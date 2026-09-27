@@ -217,14 +217,17 @@ impl ImportedPack {
 /// finished file over the real destination itself.
 ///
 /// A write that dies part-way leaves the partial file this call created at
-/// `out_path` in place and reports it as [`PartialFile::MayRemain`] on the
-/// returned [`ImportError::WriteFailed`], whose `source` stays the write's
-/// own I/O failure. Nothing is removed, so a retry on that name is refused
-/// (`AlreadyExists`) until it is cleared -- and since cleanup's reading of
-/// the name is stale by the time a caller acts on it, a retry belongs at a
-/// fresh name rather than at a deletion aimed by pathname. A replacement a
-/// concurrent writer put there is left alone, within the bound
-/// `classify_partial_file` states.
+/// `out_path` in place off Windows, reported as [`PartialFile::MayRemain`]
+/// on the returned [`ImportError::WriteFailed`]; a retry on that name is
+/// refused (`AlreadyExists`) until it is cleared. On Windows the confirmed
+/// file is deleted instead ([`PartialFile::Gone`]), and a retry lands at
+/// the same name -- except on a volume that refuses POSIX delete semantics
+/// while another process still holds the file open: there the delete stays
+/// pending, the name keeps refusing a same-name retry until that handle
+/// closes, and the finding is [`PartialFile::MayRemain`]. `source` stays
+/// the write's own I/O failure either way. A
+/// replacement a concurrent writer put there is left alone everywhere,
+/// within the bound `classify_partial_file` states.
 ///
 /// # Errors
 ///
@@ -372,11 +375,11 @@ fn is_same_file(a: &Path, b: &Path) -> bool {
 
 /// Whether `a` and `b` are two names for one file on disk.
 ///
-/// Always `false` off Unix: `std` exposes no stable file identity there,
-/// and the Windows answer needs `GetFileInformationByHandle` through a
-/// crate this workspace will not add without owner approval
-/// (`minimal-deps`). The canonical-path comparison in [`overwrites_rom`]
-/// still catches every alias that is not a hard link.
+/// Always `false` off Unix: `std` exposes no stable file identity there.
+/// Issue #1132's `windows-sys` approval covers only the handle-bound cleanup
+/// delete ([`WindowsFileIdentity`]), not this alias check, which is
+/// out of scope for that slice. The canonical-path comparison in
+/// [`overwrites_rom`] still catches every alias that is not a hard link.
 #[cfg(not(unix))]
 fn is_same_file(_a: &Path, _b: &Path) -> bool {
     false
@@ -429,8 +432,8 @@ fn write_new(out_path: &Path, bytes: &[u8]) -> Result<(), WriteFailure> {
 /// precedent).
 ///
 /// A failed write hands the still-open handle to [`classify_partial_file`],
-/// which reads what the destination holds and removes nothing; the caller
-/// sees the I/O failure itself beside that reading.
+/// which reports what the destination holds; the caller sees the I/O
+/// failure itself beside that reading.
 fn write_new_with(
     out_path: &Path,
     write: impl FnOnce(&mut std::fs::File) -> std::io::Result<()>,
@@ -461,6 +464,9 @@ fn is_the_created_file(file: &std::fs::File, found: &std::fs::Metadata) -> std::
 
 /// Off Unix there is no inode: creation time, size, and last write from the
 /// held handle, which an ancestor-junction retarget cannot pin, stand in.
+/// [`confirmed_partial_file`] is what closes the window this leaves open on
+/// Windows; off Windows the window stays open, since retention needs only
+/// to tell a replacement from the original, not to remove it.
 #[cfg(not(unix))]
 fn is_the_created_file(file: &std::fs::File, found: &std::fs::Metadata) -> std::io::Result<bool> {
     use std::os::windows::fs::MetadataExt as _;
@@ -483,6 +489,249 @@ fn is_the_created_file(file: &std::fs::File, found: &std::fs::Metadata) -> std::
 fn still_the_created_file(file: &std::fs::File, path: &Path) -> std::io::Result<bool> {
     let found = std::fs::symlink_metadata(path)?;
     Ok(found.file_type().is_file() && is_the_created_file(file, &found)?)
+}
+
+/// The identity Windows reads off an open handle: volume serial number and
+/// file ID, the one per-object identity it exposes to a handle regardless of
+/// which path was used to open it (`std`'s equivalent,
+/// `MetadataExt::volume_serial_number`/`file_index`, is still gated on the
+/// unstable `windows_by_handle`, rust-lang/rust#63010).
+///
+/// The 128-bit ID `GetFileInformationByHandleEx(FileIdInfo)` returns is
+/// read first: `GetFileInformationByHandle`'s 64-bit file index is not
+/// guaranteed unique on `ReFS` (Dev Drive's file system), whose documented
+/// unique identifier is the 128-bit one. Only a file system that rejects
+/// `FileIdInfo` falls back to the 64-bit index, zero-extended, which is how
+/// NTFS fills the 128-bit form anyway.
+///
+/// Comparing this after opening `path` fresh, rather than the path metadata
+/// [`is_the_created_file`] compares, is what lets
+/// [`remove_through_verified_handle`] delete through the very handle it just
+/// verified instead of re-resolving `path` a second time for the delete
+/// itself (issue #1132; approval trail in the dependency ledger, `README.md`).
+#[cfg(windows)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct WindowsFileIdentity {
+    volume_serial_number: u64,
+    file_id: [u8; 16],
+}
+
+#[cfg(windows)]
+impl WindowsFileIdentity {
+    /// Reads the identity of the object `handle` refers to: the 128-bit
+    /// `FileIdInfo` form, or the 64-bit index where the file system rejects
+    /// that class (`ERROR_INVALID_PARAMETER`, `ERROR_NOT_SUPPORTED`, or
+    /// `ERROR_INVALID_FUNCTION`). Any other failure surfaces.
+    fn of(handle: &std::fs::File) -> std::io::Result<Self> {
+        use std::os::windows::io::AsRawHandle as _;
+        use windows_sys::Win32::Foundation::{
+            ERROR_INVALID_FUNCTION, ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED,
+        };
+        use windows_sys::Win32::Storage::FileSystem::{
+            FileIdInfo, GetFileInformationByHandle, GetFileInformationByHandleEx,
+            BY_HANDLE_FILE_INFORMATION, FILE_ID_INFO,
+        };
+
+        let mut wide = FILE_ID_INFO::default();
+        let size = u32::try_from(std::mem::size_of::<FILE_ID_INFO>())
+            .expect("FILE_ID_INFO is far smaller than u32::MAX");
+        // SAFETY: `handle` stays open for this call, `FileIdInfo` takes a `FILE_ID_INFO`, and `size` is that structure's exact size.
+        let ok = unsafe {
+            GetFileInformationByHandleEx(
+                handle.as_raw_handle(),
+                FileIdInfo,
+                std::ptr::from_mut(&mut wide).cast(),
+                size,
+            )
+        };
+        if ok != 0 {
+            return Ok(Self {
+                volume_serial_number: wide.VolumeSerialNumber,
+                file_id: wide.FileId.Identifier,
+            });
+        }
+        let refused = std::io::Error::last_os_error();
+        let unsupported = refused
+            .raw_os_error()
+            .and_then(|code| u32::try_from(code).ok())
+            .is_some_and(|code| {
+                matches!(
+                    code,
+                    ERROR_NOT_SUPPORTED | ERROR_INVALID_PARAMETER | ERROR_INVALID_FUNCTION
+                )
+            });
+        if !unsupported {
+            return Err(refused);
+        }
+
+        let mut info = BY_HANDLE_FILE_INFORMATION::default();
+        // SAFETY: `handle` stays open for this call, and `info` is a correctly-sized out parameter the API fills in place.
+        let ok = unsafe { GetFileInformationByHandle(handle.as_raw_handle(), &raw mut info) };
+        if ok == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let index = (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow);
+        let mut file_id = [0u8; 16];
+        file_id[..8].copy_from_slice(&index.to_le_bytes());
+        Ok(Self {
+            volume_serial_number: u64::from(info.dwVolumeSerialNumber),
+            file_id,
+        })
+    }
+}
+
+/// Opens `path` for [`remove_through_verified_handle`]'s identity check and
+/// delete: `DELETE | FILE_READ_ATTRIBUTES` access,
+/// `FILE_FLAG_OPEN_REPARSE_POINT` so a reparse point planted at the final
+/// component is not followed underneath the check, and
+/// `FILE_FLAG_BACKUP_SEMANTICS` so a directory that took the name opens and
+/// fails the identity check instead of failing the open as access denied.
+///
+/// The share mode admits every other opener. A deny-all open would fail as
+/// a sharing violation whenever a scanner or indexer still held the freshly
+/// written file, leaving it behind; sharing cannot redirect the check or the
+/// delete, since both go through this handle.
+#[cfg(windows)]
+fn open_for_verified_delete(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    use windows_sys::Win32::Storage::FileSystem::{
+        DELETE, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
+        FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    };
+
+    std::fs::OpenOptions::new()
+        .access_mode(DELETE | FILE_READ_ATTRIBUTES)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)
+}
+
+/// What [`remove_through_verified_handle`] did about `path`.
+#[cfg(windows)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VerifiedRemoval {
+    /// `path` no longer reached the verified object, so nothing was touched.
+    NotOurs,
+    /// The object was deleted with POSIX semantics: its name left the
+    /// directory when the verifying handle closed, even if another process
+    /// still holds the object open.
+    Unlinked,
+    /// The volume refused POSIX semantics, so the object was only marked
+    /// delete-on-close: its name stays in the directory, refusing a
+    /// same-name create, until every other handle to it closes.
+    Pending,
+}
+
+/// Deletes the object `handle` refers to through `handle` itself rather
+/// than a second lookup of its path.
+///
+/// POSIX semantics (`FileDispositionInfoEx`) is tried first, so the name is
+/// gone once `handle` closes whatever other opener remains. A volume or
+/// Windows release without it answers `ERROR_NOT_SUPPORTED`,
+/// `ERROR_INVALID_PARAMETER`, or `ERROR_INVALID_FUNCTION`, and falls back to
+/// the plain `FileDispositionInfo` delete-on-close, reported as
+/// [`VerifiedRemoval::Pending`] because another handle can hold the name.
+#[cfg(windows)]
+fn delete_through_handle(handle: &std::fs::File) -> std::io::Result<VerifiedRemoval> {
+    use windows_sys::Win32::Foundation::{
+        ERROR_INVALID_FUNCTION, ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED,
+    };
+    use windows_sys::Win32::Storage::FileSystem::{
+        FileDispositionInfo, FileDispositionInfoEx, FILE_DISPOSITION_FLAG_DELETE,
+        FILE_DISPOSITION_FLAG_POSIX_SEMANTICS, FILE_DISPOSITION_INFO, FILE_DISPOSITION_INFO_EX,
+    };
+
+    let posix = FILE_DISPOSITION_INFO_EX {
+        Flags: FILE_DISPOSITION_FLAG_DELETE | FILE_DISPOSITION_FLAG_POSIX_SEMANTICS,
+    };
+    // SAFETY: `FileDispositionInfoEx` takes a `FILE_DISPOSITION_INFO_EX`, which `posix` is.
+    match unsafe { set_file_information(handle, FileDispositionInfoEx, &posix) } {
+        Ok(()) => return Ok(VerifiedRemoval::Unlinked),
+        Err(refused)
+            if refused
+                .raw_os_error()
+                .and_then(|code| u32::try_from(code).ok())
+                .is_some_and(|code| {
+                    matches!(
+                        code,
+                        ERROR_NOT_SUPPORTED | ERROR_INVALID_PARAMETER | ERROR_INVALID_FUNCTION
+                    )
+                }) => {}
+        Err(failed) => return Err(failed),
+    }
+    let legacy = FILE_DISPOSITION_INFO { DeleteFile: true };
+    // SAFETY: `FileDispositionInfo` takes a `FILE_DISPOSITION_INFO`, which `legacy` is.
+    unsafe { set_file_information(handle, FileDispositionInfo, &legacy) }?;
+    Ok(VerifiedRemoval::Pending)
+}
+
+/// `SetFileInformationByHandle` on `handle` with `info` as the buffer.
+///
+/// # Safety
+///
+/// `T` must be the structure `class` documents as its buffer.
+#[cfg(windows)]
+unsafe fn set_file_information<T>(
+    handle: &std::fs::File,
+    class: windows_sys::Win32::Storage::FileSystem::FILE_INFO_BY_HANDLE_CLASS,
+    info: &T,
+) -> std::io::Result<()> {
+    use std::os::windows::io::AsRawHandle as _;
+    use windows_sys::Win32::Storage::FileSystem::SetFileInformationByHandle;
+
+    let size = u32::try_from(std::mem::size_of::<T>())
+        .expect("a file-information structure is far smaller than u32::MAX");
+    // SAFETY: `handle` stays open for the call, the caller guarantees `T` matches `class`, and `size` is `T`'s exact size.
+    let ok = unsafe {
+        SetFileInformationByHandle(
+            handle.as_raw_handle(),
+            class,
+            std::ptr::from_ref(info).cast(),
+            size,
+        )
+    };
+    if ok == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+/// Removes the file `identity` names if `path` still reaches it, deleting
+/// through the same handle the identity check opens so no re-lookup of
+/// `path` occurs between the check and the delete. A path that now reaches a
+/// different object -- or nothing at all -- is left alone
+/// ([`VerifiedRemoval::NotOurs`]).
+#[cfg(windows)]
+fn remove_through_verified_handle(
+    path: &Path,
+    identity: WindowsFileIdentity,
+) -> std::io::Result<VerifiedRemoval> {
+    remove_through_verified_handle_with(path, identity, |_handle| {})
+}
+
+/// [`remove_through_verified_handle`] with a hook run between the identity
+/// check and the delete, so a test can land a retarget in exactly that
+/// window without a real race: a test's only other way to reach it would be
+/// two threads racing the OS, which no cheap seam makes deterministic.
+#[cfg(windows)]
+fn remove_through_verified_handle_with(
+    path: &Path,
+    identity: WindowsFileIdentity,
+    before_delete: impl FnOnce(&std::fs::File),
+) -> std::io::Result<VerifiedRemoval> {
+    let handle = match open_for_verified_delete(path) {
+        Ok(handle) => handle,
+        Err(missing) if missing.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(VerifiedRemoval::NotOurs)
+        }
+        Err(open_err) => return Err(open_err),
+    };
+    if WindowsFileIdentity::of(&handle)? != identity {
+        return Ok(VerifiedRemoval::NotOurs);
+    }
+    before_delete(&handle);
+    delete_through_handle(&handle)
 }
 
 /// A failed write, with what cleanup then saw at the destination.
@@ -532,24 +781,58 @@ impl WriteFailure {
 /// replacement is left alone. A retry against `path` fails closed until the
 /// caller clears it. An identity check that cannot read `path` is
 /// [`PartialFile::Unreadable`] rather than a failure of its own; `NotFound`
-/// means nothing was left to look for. Removal is never attempted, on any
-/// platform: `std` has no removal bound to the checked identity rather than
-/// to a name.
+/// means nothing was left to look for. What a confirmed file becomes is
+/// [`confirmed_partial_file`]'s call, which differs by platform.
 fn classify_partial_file(
     path: &Path,
     file: std::fs::File,
     original: std::io::Error,
 ) -> WriteFailure {
     let partial = match still_the_created_file(&file, path) {
-        Ok(true) => PartialFile::MayRemain,
+        Ok(true) => confirmed_partial_file(path, file),
         Ok(false) => PartialFile::Gone,
         Err(missing) if missing.kind() == std::io::ErrorKind::NotFound => PartialFile::Gone,
         Err(unreadable) => PartialFile::Unreadable(unreadable),
     };
-    drop(file);
     WriteFailure {
         partial,
         source: original,
+    }
+}
+
+/// What [`classify_partial_file`] reports once identity confirms `path`
+/// still names the file `file` holds open, off Windows: retained, since
+/// stable `std` has no removal bound to the checked identity rather than to
+/// a name there.
+#[cfg(not(windows))]
+fn confirmed_partial_file(_path: &Path, file: std::fs::File) -> PartialFile {
+    drop(file);
+    PartialFile::MayRemain
+}
+
+/// [`confirmed_partial_file`] on Windows: reads `file`'s own identity, gives
+/// up the handle (Windows refuses to remove or reopen-for-delete a file
+/// this process still holds), then deletes through
+/// [`remove_through_verified_handle`] rather than retaining. A failure
+/// reading the identity or performing the delete is
+/// [`PartialFile::RemovalFailed`] rather than discarded. A delete the volume
+/// could only leave pending ([`VerifiedRemoval::Pending`]) is
+/// [`PartialFile::MayRemain`]: another process's handle can keep the name
+/// refusing a same-name retry, so it is not reported as gone.
+#[cfg(windows)]
+fn confirmed_partial_file(path: &Path, file: std::fs::File) -> PartialFile {
+    let identity = match WindowsFileIdentity::of(&file) {
+        Ok(identity) => identity,
+        Err(unreadable) => {
+            drop(file);
+            return PartialFile::RemovalFailed(unreadable);
+        }
+    };
+    drop(file);
+    match remove_through_verified_handle(path, identity) {
+        Ok(VerifiedRemoval::NotOurs | VerifiedRemoval::Unlinked) => PartialFile::Gone,
+        Ok(VerifiedRemoval::Pending) => PartialFile::MayRemain,
+        Err(removal_failed) => PartialFile::RemovalFailed(removal_failed),
     }
 }
 
@@ -577,6 +860,12 @@ mod tests {
     };
     use crate::fixture::{shared_emerald_rom, RomFixture};
     use std::path::{Path, PathBuf};
+
+    #[cfg(windows)]
+    use super::{
+        remove_through_verified_handle, remove_through_verified_handle_with, VerifiedRemoval,
+        WindowsFileIdentity,
+    };
 
     #[test]
     fn import_fails_closed_on_a_missing_rom() {
@@ -757,9 +1046,12 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))]
     fn a_failed_write_retains_its_partial_file_until_the_caller_removes_it() {
         // A write that dies part-way -- a full disk -- leaves a prefix of
         // the pack behind, and cleanup retains it rather than removing it.
+        // The non-Windows contract; `a_failed_write_is_removed_through_its_verified_handle_on_windows`
+        // below is the Windows upgrade (issue #1132).
         let dir = TempDir::new("write-fails");
         let out = dir.join("pokeemerald.pack");
 
@@ -814,6 +1106,49 @@ mod tests {
         // Only once the caller clears the name themselves does a retry land.
         std::fs::remove_file(&out).expect("the caller's own cleanup");
         write_new(&out, b"pack bytes").expect("the retry takes the name once it is cleared");
+        assert_eq!(
+            std::fs::read(&out).expect("the pack reads back"),
+            b"pack bytes"
+        );
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn a_failed_write_is_removed_through_its_verified_handle_on_windows() {
+        // The Windows upgrade over the retention contract above (issue
+        // #1132): the confirmed partial file is deleted through the same
+        // handle its identity was checked against, so nothing is left for
+        // the caller to clear and a retry lands at the same name directly.
+        let dir = TempDir::new("write-fails-windows");
+        let out = dir.join("pokeemerald.pack");
+
+        let err = write_new_with(&out, |file| {
+            use std::io::Write as _;
+            file.write_all(b"half a ")?;
+            Err(std::io::Error::new(
+                std::io::ErrorKind::StorageFull,
+                "no space left on device",
+            ))
+        })
+        .unwrap_err();
+
+        assert_eq!(
+            err.source.kind(),
+            std::io::ErrorKind::StorageFull,
+            "{err:?}"
+        );
+        assert!(
+            matches!(err.partial, PartialFile::Gone),
+            "{:?}",
+            err.partial
+        );
+        assert!(
+            !out.exists(),
+            "the verified-handle delete must remove the call's own partial file"
+        );
+
+        // The name is free: a retry lands directly, with no debris to clear.
+        write_new(&out, b"pack bytes").expect("the retry takes the name with nothing left over");
         assert_eq!(
             std::fs::read(&out).expect("the pack reads back"),
             b"pack bytes"
@@ -976,9 +1311,9 @@ mod tests {
     fn the_output_cannot_be_replaced_or_removed_while_its_handle_lives() {
         // The Windows counterpart to the two swap regressions above: there a
         // peer plants the swap and the identity check catches it, while here
-        // `write_new`'s deny-all share mode makes the swap unattemptable,
-        // which is the whole of what `is_the_created_file`'s non-unix arm
-        // rests on. Drop that share mode and each of these three steps
+        // `write_new`'s deny-all share mode makes the swap unattemptable in
+        // the first place, before `confirmed_partial_file`'s handle-bound
+        // delete ever runs. Drop that share mode and each of these three steps
         // succeeds again, restoring the deletion of a swapped-in regular
         // file. Mirrors
         // `a_staged_image_cannot_be_opened_or_removed_while_its_hold_lives`
@@ -1032,6 +1367,27 @@ mod tests {
         );
     }
 
+    /// Points the directory junction at `link` at `target`, replacing
+    /// whatever it named before. Unlike a directory symlink this needs no
+    /// privilege, so the Windows ancestor-retarget regressions below never
+    /// have to skip.
+    #[cfg(windows)]
+    fn junction(link: &Path, target: &Path) {
+        let status = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .stdout(std::process::Stdio::null())
+            .status()
+            .expect("cmd runs mklink");
+        assert!(
+            status.success(),
+            "mklink /J {} {}: {status}",
+            link.display(),
+            target.display()
+        );
+    }
+
     #[test]
     #[cfg(windows)]
     fn cleanup_leaves_a_file_reached_through_a_retargeted_ancestor_alone() {
@@ -1039,25 +1395,7 @@ mod tests {
         // a directory junction stands in for the ancestor link a peer
         // retargets, closing the gap `write_new`'s deny-all `share_mode(0)`
         // leaves open, since that hold only ever covers `out`'s own entry
-        // and never the directories the path walks through to reach it. A
-        // junction, unlike a directory symlink, needs no privilege, so the
-        // test never has to skip.
-        fn junction(link: &Path, target: &Path) {
-            let status = std::process::Command::new("cmd")
-                .args(["/C", "mklink", "/J"])
-                .arg(link)
-                .arg(target)
-                .stdout(std::process::Stdio::null())
-                .status()
-                .expect("cmd runs mklink");
-            assert!(
-                status.success(),
-                "mklink /J {} {}: {status}",
-                link.display(),
-                target.display()
-            );
-        }
-
+        // and never the directories the path walks through to reach it.
         let dir = TempDir::new("write-cleanup-ancestor-swap");
         let target = dir.join("a");
         let elsewhere = dir.join("b");
@@ -1092,6 +1430,119 @@ mod tests {
             b"someone else's file",
             "cleanup must never remove a file the path only reaches through a retargeted ancestor"
         );
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn deletion_survives_an_ancestor_retargeted_between_the_check_and_the_delete() {
+        // The two ancestor-retarget tests above complete their swap before
+        // cleanup starts, so an implementation that re-resolves `path` for
+        // both the check and the delete would already pass them. This
+        // exercises the narrower window: `before_delete` runs the retarget
+        // after `remove_through_verified_handle_with` has already opened
+        // and identity-checked its handle, and only then may it delete. A
+        // handle-bound delete must still remove exactly the object it
+        // opened; it must never reach whatever the retargeted path now
+        // resolves to.
+        use std::io::Write as _;
+
+        let dir = TempDir::new("write-cleanup-race-window");
+        let target = dir.join("a");
+        let elsewhere = dir.join("b");
+        std::fs::create_dir(&target).expect("the link's first target");
+        std::fs::create_dir(&elsewhere).expect("the link's second target");
+        let victim = elsewhere.join("pokeemerald.pack");
+        std::fs::write(&victim, b"someone else's file").expect("the unrelated file exists");
+
+        let link = dir.join("link");
+        junction(&link, &target);
+        let out = link.join("pokeemerald.pack");
+        let created = target.join("pokeemerald.pack");
+
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&out)
+            .expect("the exclusive create succeeds");
+        file.write_all(b"half a ")
+            .expect("the partial write succeeds");
+        let identity = WindowsFileIdentity::of(&file).expect("identity reads back off the handle");
+        drop(file);
+
+        remove_through_verified_handle_with(&out, identity, |_handle| {
+            std::fs::remove_dir(&link).expect("the peer drops the ancestor junction");
+            junction(&link, &elsewhere);
+        })
+        .expect("a retarget after the check must not stop the handle-bound delete");
+
+        assert!(
+            !created.exists(),
+            "the delete must remove the object identity was checked against, through its handle"
+        );
+        assert_eq!(
+            std::fs::read(&victim).expect("the unrelated file survives"),
+            b"someone else's file",
+            "a retarget landing after the check must never redirect the delete onto it"
+        );
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn cleanup_leaves_a_directory_that_took_the_name_alone() {
+        // A directory opens only with `FILE_FLAG_BACKUP_SEMANTICS`; without
+        // it the verifying open fails as access denied and a partial file
+        // already gone would be reported as `RemovalFailed`.
+        let dir = TempDir::new("write-cleanup-directory-swap");
+        let out = dir.join("pokeemerald.pack");
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&out)
+            .expect("the exclusive create succeeds");
+        let identity = WindowsFileIdentity::of(&file).expect("identity reads back off the handle");
+        drop(file);
+        std::fs::remove_file(&out).expect("the peer removes the partial file");
+        std::fs::create_dir(&out).expect("the peer plants a directory at its name");
+
+        let removal = remove_through_verified_handle(&out, identity)
+            .expect("a directory at the name is identified, not an open failure");
+
+        assert_eq!(removal, VerifiedRemoval::NotOurs);
+        assert!(out.is_dir(), "the peer's directory must survive cleanup");
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn cleanup_deletes_a_partial_file_another_process_still_reads() {
+        // A scanner or indexer opening the freshly written file must not
+        // turn cleanup into a sharing violation, and a POSIX delete must
+        // free the name while that reader still holds its handle.
+        let dir = TempDir::new("write-cleanup-shared-reader");
+        let out = dir.join("pokeemerald.pack");
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&out)
+            .expect("the exclusive create succeeds");
+        let identity = WindowsFileIdentity::of(&file).expect("identity reads back off the handle");
+        drop(file);
+        let reader = std::fs::File::open(&out).expect("a sharing reader opens the partial file");
+
+        let removal = remove_through_verified_handle(&out, identity)
+            .expect("a sharing reader must not refuse the verified delete");
+
+        match removal {
+            VerifiedRemoval::Unlinked => {
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&out)
+                    .expect("an unlinked name is free for a same-name retry at once");
+            }
+            VerifiedRemoval::Pending => {}
+            VerifiedRemoval::NotOurs => panic!("the verified file was still at its name"),
+        }
+        drop(reader);
     }
 
     #[test]
@@ -1153,9 +1604,39 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_removal_keeps_its_message_on_one_line_and_its_own_reason() {
+        // Windows's verified-handle delete can fail after confirming the
+        // file is there; that reason must survive on the caller-facing
+        // line rather than being discarded (issue #1132).
+        let out = Path::new("packs/one\ntwo\u{1b}[2Kthree.pack");
+
+        let err = WriteFailure {
+            partial: PartialFile::RemovalFailed(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "access is denied",
+            )),
+            source: std::io::Error::new(std::io::ErrorKind::StorageFull, "no space left on device"),
+        }
+        .at(out);
+
+        let text = err.to_string();
+        assert!(text.contains("no space left on device"), "{text:?}");
+        assert!(text.contains("access is denied"), "{text:?}");
+        assert!(!text.contains('\n'), "{text:?}");
+        assert!(!text.contains('\u{1b}'), "{text:?}");
+        assert!(
+            text.contains(r"one\ntwo\u{1b}[2Kthree.pack"),
+            "escaped name missing from {text:?}"
+        );
+    }
+
+    #[test]
+    #[cfg(not(windows))]
     fn a_retained_partial_file_still_hands_back_the_write_error_itself() {
-        // The boundary a caller actually sees. `ImportError::WriteFailed`
-        // documents `source` as the underlying I/O failure, and
+        // The boundary a caller actually sees, on the non-Windows contract
+        // where the partial file is retained rather than removed.
+        // `ImportError::WriteFailed` documents `source` as the underlying
+        // I/O failure, and
         // `raw_os_error` is how a caller tells a quota failure from a
         // device one; a cleanup finding is something to report alongside
         // it, never something to wrap it in. `WriteFailure::at` is the

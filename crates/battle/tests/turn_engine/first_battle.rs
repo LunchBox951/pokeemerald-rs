@@ -1,11 +1,10 @@
-//! `BATTLE_TYPE_FIRST_BATTLE` (issue #187): the Route 101 intro Zigzagoon
-//! fight's three deltas from an ordinary wild encounter -- crit suppression,
-//! Run rejection for non-Run-Away holders, and the wild opponent's
-//! AI-branch move choice -- pinned end to end through the public `battle`
-//! API, the same way every other `turn_engine/` module pins its family of
-//! behavior. Unit-level draw-count pins for each formula in isolation live
-//! alongside the formula itself (`crate::critical`, `crate::hit`,
-//! `crate::battle`'s own doc-comment derivations).
+//! `BATTLE_TYPE_FIRST_BATTLE`: the Route 101 intro Zigzagoon fight's three
+//! deltas from an ordinary wild encounter -- crit suppression, Run rejection
+//! for non-Run-Away holders, and the wild opponent's AI-branch move choice --
+//! pinned end to end through the public `battle` API. Unit-level draw-count
+//! pins for each formula in isolation live alongside the formula itself
+//! (`crate::critical`, `crate::hit`, `crate::battle`'s own doc-comment
+//! derivations).
 //!
 //! Zigzagoon (species 288) is the actual scripted first-battle opponent
 //! (`pokeemerald/src/battle_controllers.c:67`-`:72` creates it at level 2 --
@@ -31,7 +30,7 @@ fn run_is_forbidden_before_any_draw_and_leaves_the_battle_usable() {
     let player = max_iv_mon(&dex, 1, 50, vec![TACKLE]);
     let enemy = max_iv_mon(&dex, 288, 2, vec![TACKLE, GROWL]);
 
-    let mut rng = SequenceRng::new([0]); // Battle::new's battle-start draw only
+    let mut rng = SequenceRng::new([0]);
     let mut battle = Battle::new(dex, player, enemy, true, &mut rng).unwrap();
     assert_eq!(rng.draws(), 1);
 
@@ -49,11 +48,7 @@ fn run_is_forbidden_before_any_draw_and_leaves_the_battle_usable() {
     );
     assert!(battle.outcome().is_none(), "the battle is still usable");
 
-    // The battle is left exactly as it was: a real action still works.
-    let mut rng = SequenceRng::new([
-        0, 0, 0, 0, 0, 0, // turn number + 4 discarded simulatedRNG + tie-break
-        0, 0, 0, // player's suppressed-crit Tackle: accuracy, damage roll, effect chance
-    ]);
+    let mut rng = SequenceRng::new([0, 0, 0, 0, 0, 0, 0, 0, 0]);
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
@@ -72,19 +67,11 @@ fn run_is_forbidden_before_any_draw_and_leaves_the_battle_usable() {
 #[test]
 fn first_battle_suppresses_the_crit_draw_and_never_crits() {
     let dex = Dex::new();
-    // L50 Rattata vs L2 Zigzagoon: obviously faster, and Slash one-shots it,
-    // so the enemy's chosen action never gets to execute -- only the
-    // selection draws before it, plus the player's own hit, are spent.
+    // Obviously faster, and Slash one-shots the enemy, so only the
+    // selection draws before it -- never the enemy's own move -- are spent.
     let player = max_iv_mon(&dex, 19, 50, vec![SLASH]);
     let enemy = max_iv_mon(&dex, 288, 2, vec![TACKLE, GROWL]);
 
-    // draws: 0 battle-start turn number (unequal speed, no tie draw).
-    // take_turn: 1 turn number, 2-5 discarded simulatedRNG, 6 tie-break
-    // (0 % 2 -> Tackle, though it never gets to act), 7 accuracy (hit),
-    // 8 damage roll (best case), 9 effect chance (discarded). If crit
-    // suppression were broken, an extra crit draw here would shift every
-    // later index by one and this 10-value script would panic on
-    // exhaustion rather than silently passing.
     let mut rng = SequenceRng::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
     let mut battle = Battle::new(dex, player, enemy, true, &mut rng).unwrap();
     let events = battle
@@ -108,23 +95,26 @@ fn first_battle_suppresses_the_crit_draw_and_never_crits() {
         Some(&BattleEvent::Ended(BattleOutcome::PlayerWon)),
         "a L50 Slash must one-shot a L2 Zigzagoon"
     );
-    assert_eq!(rng.draws(), 10);
+    assert_eq!(
+        rng.draws(),
+        10,
+        "no crit draw: the suppressed-crit hit spends only 3 draws, one \
+         fewer than an ordinary hit's 4 -- a reintroduced crit draw would \
+         exhaust this exact-sized script and panic"
+    );
 }
 
 #[test]
 fn first_battle_ai_tie_break_can_land_on_the_second_move() {
     let dex = Dex::new();
-    // Enemy faster this time, so its own chosen move is directly observable.
-    // Both sides use only Growl, so neither side's action can faint the
-    // other -- the second mover (the player) is guaranteed to also act,
-    // regardless of this test's own concern (the tie-break index).
+    // Enemy faster, so its chosen move is directly observable. Both sides
+    // use only Growl, so neither action can faint the other, and the
+    // player (second mover) is guaranteed to act too.
     let player = max_iv_mon(&dex, 19, 5, vec![GROWL]);
     let enemy = max_iv_mon(&dex, 288, 50, vec![TACKLE, GROWL]);
 
-    // draws: battle start (0), turn number (0), 4 discarded simulatedRNG,
-    // tie-break 1 -> 1 % 2 = 1 -> the second usable slot (Growl), the
-    // enemy's Growl (1 draw), then the player's own Growl (1 draw).
-    let mut rng = SequenceRng::new([0, 0, 0, 0, 0, 0, 1, 0, 0]);
+    let tie_break_selects_second_slot = 1;
+    let mut rng = SequenceRng::new([0, 0, 0, 0, 0, 0, tie_break_selects_second_slot, 0, 0]);
     let mut battle = Battle::new(dex, player, enemy, true, &mut rng).unwrap();
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
@@ -166,14 +156,21 @@ fn first_battle_ai_never_picks_a_spent_move_slot() {
         enemy.deduct_pp(0).unwrap();
     }
 
-    // The tie-break draw is deliberately an *even* value: with the PP
-    // screen in place there is one usable slot and `998 % 1 == 0` selects
-    // Growl, but if the screen were dropped both slots would be candidates
-    // and `998 % 2 == 0` would land on the spent Tackle slot -- so this
-    // draw value actually distinguishes the PP-aware pre-draw filter from
-    // a plain wild mon's PP-ignoring redraw loop (an odd value like 999
-    // would pick Growl either way and pin nothing).
-    let mut rng = SequenceRng::new([0, 0, 0, 0, 0, 0, 998, 0, 0]);
+    // Even: `998 % 1` (the one PP-positive slot) selects Growl, but
+    // `998 % 2` over both known slots would select the spent Tackle --
+    // an odd value would select Growl either way and pin nothing.
+    let tie_break_would_hit_spent_tackle_if_unfiltered = 998;
+    let mut rng = SequenceRng::new([
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        tie_break_would_hit_spent_tackle_if_unfiltered,
+        0,
+        0,
+    ]);
     let mut battle = Battle::new(dex, player, enemy, true, &mut rng).unwrap();
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
@@ -196,8 +193,6 @@ fn first_battle_ai_never_picks_a_spent_move_slot() {
     assert_eq!(enemy_move, Some(GROWL));
 }
 
-// The all-spent enemy's forced Struggle draws nothing at selection and
-// executes at its own turn-order slot.
 #[test]
 fn first_battle_forces_struggle_with_no_selection_draw_when_every_slot_is_spent() {
     let dex = Dex::new();
@@ -210,11 +205,9 @@ fn first_battle_forces_struggle_with_no_selection_draw_when_every_slot_is_spent(
         }
     }
 
-    // battle start, turn number: `AreAllMovesUnusable` forces Struggle
-    // before `BattleAI_SetupAIData` ever runs, so neither the four
-    // simulatedRNG draws nor a tie-break draw happen. Then the forced
-    // Struggle's own two draws -- accuracy and damage-variance, with no
-    // crit draw at all: first_battle suppresses it entirely.
+    // `AreAllMovesUnusable` forces Struggle before the first-battle AI's
+    // setup draws run, so neither the four simulatedRNG draws nor a
+    // tie-break draw happen.
     let mut rng = SequenceRng::new([0, 0, 0, 0]);
     let mut battle = Battle::new(dex, player, enemy, true, &mut rng).unwrap();
     let events = battle
@@ -244,7 +237,8 @@ fn first_battle_forces_struggle_with_no_selection_draw_when_every_slot_is_spent(
     assert_eq!(
         rng.draws(),
         4,
-        "no simulatedRNG, no tie-break draw, no crit draw (first_battle)"
+        "no simulatedRNG or tie-break draw for the forced Struggle, and no \
+         crit draw: first_battle suppresses it entirely"
     );
 }
 
@@ -262,9 +256,6 @@ fn wild_flees_before_the_player_can_act_once_its_hp_drops_at_or_below_twenty_per
     );
     let player_pp = player.moves()[0].pp;
 
-    // battle start (0, unequal speed), turn number (0), 4 discarded
-    // simulatedRNG -- the flee check itself draws nothing, and the battle
-    // ends before the player's action or a tie-break draw is ever reached.
     let mut rng = SequenceRng::new([0, 0, 0, 0, 0, 0]);
     let mut battle = Battle::new(dex, player, enemy, true, &mut rng).unwrap();
     let events = battle
@@ -284,7 +275,12 @@ fn wild_flees_before_the_player_can_act_once_its_hp_drops_at_or_below_twenty_per
         player_pp,
         "the player never got to act, so its PP must be untouched"
     );
-    assert_eq!(rng.draws(), 6);
+    assert_eq!(
+        rng.draws(),
+        6,
+        "the flee check itself draws nothing: the battle ends before the \
+         player's action or a tie-break draw is ever reached"
+    );
 }
 
 #[test]
@@ -300,9 +296,6 @@ fn wild_flees_after_the_players_move_already_resolved() {
     player.apply_damage(max_hp - max_hp * 20 / 100);
     assert!(100 * player.current_hp() / max_hp <= 20);
 
-    // battle start (0), turn number (0), 4 discarded simulatedRNG, then the
-    // player's Growl (1 draw: accuracy only, stat_change's pipeline shape)
-    // -- no tie-break draw, since the flee check short-circuits before it.
     let mut rng = SequenceRng::new([0, 0, 0, 0, 0, 0, 0]);
     let mut battle = Battle::new(dex, player, enemy, true, &mut rng).unwrap();
     let events = battle
@@ -324,7 +317,12 @@ fn wild_flees_after_the_players_move_already_resolved() {
         ],
         "the first mover's events must survive; the enemy flees only after"
     );
-    assert_eq!(rng.draws(), 7);
+    assert_eq!(
+        rng.draws(),
+        7,
+        "the player's Growl spends its one accuracy draw, then the flee \
+         check short-circuits before any tie-break draw"
+    );
 }
 
 #[test]
@@ -335,10 +333,6 @@ fn first_battle_ai_does_not_flee_above_the_hp_threshold() {
     let player = max_iv_mon(&dex, 1, 5, vec![GROWL]); // slow, full HP
     let enemy = max_iv_mon(&dex, 288, 50, vec![GROWL]); // fast
 
-    // Same shape as the flee test, but the player is at full HP, so the
-    // flee check must fail and fall through to the ordinary tie-break --
-    // one more draw than the flee path (the tie-break itself), plus both
-    // sides' Growl, and no WildFled outcome.
     let mut rng = SequenceRng::new([0, 0, 0, 0, 0, 0, 0, 0, 0]);
     let mut battle = Battle::new(dex, player, enemy, true, &mut rng).unwrap();
     let events = battle
@@ -362,12 +356,10 @@ fn first_battle_ai_does_not_flee_above_the_hp_threshold() {
 #[test]
 fn first_battle_ai_does_not_flee_just_above_the_hp_threshold() {
     let dex = Dex::new();
-    // Same shape as the full-HP no-flee test above, but the player sits at
-    // the *smallest* HP whose truncating percentage still exceeds the
-    // threshold -- one integer percent above 20. The opponent_ai unit test
-    // pins the inclusive edge (exactly 20% flees); this pins the exclusive
-    // one from the other side, so a threshold drifting upward (which a
-    // full-HP player can never notice) flees here and fails.
+    // The player sits at the *smallest* HP whose truncating percentage
+    // still exceeds the threshold: `first_battle_choice_flees_at_or_below_
+    // twenty_percent_after_setup_draws` (crates/battle/src/battle/
+    // opponent_ai.rs) pins the inclusive edge from the other side.
     let mut player = max_iv_mon(&dex, 1, 5, vec![GROWL]); // slow
     let enemy = max_iv_mon(&dex, 288, 50, vec![GROWL]); // fast
 
@@ -379,9 +371,6 @@ fn first_battle_ai_does_not_flee_just_above_the_hp_threshold() {
         "test setup must sit strictly above AI_FirstBattle's flee threshold"
     );
 
-    // battle start, turn number, 4 simulatedRNG, tie-break, both Growls'
-    // accuracy rolls -- a flee would end the turn 3 draws short of this
-    // script and fail the draw-count pin even before the event assert.
     let mut rng = SequenceRng::new([0, 0, 0, 0, 0, 0, 0, 0, 0]);
     let mut battle = Battle::new(dex, player, enemy, true, &mut rng).unwrap();
     let events = battle
@@ -393,27 +382,22 @@ fn first_battle_ai_does_not_flee_just_above_the_hp_threshold() {
         "just above the threshold must not trigger the flee branch"
     );
     assert_ne!(battle.outcome(), Some(BattleOutcome::WildFled));
-    assert_eq!(rng.draws(), 9);
+    assert_eq!(
+        rng.draws(),
+        9,
+        "a flee would leave 3 draws of this script unconsumed -- the event \
+         assertion above already catches that before this count is checked"
+    );
 }
 
 #[test]
 fn first_battle_suppresses_the_wild_opponents_crit_draw_too() {
     let dex = Dex::new();
     // Wild-side mirror of `first_battle_suppresses_the_crit_draw_and_never_crits`:
-    // this time the *enemy* is faster and its Tackle actually lands on a
-    // surviving player -- the single most-executed path once #221 wires the
-    // scripted Route 101 encounter, whose L2 Zigzagoon spams Tackle.
+    // here the *enemy* is faster, and its Tackle lands on a surviving player.
     let player = max_iv_mon(&dex, 1, 50, vec![GROWL]); // slower
     let enemy = max_iv_mon(&dex, 288, 50, vec![TACKLE, GROWL]); // faster
 
-    // draws: battle start (0, unequal speed), turn number (0), 4 discarded
-    // simulatedRNG, tie-break (0 % 2 -> Tackle), the enemy's
-    // suppressed-crit Tackle (accuracy, damage roll, effect chance -- 3
-    // draws, not the ordinary hit's 4), then the player's own Growl
-    // (accuracy). If the wild side's crit suppression regressed, the
-    // reintroduced crit draw would exhaust this exact-sized 11-value
-    // script and panic -- and its 0 value would also *be* a crit, failing
-    // the assertion below first.
     let mut rng = SequenceRng::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
     let mut battle = Battle::new(dex, player, enemy, true, &mut rng).unwrap();
     let events = battle
@@ -439,7 +423,14 @@ fn first_battle_suppresses_the_wild_opponents_crit_draw_too() {
         battle.outcome().is_none(),
         "both sides survive this exchange"
     );
-    assert_eq!(rng.draws(), 11);
+    assert_eq!(
+        rng.draws(),
+        11,
+        "the enemy's suppressed-crit Tackle spends only 3 draws, one fewer \
+         than an ordinary hit's 4 -- a reintroduced crit draw would exhaust \
+         this exact-sized script and panic inside take_turn, before either \
+         assertion above ever runs"
+    );
 }
 
 #[test]
@@ -458,7 +449,7 @@ fn run_away_holder_escapes_the_first_battle_unconditionally() {
 
     let mut rng = SequenceRng::new([0; 7]);
     let mut battle = Battle::new(dex, player, enemy, true, &mut rng).unwrap();
-    assert_eq!(rng.draws(), 1); // Battle::new's battle-start draw only.
+    assert_eq!(rng.draws(), 1);
 
     let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
     assert_eq!(
