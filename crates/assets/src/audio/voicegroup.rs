@@ -525,7 +525,9 @@ impl VoiceGroup {
     /// cannot be encoded, [`AudioError::PanOverrideZero`] for `Some(0)` pan,
     /// [`AudioError::PanOverrideOutOfRange`] for a pan override outside
     /// `1..=127`, [`AudioError::SquareDutyOutOfRange`] for a square duty
-    /// selector outside `0..=3`, or [`AudioError::NoisePeriodOutOfRange`] for
+    /// selector outside `0..=3`, [`AudioError::KeySplitTableNoteOutOfRange`]
+    /// for a key split whose `starting_note` plus table length exceeds
+    /// [`VOICE_SLOT_COUNT`], or [`AudioError::NoisePeriodOutOfRange`] for
     /// a noise period outside `0..=1`.
     pub fn new(slots: Vec<VoiceEntry>) -> Result<Self, AudioError> {
         if slots.len() > VOICE_SLOT_COUNT {
@@ -538,7 +540,10 @@ impl VoiceGroup {
                     check_pan_override(v.pan)?;
                 }
                 VoiceEntry::ProgrammableWave(v) => check_id_len(&v.wave.0)?,
-                VoiceEntry::KeySplit(v) => check_id_len(&v.children.0)?,
+                VoiceEntry::KeySplit(v) => {
+                    check_id_len(&v.children.0)?;
+                    check_key_split_table_note_range(v.starting_note, v.table.len())?;
+                }
                 VoiceEntry::Rhythm(v) => check_id_len(&v.children.0)?,
                 VoiceEntry::Square1(v) => check_square_duty(v.duty)?,
                 VoiceEntry::Square2(v) => check_square_duty(v.duty)?,

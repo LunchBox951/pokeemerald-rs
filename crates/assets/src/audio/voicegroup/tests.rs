@@ -249,6 +249,23 @@ fn a_key_split_table_extending_past_the_last_note_is_rejected_by_the_constructor
     );
 }
 
+/// `starting_note` is a public field, so a split built in range can be moved
+/// past the last note afterwards; the group constructor is the last check
+/// before encoding.
+#[test]
+fn a_group_rejects_a_key_split_moved_past_the_last_note_after_construction() {
+    let mut split =
+        KeySplitVoice::new(0, vec![0, 0], VoiceGroupId("audio/voicegroup/x".to_owned())).unwrap();
+    split.starting_note = u8::try_from(VOICE_SLOT_COUNT - 1).expect("127 fits a u8");
+    assert_eq!(
+        VoiceGroup::new(vec![VoiceEntry::KeySplit(split)]),
+        Err(AudioError::KeySplitTableNoteOutOfRange {
+            starting_note: 127,
+            table_len: 2,
+        })
+    );
+}
+
 #[test]
 fn an_empty_key_split_table_is_accepted_at_any_starting_note() {
     let group = VoiceGroup::new(vec![VoiceEntry::KeySplit(
