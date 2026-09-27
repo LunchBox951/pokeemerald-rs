@@ -84,10 +84,13 @@ fn play_first_battle_to_conclusion(phase: &mut OverworldPhase) {
     );
     walk_one_tile_east(phase);
     assert_eq!(phase.player.position(), (tx, ty));
-    assert!(phase.first_battle.is_some(), "setup: the trigger must fire");
+    assert!(
+        phase.is_first_battle_active(),
+        "setup: the trigger must fire"
+    );
 
     let mut frames = 0;
-    while phase.first_battle.is_some() {
+    while phase.is_first_battle_active() {
         phase.step(held(Buttons::RIGHT));
         frames += 1;
         assert!(frames < 20, "the fixture battles must resolve quickly");
@@ -367,13 +370,16 @@ fn an_aborted_first_battle_does_not_run_the_conclusion() {
     phase.party_lead = Some(unplayable_treecko_lead());
 
     walk_one_tile_east(&mut phase);
-    assert!(phase.first_battle.is_some(), "setup: the trigger must fire");
+    assert!(
+        phase.is_first_battle_active(),
+        "setup: the trigger must fire"
+    );
 
     // One driver frame: the turn fails pre-draw, so the battle ends with no
     // outcome at all -- and no conclusion may run off it.
     phase.step(held(Buttons::RIGHT));
     assert!(
-        phase.first_battle.is_none(),
+        !phase.is_first_battle_active(),
         "setup: the aborted battle emptied the slot"
     );
     assert_eq!(
