@@ -779,13 +779,10 @@ fn a_failed_publish_retains_and_reports_its_staging_file() {
     );
 }
 
-/// Nothing after a failed promoting rename touches the staging pathname, so
-/// a replacement landing there survives and the reported path still names
-/// it. This lands one deterministically where a pathname cleanup used to
-/// begin. The removed cleanup's check-to-unlink window has no counterpart in
-/// the fixed code, which performs neither lookup after the rename, so this
-/// test cannot reproduce that window; the regression that fails against the
-/// removed cleanup is `a_failed_publish_retains_and_reports_its_staging_file`.
+/// A failed promoting rename leaves the staging pathname alone: a
+/// replacement landing there right after the failure survives, and the
+/// reported path still names it. The retained original is pinned by
+/// `a_failed_publish_retains_and_reports_its_staging_file`.
 #[cfg(unix)]
 #[test]
 fn a_failed_publish_leaves_a_replacement_planted_at_the_old_cleanup_boundary() {
@@ -799,8 +796,7 @@ fn a_failed_publish_leaves_a_replacement_planted_at_the_old_cleanup_boundary() {
     let staged = super::staging::stage(&staging_path, b"generation\n").unwrap();
     let error = staged
         .publish_with(&unreachable_dest, || {
-            // The promoting rename has already failed by the time this
-            // runs; a pathname cleanup used to start here.
+            // The promoting rename has already failed by the time this runs.
             std::fs::rename(&staging_path, &carried_off).unwrap();
             std::fs::write(&staging_path, b"someone else's file").unwrap();
         })
