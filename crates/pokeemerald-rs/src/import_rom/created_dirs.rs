@@ -1,29 +1,12 @@
 //! The directory levels an import creates on the way to its destination,
 //! from creation through durability or rollback.
 //!
-//! Ownership is what a create reports: only a level whose `mkdir` succeeded
-//! is recorded, and only a recorded level is ever synced or taken back.
-//!
-//! On Unix each level is created through its pinned parent and recorded
-//! with that parent handle, its basename, the device and inode `statat`
-//! reads right after `mkdirat`, and a held descriptor to the level itself,
-//! which keeps that inode from being reused and whose own identity must
-//! match before the descent continues (a mismatch stops creation and
-//! records nothing). Rollback removes a level only by
-//! `unlinkat` in that parent, and only while the parent's lookup of the
-//! name still matches both the recorded identity and the held descriptor;
-//! anything else, including a level whose reopen failed, is left standing
-//! as litter. Two windows stay open, because no portable call closes them:
-//! between `mkdirat` and its `statat`, and between the final check and
-//! `unlinkat`.
-//!
-//! Pins spend descriptors the import still needs for itself. At most
-//! [`pin_budget`] levels, the innermost, are pinned at once, and an open
-//! refused for want of a descriptor, during creation or in the import that
-//! follows ([`open_shedding_pins`]), first releases the outermost pinned
-//! level and retries. A level with no pin is left standing by rollback.
-//!
-//! Off Unix no descriptor is pinned, and each level is addressed by path.
+//! Only a level whose `mkdir` succeeded is recorded, and only a recorded
+//! level is ever synced or taken back. On Unix a level is removed only
+//! through its pinned parent, and only while the name there still resolves
+//! to the identity captured at creation; any level the check cannot vouch
+//! for, including one past [`pin_budget`] or whose pin was shed to free a
+//! descriptor, is left standing. Off Unix each level is addressed by path.
 
 #[cfg(unix)]
 use std::ffi::OsStr;
@@ -57,40 +40,27 @@ pub(super) fn directories_to_create(dir: &Path) -> Vec<PathBuf> {
 
 /// A directory level [`create_directories`] made, and what
 /// [`sync_created_directories`] and [`undo_created_directories`] use to find
-/// it again. See the module docs for why rollback needs the parent handle,
-/// basename, identity, and pinned descriptor kept here on Unix; off Unix
-/// there is no descriptor to pin (`rustix` is Unix-only), so this stays the
-/// path alone, re-resolved each time.
+/// it again.
 #[derive(Debug)]
 #[cfg(unix)]
 pub(super) struct CreatedDirectory {
-    /// Where this level was created. Kept so both platform arms expose the
-    /// same field for `tests::created_paths` to compare; removal never
-    /// re-resolves it, which is the whole point.
+    /// Where this level was created; production never re-resolves it.
     #[allow(
         dead_code,
         reason = "read only by tests::created_paths, not by production Unix code"
     )]
     path: PathBuf,
-    /// The directory this level was created in. Shared, not duplicated,
-    /// with the level above's own [`CreatedDirectory::own`] when that level
-    /// was created by this run too, so a deep chain costs one descriptor per
-    /// level rather than two. `None` past [`MAX_PINNED_LEVELS`]: this level
-    /// was never given a descriptor to verify by, so cleanup skips it
-    /// without stopping the levels above it.
+    /// The directory this level was created in, shared with the level
+    /// above's [`CreatedDirectory::own`]; `None` for an unpinned level.
     parent: Option<std::rc::Rc<std::os::fd::OwnedFd>>,
     /// This level's own basename inside `parent`.
     name: std::ffi::OsString,
-    /// This level's own device and inode, captured right after it was
-    /// created. Kept as `rustix`'s own platform-native [`rustix::fs::Stat`],
-    /// not normalized into a fixed-width type: `st_dev`'s width and
-    /// signedness differ across Unixes this ships to (`i32` on macOS, `u64`
-    /// on Linux).
+    /// This level's device and inode, captured right after creation, in
+    /// the platform-native [`rustix::fs::Stat`] since `st_dev` differs in
+    /// width and signedness across Unixes.
     identity: rustix::fs::Stat,
-    /// This level itself, held open until cleanup runs; see the module docs
-    /// for what the pin captures and why. `None` when the reopen right
-    /// after `mkdirat` failed, or this level sits past [`MAX_PINNED_LEVELS`];
-    /// either way, cleanup leaves it standing.
+    /// This level itself, held open so its inode cannot be reused before
+    /// cleanup; `None` for an unpinned level, which cleanup leaves standing.
     own: Option<std::rc::Rc<std::os::fd::OwnedFd>>,
 }
 
@@ -672,27 +642,10 @@ pub(super) fn sync_created_directories(created: &mut [CreatedDirectory]) {
 /// several missing levels would leave a whole chain of them. Innermost
 /// first, because a directory only comes away once what it holds is gone.
 ///
-/// Non-recursive on purpose, so it can only ever remove a directory this
-/// run created and left empty. The first refusal ends the walk: a level
-/// that will not go is one the level above it is not empty of either, and
-/// a directory something else has since been put in is no longer this
-/// run's to take.
-///
-/// On Unix, "this run created" is asked of the pinned parent, not of the
-/// path: `dir.name` is looked up in `dir.parent`, without following a
-/// final symlink, and compared against the identity `create_directories`
-/// captured and against the level's own held descriptor's `fstat`; a level
-/// with no held descriptor is never removed. Only a match at that lookup
-/// is removed, by name, through `unlinkat`. The module docs own why the
-/// held descriptor makes that comparison trustworthy, why `unlinkat`
-/// re-resolves the name regardless, and how narrow the remaining gap is.
-///
-/// A level past [`MAX_PINNED_LEVELS`] has no `dir.parent` to look anything
-/// up in at all, so it is skipped rather than stopping the walk: unlike a
-/// lookup that comes back wrong, sitting outside the pin budget is this
-/// run's own choice, not a sign the levels further out are suspect too.
-/// Nothing above such a level can be removed either unless it is genuinely
-/// empty, since `unlinkat` still fails for real on one that is not.
+/// Removes, innermost first, each created level that is still empty and
+/// still resolves in its pinned parent to the identity captured at
+/// creation. The first refusal ends the walk; an unpinned level is skipped
+/// and left standing without ending it.
 #[cfg(unix)]
 pub(super) fn undo_created_directories(created: &[CreatedDirectory]) {
     for dir in created.iter().rev() {
