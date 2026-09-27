@@ -197,6 +197,7 @@ impl Mixer {
             if !reusable {
                 return false;
             }
+            voice.carry_duty_phase_from(occupant);
         }
         voice.set_seq(self.take_note_on_ordinal());
         self.cgb_slots[slot] = Some(voice);
