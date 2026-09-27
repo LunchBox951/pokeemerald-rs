@@ -3,7 +3,7 @@
 
 use engine::overworld::wild_encounter::WildEncounter;
 
-use super::OverworldPhase;
+use super::{ActiveBattle, OverworldPhase};
 use crate::flow::save_continue_tests::new_game_phase;
 
 /// `SPECIES_WURMPLE`, the same ordinary fightable wild species
@@ -39,10 +39,9 @@ fn a_wild_opponent_takes_the_save_owners_ot_id_not_the_leads() {
 
     phase.begin_wild_battle(Some(encounter));
 
-    let battle = phase
-        .wild_battle
-        .as_ref()
-        .expect("a fightable Wurmple must construct");
+    let Some(ActiveBattle::Wild(battle)) = phase.active_battle.as_ref() else {
+        panic!("a fightable Wurmple must construct");
+    };
     let enemy = battle.enemy();
     assert_eq!(
         enemy.original_trainer_id(),
@@ -67,10 +66,9 @@ fn the_scripted_first_battle_opponent_takes_the_save_owners_ot_id_not_the_leads(
 
     phase.begin_first_battle();
 
-    let battle = phase
-        .first_battle
-        .as_ref()
-        .expect("the scripted first battle must construct");
+    let Some(ActiveBattle::First(battle)) = phase.active_battle.as_ref() else {
+        panic!("the scripted first battle must construct");
+    };
     let enemy = battle.enemy();
     assert_eq!(
         enemy.original_trainer_id(),
