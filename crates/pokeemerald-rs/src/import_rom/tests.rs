@@ -13,10 +13,7 @@ use rom_import::fixture::RomFixture;
 use rom_import::{ImportError, ImportedPack};
 
 use super::dest::{not_a_directory_error, Dest};
-use super::{
-    create_directories, directories_to_create, import_to, import_to_with, pack_directory,
-    pack_name, ImportOutcome, ImportRomError,
-};
+use super::{import_to, import_to_with, pack_directory, pack_name, ImportOutcome, ImportRomError};
 
 /// A pack of `bytes` the injected importer hands back, standing in for a
 /// real one.
@@ -26,13 +23,13 @@ fn fake_pack(bytes: &[u8]) -> ImportedPack {
 
 /// A temporary directory that removes itself, so a failing test cannot
 /// leave a 16 MiB fixture behind.
-struct TempDir {
-    path: PathBuf,
+pub(super) struct TempDir {
+    pub(super) path: PathBuf,
 }
 
 impl TempDir {
     /// A fresh, empty directory under the OS temporary directory.
-    fn new(label: &str) -> Self {
+    pub(super) fn new(label: &str) -> Self {
         static COUNTER: AtomicU32 = AtomicU32::new(0);
         let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!(
@@ -45,7 +42,7 @@ impl TempDir {
     }
 
     /// A path inside this directory.
-    fn join(&self, name: &str) -> PathBuf {
+    pub(super) fn join(&self, name: &str) -> PathBuf {
         self.path.join(name)
     }
 }
@@ -145,64 +142,6 @@ fn a_successful_import_publishes_the_pack_and_clears_the_temp_file() {
         file_names(pack_path.parent().unwrap()),
         ["pokeemerald.pack"]
     );
-}
-
-#[test]
-fn every_level_the_import_must_create_is_listed_outermost_first() {
-    // Each level is a name in the one before it, and it is the *parent*
-    // that has to be synced to make that name durable -- so the list has to
-    // name every level, in the order they are created.
-    let dir = TempDir::new("levels");
-    let one = dir.join("one");
-    let two = one.join("two");
-    let three = two.join("three");
-
-    assert_eq!(
-        directories_to_create(&three),
-        [one.clone(), two.clone(), three.clone()]
-    );
-    // A destination that is already there is created by nobody, which is
-    // also how a failed import knows not to remove it.
-    assert!(directories_to_create(&dir.path).is_empty());
-
-    fs::create_dir_all(&one).expect("the first level is created");
-    assert_eq!(directories_to_create(&three), [two.clone(), three.clone()]);
-    fs::create_dir_all(&three).expect("the rest are created");
-    assert!(directories_to_create(&three).is_empty());
-}
-
-#[test]
-fn only_the_levels_the_run_created_come_back_as_its_own() {
-    // Ownership is the create's answer, not an earlier look's: a level that
-    // is already there when the create reaches it belongs to whoever made
-    // it, and a failed import must leave it standing even while it is
-    // empty. Another importer racing this one hits exactly that path.
-    let dir = TempDir::new("created-levels");
-    let one = dir.join("one");
-    let two = one.join("two");
-    fs::create_dir(&one).expect("the outer level is created");
-
-    let created = create_directories(&two).expect("the missing level is created");
-    assert_eq!(created, std::slice::from_ref(&two));
-    assert!(two.is_dir());
-
-    let again = create_directories(&two).expect("an existing destination is not a failure");
-    assert!(again.is_empty(), "a run that created nothing owns nothing");
-}
-
-#[test]
-fn a_creation_that_fails_part_way_hands_back_the_levels_it_made() {
-    // The overlong component trips the create after `new/` is on disk, and
-    // the prefix has to come back with the error for the caller to undo.
-    let dir = TempDir::new("partial-create-levels");
-    let outer = dir.join("new");
-    let overlong = "x".repeat(300);
-
-    let (created, _source) = create_directories(&outer.join(overlong))
-        .expect_err("the overlong component cannot be created");
-
-    assert_eq!(created, std::slice::from_ref(&outer));
-    assert!(outer.is_dir());
 }
 
 #[test]
@@ -315,6 +254,143 @@ fn a_failed_import_removes_the_directory_it_created() {
     // that would look like a half-installed game.
     assert!(!created.exists());
     assert!(file_names(&dir.path).is_empty());
+}
+
+/// Set in the child process [`run_under_descriptor_pressure`] spawns.
+#[cfg(unix)]
+const DESCRIPTOR_PRESSURE_CHILD: &str = "POKEEMERALD_IMPORT_DESCRIPTOR_PRESSURE_CHILD";
+
+/// Whether this process is the child [`run_under_descriptor_pressure`]
+/// spawned, where the test body runs under its lowered limit.
+#[cfg(unix)]
+pub(super) fn in_descriptor_pressure_child() -> bool {
+    std::env::var_os(DESCRIPTOR_PRESSURE_CHILD).is_some()
+}
+
+/// Reruns the test at `test_path` alone in a child process whose soft
+/// `RLIMIT_NOFILE` is 36, and fails unless it passes there.
+#[cfg(unix)]
+pub(super) fn run_under_descriptor_pressure(test_path: &str) {
+    let exe = std::env::current_exe().expect("the running test binary has a path");
+    let output = std::process::Command::new("bash")
+        .arg("-c")
+        .arg(r#"ulimit -Sn 36 && exec "$0" "$1" --exact --nocapture"#)
+        .arg(&exe)
+        .arg(test_path)
+        .env(DESCRIPTOR_PRESSURE_CHILD, "1")
+        .output()
+        .expect("the child test process must be spawnable");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("1 passed"),
+        "child status {:?}\nstdout:\n{stdout}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// Fills this process's descriptor table, then frees exactly `free` slots,
+/// so a test's headroom does not depend on how many descriptors the
+/// harness happens to hold. The pressure lasts while the result is held.
+#[cfg(unix)]
+pub(super) fn fill_descriptor_table_leaving(free: usize) -> Vec<fs::File> {
+    let mut fillers = Vec::new();
+    let exhausted = loop {
+        match fs::File::open("/dev/null") {
+            Ok(file) => fillers.push(file),
+            Err(err) => break err,
+        }
+    };
+    assert_eq!(
+        rustix::io::Errno::from_io_error(&exhausted),
+        Some(rustix::io::Errno::MFILE),
+        "{exhausted:?}"
+    );
+    fillers.truncate(fillers.len() - free);
+    fillers
+}
+
+#[cfg(unix)]
+#[test]
+fn a_deep_destination_under_descriptor_pressure_still_publishes() {
+    // Pinning is sized against the soft limit alone, so a process already
+    // holding most of its table can finish creation with none left.
+    if !in_descriptor_pressure_child() {
+        run_under_descriptor_pressure(
+            "import_rom::tests::a_deep_destination_under_descriptor_pressure_still_publishes",
+        );
+        return;
+    }
+    let dir = TempDir::new("descriptor-pressure");
+    let mut level = dir.join("d");
+    for _ in 1..32 {
+        level = level.join("d");
+    }
+    let pack_path = level.join("pokeemerald.pack");
+    let source = SourceRom::new("descriptor-pressure-src");
+    let fillers = fill_descriptor_table_leaving(4);
+    let outcome = import_to_with(source.path(), &pack_path, |_rom, _path| {
+        Ok(fake_pack(b"pack bytes"))
+    });
+    drop(fillers);
+    outcome.expect("releasable pins must not starve the destination and temporary file");
+    assert_eq!(
+        fs::read(&pack_path).expect("the pack was published"),
+        b"pack bytes"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_failed_import_does_not_remove_a_directory_it_did_not_create() {
+    // `undo_created_directories` looks `created`/`new` up in the pinned
+    // parent and compares its device and inode against what
+    // `create_directories` captured, rather than trusting the path
+    // spelling again. Between the pin and the failure, another account
+    // renames the level this run made out from under the name and puts its
+    // own there -- the level it is about to write into. That replacement's
+    // identity does not match the record, so it is left untouched;
+    // removing it anyway would be the harm `create_directories` refuses
+    // `create_dir_all` over, arriving by the other door.
+    let dir = TempDir::new("undo-swapped");
+    let created = dir.join("new");
+    let moved = dir.join("moved");
+    let pack_path = created.join("pokeemerald.pack");
+
+    let source = SourceRom::new("undo-swapped-src");
+    let err = import_to_with(source.path(), &pack_path, |_rom, _path| {
+        fs::rename(&created, &moved).expect("the created level is renamed away");
+        fs::create_dir(&created).expect("somebody else's level takes the name");
+        Err(ImportError::EmptyPack)
+    })
+    .unwrap_err();
+
+    assert!(matches!(err, ImportRomError::Import { .. }));
+    assert!(
+        created.is_dir(),
+        "the cleanup took back a directory this run never created"
+    );
+    // The directory this run actually made is left standing too -- harmless
+    // litter, not chased down under its new name.
+    assert!(moved.is_dir());
+}
+
+#[test]
+fn a_pack_directory_spelled_through_dotdot_still_imports() {
+    // `directories_to_create` walks lexically (`Path::parent`), so a
+    // destination spelled through `..` produces a level whose
+    // `Path::file_name` is `None` -- it names no new component to create,
+    // only an already-real ancestor `create_directories`'s Unix arm has to
+    // recognize rather than mistake for an unnameable failure.
+    let dir = TempDir::new("dotdot-level");
+    let pack_path = dir.join("missing").join("..").join("pokeemerald.pack");
+
+    let source = SourceRom::new("dotdot-level-src");
+    let outcome = import_to_with(source.path(), &pack_path, |_rom, _path| {
+        Ok(fake_pack(b"pack bytes"))
+    })
+    .expect("a dotdot-spelled destination still imports");
+    assert_eq!(outcome.pack_path(), pack_path);
 }
 
 #[test]
