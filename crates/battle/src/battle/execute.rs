@@ -1,8 +1,11 @@
 //! Dispatch and stateful execution for moves admitted by [`crate::battle`].
 
-use assets::{AbilityId, MoveEffect, MoveId};
+use assets::{AbilityId, MoveEffect, MoveId, Type};
 
-use crate::damage::{BattleRng, STRUGGLE};
+use crate::ability::huge_power_attack;
+use crate::damage::{
+    apply_damage_roll, base_damage, BattleRng, DamageInput, MoveCategory, Weather, STRUGGLE,
+};
 use crate::defense_curl::is_defense_curl_effect;
 use crate::drain::is_drain_effect;
 use crate::error::BattleError;
@@ -24,6 +27,10 @@ use crate::status1::Status1;
 use super::{Battle, BattleEvent};
 
 mod pipelines;
+
+/// Confusion's fixed self-hit power (`MOVE_POUND`'s override at
+/// `src/battle_util.c:2159`).
+const CONFUSION_SELF_HIT_POWER: u8 = 40;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MovePipeline {
@@ -225,6 +232,61 @@ impl Battle {
             damage: hp_lost,
         });
         self.settle_faint(attacker_is_player, events);
+    }
+
+    /// Confusion's self-hit: upstream's fixed 40-power physical Normal
+    /// calculation against the battler itself, using its own Attack and
+    /// Defense with stages and one damage-variance draw, with no accuracy,
+    /// critical, STAB, or type-chart stage (the self-target `MOVE_POUND`
+    /// call at `src/battle_util.c:2157`-`:2166`, whose type and category
+    /// `CalculateBaseDamage`, `src/pokemon.c:3106`-`:3260`, reads from).
+    /// Spends no PP; the caller must not also run the paralysis draw or
+    /// execute the chosen move for this action.
+    pub(super) fn apply_confusion_self_hit(
+        &mut self,
+        battler_is_player: bool,
+        rng: &mut impl BattleRng,
+        events: &mut Vec<BattleEvent>,
+    ) {
+        let battler = if battler_is_player {
+            &self.player
+        } else {
+            &self.enemy
+        };
+        let (raw_attack, attack_stage) = battler.attacking_stat(MoveCategory::Physical);
+        let attack_stat = huge_power_attack(battler.ability(), MoveCategory::Physical, raw_attack);
+        let (defense_stat, defense_stage) = battler.defending_stat(MoveCategory::Physical);
+        let input = DamageInput {
+            attacker_level: battler.level(),
+            power: u32::from(CONFUSION_SELF_HIT_POWER),
+            move_type: Type::Normal,
+            attack_stat,
+            attack_stage,
+            defense_stat,
+            defense_stage,
+            attacker_burned: false,
+            reflect: false,
+            light_screen: false,
+            weather: Weather::None,
+            is_solar_beam: false,
+            // Normal typing never matches a pinch ability's Fire/Water/Grass/Bug
+            // gate, so the self-hit can never trigger Overgrow/Blaze/Torrent/Swarm.
+            attacker_pinch_boost: false,
+        };
+        let damage = apply_damage_roll(base_damage(&input), rng);
+
+        let battler = if battler_is_player {
+            &mut self.player
+        } else {
+            &mut self.enemy
+        };
+        let hp_lost = damage.min(battler.current_hp());
+        battler.apply_damage(hp_lost);
+        events.push(BattleEvent::ConfusionSelfHit {
+            by_player: battler_is_player,
+            damage: hp_lost,
+        });
+        self.settle_faint(battler_is_player, events);
     }
 
     /// `tryfaintmon` for one side: reports the faint and clears the corpse's
