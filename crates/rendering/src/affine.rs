@@ -59,11 +59,21 @@ impl AffineMatrix {
 
     /// Applies the transform to a whole-pixel screen-space delta.
     ///
-    /// The returned texture-space delta is signed 8.8 fixed point.
+    /// The returned texture-space delta is signed 8.8 fixed point. Each
+    /// coefficient-delta product and their sum wrap on overflow rather than
+    /// panicking, matching the 32-bit accumulator width mGBA uses for this
+    /// same multiply-accumulate (`mgba/include/mgba/internal/gba/renderers/video-software.h:35-40`,
+    /// `mgba/src/gba/renderers/software-obj.c:241-242`); wrapping past that
+    /// width is this function's own defined policy for the out-of-hardware-domain
+    /// case, not an observed hardware behavior.
     #[must_use]
     pub const fn apply(self, horizontal: i32, vertical: i32) -> (i32, i32) {
-        let x = (self.pa as i32) * horizontal + (self.pb as i32) * vertical;
-        let y = (self.pc as i32) * horizontal + (self.pd as i32) * vertical;
+        let x = (self.pa as i32)
+            .wrapping_mul(horizontal)
+            .wrapping_add((self.pb as i32).wrapping_mul(vertical));
+        let y = (self.pc as i32)
+            .wrapping_mul(horizontal)
+            .wrapping_add((self.pd as i32).wrapping_mul(vertical));
         (x, y)
     }
 }
@@ -99,6 +109,23 @@ mod tests {
             matrix.apply(10, 4),
             (22 * expected_scale, -6 * expected_scale)
         );
+    }
+
+    #[test]
+    fn apply_wraps_a_single_product_instead_of_overflowing() {
+        let matrix = AffineMatrix::IDENTITY;
+        // 256 * i32::MAX == 0x7F_FFFF_FF00; its low 32 bits, 0xFFFF_FF00,
+        // are -256 as two's complement.
+        assert_eq!(matrix.apply(i32::MAX, 0), (-256, 0));
+    }
+
+    #[test]
+    fn apply_wraps_the_accumulated_sum_instead_of_overflowing() {
+        // Neither product overflows i32 on its own (1 * i32::MAX ==
+        // i32::MAX), but their sum, 2 * i32::MAX, does; it wraps to -2
+        // instead of panicking or invoking undefined behavior.
+        let matrix = AffineMatrix::new(1, 1, 1, 1);
+        assert_eq!(matrix.apply(i32::MAX, i32::MAX), (-2, -2));
     }
 
     #[test]
