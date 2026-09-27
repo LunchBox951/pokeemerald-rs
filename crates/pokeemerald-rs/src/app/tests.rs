@@ -252,6 +252,12 @@ fn headless_frame_is_non_blank() {
     );
 }
 
+/// Generously above the 22-call fade trace `NormalPaletteFade`'s own tests
+/// pin (`crates/rendering/src/palette_fade.rs`), so a regression that never
+/// reaches `Done` fails [`real_headless_app_reports_title_then_selected_main_menu`]
+/// loudly instead of looping forever.
+const MAX_FADE_WAIT_STEPS: usize = 40;
+
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_headless_app_reports_title_then_selected_main_menu() {
@@ -261,6 +267,24 @@ fn real_headless_app_reports_title_then_selected_main_menu() {
     app.set_headless_buttons(Buttons::START)
         .expect("headless input injection succeeds");
     assert!(app.step().expect("headless step never errors"));
+    // I-3, issue #1329: the press frame enters the white fade-wait state,
+    // still reported as `AppState::Title` -- not the main menu yet.
+    assert_eq!(app.state(), AppState::Title);
+
+    app.set_headless_buttons(Buttons::NONE)
+        .expect("headless input injection succeeds");
+    let mut left_title = false;
+    for _ in 0..MAX_FADE_WAIT_STEPS {
+        assert!(app.step().expect("headless step never errors"));
+        if app.state() != AppState::Title {
+            left_title = true;
+            break;
+        }
+    }
+    assert!(
+        left_title,
+        "the title fade did not complete within {MAX_FADE_WAIT_STEPS} steps"
+    );
     assert_eq!(
         app.state(),
         AppState::MainMenu(crate::main_menu::MainMenuItem::NewGame)
