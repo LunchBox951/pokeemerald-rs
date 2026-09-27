@@ -140,6 +140,14 @@
 //! a directory and hands back a descriptor to what it made in the same
 //! step. A replacement landed there is recorded as if this run had made it,
 //! and cleanup could later remove it.
+//!
+//! Pinning costs one descriptor per level, so an unusually deep chain of
+//! missing levels could exhaust the process's descriptor table before it
+//! runs out of levels to create. Past [`MAX_PINNED_LEVELS`], only the
+//! innermost that many stay pinned; the rest still descend through a
+//! transient reopen but keep no descriptor for cleanup to verify by, so
+//! cleanup leaves them standing -- litter, on the same terms as any level
+//! it cannot confirm.
 
 mod dest;
 
@@ -754,8 +762,10 @@ struct CreatedDirectory {
     /// The directory this level was created in. Shared, not duplicated,
     /// with the level above's own [`CreatedDirectory::own`] when that level
     /// was created by this run too, so a deep chain costs one descriptor per
-    /// level rather than two.
-    parent: std::rc::Rc<std::os::fd::OwnedFd>,
+    /// level rather than two. `None` past [`MAX_PINNED_LEVELS`]: this level
+    /// was never given a descriptor to verify by, so cleanup skips it
+    /// without stopping the levels above it.
+    parent: Option<std::rc::Rc<std::os::fd::OwnedFd>>,
     /// This level's own basename inside `parent`.
     name: std::ffi::OsString,
     /// This level's own device and inode, captured right after it was
@@ -765,8 +775,9 @@ struct CreatedDirectory {
     /// on Linux).
     identity: rustix::fs::Stat,
     /// This level itself, held open until cleanup runs; see the module docs
-    /// for what the pin captures and why. `None` only when the reopen right
-    /// after `mkdirat` failed, so cleanup leaves that level standing.
+    /// for what the pin captures and why. `None` when the reopen right
+    /// after `mkdirat` failed, or this level sits past [`MAX_PINNED_LEVELS`];
+    /// either way, cleanup leaves it standing.
     own: Option<std::rc::Rc<std::os::fd::OwnedFd>>,
 }
 
@@ -785,6 +796,13 @@ struct CreatedDirectory {
 fn same_directory_identity(a: &rustix::fs::Stat, b: &rustix::fs::Stat) -> bool {
     a.st_dev == b.st_dev && a.st_ino == b.st_ino
 }
+
+/// The most levels [`create_directories_with_hooks`] keeps a descriptor
+/// pinned for at once; see the module docs for why. A destination this many
+/// levels deep or shallower is unaffected -- every level still pins, exactly
+/// as before this existed.
+#[cfg(unix)]
+const MAX_PINNED_LEVELS: usize = 32;
 
 /// Create the levels `dir` is missing, outermost first, and answer with the
 /// ones this run made — the levels [`sync_created_directories`] persists
@@ -899,8 +917,13 @@ fn create_directories_with_hooks(
         Err(source) => return Err((Vec::new(), source)),
     };
 
+    // Only the innermost `MAX_PINNED_LEVELS` get a descriptor pinned; see
+    // the module docs. `levels.len()` is already the whole walk, computed
+    // before any of it runs, so the cutoff is known up front rather than
+    // discovered after the descriptor table is already exhausted.
+    let pin_from = levels.len().saturating_sub(MAX_PINNED_LEVELS);
     let mut created = Vec::new();
-    for level in levels {
+    for (index, level) in levels.into_iter().enumerate() {
         // `directories_to_create`'s lexical walk can produce a `..` level
         // (`Path::file_name` is `None` for one) that names no new component
         // to make. It resolves relative to the descent itself (`..` from
@@ -948,21 +971,25 @@ fn create_directories_with_hooks(
                     }
                     Err(source) => return Err((created, source.into())),
                 };
+                let pin = index >= pin_from;
                 match reopen_created_level(&parent_fd, &name, &identity, before_reopen) {
                     ReopenedLevel::Pinned(descend) => {
                         created.push(CreatedDirectory {
                             path: level,
-                            parent: parent_fd,
+                            parent: pin.then_some(parent_fd),
                             name,
                             identity,
-                            own: Some(std::rc::Rc::clone(&descend)),
+                            own: pin.then(|| std::rc::Rc::clone(&descend)),
                         });
                         parent_fd = descend;
                     }
+                    // A real reopen failure, not a budget choice: kept on
+                    // the same terms as before `MAX_PINNED_LEVELS` existed,
+                    // so cleanup still stops here rather than past it.
                     ReopenedLevel::Unpinned(source) => {
                         created.push(CreatedDirectory {
                             path: level,
-                            parent: parent_fd,
+                            parent: Some(parent_fd),
                             name,
                             identity,
                             own: None,
@@ -1033,11 +1060,15 @@ fn create_directories(
 /// Best-effort throughout: a weaker durability guarantee is not something
 /// to fail a finished import over -- including `dir.parent` itself being a
 /// traversal-only descriptor nothing can `fsync` directly
-/// ([`dest::reopen_for_sync`]).
+/// ([`dest::reopen_for_sync`]), or, past [`MAX_PINNED_LEVELS`], not being
+/// pinned at all.
 #[cfg(unix)]
 fn sync_created_directories(created: &[CreatedDirectory]) {
     for dir in created {
-        if let Ok(real) = dest::reopen_for_sync(&dir.parent) {
+        let Some(parent) = dir.parent.as_deref() else {
+            continue;
+        };
+        if let Ok(real) = dest::reopen_for_sync(parent) {
             let _ = rustix::fs::fsync(&real);
         }
     }
@@ -1082,14 +1113,20 @@ fn sync_created_directories(created: &[CreatedDirectory]) {
 /// is removed, by name, through `unlinkat`. The module docs own why the
 /// held descriptor makes that comparison trustworthy, why `unlinkat`
 /// re-resolves the name regardless, and how narrow the remaining gap is.
+///
+/// A level past [`MAX_PINNED_LEVELS`] has no `dir.parent` to look anything
+/// up in at all, so it is skipped rather than stopping the walk: unlike a
+/// lookup that comes back wrong, sitting outside the pin budget is this
+/// run's own choice, not a sign the levels further out are suspect too.
+/// Nothing above such a level can be removed either unless it is genuinely
+/// empty, since `unlinkat` still fails for real on one that is not.
 #[cfg(unix)]
 fn undo_created_directories(created: &[CreatedDirectory]) {
     for dir in created.iter().rev() {
-        match rustix::fs::statat(
-            &*dir.parent,
-            &dir.name,
-            rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
-        ) {
+        let Some(parent) = dir.parent.as_deref() else {
+            continue;
+        };
+        match rustix::fs::statat(parent, &dir.name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW) {
             Ok(stat)
                 if same_directory_identity(&stat, &dir.identity)
                     && dir.own.as_ref().is_some_and(|own| {
@@ -1097,8 +1134,7 @@ fn undo_created_directories(created: &[CreatedDirectory]) {
                             .is_ok_and(|held| same_directory_identity(&stat, &held))
                     }) =>
             {
-                match rustix::fs::unlinkat(&*dir.parent, &dir.name, rustix::fs::AtFlags::REMOVEDIR)
-                {
+                match rustix::fs::unlinkat(parent, &dir.name, rustix::fs::AtFlags::REMOVEDIR) {
                     Ok(()) => {}
                     // Already gone is already taken care of.
                     Err(err) if err == rustix::io::Errno::NOENT => {}

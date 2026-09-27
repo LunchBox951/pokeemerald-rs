@@ -545,6 +545,63 @@ fn a_level_swapped_between_stat_and_reopen_is_not_descended_into() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn a_deep_valid_destination_is_created_without_one_descriptor_per_level() {
+    let dir = TempDir::new("deep-create");
+    let mut level = dir.join("d");
+    for _ in 0..100 {
+        level = level.join("d");
+    }
+    let created = create_directories(&level)
+        .map_err(|(created, source)| (created.len(), source))
+        .expect("a valid deep destination is created");
+    assert_eq!(created.len(), 101);
+    assert!(level.is_dir());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_destination_past_the_pin_budget_rolls_back_only_the_pinned_suffix() {
+    // Pin budget is `MAX_PINNED_LEVELS`; a few levels beyond it exercises
+    // both sides of the cutoff without building an unnecessarily deep tree.
+    let dir = TempDir::new("pin-budget");
+    let total = super::MAX_PINNED_LEVELS + 5;
+    let pin_from = total - super::MAX_PINNED_LEVELS;
+    let mut level = dir.join("d");
+    for _ in 1..total {
+        level = level.join("d");
+    }
+
+    let created = create_directories(&level)
+        .expect("a valid destination past the pin budget is still created");
+    assert_eq!(created.len(), total);
+    assert!(level.is_dir());
+    for (index, entry) in created.iter().enumerate() {
+        assert_eq!(
+            entry.own.is_some(),
+            index >= pin_from,
+            "level {index} pin state (pin_from = {pin_from})"
+        );
+    }
+
+    super::undo_created_directories(&created);
+
+    for (index, entry) in created.iter().enumerate() {
+        if index >= pin_from {
+            assert!(
+                !entry.path.is_dir(),
+                "level {index} was pinned and verifiable, so rollback should remove it"
+            );
+        } else {
+            assert!(
+                entry.path.is_dir(),
+                "level {index} was never pinned, so rollback must leave it standing"
+            );
+        }
+    }
+}
+
 #[test]
 fn a_pack_directory_spelled_through_dotdot_still_imports() {
     // `directories_to_create` walks lexically (`Path::parent`), so a
