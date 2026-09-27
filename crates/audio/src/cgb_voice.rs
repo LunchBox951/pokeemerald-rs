@@ -107,6 +107,15 @@ impl Oscillator {
         }
     }
 
+    /// Applies the hardware off-write's frequency truncation
+    /// ([`SquareChannel::apply_hardware_off_write`]'s doc); a no-op for
+    /// Wave/Noise.
+    fn apply_hardware_off_write(&mut self) {
+        if let Self::Square(square) = self {
+            square.apply_hardware_off_write();
+        }
+    }
+
     fn step_sweep_tick(&mut self) -> bool {
         match self {
             Self::Square(square) => square.step_sweep_tick(),
@@ -599,6 +608,19 @@ impl CgbVoice {
     /// replaces on a shared hardware slot.
     pub(crate) fn carry_duty_phase_from(&mut self, other: &Self) {
         self.oscillator.carry_duty_phase_from(&other.oscillator);
+    }
+
+    /// Applies the off-write a voice's slot receives the instant it idles
+    /// ([`SquareChannel::apply_hardware_off_write`]'s doc).
+    pub(crate) fn apply_hardware_off_write(&mut self) {
+        self.oscillator.apply_hardware_off_write();
+    }
+
+    /// Advances an idle square slot's duty position through `samples` of
+    /// silence, the way its free-running register keeps advancing on
+    /// hardware (`mgba/src/gb/audio.c:493-510`); a no-op for Wave/Noise.
+    pub(crate) fn advance_idle_duty(&mut self, samples: usize) {
+        self.oscillator.advance_silently(samples);
     }
 
     /// Return whether `ply_endtie` may select this voice

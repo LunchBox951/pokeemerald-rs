@@ -313,6 +313,14 @@ impl SquareChannel {
             .wrapping_add(self.step_delta.wrapping_mul(samples));
     }
 
+    /// Applies the off-write an idling slot's `NR14`/`NR24` restart makes:
+    /// it clears the frequency register's high three bits, so a later
+    /// catch-up rates against the low byte alone
+    /// (`pokeemerald/src/m4a.c:857-868`, `mgba/src/gb/audio.c:168-171,219-222`).
+    pub(crate) fn apply_hardware_off_write(&mut self) {
+        self.set_frequency(self.frequency & FREQUENCY_LOW_BYTE);
+    }
+
     /// Retunes the channel from an 11-bit frequency register value, as a pitch
     /// write does through both `NR13` and `NR14`
     /// (`pokeemerald/src/m4a.c:1198-1203`).
@@ -1043,6 +1051,35 @@ mod tests {
             (first_step - (replacement_period - elapsed)).abs() <= 1.0,
             "the replacement steps after {first_step} samples, expected about {}",
             replacement_period - elapsed,
+        );
+    }
+
+    /// The off-write rates the channel as if only its low frequency byte
+    /// survived, without itself moving the duty index
+    /// (`SquareChannel::apply_hardware_off_write`'s doc).
+    #[test]
+    fn the_hardware_off_write_truncates_the_frequency_to_its_low_byte() {
+        let mut square = SquareChannel::new(HALF_DUTY_REGISTER, HIGH_FREQUENCY_REGISTER, None);
+        while square.phase / PHASE_ONE == 0 {
+            square.sample();
+        }
+        let index_before = square.phase / PHASE_ONE;
+
+        square.apply_hardware_off_write();
+
+        assert_eq!(
+            square.phase / PHASE_ONE,
+            index_before,
+            "the off-write must not itself move the duty index",
+        );
+        let truncated = SquareChannel::new(
+            HALF_DUTY_REGISTER,
+            HIGH_FREQUENCY_REGISTER & FREQUENCY_LOW_BYTE,
+            None,
+        );
+        assert_eq!(
+            square.step_delta, truncated.step_delta,
+            "the off-write must rate the channel as if only its low frequency byte survived",
         );
     }
 }

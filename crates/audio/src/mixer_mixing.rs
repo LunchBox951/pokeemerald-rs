@@ -655,3 +655,189 @@ fn a_square_note_on_continues_the_duty_phase_of_the_note_it_replaces() {
          of restarting the duty table at index zero",
     );
 }
+
+/// A note landing on a square slot that `stop_track` vacated must continue
+/// the duty index the slot's free-running register would have reached over
+/// that silence, not restart at zero (`CgbVoice::advance_idle_duty`'s doc).
+#[test]
+fn a_square_note_on_a_slot_stop_track_vacated_continues_the_idle_duty_phase() {
+    const TRACK: usize = 0;
+    const KEY: u8 = 60;
+    const IDLE_FRAMES: usize = 3;
+
+    let mut occupied = Mixer::new(MAX_MASTER_VOLUME, 1);
+    let mut vacated = Mixer::new(MAX_MASTER_VOLUME, 1);
+    // A slot's off-write truncates its frequency the instant it idles
+    // (`CgbVoice::apply_hardware_off_write`'s doc); a slot rated the same
+    // way and left occupied for the same span is the oracle.
+    let mut idle_rate_reference = cgb_keyed_voice(TRACK, KEY);
+    idle_rate_reference.apply_hardware_off_write();
+    assert!(occupied.add_cgb_voice(idle_rate_reference));
+    assert!(vacated.add_cgb_voice(cgb_keyed_voice(TRACK, KEY)));
+    vacated.stop_track(TRACK);
+
+    let mut occupied_out = vec![0.0; SAMPLES_PER_FRAME * 2];
+    let mut vacated_out = vec![0.0; SAMPLES_PER_FRAME * 2];
+    for frame in 0..IDLE_FRAMES {
+        occupied.mix_frame(&mut occupied_out);
+        vacated.mix_frame(&mut vacated_out);
+        assert!(
+            vacated_out.iter().all(|&sample| sample == 0.0),
+            "frame {frame}: a vacated slot must render silence"
+        );
+    }
+
+    assert!(occupied.add_cgb_voice(cgb_keyed_voice(TRACK, KEY)));
+    assert!(vacated.add_cgb_voice(cgb_keyed_voice(TRACK, KEY)));
+
+    occupied.mix_frame(&mut occupied_out);
+    vacated.mix_frame(&mut vacated_out);
+    assert_eq!(
+        occupied_out, vacated_out,
+        "a note on a stop_track-vacated slot must continue the duty index \
+         the slot's free-running register would have reached, not reset it \
+         to zero",
+    );
+}
+
+/// The same continuation, this time through natural envelope retirement
+/// instead of `stop_track`.
+#[test]
+fn a_square_note_on_a_naturally_retired_slot_continues_the_idle_duty_phase() {
+    const TRACK: usize = 0;
+    const KEY: u8 = 60;
+    const IDLE_FRAMES: usize = 3;
+    const MAX_FRAMES_TO_RETIRE: usize = 32;
+
+    let mut occupied = Mixer::new(MAX_MASTER_VOLUME, 1);
+    let mut retired = Mixer::new(MAX_MASTER_VOLUME, 1);
+    assert!(occupied.add_cgb_voice(cgb_keyed_voice(TRACK, KEY)));
+    assert!(retired.add_cgb_voice(cgb_keyed_voice(TRACK, KEY)));
+    retired.note_off_track(TRACK, KEY);
+
+    let mut occupied_out = vec![0.0; SAMPLES_PER_FRAME * 2];
+    let mut retired_out = vec![0.0; SAMPLES_PER_FRAME * 2];
+    let mut frames_to_retire = 0;
+    while retired.cgb_voices()[CgbChannelNumber::Square1.slot()].is_some() {
+        retired.mix_frame(&mut retired_out);
+        // The instant a slot idles, its off-write truncates the rate its
+        // duty catch-up measures by; switch the still-sounding oracle to
+        // that same rate, at the same instant, to track it.
+        if retired.cgb_voices()[CgbChannelNumber::Square1.slot()].is_none() {
+            let mut idle_rate_reference = cgb_keyed_voice(TRACK, KEY);
+            idle_rate_reference.apply_hardware_off_write();
+            assert!(occupied.add_cgb_voice(idle_rate_reference));
+        }
+        occupied.mix_frame(&mut occupied_out);
+        frames_to_retire += 1;
+        assert!(
+            frames_to_retire < MAX_FRAMES_TO_RETIRE,
+            "test setup must retire well within this bound"
+        );
+    }
+
+    for frame in 0..IDLE_FRAMES {
+        occupied.mix_frame(&mut occupied_out);
+        retired.mix_frame(&mut retired_out);
+        assert!(
+            retired_out.iter().all(|&sample| sample == 0.0),
+            "frame {frame}: a retired slot must render silence while idle"
+        );
+    }
+
+    assert!(occupied.add_cgb_voice(cgb_keyed_voice(TRACK, KEY)));
+    assert!(retired.add_cgb_voice(cgb_keyed_voice(TRACK, KEY)));
+
+    occupied.mix_frame(&mut occupied_out);
+    retired.mix_frame(&mut retired_out);
+    assert_eq!(
+        occupied_out, retired_out,
+        "a note on a naturally retired slot must continue the duty index \
+         the slot's free-running register would have reached, not reset it \
+         to zero",
+    );
+}
+
+// Overflows at trigger, muting the hardware from frame 0 while the
+// envelope keeps running (`square1_upward_sweep_overflow_is_born_muted_and_revives_on_a_safe_trigger`,
+// cgb_voice.rs).
+const OVERFLOWING_SWEEP_AT_TRIGGER: u8 = 0x31;
+const OVERFLOW_KEY: u8 = 120;
+
+fn cgb_muted_at_trigger_voice(track: usize, key: u8) -> CgbVoice {
+    CgbVoice::square(
+        CgbChannelNumber::Square1,
+        2,
+        Some(OVERFLOWING_SWEEP_AT_TRIGGER),
+        CgbAdsr::flat(),
+        key,
+        0,
+        FULL_TRACK_VOLUME,
+        FULL_TRACK_VOLUME,
+        TEST_VELOCITY,
+        TIED_GATE_TIME,
+        key,
+        track,
+        0,
+        0,
+        0,
+    )
+}
+
+/// A hardware-muted voice's unconditional duty catch-up in `render` must
+/// not also double-count the frame its envelope retires on top of the
+/// idle-duty loop's own advance for that same frame.
+#[test]
+fn a_note_on_a_slot_a_muted_voice_vacated_does_not_double_count_the_retirement_frame() {
+    const TRACK: usize = 0;
+    const IDLE_FRAMES: usize = 3;
+    const MAX_FRAMES_TO_RETIRE: usize = 32;
+
+    let mut occupied = Mixer::new(MAX_MASTER_VOLUME, 1);
+    let mut retired = Mixer::new(MAX_MASTER_VOLUME, 1);
+    assert!(occupied.add_cgb_voice(cgb_keyed_voice(TRACK, OVERFLOW_KEY)));
+    assert!(retired.add_cgb_voice(cgb_muted_at_trigger_voice(TRACK, OVERFLOW_KEY)));
+    retired.note_off_track(TRACK, OVERFLOW_KEY);
+
+    let mut occupied_out = vec![0.0; SAMPLES_PER_FRAME * 2];
+    let mut retired_out = vec![0.0; SAMPLES_PER_FRAME * 2];
+    let mut frames_to_retire = 0;
+    while retired.cgb_voices()[CgbChannelNumber::Square1.slot()].is_some() {
+        retired.mix_frame(&mut retired_out);
+        assert!(
+            retired_out.iter().all(|&sample| sample == 0.0),
+            "a muted voice must render silence while it still holds the slot"
+        );
+        if retired.cgb_voices()[CgbChannelNumber::Square1.slot()].is_none() {
+            let mut idle_rate_reference = cgb_keyed_voice(TRACK, OVERFLOW_KEY);
+            idle_rate_reference.apply_hardware_off_write();
+            assert!(occupied.add_cgb_voice(idle_rate_reference));
+        }
+        occupied.mix_frame(&mut occupied_out);
+        frames_to_retire += 1;
+        assert!(
+            frames_to_retire < MAX_FRAMES_TO_RETIRE,
+            "test setup must retire well within this bound"
+        );
+    }
+
+    for frame in 0..IDLE_FRAMES {
+        occupied.mix_frame(&mut occupied_out);
+        retired.mix_frame(&mut retired_out);
+        assert!(
+            retired_out.iter().all(|&sample| sample == 0.0),
+            "frame {frame}: a retired slot must render silence while idle"
+        );
+    }
+
+    assert!(occupied.add_cgb_voice(cgb_keyed_voice(TRACK, OVERFLOW_KEY)));
+    assert!(retired.add_cgb_voice(cgb_keyed_voice(TRACK, OVERFLOW_KEY)));
+
+    occupied.mix_frame(&mut occupied_out);
+    retired.mix_frame(&mut retired_out);
+    assert_eq!(
+        occupied_out, retired_out,
+        "a note on a slot a muted voice vacated must not double-count the \
+         retirement frame's silence",
+    );
+}

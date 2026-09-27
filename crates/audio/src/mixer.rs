@@ -51,6 +51,11 @@ enum VoiceSlot {
 pub struct Mixer {
     direct_sound_slots: Vec<Option<Voice>>,
     cgb_slots: [Option<CgbVoice>; 4],
+    /// Square1/Square2's duty position once their slot empties, tracked
+    /// apart from the `Option<CgbVoice>` occupant so a later note-on can
+    /// continue it (`CgbVoice::advance_idle_duty`'s doc). Indices match
+    /// `CgbChannelNumber::slot`.
+    idle_square_duty: [Option<CgbVoice>; 2],
     master_volume: u8,
     next_note_on_ordinal: u64,
     mix_buffer: Vec<StereoAcc>,
@@ -73,6 +78,7 @@ impl Mixer {
         Self {
             direct_sound_slots: std::iter::repeat_with(|| None).take(max_voices).collect(),
             cgb_slots: [None, None, None, None],
+            idle_square_duty: [None, None],
             master_volume,
             next_note_on_ordinal: 0,
             mix_buffer: vec![(0, 0); SAMPLES_PER_FRAME],
@@ -198,9 +204,14 @@ impl Mixer {
                 return false;
             }
             voice.carry_duty_phase_from(occupant);
+        } else if let Some(idle) = self.idle_square_duty.get(slot).and_then(Option::as_ref) {
+            voice.carry_duty_phase_from(idle);
         }
         voice.set_seq(self.take_note_on_ordinal());
         self.cgb_slots[slot] = Some(voice);
+        if let Some(idle) = self.idle_square_duty.get_mut(slot) {
+            *idle = None;
+        }
         true
     }
 
@@ -287,9 +298,14 @@ impl Mixer {
                 }
             }
         }
-        for slot in &mut self.cgb_slots {
+        for (index, slot) in self.cgb_slots.iter_mut().enumerate() {
             if let Some(voice) = slot {
                 if voice.track() == track {
+                    if let Some(idle) = self.idle_square_duty.get_mut(index) {
+                        let mut idle_voice = voice.clone();
+                        idle_voice.apply_hardware_off_write();
+                        *idle = Some(idle_voice);
+                    }
                     *slot = None;
                 }
             }
@@ -362,12 +378,32 @@ impl Mixer {
             "a frame's tick buffer must never have to grow",
         );
         let extra_envelope_iteration = self.cgb_envelope_cadence.advance_frame();
-        for slot in &mut self.cgb_slots {
+        for (index, slot) in self.cgb_slots.iter_mut().enumerate() {
             if let Some(voice) = slot {
                 voice.begin_frame(extra_envelope_iteration);
-                voice.render(&mut self.mix_buffer, &self.sweep_ticks);
+                // A voice retiring this frame renders nothing: the idle-duty
+                // loop below accounts for the whole frame's silence, so a
+                // hardware-muted voice's unconditional catch-up in `render`
+                // must not also advance it (`CgbVoice::render`'s doc).
+                if voice.is_active() {
+                    voice.render(&mut self.mix_buffer, &self.sweep_ticks);
+                }
                 if !voice.is_active() {
+                    if let Some(idle) = self.idle_square_duty.get_mut(index) {
+                        let mut idle_voice = voice.clone();
+                        idle_voice.apply_hardware_off_write();
+                        *idle = Some(idle_voice);
+                    }
                     *slot = None;
+                }
+            }
+        }
+        // A vacated square slot's hardware register keeps advancing while no
+        // voice occupies it (`CgbVoice::advance_idle_duty`'s doc).
+        for (index, idle) in self.idle_square_duty.iter_mut().enumerate() {
+            if self.cgb_slots[index].is_none() {
+                if let Some(duty) = idle {
+                    duty.advance_idle_duty(SAMPLES_PER_FRAME);
                 }
             }
         }
