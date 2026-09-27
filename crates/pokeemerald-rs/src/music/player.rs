@@ -347,6 +347,12 @@ impl MusicPlayer {
         }
     }
 
+    /// Cancels an in-progress fade, so the next [`Self::advance_frame`]
+    /// renders at full volume again. A no-op with no fade active.
+    pub fn cancel_fade(&mut self) {
+        self.fade = None;
+    }
+
     /// Returns whether the active fade has reached silence.
     ///
     /// The terminal step stops every track, so no voice sounds after it --

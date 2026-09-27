@@ -33,11 +33,10 @@ pub(crate) struct MainMenuFadeWait {
     fade: NormalPaletteFade,
 }
 
-/// The [`super::AppScene::Title`] arm of [`super::advance_scene`] (kept a
-/// free function so the match arms stay under the line-budget lint,
-/// `(oop-boundaries)`): advances the idle title's animation tick, then on a
-/// fresh advance press begins the white fade and hands off to
-/// [`AppScene::TitleFadeWait`] instead of loading the main menu directly.
+/// The [`AppScene::Title`] arm of [`super::advance_scene`]: on a fresh
+/// advance press, begins the white fade over the just-composed frame and
+/// hands off to [`AppScene::TitleFadeWait`] instead of loading the main
+/// menu directly.
 pub(super) fn advance_title(
     mut title: Box<AnimatedTitle>,
     buttons: ButtonState,
@@ -82,9 +81,8 @@ pub(super) fn advance_title_fade_wait(
     (AppScene::TitleFadeWait(wait), frame)
 }
 
-/// The [`AppScene::MainMenu`] arm of [`super::advance_scene`]
-/// ([`advance_title`]'s own doc comment on why this is a free function): a
-/// fresh A over `NEW GAME`/`CONTINUE` begins the black fade and hands off to
+/// The [`AppScene::MainMenu`] arm of [`super::advance_scene`]: a fresh A
+/// over `NEW GAME`/`CONTINUE` begins the black fade and hands off to
 /// [`AppScene::MainMenuFadeWait`] instead of dispatching [`MainMenuAction`]
 /// directly; `OPTION`'s swallowed press and Up/Down selection are
 /// unaffected.

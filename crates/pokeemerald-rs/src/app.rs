@@ -680,6 +680,14 @@ impl App {
     /// [`MusicPlayer::fade_out`] is idempotent, so calling it on every
     /// post-title frame simply keeps the one running fade running.
     ///
+    /// A fresh advance press leaves `AppScene::Title` for its fade-wait
+    /// state on the press frame itself (I-3, issue #1329), so this fade
+    /// already starts before the deferred menu load is even attempted; if
+    /// that load then fails and the fade-wait restores `AppScene::Title`,
+    /// [`MusicPlayer::cancel_fade`] cancels the now-stale fade so the
+    /// recovered, interactive title keeps its music instead of running
+    /// down to silence for a screen the player never left.
+    ///
     /// A no-op throughout when [`Self::music`] is already `None` (no
     /// pack/audio device at boot, or a headless `App` that never requested
     /// one).
@@ -687,7 +695,9 @@ impl App {
         let Some(music) = &mut self.music else {
             return;
         };
-        if !matches!(self.scene, Some(AppScene::Title(_))) {
+        if matches!(self.scene, Some(AppScene::Title(_))) {
+            music.cancel_fade();
+        } else {
             music.fade_out(crate::music::TITLE_FADE_OUT_SPEED);
         }
         if music.fade_finished() && !music.tail_sounding() {

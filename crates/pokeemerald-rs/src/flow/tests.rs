@@ -540,20 +540,12 @@ fn main_menu_confirm_on_option_stays_on_the_main_menu() {
     assert_eq!(state.scene.selected(), MainMenuItem::Option);
 }
 
-/// I-3 regression (issue #1329): a fresh A on `NEW GAME` must not call
-/// `intro::load` on the press frame. Pre-I-3, `advance_scene` dispatched
-/// synchronously and returned straight back to `AppScene::MainMenu` in that
-/// same call; this fails against that behaviour by asserting the press
-/// frame instead lands in `AppScene::MainMenuFadeWait`, that further input
-/// (UP/DOWN/a repeated A) is ignored for the fade's whole 22-call trace
-/// (`crates/rendering/src/palette_fade.rs`), and that the dispatch runs
-/// exactly once the fade reports done -- exercising `advance_scene`'s own
-/// wait arm directly, not `dispatch_main_menu_action`'s separate unit
-/// coverage. Pack-free via `PackSource::Test` pointed at an entryless
-/// scratch pack (`crate::pack_source::PackSource::Test`'s own doc comment),
-/// so the deferred dispatch still runs -- and fails, falling back to the
-/// retained menu -- without needing a real pack (module docs' boundary
-/// note: no fabricated success from an entryless pack).
+/// I-3 regression (issue #1329): a fresh A on `NEW GAME` must enter
+/// `AppScene::MainMenuFadeWait` and ignore every button until the fade
+/// reports done, only then dispatching `intro::load`. Pack-free via
+/// `PackSource::Test` pointed at an entryless scratch pack, so the deferred
+/// dispatch still runs (and fails, falling back to the retained menu)
+/// without needing a real one.
 #[test]
 fn main_menu_confirm_on_new_game_waits_for_the_fade_before_dispatching() {
     let (_temp, mut save_slot) = empty_slot("new-game-fade-wait");
