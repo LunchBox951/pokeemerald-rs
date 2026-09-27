@@ -6,7 +6,7 @@
 //! `(behavioral-fidelity)`.
 
 use assets::pack::ImageRef;
-use engine::text::render::RevealedGlyph;
+use engine::text::render::{ClearedSpan, RevealedGlyph};
 use engine::text::window::{self as msgwin, FrameTile};
 use rendering::{Bgr555, Framebuffer, Rgb888};
 
@@ -208,6 +208,97 @@ pub(crate) fn blit_glyphs_colored_tracked(
                 let screen_x = origin.0 + content_x;
                 let screen_y = origin.1 + content_y;
                 set_pixel_checked(fb, coverage, screen_x, screen_y, *color);
+            }
+        }
+    }
+}
+
+/// One retained window effect, in the order the printer produced it.
+///
+/// A dialog or intro scene keeps these instead of a flat glyph list so a
+/// `CLEAR`/`CLEAR_TO` can restore only its own rectangle -- including one
+/// that lands mid-glyph after a backward cursor move -- while glyphs
+/// revealed later still draw on top of the restored patch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum WindowOp {
+    /// A glyph the printer revealed. Boxed: [`RevealedGlyph`] carries a full
+    /// glyph bitmap, dwarfing [`ClearedSpan`] and bloating every `WindowOp`.
+    Glyph(Box<RevealedGlyph>),
+    /// A span a `CLEAR`/`CLEAR_TO` control erased (`Printer::cleared_span`).
+    ClearSpan(ClearedSpan),
+}
+
+impl WindowOp {
+    /// Shifts this op vertically by a window scroll.
+    pub(crate) fn shift_y(&mut self, dy: i32) {
+        match self {
+            Self::Glyph(glyph) => glyph.y += dy,
+            Self::ClearSpan(span) => span.y += dy,
+        }
+    }
+}
+
+/// Replays ordered glyph and clear-span ops onto `fb`, which must already
+/// hold the window's frame tiles and nothing else.
+///
+/// A `ClearSpan` restores its window-local rectangle from `fb`'s own
+/// pre-glyph pixels -- the window's already-composed background -- covering
+/// whatever an earlier op painted there, partial glyph included. Upstream
+/// paints the same span with the window's background before any later glyph
+/// lands (`pokeemerald/src/text.c:1063-1090`).
+pub(crate) fn compose_window_ops(
+    fb: &mut Framebuffer,
+    ops: &[WindowOp],
+    origin: (i32, i32),
+    content_size: (i32, i32),
+) {
+    let background = fb.clone();
+    for op in ops {
+        match op {
+            WindowOp::Glyph(glyph) => {
+                blit_glyphs(
+                    fb,
+                    std::slice::from_ref(glyph.as_ref()),
+                    origin,
+                    content_size,
+                );
+            }
+            WindowOp::ClearSpan(span) => {
+                restore_cleared_span(fb, &background, *span, origin, content_size);
+            }
+        }
+    }
+}
+
+/// Copies `span`'s window-local rectangle from `background` onto `fb`,
+/// clipped to the content bounds the same way [`blit_glyphs_colored_tracked`]
+/// clips a glyph.
+fn restore_cleared_span(
+    fb: &mut Framebuffer,
+    background: &Framebuffer,
+    span: ClearedSpan,
+    origin: (i32, i32),
+    content_size: (i32, i32),
+) {
+    let (content_width, content_height) = content_size;
+    for dy in 0..span.height {
+        for dx in 0..span.width {
+            let content_x = span.x + dx;
+            let content_y = span.y + dy;
+            if content_x < 0
+                || content_y < 0
+                || content_x >= content_width
+                || content_y >= content_height
+            {
+                continue;
+            }
+            let screen_x = origin.0 + content_x;
+            let screen_y = origin.1 + content_y;
+            let (Ok(x), Ok(y)) = (usize::try_from(screen_x), usize::try_from(screen_y)) else {
+                continue;
+            };
+            if let Some(color) = background.pixel(x, y) {
+                fb.set_pixel(x, y, color);
             }
         }
     }
