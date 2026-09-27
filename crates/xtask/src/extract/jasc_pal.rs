@@ -11,6 +11,9 @@ const BGR555_CHANNEL_BITS: u32 = 5;
 const RGB888_TO_BGR555_SHIFT: u32 = u8::BITS - BGR555_CHANNEL_BITS;
 const BGR555_GREEN_SHIFT: u32 = BGR555_CHANNEL_BITS;
 const BGR555_BLUE_SHIFT: u32 = BGR555_CHANNEL_BITS * 2;
+/// The largest palette a GBA-native consumer can hold (one full 256-color
+/// palette). A declared count above this is rejected before any allocation.
+const MAX_COLORS: usize = 256;
 
 /// An error produced while parsing a JASC-PAL file.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,6 +24,8 @@ pub enum JascPalError {
     UnsupportedVersion,
     /// The declared color count is missing or invalid.
     BadColorCount,
+    /// The declared color count exceeds what a GBA palette can hold.
+    TooManyColors { max: usize, declared: usize },
     /// The file contains fewer colors than it declares.
     TooFewColors { expected: usize, found: usize },
     /// A color entry is not three RGB channels in the supported range. The
@@ -34,6 +39,12 @@ impl fmt::Display for JascPalError {
             Self::BadMagic => write!(f, "JASC-PAL: missing or wrong magic header"),
             Self::UnsupportedVersion => write!(f, "JASC-PAL: unsupported version (expected 0100)"),
             Self::BadColorCount => write!(f, "JASC-PAL: missing or invalid colour count"),
+            Self::TooManyColors { max, declared } => {
+                write!(
+                    f,
+                    "JASC-PAL: header declared {declared} colours, exceeding the {max}-colour limit"
+                )
+            }
             Self::TooFewColors { expected, found } => {
                 write!(
                     f,
@@ -91,8 +102,14 @@ pub fn parse(text: &str) -> Result<Vec<Rgb888>, JascPalError> {
         .next()
         .and_then(|line| line.trim().parse().ok())
         .ok_or(JascPalError::BadColorCount)?;
+    if declared_color_count > MAX_COLORS {
+        return Err(JascPalError::TooManyColors {
+            max: MAX_COLORS,
+            declared: declared_color_count,
+        });
+    }
 
-    let mut colors = Vec::with_capacity(declared_color_count);
+    let mut colors = Vec::new();
     for (color_index, line) in lines.by_ref().take(declared_color_count).enumerate() {
         let color = parse_color(line).ok_or(JascPalError::BadColorLine(color_index + 1))?;
         colors.push(color);
@@ -183,6 +200,37 @@ mod tests {
     fn rejects_color_channel_above_rgb888_range() {
         let err = parse("JASC-PAL\r\n0100\r\n1\r\n256 0 0\r\n").unwrap_err();
         assert_eq!(err, JascPalError::BadColorLine(1));
+    }
+
+    #[test]
+    fn rejects_declared_count_above_gba_palette_bound_without_allocating() {
+        let err = parse("JASC-PAL\r\n0100\r\n257\r\n").unwrap_err();
+        assert_eq!(
+            err,
+            JascPalError::TooManyColors {
+                max: 256,
+                declared: 257
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_usize_max_declared_count_instead_of_panicking() {
+        let text = format!("JASC-PAL\r\n0100\r\n{}\r\n", usize::MAX);
+        let err = parse(&text).unwrap_err();
+        assert_eq!(
+            err,
+            JascPalError::TooManyColors {
+                max: 256,
+                declared: usize::MAX
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_declared_count_too_large_to_fit_a_usize() {
+        let err = parse("JASC-PAL\r\n0100\r\n99999999999999999999999999\r\n").unwrap_err();
+        assert_eq!(err, JascPalError::BadColorCount);
     }
 
     #[test]
