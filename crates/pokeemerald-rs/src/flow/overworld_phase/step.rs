@@ -25,10 +25,11 @@ use engine::overworld::{
     WarpTrigger,
 };
 use engine::save::Coords16;
+use engine::text::render::TextSpeed;
 use platform::{ButtonState, Buttons};
 
 use crate::flow::wild_encounter;
-use crate::overworld::{npc_scripts, oldale_town_npc_reposition, NpcDialog};
+use crate::overworld::{npc_scripts, NpcDialog};
 use crate::start_menu::StartMenu;
 
 use super::connections::MapConnections;
@@ -42,6 +43,18 @@ use super::OverworldPhase;
 /// `:621`/`:628`), so this tick already reads as latched to every region,
 /// unlike a fresh room's own 0.
 const TILESET_ANIM_WRAP_PERIOD: u32 = 256;
+
+/// `gSaveBlock2Ptr->optionsTextSpeed` values above this are invalid; upstream
+/// treats them exactly like `OPTIONS_TEXT_SPEED_MID`
+/// (`pokeemerald/include/constants/global.h:127-129`). Duplicated from
+/// `super::start_menu`'s own private copy: same upstream constant, two
+/// independent field-message call sites (this module and the SAVE prompt).
+const OPTIONS_TEXT_SPEED_FAST: u8 = 2;
+
+/// The saved value `GetPlayerTextSpeedDelay` repairs an out-of-range
+/// `optionsTextSpeed` to, in `gSaveBlock2Ptr` itself
+/// (`pokeemerald/src/menu.c:483-484`).
+const OPTIONS_TEXT_SPEED_MID: u8 = 1;
 
 /// This frame's pre-movement field-input decisions.
 struct PreMovementFieldInput {
@@ -271,7 +284,7 @@ impl OverworldPhase {
     /// in [`crate::flow::wild_encounter`] via
     /// [`OverworldPhase::begin_wild_battle`]. An
     /// in-progress battle owns the whole frame ahead of everything above —
-    /// see [`OverworldPhase::advance_wild_battle_frame`].
+    /// see [`OverworldPhase::advance_active_battle_frame`].
     ///
     /// The frame `arrow_trigger` or `animated_door_trigger` fires is the one
     /// case upstream would still have polled `checkStandardWildEncounter` on
@@ -311,20 +324,9 @@ impl OverworldPhase {
         // unconditionally, before the dialog early-return below.
         self.advance_tileset_anim_tick();
 
-        // A wild battle, the Route 101 scripted first battle (issue #231,
-        // `super::first_battle_trigger`), the Route 103 rival battle (issue
-        // #248, `super::route103_rival_trigger`), or a Route 103
-        // sight-trainer battle (issue #264, `super::sight_trainer_trigger`)
-        // -- the four fields are never more than one `Some` at a time,
-        // struct docs on `first_battle` -- owns the frame outright, ahead of
-        // the dialog check, the same way upstream's battle callback owns
-        // `CB2_Overworld` outright once `SetMainCallback2(CB2_InitBattle)`
-        // has run (`src/battle_setup.c:369`).
-        if self.advance_wild_battle_frame()
-            || self.advance_first_battle_frame()
-            || self.advance_route103_rival_battle_frame()
-            || self.advance_sight_trainer_battle_frame()
-        {
+        // An active battle owns the frame ahead of the dialog check, as the
+        // battle callback owns `CB2_Overworld` upstream (`src/battle_setup.c:369`).
+        if self.advance_active_battle_frame() {
             return;
         }
 
@@ -384,13 +386,10 @@ impl OverworldPhase {
         // Ahead of `runtime`'s scene borrow: the memoised screen needs
         // `&mut self`; a memo hit is a map-id comparison.
         let wild_table_fightable = self.wild_table_fightable();
-        // `oldale_town_npc_reposition::resolve_map_events` (issue #281),
-        // not a bare `MapEventsTable::resolve`: the collision/interaction
-        // check below must see Oldale Town's footprints man and mart
-        // employee already standing where `OldaleTown_OnTransition`
-        // unconditionally puts them, not their bare map.json positions --
-        // a no-op for every other map.
-        let map_events = oldale_town_npc_reposition::resolve_map_events(self.map_id);
+        // The scene's own load-time events, not a fresh resolution: Oldale
+        // Town's flag-chosen placement holds for the visit and matches the
+        // object events the scene draws.
+        let map_events = self.scene.map_events(self.map_id);
         if let (Ok(header), Ok(events)) = (
             MapHeaderTable::new().header(self.map_id),
             map_events.as_ref(),
@@ -401,7 +400,14 @@ impl OverworldPhase {
             // what defers a completed step to the call after the one that
             // drained its animation (the "Frame shape" section above owns
             // the derivation).
-            let stepped_onto = self.pending_landing.take_if(|_| !self.player.in_transit());
+            //
+            // `field_input_suppressed` withholds a forced landing from every
+            // completed-step consumer below, per upstream's `tookStep`/
+            // `checkStandardWildEncounter` exclusion (`field_control_avatar.c:116-122`).
+            let stepped_onto = self
+                .pending_landing
+                .take_if(|_| !self.player.in_transit())
+                .filter(|_| !self.player.field_input_suppressed());
             // The Route 101 scripted first-battle coord-event trigger (issue
             // #231, `super::first_battle_trigger`'s own "Precedence" section:
             // it outranks the door warp, the wild-encounter roll, and the
@@ -732,7 +738,8 @@ impl OverworldPhase {
             }
             match interaction {
                 Some(InteractionOutcome::Dialog(tokens)) => {
-                    match NpcDialog::open(self.pack_source, tokens) {
+                    let text_speed = self.field_dialog_text_speed();
+                    match NpcDialog::open_at_speed(self.pack_source, tokens, text_speed) {
                         Ok(dialog) => self.dialog = Some(dialog),
                         Err(err) => eprintln!("npc dialog: {err} -- staying in the overworld"),
                     }
@@ -746,6 +753,17 @@ impl OverworldPhase {
 
         self.begin_step_battle(first_battle_triggered, encounter);
         self.commit_start_menu(start_menu);
+    }
+
+    /// The saved `optionsTextSpeed`, repaired and read exactly as upstream's
+    /// `GetPlayerTextSpeedDelay` (`pokeemerald/src/menu.c:481-488`) --
+    /// mirroring `start_menu`'s `player_text_speed` write-back for the SAVE
+    /// prompt.
+    fn field_dialog_text_speed(&mut self) -> TextSpeed {
+        if self.save2.options_text_speed > OPTIONS_TEXT_SPEED_FAST {
+            self.save2.options_text_speed = OPTIONS_TEXT_SPEED_MID;
+        }
+        TextSpeed::from_raw_option(self.save2.options_text_speed)
     }
 
     /// The token stream a [`NpcDialog`] should open with this frame, or

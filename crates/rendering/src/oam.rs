@@ -332,6 +332,27 @@ impl OamEntry {
         self.vertical_offset(y).is_some()
     }
 
+    /// Returns `dy`, or this box's bottom row when it ends exactly at the
+    /// Y-space boundary (`raw_y + height == 256`). mGBA's vertical OBJ
+    /// mosaic clamp masks that box's `endY` to zero there, forcing every
+    /// covered scanline to the bottom row
+    /// (`mgba/src/gba/renderers/video-software.c:1043-1050`).
+    #[must_use]
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        reason = "bounding-box height is at most 128"
+    )]
+    pub(crate) fn floor_dy_to_wrap_boundary_bottom(self, dy: usize) -> usize {
+        let (_, height) = self.bounding_box();
+        debug_assert!(dy < height, "dy must already be a covered footprint row");
+        if i32::from(self.y) + height as i32 == Self::Y_SPACE {
+            height - 1
+        } else {
+            dy
+        }
+    }
+
     /// Returns the on-screen bounding-box `(width, height)`.
     ///
     /// Double-size affine sprites use twice the texture dimensions; other
@@ -527,5 +548,72 @@ mod tests {
         .with_affine(AffineMode::AffineDoubleSize { matrix_num: 0 });
         assert_eq!(e.dimensions(), (16, 16));
         assert_eq!(e.bounding_box(), (32, 32));
+    }
+
+    fn double_size_square_entry(y: u8, size: u8) -> OamEntry {
+        OamEntry::new(
+            0,
+            y,
+            0,
+            0,
+            BitDepth::Bpp4,
+            false,
+            false,
+            ObjShape::Square,
+            size,
+            0,
+            true,
+        )
+        .with_affine(AffineMode::AffineDoubleSize { matrix_num: 0 })
+    }
+
+    #[test]
+    fn vertical_offset_does_not_wrap_a_box_ending_exactly_at_the_y_space_boundary() {
+        const SIZE_64_BY_64: u8 = 3;
+        const RAW_Y_ENDING_EXACTLY_AT_256: u8 = 128;
+
+        let e = double_size_square_entry(RAW_Y_ENDING_EXACTLY_AT_256, SIZE_64_BY_64);
+        assert_eq!(e.bounding_box(), (128, 128));
+        assert_eq!(
+            e.vertical_offset(usize::from(RAW_Y_ENDING_EXACTLY_AT_256)),
+            Some(0)
+        );
+        assert_eq!(
+            e.vertical_offset(usize::from(RAW_Y_ENDING_EXACTLY_AT_256) + 127),
+            Some(127)
+        );
+    }
+
+    #[test]
+    fn vertical_offset_still_wraps_a_box_ending_past_the_y_space_boundary() {
+        const SIZE_64_BY_64: u8 = 3;
+        const RAW_Y_ENDING_PAST_256: u8 = 140;
+
+        let e = double_size_square_entry(RAW_Y_ENDING_PAST_256, SIZE_64_BY_64);
+        assert_eq!(e.bounding_box(), (128, 128));
+        assert_eq!(e.vertical_offset(0), Some(116));
+    }
+
+    #[test]
+    fn floor_dy_to_wrap_boundary_bottom_forces_the_bottom_row_only_when_the_box_ends_exactly_at_256(
+    ) {
+        const SIZE_64_BY_64: u8 = 3;
+        const RAW_Y_ENDING_EXACTLY_AT_256: u8 = 128;
+        const RAW_Y_NOT_ENDING_AT_256: u8 = 127;
+        const RAW_Y_ENDING_PAST_256: u8 = 140;
+
+        let ends_exactly_at_256 =
+            double_size_square_entry(RAW_Y_ENDING_EXACTLY_AT_256, SIZE_64_BY_64);
+        assert_eq!(ends_exactly_at_256.floor_dy_to_wrap_boundary_bottom(0), 127);
+        assert_eq!(
+            ends_exactly_at_256.floor_dy_to_wrap_boundary_bottom(31),
+            127
+        );
+
+        let one_row_short = double_size_square_entry(RAW_Y_NOT_ENDING_AT_256, SIZE_64_BY_64);
+        assert_eq!(one_row_short.floor_dy_to_wrap_boundary_bottom(0), 0);
+
+        let wrapped = double_size_square_entry(RAW_Y_ENDING_PAST_256, SIZE_64_BY_64);
+        assert_eq!(wrapped.floor_dy_to_wrap_boundary_bottom(116), 116);
     }
 }

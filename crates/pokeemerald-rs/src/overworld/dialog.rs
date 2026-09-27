@@ -18,14 +18,17 @@
 
 use assets::fonts::{FontId, OwnedFontGlyphSheet};
 use assets::pack::{AssetPack, PackError};
-use engine::text::render::{Printer, PrinterInput, RevealedGlyph, TextSpeed, TickEvent};
+use engine::text::render::{Printer, PrinterInput, TextSpeed, TickEvent};
 use engine::text::window::MessageBoxLayout;
 use engine::text::Token;
 use platform::{ButtonState, Buttons};
 use rendering::Framebuffer;
 
-use crate::textbox::{self, FrameAssets};
+use crate::textbox::{self, FrameAssets, WindowOp};
 
+/// Cadence for a caller that passes no saved [`TextSpeed`]; upstream paces
+/// field text by `GetPlayerTextSpeedDelay()`
+/// (`pokeemerald/src/menu.c:191-196,481-488`).
 const FIELD_SCRIPT_TEXT_SPEED: TextSpeed = TextSpeed::Mid;
 
 /// Maps A/B button edges and holds to the shared printer input shape.
@@ -94,7 +97,7 @@ enum DialogState {
 pub(crate) struct NpcDialog {
     frame: FrameAssets,
     printer: Printer<OwnedFontGlyphSheet>,
-    revealed: Vec<RevealedGlyph>,
+    ops: Vec<WindowOp>,
     state: DialogState,
     wait_for_button_press: bool,
 }
@@ -103,9 +106,9 @@ impl NpcDialog {
     /// Creates the standard field message box from decoded assets.
     ///
     /// NPC and save messages share this type because both use the standard field
-    /// message resources. `text_speed` stays caller-supplied so save messages can
-    /// use the saved option while field scripts use [`FIELD_SCRIPT_TEXT_SPEED`].
-    /// Holding A or B accelerates printing.
+    /// message resources. `text_speed` is the caller's: the saved, normalized
+    /// option, or [`FIELD_SCRIPT_TEXT_SPEED`]. Holding A or B accelerates
+    /// printing.
     pub(crate) fn new(
         sheet: OwnedFontGlyphSheet,
         frame: FrameAssets,
@@ -117,7 +120,7 @@ impl NpcDialog {
         Self {
             frame,
             printer,
-            revealed: Vec::new(),
+            ops: Vec::new(),
             state: DialogState::Printing,
             wait_for_button_press: false,
         }
@@ -130,19 +133,37 @@ impl NpcDialog {
         self
     }
 
-    /// Builds a confirm-to-close dialog from an already-loaded asset pack.
+    /// Builds a confirm-to-close dialog from an already-loaded asset pack, at
+    /// the default [`FIELD_SCRIPT_TEXT_SPEED`] cadence.
     ///
     /// # Errors
     ///
     /// Returns [`NpcDialogError::Pack`] for missing or malformed pack entries,
     /// and [`NpcDialogError::Font`] when the font sheet cannot be decoded.
     pub(crate) fn from_pack(pack: &AssetPack, tokens: Vec<Token>) -> Result<Self, NpcDialogError> {
-        let sheet = OwnedFontGlyphSheet::new(pack.font(FontId::Normal)?)?;
-        let frame = FrameAssets::from_handle(pack.message_box()?);
-        Ok(Self::new(sheet, frame, tokens, FIELD_SCRIPT_TEXT_SPEED).with_waitbuttonpress())
+        Self::from_pack_at_speed(pack, tokens, FIELD_SCRIPT_TEXT_SPEED)
     }
 
-    /// Loads an asset pack and opens a confirm-to-close dialog.
+    /// [`Self::from_pack`] at a caller-chosen `text_speed`: an ordinary field
+    /// dialog passes the saved, normalized option
+    /// (`pokeemerald/src/menu.c:191-196,481-488`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NpcDialogError::Pack`] for missing or malformed pack entries,
+    /// and [`NpcDialogError::Font`] when the font sheet cannot be decoded.
+    pub(crate) fn from_pack_at_speed(
+        pack: &AssetPack,
+        tokens: Vec<Token>,
+        text_speed: TextSpeed,
+    ) -> Result<Self, NpcDialogError> {
+        let sheet = OwnedFontGlyphSheet::new(pack.font(FontId::Normal)?)?;
+        let frame = FrameAssets::from_handle(pack.message_box()?);
+        Ok(Self::new(sheet, frame, tokens, text_speed).with_waitbuttonpress())
+    }
+
+    /// Loads an asset pack and opens a confirm-to-close dialog, at the
+    /// default [`FIELD_SCRIPT_TEXT_SPEED`] cadence.
     ///
     /// # Errors
     ///
@@ -156,11 +177,31 @@ impl NpcDialog {
         Self::from_pack(&pack, tokens)
     }
 
-    /// Returns the number of glyphs currently visible on screen.
+    /// [`Self::open`], at a caller-chosen `text_speed` -- see
+    /// [`Self::from_pack_at_speed`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NpcDialogError::Pack`] when the pack cannot be loaded or read,
+    /// and [`NpcDialogError::Font`] when the font sheet cannot be decoded.
+    pub(crate) fn open_at_speed(
+        source: crate::pack_source::PackSource,
+        tokens: Vec<Token>,
+        text_speed: TextSpeed,
+    ) -> Result<Self, NpcDialogError> {
+        let pack = source.load()?;
+        Self::from_pack_at_speed(&pack, tokens, text_speed)
+    }
+
+    /// Returns the number of glyphs currently retained (revealed, and not
+    /// since dropped by a page or window clear).
     #[cfg(test)]
     #[must_use]
     pub(crate) fn revealed_glyph_count(&self) -> usize {
-        self.revealed.len()
+        self.ops
+            .iter()
+            .filter(|op| matches!(op, WindowOp::Glyph(_)))
+            .count()
     }
 
     /// Advances the dialog by one frame and reports whether it remains open.
@@ -184,13 +225,19 @@ impl NpcDialog {
         // Checked ahead of `event` so a same-tick `FILL_WINDOW` glyph
         // survives the clear it follows; see `Printer::cleared_window`.
         if self.printer.cleared_window() {
-            self.revealed.clear();
+            self.ops.clear();
+        }
+        // Polled right after `tick`: a positive `CLEAR`/`CLEAR_TO` always
+        // ends the frame as `TickEvent::Idle` (`Printer::cleared_span`), so
+        // this never competes with a same-tick glyph.
+        if let Some(span) = self.printer.cleared_span() {
+            self.ops.push(WindowOp::ClearSpan(span));
         }
         match event {
-            TickEvent::Glyph(g) => self.revealed.push(*g),
+            TickEvent::Glyph(g) => self.ops.push(WindowOp::Glyph(g)),
             TickEvent::Scrolling { dy } => {
-                for g in &mut self.revealed {
-                    g.y -= dy;
+                for op in &mut self.ops {
+                    op.shift_y(-dy);
                 }
             }
             TickEvent::Finished => {
@@ -224,9 +271,9 @@ impl NpcDialog {
     pub(crate) fn compose_over(&self, mut base: Framebuffer) -> Framebuffer {
         let tiles = MessageBoxLayout::STANDARD.frame_tiles();
         textbox::blit_frame_tiles(&mut base, &tiles, self.frame.image(), &self.frame.palette);
-        textbox::blit_glyphs(
+        textbox::compose_window_ops(
             &mut base,
-            &self.revealed,
+            &self.ops,
             textbox::STANDARD_BOX_SCREEN_ORIGIN,
             textbox::STANDARD_BOX_CONTENT_SIZE_PX,
         );
@@ -330,7 +377,7 @@ mod tests {
     fn tick_reveals_glyphs_and_stays_open_while_printing() {
         let mut dialog = synthetic_dialog(vec![Token::Char('H'), Token::Char('i'), Token::End]);
         assert_eq!(dialog.tick(NO_INPUT), DialogOutcome::Continue);
-        assert_eq!(dialog.revealed.len(), 1);
+        assert_eq!(dialog.ops.len(), 1);
     }
 
     #[test]
@@ -366,7 +413,9 @@ mod tests {
             "FILL_WINDOW must drop the stale glyphs, but not the one printed after it \
              in the same tick"
         );
-        let only_glyph = dialog.revealed[0];
+        let WindowOp::Glyph(only_glyph) = &dialog.ops[0] else {
+            panic!("expected the surviving op to be a glyph")
+        };
         assert_eq!(
             (only_glyph.x, only_glyph.y),
             textbox::STANDARD_PRINTER_ORIGIN,
@@ -537,6 +586,293 @@ mod tests {
         assert_eq!(
             composed.pixel(OUTSIDE_DIALOG_PIXEL.0, OUTSIDE_DIALOG_PIXEL.1),
             Some(marker)
+        );
+    }
+
+    const OPAQUE_GLYPH_PALETTE_INDEX: u8 = 1;
+    const FRAME_INTERIOR_PALETTE_INDEX: u8 = 1;
+    const NORMAL_A_ADVANCE_WIDTH: i32 = 6;
+
+    const OPAQUE_GLYPH_COLOR: Rgb888 = Rgb888 {
+        r: 24,
+        g: 24,
+        b: 24,
+    };
+
+    const FRAME_INTERIOR_COLOR: Rgb888 = Rgb888 {
+        r: 200,
+        g: 40,
+        b: 40,
+    };
+
+    /// A dialog whose glyph sheet and message box are solid, distinguishable
+    /// colors, so a cleared span's pixels can be told apart from an unerased
+    /// glyph's -- `synthetic_dialog`'s all-transparent fixture cannot.
+    fn opaque_synthetic_dialog(tokens: Vec<Token>) -> NpcDialog {
+        use assets::fonts::FontImageRef;
+        use assets::pack::ImageRef;
+
+        const SHEET_WIDTH: u32 = 256;
+        const SHEET_HEIGHT: u32 = 512;
+        const SHEET_BIT_DEPTH: u8 = 2;
+        const FRAME_WIDTH: u32 = 56;
+        const FRAME_HEIGHT: u32 = 16;
+        const FRAME_PALETTE_SIZE: usize = 16;
+
+        let pixels = vec![OPAQUE_GLYPH_PALETTE_INDEX; (SHEET_WIDTH * SHEET_HEIGHT) as usize];
+        let image = ImageRef {
+            width: SHEET_WIDTH,
+            height: SHEET_HEIGHT,
+            bit_depth: SHEET_BIT_DEPTH,
+            pixels: &pixels,
+        };
+        let sheet = OwnedFontGlyphSheet::new(FontImageRef::new_for_tests(FontId::Normal, image))
+            .expect("this is the exact real glyph-sheet shape");
+
+        let mut palette = vec![Rgb888::BLACK; FRAME_PALETTE_SIZE];
+        palette[usize::from(FRAME_INTERIOR_PALETTE_INDEX)] = FRAME_INTERIOR_COLOR;
+        let frame = FrameAssets {
+            pixels: vec![FRAME_INTERIOR_PALETTE_INDEX; (FRAME_WIDTH * FRAME_HEIGHT) as usize],
+            width: FRAME_WIDTH,
+            height: FRAME_HEIGHT,
+            palette,
+        };
+        NpcDialog::new(sheet, frame, tokens, TextSpeed::Instant)
+    }
+
+    /// Screen pixel for a window-local content coordinate in the standard box.
+    fn box_pixel(content: (i32, i32)) -> (usize, usize) {
+        let x = textbox::STANDARD_BOX_SCREEN_ORIGIN.0 + content.0;
+        let y = textbox::STANDARD_BOX_SCREEN_ORIGIN.1 + content.1;
+        (usize::try_from(x).unwrap(), usize::try_from(y).unwrap())
+    }
+
+    #[test]
+    fn clear_paints_the_erased_span_with_the_windows_background() {
+        // `0x0D`/`0x11` are `EXT_CTRL_CODE_SHIFT_RIGHT`/`EXT_CTRL_CODE_CLEAR`
+        // (`pokeemerald/src/text.c:1063-1072`), one argument byte each per
+        // `charmap.txt`. `SHIFT_RIGHT 0` moves the cursor back over the `A`
+        // just printed, so `CLEAR` erases exactly that glyph's width.
+        let mut dialog = opaque_synthetic_dialog(vec![
+            Token::Char('A'),
+            Token::ExtCtrl {
+                sub: 0x0D,
+                args: vec![0],
+            },
+            Token::ExtCtrl {
+                sub: 0x11,
+                args: vec![u8::try_from(NORMAL_A_ADVANCE_WIDTH).unwrap()],
+            },
+            Token::End,
+        ]);
+
+        assert_eq!(
+            dialog.tick(NO_INPUT),
+            DialogOutcome::Continue,
+            "reveals 'A'"
+        );
+        assert_eq!(
+            dialog.tick(NO_INPUT),
+            DialogOutcome::Continue,
+            "SHIFT_RIGHT is free; CLEAR ends the frame"
+        );
+
+        let fb = dialog.compose_over(Framebuffer::new());
+
+        let (cleared_x, cleared_y) = box_pixel((
+            textbox::STANDARD_PRINTER_ORIGIN.0 + 2,
+            textbox::STANDARD_PRINTER_ORIGIN.1 + 8,
+        ));
+        assert_eq!(
+            fb.pixel(cleared_x, cleared_y),
+            Some(FRAME_INTERIOR_COLOR),
+            "the erased span must show the window's background, not the glyph"
+        );
+
+        let (still_glyph_x, still_glyph_y) = box_pixel((
+            textbox::STANDARD_PRINTER_ORIGIN.0 + NORMAL_A_ADVANCE_WIDTH + 4,
+            textbox::STANDARD_PRINTER_ORIGIN.1 + 8,
+        ));
+        assert_eq!(
+            fb.pixel(still_glyph_x, still_glyph_y),
+            Some(OPAQUE_GLYPH_COLOR),
+            "pixels past the cleared width belong to the same glyph and must stay visible"
+        );
+    }
+
+    #[test]
+    fn clear_to_paints_only_up_to_its_target_column() {
+        // `0x13` is `EXT_CTRL_CODE_CLEAR_TO` (`pokeemerald/src/text.c`
+        // `:1077-1090`); the argument is an origin-relative column, so this
+        // erases fewer pixels than the glyph's full advance width.
+        const CLEAR_TO_COLUMN: u8 = 4;
+        let cleared_width = i32::from(CLEAR_TO_COLUMN);
+
+        let mut dialog = opaque_synthetic_dialog(vec![
+            Token::Char('A'),
+            Token::ExtCtrl {
+                sub: 0x0D,
+                args: vec![0],
+            },
+            Token::ExtCtrl {
+                sub: 0x13,
+                args: vec![CLEAR_TO_COLUMN],
+            },
+            Token::End,
+        ]);
+
+        assert_eq!(
+            dialog.tick(NO_INPUT),
+            DialogOutcome::Continue,
+            "reveals 'A'"
+        );
+        assert_eq!(
+            dialog.tick(NO_INPUT),
+            DialogOutcome::Continue,
+            "SHIFT_RIGHT is free; CLEAR_TO ends the frame"
+        );
+
+        let fb = dialog.compose_over(Framebuffer::new());
+
+        let (cleared_x, cleared_y) = box_pixel((
+            textbox::STANDARD_PRINTER_ORIGIN.0 + 1,
+            textbox::STANDARD_PRINTER_ORIGIN.1 + 8,
+        ));
+        assert_eq!(
+            fb.pixel(cleared_x, cleared_y),
+            Some(FRAME_INTERIOR_COLOR),
+            "the span up to the target column must show the window's background"
+        );
+
+        let (still_glyph_x, still_glyph_y) = box_pixel((
+            textbox::STANDARD_PRINTER_ORIGIN.0 + cleared_width + 4,
+            textbox::STANDARD_PRINTER_ORIGIN.1 + 8,
+        ));
+        assert_eq!(
+            fb.pixel(still_glyph_x, still_glyph_y),
+            Some(OPAQUE_GLYPH_COLOR),
+            "pixels past the target column belong to the same glyph and must stay visible"
+        );
+    }
+
+    /// The smallest pack [`NpcDialog::from_pack_at_speed`] accepts: the
+    /// standard message box frame and the normal font sheet. Mirrors
+    /// `crate::start_menu::tests::synthetic_start_menu_pack_bytes`'s own
+    /// fixture.
+    fn synthetic_field_dialog_pack_bytes() -> Vec<u8> {
+        use crate::pack_test_support::{image_entry, pack_bytes, palette_entry};
+
+        const MESSAGE_BOX_WIDTH: u32 = 56;
+        const MESSAGE_BOX_HEIGHT: u32 = 16;
+        const FRAME_BIT_DEPTH: u8 = 4;
+        const FONT_BIT_DEPTH: u8 = 2;
+        const PALETTE_COLOUR_COUNT: u16 = 16;
+
+        pack_bytes(vec![
+            image_entry(
+                "text-window/image/message_box",
+                MESSAGE_BOX_WIDTH,
+                MESSAGE_BOX_HEIGHT,
+                FRAME_BIT_DEPTH,
+                0,
+            ),
+            palette_entry("text-window/palette/message_box", PALETTE_COLOUR_COUNT),
+            image_entry(
+                "font/normal/glyphs",
+                assets::fonts::SHEET_WIDTH,
+                assets::fonts::SHEET_HEIGHT,
+                FONT_BIT_DEPTH,
+                0,
+            ),
+        ])
+    }
+
+    /// Ticks `dialog` until `glyph_count` glyphs are revealed, or panics past
+    /// `PRINT_FRAME_BUDGET` frames.
+    fn frames_to_reveal(dialog: &mut NpcDialog, glyph_count: usize) -> usize {
+        const PRINT_FRAME_BUDGET: usize = 64;
+        for frame in 1..=PRINT_FRAME_BUDGET {
+            dialog.tick(NO_INPUT);
+            if dialog.revealed_glyph_count() == glyph_count {
+                return frame;
+            }
+        }
+        panic!("a message of {glyph_count} glyphs must print within {PRINT_FRAME_BUDGET} frames");
+    }
+
+    /// A dialog opened at a given speed paces at it: FAST prints the same
+    /// message in fewer frames than SLOW (`sTextSpeedFrameDelays`,
+    /// `pokeemerald/src/menu.c:77-82`, `:191-196`).
+    #[test]
+    fn field_dialogs_pace_at_the_speed_they_are_given() {
+        const MESSAGE_GLYPHS: usize = 3;
+        let tokens = || {
+            vec![
+                Token::Char('H'),
+                Token::Char('i'),
+                Token::Char('!'),
+                Token::End,
+            ]
+        };
+
+        let path = std::env::temp_dir().join(format!(
+            "pokeemerald-rs-field-dialog-text-speed-{}-{:?}.pack",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::write(&path, synthetic_field_dialog_pack_bytes())
+            .expect("the scratch directory is writable");
+        let pack = AssetPack::load(&path).expect("the synthetic field-dialog pack must load");
+        let _ = std::fs::remove_file(&path);
+
+        let mut fast_dialog =
+            NpcDialog::from_pack_at_speed(&pack, tokens(), TextSpeed::from_raw_option(2))
+                .expect("the synthetic pack carries the dialog's font and message box");
+        let mut slow_dialog =
+            NpcDialog::from_pack_at_speed(&pack, tokens(), TextSpeed::from_raw_option(0))
+                .expect("the synthetic pack carries the dialog's font and message box");
+
+        let fast = frames_to_reveal(&mut fast_dialog, MESSAGE_GLYPHS);
+        let slow = frames_to_reveal(&mut slow_dialog, MESSAGE_GLYPHS);
+
+        assert!(
+            fast < slow,
+            "a field dialog given the FAST saved option must print in fewer frames than one \
+             given SLOW, but they took {fast} and {slow} frames"
+        );
+    }
+
+    /// [`NpcDialog::open`]/[`NpcDialog::from_pack`] must keep defaulting to
+    /// [`FIELD_SCRIPT_TEXT_SPEED`] -- the sight-trainer intro speech
+    /// (`crate::flow::overworld_phase::sight_trainer_approach`) still calls
+    /// the two-argument form and must not change cadence out from under it.
+    #[test]
+    fn from_pack_still_defaults_to_the_field_script_text_speed() {
+        const MESSAGE_GLYPHS: usize = 1;
+
+        let path = std::env::temp_dir().join(format!(
+            "pokeemerald-rs-field-dialog-default-speed-{}-{:?}.pack",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::write(&path, synthetic_field_dialog_pack_bytes())
+            .expect("the scratch directory is writable");
+        let pack = AssetPack::load(&path).expect("the synthetic field-dialog pack must load");
+        let _ = std::fs::remove_file(&path);
+
+        let mut default_dialog = NpcDialog::from_pack(&pack, vec![Token::Char('H'), Token::End])
+            .expect("the synthetic pack carries the dialog's font and message box");
+        let mut mid_dialog = NpcDialog::from_pack_at_speed(
+            &pack,
+            vec![Token::Char('H'), Token::End],
+            FIELD_SCRIPT_TEXT_SPEED,
+        )
+        .expect("the synthetic pack carries the dialog's font and message box");
+
+        assert_eq!(
+            frames_to_reveal(&mut default_dialog, MESSAGE_GLYPHS),
+            frames_to_reveal(&mut mid_dialog, MESSAGE_GLYPHS),
+            "from_pack's default speed must still be FIELD_SCRIPT_TEXT_SPEED"
         );
     }
 }

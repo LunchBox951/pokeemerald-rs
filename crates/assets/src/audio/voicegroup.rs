@@ -121,8 +121,10 @@ pub struct NoiseVoice {
     pub base_key: u8,
     /// Hardware sound-length counter.
     pub length: u8,
-    /// LFSR width selector (`period & 1`): narrow (7-bit) when set, wide
-    /// (15-bit) periodic otherwise.
+    /// LFSR width selector, `0..=1`: narrow (7-bit) when `1`, wide (15-bit)
+    /// periodic when `0`. Upstream's `_voice_noise` macro stores only
+    /// `period & 1` (`asm/macros/music_voice.inc`), so no other byte value is
+    /// representable at playback.
     pub period: u8,
     pub envelope: Envelope,
     pub fixed_rate: bool,
@@ -144,6 +146,21 @@ pub struct KeySplitVoice {
 fn check_key_split_table_len(len: usize) -> Result<(), AudioError> {
     if len > VOICE_SLOT_COUNT {
         return Err(AudioError::KeySplitTableTooLong(len));
+    }
+    Ok(())
+}
+
+/// Rejects tables whose notes extend past the playable `0..VOICE_SLOT_COUNT` range.
+///
+/// `table()[i]` selects a child for played note `starting_note + i`, and a
+/// note of [`VOICE_SLOT_COUNT`] or higher can never be played, so it is
+/// rejected here rather than left to silently drop at playback.
+fn check_key_split_table_note_range(starting_note: u8, table_len: usize) -> Result<(), AudioError> {
+    if table_len > 0 && usize::from(starting_note) + table_len > VOICE_SLOT_COUNT {
+        return Err(AudioError::KeySplitTableNoteOutOfRange {
+            starting_note,
+            table_len,
+        });
     }
     Ok(())
 }
@@ -170,7 +187,9 @@ impl KeySplitVoice {
     /// # Errors
     ///
     /// Returns [`AudioError::KeySplitTableTooLong`] when the table exceeds
-    /// [`VOICE_SLOT_COUNT`] entries, or [`AudioError::KeySplitTableEntryOutOfRange`]
+    /// [`VOICE_SLOT_COUNT`] entries, [`AudioError::KeySplitTableNoteOutOfRange`]
+    /// when `starting_note + table.len()` exceeds [`VOICE_SLOT_COUNT`], covering
+    /// notes outside the playable range, or [`AudioError::KeySplitTableEntryOutOfRange`]
     /// when a table entry selects a child slot index of [`VOICE_SLOT_COUNT`] or
     /// higher, which no voicegroup can define.
     pub fn new(
@@ -179,6 +198,7 @@ impl KeySplitVoice {
         children: VoiceGroupId,
     ) -> Result<Self, AudioError> {
         check_key_split_table_len(table.len())?;
+        check_key_split_table_note_range(starting_note, table.len())?;
         check_key_split_table_entries(&table)?;
         Ok(Self {
             starting_note,
@@ -300,6 +320,7 @@ impl From<DirectSoundModeTag> for DirectSoundMode {
 const NO_PAN_OVERRIDE: u8 = 0;
 const MAX_PAN_OVERRIDE: u8 = 127;
 const MAX_SQUARE_DUTY: u8 = 3;
+const MAX_NOISE_PERIOD: u8 = 1;
 
 fn write_pan(w: &mut Writer, pan: Option<u8>) {
     w.u8(pan.unwrap_or(NO_PAN_OVERRIDE));
@@ -323,6 +344,13 @@ fn check_pan_override(pan: Option<u8>) -> Result<(), AudioError> {
 fn check_square_duty(duty: u8) -> Result<(), AudioError> {
     if duty > MAX_SQUARE_DUTY {
         return Err(AudioError::SquareDutyOutOfRange(duty));
+    }
+    Ok(())
+}
+
+fn check_noise_period(period: u8) -> Result<(), AudioError> {
+    if period > MAX_NOISE_PERIOD {
+        return Err(AudioError::NoisePeriodOutOfRange(period));
     }
     Ok(())
 }
@@ -496,8 +524,11 @@ impl VoiceGroup {
     /// [`VOICE_SLOT_COUNT`], [`AudioError::IdTooLong`] when a referenced id
     /// cannot be encoded, [`AudioError::PanOverrideZero`] for `Some(0)` pan,
     /// [`AudioError::PanOverrideOutOfRange`] for a pan override outside
-    /// `1..=127`, or [`AudioError::SquareDutyOutOfRange`] for a square duty
-    /// selector outside `0..=3`.
+    /// `1..=127`, [`AudioError::SquareDutyOutOfRange`] for a square duty
+    /// selector outside `0..=3`, [`AudioError::KeySplitTableNoteOutOfRange`]
+    /// for a key split whose `starting_note` plus table length exceeds
+    /// [`VOICE_SLOT_COUNT`], or [`AudioError::NoisePeriodOutOfRange`] for
+    /// a noise period outside `0..=1`.
     pub fn new(slots: Vec<VoiceEntry>) -> Result<Self, AudioError> {
         if slots.len() > VOICE_SLOT_COUNT {
             return Err(AudioError::TooManyVoiceSlots(slots.len()));
@@ -509,11 +540,15 @@ impl VoiceGroup {
                     check_pan_override(v.pan)?;
                 }
                 VoiceEntry::ProgrammableWave(v) => check_id_len(&v.wave.0)?,
-                VoiceEntry::KeySplit(v) => check_id_len(&v.children.0)?,
+                VoiceEntry::KeySplit(v) => {
+                    check_id_len(&v.children.0)?;
+                    check_key_split_table_note_range(v.starting_note, v.table.len())?;
+                }
                 VoiceEntry::Rhythm(v) => check_id_len(&v.children.0)?,
                 VoiceEntry::Square1(v) => check_square_duty(v.duty)?,
                 VoiceEntry::Square2(v) => check_square_duty(v.duty)?,
-                VoiceEntry::Noise(_) | VoiceEntry::Empty => {}
+                VoiceEntry::Noise(v) => check_noise_period(v.period)?,
+                VoiceEntry::Empty => {}
             }
         }
         Ok(Self { slots })
@@ -556,8 +591,8 @@ impl VoiceGroup {
     /// # Errors
     ///
     /// Returns an [`AudioError`] for malformed data, invalid tags or ids,
-    /// out-of-range counts, an out-of-domain pan or square duty selector
-    /// (see [`Self::new`]), or trailing bytes.
+    /// out-of-range counts, an out-of-domain pan, square duty, or noise
+    /// period selector (see [`Self::new`]), or trailing bytes.
     pub fn decode(bytes: &[u8]) -> Result<Self, AudioError> {
         let mut r = Reader::new(bytes);
         let count = usize::from(r.u8()?);

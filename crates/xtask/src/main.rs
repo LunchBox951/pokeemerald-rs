@@ -1,65 +1,24 @@
-//! `xtask` — the project's task-automation entry point (F-3).
+//! Development tasks invoked as `cargo xtask <command>`.
 //!
-//! A hand-rolled dev runner (std only, no `clap`/`anyhow` for the CLI itself
-//! — `minimal-deps`; `crate::e2e`'s only dependency is the workspace-local
-//! `pokeemerald-rs` crate under test, and it is optional — see below). Every
-//! subcommand parses and dispatches; a recognised-but-unimplemented
-//! subcommand fails *closed* — returning [`XtaskError::NotImplemented`]
-//! (non-zero exit) rather than exiting 0 — so the `RELEASE.md` gate commands
-//! (`e2e --suite …`) can never be satisfied by a no-op stub
-//! `(gated-by-default)`.
+//! A recognised command must not report success without running its check:
+//! an unimplemented suite or a feature-gated command built without its
+//! feature returns an error rather than exiting 0, so a `RELEASE.md` gate
+//! command can never be satisfied by a no-op `(gated-by-default)`.
 //!
-//! `e2e --suite smoke` (F-3, V-1) is real: see [`crate::e2e::run_smoke`] for
-//! the headless boot-shell run it drives. `extract` (S-4, F-3) is also
-//! real: see [`crate::extract::run`] for the local asset-pack pipeline it
-//! drives (Discussion #71 policy A, issue #81). `record-snapshot` (F-3,
-//! V-4, issue #226) is also real: see [`crate::record_snapshot::run`] for
-//! the deterministic scene capture it drives, and `docs/snapshots.md` for
-//! the capture format and the blessing workflow that consumes it.
-//! `scenario` (F-3, issue #233) is also real: its named input scripts drive
-//! the production [`pokeemerald_rs::App`] frame loop. `gen-rom-profile`
-//! (S-4, F-3, issue #122) is also real, and developer-only: it derives
-//! `rom-import`'s committed ROM address table from a cartridge image the
-//! developer already owns, and is the only place in this workspace a
-//! ROM-scanning heuristic ever runs -- see [`crate::gen_rom_profile`]. Only
-//! the `e2e` `full`/`soak` suites remain stubs.
+//! `mod e2e`, `mod record_snapshot`, and `mod scenario` pull in the
+//! workspace-local `pokeemerald-rs` crate to drive a real scene, so each
+//! sits behind a Cargo feature that keeps a default build free of it. `mod
+//! record_snapshot` is gated on the shared `scenes` feature rather than on
+//! the caller-facing `record-snapshot` feature, so its synthetic-pack unit
+//! tests still compile and run under CI's `cargo test -p xtask --features
+//! smoke` leg. `mod scenario` compiles under `scenario` or under `cfg(test)`
+//! with `scenes` for the same reason, but its dispatch arm still checks the
+//! caller-facing `scenario` feature on its own, so the subcommand stays
+//! unavailable in a `smoke`-only build even though the module compiles.
 //!
-//! `mod e2e`, `mod record_snapshot`, and `mod scenario` need the
-//! workspace-local `pokeemerald-rs` (and, for `record_snapshot`, `assets`)
-//! dependency to drive a real scene, so all sit behind the shared `scenes`
-//! cargo feature
-//! (`Cargo.toml`) — a default `cargo build -p xtask` (every other
-//! subcommand) stays dependency-free, matching pre-PR `xtask`. Without
-//! `scenes`, each subcommand still fails *closed* —
-//! [`XtaskError::SmokeUnavailable`] / [`XtaskError::RecordSnapshotUnavailable`] /
-//! [`XtaskError::ScenarioUnavailable`],
-//! not a silent no-op — telling the caller which feature to rebuild with.
-//! `mod extract` needs no such gate: it depends on nothing beyond `std`, so
-//! it is always compiled in. Neither does `mod gen_rom_profile`: its only
-//! dependencies are the workspace-local `pack-format` and `rom-import`,
-//! both std-only.
-//!
-//! The two `#[cfg]`s are deliberately *asymmetric*. `mod e2e` is gated on
-//! `smoke` (the caller-facing feature that names its subcommand), because
-//! `e2e::run_smoke` boots a real windowless app that CI runs as its own
-//! separate step. `mod record_snapshot` is gated on `scenes` — the shared
-//! *implied* feature — one rung wider than the `record-snapshot` feature
-//! that names its subcommand: `record_snapshot`'s tests are pure
-//! synthetic-pack unit tests (`crate::record_snapshot::tests`, no real pack,
-//! no window, no upstream checkout), and gating the module on
-//! `record-snapshot` would have left them compiled out of every command CI
-//! actually runs — invisible to every merge gate. Gating on `scenes` means
-//! CI's existing `cargo test -p xtask --features smoke` leg compiles and
-//! runs them, while `--features record-snapshot` (which implies `scenes`)
-//! still builds the subcommand for a developer.
-//!
-//! Run via the workspace alias: `cargo xtask <subcommand>` for
-//! feature-free subcommands (`extract`); a gated subcommand
-//! needs the full `cargo run` form so the feature flag lands before the
-//! `--`, e.g. `cargo run -p xtask --features smoke -- e2e --suite smoke`
-//! or `cargo run -p xtask --features record-snapshot -- record-snapshot
-//! --scene title`, or `cargo run -p xtask --features scenario -- scenario
-//! --name boot-to-main-menu`.
+//! A feature-gated subcommand needs the `cargo run` form so the feature
+//! flag lands before the `--`, e.g. `cargo run -p xtask --features smoke --
+//! e2e --suite smoke`.
 
 use std::error::Error;
 use std::ffi::{OsStr, OsString};
@@ -93,9 +52,11 @@ commands:
   e2e --suite <s> [--release]
                      run the end-to-end suite; <s> is smoke | full | soak";
 
-/// Errors produced while parsing an `xtask` invocation.
+/// Errors from parsing or running an `xtask` invocation.
 ///
-/// Concrete per-crate enum (`oop-boundaries`); no `anyhow`.
+/// Each `*Unavailable` variant fires when its dispatch arm's required Cargo
+/// feature is absent, so a subcommand that never ran cannot report success
+/// `(gated-by-default)`.
 #[derive(Debug)]
 pub enum XtaskError {
     /// No subcommand, or an unrecognised one. Carries the offending input
@@ -133,39 +94,35 @@ pub enum XtaskError {
     /// [`gen_rom_profile::GenRomProfileError`]'s rendered message.
     GenRomProfileFailed(String),
     /// `extract` ran but failed. Carries [`extract::ExtractError`]'s
-    /// rendered message (missing upstream checkout, a malformed source
-    /// file, or a write failure — see that type for the exact cases).
+    /// rendered message.
     ExtractFailed(String),
     /// `e2e --suite smoke` ran but did not report a clean boot. Carries
-    /// [`e2e::E2eError`]'s rendered message.
+    /// `e2e::E2eError`'s rendered message.
     SmokeFailed(String),
-    /// `e2e --suite smoke` was requested, but this `xtask` binary was built
-    /// without the `smoke` feature, so `mod e2e` (and its `pokeemerald-rs`
-    /// dependency) was not compiled in. Fails *closed* rather than silently
-    /// reporting success `(gated-by-default)` `(test-ratchet)`.
+    /// `e2e --suite smoke` was requested, but this binary lacks the `smoke`
+    /// feature, so `mod e2e` was not compiled in.
     SmokeUnavailable,
     /// `record-snapshot` ran but failed. Carries
-    /// [`record_snapshot::RecordSnapshotError`]'s rendered message (missing
-    /// local pack, a scene that failed to build, or a write failure — see
-    /// that type for the exact cases).
+    /// `record_snapshot::RecordSnapshotError`'s rendered message.
     RecordSnapshotFailed(String),
-    /// `record-snapshot` was requested, but this `xtask` binary was built
-    /// without the `record-snapshot` feature, so `mod record_snapshot` (and
-    /// its `pokeemerald-rs`/`assets` dependencies) was not compiled in.
-    /// Fails *closed* rather than silently reporting success
-    /// `(gated-by-default)` `(test-ratchet)`.
+    /// `record-snapshot` was requested, but this binary lacks the shared
+    /// `scenes` feature (enabled by `smoke`, `record-snapshot`, or
+    /// `scenario`), so `mod record_snapshot` was not compiled in.
     RecordSnapshotUnavailable,
     /// `scenario` ran but its real headless app failed to start, accept an
     /// input frame, advance, or reach an expected milestone.
     ScenarioFailed(String),
-    /// `scenario` was requested without the caller-facing `scenario`
-    /// feature. Fails closed even when another feature happens to compile
-    /// the shared scene dependencies.
+    /// `scenario` was requested, but this binary lacks the caller-facing
+    /// `scenario` feature, even if another feature compiled the shared
+    /// scene dependencies.
     ScenarioUnavailable,
 }
 
 impl fmt::Display for XtaskError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Arms below that `return` report a runtime or build-configuration
+        // failure rather than a malformed invocation, so they skip the
+        // USAGE tail every other arm falls through to.
         match self {
             Self::UnknownCommand(cmd) if cmd.is_empty() => {
                 writeln!(f, "error: no subcommand given")?;
@@ -194,31 +151,21 @@ impl fmt::Display for XtaskError {
             Self::UnexpectedArg(arg) => {
                 writeln!(f, "error: unexpected argument `{arg}`")?;
             }
-            // A not-implemented status is a runtime failure, not a usage error,
-            // so it gets no USAGE tail.
             Self::NotImplemented(what) => {
                 return write!(f, "error: `{what}` is not implemented yet");
             }
             Self::MissingOptionValue(option) => {
                 writeln!(f, "error: `{option}` requires a value")?;
             }
-            // A generator failure is runtime/behavioural, not a malformed
-            // invocation, so it gets no USAGE tail.
             Self::GenRomProfileFailed(reason) => {
                 return write!(f, "error: `gen-rom-profile` failed: {reason}");
             }
-            // Likewise an extract failure: runtime/behavioural, not a
-            // malformed invocation.
             Self::ExtractFailed(reason) => {
                 return write!(f, "error: `extract` failed: {reason}");
             }
-            // Likewise a smoke-run failure: it's a runtime/behavioural
-            // failure, not a malformed invocation.
             Self::SmokeFailed(reason) => {
                 return write!(f, "error: `e2e --suite smoke` failed: {reason}");
             }
-            // Likewise: a missing feature is a build-configuration problem,
-            // not a malformed invocation, so it gets no USAGE tail either.
             Self::SmokeUnavailable => {
                 return write!(
                     f,
@@ -226,13 +173,9 @@ impl fmt::Display for XtaskError {
                      `cargo run -p xtask --features smoke -- e2e --suite smoke`"
                 );
             }
-            // Likewise a record-snapshot failure: runtime/behavioural, not
-            // a malformed invocation.
             Self::RecordSnapshotFailed(reason) => {
                 return write!(f, "error: `record-snapshot` failed: {reason}");
             }
-            // Likewise: a missing feature is a build-configuration problem,
-            // not a malformed invocation, so it gets no USAGE tail either.
             Self::RecordSnapshotUnavailable => {
                 return write!(
                     f,
@@ -270,7 +213,7 @@ pub enum Suite {
 }
 
 impl Suite {
-    /// Parse a suite name.
+    /// The suite `--suite` names: `smoke`, `full`, or `soak`.
     ///
     /// # Errors
     ///
@@ -285,21 +228,16 @@ impl Suite {
     }
 }
 
-/// The scene `record-snapshot --scene <name>` captures (F-3, V-4).
+/// The scene `record-snapshot --scene <name>` captures.
 ///
 /// Defined here at the crate root, not inside the feature-gated
-/// [`record_snapshot`] module, so [`parse`] can route (and reject unknown)
-/// scene names even in a build without the `record-snapshot` feature —
-/// mirrors [`Suite`] living outside the feature-gated [`e2e`].
+/// `record_snapshot` module, so [`parse`] can route (and reject unknown)
+/// scene names even in a build without the `scenes` feature.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scene {
-    /// The real title screen (`pokeemerald_rs::title`), captured at frame
-    /// 16 — a fixed frame inside the *visible* half of the "Press Start"
-    /// blink, so the capture witnesses the banner (see
-    /// `record_snapshot::TITLE_FRAME_INDEX` for the full rationale).
+    /// The real title screen.
     Title,
-    /// The no-save main menu (`pokeemerald_rs::main_menu`, issue #216) with
-    /// its default selection, `NEW GAME`.
+    /// The no-save main menu with its default selection, `NEW GAME`.
     MainMenuNewGame,
     /// The no-save main menu with `OPTION` selected (one `DPAD_DOWN` press
     /// from the default selection).
@@ -307,7 +245,7 @@ pub enum Scene {
 }
 
 impl Scene {
-    /// Parse a scene name.
+    /// The scene whose [`Self::name`] is `value`.
     ///
     /// # Errors
     ///
@@ -334,23 +272,23 @@ impl Scene {
     }
 }
 
-/// A named scripted gameplay scenario (F-3, issue #233).
+/// A named scripted gameplay scenario.
 ///
-/// This type remains outside the feature-gated runner so unknown names are
-/// rejected before the build-configuration error, matching [`Scene`]'s
-/// fail-closed split.
+/// Defined here at the crate root, not inside the feature-gated `scenario`
+/// module, so [`parse`] can route (and reject unknown) scenario names even
+/// in a build without the `scenario` feature.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScenarioName {
     /// Boot the real title screen and press Start into the no-save main menu.
     BootToMainMenu,
     /// Boot to the title, start a new game, walk the protagonist's room and
     /// Route 101, trigger `BATTLE_TYPE_FIRST_BATTLE`, and drive it until the
-    /// battle resolves with a retained terminal outcome (I-7, issue #245).
+    /// battle resolves with a retained terminal outcome.
     BootToFirstFight,
 }
 
 impl ScenarioName {
-    /// Parse a scenario's canonical name.
+    /// The scenario whose [`Self::name`] is `value`.
     ///
     /// # Errors
     ///
@@ -397,7 +335,7 @@ pub enum Command {
     E2e {
         /// The selected test suite.
         suite: Suite,
-        /// Whether `--release` was requested (release-mode gates: V-2/V-3).
+        /// Whether `--release` was requested.
         release: bool,
     },
 }
@@ -410,10 +348,8 @@ pub enum Command {
 /// # Errors
 ///
 /// Returns [`XtaskError::UnknownCommand`] for an empty or unrecognised
-/// subcommand, [`XtaskError::UnexpectedArg`] when a subcommand that takes no
-/// arguments is given one (or `e2e` is given a stray/duplicate token),
-/// [`XtaskError::MissingSuiteValue`] if `e2e --suite` has no value, and
-/// [`XtaskError::InvalidSuite`] for an unknown suite name.
+/// subcommand, or the [`XtaskError`] variant naming what is wrong with its
+/// arguments.
 pub fn parse(args: &[OsString]) -> Result<Command, XtaskError> {
     let Some(subcommand) = args.first() else {
         return Err(XtaskError::UnknownCommand(String::new()));
@@ -581,11 +517,10 @@ fn parse_scenario(rest: &[String]) -> Result<ScenarioName, XtaskError> {
 /// Parse the arguments following the `e2e` subcommand:
 /// `--suite <value> [--release]`.
 ///
-/// `--suite <value>` is required; `--release` is an optional release-mode flag
-/// (the V-2/V-3 gate commands in `RELEASE.md`). The two may appear in either
-/// order, but any other token — or a repeated/stray argument — is an
-/// [`XtaskError::UnexpectedArg`]. Returns the suite and whether release mode
-/// was requested.
+/// `--suite <value>` is required; `--release` is an optional flag. The two
+/// may appear in either order, but any other token — or a repeated/stray
+/// argument — is an [`XtaskError::UnexpectedArg`]. Returns the suite and
+/// whether release mode was requested.
 fn parse_e2e(rest: &[String]) -> Result<(Suite, bool), XtaskError> {
     let mut suite: Option<Suite> = None;
     let mut release = false;
@@ -610,34 +545,17 @@ fn parse_e2e(rest: &[String]) -> Result<(Suite, bool), XtaskError> {
 
 /// Dispatch a parsed command.
 ///
-/// `extract` is real (S-4, F-3): see [`extract::run`] for the local
-/// asset-pack pipeline it drives. `e2e --suite smoke` is also real (F-3,
-/// V-1) when built with `--features smoke`: see [`e2e::run_smoke`].
-/// `record-snapshot` is also real (F-3, V-4) when built with `--features
-/// record-snapshot` (or anything else implying `scenes` — crate docs):
-/// see [`record_snapshot::run`]. Without the matching
-/// feature, each still fails *closed* —
-/// [`XtaskError::SmokeUnavailable`] / [`XtaskError::RecordSnapshotUnavailable`] /
-/// [`XtaskError::ScenarioUnavailable`] — rather than silently no-opping.
-/// The `e2e` `full`/`soak` suites remain stubs: rather than
-/// exiting 0, each returns [`XtaskError::NotImplemented`] so the process
-/// fails *closed* (non-zero exit). The `RELEASE.md` promotion gates run
-/// these exact commands, so a stub that reported success would satisfy a
-/// gate with zero validation `(gated-by-default)` `(test-ratchet)`.
+/// `e2e`'s `full` and `soak` suites are the only stubs: each returns
+/// [`XtaskError::NotImplemented`] rather than exiting 0, so a `RELEASE.md`
+/// promotion gate that runs this exact command can never pass on a no-op
+/// `(gated-by-default)` `(test-ratchet)`.
 ///
 /// # Errors
 ///
-/// Returns [`XtaskError::NotImplemented`] for each still-stubbed suite,
-/// [`XtaskError::ExtractFailed`] if `extract` ran but
-/// failed, [`XtaskError::SmokeUnavailable`] if `e2e --suite smoke` was
-/// requested but this binary was built without the `smoke` feature,
-/// [`XtaskError::SmokeFailed`] if `e2e --suite smoke` ran but did not report
-/// a clean boot, [`XtaskError::RecordSnapshotUnavailable`] if
-/// `record-snapshot` was requested but this binary was built without the
-/// `record-snapshot` feature, or [`XtaskError::RecordSnapshotFailed`] if
-/// `record-snapshot` ran but failed, [`XtaskError::ScenarioUnavailable`] if
-/// `scenario` was requested without its feature, or
-/// [`XtaskError::ScenarioFailed`] if the script did not complete.
+/// Returns [`XtaskError::NotImplemented`] for a still-stubbed suite,
+/// `*Failed` if the matching subcommand ran but did not succeed, or
+/// `*Unavailable` if it was requested without the Cargo feature its
+/// dispatch arm requires.
 fn dispatch(cmd: &Command) -> Result<(), XtaskError> {
     match cmd {
         Command::Extract => {
@@ -737,8 +655,7 @@ fn dispatch(cmd: &Command) -> Result<(), XtaskError> {
 ///
 /// # Errors
 ///
-/// Propagates any [`XtaskError`] from [`parse`], and (until the subcommands are
-/// implemented) [`XtaskError::NotImplemented`] from [`dispatch`].
+/// Propagates any [`XtaskError`] from [`parse`] or [`dispatch`].
 pub fn run(args: &[OsString]) -> Result<(), XtaskError> {
     let cmd = parse(args)?;
     dispatch(&cmd)
@@ -747,8 +664,7 @@ pub fn run(args: &[OsString]) -> Result<(), XtaskError> {
 fn main() -> ExitCode {
     // `args_os`, not `args`: the latter panics on an argument that is not
     // UTF-8, and `gen-rom-profile` takes paths the filesystem may spell in
-    // bytes no `String` can hold. The shipped binary reads its argv the
-    // same way (`pokeemerald_rs`'s `main`).
+    // bytes no `String` can hold.
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
     match run(&args) {
         Ok(()) => ExitCode::SUCCESS,
@@ -1079,7 +995,6 @@ mod tests {
 
     #[test]
     fn parse_e2e_full_release() {
-        // RELEASE.md V-2 gate: `cargo xtask e2e --suite full --release`.
         assert_eq!(
             parse(&args(&["e2e", "--suite", "full", "--release"])).unwrap(),
             Command::E2e {
@@ -1091,7 +1006,6 @@ mod tests {
 
     #[test]
     fn parse_e2e_soak_release() {
-        // RELEASE.md V-3 gate: `cargo xtask e2e --suite soak --release`.
         assert_eq!(
             parse(&args(&["e2e", "--suite", "soak", "--release"])).unwrap(),
             Command::E2e {
@@ -1187,23 +1101,18 @@ mod tests {
 
     #[test]
     fn run_stub_commands_fail_closed() {
-        // Recognised-but-unimplemented subcommands must NOT report success:
-        // RELEASE.md wires `xtask e2e --suite …` in as promotion gates, so a
-        // stub exiting 0 would satisfy a gate with zero validation
-        // `(gated-by-default)` `(test-ratchet)`. `extract`, `e2e --suite
-        // smoke`, and `record-snapshot` are deliberately absent here: all
-        // four are no longer stubs (S-4/F-3, F-3/V-1, F-3/V-4, and F-3
-        // issue #233 respectively) and each has dedicated coverage —
-        // `extract` via `extract_dispatch_fails_closed_without_local_checkout`/
-        // `extract_dispatch_succeeds_with_local_checkout` below, `e2e
-        // --suite smoke` via `crate::e2e::tests::smoke_suite_boots_cleanly_headless`
-        // (with the feature) and `e2e_smoke_without_feature_fails_closed`
-        // below (without it), `record-snapshot` via
+        // `extract`, `e2e --suite smoke`, `record-snapshot`, and `scenario`
+        // are absent here because each already has dedicated dispatch
+        // coverage: `extract` via `extract_dispatch_fails_closed_without_
+        // local_checkout`/`extract_dispatch_succeeds_with_local_checkout`
+        // below; `e2e --suite smoke` via
+        // `crate::e2e::tests::smoke_suite_boots_cleanly_headless` (with the
+        // feature) and `e2e_smoke_without_feature_fails_closed` below
+        // (without it); `record-snapshot` via
         // `record_snapshot_without_feature_fails_closed` below (without the
-        // feature) and `crate::record_snapshot::tests` (with it), and
-        // `scenario` via the unavailable check below (without its feature),
-        // the two `scenario_dispatch_*` wiring tests below (with it), plus
-        // `crate::scenario::tests` under `--features smoke`/`scenario`.
+        // feature) and `crate::record_snapshot::tests` (with it); and
+        // `scenario` via the unavailable check below, the two
+        // `scenario_dispatch_*` wiring tests below, and `crate::scenario::tests`.
         assert!(matches!(
             run(&args(&["e2e", "--suite", "full", "--release"])).unwrap_err(),
             XtaskError::NotImplemented("e2e")

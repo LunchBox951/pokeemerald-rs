@@ -4,11 +4,13 @@ const MIDDLE_C: u8 = 60;
 const KEY_SPLIT_START: u8 = 36;
 const VOICE_GROUP_SLOT_COUNT_BYTE: usize = 0;
 const FIRST_SLOT_KIND_BYTE: usize = 1;
+const FIRST_KEY_SPLIT_STARTING_NOTE_BYTE: usize = 2;
 const FIRST_KEY_SPLIT_TABLE_LENGTH_BYTE: usize = 3;
 const FIRST_KEY_SPLIT_TABLE_ENTRY_BYTE: usize = 4;
 const FIRST_DIRECT_SOUND_PAN_BYTE: usize = 3;
 const FIRST_SQUARE1_DUTY_BYTE: usize = 5;
 const FIRST_SQUARE2_DUTY_BYTE: usize = 4;
+const FIRST_NOISE_PERIOD_BYTE: usize = 4;
 
 fn sample_envelope() -> Envelope {
     Envelope {
@@ -207,6 +209,92 @@ fn decode_rejects_a_declared_key_split_table_length_above_the_maximum() {
         Err(AudioError::KeySplitTableTooLong(usize::from(
             invalid_table_len
         )))
+    );
+}
+
+#[test]
+fn a_key_split_table_ending_at_the_last_note_is_accepted() {
+    let starting_note = u8::try_from(VOICE_SLOT_COUNT - 1).expect("127 fits a u8");
+    let group = VoiceGroup::new(vec![VoiceEntry::KeySplit(
+        KeySplitVoice::new(
+            starting_note,
+            vec![0],
+            VoiceGroupId("audio/voicegroup/x".to_owned()),
+        )
+        .unwrap(),
+    )])
+    .unwrap();
+    match &VoiceGroup::decode(&group.encode()).unwrap().slots()[0] {
+        VoiceEntry::KeySplit(v) => {
+            assert_eq!(v.starting_note, starting_note);
+            assert_eq!(v.table(), [0]);
+        }
+        other => panic!("expected a KeySplit slot, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_key_split_table_extending_past_the_last_note_is_rejected_by_the_constructor() {
+    let starting_note = u8::try_from(VOICE_SLOT_COUNT - 1).expect("127 fits a u8");
+    assert_eq!(
+        KeySplitVoice::new(
+            starting_note,
+            vec![0, 0],
+            VoiceGroupId("audio/voicegroup/x".to_owned()),
+        ),
+        Err(AudioError::KeySplitTableNoteOutOfRange {
+            starting_note,
+            table_len: 2,
+        })
+    );
+}
+
+/// `starting_note` is a public field, so a split built in range can be moved
+/// past the last note afterwards; the group constructor is the last check
+/// before encoding.
+#[test]
+fn a_group_rejects_a_key_split_moved_past_the_last_note_after_construction() {
+    let mut split =
+        KeySplitVoice::new(0, vec![0, 0], VoiceGroupId("audio/voicegroup/x".to_owned())).unwrap();
+    split.starting_note = u8::try_from(VOICE_SLOT_COUNT - 1).expect("127 fits a u8");
+    assert_eq!(
+        VoiceGroup::new(vec![VoiceEntry::KeySplit(split)]),
+        Err(AudioError::KeySplitTableNoteOutOfRange {
+            starting_note: 127,
+            table_len: 2,
+        })
+    );
+}
+
+#[test]
+fn an_empty_key_split_table_is_accepted_at_any_starting_note() {
+    let group = VoiceGroup::new(vec![VoiceEntry::KeySplit(
+        KeySplitVoice::new(
+            u8::MAX,
+            vec![],
+            VoiceGroupId("audio/voicegroup/x".to_owned()),
+        )
+        .unwrap(),
+    )])
+    .unwrap();
+    assert_eq!(VoiceGroup::decode(&group.encode()).unwrap(), group);
+}
+
+#[test]
+fn decode_rejects_a_key_split_table_extending_past_the_last_note() {
+    let group = VoiceGroup::new(vec![VoiceEntry::KeySplit(
+        KeySplitVoice::new(0, vec![0, 0], VoiceGroupId("audio/voicegroup/x".to_owned())).unwrap(),
+    )])
+    .unwrap();
+    let mut bytes = group.encode();
+    let out_of_range_start = u8::try_from(VOICE_SLOT_COUNT - 1).expect("127 fits a u8");
+    bytes[FIRST_KEY_SPLIT_STARTING_NOTE_BYTE] = out_of_range_start;
+    assert_eq!(
+        VoiceGroup::decode(&bytes),
+        Err(AudioError::KeySplitTableNoteOutOfRange {
+            starting_note: out_of_range_start,
+            table_len: 2,
+        })
     );
 }
 
@@ -631,5 +719,53 @@ fn decode_rejects_out_of_range_square_duty() {
     assert_eq!(
         VoiceGroup::decode(&bytes),
         Err(AudioError::SquareDutyOutOfRange(4))
+    );
+}
+
+fn noise_with_period(period: u8) -> VoiceEntry {
+    VoiceEntry::Noise(NoiseVoice {
+        base_key: MIDDLE_C,
+        length: 0,
+        period,
+        envelope: sample_envelope(),
+        fixed_rate: false,
+    })
+}
+
+#[test]
+fn noise_period_boundaries_are_accepted_by_the_constructor_and_decode() {
+    for period in [0u8, 1] {
+        let group = VoiceGroup::new(vec![noise_with_period(period)]).unwrap();
+        assert_eq!(VoiceGroup::decode(&group.encode()).unwrap(), group);
+    }
+}
+
+#[test]
+fn noise_period_out_of_range_is_rejected_at_construction() {
+    for period in [2u8, 255] {
+        assert_eq!(
+            VoiceGroup::new(vec![noise_with_period(period)]).unwrap_err(),
+            AudioError::NoisePeriodOutOfRange(period)
+        );
+    }
+}
+
+/// Upstream `_voice_noise` stores `period & 1` (`asm/macros/music_voice.inc`) and the
+/// runtime reads only bit 0 (`audio::cgb_voice::noise_control_byte`), so a period above
+/// `1` aliases an in-domain selector and both `new` and `decode` must reject it.
+#[test]
+fn new_and_decode_reject_out_of_range_noise_period() {
+    assert_eq!(
+        VoiceGroup::new(vec![noise_with_period(2)]).unwrap_err(),
+        AudioError::NoisePeriodOutOfRange(2)
+    );
+
+    let mut bytes = VoiceGroup::new(vec![noise_with_period(1)])
+        .unwrap()
+        .encode();
+    bytes[FIRST_NOISE_PERIOD_BYTE] = 3;
+    assert_eq!(
+        VoiceGroup::decode(&bytes),
+        Err(AudioError::NoisePeriodOutOfRange(3))
     );
 }

@@ -3,7 +3,7 @@
 
 use super::step::InteractionOutcome;
 use super::test_support::*;
-use super::{OverworldPhase, SyntheticStartMenu};
+use super::{ActiveBattle, OverworldPhase, SyntheticStartMenu};
 use crate::new_game;
 use engine::overworld::{Direction, PlayerState, WALK_FRAMES_PER_TILE};
 use engine::rng::Rng;
@@ -147,6 +147,146 @@ fn a_pressed_with_a_perpendicular_direction_finds_mom_and_does_not_turn_the_play
     assert!(
         !phase.player.in_transit(),
         "no walk animation may have started either"
+    );
+}
+
+/// A field-dialog interaction repairs an out-of-range saved
+/// `optionsTextSpeed` in place on the same frame, as
+/// `GetPlayerTextSpeedDelay` does (`pokeemerald/src/menu.c:481-488`).
+#[test]
+fn a_field_dialog_interaction_repairs_an_out_of_range_saved_text_speed() {
+    /// An `optionsTextSpeed` above `OPTIONS_TEXT_SPEED_FAST` (`2`) --
+    /// invalid, same as `pokeemerald/include/constants/global.h:127-129`.
+    const OUT_OF_RANGE_TEXT_SPEED: u8 = 5;
+    /// `OPTIONS_TEXT_SPEED_MID`: what an invalid value repairs to.
+    const REPAIRED_MID_TEXT_SPEED: u8 = 1;
+
+    // One tile east of Mom, facing west -- directly adjacent (module docs'
+    // `ONE_F` fixture notes, matching this file's other Mom-interaction
+    // tests).
+    let mut phase = synthetic_phase(PlayerState::new((3, 6), 3, Direction::West), None);
+    phase.save2.options_text_speed = OUT_OF_RANGE_TEXT_SPEED;
+
+    phase.step(pressed(Buttons::A));
+
+    assert_eq!(
+        phase.save2.options_text_speed, REPAIRED_MID_TEXT_SPEED,
+        "an out-of-range saved optionsTextSpeed must be repaired to MID the moment a field \
+         dialog interaction reads it, exactly as GetPlayerTextSpeedDelay repairs \
+         gSaveBlock2Ptr->optionsTextSpeed in place"
+    );
+}
+
+/// The complement: a saved `optionsTextSpeed` already in range must survive
+/// a field dialog interaction unchanged -- only an invalid value is ever
+/// repaired.
+#[test]
+fn a_field_dialog_interaction_leaves_an_in_range_saved_text_speed_untouched() {
+    const FAST_TEXT_SPEED: u8 = 2;
+
+    let mut phase = synthetic_phase(PlayerState::new((3, 6), 3, Direction::West), None);
+    phase.save2.options_text_speed = FAST_TEXT_SPEED;
+
+    phase.step(pressed(Buttons::A));
+
+    assert_eq!(
+        phase.save2.options_text_speed, FAST_TEXT_SPEED,
+        "a saved optionsTextSpeed already within range must not be rewritten"
+    );
+}
+
+/// Drives a dialog the production `phase.step` opened from a synthetic
+/// on-disk pack ([`crate::pack_source::PackSource::Test`]) and asserts a
+/// FAST-saved session reveals its message in fewer frames than a SLOW-saved
+/// one (`sTextSpeedFrameDelays`, `pokeemerald/src/menu.c:77-82`).
+#[test]
+fn a_field_dialog_opened_by_the_real_step_pipeline_paces_at_the_saved_text_speed() {
+    use crate::pack_source::PackSource;
+    use crate::pack_test_support::{image_entry, pack_bytes, palette_entry};
+
+    const MESSAGE_BOX_WIDTH: u32 = 56;
+    const MESSAGE_BOX_HEIGHT: u32 = 16;
+    const FRAME_BIT_DEPTH: u8 = 4;
+    const FONT_BIT_DEPTH: u8 = 2;
+    const PALETTE_COLOUR_COUNT: u16 = 16;
+    const PRINT_FRAME_BUDGET: usize = 64;
+    /// Mom's real script text ([`crate::overworld::npc_scripts::script_text`])
+    /// starts well past the third glyph -- plenty of room for FAST/SLOW to
+    /// diverge before either dialog panics on a missing font glyph.
+    const GLYPH_TARGET: usize = 3;
+    const OPTIONS_TEXT_SPEED_SLOW: u8 = 0;
+    const OPTIONS_TEXT_SPEED_FAST: u8 = 2;
+
+    let pack_bytes_blob = pack_bytes(vec![
+        image_entry(
+            "text-window/image/message_box",
+            MESSAGE_BOX_WIDTH,
+            MESSAGE_BOX_HEIGHT,
+            FRAME_BIT_DEPTH,
+            0,
+        ),
+        palette_entry("text-window/palette/message_box", PALETTE_COLOUR_COUNT),
+        image_entry(
+            "font/normal/glyphs",
+            assets::fonts::SHEET_WIDTH,
+            assets::fonts::SHEET_HEIGHT,
+            FONT_BIT_DEPTH,
+            0,
+        ),
+    ]);
+
+    let frames_to_reveal_third_glyph = |saved_text_speed: u8| {
+        let path = std::env::temp_dir().join(format!(
+            "pokeemerald-rs-step-field-dialog-{saved_text_speed}-{}-{:?}.pack",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::write(&path, &pack_bytes_blob).expect("the scratch directory is writable");
+        // `PackSource::Test` needs a `'static` path; leaked once per call,
+        // reclaimed only when the test process exits (test-only, matches
+        // this crate's own `Box::leak`-for-`'static`-fixtures idiom).
+        let leaked_path: &'static std::path::Path = Box::leak(path.clone().into_boxed_path());
+
+        // One tile east of Mom, facing west -- directly adjacent (this
+        // file's other Mom-interaction tests' own fixture notes).
+        let mut phase = synthetic_phase(PlayerState::new((3, 6), 3, Direction::West), None);
+        phase.pack_source = PackSource::Test(leaked_path);
+        phase.save2.options_text_speed = saved_text_speed;
+
+        phase.step(pressed(Buttons::A));
+        assert!(
+            phase.dialog.is_some(),
+            "the synthetic pack must let the real production path open Mom's dialog"
+        );
+
+        let mut frame = 0;
+        loop {
+            frame += 1;
+            assert!(
+                frame <= PRINT_FRAME_BUDGET,
+                "the third glyph must reveal within the frame budget"
+            );
+            phase.step(ButtonState::new());
+            let dialog = phase
+                .dialog
+                .as_ref()
+                .expect("must still be printing well before waitbuttonpress");
+            if dialog.revealed_glyph_count() >= GLYPH_TARGET {
+                break;
+            }
+        }
+
+        let _ = std::fs::remove_file(&path);
+        frame
+    };
+
+    let fast = frames_to_reveal_third_glyph(OPTIONS_TEXT_SPEED_FAST);
+    let slow = frames_to_reveal_third_glyph(OPTIONS_TEXT_SPEED_SLOW);
+
+    assert!(
+        fast < slow,
+        "the dialog the real step pipeline opens for a FAST-saved session must reveal its \
+         third glyph in fewer frames than a SLOW-saved one, but they took {fast} and {slow}"
     );
 }
 
@@ -1439,5 +1579,304 @@ fn a_fresh_start_on_a_forced_tile_whose_forced_step_is_blocked_must_open_the_men
         "upstream's T_NOT_MOVING arm sets pressedStartButton even on a \
          forced-movement tile, so a player stranded on a slope whose forced \
          step is collision-blocked must still be able to open the menu"
+    );
+}
+
+/// Each [`OverworldPhase::active_battle`] variant is reported by exactly
+/// one `is_*_battle_active` accessor, and `in_battle()` by all of them.
+#[test]
+fn active_battle_reports_exactly_one_frame_owner_for_each_variant() {
+    use crate::flow::npc_trainer_battle;
+
+    const PLAYER_TRAINER_ID: u32 = 0x1234_5678;
+    // `TRAINER_BRENDAN_ROUTE_103_TREECKO`; which trainer it is does not
+    // matter here.
+    let stand_in_trainer = assets::trainers::TrainerId(532);
+
+    let mut rng = Rng::new(1);
+    let wild_battle = crate::flow::wild_encounter::start_wild_battle(
+        new_game::provisional_starter(),
+        engine::overworld::wild_encounter::WildEncounter {
+            species: assets::SpeciesId(290), // SPECIES_WURMPLE
+            level: 2,
+            slot: 0,
+        },
+        PLAYER_TRAINER_ID,
+        &mut rng,
+    )
+    .expect("a Wurmple encounter is fightable");
+    let first_battle = crate::flow::first_battle::start_first_battle(
+        new_game::provisional_starter(),
+        PLAYER_TRAINER_ID,
+        &mut rng,
+    )
+    .expect("the provisional starter must construct the scripted first battle");
+    let rival_battle = npc_trainer_battle::start_npc_trainer_battle(
+        new_game::provisional_starter(),
+        stand_in_trainer,
+        &mut rng,
+    )
+    .expect("the stand-in trainer must always construct");
+    let sight_battle = npc_trainer_battle::start_npc_trainer_battle(
+        new_game::provisional_starter(),
+        stand_in_trainer,
+        &mut rng,
+    )
+    .expect("the stand-in trainer must always construct");
+
+    let variants = [
+        ActiveBattle::Wild(wild_battle),
+        ActiveBattle::First(first_battle),
+        ActiveBattle::Rival {
+            battle: rival_battle,
+            trainer_id: stand_in_trainer,
+        },
+        ActiveBattle::SightTrainer {
+            battle: sight_battle,
+            trainer_id: stand_in_trainer,
+        },
+    ];
+
+    for variant in variants {
+        let expect_wild = matches!(variant, ActiveBattle::Wild(_));
+        let expect_first = matches!(variant, ActiveBattle::First(_));
+        let expect_rival = matches!(variant, ActiveBattle::Rival { .. });
+        let expect_sight = matches!(variant, ActiveBattle::SightTrainer { .. });
+
+        let mut phase = synthetic_phase(PlayerState::new((4, 6), 3, Direction::West), None);
+        phase.active_battle = Some(variant);
+
+        assert!(
+            phase.in_battle(),
+            "an installed ActiveBattle variant must own the frame"
+        );
+        assert_eq!(
+            phase.is_wild_battle_active(),
+            expect_wild,
+            "is_wild_battle_active must agree with the installed variant"
+        );
+        assert_eq!(
+            phase.is_first_battle_active(),
+            expect_first,
+            "is_first_battle_active must agree with the installed variant"
+        );
+        assert_eq!(
+            phase.is_rival_battle_active(),
+            expect_rival,
+            "is_rival_battle_active must agree with the installed variant"
+        );
+        assert_eq!(
+            phase.is_sight_trainer_battle_active(),
+            expect_sight,
+            "is_sight_trainer_battle_active must agree with the installed variant"
+        );
+
+        // Clearing the slot drops the whole variant at once, `trainer_id`
+        // included.
+        phase.active_battle = None;
+        assert!(!phase.in_battle());
+        assert!(!phase.is_wild_battle_active());
+        assert!(!phase.is_first_battle_active());
+        assert!(!phase.is_rival_battle_active());
+        assert!(!phase.is_sight_trainer_battle_active());
+    }
+}
+
+/// `step` dispatches one frame to the installed variant's own driver: the
+/// overworld stays frozen and the variant survives as the same arm (or has
+/// ended through its own driver).
+#[test]
+fn step_dispatches_each_active_battle_variant_to_its_own_driver() {
+    use crate::flow::npc_trainer_battle;
+    const PLAYER_TRAINER_ID: u32 = 0x1234_5678;
+    let stand_in_trainer = assets::trainers::TrainerId(532);
+    let mut rng = Rng::new(1);
+    let mk_npc = |rng: &mut Rng| {
+        npc_trainer_battle::start_npc_trainer_battle(
+            new_game::provisional_starter(),
+            stand_in_trainer,
+            rng,
+        )
+        .expect("stand-in trainer constructs")
+    };
+    let wild = crate::flow::wild_encounter::start_wild_battle(
+        new_game::provisional_starter(),
+        engine::overworld::wild_encounter::WildEncounter {
+            species: assets::SpeciesId(290),
+            level: 2,
+            slot: 0,
+        },
+        PLAYER_TRAINER_ID,
+        &mut rng,
+    )
+    .expect("wild");
+    let first = crate::flow::first_battle::start_first_battle(
+        new_game::provisional_starter(),
+        PLAYER_TRAINER_ID,
+        &mut rng,
+    )
+    .expect("first");
+    let rival = mk_npc(&mut rng);
+    let sight = mk_npc(&mut rng);
+    let variants = [
+        ActiveBattle::Wild(wild),
+        ActiveBattle::First(first),
+        ActiveBattle::Rival {
+            battle: rival,
+            trainer_id: stand_in_trainer,
+        },
+        ActiveBattle::SightTrainer {
+            battle: sight,
+            trainer_id: stand_in_trainer,
+        },
+    ];
+    for variant in variants {
+        let kind = std::mem::discriminant(&variant);
+        let mut phase = synthetic_phase(PlayerState::new((4, 6), 3, Direction::West), None);
+        phase.active_battle = Some(variant);
+        phase.step(held(Buttons::LEFT));
+        assert_eq!(
+            phase.player.position(),
+            (4, 6),
+            "battle must freeze the overworld"
+        );
+        let after = phase.active_battle.as_ref().map(std::mem::discriminant);
+        assert!(
+            after.is_none() || after == Some(kind),
+            "the variant must be driven by its own arm, never re-slotted as a sibling"
+        );
+    }
+}
+
+/// Each installed variant is driven to its end: a dispatcher that reinstalls
+/// the taken variant without calling a driver leaves the slot occupied.
+#[test]
+fn step_drives_each_active_battle_variant_to_completion() {
+    use crate::flow::npc_trainer_battle;
+    const PLAYER_TRAINER_ID: u32 = 0x1234_5678;
+    let stand_in_trainer = assets::trainers::TrainerId(532);
+    let mut rng = Rng::new(1);
+    let mk_npc = |rng: &mut Rng| {
+        npc_trainer_battle::start_npc_trainer_battle(
+            new_game::provisional_starter(),
+            stand_in_trainer,
+            rng,
+        )
+        .expect("stand-in trainer constructs")
+    };
+    let wild = crate::flow::wild_encounter::start_wild_battle(
+        new_game::provisional_starter(),
+        engine::overworld::wild_encounter::WildEncounter {
+            species: assets::SpeciesId(290),
+            level: 2,
+            slot: 0,
+        },
+        PLAYER_TRAINER_ID,
+        &mut rng,
+    )
+    .expect("wild");
+    let first = crate::flow::first_battle::start_first_battle(
+        new_game::provisional_starter(),
+        PLAYER_TRAINER_ID,
+        &mut rng,
+    )
+    .expect("first");
+    let rival = mk_npc(&mut rng);
+    let sight = mk_npc(&mut rng);
+    let variants = [
+        ActiveBattle::Wild(wild),
+        ActiveBattle::First(first),
+        ActiveBattle::Rival {
+            battle: rival,
+            trainer_id: stand_in_trainer,
+        },
+        ActiveBattle::SightTrainer {
+            battle: sight,
+            trainer_id: stand_in_trainer,
+        },
+    ];
+    for variant in variants {
+        let kind = std::mem::discriminant(&variant);
+        let mut phase = synthetic_phase(PlayerState::new((4, 6), 3, Direction::West), None);
+        phase.active_battle = Some(variant);
+        let mut frames = 0;
+        while phase.active_battle.is_some() && frames < 1000 {
+            phase.step(ButtonState::new());
+            frames += 1;
+        }
+        assert!(
+            phase.active_battle.is_none(),
+            "variant {kind:?} was never driven to an end in {frames} frames"
+        );
+    }
+}
+
+/// A forced-movement landing must not run `CheckStandardWildEncounter`
+/// (`pokeemerald/src/field_control_avatar.c:116-122`, `:162`, `:667-684`).
+#[test]
+fn a_forced_movement_landing_must_not_run_the_wild_encounter_check() {
+    use engine::overworld::metatile_behavior::{MB_MUDDY_SLOPE, MB_NORMAL};
+
+    let landing_onto = |behavior: u8| {
+        let scene =
+            crate::overworld::tests::synthetic_scene_with_special_tile(10, 10, (6, 4), behavior);
+        let mut phase = OverworldPhase::for_test(
+            scene,
+            ONE_F,
+            PlayerState::new((6, 5), 3, Direction::North),
+            None,
+        );
+        for _ in 0..u32::from(WALK_FRAMES_PER_TILE) {
+            phase.step(held(Buttons::UP));
+        }
+        assert_eq!(
+            phase.player.position(),
+            (6, 4),
+            "setup: the held step must have crossed onto the fixture tile"
+        );
+        assert!(
+            !phase.player.in_transit(),
+            "setup: the crossing must have drained, so the next call is this \
+             port's T_TILE_CENTER for it"
+        );
+        assert_eq!(
+            (
+                phase.wild.immunity_steps(),
+                phase.wild.prev_metatile_behavior()
+            ),
+            (0, MB_NORMAL),
+            "setup: the completed step is only observed on the call after the \
+             animation drains"
+        );
+        // The landing call, with no input of its own.
+        phase.step(ButtonState::new());
+        phase
+    };
+
+    // Fixture precondition: an ordinary landing *does* reach
+    // `CheckStandardWildEncounter`, so the bookkeeping below is a real
+    // observation of that call and not an inert counter.
+    let ordinary = landing_onto(MB_NORMAL);
+    assert_eq!(
+        (
+            ordinary.wild.immunity_steps(),
+            ordinary.wild.prev_metatile_behavior()
+        ),
+        (1, MB_NORMAL),
+        "fixture precondition: an unforced landing spends one immunity step \
+         and records the tile it stepped onto"
+    );
+
+    let forced = landing_onto(MB_MUDDY_SLOPE);
+    assert_eq!(
+        (
+            forced.wild.immunity_steps(),
+            forced.wild.prev_metatile_behavior()
+        ),
+        (0, MB_NORMAL),
+        "a forced-movement landing leaves `checkStandardWildEncounter` unset \
+         upstream, so `CheckStandardWildEncounter` never runs and the \
+         immunity counter and remembered behaviour stay exactly as the \
+         previous step left them"
     );
 }

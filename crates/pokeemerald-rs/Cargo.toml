@@ -53,11 +53,14 @@ rom-import = { path = "../rom-import" }
 # rename lands elsewhere -- on the player's cartridge image, in the worst
 # case. `openat`/`renameat`/`statat` are exposed by no `std` API on any
 # platform, and the alternative was project-owned `unsafe` FFI. Unix-only,
-# `fs` alone of its feature set, and already in this binary's dependency
-# graph through `platform`'s `winit`/`softbuffer`, so the shipped build
-# links nothing it did not link before.
+# and already in this binary's dependency graph through `platform`'s
+# `winit`/`softbuffer`, so the shipped build links nothing it did not link
+# before. `process` was added alongside `fs` so the same pinned-descriptor
+# budget can read the process's own `RLIMIT_NOFILE` (`getrlimit`) rather
+# than guess it; neither feature links anything `fs` alone did not already
+# pull in.
 [target.'cfg(unix)'.dependencies]
-rustix = { version = "1.1", default-features = false, features = ["std", "fs"] }
+rustix = { version = "1.1", default-features = false, features = ["std", "fs", "process"] }
 
 [dev-dependencies]
 # The same workspace-local `assets` crate with its test-only seam enabled

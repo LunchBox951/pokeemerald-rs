@@ -103,7 +103,12 @@
 //! open there. On Windows, `$POKEEMERALD_PACK` is trusted to name a path
 //! only the player controls. The default destination, their own user-data
 //! directory, is one.
+//!
+//! The directory levels created on the way to the destination are pinned
+//! the same way on Unix, so a failed import takes back only directories
+//! this run made; [`created_dirs`] owns that lifecycle.
 
+mod created_dirs;
 mod dest;
 
 use std::ffi::OsStr;
@@ -115,6 +120,9 @@ use std::path::{Path, PathBuf};
 
 use rom_import::{ImportError, ImportedPack, OneLinePath};
 
+use created_dirs::{
+    create_directories, open_shedding_pins, sync_created_directories, undo_created_directories,
+};
 use dest::Dest;
 
 /// What a successful import produced.
@@ -483,7 +491,7 @@ fn import_to_with(
     // runs rather than after it succeeds. The levels this run made answer
     // both of the questions that follow: which entries a successful run has
     // to leave durable, and which directories a failed one takes back.
-    let created = match create_directories(&dir) {
+    let mut created = match create_directories(&dir) {
         Ok(created) => created,
         Err((created, source)) => {
             // The creation can fail after making outer levels; take those
@@ -495,12 +503,14 @@ fn import_to_with(
             });
         }
     };
-    sync_created_directories(&created);
+    sync_created_directories(&mut created);
 
     // Everything from here on names files inside this one handle. A
     // directory component redirected after this open is a component
     // nothing looks at again.
-    let dest = match Dest::open(&dir) {
+    // It and the temporary file below are the two opens this import cannot
+    // do without, so a pinned level gives its descriptor up to them first.
+    let dest = match open_shedding_pins(&mut created, || Dest::open(&dir)) {
         Ok(dest) => dest,
         Err(source) => {
             undo_created_directories(&created);
@@ -535,7 +545,7 @@ fn import_to_with(
     // only as trustworthy as the directory (see the module docs). A name
     // already taken fails here having created nothing, which is what
     // leaves that file to whoever does own it.
-    let mut file = match dest.create_new(&temp_name) {
+    let mut file = match open_shedding_pins(&mut created, || dest.create_new(&temp_name)) {
         Ok(file) => file,
         Err(source) => {
             undo_created_directories(&created);
@@ -673,110 +683,6 @@ fn refuse_existing_directory(
         })
     } else {
         Ok(())
-    }
-}
-
-/// The levels `dir` is missing, outermost first: the ones
-/// [`create_directories`] has to try. Empty for a `dir` that is already a
-/// directory, which is a run with nothing to create.
-///
-/// A component that exists but is *not* a directory is listed like a
-/// missing one. Creating it then fails on it, and that failure carries the
-/// levels already made, so distinguishing the two here would buy nothing.
-fn directories_to_create(dir: &Path) -> Vec<PathBuf> {
-    let mut missing = Vec::new();
-    let mut current = Some(dir);
-    while let Some(path) = current.filter(|path| !path.as_os_str().is_empty()) {
-        if path.is_dir() {
-            break;
-        }
-        missing.push(path.to_path_buf());
-        current = path.parent();
-    }
-    missing.reverse();
-    missing
-}
-
-/// Create the levels `dir` is missing, outermost first, and answer with the
-/// ones this run made — the levels [`sync_created_directories`] persists
-/// and [`undo_created_directories`] may take back.
-///
-/// Ownership is what the create reports, never what a look beforehand
-/// predicted. [`fs::create_dir_all`] says only whether the destination
-/// exists afterwards, so pairing it with an earlier [`directories_to_create`]
-/// claims levels another process created in between — and a failed import
-/// would then remove a directory that process is about to write into.
-/// `create_dir` per level asks the question of the syscall instead: an
-/// existing level is somebody else's, and only a create that succeeded is
-/// recorded.
-///
-/// A failure hands back the levels made before it, which are this run's to
-/// take back like any other.
-fn create_directories(dir: &Path) -> Result<Vec<PathBuf>, (Vec<PathBuf>, io::Error)> {
-    let mut created = Vec::new();
-    for level in directories_to_create(dir) {
-        match fs::create_dir(&level) {
-            Ok(()) => created.push(level),
-            // A level that stands as a directory now is no failure, whoever
-            // made it — `create_dir_all`'s own rule. It is simply not this
-            // run's to record.
-            Err(_) if level.is_dir() => {}
-            Err(source) => return Err((created, source)),
-        }
-    }
-    Ok(created)
-}
-
-/// Get the entries [`create_directories`] just wrote onto the disk.
-///
-/// A new directory is a *name in the level above it*, so the parent is what
-/// has to be synced for it — the directory's own sync would only persist
-/// what is inside it. Outermost first, so a crash part-way through leaves a
-/// prefix of the chain rather than a deep directory hanging from a name
-/// that never reached the disk.
-///
-/// Best-effort throughout ([`dest::sync_directory`]): a weaker durability
-/// guarantee is not something to fail a finished import over.
-fn sync_created_directories(created: &[PathBuf]) {
-    for dir in created {
-        // A bare relative name has no parent, and `""` is not a directory
-        // any OS accepts, so it is the current directory — the same rule
-        // [`pack_directory`] resolves the destination with.
-        let parent = dir
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-            .unwrap_or(Path::new("."));
-        dest::sync_directory(parent);
-    }
-}
-
-/// Remove the directories this run created, innermost first.
-///
-/// A failed import should leave the filesystem as it found it: an empty
-/// `pokeemerald-rs` directory in the user's data directory is litter that
-/// looks like a half-installed game, and a destination reached through
-/// several missing levels would leave a whole chain of them. Innermost
-/// first, because a directory only comes away once what it holds is gone.
-///
-/// Non-recursive on purpose, so it can only ever remove a directory this
-/// run created and left empty. The first refusal ends the walk: a level
-/// that will not go is one the level above it is not empty of either, and
-/// a directory something else has since been put in is no longer this
-/// run's to take.
-fn undo_created_directories(created: &[PathBuf]) {
-    for dir in created.iter().rev() {
-        if fs::remove_dir(dir).is_err() {
-            // A partial `create_dir_all` never made this level -- it is
-            // missing, unnameable, or the non-directory component it tripped
-            // on -- and the outer levels it did create still get taken back.
-            // A level that still stands as a directory refused removal for
-            // real (it holds something), so the levels above hold it too and
-            // are not this run's to take back.
-            match fs::symlink_metadata(dir) {
-                Ok(meta) if meta.is_dir() => break,
-                _ => {}
-            }
-        }
     }
 }
 

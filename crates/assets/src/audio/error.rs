@@ -33,6 +33,11 @@ pub enum AudioError {
     /// [`super::voicegroup::VOICE_SLOT_COUNT`] or higher, which no voicegroup can
     /// define. `entry_index` is the table entry's position; `slot` is its value.
     KeySplitTableEntryOutOfRange { entry_index: usize, slot: u8 },
+    /// A key-split table's `starting_note + table.len()` exceeds
+    /// [`super::voicegroup::VOICE_SLOT_COUNT`], covering a note that can never
+    /// be played. `starting_note` is the table's first note; `table_len` is
+    /// its entry count.
+    KeySplitTableNoteOutOfRange { starting_note: u8, table_len: usize },
     /// A song has more tracks than its `u8` wire count can encode. The value is the
     /// track count.
     TooManyTracks(usize),
@@ -42,6 +47,18 @@ pub enum AudioError {
     /// A `DirectSound` sample has more values than its `u32` wire length can encode. The
     /// value is the sample count.
     SampleTooLong(usize),
+    /// A `DirectSound` sample's buffer does not hold exactly one more value
+    /// than its logical sample count.
+    ///
+    /// The buffer always retains one interpolation-guard value past the
+    /// logical end, matching wav2agb's binary payload writer, which emits
+    /// through the unoverridden sampler end regardless of `agbl`
+    /// (`crates/xtask/src/extract/wav.rs`'s module docs;
+    /// `pokeemerald/src/m4a_1.s:399-407`).
+    DirectSoundBufferLength {
+        sample_count: u32,
+        buffer_len: usize,
+    },
     /// A loop start is not before the end of its PCM payload.
     ///
     /// Upstream computes the loop length as `size - loopStart`, so a valid
@@ -55,6 +72,9 @@ pub enum AudioError {
     /// A CGB square duty selector exceeds the documented `0..=3` domain. The
     /// value is the out-of-range duty byte.
     SquareDutyOutOfRange(u8),
+    /// A CGB noise period (LFSR width selector) exceeds the documented `0..=1`
+    /// domain. The value is the out-of-range period byte.
+    NoisePeriodOutOfRange(u8),
     /// A MEMACC tag identifies neither [`super::song::MemAccOp`] nor
     /// [`super::song::MemAccCondition`]. The value is the unrecognized tag.
     UnknownMemAccOp(u8),
@@ -72,6 +92,10 @@ pub enum AudioError {
 }
 
 impl fmt::Display for AudioError {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one exhaustive match keeps every audio-pack error message together"
+    )]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Truncated => write!(f, "audio-pack entry: truncated or corrupt"),
@@ -114,6 +138,16 @@ impl fmt::Display for AudioError {
                  maximum of {}",
                 super::voicegroup::VOICE_SLOT_COUNT
             ),
+            Self::KeySplitTableNoteOutOfRange {
+                starting_note,
+                table_len,
+            } => write!(
+                f,
+                "audio-pack voicegroup: key-split table starting at note \
+                 {starting_note} with {table_len} entries runs past the \
+                 last playable note {}",
+                super::voicegroup::VOICE_SLOT_COUNT - 1
+            ),
             Self::TooManyTracks(count) => write!(
                 f,
                 "audio-pack song: {count} tracks exceeds the maximum of {}",
@@ -129,6 +163,14 @@ impl fmt::Display for AudioError {
                 f,
                 "audio-pack sample: {len} samples exceeds the maximum of {}",
                 u32::MAX
+            ),
+            Self::DirectSoundBufferLength {
+                sample_count,
+                buffer_len,
+            } => write!(
+                f,
+                "audio-pack sample: buffer of {buffer_len} value(s) does not hold \
+                 exactly one more than the logical sample count {sample_count}"
             ),
             Self::LoopStartOutOfRange {
                 loop_start,
@@ -152,6 +194,11 @@ impl fmt::Display for AudioError {
                 f,
                 "audio-pack voicegroup: a square duty cycle selector of {duty} \
                  is outside the valid range 0..=3"
+            ),
+            Self::NoisePeriodOutOfRange(period) => write!(
+                f,
+                "audio-pack voicegroup: a noise period selector of {period} \
+                 is outside the valid range 0..=1"
             ),
             Self::UnknownMemAccOp(byte) => {
                 write!(f, "audio-pack song: invalid MEMACC op byte `{byte}`")
