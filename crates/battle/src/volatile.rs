@@ -1,7 +1,7 @@
 //! Focus Energy, Charge, Defense Curl, and Confusion state carried by one
 //! battler.
 //!
-//! Ordinary switches clear all three. Baton Pass preserves Focus Energy but
+//! Ordinary switches clear all four. Baton Pass preserves Focus Energy but
 //! clears Charge's timer and Defense Curl's flag: its `status2` mask keeps
 //! `STATUS2_FOCUS_ENERGY` but omits `STATUS2_DEFENSE_CURL`
 //! (`src/battle_main.c:3173`-`:3217`), the opposite of how Focus Energy
