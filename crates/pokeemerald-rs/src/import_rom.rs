@@ -143,11 +143,15 @@
 //!
 //! Pinning costs one descriptor per level, so an unusually deep chain of
 //! missing levels could exhaust the process's descriptor table before it
-//! runs out of levels to create. Past [`MAX_PINNED_LEVELS`], only the
-//! innermost that many stay pinned; the rest still descend through a
-//! transient reopen but keep no descriptor for cleanup to verify by, so
-//! cleanup leaves them standing -- litter, on the same terms as any level
-//! it cannot confirm.
+//! runs out of levels to create -- or leave no room for the opens creation
+//! hands off to afterward, such as the destination handle and the
+//! temporary pack file. [`pin_budget`] caps how many levels this run tries
+//! to pin at once against the process's own soft `RLIMIT_NOFILE`, never
+//! above [`MAX_PINNED_LEVELS`]; reactive shedding is still the fallback
+//! should even that prove optimistic. Only the innermost that many stay
+//! pinned; the rest still descend through a transient reopen but keep no
+//! descriptor for cleanup to verify by, so cleanup leaves them standing --
+//! litter, on the same terms as any level it cannot confirm.
 
 mod dest;
 
@@ -797,13 +801,48 @@ fn same_directory_identity(a: &rustix::fs::Stat, b: &rustix::fs::Stat) -> bool {
     a.st_dev == b.st_dev && a.st_ino == b.st_ino
 }
 
-/// The most levels [`create_directories_with_hooks`] keeps a descriptor
-/// pinned for at once; see the module docs for why. A destination this many
-/// levels deep or shallower is unaffected -- every level still pins, exactly
-/// as before this existed. Real fd pressure can still force fewer than this
-/// many pinned; see [`shed_outermost_pinned_level`].
+/// The most levels [`create_directories_with_hooks`] ever tries to keep a
+/// descriptor pinned for at once; see the module docs for why.
+/// [`pin_budget`] is the real ceiling, never above this one, and real fd
+/// pressure can still force fewer pinned than either; see
+/// [`shed_outermost_pinned_level`].
 #[cfg(unix)]
 const MAX_PINNED_LEVELS: usize = 32;
+
+/// Descriptors this run needs outside the pinned chain, so [`pin_budget`]
+/// never plans to pin so many that the opens still to come after creation
+/// finishes -- `Dest::open`'s own handle and the temporary pack file --
+/// fail instead: three for stdio, one for the ROM file already open before
+/// creation starts, one for [`create_directories_with_hooks`]'s own
+/// traversal handle, one apiece for those two later opens, and three of
+/// margin for whatever else the process already holds. Ten in total.
+#[cfg(unix)]
+const RESERVED_DESCRIPTORS: usize = 10;
+
+/// The most levels this run should try to keep pinned at once, given the
+/// process's own soft `RLIMIT_NOFILE` right now: never more than
+/// [`MAX_PINNED_LEVELS`], and never so many that [`RESERVED_DESCRIPTORS`]
+/// worth of headroom would not survive them.
+#[cfg(unix)]
+fn pin_budget() -> usize {
+    pin_budget_for(rustix::process::getrlimit(rustix::process::Resource::Nofile).current)
+}
+
+/// [`pin_budget`]'s formula, taking the soft limit as a plain value so a
+/// test can check it without touching the process's real `RLIMIT_NOFILE`.
+/// No limit (`soft` is `None`, `getrlimit`'s own spelling for `RLIM_INFINITY`)
+/// reads as no ceiling here either, leaving [`MAX_PINNED_LEVELS`] the only
+/// one.
+#[cfg(unix)]
+fn pin_budget_for(soft: Option<u64>) -> usize {
+    match soft {
+        Some(soft) => {
+            let soft = usize::try_from(soft).unwrap_or(usize::MAX);
+            MAX_PINNED_LEVELS.min(soft.saturating_sub(RESERVED_DESCRIPTORS))
+        }
+        None => MAX_PINNED_LEVELS,
+    }
+}
 
 /// Whether `error` is the OS refusing one more descriptor (`EMFILE` or
 /// `ENFILE`) -- the two [`shed_outermost_pinned_level`] exists to answer by
@@ -882,7 +921,7 @@ fn shed_outermost_pinned_level(created: &mut [CreatedDirectory], pin_from: &mut 
 fn create_directories(
     dir: &Path,
 ) -> Result<Vec<CreatedDirectory>, (Vec<CreatedDirectory>, io::Error)> {
-    create_directories_with_hooks(dir, &mut || {}, &mut || None)
+    create_directories_with_hooks(dir, pin_budget(), &mut || {}, &mut || None, &mut || None)
 }
 
 /// What reopening a level [`create_directories_with_hooks`] just made turned
@@ -951,6 +990,7 @@ fn reopen_created_level(
 fn create_missing_level(
     created: &mut Vec<CreatedDirectory>,
     pin_from: &mut usize,
+    pin_limit: usize,
     parent_fd: std::rc::Rc<std::os::fd::OwnedFd>,
     path: PathBuf,
     name: std::ffi::OsString,
@@ -1003,10 +1043,10 @@ fn create_missing_level(
                 own: Some(std::rc::Rc::clone(&descend)),
             });
             // This level just made the pinned window one longer than
-            // `MAX_PINNED_LEVELS`; shed the outermost to bring it back --
-            // one call always suffices, since nothing but this push could
-            // have grown the window since the last time it was checked.
-            if created.len() - *pin_from > MAX_PINNED_LEVELS {
+            // `pin_limit`; shed the outermost to bring it back -- one call
+            // always suffices, since nothing but this push could have grown
+            // the window since the last time it was checked.
+            if created.len() - *pin_from > pin_limit {
                 shed_outermost_pinned_level(created, pin_from);
             }
             Ok(descend)
@@ -1028,7 +1068,35 @@ fn create_missing_level(
     }
 }
 
-/// [`create_directories`]'s body on Unix, with two seams a test injects
+/// Opens `name` inside `parent` for [`create_directories_with_hooks`]'s two
+/// non-`mkdirat` descents -- ascending a lexical `..`, or stepping into a
+/// level that turned out to already exist -- retrying via
+/// [`shed_outermost_pinned_level`] on [`is_out_of_descriptors_io`] the same
+/// way [`reopen_created_level`] does. `before_open` is its test seam, in
+/// the same shape as `before_reopen`.
+#[cfg(unix)]
+fn open_existing_level(
+    created: &mut [CreatedDirectory],
+    pin_from: &mut usize,
+    parent: &std::rc::Rc<std::os::fd::OwnedFd>,
+    name: &OsStr,
+    before_open: &mut dyn FnMut() -> Option<io::Error>,
+) -> io::Result<std::os::fd::OwnedFd> {
+    loop {
+        let attempt = match before_open() {
+            Some(err) => Err(err),
+            None => dest::open_directory_at(parent, name),
+        };
+        match attempt {
+            Err(source)
+                if is_out_of_descriptors_io(&source)
+                    && shed_outermost_pinned_level(created, pin_from) => {}
+            result => return result,
+        }
+    }
+}
+
+/// [`create_directories`]'s body on Unix, with three seams a test injects
 /// and production leaves as no-ops:
 ///
 /// - `before_dotdot` runs the instant before a `..` level is resolved --
@@ -1037,11 +1105,19 @@ fn create_missing_level(
 /// - `before_reopen` runs the instant before the reopen issued right after a
 ///   successful `mkdirat`. `Some` replaces that reopen with the given
 ///   failure instead of running it; `None` defers to the real reopen.
+/// - `before_open` is [`open_existing_level`]'s own version of the same
+///   seam, for the `..` and already-exists opens instead of the reopen.
+///
+/// `pin_budget` caps how many levels stay pinned; production always passes
+/// [`pin_budget`] itself, and a test can inject a smaller one to see the
+/// cap enforced without needing to lower the process's own `RLIMIT_NOFILE`.
 #[cfg(unix)]
 fn create_directories_with_hooks(
     dir: &Path,
+    pin_limit: usize,
     before_dotdot: &mut dyn FnMut(),
     before_reopen: &mut dyn FnMut() -> Option<io::Error>,
+    before_open: &mut dyn FnMut() -> Option<io::Error>,
 ) -> Result<Vec<CreatedDirectory>, (Vec<CreatedDirectory>, io::Error)> {
     let levels = directories_to_create(dir);
     let Some(first) = levels.first() else {
@@ -1059,11 +1135,11 @@ fn create_directories_with_hooks(
         Err(source) => return Err((Vec::new(), source)),
     };
 
-    // Only the innermost `MAX_PINNED_LEVELS` get a descriptor pinned; see
-    // the module docs. Counted against `created`, the levels this run
-    // actually makes, never `levels` itself: a lexical `..` in `levels`
-    // creates nothing, and pairing the budget with the wrong count would
-    // pin too few of a destination that fits comfortably within it.
+    // Only the innermost `pin_limit` get a descriptor pinned; see the
+    // module docs. Counted against `created`, the levels this run actually
+    // makes, never `levels` itself: a lexical `..` in `levels` creates
+    // nothing, and pairing the budget with the wrong count would pin too
+    // few of a destination that fits comfortably within it.
     let mut pin_from = 0;
     let mut created = Vec::new();
     for level in levels {
@@ -1076,7 +1152,13 @@ fn create_directories_with_hooks(
         // already pinned.
         let Some(name) = level.file_name().map(std::ffi::OsStr::to_os_string) else {
             before_dotdot();
-            parent_fd = match dest::open_directory_at(&parent_fd, OsStr::new("..")) {
+            parent_fd = match open_existing_level(
+                &mut created,
+                &mut pin_from,
+                &parent_fd,
+                OsStr::new(".."),
+                before_open,
+            ) {
                 Ok(fd) => std::rc::Rc::new(fd),
                 Err(source) => return Err((created, source)),
             };
@@ -1099,6 +1181,7 @@ fn create_directories_with_hooks(
                 match create_missing_level(
                     &mut created,
                     &mut pin_from,
+                    pin_limit,
                     parent_fd,
                     level,
                     name,
@@ -1122,7 +1205,13 @@ fn create_directories_with_hooks(
                         },
                     );
                 if already_a_directory {
-                    match dest::open_directory_at(&parent_fd, &name) {
+                    match open_existing_level(
+                        &mut created,
+                        &mut pin_from,
+                        &parent_fd,
+                        &name,
+                        before_open,
+                    ) {
                         Ok(fd) => parent_fd = std::rc::Rc::new(fd),
                         // The open's own failure is the real diagnosis now;
                         // the `mkdir` collision only ever proved the name

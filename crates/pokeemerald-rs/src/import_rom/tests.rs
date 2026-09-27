@@ -498,9 +498,13 @@ fn a_level_whose_reopen_failed_is_left_standing_by_the_cleanup() {
     let dir = TempDir::new("undo-unpinned");
     let level = dir.join("new");
 
-    let (created, _source) = super::create_directories_with_hooks(&level, &mut || {}, &mut || {
-        Some(std::io::Error::other("reopen forced to fail for the test"))
-    })
+    let (created, _source) = super::create_directories_with_hooks(
+        &level,
+        super::MAX_PINNED_LEVELS,
+        &mut || {},
+        &mut || Some(std::io::Error::other("reopen forced to fail for the test")),
+        &mut || None,
+    )
     .expect_err("a forced reopen failure fails the create");
     assert_eq!(created_paths(&created), std::slice::from_ref(&level));
     assert!(
@@ -536,7 +540,13 @@ fn a_level_swapped_between_stat_and_reopen_is_not_descended_into() {
         None
     };
 
-    let _ = super::create_directories_with_hooks(&target, &mut || {}, &mut hook);
+    let _ = super::create_directories_with_hooks(
+        &target,
+        super::MAX_PINNED_LEVELS,
+        &mut || {},
+        &mut hook,
+        &mut || None,
+    );
 
     assert!(swapped, "the hook ran");
     assert!(
@@ -683,8 +693,14 @@ fn a_reopen_out_of_descriptors_sheds_every_earlier_level_in_order_under_repeated
             .then(|| std::io::Error::from(rustix::io::Errno::MFILE))
     };
 
-    let created = super::create_directories_with_hooks(&level, &mut || {}, &mut hook)
-        .expect("shedding three pinned levels frees enough room for the retry to succeed");
+    let created = super::create_directories_with_hooks(
+        &level,
+        super::MAX_PINNED_LEVELS,
+        &mut || {},
+        &mut hook,
+        &mut || None,
+    )
+    .expect("shedding three pinned levels frees enough room for the retry to succeed");
 
     assert_eq!(created.len(), 6);
     for (index, entry) in created.iter().enumerate() {
@@ -697,6 +713,85 @@ fn a_reopen_out_of_descriptors_sheds_every_earlier_level_in_order_under_repeated
         }
     }
     assert!(level.is_dir());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_dotdot_open_out_of_descriptors_sheds_a_pinned_level_and_retries() {
+    // The `..` traversal open, unlike the created-level reopen, used to
+    // surface `EMFILE` straight to the caller with no chance to shed a
+    // pinned level first. `before_open` forces it to fail once, exactly
+    // the way `before_reopen` forces the created-level reopen to.
+    let dir = TempDir::new("dotdot-open-shed");
+    let dest = dir.join("a").join("b").join("..").join("c");
+
+    let mut failed_once = false;
+    let mut before_open = move || -> Option<std::io::Error> {
+        if failed_once {
+            None
+        } else {
+            failed_once = true;
+            Some(std::io::Error::from(rustix::io::Errno::MFILE))
+        }
+    };
+
+    let created = super::create_directories_with_hooks(
+        &dest,
+        super::MAX_PINNED_LEVELS,
+        &mut || {},
+        &mut || None,
+        &mut before_open,
+    )
+    .expect("shedding a pinned level frees enough room for the dotdot open to retry");
+
+    assert_eq!(created.len(), 3, "levels a, b, and c");
+    assert!(
+        created[0].own.is_none(),
+        "the outermost level was shed to free room for the dotdot open"
+    );
+    assert!(dest.is_dir());
+}
+
+#[cfg(unix)]
+#[test]
+fn create_directories_with_hooks_never_pins_more_than_its_injected_limit() {
+    let dir = TempDir::new("small-pin-limit");
+    let limit = 3;
+    let total = limit + 5;
+    let mut level = dir.join("d");
+    for _ in 1..total {
+        level = level.join("d");
+    }
+
+    let created =
+        super::create_directories_with_hooks(&level, limit, &mut || {}, &mut || None, &mut || None)
+            .expect("a valid destination is created regardless of how small the pin limit is");
+
+    assert_eq!(created.len(), total);
+    let pinned = created.iter().filter(|entry| entry.own.is_some()).count();
+    assert!(
+        pinned <= limit,
+        "pinned {pinned} records against an injected limit of {limit}"
+    );
+    assert!(level.is_dir());
+}
+
+#[cfg(unix)]
+#[test]
+fn pin_budget_for_stays_within_reserved_headroom_of_the_soft_limit() {
+    // Pure formula, no real `RLIMIT_NOFILE` touched: `min(MAX_PINNED_LEVELS,
+    // soft - RESERVED_DESCRIPTORS)`, floored at 0, and `None` (no limit)
+    // reads as no ceiling at all.
+    assert_eq!(
+        super::pin_budget_for(Some(36)),
+        36 - super::RESERVED_DESCRIPTORS
+    );
+    assert_eq!(
+        super::pin_budget_for(Some(1_000_000)),
+        super::MAX_PINNED_LEVELS
+    );
+    assert_eq!(super::pin_budget_for(Some(1)), 0);
+    assert_eq!(super::pin_budget_for(None), super::MAX_PINNED_LEVELS);
 }
 
 #[test]
@@ -1684,8 +1779,14 @@ fn a_dotdot_level_descends_from_the_pinned_parent_not_the_path() {
         }
     };
 
-    let made_them =
-        super::create_directories_with_hooks(&dest, &mut before_dotdot, &mut || None).is_ok();
+    let made_them = super::create_directories_with_hooks(
+        &dest,
+        super::MAX_PINNED_LEVELS,
+        &mut before_dotdot,
+        &mut || None,
+        &mut || None,
+    )
+    .is_ok();
 
     assert!(
         swapped_at_dotdot.get(),
