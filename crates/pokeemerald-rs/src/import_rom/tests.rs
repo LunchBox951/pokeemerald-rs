@@ -256,58 +256,27 @@ fn a_failed_import_removes_the_directory_it_created() {
     assert!(file_names(&dir.path).is_empty());
 }
 
-/// Set in the child process
-/// [`a_deep_destination_under_descriptor_pressure_still_publishes`] spawns
-/// under a lowered `RLIMIT_NOFILE`.
+/// Set in the child process [`run_under_descriptor_pressure`] spawns.
 #[cfg(unix)]
 const DESCRIPTOR_PRESSURE_CHILD: &str = "POKEEMERALD_IMPORT_DESCRIPTOR_PRESSURE_CHILD";
 
+/// Whether this process is the child [`run_under_descriptor_pressure`]
+/// spawned, where the test body runs under its lowered limit.
 #[cfg(unix)]
-#[test]
-fn a_deep_destination_under_descriptor_pressure_still_publishes() {
-    // Pinning is sized against the soft limit alone, so a process already
-    // holding most of its table can finish creation with none left. The
-    // child fills its table and frees exactly four slots, so the result
-    // does not depend on how many descriptors the harness happens to hold.
-    if std::env::var_os(DESCRIPTOR_PRESSURE_CHILD).is_some() {
-        let dir = TempDir::new("descriptor-pressure");
-        let mut level = dir.join("d");
-        for _ in 1..32 {
-            level = level.join("d");
-        }
-        let pack_path = level.join("pokeemerald.pack");
-        let source = SourceRom::new("descriptor-pressure-src");
-        let mut fillers = Vec::new();
-        let exhausted = loop {
-            match fs::File::open("/dev/null") {
-                Ok(file) => fillers.push(file),
-                Err(err) => break err,
-            }
-        };
-        assert_eq!(
-            rustix::io::Errno::from_io_error(&exhausted),
-            Some(rustix::io::Errno::MFILE),
-            "{exhausted:?}"
-        );
-        fillers.truncate(fillers.len() - 4);
-        let outcome = import_to_with(source.path(), &pack_path, |_rom, _path| {
-            Ok(fake_pack(b"pack bytes"))
-        });
-        drop(fillers);
-        outcome.expect("releasable pins must not starve the destination and temporary file");
-        assert_eq!(
-            fs::read(&pack_path).expect("the pack was published"),
-            b"pack bytes"
-        );
-        return;
-    }
+pub(super) fn in_descriptor_pressure_child() -> bool {
+    std::env::var_os(DESCRIPTOR_PRESSURE_CHILD).is_some()
+}
 
+/// Reruns the test at `test_path` alone in a child process whose soft
+/// `RLIMIT_NOFILE` is 36, and fails unless it passes there.
+#[cfg(unix)]
+pub(super) fn run_under_descriptor_pressure(test_path: &str) {
     let exe = std::env::current_exe().expect("the running test binary has a path");
     let output = std::process::Command::new("bash")
         .arg("-c")
         .arg(r#"ulimit -Sn 36 && exec "$0" "$1" --exact --nocapture"#)
         .arg(&exe)
-        .arg("import_rom::tests::a_deep_destination_under_descriptor_pressure_still_publishes")
+        .arg(test_path)
         .env(DESCRIPTOR_PRESSURE_CHILD, "1")
         .output()
         .expect("the child test process must be spawnable");
@@ -317,6 +286,57 @@ fn a_deep_destination_under_descriptor_pressure_still_publishes() {
         "child status {:?}\nstdout:\n{stdout}\nstderr:\n{}",
         output.status,
         String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// Fills this process's descriptor table, then frees exactly `free` slots,
+/// so a test's headroom does not depend on how many descriptors the
+/// harness happens to hold. The pressure lasts while the result is held.
+#[cfg(unix)]
+pub(super) fn fill_descriptor_table_leaving(free: usize) -> Vec<fs::File> {
+    let mut fillers = Vec::new();
+    let exhausted = loop {
+        match fs::File::open("/dev/null") {
+            Ok(file) => fillers.push(file),
+            Err(err) => break err,
+        }
+    };
+    assert_eq!(
+        rustix::io::Errno::from_io_error(&exhausted),
+        Some(rustix::io::Errno::MFILE),
+        "{exhausted:?}"
+    );
+    fillers.truncate(fillers.len() - free);
+    fillers
+}
+
+#[cfg(unix)]
+#[test]
+fn a_deep_destination_under_descriptor_pressure_still_publishes() {
+    // Pinning is sized against the soft limit alone, so a process already
+    // holding most of its table can finish creation with none left.
+    if !in_descriptor_pressure_child() {
+        run_under_descriptor_pressure(
+            "import_rom::tests::a_deep_destination_under_descriptor_pressure_still_publishes",
+        );
+        return;
+    }
+    let dir = TempDir::new("descriptor-pressure");
+    let mut level = dir.join("d");
+    for _ in 1..32 {
+        level = level.join("d");
+    }
+    let pack_path = level.join("pokeemerald.pack");
+    let source = SourceRom::new("descriptor-pressure-src");
+    let fillers = fill_descriptor_table_leaving(4);
+    let outcome = import_to_with(source.path(), &pack_path, |_rom, _path| {
+        Ok(fake_pack(b"pack bytes"))
+    });
+    drop(fillers);
+    outcome.expect("releasable pins must not starve the destination and temporary file");
+    assert_eq!(
+        fs::read(&pack_path).expect("the pack was published"),
+        b"pack bytes"
     );
 }
 

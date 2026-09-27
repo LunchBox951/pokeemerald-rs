@@ -2,6 +2,10 @@ use std::fs;
 use std::path::PathBuf;
 
 use super::super::tests::TempDir;
+#[cfg(unix)]
+use super::super::tests::{
+    fill_descriptor_table_leaving, in_descriptor_pressure_child, run_under_descriptor_pressure,
+};
 use super::{create_directories, directories_to_create, CreatedDirectory};
 
 /// The paths [`create_directories`] recorded, in order -- the one field
@@ -283,18 +287,26 @@ fn a_deep_valid_destination_is_created_without_one_descriptor_per_level() {
 #[cfg(unix)]
 #[test]
 fn a_destination_past_the_pin_budget_rolls_back_only_the_pinned_suffix() {
-    // Pin budget is `MAX_PINNED_LEVELS`; a few levels beyond it exercises
-    // both sides of the cutoff without building an unnecessarily deep tree.
+    // A small injected budget keeps the cutoff independent of the runner's
+    // `RLIMIT_NOFILE` and of how many descriptors it already holds; a few
+    // levels beyond it exercise both sides.
     let dir = TempDir::new("pin-budget");
-    let total = super::MAX_PINNED_LEVELS + 5;
-    let pin_from = total - super::MAX_PINNED_LEVELS;
+    let pin_limit = 4;
+    let total = pin_limit + 5;
+    let pin_from = total - pin_limit;
     let mut level = dir.join("d");
     for _ in 1..total {
         level = level.join("d");
     }
 
-    let created = create_directories(&level)
-        .expect("a valid destination past the pin budget is still created");
+    let created = super::create_directories_with_hooks(
+        &level,
+        pin_limit,
+        &mut || {},
+        &mut || None,
+        &mut || None,
+    )
+    .expect("a valid destination past the pin budget is still created");
     assert_eq!(created.len(), total);
     assert!(level.is_dir());
     for (index, entry) in created.iter().enumerate() {
@@ -328,24 +340,30 @@ fn a_destination_with_dotdot_levels_pins_every_directory_it_actually_creates() {
     // `directories_to_create`'s lexical walk counts a `..` as a level of its
     // own -- it names no new component, so it never reaches `created` -- and
     // the pin budget must be measured against what actually lands there, not
-    // against that longer lexical list. Twenty missing levels descended into
-    // and twenty `..` climbed back out, then a final component: 41 lexical
-    // levels but only 21 real directories, comfortably inside
-    // `MAX_PINNED_LEVELS`.
+    // against that longer lexical list. Five missing levels descended into
+    // and five `..` climbed back out, then a final component: 11 lexical
+    // levels but only 6 real directories, exactly the injected budget.
     let dir = TempDir::new("dotdot-budget");
+    let pin_limit = 6;
     let mut level = dir.join("d");
-    for _ in 1..20 {
+    for _ in 1..5 {
         level = level.join("d");
     }
-    for _ in 0..20 {
+    for _ in 0..5 {
         level = level.join("..");
     }
     level = level.join("final");
 
-    let created = create_directories(&level)
-        .expect("a destination that fits the budget is still created through its dotdot levels");
+    let created = super::create_directories_with_hooks(
+        &level,
+        pin_limit,
+        &mut || {},
+        &mut || None,
+        &mut || None,
+    )
+    .expect("a destination that fits the budget is still created through its dotdot levels");
 
-    assert_eq!(created.len(), 21);
+    assert_eq!(created.len(), pin_limit);
     for (index, entry) in created.iter().enumerate() {
         assert!(entry.own.is_some(), "level {index} fits the pin budget");
         assert!(entry.parent.is_some(), "level {index} fits the pin budget");
@@ -356,16 +374,22 @@ fn a_destination_with_dotdot_levels_pins_every_directory_it_actually_creates() {
 #[cfg(unix)]
 #[test]
 fn a_valid_deep_destination_creates_or_fully_rolls_back() {
-    // Meant to also be run under a tight `RLIMIT_NOFILE` (see the PR record
-    // for `prlimit --nofile=32/36/64` results); at the ordinary limit this
-    // always takes the `Ok` arm. Either way, a valid destination must never
-    // come out half made: full creation, or nothing left behind.
+    // Run under a tight `RLIMIT_NOFILE` with four descriptors free, where
+    // creation has to shed pins to finish: a valid destination must never
+    // come out half made -- full creation, or nothing left behind.
+    if !in_descriptor_pressure_child() {
+        run_under_descriptor_pressure(
+            "import_rom::created_dirs::tests::a_valid_deep_destination_creates_or_fully_rolls_back",
+        );
+        return;
+    }
     let dir = TempDir::new("valid-deep-fd");
     let total = 37;
     let mut level = dir.join("d");
     for _ in 1..total {
         level = level.join("d");
     }
+    let _fillers = fill_descriptor_table_leaving(4);
     match create_directories(&level) {
         Ok(created) => assert_eq!(created.len(), total),
         Err((created, source)) => {
