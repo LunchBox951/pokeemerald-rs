@@ -602,6 +602,78 @@ fn a_destination_past_the_pin_budget_rolls_back_only_the_pinned_suffix() {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn a_valid_deep_destination_creates_or_fully_rolls_back() {
+    // Meant to also be run under a tight `RLIMIT_NOFILE` (see the PR record
+    // for `prlimit --nofile=32/36/64` results); at the ordinary limit this
+    // always takes the `Ok` arm. Either way, a valid destination must never
+    // come out half made: full creation, or nothing left behind.
+    let dir = TempDir::new("valid-deep-fd");
+    let total = 37;
+    let mut level = dir.join("d");
+    for _ in 1..total {
+        level = level.join("d");
+    }
+    match create_directories(&level) {
+        Ok(created) => assert_eq!(created.len(), total),
+        Err((created, source)) => {
+            let recorded = created.len();
+            super::undo_created_directories(&created);
+            drop(created);
+            assert!(
+                !dir.join("d").exists(),
+                "create failed after {recorded} levels ({source}); rollback left {} behind",
+                dir.join("d").display()
+            );
+            panic!("valid deep destination failed to create: {source}");
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_reopen_out_of_descriptors_sheds_the_outermost_pinned_level_and_retries() {
+    // The fifth `before_reopen` call is level 4's (0-indexed) first attempt;
+    // answering it with `EMFILE` drives the real shedding-and-retry path
+    // instead of a stand-in for its end state, the same way
+    // `a_level_whose_reopen_failed_is_left_standing_by_the_cleanup` drives a
+    // real reopen failure rather than clearing `own` by hand.
+    let dir = TempDir::new("shed-outermost");
+    let mut level = dir.join("d");
+    for _ in 1..5 {
+        level = level.join("d");
+    }
+    let mut calls = 0u32;
+    let mut hook = move || -> Option<std::io::Error> {
+        calls += 1;
+        (calls == 5).then(|| std::io::Error::from(rustix::io::Errno::MFILE))
+    };
+
+    let created = super::create_directories_with_hooks(&level, &mut || {}, &mut hook)
+        .expect("shedding a pinned level frees enough room for the retry to succeed");
+
+    assert_eq!(created.len(), 5);
+    assert!(created[0].own.is_none(), "the outermost level was shed");
+    assert!(created[0].parent.is_none(), "the outermost level was shed");
+    assert!(
+        created[1].parent.is_none(),
+        "the level just inside the shed one loses its own verifiable parent"
+    );
+    assert!(
+        created[1].own.is_some(),
+        "the level just inside the shed one keeps its own descriptor to keep descending with"
+    );
+    for entry in &created[2..] {
+        assert!(entry.own.is_some(), "levels past the shed pair stay pinned");
+        assert!(
+            entry.parent.is_some(),
+            "levels past the shed pair stay pinned"
+        );
+    }
+    assert!(level.is_dir());
+}
+
 #[test]
 fn a_pack_directory_spelled_through_dotdot_still_imports() {
     // `directories_to_create` walks lexically (`Path::parent`), so a

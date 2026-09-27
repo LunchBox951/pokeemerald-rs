@@ -120,19 +120,19 @@
 //! itself.
 //!
 //! That identity comes from a lookup (`statat`) right after `mkdirat`
-//! succeeds, not a descriptor `mkdirat` never hands back. The level is then
-//! reopened, and the reopened descriptor's own identity must match that
-//! lookup before the descent continues -- a mismatch means the name was
-//! swapped for a replacement in the gap between the two calls, so this run
-//! stops there instead of creating the next level inside it, leaving the
-//! replacement unrecorded and untouched. Only a level whose reopen and
-//! identity check both agree gets its descriptor held open until cleanup
-//! runs, pinning its inode so a later directory reusing the same freed
-//! inode number is not mistaken for this one; a level whose reopen failed
-//! is recorded with no pin, so cleanup leaves it standing rather than trust
-//! identity alone, and a level whose reopened identity did not match is not
-//! recorded at all. The reopen also refuses a symlink planted at the name
-//! (`O_NOFOLLOW`).
+//! succeeds, not a descriptor `mkdirat` never hands back
+//! ([`dest::open_created_directory_at`] owns the reopen that follows,
+//! including why it refuses a symlink there). The reopened descriptor's own
+//! identity must match that lookup before the descent continues -- a
+//! mismatch means the name was swapped for a replacement in the gap between
+//! the two calls, so this run stops there instead of creating the next
+//! level inside it, leaving the replacement unrecorded and untouched. Only
+//! a level whose reopen and identity check both agree gets its descriptor
+//! held open until cleanup runs, pinning its inode so a later directory
+//! reusing the same freed inode number is not mistaken for this one; a
+//! level whose reopen failed is recorded with no pin, so cleanup leaves it
+//! standing rather than trust identity alone, and a level whose reopened
+//! identity did not match is not recorded at all.
 //!
 //! One gap stays open regardless: a directory can be swapped for another
 //! between `mkdirat`'s own success and the `statat` that reads its
@@ -800,9 +800,51 @@ fn same_directory_identity(a: &rustix::fs::Stat, b: &rustix::fs::Stat) -> bool {
 /// The most levels [`create_directories_with_hooks`] keeps a descriptor
 /// pinned for at once; see the module docs for why. A destination this many
 /// levels deep or shallower is unaffected -- every level still pins, exactly
-/// as before this existed.
+/// as before this existed. Real fd pressure can still force fewer than this
+/// many pinned; see [`shed_outermost_pinned_level`].
 #[cfg(unix)]
 const MAX_PINNED_LEVELS: usize = 32;
+
+/// Whether `error` is the OS refusing one more descriptor (`EMFILE` or
+/// `ENFILE`) -- the two [`shed_outermost_pinned_level`] exists to answer by
+/// giving one back rather than failing the whole create.
+#[cfg(unix)]
+fn is_out_of_descriptors(error: rustix::io::Errno) -> bool {
+    error == rustix::io::Errno::MFILE || error == rustix::io::Errno::NFILE
+}
+
+/// [`is_out_of_descriptors`] for an already-converted [`io::Error`], the
+/// shape a reopen's own seam hands back.
+#[cfg(unix)]
+fn is_out_of_descriptors_io(error: &io::Error) -> bool {
+    rustix::io::Errno::from_io_error(error).is_some_and(is_out_of_descriptors)
+}
+
+/// Releases the outermost level still holding a pinned descriptor, if any,
+/// so a caller that just hit [`is_out_of_descriptors`] can retry with one
+/// fewer descriptor in use. `pin_from` is both read and advanced past
+/// whatever this frees.
+///
+/// The level just inside the one released loses its own verifiable parent
+/// as a side effect -- that parent *was* the descriptor just released --
+/// though its own descriptor is untouched, since it is still needed to keep
+/// descending. Nothing deeper is affected: each level's descriptor is its
+/// own, shared only with its immediate neighbors on each side.
+#[cfg(unix)]
+fn shed_outermost_pinned_level(created: &mut [CreatedDirectory], pin_from: &mut usize) -> bool {
+    let shed = *pin_from;
+    let Some(level) = created.get_mut(shed) else {
+        return false;
+    };
+    level.own = None;
+    level.parent = None;
+    *pin_from = shed + 1;
+    if let Some(next) = created.get_mut(shed + 1) {
+        next.parent = None;
+        *pin_from = shed + 2;
+    }
+    true
+}
 
 /// Create the levels `dir` is missing, outermost first, and answer with the
 /// ones this run made — the levels [`sync_created_directories`] persists
@@ -823,20 +865,15 @@ const MAX_PINNED_LEVELS: usize = 32;
 /// On Unix, every level is both created and recorded by descriptor: the
 /// parent of the outermost missing level is the one path this resolves --
 /// it already exists, which is why [`directories_to_create`]'s own walk
-/// stopped there -- and each level after it is made with `mkdirat` against
-/// the directory the previous level's own creation (or discovery) just
-/// opened. Nothing past that first parent is ever looked up by path again.
+/// stopped there -- and every level after it chains through
+/// [`dest::open_directory_at`] or [`dest::open_created_directory_at`]
+/// instead of a path re-resolved past that first parent.
 ///
-/// Opening a directory to hold as `mkdirat`'s target needs no more than a
-/// plain path-based `mkdir` already needed from it -- write and search --
-/// on Linux, Android, FreeBSD (`O_PATH`), and macOS 13 and later (POSIX's
-/// own `O_SEARCH`; `dest::open_traversal_directory` documents each
-/// platform's open). Every other Unix this builds for reopens for real,
-/// read-mode access and does need read permission on it, the same
-/// requirement [`Dest::open`] always has for the final destination
-/// directory itself, which really is read for `fsync`, not merely
-/// traversed. A level this run creates is unaffected either way: it is
-/// made at the ordinary default mode, not reopened read-restricted.
+/// [`dest::open_traversal_directory`] documents, per platform, whether
+/// opening a directory to hold as `mkdirat`'s target needs more than the
+/// write and search a plain `mkdir` already needed. A level this run
+/// creates is unaffected either way: it is made at the ordinary default
+/// mode, not reopened read-restricted.
 #[cfg(unix)]
 fn create_directories(
     dir: &Path,
@@ -860,16 +897,30 @@ enum ReopenedLevel {
 /// Reopens the level [`create_directories_with_hooks`] just created at
 /// `name` in `parent` and checks it against `identity`. `before_reopen` is
 /// the test seam [`create_directories_with_hooks`] documents.
+///
+/// A reopen refused with [`is_out_of_descriptors`] retries after
+/// [`shed_outermost_pinned_level`] frees one, as long as there is one left
+/// to free; only once none is does the refusal stand.
 #[cfg(unix)]
 fn reopen_created_level(
+    created: &mut [CreatedDirectory],
+    pin_from: &mut usize,
     parent: &std::rc::Rc<std::os::fd::OwnedFd>,
     name: &OsStr,
     identity: &rustix::fs::Stat,
     before_reopen: &mut dyn FnMut() -> Option<io::Error>,
 ) -> ReopenedLevel {
-    let descend = match before_reopen() {
-        Some(err) => Err(err),
-        None => dest::open_created_directory_at(parent, name).map(std::rc::Rc::new),
+    let descend = loop {
+        let attempt = match before_reopen() {
+            Some(err) => Err(err),
+            None => dest::open_created_directory_at(parent, name).map(std::rc::Rc::new),
+        };
+        match attempt {
+            Err(source)
+                if is_out_of_descriptors_io(&source)
+                    && shed_outermost_pinned_level(created, pin_from) => {}
+            result => break result,
+        }
     };
     let descend = match descend {
         Ok(fd) => fd,
@@ -883,6 +934,91 @@ fn reopen_created_level(
             "directory level was replaced before it could be reopened",
         )),
         Err(source) => ReopenedLevel::Unverified(source.into()),
+    }
+}
+
+/// Finishes a level [`create_directories_with_hooks`] just `mkdirat`ed at
+/// `name`, inside `parent_fd`: captures its identity (retrying through
+/// [`shed_outermost_pinned_level`] on [`is_out_of_descriptors`], like the
+/// `mkdirat` before it), reopens and records it through
+/// [`reopen_created_level`], and answers with the descriptor the next level
+/// descends through.
+#[cfg(unix)]
+fn create_missing_level(
+    created: &mut Vec<CreatedDirectory>,
+    pin_from: &mut usize,
+    parent_fd: std::rc::Rc<std::os::fd::OwnedFd>,
+    path: PathBuf,
+    name: std::ffi::OsString,
+    index: usize,
+    before_reopen: &mut dyn FnMut() -> Option<io::Error>,
+) -> Result<std::rc::Rc<std::os::fd::OwnedFd>, io::Error> {
+    // The identity comes from a lookup, not from a descriptor `mkdirat`
+    // never hands back -- and it is captured whether or not the reopen just
+    // below succeeds, so a mundane failure there (too many open files)
+    // cannot un-record a level that really was made and leave it stuck
+    // forever. `mkdirat` just said this name is a fresh directory, so
+    // anything other than one sitting there the instant this looks again is
+    // somebody else's swap; refused the same way, without following it as a
+    // symlink might.
+    let found = loop {
+        match rustix::fs::statat(&*parent_fd, &name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW) {
+            Err(err)
+                if is_out_of_descriptors(err) && shed_outermost_pinned_level(created, pin_from) => {
+            }
+            result => break result,
+        }
+    };
+    let identity = match found {
+        Ok(found)
+            if rustix::fs::FileType::from_raw_mode(found.st_mode)
+                == rustix::fs::FileType::Directory =>
+        {
+            found
+        }
+        Ok(_) => {
+            return Err(io::Error::other(
+                "directory level was replaced during creation",
+            ));
+        }
+        Err(source) => return Err(source.into()),
+    };
+    match reopen_created_level(
+        created,
+        pin_from,
+        &parent_fd,
+        &name,
+        &identity,
+        before_reopen,
+    ) {
+        ReopenedLevel::Pinned(descend) => {
+            // `pin_from` may have advanced during the reopen itself
+            // (shedding to make room for it), but never past `index`:
+            // shedding only ever touches earlier, already-recorded levels.
+            let pin = index >= *pin_from;
+            created.push(CreatedDirectory {
+                path,
+                parent: pin.then_some(parent_fd),
+                name,
+                identity,
+                own: pin.then(|| std::rc::Rc::clone(&descend)),
+            });
+            Ok(descend)
+        }
+        // A real reopen failure, not a budget choice: kept on the same
+        // terms as before `MAX_PINNED_LEVELS` existed, so cleanup still
+        // stops here rather than past it.
+        ReopenedLevel::Unpinned(source) => {
+            created.push(CreatedDirectory {
+                path,
+                parent: Some(parent_fd),
+                name,
+                identity,
+                own: None,
+            });
+            Err(source)
+        }
+        ReopenedLevel::Unverified(source) => Err(source),
     }
 }
 
@@ -919,9 +1055,10 @@ fn create_directories_with_hooks(
 
     // Only the innermost `MAX_PINNED_LEVELS` get a descriptor pinned; see
     // the module docs. `levels.len()` is already the whole walk, computed
-    // before any of it runs, so the cutoff is known up front rather than
-    // discovered after the descriptor table is already exhausted.
-    let pin_from = levels.len().saturating_sub(MAX_PINNED_LEVELS);
+    // before any of it runs, so the cutoff is known up front. `pin_from`
+    // still advances past this if the descriptor table turns out tighter
+    // than that budget expected; see `shed_outermost_pinned_level`.
+    let mut pin_from = levels.len().saturating_sub(MAX_PINNED_LEVELS);
     let mut created = Vec::new();
     for (index, level) in levels.into_iter().enumerate() {
         // `directories_to_create`'s lexical walk can produce a `..` level
@@ -939,64 +1076,31 @@ fn create_directories_with_hooks(
             };
             continue;
         };
-        match rustix::fs::mkdirat(
-            &*parent_fd,
-            &name,
-            rustix::fs::Mode::RWXU | rustix::fs::Mode::RWXG | rustix::fs::Mode::RWXO,
-        ) {
+        let mkdir_result = loop {
+            match rustix::fs::mkdirat(
+                &*parent_fd,
+                &name,
+                rustix::fs::Mode::RWXU | rustix::fs::Mode::RWXG | rustix::fs::Mode::RWXO,
+            ) {
+                Err(err)
+                    if is_out_of_descriptors(err)
+                        && shed_outermost_pinned_level(&mut created, &mut pin_from) => {}
+                result => break result,
+            }
+        };
+        match mkdir_result {
             Ok(()) => {
-                // The identity comes from a lookup, not from a descriptor
-                // `mkdirat` never hands back -- and it is captured whether
-                // or not the reopen just below succeeds, so a mundane
-                // failure there (too many open files) cannot un-record a
-                // level that really was made and leave it stuck forever.
-                // `mkdirat` just said this name is a fresh directory, so
-                // anything other than one sitting there the instant this
-                // looks again is somebody else's swap; refused the same
-                // way, without following it as a symlink might.
-                let found =
-                    rustix::fs::statat(&*parent_fd, &name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW);
-                let identity = match found {
-                    Ok(found)
-                        if rustix::fs::FileType::from_raw_mode(found.st_mode)
-                            == rustix::fs::FileType::Directory =>
-                    {
-                        found
-                    }
-                    Ok(_) => {
-                        return Err((
-                            created,
-                            io::Error::other("directory level was replaced during creation"),
-                        ));
-                    }
-                    Err(source) => return Err((created, source.into())),
-                };
-                let pin = index >= pin_from;
-                match reopen_created_level(&parent_fd, &name, &identity, before_reopen) {
-                    ReopenedLevel::Pinned(descend) => {
-                        created.push(CreatedDirectory {
-                            path: level,
-                            parent: pin.then_some(parent_fd),
-                            name,
-                            identity,
-                            own: pin.then(|| std::rc::Rc::clone(&descend)),
-                        });
-                        parent_fd = descend;
-                    }
-                    // A real reopen failure, not a budget choice: kept on
-                    // the same terms as before `MAX_PINNED_LEVELS` existed,
-                    // so cleanup still stops here rather than past it.
-                    ReopenedLevel::Unpinned(source) => {
-                        created.push(CreatedDirectory {
-                            path: level,
-                            parent: Some(parent_fd),
-                            name,
-                            identity,
-                            own: None,
-                        });
-                        return Err((created, source));
-                    }
-                    ReopenedLevel::Unverified(source) => return Err((created, source)),
+                match create_missing_level(
+                    &mut created,
+                    &mut pin_from,
+                    parent_fd,
+                    level,
+                    name,
+                    index,
+                    before_reopen,
+                ) {
+                    Ok(descend) => parent_fd = descend,
+                    Err(source) => return Err((created, source)),
                 }
             }
             // A level that stands as a directory now is no failure, whoever
