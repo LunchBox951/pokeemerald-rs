@@ -803,9 +803,14 @@ fn clear_battle_scratch_resets_stages_and_volatiles_but_not_status1() {
     let dex = Dex::new();
     let mut mon = sample_mon(&dex);
     mon.stages_mut().speed = StatStage::new(2).unwrap();
+    mon.volatiles_mut().set_confusion(3);
     mon.set_status1(Status1::Paralysed);
     mon.clear_battle_scratch();
     assert_eq!(mon.stages(), StatStages::default());
+    assert!(
+        !mon.volatiles().confused(),
+        "confusion is battle-only scratch, cleared with every other volatile"
+    );
     assert_eq!(
         mon.status1(),
         Status1::Paralysed,
