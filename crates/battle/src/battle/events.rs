@@ -42,6 +42,16 @@ pub enum BattleEvent {
         /// The move with no PP remaining.
         move_id: MoveId,
     },
+    /// A confused battler's duration reached zero this action, ending
+    /// confusion before the paralysis draw and PP handling run
+    /// (`CANCELER_CONFUSED`, `src/battle_util.c:2157`-`:2187`).
+    ///
+    /// This precedes [`BattleEvent::FullyParalyzed`] when both fire for the
+    /// same action.
+    SnappedOutOfConfusion {
+        /// Whether the player's battler snapped out.
+        by_player: bool,
+    },
     /// A paralysed battler's full-paralysis draw cancelled its chosen move
     /// before any PP was spent.
     FullyParalyzed {
