@@ -723,10 +723,10 @@ fn reading_a_non_symlink_reparse_point_in_the_files_place_loads_through_its_filt
 
 /// A reparse point's hydrating reopen must read through the object identity
 /// already verified, not whatever now occupies the path's name: `open`'s
-/// `open_verified_for_read_with` lands a swap -- the original entry removed,
-/// a different file taking its name -- right before the reopen that would
-/// otherwise be a second, redirectable lookup of the path. The swap must
-/// have no effect on what comes back.
+/// `open_verified_for_read_with` lands a swap -- the original entry renamed
+/// aside, a different file taking its name -- right before the reopen that
+/// would otherwise be a second, redirectable lookup of the path. The swap
+/// must have no effect on what comes back.
 #[cfg(windows)]
 #[test]
 fn a_reparse_points_hydrating_reopen_reads_through_the_verified_object_despite_a_path_swap() {
@@ -738,8 +738,13 @@ fn a_reparse_points_hydrating_reopen_reads_through_the_verified_object_despite_a
     SaveFile::at(&path).write(&original).unwrap();
     compress_into_a_non_symlink_reparse_point(&path);
 
+    let carried_off = dir.join("carried-off.sav");
     let outcome = open::open_verified_for_read_with(&path, |_verified_handle| {
-        std::fs::remove_file(&path).expect("the verified entry is removed");
+        // Renamed aside, not removed: a volume without POSIX delete semantics would only
+        // mark a same-name-while-open remove pending, refusing the create below with access
+        // denied until the verified handle closes, which would test that refusal instead of
+        // the swap this test means to exercise.
+        std::fs::rename(&path, &carried_off).expect("the verified entry is renamed aside");
         std::fs::write(&path, vec![0xFFu8; FLASH_IMAGE_LEN])
             .expect("a different file takes the same name");
     });
