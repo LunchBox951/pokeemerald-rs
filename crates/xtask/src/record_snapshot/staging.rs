@@ -2,10 +2,11 @@
 //! re-verifies that handle's identity before the promoting rename, so a
 //! symlink planted at the name is refused rather than followed or published.
 //! That check is not fused to the rename: a replacement landing in the gap
-//! is still promoted. On Windows the hold has to be released before the
-//! rename, and past that point nothing can confirm identity, so a rename that
-//! then fails leaves the staging file in place rather than unlinking a name
-//! something else may have taken.
+//! is still promoted. Once staging has created a pointer file, a failure
+//! retains it and reports its last known path instead of removing it: a held
+//! file's identity check cannot make a later, separate pathname deletion
+//! conditional on that identity, so no failure path names and deletes this
+//! file a second time.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -31,9 +32,9 @@ fn create_new_exclusive(path: &Path) -> std::io::Result<std::fs::File> {
 
 /// Creates `path` exclusively and writes `bytes` into it, syncing before
 /// returning the held staging file. Fails with `AlreadyExists` if `path`
-/// already names anything, including a planted symlink; any failure past the
-/// exclusive create removes the file again, so this call never deletes an
-/// entry a different owner put there.
+/// already names anything, including a planted symlink; a failure past the
+/// exclusive create retains the file and reports its path, so this call
+/// never deletes an entry a different owner put there.
 pub(super) fn stage(path: &Path, bytes: &[u8]) -> std::io::Result<StagedFile> {
     let file = create_new_exclusive(path)?;
     let result = (|| {
@@ -46,13 +47,13 @@ pub(super) fn stage(path: &Path, bytes: &[u8]) -> std::io::Result<StagedFile> {
     let hold = file;
     #[cfg(windows)]
     let hold = Some(file);
-    let mut staged = StagedFile {
+    let staged = StagedFile {
         path: path.to_path_buf(),
         hold,
     };
     match result {
         Ok(()) => Ok(staged),
-        Err(source) => Err(staged.remove_after(source)),
+        Err(source) => Err(staged.report_retained(&source)),
     }
 }
 
@@ -75,7 +76,7 @@ type Hold = Option<std::fs::File>;
 fn release(_hold: &mut Hold) {}
 
 /// Ends `hold` where the platform needs it ended: drops the handle so the
-/// staging name can be renamed or deleted again (see [`Hold`]).
+/// staging name can be renamed again (see [`Hold`]).
 #[cfg(windows)]
 fn release(hold: &mut Hold) {
     drop(hold.take());
@@ -137,32 +138,21 @@ impl StagedFile {
     }
 
     /// Gives up the hold, so that the rename which promotes the staged
-    /// pointer -- or the unlink which abandons it -- can take its name.
+    /// pointer can take its name.
     fn release_hold(&mut self) {
         release(&mut self.hold);
     }
 
-    /// Removes this staged file after `source`, folding a cleanup failure
-    /// into the returned error rather than swallowing it. An entry that
-    /// replaced it belongs to whoever put it there and is left where it is;
-    /// ownership that could not be read at all leaves the same file behind,
-    /// and is reported the same way.
-    fn remove_after(&mut self, source: std::io::Error) -> std::io::Error {
-        let left_behind = match self.still_ours() {
-            Ok(false) => return source,
-            Ok(true) => {
-                self.release_hold();
-                std::fs::remove_file(&self.path).err()
-            }
-            Err(unreadable) => Some(unreadable),
-        };
-        let Some(cleanup_source) = left_behind else {
-            return source;
-        };
+    /// Folds a stage or publish failure into `source` and reports this
+    /// staged file's last known path. No failure path unlinks it: a held
+    /// file's identity check and a pathname deletion are separate lookups,
+    /// so nothing can make one conditional on the other; the file is left
+    /// for an operator to inspect and remove.
+    fn report_retained(&self, source: &std::io::Error) -> std::io::Error {
         std::io::Error::new(
             source.kind(),
             format!(
-                "{source}; additionally failed to remove the abandoned staging file {}: {cleanup_source}",
+                "{source}; the staging file was not removed; last known path: {}",
                 self.path.display()
             ),
         )
@@ -170,26 +160,42 @@ impl StagedFile {
 
     /// Verifies ownership, then publishes this staging path to `dest` by
     /// rename; refuses to publish a replaced or unverifiable staging path.
-    pub(super) fn publish(mut self, dest: &Path) -> std::io::Result<()> {
+    pub(super) fn publish(self, dest: &Path) -> std::io::Result<()> {
+        self.publish_with(dest, || {})
+    }
+
+    /// [`Self::publish`], plus a hook run right after a failed promoting
+    /// rename and before that failure is retained and reported. Production
+    /// always passes a no-op; tests use it to land a replacement at the
+    /// staging pathname and pin that a failed publish leaves it untouched.
+    pub(super) fn publish_with(
+        mut self,
+        dest: &Path,
+        on_rename_failure: impl FnOnce(),
+    ) -> std::io::Result<()> {
         match self.still_ours() {
             Ok(true) => {}
             Ok(false) => {
-                return Err(std::io::Error::other(format!(
+                return Err(self.report_retained(&std::io::Error::other(format!(
                     "staging file {} was replaced before it could be published",
                     self.path.display()
-                )));
+                ))));
             }
             Err(error) => {
-                return Err(std::io::Error::new(
+                let wrapped = std::io::Error::new(
                     error.kind(),
                     format!(
-                        "ownership of the staging file {} could not be confirmed before publishing, so it was left in place: {error}",
+                        "ownership of the staging file {} could not be confirmed before publishing: {error}",
                         self.path.display()
                     ),
-                ));
+                );
+                return Err(self.report_retained(&wrapped));
             }
         }
         self.release_hold();
-        std::fs::rename(&self.path, dest).map_err(|error| self.remove_after(error))
+        std::fs::rename(&self.path, dest).map_err(|error| {
+            on_rename_failure();
+            self.report_retained(&error)
+        })
     }
 }
