@@ -375,6 +375,8 @@ pub struct OverworldScene {
     blank_tile_index: u16,
     tile_anims: tileset_anims::AnimatedTileset,
     sprites: sprites::SceneSprites,
+    /// The events `from_pack` received, fixed for the visit.
+    events: assets::MapEvents,
 }
 
 impl OverworldScene {
@@ -386,7 +388,8 @@ impl OverworldScene {
     /// connections. `event_data` is the persistent flag and variable state as
     /// it stands after the destination map's transition updates, not a
     /// per-room store; with `events` it determines the sprite bindings this
-    /// scene captures for the visit.
+    /// scene captures for the visit. `events` is also what
+    /// [`Self::map_events`] answers for the rest of the visit.
     ///
     /// # Errors
     ///
@@ -447,6 +450,33 @@ impl OverworldScene {
             blank_tile_index,
             tile_anims,
             sprites,
+            events: *events,
+        })
+    }
+
+    /// The events collision, interaction, and rendering share for `map_id`
+    /// during this visit.
+    ///
+    /// When the scene was loaded with `map_id`'s own events (the same events
+    /// owner [`MapEventsTable::resolve`] reports), these are the events as
+    /// loaded, so a transition-time object placement such as Oldale Town's
+    /// holds until the next load even if the flags that chose it change.
+    /// A scene loaded with another owner's events answers `map_id`'s
+    /// generated events instead.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AssetError::UnknownMapEvents`] if `map_id` or its events
+    /// owner is unknown.
+    pub(crate) fn map_events(
+        &self,
+        map_id: assets::MapId,
+    ) -> Result<assets::MapEvents, AssetError> {
+        let generated = MapEventsTable::new().resolve(map_id)?;
+        Ok(if generated.id == self.events.id {
+            self.events
+        } else {
+            *generated
         })
     }
 

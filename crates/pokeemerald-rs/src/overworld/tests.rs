@@ -527,6 +527,35 @@ pub(crate) fn synthetic_scene(width: u16, height: u16) -> super::OverworldScene 
     .expect("synthetic pack should decode cleanly")
 }
 
+/// [`synthetic_scene`], loaded with `events` instead of no object events,
+/// plus an opaque 16x32 people sheet for each of `sprite_paths` so those
+/// events' sprites bind and draw.
+pub(crate) fn synthetic_scene_with_events(
+    width: u16,
+    height: u16,
+    events: &'static assets::MapEvents,
+    sprite_paths: &[&str],
+) -> super::OverworldScene {
+    let mut entries = synthetic_overworld_pack_entries_for("general", width, height);
+    for path in sprite_paths {
+        entries.push(Entry {
+            id: leaked(format!("sprite/{path}")),
+            kind_tag: IMAGE_KIND_TAG,
+            meta: image_meta(144, 32, 8),
+            payload: vec![3u8; 144 * 32],
+        });
+    }
+    synthetic_scene_result_with_connections_and_events(
+        write_synthetic_pack(entries),
+        "gTileset_General",
+        width,
+        height,
+        &[],
+        events,
+    )
+    .expect("synthetic pack with object-event sprites should decode cleanly")
+}
+
 /// [`synthetic_scene`], but the cell at `special_pos` is a second, distinct
 /// metatile with `special_behavior` instead of ordinary ground
 /// (`MB_NORMAL`); otherwise identical: fully walkable, uniform elevation

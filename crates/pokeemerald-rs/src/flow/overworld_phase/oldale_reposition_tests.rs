@@ -1,19 +1,19 @@
 //! Tests for `oldale_town_npc_reposition`:
 //! `OldaleTown_OnTransition`'s `setobjectxyperm`/`setobjectmovementtype`
 //! pair, gated by `FLAG_ADVENTURE_STARTED`/`FLAG_RECEIVED_POTION_OLDALE`,
-//! applied wherever
-//! [`crate::flow::overworld_phase::step`]/[`crate::overworld::load_room`]
-//! resolve Oldale Town's own object events. This file's phases use a fresh
-//! save, so both flags stay unset and both NPCs stay at their moved tiles.
+//! resolved once when [`crate::overworld::load_room`] loads Oldale Town and
+//! held by the scene for the rest of the visit. This file's phases load
+//! from a fresh save, so both flags start unset and both NPCs start at
+//! their moved tiles.
 //!
 //! Mirrors `route103_rival_tests`' own "real events over a synthetic grid"
-//! split (that module's doc comment): a fabricated flat, open room paired
-//! with the *real* `MAP_OLDALE_TOWN` id, so `resolve_map_events` hands back
-//! the real (patched) footprints man/mart employee object events without
-//! needing a local pack -- plus one `#[ignore]`d real-pack walk that proves
+//! split (that module's doc comment): a fabricated flat, open room loaded
+//! with the *real* resolved `MAP_OLDALE_TOWN` object events, so the tests
+//! need no local pack -- plus one `#[ignore]`d real-pack walk that proves
 //! the same claims against the bundled map's own real layout.
 
 use assets::{MapId, MovementType};
+use engine::event_data::EventData;
 use engine::overworld::{Direction, PlayerState};
 use platform::Buttons;
 
@@ -40,13 +40,28 @@ const MART_EMPLOYEE_NEW_TILE: (i32, i32) = (13, 14);
 /// The mart employee's bare map.json tile, now vacated.
 const MART_EMPLOYEE_OLD_TILE: (i32, i32) = (13, 7);
 
-/// An [`OverworldPhase`] over a **synthetic** flat, open 20x20 room but the
-/// *real* `MAP_OLDALE_TOWN` id (module docs) -- large enough to hold every
-/// tile this file exercises, with no interior collision of its own, so any
-/// blocked step below is caused by an object event, never the grid.
+/// `FLAG_ADVENTURE_STARTED` (`include/constants/flags.h:136`).
+const FLAG_ADVENTURE_STARTED: u16 = 0x74;
+
+/// `FLAG_RECEIVED_POTION_OLDALE` (`include/constants/flags.h:154`).
+const FLAG_RECEIVED_POTION_OLDALE: u16 = 0x84;
+
+/// An [`OverworldPhase`] over a **synthetic** flat, open 20x20 room loaded
+/// with the *real* `MAP_OLDALE_TOWN` object events a fresh save resolves
+/// (module docs) -- large enough to hold every tile this file exercises,
+/// with no interior collision of its own, so any blocked step below is
+/// caused by an object event, never the grid.
 fn oldale_phase(player: PlayerState) -> OverworldPhase {
+    let events = oldale_town_npc_reposition::resolve_map_events(OLDALE_TOWN, &EventData::new())
+        .expect("MAP_OLDALE_TOWN must resolve");
+    let events: &'static assets::MapEvents = Box::leak(Box::new(events));
     OverworldPhase::for_test(
-        crate::overworld::tests::synthetic_scene(20, 20),
+        crate::overworld::tests::synthetic_scene_with_events(
+            20,
+            20,
+            events,
+            &["girl_3", "mart_employee", "maniac"],
+        ),
         OLDALE_TOWN,
         player,
         None,
@@ -55,21 +70,14 @@ fn oldale_phase(player: PlayerState) -> OverworldPhase {
 
 // -- The reposition, pinned directly at the data source --------------------
 
-/// The object events [`crate::overworld::load_room`] and
-/// [`super::step`]'s per-frame runtime rebuild both resolve through
-/// (`oldale_town_npc_reposition`'s own module docs) already carry the
-/// footprints man's and mart employee's post-script positions and facings --
-/// this is what both the collision tests below and NPC rendering
-/// (`crate::overworld::npc`'s existing `object_screen_position`/
-/// `initial_facing_direction` machinery, exercised generically, not
-/// Oldale-specifically, by that module's own tests) draw from.
+/// The object events [`crate::overworld::load_room`] resolves on a fresh
+/// save carry the footprints man's and mart employee's post-script
+/// positions and facings -- the scene holds them for the visit, and both
+/// the collision tests below and NPC rendering draw from them.
 #[test]
 fn the_footprints_man_and_mart_employee_resolve_at_their_post_transition_tiles() {
-    let map_events = oldale_town_npc_reposition::resolve_map_events(
-        OLDALE_TOWN,
-        &engine::event_data::EventData::new(),
-    )
-    .expect("MAP_OLDALE_TOWN must resolve");
+    let map_events = oldale_town_npc_reposition::resolve_map_events(OLDALE_TOWN, &EventData::new())
+        .expect("MAP_OLDALE_TOWN must resolve");
 
     let footprints_man = map_events
         .object_events
@@ -169,6 +177,93 @@ fn the_mart_employees_old_tile_is_walkable() {
         "nothing stands on the mart employee's vacated map.json tile"
     );
     assert!(phase.player.in_transit());
+}
+
+// -- The entry-time placement holds for the visit --------------------------
+
+/// `OldaleTown_OnTransition` runs on map entry only
+/// (`data/maps/OldaleTown/scripts.inc:4-9`), so setting either flag while
+/// Oldale Town stays loaded must leave collision, interaction, and rendering
+/// on the placement resolved at entry until the next transition.
+#[test]
+fn a_flag_set_mid_visit_leaves_the_entry_time_placement_in_force() {
+    let (ex, ey) = MART_EMPLOYEE_NEW_TILE;
+    let mut phase = oldale_phase(PlayerState::new((ex, ey - 1), 3, Direction::South));
+    let entry_oam = phase
+        .scene
+        .oam_entries_and_bg_scroll(&phase.player, &phase.save1.event_data)
+        .0;
+
+    phase
+        .save1
+        .event_data
+        .flag_set(FLAG_ADVENTURE_STARTED)
+        .unwrap();
+    phase
+        .save1
+        .event_data
+        .flag_set(FLAG_RECEIVED_POTION_OLDALE)
+        .unwrap();
+
+    let events = phase
+        .scene
+        .map_events(OLDALE_TOWN)
+        .expect("MAP_OLDALE_TOWN must resolve");
+    let header = assets::MapHeaderTable::new()
+        .header(OLDALE_TOWN)
+        .expect("MAP_OLDALE_TOWN must have a header");
+    {
+        let runtime = phase.scene.runtime(OLDALE_TOWN, header, &events);
+        assert!(
+            phase
+                .interaction_tokens_this_frame(crate::flow::tests::pressed(Buttons::A), &runtime)
+                .is_some(),
+            "the mart employee must still answer A on her entry-time tile"
+        );
+    }
+
+    let mart_employee_draw = |phase: &OverworldPhase| {
+        let (oam, _) = phase
+            .scene
+            .oam_entries_and_bg_scroll(&phase.player, &phase.save1.event_data);
+        let player = oam[0];
+        oam.into_iter().skip(1).find(|entry| {
+            entry.x() == player.x() && i32::from(entry.y()) == i32::from(player.y()) + 16
+        })
+    };
+    assert_eq!(
+        phase
+            .scene
+            .oam_entries_and_bg_scroll(&phase.player, &phase.save1.event_data)
+            .0,
+        entry_oam,
+        "rendering must not change when a flag flips mid-visit"
+    );
+    assert!(
+        mart_employee_draw(&phase).is_some(),
+        "the mart employee must still draw one tile south of the player"
+    );
+
+    phase.step(held(Buttons::DOWN));
+    assert_eq!(
+        phase.player.position(),
+        (ex, ey - 1),
+        "the mart employee's entry-time tile must still block the step"
+    );
+
+    let (fx, fy) = FOOTPRINTS_MAN_OLD_TILE;
+    let mut phase = oldale_phase(PlayerState::new((fx - 1, fy), 3, Direction::East));
+    phase
+        .save1
+        .event_data
+        .flag_set(FLAG_ADVENTURE_STARTED)
+        .unwrap();
+    phase.step(held(Buttons::RIGHT));
+    assert_eq!(
+        phase.player.position(),
+        (fx, fy),
+        "the footprints man's map.json tile must stay vacated until the next transition"
+    );
 }
 
 // -- The same four claims, against the real bundled map -------------------

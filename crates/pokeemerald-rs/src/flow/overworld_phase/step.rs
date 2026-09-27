@@ -29,7 +29,7 @@ use engine::text::render::TextSpeed;
 use platform::{ButtonState, Buttons};
 
 use crate::flow::wild_encounter;
-use crate::overworld::{npc_scripts, oldale_town_npc_reposition, NpcDialog};
+use crate::overworld::{npc_scripts, NpcDialog};
 use crate::start_menu::StartMenu;
 
 use super::connections::MapConnections;
@@ -397,13 +397,10 @@ impl OverworldPhase {
         // Ahead of `runtime`'s scene borrow: the memoised screen needs
         // `&mut self`; a memo hit is a map-id comparison.
         let wild_table_fightable = self.wild_table_fightable();
-        // `oldale_town_npc_reposition::resolve_map_events`, not a bare
-        // `MapEventsTable::resolve`: collision/interaction must see Oldale
-        // Town's footprints man and mart employee at the positions
-        // `save1.event_data`'s own flags currently dictate -- a no-op for
-        // every other map.
-        let map_events =
-            oldale_town_npc_reposition::resolve_map_events(self.map_id, &self.save1.event_data);
+        // The scene's own load-time events, not a fresh resolution: Oldale
+        // Town's flag-chosen placement holds for the visit and matches the
+        // object events the scene draws.
+        let map_events = self.scene.map_events(self.map_id);
         if let (Ok(header), Ok(events)) = (
             MapHeaderTable::new().header(self.map_id),
             map_events.as_ref(),
