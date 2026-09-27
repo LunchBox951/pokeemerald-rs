@@ -273,6 +273,49 @@ class PromoteAppIdentityRuleTest(unittest.TestCase):
         self.assertIn("refusing to run without a configured App identity", result.stderr)
 
 
+class PrecedingProvenanceLookupFailureTest(unittest.TestCase):
+    """A failed provenance lookup must fail the run, not skip the rung.
+
+    require_preceding_promotion() is invoked as
+    `provenance="$(require_preceding_promotion ...)"`; its own
+    `candidate_logins="$(gh pr list ...)"` and
+    `candidate_login_lines="$(jq -r '.[]' ...)"` are a second layer of
+    command substitution. Bash does not propagate `errexit` into that
+    second layer unless `inherit_errexit` is set, so a `gh` or `jq`
+    failure there must not silently read as zero candidates.
+    """
+
+    def run_open_stable(self, gh_body):
+        shopt_line = _extract_line(PROMOTE_WORKFLOW, "shopt -s inherit_errexit")
+        function = "\n".join(
+            _extract_bash_function(PROMOTE_WORKFLOW, name)
+            for name in ("is_promotion_app_author", "require_preceding_promotion",
+                         "open_promotion")
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "gh").write_text("#!/usr/bin/env bash\n" + gh_body + "\n")
+            (root / "gh").chmod(0o755)
+            script = (
+                "set -euo pipefail\n"
+                + shopt_line + "\n"
+                'APP_LOGIN="promoter[bot]"\nAPP_SLUG="promoter"\nREPOSITORY="owner/repo"\n'
+                f'branch_sha() {{ echo {"a" * 40}; }}\n'
+                + function + "\nopen_promotion stable\n"
+            )
+            return subprocess.run(["bash", "-c", script], capture_output=True, text=True,
+                                  cwd=REPOSITORY_ROOT,
+                                  env={**os.environ, "PATH": f"{root}:{os.environ['PATH']}"})
+
+    def test_failed_gh_lookup_fails_the_run(self):
+        result = self.run_open_stable('echo "HTTP 502" >&2; exit 1')
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+
+    def test_unparseable_lookup_fails_the_run(self):
+        result = self.run_open_stable('echo "not json"')
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+
+
 class SourceGateAppIdentityRuleTest(unittest.TestCase):
     """channel-merge-policy.yml derives the same two-form rule from the
     configured REST-form PROMOTION_APP_LOGIN; cover both observed forms

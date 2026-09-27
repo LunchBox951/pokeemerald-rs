@@ -37,6 +37,9 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
+          # A failure inside a function called via command substitution
+          # (e.g. `x="$(some_func)"`) must abort the run, not read as "$()".
+          shopt -s inherit_errexit
 
           case "${EVENT_BASE}" in
             unstable) expected_head="dev" ;;

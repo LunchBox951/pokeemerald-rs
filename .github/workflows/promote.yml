@@ -81,6 +81,9 @@ jobs:
           REPOSITORY_OWNER: ${{ github.repository_owner }}
         run: |
           set -euo pipefail
+          # A failure inside a function called via command substitution
+          # (e.g. `x="$(some_func)"`) must abort the run, not read as "$()".
+          shopt -s inherit_errexit
 
           branch_sha() {
             gh api "repos/${REPOSITORY}/branches/$1" --jq '.commit.sha'
