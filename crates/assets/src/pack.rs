@@ -59,10 +59,8 @@ impl AssetPack {
     ///
     /// # Panics
     ///
-    /// See [`pack_format::default_pack_path`]'s own `# Panics`: a non-`dev`
-    /// build with no override, no user-data directory, and no known
-    /// executable directory has no non-cwd candidate left and panics
-    /// instead of resolving through the process's current directory.
+    /// When [`pack_format::default_pack_path`] does; its `# Panics` owns
+    /// the condition.
     #[must_use]
     pub fn default_path() -> PathBuf {
         pack_format::default_pack_path()

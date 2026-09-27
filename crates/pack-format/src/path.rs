@@ -191,10 +191,8 @@ fn std_env(key: &str) -> Option<OsString> {
 ///
 /// # Panics
 ///
-/// See [`default_pack_path`]: a non-`dev` `rule`/`RELEASE_CHANNEL` with no
-/// override, no user-data directory, and `exe_dir: None` has no non-cwd
-/// candidate left and panics rather than resolve through `exe_dir`'s
-/// current-directory default.
+/// As [`default_pack_path`] documents, when `exe_dir` is `None` on a
+/// non-`dev` channel with no override and no user-data directory.
 fn resolve(
     env: &impl Fn(&str) -> Option<OsString>,
     exe_dir: Option<&Path>,
