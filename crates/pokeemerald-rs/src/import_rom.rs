@@ -120,7 +120,9 @@ use std::path::{Path, PathBuf};
 
 use rom_import::{ImportError, ImportedPack, OneLinePath};
 
-use created_dirs::{create_directories, sync_created_directories, undo_created_directories};
+use created_dirs::{
+    create_directories, open_shedding_pins, sync_created_directories, undo_created_directories,
+};
 use dest::Dest;
 
 /// What a successful import produced.
@@ -489,7 +491,7 @@ fn import_to_with(
     // runs rather than after it succeeds. The levels this run made answer
     // both of the questions that follow: which entries a successful run has
     // to leave durable, and which directories a failed one takes back.
-    let created = match create_directories(&dir) {
+    let mut created = match create_directories(&dir) {
         Ok(created) => created,
         Err((created, source)) => {
             // The creation can fail after making outer levels; take those
@@ -501,12 +503,14 @@ fn import_to_with(
             });
         }
     };
-    sync_created_directories(&created);
+    sync_created_directories(&mut created);
 
     // Everything from here on names files inside this one handle. A
     // directory component redirected after this open is a component
     // nothing looks at again.
-    let dest = match Dest::open(&dir) {
+    // It and the temporary file below are the two opens this import cannot
+    // do without, so a pinned level gives its descriptor up to them first.
+    let dest = match open_shedding_pins(&mut created, || Dest::open(&dir)) {
         Ok(dest) => dest,
         Err(source) => {
             undo_created_directories(&created);
@@ -541,7 +545,7 @@ fn import_to_with(
     // only as trustworthy as the directory (see the module docs). A name
     // already taken fails here having created nothing, which is what
     // leaves that file to whoever does own it.
-    let mut file = match dest.create_new(&temp_name) {
+    let mut file = match open_shedding_pins(&mut created, || dest.create_new(&temp_name)) {
         Ok(file) => file,
         Err(source) => {
             undo_created_directories(&created);

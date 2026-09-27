@@ -19,8 +19,9 @@
 //!
 //! Pins spend descriptors the import still needs for itself. At most
 //! [`pin_budget`] levels, the innermost, are pinned at once, and an open
-//! refused for want of a descriptor during creation first releases the
-//! outermost pinned level and retries. A level with no pin is left standing by rollback.
+//! refused for want of a descriptor, during creation or in the import that
+//! follows ([`open_shedding_pins`]), first releases the outermost pinned
+//! level and retries. A level with no pin is left standing by rollback.
 //!
 //! Off Unix no descriptor is pinned, and each level is addressed by path.
 
@@ -118,12 +119,14 @@ fn same_directory_identity(a: &rustix::fs::Stat, b: &rustix::fs::Stat) -> bool {
 const MAX_PINNED_LEVELS: usize = 32;
 
 /// Descriptors this run needs outside the pinned chain, so [`pin_budget`]
-/// never plans to pin so many that the opens still to come after creation
-/// finishes -- `Dest::open`'s own handle and the temporary pack file --
-/// fail instead: three for stdio, one for the ROM file already open before
-/// creation starts, one for [`create_directories_with_hooks`]'s own
-/// traversal handle, one apiece for those two later opens, and three of
-/// margin for whatever else the process already holds. Ten in total.
+/// leaves room for them rather than making the opens after creation --
+/// `Dest::open`'s own handle and the temporary pack file -- shed pins
+/// through [`open_shedding_pins`]: three for stdio, one for the ROM file
+/// already open before creation starts, one for
+/// [`create_directories_with_hooks`]'s own traversal handle, one apiece
+/// for those two later opens, and three of margin. The margin is a guess
+/// about what else the process holds, never a measurement of it; shedding
+/// is what answers a guess that falls short.
 #[cfg(unix)]
 const RESERVED_DESCRIPTORS: usize = 10;
 
@@ -561,7 +564,9 @@ pub(super) fn create_directories(
 /// has to be synced for it — the directory's own sync would only persist
 /// what is inside it. Outermost first, so a crash part-way through leaves a
 /// prefix of the chain rather than a deep directory hanging from a name
-/// that never reached the disk.
+/// that never reached the disk. A reopen refused for want of a descriptor
+/// sheds the outermost pinned level, outermost being synced first, and
+/// retries.
 ///
 /// Best-effort throughout: a weaker durability guarantee is not something
 /// to fail a finished import over -- including `dir.parent` itself being a
@@ -569,21 +574,64 @@ pub(super) fn create_directories(
 /// ([`dest::reopen_for_sync`]), or, past [`MAX_PINNED_LEVELS`], not being
 /// pinned at all.
 #[cfg(unix)]
-pub(super) fn sync_created_directories(created: &[CreatedDirectory]) {
-    for dir in created {
-        let Some(parent) = dir.parent.as_deref() else {
-            continue;
-        };
-        if let Ok(real) = dest::reopen_for_sync(parent) {
-            let _ = rustix::fs::fsync(&real);
+pub(super) fn sync_created_directories(created: &mut [CreatedDirectory]) {
+    let mut pin_from = 0;
+    for index in 0..created.len() {
+        while let Some(parent) = created[index].parent.clone() {
+            match dest::reopen_for_sync(&parent) {
+                Ok(real) => {
+                    let _ = rustix::fs::fsync(&real);
+                    break;
+                }
+                Err(source) if is_out_of_descriptors_io(&source) => {
+                    // The clone must go first, or shedding the level that
+                    // shares it releases nothing.
+                    drop(parent);
+                    if !shed_outermost_pinned_level(created, &mut pin_from) {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
         }
     }
+}
+
+/// Runs `open`, and while it is refused for want of a descriptor, releases
+/// the outermost of `created`'s pinned levels and runs it again; the
+/// refusal stands once none is left to release. For the opens an import
+/// makes after [`create_directories`] returns, which would otherwise fail
+/// on descriptors that rollback could do without.
+#[cfg(unix)]
+pub(super) fn open_shedding_pins<T>(
+    created: &mut [CreatedDirectory],
+    mut open: impl FnMut() -> io::Result<T>,
+) -> io::Result<T> {
+    let mut pin_from = 0;
+    loop {
+        match open() {
+            Err(source)
+                if is_out_of_descriptors_io(&source)
+                    && shed_outermost_pinned_level(created, &mut pin_from) => {}
+            result => return result,
+        }
+    }
+}
+
+/// [`open_shedding_pins`]'s off-Unix arm: nothing is pinned, so `open` runs
+/// once.
+#[cfg(not(unix))]
+pub(super) fn open_shedding_pins<T>(
+    _created: &mut [CreatedDirectory],
+    mut open: impl FnMut() -> io::Result<T>,
+) -> io::Result<T> {
+    open()
 }
 
 /// [`sync_created_directories`]'s off-Unix arm, through
 /// [`dest::sync_directory`] since no descriptor is pinned to sync directly.
 #[cfg(not(unix))]
-pub(super) fn sync_created_directories(created: &[CreatedDirectory]) {
+pub(super) fn sync_created_directories(created: &mut [CreatedDirectory]) {
     for dir in created {
         // A bare relative name has no parent, and `""` is not a directory
         // any OS accepts, so it is the current directory — the same rule
