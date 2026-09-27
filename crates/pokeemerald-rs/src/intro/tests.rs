@@ -9,7 +9,7 @@ use rendering::Rgb888;
 
 use super::{IntroScene, IntroStatus, TraversalRun, NUM_PAGES};
 use crate::new_game::NewGameOptions;
-use crate::textbox::{FrameAssets, STANDARD_BOX_SCREEN_ORIGIN, STANDARD_PRINTER_ORIGIN};
+use crate::textbox::{FrameAssets, WindowOp, STANDARD_BOX_SCREEN_ORIGIN, STANDARD_PRINTER_ORIGIN};
 
 const NO_INPUT: PrinterInput = PrinterInput::none();
 
@@ -44,6 +44,7 @@ const MESSAGE_BOX_BIT_DEPTH: u8 = 4;
 const MESSAGE_BOX_PALETTE_COLOUR_COUNT: u16 = 16;
 const SOLID_FRAME_PALETTE_INDEX: u8 = 1;
 const TILE_SIDE: i32 = 8;
+const NORMAL_A_ADVANCE_WIDTH: i32 = 6;
 const GLYPH_INTERIOR_OFFSET: i32 = 4;
 const MESSAGE_BOX_INTERIOR_OFFSET: i32 = 4;
 const BACKDROP_PROBE: usize = 2;
@@ -293,7 +294,9 @@ fn fill_window_drops_stale_glyphs_but_keeps_the_glyph_printed_after_it() {
         "FILL_WINDOW must drop the stale glyphs, but not the one printed after it \
          in the same tick"
     );
-    let only_glyph = scene.revealed[0];
+    let WindowOp::Glyph(only_glyph) = &scene.ops[0] else {
+        panic!("expected the surviving op to be a glyph")
+    };
     assert_eq!(
         (only_glyph.x, only_glyph.y),
         STANDARD_PRINTER_ORIGIN,
@@ -340,6 +343,125 @@ fn compose_draws_the_dialogue_box_border_even_before_any_glyph_reveals() {
     assert_eq!(
         fb.pixel(BACKDROP_PROBE, BACKDROP_PROBE),
         Some(Rgb888::BLACK)
+    );
+}
+
+/// Screen pixel for a window-local content coordinate in the standard box.
+fn box_pixel(content: (i32, i32)) -> (usize, usize) {
+    let x = STANDARD_BOX_SCREEN_ORIGIN.0 + content.0;
+    let y = STANDARD_BOX_SCREEN_ORIGIN.1 + content.1;
+    (usize::try_from(x).unwrap(), usize::try_from(y).unwrap())
+}
+
+#[test]
+fn clear_paints_the_erased_span_with_the_windows_background() {
+    let pixels = dark_grey_glyph_sheet_pixels();
+    let mut scene = IntroScene::new(
+        synthetic_sheet(&pixels),
+        solid_red_message_box(),
+        TextSpeed::Instant,
+        NewGameOptions::DEFAULT,
+    );
+    // `0x0D`/`0x11` are `EXT_CTRL_CODE_SHIFT_RIGHT`/`EXT_CTRL_CODE_CLEAR`
+    // (`pokeemerald/src/text.c:1063-1072`), one argument byte each per
+    // `charmap.txt`. `SHIFT_RIGHT 0` moves the cursor back over the `A` just
+    // printed, so `CLEAR` erases exactly that glyph's width. `tests` is a
+    // descendant of `intro`, so it can restart the scene's own printer
+    // directly with a controlled token stream instead of the real speech.
+    scene.printer.restart(vec![
+        Token::Char('A'),
+        Token::ExtCtrl {
+            sub: 0x0D,
+            args: vec![0],
+        },
+        Token::ExtCtrl {
+            sub: 0x11,
+            args: vec![u8::try_from(NORMAL_A_ADVANCE_WIDTH).unwrap()],
+        },
+        Token::End,
+    ]);
+
+    assert_eq!(scene.tick(NO_INPUT), IntroStatus::Continue, "reveals 'A'");
+    assert_eq!(
+        scene.tick(NO_INPUT),
+        IntroStatus::Continue,
+        "SHIFT_RIGHT is free; CLEAR ends the frame"
+    );
+
+    let fb = scene.compose();
+
+    let (cleared_x, cleared_y) =
+        box_pixel((STANDARD_PRINTER_ORIGIN.0 + 2, STANDARD_PRINTER_ORIGIN.1 + 8));
+    assert_eq!(
+        fb.pixel(cleared_x, cleared_y),
+        Some(SOLID_FRAME_COLOR),
+        "the erased span must show the window's background, not the glyph"
+    );
+
+    let (still_glyph_x, still_glyph_y) = box_pixel((
+        STANDARD_PRINTER_ORIGIN.0 + NORMAL_A_ADVANCE_WIDTH + 4,
+        STANDARD_PRINTER_ORIGIN.1 + 8,
+    ));
+    assert_eq!(
+        fb.pixel(still_glyph_x, still_glyph_y),
+        Some(DARK_GREY_GLYPH_COLOR),
+        "pixels past the cleared width belong to the same glyph and must stay visible"
+    );
+}
+
+#[test]
+fn clear_to_paints_only_up_to_its_target_column() {
+    // `0x13` is `EXT_CTRL_CODE_CLEAR_TO` (`pokeemerald/src/text.c`
+    // `:1077-1090`); the argument is an origin-relative column, so this
+    // erases fewer pixels than the glyph's full advance width.
+    const CLEAR_TO_COLUMN: u8 = 4;
+    let cleared_width = i32::from(CLEAR_TO_COLUMN);
+
+    let pixels = dark_grey_glyph_sheet_pixels();
+    let mut scene = IntroScene::new(
+        synthetic_sheet(&pixels),
+        solid_red_message_box(),
+        TextSpeed::Instant,
+        NewGameOptions::DEFAULT,
+    );
+    scene.printer.restart(vec![
+        Token::Char('A'),
+        Token::ExtCtrl {
+            sub: 0x0D,
+            args: vec![0],
+        },
+        Token::ExtCtrl {
+            sub: 0x13,
+            args: vec![CLEAR_TO_COLUMN],
+        },
+        Token::End,
+    ]);
+
+    assert_eq!(scene.tick(NO_INPUT), IntroStatus::Continue, "reveals 'A'");
+    assert_eq!(
+        scene.tick(NO_INPUT),
+        IntroStatus::Continue,
+        "SHIFT_RIGHT is free; CLEAR_TO ends the frame"
+    );
+
+    let fb = scene.compose();
+
+    let (cleared_x, cleared_y) =
+        box_pixel((STANDARD_PRINTER_ORIGIN.0 + 1, STANDARD_PRINTER_ORIGIN.1 + 8));
+    assert_eq!(
+        fb.pixel(cleared_x, cleared_y),
+        Some(SOLID_FRAME_COLOR),
+        "the span up to the target column must show the window's background"
+    );
+
+    let (still_glyph_x, still_glyph_y) = box_pixel((
+        STANDARD_PRINTER_ORIGIN.0 + cleared_width + 4,
+        STANDARD_PRINTER_ORIGIN.1 + 8,
+    ));
+    assert_eq!(
+        fb.pixel(still_glyph_x, still_glyph_y),
+        Some(DARK_GREY_GLYPH_COLOR),
+        "pixels past the target column belong to the same glyph and must stay visible"
     );
 }
 
