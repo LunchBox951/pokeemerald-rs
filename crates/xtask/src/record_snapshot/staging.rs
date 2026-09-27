@@ -165,10 +165,10 @@ impl StagedFile {
     }
 
     /// [`Self::publish`], plus a hook run right after a failed promoting
-    /// rename and before that failure is retained and reported: the exact
-    /// point a separate ownership check and a separate pathname unlink would
-    /// have divided their two lookups. Production always passes a no-op;
-    /// tests use it to land a replacement exactly there.
+    /// rename and before that failure is retained and reported: the point
+    /// where a cleanup of the staging pathname used to begin. Production
+    /// always passes a no-op; tests use it to land a replacement there and
+    /// pin that nothing after a failed rename touches the pathname.
     pub(super) fn publish_with(
         mut self,
         dest: &Path,
