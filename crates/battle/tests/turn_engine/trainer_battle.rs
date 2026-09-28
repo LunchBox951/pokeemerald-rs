@@ -1314,3 +1314,56 @@ fn a_residual_poison_knockout_scores_replacements_with_no_move_resolving() {
     );
     assert_eq!(battle.enemy().species(), SpeciesId(PICHU));
 }
+
+/// `HandleFaintedMonActions` case 4 walks battlers from 0
+/// (`src/battle_util.c:1924`-`:1935`), so a double faint sends the player's
+/// replacement out (`data/battle_scripts_1.s:2883`-`:2893`) before the
+/// trainer chooses its own.
+#[test]
+fn a_double_faint_sends_the_players_replacement_out_before_the_trainers() {
+    let dex = Dex::new();
+    let mut lead = max_iv_mon(&dex, KANGASKHAN, 50, vec![battle::STRUGGLE]);
+    lead.apply_damage(lead.current_hp() - 1);
+    let reserve = max_iv_mon(&dex, MUDKIP, 5, vec![TACKLE]);
+    let mut enemy_lead = max_iv_mon(&dex, CHANSEY, 5, vec![POUND]);
+    enemy_lead.apply_damage(enemy_lead.current_hp() - 1);
+    let party = vec![
+        enemy_lead,
+        max_iv_mon(&dex, TREECKO, 5, vec![POUND]),
+        max_iv_mon(&dex, TORCHIC, 5, vec![SCRATCH]),
+    ];
+    let mut rng = SequenceRng::new([0; 64]);
+    let mut battle = Battle::new_trainer_with_player_reserves(
+        dex,
+        lead,
+        vec![reserve],
+        MAY_ROUTE_103_MUDKIP,
+        party,
+        &mut rng,
+    )
+    .unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    assert!(
+        events.contains(&BattleEvent::Fainted { by_player: true }),
+        "{events:?}"
+    );
+    assert!(
+        events.contains(&BattleEvent::Fainted { by_player: false }),
+        "{events:?}"
+    );
+    let player_sent = events
+        .iter()
+        .position(|event| matches!(event, BattleEvent::PlayerSentOut { .. }))
+        .expect("the player's replacement is sent out");
+    let trainer_sent = events
+        .iter()
+        .position(|event| matches!(event, BattleEvent::TrainerSentOut { .. }))
+        .expect("the trainer's replacement is sent out");
+    assert!(
+        player_sent < trainer_sent,
+        "the player's replacement goes out first: {events:?}"
+    );
+}

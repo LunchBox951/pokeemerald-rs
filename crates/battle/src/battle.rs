@@ -913,15 +913,20 @@ impl Battle {
         if self.player.pending_move_learn().is_some() {
             return Ok(());
         }
-        self.settle_fainted_enemy(events)?;
-        // The enemy's own faint may have already ended the battle
-        // (`BattleOutcome::PlayerWon`); only a still-open battle reaches the
-        // player's own send-out branch (`data/battle_scripts_1.s:2830`-
-        // `:2832`).
-        if self.outcome.is_none() && self.player.is_fainted() {
+        // `HandleFaintedMonActions` case 4 walks battlers from 0
+        // (`src/battle_util.c:1924`-`:1935`), so the player's replacement is
+        // out before the trainer picks its own against it. A battle the
+        // enemy's faint ends never reaches the player's send-out branch
+        // (`data/battle_scripts_1.s:2830`-`:2832`).
+        if self.player.is_fainted() && self.trainer_has_usable_bench() {
             self.send_out_next_player_reserve(events);
         }
-        Ok(())
+        self.settle_fainted_enemy(events)
+    }
+
+    fn trainer_has_usable_bench(&self) -> bool {
+        matches!(&self.kind, BattleKind::Trainer(context)
+            if context.bench().iter().any(|mon| !mon.is_fainted()))
     }
 
     /// The player-side analogue of [`Battle::settle_fainted_enemy`]:
