@@ -481,6 +481,17 @@ mod synthetic_pack {
         }
     }
 
+    /// `CgbAdsr::flat()` as a pack envelope; [`flat_envelope`]'s
+    /// out-of-domain values are valid only for `DirectSound`'s unmasked envelope.
+    fn flat_cgb_envelope() -> Envelope {
+        Envelope {
+            attack: 0,
+            decay: 0,
+            sustain: 15,
+            release: 0,
+        }
+    }
+
     fn fixed_rate_voicegroup(wave_id: &str) -> VoiceGroup {
         VoiceGroup::new(vec![
             VoiceEntry::Square1(Square1Voice {
@@ -488,21 +499,21 @@ mod synthetic_pack {
                 length: 0,
                 sweep: 0,
                 duty: 2,
-                envelope: flat_envelope(),
+                envelope: flat_cgb_envelope(),
                 fixed_rate: true,
             }),
             VoiceEntry::Square2(Square2Voice {
                 base_key: 60,
                 length: 0,
                 duty: 2,
-                envelope: flat_envelope(),
+                envelope: flat_cgb_envelope(),
                 fixed_rate: true,
             }),
             VoiceEntry::ProgrammableWave(ProgrammableWaveVoice {
                 base_key: 60,
                 length: 0,
                 wave: SampleId(wave_id.to_owned()),
-                envelope: flat_envelope(),
+                envelope: flat_cgb_envelope(),
                 fixed_rate: true,
             }),
             VoiceEntry::Square1(Square1Voice {
@@ -510,7 +521,7 @@ mod synthetic_pack {
                 length: 0,
                 sweep: 0,
                 duty: 2,
-                envelope: flat_envelope(),
+                envelope: flat_cgb_envelope(),
                 fixed_rate: false,
             }),
         ])
