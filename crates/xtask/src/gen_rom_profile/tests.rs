@@ -821,6 +821,25 @@ fn no_song_at_all_is_refused_by_the_same_singleton_check() {
 }
 
 #[test]
+fn a_lone_unsupported_song_is_refused_by_the_singleton_check() {
+    // Pins the id half of the singleton check: one entry, but not mus_title.
+    with_audio_context("audio-lone-other", &["audio/song/mus_other"], |ctx| {
+        let mut report = Vec::new();
+        let err = audio::locate(ctx, &mut report)
+            .expect_err("a pack holding only an unsupported song must be refused");
+        let GenRomProfileError::StructMismatch { id, reason } = &err else {
+            panic!("{err:?}");
+        };
+        assert_eq!(id, "audio/song/*");
+        assert!(reason.contains("audio/song/mus_other"), "{reason}");
+        assert!(
+            report.is_empty(),
+            "refused before locating anything: {report:?}"
+        );
+    });
+}
+
+#[test]
 fn an_eight_bit_sheet_with_indices_above_fifteen_is_still_located() {
     // `title/image/pokemon_logo` is an 8-bit-indexed PNG using indices up
     // to 223. `rom_depths(8)` speculatively probes 4bpp as well, so the
