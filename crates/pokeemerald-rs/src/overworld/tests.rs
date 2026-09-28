@@ -771,9 +771,6 @@ fn synthetic_scene_result_with_connections_and_events(
 #[test]
 fn from_pack_rejects_an_anim_frame_of_the_wrong_size() {
     let mut entries = synthetic_overworld_pack_entries_for("general", 4, 4);
-    // Swap flower/0 (upstream copies exactly 4 tiles) for a 6-tile 8x48
-    // column -- tile-aligned, dimensions and payload in agreement, so only
-    // the new exact-size gate can catch it.
     let frame = entries
         .iter_mut()
         .find(|e| e.id == "tileset/general/anim/flower/0")
@@ -798,12 +795,9 @@ fn from_pack_rejects_an_anim_frame_of_the_wrong_size() {
     );
 }
 
-/// Review regression (#192): a primary tileset [`super::tileset_anims`]
-/// declares no regions for takes `from_pack`'s cached-decode branch, whose
-/// observable contract is tick-invariance -- the same scene composes
-/// pixel-identical frames at any two ticks. Before this test, that branch
-/// was exercised by nothing (`petalburg` is only ever a *secondary*
-/// tileset on bundled maps).
+/// `petalburg` is bundled only as a *secondary* tileset elsewhere, so this
+/// synthetic primary-tileset use is what exercises `from_pack`'s
+/// cached-decode branch.
 #[test]
 fn an_unanimated_primary_tileset_composes_tick_invariant_frames() {
     let scene = synthetic_scene_result(
@@ -853,16 +847,11 @@ fn overworld_scene_from_pack_composes_a_non_blank_deterministic_frame() {
         "the composed viewport must be non-blank"
     );
 
-    // The world's single opaque metatile (red, palette index 5) covers the
-    // whole visible screen -- both the grid interior and the border
-    // fallback resolve to it in this fixture.
     assert_eq!(
         first.pixel(0, 0),
         Some(rendering::Bgr555::from_raw(0x001F).to_rgb888())
     );
 
-    // The player OBJ (blue, palette index 9) must be visible at its fixed
-    // screen position, drawn over the world BG layers.
     assert_eq!(
         first.pixel(
             usize::from(super::avatar::PLAYER_OBJ_X),
@@ -874,17 +863,11 @@ fn overworld_scene_from_pack_composes_a_non_blank_deterministic_frame() {
 
 /// The combined world palette's global color 0 is always `RGB_BLACK`
 /// (`LoadTilesetPalette`, `pokeemerald/src/fieldmap.c:839-841`), whatever
-/// the primary tileset's own source color 0 holds. This fixture gives that
-/// source color a distinct nonblack value, and points the border at a
-/// metatile id no attribute entry covers so that screen position composes
-/// the backdrop rather than an opaque tile.
+/// the primary tileset's own source color 0 holds.
 #[test]
 fn a_nonblack_primary_source_color_zero_still_composes_a_black_backdrop() {
     let mut entries = synthetic_overworld_pack_entries_for("general", 4, 4);
 
-    // Bank 0, color 0: a distinct nonblack blue that would leak into the
-    // backdrop pre-fix. Color 1: a distinct nonblack green, proving colors
-    // past index 0 stay untouched rather than shifting down to fill it.
     let bank0 = entries
         .iter_mut()
         .find(|e| e.id == "tileset/general/palette/00")
@@ -892,9 +875,8 @@ fn a_nonblack_primary_source_color_zero_still_composes_a_black_backdrop() {
     bank0.payload[0..2].copy_from_slice(&0x001Fu16.to_le_bytes());
     bank0.payload[2..4].copy_from_slice(&0x03E0u16.to_le_bytes());
 
-    // Border: every cell now names a metatile id past the fixture's own
-    // one-entry attribute table, so `metatile_layers` resolves to `None`
-    // there instead of the fixture's normal opaque metatile.
+    // Metatile id 99 is outside the fixture's one-entry attribute table, so
+    // `metatile_layers` resolves `None` for every border cell.
     let uncovered_cell = assets::MetatileCell {
         metatile_id: 99,
         collision: 0,
@@ -925,12 +907,8 @@ fn a_nonblack_primary_source_color_zero_still_composes_a_black_backdrop() {
     );
 }
 
-/// Builds [`compose_applies_the_reduced_954_cycle_hblank_free_oam_budget`]'s
-/// own fixture: a synthetic room with `FILLER_COUNT` transparent
-/// `OBJ_EVENT_GFX_MOM` NPCs followed by one opaque `OBJ_EVENT_GFX_TWIN`
-/// target, all stacked one metatile right of the player -- split out purely
-/// to keep that test's own body under `clippy::too_many_lines`, not because
-/// anything else reuses it.
+/// [`compose_applies_the_reduced_954_cycle_hblank_free_oam_budget`]'s own
+/// fixture.
 fn hblank_budget_regression_fixture() -> (
     super::OverworldScene,
     PlayerState,
@@ -939,18 +917,16 @@ fn hblank_budget_regression_fixture() -> (
     const FILLER_COUNT: usize = 64;
 
     let mut pack_entries = synthetic_overworld_pack_entries_for("general", 4, 4);
-    // The filler NPCs' entire sheet is palette index 0 -- transparent on
-    // real hardware regardless of which bank it draws from -- so every
-    // filler spends OAM admission budget without ever painting a pixel.
+    // Filler sheets are palette index 0 (transparent on real hardware) so
+    // each filler spends OAM admission budget without painting a pixel; the
+    // target sheet is opaque (index 3) so its admission is the only thing
+    // that can color its screen position.
     pack_entries.push(Entry {
         id: "sprite/mom",
         kind_tag: 0,
         meta: image_meta(144, 32, 8),
         payload: vec![0u8; 144 * 32],
     });
-    // The target NPC's sheet is opaque (index 3) everywhere, so its
-    // admission is the only thing that can put color at its screen
-    // position.
     pack_entries.push(Entry {
         id: "sprite/twin",
         kind_tag: 0,
@@ -959,8 +935,7 @@ fn hblank_budget_regression_fixture() -> (
     });
 
     let player_tile = (5_i16, 5_i16);
-    // One metatile right of the player -- its own, non-overlapping 16px
-    // OAM column, never the player's own index-0 entry's.
+    // One metatile right of the player: its own, non-overlapping OAM column.
     let npc_tile = (player_tile.0 + 1, player_tile.1);
 
     let mut object_events = Vec::with_capacity(FILLER_COUNT + 1);
@@ -1023,31 +998,8 @@ fn hblank_budget_regression_fixture() -> (
     (scene, player, event_data)
 }
 
-/// S-2/#334 regression: `OverworldScene::compose` must run its `SpriteLayer`
-/// under the reduced 954-cycle HBlank-interval-free OAM budget, not the
-/// normal 1210-cycle one -- see `super::OverworldScene::compose`'s own doc
-/// comment for the `overworld.c:2122-2123` `SetGpuReg(REG_OFFSET_DISPCNT,
-/// ...)` citation this wires up.
-///
-/// Mirrors `crates/rendering/src/sprite.rs`'s own
-/// `with_hblank_free_interval_applies_the_reduced_954_cycle_budget` test's
-/// transparent-filler/opaque-target arrangement (module docs there), but
-/// through the real `from_pack` -> `compose` pipeline instead of a bare
-/// `SpriteLayer`, so a regression in *wiring* the flag through -- not just
-/// in the budget math itself, which `rendering` already covers -- fails
-/// this test too.
-///
-/// `FILLER_COUNT` (64) transparent `OBJ_EVENT_GFX_MOM` NPCs stack on one
-/// screen position ahead of one opaque `OBJ_EVENT_GFX_TWIN` target, each
-/// in its own on-screen (`x >= 0`) 16px-wide OAM column one metatile off
-/// the player's index-0 entry (the fixture comment above), never
-/// overlapping it: each entry costs `TRAVERSAL_COST (2) + (width - 2) == 16`
-/// cycles once admitted (`oam_budget.rs`'s own cost model), so the target
-/// -- OAM index `FILLER_COUNT + 1` once the player's own index-0 entry is
-/// counted -- lands past the reduced budget's ~59-entry cutoff but well
-/// inside the normal budget's ~75-entry one. The two control assertions
-/// below pin those exact cutoffs against this arrangement before the real
-/// regression check relies on them.
+/// The wiring of the reduced 954-cycle budget (`overworld.c:2122-2123`, cited
+/// on `OverworldScene::compose`); the budget math is pinned in `rendering`.
 #[test]
 fn compose_applies_the_reduced_954_cycle_hblank_free_oam_budget() {
     let (scene, player, event_data) = hblank_budget_regression_fixture();
@@ -1056,10 +1008,8 @@ fn compose_applies_the_reduced_954_cycle_hblank_free_oam_budget() {
         usize::from(super::avatar::PLAYER_OBJ_X) + usize::try_from(super::METATILE_PX).unwrap();
     let target_y = usize::from(super::avatar::PLAYER_OBJ_Y);
 
-    // Control: built independently over the exact same entries/tiles/palette
-    // `compose` draws from, the normal 1210-cycle budget still admits the
-    // target NPC, and the reduced 954-cycle one drops it -- pinning that
-    // this arrangement actually straddles the two budgets' cutoffs.
+    // Controls, built independently over the same entries `compose` draws
+    // from: confirm this arrangement straddles both budgets' cutoffs.
     let sprite_entries = scene.sprites.entries(&player, &event_data);
     let normal_budget = rendering::SpriteLayer::new(
         &sprite_entries,
@@ -1083,11 +1033,6 @@ fn compose_applies_the_reduced_954_cycle_hblank_free_oam_budget() {
         "control: the reduced 954-cycle budget must drop the target NPC"
     );
 
-    // The regression: `OverworldScene::compose`'s own composed frame must
-    // match the reduced-budget control above, not the normal one -- the
-    // world's uniform red metatile (module docs on the sibling test above)
-    // fills back in once the target NPC is gone, since every filler NPC
-    // ahead of it is transparent.
     let frame = scene.compose(&player, &event_data, 0);
     assert_eq!(
         frame.pixel(target_x, target_y),
@@ -1097,9 +1042,9 @@ fn compose_applies_the_reduced_954_cycle_hblank_free_oam_budget() {
     );
 }
 
-/// The combined-tileset slot and palette-bank colour behind
-/// `DrawMetatile`'s fixed BG3 screen entry `0x3014`, as the fixture below
-/// fabricates them: tile `0x14`, opaque on palette bank 3's index 1.
+/// `DrawMetatile`'s fixed BG3 screen entry `0x3014`
+/// (`pokeemerald/src/field_camera.c:287-292`): this fixture's tile index
+/// and palette bank 3 colour for it.
 const NORMAL_BG3_TILE_INDEX: usize = 0x14;
 const NORMAL_BG3_COLOR: u16 = 0x03FF;
 
@@ -1116,9 +1061,6 @@ fn transparent_metatile_pack_entries(
 ) -> Vec<Entry> {
     let mut entries = synthetic_overworld_pack_entries_for("general", width, height);
 
-    // `tileset/general/tiles` grows from one 8x8 tile to `0x15` stacked
-    // vertically: tiles `1..0x14` all palette index 0 (transparent), tile
-    // `0x14` all palette index 1.
     let tiles = entries
         .iter_mut()
         .find(|e| e.id == "tileset/general/tiles")
@@ -1134,8 +1076,7 @@ fn transparent_metatile_pack_entries(
     ));
     tiles.payload.extend(std::iter::repeat_n(1u8, 8 * 8));
 
-    // Metatile 1: every raw entry points at transparent tile index 1,
-    // palette bank 0, no flip.
+    // Raw entry `1`: tile index 1, bank 0, no flip (`ScreenEntry` encoding).
     let metatile: Vec<u8> = std::iter::repeat_n(1u16.to_le_bytes(), 8)
         .flatten()
         .collect();
@@ -1153,7 +1094,6 @@ fn transparent_metatile_pack_entries(
         .payload
         .extend_from_slice(&attr.to_le_bytes());
 
-    // Palette bank 3, index 1: distinct from bank 0's red and the backdrop.
     let bank3 = entries
         .iter_mut()
         .find(|e| e.id == "tileset/general/palette/03")
@@ -1200,12 +1140,10 @@ fn transparent_metatile_composed_pixel(layer_type: assets::MetatileLayerType) ->
         .expect("(148, 108) is inside the native framebuffer")
 }
 
-/// Issue #1214: where a `Normal` metatile is transparent on both drawn
-/// layers, `DrawMetatile`'s fixed `0x3014` BG3 write reaches the screen, so
-/// the composed pixel is tile `0x14`'s palette-bank-3 colour. The `Covered`
-/// control -- same tiles, same cell, BG3 carrying the metatile's own
-/// transparent half instead -- pins that this pixel is otherwise the bare
-/// backdrop.
+/// A `Normal` metatile transparent on both drawn layers still shows
+/// `DrawMetatile`'s fixed `0x3014` BG3 write. The `Covered` control (same
+/// tiles and cell, BG3 carrying the metatile's own transparent half
+/// instead) pins that the pixel is otherwise the bare backdrop.
 #[test]
 fn compose_shows_draw_metatiles_fixed_bg3_entry_through_a_transparent_normal_metatile() {
     assert_eq!(
@@ -1222,40 +1160,24 @@ fn compose_shows_draw_metatiles_fixed_bg3_entry_through_a_transparent_normal_met
     );
 }
 
-/// A real, registered `MapId`/`LayoutId` (issue #253's own connection-test
-/// target) with no bearing on this fixture beyond its identity and real
-/// dimensions (11x9, `LAYOUT_LITTLEROOT_TOWN_MAYS_HOUSE_1F`,
-/// `crates/assets/src/map_layouts.rs`): `OverworldScene::from_pack`'s
-/// `resolve_connections` walks the *real* generated `MapHeaderTable`/
-/// `LayoutTable` to resolve a connection's target (mirroring
-/// `crate::flow::overworld_phase::connections::MapConnections`'s identical
-/// choice), so a synthetic connection test needs a real map id to point at
-/// -- there is no synthetic map-table stand-in. Its own real house-interior
-/// content is irrelevant here; only its declared width/height matter, and
-/// this fixture supplies its own hand-built `map.bin` bytes for it below
-/// rather than reading the real pack.
+/// A real, registered `MapId`/`LayoutId`
+/// (`LAYOUT_LITTLEROOT_TOWN_MAYS_HOUSE_1F`, 11x9,
+/// `crates/assets/src/map_layouts.rs`): `resolve_connections` walks the
+/// real generated `MapHeaderTable`/`LayoutTable`, so a synthetic connection
+/// test needs a real map id -- there is no synthetic table stand-in.
 const CONNECTION_TARGET: assets::MapId = assets::MapId("MAP_LITTLEROOT_TOWN_MAYS_HOUSE_1F");
 const CONNECTION_TARGET_WIDTH: u16 = 11;
 const CONNECTION_TARGET_HEIGHT: u16 = 9;
 
 /// [`overworld_scene_from_pack_composes_a_non_blank_deterministic_frame`]'s
-/// own synthetic fixture, extended with one declared South connection
-/// (issue #253) whose target is [`CONNECTION_TARGET`]: a second physical
-/// tile (index 1, palette index 6 -- distinct from the base fixture's index
-/// 5) and a second metatile (id 1, `Covered`, same shape as the base
-/// fixture's own metatile 0) referencing it, plus a
-/// [`CONNECTION_TARGET_WIDTH`]x[`CONNECTION_TARGET_HEIGHT`]
-/// `layout/littleroot_town_mays_house_1f/map` entry whose every cell is
-/// that new metatile -- so a composed pixel sampling the connected map's
-/// content is visibly distinct (color) from one sampling the active grid or
-/// the border block (both still metatile 0, per the base fixture's own
-/// docs).
+/// own synthetic fixture, extended with one declared South connection whose
+/// target is [`CONNECTION_TARGET`]: a second tile and metatile (green,
+/// palette index 6) so a pixel sampling the connected map is visibly
+/// distinct from one sampling the active grid or border block (both still
+/// the base fixture's red metatile 0).
 fn connected_overworld_pack_entries(width: u16, height: u16) -> Vec<Entry> {
     let mut entries = synthetic_overworld_pack_entries_for("general", width, height);
 
-    // Extend `tileset/general/tiles` from one 8x8 tile (index 0, palette
-    // index 5) to two, stacked vertically (8x16): a new opaque tile, index
-    // 1, every pixel palette index 6.
     let tiles = entries
         .iter_mut()
         .find(|e| e.id == "tileset/general/tiles")
@@ -1263,9 +1185,8 @@ fn connected_overworld_pack_entries(width: u16, height: u16) -> Vec<Entry> {
     tiles.meta = image_meta(8, 16, 4);
     tiles.payload.extend(std::iter::repeat_n(6u8, 8 * 8));
 
-    // A second metatile (id 1), `Covered` like metatile 0 (module docs on
-    // why -- the player OBJ must never be hidden by it), every raw entry
-    // pointing at the new tile index 1.
+    // Metatile 1 is `Covered`, like metatile 0, so the player OBJ is never
+    // hidden behind it.
     let metatile: Vec<u8> = std::iter::repeat_n(1u16.to_le_bytes(), 8)
         .flatten()
         .collect();
@@ -1283,8 +1204,6 @@ fn connected_overworld_pack_entries(width: u16, height: u16) -> Vec<Entry> {
         .payload
         .extend_from_slice(&attr.to_le_bytes());
 
-    // Palette bank 0, index 6: distinct from index 5's red (green, raw
-    // BGR555 `0x03E0`).
     let bank0 = entries
         .iter_mut()
         .find(|e| e.id == "tileset/general/palette/00")
@@ -1292,10 +1211,8 @@ fn connected_overworld_pack_entries(width: u16, height: u16) -> Vec<Entry> {
     bank0.meta = 7u16.to_le_bytes().to_vec();
     bank0.payload.extend_from_slice(&0x03E0u16.to_le_bytes());
 
-    // The connected map's own `map.bin`: every cell metatile 1 (the new
-    // marker tile), walkable, elevation 3 -- collision/elevation are
-    // irrelevant here (rendering only), matching the base fixture's own
-    // convention.
+    // Every cell is metatile 1 (marker); collision/elevation are irrelevant
+    // here (rendering only).
     let target_cell = assets::MetatileCell {
         metatile_id: 1,
         collision: 0,
@@ -1316,11 +1233,10 @@ fn connected_overworld_pack_entries(width: u16, height: u16) -> Vec<Entry> {
     entries
 }
 
-/// Issue #253's own wiring test: a declared South connection actually
-/// reaches composed pixels, and a position past a *different*, undeclared
-/// edge still falls back to the border block -- the two acceptance-test
-/// halves (I-4, V-4) at the synthetic-fixture level, ahead of the real-pack
-/// Littleroot/Route 101 test below.
+/// A declared South connection reaches composed pixels, and a position
+/// past a different, undeclared edge still falls back to the border block
+/// -- the two acceptance-test halves (I-4, V-4) at the synthetic-fixture
+/// level, ahead of the real-pack test below.
 #[test]
 fn compose_renders_a_declared_connections_tiles_past_the_active_grids_own_edge() {
     let connections: &'static [assets::MapConnection] = &[assets::MapConnection {
@@ -1337,20 +1253,15 @@ fn compose_renders_a_declared_connections_tiles_past_the_active_grids_own_edge()
     )
     .expect("the connection fixture should decode cleanly");
 
-    // At rest, standing at the active grid's own origin: screen row 144
-    // samples world y == 4 -- one row south of the 4x4 grid's own last row
-    // (module docs' anchor math: `anchor_y == -5`, so metatile row 9 of the
-    // viewport is world row `-5 + 9 == 4`). Row 9 still lands at screen row
-    // 144 because the resting `RESTING_SCROLL_Y == 8` baseline only eats
-    // into the rows immediately above and below it: `(144 + 8) / 16 == 9`
-    // exactly.
+    // Screen row 144 samples world y == 4 (module docs' anchor math:
+    // `anchor_y == -5`, viewport row 9): the resting `RESTING_SCROLL_Y == 8`
+    // baseline keeps row 9 at screen row 144, `(144 + 8) / 16 == 9`.
     let player = PlayerState::new((0, 0), 3, Direction::South);
     let event_data = engine::event_data::EventData::new();
     let frame = scene.compose(&player, &event_data, 0);
 
-    // Screen (112, 144): world (0, 4) -- south of the grid, within the
-    // connected map's own width (target x == 0) -- must show the connected
-    // map's own marker tile (green, palette index 6), not the border block.
+    // Screen (112, 144) is world (0, 4): south of the grid, within the
+    // connected map's width.
     assert_eq!(
         frame.pixel(112, 144),
         Some(rendering::Bgr555::from_raw(0x03E0).to_rgb888()),
@@ -1358,12 +1269,10 @@ fn compose_renders_a_declared_connections_tiles_past_the_active_grids_own_edge()
          connected map's own tile"
     );
 
-    // Screen (96, 144): world (-1, 4) -- simultaneously south of the grid
-    // *and* west of it (x < 0), but this fixture declares no West
-    // connection. The South connection's own bounds check
-    // (`connected_cell_at`) does not cover negative x, so this must still
-    // fall all the way back to the border block (red, palette index 5,
-    // this fixture's border/grid color -- module docs on the base fixture).
+    // Screen (96, 144) is world (-1, 4): south of the grid and west of it
+    // (x < 0), but no West connection is declared, and the South
+    // connection's own bounds check (`connected_cell_at`) does not cover
+    // negative x.
     assert_eq!(
         frame.pixel(96, 144),
         Some(rendering::Bgr555::from_raw(0x001F).to_rgb888()),
@@ -1372,15 +1281,11 @@ fn compose_renders_a_declared_connections_tiles_past_the_active_grids_own_edge()
     );
 }
 
-/// A connection declared in the header but whose target map/layout/grid
-/// can't be resolved against the pack (here: no real generated `MapId`
-/// matches) must not be surfaced as an error, and must render exactly as
-/// if it were not declared at all -- [`super::ConnectedLayout`]'s own doc comment
-/// on why an unresolvable connection is simply omitted. This is also the
-/// state of every bundled interior room and of any bundled outdoor map's
-/// declared connection into a not-yet-extracted neighbour (e.g. Route
-/// 101's own connection into Oldale Town -- [`super::viewport::build_tilemaps`]'s
-/// docs).
+/// A connection whose target can't be resolved against the pack (no real
+/// generated `MapId` matches) must not surface as an error, and must
+/// render exactly as if it were not declared at all --
+/// [`super::ConnectedLayout`]'s own doc comment on why an unresolvable
+/// connection is simply omitted.
 #[test]
 fn an_unresolvable_connection_falls_back_to_the_border_exactly_like_no_connection() {
     let unresolvable: &'static [assets::MapConnection] = &[assets::MapConnection {
@@ -1408,13 +1313,11 @@ fn an_unresolvable_connection_falls_back_to_the_border_exactly_like_no_connectio
     );
 }
 
-/// Review regression (#253), the *other* silent-omission path: the target
-/// map and its layout both resolve against the real generated tables (it's
-/// [`CONNECTION_TARGET`], a real bundled `MapId`), but the pack carries no
-/// `layout/<name>/map` entry for it at all. Still not an error -- that's
-/// exactly a not-yet-extracted neighbour -- and still observably identical
-/// to no connection, the same as the unknown-`MapId` case above
-/// ([`super::ConnectedLayout`]'s docs on the two omission modes).
+/// The *other* silent-omission path: [`CONNECTION_TARGET`] resolves
+/// against the real generated tables, but the pack carries no
+/// `layout/<name>/map` entry for it. Still not an error, and still
+/// observably identical to no connection, like the unknown-`MapId` case
+/// above ([`super::ConnectedLayout`]'s docs on the two omission modes).
 #[test]
 fn a_connection_whose_target_has_no_pack_entry_is_omitted_not_an_error() {
     let connections: &'static [assets::MapConnection] = &[assets::MapConnection {
@@ -1422,10 +1325,9 @@ fn a_connection_whose_target_has_no_pack_entry_is_omitted_not_an_error() {
         offset: 0,
         target: CONNECTION_TARGET,
     }];
-    // The *base* fixture, deliberately not `connected_overworld_pack_entries`:
-    // it fabricates no `layout/littleroot_town_mays_house_1f/map` entry, so
-    // `resolve_connections` clears the header/layout table lookups and then
-    // fails at the pack lookup itself.
+    // Deliberately the base fixture, not `connected_overworld_pack_entries`:
+    // it fabricates no target map entry, so the pack lookup itself is what
+    // fails.
     let with_connection = synthetic_scene_result_with_connections(
         write_synthetic_pack(synthetic_overworld_pack_entries_for("general", 4, 4)),
         "gTileset_General",
@@ -1450,10 +1352,10 @@ fn a_connection_whose_target_has_no_pack_entry_is_omitted_not_an_error() {
     );
 }
 
-/// Review regression (#253): a connected target's map entry is optional
-/// only when it is absent. A present entry of another pack kind is corrupt
-/// and must retain the exact pack lookup error rather than disappearing as
-/// though the neighbour had not been bundled.
+/// A connected target's map entry is optional only when it is absent. A
+/// present entry of another pack kind is corrupt and must retain the exact
+/// pack lookup error rather than disappearing as though the neighbour had
+/// not been bundled.
 #[test]
 fn a_connection_target_with_the_wrong_pack_entry_kind_is_an_error_not_a_silent_omission() {
     let connections: &'static [assets::MapConnection] = &[assets::MapConnection {
@@ -1467,10 +1369,10 @@ fn a_connection_target_with_the_wrong_pack_entry_kind_is_an_error_not_a_silent_o
         .find(|e| e.id == "layout/littleroot_town_mays_house_1f/map")
         .expect("the connection fixture always fabricates the target's map entry");
     target_grid.kind_tag = 1;
-    // A well-formed palette of the wrong kind: the format rejects a palette
-    // whose `color_count` does not address its payload
-    // (`pack_format::parse_directory`), and this fixture is about the *kind*
-    // reaching the caller, not about a corrupt pack failing to load.
+    // A well-formed palette of the wrong kind: `pack_format::parse_directory`
+    // rejects a `color_count` that doesn't address its payload, and this
+    // fixture is about the *kind* reaching the caller, not a corrupt pack
+    // failing to load.
     let colors = u16::try_from(target_grid.payload.len() / 2).expect("a u16 grid of colours");
     target_grid.meta = colors.to_le_bytes().to_vec();
 
@@ -1493,14 +1395,11 @@ fn a_connection_target_with_the_wrong_pack_entry_kind_is_an_error_not_a_silent_o
     );
 }
 
-/// Review regression (#253): a connection target that *is* in the pack but
-/// whose `map.bin` bytes are too short for its own declared dimensions is a
-/// corrupt pack, not a missing neighbour -- it must surface as an
-/// `OverworldSceneError` out of `from_pack` rather than being swallowed
-/// into a silent border fallback. Mirrors the *active* map's own
-/// `grid_bytes` validation, which has always propagated the identical
-/// `AssetError` ([`super::ConnectedLayout`]'s docs on the asymmetry this
-/// closes).
+/// A connection target that *is* in the pack but whose `map.bin` bytes are
+/// too short for its declared dimensions is a corrupt pack, not a missing
+/// neighbour -- it must surface as an `OverworldSceneError`, not a silent
+/// border fallback. Mirrors the *active* map's own `grid_bytes` validation
+/// ([`super::ConnectedLayout`]'s docs on the asymmetry this closes).
 #[test]
 fn a_connection_target_with_a_truncated_grid_is_an_error_not_a_silent_omission() {
     let connections: &'static [assets::MapConnection] = &[assets::MapConnection {
