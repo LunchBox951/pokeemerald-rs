@@ -22,12 +22,9 @@ use platform::{ButtonState, Buttons, Frame};
 /// [`drive_through_fade_wait`] loudly instead of hanging the test.
 const MAX_FADE_WAIT_FRAMES: usize = 40;
 
-/// Drives `advance_scene` with no input until `scene` -- which must already
-/// be one of the I-3 (issue #1329) front-end fade-wait states -- leaves it,
-/// returning the destination scene, every outgoing frame observed while
-/// still waiting, and the destination's own first frame -- so a caller can
-/// assert both that the fade actually progressed and that the destination
-/// only appears once, on the frame it becomes current.
+/// Drives a fade-wait `scene` with no input until it leaves, returning the
+/// destination, the frames presented while waiting, and the destination's
+/// first frame.
 ///
 /// # Panics
 ///
