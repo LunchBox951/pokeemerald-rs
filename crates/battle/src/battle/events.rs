@@ -381,8 +381,7 @@ pub enum BattleEvent {
     },
     /// The player sent out the first non-fainted reserve after an active
     /// faint, under the headless party-order policy (no player choice, no
-    /// party-screen UI). This crate models it only for a wild battle: a
-    /// trainer battle sends no player reserves.
+    /// party-screen UI). Reported for a wild or trainer battle alike.
     PlayerSentOut {
         /// The replacement's species.
         species: SpeciesId,
