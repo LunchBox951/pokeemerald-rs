@@ -9,7 +9,7 @@ use assets::{
     BorderGrid, Direction as ConnectionDirection, ImageRef, LayoutGrid, MetatileAttributeTable,
     MetatileCell, MetatileLayerType, PaletteRef,
 };
-use engine::overworld::{Direction, PlayerState, NUM_METATILES_IN_PRIMARY, WALK_FRAMES_PER_TILE};
+use engine::overworld::{Direction, PlayerState, NUM_METATILES_IN_PRIMARY};
 use rendering::{Bgr555, BitDepth, Palette, ScreenEntry, Tilemap};
 
 use super::{
@@ -283,7 +283,7 @@ pub(super) fn camera_lag_px(player: &PlayerState) -> (i32, i32) {
         return (0, 0);
     };
     let (dx, dy) = direction.delta();
-    let lag = i32::from(WALK_FRAMES_PER_TILE) - i32::from(player.step_progress());
+    let lag = i32::from(player.transit_duration()) - i32::from(player.step_progress());
     (dx * lag, dy * lag)
 }
 
@@ -409,7 +409,7 @@ mod tests {
         RegionMapSectionId, Weather,
     };
     use engine::event_data::EventData;
-    use engine::overworld::Direction as EngineDirection;
+    use engine::overworld::{Direction as EngineDirection, WALK_FRAMES_PER_TILE};
     use rendering::Tileset;
 
     const NO_FLAGS: EventData = EventData::new();
@@ -563,6 +563,122 @@ mod tests {
             player.tick();
         }
         player
+    }
+
+    /// A player who entered an `MB_SLIDE_EAST` tile ordinarily, then had
+    /// `elapsed` frames of the tile's own eight-frame forced dispatch
+    /// drained -- proves [`camera_lag_px`] reads the active crossing's own
+    /// duration rather than assuming [`WALK_FRAMES_PER_TILE`].
+    fn player_mid_dispatched_slide(elapsed: u8) -> PlayerState {
+        const MAP_SIZE: u16 = 10;
+        const SLIDE_TILE: (u16, u16) = (5, 5);
+        const SLIDE_METATILE_ID: u16 = 1;
+
+        let mut grid_bytes = uniform_grid_bytes(MAP_SIZE, MAP_SIZE, INTERIOR_METATILE_ID);
+        let slide_offset =
+            (usize::from(SLIDE_TILE.1) * usize::from(MAP_SIZE) + usize::from(SLIDE_TILE.0)) * 2;
+        let slide_cell_bytes = cell(SLIDE_METATILE_ID, 0, WALKABLE_ELEVATION).to_le_bytes();
+        grid_bytes[slide_offset..slide_offset + 2].copy_from_slice(&slide_cell_bytes);
+
+        let layout = test_layout(MAP_SIZE, MAP_SIZE);
+        let grid = layout.grid(&grid_bytes).unwrap();
+        let header = MapHeader {
+            id: MapId("MAP_TEST"),
+            group: 0,
+            num: 0,
+            name: "MapTest",
+            layout: assets::LayoutId("MAP_TEST"),
+            music: assets::MusicId(0),
+            region_map_section: RegionMapSectionId("MAPSEC_NONE"),
+            requires_flash: false,
+            weather: Weather::None,
+            map_type: MapType::Route,
+            allow_bike: true,
+            allow_escape: true,
+            allow_run: true,
+            show_name: false,
+            battle_scene: BattleScene::Normal,
+            connections: &[] as &'static [MapConnection],
+        };
+        let events = MapEvents {
+            id: MapId("MAP_TEST"),
+            shared_events_map: None,
+            object_events: &[],
+            warp_events: &[],
+            coord_events: &[],
+            bg_events: &[],
+        };
+        let attrs = [
+            u16::from(engine::overworld::metatile_behavior::MB_NORMAL).to_le_bytes(),
+            u16::from(engine::overworld::metatile_behavior::MB_SLIDE_EAST).to_le_bytes(),
+        ]
+        .concat();
+        let runtime = engine::overworld::MapRuntime::new(
+            MapId("MAP_TEST"),
+            &header,
+            &events,
+            grid,
+            MetatileAttributeTable::new(&attrs),
+            MetatileAttributeTable::new(&[]),
+        );
+        let no_connections = |_: MapId| -> Option<(u16, u16)> { None };
+
+        let entry = (i32::from(SLIDE_TILE.0) - 1, i32::from(SLIDE_TILE.1));
+        let mut player = PlayerState::new(entry, WALKABLE_ELEVATION, EngineDirection::East);
+        assert!(
+            matches!(
+                player.step(
+                    Some(EngineDirection::East),
+                    &runtime,
+                    &no_connections,
+                    &NO_FLAGS
+                ),
+                engine::overworld::StepOutcome::Advanced { .. }
+            ),
+            "fixture precondition: the slide tile is entered like ordinary ground"
+        );
+        for _ in 0..WALK_FRAMES_PER_TILE {
+            player.tick();
+        }
+        assert!(
+            matches!(
+                player.step(None, &runtime, &no_connections, &NO_FLAGS),
+                engine::overworld::StepOutcome::Advanced { .. }
+            ),
+            "fixture precondition: the no-input poll dispatches the slide \
+             tile's own crossing"
+        );
+        for _ in 0..elapsed {
+            player.tick();
+        }
+        player
+    }
+
+    #[test]
+    fn camera_lag_px_matches_the_slide_familys_eight_frame_cadence() {
+        use engine::overworld::SLIDE_FRAMES_PER_TILE;
+
+        const ELAPSED: u8 = 3;
+        let mid = player_mid_dispatched_slide(ELAPSED);
+        assert!(mid.in_transit(), "fixture precondition: still mid-crossing");
+        assert_eq!(mid.step_progress(), ELAPSED);
+        assert_eq!(
+            camera_lag_px(&mid),
+            (i32::from(SLIDE_FRAMES_PER_TILE - ELAPSED), 0),
+            "a dispatched slide crossing must owe lag against its own \
+             eight-frame duration, not the sixteen-frame walk assumption"
+        );
+
+        let last = player_mid_dispatched_slide(SLIDE_FRAMES_PER_TILE - 1);
+        assert!(last.in_transit());
+        assert_eq!(camera_lag_px(&last), (1, 0));
+
+        let settled = player_mid_dispatched_slide(SLIDE_FRAMES_PER_TILE);
+        assert!(
+            !settled.in_transit(),
+            "an eight-frame slide crossing must drain in exactly eight frames"
+        );
+        assert_eq!(camera_lag_px(&settled), (0, 0));
     }
 
     #[test]

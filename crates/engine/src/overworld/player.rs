@@ -218,6 +218,17 @@ impl PlayerState {
         }
     }
 
+    /// Returns the active tile crossing's total frame count --
+    /// [`WALK_FRAMES_PER_TILE`] for an ordinary step or a dispatched walk
+    /// tile, [`SLIDE_FRAMES_PER_TILE`] for a dispatched slide tile. Only
+    /// meaningful alongside [`step_progress`](Self::step_progress) while
+    /// [`step_direction`](Self::step_direction) is `Some`; stale (the
+    /// last crossing's duration) at rest.
+    #[must_use]
+    pub const fn transit_duration(&self) -> u8 {
+        self.transit_duration
+    }
+
     /// Returns whether a tile crossing is still in progress.
     #[must_use]
     pub const fn in_transit(&self) -> bool {
