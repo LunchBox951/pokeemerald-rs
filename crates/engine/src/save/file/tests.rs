@@ -676,17 +676,22 @@ const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
 fn compress_into_a_non_symlink_reparse_point(path: &Path) {
     use std::os::windows::fs::MetadataExt as _;
 
-    let status = std::process::Command::new("compact")
-        .args(["/c", "/exe:xpress8k"])
+    let before = std::fs::symlink_metadata(path)
+        .expect("the file to compact is there")
+        .file_attributes();
+    let output = std::process::Command::new("compact")
+        .args(["/c", "/f", "/exe:xpress8k"])
         .arg(path)
-        .stdout(std::process::Stdio::null())
-        .status()
+        .output()
         .expect("compact.exe runs");
-    assert!(
-        status.success(),
-        "compact /c /exe:xpress8k {}: {status}",
-        path.display()
+    let transcript = format!(
+        "compact /c /f /exe:xpress8k {}: {}\nstdout:\n{}\nstderr:\n{}",
+        path.display(),
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
     );
+    assert!(output.status.success(), "{transcript}");
 
     let attributes = std::fs::symlink_metadata(path)
         .expect("the compacted file is still there")
@@ -694,8 +699,9 @@ fn compress_into_a_non_symlink_reparse_point(path: &Path) {
     assert!(
         attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0,
         "compact /c /exe: must turn {} into a reparse point for this test to mean anything; \
-         got attributes {attributes:#x}",
-        path.display()
+         attributes {before:#x} before, {attributes:#x} after, {} bytes on disk\n{transcript}",
+        path.display(),
+        std::fs::metadata(path).map_or(0, |m| m.len()),
     );
 }
 
