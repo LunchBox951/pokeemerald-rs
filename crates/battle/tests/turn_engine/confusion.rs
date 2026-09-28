@@ -1,16 +1,11 @@
-//! Confusion's duration-bearing volatile, driven through real turns.
-//!
-//! Unit-level decrement and expiry shapes are pinned inside
-//! `battle::volatile`'s own tests. What is pinned **here** is the wiring only
-//! a turn can show: that the decrement runs before the full-paralysis draw,
-//! that it consumes no RNG of its own, and that it applies independently to
-//! each battler's own action. No move in this crate can yet write confusion,
-//! so every fixture below sets it directly through
-//! [`battle::BattlePokemon::volatiles_mut`].
+//! Confusion's volatile driven through real turns: the ordering against
+//! the paralysis draw and PP, and the self-hit's cancel and faint, which
+//! `battle::volatile`'s unit tests cannot show. No move writes confusion
+//! yet, so fixtures set it through [`battle::BattlePokemon::volatiles_mut`].
 
 use crate::common::{max_iv_mon, SequenceRng};
 use assets::MoveId;
-use battle::{Battle, BattleEvent, BattleOutcome, Dex, PlayerAction, Status1};
+use battle::{Battle, BattleEvent, BattleOutcome, Dex, PlayerAction, StatStage, Status1};
 
 const TACKLE: MoveId = MoveId(33);
 
@@ -164,8 +159,136 @@ fn a_multi_turn_confusion_persists_without_an_expiry_event() {
     let mut player = max_iv_mon(&dex, CHARMANDER, 50, vec![TACKLE]);
     player.volatiles_mut().set_confusion(2);
     let enemy = max_iv_mon(&dex, RATTATA, 2, vec![TACKLE]);
+    let starting_pp = player.moves()[0].pp;
 
-    let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0]);
+    // battle-start turn number, the turn's own turn number, the enemy's
+    // selection, the confusion coin (residue 1 -> odd, the chosen move
+    // continues), then the player's ordinary one-shot Tackle (4 draws).
+    let mut rng = SequenceRng::new([0, 0, 0, 1, 0, 1, 0, 0]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    assert_eq!(
+        events[0],
+        BattleEvent::Confused { by_player: true },
+        "a still-active decrement announces before the coin draw: {events:?}"
+    );
+    assert!(
+        matches!(
+            events[1],
+            BattleEvent::Hit {
+                by_player: true,
+                move_id: TACKLE,
+                ..
+            }
+        ),
+        "an odd coin lets the chosen move continue: {events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, BattleEvent::SnappedOutOfConfusion { .. })),
+        "one turn of a two-turn duration must not report the terminal event: {events:?}"
+    );
+    assert_eq!(
+        battle.player().moves()[0].pp,
+        starting_pp - 1,
+        "the move-through branch spends PP exactly like an ordinary action"
+    );
+    assert_eq!(
+        rng.draws(),
+        8,
+        "one coin draw precedes the ordinary hit's own four"
+    );
+    assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerWon));
+    assert!(battle.player().volatiles().confused());
+    assert_eq!(
+        battle.player().volatiles().confusion_turns,
+        1,
+        "the counter still advances toward its own expiry"
+    );
+}
+
+#[test]
+fn an_even_coin_cancels_the_chosen_move_for_a_self_hit_that_ignores_its_own_type_immunity() {
+    let dex = Dex::new();
+    let mut player = max_iv_mon(&dex, GASTLY, 5, vec![TACKLE]);
+    player.volatiles_mut().set_confusion(2);
+    let starting_pp = player.moves()[0].pp;
+    let enemy = max_iv_mon(&dex, ZIGZAGOON, 5, vec![TACKLE]);
+
+    // battle-start turn number, the turn's own turn number, the enemy's
+    // selection, the player's confusion coin (residue 0 -> even, self-hit),
+    // the self-hit's own damage-variance draw (residue 0 -> the full 100%),
+    // then the enemy's own immune Tackle into the still-standing Ghost
+    // player (4 draws): unparalysed, GASTLY's own Speed outruns Zigzagoon,
+    // unlike the paralysed fixture in
+    // `confusion_snaps_out_ahead_of_the_same_action_s_full_paralysis_draw`.
+    let mut rng = SequenceRng::new([0, 0, 0, 0, 0, 0, 1, 0, 0]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    assert_eq!(
+        events[0],
+        BattleEvent::Confused { by_player: true },
+        "the still-active decrement announces before the coin draw: {events:?}"
+    );
+    assert_eq!(
+        events[1],
+        BattleEvent::ConfusionSelfHit {
+            by_player: true,
+            damage: 5,
+        },
+        "an even coin cancels the move for a self-hit that damages its own \
+         Ghost user despite Tackle's Normal type being an immunity: {events:?}"
+    );
+    assert_eq!(
+        events[2],
+        BattleEvent::NoEffect {
+            by_player: false,
+            move_id: TACKLE,
+        },
+        "the still-standing player still faces the enemy's own action after \
+         the self-hit: {events:?}"
+    );
+    assert!(
+        !events.iter().any(|event| matches!(
+            event,
+            BattleEvent::Hit {
+                by_player: true,
+                ..
+            }
+        )),
+        "the chosen move never executes on the self-hit branch: {events:?}"
+    );
+    assert_eq!(
+        battle.player().moves()[0].pp,
+        starting_pp,
+        "a self-hit spends no PP"
+    );
+    assert_eq!(
+        rng.draws(),
+        9,
+        "exactly one coin draw and one damage-variance draw precede the enemy's own hit"
+    );
+}
+
+#[test]
+fn a_self_hit_ignores_its_own_paralysis_and_draws_no_paralysis_bit() {
+    let dex = Dex::new();
+    let mut player = max_iv_mon(&dex, GASTLY, 5, vec![TACKLE]);
+    player.volatiles_mut().set_confusion(2);
+    player.set_status1(Status1::Paralysed);
+    let enemy = max_iv_mon(&dex, ZIGZAGOON, 5, vec![TACKLE]);
+
+    // Identical shape to the sibling self-hit fixture: the self-hit branch
+    // returns before the paralysis draw, so a simultaneously paralysed
+    // confused battler still draws only the coin and the damage roll.
+    let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0, 0, 0]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
@@ -174,13 +297,91 @@ fn a_multi_turn_confusion_persists_without_an_expiry_event() {
     assert!(
         !events
             .iter()
-            .any(|event| matches!(event, BattleEvent::SnappedOutOfConfusion { .. })),
-        "one turn of a two-turn duration must not report the terminal event: {events:?}"
+            .any(|event| matches!(event, BattleEvent::FullyParalyzed { .. })),
+        "the self-hit branch ends the action before the paralysis draw: {events:?}"
     );
-    assert!(battle.player().volatiles().confused());
+    assert!(
+        matches!(
+            events[2],
+            BattleEvent::ConfusionSelfHit {
+                by_player: true,
+                ..
+            }
+        ),
+        "the self-hit still runs despite the paralysis status: {events:?}"
+    );
     assert_eq!(
-        battle.player().volatiles().confusion_turns,
-        1,
-        "the counter still advances toward its own expiry"
+        rng.draws(),
+        9,
+        "no extra draw is spent on the paralysis check this action skips"
+    );
+}
+
+#[test]
+fn a_self_hit_can_faint_its_own_user_and_skip_the_opponent_s_queued_action() {
+    let dex = Dex::new();
+    let mut player = max_iv_mon(&dex, CHARMANDER, 50, vec![TACKLE]);
+    player.volatiles_mut().set_confusion(2);
+    player.apply_damage(player.stats().max_hp - 1);
+    let enemy = max_iv_mon(&dex, RATTATA, 2, vec![TACKLE]);
+
+    // battle-start turn number, the turn's own turn number, the enemy's
+    // selection, the player's confusion coin (residue 0 -> even, self-hit),
+    // the self-hit's own damage-variance draw. The player acts first (same
+    // Speed matchup as `a_duration_one_confusion_snaps_out_before_the_mover_s_own_hit`),
+    // faints itself, and the enemy's queued Tackle never resolves.
+    let mut rng = SequenceRng::new([0, 0, 0, 0, 0]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    assert_eq!(
+        events,
+        vec![
+            BattleEvent::Confused { by_player: true },
+            BattleEvent::ConfusionSelfHit {
+                by_player: true,
+                damage: 1,
+            },
+            BattleEvent::Fainted { by_player: true },
+            BattleEvent::Ended(BattleOutcome::PlayerLost),
+        ],
+        "the self-hit's own faint settles before the opponent ever acts, \
+         ending the battle immediately since a wild player has no reserves: {events:?}"
+    );
+    assert_eq!(
+        rng.draws(),
+        5,
+        "the opponent's queued Tackle draws nothing once the player has fainted"
+    );
+    assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerLost));
+}
+
+#[test]
+fn a_self_hit_rates_against_the_users_own_attack_and_defense_stages() {
+    let dex = Dex::new();
+    let mut player = max_iv_mon(&dex, GASTLY, 5, vec![TACKLE]);
+    player.volatiles_mut().set_confusion(2);
+    player.stages_mut().attack = StatStage::new(2).unwrap();
+    player.stages_mut().defense = StatStage::new(-2).unwrap();
+    let enemy = max_iv_mon(&dex, ZIGZAGOON, 5, vec![TACKLE]);
+
+    // The same draws as the neutral-stage self-hit above, so the only
+    // difference in the roll is the two stages.
+    let mut rng = SequenceRng::new([0, 0, 0, 0, 0, 0, 1, 0, 0]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    assert_eq!(
+        events[1],
+        BattleEvent::ConfusionSelfHit {
+            by_player: true,
+            damage: 18,
+        },
+        "a raised Attack over a lowered Defense outdamages the neutral 5; \
+         swapping the two stages would land below it: {events:?}"
     );
 }

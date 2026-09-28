@@ -52,6 +52,28 @@ pub enum BattleEvent {
         /// Whether the player's battler snapped out.
         by_player: bool,
     },
+    /// A confusion duration that remained active after this action's
+    /// decrement was announced, ahead of the coin draw that decides between
+    /// a self-hit and the chosen move (`CANCELER_CONFUSED`'s still-active
+    /// branch, `src/battle_util.c:2157`-`:2187`).
+    ///
+    /// This precedes either [`BattleEvent::ConfusionSelfHit`] or, when the
+    /// chosen move proceeds instead, the same action's paralysis draw and PP
+    /// handling.
+    Confused {
+        /// Whether the player's battler is confused.
+        by_player: bool,
+    },
+    /// Confusion's coin draw cancelled the chosen move for a self-hit, after
+    /// [`BattleEvent::Confused`] and before any resulting
+    /// [`BattleEvent::Fainted`]. No PP is spent, and the paralysis draw does
+    /// not run for this action.
+    ConfusionSelfHit {
+        /// Whether the player's battler hurt itself.
+        by_player: bool,
+        /// HP removed from that battler, capped at its HP before the hit.
+        damage: u32,
+    },
     /// A paralysed battler's full-paralysis draw cancelled its chosen move
     /// before any PP was spent.
     FullyParalyzed {
@@ -359,8 +381,7 @@ pub enum BattleEvent {
     },
     /// The player sent out the first non-fainted reserve after an active
     /// faint, under the headless party-order policy (no player choice, no
-    /// party-screen UI). This crate models it only for a wild battle: a
-    /// trainer battle sends no player reserves.
+    /// party-screen UI). Reported for a wild or trainer battle alike.
     PlayerSentOut {
         /// The replacement's species.
         species: SpeciesId,
