@@ -266,8 +266,53 @@ impl Header {
         if self.interlace_method != NO_INTERLACE {
             return Err(PngError::Unsupported("image is interlaced"));
         }
+        scanline_layout(self.width as usize, self.height as usize, self.bit_depth)?;
         Ok(())
     }
+}
+
+/// The maximum inflated pixel data this decoder accepts, matching the
+/// decompressed-size limit [`inflate::inflate_zlib`] already enforces: no
+/// real `IDAT` stream this decoder inflates can exceed it, so `IHDR`
+/// dimensions implying more are unsatisfiable by any legitimate PNG and are
+/// rejected up front rather than after an inflate pass. GBA assets are far
+/// smaller than this bound.
+const MAX_PIXEL_DATA_BYTES: usize = 64 * 1024 * 1024;
+
+/// Computes the scanline byte layout `width`, `height`, and `bit_depth`
+/// imply: each packed row's byte count, the filter-prefixed scanline size,
+/// and the exact inflated length a well-formed image of this shape has.
+///
+/// Uses checked arithmetic throughout so that on hosts where `usize` is
+/// narrower than 64 bits, an extreme `IHDR` cannot wrap the computed sizes
+/// into a small number before the later length checks can catch it.
+///
+/// # Errors
+///
+/// Returns [`PngError::Unsupported`] when the computation overflows `usize`
+/// or when the resulting length would exceed [`MAX_PIXEL_DATA_BYTES`].
+fn scanline_layout(
+    width: usize,
+    height: usize,
+    bit_depth: u8,
+) -> Result<(usize, usize, usize), PngError> {
+    const OVERFLOW: PngError =
+        PngError::Unsupported("IHDR dimensions overflow scanline size arithmetic");
+    const TOO_LARGE: PngError =
+        PngError::Unsupported("IHDR dimensions imply more pixel data than this decoder accepts");
+
+    let packed_row_bytes = width
+        .checked_mul(usize::from(bit_depth))
+        .map(|bits| bits.div_ceil(8))
+        .ok_or(OVERFLOW)?;
+    let scanline_size = FILTER_PREFIX_SIZE
+        .checked_add(packed_row_bytes)
+        .ok_or(OVERFLOW)?;
+    let expected_len = scanline_size.checked_mul(height).ok_or(OVERFLOW)?;
+    if expected_len > MAX_PIXEL_DATA_BYTES {
+        return Err(TOO_LARGE);
+    }
+    Ok((packed_row_bytes, scanline_size, expected_len))
 }
 
 /// Decode a PNG file's bytes into an [`IndexedImage`].
@@ -350,9 +395,8 @@ fn defilter_and_unpack(
 ) -> Result<Vec<u8>, PngError> {
     let width = width as usize;
     let height = height as usize;
-    let packed_row_bytes = (width * usize::from(bit_depth)).div_ceil(8);
-    let scanline_size = FILTER_PREFIX_SIZE + packed_row_bytes;
-    let expected_len = scanline_size * height;
+    let (packed_row_bytes, scanline_size, expected_len) =
+        scanline_layout(width, height, bit_depth)?;
 
     if raw.len() < expected_len {
         return Err(PngError::PixelDataTooShort {
@@ -643,6 +687,42 @@ mod tests {
                 Err(PngError::Unsupported("width or height is zero"))
             );
         }
+    }
+
+    #[test]
+    fn rejects_extreme_ihdr_dimensions_before_inflating_or_allocating() {
+        // `Header::validate` must reject IHDR dimensions this extreme with
+        // a documented, capped error before `decode` inflates `IDAT` or
+        // allocates pixel storage sized from `width`/`height`.
+        let png = indexed_png_from_raw(
+            super::EIGHT_BIT_DEPTH,
+            u32::MAX,
+            u32::MAX,
+            &[super::FILTER_NONE, 0],
+        );
+
+        let err = decode(&png).unwrap_err();
+        assert_eq!(
+            err,
+            PngError::Unsupported(
+                "IHDR dimensions imply more pixel data than this decoder accepts"
+            )
+        );
+    }
+
+    #[test]
+    fn scanline_layout_rejects_arithmetic_that_would_overflow_usize() {
+        // `u32` IHDR fields can never reach this branch on a 64-bit host
+        // (the largest possible scanline size, `u32::MAX` square at 8 bits
+        // per pixel, still fits under `usize::MAX`), so this exercises the
+        // checked-arithmetic guard directly with inputs a 32-bit host's
+        // `usize` cannot represent the product of, standing in for what a
+        // real `u32` IHDR reaches there.
+        let err = super::scanline_layout(usize::MAX, 2, super::EIGHT_BIT_DEPTH).unwrap_err();
+        assert_eq!(
+            err,
+            PngError::Unsupported("IHDR dimensions overflow scanline size arithmetic")
+        );
     }
 
     #[test]
