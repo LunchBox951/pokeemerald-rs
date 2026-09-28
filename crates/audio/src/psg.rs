@@ -421,16 +421,9 @@ impl WaveChannel {
         chan
     }
 
-    /// Retunes the channel from an 11-bit frequency register value. Unlike
-    /// the square channels, whose NR14/NR24 handlers touch no timing state
-    /// on a plain write (`mgba/src/gb/audio.c:168-197,219-244`), the wave
-    /// channel's NR34 handler resets its per-write deadline to a fresh new
-    /// period after every write, trigger bit or not, as long as the channel
-    /// is already playing (`mgba/src/gb/audio.c:307-335`). A pitch write
-    /// (`pokeemerald/src/m4a.c:1196-1202`) writes both NR33 and NR34
-    /// regardless of channel, so this keeps the sample index and discards
-    /// the fraction of the old step already elapsed, rather than retiming
-    /// it the way `retime_step_remainder` does for the square channels.
+    /// Retunes the channel from an 11-bit frequency register value, keeping
+    /// the sample index but starting a fresh period at the new rate
+    /// (`mgba/src/gb/audio.c:331-335`).
     pub fn set_frequency(&mut self, freq_reg: u16) {
         let hz = register_frequency_hz(freq_reg, WAVE_CLOCK_HZ);
         self.step_delta = phase_delta(hz, WAVE_STEPS_PER_CYCLE);
