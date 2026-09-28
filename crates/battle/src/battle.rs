@@ -30,6 +30,7 @@ use crate::secondary;
 use crate::stat_change;
 use crate::status1::{draws_full_paralysis, draws_shed_skin_cure, poison_residual_damage, Status1};
 use crate::turn_order::{resolve_order, Order};
+use crate::volatile::draws_confusion_self_hit;
 
 mod events;
 mod execute;
@@ -99,9 +100,8 @@ pub(crate) fn ensure_executable(dex: &Dex, move_id: MoveId) -> Result<(), Battle
 pub struct Battle {
     dex: Dex,
     player: BattlePokemon,
-    /// The player's party members other than [`Battle::player`] for a wild
-    /// battle, always in the order the owning flow passed them. Empty for a
-    /// trainer battle: this slice models no trainer-side player replacement.
+    /// The player's party members other than [`Battle::player`], always in
+    /// the order the owning flow passed them.
     /// [`Battle::send_out_next_player_reserve`] returns a fainted active
     /// member to its own position here rather than swapping it into the
     /// sent-out reserve's, so the party order never changes across
@@ -109,8 +109,9 @@ pub struct Battle {
     /// while `gBattlerPartyIndexes` names the active one.
     player_reserves: Vec<BattlePokemon>,
     /// The position of [`Battle::player`] in the party as passed to
-    /// [`Battle::new_with_player_reserves`]: `0` until a replacement, and
-    /// never beyond `player_reserves.len()`. The player-side analogue of
+    /// [`Battle::new_with_player_reserves`] or
+    /// [`Battle::new_trainer_with_player_reserves`]: `0` until a replacement,
+    /// and never beyond `player_reserves.len()`. The player-side analogue of
     /// upstream's `gBattlerPartyIndexes` entry for the player's battler.
     player_slot: usize,
     enemy: BattlePokemon,
@@ -288,10 +289,9 @@ impl Battle {
         })
     }
 
-    /// Starts a trainer battle with `party[0]` active and the rest on the bench.
-    ///
-    /// Trainer metadata, AI flags, active battlers, and every party move are
-    /// validated before this constructor consumes RNG.
+    /// Starts a trainer battle with `party[0]` active and the rest on the
+    /// bench. Equivalent to [`Battle::new_trainer_with_player_reserves`] with
+    /// no player reserves.
     ///
     /// # Errors
     ///
@@ -302,6 +302,31 @@ impl Battle {
     pub fn new_trainer(
         dex: Dex,
         player: BattlePokemon,
+        trainer: TrainerId,
+        party: Vec<BattlePokemon>,
+        rng: &mut impl BattleRng,
+    ) -> Result<Self, BattleError> {
+        Self::new_trainer_with_player_reserves(dex, player, Vec::new(), trainer, party, rng)
+    }
+
+    /// Starts a trainer battle with `party[0]` active and the rest on the
+    /// bench, and `player_reserves` under the same ordered, headless
+    /// replacement policy as [`Battle::new_with_player_reserves`]
+    /// (`Cmd_checkteamslost`, `src/battle_script_commands.c:3534`-`:3564`).
+    /// Every trainer party move is additionally validated against every
+    /// non-fainted reserve, not just `player`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BattleError::EmptyTrainerParty`] for an empty party,
+    /// [`BattleError::UnknownTrainer`] for an unknown trainer,
+    /// [`BattleError::FaintedBattler`] for a fainted active battler, or the
+    /// first AI, move, or ability validation error against the active member
+    /// or any non-fainted reserve. Errors leave the RNG untouched.
+    pub fn new_trainer_with_player_reserves(
+        dex: Dex,
+        player: BattlePokemon,
+        player_reserves: Vec<BattlePokemon>,
         trainer: TrainerId,
         mut party: Vec<BattlePokemon>,
         rng: &mut impl BattleRng,
@@ -321,7 +346,13 @@ impl Battle {
             for slot in mon.moves() {
                 trainer::ensure_move_playable(&dex, slot.move_id)?;
                 if slot.pp > 0 {
-                    secondary::ensure_admissible(&dex, slot.move_id, mon, &player)?;
+                    for defender in std::iter::once(&player).chain(
+                        player_reserves
+                            .iter()
+                            .filter(|reserve| !reserve.is_fainted()),
+                    ) {
+                        secondary::ensure_admissible(&dex, slot.move_id, mon, defender)?;
+                    }
                 }
             }
         }
@@ -331,10 +362,7 @@ impl Battle {
         Ok(Self {
             dex,
             player,
-            // This slice models no trainer-side player replacement
-            // (issue #1326's boundary); a trainer battle's player party is
-            // always this one active member.
-            player_reserves: Vec::new(),
+            player_reserves,
             player_slot: 0,
             enemy,
             run_attempts: 0,
@@ -374,8 +402,9 @@ impl Battle {
     }
 
     /// Returns every player-side party member in the order it was passed to
-    /// [`Battle::new_with_player_reserves`] -- the starting active member
-    /// first, then each reserve -- whichever member is active now.
+    /// [`Battle::new_with_player_reserves`] or
+    /// [`Battle::new_trainer_with_player_reserves`] -- the starting active
+    /// member first, then each reserve -- whichever member is active now.
     ///
     /// The position is the stable link back to the caller's party slot: it
     /// survives every replacement, so two members that share species,
@@ -884,15 +913,20 @@ impl Battle {
         if self.player.pending_move_learn().is_some() {
             return Ok(());
         }
-        self.settle_fainted_enemy(events)?;
-        // The enemy's own faint may have already ended the battle
-        // (`BattleOutcome::PlayerWon`); only a still-open battle reaches the
-        // player's own send-out branch (`data/battle_scripts_1.s:2830`-
-        // `:2832`).
-        if self.outcome.is_none() && self.player.is_fainted() {
+        // `HandleFaintedMonActions` case 4 walks battlers from 0
+        // (`src/battle_util.c:1924`-`:1935`), so the player's replacement is
+        // out before the trainer picks its own against it. A battle the
+        // enemy's faint ends never reaches the player's send-out branch
+        // (`data/battle_scripts_1.s:2830`-`:2832`).
+        if self.player.is_fainted() && self.trainer_has_usable_bench() {
             self.send_out_next_player_reserve(events);
         }
-        Ok(())
+        self.settle_fainted_enemy(events)
+    }
+
+    fn trainer_has_usable_bench(&self) -> bool {
+        matches!(&self.kind, BattleKind::Trainer(context)
+            if context.bench().iter().any(|mon| !mon.is_fainted()))
     }
 
     /// The player-side analogue of [`Battle::settle_fainted_enemy`]:
@@ -1032,8 +1066,8 @@ impl Battle {
         self.last_move_used = move_id;
         // `CANCELER_CONFUSED` decrements the attacker's confusion duration
         // ahead of `CANCELER_PARALYZED` (`src/battle_util.c:2157`-`:2199`).
-        // Only the terminal zero transition is modelled here: the self-hit
-        // draw a still-active decrement can trigger is out of this slice.
+        // A duration that survives the decrement draws once more before the
+        // paralysis draw and PP handling: a self-hit ends the action here.
         let attacker = if player_is_attacker {
             &mut self.player
         } else {
@@ -1043,6 +1077,14 @@ impl Battle {
             events.push(BattleEvent::SnappedOutOfConfusion {
                 by_player: player_is_attacker,
             });
+        } else if attacker.volatiles().confused() {
+            events.push(BattleEvent::Confused {
+                by_player: player_is_attacker,
+            });
+            if draws_confusion_self_hit(rng) {
+                self.apply_confusion_self_hit(player_is_attacker, rng, events);
+                return Ok(());
+            }
         }
         let attacker_status1 = if player_is_attacker {
             self.player.status1()

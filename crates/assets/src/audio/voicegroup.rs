@@ -321,6 +321,14 @@ const NO_PAN_OVERRIDE: u8 = 0;
 const MAX_PAN_OVERRIDE: u8 = 127;
 const MAX_SQUARE_DUTY: u8 = 3;
 const MAX_NOISE_PERIOD: u8 = 1;
+/// The largest CGB envelope attack, decay, or release value that survives
+/// upstream's `& 0x7` mask (`pokeemerald/asm/macros/music_voice.inc:60-63`
+/// (`_voice_square_1`), `:85-88` (`_voice_square_2`), `:109-112`
+/// (`_voice_programmable_wave`), `:134-137` (`_voice_noise`)).
+const MAX_CGB_ENVELOPE_ATTACK_DECAY_RELEASE: u8 = 0x7;
+/// The largest CGB envelope sustain value that survives upstream's `& 0xF`
+/// mask (same macro lines as [`MAX_CGB_ENVELOPE_ATTACK_DECAY_RELEASE`]).
+const MAX_CGB_ENVELOPE_SUSTAIN: u8 = 0xF;
 
 fn write_pan(w: &mut Writer, pan: Option<u8>) {
     w.u8(pan.unwrap_or(NO_PAN_OVERRIDE));
@@ -351,6 +359,41 @@ fn check_square_duty(duty: u8) -> Result<(), AudioError> {
 fn check_noise_period(period: u8) -> Result<(), AudioError> {
     if period > MAX_NOISE_PERIOD {
         return Err(AudioError::NoisePeriodOutOfRange(period));
+    }
+    Ok(())
+}
+
+/// `_voice_directsound` stores its envelope unmasked
+/// (`pokeemerald/asm/macros/music_voice.inc:35-38`), so
+/// [`DirectSoundVoice`] skips this check.
+fn check_cgb_envelope(voice_kind: &'static str, envelope: Envelope) -> Result<(), AudioError> {
+    let fields = [
+        (
+            "attack",
+            envelope.attack,
+            MAX_CGB_ENVELOPE_ATTACK_DECAY_RELEASE,
+        ),
+        (
+            "decay",
+            envelope.decay,
+            MAX_CGB_ENVELOPE_ATTACK_DECAY_RELEASE,
+        ),
+        ("sustain", envelope.sustain, MAX_CGB_ENVELOPE_SUSTAIN),
+        (
+            "release",
+            envelope.release,
+            MAX_CGB_ENVELOPE_ATTACK_DECAY_RELEASE,
+        ),
+    ];
+    for (field, value, maximum) in fields {
+        if value > maximum {
+            return Err(AudioError::CgbEnvelopeOutOfRange {
+                voice_kind,
+                field,
+                value,
+                maximum,
+            });
+        }
     }
     Ok(())
 }
@@ -527,8 +570,11 @@ impl VoiceGroup {
     /// `1..=127`, [`AudioError::SquareDutyOutOfRange`] for a square duty
     /// selector outside `0..=3`, [`AudioError::KeySplitTableNoteOutOfRange`]
     /// for a key split whose `starting_note` plus table length exceeds
-    /// [`VOICE_SLOT_COUNT`], or [`AudioError::NoisePeriodOutOfRange`] for
-    /// a noise period outside `0..=1`.
+    /// [`VOICE_SLOT_COUNT`], [`AudioError::NoisePeriodOutOfRange`] for
+    /// a noise period outside `0..=1`, or [`AudioError::CgbEnvelopeOutOfRange`]
+    /// for a Square1, Square2, `ProgrammableWave`, or Noise envelope field
+    /// outside its upstream-masked domain (`0..=7` for attack/decay/release,
+    /// `0..=15` for sustain).
     pub fn new(slots: Vec<VoiceEntry>) -> Result<Self, AudioError> {
         if slots.len() > VOICE_SLOT_COUNT {
             return Err(AudioError::TooManyVoiceSlots(slots.len()));
@@ -539,15 +585,27 @@ impl VoiceGroup {
                     check_id_len(&v.sample.0)?;
                     check_pan_override(v.pan)?;
                 }
-                VoiceEntry::ProgrammableWave(v) => check_id_len(&v.wave.0)?,
+                VoiceEntry::ProgrammableWave(v) => {
+                    check_id_len(&v.wave.0)?;
+                    check_cgb_envelope("programmable wave", v.envelope)?;
+                }
                 VoiceEntry::KeySplit(v) => {
                     check_id_len(&v.children.0)?;
                     check_key_split_table_note_range(v.starting_note, v.table.len())?;
                 }
                 VoiceEntry::Rhythm(v) => check_id_len(&v.children.0)?,
-                VoiceEntry::Square1(v) => check_square_duty(v.duty)?,
-                VoiceEntry::Square2(v) => check_square_duty(v.duty)?,
-                VoiceEntry::Noise(v) => check_noise_period(v.period)?,
+                VoiceEntry::Square1(v) => {
+                    check_square_duty(v.duty)?;
+                    check_cgb_envelope("square 1", v.envelope)?;
+                }
+                VoiceEntry::Square2(v) => {
+                    check_square_duty(v.duty)?;
+                    check_cgb_envelope("square 2", v.envelope)?;
+                }
+                VoiceEntry::Noise(v) => {
+                    check_noise_period(v.period)?;
+                    check_cgb_envelope("noise", v.envelope)?;
+                }
                 VoiceEntry::Empty => {}
             }
         }
@@ -591,8 +649,8 @@ impl VoiceGroup {
     /// # Errors
     ///
     /// Returns an [`AudioError`] for malformed data, invalid tags or ids,
-    /// out-of-range counts, an out-of-domain pan, square duty, or noise
-    /// period selector (see [`Self::new`]), or trailing bytes.
+    /// out-of-range counts, an out-of-domain pan, square duty, noise
+    /// period, or CGB envelope field (see [`Self::new`]), or trailing bytes.
     pub fn decode(bytes: &[u8]) -> Result<Self, AudioError> {
         let mut r = Reader::new(bytes);
         let count = usize::from(r.u8()?);
