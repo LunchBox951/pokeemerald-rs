@@ -255,10 +255,13 @@ fn supported_forced_tiles_blocked_route_falls_through_to_held_keypad() {
 /// A blocked forced route with no input idles, but keeps the guard armed
 /// while the player still stands on the tile -- only leaving it or a
 /// successful dispatch consumes the guard, so a later poll retries the
-/// dispatch too (`field_player_avatar.c:344-349, 409-470`)
-/// `(behavioral-fidelity)`.
+/// dispatch too (`field_player_avatar.c:344-349, 409-470`). The retried
+/// dispatch is still blocked and, like `DoForcedMovement`'s collision
+/// branch, never touches the movement streak the idle poll already ended
+/// (`:443-462`), so that later poll turns in place first rather than
+/// stepping immediately `(behavioral-fidelity)`.
 #[test]
-fn supported_forced_tiles_blocked_route_with_no_input_idles_but_stays_armed() {
+fn blocked_forced_route_after_idle_turns_before_stepping() {
     for &(behavior, direction, _frames) in &FORCED_MOVERS {
         let runtime = forced_mover_runtime(behavior, direction, true);
         let mut player = enter_forced_tile(&runtime, direction);
@@ -276,8 +279,6 @@ fn supported_forced_tiles_blocked_route_with_no_input_idles_but_stays_armed() {
              once whatever blocked it no longer does"
         );
 
-        let (dx, dy) = direction.delta();
-        let entry: TilePos = (2 - dx, 2 - dy);
         assert_eq!(
             player.step(
                 Some(opposite(direction)),
@@ -285,14 +286,11 @@ fn supported_forced_tiles_blocked_route_with_no_input_idles_but_stays_armed() {
                 &no_connections,
                 &NO_FLAGS
             ),
-            StepOutcome::Advanced {
-                from: (2, 2),
-                to: entry,
-            },
-            "behavior {behavior:#04x}: the still-armed guard retries the \
-             dispatch, finds it still blocked, and falls through to the \
-             held keypad direction -- the same outcome a direct poll \
-             produces (`supported_forced_tiles_blocked_route_falls_through_to_held_keypad`)"
+            StepOutcome::Turned(opposite(direction)),
+            "behavior {behavior:#04x}: the retried dispatch is still \
+             blocked and never touched the movement streak the idle poll \
+             ended, so this poll turns in place like any other direction \
+             change from standstill"
         );
     }
 }

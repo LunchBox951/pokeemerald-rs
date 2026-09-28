@@ -584,10 +584,12 @@ impl PlayerState {
     /// (a wall, an object event) no longer does. `step`'s ordinary keypad
     /// handling runs next on the original poll -- upstream's `FALSE` arm
     /// falls through to `MovePlayerAvatarUsingKeypadInput` the same way
-    /// (`:344-348`). `movement_direction` and (unless `mover.locks_facing`)
-    /// `facing` change only on a successful dispatch: `ForcedMovement_None`
-    /// restores the sprite's existing facing rather than adopting the
-    /// forced one on a blocked route (`:428-438`).
+    /// (`:344-348`). `movement_streak_active`, `movement_direction`, and
+    /// (unless `mover.locks_facing`) `facing` all change only on a
+    /// successful dispatch: `DoForcedMovement`'s collision branch leaves
+    /// `runningState` untouched on a blocked route (`:443-462`), so a
+    /// blocked attempt must not suppress the keypad's own turn-in-place
+    /// the way a real step would.
     fn dispatch_forced_mover(
         &mut self,
         mover: ForcedMover,
@@ -597,7 +599,6 @@ impl PlayerState {
         event_data: &EventData,
     ) -> Option<StepOutcome> {
         let direction = mover.direction;
-        self.movement_streak_active = true;
 
         let landing = self.resolve_landing(direction, runtime, maps).ok()?;
         let from = self.position;
@@ -613,6 +614,7 @@ impl PlayerState {
         )
         .ok()?;
 
+        self.movement_streak_active = true;
         self.movement_direction = direction;
         if !mover.locks_facing {
             self.facing = direction;
@@ -2283,9 +2285,13 @@ mod tests {
     /// `GetForcedMovementByMetatileBehavior` re-reads the standing tile
     /// fresh every poll rather than latching a one-time verdict (`:409-426`):
     /// only leaving the tile or a successful dispatch consumes it, so a
-    /// later poll retries the same dispatch `(behavioral-fidelity)`.
+    /// later poll retries the same dispatch. A blocked dispatch attempt
+    /// leaves `runningState` (this port's movement streak) untouched, same
+    /// as `DoForcedMovement`'s collision branch (`:443-462`), so the retry
+    /// still turns in place first rather than stepping immediately
+    /// `(behavioral-fidelity)`.
     #[test]
-    fn a_blocked_forced_movement_tile_stays_armed_and_retries_on_a_later_poll() {
+    fn a_blocked_forced_movement_tile_stays_armed_and_still_turns_after_an_idle_poll() {
         let runtime = blocked_slide_east_runtime();
 
         let mut player = PlayerState::new((1, 2), 3, Direction::East);
@@ -2321,14 +2327,12 @@ mod tests {
 
         assert_eq!(
             player.step(Some(Direction::West), &runtime, &no_connections, &NO_FLAGS),
-            StepOutcome::Advanced {
-                from: (2, 2),
-                to: (1, 2),
-            },
-            "the retried dispatch is still blocked, so this poll falls through \
-             to the held keypad direction, the same outcome a direct poll \
-             produces (`a_collision_blocked_forced_direction_still_honours_manual_input`)"
+            StepOutcome::Turned(Direction::West),
+            "the retried dispatch is still blocked and never touched the \
+             movement streak the idle poll ended, so this poll turns in \
+             place like any other direction change from standstill"
         );
+        assert_eq!(player.position(), (2, 2));
     }
 
     /// A dispatched forced tile's own direction sets the avatar's facing --
