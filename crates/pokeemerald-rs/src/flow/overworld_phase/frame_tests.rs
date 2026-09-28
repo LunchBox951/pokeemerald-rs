@@ -395,8 +395,8 @@ fn b_does_not_move_the_player_or_open_a_dialog() {
     // resolve, so the check above is about the button rather than the
     // position. Read at `interaction_tokens_this_frame` itself -- the
     // frame's whole A-press decision -- rather than driving it through
-    // `step`, whose own dialog-open commit (`NpcDialog::open`) loads an
-    // asset pack this synthetic fixture has none of.
+    // `step`, whose own dialog-open commit (`NpcDialog::open_at_speed`) loads
+    // an asset pack this synthetic fixture has none of.
     let runtime = runtime_for(&phase);
     assert!(
         phase
