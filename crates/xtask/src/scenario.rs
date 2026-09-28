@@ -276,10 +276,9 @@ fn run_with_driver(
         previous_state = actual_state;
     }
 
-    // The transition check above only proves the outcome existed the moment
-    // the battle ended. A later frame can still clear or overwrite it before
-    // the scenario reports success, so the retained outcome must still match
-    // what the transition observed (issue #1453).
+    // A later frame can still clear or overwrite an outcome already
+    // confirmed at the transition; require it to still match before
+    // reporting success.
     if let Some(outcome) = retained_outcome {
         if driver.first_battle_outcome() != Some(outcome) {
             return Err(ScenarioError::FirstBattleOutcomeNotRetained {
@@ -482,7 +481,7 @@ mod tests {
     struct ClearingDriver {
         state: AppState,
         outcome: Option<BattleOutcome>,
-        step: usize,
+        frame: usize,
     }
 
     impl ScenarioDriver for ClearingDriver {
@@ -499,12 +498,9 @@ mod tests {
         }
 
         fn step(&mut self) -> Result<bool, String> {
-            // Frame 0 is the FirstBattle-to-Overworld transition, exposing
-            // the win. Frame 1 is the following release frame, which clears
-            // it while staying in Overworld -- the regression this proves
-            // closed (issue #1453).
-            self.outcome = (self.step == 0).then_some(BattleOutcome::PlayerWon);
-            self.step += 1;
+            const TRANSITION_FRAME: usize = 0;
+            self.outcome = (self.frame == TRANSITION_FRAME).then_some(BattleOutcome::PlayerWon);
+            self.frame += 1;
             self.state = AppState::Overworld;
             Ok(true)
         }
@@ -515,7 +511,7 @@ mod tests {
         let mut driver = ClearingDriver {
             state: AppState::FirstBattle,
             outcome: None,
-            step: 0,
+            frame: 0,
         };
         let scenario = ScenarioSpec {
             initial: AppState::FirstBattle,
