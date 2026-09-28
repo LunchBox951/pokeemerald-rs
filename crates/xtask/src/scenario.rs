@@ -296,19 +296,30 @@ mod tests {
     }
 
     impl FakeDriver {
-        /// Built from [`spec`]'s own `BootToMainMenu` frames, not a
-        /// hand-duplicated copy, so this fixture can never drift out of
-        /// sync with the real script it is driving.
+        /// Hand-specified, independently of [`spec`], so a wrong scripted
+        /// input or per-frame expectation in the real script fails against
+        /// it rather than changing both sides of the comparison.
+        ///
+        /// Frame 0 presses START and stays on the title while its white fade
+        /// begins. Frames 1 through 21 are the released fade-wait, still
+        /// reported as the title: `rendering::palette_fade`'s 22 updates
+        /// after `begin`, less the one the press frame runs, the last of
+        /// them the frame the fade reports done. Frames 22 and 23 are the
+        /// main menu.
         fn boot_to_main_menu() -> Self {
-            let frames = spec(ScenarioName::BootToMainMenu)
-                .frames
-                .iter()
-                .map(|frame| FakeFrame {
-                    expected_buttons: frame.buttons,
-                    next_state: frame.expected,
-                    should_continue: true,
-                })
-                .collect();
+            let frame = |expected_buttons, next_state| FakeFrame {
+                expected_buttons,
+                next_state,
+                should_continue: true,
+            };
+            let mut frames = VecDeque::from([frame(AppButtons::START, AppState::Title)]);
+            frames.extend(
+                std::iter::repeat_with(|| frame(AppButtons::NONE, AppState::Title)).take(21),
+            );
+            frames.extend([
+                frame(AppButtons::NONE, AppState::MainMenu(MainMenuItem::NewGame)),
+                frame(AppButtons::NONE, AppState::MainMenu(MainMenuItem::NewGame)),
+            ]);
             Self {
                 current_state: AppState::Title,
                 held_buttons: AppButtons::NONE,
@@ -351,11 +362,10 @@ mod tests {
     #[test]
     fn boot_to_main_menu_drives_press_release_and_ordered_milestones() {
         let mut driver = FakeDriver::boot_to_main_menu();
-        let expected_frames_run = spec(ScenarioName::BootToMainMenu).frames.len();
         let report = run_with_driver(spec(ScenarioName::BootToMainMenu), &mut driver)
             .expect("the proving scenario should pass");
 
-        assert_eq!(report.frames_run, expected_frames_run);
+        assert_eq!(report.frames_run, 24);
         assert_eq!(report.first_battle_outcome, None);
         assert_eq!(
             report.milestones,
