@@ -691,13 +691,16 @@ mod tests {
 
     #[test]
     fn rejects_extreme_ihdr_dimensions_before_inflating_or_allocating() {
-        // `Header::validate` must reject IHDR dimensions this extreme with
-        // a documented, capped error before `decode` inflates `IDAT` or
-        // allocates pixel storage sized from `width`/`height`.
+        // 16384x8192 at 8 bits per pixel implies about 128 MiB of pixel
+        // data: over MAX_PIXEL_DATA_BYTES on every host, including a
+        // 32-bit one, without overflowing that host's usize, so the cap
+        // rejection below is what fires everywhere. `Header::validate`
+        // must reject it before `decode` inflates `IDAT` or allocates
+        // pixel storage sized from `width`/`height`.
         let png = indexed_png_from_raw(
             super::EIGHT_BIT_DEPTH,
-            u32::MAX,
-            u32::MAX,
+            16384,
+            8192,
             &[super::FILTER_NONE, 0],
         );
 
