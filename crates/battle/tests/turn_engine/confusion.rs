@@ -5,7 +5,7 @@
 
 use crate::common::{max_iv_mon, SequenceRng};
 use assets::MoveId;
-use battle::{Battle, BattleEvent, BattleOutcome, Dex, PlayerAction, Status1};
+use battle::{Battle, BattleEvent, BattleOutcome, Dex, PlayerAction, StatStage, Status1};
 
 const TACKLE: MoveId = MoveId(33);
 
@@ -356,4 +356,32 @@ fn a_self_hit_can_faint_its_own_user_and_skip_the_opponent_s_queued_action() {
         "the opponent's queued Tackle draws nothing once the player has fainted"
     );
     assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerLost));
+}
+
+#[test]
+fn a_self_hit_rates_against_the_users_own_attack_and_defense_stages() {
+    let dex = Dex::new();
+    let mut player = max_iv_mon(&dex, GASTLY, 5, vec![TACKLE]);
+    player.volatiles_mut().set_confusion(2);
+    player.stages_mut().attack = StatStage::new(2).unwrap();
+    player.stages_mut().defense = StatStage::new(-2).unwrap();
+    let enemy = max_iv_mon(&dex, ZIGZAGOON, 5, vec![TACKLE]);
+
+    // The same draws as the neutral-stage self-hit above, so the only
+    // difference in the roll is the two stages.
+    let mut rng = SequenceRng::new([0, 0, 0, 0, 0, 0, 1, 0, 0]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    assert_eq!(
+        events[1],
+        BattleEvent::ConfusionSelfHit {
+            by_player: true,
+            damage: 18,
+        },
+        "a raised Attack over a lowered Defense outdamages the neutral 5; \
+         swapping the two stages would land below it: {events:?}"
+    );
 }
