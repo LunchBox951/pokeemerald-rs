@@ -191,8 +191,7 @@ fn std_env(key: &str) -> Option<OsString> {
 ///
 /// # Panics
 ///
-/// As [`default_pack_path`] documents, when `exe_dir` is `None` on a
-/// non-`dev` channel with no override and no user-data directory.
+/// When [`default_pack_path`] does; its `# Panics` owns the condition.
 fn resolve(
     env: &impl Fn(&str) -> Option<OsString>,
     exe_dir: Option<&Path>,
