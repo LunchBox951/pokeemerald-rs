@@ -1254,25 +1254,10 @@ mod animated_door_elevation_tests {
 
 #[cfg(test)]
 mod forced_landing_field_input_gate_tests {
-    //! Issue #1314: #1269 closed `poll_open`'s and `interaction`'s own
-    //! `!self.player.field_input_suppressed()` terms so the arrow-warp poll,
-    //! the animated-door poll, and the same-frame interaction all withhold
-    //! on a forced-movement tile's own landing call, matching the `START`
-    //! half of the same gate in `super::super::start_menu`
-    //! (`field_control_avatar.c:95-113`'s `!forcedMove` term) -- but only
-    //! that `START` half was ever pinned
-    //! (`super::super::step_tests`'s
-    //! `a_fresh_start_on_a_forced_movement_landing_tile_must_not_open_the_menu`).
-    //! These three tests are [`super::resolve_pre_movement_field_input`]'s own
-    //! counterpart for the other three decisions: each must be `None` on the
-    //! landing's own call, and admitted the moment [`PlayerState::tick`]
-    //! clears that one-frame flag.
-    //!
-    //! Same-file placement (rather than `step_tests.rs`) is deliberate,
-    //! mirroring [`super::door_sequencing_tests`] and this file's other
-    //! resolver-level test modules above: nested modules see
-    //! [`super::PreMovementFieldInput`]'s private fields for free, with no
-    //! `pub(super)` widening needed.
+    //! The forced-movement-tile field-input gate
+    //! (`field_control_avatar.c:95-113`) for the arrow-warp poll, the
+    //! animated-door poll, and the same-frame interaction; `start_menu`'s
+    //! own tests already pin its `START` half.
 
     use super::super::test_support::{held, pressed, runtime_for, ONE_F};
     use super::{InteractionOutcome, OverworldPhase, PreMovementFieldInput};
@@ -1284,13 +1269,9 @@ mod forced_landing_field_input_gate_tests {
     };
     use platform::Buttons;
 
-    /// A synthetic forced-movement slope one tile south of a synthetic
-    /// [`MB_ANIMATED_DOOR`] placed on Brendan's House 1F's own real upstairs
-    /// warp *coordinate*, `(8, 2)` (`map_events.rs`'s warp #2 -- the warp
-    /// event itself is real and pack-free; upstream's own tile there is
-    /// `MB_NON_ANIMATED_DOOR`, not this poll's behavior, so the door
-    /// *behavior* is this fixture's own substitution, same as
-    /// [`super::super::test_support::littleroot_lab_door_scene`]'s).
+    /// A synthetic [`MB_ANIMATED_DOOR`] over 1F's real warp #2 coordinate,
+    /// `(8, 2)` -- same substitution as
+    /// [`super::super::test_support::littleroot_lab_door_scene`]'s.
     fn slope_below_the_upstairs_door_phase() -> OverworldPhase {
         let scene = crate::overworld::tests::synthetic_scene_with_special_tiles(
             10,
@@ -1473,22 +1454,9 @@ mod forced_landing_field_input_gate_tests {
         );
     }
 
-    /// A forced-movement slope directly on Brendan's House 1F's own real
-    /// front-doormat warp tile, `(9, 8)` (`map_events.rs`'s warp #0), plus a
-    /// *separate* probe scene where that same tile is
-    /// [`MB_SOUTH_ARROW_WARP`] instead of forced-movement.
-    ///
-    /// A single real tile cannot carry both: `trigger_arrow_warp` reads the
-    /// player's own *standing* tile (`resolve_pre_movement_field_input`'s
-    /// `position` local, unlike the door and interaction checks above, which
-    /// both read the tile the player *faces*), and upstream's
-    /// forced-movement and arrow-warp behavior sets are themselves disjoint
-    /// (`metatile_behavior.rs`'s `is_forced_movement`/`is_south_arrow_warp`).
-    /// The probe scene isolates `poll_open`'s own suppression term from that
-    /// data constraint: a runtime that *would* resolve a warp if the poll
-    /// ran at all, fed to the same forced-landing player's own resolver
-    /// call -- the player and save state the assertions below actually
-    /// exercise stay the real, forced-landing ones throughout.
+    /// A forced-movement slope over 1F's real front-doormat warp
+    /// coordinate, `(9, 8)`, paired with [`arrow_probe_runtime`]'s
+    /// arrow-tile probe scene at the same position.
     fn slope_onto_the_southward_warp_phase() -> OverworldPhase {
         let scene = crate::overworld::tests::synthetic_scene_with_special_tile(
             10,
