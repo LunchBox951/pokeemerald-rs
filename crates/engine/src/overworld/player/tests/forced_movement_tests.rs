@@ -252,11 +252,13 @@ fn supported_forced_tiles_blocked_route_falls_through_to_held_keypad() {
     }
 }
 
-/// A blocked forced route with no input idles and clears the guard, so
-/// the following poll is an ordinary controllable turn
-/// (`field_player_avatar.c:344-349, 443-462`) `(behavioral-fidelity)`.
+/// A blocked forced route with no input idles, but keeps the guard armed
+/// while the player still stands on the tile -- only leaving it or a
+/// successful dispatch consumes the guard, so a later poll retries the
+/// dispatch too (`field_player_avatar.c:344-349, 409-470`)
+/// `(behavioral-fidelity)`.
 #[test]
-fn supported_forced_tiles_blocked_route_with_no_input_idles_then_accepts_keypad() {
+fn supported_forced_tiles_blocked_route_with_no_input_idles_but_stays_armed() {
     for &(behavior, direction, _frames) in &FORCED_MOVERS {
         let runtime = forced_mover_runtime(behavior, direction, true);
         let mut player = enter_forced_tile(&runtime, direction);
@@ -268,11 +270,14 @@ fn supported_forced_tiles_blocked_route_with_no_input_idles_then_accepts_keypad(
              no-input poll must idle rather than move"
         );
         assert!(
-            !player.forced_movement_armed(),
-            "behavior {behavior:#04x}: the guard must clear once the forced \
-             route is found blocked"
+            player.forced_movement_armed(),
+            "behavior {behavior:#04x}: the guard must stay armed while the \
+             player still stands on the tile, so a later poll can retry \
+             once whatever blocked it no longer does"
         );
 
+        let (dx, dy) = direction.delta();
+        let entry: TilePos = (2 - dx, 2 - dy);
         assert_eq!(
             player.step(
                 Some(opposite(direction)),
@@ -280,10 +285,14 @@ fn supported_forced_tiles_blocked_route_with_no_input_idles_then_accepts_keypad(
                 &no_connections,
                 &NO_FLAGS
             ),
-            StepOutcome::Turned(opposite(direction)),
-            "behavior {behavior:#04x}: the guard is clear and the streak \
-             ended on the idle poll, so the next poll is an ordinary \
-             controllable turn"
+            StepOutcome::Advanced {
+                from: (2, 2),
+                to: entry,
+            },
+            "behavior {behavior:#04x}: the still-armed guard retries the \
+             dispatch, finds it still blocked, and falls through to the \
+             held keypad direction -- the same outcome a direct poll \
+             produces (`supported_forced_tiles_blocked_route_falls_through_to_held_keypad`)"
         );
     }
 }
@@ -376,4 +385,93 @@ fn walk_tiles_chain_across_consecutive_landings() {
 #[test]
 fn slide_tiles_chain_across_consecutive_landings() {
     assert_forced_tiles_chain_without_input(MB_SLIDE_EAST, SLIDE_FRAMES_PER_TILE);
+}
+
+/// A slide-east tile whose eastward destination is blocked only by a
+/// visible object event (rather than a wall), so it can become passable
+/// again once that object hides.
+fn slide_east_runtime_with_blocking_object(flag: &'static str) -> MapRuntime<'static> {
+    let objects: &'static [ObjectEvent] = Box::leak(Box::new([object(1, 3, 2, 3, flag)]));
+    let events: &'static MapEvents = Box::leak(Box::new(MapEvents {
+        id: assets::MapId("MAP_TEST"),
+        shared_events_map: None,
+        object_events: objects,
+        warp_events: &[],
+        coord_events: &[],
+        bg_events: &[],
+    }));
+    let mut bytes = Vec::new();
+    for y in 0..5u16 {
+        for x in 0..5u16 {
+            let raw = MetatileCell {
+                metatile_id: u16::from((x, y) == (2, 2)),
+                collision: 0,
+                elevation: 3,
+            }
+            .pack();
+            bytes.extend_from_slice(&raw.to_le_bytes());
+        }
+    }
+    let attrs = [
+        u16::from(MB_NORMAL).to_le_bytes(),
+        u16::from(MB_SLIDE_EAST).to_le_bytes(),
+    ]
+    .concat();
+    let layout = assets::MapLayout {
+        id: assets::LayoutId("MAP_TEST"),
+        name: "MapTest",
+        width: 5,
+        height: 5,
+        primary_tileset: "gTileset_General",
+        secondary_tileset: "gTileset_General",
+    };
+    let (_, header, _) = flat_runtime(1, 1, |_, _| 0);
+    let bytes = Box::leak(bytes.into_boxed_slice());
+    let attrs = Box::leak(attrs.into_boxed_slice());
+    let header = Box::leak(Box::new(header));
+    MapRuntime::new(
+        assets::MapId("MAP_TEST"),
+        header,
+        events,
+        layout.grid(bytes).unwrap(),
+        MetatileAttributeTable::new(attrs),
+        MetatileAttributeTable::new(&[]),
+    )
+}
+
+/// A forced route blocked only by an object event retries on later polls:
+/// `GetForcedMovementByMetatileBehavior` re-reads the standing tile's
+/// behavior fresh every poll rather than latching a one-time verdict
+/// (`field_player_avatar.c:409-470`), so the guard must stay armed while
+/// the player still stands on the tile -- only leaving it or a successful
+/// dispatch consumes it. Once the blocking object is hidden, the next
+/// no-input poll dispatches `(behavioral-fidelity)`.
+#[test]
+fn blocked_forced_route_retries_once_the_blocking_object_disappears() {
+    const HIDE: &str = "FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_RIVAL_BEDROOM";
+    let runtime = slide_east_runtime_with_blocking_object(HIDE);
+    let mut player = enter_forced_tile(&runtime, Direction::East);
+    let mut data = EventData::new();
+
+    assert_eq!(
+        player.step(None, &runtime, &no_connections, &data),
+        StepOutcome::Idle,
+        "the visible object blocks the forced route"
+    );
+    assert!(
+        player.forced_movement_armed(),
+        "the guard must stay armed while the player still stands on the tile"
+    );
+
+    data.flag_set(assets::object_event_flags::resolve(HIDE).unwrap())
+        .unwrap();
+    assert_eq!(
+        player.step(None, &runtime, &no_connections, &data),
+        StepOutcome::Advanced {
+            from: (2, 2),
+            to: (3, 2),
+        },
+        "once the blocking object is hidden, the still-standing forced tile \
+         must retry its dispatch on the next no-input poll"
+    );
 }

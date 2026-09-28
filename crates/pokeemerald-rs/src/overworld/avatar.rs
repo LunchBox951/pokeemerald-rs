@@ -199,8 +199,9 @@ fn frame_for(player: &PlayerState) -> (u16, bool) {
         Direction::North => FRAME_NORTH_STEP,
         Direction::West | Direction::East => FRAME_WEST_STEP,
     };
-    let walking_foot_forward =
-        player.in_transit() && player.step_progress() < player.transit_duration() / 2;
+    let walking_foot_forward = player.in_transit()
+        && (player.transit_animation_disabled()
+            || player.step_progress() < player.transit_duration() / 2);
     let turning_foot_forward = player.turn_frames_remaining() >= TURN_FRAME_HALF;
     let frame = if walking_foot_forward || turning_foot_forward {
         step
@@ -428,11 +429,14 @@ mod tests {
         )
     }
 
-    /// A dispatched slide tile crosses in eight frames, not sixteen, so its
-    /// forward foot must switch back to standing at the crossing's own
-    /// halfway point `(behavioral-fidelity)`.
+    /// `ForcedMovement_Slide` sets `disableAnim` before `PlayerWalkFast`
+    /// (`field_player_avatar.c:526-532`), so the go-fast animation's first,
+    /// forward-foot cell is held for the whole slide crossing -- unlike an
+    /// ordinary step or a dispatched walk tile, which switch to the
+    /// standing frame at their own crossing's halfway point
+    /// `(behavioral-fidelity)`.
     #[test]
-    fn frame_for_shows_the_forward_foot_for_the_first_half_of_a_dispatched_slide() {
+    fn frame_for_holds_the_forward_foot_for_the_whole_slide_crossing() {
         let runtime = slide_runtime();
         let no_connections = |_: assets::MapId| -> Option<(u16, u16)> { None };
 
@@ -455,21 +459,19 @@ mod tests {
             "fixture precondition: the no-input poll dispatches the slide \
              tile's own crossing"
         );
-        assert_eq!(
-            frame_for(&player),
-            (FRAME_WEST_STEP, true),
-            "the dispatched crossing's own first frame shows the forward foot"
-        );
 
-        for _ in 0..(engine::overworld::SLIDE_FRAMES_PER_TILE / 2) {
+        for elapsed in 0..engine::overworld::SLIDE_FRAMES_PER_TILE {
+            assert_eq!(
+                frame_for(&player),
+                (FRAME_WEST_STEP, true),
+                "slide frame {elapsed} must hold the paused forward-foot pose"
+            );
             player.tick();
         }
-        assert_eq!(
-            frame_for(&player),
-            (FRAME_WEST_STAND, true),
-            "the second half of an eight-frame slide crossing must show the \
-             standing frame -- not still the forward foot the sixteen-frame \
-             walk assumption would keep showing"
+        assert!(
+            !player.in_transit(),
+            "fixture precondition: an eight-frame slide crossing must drain \
+             in exactly eight frames"
         );
     }
 

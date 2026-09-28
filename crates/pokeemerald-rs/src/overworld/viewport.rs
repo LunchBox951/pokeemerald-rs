@@ -269,7 +269,7 @@ fn write_quad(map: &mut [ScreenEntry], stride: usize, col: usize, row: usize, qu
     map[index(col + 1, row + 1)] = quad[3];
 }
 
-/// Returns the remaining signed step displacement shared by backgrounds and
+/// Returns the remaining signed pixel displacement shared by backgrounds and
 /// NPC sprites.
 ///
 /// Reads the step's committed direction rather than facing: upstream derives
@@ -277,13 +277,22 @@ fn write_quad(map: &mut [ScreenEntry], stride: usize, col: usize, row: usize, qu
 /// a separately mutable facing (`pokeemerald/src/event_object_movement.c:2253-2261`,
 /// `pokeemerald/src/field_camera.c:332-337`), and `PlayerState::face` can
 /// change facing mid-step without touching the active crossing.
+///
+/// A tile is always [`METATILE_PX`] wide regardless of the active
+/// crossing's own frame count, so the pixels already covered scale by
+/// `step_progress / transit_duration` -- a dispatched slide crossing
+/// (eight frames) starts owing a full metatile and covers two pixels per
+/// frame, not one, unlike an ordinary step or a dispatched walk tile
+/// (sixteen frames, one pixel per frame).
 #[must_use]
 pub(super) fn camera_lag_px(player: &PlayerState) -> (i32, i32) {
     let Some(direction) = player.step_direction() else {
         return (0, 0);
     };
     let (dx, dy) = direction.delta();
-    let lag = i32::from(player.transit_duration()) - i32::from(player.step_progress());
+    let covered_px =
+        i32::from(player.step_progress()) * METATILE_PX / i32::from(player.transit_duration());
+    let lag = METATILE_PX - covered_px;
     (dx * lag, dy * lag)
 }
 
@@ -655,23 +664,34 @@ mod tests {
     }
 
     #[test]
-    fn camera_lag_px_matches_the_slide_familys_eight_frame_cadence() {
+    fn camera_lag_px_owes_a_full_metatile_of_pixels_at_slide_start_and_two_per_frame() {
         use engine::overworld::SLIDE_FRAMES_PER_TILE;
 
-        const ELAPSED: u8 = 3;
-        let mid = player_mid_dispatched_slide(ELAPSED);
-        assert!(mid.in_transit(), "fixture precondition: still mid-crossing");
-        assert_eq!(mid.step_progress(), ELAPSED);
+        let start = player_mid_dispatched_slide(0);
+        assert!(
+            start.in_transit(),
+            "fixture precondition: still mid-crossing"
+        );
+        assert_eq!(
+            camera_lag_px(&start),
+            (METATILE_PX, 0),
+            "a dispatched slide crossing starts owing a full metatile of \
+             pixels, the same as any other crossing: a tile is always \
+             METATILE_PX wide regardless of its own frame count"
+        );
+
+        let mid = player_mid_dispatched_slide(SLIDE_FRAMES_PER_TILE / 2);
+        assert!(mid.in_transit());
         assert_eq!(
             camera_lag_px(&mid),
-            (i32::from(SLIDE_FRAMES_PER_TILE - ELAPSED), 0),
-            "a dispatched slide crossing must owe lag against its own \
-             eight-frame duration, not the sixteen-frame walk assumption"
+            (METATILE_PX / 2, 0),
+            "an eight-frame slide crossing covers two pixels per frame, not \
+             one, so it is already half-owed at its own halfway point"
         );
 
         let last = player_mid_dispatched_slide(SLIDE_FRAMES_PER_TILE - 1);
         assert!(last.in_transit());
-        assert_eq!(camera_lag_px(&last), (1, 0));
+        assert_eq!(camera_lag_px(&last), (2, 0));
 
         let settled = player_mid_dispatched_slide(SLIDE_FRAMES_PER_TILE);
         assert!(
