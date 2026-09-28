@@ -25,6 +25,22 @@ READINESS_RECORDER = (
 ).read_text()
 
 
+def _extract_bash_function(source: str, name: str) -> str:
+    """Pull one top-level ``name() { ... }`` bash function out of workflow text."""
+
+    match = re.search(rf"( *){re.escape(name)}\(\) \{{.*?\n\1\}}", source, re.DOTALL)
+    if not match:
+        raise AssertionError(f"could not locate bash function {name!r} in workflow text")
+    return match.group(0)
+
+
+def _extract_line(source: str, prefix: str) -> str:
+    """Pull the single line whose stripped text starts with ``prefix``."""
+
+    for line in source.splitlines():
+        if line.strip().startswith(prefix):
+            return line.strip()
+    raise AssertionError(f"could not find a line starting with {prefix!r}")
 
 
 class ChannelLadderTest(unittest.TestCase):
@@ -179,8 +195,21 @@ class PromotionWorkflowContractTest(unittest.TestCase):
 
     def test_existing_promotion_must_have_been_opened_by_the_app(self):
         self.assertIn("--json author,headRepository,number", PROMOTE_WORKFLOW)
-        self.assertIn('"${existing_author}" != "${APP_LOGIN}"', PROMOTE_WORKFLOW)
+        self.assertIn(
+            'if ! is_promotion_app_author "${existing_author}"; then', PROMOTE_WORKFLOW
+        )
         self.assertIn("refusing to adopt it", PROMOTE_WORKFLOW)
+
+    def test_nightly_merge_and_preceding_provenance_use_the_app_identity_rule(self):
+        self.assertIn(
+            'if ! is_promotion_app_author "$(jq -r \'.author.login\' <<<"${pr_json}")"; then',
+            PROMOTE_WORKFLOW,
+        )
+        self.assertIn(
+            'if [[ -n "${candidate_login}" ]] && is_promotion_app_author "${candidate_login}"; then',
+            PROMOTE_WORKFLOW,
+        )
+        self.assertEqual(PROMOTE_WORKFLOW.count("is_promotion_app_author"), 4)
 
     def test_merge_is_immediate_and_bound_to_the_evaluated_sha(self):
         self.assertIn('"repos/${REPOSITORY}/pulls/${pr_number}/merge"', PROMOTE_WORKFLOW)
@@ -198,13 +227,165 @@ class PromotionWorkflowContractTest(unittest.TestCase):
         self.assertNotIn("release-readiness", PROMOTE_WORKFLOW)
 
 
+class PromoteAppIdentityRuleTest(unittest.TestCase):
+    """The promotion App is one identity behind two API representations:
+    REST reports it as "<slug>[bot]"; GraphQL reports it as "app/<slug>".
+    ``is_promotion_app_author`` in promote.yml must accept exactly those
+    two forms of the configured slug and reject anything else."""
+
+    APP_LOGIN = "promoter[bot]"
+    APP_SLUG = "promoter"
+
+    def accepts(self, candidate: str) -> bool:
+        function = _extract_bash_function(PROMOTE_WORKFLOW, "is_promotion_app_author")
+        script = (
+            "set -euo pipefail\n"
+            f'APP_LOGIN="{self.APP_LOGIN}"\nAPP_SLUG="{self.APP_SLUG}"\n'
+            + function
+            + f'\nis_promotion_app_author "{candidate}"\n'
+        )
+        result = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+        return result.returncode == 0
+
+    def test_accepts_the_observed_rest_form(self):
+        self.assertTrue(self.accepts("promoter[bot]"))
+
+    def test_accepts_the_observed_graphql_form(self):
+        self.assertTrue(self.accepts("app/promoter"))
+
+    def test_rejects_an_unrelated_author(self):
+        for candidate in ("someone-else", "app/someone-else", "promoter", "promoter[bot] "):
+            with self.subTest(candidate=candidate):
+                self.assertFalse(self.accepts(candidate))
+
+    def test_fails_closed_on_an_empty_app_slug(self):
+        # An empty APP_SLUG would make is_promotion_app_author wrongly
+        # accept the bare GraphQL author "app/"; the token step's slug
+        # output must be validated non-empty before the rule is defined.
+        match = re.search(
+            r'( *)if \[\[ -z "\$\{APP_SLUG\}" \]\]; then\n(?:.*\n)*?\1fi\n',
+            PROMOTE_WORKFLOW,
+        )
+        self.assertIsNotNone(match, "empty-APP_SLUG guard not found in promote.yml")
+        script = 'set -euo pipefail\nAPP_SLUG=""\n' + match.group(0)
+        result = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("refusing to run without a configured App identity", result.stderr)
+
+
+class PrecedingProvenanceLookupFailureTest(unittest.TestCase):
+    """A failed provenance lookup must fail the run, not skip the rung.
+
+    require_preceding_promotion() is invoked as
+    `provenance="$(require_preceding_promotion ...)"`; its own
+    `candidate_logins="$(gh pr list ...)"` and
+    `candidate_login_lines="$(jq -r '.[]' ...)"` are a second layer of
+    command substitution. Bash does not propagate `errexit` into that
+    second layer unless `inherit_errexit` is set, so a `gh` or `jq`
+    failure there must not silently read as zero candidates.
+    """
+
+    def run_open_stable(self, gh_body):
+        shopt_line = _extract_line(PROMOTE_WORKFLOW, "shopt -s inherit_errexit")
+        function = "\n".join(
+            _extract_bash_function(PROMOTE_WORKFLOW, name)
+            for name in ("is_promotion_app_author", "require_preceding_promotion",
+                         "open_promotion")
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "gh").write_text("#!/usr/bin/env bash\n" + gh_body + "\n")
+            (root / "gh").chmod(0o755)
+            script = (
+                "set -euo pipefail\n"
+                + shopt_line + "\n"
+                'APP_LOGIN="promoter[bot]"\nAPP_SLUG="promoter"\nREPOSITORY="owner/repo"\n'
+                f'branch_sha() {{ echo {"a" * 40}; }}\n'
+                + function + "\nopen_promotion stable\n"
+            )
+            return subprocess.run(["bash", "-c", script], capture_output=True, text=True,
+                                  cwd=REPOSITORY_ROOT,
+                                  env={**os.environ, "PATH": f"{root}:{os.environ['PATH']}"})
+
+    def test_failed_gh_lookup_fails_the_run(self):
+        result = self.run_open_stable('echo "HTTP 502" >&2; exit 1')
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+
+    def test_unparseable_lookup_fails_the_run(self):
+        result = self.run_open_stable('echo "not json"')
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+
+
+class SourceGateAppIdentityRuleTest(unittest.TestCase):
+    """channel-merge-policy.yml derives the same two-form rule from the
+    configured REST-form PROMOTION_APP_LOGIN; cover both observed forms
+    and rejection of an unrelated author for its standalone copy."""
+
+    PROMOTION_APP_LOGIN = "promoter[bot]"
+
+    def accepts(self, candidate: str) -> bool:
+        slug_line = _extract_line(SOURCE_GATE_WORKFLOW, "promotion_app_slug=")
+        function = _extract_bash_function(SOURCE_GATE_WORKFLOW, "is_promotion_app_author")
+        script = (
+            "set -euo pipefail\n"
+            f'PROMOTION_APP_LOGIN="{self.PROMOTION_APP_LOGIN}"\n'
+            + slug_line
+            + "\n"
+            + function
+            + f'\nis_promotion_app_author "{candidate}"\n'
+        )
+        result = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+        return result.returncode == 0
+
+    def test_accepts_the_observed_rest_form(self):
+        self.assertTrue(self.accepts("promoter[bot]"))
+
+    def test_accepts_the_observed_graphql_form(self):
+        self.assertTrue(self.accepts("app/promoter"))
+
+    def test_rejects_an_unrelated_author(self):
+        for candidate in ("someone-else", "app/someone-else", "promoter"):
+            with self.subTest(candidate=candidate):
+                self.assertFalse(self.accepts(candidate))
+
+    def run_malformed_login_guard(self, login: str):
+        validation = re.search(
+            r"( *)if \[\[ \"\$\{PROMOTION_APP_LOGIN\}\" != \?\*'\[bot\]' \]\]; then\n"
+            r"(?:.*\n)*?\1fi\n",
+            SOURCE_GATE_WORKFLOW,
+        )
+        self.assertIsNotNone(validation, "malformed-login guard not found in source-gate")
+        script = (
+            "set -euo pipefail\n"
+            f'PROMOTION_APP_LOGIN="{login}"\n'
+            + validation.group(0)
+        )
+        return subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+
+    def test_fails_closed_on_a_login_missing_the_bot_suffix(self):
+        result = self.run_malformed_login_guard("promoter")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("must be the REST-form", result.stdout)
+
+    def test_fails_closed_on_an_empty_slug(self):
+        # "[bot]" alone satisfies a suffix-only check but derives an empty
+        # slug, which would make is_promotion_app_author wrongly accept the
+        # bare GraphQL author "app/"; the guard must reject it outright.
+        result = self.run_malformed_login_guard("[bot]")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("must be the REST-form", result.stdout)
+
+
 class NightlyMergeTest(unittest.TestCase):
     SHA = "d" * 40
 
-    def run_merge(self, *, failed_check=None, merge_state="CLEAN", moved=False):
-        function = re.search(
-            r"( *)merge_unstable\(\) \{.*?\n\1\}", PROMOTE_WORKFLOW, re.DOTALL
-        ).group(0)
+    def run_merge_result(self, *, failed_check=None, merge_state="CLEAN", moved=False,
+                          author="promoter[bot]"):
+        function = (
+            _extract_bash_function(PROMOTE_WORKFLOW, "is_promotion_app_author")
+            + "\n"
+            + _extract_bash_function(PROMOTE_WORKFLOW, "merge_unstable")
+        )
         checks = [
             {"name": name, "conclusion": "FAILURE" if name == failed_check else "SUCCESS"}
             for name in ("merge-gate / unstable", "source-gate / unstable",
@@ -212,7 +393,7 @@ class NightlyMergeTest(unittest.TestCase):
                          "codeql (python)", "codeql (rust)")
         ]
         pr = {
-            "author": {"login": "promoter[bot]"}, "baseRefName": "unstable",
+            "author": {"login": author}, "baseRefName": "unstable",
             "baseRefOid": "b" * 40, "headRefName": "dev", "headRefOid": self.SHA,
             "isDraft": False, "mergeStateStatus": merge_state, "statusCheckRollup": checks,
         }
@@ -240,7 +421,7 @@ else:
             live_head = "e" * 40 if moved else self.SHA
             script = (
                 "set -euo pipefail\n"
-                'APP_LOGIN="promoter[bot]"\nREPOSITORY="owner/repo"\n'
+                'APP_LOGIN="promoter[bot]"\nAPP_SLUG="promoter"\nREPOSITORY="owner/repo"\n'
                 'REPOSITORY_OWNER="owner"\n'
                 f'branch_sha() {{ if [[ "$1" == dev ]]; then echo {live_head}; '
                 f'else echo {"b" * 40}; fi; }}\n'
@@ -249,12 +430,27 @@ else:
             result = subprocess.run(["bash", "-c", script], capture_output=True, text=True,
                                     env={**os.environ, "PATH": f"{root}:{os.environ['PATH']}",
                                          "GH_FIXTURE": str(root)})
-            self.assertEqual(result.returncode, 0, result.stderr)
             merged = root / "merged.json"
-            return json.loads(merged.read_text()) if merged.exists() else None
+            merged_body = json.loads(merged.read_text()) if merged.exists() else None
+            return result, merged_body
+
+    def run_merge(self, *, failed_check=None, merge_state="CLEAN", moved=False,
+                  author="promoter[bot]"):
+        result, merged_body = self.run_merge_result(
+            failed_check=failed_check, merge_state=merge_state, moved=moved, author=author
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return merged_body
 
     def test_green_candidate_merges_without_an_owner_status(self):
         self.assertIn(f"sha={self.SHA}", self.run_merge())
+
+    def test_an_unrelated_author_is_rejected_not_merged(self):
+        result, merged_body = self.run_merge_result(author="someone-else")
+        self.assertEqual(result.returncode, 1)
+        self.assertIsNone(merged_body)
+        self.assertIn("is not the expected App-created ready dev->unstable promotion",
+                       result.stderr)
 
     def test_each_required_ci_failure_keeps_the_previous_nightly(self):
         for check in ("merge-gate / unstable", "source-gate / unstable", "dependency-review",
@@ -323,13 +519,27 @@ class SourceGateWorkflowContractTest(unittest.TestCase):
             SOURCE_GATE_WORKFLOW,
         )
         self.assertIn(
-            '"${live_author}" != "${PROMOTION_APP_LOGIN}"',
+            'if ! is_promotion_app_author "${live_author}"; then',
             SOURCE_GATE_WORKFLOW,
         )
         self.assertIn('stable) preceding_head="dev"', SOURCE_GATE_WORKFLOW)
         self.assertIn('main)   preceding_head="unstable"', SOURCE_GATE_WORKFLOW)
         self.assertIn(".mergeCommit.oid ==", SOURCE_GATE_WORKFLOW)
         self.assertIn("${EVENT_HEAD_SHA}", SOURCE_GATE_WORKFLOW)
+
+    def test_source_gate_rejects_a_misconfigured_app_login(self):
+        self.assertIn("!= ?*'[bot]'", SOURCE_GATE_WORKFLOW)
+        self.assertIn(
+            "PROMOTION_APP_LOGIN must be the REST-form <slug>[bot] login with a non-empty slug",
+            SOURCE_GATE_WORKFLOW,
+        )
+
+    def test_preceding_provenance_uses_the_app_identity_rule(self):
+        self.assertIn(
+            'if [[ -n "${candidate_login}" ]] && is_promotion_app_author "${candidate_login}"; then',
+            SOURCE_GATE_WORKFLOW,
+        )
+        self.assertEqual(SOURCE_GATE_WORKFLOW.count("is_promotion_app_author"), 3)
         self.assertIn('if [[ "${provenance}" != "1" ]]', SOURCE_GATE_WORKFLOW)
 
 

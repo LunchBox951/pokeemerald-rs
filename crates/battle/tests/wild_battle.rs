@@ -105,6 +105,92 @@ fn scripted_wild_battle_runs_move_vs_move_to_a_faint_and_reports_victory() {
 }
 
 #[test]
+fn a_wild_opponent_resolves_its_own_tackle_through_accuracy_crit_and_damage() {
+    let dex = Dex::new();
+
+    // Evenly matched level-5 combatants: neither one-shots the other, so
+    // both sides' Tackle -- accuracy, critical-hit, and damage rolls --
+    // resolve within the same turn, unlike the level-50-vs-level-5 fixture
+    // above where the enemy never gets to act.
+    let player = fixed_mon(&dex, 4, 5, vec![MoveId(33)]);
+    let player_max_hp = player.stats().max_hp;
+
+    let mut rng = ScriptedRng::new([
+        // build_wild_pokemon (5 draws):
+        0, // wild nature
+        0, // personality, first attempt: low half
+        0, // personality, first attempt: high half
+        0, // wild IV draw 1
+        0, // wild IV draw 2
+        // Battle::new (1 draw):
+        0, // battle-start turn number
+        // the turn (2 draws, then 4 per attacker; unequal Speed skips both
+        // turn-order tie draws -- the player's 13 outpaces the enemy's 12):
+        0,  // turn number
+        0,  // opponent's move selection
+        0,  // player's accuracy roll
+        1,  // player's critical-hit roll: non-crit
+        15, // player's damage variance roll: the minimum (85%)
+        0,  // player's discarded effect-chance roll
+        0,  // enemy's accuracy roll
+        0,  // enemy's critical-hit roll: crit
+        0,  // enemy's damage variance roll: the maximum (100%)
+        0,  // enemy's discarded effect-chance roll
+    ]);
+
+    let enemy = build_wild_pokemon(&dex, SpeciesId(19), 5, vec![MoveId(33)], &mut rng)
+        .expect("wild Rattata construction");
+    assert_eq!(
+        player.stats().speed,
+        13,
+        "the player must outpace the enemy for a deterministic turn order without a tie draw"
+    );
+    assert_eq!(enemy.stats().speed, 12);
+    let enemy_max_hp = enemy.stats().max_hp;
+
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).expect("Battle::new");
+
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .expect("take_turn");
+
+    assert_eq!(
+        events,
+        vec![
+            BattleEvent::Hit {
+                by_player: true,
+                move_id: MoveId(33),
+                damage: 4,
+                is_critical: false,
+            },
+            BattleEvent::Hit {
+                by_player: false,
+                move_id: MoveId(33),
+                damage: 12,
+                is_critical: true,
+            },
+        ],
+        "both Tackles must resolve in the same turn: {events:?}"
+    );
+    assert_eq!(
+        battle.player().current_hp(),
+        player_max_hp - 12,
+        "the enemy's landed Tackle must be reflected in the player's HP"
+    );
+    assert_eq!(battle.enemy().current_hp(), enemy_max_hp - 4);
+    assert_eq!(
+        battle.outcome(),
+        None,
+        "neither combatant faints at this HP/damage pairing, so the battle continues"
+    );
+    assert_eq!(
+        rng.draws(),
+        16,
+        "5 (wild construction) + 1 (battle start) + 2 (turn/move selection) + 4 + 4 (both hits)"
+    );
+}
+
+#[test]
 fn a_faster_player_always_escapes_a_wild_battle_successfully() {
     let dex = Dex::new();
     let player = fixed_mon(&dex, 4, 50, vec![MoveId(33)]);

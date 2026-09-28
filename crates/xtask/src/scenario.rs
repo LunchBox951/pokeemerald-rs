@@ -1,4 +1,5 @@
 use std::fmt;
+use std::sync::OnceLock;
 
 use pokeemerald_rs::main_menu::MainMenuItem;
 use pokeemerald_rs::{App, AppButtons, AppState, BattleOutcome};
@@ -20,16 +21,44 @@ struct ScenarioSpec {
     requires_first_battle_outcome: bool,
 }
 
-const BOOT_TO_MAIN_MENU: [ScenarioFrame; 2] = [
-    ScenarioFrame {
-        buttons: AppButtons::START,
-        expected: AppState::MainMenu(MainMenuItem::NewGame),
-    },
-    ScenarioFrame {
-        buttons: AppButtons::NONE,
-        expected: AppState::MainMenu(MainMenuItem::NewGame),
-    },
-];
+/// The number of frames between a front-end fade-wait press and the
+/// destination's first frame (I-3, issue #1329): `rendering::palette_fade`'s
+/// own 22-call trace after `begin`, less the second update the press frame
+/// itself runs, so the last of these frames is the one whose update reports
+/// `Done` and still presents the fully faded title.
+const FADE_WAIT_FRAMES: usize = 21;
+
+/// Press Start, hold through the white title fade-wait
+/// (`pokeemerald_rs::flow::AppScene::TitleFadeWait`, reported as
+/// `AppState::Title` throughout), then confirm the main menu is current and
+/// stays current one frame later.
+fn boot_to_main_menu_frames() -> &'static [ScenarioFrame] {
+    static FRAMES: OnceLock<Vec<ScenarioFrame>> = OnceLock::new();
+    FRAMES.get_or_init(|| {
+        expand_segments(&[
+            Segment {
+                buttons: AppButtons::START,
+                count: 1,
+                expected: AppState::Title,
+            },
+            Segment {
+                buttons: AppButtons::NONE,
+                count: FADE_WAIT_FRAMES,
+                expected: AppState::Title,
+            },
+            Segment {
+                buttons: AppButtons::NONE,
+                count: 1,
+                expected: AppState::MainMenu(MainMenuItem::NewGame),
+            },
+            Segment {
+                buttons: AppButtons::NONE,
+                count: 1,
+                expected: AppState::MainMenu(MainMenuItem::NewGame),
+            },
+        ])
+    })
+}
 
 // Mirrors `engine::overworld::WALK_FRAMES_PER_TILE` without adding a direct dependency.
 const WALK_FRAMES_PER_TILE: usize = 16;
@@ -59,7 +88,7 @@ fn spec(name: ScenarioName) -> ScenarioSpec {
     match name {
         ScenarioName::BootToMainMenu => ScenarioSpec {
             initial: AppState::Title,
-            frames: &BOOT_TO_MAIN_MENU,
+            frames: boot_to_main_menu_frames(),
             requires_first_battle_outcome: false,
         },
         ScenarioName::BootToFirstFight => ScenarioSpec {
@@ -267,23 +296,35 @@ mod tests {
     }
 
     impl FakeDriver {
+        /// Hand-specified, independently of [`spec`], so a wrong scripted
+        /// input or per-frame expectation in the real script fails against
+        /// it rather than changing both sides of the comparison.
+        ///
+        /// Frame 0 presses START and stays on the title while its white fade
+        /// begins. Frames 1 through 21 are the released fade-wait, still
+        /// reported as the title: `rendering::palette_fade`'s 22 updates
+        /// after `begin`, less the one the press frame runs, the last of
+        /// them the frame the fade reports done. Frames 22 and 23 are the
+        /// main menu.
         fn boot_to_main_menu() -> Self {
+            let frame = |expected_buttons, next_state| FakeFrame {
+                expected_buttons,
+                next_state,
+                should_continue: true,
+            };
+            let mut frames = VecDeque::from([frame(AppButtons::START, AppState::Title)]);
+            frames.extend(
+                std::iter::repeat_with(|| frame(AppButtons::NONE, AppState::Title)).take(21),
+            );
+            frames.extend([
+                frame(AppButtons::NONE, AppState::MainMenu(MainMenuItem::NewGame)),
+                frame(AppButtons::NONE, AppState::MainMenu(MainMenuItem::NewGame)),
+            ]);
             Self {
                 current_state: AppState::Title,
                 held_buttons: AppButtons::NONE,
                 first_battle_outcome: None,
-                frames: VecDeque::from([
-                    FakeFrame {
-                        expected_buttons: AppButtons::START,
-                        next_state: AppState::MainMenu(MainMenuItem::NewGame),
-                        should_continue: true,
-                    },
-                    FakeFrame {
-                        expected_buttons: AppButtons::NONE,
-                        next_state: AppState::MainMenu(MainMenuItem::NewGame),
-                        should_continue: true,
-                    },
-                ]),
+                frames,
             }
         }
     }
@@ -324,11 +365,13 @@ mod tests {
         let report = run_with_driver(spec(ScenarioName::BootToMainMenu), &mut driver)
             .expect("the proving scenario should pass");
 
-        assert_eq!(report.frames_run, 2);
+        assert_eq!(report.frames_run, 24);
         assert_eq!(report.first_battle_outcome, None);
         assert_eq!(
             report.milestones,
-            vec![AppState::Title, AppState::MainMenu(MainMenuItem::NewGame)]
+            vec![AppState::Title, AppState::MainMenu(MainMenuItem::NewGame)],
+            "the fade-wait frames must not introduce a distinct milestone \
+             of their own"
         );
         assert!(driver.frames.is_empty(), "every scripted frame must run");
     }
@@ -336,6 +379,7 @@ mod tests {
     #[test]
     fn a_wrong_initial_state_fails_before_input() {
         let mut driver = FakeDriver::boot_to_main_menu();
+        let frame_count = driver.frames.len();
         driver.current_state = AppState::SyntheticBoot;
         let error = run_with_driver(spec(ScenarioName::BootToMainMenu), &mut driver)
             .expect_err("the title milestone is required");
@@ -348,7 +392,7 @@ mod tests {
         ));
         assert_eq!(
             driver.frames.len(),
-            2,
+            frame_count,
             "no frame may run after the mismatch"
         );
     }
@@ -356,16 +400,17 @@ mod tests {
     #[test]
     fn a_wrong_post_frame_milestone_fails_closed() {
         let mut driver = FakeDriver::boot_to_main_menu();
-        driver.frames[0].next_state = AppState::Title;
+        let last = driver.frames.len() - 1;
+        driver.frames[last].next_state = AppState::Title;
         let error = run_with_driver(spec(ScenarioName::BootToMainMenu), &mut driver)
             .expect_err("the menu milestone is required");
         assert!(matches!(
             error,
             ScenarioError::Milestone {
-                frame: 0,
+                frame,
                 expected: AppState::MainMenu(MainMenuItem::NewGame),
                 actual: AppState::Title
-            }
+            } if frame == last
         ));
     }
 
@@ -416,7 +461,10 @@ mod tests {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let report = super::run(ScenarioName::BootToMainMenu)
             .expect("boot-to-main-menu should pass against the real pack");
-        assert_eq!(report.frames_run, 2);
+        assert_eq!(
+            report.frames_run,
+            spec(ScenarioName::BootToMainMenu).frames.len()
+        );
         assert_eq!(report.first_battle_outcome, None);
         assert_eq!(
             report.milestones,

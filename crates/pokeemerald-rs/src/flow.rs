@@ -15,6 +15,16 @@
 //! single frame -- see that variant's own doc comment and
 //! [`should_retry_overworld_load`].
 //!
+//! # Waiting for the front-end palette fade (I-3, issue #1329)
+//!
+//! `Title` -> `MainMenu` and a `MainMenu` confirm on `NEW GAME`/`CONTINUE`
+//! hold the outgoing frame through a [`rendering::NormalPaletteFade`]
+//! before the destination loads, matching upstream's own
+//! `BeginNormalPaletteFade`/`UpdatePaletteFade` gate
+//! (`pokeemerald/src/title_screen.c:779-787,824-828`;
+//! `main_menu.c:884-894,936-943`) -- see [`AppScene::TitleFadeWait`] and
+//! [`AppScene::MainMenuFadeWait`] for the waiting states themselves.
+//!
 //! [`AnimatedTitle`] is the pre-I-3 per-frame title-animation state,
 //! unchanged in shape and behaviour from before this issue (see
 //! [`advance_scene`]'s `Title` arm and `crate::app`'s "Animating the real
@@ -46,17 +56,23 @@
 use engine::text::render::PrinterInput;
 use platform::{ButtonState, Buttons, Frame};
 
-use crate::frame::to_platform_frame;
 use crate::game_save::{SaveSlot, SavedGame};
 use crate::intro::{self, IntroScene, IntroStatus};
 use crate::main_menu::{self, MainMenuItem, MainMenuScene, MainMenuSceneError, MainMenuType};
 use crate::new_game::NewGameOptions;
 use crate::title::TitleScene;
+use fade_wait::{
+    advance_main_menu, advance_main_menu_fade_wait, advance_title, advance_title_fade_wait,
+    MainMenuFadeWait, TitleFadeWait,
+};
 
 /// The battle-turn finalization (issue #405) shared by all three headless
 /// battle drivers -- see that module's docs for the shared decision and
 /// write-back, and each driver's own docs for what stays driver-specific.
 mod battle_finalize;
+/// I-3 (issue #1329) front-end palette fade-wait states and the four
+/// [`advance_scene`] arms that drive them -- this module's own docs.
+mod fade_wait;
 pub(crate) mod first_battle;
 /// The level-up move-replacement decision (issue #304), answered in one
 /// place for all three headless battle drivers — see that module's docs for
@@ -152,10 +168,23 @@ pub(crate) enum AppScene {
     /// The idle/animating title screen, waiting for A or Start
     /// ([`title_advance_pressed`]).
     Title(Box<AnimatedTitle>),
+    /// Waiting for the title's white front-end palette fade before
+    /// [`title_to_main_menu`] runs (I-3, issue #1329: module docs' "Waiting
+    /// for the front-end palette fade" section). [`AnimatedTitle::tick`]
+    /// stays fixed here -- the retained title stops animating, matching
+    /// upstream parking `CB2_GoToMainMenu` on the fade rather than the
+    /// title task.
+    TitleFadeWait(Box<TitleFadeWait>),
     /// The main menu (I-3, issue #216; I-6, issue #214): Up/Down move the
     /// selection, A confirms it (module docs on [`advance_scene`]'s
     /// `MainMenu` arm for what each item does).
     MainMenu(Box<MainMenuState>),
+    /// Waiting for the main menu's black front-end palette fade before the
+    /// [`MainMenuAction`] a fresh A confirmed on `NEW GAME`/`CONTINUE`
+    /// dispatches (I-3, issue #1329: module docs' "Waiting for the
+    /// front-end palette fade" section). `OPTION`'s swallowed press never
+    /// reaches this state -- module docs' boundary note.
+    MainMenuFadeWait(Box<MainMenuFadeWait>),
     /// Birch's speech, paging through [`crate::intro::speech`]'s text.
     Intro(Box<IntroScene>),
     /// The intro finished, but [`OverworldPhase::load_default`] failed once
@@ -378,18 +407,19 @@ fn main_menu_load_failure_message(err: &MainMenuSceneError) -> String {
     )
 }
 
-/// The `Title` -> `MainMenu` half of [`advance_scene`]'s `AppScene::Title`
-/// arm, split out so that arm stays under the lint's line budget
-/// `(oop-boundaries)`: reads `save_slot`, builds the menu bordered with the
-/// save's own window frame, and returns the next scene and its first frame
-/// on success -- upstream reads the save before the title screen ever
-/// draws, in `CB2_InitCopyrightScreenAfterBootup` (`src/intro.c:1147-1159`),
-/// and parks the verdict in `gSaveFileStatus` for `Task_MainMenuCheckSaveFile`
-/// to branch on later. This port has no copyright screen and no globals
-/// `(oop-boundaries)`, so the load happens at the one moment its result is
-/// first needed -- building the menu -- and travels onward as a value in
-/// `MainMenuState`. The observable result is identical: the menu shown is
-/// the one the save on disk selects.
+/// The `Title` -> `MainMenu` half of [`advance_scene`]'s
+/// `AppScene::TitleFadeWait` arm, split out so that arm stays under the
+/// lint's line budget `(oop-boundaries)`: reads `save_slot`, builds the menu
+/// bordered with the save's own window frame, and returns the next scene and
+/// its first frame on success -- upstream reads the save before the title
+/// screen ever draws, in `CB2_InitCopyrightScreenAfterBootup`
+/// (`src/intro.c:1147-1159`), and parks the verdict in `gSaveFileStatus` for
+/// `Task_MainMenuCheckSaveFile` to branch on later. This port has no
+/// copyright screen and no globals `(oop-boundaries)`, so the load happens
+/// at the one moment its result is first needed -- once the title's fade
+/// reports done -- and travels onward as a value in `MainMenuState`. The
+/// observable result is identical: the menu shown is the one the save on
+/// disk selects.
 ///
 /// Returns `None`, after logging, if the pack load fails -- the caller stays
 /// on the title screen.
@@ -425,10 +455,13 @@ fn title_to_main_menu(
 /// Every `Title`/`MainMenu`/`Intro` -> next-scene transition loads its own
 /// fresh [`assets::AssetPack`] (mirroring how [`TitleScene`]/
 /// [`OverworldScene`](crate::overworld::OverworldScene) already each load
-/// their own pack independently) and
-/// composes that scene's first frame immediately, so the returned frame is
-/// always the *new* scene's -- never a stale one from the scene being left.
-/// If a transition's pack load fails, this logs and returns the *original*
+/// their own pack independently) and composes that scene's first frame
+/// immediately once it runs, so the returned frame is always the *new*
+/// scene's -- never a stale one from the scene being left. `Title` ->
+/// `MainMenu` and a `MainMenu` confirm now enter the front-end fade-wait
+/// states first instead (module docs); `Intro` -> `Overworld` still loads
+/// immediately (module docs' boundary note: no fade there). If a
+/// transition's pack load fails, this logs and returns the *original*
 /// scene unchanged instead (module docs) -- except `Intro` -> `Overworld`
 /// specifically, whose failure instead moves to
 /// [`AppScene::OverworldLoadFailed`] (module docs' exception, and that
@@ -456,64 +489,10 @@ pub(crate) fn advance_scene(
     pack_source: crate::pack_source::PackSource,
 ) -> (AppScene, Box<Frame>) {
     match scene {
-        AppScene::Title(mut title) => {
-            if title.presented {
-                title.tick = title.tick.wrapping_add(1);
-            }
-            title.presented = true;
-
-            if title_advance_pressed(buttons) {
-                if let Some(result) = title_to_main_menu(pack_source, save_slot) {
-                    return result;
-                }
-            }
-
-            let frame = to_platform_frame(&title.scene.compose(title.tick));
-            (AppScene::Title(title), frame)
-        }
-        AppScene::MainMenu(mut state) => {
-            if buttons.is_newly_pressed(Buttons::A) {
-                // A pure decision, not an inline match, so the item ->
-                // action mapping is pinned by a pack-less test -- see
-                // `menu_action`'s own doc comment.
-                match menu_action(state.scene.selected()) {
-                    MainMenuAction::NewGame => {
-                        match intro::load(pack_source, new_game_options_for(&state.saved)) {
-                            Ok(intro_scene) => {
-                                let frame = intro_scene.compose_frame();
-                                return (AppScene::Intro(Box::new(intro_scene)), frame);
-                            }
-                            Err(err) => eprintln!("intro: {err} -- staying on the main menu"),
-                        }
-                    }
-                    // `ACTION_CONTINUE` (`main_menu.c:1064-1069`) ->
-                    // `CB2_ContinueSavedGame`. The blocks are moved out of
-                    // the menu state by cloning rather than by consuming it,
-                    // because a failed continue must leave the menu exactly
-                    // as it was -- still offering `CONTINUE`, still holding
-                    // the save it could not resume.
-                    MainMenuAction::Continue => {
-                        let (block1, block2) =
-                            (state.saved.block1.clone(), state.saved.block2.clone());
-                        match OverworldPhase::continue_saved_game(pack_source, block1, block2) {
-                            Ok(phase) => {
-                                log_game_continued(&phase);
-                                let frame = phase.compose_frame();
-                                return (AppScene::Overworld(Box::new(phase)), frame);
-                            }
-                            Err(err) => eprintln!("{err} -- staying on the main menu"),
-                        }
-                    }
-                    MainMenuAction::None => {}
-                }
-            } else if buttons.is_newly_pressed(Buttons::UP) {
-                state.scene.move_up();
-            } else if buttons.is_newly_pressed(Buttons::DOWN) {
-                state.scene.move_down();
-            }
-            let frame = state.scene.compose_frame();
-            (AppScene::MainMenu(state), frame)
-        }
+        AppScene::Title(title) => advance_title(title, buttons),
+        AppScene::TitleFadeWait(wait) => advance_title_fade_wait(wait, save_slot, pack_source),
+        AppScene::MainMenu(state) => advance_main_menu(state, buttons),
+        AppScene::MainMenuFadeWait(wait) => advance_main_menu_fade_wait(wait, pack_source),
         // Issue #393: B is an ordinary dialogue-advance button here, not a
         // whole-intro skip -- `intro_printer_input`'s own doc comment.
         AppScene::Intro(mut intro_scene) => {
