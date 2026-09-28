@@ -758,8 +758,9 @@ impl OverworldPhase {
     /// The saved `optionsTextSpeed`, repaired and read exactly as upstream's
     /// `GetPlayerTextSpeedDelay` (`pokeemerald/src/menu.c:481-488`) --
     /// mirroring `start_menu`'s `player_text_speed` write-back for the SAVE
-    /// prompt.
-    fn field_dialog_text_speed(&mut self) -> TextSpeed {
+    /// prompt. Shared with [`super::sight_trainer_approach`]'s intro speech,
+    /// which prints through the same field message box.
+    pub(super) fn field_dialog_text_speed(&mut self) -> TextSpeed {
         if self.save2.options_text_speed > OPTIONS_TEXT_SPEED_FAST {
             self.save2.options_text_speed = OPTIONS_TEXT_SPEED_MID;
         }

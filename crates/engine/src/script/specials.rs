@@ -645,6 +645,71 @@ mod tests {
     }
 
     #[test]
+    fn waitstate_flags_match_upstream_positions() {
+        const UPSTREAM_WAITSTATE_INDICES: [usize; 99] = [
+            2, 3, 24, 27, 28, 29, 30, 31, 33, 34, 37, 42, 43, 47, 58, 62, 63, 95, 96, 97, 112, 116,
+            120, 148, 155, 157, 158, 159, 160, 161, 162, 164, 165, 191, 192, 197, 202, 203, 211,
+            222, 227, 239, 248, 252, 253, 254, 257, 265, 266, 267, 273, 275, 276, 285, 286, 302,
+            307, 314, 315, 317, 321, 325, 334, 372, 380, 381, 388, 390, 401, 406, 411, 413, 416,
+            417, 419, 423, 429, 431, 435, 445, 446, 450, 452, 470, 471, 472, 477, 480, 483, 484,
+            485, 486, 494, 500, 505, 508, 511, 513, 518,
+        ];
+        let indices: Vec<usize> = SPECIALS
+            .iter()
+            .enumerate()
+            .filter_map(|(index, spec)| spec.waitstate.then_some(index))
+            .collect();
+        assert_eq!(indices, UPSTREAM_WAITSTATE_INDICES);
+    }
+
+    #[test]
+    fn duplicate_specials_preserve_encoded_positions() {
+        for (name, indices, waitstate) in [
+            ("ShowGlassWorkshopMenu", [277, 348], false),
+            ("ShowMapNamePopup", [409, 410], false),
+            ("Script_DoRayquazaScene", [470, 508], true),
+        ] {
+            for index in indices {
+                assert_eq!(SPECIALS[index].name, name, "index {index}");
+                assert_eq!(SPECIALS[index].waitstate, waitstate, "index {index}");
+            }
+        }
+    }
+
+    /// FNV-1a 64-bit hash, matching the change locator in `xtask::record_snapshot`.
+    fn fnv1a64(bytes: &[u8]) -> u64 {
+        bytes.iter().fold(0xcbf2_9ce4_8422_2325_u64, |hash, &byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+        })
+    }
+
+    /// Renders every entry's name and waitstate flag the way
+    /// `data/specials.inc` encodes them: the name, then `!` when
+    /// `waitstate` is set, then a newline, in table order.
+    fn render_table_bytes() -> Vec<u8> {
+        let mut out = Vec::new();
+        for spec in &SPECIALS {
+            out.extend_from_slice(spec.name.as_bytes());
+            if spec.waitstate {
+                out.push(b'!');
+            }
+            out.push(b'\n');
+        }
+        out
+    }
+
+    /// Digest of upstream `data/specials.inc`, every entry rendered as
+    /// `render_table_bytes` renders ours.
+    #[test]
+    fn every_entry_matches_the_canonical_digest() {
+        assert_eq!(
+            format!("{:016x}", fnv1a64(&render_table_bytes())),
+            "c469fec741db3e85",
+            "special registry diverges from the canonical upstream order",
+        );
+    }
+
+    #[test]
     fn special_ids_round_trip_within_range() {
         let id = SpecialId::from_index(0).unwrap();
         assert_eq!(id.index(), 0);

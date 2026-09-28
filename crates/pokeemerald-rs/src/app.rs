@@ -209,9 +209,16 @@ impl From<TitleSceneError> for AppError {
 pub enum AppState {
     /// The pack-free synthetic scene built by [`App::new_headless`].
     SyntheticBoot,
-    /// The real animated title screen.
+    /// The real animated title screen, including its front-end fade-wait
+    /// state (I-3, issue #1329: [`crate::flow::AppScene::TitleFadeWait`]) --
+    /// this milestone does not distinguish a title still animating from one
+    /// fading toward the main menu.
     Title,
-    /// The main menu and its current selection.
+    /// The main menu and its current selection, including its front-end
+    /// fade-wait state (I-3, issue #1329:
+    /// [`crate::flow::AppScene::MainMenuFadeWait`]) -- this milestone does
+    /// not distinguish a menu awaiting input from one already fading toward
+    /// its confirmed selection.
     MainMenu(MainMenuItem),
     /// Birch's new-game introduction.
     Intro,
@@ -673,6 +680,14 @@ impl App {
     /// [`MusicPlayer::fade_out`] is idempotent, so calling it on every
     /// post-title frame simply keeps the one running fade running.
     ///
+    /// A fresh advance press leaves `AppScene::Title` for its fade-wait
+    /// state on the press frame itself (I-3, issue #1329), so this fade
+    /// already starts before the deferred menu load is even attempted; if
+    /// that load then fails and the fade-wait restores `AppScene::Title`,
+    /// [`MusicPlayer::cancel_fade`] cancels the now-stale fade so the
+    /// recovered, interactive title keeps its music instead of running
+    /// down to silence for a screen the player never left.
+    ///
     /// A no-op throughout when [`Self::music`] is already `None` (no
     /// pack/audio device at boot, or a headless `App` that never requested
     /// one).
@@ -680,7 +695,9 @@ impl App {
         let Some(music) = &mut self.music else {
             return;
         };
-        if !matches!(self.scene, Some(AppScene::Title(_))) {
+        if matches!(self.scene, Some(AppScene::Title(_))) {
+            music.cancel_fade();
+        } else {
             music.fade_out(crate::music::TITLE_FADE_OUT_SPEED);
         }
         if music.fade_finished() && !music.tail_sounding() {
@@ -716,8 +733,11 @@ impl App {
     pub fn state(&self) -> AppState {
         match self.scene.as_ref() {
             None => AppState::SyntheticBoot,
-            Some(AppScene::Title(_)) => AppState::Title,
+            Some(AppScene::Title(_) | AppScene::TitleFadeWait(_)) => AppState::Title,
             Some(AppScene::MainMenu(menu)) => AppState::MainMenu(menu.scene.selected()),
+            Some(AppScene::MainMenuFadeWait(wait)) => {
+                AppState::MainMenu(wait.state.scene.selected())
+            }
             Some(AppScene::Intro(_)) => AppState::Intro,
             Some(AppScene::OverworldLoadFailed(_)) => AppState::OverworldLoadFailed,
             Some(AppScene::Overworld(phase)) if phase.is_first_battle_active() => {

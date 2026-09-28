@@ -14,7 +14,11 @@
 //!
 //! Confusion decrements once per attacker action, not once per end-of-turn
 //! tick like Charge (`CANCELER_CONFUSED`, `src/battle_util.c:2157`-`:2187`).
-//! [`Volatiles::tick_confusion`] reports only the terminal zero transition.
+//! [`Volatiles::tick_confusion`] reports only the terminal zero transition;
+//! [`draws_confusion_self_hit`] is the coin draw for a duration that is
+//! still active after that decrement.
+
+use crate::damage::BattleRng;
 
 /// The transient conditions carried by one battler.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -89,9 +93,56 @@ impl Volatiles {
     }
 }
 
+/// Confusion's coin draw for a battler whose duration is still active after
+/// this action's decrement: reports whether the chosen move is cancelled for
+/// a self-hit rather than continuing. `Random() & 1` odd continues the
+/// chosen move; even self-hits (`CANCELER_CONFUSED`,
+/// `src/battle_util.c:2157`-`:2187`).
+///
+/// Draws exactly once. Callers must not call this for an inactive or
+/// just-expired confusion, which draw nothing.
+#[must_use]
+pub fn draws_confusion_self_hit(rng: &mut impl BattleRng) -> bool {
+    rng.next_u16().is_multiple_of(2)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::Volatiles;
+    use super::{draws_confusion_self_hit, Volatiles};
+    use crate::damage::BattleRng;
+
+    struct FixedRng(u16);
+    impl BattleRng for FixedRng {
+        fn next_u16(&mut self) -> u16 {
+            self.0
+        }
+    }
+
+    struct CountingRng {
+        value: u16,
+        draws: u32,
+    }
+    impl BattleRng for CountingRng {
+        fn next_u16(&mut self) -> u16 {
+            self.draws += 1;
+            self.value
+        }
+    }
+
+    #[test]
+    fn an_even_draw_self_hits_and_an_odd_draw_continues() {
+        assert!(draws_confusion_self_hit(&mut FixedRng(0)));
+        assert!(draws_confusion_self_hit(&mut FixedRng(2)));
+        assert!(!draws_confusion_self_hit(&mut FixedRng(1)));
+        assert!(!draws_confusion_self_hit(&mut FixedRng(3)));
+    }
+
+    #[test]
+    fn the_confusion_coin_draws_exactly_once() {
+        let mut rng = CountingRng { value: 1, draws: 0 };
+        let _ = draws_confusion_self_hit(&mut rng);
+        assert_eq!(rng.draws, 1);
+    }
 
     #[test]
     fn a_fresh_battler_carries_no_volatiles() {

@@ -41,7 +41,7 @@ use engine::save::{BoxPokemon, Pokemon, SaveBlock1, SaveBlock2};
 use platform::Buttons;
 
 use super::overworld_phase::{saved_map_id, OverworldPhase};
-use super::tests::{held, pressed, TempSave};
+use super::tests::{drive_through_fade_wait, held, pressed, TempSave};
 use super::{menu_type_for, AppScene, MainMenuState};
 use crate::game_save::SaveSlot;
 use crate::main_menu::{MainMenuItem, MainMenuType};
@@ -726,15 +726,23 @@ fn real_pack_continue_from_the_main_menu_restores_the_saved_game() {
     assert_eq!(menu.selected(), MainMenuItem::Continue);
 
     let scene = AppScene::MainMenu(Box::new(MainMenuState { scene: menu, saved }));
-    let (next, _frame) = super::advance_scene(
+    // I-3, issue #1329: the press must first enter the black fade-wait
+    // state, not hand off to the overworld on the press frame.
+    let (waiting, _press_frame) = super::advance_scene(
         scene,
         pressed(Buttons::A),
         &mut slot,
         crate::pack_source::PackSource::Runtime,
     );
+    assert!(
+        matches!(waiting, AppScene::MainMenuFadeWait(_)),
+        "A on CONTINUE must first enter the black fade-wait state"
+    );
+    let (next, _wait_frames, _destination_frame) =
+        drive_through_fade_wait(waiting, &mut slot, crate::pack_source::PackSource::Runtime);
 
     let AppScene::Overworld(resumed) = next else {
-        panic!("A on CONTINUE must hand off to the overworld");
+        panic!("A on CONTINUE must hand off to the overworld once the fade completes");
     };
     let after = snapshot(&resumed);
     assert_eq!(after.map, before.map);
