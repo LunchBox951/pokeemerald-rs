@@ -998,16 +998,8 @@ fn hblank_budget_regression_fixture() -> (
     (scene, player, event_data)
 }
 
-/// `OverworldScene::compose` selects the reduced 954-cycle HBlank-free OAM
-/// budget over the normal one; see its own doc comment for the
-/// `overworld.c:2122-2123` citation.
-///
-/// This drives the real `from_pack` -> `compose` pipeline rather than a
-/// bare `SpriteLayer` (unlike `crates/rendering/src/sprite.rs`'s
-/// `with_hblank_free_interval_applies_the_reduced_954_cycle_budget`), so a
-/// wiring regression fails here even though the budget math itself is
-/// covered there. The control assertions below pin that this fixture's
-/// arrangement straddles both budgets' cutoffs.
+/// The wiring of the reduced 954-cycle budget (`overworld.c:2122-2123`, cited
+/// on `OverworldScene::compose`); the budget math is pinned in `rendering`.
 #[test]
 fn compose_applies_the_reduced_954_cycle_hblank_free_oam_budget() {
     let (scene, player, event_data) = hblank_budget_regression_fixture();
