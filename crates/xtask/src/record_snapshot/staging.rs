@@ -1,12 +1,16 @@
 //! [`stage`] fills a `create_new`-held file and [`StagedFile::publish`]
 //! re-verifies that handle's identity before the promoting rename, so a
 //! symlink planted at the name is refused rather than followed or published.
-//! That check is not fused to the rename: a replacement landing in the gap
-//! is still promoted. Once staging has created a pointer file, a failure
-//! retains it and reports its last known path instead of removing it: a held
-//! file's identity check cannot make a later, separate pathname deletion
-//! conditional on that identity, so no failure path names and deletes this
-//! file a second time.
+//! On Unix the same handle survives the rename, so publication also
+//! re-verifies the promoted entry's identity before reporting success: a
+//! replacement that wins the gap between the check and the rename is
+//! promoted onto the pointer path but never accepted as the published
+//! pointer. Once staging has created a pointer file, a failure retains it
+//! (or, past a successful rename, retains the unverified promoted entry) and
+//! reports its last known path instead of removing it: a held file's
+//! identity check cannot make a later, separate pathname deletion
+//! conditional on that identity, so no failure path names and deletes an
+//! entry a second time.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -127,14 +131,19 @@ pub(super) struct StagedFile {
 }
 
 impl StagedFile {
-    /// Whether the staging path still names this staged file, rather than a
-    /// symlink, directory, or other entry that took its name.
+    /// Whether `path` names this staged file, rather than a symlink,
+    /// directory, or other entry that took its name.
     ///
     /// A reading that failed is neither answer, and surfaces rather than
     /// passing for "replaced".
-    fn still_ours(&self) -> std::io::Result<bool> {
-        let found = std::fs::symlink_metadata(&self.path)?;
+    fn matches(&self, path: &Path) -> std::io::Result<bool> {
+        let found = std::fs::symlink_metadata(path)?;
         Ok(found.file_type().is_file() && is_the_held_file(&self.hold, &found)?)
+    }
+
+    /// Whether the staging path still names this staged file.
+    fn still_ours(&self) -> std::io::Result<bool> {
+        self.matches(&self.path)
     }
 
     /// Gives up the hold, so that the rename which promotes the staged
@@ -158,19 +167,39 @@ impl StagedFile {
         )
     }
 
+    /// Folds a post-rename identity failure into `source` and reports the
+    /// promoted pointer's path. Nothing unlinks it: an unverifiable identity
+    /// cannot make a pathname deletion of `dest` conditional on the very
+    /// identity it failed to prove, so the promoted entry is left for an
+    /// operator to inspect and remove.
+    #[cfg(unix)]
+    fn report_unverified(dest: &Path, source: &std::io::Error) -> std::io::Error {
+        std::io::Error::new(
+            source.kind(),
+            format!(
+                "{source}; the promoted pointer was not removed; last known path: {}",
+                dest.display()
+            ),
+        )
+    }
+
     /// Verifies ownership, then publishes this staging path to `dest` by
     /// rename; refuses to publish a replaced or unverifiable staging path.
     pub(super) fn publish(self, dest: &Path) -> std::io::Result<()> {
-        self.publish_with(dest, || {})
+        self.publish_with(dest, || {}, || {})
     }
 
-    /// [`Self::publish`], plus a hook run right after a failed promoting
-    /// rename and before that failure is retained and reported. Production
-    /// always passes a no-op; tests use it to land a replacement at the
-    /// staging pathname and pin that a failed publish leaves it untouched.
+    /// [`Self::publish`], plus `before_rename` run immediately before the
+    /// promoting rename and `on_rename_failure` run right after a failed one
+    /// and before that failure is retained and reported. Production always
+    /// passes no-ops; tests use `before_rename` to land a replacement at the
+    /// staging pathname ahead of the rename that promotes it, and
+    /// `on_rename_failure` to land one at the staging pathname a failed
+    /// rename leaves behind.
     pub(super) fn publish_with(
         mut self,
         dest: &Path,
+        before_rename: impl FnOnce(),
         on_rename_failure: impl FnOnce(),
     ) -> std::io::Result<()> {
         match self.still_ours() {
@@ -193,9 +222,36 @@ impl StagedFile {
             }
         }
         self.release_hold();
+        before_rename();
         std::fs::rename(&self.path, dest).map_err(|error| {
             on_rename_failure();
             self.report_retained(&error)
-        })
+        })?;
+        #[cfg(unix)]
+        match self.matches(dest) {
+            Ok(true) => {}
+            Ok(false) => {
+                return Err(Self::report_unverified(
+                    dest,
+                    &std::io::Error::other(format!(
+                        "the promoted pointer {} does not match the staged file",
+                        dest.display()
+                    )),
+                ));
+            }
+            Err(error) => {
+                return Err(Self::report_unverified(
+                    dest,
+                    &std::io::Error::new(
+                        error.kind(),
+                        format!(
+                            "the promoted pointer {} could not be confirmed after publishing: {error}",
+                            dest.display()
+                        ),
+                    ),
+                ));
+            }
+        }
+        Ok(())
     }
 }
