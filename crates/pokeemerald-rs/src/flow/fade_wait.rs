@@ -78,22 +78,28 @@ pub(super) fn advance_title(
 }
 
 /// The [`AppScene::TitleFadeWait`] arm of [`super::advance_scene`]: drives
-/// one fade update, ignoring input, and only once it reports done calls
-/// [`title_to_main_menu`] -- restoring the retained title unfaded, at the
-/// tick it last composed, if that load fails (that function's own doc
-/// comment).
+/// one fade update per frame, ignoring input, and calls
+/// [`title_to_main_menu`] only on the step after the one whose update
+/// reported done -- restoring the retained title unfaded, at the tick it
+/// last composed, if that load fails (that function's own doc comment).
+///
+/// The done frame itself still presents the fully faded title: upstream's
+/// `CB2_GoToMainMenu` only installs `CB2_InitMainMenu` when the fade
+/// finishes, and that callback first runs on the next frame
+/// (`pokeemerald/src/title_screen.c:824-828`).
 pub(super) fn advance_title_fade_wait(
     mut wait: Box<TitleFadeWait>,
     save_slot: &mut SaveSlot,
     pack_source: crate::pack_source::PackSource,
 ) -> (AppScene, Box<Frame>) {
-    if wait.fade.update() == PaletteFadeStatus::Done {
+    if wait.fade.is_done() {
         if let Some(result) = title_to_main_menu(pack_source, save_slot) {
             return result;
         }
         let frame = to_platform_frame(&wait.title.scene.compose(wait.title.tick));
         return (AppScene::Title(wait.title), frame);
     }
+    wait.fade.update();
     let frame = to_platform_frame(wait.fade.framebuffer());
     (AppScene::TitleFadeWait(wait), frame)
 }
@@ -135,20 +141,28 @@ pub(super) fn advance_main_menu(
 }
 
 /// The [`AppScene::MainMenuFadeWait`] arm of [`super::advance_scene`]:
-/// drives one fade update, ignoring input, and only once it reports done
-/// calls [`dispatch_main_menu_action`] -- restoring the retained menu
-/// unfaded if that dispatch fails (that function's own doc comment).
+/// drives one fade update per frame, ignoring input, and calls
+/// [`dispatch_main_menu_action`] only on the step after the one whose update
+/// reported done -- restoring the retained menu unfaded if that dispatch
+/// fails (that function's own doc comment).
+///
+/// The done frame itself still presents the fully faded menu: upstream's
+/// `Task_HandleMainMenuAPressed` polls `gPaletteFade.active` from
+/// `RunTasks`, before that frame's own `UpdatePaletteFade`, so it first sees
+/// the fade finished on the next frame (`pokeemerald/src/main_menu.c:532-538`,
+/// `:936-943`).
 pub(super) fn advance_main_menu_fade_wait(
     mut wait: Box<MainMenuFadeWait>,
     pack_source: crate::pack_source::PackSource,
 ) -> (AppScene, Box<Frame>) {
-    if wait.fade.update() == PaletteFadeStatus::Done {
+    if wait.fade.is_done() {
         if let Some(result) = dispatch_main_menu_action(wait.action, pack_source, &wait.state) {
             return result;
         }
         let frame = wait.state.scene.compose_frame();
         return (AppScene::MainMenu(wait.state), frame);
     }
+    wait.fade.update();
     let frame = to_platform_frame(wait.fade.framebuffer());
     (AppScene::MainMenuFadeWait(wait), frame)
 }

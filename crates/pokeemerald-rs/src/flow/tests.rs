@@ -602,10 +602,25 @@ fn main_menu_confirm_on_new_game_waits_for_the_fade_before_dispatching() {
         scene = next;
     }
 
-    // The 21st frame after the press reports done: dispatch is attempted exactly once,
-    // fails against the entryless pack, and falls back to the retained
-    // menu -- still selecting `NEW GAME`, proving the UP/DOWN presses above
-    // were ignored, not merely unobserved.
+    // The 21st frame after the press is the one whose update reports done:
+    // it still presents the fully black retained menu rather than the
+    // destination, as upstream's task only observes the finished fade on
+    // the next frame.
+    let (done, done_frame) = advance_scene(scene, ButtonState::new(), &mut save_slot, pack_source);
+    assert!(
+        matches!(done, AppScene::MainMenuFadeWait(_)),
+        "the frame the fade reports done must still present the retained frame, not dispatch"
+    );
+    assert!(
+        done_frame.iter().all(|&pixel| pixel == 0),
+        "the done frame must present the fully black fade"
+    );
+    scene = done;
+
+    // The next frame dispatches exactly once, fails against the entryless
+    // pack, and falls back to the retained menu -- still selecting
+    // `NEW GAME`, proving the UP/DOWN presses above were ignored, not
+    // merely unobserved.
     let (after, _frame) = advance_scene(scene, ButtonState::new(), &mut save_slot, pack_source);
     drop(std::fs::remove_file(&pack_path));
     let AppScene::MainMenu(state) = after else {
