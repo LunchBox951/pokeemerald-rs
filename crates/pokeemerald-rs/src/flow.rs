@@ -75,9 +75,8 @@ mod battle_finalize;
 mod fade_wait;
 pub(crate) mod first_battle;
 /// The first-usable-move headless action policy shared by [`first_battle`]
-/// and [`npc_trainer_battle`] (issue #1337, generalized off issue #1191's
-/// byte-identical per-driver copies) -- see that module's docs for the
-/// RNG-state contract driving it.
+/// and [`npc_trainer_battle`] -- see that module's docs for the RNG-state
+/// contract driving it.
 mod first_usable_move;
 /// The level-up move-replacement decision (issue #304), answered in one
 /// place for all three headless battle drivers — see that module's docs for

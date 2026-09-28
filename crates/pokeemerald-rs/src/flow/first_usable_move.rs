@@ -1,7 +1,6 @@
 //! The first-usable-move headless action policy, shared by [`super::first_battle`] and
-//! [`super::npc_trainer_battle`] (issue #1337, generalized off issue #1191's
-//! byte-identical per-driver copies): both drive a headless battle with no action menu,
-//! and both pick their move the same way.
+//! [`super::npc_trainer_battle`]: both drive a headless battle with no action menu, and
+//! both pick their move the same way.
 
 use battle::{Battle, BattleEvent, PlayerAction, TurnError};
 use engine::rng::Rng;
