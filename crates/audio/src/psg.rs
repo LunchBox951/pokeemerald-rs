@@ -421,10 +421,20 @@ impl WaveChannel {
         chan
     }
 
-    /// Retunes the channel from an 11-bit frequency register value.
+    /// Retunes the channel from an 11-bit frequency register value. Unlike
+    /// the square channels, whose NR14/NR24 handlers touch no timing state
+    /// on a plain write (`mgba/src/gb/audio.c:168-197,219-244`), the wave
+    /// channel's NR34 handler resets its per-write deadline to a fresh new
+    /// period after every write, trigger bit or not, as long as the channel
+    /// is already playing (`mgba/src/gb/audio.c:307-335`). A pitch write
+    /// (`pokeemerald/src/m4a.c:1196-1202`) writes both NR33 and NR34
+    /// regardless of channel, so this keeps the sample index and discards
+    /// the fraction of the old step already elapsed, rather than retiming
+    /// it the way `retime_step_remainder` does for the square channels.
     pub fn set_frequency(&mut self, freq_reg: u16) {
         let hz = register_frequency_hz(freq_reg, WAVE_CLOCK_HZ);
         self.step_delta = phase_delta(hz, WAVE_STEPS_PER_CYCLE);
+        self.phase &= !(PHASE_ONE - 1);
     }
 
     /// Produces the next unscaled decoded sample in `-8..=7`.
@@ -831,6 +841,57 @@ mod tests {
         let mut wave = WaveChannel::new(full_amplitude_wave, 0);
         wave.step_delta = 0;
         assert_eq!(wave.sample(), 7);
+    }
+
+    fn samples_until_next_wave_step(mut chan: WaveChannel) -> u32 {
+        let index = chan.phase / PHASE_ONE;
+        (1..=PHASE_ONE)
+            .find(|_| {
+                chan.sample();
+                chan.phase / PHASE_ONE != index
+            })
+            .expect("a wave channel always reaches its next step")
+    }
+
+    /// A retune mid-step keeps the sample index but discards the fraction
+    /// of the old step already elapsed, so the new rate's first step lands
+    /// one new period after the retune itself, not after the step it
+    /// interrupted (`WaveChannel::set_frequency`'s doc).
+    #[test]
+    fn a_wave_retune_mid_step_lands_the_next_step_one_new_period_after_the_retune() {
+        const FIRST_FREQUENCY: u16 = 0x400;
+        const RETUNED_FREQUENCY: u16 = 0x200;
+        const SAMPLES_BEFORE_RETUNE: u32 = 3;
+
+        let wave_ram = WaveChannel::decode_wave_ram(&[0xF0; WAVE_RAM_BYTES]);
+        let mut wave = WaveChannel::new(wave_ram, FIRST_FREQUENCY);
+        // Walk into the middle of a step so a remainder is actually carried.
+        while wave.phase / PHASE_ONE == 0 {
+            wave.sample();
+        }
+        let last_step_index = wave.phase / PHASE_ONE;
+        for _ in 0..SAMPLES_BEFORE_RETUNE {
+            wave.sample();
+        }
+        assert_eq!(
+            wave.phase / PHASE_ONE,
+            last_step_index,
+            "the retune case must stay within the same step",
+        );
+
+        wave.set_frequency(RETUNED_FREQUENCY);
+        assert_eq!(
+            wave.phase % PHASE_ONE,
+            0,
+            "the retune must discard the elapsed fraction of the old step",
+        );
+        let retuned_period = f64::from(PHASE_ONE) / f64::from(wave.step_delta);
+
+        let next_step = f64::from(samples_until_next_wave_step(wave));
+        assert!(
+            (next_step - retuned_period).abs() <= 1.0,
+            "the retuned wave steps after {next_step} samples, expected about {retuned_period}",
+        );
     }
 
     #[test]
