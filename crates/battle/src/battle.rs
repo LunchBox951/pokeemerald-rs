@@ -30,6 +30,7 @@ use crate::secondary;
 use crate::stat_change;
 use crate::status1::{draws_full_paralysis, draws_shed_skin_cure, poison_residual_damage, Status1};
 use crate::turn_order::{resolve_order, Order};
+use crate::volatile::draws_confusion_self_hit;
 
 mod events;
 mod execute;
@@ -1032,8 +1033,8 @@ impl Battle {
         self.last_move_used = move_id;
         // `CANCELER_CONFUSED` decrements the attacker's confusion duration
         // ahead of `CANCELER_PARALYZED` (`src/battle_util.c:2157`-`:2199`).
-        // Only the terminal zero transition is modelled here: the self-hit
-        // draw a still-active decrement can trigger is out of this slice.
+        // A duration that survives the decrement draws once more before the
+        // paralysis draw and PP handling: a self-hit ends the action here.
         let attacker = if player_is_attacker {
             &mut self.player
         } else {
@@ -1043,6 +1044,14 @@ impl Battle {
             events.push(BattleEvent::SnappedOutOfConfusion {
                 by_player: player_is_attacker,
             });
+        } else if attacker.volatiles().confused() {
+            events.push(BattleEvent::Confused {
+                by_player: player_is_attacker,
+            });
+            if draws_confusion_self_hit(rng) {
+                self.apply_confusion_self_hit(player_is_attacker, rng, events);
+                return Ok(());
+            }
         }
         let attacker_status1 = if player_is_attacker {
             self.player.status1()

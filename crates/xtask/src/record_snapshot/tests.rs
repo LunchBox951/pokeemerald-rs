@@ -795,11 +795,15 @@ fn a_failed_publish_leaves_a_replacement_planted_at_the_old_cleanup_boundary() {
 
     let staged = super::staging::stage(&staging_path, b"generation\n").unwrap();
     let error = staged
-        .publish_with(&unreachable_dest, || {
-            // The promoting rename has already failed by the time this runs.
-            std::fs::rename(&staging_path, &carried_off).unwrap();
-            std::fs::write(&staging_path, b"someone else's file").unwrap();
-        })
+        .publish_with(
+            &unreachable_dest,
+            || {},
+            || {
+                // The promoting rename has already failed by the time this runs.
+                std::fs::rename(&staging_path, &carried_off).unwrap();
+                std::fs::write(&staging_path, b"someone else's file").unwrap();
+            },
+        )
         .unwrap_err();
 
     assert_eq!(
@@ -814,6 +818,101 @@ fn a_failed_publish_leaves_a_replacement_planted_at_the_old_cleanup_boundary() {
             .contains(&format!("last known path: {}", staging_path.display())),
         "the error must still report the staging path even though a replacement now sits there: {error}"
     );
+}
+
+/// A replacement that wins the gap between `publish`'s ownership check and
+/// its promoting rename is renamed onto the pointer path exactly as the
+/// genuine staged file would have been; publication must still refuse it
+/// rather than report success for whatever landed there.
+#[cfg(unix)]
+#[test]
+fn a_replacement_racing_the_promoting_rename_is_promoted_but_never_accepted() {
+    let dir = scratch_path("publish-race-foreign-file");
+    let _guard = ScratchGuard(dir.clone());
+    std::fs::create_dir_all(&dir).unwrap();
+    let staging_path = dir.join(".pointer.tmp");
+    let carried_off = dir.join("carried-off");
+    let pointer_path = dir.join("scene.generation");
+
+    let staged = super::staging::stage(&staging_path, b"a-generation\n").unwrap();
+    let error = staged
+        .publish_with(
+            &pointer_path,
+            || {
+                // Fires after the ownership check passes and before the
+                // promoting rename: the genuine staged file is carried off
+                // and a foreign regular file takes its name in the gap.
+                std::fs::rename(&staging_path, &carried_off).unwrap();
+                std::fs::write(&staging_path, b"attacker-controlled\n").unwrap();
+            },
+            || panic!("the promoting rename must succeed for this race to be exercised"),
+        )
+        .unwrap_err();
+
+    assert_eq!(
+        std::fs::read(&pointer_path).unwrap(),
+        b"attacker-controlled\n",
+        "the replacement is promoted onto the pointer path by the rename itself"
+    );
+    assert_eq!(
+        std::fs::read(&carried_off).unwrap(),
+        b"a-generation\n",
+        "the genuine staged file is untouched at its carried-off path"
+    );
+    assert!(
+        error
+            .to_string()
+            .contains(&format!("last known path: {}", pointer_path.display())),
+        "the error must name the promoted pointer path: {error}"
+    );
+}
+
+/// The same race, but the replacement is a symlink rather than a foreign
+/// regular file: a promoted symlink must be refused just as a foreign
+/// regular file is, and left in place for inspection.
+#[cfg(unix)]
+#[test]
+fn a_symlink_racing_the_promoting_rename_is_promoted_but_never_accepted() {
+    let dir = scratch_path("publish-race-symlink");
+    let _guard = ScratchGuard(dir.clone());
+    let bystander_dir = scratch_path("publish-race-symlink-bystander");
+    let bystander_guard = ScratchGuard(bystander_dir.clone());
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::create_dir_all(&bystander_dir).unwrap();
+    let staging_path = dir.join(".pointer.tmp");
+    let carried_off = dir.join("carried-off");
+    let pointer_path = dir.join("scene.generation");
+    let bystander = bystander_dir.join("bystander");
+    std::fs::write(&bystander, b"outside the output directory\n").unwrap();
+
+    let staged = super::staging::stage(&staging_path, b"a-generation\n").unwrap();
+    let error = staged
+        .publish_with(
+            &pointer_path,
+            || {
+                std::fs::rename(&staging_path, &carried_off).unwrap();
+                std::os::unix::fs::symlink(&bystander, &staging_path).unwrap();
+            },
+            || panic!("the promoting rename must succeed for this race to be exercised"),
+        )
+        .unwrap_err();
+
+    assert!(
+        std::fs::symlink_metadata(&pointer_path)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "the planted symlink is promoted onto the pointer path by the rename itself"
+    );
+    assert_eq!(std::fs::read(&carried_off).unwrap(), b"a-generation\n");
+    assert!(
+        error
+            .to_string()
+            .contains(&format!("last known path: {}", pointer_path.display())),
+        "the error must name the promoted pointer path: {error}"
+    );
+
+    drop(bystander_guard);
 }
 
 /// Failure cleanup must only remove what this publish created. The generation
