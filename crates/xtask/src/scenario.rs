@@ -21,11 +21,11 @@ struct ScenarioSpec {
     requires_first_battle_outcome: bool,
 }
 
-/// The number of `Active` `rendering::NormalPaletteFade::update` calls
-/// between a front-end fade-wait press and the frame it reports `Done` (I-3,
-/// issue #1329) -- `rendering::palette_fade`'s own 22-call trace, less the
-/// press frame itself and the `Done` frame.
-const FADE_WAIT_FRAMES: usize = 21;
+/// The number of frames between a front-end fade-wait press and the frame
+/// its fade reports `Done` (I-3, issue #1329) -- `rendering::palette_fade`'s
+/// own 22-call trace after `begin`, less the second update the press frame
+/// itself runs and the `Done` frame.
+const FADE_WAIT_FRAMES: usize = 20;
 
 /// Press Start, hold through the white title fade-wait
 /// (`pokeemerald_rs::flow::AppScene::TitleFadeWait`, reported as

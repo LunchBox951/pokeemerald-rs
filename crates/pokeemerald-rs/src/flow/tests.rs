@@ -563,14 +563,25 @@ fn main_menu_confirm_on_new_game_waits_for_the_fade_before_dispatching() {
     let leaked_path: &'static std::path::Path = Box::leak(pack_path.clone().into_boxed_path());
     let pack_source = crate::pack_source::PackSource::Test(leaked_path);
 
-    let (mut scene, _press_frame) =
+    let (mut scene, press_frame) =
         advance_scene(scene, pressed(Buttons::A), &mut save_slot, pack_source);
     assert!(
         matches!(scene, AppScene::MainMenuFadeWait(_)),
         "A on NEW GAME must enter the fade-wait state on the press frame, not dispatch immediately"
     );
 
-    // 21 further frames, all still `Active`, with deliberately distracting
+    // The press frame runs both of upstream's updates at coefficient 0, so
+    // the very next frame already blends at coefficient 2.
+    let (next, first_wait_frame) =
+        advance_scene(scene, ButtonState::new(), &mut save_slot, pack_source);
+    assert_ne!(
+        *first_wait_frame, *press_frame,
+        "the frame after the press must already show the first fade step, not a second \
+         coefficient-0 frame"
+    );
+    scene = next;
+
+    // 19 further frames, all still `Active`, with deliberately distracting
     // input every frame -- none of it may resume the selection or retrigger
     // the dispatch while waiting.
     for buttons in [
@@ -581,7 +592,7 @@ fn main_menu_confirm_on_new_game_waits_for_the_fade_before_dispatching() {
     ]
     .into_iter()
     .cycle()
-    .take(21)
+    .take(19)
     {
         let (next, _frame) = advance_scene(scene, buttons, &mut save_slot, pack_source);
         assert!(
@@ -591,7 +602,7 @@ fn main_menu_confirm_on_new_game_waits_for_the_fade_before_dispatching() {
         scene = next;
     }
 
-    // The 22nd update reports done: dispatch is attempted exactly once,
+    // The 21st frame after the press reports done: dispatch is attempted exactly once,
     // fails against the entryless pack, and falls back to the retained
     // menu -- still selecting `NEW GAME`, proving the UP/DOWN presses above
     // were ignored, not merely unobserved.

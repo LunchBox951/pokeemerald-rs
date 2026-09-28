@@ -33,6 +33,23 @@ pub(crate) struct MainMenuFadeWait {
     fade: NormalPaletteFade,
 }
 
+/// Begins a fade on a confirm press's own frame, performing both updates
+/// upstream runs on that frame: `BeginNormalPaletteFade`'s immediate one
+/// (inside [`NormalPaletteFade::begin`]) from the input task, then the
+/// scene callback's own `UpdatePaletteFade` after `RunTasks` returns
+/// (`pokeemerald/src/title_screen.c:675-681`, `main_menu.c:532-538`). The
+/// begin clears the pending-transfer flag its own update raised
+/// (`palette.c:129`, `:189-194`), so that second update is not deferred.
+fn begin_on_press_frame(
+    framebuffer: rendering::Framebuffer,
+    target: PaletteFadeTarget,
+) -> NormalPaletteFade {
+    let mut fade = NormalPaletteFade::begin(framebuffer, target);
+    let status = fade.update();
+    debug_assert_eq!(status, PaletteFadeStatus::Active);
+    fade
+}
+
 /// The [`AppScene::Title`] arm of [`super::advance_scene`]: on a fresh
 /// advance press, begins the white fade over the just-composed frame and
 /// hands off to [`AppScene::TitleFadeWait`] instead of loading the main
@@ -48,7 +65,7 @@ pub(super) fn advance_title(
 
     if title_advance_pressed(buttons) {
         let framebuffer = title.scene.compose(title.tick);
-        let fade = NormalPaletteFade::begin(framebuffer, PaletteFadeTarget::White);
+        let fade = begin_on_press_frame(framebuffer, PaletteFadeTarget::White);
         let frame = to_platform_frame(fade.framebuffer());
         return (
             AppScene::TitleFadeWait(Box::new(TitleFadeWait { title, fade })),
@@ -97,7 +114,7 @@ pub(super) fn advance_main_menu(
         let action = menu_action(state.scene.selected());
         if !matches!(action, MainMenuAction::None) {
             let framebuffer = state.scene.compose();
-            let fade = NormalPaletteFade::begin(framebuffer, PaletteFadeTarget::Black);
+            let fade = begin_on_press_frame(framebuffer, PaletteFadeTarget::Black);
             let frame = to_platform_frame(fade.framebuffer());
             return (
                 AppScene::MainMenuFadeWait(Box::new(MainMenuFadeWait {
