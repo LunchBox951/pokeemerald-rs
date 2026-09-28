@@ -363,16 +363,9 @@ fn check_noise_period(period: u8) -> Result<(), AudioError> {
     Ok(())
 }
 
-/// Rejects a CGB voice envelope field upstream's macro mask cannot represent.
-///
-/// `_voice_square_1`, `_voice_square_2`, `_voice_programmable_wave`, and
-/// `_voice_noise` all mask their attack/decay/release operands `& 0x7` and
-/// their sustain operand `& 0xF` before storing them
-/// (`pokeemerald/asm/macros/music_voice.inc:60-63,85-88,109-112,134-137`), so
-/// a byte outside those masked domains can never occur in ROM data and would
-/// otherwise alias an in-domain value once [`crate`]'s CGB envelope playback
-/// reads it. `_voice_directsound` stores its envelope unmasked (`:35-38`), so
-/// this check does not apply to [`DirectSoundVoice`].
+/// `_voice_directsound` stores its envelope unmasked
+/// (`pokeemerald/asm/macros/music_voice.inc:35-38`), so
+/// [`DirectSoundVoice`] skips this check.
 fn check_cgb_envelope(voice_kind: &'static str, envelope: Envelope) -> Result<(), AudioError> {
     let fields = [
         (

@@ -860,11 +860,8 @@ fn cgb_envelope_boundaries_are_accepted_by_the_constructor_and_decode() {
     }
 }
 
-/// Every CGB voice macro masks attack/decay/release `& 0x7` and sustain
-/// `& 0xF` before storing them (`pokeemerald/asm/macros/music_voice.inc:
-/// 60-63,85-88,109-112,134-137`), so a byte outside that domain can never
-/// occur in ROM data. The constructor rejects each field independently, one
-/// past its mask's domain, for every CGB voice kind.
+/// The constructor rejects each field independently, one past its mask's
+/// domain, for every CGB voice kind.
 #[test]
 fn cgb_envelope_out_of_range_is_rejected_at_construction() {
     for (voice_kind, build) in cgb_voice_kinds_with_envelope() {

@@ -481,14 +481,11 @@ mod synthetic_pack {
         }
     }
 
-    /// A CGB envelope within upstream's macro-masked domain (`0..=7` for
-    /// attack/decay/release, `0..=15` for sustain;
-    /// `pokeemerald/asm/macros/music_voice.inc:60-63,85-88,109-112,134-137`).
-    /// [`flat_envelope`]'s out-of-domain values are valid only for
-    /// `DirectSound`'s unmasked envelope.
+    /// `CgbAdsr::flat()` as a pack envelope; [`flat_envelope`]'s
+    /// out-of-domain values are valid only for `DirectSound`'s unmasked envelope.
     fn flat_cgb_envelope() -> Envelope {
         Envelope {
-            attack: 7,
+            attack: 0,
             decay: 0,
             sustain: 15,
             release: 0,
