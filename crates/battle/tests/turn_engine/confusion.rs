@@ -1,17 +1,7 @@
-//! Confusion's duration-bearing volatile, driven through real turns.
-//!
-//! Unit-level decrement, expiry, and coin-draw shapes are pinned inside
-//! `battle::volatile`'s own tests. What is pinned **here** is the wiring only
-//! a turn can show: that the decrement runs before the full-paralysis draw,
-//! that a duration surviving the decrement announces itself and draws
-//! exactly one more bit, that the self-hit branch cancels the chosen move
-//! and ends the action before the paralysis draw and PP handling ever run
-//! (spending no PP, ignoring the target's own type immunity since it hits
-//! itself with no type-chart stage), that the move-through branch spends PP
-//! and draws exactly like an ordinary action, and that a self-hit can faint
-//! its own user and skip the opponent's queued action for the turn. No move
-//! in this crate can yet write confusion, so every fixture below sets it
-//! directly through [`battle::BattlePokemon::volatiles_mut`].
+//! Confusion's volatile driven through real turns: the ordering against
+//! the paralysis draw and PP, and the self-hit's cancel and faint, which
+//! `battle::volatile`'s unit tests cannot show. No move writes confusion
+//! yet, so fixtures set it through [`battle::BattlePokemon::volatiles_mut`].
 
 use crate::common::{max_iv_mon, SequenceRng};
 use assets::MoveId;

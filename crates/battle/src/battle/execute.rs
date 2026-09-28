@@ -234,14 +234,9 @@ impl Battle {
         self.settle_faint(attacker_is_player, events);
     }
 
-    /// Confusion's self-hit: upstream's fixed 40-power physical Normal
-    /// calculation against the battler itself, using its own Attack and
-    /// Defense with stages and one damage-variance draw, with no accuracy,
-    /// critical, STAB, or type-chart stage (the self-target `MOVE_POUND`
-    /// call at `src/battle_util.c:2157`-`:2166`, whose type and category
-    /// `CalculateBaseDamage`, `src/pokemon.c:3106`-`:3260`, reads from).
-    /// Spends no PP; the caller must not also run the paralysis draw or
-    /// execute the chosen move for this action.
+    /// Upstream's self-target `MOVE_POUND` damage call
+    /// (`src/battle_util.c:2157`-`:2166`): 40 power, one variance draw, no
+    /// accuracy, critical, STAB, or type stage, and no PP spent.
     pub(super) fn apply_confusion_self_hit(
         &mut self,
         battler_is_player: bool,
