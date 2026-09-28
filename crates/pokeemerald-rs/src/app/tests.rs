@@ -252,6 +252,12 @@ fn headless_frame_is_non_blank() {
     );
 }
 
+/// Generously above the 22-call fade trace `NormalPaletteFade`'s own tests
+/// pin (`crates/rendering/src/palette_fade.rs`), so a regression that never
+/// reaches `Done` fails [`real_headless_app_reports_title_then_selected_main_menu`]
+/// loudly instead of looping forever.
+const MAX_FADE_WAIT_STEPS: usize = 40;
+
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_headless_app_reports_title_then_selected_main_menu() {
@@ -261,6 +267,24 @@ fn real_headless_app_reports_title_then_selected_main_menu() {
     app.set_headless_buttons(Buttons::START)
         .expect("headless input injection succeeds");
     assert!(app.step().expect("headless step never errors"));
+    // I-3, issue #1329: the press frame enters the white fade-wait state,
+    // still reported as `AppState::Title` -- not the main menu yet.
+    assert_eq!(app.state(), AppState::Title);
+
+    app.set_headless_buttons(Buttons::NONE)
+        .expect("headless input injection succeeds");
+    let mut left_title = false;
+    for _ in 0..MAX_FADE_WAIT_STEPS {
+        assert!(app.step().expect("headless step never errors"));
+        if app.state() != AppState::Title {
+            left_title = true;
+            break;
+        }
+    }
+    assert!(
+        left_title,
+        "the title fade did not complete within {MAX_FADE_WAIT_STEPS} steps"
+    );
     assert_eq!(
         app.state(),
         AppState::MainMenu(crate::main_menu::MainMenuItem::NewGame)
@@ -735,5 +759,55 @@ fn start_title_music_failure_emits_its_subsystem_prefix_once_at_the_eprintln_bou
         output.status.success(),
         "the child test must pass: status {:?}\nstderr:\n{stderr}",
         output.status
+    );
+}
+
+/// A failed menu load after the title fade-wait leaves the restored title
+/// with its music playing.
+#[test]
+fn failed_menu_load_after_title_fade_wait_leaves_title_music_playing() {
+    let Ok(title_scene) = crate::title::load_default() else {
+        eprintln!("skipping: no pack");
+        return;
+    };
+    let missing: &'static std::path::Path =
+        Box::leak(std::path::PathBuf::from("/nonexistent/birch/menu.pack").into_boxed_path());
+    let mut app = App::assemble(
+        platform::Platform::new_headless(),
+        crate::app::compose_title_scene(title_scene),
+        SaveSlot::disabled(),
+        crate::pack_source::PackSource::Test(missing),
+    );
+    let output = platform::AudioOutput::null(crate::music::RING_CAPACITY_FRAMES);
+    let music = crate::music::MusicPlayer::start(looping_song_for_test(), output)
+        .expect("null backend never errors");
+    app.attach_music_for_test(music);
+
+    let mut drained = vec![0.0_f32; audio::Sequencer::FRAME_SAMPLES];
+    app.set_headless_buttons(Buttons::START).unwrap();
+    app.step().unwrap();
+    app.drain_music_for_test(&mut drained);
+    app.set_headless_buttons(Buttons::NONE).unwrap();
+    let mut back_on_title = false;
+    for _ in 0..40 {
+        app.step().unwrap();
+        app.drain_music_for_test(&mut drained);
+        if matches!(app.scene, Some(crate::flow::AppScene::Title(_))) {
+            back_on_title = true;
+            break;
+        }
+    }
+    assert!(back_on_title, "failed menu load must restore the title");
+    for _ in 0..200 {
+        app.step().unwrap();
+        app.drain_music_for_test(&mut drained);
+    }
+    assert!(matches!(app.scene, Some(crate::flow::AppScene::Title(_))));
+    let music = app.music.as_ref();
+    assert!(
+        music.is_some_and(|m| !m.fade_finished()),
+        "the recovered title must still have audible title music, got music present={} faded={:?}",
+        music.is_some(),
+        music.map(crate::music::MusicPlayer::fade_finished)
     );
 }

@@ -3,7 +3,7 @@ use std::sync::OnceLock;
 use pokeemerald_rs::main_menu::MainMenuItem;
 use pokeemerald_rs::{AppButtons, AppState};
 
-use super::{expand_segments, ScenarioFrame, Segment, WALK_FRAMES_PER_TILE};
+use super::{expand_segments, ScenarioFrame, Segment, FADE_WAIT_FRAMES, WALK_FRAMES_PER_TILE};
 
 const INTRO_HANDOFF_FRAMES: usize = 1;
 const BUTTON_EDGE_FRAMES: usize = 1;
@@ -63,12 +63,29 @@ const fn walk(direction: AppButtons, tiles: usize, expected: AppState) -> Scenar
 }
 
 const SEGMENTS: &[ScenarioBlock] = &[
+    // I-3, issue #1329: Start lands in the white title fade-wait
+    // (`AppState::Title` throughout), settling on the main menu only once
+    // the fade reports done.
+    held(AppButtons::START, BUTTON_EDGE_FRAMES, AppState::Title),
+    held(AppButtons::NONE, FADE_WAIT_FRAMES, AppState::Title),
     held(
-        AppButtons::START,
+        AppButtons::NONE,
         BUTTON_EDGE_FRAMES,
         AppState::MainMenu(MainMenuItem::NewGame),
     ),
-    held(AppButtons::A, BUTTON_EDGE_FRAMES, AppState::Intro),
+    // A on NEW GAME likewise lands in the black menu fade-wait (still
+    // reporting the confirmed selection) before the intro loads.
+    held(
+        AppButtons::A,
+        BUTTON_EDGE_FRAMES,
+        AppState::MainMenu(MainMenuItem::NewGame),
+    ),
+    held(
+        AppButtons::NONE,
+        FADE_WAIT_FRAMES,
+        AppState::MainMenu(MainMenuItem::NewGame),
+    ),
+    held(AppButtons::NONE, BUTTON_EDGE_FRAMES, AppState::Intro),
     ScenarioBlock::IntroTraversal,
     walk(
         AppButtons::DOWN,
@@ -195,7 +212,10 @@ mod tests {
     use pokeemerald_rs::main_menu::MainMenuItem;
     use pokeemerald_rs::{AppButtons, AppState};
 
-    const EXPECTED_TITLE_AND_MENU_FRAMES: usize = 2;
+    /// One press-frame, [`super::FADE_WAIT_FRAMES`] waiting frames, and one
+    /// done-frame for each of the title and menu fade-waits (I-3, issue
+    /// #1329).
+    const EXPECTED_TITLE_AND_MENU_FRAMES: usize = 2 * (2 + super::FADE_WAIT_FRAMES);
     const EXPECTED_ROUTE_WALK_TILES: usize = 25;
     /// The three completed-step landings the route runs a field event on
     /// rather than a step, each costing the script a frame of its own
@@ -221,13 +241,39 @@ mod tests {
             + EXPECTED_FINAL_RELEASE_FRAMES;
         assert_eq!(frames.len(), expected_total);
 
-        assert_eq!(frames[0].buttons, AppButtons::START);
+        // I-3, issue #1329: Start and A each land in a fade-wait first
+        // (`AppState::Title`/`MainMenu` respectively, held for
+        // `FADE_WAIT_FRAMES`), settling on the next milestone only on the
+        // frame after.
+        let title_press = 0;
+        let title_wait_start = title_press + 1;
+        let title_done = title_wait_start + super::FADE_WAIT_FRAMES;
+        let menu_press = title_done + 1;
+        let menu_wait_start = menu_press + 1;
+        let menu_done = menu_wait_start + super::FADE_WAIT_FRAMES;
+        assert_eq!(menu_done + 1, EXPECTED_TITLE_AND_MENU_FRAMES);
+
+        assert_eq!(frames[title_press].buttons, AppButtons::START);
+        assert_eq!(frames[title_press].expected, AppState::Title);
+        for frame in &frames[title_wait_start..title_done] {
+            assert_eq!(frame.buttons, AppButtons::NONE);
+            assert_eq!(frame.expected, AppState::Title);
+        }
         assert_eq!(
-            frames[0].expected,
+            frames[title_done].expected,
             AppState::MainMenu(MainMenuItem::NewGame)
         );
-        assert_eq!(frames[1].buttons, AppButtons::A);
-        assert_eq!(frames[1].expected, AppState::Intro);
+
+        assert_eq!(frames[menu_press].buttons, AppButtons::A);
+        assert_eq!(
+            frames[menu_press].expected,
+            AppState::MainMenu(MainMenuItem::NewGame)
+        );
+        for frame in &frames[menu_wait_start..menu_done] {
+            assert_eq!(frame.buttons, AppButtons::NONE);
+            assert_eq!(frame.expected, AppState::MainMenu(MainMenuItem::NewGame));
+        }
+        assert_eq!(frames[menu_done].expected, AppState::Intro);
 
         let intro_start = EXPECTED_TITLE_AND_MENU_FRAMES;
         let intro_end = intro_start + pokeemerald_rs::intro::TRAVERSAL_FRAMES;
