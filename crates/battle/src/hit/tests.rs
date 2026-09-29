@@ -9,6 +9,7 @@ use crate::dex::Dex;
 use crate::error::BattleError;
 use crate::pokemon::{BattlePokemon, Ivs};
 use crate::script_rng::SequenceRng;
+use crate::secondary::SecondaryApplication;
 use crate::stat_stage::StatStage;
 use crate::status1::Status1;
 use assets::species::AbilityId;
@@ -148,7 +149,7 @@ fn a_miss_draws_only_for_accuracy() {
     let resolution = resolve_hit(&dex, TACKLE, &attacker, &defender, false, &mut rng).unwrap();
 
     assert_eq!(resolution.outcome, HitOutcome::Miss);
-    assert!(!resolution.poisons_defender);
+    assert_eq!(resolution.secondary_effect, SecondaryApplication::None);
     assert_eq!(rng.draws(), 1);
 }
 
@@ -162,8 +163,9 @@ fn an_ordinary_hit_draws_accuracy_critical_damage_and_effect_chance() {
     let resolution = resolve_hit(&dex, TACKLE, &attacker, &defender, false, &mut rng).unwrap();
 
     assert!(matches!(resolution.outcome, HitOutcome::Hit { .. }));
-    assert!(
-        !resolution.poisons_defender,
+    assert_eq!(
+        resolution.secondary_effect,
+        SecondaryApplication::None,
         "Tackle has no secondary effect"
     );
     assert_eq!(rng.draws(), ORDINARY_NON_CRITICAL_DRAWS.len());
@@ -363,8 +365,9 @@ fn wonder_guard_blocks_a_neutral_hit_and_still_draws_normally() {
     .unwrap();
 
     assert_eq!(resolution.outcome, HitOutcome::WonderGuardBlocked);
-    assert!(
-        !resolution.poisons_defender,
+    assert_eq!(
+        resolution.secondary_effect,
+        SecondaryApplication::None,
         "a Wonder Guard block must not permit a secondary effect"
     );
     assert_eq!(
@@ -654,7 +657,7 @@ fn a_landed_poison_sting_reports_poisons_defender_only_on_a_successful_roll() {
     )
     .unwrap();
     assert!(matches!(succeeded.outcome, HitOutcome::Hit { .. }));
-    assert!(succeeded.poisons_defender);
+    assert_eq!(succeeded.secondary_effect, SecondaryApplication::Poison);
     assert_eq!(succeeds.draws(), 4);
 
     let mut fails = SequenceRng::new([
@@ -665,7 +668,7 @@ fn a_landed_poison_sting_reports_poisons_defender_only_on_a_successful_roll() {
     ]);
     let failed = resolve_hit(&dex, POISON_STING, &attacker, &defender, false, &mut fails).unwrap();
     assert!(matches!(failed.outcome, HitOutcome::Hit { .. }));
-    assert!(!failed.poisons_defender);
+    assert_eq!(failed.secondary_effect, SecondaryApplication::None);
 }
 
 #[test]
@@ -693,7 +696,7 @@ fn a_poison_type_or_steel_type_defender_never_reports_poisons_defender() {
         "fixture sanity: Poison is only not-very-effective against Poison, not immune, \
          so the hit must land for this to test the status guard rather than a coincidental miss"
     );
-    assert!(!resolution.poisons_defender);
+    assert_eq!(resolution.secondary_effect, SecondaryApplication::None);
 }
 
 /// Poison Sting's secondary is modelled (unlike Water Gun's, which has no
@@ -730,11 +733,84 @@ fn wonder_guard_suppresses_poison_stings_secondary_on_a_successful_chance_roll()
         "Poison is not-very-effective against Ghost and has no row against \
          Bug, so only Wonder Guard blocks this hit"
     );
-    assert!(
-        !resolution.poisons_defender,
+    assert_eq!(
+        resolution.secondary_effect,
+        SecondaryApplication::None,
         "Wonder Guard must suppress the secondary effect even when the \
          chance roll would otherwise succeed"
     );
+}
+
+/// `MOVE_PSYBEAM`: `EFFECT_CONFUSE_HIT`, 100 accuracy, 10% chance.
+const PSYBEAM: MoveId = MoveId(60);
+/// `SPECIES_SPINDA`: Own Tempo in its only ability slot.
+const SPINDA: SpeciesId = SpeciesId(308);
+/// A draw that clears [`PSYBEAM`]'s 10% secondary chance.
+const CONFUSE_CHANCE_HIT_DRAW: u16 = 9;
+/// A draw that misses it.
+const CONFUSE_CHANCE_MISS_DRAW: u16 = 10;
+
+#[test]
+fn effect_confuse_hit_is_admitted_though_not_ordinary() {
+    let dex = Dex::new();
+    let effect = dex.move_data(PSYBEAM).unwrap().effect;
+    assert!(
+        !is_ordinary_hit_effect(effect),
+        "Psybeam needs the confuse trampoline, not the plain hit script"
+    );
+    assert_eq!(ensure_resolvable(&dex, PSYBEAM), Ok(()));
+}
+
+#[test]
+fn a_landed_psybeam_reports_confuse_only_on_a_successful_roll() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, BULBASAUR, 10, vec![PSYBEAM]);
+    let defender = mon(&dex, SQUIRTLE, 10, vec![TACKLE]);
+    assert_eq!(dex.move_data(PSYBEAM).unwrap().secondary_effect_chance, 10);
+
+    let mut succeeds = SequenceRng::new([
+        ACCURACY_HIT_DRAW,
+        ORDINARY_NO_CRIT_DRAW,
+        BEST_DAMAGE_DRAW,
+        CONFUSE_CHANCE_HIT_DRAW,
+    ]);
+    let succeeded = resolve_hit(&dex, PSYBEAM, &attacker, &defender, false, &mut succeeds).unwrap();
+    assert!(matches!(succeeded.outcome, HitOutcome::Hit { .. }));
+    assert_eq!(succeeded.secondary_effect, SecondaryApplication::Confuse);
+    assert_eq!(
+        succeeds.draws(),
+        4,
+        "the duration draw is not part of resolve_hit; the caller draws it \
+         only once the target's post-damage faint check clears"
+    );
+
+    let mut fails = SequenceRng::new([
+        ACCURACY_HIT_DRAW,
+        ORDINARY_NO_CRIT_DRAW,
+        BEST_DAMAGE_DRAW,
+        CONFUSE_CHANCE_MISS_DRAW,
+    ]);
+    let failed = resolve_hit(&dex, PSYBEAM, &attacker, &defender, false, &mut fails).unwrap();
+    assert!(matches!(failed.outcome, HitOutcome::Hit { .. }));
+    assert_eq!(failed.secondary_effect, SecondaryApplication::None);
+}
+
+#[test]
+fn an_own_tempo_defender_never_reports_confuse() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, BULBASAUR, 10, vec![PSYBEAM]);
+    let defender = mon(&dex, SPINDA, 10, vec![TACKLE]);
+    assert_eq!(defender.ability(), AbilityId::OWN_TEMPO);
+    let mut rng = SequenceRng::new([
+        ACCURACY_HIT_DRAW,
+        ORDINARY_NO_CRIT_DRAW,
+        BEST_DAMAGE_DRAW,
+        CONFUSE_CHANCE_HIT_DRAW,
+    ]);
+    let resolution = resolve_hit(&dex, PSYBEAM, &attacker, &defender, false, &mut rng).unwrap();
+    assert!(matches!(resolution.outcome, HitOutcome::Hit { .. }));
+    assert_eq!(resolution.secondary_effect, SecondaryApplication::None);
+    assert_eq!(rng.draws(), 4, "the chance draw still happens, discarded");
 }
 
 #[test]
@@ -1186,7 +1262,7 @@ fn a_failed_accuracy_roll_against_an_immune_target_reports_the_immunity() {
         resolve_hit(&dex, TACKLE, &attacker, &ghost_defender, false, &mut rng).unwrap();
 
     assert_eq!(resolution.outcome, HitOutcome::NoEffect);
-    assert!(!resolution.poisons_defender);
+    assert_eq!(resolution.secondary_effect, SecondaryApplication::None);
     assert_eq!(
         rng.draws(),
         1,
