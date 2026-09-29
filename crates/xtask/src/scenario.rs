@@ -269,22 +269,19 @@ fn run_with_driver(
                 return Err(ScenarioError::FirstBattleEndedWithoutOutcome { frame });
             };
             retained_outcome = Some(outcome);
+        } else if let Some(outcome) = retained_outcome {
+            // Every later frame can clear or overwrite the outcome confirmed
+            // at the transition, and a frame that restores it before the
+            // scenario ends would hide that; require it to still match on
+            // each post-transition frame, not only the last one.
+            if driver.first_battle_outcome() != Some(outcome) {
+                return Err(ScenarioError::FirstBattleOutcomeNotRetained { frame });
+            }
         }
         if milestones.last() != Some(&actual_state) {
             milestones.push(actual_state);
         }
         previous_state = actual_state;
-    }
-
-    // A later frame can still clear or overwrite an outcome already
-    // confirmed at the transition; require it to still match before
-    // reporting success.
-    if let Some(outcome) = retained_outcome {
-        if driver.first_battle_outcome() != Some(outcome) {
-            return Err(ScenarioError::FirstBattleOutcomeNotRetained {
-                frame: spec.frames.len() - 1,
-            });
-        }
     }
 
     Ok(Report {
@@ -530,6 +527,62 @@ mod tests {
 
         let error = run_with_driver(scenario, &mut driver)
             .expect_err("a retained outcome cleared after the transition must fail the scenario");
+        assert_eq!(
+            error,
+            ScenarioError::FirstBattleOutcomeNotRetained { frame: 1 }
+        );
+    }
+
+    /// A driver that sets the outcome on the transition frame, clears it on
+    /// the next frame, and restores it on the final frame, so a check that
+    /// only samples the last frame would pass it.
+    struct TransientClearDriver {
+        state: AppState,
+        outcome: Option<BattleOutcome>,
+        frame: usize,
+    }
+
+    impl ScenarioDriver for TransientClearDriver {
+        fn state(&self) -> AppState {
+            self.state
+        }
+
+        fn first_battle_outcome(&self) -> Option<BattleOutcome> {
+            self.outcome
+        }
+
+        fn set_buttons(&mut self, _buttons: AppButtons) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn step(&mut self) -> Result<bool, String> {
+            const CLEARED_FRAME: usize = 1;
+            self.outcome = (self.frame != CLEARED_FRAME).then_some(BattleOutcome::PlayerWon);
+            self.frame += 1;
+            self.state = AppState::Overworld;
+            Ok(true)
+        }
+    }
+
+    #[test]
+    fn a_required_first_battle_rejects_an_outcome_cleared_then_restored_after_the_transition() {
+        let mut driver = TransientClearDriver {
+            state: AppState::FirstBattle,
+            outcome: None,
+            frame: 0,
+        };
+        const FRAME: ScenarioFrame = ScenarioFrame {
+            buttons: AppButtons::NONE,
+            expected: AppState::Overworld,
+        };
+        let scenario = ScenarioSpec {
+            initial: AppState::FirstBattle,
+            frames: &[FRAME, FRAME, FRAME],
+            requires_first_battle_outcome: true,
+        };
+
+        let error = run_with_driver(scenario, &mut driver)
+            .expect_err("an outcome cleared on an intermediate frame must fail the scenario");
         assert_eq!(
             error,
             ScenarioError::FirstBattleOutcomeNotRetained { frame: 1 }
