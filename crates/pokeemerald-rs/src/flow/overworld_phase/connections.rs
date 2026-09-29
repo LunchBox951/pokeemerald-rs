@@ -355,7 +355,8 @@ impl OverworldPhase {
     /// `destination`'s three branches in upstream's own order.
     ///
     /// Same shape as [`OverworldPhase::warp_to`] otherwise, including its
-    /// failure contract.
+    /// failure contract. Returns whether the warp landed: `false` means the
+    /// phase is untouched.
     ///
     /// Unlike [`OverworldPhase::warp_to_position`], `save1.location` is set
     /// to `destination` **verbatim**, warp id included: a later white-out
@@ -365,18 +366,22 @@ impl OverworldPhase {
     /// # Panics
     ///
     /// Same as [`OverworldPhase::warp_to`].
-    pub(super) fn warp_to_saved_location(&mut self, map: assets::MapId, destination: WarpData) {
+    pub(super) fn warp_to_saved_location(
+        &mut self,
+        map: assets::MapId,
+        destination: WarpData,
+    ) -> bool {
         let Ok(header) = MapHeaderTable::new().header(map) else {
             eprintln!("warp: unknown destination map {map:?} -- staying put");
-            return;
+            return false;
         };
         let Ok(events) = MapEventsTable::new().resolve(map) else {
             eprintln!("warp: no event data for destination map {map:?} -- staying put");
-            return;
+            return false;
         };
         let Some((transitioned_event_data, scene)) = self.stage_transition(map) else {
             eprintln!("warp: failed to load destination map {map:?} -- staying put");
-            return;
+            return false;
         };
         let position = {
             let runtime = scene.runtime(map, header, events);
@@ -392,7 +397,7 @@ impl OverworldPhase {
                 "warp: saved location {destination:?} names no position inside map {map:?} -- \
                  staying put"
             );
-            return;
+            return false;
         };
 
         self.player =
@@ -405,6 +410,7 @@ impl OverworldPhase {
         self.wild.restart_immunity_steps();
         self.save1.location = destination;
         self.save1.pos = engine::save::Coords16 { x, y };
+        true
     }
 
     /// Rebinds `map_id`/`scene`/`save1.location` after `self.player` has

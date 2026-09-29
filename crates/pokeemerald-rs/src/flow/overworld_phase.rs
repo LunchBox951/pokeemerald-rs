@@ -432,18 +432,28 @@ impl OverworldPhase {
         // keeps honoring it too.
         phase.pack_source = source;
         if let Some((warp_map, destination)) = continue_game_warp {
-            // `SetWarpDestinationToContinueGameWarp` + `WarpIntoMap`
-            // (`src/overworld.c:1741-1743`) in place of
-            // `InitMapFromSavedGame`; `LoadMapFromWarp` clears temp field
-            // data and runs the on-transition effects.
-            phase.warp_to_saved_location(warp_map, destination);
-            // A refused warp leaves `save1.location` at the stale value the
-            // save carried, not where it asked to resume.
-            if phase.save1.location != destination {
-                return Err(ContinueError::ContinueGameWarp { destination });
-            }
+            phase.land_at_continue_game_warp(warp_map, destination)?;
         }
         Ok(phase)
+    }
+
+    /// `SetWarpDestinationToContinueGameWarp` + `WarpIntoMap`
+    /// (`src/overworld.c:1741-1743`) in place of `InitMapFromSavedGame`;
+    /// `LoadMapFromWarp` clears temp field data and runs the on-transition
+    /// effects. The flag is already consumed
+    /// ([`take_continue_game_warp`]), matching upstream, which clears it
+    /// before the warp; a refused warp fails the continue, so the caller's
+    /// copy of the save, flag still set, is what stays on disk.
+    pub(super) fn land_at_continue_game_warp(
+        &mut self,
+        warp_map: assets::MapId,
+        destination: WarpData,
+    ) -> Result<(), ContinueError> {
+        if self.warp_to_saved_location(warp_map, destination) {
+            Ok(())
+        } else {
+            Err(ContinueError::ContinueGameWarp { destination })
+        }
     }
 
     /// [`Self::continue_saved_game`]'s pack-free core: build the resumed

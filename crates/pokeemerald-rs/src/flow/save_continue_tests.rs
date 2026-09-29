@@ -783,6 +783,30 @@ fn a_flagged_save_with_an_unknown_continue_game_warp_does_not_resume() {
     );
 }
 
+/// A flagged save whose `continue_game_warp` names a known map but cannot
+/// land (here: no pack loads the destination, and equally for a
+/// `warp_id = -1` warp with out-of-bounds coordinates) must not resume,
+/// even when it equals the phase's own `location` -- identity with the
+/// destination is not evidence the warp ran.
+#[test]
+fn a_flagged_warp_equal_to_location_that_cannot_land_does_not_resume() {
+    let mut phase = new_game_phase();
+    let destination = WarpData {
+        map_group: new_game::SPAWN_MAP_GROUP,
+        map_num: new_game::SPAWN_MAP_NUM,
+        warp_id: -1,
+        x: i16::MAX,
+        y: i16::MAX,
+    };
+    phase.save1.location = destination;
+    let before = snapshot(&phase);
+    let Err(err) = phase.land_at_continue_game_warp(new_game::SPAWN_MAP_ID, destination) else {
+        panic!("a refused warp must fail the continue");
+    };
+    assert!(err.to_string().contains("continue-game warp"), "{err}");
+    assert_eq!(snapshot(&phase), before, "a refused warp changes nothing");
+}
+
 /// The `#[ignore]`d half of the round trip (module docs): the whole
 /// `CONTINUE` press, through `advance_scene` and the real
 /// `OverworldPhase::continue_saved_game` -> `crate::overworld::load_room`.
