@@ -688,21 +688,50 @@ impl Drop for SyncRootGuard {
     }
 }
 
-/// Registers `dir` as a cloud-files sync root with hydration allowed.
+/// Registers `dir` as a cloud-files sync root with hydration allowed and the
+/// namespace declared complete, so the filter never waits on the sync
+/// provider this test does not connect.
 ///
 /// Panics on any registration failure, with no skip path: on a
 /// save-data-risk change a Windows leg that cannot build the fixture must
 /// fail, not read green while the read-path tests never ran.
 #[cfg(windows)]
 fn register_sync_root(dir: &TempDir, label: &str) -> SyncRootGuard {
+    use windows_sys::Win32::Storage::CloudFilters::{
+        CF_HYDRATION_POLICY_FULL, CF_POPULATION_POLICY_ALWAYS_FULL,
+    };
+
+    match try_register_sync_root(
+        &dir.path,
+        label,
+        CF_HYDRATION_POLICY_FULL,
+        CF_POPULATION_POLICY_ALWAYS_FULL,
+    ) {
+        Ok(guard) => guard,
+        Err(result) => panic!(
+            "sync root registration refused: CfRegisterSyncRoot on {} failed with HRESULT {result:#010x}",
+            dir.path.display()
+        ),
+    }
+}
+
+/// Registers `root` with the given hydration and population policies,
+/// returning the failing HRESULT instead of panicking so
+/// [`probe_placeholder_policies`] can report every combination it tries.
+#[cfg(windows)]
+fn try_register_sync_root(
+    root: &Path,
+    label: &str,
+    hydration: windows_sys::Win32::Storage::CloudFilters::CF_HYDRATION_POLICY_PRIMARY,
+    population: windows_sys::Win32::Storage::CloudFilters::CF_POPULATION_POLICY_PRIMARY,
+) -> Result<SyncRootGuard, i32> {
     use std::os::windows::ffi::OsStrExt as _;
     use windows_sys::Win32::Storage::CloudFilters::{
-        CfRegisterSyncRoot, CF_HYDRATION_POLICY_ALWAYS_FULL, CF_POPULATION_POLICY_ALWAYS_FULL,
-        CF_REGISTER_FLAG_NONE, CF_SYNC_POLICIES, CF_SYNC_REGISTRATION,
+        CfRegisterSyncRoot, CF_REGISTER_FLAG_NONE, CF_SYNC_POLICIES, CF_SYNC_REGISTRATION,
     };
 
     let wide = |text: &std::ffi::OsStr| -> Vec<u16> { text.encode_wide().chain(Some(0)).collect() };
-    let root = wide(dir.path.as_os_str());
+    let root = wide(root.as_os_str());
     let provider_name = wide(std::ffi::OsStr::new(&format!(
         "pokeemerald-rs-save-test-{label}-{}",
         std::process::id()
@@ -730,10 +759,8 @@ fn register_sync_root(dir: &TempDir, label: &str) -> SyncRootGuard {
         StructSize: u32::try_from(std::mem::size_of::<CF_SYNC_POLICIES>()).unwrap(),
         ..Default::default()
     };
-    // ALWAYS_FULL on both: the namespace and every placeholder are already complete, so the
-    // filter never waits on a sync provider this test does not connect.
-    policies.Hydration.Primary = CF_HYDRATION_POLICY_ALWAYS_FULL;
-    policies.Population.Primary = CF_POPULATION_POLICY_ALWAYS_FULL;
+    policies.Hydration.Primary = hydration;
+    policies.Population.Primary = population;
 
     // SAFETY: every pointer names a live, NUL-terminated buffer or struct that outlives the call.
     let result = unsafe {
@@ -744,32 +771,20 @@ fn register_sync_root(dir: &TempDir, label: &str) -> SyncRootGuard {
             CF_REGISTER_FLAG_NONE,
         )
     };
-    assert!(
-        result >= 0,
-        "sync root registration refused: CfRegisterSyncRoot on {} failed with HRESULT {result:#010x}",
-        dir.path.display()
-    );
-    SyncRootGuard { root }
+    if result < 0 {
+        return Err(result);
+    }
+    Ok(SyncRootGuard { root })
 }
 
-/// Converts the hydrated file at `path`, inside a registered sync root, into
-/// a genuine cloud-files placeholder that stays hydrated: its cloud-files
-/// filter still serves the bytes on an ordinary read while
-/// `FILE_ATTRIBUTE_REPARSE_POINT` is visible to callers, the same shape of
-/// object a `OneDrive` placeholder is.
-///
-/// Asserts the conversion succeeded and the entry now reads as a reparse
-/// point, so a fixture that never reaches the hydrating-reopen branch fails
-/// loudly here instead of letting the read below pass for an unrelated reason.
+/// Converts the hydrated file at `path` in place with `CfConvertToPlaceholder`
+/// and returns the attributes it reads afterwards, or the failing HRESULT.
 #[cfg(windows)]
-fn convert_into_a_hydrated_placeholder(path: &Path) {
+fn try_convert_to_placeholder(path: &Path) -> Result<u32, i32> {
     use std::os::windows::fs::MetadataExt as _;
     use std::os::windows::io::AsRawHandle as _;
     use windows_sys::Win32::Storage::CloudFilters::{CfConvertToPlaceholder, CF_CONVERT_FLAG_NONE};
 
-    let before = std::fs::symlink_metadata(path)
-        .expect("the file to convert is there")
-        .file_attributes();
     let file = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -788,20 +803,96 @@ fn convert_into_a_hydrated_placeholder(path: &Path) {
         )
     };
     drop(file);
-    assert!(
-        result >= 0,
-        "CfConvertToPlaceholder on {} failed with HRESULT {result:#010x}",
-        path.display()
-    );
-
-    let attributes = std::fs::symlink_metadata(path)
+    if result < 0 {
+        return Err(result);
+    }
+    Ok(std::fs::symlink_metadata(path)
         .expect("the converted file is still there")
+        .file_attributes())
+}
+
+/// Tries every hydration and population policy pair on a fresh sibling
+/// directory and reports, per pair, the registration HRESULT, the
+/// conversion HRESULT, and the attributes the converted file reads.
+///
+/// Only reached from a failing precondition, so the panic carries the
+/// evidence that picks the fixture's next policy instead of a guess.
+#[cfg(windows)]
+fn probe_placeholder_policies(dir: &TempDir) -> String {
+    use std::fmt::Write as _;
+    use windows_sys::Win32::Storage::CloudFilters::{
+        CF_HYDRATION_POLICY_ALWAYS_FULL, CF_HYDRATION_POLICY_FULL, CF_HYDRATION_POLICY_PARTIAL,
+        CF_HYDRATION_POLICY_PROGRESSIVE, CF_POPULATION_POLICY_ALWAYS_FULL,
+        CF_POPULATION_POLICY_FULL, CF_POPULATION_POLICY_PARTIAL,
+    };
+
+    let hydrations = [
+        ("partial", CF_HYDRATION_POLICY_PARTIAL),
+        ("progressive", CF_HYDRATION_POLICY_PROGRESSIVE),
+        ("full", CF_HYDRATION_POLICY_FULL),
+        ("always-full", CF_HYDRATION_POLICY_ALWAYS_FULL),
+    ];
+    let populations = [
+        ("partial", CF_POPULATION_POLICY_PARTIAL),
+        ("full", CF_POPULATION_POLICY_FULL),
+        ("always-full", CF_POPULATION_POLICY_ALWAYS_FULL),
+    ];
+    let mut report = String::new();
+    for (hydration_name, hydration) in hydrations {
+        for (population_name, population) in populations {
+            let label = format!("probe-{hydration_name}-{population_name}");
+            let root = dir.join(&label);
+            std::fs::create_dir_all(&root).expect("the probe root is creatable");
+            let file = root.join("probe.sav");
+            std::fs::write(&file, [0x5Au8; 64])
+                .expect("the probe file is writable before registration");
+            let outcome = match try_register_sync_root(&root, &label, hydration, population) {
+                Err(result) => format!("register {result:#010x}"),
+                Ok(_guard) => match try_convert_to_placeholder(&file) {
+                    Err(result) => format!("register ok, convert {result:#010x}"),
+                    Ok(attributes) => {
+                        format!("register ok, convert ok, attributes {attributes:#x}")
+                    }
+                },
+            };
+            let _ = write!(
+                report,
+                "\n  hydration {hydration_name}, population {population_name}: {outcome}"
+            );
+        }
+    }
+    report
+}
+
+/// Converts the hydrated file at `path`, inside a registered sync root, into
+/// a genuine cloud-files placeholder that stays hydrated: its cloud-files
+/// filter still serves the bytes on an ordinary read while
+/// `FILE_ATTRIBUTE_REPARSE_POINT` is visible to callers, the same shape of
+/// object a `OneDrive` placeholder is.
+///
+/// Asserts the conversion succeeded and the entry now reads as a reparse
+/// point, so a fixture that never reaches the hydrating-reopen branch fails
+/// loudly here instead of letting the read below pass for an unrelated reason.
+#[cfg(windows)]
+fn convert_into_a_hydrated_placeholder(dir: &TempDir, path: &Path) {
+    use std::os::windows::fs::MetadataExt as _;
+
+    let before = std::fs::symlink_metadata(path)
+        .expect("the file to convert is there")
         .file_attributes();
+    let attributes = match try_convert_to_placeholder(path) {
+        Ok(attributes) => attributes,
+        Err(result) => panic!(
+            "CfConvertToPlaceholder on {} failed with HRESULT {result:#010x}",
+            path.display()
+        ),
+    };
     assert!(
         attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0,
         "CfConvertToPlaceholder must turn {} into a reparse point for this test to mean anything; \
-         attributes {before:#x} before, {attributes:#x} after",
+         attributes {before:#x} before, {attributes:#x} after; policy probe:{}",
         path.display(),
+        probe_placeholder_policies(dir),
     );
 }
 
@@ -818,7 +909,7 @@ fn reading_a_non_symlink_reparse_point_in_the_files_place_loads_through_its_filt
     let (store, _, _) = saved_store();
     SaveFile::at(&path).write(&store).unwrap();
     let _sync_root = register_sync_root(&dir, "read-cloud-placeholder");
-    convert_into_a_hydrated_placeholder(&path);
+    convert_into_a_hydrated_placeholder(&dir, &path);
 
     let reloaded = SaveFile::at(&path)
         .read()
@@ -843,7 +934,7 @@ fn a_reparse_points_hydrating_reopen_reads_through_the_verified_object_despite_a
     let (original, _, _) = saved_store();
     SaveFile::at(&path).write(&original).unwrap();
     let _sync_root = register_sync_root(&dir, "reopen-path-swap");
-    convert_into_a_hydrated_placeholder(&path);
+    convert_into_a_hydrated_placeholder(&dir, &path);
 
     let carried_off = dir.join("carried-off.sav");
     let outcome = open::open_verified_for_read_with(&path, |_verified_handle| {
