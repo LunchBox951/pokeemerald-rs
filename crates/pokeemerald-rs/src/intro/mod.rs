@@ -376,6 +376,7 @@ impl IntroScene {
             &self.ops,
             textbox::STANDARD_BOX_SCREEN_ORIGIN,
             textbox::STANDARD_BOX_CONTENT_SIZE_PX,
+            &self.frame.glyph_colors(),
         );
 
         fb
