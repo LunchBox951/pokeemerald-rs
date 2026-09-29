@@ -381,7 +381,10 @@ macro_rules! define_items {
         $($name:ident = $index:literal => $kind:ident $attributes:tt),+ $(,)?
     ) => {
         impl ItemId {
-            $(pub(crate) const $name: ItemId = ItemId($index);)+
+            $(
+                #[doc = concat!("The canonical item identity for `", stringify!($name), "`.")]
+                pub const $name: ItemId = ItemId($index);
+            )+
         }
 
         const ITEMS: [ItemData; ITEMS_COUNT] = [
