@@ -658,50 +658,159 @@ fn a_save_path_swapped_after_inspection_is_still_not_followed() {
 }
 
 /// Windows's `FILE_ATTRIBUTE_REPARSE_POINT`, checked below as this test
-/// module's own confirmation that `compact /c /exe:` did what it claims,
+/// module's own confirmation that the fixture built a reparse point,
 /// independent of `open`'s copy of the same flag.
 #[cfg(windows)]
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
 
-/// Turns `path` into a genuine, non-symlink Windows reparse point
-/// (`IO_REPARSE_TAG_WOF`) via per-file compression, a stock Windows tool
-/// needing no cloud provider and no elevated privilege: `compact /c /exe:`.
-/// Its filter transparently serves the original bytes back on an ordinary
-/// read, the same shape of object a `OneDrive` cloud-files placeholder is.
+/// A directory registered as a cloud-files sync root, unregistered again on
+/// every exit path (drop runs on a panic unwind too).
 ///
-/// Asserts the file actually became a reparse point, so a host or Windows
-/// edition where `compact` declines fails loudly here rather than letting
-/// the read below pass for an unrelated reason.
+/// Declare it after the [`TempDir`] it registers so it drops first: a sync
+/// root cannot be unregistered from a directory that no longer exists.
 #[cfg(windows)]
-fn compress_into_a_non_symlink_reparse_point(path: &Path) {
+struct SyncRootGuard {
+    root: Vec<u16>,
+}
+
+#[cfg(windows)]
+impl Drop for SyncRootGuard {
+    fn drop(&mut self) {
+        // SAFETY: `root` is the NUL-terminated wide path this guard registered.
+        let _ = unsafe {
+            windows_sys::Win32::Storage::CloudFilters::CfUnregisterSyncRoot(self.root.as_ptr())
+        };
+    }
+}
+
+/// Registers `dir` as a cloud-files sync root with hydration allowed, or
+/// returns `None` -- after saying why on stderr -- when the host refuses the
+/// registration as unsupported or forbidden (access denied, not supported,
+/// invalid function: a runner without the cloud-files filter, or a volume it
+/// cannot sit on). Any other failure panics: only that specific
+/// precondition may skip a test, never a read-path assertion.
+#[cfg(windows)]
+fn register_sync_root(dir: &TempDir, label: &str) -> Option<SyncRootGuard> {
+    use std::os::windows::ffi::OsStrExt as _;
+    use windows_sys::Win32::Storage::CloudFilters::{
+        CfRegisterSyncRoot, CF_HYDRATION_POLICY_FULL, CF_POPULATION_POLICY_FULL,
+        CF_REGISTER_FLAG_NONE, CF_SYNC_POLICIES, CF_SYNC_REGISTRATION,
+    };
+
+    // HRESULT_FROM_WIN32 of ERROR_INVALID_FUNCTION, ERROR_ACCESS_DENIED, ERROR_NOT_SUPPORTED.
+    const HOST_REFUSALS: [i32; 3] = [
+        0x8007_0001_u32.cast_signed(),
+        0x8007_0005_u32.cast_signed(),
+        0x8007_0032_u32.cast_signed(),
+    ];
+
+    let wide = |text: &std::ffi::OsStr| -> Vec<u16> { text.encode_wide().chain(Some(0)).collect() };
+    let root = wide(dir.path.as_os_str());
+    let provider_name = wide(std::ffi::OsStr::new(&format!(
+        "pokeemerald-rs-save-test-{label}-{}",
+        std::process::id()
+    )));
+    let provider_version = wide(std::ffi::OsStr::new("1"));
+
+    // A GUID unique to this process and label, so concurrent tests never share a provider id.
+    let label_hash = label
+        .bytes()
+        .fold(0u8, |acc, byte| acc.wrapping_mul(31).wrapping_add(byte));
+    let registration = CF_SYNC_REGISTRATION {
+        StructSize: u32::try_from(std::mem::size_of::<CF_SYNC_REGISTRATION>()).unwrap(),
+        ProviderName: provider_name.as_ptr(),
+        ProviderVersion: provider_version.as_ptr(),
+        ProviderId: windows_sys::core::GUID {
+            data1: std::process::id(),
+            data2: 0x1399,
+            data3: 0x4a6e,
+            data4: [0x91, 0x5d, 0x0b, 0x1c, 0x53, 0x76, 0x41, label_hash],
+        },
+        ..Default::default()
+    };
+
+    let mut policies = CF_SYNC_POLICIES {
+        StructSize: u32::try_from(std::mem::size_of::<CF_SYNC_POLICIES>()).unwrap(),
+        ..Default::default()
+    };
+    policies.Hydration.Primary = CF_HYDRATION_POLICY_FULL;
+    policies.Population.Primary = CF_POPULATION_POLICY_FULL;
+
+    // SAFETY: every pointer names a live, NUL-terminated buffer or struct that outlives the call.
+    let result = unsafe {
+        CfRegisterSyncRoot(
+            root.as_ptr(),
+            &raw const registration,
+            &raw const policies,
+            CF_REGISTER_FLAG_NONE,
+        )
+    };
+    if result >= 0 {
+        return Some(SyncRootGuard { root });
+    }
+    assert!(
+        HOST_REFUSALS.contains(&result),
+        "CfRegisterSyncRoot on {} failed with an unexpected HRESULT {result:#010x}",
+        dir.path.display()
+    );
+    eprintln!(
+        "skipping {label}: this host refuses to register a cloud-files sync root at {} \
+         (HRESULT {result:#010x}), so no real placeholder can be built",
+        dir.path.display()
+    );
+    None
+}
+
+/// Converts the hydrated file at `path`, inside a registered sync root, into
+/// a genuine cloud-files placeholder that stays hydrated: its cloud-files
+/// filter still serves the bytes on an ordinary read while
+/// `FILE_ATTRIBUTE_REPARSE_POINT` is visible to callers, the same shape of
+/// object a `OneDrive` placeholder is.
+///
+/// Asserts the conversion succeeded and the entry now reads as a reparse
+/// point, so a fixture that never reaches the hydrating-reopen branch fails
+/// loudly here instead of letting the read below pass for an unrelated reason.
+#[cfg(windows)]
+fn convert_into_a_hydrated_placeholder(path: &Path) {
     use std::os::windows::fs::MetadataExt as _;
+    use std::os::windows::io::AsRawHandle as _;
+    use windows_sys::Win32::Storage::CloudFilters::{CfConvertToPlaceholder, CF_CONVERT_FLAG_NONE};
 
     let before = std::fs::symlink_metadata(path)
-        .expect("the file to compact is there")
+        .expect("the file to convert is there")
         .file_attributes();
-    let output = std::process::Command::new("compact")
-        .args(["/c", "/f", "/exe:xpress8k"])
-        .arg(path)
-        .output()
-        .expect("compact.exe runs");
-    let transcript = format!(
-        "compact /c /f /exe:xpress8k {}: {}\nstdout:\n{}\nstderr:\n{}",
-        path.display(),
-        output.status,
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr),
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .expect("the file to convert opens for conversion");
+    // SAFETY: the handle is live for the call; no file identity, USN out-pointer, or
+    // overlapped is passed, so the call is synchronous.
+    let result = unsafe {
+        CfConvertToPlaceholder(
+            file.as_raw_handle(),
+            std::ptr::null(),
+            0,
+            CF_CONVERT_FLAG_NONE,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    drop(file);
+    assert!(
+        result >= 0,
+        "CfConvertToPlaceholder on {} failed with HRESULT {result:#010x}",
+        path.display()
     );
-    assert!(output.status.success(), "{transcript}");
 
     let attributes = std::fs::symlink_metadata(path)
-        .expect("the compacted file is still there")
+        .expect("the converted file is still there")
         .file_attributes();
     assert!(
         attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0,
-        "compact /c /exe: must turn {} into a reparse point for this test to mean anything; \
-         attributes {before:#x} before, {attributes:#x} after, {} bytes on disk\n{transcript}",
+        "CfConvertToPlaceholder must turn {} into a reparse point for this test to mean anything; \
+         attributes {before:#x} before, {attributes:#x} after",
         path.display(),
-        std::fs::metadata(path).map_or(0, |m| m.len()),
     );
 }
 
@@ -713,12 +822,15 @@ fn compress_into_a_non_symlink_reparse_point(path: &Path) {
 #[cfg(windows)]
 #[test]
 fn reading_a_non_symlink_reparse_point_in_the_files_place_loads_through_its_filter() {
-    let dir = TempDir::new("read-wof-reparse");
+    let dir = TempDir::new("read-cloud-placeholder");
+    let Some(_sync_root) = register_sync_root(&dir, "read-cloud-placeholder") else {
+        return;
+    };
     let path = dir.join(SAVE_FILE_NAME);
     let (store, _, _) = saved_store();
     SaveFile::at(&path).write(&store).unwrap();
 
-    compress_into_a_non_symlink_reparse_point(&path);
+    convert_into_a_hydrated_placeholder(&path);
 
     let reloaded = SaveFile::at(&path)
         .read()
@@ -739,10 +851,13 @@ fn a_reparse_points_hydrating_reopen_reads_through_the_verified_object_despite_a
     use std::io::Read as _;
 
     let dir = TempDir::new("read-windows-reopen-ignores-a-path-swap");
+    let Some(_sync_root) = register_sync_root(&dir, "reopen-path-swap") else {
+        return;
+    };
     let path = dir.join(SAVE_FILE_NAME);
     let (original, _, _) = saved_store();
     SaveFile::at(&path).write(&original).unwrap();
-    compress_into_a_non_symlink_reparse_point(&path);
+    convert_into_a_hydrated_placeholder(&path);
 
     let carried_off = dir.join("carried-off.sav");
     let outcome = open::open_verified_for_read_with(&path, |_verified_handle| {

@@ -34,3 +34,17 @@ windows-sys = { version = "=0.61.2", default-features = false, features = [
 # build synthetic font sheets via FontImageRef::new_for_tests. The feature is
 # dev-only, so production builds keep the pack-mediated pairing guarantee.
 assets = { path = "../assets", features = ["test-support"] }
+
+# Test-only widening of the feature boundary above, owner-approved 2026-09-28
+# (issue #1399, `minimum-deps: approved`): `Win32_Storage_CloudFilters` lets the
+# Windows save-read tests register a sync root and convert a hydrated file into
+# a real cloud-files placeholder. `Win32_System_IO` is the `OVERLAPPED` type
+# `CfConvertToPlaceholder`'s signature requires. Same crate, same pinned
+# version; never part of the shipped library. Recorded in `README.md`.
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { version = "=0.61.2", default-features = false, features = [
+    "Win32_Foundation",
+    "Win32_Storage_CloudFilters",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+] }
