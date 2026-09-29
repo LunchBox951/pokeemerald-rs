@@ -511,11 +511,14 @@ fn wait_for_device_tail(
 ///
 /// The sounded estimate only moves when a callback's timestamps are usable,
 /// so a stationary estimate alone cannot tell a stalled device from stale
-/// timestamps. When submitted frames kept advancing after the estimate last
-/// moved, the callbacks are alive and the estimate is stale: the wait then
-/// holds on for `derived_tail`, as [`wait_for_device_tail`] would, and
-/// succeeds if submitted frames were still advancing in the second half of it. `progress`,
-/// `stream_errors`, `now`, and `sleep` are injected as in [`push_frame`].
+/// timestamps. When the estimate has stood still for `derived_tail` while
+/// submitted frames kept advancing (the last advance within half of
+/// `derived_tail`), the callbacks are alive and the estimate is stale: the
+/// wait ends early as a finish, as [`wait_for_device_tail`] would. That only
+/// ever shortens the wait, so `policy.max_wait` still bounds it; a
+/// `derived_tail` longer than `max_wait` therefore never takes effect.
+/// `progress`, `stream_errors`, `now`, and `sleep` are injected as in
+/// [`push_frame`].
 fn wait_for_measured_tail(
     target: u64,
     derived_tail: Duration,
@@ -525,11 +528,13 @@ fn wait_for_measured_tail(
     mut now: impl FnMut() -> Instant,
     mut sleep: impl FnMut(Duration),
 ) -> Result<(), DrainError> {
-    let deadline = now() + policy.max_wait;
+    let started = now();
+    let deadline = started + policy.max_wait;
     let mut last_sounded = None;
     let mut last_submitted = None;
-    let mut submitted_since_sounded = false;
-    let submitted = loop {
+    let mut stale_since = started;
+    let mut last_advance = None;
+    loop {
         let snapshot = progress();
         let errors = stream_errors();
         if errors > 0 {
@@ -545,54 +550,25 @@ fn wait_for_measured_tail(
         if sounded >= target {
             return Ok(());
         }
+        let current = now();
         if last_sounded.is_some_and(|last| sounded > last) {
-            submitted_since_sounded = false;
-        } else if last_submitted.is_some_and(|last| submitted > last) {
-            submitted_since_sounded = true;
+            stale_since = current;
+            last_advance = None;
+        }
+        if last_submitted.is_some_and(|last| submitted > last) {
+            last_advance = Some(current);
         }
         last_sounded = Some(sounded);
         last_submitted = Some(submitted);
-        if now() >= deadline {
-            if submitted_since_sounded {
-                break submitted;
-            }
+        let callbacks_alive =
+            last_advance.is_some_and(|at| current.duration_since(at) <= derived_tail / 2);
+        if callbacks_alive && current.duration_since(stale_since) >= derived_tail {
+            return Ok(());
+        }
+        if current >= deadline {
             return Err(DrainError::MeasuredTailTimedOut { sounded, target });
         }
         sleep(policy.interval);
-    };
-    // Stale timestamps with live callbacks: hold on for the derived tail,
-    // succeeding only if submitted frames were still advancing near its end.
-    let tail_deadline = now() + derived_tail;
-    let mut submitted = submitted;
-    let mut last_advance = now();
-    loop {
-        sleep(policy.interval);
-        let snapshot = progress();
-        let errors = stream_errors();
-        if errors > 0 {
-            return Err(DrainError::StreamStoppedDuringTail { errors });
-        }
-        let Some(snapshot) = snapshot else {
-            return Ok(());
-        };
-        if snapshot.sounded_frames >= target {
-            return Ok(());
-        }
-        let current = now();
-        if snapshot.submitted_frames > submitted {
-            submitted = snapshot.submitted_frames;
-            last_advance = current;
-        }
-        if current >= tail_deadline {
-            return if tail_deadline.duration_since(last_advance) <= derived_tail / 2 {
-                Ok(())
-            } else {
-                Err(DrainError::MeasuredTailTimedOut {
-                    sounded: snapshot.sounded_frames,
-                    target,
-                })
-            };
-        }
     }
 }
 
@@ -1228,7 +1204,7 @@ mod tests {
     ) -> (Result<(), DrainError>, std::time::Duration) {
         let policy = RetryPolicy {
             interval: std::time::Duration::from_millis(10),
-            max_wait: std::time::Duration::from_millis(30),
+            max_wait: std::time::Duration::from_millis(300),
         };
         let start = std::time::Instant::now();
         let clock = Rc::new(RefCell::new(start));
@@ -1239,7 +1215,7 @@ mod tests {
             &policy,
             || Some(progress(0, submitted.get())),
             || {
-                if clock.borrow().duration_since(start) > policy.max_wait {
+                if clock.borrow().duration_since(start) > std::time::Duration::from_millis(50) {
                     errors
                 } else {
                     0
@@ -1285,7 +1261,7 @@ mod tests {
     fn callbacks_that_stall_partway_through_the_derived_tail_still_time_out() {
         let policy = RetryPolicy {
             interval: std::time::Duration::from_millis(10),
-            max_wait: std::time::Duration::from_millis(30),
+            max_wait: std::time::Duration::from_millis(300),
         };
         let clock = Rc::new(RefCell::new(std::time::Instant::now()));
         let submitted = Cell::new(4_u64);
@@ -1313,6 +1289,45 @@ mod tests {
             result,
             Err(DrainError::MeasuredTailTimedOut { .. })
         ));
+    }
+
+    /// `policy.max_wait` is documented as bounding how long the stream is
+    /// held open: a callback that advances and then stalls must not keep it
+    /// open past that bound.
+    #[test]
+    fn a_stalling_callback_does_not_hold_the_stream_past_max_wait() {
+        let policy = RetryPolicy {
+            interval: std::time::Duration::from_millis(10),
+            max_wait: std::time::Duration::from_millis(30),
+        };
+        let start = std::time::Instant::now();
+        let clock = Rc::new(RefCell::new(start));
+        let submitted = Cell::new(4_u64);
+        let sleeps = Cell::new(0_u32);
+
+        let result = wait_for_measured_tail(
+            4,
+            std::time::Duration::from_millis(200),
+            &policy,
+            || Some(progress(0, submitted.get())),
+            || 0,
+            || *clock.borrow(),
+            |duration| {
+                *clock.borrow_mut() += duration;
+                sleeps.set(sleeps.get() + 1);
+                if sleeps.get() < 5 {
+                    submitted.set(submitted.get() + 1);
+                }
+            },
+        );
+        let held = clock.borrow().duration_since(start);
+
+        assert!(result.is_err(), "a stalled drain must not succeed");
+        assert!(
+            held <= policy.max_wait + policy.interval,
+            "max_wait {:?} must bound the hold, held {held:?}",
+            policy.max_wait
+        );
     }
 
     #[test]
