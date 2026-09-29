@@ -242,8 +242,9 @@ struct SlotScan {
     /// rather than all 14 sectors validating. See [`SaveStore::resolve`].
     legacy: bool,
     /// The generation of a complete, checksum-valid set of ids 5-13, each
-    /// held once, anywhere in this slot (at most one footer counter may
-    /// disagree; see `SlotSurvey::storage_generation`): the box data still
+    /// held once at one rotation, anywhere in this slot (at most one footer
+    /// counter may disagree, and never with a save-block generation's own;
+    /// see `SlotSurvey::storage_generation`): the box data still
     /// salvageable from it, whatever the slot's own integrity. A legacy head's stale
     /// tail sets it; so does a slot whose save-block sectors are too damaged
     /// for the slot to be `Ok` at all. Completeness is required because a
@@ -309,6 +310,15 @@ struct SlotSurvey {
     /// by chunk; meaningful only for the ids set in `storage_valid_ids`.
     storage_counters: [u32; PKMN_STORAGE_CHUNKS],
     storage_ids_unique: bool,
+    /// The rotation every checksum-valid storage id's position implies,
+    /// while they all imply the same one.
+    storage_rotation: Option<usize>,
+    storage_rotation_coherent: bool,
+    /// The footer counter of every checksum-valid save-block sector (ids
+    /// 0-4) anywhere in the slot, in position order; only the first
+    /// `save_block_count` entries are meaningful.
+    save_block_counters: [u32; NUM_SECTORS_PER_SLOT],
+    save_block_count: usize,
     legacy_counter: Option<u32>,
     legacy_consistent: bool,
 }
@@ -331,6 +341,10 @@ impl SlotSurvey {
             storage_valid_ids: 0,
             storage_counters: [0; PKMN_STORAGE_CHUNKS],
             storage_ids_unique: true,
+            storage_rotation: None,
+            storage_rotation_coherent: true,
+            save_block_counters: [0; NUM_SECTORS_PER_SLOT],
+            save_block_count: 0,
             legacy_counter: None,
             legacy_consistent: true,
         }
@@ -357,6 +371,12 @@ impl SlotSurvey {
         let counter = sector.counter();
         self.counter = counter;
         self.valid_ids |= 1 << id;
+        let rotation = (i + NUM_SECTORS_PER_SLOT - usize::from(id) % NUM_SECTORS_PER_SLOT)
+            % NUM_SECTORS_PER_SLOT;
+        if id < SECTOR_ID_PKMN_STORAGE_START {
+            self.save_block_counters[self.save_block_count] = counter;
+            self.save_block_count += 1;
+        }
         // Tracked over the whole slot, not just positions 5-13: a rotated
         // full generation scatters its storage ids across every position,
         // and a damaged slot's surviving storage is worth just as much.
@@ -371,12 +391,15 @@ impl SlotSurvey {
             }
             self.storage_valid_ids |= 1 << id;
             self.storage_counters[usize::from(id - SECTOR_ID_PKMN_STORAGE_START)] = counter;
+            match self.storage_rotation {
+                None => self.storage_rotation = Some(rotation),
+                Some(r) if r == rotation => {}
+                Some(_) => self.storage_rotation_coherent = false,
+            }
         }
         if in_tail {
             self.tail_counters[self.tail_valid_count] = counter;
             self.tail_valid_count += 1;
-            let rotation = (i + NUM_SECTORS_PER_SLOT - usize::from(id) % NUM_SECTORS_PER_SLOT)
-                % NUM_SECTORS_PER_SLOT;
             match self.tail_rotation {
                 None => self.tail_rotation = Some(rotation),
                 Some(r) if r == rotation => {}
@@ -413,14 +436,34 @@ impl SlotSurvey {
     /// and new sectors it leaves always meet at a duplicated pair of ids and
     /// a missing pair, and a set with neither in 5-13 draws on one
     /// generation only. Anything wider than one outlier is still refused.
+    ///
+    /// The footer id is unchecksummed too, and ids 1-3 share ids 5-12's
+    /// payload length, so a save-block sector relabeled into a storage id
+    /// the slot has lost (a legacy head over a rotated remnant drops
+    /// whichever storage ids sat in positions 0-4) would complete the set
+    /// as that one outlier. One generation lays every id at one rotation,
+    /// so the set must imply one; and a relabeled sector keeps its own
+    /// generation's genuine counter, which the slot's surviving save-block
+    /// sectors still carry, while a damaged counter matches none of them.
+    /// Legacy rotation 3 places id 1 exactly where a rotation-13 remnant's
+    /// id 5 sat, so only the counter test catches that relabel.
     fn storage_generation(&self) -> Option<u32> {
-        self.storage_counters.iter().copied().find(|&candidate| {
+        if !self.storage_rotation_coherent {
+            return None;
+        }
+        let generation = self.storage_counters.iter().copied().find(|&candidate| {
             self.storage_counters
                 .iter()
                 .filter(|&&counter| counter == candidate)
                 .count()
                 >= PKMN_STORAGE_CHUNKS - 1
-        })
+        })?;
+        let save_block_counters = &self.save_block_counters[..self.save_block_count];
+        let outlier_is_a_save_block_generation = self
+            .storage_counters
+            .iter()
+            .any(|&counter| counter != generation && save_block_counters.contains(&counter));
+        (!outlier_is_a_save_block_generation).then_some(generation)
     }
 
     /// The generation a stale tail belongs to: one full generation's
@@ -2791,5 +2834,87 @@ mod tests {
         assert_eq!(store.read_physical(1, 0).counter(), 40);
 
         assert_eq!(store.scan_slot(1).integrity, SlotIntegrity::Error);
+    }
+
+    /// Builds the donor-slot shape for the relabeled-head-sector tests: an
+    /// imported rotation-13 full generation (counter 13, storage `0xAB`) in
+    /// slot 1, overwritten by a pre-#1227 write at `legacy_rotation`
+    /// (counter 15), whose id-1 footer is then flipped into id 5. The
+    /// genuine id 5 sat at position 4 and is gone, so every storage id is
+    /// held once. Slot 0 is a newer legacy generation over erased flash
+    /// with no storage of its own. Returns the `SaveBlock1` bytes the
+    /// relabeled sector carries.
+    fn relabeled_head_sector_over_a_rotation_13_remnant(
+        store: &mut SaveStore,
+        legacy_rotation: u16,
+    ) -> Vec<u8> {
+        let block2 = sample_block2();
+        let legacy_block1 = SaveBlock1 {
+            money: 15,
+            ..sample_block1()
+        };
+        let newer_block1 = SaveBlock1 {
+            money: 16,
+            ..sample_block1()
+        };
+        let storage_bytes = vec![0xABu8; PKMN_STORAGE_PAYLOAD_LEN];
+        write_full_slot(store, 1, &sample_block1(), &block2, &storage_bytes, 13);
+        let sectors: Vec<Sector> = (0..NUM_SECTORS_PER_SLOT)
+            .map(|i| store.read_physical(1, i))
+            .collect();
+        for (id, sector) in sectors.iter().enumerate() {
+            store.write_physical(1, (id + 13) % NUM_SECTORS_PER_SLOT, sector);
+        }
+        write_legacy_slot_rotated(store, 1, &legacy_block1, &block2, 15, legacy_rotation);
+        let relabeled = usize::from((SECTOR_ID_SAVEBLOCK1_START + legacy_rotation) % 5);
+        let id_offset = SECTOR_SIZE - 2 * size_of::<u32>() - 2 * size_of::<u16>();
+        let mut bytes = *store.read_physical(1, relabeled).as_bytes();
+        bytes[id_offset] ^= 0x04;
+        store.write_physical(1, relabeled, &Sector::from_bytes(bytes));
+        assert_eq!(
+            store.read_physical(1, relabeled).id(),
+            SECTOR_ID_PKMN_STORAGE_START
+        );
+        assert!(store
+            .read_physical(1, relabeled)
+            .is_valid(sector_payload_len(SECTOR_ID_PKMN_STORAGE_START).unwrap()));
+        write_legacy_slot(store, 0, &newer_block1, &block2, 16);
+        legacy_block1.to_bytes(block2.encryption_key)[..SECTOR_DATA_SIZE].to_vec()
+    }
+
+    fn assert_relabeled_head_sector_is_never_donated(legacy_rotation: u16) {
+        let mut store = SaveStore::new();
+        let head_chunk =
+            relabeled_head_sector_over_a_rotation_13_remnant(&mut store, legacy_rotation);
+        assert_eq!(store.scan_slot(1).integrity, SlotIntegrity::Error);
+        assert!(
+            store.scan_slot(1).storage_counter.is_none(),
+            "a legacy head sector relabeled into the missing id 5 must not complete a donor set \
+             (legacy rotation {legacy_rotation})"
+        );
+        let outcome = store.load();
+        assert_eq!(outcome.status, SaveStatus::Error);
+        assert_eq!(store.save_counter(), 16);
+        assert_ne!(
+            &store.base_pokemon_storage[..SECTOR_DATA_SIZE],
+            &head_chunk[..],
+            "SaveBlock1 bytes must never be loaded as a box chunk (legacy rotation {legacy_rotation})"
+        );
+    }
+
+    /// The legacy head's id 1 sits at position 1 and implies rotation 10,
+    /// while the remnant's ids 6-13 imply rotation 13.
+    #[test]
+    fn a_relabeled_legacy_head_sector_off_the_remnant_rotation_is_never_donated() {
+        assert_relabeled_head_sector_is_never_donated(0);
+    }
+
+    /// At legacy rotation 3 the head's id 1 sits at position 4, exactly
+    /// where the remnant's own id 5 was, so the relabeled set is
+    /// rotation-coherent; only its outlier counter -- the head's own
+    /// generation -- gives it away.
+    #[test]
+    fn a_relabeled_legacy_head_sector_at_the_remnant_rotation_is_never_donated() {
+        assert_relabeled_head_sector_is_never_donated(3);
     }
 }
