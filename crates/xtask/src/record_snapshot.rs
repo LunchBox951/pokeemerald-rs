@@ -23,7 +23,7 @@ mod staging;
 
 #[cfg(windows)]
 use directory::claim_promoted_dir;
-use directory::{claim_staged_dir, rename_without_replacement, StagedDirClaim};
+use directory::{claim_output_dir, claim_staged_dir, rename_without_replacement, StagedDirClaim};
 
 const SCREEN_WIDTH: usize = 240;
 const SCREEN_HEIGHT: usize = 160;
@@ -189,12 +189,14 @@ where
         meta_bytes,
         after_rgb_staged,
         || {},
+        || {},
     )
 }
 
 /// [`publish_generation`] with a hook between the staging directory's last
 /// identity check and its promoting rename, so tests can land a replacement in
-/// that gap.
+/// that gap, and one between the promoted generation's identity check and
+/// the pointer's staging, so they can swap `output_dir` there.
 fn publish_generation_with<F>(
     scene: Scene,
     output_dir: &Path,
@@ -202,6 +204,7 @@ fn publish_generation_with<F>(
     meta_bytes: &[u8],
     after_rgb_staged: F,
     before_rename: impl FnOnce(),
+    after_generation_check: impl FnOnce(),
 ) -> Result<(PathBuf, PathBuf), RecordSnapshotError>
 where
     F: FnOnce() -> Result<(), RecordSnapshotError>,
@@ -209,6 +212,13 @@ where
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT_GENERATION: AtomicU64 = AtomicU64::new(0);
+    let output_claim = claim_output_dir(output_dir)
+        .map_err(|e| RecordSnapshotError::Write(output_dir.to_path_buf(), e.to_string()))?;
+    let require_output_dir = || {
+        output_claim.require_path(output_dir).map_err(|error| {
+            RecordSnapshotError::Write(output_dir.to_path_buf(), error.to_string())
+        })
+    };
     let (generation, staged_dir, generation_dir, mut staged_dir_claim) = loop {
         let generation = format!(
             "{}.generation-{}-{}",
@@ -259,12 +269,20 @@ where
             .map_err(|error| {
                 RecordSnapshotError::Write(generation_dir.clone(), error.to_string())
             })?;
+        after_generation_check();
+        // The generation was verified under `output_dir`; the pointer must land
+        // in that same directory, not in whatever the pathname names now.
+        require_output_dir()?;
         // See `staging` for the guard this stage-then-publish pair provides.
         let staged_pointer = stage_pointer(&pointer_path, format!("{generation}\n").as_bytes())
             .map_err(|e| RecordSnapshotError::Write(pointer_path.clone(), e.to_string()))?;
+        // Staging resolved `output_dir` anew; refuse before the rename can
+        // replace a visible pointer in a directory swapped in since the check.
+        require_output_dir()?;
         staged_pointer
             .publish(&pointer_path)
             .map_err(|e| RecordSnapshotError::Write(pointer_path.clone(), e.to_string()))?;
+        require_output_dir()?;
         Ok((
             generation_dir.join(format!("{}.rgb", scene.name())),
             generation_dir.join(format!("{}.meta", scene.name())),

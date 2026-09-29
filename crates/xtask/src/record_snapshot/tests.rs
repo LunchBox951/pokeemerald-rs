@@ -1878,6 +1878,7 @@ fn a_staging_directory_replaced_after_verification_is_promoted_but_never_publish
         b"meta-bytes",
         || Ok(()),
         swap_the_staging_directory,
+        || {},
     )
     .unwrap_err()
     .to_string();
@@ -1906,5 +1907,59 @@ fn a_staging_directory_replaced_after_verification_is_promoted_but_never_publish
         std::fs::read(carried.join(format!("{}.rgb", scene.name()))).unwrap(),
         b"rgb-bytes",
         "this call's payloads stay in its own directory"
+    );
+}
+
+/// A directory swapped in at `output_dir` after the promoted generation's
+/// identity check must not receive a pointer naming a generation it lacks, and
+/// its own visible pointer stays as it was.
+#[cfg(unix)]
+#[test]
+fn an_output_directory_swapped_after_the_generation_check_is_never_published_into() {
+    let scene = Scene::MainMenuNewGame;
+    let root = scratch_path("output-dir-swapped-after-check");
+    let _guard = ScratchGuard(root.clone());
+    let output_dir = root.join("out");
+    let replacement = root.join("replacement");
+    let carried = root.join("carried");
+    std::fs::create_dir_all(&output_dir).unwrap();
+    std::fs::create_dir_all(&replacement).unwrap();
+    let pointer_name = format!("{}.generation", scene.name());
+    std::fs::write(replacement.join(&pointer_name), b"previous\n").unwrap();
+
+    let swap_the_output_directory = || {
+        std::fs::rename(&output_dir, &carried).unwrap();
+        std::fs::rename(&replacement, &output_dir).unwrap();
+    };
+    let error = super::publish_generation_with(
+        scene,
+        &output_dir,
+        b"rgb-bytes",
+        b"meta-bytes",
+        || Ok(()),
+        || {},
+        swap_the_output_directory,
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(
+        error.contains("no longer matches the capture's held directory"),
+        "{error}"
+    );
+    assert_eq!(
+        std::fs::read(output_dir.join(&pointer_name)).unwrap(),
+        b"previous\n",
+        "the visible pointer in the new directory is untouched"
+    );
+    let generations: Vec<_> = std::fs::read_dir(&carried)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.is_dir())
+        .collect();
+    assert_eq!(generations.len(), 1);
+    assert_eq!(
+        std::fs::read(generations[0].join(format!("{}.rgb", scene.name()))).unwrap(),
+        b"rgb-bytes"
     );
 }

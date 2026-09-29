@@ -180,6 +180,90 @@ pub(super) fn claim_promoted_dir(path: &Path) -> std::io::Result<StagedDirClaim>
     }
 }
 
+/// Pins the output directory for a whole publication. A check compares the
+/// held directory with whatever the pathname resolves to now, so a directory
+/// swapped in at `output_dir` is refused rather than handed a pointer naming a
+/// generation it does not contain. The check is not atomic with the pointer's
+/// rename; a swap inside that gap is caught by the check after publication.
+pub(super) struct OutputDirClaim {
+    hold: std::fs::File,
+}
+
+impl OutputDirClaim {
+    pub(super) fn require_path(&self, path: &Path) -> std::io::Result<()> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+            let identity = self.hold.metadata()?;
+            let found = std::fs::metadata(path)?;
+            if !found.is_dir() || (identity.dev(), identity.ino()) != (found.dev(), found.ino()) {
+                return Err(std::io::Error::other(format!(
+                    "the output directory at {} no longer matches the capture's held directory",
+                    path.display()
+                )));
+            }
+        }
+        // Windows: the hold withholds `FILE_SHARE_DELETE`, so the directory
+        // cannot be renamed away while it is held.
+        #[cfg(not(unix))]
+        if !self.hold.metadata()?.is_dir() {
+            return Err(std::io::Error::other(format!(
+                "the output directory at {} is not a directory",
+                path.display()
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// Unlike the staging claim this follows a symlinked `output_dir`, which
+/// callers may pass.
+#[cfg(unix)]
+pub(super) fn claim_output_dir(path: &Path) -> std::io::Result<OutputDirClaim> {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    let access = rustix::fs::OFlags::PATH;
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    let access = rustix::fs::OFlags::RDONLY;
+    let open = |access| {
+        rustix::fs::open(
+            path,
+            access | rustix::fs::OFlags::DIRECTORY,
+            rustix::fs::Mode::empty(),
+        )
+        .map(std::fs::File::from)
+        .map_err(std::io::Error::from)
+    };
+    let hold = open(access);
+    // A search-only output directory (mode `0333`) refuses `O_RDONLY`; see
+    // [`claim_staged_dir`].
+    #[cfg(target_vendor = "apple")]
+    let hold = match hold {
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => open(APPLE_SEARCH),
+        hold => hold,
+    };
+    let hold = hold?;
+    Ok(OutputDirClaim { hold })
+}
+
+#[cfg(windows)]
+pub(super) fn claim_output_dir(path: &Path) -> std::io::Result<OutputDirClaim> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    const FILE_SHARE_READ: u32 = 1;
+    const FILE_SHARE_WRITE: u32 = 2;
+    let hold = std::fs::OpenOptions::new()
+        .access_mode(0)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+        .open(path)?;
+    Ok(OutputDirClaim { hold })
+}
+
+#[cfg(not(any(unix, windows)))]
+pub(super) fn claim_output_dir(_path: &Path) -> std::io::Result<OutputDirClaim> {
+    Err(std::io::ErrorKind::Unsupported.into())
+}
+
 #[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
 pub(super) fn rename_without_replacement(source: &Path, destination: &Path) -> std::io::Result<()> {
     rustix::fs::renameat_with(
