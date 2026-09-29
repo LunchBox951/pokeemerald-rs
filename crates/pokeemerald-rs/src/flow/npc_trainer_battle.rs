@@ -300,7 +300,7 @@ mod tests {
     use assets::SpeciesId;
 
     const TREECKO: SpeciesId = SpeciesId(277);
-    const SLASH: MoveId = MoveId(163);
+    const SLASH: MoveId = MoveId::SLASH;
     const TEST_LEVEL: u8 = 50;
     const TEST_PARTY_IV: u8 = 31;
     const TEST_PERSONALITY: u32 = 0;
