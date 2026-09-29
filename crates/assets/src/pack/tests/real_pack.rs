@@ -13,12 +13,10 @@ use crate::audio::{SampleId, SongEvent, VoiceGroupId};
 /// and this reader agree byte-for-byte on the format, not just on the
 /// synthetic fixtures above. Needs a local pack:
 /// run `cargo xtask extract` first, then `cargo test -p assets -- --ignored`.
-// Long because it's one end-to-end smoke test exercising every typed
-// accessor this module offers (tileset/sprite/title/layout/font/text-window)
-// against the real extracted pack -- splitting it up would just scatter the
-// same "does the real pack round-trip" assertion across several `#[ignore]`d
-// tests that all need the same `cargo xtask extract` precondition.
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one end-to-end walk over every typed accessor; a split scatters one round-trip claim across ignored tests"
+)]
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_loads_and_every_typed_accessor_works() {
@@ -468,12 +466,10 @@ fn real_pack_audio_song_decodes_through_the_song_schema() {
 /// Needs a local pack: run `cargo xtask extract` first, then
 /// `cargo test -p assets -- --ignored` (CI's Ubuntu `native` leg does
 /// exactly this).
-// Long for the same reason `real_pack_loads_and_every_typed_accessor_works`
-// is: one end-to-end walk (song -> every reachable voicegroup -> every
-// referenced sample) that would only get scattered across several
-// `#[ignore]`d tests sharing the same `cargo xtask extract` precondition if
-// split up, without reducing what it actually checks.
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one end-to-end walk from song to every voicegroup and sample; a split scatters one chain claim across ignored tests"
+)]
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_mus_title_data_chain_round_trips_through_the_typed_accessors() {

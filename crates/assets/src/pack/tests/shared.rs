@@ -67,10 +67,10 @@ pub(super) struct Entry {
 /// the issue's CI caveat, no test in this crate touches `pokeemerald/` or
 /// the real extracted pack) with one entry of each kind: an `Image`, a
 /// `Palette`, and a `Raw` blob.
-// Long because it lists one fixture entry per accessor this module tests
-// (tileset/layout/font/text-window) — splitting the literal list across
-// helper functions would just move the line count, not reduce it.
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one fixture entry per accessor under test; helpers would move the lines, not remove them"
+)]
 pub(super) fn synthetic_pack() -> Vec<u8> {
     let entries = vec![
         Entry {
