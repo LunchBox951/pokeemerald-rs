@@ -15,6 +15,9 @@
 //! A few upstream `map.bin` files carry trailing padding beyond
 //! `width * height * 2`, so the width and height are checked as a lower
 //! bound on the grid, never as an equality.
+//!
+//! The domain is fixed, not discovered: a pack with zero `layout/*/map`
+//! entries is missing the domain, not empty of it, and is refused.
 
 use rom_import::Encoding;
 
@@ -42,12 +45,19 @@ const MAX_LAYOUT_SIDE: u32 = 1024;
 ///
 /// # Errors
 ///
-/// Any [`GenRomProfileError`] a locator raises.
+/// [`GenRomProfileError::MissingPackEntry`] if the pack holds no
+/// `layout/*/map` entries at all, or any other [`GenRomProfileError`] a
+/// locator raises.
 pub fn locate(
     ctx: &Context<'_>,
     report: &mut Vec<ReportLine>,
 ) -> Result<Vec<MapLayoutPlan>, GenRomProfileError> {
     let names = layout_names(ctx);
+    if names.is_empty() {
+        return Err(GenRomProfileError::MissingPackEntry(
+            "layout/*/map".to_owned(),
+        ));
+    }
     let mut needles = Vec::with_capacity(names.len());
     for name in &names {
         needles.push(ctx.pack.get(&format!("layout/{name}/map"))?.payload.clone());

@@ -8,7 +8,7 @@
 //! [`crate::ring::Consumer::fill`] call into a preallocated scratch buffer,
 //! then linearly interpolates from that scratch. A callback within the
 //! constructor's advertised bound is one such chunk, so it is one bulk drain;
-//! an oversized callback (see [`Self::fill`]) is split into several bounded
+//! an oversized callback (see [`Resampler::fill`]) is split into several bounded
 //! chunks rather than growing scratch, so it is several. Either way `fill`
 //! never drains the ring one source frame at a time, so the resampled path
 //! is no more contended than the direct path, and underrun accounting
