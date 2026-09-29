@@ -258,6 +258,11 @@ pub struct SquareChannel {
     note_high_bits: u16,
     sweep: Option<Sweep>,
     disabled_at_trigger: bool,
+    /// Samples an idle slot has spent since `phase` was last settled: the
+    /// hardware defers the duty catch-up to the next register write, so a
+    /// sweep retuning meanwhile does not rate those samples
+    /// ([`Self::defer_idle_samples`]'s doc).
+    idle_samples: u32,
 }
 
 impl SquareChannel {
@@ -274,6 +279,7 @@ impl SquareChannel {
             note_high_bits: 0,
             sweep,
             disabled_at_trigger,
+            idle_samples: 0,
         };
         chan.set_frequency(freq_reg);
         chan
@@ -292,14 +298,36 @@ impl SquareChannel {
 
     #[cfg(test)]
     pub(crate) fn duty_phase(&self) -> u32 {
+        self.settled_phase()
+    }
+
+    /// The duty position once the deferred idle samples are rated at the
+    /// current frequency.
+    fn settled_phase(&self) -> u32 {
         self.phase
+            .wrapping_add(self.step_delta.wrapping_mul(self.idle_samples))
     }
 
     /// Continues the duty position of `previous`, the note this one replaces
     /// on the same hardware slot: a restart keeps the duty index and the time
     /// since the last step (`mgba/src/gb/audio.c:168-194`, `:493-510`).
     pub(crate) fn continue_duty_from(&mut self, previous: &Self) {
-        self.phase = retime_step_remainder(previous.phase, previous.step_delta, self.step_delta);
+        self.phase = retime_step_remainder(
+            previous.settled_phase(),
+            previous.step_delta,
+            self.step_delta,
+        );
+        self.idle_samples = 0;
+    }
+
+    /// Records `samples` of an idle slot's silence without advancing the duty
+    /// position. The disabled channel's catch-up is skipped at every frame and
+    /// sweep tick (`GBAudioRun`'s `dead != 2` gate, `mgba/src/gb/audio.c:493-510`)
+    /// and runs once at the next register write, at whatever frequency the
+    /// sweep has reached by then (`:162-171`), not at each intermediate one.
+    pub(crate) fn defer_idle_samples(&mut self, samples: usize) {
+        let samples = u32::try_from(samples).unwrap_or(u32::MAX);
+        self.idle_samples = self.idle_samples.wrapping_add(samples);
     }
 
     /// Advances the duty position through `samples` of silence. A disabled
@@ -311,6 +339,18 @@ impl SquareChannel {
         self.phase = self
             .phase
             .wrapping_add(self.step_delta.wrapping_mul(samples));
+    }
+
+    /// Applies the off-write an idling slot's `NR14`/`NR24` restart makes:
+    /// it clears the frequency register's high three bits, so a later
+    /// catch-up rates against the low byte alone
+    /// (`pokeemerald/src/m4a.c:857-868`, `mgba/src/gb/audio.c:168-171,219-222`).
+    /// The write is also a trigger, so channel 1's sweep reloads from the
+    /// truncated frequency and rechecks overflow (`mgba/src/gb/audio.c:168-186`);
+    /// returns whether the channel still plays.
+    pub(crate) fn apply_hardware_off_write(&mut self) -> bool {
+        self.set_frequency(self.frequency & FREQUENCY_LOW_BYTE);
+        self.retrigger()
     }
 
     /// Retunes the channel from an 11-bit frequency register value, as a pitch
@@ -421,10 +461,13 @@ impl WaveChannel {
         chan
     }
 
-    /// Retunes the channel from an 11-bit frequency register value.
+    /// Retunes the channel from an 11-bit frequency register value, keeping
+    /// the sample index but starting a fresh period at the new rate
+    /// (`mgba/src/gb/audio.c:331-335`).
     pub fn set_frequency(&mut self, freq_reg: u16) {
         let hz = register_frequency_hz(freq_reg, WAVE_CLOCK_HZ);
         self.step_delta = phase_delta(hz, WAVE_STEPS_PER_CYCLE);
+        self.phase &= !(PHASE_ONE - 1);
     }
 
     /// Produces the next unscaled decoded sample in `-8..=7`.
@@ -833,6 +876,57 @@ mod tests {
         assert_eq!(wave.sample(), 7);
     }
 
+    fn samples_until_next_wave_step(mut chan: WaveChannel) -> u32 {
+        let index = chan.phase / PHASE_ONE;
+        (1..=PHASE_ONE)
+            .find(|_| {
+                chan.sample();
+                chan.phase / PHASE_ONE != index
+            })
+            .expect("a wave channel always reaches its next step")
+    }
+
+    /// A retune mid-step keeps the sample index but discards the fraction
+    /// of the old step already elapsed, so the new rate's first step lands
+    /// one new period after the retune itself, not after the step it
+    /// interrupted (`WaveChannel::set_frequency`'s doc).
+    #[test]
+    fn a_wave_retune_mid_step_lands_the_next_step_one_new_period_after_the_retune() {
+        const FIRST_FREQUENCY: u16 = 0x400;
+        const RETUNED_FREQUENCY: u16 = 0x200;
+        const SAMPLES_BEFORE_RETUNE: u32 = 3;
+
+        let wave_ram = WaveChannel::decode_wave_ram(&[0xF0; WAVE_RAM_BYTES]);
+        let mut wave = WaveChannel::new(wave_ram, FIRST_FREQUENCY);
+        // Walk into the middle of a step so a remainder is actually carried.
+        while wave.phase / PHASE_ONE == 0 {
+            wave.sample();
+        }
+        let last_step_index = wave.phase / PHASE_ONE;
+        for _ in 0..SAMPLES_BEFORE_RETUNE {
+            wave.sample();
+        }
+        assert_eq!(
+            wave.phase / PHASE_ONE,
+            last_step_index,
+            "the retune case must stay within the same step",
+        );
+
+        wave.set_frequency(RETUNED_FREQUENCY);
+        assert_eq!(
+            wave.phase % PHASE_ONE,
+            0,
+            "the retune must discard the elapsed fraction of the old step",
+        );
+        let retuned_period = f64::from(PHASE_ONE) / f64::from(wave.step_delta);
+
+        let next_step = f64::from(samples_until_next_wave_step(wave));
+        assert!(
+            (next_step - retuned_period).abs() <= 1.0,
+            "the retuned wave steps after {next_step} samples, expected about {retuned_period}",
+        );
+    }
+
     #[test]
     fn noise_narrow_mode_repeats_much_sooner_than_wide_mode() {
         let narrow = NoiseChannel::from_control_byte(NoiseControl::WIDTH_BIT);
@@ -1043,6 +1137,35 @@ mod tests {
             (first_step - (replacement_period - elapsed)).abs() <= 1.0,
             "the replacement steps after {first_step} samples, expected about {}",
             replacement_period - elapsed,
+        );
+    }
+
+    /// The off-write rates the channel as if only its low frequency byte
+    /// survived, without itself moving the duty index
+    /// (`SquareChannel::apply_hardware_off_write`'s doc).
+    #[test]
+    fn the_hardware_off_write_truncates_the_frequency_to_its_low_byte() {
+        let mut square = SquareChannel::new(HALF_DUTY_REGISTER, HIGH_FREQUENCY_REGISTER, None);
+        while square.phase / PHASE_ONE == 0 {
+            square.sample();
+        }
+        let index_before = square.phase / PHASE_ONE;
+
+        square.apply_hardware_off_write();
+
+        assert_eq!(
+            square.phase / PHASE_ONE,
+            index_before,
+            "the off-write must not itself move the duty index",
+        );
+        let truncated = SquareChannel::new(
+            HALF_DUTY_REGISTER,
+            HIGH_FREQUENCY_REGISTER & FREQUENCY_LOW_BYTE,
+            None,
+        );
+        assert_eq!(
+            square.step_delta, truncated.step_delta,
+            "the off-write must rate the channel as if only its low frequency byte survived",
         );
     }
 }

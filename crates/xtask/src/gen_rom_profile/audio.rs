@@ -29,6 +29,8 @@
 
 use std::path::Path;
 
+use assets::audio::{DirectSoundSample, Sample};
+
 use crate::extract::midi::SONG_PACK_ID as SUPPORTED_SONG_ID;
 use crate::extract::voicegroups::parser::{RawSlot, RawVoiceGroup};
 use crate::extract::voicegroups::{index_voicegroup_sources, parser};
@@ -196,9 +198,12 @@ fn locate_direct_sound(
     report: &mut Vec<ReportLine>,
 ) -> Result<Vec<SamplePlan>, GenRomProfileError> {
     let ids = ctx.pack.ids_with_prefix(DIRECT_SOUND_PREFIX);
+    let mut samples = Vec::with_capacity(ids.len());
     let mut needles = Vec::with_capacity(ids.len());
     for id in &ids {
-        needles.push(pcm_of(ctx, id)?.to_vec());
+        let sample = direct_sound_of(ctx, id)?;
+        needles.push(pcm_needle(&sample));
+        samples.push(sample);
     }
     let hits = ctx.raw.find_all(&needles);
 
@@ -211,14 +216,14 @@ fn locate_direct_sound(
                 reason: "the PCM starts before a header could fit".to_owned(),
             }
         })?;
-        check_wave_header(ctx, id, addr, &needles[index])?;
-        // The needle is the buffer `wav.rs` retains: `data_len` logical
-        // samples plus one interpolation-guard byte wav2agb's payload writer
-        // always emits (`crates/xtask/src/extract/wav.rs`'s module docs).
+        let sample = &samples[index];
+        check_wave_header(ctx, id, addr, sample)?;
+        // The needle is the buffer the canonical schema retains: `data_len`
+        // logical samples (`sample.sample_count()`) plus one
+        // interpolation-guard byte wav2agb's payload writer always emits
+        // (`crates/xtask/src/extract/wav.rs`'s module docs).
         let buffer_len = u32::try_from(needles[index].len()).expect("a sample fits in u32");
-        let data_len = buffer_len
-            .checked_sub(1)
-            .expect("a DirectSound sample always retains its interpolation guard");
+        let data_len = sample.sample_count();
         let symbol = format!(
             "{DIRECT_SOUND_SYMBOL}{}",
             id.trim_start_matches(DIRECT_SOUND_PREFIX)
@@ -238,35 +243,57 @@ fn locate_direct_sound(
     Ok(plans)
 }
 
-/// The PCM bytes of a `DirectSound` pack entry.
-fn pcm_of<'a>(ctx: &'a Context<'_>, id: &str) -> Result<&'a [u8], GenRomProfileError> {
+/// Decode and validate a `DirectSound` pack entry through the canonical
+/// wire schema (`assets::audio::Sample::decode`): the same schema the
+/// runtime pack loader enforces decides whether a payload is well-formed
+/// enough to search for, so a declared `sample_count` that disagrees with
+/// the retained PCM, or any other canonical violation (loop bounds,
+/// trailing bytes, an unrecognized kind tag), is refused here rather than
+/// reaching the ROM search.
+///
+/// # Errors
+///
+/// [`GenRomProfileError::EntryShape`] naming `id` when the payload does not
+/// decode as a valid `DirectSound` sample.
+fn direct_sound_of(ctx: &Context<'_>, id: &str) -> Result<DirectSoundSample, GenRomProfileError> {
     let payload = &ctx.pack.get(id)?.payload;
-    payload
-        .get(14..)
-        .ok_or_else(|| GenRomProfileError::EntryShape {
+    match Sample::decode(payload) {
+        Ok(Sample::DirectSound(sample)) => Ok(sample),
+        Ok(Sample::ProgrammableWave(_)) => Err(GenRomProfileError::EntryShape {
             id: id.to_owned(),
-            reason: "a DirectSound sample payload is shorter than its own header".to_owned(),
-        })
+            reason: "decoded as a programmable-wave table under a DirectSound pack id".to_owned(),
+        }),
+        Err(err) => Err(GenRomProfileError::EntryShape {
+            id: id.to_owned(),
+            reason: err.to_string(),
+        }),
+    }
 }
 
-/// Check a `WaveData` header against the pack entry's own fields.
+/// The ROM's raw PCM bytes for a validated `DirectSound` sample.
+///
+/// [`DirectSoundSample::data`] returns `i8` values in playback order; the
+/// ROM (and the pack payload the schema decoded them from) stores the
+/// identical bit pattern as plain bytes.
+fn pcm_needle(sample: &DirectSoundSample) -> Vec<u8> {
+    sample
+        .data()
+        .iter()
+        .map(|&value| value.to_le_bytes()[0])
+        .collect()
+}
+
+/// Check a `WaveData` header against the pack entry's own validated fields.
 fn check_wave_header(
     ctx: &Context<'_>,
     id: &str,
     addr: u32,
-    pcm: &[u8],
+    sample: &DirectSoundSample,
 ) -> Result<(), GenRomProfileError> {
-    let payload = &ctx.pack.get(id)?.payload;
-    let word = |at: usize| u32::from_le_bytes(payload[at..at + 4].try_into().expect("four bytes"));
-    let expected_frequency = word(1);
-    let expected_looping = payload[5] == 1;
-    let expected_loop = if expected_looping { word(6) } else { 0 };
-    // `pcm` is the retained buffer: `WaveData.size` logical samples plus one
-    // interpolation-guard byte (module docs above).
-    let expected_size = u32::try_from(pcm.len())
-        .expect("a sample fits in u32")
-        .checked_sub(1)
-        .expect("a DirectSound sample always retains its interpolation guard");
+    let expected_frequency = sample.base_frequency;
+    let expected_looping = sample.loop_start().is_some();
+    let expected_loop = sample.loop_start().unwrap_or_default();
+    let expected_size = sample.sample_count();
 
     let mismatch = |reason: String| GenRomProfileError::StructMismatch {
         id: id.to_owned(),
@@ -761,6 +788,52 @@ mod tests {
                     if id == "audio/sample/direct-sound/test"
             ),
             "{err}"
+        );
+    }
+
+    #[test]
+    fn a_pack_sample_whose_declared_count_disagrees_with_its_pcm_is_rejected() {
+        let data = pcm();
+        let freq = 1 << 20;
+        let size = u32::try_from(data.len()).expect("a sample fits in u32");
+        let header = wave_header(0, 0, freq, 0, size);
+        let mut payload = direct_sound_payload(freq, None, &data);
+        // Corrupt only the serialized sample_count (bytes 10..14). The
+        // canonical decoder (`assets::audio::Sample::decode`) requires it
+        // to agree with the retained PCM and rejects this payload before
+        // the generator ever searches the ROM for it.
+        payload[10..14].copy_from_slice(&(size + 7).to_le_bytes());
+
+        let err = locate_one("declared-count-too-large", &header, payload, &data).unwrap_err();
+        assert!(
+            matches!(
+                &err,
+                crate::gen_rom_profile::GenRomProfileError::EntryShape { id, .. }
+                    if id == "audio/sample/direct-sound/test"
+            ),
+            "a non-canonical sample payload located successfully: {err}"
+        );
+    }
+
+    #[test]
+    fn a_pack_sample_with_trailing_bytes_past_its_declared_count_is_rejected() {
+        let data = pcm();
+        let freq = 1 << 20;
+        let size = u32::try_from(data.len()).expect("a sample fits in u32");
+        let header = wave_header(0, 0, freq, 0, size);
+        let mut payload = direct_sound_payload(freq, None, &data);
+        // Shrink the declared sample_count so the retained buffer holds
+        // bytes past what the canonical schema's `expect_eof` allows.
+        payload[10..14].copy_from_slice(&(size - 1).to_le_bytes());
+
+        let err = locate_one("declared-count-too-small", &header, payload, &data).unwrap_err();
+        assert!(
+            matches!(
+                &err,
+                crate::gen_rom_profile::GenRomProfileError::EntryShape { id, .. }
+                    if id == "audio/sample/direct-sound/test"
+            ),
+            "a non-canonical sample payload located successfully: {err}"
         );
     }
 

@@ -125,6 +125,9 @@ pub enum ScenarioError {
     },
     /// The first battle ended without a terminal outcome.
     FirstBattleEndedWithoutOutcome { frame: usize },
+    /// The outcome observed at the first-battle transition was lost before
+    /// the scenario finished: it went missing or changed on a later frame.
+    FirstBattleOutcomeNotRetained { frame: usize },
 }
 
 impl fmt::Display for ScenarioError {
@@ -156,6 +159,11 @@ impl fmt::Display for ScenarioError {
             Self::FirstBattleEndedWithoutOutcome { frame } => write!(
                 f,
                 "frame {frame} ended the scripted first battle without a terminal outcome"
+            ),
+            Self::FirstBattleOutcomeNotRetained { frame } => write!(
+                f,
+                "frame {frame} lost the first-battle outcome observed at the FirstBattle-to-Overworld \
+                 transition before the scenario finished"
             ),
         }
     }
@@ -233,6 +241,7 @@ fn run_with_driver(
 
     let mut milestones = vec![actual_initial_state];
     let mut previous_state = actual_initial_state;
+    let mut retained_outcome: Option<BattleOutcome> = None;
     for (frame, expected_frame) in spec.frames.iter().enumerate() {
         driver
             .set_buttons(expected_frame.buttons)
@@ -255,8 +264,15 @@ fn run_with_driver(
         let first_battle_ended = spec.requires_first_battle_outcome
             && previous_state == AppState::FirstBattle
             && actual_state != AppState::FirstBattle;
-        if first_battle_ended && driver.first_battle_outcome().is_none() {
-            return Err(ScenarioError::FirstBattleEndedWithoutOutcome { frame });
+        if first_battle_ended {
+            let Some(outcome) = driver.first_battle_outcome() else {
+                return Err(ScenarioError::FirstBattleEndedWithoutOutcome { frame });
+            };
+            retained_outcome = Some(outcome);
+        } else if let Some(outcome) = retained_outcome {
+            if driver.first_battle_outcome() != Some(outcome) {
+                return Err(ScenarioError::FirstBattleOutcomeNotRetained { frame });
+            }
         }
         if milestones.last() != Some(&actual_state) {
             milestones.push(actual_state);
@@ -449,6 +465,117 @@ mod tests {
         assert_eq!(
             error,
             ScenarioError::FirstBattleEndedWithoutOutcome { frame: 0 }
+        );
+    }
+
+    struct ClearingDriver {
+        state: AppState,
+        outcome: Option<BattleOutcome>,
+        frame: usize,
+    }
+
+    impl ScenarioDriver for ClearingDriver {
+        fn state(&self) -> AppState {
+            self.state
+        }
+
+        fn first_battle_outcome(&self) -> Option<BattleOutcome> {
+            self.outcome
+        }
+
+        fn set_buttons(&mut self, _buttons: AppButtons) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn step(&mut self) -> Result<bool, String> {
+            const TRANSITION_FRAME: usize = 0;
+            self.outcome = (self.frame == TRANSITION_FRAME).then_some(BattleOutcome::PlayerWon);
+            self.frame += 1;
+            self.state = AppState::Overworld;
+            Ok(true)
+        }
+    }
+
+    #[test]
+    fn a_required_first_battle_rejects_an_outcome_cleared_after_the_transition() {
+        let mut driver = ClearingDriver {
+            state: AppState::FirstBattle,
+            outcome: None,
+            frame: 0,
+        };
+        let scenario = ScenarioSpec {
+            initial: AppState::FirstBattle,
+            frames: &[
+                ScenarioFrame {
+                    buttons: AppButtons::NONE,
+                    expected: AppState::Overworld,
+                },
+                ScenarioFrame {
+                    buttons: AppButtons::NONE,
+                    expected: AppState::Overworld,
+                },
+            ],
+            requires_first_battle_outcome: true,
+        };
+
+        let error = run_with_driver(scenario, &mut driver)
+            .expect_err("a retained outcome cleared after the transition must fail the scenario");
+        assert_eq!(
+            error,
+            ScenarioError::FirstBattleOutcomeNotRetained { frame: 1 }
+        );
+    }
+
+    struct TransientClearDriver {
+        state: AppState,
+        outcome: Option<BattleOutcome>,
+        frame: usize,
+    }
+
+    impl ScenarioDriver for TransientClearDriver {
+        fn state(&self) -> AppState {
+            self.state
+        }
+
+        fn first_battle_outcome(&self) -> Option<BattleOutcome> {
+            self.outcome
+        }
+
+        fn set_buttons(&mut self, _buttons: AppButtons) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn step(&mut self) -> Result<bool, String> {
+            const CLEARED_FRAME: usize = 1;
+            self.outcome = (self.frame != CLEARED_FRAME).then_some(BattleOutcome::PlayerWon);
+            self.frame += 1;
+            self.state = AppState::Overworld;
+            Ok(true)
+        }
+    }
+
+    #[test]
+    fn a_required_first_battle_rejects_an_outcome_cleared_then_restored_after_the_transition() {
+        const FRAME: ScenarioFrame = ScenarioFrame {
+            buttons: AppButtons::NONE,
+            expected: AppState::Overworld,
+        };
+        let mut driver = TransientClearDriver {
+            state: AppState::FirstBattle,
+            outcome: None,
+            frame: 0,
+        };
+        let scenario = ScenarioSpec {
+            initial: AppState::FirstBattle,
+            frames: &[FRAME, FRAME, FRAME],
+            requires_first_battle_outcome: true,
+        };
+
+        let error = run_with_driver(scenario, &mut driver)
+            .expect_err("an outcome cleared on an intermediate frame must fail the scenario");
+        assert_eq!(
+            error,
+            ScenarioError::FirstBattleOutcomeNotRetained { frame: 1 }
         );
     }
 
