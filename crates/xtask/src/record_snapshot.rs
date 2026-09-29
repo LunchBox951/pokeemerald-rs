@@ -23,7 +23,9 @@ mod staging;
 
 #[cfg(windows)]
 use directory::claim_promoted_dir;
-use directory::{claim_output_dir, claim_staged_dir, rename_without_replacement, StagedDirClaim};
+use directory::{
+    claim_output_dir, claim_staged_dir, rename_without_replacement, OutputDirClaim, StagedDirClaim,
+};
 
 const SCREEN_WIDTH: usize = 240;
 const SCREEN_HEIGHT: usize = 160;
@@ -272,17 +274,26 @@ where
         after_generation_check();
         // The generation was verified under `output_dir`; the pointer must land
         // in that same directory, not in whatever the pathname names now.
+        // Unix stages and renames the pointer relative to the held directory,
+        // so it cannot land elsewhere; only Windows resolves the pathname
+        // again and repeats the check around the rename.
         require_output_dir()?;
         // See `staging` for the guard this stage-then-publish pair provides.
-        let staged_pointer = stage_pointer(&pointer_path, format!("{generation}\n").as_bytes())
-            .map_err(|e| RecordSnapshotError::Write(pointer_path.clone(), e.to_string()))?;
-        // Staging resolved `output_dir` anew; refuse before the rename can
-        // replace a visible pointer in a directory swapped in since the check.
-        require_output_dir()?;
+        let staged_pointer = stage_pointer(
+            &output_claim,
+            &pointer_path,
+            format!("{generation}\n").as_bytes(),
+        )
+        .map_err(|e| RecordSnapshotError::Write(pointer_path.clone(), e.to_string()))?;
+        if cfg!(not(unix)) {
+            require_output_dir()?;
+        }
         staged_pointer
             .publish(&pointer_path)
             .map_err(|e| RecordSnapshotError::Write(pointer_path.clone(), e.to_string()))?;
-        require_output_dir()?;
+        if cfg!(not(unix)) {
+            require_output_dir()?;
+        }
         Ok((
             generation_dir.join(format!("{}.rgb", scene.name())),
             generation_dir.join(format!("{}.meta", scene.name())),
@@ -359,19 +370,37 @@ const POINTER_STAGING_ATTEMPTS: usize = 256;
 
 /// Stages the pointer at an unguessable sibling of `pointer_path`, retrying
 /// through [`pointer_staging_candidates`] on a genuine name collision.
-fn stage_pointer(pointer_path: &Path, bytes: &[u8]) -> std::io::Result<staging::StagedFile> {
-    stage_pointer_with_candidates(bytes, pointer_staging_candidates(pointer_path))
+fn stage_pointer(
+    output_claim: &OutputDirClaim,
+    pointer_path: &Path,
+    bytes: &[u8],
+) -> std::io::Result<staging::StagedFile> {
+    stage_first_free(
+        bytes,
+        pointer_staging_candidates(pointer_path),
+        |candidate, bytes| output_claim.stage_pointer(candidate, bytes),
+    )
 }
 
 /// Stages `bytes` at the first of `candidates` that `staging::stage` finds
 /// free, reporting the last collision once they have all turned out taken.
+#[cfg(test)]
 fn stage_pointer_with_candidates(
     bytes: &[u8],
     candidates: impl IntoIterator<Item = PathBuf>,
 ) -> std::io::Result<staging::StagedFile> {
+    stage_first_free(bytes, candidates, staging::stage)
+}
+
+/// [`stage_pointer_with_candidates`] with the staging step supplied.
+fn stage_first_free(
+    bytes: &[u8],
+    candidates: impl IntoIterator<Item = PathBuf>,
+    mut stage: impl FnMut(&Path, &[u8]) -> std::io::Result<staging::StagedFile>,
+) -> std::io::Result<staging::StagedFile> {
     let mut last_collision = None;
     for candidate in candidates {
-        match staging::stage(&candidate, bytes) {
+        match stage(&candidate, bytes) {
             Ok(staged) => return Ok(staged),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                 last_collision = Some(error);

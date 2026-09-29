@@ -1963,3 +1963,85 @@ fn an_output_directory_swapped_after_the_generation_check_is_never_published_int
         b"rgb-bytes"
     );
 }
+
+/// Swaps a replacement directory in at `output_dir` between the last check
+/// and the pointer's rename, optionally carrying the staged file into it, and
+/// returns the publication result with the directory the claim verified.
+#[cfg(unix)]
+fn publish_pointer_across_an_output_dir_swap(
+    name: &str,
+    carry_staged_file: bool,
+) -> (std::io::Result<()>, PathBuf, PathBuf) {
+    let root = scratch_path(name);
+    let output_dir = root.join("out");
+    let replacement = root.join("replacement");
+    let carried = root.join("carried");
+    std::fs::create_dir_all(&output_dir).unwrap();
+    std::fs::create_dir_all(&replacement).unwrap();
+    let pointer_path = output_dir.join("scene.generation");
+    std::fs::write(replacement.join("scene.generation"), b"previous\n").unwrap();
+
+    let claim = super::directory::claim_output_dir(&output_dir).unwrap();
+    claim.require_path(&output_dir).unwrap();
+    let staged =
+        super::stage_pointer(&claim, &pointer_path, b"scene.generation-only-in-out\n").unwrap();
+    claim.require_path(&output_dir).unwrap();
+    let swap = || {
+        if carry_staged_file {
+            let staged_name = std::fs::read_dir(&output_dir)
+                .unwrap()
+                .map(|e| e.unwrap().file_name())
+                .find(|n| n != "scene.generation")
+                .unwrap();
+            std::fs::rename(
+                output_dir.join(&staged_name),
+                replacement.join(&staged_name),
+            )
+            .unwrap();
+        }
+        std::fs::rename(&output_dir, &carried).unwrap();
+        std::fs::rename(&replacement, &output_dir).unwrap();
+    };
+    let published = staged.publish_with(&pointer_path, swap, || {});
+    (published, output_dir, carried)
+}
+
+/// The pointer stages and renames relative to the held directory, so an
+/// output directory swapped in after the last check keeps its own pointer and
+/// the new pointer lands beside its generation.
+#[cfg(unix)]
+#[test]
+fn an_output_directory_swapped_between_the_last_check_and_the_pointer_rename_keeps_its_pointer() {
+    let (published, output_dir, carried) = publish_pointer_across_an_output_dir_swap(
+        "output-dir-swapped-before-pointer-rename",
+        false,
+    );
+    let _guard = ScratchGuard(output_dir.parent().unwrap().to_path_buf());
+    published.unwrap();
+    assert_eq!(
+        std::fs::read(output_dir.join("scene.generation")).unwrap(),
+        b"previous\n",
+        "the swapped-in directory's visible pointer is untouched"
+    );
+    assert_eq!(
+        std::fs::read(carried.join("scene.generation")).unwrap(),
+        b"scene.generation-only-in-out\n",
+        "the pointer landed in the directory the claim verified"
+    );
+}
+
+/// A staged file carried into the swapped-in directory is not published from
+/// there: the rename looks for it in the held directory and fails.
+#[cfg(unix)]
+#[test]
+fn a_staged_pointer_carried_into_a_swapped_output_directory_is_never_published() {
+    let (published, output_dir, _carried) =
+        publish_pointer_across_an_output_dir_swap("output-dir-swapped-with-staged-pointer", true);
+    let _guard = ScratchGuard(output_dir.parent().unwrap().to_path_buf());
+    published.unwrap_err();
+    assert_eq!(
+        std::fs::read(output_dir.join("scene.generation")).unwrap(),
+        b"previous\n",
+        "the swapped-in directory's visible pointer is untouched"
+    );
+}

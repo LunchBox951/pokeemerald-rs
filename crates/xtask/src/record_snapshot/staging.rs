@@ -1,3 +1,6 @@
+//! Staged through a held directory ([`stage_in`]), the file is looked up and
+//! renamed relative to that directory, so publication cannot land elsewhere.
+//!
 //! [`stage`] fills a `create_new`-held file and [`StagedFile::publish`]
 //! re-verifies that handle's identity before the promoting rename, so a
 //! symlink planted at the name is refused rather than followed or published.
@@ -22,6 +25,7 @@ use std::path::{Path, PathBuf};
 /// On Windows the returned handle shares nothing, so until it is dropped no
 /// other opener -- in this process or any other -- can open, delete, or
 /// rename that entry.
+#[cfg(any(not(unix), test))]
 fn create_new_exclusive(path: &Path) -> std::io::Result<std::fs::File> {
     let mut options = std::fs::OpenOptions::new();
     options.create_new(true).write(true);
@@ -39,8 +43,53 @@ fn create_new_exclusive(path: &Path) -> std::io::Result<std::fs::File> {
 /// already names anything, including a planted symlink; a failure past the
 /// exclusive create retains the file and reports its path, so this call
 /// never deletes an entry a different owner put there.
+#[cfg(any(not(unix), test))]
 pub(super) fn stage(path: &Path, bytes: &[u8]) -> std::io::Result<StagedFile> {
-    let file = create_new_exclusive(path)?;
+    stage_file(create_new_exclusive(path)?, path, bytes)
+}
+
+/// [`stage`], creating the file relative to the held directory `dir` under
+/// `path`'s final component, so the entry can only appear in that directory.
+/// The staged file then publishes relative to `dir` as well.
+#[cfg(unix)]
+pub(super) fn stage_in(
+    dir: &std::fs::File,
+    path: &Path,
+    bytes: &[u8],
+) -> std::io::Result<StagedFile> {
+    let fd = rustix::fs::openat(
+        dir,
+        entry_name(path)?,
+        rustix::fs::OFlags::WRONLY
+            | rustix::fs::OFlags::CREATE
+            | rustix::fs::OFlags::EXCL
+            | rustix::fs::OFlags::NOFOLLOW,
+        // `File::create`'s own 0o666; the process umask narrows it.
+        rustix::fs::Mode::RUSR
+            | rustix::fs::Mode::WUSR
+            | rustix::fs::Mode::RGRP
+            | rustix::fs::Mode::WGRP
+            | rustix::fs::Mode::ROTH
+            | rustix::fs::Mode::WOTH,
+    )?;
+    let mut staged = stage_file(std::fs::File::from(fd), path, bytes);
+    if let Ok(staged) = &mut staged {
+        staged.dir = Some(dir.try_clone()?);
+    }
+    staged
+}
+
+#[cfg(unix)]
+fn entry_name(path: &Path) -> std::io::Result<&std::ffi::OsStr> {
+    path.file_name().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{} names no directory entry", path.display()),
+        )
+    })
+}
+
+fn stage_file(file: std::fs::File, path: &Path, bytes: &[u8]) -> std::io::Result<StagedFile> {
     let result = (|| {
         let mut writer = std::io::BufWriter::new(&file);
         writer.write_all(bytes)?;
@@ -54,6 +103,8 @@ pub(super) fn stage(path: &Path, bytes: &[u8]) -> std::io::Result<StagedFile> {
     let staged = StagedFile {
         path: path.to_path_buf(),
         hold,
+        #[cfg(unix)]
+        dir: None,
     };
     match result {
         Ok(()) => Ok(staged),
@@ -128,6 +179,11 @@ fn is_the_held_file(_hold: &Hold, _found: &std::fs::Metadata) -> std::io::Result
 pub(super) struct StagedFile {
     path: PathBuf,
     hold: Hold,
+    /// The held directory this file was staged in, when it was staged through
+    /// one: every later lookup and the promoting rename then name entries
+    /// relative to it, never through a pathname.
+    #[cfg(unix)]
+    dir: Option<std::fs::File>,
 }
 
 impl StagedFile {
@@ -137,6 +193,18 @@ impl StagedFile {
     /// A reading that failed is neither answer, and surfaces rather than
     /// passing for "replaced".
     fn matches(&self, path: &Path) -> std::io::Result<bool> {
+        #[cfg(unix)]
+        if let Some(dir) = &self.dir {
+            let found = rustix::fs::statat(
+                dir,
+                entry_name(path)?,
+                rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+            )?;
+            let staged = rustix::fs::fstat(&self.hold)?;
+            return Ok(rustix::fs::FileType::from_raw_mode(found.st_mode)
+                == rustix::fs::FileType::RegularFile
+                && (staged.st_dev, staged.st_ino) == (found.st_dev, found.st_ino));
+        }
         let found = std::fs::symlink_metadata(path)?;
         Ok(found.file_type().is_file() && is_the_held_file(&self.hold, &found)?)
     }
@@ -183,6 +251,17 @@ impl StagedFile {
         )
     }
 
+    /// Renames the staged file onto `dest`: relative to the held directory
+    /// when there is one, so the rename cannot leave it.
+    fn rename_to(&self, dest: &Path) -> std::io::Result<()> {
+        #[cfg(unix)]
+        if let Some(dir) = &self.dir {
+            return rustix::fs::renameat(dir, entry_name(&self.path)?, dir, entry_name(dest)?)
+                .map_err(Into::into);
+        }
+        std::fs::rename(&self.path, dest)
+    }
+
     /// Verifies ownership, then publishes this staging path to `dest` by
     /// rename; refuses to publish a replaced or unverifiable staging path.
     pub(super) fn publish(self, dest: &Path) -> std::io::Result<()> {
@@ -223,7 +302,7 @@ impl StagedFile {
         }
         self.release_hold();
         before_rename();
-        std::fs::rename(&self.path, dest).map_err(|error| {
+        self.rename_to(dest).map_err(|error| {
             on_rename_failure();
             self.report_retained(&error)
         })?;
