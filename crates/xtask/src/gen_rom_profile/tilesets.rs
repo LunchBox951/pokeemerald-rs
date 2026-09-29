@@ -12,6 +12,9 @@
 //! animation frames do not: `src/tileset_anims.c` stores them uncompressed
 //! and out of frame order, with padding in between, and nothing points at
 //! them from the struct, so each frame is matched on its own bytes.
+//!
+//! The domain is fixed, not discovered: a pack with zero `tileset/*/tiles`
+//! entries is missing the domain, not empty of it, and is refused.
 
 use std::collections::BTreeMap;
 
@@ -50,15 +53,23 @@ const TILE_BYTES: usize = 32;
 ///
 /// # Errors
 ///
-/// Any [`GenRomProfileError`] a locator raises: a missing pack entry, a
-/// root that matches nothing or matches twice, or a struct whose fields do
-/// not agree with the tables they should point at.
+/// [`GenRomProfileError::MissingPackEntry`] if the pack holds no
+/// `tileset/*/tiles` entries at all, or any other [`GenRomProfileError`] a
+/// locator raises: a missing pack entry, a root that matches nothing or
+/// matches twice, or a struct whose fields do not agree with the tables
+/// they should point at.
 pub fn locate(
     ctx: &Context<'_>,
     report: &mut Vec<ReportLine>,
 ) -> Result<Vec<TilesetPlan>, GenRomProfileError> {
+    let names = tileset_names(ctx);
+    if names.is_empty() {
+        return Err(GenRomProfileError::MissingPackEntry(
+            "tileset/*/tiles".to_owned(),
+        ));
+    }
     let mut plans = Vec::new();
-    for name in tileset_names(ctx) {
+    for name in names {
         plans.push(locate_one(ctx, &name, report)?);
     }
     Ok(plans)

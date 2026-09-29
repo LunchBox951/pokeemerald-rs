@@ -450,7 +450,10 @@ macro_rules! move_flags {
 macro_rules! define_moves {
     ($($name:ident = $index:literal => move_data($($attribute:expr),+ $(,)?)),+ $(,)?) => {
         impl MoveId {
-            $(pub(crate) const $name: MoveId = MoveId($index);)+
+            $(
+                #[doc = concat!("The canonical move identity for `", stringify!($name), "`.")]
+                pub const $name: MoveId = MoveId($index);
+            )+
         }
 
         const MOVES: [MoveData; MOVES_COUNT] = [
