@@ -54,9 +54,13 @@ impl AssetPack {
     /// user-data directory, then the executable's own directory). Only a
     /// `dev` build falls through to this checkout's bundled pack.
     ///
-    /// Never fails: the last rung always yields a path; a path that does
-    /// not exist surfaces as [`PackError::NotFound`] from
-    /// [`load`](Self::load).
+    /// A path that does not exist surfaces as [`PackError::NotFound`] from
+    /// [`load`](Self::load) rather than failing here.
+    ///
+    /// # Panics
+    ///
+    /// When [`pack_format::default_pack_path`] does; its `# Panics` owns
+    /// the condition.
     #[must_use]
     pub fn default_path() -> PathBuf {
         pack_format::default_pack_path()
