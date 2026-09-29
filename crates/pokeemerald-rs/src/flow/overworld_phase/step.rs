@@ -1272,6 +1272,17 @@ mod forced_landing_field_input_gate_tests {
     /// A synthetic [`MB_ANIMATED_DOOR`] over 1F's real warp #2 coordinate,
     /// `(8, 2)` -- same substitution as
     /// [`super::super::test_support::littleroot_lab_door_scene`]'s.
+    /// Ticks the player directly rather than through `OverworldPhase::step`,
+    /// which would dispatch the still-armed forced slope instead of leaving
+    /// the player at rest for the next-call probe.
+    fn clear_landing_frame_without_forced_dispatch(phase: &mut OverworldPhase) {
+        phase.player.tick();
+        assert!(
+            !phase.player.field_input_suppressed(),
+            "fixture precondition: the landing call's own tick clears the one-frame flag"
+        );
+    }
+
     fn slope_below_the_upstairs_door_phase() -> OverworldPhase {
         let scene = crate::overworld::tests::synthetic_scene_with_special_tiles(
             10,
@@ -1335,16 +1346,7 @@ mod forced_landing_field_input_gate_tests {
              never sets heldDirection2 while forcedMove holds (field_control_avatar.c:95-113)"
         );
 
-        // The landing call's own tick clears the one-frame flag, called
-        // directly (not through `OverworldPhase::step`) so this probe stays
-        // isolated from that method's own movement dispatch -- the slope's
-        // forced direction is still armed, and a second `step` call would
-        // start sliding the player south instead of leaving them at rest.
-        phase.player.tick();
-        assert!(
-            !phase.player.field_input_suppressed(),
-            "fixture precondition: the landing call's own tick clears the one-frame flag"
-        );
+        clear_landing_frame_without_forced_dispatch(&mut phase);
 
         let at_rest_pre: PreMovementFieldInput = {
             let runtime = runtime_for(&phase);
@@ -1434,10 +1436,7 @@ mod forced_landing_field_input_gate_tests {
              (field_control_avatar.c:95-113)"
         );
 
-        // Direct `tick`, not `OverworldPhase::step` -- same isolation reason
-        // as the door test above.
-        phase.player.tick();
-        assert!(!phase.player.field_input_suppressed());
+        clear_landing_frame_without_forced_dispatch(&mut phase);
 
         // A fresh `ButtonState` models a fresh key edge, same as the
         // landing-call press above: two independent presses, not one held
@@ -1537,11 +1536,7 @@ mod forced_landing_field_input_gate_tests {
              never sets heldDirection while forcedMove holds (field_control_avatar.c:95-113)"
         );
 
-        // Direct `tick`, not `OverworldPhase::step` -- same isolation reason
-        // as the door test above (the slope's forced direction is still
-        // armed on the real phase's own scene).
-        phase.player.tick();
-        assert!(!phase.player.field_input_suppressed());
+        clear_landing_frame_without_forced_dispatch(&mut phase);
 
         let at_rest_pre: PreMovementFieldInput = {
             let runtime = arrow_probe_runtime(&probe_scene);
