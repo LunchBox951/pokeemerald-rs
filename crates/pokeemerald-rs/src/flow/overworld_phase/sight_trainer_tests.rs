@@ -821,6 +821,13 @@ fn real_pack_rhetts_cone_reaches_the_player_over_real_terrain_and_draws_nothing(
 /// this crate's usual "each test file cites the upstream fact" convention.
 const EXCLAMATION_ICON_FRAMES: usize = 60;
 
+/// Non-icon lock-handoff frames, transcribed independently of
+/// `sight_trainer_approach`'s own constants (`event_object_lock.c:130-146`,
+/// `script.c:80-87`): after the trigger frame for a standing player, and
+/// after the frame an in-flight step drains on.
+const LOCK_HANDOFF_AT_REST: usize = 1;
+const LOCK_HANDOFF_AFTER_DRAIN: usize = 2;
+
 /// Rhett's own real object event out of the extracted `MAP_ROUTE103` data.
 fn rhetts_object_event() -> &'static assets::ObjectEvent {
     assets::MapEventsTable::new()
@@ -868,12 +875,13 @@ fn the_approach_owns_every_frame_and_walks_one_tile_per_sixteen() {
     let mut phase = route_103_phase(PlayerState::new(start, 3, Direction::South));
     seed_approach(&mut phase, 1);
 
-    for frame in 1..EXCLAMATION_ICON_FRAMES {
+    // Frames 1..=60: the handoff frame plus icon frames 1..=59; frame 61 commits.
+    for frame in 1..=EXCLAMATION_ICON_FRAMES {
         phase.step(held(Buttons::DOWN));
         assert_eq!(
             approaching_trainer(&phase).position(),
             RHETT_TILE,
-            "frame {frame}: the trainer stands still under its own icon"
+            "frame {frame}: the trainer stands still through the lock handoff and its icon"
         );
         assert_eq!(
             phase.player.position(),
@@ -886,7 +894,8 @@ fn the_approach_owns_every_frame_and_walks_one_tile_per_sixteen() {
         );
     }
 
-    // The icon's last frame is the first walked tile's own start.
+    // The icon's last frame (the sixty-first after the trigger) is the first
+    // walked tile's own start.
     phase.step(held(Buttons::DOWN));
     assert_eq!(approaching_trainer(&phase).position(), (rx, ry + 1));
     assert_eq!(
@@ -928,9 +937,10 @@ fn the_trainer_stops_beside_the_player_and_both_turn_to_face_each_other() {
     let mut phase = route_103_phase(PlayerState::new(start, 3, Direction::South));
     seed_approach(&mut phase, 1);
 
-    // Sixty icon frames, sixteen walk frames, one frame for the trainer's own
-    // `MOVEMENT_ACTION_FACE_PLAYER`, then the stop itself.
-    for _ in 0..=EXCLAMATION_ICON_FRAMES + usize::from(WALK_FRAMES_PER_TILE) {
+    // The lock handoff, sixty icon frames, sixteen walk frames, one frame for
+    // the trainer's own `MOVEMENT_ACTION_FACE_PLAYER`, then the stop itself.
+    for _ in 0..=LOCK_HANDOFF_AT_REST + EXCLAMATION_ICON_FRAMES + usize::from(WALK_FRAMES_PER_TILE)
+    {
         phase.step(ButtonState::new());
     }
     assert_eq!(
@@ -1195,25 +1205,44 @@ fn the_icon_countdown_holds_until_the_players_step_drains() {
         );
     }
 
-    // The drain-completing frame is also the countdown's first (stage
-    // changes happen within the frame that earns them -- `advance_movement`'s
-    // docs), so the first walked tile commits `EXCLAMATION_ICON_FRAMES - 1`
-    // frames later, not `EXCLAMATION_ICON_FRAMES - drain_frames`.
-    for frame in 1..EXCLAMATION_ICON_FRAMES - 1 {
+    // The drain-completing frame is not an icon frame, and neither are the
+    // two frames the freeze task and the native poll spend after it, so the
+    // first walked tile commits on the icon's sixtieth frame -- the
+    // `LOCK_HANDOFF_AFTER_DRAIN + EXCLAMATION_ICON_FRAMES`th after the drain.
+    for frame in 1..LOCK_HANDOFF_AFTER_DRAIN + EXCLAMATION_ICON_FRAMES {
         phase.step(held(Buttons::DOWN));
         assert_eq!(
             approaching_trainer(&phase).position(),
             RHETT_TILE,
-            "icon frame {frame}: the countdown had not begun while the step drained, so the \
-             walk-up must not start early"
+            "frame {frame} after the drain: no icon frame has expired, so the walk-up must \
+             not start early"
         );
     }
     phase.step(held(Buttons::DOWN));
     assert_eq!(
         approaching_trainer(&phase).position(),
         (rx, ry + 1),
-        "the sixtieth icon frame after the drain commits the first walked tile"
+        "the sixtieth icon frame, two handoff frames after the drain, commits the first \
+         walked tile"
     );
+}
+
+/// The at-rest counterpart: the trigger frame runs the freeze task, the
+/// next frame is the native poll, and only the frame after is the icon's
+/// first -- so a standing player's approach starts no earlier than
+/// `LOCK_HANDOFF_AT_REST` frames after the trigger.
+#[test]
+fn an_at_rest_approach_spends_a_handoff_frame_before_the_icon() {
+    let (rx, ry) = RHETT_TILE;
+    let mut phase = route_103_phase(PlayerState::new((rx, ry + 2), 3, Direction::South));
+    seed_approach(&mut phase, 1);
+
+    for _ in 0..LOCK_HANDOFF_AT_REST + EXCLAMATION_ICON_FRAMES - 1 {
+        phase.step(ButtonState::new());
+        assert_eq!(approaching_trainer(&phase).position(), RHETT_TILE);
+    }
+    phase.step(ButtonState::new());
+    assert_eq!(approaching_trainer(&phase).position(), (rx, ry + 1));
 }
 
 /// [`OverworldPhase::tick_player_under_approach_lock`]'s own two-part

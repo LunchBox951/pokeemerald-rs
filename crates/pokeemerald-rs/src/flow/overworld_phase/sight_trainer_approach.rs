@@ -73,11 +73,21 @@ use super::{ActiveBattle, OverworldPhase};
 ///
 /// Upstream's own count is one or two frames longer (the frame
 /// `FieldEffectStart` runs on, plus `ANIMCMD_END`'s own dispatch); this
-/// module spends the round sixty, with the trigger frame itself standing in
-/// for `FieldEffectStart`'s. A frame either way is below what any part of
-/// this port can observe -- nothing draws from the same stream during the
-/// approach, and the RNG is untouched by the whole sequence.
+/// module spends the round sixty. A frame either way is below what any part
+/// of this port can observe -- nothing draws from the same stream during the
+/// approach, and the RNG is untouched by the whole sequence. The frames
+/// *before* the icon are not rounded away: [`ApproachStage::LockHandoff`].
 const EXCLAMATION_ICON_FRAMES: u8 = 60;
+
+/// Non-icon frames of [`ApproachStage::LockHandoff`] for a player standing
+/// still on the trigger frame: `lockfortrainer`'s freeze task and native poll
+/// (`event_object_lock.c:130-146,193-203`, `script.c:80-87`).
+const LOCK_HANDOFF_FRAMES_AT_REST: u8 = 1;
+
+/// The same, counted from the frame an in-flight step drains on: the freeze
+/// task only sees the player standing still a frame later
+/// (`field_player_avatar.c:901-917`, `overworld.c:1438-1469`).
+const LOCK_HANDOFF_FRAMES_AFTER_DRAIN: u8 = 2;
 
 /// Which part of the sequence the approach is currently in -- upstream's
 /// `sTrainerSeeFuncList` (`trainer_see.c:89-104`) minus the two reveal
@@ -89,6 +99,15 @@ const EXCLAMATION_ICON_FRAMES: u8 = 60;
 /// [`Self::PlayerFaceWait`] -- that variant's own docs say why).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ApproachStage {
+    /// `EventScript_TrainerApproach`'s `lockfortrainer` half
+    /// (`trainer_battle.inc:1-7`): `Task_FreezeObjectAndPlayer` and the
+    /// script's native poll on it, which spend frames before
+    /// `DoTrainerApproach` may start the icon. No icon frame is spent here.
+    LockHandoff {
+        /// Handoff frames still to spend; reset while the player's step is
+        /// still in flight.
+        frames_left: u8,
+    },
     /// `TRSEE_EXCLAMATION`/`_EXCLAMATION_WAIT`: the icon is up and the
     /// trainer is standing still under it.
     ExclamationIcon {
@@ -177,8 +196,8 @@ impl SightApproach {
             intro,
             battle,
             trainer_id,
-            stage: ApproachStage::ExclamationIcon {
-                frames_left: EXCLAMATION_ICON_FRAMES,
+            stage: ApproachStage::LockHandoff {
+                frames_left: LOCK_HANDOFF_FRAMES_AT_REST,
             },
         }
     }
@@ -204,6 +223,28 @@ impl SightApproach {
     #[cfg(test)]
     pub(super) const fn skip_to_open_intro_message(&mut self) {
         self.stage = ApproachStage::IntroMessage { opened: true };
+    }
+
+    /// Spend one frame of [`ApproachStage::LockHandoff`]. `player_was_moving`
+    /// is whether the player's step was still in flight *before* this frame's
+    /// animation ran: the freeze task polls the state the previous frame left,
+    /// so the frame a step drains on is still a moving frame.
+    fn advance_lock_handoff(&mut self, player_was_moving: bool) {
+        let ApproachStage::LockHandoff { frames_left } = self.stage else {
+            return;
+        };
+        let frames_left = if player_was_moving {
+            LOCK_HANDOFF_FRAMES_AFTER_DRAIN
+        } else {
+            frames_left - 1
+        };
+        self.stage = if frames_left == 0 {
+            ApproachStage::ExclamationIcon {
+                frames_left: EXCLAMATION_ICON_FRAMES,
+            }
+        } else {
+            ApproachStage::LockHandoff { frames_left }
+        };
     }
 
     /// Spend one frame of the icon or the walk-up
@@ -242,8 +283,10 @@ impl SightApproach {
                 }
             }
             // Driven by `OverworldPhase`, which owns the player and the
-            // message box this module's later stages touch.
-            ApproachStage::PlayerFacesTrainer
+            // message box this module's later stages touch; the handoff is
+            // driven by `advance_lock_handoff`.
+            ApproachStage::LockHandoff { .. }
+            | ApproachStage::PlayerFacesTrainer
             | ApproachStage::PlayerFaceWait
             | ApproachStage::IntroMessage { .. } => {}
         }
@@ -429,7 +472,7 @@ impl OverworldPhase {
     /// trainer watching -- but it drains *before* the exclamation icon, not
     /// under it: `lockfortrainer` blocks the script until the player stands
     /// still, and only then does `DoTrainerApproach` start the icon (the
-    /// `ExclamationIcon` guard arm below).
+    /// `LockHandoff` arm below).
     /// [`Self::tick_player_under_approach_lock`] here is that continued
     /// animation's stand-in, and it carries the latched-landing half with
     /// it -- that method's own docs for both.
@@ -438,18 +481,16 @@ impl OverworldPhase {
         buttons: ButtonState,
     ) -> Option<SightTrainerOutcome> {
         let stage = self.sight_approach.as_ref()?.stage;
+        let player_was_moving = self.player.in_transit();
         self.tick_player_under_approach_lock();
         match stage {
-            ApproachStage::ExclamationIcon { .. } if self.player.in_transit() => {
-                // `lockfortrainer` blocks the script on
-                // `IsFreezeObjectAndPlayerFinished` until the player is
-                // standing still (`scrcmd.c:2193-2208`,
-                // `event_object_lock.c:130-147`), and only then does
-                // `EventScript_TrainerApproach` reach `DoTrainerApproach`'s
-                // `FieldEffectStart` (`trainer_battle.inc:1-7`,
-                // `trainer_see.c:459-469`). The countdown therefore holds
-                // while the in-flight step drains above; it never overlaps
-                // the walk it waited out.
+            ApproachStage::LockHandoff { .. } => {
+                // `lockfortrainer` (`scrcmd.c:2193-2208`) holds
+                // `DoTrainerApproach`'s icon (`trainer_battle.inc:1-7`) back
+                // until the handoff constants' frames have passed.
+                if let Some(approach) = &mut self.sight_approach {
+                    approach.advance_lock_handoff(player_was_moving);
+                }
                 Some(SightTrainerOutcome::ApproachAdvanced)
             }
             ApproachStage::ExclamationIcon { .. } | ApproachStage::WalkUp { .. } => {
@@ -810,13 +851,19 @@ mod tests {
             script: "Route103_EventScript_Rhett",
             flag: "0",
         };
-        SightApproach::new(
+        let mut approach = SightApproach::new(
             ObjectEventState::from_template(&template),
             walk_tiles,
             "Whoa!",
             stand_in_battle(),
             TrainerId(703),
-        )
+        );
+        // These tests drive the icon and the walk-up; the lock handoff in
+        // front of them has its own coverage in `sight_trainer_tests`.
+        approach.stage = ApproachStage::ExclamationIcon {
+            frames_left: EXCLAMATION_ICON_FRAMES,
+        };
+        approach
     }
 
     /// Any constructible fight: this module's own tests never start it, they
