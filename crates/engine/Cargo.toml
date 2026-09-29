@@ -39,10 +39,14 @@ assets = { path = "../assets", features = ["test-support"] }
 # (`minimal-deps`, PR #1500, for the issue #1399 save-path read): `Win32_Storage_CloudFilters` lets the
 # Windows save-read tests register a sync root and convert a hydrated file into
 # a real cloud-files placeholder. `Win32_System_IO` is the `OVERLAPPED` type
-# `CfConvertToPlaceholder`'s signature requires. Same crate, same pinned
-# version; never part of the shipped library. Recorded in `README.md`.
+# `CfConvertToPlaceholder`'s signature requires; `Wdk_Storage_FileSystem` is
+# `RtlSetProcessPlaceholderCompatibilityMode`, which lets the test process see
+# a hydrated placeholder's reparse attribute instead of the disguised plain
+# file. Same crate, same pinned version; never part of the shipped library.
+# Recorded in `README.md`.
 [target.'cfg(windows)'.dev-dependencies]
 windows-sys = { version = "=0.61.2", default-features = false, features = [
+    "Wdk_Storage_FileSystem",
     "Win32_Foundation",
     "Win32_Storage_CloudFilters",
     "Win32_Storage_FileSystem",

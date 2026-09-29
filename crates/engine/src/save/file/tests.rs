@@ -688,6 +688,32 @@ impl Drop for SyncRootGuard {
     }
 }
 
+/// `PHCM_EXPOSE_PLACEHOLDERS` from `ntifs.h`: the process sees every
+/// placeholder as the reparse point it is.
+#[cfg(windows)]
+const PHCM_EXPOSE_PLACEHOLDERS: i8 = 2;
+
+/// Opts this process out of placeholder disguise, under which the cloud
+/// filter hides `FILE_ATTRIBUTE_REPARSE_POINT` on a fully hydrated
+/// placeholder and hands legacy callers a plain file: a `OneDrive` save is
+/// exposed to the game only once dehydrated, and this fixture keeps its
+/// placeholder hydrated so the read can be served with no sync provider
+/// connected, so the test process asks for the exposed view instead.
+///
+/// Process-wide and idempotent; `RtlSetProcessPlaceholderCompatibilityMode`
+/// returns the previous mode, or a negative code on failure.
+#[cfg(windows)]
+fn expose_placeholders_to_this_process() {
+    use windows_sys::Wdk::Storage::FileSystem::RtlSetProcessPlaceholderCompatibilityMode;
+
+    // SAFETY: the call takes one plain integer and touches no memory of ours.
+    let previous = unsafe { RtlSetProcessPlaceholderCompatibilityMode(PHCM_EXPOSE_PLACEHOLDERS) };
+    assert!(
+        previous >= 0,
+        "RtlSetProcessPlaceholderCompatibilityMode(PHCM_EXPOSE_PLACEHOLDERS) failed with {previous}"
+    );
+}
+
 /// Registers `dir` as a cloud-files sync root with hydration allowed and the
 /// namespace declared complete, so the filter never waits on the sync
 /// provider this test does not connect.
@@ -701,6 +727,7 @@ fn register_sync_root(dir: &TempDir, label: &str) -> SyncRootGuard {
         CF_HYDRATION_POLICY_FULL, CF_POPULATION_POLICY_ALWAYS_FULL,
     };
 
+    expose_placeholders_to_this_process();
     match try_register_sync_root(
         &dir.path,
         label,
@@ -716,8 +743,7 @@ fn register_sync_root(dir: &TempDir, label: &str) -> SyncRootGuard {
 }
 
 /// Registers `root` with the given hydration and population policies,
-/// returning the failing HRESULT instead of panicking so
-/// [`probe_placeholder_policies`] can report every combination it tries.
+/// returning the failing HRESULT instead of panicking.
 #[cfg(windows)]
 fn try_register_sync_root(
     root: &Path,
@@ -811,59 +837,6 @@ fn try_convert_to_placeholder(path: &Path) -> Result<u32, i32> {
         .file_attributes())
 }
 
-/// Tries every hydration and population policy pair on a fresh sibling
-/// directory and reports, per pair, the registration HRESULT, the
-/// conversion HRESULT, and the attributes the converted file reads.
-///
-/// Only reached from a failing precondition, so the panic carries the
-/// evidence that picks the fixture's next policy instead of a guess.
-#[cfg(windows)]
-fn probe_placeholder_policies(dir: &TempDir) -> String {
-    use std::fmt::Write as _;
-    use windows_sys::Win32::Storage::CloudFilters::{
-        CF_HYDRATION_POLICY_ALWAYS_FULL, CF_HYDRATION_POLICY_FULL, CF_HYDRATION_POLICY_PARTIAL,
-        CF_HYDRATION_POLICY_PROGRESSIVE, CF_POPULATION_POLICY_ALWAYS_FULL,
-        CF_POPULATION_POLICY_FULL, CF_POPULATION_POLICY_PARTIAL,
-    };
-
-    let hydrations = [
-        ("partial", CF_HYDRATION_POLICY_PARTIAL),
-        ("progressive", CF_HYDRATION_POLICY_PROGRESSIVE),
-        ("full", CF_HYDRATION_POLICY_FULL),
-        ("always-full", CF_HYDRATION_POLICY_ALWAYS_FULL),
-    ];
-    let populations = [
-        ("partial", CF_POPULATION_POLICY_PARTIAL),
-        ("full", CF_POPULATION_POLICY_FULL),
-        ("always-full", CF_POPULATION_POLICY_ALWAYS_FULL),
-    ];
-    let mut report = String::new();
-    for (hydration_name, hydration) in hydrations {
-        for (population_name, population) in populations {
-            let label = format!("probe-{hydration_name}-{population_name}");
-            let root = dir.join(&label);
-            std::fs::create_dir_all(&root).expect("the probe root is creatable");
-            let file = root.join("probe.sav");
-            std::fs::write(&file, [0x5Au8; 64])
-                .expect("the probe file is writable before registration");
-            let outcome = match try_register_sync_root(&root, &label, hydration, population) {
-                Err(result) => format!("register {result:#010x}"),
-                Ok(_guard) => match try_convert_to_placeholder(&file) {
-                    Err(result) => format!("register ok, convert {result:#010x}"),
-                    Ok(attributes) => {
-                        format!("register ok, convert ok, attributes {attributes:#x}")
-                    }
-                },
-            };
-            let _ = write!(
-                report,
-                "\n  hydration {hydration_name}, population {population_name}: {outcome}"
-            );
-        }
-    }
-    report
-}
-
 /// Converts the hydrated file at `path`, inside a registered sync root, into
 /// a genuine cloud-files placeholder that stays hydrated: its cloud-files
 /// filter still serves the bytes on an ordinary read while
@@ -874,7 +847,7 @@ fn probe_placeholder_policies(dir: &TempDir) -> String {
 /// point, so a fixture that never reaches the hydrating-reopen branch fails
 /// loudly here instead of letting the read below pass for an unrelated reason.
 #[cfg(windows)]
-fn convert_into_a_hydrated_placeholder(dir: &TempDir, path: &Path) {
+fn convert_into_a_hydrated_placeholder(path: &Path) {
     use std::os::windows::fs::MetadataExt as _;
 
     let before = std::fs::symlink_metadata(path)
@@ -890,9 +863,8 @@ fn convert_into_a_hydrated_placeholder(dir: &TempDir, path: &Path) {
     assert!(
         attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0,
         "CfConvertToPlaceholder must turn {} into a reparse point for this test to mean anything; \
-         attributes {before:#x} before, {attributes:#x} after; policy probe:{}",
+         attributes {before:#x} before, {attributes:#x} after",
         path.display(),
-        probe_placeholder_policies(dir),
     );
 }
 
@@ -909,7 +881,7 @@ fn reading_a_non_symlink_reparse_point_in_the_files_place_loads_through_its_filt
     let (store, _, _) = saved_store();
     SaveFile::at(&path).write(&store).unwrap();
     let _sync_root = register_sync_root(&dir, "read-cloud-placeholder");
-    convert_into_a_hydrated_placeholder(&dir, &path);
+    convert_into_a_hydrated_placeholder(&path);
 
     let reloaded = SaveFile::at(&path)
         .read()
@@ -934,7 +906,7 @@ fn a_reparse_points_hydrating_reopen_reads_through_the_verified_object_despite_a
     let (original, _, _) = saved_store();
     SaveFile::at(&path).write(&original).unwrap();
     let _sync_root = register_sync_root(&dir, "reopen-path-swap");
-    convert_into_a_hydrated_placeholder(&dir, &path);
+    convert_into_a_hydrated_placeholder(&path);
 
     let carried_off = dir.join("carried-off.sav");
     let outcome = open::open_verified_for_read_with(&path, |_verified_handle| {
