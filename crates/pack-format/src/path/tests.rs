@@ -38,6 +38,30 @@ fn release_channel_missing_pack_does_not_load_shared_or_checkout_data() {
     assert_eq!(actual, PathBuf::from(expected));
 }
 
+/// A release channel with no override, no user-data directory, and no known
+/// executable directory must not fall back through the launch directory:
+/// that would let whoever controls the process's current directory pick the
+/// pack, the exact hazard [`super::is_absolute_xdg_path`] already refuses
+/// for a relative `$XDG_DATA_HOME`. `dev` cannot reach this branch —
+/// [`a_scrubbed_environment_still_resolves_to_the_repo_path`] already covers
+/// its own terminal rung with the same inputs — so this test is a no-op
+/// there and meaningful only when built for a non-`dev` channel.
+#[test]
+fn release_channel_resolution_refuses_to_fall_back_through_the_launch_directory() {
+    if super::RELEASE_CHANNEL == "dev" {
+        return;
+    }
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        resolve(&env_of(&[]), None, &exists_of(&[]), DataDirRule::Xdg)
+    }));
+    if let Ok(path) = outcome {
+        panic!(
+            "resolution fell back to the launch directory: {}",
+            path.display()
+        );
+    }
+}
+
 /// An environment built from `(key, value)` pairs; every other key is unset.
 fn env_of(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> {
     let owned: Vec<(String, OsString)> = pairs
@@ -284,6 +308,13 @@ fn nothing_present_falls_back_to_the_compile_time_repo_path() {
 
 #[test]
 fn a_scrubbed_environment_still_resolves_to_the_repo_path() {
+    // Only a `dev` build reaches rung 4 here: a non-`dev` build with the
+    // same scrubbed inputs refuses instead, which
+    // `release_channel_resolution_refuses_to_fall_back_through_the_launch_directory`
+    // already covers.
+    if super::RELEASE_CHANNEL != "dev" {
+        return;
+    }
     let path = resolve(&env_of(&[]), None, &exists_of(&[]), DataDirRule::Xdg);
     assert_eq!(path, repo_pack_path());
 }
