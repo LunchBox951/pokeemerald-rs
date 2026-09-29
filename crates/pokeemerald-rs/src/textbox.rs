@@ -1,34 +1,28 @@
 //! Draws text-window frames and revealed glyphs directly into framebuffers.
 //!
 //! Revealed glyphs have pixel positions inside a window, so they do not fit
-//! the tile-aligned background compositor. Glyphs draw with this module's
-//! fixed fallback colors; frame tiles use their extracted palettes unchanged
-//! `(behavioral-fidelity)`.
+//! the tile-aligned background compositor. Glyphs and frame tiles both draw
+//! with colors read from the loaded window palette `(behavioral-fidelity)`.
 
 use assets::pack::ImageRef;
 use engine::text::render::{ClearedSpan, RevealedGlyph};
 use engine::text::window::{self as msgwin, FrameTile};
 use rendering::{Bgr555, Framebuffer, Rgb888};
 
-const DEFAULT_GLYPH_BACKGROUND: Option<Rgb888> = None;
-const DEFAULT_GLYPH_FOREGROUND: Option<Rgb888> = Some(Rgb888 {
-    r: 24,
-    g: 24,
-    b: 24,
-});
-const DEFAULT_GLYPH_SHADOW: Option<Rgb888> = Some(Rgb888 {
-    r: 160,
-    g: 160,
-    b: 160,
-});
-const DEFAULT_GLYPH_BOX: Option<Rgb888> = None;
+/// Palette indices upstream's message printers select for text:
+/// `TEXT_COLOR_DARK_GRAY` (foreground) and `TEXT_COLOR_LIGHT_GRAY` (shadow)
+/// (`pokeemerald/src/menu.c:191-201`,
+/// `pokeemerald/include/constants/characters.h:234-237`) -- indices into the
+/// palette `LoadMessageBoxGfx` loads for the window
+/// (`pokeemerald/src/text_window.c:93-97`).
+const MESSAGE_BOX_FOREGROUND_PALETTE_INDEX: usize = 2;
+const MESSAGE_BOX_SHADOW_PALETTE_INDEX: usize = 3;
 
-const GLYPH_COLORS: [Option<Rgb888>; 4] = [
-    DEFAULT_GLYPH_BACKGROUND,
-    DEFAULT_GLYPH_FOREGROUND,
-    DEFAULT_GLYPH_SHADOW,
-    DEFAULT_GLYPH_BOX,
-];
+/// Glyph-role color slots [`blit_glyphs_colored`] indexes a revealed glyph's
+/// pixel through -- distinct from the palette indices above.
+const GLYPH_COLOR_COUNT: usize = 4;
+const GLYPH_FOREGROUND_INDEX: usize = 1;
+const GLYPH_SHADOW_INDEX: usize = 2;
 
 const TILE_SIZE: usize = msgwin::TILE_SIZE as usize;
 const TILE_SIZE_PX: i32 = msgwin::TILE_SIZE.cast_signed();
@@ -146,16 +140,6 @@ pub(crate) fn blit_frame_tiles_tracked(
     }
 }
 
-/// Draws revealed glyphs inside a window's content bounds using fallback colors.
-pub(crate) fn blit_glyphs(
-    fb: &mut Framebuffer,
-    glyphs: &[RevealedGlyph],
-    origin: (i32, i32),
-    content_size: (i32, i32),
-) {
-    blit_glyphs_colored(fb, glyphs, origin, content_size, &GLYPH_COLORS);
-}
-
 /// Draws revealed glyphs inside a window's content bounds using caller-supplied colors.
 pub(crate) fn blit_glyphs_colored(
     fb: &mut Framebuffer,
@@ -251,16 +235,18 @@ pub(crate) fn compose_window_ops(
     ops: &[WindowOp],
     origin: (i32, i32),
     content_size: (i32, i32),
+    colors: &[Option<Rgb888>; GLYPH_COLOR_COUNT],
 ) {
     let background = fb.clone();
     for op in ops {
         match op {
             WindowOp::Glyph(glyph) => {
-                blit_glyphs(
+                blit_glyphs_colored(
                     fb,
                     std::slice::from_ref(glyph.as_ref()),
                     origin,
                     content_size,
+                    colors,
                 );
             }
             WindowOp::ClearSpan(span) => {
@@ -333,6 +319,18 @@ impl FrameAssets {
             pixels: &self.pixels,
         }
     }
+
+    /// Message-box glyph colors read from this frame's loaded palette, at
+    /// the indices upstream's message printers select
+    /// (`pokeemerald/src/menu.c:191-201`, `pokeemerald/src/text_window.c:93-97`).
+    /// A palette shorter than the loaded index leaves that role transparent.
+    pub(crate) fn glyph_colors(&self) -> [Option<Rgb888>; GLYPH_COLOR_COUNT] {
+        let palette_color = |index: usize| self.palette.get(index).copied();
+        let mut colors = [None; GLYPH_COLOR_COUNT];
+        colors[GLYPH_FOREGROUND_INDEX] = palette_color(MESSAGE_BOX_FOREGROUND_PALETTE_INDEX);
+        colors[GLYPH_SHADOW_INDEX] = palette_color(MESSAGE_BOX_SHADOW_PALETTE_INDEX);
+        colors
+    }
 }
 
 /// Decodes every BGR555 entry in a packed palette.
@@ -394,6 +392,19 @@ mod tests {
     const FILL_PIXEL: u8 = 3;
     const BORDER_COLOR: Rgb888 = Rgb888 { r: 200, g: 0, b: 0 };
     const FILL_COLOR: Rgb888 = Rgb888 { r: 0, g: 200, b: 0 };
+    const OPAQUE_GLYPH_COLOR: Rgb888 = Rgb888 {
+        r: 24,
+        g: 24,
+        b: 24,
+    };
+
+    /// Test-only glyph colors: only [`OPAQUE_GLYPH_PALETTE_INDEX`] paints,
+    /// matching the shape [`FrameAssets::glyph_colors`] produces.
+    const TEST_GLYPH_COLORS: [Option<Rgb888>; GLYPH_COLOR_COUNT] = {
+        let mut colors = [None; GLYPH_COLOR_COUNT];
+        colors[OPAQUE_GLYPH_PALETTE_INDEX as usize] = Some(OPAQUE_GLYPH_COLOR);
+        colors
+    };
 
     fn opaque_glyph_at(x: i32, y: i32) -> RevealedGlyph {
         RevealedGlyph {
@@ -447,7 +458,7 @@ mod tests {
         let mut fb = Framebuffer::new();
         let glyph = opaque_glyph_at(4, -GLYPH_SIZE_PX);
 
-        blit_glyphs(&mut fb, &[glyph], (20, 30), (200, 32));
+        blit_glyphs_colored(&mut fb, &[glyph], (20, 30), (200, 32), &TEST_GLYPH_COLORS);
 
         assert!(
             fb.pixels().iter().all(|&p| p == Rgb888::BLACK),
@@ -461,7 +472,7 @@ mod tests {
         let origin = (20, 30);
         let glyph = opaque_glyph_at(0, -(GLYPH_SIZE_PX / 2));
 
-        blit_glyphs(&mut fb, &[glyph], origin, (200, 32));
+        blit_glyphs_colored(&mut fb, &[glyph], origin, (200, 32), &TEST_GLYPH_COLORS);
 
         let row_above_content = usize::try_from(origin.1 - 1).unwrap();
         let first_content_row = usize::try_from(origin.1).unwrap();
@@ -483,7 +494,7 @@ mod tests {
         let content_size = (10, 10);
         let glyph = opaque_glyph_at(0, 0);
 
-        blit_glyphs(&mut fb, &[glyph], origin, content_size);
+        blit_glyphs_colored(&mut fb, &[glyph], origin, content_size, &TEST_GLYPH_COLORS);
 
         let inside = (content_size.0 / 2, content_size.1 / 2);
         let past_right_edge = (content_size.0 + 2, inside.1);
@@ -499,7 +510,7 @@ mod tests {
         let origin = (10, 10);
         let glyph = opaque_glyph_at(0, 0);
 
-        blit_glyphs(&mut fb, &[glyph], origin, (200, 100));
+        blit_glyphs_colored(&mut fb, &[glyph], origin, (200, 100), &TEST_GLYPH_COLORS);
 
         for y in origin.1..origin.1 + GLYPH_SIZE_PX {
             for x in origin.0..origin.0 + GLYPH_SIZE_PX {

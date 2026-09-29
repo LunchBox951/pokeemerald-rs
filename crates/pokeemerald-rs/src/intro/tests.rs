@@ -5,7 +5,7 @@ use assets::pack::{AssetPack, ImageRef};
 use engine::text::render::{Printer, PrinterInput, TextSpeed, TickEvent};
 use engine::text::Token;
 use pack_format::PackEntry;
-use rendering::Rgb888;
+use rendering::{Bgr555, Rgb888};
 
 use super::{IntroScene, IntroStatus, TraversalRun, NUM_PAGES};
 use crate::new_game::NewGameOptions;
@@ -37,6 +37,11 @@ const APP_A_PRESS: PrinterInput = PrinterInput {
 const TRANSPARENT_PALETTE_INDEX: u8 = 0;
 const DARK_GREY_GLYPH_PALETTE_INDEX: u8 = 1;
 const SHADOW_GLYPH_PALETTE_INDEX: u8 = 2;
+// The message-box palette indices upstream selects for glyph foreground and
+// shadow (`pokeemerald/src/menu.c:191-201`); mirrors
+// `textbox::MESSAGE_BOX_FOREGROUND_PALETTE_INDEX`/`..._SHADOW_...`.
+const MESSAGE_BOX_FOREGROUND_PALETTE_INDEX: u8 = 2;
+const MESSAGE_BOX_SHADOW_PALETTE_INDEX: u8 = 3;
 const FONT_BIT_DEPTH: u8 = 2;
 const MESSAGE_BOX_WIDTH: u32 = 56;
 const MESSAGE_BOX_HEIGHT: u32 = 16;
@@ -68,17 +73,22 @@ fn dark_grey_glyph_sheet_pixels() -> Vec<u8> {
 }
 
 fn transparent_message_box() -> FrameAssets {
+    let mut palette = vec![Rgb888::BLACK; usize::from(MESSAGE_BOX_PALETTE_COLOUR_COUNT)];
+    palette[usize::from(MESSAGE_BOX_FOREGROUND_PALETTE_INDEX)] = DARK_GREY_GLYPH_COLOR;
+    palette[usize::from(MESSAGE_BOX_SHADOW_PALETTE_INDEX)] = SHADOW_GLYPH_COLOR;
     FrameAssets {
         pixels: vec![TRANSPARENT_PALETTE_INDEX; (MESSAGE_BOX_WIDTH * MESSAGE_BOX_HEIGHT) as usize],
         width: MESSAGE_BOX_WIDTH,
         height: MESSAGE_BOX_HEIGHT,
-        palette: vec![Rgb888::BLACK; usize::from(MESSAGE_BOX_PALETTE_COLOUR_COUNT)],
+        palette,
     }
 }
 
 fn solid_red_message_box() -> FrameAssets {
     let mut palette = vec![Rgb888::BLACK; usize::from(MESSAGE_BOX_PALETTE_COLOUR_COUNT)];
     palette[usize::from(SOLID_FRAME_PALETTE_INDEX)] = SOLID_FRAME_COLOR;
+    palette[usize::from(MESSAGE_BOX_FOREGROUND_PALETTE_INDEX)] = DARK_GREY_GLYPH_COLOR;
+    palette[usize::from(MESSAGE_BOX_SHADOW_PALETTE_INDEX)] = SHADOW_GLYPH_COLOR;
     FrameAssets {
         pixels: vec![SOLID_FRAME_PALETTE_INDEX; (MESSAGE_BOX_WIDTH * MESSAGE_BOX_HEIGHT) as usize],
         width: MESSAGE_BOX_WIDTH,
@@ -481,6 +491,19 @@ fn font_entry(fill_palette_index: u8) -> PackEntry {
     )
 }
 
+// `Bgr555` channel values that round-trip exactly through
+// `Bgr555::to_rgb888`'s 5-to-8-bit expansion (`crates/rendering/src/palette.rs:56-69`),
+// so a packed-palette test can assert an exact decoded color.
+const PACKED_FOREGROUND_CHANNEL: u8 = 3;
+const PACKED_SHADOW_CHANNEL: u8 = 20;
+
+const PACKED_FOREGROUND_COLOR: Rgb888 = DARK_GREY_GLYPH_COLOR;
+const PACKED_SHADOW_COLOR: Rgb888 = Rgb888 {
+    r: 165,
+    g: 165,
+    b: 165,
+};
+
 fn message_box_entries() -> Vec<PackEntry> {
     vec![
         crate::pack_test_support::image_entry(
@@ -490,9 +513,27 @@ fn message_box_entries() -> Vec<PackEntry> {
             MESSAGE_BOX_BIT_DEPTH,
             SOLID_FRAME_PALETTE_INDEX,
         ),
-        crate::pack_test_support::palette_entry(
+        crate::pack_test_support::palette_entry_with_colors(
             "text-window/palette/message_box",
             MESSAGE_BOX_PALETTE_COLOUR_COUNT,
+            &[
+                (
+                    MESSAGE_BOX_FOREGROUND_PALETTE_INDEX,
+                    Bgr555::from_channels(
+                        PACKED_FOREGROUND_CHANNEL,
+                        PACKED_FOREGROUND_CHANNEL,
+                        PACKED_FOREGROUND_CHANNEL,
+                    ),
+                ),
+                (
+                    MESSAGE_BOX_SHADOW_PALETTE_INDEX,
+                    Bgr555::from_channels(
+                        PACKED_SHADOW_CHANNEL,
+                        PACKED_SHADOW_CHANNEL,
+                        PACKED_SHADOW_CHANNEL,
+                    ),
+                ),
+            ],
         ),
     ]
 }
@@ -633,7 +674,7 @@ fn a_second_load_after_the_pack_is_regenerated_sees_the_new_bytes() {
     first.tick(NO_INPUT);
     assert_eq!(
         first_glyph_pixel(&first),
-        Some(DARK_GREY_GLYPH_COLOR),
+        Some(PACKED_FOREGROUND_COLOR),
         "the first load must render the pack that was on disk then"
     );
 
@@ -646,13 +687,13 @@ fn a_second_load_after_the_pack_is_regenerated_sees_the_new_bytes() {
     second.tick(NO_INPUT);
     assert_eq!(
         first_glyph_pixel(&second),
-        Some(SHADOW_GLYPH_COLOR),
+        Some(PACKED_SHADOW_COLOR),
         "a load after the pack changed must render the new bytes, not a cached first-load pack"
     );
 
     assert_eq!(
         first_glyph_pixel(&first),
-        Some(DARK_GREY_GLYPH_COLOR),
+        Some(PACKED_FOREGROUND_COLOR),
         "an already-built scene must keep rendering its own owned bytes"
     );
 }

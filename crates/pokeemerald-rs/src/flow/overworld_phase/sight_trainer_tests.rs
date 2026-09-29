@@ -1538,7 +1538,7 @@ fn approaching_trainer(phase: &OverworldPhase) -> &ObjectEventState {
 ///
 /// The fixture is [`UNEXECUTABLE_MOVE`]: a spent slot 0 no longer aborts
 /// anything, since the driver falls back to the next usable slot
-/// (`crate::flow::npc_trainer_battle::take_first_usable_move_turn`) and an
+/// (`crate::flow::first_usable_move::take_first_usable_move_turn`) and an
 /// all-spent moveset is diverted into Struggle (`crates/battle/src/battle.rs:491`).
 #[test]
 fn an_aborted_sight_battle_clears_the_trainer_id_with_the_slot() {

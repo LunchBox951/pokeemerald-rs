@@ -38,6 +38,30 @@ fn release_channel_missing_pack_does_not_load_shared_or_checkout_data() {
     assert_eq!(actual, PathBuf::from(expected));
 }
 
+/// A release channel with no override, no user-data directory, and no known
+/// executable directory must not fall back through the launch directory:
+/// that would let whoever controls the process's current directory pick the
+/// pack, the exact hazard [`super::is_absolute_xdg_path`] already refuses
+/// for a relative `$XDG_DATA_HOME`. `dev` cannot reach this branch —
+/// [`a_scrubbed_environment_still_resolves_to_the_repo_path`] already covers
+/// its own terminal rung with the same inputs — so this test is a no-op
+/// there and meaningful only when built for a non-`dev` channel.
+#[test]
+fn release_channel_resolution_refuses_to_fall_back_through_the_launch_directory() {
+    if super::RELEASE_CHANNEL == "dev" {
+        return;
+    }
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        resolve(&env_of(&[]), None, &exists_of(&[]), DataDirRule::Xdg)
+    }));
+    if let Ok(path) = outcome {
+        panic!(
+            "resolution fell back to the launch directory: {}",
+            path.display()
+        );
+    }
+}
+
 /// An environment built from `(key, value)` pairs; every other key is unset.
 fn env_of(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> {
     let owned: Vec<(String, OsString)> = pairs
@@ -58,6 +82,13 @@ fn exists_of(present: &[&str]) -> impl Fn(&Path) -> Probe {
             Probe::Missing
         }
     }
+}
+
+/// The candidate [`super::resolve`]'s user-data rung builds for `dir`:
+/// `<dir>/`[`super::APP_DATA_SUBDIRECTORY`]`/pokeemerald.pack`. A `String`
+/// so it plugs into [`exists_of`] / [`probe_of`] and `PathBuf::from`.
+fn user_data_pack(dir: &str) -> String {
+    format!("{dir}/{}/pokeemerald.pack", super::APP_DATA_SUBDIRECTORY)
 }
 
 /// A probe that cannot examine `unreadable`, finds `present`, and reports
@@ -108,47 +139,39 @@ fn the_env_override_is_honoured_even_when_the_file_is_absent() {
 
 #[test]
 fn an_empty_env_override_is_ignored() {
+    let pack = user_data_pack("/home/dev/.local/share");
     let path = resolve(
         &env_of(&[(PACK_PATH_ENV, ""), ("HOME", "/home/dev")]),
         None,
-        &exists_of(&["/home/dev/.local/share/pokeemerald-rs/pokeemerald.pack"]),
+        &exists_of(&[&pack]),
         DataDirRule::Xdg,
     );
-    assert_eq!(
-        path,
-        PathBuf::from("/home/dev/.local/share/pokeemerald-rs/pokeemerald.pack")
-    );
+    assert_eq!(path, PathBuf::from(&pack));
 }
 
 #[test]
 fn the_user_data_pack_wins_over_the_executable_directory() {
+    let pack = user_data_pack("/home/dev/.local/share");
     let path = resolve(
         &env_of(&[("HOME", "/home/dev")]),
         Some(Path::new("/opt/game")),
-        &exists_of(&[
-            "/home/dev/.local/share/pokeemerald-rs/pokeemerald.pack",
-            "/opt/game/assets-pack/pokeemerald.pack",
-        ]),
+        &exists_of(&[&pack, "/opt/game/assets-pack/pokeemerald.pack"]),
         DataDirRule::Xdg,
     );
-    assert_eq!(
-        path,
-        PathBuf::from("/home/dev/.local/share/pokeemerald-rs/pokeemerald.pack")
-    );
+    assert_eq!(path, PathBuf::from(&pack));
 }
 
 #[test]
 fn xdg_data_home_beats_the_home_fallback() {
+    let xdg_pack = user_data_pack("/xdg");
+    let home_pack = user_data_pack("/home/dev/.local/share");
     let path = resolve(
         &env_of(&[("XDG_DATA_HOME", "/xdg"), ("HOME", "/home/dev")]),
         None,
-        &exists_of(&[
-            "/xdg/pokeemerald-rs/pokeemerald.pack",
-            "/home/dev/.local/share/pokeemerald-rs/pokeemerald.pack",
-        ]),
+        &exists_of(&[&xdg_pack, &home_pack]),
         DataDirRule::Xdg,
     );
-    assert_eq!(path, PathBuf::from("/xdg/pokeemerald-rs/pokeemerald.pack"));
+    assert_eq!(path, PathBuf::from(&xdg_pack));
 }
 
 #[test]
@@ -163,19 +186,15 @@ fn a_relative_xdg_data_home_is_ignored_in_favour_of_the_home_fallback() {
         ),
         Some(PathBuf::from("/home/dev/.local/share"))
     );
+    let data_pack = user_data_pack("data");
+    let home_pack = user_data_pack("/home/dev/.local/share");
     let path = resolve(
         &env_of(&[("XDG_DATA_HOME", "data"), ("HOME", "/home/dev")]),
         None,
-        &exists_of(&[
-            "data/pokeemerald-rs/pokeemerald.pack",
-            "/home/dev/.local/share/pokeemerald-rs/pokeemerald.pack",
-        ]),
+        &exists_of(&[&data_pack, &home_pack]),
         DataDirRule::Xdg,
     );
-    assert_eq!(
-        path,
-        PathBuf::from("/home/dev/.local/share/pokeemerald-rs/pokeemerald.pack")
-    );
+    assert_eq!(path, PathBuf::from(&home_pack));
 }
 
 #[test]
@@ -190,30 +209,26 @@ fn a_relative_xdg_data_home_with_no_home_yields_no_data_directory() {
 
 #[test]
 fn macos_looks_under_library_application_support() {
+    let pack = user_data_pack("/Users/dev/Library/Application Support");
     let path = resolve(
         &env_of(&[("HOME", "/Users/dev"), ("XDG_DATA_HOME", "/xdg")]),
         None,
-        &exists_of(&["/Users/dev/Library/Application Support/pokeemerald-rs/pokeemerald.pack"]),
+        &exists_of(&[&pack]),
         DataDirRule::MacOs,
     );
-    assert_eq!(
-        path,
-        PathBuf::from("/Users/dev/Library/Application Support/pokeemerald-rs/pokeemerald.pack")
-    );
+    assert_eq!(path, PathBuf::from(&pack));
 }
 
 #[test]
 fn windows_looks_under_appdata() {
+    let pack = user_data_pack("C:/Users/dev/AppData/Roaming");
     let path = resolve(
         &env_of(&[("APPDATA", "C:/Users/dev/AppData/Roaming"), ("HOME", "/h")]),
         None,
-        &exists_of(&["C:/Users/dev/AppData/Roaming/pokeemerald-rs/pokeemerald.pack"]),
+        &exists_of(&[&pack]),
         DataDirRule::Windows,
     );
-    assert_eq!(
-        path,
-        PathBuf::from("C:/Users/dev/AppData/Roaming/pokeemerald-rs/pokeemerald.pack")
-    );
+    assert_eq!(path, PathBuf::from(&pack));
 }
 
 #[test]
@@ -233,16 +248,14 @@ fn windows_falls_back_to_userprofile_when_appdata_is_unset() {
                 .join("Roaming")
         )
     );
+    let pack = user_data_pack("C:/Users/dev/AppData/Roaming");
     let path = resolve(
         &env_of(&[("USERPROFILE", "C:/Users/dev")]),
         None,
-        &exists_of(&["C:/Users/dev/AppData/Roaming/pokeemerald-rs/pokeemerald.pack"]),
+        &exists_of(&[&pack]),
         DataDirRule::Windows,
     );
-    assert_eq!(
-        path,
-        PathBuf::from("C:/Users/dev/AppData/Roaming/pokeemerald-rs/pokeemerald.pack")
-    );
+    assert_eq!(path, PathBuf::from(&pack));
 }
 
 #[test]
@@ -258,16 +271,20 @@ fn windows_appdata_beats_the_userprofile_fallback() {
 
 #[test]
 fn the_executable_directory_is_used_when_no_user_data_pack_exists() {
+    // Only `dev` checks rung 2's existence before falling to rung 3; every
+    // other channel returns its user-data candidate unconditionally.
     let path = resolve(
         &env_of(&[("HOME", "/home/dev")]),
         Some(Path::new("/opt/game")),
         &exists_of(&["/opt/game/assets-pack/pokeemerald.pack"]),
         DataDirRule::Xdg,
     );
-    assert_eq!(
-        path,
+    let expected = if super::RELEASE_CHANNEL == "dev" {
         PathBuf::from("/opt/game/assets-pack/pokeemerald.pack")
-    );
+    } else {
+        PathBuf::from(user_data_pack("/home/dev/.local/share"))
+    };
+    assert_eq!(path, expected);
 }
 
 #[test]
@@ -278,14 +295,42 @@ fn nothing_present_falls_back_to_the_compile_time_repo_path() {
         &exists_of(&[]),
         DataDirRule::Xdg,
     );
-    assert_eq!(path, repo_pack_path());
-    assert!(path.ends_with(OUTPUT_RELATIVE_PATH), "{}", path.display());
+    if super::RELEASE_CHANNEL == "dev" {
+        assert_eq!(path, repo_pack_path());
+        assert!(path.ends_with(OUTPUT_RELATIVE_PATH), "{}", path.display());
+    } else {
+        // A channel build never reaches the checkout fallback: rung 2 wins
+        // unconditionally, even with nothing there.
+        assert_eq!(
+            path,
+            PathBuf::from(user_data_pack("/home/dev/.local/share"))
+        );
+    }
 }
 
 #[test]
 fn a_scrubbed_environment_still_resolves_to_the_repo_path() {
+    // Only a `dev` build reaches rung 4 here: a non-`dev` build with the
+    // same scrubbed inputs refuses instead, which
+    // `release_channel_resolution_refuses_to_fall_back_through_the_launch_directory`
+    // already covers.
+    if super::RELEASE_CHANNEL != "dev" {
+        return;
+    }
     let path = resolve(&env_of(&[]), None, &exists_of(&[]), DataDirRule::Xdg);
-    assert_eq!(path, repo_pack_path());
+    if super::RELEASE_CHANNEL == "dev" {
+        assert_eq!(path, repo_pack_path());
+    } else {
+        // With no `HOME` and no executable directory (`None` here), a
+        // channel build falls to `exe_dir.unwrap_or(".")` instead of the
+        // checkout fallback `dev` reaches.
+        assert_eq!(
+            path,
+            Path::new(".")
+                .join(super::APP_DATA_SUBDIRECTORY)
+                .join("pokeemerald.pack")
+        );
+    }
 }
 
 #[test]
@@ -320,7 +365,11 @@ fn the_host_helpers_agree_with_the_rule_they_are_built_from() {
     // between the two public helpers, never a concrete directory.
     match (user_data_dir(), super::user_pack_path()) {
         (Some(dir), Some(pack)) => {
-            assert_eq!(pack, dir.join("pokeemerald-rs").join("pokeemerald.pack"));
+            assert_eq!(
+                pack,
+                dir.join(super::APP_DATA_SUBDIRECTORY)
+                    .join("pokeemerald.pack")
+            );
         }
         (None, None) => {}
         other => panic!("user_data_dir and user_pack_path disagree: {other:?}"),
@@ -340,10 +389,28 @@ fn a_user_pack_may_stop_resolution(candidate: &Path) -> bool {
 
 #[test]
 fn the_default_path_is_the_repo_path_in_a_plain_developer_checkout() {
+    // An explicit override wins on every channel, so it must be checked
+    // before the channel branch below too.
+    if std::env::var_os(PACK_PATH_ENV).is_some() {
+        return;
+    }
     // CI and a developer machine both run with no `POKEEMERALD_PACK`, no
     // user-data pack, and test binaries under `target/`, so rung 4 wins and
-    // every existing pack test keeps finding the extracted pack.
-    if std::env::var_os(PACK_PATH_ENV).is_some() {
+    // every existing pack test keeps finding the extracted pack. A channel
+    // build never reaches rung 4: it always resolves its own channel path
+    // instead, which is the invariant checked here.
+    if super::RELEASE_CHANNEL != "dev" {
+        let path = default_pack_path();
+        assert_ne!(
+            path,
+            repo_pack_path(),
+            "a channel build must never fall back to the build machine's checkout"
+        );
+        assert!(
+            path.ends_with(Path::new(super::APP_DATA_SUBDIRECTORY).join("pokeemerald.pack")),
+            "a channel build must resolve to its own channel path: {}",
+            path.display()
+        );
         return;
     }
     if super::user_pack_path().is_some_and(|p| a_user_pack_may_stop_resolution(&p)) {
@@ -409,51 +476,58 @@ fn an_unreadable_user_pack_stops_resolution_instead_of_falling_through() {
     // The player installed a pack and something made its directory
     // unsearchable. Walking on would either load the portable install
     // silently or report the checkout path as missing; neither tells them
-    // what actually happened.
+    // what actually happened. True on every channel, for different
+    // reasons: `dev` stops because the candidate is `Unreadable`, and every
+    // other channel stops there unconditionally either way.
+    let pack = user_data_pack("/home/dev/.local/share");
     let path = resolve(
         &env_of(&[("HOME", "/home/dev")]),
         Some(Path::new("/opt/game")),
-        &probe_of(
-            &["/opt/game/assets-pack/pokeemerald.pack"],
-            &["/home/dev/.local/share/pokeemerald-rs/pokeemerald.pack"],
-        ),
+        &probe_of(&["/opt/game/assets-pack/pokeemerald.pack"], &[&pack]),
         DataDirRule::Xdg,
     );
     assert_eq!(
         path,
-        PathBuf::from("/home/dev/.local/share/pokeemerald-rs/pokeemerald.pack"),
+        PathBuf::from(&pack),
         "an unreadable candidate is handed back for the loader to diagnose"
     );
 }
 
 #[test]
 fn an_unreadable_executable_directory_pack_also_stops_resolution() {
+    // Only `dev` reaches rung 3 here; every other channel wins at rung 2
+    // unconditionally, so its unreadable rung-3 candidate never matters.
     let path = resolve(
         &env_of(&[("HOME", "/home/dev")]),
         Some(Path::new("/opt/game")),
         &probe_of(&[], &["/opt/game/assets-pack/pokeemerald.pack"]),
         DataDirRule::Xdg,
     );
-    assert_eq!(
-        path,
+    let expected = if super::RELEASE_CHANNEL == "dev" {
         PathBuf::from("/opt/game/assets-pack/pokeemerald.pack")
-    );
+    } else {
+        PathBuf::from(user_data_pack("/home/dev/.local/share"))
+    };
+    assert_eq!(path, expected);
 }
 
 #[test]
 fn a_missing_candidate_still_advances_to_the_next_rung() {
     // The other half of the distinction: only `Missing` walks on, and it
-    // must keep doing so or every packless developer checkout breaks.
+    // must keep doing so or every packless developer checkout breaks. As
+    // above, this rung-3 exercise only applies to a `dev` build.
     let path = resolve(
         &env_of(&[("HOME", "/home/dev")]),
         Some(Path::new("/opt/game")),
         &probe_of(&["/opt/game/assets-pack/pokeemerald.pack"], &[]),
         DataDirRule::Xdg,
     );
-    assert_eq!(
-        path,
+    let expected = if super::RELEASE_CHANNEL == "dev" {
         PathBuf::from("/opt/game/assets-pack/pokeemerald.pack")
-    );
+    } else {
+        PathBuf::from(user_data_pack("/home/dev/.local/share"))
+    };
+    assert_eq!(path, expected);
 }
 
 #[test]
@@ -541,7 +615,9 @@ fn the_real_probe_reports_a_candidate_under_a_regular_file_as_missing() {
 }
 
 /// A regular file at rung 2's user-data directory proves no pack can be
-/// there, so resolution must still find rung 3's valid pack.
+/// there, so a `dev` build's resolution must still find rung 3's valid
+/// pack. Every other channel returns rung 2's candidate regardless, blocked
+/// or not, so it never reaches rung 3 here; see the channel branch below.
 #[test]
 fn a_regular_file_at_the_user_data_rung_advances_resolution_to_a_valid_later_rung() {
     use super::{probe, HOST_RULE};
@@ -579,12 +655,29 @@ fn a_regular_file_at_the_user_data_rung_advances_resolution_to_a_valid_later_run
 
     let path = resolve(&env, Some(exe_dir.as_path()), &probe, HOST_RULE);
 
+    // The same directory `data_dir` would build from `data_home` for this
+    // host's rule: only `MacOs` adds a suffix before the app subdirectory.
+    let user_data_root = match HOST_RULE {
+        DataDirRule::MacOs => data_home.join("Library").join("Application Support"),
+        DataDirRule::Xdg | DataDirRule::Windows => data_home.clone(),
+    };
+
     let _ = std::fs::remove_file(&data_home);
     let _ = std::fs::remove_dir_all(&exe_dir);
     let _ = std::fs::remove_dir(&root);
 
-    assert_eq!(
-        path, pack,
-        "a regular file blocking the user-data rung must not stop resolution before a valid later rung"
-    );
+    if super::RELEASE_CHANNEL == "dev" {
+        assert_eq!(
+            path, pack,
+            "a regular file blocking the user-data rung must not stop resolution before a valid later rung"
+        );
+    } else {
+        assert_eq!(
+            path,
+            user_data_root
+                .join(super::APP_DATA_SUBDIRECTORY)
+                .join("pokeemerald.pack"),
+            "a channel build must still return its own user-data candidate, blocked or not"
+        );
+    }
 }
