@@ -17,7 +17,7 @@
 //! [`super::OverworldPhase::from_saved`]'s "What a continue restores" for the
 //! whole account.
 
-use engine::overworld::{warp_in_facing, Direction, TilePos};
+use engine::overworld::{warp_in_facing, Direction, TilePos, ELEVATION_MULTI_LEVEL};
 use engine::save::SaveBlock1;
 
 use crate::new_game;
@@ -41,20 +41,47 @@ pub(super) fn saved_facing(block1: &SaveBlock1, fallback: Direction) -> Directio
 
 /// `LoadObjectEvents`' elevation half (`src/load_save.c:188-193`): the
 /// `(current, previous)` elevation pair the saved player object holds, or
-/// `(tile_elevation, tile_elevation)` when the save's player object is not
-/// marked `active` -- what an image written before this port persisted
-/// elevations holds.
+/// `(tile_elevation, tile_elevation)` when the save cannot be trusted to hold
+/// one for this tile.
 ///
-/// The pair itself cannot mark the fallback: `(0, 0)` is a real state (leaving
-/// a multi-level tile onto an elevated one skips both updates), so the
-/// upstream `active` bit, which every save this port now writes sets, does.
-pub(super) fn saved_elevations(block1: &SaveBlock1, tile_elevation: u8) -> (u8, u8) {
+/// The pair is trusted only when the player object is `active` (upstream's own
+/// bit, set by every save this port writes) *and* the saved current elevation
+/// is one upstream could hold on the landing cell. `ObjectEventUpdateElevation`
+/// (`src/event_object_movement.c:7759-7771`) sets current elevation to the
+/// cell's own -- 0 on a transition cell -- and retains it on a multi-level
+/// (15) cell. An upstream-origin image re-saved by an older writer keeps its
+/// `active` bit and elevation byte while the position moves on, so a current
+/// elevation the cell forbids marks that stale byte. Upstream can also hold a
+/// mismatched current after stepping off a multi-level cell, but the save
+/// records no previous coordinates, so that state is indistinguishable from a
+/// stale byte and re-derives from the cell.
+pub(super) fn saved_elevations(
+    block1: &SaveBlock1,
+    cell_elevation: Option<u8>,
+    tile_elevation: u8,
+) -> (u8, u8) {
     let event = block1.player_object_event;
-    if event.active {
+    let holdable = cell_elevation
+        .is_some_and(|cell| cell == ELEVATION_MULTI_LEVEL || event.current_elevation == cell);
+    if event.active && holdable {
         (event.current_elevation, event.previous_elevation)
     } else {
         (tile_elevation, tile_elevation)
     }
+}
+
+/// The raw grid-cell elevation at `position` on `map_id`, before
+/// [`saved_tile_placement`]'s multi-level substitution, or `None` when the
+/// cell will not decode.
+pub(super) fn saved_cell_elevation(
+    scene: &OverworldScene,
+    map_id: assets::MapId,
+    position: TilePos,
+) -> Option<u8> {
+    let header = assets::MapHeaderTable::new().header(map_id).ok()?;
+    let events = assets::MapEventsTable::new().resolve(map_id).ok()?;
+    let runtime = scene.runtime(map_id, header, events);
+    Some(runtime.metatile_cell(position.0, position.1)?.elevation)
 }
 
 /// The `(elevation, facing)` a continued save's player is placed with at

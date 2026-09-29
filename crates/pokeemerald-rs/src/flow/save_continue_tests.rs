@@ -375,21 +375,31 @@ fn continue_on_a_multi_level_tile_restores_the_saved_elevation_history() {
     assert_eq!(after, before);
 }
 
-/// Issue #801 review: `(0, 0)` is a real saved pair on an elevated tile (a
-/// step off a multi-level tile onto ordinary ground skips both updates), so a
-/// continue must not mistake it for a legacy image and re-derive `(7, 7)`.
+/// Issue #801 review: a multi-level cell retains whatever elevation the
+/// player arrived with (`ObjectEventUpdateElevation`,
+/// `src/event_object_movement.c:7759-7771`), so any saved pair is valid there
+/// and a continue must not re-derive the transition wildcard from the cell.
 #[test]
-fn continue_restores_a_zero_elevation_pair_on_an_elevated_tile() {
+fn continue_restores_any_elevation_pair_on_a_multi_level_tile() {
     let tile = (4_u16, 4_u16);
-    let scene = || crate::overworld::tests::synthetic_scene_with_cell_elevation(10, 10, tile, 7);
-    let temp = TempSave::new("zero-pair");
+    let scene = || {
+        crate::overworld::tests::synthetic_scene_with_cell_elevation(
+            10,
+            10,
+            tile,
+            engine::overworld::ELEVATION_MULTI_LEVEL,
+        )
+    };
+    let temp = TempSave::new("multi-level-pair");
     let mut slot = temp.slot();
     let mut phase = OverworldPhase::for_test(
         scene(),
         new_game::SPAWN_MAP_ID,
-        PlayerState::new((4, 4), 0, Direction::South),
+        PlayerState::new((4, 4), 7, Direction::South),
         None,
     );
+    phase.save1.pos.x = 4;
+    phase.save1.pos.y = 4;
     save_from_the_start_menu(&mut phase, &mut slot);
     let saved = slot.load();
     let resumed =
@@ -399,7 +409,43 @@ fn continue_restores_a_zero_elevation_pair_on_an_elevated_tile() {
             resumed.player.elevation(),
             resumed.player.previous_elevation()
         ),
-        (0, 0)
+        (7, 7)
+    );
+}
+
+/// Adjudication (#801 review): an upstream-origin image (player object
+/// `active`, elevation byte 0x33 from an elevation-3 floor) re-saved by the
+/// pre-slice writer after the player walked onto a transition cell carries
+/// the new position but the old elevation byte and active bit. Upstream can
+/// never hold current elevation 3 on a transition cell
+/// (`ObjectEventUpdateElevation` sets current to the cell's 0), so a continue
+/// must not restore the stale pair.
+#[test]
+fn legacy_active_image_with_stale_elevation_byte_does_not_restore_it() {
+    let tile = (4_u16, 4_u16);
+    let scene = || {
+        crate::overworld::tests::synthetic_scene_with_cell_elevation(
+            10,
+            10,
+            tile,
+            engine::overworld::ELEVATION_TRANSITION,
+        )
+    };
+    let mut block1 = new_game_phase().save1.clone();
+    let block2 = new_game_phase().save2.clone();
+    block1.pos.x = 4;
+    block1.pos.y = 4;
+    // Exactly what `SaveBlock1::from_bytes` decodes from such an image.
+    block1.player_object_event = block1
+        .player_object_event
+        .with_elevation_byte(0x33)
+        .with_active(true);
+    let resumed = OverworldPhase::from_saved(scene(), new_game::SPAWN_MAP_ID, block1, block2);
+    assert_eq!(resumed.player.position(), (4, 4));
+    assert_eq!(
+        resumed.player.elevation(),
+        engine::overworld::ELEVATION_TRANSITION,
+        "a stale elevation byte from the prior location must not be restored"
     );
 }
 
