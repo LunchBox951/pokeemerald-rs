@@ -26846,10 +26846,10 @@
           "status": "rewritten"
         },
         "CgbOscOff": {
-          "fold_target": "crates/audio/src/cgb_envelope.rs",
-          "reason": "CgbOscOff's immediate-silence effect is absorbed by CgbEnvelope::retire when a note's envelope ends. A channel-1 sweep overflow does not reach it: that mutes the hardware channel alone (CgbVoice::hardware_muted) while the software voice stays live for a later trigger, since CgbSound keeps SOUND_CHANNEL_SF_ON for the whole envelope (m4a.c:1055-1058 is the only clearer). This crate has no hardware NRxx registers to zero (S-3).",
+          "reason": "CgbOscOff's channel-1/2 off-write is reimplemented as SquareChannel::apply_hardware_off_write (crates/audio/src/psg.rs, reached through CgbVoice::apply_hardware_off_write): REG_NR14/REG_NR24 = 0x80 (m4a.c:857-868) clears the frequency register's high three bits, so GBAudioWriteNR14/NR24's catch-up (mgba/src/gb/audio.c:140-194,219-241) rates a later idle-duty advance against the low byte alone rather than the note's last full frequency. The write is also a genuine hardware trigger (GBAudioWriteNR14, mgba/src/gb/audio.c:168-186): it reloads channel 1's sweep from the truncated frequency, rechecks overflow, and revives a muted channel, as SquareChannel::retrigger does. Mixer applies it the instant a Square1/Square2 slot idles, both on TrackStop's immediate clear (src/m4a_1.s#TrackStop) and on natural envelope retirement, tracking the truncated duty position independently of the CgbVoice occupant so the next note-on continues it (issue #1482). NR12=8 leaves the DAC on, so a nonzero-shift channel-1 sweep keeps ticking at 128 Hz and retuning the played frequency while the slot idles (mgba/src/gb/audio.c:965-988); Mixer::mix_frame steps the vacated slot's sweep at the frame's shared tick offsets through CgbVoice::advance_idle_duty, and a sweep overflow mutes the idle channel so its frequency freezes. The idle channel's envelope is dead (volume 0), so GBAudioRun skips its duty catch-up at frame and sweep ticks (mgba/src/gb/audio.c:493-510); the duty catch-up is deferred (SquareChannel::defer_idle_samples) and rated once at the next note-on at the frequency the sweep finally reached. The channel's envelope-silencing half (REG_NR12/REG_NR22/REG_NR42 = 8) remains a byproduct of CgbEnvelope::retire when a note's envelope ends, not a dedicated write; channel 3's disable (REG_NR30 = 0) and channel 4's noise off-write are not modeled.",
+          "rust_target": "crates/audio/src/cgb_voice.rs",
           "spec": "S-3",
-          "status": "folded"
+          "status": "stubbed"
         },
         "CgbPan": {
           "reason": "CgbPan's hard-pan-vs-centre decision re-implemented as cgb_envelope::cgb_pan (S-3 slice 2).",
@@ -26967,7 +26967,7 @@
           "status": "rewritten"
         },
         "TrackStop": {
-          "reason": "Mixer::stop_track reimplements TrackStop's immediate channel teardown: dropping each matching DirectSound or CGB slot absorbs the active-channel status clear and CGB oscillator-off call (m4a_1.s:1480-1493), the per-channel owner unlink (m4a_1.s:1494-1498), and the track channel-head clear (m4a_1.s:1499-1500).",
+          "reason": "Mixer::stop_track reimplements TrackStop's immediate channel teardown: dropping each matching DirectSound or CGB slot absorbs the active-channel status clear (m4a_1.s:1480-1493), the per-channel owner unlink (m4a_1.s:1494-1498), and the track channel-head clear (m4a_1.s:1499-1500). The CGB oscillator-off call itself (src/m4a.c#CgbOscOff) is applied to a vacated Square1/Square2 slot before it drops, truncating the frequency its idle duty catch-up rates against (issue #1482).",
           "rust_target": "crates/audio/src/mixer.rs",
           "spec": "S-3",
           "status": "rewritten"
