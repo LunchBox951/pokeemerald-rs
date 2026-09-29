@@ -5,7 +5,7 @@ use assets::{Effectiveness, MoveId, Type, TypeChart};
 use crate::stat_stage::StatStage;
 
 /// Struggle, which bypasses STAB and type effectiveness.
-pub const STRUGGLE: MoveId = MoveId(165);
+pub const STRUGGLE: MoveId = MoveId::STRUGGLE;
 
 /// A move's type-based damage category.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -363,7 +363,7 @@ mod tests {
     use crate::stat_stage::StatStage;
     use assets::{Effectiveness, MoveId, Type};
 
-    const TACKLE: MoveId = MoveId(33);
+    const TACKLE: MoveId = MoveId::TACKLE;
 
     struct FixedRng(u16);
     impl BattleRng for FixedRng {
