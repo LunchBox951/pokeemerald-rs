@@ -403,7 +403,7 @@ impl Mixer {
         for (index, idle) in self.idle_square_duty.iter_mut().enumerate() {
             if self.cgb_slots[index].is_none() {
                 if let Some(duty) = idle {
-                    duty.advance_idle_duty(SAMPLES_PER_FRAME);
+                    duty.advance_idle_duty(SAMPLES_PER_FRAME, &self.sweep_ticks);
                 }
             }
         }

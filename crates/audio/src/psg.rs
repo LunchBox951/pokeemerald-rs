@@ -258,6 +258,11 @@ pub struct SquareChannel {
     note_high_bits: u16,
     sweep: Option<Sweep>,
     disabled_at_trigger: bool,
+    /// Samples an idle slot has spent since `phase` was last settled: the
+    /// hardware defers the duty catch-up to the next register write, so a
+    /// sweep retuning meanwhile does not rate those samples
+    /// ([`Self::defer_idle_samples`]'s doc).
+    idle_samples: u32,
 }
 
 impl SquareChannel {
@@ -274,6 +279,7 @@ impl SquareChannel {
             note_high_bits: 0,
             sweep,
             disabled_at_trigger,
+            idle_samples: 0,
         };
         chan.set_frequency(freq_reg);
         chan
@@ -292,14 +298,36 @@ impl SquareChannel {
 
     #[cfg(test)]
     pub(crate) fn duty_phase(&self) -> u32 {
+        self.settled_phase()
+    }
+
+    /// The duty position once the deferred idle samples are rated at the
+    /// current frequency.
+    fn settled_phase(&self) -> u32 {
         self.phase
+            .wrapping_add(self.step_delta.wrapping_mul(self.idle_samples))
     }
 
     /// Continues the duty position of `previous`, the note this one replaces
     /// on the same hardware slot: a restart keeps the duty index and the time
     /// since the last step (`mgba/src/gb/audio.c:168-194`, `:493-510`).
     pub(crate) fn continue_duty_from(&mut self, previous: &Self) {
-        self.phase = retime_step_remainder(previous.phase, previous.step_delta, self.step_delta);
+        self.phase = retime_step_remainder(
+            previous.settled_phase(),
+            previous.step_delta,
+            self.step_delta,
+        );
+        self.idle_samples = 0;
+    }
+
+    /// Records `samples` of an idle slot's silence without advancing the duty
+    /// position. The disabled channel's catch-up is skipped at every frame and
+    /// sweep tick (`GBAudioRun`'s `dead != 2` gate, `mgba/src/gb/audio.c:493-510`)
+    /// and runs once at the next register write, at whatever frequency the
+    /// sweep has reached by then (`:162-171`), not at each intermediate one.
+    pub(crate) fn defer_idle_samples(&mut self, samples: usize) {
+        let samples = u32::try_from(samples).unwrap_or(u32::MAX);
+        self.idle_samples = self.idle_samples.wrapping_add(samples);
     }
 
     /// Advances the duty position through `samples` of silence. A disabled
@@ -317,8 +345,12 @@ impl SquareChannel {
     /// it clears the frequency register's high three bits, so a later
     /// catch-up rates against the low byte alone
     /// (`pokeemerald/src/m4a.c:857-868`, `mgba/src/gb/audio.c:168-171,219-222`).
-    pub(crate) fn apply_hardware_off_write(&mut self) {
+    /// The write is also a trigger, so channel 1's sweep reloads from the
+    /// truncated frequency and rechecks overflow (`mgba/src/gb/audio.c:168-186`);
+    /// returns whether the channel still plays.
+    pub(crate) fn apply_hardware_off_write(&mut self) -> bool {
         self.set_frequency(self.frequency & FREQUENCY_LOW_BYTE);
+        self.retrigger()
     }
 
     /// Retunes the channel from an 11-bit frequency register value, as a pitch

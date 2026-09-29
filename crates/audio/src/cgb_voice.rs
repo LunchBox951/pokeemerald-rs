@@ -107,12 +107,21 @@ impl Oscillator {
         }
     }
 
+    /// Defers an idle square slot's duty catch-up
+    /// ([`SquareChannel::defer_idle_samples`]'s doc); a no-op for Wave/Noise.
+    fn defer_idle_samples(&mut self, samples: usize) {
+        if let Self::Square(square) = self {
+            square.defer_idle_samples(samples);
+        }
+    }
+
     /// Applies the hardware off-write's frequency truncation
     /// ([`SquareChannel::apply_hardware_off_write`]'s doc); a no-op for
     /// Wave/Noise.
-    fn apply_hardware_off_write(&mut self) {
-        if let Self::Square(square) = self {
-            square.apply_hardware_off_write();
+    fn apply_hardware_off_write(&mut self) -> bool {
+        match self {
+            Self::Square(square) => square.apply_hardware_off_write(),
+            Self::Wave(_) | Self::Noise(_) => true,
         }
     }
 
@@ -611,16 +620,30 @@ impl CgbVoice {
     }
 
     /// Applies the off-write a voice's slot receives the instant it idles
-    /// ([`SquareChannel::apply_hardware_off_write`]'s doc).
+    /// ([`SquareChannel::apply_hardware_off_write`]'s doc); its trigger
+    /// revives or re-mutes the hardware channel like any other.
     pub(crate) fn apply_hardware_off_write(&mut self) {
-        self.oscillator.apply_hardware_off_write();
+        self.hardware_muted = !self.oscillator.apply_hardware_off_write();
     }
 
-    /// Advances an idle square slot's duty position through `samples` of
-    /// silence, the way its free-running register keeps advancing on
-    /// hardware (`mgba/src/gb/audio.c:493-510`); a no-op for Wave/Noise.
-    pub(crate) fn advance_idle_duty(&mut self, samples: usize) {
-        self.oscillator.advance_silently(samples);
+    /// Accounts an idle square slot's `samples` of silence, whose duty
+    /// position the free-running register catches up over
+    /// (`mgba/src/gb/audio.c:493-510`); a no-op for Wave/Noise.
+    /// The idle channel's sweep keeps ticking at the frame's `sweep_ticks`,
+    /// retuning it as [`Self::render`] does, and a sweep overflow mutes the
+    /// channel, freezing its frequency. The catch-up itself is deferred to
+    /// the next note-on ([`SquareChannel::defer_idle_samples`]'s doc), so the
+    /// silence is rated at the frequency the sweep finally reaches.
+    pub(crate) fn advance_idle_duty(&mut self, samples: usize, sweep_ticks: &[usize]) {
+        if !self.hardware_muted {
+            for _ in sweep_ticks {
+                if !self.oscillator.step_sweep_tick() {
+                    self.hardware_muted = true;
+                    break;
+                }
+            }
+        }
+        self.oscillator.defer_idle_samples(samples);
     }
 
     /// Return whether `ply_endtie` may select this voice
@@ -2116,6 +2139,59 @@ mod tests {
             Some(sweep_byte),
             TestNote::at_key(0),
         )
+    }
+
+    #[test]
+    fn idle_duty_retunes_at_each_sweep_tick_then_freezes_on_overflow() {
+        const FRAME_SAMPLES: usize = 300;
+        const TICK: usize = 100;
+        const MAX_FRAMES_TO_OVERFLOW: usize = 400;
+
+        let start = square_voice(
+            CgbChannelNumber::Square1,
+            Some(upward_sweep(1, 1)),
+            TestNote::at_key(0),
+        );
+        let phase = |voice: &CgbVoice| voice.square_oscillator().expect("square").duty_phase();
+
+        // The tick retunes the rate the whole deferred span is then rated at.
+        let mut idle = start.clone();
+        idle.advance_idle_duty(FRAME_SAMPLES, &[TICK]);
+        let mut deferred = start.clone();
+        assert!(deferred.oscillator.step_sweep_tick());
+        deferred.oscillator.advance_silently(FRAME_SAMPLES);
+        assert_eq!(phase(&idle), phase(&deferred));
+        let mut eager = start.clone();
+        eager.oscillator.advance_silently(TICK);
+        assert!(eager.oscillator.step_sweep_tick());
+        eager.oscillator.advance_silently(FRAME_SAMPLES - TICK);
+        assert_ne!(
+            phase(&idle),
+            phase(&eager),
+            "the catch-up must not be rated at each intermediate frequency"
+        );
+        let mut unswept = start.clone();
+        unswept.advance_idle_duty(FRAME_SAMPLES, &[]);
+        assert_ne!(
+            phase(&idle),
+            phase(&unswept),
+            "the tick must retune the rate"
+        );
+
+        // An overflow mutes the channel; its frequency then stays frozen.
+        let mut overflowing = start;
+        let mut frames = 0;
+        while !overflowing.hardware_muted {
+            assert!(frames < MAX_FRAMES_TO_OVERFLOW, "the sweep must overflow");
+            overflowing.advance_idle_duty(FRAME_SAMPLES, &[TICK]);
+            frames += 1;
+        }
+        let frozen_frequency = overflowing.sweep_frequency();
+        let mut free_running = overflowing.clone();
+        free_running.oscillator.advance_silently(FRAME_SAMPLES);
+        overflowing.advance_idle_duty(FRAME_SAMPLES, &[TICK]);
+        assert_eq!(overflowing.sweep_frequency(), frozen_frequency);
+        assert_eq!(phase(&overflowing), phase(&free_running));
     }
 
     fn sweep_frequency_after(sweep_byte: u8, len: usize, schedule: &[usize]) -> u16 {

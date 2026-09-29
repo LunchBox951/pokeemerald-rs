@@ -23,23 +23,7 @@ fn unity_freq() -> u32 {
 }
 
 fn cgb_keyed_voice(track: usize, key: u8) -> CgbVoice {
-    CgbVoice::square(
-        CgbChannelNumber::Square1,
-        2,
-        None,
-        CgbAdsr::flat(),
-        key,
-        0,
-        FULL_TRACK_VOLUME,
-        FULL_TRACK_VOLUME,
-        TEST_VELOCITY,
-        TIED_GATE_TIME,
-        key,
-        track,
-        0,
-        0,
-        0,
-    )
+    cgb_swept_voice(track, key, None)
 }
 
 fn constant_voice(level: i8, track: usize) -> Voice {
@@ -795,7 +779,6 @@ fn a_note_on_a_slot_a_muted_voice_vacated_does_not_double_count_the_retirement_f
 
     let mut occupied = Mixer::new(MAX_MASTER_VOLUME, 1);
     let mut retired = Mixer::new(MAX_MASTER_VOLUME, 1);
-    assert!(occupied.add_cgb_voice(cgb_keyed_voice(TRACK, OVERFLOW_KEY)));
     assert!(retired.add_cgb_voice(cgb_muted_at_trigger_voice(TRACK, OVERFLOW_KEY)));
     retired.note_off_track(TRACK, OVERFLOW_KEY);
 
@@ -809,9 +792,10 @@ fn a_note_on_a_slot_a_muted_voice_vacated_does_not_double_count_the_retirement_f
             "a muted voice must render silence while it still holds the slot"
         );
         if retired.cgb_voices()[CgbChannelNumber::Square1.slot()].is_none() {
-            let mut idle_rate_reference = cgb_keyed_voice(TRACK, OVERFLOW_KEY);
-            idle_rate_reference.apply_hardware_off_write();
-            assert!(occupied.add_cgb_voice(idle_rate_reference));
+            // The oracle idles through `stop_track`, which counts the frame
+            // once, at the same vacated instant.
+            assert!(occupied.add_cgb_voice(cgb_muted_at_trigger_voice(TRACK, OVERFLOW_KEY)));
+            occupied.stop_track(TRACK);
         }
         occupied.mix_frame(&mut occupied_out);
         frames_to_retire += 1;
@@ -839,5 +823,61 @@ fn a_note_on_a_slot_a_muted_voice_vacated_does_not_double_count_the_retirement_f
         occupied_out, retired_out,
         "a note on a slot a muted voice vacated must not double-count the \
          retirement frame's silence",
+    );
+}
+
+fn cgb_swept_voice(track: usize, key: u8, sweep: Option<u8>) -> CgbVoice {
+    CgbVoice::square(
+        CgbChannelNumber::Square1,
+        2,
+        sweep,
+        CgbAdsr::flat(),
+        key,
+        0,
+        FULL_TRACK_VOLUME,
+        FULL_TRACK_VOLUME,
+        TEST_VELOCITY,
+        TIED_GATE_TIME,
+        key,
+        track,
+        0,
+        0,
+        0,
+    )
+}
+
+/// Mixes `idle_frames` over a Square1 slot `stop_track` vacated from a voice
+/// carrying `sweep`, then plays an unswept note on it and returns that frame.
+fn frame_after_idling_a_stopped_square1(
+    sweep: Option<u8>,
+    key: u8,
+    idle_frames: usize,
+) -> Vec<f32> {
+    const TRACK: usize = 0;
+
+    let mut mixer = Mixer::new(MAX_MASTER_VOLUME, 1);
+    assert!(mixer.add_cgb_voice(cgb_swept_voice(TRACK, key, sweep)));
+    mixer.stop_track(TRACK);
+    let mut out = vec![0.0; SAMPLES_PER_FRAME * 2];
+    for _ in 0..idle_frames {
+        mixer.mix_frame(&mut out);
+    }
+    assert!(mixer.add_cgb_voice(cgb_swept_voice(TRACK, key, None)));
+    mixer.mix_frame(&mut out);
+    out
+}
+
+/// A vacated Square1 slot's hardware sweep keeps ticking and retuning while
+/// it idles, so the next note inherits a different duty phase than an
+/// unswept slot's (`CgbVoice::advance_idle_duty`'s doc).
+#[test]
+fn verify_idle_square1_sweep_keeps_ticking_after_stop_track() {
+    const KEY: u8 = 60;
+    const DOWNWARD_PERIOD_1_SHIFT_1: u8 = 0x19;
+
+    assert_ne!(
+        frame_after_idling_a_stopped_square1(Some(DOWNWARD_PERIOD_1_SHIFT_1), KEY, 3),
+        frame_after_idling_a_stopped_square1(None, KEY, 3),
+        "an idle slot's sweep must retune the duty rate the next note continues",
     );
 }
