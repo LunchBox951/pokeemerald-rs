@@ -1,7 +1,3 @@
-//! Splits the voicegroup test suite by independent validation seam: the
-//! shared voice fixtures, key-split tables, slot-count and codec framing,
-//! `DirectSound` pan, square duty, noise period, and CGB envelope domains.
-
 mod shared;
 
 mod cgb_envelope;
