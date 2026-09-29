@@ -566,14 +566,14 @@ mod tests {
 
     #[test]
     fn a_required_first_battle_rejects_an_outcome_cleared_then_restored_after_the_transition() {
+        const FRAME: ScenarioFrame = ScenarioFrame {
+            buttons: AppButtons::NONE,
+            expected: AppState::Overworld,
+        };
         let mut driver = TransientClearDriver {
             state: AppState::FirstBattle,
             outcome: None,
             frame: 0,
-        };
-        const FRAME: ScenarioFrame = ScenarioFrame {
-            buttons: AppButtons::NONE,
-            expected: AppState::Overworld,
         };
         let scenario = ScenarioSpec {
             initial: AppState::FirstBattle,
