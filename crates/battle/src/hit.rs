@@ -19,7 +19,9 @@ use crate::damage::{
 use crate::dex::Dex;
 use crate::error::BattleError;
 use crate::pokemon::BattlePokemon;
-use crate::secondary::{is_poison_hit_effect, spend_effect_chance_draw};
+use crate::secondary::{
+    is_confuse_hit_effect, is_poison_hit_effect, spend_effect_chance_draw, SecondaryApplication,
+};
 
 const EFFECT_HIT: MoveEffect = MoveEffect(0);
 const EFFECT_SPEED_UP: MoveEffect = MoveEffect(12);
@@ -122,10 +124,12 @@ pub fn ensure_resolvable(dex: &Dex, move_id: MoveId) -> Result<(), BattleError> 
     if move_data.move_type.battle_type().is_none() {
         return Err(BattleError::UnsupportedMoveType(move_id));
     }
-    // `EFFECT_POISON_HIT` resolves through this same damage script while
-    // keeping its own trampoline dispatch in `spend_effect_chance_draw`.
+    // `EFFECT_POISON_HIT` and `EFFECT_CONFUSE_HIT` resolve through this same
+    // damage script while keeping their own trampoline dispatch in
+    // `spend_effect_chance_draw`.
     if !is_ordinary_hit_effect(move_data.effect)
         && !is_poison_hit_effect(move_data.effect)
+        && !is_confuse_hit_effect(move_data.effect)
         && move_id != STRUGGLE
     {
         return Err(BattleError::UnsupportedMoveEffect(move_id));
@@ -427,16 +431,15 @@ pub fn damage_core(
     }
 }
 
-/// [`resolve_hit`]'s full result: the damage verdict, plus whether the
-/// trailing effect-chance draw wants to poison `defender`.
+/// [`resolve_hit`]'s full result: the damage verdict, plus what the trailing
+/// effect-chance draw wants the caller to apply to `defender`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct HitResolution {
     /// The damage verdict.
     pub outcome: HitOutcome,
-    /// Whether the caller should write [`crate::status1::Status1::Poisoned`]
-    /// to `defender`, subject to the caller's own post-damage faint check
-    /// ([`spend_effect_chance_draw`]).
-    pub poisons_defender: bool,
+    /// What the caller should apply to `defender`, subject to the caller's
+    /// own post-damage faint check ([`spend_effect_chance_draw`]).
+    pub secondary_effect: SecondaryApplication,
 }
 
 /// Resolves an ordinary hit against one target.
@@ -464,7 +467,7 @@ pub fn resolve_hit(
     if !accuracy_roll(dex, move_id, attacker, defender, rng)? {
         return Ok(HitResolution {
             outcome: classify_accuracy_failure(dex, move_id, defender)?,
-            poisons_defender: false,
+            secondary_effect: SecondaryApplication::None,
         });
     }
 
@@ -477,8 +480,8 @@ pub fn resolve_hit(
         rng,
     )?;
 
-    let poisons_defender = if move_id == STRUGGLE {
-        false
+    let secondary_effect = if move_id == STRUGGLE {
+        SecondaryApplication::None
     } else {
         // Wonder Guard's block carries `MOVE_RESULT_MISSED`, part of
         // upstream's `MOVE_RESULT_NO_EFFECT` bitmask
@@ -493,7 +496,7 @@ pub fn resolve_hit(
 
     Ok(HitResolution {
         outcome,
-        poisons_defender,
+        secondary_effect,
     })
 }
 

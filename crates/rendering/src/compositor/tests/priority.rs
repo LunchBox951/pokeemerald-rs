@@ -99,7 +99,7 @@ fn sprite_vs_bg_same_priority_sprite_wins() {
 }
 
 #[test]
-fn sprite_lower_priority_number_beats_a_better_indexed_bg() {
+fn bg_with_better_priority_number_beats_a_sprite() {
     let (ts, pal, tm) = opaque_bg_fixture(1);
     let bg_layer = crate::bg::BgLayer::new(&ts, &pal, &tm);
     let slots = [BgSlot::new(bg_layer, 0, 0, 0, 0, true)];
@@ -170,22 +170,26 @@ fn better_sprites_transparent_hole_promotes_a_worse_sprite_over_the_bg() {
     // order to priority 0, so the OBJ layer (still B's color) beats the
     // BG even though B's own priority (2) is worse than the BG's (1)
     // (`mgba/src/gba/renderers/software-obj.c:76-85,116-125`).
+    const OPAQUE_TILE: u16 = 0;
+    const TRANSPARENT_TILE: u16 = 1;
+    const OPAQUE_PALETTE_INDEX: u8 = 15;
+    const B_COLOR: Bgr555 = Bgr555::from_channels(0, 0, 9);
+
     let (ts, pal, tm) = opaque_bg_fixture(7);
     let bg_layer = crate::bg::BgLayer::new(&ts, &pal, &tm);
     let slots = [BgSlot::new(bg_layer, 0, 1, 0, 0, true)];
 
-    // Tile 0 is opaque (drawn by B); tile 1 is transparent (drawn by A).
     let mut two_tiles = [0u8; 64];
-    two_tiles[..32].copy_from_slice(&[0xFFu8; 32]); // tile 0 -> index 15 everywhere
+    two_tiles[..32].fill(0xFF);
     let shared = Tileset::decode(BitDepth::Bpp4, &two_tiles).unwrap();
     let mut colors = [Bgr555::default(); Palette::LEN];
-    colors[15] = Bgr555::from_channels(0, 0, 9); // B's color (blue)
+    colors[usize::from(OPAQUE_PALETTE_INDEX)] = B_COLOR;
     let palette = Palette::new(colors);
 
     let b_opaque_prio2 = OamEntry::new(
         0,
         0,
-        0, // tile 0 (opaque)
+        OPAQUE_TILE,
         0,
         BitDepth::Bpp4,
         false,
@@ -198,7 +202,7 @@ fn better_sprites_transparent_hole_promotes_a_worse_sprite_over_the_bg() {
     let a_transparent_prio0 = OamEntry::new(
         0,
         0,
-        1, // tile 1 (transparent)
+        TRANSPARENT_TILE,
         0,
         BitDepth::Bpp4,
         false,
@@ -214,7 +218,7 @@ fn better_sprites_transparent_hole_promotes_a_worse_sprite_over_the_bg() {
     let fb = compose_frame(&sprites, &slots);
     assert_eq!(
         fb.pixel(0, 0),
-        Some(Bgr555::from_channels(0, 0, 9).to_rgb888()),
+        Some(B_COLOR.to_rgb888()),
         "B's color must beat the BG because A's hole upgrades it to priority 0"
     );
 }

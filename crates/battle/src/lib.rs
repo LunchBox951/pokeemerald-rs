@@ -28,7 +28,7 @@
 //!
 //! Move-effect breadth is the sharp edge of this slice, so it is enforced
 //! rather than assumed: a move is only executable if its `EFFECT_*` runs
-//! one of the battle scripts this crate reproduces — the eight pipelines
+//! one of the battle scripts this crate reproduces — the nine pipelines
 //! `battle::ensure_executable` composes:
 //!
 //! | pipeline | script |
@@ -41,6 +41,7 @@
 //! | [`flag_move`] | `_Splash` / `_FocusEnergy` / `_Charge` ([`flag_move::is_flag_move_effect`]) |
 //! | [`defense_curl`] | `_EffectDefenseCurl` ([`defense_curl::is_defense_curl_effect`]) |
 //! | [`paralyze`] | `BattleScript_EffectParalyze` ([`paralyze::is_paralyze_effect`]) |
+//! | [`confuse`] | `BattleScript_EffectConfuse` ([`confuse::is_confuse_effect`]) |
 //!
 //! The screen is guarded at a two-sided boundary. [`battle::Battle::new`]
 //! rejects a battle whose **opposing** mon knows anything else (its
@@ -224,16 +225,23 @@
 //! guard left unmodelled there; [`secondary`] models it for poison) —
 //! held items, every primary status but
 //! [`status1::Status1::Paralysed`] and [`status1::Status1::Poisoned`]
-//! (confusion, sleep, freeze, burn, toxic — see [`status1`]'s module docs),
-//! weather, multi/double battles, Mist/Substitute/Safeguard/Protect, and the
-//! one ability that still reads a holder's primary status for a poison
-//! landing only — Serene Grace (see [`secondary::ensure_admissible`]) —
-//! and the move effects the eight
+//! (sleep, freeze, burn, toxic — see [`status1`]'s module docs), every
+//! `status2`/`gStatuses3` bit outside [`volatile::Volatiles`]'s four
+//! (Substitute chief among them — see [`volatile`]'s module docs), weather,
+//! multi/double battles, Mist/Substitute/Safeguard/Protect, and the
+//! attacker ability that still reaches an unported chance-doubling for a
+//! landed secondary effect — Serene Grace (see
+//! [`secondary::ensure_admissible`], which screens the *defender*'s primary
+//! status for a poison landing and, since this slice, the *defender*'s Own
+//! Tempo and Shield Dust — never a primary status — for a confusion
+//! landing) —
+//! and the move effects the nine
 //! pipelines still do not cover — the secondary-effect trampolines
 //! ([`secondary::SECONDARY_TRAMPOLINES`] lists all 31, of which
-//! [`secondary::EFFECT_POISON_HIT`] is the one resolved; the other 30 are
-//! not, including [`paralyze::EFFECT_PARALYZE`]'s on-hit sibling
-//! `EFFECT_PARALYZE_HIT`), `EFFECT_RECOIL` for any move but Struggle (Take Down and
+//! [`secondary::EFFECT_POISON_HIT`] and [`secondary::EFFECT_CONFUSE_HIT`] are
+//! the two resolved; the other 29 are not, including
+//! [`paralyze::EFFECT_PARALYZE`]'s on-hit sibling `EFFECT_PARALYZE_HIT`),
+//! `EFFECT_RECOIL` for any move but Struggle (Take Down and
 //! Submission stay refused), OHKO, Counter, Bide, Leech Seed and the rest of the end-of-turn
 //! residual family, and so on.
 //!
@@ -245,6 +253,7 @@
 pub mod ability;
 pub mod accuracy;
 pub mod battle;
+pub mod confuse;
 pub mod critical;
 pub mod damage;
 pub mod defense_curl;
@@ -278,6 +287,7 @@ pub use battle::trainer::{
     shiny_value, trainer_data, trainer_money, TrainerContext, TrainerPartyMon, SHINY_ODDS,
 };
 pub use battle::{Battle, BattleEvent, BattleOutcome, PlayerAction, TurnError};
+pub use confuse::{is_confuse_effect, resolve_confuse_move, ConfuseOutcome, EFFECT_CONFUSE};
 pub use damage::{
     apply_damage_roll, apply_dual_type_effectiveness, apply_stab, apply_type_effectiveness,
     base_damage, calculate_damage, has_stab, BattleRng, DamageInput, MoveCategory, Weather,
@@ -303,8 +313,8 @@ pub use pokemon::{
     SPECIES_SHEDINJA,
 };
 pub use secondary::{
-    is_poison_hit_effect, is_secondary_effect, spend_effect_chance_draw, Trampoline,
-    EFFECT_POISON_HIT,
+    is_confuse_hit_effect, is_poison_hit_effect, is_secondary_effect, spend_effect_chance_draw,
+    SecondaryApplication, Trampoline, EFFECT_CONFUSE_HIT, EFFECT_POISON_HIT,
 };
 pub use stat_change::{
     is_stat_change_effect, stat_change_for_effect, ChangedStat, StatChangeDirection,

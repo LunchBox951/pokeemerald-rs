@@ -7,6 +7,12 @@
 
 use std::path::{Path, PathBuf};
 
+// `WindowsFileIdentity`: the per-object identity a handle exposes regardless
+// of which path opened it, owned by `open` and shared with its verified
+// save-path read, which compares it the same way.
+#[cfg(windows)]
+use super::open::WindowsFileIdentity;
+
 /// A first guess at the per-component limit most POSIX and Windows
 /// filesystems share, in bytes -- not a promise every filesystem keeps:
 /// eCryptfs caps a component at 143, and a symlinked temp root can make a
@@ -335,96 +341,6 @@ fn release(_hold: &mut Hold) {}
 #[cfg(windows)]
 fn release(hold: &mut Hold) {
     drop(hold.file.take());
-}
-
-/// The identity Windows reads off an open handle: volume serial number and
-/// file ID, the one per-object identity it exposes to a handle regardless of
-/// which path was used to open it (`std`'s equivalent,
-/// `MetadataExt::volume_serial_number`/`file_index`, is still gated on the
-/// unstable `windows_by_handle`, rust-lang/rust#63010).
-///
-/// The 128-bit ID `GetFileInformationByHandleEx(FileIdInfo)` returns is
-/// read first: `GetFileInformationByHandle`'s 64-bit file index is not
-/// guaranteed unique on `ReFS` (Dev Drive's file system), whose documented
-/// unique identifier is the 128-bit one. Only a file system that rejects
-/// `FileIdInfo` falls back to the 64-bit index, zero-extended, which is how
-/// NTFS fills the 128-bit form anyway.
-///
-/// Comparing this after opening `path` fresh, rather than trusting the live
-/// hold the way [`is_the_held_file`] does before [`StagedSave::release_hold`]
-/// runs, is what lets [`remove_through_verified_handle`] delete through the
-/// very handle it just verified instead of re-resolving `path` a second time
-/// for the delete itself (issue #1132; approval trail in the dependency
-/// ledger, `README.md`).
-#[cfg(windows)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct WindowsFileIdentity {
-    volume_serial_number: u64,
-    file_id: [u8; 16],
-}
-
-#[cfg(windows)]
-impl WindowsFileIdentity {
-    /// Reads the identity of the object `handle` refers to: the 128-bit
-    /// `FileIdInfo` form, or the 64-bit index where the file system rejects
-    /// that class (`ERROR_INVALID_PARAMETER`, `ERROR_NOT_SUPPORTED`, or
-    /// `ERROR_INVALID_FUNCTION`). Any other failure surfaces.
-    fn of(handle: &std::fs::File) -> std::io::Result<Self> {
-        use std::os::windows::io::AsRawHandle as _;
-        use windows_sys::Win32::Foundation::{
-            ERROR_INVALID_FUNCTION, ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED,
-        };
-        use windows_sys::Win32::Storage::FileSystem::{
-            FileIdInfo, GetFileInformationByHandle, GetFileInformationByHandleEx,
-            BY_HANDLE_FILE_INFORMATION, FILE_ID_INFO,
-        };
-
-        let mut wide = FILE_ID_INFO::default();
-        let size = u32::try_from(std::mem::size_of::<FILE_ID_INFO>())
-            .expect("FILE_ID_INFO is far smaller than u32::MAX");
-        // SAFETY: `handle` stays open for this call, `FileIdInfo` takes a `FILE_ID_INFO`, and `size` is that structure's exact size.
-        let ok = unsafe {
-            GetFileInformationByHandleEx(
-                handle.as_raw_handle(),
-                FileIdInfo,
-                std::ptr::from_mut(&mut wide).cast(),
-                size,
-            )
-        };
-        if ok != 0 {
-            return Ok(Self {
-                volume_serial_number: wide.VolumeSerialNumber,
-                file_id: wide.FileId.Identifier,
-            });
-        }
-        let refused = std::io::Error::last_os_error();
-        let unsupported = refused
-            .raw_os_error()
-            .and_then(|code| u32::try_from(code).ok())
-            .is_some_and(|code| {
-                matches!(
-                    code,
-                    ERROR_NOT_SUPPORTED | ERROR_INVALID_PARAMETER | ERROR_INVALID_FUNCTION
-                )
-            });
-        if !unsupported {
-            return Err(refused);
-        }
-
-        let mut info = BY_HANDLE_FILE_INFORMATION::default();
-        // SAFETY: `handle` stays open for this call, and `info` is a correctly-sized out parameter the API fills in place.
-        let ok = unsafe { GetFileInformationByHandle(handle.as_raw_handle(), &raw mut info) };
-        if ok == 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        let index = (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow);
-        let mut file_id = [0u8; 16];
-        file_id[..8].copy_from_slice(&index.to_le_bytes());
-        Ok(Self {
-            volume_serial_number: u64::from(info.dwVolumeSerialNumber),
-            file_id,
-        })
-    }
 }
 
 /// Opens `path` for [`remove_through_verified_handle`]'s identity check and
