@@ -447,3 +447,74 @@ fn a_failed_warp_leaves_the_live_object_events_intact() {
         (FOOTPRINTS_MAN_NEW_TILE.0, FOOTPRINTS_MAN_NEW_TILE.1 - 1)
     );
 }
+
+/// A successful warp and a successful connection crossing each replace the
+/// live collection with the destination's freshly seeded one: a live edit
+/// made before the transition does not survive it, and every entry points
+/// at the new scene's own resolved template.
+#[test]
+fn a_successful_transition_replaces_the_live_object_events() {
+    use crate::pack_source::PackSource;
+
+    let path = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-live-object-events-{}-{:?}.pack",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    crate::overworld::tests::write_oldale_layout_pack(
+        &path,
+        &["girl_3", "mart_employee", "maniac"],
+    );
+    let leaked_path: &'static std::path::Path = Box::leak(path.clone().into_boxed_path());
+
+    let walk_footprints_man = |phase: &mut OverworldPhase| {
+        let local_id = phase
+            .object_events
+            .object_events_at(FOOTPRINTS_MAN_NEW_TILE.0, FOOTPRINTS_MAN_NEW_TILE.1, 3)
+            .next()
+            .expect("the footprints man is seeded")
+            .template()
+            .local_id;
+        phase
+            .object_events
+            .get_mut(local_id)
+            .unwrap()
+            .state_mut()
+            .walk(Direction::North);
+        local_id
+    };
+    let assert_replaced = |phase: &OverworldPhase, local_id, what: &str| {
+        assert_eq!(phase.map_id, OLDALE_TOWN, "{what} must complete");
+        assert_eq!(
+            phase
+                .object_events
+                .get(local_id)
+                .unwrap()
+                .state()
+                .position(),
+            FOOTPRINTS_MAN_NEW_TILE,
+            "{what} must reseed, discarding the pre-transition live edit"
+        );
+        for template in phase.scene.map_events(OLDALE_TOWN).unwrap().object_events {
+            let entry = phase.object_events.get(template.local_id).unwrap();
+            assert!(
+                std::ptr::eq(entry.template(), template),
+                "{what}: entries must point at the new scene's templates"
+            );
+        }
+    };
+
+    let mut phase = oldale_phase(PlayerState::new((5, 5), 3, Direction::South));
+    phase.pack_source = PackSource::Test(leaked_path);
+    let local_id = walk_footprints_man(&mut phase);
+    phase.warp_to(OLDALE_TOWN, 0);
+    assert_replaced(&phase, local_id, "the warp");
+
+    let mut phase = oldale_phase(PlayerState::new((5, 5), 3, Direction::South));
+    phase.pack_source = PackSource::Test(leaked_path);
+    let local_id = walk_footprints_man(&mut phase);
+    assert!(phase.cross_connection(OLDALE_TOWN, (5, 5)));
+    assert_replaced(&phase, local_id, "the connection crossing");
+
+    let _ = std::fs::remove_file(&path);
+}
