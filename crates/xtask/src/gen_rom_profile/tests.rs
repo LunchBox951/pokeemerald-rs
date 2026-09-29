@@ -908,3 +908,90 @@ fn a_two_bit_sheet_with_an_index_above_fifteen_is_an_entry_shape_error() {
         );
     });
 }
+
+/// A pack entry outside every domain this file tests, so a refusal proves
+/// the domain itself is missing rather than the whole pack being empty.
+fn unrelated_entry() -> pack_format::PackEntry {
+    pack_format::raw_entry("sprite/unrelated".to_owned(), vec![1, 2, 3, 4])
+}
+
+#[test]
+fn a_pack_missing_the_whole_font_domain_is_refused() {
+    let rom = RomFixture::new().emerald_header().finish();
+
+    with_context("no-fonts", &rom, vec![unrelated_entry()], |ctx| {
+        let mut report = Vec::new();
+        let err = super::fonts::locate(ctx, &mut report)
+            .expect_err("a pack with no font/*/glyphs entries must be refused");
+        assert!(
+            matches!(&err, GenRomProfileError::MissingPackEntry(id) if id == "font/*/glyphs"),
+            "{err:?}"
+        );
+        assert!(
+            report.is_empty(),
+            "refused before locating anything: {report:?}"
+        );
+    });
+}
+
+#[test]
+fn a_pack_missing_the_whole_tileset_domain_is_refused() {
+    let rom = RomFixture::new().emerald_header().finish();
+
+    with_context("no-tilesets", &rom, vec![unrelated_entry()], |ctx| {
+        let mut report = Vec::new();
+        let err = super::tilesets::locate(ctx, &mut report)
+            .expect_err("a pack with no tileset/*/tiles entries must be refused");
+        assert!(
+            matches!(&err, GenRomProfileError::MissingPackEntry(id) if id == "tileset/*/tiles"),
+            "{err:?}"
+        );
+        assert!(
+            report.is_empty(),
+            "refused before locating anything: {report:?}"
+        );
+    });
+}
+
+#[test]
+fn a_pack_missing_the_whole_layout_domain_is_refused() {
+    let rom = RomFixture::new().emerald_header().finish();
+
+    with_context("no-layouts", &rom, vec![unrelated_entry()], |ctx| {
+        let mut report = Vec::new();
+        let err = super::layouts::locate(ctx, &mut report)
+            .expect_err("a pack with no layout/*/map entries must be refused");
+        assert!(
+            matches!(&err, GenRomProfileError::MissingPackEntry(id) if id == "layout/*/map"),
+            "{err:?}"
+        );
+        assert!(
+            report.is_empty(),
+            "refused before locating anything: {report:?}"
+        );
+    });
+}
+
+#[test]
+fn a_pack_missing_the_whole_interface_palette_domain_is_refused() {
+    let rom = RomFixture::new().emerald_header().finish();
+
+    with_context(
+        "no-interface-palettes",
+        &rom,
+        vec![unrelated_entry()],
+        |ctx| {
+            let mut report = Vec::new();
+            let err = super::locate_interface_palettes(ctx, &mut report)
+                .expect_err("a pack with no interface/palette/* entries must be refused");
+            assert!(
+                matches!(&err, GenRomProfileError::MissingPackEntry(id) if id == "interface/palette/*"),
+                "{err:?}"
+            );
+            assert!(
+                report.is_empty(),
+                "refused before locating anything: {report:?}"
+            );
+        },
+    );
+}

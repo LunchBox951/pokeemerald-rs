@@ -233,11 +233,23 @@ impl<'a> BgSlot<'a> {
 }
 
 /// A candidate's `(priority, layer_rank)` sort key (lower sorts in front),
-/// per the module docs' ordering. A sprite's `layer_rank` is `0`; a BG's is
-/// `1 + bg_index`.
+/// per the module docs' ordering. A sprite's `layer_rank` is
+/// [`SPRITE_LAYER_RANK`]; a BG's is [`bg_layer_rank`].
 type OrderKey = (u8, u8);
+
+/// [`OrderKey`]'s sprite `layer_rank`: a sprite always ranks ahead of every
+/// BG at equal priority (module docs).
+const SPRITE_LAYER_RANK: u8 = 0;
+
+/// [`OrderKey`]'s BG `layer_rank` for `bg_index`: strictly behind
+/// [`SPRITE_LAYER_RANK`] at equal priority, and ordered by `bg_index` among
+/// BGs (module docs).
+const fn bg_layer_rank(bg_index: u8) -> u8 {
+    1 + bg_index
+}
+
 /// `(order, color, kind, forced_alpha, color_semi_transparent)` — the last
-/// two fields mirror [`SpritePixel`](crate::sprite::SpritePixel)'s
+/// two fields mirror [`SpritePixel`]'s
 /// `semi_transparent`/`color_semi_transparent` split and are always `false`
 /// for a BG candidate.
 type Candidate = (OrderKey, Rgb888, LayerKind, bool, bool);
@@ -496,7 +508,7 @@ fn compose_pixel(
             &mut front,
             &mut next,
             (
-                (pixel.priority, 0),
+                (pixel.priority, SPRITE_LAYER_RANK),
                 pixel.color,
                 LayerKind::Obj,
                 pixel.semi_transparent,
@@ -525,7 +537,7 @@ fn compose_pixel(
             &mut front,
             &mut next,
             (
-                (slot.priority, 1 + slot.bg_index),
+                (slot.priority, bg_layer_rank(slot.bg_index)),
                 color,
                 LayerKind::Bg(slot.bg_index),
                 false,
