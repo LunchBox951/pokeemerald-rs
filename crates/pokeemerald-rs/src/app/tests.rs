@@ -764,12 +764,12 @@ fn start_title_music_failure_emits_its_subsystem_prefix_once_at_the_eprintln_bou
 
 /// A failed menu load after the title fade-wait leaves the restored title
 /// with its music playing.
+///
+/// Needs the real pack, so it is `#[ignore]`d and runs in CI's `real-pack` job.
 #[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn failed_menu_load_after_title_fade_wait_leaves_title_music_playing() {
-    let Ok(title_scene) = crate::title::load_default() else {
-        eprintln!("skipping: no pack");
-        return;
-    };
+    let title_scene = crate::title::load_repo().expect("run `cargo xtask extract` first");
     let missing: &'static std::path::Path =
         Box::leak(std::path::PathBuf::from("/nonexistent/birch/menu.pack").into_boxed_path());
     let mut app = App::assemble(
