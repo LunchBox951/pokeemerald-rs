@@ -20,9 +20,9 @@ pack-format = { path = "../pack-format" }
 
 # The one external crate this package names (`minimal-deps`; S-4, issue
 # #1132): closes `StagedSave::remove_after`'s Windows handle-bound cleanup
-# delete (see `WindowsFileIdentity` in `src/save/file/staging.rs`). Approval
-# trail, exact version, and feature boundary are recorded in the dependency
-# ledger (`README.md`).
+# delete and backs the save path's verified read (see `WindowsFileIdentity`
+# in `src/save/file/open.rs`). Approval trail, exact version, and feature
+# boundary are recorded in the dependency ledger (`README.md`).
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "=0.61.2", default-features = false, features = [
     "Win32_Foundation",
@@ -34,3 +34,21 @@ windows-sys = { version = "=0.61.2", default-features = false, features = [
 # build synthetic font sheets via FontImageRef::new_for_tests. The feature is
 # dev-only, so production builds keep the pack-mediated pairing guarantee.
 assets = { path = "../assets", features = ["test-support"] }
+
+# Test-only widening of the feature boundary above, owner-approved 2026-09-28
+# (`minimal-deps`, PR #1500, for the issue #1399 save-path read): `Win32_Storage_CloudFilters` lets the
+# Windows save-read tests register a sync root and convert a hydrated file into
+# a real cloud-files placeholder. `Win32_System_IO` is the `OVERLAPPED` type
+# `CfConvertToPlaceholder`'s signature requires; `Wdk_Storage_FileSystem` is
+# `RtlSetProcessPlaceholderCompatibilityMode`, which lets the test process see
+# a hydrated placeholder's reparse attribute instead of the disguised plain
+# file. Same crate, same pinned version; never part of the shipped library.
+# Recorded in `README.md`.
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { version = "=0.61.2", default-features = false, features = [
+    "Wdk_Storage_FileSystem",
+    "Win32_Foundation",
+    "Win32_Storage_CloudFilters",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+] }

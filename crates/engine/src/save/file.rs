@@ -15,10 +15,14 @@ mod staging;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
+use self::open::UnusableEntry;
+#[cfg(not(windows))]
 use self::open::{
     open_refused_a_symlink, refuse_an_unusable_entry, refuse_an_unusable_open,
-    refuse_unusable_opens, UnusableEntry,
+    refuse_unusable_opens,
 };
+#[cfg(windows)]
+use self::open::{open_verified_for_read, VerifiedReadError};
 use self::staging::{StagedSave, StagingArea};
 use super::store::{self, SaveStore};
 
@@ -93,6 +97,12 @@ pub enum SaveFileError {
         /// The save path that is not a plain file.
         path: PathBuf,
     },
+    /// On Windows, the save path named a different object once its data
+    /// was read than the one [`SaveFile::read`] had just verified.
+    SavePathRetargeted {
+        /// The save path that changed underneath the read.
+        path: PathBuf,
+    },
     /// The file length does not match [`store::FLASH_IMAGE_LEN`].
     BadLength {
         /// The file whose length was wrong.
@@ -153,8 +163,15 @@ impl std::fmt::Display for SaveFileError {
             Self::SavePathNotAPlainFile { path } => write!(
                 f,
                 "save file: the save path {} is not a plain file -- a directory, socket, \
-                 device, or reparse point there is not a save image, and opening a FIFO \
-                 would wait for a writer that never comes",
+                 or device there is not a save image, and opening a FIFO would wait for a \
+                 writer that never comes",
+                path.display()
+            ),
+            Self::SavePathRetargeted { path } => write!(
+                f,
+                "save file: the save path {} named a different file by the time its data \
+                 was read than the one just verified -- something replaced it in that \
+                 window, so neither is trusted",
                 path.display()
             ),
             Self::BadLength {
@@ -183,6 +200,7 @@ impl std::error::Error for SaveFileError {
             | Self::LockPathNotAPlainFile { .. }
             | Self::SavePathIsAlias { .. }
             | Self::SavePathNotAPlainFile { .. }
+            | Self::SavePathRetargeted { .. }
             | Self::BadLength { .. } => None,
         }
     }
@@ -311,43 +329,26 @@ impl SaveFile {
     ///
     /// # Errors
     ///
-    /// [`SaveFileError::SavePathIsAlias`] if the save path is a symlink;
+    /// [`SaveFileError::SavePathIsAlias`] if the save path is a symlink (on
+    /// Windows, a junction counts too);
     /// [`SaveFileError::SavePathNotAPlainFile`] if it is anything else that
     /// is not a plain file -- a directory, socket, device, or FIFO, which a
-    /// blocking open or read could otherwise wait on forever, or a Windows
-    /// reparse point such as a cloud-files placeholder;
+    /// blocking open or read could otherwise wait on forever (a non-symlink
+    /// Windows reparse point, such as a cloud-files placeholder, is not
+    /// included: it loads through its filter, like any other caller of
+    /// `std::fs::File::open`);
+    /// [`SaveFileError::SavePathRetargeted`] if, on Windows, the path named
+    /// a different object by the time its data was read than the one just
+    /// verified;
     /// [`SaveFileError::Read`] for any other I/O failure than "not found";
     /// [`SaveFileError::BadLength`] if the file is not
     /// [`store::FLASH_IMAGE_LEN`] bytes.
     pub fn read(&self) -> Result<Option<SaveStore>, SaveFileError> {
         use std::io::Read as _;
 
-        // Refuses a symlink or a non-plain file up front, for a fast, typed
-        // error in the ordinary case; `refuse_unusable_opens` and
-        // `refuse_an_unusable_open` below close the window an entry swapped
-        // in between this check and the open could otherwise slip through.
-        refuse_an_unusable_entry(&self.path)
-            .map_err(|unusable| self.unusable_entry_error(unusable))?;
-
-        let mut options = std::fs::OpenOptions::new();
-        options.read(true);
-        refuse_unusable_opens(&mut options);
-        let file = match options.open(&self.path) {
-            Ok(file) => file,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(err) if open_refused_a_symlink(&err) => {
-                return Err(SaveFileError::SavePathIsAlias {
-                    path: self.path.clone(),
-                })
-            }
-            Err(source) => {
-                return Err(SaveFileError::Read {
-                    path: self.path.clone(),
-                    source,
-                })
-            }
+        let Some(file) = self.open_for_read()? else {
+            return Ok(None);
         };
-        refuse_an_unusable_open(&file).map_err(|unusable| self.unusable_entry_error(unusable))?;
 
         let oversized_image_probe_len = store::FLASH_IMAGE_LEN + 1;
         let mut bytes = Vec::with_capacity(oversized_image_probe_len);
@@ -373,6 +374,52 @@ impl SaveFile {
                 expected: store::FLASH_IMAGE_LEN,
                 got: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
             })
+    }
+
+    /// Opens the save path for [`Self::read`], or returns `Ok(None)` if it
+    /// names nothing: a symlink or non-plain file up front, for a fast,
+    /// typed error in the ordinary case; `refuse_unusable_opens` and
+    /// `refuse_an_unusable_open` below close the window an entry swapped in
+    /// between this check and the open could otherwise slip through.
+    #[cfg(not(windows))]
+    fn open_for_read(&self) -> Result<Option<std::fs::File>, SaveFileError> {
+        refuse_an_unusable_entry(&self.path)
+            .map_err(|unusable| self.unusable_entry_error(unusable))?;
+
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true);
+        refuse_unusable_opens(&mut options);
+        let file = match options.open(&self.path) {
+            Ok(file) => file,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(err) if open_refused_a_symlink(&err) => {
+                return Err(SaveFileError::SavePathIsAlias {
+                    path: self.path.clone(),
+                })
+            }
+            Err(source) => {
+                return Err(SaveFileError::Read {
+                    path: self.path.clone(),
+                    source,
+                })
+            }
+        };
+        refuse_an_unusable_open(&file).map_err(|unusable| self.unusable_entry_error(unusable))?;
+        Ok(Some(file))
+    }
+
+    /// Opens the save path for [`Self::read`], or returns `Ok(None)` if it
+    /// names nothing: [`open_verified_for_read`]'s Windows policy, admitting
+    /// a non-symlink reparse point through its filter instead of refusing
+    /// it outright (see that function's docs).
+    #[cfg(windows)]
+    fn open_for_read(&self) -> Result<Option<std::fs::File>, SaveFileError> {
+        open_verified_for_read(&self.path).map_err(|unusable| match unusable {
+            VerifiedReadError::Unusable(unusable) => self.unusable_entry_error(unusable),
+            VerifiedReadError::Retargeted => SaveFileError::SavePathRetargeted {
+                path: self.path.clone(),
+            },
+        })
     }
 
     /// Folds an [`UnusableEntry`] classification of this save path into the
