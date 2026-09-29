@@ -270,10 +270,6 @@ fn run_with_driver(
             };
             retained_outcome = Some(outcome);
         } else if let Some(outcome) = retained_outcome {
-            // Every later frame can clear or overwrite the outcome confirmed
-            // at the transition, and a frame that restores it before the
-            // scenario ends would hide that; require it to still match on
-            // each post-transition frame, not only the last one.
             if driver.first_battle_outcome() != Some(outcome) {
                 return Err(ScenarioError::FirstBattleOutcomeNotRetained { frame });
             }
@@ -472,9 +468,7 @@ mod tests {
         );
     }
 
-    /// A driver whose retained outcome can diverge from the transition frame,
-    /// independently of [`FakeDriver`]'s single shared `first_battle_outcome`
-    /// field, so this regression can script a later frame that clears it.
+    /// Clears the outcome on every frame after the transition.
     struct ClearingDriver {
         state: AppState,
         outcome: Option<BattleOutcome>,
@@ -533,9 +527,7 @@ mod tests {
         );
     }
 
-    /// A driver that sets the outcome on the transition frame, clears it on
-    /// the next frame, and restores it on the final frame, so a check that
-    /// only samples the last frame would pass it.
+    /// Clears the outcome on one intermediate frame and restores it afterwards.
     struct TransientClearDriver {
         state: AppState,
         outcome: Option<BattleOutcome>,
