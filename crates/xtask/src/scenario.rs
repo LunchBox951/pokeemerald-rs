@@ -468,7 +468,6 @@ mod tests {
         );
     }
 
-    /// Clears the outcome on every frame after the transition.
     struct ClearingDriver {
         state: AppState,
         outcome: Option<BattleOutcome>,
@@ -527,7 +526,6 @@ mod tests {
         );
     }
 
-    /// Clears the outcome on one intermediate frame and restores it afterwards.
     struct TransientClearDriver {
         state: AppState,
         outcome: Option<BattleOutcome>,
