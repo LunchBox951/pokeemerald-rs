@@ -1,4 +1,4 @@
-//! Frame pacing (S-1): a fixed-cadence wait analogous to upstream's
+//! Frame pacing: a fixed-cadence wait analogous to upstream's
 //! `WaitForVBlank` (`pokeemerald/src/main.c`).
 //!
 //! The GBA's LCD refreshes every 280896 CPU cycles at ~16.78 MHz — **not** a
@@ -80,16 +80,21 @@ impl FramePacer {
     pub fn tick(&mut self, now: Instant) -> Duration {
         let mut deadline = self.next_deadline.unwrap_or(now);
         if deadline < now {
-            let overdue = now.duration_since(deadline);
+            let overdue_nanos = now.duration_since(deadline).as_nanos();
             let period_nanos = self.period.as_nanos().max(1);
-            // Round up: land on the first boundary *at or after* `now`, not
-            // the last one strictly before it.
-            let mut periods_missed = overdue.as_nanos() / period_nanos;
-            if !overdue.as_nanos().is_multiple_of(period_nanos) {
-                periods_missed += 1;
-            }
-            let skip = u32::try_from(periods_missed).unwrap_or(u32::MAX).max(1);
-            deadline += self.period * skip;
+            // A phase remainder, not a periods-missed count multiplied back
+            // up: that count can exceed `u32`, `Duration` multiplication's
+            // widest multiplier, and silently under-advance the deadline.
+            let remainder_nanos = overdue_nanos % period_nanos;
+            let remainder = Duration::new(
+                u64::try_from(remainder_nanos / 1_000_000_000).unwrap_or(u64::MAX),
+                u32::try_from(remainder_nanos % 1_000_000_000).unwrap_or(0),
+            );
+            deadline = if remainder.is_zero() {
+                now
+            } else {
+                now + self.period.saturating_sub(remainder)
+            };
         }
         let wait = deadline - now;
         self.next_deadline = Some(deadline + self.period);
@@ -104,13 +109,26 @@ impl Default for FramePacer {
 }
 
 #[cfg(test)]
+impl FramePacer {
+    /// Whether [`FramePacer::tick`] has ever been called (i.e. a deadline
+    /// has been scheduled). Test-only introspection used to assert,
+    /// deterministically, that a caller never consults the pacer at all —
+    /// see `window::tests::headless_wait_for_next_frame_never_consults_pacer`,
+    /// which pins that in place of a wall-clock timing assertion that could
+    /// flake under scheduler pressure.
+    pub(crate) fn has_ticked(&self) -> bool {
+        self.next_deadline.is_some()
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn frame_period_matches_gba_hardware_cadence() {
         // 280896 cycles at 16.777216 MHz, expressed precisely in
-        // nanoseconds per the issue's formula: 280896 * 1e9 / 16_777_216.
+        // nanoseconds: 280896 * 1e9 / 16_777_216.
         assert_eq!(GBA_FRAME_PERIOD, Duration::from_nanos(16_742_706));
         // And, in Hz, ~59.7275 - not a rounded 60.
         let hz = 1.0 / GBA_FRAME_PERIOD.as_secs_f64();
@@ -195,5 +213,19 @@ mod tests {
         let t0 = Instant::now();
         pacer.tick(t0);
         assert_eq!(pacer.tick(t0), period);
+    }
+
+    #[test]
+    fn catch_up_beyond_u32_periods_reaches_next_boundary_in_one_tick() {
+        let period = Duration::from_nanos(2);
+        let mut pacer = FramePacer::with_period(period);
+        let t0 = Instant::now();
+        assert_eq!(pacer.tick(t0), Duration::ZERO);
+
+        let very_late = t0 + Duration::from_nanos(2 * u64::from(u32::MAX) + 3);
+
+        let wait = pacer.tick(very_late);
+        assert_eq!(wait, Duration::from_nanos(1));
+        assert_eq!(pacer.tick(very_late + wait), period);
     }
 }

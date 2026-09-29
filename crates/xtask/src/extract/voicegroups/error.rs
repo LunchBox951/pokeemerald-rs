@@ -1,0 +1,251 @@
+use std::fmt;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum VoiceGroupError {
+    MissingVoiceGroupDeclaration,
+    InvalidVoiceGroupStartingNote,
+    MalformedVoiceSlot {
+        group: String,
+        line: String,
+    },
+    PanOverrideOutOfRange {
+        group: String,
+        pan: u8,
+    },
+    SquareDutyOutOfRange {
+        group: String,
+        duty: u8,
+    },
+    CgbEnvelopeOutOfRange {
+        group: String,
+        operand: &'static str,
+        value: u8,
+        maximum: u8,
+    },
+    NoisePeriodOutOfRange {
+        group: String,
+        period: u8,
+    },
+    CgbLengthOutOfRange {
+        group: String,
+        length: u8,
+    },
+    UnknownVoiceMacro {
+        group: String,
+        macro_name: String,
+    },
+    MalformedReference {
+        group: String,
+        reference: String,
+        expected_prefix: &'static str,
+    },
+    MalformedProgrammableWaveIndex {
+        group: String,
+        reference: String,
+    },
+    MissingKeySplitLabel,
+    InvalidKeySplitStartingNote,
+    SplitBeforeKeySplit,
+    InvalidSplitOperands {
+        table: String,
+    },
+    SplitChildSlotOutOfRange {
+        table: String,
+        slot: u8,
+    },
+    SplitOutOfOrder {
+        table: String,
+    },
+    UnknownKeySplitMacro {
+        macro_name: String,
+    },
+    DuplicateKeySplitTable {
+        label: String,
+    },
+    KeySplitTableTooLong {
+        label: String,
+        expanded_len: usize,
+    },
+    DanglingVoiceGroupReference {
+        referrer: String,
+        target: String,
+    },
+    DanglingKeySplitTableReference {
+        referrer: String,
+        target: String,
+    },
+    Cycle(Vec<String>),
+    NestedIndirection {
+        parent: String,
+        child: String,
+    },
+    TooManySlots {
+        group: String,
+        starting_note: u8,
+        slot_count: usize,
+    },
+    PackIdTooLong {
+        group: String,
+        id_len: usize,
+    },
+    UnindexedLinkOrderFile(String),
+}
+
+impl fmt::Display for VoiceGroupError {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one exhaustive match keeps every voicegroup error message together"
+    )]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingVoiceGroupDeclaration => {
+                write!(f, "no `voice_group` declaration line found")
+            }
+            Self::InvalidVoiceGroupStartingNote => {
+                write!(
+                    f,
+                    "`voice_group` declaration's starting_note operand is not a valid u8"
+                )
+            }
+            Self::MalformedVoiceSlot { group, line } => {
+                write!(f, "voicegroup `{group}`: malformed line: `{line}`")
+            }
+            Self::PanOverrideOutOfRange { group, pan } => write!(
+                f,
+                "voicegroup `{group}`: DirectSound pan override {pan} is outside the valid \
+                 range 1..=127"
+            ),
+            Self::SquareDutyOutOfRange { group, duty } => write!(
+                f,
+                "voicegroup `{group}`: square duty cycle selector {duty} is outside the valid \
+                 range 0..=3"
+            ),
+            Self::CgbEnvelopeOutOfRange {
+                group,
+                operand,
+                value,
+                maximum,
+            } => write!(
+                f,
+                "voicegroup `{group}`: CGB envelope {operand} {value} is outside the valid \
+                 range 0..={maximum}"
+            ),
+            Self::NoisePeriodOutOfRange { group, period } => write!(
+                f,
+                "voicegroup `{group}`: noise period {period} is outside the valid range 0..=1"
+            ),
+            Self::CgbLengthOutOfRange { group, length } => write!(
+                f,
+                "voicegroup `{group}`: CGB length operand {length} is outside the valid range \
+                 0..=127"
+            ),
+            Self::UnknownVoiceMacro { group, macro_name } => {
+                write!(f, "voicegroup `{group}`: unrecognized macro `{macro_name}`")
+            }
+            Self::MalformedReference {
+                group,
+                reference,
+                expected_prefix,
+            } => write!(
+                f,
+                "voicegroup `{group}`: reference `{reference}` does not start with expected \
+                 prefix `{expected_prefix}`"
+            ),
+            Self::MalformedProgrammableWaveIndex { group, reference } => write!(
+                f,
+                "voicegroup `{group}`: programmable-wave symbol `{reference}` does not end in a \
+                 sample number"
+            ),
+            Self::MissingKeySplitLabel => {
+                write!(
+                    f,
+                    "keysplit_tables.inc: `keysplit` line is missing its label"
+                )
+            }
+            Self::InvalidKeySplitStartingNote => write!(
+                f,
+                "keysplit_tables.inc: `keysplit` declaration's starting_note operand is not a \
+                 valid u8"
+            ),
+            Self::SplitBeforeKeySplit => write!(
+                f,
+                "keysplit_tables.inc: `split` line appears before any `keysplit` declaration"
+            ),
+            Self::InvalidSplitOperands { table } => write!(
+                f,
+                "keysplit table `{table}`: malformed `split` line (index/ending_note not a valid \
+                 u8)"
+            ),
+            Self::SplitChildSlotOutOfRange { table, slot } => write!(
+                f,
+                "keysplit table `{table}`: `split` selects child slot {slot}, past the last voice \
+                 slot {}",
+                super::VOICE_SLOT_COUNT - 1
+            ),
+            Self::SplitOutOfOrder { table } => write!(
+                f,
+                "keysplit table `{table}`: a `split` line's ending_note is earlier than the \
+                 running note cursor"
+            ),
+            Self::UnknownKeySplitMacro { macro_name } => {
+                write!(f, "keysplit_tables.inc: unrecognized macro `{macro_name}`")
+            }
+            Self::DuplicateKeySplitTable { label } => write!(
+                f,
+                "keysplit_tables.inc: duplicate `keysplit` label `{label}`"
+            ),
+            Self::KeySplitTableTooLong {
+                label,
+                expanded_len,
+            } => write!(
+                f,
+                "keysplit table `{label}`: expanded length {expanded_len} exceeds the maximum of {}",
+                super::VOICE_SLOT_COUNT
+            ),
+            Self::DanglingVoiceGroupReference { referrer, target } => write!(
+                f,
+                "voicegroup `{referrer}` references unknown voicegroup `{target}` (no matching \
+                 `voice_group {target}` declaration found under sound/voicegroups/)"
+            ),
+            Self::DanglingKeySplitTableReference { referrer, target } => write!(
+                f,
+                "voicegroup `{referrer}` references unknown keysplit table `{target}` (no \
+                 matching `keysplit {target}` block found in keysplit_tables.inc)"
+            ),
+            Self::Cycle(path) => write!(
+                f,
+                "voicegroup reference cycle detected: {}",
+                path.join(" -> ")
+            ),
+            Self::NestedIndirection { parent, child } => write!(
+                f,
+                "voicegroup `{parent}` references `{child}` as a key-split/rhythm child, but \
+                 `{child}` itself contains a key-split/rhythm slot -- upstream's ply_note aborts \
+                 rather than recursing through a second level of indirection"
+            ),
+            Self::TooManySlots {
+                group,
+                starting_note,
+                slot_count,
+            } => write!(
+                f,
+                "voicegroup `{group}`: starting_note {starting_note} + {slot_count} slots \
+                 exceeds the maximum of {}",
+                super::VOICE_SLOT_COUNT
+            ),
+            Self::PackIdTooLong { group, id_len } => write!(
+                f,
+                "voicegroup `{group}`: referenced pack id of {id_len} bytes exceeds the pack \
+                 format's u16 id length field maximum of {}",
+                u16::MAX
+            ),
+            Self::UnindexedLinkOrderFile(path) => write!(
+                f,
+                "sound/voice_groups.inc links `sound/voicegroups/{path}`, but no parsed \
+                 voicegroup declares that file (directory walk vs. linker order mismatch)"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for VoiceGroupError {}

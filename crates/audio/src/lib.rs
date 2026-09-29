@@ -2,29 +2,66 @@
 //!
 //! This crate re-implements the *behaviour* of `pokeemerald`'s M4A sound
 //! driver `(behavioral-fidelity)` — no GBA emulation, no transliterated C
-//! `(no-verbatim)`. Slice 1 covers the DirectSound (PCM) music path:
+//! `(no-verbatim)`. Slice 1 covers the DirectSound (PCM) music path; slice 2
+//! adds the four CGB PSG channels, LFO/vibrato, and pattern execution:
 //!
 //! - [`sequence`] — the typed track model and the decoder that turns MP2K's
 //!   byte-coded command stream into [`Event`]s once, ahead of playback.
-//! - [`song`] — a loaded [`Song`] (voicegroup + decoded tracks).
-//! - [`envelope`] — the per-voice ADSR state machine.
+//! - [`song`] — a loaded [`Song`] (voicegroup + decoded tracks); its
+//!   [`song::Instrument`] selects a DirectSound sample or a CGB PSG kind.
+//! - [`envelope`] — the per-voice DirectSound ADSR state machine.
 //! - [`voice`] — one playing DirectSound [`Voice`]: pitch-stepped, interpolated
 //!   sample playback shaped by an envelope.
-//! - [`mixer`] — the software [`Mixer`] that sums voices to interleaved stereo
-//!   `f32` and clips.
+//! - [`cgb_pitch`] — MIDI key → CGB hardware frequency register / noise
+//!   control byte.
+//! - [`psg`] — the four CGB PSG waveform generators (square/wave/noise).
+//! - [`cgb_envelope`] — the CGB hardware's coarse `0..=15` envelope, plus its
+//!   `CgbPan`/`CgbModVol` stereo-routing helpers.
+//! - [`cgb_voice`] — one playing CGB [`cgb_voice::CgbVoice`], tying an
+//!   oscillator, envelope, and panning together.
+//! - [`mixer`] — the software [`Mixer`] that sums DirectSound and CGB voices
+//!   to interleaved stereo `f32` and clips.
 //! - [`sequencer`] — the owned [`Sequencer`] tying it together: the tick engine
-//!   plus an offline, device-free rendering path ([`Sequencer::mix_into`]).
+//!   (including LFO/vibrato, `PATT`/`PEND`/`REPT` pattern execution, and
+//!   `MEMACC`) plus an offline, device-free rendering path
+//!   ([`Sequencer::mix_into`]).
 //! - [`pitch`] — the MIDI-key → frequency table and the fixed-point step math.
+//!
+//! Slice 3 adds key-split (`TONEDATA_TYPE_SPL`) and rhythm
+//! (`TONEDATA_TYPE_RHY`) voice indirection ([`song::KeySplit`],
+//! [`song::Rhythm`]), fixed-rate DirectSound (`TONEDATA_TYPE_FIX`,
+//! [`song::ToneData::fixed`]), and the `xIECV`/`xIECL` pseudo-echo `XCMD`s
+//! for both DirectSound and CGB voices.
+//!
+//! Slice 4 (S-3, issue #185) adds the master-mix reverb/pseudo-echo stage
+//! ([`reverb`], wired into [`mixer::Mixer`]) — a song's [`song::Song::reverb`]
+//! level seeds a feedback delay line the mixer reads before each frame's
+//! voices mix additively on top of it, producing the game's characteristic
+//! decaying echo. Continuous, frame-driven playback (the App advancing one
+//! frame of audio per game frame and looping via the song's own internal
+//! jump commands, per Discussion #227's owner decision) is the integration
+//! crate's job, not this one's — see `pokeemerald_rs::music`.
+//!
+//! Slice 5 (S-3, issue #394) executes the memory accumulator (`MEMACC`,
+//! `ply_memacc`) in the [`sequencer`]: both the cell-mutating ops and the
+//! conditional-jump family run, against an accumulator area owned per
+//! [`Sequencer`] rather than upstream's single global — see [`sequencer`]'s
+//! module docs for that divergence and why canonical song data cannot
+//! observe it.
 //!
 //! Everything renders at exactly [`pitch::MIXER_RATE`] (13379 Hz), the rate the
 //! `platform` producer expects; a unit test pins the two together.
 //!
 //! ## Out of scope for this slice
 //!
-//! CGB PSG channels (square/wave/noise), reverb, SFX priority/interruption and
-//! voice stealing, the M4A player command interface, compressed/fixed-rate
-//! waves, LFO/vibrato, and patterns (`PATT`/`PEND`/`REPT`). Commands the engine
-//! does not yet execute are still *decoded* so the byte stream stays in sync.
+//! Cross-song SFX priority/interruption (which needs the M4A player command
+//! interface `MPlayStart`/`m4aSongNumStart` layers this crate does not model)
+//! and compressed/reversed DirectSound waves. Within a single song,
+//! `ply_note`'s priority-driven channel allocation *is* implemented — see
+//! [`mixer`]'s module docs. `PORT` and every `XCMD` sub-command other than
+//! `xIECV`/`xIECL` are still only *decoded*, not executed, so the byte
+//! stream stays in sync; `tools/mid2agb` emits none of them, so no
+//! canonical song reaches those arms ([`sequencer`]'s module docs).
 
 // This crate's docs cite upstream C symbols and hardware names heavily
 // (DirectSound, MP2K, SongHeader, …); backticking every prose mention adds
@@ -32,22 +69,35 @@
 // close names (volMR/volML, keyM/pitM) taken verbatim from the reference.
 #![allow(clippy::doc_markdown, clippy::similar_names)]
 
+pub mod cgb_envelope;
+pub mod cgb_pitch;
+pub mod cgb_voice;
 pub mod envelope;
 pub mod mixer;
 pub mod pitch;
+pub mod psg;
 pub mod sample;
 pub mod sequence;
 pub mod sequencer;
 pub mod song;
 pub mod voice;
 
+/// The master-mix reverb/pseudo-echo stage (S-3, issue #185). Crate-private:
+/// a [`song::Song`]'s [`song::Song::reverb`] level is the only public knob —
+/// see [`reverb::Reverb`]'s own docs and [`mixer::Mixer::with_reverb_level`].
+mod reverb;
+
+pub use cgb_envelope::{CgbAdsr, CgbEnvelope};
+pub use cgb_voice::CgbVoice;
 pub use envelope::{Adsr, Envelope, Phase};
 pub use mixer::{Mixer, DEFAULT_MASTER_VOLUME, DEFAULT_MAX_VOICES};
 pub use pitch::{MIXER_RATE, SAMPLES_PER_FRAME};
 pub use sample::WaveData;
 pub use sequence::{decode_track, DecodeError, Event};
 pub use sequencer::Sequencer;
-pub use song::{Song, ToneData};
+pub use song::{
+    rhythm_pan_from_pan_sweep, Instrument, KeySplit, Rhythm, RhythmChild, Song, ToneData, KEY_SLOTS,
+};
 pub use voice::Voice;
 
 #[cfg(test)]
@@ -79,7 +129,11 @@ mod tests {
             13_697_024,
             vec![80; SAMPLES_PER_FRAME * 4],
         ));
-        let song = Song::new(vec![ToneData::new(wave, Adsr::flat())], vec![events], 150);
+        let song = Song::new(
+            vec![Instrument::DirectSound(ToneData::new(wave, Adsr::flat()))],
+            vec![events],
+            150,
+        );
         let mut seq = Sequencer::new(song);
 
         // Render two frames' worth of audio.

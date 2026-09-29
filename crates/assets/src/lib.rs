@@ -11,21 +11,48 @@
 //! (see [`species_names`], [`move_names`], [`abilities`]), the experience
 //! growth curves (see [`experience`]), the per-map wild encounter tables (see
 //! [`wild_encounters`]), the trainer roster and parties (see [`trainers`]),
-//! the map layout geometry (see [`map_layouts`]), and the map headers,
-//! groups, and connections (see [`map_headers`]); more data follows as the
-//! crate fills out.
+//! the map layout geometry (see [`map_layouts`]), the map headers, groups,
+//! and connections (see [`map_headers`]), the per-map object/warp/coord/
+//! bg events (see [`map_events`]), and the fresh-save object-hide flag set
+//! `EventScript_ResetAllMapFlags` applies (see [`new_game_flags`]); more
+//! data follows as the crate fills out.
+//!
+//! The backend-neutral song/voicegroup/sample pack schemas both
+//! audio-extraction backends emit into (S-4, issue #180) live in [`audio`].
+//!
+//! Binary graphics (tileset tile graphics, palettes, player/NPC sprite
+//! sheets, font glyph sheets, text-window border frames) and map layout
+//! grid/border bytes are not compiled into this crate as Rust source,
+//! unlike the tables above — per Discussion #71 policy A they live in a
+//! local, gitignored asset pack that `cargo xtask extract` produces (issue
+//! #81); [`pack`] is this crate's typed loader over that pack.
+//! [`map_layouts`], [`metatile_attributes`], and [`fonts`] provide the
+//! decode layer those bytes feed once read out of the pack:
+//! [`map_layouts::LayoutGrid`]/[`map_layouts::BorderGrid`] for a layout's
+//! metatile grid, [`metatile_attributes::MetatileAttributeTable`] for a
+//! tileset's per-metatile behavior/layer-type attributes, and
+//! [`fonts::FontGlyphSheet`] for a Latin font's per-glyph bitmap (its
+//! per-glyph advance widths, unlike the bitmaps, are ordinary Rust data —
+//! see that module's docs).
 
 pub mod abilities;
+pub mod audio;
 pub mod battle_moves;
 pub mod egg_moves;
 pub mod error;
 pub mod evolution;
 pub mod experience;
+pub mod fonts;
 pub mod items;
 pub mod level_up_learnsets;
+pub mod map_events;
 pub mod map_headers;
 pub mod map_layouts;
+pub mod metatile_attributes;
 pub mod move_names;
+pub mod new_game_flags;
+pub mod object_event_flags;
+pub mod pack;
 pub mod species;
 pub mod species_names;
 pub mod tmhm_learnsets;
@@ -34,6 +61,15 @@ pub mod type_chart;
 pub mod wild_encounters;
 
 pub use abilities::{Abilities, AbilityData, ABILITIES_COUNT};
+// `audio::VoiceGroupId`/`audio::SampleId` are re-exported here alongside the
+// three schema types they identify; `audio`'s own internal cross-references
+// between them stay reachable through the `audio` module path too.
+pub use audio::{
+    AudioError, DirectSoundMode, DirectSoundSample, DirectSoundVoice, Envelope, KeySplitVoice,
+    NoiseVoice, ProgrammableWave, ProgrammableWaveVoice, RhythmVoice, Sample, SampleId, Song,
+    SongEvent, Square1Voice, Square2Voice, VoiceEntry, VoiceGroup, VoiceGroupId, MAX_TRACKS,
+    VOICE_SLOT_COUNT,
+};
 pub use battle_moves::{
     MoveData, MoveEffect, MoveFlags, MoveId, MoveTable, MoveTarget, MoveType, MOVES_COUNT,
 };
@@ -44,7 +80,16 @@ pub use egg_moves::{
 pub use error::AssetError;
 pub use evolution::{EvoMethod, Evolution, EvolutionTable};
 pub use experience::{experience_for_level, MAX_LEVEL};
+pub use fonts::{
+    FontGlyphSheet, FontId, FontImageRef, Glyph, GlyphSource, OwnedFontGlyphSheet, GLYPH_COLUMNS,
+    GLYPH_COUNT, GLYPH_PIXELS, GLYPH_ROWS, GLYPH_SIZE, SHEET_HEIGHT, SHEET_WIDTH,
+};
 pub use level_up_learnsets::{LevelUpLearnsets, LevelUpMove, SPECIES_COUNT};
+pub use map_events::{
+    BgEvent, BgEventKind, CoordEvent, CoordEventKind, CoordWeather, FacingDirection, MapEvents,
+    MapEventsTable, MovementType, ObjectEvent, SecretBaseId, TrainerType, WarpDestination,
+    WarpEvent, WarpId, MAP_EVENTS_COUNT,
+};
 pub use map_headers::{
     BattleScene, Direction, MapConnection, MapGroup, MapHeader, MapHeaderTable, MapType, MusicId,
     RegionMapSectionId, Weather, MAP_COUNT, MAP_GROUP_COUNT,
@@ -53,6 +98,12 @@ pub use map_layouts::{
     BorderGrid, LayoutGrid, LayoutId, LayoutTable, MapLayout, MetatileCell, BORDER_CELLS,
     BORDER_HEIGHT, BORDER_WIDTH, LAYOUT_COUNT,
 };
+pub use metatile_attributes::{MetatileAttribute, MetatileAttributeTable, MetatileLayerType};
+pub use new_game_flags::{
+    FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_RIVAL_BEDROOM, RESET_MAP_FLAGS,
+    TRUCK_INTRO_FLAGS_FEMALE, TRUCK_INTRO_FLAGS_MALE, TRUCK_INTRO_VARS_FEMALE,
+    TRUCK_INTRO_VARS_MALE,
+};
 
 // `items::ItemId` is the full item-table identifier; it is intentionally *not*
 // re-exported at the crate root to avoid clashing with `species::ItemId` (the
@@ -60,12 +111,13 @@ pub use map_layouts::{
 // `items` module path.
 pub use items::{BattleUsage, HoldEffect, ItemData, ItemTable, ItemType, Pocket, ITEMS_COUNT};
 pub use move_names::MoveNames;
+pub use pack::{AssetPack, EntryKind, ImageRef, PackError, PaletteRef, TilesetHandle};
 pub use species::{
     AbilityId, BaseStats, BodyColor, EggGroup, EvYield, GenderRatio, GrowthRate, ItemId, SpeciesId,
     SpeciesTable,
 };
 pub use species_names::SpeciesNames;
-pub use tmhm_learnsets::{TmHmLearnsets, TmHmSlot};
+pub use tmhm_learnsets::{is_hm_move, TmHmLearnsets, TmHmSlot};
 pub use trainers::{
     AiFlags, EncounterMusic, TrainerClass, TrainerData, TrainerId, TrainerMonItemCustomMoves,
     TrainerMonItemDefaultMoves, TrainerMonNoItemCustomMoves, TrainerMonNoItemDefaultMoves,

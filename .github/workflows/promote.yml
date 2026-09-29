@@ -42,6 +42,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Create least-privilege promotion App token
         id: app-token
@@ -72,26 +74,36 @@ jobs:
       - name: Reconcile or merge promotion
         env:
           APP_LOGIN: ${{ steps.app-token.outputs.app-slug }}[bot]
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           OPERATION: ${{ steps.operation.outputs.operation }}
           REPOSITORY: ${{ github.repository }}
           REPOSITORY_OWNER: ${{ github.repository_owner }}
         run: |
           set -euo pipefail
-
-          status_creator() {
-            local sha="$1" context="$2"
-            gh api "repos/${REPOSITORY}/commits/${sha}/status" \
-              --jq '[.statuses[] | select(.context == "'"${context}"'" and .state == "success")][0].creator.login // empty'
-          }
+          # A failure inside a function called via command substitution
+          # (e.g. `x="$(some_func)"`) must abort the run, not read as "$()".
+          shopt -s inherit_errexit
 
           branch_sha() {
             gh api "repos/${REPOSITORY}/branches/$1" --jq '.commit.sha'
           }
 
+          if [[ -z "${APP_SLUG}" ]]; then
+            echo "Promotion App token has no slug; refusing to run without a configured App identity." >&2
+            exit 1
+          fi
+
+          # The configured App is one identity behind two representations:
+          # REST uses "<slug>[bot]" (APP_LOGIN); GraphQL uses "app/<slug>".
+          is_promotion_app_author() {
+            [[ "$1" == "${APP_LOGIN}" || "$1" == "app/${APP_SLUG}" ]]
+          }
+
           require_preceding_promotion() {
             local source="$1" source_sha="$2" preceding="$3"
-            gh pr list \
+            local candidate_logins candidate_login_lines candidate_login count=0
+            candidate_logins="$(gh pr list \
               --repo "${REPOSITORY}" \
               --state merged \
               --base "${source}" \
@@ -99,26 +111,28 @@ jobs:
               --limit 100 \
               --json author,baseRefName,headRefName,mergeCommit \
               --jq '[.[] | select(
-                .author.login == "'"${APP_LOGIN}"'" and
                 .baseRefName == "'"${source}"'" and
                 .headRefName == "'"${preceding}"'" and
                 .mergeCommit.oid == "'"${source_sha}"'"
-              )] | length'
+              ) | .author.login]')"
+            # A jq failure here must abort, not silently count as zero matches.
+            candidate_login_lines="$(jq -r '.[]' <<<"${candidate_logins}")"
+            while IFS= read -r candidate_login; do
+              if [[ -n "${candidate_login}" ]] && is_promotion_app_author "${candidate_login}"; then
+                count=$((count + 1))
+              fi
+            done <<<"${candidate_login_lines}"
+            echo "${count}"
           }
 
           open_promotion() {
-            local target="$1" source source_sha target_sha ahead existing labels body
+            local target="$1" source source_sha target_sha ahead existing_json
+            local existing existing_author labels body preceding provenance
             source="$(python3 scripts/channel_ladder.py source-for "${target}")"
             source_sha="$(branch_sha "${source}")"
             target_sha="$(branch_sha "${target}")"
 
-            if [[ "${target}" == "unstable" ]]; then
-              creator="$(status_creator "${source_sha}" release-readiness)"
-              if [[ "${creator}" != "github-actions[bot]" ]]; then
-                echo "${source}@${source_sha} has no owner-recorded release-readiness success; unstable remains dormant."
-                return 0
-              fi
-            else
+            if [[ "${target}" != "unstable" ]]; then
               preceding="$(python3 scripts/channel_ladder.py source-for "${source}")"
               provenance="$(require_preceding_promotion "${source}" "${source_sha}" "${preceding}")"
               if [[ "${provenance}" != "1" ]]; then
@@ -133,14 +147,20 @@ jobs:
               return 0
             fi
 
-            existing="$(gh pr list \
+            existing_json="$(gh pr list \
               --repo "${REPOSITORY}" \
               --state open \
               --base "${target}" \
               --head "${source}" \
-              --json headRepository,number \
-              --jq '[.[] | select(.headRepository.nameWithOwner == "'"${REPOSITORY}"'")] | length')"
+              --json author,headRepository,number \
+              --jq '[.[] | select(.headRepository.nameWithOwner == "'"${REPOSITORY}"'")]')"
+            existing="$(jq -r 'length' <<<"${existing_json}")"
             if [[ "${existing}" == "1" ]]; then
+              existing_author="$(jq -r '.[0].author.login' <<<"${existing_json}")"
+              if ! is_promotion_app_author "${existing_author}"; then
+                echo "Existing ${source}->${target} PR is owned by ${existing_author}, not ${APP_LOGIN}; refusing to adopt it." >&2
+                return 1
+              fi
               echo "${source}->${target} promotion PR already open."
               return 0
             fi
@@ -166,7 +186,7 @@ jobs:
           }
 
           merge_unstable() {
-            local pr_count pr_number pr_json head_sha base_sha creator unresolved merge_state
+            local pr_count pr_number pr_json head_sha base_sha unresolved merge_state
             pr_count="$(gh pr list \
               --repo "${REPOSITORY}" \
               --state open \
@@ -192,8 +212,11 @@ jobs:
               --jq '[.[] | select(.headRepository.nameWithOwner == "'"${REPOSITORY}"'")][0].number')"
             pr_json="$(gh pr view "${pr_number}" --repo "${REPOSITORY}" --json author,baseRefName,baseRefOid,headRefName,headRefOid,isDraft,mergeStateStatus,statusCheckRollup)"
 
-            if [[ "$(jq -r '.author.login' <<<"${pr_json}")" != "${APP_LOGIN}" \
-              || "$(jq -r '.baseRefName' <<<"${pr_json}")" != "unstable" \
+            if ! is_promotion_app_author "$(jq -r '.author.login' <<<"${pr_json}")"; then
+              echo "PR #${pr_number} is not the expected App-created ready dev->unstable promotion." >&2
+              return 1
+            fi
+            if [[ "$(jq -r '.baseRefName' <<<"${pr_json}")" != "unstable" \
               || "$(jq -r '.headRefName' <<<"${pr_json}")" != "dev" \
               || "$(jq -r '.isDraft' <<<"${pr_json}")" != "false" ]]; then
               echo "PR #${pr_number} is not the expected App-created ready dev->unstable promotion." >&2
@@ -204,12 +227,6 @@ jobs:
             base_sha="$(jq -r '.baseRefOid' <<<"${pr_json}")"
             if [[ "${head_sha}" != "$(branch_sha dev)" || "${base_sha}" != "$(branch_sha unstable)" ]]; then
               echo "PR #${pr_number} moved while being evaluated; wait for the next scheduled attempt."
-              return 0
-            fi
-
-            creator="$(status_creator "${head_sha}" release-readiness)"
-            if [[ "${creator}" != "github-actions[bot]" ]]; then
-              echo "Current dev head lacks owner-recorded release-readiness; not merging."
               return 0
             fi
 

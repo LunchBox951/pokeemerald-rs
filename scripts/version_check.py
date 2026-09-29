@@ -16,7 +16,17 @@ exactly four dot-separated non-negative integers, e.g.::
 Git tags / GitHub Releases add the ``v`` prefix; the ``VERSION`` file never
 carries it.
 
-What this script checks:
+Two validation modes are available:
+
+``transition`` (the default) validates one product change entering ``dev``.
+It enforces reset rules and requires fresh approval evidence for a FINAL change.
+
+``cumulative`` validates ordering between channel snapshots or distant
+endpoints. It still requires canonical VERSION files and rejects regressions,
+but does not replay reset or FINAL-marker rules that were already enforced when
+the intervening changes entered ``dev``.
+
+What transition mode checks:
 
 1. Read ``VERSION`` at HEAD (the current working tree).
 2. Read ``VERSION`` at the base ref (default ``origin/main``). If the ref or
@@ -39,6 +49,8 @@ What this script checks:
    contributors (handle: gated-by-default). A marker is only evidence for
    *this* transition if the diff actually touched it -- an untouched marker
    left over from an earlier approval authorizes nothing.
+8. Require the workspace package version to encode the proposed game version
+   as ``FINAL.MAJOR.MINOR+gamepatch.PATCH``.
 
    The marker must contain, one per line (case-insensitive keys, order
    doesn't matter)::
@@ -117,6 +129,17 @@ MARKER_DATE_RE = re.compile(r"(?im)^[ \t]*date[ \t]*:[ \t]*(\S+)[ \t]*\r?$")
 # Strict Date shape; date.fromisoformat alone also accepts e.g. '20260725'
 # and week dates, which the documented format does not.
 MARKER_DATE_SHAPE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+# Cargo accepts three numeric SemVer components. Preserve the game's fourth
+# component as build metadata while keeping VERSION authoritative for ordering.
+WORKSPACE_PACKAGE_SECTION_RE = re.compile(
+    r"(?ms)^\[workspace\.package\][ \t]*\r?\n"
+    r"(?P<body>.*?)(?=^\[|\Z)"
+)
+WORKSPACE_VERSION_RE = re.compile(
+    r'(?m)^(?P<prefix>[ \t]*version[ \t]*=[ \t]*")'
+    r'(?P<version>[^"\r\n]+)(?P<suffix>"[^\r\n]*)(?P<newline>\r?\n|$)'
+)
 
 Version = Tuple[int, int, int, int]
 
@@ -205,6 +228,60 @@ def parse_version(raw: str, source: str) -> Version:
     return (values[0], values[1], values[2], values[3])
 
 
+def cargo_version(version: Version) -> str:
+    """Map ``FINAL.MAJOR.MINOR.PATCH`` to valid Cargo SemVer."""
+    final, major, minor, patch = version
+    return f"{final}.{major}.{minor}+gamepatch.{patch}"
+
+
+def _workspace_version_match(raw: str, source: str):
+    """Return the workspace section and its single package version match."""
+    sections = list(WORKSPACE_PACKAGE_SECTION_RE.finditer(raw))
+    if len(sections) != 1:
+        raise VersionError(
+            f"{source}: expected one [workspace.package] section; "
+            f"found {len(sections)}"
+        )
+
+    versions = list(WORKSPACE_VERSION_RE.finditer(sections[0].group("body")))
+    if len(versions) != 1:
+        raise VersionError(
+            f"{source}: [workspace.package] must contain one version; "
+            f"found {len(versions)}"
+        )
+    return sections[0], versions[0]
+
+
+def workspace_package_version(raw: str, source: str) -> str:
+    """Read the single version from ``[workspace.package]``."""
+    _section, version = _workspace_version_match(raw, source)
+    return version.group("version")
+
+
+def replace_workspace_package_version(
+    raw: str, version: Version, source: str
+) -> str:
+    """Replace only ``[workspace.package].version`` while preserving layout."""
+    section, current = _workspace_version_match(raw, source)
+    start = section.start("body") + current.start("version")
+    end = section.start("body") + current.end("version")
+    return raw[:start] + cargo_version(version) + raw[end:]
+
+
+def check_workspace_package_version(
+    raw: str, version: Version, source: str
+) -> None:
+    """Require Cargo metadata to encode the canonical game version."""
+    actual = workspace_package_version(raw, source)
+    expected = cargo_version(version)
+    if actual != expected:
+        raise VersionError(
+            f"{source}: workspace package version {actual!r} does not match "
+            f"VERSION {fmt(version)}; expected {expected!r}. Run "
+            f"'python3 scripts/sync_cargo_version.py'."
+        )
+
+
 def read_ref_file(ref: str, rel_path: str, root: str) -> Optional[str]:
     """Return the head-side contents of ``rel_path`` at ``ref``.
 
@@ -291,6 +368,23 @@ def read_base_version(base: str, root: str) -> Version:
     if raw is None:
         return ABSENT_BASE_VERSION
     return parse_version(raw, f"base ({base})")
+
+
+def read_required_base_version(base: str, root: str) -> Version:
+    """Read a canonical VERSION at ``base``, failing if the ref/file is absent."""
+    raw = git_show_file(base, "VERSION", root)
+    if raw is None:
+        raise VersionError(f"base ({base}): VERSION not found")
+    return parse_version(raw, f"base ({base})")
+
+
+def require_commit_ref(ref: str, side: str, root: str) -> None:
+    """Require ``ref`` to resolve to a commit for cumulative comparison."""
+    resolved = _git_stdout(
+        ["git", "rev-parse", "--verify", f"{ref}^{{commit}}"], root
+    )
+    if resolved is None:
+        raise VersionError(f"{side} ({ref}): git ref not found")
 
 
 def parse_marker(raw: str, source: str) -> Tuple[Version, str]:
@@ -460,6 +554,22 @@ def check_transition(
         # head[i] == base[i]: tier unchanged, inspect the next tier down.
 
 
+def check_cumulative(
+    base: Version, head: Version, *, require_bump: bool = False
+) -> None:
+    """Validate cumulative ordering without replaying transition-only gates."""
+    if head < base:
+        raise VersionError(
+            f"version regression: {fmt(head)} is lower than base "
+            f"{fmt(base)} (versions only move forward)"
+        )
+    if require_bump and head == base:
+        raise VersionError(
+            f"version unchanged at {fmt(head)}; the proposed change must "
+            "advance VERSION"
+        )
+
+
 def _reset_lower(version: Version, idx: int) -> Version:
     """Return ``version`` with every component after ``idx`` set to 0."""
     kept = list(version[: idx + 1])
@@ -482,11 +592,22 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--mode",
+        choices=("transition", "cumulative"),
+        default="transition",
+        help=(
+            "Validation policy: 'transition' (default) enforces reset and "
+            "fresh FINAL-approval rules; 'cumulative' checks canonical "
+            "endpoint ordering without replaying those rules."
+        ),
+    )
+    parser.add_argument(
         "--base",
         default="origin/main",
         help=(
-            "Base git ref to compare against (default: origin/main). "
-            "If the ref or its VERSION is absent, base is treated as 0.0.0.0."
+            "Base git ref to compare against (default: origin/main). In "
+            "transition mode an absent base is treated as 0.0.0.0; cumulative "
+            "mode requires the ref and its VERSION file."
         ),
     )
     parser.add_argument(
@@ -523,23 +644,37 @@ def main(argv: Optional[list] = None) -> int:
 
     try:
         head_version = read_head_version(args.head, root)
-        base_version = read_base_version(args.base, root)
-        marker_head = read_ref_file(args.head, args.final_gate_marker, root)
-        # Base side always reads the committed blob (see read_base_version).
-        marker_base = git_show_file(args.base, args.final_gate_marker, root)
-        # Change detection is delegated to git (filter-aware, fails closed);
-        # a marker absent at base is trivially "changed" if present at head.
-        unchanged = marker_base is not None and not marker_changed(
-            args.base, args.head, args.final_gate_marker, root
+        cargo_manifest = read_ref_file(args.head, "Cargo.toml", root)
+        if cargo_manifest is None:
+            raise VersionError(f"head ({args.head}): Cargo.toml not found")
+        check_workspace_package_version(
+            cargo_manifest, head_version, f"head ({args.head}): Cargo.toml"
         )
-        check_transition(
-            base_version,
-            head_version,
-            marker_head=marker_head,
-            marker_unchanged=unchanged,
-            marker_rel=args.final_gate_marker,
-            require_bump=args.require_bump,
-        )
+        if args.mode == "cumulative":
+            require_commit_ref(args.base, "base", root)
+            require_commit_ref(args.head, "head", root)
+            base_version = read_required_base_version(args.base, root)
+            check_cumulative(
+                base_version, head_version, require_bump=args.require_bump
+            )
+        else:
+            base_version = read_base_version(args.base, root)
+            marker_head = read_ref_file(args.head, args.final_gate_marker, root)
+            # Base side always reads the committed blob (see read_base_version).
+            marker_base = git_show_file(args.base, args.final_gate_marker, root)
+            # Change detection is delegated to git (filter-aware, fails closed);
+            # a marker absent at base is trivially "changed" if present at head.
+            unchanged = marker_base is not None and not marker_changed(
+                args.base, args.head, args.final_gate_marker, root
+            )
+            check_transition(
+                base_version,
+                head_version,
+                marker_head=marker_head,
+                marker_unchanged=unchanged,
+                marker_rel=args.final_gate_marker,
+                require_bump=args.require_bump,
+            )
     except VersionError as exc:
         print(f"version_check: FAIL: {exc}", file=sys.stderr)
         return 1

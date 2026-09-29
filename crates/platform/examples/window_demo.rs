@@ -20,8 +20,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if platform.buttons().is_held(Buttons::START) {
             break;
         }
-        platform.present(&frame)?;
         platform.wait_for_next_frame();
+        platform.present(&frame)?;
     }
 
     Ok(())

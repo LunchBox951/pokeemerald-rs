@@ -1,18 +1,26 @@
-//! The [`Platform`] window type (S-1): owns the `winit` event loop, the
+//! The [`Platform`] window type: owns the `winit` event loop, the
 //! native window, and the `softbuffer` presentation surface, and glues them
 //! together with [`crate::input`] and [`crate::pacing`] behind a small
 //! per-frame API.
 //!
-//! Not unit tested directly — CI is headless and must never open a real
-//! window. [`crate::input`], [`crate::pacing`], and [`crate::present`] carry
-//! all the tested logic; this module is thin glue over `winit`/`softbuffer`
-//! plus a manual event pump (see [`Platform::pump`]) so a caller stays in
-//! control of its own frame loop rather than handing control to `winit`.
+//! The windowed path itself is not unit tested directly — CI is headless and
+//! must never open a real window. [`crate::input`], [`crate::pacing`], and
+//! [`crate::present`] carry all the tested logic; this module is thin glue
+//! over `winit`/`softbuffer` plus a manual event pump (see
+//! [`Platform::pump`]) so a caller stays in control of its own frame loop
+//! rather than handing control to `winit`.
+//!
+//! [`Platform::new_headless`] is the explicit, always-available
+//! null backend for tests and CI — mirroring [`crate::audio::AudioOutput`]'s
+//! `null` constructor: no cargo feature flag, just a second constructor that
+//! opens no OS window/event loop/surface. It is what backs `xtask`'s `e2e
+//! --suite smoke` run (see `pokeemerald_rs::App::new_headless`).
 //!
 //! Quit is a platform-level concept, not a GBA button: the OS window-close
 //! control and the Escape key both end the loop via [`Platform::pump`]
 //! returning `false`, independent of [`crate::input::Keymap`]'s GBA button
-//! bindings.
+//! bindings. The null backend never signals this on its own — there is no
+//! window to close — so [`Platform::pump`] always reports "keep going".
 
 use std::num::NonZeroU32;
 use std::rc::Rc;
@@ -48,16 +56,31 @@ struct Inner {
 /// Keyboard events accumulate into `frame_held` as they arrive; [`Platform`]
 /// folds that into a [`ButtonState`] once per [`Platform::pump`] call, which
 /// is the held/newly-pressed frame boundary this crate exposes.
-struct App {
+struct WinitApp {
     title: String,
     keymap: Keymap,
     frame_held: Buttons,
     buttons: ButtonState,
     inner: Option<Inner>,
     init_error: Option<PlatformError>,
+    /// The frame [`Self::render_latest`] draws; boxed since a [`Frame`] is
+    /// 150 KiB.
+    latest_frame: Option<Box<Frame>>,
+    /// A render failure from inside a `RedrawRequested` callback:
+    /// `window_event` returns `()`, so this is drained by the next
+    /// [`Self::take_pump_error`] call instead of returning directly.
+    pending_error: Option<PlatformError>,
+    /// Test-only stand-ins for a live `softbuffer` surface, which this
+    /// crate's headless suite never opens (see the module docs):
+    /// `render_calls` counts [`Self::render_latest`] attempts, and
+    /// `fail_next_render` makes the next one fail.
+    #[cfg(test)]
+    render_calls: usize,
+    #[cfg(test)]
+    fail_next_render: bool,
 }
 
-impl App {
+impl WinitApp {
     fn new(title: String) -> Self {
         Self {
             title,
@@ -66,11 +89,119 @@ impl App {
             buttons: ButtonState::new(),
             inner: None,
             init_error: None,
+            latest_frame: None,
+            pending_error: None,
+            #[cfg(test)]
+            render_calls: 0,
+            #[cfg(test)]
+            fail_next_render: false,
         }
+    }
+
+    /// Store `frame` for [`Self::render_latest`], reusing the existing
+    /// allocation rather than boxing a fresh 150 KiB frame every call.
+    fn retain_frame(&mut self, frame: &Frame) {
+        match &mut self.latest_frame {
+            Some(retained) => **retained = *frame,
+            None => self.latest_frame = Some(Box::new(*frame)),
+        }
+    }
+
+    /// Render the retained frame, shared by [`Platform::present`] and the
+    /// `RedrawRequested` callback so both blit through the same logic.
+    ///
+    /// A no-op if nothing has been retained, or the window doesn't exist
+    /// yet.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PlatformError::SoftBuffer`] if the presentation surface
+    /// could not be resized or presented.
+    fn render_latest(&mut self) -> Result<(), PlatformError> {
+        let Some(frame) = self.latest_frame.as_deref() else {
+            return Ok(());
+        };
+
+        #[cfg(test)]
+        {
+            self.render_calls += 1;
+            if self.fail_next_render {
+                self.fail_next_render = false;
+                return Err(PlatformError::SoftBuffer(
+                    softbuffer::SoftBufferError::Unimplemented,
+                ));
+            }
+        }
+
+        let Some(inner) = self.inner.as_mut() else {
+            return Ok(());
+        };
+        let size = inner.window.inner_size();
+        let (Some(width), Some(height)) =
+            (NonZeroU32::new(size.width), NonZeroU32::new(size.height))
+        else {
+            return Ok(());
+        };
+
+        inner.surface.resize(width, height)?;
+        let mut buffer = inner.surface.buffer_mut()?;
+        let letterbox = Letterbox::compute(size.width, size.height);
+        present::blit(frame, &letterbox, size.width, size.height, &mut buffer[..]);
+        buffer.present()?;
+        Ok(())
+    }
+
+    /// Drain the recorded error, if any: `init_error` (no usable window)
+    /// takes priority over a later `pending_error` from a redraw callback.
+    fn take_pump_error(&mut self) -> Option<PlatformError> {
+        self.init_error.take().or_else(|| self.pending_error.take())
+    }
+
+    /// Handle one `WindowEvent`; returns whether to exit (close or
+    /// Escape). Split from `window_event` so it's testable without a real
+    /// `ActiveEventLoop`.
+    fn handle_window_event(&mut self, event: WindowEvent) -> bool {
+        match event {
+            WindowEvent::CloseRequested => return true,
+            // Winit does not synthesize key-release events on focus loss
+            // (macOS/Wayland), so a key held across an alt-tab would stay
+            // stuck in `frame_held` forever. Drop all held state instead;
+            // still-held keys re-register on the next real press.
+            WindowEvent::Focused(false) => self.frame_held = Buttons::NONE,
+            WindowEvent::KeyboardInput { event, .. } => {
+                if let PhysicalKey::Code(code) = event.physical_key {
+                    // Escape is a dev/emulator quit affordance, not a GBA
+                    // button (there is no hardware key it could map to), so
+                    // it is handled here directly rather than through
+                    // `Keymap` — same exit path as a window-close request.
+                    if code == KeyCode::Escape && event.state == ElementState::Pressed {
+                        return true;
+                    }
+                    if let Some(button) = self.keymap.lookup(code) {
+                        match event.state {
+                            ElementState::Pressed => self.frame_held |= button,
+                            ElementState::Released => self.frame_held &= !button,
+                        }
+                    }
+                }
+            }
+            // winit requires rendering to finish before this callback
+            // returns (macOS dispatches it synchronously from `drawRect:`),
+            // so render here rather than waiting for the next
+            // `Platform::present`. This callback can't return an error, so
+            // the first failure is kept and surfaces from the next `pump`.
+            WindowEvent::RedrawRequested => {
+                if let Err(err) = self.render_latest() {
+                    self.pending_error.get_or_insert(err);
+                }
+            }
+            _ => {}
+        }
+        false
     }
 }
 
-impl ApplicationHandler for App {
+impl ApplicationHandler for WinitApp {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         // Winit may deliver redundant back-to-back `Resumed` events; only
         // (re)create the window/surface once, and don't retry after a
@@ -110,38 +241,49 @@ impl ApplicationHandler for App {
         _window_id: WindowId,
         event: WindowEvent,
     ) {
-        match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
-            // Winit does not synthesize key-release events on focus loss
-            // (macOS/Wayland), so a key held across an alt-tab would stay
-            // stuck in `frame_held` forever. Drop all held state instead;
-            // still-held keys re-register on the next real press.
-            WindowEvent::Focused(false) => self.frame_held = Buttons::NONE,
-            WindowEvent::KeyboardInput { event, .. } => {
-                if let PhysicalKey::Code(code) = event.physical_key {
-                    // Escape is a dev/emulator quit affordance, not a GBA
-                    // button (there is no hardware key it could map to), so
-                    // it is handled here directly rather than through
-                    // `Keymap` — same exit path as a window-close request.
-                    if code == KeyCode::Escape && event.state == ElementState::Pressed {
-                        event_loop.exit();
-                        return;
-                    }
-                    if let Some(button) = self.keymap.lookup(code) {
-                        match event.state {
-                            ElementState::Pressed => self.frame_held |= button,
-                            ElementState::Released => self.frame_held &= !button,
-                        }
-                    }
-                }
-            }
-            _ => {}
+        if self.handle_window_event(event) {
+            event_loop.exit();
         }
     }
 }
 
-/// An open native window: input, frame pacing, and `softbuffer`
-/// presentation, exposed as a small per-frame API.
+/// The `winit` event loop plus (lazily created, see [`WinitApp`]) native
+/// window and `softbuffer` surface backing a windowed [`Platform`].
+///
+/// Boxed inside [`Backend::Window`] so the null variant (just a
+/// [`ButtonState`]) doesn't force every [`Platform`] — headless ones
+/// included — to be sized for `winit`'s much larger `EventLoop`
+/// (`clippy::large_enum_variant`).
+struct WindowBackend {
+    event_loop: EventLoop<()>,
+    app: WinitApp,
+}
+
+/// Which concrete backend a [`Platform`] is driving: a real OS window, or
+/// the explicit headless/null stand-in (see [`Platform::new_headless`]).
+enum Backend {
+    /// A real OS window — see [`WindowBackend`].
+    Window(Box<WindowBackend>),
+    /// No OS window, event loop, or surface — see [`Platform::new_headless`].
+    Null {
+        buttons: ButtonState,
+        /// The raw held set [`Platform::pump`] applies on its next null
+        /// frame. Defaults to [`Buttons::NONE`] and changes only through
+        /// [`Platform::set_headless_buttons`].
+        next_buttons: Buttons,
+        /// The frame most recently handed to [`Platform::present`], read
+        /// back via [`Platform::last_presented`]: the null backend's only
+        /// observable effect, so a headless caller can check *what it
+        /// actually presented* rather than what it meant to. Boxed because
+        /// a [`Frame`] is 150 KiB — far too large to inline into every
+        /// [`Platform`].
+        last_presented: Option<Box<Frame>>,
+    },
+}
+
+/// An open native window (or, headlessly, `platform`'s null backend): input,
+/// frame pacing, and `softbuffer` presentation, exposed as a small
+/// per-frame API.
 ///
 /// Typical usage:
 ///
@@ -156,15 +298,14 @@ impl ApplicationHandler for App {
 ///     if platform.buttons().is_held(platform::Buttons::START) {
 ///         break;
 ///     }
-///     platform.present(&frame)?;
 ///     platform.wait_for_next_frame();
+///     platform.present(&frame)?;
 /// }
 /// # Ok(())
 /// # }
 /// ```
 pub struct Platform {
-    event_loop: EventLoop<()>,
-    app: App,
+    backend: Backend,
     pacer: FramePacer,
 }
 
@@ -181,10 +322,39 @@ impl Platform {
     /// event loop could not be created.
     pub fn new(title: impl Into<String>) -> Result<Self, PlatformError> {
         Ok(Self {
-            event_loop: EventLoop::new()?,
-            app: App::new(title.into()),
+            backend: Backend::Window(Box::new(WindowBackend {
+                event_loop: EventLoop::new()?,
+                app: WinitApp::new(title.into()),
+            })),
             pacer: FramePacer::new(),
         })
+    }
+
+    /// An explicit headless/null backend: opens no `winit` event loop,
+    /// native window, or `softbuffer` surface.
+    ///
+    /// Always available (no display server required), so this is the only
+    /// backend `cargo test`/CI's `xtask e2e --suite smoke` run may
+    /// construct — mirrors [`crate::audio::AudioOutput::null`]'s pattern.
+    /// [`Platform::pump`] always reports "keep going" (there is no
+    /// window-close event to simulate), [`Platform::buttons`] reads as
+    /// nothing held unless a headless driver supplies a set through
+    /// [`Platform::set_headless_buttons`],
+    /// [`Platform::present`] draws nothing (there is no surface to draw
+    /// into) but records its argument for [`Platform::last_presented`], and
+    /// [`Platform::wait_for_next_frame`] never sleeps (there is no real
+    /// display to pace against) — a headless caller drives frames
+    /// back-to-back instead.
+    #[must_use]
+    pub fn new_headless() -> Self {
+        Self {
+            backend: Backend::Null {
+                buttons: ButtonState::new(),
+                next_buttons: Buttons::NONE,
+                last_presented: None,
+            },
+            pacer: FramePacer::new(),
+        }
     }
 
     /// Pump pending OS/window events and advance the button state for this
@@ -194,7 +364,8 @@ impl Platform {
     /// already pending. Returns `false` once the window has been asked to
     /// close (via the OS close control or the Escape key — see the module
     /// docs), at which point the caller should stop calling into this
-    /// `Platform` and drop it.
+    /// `Platform` and drop it. Always returns `true` for the null backend
+    /// (see [`Platform::new_headless`]).
     ///
     /// # Errors
     ///
@@ -202,27 +373,80 @@ impl Platform {
     /// That failure happens asynchronously (once `winit` resumes the app),
     /// so it is only observable via this method's return value, typically
     /// on the first call.
+    ///
+    /// Also returns [`PlatformError::SoftBuffer`] if an OS-driven redraw
+    /// (expose, live-resize) failed to resize or present the surface from
+    /// inside its callback: that callback cannot return an error, so the
+    /// first such failure is recorded and surfaces from the pump that
+    /// follows it. Any call can therefore fail this way, not just the
+    /// first. Never errors for the null backend.
     pub fn pump(&mut self) -> Result<bool, PlatformError> {
-        let status = self
-            .event_loop
-            .pump_app_events(Some(Duration::ZERO), &mut self.app);
-        if let Some(err) = self.app.init_error.take() {
-            return Err(err);
+        match &mut self.backend {
+            Backend::Window(window) => {
+                let status = window
+                    .event_loop
+                    .pump_app_events(Some(Duration::ZERO), &mut window.app);
+                if let Some(err) = window.app.take_pump_error() {
+                    return Err(err);
+                }
+                window.app.buttons.update(window.app.frame_held);
+                Ok(!matches!(status, PumpStatus::Exit(_)))
+            }
+            Backend::Null {
+                buttons,
+                next_buttons,
+                ..
+            } => {
+                // No OS event source to drain. The driver-supplied held set
+                // still goes through the exact `ButtonState::update` edge
+                // calculation used by the windowed path.
+                buttons.update(*next_buttons);
+                Ok(true)
+            }
         }
-        self.app.buttons.update(self.app.frame_held);
-        Ok(!matches!(status, PumpStatus::Exit(_)))
+    }
+
+    /// Set the buttons the null backend will report as held on its next and
+    /// subsequent [`pump`](Self::pump) calls.
+    ///
+    /// The value remains in effect until replaced, matching a physical key
+    /// that stays held across frames. Supply [`Buttons::NONE`] for a release
+    /// frame. `pump` derives newly-pressed edges from consecutive held sets,
+    /// so scripted and windowed input follow the same state transition.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PlatformError::ScriptedInputRequiresHeadless`] for a
+    /// windowed backend; OS-owned input cannot be replaced by a scenario.
+    pub fn set_headless_buttons(&mut self, buttons: Buttons) -> Result<(), PlatformError> {
+        match &mut self.backend {
+            Backend::Null { next_buttons, .. } => {
+                *next_buttons = buttons;
+                Ok(())
+            }
+            Backend::Window(_) => Err(PlatformError::ScriptedInputRequiresHeadless),
+        }
     }
 
     /// The button state as of the most recent [`Platform::pump`] call.
     #[must_use]
     pub fn buttons(&self) -> &ButtonState {
-        &self.app.buttons
+        match &self.backend {
+            Backend::Window(window) => &window.app.buttons,
+            Backend::Null { buttons, .. } => buttons,
+        }
     }
 
     /// Block until it is time to present the next frame, paced to the GBA's
     /// real refresh cadence (see [`crate::pacing`]) rather than wall-clock
-    /// 60 Hz — analogous to upstream's `WaitForVBlank`.
+    /// 60 Hz — analogous to upstream's `WaitForVBlank`. A no-op for the null
+    /// backend (see [`Platform::new_headless`]): there is no real display to
+    /// pace against, so a headless caller drives frames back-to-back rather
+    /// than sleeping between them.
     pub fn wait_for_next_frame(&mut self) {
+        if matches!(self.backend, Backend::Null { .. }) {
+            return;
+        }
         let wait = self.pacer.tick(Instant::now());
         if !wait.is_zero() {
             std::thread::sleep(wait);
@@ -232,30 +456,245 @@ impl Platform {
     /// Present a native 240x160 frame, integer-scaled and letterboxed to fit
     /// the current window size (see [`crate::present`]).
     ///
+    /// Renders `frame` immediately and retains it, so a later OS-driven
+    /// redraw (e.g. expose, live-resize) can re-present the same pixels
+    /// from its own callback without waiting for the next call.
+    ///
     /// A no-op if the window/surface has not been created yet (i.e. before
     /// the first successful [`Platform::pump`]) or the window is currently
-    /// zero-sized (e.g. minimized).
+    /// zero-sized (e.g. minimized). The null backend (see
+    /// [`Platform::new_headless`]) has no surface to draw into, so it draws
+    /// nothing either — but it does *record* `frame`, readable back via
+    /// [`Platform::last_presented`].
     ///
     /// # Errors
     ///
     /// Returns [`PlatformError::SoftBuffer`] if the presentation surface
-    /// could not be resized or presented.
+    /// could not be resized or presented. Never errors for the null backend.
     pub fn present(&mut self, frame: &Frame) -> Result<(), PlatformError> {
-        let Some(inner) = self.app.inner.as_mut() else {
-            return Ok(());
-        };
-        let size = inner.window.inner_size();
-        let (Some(width), Some(height)) =
-            (NonZeroU32::new(size.width), NonZeroU32::new(size.height))
-        else {
-            return Ok(());
-        };
+        match &mut self.backend {
+            Backend::Window(window) => {
+                window.app.retain_frame(frame);
+                // Renders here and now; deliberately does *not* call
+                // `Window::request_redraw`. That would queue a
+                // `RedrawRequested` for the next `pump` to render the frame
+                // a second time, doubling the window-sized blit and surface
+                // present every frame for no visible gain. OS-driven
+                // redraws (expose, live-resize) arrive on their own —
+                // macOS from `drawRect:`, X11 from `Expose`, Wayland from
+                // `configure` — and the `RedrawRequested` arm renders the
+                // retained frame for those.
+                window.app.render_latest()
+            }
+            Backend::Null { last_presented, .. } => {
+                // Copy into the existing box rather than allocating a fresh
+                // 150 KiB one every headless frame.
+                match last_presented {
+                    Some(recorded) => **recorded = *frame,
+                    None => *last_presented = Some(Box::new(*frame)),
+                }
+                Ok(())
+            }
+        }
+    }
 
-        inner.surface.resize(width, height)?;
-        let mut buffer = inner.surface.buffer_mut()?;
-        let letterbox = Letterbox::compute(size.width, size.height);
-        present::blit(frame, &letterbox, size.width, size.height, &mut buffer[..]);
-        buffer.present()?;
-        Ok(())
+    /// The frame most recently handed to [`Platform::present`] on the null
+    /// backend, or `None` if nothing has been presented yet.
+    ///
+    /// Always `None` for a windowed [`Platform`]: the pixels there are
+    /// blitted straight into `softbuffer`'s surface and handed to the
+    /// compositor, so this crate keeps no copy — nothing to hand back, and
+    /// no per-frame allocation added to the real path.
+    ///
+    /// The point of the null backend recording it: headless callers —
+    /// `pokeemerald_rs`'s real-boot check, `xtask`'s smoke suite — can
+    /// assert on the frame that *reached presentation*, not
+    /// merely the one their own scene state says they composed. Without it,
+    /// a caller that composed correctly and then never called `present` at
+    /// all would still look healthy.
+    #[must_use]
+    pub fn last_presented(&self) -> Option<&Frame> {
+        match &self.backend {
+            Backend::Window(_) => None,
+            Backend::Null { last_presented, .. } => last_presented.as_deref(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Platform, WinitApp};
+    use crate::error::PlatformError;
+    use crate::input::Buttons;
+    use crate::present::test_pattern;
+    use winit::event::WindowEvent;
+
+    // These drive `WinitApp` directly rather than through `Platform`, since
+    // CI never opens a real window (see the module docs).
+
+    #[test]
+    fn redraw_requested_renders_the_retained_frame_synchronously() {
+        let mut app = WinitApp::new("test".into());
+        let frame = test_pattern();
+        app.retain_frame(&frame);
+        assert_eq!(
+            app.render_calls, 0,
+            "retaining a frame must not itself render it"
+        );
+
+        let exit = app.handle_window_event(WindowEvent::RedrawRequested);
+
+        assert!(!exit, "a redraw event must not request exit");
+        assert_eq!(
+            app.render_calls, 1,
+            "a RedrawRequested event arriving with a retained frame must render it \
+             synchronously inside the callback, not defer to the next `Platform::present`"
+        );
+    }
+
+    #[test]
+    fn redraw_requested_without_a_retained_frame_does_not_render() {
+        let mut app = WinitApp::new("test".into());
+
+        app.handle_window_event(WindowEvent::RedrawRequested);
+
+        assert_eq!(
+            app.render_calls, 0,
+            "there is nothing to render before the first `Platform::present`"
+        );
+    }
+
+    #[test]
+    fn redraw_presentation_failure_surfaces_from_the_next_pump() {
+        let mut app = WinitApp::new("test".into());
+        let frame = test_pattern();
+        app.retain_frame(&frame);
+        app.fail_next_render = true;
+
+        app.handle_window_event(WindowEvent::RedrawRequested);
+
+        assert!(
+            app.pending_error.is_some(),
+            "a render failure raised inside the RedrawRequested callback must not be \
+             silently dropped"
+        );
+
+        let err = app
+            .take_pump_error()
+            .expect("the failure recorded by the callback must surface from the next pump");
+        assert!(
+            matches!(err, PlatformError::SoftBuffer(_)),
+            "unexpected error kind: {err:?}"
+        );
+        assert!(
+            app.take_pump_error().is_none(),
+            "a drained pending error must not surface twice"
+        );
+    }
+
+    #[test]
+    fn headless_pump_always_reports_keep_going() {
+        let mut platform = Platform::new_headless();
+        for _ in 0..5 {
+            assert!(platform.pump().expect("null backend never errors"));
+        }
+    }
+
+    #[test]
+    fn headless_buttons_start_and_stay_unheld() {
+        let mut platform = Platform::new_headless();
+        platform.pump().expect("null backend never errors");
+        assert_eq!(platform.buttons().held(), Buttons::NONE);
+        assert_eq!(platform.buttons().newly_pressed(), Buttons::NONE);
+    }
+
+    #[test]
+    fn headless_scripted_buttons_preserve_held_and_new_press_edges() {
+        let mut platform = Platform::new_headless();
+
+        platform
+            .set_headless_buttons(Buttons::START)
+            .expect("null backend accepts scripted input");
+        platform.pump().expect("null backend never errors");
+        assert_eq!(platform.buttons().held(), Buttons::START);
+        assert_eq!(platform.buttons().newly_pressed(), Buttons::START);
+
+        platform.pump().expect("null backend never errors");
+        assert_eq!(platform.buttons().held(), Buttons::START);
+        assert_eq!(platform.buttons().newly_pressed(), Buttons::NONE);
+
+        platform
+            .set_headless_buttons(Buttons::NONE)
+            .expect("null backend accepts release frames");
+        platform.pump().expect("null backend never errors");
+        assert_eq!(platform.buttons().held(), Buttons::NONE);
+        assert_eq!(platform.buttons().newly_pressed(), Buttons::NONE);
+    }
+
+    #[test]
+    fn headless_present_accepts_a_frame_without_erroring() {
+        let mut platform = Platform::new_headless();
+        let frame = test_pattern();
+        platform.present(&frame).expect("null backend never errors");
+    }
+
+    #[test]
+    fn headless_last_presented_is_none_until_something_is_presented() {
+        let platform = Platform::new_headless();
+        assert!(platform.last_presented().is_none());
+    }
+
+    #[test]
+    fn headless_present_records_the_exact_frame_it_was_given() {
+        let mut platform = Platform::new_headless();
+        let frame = test_pattern();
+        platform.present(&frame).expect("null backend never errors");
+        assert_eq!(
+            platform
+                .last_presented()
+                .expect("recorded by present")
+                .to_vec(),
+            frame.to_vec(),
+            "the null backend must hand back exactly the frame it was presented"
+        );
+    }
+
+    #[test]
+    fn headless_last_presented_tracks_the_most_recent_present() {
+        let mut platform = Platform::new_headless();
+        let first = test_pattern();
+        let mut second = test_pattern();
+        second[0] ^= 0x00FF_FFFF; // any frame distinguishable from `first`.
+        platform.present(&first).expect("null backend never errors");
+        platform
+            .present(&second)
+            .expect("null backend never errors");
+        assert_eq!(
+            platform
+                .last_presented()
+                .expect("recorded by present")
+                .to_vec(),
+            second.to_vec(),
+            "the recording must be the latest present, not the first"
+        );
+    }
+
+    #[test]
+    fn headless_wait_for_next_frame_never_consults_pacer() {
+        // Regression: if this ever started sleeping, a smoke run driving
+        // many frames headlessly would slow down for no visible benefit
+        // (there is no real display to pace against). A wall-clock
+        // assertion here would be scheduler-sensitive and could flake under
+        // CI load, so instead this pins the actual code path: the null arm
+        // of `wait_for_next_frame` returns before ever calling
+        // `FramePacer::tick` (the only place `next_deadline` moves out of
+        // `None`, and the only place that can compute a nonzero wait to
+        // sleep on) — deterministic, and a direct check of the "never
+        // blocks" contract rather than a proxy for it.
+        let mut platform = Platform::new_headless();
+        for _ in 0..1000 {
+            platform.wait_for_next_frame();
+        }
+        assert!(!platform.pacer.has_ticked());
     }
 }

@@ -2,7 +2,19 @@
 name = "assets"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 publish.workspace = true
+
+[features]
+# Test-only seam: exposes constructors (FontImageRef::new_for_tests) that
+# bypass pack-mediated pairing guarantees so downstream crates can build
+# synthetic fixtures. Enable only from [dev-dependencies].
+test-support = []
 
 [lints]
 workspace = true
+
+[dependencies]
+# The asset-pack container format this crate's `AssetPack` reads. In-workspace,
+# std-only, not a new external dependency.
+pack-format = { path = "../pack-format" }

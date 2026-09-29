@@ -1,0 +1,1148 @@
+//! Tests for warp execution, arrow-warp triggers, and door transitions
+//! ([`super::OverworldPhase::warp_to`]).
+
+use super::test_support::*;
+use super::OverworldPhase;
+use crate::new_game;
+use assets::MapId;
+use engine::overworld::metatile_behavior::{
+    MB_ANIMATED_DOOR, MB_NON_ANIMATED_DOOR, MB_SOUTH_ARROW_WARP,
+};
+use engine::overworld::{
+    warp_in_facing, Direction, PlayerState, WALK_FRAMES_PER_TILE, WILD_ENCOUNTER_IMMUNITY_STEPS,
+};
+use engine::rng::Rng;
+use platform::{ButtonState, Buttons};
+
+/// Flow-level test (the issue #163 acceptance test): stepping onto the bedroom's stair
+/// warp tile at `(7, 1)` from below transitions the phase to
+/// `MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F`, landing the player exactly at
+/// that map's own warp-event #2 arrival position -- `crate::new_game`'s
+/// module docs trace this exact warp chain (`(7, 1)` on 2F ->
+/// `dest_warp_id: 2` on 1F -> `(8, 2)`, `warp.rs`'s
+/// `warp_destination_position`) -- facing whatever that destination
+/// tile's own behavior dictates (`engine::overworld::warp_in_facing`),
+/// with `save1.location`/`save1.pos` kept coherent with the new map
+/// ([`OverworldPhase::warp_to`]'s own doc comment).
+///
+/// The transition is also asserted to happen on the frame *after* the
+/// step's animation finishes, not the frame it starts: upstream gates
+/// `TryStartWarpEventScript` on `input->tookStep`, set only at
+/// `T_TILE_CENTER` while `runningState == MOVING`
+/// (`pokeemerald/src/field_control_avatar.c:117-119, 155-161`), and
+/// `T_TILE_CENTER` needs `PlayerCheckIfAnimFinishedOrInactive`
+/// (`field_player_avatar.c:901-915`) to see a `heldMovementFinished` that
+/// only the *previous* frame's CB2 `AnimateSprites` could have set
+/// (`main.c:188-195`, `overworld.c:1438-1469`). So the animation's last
+/// frame is call [`WALK_FRAMES_PER_TILE`] (16), and the warp fires on
+/// call 17 ([`OverworldPhase::step`]'s "Frame shape" and "Warp timing"
+/// sections, issue #1039).
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn stepping_onto_the_bedroom_stair_warp_transitions_to_the_1f_map() {
+    let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+    let bedroom = phase.map_id;
+
+    // `new_game::SPAWN_POSITION` is the warp tile itself (module docs),
+    // so start one tile south of it instead and step north onto it --
+    // "stepping onto (7, 1) from below" (DoD).
+    phase.player = PlayerState::new((7, 2), new_game::SPAWN_ELEVATION, Direction::North);
+
+    // Frame 1: the step onto (7, 1) begins. `PlayerState` commits the
+    // tile immediately, but the warp must not fire yet.
+    phase.step(held(Buttons::UP));
+    assert_eq!(
+        phase.player.position(),
+        new_game::SPAWN_POSITION,
+        "the step commits the landing tile on the frame it begins"
+    );
+    assert_eq!(
+        phase.map_id, bedroom,
+        "the warp must not fire on the frame the step begins"
+    );
+
+    // Frames 2..=16: drain the walk animation with no input held. The
+    // map must stay put for every one of them, including frame 16, which
+    // is upstream's *last* animation frame rather than its `tookStep`
+    // frame (issue #1039).
+    for frame in 2..=u32::from(WALK_FRAMES_PER_TILE) {
+        phase.step(ButtonState::new());
+        assert_eq!(
+            phase.map_id, bedroom,
+            "the warp must not fire mid-animation (frame {frame} of \
+             {WALK_FRAMES_PER_TILE})"
+        );
+        assert!(
+            phase.mid_step(),
+            "the step must still be outstanding on frame {frame}"
+        );
+    }
+    assert!(
+        !phase.player.in_transit(),
+        "frame {WALK_FRAMES_PER_TILE} drains the walk animation"
+    );
+
+    // Frame 17: the first call whose start-of-frame field input observes
+    // the completed step -- upstream's `tookStep` frame, and the one the
+    // warp fires on.
+    phase.step(ButtonState::new());
+
+    let destination = assets::MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F");
+    assert_eq!(
+        phase.map_id, destination,
+        "the completed step onto the stair warp must rebind to the 1F map \
+         on the 17th frame"
+    );
+    assert_eq!(
+        phase.player.position(),
+        (8, 2),
+        "the player must arrive at 1F's own warp #2 position"
+    );
+    // The facing is derived from the *destination* tile's own behavior,
+    // so pin that behavior down too -- otherwise `South` here would also
+    // be satisfied by `GetAdjustedInitialDirection`'s catch-all `else`.
+    let (dest_pos, dest_behavior) = warp_tile_behavior(destination, 2);
+    assert_eq!(dest_pos, (8, 2));
+    assert_eq!(
+        dest_behavior, MB_NON_ANIMATED_DOOR,
+        "1F's warp #2 is the staircase's own non-animated-door tile"
+    );
+    assert_eq!(
+        phase.player.facing(),
+        Direction::South,
+        "GetAdjustedInitialDirection's IsNonAnimDoor||IsDoor branch \
+         (overworld.c:935-936) applies to that tile"
+    );
+
+    let dest_header = assets::MapHeaderTable::new()
+        .header(destination)
+        .expect("1F must resolve in the generated map-header table");
+    assert_eq!(
+        phase.save1().location.map_group,
+        i8::try_from(dest_header.group).unwrap()
+    );
+    assert_eq!(
+        phase.save1().location.map_num,
+        i8::try_from(dest_header.num).unwrap()
+    );
+    assert_eq!(
+        phase.save1().location.warp_id,
+        2,
+        "arrived via 1F's own warp-event index 2 (new_game module docs)"
+    );
+    assert_eq!(
+        (phase.save1().location.x, phase.save1().location.y),
+        (-1, -1),
+        "SetWarpDestinationToMapWarp always passes -1, -1 for x/y (overworld.c:638-641)"
+    );
+    assert_eq!(
+        (
+            i32::from(phase.save1().pos.x),
+            i32::from(phase.save1().pos.y)
+        ),
+        (8, 2),
+        "save1.pos must mirror the post-warp tile, not the pre-warp one"
+    );
+}
+
+/// Regression (the issue #163 acceptance test): a completed landing on an *ordinary*
+/// (non-warp) tile must not transition the map, even though every
+/// completed landing is now checked for a warp trigger.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn stepping_onto_an_ordinary_tile_does_not_warp() {
+    let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+    let starting_map = phase.map_id;
+
+    // The spawn tile IS the warp tile; step south, away from it, onto
+    // ordinary bedroom floor (already exercised, collision-wise, by
+    // `overworld_movement_input_turns_the_player`). Drive the whole
+    // 16-frame walk animation *and* the 17th call that observes the
+    // completed step, since the trigger check runs at the start of that
+    // call (`OverworldPhase::step`'s "Warp timing" section, issue #1039).
+    phase.step(held(Buttons::DOWN));
+    for _ in 1..WALK_FRAMES_PER_TILE {
+        phase.step(ButtonState::new());
+    }
+    assert!(
+        !phase.player.in_transit(),
+        "16 frames must fully drain the step this test relies on completing"
+    );
+    phase.step(ButtonState::new());
+
+    assert_eq!(
+        phase.map_id, starting_map,
+        "stepping onto an ordinary floor tile must not transition maps"
+    );
+    assert_eq!(
+        phase.player.position(),
+        (7, 2),
+        "the step itself must still have landed"
+    );
+    assert!(
+        !phase.mid_step(),
+        "the 17th call must have consumed the completed landing"
+    );
+}
+
+/// [`warp_data_index`] narrows the *generated* tables' real indices
+/// (no pack needed -- `MapHeaderTable` is compiled in), cross-checked
+/// against [`new_game`]'s own hand-maintained constants the same way
+/// `new_game`'s `spawn_location_matches_the_generated_map_header` does.
+#[test]
+fn warp_data_index_narrows_the_generated_map_indices() {
+    let header = assets::MapHeaderTable::new()
+        .header(new_game::SPAWN_MAP_ID)
+        .expect("SPAWN_MAP_ID must resolve in the generated map-header table");
+    assert_eq!(
+        warp_data_index(header.group, "MAP_GROUP"),
+        new_game::SPAWN_MAP_GROUP
+    );
+    assert_eq!(
+        warp_data_index(header.num, "MAP_NUM"),
+        new_game::SPAWN_MAP_NUM
+    );
+    assert_eq!(warp_data_index(0, "warp id"), 0);
+    assert_eq!(warp_data_index(127, "warp id"), 127);
+}
+
+/// The out-of-range case panics rather than fabricating a plausible
+/// index: saturating to `127` would have silently written a *different,
+/// real* map's group/num into the save (that function's own doc).
+#[test]
+#[should_panic(expected = "does not fit the i8")]
+fn warp_data_index_refuses_to_fabricate_an_out_of_range_index() {
+    let _ = warp_data_index(128, "MAP_GROUP");
+}
+
+/// Real-pack guard for the *destination*-tile rule
+/// [`OverworldPhase::warp_to`] derives its arrival facing from
+/// (`engine::overworld::warp_in_facing` <- upstream
+/// `GetAdjustedInitialDirection`, `pokeemerald/src/overworld.c:929-951`).
+///
+/// The I-3 path's own counterexample to a source-tile rule: Brendan's
+/// house front door is `MAP_LITTLEROOT_TOWN`'s warp #1, sitting on an
+/// `MB_ANIMATED_DOOR` tile -- whose *own* branch would say `DIR_SOUTH` --
+/// but it lands on `..._BRENDANS_HOUSE_1F`'s warp #1, whose tile is
+/// `MB_SOUTH_ARROW_WARP`, so upstream faces the arrival `DIR_NORTH`
+/// (back into the house). Asserted against the extracted pack's real
+/// metatile attributes, not a hand-built fixture.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn the_front_door_warp_faces_north_from_the_destination_tiles_behavior() {
+    let (source_pos, source_behavior) = warp_tile_behavior(assets::MapId("MAP_LITTLEROOT_TOWN"), 1);
+    assert_eq!(source_pos, (5, 8), "Littleroot's warp #1: the house door");
+    assert_eq!(source_behavior, MB_ANIMATED_DOOR);
+    assert_eq!(
+        warp_in_facing(source_behavior),
+        Direction::South,
+        "what a (wrong) source-tile rule would have produced"
+    );
+
+    let (dest_pos, dest_behavior) =
+        warp_tile_behavior(assets::MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F"), 1);
+    assert_eq!(dest_pos, (8, 8), "1F's warp #1: the doormat inside");
+    assert_eq!(dest_behavior, MB_SOUTH_ARROW_WARP);
+    assert_eq!(
+        warp_in_facing(dest_behavior),
+        Direction::North,
+        "GetAdjustedInitialDirection's IsSouthArrowWarp branch (overworld.c:937-938)"
+    );
+}
+
+/// Mutation guard for [`OverworldPhase::warp_to`] itself: the front-door
+/// arrival from the test above, driven through `warp_to` rather than the
+/// pure `warp_in_facing`. Landing on 1F's warp #1 (`(8, 8)`,
+/// `MB_SOUTH_ARROW_WARP`) must face North — a facing distinguishable from
+/// both `GetAdjustedInitialDirection`'s catch-all `else` and `warp_to`'s
+/// own `MB_NORMAL` fallback (which would each say South, and which the
+/// bedroom-stair test cannot tell apart) — and `scene` must rebind in
+/// lockstep with `map_id` (`warp_to`'s documented invariant), observed by
+/// composing the phase's frame against a freshly loaded 1F scene.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn warping_to_the_front_doormat_faces_north_and_rebinds_the_scene() {
+    let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+    let one_f = assets::MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F");
+
+    phase.warp_to(one_f, 1);
+
+    assert_eq!(phase.map_id, one_f);
+    assert_eq!(
+        phase.player.position(),
+        (8, 8),
+        "1F's warp #1: the doormat inside the front door"
+    );
+    assert_eq!(
+        phase.player.facing(),
+        Direction::North,
+        "the doormat's own MB_SOUTH_ARROW_WARP behavior must drive the \
+         facing (overworld.c:937-938) -- South would mean the destination \
+         behavior was never read"
+    );
+    let fresh = crate::overworld::load_room(
+        one_f,
+        crate::overworld::PlayerCharacter::Brendan,
+        &phase.save1.event_data,
+    )
+    .expect("1F must load from the extracted pack");
+    assert!(
+        phase.compose_frame()[..]
+            == fresh.compose_frame(&phase.player, &phase.save1.event_data, 0)[..],
+        "warp_to must rebind `scene` to the destination map, not just `map_id` -- `tick` is 0 \
+         on both sides since `warp_to` resets `phase.tick` and `fresh` has never `step`ped"
+    );
+}
+
+/// `ClearTempFieldEventData` (`overworld.c:848`, in `LoadMapFromWarp`,
+/// ahead of `RunOnTransitionMapScript` at `:860`): a warp clears the
+/// per-map-load temp flag/var ranges -- load-bearing since Route 103's
+/// cuttable-tree object events ride `FLAG_TEMP_12`/`_13`
+/// (`assets::object_event_flags`, issue #248) -- while ordinary persistent
+/// state survives untouched. The connection-crossing sibling
+/// (`LoadMapFromCameraTransition`, `:798`) is pinned by
+/// `route103_rival_tests::walking_north_from_route_101_crosses_oldale_town_into_route_103`.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn warping_clears_temp_field_event_data_but_not_persistent_flags() {
+    // `FLAG_TEMP_12` (`TEMP_FLAGS_START + 0x12`) and `VAR_TEMP_3`
+    // (`TEMP_VARS_START + 0x3`) -- independently transcribed, the same
+    // "each module cites its own constant" convention as everywhere else.
+    const FLAG_TEMP_12: u16 = 0x12;
+    const VAR_TEMP_3: u16 = 0x4003;
+    // An ordinary persistent flag far outside the temp range
+    // (`FLAG_HIDE_ROUTE_103_RIVAL`, `include/constants/flags.h:772`).
+    const FLAG_HIDE_ROUTE_103_RIVAL: u16 = 0x2D3;
+
+    let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+    phase.save1.event_data.flag_set(FLAG_TEMP_12).unwrap();
+    phase.save1.event_data.var_set(VAR_TEMP_3, 7).unwrap();
+    phase
+        .save1
+        .event_data
+        .flag_set(FLAG_HIDE_ROUTE_103_RIVAL)
+        .unwrap();
+
+    phase.warp_to(assets::MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F"), 1);
+
+    assert_eq!(
+        phase.save1.event_data.flag_get(FLAG_TEMP_12),
+        Ok(false),
+        "a warp is a map load -- the temp flag range must clear"
+    );
+    assert_eq!(
+        phase.save1.event_data.var_get(VAR_TEMP_3),
+        Ok(0),
+        "and the temp var range with it"
+    );
+    assert_eq!(
+        phase.save1.event_data.flag_get(FLAG_HIDE_ROUTE_103_RIVAL),
+        Ok(true),
+        "while ordinary persistent flags survive the load untouched"
+    );
+}
+
+/// The issue #174 acceptance test: from inside 1F, walking onto the
+/// doormat (warp #1, `(8, 8)`, `MB_SOUTH_ARROW_WARP`) while holding South
+/// fires the arrow-warp trigger -- upstream `TryArrowWarp`/
+/// `IsArrowWarpMetatileBehavior` (`field_control_avatar.c:688-699, 767-780`,
+/// polled every frame `input->heldDirection && input->dpadDirection ==
+/// playerDirection` holds, `:164-168` -- `OverworldPhase::step`'s "Warp
+/// timing" section) -- and exits through the front door to
+/// `MAP_LITTLEROOT_TOWN`'s own warp #1 (`(5, 8)`, `MB_ANIMATED_DOOR`,
+/// already pinned by
+/// [`the_front_door_warp_faces_north_from_the_destination_tiles_behavior`]),
+/// landing facing South per that tile's own `IsNonAnimDoor||IsDoor` branch
+/// (`overworld.c:935-936`). This is the doormat this port's whole warp
+/// stack exists to fire: without it, the player can walk down into
+/// Brendan's house but never back out through the front door.
+///
+/// Down is held for the **whole** crossing, which is what upstream's gate
+/// actually requires -- see
+/// [`releasing_south_mid_step_does_not_exit_through_the_doormat`] for the
+/// sibling that releases it and must therefore *not* warp.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn walking_onto_the_doormat_holding_south_exits_through_the_front_door() {
+    let (doormat_pos, doormat_behavior) = warp_tile_behavior(ONE_F, 1);
+    assert_eq!(doormat_pos, (8, 8), "1F's warp #1: the doormat inside");
+    assert_eq!(doormat_behavior, MB_SOUTH_ARROW_WARP);
+
+    // One tile north of the doormat, already facing South -- so the very
+    // first held-Down frame steps directly onto it with no turn frame
+    // needed first.
+    let mut phase = one_f_phase((8, 7), Direction::South);
+
+    // Frame 1: the step onto the doormat begins. `PlayerState` commits the
+    // tile immediately, but no warp may fire while the crossing is still
+    // animating -- upstream's `heldDirection` is only ever set at
+    // `T_TILE_CENTER`/`T_NOT_MOVING` (`field_control_avatar.c:95-112`).
+    phase.step(held(Buttons::DOWN));
+    assert_eq!(
+        phase.player.position(),
+        (8, 8),
+        "the step onto the doormat must commit on the frame it begins"
+    );
+    assert_eq!(
+        phase.map_id, ONE_F,
+        "the arrow warp must not fire on the frame the step begins"
+    );
+
+    // Frames 2..=16: keep Down held (upstream polls the *currently held*
+    // direction, so releasing it would be a different test) while the walk
+    // animation drains. The step is still outstanding throughout --
+    // including frame 16, which is upstream's last animation frame rather
+    // than the frame its CB1 observes the landing (issue #1039) -- so the
+    // poll stays closed and the map must not change.
+    for frame in 2..=u32::from(WALK_FRAMES_PER_TILE) {
+        phase.step(held(Buttons::DOWN));
+        assert_eq!(
+            phase.map_id, ONE_F,
+            "the warp must not fire mid-animation (frame {frame} of {WALK_FRAMES_PER_TILE})"
+        );
+    }
+
+    // Frame 17: the first call whose start-of-frame field input sees the
+    // player at rest on the doormat, with Down still held and still equal
+    // to their facing -- so `TryArrowWarp`'s gate opens and the doormat's
+    // own MB_SOUTH_ARROW_WARP behavior matches it.
+    phase.step(held(Buttons::DOWN));
+
+    let destination = assets::MapId("MAP_LITTLEROOT_TOWN");
+    assert_eq!(
+        phase.map_id, destination,
+        "the doormat's arrow-warp trigger must fire on the first call whose \
+         field input observes the completed step with South still held"
+    );
+    assert_eq!(
+        phase.player.position(),
+        (5, 8),
+        "Littleroot's own warp #1: the front door"
+    );
+    assert_eq!(
+        phase.player.facing(),
+        Direction::South,
+        "the front door's MB_ANIMATED_DOOR behavior drives the arrival \
+         facing (overworld.c:935-936)"
+    );
+    assert!(
+        !phase.player.in_transit(),
+        "the warp lands the player at rest, not mid-step"
+    );
+}
+
+/// Senior-review regression (#174 finding 1b, the over-trigger half):
+/// upstream's arrow-warp gate reads the direction **currently held**
+/// (`input->heldDirection && input->dpadDirection == playerDirection`,
+/// `field_control_avatar.c:164-168`), not the direction some earlier step
+/// happened to be taken in. So tapping Down for one frame and releasing it
+/// during the crossing walks the player onto the doormat and leaves them
+/// there -- `tookStep` would be true, but `heldDirection` is false.
+///
+/// Identical setup and frame count to
+/// [`walking_onto_the_doormat_holding_south_exits_through_the_front_door`];
+/// the only difference is the released button, so a regression that keys
+/// arrow warps off the landing rather than the held keys fails here.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn releasing_south_mid_step_does_not_exit_through_the_doormat() {
+    let mut phase = one_f_phase((8, 7), Direction::South);
+
+    phase.step(held(Buttons::DOWN));
+    assert_eq!(
+        phase.player.position(),
+        (8, 8),
+        "the step onto the doormat must still commit"
+    );
+
+    // Down released from frame 2 onward, through the frame the crossing
+    // completes and on into the 17th call that observes it -- the same
+    // frame count as the holding sibling, so the released-button case
+    // lands exactly on the landing call.
+    for _ in 2..=u32::from(WALK_FRAMES_PER_TILE) {
+        phase.step(ButtonState::new());
+    }
+    assert!(
+        !phase.player.in_transit(),
+        "the crossing must have fully drained -- otherwise this test proves nothing"
+    );
+    phase.step(ButtonState::new());
+    assert!(
+        !phase.mid_step(),
+        "the 17th call must have consumed the completed landing -- otherwise \
+         this test proves nothing"
+    );
+    assert_eq!(
+        phase.map_id, ONE_F,
+        "a released direction must not warp: upstream needs heldDirection on \
+         the frame the check runs, not merely a completed step"
+    );
+    assert_eq!(
+        phase.player.position(),
+        (8, 8),
+        "the player stays standing on the doormat"
+    );
+}
+
+/// Issue #1039 regression, the frame-boundary half: the arrow-warp poll
+/// belongs to the call whose *start-of-frame* field input observes the
+/// completed step, not to the call that drains the walk animation.
+///
+/// Upstream's `T_TILE_CENTER` needs `PlayerCheckIfAnimFinishedOrInactive`
+/// (`field_player_avatar.c:901-915`) to see a `heldMovementFinished` that
+/// only the previous frame's CB2 `AnimateSprites` could have set
+/// (`main.c:188-195`, `overworld.c:1438-1469`), so call 16 is the last
+/// animation frame and `input->heldDirection` is still false on it
+/// (`field_control_avatar.c:95-112`). A player who holds South all the way
+/// through call 16 and releases it on call 17 therefore has no held
+/// direction on the only call whose `TryArrowWarp` gate is open
+/// (`:164-168`), and must stay standing on the doormat.
+///
+/// Same setup and same button pattern as
+/// [`walking_onto_the_doormat_holding_south_exits_through_the_front_door`]
+/// up to and including call 16; the only difference is the release on call
+/// 17. A regression that polls the arrow warp after movement on the drain
+/// call -- the pre-#1039 shape -- exits the house here.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn releasing_the_direction_on_the_landing_call_does_not_exit_through_the_doormat() {
+    let (doormat_pos, doormat_behavior) = warp_tile_behavior(ONE_F, 1);
+    assert_eq!(doormat_pos, (8, 8), "1F's warp #1: the doormat inside");
+    assert_eq!(doormat_behavior, MB_SOUTH_ARROW_WARP);
+
+    let mut phase = one_f_phase((8, 7), Direction::South);
+
+    // Calls 1..=16: Down held for the whole crossing, exactly as the
+    // exiting sibling holds it. Call 16 drains the animation, and the map
+    // must still not have changed on it.
+    for frame in 1..=u32::from(WALK_FRAMES_PER_TILE) {
+        phase.step(held(Buttons::DOWN));
+        assert_eq!(
+            phase.map_id, ONE_F,
+            "the warp must not fire while the step is still outstanding \
+             (frame {frame} of {WALK_FRAMES_PER_TILE})"
+        );
+    }
+    assert_eq!(
+        phase.player.position(),
+        (8, 8),
+        "the crossing must have landed on the doormat"
+    );
+    assert!(
+        !phase.player.in_transit(),
+        "frame {WALK_FRAMES_PER_TILE} drains the walk animation"
+    );
+    assert!(
+        phase.mid_step(),
+        "but the completed step is still outstanding -- it is call 17's \
+         field input that observes it (issue #1039)"
+    );
+
+    // Call 17: the poll's only open frame, and Down is released on it.
+    phase.step(ButtonState::new());
+
+    assert!(
+        !phase.mid_step(),
+        "call 17 must have consumed the completed landing -- otherwise this \
+         test proves nothing"
+    );
+    assert_eq!(
+        phase.map_id, ONE_F,
+        "no direction is held on the frame the arrow-warp gate is open, so \
+         the doormat must not exit the house"
+    );
+    assert_eq!(
+        phase.player.position(),
+        (8, 8),
+        "the player stays standing on the doormat"
+    );
+}
+
+/// Review regression (#191, Codex P2): upstream evaluates `TryArrowWarp`
+/// *before* `PlayerStep` mutates the player, so the gate compares the held
+/// direction against the facing the frame *started* with. A player who just
+/// warped onto the doormat facing North and taps Down for a single frame is
+/// only *turned* South by that frame (`field_control_avatar.c:164-168` reads
+/// the pre-movement `playerDirection`); the warp may not fire until a later
+/// frame still holds Down against the now-South facing. Reading the
+/// post-turn facing instead would exit the house on the tap frame itself.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn a_one_frame_down_tap_on_the_doormat_facing_north_turns_without_warping() {
+    let (doormat_pos, doormat_behavior) = warp_tile_behavior(ONE_F, 1);
+    assert_eq!(doormat_pos, (8, 8), "1F's warp #1: the doormat inside");
+    assert_eq!(doormat_behavior, MB_SOUTH_ARROW_WARP);
+
+    // The state a warp *into* the house leaves the player in: standing on
+    // the doormat, facing North (see
+    // `warping_to_the_front_doormat_faces_north_and_rebinds_the_scene`).
+    let mut phase = one_f_phase((8, 8), Direction::North);
+
+    // The tap frame: Down is held against a North facing, so upstream's
+    // pre-movement gate stays closed and the frame only turns the player.
+    phase.step(held(Buttons::DOWN));
+    assert_eq!(
+        phase.map_id, ONE_F,
+        "the tap frame must only turn the player, not fire the arrow warp"
+    );
+    assert_eq!(
+        phase.player.facing(),
+        Direction::South,
+        "the tap turned the player"
+    );
+    assert_eq!(
+        phase.player.position(),
+        (8, 8),
+        "still standing on the doormat"
+    );
+
+    // Down released before the next frame: the gate reads the *currently*
+    // held direction, so nothing fires and the player stays put.
+    phase.step(ButtonState::new());
+    assert_eq!(
+        phase.map_id, ONE_F,
+        "a released tap leaves the player standing on the doormat, as upstream does"
+    );
+
+    // Holding Down again -- now against the already-South facing -- is the
+    // ordinary arrow-warp case: the gate opens and the doormat fires.
+    phase.step(held(Buttons::DOWN));
+    assert_eq!(
+        phase.map_id,
+        assets::MapId("MAP_LITTLEROOT_TOWN"),
+        "holding Down against the South facing fires the doormat normally"
+    );
+}
+
+/// Senior-review regression (#174 finding 1a, the under-trigger half, and
+/// the early playable slice's doormat interaction): the state a warp *into* the
+/// house leaves the player in -- standing on the doormat at `(8, 8)`,
+/// facing North, because the mat's own `MB_SOUTH_ARROW_WARP` drives
+/// `GetAdjustedInitialDirection` that way (`overworld.c:937-938`, pinned by
+/// [`warping_to_the_front_doormat_faces_north_and_rebinds_the_scene`]).
+///
+/// From there, holding Down must exit. Upstream gets this from the
+/// every-frame `heldDirection` poll: the turn-in-place makes
+/// `playerDirection` South, the poll matches, `TryArrowWarp` fires. It
+/// cannot come from a step, because `(8, 9)` is off-map -- the step is
+/// blocked forever, so a landing-gated arrow warp makes the front door a
+/// permanent one-way trip into the house.
+///
+/// The poll reads the frame's *pre-movement* facing (review finding on
+/// #191, matching upstream's `TryArrowWarp`-before-`PlayerStep` order), so
+/// the first held-Down frame only turns the player and the exit fires on
+/// the second, when the held direction meets the already-South facing --
+/// exactly upstream's frame anatomy. The released-tap half of the same
+/// finding is pinned by
+/// [`a_one_frame_down_tap_on_the_doormat_facing_north_turns_without_warping`].
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn standing_on_the_doormat_facing_north_and_holding_south_exits() {
+    let mut phase = one_f_phase((0, 0), Direction::South);
+
+    // Arrive the way the front door actually arrives, rather than asserting
+    // the post-warp state by hand.
+    phase.warp_to(ONE_F, 1);
+    assert_eq!(phase.player.position(), (8, 8), "1F's warp #1: the doormat");
+    assert_eq!(
+        phase.player.facing(),
+        Direction::North,
+        "a warp-in onto a south-arrow tile faces back out of it"
+    );
+
+    // Hold Down. Frame 1 only turns in place: the poll compares against the
+    // pre-movement (still-North) facing, so it stays closed while the turn
+    // happens -- upstream's `TryArrowWarp` runs before `PlayerStep`.
+    phase.step(held(Buttons::DOWN));
+    assert_eq!(
+        phase.map_id, ONE_F,
+        "the turn frame must not warp: the poll reads the pre-turn facing"
+    );
+    assert_eq!(
+        phase.player.facing(),
+        Direction::South,
+        "frame 1 turned the player to face the held direction"
+    );
+
+    // Frame 2: Down is still held and now meets the already-South facing,
+    // so the every-frame poll fires the doormat.
+    phase.step(held(Buttons::DOWN));
+
+    assert_eq!(
+        phase.map_id,
+        assets::MapId("MAP_LITTLEROOT_TOWN"),
+        "holding Down while standing on the doormat must exit the house -- \
+         the step south is blocked (off-map), so only the every-frame \
+         heldDirection poll can ever fire this"
+    );
+    assert_eq!(
+        phase.player.position(),
+        (5, 8),
+        "Littleroot's own warp #1: the front door"
+    );
+    assert_eq!(phase.player.facing(), Direction::South);
+}
+
+/// The companion to the test above: a warp-in alone must *not* warp back
+/// out, however many frames pass with nothing held. This is what makes the
+/// every-frame poll safe -- [`warp_in_facing`] lands the arrival facing out
+/// of the arrow, so its direction can never match a held one without a
+/// deliberate turn first.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn arriving_on_the_doormat_does_not_immediately_warp_back_out() {
+    let mut phase = one_f_phase((0, 0), Direction::South);
+    phase.warp_to(ONE_F, 1);
+
+    for _ in 0..u32::from(WALK_FRAMES_PER_TILE) * 2 {
+        phase.step(ButtonState::new());
+        assert_eq!(
+            phase.map_id, ONE_F,
+            "an arrival on an arrow tile must not re-fire it"
+        );
+    }
+    assert_eq!(phase.player.position(), (8, 8));
+    assert_eq!(phase.player.facing(), Direction::North);
+}
+
+/// Regression: the same doormat, same position, but facing/holding a
+/// direction other than South must not fire the arrow-warp trigger --
+/// `IsArrowWarpMetatileBehavior` only matches the one direction its id
+/// belongs to (`engine::overworld::warp::is_arrow_warp_trigger`'s own unit
+/// tests cover the predicate directly; this is the phase-level version:
+/// landing on the doormat by walking sideways past it must not exit).
+///
+/// Right is held for the whole crossing *and* through the landing call
+/// after it, so the poll really does run with a direction held that equals
+/// the player's facing -- only the id-vs-direction match denies it.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn walking_onto_the_doormat_facing_east_does_not_exit() {
+    // One tile west of the doormat, already facing East, so the first
+    // held-Right frame steps directly onto (8, 8) facing East instead of
+    // South.
+    let mut phase = one_f_phase((7, 8), Direction::East);
+
+    phase.step(held(Buttons::RIGHT));
+    assert_eq!(phase.player.position(), (8, 8));
+    // 15 more frames: the crossing's animation drains on the last of them.
+    for _ in 1..WALK_FRAMES_PER_TILE {
+        phase.step(held(Buttons::RIGHT));
+    }
+    assert!(
+        !phase.player.in_transit(),
+        "the crossing's animation must have fully drained by frame \
+         {WALK_FRAMES_PER_TILE}"
+    );
+    assert!(
+        phase.mid_step(),
+        "but call 17's field input is what observes the landing (issue #1039)"
+    );
+    assert_eq!(phase.player.position(), (8, 8));
+
+    // Call 17: the poll's open frame, with Right still held and still equal
+    // to the player's East facing -- so only the id-vs-direction match can
+    // deny the doormat here.
+    phase.step(held(Buttons::RIGHT));
+    // The landing call is also where a still-held direction starts the next
+    // crossing (`OverworldPhase::step`'s "Frame shape" docs), so the doormat
+    // landing is observed here as *replaced*, not as cleared -- `mid_step()`
+    // is true again on the way out of this call, for the new crossing.
+    assert_ne!(
+        phase.pending_landing,
+        Some((8, 8)),
+        "call 17 must have consumed the doormat landing -- otherwise the \
+         poll never ran and this test proves nothing"
+    );
+
+    assert_eq!(
+        phase.map_id, ONE_F,
+        "the doormat must not fire while facing East -- only South matches \
+         its MB_SOUTH_ARROW_WARP behavior"
+    );
+}
+
+/// The issue #194 acceptance test: upstream runs `ProcessPlayerFieldInput`
+/// *before* `PlayerStep` and skips the step entirely once it consumes the
+/// input (`pokeemerald/src/overworld.c:1444-1455`), so a *legal, walkable*
+/// step in an arrow-warp tile's own direction warps instead of stepping.
+/// No bundled real map can exercise this -- every arrow tile this port's own
+/// data reaches has its arrow direction impassable, the doormat's `(8, 9)`
+/// off-map among them (`OverworldPhase::step`'s "Warp timing" docs) -- so
+/// this borrows the doormat's own real, static warp-event data (`ONE_F`'s
+/// warp #1, `(8, 8)` -> `MAP_LITTLEROOT_TOWN` warp #1; needs no pack, see
+/// [`warp_tile_behavior`]'s own doc comment on why `MapEventsTable` is
+/// always available) but drops it onto a **synthetic** scene
+/// ([`crate::overworld::tests::synthetic_scene_with_special_tile`]) where
+/// `(8, 9)` -- unlike the real off-map tile -- is ordinary, walkable ground.
+///
+/// The player starts already standing on the doormat, facing and holding
+/// South -- the same state
+/// [`standing_on_the_doormat_facing_north_and_holding_south_exits`]'s second
+/// frame reaches, which already proves the ordinary (post-movement) poll
+/// fires when the step south is *blocked*. This test is that one's
+/// walkable-exit counterpart: before issue #194, `advance_player_one_frame`
+/// ran first here, the (now legal) step to `(8, 9)` landed, `in_transit`
+/// closed the poll for the whole crossing, and by the time it reopened the
+/// player was standing on `(8, 9)` -- ordinary ground, no warp, ever.
+///
+/// # What this test does and does not prove (pack-free ratchet)
+///
+/// This one runs in a plain `cargo test --workspace`, with no extracted
+/// pack, and that is the point: it is the *ratchet* that keeps the #194
+/// ordering from regressing in the default gate. But `warp_to` finishes
+/// through [`crate::overworld::load_room`], which needs a local pack for
+/// the real `MAP_LITTLEROOT_TOWN` destination, so with no pack the warp
+/// resolves, bails out at the load, and leaves the player where they were.
+/// Hence the assertions here are deliberately only the *negative* half --
+/// the player must never reach `(8, 9)`, and must never be left
+/// mid-crossing -- which is exactly and only what the pre-#194
+/// movement-first ordering violated.
+///
+/// What it therefore does **not** prove is that a warp actually fired: a
+/// regression that skipped the step while producing no warp at all (a
+/// soft-lock -- input consumed, nothing happening) would still satisfy both
+/// assertions. That positive half is pinned by the pack-gated sibling
+/// [`a_legal_step_in_the_arrow_direction_lands_the_warp`], which runs this
+/// same synthetic scene and asserts the destination map and tile.
+#[test]
+fn a_legal_step_in_the_arrow_direction_warps_instead_of_stepping() {
+    let mut phase = walkable_south_arrow_phase();
+
+    phase.step(held(Buttons::DOWN));
+
+    assert_ne!(
+        phase.player.position(),
+        (8, 9),
+        "a legal step in the arrow direction must never happen -- the warp preempts it \
+         (overworld.c:1444-1455); the pre-#194 movement-first ordering would have stepped \
+         the player onto (8, 9) here, before the poll ever got a chance to fire"
+    );
+    assert!(
+        !phase.player.in_transit(),
+        "no walk animation was ever started -- the step never ran"
+    );
+}
+
+/// The positive half of
+/// [`a_legal_step_in_the_arrow_direction_warps_instead_of_stepping`]: the
+/// same synthetic scene and the same single held-South frame, but asserting
+/// that the preempting warp actually *landed* rather than only that the
+/// step never happened -- so a regression that skips movement without
+/// warping (a soft-lock) fails here even though it passes the pack-free
+/// ratchet.
+///
+/// Needs a local pack because `warp_to` loads the real destination room
+/// ([`crate::overworld::load_room`] over extracted tileset/map data). The
+/// destination pins are the same ones
+/// [`standing_on_the_doormat_facing_north_and_holding_south_exits`] uses
+/// for the real front door: `MAP_LITTLEROOT_TOWN`, warp #1 at `(5, 8)`.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn a_legal_step_in_the_arrow_direction_lands_the_warp() {
+    let mut phase = walkable_south_arrow_phase();
+
+    phase.step(held(Buttons::DOWN));
+
+    assert_eq!(
+        phase.map_id,
+        assets::MapId("MAP_LITTLEROOT_TOWN"),
+        "the preempting arrow warp must actually land, not merely eat the step"
+    );
+    assert_eq!(
+        phase.player.position(),
+        (5, 8),
+        "Littleroot's own warp #1: the front door"
+    );
+    assert_ne!(
+        phase.player.position(),
+        (8, 9),
+        "and the step in the arrow direction still never happened"
+    );
+}
+
+/// The issue #851 acceptance test's pack-free half: animated doors are
+/// polled pre-movement, against the tile the player *faces*, never one they
+/// land on -- a completed-step check alone can never reach a real animated
+/// door, because every one of them is solid
+/// (`engine::overworld::warp`'s module docs). Littleroot's lab door at
+/// `(7, 16)` is this port's own real evidence for that (issue #851's own
+/// evidence section): it decodes to collision 1 with `MB_ANIMATED_DOOR`,
+/// with no alternative entrance.
+///
+/// [`facing_littleroot_lab_door_phase`] reuses that real warp event but on a
+/// **synthetic**, walkable scene (this test's own doc comment) precisely so
+/// this can assert the *negative* half, independent of whether a local pack
+/// happens to be present: before issue #851, a legal, walkable step onto an
+/// animated-door tile would simply have happened, `trigger_door_warp` only
+/// ever running (and firing) once that step's walk animation drained.
+/// Mirrors [`a_legal_step_in_the_arrow_direction_warps_instead_of_stepping`]'s
+/// own shape (and its own reason for asserting only the negative half) for
+/// the arrow-warp path: whether the preempting warp actually *lands*
+/// depends on a local pack ([`facing_the_lab_door_and_holding_north_enters_birchs_lab`]
+/// pins that separately), but the step it preempts must never happen either
+/// way.
+#[test]
+fn facing_the_lab_door_and_holding_north_preempts_movement_instead_of_stepping() {
+    let mut phase = facing_littleroot_lab_door_phase(Direction::North);
+
+    phase.step(held(Buttons::UP));
+
+    assert_ne!(
+        phase.player.position(),
+        (7, 16),
+        "the pre-movement animated-door check must preempt movement before \
+         PlayerState::step ever runs (field_control_avatar.c:170-178) -- the \
+         pre-#851 completed-step-only gate would have let this walkable \
+         synthetic tile be stepped onto instead"
+    );
+    assert!(
+        !phase.player.in_transit(),
+        "no walk animation was ever started -- the step never ran"
+    );
+}
+
+/// The turning half of the same gate: a fresh turn into the door's facing
+/// direction must not itself warp -- upstream reads `playerDirection` ahead
+/// of `PlayerStep` (`field_control_avatar.c:143`), so `dpadDirection ==
+/// playerDirection` can never be satisfied on the very frame that turn
+/// happens. Only the *next* held frame, now already facing the door, meets
+/// the gate. Mirrors the doormat's own
+/// `a_one_frame_down_tap_on_the_doormat_facing_north_turns_without_warping`
+/// for the arrow path.
+#[test]
+fn turning_to_face_the_lab_door_does_not_warp_on_the_turning_frame() {
+    let mut phase = facing_littleroot_lab_door_phase(Direction::East);
+
+    phase.step(held(Buttons::UP));
+    assert_eq!(
+        phase.player.facing(),
+        Direction::North,
+        "holding Up while facing East must turn the player to face North"
+    );
+    assert_eq!(
+        phase.player.position(),
+        (7, 17),
+        "a turning frame must never also move or warp"
+    );
+    assert_eq!(
+        phase.map_id,
+        MapId("MAP_LITTLEROOT_TOWN"),
+        "a turning frame must not warp"
+    );
+
+    phase.step(held(Buttons::UP));
+    assert_ne!(
+        phase.player.position(),
+        (7, 16),
+        "now already facing North, the second held-Up frame satisfies the gate and \
+         the door check preempts the now-legal step onto the (synthetic, walkable) tile"
+    );
+}
+
+/// The pack-free half of
+/// [`walking_up_to_the_lab_door_enters_it_on_the_next_input_frame`]: a
+/// *walked* approach (two full tile crossings, not a stationary press) must
+/// preempt the final step onto the door.
+///
+/// The second crossing drains on the 32nd held frame ([`WALK_FRAMES_PER_TILE`]
+/// `* 2`) and the 33rd is the first pre-movement poll that sees the player
+/// at rest on `(7, 17)` ([`super::animated_door`] owns why), so that is the
+/// frame the door must claim, and a still-held Up must never instead walk
+/// onto the (synthetic, walkable) door tile `(7, 16)`.
+///
+/// Runs pack-free the same way
+/// [`a_legal_step_in_the_arrow_direction_warps_instead_of_stepping`] does:
+/// whether the preempting warp actually lands depends on a local pack (the
+/// `#[ignore]`d sibling above pins that), but the step it preempts must
+/// never happen either way.
+#[test]
+fn walking_up_to_the_lab_door_preempts_the_final_step_onto_it() {
+    let mut phase = approaching_littleroot_lab_door_phase();
+
+    for _ in 0..=2 * u32::from(WALK_FRAMES_PER_TILE) {
+        phase.step(held(Buttons::UP));
+    }
+
+    assert_ne!(
+        phase.player.position(),
+        (7, 16),
+        "the pre-movement animated-door check must preempt the walked approach's final \
+         step onto the (synthetic, walkable) door tile on the first frame it sees the \
+         player at rest in front of it -- pre-#851 code steps onto it here instead"
+    );
+    assert!(
+        !phase.player.in_transit(),
+        "the walked approach's second tile crossing must have fully drained well before \
+         the {}th held frame",
+        2 * u32::from(WALK_FRAMES_PER_TILE) + 1
+    );
+}
+
+/// The positive, pack-gated half of
+/// [`facing_the_lab_door_and_holding_north_preempts_movement_instead_of_stepping`]:
+/// the same real warp event, but asserting the preempting animated-door
+/// warp actually *lands* rather than only that the step never happened --
+/// so a regression that skips movement without warping (a soft-lock) fails
+/// here even though it passes the pack-free ratchet. This is the issue #851
+/// acceptance test proper: entering Littleroot's real front door (Professor
+/// Birch's lab) from outdoors.
+///
+/// Needs a local pack because `warp_to` loads the real destination room
+/// ([`crate::overworld::load_room`] over extracted tileset/map data).
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn facing_the_lab_door_and_holding_north_enters_birchs_lab() {
+    let mut phase = facing_littleroot_lab_door_phase(Direction::North);
+
+    phase.step(held(Buttons::UP));
+
+    assert_eq!(
+        phase.map_id,
+        MapId("MAP_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB"),
+        "holding Up in front of the lab's animated door must fire TryDoorWarp \
+         (field_control_avatar.c:170-178, 833-856)"
+    );
+    assert_eq!(
+        phase.player.position(),
+        (6, 12),
+        "arriving at the lab's own warp #0"
+    );
+}
+
+/// The pack-gated half of
+/// [`walking_up_to_the_lab_door_preempts_the_final_step_onto_it`]: a
+/// *walked* approach to the door enters it on the held frame *after* the
+/// approach's own walk animation drains, and not on the drain frame itself.
+/// [`approaching_littleroot_lab_door_phase`] starts the player three tiles
+/// south of the door, already facing North, so reaching the tile in front
+/// of it takes two full tile crossings ([`WALK_FRAMES_PER_TILE`] frames
+/// each) and the 33rd held frame is the first one
+/// [`OverworldPhase::step`]'s pre-movement stage sees them at rest there
+/// ([`super::animated_door`] owns why that is upstream's own timing).
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn walking_up_to_the_lab_door_enters_it_on_the_next_input_frame() {
+    let mut phase = approaching_littleroot_lab_door_phase();
+
+    for _ in 0..2 * u32::from(WALK_FRAMES_PER_TILE) {
+        phase.step(held(Buttons::UP));
+    }
+    assert_eq!(
+        phase.map_id,
+        MapId("MAP_LITTLEROOT_TOWN"),
+        "the drain frame is this port's counterpart to the CB2 that finishes the walk, \
+         where upstream processes no field input at all -- the door must not fire on the \
+         {}th held frame",
+        2 * u32::from(WALK_FRAMES_PER_TILE)
+    );
+
+    phase.step(held(Buttons::UP));
+    assert_eq!(
+        phase.map_id,
+        MapId("MAP_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB"),
+        "the {}st held frame is upstream's first T_TILE_CENTER CB1 for that crossing, and \
+         TryDoorWarp fires there",
+        2 * u32::from(WALK_FRAMES_PER_TILE) + 1
+    );
+    assert_eq!(
+        phase.player.position(),
+        (6, 12),
+        "arriving at the lab's own warp #0"
+    );
+}
+
+/// A player who holds Up through the walked approach's last movement frame
+/// but lets go before the next one must stay outside, and must still be
+/// standing in front of the door rather than have walked onto it.
+///
+/// This is the player-visible end of that contract only. It cannot also
+/// stand in for the timing regression: pack-free, a drain-call door poll
+/// would resolve the lab warp but `warp_to` fails to load the destination
+/// and returns leaving both asserted values untouched
+/// (`super::connections`'s own failure contract), so an erroneous warp
+/// attempt reads exactly like no attempt. `step`'s
+/// `the_drain_call_of_a_walked_approach_resolves_no_door_warp` is the
+/// ratchet that observes the decision itself.
+#[test]
+fn releasing_up_after_the_walked_approach_drains_leaves_the_lab_door_shut() {
+    let mut phase = approaching_littleroot_lab_door_phase();
+
+    for _ in 0..2 * u32::from(WALK_FRAMES_PER_TILE) {
+        phase.step(held(Buttons::UP));
+    }
+
+    phase.step(ButtonState::new());
+
+    assert_eq!(
+        phase.map_id,
+        MapId("MAP_LITTLEROOT_TOWN"),
+        "Up was released on the only frame upstream would have read it for TryDoorWarp, \
+         so the door must not open"
+    );
+    assert_eq!(
+        phase.player.position(),
+        (7, 17),
+        "and the player must still be standing in front of it"
+    );
+}
+
+/// `RestartWildEncounterImmunitySteps` at upstream's `LoadMapFromWarp` call
+/// site (`src/overworld.c:850`), pinned through the whole phase: a warp must
+/// buy four fresh encounter-free steps, however many the player had already
+/// spent before taking it.
+///
+/// Deleting `self.wild.restart_immunity_steps()` from
+/// [`OverworldPhase::warp_to`] fails here -- the counter stays at
+/// [`WILD_ENCOUNTER_IMMUNITY_STEPS`] and the very first grass step after the
+/// warp draws.
+///
+/// The four-silent-steps tail is driven against Route 101's table through
+/// the phase's own [`OverworldPhase::wild`] rather than walked, because no
+/// warp this port can resolve lands anywhere with a wild table at all: the
+/// destination is Brendan's house, whose `gWildMonHeaders` entry does not
+/// exist, so walking it would assert nothing.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn warping_restarts_the_wild_encounter_immunity_window() {
+    // A real `map_id` with a real wild table over a synthetic open room, so
+    // the pre-warp steps are ordinary walking on ordinary ground.
+    let mut phase = OverworldPhase::for_test(
+        crate::overworld::tests::synthetic_scene(10, 10),
+        MapId("MAP_ROUTE101"),
+        PlayerState::new((2, 5), 3, Direction::East),
+        None,
+    );
+    phase.rng = Rng::new(IMMUNITY_SEED);
+
+    // Spend the window the phase started with.
+    for _ in 0..WILD_ENCOUNTER_IMMUNITY_STEPS {
+        walk_one_tile_east(&mut phase);
+    }
+    assert_eq!(
+        phase.wild.immunity_steps(),
+        WILD_ENCOUNTER_IMMUNITY_STEPS,
+        "four ordinary steps must exhaust the post-transition window"
+    );
+
+    phase.warp_to(ONE_F, 1);
+    assert_eq!(
+        phase.wild.immunity_steps(),
+        0,
+        "a warp is a full map load -- LoadMapFromWarp calls \
+         RestartWildEncounterImmunitySteps (overworld.c:850)"
+    );
+
+    // And the window it just granted really is four RNG-silent steps.
+    let mut rng = Rng::new(IMMUNITY_SEED);
+    for step in 1..=WILD_ENCOUNTER_IMMUNITY_STEPS {
+        assert!(
+            !grass_step_draws(&mut phase.wild, &mut rng),
+            "grass step {step} after a warp must be immune, and immune means RNG-silent"
+        );
+    }
+    assert!(
+        grass_step_draws(&mut phase.wild, &mut rng),
+        "the fifth step is out of the window and rolls for real"
+    );
+}

@@ -169,6 +169,42 @@ class TestCheckTransition(unittest.TestCase):
         )
 
 
+class TestCargoVersion(unittest.TestCase):
+    def test_maps_every_game_component(self):
+        self.assertEqual(
+            version_check.cargo_version((0, 0, 22, 7)),
+            "0.0.22+gamepatch.7",
+        )
+        self.assertEqual(
+            version_check.cargo_version((1, 0, 0, 0)),
+            "1.0.0+gamepatch.0",
+        )
+
+    def test_replaces_only_workspace_package_version(self):
+        manifest = (
+            '[package]\nversion = "9.9.9"\n\n'
+            '[workspace.package]\nedition = "2021"\nversion = "0.0.0"\n'
+        )
+        updated = version_check.replace_workspace_package_version(
+            manifest, (0, 1, 2, 3), "Cargo.toml"
+        )
+        self.assertIn('[package]\nversion = "9.9.9"', updated)
+        self.assertIn('version = "0.1.2+gamepatch.3"', updated)
+
+    def test_rejects_missing_or_duplicate_workspace_versions(self):
+        for manifest in (
+            "[workspace.package]\nedition = \"2021\"\n",
+            (
+                "[workspace.package]\n"
+                'version = "0.0.0"\nversion = "0.0.1"\n'
+            ),
+        ):
+            with self.subTest(manifest=manifest), self.assertRaises(
+                version_check.VersionError
+            ):
+                version_check.workspace_package_version(manifest, "Cargo.toml")
+
+
 class _TempGitRepo:
     """A throwaway git repo for driving version_check.main() end to end."""
 
@@ -192,19 +228,38 @@ class _TempGitRepo:
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content, encoding="utf-8")
 
+    def sync_cargo_manifest(self):
+        version = version_check.parse_version(
+            (self.path / "VERSION").read_text(encoding="utf-8"), "VERSION"
+        )
+        self.write(
+            "Cargo.toml",
+            "[workspace.package]\n"
+            f'version = "{version_check.cargo_version(version)}"\n',
+        )
+
     def commit(self, tag: str, message: str = "commit"):
+        try:
+            self.sync_cargo_manifest()
+        except version_check.VersionError:
+            pass
         self._run("add", "-A")
         self._run("commit", "-q", "-m", message)
         self._run("tag", tag)
 
     def run_version_check(
-        self, base: str, head: str = "HEAD", *, require_bump: bool = False
+        self,
+        base: str,
+        head: str = "HEAD",
+        *,
+        mode: str = "transition",
+        require_bump: bool = False,
     ):
         """Invoke version_check.main() with cwd set to the repo (like CI)."""
         old_cwd = os.getcwd()
         os.chdir(self.path)
         try:
-            args = ["--base", base, "--head", head]
+            args = ["--mode", mode, "--base", base, "--head", head]
             if require_bump:
                 args.append("--require-bump")
             return version_check.main(args)
@@ -239,6 +294,26 @@ class TestFinalGateIntegration(unittest.TestCase):
 
     def tearDown(self):
         self.repo.cleanup()
+
+    def test_workspace_package_version_must_match_version(self):
+        self.repo.write("VERSION", "0.1.2.5\n")
+        self.repo.commit("baseline")
+
+        self.repo.write("VERSION", "0.1.2.6\n")
+        self.assertNotEqual(
+            self.repo.run_version_check(
+                base="baseline", head="HEAD", require_bump=True
+            ),
+            0,
+        )
+
+        self.repo.sync_cargo_manifest()
+        self.assertEqual(
+            self.repo.run_version_check(
+                base="baseline", head="HEAD", require_bump=True
+            ),
+            0,
+        )
 
     def test_stale_marker_no_longer_authorizes_later_final_bump(self):
         # Step 2: baseline at 0.9.9.9.
@@ -351,6 +426,7 @@ class TestFinalGateIntegration(unittest.TestCase):
         )
 
         self.repo.write("VERSION", "0.1.2.6\n")
+        self.repo.sync_cargo_manifest()
         self.assertEqual(
             self.repo.run_version_check(
                 base="baseline", head="HEAD", require_bump=True
@@ -470,6 +546,154 @@ class TestFinalGateIntegration(unittest.TestCase):
 
         self.assertNotEqual(
             self.repo.run_version_check(base="baseline", head="HEAD"), 0
+        )
+
+
+class TestStrictTransitionPolicy(unittest.TestCase):
+    """Pin the ordinary-PR policy independently of cumulative validation."""
+
+    def test_valid_patch_and_reset_bumps(self):
+        for base, head in (
+            ((0, 1, 2, 5), (0, 1, 2, 6)),
+            ((0, 1, 2, 5), (0, 1, 3, 0)),
+            ((0, 1, 2, 5), (0, 2, 0, 0)),
+        ):
+            with self.subTest(base=base, head=head):
+                version_check.check_transition(
+                    base,
+                    head,
+                    marker_head=None,
+                    marker_unchanged=False,
+                    marker_rel=MARKER,
+                    require_bump=True,
+                )
+
+    def test_invalid_minor_and_major_resets_fail(self):
+        for head in ((0, 1, 3, 6), (0, 2, 1, 0), (0, 2, 0, 1)):
+            with self.subTest(head=head), self.assertRaises(
+                version_check.VersionError
+            ):
+                version_check.check_transition(
+                    (0, 1, 2, 5),
+                    head,
+                    marker_head=None,
+                    marker_unchanged=False,
+                    marker_rel=MARKER,
+                    require_bump=True,
+                )
+
+    def test_unchanged_and_regression_fail_when_bump_required(self):
+        for head in ((0, 1, 2, 5), (0, 1, 2, 4)):
+            with self.subTest(head=head), self.assertRaises(
+                version_check.VersionError
+            ):
+                version_check.check_transition(
+                    (0, 1, 2, 5),
+                    head,
+                    marker_head=None,
+                    marker_unchanged=False,
+                    marker_rel=MARKER,
+                    require_bump=True,
+                )
+
+    def test_malformed_versions_remain_rejected(self):
+        for raw in ("0.1.2", "v0.1.2.6", "0.01.2.6", "0.1.-2.6"):
+            with self.subTest(raw=raw), self.assertRaises(
+                version_check.VersionError
+            ):
+                version_check.parse_version(raw, "test")
+
+
+class TestCumulativePolicy(unittest.TestCase):
+    def setUp(self):
+        self.repo = _TempGitRepo()
+
+    def tearDown(self):
+        self.repo.cleanup()
+
+    def test_accepts_distant_accumulated_endpoints(self):
+        for base, head in (
+            ("0.0.0.0", "0.0.13.9"),
+            ("0.0.13.8", "0.1.36.2"),
+            ("1.0.0.0", "1.4.27.6"),
+            ("0.9.9.9", "1.4.27.6"),
+        ):
+            with self.subTest(base=base, head=head):
+                repo = _TempGitRepo()
+                try:
+                    repo.write("VERSION", f"{base}\n")
+                    repo.commit("base")
+                    repo.write("VERSION", f"{head}\n")
+                    repo.commit("head")
+                    self.assertEqual(
+                        repo.run_version_check(
+                            base="base", head="head", mode="cumulative"
+                        ),
+                        0,
+                    )
+                finally:
+                    repo.cleanup()
+
+    def test_equality_allowed_for_health_but_rejected_for_promotion(self):
+        self.repo.write("VERSION", "0.1.36.2\n")
+        self.repo.commit("same")
+        self.assertEqual(
+            self.repo.run_version_check(
+                base="same", head="same", mode="cumulative"
+            ),
+            0,
+        )
+        self.assertNotEqual(
+            self.repo.run_version_check(
+                base="same",
+                head="same",
+                mode="cumulative",
+                require_bump=True,
+            ),
+            0,
+        )
+
+    def test_regression_is_rejected(self):
+        self.repo.write("VERSION", "0.1.36.2\n")
+        self.repo.commit("base")
+        self.repo.write("VERSION", "0.0.13.9\n")
+        self.repo.commit("head")
+        self.assertNotEqual(
+            self.repo.run_version_check(
+                base="base", head="head", mode="cumulative"
+            ),
+            0,
+        )
+
+    def test_malformed_endpoints_are_rejected(self):
+        for base, head in (
+            ("0.0.13.9", "0.1.36"),
+            ("0.0.13", "0.1.36.2"),
+        ):
+            with self.subTest(base=base, head=head):
+                repo = _TempGitRepo()
+                try:
+                    repo.write("VERSION", f"{base}\n")
+                    repo.commit("base")
+                    repo.write("VERSION", f"{head}\n")
+                    repo.commit("head")
+                    self.assertNotEqual(
+                        repo.run_version_check(
+                            base="base", head="head", mode="cumulative"
+                        ),
+                        0,
+                    )
+                finally:
+                    repo.cleanup()
+
+    def test_missing_base_ref_is_rejected(self):
+        self.repo.write("VERSION", "0.1.36.2\n")
+        self.repo.commit("head")
+        self.assertNotEqual(
+            self.repo.run_version_check(
+                base="missing", head="head", mode="cumulative"
+            ),
+            0,
         )
 
 

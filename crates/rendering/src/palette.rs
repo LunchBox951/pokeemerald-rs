@@ -1,31 +1,22 @@
-//! GBA BGR555 palette color conversion (S-2 slice 1).
-//!
-//! Ports the 15-bit-palette-to-RGB semantics of `pokeemerald/src/palette.c`
-//! and `pokeemerald/src/gpu_regs.c`: each GBA palette-RAM color is a 15-bit
-//! BGR555 value (`struct PlttData` in `pokeemerald/include/gba/types.h`)
-//! with the red channel in bits 0-4, green in bits 5-9, and blue in bits
-//! 10-14 (bit 15, `unused_15`, is not part of the color). Verified against
-//! `mgba/src/gba/renderers/gl.c`'s normalized `PALETTE_ENTRY` shader macro,
-//! which extracts the same three 5-bit fields and divides by 31
-//! `(behavioral-fidelity)`.
+//! GBA BGR555 colors and palettes.
 
 /// A 15-bit GBA palette-RAM color: 5 bits each of red, green, and blue.
 ///
-/// Mirrors `struct PlttData` (`pokeemerald/include/gba/types.h`): red in
-/// bits 0-4, green in bits 5-9, blue in bits 10-14. Bit 15 is masked off on
-/// construction.
+/// Red occupies bits 0-4, green bits 5-9, and blue bits 10-14. Construction
+/// clears bit 15.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Bgr555(u16);
 
 impl Bgr555 {
-    /// Bitmask covering the 15 significant bits (5 per channel).
-    const MASK: u16 = 0x7FFF;
+    const COLOR_MASK: u16 = 0x7FFF;
+    const CHANNEL_MASK: u16 = 0x1F;
+    const GREEN_SHIFT: u32 = 5;
+    const BLUE_SHIFT: u32 = 10;
 
-    /// Build a color from a raw palette-RAM value, masking off the unused
-    /// bit 15.
+    /// Build a color from a raw palette-RAM value, clearing bit 15.
     #[must_use]
     pub const fn from_raw(raw: u16) -> Self {
-        Self(raw & Self::MASK)
+        Self(raw & Self::COLOR_MASK)
     }
 
     /// The raw 15-bit value (bit 15 always clear).
@@ -34,44 +25,35 @@ impl Bgr555 {
         self.0
     }
 
-    /// Build a color directly from 5-bit-per-channel red/green/blue
-    /// components. Each component is masked to its low 5 bits.
+    /// Build a color from red, green, and blue channels, keeping each channel's
+    /// low 5 bits.
     #[must_use]
     pub const fn from_channels(r: u8, g: u8, b: u8) -> Self {
-        let r = (r as u16) & 0x1F;
-        let g = (g as u16) & 0x1F;
-        let b = (b as u16) & 0x1F;
-        Self(r | (g << 5) | (b << 10))
+        let r = (r as u16) & Self::CHANNEL_MASK;
+        let g = (g as u16) & Self::CHANNEL_MASK;
+        let b = (b as u16) & Self::CHANNEL_MASK;
+        Self(r | (g << Self::GREEN_SHIFT) | (b << Self::BLUE_SHIFT))
     }
 
     /// The 5-bit red channel (bits 0-4).
     #[must_use]
     pub const fn r5(self) -> u8 {
-        (self.0 & 0x1F) as u8
+        (self.0 & Self::CHANNEL_MASK) as u8
     }
 
     /// The 5-bit green channel (bits 5-9).
     #[must_use]
     pub const fn g5(self) -> u8 {
-        ((self.0 >> 5) & 0x1F) as u8
+        ((self.0 >> Self::GREEN_SHIFT) & Self::CHANNEL_MASK) as u8
     }
 
     /// The 5-bit blue channel (bits 10-14).
     #[must_use]
     pub const fn b5(self) -> u8 {
-        ((self.0 >> 10) & 0x1F) as u8
+        ((self.0 >> Self::BLUE_SHIFT) & Self::CHANNEL_MASK) as u8
     }
 
-    /// Convert to 8-bit-per-channel RGB888.
-    ///
-    /// Each 5-bit channel is expanded to 8 bits with `(c << 3) | (c >> 2)`
-    /// — the faithful GBA 5-to-8-bit expansion (replicating the channel's
-    /// top 3 bits into the new low bits), not a naive `<< 3` truncation
-    /// that would leave the low 3 bits always zero and so never reach full
-    /// brightness (`0x1F << 3 == 0xF8`, not `0xFF`). Verified against
-    /// `mgba`'s normalized `/ 31.` reference: `(c << 3) | (c >> 2)` is the
-    /// standard integer implementation of `round(c * 255 / 31)`
-    /// `(behavioral-fidelity)`.
+    /// Convert to RGB888 by bit-replicating each 5-bit channel.
     #[must_use]
     pub const fn to_rgb888(self) -> Rgb888 {
         Rgb888 {
@@ -82,9 +64,14 @@ impl Bgr555 {
     }
 }
 
-/// Expand a 5-bit channel value (`0..=31`) to 8 bits.
-const fn expand_5_to_8(c: u8) -> u8 {
+pub(crate) const fn expand_5_to_8(c: u8) -> u8 {
     (c << 3) | (c >> 2)
+}
+
+/// The inverse of [`expand_5_to_8`]: the 5-bit palette-RAM precision an
+/// 8-bit channel came from (or blends at), discarding the low 3 bits.
+pub(crate) const fn compress_8_to_5(c: u8) -> u8 {
+    c >> 3
 }
 
 /// An 8-bit-per-channel RGB color, ready for framebuffer presentation.
@@ -99,56 +86,58 @@ pub struct Rgb888 {
 }
 
 impl Rgb888 {
-    /// Black — the [`Framebuffer`](crate::framebuffer::Framebuffer)'s
-    /// default fill color.
+    /// Black.
     pub const BLACK: Self = Self { r: 0, g: 0, b: 0 };
 }
 
-/// A GBA BG palette bank set: 256 colors addressable as sixteen 16-color
-/// banks (as used by 4bpp tiles) or as one flat 256-color table (as used by
-/// 8bpp tiles).
-///
-/// Mirrors the shape of BG palette RAM (`pokeemerald/src/palette.c`);
-/// loading palette RAM from a ROM asset is out of scope here (M2/S-4) — a
-/// [`Palette`] is always built directly from already-decoded colors.
+/// The 256 GBA background colors, addressable as sixteen banks or one flat
+/// table.
 #[derive(Debug, Clone)]
 pub struct Palette {
     colors: [Bgr555; Self::LEN],
 }
 
 impl Palette {
-    /// Total addressable color slots (16 banks x 16 colors).
+    /// Total color slots.
     pub const LEN: usize = 256;
 
-    /// Number of colors per 4bpp palette bank.
+    /// Colors per 4bpp bank.
     pub const BANK_LEN: usize = 16;
 
-    /// Build a palette from all 256 raw colors, in flat index order.
+    /// Build a palette from colors in flat index order.
     #[must_use]
     pub const fn new(colors: [Bgr555; Self::LEN]) -> Self {
         Self { colors }
     }
 
-    /// The raw color at a flat index (`0..256`), as used directly by 8bpp
-    /// tiles.
+    /// The color at a flat 8bpp index.
     #[must_use]
     pub const fn color(&self, index: u8) -> Bgr555 {
         self.colors[index as usize]
     }
 
-    /// The color at `local_index` (`0..16`) within `bank` (`0..16`), as
-    /// used by 4bpp tiles. Both are masked to 4 bits, so this never panics.
+    /// The color at a 4bpp bank and local index.
+    ///
+    /// Both inputs are masked to 4 bits.
     #[must_use]
     pub const fn bank_color(&self, bank: u8, local_index: u8) -> Bgr555 {
-        let bank = (bank & 0x0F) as usize;
-        let local_index = (local_index & 0x0F) as usize;
+        const FOUR_BIT_MASK: u8 = 0x0F;
+        let bank = (bank & FOUR_BIT_MASK) as usize;
+        let local_index = (local_index & FOUR_BIT_MASK) as usize;
         self.colors[bank * Self::BANK_LEN + local_index]
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Bgr555, Palette, Rgb888};
+    use super::{compress_8_to_5, expand_5_to_8, Bgr555, Palette, Rgb888};
+
+    #[test]
+    fn compress_is_the_exact_inverse_of_expand_for_every_5bit_value() {
+        for c in 0u8..32 {
+            assert_eq!(compress_8_to_5(expand_5_to_8(c)), c, "channel value {c}");
+        }
+    }
 
     #[test]
     fn boundary_channels_expand_to_boundary_bytes() {
@@ -167,23 +156,27 @@ mod tests {
     }
 
     #[test]
-    fn known_reference_colors() {
-        // Pure red/green/blue at max channel intensity, and raw 0x7FFF /
-        // 0x0000 landmark values from `pokeemerald/src/palette.c`.
+    fn primary_color_bit_fields_decode_correctly() {
+        const RED: u16 = 0x001F;
+        const GREEN: u16 = 0x03E0;
+        const BLUE: u16 = 0x7C00;
+        const WHITE: u16 = 0x7FFF;
+        const BLACK: u16 = 0x0000;
+
         assert_eq!(
-            Bgr555::from_raw(0x001F).to_rgb888(),
+            Bgr555::from_raw(RED).to_rgb888(),
             Rgb888 { r: 255, g: 0, b: 0 }
         );
         assert_eq!(
-            Bgr555::from_raw(0x03E0).to_rgb888(),
+            Bgr555::from_raw(GREEN).to_rgb888(),
             Rgb888 { r: 0, g: 255, b: 0 }
         );
         assert_eq!(
-            Bgr555::from_raw(0x7C00).to_rgb888(),
+            Bgr555::from_raw(BLUE).to_rgb888(),
             Rgb888 { r: 0, g: 0, b: 255 }
         );
         assert_eq!(
-            Bgr555::from_raw(0x7FFF).to_rgb888(),
+            Bgr555::from_raw(WHITE).to_rgb888(),
             Rgb888 {
                 r: 255,
                 g: 255,
@@ -191,33 +184,28 @@ mod tests {
             }
         );
         assert_eq!(
-            Bgr555::from_raw(0x0000).to_rgb888(),
+            Bgr555::from_raw(BLACK).to_rgb888(),
             Rgb888 { r: 0, g: 0, b: 0 }
         );
     }
 
     #[test]
-    fn expansion_is_not_a_naive_left_shift() {
-        // A naive `c << 3` truncation would map every c to a multiple of 8
-        // and could never reach 255. The faithful expansion must.
+    fn expansion_reaches_full_brightness_and_replicates_high_bits() {
         assert_eq!(Bgr555::from_channels(0x1F, 0, 0).to_rgb888().r, 255);
-        // c=4 distinguishes the two formulas: naive `<<3` gives 32, the
-        // faithful `(c<<3)|(c>>2)` gives 33.
         assert_eq!(Bgr555::from_channels(4, 0, 0).to_rgb888().r, 33);
     }
 
     #[test]
-    fn channel_expansion_matches_golden_table() {
-        // Independently transcribed 5-bit -> 8-bit expansion table for
-        // every possible channel value, cross-checking the formula
-        // implementation the same way `assets::type_chart`'s golden grid
-        // pins `gTypeEffectiveness`.
-        const GOLDEN: [u8; 32] = [
+    fn channel_expansion_matches_expected_values() {
+        const EXPECTED_EXPANDED_CHANNELS: [u8; 32] = [
             0, 8, 16, 24, 33, 41, 49, 57, 66, 74, 82, 90, 99, 107, 115, 123, 132, 140, 148, 156,
             165, 173, 181, 189, 198, 206, 214, 222, 231, 239, 247, 255,
         ];
-        for (c, &expected) in GOLDEN.iter().enumerate() {
-            #[allow(clippy::cast_possible_truncation)]
+        for (c, &expected) in EXPECTED_EXPANDED_CHANNELS.iter().enumerate() {
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "the table contains every 5-bit channel value"
+            )]
             let c = c as u8;
             let rgb = Bgr555::from_channels(c, 0, 0).to_rgb888();
             assert_eq!(rgb.r, expected, "channel value {c}");
@@ -242,9 +230,12 @@ mod tests {
     #[test]
     fn palette_flat_and_bank_indexing_agree() {
         let mut colors = [Bgr555::default(); Palette::LEN];
-        colors[0] = Bgr555::from_channels(0x1F, 0, 0); // bank 0, local 0
-        colors[17] = Bgr555::from_channels(0, 0x1F, 0); // bank 1, local 1
-        colors[255] = Bgr555::from_channels(0, 0, 0x1F); // bank 15, local 15
+        let red = Bgr555::from_channels(0x1F, 0, 0);
+        let green = Bgr555::from_channels(0, 0x1F, 0);
+        let blue = Bgr555::from_channels(0, 0, 0x1F);
+        colors[0] = red;
+        colors[Palette::BANK_LEN + 1] = green;
+        colors[Palette::LEN - 1] = blue;
         let palette = Palette::new(colors);
 
         assert_eq!(palette.color(0), colors[0]);
@@ -260,7 +251,6 @@ mod tests {
         let mut colors = [Bgr555::default(); Palette::LEN];
         colors[0] = Bgr555::from_channels(0x1F, 0, 0);
         let palette = Palette::new(colors);
-        // bank=16 masks to 0, local_index=16 masks to 0 -> flat index 0.
         assert_eq!(palette.bank_color(16, 16), colors[0]);
     }
 }

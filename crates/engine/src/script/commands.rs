@@ -1,148 +1,68 @@
-//! Concrete script commands, slice 1 (S-5, issue #69): control flow,
-//! comparison, and the flags/vars commands, wired to
-//! [`event_data::EventData`](crate::event_data::EventData) via [`ScriptHost`].
+//! Native handlers for Emerald's field-script bytecode.
 //!
-//! Behavioural re-implementation `(behavioral-fidelity)` of the `ScrCmd_*`
-//! functions in `pokeemerald/src/scrcmd.c` this slice covers, dispatched at
-//! the exact opcode numbers `pokeemerald/data/script_cmd_table.inc` assigns
-//! them (`(no-verbatim)` — scripts are upstream *data*, so the numbers are
-//! pinned, the implementations are not).
+//! [`COMMAND_TABLE`] preserves the opcode assignments through `random` from
+//! `data/script_cmd_table.inc`. Unsupported opcodes trap with their identity
+//! instead of aliasing a handler or failing silently.
 //!
-//! # Scope
+//! The interpreter uses byte offsets instead of ROM pointers. Variable access
+//! similarly goes through checked [`EventData`] methods; valid field scripts
+//! observe the same values, while malformed identifiers trap instead of
+//! dereferencing arbitrary memory. Operands passed through `VarGet` upstream
+//! still accept either a literal or a variable identifier here.
 //!
-//! Ported: `nop`/`nop1`/`end`/`return`/`goto`/`call`/`goto_if`/`call_if`
-//! (control flow), `compare_var_to_value`/`compare_var_to_var` — the two
-//! opcodes the community and this port both call `compare`/`comparevars`
-//! (comparison), `setflag`/`clearflag`/`checkflag` (flags), and
-//! `setvar`/`addvar`/`subvar`/`copyvar`/`setorcopyvar` (vars).
-//!
-//! Deliberately excluded, each for a reason a later slice resolves:
-//! * `gotostd`/`callstd`/`gotostd_if`/`callstd_if` (0x08–0x0b) — index into
-//!   `gStdScripts`, a shared-script table this port doesn't have yet.
-//! * `returnram`/`endram` (0x0c–0x0d), `setmysteryeventstatus` (0x0e) — no
-//!   RAM-script loading or Mystery Event subsystem yet.
-//! * `loadword`/`loadbyte`/`setptr`/`loadbytefromptr`/`setptrbyte`/
-//!   `copylocal`/`copybyte` (0x0f–0x15) and `compare_local_to_ptr`/
-//!   `compare_ptr_to_local`/`compare_ptr_to_value`/`compare_ptr_to_ptr`
-//!   (0x1d–0x20) — every one dereferences a raw ROM/RAM address
-//!   (`*(const u8 *)ScriptReadWord(ctx)`); `(oop-boundaries)` and `(no-ffi)`
-//!   rule out reproducing that, and unlike `goto`/`call`'s destination (see
-//!   [`ScriptContext::resolve`]) there is no byte-offset substitute for
-//!   "read an arbitrary byte of the running program" that means anything.
-//! * `compare_local_to_local`/`compare_local_to_value` (0x1b–0x1c) — the
-//!   `ctx->data[]` scratch-register comparisons; only `compare`/`comparevars`
-//!   (the var-based pair actual field scripts use for `goto_if`/`call_if`)
-//!   are in this slice's scope.
-//! * `callnative`/`gotonative` (0x23–0x24), `special`/`specialvar`
-//!   (0x25–0x26), `waitstate`/`delay` (0x27–0x28) — native-step and
-//!   special-function dispatch, out of scope for this slice.
-//!
-//! Every excluded-but-numbered opcode still gets a table entry — see
-//! [`unimplemented`] — so a hand-assembled script that hits one traps
-//! ([`CommandTrap::Unimplemented`]) instead of silently misbehaving or
-//! panicking `(behavioral-fidelity)`.
-//!
-//! # Traps
-//!
-//! `Command<H>`'s signature (`fn(&mut ScriptContext<'_, '_, H>, &mut H) ->
-//! bool`) mirrors upstream `ScrCmdFunc` (`bool8 (*)(struct ScriptContext
-//! *)`) exactly, which leaves no room for a `Result`. A command that hits a
-//! condition upstream leaves unchecked or dispatches through machinery this
-//! port doesn't have therefore can't return an error the way
-//! [`EventData`] or [`ScriptContext`]'s own
-//! methods do; instead it records why in [`ScriptHost::trap`] and calls
-//! [`ScriptContext::stop`], exactly like `ScrCmd_end` halts the script —
-//! the difference is only that callers can inspect *why* afterwards, rather
-//! than the reason being silently lost.
-//!
-//! # `VAR_` dereferencing
-//!
-//! Upstream draws a sharp line between two ways a var-id operand gets
-//! resolved:
-//! * `VarGet` (what [`EventData::var_get`] mirrors): an id below `VARS_START`
-//!   passes through unchanged as an immediate value — only `setorcopyvar`'s
-//!   source and `subvar`'s subtrahend use this upstream, so a script can pass
-//!   either a `VAR_*` id or a literal in those two operand slots.
-//! * A raw, unchecked `GetVarPointer(id)` dereference (what `setvar`,
-//!   `addvar`'s destination, `copyvar`'s source, and `compare`'s var operand
-//!   use upstream): `id` *must* already be a valid var id, or the dereference
-//!   is undefined behaviour. Note `compare_var_to_value` reads its var operand
-//!   as `*GetVarPointer(...)`, the *same* raw-deref primitive as `copyvar`'s
-//!   source — not `VarGet` — so its var slot is a strict var id, never a
-//!   literal-or-var slot (its *second* operand is the literal). This port has
-//!   no raw-pointer primitive to reproduce that with —
-//!   [`EventData::var_get`]/[`EventData::var_set`] (the *checked*
-//!   `VarGet`/`VarSet`) are the only var accessors it exposes — so every
-//!   command below reads and writes vars through them uniformly. For every
-//!   id a real script ever actually passes (always a proper `VAR_*` id in
-//!   these positions) the two give identical results; the only places this
-//!   is observable are `copyvar`'s source and `compare`'s var operand, which
-//!   then behave exactly like `setorcopyvar`'s already-checked resolution — a
-//!   strictly safer substitute for upstream's UB, not a behavioural gap
-//!   `(behavioral-fidelity)`.
-//!
-//! `addvar`'s second operand is the one documented exception:
-//! `pokeemerald/asm/macros/event.inc` notes upstream `ScrCmd_addvar` never
-//! calls `VarGet` on it (only `subvar` does) — see `addvar`'s doc comment below.
+//! Standard-script labels and special-function identifiers are typed even when
+//! their target implementation is unavailable, so traps retain the requested
+//! identity. `waitstate` represents upstream's global waiting status with a
+//! host-owned resume flag polled through [`ScriptContext::setup_gate`].
 
-use crate::event_data::{EventData, EventDataError};
+use crate::event_data::{EventData, EventDataError, SPECIAL_VARS_START};
+use crate::rng::Rng;
+use crate::script::specials::{SpecialId, SPECIAL_TABLE};
+use crate::script::std_script::StdScript;
 use crate::script::{Command, ScriptContext, ScriptError};
 
-/// Minimal host for this slice's command set: owns the [`EventData`] store
-/// every flag/var/comparison command below reads or writes, plus the last
-/// [`CommandTrap`] a command recorded (see the [module docs, "Traps"](self#traps) section). `(oop-boundaries)` — no global mutable
-/// state; the binary composes a richer host later (bag, map, audio, …) as
-/// this command set grows, but this slice's commands only ever need
-/// `EventData`.
+/// State owned by the field-script command handlers.
 #[derive(Debug, Default)]
 pub struct ScriptHost {
-    /// Emerald's flags and vars — see [`EventData`].
+    /// Emerald's event flags and variables.
     pub event_data: EventData,
-    /// Set by a trapping command; see the [module docs](self#traps). Cleared
-    /// by nothing here — callers that resume a context after a trap should
-    /// clear it themselves once they've inspected it.
+    /// Emerald's deterministic pseudorandom number generator.
+    pub rng: Rng,
+    /// Whether a `waitstate` command is blocking bytecode execution.
+    pub waiting: bool,
+    /// The last command failure. Callers clear it after handling the trap.
     pub trap: Option<CommandTrap>,
 }
 
-/// Why a command halted the script instead of running normally — see the
-/// [module docs, "Traps"](self#traps) section for why this exists instead of
-/// a `Result`.
+/// Why a field-script command halted the interpreter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandTrap {
-    /// The opcode has a `script_cmd_table.inc` entry upstream but no command
-    /// implementation in this slice (see the [module docs, "Scope"](self#scope) section). Carries the offending opcode.
+    /// The opcode has no native command implementation.
     Unimplemented(u8),
-    /// A `goto_if`/`call_if` condition byte was not one of the 6 upstream
-    /// `enum ComparisonOperators` values. Upstream indexes
-    /// `sScriptConditionTable` with it regardless (`ctx->comparisonResult`
-    /// is a `u8` used as the *column*, and the condition byte is the *row*
-    /// index — an out-of-range row reads past the table, undefined
-    /// behaviour); this port refuses it instead. Carries the offending byte.
+    /// A conditional command contained an unknown comparison operator.
     InvalidCondition(u8),
-    /// A flag/var access failed — see [`EventDataError`].
+    /// A flag or variable operand could not be resolved.
     EventData(EventDataError),
-    /// A cursor read or a `goto`/`call`/`goto_if`/`call_if` jump-target
-    /// resolution failed — see [`ScriptError`].
+    /// Bytecode decoding, stack access, or jump resolution failed.
     Script(ScriptError),
+    /// A known standard-script label has no compiled bytecode target.
+    StdScript(StdScript),
+    /// A special-function index is outside the known table.
+    InvalidSpecial(u16),
+    /// A known special-function identifier has no callback.
+    UnimplementedSpecial(SpecialId),
+    /// A `random` command resolved its modulus to zero.
+    DivideByZero,
 }
 
-/// The result of upstream's `Compare(u16 a, u16 b)`, used as the row index
-/// into [`CONDITION_TABLE`]. Not a general-purpose ordering type — it exists
-/// solely to name the three cases `Compare` (and, degenerately,
-/// `checkflag`'s bare `0`/`1`) ever store into `comparisonResult`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 enum CompareResult {
-    /// `a < b`. Also `checkflag`'s "flag clear" result.
     Less = 0,
-    /// `a == b`. Also `checkflag`'s "flag set" result.
     Equal = 1,
-    /// `a > b`. Never produced by `checkflag`.
     Greater = 2,
 }
 
-/// Mirrors upstream `Compare` (`src/scrcmd.c`): `Less` if `a < b`, `Equal` if
-/// `a == b`, `Greater` if `a > b`.
 fn compare_u16(a: u16, b: u16) -> CompareResult {
     match a.cmp(&b) {
         std::cmp::Ordering::Less => CompareResult::Less,
@@ -151,11 +71,6 @@ fn compare_u16(a: u16, b: u16) -> CompareResult {
     }
 }
 
-/// One of the 6 upstream `enum ComparisonOperators` values
-/// (`include/constants/comparison_operators.h`), read from a `goto_if`/
-/// `call_if` condition byte. Explicit discriminants match the upstream enum
-/// (and this type's own [`CONDITION_TABLE`] row order) so `self as usize`
-/// indexes correctly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 enum ScriptCondition {
@@ -167,24 +82,76 @@ enum ScriptCondition {
     NotEqual = 5,
 }
 
-/// Transcribed 1:1 from upstream's `sScriptConditionTable`
-/// (`src/scrcmd.c`) — ground truth, not derived from the logic it checks —
-/// row = [`ScriptCondition`], column = [`CompareResult`] (`<`, `==`, `>`).
-/// `true` means "`goto_if`/`call_if` jumps".
-const CONDITION_TABLE: [[bool; 3]; 6] = [
-    // <      ==     >
-    [true, false, false], // LessThan
-    [false, true, false], // Equal
-    [false, false, true], // GreaterThan
-    [true, true, false],  // LessThanOrEqual
-    [false, true, true],  // GreaterThanOrEqual
-    [true, false, true],  // NotEqual
+#[derive(Clone, Copy)]
+struct MatchingResults {
+    less: bool,
+    equal: bool,
+    greater: bool,
+}
+
+impl MatchingResults {
+    const fn includes(self, result: CompareResult) -> bool {
+        match result {
+            CompareResult::Less => self.less,
+            CompareResult::Equal => self.equal,
+            CompareResult::Greater => self.greater,
+        }
+    }
+}
+
+// `src/scrcmd.c:sScriptConditionTable` is the authority for these rows.
+const CONDITION_TABLE: [(ScriptCondition, MatchingResults); 6] = [
+    (
+        ScriptCondition::LessThan,
+        MatchingResults {
+            less: true,
+            equal: false,
+            greater: false,
+        },
+    ),
+    (
+        ScriptCondition::Equal,
+        MatchingResults {
+            less: false,
+            equal: true,
+            greater: false,
+        },
+    ),
+    (
+        ScriptCondition::GreaterThan,
+        MatchingResults {
+            less: false,
+            equal: false,
+            greater: true,
+        },
+    ),
+    (
+        ScriptCondition::LessThanOrEqual,
+        MatchingResults {
+            less: true,
+            equal: true,
+            greater: false,
+        },
+    ),
+    (
+        ScriptCondition::GreaterThanOrEqual,
+        MatchingResults {
+            less: false,
+            equal: true,
+            greater: true,
+        },
+    ),
+    (
+        ScriptCondition::NotEqual,
+        MatchingResults {
+            less: true,
+            equal: false,
+            greater: true,
+        },
+    ),
 ];
 
 impl ScriptCondition {
-    /// Classify a raw condition byte, mirroring the *value space* of
-    /// upstream's `enum ComparisonOperators` (upstream itself does not
-    /// validate this byte — see [`CommandTrap::InvalidCondition`]).
     fn from_byte(byte: u8) -> Option<Self> {
         match byte {
             0 => Some(Self::LessThan),
@@ -197,18 +164,13 @@ impl ScriptCondition {
         }
     }
 
-    /// `sScriptConditionTable[self][result]` — whether `goto_if`/`call_if`
-    /// should jump given the last comparison's [`CompareResult`].
     fn matches(self, result: CompareResult) -> bool {
-        CONDITION_TABLE[self as usize][result as usize]
+        let (condition, matching_results) = CONDITION_TABLE[self as usize];
+        debug_assert_eq!(condition, self);
+        matching_results.includes(result)
     }
 }
 
-/// Record `why` on the host, halt the script (mirroring `ScrCmd_end`'s
-/// `StopScript`), and return the upstream-matching "keep the bytecode loop
-/// going" `false` — the loop reads `false` as "don't yield", but the halt
-/// itself makes the *next* fetch see an empty cursor and stop. See the
-/// [module docs, "Traps"](self#traps) section.
 fn trap(
     ctx: &mut ScriptContext<'_, '_, ScriptHost>,
     host: &mut ScriptHost,
@@ -219,18 +181,12 @@ fn trap(
     false
 }
 
-/// A [`ScriptCondition`]-independent operand pair reader: every `setvar`/
-/// `addvar`/`subvar`/`copyvar`/`setorcopyvar`/`compare_var_to_*` opcode reads
-/// exactly two little-endian halfwords, in order.
 fn read_u16_pair(ctx: &mut ScriptContext<'_, '_, ScriptHost>) -> Result<(u16, u16), ScriptError> {
     let a = ctx.read_u16()?;
     let b = ctx.read_u16()?;
     Ok((a, b))
 }
 
-/// Read a `goto`/`call`/`goto_if`/`call_if` destination operand (a 4-byte
-/// offset) and resolve it via [`ScriptContext::resolve`] — see that method's
-/// docs for what the offset means.
 fn read_target<'script>(
     ctx: &mut ScriptContext<'_, 'script, ScriptHost>,
 ) -> Result<&'script [u8], ScriptError> {
@@ -238,27 +194,19 @@ fn read_target<'script>(
     ctx.resolve(offset)
 }
 
-/// `SCR_OP_NOP` (`0x00`) / [`nop1`] (`0x01`). Mirrors `ScrCmd_nop`: does
-/// nothing.
 fn nop(_ctx: &mut ScriptContext<'_, '_, ScriptHost>, _host: &mut ScriptHost) -> bool {
     false
 }
 
-/// `SCR_OP_NOP1` (`0x01`). Mirrors `ScrCmd_nop1`: does nothing — a distinct
-/// upstream function from [`nop`], kept distinct here too even though the
-/// behaviour is identical, so the opcode↔command mapping stays 1:1.
 fn nop1(_ctx: &mut ScriptContext<'_, '_, ScriptHost>, _host: &mut ScriptHost) -> bool {
     false
 }
 
-/// `SCR_OP_END` (`0x02`). Mirrors `ScrCmd_end`: halts the script.
 fn end(ctx: &mut ScriptContext<'_, '_, ScriptHost>, _host: &mut ScriptHost) -> bool {
     ctx.stop();
     false
 }
 
-/// `SCR_OP_RETURN` (`0x03`). Mirrors `ScrCmd_return`: pops the call stack
-/// and jumps to the popped return address.
 fn script_return(ctx: &mut ScriptContext<'_, '_, ScriptHost>, host: &mut ScriptHost) -> bool {
     match ctx.script_return() {
         Ok(()) => false,
@@ -266,9 +214,6 @@ fn script_return(ctx: &mut ScriptContext<'_, '_, ScriptHost>, host: &mut ScriptH
     }
 }
 
-/// `SCR_OP_CALL` (`0x04`). Mirrors `ScrCmd_call`: pushes the current cursor
-/// as a return address, then jumps to the operand's target — see
-/// [`read_target`].
 fn call(ctx: &mut ScriptContext<'_, '_, ScriptHost>, host: &mut ScriptHost) -> bool {
     let target = match read_target(ctx) {
         Ok(target) => target,
@@ -280,8 +225,6 @@ fn call(ctx: &mut ScriptContext<'_, '_, ScriptHost>, host: &mut ScriptHost) -> b
     }
 }
 
-/// `SCR_OP_GOTO` (`0x05`). Mirrors `ScrCmd_goto`: jumps to the operand's
-/// target — see [`read_target`].
 fn goto(ctx: &mut ScriptContext<'_, '_, ScriptHost>, host: &mut ScriptHost) -> bool {
     match read_target(ctx) {
         Ok(target) => {
@@ -292,42 +235,20 @@ fn goto(ctx: &mut ScriptContext<'_, '_, ScriptHost>, host: &mut ScriptHost) -> b
     }
 }
 
-/// `SCR_OP_GOTO_IF` (`0x06`). Mirrors `ScrCmd_goto_if`: reads a condition
-/// byte and a destination operand (in that order, both unconditionally, like
-/// upstream), then jumps only if the condition
-/// [`matches`](ScriptCondition::matches) [`ScriptContext::comparison_result`].
 fn goto_if(ctx: &mut ScriptContext<'_, '_, ScriptHost>, host: &mut ScriptHost) -> bool {
     conditional(ctx, host, ConditionalAction::Jump)
 }
 
-/// `SCR_OP_CALL_IF` (`0x07`). Mirrors `ScrCmd_call_if`: reads a condition
-/// byte and a destination operand (in that order, both unconditionally, like
-/// upstream), then calls only if the condition
-/// [`matches`](ScriptCondition::matches) [`ScriptContext::comparison_result`].
 fn call_if(ctx: &mut ScriptContext<'_, '_, ScriptHost>, host: &mut ScriptHost) -> bool {
     conditional(ctx, host, ConditionalAction::Call)
 }
 
-/// The one difference between [`goto_if`] and [`call_if`]: whether a
-/// matching condition jumps ([`ScriptContext::jump`]) or calls
-/// ([`ScriptContext::call`]).
-///
-/// A plain enum rather than passing `ScriptContext::jump`/`ScriptContext::call`
-/// as a function pointer: `jump` is infallible and `call`'s `&'script [u8]`
-/// parameter is tied to the exact same `'script` as `ctx`'s — a bare `fn(...)`
-/// *type* can't express that link (each elided lifetime in it is
-/// independently higher-ranked, per [`Command`]'s own doc comment), so
-/// [`conditional`] just branches on this flag instead of taking `act` as a
-/// value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ConditionalAction {
     Jump,
     Call,
 }
 
-/// Shared body of [`goto_if`]/[`call_if`]: both read the same operand pair
-/// in the same order and differ only in whether a matching condition jumps
-/// or calls — see [`ConditionalAction`].
 fn conditional(
     ctx: &mut ScriptContext<'_, '_, ScriptHost>,
     host: &mut ScriptHost,
@@ -337,9 +258,8 @@ fn conditional(
         Ok(b) => b,
         Err(e) => return trap(ctx, host, CommandTrap::Script(e)),
     };
-    // Read unconditionally, matching upstream's unconditional
-    // `ScriptReadWord` — the operand is only ever *used* (resolved) below,
-    // once we know the condition actually matches.
+    // `ScrCmd_goto_if` and `ScrCmd_call_if` consume the target before testing
+    // the condition, so a truncated target still fails on a false branch.
     let offset = match ctx.read_u32() {
         Ok(o) => o,
         Err(e) => return trap(ctx, host, CommandTrap::Script(e)),
@@ -347,17 +267,7 @@ fn conditional(
     let Some(condition) = ScriptCondition::from_byte(condition_byte) else {
         return trap(ctx, host, CommandTrap::InvalidCondition(condition_byte));
     };
-    let result = match ctx.comparison_result() {
-        0 => CompareResult::Less,
-        1 => CompareResult::Equal,
-        // Only ever 0/1/2 here: nothing but `compare`/`comparevars`/
-        // `checkflag` below ever writes `comparison_result`, and none of
-        // them write anything else. Any other value is unreachable through
-        // this command set, so it's treated as "never matches" rather than
-        // panicking.
-        _ => CompareResult::Greater,
-    };
-    if condition.matches(result) {
+    if condition.matches(current_compare_result(ctx)) {
         let target = match ctx.resolve(offset) {
             Ok(target) => target,
             Err(e) => return trap(ctx, host, CommandTrap::Script(e)),
@@ -374,8 +284,68 @@ fn conditional(
     false
 }
 
-/// `SCR_OP_SETVAR` (`0x16`). Mirrors `ScrCmd_setvar`: writes a literal
-/// value to a var.
+fn current_compare_result(ctx: &ScriptContext<'_, '_, ScriptHost>) -> CompareResult {
+    match ctx.comparison_result() {
+        0 => CompareResult::Less,
+        1 => CompareResult::Equal,
+        // Command handlers only store 0, 1, or 2. Treat corrupted host state
+        // as the final table column instead of indexing out of bounds.
+        _ => CompareResult::Greater,
+    }
+}
+
+fn gotostd(ctx: &mut ScriptContext<'_, '_, ScriptHost>, host: &mut ScriptHost) -> bool {
+    let index = match ctx.read_u8() {
+        Ok(i) => i,
+        Err(e) => return trap(ctx, host, CommandTrap::Script(e)),
+    };
+    dispatch_std_script(ctx, host, index)
+}
+
+fn callstd(ctx: &mut ScriptContext<'_, '_, ScriptHost>, host: &mut ScriptHost) -> bool {
+    gotostd(ctx, host)
+}
+
+fn gotostd_if(ctx: &mut ScriptContext<'_, '_, ScriptHost>, host: &mut ScriptHost) -> bool {
+    std_conditional(ctx, host)
+}
+
+fn callstd_if(ctx: &mut ScriptContext<'_, '_, ScriptHost>, host: &mut ScriptHost) -> bool {
+    std_conditional(ctx, host)
+}
+
+fn std_conditional(ctx: &mut ScriptContext<'_, '_, ScriptHost>, host: &mut ScriptHost) -> bool {
+    let condition_byte = match ctx.read_u8() {
+        Ok(b) => b,
+        Err(e) => return trap(ctx, host, CommandTrap::Script(e)),
+    };
+    let index = match ctx.read_u8() {
+        Ok(i) => i,
+        Err(e) => return trap(ctx, host, CommandTrap::Script(e)),
+    };
+    let Some(condition) = ScriptCondition::from_byte(condition_byte) else {
+        return trap(ctx, host, CommandTrap::InvalidCondition(condition_byte));
+    };
+    if condition.matches(current_compare_result(ctx)) {
+        dispatch_std_script(ctx, host, index)
+    } else {
+        false
+    }
+}
+
+fn dispatch_std_script(
+    ctx: &mut ScriptContext<'_, '_, ScriptHost>,
+    host: &mut ScriptHost,
+    index: u8,
+) -> bool {
+    // All four upstream standard-script commands ignore indices at or beyond
+    // `gStdScripts_End` (`src/scrcmd.c`).
+    match StdScript::from_index(index) {
+        Some(id) => trap(ctx, host, CommandTrap::StdScript(id)),
+        None => false,
+    }
+}
+
 fn setvar(ctx: &mut ScriptContext<'_, '_, ScriptHost>, host: &mut ScriptHost) -> bool {
     let (dest, value) = match read_u16_pair(ctx) {
         Ok(pair) => pair,
@@ -387,15 +357,6 @@ fn setvar(ctx: &mut ScriptContext<'_, '_, ScriptHost>, host: &mut ScriptHost) ->
     }
 }
 
-/// `SCR_OP_ADDVAR` (`0x17`). Mirrors `ScrCmd_addvar`: adds a **literal**
-/// value to a var (`0xFFFF + 1` wraps to `0x0000`, matching upstream's
-/// unchecked `u16` overflow).
-///
-/// Upstream's own comment on `ScrCmd_addvar` (`src/scrcmd.c`) is explicit
-/// that this is deliberate and must stay this way: "addvar doesn't support
-/// adding from a variable in vanilla" — unlike [`subvar`], the second
-/// operand is never resolved through `VarGet`, even though it's read from
-/// the same 2-byte operand slot a `VAR_*` id would occupy.
 fn addvar(ctx: &mut ScriptContext<'_, '_, ScriptHost>, host: &mut ScriptHost) -> bool {
     let (dest, literal) = match read_u16_pair(ctx) {
         Ok(pair) => pair,
@@ -405,18 +366,14 @@ fn addvar(ctx: &mut ScriptContext<'_, '_, ScriptHost>, host: &mut ScriptHost) ->
         Ok(v) => v,
         Err(e) => return trap(ctx, host, CommandTrap::EventData(e)),
     };
+    // `ScrCmd_addvar` deliberately treats its second operand as a literal;
+    // unlike `subvar`, it does not call `VarGet` (`src/scrcmd.c`).
     match host.event_data.var_set(dest, current.wrapping_add(literal)) {
         Ok(()) => false,
         Err(e) => trap(ctx, host, CommandTrap::EventData(e)),
     }
 }
 
-/// `SCR_OP_SUBVAR` (`0x18`). Mirrors `ScrCmd_subvar`: subtracts
-/// [`EventData::var_get`]-resolved `source` (a `VAR_*` id **or** a literal —
-/// see the [module docs' `VAR_` dereferencing](self#var_-dereferencing)
-/// section) from `dest` (`0x0000 - 1` wraps to `0xFFFF`, matching upstream's
-/// unchecked `u16` overflow). Unlike `addvar`, upstream does resolve this
-/// operand through `VarGet`.
 fn subvar(ctx: &mut ScriptContext<'_, '_, ScriptHost>, host: &mut ScriptHost) -> bool {
     let (dest, source) = match read_u16_pair(ctx) {
         Ok(pair) => pair,
@@ -439,12 +396,6 @@ fn subvar(ctx: &mut ScriptContext<'_, '_, ScriptHost>, host: &mut ScriptHost) ->
     }
 }
 
-/// `SCR_OP_COPYVAR` (`0x19`). Mirrors `ScrCmd_copyvar`: copies `source`'s
-/// value into `dest`. See the [module docs' `VAR_`
-/// dereferencing](self#var_-dereferencing) section for why this reads
-/// `source` through [`EventData::var_get`] (the checked `VarGet`) rather
-/// than upstream's raw, unchecked pointer dereference — for every id a real
-/// script passes here (always a proper `VAR_*` id) the two agree.
 fn copyvar(ctx: &mut ScriptContext<'_, '_, ScriptHost>, host: &mut ScriptHost) -> bool {
     let (dest, source) = match read_u16_pair(ctx) {
         Ok(pair) => pair,
@@ -460,19 +411,10 @@ fn copyvar(ctx: &mut ScriptContext<'_, '_, ScriptHost>, host: &mut ScriptHost) -
     }
 }
 
-/// `SCR_OP_SETORCOPYVAR` (`0x1a`). Mirrors `ScrCmd_setorcopyvar`: writes
-/// `source` into `dest`, where `source` may be either a `VAR_*` id or a
-/// literal — `EventData::var_get` resolves either case (see the [module
-/// docs' `VAR_` dereferencing](self#var_-dereferencing) section), exactly
-/// mirroring upstream's `VarGet` call here.
 fn setorcopyvar(ctx: &mut ScriptContext<'_, '_, ScriptHost>, host: &mut ScriptHost) -> bool {
     copyvar(ctx, host)
 }
 
-/// `SCR_OP_COMPARE_VAR_TO_VALUE` (`0x21`), commonly called `compare`.
-/// Mirrors `ScrCmd_compare_var_to_value`: compares a var's value to a
-/// literal and stores the result in [`ScriptContext::comparison_result`] for
-/// a following `goto_if`/`call_if`.
 fn compare(ctx: &mut ScriptContext<'_, '_, ScriptHost>, host: &mut ScriptHost) -> bool {
     let (var, value) = match read_u16_pair(ctx) {
         Ok(pair) => pair,
@@ -486,10 +428,6 @@ fn compare(ctx: &mut ScriptContext<'_, '_, ScriptHost>, host: &mut ScriptHost) -
     false
 }
 
-/// `SCR_OP_COMPARE_VAR_TO_VAR` (`0x22`), commonly called `comparevars`.
-/// Mirrors `ScrCmd_compare_var_to_var`: compares two vars' values and stores
-/// the result in [`ScriptContext::comparison_result`] for a following
-/// `goto_if`/`call_if`.
 fn comparevars(ctx: &mut ScriptContext<'_, '_, ScriptHost>, host: &mut ScriptHost) -> bool {
     let (var1, var2) = match read_u16_pair(ctx) {
         Ok(pair) => pair,
@@ -507,7 +445,6 @@ fn comparevars(ctx: &mut ScriptContext<'_, '_, ScriptHost>, host: &mut ScriptHos
     false
 }
 
-/// `SCR_OP_SETFLAG` (`0x29`). Mirrors `ScrCmd_setflag`.
 fn setflag(ctx: &mut ScriptContext<'_, '_, ScriptHost>, host: &mut ScriptHost) -> bool {
     let id = match ctx.read_u16() {
         Ok(id) => id,
@@ -519,7 +456,6 @@ fn setflag(ctx: &mut ScriptContext<'_, '_, ScriptHost>, host: &mut ScriptHost) -
     }
 }
 
-/// `SCR_OP_CLEARFLAG` (`0x2a`). Mirrors `ScrCmd_clearflag`.
 fn clearflag(ctx: &mut ScriptContext<'_, '_, ScriptHost>, host: &mut ScriptHost) -> bool {
     let id = match ctx.read_u16() {
         Ok(id) => id,
@@ -531,11 +467,6 @@ fn clearflag(ctx: &mut ScriptContext<'_, '_, ScriptHost>, host: &mut ScriptHost)
     }
 }
 
-/// `SCR_OP_CHECKFLAG` (`0x2b`). Mirrors `ScrCmd_checkflag`: stores the
-/// flag's value (`0` or `1`) in [`ScriptContext::comparison_result`] — a
-/// following `goto_if`/`call_if` typically uses `EQUAL`/`LESS_THAN` (i.e.
-/// `TRUE`/`FALSE`) against it, both of which [`CONDITION_TABLE`] already
-/// covers via its `<`/`==` columns.
 fn checkflag(ctx: &mut ScriptContext<'_, '_, ScriptHost>, host: &mut ScriptHost) -> bool {
     let id = match ctx.read_u16() {
         Ok(id) => id,
@@ -550,11 +481,78 @@ fn checkflag(ctx: &mut ScriptContext<'_, '_, ScriptHost>, host: &mut ScriptHost)
     }
 }
 
-/// Table entry for an opcode `script_cmd_table.inc` assigns upstream but
-/// this slice doesn't implement (see the [module docs, "Scope"](self#scope) section) — traps with [`CommandTrap::Unimplemented`]
-/// instead of leaving a gap or aliasing another command. `OP` is baked in
-/// per table slot via a const generic, so one function body serves every
-/// unimplemented opcode while each slot still reports its own opcode.
+const VAR_RESULT: u16 = SPECIAL_VARS_START + 0xD;
+
+fn random(ctx: &mut ScriptContext<'_, '_, ScriptHost>, host: &mut ScriptHost) -> bool {
+    let operand = match ctx.read_u16() {
+        Ok(v) => v,
+        Err(e) => return trap(ctx, host, CommandTrap::Script(e)),
+    };
+    let limit = match host.event_data.var_get(operand) {
+        Ok(v) => v,
+        Err(e) => return trap(ctx, host, CommandTrap::EventData(e)),
+    };
+    if limit == 0 {
+        return trap(ctx, host, CommandTrap::DivideByZero);
+    }
+    let value = host.rng.next_u16() % limit;
+    match host.event_data.var_set(VAR_RESULT, value) {
+        Ok(()) => false,
+        Err(e) => trap(ctx, host, CommandTrap::EventData(e)),
+    }
+}
+
+fn special(ctx: &mut ScriptContext<'_, '_, ScriptHost>, host: &mut ScriptHost) -> bool {
+    let raw = match ctx.read_u16() {
+        Ok(v) => v,
+        Err(e) => return trap(ctx, host, CommandTrap::Script(e)),
+    };
+    let Some(id) = SpecialId::from_index(raw) else {
+        return trap(ctx, host, CommandTrap::InvalidSpecial(raw));
+    };
+    match SPECIAL_TABLE[usize::from(id.index())] {
+        Some(f) => {
+            f(host);
+            false
+        }
+        None => trap(ctx, host, CommandTrap::UnimplementedSpecial(id)),
+    }
+}
+
+fn specialvar(ctx: &mut ScriptContext<'_, '_, ScriptHost>, host: &mut ScriptHost) -> bool {
+    let dest = match ctx.read_u16() {
+        Ok(v) => v,
+        Err(e) => return trap(ctx, host, CommandTrap::Script(e)),
+    };
+    let raw = match ctx.read_u16() {
+        Ok(v) => v,
+        Err(e) => return trap(ctx, host, CommandTrap::Script(e)),
+    };
+    let Some(id) = SpecialId::from_index(raw) else {
+        return trap(ctx, host, CommandTrap::InvalidSpecial(raw));
+    };
+    match SPECIAL_TABLE[usize::from(id.index())] {
+        Some(f) => {
+            let value = f(host);
+            match host.event_data.var_set(dest, value) {
+                Ok(()) => false,
+                Err(e) => trap(ctx, host, CommandTrap::EventData(e)),
+            }
+        }
+        None => trap(ctx, host, CommandTrap::UnimplementedSpecial(id)),
+    }
+}
+
+fn waitstate(ctx: &mut ScriptContext<'_, '_, ScriptHost>, host: &mut ScriptHost) -> bool {
+    host.waiting = true;
+    ctx.setup_gate(step_waitstate);
+    true
+}
+
+fn step_waitstate(_ctx: &mut ScriptContext<'_, '_, ScriptHost>, host: &mut ScriptHost) -> bool {
+    !host.waiting
+}
+
 fn unimplemented<const OP: u8>(
     ctx: &mut ScriptContext<'_, '_, ScriptHost>,
     host: &mut ScriptHost,
@@ -562,65 +560,289 @@ fn unimplemented<const OP: u8>(
     trap(ctx, host, CommandTrap::Unimplemented(OP))
 }
 
-/// This slice's command table, indexed by upstream opcode
-/// (`data/script_cmd_table.inc`) from `SCR_OP_NOP` (`0x00`) through
-/// `SCR_OP_CHECKFLAG` (`0x2b`) — the highest opcode this slice implements.
-/// Every index in between has an entry: either a ported command, or
-/// [`unimplemented`] carrying that slot's own opcode number. See the
-/// [module docs](self) for what's ported and why the rest isn't yet.
-pub const COMMAND_TABLE: [Command<ScriptHost>; 0x2c] = [
-    nop,                   // 0x00 SCR_OP_NOP
-    nop1,                  // 0x01 SCR_OP_NOP1
-    end,                   // 0x02 SCR_OP_END
-    script_return,         // 0x03 SCR_OP_RETURN
-    call,                  // 0x04 SCR_OP_CALL
-    goto,                  // 0x05 SCR_OP_GOTO
-    goto_if,               // 0x06 SCR_OP_GOTO_IF
-    call_if,               // 0x07 SCR_OP_CALL_IF
-    unimplemented::<0x08>, // SCR_OP_GOTO_STD
-    unimplemented::<0x09>, // SCR_OP_CALL_STD
-    unimplemented::<0x0a>, // SCR_OP_GOTO_STD_IF
-    unimplemented::<0x0b>, // SCR_OP_CALL_STD_IF
-    unimplemented::<0x0c>, // SCR_OP_RETURNRAM
-    unimplemented::<0x0d>, // SCR_OP_ENDRAM
-    unimplemented::<0x0e>, // SCR_OP_SETMYSTERYEVENTSTATUS
-    unimplemented::<0x0f>, // SCR_OP_LOAD_WORD
-    unimplemented::<0x10>, // SCR_OP_LOAD_BYTE
-    unimplemented::<0x11>, // SCR_OP_SETPTR
-    unimplemented::<0x12>, // SCR_OP_LOADBYTEFROMPTR
-    unimplemented::<0x13>, // SCR_OP_SETPTRBYTE
-    unimplemented::<0x14>, // SCR_OP_COPYLOCAL
-    unimplemented::<0x15>, // SCR_OP_COPYBYTE
-    setvar,                // 0x16 SCR_OP_SETVAR
-    addvar,                // 0x17 SCR_OP_ADDVAR
-    subvar,                // 0x18 SCR_OP_SUBVAR
-    copyvar,               // 0x19 SCR_OP_COPYVAR
-    setorcopyvar,          // 0x1a SCR_OP_SETORCOPYVAR
-    unimplemented::<0x1b>, // SCR_OP_COMPARE_LOCAL_TO_LOCAL
-    unimplemented::<0x1c>, // SCR_OP_COMPARE_LOCAL_TO_VALUE
-    unimplemented::<0x1d>, // SCR_OP_COMPARE_LOCAL_TO_PTR
-    unimplemented::<0x1e>, // SCR_OP_COMPARE_PTR_TO_LOCAL
-    unimplemented::<0x1f>, // SCR_OP_COMPARE_PTR_TO_VALUE
-    unimplemented::<0x20>, // SCR_OP_COMPARE_PTR_TO_PTR
-    compare,               // 0x21 SCR_OP_COMPARE_VAR_TO_VALUE
-    comparevars,           // 0x22 SCR_OP_COMPARE_VAR_TO_VAR
-    unimplemented::<0x23>, // SCR_OP_CALLNATIVE
-    unimplemented::<0x24>, // SCR_OP_GOTONATIVE
-    unimplemented::<0x25>, // SCR_OP_SPECIAL
-    unimplemented::<0x26>, // SCR_OP_SPECIALVAR
-    unimplemented::<0x27>, // SCR_OP_WAITSTATE
-    unimplemented::<0x28>, // SCR_OP_DELAY
-    setflag,               // 0x29 SCR_OP_SETFLAG
-    clearflag,             // 0x2a SCR_OP_CLEARFLAG
-    checkflag,             // 0x2b SCR_OP_CHECKFLAG
-];
+macro_rules! define_command_table {
+    ($($name:ident = $opcode:literal $(=> $handler:expr)?),+ $(,)?) => {
+        /// Handlers indexed by Emerald field-script opcode.
+        ///
+        /// The table covers `NOP` through `RANDOM`. Entries without an explicit
+        /// handler trap as [`CommandTrap::Unimplemented`].
+        pub const COMMAND_TABLE: [Command<ScriptHost>; 0x90] = {
+            let mut expected_opcode = 0u8;
+            $(
+                assert!($opcode == expected_opcode, concat!("non-sequential opcode: ", stringify!($name)));
+                expected_opcode += 1;
+            )+
+            assert!(expected_opcode == 0x90);
+            [$(define_command_table!(@handler $opcode $(=> $handler)?)),+]
+        };
+    };
+    (@handler $opcode:literal => $handler:expr) => { $handler };
+    (@handler $opcode:literal) => { unimplemented::<$opcode> };
+}
+
+define_command_table! {
+    NOP = 0x00 => nop,
+    NOP1 = 0x01 => nop1,
+    END = 0x02 => end,
+    RETURN = 0x03 => script_return,
+    CALL = 0x04 => call,
+    GOTO = 0x05 => goto,
+    GOTO_IF = 0x06 => goto_if,
+    CALL_IF = 0x07 => call_if,
+    GOTO_STD = 0x08 => gotostd,
+    CALL_STD = 0x09 => callstd,
+    GOTO_STD_IF = 0x0a => gotostd_if,
+    CALL_STD_IF = 0x0b => callstd_if,
+    RETURN_RAM = 0x0c,
+    END_RAM = 0x0d,
+    SET_MYSTERY_EVENT_STATUS = 0x0e,
+    LOAD_WORD = 0x0f,
+    LOAD_BYTE = 0x10,
+    SET_PTR = 0x11,
+    LOAD_BYTE_FROM_PTR = 0x12,
+    SET_PTR_BYTE = 0x13,
+    COPY_LOCAL = 0x14,
+    COPY_BYTE = 0x15,
+    SET_VAR = 0x16 => setvar,
+    ADD_VAR = 0x17 => addvar,
+    SUB_VAR = 0x18 => subvar,
+    COPY_VAR = 0x19 => copyvar,
+    SET_OR_COPY_VAR = 0x1a => setorcopyvar,
+    COMPARE_LOCAL_TO_LOCAL = 0x1b,
+    COMPARE_LOCAL_TO_VALUE = 0x1c,
+    COMPARE_LOCAL_TO_PTR = 0x1d,
+    COMPARE_PTR_TO_LOCAL = 0x1e,
+    COMPARE_PTR_TO_VALUE = 0x1f,
+    COMPARE_PTR_TO_PTR = 0x20,
+    COMPARE_VAR_TO_VALUE = 0x21 => compare,
+    COMPARE_VAR_TO_VAR = 0x22 => comparevars,
+    CALL_NATIVE = 0x23,
+    GOTO_NATIVE = 0x24,
+    SPECIAL = 0x25 => special,
+    SPECIAL_VAR = 0x26 => specialvar,
+    WAIT_STATE = 0x27 => waitstate,
+    DELAY = 0x28,
+    SET_FLAG = 0x29 => setflag,
+    CLEAR_FLAG = 0x2a => clearflag,
+    CHECK_FLAG = 0x2b => checkflag,
+    INIT_CLOCK = 0x2c,
+    DO_TIME_BASED_EVENTS = 0x2d,
+    GET_TIME = 0x2e,
+    PLAY_SE = 0x2f,
+    WAIT_SE = 0x30,
+    PLAY_FANFARE = 0x31,
+    WAIT_FANFARE = 0x32,
+    PLAY_BGM = 0x33,
+    SAVE_BGM = 0x34,
+    FADE_DEFAULT_BGM = 0x35,
+    FADE_NEW_BGM = 0x36,
+    FADE_OUT_BGM = 0x37,
+    FADE_IN_BGM = 0x38,
+    WARP = 0x39,
+    WARP_SILENT = 0x3a,
+    WARP_DOOR = 0x3b,
+    WARP_HOLE = 0x3c,
+    WARP_TELEPORT = 0x3d,
+    SET_WARP = 0x3e,
+    SET_DYNAMIC_WARP = 0x3f,
+    SET_DIVE_WARP = 0x40,
+    SET_HOLE_WARP = 0x41,
+    GET_PLAYER_XY = 0x42,
+    GET_PARTY_SIZE = 0x43,
+    ADD_ITEM = 0x44,
+    REMOVE_ITEM = 0x45,
+    CHECK_ITEM_SPACE = 0x46,
+    CHECK_ITEM = 0x47,
+    CHECK_ITEM_TYPE = 0x48,
+    ADD_PC_ITEM = 0x49,
+    CHECK_PC_ITEM = 0x4a,
+    ADD_DECORATION = 0x4b,
+    REMOVE_DECORATION = 0x4c,
+    CHECK_DECOR = 0x4d,
+    CHECK_DECOR_SPACE = 0x4e,
+    APPLY_MOVEMENT = 0x4f,
+    APPLY_MOVEMENT_AT = 0x50,
+    WAIT_MOVEMENT = 0x51,
+    WAIT_MOVEMENT_AT = 0x52,
+    REMOVE_OBJECT = 0x53,
+    REMOVE_OBJECT_AT = 0x54,
+    ADD_OBJECT = 0x55,
+    ADD_OBJECT_AT = 0x56,
+    SET_OBJECT_XY = 0x57,
+    SHOW_OBJECT_AT = 0x58,
+    HIDE_OBJECT_AT = 0x59,
+    FACE_PLAYER = 0x5a,
+    TURN_OBJECT = 0x5b,
+    TRAINER_BATTLE = 0x5c,
+    DO_TRAINER_BATTLE = 0x5d,
+    GOTO_POST_BATTLE_SCRIPT = 0x5e,
+    GOTO_BEATEN_SCRIPT = 0x5f,
+    CHECK_TRAINER_FLAG = 0x60,
+    SET_TRAINER_FLAG = 0x61,
+    CLEAR_TRAINER_FLAG = 0x62,
+    SET_OBJECT_XY_PERMANENT = 0x63,
+    COPY_OBJECT_XY_TO_PERMANENT = 0x64,
+    SET_OBJECT_MOVEMENT_TYPE = 0x65,
+    WAIT_MESSAGE = 0x66,
+    MESSAGE = 0x67,
+    CLOSE_MESSAGE = 0x68,
+    LOCK_ALL = 0x69,
+    LOCK = 0x6a,
+    RELEASE_ALL = 0x6b,
+    RELEASE = 0x6c,
+    WAIT_BUTTON_PRESS = 0x6d,
+    YES_NO_BOX = 0x6e,
+    MULTICHOICE = 0x6f,
+    MULTICHOICE_DEFAULT = 0x70,
+    MULTICHOICE_GRID = 0x71,
+    DRAW_BOX = 0x72,
+    ERASE_BOX = 0x73,
+    DRAW_BOX_TEXT = 0x74,
+    SHOW_MON_PIC = 0x75,
+    HIDE_MON_PIC = 0x76,
+    SHOW_CONTEST_PAINTING = 0x77,
+    BRAILLE_MESSAGE = 0x78,
+    GIVE_MON = 0x79,
+    GIVE_EGG = 0x7a,
+    SET_MON_MOVE = 0x7b,
+    CHECK_PARTY_MOVE = 0x7c,
+    BUFFER_SPECIES_NAME = 0x7d,
+    BUFFER_LEAD_MON_SPECIES_NAME = 0x7e,
+    BUFFER_PARTY_MON_NICKNAME = 0x7f,
+    BUFFER_ITEM_NAME = 0x80,
+    BUFFER_DECORATION_NAME = 0x81,
+    BUFFER_MOVE_NAME = 0x82,
+    BUFFER_NUMBER_STRING = 0x83,
+    BUFFER_STD_STRING = 0x84,
+    BUFFER_STRING = 0x85,
+    POKEMART = 0x86,
+    POKEMART_DECORATION = 0x87,
+    POKEMART_DECORATION_2 = 0x88,
+    PLAY_SLOT_MACHINE = 0x89,
+    SET_BERRY_TREE = 0x8a,
+    CHOOSE_CONTEST_MON = 0x8b,
+    START_CONTEST = 0x8c,
+    SHOW_CONTEST_RESULTS = 0x8d,
+    CONTEST_LINK_TRANSFER = 0x8e,
+    RANDOM = 0x8f => random,
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event_data::{SPECIAL_FLAGS_START, SPECIAL_VARS_START, VARS_START};
+    use crate::event_data::{SPECIAL_FLAGS_START, VARS_START};
 
-    /// Builds a fresh context wired to [`COMMAND_TABLE`] and a fresh host.
+    // Keep the bytecode oracle independent from `define_command_table!` so a
+    // coordinated opcode-and-handler mistake still fails the behavior tests.
+    macro_rules! opcode {
+        (NOP) => {
+            0x00
+        };
+        (NOP1) => {
+            0x01
+        };
+        (END) => {
+            0x02
+        };
+        (RETURN) => {
+            0x03
+        };
+        (CALL) => {
+            0x04
+        };
+        (GOTO) => {
+            0x05
+        };
+        (GOTO_IF) => {
+            0x06
+        };
+        (CALL_IF) => {
+            0x07
+        };
+        (GOTO_STD) => {
+            0x08
+        };
+        (CALL_STD) => {
+            0x09
+        };
+        (GOTO_STD_IF) => {
+            0x0a
+        };
+        (CALL_STD_IF) => {
+            0x0b
+        };
+        (RETURN_RAM) => {
+            0x0c
+        };
+        (SET_VAR) => {
+            0x16
+        };
+        (ADD_VAR) => {
+            0x17
+        };
+        (SUB_VAR) => {
+            0x18
+        };
+        (COPY_VAR) => {
+            0x19
+        };
+        (SET_OR_COPY_VAR) => {
+            0x1a
+        };
+        (COMPARE_VAR_TO_VALUE) => {
+            0x21
+        };
+        (COMPARE_VAR_TO_VAR) => {
+            0x22
+        };
+        (SPECIAL) => {
+            0x25
+        };
+        (SPECIAL_VAR) => {
+            0x26
+        };
+        (WAIT_STATE) => {
+            0x27
+        };
+        (SET_FLAG) => {
+            0x29
+        };
+        (CLEAR_FLAG) => {
+            0x2a
+        };
+        (CHECK_FLAG) => {
+            0x2b
+        };
+        (RANDOM) => {
+            0x8f
+        };
+    }
+
+    /// The six condition bytes `sScriptConditionTable` orders
+    /// (`pokeemerald/src/scrcmd.c`) and the three `comparisonResult` values
+    /// `ScriptCompare` stores. Pinned as literals for the same reason as
+    /// [`opcode!`], rather than read back from [`ScriptCondition`] and
+    /// [`CompareResult`] through `as u8`: a discriminant moved in step with
+    /// `from_byte` and the matcher would otherwise move the tests' inputs
+    /// along with it and leave them green on the wrong mapping.
+    const COND_LESS_THAN: u8 = 0;
+    const COND_EQUAL: u8 = 1;
+    const COND_GREATER_THAN: u8 = 2;
+    const COND_LESS_THAN_OR_EQUAL: u8 = 3;
+    const COND_GREATER_THAN_OR_EQUAL: u8 = 4;
+    const COND_NOT_EQUAL: u8 = 5;
+    const RESULT_LESS: u8 = 0;
+    const RESULT_EQUAL: u8 = 1;
+    const RESULT_GREATER: u8 = 2;
+
+    /// `VAR_RESULT`'s encoded identifier (`include/constants/vars.h:296`,
+    /// `SPECIAL_VARS_START + 0xD`), pinned here instead of read back from
+    /// production's [`VAR_RESULT`] so that renumbering that constant to
+    /// another valid special-variable slot fails
+    /// [`setvar_writes_a_special_var`] rather than moving the operand and the
+    /// assertion together. That test is the one place the two meet.
+    const PINNED_VAR_RESULT: u16 = SPECIAL_VARS_START + 0xD;
+
     fn setup() -> (ScriptContext<'static, 'static, ScriptHost>, ScriptHost) {
         (ScriptContext::new(&COMMAND_TABLE), ScriptHost::default())
     }
@@ -628,7 +850,7 @@ mod tests {
     #[test]
     fn nop_and_nop1_do_nothing_and_advance_past_themselves() {
         let (mut ctx, mut host) = setup();
-        let bytes = [0x00, 0x01, 0x02]; // nop, nop1, end
+        let bytes = [opcode!(NOP), opcode!(NOP1), opcode!(END)];
         ctx.setup_bytecode(&bytes);
         assert!(!ctx.run(&mut host), "end halts the script");
         assert!(ctx.is_stopped());
@@ -638,7 +860,7 @@ mod tests {
     #[test]
     fn end_halts_the_script() {
         let (mut ctx, mut host) = setup();
-        let bytes = [0x02, 0x00]; // end, (nop never reached)
+        let bytes = [opcode!(END), opcode!(NOP)];
         ctx.setup_bytecode(&bytes);
         assert!(!ctx.run(&mut host));
         assert!(ctx.is_stopped());
@@ -647,32 +869,29 @@ mod tests {
     #[test]
     fn goto_jumps_to_the_resolved_offset_skipping_what_linear_flow_would_hit() {
         let (mut ctx, mut host) = setup();
-        // 0: goto 10          -> 05 <offset:4>
-        // 5: setflag 999      -> 29 <id:2>  (would run without the jump; must NOT)
-        // 8: end              -> 02          (would halt without the jump; must NOT)
-        // 9: nop              -> 00          (padding, unreached either way)
-        // 10: setflag 100     -> 29 <id:2>  (only reached via the jump)
-        // 13: end             -> 02
-        let mut bytes = vec![0x05];
-        bytes.extend_from_slice(&10u32.to_le_bytes());
-        bytes.push(0x29);
-        bytes.extend_from_slice(&999u16.to_le_bytes());
-        bytes.push(0x02);
-        bytes.push(0x00);
-        bytes.push(0x29);
-        bytes.extend_from_slice(&100u16.to_le_bytes());
-        bytes.push(0x02);
+        let skipped_flag = 999u16;
+        let target_flag = 100u16;
+        let target_offset = 10u32;
+        let mut bytes = vec![opcode!(GOTO)];
+        bytes.extend_from_slice(&target_offset.to_le_bytes());
+        bytes.push(opcode!(SET_FLAG));
+        bytes.extend_from_slice(&skipped_flag.to_le_bytes());
+        bytes.push(opcode!(END));
+        bytes.push(opcode!(NOP));
+        bytes.push(opcode!(SET_FLAG));
+        bytes.extend_from_slice(&target_flag.to_le_bytes());
+        bytes.push(opcode!(END));
         ctx.setup_bytecode(&bytes);
 
         assert!(!ctx.run(&mut host));
         assert_eq!(host.trap, None);
         assert_eq!(
-            host.event_data.flag_get(100),
+            host.event_data.flag_get(target_flag),
             Ok(true),
             "the jump target's setflag ran"
         );
         assert_eq!(
-            host.event_data.flag_get(999),
+            host.event_data.flag_get(skipped_flag),
             Ok(false),
             "the setflag linear flow would have hit was skipped over"
         );
@@ -681,26 +900,28 @@ mod tests {
     #[test]
     fn call_pushes_a_return_address_and_return_resumes_after_it() {
         let (mut ctx, mut host) = setup();
-        // 0: call 9          -> 04 <offset:4>
-        // 5: setflag 200     -> 29 <id:2>  (runs after the call returns)
-        // 8: end             -> 02
-        // 9: setflag 100     -> 29 <id:2>  (the subroutine)
-        // 12: return         -> 03
-        let mut bytes = vec![0x04];
-        bytes.extend_from_slice(&9u32.to_le_bytes());
-        bytes.push(0x29);
-        bytes.extend_from_slice(&200u16.to_le_bytes());
-        bytes.push(0x02);
-        bytes.push(0x29);
-        bytes.extend_from_slice(&100u16.to_le_bytes());
-        bytes.push(0x03);
+        let after_call_flag = 200u16;
+        let subroutine_flag = 100u16;
+        let subroutine_offset = 9u32;
+        let mut bytes = vec![opcode!(CALL)];
+        bytes.extend_from_slice(&subroutine_offset.to_le_bytes());
+        bytes.push(opcode!(SET_FLAG));
+        bytes.extend_from_slice(&after_call_flag.to_le_bytes());
+        bytes.push(opcode!(END));
+        bytes.push(opcode!(SET_FLAG));
+        bytes.extend_from_slice(&subroutine_flag.to_le_bytes());
+        bytes.push(opcode!(RETURN));
         ctx.setup_bytecode(&bytes);
 
         assert!(!ctx.run(&mut host));
         assert_eq!(host.trap, None);
-        assert_eq!(host.event_data.flag_get(100), Ok(true), "subroutine ran");
         assert_eq!(
-            host.event_data.flag_get(200),
+            host.event_data.flag_get(subroutine_flag),
+            Ok(true),
+            "subroutine ran"
+        );
+        assert_eq!(
+            host.event_data.flag_get(after_call_flag),
             Ok(true),
             "resumed after the call site"
         );
@@ -710,7 +931,7 @@ mod tests {
     #[test]
     fn goto_with_out_of_range_target_traps() {
         let (mut ctx, mut host) = setup();
-        let mut bytes = vec![0x05];
+        let mut bytes = vec![opcode!(GOTO)];
         bytes.extend_from_slice(&999u32.to_le_bytes());
         ctx.setup_bytecode(&bytes);
 
@@ -721,43 +942,45 @@ mod tests {
         );
     }
 
-    /// Exhaustive over all 6 [`ScriptCondition`] values × all 3
-    /// [`CompareResult`] outcomes: exactly the cells `sScriptConditionTable`
-    /// marks `1` should jump; every other cell should not.
     #[test]
     fn goto_if_truth_table_matches_upstream_condition_table() {
-        // (condition byte, comparisonResult) -> expect jump?
+        // (condition byte, comparisonResult byte, expect jump?), both bytes
+        // pinned above rather than read out of the production enums.
         #[rustfmt::skip]
-        let cases: &[(u8, u8, bool)] = &[
-            // LESS_THAN
-            (0, 0, true), (0, 1, false), (0, 2, false),
-            // EQUAL
-            (1, 0, false), (1, 1, true), (1, 2, false),
-            // GREATER_THAN
-            (2, 0, false), (2, 1, false), (2, 2, true),
-            // LESS_THAN_OR_EQUAL
-            (3, 0, true), (3, 1, true), (3, 2, false),
-            // GREATER_THAN_OR_EQUAL
-            (4, 0, false), (4, 1, true), (4, 2, true),
-            // NOT_EQUAL
-            (5, 0, true), (5, 1, false), (5, 2, true),
+        let cases: [(u8, u8, bool); 18] = [
+            (COND_LESS_THAN,              RESULT_LESS,    true),
+            (COND_LESS_THAN,              RESULT_EQUAL,   false),
+            (COND_LESS_THAN,              RESULT_GREATER, false),
+            (COND_EQUAL,                  RESULT_LESS,    false),
+            (COND_EQUAL,                  RESULT_EQUAL,   true),
+            (COND_EQUAL,                  RESULT_GREATER, false),
+            (COND_GREATER_THAN,           RESULT_LESS,    false),
+            (COND_GREATER_THAN,           RESULT_EQUAL,   false),
+            (COND_GREATER_THAN,           RESULT_GREATER, true),
+            (COND_LESS_THAN_OR_EQUAL,     RESULT_LESS,    true),
+            (COND_LESS_THAN_OR_EQUAL,     RESULT_EQUAL,   true),
+            (COND_LESS_THAN_OR_EQUAL,     RESULT_GREATER, false),
+            (COND_GREATER_THAN_OR_EQUAL,  RESULT_LESS,    false),
+            (COND_GREATER_THAN_OR_EQUAL,  RESULT_EQUAL,   true),
+            (COND_GREATER_THAN_OR_EQUAL,  RESULT_GREATER, true),
+            (COND_NOT_EQUAL,              RESULT_LESS,    true),
+            (COND_NOT_EQUAL,              RESULT_EQUAL,   false),
+            (COND_NOT_EQUAL,              RESULT_GREATER, true),
         ];
 
-        for &(condition, comparison_result, expect_jump) in cases {
+        for (condition, comparison_result, expect_jump) in cases {
             let (mut ctx, mut host) = setup();
-            // 0: goto_if <condition>, 10   -> 06 <cond:1> <offset:4>
-            // 6: setflag 1                 -> 29 <id:2>  (only if it doesn't jump)
-            // 9: end                       -> 02
-            // 10: setflag 2                -> 29 <id:2>  (only if it jumps)
-            // 13: end                      -> 02
-            let mut bytes = vec![0x06, condition];
-            bytes.extend_from_slice(&10u32.to_le_bytes());
-            bytes.push(0x29);
-            bytes.extend_from_slice(&1u16.to_le_bytes());
-            bytes.push(0x02);
-            bytes.push(0x29);
-            bytes.extend_from_slice(&2u16.to_le_bytes());
-            bytes.push(0x02);
+            let linear_flag = 1u16;
+            let target_flag = 2u16;
+            let target_offset = 10u32;
+            let mut bytes = vec![opcode!(GOTO_IF), condition];
+            bytes.extend_from_slice(&target_offset.to_le_bytes());
+            bytes.push(opcode!(SET_FLAG));
+            bytes.extend_from_slice(&linear_flag.to_le_bytes());
+            bytes.push(opcode!(END));
+            bytes.push(opcode!(SET_FLAG));
+            bytes.extend_from_slice(&target_flag.to_le_bytes());
+            bytes.push(opcode!(END));
             ctx.setup_bytecode(&bytes);
             ctx.set_comparison_result(comparison_result);
 
@@ -767,47 +990,44 @@ mod tests {
                 "condition {condition} result {comparison_result}"
             );
             assert_eq!(
-                host.event_data.flag_get(2),
+                host.event_data.flag_get(target_flag),
                 Ok(expect_jump),
-                "condition {condition}, comparisonResult {comparison_result}: expected jump = {expect_jump}"
+                "condition {condition}, comparison result {comparison_result}: expected jump = {expect_jump}"
             );
-            assert_eq!(host.event_data.flag_get(1), Ok(!expect_jump));
+            assert_eq!(host.event_data.flag_get(linear_flag), Ok(!expect_jump));
         }
     }
 
     #[test]
     fn call_if_jumps_via_call_so_return_comes_back() {
         let (mut ctx, mut host) = setup();
-        // 0: compare_var_to_value VARS_START, 5   -> 21 <var:2> <value:2>
-        // 5: call_if EQUAL(1), 15                 -> 07 <cond:1> <offset:4>
-        // 11: setflag 9                            -> 29 <id:2>
-        // 14: end                                  -> 02
-        // 15: setflag 10                           -> 29 <id:2>
-        // 18: return                               -> 03
-        let mut bytes = vec![0x21];
+        let after_call_flag = 9u16;
+        let subroutine_flag = 10u16;
+        let subroutine_offset = 15u32;
+        let mut bytes = vec![opcode!(COMPARE_VAR_TO_VALUE)];
         bytes.extend_from_slice(&VARS_START.to_le_bytes());
         bytes.extend_from_slice(&5u16.to_le_bytes());
-        bytes.push(0x07);
-        bytes.push(1);
-        bytes.extend_from_slice(&15u32.to_le_bytes());
-        bytes.push(0x29);
-        bytes.extend_from_slice(&9u16.to_le_bytes());
-        bytes.push(0x02);
-        bytes.push(0x29);
-        bytes.extend_from_slice(&10u16.to_le_bytes());
-        bytes.push(0x03);
+        bytes.push(opcode!(CALL_IF));
+        bytes.push(COND_EQUAL);
+        bytes.extend_from_slice(&subroutine_offset.to_le_bytes());
+        bytes.push(opcode!(SET_FLAG));
+        bytes.extend_from_slice(&after_call_flag.to_le_bytes());
+        bytes.push(opcode!(END));
+        bytes.push(opcode!(SET_FLAG));
+        bytes.extend_from_slice(&subroutine_flag.to_le_bytes());
+        bytes.push(opcode!(RETURN));
         ctx.setup_bytecode(&bytes);
         host.event_data.var_set(VARS_START, 5).unwrap();
 
         assert!(!ctx.run(&mut host));
         assert_eq!(host.trap, None);
         assert_eq!(
-            host.event_data.flag_get(10),
+            host.event_data.flag_get(subroutine_flag),
             Ok(true),
             "call_if called the subroutine"
         );
         assert_eq!(
-            host.event_data.flag_get(9),
+            host.event_data.flag_get(after_call_flag),
             Ok(true),
             "resumed after the call site"
         );
@@ -816,18 +1036,22 @@ mod tests {
     #[test]
     fn goto_if_with_invalid_condition_byte_traps() {
         let (mut ctx, mut host) = setup();
-        let mut bytes = vec![0x06, 6]; // condition 6 is past NOT_EQUAL(5)
+        let invalid_condition = 6;
+        let mut bytes = vec![opcode!(GOTO_IF), invalid_condition];
         bytes.extend_from_slice(&0u32.to_le_bytes());
         ctx.setup_bytecode(&bytes);
 
         assert!(!ctx.run(&mut host));
-        assert_eq!(host.trap, Some(CommandTrap::InvalidCondition(6)));
+        assert_eq!(
+            host.trap,
+            Some(CommandTrap::InvalidCondition(invalid_condition))
+        );
     }
 
     #[test]
     fn setvar_writes_a_literal_value() {
         let (mut ctx, mut host) = setup();
-        let mut bytes = vec![0x16];
+        let mut bytes = vec![opcode!(SET_VAR)];
         bytes.extend_from_slice(&VARS_START.to_le_bytes());
         bytes.extend_from_slice(&42u16.to_le_bytes());
         ctx.setup_bytecode(&bytes);
@@ -841,26 +1065,26 @@ mod tests {
 
     #[test]
     fn setvar_writes_a_special_var() {
-        // Upstream `GetVarPointer` serves 0x8000..=0x8015 through the
-        // `gSpecialVars` table as plain storage, so a field script's
-        // `setvar VAR_RESULT, n` must write, not trap.
         let (mut ctx, mut host) = setup();
-        let var_result = SPECIAL_VARS_START + 0xD; // VAR_RESULT
-        let mut bytes = vec![0x16];
-        bytes.extend_from_slice(&var_result.to_le_bytes());
+        let mut bytes = vec![opcode!(SET_VAR)];
+        bytes.extend_from_slice(&PINNED_VAR_RESULT.to_le_bytes());
         bytes.extend_from_slice(&7u16.to_le_bytes());
         ctx.setup_bytecode(&bytes);
 
         assert!(!ctx.run(&mut host));
         assert_eq!(host.trap, None, "setvar on a special var must not trap");
-        assert_eq!(host.event_data.var_get(var_result), Ok(7));
+        assert_eq!(
+            host.event_data.var_get(VAR_RESULT),
+            Ok(7),
+            "the identifier a field script encodes is the slot production's VAR_RESULT names"
+        );
     }
 
     #[test]
     fn addvar_adds_a_literal_and_wraps() {
         let (mut ctx, mut host) = setup();
         host.event_data.var_set(VARS_START, 0xFFFF).unwrap();
-        let mut bytes = vec![0x17];
+        let mut bytes = vec![opcode!(ADD_VAR)];
         bytes.extend_from_slice(&VARS_START.to_le_bytes());
         bytes.extend_from_slice(&1u16.to_le_bytes());
         ctx.setup_bytecode(&bytes);
@@ -875,14 +1099,12 @@ mod tests {
 
     #[test]
     fn addvar_does_not_resolve_its_operand_through_varget() {
-        // addvar's second operand is a literal even when it looks like a
-        // VAR_* id — see the doc comment on `addvar`.
         let (mut ctx, mut host) = setup();
-        host.event_data.var_set(VARS_START, 3).unwrap(); // VARS_START holds 3
+        host.event_data.var_set(VARS_START, 3).unwrap();
         host.event_data.var_set(VARS_START + 1, 10).unwrap();
-        let mut bytes = vec![0x17];
-        bytes.extend_from_slice(&(VARS_START + 1).to_le_bytes()); // dest
-        bytes.extend_from_slice(&VARS_START.to_le_bytes()); // "literal" == VARS_START's numeric id
+        let mut bytes = vec![opcode!(ADD_VAR)];
+        bytes.extend_from_slice(&(VARS_START + 1).to_le_bytes());
+        bytes.extend_from_slice(&VARS_START.to_le_bytes());
         ctx.setup_bytecode(&bytes);
 
         ctx.run(&mut host);
@@ -898,9 +1120,9 @@ mod tests {
         let (mut ctx, mut host) = setup();
         host.event_data.var_set(VARS_START, 0).unwrap();
         host.event_data.var_set(VARS_START + 1, 1).unwrap();
-        let mut bytes = vec![0x18];
-        bytes.extend_from_slice(&VARS_START.to_le_bytes()); // dest, currently 0
-        bytes.extend_from_slice(&(VARS_START + 1).to_le_bytes()); // source var holding 1
+        let mut bytes = vec![opcode!(SUB_VAR)];
+        bytes.extend_from_slice(&VARS_START.to_le_bytes());
+        bytes.extend_from_slice(&(VARS_START + 1).to_le_bytes());
         ctx.setup_bytecode(&bytes);
 
         ctx.run(&mut host);
@@ -915,7 +1137,7 @@ mod tests {
     fn copyvar_copies_the_source_vars_value() {
         let (mut ctx, mut host) = setup();
         host.event_data.var_set(VARS_START + 1, 77).unwrap();
-        let mut bytes = vec![0x19];
+        let mut bytes = vec![opcode!(COPY_VAR)];
         bytes.extend_from_slice(&VARS_START.to_le_bytes());
         bytes.extend_from_slice(&(VARS_START + 1).to_le_bytes());
         ctx.setup_bytecode(&bytes);
@@ -928,7 +1150,7 @@ mod tests {
     fn setorcopyvar_treats_a_var_id_as_a_var() {
         let (mut ctx, mut host) = setup();
         host.event_data.var_set(VARS_START + 1, 55).unwrap();
-        let mut bytes = vec![0x1a];
+        let mut bytes = vec![opcode!(SET_OR_COPY_VAR)];
         bytes.extend_from_slice(&VARS_START.to_le_bytes());
         bytes.extend_from_slice(&(VARS_START + 1).to_le_bytes());
         ctx.setup_bytecode(&bytes);
@@ -940,9 +1162,9 @@ mod tests {
     #[test]
     fn setorcopyvar_treats_a_non_var_id_as_a_literal() {
         let (mut ctx, mut host) = setup();
-        let mut bytes = vec![0x1a];
+        let mut bytes = vec![opcode!(SET_OR_COPY_VAR)];
         bytes.extend_from_slice(&VARS_START.to_le_bytes());
-        bytes.extend_from_slice(&123u16.to_le_bytes()); // not a VAR_* id
+        bytes.extend_from_slice(&123u16.to_le_bytes());
         ctx.setup_bytecode(&bytes);
 
         ctx.run(&mut host);
@@ -951,11 +1173,14 @@ mod tests {
 
     #[test]
     fn compare_var_to_value_sets_comparison_result() {
-        // (var's stored value, literal operand, expected comparisonResult)
-        for (stored, literal, expected) in [(5u16, 10u16, 0u8), (5, 5, 1), (10, 5, 2)] {
+        for (stored, literal, expected) in [
+            (5u16, 10u16, RESULT_LESS),
+            (5, 5, RESULT_EQUAL),
+            (10, 5, RESULT_GREATER),
+        ] {
             let (mut ctx, mut host) = setup();
             host.event_data.var_set(VARS_START, stored).unwrap();
-            let mut bytes = vec![0x21];
+            let mut bytes = vec![opcode!(COMPARE_VAR_TO_VALUE)];
             bytes.extend_from_slice(&VARS_START.to_le_bytes());
             bytes.extend_from_slice(&literal.to_le_bytes());
             ctx.setup_bytecode(&bytes);
@@ -974,24 +1199,23 @@ mod tests {
         let (mut ctx, mut host) = setup();
         host.event_data.var_set(VARS_START, 3).unwrap();
         host.event_data.var_set(VARS_START + 1, 9).unwrap();
-        let mut bytes = vec![0x22];
+        let mut bytes = vec![opcode!(COMPARE_VAR_TO_VAR)];
         bytes.extend_from_slice(&VARS_START.to_le_bytes());
         bytes.extend_from_slice(&(VARS_START + 1).to_le_bytes());
         ctx.setup_bytecode(&bytes);
 
         ctx.run(&mut host);
-        assert_eq!(ctx.comparison_result(), 0, "3 < 9");
+        assert_eq!(ctx.comparison_result(), RESULT_LESS, "3 < 9");
     }
 
     #[test]
     fn setflag_clearflag_checkflag_round_trip() {
         let (mut ctx, mut host) = setup();
-        // setflag SPECIAL_FLAGS_START; checkflag SPECIAL_FLAGS_START; end
-        let mut bytes = vec![0x29];
+        let mut bytes = vec![opcode!(SET_FLAG)];
         bytes.extend_from_slice(&SPECIAL_FLAGS_START.to_le_bytes());
-        bytes.push(0x2b);
+        bytes.push(opcode!(CHECK_FLAG));
         bytes.extend_from_slice(&SPECIAL_FLAGS_START.to_le_bytes());
-        bytes.push(0x02);
+        bytes.push(opcode!(END));
         ctx.setup_bytecode(&bytes);
 
         ctx.run(&mut host);
@@ -1003,11 +1227,11 @@ mod tests {
         );
 
         let (mut ctx2, mut host2) = setup();
-        let mut clear_bytes = vec![0x2a];
+        let mut clear_bytes = vec![opcode!(CLEAR_FLAG)];
         clear_bytes.extend_from_slice(&SPECIAL_FLAGS_START.to_le_bytes());
-        clear_bytes.push(0x2b);
+        clear_bytes.push(opcode!(CHECK_FLAG));
         clear_bytes.extend_from_slice(&SPECIAL_FLAGS_START.to_le_bytes());
-        clear_bytes.push(0x02);
+        clear_bytes.push(opcode!(END));
         ctx2.setup_bytecode(&clear_bytes);
         host2.event_data.flag_set(SPECIAL_FLAGS_START).unwrap();
 
@@ -1023,19 +1247,22 @@ mod tests {
     #[test]
     fn unimplemented_opcode_traps_with_its_own_number() {
         let (mut ctx, mut host) = setup();
-        let bytes = [0x08]; // SCR_OP_GOTO_STD, not implemented in this slice
+        let bytes = [opcode!(RETURN_RAM)];
         ctx.setup_bytecode(&bytes);
 
         assert!(!ctx.run(&mut host));
-        assert_eq!(host.trap, Some(CommandTrap::Unimplemented(0x08)));
+        assert_eq!(
+            host.trap,
+            Some(CommandTrap::Unimplemented(opcode!(RETURN_RAM)))
+        );
         assert!(ctx.is_stopped());
     }
 
     #[test]
     fn event_data_out_of_range_error_traps_instead_of_propagating_silently() {
         let (mut ctx, mut host) = setup();
-        let mut bytes = vec![0x29]; // setflag
-        let bad_id = SPECIAL_FLAGS_START - 1; // the unchecked-in-C gap
+        let mut bytes = vec![opcode!(SET_FLAG)];
+        let bad_id = SPECIAL_FLAGS_START - 1;
         bytes.extend_from_slice(&bad_id.to_le_bytes());
         ctx.setup_bytecode(&bytes);
 
@@ -1043,6 +1270,279 @@ mod tests {
         assert_eq!(
             host.trap,
             Some(CommandTrap::EventData(EventDataError::OutOfRange(bad_id)))
+        );
+    }
+
+    #[test]
+    fn gotostd_traps_naming_the_resolved_std_script() {
+        let (mut ctx, mut host) = setup();
+        let bytes = [opcode!(GOTO_STD), StdScript::MsgboxNpc.index()];
+        ctx.setup_bytecode(&bytes);
+
+        assert!(!ctx.run(&mut host));
+        assert_eq!(
+            host.trap,
+            Some(CommandTrap::StdScript(StdScript::MsgboxNpc))
+        );
+        assert!(ctx.is_stopped());
+    }
+
+    #[test]
+    fn callstd_traps_identically_to_gotostd() {
+        let (mut ctx, mut host) = setup();
+        let bytes = [opcode!(CALL_STD), StdScript::ObtainItem.index()];
+        ctx.setup_bytecode(&bytes);
+
+        assert!(!ctx.run(&mut host));
+        assert_eq!(
+            host.trap,
+            Some(CommandTrap::StdScript(StdScript::ObtainItem))
+        );
+    }
+
+    #[test]
+    fn gotostd_with_out_of_range_index_is_a_silent_no_op() {
+        let (mut ctx, mut host) = setup();
+        let mut bytes = vec![opcode!(GOTO_STD), StdScript::COUNT];
+        bytes.push(opcode!(SET_FLAG));
+        bytes.extend_from_slice(&5u16.to_le_bytes());
+        bytes.push(opcode!(END));
+        ctx.setup_bytecode(&bytes);
+
+        assert!(!ctx.run(&mut host));
+        assert_eq!(host.trap, None, "out-of-range index must not trap");
+        assert_eq!(
+            host.event_data.flag_get(5),
+            Ok(true),
+            "execution continues past the no-op gotostd"
+        );
+    }
+
+    #[test]
+    fn gotostd_if_reads_both_operands_unconditionally_and_dispatches_only_on_match() {
+        let (mut ctx, mut host) = setup();
+        let mut bytes = vec![opcode!(COMPARE_VAR_TO_VALUE)];
+        bytes.extend_from_slice(&VARS_START.to_le_bytes());
+        bytes.extend_from_slice(&5u16.to_le_bytes());
+        bytes.push(opcode!(GOTO_STD_IF));
+        bytes.push(COND_NOT_EQUAL);
+        bytes.push(StdScript::MsgboxSign.index());
+        bytes.push(opcode!(END));
+        ctx.setup_bytecode(&bytes);
+        host.event_data.var_set(VARS_START, 5).unwrap();
+
+        assert!(!ctx.run(&mut host));
+        assert_eq!(
+            host.trap, None,
+            "condition didn't match: no dispatch, no trap"
+        );
+    }
+
+    #[test]
+    fn gotostd_if_dispatches_when_the_condition_matches() {
+        let (mut ctx, mut host) = setup();
+        let bytes = [
+            opcode!(GOTO_STD_IF),
+            COND_EQUAL,
+            StdScript::MsgboxSign.index(),
+        ];
+        ctx.setup_bytecode(&bytes);
+        ctx.set_comparison_result(RESULT_EQUAL);
+
+        assert!(!ctx.run(&mut host));
+        assert_eq!(
+            host.trap,
+            Some(CommandTrap::StdScript(StdScript::MsgboxSign))
+        );
+    }
+
+    #[test]
+    fn callstd_if_behaves_like_gotostd_if() {
+        let (mut ctx, mut host) = setup();
+        let bytes = [
+            opcode!(CALL_STD_IF),
+            COND_EQUAL,
+            StdScript::ObtainDecoration.index(),
+        ];
+        ctx.setup_bytecode(&bytes);
+        ctx.set_comparison_result(RESULT_EQUAL);
+
+        assert!(!ctx.run(&mut host));
+        assert_eq!(
+            host.trap,
+            Some(CommandTrap::StdScript(StdScript::ObtainDecoration))
+        );
+    }
+
+    #[test]
+    fn gotostd_if_with_invalid_condition_byte_traps() {
+        let (mut ctx, mut host) = setup();
+        let invalid_condition = 6;
+        let bytes = [
+            opcode!(GOTO_STD_IF),
+            invalid_condition,
+            StdScript::ObtainItem.index(),
+        ];
+        ctx.setup_bytecode(&bytes);
+
+        assert!(!ctx.run(&mut host));
+        assert_eq!(
+            host.trap,
+            Some(CommandTrap::InvalidCondition(invalid_condition))
+        );
+    }
+
+    #[test]
+    fn random_writes_random_mod_limit_to_var_result() {
+        let (mut ctx, mut host) = setup();
+        let mut bytes = vec![opcode!(RANDOM)];
+        bytes.extend_from_slice(&10u16.to_le_bytes());
+        ctx.setup_bytecode(&bytes);
+        host.rng.seed(0);
+        let mut expected_rng = crate::rng::Rng::new(0);
+        let expected = expected_rng.next_u16() % 10;
+
+        assert!(!ctx.run(&mut host));
+        assert_eq!(host.trap, None);
+        assert_eq!(host.event_data.var_get(VAR_RESULT), Ok(expected));
+    }
+
+    #[test]
+    fn random_resolves_its_limit_operand_through_varget() {
+        let (mut ctx, mut host) = setup();
+        host.event_data.var_set(VARS_START, 7).unwrap();
+        let mut bytes = vec![opcode!(RANDOM)];
+        bytes.extend_from_slice(&VARS_START.to_le_bytes());
+        ctx.setup_bytecode(&bytes);
+        host.rng.seed(0);
+        let mut expected_rng = crate::rng::Rng::new(0);
+        let expected = expected_rng.next_u16() % 7;
+
+        assert!(!ctx.run(&mut host));
+        assert_eq!(host.event_data.var_get(VAR_RESULT), Ok(expected));
+    }
+
+    #[test]
+    fn random_with_zero_limit_traps_instead_of_panicking() {
+        let (mut ctx, mut host) = setup();
+        let mut bytes = vec![opcode!(RANDOM)];
+        bytes.extend_from_slice(&0u16.to_le_bytes());
+        ctx.setup_bytecode(&bytes);
+
+        assert!(!ctx.run(&mut host));
+        assert_eq!(host.trap, Some(CommandTrap::DivideByZero));
+    }
+
+    #[test]
+    fn random_draws_advance_the_generator_across_calls() {
+        let (mut ctx, mut host) = setup();
+        let mut bytes = vec![opcode!(RANDOM)];
+        bytes.extend_from_slice(&100u16.to_le_bytes());
+        bytes.push(opcode!(RANDOM));
+        bytes.extend_from_slice(&100u16.to_le_bytes());
+        ctx.setup_bytecode(&bytes);
+        host.rng.seed(0);
+
+        assert!(!ctx.run(&mut host));
+        let mut probe = crate::rng::Rng::new(0);
+        let _first_draw = probe.next_u16();
+        let expected_second = probe.next_u16() % 100;
+        assert_eq!(
+            host.event_data.var_get(VAR_RESULT),
+            Ok(expected_second),
+            "the second random draw used the advanced generator state, not a repeat of the first"
+        );
+    }
+
+    #[test]
+    fn special_traps_unimplemented_for_every_currently_valid_id() {
+        let (mut ctx, mut host) = setup();
+        let special_index = 0u16;
+        let mut bytes = vec![opcode!(SPECIAL)];
+        bytes.extend_from_slice(&special_index.to_le_bytes());
+        ctx.setup_bytecode(&bytes);
+
+        assert!(!ctx.run(&mut host));
+        let id = crate::script::specials::SpecialId::from_index(special_index).unwrap();
+        assert_eq!(host.trap, Some(CommandTrap::UnimplementedSpecial(id)));
+    }
+
+    #[test]
+    fn special_with_out_of_range_index_traps_invalid_special() {
+        let (mut ctx, mut host) = setup();
+        let mut bytes = vec![opcode!(SPECIAL)];
+        let bad = u16::try_from(crate::script::specials::SPECIAL_COUNT).unwrap();
+        bytes.extend_from_slice(&bad.to_le_bytes());
+        ctx.setup_bytecode(&bytes);
+
+        assert!(!ctx.run(&mut host));
+        assert_eq!(host.trap, Some(CommandTrap::InvalidSpecial(bad)));
+    }
+
+    #[test]
+    fn specialvar_reads_output_var_then_index_and_traps_unimplemented() {
+        let (mut ctx, mut host) = setup();
+        let special_index = 1u16;
+        let mut bytes = vec![opcode!(SPECIAL_VAR)];
+        bytes.extend_from_slice(&VARS_START.to_le_bytes());
+        bytes.extend_from_slice(&special_index.to_le_bytes());
+        ctx.setup_bytecode(&bytes);
+
+        assert!(!ctx.run(&mut host));
+        let id = crate::script::specials::SpecialId::from_index(special_index).unwrap();
+        assert_eq!(host.trap, Some(CommandTrap::UnimplementedSpecial(id)));
+        assert_eq!(
+            host.event_data.var_get(VARS_START),
+            Ok(0),
+            "the output var is untouched when the special is unimplemented"
+        );
+    }
+
+    #[test]
+    fn specialvar_with_out_of_range_index_traps_invalid_special() {
+        let (mut ctx, mut host) = setup();
+        let mut bytes = vec![opcode!(SPECIAL_VAR)];
+        bytes.extend_from_slice(&VARS_START.to_le_bytes());
+        let bad = u16::MAX;
+        bytes.extend_from_slice(&bad.to_le_bytes());
+        ctx.setup_bytecode(&bytes);
+
+        assert!(!ctx.run(&mut host));
+        assert_eq!(host.trap, Some(CommandTrap::InvalidSpecial(bad)));
+    }
+
+    #[test]
+    fn waitstate_blocks_the_script_until_externally_unblocked() {
+        let (mut ctx, mut host) = setup();
+        let flag_id = 5u16;
+        let mut bytes = vec![opcode!(WAIT_STATE), opcode!(SET_FLAG)];
+        bytes.extend_from_slice(&flag_id.to_le_bytes());
+        bytes.push(opcode!(END));
+        ctx.setup_bytecode(&bytes);
+
+        assert!(ctx.run(&mut host), "waitstate yields, script stays active");
+        assert!(!ctx.is_stopped());
+        assert!(host.waiting, "waitstate sets the pause flag");
+        assert_eq!(
+            host.event_data.flag_get(flag_id),
+            Ok(false),
+            "bytecode after waitstate must not run while still waiting"
+        );
+
+        assert!(ctx.run(&mut host));
+        assert!(!ctx.is_stopped());
+        assert_eq!(host.event_data.flag_get(flag_id), Ok(false));
+
+        host.waiting = false;
+        assert!(
+            !ctx.run(&mut host),
+            "the released wait dispatches setflag and runs to `end` in the same call"
+        );
+        assert!(ctx.is_stopped());
+        assert_eq!(
+            host.event_data.flag_get(flag_id),
+            Ok(true),
+            "setflag after waitstate ran on the call that released the wait"
         );
     }
 }

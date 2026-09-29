@@ -1,33 +1,55 @@
-//! Error types for the `rendering` crate.
-//!
-//! A concrete per-crate enum `(oop-boundaries)` — no `anyhow` in library
-//! crates.
+//! Rendering data validation errors.
 
 use std::error::Error;
 use std::fmt;
 
 use crate::tile::BitDepth;
 
-/// An error produced while building rendering-crate types from raw data.
+/// Invalid data supplied to a rendering type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RenderError {
-    /// Raw tile pixel data was not an exact multiple of the tile byte size
-    /// for the requested [`BitDepth`] (32 bytes/tile for 4bpp, 64 for 8bpp).
-    ///
-    /// Carries the bit depth and the offending byte length.
+    /// Packed pixel data does not contain a whole number of tiles.
     InvalidTileDataLen {
-        /// The bit depth the data was decoded against.
+        /// Requested tile bit depth.
         bit_depth: BitDepth,
-        /// The offending byte length.
+        /// Supplied byte length.
         len: usize,
     },
 
-    /// A [`Tilemap`](crate::tilemap::Tilemap)'s screen-entry count did not
-    /// match `width_tiles * height_tiles`.
+    /// A regular tilemap's entry count does not match its area.
     TilemapSizeMismatch {
-        /// The expected entry count (`width_tiles * height_tiles`).
+        /// Entry count required by the dimensions.
         expected: usize,
-        /// The actual number of entries supplied.
+        /// Supplied entry count.
+        actual: usize,
+    },
+
+    /// A nonempty regular tilemap has unsupported dimensions or an area that
+    /// overflows `usize`.
+    ///
+    /// Valid dimensions are at most 32x32 or exactly 64x32, 32x64, or 64x64.
+    TilemapDimensionsInvalid {
+        /// Supplied width in tiles.
+        width_tiles: usize,
+        /// Supplied height in tiles.
+        height_tiles: usize,
+    },
+
+    /// An affine tilemap's tile area overflows `usize`, or a per-axis pixel
+    /// extent (`width_tiles` or `height_tiles` times the tile side length)
+    /// leaves the signed texture coordinates affine sampling addresses.
+    AffineTilemapDimensionsInvalid {
+        /// Supplied width in tiles.
+        width_tiles: usize,
+        /// Supplied height in tiles.
+        height_tiles: usize,
+    },
+
+    /// An affine tilemap's tile-index count does not match its area.
+    AffineTilemapSizeMismatch {
+        /// Tile-index count required by the dimensions.
+        expected: usize,
+        /// Supplied tile-index count.
         actual: usize,
     },
 }
@@ -43,6 +65,25 @@ impl fmt::Display for RenderError {
             Self::TilemapSizeMismatch { expected, actual } => write!(
                 f,
                 "tilemap expected {expected} screen entries, got {actual}"
+            ),
+            Self::TilemapDimensionsInvalid {
+                width_tiles,
+                height_tiles,
+            } => write!(
+                f,
+                "tilemap dimensions {width_tiles}x{height_tiles} are not a valid single- or \
+                 multi-screenblock size"
+            ),
+            Self::AffineTilemapDimensionsInvalid {
+                width_tiles,
+                height_tiles,
+            } => write!(
+                f,
+                "affine tilemap dimensions {width_tiles}x{height_tiles} are not addressable"
+            ),
+            Self::AffineTilemapSizeMismatch { expected, actual } => write!(
+                f,
+                "affine tilemap expected {expected} tile indices, got {actual}"
             ),
         }
     }
@@ -72,5 +113,21 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains('6'));
         assert!(msg.contains('5'));
+
+        let err = RenderError::TilemapDimensionsInvalid {
+            width_tiles: 33,
+            height_tiles: 1,
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("33"));
+        assert!(msg.contains('1'));
+
+        let err = RenderError::AffineTilemapDimensionsInvalid {
+            width_tiles: usize::MAX,
+            height_tiles: 2,
+        };
+        let msg = err.to_string();
+        assert!(msg.contains(&usize::MAX.to_string()));
+        assert!(msg.contains('2'));
     }
 }
