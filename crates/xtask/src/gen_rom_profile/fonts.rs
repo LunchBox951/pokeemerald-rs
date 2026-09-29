@@ -5,6 +5,9 @@
 //! the ROM stores that verbatim. [`super::pack_source::latin_font_bytes`]
 //! reproduces the layout from the pack's raster, which makes the sheet a
 //! 32 KiB signature -- as unmistakable as a root gets.
+//!
+//! The domain is fixed, not discovered: a pack with zero `font/*/glyphs`
+//! entries is missing the domain, not empty of it, and is refused.
 
 use super::error::GenRomProfileError;
 use super::locate::{camel_case, exactly_one};
@@ -17,9 +20,11 @@ use super::Context;
 ///
 /// # Errors
 ///
-/// [`GenRomProfileError::EntryShape`] if a sheet is not the 256x512 2bpp
-/// shape the layout assumes, or [`GenRomProfileError::NotFound`] /
-/// [`GenRomProfileError::Ambiguous`] if one does not turn up exactly once.
+/// [`GenRomProfileError::MissingPackEntry`] if the pack holds no
+/// `font/*/glyphs` entries at all, [`GenRomProfileError::EntryShape`] if a
+/// sheet is not the 256x512 2bpp shape the layout assumes, or
+/// [`GenRomProfileError::NotFound`] / [`GenRomProfileError::Ambiguous`] if
+/// one does not turn up exactly once.
 pub fn locate(
     ctx: &Context<'_>,
     report: &mut Vec<ReportLine>,
@@ -30,6 +35,11 @@ pub fn locate(
         .into_iter()
         .filter(|id| id.ends_with("/glyphs"))
         .collect();
+    if ids.is_empty() {
+        return Err(GenRomProfileError::MissingPackEntry(
+            "font/*/glyphs".to_owned(),
+        ));
+    }
     let mut needles = Vec::with_capacity(ids.len());
     for id in &ids {
         needles.push(latin_font_bytes(ctx.pack, id)?);

@@ -74,6 +74,10 @@ mod battle_finalize;
 /// [`advance_scene`] arms that drive them -- this module's own docs.
 mod fade_wait;
 pub(crate) mod first_battle;
+/// The first-usable-move headless action policy shared by [`first_battle`]
+/// and [`npc_trainer_battle`] -- see that module's docs for the RNG-state
+/// contract driving it.
+mod first_usable_move;
 /// The level-up move-replacement decision (issue #304), answered in one
 /// place for all three headless battle drivers — see that module's docs for
 /// the stand-in answer it gives and exactly where the seam ends.
