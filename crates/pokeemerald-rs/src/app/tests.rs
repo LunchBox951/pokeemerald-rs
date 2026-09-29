@@ -516,15 +516,11 @@ fn a_faded_reverbed_songs_tail_keeps_sounding_past_the_terminal_fade_step() {
         "sanity: the terminal step lands on frame {FADE_FRAMES}, with the player still attached"
     );
 
-    let mut audible_after_terminal = false;
-    for _ in 0..TAIL_BUDGET {
+    let audible_after_terminal = scan_post_terminal_tail(&mut drained, TAIL_BUDGET, |drained| {
         app.step().expect("headless step never errors");
-        app.drain_music_for_test(&mut drained);
-        audible_after_terminal |= drained.iter().any(|&sample| sample != 0.0);
-        if !app.has_music_for_test() {
-            break;
-        }
-    }
+        app.drain_music_for_test(drained);
+        app.has_music_for_test()
+    });
 
     assert!(
         audible_after_terminal,
@@ -534,6 +530,53 @@ fn a_faded_reverbed_songs_tail_keeps_sounding_past_the_terminal_fade_step() {
     assert!(
         !app.has_music_for_test(),
         "the tail must ring down and the player be dropped within {TAIL_BUDGET} further steps"
+    );
+}
+
+/// Steps the post-terminal tail up to `budget` times and reports whether a
+/// step left the player attached with a nonzero sample. `step` runs one app
+/// step plus its drain and returns whether the player is still attached.
+///
+/// Zeroes `drained` before every step: `drain_music_for_test` is a no-op once
+/// the player is gone, so an unzeroed buffer would still hold the previous
+/// step's samples and score a premature drop as an audible tail.
+fn scan_post_terminal_tail(
+    drained: &mut [f32],
+    budget: usize,
+    mut step: impl FnMut(&mut [f32]) -> bool,
+) -> bool {
+    let mut audible = false;
+    for _ in 0..budget {
+        drained.fill(0.0);
+        let attached = step(drained);
+        audible |= attached && drained.iter().any(|&sample| sample != 0.0);
+        if !attached {
+            break;
+        }
+    }
+    audible
+}
+
+/// The scan must not count stale samples: a player dropped on the first
+/// post-terminal step, with the terminal step's wet samples still in the
+/// buffer, is no audible tail.
+#[test]
+fn a_first_post_terminal_drop_is_not_scored_as_an_audible_tail() {
+    let mut app = App::new_headless();
+    let output = platform::AudioOutput::null(crate::music::RING_CAPACITY_FRAMES);
+    let music = crate::music::MusicPlayer::start(sustained_reverbed_song_for_test(50), output)
+        .expect("null backend never errors");
+    app.attach_music_for_test(music);
+
+    let mut drained = vec![1.0_f32; 16];
+    let audible = scan_post_terminal_tail(&mut drained, 4, |_| {
+        app.music = None;
+        app.has_music_for_test()
+    });
+
+    assert!(
+        !audible,
+        "stale terminal-step samples were scored as an audible tail"
     );
 }
 
