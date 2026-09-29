@@ -51,11 +51,6 @@ pub(super) const YES_NO_CURSOR_ORIGIN: (i32, i32) = (0, 1);
 pub(super) const SELECTOR_ARROW: char = '▶';
 
 const CONTENT_FILL_PALETTE_INDEX: usize = 1;
-const GLYPH_COLOR_COUNT: usize = 4;
-const GLYPH_FOREGROUND_INDEX: usize = 1;
-const GLYPH_SHADOW_INDEX: usize = 2;
-const FONT_FOREGROUND_PALETTE_INDEX: usize = 2;
-const FONT_SHADOW_PALETTE_INDEX: usize = 3;
 const TILE_SIZE_PX: i32 = msgwin::TILE_SIZE.cast_signed();
 const _: () = assert!(msgwin::TILE_SIZE == 8);
 
@@ -123,14 +118,6 @@ impl StartMenuChrome {
         glyphs
     }
 
-    fn glyph_colors(&self) -> [Option<Rgb888>; GLYPH_COLOR_COUNT] {
-        let palette_color = |index: usize| self.message_frame.palette.get(index).copied();
-        let mut colors = [None; GLYPH_COLOR_COUNT];
-        colors[GLYPH_FOREGROUND_INDEX] = palette_color(FONT_FOREGROUND_PALETTE_INDEX);
-        colors[GLYPH_SHADOW_INDEX] = palette_color(FONT_SHADOW_PALETTE_INDEX);
-        colors
-    }
-
     // The game assigns standard-window borders and message-box content to
     // separate palette banks.
     fn content_fill_color(&self) -> Rgb888 {
@@ -181,7 +168,7 @@ impl StartMenuChrome {
                 width_tiles * TILE_SIZE_PX - origin_px.0,
                 height_tiles * TILE_SIZE_PX - origin_px.1,
             ),
-            &self.glyph_colors(),
+            &self.message_frame.glyph_colors(),
         );
     }
 }
