@@ -1269,9 +1269,6 @@ mod forced_landing_field_input_gate_tests {
     };
     use platform::Buttons;
 
-    /// A synthetic [`MB_ANIMATED_DOOR`] over 1F's real warp #2 coordinate,
-    /// `(8, 2)` -- same substitution as
-    /// [`super::super::test_support::littleroot_lab_door_scene`]'s.
     /// Ticks the player directly rather than through `OverworldPhase::step`,
     /// which would dispatch the still-armed forced slope instead of leaving
     /// the player at rest for the next-call probe.
@@ -1283,6 +1280,9 @@ mod forced_landing_field_input_gate_tests {
         );
     }
 
+    /// A synthetic [`MB_ANIMATED_DOOR`] over 1F's real warp #2 coordinate,
+    /// `(8, 2)` -- same substitution as
+    /// [`super::super::test_support::littleroot_lab_door_scene`]'s.
     fn slope_below_the_upstairs_door_phase() -> OverworldPhase {
         let scene = crate::overworld::tests::synthetic_scene_with_special_tiles(
             10,
