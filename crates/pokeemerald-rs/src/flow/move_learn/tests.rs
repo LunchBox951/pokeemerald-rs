@@ -10,12 +10,12 @@ use crate::flow::wild_encounter::SharedRng;
 const MAY_ROUTE_103_MUDKIP: TrainerId = TrainerId(529);
 const TREECKO: SpeciesId = SpeciesId(277);
 const TORCHIC: SpeciesId = SpeciesId(280);
-const POUND: MoveId = MoveId(1);
-const SCRATCH: MoveId = MoveId(10);
-const LEER: MoveId = MoveId(43);
-const GROWL: MoveId = MoveId(45);
-const TACKLE: MoveId = MoveId(33);
-const PECK: MoveId = MoveId(64);
+const POUND: MoveId = MoveId::POUND;
+const SCRATCH: MoveId = MoveId::SCRATCH;
+const LEER: MoveId = MoveId::LEER;
+const GROWL: MoveId = MoveId::GROWL;
+const TACKLE: MoveId = MoveId::TACKLE;
+const PECK: MoveId = MoveId::PECK;
 const MAX_TEST_TURNS: usize = 60;
 
 fn torchic_one_point_from_a_full_moveset_level_up(dex: &Dex) -> BattlePokemon {
@@ -269,7 +269,12 @@ fn settling_drains_a_chain_of_prompts_in_one_call() {
     /// `SPECIES_WYNAUT`, whose level-15 learnset block is four entries:
     /// Counter, Mirror Coat, Safeguard, Destiny Bond (in table order).
     const WYNAUT: SpeciesId = SpeciesId(360);
-    const LEVEL_15_BLOCK: [MoveId; 4] = [MoveId(68), MoveId(243), MoveId(219), MoveId(194)];
+    const LEVEL_15_BLOCK: [MoveId; 4] = [
+        MoveId::COUNTER,
+        MoveId::MIRROR_COAT,
+        MoveId::SAFEGUARD,
+        MoveId::DESTINY_BOND,
+    ];
 
     let dex = Dex::new();
     let growth_rate = dex.species(WYNAUT).unwrap().growth_rate;

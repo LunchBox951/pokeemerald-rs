@@ -12,11 +12,11 @@ const TREECKO: assets::SpeciesId = assets::SpeciesId(277);
 const TORCHIC: assets::SpeciesId = assets::SpeciesId(280);
 const TENTACOOL: assets::SpeciesId = assets::SpeciesId(72);
 
-const POUND: assets::MoveId = assets::MoveId(1);
-const SCRATCH: assets::MoveId = assets::MoveId(10);
-const TACKLE: assets::MoveId = assets::MoveId(33);
-const GROWL: assets::MoveId = assets::MoveId(45);
-const PECK: assets::MoveId = assets::MoveId(64);
+const POUND: assets::MoveId = assets::MoveId::POUND;
+const SCRATCH: assets::MoveId = assets::MoveId::SCRATCH;
+const TACKLE: assets::MoveId = assets::MoveId::TACKLE;
+const GROWL: assets::MoveId = assets::MoveId::GROWL;
+const PECK: assets::MoveId = assets::MoveId::PECK;
 
 const FIXTURE_PERSONALITY: u32 = 0x1234_ABCD;
 const FIXTURE_ORIGINAL_TRAINER_ID: u32 = 0x89AB_CDEF;

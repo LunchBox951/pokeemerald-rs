@@ -19,7 +19,7 @@ const NO_CRIT_ROLL: u16 = 1;
 const CHARMANDER: u16 = 4;
 const RATTATA: u16 = 19;
 const BULBASAUR: u16 = 1;
-const TACKLE: MoveId = MoveId(33);
+const TACKLE: MoveId = MoveId::TACKLE;
 
 #[test]
 fn take_turn_after_the_battle_ended_is_an_error() {
@@ -236,10 +236,10 @@ fn a_wild_knockouts_prompt_defers_the_battles_end_until_it_is_answered() {
     use battle::MoveLearnDecision;
 
     const TORCHIC: u16 = 280;
-    const SCRATCH: MoveId = MoveId(10);
-    const GROWL: MoveId = MoveId(45);
-    const LEER: MoveId = MoveId(43);
-    const PECK: MoveId = MoveId(64);
+    const SCRATCH: MoveId = MoveId::SCRATCH;
+    const GROWL: MoveId = MoveId::GROWL;
+    const LEER: MoveId = MoveId::LEER;
+    const PECK: MoveId = MoveId::PECK;
     const PECK_LEARN_LEVEL: u8 = 16;
     const EXPERIENCE_SHORT_OF_PECK_LEVEL: u32 = 1;
 
@@ -304,10 +304,10 @@ fn an_active_faint_with_a_healthy_reserve_sends_it_out_instead_of_ending_the_bat
     // the active before it can act, exactly like
     // `losing_the_battle_reports_defeat_and_awards_no_exp` -- but this
     // time a healthy L5 Squirtle reserve is waiting behind it.
-    let player = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]);
-    let reserve = max_iv_mon(&dex, 7, 5, vec![MoveId(33)]);
+    let player = max_iv_mon(&dex, 19, 5, vec![MoveId::TACKLE]);
+    let reserve = max_iv_mon(&dex, 7, 5, vec![MoveId::TACKLE]);
     let reserve_max_hp = reserve.stats().max_hp;
-    let enemy = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]);
+    let enemy = max_iv_mon(&dex, 4, 50, vec![MoveId::TACKLE]);
     let player_max_hp = player.stats().max_hp;
 
     // battle start, turn number, enemy pick, enemy hit (accuracy / no
@@ -326,7 +326,7 @@ fn an_active_faint_with_a_healthy_reserve_sends_it_out_instead_of_ending_the_bat
         vec![
             BattleEvent::Hit {
                 by_player: false,
-                move_id: MoveId(33),
+                move_id: MoveId::TACKLE,
                 damage: player_max_hp,
                 is_critical: false,
             },
@@ -365,12 +365,12 @@ fn identical_identity_members_report_in_their_original_party_order_after_a_repla
     // Same species, personality, and OT id: only the slot tells these two
     // Rattata apart. The first is overkilled by the L50 Charmander before
     // it can act; the second enters untouched.
-    let player = max_iv_mon_with_personality(&dex, 19, 5, vec![MoveId(33)], 7)
+    let player = max_iv_mon_with_personality(&dex, 19, 5, vec![MoveId::TACKLE], 7)
         .with_original_trainer_id(12_345);
-    let reserve = max_iv_mon_with_personality(&dex, 19, 5, vec![MoveId(33)], 7)
+    let reserve = max_iv_mon_with_personality(&dex, 19, 5, vec![MoveId::TACKLE], 7)
         .with_original_trainer_id(12_345);
     let reserve_max_hp = reserve.stats().max_hp;
-    let enemy = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]);
+    let enemy = max_iv_mon(&dex, 4, 50, vec![MoveId::TACKLE]);
 
     let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0]);
     let mut battle =
@@ -411,11 +411,11 @@ fn successive_replacements_keep_every_member_in_its_original_party_order() {
     let dex = Dex::new();
     // Three L5 Rattata told apart only by personality, each overkilled in
     // turn by the fast L50 Charmander.
-    let player = max_iv_mon_with_personality(&dex, 19, 5, vec![MoveId(33)], 1);
-    let second = max_iv_mon_with_personality(&dex, 19, 5, vec![MoveId(33)], 2);
-    let third = max_iv_mon_with_personality(&dex, 19, 5, vec![MoveId(33)], 3);
+    let player = max_iv_mon_with_personality(&dex, 19, 5, vec![MoveId::TACKLE], 1);
+    let second = max_iv_mon_with_personality(&dex, 19, 5, vec![MoveId::TACKLE], 2);
+    let third = max_iv_mon_with_personality(&dex, 19, 5, vec![MoveId::TACKLE], 3);
     let third_max_hp = third.stats().max_hp;
-    let enemy = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]);
+    let enemy = max_iv_mon(&dex, 4, 50, vec![MoveId::TACKLE]);
 
     // Turn 1: battle start, turn number, enemy pick, enemy hit. Turn 2:
     // turn number, enemy pick, enemy hit.
@@ -452,14 +452,14 @@ fn successive_replacements_keep_every_member_in_its_original_party_order() {
 #[test]
 fn a_fainted_player_with_no_usable_reserve_still_loses_and_reports_both_members() {
     let dex = Dex::new();
-    let player = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]);
-    let mut reserve = max_iv_mon_with_personality(&dex, 7, 5, vec![MoveId(33)], 5);
+    let player = max_iv_mon(&dex, 19, 5, vec![MoveId::TACKLE]);
+    let mut reserve = max_iv_mon_with_personality(&dex, 7, 5, vec![MoveId::TACKLE], 5);
     reserve.apply_damage(reserve.stats().max_hp);
     assert!(
         reserve.is_fainted(),
         "fixture sanity: the reserve is dead on arrival"
     );
-    let enemy = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]);
+    let enemy = max_iv_mon(&dex, 4, 50, vec![MoveId::TACKLE]);
     let player_max_hp = player.stats().max_hp;
 
     let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0]);
@@ -475,7 +475,7 @@ fn a_fainted_player_with_no_usable_reserve_still_loses_and_reports_both_members(
         vec![
             BattleEvent::Hit {
                 by_player: false,
-                move_id: MoveId(33),
+                move_id: MoveId::TACKLE,
                 damage: player_max_hp,
                 is_critical: false,
             },
@@ -516,15 +516,15 @@ fn a_struggle_recoil_faint_takes_the_same_reserve_or_exhaustion_decision() {
     // Struggle at selection (`AreAllMovesUnusable`); starting at 1 HP
     // guarantees the certain quarter-damage recoil (floored to a minimum
     // of 1) faints it, regardless of the exact damage Struggle deals.
-    let mut player = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]);
+    let mut player = max_iv_mon(&dex, 19, 5, vec![MoveId::TACKLE]);
     for _ in 0..player.moves()[0].pp {
         player.deduct_pp(0).unwrap();
     }
     assert_eq!(player.moves()[0].pp, 0, "fixture sanity: Tackle is spent");
     player.apply_damage(player.stats().max_hp - 1);
-    let reserve = max_iv_mon(&dex, 7, 5, vec![MoveId(33)]);
+    let reserve = max_iv_mon(&dex, 7, 5, vec![MoveId::TACKLE]);
     let reserve_max_hp = reserve.stats().max_hp;
-    let enemy = max_iv_mon(&dex, 1, 5, vec![MoveId(33)]);
+    let enemy = max_iv_mon(&dex, 1, 5, vec![MoveId::TACKLE]);
 
     // battle start, turn number, enemy's Tackle pick (not forced, so it
     // draws a slot), then the player's forced Struggle: accuracy, crit,
@@ -591,7 +591,7 @@ fn a_struggle_recoil_faint_takes_the_same_reserve_or_exhaustion_decision() {
 /// with a reserve added.
 #[test]
 fn a_simultaneous_double_faint_with_a_healthy_reserve_still_wins() {
-    const ABSORB: MoveId = MoveId(71);
+    const ABSORB: MoveId = MoveId::ABSORB;
     const BULBASAUR: u16 = 1;
     const TENTACOOL: u16 = 72;
 
@@ -602,10 +602,10 @@ fn a_simultaneous_double_faint_with_a_healthy_reserve_still_wins() {
     // Absorb's own drain-turned-damage faints it in the same exchange that
     // its hit faints the level-5 Tentacool target.
     player.apply_damage(player_max_hp - 6);
-    let reserve = max_iv_mon(&dex, 7, 5, vec![MoveId(33)]);
+    let reserve = max_iv_mon(&dex, 7, 5, vec![MoveId::TACKLE]);
     let reserve_max_hp = reserve.stats().max_hp;
     // Personality 1 lands Tentacool on ability slot 1, Liquid Ooze.
-    let enemy = max_iv_mon_with_personality(&dex, TENTACOOL, 5, vec![MoveId(33)], 1);
+    let enemy = max_iv_mon_with_personality(&dex, TENTACOOL, 5, vec![MoveId::TACKLE], 1);
 
     // battle start, turn number, enemy pick, Absorb's hit (accuracy / no
     // crit / best roll / effect chance).
@@ -663,7 +663,7 @@ fn a_simultaneous_double_faint_with_a_healthy_reserve_still_wins() {
 /// `a_simultaneous_double_faint_with_a_healthy_reserve_still_wins`.
 #[test]
 fn a_fainted_player_gains_no_exp_or_evs_from_a_simultaneous_double_faint() {
-    const ABSORB: MoveId = MoveId(71);
+    const ABSORB: MoveId = MoveId::ABSORB;
     const BULBASAUR: u16 = 1;
     const TENTACOOL: u16 = 72;
     let dex = Dex::new();
@@ -672,8 +672,8 @@ fn a_fainted_player_gains_no_exp_or_evs_from_a_simultaneous_double_faint() {
     player.apply_damage(player_max_hp - 6);
     let experience_before = player.experience();
     let evs_before = player.evs();
-    let reserve = max_iv_mon(&dex, 7, 5, vec![MoveId(33)]);
-    let enemy = max_iv_mon_with_personality(&dex, TENTACOOL, 5, vec![MoveId(33)], 1);
+    let reserve = max_iv_mon(&dex, 7, 5, vec![MoveId::TACKLE]);
+    let enemy = max_iv_mon_with_personality(&dex, TENTACOOL, 5, vec![MoveId::TACKLE], 1);
     let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0]);
     let mut battle =
         Battle::new_with_player_reserves(dex, player, vec![reserve], enemy, false, &mut rng)

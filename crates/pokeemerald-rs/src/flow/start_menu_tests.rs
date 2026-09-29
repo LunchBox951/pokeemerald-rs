@@ -60,7 +60,7 @@ fn the_start_menu_does_not_open_mid_battle() {
         50,
         ivs,
         0,
-        vec![assets::MoveId(1)],
+        vec![assets::MoveId::POUND],
     )
     .expect("Treecko with Pound is in the dex");
     let mut rng = Rng::new(0x00C0_FFEE);

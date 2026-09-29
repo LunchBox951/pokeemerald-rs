@@ -16,7 +16,7 @@ const WURMPLE: SpeciesId = SpeciesId(290);
 
 /// `SPECIES_TREECKO`/`SLASH`.
 const TREECKO: SpeciesId = SpeciesId(277);
-const SLASH: MoveId = MoveId(163);
+const SLASH: MoveId = MoveId::SLASH;
 
 fn fainted_starter() -> BattlePokemon {
     let mut fainted = new_game::provisional_starter();
