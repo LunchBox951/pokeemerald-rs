@@ -45,6 +45,17 @@ const PLAYER_OBJECT_EVENT_INDEX: usize = 0;
 const PLAYER_OBJECT_EVENT_DIRECTIONS_OFFSET: usize = OBJECT_EVENTS_OFFSET
     + PLAYER_OBJECT_EVENT_INDEX * OBJECT_EVENT_LEN
     + OBJECT_EVENT_DIRECTIONS_OFFSET;
+// `ObjectEvent`'s packed `currentElevation:4` / `previousElevation:4` byte
+// (include/global.fieldmap.h:232-233).
+const OBJECT_EVENT_ELEVATIONS_OFFSET: usize = 0x0B;
+const PLAYER_OBJECT_EVENT_ELEVATIONS_OFFSET: usize = OBJECT_EVENTS_OFFSET
+    + PLAYER_OBJECT_EVENT_INDEX * OBJECT_EVENT_LEN
+    + OBJECT_EVENT_ELEVATIONS_OFFSET;
+// `ObjectEvent`'s `active:1`, the low bit of its first byte
+// (include/global.fieldmap.h:213).
+const PLAYER_OBJECT_EVENT_ACTIVE_OFFSET: usize =
+    OBJECT_EVENTS_OFFSET + PLAYER_OBJECT_EVENT_INDEX * OBJECT_EVENT_LEN;
+const OBJECT_EVENT_ACTIVE_BIT: u8 = 0x01;
 const DIRECTION_NIBBLE_MASK: u8 = 0x0F;
 const MOVEMENT_DIRECTION_SHIFT: u32 = 4;
 const SERIALIZED_U16_LEN: usize = std::mem::size_of::<u16>();
@@ -306,19 +317,50 @@ impl SaveBlock2 {
     }
 }
 
-/// The player object's raw saved direction nibbles.
+/// The player object's raw saved direction and elevation nibbles.
 ///
 /// Raw values include the no-direction value from a zero-filled entry, which
-/// has no equivalent walking direction.
+/// has no equivalent walking direction. `active` marks an entry this
+/// port wrote, since a zero elevation pair is valid and cannot mark it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SavedObjectEvent {
+    /// `active`: the slot holds a live object. Zero-filled entries, and images
+    /// written before elevations were persisted, leave it clear, which is what
+    /// tells a real `(0, 0)` elevation pair from an unwritten byte.
+    pub active: bool,
     /// Facing direction stored in the low nibble.
     pub facing_direction: u8,
     /// Movement direction stored in the high nibble.
     pub movement_direction: u8,
+    /// `currentElevation`, stored in the low nibble of the elevation byte.
+    pub current_elevation: u8,
+    /// `previousElevation`, stored in the high nibble of the elevation byte.
+    pub previous_elevation: u8,
 }
 
 impl SavedObjectEvent {
+    /// Packs both elevation values into their four-bit fields.
+    #[must_use]
+    pub const fn to_elevation_byte(self) -> u8 {
+        (self.current_elevation & DIRECTION_NIBBLE_MASK)
+            | ((self.previous_elevation & DIRECTION_NIBBLE_MASK) << MOVEMENT_DIRECTION_SHIFT)
+    }
+
+    /// Sets [`Self::active`].
+    #[must_use]
+    pub const fn with_active(mut self, active: bool) -> Self {
+        self.active = active;
+        self
+    }
+
+    /// Unpacks the elevation byte into `self`, leaving directions as they are.
+    #[must_use]
+    pub const fn with_elevation_byte(mut self, byte: u8) -> Self {
+        self.current_elevation = byte & DIRECTION_NIBBLE_MASK;
+        self.previous_elevation = byte >> MOVEMENT_DIRECTION_SHIFT;
+        self
+    }
+
     /// Packs both direction values into their four-bit fields.
     #[must_use]
     pub const fn to_direction_byte(self) -> u8 {
@@ -332,6 +374,9 @@ impl SavedObjectEvent {
         Self {
             facing_direction: byte & DIRECTION_NIBBLE_MASK,
             movement_direction: byte >> MOVEMENT_DIRECTION_SHIFT,
+            current_elevation: 0,
+            previous_elevation: 0,
+            active: false,
         }
     }
 }
@@ -418,6 +463,13 @@ impl SaveBlock1 {
             base[offset..offset + SERIALIZED_U16_LEN].copy_from_slice(&value.to_le_bytes());
         }
         base[PLAYER_OBJECT_EVENT_DIRECTIONS_OFFSET] = self.player_object_event.to_direction_byte();
+        base[PLAYER_OBJECT_EVENT_ELEVATIONS_OFFSET] = self.player_object_event.to_elevation_byte();
+        // Only bit 0 is modeled; the byte's other bitfields stay as loaded.
+        let active_byte = &mut base[PLAYER_OBJECT_EVENT_ACTIVE_OFFSET];
+        *active_byte &= !OBJECT_EVENT_ACTIVE_BIT;
+        if self.player_object_event.active {
+            *active_byte |= OBJECT_EVENT_ACTIVE_BIT;
+        }
     }
 
     /// Decodes modeled fields and decrypts money and bag quantities.
@@ -463,7 +515,9 @@ impl SaveBlock1 {
             event_data: EventData::from_saved_state(flags, vars),
             player_object_event: SavedObjectEvent::from_direction_byte(
                 bytes[PLAYER_OBJECT_EVENT_DIRECTIONS_OFFSET],
-            ),
+            )
+            .with_elevation_byte(bytes[PLAYER_OBJECT_EVENT_ELEVATIONS_OFFSET])
+            .with_active(bytes[PLAYER_OBJECT_EVENT_ACTIVE_OFFSET] & OBJECT_EVENT_ACTIVE_BIT != 0),
         })
     }
 }
@@ -744,12 +798,25 @@ mod tests {
             |base| {
                 block.patch_bytes(base, key);
             },
-            &[],
+            // The player object's first byte shares `active` (bit 0) with
+            // unmodeled bitfields, which patching preserves.
+            &[PLAYER_OBJECT_EVENT_ACTIVE_OFFSET],
         );
         assert_eq!(
             SaveBlock1::from_bytes(&patched, key).unwrap().money,
             block.money
         );
+
+        let mut base = [0xEE_u8; SaveBlock1::PAYLOAD_LEN];
+        block.player_object_event.active = true;
+        block.patch_bytes(&mut base, key);
+        assert_eq!(
+            base[PLAYER_OBJECT_EVENT_ACTIVE_OFFSET], 0xEF,
+            "active is set and the other seven bits are kept"
+        );
+        block.player_object_event.active = false;
+        block.patch_bytes(&mut base, key);
+        assert_eq!(base[PLAYER_OBJECT_EVENT_ACTIVE_OFFSET], 0xEE);
     }
 
     #[test]
@@ -766,6 +833,9 @@ mod tests {
             player_object_event: SavedObjectEvent {
                 facing_direction: DIRECTION_WEST,
                 movement_direction: DIRECTION_EAST,
+                current_elevation: 0,
+                previous_elevation: 3,
+                active: true,
             },
             ..SaveBlock1::default()
         };
@@ -807,6 +877,8 @@ mod tests {
         assert_eq!(bytes[0x1270 + event_data::NUM_FLAG_BYTES - 1], 0x80);
         assert_eq!(&bytes[0x159A..0x159C], &[0xEF, 0xBE]);
         assert_eq!(bytes[0xA48], 0x43);
+        assert_eq!(bytes[0xA3B], 0x30, "previous 3 high, current 0 low");
+        assert_eq!(bytes[0xA30] & 1, 1, "the player object is active");
 
         let restored = SaveBlock1::from_bytes(&bytes, key).unwrap();
         assert_eq!(restored.pos, block.pos);
@@ -830,6 +902,7 @@ mod tests {
         let event = SavedObjectEvent {
             facing_direction: 1,
             movement_direction: 2,
+            ..SavedObjectEvent::default()
         };
         assert_eq!(event.to_direction_byte(), 0x21);
         assert_eq!(SavedObjectEvent::from_direction_byte(0x21), event);
@@ -837,8 +910,26 @@ mod tests {
             SavedObjectEvent {
                 facing_direction: 0xFF,
                 movement_direction: 0xF0,
+                ..SavedObjectEvent::default()
             }
             .to_direction_byte(),
+            0x0F,
+            "each nibble truncates like its bitfield, never spilling into the other"
+        );
+    }
+
+    #[test]
+    fn saved_object_event_packs_two_elevation_nibbles() {
+        let event = SavedObjectEvent::default().with_elevation_byte(0x30);
+        assert_eq!((event.current_elevation, event.previous_elevation), (0, 3));
+        assert_eq!(event.to_elevation_byte(), 0x30);
+        assert_eq!(
+            SavedObjectEvent {
+                current_elevation: 0xFF,
+                previous_elevation: 0xF0,
+                ..SavedObjectEvent::default()
+            }
+            .to_elevation_byte(),
             0x0F,
             "each nibble truncates like its bitfield, never spilling into the other"
         );

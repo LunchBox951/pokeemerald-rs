@@ -285,8 +285,8 @@ impl OverworldPhase {
     /// not on this path; it belongs to `NewGameInitData` and the battle
     /// facilities.
     ///
-    /// **Object events** (`SaveObjectEvents`): only the player's facing,
-    /// the one field this port models
+    /// **Object events** (`SaveObjectEvents`): the player's facing and
+    /// current/previous elevation, the fields this port models
     /// ([`engine::save::SavedObjectEvent`]'s own docs). Both direction
     /// nibbles are written from the same value because
     /// `SetObjectEventDirection` keeps them in step for a turn in place
@@ -312,6 +312,9 @@ impl OverworldPhase {
         self.save1.player_object_event = SavedObjectEvent {
             facing_direction: facing,
             movement_direction: facing,
+            active: true,
+            current_elevation: self.player.elevation(),
+            previous_elevation: self.player.previous_elevation(),
         };
     }
 

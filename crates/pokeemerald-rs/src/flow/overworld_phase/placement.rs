@@ -3,8 +3,9 @@
 //! facing [`super::OverworldPhase::from_saved`] places
 //! [`engine::overworld::PlayerState`] with.
 //!
-//! Two different upstream sources, deliberately kept apart: the elevation
-//! comes from the destination tile's own grid cell
+//! The saved player object's elevation pair wins when the save holds one
+//! ([`saved_elevations`]); otherwise the elevation comes from the
+//! destination tile's own grid cell
 //! ([`engine::overworld::MapRuntime::arrival_elevation`], this port's shared
 //! home for `ObjectEventUpdateElevation`'s landing-tile read -- also used by
 //! [`engine::overworld::warp_destination_position`] for a resolved warp and
@@ -38,13 +39,31 @@ pub(super) fn saved_facing(block1: &SaveBlock1, fallback: Direction) -> Directio
     Direction::from_dir_id(block1.player_object_event.facing_direction).unwrap_or(fallback)
 }
 
+/// `LoadObjectEvents`' elevation half (`src/load_save.c:188-193`): the
+/// `(current, previous)` elevation pair the saved player object holds, or
+/// `(tile_elevation, tile_elevation)` when the save's player object is not
+/// marked `active` -- what an image written before this port persisted
+/// elevations holds.
+///
+/// The pair itself cannot mark the fallback: `(0, 0)` is a real state (leaving
+/// a multi-level tile onto an elevated one skips both updates), so the
+/// upstream `active` bit, which every save this port now writes sets, does.
+pub(super) fn saved_elevations(block1: &SaveBlock1, tile_elevation: u8) -> (u8, u8) {
+    let event = block1.player_object_event;
+    if event.active {
+        (event.current_elevation, event.previous_elevation)
+    } else {
+        (tile_elevation, tile_elevation)
+    }
+}
+
 /// The `(elevation, facing)` a continued save's player is placed with at
 /// `position` on `map_id` -- see
 /// [`super::OverworldPhase::from_saved`]'s "What a continue restores". The facing
 /// half is only the *fallback* since issue #232 ([`saved_facing`]).
 ///
-/// Both come from the saved tile's own map data, never from the save file:
-/// upstream reads the destination grid cell for elevation
+/// Both are the *fallback* for a save whose player object holds none
+/// ([`saved_elevations`], [`saved_facing`]); upstream reads the destination grid cell for elevation
 /// (`ObjectEventUpdateElevation`, via
 /// [`engine::overworld::MapRuntime::arrival_elevation`]) and the destination
 /// metatile's behavior for direction (`GetAdjustedInitialDirection`). A tile

@@ -136,6 +136,26 @@ impl PlayerState {
         }
     }
 
+    /// Creates a stationary player carrying a saved elevation pair.
+    ///
+    /// Upstream's continue restores the player object's persisted
+    /// `currentElevation`/`previousElevation` verbatim
+    /// (`LoadObjectEvents`, `src/load_save.c:188-193`) rather than deriving
+    /// both from the landing tile as [`Self::new`] does; the two differ on
+    /// multi-level and transition cells, where
+    /// `ObjectEventUpdateElevation` retains history.
+    #[must_use]
+    pub const fn with_saved_elevations(
+        position: TilePos,
+        current_elevation: u8,
+        previous_elevation: u8,
+        facing: Direction,
+    ) -> Self {
+        let mut player = Self::new(position, current_elevation, facing);
+        player.render_elevation = previous_elevation;
+        player
+    }
+
     /// Returns the current tile position.
     #[must_use]
     pub const fn position(&self) -> TilePos {

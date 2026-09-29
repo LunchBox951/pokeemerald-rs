@@ -421,8 +421,10 @@ impl OverworldPhase {
     /// phase around an already-loaded `scene` for `map_id`, restoring
     /// `block1`/`block2` as this phase's save state.
     ///
-    /// Facing falls back to the tile-derived direction ([`saved_facing`])
-    /// and elevation to [`new_game::SPAWN_ELEVATION`] when the saved data
+    /// Facing falls back to the tile-derived direction ([`saved_facing`]),
+    /// the elevation pair to the saved player object's
+    /// ([`placement::saved_elevations`]) and, for a save that holds none, to
+    /// the tile's, and elevation to [`new_game::SPAWN_ELEVATION`] when the saved data
     /// will not decode, rather than panicking. Does not rerun the map's
     /// on-transition script, but does run the same on-frame Route 101
     /// update every map-entry point runs
@@ -455,11 +457,18 @@ impl OverworldPhase {
             }
         }
         let position = (i32::from(block1.pos.x), i32::from(block1.pos.y));
-        let (elevation, tile_facing) = placement::saved_tile_placement(&scene, map_id, position);
+        let (tile_elevation, tile_facing) =
+            placement::saved_tile_placement(&scene, map_id, position);
         let facing = placement::saved_facing(&block1, tile_facing);
+        let (elevation, previous_elevation) = placement::saved_elevations(&block1, tile_elevation);
         let mut phase = Self {
             scene,
-            player: PlayerState::new(position, elevation, facing),
+            player: PlayerState::with_saved_elevations(
+                position,
+                elevation,
+                previous_elevation,
+                facing,
+            ),
             map_id,
             save1: block1,
             save2: block2,

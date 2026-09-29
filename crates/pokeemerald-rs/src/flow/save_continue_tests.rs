@@ -299,6 +299,110 @@ pub(super) fn save_from_the_start_menu(
     prompts
 }
 
+/// Walks a new-game player from an elevation-3 floor tile onto the cell at
+/// `(4, 4)` (which carries `cell_elevation`), saves from the start menu,
+/// reloads, and returns the `(current, previous)` elevation pair before the
+/// save and after the continue.
+///
+/// Upstream persists both fields with the player object
+/// (`include/global.fieldmap.h:232-233`) and `LoadObjectEvents` restores
+/// them whole (`src/load_save.c:188-193`); a continue never re-derives them
+/// from the landing cell.
+fn walk_onto_cell_then_save_and_continue(name: &str, cell_elevation: u8) -> ((u8, u8), (u8, u8)) {
+    let cell = (4_u16, 4_u16);
+    let scene = || {
+        crate::overworld::tests::synthetic_scene_with_cell_elevation(10, 10, cell, cell_elevation)
+    };
+    let temp = TempSave::new(name);
+    let mut slot = temp.slot();
+    let mut phase = OverworldPhase::for_test(
+        scene(),
+        new_game::SPAWN_MAP_ID,
+        PlayerState::new((4, 3), 3, Direction::South),
+        None,
+    );
+    phase.step(held(Buttons::DOWN));
+    settle(&mut phase);
+    assert_eq!(
+        phase.player.position(),
+        (4, 4),
+        "the walk must reach the cell"
+    );
+    let before = (phase.player.elevation(), phase.player.previous_elevation());
+
+    save_from_the_start_menu(&mut phase, &mut slot);
+    let saved = slot.load();
+    let resumed =
+        OverworldPhase::from_saved(scene(), new_game::SPAWN_MAP_ID, saved.block1, saved.block2);
+    assert_eq!(resumed.player.position(), (4, 4));
+    (
+        before,
+        (
+            resumed.player.elevation(),
+            resumed.player.previous_elevation(),
+        ),
+    )
+}
+
+/// Issue #801: a transition cell adopts elevation 0 while retaining the
+/// floor's 3 as previous (`ObjectEventUpdateElevation`,
+/// `src/event_object_movement.c:7759-7771`); the continue must keep both,
+/// not reseed previous from the derived current.
+#[test]
+fn continue_on_a_transition_tile_restores_the_saved_elevation_history() {
+    let (before, after) = walk_onto_cell_then_save_and_continue(
+        "transition-history",
+        engine::overworld::ELEVATION_TRANSITION,
+    );
+    assert_eq!(before, (0, 3), "the walk must leave the retained history");
+    assert_eq!(after, before);
+}
+
+/// Issue #801: a multi-level cell leaves both fields untouched (the same
+/// early return), so the player keeps the floor's 3 -- not the wildcard a
+/// tile-derived continue would produce.
+#[test]
+fn continue_on_a_multi_level_tile_restores_the_saved_elevation_history() {
+    let (before, after) = walk_onto_cell_then_save_and_continue(
+        "multi-level-history",
+        engine::overworld::ELEVATION_MULTI_LEVEL,
+    );
+    assert_eq!(
+        before,
+        (3, 3),
+        "the walk must keep the elevation it arrived with"
+    );
+    assert_eq!(after, before);
+}
+
+/// Issue #801 review: `(0, 0)` is a real saved pair on an elevated tile (a
+/// step off a multi-level tile onto ordinary ground skips both updates), so a
+/// continue must not mistake it for a legacy image and re-derive `(7, 7)`.
+#[test]
+fn continue_restores_a_zero_elevation_pair_on_an_elevated_tile() {
+    let tile = (4_u16, 4_u16);
+    let scene = || crate::overworld::tests::synthetic_scene_with_cell_elevation(10, 10, tile, 7);
+    let temp = TempSave::new("zero-pair");
+    let mut slot = temp.slot();
+    let mut phase = OverworldPhase::for_test(
+        scene(),
+        new_game::SPAWN_MAP_ID,
+        PlayerState::new((4, 4), 0, Direction::South),
+        None,
+    );
+    save_from_the_start_menu(&mut phase, &mut slot);
+    let saved = slot.load();
+    let resumed =
+        OverworldPhase::from_saved(scene(), new_game::SPAWN_MAP_ID, saved.block1, saved.block2);
+    assert_eq!(
+        (
+            resumed.player.elevation(),
+            resumed.player.previous_elevation()
+        ),
+        (0, 0)
+    );
+}
+
 /// The I-6 acceptance round trip: new game -> play -> start-menu save ->
 /// reload -> continue, with the restored phase matching what was saved.
 #[test]
