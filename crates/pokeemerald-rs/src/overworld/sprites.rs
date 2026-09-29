@@ -46,7 +46,7 @@ impl SceneSprites {
 
     /// Lists the player first, then NPCs in template order, then orders each
     /// priority group by upstream's y-derived subpriority
-    /// ([`npc::order_by_depth`]); the player leads an exact depth tie.
+    /// ([`npc::order_by_depth`]); the player leads a tie in every sort key.
     #[must_use]
     pub(super) fn entries(&self, player: &PlayerState, event_data: &EventData) -> Vec<OamEntry> {
         let mut entries = vec![(avatar::player_entry(player), player.previous_elevation())];

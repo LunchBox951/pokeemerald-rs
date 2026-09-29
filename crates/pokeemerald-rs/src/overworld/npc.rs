@@ -367,8 +367,9 @@ fn subpriority(entry: OamEntry, elevation: u8) -> u16 {
 
 /// Reorders `(entry, elevation)` pairs so that, within each OBJ priority, a
 /// lower subpriority takes the lower OAM index and wins the overlap, as
-/// upstream's sprite sort draws it. Entries keep their slots across
-/// priorities, and equal subpriorities keep their given order.
+/// upstream's sprite sort draws it. Equal subpriorities fall to the lower
+/// on-screen `y` first (`SortSprites`, `sprite.c:413-415`), and full ties keep
+/// their given order. Entries keep their slots across priorities.
 pub(super) fn order_by_depth(entries: &[(OamEntry, u8)]) -> Vec<OamEntry> {
     let mut ordered: Vec<OamEntry> = entries.iter().map(|&(entry, _)| entry).collect();
     for priority in 0..=3 {
@@ -376,7 +377,9 @@ pub(super) fn order_by_depth(entries: &[(OamEntry, u8)]) -> Vec<OamEntry> {
             .filter(|&i| entries[i].0.priority() == priority)
             .collect();
         let mut group: Vec<(OamEntry, u8)> = slots.iter().map(|&i| entries[i]).collect();
-        group.sort_by_key(|&(entry, elevation)| subpriority(entry, elevation));
+        group.sort_by_key(|&(entry, elevation)| {
+            (subpriority(entry, elevation), std::cmp::Reverse(entry.y()))
+        });
         for (slot, (entry, _)) in slots.into_iter().zip(group) {
             ordered[slot] = entry;
         }
@@ -462,6 +465,36 @@ fn visible_object_events_with_binding<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Upstream `SortSprites` (`sprite.c:413-415`) breaks an equal
+    /// priority/subpriority tie by `oam.y`, the lower-on-screen sprite first.
+    #[test]
+    fn order_by_depth_breaks_a_subpriority_tie_by_lower_screen_y() {
+        let at = |y: u8, bank: u8| {
+            OamEntry::new(
+                120,
+                y,
+                0,
+                bank,
+                rendering::BitDepth::Bpp4,
+                false,
+                false,
+                rendering::ObjShape::Vertical,
+                2,
+                2,
+                true,
+            )
+        };
+        let player = at(64, 0);
+        let npc = at(70, 1);
+        assert_eq!(subpriority(player, 3), subpriority(npc, 3), "tie premise");
+        let ordered = order_by_depth(&[(player, 3), (npc, 3)]);
+        assert_eq!(
+            ordered[0].palette_bank(),
+            1,
+            "lower NPC must take OAM slot 0"
+        );
+    }
     use assets::{MovementType, TrainerType};
     use engine::overworld::Direction;
 
