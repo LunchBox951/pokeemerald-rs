@@ -659,6 +659,157 @@ pub(crate) fn select_active_battler(
     from_save_pokemon(dex, &party[0]).map(|mon| (0, mon))
 }
 
+/// The loaded lead: the one owner of the selected party slot, its live
+/// [`BattlePokemon`], the backing save record, and the signed count of
+/// current-HP points the zero-EV load hid.
+///
+/// The three cannot drift apart: [`Self::load`] picks the record through
+/// [`select_active_battler`] and measures the offset against that same
+/// record, and [`Self::merge_and_save`] replaces the owned record and rebases
+/// the owned offset in one step -- the single reconciliation boundary
+/// `Cmd_getexp` keeps (`pokeemerald/src/battle_script_commands.c:3465-3478`).
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "no production caller until the overworld adopts it"
+    )
+)]
+#[derive(Debug)]
+pub(crate) struct LoadedLead {
+    slot: usize,
+    /// `None` only while [`Self::take_battler`] has lent it to a battle.
+    battler: Option<BattlePokemon>,
+    record: Pokemon,
+    lead_hp_hidden_by_load: i32,
+}
+
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "no production caller until the overworld adopts it"
+    )
+)]
+impl LoadedLead {
+    /// Selects the active member of `party` and measures what its load hid.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`select_active_battler`]'s [`PartyError`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if `party` is empty, as [`select_active_battler`] does.
+    pub(crate) fn load(dex: &Dex, party: &[Pokemon]) -> Result<Self, PartyError> {
+        let (slot, battler) = select_active_battler(dex, party)?;
+        let record = party[slot];
+        let lead_hp_hidden_by_load = hp_hidden_by_load(dex, &record, &battler);
+        Ok(Self {
+            slot,
+            battler: Some(battler),
+            record,
+            lead_hp_hidden_by_load,
+        })
+    }
+
+    /// The selected party slot.
+    pub(crate) fn slot(&self) -> usize {
+        self.slot
+    }
+
+    /// The backing save record as last merged.
+    pub(crate) fn record(&self) -> &Pokemon {
+        &self.record
+    }
+
+    /// The signed hidden-HP offset carried into the next merge.
+    pub(crate) fn hidden_hp_offset(&self) -> i32 {
+        self.lead_hp_hidden_by_load
+    }
+
+    /// # Panics
+    ///
+    /// Panics if the battler is lent out through [`Self::take_battler`].
+    pub(crate) fn battler(&self) -> &BattlePokemon {
+        self.battler.as_ref().expect(LENT_OUT)
+    }
+
+    /// # Panics
+    ///
+    /// Panics if the battler is lent out through [`Self::take_battler`].
+    pub(crate) fn battler_mut(&mut self) -> &mut BattlePokemon {
+        self.battler.as_mut().expect(LENT_OUT)
+    }
+
+    /// Lends the battler to a battle; hand it back with
+    /// [`Self::restore_battler`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if the battler is already lent out.
+    pub(crate) fn take_battler(&mut self) -> BattlePokemon {
+        self.battler.take().expect(LENT_OUT)
+    }
+
+    /// Returns the lent battler.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the battler was not lent out, or is not the same mon as the
+    /// owned record (personality and original trainer id).
+    pub(crate) fn restore_battler(&mut self, battler: BattlePokemon) {
+        assert!(
+            self.battler.is_none(),
+            "the loaded lead's battler was never lent out"
+        );
+        assert!(
+            battler.personality() == self.record.box_data.personality()
+                && battler.original_trainer_id() == self.record.box_data.ot_id(),
+            "a different party member cannot take the loaded lead's place"
+        );
+        self.battler = Some(battler);
+    }
+
+    /// Merges the battler onto the owned record ([`merge_into_save_pokemon`]),
+    /// keeps the result as the owned record, rebases the owned offset, and
+    /// returns a copy for filing into the save.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the battler is lent out through [`Self::take_battler`].
+    pub(crate) fn merge_and_save(&mut self, dex: &Dex) -> Pokemon {
+        let battler = self.battler.as_ref().expect(LENT_OUT);
+        self.record =
+            merge_into_save_pokemon(dex, battler, &self.record, &mut self.lead_hp_hidden_by_load);
+        self.record
+    }
+
+    /// Heals the whole lead (`HealPlayerParty`): clears status and restores
+    /// HP and PP, re-measures the offset against the healed record, and
+    /// merges. When the PP heal fails the record keeps its cleared status
+    /// and full HP but is not merged, and the error is returned.
+    ///
+    /// # Errors
+    ///
+    /// Returns the battler's PP-restore error.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the battler is lent out through [`Self::take_battler`].
+    pub(crate) fn heal_whole_lead(&mut self, dex: &Dex) -> Result<(), battle::BattleError> {
+        self.record.status = 0;
+        self.record.hp = self.record.max_hp;
+        let battler = self.battler.as_mut().expect(LENT_OUT);
+        battler.heal(dex)?;
+        self.lead_hp_hidden_by_load = hp_hidden_by_load(dex, &self.record, battler);
+        self.merge_and_save(dex);
+        Ok(())
+    }
+}
+
+const LENT_OUT: &str = "the loaded lead's battler is lent out to a battle";
+
 fn read_u16(bytes: &[u8], range: Range<usize>) -> u16 {
     let field = bytes[range]
         .try_into()
