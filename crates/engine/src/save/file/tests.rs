@@ -697,7 +697,7 @@ impl Drop for SyncRootGuard {
 fn register_sync_root(dir: &TempDir, label: &str) -> SyncRootGuard {
     use std::os::windows::ffi::OsStrExt as _;
     use windows_sys::Win32::Storage::CloudFilters::{
-        CfRegisterSyncRoot, CF_HYDRATION_POLICY_FULL, CF_POPULATION_POLICY_FULL,
+        CfRegisterSyncRoot, CF_HYDRATION_POLICY_ALWAYS_FULL, CF_POPULATION_POLICY_ALWAYS_FULL,
         CF_REGISTER_FLAG_NONE, CF_SYNC_POLICIES, CF_SYNC_REGISTRATION,
     };
 
@@ -730,8 +730,10 @@ fn register_sync_root(dir: &TempDir, label: &str) -> SyncRootGuard {
         StructSize: u32::try_from(std::mem::size_of::<CF_SYNC_POLICIES>()).unwrap(),
         ..Default::default()
     };
-    policies.Hydration.Primary = CF_HYDRATION_POLICY_FULL;
-    policies.Population.Primary = CF_POPULATION_POLICY_FULL;
+    // ALWAYS_FULL on both: the namespace and every placeholder are already complete, so the
+    // filter never waits on a sync provider this test does not connect.
+    policies.Hydration.Primary = CF_HYDRATION_POLICY_ALWAYS_FULL;
+    policies.Population.Primary = CF_POPULATION_POLICY_ALWAYS_FULL;
 
     // SAFETY: every pointer names a live, NUL-terminated buffer or struct that outlives the call.
     let result = unsafe {
@@ -812,11 +814,10 @@ fn convert_into_a_hydrated_placeholder(path: &Path) {
 #[test]
 fn reading_a_non_symlink_reparse_point_in_the_files_place_loads_through_its_filter() {
     let dir = TempDir::new("read-cloud-placeholder");
-    let _sync_root = register_sync_root(&dir, "read-cloud-placeholder");
     let path = dir.join(SAVE_FILE_NAME);
     let (store, _, _) = saved_store();
     SaveFile::at(&path).write(&store).unwrap();
-
+    let _sync_root = register_sync_root(&dir, "read-cloud-placeholder");
     convert_into_a_hydrated_placeholder(&path);
 
     let reloaded = SaveFile::at(&path)
@@ -838,10 +839,10 @@ fn a_reparse_points_hydrating_reopen_reads_through_the_verified_object_despite_a
     use std::io::Read as _;
 
     let dir = TempDir::new("read-windows-reopen-ignores-a-path-swap");
-    let _sync_root = register_sync_root(&dir, "reopen-path-swap");
     let path = dir.join(SAVE_FILE_NAME);
     let (original, _, _) = saved_store();
     SaveFile::at(&path).write(&original).unwrap();
+    let _sync_root = register_sync_root(&dir, "reopen-path-swap");
     convert_into_a_hydrated_placeholder(&path);
 
     let carried_off = dir.join("carried-off.sav");
