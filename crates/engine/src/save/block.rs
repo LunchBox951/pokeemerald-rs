@@ -11,6 +11,9 @@ use crate::event_data::{self, EventData};
 const PLAYER_NAME_OFFSET: usize = 0x00;
 const PLAYER_GENDER_OFFSET: usize = 0x08;
 const PLAYER_TRAINER_ID_OFFSET: usize = 0x0A;
+// `struct SaveBlock2`'s `specialSaveWarpFlags` byte
+// (`pokeemerald/include/global.h:511`).
+const SPECIAL_SAVE_WARP_FLAGS_OFFSET: usize = 0x09;
 // `struct SaveBlock2`'s packed `u16` options bitfield
 // (`pokeemerald/include/global.h:518-524`): `optionsTextSpeed:3` (bits 0-2)
 // then `optionsWindowFrameType:5` (bits 3-7) then four more unmodeled 1-bit
@@ -215,6 +218,12 @@ pub struct SaveBlock2 {
     pub player_gender: PlayerGender,
     /// Raw trainer ID.
     pub player_trainer_id: [u8; TRAINER_ID_LENGTH],
+    /// Raw `specialSaveWarpFlags` byte (`pokeemerald/include/global.h:511`).
+    /// Only [`SaveBlock2::CONTINUE_GAME_WARP`] is interpreted (through
+    /// [`Self::continue_game_warp_pending`] and
+    /// [`Self::clear_continue_game_warp`]); the whole byte is kept so every
+    /// sibling flag survives a decode and re-encode untouched.
+    pub special_save_warp_flags: u8,
     /// Key used to serialize money and item quantities.
     pub encryption_key: u32,
     /// `optionsTextSpeed` (`pokeemerald/include/global.h:519`): the
@@ -239,6 +248,23 @@ impl SaveBlock2 {
     /// Serialized byte length of a complete secondary block.
     pub const PAYLOAD_LEN: usize = 0xF2C;
 
+    /// `CONTINUE_GAME_WARP` (`pokeemerald/include/save_location.h:5`): the
+    /// `specialSaveWarpFlags` bit asking the next continue to land at
+    /// `SaveBlock1::continue_game_warp`.
+    pub const CONTINUE_GAME_WARP: u8 = 1 << 0;
+
+    /// `UseContinueGameWarp` (`pokeemerald/src/load_save.c:134-137`).
+    #[must_use]
+    pub const fn continue_game_warp_pending(&self) -> bool {
+        self.special_save_warp_flags & Self::CONTINUE_GAME_WARP != 0
+    }
+
+    /// `ClearContinueGameWarpStatus` (`pokeemerald/src/load_save.c:139-142`):
+    /// clears only `CONTINUE_GAME_WARP`, leaving the sibling flag bits.
+    pub const fn clear_continue_game_warp(&mut self) {
+        self.special_save_warp_flags &= !Self::CONTINUE_GAME_WARP;
+    }
+
     /// Serializes modeled fields over a zero-filled payload.
     #[must_use]
     pub fn to_bytes(&self) -> [u8; Self::PAYLOAD_LEN] {
@@ -260,6 +286,7 @@ impl SaveBlock2 {
         base[PLAYER_NAME_OFFSET..PLAYER_NAME_OFFSET + PLAYER_NAME_BUF_LEN]
             .copy_from_slice(&self.player_name);
         base[PLAYER_GENDER_OFFSET] = self.player_gender.to_byte();
+        base[SPECIAL_SAVE_WARP_FLAGS_OFFSET] = self.special_save_warp_flags;
         base[PLAYER_TRAINER_ID_OFFSET..PLAYER_TRAINER_ID_OFFSET + TRAINER_ID_LENGTH]
             .copy_from_slice(&self.player_trainer_id);
         let modeled_options_mask = OPTIONS_TEXT_SPEED_MASK | OPTIONS_WINDOW_FRAME_TYPE_MASK;
@@ -299,6 +326,7 @@ impl SaveBlock2 {
             player_name,
             player_gender,
             player_trainer_id,
+            special_save_warp_flags: bytes[SPECIAL_SAVE_WARP_FLAGS_OFFSET],
             encryption_key: read_u32(bytes, ENCRYPTION_KEY_OFFSET),
             options_text_speed,
             options_window_frame_type,
@@ -532,7 +560,6 @@ mod tests {
     use super::*;
     use crate::save::{ItemSlot, PokemonSubstructures};
 
-    const UNMODELED_SPECIAL_SAVE_WARP_FLAGS_OFFSET: usize = 0x09;
     const UNMODELED_POKEDEX_OFFSET: usize = 0x20;
     const DIRECTION_WEST: u8 = 3;
     const DIRECTION_EAST: u8 = 4;
@@ -630,6 +657,7 @@ mod tests {
             player_name: *b"RUSTY\xFF\0\0",
             player_gender: PlayerGender::Female,
             player_trainer_id: [0x12, 0x34, 0x56, 0x78],
+            special_save_warp_flags: 0x81,
             encryption_key: 0x89AB_CDEF,
             options_text_speed: 2,
             options_window_frame_type: 19,
@@ -638,7 +666,7 @@ mod tests {
         assert_eq!(bytes.len(), 0xF2C);
         assert_eq!(&bytes[0x00..0x08], b"RUSTY\xFF\0\0");
         assert_eq!(bytes[0x08], 1);
-        assert_eq!(bytes[UNMODELED_SPECIAL_SAVE_WARP_FLAGS_OFFSET], 0);
+        assert_eq!(bytes[0x09], 0x81);
         assert_eq!(&bytes[0x0A..0x0E], &[0x12, 0x34, 0x56, 0x78]);
         // `optionsTextSpeed` (`pokeemerald/include/global.h:519`) is bits
         // 0-2 of the `u16` at 0x14 (`2`) and `optionsWindowFrameType`
@@ -693,13 +721,51 @@ mod tests {
         assert_eq!(decoded.options_window_frame_type, 19);
     }
 
+    /// `CONTINUE_GAME_WARP` is bit 0 of the byte at 0x09
+    /// (`pokeemerald/include/save_location.h:5`); consuming it must clear
+    /// that bit alone, in the decoded value and in a patched image whose
+    /// previous byte still had it set.
+    #[test]
+    fn save_block2_decodes_and_clears_only_the_continue_game_warp_bit() {
+        let mut bytes = [0u8; SaveBlock2::PAYLOAD_LEN];
+        bytes[0x09] = 0b1000_0001;
+        let mut block = SaveBlock2::from_bytes(&bytes).unwrap();
+        assert_eq!(block.special_save_warp_flags, 0b1000_0001);
+        assert!(block.continue_game_warp_pending());
+
+        block.clear_continue_game_warp();
+        assert!(!block.continue_game_warp_pending());
+        assert_eq!(block.special_save_warp_flags, 0b1000_0000);
+
+        block.patch_bytes(&mut bytes);
+        assert_eq!(
+            bytes[0x09], 0b1000_0000,
+            "the patch must drop the stale bit"
+        );
+        assert!(!SaveBlock2::from_bytes(&bytes)
+            .unwrap()
+            .continue_game_warp_pending());
+    }
+
+    #[test]
+    fn save_block2_reports_no_pending_warp_when_only_sibling_bits_are_set() {
+        let block = SaveBlock2 {
+            special_save_warp_flags: 0b1111_1110,
+            ..SaveBlock2::default()
+        };
+        assert!(!block.continue_game_warp_pending());
+    }
+
     #[test]
     fn save_block2_ignores_unmodeled_bytes_and_zeroes_them_on_encode() {
         let mut bytes = [0xA5; SaveBlock2::PAYLOAD_LEN];
         bytes[PLAYER_GENDER_OFFSET] = PlayerGender::MALE_VALUE;
         let decoded = SaveBlock2::from_bytes(&bytes).unwrap();
         let encoded = decoded.to_bytes();
-        assert_eq!(encoded[UNMODELED_SPECIAL_SAVE_WARP_FLAGS_OFFSET], 0);
+        assert_eq!(
+            encoded[SPECIAL_SAVE_WARP_FLAGS_OFFSET], 0xA5,
+            "specialSaveWarpFlags is modeled: the whole byte round-trips"
+        );
         assert_eq!(encoded[UNMODELED_POKEDEX_OFFSET], 0);
         assert_eq!(encoded[SaveBlock2::PAYLOAD_LEN - 1], 0);
     }
@@ -710,6 +776,7 @@ mod tests {
             player_name: *b"RUSTY\xFF\0\0",
             player_gender: PlayerGender::Female,
             player_trainer_id: [0x12, 0x34, 0x56, 0x78],
+            special_save_warp_flags: 0x81,
             encryption_key: 0x89AB_CDEF,
             options_text_speed: 2,
             options_window_frame_type: 19,

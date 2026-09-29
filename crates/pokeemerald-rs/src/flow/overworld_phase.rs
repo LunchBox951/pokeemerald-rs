@@ -87,6 +87,12 @@ pub(crate) enum ContinueError {
     },
     /// Loading that map's scene out of the asset pack failed.
     Scene(OverworldSceneError),
+    /// A `CONTINUE_GAME_WARP` save's `SaveBlock1::continue_game_warp` did not
+    /// land: it names no known map, or no position inside the map it names.
+    ContinueGameWarp {
+        /// The unresolvable `continueGameWarp`.
+        destination: WarpData,
+    },
 }
 
 impl std::fmt::Display for ContinueError {
@@ -98,6 +104,10 @@ impl std::fmt::Display for ContinueError {
                  which is not in the map-header table"
             ),
             Self::Scene(err) => write!(f, "continue: {err}"),
+            Self::ContinueGameWarp { destination } => write!(
+                f,
+                "continue: the save's continue-game warp {destination:?} does not land"
+            ),
         }
     }
 }
@@ -388,16 +398,23 @@ impl OverworldPhase {
     ///
     /// [`ContinueError::UnknownLocation`] if the save's location names no
     /// known map; [`ContinueError::Scene`] if that map's scene will not load
-    /// (most commonly: no extracted pack).
+    /// (most commonly: no extracted pack); [`ContinueError::ContinueGameWarp`]
+    /// if a flagged save's `continue_game_warp` does not land.
     pub(super) fn continue_saved_game(
         source: crate::pack_source::PackSource,
         block1: SaveBlock1,
-        block2: SaveBlock2,
+        mut block2: SaveBlock2,
     ) -> Result<Self, ContinueError> {
-        let map_id = saved_map_id(block1.location).ok_or(ContinueError::UnknownLocation {
-            map_group: block1.location.map_group,
-            map_num: block1.location.map_num,
-        })?;
+        let continue_game_warp = take_continue_game_warp(&block1, &mut block2)?;
+        // A flagged save resumes at its warp, so its stale `location` need
+        // not name a loadable map; the destination map seeds the phase.
+        let map_id = match continue_game_warp {
+            Some((warp_map, _)) => warp_map,
+            None => saved_map_id(block1.location).ok_or(ContinueError::UnknownLocation {
+                map_group: block1.location.map_group,
+                map_num: block1.location.map_num,
+            })?,
+        };
         // Loaded with the save's own event data, not a fresh store: a
         // continue does not rerun the map's on-transition script, so a
         // previously set var (e.g. Route 103's rival sprite) must already
@@ -414,6 +431,18 @@ impl OverworldPhase {
         // `Runtime` default, so every later load this phase performs
         // keeps honoring it too.
         phase.pack_source = source;
+        if let Some((warp_map, destination)) = continue_game_warp {
+            // `SetWarpDestinationToContinueGameWarp` + `WarpIntoMap`
+            // (`src/overworld.c:1741-1743`) in place of
+            // `InitMapFromSavedGame`; `LoadMapFromWarp` clears temp field
+            // data and runs the on-transition effects.
+            phase.warp_to_saved_location(warp_map, destination);
+            // A refused warp leaves `save1.location` at the stale value the
+            // save carried, not where it asked to resume.
+            if phase.save1.location != destination {
+                return Err(ContinueError::ContinueGameWarp { destination });
+            }
+        }
         Ok(phase)
     }
 
@@ -727,6 +756,24 @@ impl OverworldPhase {
         };
         true
     }
+}
+
+/// `UseContinueGameWarp` + `ClearContinueGameWarpStatus`
+/// (`src/load_save.c:134-142`, taken at `src/overworld.c:1739-1741`):
+/// when `block2` carries `CONTINUE_GAME_WARP`, clears that bit and returns
+/// the map and warp `block1.continue_game_warp` names. `None` leaves
+/// `block2` untouched: the ordinary `InitMapFromSavedGame` continue.
+pub(super) fn take_continue_game_warp(
+    block1: &SaveBlock1,
+    block2: &mut SaveBlock2,
+) -> Result<Option<(assets::MapId, WarpData)>, ContinueError> {
+    if !block2.continue_game_warp_pending() {
+        return Ok(None);
+    }
+    let destination = block1.continue_game_warp;
+    let map = saved_map_id(destination).ok_or(ContinueError::ContinueGameWarp { destination })?;
+    block2.clear_continue_game_warp();
+    Ok(Some((map, destination)))
 }
 
 /// The map `warp` names, resolved through the generated
