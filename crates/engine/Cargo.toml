@@ -36,7 +36,7 @@ windows-sys = { version = "=0.61.2", default-features = false, features = [
 assets = { path = "../assets", features = ["test-support"] }
 
 # Test-only widening of the feature boundary above, owner-approved 2026-09-28
-# (issue #1399, `minimum-deps: approved`): `Win32_Storage_CloudFilters` lets the
+# (`minimal-deps`, PR #1500, for the issue #1399 save-path read): `Win32_Storage_CloudFilters` lets the
 # Windows save-read tests register a sync root and convert a hydrated file into
 # a real cloud-files placeholder. `Win32_System_IO` is the `OVERLAPPED` type
 # `CfConvertToPlaceholder`'s signature requires. Same crate, same pinned

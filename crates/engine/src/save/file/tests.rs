@@ -677,32 +677,29 @@ struct SyncRootGuard {
 impl Drop for SyncRootGuard {
     fn drop(&mut self) {
         // SAFETY: `root` is the NUL-terminated wide path this guard registered.
-        let _ = unsafe {
+        let result = unsafe {
             windows_sys::Win32::Storage::CloudFilters::CfUnregisterSyncRoot(self.root.as_ptr())
         };
+        if result < 0 {
+            // Not a panic: this may already be a panic unwind, and a leaked registration
+            // must not mask the assertion that started it.
+            eprintln!("CfUnregisterSyncRoot failed with HRESULT {result:#010x}; the sync root stays registered");
+        }
     }
 }
 
-/// Registers `dir` as a cloud-files sync root with hydration allowed, or
-/// returns `None` -- after saying why on stderr -- when the host refuses the
-/// registration as unsupported or forbidden (access denied, not supported,
-/// invalid function: a runner without the cloud-files filter, or a volume it
-/// cannot sit on). Any other failure panics: only that specific
-/// precondition may skip a test, never a read-path assertion.
+/// Registers `dir` as a cloud-files sync root with hydration allowed.
+///
+/// Panics on any registration failure, with no skip path: on a
+/// save-data-risk change a Windows leg that cannot build the fixture must
+/// fail, not read green while the read-path tests never ran.
 #[cfg(windows)]
-fn register_sync_root(dir: &TempDir, label: &str) -> Option<SyncRootGuard> {
+fn register_sync_root(dir: &TempDir, label: &str) -> SyncRootGuard {
     use std::os::windows::ffi::OsStrExt as _;
     use windows_sys::Win32::Storage::CloudFilters::{
         CfRegisterSyncRoot, CF_HYDRATION_POLICY_FULL, CF_POPULATION_POLICY_FULL,
         CF_REGISTER_FLAG_NONE, CF_SYNC_POLICIES, CF_SYNC_REGISTRATION,
     };
-
-    // HRESULT_FROM_WIN32 of ERROR_INVALID_FUNCTION, ERROR_ACCESS_DENIED, ERROR_NOT_SUPPORTED.
-    const HOST_REFUSALS: [i32; 3] = [
-        0x8007_0001_u32.cast_signed(),
-        0x8007_0005_u32.cast_signed(),
-        0x8007_0032_u32.cast_signed(),
-    ];
 
     let wide = |text: &std::ffi::OsStr| -> Vec<u16> { text.encode_wide().chain(Some(0)).collect() };
     let root = wide(dir.path.as_os_str());
@@ -745,20 +742,12 @@ fn register_sync_root(dir: &TempDir, label: &str) -> Option<SyncRootGuard> {
             CF_REGISTER_FLAG_NONE,
         )
     };
-    if result >= 0 {
-        return Some(SyncRootGuard { root });
-    }
     assert!(
-        HOST_REFUSALS.contains(&result),
-        "CfRegisterSyncRoot on {} failed with an unexpected HRESULT {result:#010x}",
+        result >= 0,
+        "sync root registration refused: CfRegisterSyncRoot on {} failed with HRESULT {result:#010x}",
         dir.path.display()
     );
-    eprintln!(
-        "skipping {label}: this host refuses to register a cloud-files sync root at {} \
-         (HRESULT {result:#010x}), so no real placeholder can be built",
-        dir.path.display()
-    );
-    None
+    SyncRootGuard { root }
 }
 
 /// Converts the hydrated file at `path`, inside a registered sync root, into
@@ -823,9 +812,7 @@ fn convert_into_a_hydrated_placeholder(path: &Path) {
 #[test]
 fn reading_a_non_symlink_reparse_point_in_the_files_place_loads_through_its_filter() {
     let dir = TempDir::new("read-cloud-placeholder");
-    let Some(_sync_root) = register_sync_root(&dir, "read-cloud-placeholder") else {
-        return;
-    };
+    let _sync_root = register_sync_root(&dir, "read-cloud-placeholder");
     let path = dir.join(SAVE_FILE_NAME);
     let (store, _, _) = saved_store();
     SaveFile::at(&path).write(&store).unwrap();
@@ -851,9 +838,7 @@ fn a_reparse_points_hydrating_reopen_reads_through_the_verified_object_despite_a
     use std::io::Read as _;
 
     let dir = TempDir::new("read-windows-reopen-ignores-a-path-swap");
-    let Some(_sync_root) = register_sync_root(&dir, "reopen-path-swap") else {
-        return;
-    };
+    let _sync_root = register_sync_root(&dir, "reopen-path-swap");
     let path = dir.join(SAVE_FILE_NAME);
     let (original, _, _) = saved_store();
     SaveFile::at(&path).write(&original).unwrap();
