@@ -52,6 +52,28 @@ pub enum BattleEvent {
         /// Whether the player's battler snapped out.
         by_player: bool,
     },
+    /// A confusion duration that remained active after this action's
+    /// decrement was announced, ahead of the coin draw that decides between
+    /// a self-hit and the chosen move (`CANCELER_CONFUSED`'s still-active
+    /// branch, `src/battle_util.c:2157`-`:2187`).
+    ///
+    /// This precedes either [`BattleEvent::ConfusionSelfHit`] or, when the
+    /// chosen move proceeds instead, the same action's paralysis draw and PP
+    /// handling.
+    Confused {
+        /// Whether the player's battler is confused.
+        by_player: bool,
+    },
+    /// Confusion's coin draw cancelled the chosen move for a self-hit, after
+    /// [`BattleEvent::Confused`] and before any resulting
+    /// [`BattleEvent::Fainted`]. No PP is spent, and the paralysis draw does
+    /// not run for this action.
+    ConfusionSelfHit {
+        /// Whether the player's battler hurt itself.
+        by_player: bool,
+        /// HP removed from that battler, capped at its HP before the hit.
+        damage: u32,
+    },
     /// A paralysed battler's full-paralysis draw cancelled its chosen move
     /// before any PP was spent.
     FullyParalyzed {
@@ -331,6 +353,49 @@ pub enum BattleEvent {
         /// The move whose poison was reflected.
         move_id: MoveId,
     },
+    /// A move inflicted a fresh confusion volatile on its target, whether
+    /// directly (`BattleScript_EffectConfuse`'s own `seteffectprimary`,
+    /// `data/battle_scripts_1.s:918-922`) or through a damaging hit's
+    /// trailing chance draw (`EFFECT_CONFUSE_HIT`'s trampoline into the same
+    /// `SetMoveEffect` `MOVE_EFFECT_CONFUSION` case,
+    /// `src/battle_script_commands.c:2528`-`:2544`).
+    ///
+    /// This is distinct from [`BattleEvent::Confused`], which announces an
+    /// *already*-active duration ahead of that action's own coin draw rather
+    /// than a fresh application.
+    ConfusionInflicted {
+        /// Whether the player used the move.
+        by_player: bool,
+        /// The move that inflicted confusion.
+        move_id: MoveId,
+    },
+    /// A direct confuse move's target already carried an active confusion
+    /// volatile, so no accuracy draw occurred
+    /// (`BattleScript_AlreadyConfused`, `data/battle_scripts_1.s:918`-`:922`).
+    ///
+    /// An on-hit trampoline's own already-confused defender instead lands
+    /// silently: the hit still connects, but nothing beyond its own
+    /// [`BattleEvent::Hit`] is reported, matching an already-poisoned
+    /// defender's identical silent no-land.
+    AlreadyConfused {
+        /// Whether the player used the move.
+        by_player: bool,
+        /// The move that targeted the already-confused battler.
+        move_id: MoveId,
+    },
+    /// A direct confuse move exited through `BattleScript_OwnTempoPrevents`
+    /// (`data/battle_scripts_1.s:4152`-`:4156`): the target's
+    /// [`AbilityId::OWN_TEMPO`] blocked the move before the accuracy draw.
+    ///
+    /// An on-hit trampoline's own Own-Tempo defender instead lands silently,
+    /// the same way an already-confused trampoline target does; see
+    /// [`BattleEvent::AlreadyConfused`]'s docs.
+    OwnTempoProtected {
+        /// Whether the player used the move.
+        by_player: bool,
+        /// The move the ability blocked.
+        move_id: MoveId,
+    },
     /// `STRINGID_PKMNHURTBYPOISON` (`data/battle_scripts_1.s:3736-3737`).
     HurtByPoison {
         /// Whether the player's battler was hurt.
@@ -359,8 +424,7 @@ pub enum BattleEvent {
     },
     /// The player sent out the first non-fainted reserve after an active
     /// faint, under the headless party-order policy (no player choice, no
-    /// party-screen UI). This crate models it only for a wild battle: a
-    /// trainer battle sends no player reserves.
+    /// party-screen UI). Reported for a wild or trainer battle alike.
     PlayerSentOut {
         /// The replacement's species.
         species: SpeciesId,

@@ -1271,7 +1271,7 @@ fn a_locked_frame_advances_the_players_walk_and_drops_its_latched_landing() {
 /// docs) so the handshake is pinned without an extracted pack -- built the
 /// exact way the production path builds it since issue #410: no trailing
 /// `{P}`, and the script's `waitbuttonpress` opted into on the dialog
-/// (`NpcDialog::open` applies it for the real
+/// (`NpcDialog::open_at_speed` applies it for the real
 /// `advance_intro_message`).
 #[test]
 fn the_intro_speech_holds_the_battle_until_the_player_dismisses_it() {
@@ -1385,10 +1385,11 @@ fn the_intro_speech_holds_the_battle_until_the_player_dismisses_it() {
 /// test only reaches `advance_intro_message`'s real `!opened` arm one frame
 /// after [`SightApproach::skip_to_open_intro_message`]'s synthetic
 /// shortcut plants the box directly -- so
-/// [`OverworldPhase::advance_intro_message`]'s actual `NpcDialog::open`
-/// call, its `opened` latch, and the `Err` fallback path
-/// (`sight_trainer_approach.rs`'s own module doc comment) had never been
-/// exercised by any test. This one drives the real icon, the real
+/// [`OverworldPhase::advance_intro_message`]'s actual
+/// `NpcDialog::open_at_speed` call and its `opened` latch also have a
+/// synthetic-pack sibling in `step_tests` (issue #1444); its `Err` fallback
+/// path (`sight_trainer_approach.rs`'s own module doc comment) does not, and
+/// still only runs here. This one drives the real icon, the real
 /// zero-tile turn, and the real message box -- open, print every glyph, and
 /// dismiss through the script's own `waitbuttonpress` -- against the
 /// genuinely extracted
@@ -1537,7 +1538,7 @@ fn approaching_trainer(phase: &OverworldPhase) -> &ObjectEventState {
 ///
 /// The fixture is [`UNEXECUTABLE_MOVE`]: a spent slot 0 no longer aborts
 /// anything, since the driver falls back to the next usable slot
-/// (`crate::flow::npc_trainer_battle::take_first_usable_move_turn`) and an
+/// (`crate::flow::first_usable_move::take_first_usable_move_turn`) and an
 /// all-spent moveset is diverted into Struggle (`crates/battle/src/battle.rs:491`).
 #[test]
 fn an_aborted_sight_battle_clears_the_trainer_id_with_the_slot() {
