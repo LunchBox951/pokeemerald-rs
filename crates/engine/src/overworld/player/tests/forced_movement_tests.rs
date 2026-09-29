@@ -473,3 +473,57 @@ fn blocked_forced_route_retries_once_the_blocking_object_disappears() {
          must retry its dispatch on the next no-input poll"
     );
 }
+
+/// A slide entered perpendicular to its own direction leaves
+/// `movement_direction` on the slide and `facing` locked on the entrant
+/// until the first poll off the tile, where `ForcedMovement_None` clears
+/// `facingDirectionLocked` and calls `SetObjectEventDirection` with the
+/// locked facing, resynchronising `movementDirection` to it
+/// (`field_player_avatar.c:429-440`, `event_object_movement.c:2361-2367`)
+/// `(behavioral-fidelity)`.
+#[test]
+fn a_slides_movement_direction_resyncs_to_facing_on_the_first_poll_off_the_tile() {
+    let runtime = slide_east_runtime();
+    let mut player = PlayerState::new((2, 1), 3, Direction::South);
+    assert_eq!(
+        player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS),
+        StepOutcome::Advanced {
+            from: (2, 1),
+            to: (2, 2),
+        },
+        "fixture precondition: the slide tile is entered from the north"
+    );
+    for _ in 0..WALK_FRAMES_PER_TILE {
+        player.tick();
+    }
+    assert_eq!(
+        player.step(None, &runtime, &no_connections, &NO_FLAGS),
+        StepOutcome::Advanced {
+            from: (2, 2),
+            to: (3, 2),
+        },
+        "fixture precondition: the slide dispatches east"
+    );
+    for _ in 0..SLIDE_FRAMES_PER_TILE {
+        player.tick();
+    }
+    assert_eq!(player.facing(), Direction::South);
+    assert_eq!(
+        player.movement_direction(),
+        Direction::East,
+        "on the landing frame, before any poll, the slide's own direction \
+         is still the movement direction"
+    );
+
+    assert_eq!(
+        player.step(None, &runtime, &no_connections, &NO_FLAGS),
+        StepOutcome::Idle
+    );
+    assert_eq!(player.facing(), Direction::South);
+    assert_eq!(
+        player.movement_direction(),
+        Direction::South,
+        "ForcedMovement_None resynchronises movementDirection to the locked \
+         facing on the first poll off the forced tile"
+    );
+}

@@ -1616,6 +1616,104 @@ fn a_fresh_start_on_a_cracked_floor_landing_tile_must_not_open_the_menu() {
     );
 }
 
+/// Slides the player east across an `MB_SLIDE_EAST` tile at `(6, 4)` it
+/// entered facing North, stopping on the landing frame at `(7, 4)` --
+/// the first `T_TILE_CENTER` CB1 off the forced tile, before any
+/// `PlayerStep` poll has run there.
+fn phase_on_a_perpendicular_slides_landing_frame() -> OverworldPhase {
+    let scene = crate::overworld::tests::synthetic_scene_with_special_tile(
+        10,
+        10,
+        (6, 4),
+        engine::overworld::metatile_behavior::MB_SLIDE_EAST,
+    );
+    let mut phase = OverworldPhase::for_test(
+        scene,
+        ONE_F,
+        PlayerState::new((6, 5), 3, Direction::North),
+        None,
+    );
+    phase.synthetic_start_menu = SyntheticStartMenu::Builds;
+    for _ in 0..u32::from(WALK_FRAMES_PER_TILE) {
+        phase.step(held(Buttons::UP));
+    }
+    assert_eq!(
+        phase.player.position(),
+        (6, 4),
+        "setup: the held step must have crossed onto the slide tile"
+    );
+    phase.step(ButtonState::default());
+    assert_eq!(
+        phase.player.position(),
+        (7, 4),
+        "setup: the slide must have dispatched east"
+    );
+    for _ in 0..16 {
+        if !phase.player.in_transit() {
+            break;
+        }
+        phase.step(ButtonState::default());
+    }
+    assert!(
+        !phase.player.in_transit(),
+        "setup: the slide crossing must have drained"
+    );
+    assert_eq!(phase.player.facing(), Direction::North);
+    phase
+}
+
+/// `SaveObjectEvents` copies the player's object event whole
+/// (`pokeemerald/src/load_save.c:180-186`), so a save opened on a
+/// perpendicular slide's landing frame -- where `ProcessPlayerFieldInput`
+/// claims START ahead of `PlayerStep` (`overworld.c:1444-1455`), before
+/// `ForcedMovement_None` can resynchronise the two
+/// (`field_player_avatar.c:429-440`) -- keeps `movementDirection` on the
+/// slide while `facingDirection` stays locked on the entrant.
+#[test]
+fn a_save_on_a_slides_landing_frame_keeps_both_direction_nibbles() {
+    let mut phase = phase_on_a_perpendicular_slides_landing_frame();
+
+    phase.step(pressed(Buttons::START));
+    assert!(
+        phase.start_menu().is_some(),
+        "setup: START on a non-forced landing tile opens the menu"
+    );
+    phase.copy_party_and_objects_to_save();
+
+    assert_eq!(
+        phase.save1.player_object_event,
+        engine::save::SavedObjectEvent {
+            facing_direction: Direction::North.to_dir_id(),
+            movement_direction: Direction::East.to_dir_id(),
+        },
+        "the locked facing and the slide's movement direction are saved \
+         into their own nibbles"
+    );
+}
+
+/// One idle poll after the landing, `ForcedMovement_None` has already set
+/// `movementDirection` back to the locked facing
+/// (`field_player_avatar.c:429-440`), so a later save carries one
+/// direction in both nibbles.
+#[test]
+fn a_save_after_a_slides_first_idle_poll_carries_the_resynced_direction() {
+    let mut phase = phase_on_a_perpendicular_slides_landing_frame();
+
+    phase.step(ButtonState::default());
+    phase.step(pressed(Buttons::START));
+    assert!(phase.start_menu().is_some(), "setup: START opens the menu");
+    phase.copy_party_and_objects_to_save();
+
+    assert_eq!(
+        phase.save1.player_object_event,
+        engine::save::SavedObjectEvent {
+            facing_direction: Direction::North.to_dir_id(),
+            movement_direction: Direction::North.to_dir_id(),
+        },
+        "the resynchronised movement direction matches the locked facing"
+    );
+}
+
 /// A player whose forced step is collision-blocked parks at `T_NOT_MOVING`,
 /// the gate arm that admits START whatever `forcedMove` says
 /// (`pokeemerald/src/field_control_avatar.c:95`).

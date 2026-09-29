@@ -204,6 +204,16 @@ impl PlayerState {
         self.facing
     }
 
+    /// Returns the current movement direction, which a slide leaves on its
+    /// own direction while facing stays locked, until the next poll off
+    /// the tile resynchronises the two ([`step`](Self::step)'s "Forced
+    /// movement"), as `GetPlayerMovementDirection` reads
+    /// `movementDirection` (`field_player_avatar.c:429-440, 526-532`).
+    #[must_use]
+    pub const fn movement_direction(&self) -> Direction {
+        self.movement_direction
+    }
+
     /// Changes facing without starting or interrupting a step, carrying the
     /// movement direction with it as upstream's `SetObjectEventDirection`
     /// does (`event_object_movement.c:2361-2371`).
@@ -391,6 +401,15 @@ impl PlayerState {
                 // skipping the deferred-behavior check below -- this tile is
                 // a supported mover, not one of those behaviors.
             }
+        }
+
+        // `ForcedMovement_None`, reached off a forced tile or through a
+        // blocked `DoForcedMovement`, clears a slide's facing lock and
+        // resets `movementDirection` to the locked facing
+        // (`field_player_avatar.c:429-440, 449-451`). A no-op unless a slide
+        // left the two apart; deferred armed tiles keep theirs.
+        if !self.forced_movement_armed || supported_mover.is_some() {
+            self.movement_direction = self.facing;
         }
 
         let Some(direction) = input else {
@@ -584,12 +603,14 @@ impl PlayerState {
     /// (a wall, an object event) no longer does. `step`'s ordinary keypad
     /// handling runs next on the original poll -- upstream's `FALSE` arm
     /// falls through to `MovePlayerAvatarUsingKeypadInput` the same way
-    /// (`:344-348`). `movement_streak_active`, `movement_direction`, and
-    /// (unless `mover.locks_facing`) `facing` all change only on a
-    /// successful dispatch: `DoForcedMovement`'s collision branch leaves
+    /// (`:344-348`). `movement_streak_active` and (unless
+    /// `mover.locks_facing`) `facing` change only on a successful
+    /// dispatch: `DoForcedMovement`'s collision branch leaves
     /// `runningState` untouched on a blocked route (`:443-462`), so a
     /// blocked attempt must not suppress the keypad's own turn-in-place
-    /// the way a real step would.
+    /// the way a real step would. That branch's `ForcedMovement_None`
+    /// resets `movement_direction` to `facing`, which `step` applies
+    /// after this returns `None`.
     fn dispatch_forced_mover(
         &mut self,
         mover: ForcedMover,
