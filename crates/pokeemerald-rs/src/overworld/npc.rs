@@ -14,8 +14,8 @@
 //!
 //! Upstream resolves equal-priority overlap with a y-derived subpriority
 //! (`SetObjectSubpriorityByElevation`, `event_object_movement.c:7773-7779`).
-//! [`rendering::SpriteLayer`] has no subpriority, so its lower OAM index wins
-//! and the player draws in front of every same-priority NPC.
+//! [`rendering::SpriteLayer`] has no subpriority, so [`order_by_depth`]
+//! reproduces it by giving the lower-on-screen object the lower OAM index.
 
 use std::collections::HashMap;
 
@@ -343,7 +343,49 @@ fn object_screen_position(
     (wrap_oam_x(x), wrap_oam_y(y))
 }
 
+/// Height of every bound object event's 16x32 OBJ.
+const SPRITE_H_PX: u16 = 32;
+
+/// `sElevationToSubpriority` (`event_object_movement.c:7691-7693`). Elevations
+/// sharing an OBJ priority still differ here, so it is part of the draw order.
+const ELEVATION_TO_SUBPRIORITY: [u16; 16] = [
+    115, 115, 83, 115, 83, 115, 83, 115, 83, 115, 83, 115, 83, 0, 0, 115,
+];
+
+/// Upstream's subpriority for an OBJ at `elevation` whose rendered top is `y`:
+/// `sElevationToSubpriority[elevation] + (16 - (((y + 8) & 0xFF) >> 4)) * 2 + 1`
+/// (`SetObjectSubpriorityByElevation`, `:7739-7745`, called with subpriority 1),
+/// where upstream's `y` is the sprite bottom, so the 32px height is added.
+fn subpriority(entry: OamEntry, elevation: u8) -> u16 {
+    let bottom_plus_bias = (u16::from(entry.y()) + SPRITE_H_PX + 8) & 0xFF;
+    let base = ELEVATION_TO_SUBPRIORITY
+        .get(usize::from(elevation))
+        .copied()
+        .unwrap_or(ELEVATION_TO_SUBPRIORITY[0]);
+    base + (16 - (bottom_plus_bias >> 4)) * 2 + 1
+}
+
+/// Reorders `(entry, elevation)` pairs so that, within each OBJ priority, a
+/// lower subpriority takes the lower OAM index and wins the overlap, as
+/// upstream's sprite sort draws it. Entries keep their slots across
+/// priorities, and equal subpriorities keep their given order.
+pub(super) fn order_by_depth(entries: &[(OamEntry, u8)]) -> Vec<OamEntry> {
+    let mut ordered: Vec<OamEntry> = entries.iter().map(|&(entry, _)| entry).collect();
+    for priority in 0..=3 {
+        let slots: Vec<usize> = (0..entries.len())
+            .filter(|&i| entries[i].0.priority() == priority)
+            .collect();
+        let mut group: Vec<(OamEntry, u8)> = slots.iter().map(|&i| entries[i]).collect();
+        group.sort_by_key(|&(entry, elevation)| subpriority(entry, elevation));
+        for (slot, (entry, _)) in slots.into_iter().zip(group) {
+            ordered[slot] = entry;
+        }
+    }
+    ordered
+}
+
 /// Builds OAM entries for visible events with resolved sprite bindings.
+#[cfg(test)]
 #[must_use]
 pub(super) fn oam_entries(
     object_events: &'static [ObjectEvent],
@@ -351,6 +393,21 @@ pub(super) fn oam_entries(
     player: &PlayerState,
     event_data: &EventData,
 ) -> Vec<OamEntry> {
+    elevated_oam_entries(object_events, bindings, player, event_data)
+        .into_iter()
+        .map(|(entry, _)| entry)
+        .collect()
+}
+
+/// [`oam_entries`] with each entry's authored elevation, which selects its
+/// upstream subpriority base.
+#[must_use]
+pub(super) fn elevated_oam_entries(
+    object_events: &'static [ObjectEvent],
+    bindings: &HashMap<&'static str, SpriteBinding>,
+    player: &PlayerState,
+    event_data: &EventData,
+) -> Vec<(OamEntry, u8)> {
     let player_pos = player.position();
     let camera_lag = super::viewport::camera_lag_px(player);
     visible_object_events_with_binding(object_events, bindings, event_data)
@@ -364,7 +421,7 @@ pub(super) fn oam_entries(
                 player_pos,
                 camera_lag,
             );
-            OamEntry::new(
+            let entry = OamEntry::new(
                 x,
                 y,
                 tile_index,
@@ -376,7 +433,8 @@ pub(super) fn oam_entries(
                 avatar::PLAYER_OBJ_SIZE,
                 priority_for_stationary_object(event),
                 true,
-            )
+            );
+            (entry, event.elevation)
         })
         .collect()
 }
