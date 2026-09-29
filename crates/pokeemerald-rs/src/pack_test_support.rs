@@ -30,8 +30,19 @@ pub(crate) fn palette_entry_with_color(
     index: u8,
     color: Bgr555,
 ) -> PackEntry {
+    palette_entry_with_colors(id, color_count, &[(index, color)])
+}
+
+/// [`palette_entry`], with each `(index, color)` pair set.
+pub(crate) fn palette_entry_with_colors(
+    id: &'static str,
+    color_count: u16,
+    entries: &[(u8, Bgr555)],
+) -> PackEntry {
     let mut colors = vec![0u16; usize::from(color_count)];
-    colors[usize::from(index)] = color.raw();
+    for &(index, color) in entries {
+        colors[usize::from(index)] = color.raw();
+    }
     pack_format::palette_entry(id.into(), &colors).unwrap()
 }
 
