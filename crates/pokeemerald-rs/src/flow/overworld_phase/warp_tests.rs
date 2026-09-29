@@ -1146,3 +1146,29 @@ fn warping_restarts_the_wild_encounter_immunity_window() {
         "the fifth step is out of the window and rolls for real"
     );
 }
+
+/// A successful warp replaces the live object events with the destination
+/// map's: the bedroom's collection gives way to the 1F's, seeded from the
+/// same resolved events.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn a_successful_warp_replaces_the_live_object_events_with_the_destinations() {
+    let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+    let destination = MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F");
+
+    phase.warp_to(destination, 2);
+
+    assert_eq!(phase.map_id, destination);
+    let templates = phase
+        .scene
+        .map_events(destination)
+        .expect("destination events resolve")
+        .object_events;
+    for template in templates {
+        let entry = phase
+            .object_events
+            .get(template.local_id)
+            .expect("every destination template is seeded");
+        assert!(std::ptr::eq(entry.template(), template));
+    }
+}
