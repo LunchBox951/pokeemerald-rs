@@ -1597,3 +1597,48 @@ fn an_aborted_sight_battle_clears_the_trainer_id_with_the_slot() {
          battle slot emptied is stale the instant a fresh cone entry reuses the field"
     );
 }
+
+/// The trigger frame itself drains the last tick of the player's step: the
+/// drain frame is `step.rs`'s trigger path, not the approach driver, so the
+/// two after-drain handoff frames must still be spent before the icon.
+#[test]
+fn a_trigger_frame_that_drains_the_step_still_spends_the_after_drain_handoff() {
+    let (rx, ry) = RHETT_TILE;
+    // Same geometry as `the_icon_countdown_holds_until_the_players_step_drains`.
+    let mut phase = route_103_phase(PlayerState::new((rx, ry + 2), 3, Direction::South));
+    phase.synthetic_sight_trainer = Some(assets::trainers::TrainerId(STAND_IN_TRAINER));
+    assert!(
+        phase.party_lead.is_none(),
+        "setup: the cone refuses while walking"
+    );
+
+    phase.step(held(Buttons::DOWN));
+    assert!(phase.player.in_transit(), "setup: step committed");
+    while phase.player.step_progress() < WALK_FRAMES_PER_TILE - 1 {
+        phase.step(ButtonState::new());
+        assert!(phase.sight_approach.is_none());
+    }
+    assert!(phase.player.in_transit(), "setup: one tick left");
+
+    phase.rng = engine::rng::Rng::new(7);
+    phase.party_lead = Some(overwhelming_lead());
+    phase.step(ButtonState::new()); // trigger frame == drain frame
+    assert!(
+        phase.sight_approach.is_some(),
+        "setup: the trigger claimed the frame"
+    );
+    assert!(
+        !phase.player.in_transit(),
+        "setup: the trigger frame drained the step"
+    );
+
+    let mut frames_after_drain = 0;
+    while format!("{:?}", phase.sight_approach).contains("LockHandoff") {
+        phase.step(ButtonState::new());
+        frames_after_drain += 1;
+    }
+    assert_eq!(
+        frames_after_drain, LOCK_HANDOFF_AFTER_DRAIN,
+        "the icon must start only after both after-drain handoff frames"
+    );
+}

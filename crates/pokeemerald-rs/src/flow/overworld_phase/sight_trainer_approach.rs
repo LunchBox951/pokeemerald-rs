@@ -228,8 +228,9 @@ impl SightApproach {
     /// Spend one frame of [`ApproachStage::LockHandoff`]. `player_was_moving`
     /// is whether the player's step was still in flight *before* this frame's
     /// animation ran: the freeze task polls the state the previous frame left,
-    /// so the frame a step drains on is still a moving frame.
-    fn advance_lock_handoff(&mut self, player_was_moving: bool) {
+    /// so the frame a step drains on is still a moving frame -- the trigger
+    /// frame included, which [`OverworldPhase::step`] reports itself.
+    pub(super) fn advance_lock_handoff(&mut self, player_was_moving: bool) {
         let ApproachStage::LockHandoff { frames_left } = self.stage else {
             return;
         };
