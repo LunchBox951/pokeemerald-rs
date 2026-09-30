@@ -519,8 +519,8 @@ fn wait_for_device_tail(
 /// is stale: the wait ends early as a finish, as [`wait_for_device_tail`] would. That only
 /// ever shortens the wait, so `policy.max_wait` still bounds it; a
 /// `derived_tail` longer than `max_wait` therefore never takes effect. A poll
-/// past the deadline reports the timeout even when the fallback would
-/// otherwise qualify.
+/// more than one `policy.interval` past the deadline reports the timeout even
+/// when the fallback would otherwise qualify.
 /// `progress`, `stream_errors`, `now`, and `sleep` are injected as in
 /// [`push_frame`].
 fn wait_for_measured_tail(
@@ -569,17 +569,20 @@ fn wait_for_measured_tail(
         }
         last_sounded = Some(sounded);
         last_submitted = Some(submitted);
-        // A poll landing exactly on the deadline may still finish, so a
-        // `derived_tail` equal to `max_wait` (both capped at one second) can
-        // take the fallback; any later poll reports the timeout.
-        if current > deadline {
-            return Err(DrainError::MeasuredTailTimedOut { sounded, target });
-        }
         let callbacks_alive = last_advance.zip(run_start).is_some_and(|(at, start)| {
             current.duration_since(at) <= derived_tail / 2
                 && at.duration_since(start) >= derived_tail / 4
         });
-        if callbacks_alive && current.duration_since(stale_since) >= derived_tail {
+        let stale_tail_elapsed =
+            callbacks_alive && current.duration_since(stale_since) >= derived_tail;
+        // The production `derived_tail` is capped at `max_wait`, so the
+        // fallback qualifies only at the deadline; a real sleep overshoots
+        // it. One poll interval of slack lets that qualifying poll finish,
+        // while any other poll past the deadline reports the timeout.
+        if current > deadline && !(stale_tail_elapsed && current <= deadline + policy.interval) {
+            return Err(DrainError::MeasuredTailTimedOut { sounded, target });
+        }
+        if stale_tail_elapsed {
             return Ok(());
         }
         sleep(policy.interval);
@@ -1472,6 +1475,33 @@ mod tests {
         );
 
         assert!(result.is_ok(), "the capped production tail must not fail");
+    }
+
+    #[test]
+    fn sleep_overshoot_at_the_capped_tail_still_takes_the_fallback() {
+        let policy = RetryPolicy {
+            interval: std::time::Duration::from_millis(10),
+            max_wait: std::time::Duration::from_millis(200),
+        };
+        let clock = Rc::new(RefCell::new(std::time::Instant::now()));
+        let submitted = Cell::new(4_u64);
+
+        let result = wait_for_measured_tail(
+            4,
+            std::time::Duration::from_millis(200),
+            &policy,
+            || Some(progress(0, submitted.get())),
+            || 0,
+            || *clock.borrow(),
+            |duration| {
+                // Every sleep overshoots by 3 ms, so no poll lands exactly on
+                // the deadline.
+                *clock.borrow_mut() += duration + std::time::Duration::from_millis(3);
+                submitted.set(submitted.get() + 1);
+            },
+        );
+
+        assert!(result.is_ok(), "a few ms of overshoot must not fail");
     }
 
     #[test]
