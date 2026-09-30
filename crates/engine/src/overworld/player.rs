@@ -236,6 +236,7 @@ impl PlayerState {
     /// Ends a standstill turn's busy window early, as `PlayerFreeze` does
     /// the instant the field lock engages (`field_player_avatar.c:1039-1046`).
     pub const fn clear_turn_lock(&mut self) {
+        self.rest_pose = RestPose::Standing;
         self.turn_frames_remaining = 0;
     }
 
@@ -287,11 +288,8 @@ impl PlayerState {
         self.transit_cadence.animation_disabled
     }
 
-    /// Returns whether a finished slide crossing still holds its paused
-    /// forward-foot pose: `ForcedMovement_Slide` sets `disableAnim`, which
-    /// pauses the sprite's animation (`field_player_avatar.c:525-531`,
-    /// `event_object_movement.c:7302-7306`) and leaves it paused at rest until
-    /// the next step, turn, or scripted facing restarts it.
+    /// Returns whether a finished slide still holds its paused forward-foot
+    /// pose until the next keypad poll or field lock (`event_object_movement.c:7302-7306`).
     #[must_use]
     pub const fn slide_pose_held(&self) -> bool {
         matches!(self.rest_pose, RestPose::SlidePaused)
@@ -436,11 +434,14 @@ impl PlayerState {
             self.movement_direction = self.facing;
         }
 
+        // Any poll that reaches the keypad, idle included, restarts the sprite
+        // animation: `ForcedMovement_None` sets `enableAnim`, and a no-input poll
+        // faces the standing cell (`field_player_avatar.c:429-440, 588-600`).
+        self.rest_pose = RestPose::Standing;
         let Some(direction) = input else {
             self.movement_streak_active = false;
             return StepOutcome::Idle;
         };
-        self.rest_pose = RestPose::Standing;
 
         // Checked before the turn branch; see `step`'s doc for the contract.
         // `supported_mover.is_none()` excludes a tile already handled above.
@@ -2461,6 +2462,55 @@ mod tests {
             "a slide locks the rendered facing to its pre-dispatch value: the \
              avatar moves east while still facing south"
         );
+    }
+
+    /// `ForcedMovement_Slide`'s `disableAnim` leaves the sprite paused after
+    /// the crossing (`field_player_avatar.c:525-531`); the next keypad poll or
+    /// scripted facing restarts the animation
+    /// (`event_object_movement.c:7302-7313`) `(behavioral-fidelity)`.
+    #[test]
+    fn a_finished_slide_holds_its_pose_until_the_next_movement() {
+        let runtime = slide_east_runtime();
+        let mut player = PlayerState::new((2, 1), 3, Direction::South);
+        player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS);
+        for _ in 0..WALK_FRAMES_PER_TILE {
+            player.tick();
+        }
+        player.step(None, &runtime, &no_connections, &NO_FLAGS);
+        assert!(!player.slide_pose_held(), "the pose is held only at rest");
+        for _ in 0..SLIDE_FRAMES_PER_TILE {
+            player.tick();
+        }
+        assert!(!player.in_transit());
+        assert!(player.slide_pose_held());
+        player.tick();
+        assert!(player.slide_pose_held(), "ticking alone keeps the pause");
+
+        let mut idle = player;
+        idle.step(None, &runtime, &no_connections, &NO_FLAGS);
+        assert!(
+            !idle.slide_pose_held(),
+            "an idle poll faces the standing cell"
+        );
+
+        let mut stepping = player;
+        stepping.step(Some(Direction::East), &runtime, &no_connections, &NO_FLAGS);
+        assert!(!stepping.slide_pose_held(), "a step restarts the animation");
+
+        let mut turning = player;
+        turning.step(Some(Direction::North), &runtime, &no_connections, &NO_FLAGS);
+        assert!(!turning.slide_pose_held(), "a turn restarts the animation");
+
+        let mut frozen = player;
+        frozen.clear_turn_lock();
+        assert!(
+            !frozen.slide_pose_held(),
+            "a field lock faces the standing cell"
+        );
+
+        let mut faced = player;
+        faced.face(Direction::West);
+        assert!(!faced.slide_pose_held(), "a scripted facing restarts it");
     }
 
     /// A walk-east tile, for proving facing follows dispatch on a family

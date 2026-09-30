@@ -476,10 +476,8 @@ mod tests {
         );
     }
 
-    /// Production order: `advance_player_one_frame` steps then ticks before
-    /// `compose_frame` renders, so every presented slide frame -- including
-    /// the eighth, on which the crossing completes -- must show the paused
-    /// forward-foot pose.
+    /// Every presented slide frame, the completing eighth included, holds the
+    /// paused forward foot when the tick runs before the render.
     #[test]
     fn frame_for_holds_the_slide_pose_through_tick_before_render() {
         let runtime = slide_runtime();
