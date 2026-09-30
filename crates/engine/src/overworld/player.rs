@@ -64,6 +64,14 @@ impl TransitCadence {
     };
 }
 
+/// The sprite pose the player holds at rest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RestPose {
+    Standing,
+    /// A finished slide crossing's animation-paused forward foot.
+    SlidePaused,
+}
+
 /// The player's tile position, facing, elevation, and step progress.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PlayerState {
@@ -81,6 +89,7 @@ pub struct PlayerState {
     transit_direction: Option<Direction>,
     forced_movement_armed: bool,
     forced_input_tile_center: bool,
+    rest_pose: RestPose,
 }
 
 /// The result of one directional-input poll.
@@ -177,6 +186,7 @@ impl PlayerState {
             transit_direction: None,
             forced_movement_armed: false,
             forced_input_tile_center: false,
+            rest_pose: RestPose::Standing,
         }
     }
 
@@ -218,6 +228,7 @@ impl PlayerState {
     /// movement direction with it as upstream's `SetObjectEventDirection`
     /// does (`event_object_movement.c:2361-2371`).
     pub const fn face(&mut self, direction: Direction) {
+        self.rest_pose = RestPose::Standing;
         self.facing = direction;
         self.movement_direction = direction;
     }
@@ -276,6 +287,16 @@ impl PlayerState {
         self.transit_cadence.animation_disabled
     }
 
+    /// Returns whether a finished slide crossing still holds its paused
+    /// forward-foot pose: `ForcedMovement_Slide` sets `disableAnim`, which
+    /// pauses the sprite's animation (`field_player_avatar.c:525-531`,
+    /// `event_object_movement.c:7302-7306`) and leaves it paused at rest until
+    /// the next step, turn, or scripted facing restarts it.
+    #[must_use]
+    pub const fn slide_pose_held(&self) -> bool {
+        matches!(self.rest_pose, RestPose::SlidePaused)
+    }
+
     /// Returns whether a tile crossing is still in progress.
     #[must_use]
     pub const fn in_transit(&self) -> bool {
@@ -313,6 +334,9 @@ impl PlayerState {
             if *frames >= self.transit_cadence.duration {
                 self.transit_frames = None;
                 self.transit_direction = None;
+                if self.transit_cadence.animation_disabled {
+                    self.rest_pose = RestPose::SlidePaused;
+                }
             }
         }
         // The landing's tile-center frame is the first whole frame it spends
@@ -416,6 +440,7 @@ impl PlayerState {
             self.movement_streak_active = false;
             return StepOutcome::Idle;
         };
+        self.rest_pose = RestPose::Standing;
 
         // Checked before the turn branch; see `step`'s doc for the contract.
         // `supported_mover.is_none()` excludes a tile already handled above.
@@ -585,6 +610,7 @@ impl PlayerState {
         self.transit_direction = Some(direction);
         self.transit_frames = Some(0);
         self.transit_cadence = cadence;
+        self.rest_pose = RestPose::Standing;
         // The dispatch set guards movement, the wider input set holds field
         // input (`field_player_avatar.c:144-164`, `metatile_behavior.c:338-351`).
         self.forced_movement_armed = is_forced_movement(landing.destination_behavior);
@@ -592,25 +618,10 @@ impl PlayerState {
         Ok(())
     }
 
-    /// Dispatches a supported standing forced tile's mover before the
-    /// keypad is read, as `DoForcedMovement` does on a clear route
-    /// (`field_player_avatar.c:443-470`). Returns `None` when the forced
-    /// route is blocked; [`forced_movement_armed`](Self::forced_movement_armed)
-    /// stays set, since the player is still standing on the same tile --
-    /// `GetForcedMovementByMetatileBehavior` re-reads the standing tile's
-    /// behavior fresh every poll rather than latching a one-time verdict
-    /// (`:409-426`), so a later poll retries once whatever blocked this one
-    /// (a wall, an object event) no longer does. `step`'s ordinary keypad
-    /// handling runs next on the original poll -- upstream's `FALSE` arm
-    /// falls through to `MovePlayerAvatarUsingKeypadInput` the same way
-    /// (`:344-348`). `movement_streak_active` and (unless
-    /// `mover.locks_facing`) `facing` change only on a successful
-    /// dispatch: `DoForcedMovement`'s collision branch leaves
-    /// `runningState` untouched on a blocked route (`:443-462`), so a
-    /// blocked attempt must not suppress the keypad's own turn-in-place
-    /// the way a real step would. That branch's `ForcedMovement_None`
-    /// resets `movement_direction` to `facing`, which `step` applies
-    /// after this returns `None`.
+    /// Dispatches a supported standing forced tile's mover before the keypad
+    /// is read (`field_player_avatar.c:443-470`). A blocked route returns
+    /// `None` and leaves the guard armed and `runningState` untouched, so the
+    /// keypad falls through as upstream's `FALSE` arm does (`:344-348`).
     fn dispatch_forced_mover(
         &mut self,
         mover: ForcedMover,

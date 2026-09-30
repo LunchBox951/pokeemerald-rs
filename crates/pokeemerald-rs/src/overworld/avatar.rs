@@ -199,9 +199,10 @@ fn frame_for(player: &PlayerState) -> (u16, bool) {
         Direction::North => FRAME_NORTH_STEP,
         Direction::West | Direction::East => FRAME_WEST_STEP,
     };
-    let walking_foot_forward = player.in_transit()
-        && (player.transit_animation_disabled()
-            || player.step_progress() < player.transit_duration() / 2);
+    let walking_foot_forward = player.slide_pose_held()
+        || (player.in_transit()
+            && (player.transit_animation_disabled()
+                || player.step_progress() < player.transit_duration() / 2));
     let turning_foot_forward = player.turn_frames_remaining() >= TURN_FRAME_HALF;
     let frame = if walking_foot_forward || turning_foot_forward {
         step
@@ -472,6 +473,32 @@ mod tests {
             !player.in_transit(),
             "fixture precondition: an eight-frame slide crossing must drain \
              in exactly eight frames"
+        );
+    }
+
+    /// Production order: `advance_player_one_frame` steps then ticks before
+    /// `compose_frame` renders, so every presented slide frame -- including
+    /// the eighth, on which the crossing completes -- must show the paused
+    /// forward-foot pose.
+    #[test]
+    fn frame_for_holds_the_slide_pose_through_tick_before_render() {
+        let runtime = slide_runtime();
+        let no_connections = |_: assets::MapId| -> Option<(u16, u16)> { None };
+
+        let mut player = player_at((1, 2), Direction::East);
+        player.step(Some(Direction::East), &runtime, &no_connections, &NO_FLAGS);
+        for _ in 0..WALK_FRAMES_PER_TILE {
+            player.tick();
+        }
+        let mut rendered = Vec::new();
+        for _ in 0..engine::overworld::SLIDE_FRAMES_PER_TILE {
+            player.step(None, &runtime, &no_connections, &NO_FLAGS);
+            player.tick();
+            rendered.push(frame_for(&player));
+        }
+        assert_eq!(
+            rendered,
+            vec![(FRAME_WEST_STEP, true); usize::from(engine::overworld::SLIDE_FRAMES_PER_TILE)]
         );
     }
 
