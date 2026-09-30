@@ -449,6 +449,33 @@ fn legacy_active_image_with_stale_elevation_byte_does_not_restore_it() {
     );
 }
 
+/// Issue #801 review, adjudicated: a settled player never holds a current
+/// elevation that differs from an ordinary landing cell -- the finished step
+/// shifts previous coords to current and re-runs `ObjectEventUpdateElevation`
+/// (`src/event_object_movement.c:2162,8120-8130,7759-7771`) -- so an active
+/// `(0, 0)` pair on an elevation-3 cell is not upstream state and the continue
+/// re-derives the cell's pair rather than restoring it.
+#[test]
+fn an_active_pair_the_ordinary_landing_cell_cannot_hold_is_not_restored() {
+    let mut block1 = new_game_phase().save1.clone();
+    let block2 = new_game_phase().save2.clone();
+    block1.pos.x = 4;
+    block1.pos.y = 4;
+    block1.player_object_event = block1
+        .player_object_event
+        .with_elevation_byte(0x00)
+        .with_active(true);
+    let scene = crate::overworld::tests::synthetic_scene_with_cell_elevation(10, 10, (4, 4), 3);
+    let resumed = OverworldPhase::from_saved(scene, new_game::SPAWN_MAP_ID, block1, block2);
+    assert_eq!(
+        (
+            resumed.player.elevation(),
+            resumed.player.previous_elevation()
+        ),
+        (3, 3)
+    );
+}
+
 /// The I-6 acceptance round trip: new game -> play -> start-menu save ->
 /// reload -> continue, with the restored phase matching what was saved.
 #[test]

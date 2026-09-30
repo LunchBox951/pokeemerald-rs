@@ -51,10 +51,11 @@ pub(super) fn saved_facing(block1: &SaveBlock1, fallback: Direction) -> Directio
 /// cell's own -- 0 on a transition cell -- and retains it on a multi-level
 /// (15) cell. An upstream-origin image re-saved by an older writer keeps its
 /// `active` bit and elevation byte while the position moves on, so a current
-/// elevation the cell forbids marks that stale byte. Upstream can also hold a
-/// mismatched current after stepping off a multi-level cell, but the save
-/// records no previous coordinates, so that state is indistinguishable from a
-/// stale byte and re-derives from the cell.
+/// elevation the cell forbids marks that stale byte. A settled player never
+/// holds a mismatch on an ordinary cell: a finished step sets previous coords
+/// to current (`ShiftStillObjectEventCoords`, `event_object_movement.c:2162`)
+/// before `DoGroundEffects_OnFinishStep` re-runs the update (`:8120-8130`), so
+/// the mid-step multi-level early return does not survive to a save.
 pub(super) fn saved_elevations(
     block1: &SaveBlock1,
     cell_elevation: Option<u8>,
