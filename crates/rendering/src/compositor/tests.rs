@@ -9,5 +9,6 @@ mod effects;
 mod oam;
 mod obj_mosaic;
 mod objwin;
+mod palette;
 mod priority;
 mod window;
