@@ -64,6 +64,15 @@ const OBJECT_EVENT_ACTIVE_BIT: u8 = 0x01;
 const PLAYER_OBJECT_EVENT_MARKER_OFFSET: usize =
     OBJECT_EVENTS_OFFSET + PLAYER_OBJECT_EVENT_INDEX * OBJECT_EVENT_LEN + 0x03;
 const OBJECT_EVENT_MARKER_BIT: u8 = 0x80;
+// `ObjectEvent::currentCoords` (include/global.fieldmap.h:235), map-local plus
+// `MAP_OFFSET` (include/fieldmap.h:18), as upstream keeps it against
+// `SaveBlock1::pos`. Written from `pos` with the elevation pair, so a writer
+// that moves `pos` but preserves the entry leaves the two disagreeing.
+const OBJECT_EVENT_CURRENT_COORDS_OFFSET: usize = 0x10;
+const PLAYER_OBJECT_EVENT_COORDS_OFFSET: usize = OBJECT_EVENTS_OFFSET
+    + PLAYER_OBJECT_EVENT_INDEX * OBJECT_EVENT_LEN
+    + OBJECT_EVENT_CURRENT_COORDS_OFFSET;
+const MAP_OFFSET: i16 = 7;
 const DIRECTION_NIBBLE_MASK: u8 = 0x0F;
 const MOVEMENT_DIRECTION_SHIFT: u32 = 4;
 const SERIALIZED_U16_LEN: usize = std::mem::size_of::<u16>();
@@ -116,6 +125,15 @@ pub struct Coords16 {
     pub x: i16,
     /// Y coordinate.
     pub y: i16,
+}
+
+/// The `currentCoords` an object at save position `pos` holds
+/// (`pos` plus `MAP_OFFSET`, wrapping like the `s16` upstream stores).
+fn object_event_coords(pos: Coords16) -> Coords16 {
+    Coords16 {
+        x: pos.x.wrapping_add(MAP_OFFSET),
+        y: pos.y.wrapping_add(MAP_OFFSET),
+    }
 }
 
 impl Coords16 {
@@ -482,6 +500,8 @@ impl SaveBlock1 {
         if self.player_object_event.active {
             base[PLAYER_OBJECT_EVENT_ACTIVE_OFFSET] |= OBJECT_EVENT_ACTIVE_BIT;
             base[PLAYER_OBJECT_EVENT_MARKER_OFFSET] |= OBJECT_EVENT_MARKER_BIT;
+            base[PLAYER_OBJECT_EVENT_COORDS_OFFSET..][..Coords16::LEN]
+                .copy_from_slice(&object_event_coords(self.pos).to_bytes());
         }
     }
 
@@ -510,8 +530,9 @@ impl SaveBlock1 {
             *value = read_u16(bytes, VARS_OFFSET + index * SERIALIZED_U16_LEN);
         }
 
+        let pos = Coords16::from_bytes(&bytes[POSITION_OFFSET..POSITION_OFFSET + Coords16::LEN]);
         Ok(Self {
-            pos: Coords16::from_bytes(&bytes[POSITION_OFFSET..POSITION_OFFSET + Coords16::LEN]),
+            pos,
             location: WarpData::from_bytes(
                 &bytes[LOCATION_OFFSET..LOCATION_OFFSET + WarpData::LEN],
             ),
@@ -532,7 +553,10 @@ impl SaveBlock1 {
             .with_elevation_byte(bytes[PLAYER_OBJECT_EVENT_ELEVATIONS_OFFSET])
             .with_active(
                 bytes[PLAYER_OBJECT_EVENT_ACTIVE_OFFSET] & OBJECT_EVENT_ACTIVE_BIT != 0
-                    && bytes[PLAYER_OBJECT_EVENT_MARKER_OFFSET] & OBJECT_EVENT_MARKER_BIT != 0,
+                    && bytes[PLAYER_OBJECT_EVENT_MARKER_OFFSET] & OBJECT_EVENT_MARKER_BIT != 0
+                    && Coords16::from_bytes(
+                        &bytes[PLAYER_OBJECT_EVENT_COORDS_OFFSET..][..Coords16::LEN],
+                    ) == object_event_coords(pos),
             ),
         })
     }
@@ -819,6 +843,10 @@ mod tests {
             &[
                 PLAYER_OBJECT_EVENT_ACTIVE_OFFSET,
                 PLAYER_OBJECT_EVENT_MARKER_OFFSET,
+                PLAYER_OBJECT_EVENT_COORDS_OFFSET,
+                PLAYER_OBJECT_EVENT_COORDS_OFFSET + 1,
+                PLAYER_OBJECT_EVENT_COORDS_OFFSET + 2,
+                PLAYER_OBJECT_EVENT_COORDS_OFFSET + 3,
             ],
         );
         assert_eq!(
@@ -854,6 +882,37 @@ mod tests {
         assert!(
             !decoded.player_object_event.active,
             "no marker, not trusted"
+        );
+    }
+
+    #[test]
+    fn a_pre_801_resave_that_moves_pos_leaves_the_elevation_pair_untrusted() {
+        let key = 0xA1B2_C3D4;
+        let mut block = SaveBlock1 {
+            pos: Coords16 { x: 4, y: 4 },
+            ..SaveBlock1::default()
+        };
+        block.player_object_event.active = true;
+        block.player_object_event.current_elevation = 0;
+        block.player_object_event.previous_elevation = 3;
+        let mut bytes = block.to_bytes(key);
+        assert!(
+            SaveBlock1::from_bytes(&bytes, key)
+                .unwrap()
+                .player_object_event
+                .active,
+            "a fresh save is trusted"
+        );
+
+        // The pre-#801 writer: new position and directions over the loaded
+        // bytes, every other byte -- marker, elevations, coords -- preserved.
+        bytes[POSITION_OFFSET..POSITION_OFFSET + Coords16::LEN]
+            .copy_from_slice(&Coords16 { x: 5, y: 4 }.to_bytes());
+        let reopened = SaveBlock1::from_bytes(&bytes, key).unwrap();
+        assert_eq!(reopened.pos, Coords16 { x: 5, y: 4 });
+        assert!(
+            !reopened.player_object_event.active,
+            "a pair written for another position must not be trusted"
         );
     }
 
