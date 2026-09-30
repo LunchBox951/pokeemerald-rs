@@ -2045,3 +2045,32 @@ fn a_staged_pointer_carried_into_a_swapped_output_directory_is_never_published()
         "the swapped-in directory's visible pointer is untouched"
     );
 }
+
+/// A held output directory whose handle cannot be duplicated stages nothing,
+/// so the failure never leaves a pointer file behind under an unpredictable
+/// name it does not report.
+#[cfg(unix)]
+#[test]
+fn a_directory_handle_that_cannot_be_duplicated_leaves_no_staged_pointer() {
+    let output_dir = scratch_path("pointer-dir-clone-failure");
+    let _guard = ScratchGuard(output_dir.clone());
+    std::fs::create_dir_all(&output_dir).unwrap();
+    let dir = std::fs::File::open(&output_dir).unwrap();
+    let pointer_path = output_dir.join("scene.generation.tmp.0000000001");
+    let error = super::staging::stage_in_with(&dir, &pointer_path, b"scene\n", |_| {
+        Err(std::io::Error::other("descriptor table full"))
+    })
+    .err()
+    .expect("a failed duplication must fail staging");
+    let left: Vec<_> = std::fs::read_dir(&output_dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert!(
+        left.is_empty()
+            || error
+                .to_string()
+                .contains(&pointer_path.display().to_string()),
+        "staging left {left:?} behind without reporting it: {error}"
+    );
+}

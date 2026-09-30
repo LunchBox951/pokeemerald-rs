@@ -57,8 +57,22 @@ pub(super) fn stage_in(
     path: &Path,
     bytes: &[u8],
 ) -> std::io::Result<StagedFile> {
+    stage_in_with(dir, path, bytes, std::fs::File::try_clone)
+}
+
+/// [`stage_in`] with the directory handle's duplication supplied, so tests can
+/// fail it.
+#[cfg(unix)]
+pub(super) fn stage_in_with(
+    dir: &std::fs::File,
+    path: &Path,
+    bytes: &[u8],
+    clone_dir: impl FnOnce(&std::fs::File) -> std::io::Result<std::fs::File>,
+) -> std::io::Result<StagedFile> {
+    // Duplicated before the create, so a failure here leaves nothing behind.
+    let dir = clone_dir(dir)?;
     let fd = rustix::fs::openat(
-        dir,
+        &dir,
         entry_name(path)?,
         rustix::fs::OFlags::WRONLY
             | rustix::fs::OFlags::CREATE
@@ -74,7 +88,7 @@ pub(super) fn stage_in(
     )?;
     let mut staged = stage_file(std::fs::File::from(fd), path, bytes);
     if let Ok(staged) = &mut staged {
-        staged.dir = Some(dir.try_clone()?);
+        staged.dir = Some(dir);
     }
     staged
 }
