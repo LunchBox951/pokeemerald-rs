@@ -73,6 +73,14 @@ const PLAYER_OBJECT_EVENT_COORDS_OFFSET: usize = OBJECT_EVENTS_OFFSET
     + PLAYER_OBJECT_EVENT_INDEX * OBJECT_EVENT_LEN
     + OBJECT_EVENT_CURRENT_COORDS_OFFSET;
 const MAP_OFFSET: i16 = 7;
+// `ObjectEvent::initialCoords` (include/global.fieldmap.h:234): four bytes
+// the model never reads and the pre-#801 writer never touched, reused to hold
+// the save counter of the write that stored the pair. Every writer advances
+// the counter, so a save by a build that does not stamp it leaves a stale one.
+const OBJECT_EVENT_INITIAL_COORDS_OFFSET: usize = 0x0C;
+const PLAYER_OBJECT_EVENT_GENERATION_OFFSET: usize = OBJECT_EVENTS_OFFSET
+    + PLAYER_OBJECT_EVENT_INDEX * OBJECT_EVENT_LEN
+    + OBJECT_EVENT_INITIAL_COORDS_OFFSET;
 const DIRECTION_NIBBLE_MASK: u8 = 0x0F;
 const MOVEMENT_DIRECTION_SHIFT: u32 = 4;
 const SERIALIZED_U16_LEN: usize = std::mem::size_of::<u16>();
@@ -452,6 +460,23 @@ impl Default for SaveBlock1 {
 }
 
 impl SaveBlock1 {
+    /// Records `counter`, the save counter the write carries, in the player
+    /// object's entry when [`SavedObjectEvent::active`] is set.
+    pub(crate) fn stamp_generation(&self, bytes: &mut [u8; Self::PAYLOAD_LEN], counter: u32) {
+        if self.player_object_event.active {
+            bytes[PLAYER_OBJECT_EVENT_GENERATION_OFFSET..][..SERIALIZED_U32_LEN]
+                .copy_from_slice(&counter.to_le_bytes());
+        }
+    }
+
+    /// Withdraws trust in the saved elevation pair unless the stamp in `bytes`
+    /// equals `counter`, the counter of the slot they were read from.
+    pub(crate) fn require_generation(&mut self, bytes: &[u8], counter: u32) {
+        if read_u32(bytes, PLAYER_OBJECT_EVENT_GENERATION_OFFSET) != counter {
+            self.player_object_event.active = false;
+        }
+    }
+
     /// Serialized byte length of a complete primary block.
     pub const PAYLOAD_LEN: usize = 0x3D88;
 
