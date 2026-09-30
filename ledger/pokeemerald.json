@@ -26175,6 +26175,12 @@
           "spec": "S-5",
           "status": "rewritten"
         },
+        "MapEntryObjectEventInitialization": {
+          "reason": "OverworldPhase owns one live collection seeded in template order from the scene-resolved MapEvents on construction and continue, and atomically replaces it on successful warp or connection rebind; failed transitions retain the prior collection. Spawn-window and hide-flag admission, sprite setup and NPC movement remain outside this slice.",
+          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        },
         "ObjectEventUpdateElevation": {
           "reason": "Current-vs-previous elevation split (issue #218): PlayerState::adopt_elevation reproduces the early-return-on-either-side-ELEVATION_MULTI_LEVEL guard and the unconditional currentElevation adopt / non-transition-only previousElevation adopt, called from both of PlayerState::step's arrival sites (same-map and connection-crossing). previousElevation now exposed as PlayerState::previous_elevation, feeding the player OBJ's elevation-driven render priority. Modelled in two halves (issue #379): PlayerState::adopt_elevation is the per-step half above, and engine::overworld::MapRuntime::arrival_elevation (crates/engine/src/overworld/map_runtime.rs) is the spawn/arrival half, the single grid read shared by warp_destination_position (a resolved warp event), OverworldPhase::warp_to_position (an explicit-coordinate warp), and saved_tile_placement (a continued save). arrival_elevation takes one coordinate pair rather than two because a freshly spawned object event's previousCoords are seeded equal to its currentCoords (InitObjectEventStateFromTemplate, :1309-1312), so the prevElevation half of the :7764-7765 guard collapses into the curElevation half there; it returns ELEVATION_TRANSITION for a multi-level landing cell rather than modelling upstream's no-op early return, since the player it places is fresh and upstream's own spawn-time initialization already left that field at ELEVATION_TRANSITION.",
           "rust_target": "crates/engine/src/overworld/player.rs",
