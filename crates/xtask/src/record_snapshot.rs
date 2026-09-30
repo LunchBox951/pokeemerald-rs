@@ -190,13 +190,19 @@ where
         after_rgb_staged,
         || {},
         || {},
+        || {},
     )
 }
 
 /// [`publish_generation`] with a hook between the staging directory's last
 /// identity check and its promoting rename, so tests can land a replacement in
-/// that gap, and one between the promoted generation's identity check and
-/// the pointer's staging, so they can swap `output_dir` there.
+/// that gap, one between the promoted generation's identity check and
+/// the pointer's staging, so they can swap `output_dir` there, and one just
+/// before the pointer's publication, past the last pre-publish check.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "three test hooks beside the inputs; production passes no-ops through `publish_generation`"
+)]
 fn publish_generation_with<F>(
     scene: Scene,
     output_dir: &Path,
@@ -205,6 +211,7 @@ fn publish_generation_with<F>(
     after_rgb_staged: F,
     before_rename: impl FnOnce(),
     after_generation_check: impl FnOnce(),
+    before_pointer_publish: impl FnOnce(),
 ) -> Result<(PathBuf, PathBuf), RecordSnapshotError>
 where
     F: FnOnce() -> Result<(), RecordSnapshotError>,
@@ -277,7 +284,10 @@ where
         // in that same directory, not in whatever the pathname names now.
         // Unix stages and renames the pointer relative to the held directory,
         // so it cannot land elsewhere; only Windows resolves the pathname
-        // again and repeats the check around the rename.
+        // again and repeats the check before the rename. Every platform
+        // repeats it after: the returned payload paths are pathnames under
+        // `output_dir`, so success is reported only while that pathname still
+        // names the directory that received the generation.
         require_output_dir()?;
         // See `staging` for the guard this stage-then-publish pair provides.
         let staged_pointer = stage_pointer(
@@ -289,12 +299,11 @@ where
         if cfg!(not(unix)) {
             require_output_dir()?;
         }
+        before_pointer_publish();
         staged_pointer
             .publish(&pointer_path)
             .map_err(|e| RecordSnapshotError::Write(pointer_path.clone(), e.to_string()))?;
-        if cfg!(not(unix)) {
-            require_output_dir()?;
-        }
+        require_output_dir()?;
         Ok((
             generation_dir.join(format!("{}.rgb", scene.name())),
             generation_dir.join(format!("{}.meta", scene.name())),

@@ -1881,6 +1881,7 @@ fn a_staging_directory_replaced_after_verification_is_promoted_but_never_publish
         || Ok(()),
         swap_the_staging_directory,
         || {},
+        || {},
     )
     .unwrap_err()
     .to_string();
@@ -1941,6 +1942,7 @@ fn an_output_directory_swapped_after_the_generation_check_is_never_published_int
         || Ok(()),
         || {},
         swap_the_output_directory,
+        || {},
     )
     .unwrap_err()
     .to_string();
@@ -2116,6 +2118,7 @@ fn a_generation_promoted_into_a_swapped_output_directory_is_never_published() {
         || Ok(()),
         carry_the_staging_directory_into_a_swapped_replacement,
         restore_the_held_directory,
+        || {},
     );
 
     for dir in [&output_dir, &held_aside, &replacement_aside] {
@@ -2164,4 +2167,60 @@ fn a_generation_check_resolves_through_the_held_output_directory() {
         .require_entry_in(&output_claim, &generation)
         .unwrap_err();
     assert_eq!(error.kind(), std::io::ErrorKind::NotFound, "{error}");
+}
+
+/// An output directory swapped out after the last pre-publish check still
+/// receives no pointer, since the pointer renames within the held directory; but
+/// the returned payload paths are pathnames under `output_dir`, so success is
+/// reported only if that pathname still names the held directory.
+#[cfg(unix)]
+#[test]
+fn an_output_directory_swapped_before_the_pointer_publication_is_not_reported_as_published() {
+    let scene = Scene::MainMenuNewGame;
+    let root = scratch_path("output-dir-swapped-before-pointer-rename-report");
+    let _guard = ScratchGuard(root.clone());
+    let output_dir = root.join("out");
+    let replacement = root.join("replacement");
+    let carried = root.join("carried");
+    std::fs::create_dir_all(&output_dir).unwrap();
+    std::fs::create_dir_all(&replacement).unwrap();
+
+    let swap_the_output_directory = || {
+        std::fs::rename(&output_dir, &carried).unwrap();
+        std::fs::rename(&replacement, &output_dir).unwrap();
+    };
+    let result = super::publish_generation_with(
+        scene,
+        &output_dir,
+        b"rgb-bytes",
+        b"meta-bytes",
+        || Ok(()),
+        || {},
+        || {},
+        swap_the_output_directory,
+    );
+
+    if let Ok((rgb, meta)) = &result {
+        assert!(
+            rgb.is_file() && meta.is_file(),
+            "success reported {} and {}, absent from the directory now at output_dir",
+            rgb.display(),
+            meta.display()
+        );
+    }
+    let error = result
+        .expect_err("a swapped output directory must not be reported as published")
+        .to_string();
+    assert!(
+        error.contains("no longer matches the capture's held directory")
+            && error.contains("last known path"),
+        "{error}"
+    );
+    let generation =
+        visible_generation(&carried, scene).expect("the held directory got its pointer");
+    assert_eq!(
+        std::fs::read(generation.join(format!("{}.rgb", scene.name()))).unwrap(),
+        b"rgb-bytes",
+        "the pointer in the held directory names the generation beside it"
+    );
 }
