@@ -284,10 +284,11 @@ struct Resolution {
 ///
 /// Split from `scan_slot` so the reading of each sector and the judgement
 /// made from the whole slot stay separately legible.
-// Each flag is one independent "has this property held so far" tally over a
-// single loop, not a configuration a caller passes: grouping them into
-// sub-structs would only rename the tallies.
-#[allow(clippy::struct_excessive_bools)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is an independent tally over one scan loop, not caller configuration; \
+              grouping them into sub-structs would only rename the tallies"
+)]
 struct SlotSurvey {
     signature_valid: bool,
     valid_ids: u32,
