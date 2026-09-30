@@ -2422,7 +2422,7 @@ fn healing_a_loaded_lead_restores_hp_pp_and_status_and_remeasures_the_offset() {
     loaded.battler_mut().apply_damage(u32::MAX);
     loaded.battler_mut().deduct_pp(0).unwrap();
 
-    loaded.heal_whole_lead(&dex).expect("PP restores");
+    loaded.heal_whole_lead(&dex, 1).expect("PP restores");
 
     let healed = loaded.record();
     assert_eq!(healed.status, 0);
@@ -2433,6 +2433,26 @@ fn healing_a_loaded_lead_restores_hp_pp_and_status_and_remeasures_the_offset() {
         i32::from(healed.hp) - i32::try_from(loaded.battler().stats().max_hp).unwrap()
     );
     assert!(loaded.battler().moves().iter().all(|slot| slot.pp > 0));
+}
+
+#[test]
+fn healing_a_residual_lead_beyond_the_stored_count_leaves_it_unhealed() {
+    let dex = Dex::new();
+    let mut fainted = treecko_fixture();
+    fainted.apply_damage(u32::MAX);
+    let mut residual = to_save_pokemon(&dex, &torchic_before_learning_peck());
+    residual.status = 0x8;
+    let party = [to_save_pokemon(&dex, &fainted), residual];
+    let mut loaded = LoadedLead::load(&dex, &party).expect("slot 1 is usable");
+    assert_eq!(loaded.slot(), 1);
+    loaded.battler_mut().apply_damage(3);
+    let damaged_hp = loaded.battler().current_hp();
+
+    loaded.heal_whole_lead(&dex, 1).expect("nothing to restore");
+
+    assert_eq!(loaded.battler().current_hp(), damaged_hp);
+    assert_eq!(loaded.record().status, 0x8);
+    assert!(loaded.record().hp < loaded.record().max_hp);
 }
 
 #[test]

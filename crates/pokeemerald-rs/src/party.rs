@@ -790,6 +790,12 @@ impl LoadedLead {
     /// merges. When the PP heal fails the record keeps its cleared status
     /// and full HP but is not merged, and the error is returned.
     ///
+    /// `player_party_count` is the save's stored count. A lead at or beyond a
+    /// nonzero count is not an occupied slot, which `HealPlayerParty` skips
+    /// (`pokeemerald/src/script_pokemon_util.c:30-58`): it is not healed, only
+    /// re-measured and merged so the re-scan keeps its session state. A zero
+    /// count still heals, so an unsaved new game keeps slot 0 (#800).
+    ///
     /// # Errors
     ///
     /// Returns the battler's PP-restore error.
@@ -797,7 +803,18 @@ impl LoadedLead {
     /// # Panics
     ///
     /// Panics if the battler is lent out through [`Self::take_battler`].
-    pub(crate) fn heal_whole_lead(&mut self, dex: &Dex) -> Result<(), battle::BattleError> {
+    pub(crate) fn heal_whole_lead(
+        &mut self,
+        dex: &Dex,
+        player_party_count: u8,
+    ) -> Result<(), battle::BattleError> {
+        let stored_count = usize::from(player_party_count);
+        if stored_count != 0 && self.slot >= stored_count {
+            let battler = self.battler.as_ref().expect(LENT_OUT);
+            self.lead_hp_hidden_by_load = hp_hidden_by_load(dex, &self.record, battler);
+            self.merge_and_save(dex);
+            return Ok(());
+        }
         self.record.status = 0;
         self.record.hp = self.record.max_hp;
         let battler = self.battler.as_mut().expect(LENT_OUT);
