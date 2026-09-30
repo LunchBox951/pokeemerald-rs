@@ -148,6 +148,7 @@ fn main() -> ExitCode {
     let tail_result = wait_for_device_tail_or_measured(
         submitted_target,
         derived_tail,
+        callback_period(output.max_callback_frames(), output.device_sample_rate()),
         &policy,
         || output.playback_progress(),
         || output.stream_errors(),
@@ -497,6 +498,18 @@ fn wait_for_device_tail(
     }
 }
 
+/// One callback period at the device's largest advertised callback buffer;
+/// [`Duration::ZERO`] when the device advertises none.
+fn callback_period(max_callback_frames: Option<usize>, device_sample_rate: u32) -> Duration {
+    match max_callback_frames {
+        Some(frames) if device_sample_rate > 0 => {
+            let frames = u32::try_from(frames).unwrap_or(u32::MAX);
+            Duration::from_secs_f64(f64::from(frames) / f64::from(device_sample_rate))
+        }
+        _ => Duration::ZERO,
+    }
+}
+
 /// Wait, within `policy`, for the device's measured playback position (see
 /// `platform::AudioOutput::playback_progress`) to reach `target` submitted
 /// device frames, polling `progress` at `policy.interval`.
@@ -515,7 +528,9 @@ fn wait_for_device_tail(
 /// submitted frames advanced steadily through the tail's second half (a run of
 /// advances no more than half of `derived_tail` apart, spanning at least a
 /// quarter of it, and still current; `derived_tail` covers two callback
-/// periods, so a healthy callback lands inside that gap), the callbacks are alive and the estimate
+/// periods, so a healthy callback lands inside that gap; when one
+/// `callback_period` exceeds half the tail, as under the [`DEVICE_TAIL_MAX`]
+/// cap, a single current advance suffices), the callbacks are alive and the estimate
 /// is stale: the wait ends early as a finish, as [`wait_for_device_tail`] would. That only
 /// ever shortens the wait, so `policy.max_wait` still bounds it; a
 /// `derived_tail` longer than `max_wait` therefore never takes effect. A poll
@@ -523,9 +538,14 @@ fn wait_for_device_tail(
 /// when the fallback would otherwise qualify.
 /// `progress`, `stream_errors`, `now`, and `sleep` are injected as in
 /// [`push_frame`].
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the injected clock, sleep, and stream hooks are the seam the tests drive"
+)]
 fn wait_for_measured_tail(
     target: u64,
     derived_tail: Duration,
+    callback_period: Duration,
     policy: &RetryPolicy,
     mut progress: impl FnMut() -> Option<PlaybackProgress>,
     mut stream_errors: impl FnMut() -> u64,
@@ -569,9 +589,13 @@ fn wait_for_measured_tail(
         }
         last_sounded = Some(sounded);
         last_submitted = Some(submitted);
+        // Two callbacks need not fit in the tail: a capped tail can be shorter
+        // than two periods of a large-buffer device, where one observed
+        // advance is all the deadline leaves room for.
+        let one_period_fills_the_tail = callback_period > derived_tail / 2;
         let callbacks_alive = last_advance.zip(run_start).is_some_and(|(at, start)| {
-            current.duration_since(at) <= derived_tail / 2
-                && at.duration_since(start) >= derived_tail / 4
+            current.duration_since(at) <= derived_tail.max(callback_period) / 2
+                && (one_period_fills_the_tail || at.duration_since(start) >= derived_tail / 4)
         });
         let stale_tail_elapsed =
             callbacks_alive && current.duration_since(stale_since) >= derived_tail;
@@ -596,9 +620,14 @@ fn wait_for_measured_tail(
 /// [`device_tail_wait`] result) via [`wait_for_device_tail`] -- see the
 /// module docs. `progress`, `stream_errors`, `now`, and `sleep` are
 /// injected as in [`push_frame`].
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the injected clock, sleep, and stream hooks are the seam the tests drive"
+)]
 fn wait_for_device_tail_or_measured(
     submitted_target: Option<u64>,
     derived_tail: Duration,
+    callback_period: Duration,
     policy: &RetryPolicy,
     progress: impl FnMut() -> Option<PlaybackProgress>,
     stream_errors: impl FnMut() -> u64,
@@ -609,6 +638,7 @@ fn wait_for_device_tail_or_measured(
         wait_for_measured_tail(
             target,
             derived_tail,
+            callback_period,
             policy,
             progress,
             stream_errors,
@@ -1229,6 +1259,7 @@ mod tests {
         let result = wait_for_measured_tail(
             4,
             std::time::Duration::from_millis(200),
+            std::time::Duration::ZERO,
             &policy,
             || Some(progress(0, submitted.get())),
             || {
@@ -1287,6 +1318,7 @@ mod tests {
         let result = wait_for_measured_tail(
             4,
             std::time::Duration::from_millis(200),
+            std::time::Duration::ZERO,
             &policy,
             || Some(progress(0, submitted.get())),
             || 0,
@@ -1325,6 +1357,7 @@ mod tests {
         let result = wait_for_measured_tail(
             4,
             std::time::Duration::from_millis(200),
+            std::time::Duration::ZERO,
             &policy,
             || Some(progress(0, submitted.get())),
             || 0,
@@ -1361,6 +1394,7 @@ mod tests {
         let result = wait_for_measured_tail(
             4,
             std::time::Duration::from_millis(200),
+            std::time::Duration::ZERO,
             &policy,
             || Some(progress(0, submitted.get())),
             || 0,
@@ -1394,6 +1428,7 @@ mod tests {
         let result = wait_for_measured_tail(
             4,
             std::time::Duration::from_millis(200),
+            std::time::Duration::ZERO,
             &policy,
             || Some(progress(0, submitted.get())),
             || 0,
@@ -1432,6 +1467,7 @@ mod tests {
         let result = wait_for_measured_tail(
             4,
             std::time::Duration::from_millis(370),
+            std::time::Duration::ZERO,
             &policy,
             || Some(progress(0, submitted.get())),
             || 0,
@@ -1464,6 +1500,7 @@ mod tests {
         let result = wait_for_measured_tail(
             4,
             std::time::Duration::from_millis(200),
+            std::time::Duration::ZERO,
             &policy,
             || Some(progress(0, submitted.get())),
             || 0,
@@ -1489,6 +1526,7 @@ mod tests {
         let result = wait_for_measured_tail(
             4,
             std::time::Duration::from_millis(200),
+            std::time::Duration::ZERO,
             &policy,
             || Some(progress(0, submitted.get())),
             || 0,
@@ -1502,6 +1540,35 @@ mod tests {
         );
 
         assert!(result.is_ok(), "a few ms of overshoot must not fail");
+    }
+
+    #[test]
+    fn a_capped_tail_with_a_600_ms_callback_period_takes_the_fallback() {
+        let policy = RetryPolicy {
+            interval: std::time::Duration::from_millis(10),
+            max_wait: std::time::Duration::from_secs(1),
+        };
+        let start = std::time::Instant::now();
+        let clock = Rc::new(RefCell::new(start));
+        let submitted = Cell::new(4_u64);
+
+        let result = wait_for_measured_tail(
+            4,
+            std::time::Duration::from_secs(1),
+            std::time::Duration::from_millis(600),
+            &policy,
+            || Some(progress(0, submitted.get())),
+            || 0,
+            || *clock.borrow(),
+            |duration| {
+                *clock.borrow_mut() += duration;
+                if clock.borrow().duration_since(start).as_millis() == 600 {
+                    submitted.set(submitted.get() + 1);
+                }
+            },
+        );
+
+        assert!(result.is_ok(), "a healthy slow callback must not fail");
     }
 
     #[test]
@@ -1524,6 +1591,7 @@ mod tests {
         let result = wait_for_measured_tail(
             4,
             std::time::Duration::from_millis(200),
+            std::time::Duration::ZERO,
             &policy,
             || Some(progress(4, 4)),
             || 0,
@@ -1545,6 +1613,7 @@ mod tests {
         let result = wait_for_measured_tail(
             4,
             std::time::Duration::from_millis(200),
+            std::time::Duration::ZERO,
             &policy,
             || Some(progress(0, 0)), // stationary, well short of the target
             || 1,                    // already unhealthy
@@ -1573,6 +1642,7 @@ mod tests {
         let result = wait_for_measured_tail(
             4,
             std::time::Duration::from_millis(200),
+            std::time::Duration::ZERO,
             &policy,
             || Some(progress(0, 0)), // never reaches the target
             || 0,
@@ -1609,6 +1679,7 @@ mod tests {
         let result = wait_for_device_tail_or_measured(
             Some(4),
             std::time::Duration::from_millis(200),
+            std::time::Duration::ZERO,
             &policy,
             || Some(progress(4, 4)),
             || 0,
@@ -1632,6 +1703,7 @@ mod tests {
         let result = wait_for_device_tail_or_measured(
             None,
             derived_tail,
+            std::time::Duration::ZERO,
             &policy,
             || panic!("the measured path must not be consulted once no target is available"),
             || 0,
