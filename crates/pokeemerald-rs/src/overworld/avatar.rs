@@ -4,7 +4,7 @@
 //! in `object_event_pic_tables.h`; `FRAME_*` follow `object_event_anims.h`.
 
 use assets::{ImageRef, PaletteRef};
-use engine::overworld::{Direction, PlayerState, TURN_IN_PLACE_FRAMES, WALK_FRAMES_PER_TILE};
+use engine::overworld::{Direction, PlayerState, TURN_IN_PLACE_FRAMES};
 use engine::save::PlayerGender;
 use rendering::{Bgr555, BitDepth, OamEntry, ObjShape, Palette};
 
@@ -34,7 +34,6 @@ const FRAME_SOUTH_STEP: u16 = 3;
 const FRAME_NORTH_STEP: u16 = 5;
 const FRAME_WEST_STEP: u16 = 7;
 
-const STEP_FRAME_HALF: u8 = WALK_FRAMES_PER_TILE / 2;
 /// A standstill turn runs `sAnim_GoFast*`, whose cells last half as long as
 /// `sAnim_Go*`'s: the forward foot, then the standing pose.
 const TURN_FRAME_HALF: u8 = TURN_IN_PLACE_FRAMES / 2;
@@ -200,7 +199,10 @@ fn frame_for(player: &PlayerState) -> (u16, bool) {
         Direction::North => FRAME_NORTH_STEP,
         Direction::West | Direction::East => FRAME_WEST_STEP,
     };
-    let walking_foot_forward = player.in_transit() && player.step_progress() < STEP_FRAME_HALF;
+    let walking_foot_forward = player.slide_pose_held()
+        || (player.in_transit()
+            && (player.transit_animation_disabled()
+                || player.step_progress() < player.transit_duration() / 2));
     let turning_foot_forward = player.turn_frames_remaining() >= TURN_FRAME_HALF;
     let frame = if walking_foot_forward || turning_foot_forward {
         step
@@ -231,9 +233,10 @@ pub(super) fn player_entry(player: &PlayerState) -> OamEntry {
 mod tests {
     use super::*;
     use engine::event_data::EventData;
-    use engine::overworld::TilePos;
+    use engine::overworld::{TilePos, WALK_FRAMES_PER_TILE};
 
     const NO_FLAGS: EventData = EventData::new();
+    const STEP_FRAME_HALF: u8 = WALK_FRAMES_PER_TILE / 2;
     use rendering::Tileset;
 
     #[test]
@@ -377,6 +380,123 @@ mod tests {
             frame_for(&player),
             (FRAME_SOUTH_STAND, false),
             "the second half of a step shows the standing frame"
+        );
+    }
+
+    /// A 5x5 map whose `(2, 2)` tile is `MB_SLIDE_EAST`, otherwise plain
+    /// ground, for proving [`frame_for`] reads the active crossing's own
+    /// duration rather than assuming [`WALK_FRAMES_PER_TILE`].
+    fn slide_runtime() -> engine::overworld::MapRuntime<'static> {
+        let mut bytes = Vec::new();
+        for y in 0..5u16 {
+            for x in 0..5u16 {
+                bytes.extend_from_slice(
+                    &assets::MetatileCell {
+                        metatile_id: u16::from((x, y) == (2, 2)),
+                        collision: 0,
+                        elevation: 3,
+                    }
+                    .pack()
+                    .to_le_bytes(),
+                );
+            }
+        }
+        let attrs = [
+            u16::from(engine::overworld::metatile_behavior::MB_NORMAL).to_le_bytes(),
+            u16::from(engine::overworld::metatile_behavior::MB_SLIDE_EAST).to_le_bytes(),
+        ]
+        .concat();
+        let (_, header, events) = flat_test_map();
+        let bytes = Box::leak(bytes.into_boxed_slice());
+        let attrs = Box::leak(attrs.into_boxed_slice());
+        let header = Box::leak(Box::new(header));
+        let events = Box::leak(Box::new(events));
+        engine::overworld::MapRuntime::new(
+            assets::MapId("MAP_TEST"),
+            header,
+            events,
+            assets::MapLayout {
+                id: assets::LayoutId("MAP_TEST"),
+                name: "MapTest",
+                width: 5,
+                height: 5,
+                primary_tileset: "gTileset_General",
+                secondary_tileset: "gTileset_General",
+            }
+            .grid(bytes)
+            .unwrap(),
+            assets::MetatileAttributeTable::new(attrs),
+            assets::MetatileAttributeTable::new(&[]),
+        )
+    }
+
+    /// `ForcedMovement_Slide` sets `disableAnim` before `PlayerWalkFast`
+    /// (`field_player_avatar.c:526-532`), so the go-fast animation's first,
+    /// forward-foot cell is held for the whole slide crossing -- unlike an
+    /// ordinary step or a dispatched walk tile, which switch to the
+    /// standing frame at their own crossing's halfway point
+    /// `(behavioral-fidelity)`.
+    #[test]
+    fn frame_for_holds_the_forward_foot_for_the_whole_slide_crossing() {
+        let runtime = slide_runtime();
+        let no_connections = |_: assets::MapId| -> Option<(u16, u16)> { None };
+
+        let mut player = player_at((1, 2), Direction::East);
+        assert!(
+            matches!(
+                player.step(Some(Direction::East), &runtime, &no_connections, &NO_FLAGS),
+                engine::overworld::StepOutcome::Advanced { .. }
+            ),
+            "fixture precondition: the slide tile is entered like ordinary ground"
+        );
+        for _ in 0..WALK_FRAMES_PER_TILE {
+            player.tick();
+        }
+        assert!(
+            matches!(
+                player.step(None, &runtime, &no_connections, &NO_FLAGS),
+                engine::overworld::StepOutcome::Advanced { .. }
+            ),
+            "fixture precondition: the no-input poll dispatches the slide \
+             tile's own crossing"
+        );
+
+        for elapsed in 0..engine::overworld::SLIDE_FRAMES_PER_TILE {
+            assert_eq!(
+                frame_for(&player),
+                (FRAME_WEST_STEP, true),
+                "slide frame {elapsed} must hold the paused forward-foot pose"
+            );
+            player.tick();
+        }
+        assert!(
+            !player.in_transit(),
+            "fixture precondition: an eight-frame slide crossing must drain \
+             in exactly eight frames"
+        );
+    }
+
+    /// Every presented slide frame, the completing eighth included, holds the
+    /// paused forward foot when the tick runs before the render.
+    #[test]
+    fn frame_for_holds_the_slide_pose_through_tick_before_render() {
+        let runtime = slide_runtime();
+        let no_connections = |_: assets::MapId| -> Option<(u16, u16)> { None };
+
+        let mut player = player_at((1, 2), Direction::East);
+        player.step(Some(Direction::East), &runtime, &no_connections, &NO_FLAGS);
+        for _ in 0..WALK_FRAMES_PER_TILE {
+            player.tick();
+        }
+        let mut rendered = Vec::new();
+        for _ in 0..engine::overworld::SLIDE_FRAMES_PER_TILE {
+            player.step(None, &runtime, &no_connections, &NO_FLAGS);
+            player.tick();
+            rendered.push(frame_for(&player));
+        }
+        assert_eq!(
+            rendered,
+            vec![(FRAME_WEST_STEP, true); usize::from(engine::overworld::SLIDE_FRAMES_PER_TILE)]
         );
     }
 
