@@ -14,6 +14,7 @@
 use assets::trainers::TrainerId;
 use assets::{AbilityId, MoveId, MoveTarget};
 
+use crate::confuse;
 use crate::damage::{BattleRng, STRUGGLE};
 use crate::defense_curl;
 use crate::dex::Dex;
@@ -85,7 +86,8 @@ pub(crate) fn ensure_executable(dex: &Dex, move_id: MoveId) -> Result<(), Battle
                 || multi_hit::ensure_resolvable(dex, move_id).is_ok()
                 || flag_move::ensure_resolvable(dex, move_id).is_ok()
                 || defense_curl::ensure_resolvable(dex, move_id).is_ok()
-                || paralyze::ensure_resolvable(dex, move_id).is_ok();
+                || paralyze::ensure_resolvable(dex, move_id).is_ok()
+                || confuse::ensure_resolvable(dex, move_id).is_ok();
             if accepted_by_specialized_pipeline {
                 Ok(())
             } else {

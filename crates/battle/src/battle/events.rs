@@ -353,6 +353,49 @@ pub enum BattleEvent {
         /// The move whose poison was reflected.
         move_id: MoveId,
     },
+    /// A move inflicted a fresh confusion volatile on its target, whether
+    /// directly (`BattleScript_EffectConfuse`'s own `seteffectprimary`,
+    /// `data/battle_scripts_1.s:918-922`) or through a damaging hit's
+    /// trailing chance draw (`EFFECT_CONFUSE_HIT`'s trampoline into the same
+    /// `SetMoveEffect` `MOVE_EFFECT_CONFUSION` case,
+    /// `src/battle_script_commands.c:2528`-`:2544`).
+    ///
+    /// This is distinct from [`BattleEvent::Confused`], which announces an
+    /// *already*-active duration ahead of that action's own coin draw rather
+    /// than a fresh application.
+    ConfusionInflicted {
+        /// Whether the player used the move.
+        by_player: bool,
+        /// The move that inflicted confusion.
+        move_id: MoveId,
+    },
+    /// A direct confuse move's target already carried an active confusion
+    /// volatile, so no accuracy draw occurred
+    /// (`BattleScript_AlreadyConfused`, `data/battle_scripts_1.s:918`-`:922`).
+    ///
+    /// An on-hit trampoline's own already-confused defender instead lands
+    /// silently: the hit still connects, but nothing beyond its own
+    /// [`BattleEvent::Hit`] is reported, matching an already-poisoned
+    /// defender's identical silent no-land.
+    AlreadyConfused {
+        /// Whether the player used the move.
+        by_player: bool,
+        /// The move that targeted the already-confused battler.
+        move_id: MoveId,
+    },
+    /// A direct confuse move exited through `BattleScript_OwnTempoPrevents`
+    /// (`data/battle_scripts_1.s:4152`-`:4156`): the target's
+    /// [`AbilityId::OWN_TEMPO`] blocked the move before the accuracy draw.
+    ///
+    /// An on-hit trampoline's own Own-Tempo defender instead lands silently,
+    /// the same way an already-confused trampoline target does; see
+    /// [`BattleEvent::AlreadyConfused`]'s docs.
+    OwnTempoProtected {
+        /// Whether the player used the move.
+        by_player: bool,
+        /// The move the ability blocked.
+        move_id: MoveId,
+    },
     /// `STRINGID_PKMNHURTBYPOISON` (`data/battle_scripts_1.s:3736-3737`).
     HurtByPoison {
         /// Whether the player's battler was hurt.

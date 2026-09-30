@@ -1,9 +1,9 @@
 use super::{
-    ensure_admissible, is_poison_hit_effect, is_secondary_effect,
+    ensure_admissible, is_confuse_hit_effect, is_poison_hit_effect, is_secondary_effect,
     resolve_synchronize_poison_reflection, spend_effect_chance_draw, trampoline_for_effect,
-    SynchronizePoisonReflectionOutcome, EFFECT_DOUBLE_EDGE, EFFECT_FAKE_OUT, EFFECT_OVERHEAT,
-    EFFECT_POISON_HIT, EFFECT_POISON_TAIL, EFFECT_RAPID_SPIN, EFFECT_SUPERPOWER,
-    SECONDARY_TRAMPOLINES,
+    SecondaryApplication, SynchronizePoisonReflectionOutcome, EFFECT_CONFUSE_HIT,
+    EFFECT_DOUBLE_EDGE, EFFECT_FAKE_OUT, EFFECT_OVERHEAT, EFFECT_POISON_HIT, EFFECT_POISON_TAIL,
+    EFFECT_RAPID_SPIN, EFFECT_SUPERPOWER, SECONDARY_TRAMPOLINES,
 };
 use crate::damage::STRUGGLE;
 use crate::dex::Dex;
@@ -26,6 +26,8 @@ const TACKLE: MoveId = MoveId(33);
 const POISON_STING: MoveId = MoveId(40);
 const POISON_TAIL: MoveId = MoveId(342);
 const THUNDER_SHOCK: MoveId = MoveId(84);
+/// `MOVE_PSYBEAM` (`EFFECT_CONFUSE_HIT`), 100 accuracy, 10% chance, Psychic type.
+const PSYBEAM: MoveId = MoveId(60);
 const DRAW_WRAPPING_BELOW_THUNDER_SHOCK_CHANCE: u16 = 109;
 const DRAW_WRAPPING_ONTO_THUNDER_SHOCK_CHANCE: u16 = 110;
 const FAKE_OUT: MoveId = MoveId(252);
@@ -53,6 +55,8 @@ const DRATINI: u16 = 147;
 const MACHOP: u16 = 66;
 /// `SPECIES_MILOTIC`: Marvel Scale in its primary ability slot.
 const MILOTIC: u16 = 329;
+/// `SPECIES_SPINDA`: Own Tempo in its only ability slot.
+const SPINDA: u16 = 308;
 
 const PRIMARY_ABILITY_PERSONALITY: u32 = 0;
 
@@ -269,7 +273,7 @@ fn a_plain_move_discards_one_draw_even_when_the_hit_has_no_effect() {
             let mut rng = SequenceRng::new([value]);
             assert_eq!(
                 spend_effect_chance_draw(&dex, TACKLE, had_effect, &defender, &mut rng),
-                Ok(false)
+                Ok(SecondaryApplication::None)
             );
             assert_eq!(rng.draws(), 1, "value {value}, had_effect {had_effect}");
         }
@@ -303,7 +307,7 @@ fn a_successful_unported_effect_chance_fails_closed_after_drawing() {
     let mut failed_roll_rng = SequenceRng::new([10]);
     assert_eq!(
         spend_effect_chance_draw(&dex, THUNDER_SHOCK, true, &defender, &mut failed_roll_rng),
-        Ok(false)
+        Ok(SecondaryApplication::None)
     );
     assert_eq!(failed_roll_rng.draws(), 1);
 
@@ -316,7 +320,7 @@ fn a_successful_unported_effect_chance_fails_closed_after_drawing() {
             &defender,
             &mut ineffective_hit_rng
         ),
-        Ok(false)
+        Ok(SecondaryApplication::None)
     );
     assert_eq!(ineffective_hit_rng.draws(), 1);
 }
@@ -351,7 +355,7 @@ fn a_successful_struggle_fails_closed_without_drawing() {
     let mut ineffective_hit_rng = SequenceRng::new([0]);
     assert_eq!(
         spend_effect_chance_draw(&dex, STRUGGLE, false, &defender, &mut ineffective_hit_rng),
-        Ok(false)
+        Ok(SecondaryApplication::None)
     );
     assert_eq!(ineffective_hit_rng.draws(), 1);
 }
@@ -381,7 +385,7 @@ fn effect_chance_uses_the_draw_modulo_one_hundred() {
             &defender,
             &mut failed_wrapped_roll_rng,
         ),
-        Ok(false)
+        Ok(SecondaryApplication::None)
     );
 }
 
@@ -413,7 +417,7 @@ fn a_certain_effect_draws_only_when_the_hit_has_no_effect() {
     let mut rng = SequenceRng::new([9999]);
     assert_eq!(
         spend_effect_chance_draw(&dex, FAKE_OUT, false, &defender, &mut rng),
-        Ok(false)
+        Ok(SecondaryApplication::None)
     );
     assert_eq!(rng.draws(), 1);
 }
@@ -430,14 +434,14 @@ fn poison_sting_applies_poison_on_a_successful_roll_against_an_eligible_target()
     let mut succeeds = SequenceRng::new([29]);
     assert_eq!(
         spend_effect_chance_draw(&dex, POISON_STING, true, &defender, &mut succeeds),
-        Ok(true)
+        Ok(SecondaryApplication::Poison)
     );
     assert_eq!(succeeds.draws(), 1, "exactly one chance draw");
 
     let mut fails = SequenceRng::new([30]);
     assert_eq!(
         spend_effect_chance_draw(&dex, POISON_STING, true, &defender, &mut fails),
-        Ok(false)
+        Ok(SecondaryApplication::None)
     );
     assert_eq!(fails.draws(), 1);
 }
@@ -449,7 +453,7 @@ fn an_ineffective_hit_never_poisons_regardless_of_the_roll() {
     let mut rng = SequenceRng::new([29]);
     assert_eq!(
         spend_effect_chance_draw(&dex, POISON_STING, false, &defender, &mut rng),
-        Ok(false)
+        Ok(SecondaryApplication::None)
     );
     assert_eq!(
         rng.draws(),
@@ -465,7 +469,7 @@ fn a_poison_type_defender_is_immune_but_still_consumes_the_draw() {
     let mut rng = SequenceRng::new([29]);
     assert_eq!(
         spend_effect_chance_draw(&dex, POISON_STING, true, &defender, &mut rng),
-        Ok(false)
+        Ok(SecondaryApplication::None)
     );
     assert_eq!(rng.draws(), 1);
 }
@@ -477,7 +481,7 @@ fn a_steel_type_defender_is_immune_but_still_consumes_the_draw() {
     let mut rng = SequenceRng::new([29]);
     assert_eq!(
         spend_effect_chance_draw(&dex, POISON_STING, true, &defender, &mut rng),
-        Ok(false)
+        Ok(SecondaryApplication::None)
     );
     assert_eq!(rng.draws(), 1);
 }
@@ -490,7 +494,7 @@ fn an_already_statused_defender_refuses_a_second_status_but_still_draws() {
     let mut rng = SequenceRng::new([29]);
     assert_eq!(
         spend_effect_chance_draw(&dex, POISON_STING, true, &defender, &mut rng),
-        Ok(false)
+        Ok(SecondaryApplication::None)
     );
     assert_eq!(rng.draws(), 1);
 }
@@ -503,7 +507,7 @@ fn an_immunity_ability_defender_blocks_poison_silently_but_still_draws() {
     let mut rng = SequenceRng::new([29]);
     assert_eq!(
         spend_effect_chance_draw(&dex, POISON_STING, true, &defender, &mut rng),
-        Ok(false)
+        Ok(SecondaryApplication::None)
     );
     assert_eq!(rng.draws(), 1);
 }
@@ -516,7 +520,7 @@ fn a_shield_dust_defender_blocks_poison_silently_but_still_draws() {
     let mut rng = SequenceRng::new([29]);
     assert_eq!(
         spend_effect_chance_draw(&dex, POISON_STING, true, &defender, &mut rng),
-        Ok(false)
+        Ok(SecondaryApplication::None)
     );
     assert_eq!(rng.draws(), 1);
 }
@@ -700,5 +704,150 @@ fn ensure_admissible_propagates_an_unknown_move() {
     assert_eq!(
         ensure_admissible(&dex, unknown, &attacker, &defender),
         Err(BattleError::UnknownMove(unknown))
+    );
+}
+
+#[test]
+fn only_effect_confuse_hit_is_the_modelled_confuse_trampoline() {
+    let dex = Dex::new();
+    assert!(is_confuse_hit_effect(EFFECT_CONFUSE_HIT));
+    assert_eq!(dex.move_data(PSYBEAM).unwrap().effect, EFFECT_CONFUSE_HIT);
+    assert!(!is_confuse_hit_effect(EFFECT_POISON_HIT));
+}
+
+#[test]
+fn psybeam_applies_confuse_on_a_successful_roll_against_an_eligible_target() {
+    let dex = Dex::new();
+    let defender = mon(&dex, ZIGZAGOON);
+    assert_eq!(dex.move_data(PSYBEAM).unwrap().secondary_effect_chance, 10);
+
+    let mut succeeds = SequenceRng::new([9]);
+    assert_eq!(
+        spend_effect_chance_draw(&dex, PSYBEAM, true, &defender, &mut succeeds),
+        Ok(SecondaryApplication::Confuse)
+    );
+    assert_eq!(succeeds.draws(), 1, "exactly one chance draw");
+
+    let mut fails = SequenceRng::new([10]);
+    assert_eq!(
+        spend_effect_chance_draw(&dex, PSYBEAM, true, &defender, &mut fails),
+        Ok(SecondaryApplication::None)
+    );
+    assert_eq!(fails.draws(), 1);
+}
+
+#[test]
+fn an_ineffective_hit_never_confuses_regardless_of_the_roll() {
+    let dex = Dex::new();
+    let defender = mon(&dex, ZIGZAGOON);
+    let mut rng = SequenceRng::new([9]);
+    assert_eq!(
+        spend_effect_chance_draw(&dex, PSYBEAM, false, &defender, &mut rng),
+        Ok(SecondaryApplication::None)
+    );
+    assert_eq!(
+        rng.draws(),
+        1,
+        "the draw still happens; only its result is discarded"
+    );
+}
+
+#[test]
+fn an_own_tempo_defender_blocks_confuse_silently_but_still_draws() {
+    let dex = Dex::new();
+    let defender = mon(&dex, SPINDA);
+    assert_eq!(defender.ability(), AbilityId::OWN_TEMPO);
+    let mut rng = SequenceRng::new([9]);
+    assert_eq!(
+        spend_effect_chance_draw(&dex, PSYBEAM, true, &defender, &mut rng),
+        Ok(SecondaryApplication::None)
+    );
+    assert_eq!(rng.draws(), 1);
+}
+
+#[test]
+fn an_already_confused_defender_blocks_a_second_confusion_but_still_draws() {
+    let dex = Dex::new();
+    let mut defender = mon(&dex, ZIGZAGOON);
+    defender.volatiles_mut().set_confusion(2);
+    let mut rng = SequenceRng::new([9]);
+    assert_eq!(
+        spend_effect_chance_draw(&dex, PSYBEAM, true, &defender, &mut rng),
+        Ok(SecondaryApplication::None)
+    );
+    assert_eq!(rng.draws(), 1);
+}
+
+#[test]
+fn a_shield_dust_defender_blocks_confuse_silently_but_still_draws() {
+    let dex = Dex::new();
+    let defender = mon(&dex, WURMPLE);
+    assert_eq!(defender.ability(), AbilityId::SHIELD_DUST);
+    let mut rng = SequenceRng::new([9]);
+    assert_eq!(
+        spend_effect_chance_draw(&dex, PSYBEAM, true, &defender, &mut rng),
+        Ok(SecondaryApplication::None)
+    );
+    assert_eq!(rng.draws(), 1);
+}
+
+#[test]
+fn poison_and_confuse_never_both_apply_from_one_call() {
+    let dex = Dex::new();
+    let defender = mon(&dex, ZIGZAGOON);
+    let mut poison_roll = SequenceRng::new([29]);
+    assert_eq!(
+        spend_effect_chance_draw(&dex, POISON_STING, true, &defender, &mut poison_roll),
+        Ok(SecondaryApplication::Poison)
+    );
+    let mut confuse_roll = SequenceRng::new([9]);
+    assert_eq!(
+        spend_effect_chance_draw(&dex, PSYBEAM, true, &defender, &mut confuse_roll),
+        Ok(SecondaryApplication::Confuse)
+    );
+}
+
+#[test]
+fn a_serene_grace_attacker_is_refused_for_a_confuse_hit_before_any_draw() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, DUNSPARCE);
+    assert_eq!(attacker.ability(), AbilityId::SERENE_GRACE);
+    let defender = mon(&dex, ZIGZAGOON);
+    assert_eq!(
+        ensure_admissible(&dex, PSYBEAM, &attacker, &defender),
+        Err(BattleError::UnportedAbilityInteraction(
+            AbilityId::SERENE_GRACE
+        ))
+    );
+}
+
+#[test]
+fn a_serene_grace_attacker_is_admitted_against_an_own_tempo_defender() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, DUNSPARCE);
+    let defender = mon(&dex, SPINDA);
+    assert_eq!(
+        ensure_admissible(&dex, PSYBEAM, &attacker, &defender),
+        Ok(()),
+        "Own Tempo can never change mid-battle, so confusion can never land \
+         regardless of the doubled threshold"
+    );
+}
+
+/// [`ensure_admissible`] deliberately still refuses a Serene Grace attacker
+/// against an *already confused* defender: unlike Own Tempo, that volatile
+/// can clear before this move executes if the defender snaps out on its own
+/// earlier action the same turn.
+#[test]
+fn a_serene_grace_attacker_is_still_refused_against_a_currently_confused_defender() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, DUNSPARCE);
+    let mut defender = mon(&dex, ZIGZAGOON);
+    defender.volatiles_mut().set_confusion(1);
+    assert_eq!(
+        ensure_admissible(&dex, PSYBEAM, &attacker, &defender),
+        Err(BattleError::UnportedAbilityInteraction(
+            AbilityId::SERENE_GRACE
+        ))
     );
 }

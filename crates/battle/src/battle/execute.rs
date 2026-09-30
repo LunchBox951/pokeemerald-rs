@@ -3,6 +3,9 @@
 use assets::{AbilityId, MoveEffect, MoveId, Type};
 
 use crate::ability::huge_power_attack;
+use crate::confuse::{
+    draw_confusion_duration, is_confuse_effect, resolve_confuse_move, ConfuseOutcome,
+};
 use crate::damage::{
     apply_damage_roll, base_damage, BattleRng, DamageInput, MoveCategory, Weather, STRUGGLE,
 };
@@ -17,7 +20,9 @@ use crate::paralyze::{
     is_paralyze_effect, resolve_paralyze_move, resolve_synchronize_reflection, ParalyzeOutcome,
     SynchronizeReflectionOutcome,
 };
-use crate::secondary::{resolve_synchronize_poison_reflection, SynchronizePoisonReflectionOutcome};
+use crate::secondary::{
+    resolve_synchronize_poison_reflection, SecondaryApplication, SynchronizePoisonReflectionOutcome,
+};
 use crate::stat_change::{
     is_stat_change_effect, resolve_stat_change_move, set_stage, StatChangeDirection,
     StatChangeOutcome,
@@ -41,6 +46,7 @@ enum MovePipeline {
     Flag,
     DefenseCurl,
     Paralyze,
+    Confuse,
     OrdinaryHit,
 }
 
@@ -60,6 +66,8 @@ impl MovePipeline {
             Self::DefenseCurl
         } else if is_paralyze_effect(effect) {
             Self::Paralyze
+        } else if is_confuse_effect(effect) {
+            Self::Confuse
         } else {
             Self::OrdinaryHit
         }
@@ -95,6 +103,9 @@ impl Battle {
             }
             MovePipeline::Paralyze => {
                 self.execute_paralyze_move(attacker_is_player, move_id, rng, events)
+            }
+            MovePipeline::Confuse => {
+                self.execute_confuse_move(attacker_is_player, move_id, rng, events)
             }
             MovePipeline::OrdinaryHit => {
                 self.execute_hit_move(attacker_is_player, move_id, rng, events)
@@ -160,21 +171,50 @@ impl Battle {
                 // `seteffectwithchance` precedes `tryfaintmon`
                 // (`data/battle_scripts_1.s:265`-`:266`), but `SetMoveEffect`
                 // leads with an `hp == 0` guard
-                // (`battle_script_commands.c:2261`-`:2264`).
+                // (`battle_script_commands.c:2261`-`:2264`), shared by every
+                // arm the trampoline can reach.
                 let mut poisoned_synchronize_holder = false;
-                if resolution.poisons_defender {
-                    let defender = if attacker_is_player {
-                        &mut self.enemy
-                    } else {
-                        &mut self.player
-                    };
-                    if !defender.is_fainted() {
-                        defender.set_status1(Status1::Poisoned);
-                        poisoned_synchronize_holder = defender.ability() == AbilityId::SYNCHRONIZE;
-                        events.push(BattleEvent::Poisoned {
-                            by_player: attacker_is_player,
-                            move_id,
-                        });
+                match resolution.secondary_effect {
+                    SecondaryApplication::None => {}
+                    SecondaryApplication::Poison => {
+                        let defender = if attacker_is_player {
+                            &mut self.enemy
+                        } else {
+                            &mut self.player
+                        };
+                        if !defender.is_fainted() {
+                            defender.set_status1(Status1::Poisoned);
+                            poisoned_synchronize_holder =
+                                defender.ability() == AbilityId::SYNCHRONIZE;
+                            events.push(BattleEvent::Poisoned {
+                                by_player: attacker_is_player,
+                                move_id,
+                            });
+                        }
+                    }
+                    SecondaryApplication::Confuse => {
+                        let target_fainted = if attacker_is_player {
+                            self.enemy.is_fainted()
+                        } else {
+                            self.player.is_fainted()
+                        };
+                        if !target_fainted {
+                            // The duration draw is inside `SetMoveEffect`'s
+                            // own `hp == 0` guard, not before it, so it only
+                            // happens once the target is known to have
+                            // survived this same hit.
+                            let turns = draw_confusion_duration(rng);
+                            let defender = if attacker_is_player {
+                                &mut self.enemy
+                            } else {
+                                &mut self.player
+                            };
+                            defender.volatiles_mut().set_confusion(turns);
+                            events.push(BattleEvent::ConfusionInflicted {
+                                by_player: attacker_is_player,
+                                move_id,
+                            });
+                        }
                     }
                 }
                 // Struggle's certain `MOVE_EFFECT_RECOIL_25` fires from the
@@ -462,6 +502,62 @@ impl Battle {
                 if defender_ability == AbilityId::SYNCHRONIZE {
                     self.reflect_synchronize_paralysis(attacker_is_player, move_id, events);
                 }
+            }
+        }
+        Ok(())
+    }
+
+    /// A failed accuracy roll reports the same generic [`BattleEvent::Missed`]
+    /// every other pipeline uses ([`Battle::execute_paralyze_move`],
+    /// [`Battle::execute_stat_change_move`], [`Battle::execute_hit_move`]),
+    /// even though upstream's own miss branch for this script
+    /// (`BattleScript_ButItFailed`, `data/battle_scripts_1.s:910,1017`) differs
+    /// textually from theirs: this crate already collapses every accuracy-roll
+    /// failure other than [`crate::hit::classify_accuracy_failure`]'s type-aware
+    /// cases onto one event, so confusion keeps that established convention
+    /// rather than adding a one-off exception.
+    fn execute_confuse_move(
+        &mut self,
+        attacker_is_player: bool,
+        move_id: MoveId,
+        rng: &mut impl BattleRng,
+        events: &mut Vec<BattleEvent>,
+    ) -> Result<(), BattleError> {
+        let outcome = {
+            let (attacker, defender) = self.battlers(attacker_is_player);
+            resolve_confuse_move(&self.dex, move_id, attacker, defender, rng)?
+        };
+
+        match outcome {
+            ConfuseOutcome::OwnTempoProtected => {
+                events.push(BattleEvent::OwnTempoProtected {
+                    by_player: attacker_is_player,
+                    move_id,
+                });
+            }
+            ConfuseOutcome::AlreadyConfused => {
+                events.push(BattleEvent::AlreadyConfused {
+                    by_player: attacker_is_player,
+                    move_id,
+                });
+            }
+            ConfuseOutcome::Miss => {
+                events.push(BattleEvent::Missed {
+                    by_player: attacker_is_player,
+                    move_id,
+                });
+            }
+            ConfuseOutcome::Applied { turns } => {
+                let defender = if attacker_is_player {
+                    &mut self.enemy
+                } else {
+                    &mut self.player
+                };
+                defender.volatiles_mut().set_confusion(turns);
+                events.push(BattleEvent::ConfusionInflicted {
+                    by_player: attacker_is_player,
+                    move_id,
+                });
             }
         }
         Ok(())

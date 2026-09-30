@@ -44,6 +44,12 @@
 //! counts, and names, and nothing else: no payloads, no decompressed data,
 //! no hashes of ROM regions beyond the whole-file SHA-1 `rom_import`
 //! already ships.
+//!
+//! # Completeness
+//!
+//! A fixed asset domain (fonts, tilesets, layouts, interface palettes) is
+//! required, not optional: a pack missing the whole domain is refused
+//! rather than plans built from whichever ids happen to remain.
 
 mod audio;
 mod emit;
@@ -224,12 +230,7 @@ pub fn run(options: &Options) -> Result<GenReport, GenRomProfileError> {
         layouts: layouts::locate(&ctx, &mut lines)?,
         fonts: fonts::locate(&ctx, &mut lines)?,
         text_window: text_window::locate(&ctx, &mut lines)?,
-        interface: palettes::locate_unique(
-            &ctx,
-            &pack.ids_with_prefix("interface/palette/"),
-            &interface_palette_symbol,
-            &mut lines,
-        )?,
+        interface: locate_interface_palettes(&ctx, &mut lines)?,
         audio: audio::locate(&ctx, &mut lines)?,
     };
 
@@ -246,6 +247,26 @@ pub fn run(options: &Options) -> Result<GenReport, GenRomProfileError> {
         map_skipped: map.skipped,
         map_used: map.used,
     })
+}
+
+/// Locate every interface palette the pack holds.
+///
+/// # Errors
+///
+/// [`GenRomProfileError::MissingPackEntry`] if the pack holds no
+/// `interface/palette/*` entries at all, or any other
+/// [`GenRomProfileError`] [`palettes::locate_unique`] raises.
+fn locate_interface_palettes(
+    ctx: &Context<'_>,
+    report: &mut Vec<ReportLine>,
+) -> Result<Vec<plan::PalettePlan>, GenRomProfileError> {
+    let ids = ctx.pack.ids_with_prefix("interface/palette/");
+    if ids.is_empty() {
+        return Err(GenRomProfileError::MissingPackEntry(
+            "interface/palette/*".to_owned(),
+        ));
+    }
+    palettes::locate_unique(ctx, &ids, &interface_palette_symbol, report)
 }
 
 /// What a linker map should say at an interface palette's address.

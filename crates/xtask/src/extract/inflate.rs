@@ -24,6 +24,11 @@ pub enum InflateError {
     /// A back-reference's distance pointed further back than any byte
     /// produced so far.
     DistanceTooFar,
+    /// A back-reference's distance exceeded the DEFLATE history window: for
+    /// a zlib stream, the window RFC 1950 section 2.2 derives from the
+    /// header's `CINFO` field (`2^(CINFO+8)` bytes); for a raw DEFLATE
+    /// stream, RFC 1951 section 3.2.5's 32 KiB maximum.
+    DistanceExceedsWindow,
     /// The zlib header's 2-byte `CMF`/`FLG` pair failed its own checks
     /// (compression method must be 8, `CINFO` must be at most 7,
     /// `(CMF*256+FLG) % 31 == 0`, and `FDICT` — a preset dictionary — is not
@@ -48,6 +53,12 @@ impl fmt::Display for InflateError {
             Self::BadHuffmanTable => write!(f, "inflate: malformed Huffman code table"),
             Self::InvalidCode => write!(f, "inflate: invalid Huffman code"),
             Self::DistanceTooFar => write!(f, "inflate: back-reference distance too far"),
+            Self::DistanceExceedsWindow => {
+                write!(
+                    f,
+                    "inflate: back-reference distance exceeds the DEFLATE window"
+                )
+            }
             Self::BadZlibHeader => write!(f, "inflate: bad zlib header"),
             Self::TrailingData => write!(f, "inflate: trailing data before zlib Adler-32 trailer"),
             Self::AdlerMismatch => write!(f, "inflate: Adler-32 checksum mismatch"),
@@ -59,6 +70,14 @@ impl fmt::Display for InflateError {
 impl std::error::Error for InflateError {}
 
 const MAX_DECOMPRESSED_SIZE: usize = 64 * 1024 * 1024;
+
+/// RFC 1951 section 3.2.5's maximum DEFLATE history window, for a raw
+/// DEFLATE stream with no zlib header to derive a smaller window from. Only
+/// the test-only raw-DEFLATE entry point below uses this directly;
+/// `inflate_zlib` derives its window from the header's `CINFO` field
+/// instead.
+#[cfg(test)]
+const MAX_DEFLATE_WINDOW_SIZE: usize = 32 * 1024;
 
 /// Reads DEFLATE fields in their least-significant-bit-first stream order.
 ///
@@ -359,6 +378,7 @@ fn inflate_block(
     literal_length_table: &HuffmanTable,
     distance_table: &HuffmanTable,
     output: &mut Vec<u8>,
+    window_size: usize,
 ) -> Result<(), InflateError> {
     loop {
         let symbol = literal_length_table.decode(reader)?;
@@ -384,6 +404,9 @@ fn inflate_block(
 
                 if distance > output.len() {
                     return Err(InflateError::DistanceTooFar);
+                }
+                if distance > window_size {
+                    return Err(InflateError::DistanceExceedsWindow);
                 }
                 let source_start = output.len() - distance;
                 for offset in 0..length {
@@ -420,7 +443,7 @@ struct InflateOutcome {
     bit_offset: u32,
 }
 
-fn inflate_with_position(data: &[u8]) -> Result<InflateOutcome, InflateError> {
+fn inflate_with_position(data: &[u8], window_size: usize) -> Result<InflateOutcome, InflateError> {
     let mut reader = BitReader::new(data);
     let mut output = Vec::new();
 
@@ -448,6 +471,7 @@ fn inflate_with_position(data: &[u8]) -> Result<InflateOutcome, InflateError> {
                     &literal_length_table,
                     &distance_table,
                     &mut output,
+                    window_size,
                 )?;
             }
             DYNAMIC_HUFFMAN_BLOCK => {
@@ -457,6 +481,7 @@ fn inflate_with_position(data: &[u8]) -> Result<InflateOutcome, InflateError> {
                     &literal_length_table,
                     &distance_table,
                     &mut output,
+                    window_size,
                 )?;
             }
             _ => return Err(InflateError::ReservedBlockType),
@@ -478,9 +503,11 @@ fn inflate_with_position(data: &[u8]) -> Result<InflateOutcome, InflateError> {
 /// needs the consumed-position tracking `inflate_with_position` returns, so
 /// this discards-the-position convenience wrapper exists only to give tests
 /// a plain `Vec<u8>` result for the raw-DEFLATE (non-zlib) test cases below.
+/// With no zlib header to derive a smaller window from, back-references are
+/// bounded by RFC 1951 section 3.2.5's 32 KiB maximum window.
 #[cfg(test)]
 fn inflate(data: &[u8]) -> Result<Vec<u8>, InflateError> {
-    inflate_with_position(data).map(|outcome| outcome.output)
+    inflate_with_position(data, MAX_DEFLATE_WINDOW_SIZE).map(|outcome| outcome.output)
 }
 
 fn adler32(data: &[u8]) -> u32 {
@@ -511,8 +538,10 @@ const ZLIB_TRAILER_SIZE: usize = 4;
 /// dictionary. Returns [`InflateError::TrailingData`] when complete bytes
 /// separate the final DEFLATE block from the trailer. Returns
 /// [`InflateError::AdlerMismatch`] when the decompressed data does not match
-/// the trailing checksum. Malformed DEFLATE data returns the corresponding
-/// error from the underlying DEFLATE decoder.
+/// the trailing checksum. Returns [`InflateError::DistanceExceedsWindow`]
+/// when a back-reference's distance exceeds the window the header's `CINFO`
+/// field declares (RFC 1950 section 2.2). Malformed DEFLATE data returns the
+/// corresponding error from the underlying DEFLATE decoder.
 pub fn inflate_zlib(data: &[u8]) -> Result<Vec<u8>, InflateError> {
     let &[compression_method_and_flags, flags, ref body @ ..] = data else {
         return Err(InflateError::BadZlibHeader);
@@ -528,6 +557,11 @@ pub fn inflate_zlib(data: &[u8]) -> Result<Vec<u8>, InflateError> {
     {
         return Err(InflateError::BadZlibHeader);
     }
+    // RFC 1950 section 2.2: CINFO is the base-2 logarithm of the DEFLATE
+    // window size, less 8 (a window of 2^(CINFO+8) bytes). CINFO is at most
+    // 7 here (checked above), so this window is at most 32 KiB, RFC 1951
+    // section 3.2.5's own maximum.
+    let window_size = 1usize << (compression_info + 8);
     if body.len() < ZLIB_TRAILER_SIZE {
         return Err(InflateError::UnexpectedEnd);
     }
@@ -538,7 +572,7 @@ pub fn inflate_zlib(data: &[u8]) -> Result<Vec<u8>, InflateError> {
         output,
         byte_pos,
         bit_offset,
-    } = inflate_with_position(deflate_body)?;
+    } = inflate_with_position(deflate_body, window_size)?;
     // A final block can end mid-byte; only whole trailing bytes beyond that
     // partial byte count as residue, since RFC 1951 leaves no framing after
     // `BFINAL` for anything else to legitimately occupy.
@@ -709,6 +743,78 @@ palette pokeemerald the lazy palette fox lazy sprite the pokeemerald fox";
                 257 + hlit
             );
         }
+    }
+
+    #[test]
+    fn zlib_distance_beyond_declared_window_is_rejected() {
+        // CMF=0x08 (CINFO=0, a 256-byte window), FLG=0x1d. A nonfinal stored
+        // block of 257 `A` bytes, then a final fixed block copying length 3
+        // from distance 257, which exceeds the declared window even though
+        // 257 prior bytes have actually been produced.
+        let mut stream = vec![0x08, 0x1d, 0x00, 0x01, 0x01, 0xfe, 0xfe];
+        stream.extend(std::iter::repeat_n(b'A', 257));
+        stream.extend([0x03, 0x06, 0x00, 0x00]);
+        stream.extend(adler32(&[b'A'; 260]).to_be_bytes());
+        assert_eq!(
+            inflate_zlib(&stream).unwrap_err(),
+            InflateError::DistanceExceedsWindow
+        );
+    }
+
+    #[test]
+    fn zlib_distance_at_window_boundary_still_decodes() {
+        // CMF=0x08 (CINFO=0, a 256-byte window), FLG=0x1d, the same declared
+        // window as the rejected stream above. A nonfinal stored block of
+        // 256 `A` bytes fills the window exactly, then a final
+        // dynamic-Huffman block copies length 3 from distance 256 -- the
+        // largest distance the declared window still permits.
+        const OUTPUT_LEN: usize = 259;
+
+        let mut lit_len_lengths = [0u8; 258];
+        lit_len_lengths[256] = 1; // end-of-block
+        lit_len_lengths[257] = 1; // length code (base 3, 0 extra bits)
+        let mut dist_lengths = [0u8; 16];
+        dist_lengths[15] = 1; // distance code (base 193, 6 extra bits)
+
+        let mut raw_lengths = Vec::new();
+        raw_lengths.extend_from_slice(&lit_len_lengths);
+        raw_lengths.extend_from_slice(&dist_lengths);
+
+        // The code-length alphabet only needs to describe the two distinct
+        // raw lengths above (0 and 1); one bit each fills the code space
+        // exactly, so this code-length tree is complete.
+        let mut code_length_lengths = [0u8; 19];
+        code_length_lengths[0] = 1;
+        code_length_lengths[1] = 1;
+        let code_length_codes = canonical_codes(&code_length_lengths);
+
+        let mut writer = BitWriter::new();
+        writer.write_bit(1); // BFINAL
+        writer.write_bits(2, 2); // BTYPE = dynamic
+        writer.write_bits(1, 5); // HLIT = 1 -> 258 literal/length codes
+        writer.write_bits(15, 5); // HDIST = 15 -> 16 distance codes
+        writer.write_bits(15, 4); // HCLEN = 15 -> transmit all 19 order slots
+        for &symbol in &CODE_LENGTH_ORDER {
+            writer.write_bits(u32::from(code_length_lengths[symbol]), 3);
+        }
+        for &raw_length in &raw_lengths {
+            let (code, length) = code_length_codes[usize::from(raw_length)];
+            writer.write_code(code, length);
+        }
+
+        let lit_len_codes = canonical_codes(&lit_len_lengths);
+        let dist_codes = canonical_codes(&dist_lengths);
+        writer.write_code(lit_len_codes[257].0, lit_len_codes[257].1); // length 3
+        writer.write_code(dist_codes[15].0, dist_codes[15].1); // distance base 193
+        writer.write_bits(63, 6); // distance extra bits: 193 + 63 = 256
+        writer.write_code(lit_len_codes[256].0, lit_len_codes[256].1); // end-of-block
+
+        let mut stream = vec![0x08, 0x1d, 0x00, 0x00, 0x01, 0xff, 0xfe];
+        stream.extend(std::iter::repeat_n(b'A', 256));
+        stream.extend(writer.finish());
+        stream.extend(adler32(&vec![b'A'; OUTPUT_LEN]).to_be_bytes());
+
+        assert_eq!(inflate_zlib(&stream).unwrap(), vec![b'A'; OUTPUT_LEN]);
     }
 
     #[test]
