@@ -72,6 +72,44 @@ impl StagedDirClaim {
             .write_all(bytes)
     }
 
+    /// Fails unless `path`'s final component names the held directory inside
+    /// `output`'s held directory. The lookup goes through that directory's
+    /// handle, not the pathname, so a generation carried into whatever the
+    /// output pathname names now cannot pass for one in the held directory.
+    #[cfg(unix)]
+    pub(super) fn require_entry_in(
+        &self,
+        output: &OutputDirClaim,
+        path: &Path,
+    ) -> std::io::Result<()> {
+        let hold = self.hold.as_ref().ok_or_else(|| unpinned_directory(path))?;
+        let identity = rustix::fs::fstat(hold)?;
+        let found = rustix::fs::statat(
+            &output.hold,
+            entry_name(path)?,
+            rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+        )?;
+        if rustix::fs::FileType::from_raw_mode(found.st_mode) != rustix::fs::FileType::Directory
+            || (identity.st_dev, identity.st_ino) != (found.st_dev, found.st_ino)
+        {
+            return Err(std::io::Error::other(format!(
+                "the directory at {} no longer matches the capture's held directory",
+                path.display()
+            )));
+        }
+        Ok(())
+    }
+
+    /// Windows resolves the pathname; see [`OutputDirClaim`] for the residual.
+    #[cfg(not(unix))]
+    pub(super) fn require_entry_in(
+        &self,
+        _output: &OutputDirClaim,
+        path: &Path,
+    ) -> std::io::Result<()> {
+        self.require_path(path)
+    }
+
     // Unix carries the handle through rename. Windows must release its sharing
     // restriction first; preserving identity across that gap is issue #1345.
     #[cfg_attr(
@@ -85,6 +123,16 @@ impl StagedDirClaim {
         #[cfg(windows)]
         self.hold.take();
     }
+}
+
+#[cfg(unix)]
+fn entry_name(path: &Path) -> std::io::Result<&std::ffi::OsStr> {
+    path.file_name().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{} names no directory entry", path.display()),
+        )
+    })
 }
 
 fn unpinned_directory(path: &Path) -> std::io::Error {
@@ -182,14 +230,16 @@ pub(super) fn claim_promoted_dir(path: &Path) -> std::io::Result<StagedDirClaim>
 
 /// Pins the output directory for a whole publication.
 ///
-/// On Unix the pointer is staged and promoted relative to this held
-/// directory ([`Self::stage_pointer`], `staging::StagedFile`), so the
-/// pointer can only land in the directory the claim verified, whatever the
-/// pathname names by then. Windows has no fd-relative rename through the
-/// approved surface, so there the pathname stays in the loop: the hold keeps
-/// the directory from being renamed away, [`Self::require_path`] compares a
-/// fresh open of the path with the held handle, and a swap in the gap between
-/// that check and the pointer's rename remains possible (check-then-act).
+/// On Unix the generation is promoted ([`Self::promote_without_replacement`])
+/// and verified (`StagedDirClaim::require_entry_in`) relative to this held
+/// directory, and the pointer is staged and promoted relative to it as well
+/// ([`Self::stage_pointer`], `staging::StagedFile`), so the pointer can only
+/// land in the directory the claim verified, beside the generation it names,
+/// whatever the pathname names by then. Windows has no fd-relative rename
+/// through the approved surface, so there the pathname stays in the loop: the
+/// hold keeps the directory from being renamed away, [`Self::require_path`]
+/// compares a fresh open of the path with the held handle, and a swap in the
+/// gap between a check and a rename remains possible (check-then-act).
 pub(super) struct OutputDirClaim {
     hold: std::fs::File,
 }
@@ -218,6 +268,41 @@ impl OutputDirClaim {
         #[cfg(not(any(unix, windows)))]
         let _ = path;
         Ok(())
+    }
+
+    /// Renames `staged` to `generation`, both named by their final component
+    /// inside the held directory, refusing to replace anything at
+    /// `generation`. A staging directory moved out of the held directory is
+    /// not found, rather than promoted wherever the pathname now leads.
+    #[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
+    pub(super) fn promote_without_replacement(
+        &self,
+        staged: &Path,
+        generation: &Path,
+    ) -> std::io::Result<()> {
+        rustix::fs::renameat_with(
+            &self.hold,
+            entry_name(staged)?,
+            &self.hold,
+            entry_name(generation)?,
+            rustix::fs::RenameFlags::NOREPLACE,
+        )
+        .map_err(Into::into)
+    }
+
+    /// Windows has no handle-relative rename through the approved surface, so
+    /// promotion resolves the pathname (see the residual above).
+    #[cfg(not(any(target_os = "linux", target_os = "android", target_vendor = "apple")))]
+    #[expect(
+        clippy::unused_self,
+        reason = "one signature for every platform; only the unix arms rename through the hold"
+    )]
+    pub(super) fn promote_without_replacement(
+        &self,
+        staged: &Path,
+        generation: &Path,
+    ) -> std::io::Result<()> {
+        rename_without_replacement(staged, generation)
     }
 
     /// Creates a staged pointer named after `path`'s final component inside
@@ -378,20 +463,8 @@ impl WindowsFileIdentity {
     }
 }
 
-#[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
-pub(super) fn rename_without_replacement(source: &Path, destination: &Path) -> std::io::Result<()> {
-    rustix::fs::renameat_with(
-        rustix::fs::CWD,
-        source,
-        rustix::fs::CWD,
-        destination,
-        rustix::fs::RenameFlags::NOREPLACE,
-    )
-    .map_err(Into::into)
-}
-
 #[cfg(windows)]
-pub(super) fn rename_without_replacement(source: &Path, destination: &Path) -> std::io::Result<()> {
+fn rename_without_replacement(source: &Path, destination: &Path) -> std::io::Result<()> {
     // Modern Windows rename can replace empty directories too. This refusal is
     // not atomic with rename; closing that window belongs to #1345.
     match std::fs::symlink_metadata(destination) {
@@ -408,10 +481,7 @@ pub(super) fn rename_without_replacement(source: &Path, destination: &Path) -> s
     target_vendor = "apple",
     windows
 )))]
-pub(super) fn rename_without_replacement(
-    _source: &Path,
-    _destination: &Path,
-) -> std::io::Result<()> {
+fn rename_without_replacement(_source: &Path, _destination: &Path) -> std::io::Result<()> {
     Err(std::io::Error::new(
         std::io::ErrorKind::Unsupported,
         "atomic directory promotion without replacement is unavailable on this target",

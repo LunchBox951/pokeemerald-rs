@@ -1493,7 +1493,8 @@ fn promotion_preserves_an_empty_destination_created_at_the_rename_boundary() {
     std::fs::create_dir(&staged).unwrap();
     std::fs::write(staged.join("frame.rgb"), b"our capture").unwrap();
     let mut competitor_identity = None;
-    let result = super::promote_staged_dir(&staged, &generation, || {
+    let output_claim = super::claim_output_dir(&output).unwrap();
+    let result = super::promote_staged_dir(&output_claim, &staged, &generation, || {
         std::fs::create_dir(&generation).unwrap();
         let meta = generation.metadata().unwrap();
         competitor_identity = Some((meta.dev(), meta.ino()));
@@ -1809,7 +1810,8 @@ fn a_generation_replacement_cannot_satisfy_the_staged_directory_claim() {
     std::fs::create_dir(&staged).unwrap();
     std::fs::write(staged.join("frame"), b"ours").unwrap();
     let claim = super::claim_staged_dir(&staged).unwrap();
-    super::promote_staged_dir(&staged, &generation, || {}).unwrap();
+    let output_claim = super::claim_output_dir(&output).unwrap();
+    super::promote_staged_dir(&output_claim, &staged, &generation, || {}).unwrap();
     claim.require_path(&generation).unwrap();
     std::fs::rename(&generation, &carried).unwrap();
     std::fs::create_dir(&generation).unwrap();
@@ -2073,4 +2075,93 @@ fn a_directory_handle_that_cannot_be_duplicated_leaves_no_staged_pointer() {
                 .contains(&pointer_path.display().to_string()),
         "staging left {left:?} behind without reporting it: {error}"
     );
+}
+
+/// An output directory swapped out and back (A, then B, then A again) around
+/// the generation's promotion and check must not end with A's pointer naming
+/// a generation that was promoted into B.
+#[cfg(unix)]
+#[test]
+fn a_generation_promoted_into_a_swapped_output_directory_is_never_published() {
+    let scene = Scene::MainMenuNewGame;
+    let root = scratch_path("output-dir-swapped-and-restored");
+    let _guard = ScratchGuard(root.clone());
+    let output_dir = root.join("out");
+    let replacement = root.join("replacement");
+    let held_aside = root.join("held-aside");
+    let replacement_aside = root.join("replacement-aside");
+    std::fs::create_dir_all(&output_dir).unwrap();
+    std::fs::create_dir_all(&replacement).unwrap();
+    let pointer_name = format!("{}.generation", scene.name());
+
+    let carry_the_staging_directory_into_a_swapped_replacement = || {
+        let staged = std::fs::read_dir(&output_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| path.extension().is_some_and(|ext| ext == "staged"))
+            .expect("this call's own staging directory must exist by now");
+        std::fs::rename(&staged, replacement.join(staged.file_name().unwrap())).unwrap();
+        std::fs::rename(&output_dir, &held_aside).unwrap();
+        std::fs::rename(&replacement, &output_dir).unwrap();
+    };
+    let restore_the_held_directory = || {
+        std::fs::rename(&output_dir, &replacement_aside).unwrap();
+        std::fs::rename(&held_aside, &output_dir).unwrap();
+    };
+    let result = super::publish_generation_with(
+        scene,
+        &output_dir,
+        b"rgb-bytes",
+        b"meta-bytes",
+        || Ok(()),
+        carry_the_staging_directory_into_a_swapped_replacement,
+        restore_the_held_directory,
+    );
+
+    for dir in [&output_dir, &held_aside, &replacement_aside] {
+        if let Ok(named) = std::fs::read_to_string(dir.join(&pointer_name)) {
+            assert!(
+                dir.join(named.trim()).is_dir(),
+                "the pointer in {} names {:?}, a generation it does not contain",
+                dir.display(),
+                named.trim()
+            );
+        }
+    }
+    let error = result
+        .expect_err("a generation promoted outside the held directory must not publish")
+        .to_string();
+    assert!(error.contains("last known path"), "{error}");
+}
+
+/// The promoted generation is looked up in the held output directory, not
+/// through the pathname: a generation carried into a directory now at that
+/// pathname satisfies the pathname check but not the held one.
+#[cfg(unix)]
+#[test]
+fn a_generation_check_resolves_through_the_held_output_directory() {
+    let root = scratch_path("generation-check-held-output");
+    let _guard = ScratchGuard(root.clone());
+    let output_dir = root.join("out");
+    let replacement = root.join("replacement");
+    let held_aside = root.join("held-aside");
+    std::fs::create_dir_all(&output_dir).unwrap();
+    std::fs::create_dir_all(&replacement).unwrap();
+    let staged = output_dir.join(".generation.staged");
+    let generation = output_dir.join("generation");
+    std::fs::create_dir(&staged).unwrap();
+    let output_claim = super::claim_output_dir(&output_dir).unwrap();
+    let claim = super::claim_staged_dir(&staged).unwrap();
+    super::promote_staged_dir(&output_claim, &staged, &generation, || {}).unwrap();
+    claim.require_entry_in(&output_claim, &generation).unwrap();
+
+    std::fs::rename(&generation, replacement.join("generation")).unwrap();
+    std::fs::rename(&output_dir, &held_aside).unwrap();
+    std::fs::rename(&replacement, &output_dir).unwrap();
+
+    claim.require_path(&generation).unwrap();
+    let error = claim
+        .require_entry_in(&output_claim, &generation)
+        .unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::NotFound, "{error}");
 }

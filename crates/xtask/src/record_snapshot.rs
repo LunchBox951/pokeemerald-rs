@@ -23,9 +23,7 @@ mod staging;
 
 #[cfg(windows)]
 use directory::claim_promoted_dir;
-use directory::{
-    claim_output_dir, claim_staged_dir, rename_without_replacement, OutputDirClaim, StagedDirClaim,
-};
+use directory::{claim_output_dir, claim_staged_dir, OutputDirClaim, StagedDirClaim};
 
 const SCREEN_WIDTH: usize = 240;
 const SCREEN_HEIGHT: usize = 160;
@@ -257,7 +255,7 @@ where
             .require_path(&staged_dir)
             .map_err(|error| RecordSnapshotError::Write(staged_dir.clone(), error.to_string()))?;
         staged_dir_claim.release_hold();
-        promote_staged_dir(&staged_dir, &generation_dir, before_rename)
+        promote_staged_dir(&output_claim, &staged_dir, &generation_dir, before_rename)
             .map_err(|e| RecordSnapshotError::Write(generation_dir.clone(), e.to_string()))?;
         renamed = true;
         #[cfg(windows)]
@@ -266,8 +264,11 @@ where
                 RecordSnapshotError::Write(generation_dir.clone(), error.to_string())
             })?;
         }
+        // Looked up in the held output directory, so the generation the
+        // pointer will name is proven to sit beside it, not merely somewhere
+        // the `output_dir` pathname led at the time.
         staged_dir_claim
-            .require_path(&generation_dir)
+            .require_entry_in(&output_claim, &generation_dir)
             .map_err(|error| {
                 RecordSnapshotError::Write(generation_dir.clone(), error.to_string())
             })?;
@@ -310,18 +311,21 @@ where
     })
 }
 
-// The rename binds to the staging pathname, not to the held handle, so a
-// replacement landing after the last identity check is promoted to the
-// generation name. The held handle's check against that name then refuses to
-// publish the pointer, and the directory is retained and reported like every
-// other failure (#1282's retention policy).
+// The rename binds to the staging entry's name in the held output directory,
+// not to the held staging handle, so a replacement landing there after the
+// last identity check is promoted to the generation name. The held handle's
+// check against that name then refuses to publish the pointer, and the
+// directory is retained and reported like every other failure (#1282's
+// retention policy). On Unix a staging directory moved out of the held output
+// directory is not found, so it is never promoted elsewhere.
 fn promote_staged_dir(
+    output: &OutputDirClaim,
     staged: &Path,
     generation: &Path,
     before_rename: impl FnOnce(),
 ) -> std::io::Result<()> {
     before_rename();
-    rename_without_replacement(staged, generation)
+    output.promote_without_replacement(staged, generation)
 }
 
 // Neither an open handle nor a metadata comparison makes a later pathname
