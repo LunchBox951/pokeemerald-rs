@@ -2264,6 +2264,7 @@ dependencies = [
  "pokeemerald-rs",
  "rom-import",
  "rustix 1.1.5",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
