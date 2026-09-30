@@ -14,7 +14,8 @@
 //!
 //! [`BorderGrid::cell_at`] preserves `src/fieldmap.c`'s `GetBorderBlockAt`
 //! rule: each world coordinate is shifted by one and masked into the repeating
-//! two-by-two border. Wrapping the shift keeps the same parity at `i32` limits.
+//! two-by-two border, and every returned cell is forced impassable. Wrapping
+//! the shift keeps the same parity at `i32` limits.
 
 use crate::error::AssetError;
 use std::mem::size_of;
@@ -27,6 +28,8 @@ const ELEVATION_MASK: u16 = 0b1111;
 const ELEVATION_SHIFT: u32 = 12;
 const NO_TILESET: &str = "0";
 const BORDER_REPEAT_OFFSET: i32 = 1;
+/// `MAPGRID_IMPASSABLE` collision bits, as forced by `GetBorderBlockAt`.
+const BORDER_FORCED_COLLISION: u8 = 3;
 const BORDER_COORDINATE_MASK: i32 = 1;
 
 /// Number of canonical map layouts.
@@ -211,16 +214,21 @@ impl<'a> BorderGrid<'a> {
         Ok(Self { bytes })
     }
 
-    /// Returns the border cell repeated over world position `(x, y)`.
+    /// Returns the border cell repeated over world position `(x, y)` with
+    /// collision forced to `MAPGRID_IMPASSABLE`, unlike the raw [`Self::cells`].
     #[must_use]
     pub fn cell_at(&self, x: i32, y: i32) -> MetatileCell {
         let column = repeating_border_coordinate(x);
         let row = repeating_border_coordinate(y);
         let offset = (row * BORDER_WIDTH + column) * BYTES_PER_METATILE_CELL;
-        decode_metatile_cell(&self.bytes[offset..offset + BYTES_PER_METATILE_CELL])
+        let stored = decode_metatile_cell(&self.bytes[offset..offset + BYTES_PER_METATILE_CELL]);
+        MetatileCell {
+            collision: BORDER_FORCED_COLLISION,
+            ..stored
+        }
     }
 
-    /// Iterates over the border cells in row-major order.
+    /// Iterates over the stored border cells in row-major order, collision unforced.
     pub fn cells(&self) -> impl Iterator<Item = MetatileCell> + '_ {
         self.bytes
             .chunks_exact(BYTES_PER_METATILE_CELL)
@@ -4030,10 +4038,23 @@ mod tests {
         let grid = BorderGrid::new(&bytes).unwrap();
         let cells: Vec<_> = grid.cells().collect();
         assert_eq!(cells, expected);
-        assert_eq!(grid.cell_at(0, 0), cells[3]);
-        assert_eq!(grid.cell_at(1, 0), cells[2]);
-        assert_eq!(grid.cell_at(0, 1), cells[1]);
-        assert_eq!(grid.cell_at(1, 1), cells[0]);
+        assert_eq!(grid.cell_at(0, 0), cell(4, 3, 0));
+        assert_eq!(grid.cell_at(1, 0), cell(3, 3, 0));
+        assert_eq!(grid.cell_at(0, 1), cell(2, 3, 0));
+        assert_eq!(grid.cell_at(1, 1), cell(1, 3, 0));
+    }
+
+    #[test]
+    fn border_grid_cell_at_forces_upstream_collision_bits() {
+        // `GetBorderBlockAt` ORs `MAPGRID_IMPASSABLE` into every border block.
+        let stored = [cell(1, 0, 5), cell(2, 1, 6), cell(3, 2, 7), cell(4, 3, 8)];
+        let bytes = encode_cells(&stored);
+        let grid = BorderGrid::new(&bytes).unwrap();
+        assert!(grid.cells().eq(stored));
+        for (x, y, index) in [(0, 0, 3), (1, 0, 2), (0, 1, 1), (1, 1, 0)] {
+            let raw = stored[index];
+            assert_eq!(grid.cell_at(x, y), cell(raw.metatile_id, 3, raw.elevation));
+        }
     }
 
     #[test]
