@@ -518,12 +518,15 @@ fn wait_for_device_tail(
 /// from the advertised buffer range. Callbacks are alive when submitted frames
 /// advanced across at least a quarter of `derived_tail` (or one advance alone
 /// covered that much playback) and the latest advance is within one observed
-/// cadence, plus two poll intervals, of now. Once the estimate has stood still
-/// for `derived_tail` with the callbacks alive, the wait ends early as a
-/// finish, as [`wait_for_device_tail`] would.
+/// cadence, plus two poll intervals, of now. An advance seen at a late poll is
+/// credited no later than the playback it covers past the previous poll, so an
+/// aggregate of callbacks that then stalled reads as stale. Once `derived_tail`
+/// has run from the start of the wait with the callbacks alive, the wait ends
+/// early as a finish, as [`wait_for_device_tail`] would; usable timestamps
+/// along the way do not restart it.
 ///
 /// `policy.max_wait` still bounds the wait: a poll past the deadline reports
-/// the timeout unless the derived tail could have elapsed by the deadline
+/// the timeout unless `derived_tail` fits within `max_wait`
 /// (so the production tail, capped at `max_wait`, still qualifies when a real
 /// sleep overshoots it) and the callbacks were alive at that poll. A
 /// `derived_tail` that cannot elapse within `max_wait` never takes effect.
@@ -547,7 +550,7 @@ fn wait_for_measured_tail(
     let deadline = started + policy.max_wait;
     let mut last_sounded = None;
     let mut last_submitted = None;
-    let mut stale_since = started;
+    let mut last_poll = started;
     let mut first_advance = None;
     let mut last_advance = None;
     let mut max_gap = Duration::ZERO;
@@ -570,7 +573,6 @@ fn wait_for_measured_tail(
         }
         let current = now();
         if last_sounded.is_some_and(|last| sounded > last) {
-            stale_since = current;
             first_advance = None;
             last_advance = None;
             max_gap = Duration::ZERO;
@@ -578,17 +580,24 @@ fn wait_for_measured_tail(
         }
         if let Some(previous) = last_submitted.filter(|&last| submitted > last) {
             let frames = u32::try_from(submitted - previous).unwrap_or(u32::MAX);
-            if device_sample_rate > 0 {
-                let played =
-                    Duration::from_secs_f64(f64::from(frames) / f64::from(device_sample_rate));
-                max_advance = max_advance.max(played);
+            let played = if device_sample_rate > 0 {
+                Duration::from_secs_f64(f64::from(frames) / f64::from(device_sample_rate))
+            } else {
+                Duration::ZERO
+            };
+            max_advance = max_advance.max(played);
+            // The advance happened somewhere since the previous poll. A late
+            // poll can fold many callbacks into it, so credit it no later
+            // than the playback it covers past that poll rather than
+            // stamping it with the (possibly much later) observation time.
+            let at = current.min(last_poll + played);
+            if let Some(previous_at) = last_advance {
+                max_gap = max_gap.max(at.saturating_duration_since(previous_at));
             }
-            if let Some(at) = last_advance {
-                max_gap = max_gap.max(current.duration_since(at));
-            }
-            first_advance.get_or_insert(current);
-            last_advance = Some(current);
+            first_advance.get_or_insert(at);
+            last_advance = Some(at);
         }
+        last_poll = current;
         last_sounded = Some(sounded);
         last_submitted = Some(submitted);
         let callbacks_alive = first_advance
@@ -598,12 +607,14 @@ fn wait_for_measured_tail(
                 last.duration_since(first).max(max_advance) >= derived_tail / 4
                     && current.duration_since(last) <= cadence + policy.interval * 2
             });
-        let stale_tail_elapsed =
-            callbacks_alive && current.duration_since(stale_since) >= derived_tail;
+        // Everything submitted before the drain began has sounded once the
+        // tail has run from `started`; a usable timestamp mid-wait does not
+        // restart it, so a valid-then-stale device keeps its budget.
+        let stale_tail_elapsed = callbacks_alive && current.duration_since(started) >= derived_tail;
         if current > deadline {
             // The first poll past the deadline is the last: the tail may finish
             // it only if it could have elapsed within the budget.
-            return if stale_tail_elapsed && stale_since + derived_tail <= deadline {
+            return if stale_tail_elapsed && derived_tail <= policy.max_wait {
                 Ok(())
             } else {
                 Err(DrainError::MeasuredTailTimedOut { sounded, target })
@@ -1647,6 +1658,84 @@ mod tests {
         let stalled = cadence_wait(200, 200, 1, |ms| ms <= 100 && ms % 10 == 0, Some(180));
         assert!(matches!(
             stalled,
+            Err(DrainError::MeasuredTailTimedOut { .. })
+        ));
+    }
+
+    /// Timestamps usable for 300 ms and then stale must still finish inside
+    /// the capped one-second budget while submitted frames keep advancing.
+    #[test]
+    fn a_valid_then_stale_transition_keeps_the_capped_budget() {
+        let policy = RetryPolicy {
+            interval: std::time::Duration::from_millis(10),
+            max_wait: std::time::Duration::from_secs(1),
+        };
+        let start = std::time::Instant::now();
+        let clock = Rc::new(RefCell::new(start));
+        let submitted = Cell::new(100_u64);
+
+        let result = wait_for_measured_tail(
+            100,
+            std::time::Duration::from_secs(1),
+            48_000,
+            &policy,
+            || {
+                let ms = clock.borrow().duration_since(start).as_millis();
+                Some(progress(
+                    if ms < 300 {
+                        u64::try_from(ms / 10).unwrap_or(0)
+                    } else {
+                        30
+                    },
+                    submitted.get(),
+                ))
+            },
+            || 0,
+            || *clock.borrow(),
+            |duration| {
+                *clock.borrow_mut() += duration;
+                submitted.set(submitted.get() + 1);
+            },
+        );
+
+        assert!(result.is_ok(), "the transition must not forfeit the budget");
+    }
+
+    /// Callbacks that advance 250 ms of playback and then stall must not read
+    /// as fresh because the poll resumed after the deadline.
+    #[test]
+    fn an_aggregate_advance_seen_at_a_late_poll_is_not_fresh() {
+        let policy = RetryPolicy {
+            interval: std::time::Duration::from_millis(10),
+            max_wait: std::time::Duration::from_secs(1),
+        };
+        let start = std::time::Instant::now();
+        let clock = Rc::new(RefCell::new(start));
+        let submitted = Cell::new(4_u64);
+
+        let result = wait_for_measured_tail(
+            4,
+            std::time::Duration::from_secs(1),
+            48_000,
+            &policy,
+            || Some(progress(0, submitted.get())),
+            || 0,
+            || *clock.borrow(),
+            |duration| {
+                let elapsed = clock.borrow().duration_since(start);
+                if elapsed >= std::time::Duration::from_millis(100) {
+                    // The sleep overruns past the deadline; the only callbacks
+                    // that ran covered 250 ms (12 000 frames at 48 kHz).
+                    *clock.borrow_mut() += std::time::Duration::from_secs(1);
+                    submitted.set(submitted.get() + 12_000);
+                } else {
+                    *clock.borrow_mut() += duration;
+                }
+            },
+        );
+
+        assert!(matches!(
+            result,
             Err(DrainError::MeasuredTailTimedOut { .. })
         ));
     }
