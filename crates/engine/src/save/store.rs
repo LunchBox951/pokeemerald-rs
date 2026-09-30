@@ -491,15 +491,16 @@ impl SlotSurvey {
 
     fn verdict(&self) -> SlotScan {
         let tail_counter = self.tail_generation();
-        // Same-slot generations sit exactly 2 counters and 2 rotations
-        // apart, so this is indistinguishable from a real write torn after 5
-        // sectors; upstream reports that shape Error, never Ok.
+        // A same-slot predecessor sits 2 rotations behind, so an identity
+        // head over a rotation-12 tail is indistinguishable from a real
+        // write torn after 5 sectors; upstream reports that shape Error,
+        // never Ok. The layout decides, not the counters: the predecessor
+        // is 2 counters older only while upstream's counter lineage is
+        // clean, and one flipped footer bit, which upstream adopts as its
+        // next counter, breaks that.
         let ambiguous_with_a_torn_full_write = self.head_is_identity
-            && self.tail_matches_predecessor_of_identity_head
-            && self
-                .legacy_counter
-                .zip(tail_counter)
-                .is_some_and(|(legacy, tail)| legacy == tail.wrapping_add(2));
+            && self.tail_valid_count > 0
+            && self.tail_matches_predecessor_of_identity_head;
 
         let stale_tail_is_donor_only = self.tail_signature_seen
             && self.tail_all_recognized_valid
@@ -764,7 +765,8 @@ impl SaveStore {
     /// write, which takes an identity head (rotation zero); a head at any
     /// other rotation is accepted over whatever remnant sits behind it. An
     /// identity head needs a stale, strictly older, fully valid tail that
-    /// is not the one shape a genuinely torn write leaves. Either way the
+    /// is not laid out at rotation 12, where a genuinely torn write leaves
+    /// its predecessor. Either way the
     /// tail is a storage-donor candidate only ([`SaveStore::resolve`]),
     /// never progress ([`SaveStore::copy_valid_slot_payloads`] skips it).
     fn scan_slot(&self, slot: usize) -> SlotScan {
@@ -2655,6 +2657,59 @@ mod tests {
             SaveStatus::Corrupt,
             "an interrupted 14-sector write must never be mistaken for a legacy migration"
         );
+    }
+
+    /// Upstream's counter lineage is not always clean: the footer counter
+    /// sits outside the checksum, and upstream adopts the last valid
+    /// sector's counter as-is. Here slot 1's id-0 footer flips from 11 to
+    /// 1035, so upstream's next save is 1036, at rotation 0 over slot 0's
+    /// generation 10, and it tears after 5 sectors. The tail is then 1026
+    /// counters behind the head rather than 2, but still sits at rotation
+    /// 12; a counter test alone would load that head with generation 11's
+    /// boxes as one `Ok` save.
+    #[test]
+    fn a_torn_rotation_zero_write_after_a_flipped_counter_is_never_legacy_migration() {
+        let block2 = sample_block2();
+        let storage_bytes = vec![0x0Fu8; PKMN_STORAGE_PAYLOAD_LEN];
+        let lay_full_slot_at_rotation =
+            |store: &mut SaveStore, slot: usize, money: u32, counter: u32, rotation: usize| {
+                let block1 = SaveBlock1 {
+                    money,
+                    ..sample_block1()
+                };
+                write_full_slot(store, slot, &block1, &block2, &storage_bytes, counter);
+                let sectors: Vec<Sector> = (0..NUM_SECTORS_PER_SLOT)
+                    .map(|i| store.read_physical(slot, i))
+                    .collect();
+                for (id, sector) in sectors.iter().enumerate() {
+                    store.write_physical(slot, (id + rotation) % NUM_SECTORS_PER_SLOT, sector);
+                }
+            };
+
+        let mut store = SaveStore::new();
+        lay_full_slot_at_rotation(&mut store, 0, 10, 10, 12);
+        lay_full_slot_at_rotation(&mut store, 1, 11, 11, 13);
+        let counter_offset = SECTOR_SIZE - size_of::<u32>();
+        let mut bytes = *store.read_physical(1, 13).as_bytes();
+        bytes[counter_offset + 1] ^= 0x04;
+        store.write_physical(1, 13, &Sector::from_bytes(bytes));
+        assert_eq!(store.read_physical(1, 13).counter(), 1035);
+        write_legacy_slot(
+            &mut store,
+            0,
+            &SaveBlock1 {
+                money: 1036,
+                ..sample_block1()
+            },
+            &block2,
+            1036,
+        );
+
+        assert_eq!(store.scan_slot(0).integrity, SlotIntegrity::Error);
+        let outcome = store.load();
+        assert_eq!(outcome.status, SaveStatus::Error);
+        assert_eq!(store.save_counter(), 1035);
+        assert_eq!(outcome.block1.money, 11);
     }
 
     #[test]
