@@ -476,6 +476,48 @@ fn an_active_pair_the_ordinary_landing_cell_cannot_hold_is_not_restored() {
     );
 }
 
+/// Codex review: an upstream-origin image (`active` set, elevation byte
+/// `(0, 3)` from a transition cell) re-saved by the pre-#801 writer moves the
+/// position but keeps both bytes. Its stale current 0 is holdable on the next
+/// transition cell, so only the port's own marker bit keeps the wrong previous
+/// elevation 3 from being restored where the walk from elevation 4 left 0.
+#[test]
+fn upstream_origin_image_with_a_holdable_stale_current_is_not_restored() {
+    let tile = (4_u16, 4_u16);
+    let scene = || {
+        crate::overworld::tests::synthetic_scene_with_cell_elevation(
+            10,
+            10,
+            tile,
+            engine::overworld::ELEVATION_TRANSITION,
+        )
+    };
+    let mut block1 = new_game_phase().save1.clone();
+    let block2 = new_game_phase().save2.clone();
+    block1.pos.x = 4;
+    block1.pos.y = 4;
+    let key = block2.encryption_key;
+    let mut bytes = block1.to_bytes(key);
+    // The upstream image's bytes, as the pre-#801 writer left them: the
+    // `active` bit and the `(0, 3)` elevation byte, no port marker.
+    let object_events = 0xA30;
+    bytes[object_events] |= 0x01;
+    bytes[object_events + 0x03] &= !0x80;
+    bytes[object_events + 0x0B] = 0x30;
+    let block1 = engine::save::SaveBlock1::from_bytes(&bytes, key).unwrap();
+    let resumed = OverworldPhase::from_saved(scene(), new_game::SPAWN_MAP_ID, block1, block2);
+    assert_eq!(
+        (
+            resumed.player.elevation(),
+            resumed.player.previous_elevation()
+        ),
+        (
+            engine::overworld::ELEVATION_TRANSITION,
+            engine::overworld::ELEVATION_TRANSITION
+        )
+    );
+}
+
 /// The I-6 acceptance round trip: new game -> play -> start-menu save ->
 /// reload -> continue, with the restored phase matching what was saved.
 #[test]

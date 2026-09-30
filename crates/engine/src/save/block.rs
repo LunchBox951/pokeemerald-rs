@@ -56,6 +56,14 @@ const PLAYER_OBJECT_EVENT_ELEVATIONS_OFFSET: usize = OBJECT_EVENTS_OFFSET
 const PLAYER_OBJECT_EVENT_ACTIVE_OFFSET: usize =
     OBJECT_EVENTS_OFFSET + PLAYER_OBJECT_EVENT_INDEX * OBJECT_EVENT_LEN;
 const OBJECT_EVENT_ACTIVE_BIT: u8 = 0x01;
+// The top bit of `ObjectEvent`'s third bitfield byte, inside the
+// `u32 padding:4` upstream leaves unused (include/global.fieldmap.h:227-228).
+// Only this port's writer sets it, so an upstream-origin image -- whose
+// `active` bit is set but whose elevation byte predates this position -- is
+// told apart from a save whose elevation pair was written with its position.
+const PLAYER_OBJECT_EVENT_MARKER_OFFSET: usize =
+    OBJECT_EVENTS_OFFSET + PLAYER_OBJECT_EVENT_INDEX * OBJECT_EVENT_LEN + 0x03;
+const OBJECT_EVENT_MARKER_BIT: u8 = 0x80;
 const DIRECTION_NIBBLE_MASK: u8 = 0x0F;
 const MOVEMENT_DIRECTION_SHIFT: u32 = 4;
 const SERIALIZED_U16_LEN: usize = std::mem::size_of::<u16>();
@@ -324,9 +332,11 @@ impl SaveBlock2 {
 /// port wrote, since a zero elevation pair is valid and cannot mark it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SavedObjectEvent {
-    /// `active`: the slot holds a live object. Zero-filled entries, and images
-    /// written before elevations were persisted, leave it clear, which is what
-    /// tells a real `(0, 0)` elevation pair from an unwritten byte.
+    /// `active` and this port's marker bit both set: the slot holds a live
+    /// object whose elevation pair this port wrote with its position.
+    /// Zero-filled entries, and images (including upstream-origin ones) not
+    /// written by this port's elevation writer, decode it clear, which is what
+    /// tells a real `(0, 0)` elevation pair from a stale or unwritten byte.
     pub active: bool,
     /// Facing direction stored in the low nibble.
     pub facing_direction: u8,
@@ -467,8 +477,11 @@ impl SaveBlock1 {
         // Only bit 0 is modeled; the byte's other bitfields stay as loaded.
         let active_byte = &mut base[PLAYER_OBJECT_EVENT_ACTIVE_OFFSET];
         *active_byte &= !OBJECT_EVENT_ACTIVE_BIT;
+        let marker_byte = &mut base[PLAYER_OBJECT_EVENT_MARKER_OFFSET];
+        *marker_byte &= !OBJECT_EVENT_MARKER_BIT;
         if self.player_object_event.active {
-            *active_byte |= OBJECT_EVENT_ACTIVE_BIT;
+            base[PLAYER_OBJECT_EVENT_ACTIVE_OFFSET] |= OBJECT_EVENT_ACTIVE_BIT;
+            base[PLAYER_OBJECT_EVENT_MARKER_OFFSET] |= OBJECT_EVENT_MARKER_BIT;
         }
     }
 
@@ -517,7 +530,10 @@ impl SaveBlock1 {
                 bytes[PLAYER_OBJECT_EVENT_DIRECTIONS_OFFSET],
             )
             .with_elevation_byte(bytes[PLAYER_OBJECT_EVENT_ELEVATIONS_OFFSET])
-            .with_active(bytes[PLAYER_OBJECT_EVENT_ACTIVE_OFFSET] & OBJECT_EVENT_ACTIVE_BIT != 0),
+            .with_active(
+                bytes[PLAYER_OBJECT_EVENT_ACTIVE_OFFSET] & OBJECT_EVENT_ACTIVE_BIT != 0
+                    && bytes[PLAYER_OBJECT_EVENT_MARKER_OFFSET] & OBJECT_EVENT_MARKER_BIT != 0,
+            ),
         })
     }
 }
@@ -800,7 +816,10 @@ mod tests {
             },
             // The player object's first byte shares `active` (bit 0) with
             // unmodeled bitfields, which patching preserves.
-            &[PLAYER_OBJECT_EVENT_ACTIVE_OFFSET],
+            &[
+                PLAYER_OBJECT_EVENT_ACTIVE_OFFSET,
+                PLAYER_OBJECT_EVENT_MARKER_OFFSET,
+            ],
         );
         assert_eq!(
             SaveBlock1::from_bytes(&patched, key).unwrap().money,
@@ -814,9 +833,28 @@ mod tests {
             base[PLAYER_OBJECT_EVENT_ACTIVE_OFFSET], 0xEF,
             "active is set and the other seven bits are kept"
         );
+        assert_eq!(
+            base[PLAYER_OBJECT_EVENT_MARKER_OFFSET],
+            0xEE | OBJECT_EVENT_MARKER_BIT,
+            "the marker is set and the other seven bits are kept"
+        );
         block.player_object_event.active = false;
         block.patch_bytes(&mut base, key);
         assert_eq!(base[PLAYER_OBJECT_EVENT_ACTIVE_OFFSET], 0xEE);
+        assert_eq!(
+            base[PLAYER_OBJECT_EVENT_MARKER_OFFSET],
+            0xEE & !OBJECT_EVENT_MARKER_BIT
+        );
+
+        // An upstream-origin image: `active` set, no marker, stale elevation.
+        let mut upstream = [0u8; SaveBlock1::PAYLOAD_LEN];
+        upstream[PLAYER_OBJECT_EVENT_ACTIVE_OFFSET] = OBJECT_EVENT_ACTIVE_BIT;
+        upstream[PLAYER_OBJECT_EVENT_ELEVATIONS_OFFSET] = 0x30;
+        let decoded = SaveBlock1::from_bytes(&upstream, key).unwrap();
+        assert!(
+            !decoded.player_object_event.active,
+            "no marker, not trusted"
+        );
     }
 
     #[test]

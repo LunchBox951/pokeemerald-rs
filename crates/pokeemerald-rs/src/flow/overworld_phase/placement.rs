@@ -44,14 +44,14 @@ pub(super) fn saved_facing(block1: &SaveBlock1, fallback: Direction) -> Directio
 /// `(tile_elevation, tile_elevation)` when the save cannot be trusted to hold
 /// one for this tile.
 ///
-/// The pair is trusted only when the player object is `active` (upstream's own
-/// bit, set by every save this port writes) *and* the saved current elevation
-/// is one upstream could hold on the landing cell. `ObjectEventUpdateElevation`
+/// The pair is trusted only when the decoded `active` is set (upstream's bit
+/// plus this port's marker, which only this port's writer sets) *and* the saved
+/// current elevation is one upstream could hold on the landing cell. `ObjectEventUpdateElevation`
 /// (`src/event_object_movement.c:7759-7771`) sets current elevation to the
 /// cell's own -- 0 on a transition cell -- and retains it on a multi-level
 /// (15) cell. An upstream-origin image re-saved by an older writer keeps its
-/// `active` bit and elevation byte while the position moves on, so a current
-/// elevation the cell forbids marks that stale byte. A settled player never
+/// `active` bit and elevation byte while the position moves on; the missing
+/// marker rejects it, and a current elevation the cell forbids is a second net. A settled player never
 /// holds a mismatch on an ordinary cell: a finished step sets previous coords
 /// to current (`ShiftStillObjectEventCoords`, `event_object_movement.c:2162`)
 /// before `DoGroundEffects_OnFinishStep` re-runs the update (`:8120-8130`), so
