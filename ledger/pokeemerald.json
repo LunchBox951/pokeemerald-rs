@@ -26509,7 +26509,7 @@
           "status": "rewritten"
         },
         "GetBorderBlockAt": {
-          "reason": "Border-block fallback for any camera viewport position outside the current layout's own grid, ported into viewport::cell_at (rendering-only; movement's own border handling stays out of MapRuntime's scope per issue #108).",
+          "reason": "Border-block fallback for any camera viewport position outside the current layout's own grid, ported into viewport::cell_at over assets::BorderGrid::cell_at, which repeats the shifted 2x2 border and forces MAPGRID_IMPASSABLE collision (rendering-only; movement's own border handling stays out of MapRuntime's scope per issue #108).",
           "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",
           "spec": "I-3",
           "status": "rewritten"
