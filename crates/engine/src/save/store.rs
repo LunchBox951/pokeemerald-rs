@@ -253,15 +253,9 @@ struct SlotScan {
     /// Whether an `Ok` integrity came from the legacy five-sector fallback
     /// rather than all 14 sectors validating. See [`SaveStore::resolve`].
     legacy: bool,
-    /// The generation of a complete, checksum-valid set of ids 5-13, each
-    /// held once at one rotation, anywhere in this slot (at most one footer
-    /// counter may disagree, and never with a save-block generation's own;
-    /// see `SlotSurvey::storage_generation`): the box data still
-    /// salvageable from it, whatever the slot's own integrity. A legacy head's stale
-    /// tail sets it; so does a slot whose save-block sectors are too damaged
-    /// for the slot to be `Ok` at all. Completeness is required because a
-    /// partial set would mix stale chunks with zeroed ones into a storage
-    /// image that never existed.
+    /// The generation of a complete, checksum-valid storage set (ids 5-13)
+    /// found anywhere in this slot, whatever the slot's own integrity; see
+    /// `SlotSurvey::storage_generation` for what qualifies.
     storage_counter: Option<u32>,
 }
 
@@ -273,16 +267,10 @@ struct Resolution {
     /// to pick both the next save's physical slot and (absent a merge) the
     /// slot every field is copied from.
     counter: u32,
-    /// The *physical* index of the slot to source `PokemonStorage` from,
-    /// when that is not simply the adopted generation's own slot: the
-    /// counterpart full-format slot of a legacy/full merge, or whichever
-    /// slot still holds a complete verified storage generation when the
-    /// adopted one is legacy (see [`SaveStore::storage_donor`]).
-    /// The scanned index is carried through rather than a counter, because
-    /// [`physical_slot_for_counter`] recovers a slot only under the parity
-    /// invariant [`SaveStore::save`] maintains -- which
-    /// [`SaveStore::scan_slot`], accepting each slot on its own contents,
-    /// never enforces on an externally assembled image.
+    /// The physical slot to source `PokemonStorage` from when the adopted
+    /// generation carries none of its own ([`SaveStore::storage_donor`]). A
+    /// scanned index, not a counter: an assembled image need not keep the
+    /// parity [`SaveStore::save`] maintains.
     storage_from_slot: Option<usize>,
     /// Whether `counter`'s own slot was accepted through the legacy
     /// five-sector fallback: [`SaveStore::copy_valid_slot_payloads`] must
@@ -473,20 +461,10 @@ impl SlotSurvey {
     }
 
     /// The generation a stale tail belongs to, as its rotation and
-    /// counter: one full generation's layout whose valid sectors all agree
-    /// on both but for at most one outlier sector.
-    ///
-    /// As with [`Self::storage_generation`], the counter and the id (from
-    /// which a sector's rotation follows) are unchecksummed footers, so one
-    /// damaged footer in data the slot never loads as progress must not
-    /// reject the legacy head in front of it; the pre-#1227 store never
-    /// read positions 5-13 at all. A real torn write stays out: a write at
-    /// rotation zero torn after six sectors leaves its own id 5 as the one
-    /// rotation outlier over the older generation, but under the head's
-    /// own counter, which no stale remnant behind a five-sector write can
-    /// carry, so such an outlier is refused. Torn later, it leaves two or
-    /// more rotation outliers, or a consensus under the head's counter that
-    /// `verdict` never treats as older. The head itself stays unanimous.
+    /// counter: one layout and one counter, each with at most one outlier
+    /// sector (both footers are unchecksummed). A rotation outlier under the
+    /// head's own counter is refused; that is a torn full write, not a
+    /// remnant.
     fn tail_generation(&self) -> Option<(usize, u32)> {
         let counters = &self.tail_counters[..self.tail_valid_count];
         let rotations = &self.tail_rotations[..self.tail_valid_count];
@@ -508,13 +486,8 @@ impl SlotSurvey {
     fn verdict(&self) -> SlotScan {
         let tail = self.tail_generation();
         let tail_counter = tail.map(|(_, counter)| counter);
-        // A same-slot predecessor sits 2 rotations behind, so an identity
-        // head over a rotation-12 tail is indistinguishable from a real
-        // write torn after 5 sectors; upstream reports that shape Error,
-        // never Ok. The layout decides, not the counters: the predecessor
-        // is 2 counters older only while upstream's counter lineage is
-        // clean, and one flipped footer bit, which upstream adopts as its
-        // next counter, breaks that.
+        // An identity head over a rotation-12 tail is the shape a full
+        // write torn after five sectors leaves; upstream reads it Error.
         let ambiguous_with_a_torn_full_write = self.head_is_identity
             && tail.is_some_and(|(rotation, _)| rotation == TORN_WRITE_PREDECESSOR_ROTATION);
 
@@ -527,22 +500,10 @@ impl SlotSurvey {
                 .is_some_and(|(legacy, tail)| older_generation_precedes(tail, legacy))
             && !ambiguous_with_a_torn_full_write;
 
-        // Ids 0-4 land in positions 0-4 together only at rotation zero,
-        // where id `i` sits at position `i`; every other rotation pushes id
-        // 4 (or more) past position 4. So a non-identity head cannot be a
-        // 14-sector write torn after five sectors -- it can only have come
-        // from the five-sector writer -- and what sits behind it is stale
-        // remnant whatever its state. Damage there costs the tail its
-        // donor eligibility, never the head its progress.
-        //
-        // Unless the head is no five-sector write at all: the unchecksummed
-        // footer id lets a full generation's own sector (id 13 at rotation
-        // 1, zero-padded) relabel into the id its head lacks. The
-        // five-sector writer never touched positions 5-13, so a tail sector
-        // under the head's own counter proves the head is that full
-        // generation, missing an id, and upstream reports it Error. A
-        // tail whose consensus is older keeps the one-outlier tolerance:
-        // that sector is a damaged counter, not the head's generation.
+        // Only an identity head can be a torn full write, so a rotated head
+        // is accepted over any remnant, unless a tail sector carries its own
+        // counter: the five-sector writer never wrote positions 5-13, so
+        // that head is a full generation missing an id, Error upstream.
         let tail_shares_head_generation = self.legacy_counter.is_some_and(|legacy| {
             self.tail_counters[..self.tail_valid_count].contains(&legacy)
                 && !tail_counter.is_some_and(|tail| older_generation_precedes(tail, legacy))
@@ -788,18 +749,9 @@ impl SaveStore {
 
     /// Scans all 14 physical positions of `slot`, matching upstream's
     /// `GetSaveValidStatus` (`pokeemerald/src/save.c:514-585`): intact when
-    /// all 14 ids validate, or when physical positions 0-4 hold ids 0-4
-    /// under one counter (this project's pre-#1227 five-sector format).
-    ///
-    /// A signed sector in positions 5-13 disqualifies that legacy reading
-    /// only when the head could itself be the start of a torn 14-sector
-    /// write, which takes an identity head (rotation zero); a head at any
-    /// other rotation is accepted over whatever remnant sits behind it. An
-    /// identity head needs a stale, strictly older, fully valid tail that
-    /// is not laid out at rotation 12, where a genuinely torn write leaves
-    /// its predecessor. Either way the
-    /// tail is a storage-donor candidate only ([`SaveStore::resolve`]),
-    /// never progress ([`SaveStore::copy_valid_slot_payloads`] skips it).
+    /// all 14 ids validate, or when positions 0-4 hold ids 0-4 under one
+    /// counter (this project's former five-sector format). A stale tail
+    /// behind such a head is a storage-donor candidate only, never progress.
     fn scan_slot(&self, slot: usize) -> SlotScan {
         let mut survey = SlotSurvey::new();
         for i in 0..NUM_SECTORS_PER_SLOT {
@@ -808,28 +760,9 @@ impl SaveStore {
         survey.verdict()
     }
 
-    /// When both slots are intact and exactly one is the legacy five-sector
-    /// fallback, the newer generation still wins, but never by discarding
-    /// the other slot's own verified data: if the full-format slot is newer,
-    /// it already has everything and wins outright as usual; if the legacy
-    /// slot is newer, its SaveBlock1/SaveBlock2 -- the player's latest
-    /// progress -- are combined with the full slot's `PokemonStorage` (its
-    /// only unique, verified contribution) rather than reverting the save to
-    /// the older generation, or dropping the full slot's storage, under a
-    /// still-reported `SaveStatus::Ok`. A legacy slot with a newer counter
-    /// than a full slot is reachable via a build downgrade (a full write,
-    /// then a pre-#1227 five-sector write into the other slot) or an
-    /// externally assembled image, not via an ordinary import.
-    ///
-    /// When no full-format slot is left to merge from -- a cartridge image
-    /// imported into a pre-#1227 build and saved twice leaves a legacy head
-    /// over an older signed tail in *both* slots -- the adopted generation
-    /// instead donates storage from the newer of the two verified stale
-    /// storage generations ([`SlotScan::storage_counter`]) -- which may sit
-    /// in a slot too damaged to be `Ok` itself. Those bytes are the
-    /// player's boxed Pokemon, still physically present in flash because
-    /// that writer only ever touched positions 0-4; zeroing them here would
-    /// make the next full-slot write destroy them.
+    /// Picks the generation to load. The newer intact slot wins; when it is
+    /// a five-sector generation, `PokemonStorage` comes from the newest
+    /// complete verified storage set in either slot instead of zeros.
     fn resolve(slot0: &SlotScan, slot1: &SlotScan) -> Resolution {
         use SlotIntegrity::{Empty, Error, Ok};
         let (status, counter, storage_from_slot, legacy) = match (slot0.integrity, slot1.integrity)
@@ -905,19 +838,9 @@ impl SaveStore {
         }
     }
 
-    /// The storage donor for an adopted generation that carries none of its
-    /// own.
-    ///
-    /// A legacy generation never wrote ids 5-13, so without a donor
-    /// [`SaveStore::load`] hands back zeroed boxes and the next full write
-    /// makes that permanent. Any slot still holding a complete verified
-    /// storage generation beats that -- including one whose save-block
-    /// sectors are too damaged for the slot to be `Ok` at all, which is
-    /// exactly the single-bad-sector case two slots exist to survive. Of
-    /// two candidates the newer wins; their counters can sit an arbitrary
-    /// number of generations apart, so they are compared as wrapping serial
-    /// numbers. A full-format adopted generation needs no donor: its own
-    /// storage is already live.
+    /// The storage donor for an adopted five-sector generation: whichever
+    /// slot holds the newest complete verified storage set, even one too
+    /// damaged to be `Ok` itself. Counters compare as wrapping serials.
     fn storage_donor(adopted_is_legacy: bool, slot0: &SlotScan, slot1: &SlotScan) -> Option<usize> {
         if !adopted_is_legacy {
             return None;
@@ -987,15 +910,10 @@ impl SaveStore {
         copied
     }
 
-    /// Validates both slots and loads payloads selected by the resolved
-    /// counter's parity.
-    ///
-    /// The resolved counter's parity selects the slot to copy, even if a
-    /// checksum-valid payload has a corrupt footer counter that makes this
-    /// differ from the slot preferred during validation. A legacy/full merge
-    /// (see [`SaveStore::resolve`]) instead copies `PokemonStorage` from the
-    /// other slot; that copy runs first so the final, block-owning copy is
-    /// the one that recovers [`SaveStore::last_written_sector`].
+    /// Validates both slots and loads payloads from the resolved counter's
+    /// parity slot, as upstream's `CopySaveSlotData` does. A storage donor,
+    /// if any, is copied first so the progress copy is the one that recovers
+    /// [`SaveStore::last_written_sector`].
     #[must_use]
     pub fn load(&mut self) -> LoadOutcome {
         let scans = [self.scan_slot(0), self.scan_slot(1)];
