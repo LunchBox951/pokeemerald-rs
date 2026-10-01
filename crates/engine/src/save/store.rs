@@ -426,38 +426,13 @@ impl SlotSurvey {
         }
     }
 
-    /// The generation a complete, unique storage set belongs to: the
-    /// counter at least eight of its nine footers agree on.
-    ///
-    /// The counter sits outside the checksummed payload (upstream's
-    /// `CalculateChecksum` sums `data` only, `pokeemerald/src/save.c:674-685`;
-    /// likewise [`Sector::is_valid`]), so one damaged footer leaves a chunk
-    /// whose bytes still verify. Upstream never compares counters across a
-    /// slot's sectors at all (`GetSaveValidStatus`, `save.c:514-585`). A
-    /// torn write cannot produce this shape either: it lays new ids 0.. in
-    /// order two rotations past the slot's previous generation, so the old
-    /// and new sectors it leaves always meet at a duplicated pair of ids and
-    /// a missing pair, and a set with neither in 5-13 draws on one
-    /// generation only. Anything wider than one outlier is still refused.
-    ///
-    /// The footer id is unchecksummed too, and every save-block payload
-    /// fits within ids 5-12's (ids 1-3 match it; ids 0 and 4 are shorter,
-    /// and the zero padding behind them adds nothing to the word-sum
-    /// checksum), so a save-block sector relabeled into a storage id
-    /// the slot has lost (a legacy head over a rotated remnant drops
-    /// whichever storage ids sat in positions 0-4) would complete the set
-    /// as that one outlier. One generation lays every id at one rotation,
-    /// so the set must imply one; and a relabeled sector keeps its own
-    /// generation's genuine counter, which the slot's surviving save-block
-    /// sectors still carry. Legacy rotation 3 places id 1 exactly where a
-    /// rotation-13 remnant's id 5 sat, so only the counter test catches
-    /// that relabel. A damaged counter can land on that same value by
-    /// chance, though, and one generation writes each id once: the
-    /// relabeled sector *is* one of that generation's ids 0-4, so a
-    /// generation still holding all five of them relabeled nothing, and
-    /// its counter on a storage footer is damage, not a disguised head
-    /// sector. Only an outlier matching a generation that has lost one of
-    /// ids 0-4 withdraws the set.
+    /// The generation a complete, unique storage set belongs to: one
+    /// rotation and one counter, with at most one footer disagreeing on
+    /// the counter. Footers sit outside the sector checksum
+    /// (`pokeemerald/src/save.c:674-685`), so one damaged counter is
+    /// tolerated; a save-block sector relabeled into a storage id is not,
+    /// and it is recognised by its counter matching a generation that has
+    /// lost one of ids 0-4.
     fn storage_generation(&self) -> Option<u32> {
         if !self.storage_rotation_coherent {
             return None;
@@ -1000,9 +975,8 @@ impl SaveStore {
                     .copy_from_slice(&sector.data()[..payload_len]);
                 copied.valid_block1_chunks[chunk_num] = true;
             } else {
-                // A slot in the pre-#1227 five-sector format never wrote ids
-                // 5-13, so this legitimately stays zeroed for it (issue
-                // #235's empty-placeholder migration).
+                // A five-sector slot never wrote ids 5-13; its storage stays
+                // zeroed.
                 let chunk_num = usize::from(id - SECTOR_ID_PKMN_STORAGE_START);
                 let offset = chunk_num * SECTOR_DATA_SIZE;
                 copied.pokemon_storage[offset..offset + payload_len]
