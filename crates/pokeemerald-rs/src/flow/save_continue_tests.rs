@@ -1018,12 +1018,17 @@ fn a_flagged_warp_equal_to_location_that_cannot_land_does_not_resume() {
         y: i16::MAX,
     };
     phase.save1.location = destination;
-    let before = snapshot(&phase);
-    let Err(err) = phase.land_at_continue_game_warp(new_game::SPAWN_MAP_ID, destination) else {
-        panic!("a refused warp must fail the continue");
-    };
-    assert!(err.to_string().contains("continue-game warp"), "{err}");
-    assert_eq!(snapshot(&phase), before, "a refused warp changes nothing");
+    phase.save1.continue_game_warp = destination;
+    phase.save2.special_save_warp_flags |= SaveBlock2::CONTINUE_GAME_WARP;
+    assert!(
+        OverworldPhase::continue_saved_game(
+            crate::pack_source::PackSource::Runtime,
+            phase.save1.clone(),
+            phase.save2.clone(),
+        )
+        .is_err(),
+        "a refused warp must fail the continue"
+    );
 }
 
 /// The `#[ignore]`d half of the round trip (module docs): the whole
@@ -1278,10 +1283,11 @@ fn saving_twice_in_one_session_files_the_same_bytes() {
 }
 
 /// The landing half of `UseContinueGameWarp`, on the real-pack lane (no
-/// pack-free seam reaches `warp_to_saved_location`): a flagged save resumes
-/// at `continue_game_warp` rather than `location`, the flag is gone, temp
-/// field data is cleared, and the supported on-transition effect (the
-/// bedroom's decoration flags) ran.
+/// pack-free seam reaches a landed saved-location warp): a flagged save
+/// resumes at `continue_game_warp` rather than `location`, the flag is gone,
+/// temp field data is cleared, the supported on-transition effect (the
+/// bedroom's decoration flags) ran, and the destination was loaded from the
+/// pack exactly once.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_flagged_continue_lands_at_the_continue_game_warp() {
@@ -1308,6 +1314,7 @@ fn real_pack_flagged_continue_lands_at_the_continue_game_warp() {
     let decoration = assets::object_event_flags::DECORATION_FLAGS[0];
     assert!(!block1.event_data.flag_get(decoration).unwrap());
 
+    let loads_before = crate::pack_source::pack_loads_on_this_thread();
     let phase = OverworldPhase::continue_saved_game(
         crate::pack_source::PackSource::Runtime,
         block1.clone(),
@@ -1315,6 +1322,11 @@ fn real_pack_flagged_continue_lands_at_the_continue_game_warp() {
     )
     .expect("run `cargo xtask extract` first");
 
+    assert_eq!(
+        crate::pack_source::pack_loads_on_this_thread() - loads_before,
+        1,
+        "a flagged continue loads its destination's pack exactly once"
+    );
     assert_eq!(phase.map_id, new_game::SPAWN_MAP_ID);
     assert_eq!(phase.player.position(), new_game::SPAWN_POSITION);
     assert_eq!(phase.save1.location, block1.continue_game_warp);

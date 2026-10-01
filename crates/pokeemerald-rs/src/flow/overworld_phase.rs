@@ -411,16 +411,19 @@ impl OverworldPhase {
         block1: SaveBlock1,
         mut block2: SaveBlock2,
     ) -> Result<Self, ContinueError> {
-        let continue_game_warp = take_continue_game_warp(&block1, &mut block2)?;
-        // A flagged save resumes at its warp, so its stale `location` need
-        // not name a loadable map; the destination map seeds the phase.
-        let map_id = match continue_game_warp {
-            Some((warp_map, _)) => warp_map,
-            None => saved_map_id(block1.location).ok_or(ContinueError::UnknownLocation {
-                map_group: block1.location.map_group,
-                map_num: block1.location.map_num,
-            })?,
-        };
+        if let Some((warp_map, destination)) = take_continue_game_warp(&block1, &mut block2)? {
+            return Self::continue_at_continue_game_warp(
+                source,
+                block1,
+                block2,
+                warp_map,
+                destination,
+            );
+        }
+        let map_id = saved_map_id(block1.location).ok_or(ContinueError::UnknownLocation {
+            map_group: block1.location.map_group,
+            map_num: block1.location.map_num,
+        })?;
         // Loaded with the save's own event data, not a fresh store: a
         // continue does not rerun the map's on-transition script, so a
         // previously set var (e.g. Route 103's rival sprite) must already
@@ -437,29 +440,71 @@ impl OverworldPhase {
         // `Runtime` default, so every later load this phase performs
         // keeps honoring it too.
         phase.pack_source = source;
-        if let Some((warp_map, destination)) = continue_game_warp {
-            phase.land_at_continue_game_warp(warp_map, destination)?;
-        }
         Ok(phase)
     }
 
+    /// [`Self::continue_saved_game`] for a flagged save:
     /// `SetWarpDestinationToContinueGameWarp` + `WarpIntoMap`
-    /// (`src/overworld.c:1741-1743`) in place of `InitMapFromSavedGame`;
-    /// `LoadMapFromWarp` clears temp field data and runs the on-transition
-    /// effects. The flag is already consumed
-    /// ([`take_continue_game_warp`]), matching upstream, which clears it
-    /// before the warp; a refused warp fails the continue, so the caller's
-    /// copy of the save, flag still set, is what stays on disk.
-    pub(super) fn land_at_continue_game_warp(
-        &mut self,
+    /// (`src/overworld.c:1741-1743`) in place of `InitMapFromSavedGame`.
+    /// The save's stale `location` need not name a loadable map; the
+    /// destination seeds the phase.
+    ///
+    /// Stages the destination the way `LoadMapFromWarp` enters it -- temp
+    /// field data cleared and the on-transition effects run
+    /// ([`connections::map_entry_event_data`]) -- and loads its scene
+    /// **once**, building the phase directly around it rather than loading
+    /// the destination for [`Self::from_saved`] and again for
+    /// [`Self::warp_to_saved_location`]. Staging from the save's own event
+    /// data instead of the phase's matches that two-load order exactly:
+    /// the only event-data write [`Self::from_saved`] makes first,
+    /// [`first_battle_trigger::sync_route_101_state_on_entry`], is
+    /// idempotent and touches no temp var or on-transition input, and
+    /// staging reruns it.
+    ///
+    /// The flag is already consumed ([`take_continue_game_warp`]), matching
+    /// upstream, which clears it before the warp; a refused warp fails the
+    /// continue, so the caller's copy of the save, flag still set, is what
+    /// stays on disk.
+    fn continue_at_continue_game_warp(
+        source: crate::pack_source::PackSource,
+        block1: SaveBlock1,
+        block2: SaveBlock2,
         warp_map: assets::MapId,
         destination: WarpData,
-    ) -> Result<(), ContinueError> {
-        if self.warp_to_saved_location(warp_map, destination) {
-            Ok(())
-        } else {
-            Err(ContinueError::ContinueGameWarp { destination })
-        }
+    ) -> Result<Self, ContinueError> {
+        let refused = ContinueError::ContinueGameWarp { destination };
+        let (Ok(header), Ok(events)) = (
+            assets::MapHeaderTable::new().header(warp_map),
+            assets::MapEventsTable::new().resolve(warp_map),
+        ) else {
+            return Err(refused);
+        };
+        let event_data =
+            connections::map_entry_event_data(&block1.event_data, warp_map, block2.player_gender);
+        let scene = overworld::load_room_from_source(
+            source,
+            warp_map,
+            block2.player_gender.into(),
+            &event_data,
+        )?;
+        let Some(object_events) = connections::seed_object_events(&scene, warp_map) else {
+            return Err(refused);
+        };
+        let Some(landing) =
+            connections::saved_location_landing(&scene, warp_map, header, events, destination)
+        else {
+            return Err(refused);
+        };
+        let mut phase = Self::from_saved(scene, warp_map, block1, block2);
+        phase.pack_source = source;
+        phase.commit_saved_location_landing(
+            warp_map,
+            destination,
+            landing,
+            event_data,
+            object_events,
+        );
+        Ok(phase)
     }
 
     /// [`Self::continue_saved_game`]'s pack-free core: build the resumed
