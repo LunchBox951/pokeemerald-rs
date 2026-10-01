@@ -35,7 +35,7 @@ pub use pp_bonuses::{calculate_pp_with_bonus, PpBonuses, MAX_PP_UPS};
 pub const MAX_MON_MOVES: usize = 4;
 
 /// Empty move-slot marker, which cannot be used as a known move.
-pub const MOVE_NONE: MoveId = MoveId(0);
+pub const MOVE_NONE: MoveId = MoveId::NONE;
 
 /// Reserved empty-species marker.
 pub const SPECIES_NONE: SpeciesId = SpeciesId(0);

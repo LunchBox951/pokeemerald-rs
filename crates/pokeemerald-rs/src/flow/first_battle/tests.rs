@@ -9,10 +9,10 @@ use super::{
 
 const TREECKO: SpeciesId = SpeciesId(277);
 const ZIGZAGOON: SpeciesId = SpeciesId(288);
-const TACKLE: MoveId = MoveId(33);
-const GROWL: MoveId = MoveId(45);
-const POUND: MoveId = MoveId(1);
-const LEER: MoveId = MoveId(43);
+const TACKLE: MoveId = MoveId::TACKLE;
+const GROWL: MoveId = MoveId::GROWL;
+const POUND: MoveId = MoveId::POUND;
+const LEER: MoveId = MoveId::LEER;
 const FIRST_MOVE_SLOT: usize = 0;
 const FIXED_PLAYER_PERSONALITY: u32 = 0;
 const SCRIPTED_OPPONENT_LEVEL: u8 = 2;

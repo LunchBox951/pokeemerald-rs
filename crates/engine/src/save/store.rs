@@ -785,6 +785,7 @@ impl SaveStore {
 
         let new_last_written_sector = (self.last_written_sector + 1) % NUM_SECTORS_PER_SLOT_U16;
         let new_save_counter = self.save_counter.wrapping_add(1);
+        block1.stamp_generation(&mut block1_bytes, new_save_counter);
         let slot = physical_slot_for_counter(new_save_counter);
 
         for sector_id in 0..NUM_SECTORS_PER_SLOT_U16 {
@@ -1057,6 +1058,7 @@ impl SaveStore {
 
         let mut block1 =
             SaveBlock1::from_bytes(&copied.block1[..], block2.encryption_key).unwrap_or_default();
+        block1.require_generation(&copied.block1[..], self.save_counter);
 
         if !copied.block2_valid {
             clear_key_encrypted_fields(&mut block1);

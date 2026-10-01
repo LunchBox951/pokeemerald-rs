@@ -20,7 +20,7 @@ use crate::status1::Status1;
 use assets::{AbilityId, MoveId, SpeciesId, SpeciesTable};
 
 const TACKLE_BASE_PP: u8 = 35;
-const SCRATCH: MoveId = MoveId(10);
+const SCRATCH: MoveId = MoveId::SCRATCH;
 const TENTACOOL: SpeciesId = SpeciesId(72);
 const ZIGZAGOON: SpeciesId = SpeciesId(288);
 const PICKUP: AbilityId = AbilityId(53);

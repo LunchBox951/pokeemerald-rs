@@ -33,6 +33,73 @@ fn fresh_store_loads_as_empty() {
     assert_eq!(store.last_written_sector(), 0);
 }
 
+/// What a build without the #801 generation stamp does on a save: patch the
+/// position over the loaded bytes, leave every other byte, and advance the
+/// counter.
+fn write_without_a_generation_stamp(store: &mut SaveStore, pos: Coords16) {
+    let mut block1_bytes = store.base_block1.clone();
+    block1_bytes[..4].copy_from_slice(&[
+        pos.x.to_le_bytes()[0],
+        pos.x.to_le_bytes()[1],
+        pos.y.to_le_bytes()[0],
+        pos.y.to_le_bytes()[1],
+    ]);
+    let block2_bytes = store.base_block2.clone();
+    let storage_bytes = store.base_pokemon_storage.clone();
+    let new_last_written_sector = (store.last_written_sector + 1) % NUM_SECTORS_PER_SLOT_U16;
+    let new_save_counter = store.save_counter.wrapping_add(1);
+    let slot = physical_slot_for_counter(new_save_counter);
+    for sector_id in 0..NUM_SECTORS_PER_SLOT_U16 {
+        let data: &[u8] = if sector_id == SECTOR_ID_SAVEBLOCK2 {
+            &block2_bytes[..]
+        } else if sector_id < SECTOR_ID_PKMN_STORAGE_START {
+            chunk_of(
+                &block1_bytes[..],
+                (sector_id - SECTOR_ID_SAVEBLOCK1_START) as usize,
+            )
+        } else {
+            chunk_of(
+                &storage_bytes[..],
+                (sector_id - SECTOR_ID_PKMN_STORAGE_START) as usize,
+            )
+        };
+        let physical = ((sector_id + new_last_written_sector) % NUM_SECTORS_PER_SLOT_U16) as usize;
+        store.write_physical(
+            slot,
+            physical,
+            &Sector::write(sector_id, data, new_save_counter),
+        );
+    }
+    store.last_written_sector = new_last_written_sector;
+    store.save_counter = new_save_counter;
+    store.base_block1 = block1_bytes;
+}
+
+/// A save from this build, reopened and saved by a pre-#801 build that walks
+/// off the position and back to it, keeps the marker, coordinates and
+/// elevation pair, all still consistent; only the counter stamp differs, so
+/// the pair must not be trusted.
+#[test]
+fn an_old_build_save_back_at_the_same_position_leaves_the_pair_untrusted() {
+    let mut store = SaveStore::new();
+    let mut block1 = sample_block1();
+    block1.player_object_event.active = true;
+    block1.player_object_event.current_elevation = 0;
+    block1.player_object_event.previous_elevation = 3;
+    let block2 = sample_block2();
+    store.save(&block1, &block2);
+    assert!(store.load().block1.player_object_event.active, "fresh save");
+
+    write_without_a_generation_stamp(&mut store, Coords16 { x: 11, y: -20 });
+    write_without_a_generation_stamp(&mut store, block1.pos);
+    let reopened = store.load().block1;
+    assert_eq!(reopened.pos, block1.pos);
+    assert!(
+        !reopened.player_object_event.active,
+        "a pair stamped by an earlier save must not be trusted"
+    );
+}
+
 #[test]
 fn save_then_load_round_trips_identical_state() {
     let mut store = SaveStore::new();

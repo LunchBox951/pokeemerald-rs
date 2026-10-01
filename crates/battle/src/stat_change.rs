@@ -81,16 +81,16 @@ pub const SOUNDPROOF: AbilityId = AbilityId(43);
 /// (`src/battle_util.c:686-692`). Soundproof blocks every entry, whatever the
 /// move's effect.
 const SOUND_MOVES: [MoveId; 10] = [
-    MoveId(45),  // Growl
-    MoveId(46),  // Roar
-    MoveId(47),  // Sing
-    MoveId(48),  // Supersonic
-    MoveId(103), // Screech
-    MoveId(173), // Snore
-    MoveId(253), // Uproar
-    MoveId(319), // Metal Sound
-    MoveId(320), // Grass Whistle
-    MoveId(304), // Hyper Voice
+    MoveId::GROWL,
+    MoveId::ROAR,
+    MoveId::SING,
+    MoveId::SUPERSONIC,
+    MoveId::SCREECH,
+    MoveId::SNORE,
+    MoveId::UPROAR,
+    MoveId::METAL_SOUND,
+    MoveId::GRASS_WHISTLE,
+    MoveId::HYPER_VOICE,
 ];
 
 /// A battle stat that a move effect can raise or lower.

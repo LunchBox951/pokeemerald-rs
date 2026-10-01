@@ -87,6 +87,9 @@ pub struct PlayerState {
     transit_cadence: TransitCadence,
     turn_frames_remaining: u8,
     transit_direction: Option<Direction>,
+    /// The elevation of the cell the active crossing lands on, re-adopted
+    /// when the crossing finishes. Stale at rest.
+    landing_elevation: u8,
     forced_movement_armed: bool,
     forced_input_tile_center: bool,
     rest_pose: RestPose,
@@ -184,10 +187,31 @@ impl PlayerState {
             transit_cadence: TransitCadence::WALK,
             turn_frames_remaining: 0,
             transit_direction: None,
+            landing_elevation: elevation,
             forced_movement_armed: false,
             forced_input_tile_center: false,
             rest_pose: RestPose::Standing,
         }
+    }
+
+    /// Creates a stationary player carrying a saved elevation pair.
+    ///
+    /// Upstream's continue restores the player object's persisted
+    /// `currentElevation`/`previousElevation` verbatim
+    /// (`LoadObjectEvents`, `src/load_save.c:188-193`) rather than deriving
+    /// both from the landing tile as [`Self::new`] does; the two differ on
+    /// multi-level and transition cells, where
+    /// `ObjectEventUpdateElevation` retains history.
+    #[must_use]
+    pub const fn with_saved_elevations(
+        position: TilePos,
+        current_elevation: u8,
+        previous_elevation: u8,
+        facing: Direction,
+    ) -> Self {
+        let mut player = Self::new(position, current_elevation, facing);
+        player.render_elevation = previous_elevation;
+        player
     }
 
     /// Returns the current tile position.
@@ -332,6 +356,13 @@ impl PlayerState {
             if *frames >= self.transit_cadence.duration {
                 self.transit_frames = None;
                 self.transit_direction = None;
+                // Upstream's finished step shifts previous coords onto
+                // current (`ShiftStillObjectEventCoords`,
+                // `event_object_movement.c:2162-2165`) and re-runs
+                // `ObjectEventUpdateElevation` over the landing cell alone
+                // (`DoGroundEffects_OnFinishStep`, `:8085-8104`), so a
+                // multi-level origin's deferred adoption lands here.
+                self.adopt_elevation(self.landing_elevation, self.landing_elevation);
                 if self.transit_cadence.animation_disabled {
                     self.rest_pose = RestPose::SlidePaused;
                 }
@@ -345,6 +376,9 @@ impl PlayerState {
         self.turn_frames_remaining = self.turn_frames_remaining.saturating_sub(1);
     }
 
+    /// `ObjectEventUpdateElevation` (`event_object_movement.c:7725-7737`):
+    /// skipped whole while either end is multi-level, and a transition
+    /// destination keeps the render elevation.
     fn adopt_elevation(&mut self, origin_elevation: u8, destination_elevation: u8) {
         if origin_elevation == super::collision::ELEVATION_MULTI_LEVEL
             || destination_elevation == super::collision::ELEVATION_MULTI_LEVEL
@@ -608,6 +642,7 @@ impl PlayerState {
             });
         self.position = landing.position;
         self.adopt_elevation(origin_elevation, landing.cell.elevation);
+        self.landing_elevation = landing.cell.elevation;
         self.transit_direction = Some(direction);
         self.transit_frames = Some(0);
         self.transit_cadence = cadence;
@@ -1583,8 +1618,7 @@ mod tests {
     }
 
     #[test]
-    fn a_multi_level_origin_tile_skips_the_elevation_update_even_though_the_destination_is_ordinary(
-    ) {
+    fn a_multi_level_origin_defers_the_elevation_update_to_the_finished_step() {
         let width = 5u16;
         let height = 5u16;
         let mut bytes = Vec::with_capacity(usize::from(width) * usize::from(height) * 2);
@@ -1657,10 +1691,82 @@ mod tests {
         assert_eq!(
             (player.elevation(), player.previous_elevation()),
             (0, 0),
-            "the origin tile's ELEVATION_MULTI_LEVEL must skip the whole \
-             adoption -- both fields stay exactly as they were before this \
-             step, even though the destination (7) is perfectly ordinary \
-             and would otherwise have been adopted into both"
+            "the begin-step pass skips the whole adoption while the origin is \
+             ELEVATION_MULTI_LEVEL, even though the destination (7) is ordinary"
+        );
+        for _ in 0..WALK_FRAMES_PER_TILE {
+            player.tick();
+        }
+        assert!(!player.in_transit());
+        assert_eq!(
+            (player.elevation(), player.previous_elevation()),
+            (7, 7),
+            "the finish-step pass runs over the landing cell alone, so both \
+             fields adopt the ordinary destination once the crossing ends"
+        );
+    }
+
+    /// A multi-level cell crossed between a transition cell and an ordinary
+    /// one leaves the settled pair on the landing cell's elevation, the pair
+    /// a save then holds and a continue accepts on an ordinary cell.
+    #[test]
+    fn settled_elevation_follows_the_landing_cell_after_crossing_multi_level() {
+        // Column x=2: y=1 elev 3, y=2 elev 0, y=3 elev 15, y=4 elev 7.
+        let (_, header, events) = flat_runtime(5, 6, |_, _| 0);
+        let mut bytes = Vec::new();
+        for y in 0..6u16 {
+            for x in 0..5u16 {
+                let elevation = match (x, y) {
+                    (2, 2) => 0,
+                    (2, 3) => super::super::collision::ELEVATION_MULTI_LEVEL,
+                    (2, 4) => 7,
+                    _ => 3,
+                };
+                let raw = MetatileCell {
+                    metatile_id: 1,
+                    collision: 0,
+                    elevation,
+                }
+                .pack();
+                bytes.extend_from_slice(&raw.to_le_bytes());
+            }
+        }
+        let layout = assets::MapLayout {
+            id: assets::LayoutId("MAP_TEST"),
+            name: "MapTest",
+            width: 5,
+            height: 6,
+            primary_tileset: "gTileset_General",
+            secondary_tileset: "gTileset_General",
+        };
+        let grid = layout.grid(&bytes).unwrap();
+        let runtime = MapRuntime::new(
+            assets::MapId("MAP_TEST"),
+            &header,
+            &events,
+            grid,
+            MetatileAttributeTable::new(&[]),
+            MetatileAttributeTable::new(&[]),
+        );
+        let mut player = PlayerState::new((2, 1), 3, Direction::South);
+        let mut settled = Vec::new();
+        for _ in 0..3 {
+            assert!(matches!(
+                player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS),
+                StepOutcome::Advanced { .. }
+            ));
+            for _ in 0..WALK_FRAMES_PER_TILE {
+                player.tick();
+            }
+            settled.push((player.elevation(), player.previous_elevation()));
+        }
+        assert_eq!(player.position(), (2, 4));
+        assert!(!player.in_transit());
+        assert_eq!(
+            settled,
+            vec![(0, 3), (0, 3), (7, 7)],
+            "transition keeps the retained 3, multi-level retains both, and the \
+             ordinary landing settles both halves on 7"
         );
     }
 

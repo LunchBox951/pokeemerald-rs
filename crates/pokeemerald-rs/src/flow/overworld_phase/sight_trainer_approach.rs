@@ -645,7 +645,7 @@ impl OverworldPhase {
             50,
             battle::fixed_ivs(31),
             0,
-            vec![assets::MoveId(163)], // MOVE_SLASH
+            vec![assets::MoveId::SLASH],
         )
         .expect("Treecko/Slash is a valid pairing");
         let mut rng = engine::rng::Rng::new(1);
@@ -877,7 +877,7 @@ mod tests {
             50,
             battle::fixed_ivs(31),
             0,
-            vec![assets::MoveId(163)], // MOVE_SLASH
+            vec![assets::MoveId::SLASH],
         )
         .expect("Treecko/Slash is a valid pairing");
         let mut rng = engine::rng::Rng::new(1);

@@ -387,15 +387,15 @@ fn ai_get_ability(target: &BattlePokemon, rng: &mut impl BattleRng) -> AbilityId
 /// (`data/battle_ai_scripts.s:95-103`); unlike execution's `SOUND_MOVES` in
 /// `stat_change.rs`, this list omits Hyper Voice.
 const AI_SOUND_MOVES: [MoveId; 9] = [
-    MoveId(45),  // Growl
-    MoveId(46),  // Roar
-    MoveId(47),  // Sing
-    MoveId(48),  // Supersonic
-    MoveId(103), // Screech
-    MoveId(173), // Snore
-    MoveId(253), // Uproar
-    MoveId(319), // Metal Sound
-    MoveId(320), // Grass Whistle
+    MoveId::GROWL,
+    MoveId::ROAR,
+    MoveId::SING,
+    MoveId::SUPERSONIC,
+    MoveId::SCREECH,
+    MoveId::SNORE,
+    MoveId::UPROAR,
+    MoveId::METAL_SOUND,
+    MoveId::GRASS_WHISTLE,
 ];
 
 /// Whether `AI_CheckBadMove` discourages `move_id` for Soundproof, given the
@@ -816,19 +816,19 @@ mod tests {
     /// ability `ai_get_ability` reads directly) in slot 1.
     const TRAPINCH: SpeciesId = SpeciesId(332);
 
-    const POUND: MoveId = MoveId(1);
-    const SCRATCH: MoveId = MoveId(10);
-    const WING_ATTACK: MoveId = MoveId(17);
-    const TACKLE: MoveId = MoveId(33);
-    const LEER: MoveId = MoveId(43);
-    const GROWL: MoveId = MoveId(45);
-    const EMBER: MoveId = MoveId(52);
-    const WATER_GUN: MoveId = MoveId(55);
-    const EARTHQUAKE: MoveId = MoveId(89);
+    const POUND: MoveId = MoveId::POUND;
+    const SCRATCH: MoveId = MoveId::SCRATCH;
+    const WING_ATTACK: MoveId = MoveId::WING_ATTACK;
+    const TACKLE: MoveId = MoveId::TACKLE;
+    const LEER: MoveId = MoveId::LEER;
+    const GROWL: MoveId = MoveId::GROWL;
+    const EMBER: MoveId = MoveId::EMBER;
+    const WATER_GUN: MoveId = MoveId::WATER_GUN;
+    const EARTHQUAKE: MoveId = MoveId::EARTHQUAKE;
     /// `MOVE_HYPER_VOICE`: absent from the AI's own Soundproof list
     /// (`data/battle_ai_scripts.s:95-103`) despite belonging to execution's
     /// `SOUND_MOVES` (`crates/battle/src/stat_change.rs:83-94`).
-    const HYPER_VOICE: MoveId = MoveId(304);
+    const HYPER_VOICE: MoveId = MoveId::HYPER_VOICE;
 
     fn route_103_flags() -> AiFlags {
         AiFlags::CHECK_BAD_MOVE

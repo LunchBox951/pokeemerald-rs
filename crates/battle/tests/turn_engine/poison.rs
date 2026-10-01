@@ -15,10 +15,10 @@ use battle::status1::poison_residual_damage;
 use battle::{Battle, BattleEvent, BattleOutcome, Dex, PlayerAction, Status1};
 
 /// `MOVE_TACKLE`.
-const TACKLE: MoveId = MoveId(33);
+const TACKLE: MoveId = MoveId::TACKLE;
 /// `MOVE_POISON_STING` (`EFFECT_POISON_HIT`), 100 accuracy, 30% chance,
 /// Poison type.
-const POISON_STING: MoveId = MoveId(40);
+const POISON_STING: MoveId = MoveId::POISON_STING;
 
 /// `SPECIES_RATTATA`: base Speed 72, the fast mover in every fixture below.
 const RATTATA: u16 = 19;
@@ -464,9 +464,9 @@ fn a_direct_hit_kos_reward_is_paid_before_the_residual_tick_that_fells_the_winne
 
 /// `MOVE_LEER`, non-damaging: with [`GROWL`], no direct action can change
 /// HP, so the residual pass alone decides the battle.
-const LEER: MoveId = MoveId(43);
+const LEER: MoveId = MoveId::LEER;
 /// `MOVE_GROWL`, the player's own non-damaging move.
-const GROWL: MoveId = MoveId(45);
+const GROWL: MoveId = MoveId::GROWL;
 /// `TRAINER_MAY_ROUTE_103_MUDKIP`.
 const MAY_ROUTE_103_MUDKIP: assets::trainers::TrainerId = assets::trainers::TrainerId(529);
 
@@ -535,11 +535,11 @@ const TORCHIC: u16 = 280;
 /// `SPECIES_TREECKO`.
 const TREECKO: u16 = 277;
 /// `MOVE_SCRATCH`.
-const SCRATCH: MoveId = MoveId(10);
+const SCRATCH: MoveId = MoveId::SCRATCH;
 /// `MOVE_POUND`.
-const POUND: MoveId = MoveId(1);
+const POUND: MoveId = MoveId::POUND;
 /// `MOVE_PECK`, the level-16 entry Torchic has no free slot for.
-const PECK: MoveId = MoveId(64);
+const PECK: MoveId = MoveId::PECK;
 
 /// A level-up prompt interrupts the residual pass without dropping it:
 /// upstream answers the box inside `BattleScript_GiveExp` before
