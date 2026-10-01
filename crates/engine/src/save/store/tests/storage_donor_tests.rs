@@ -401,3 +401,49 @@ fn an_identity_legacy_head_over_a_complete_tail_keeps_its_counter_despite_one_da
     assert_eq!(outcome.block1.money, counter_16_block1.money);
     assert_eq!(&store.base_pokemon_storage[..], &counter_14_storage[..]);
 }
+
+/// Rewrites the unchecksummed footer id of the sector at `position`,
+/// leaving its payload, checksum, signature and counter untouched.
+fn relabel_footer_id(store: &mut SaveStore, slot: usize, position: usize, id: u16) {
+    // The footer ends id (u16), checksum (u16), signature, counter (u32s).
+    let id_offset = SECTOR_SIZE - 2 * size_of::<u32>() - 2 * size_of::<u16>();
+    let mut bytes = *store.read_physical(slot, position).as_bytes();
+    bytes[id_offset..id_offset + 2].copy_from_slice(&id.to_le_bytes());
+    store.write_physical(slot, position, &Sector::from_bytes(bytes));
+}
+
+/// Every save-block id, not only ids 1-3, fits within a storage chunk:
+/// id 0 (`SaveBlock2`, 3884 bytes) and id 4 (`SaveBlock1`'s last chunk,
+/// 3848 bytes) are zero-padded to the sector, and the checksum sums
+/// words, so either still verifies at storage id 5's 3968 bytes. A
+/// legacy head over slot 1's rotation-13 remnant puts id 4 (rotation 0)
+/// or id 0 (rotation 4) at position 4, where the lost id 5 sat; one
+/// relabeled footer there completes a rotation-coherent storage set
+/// whose generation still holds all of ids 1-3, and `load` would copy
+/// those save-block bytes over the first box chunk.
+#[test]
+fn a_relabeled_short_save_block_sector_is_never_donated_as_storage() {
+    for (head_rotation, head_id) in [(0u16, 4u16), (4, SECTOR_ID_SAVEBLOCK2)] {
+        let block2 = sample_block2();
+        let mut store = SaveStore::new();
+        for _ in 0..12 {
+            store.save(&sample_block1(), &block2);
+        }
+        store.base_pokemon_storage.fill(0x0D);
+        store.save(&sample_block1(), &block2);
+        assert_eq!(store.save_counter(), 13);
+        assert_eq!(store.last_written_sector(), 13);
+
+        write_legacy_slot_rotated(&mut store, 1, &sample_block1(), &block2, 15, head_rotation);
+        assert_eq!(store.read_physical(1, 4).id(), head_id);
+        relabel_footer_id(&mut store, 1, 4, SECTOR_ID_PKMN_STORAGE_START);
+        assert!(store
+            .read_physical(1, 4)
+            .is_valid(sector_payload_len(SECTOR_ID_PKMN_STORAGE_START).unwrap()));
+
+        assert!(
+            store.scan_slot(1).storage_counter.is_none(),
+            "id {head_id} relabeled into the lost id 5 must not complete a donor set"
+        );
+    }
+}

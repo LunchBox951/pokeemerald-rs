@@ -387,8 +387,8 @@ impl SlotSurvey {
         if id >= SECTOR_ID_PKMN_STORAGE_START {
             // One generation writes each id once. A second checksum-valid
             // copy under the same counter can only be a save-block sector
-            // whose unchecksummed footer id was damaged into this one (ids
-            // 1-3 share ids 5-12's payload length), and `load`'s donor copy
+            // whose unchecksummed footer id was damaged into this one (every
+            // save-block payload fits within ids 5-12's), and `load`'s donor copy
             // would splice it over the real chunk.
             if self.storage_valid_ids & (1 << id) != 0 {
                 self.storage_ids_unique = false;
@@ -441,8 +441,10 @@ impl SlotSurvey {
     /// a missing pair, and a set with neither in 5-13 draws on one
     /// generation only. Anything wider than one outlier is still refused.
     ///
-    /// The footer id is unchecksummed too, and ids 1-3 share ids 5-12's
-    /// payload length, so a save-block sector relabeled into a storage id
+    /// The footer id is unchecksummed too, and every save-block payload
+    /// fits within ids 5-12's (ids 1-3 match it; ids 0 and 4 are shorter,
+    /// and the zero padding behind them adds nothing to the word-sum
+    /// checksum), so a save-block sector relabeled into a storage id
     /// the slot has lost (a legacy head over a rotated remnant drops
     /// whichever storage ids sat in positions 0-4) would complete the set
     /// as that one outlier. One generation lays every id at one rotation,
@@ -452,11 +454,11 @@ impl SlotSurvey {
     /// rotation-13 remnant's id 5 sat, so only the counter test catches
     /// that relabel. A damaged counter can land on that same value by
     /// chance, though, and one generation writes each id once: the
-    /// relabeled sector *is* that generation's id 1, 2 or 3, so a
-    /// generation still holding all three of them relabeled nothing, and
+    /// relabeled sector *is* one of that generation's ids 0-4, so a
+    /// generation still holding all five of them relabeled nothing, and
     /// its counter on a storage footer is damage, not a disguised head
     /// sector. Only an outlier matching a generation that has lost one of
-    /// ids 1-3 withdraws the set.
+    /// ids 0-4 withdraws the set.
     fn storage_generation(&self) -> Option<u32> {
         if !self.storage_rotation_coherent {
             return None;
@@ -475,11 +477,13 @@ impl SlotSurvey {
     }
 
     /// Whether the save-block sectors carrying `counter` could have lost one
-    /// of ids 1-3 to a relabeled footer: some sector of that generation is
-    /// present, and not all three relabel-capable ids are.
+    /// of ids 0-4 to a relabeled footer: some sector of that generation is
+    /// present, and not all five save-block ids are.
     fn save_block_generation_may_have_relabeled(&self, counter: u32) -> bool {
-        /// Ids 1-3: the save-block ids whose payload length matches ids 5-12.
-        const RELABEL_CAPABLE_IDS: u32 = 0b1110;
+        /// Ids 0-4: every save-block payload fits within ids 5-12's, and
+        /// the zero padding after the shorter ids 0 and 4 adds nothing to
+        /// the word-sum checksum, so each verifies under a storage id.
+        const RELABEL_CAPABLE_IDS: u32 = LEGACY_ERA_IDS_MASK;
         let mut seen = false;
         let mut ids_present = 0u32;
         for (&c, &id) in self.save_block_counters[..self.save_block_count]
