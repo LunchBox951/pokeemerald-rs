@@ -550,7 +550,21 @@ impl SlotSurvey {
         // from the five-sector writer -- and what sits behind it is stale
         // remnant whatever its state. Damage there costs the tail its
         // donor eligibility, never the head its progress.
-        let head_cannot_be_a_torn_full_write = !self.head_is_identity;
+        //
+        // Unless the head is no five-sector write at all: the unchecksummed
+        // footer id lets a full generation's own sector (id 13 at rotation
+        // 1, zero-padded) relabel into the id its head lacks. The
+        // five-sector writer never touched positions 5-13, so a tail sector
+        // under the head's own counter proves the head is that full
+        // generation, missing an id, and upstream reports it Error. A
+        // tail whose consensus is older keeps the one-outlier tolerance:
+        // that sector is a damaged counter, not the head's generation.
+        let tail_shares_head_generation = self.legacy_counter.is_some_and(|legacy| {
+            self.tail_counters[..self.tail_valid_count].contains(&legacy)
+                && !tail_counter.is_some_and(|tail| older_generation_precedes(tail, legacy))
+        });
+        let head_cannot_be_a_torn_full_write =
+            !self.head_is_identity && !tail_shares_head_generation;
         let all_valid_mask = (1u32 << u32::from(NUM_SECTORS_PER_SLOT_U16)) - 1;
         let legacy_intact = self.legacy_consistent
             && self.head_valid_ids == LEGACY_ERA_IDS_MASK

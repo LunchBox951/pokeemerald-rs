@@ -272,3 +272,59 @@ fn a_relabeled_legacy_head_sector_off_the_remnant_rotation_is_never_donated() {
 fn a_relabeled_legacy_head_sector_at_the_remnant_rotation_is_never_donated() {
     assert_relabeled_head_sector_is_never_donated(3);
 }
+
+/// A full generation at rotation 1 puts ids 13, 0, 1, 2, 3 in positions
+/// 0-4 and id 4 at position 5. Id 13's 2000-byte payload is zero-padded
+/// to the sector and the checksum sums words, so relabeling its footer
+/// to id 4 leaves it valid there and turns the head into [4, 0, 1, 2, 3]:
+/// a non-identity head no torn full write can produce. But the
+/// five-sector writer never touched positions 5-13, so tail sectors
+/// carrying the head's own counter prove the head is that same full
+/// generation, now missing id 13. Upstream's `GetSaveValidStatus`
+/// (`pokeemerald/src/save.c:525-550`) reports such a slot Error, and
+/// with the counterpart empty the image is Corrupt (`save.c:607-636`);
+/// accepting it as an intact legacy head would load storage bytes as a
+/// `SaveBlock1` chunk and zero every box on the next save.
+#[test]
+fn a_relabeled_full_generation_never_reads_as_a_rotated_legacy_head() {
+    const ROTATION: u16 = 1;
+    let block2 = sample_block2();
+    let block2_bytes = block2.to_bytes();
+    let block1_bytes = sample_block1().to_bytes(block2.encryption_key);
+    let storage_bytes = vec![0xABu8; PKMN_STORAGE_PAYLOAD_LEN];
+
+    let mut store = SaveStore::new();
+    for id in 0..NUM_SECTORS_PER_SLOT_U16 {
+        let len = sector_payload_len(id).unwrap();
+        let payload: &[u8] = if id == SECTOR_ID_SAVEBLOCK2 {
+            &block2_bytes[..len]
+        } else if id < SECTOR_ID_PKMN_STORAGE_START {
+            let offset = usize::from(id - SECTOR_ID_SAVEBLOCK1_START) * SECTOR_DATA_SIZE;
+            &block1_bytes[offset..offset + len]
+        } else {
+            let offset = usize::from(id - SECTOR_ID_PKMN_STORAGE_START) * SECTOR_DATA_SIZE;
+            &storage_bytes[offset..offset + len]
+        };
+        let physical = usize::from((id + ROTATION) % NUM_SECTORS_PER_SLOT_U16);
+        store.write_physical(1, physical, &Sector::write(id, payload, 3));
+    }
+    assert_eq!(store.scan_slot(1).integrity, SlotIntegrity::Ok);
+
+    // Id 13's footer id, at position 0, is damaged into id 4.
+    let id_offset = SECTOR_SIZE - 2 * size_of::<u32>() - 2 * size_of::<u16>();
+    let mut bytes = *store.read_physical(1, 0).as_bytes();
+    bytes[id_offset..id_offset + 2].copy_from_slice(&4u16.to_le_bytes());
+    store.write_physical(1, 0, &Sector::from_bytes(bytes));
+    assert!(store
+        .read_physical(1, 0)
+        .is_valid(sector_payload_len(4).unwrap()));
+
+    let scan = store.scan_slot(1);
+    assert_eq!(
+        scan.integrity,
+        SlotIntegrity::Error,
+        "a full generation missing id 13 must read Error, as upstream does"
+    );
+    assert!(!scan.legacy);
+    assert_eq!(store.load().status, SaveStatus::Corrupt);
+}
