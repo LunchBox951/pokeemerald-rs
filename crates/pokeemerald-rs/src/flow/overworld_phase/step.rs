@@ -378,7 +378,13 @@ impl OverworldPhase {
             // nor in `advance_sight_trainer_approach_frame` above, which ran
             // before `self.sight_approach` existed and returned `None`
             // (PR #407 review).
+            let player_was_moving = self.player.in_transit();
             self.tick_player_under_approach_lock();
+            if player_was_moving {
+                if let Some(approach) = &mut self.sight_approach {
+                    approach.advance_lock_handoff(true);
+                }
+            }
             return;
         }
 

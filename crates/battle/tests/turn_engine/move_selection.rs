@@ -11,17 +11,17 @@ use battle::{
     STRUGGLE,
 };
 
-const TACKLE: MoveId = MoveId(33);
-const SCRATCH: MoveId = MoveId(10);
-const POUND: MoveId = MoveId(1);
-const CUT: MoveId = MoveId(15);
-const LEER: MoveId = MoveId(43);
-const GROWL: MoveId = MoveId(45);
-const POISON_STING: MoveId = MoveId(40);
-const SUPERSONIC: MoveId = MoveId(48);
-const HYPER_VOICE: MoveId = MoveId(304);
-const HORN_DRILL: MoveId = MoveId(32);
-const HAZE: MoveId = MoveId(114);
+const TACKLE: MoveId = MoveId::TACKLE;
+const SCRATCH: MoveId = MoveId::SCRATCH;
+const POUND: MoveId = MoveId::POUND;
+const CUT: MoveId = MoveId::CUT;
+const LEER: MoveId = MoveId::LEER;
+const GROWL: MoveId = MoveId::GROWL;
+const POISON_STING: MoveId = MoveId::POISON_STING;
+const SUPERSONIC: MoveId = MoveId::SUPERSONIC;
+const HYPER_VOICE: MoveId = MoveId::HYPER_VOICE;
+const HORN_DRILL: MoveId = MoveId::HORN_DRILL;
+const HAZE: MoveId = MoveId::HAZE;
 
 const CHARMANDER: u16 = 4;
 const RATTATA: u16 = 19;

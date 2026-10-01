@@ -37,7 +37,7 @@ mod tests {
     use crate::error::BattleError;
     use assets::MoveId;
 
-    const CURSE: MoveId = MoveId(174);
+    const CURSE: MoveId = MoveId::CURSE;
     const UNKNOWN_MOVE: MoveId = MoveId(60_000);
 
     #[test]

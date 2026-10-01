@@ -10,14 +10,14 @@ use crate::flow::npc_trainer_battle::{
 };
 use crate::flow::wild_encounter::SharedRng;
 
-const POUND: MoveId = MoveId(1);
-const TACKLE: MoveId = MoveId(33);
-const LEER: MoveId = MoveId(43);
+const POUND: MoveId = MoveId::POUND;
+const TACKLE: MoveId = MoveId::TACKLE;
+const LEER: MoveId = MoveId::LEER;
 /// `MOVE_PURSUIT`: `EFFECT_PURSUIT` has no resolver, so
 /// `validate_player_move` refuses it ahead of any draw
 /// (`crates/battle/src/battle.rs:415`).
-const PURSUIT: MoveId = MoveId(228);
-const SLASH: MoveId = MoveId(163);
+const PURSUIT: MoveId = MoveId::PURSUIT;
+const SLASH: MoveId = MoveId::SLASH;
 const FEMALE_TRAINER_PERSONALITY_BASE: u32 = 0x78;
 const MALE_TRAINER_PERSONALITY_BASE: u32 = 0x88;
 const NAME_HASH_PERSONALITY_SHIFT: u32 = 8;

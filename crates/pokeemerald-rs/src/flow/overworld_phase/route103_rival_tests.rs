@@ -803,7 +803,7 @@ fn a_lost_route_101_first_battle_still_lets_the_healed_lead_fight_the_rival() {
         sp_defense: battle::MAX_IV,
     };
     route_101.party_lead = Some(
-        BattlePokemon::new(&Dex::new(), SpeciesId(277), 1, ivs, 0, vec![MoveId(1)])
+        BattlePokemon::new(&Dex::new(), SpeciesId(277), 1, ivs, 0, vec![MoveId::POUND])
             .expect("Treecko/Pound must be in the dex"),
     );
 
