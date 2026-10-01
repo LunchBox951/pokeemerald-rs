@@ -11,7 +11,7 @@ use crate::common::{max_iv_mon, SequenceRng};
 use assets::MoveId;
 use battle::{Battle, BattleEvent, BattleOutcome, Dex, PlayerAction, StatStage, Status1};
 
-const TACKLE: MoveId = MoveId(33);
+const TACKLE: MoveId = MoveId::TACKLE;
 
 /// `SPECIES_CHARMANDER`, level 50 against level-2 Rattata: one-shots it, the
 /// same overkill fixture `turn_engine/move_resolution.rs`'s own test uses.
@@ -391,11 +391,11 @@ fn a_self_hit_rates_against_the_users_own_attack_and_defense_stages() {
 }
 
 /// `MOVE_CONFUSE_RAY` (`EFFECT_CONFUSE`), Ghost, 100 accuracy.
-const CONFUSE_RAY: MoveId = MoveId(109);
+const CONFUSE_RAY: MoveId = MoveId::CONFUSE_RAY;
 /// `MOVE_SWEET_KISS` (`EFFECT_CONFUSE`), Normal, 75 accuracy.
-const SWEET_KISS: MoveId = MoveId(186);
+const SWEET_KISS: MoveId = MoveId::SWEET_KISS;
 /// `MOVE_PSYBEAM` (`EFFECT_CONFUSE_HIT`), Psychic, 100 accuracy, 10% chance.
-const PSYBEAM: MoveId = MoveId(60);
+const PSYBEAM: MoveId = MoveId::PSYBEAM;
 /// `SPECIES_SPINDA`: Own Tempo in its only ability slot.
 const SPINDA: u16 = 308;
 

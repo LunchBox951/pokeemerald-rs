@@ -33,13 +33,13 @@ fn mon(dex: &Dex, species: SpeciesId, level: u8, moves: Vec<MoveId>) -> BattlePo
 }
 
 /// `MOVE_THUNDER_WAVE`: Electric, 100 accuracy.
-const THUNDER_WAVE: MoveId = MoveId(86);
+const THUNDER_WAVE: MoveId = MoveId::THUNDER_WAVE;
 /// `MOVE_STUN_SPORE`: Grass, 75 accuracy.
-const STUN_SPORE: MoveId = MoveId(78);
+const STUN_SPORE: MoveId = MoveId::STUN_SPORE;
 /// `MOVE_GLARE`: Normal, 75 accuracy.
-const GLARE: MoveId = MoveId(137);
+const GLARE: MoveId = MoveId::GLARE;
 /// `MOVE_TACKLE`, outside the family.
-const TACKLE: MoveId = MoveId(33);
+const TACKLE: MoveId = MoveId::TACKLE;
 const UNKNOWN_MOVE: MoveId = MoveId(60_000);
 
 /// `SPECIES_ZIGZAGOON`, an ordinary non-immune target.

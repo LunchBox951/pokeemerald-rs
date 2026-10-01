@@ -30,6 +30,7 @@
 //! menu and the save sync behind its `SAVE` action), and [`placement`]
 //! (where a continued save puts the player).
 
+use engine::overworld::object_event::ObjectEventCollection;
 use engine::overworld::{PlayerState, TilePos, WildEncounterState};
 use engine::save::{SaveBlock1, SaveBlock2, WarpData};
 use std::cell::OnceCell;
@@ -158,6 +159,11 @@ pub(crate) struct OverworldPhase {
     scene: OverworldScene,
     pub(super) player: PlayerState,
     pub(super) map_id: assets::MapId,
+    /// Live object events for the current map visit, seeded from the same
+    /// resolved events the scene simulates
+    /// ([`connections::seed_object_events`]) and replaced only by a
+    /// completed map transition.
+    object_events: ObjectEventCollection,
     pub(super) save1: SaveBlock1,
     pub(super) save2: SaveBlock2,
     /// Destination latched at step start for warp processing at step
@@ -421,8 +427,10 @@ impl OverworldPhase {
     /// phase around an already-loaded `scene` for `map_id`, restoring
     /// `block1`/`block2` as this phase's save state.
     ///
-    /// Facing falls back to the tile-derived direction ([`saved_facing`])
-    /// and elevation to [`new_game::SPAWN_ELEVATION`] when the saved data
+    /// Facing falls back to the tile-derived direction ([`saved_facing`]),
+    /// the elevation pair to the saved player object's
+    /// ([`placement::saved_elevations`]) and, for a save that holds none or
+    /// one the landing cell forbids, to the tile's, and elevation to [`new_game::SPAWN_ELEVATION`] when the saved data
     /// will not decode, rather than panicking. Does not rerun the map's
     /// on-transition script, but does run the same on-frame Route 101
     /// update every map-entry point runs
@@ -455,12 +463,26 @@ impl OverworldPhase {
             }
         }
         let position = (i32::from(block1.pos.x), i32::from(block1.pos.y));
-        let (elevation, tile_facing) = placement::saved_tile_placement(&scene, map_id, position);
+        let (tile_elevation, tile_facing) =
+            placement::saved_tile_placement(&scene, map_id, position);
         let facing = placement::saved_facing(&block1, tile_facing);
+        let (elevation, previous_elevation) = placement::saved_elevations(
+            &block1,
+            placement::saved_cell_elevation(&scene, map_id, position),
+            tile_elevation,
+        );
+        let object_events = connections::seed_object_events(&scene, map_id)
+            .expect("a loaded scene's map has event data");
         let mut phase = Self {
             scene,
-            player: PlayerState::new(position, elevation, facing),
+            player: PlayerState::with_saved_elevations(
+                position,
+                elevation,
+                previous_elevation,
+                facing,
+            ),
             map_id,
+            object_events,
             save1: block1,
             save2: block2,
             pending_landing: None,
@@ -572,10 +594,13 @@ impl OverworldPhase {
             &mut save1.event_data,
             save2.player_gender,
         );
+        let object_events = connections::seed_object_events(&scene, map_id)
+            .expect("a loaded scene's map has event data");
         Self {
             scene,
             player,
             map_id,
+            object_events,
             save1,
             save2,
             pending_landing: None,

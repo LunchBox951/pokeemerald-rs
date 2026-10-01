@@ -23,7 +23,7 @@ mod staging;
 
 #[cfg(windows)]
 use directory::claim_promoted_dir;
-use directory::{claim_staged_dir, rename_without_replacement, StagedDirClaim};
+use directory::{claim_output_dir, claim_staged_dir, OutputDirClaim, StagedDirClaim};
 
 const SCREEN_WIDTH: usize = 240;
 const SCREEN_HEIGHT: usize = 160;
@@ -189,12 +189,20 @@ where
         meta_bytes,
         after_rgb_staged,
         || {},
+        || {},
+        || {},
     )
 }
 
 /// [`publish_generation`] with a hook between the staging directory's last
 /// identity check and its promoting rename, so tests can land a replacement in
-/// that gap.
+/// that gap, one between the promoted generation's identity check and
+/// the pointer's staging, so they can swap `output_dir` there, and one just
+/// before the pointer's publication, past the last pre-publish check.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "three test hooks beside the inputs; production passes no-ops through `publish_generation`"
+)]
 fn publish_generation_with<F>(
     scene: Scene,
     output_dir: &Path,
@@ -202,6 +210,8 @@ fn publish_generation_with<F>(
     meta_bytes: &[u8],
     after_rgb_staged: F,
     before_rename: impl FnOnce(),
+    after_generation_check: impl FnOnce(),
+    before_pointer_publish: impl FnOnce(),
 ) -> Result<(PathBuf, PathBuf), RecordSnapshotError>
 where
     F: FnOnce() -> Result<(), RecordSnapshotError>,
@@ -209,6 +219,13 @@ where
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT_GENERATION: AtomicU64 = AtomicU64::new(0);
+    let output_claim = claim_output_dir(output_dir)
+        .map_err(|e| RecordSnapshotError::Write(output_dir.to_path_buf(), e.to_string()))?;
+    let require_output_dir = || {
+        output_claim.require_path(output_dir).map_err(|error| {
+            RecordSnapshotError::Write(output_dir.to_path_buf(), error.to_string())
+        })
+    };
     let (generation, staged_dir, generation_dir, mut staged_dir_claim) = loop {
         let generation = format!(
             "{}.generation-{}-{}",
@@ -245,7 +262,7 @@ where
             .require_path(&staged_dir)
             .map_err(|error| RecordSnapshotError::Write(staged_dir.clone(), error.to_string()))?;
         staged_dir_claim.release_hold();
-        promote_staged_dir(&staged_dir, &generation_dir, before_rename)
+        promote_staged_dir(&output_claim, &staged_dir, &generation_dir, before_rename)
             .map_err(|e| RecordSnapshotError::Write(generation_dir.clone(), e.to_string()))?;
         renamed = true;
         #[cfg(windows)]
@@ -254,17 +271,39 @@ where
                 RecordSnapshotError::Write(generation_dir.clone(), error.to_string())
             })?;
         }
+        // Looked up in the held output directory, so the generation the
+        // pointer will name is proven to sit beside it, not merely somewhere
+        // the `output_dir` pathname led at the time.
         staged_dir_claim
-            .require_path(&generation_dir)
+            .require_entry_in(&output_claim, &generation_dir)
             .map_err(|error| {
                 RecordSnapshotError::Write(generation_dir.clone(), error.to_string())
             })?;
+        after_generation_check();
+        // The generation was verified under `output_dir`; the pointer must land
+        // in that same directory, not in whatever the pathname names now.
+        // Unix stages and renames the pointer relative to the held directory,
+        // so it cannot land elsewhere; only Windows resolves the pathname
+        // again and repeats the check before the rename. Every platform
+        // repeats it after: the returned payload paths are pathnames under
+        // `output_dir`, so success is reported only while that pathname still
+        // names the directory that received the generation.
+        require_output_dir()?;
         // See `staging` for the guard this stage-then-publish pair provides.
-        let staged_pointer = stage_pointer(&pointer_path, format!("{generation}\n").as_bytes())
-            .map_err(|e| RecordSnapshotError::Write(pointer_path.clone(), e.to_string()))?;
+        let staged_pointer = stage_pointer(
+            &output_claim,
+            &pointer_path,
+            format!("{generation}\n").as_bytes(),
+        )
+        .map_err(|e| RecordSnapshotError::Write(pointer_path.clone(), e.to_string()))?;
+        if cfg!(not(unix)) {
+            require_output_dir()?;
+        }
+        before_pointer_publish();
         staged_pointer
             .publish(&pointer_path)
             .map_err(|e| RecordSnapshotError::Write(pointer_path.clone(), e.to_string()))?;
+        require_output_dir()?;
         Ok((
             generation_dir.join(format!("{}.rgb", scene.name())),
             generation_dir.join(format!("{}.meta", scene.name())),
@@ -281,18 +320,21 @@ where
     })
 }
 
-// The rename binds to the staging pathname, not to the held handle, so a
-// replacement landing after the last identity check is promoted to the
-// generation name. The held handle's check against that name then refuses to
-// publish the pointer, and the directory is retained and reported like every
-// other failure (#1282's retention policy).
+// The rename binds to the staging entry's name in the held output directory,
+// not to the held staging handle, so a replacement landing there after the
+// last identity check is promoted to the generation name. The held handle's
+// check against that name then refuses to publish the pointer, and the
+// directory is retained and reported like every other failure (#1282's
+// retention policy). On Unix a staging directory moved out of the held output
+// directory is not found, so it is never promoted elsewhere.
 fn promote_staged_dir(
+    output: &OutputDirClaim,
     staged: &Path,
     generation: &Path,
     before_rename: impl FnOnce(),
 ) -> std::io::Result<()> {
     before_rename();
-    rename_without_replacement(staged, generation)
+    output.promote_without_replacement(staged, generation)
 }
 
 // Neither an open handle nor a metadata comparison makes a later pathname
@@ -341,19 +383,37 @@ const POINTER_STAGING_ATTEMPTS: usize = 256;
 
 /// Stages the pointer at an unguessable sibling of `pointer_path`, retrying
 /// through [`pointer_staging_candidates`] on a genuine name collision.
-fn stage_pointer(pointer_path: &Path, bytes: &[u8]) -> std::io::Result<staging::StagedFile> {
-    stage_pointer_with_candidates(bytes, pointer_staging_candidates(pointer_path))
+fn stage_pointer(
+    output_claim: &OutputDirClaim,
+    pointer_path: &Path,
+    bytes: &[u8],
+) -> std::io::Result<staging::StagedFile> {
+    stage_first_free(
+        bytes,
+        pointer_staging_candidates(pointer_path),
+        |candidate, bytes| output_claim.stage_pointer(candidate, bytes),
+    )
 }
 
 /// Stages `bytes` at the first of `candidates` that `staging::stage` finds
 /// free, reporting the last collision once they have all turned out taken.
+#[cfg(test)]
 fn stage_pointer_with_candidates(
     bytes: &[u8],
     candidates: impl IntoIterator<Item = PathBuf>,
 ) -> std::io::Result<staging::StagedFile> {
+    stage_first_free(bytes, candidates, staging::stage)
+}
+
+/// [`stage_pointer_with_candidates`] with the staging step supplied.
+fn stage_first_free(
+    bytes: &[u8],
+    candidates: impl IntoIterator<Item = PathBuf>,
+    mut stage: impl FnMut(&Path, &[u8]) -> std::io::Result<staging::StagedFile>,
+) -> std::io::Result<staging::StagedFile> {
     let mut last_collision = None;
     for candidate in candidates {
-        match staging::stage(&candidate, bytes) {
+        match stage(&candidate, bytes) {
             Ok(staged) => return Ok(staged),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                 last_collision = Some(error);

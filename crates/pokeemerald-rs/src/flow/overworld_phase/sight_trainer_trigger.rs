@@ -839,38 +839,46 @@ mod tests {
             (
                 "Daisy",
                 TrainerId(36),
-                Battle(BattleError::UnscoreableMoveEffect(assets::MoveId(71))), // MOVE_ABSORB
+                Battle(BattleError::UnscoreableMoveEffect(assets::MoveId::ABSORB)),
             ),
             (
                 "Amy & Liv",
                 TrainerId(481),
-                Battle(BattleError::UnscoreableMoveEffect(assets::MoveId(86))), // MOVE_THUNDER_WAVE
+                Battle(BattleError::UnscoreableMoveEffect(
+                    assets::MoveId::THUNDER_WAVE,
+                )),
             ),
             (
                 "Andrew",
                 TrainerId(336),
-                Battle(BattleError::UnscoreableMoveEffect(assets::MoveId(150))), // MOVE_SPLASH
+                Battle(BattleError::UnscoreableMoveEffect(assets::MoveId::SPLASH)),
             ),
             ("Miguel", TrainerId(293), HeldItemParty(TrainerId(293))),
             (
                 "Rhett",
                 TrainerId(703),
-                Battle(BattleError::UnscoreableMoveEffect(assets::MoveId(116))), // MOVE_FOCUS_ENERGY
+                Battle(BattleError::UnscoreableMoveEffect(
+                    assets::MoveId::FOCUS_ENERGY,
+                )),
             ),
             (
                 "Marcos",
                 TrainerId(702),
-                Battle(BattleError::UnscoreableMoveEffect(assets::MoveId(268))), // MOVE_CHARGE
+                Battle(BattleError::UnscoreableMoveEffect(assets::MoveId::CHARGE)),
             ),
             (
                 "Isabelle",
                 TrainerId(736),
-                Battle(BattleError::UnscoreableMoveEffect(assets::MoveId(111))), // MOVE_DEFENSE_CURL
+                Battle(BattleError::UnscoreableMoveEffect(
+                    assets::MoveId::DEFENSE_CURL,
+                )),
             ),
             (
                 "Pete",
                 TrainerId(735),
-                Battle(BattleError::UnscoreableMoveEffect(assets::MoveId(40))), // MOVE_POISON_STING
+                Battle(BattleError::UnscoreableMoveEffect(
+                    assets::MoveId::POISON_STING,
+                )),
             ),
         ];
 
@@ -890,7 +898,7 @@ mod tests {
                 50,
                 battle::fixed_ivs(31),
                 0,
-                vec![assets::MoveId(163)], // MOVE_SLASH
+                vec![assets::MoveId::SLASH],
             )
             .expect("Treecko/Slash is a valid pairing");
             let mut rng = engine::rng::Rng::new(1);

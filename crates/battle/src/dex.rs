@@ -69,7 +69,7 @@ mod tests {
     use assets::{Effectiveness, MoveId, SpeciesId, SpeciesTable, Type};
 
     const BULBASAUR: SpeciesId = SpeciesId(1);
-    const POUND: MoveId = MoveId(1);
+    const POUND: MoveId = MoveId::POUND;
     const UNKNOWN_MOVE: MoveId = MoveId(60_000);
 
     #[test]

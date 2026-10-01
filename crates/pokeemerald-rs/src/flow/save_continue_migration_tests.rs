@@ -8,8 +8,9 @@ use super::overworld_phase::OverworldPhase;
 use super::save_continue_tests::{a_damaged_lead, dormant_party_member, new_game_phase};
 use crate::new_game;
 
-/// `saved_tile_placement`'s one substitution, pinned (issue #214 review):
-/// a save standing on an `ELEVATION_MULTI_LEVEL` (15) tile resumes at
+/// `saved_tile_placement`'s one substitution, pinned (issue #214 review),
+/// for a save whose player object is not marked active (a legacy image;
+/// a written one is restored verbatim, issue #801): a save standing on an `ELEVATION_MULTI_LEVEL` (15) tile resumes at
 /// `ELEVATION_TRANSITION`, exactly the `ObjectEventUpdateElevation`
 /// behaviour the warp path already applies -- never at the raw 15, which
 /// no walking player can legitimately hold. The ordinary-tile case (the

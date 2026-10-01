@@ -11,8 +11,8 @@ fn battle_start_draws_the_initial_turn_order_tie_on_equal_speeds() {
     // exact Speed tie at construction already costs a draw there
     // (`:4745`-`:4750`), before any turn-body tie draw.
     let dex = Dex::new();
-    let player = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]);
-    let enemy = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]);
+    let player = max_iv_mon(&dex, 19, 5, vec![MoveId::TACKLE]);
+    let enemy = max_iv_mon(&dex, 19, 5, vec![MoveId::TACKLE]);
     let mut rng = SequenceRng::new([0x1234, 0]);
     let _battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     assert_eq!(
@@ -27,8 +27,8 @@ fn battle_start_and_every_turn_each_refresh_the_turn_number() {
     let dex = Dex::new();
     // Both battlers survive two full turns, so a real second turn starts
     // and its own turn-number refresh can be asserted on too.
-    let player = max_iv_mon(&dex, 19, 5, vec![MoveId(98)]); // Rattata/Quick Attack
-    let enemy = max_iv_mon(&dex, 4, 10, vec![MoveId(33)]); // Charmander/Tackle
+    let player = max_iv_mon(&dex, 19, 5, vec![MoveId::QUICK_ATTACK]); // Rattata/Quick Attack
+    let enemy = max_iv_mon(&dex, 4, 10, vec![MoveId::TACKLE]); // Charmander/Tackle
 
     // Three distinguishable turn-number draws (battle start, turn 1, turn
     // 2), each followed by the ordinary tail of a turn (no turn-order draw,
@@ -84,8 +84,8 @@ fn move_priority_beats_speed_for_either_side() {
     // Leg 1: the slower player's +1-priority Quick Attack moves first
     // against the faster enemy's ordinary Tackle. Priorities differ, so
     // no turn-order draw is made.
-    let player = max_iv_mon(&dex, 19, 5, vec![MoveId(98)]); // slow, +1 priority
-    let enemy = max_iv_mon(&dex, 4, 10, vec![MoveId(33)]); // fast, priority 0
+    let player = max_iv_mon(&dex, 19, 5, vec![MoveId::QUICK_ATTACK]); // slow, +1 priority
+    let enemy = max_iv_mon(&dex, 4, 10, vec![MoveId::TACKLE]); // fast, priority 0
     let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0]);
     let mut battle = Battle::new(dex.clone(), player, enemy, false, &mut rng).unwrap();
     let events = battle
@@ -96,13 +96,13 @@ fn move_priority_beats_speed_for_either_side() {
         vec![
             BattleEvent::Hit {
                 by_player: true,
-                move_id: MoveId(98),
+                move_id: MoveId::QUICK_ATTACK,
                 damage: 6,
                 is_critical: false,
             },
             BattleEvent::Hit {
                 by_player: false,
-                move_id: MoveId(33),
+                move_id: MoveId::TACKLE,
                 damage: 9,
                 is_critical: false,
             },
@@ -114,8 +114,8 @@ fn move_priority_beats_speed_for_either_side() {
     // Leg 2, mirrored: the wild mon's rejection loop lands on its own
     // +1-priority slot (draw 1 -> slot 1, Quick Attack) and it moves
     // first despite being far slower than the player.
-    let player = max_iv_mon(&dex, 4, 10, vec![MoveId(33)]); // fast, priority 0
-    let enemy = max_iv_mon(&dex, 19, 5, vec![MoveId(33), MoveId(98)]); // slow
+    let player = max_iv_mon(&dex, 4, 10, vec![MoveId::TACKLE]); // fast, priority 0
+    let enemy = max_iv_mon(&dex, 19, 5, vec![MoveId::TACKLE, MoveId::QUICK_ATTACK]); // slow
     let mut rng = SequenceRng::new([0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
@@ -126,13 +126,13 @@ fn move_priority_beats_speed_for_either_side() {
         vec![
             BattleEvent::Hit {
                 by_player: false,
-                move_id: MoveId(98),
+                move_id: MoveId::QUICK_ATTACK,
                 damage: 6,
                 is_critical: false,
             },
             BattleEvent::Hit {
                 by_player: true,
-                move_id: MoveId(33),
+                move_id: MoveId::TACKLE,
                 damage: 9,
                 is_critical: false,
             },
@@ -158,8 +158,8 @@ fn a_mid_turn_speed_tie_draws_once_between_selection_and_the_first_hit() {
     // value 0 must mean "player first" -- were the two consumed in the
     // other order, the odd 1 would flip the tie to the enemy and the 0
     // would pick slot 0 (Tackle), failing both assertions below.
-    let player = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]);
-    let enemy = max_iv_mon(&dex, 19, 5, vec![MoveId(33), MoveId(10)]); // Tackle, Scratch
+    let player = max_iv_mon(&dex, 19, 5, vec![MoveId::TACKLE]);
+    let enemy = max_iv_mon(&dex, 19, 5, vec![MoveId::TACKLE, MoveId::SCRATCH]); // Tackle, Scratch
     let mut rng = SequenceRng::new([
         0, 0, // Battle::new: battle-start turn number + initial-seeding tie
         0, // the turn's own turn number
@@ -182,13 +182,13 @@ fn a_mid_turn_speed_tie_draws_once_between_selection_and_the_first_hit() {
         vec![
             BattleEvent::Hit {
                 by_player: true,
-                move_id: MoveId(33),
+                move_id: MoveId::TACKLE,
                 damage: 7,
                 is_critical: false,
             },
             BattleEvent::Hit {
                 by_player: false,
-                move_id: MoveId(10),
+                move_id: MoveId::SCRATCH,
                 damage: 7,
                 is_critical: false,
             },
@@ -208,8 +208,8 @@ fn an_always_hit_move_makes_a_full_turn_cost_ten_draws_not_eleven() {
     // Swift (EFFECT_ALWAYS_HIT) skips `AccuracyCalcHelper`'s roll
     // entirely (`battle_script_commands.c:1089`-`:1094`), so the player's
     // move costs 3 draws where an ordinary move costs 4.
-    let player = max_iv_mon(&dex, 19, 5, vec![MoveId(129)]); // Rattata/Swift
-    let enemy = max_iv_mon(&dex, 1, 5, vec![MoveId(33)]); // Bulbasaur/Tackle
+    let player = max_iv_mon(&dex, 19, 5, vec![MoveId::SWIFT]); // Rattata/Swift
+    let enemy = max_iv_mon(&dex, 1, 5, vec![MoveId::TACKLE]); // Bulbasaur/Tackle
 
     let mut rng = SequenceRng::new([
         0, // battle start turn number (Rattata is faster: no tie draw)
@@ -228,13 +228,13 @@ fn an_always_hit_move_makes_a_full_turn_cost_ten_draws_not_eleven() {
         vec![
             BattleEvent::Hit {
                 by_player: true,
-                move_id: MoveId(129),
+                move_id: MoveId::SWIFT,
                 damage: 10,
                 is_critical: false,
             },
             BattleEvent::Hit {
                 by_player: false,
-                move_id: MoveId(33),
+                move_id: MoveId::TACKLE,
                 damage: 5,
                 is_critical: false,
             },
