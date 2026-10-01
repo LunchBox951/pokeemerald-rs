@@ -17,12 +17,12 @@ use assets::{MoveId, SpeciesId};
 use battle::{Battle, BattleEvent, BattlePokemon, Dex, PlayerAction, Status1, STRUGGLE};
 
 /// `MOVE_TACKLE`.
-const TACKLE: MoveId = MoveId(33);
+const TACKLE: MoveId = MoveId::TACKLE;
 /// `MOVE_THUNDER_WAVE` (`EFFECT_PARALYZE`).
-const THUNDER_WAVE: MoveId = MoveId(86);
+const THUNDER_WAVE: MoveId = MoveId::THUNDER_WAVE;
 /// `MOVE_ABSORB` (`EFFECT_ABSORB`), the drain pipeline's own double-faint
 /// fixture move (`turn_engine/pipelines.rs`).
-const ABSORB: MoveId = MoveId(71);
+const ABSORB: MoveId = MoveId::ABSORB;
 
 /// `SPECIES_RATTATA`: base Speed 72, the fast mover in every fixture below.
 const RATTATA: u16 = 19;
@@ -55,7 +55,7 @@ const MILOTIC: u16 = 329;
 fn full_paralysis_cancels_before_the_no_pp_abort_and_retains_pp() {
     let dex = Dex::new();
     let player = max_iv_mon(&dex, RATTATA, 5, vec![TACKLE]);
-    let mut enemy = max_iv_mon(&dex, GASTLY, 5, vec![TACKLE, MoveId(45)]); // Tackle, Growl
+    let mut enemy = max_iv_mon(&dex, GASTLY, 5, vec![TACKLE, MoveId::GROWL]); // Tackle, Growl
     for _ in 0..enemy.moves()[0].pp {
         enemy.deduct_pp(0).unwrap();
     }

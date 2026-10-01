@@ -87,8 +87,13 @@ pub const SECONDARY_ABILITY_PERSONALITY: u32 = 25;
 /// unconditionally, bypassing the plain speed/run-tries branch these tests
 /// assert (`battle_util.c:427-447`).
 pub fn slow_runner_rattata(dex: &Dex) -> BattlePokemon {
-    let runner =
-        max_iv_mon_with_personality(dex, 19, 5, vec![MoveId(33)], SECONDARY_ABILITY_PERSONALITY);
+    let runner = max_iv_mon_with_personality(
+        dex,
+        19,
+        5,
+        vec![MoveId::TACKLE],
+        SECONDARY_ABILITY_PERSONALITY,
+    );
     assert_eq!(
         runner.ability(),
         AbilityId::GUTS,

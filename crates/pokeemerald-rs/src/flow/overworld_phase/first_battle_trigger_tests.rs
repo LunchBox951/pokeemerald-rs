@@ -33,7 +33,7 @@ const ROUTE_101_TRIGGER_ELEVATION: u8 = 3;
 /// has no resolver, so `validate_player_move` refuses it ahead of any draw
 /// (`crates/battle/src/battle.rs:415`) and the driver's fallback scan finds
 /// nothing usable.
-const UNEXECUTABLE_MOVE: MoveId = MoveId(228);
+const UNEXECUTABLE_MOVE: MoveId = MoveId::PURSUIT;
 
 /// A synthetic, fully open (no collision, elevation 3 throughout) room named
 /// `MAP_ROUTE101`: the layout grid is fabricated, but `map_id` still resolves

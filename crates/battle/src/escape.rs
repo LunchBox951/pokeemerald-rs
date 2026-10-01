@@ -111,7 +111,7 @@ mod tests {
     const ARON: SpeciesId = SpeciesId(382);
 
     fn mon(dex: &Dex, species: SpeciesId, personality: u32) -> BattlePokemon {
-        BattlePokemon::new(dex, species, 5, MAX_IVS, personality, vec![MoveId(33)]).unwrap()
+        BattlePokemon::new(dex, species, 5, MAX_IVS, personality, vec![MoveId::TACKLE]).unwrap()
     }
 
     #[test]
