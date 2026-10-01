@@ -278,7 +278,7 @@ fn a_ko_that_awards_evs_and_crosses_a_level_keeps_the_gain_on_evs_not_the_live_c
         99,
         Ivs::default(),
         0x1234_5663, // % 25 == 0, so the derived nature is neutral Hardy
-        vec![MoveId(33)],
+        vec![MoveId::TACKLE],
     )
     .unwrap()
     .with_evs(Evs {

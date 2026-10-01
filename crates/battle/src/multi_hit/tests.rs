@@ -11,11 +11,11 @@ use crate::script_rng::SequenceRng;
 use assets::species::AbilityId;
 use assets::{MoveId, SpeciesId};
 
-const DOUBLE_SLAP: MoveId = MoveId(3);
-const FURY_ATTACK: MoveId = MoveId(31);
-const TACKLE: MoveId = MoveId(33);
+const DOUBLE_SLAP: MoveId = MoveId::DOUBLE_SLAP;
+const FURY_ATTACK: MoveId = MoveId::FURY_ATTACK;
+const TACKLE: MoveId = MoveId::TACKLE;
 /// `MOVE_BONE_RUSH`: `EFFECT_MULTI_HIT`, Ground, 80 accuracy.
-const BONE_RUSH: MoveId = MoveId(198);
+const BONE_RUSH: MoveId = MoveId::BONE_RUSH;
 const BULBASAUR: SpeciesId = SpeciesId(1);
 const SQUIRTLE: SpeciesId = SpeciesId(7);
 const ANORITH: SpeciesId = SpeciesId(390);

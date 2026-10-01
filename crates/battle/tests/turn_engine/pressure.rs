@@ -12,9 +12,9 @@ use assets::MoveId;
 use battle::{Battle, BattleEvent, Dex, PlayerAction};
 
 /// `MOVE_SCRATCH`, a single-target Normal-type hit.
-const SCRATCH: MoveId = MoveId(10);
+const SCRATCH: MoveId = MoveId::SCRATCH;
 /// `MOVE_SWORDS_DANCE` (`EFFECT_ATTACK_UP_2`), `MOVE_TARGET_USER`.
-const SWORDS_DANCE: MoveId = MoveId(14);
+const SWORDS_DANCE: MoveId = MoveId::SWORDS_DANCE;
 
 /// `SPECIES_RATTATA`: base Speed 72, used only by the saturation test below,
 /// where turn order does not matter.

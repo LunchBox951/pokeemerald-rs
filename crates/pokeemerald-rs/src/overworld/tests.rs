@@ -2668,3 +2668,35 @@ fn equal_priority_overlap_orders_the_player_and_npc_by_screen_depth() {
         );
     }
 }
+
+/// Writes a synthetic pack at `path` that loads the *real* bundled
+/// `MAP_OLDALE_TOWN` header and layout (`general`/`petalburg`, 20x20) through
+/// [`super::load_room_from_source`], with an opaque people sheet for each of
+/// `sprite_paths`, so a phase test can complete a real map transition.
+pub(crate) fn write_oldale_layout_pack(path: &std::path::Path, sprite_paths: &[&str]) {
+    let mut entries: Vec<Entry> = synthetic_overworld_pack_entries_for("general", 20, 20)
+        .into_iter()
+        .map(|mut e| {
+            if e.id == "layout/map_test/map" {
+                e.id = "layout/oldale_town/map";
+            } else if e.id == "layout/map_test/border" {
+                e.id = "layout/oldale_town/border";
+            }
+            e
+        })
+        .collect();
+    entries.extend(
+        synthetic_overworld_pack_entries_for("petalburg", 20, 20)
+            .into_iter()
+            .filter(|e| e.id.starts_with("tileset/petalburg/")),
+    );
+    for sprite in sprite_paths {
+        entries.push(Entry {
+            id: leaked(format!("sprite/{sprite}")),
+            kind_tag: IMAGE_KIND_TAG,
+            meta: image_meta(144, 32, 8),
+            payload: vec![3u8; 144 * 32],
+        });
+    }
+    std::fs::write(path, write_synthetic_pack(entries)).unwrap();
+}

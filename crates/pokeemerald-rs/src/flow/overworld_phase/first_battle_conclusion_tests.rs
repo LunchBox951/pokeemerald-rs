@@ -37,7 +37,7 @@ const VAR_STARTER_MON: u16 = 0x4023;
 /// ahead of any draw (`crates/battle/src/battle.rs:415`), and its full PP
 /// keeps the all-spent Struggle diversion (`crates/battle/src/battle.rs:491`)
 /// from turning the abort into a played turn.
-const UNEXECUTABLE_MOVE: MoveId = MoveId(228);
+const UNEXECUTABLE_MOVE: MoveId = MoveId::PURSUIT;
 
 /// `FLAG_HIDE_ROUTE_101_BIRCH_ZIGZAGOON_BATTLE`
 /// (`include/constants/flags.h:769`) -- independently transcribed, same
@@ -112,7 +112,7 @@ fn fragile_treecko_lead() -> BattlePokemon {
         sp_attack: MAX_IV,
         sp_defense: MAX_IV,
     };
-    BattlePokemon::new(&Dex::new(), SpeciesId(277), 1, ivs, 0, vec![MoveId(1)])
+    BattlePokemon::new(&Dex::new(), SpeciesId(277), 1, ivs, 0, vec![MoveId::POUND])
         .expect("Treecko/Pound must be in the dex")
 }
 
