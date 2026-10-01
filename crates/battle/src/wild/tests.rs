@@ -17,14 +17,14 @@ const WURMPLE: SpeciesId = SpeciesId(290);
 const SEEDOT: SpeciesId = SpeciesId(298);
 const UNKNOWN_SPECIES: SpeciesId = SpeciesId(60_000);
 
-const HEADBUTT: MoveId = MoveId(29);
-const TACKLE: MoveId = MoveId(33);
-const TAIL_WHIP: MoveId = MoveId(39);
-const GROWL: MoveId = MoveId(45);
-const STRING_SHOT: MoveId = MoveId(81);
-const HARDEN: MoveId = MoveId(106);
-const BIDE: MoveId = MoveId(117);
-const HOWL: MoveId = MoveId(336);
+const HEADBUTT: MoveId = MoveId::HEADBUTT;
+const TACKLE: MoveId = MoveId::TACKLE;
+const TAIL_WHIP: MoveId = MoveId::TAIL_WHIP;
+const GROWL: MoveId = MoveId::GROWL;
+const STRING_SHOT: MoveId = MoveId::STRING_SHOT;
+const HARDEN: MoveId = MoveId::HARDEN;
+const BIDE: MoveId = MoveId::BIDE;
+const HOWL: MoveId = MoveId::HOWL;
 const UNKNOWN_MOVE: MoveId = MoveId(60_000);
 
 fn personality_draw(personality: u32) -> [u16; 2] {

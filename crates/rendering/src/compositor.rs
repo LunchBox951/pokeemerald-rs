@@ -304,7 +304,7 @@ pub fn compose_frame(sprites: &SpriteLayer<'_>, bg_slots: &[BgSlot<'_>]) -> Fram
 /// effect, no mosaic, black backdrop) — see [`compose_frame`] for what that
 /// makes it equivalent to.
 #[derive(Debug, Clone, Copy, Default)]
-pub struct FrameEffects {
+pub struct FrameEffects<'a> {
     /// Hardware window configuration (`WIN0`/`WIN1`/`OBJWIN`/`WINOUT`).
     pub windows: WindowConfig,
     /// Color special-effect configuration (`BLDCNT`/`BLDALPHA`/`BLDY`).
@@ -315,6 +315,45 @@ pub struct FrameEffects {
     /// pixel — defaults to [`Rgb888::BLACK`](crate::palette::Rgb888::BLACK),
     /// matching [`Framebuffer::new`]'s default fill.
     pub backdrop: Rgb888,
+    /// Per-bank palette transforms applied at sample time, before
+    /// candidate selection and every alpha/brighten/darken resolution.
+    /// [`Default`] is the identity for both banks.
+    pub palette: PaletteStage<'a>,
+}
+
+/// A colour transform applied to one palette bank's sampled colours.
+///
+/// Upstream blends the BG and OBJ palette banks before layer composition
+/// and before any hardware colour effect (`src/palette.c:407-509`)
+/// `(behavioral-fidelity)`. An implementation carries whatever state it
+/// needs; the compositor only asks it to map one colour.
+pub trait PaletteColorTransform: std::fmt::Debug {
+    /// Maps one expanded palette colour to its transformed colour.
+    fn transform(&self, color: Rgb888) -> Rgb888;
+}
+
+/// The palette stage of [`FrameEffects`]: an independent, optional
+/// transform per palette bank. `None` is the exact identity for that bank.
+///
+/// The BG transform also applies to the backdrop, which is BG palette colour
+/// 0. Transparent (index 0) layer texels are not colours and never reach a
+/// transform; this stage changes neither priority, windows, nor mosaic.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PaletteStage<'a> {
+    /// Applied to every BG sample and to the backdrop.
+    pub bg: Option<&'a dyn PaletteColorTransform>,
+    /// Applied to every OBJ sample.
+    pub obj: Option<&'a dyn PaletteColorTransform>,
+}
+
+impl PaletteStage<'_> {
+    fn apply_bg(&self, color: Rgb888) -> Rgb888 {
+        self.bg.map_or(color, |t| t.transform(color))
+    }
+
+    fn apply_obj(&self, color: Rgb888) -> Rgb888 {
+        self.obj.map_or(color, |t| t.transform(color))
+    }
 }
 
 /// [`compose_frame`], extended with hardware windows, color special
@@ -329,7 +368,7 @@ pub struct FrameEffects {
 pub fn compose_frame_with_effects(
     sprites: &SpriteLayer<'_>,
     bg_slots: &[BgSlot<'_>],
-    effects: &FrameEffects,
+    effects: &FrameEffects<'_>,
 ) -> Framebuffer {
     // mgba's global "any target2" signal (software-obj.c:181-185): the
     // backdrop target2 bit, OR any BG that is a BLDCNT target2 *and* enabled.
@@ -464,7 +503,7 @@ fn affine_mosaic_hold_participates(
 fn compose_pixel(
     sprites: &SpriteLayer<'_>,
     bg_slots: &[BgSlot<'_>],
-    effects: &FrameEffects,
+    effects: &FrameEffects<'_>,
     any_target2: bool,
     affine_mosaic_holds: &mut [Option<AffineMosaicHold>],
     window_spans: WindowSpans<'_>,
@@ -486,8 +525,11 @@ fn compose_pixel(
     // The backdrop's brighten/darken variant is chosen from that same
     // OBJWIN-independent span, not from `window.effects` below
     // (`crate::effects::backdrop_variant`) `(behavioral-fidelity)`.
-    let span_backdrop =
-        effects::backdrop_variant(&effects.color, partition_control.effects, effects.backdrop);
+    let span_backdrop = effects::backdrop_variant(
+        &effects.color,
+        partition_control.effects,
+        effects.palette.apply_bg(effects.backdrop),
+    );
     let sprite = window
         .obj
         .then(|| sprites.resolve_pixel_with_mosaic_windowed(x, y, effects.mosaic.obj, window_spans))
@@ -509,7 +551,7 @@ fn compose_pixel(
             &mut next,
             (
                 (pixel.priority, SPRITE_LAYER_RANK),
-                pixel.color,
+                effects.palette.apply_obj(pixel.color),
                 LayerKind::Obj,
                 pixel.semi_transparent,
                 pixel.color_semi_transparent,
@@ -538,7 +580,7 @@ fn compose_pixel(
             &mut next,
             (
                 (slot.priority, bg_layer_rank(slot.bg_index)),
-                color,
+                effects.palette.apply_bg(color),
                 LayerKind::Bg(slot.bg_index),
                 false,
                 false,

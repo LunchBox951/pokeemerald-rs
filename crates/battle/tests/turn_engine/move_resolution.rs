@@ -19,25 +19,25 @@ use crate::common::{max_iv_mon, SequenceRng};
 use assets::{AbilityId, MoveId};
 use battle::{Battle, BattleEvent, BattleOutcome, Dex, PlayerAction, STRUGGLE};
 
-const TACKLE: MoveId = MoveId(33);
-const SCRATCH: MoveId = MoveId(10);
+const TACKLE: MoveId = MoveId::TACKLE;
+const SCRATCH: MoveId = MoveId::SCRATCH;
 /// `MOVE_BONE_RUSH` (`EFFECT_MULTI_HIT`, Ground, 80 accuracy).
-const BONE_RUSH: MoveId = MoveId(198);
+const BONE_RUSH: MoveId = MoveId::BONE_RUSH;
 /// `MOVE_WATER_GUN` (`EFFECT_HIT`, Water, power 40): neutral against both
 /// Bug and Ghost.
-const WATER_GUN: MoveId = MoveId(55);
+const WATER_GUN: MoveId = MoveId::WATER_GUN;
 /// `MOVE_DRAGON_RAGE` (`EFFECT_DRAGON_RAGE`, fixed 40 damage): neutral
 /// against Bug and Ghost (no chart row).
-const DRAGON_RAGE: MoveId = MoveId(82);
+const DRAGON_RAGE: MoveId = MoveId::DRAGON_RAGE;
 /// `MOVE_FAINT_ATTACK` (`EFFECT_ALWAYS_HIT`, Dark, power 60): super
 /// effective against Ghost, neutral against Bug.
-const FAINT_ATTACK: MoveId = MoveId(185);
+const FAINT_ATTACK: MoveId = MoveId::FAINT_ATTACK;
 /// `MOVE_PIN_MISSILE` (`EFFECT_MULTI_HIT`, Bug): not very effective against
 /// Ghost, neutral against Bug.
-const PIN_MISSILE: MoveId = MoveId(42);
+const PIN_MISSILE: MoveId = MoveId::PIN_MISSILE;
 /// `MOVE_POISON_STING` (`EFFECT_POISON_HIT`, 30% secondary chance): not
 /// very effective against Ghost, neutral against Bug.
-const POISON_STING: MoveId = MoveId(40);
+const POISON_STING: MoveId = MoveId::POISON_STING;
 
 /// `SPECIES_BULBASAUR`.
 const BULBASAUR: u16 = 1;

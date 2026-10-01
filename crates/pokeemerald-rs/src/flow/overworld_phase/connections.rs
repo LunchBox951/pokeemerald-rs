@@ -8,6 +8,7 @@
 //! map-script effect.
 
 use assets::{MapEventsTable, MapHeaderTable};
+use engine::overworld::object_event::ObjectEventCollection;
 use engine::overworld::{
     warp_destination_position, warp_in_facing, ConnectedMapData, TilePos, NUM_METATILES_IN_PRIMARY,
 };
@@ -171,14 +172,19 @@ impl OverworldPhase {
         event_data
     }
 
-    /// Prepares `map`'s post-transition event data and scene without
+    /// Prepares `map`'s post-transition event data, scene, and live object
+    /// events without
     /// mutating `self`, so every caller below can validate the destination
     /// and commit the transition only once every fallible step has already
     /// succeeded. `None` on any load failure, having touched nothing.
     fn stage_transition(
         &self,
         map: assets::MapId,
-    ) -> Option<(engine::event_data::EventData, overworld::OverworldScene)> {
+    ) -> Option<(
+        engine::event_data::EventData,
+        overworld::OverworldScene,
+        ObjectEventCollection,
+    )> {
         let event_data = self.prepare_map_entry_event_data(map, self.save2.player_gender);
         let scene = overworld::load_room_from_source(
             self.pack_source,
@@ -187,7 +193,8 @@ impl OverworldPhase {
             &event_data,
         )
         .ok()?;
-        Some((event_data, scene))
+        let object_events = seed_object_events(&scene, map)?;
+        Some((event_data, scene, object_events))
     }
 
     /// Executes a resolved [`engine::overworld::WarpTrigger::Resolved`]
@@ -226,7 +233,8 @@ impl OverworldPhase {
             eprintln!("warp: no event data for destination map {map:?} -- staying put");
             return;
         };
-        let Some((transitioned_event_data, scene)) = self.stage_transition(map) else {
+        let Some((transitioned_event_data, scene, object_events)) = self.stage_transition(map)
+        else {
             eprintln!("warp: failed to load destination map {map:?} -- staying put");
             return;
         };
@@ -254,6 +262,7 @@ impl OverworldPhase {
         // the destination map.
         self.pending_landing = None;
         self.scene = scene;
+        self.object_events = object_events;
         self.map_id = map;
         // Upstream's own `InitTilesetAnimations` reset: animated tiles
         // start over on entry to a new map via warp.
@@ -312,7 +321,8 @@ impl OverworldPhase {
             eprintln!("warp: no event data for destination map {map:?} -- staying put");
             return;
         };
-        let Some((transitioned_event_data, scene)) = self.stage_transition(map) else {
+        let Some((transitioned_event_data, scene, object_events)) = self.stage_transition(map)
+        else {
             eprintln!("warp: failed to load destination map {map:?} -- staying put");
             return;
         };
@@ -334,6 +344,7 @@ impl OverworldPhase {
             engine::overworld::PlayerState::new((i32::from(x), i32::from(y)), elevation, facing);
         self.pending_landing = None;
         self.scene = scene;
+        self.object_events = object_events;
         self.map_id = map;
         self.tick = 0;
         self.save1.event_data = transitioned_event_data;
@@ -379,7 +390,8 @@ impl OverworldPhase {
             eprintln!("warp: no event data for destination map {map:?} -- staying put");
             return false;
         };
-        let Some((transitioned_event_data, scene)) = self.stage_transition(map) else {
+        let Some((transitioned_event_data, scene, object_events)) = self.stage_transition(map)
+        else {
             eprintln!("warp: failed to load destination map {map:?} -- staying put");
             return false;
         };
@@ -404,6 +416,7 @@ impl OverworldPhase {
             engine::overworld::PlayerState::new((i32::from(x), i32::from(y)), elevation, facing);
         self.pending_landing = None;
         self.scene = scene;
+        self.object_events = object_events;
         self.map_id = map;
         self.tick = 0;
         self.save1.event_data = transitioned_event_data;
@@ -452,7 +465,8 @@ impl OverworldPhase {
             );
             return false;
         };
-        let Some((transitioned_event_data, scene)) = self.stage_transition(to_map) else {
+        let Some((transitioned_event_data, scene, object_events)) = self.stage_transition(to_map)
+        else {
             eprintln!(
                 "connection: failed to load destination map {to_map:?} -- staying on the \
                  departed map's data"
@@ -461,6 +475,7 @@ impl OverworldPhase {
         };
 
         self.scene = scene;
+        self.object_events = object_events;
         self.map_id = to_map;
         // Re-latches onto the entered map, unlike a warp's `None`: the
         // crossing step's own landing tile still needs its door check
@@ -479,6 +494,21 @@ impl OverworldPhase {
         };
         true
     }
+}
+
+/// Seeds `map`'s live object events, one per template in declaration order,
+/// from `scene`'s own resolved events -- the set simulation reads, including
+/// a load-time replacement such as Oldale's ([`OverworldScene::map_events`]).
+/// Upstream initialises them per map load (`event_object_movement.c:1287-1330`)
+/// and replaces them on a map change (`:1645-1673`). `None` if `map` has no
+/// event data.
+pub(super) fn seed_object_events(
+    scene: &overworld::OverworldScene,
+    map: assets::MapId,
+) -> Option<ObjectEventCollection> {
+    Some(ObjectEventCollection::from_templates(
+        scene.map_events(map).ok()?.object_events,
+    ))
 }
 
 /// `SetPlayerCoordsFromWarp` (`src/overworld.c:603-624`): a

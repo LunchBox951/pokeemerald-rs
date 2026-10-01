@@ -48,6 +48,42 @@ const PLAYER_OBJECT_EVENT_INDEX: usize = 0;
 const PLAYER_OBJECT_EVENT_DIRECTIONS_OFFSET: usize = OBJECT_EVENTS_OFFSET
     + PLAYER_OBJECT_EVENT_INDEX * OBJECT_EVENT_LEN
     + OBJECT_EVENT_DIRECTIONS_OFFSET;
+// `ObjectEvent`'s packed `currentElevation:4` / `previousElevation:4` byte
+// (include/global.fieldmap.h:232-233).
+const OBJECT_EVENT_ELEVATIONS_OFFSET: usize = 0x0B;
+const PLAYER_OBJECT_EVENT_ELEVATIONS_OFFSET: usize = OBJECT_EVENTS_OFFSET
+    + PLAYER_OBJECT_EVENT_INDEX * OBJECT_EVENT_LEN
+    + OBJECT_EVENT_ELEVATIONS_OFFSET;
+// `ObjectEvent`'s `active:1`, the low bit of its first byte
+// (include/global.fieldmap.h:213).
+const PLAYER_OBJECT_EVENT_ACTIVE_OFFSET: usize =
+    OBJECT_EVENTS_OFFSET + PLAYER_OBJECT_EVENT_INDEX * OBJECT_EVENT_LEN;
+const OBJECT_EVENT_ACTIVE_BIT: u8 = 0x01;
+// The top bit of `ObjectEvent`'s third bitfield byte, inside the
+// `u32 padding:4` upstream leaves unused (include/global.fieldmap.h:227-228).
+// Only this port's writer sets it, so an upstream-origin image -- whose
+// `active` bit is set but whose elevation byte predates this position -- is
+// told apart from a save whose elevation pair was written with its position.
+const PLAYER_OBJECT_EVENT_MARKER_OFFSET: usize =
+    OBJECT_EVENTS_OFFSET + PLAYER_OBJECT_EVENT_INDEX * OBJECT_EVENT_LEN + 0x03;
+const OBJECT_EVENT_MARKER_BIT: u8 = 0x80;
+// `ObjectEvent::currentCoords` (include/global.fieldmap.h:235), map-local plus
+// `MAP_OFFSET` (include/fieldmap.h:18), as upstream keeps it against
+// `SaveBlock1::pos`. Written from `pos` with the elevation pair, so a writer
+// that moves `pos` but preserves the entry leaves the two disagreeing.
+const OBJECT_EVENT_CURRENT_COORDS_OFFSET: usize = 0x10;
+const PLAYER_OBJECT_EVENT_COORDS_OFFSET: usize = OBJECT_EVENTS_OFFSET
+    + PLAYER_OBJECT_EVENT_INDEX * OBJECT_EVENT_LEN
+    + OBJECT_EVENT_CURRENT_COORDS_OFFSET;
+const MAP_OFFSET: i16 = 7;
+// `ObjectEvent::initialCoords` (include/global.fieldmap.h:234): four bytes
+// the model never reads and the pre-#801 writer never touched, reused to hold
+// the save counter of the write that stored the pair. Every writer advances
+// the counter, so a save by a build that does not stamp it leaves a stale one.
+const OBJECT_EVENT_INITIAL_COORDS_OFFSET: usize = 0x0C;
+const PLAYER_OBJECT_EVENT_GENERATION_OFFSET: usize = OBJECT_EVENTS_OFFSET
+    + PLAYER_OBJECT_EVENT_INDEX * OBJECT_EVENT_LEN
+    + OBJECT_EVENT_INITIAL_COORDS_OFFSET;
 const DIRECTION_NIBBLE_MASK: u8 = 0x0F;
 const MOVEMENT_DIRECTION_SHIFT: u32 = 4;
 const SERIALIZED_U16_LEN: usize = std::mem::size_of::<u16>();
@@ -100,6 +136,15 @@ pub struct Coords16 {
     pub x: i16,
     /// Y coordinate.
     pub y: i16,
+}
+
+/// The `currentCoords` an object at save position `pos` holds
+/// (`pos` plus `MAP_OFFSET`, wrapping like the `s16` upstream stores).
+fn object_event_coords(pos: Coords16) -> Coords16 {
+    Coords16 {
+        x: pos.x.wrapping_add(MAP_OFFSET),
+        y: pos.y.wrapping_add(MAP_OFFSET),
+    }
 }
 
 impl Coords16 {
@@ -334,19 +379,52 @@ impl SaveBlock2 {
     }
 }
 
-/// The player object's raw saved direction nibbles.
+/// The player object's raw saved direction and elevation nibbles.
 ///
 /// Raw values include the no-direction value from a zero-filled entry, which
-/// has no equivalent walking direction.
+/// has no equivalent walking direction. `active` marks an entry this
+/// port wrote, since a zero elevation pair is valid and cannot mark it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SavedObjectEvent {
+    /// `active` and this port's marker bit both set: the slot holds a live
+    /// object whose elevation pair this port wrote with its position.
+    /// Zero-filled entries, and images (including upstream-origin ones) not
+    /// written by this port's elevation writer, decode it clear, which is what
+    /// tells a real `(0, 0)` elevation pair from a stale or unwritten byte.
+    pub active: bool,
     /// Facing direction stored in the low nibble.
     pub facing_direction: u8,
     /// Movement direction stored in the high nibble.
     pub movement_direction: u8,
+    /// `currentElevation`, stored in the low nibble of the elevation byte.
+    pub current_elevation: u8,
+    /// `previousElevation`, stored in the high nibble of the elevation byte.
+    pub previous_elevation: u8,
 }
 
 impl SavedObjectEvent {
+    /// Packs both elevation values into their four-bit fields.
+    #[must_use]
+    pub const fn to_elevation_byte(self) -> u8 {
+        (self.current_elevation & DIRECTION_NIBBLE_MASK)
+            | ((self.previous_elevation & DIRECTION_NIBBLE_MASK) << MOVEMENT_DIRECTION_SHIFT)
+    }
+
+    /// Sets [`Self::active`].
+    #[must_use]
+    pub const fn with_active(mut self, active: bool) -> Self {
+        self.active = active;
+        self
+    }
+
+    /// Unpacks the elevation byte into `self`, leaving directions as they are.
+    #[must_use]
+    pub const fn with_elevation_byte(mut self, byte: u8) -> Self {
+        self.current_elevation = byte & DIRECTION_NIBBLE_MASK;
+        self.previous_elevation = byte >> MOVEMENT_DIRECTION_SHIFT;
+        self
+    }
+
     /// Packs both direction values into their four-bit fields.
     #[must_use]
     pub const fn to_direction_byte(self) -> u8 {
@@ -360,6 +438,9 @@ impl SavedObjectEvent {
         Self {
             facing_direction: byte & DIRECTION_NIBBLE_MASK,
             movement_direction: byte >> MOVEMENT_DIRECTION_SHIFT,
+            current_elevation: 0,
+            previous_elevation: 0,
+            active: false,
         }
     }
 }
@@ -407,6 +488,23 @@ impl Default for SaveBlock1 {
 }
 
 impl SaveBlock1 {
+    /// Records `counter`, the save counter the write carries, in the player
+    /// object's entry when [`SavedObjectEvent::active`] is set.
+    pub(crate) fn stamp_generation(&self, bytes: &mut [u8; Self::PAYLOAD_LEN], counter: u32) {
+        if self.player_object_event.active {
+            bytes[PLAYER_OBJECT_EVENT_GENERATION_OFFSET..][..SERIALIZED_U32_LEN]
+                .copy_from_slice(&counter.to_le_bytes());
+        }
+    }
+
+    /// Withdraws trust in the saved elevation pair unless the stamp in `bytes`
+    /// equals `counter`, the counter of the slot they were read from.
+    pub(crate) fn require_generation(&mut self, bytes: &[u8], counter: u32) {
+        if read_u32(bytes, PLAYER_OBJECT_EVENT_GENERATION_OFFSET) != counter {
+            self.player_object_event.active = false;
+        }
+    }
+
     /// Serialized byte length of a complete primary block.
     pub const PAYLOAD_LEN: usize = 0x3D88;
 
@@ -446,6 +544,18 @@ impl SaveBlock1 {
             base[offset..offset + SERIALIZED_U16_LEN].copy_from_slice(&value.to_le_bytes());
         }
         base[PLAYER_OBJECT_EVENT_DIRECTIONS_OFFSET] = self.player_object_event.to_direction_byte();
+        base[PLAYER_OBJECT_EVENT_ELEVATIONS_OFFSET] = self.player_object_event.to_elevation_byte();
+        // Only bit 0 is modeled; the byte's other bitfields stay as loaded.
+        let active_byte = &mut base[PLAYER_OBJECT_EVENT_ACTIVE_OFFSET];
+        *active_byte &= !OBJECT_EVENT_ACTIVE_BIT;
+        let marker_byte = &mut base[PLAYER_OBJECT_EVENT_MARKER_OFFSET];
+        *marker_byte &= !OBJECT_EVENT_MARKER_BIT;
+        if self.player_object_event.active {
+            base[PLAYER_OBJECT_EVENT_ACTIVE_OFFSET] |= OBJECT_EVENT_ACTIVE_BIT;
+            base[PLAYER_OBJECT_EVENT_MARKER_OFFSET] |= OBJECT_EVENT_MARKER_BIT;
+            base[PLAYER_OBJECT_EVENT_COORDS_OFFSET..][..Coords16::LEN]
+                .copy_from_slice(&object_event_coords(self.pos).to_bytes());
+        }
     }
 
     /// Decodes modeled fields and decrypts money and bag quantities.
@@ -473,8 +583,9 @@ impl SaveBlock1 {
             *value = read_u16(bytes, VARS_OFFSET + index * SERIALIZED_U16_LEN);
         }
 
+        let pos = Coords16::from_bytes(&bytes[POSITION_OFFSET..POSITION_OFFSET + Coords16::LEN]);
         Ok(Self {
-            pos: Coords16::from_bytes(&bytes[POSITION_OFFSET..POSITION_OFFSET + Coords16::LEN]),
+            pos,
             location: WarpData::from_bytes(
                 &bytes[LOCATION_OFFSET..LOCATION_OFFSET + WarpData::LEN],
             ),
@@ -491,6 +602,14 @@ impl SaveBlock1 {
             event_data: EventData::from_saved_state(flags, vars),
             player_object_event: SavedObjectEvent::from_direction_byte(
                 bytes[PLAYER_OBJECT_EVENT_DIRECTIONS_OFFSET],
+            )
+            .with_elevation_byte(bytes[PLAYER_OBJECT_EVENT_ELEVATIONS_OFFSET])
+            .with_active(
+                bytes[PLAYER_OBJECT_EVENT_ACTIVE_OFFSET] & OBJECT_EVENT_ACTIVE_BIT != 0
+                    && bytes[PLAYER_OBJECT_EVENT_MARKER_OFFSET] & OBJECT_EVENT_MARKER_BIT != 0
+                    && Coords16::from_bytes(
+                        &bytes[PLAYER_OBJECT_EVENT_COORDS_OFFSET..][..Coords16::LEN],
+                    ) == object_event_coords(pos),
             ),
         })
     }
@@ -811,11 +930,81 @@ mod tests {
             |base| {
                 block.patch_bytes(base, key);
             },
-            &[],
+            // The player object's first byte shares `active` (bit 0) with
+            // unmodeled bitfields, which patching preserves.
+            &[
+                PLAYER_OBJECT_EVENT_ACTIVE_OFFSET,
+                PLAYER_OBJECT_EVENT_MARKER_OFFSET,
+                PLAYER_OBJECT_EVENT_COORDS_OFFSET,
+                PLAYER_OBJECT_EVENT_COORDS_OFFSET + 1,
+                PLAYER_OBJECT_EVENT_COORDS_OFFSET + 2,
+                PLAYER_OBJECT_EVENT_COORDS_OFFSET + 3,
+            ],
         );
         assert_eq!(
             SaveBlock1::from_bytes(&patched, key).unwrap().money,
             block.money
+        );
+
+        let mut base = [0xEE_u8; SaveBlock1::PAYLOAD_LEN];
+        block.player_object_event.active = true;
+        block.patch_bytes(&mut base, key);
+        assert_eq!(
+            base[PLAYER_OBJECT_EVENT_ACTIVE_OFFSET], 0xEF,
+            "active is set and the other seven bits are kept"
+        );
+        assert_eq!(
+            base[PLAYER_OBJECT_EVENT_MARKER_OFFSET],
+            0xEE | OBJECT_EVENT_MARKER_BIT,
+            "the marker is set and the other seven bits are kept"
+        );
+        block.player_object_event.active = false;
+        block.patch_bytes(&mut base, key);
+        assert_eq!(base[PLAYER_OBJECT_EVENT_ACTIVE_OFFSET], 0xEE);
+        assert_eq!(
+            base[PLAYER_OBJECT_EVENT_MARKER_OFFSET],
+            0xEE & !OBJECT_EVENT_MARKER_BIT
+        );
+
+        // An upstream-origin image: `active` set, no marker, stale elevation.
+        let mut upstream = [0u8; SaveBlock1::PAYLOAD_LEN];
+        upstream[PLAYER_OBJECT_EVENT_ACTIVE_OFFSET] = OBJECT_EVENT_ACTIVE_BIT;
+        upstream[PLAYER_OBJECT_EVENT_ELEVATIONS_OFFSET] = 0x30;
+        let decoded = SaveBlock1::from_bytes(&upstream, key).unwrap();
+        assert!(
+            !decoded.player_object_event.active,
+            "no marker, not trusted"
+        );
+    }
+
+    #[test]
+    fn a_pre_801_resave_that_moves_pos_leaves_the_elevation_pair_untrusted() {
+        let key = 0xA1B2_C3D4;
+        let mut block = SaveBlock1 {
+            pos: Coords16 { x: 4, y: 4 },
+            ..SaveBlock1::default()
+        };
+        block.player_object_event.active = true;
+        block.player_object_event.current_elevation = 0;
+        block.player_object_event.previous_elevation = 3;
+        let mut bytes = block.to_bytes(key);
+        assert!(
+            SaveBlock1::from_bytes(&bytes, key)
+                .unwrap()
+                .player_object_event
+                .active,
+            "a fresh save is trusted"
+        );
+
+        // The pre-#801 writer: new position and directions over the loaded
+        // bytes, every other byte -- marker, elevations, coords -- preserved.
+        bytes[POSITION_OFFSET..POSITION_OFFSET + Coords16::LEN]
+            .copy_from_slice(&Coords16 { x: 5, y: 4 }.to_bytes());
+        let reopened = SaveBlock1::from_bytes(&bytes, key).unwrap();
+        assert_eq!(reopened.pos, Coords16 { x: 5, y: 4 });
+        assert!(
+            !reopened.player_object_event.active,
+            "a pair written for another position must not be trusted"
         );
     }
 
@@ -833,6 +1022,9 @@ mod tests {
             player_object_event: SavedObjectEvent {
                 facing_direction: DIRECTION_WEST,
                 movement_direction: DIRECTION_EAST,
+                current_elevation: 0,
+                previous_elevation: 3,
+                active: true,
             },
             ..SaveBlock1::default()
         };
@@ -874,6 +1066,8 @@ mod tests {
         assert_eq!(bytes[0x1270 + event_data::NUM_FLAG_BYTES - 1], 0x80);
         assert_eq!(&bytes[0x159A..0x159C], &[0xEF, 0xBE]);
         assert_eq!(bytes[0xA48], 0x43);
+        assert_eq!(bytes[0xA3B], 0x30, "previous 3 high, current 0 low");
+        assert_eq!(bytes[0xA30] & 1, 1, "the player object is active");
 
         let restored = SaveBlock1::from_bytes(&bytes, key).unwrap();
         assert_eq!(restored.pos, block.pos);
@@ -897,6 +1091,7 @@ mod tests {
         let event = SavedObjectEvent {
             facing_direction: 1,
             movement_direction: 2,
+            ..SavedObjectEvent::default()
         };
         assert_eq!(event.to_direction_byte(), 0x21);
         assert_eq!(SavedObjectEvent::from_direction_byte(0x21), event);
@@ -904,8 +1099,26 @@ mod tests {
             SavedObjectEvent {
                 facing_direction: 0xFF,
                 movement_direction: 0xF0,
+                ..SavedObjectEvent::default()
             }
             .to_direction_byte(),
+            0x0F,
+            "each nibble truncates like its bitfield, never spilling into the other"
+        );
+    }
+
+    #[test]
+    fn saved_object_event_packs_two_elevation_nibbles() {
+        let event = SavedObjectEvent::default().with_elevation_byte(0x30);
+        assert_eq!((event.current_elevation, event.previous_elevation), (0, 3));
+        assert_eq!(event.to_elevation_byte(), 0x30);
+        assert_eq!(
+            SavedObjectEvent {
+                current_elevation: 0xFF,
+                previous_elevation: 0xF0,
+                ..SavedObjectEvent::default()
+            }
+            .to_elevation_byte(),
             0x0F,
             "each nibble truncates like its bitfield, never spilling into the other"
         );

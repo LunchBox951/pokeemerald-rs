@@ -55,28 +55,28 @@ const CHANSEY: u16 = 113;
 /// [`CHANSEY`].
 const KANGASKHAN: u16 = 115;
 
-const POUND: MoveId = MoveId(1);
-const SCRATCH: MoveId = MoveId(10);
-const TACKLE: MoveId = MoveId(33);
-const LEER: MoveId = MoveId(43);
-const GROWL: MoveId = MoveId(45);
-const ABSORB: MoveId = MoveId(71);
+const POUND: MoveId = MoveId::POUND;
+const SCRATCH: MoveId = MoveId::SCRATCH;
+const TACKLE: MoveId = MoveId::TACKLE;
+const LEER: MoveId = MoveId::LEER;
+const GROWL: MoveId = MoveId::GROWL;
+const ABSORB: MoveId = MoveId::ABSORB;
 /// `MOVE_PURSUIT`, Treecko's level-16 learnset move: `EFFECT_PURSUIT` has
 /// no resolver, so `battle::hit`'s allow-list refuses it (see its module
 /// docs).
-const PURSUIT: MoveId = MoveId(228);
+const PURSUIT: MoveId = MoveId::PURSUIT;
 /// `MOVE_PECK` (`include/constants/moves.h:68`) — Torchic's level-16
 /// learnset entry.
-const PECK: MoveId = MoveId(64);
-const SAND_ATTACK: MoveId = MoveId(28);
-const FIRE_SPIN: MoveId = MoveId(83);
-const QUICK_ATTACK: MoveId = MoveId(98);
-const SLASH: MoveId = MoveId(163);
+const PECK: MoveId = MoveId::PECK;
+const SAND_ATTACK: MoveId = MoveId::SAND_ATTACK;
+const FIRE_SPIN: MoveId = MoveId::FIRE_SPIN;
+const QUICK_ATTACK: MoveId = MoveId::QUICK_ATTACK;
+const SLASH: MoveId = MoveId::SLASH;
 /// `MOVE_MEGA_KICK` (`include/constants/moves.h:25`): a plain-hit Normal
 /// move with far more power than Tackle's.
-const MEGA_KICK: MoveId = MoveId(25);
+const MEGA_KICK: MoveId = MoveId::MEGA_KICK;
 /// `MOVE_WATER_GUN` (`include/constants/moves.h:59`).
-const WATER_GUN: MoveId = MoveId(55);
+const WATER_GUN: MoveId = MoveId::WATER_GUN;
 
 fn rival_treecko(dex: &Dex) -> Vec<BattlePokemon> {
     vec![max_iv_mon(dex, TREECKO, 5, vec![POUND, LEER])]
@@ -923,10 +923,10 @@ fn a_prompts_deferred_send_out_arrives_with_the_answer_and_the_battle_plays_on()
 #[test]
 fn a_multi_prompt_chain_resolves_fully_before_the_deferred_transition() {
     const WYNAUT: u16 = 360;
-    const COUNTER: MoveId = MoveId(68);
-    const MIRROR_COAT: MoveId = MoveId(243);
-    const SAFEGUARD: MoveId = MoveId(219);
-    const DESTINY_BOND: MoveId = MoveId(194);
+    const COUNTER: MoveId = MoveId::COUNTER;
+    const MIRROR_COAT: MoveId = MoveId::MIRROR_COAT;
+    const SAFEGUARD: MoveId = MoveId::SAFEGUARD;
+    const DESTINY_BOND: MoveId = MoveId::DESTINY_BOND;
     const LEVEL_15_BLOCK: [MoveId; 4] = [COUNTER, MIRROR_COAT, SAFEGUARD, DESTINY_BOND];
 
     let dex = Dex::new();

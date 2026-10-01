@@ -2564,3 +2564,139 @@ fn real_pack_route_101_and_oldale_town_render_continuously_across_their_shared_e
          all-border strip"
     );
 }
+
+/// Upstream `SetObjectSubpriorityByElevation` (`event_object_movement.c`)
+/// gives the lower-on-screen object the smaller subpriority, so at equal
+/// OBJ priority an NPC standing one tile south of the player draws in front
+/// of the player where their sprites overlap, and one standing north behind.
+#[test]
+fn equal_priority_overlap_orders_the_player_and_npc_by_screen_depth() {
+    // Elevations 2 and 3 share OBJ priority 2 but have subpriority bases 83
+    // and 115, so a north neighbour at elevation 2 still draws in front.
+    for (npc_dy, npc_elevation, npc_in_front) in
+        [(1_i16, 3_u8, true), (-1, 3, false), (-1, 2, true)]
+    {
+        let mut pack_entries = synthetic_overworld_pack_entries_for("general", 4, 4);
+        pack_entries.push(Entry {
+            id: "sprite/twin",
+            kind_tag: 0,
+            meta: image_meta(144, 32, 8),
+            payload: vec![3u8; 144 * 32],
+        });
+        let player_tile = (5_i16, 5_i16);
+        let object_events: &'static [ObjectEvent] = Box::leak(Box::new([ObjectEvent {
+            local_id: 1,
+            graphics_id: "OBJ_EVENT_GFX_TWIN",
+            x: player_tile.0,
+            y: player_tile.1 + npc_dy,
+            elevation: npc_elevation,
+            movement_type: MovementType::FaceDown,
+            movement_range_x: 0,
+            movement_range_y: 0,
+            trainer_type: TrainerType::None,
+            trainer_sight_or_berry_tree_id: "0",
+            script: "0x0",
+            flag: "0",
+        }]));
+        let events: &'static assets::MapEvents = Box::leak(Box::new(assets::MapEvents {
+            id: assets::MapId("MAP_TEST"),
+            shared_events_map: None,
+            object_events,
+            warp_events: &[],
+            coord_events: &[],
+            bg_events: &[],
+        }));
+        let scene = synthetic_scene_result_with_connections_and_events(
+            write_synthetic_pack(pack_entries),
+            "gTileset_General",
+            4,
+            4,
+            &[],
+            events,
+        )
+        .expect("synthetic pack decodes");
+        let player = PlayerState::new(
+            (i32::from(player_tile.0), i32::from(player_tile.1)),
+            3,
+            Direction::South,
+        );
+        let entries = scene
+            .sprites
+            .entries(&player, &engine::event_data::EventData::new());
+        assert_eq!(entries.len(), 2);
+        assert_eq!(
+            entries[0].priority(),
+            entries[1].priority(),
+            "equal priority premise"
+        );
+
+        // Both sprites are 16x32 and the NPC is one tile above or below the
+        // player, so a row inside the shared 16px band lies inside both.
+        let x = usize::from(super::avatar::PLAYER_OBJ_X) + 8;
+        let y = usize::from(super::avatar::PLAYER_OBJ_Y) + if npc_dy > 0 { 24 } else { 8 };
+        let color_at = |e: &[rendering::OamEntry]| {
+            rendering::SpriteLayer::new(
+                e,
+                scene.sprites.tiles(),
+                scene.sprites.tiles(),
+                scene.sprites.palette(),
+            )
+            .resolve_pixel(x, y)
+            .map(|p| p.color)
+        };
+        let player_entry = super::avatar::player_entry(&player);
+        let player_only = color_at(&[player_entry]);
+        let npc_only = color_at(
+            &entries
+                .iter()
+                .copied()
+                .filter(|e| e.palette_bank() != player_entry.palette_bank())
+                .collect::<Vec<_>>(),
+        );
+        assert!(
+            player_only.is_some() && npc_only.is_some(),
+            "both sprites cover the pixel"
+        );
+        assert_ne!(
+            player_only, npc_only,
+            "control: the two sprites are distinguishable"
+        );
+        assert_eq!(
+            color_at(&entries),
+            if npc_in_front { npc_only } else { player_only },
+            "NPC at dy={npc_dy}: nearer (lower on screen) sprite must win the equal-priority overlap"
+        );
+    }
+}
+
+/// Writes a synthetic pack at `path` that loads the *real* bundled
+/// `MAP_OLDALE_TOWN` header and layout (`general`/`petalburg`, 20x20) through
+/// [`super::load_room_from_source`], with an opaque people sheet for each of
+/// `sprite_paths`, so a phase test can complete a real map transition.
+pub(crate) fn write_oldale_layout_pack(path: &std::path::Path, sprite_paths: &[&str]) {
+    let mut entries: Vec<Entry> = synthetic_overworld_pack_entries_for("general", 20, 20)
+        .into_iter()
+        .map(|mut e| {
+            if e.id == "layout/map_test/map" {
+                e.id = "layout/oldale_town/map";
+            } else if e.id == "layout/map_test/border" {
+                e.id = "layout/oldale_town/border";
+            }
+            e
+        })
+        .collect();
+    entries.extend(
+        synthetic_overworld_pack_entries_for("petalburg", 20, 20)
+            .into_iter()
+            .filter(|e| e.id.starts_with("tileset/petalburg/")),
+    );
+    for sprite in sprite_paths {
+        entries.push(Entry {
+            id: leaked(format!("sprite/{sprite}")),
+            kind_tag: IMAGE_KIND_TAG,
+            meta: image_meta(144, 32, 8),
+            payload: vec![3u8; 144 * 32],
+        });
+    }
+    std::fs::write(path, write_synthetic_pack(entries)).unwrap();
+}
