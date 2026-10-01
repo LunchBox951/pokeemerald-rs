@@ -42,6 +42,12 @@ const DEVICE_TAIL_FALLBACK: Duration = Duration::from_millis(200);
 /// this keeps a manual smoke run from looking hung after the last note.
 const DEVICE_TAIL_MAX: Duration = Duration::from_secs(1);
 
+/// How many of the most recent submitted-frame advances size the callback
+/// cadence in [`wait_for_measured_tail`]: enough to ride out a jittery
+/// period, few enough that one aggregate a late poll folded together ages out
+/// once callbacks resume at their real pace.
+const CADENCE_WINDOW: usize = 4;
+
 fn main() -> ExitCode {
     let song = build_song();
     let mut seq = Sequencer::new(song);
@@ -515,12 +521,14 @@ fn wait_for_device_tail(
 /// timestamps. The wait therefore watches submitted frames that advance while
 /// the sounded estimate stands still (any sounded advance discards that
 /// evidence, so a fresh estimate below `target` is never overridden), sizing the
-/// callback cadence from what it observes (the largest gap between advances
-/// and the largest advance, converted to time at `device_sample_rate`), never
-/// from the advertised buffer range. Callbacks are alive when submitted frames
-/// advanced across at least a quarter of `derived_tail` (or one advance alone
-/// covered that much playback) and the latest advance is within one observed
-/// cadence, plus two poll intervals, of now. An advance seen at a late poll is
+/// callback cadence from what it observes (the largest gap between, or size
+/// of, the last [`CADENCE_WINDOW`] advances, converted to time at
+/// `device_sample_rate`), never from the advertised buffer range, so an
+/// aggregate one late poll saw does not widen the cadence for good. Callbacks
+/// are alive when submitted frames advanced across at least a quarter of
+/// `derived_tail` (or one advance alone covered that much playback) and the
+/// latest advance is within one observed cadence, plus two poll intervals, of
+/// now. An advance seen at a late poll is
 /// credited no later than the playback it covers past the previous poll, so an
 /// aggregate of callbacks that then stalled reads as stale. Once `derived_tail`
 /// has run from the start of the wait with the callbacks alive, the wait ends
@@ -555,8 +563,9 @@ fn wait_for_measured_tail(
     let mut last_poll = started;
     let mut first_advance = None;
     let mut last_advance = None;
-    let mut max_gap = Duration::ZERO;
     let mut max_advance = Duration::ZERO;
+    let mut recent_cadence = [Duration::ZERO; CADENCE_WINDOW];
+    let mut advances = 0_usize;
     loop {
         let snapshot = progress();
         let errors = stream_errors();
@@ -583,8 +592,8 @@ fn wait_for_measured_tail(
         if sounded_advanced {
             first_advance = None;
             last_advance = None;
-            max_gap = Duration::ZERO;
             max_advance = Duration::ZERO;
+            recent_cadence = [Duration::ZERO; CADENCE_WINDOW];
         }
         if let Some(previous) = last_submitted
             .filter(|&last| submitted > last)
@@ -602,9 +611,11 @@ fn wait_for_measured_tail(
             // than the playback it covers past that poll rather than
             // stamping it with the (possibly much later) observation time.
             let at = current.min(last_poll + played);
-            if let Some(previous_at) = last_advance {
-                max_gap = max_gap.max(at.saturating_duration_since(previous_at));
-            }
+            let gap = last_advance.map_or(Duration::ZERO, |previous_at| {
+                at.saturating_duration_since(previous_at)
+            });
+            recent_cadence[advances % CADENCE_WINDOW] = gap.max(played);
+            advances = advances.wrapping_add(1);
             first_advance.get_or_insert(at);
             last_advance = Some(at);
         }
@@ -614,7 +625,7 @@ fn wait_for_measured_tail(
         let callbacks_alive = first_advance
             .zip(last_advance)
             .is_some_and(|(first, last)| {
-                let cadence = max_gap.max(max_advance);
+                let cadence = recent_cadence.iter().copied().max().unwrap_or_default();
                 last.duration_since(first).max(max_advance) >= derived_tail / 4
                     && current.duration_since(last) <= cadence + policy.interval * 2
             });
@@ -1797,6 +1808,48 @@ mod tests {
             elapsed >= std::time::Duration::from_millis(400),
             "finished at {elapsed:?}, before the measured target sounded"
         );
+    }
+
+    /// One 300 ms polling pause folds 10 ms callbacks into one aggregate;
+    /// callbacks that later stall 300 ms before the deadline must read as
+    /// stale rather than inherit that aggregate as their cadence.
+    #[test]
+    fn an_old_aggregate_advance_does_not_widen_the_later_cadence() {
+        let policy = RetryPolicy {
+            interval: std::time::Duration::from_millis(10),
+            max_wait: std::time::Duration::from_secs(1),
+        };
+        let start = std::time::Instant::now();
+        let clock = Rc::new(RefCell::new(start));
+        let submitted = Cell::new(4_u64);
+        let mut first_sleep = true;
+
+        let result = wait_for_measured_tail(
+            4,
+            std::time::Duration::from_secs(1),
+            48_000,
+            &policy,
+            || Some(progress(0, submitted.get())),
+            || 0,
+            || *clock.borrow(),
+            |duration| {
+                if std::mem::take(&mut first_sleep) {
+                    // The poll pauses 300 ms while thirty 10 ms callbacks run.
+                    *clock.borrow_mut() += std::time::Duration::from_millis(300);
+                    submitted.set(submitted.get() + 30 * 480);
+                    return;
+                }
+                *clock.borrow_mut() += duration;
+                if clock.borrow().duration_since(start) <= std::time::Duration::from_millis(700) {
+                    submitted.set(submitted.get() + 480);
+                }
+            },
+        );
+
+        assert!(matches!(
+            result,
+            Err(DrainError::MeasuredTailTimedOut { .. })
+        ));
     }
 
     #[test]
