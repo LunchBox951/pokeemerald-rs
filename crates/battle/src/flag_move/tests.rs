@@ -8,11 +8,11 @@ use crate::pokemon::{BattlePokemon, Ivs};
 use crate::volatile::Volatiles;
 use assets::{MoveId, SpeciesId};
 
-const SPLASH: MoveId = MoveId(150);
-const FOCUS_ENERGY: MoveId = MoveId(116);
-const CHARGE: MoveId = MoveId(268);
-const DEFENSE_CURL: MoveId = MoveId(111);
-const TACKLE: MoveId = MoveId(33);
+const SPLASH: MoveId = MoveId::SPLASH;
+const FOCUS_ENERGY: MoveId = MoveId::FOCUS_ENERGY;
+const CHARGE: MoveId = MoveId::CHARGE;
+const DEFENSE_CURL: MoveId = MoveId::DEFENSE_CURL;
+const TACKLE: MoveId = MoveId::TACKLE;
 const TEST_SPECIES: SpeciesId = SpeciesId(1);
 const TEST_LEVEL: u8 = 5;
 const TEST_PERSONALITY: u32 = 0;

@@ -358,8 +358,8 @@ mod tests {
     const MAY_ROUTE_103_MUDKIP: TrainerId = TrainerId(529);
     const UNKNOWN_TRAINER: TrainerId = TrainerId(60_000);
     const TREECKO: SpeciesId = SpeciesId(277);
-    const POUND: MoveId = MoveId(1);
-    const HARDEN: MoveId = MoveId(106);
+    const POUND: MoveId = MoveId::POUND;
+    const HARDEN: MoveId = MoveId::HARDEN;
     const ROUTE_103_RIVAL_LEVEL: u8 = 5;
     const INVALID_LEVEL: u8 = 0;
     const NON_SHINY_OT_ID: u32 = 0x0000_00FF;

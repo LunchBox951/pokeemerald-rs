@@ -161,7 +161,7 @@ fn walking_in_route_101s_grass_fires_an_encounter_and_runs_a_battle() {
     phase.rng = Rng::new(ENCOUNTER_SEED);
     // A level-50 Treecko (species 277) knowing Pound (move 1) -- far faster than a level-2
     // Wurmple, so the driver's run attempt succeeds on the first turn.
-    phase.party_lead = Some(player_mon(277, 50, vec![MoveId(1)]));
+    phase.party_lead = Some(player_mon(277, 50, vec![MoveId::POUND]));
 
     // Four steps on ordinary ground: the immunity window, RNG-silent.
     for step in 1..=4 {
@@ -199,7 +199,7 @@ fn walking_in_route_101s_grass_fires_an_encounter_and_runs_a_battle() {
     // `GiveBoxMonInitialMoveset`: a level-2 Wurmple knows Tackle (33) and
     // String Shot (81).
     let known: Vec<MoveId> = battle.enemy().moves().iter().map(|m| m.move_id).collect();
-    assert_eq!(known, vec![MoveId(33), MoveId(81)]);
+    assert_eq!(known, vec![MoveId::TACKLE, MoveId::STRING_SHOT]);
     // The one-stream invariant itself (issue #207 review, round 5): the
     // wild mon's nature/personality/IV draws must continue the SAME stream
     // the four roll draws came from. Reproduce `CreateWildMon`'s sequence
@@ -292,7 +292,7 @@ fn a_route_101_encounter_fights_a_full_battle_to_a_faint() {
 
     // Level-50 Treecko with Pound; the wild moveset comes from the real
     // learnset inside `start_wild_battle`.
-    let lead = player_mon(277, 50, vec![MoveId(1)]);
+    let lead = player_mon(277, 50, vec![MoveId::POUND]);
     let mut battle = start_wild_battle(lead, encounter, TEST_PLAYER_TRAINER_ID, &mut rng)
         .expect("a Route 101 Wurmple must be fightable");
     assert_eq!(battle.enemy().species(), WURMPLE);
@@ -368,7 +368,7 @@ fn walking_on_ordinary_ground_never_rolls_an_encounter() {
     // Grass parked well off the walking lane.
     let mut phase = route_101_phase(PlayerState::new((1, 5), 3, Direction::East), (1, 1));
     phase.rng = Rng::new(ENCOUNTER_SEED);
-    phase.party_lead = Some(player_mon(277, 50, vec![MoveId(1)]));
+    phase.party_lead = Some(player_mon(277, 50, vec![MoveId::POUND]));
 
     for _ in 0..(8 * FRAMES_PER_STEP) {
         phase.step(held(Buttons::RIGHT));
@@ -423,7 +423,7 @@ fn an_unfightable_map_table_disables_the_roll_without_drawing() {
         None,
     );
     phase.rng = Rng::new(ENCOUNTER_SEED);
-    phase.party_lead = Some(player_mon(277, 50, vec![MoveId(1)]));
+    phase.party_lead = Some(player_mon(277, 50, vec![MoveId::POUND]));
     assert!(
         !phase.wild_table_fightable(),
         "Route 102 must fail the screen"
@@ -502,7 +502,7 @@ fn ending_a_battle_writes_the_lead_back_with_neutral_stat_stages() {
     // A level-50 Treecko whose Speed stage is already at -2: even halved it
     // outruns a level-2 Wurmple, so the driver's run succeeds immediately
     // and the battle ends with the stage still non-neutral.
-    let mut lead = player_mon(277, 50, vec![MoveId(1)]);
+    let mut lead = player_mon(277, 50, vec![MoveId::POUND]);
     lead.stages_mut().speed = StatStage::new(-2).unwrap();
 
     let battle = start_wild_battle(lead, encounter, TEST_PLAYER_TRAINER_ID, &mut rng)
@@ -555,7 +555,7 @@ fn ending_a_battle_writes_the_lead_back_with_cleared_volatiles() {
         slot: 0,
     };
 
-    let mut lead = player_mon(277, 50, vec![MoveId(1)]);
+    let mut lead = player_mon(277, 50, vec![MoveId::POUND]);
     lead.volatiles_mut().set_focus_energy();
     lead.volatiles_mut().set_charge();
 
@@ -649,7 +649,7 @@ fn walking_route_101s_real_grass_produces_an_encounter_from_its_own_table() {
         None,
     );
     phase.rng = Rng::new(ENCOUNTER_SEED);
-    phase.party_lead = Some(player_mon(277, 50, vec![MoveId(1)]));
+    phase.party_lead = Some(player_mon(277, 50, vec![MoveId::POUND]));
 
     // Pace back and forth between the two grass tiles. Route 101's land rate
     // is 320/2880 (~11%) per eligible step, so 100 steps missing every time
@@ -801,7 +801,7 @@ fn a_door_warp_frame_never_reaches_the_encounter_roll() {
         None,
     );
     phase.rng = Rng::new(ENCOUNTER_SEED);
-    phase.party_lead = Some(player_mon(277, 50, vec![MoveId(1)]));
+    phase.party_lead = Some(player_mon(277, 50, vec![MoveId::POUND]));
     // Granite Cave's table fails today's executability screen (its Zubat
     // knows Leech Life), which would freeze the very bookkeeping this test
     // pins. Force the table on: this test is about the warp-vs-roll
@@ -1000,9 +1000,9 @@ fn a_lost_battle_now_heals_the_party_and_halves_money() {
     // branch), frail enough that the Wurmple's reply faints it -- and PP
     // already short of its base, so healing it is observable too.
     let dex = Dex::new();
-    let mut lead = player_mon(SHUCKLE, 2, vec![MoveId(1)]);
+    let mut lead = player_mon(SHUCKLE, 2, vec![MoveId::POUND]);
     lead.apply_damage(lead.stats().max_hp - 1);
-    let base_pp = dex.move_data(MoveId(1)).unwrap().pp;
+    let base_pp = dex.move_data(MoveId::POUND).unwrap().pp;
     lead.deduct_pp(0).unwrap();
     assert!(lead.moves()[0].pp < base_pp, "setup: PP really is short");
     phase.party_lead = Some(lead);
@@ -1086,7 +1086,7 @@ fn after_a_white_out_a_later_grass_step_rolls_again() {
         x: 0,
         y: 0,
     };
-    let mut lead = player_mon(SHUCKLE, 2, vec![MoveId(1)]);
+    let mut lead = player_mon(SHUCKLE, 2, vec![MoveId::POUND]);
     lead.apply_damage(lead.stats().max_hp - 1);
     phase.party_lead = Some(lead);
 
@@ -1200,7 +1200,7 @@ fn a_lost_route_101_first_battle_heals_the_lead_instead_of_leaving_it_fainted() 
         sp_defense: MAX_IV,
     };
     let fragile_treecko =
-        BattlePokemon::new(&Dex::new(), SpeciesId(277), 1, ivs, 0, vec![MoveId(1)])
+        BattlePokemon::new(&Dex::new(), SpeciesId(277), 1, ivs, 0, vec![MoveId::POUND])
             .expect("Treecko/Pound must be in the dex");
     let max_hp = fragile_treecko.stats().max_hp;
     let base_pp = fragile_treecko.moves()[0].pp;
@@ -1290,7 +1290,7 @@ fn real_pack_a_lost_wild_battle_warps_home_to_the_default_heal_location() {
         &[(7, 5)],
     );
     phase.rng = Rng::new(ENCOUNTER_SEED);
-    let mut lead = player_mon(SHUCKLE, 2, vec![MoveId(1)]);
+    let mut lead = player_mon(SHUCKLE, 2, vec![MoveId::POUND]);
     lead.apply_damage(lead.stats().max_hp - 1);
     phase.party_lead = Some(lead);
 
@@ -1340,7 +1340,7 @@ fn no_fightable_land_table_can_roll_a_trapping_opponent() {
             sp_attack: MAX_IV,
             sp_defense: MAX_IV,
         };
-        BattlePokemon::new(&dex, species, level, ivs, personality, vec![MoveId(33)])
+        BattlePokemon::new(&dex, species, level, ivs, personality, vec![MoveId::TACKLE])
     };
     let leads: Vec<BattlePokemon> = (0..species_count)
         .map(SpeciesId)

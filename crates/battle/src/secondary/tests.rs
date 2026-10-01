@@ -22,15 +22,15 @@ const MAX_IVS: Ivs = Ivs {
     sp_defense: 31,
 };
 
-const TACKLE: MoveId = MoveId(33);
-const POISON_STING: MoveId = MoveId(40);
-const POISON_TAIL: MoveId = MoveId(342);
-const THUNDER_SHOCK: MoveId = MoveId(84);
+const TACKLE: MoveId = MoveId::TACKLE;
+const POISON_STING: MoveId = MoveId::POISON_STING;
+const POISON_TAIL: MoveId = MoveId::POISON_TAIL;
+const THUNDER_SHOCK: MoveId = MoveId::THUNDER_SHOCK;
 /// `MOVE_PSYBEAM` (`EFFECT_CONFUSE_HIT`), 100 accuracy, 10% chance, Psychic type.
-const PSYBEAM: MoveId = MoveId(60);
+const PSYBEAM: MoveId = MoveId::PSYBEAM;
 const DRAW_WRAPPING_BELOW_THUNDER_SHOCK_CHANCE: u16 = 109;
 const DRAW_WRAPPING_ONTO_THUNDER_SHOCK_CHANCE: u16 = 110;
-const FAKE_OUT: MoveId = MoveId(252);
+const FAKE_OUT: MoveId = MoveId::FAKE_OUT;
 const UNKNOWN_EFFECT: MoveEffect = MoveEffect(u8::MAX);
 
 /// `SPECIES_ZIGZAGOON`, Normal-type: eligible for poison, no interfering

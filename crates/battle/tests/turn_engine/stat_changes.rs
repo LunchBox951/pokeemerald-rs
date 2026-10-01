@@ -13,8 +13,8 @@ fn wild_zigzagoon_growl_executes_when_the_rejection_loop_lands_on_it() {
     // The enemy knows two moves so the rejection loop can land on either
     // slot; this run pins it landing on Growl. Rattata is faster than
     // Zigzagoon, so Rattata's Tackle resolves first every turn.
-    let player = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]); // Rattata/Tackle
-    let enemy = max_iv_mon(&dex, 288, 3, vec![MoveId(33), MoveId(45)]); // Zigzagoon: Tackle, Growl
+    let player = max_iv_mon(&dex, 19, 5, vec![MoveId::TACKLE]); // Rattata/Tackle
+    let enemy = max_iv_mon(&dex, 288, 3, vec![MoveId::TACKLE, MoveId::GROWL]); // Zigzagoon: Tackle, Growl
     let enemy_hp_before = enemy.current_hp();
     // Pins the level-3 fixture's HP construction independently of the
     // damage arithmetic below.
@@ -36,13 +36,13 @@ fn wild_zigzagoon_growl_executes_when_the_rejection_loop_lands_on_it() {
         vec![
             BattleEvent::Hit {
                 by_player: true,
-                move_id: MoveId(33),
+                move_id: MoveId::TACKLE,
                 damage: 9,
                 is_critical: false,
             },
             BattleEvent::StatFell {
                 by_player: false,
-                move_id: MoveId(45),
+                move_id: MoveId::GROWL,
                 stat: ChangedStat::Attack,
                 new_stage: StatStage::new(-1).unwrap(),
                 magnitude: 1,
@@ -64,8 +64,8 @@ fn wild_wurmple_string_shot_misses_when_the_rejection_loop_lands_on_it() {
     // The enemy knows two moves so the rejection loop can land on either
     // slot; this run pins it landing on String Shot. Rattata is faster
     // than Wurmple, so Rattata's Tackle resolves first.
-    let player = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]); // Rattata/Tackle
-    let enemy = max_iv_mon(&dex, 290, 3, vec![MoveId(33), MoveId(81)]); // Wurmple: Tackle, String Shot
+    let player = max_iv_mon(&dex, 19, 5, vec![MoveId::TACKLE]); // Rattata/Tackle
+    let enemy = max_iv_mon(&dex, 290, 3, vec![MoveId::TACKLE, MoveId::STRING_SHOT]); // Wurmple: Tackle, String Shot
     let enemy_hp_before = enemy.current_hp();
     // Pins the level-3 fixture's HP construction independently of the
     // damage arithmetic below.
@@ -86,13 +86,13 @@ fn wild_wurmple_string_shot_misses_when_the_rejection_loop_lands_on_it() {
         vec![
             BattleEvent::Hit {
                 by_player: true,
-                move_id: MoveId(33),
+                move_id: MoveId::TACKLE,
                 damage: 9,
                 is_critical: false,
             },
             BattleEvent::Missed {
                 by_player: false,
-                move_id: MoveId(81),
+                move_id: MoveId::STRING_SHOT,
             },
         ]
     );
@@ -116,8 +116,8 @@ fn a_stat_already_at_the_floor_reports_wont_go_lower_and_stays_put() {
     // stage is already at the floor. Upstream's ChangeStatBuffs checks the
     // floor after the accuracy check passes, so the move still connects
     // even though the stage cannot move (battle_script_commands.c:7056).
-    let player = max_iv_mon(&dex, 19, 5, vec![MoveId(45)]); // Rattata/Growl
-    let mut enemy = max_iv_mon(&dex, 1, 5, vec![MoveId(33)]); // Bulbasaur/Tackle
+    let player = max_iv_mon(&dex, 19, 5, vec![MoveId::GROWL]); // Rattata/Growl
+    let mut enemy = max_iv_mon(&dex, 1, 5, vec![MoveId::TACKLE]); // Bulbasaur/Tackle
     enemy.stages_mut().attack = StatStage::MIN;
 
     // battle start, turn number, enemy pick (its only move), Growl's
@@ -136,12 +136,12 @@ fn a_stat_already_at_the_floor_reports_wont_go_lower_and_stays_put() {
         vec![
             BattleEvent::StatWontGoLower {
                 by_player: true,
-                move_id: MoveId(45),
+                move_id: MoveId::GROWL,
                 stat: ChangedStat::Attack,
             },
             BattleEvent::Hit {
                 by_player: false,
-                move_id: MoveId(33),
+                move_id: MoveId::TACKLE,
                 damage: 3,
                 is_critical: false,
             },
@@ -165,8 +165,8 @@ fn growl_lowers_the_players_subsequent_tackle_damage() {
     // The faster enemy's Growl resolves before the player's own Tackle in
     // the same turn, so the Tackle's damage must read the already-lowered
     // Attack stage rather than the player's neutral baseline.
-    let enemy = max_iv_mon(&dex, 19, 5, vec![MoveId(45)]); // Rattata/Growl
-    let player = max_iv_mon(&dex, 1, 5, vec![MoveId(33)]); // Bulbasaur/Tackle
+    let enemy = max_iv_mon(&dex, 19, 5, vec![MoveId::GROWL]); // Rattata/Growl
+    let player = max_iv_mon(&dex, 1, 5, vec![MoveId::TACKLE]); // Bulbasaur/Tackle
 
     // battle start, turn number, enemy pick (its only move), Growl's
     // 1-draw accuracy check (100 accuracy: cannot miss), then the
@@ -182,14 +182,14 @@ fn growl_lowers_the_players_subsequent_tackle_damage() {
         vec![
             BattleEvent::StatFell {
                 by_player: false,
-                move_id: MoveId(45),
+                move_id: MoveId::GROWL,
                 stat: ChangedStat::Attack,
                 new_stage: StatStage::new(-1).unwrap(),
                 magnitude: 1,
             },
             BattleEvent::Hit {
                 by_player: true,
-                move_id: MoveId(33),
+                move_id: MoveId::TACKLE,
                 damage: 3,
                 is_critical: false,
             },
@@ -210,8 +210,8 @@ fn string_shot_flips_turn_order_once_the_targets_effective_speed_drops_below_the
     // Poochyena's effective Speed truncates down to a value below
     // Wurmple's untouched Speed from turn 2 on, flipping who moves first
     // despite Wurmple being the raw-slower mon.
-    let player = max_iv_mon(&dex, 290, 5, vec![MoveId(81), MoveId(33)]); // Wurmple: String Shot, Tackle
-    let enemy = max_iv_mon(&dex, 286, 5, vec![MoveId(33)]); // Poochyena: Tackle
+    let player = max_iv_mon(&dex, 290, 5, vec![MoveId::STRING_SHOT, MoveId::TACKLE]); // Wurmple: String Shot, Tackle
+    let enemy = max_iv_mon(&dex, 286, 5, vec![MoveId::TACKLE]); // Poochyena: Tackle
     let player_hp_before = player.current_hp();
     let enemy_hp_before = enemy.current_hp();
     // Pin both level-5 fixtures' HP construction independently of the
@@ -247,13 +247,13 @@ fn string_shot_flips_turn_order_once_the_targets_effective_speed_drops_below_the
         vec![
             BattleEvent::Hit {
                 by_player: false,
-                move_id: MoveId(33),
+                move_id: MoveId::TACKLE,
                 damage: 5,
                 is_critical: false,
             },
             BattleEvent::StatFell {
                 by_player: true,
-                move_id: MoveId(81),
+                move_id: MoveId::STRING_SHOT,
                 stat: ChangedStat::Speed,
                 new_stage: StatStage::new(-1).unwrap(),
                 magnitude: 1,
@@ -275,13 +275,13 @@ fn string_shot_flips_turn_order_once_the_targets_effective_speed_drops_below_the
         vec![
             BattleEvent::Hit {
                 by_player: true,
-                move_id: MoveId(33),
+                move_id: MoveId::TACKLE,
                 damage: 5,
                 is_critical: false,
             },
             BattleEvent::Hit {
                 by_player: false,
-                move_id: MoveId(33),
+                move_id: MoveId::TACKLE,
                 damage: 5,
                 is_critical: false,
             },
@@ -303,11 +303,11 @@ fn a_fainting_battler_drops_its_accumulated_stages() {
     // The enemy Hardens on itself first, then the player finishes it off
     // in the same turn: Harden does not damage or delay the enemy's own
     // faint.
-    let mut enemy = max_iv_mon(&dex, 19, 50, vec![MoveId(106)]); // Rattata/Harden
+    let mut enemy = max_iv_mon(&dex, 19, 50, vec![MoveId::HARDEN]); // Rattata/Harden
     enemy.apply_damage(enemy.current_hp() - 1);
     enemy.volatiles_mut().set_focus_energy();
     enemy.volatiles_mut().set_charge();
-    let player = max_iv_mon(&dex, 1, 5, vec![MoveId(33)]); // Bulbasaur/Tackle
+    let player = max_iv_mon(&dex, 1, 5, vec![MoveId::TACKLE]); // Bulbasaur/Tackle
 
     // battle start, turn number, the enemy's 1-draw rejection-loop pick
     // (only slot 0 is known, so draw 0 -> 0 % 4 == 0 lands immediately),

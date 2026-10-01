@@ -103,8 +103,8 @@ mod tests {
 
     const BULBASAUR: SpeciesId = SpeciesId(1);
     const ZIGZAGOON: SpeciesId = SpeciesId(288);
-    const TACKLE: MoveId = MoveId(33);
-    const GROWL: MoveId = MoveId(45);
+    const TACKLE: MoveId = MoveId::TACKLE;
+    const GROWL: MoveId = MoveId::GROWL;
     const MAX_IVS: Ivs = Ivs {
         hp: 31,
         attack: 31,
