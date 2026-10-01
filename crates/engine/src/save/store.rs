@@ -86,6 +86,9 @@ const SAVE_BLOCK1_CHUNKS_U16: u16 = SAVE_BLOCK1_CHUNKS as u16;
 )]
 const PKMN_STORAGE_CHUNKS_U16: u16 = PKMN_STORAGE_CHUNKS as u16;
 const ERASED_FLASH_BYTE: u8 = u8::MAX;
+/// The rotation of the same-slot predecessor a rotation-zero write lays
+/// over: two saves, so two rotations, behind.
+const TORN_WRITE_PREDECESSOR_ROTATION: usize = NUM_SECTORS_PER_SLOT - NUM_SAVE_SLOTS;
 const LEGACY_ERA_IDS_MASK: u32 = (1 << SECTOR_ID_PKMN_STORAGE_START) - 1;
 /// The nine opaque `PokemonStorage` sector ids (5-13) as a bitmask.
 const PKMN_STORAGE_IDS_MASK: u32 =
@@ -188,6 +191,15 @@ fn second_counter_is_newer(first: u32, second: u32) -> bool {
 fn older_generation_precedes(older: u32, newer: u32) -> bool {
     let delta = newer.wrapping_sub(older);
     delta != 0 && delta < (1 << 31)
+}
+
+/// The value all but at most one of `values` share, held by a strict
+/// majority of them.
+fn one_outlier_consensus<T: Copy + Eq>(values: &[T]) -> Option<T> {
+    values.iter().copied().find(|&candidate| {
+        let agreeing = values.iter().filter(|&&v| v == candidate).count();
+        agreeing + 1 >= values.len() && 2 * agreeing > values.len()
+    })
 }
 
 fn physical_slot_for_counter(counter: u32) -> usize {
@@ -301,11 +313,9 @@ struct SlotSurvey {
     /// order; only the first `tail_valid_count` entries are meaningful.
     tail_counters: [u32; PKMN_STORAGE_CHUNKS],
     tail_valid_count: usize,
-    /// The rotation every checksum-valid tail sector's id/position pairing
-    /// implies, while they all imply the same one.
-    tail_rotation: Option<usize>,
-    tail_rotation_coherent: bool,
-    tail_matches_predecessor_of_identity_head: bool,
+    /// The rotation each checksum-valid tail sector's id/position pairing
+    /// implies, parallel to `tail_counters`.
+    tail_rotations: [usize; PKMN_STORAGE_CHUNKS],
     storage_valid_ids: u32,
     /// The footer counter of each checksum-valid storage id (5-13), indexed
     /// by chunk; meaningful only for the ids set in `storage_valid_ids`.
@@ -337,9 +347,7 @@ impl SlotSurvey {
             tail_all_recognized_valid: true,
             tail_counters: [0; PKMN_STORAGE_CHUNKS],
             tail_valid_count: 0,
-            tail_rotation: None,
-            tail_rotation_coherent: true,
-            tail_matches_predecessor_of_identity_head: true,
+            tail_rotations: [0; PKMN_STORAGE_CHUNKS],
             storage_valid_ids: 0,
             storage_counters: [0; PKMN_STORAGE_CHUNKS],
             storage_ids_unique: true,
@@ -403,17 +411,8 @@ impl SlotSurvey {
         }
         if in_tail {
             self.tail_counters[self.tail_valid_count] = counter;
+            self.tail_rotations[self.tail_valid_count] = rotation;
             self.tail_valid_count += 1;
-            match self.tail_rotation {
-                None => self.tail_rotation = Some(rotation),
-                Some(r) if r == rotation => {}
-                Some(_) => self.tail_rotation_coherent = false,
-            }
-            // A torn rotation-0 write also leaves its predecessor
-            // generation (rotation 12) at this exact id/position pairing.
-            if usize::from(id) != (i + 2) % NUM_SECTORS_PER_SLOT {
-                self.tail_matches_predecessor_of_identity_head = false;
-            }
         } else if id < SECTOR_ID_PKMN_STORAGE_START {
             self.head_valid_ids |= 1 << id;
             if usize::from(id) != i {
@@ -498,31 +497,42 @@ impl SlotSurvey {
         seen && ids_present & RELABEL_CAPABLE_IDS != RELABEL_CAPABLE_IDS
     }
 
-    /// The generation a stale tail belongs to: one full generation's
-    /// layout (every valid sector implying the same rotation) whose
-    /// counters all agree but for at most one outlier.
+    /// The generation a stale tail belongs to, as its rotation and
+    /// counter: one full generation's layout whose valid sectors all agree
+    /// on both but for at most one outlier sector.
     ///
-    /// As with [`Self::storage_generation`], the counter is an
-    /// unchecksummed footer, so one damaged counter in data the slot never
-    /// loads as progress must not reject the legacy head in front of it.
-    /// Rotation coherence keeps a real torn write out: the tail sectors a
-    /// torn write at rotation zero lays down beyond position 4 carry ids at
-    /// that rotation, while the older generation it failed to finish
-    /// overwriting sits two rotations behind, so their mix never shares one
-    /// rotation. The head itself stays unanimous.
-    fn tail_generation(&self) -> Option<u32> {
-        if !self.tail_rotation_coherent {
+    /// As with [`Self::storage_generation`], the counter and the id (from
+    /// which a sector's rotation follows) are unchecksummed footers, so one
+    /// damaged footer in data the slot never loads as progress must not
+    /// reject the legacy head in front of it; the pre-#1227 store never
+    /// read positions 5-13 at all. A real torn write stays out: a write at
+    /// rotation zero torn after six sectors leaves its own id 5 as the one
+    /// rotation outlier over the older generation, but under the head's
+    /// own counter, which no stale remnant behind a five-sector write can
+    /// carry, so such an outlier is refused. Torn later, it leaves two or
+    /// more rotation outliers, or a consensus under the head's counter that
+    /// `verdict` never treats as older. The head itself stays unanimous.
+    fn tail_generation(&self) -> Option<(usize, u32)> {
+        let counters = &self.tail_counters[..self.tail_valid_count];
+        let rotations = &self.tail_rotations[..self.tail_valid_count];
+        let rotation = one_outlier_consensus(rotations)?;
+        let counter = one_outlier_consensus(counters)?;
+        let mut outliers = rotations
+            .iter()
+            .zip(counters)
+            .filter(|&(&r, &c)| r != rotation || c != counter);
+        let outlier = outliers.next();
+        if outliers.next().is_some() {
             return None;
         }
-        let counters = &self.tail_counters[..self.tail_valid_count];
-        counters.iter().copied().find(|&candidate| {
-            let agreeing = counters.iter().filter(|&&c| c == candidate).count();
-            agreeing + 1 >= counters.len() && 2 * agreeing > counters.len()
-        })
+        let rotation_outlier_is_the_heads_generation =
+            outlier.is_some_and(|(&r, &c)| r != rotation && self.legacy_counter == Some(c));
+        (!rotation_outlier_is_the_heads_generation).then_some((rotation, counter))
     }
 
     fn verdict(&self) -> SlotScan {
-        let tail_counter = self.tail_generation();
+        let tail = self.tail_generation();
+        let tail_counter = tail.map(|(_, counter)| counter);
         // A same-slot predecessor sits 2 rotations behind, so an identity
         // head over a rotation-12 tail is indistinguishable from a real
         // write torn after 5 sectors; upstream reports that shape Error,
@@ -531,8 +541,7 @@ impl SlotSurvey {
         // clean, and one flipped footer bit, which upstream adopts as its
         // next counter, breaks that.
         let ambiguous_with_a_torn_full_write = self.head_is_identity
-            && self.tail_valid_count > 0
-            && self.tail_matches_predecessor_of_identity_head;
+            && tail.is_some_and(|(rotation, _)| rotation == TORN_WRITE_PREDECESSOR_ROTATION);
 
         let stale_tail_is_donor_only = self.tail_signature_seen
             && self.tail_all_recognized_valid

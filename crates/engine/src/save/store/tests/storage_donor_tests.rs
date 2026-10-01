@@ -447,3 +447,62 @@ fn a_relabeled_short_save_block_sector_is_never_donated_as_storage() {
         );
     }
 }
+
+/// The id twin of the damaged-counter case above: an identity legacy
+/// head over an older rotation-zero full generation, where one bit of the
+/// stale tail's id-5 footer flips it to id 7. Both ids share one payload
+/// length, so the sector still verifies, and alone it implies another
+/// rotation. That is one damaged footer in data the slot never loads as
+/// progress; the pre-#1227 store never read it at all. It must not roll
+/// the player back to the older counterpart slot, while the tail, now
+/// missing id 5 and holding id 7 twice, is never donated.
+#[test]
+fn an_identity_legacy_head_survives_one_flipped_stale_tail_id() {
+    let block2 = sample_block2();
+    let older_block1 = SaveBlock1 {
+        money: 111,
+        ..sample_block1()
+    };
+    let newer_block1 = SaveBlock1 {
+        money: 222,
+        ..sample_block1()
+    };
+    let stale_storage = vec![0xABu8; PKMN_STORAGE_PAYLOAD_LEN];
+    let counterpart_storage = vec![0xCDu8; PKMN_STORAGE_PAYLOAD_LEN];
+
+    let mut store = SaveStore::new();
+    write_full_slot(&mut store, 1, &older_block1, &block2, &stale_storage, 1);
+    write_full_slot(
+        &mut store,
+        0,
+        &older_block1,
+        &block2,
+        &counterpart_storage,
+        2,
+    );
+    write_legacy_slot(&mut store, 1, &newer_block1, &block2, 3);
+    relabel_footer_id(&mut store, 1, 5, 7);
+    assert!(store
+        .read_physical(1, 5)
+        .is_valid(sector_payload_len(7).unwrap()));
+
+    let scan = store.scan_slot(1);
+    assert_eq!(
+        scan.integrity,
+        SlotIntegrity::Ok,
+        "one flipped stale-tail id must not reject the legacy head"
+    );
+    assert!(scan.legacy);
+    assert!(
+        scan.storage_counter.is_none(),
+        "a tail missing id 5 and holding id 7 twice must not be donated"
+    );
+    let outcome = store.load();
+    assert_eq!(outcome.status, SaveStatus::Ok);
+    assert_eq!(store.save_counter(), 3);
+    assert_eq!(
+        outcome.block1.money, newer_block1.money,
+        "reverting to the older counterpart would undo the legacy session"
+    );
+    assert_eq!(&store.base_pokemon_storage[..], &counterpart_storage[..]);
+}

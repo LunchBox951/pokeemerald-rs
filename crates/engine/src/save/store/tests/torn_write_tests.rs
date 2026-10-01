@@ -113,9 +113,11 @@ fn a_torn_rotation_zero_write_after_a_flipped_counter_is_never_legacy_migration(
 /// The torn-write guard behind the stale-tail consensus: a rotation-0
 /// full write torn after six sectors leaves its id 5 at position 5
 /// under the new counter over eight sectors of the rotation-12
-/// predecessor. Eight of nine tail counters agree, but the tail mixes
-/// two layouts, so it is never one stale generation and the slot must
-/// stay unaccepted, exactly as upstream's missing ids 6 and 7 make it.
+/// predecessor. Eight of nine tail counters and rotations agree, but the
+/// lone outlier carries the head's own counter, which no stale remnant
+/// can, and the consensus layout is the rotation-12 predecessor's, so the
+/// slot must stay unaccepted, exactly as upstream's missing ids 6 and 7
+/// make it.
 #[test]
 fn a_full_write_torn_past_the_head_is_never_a_stale_tail_with_one_outlier() {
     let block1 = sample_block1();
@@ -327,4 +329,83 @@ fn a_relabeled_full_generation_never_reads_as_a_rotated_legacy_head() {
     );
     assert!(!scan.legacy);
     assert_eq!(store.load().status, SaveStatus::Corrupt);
+}
+
+/// Lays a complete generation into `slot` at `rotation` under `counter`.
+fn write_full_slot_rotated(store: &mut SaveStore, slot: usize, rotation: usize, counter: u32) {
+    let storage_bytes = vec![0x0Fu8; PKMN_STORAGE_PAYLOAD_LEN];
+    write_full_slot(
+        store,
+        slot,
+        &sample_block1(),
+        &sample_block2(),
+        &storage_bytes,
+        counter,
+    );
+    let sectors: Vec<Sector> = (0..NUM_SECTORS_PER_SLOT)
+        .map(|i| store.read_physical(slot, i))
+        .collect();
+    for (id, sector) in sectors.iter().enumerate() {
+        store.write_physical(slot, (id + rotation) % NUM_SECTORS_PER_SLOT, sector);
+    }
+}
+
+/// Writes ids `0..written` of a rotation-zero generation under `counter`
+/// over whatever `slot` holds: a full write torn after `written` sectors.
+fn tear_rotation_zero_write(store: &mut SaveStore, slot: usize, written: u16, counter: u32) {
+    let block2 = sample_block2();
+    let block2_bytes = block2.to_bytes();
+    let block1_bytes = sample_block1().to_bytes(block2.encryption_key);
+    let storage_bytes = vec![0x0Fu8; PKMN_STORAGE_PAYLOAD_LEN];
+    for id in 0..written {
+        let len = sector_payload_len(id).unwrap();
+        let payload: &[u8] = if id == SECTOR_ID_SAVEBLOCK2 {
+            &block2_bytes[..len]
+        } else if id < SECTOR_ID_PKMN_STORAGE_START {
+            let offset = usize::from(id - SECTOR_ID_SAVEBLOCK1_START) * SECTOR_DATA_SIZE;
+            &block1_bytes[offset..offset + len]
+        } else {
+            let offset = usize::from(id - SECTOR_ID_PKMN_STORAGE_START) * SECTOR_DATA_SIZE;
+            &storage_bytes[offset..offset + len]
+        };
+        store.write_physical(slot, usize::from(id), &Sector::write(id, payload, counter));
+    }
+}
+
+/// A one-outlier stale-tail rotation must never admit a torn write. A
+/// rotation-zero write torn after six or more sectors over a predecessor
+/// at any other rotation leaves ids missing, so upstream's
+/// `GetSaveValidStatus` (`pokeemerald/src/save.c:525-550`) reports the
+/// slot Error, and so must `scan_slot` (over a rotation-zero predecessor
+/// every id stays valid and upstream reports Ok, so it is not bounded
+/// here). Torn after six, the write's own id 5 is the tail's lone
+/// rotation outlier and carries the head's counter, which no stale
+/// remnant behind a five-sector write can, so it is refused whatever
+/// rotation the rest of the tail follows. Torn after exactly five, only
+/// the rotation-12 layout is refused; the others are indistinguishable
+/// from a legacy head over an imported remnant and stay accepted.
+#[test]
+fn a_torn_rotation_zero_write_never_passes_a_one_outlier_tail_rotation() {
+    for predecessor_rotation in 1..NUM_SECTORS_PER_SLOT {
+        for written in 6..NUM_SECTORS_PER_SLOT_U16 {
+            let mut store = SaveStore::new();
+            write_full_slot_rotated(&mut store, 1, predecessor_rotation, 12);
+            tear_rotation_zero_write(&mut store, 1, written, 14);
+            assert_eq!(
+                store.scan_slot(1).integrity,
+                SlotIntegrity::Error,
+                "predecessor rotation {predecessor_rotation}, torn after {written}: a torn \
+                 full write upstream reports Error must never read as a legacy head"
+            );
+        }
+        let mut store = SaveStore::new();
+        write_full_slot_rotated(&mut store, 1, predecessor_rotation, 12);
+        tear_rotation_zero_write(&mut store, 1, 5, 14);
+        assert_eq!(
+            store.scan_slot(1).integrity == SlotIntegrity::Error,
+            predecessor_rotation == 12,
+            "predecessor rotation {predecessor_rotation}, torn after 5: only the rotation-12 \
+             layout is refused"
+        );
+    }
 }
