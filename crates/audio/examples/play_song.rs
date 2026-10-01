@@ -512,7 +512,9 @@ fn wait_for_device_tail(
 ///
 /// The sounded estimate only moves when a callback's timestamps are usable,
 /// so a stationary estimate alone cannot tell a stalled device from stale
-/// timestamps. The wait therefore watches submitted frames, sizing the
+/// timestamps. The wait therefore watches submitted frames that advance while
+/// the sounded estimate stands still (any sounded advance discards that
+/// evidence, so a fresh estimate below `target` is never overridden), sizing the
 /// callback cadence from what it observes (the largest gap between advances
 /// and the largest advance, converted to time at `device_sample_rate`), never
 /// from the advertised buffer range. Callbacks are alive when submitted frames
@@ -572,13 +574,22 @@ fn wait_for_measured_tail(
             return Ok(());
         }
         let current = now();
-        if last_sounded.is_some_and(|last| sounded > last) {
+        // A sounded advance means a usable timestamp landed since the last
+        // poll, so the estimate is fresh: forget the stale-callback evidence,
+        // and do not count this poll's submitted advance as stale either --
+        // only callbacks that ran while the estimate stood still prove it
+        // stale.
+        let sounded_advanced = last_sounded.is_some_and(|last| sounded > last);
+        if sounded_advanced {
             first_advance = None;
             last_advance = None;
             max_gap = Duration::ZERO;
             max_advance = Duration::ZERO;
         }
-        if let Some(previous) = last_submitted.filter(|&last| submitted > last) {
+        if let Some(previous) = last_submitted
+            .filter(|&last| submitted > last)
+            .filter(|_| !sounded_advanced)
+        {
             let frames = u32::try_from(submitted - previous).unwrap_or(u32::MAX);
             let played = if device_sample_rate > 0 {
                 Duration::from_secs_f64(f64::from(frames) / f64::from(device_sample_rate))
@@ -1738,6 +1749,54 @@ mod tests {
             result,
             Err(DrainError::MeasuredTailTimedOut { .. })
         ));
+    }
+
+    /// A high-latency device whose usable timestamps keep advancing the
+    /// sounded estimate must wait for the measured target, even when one
+    /// callback covers more than a quarter of the derived tail.
+    #[test]
+    fn a_fresh_sounded_estimate_below_target_is_not_overridden_by_the_tail() {
+        let policy = RetryPolicy {
+            interval: std::time::Duration::from_millis(10),
+            max_wait: std::time::Duration::from_secs(1),
+        };
+        let start = std::time::Instant::now();
+        let clock = Rc::new(RefCell::new(start));
+        // 1 s submitted before the drain; 400 ms of output latency.
+        let submitted = Cell::new(48_000_u64);
+        let sounded = Cell::new(48_000_u64 - 19_200);
+
+        let result = wait_for_measured_tail(
+            48_000,
+            // `device_tail_wait(Some(4_800), 48_000)`: two 100 ms periods
+            // plus the margin.
+            std::time::Duration::from_millis(250),
+            48_000,
+            &policy,
+            || Some(progress(sounded.get(), submitted.get())),
+            || 0,
+            || *clock.borrow(),
+            |duration| {
+                *clock.borrow_mut() += duration;
+                if clock
+                    .borrow()
+                    .duration_since(start)
+                    .as_millis()
+                    .is_multiple_of(100)
+                {
+                    // Every 100 ms callback carries a usable timestamp.
+                    submitted.set(submitted.get() + 4_800);
+                    sounded.set(sounded.get() + 4_800);
+                }
+            },
+        );
+        let elapsed = clock.borrow().duration_since(start);
+
+        assert!(result.is_ok());
+        assert!(
+            elapsed >= std::time::Duration::from_millis(400),
+            "finished at {elapsed:?}, before the measured target sounded"
+        );
     }
 
     #[test]
