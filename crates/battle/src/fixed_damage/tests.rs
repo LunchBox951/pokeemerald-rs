@@ -17,11 +17,11 @@ const GASTLY: SpeciesId = SpeciesId(92);
 /// `SPECIES_SHEDINJA`: Wonder Guard in its primary (and only) ability slot.
 const SHEDINJA: SpeciesId = SpeciesId(303);
 
-const TACKLE: MoveId = MoveId(33);
-const SONIC_BOOM: MoveId = MoveId(49);
-const SEISMIC_TOSS: MoveId = MoveId(69);
-const DRAGON_RAGE: MoveId = MoveId(82);
-const NIGHT_SHADE: MoveId = MoveId(101);
+const TACKLE: MoveId = MoveId::TACKLE;
+const SONIC_BOOM: MoveId = MoveId::SONIC_BOOM;
+const SEISMIC_TOSS: MoveId = MoveId::SEISMIC_TOSS;
+const DRAGON_RAGE: MoveId = MoveId::DRAGON_RAGE;
+const NIGHT_SHADE: MoveId = MoveId::NIGHT_SHADE;
 
 const HARDY_PERSONALITY: u32 = 0;
 const ACCURACY_HIT_DRAW: u16 = 0;

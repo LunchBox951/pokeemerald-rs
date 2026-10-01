@@ -37,34 +37,34 @@ const REMORAID: SpeciesId = SpeciesId(223);
 /// [`BattlePokemon::with_ability_slot`].
 const DELIBIRD: SpeciesId = SpeciesId(225);
 
-const DOUBLE_SLAP: MoveId = MoveId(3);
-const HORN_DRILL: MoveId = MoveId(32);
-const TACKLE: MoveId = MoveId(33);
+const DOUBLE_SLAP: MoveId = MoveId::DOUBLE_SLAP;
+const HORN_DRILL: MoveId = MoveId::HORN_DRILL;
+const TACKLE: MoveId = MoveId::TACKLE;
 /// `MOVE_BONE_RUSH` -- `EFFECT_MULTI_HIT`, Ground. Used below only for its
 /// typing: no admitted `is_ordinary_hit_effect` move is Ground-type, so
 /// [`damage_core`] is exercised directly instead of through [`resolve_hit`],
 /// which would reject Bone Rush's effect at [`ensure_resolvable`].
-const BONE_RUSH: MoveId = MoveId(198);
-const GROWL: MoveId = MoveId(45);
-const SONIC_BOOM: MoveId = MoveId(49);
-const WATER_GUN: MoveId = MoveId(55);
-const COUNTER: MoveId = MoveId(68);
-const SEISMIC_TOSS: MoveId = MoveId(69);
-const ABSORB: MoveId = MoveId(71);
-const QUICK_ATTACK: MoveId = MoveId(98);
-const SWIFT: MoveId = MoveId(129);
-const SLASH: MoveId = MoveId(163);
-const CURSE: MoveId = MoveId(174);
-const FALSE_SWIPE: MoveId = MoveId(206);
-const PURSUIT: MoveId = MoveId(228);
+const BONE_RUSH: MoveId = MoveId::BONE_RUSH;
+const GROWL: MoveId = MoveId::GROWL;
+const SONIC_BOOM: MoveId = MoveId::SONIC_BOOM;
+const WATER_GUN: MoveId = MoveId::WATER_GUN;
+const COUNTER: MoveId = MoveId::COUNTER;
+const SEISMIC_TOSS: MoveId = MoveId::SEISMIC_TOSS;
+const ABSORB: MoveId = MoveId::ABSORB;
+const QUICK_ATTACK: MoveId = MoveId::QUICK_ATTACK;
+const SWIFT: MoveId = MoveId::SWIFT;
+const SLASH: MoveId = MoveId::SLASH;
+const CURSE: MoveId = MoveId::CURSE;
+const FALSE_SWIPE: MoveId = MoveId::FALSE_SWIPE;
+const PURSUIT: MoveId = MoveId::PURSUIT;
 const UNKNOWN_MOVE: MoveId = MoveId(60_000);
 /// Normal-type (physical), 75 accuracy.
-const SLAM: MoveId = MoveId(21);
+const SLAM: MoveId = MoveId::SLAM;
 
 const THICK_FAT: AbilityId = AbilityId(47);
 /// `SPECIES_SHEDINJA`: Wonder Guard in its primary (and only) ability slot.
 const SHEDINJA: SpeciesId = SpeciesId(303);
-const FAINT_ATTACK: MoveId = MoveId(185);
+const FAINT_ATTACK: MoveId = MoveId::FAINT_ATTACK;
 
 const MAX_IVS: Ivs = Ivs {
     hp: 31,
@@ -593,15 +593,15 @@ fn ordinary_hit_shaped_moves_and_struggle_are_accepted() {
 }
 
 /// `MOVE_POISON_STING`: `EFFECT_POISON_HIT`.
-const POISON_STING: MoveId = MoveId(40);
+const POISON_STING: MoveId = MoveId::POISON_STING;
 /// `MOVE_SMOG`: `EFFECT_POISON_HIT`.
-const SMOG: MoveId = MoveId(123);
+const SMOG: MoveId = MoveId::SMOG;
 /// `MOVE_SLUDGE`: `EFFECT_POISON_HIT`.
-const SLUDGE: MoveId = MoveId(124);
+const SLUDGE: MoveId = MoveId::SLUDGE;
 /// `MOVE_SLUDGE_BOMB`: `EFFECT_POISON_HIT`.
-const SLUDGE_BOMB: MoveId = MoveId(188);
+const SLUDGE_BOMB: MoveId = MoveId::SLUDGE_BOMB;
 /// `MOVE_POISON_TAIL`: `EFFECT_POISON_TAIL`, an unported trampoline.
-const POISON_TAIL: MoveId = MoveId(342);
+const POISON_TAIL: MoveId = MoveId::POISON_TAIL;
 /// `SPECIES_EKANS`: mono Poison-type.
 const EKANS: SpeciesId = SpeciesId(23);
 /// A draw that clears [`POISON_STING`]'s 30% secondary chance.
@@ -742,7 +742,7 @@ fn wonder_guard_suppresses_poison_stings_secondary_on_a_successful_chance_roll()
 }
 
 /// `MOVE_PSYBEAM`: `EFFECT_CONFUSE_HIT`, 100 accuracy, 10% chance.
-const PSYBEAM: MoveId = MoveId(60);
+const PSYBEAM: MoveId = MoveId::PSYBEAM;
 /// `SPECIES_SPINDA`: Own Tempo in its only ability slot.
 const SPINDA: SpeciesId = SpeciesId(308);
 /// A draw that clears [`PSYBEAM`]'s 10% secondary chance.

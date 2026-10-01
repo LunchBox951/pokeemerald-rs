@@ -16,17 +16,17 @@ use battle::{
 };
 
 /// `MOVE_TACKLE`.
-const TACKLE: MoveId = MoveId(33);
+const TACKLE: MoveId = MoveId::TACKLE;
 /// `MOVE_SCRATCH`.
-const SCRATCH: MoveId = MoveId(10);
+const SCRATCH: MoveId = MoveId::SCRATCH;
 /// `MOVE_GROWL`.
-const GROWL: MoveId = MoveId(45);
+const GROWL: MoveId = MoveId::GROWL;
 /// `MOVE_LEER`.
-const LEER: MoveId = MoveId(43);
+const LEER: MoveId = MoveId::LEER;
 /// `MOVE_POUND`.
-const POUND: MoveId = MoveId(1);
+const POUND: MoveId = MoveId::POUND;
 /// `MOVE_POISON_TAIL`, [`SEVIPER`]'s level-16 learnset entry.
-const POISON_TAIL: MoveId = MoveId(342);
+const POISON_TAIL: MoveId = MoveId::POISON_TAIL;
 
 /// `SPECIES_SEVIPER`: Poison, Shed Skin in its only ability slot, raw Speed
 /// 21 at level 10 -- faster than [`ZIGZAGOON`] and [`DRATINI`].
@@ -50,7 +50,7 @@ const DUNSPARCE: u16 = 206;
 /// `MOVE_POISON_STING`, a 30% `EFFECT_POISON_HIT` move Serene Grace doubles
 /// to 60%; this crate does not model that doubling, so
 /// `secondary::ensure_admissible` refuses it instead.
-const POISON_STING: MoveId = MoveId(40);
+const POISON_STING: MoveId = MoveId::POISON_STING;
 /// May's Route 103 starter-rival trainer, whose party this fixture replaces
 /// with two [`TREECKO`] so the bench survives the first knockout.
 const MAY_ROUTE_103_MUDKIP: TrainerId = TrainerId(529);

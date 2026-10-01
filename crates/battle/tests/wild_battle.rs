@@ -15,7 +15,7 @@ use common::{max_iv_mon as fixed_mon, SequenceRng as ScriptedRng, MAX_IVS};
 fn scripted_wild_battle_runs_move_vs_move_to_a_faint_and_reports_victory() {
     let dex = Dex::new();
 
-    let player = fixed_mon(&dex, 4, 50, vec![MoveId(33)]);
+    let player = fixed_mon(&dex, 4, 50, vec![MoveId::TACKLE]);
 
     let minimum_damage_variance_roll: u16 = 15;
     let mut rng = ScriptedRng::new([
@@ -37,7 +37,7 @@ fn scripted_wild_battle_runs_move_vs_move_to_a_faint_and_reports_victory() {
         0, // discarded effect-chance roll
     ]);
 
-    let enemy = build_wild_pokemon(&dex, SpeciesId(19), 5, vec![MoveId(33)], &mut rng)
+    let enemy = build_wild_pokemon(&dex, SpeciesId(19), 5, vec![MoveId::TACKLE], &mut rng)
         .expect("wild Rattata construction");
     assert_eq!(enemy.nature(), Nature::Hardy);
     assert_eq!(enemy.ivs().hp, 0);
@@ -53,7 +53,7 @@ fn scripted_wild_battle_runs_move_vs_move_to_a_faint_and_reports_victory() {
             e,
             BattleEvent::Hit {
                 by_player: true,
-                move_id: MoveId(33),
+                move_id: MoveId::TACKLE,
                 ..
             }
         )),
@@ -112,7 +112,7 @@ fn a_wild_opponent_resolves_its_own_tackle_through_accuracy_crit_and_damage() {
     // both sides' Tackle -- accuracy, critical-hit, and damage rolls --
     // resolve within the same turn, unlike the level-50-vs-level-5 fixture
     // above where the enemy never gets to act.
-    let player = fixed_mon(&dex, 4, 5, vec![MoveId(33)]);
+    let player = fixed_mon(&dex, 4, 5, vec![MoveId::TACKLE]);
     let player_max_hp = player.stats().max_hp;
 
     let mut rng = ScriptedRng::new([
@@ -138,7 +138,7 @@ fn a_wild_opponent_resolves_its_own_tackle_through_accuracy_crit_and_damage() {
         0,  // enemy's discarded effect-chance roll
     ]);
 
-    let enemy = build_wild_pokemon(&dex, SpeciesId(19), 5, vec![MoveId(33)], &mut rng)
+    let enemy = build_wild_pokemon(&dex, SpeciesId(19), 5, vec![MoveId::TACKLE], &mut rng)
         .expect("wild Rattata construction");
     assert_eq!(
         player.stats().speed,
@@ -159,13 +159,13 @@ fn a_wild_opponent_resolves_its_own_tackle_through_accuracy_crit_and_damage() {
         vec![
             BattleEvent::Hit {
                 by_player: true,
-                move_id: MoveId(33),
+                move_id: MoveId::TACKLE,
                 damage: 4,
                 is_critical: false,
             },
             BattleEvent::Hit {
                 by_player: false,
-                move_id: MoveId(33),
+                move_id: MoveId::TACKLE,
                 damage: 12,
                 is_critical: true,
             },
@@ -193,12 +193,12 @@ fn a_wild_opponent_resolves_its_own_tackle_through_accuracy_crit_and_damage() {
 #[test]
 fn a_faster_player_always_escapes_a_wild_battle_successfully() {
     let dex = Dex::new();
-    let player = fixed_mon(&dex, 4, 50, vec![MoveId(33)]);
+    let player = fixed_mon(&dex, 4, 50, vec![MoveId::TACKLE]);
 
     // Draw order: five wild-construction draws, battle-start turn number,
     // turn number, then opponent move selection; guaranteed escape rolls nothing.
     let mut rng = ScriptedRng::new([0, 0, 0, 0, 0, 0, 0, 0]);
-    let enemy = build_wild_pokemon(&dex, SpeciesId(19), 5, vec![MoveId(33)], &mut rng)
+    let enemy = build_wild_pokemon(&dex, SpeciesId(19), 5, vec![MoveId::TACKLE], &mut rng)
         .expect("wild Rattata construction");
 
     let player_hp_before = player.current_hp();
@@ -242,17 +242,17 @@ fn a_battle_with_a_move_outside_this_slice_is_refused_before_it_starts() {
     // power-only check would admit it to the wrong damage/RNG path.
     let horn_drill_ohko_effect = MoveEffect(38);
     let horn_drill_token_power = 1;
-    let horn_drill = dex.move_data(MoveId(32)).unwrap();
+    let horn_drill = dex.move_data(MoveId::HORN_DRILL).unwrap();
     assert_eq!(horn_drill.effect, horn_drill_ohko_effect);
     assert_eq!(horn_drill.power, horn_drill_token_power);
 
-    let player = fixed_mon(&dex, 4, 50, vec![MoveId(33)]);
-    let enemy = fixed_mon(&dex, 19, 5, vec![MoveId(32)]);
+    let player = fixed_mon(&dex, 4, 50, vec![MoveId::TACKLE]);
+    let enemy = fixed_mon(&dex, 19, 5, vec![MoveId::HORN_DRILL]);
 
     let mut rng = ScriptedRng::new([]);
     assert_eq!(
         Battle::new(dex, player, enemy, false, &mut rng).err(),
-        Some(BattleError::UnsupportedMoveEffect(MoveId(32)))
+        Some(BattleError::UnsupportedMoveEffect(MoveId::HORN_DRILL))
     );
     assert_eq!(rng.draws(), 0);
 }
@@ -260,12 +260,12 @@ fn a_battle_with_a_move_outside_this_slice_is_refused_before_it_starts() {
 #[test]
 fn an_exhausted_player_party_loses_only_after_every_reserve_has_had_its_turn() {
     let dex = Dex::new();
-    let player = fixed_mon(&dex, 19, 5, vec![MoveId(33)]);
+    let player = fixed_mon(&dex, 19, 5, vec![MoveId::TACKLE]);
     let player_max_hp = player.stats().max_hp;
-    let reserve = fixed_mon(&dex, 7, 5, vec![MoveId(33)]);
+    let reserve = fixed_mon(&dex, 7, 5, vec![MoveId::TACKLE]);
     let reserve_max_hp = reserve.stats().max_hp;
-    let enemy = fixed_mon(&dex, 4, 50, vec![MoveId(33)]);
-    let tackle_max_pp = dex.move_data(MoveId(33)).unwrap().pp;
+    let enemy = fixed_mon(&dex, 4, 50, vec![MoveId::TACKLE]);
+    let tackle_max_pp = dex.move_data(MoveId::TACKLE).unwrap().pp;
 
     // RNG order: battle-start number; then, per turn, turn number,
     // opponent move selection, accuracy, crit, damage, and effect-chance rolls.
@@ -282,7 +282,7 @@ fn an_exhausted_player_party_loses_only_after_every_reserve_has_had_its_turn() {
         vec![
             BattleEvent::Hit {
                 by_player: false,
-                move_id: MoveId(33),
+                move_id: MoveId::TACKLE,
                 damage: player_max_hp,
                 is_critical: false,
             },
@@ -305,7 +305,7 @@ fn an_exhausted_player_party_loses_only_after_every_reserve_has_had_its_turn() {
         vec![
             BattleEvent::Hit {
                 by_player: false,
-                move_id: MoveId(33),
+                move_id: MoveId::TACKLE,
                 damage: reserve_max_hp,
                 is_critical: false,
             },
@@ -332,7 +332,7 @@ fn an_exhausted_player_party_loses_only_after_every_reserve_has_had_its_turn() {
 fn an_impossible_battler_cannot_be_built_at_all() {
     let dex = Dex::new();
     assert_eq!(
-        BattlePokemon::new(&dex, SpeciesId(1), 101, MAX_IVS, 0, vec![MoveId(33)]),
+        BattlePokemon::new(&dex, SpeciesId(1), 101, MAX_IVS, 0, vec![MoveId::TACKLE]),
         Err(BattleError::InvalidLevel(101))
     );
     assert!(matches!(
@@ -342,7 +342,7 @@ fn an_impossible_battler_cannot_be_built_at_all() {
             5,
             Ivs { hp: 99, ..MAX_IVS },
             0,
-            vec![MoveId(33)]
+            vec![MoveId::TACKLE]
         ),
         Err(BattleError::InvalidIv(99))
     ));

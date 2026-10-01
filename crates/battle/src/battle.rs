@@ -1217,8 +1217,8 @@ mod tests {
         sp_attack: 31,
         sp_defense: 31,
     };
-    const ABSORB: MoveId = MoveId(71);
-    const TACKLE: MoveId = MoveId(33);
+    const ABSORB: MoveId = MoveId::ABSORB;
+    const TACKLE: MoveId = MoveId::TACKLE;
     const BULBASAUR: SpeciesId = SpeciesId(1);
     const SQUIRTLE: SpeciesId = SpeciesId(7);
     const TENTACOOL: SpeciesId = SpeciesId(72);

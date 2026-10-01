@@ -16,18 +16,18 @@ use battle::{
     Volatiles,
 };
 
-const TACKLE: MoveId = MoveId(33);
-const ABSORB: MoveId = MoveId(71);
-const SONIC_BOOM: MoveId = MoveId(49);
-const DOUBLE_SLAP: MoveId = MoveId(3);
-const SPLASH: MoveId = MoveId(150);
-const FOCUS_ENERGY: MoveId = MoveId(116);
-const CHARGE: MoveId = MoveId(268);
-const DEFENSE_CURL: MoveId = MoveId(111);
+const TACKLE: MoveId = MoveId::TACKLE;
+const ABSORB: MoveId = MoveId::ABSORB;
+const SONIC_BOOM: MoveId = MoveId::SONIC_BOOM;
+const DOUBLE_SLAP: MoveId = MoveId::DOUBLE_SLAP;
+const SPLASH: MoveId = MoveId::SPLASH;
+const FOCUS_ENERGY: MoveId = MoveId::FOCUS_ENERGY;
+const CHARGE: MoveId = MoveId::CHARGE;
+const DEFENSE_CURL: MoveId = MoveId::DEFENSE_CURL;
 /// An Electric move whose `EFFECT_ALWAYS_HIT` skips only the accuracy draw;
 /// crit, damage-variance, and effect-chance draws still follow. Charge
 /// itself draws nothing.
-const SHOCK_WAVE: MoveId = MoveId(351);
+const SHOCK_WAVE: MoveId = MoveId::SHOCK_WAVE;
 
 /// Grass/Poison; Overgrow occupies ability slot 0, the slot every
 /// [`max_iv_mon`] (even personality) call selects.
