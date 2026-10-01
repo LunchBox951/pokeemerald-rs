@@ -2,14 +2,10 @@
 
 use super::*;
 
-/// A real interrupted 14-sector write at rotation 0, torn after exactly
-/// its first 5 (logical-order) sectors, leaves precisely the same shape
-/// behind as a legacy five-sector write over an imported image: ids 0-4
-/// fresh under the new counter, and the slot's own predecessor
-/// generation (2 counters and 2 rotations older) filling the rest.
-/// Upstream reports that shape `SAVE_STATUS_ERROR`
-/// (`pokeemerald/src/save.c:543-546`), so `scan_slot` must never accept
-/// it as a legacy migration.
+/// A rotation-0 write torn after five sectors leaves ids 0-4 over the
+/// predecessor generation, the same shape as a five-sector head over an
+/// imported image; upstream reports it `SAVE_STATUS_ERROR`
+/// (`pokeemerald/src/save.c:543-546`).
 #[test]
 fn an_interrupted_full_write_at_rotation_zero_is_never_mistaken_for_legacy_migration() {
     let block1 = sample_block1();
@@ -57,14 +53,9 @@ fn an_interrupted_full_write_at_rotation_zero_is_never_mistaken_for_legacy_migra
     );
 }
 
-/// Upstream's counter lineage is not always clean: the footer counter
-/// sits outside the checksum, and upstream adopts the last valid
-/// sector's counter as-is. Here slot 1's id-0 footer flips from 11 to
-/// 1035, so upstream's next save is 1036, at rotation 0 over slot 0's
-/// generation 10, and it tears after 5 sectors. The tail is then 1026
-/// counters behind the head rather than 2, but still sits at rotation
-/// 12; a counter test alone would load that head with generation 11's
-/// boxes as one `Ok` save.
+/// A flipped head counter puts the torn write's predecessor 1026 counters
+/// behind instead of 2, still at rotation 12; the layout, not the counter
+/// gap, must refuse it.
 #[test]
 fn a_torn_rotation_zero_write_after_a_flipped_counter_is_never_legacy_migration() {
     let block2 = sample_block2();
@@ -110,14 +101,9 @@ fn a_torn_rotation_zero_write_after_a_flipped_counter_is_never_legacy_migration(
     assert_eq!(outcome.block1.money, 11);
 }
 
-/// The torn-write guard behind the stale-tail consensus: a rotation-0
-/// full write torn after six sectors leaves its id 5 at position 5
-/// under the new counter over eight sectors of the rotation-12
-/// predecessor. Eight of nine tail counters and rotations agree, but the
-/// lone outlier carries the head's own counter, which no stale remnant
-/// can, and the consensus layout is the rotation-12 predecessor's, so the
-/// slot must stay unaccepted, exactly as upstream's missing ids 6 and 7
-/// make it.
+/// A rotation-0 write torn after six sectors leaves one rotation outlier
+/// under the head's own counter over a rotation-12 consensus; both rules
+/// refuse it, as upstream's missing ids 6 and 7 do.
 #[test]
 fn a_full_write_torn_past_the_head_is_never_a_stale_tail_with_one_outlier() {
     let block1 = sample_block1();
@@ -194,14 +180,10 @@ fn a_torn_legacy_write_over_a_rotated_remnant_is_never_an_intact_head() {
     assert_eq!(store.scan_slot(1).integrity, SlotIntegrity::Error);
 }
 
-/// Builds the donor-slot shape for the relabeled-head-sector tests: an
-/// imported rotation-13 full generation (counter 13, storage `0xAB`) in
-/// slot 1, overwritten by a five-sector write at `legacy_rotation`
-/// (counter 15), whose id-1 footer is then flipped into id 5. The
-/// genuine id 5 sat at position 4 and is gone, so every storage id is
-/// held once. Slot 0 is a newer legacy generation over erased flash
-/// with no storage of its own. Returns the `SaveBlock1` bytes the
-/// relabeled sector carries.
+/// Slot 1: an imported rotation-13 generation (counter 13, storage `0xAB`)
+/// under a five-sector write at `legacy_rotation` (counter 15) whose id-1
+/// footer is flipped to 5. Slot 0: a newer five-sector generation over
+/// erased flash. Returns the `SaveBlock1` bytes the relabeled sector holds.
 fn relabeled_head_sector_over_a_rotation_13_remnant(
     store: &mut SaveStore,
     legacy_rotation: u16,
@@ -275,18 +257,10 @@ fn a_relabeled_legacy_head_sector_at_the_remnant_rotation_is_never_donated() {
     assert_relabeled_head_sector_is_never_donated(3);
 }
 
-/// A full generation at rotation 1 puts ids 13, 0, 1, 2, 3 in positions
-/// 0-4 and id 4 at position 5. Id 13's 2000-byte payload is zero-padded
-/// to the sector and the checksum sums words, so relabeling its footer
-/// to id 4 leaves it valid there and turns the head into [4, 0, 1, 2, 3]:
-/// a non-identity head no torn full write can produce. But the
-/// five-sector writer never touched positions 5-13, so tail sectors
-/// carrying the head's own counter prove the head is that same full
-/// generation, now missing id 13. Upstream's `GetSaveValidStatus`
-/// (`pokeemerald/src/save.c:525-550`) reports such a slot Error, and
-/// with the counterpart empty the image is Corrupt (`save.c:607-636`);
-/// accepting it as an intact legacy head would load storage bytes as a
-/// `SaveBlock1` chunk and zero every box on the next save.
+/// A rotation-1 generation whose zero-padded id 13 is relabeled to 4 reads
+/// as the rotated head [4, 0, 1, 2, 3] over a tail carrying its own
+/// counter. Upstream reports the slot Error (`pokeemerald/src/save.c:525-550`)
+/// and the image Corrupt (`save.c:607-636`).
 #[test]
 fn a_relabeled_full_generation_never_reads_as_a_rotated_legacy_head() {
     const ROTATION: u16 = 1;
@@ -372,18 +346,10 @@ fn tear_rotation_zero_write(store: &mut SaveStore, slot: usize, written: u16, co
     }
 }
 
-/// A one-outlier stale-tail rotation must never admit a torn write. A
-/// rotation-zero write torn after six or more sectors over a predecessor
-/// at any other rotation leaves ids missing, so upstream's
-/// `GetSaveValidStatus` (`pokeemerald/src/save.c:525-550`) reports the
-/// slot Error, and so must `scan_slot` (over a rotation-zero predecessor
-/// every id stays valid and upstream reports Ok, so it is not bounded
-/// here). Torn after six, the write's own id 5 is the tail's lone
-/// rotation outlier and carries the head's counter, which no stale
-/// remnant behind a five-sector write can, so it is refused whatever
-/// rotation the rest of the tail follows. Torn after exactly five, only
-/// the rotation-12 layout is refused; the others are indistinguishable
-/// from a legacy head over an imported remnant and stay accepted.
+/// A rotation-zero write torn after six or more sectors over any non-zero
+/// predecessor rotation leaves ids missing and must read Error, as upstream
+/// does (`pokeemerald/src/save.c:525-550`). Torn after exactly five, only the
+/// rotation-12 layout is refused.
 #[test]
 fn a_torn_rotation_zero_write_never_passes_a_one_outlier_tail_rotation() {
     for predecessor_rotation in 1..NUM_SECTORS_PER_SLOT {

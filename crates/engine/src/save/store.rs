@@ -2,19 +2,11 @@
 //!
 //! [`SaveStore`] rotates, scans, and rewrites all fourteen physical sectors
 //! of each slot, matching upstream's `sSaveSlotLayout`
-//! (`pokeemerald/src/save.c:43-72`, `pokeemerald/include/save.h:19-30`): id 0
-//! is [`SaveBlock2`], ids 1-4 are [`SaveBlock1`] chunks, and ids 5-13 are the
-//! nine `PokemonStorage` chunks, carried opaquely without being interpreted.
-//! A fresh store emits valid all-zero placeholder chunks so every generation
-//! it writes satisfies upstream's all-14-sectors-valid invariant.
-//!
-//! [`SaveStore::load`] also accepts a slot written in this project's
-//! five-sector format (ids 0-4 only; physical positions 5-13 never
-//! touched); the next [`SaveStore::save`] rewrites it in the full format.
-//!
-//! The in-memory store validates sector signatures and checksums, but writes
-//! cannot reproduce partial hardware failures. File persistence belongs to
-//! [`super::file`].
+//! (`pokeemerald/src/save.c:43-72`): id 0 is [`SaveBlock2`], ids 1-4 are
+//! [`SaveBlock1`] chunks, and ids 5-13 are opaque `PokemonStorage` chunks.
+//! [`SaveStore::load`] also accepts this project's five-sector format (ids
+//! 0-4 only) and the next [`SaveStore::save`] rewrites it in full. File
+//! persistence belongs to [`super::file`].
 
 use super::block::{SaveBlock1, SaveBlock2};
 use super::sector::{Sector, SECTOR_DATA_SIZE, SECTOR_SIGNATURE, SECTOR_SIZE};
@@ -50,12 +42,8 @@ const _: () =
 const _: () = assert!(NUM_SAVE_SLOTS * NUM_SECTORS_PER_SLOT <= NUM_SECTORS);
 
 /// Exact `sizeof(struct PokemonStorage)`
-/// (`pokeemerald/include/pokemon_storage_system.h:20-24`): one `currentBox`
-/// byte, three bytes of alignment padding before the `BoxPokemon` array
-/// (`boxNames` sits at the declared offset 0x8344, `boxes` at 0x0004), 14x30
-/// eighty-byte `BoxPokemon` records (`pokeemerald/include/pokemon.h:178-217`),
-/// 14 nine-byte `boxNames` entries, and 14 `boxWallpapers` bytes:
-/// `0x4 + 0x8340 + 0x7E + 0xE == 0x83D0`.
+/// (`pokeemerald/include/pokemon_storage_system.h:20-24`): `currentBox`
+/// plus padding, 14x30 `BoxPokemon`, `boxNames`, and `boxWallpapers`.
 pub const PKMN_STORAGE_PAYLOAD_LEN: usize = 0x83D0;
 
 /// Exact byte length of a [`SaveStore`] flash image.
@@ -180,13 +168,9 @@ fn second_counter_is_newer(first: u32, second: u32) -> bool {
     }
 }
 
-/// Whether `older` precedes `newer` as a wrapping serial number (RFC 1982),
-/// i.e. `newer` is reachable from `older` by fewer than half the counter
-/// space. Unlike [`second_counter_is_newer`] -- sound only for two
-/// generations already known to be adjacent -- this is the comparison
-/// [`SaveStore::scan_slot`] needs for a stale tail's counter, which can sit
-/// an arbitrary number of generations behind the legacy head that
-/// overwrote it.
+/// Whether `older` precedes `newer` as a wrapping serial number (RFC 1982).
+/// Sound for any generation gap, unlike [`second_counter_is_newer`], which
+/// assumes adjacent generations.
 #[must_use]
 fn older_generation_precedes(older: u32, newer: u32) -> bool {
     let delta = newer.wrapping_sub(older);
@@ -415,12 +399,10 @@ impl SlotSurvey {
     }
 
     /// The generation a complete, unique storage set belongs to: one
-    /// rotation and one counter, with at most one footer disagreeing on
-    /// the counter. Footers sit outside the sector checksum
-    /// (`pokeemerald/src/save.c:674-685`), so one damaged counter is
-    /// tolerated; a save-block sector relabeled into a storage id is not,
-    /// and it is recognised by its counter matching a generation that has
-    /// lost one of ids 0-4.
+    /// rotation and one counter, with at most one counter outlier (footers
+    /// are unchecksummed, `pokeemerald/src/save.c:674-685`). An outlier
+    /// matching a save-block generation missing one of ids 0-4 is a
+    /// relabeled head sector and withdraws the set.
     fn storage_generation(&self) -> Option<u32> {
         if !self.storage_rotation_coherent {
             return None;
@@ -613,13 +595,9 @@ impl SaveStore {
         &self.buffer
     }
 
-    /// Rebuilds a store from an exact-length flash image.
-    ///
-    /// Runtime counters and retained bytes (including `PokemonStorage`) start
-    /// blank until [`SaveStore::load`] reconstructs them from the image's own
-    /// sector footers and payloads: call it before [`SaveStore::save`], or
-    /// the write will patch onto that blank base and discard whatever the
-    /// image actually held.
+    /// Rebuilds a store from an exact-length flash image. Call
+    /// [`SaveStore::load`] before [`SaveStore::save`]: counters and retained
+    /// bytes start blank until the image is read.
     #[must_use]
     pub fn from_flash_image(image: &[u8]) -> Option<Self> {
         if image.len() != FLASH_IMAGE_LEN {
@@ -706,12 +684,9 @@ impl SaveStore {
     }
 
     /// Writes all 14 logical sectors into the next rotated physical slot
-    /// under one save counter, as upstream's `WriteSaveSectorOrSlot` does for
-    /// every write (`pokeemerald/src/save.c:138-173`; the single-sector path
-    /// is never reached upstream either). Opaque `PokemonStorage` chunks
-    /// (ids 5-13) are rewritten unchanged so every generation stays fully
-    /// checksummed, matching `HandleWriteSector` rewriting every sector on a
-    /// full-slot write.
+    /// under one save counter, as upstream's `WriteSaveSectorOrSlot` does
+    /// (`pokeemerald/src/save.c:138-173`). `PokemonStorage` chunks are
+    /// rewritten unchanged so every generation stays fully checksummed.
     pub fn save(&mut self, block1: &SaveBlock1, block2: &SaveBlock2) {
         let mut block2_bytes = self.base_block2.clone();
         let mut block1_bytes = self.base_block1.clone();
@@ -853,13 +828,10 @@ impl SaveStore {
         }
     }
 
-    /// `legacy` marks the copy that owns a slot's *progress*: a legacy
-    /// generation only ever wrote physical positions 0-4, so 5-13 are
-    /// skipped outright rather than read as its blocks -- whether they are
-    /// plain erased flash or a stale tail [`SaveStore::scan_slot`]
-    /// tolerated. [`SaveStore::load`]'s separate storage-donor pass instead
-    /// passes `false` precisely to harvest those positions, keeping only
-    /// `pokemon_storage` from the result.
+    /// `legacy` marks the copy that owns a five-sector generation's
+    /// progress: positions 5-13 are skipped rather than read as its blocks.
+    /// [`SaveStore::load`]'s storage-donor pass passes `false` to harvest
+    /// exactly those positions.
     fn copy_valid_slot_payloads(&mut self, slot: usize, legacy: bool) -> CopiedSlotPayloads {
         let mut copied = CopiedSlotPayloads {
             block1: Box::new([0; SaveBlock1::PAYLOAD_LEN]),

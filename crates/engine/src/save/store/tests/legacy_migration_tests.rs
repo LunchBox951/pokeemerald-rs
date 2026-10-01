@@ -104,17 +104,9 @@ fn a_torn_full_slot_write_is_reported_corrupt_and_load_never_mutates_flash() {
     );
 }
 
-/// A full-14 slot can carry real `PokemonStorage` bytes (e.g. an
-/// imported image) while a legacy-shaped generation with a numerically
-/// newer counter sits in the other slot -- reachable via a build
-/// downgrade (a full write, then a five-sector write into the
-/// other slot) or an externally assembled image. `load` must adopt the
-/// newer legacy generation (never silently revert to the older full
-/// slot) while still carrying the full slot's verified storage bytes
-/// forward, rather than dropping either under a still-reported
-/// `SaveStatus::Ok`. `migrating_a_newer_legacy_slot_keeps_its_progress_
-/// and_the_full_slot_storage` below covers the case where the two
-/// slots' blocks actually differ.
+/// A newer five-sector generation beside an older full slot (a build
+/// downgrade or an assembled image): `load` adopts the newer progress and
+/// carries the full slot's verified storage forward under `Ok`.
 #[test]
 fn a_newer_legacy_slot_merges_its_blocks_with_the_older_full_slots_storage() {
     let mut store = SaveStore::new();
@@ -196,14 +188,9 @@ fn migrating_a_newer_legacy_slot_keeps_its_progress_and_the_full_slot_storage() 
     );
 }
 
-/// `scan_slot` accepts each slot on its own contents; nothing in it ties
-/// a generation's counter to the physical slot it sits in. That mapping
-/// is only an invariant `SaveStore::save` maintains (as upstream's
-/// `gSaveCounter % NUM_SAVE_SLOTS` does), so an externally assembled
-/// image -- the same input class the legacy/full merge exists for -- can
-/// present a full slot whose counter parity points at the *other* slot.
-/// The merge must then still take `PokemonStorage` from the full slot
-/// the scan actually found, never from the legacy slot's erased tail.
+/// Counter parity binds a generation to a physical slot only through
+/// `SaveStore::save`; an assembled image can break it. The merge must take
+/// `PokemonStorage` from the full slot the scan found, not the parity slot.
 #[test]
 fn a_legacy_full_merge_takes_storage_from_the_scanned_full_slot() {
     let block2 = sample_block2();

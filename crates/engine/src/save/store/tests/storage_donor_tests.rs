@@ -2,15 +2,9 @@
 
 use super::*;
 
-/// A rotation-zero cartridge image whose older slot has one damaged
-/// sector in its tail. The five-sector store accepted such an image (its
-/// scan only read positions 0-4), recovered rotation 0 from the newest
-/// slot's id 0, and wrote its next five-sector generation at rotation 1
-/// over the older slot -- leaving a legacy head that no 14-sector write
-/// can produce, since a torn full write only ever fills positions 0-4
-/// from rotation zero, where id `i` lands at position `i`. Withholding
-/// that damaged tail as a storage donor is right; rejecting the intact
-/// legacy head with it throws away the session the player just saved.
+/// A five-sector head at rotation 1 over an older slot whose tail has one
+/// damaged sector: no torn full write produces a rotated head, so the head
+/// stays intact and only the damaged tail loses donor eligibility.
 #[test]
 fn a_rotated_legacy_head_survives_a_damaged_stale_tail() {
     let block2 = sample_block2();
@@ -53,14 +47,9 @@ fn a_rotated_legacy_head_survives_a_damaged_stale_tail() {
     );
 }
 
-/// Two-slot redundancy exists so one bad sector cannot cost the player
-/// anything. When the counterpart slot is `Error` only because a
-/// save-block sector is damaged, all nine of its storage sectors can
-/// still validate -- the boxes are intact and merely unreachable
-/// through that slot's blocks. The accepted legacy generation wrote no
-/// storage of its own, so without a donor `load` hands back zeroes,
-/// `SaveFileStatus::Error` still offers CONTINUE, and the next save
-/// rewrites those zeroes over the surviving sectors.
+/// A counterpart slot that is `Error` only through a damaged save-block
+/// sector still holds nine valid storage sectors; the accepted five-sector
+/// generation borrows them rather than loading zeroed boxes.
 #[test]
 fn a_damaged_full_slot_still_donates_its_intact_storage() {
     let block2 = sample_block2();
@@ -108,13 +97,9 @@ fn a_damaged_full_slot_still_donates_its_intact_storage() {
     );
 }
 
-/// A footer id is outside the sector checksum, and ids 1-3 (`SaveBlock1`
-/// chunks 0-2) share ids 5-12's payload length, so a bit flip turning id 1
-/// into id 5 leaves both copies checksum-valid under one counter with
-/// all nine storage ids still present. At rotation 10 the relabeled
-/// chunk sits at position 11, after the real id 5 at position 1, so a
-/// donor copy would splice `SaveBlock1` bytes over the first box chunk
-/// and the next save would persist them.
+/// A footer id flipped from 1 to 5 leaves both copies checksum-valid under
+/// one counter with every storage id present; a donor copy would splice
+/// `SaveBlock1` bytes over the first box chunk.
 #[test]
 fn a_duplicated_storage_id_is_never_donated_as_storage() {
     const ROTATION: u16 = 10;
@@ -179,13 +164,9 @@ fn a_duplicated_storage_id_is_never_donated_as_storage() {
     );
 }
 
-/// A sector's footer counter sits outside the payload its checksum
-/// covers, upstream (`pokeemerald/src/save.c:674-685` sums `data` only)
-/// and here ([`Sector::is_valid`]), so flash damage there leaves every
-/// id and checksum intact. Both slots hold legacy heads, and only slot
-/// 1's stale tail is a complete storage set; one bit of one of its
-/// counters must not cost the player every boxed Pokemon when the other
-/// eight chunks still agree on their generation.
+/// One damaged footer counter (unchecksummed, `pokeemerald/src/save.c:674-685`)
+/// in the only complete storage set must not cost the boxes when the other
+/// eight chunks agree on their generation.
 #[test]
 fn one_damaged_storage_counter_still_leaves_a_complete_tail_donatable() {
     let block2 = sample_block2();
@@ -412,15 +393,10 @@ fn relabel_footer_id(store: &mut SaveStore, slot: usize, position: usize, id: u1
     store.write_physical(slot, position, &Sector::from_bytes(bytes));
 }
 
-/// Every save-block id, not only ids 1-3, fits within a storage chunk:
-/// id 0 (`SaveBlock2`, 3884 bytes) and id 4 (`SaveBlock1`'s last chunk,
-/// 3848 bytes) are zero-padded to the sector, and the checksum sums
-/// words, so either still verifies at storage id 5's 3968 bytes. A
-/// legacy head over slot 1's rotation-13 remnant puts id 4 (rotation 0)
-/// or id 0 (rotation 4) at position 4, where the lost id 5 sat; one
-/// relabeled footer there completes a rotation-coherent storage set
-/// whose generation still holds all of ids 1-3, and `load` would copy
-/// those save-block bytes over the first box chunk.
+/// Ids 0 and 4 are zero-padded and the checksum sums words, so either
+/// verifies at a storage id's length. Relabeled into the lost id 5 at
+/// position 4, each would complete a coherent set from a generation still
+/// holding ids 1-3; neither may donate.
 #[test]
 fn a_relabeled_short_save_block_sector_is_never_donated_as_storage() {
     for (head_rotation, head_id) in [(0u16, 4u16), (4, SECTOR_ID_SAVEBLOCK2)] {
@@ -448,14 +424,9 @@ fn a_relabeled_short_save_block_sector_is_never_donated_as_storage() {
     }
 }
 
-/// The id twin of the damaged-counter case above: an identity legacy
-/// head over an older rotation-zero full generation, where one bit of the
-/// stale tail's id-5 footer flips it to id 7. Both ids share one payload
-/// length, so the sector still verifies, and alone it implies another
-/// rotation. That is one damaged footer in data the slot never loads as
-/// progress; the five-sector store never read it at all. It must not roll
-/// the player back to the older counterpart slot, while the tail, now
-/// missing id 5 and holding id 7 twice, is never donated.
+/// An identity five-sector head over an older rotation-zero generation
+/// whose stale id-5 footer flipped to 7: one damaged footer in data never
+/// loaded as progress keeps the head, and the tail is never donated.
 #[test]
 fn an_identity_legacy_head_survives_one_flipped_stale_tail_id() {
     let block2 = sample_block2();
