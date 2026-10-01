@@ -375,7 +375,7 @@ fn continue_on_a_multi_level_tile_restores_the_saved_elevation_history() {
     assert_eq!(after, before);
 }
 
-/// Issue #801 review: a multi-level cell retains whatever elevation the
+/// A multi-level cell retains whatever elevation the
 /// player arrived with (`ObjectEventUpdateElevation`,
 /// `src/event_object_movement.c:7759-7771`), so any saved pair is valid there
 /// and a continue must not re-derive the transition wildcard from the cell.
@@ -413,7 +413,7 @@ fn continue_restores_any_elevation_pair_on_a_multi_level_tile() {
     );
 }
 
-/// Adjudication (#801 review): an upstream-origin image (player object
+/// An upstream-origin image (player object
 /// `active`, elevation byte 0x33 from an elevation-3 floor) re-saved by the
 /// pre-slice writer after the player walked onto a transition cell carries
 /// the new position but the old elevation byte and active bit. Upstream can
@@ -449,7 +449,7 @@ fn legacy_active_image_with_stale_elevation_byte_does_not_restore_it() {
     );
 }
 
-/// Issue #801 review, adjudicated: a settled player never holds a current
+/// A settled player never holds a current
 /// elevation that differs from an ordinary landing cell -- the finished step
 /// shifts previous coords to current and re-runs `ObjectEventUpdateElevation`
 /// (`src/event_object_movement.c:2162,8120-8130,7759-7771`) -- so an active
@@ -476,7 +476,7 @@ fn an_active_pair_the_ordinary_landing_cell_cannot_hold_is_not_restored() {
     );
 }
 
-/// Codex review: an upstream-origin image (`active` set, elevation byte
+/// An upstream-origin image (`active` set, elevation byte
 /// `(0, 3)` from a transition cell) re-saved by the pre-#801 writer moves the
 /// position but keeps both bytes. Its stale current 0 is holdable on the next
 /// transition cell, so only the port's own marker bit keeps the wrong previous

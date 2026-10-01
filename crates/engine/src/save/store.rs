@@ -656,7 +656,7 @@ mod tests {
         store.base_block1 = block1_bytes;
     }
 
-    /// Codex review: a save from this build, reopened and saved by a pre-#801
+    /// A save from this build, reopened and saved by a pre-#801
     /// build that walks off the position and back to it, keeps the marker,
     /// coordinates and elevation pair, all still consistent; only the counter
     /// stamp differs, so the pair must not be trusted.
