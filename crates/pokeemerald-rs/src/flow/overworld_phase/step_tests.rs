@@ -1685,6 +1685,9 @@ fn a_save_on_a_slides_landing_frame_keeps_both_direction_nibbles() {
         engine::save::SavedObjectEvent {
             facing_direction: Direction::North.to_dir_id(),
             movement_direction: Direction::East.to_dir_id(),
+            active: true,
+            current_elevation: phase.player.elevation(),
+            previous_elevation: phase.player.previous_elevation(),
         },
         "the locked facing and the slide's movement direction are saved \
          into their own nibbles"
@@ -1709,6 +1712,9 @@ fn a_save_after_a_slides_first_idle_poll_carries_the_resynced_direction() {
         engine::save::SavedObjectEvent {
             facing_direction: Direction::North.to_dir_id(),
             movement_direction: Direction::North.to_dir_id(),
+            active: true,
+            current_elevation: phase.player.elevation(),
+            previous_elevation: phase.player.previous_elevation(),
         },
         "the resynchronised movement direction matches the locked facing"
     );
