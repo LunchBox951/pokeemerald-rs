@@ -218,6 +218,44 @@ fn one_damaged_storage_counter_still_leaves_a_complete_tail_donatable() {
     );
 }
 
+/// A damaged storage counter that happens to equal the intact legacy
+/// head's own counter must not withdraw the only complete storage tail.
+#[test]
+fn a_damaged_storage_counter_matching_the_legacy_head_still_donates() {
+    let block2 = sample_block2();
+    let older_block1 = SaveBlock1 {
+        money: 111,
+        ..sample_block1()
+    };
+    let newer_block1 = SaveBlock1 {
+        money: 222,
+        ..sample_block1()
+    };
+    let storage_bytes = vec![0xABu8; PKMN_STORAGE_PAYLOAD_LEN];
+
+    let mut store = SaveStore::new();
+    write_full_slot(&mut store, 0, &older_block1, &block2, &storage_bytes, 28);
+    // Flip bit 1 of id 9's footer counter: 28 -> 30. Footer only, so
+    // the checksum still holds.
+    let damaged = store.read_physical(0, 9);
+    let offset = (9 - usize::from(SECTOR_ID_PKMN_STORAGE_START)) * SECTOR_DATA_SIZE;
+    let rewritten = Sector::write(9, &storage_bytes[offset..offset + SECTOR_DATA_SIZE], 30);
+    assert_eq!(damaged.data(), rewritten.data());
+    store.write_physical(0, 9, &rewritten);
+    assert!(store.read_physical(0, 9).is_valid(SECTOR_DATA_SIZE));
+    write_legacy_slot(&mut store, 1, &older_block1, &block2, 29);
+    write_legacy_slot(&mut store, 0, &newer_block1, &block2, 30);
+
+    let outcome = store.load();
+    assert_eq!(outcome.status, SaveStatus::Ok);
+    assert_eq!(store.save_counter(), 30);
+    assert_eq!(outcome.block1.money, newer_block1.money);
+    assert!(
+        store.base_pokemon_storage[..] == storage_bytes[..],
+        "the only complete storage tail must survive a counter outlier equal to the head"
+    );
+}
+
 /// One outlier is flash damage; two disagreeing footers are no longer a
 /// set this scan can vouch for, so the donor rule stays strict there.
 #[test]

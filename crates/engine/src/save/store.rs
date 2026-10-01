@@ -315,10 +315,11 @@ struct SlotSurvey {
     /// while they all imply the same one.
     storage_rotation: Option<usize>,
     storage_rotation_coherent: bool,
-    /// The footer counter of every checksum-valid save-block sector (ids
-    /// 0-4) anywhere in the slot, in position order; only the first
+    /// The footer counter and id of every checksum-valid save-block sector
+    /// (ids 0-4) anywhere in the slot, in position order; only the first
     /// `save_block_count` entries are meaningful.
     save_block_counters: [u32; NUM_SECTORS_PER_SLOT],
+    save_block_ids: [u16; NUM_SECTORS_PER_SLOT],
     save_block_count: usize,
     legacy_counter: Option<u32>,
     legacy_consistent: bool,
@@ -345,6 +346,7 @@ impl SlotSurvey {
             storage_rotation: None,
             storage_rotation_coherent: true,
             save_block_counters: [0; NUM_SECTORS_PER_SLOT],
+            save_block_ids: [0; NUM_SECTORS_PER_SLOT],
             save_block_count: 0,
             legacy_counter: None,
             legacy_consistent: true,
@@ -376,6 +378,7 @@ impl SlotSurvey {
             % NUM_SECTORS_PER_SLOT;
         if id < SECTOR_ID_PKMN_STORAGE_START {
             self.save_block_counters[self.save_block_count] = counter;
+            self.save_block_ids[self.save_block_count] = id;
             self.save_block_count += 1;
         }
         // Tracked over the whole slot, not just positions 5-13: a rotated
@@ -445,9 +448,15 @@ impl SlotSurvey {
     /// as that one outlier. One generation lays every id at one rotation,
     /// so the set must imply one; and a relabeled sector keeps its own
     /// generation's genuine counter, which the slot's surviving save-block
-    /// sectors still carry, while a damaged counter matches none of them.
-    /// Legacy rotation 3 places id 1 exactly where a rotation-13 remnant's
-    /// id 5 sat, so only the counter test catches that relabel.
+    /// sectors still carry. Legacy rotation 3 places id 1 exactly where a
+    /// rotation-13 remnant's id 5 sat, so only the counter test catches
+    /// that relabel. A damaged counter can land on that same value by
+    /// chance, though, and one generation writes each id once: the
+    /// relabeled sector *is* that generation's id 1, 2 or 3, so a
+    /// generation still holding all three of them relabeled nothing, and
+    /// its counter on a storage footer is damage, not a disguised head
+    /// sector. Only an outlier matching a generation that has lost one of
+    /// ids 1-3 withdraws the set.
     fn storage_generation(&self) -> Option<u32> {
         if !self.storage_rotation_coherent {
             return None;
@@ -459,12 +468,30 @@ impl SlotSurvey {
                 .count()
                 >= PKMN_STORAGE_CHUNKS - 1
         })?;
-        let save_block_counters = &self.save_block_counters[..self.save_block_count];
-        let outlier_is_a_save_block_generation = self
-            .storage_counters
+        let outlier_may_be_a_relabeled_save_block = self.storage_counters.iter().any(|&counter| {
+            counter != generation && self.save_block_generation_may_have_relabeled(counter)
+        });
+        (!outlier_may_be_a_relabeled_save_block).then_some(generation)
+    }
+
+    /// Whether the save-block sectors carrying `counter` could have lost one
+    /// of ids 1-3 to a relabeled footer: some sector of that generation is
+    /// present, and not all three relabel-capable ids are.
+    fn save_block_generation_may_have_relabeled(&self, counter: u32) -> bool {
+        /// Ids 1-3: the save-block ids whose payload length matches ids 5-12.
+        const RELABEL_CAPABLE_IDS: u32 = 0b1110;
+        let mut seen = false;
+        let mut ids_present = 0u32;
+        for (&c, &id) in self.save_block_counters[..self.save_block_count]
             .iter()
-            .any(|&counter| counter != generation && save_block_counters.contains(&counter));
-        (!outlier_is_a_save_block_generation).then_some(generation)
+            .zip(&self.save_block_ids[..self.save_block_count])
+        {
+            if c == counter {
+                seen = true;
+                ids_present |= 1 << id;
+            }
+        }
+        seen && ids_present & RELABEL_CAPABLE_IDS != RELABEL_CAPABLE_IDS
     }
 
     /// The generation a stale tail belongs to: one full generation's
