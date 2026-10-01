@@ -32,13 +32,13 @@ fn mon(dex: &Dex, species: SpeciesId, level: u8, moves: Vec<MoveId>) -> BattlePo
 }
 
 /// `MOVE_SUPERSONIC`: Normal, 55 accuracy.
-const SUPERSONIC: MoveId = MoveId(48);
+const SUPERSONIC: MoveId = MoveId::SUPERSONIC;
 /// `MOVE_CONFUSE_RAY`: Ghost, 100 accuracy.
-const CONFUSE_RAY: MoveId = MoveId(109);
+const CONFUSE_RAY: MoveId = MoveId::CONFUSE_RAY;
 /// `MOVE_SWEET_KISS`: Normal, 75 accuracy.
-const SWEET_KISS: MoveId = MoveId(186);
+const SWEET_KISS: MoveId = MoveId::SWEET_KISS;
 /// `MOVE_TACKLE`, outside the family.
-const TACKLE: MoveId = MoveId(33);
+const TACKLE: MoveId = MoveId::TACKLE;
 const UNKNOWN_MOVE: MoveId = MoveId(60_000);
 
 /// `SPECIES_ZIGZAGOON`, an ordinary non-immune target.

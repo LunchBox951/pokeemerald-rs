@@ -35,18 +35,18 @@ fn mon(dex: &Dex, species: SpeciesId, level: u8, moves: Vec<MoveId>) -> BattlePo
     .unwrap()
 }
 
-const LEER: MoveId = MoveId(43);
-const GROWL: MoveId = MoveId(45);
-const TAIL_WHIP: MoveId = MoveId(39);
-const STRING_SHOT: MoveId = MoveId(81);
-const SAND_ATTACK: MoveId = MoveId(28);
-const SCREECH: MoveId = MoveId(103);
-const METAL_SOUND: MoveId = MoveId(319);
-const HYPER_VOICE: MoveId = MoveId(304);
-const GROWTH: MoveId = MoveId(74);
-const HARDEN: MoveId = MoveId(106);
-const TACKLE: MoveId = MoveId(33);
-const TAIL_GLOW: MoveId = MoveId(294);
+const LEER: MoveId = MoveId::LEER;
+const GROWL: MoveId = MoveId::GROWL;
+const TAIL_WHIP: MoveId = MoveId::TAIL_WHIP;
+const STRING_SHOT: MoveId = MoveId::STRING_SHOT;
+const SAND_ATTACK: MoveId = MoveId::SAND_ATTACK;
+const SCREECH: MoveId = MoveId::SCREECH;
+const METAL_SOUND: MoveId = MoveId::METAL_SOUND;
+const HYPER_VOICE: MoveId = MoveId::HYPER_VOICE;
+const GROWTH: MoveId = MoveId::GROWTH;
+const HARDEN: MoveId = MoveId::HARDEN;
+const TACKLE: MoveId = MoveId::TACKLE;
+const TAIL_GLOW: MoveId = MoveId::TAIL_GLOW;
 const UNKNOWN_MOVE: MoveId = MoveId(60_000);
 
 const FIRST_MOVE_ID: u16 = 1;
