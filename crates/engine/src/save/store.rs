@@ -8,8 +8,8 @@
 //! A fresh store emits valid all-zero placeholder chunks so every generation
 //! it writes satisfies upstream's all-14-sectors-valid invariant.
 //!
-//! [`SaveStore::load`] also accepts a slot written under this project's
-//! earlier five-sector format (ids 0-4 only; physical positions 5-13 never
+//! [`SaveStore::load`] also accepts a slot written in this project's
+//! five-sector format (ids 0-4 only; physical positions 5-13 never
 //! touched); the next [`SaveStore::save`] rewrites it in the full format.
 //!
 //! The in-memory store validates sector signatures and checksums, but writes
@@ -241,8 +241,8 @@ fn clear_key_encrypted_fields(block1: &mut SaveBlock1) {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SlotIntegrity {
     Empty,
-    /// All 14 sectors validate, or the slot matches this project's pre-#1227
-    /// five-sector-era shape (see [`SaveStore::scan_slot`]).
+    /// All 14 sectors validate, or the slot holds a five-sector generation
+    /// (see [`SaveStore::scan_slot`]).
     Ok,
     Error,
 }

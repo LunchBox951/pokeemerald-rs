@@ -155,7 +155,7 @@ fn a_full_write_torn_past_the_head_is_never_a_stale_tail_with_one_outlier() {
 }
 
 /// Why the legacy head, unlike its stale tail, stays unanimous: a
-/// pre-#1227 write torn after four sectors over an imported rotation-10
+/// five-sector write torn after four sectors over an imported rotation-10
 /// generation leaves ids 4, 0, 1, 2, 3 in positions 0-4 -- every head id
 /// once, all checksum-valid, four footers agreeing -- yet id 4 is
 /// `SaveBlock1` from a different generation. A four-of-five consensus
@@ -196,7 +196,7 @@ fn a_torn_legacy_write_over_a_rotated_remnant_is_never_an_intact_head() {
 
 /// Builds the donor-slot shape for the relabeled-head-sector tests: an
 /// imported rotation-13 full generation (counter 13, storage `0xAB`) in
-/// slot 1, overwritten by a pre-#1227 write at `legacy_rotation`
+/// slot 1, overwritten by a five-sector write at `legacy_rotation`
 /// (counter 15), whose id-1 footer is then flipped into id 5. The
 /// genuine id 5 sat at position 4 and is gone, so every storage id is
 /// held once. Slot 0 is a newer legacy generation over erased flash

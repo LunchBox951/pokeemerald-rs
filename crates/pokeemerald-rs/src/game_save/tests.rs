@@ -830,11 +830,8 @@ fn legacy_block1_chunk(bytes: &[u8; SaveBlock1::PAYLOAD_LEN], chunk_num: usize) 
     &bytes[offset..offset + len]
 }
 
-/// This project's pre-#1227 save writer confined ids 0-4 to physical
-/// positions 0-4 of a slot and never wrote positions 5-13 at all (issue
-/// #1227, issue #235). Builds that exact on-disk shape directly, bypassing
-/// [`SaveStore`] (which -- correctly, after #1227 -- can no longer produce
-/// it), to prove a real legacy file on a player's disk still loads and then
+/// Builds the five-sector on-disk shape directly, since [`SaveStore`] no
+/// longer produces it, to prove a real legacy file still loads and then
 /// migrates.
 #[test]
 fn a_legacy_five_sector_save_file_loads_ok_and_migrates_on_the_next_store() {
@@ -872,7 +869,7 @@ fn a_legacy_five_sector_save_file_loads_ok_and_migrates_on_the_next_store() {
     assert_eq!(
         saved.status,
         SaveFileStatus::Ok,
-        "a pre-#1227 five-sector file must still load as intact (issue #235)"
+        "a five-sector file must still load as intact"
     );
     assert!(saved.status.menu_shows_continue());
     assert_eq!(saved.block1.money, 54_321);

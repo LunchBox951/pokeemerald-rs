@@ -3,7 +3,7 @@
 use super::*;
 
 /// A rotation-zero cartridge image whose older slot has one damaged
-/// sector in its tail. The pre-#1227 build accepted such an image (its
+/// sector in its tail. The five-sector store accepted such an image (its
 /// scan only read positions 0-4), recovered rotation 0 from the newest
 /// slot's id 0, and wrote its next five-sector generation at rotation 1
 /// over the older slot -- leaving a legacy head that no 14-sector write
@@ -79,7 +79,7 @@ fn a_damaged_full_slot_still_donates_its_intact_storage() {
     // SaveBlock1 chunk (id 1, at position 1 for a rotation-zero write).
     write_full_slot(&mut store, 0, &older_block1, &block2, &storage_bytes, 2);
     store.corrupt_byte(0, 1, 4);
-    // Slot 1: a pre-#1227 five-sector generation over erased flash, so
+    // Slot 1: a five-sector generation over erased flash, so
     // it has no stale tail of its own to donate.
     write_legacy_slot(&mut store, 1, &newer_block1, &block2, 3);
 
@@ -161,7 +161,7 @@ fn a_duplicated_storage_id_is_never_donated_as_storage() {
     assert!(store
         .read_physical(0, relabeled)
         .is_valid(sector_payload_len(SECTOR_ID_PKMN_STORAGE_START).unwrap()));
-    // Slot 1: a newer pre-#1227 generation with no storage of its own.
+    // Slot 1: a newer five-sector generation with no storage of its own.
     write_legacy_slot(&mut store, 1, &newer_block1, &block2, 11);
 
     assert!(
@@ -453,7 +453,7 @@ fn a_relabeled_short_save_block_sector_is_never_donated_as_storage() {
 /// stale tail's id-5 footer flips it to id 7. Both ids share one payload
 /// length, so the sector still verifies, and alone it implies another
 /// rotation. That is one damaged footer in data the slot never loads as
-/// progress; the pre-#1227 store never read it at all. It must not roll
+/// progress; the five-sector store never read it at all. It must not roll
 /// the player back to the older counterpart slot, while the tail, now
 /// missing id 5 and holding id 7 twice, is never donated.
 #[test]

@@ -1,4 +1,4 @@
-//! Loading pre-#1227 five-sector slots and migrating them on the next save.
+//! Loading five-sector slots and migrating them on the next save.
 
 use super::*;
 
@@ -11,7 +11,7 @@ fn a_legacy_five_sector_slot_loads_ok_and_is_migrated_on_the_next_save() {
     assert_eq!(
         outcome.status,
         SaveStatus::Ok,
-        "a pre-#1227 slot must still load as intact (issue #235)"
+        "a five-sector slot must still load as intact"
     );
     assert_eq!(outcome.block2, sample_block2());
     assert_eq!(outcome.block1.money, sample_block1().money);
@@ -44,8 +44,7 @@ fn a_legacy_slot_at_every_old_rotation_loads_ok() {
 }
 
 /// A signed sector anywhere in physical positions 5-13 proves this slot
-/// was written by the current (post-#1227) 14-sector code, not the
-/// legacy five-sector era, even if that sector's own checksum is
+/// was written by the 14-sector code, not the five-sector writer, even if that sector's own checksum is
 /// damaged. Such a slot must never be silently "healed" into a legacy
 /// read: a genuinely torn full-slot write must surface as damage the
 /// other slot's generation recovers from, not as a false Ok.
@@ -108,7 +107,7 @@ fn a_torn_full_slot_write_is_reported_corrupt_and_load_never_mutates_flash() {
 /// A full-14 slot can carry real `PokemonStorage` bytes (e.g. an
 /// imported image) while a legacy-shaped generation with a numerically
 /// newer counter sits in the other slot -- reachable via a build
-/// downgrade (a full write, then a pre-#1227 five-sector write into the
+/// downgrade (a full write, then a five-sector write into the
 /// other slot) or an externally assembled image. `load` must adopt the
 /// newer legacy generation (never silently revert to the older full
 /// slot) while still carrying the full slot's verified storage bytes
@@ -388,7 +387,7 @@ fn two_legacy_slots_over_an_imported_image_keep_the_newest_verified_tail() {
     assert_eq!(store.last_written_sector(), 0);
     let counter_14_storage = store.base_pokemon_storage.clone();
 
-    // Two pre-#1227 saves, into slot 1 then slot 0 by parity. Slot 0's
+    // Two five-sector saves, into slot 1 then slot 0 by parity. Slot 0's
     // counter-14 tail keeps ids 5-13 at positions 5-13 (rotation zero),
     // a complete storage generation; slot 1's counter-13 tail is the
     // rotation-13 remnant, missing id 5, and so cannot donate.
@@ -446,7 +445,7 @@ fn a_lone_legacy_slot_still_donates_its_own_verified_storage_tail() {
     let storage_bytes = vec![0xABu8; PKMN_STORAGE_PAYLOAD_LEN];
 
     let mut store = SaveStore::new();
-    // Slot 1 held a full generation at counter 2; a pre-#1227 write at
+    // Slot 1 held a full generation at counter 2; a five-sector write at
     // counter 3 replaced positions 0-4 only. Slot 0 is untouched flash.
     write_full_slot(&mut store, 1, &older_block1, &block2, &storage_bytes, 2);
     write_legacy_slot(&mut store, 1, &newer_block1, &block2, 3);

@@ -106,7 +106,7 @@ fn sample_pokemon(index: usize) -> Pokemon {
     }
 }
 
-/// Builds a slot exactly as this project's pre-#1227 code did: ids 0-4
+/// Builds a slot exactly as the five-sector writer did: ids 0-4
 /// only, placed at `(id + rotation) % 5`, physical positions 5-13 left
 /// erased.
 fn write_legacy_era_slot(store: &mut SaveStore, slot: usize, rotation: u16, counter: u32) {
@@ -156,7 +156,7 @@ fn write_full_slot(
     }
 }
 
-/// Writes a pre-#1227 five-sector generation (ids 0-4 only, positions
+/// Writes a five-sector generation (ids 0-4 only, positions
 /// 5-13 left untouched) carrying the given blocks, at rotation zero.
 fn write_legacy_slot(
     store: &mut SaveStore,
@@ -168,7 +168,7 @@ fn write_legacy_slot(
     write_legacy_slot_rotated(store, slot, block1, block2, counter, 0);
 }
 
-/// As [`write_legacy_slot`], at the given rotation: the pre-#1227 writer
+/// As [`write_legacy_slot`], at the given rotation: the five-sector writer
 /// placed id `i` at physical position `(i + rotation) % 5`, so every
 /// rotation but zero leaves a head no 14-sector write can imitate.
 fn write_legacy_slot_rotated(

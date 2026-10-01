@@ -33,7 +33,7 @@ fn fresh_store_loads_as_empty() {
     assert_eq!(store.last_written_sector(), 0);
 }
 
-/// What a build without the #801 generation stamp does on a save: patch the
+/// What a writer without the generation stamp does on a save: patch the
 /// position over the loaded bytes, leave every other byte, and advance the
 /// counter.
 fn write_without_a_generation_stamp(store: &mut SaveStore, pos: Coords16) {
@@ -75,7 +75,7 @@ fn write_without_a_generation_stamp(store: &mut SaveStore, pos: Coords16) {
     store.base_block1 = block1_bytes;
 }
 
-/// A save from this build, reopened and saved by a pre-#801 build that walks
+/// A save from this build, reopened and saved by an unstamped writer that walks
 /// off the position and back to it, keeps the marker, coordinates and
 /// elevation pair, all still consistent; only the counter stamp differs, so
 /// the pair must not be trusted.
