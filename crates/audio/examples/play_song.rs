@@ -527,16 +527,18 @@ fn wait_for_device_tail(
 /// sizes the callback cadence from what it observes (the largest gap between,
 /// or size of, the last [`CADENCE_WINDOW`] advances, converted to time at
 /// `device_sample_rate`), never from the advertised buffer range, so an
-/// aggregate one late poll saw does not widen the cadence for good. Callbacks
-/// are alive when the stale evidence spans at least a quarter of `derived_tail`
-/// (or one such advance alone covered that much playback) and the latest
-/// advance is within one observed cadence, plus two poll intervals, of now. An
-/// advance seen at a late poll is credited no later than the playback it covers
-/// past the previous poll, so an aggregate of callbacks that then stalled reads
-/// as stale. Once `derived_tail` has run from the start of the wait with the
-/// callbacks alive, the wait ends early as a finish, as
-/// [`wait_for_device_tail`] would; usable timestamps along the way do not
-/// restart it.
+/// aggregate one late poll saw does not widen the cadence for good. A gap past
+/// half `derived_tail` that also outruns the playback closing it by a
+/// quarter-tail is a stall, not cadence, and restarts both the evidence and the
+/// cadence from the resumed callback. Callbacks are alive when the stale
+/// evidence spans at least a quarter of `derived_tail` (or one such advance
+/// alone covered that much playback) and the latest advance is within one
+/// observed cadence, plus two poll intervals, of now. An advance seen at a late
+/// poll is credited no later than the playback it covers past the previous
+/// poll, so an aggregate of callbacks that then stalled reads as stale. Once
+/// `derived_tail` has run from the start of the wait with the callbacks alive,
+/// the wait ends early as a finish, as [`wait_for_device_tail`] would; usable
+/// timestamps along the way do not restart it.
 ///
 /// `policy.max_wait` still bounds the wait: a poll past the deadline reports
 /// the timeout unless `derived_tail` fits within `max_wait`
@@ -622,6 +624,19 @@ fn wait_for_measured_tail(
             let gap = last_advance.map_or(Duration::ZERO, |previous_at| {
                 at.saturating_duration_since(previous_at)
             });
+            // A healthy period is under half the derived tail (two queued
+            // periods plus margin) or hands over about a period of playback,
+            // so a gap past half the tail that also outruns the playback
+            // closing it by a quarter-tail is a stall, not cadence: the
+            // evidence and cadence before it say nothing about the resumed
+            // callbacks, so start both afresh.
+            if gap > derived_tail / 2 && gap > played + derived_tail / 4 {
+                pending_stale = None;
+                first_stale = None;
+                last_stale = None;
+                max_stale_advance = Duration::ZERO;
+                recent_cadence = [Duration::ZERO; CADENCE_WINDOW];
+            }
             recent_cadence[advances % CADENCE_WINDOW] = gap.max(played);
             advances = advances.wrapping_add(1);
             last_advance = Some(at);
@@ -1854,6 +1869,19 @@ mod tests {
                 }
             },
         );
+
+        assert!(matches!(
+            result,
+            Err(DrainError::MeasuredTailTimedOut { .. })
+        ));
+    }
+
+    /// Stale timestamps with one callback early in the tail and the next only
+    /// at the deadline: the long stall is neither sustained progress nor the
+    /// callback cadence, so the resumed callback alone cannot finish the drain.
+    #[test]
+    fn a_stall_and_resume_across_the_tail_does_not_prove_callbacks_alive() {
+        let result = cadence_wait(1_000, 1_000, 480, |ms| ms == 100 || ms == 1_000, None);
 
         assert!(matches!(
             result,
