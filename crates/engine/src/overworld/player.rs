@@ -14,8 +14,18 @@ use super::metatile_behavior::{
 use super::object_event::visible_object_event_at;
 use crate::event_data::EventData;
 
-/// Frames required for a normal on-foot step to cross one tile.
+/// Frames required for a normal on-foot step to cross one tile: also the
+/// pace `ForcedMovement_WalkSouth/North/West/East`'s `PlayerWalkNormal`
+/// mover crosses a standing `MB_WALK_*` tile at
+/// (`field_player_avatar.c:486-503, 975-977`; `sStepTimes[MOVE_SPEED_NORMAL]
+/// == ARRAY_COUNT(sStep1Funcs) == 16`, `event_object_movement.c:8233-8298`).
 pub const WALK_FRAMES_PER_TILE: u8 = 16;
+
+/// Frames a standing `MB_SLIDE_*` tile's `ForcedMovement_Slide` mover takes
+/// to cross one tile, via `PlayerWalkFast`
+/// (`field_player_avatar.c:526-552, 979-982`; `sStepTimes[MOVE_SPEED_FAST_1]
+/// == ARRAY_COUNT(sStep2Funcs) == 8`, `event_object_movement.c:8233-8298`).
+pub const SLIDE_FRAMES_PER_TILE: u8 = 8;
 
 /// Frames a standstill turn busies movement input for: upstream's
 /// `WALK_IN_PLACE_FAST` action (`event_object_movement.c:5704-5721`).
@@ -23,6 +33,44 @@ pub const TURN_IN_PLACE_FRAMES: u8 = 8;
 
 /// A tile position in the active map's coordinate space.
 pub type TilePos = (i32, i32);
+
+/// A tile crossing's per-crossing pace, fixed at the frame it started:
+/// its total frame count and whether its walk animation is paused on the
+/// forward-foot cell for the whole crossing rather than switching to the
+/// standing pose at the halfway point.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TransitCadence {
+    /// [`WALK_FRAMES_PER_TILE`] for an ordinary step or a dispatched walk
+    /// tile, [`SLIDE_FRAMES_PER_TILE`] for a dispatched slide tile.
+    duration: u8,
+    /// `ForcedMovement_Slide` sets `disableAnim` before moving
+    /// (`field_player_avatar.c:526-532`), so the go-fast animation never
+    /// reaches its standing half; the four `ForcedMovement_Walk*` and every
+    /// ordinary step never set it.
+    animation_disabled: bool,
+}
+
+impl TransitCadence {
+    /// An ordinary step's pace, and a dispatched walk tile's.
+    const WALK: Self = Self {
+        duration: WALK_FRAMES_PER_TILE,
+        animation_disabled: false,
+    };
+
+    /// A dispatched slide tile's pace.
+    const SLIDE: Self = Self {
+        duration: SLIDE_FRAMES_PER_TILE,
+        animation_disabled: true,
+    };
+}
+
+/// The sprite pose the player holds at rest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RestPose {
+    Standing,
+    /// A finished slide crossing's animation-paused forward foot.
+    SlidePaused,
+}
 
 /// The player's tile position, facing, elevation, and step progress.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,10 +82,14 @@ pub struct PlayerState {
     movement_direction: Direction,
     movement_streak_active: bool,
     transit_frames: Option<u8>,
+    /// The active crossing's pace. Meaningless while `transit_frames` is
+    /// `None`.
+    transit_cadence: TransitCadence,
     turn_frames_remaining: u8,
     transit_direction: Option<Direction>,
     forced_movement_armed: bool,
     forced_input_tile_center: bool,
+    rest_pose: RestPose,
 }
 
 /// The result of one directional-input poll.
@@ -129,10 +181,12 @@ impl PlayerState {
             movement_direction: facing,
             movement_streak_active: false,
             transit_frames: None,
+            transit_cadence: TransitCadence::WALK,
             turn_frames_remaining: 0,
             transit_direction: None,
             forced_movement_armed: false,
             forced_input_tile_center: false,
+            rest_pose: RestPose::Standing,
         }
     }
 
@@ -160,10 +214,21 @@ impl PlayerState {
         self.facing
     }
 
+    /// Returns the current movement direction, which a slide leaves on its
+    /// own direction while facing stays locked, until the next poll off
+    /// the tile resynchronises the two ([`step`](Self::step)'s "Forced
+    /// movement"), as `GetPlayerMovementDirection` reads
+    /// `movementDirection` (`field_player_avatar.c:429-440, 526-532`).
+    #[must_use]
+    pub const fn movement_direction(&self) -> Direction {
+        self.movement_direction
+    }
+
     /// Changes facing without starting or interrupting a step, carrying the
     /// movement direction with it as upstream's `SetObjectEventDirection`
     /// does (`event_object_movement.c:2361-2371`).
     pub const fn face(&mut self, direction: Direction) {
+        self.rest_pose = RestPose::Standing;
         self.facing = direction;
         self.movement_direction = direction;
     }
@@ -171,12 +236,16 @@ impl PlayerState {
     /// Ends a standstill turn's busy window early, as `PlayerFreeze` does
     /// the instant the field lock engages (`field_player_avatar.c:1039-1046`).
     pub const fn clear_turn_lock(&mut self) {
+        self.rest_pose = RestPose::Standing;
         self.turn_frames_remaining = 0;
     }
 
-    /// Returns whether the standing tile refuses manual steps as upstream's
-    /// `sForcedMovementTestFuncs` dispatch does (`field_player_avatar.c:412-427`).
-    /// Armed only by a step this state committed, never by placement.
+    /// Returns whether the standing tile is in upstream's forced-movement
+    /// dispatch set, `sForcedMovementTestFuncs`
+    /// (`field_player_avatar.c:412-427`). [`supported_forced_mover`]
+    /// dispatches a `MB_WALK_*`/`MB_SLIDE_*` tile as real movement; every
+    /// other armed tile still refuses manual steps. Armed only by a step
+    /// this state committed, never by placement.
     #[must_use]
     pub const fn forced_movement_armed(&self) -> bool {
         self.forced_movement_armed
@@ -197,6 +266,33 @@ impl PlayerState {
             Some(frames) => frames,
             None => 0,
         }
+    }
+
+    /// Returns the active tile crossing's total frame count --
+    /// [`WALK_FRAMES_PER_TILE`] for an ordinary step or a dispatched walk
+    /// tile, [`SLIDE_FRAMES_PER_TILE`] for a dispatched slide tile. Only
+    /// meaningful alongside [`step_progress`](Self::step_progress) while
+    /// [`step_direction`](Self::step_direction) is `Some`; stale (the
+    /// last crossing's duration) at rest.
+    #[must_use]
+    pub const fn transit_duration(&self) -> u8 {
+        self.transit_cadence.duration
+    }
+
+    /// Returns whether the active tile crossing pauses its walk animation
+    /// on the forward-foot cell for the whole crossing, as a dispatched
+    /// slide tile's `disableAnim` does. Only meaningful while
+    /// [`step_direction`](Self::step_direction) is `Some`; stale at rest.
+    #[must_use]
+    pub const fn transit_animation_disabled(&self) -> bool {
+        self.transit_cadence.animation_disabled
+    }
+
+    /// Returns whether a finished slide still holds its paused forward-foot
+    /// pose until the next keypad poll or field lock (`event_object_movement.c:7302-7306`).
+    #[must_use]
+    pub const fn slide_pose_held(&self) -> bool {
+        matches!(self.rest_pose, RestPose::SlidePaused)
     }
 
     /// Returns whether a tile crossing is still in progress.
@@ -223,14 +319,22 @@ impl PlayerState {
 
     /// Advances an active tile crossing by one frame; a stationary player remains stationary.
     ///
+    /// A crossing drains at the per-tile pace fixed when it started, so a
+    /// dispatched slide tile ([`SLIDE_FRAMES_PER_TILE`]) drains twice as
+    /// fast as an ordinary step or a dispatched walk tile
+    /// ([`WALK_FRAMES_PER_TILE`]).
+    ///
     /// Also drains [`TURN_IN_PLACE_FRAMES`], independently of tile transit.
     pub fn tick(&mut self) {
         let crossing = self.transit_frames.is_some();
         if let Some(frames) = self.transit_frames.as_mut() {
             *frames += 1;
-            if *frames >= WALK_FRAMES_PER_TILE {
+            if *frames >= self.transit_cadence.duration {
                 self.transit_frames = None;
                 self.transit_direction = None;
+                if self.transit_cadence.animation_disabled {
+                    self.rest_pose = RestPose::SlidePaused;
+                }
             }
         }
         // The landing's tile-center frame is the first whole frame it spends
@@ -257,6 +361,16 @@ impl PlayerState {
     ///
     /// Input is ignored during a tile crossing.
     ///
+    /// # Forced movement
+    ///
+    /// An armed tile dispatches before the keypad, even on a `None` poll,
+    /// winning over whatever direction the caller polled
+    /// (`field_player_avatar.c:332-349`). See
+    /// [`dispatch_forced_mover`](Self::dispatch_forced_mover) for a
+    /// supported tile's own dispatch and blocked-route fallback, and
+    /// [`forced_movement_armed`](Self::forced_movement_armed) for the
+    /// dispatched-vs-deferred split.
+    ///
     /// # Turn vs. step
     ///
     /// A direction change turns in place unless a movement streak is active.
@@ -273,9 +387,6 @@ impl PlayerState {
     /// only the neighbour's object events stay unavailable.
     ///
     /// A blocked attempt leaves the player facing the attempted direction.
-    /// An armed forced-movement tile instead refuses every poll without
-    /// turning, unless its own forced direction is blocked, where upstream
-    /// falls through to the keypad (`field_player_avatar.c:344-348`).
     ///
     /// # Elevation adoption
     ///
@@ -293,17 +404,48 @@ impl PlayerState {
             return StepOutcome::Idle;
         }
 
+        let standing_behavior = runtime
+            .metatile_behavior(self.position.0, self.position.1)
+            .unwrap_or(MB_NORMAL);
+        let supported_mover = supported_forced_mover(standing_behavior);
+
+        // Dispatched ahead of the keypad, even on a `None` poll; see
+        // `step`'s "Forced movement" section for the contract.
+        if self.forced_movement_armed {
+            if let Some(mover) = supported_mover {
+                if let Some(outcome) =
+                    self.dispatch_forced_mover(mover, standing_behavior, runtime, maps, event_data)
+                {
+                    return outcome;
+                }
+                // Blocked: the guard stays set (see `dispatch_forced_mover`'s
+                // doc), so keypad handling below runs on the original poll,
+                // skipping the deferred-behavior check below -- this tile is
+                // a supported mover, not one of those behaviors.
+            }
+        }
+
+        // `ForcedMovement_None`, reached off a forced tile or through a
+        // blocked `DoForcedMovement`, clears a slide's facing lock and
+        // resets `movementDirection` to the locked facing
+        // (`field_player_avatar.c:429-440, 449-451`). A no-op unless a slide
+        // left the two apart; deferred armed tiles keep theirs.
+        if !self.forced_movement_armed || supported_mover.is_some() {
+            self.movement_direction = self.facing;
+        }
+
+        // Any poll that reaches the keypad, idle included, restarts the sprite
+        // animation: `ForcedMovement_None` sets `enableAnim`, and a no-input poll
+        // faces the standing cell (`field_player_avatar.c:429-440, 588-600`).
+        self.rest_pose = RestPose::Standing;
         let Some(direction) = input else {
             self.movement_streak_active = false;
             return StepOutcome::Idle;
         };
 
-        let standing_behavior = runtime
-            .metatile_behavior(self.position.0, self.position.1)
-            .unwrap_or(MB_NORMAL);
-
         // Checked before the turn branch; see `step`'s doc for the contract.
-        if self.forced_movement_armed {
+        // `supported_mover.is_none()` excludes a tile already handled above.
+        if self.forced_movement_armed && supported_mover.is_none() {
             let forced_step_blocked =
                 forced_movement_direction(standing_behavior, self.movement_direction).is_some_and(
                     |forced_direction| {
@@ -347,6 +489,7 @@ impl PlayerState {
                     event_data,
                     standing_behavior,
                     landing,
+                    TransitCadence::WALK,
                 ) {
                     Ok(()) => match to_map {
                         Some(to_map) => StepOutcome::Crossed {
@@ -439,6 +582,10 @@ impl PlayerState {
         None
     }
 
+    /// `cadence` is the crossing's own pace -- the caller's, not the
+    /// destination's: an ordinary step and a dispatched walk tile both use
+    /// [`TransitCadence::WALK`], a dispatched slide tile its own faster,
+    /// animation-paused pace.
     fn try_start_resolved_step(
         &mut self,
         direction: Direction,
@@ -446,6 +593,7 @@ impl PlayerState {
         event_data: &EventData,
         standing_behavior: u8,
         landing: Landing,
+        cadence: TransitCadence,
     ) -> Result<(), Collision> {
         if let Some(collision) =
             self.landing_collision(direction, standing_behavior, &landing, runtime, event_data)
@@ -462,11 +610,55 @@ impl PlayerState {
         self.adopt_elevation(origin_elevation, landing.cell.elevation);
         self.transit_direction = Some(direction);
         self.transit_frames = Some(0);
+        self.transit_cadence = cadence;
+        self.rest_pose = RestPose::Standing;
         // The dispatch set guards movement, the wider input set holds field
         // input (`field_player_avatar.c:144-164`, `metatile_behavior.c:338-351`).
         self.forced_movement_armed = is_forced_movement(landing.destination_behavior);
         self.forced_input_tile_center = is_forced_movement_input_tile(landing.destination_behavior);
         Ok(())
+    }
+
+    /// Dispatches a supported standing forced tile's mover before the keypad
+    /// is read (`field_player_avatar.c:443-470`). A blocked route returns
+    /// `None` and leaves the guard armed and `runningState` untouched, so the
+    /// keypad falls through as upstream's `FALSE` arm does (`:344-348`).
+    fn dispatch_forced_mover(
+        &mut self,
+        mover: ForcedMover,
+        standing_behavior: u8,
+        runtime: &MapRuntime<'_>,
+        maps: &impl ConnectedMapData,
+        event_data: &EventData,
+    ) -> Option<StepOutcome> {
+        let direction = mover.direction;
+
+        let landing = self.resolve_landing(direction, runtime, maps).ok()?;
+        let from = self.position;
+        let to = landing.position;
+        let to_map = landing.to_map;
+        self.try_start_resolved_step(
+            direction,
+            runtime,
+            event_data,
+            standing_behavior,
+            landing,
+            mover.cadence,
+        )
+        .ok()?;
+
+        self.movement_streak_active = true;
+        self.movement_direction = direction;
+        if !mover.locks_facing {
+            self.facing = direction;
+        }
+        Some(match to_map {
+            Some(to_map) => StepOutcome::Crossed {
+                to_map,
+                to_position: to,
+            },
+            None => StepOutcome::Advanced { from, to },
+        })
     }
 
     /// Returns whether a step in `direction` would be collision-blocked,
@@ -489,21 +681,66 @@ impl PlayerState {
     }
 }
 
-/// Returns the direction a standing behavior's `ForcedMovement_*` handler
-/// collision-tests (`field_player_avatar.c:486-580`), `movement_direction`
-/// for the two `ForcedMovement_Slip` tiles (`:473-484`) and `None` for the
-/// Secret Base mats, which never collision-check (`:555-565`).
+/// A supported standing forced tile's fixed direction, crossing pace, and
+/// whether it locks the sprite's rendered facing, as dispatched by
+/// [`supported_forced_mover`].
+#[derive(Debug, Clone, Copy)]
+struct ForcedMover {
+    direction: Direction,
+    cadence: TransitCadence,
+    /// Whether the mover locks facing to its pre-dispatch value rather than
+    /// adopting `direction`: `ForcedMovement_Slide` sets
+    /// `facingDirectionLocked` before moving, so `SetObjectEventDirection`
+    /// updates only `movementDirection`; the four `ForcedMovement_Walk*`
+    /// never set that lock (`field_player_avatar.c:486-503, 526-532`;
+    /// `event_object_movement.c:2361-2370`).
+    locks_facing: bool,
+}
+
+/// Returns the walk or slide mover a standing behavior dispatches
+/// (`field_player_avatar.c:486-552, 975-982`), or `None` for every other
+/// behavior [`is_forced_movement`] arms -- ice, currents, the Trick House
+/// puzzle floor, the waterfall, the muddy slope, and the Secret Base mats,
+/// which stay deferred.
+#[must_use]
+fn supported_forced_mover(standing_behavior: u8) -> Option<ForcedMover> {
+    // `locks_facing` and `cadence.animation_disabled` coincide for every
+    // mover this slice supports: both are set together, only by
+    // `ForcedMovement_Slide` (`field_player_avatar.c:526-532`).
+    let (direction, cadence, locks_facing) = match standing_behavior {
+        MB_WALK_EAST => (Direction::East, TransitCadence::WALK, false),
+        MB_WALK_WEST => (Direction::West, TransitCadence::WALK, false),
+        MB_WALK_NORTH => (Direction::North, TransitCadence::WALK, false),
+        MB_WALK_SOUTH => (Direction::South, TransitCadence::WALK, false),
+        MB_SLIDE_EAST => (Direction::East, TransitCadence::SLIDE, true),
+        MB_SLIDE_WEST => (Direction::West, TransitCadence::SLIDE, true),
+        MB_SLIDE_NORTH => (Direction::North, TransitCadence::SLIDE, true),
+        MB_SLIDE_SOUTH => (Direction::South, TransitCadence::SLIDE, true),
+        _ => return None,
+    };
+    Some(ForcedMover {
+        direction,
+        cadence,
+        locks_facing,
+    })
+}
+
+/// Returns the direction a standing *deferred* behavior's `ForcedMovement_*`
+/// handler collision-tests (`field_player_avatar.c:486-580`),
+/// `movement_direction` for the two `ForcedMovement_Slip` tiles
+/// (`:473-484`) and `None` for the Secret Base mats, which never
+/// collision-check (`:555-565`). `MB_WALK_*` and `MB_SLIDE_*` are dispatched
+/// by [`supported_forced_mover`] before `step` ever reaches this deferred
+/// path.
 fn forced_movement_direction(
     standing_behavior: u8,
     movement_direction: Direction,
 ) -> Option<Direction> {
     match standing_behavior {
-        MB_WALK_EAST | MB_SLIDE_EAST | MB_EASTWARD_CURRENT => Some(Direction::East),
-        MB_WALK_WEST | MB_SLIDE_WEST | MB_WESTWARD_CURRENT => Some(Direction::West),
-        MB_WALK_NORTH | MB_SLIDE_NORTH | MB_NORTHWARD_CURRENT => Some(Direction::North),
-        MB_WALK_SOUTH | MB_SLIDE_SOUTH | MB_SOUTHWARD_CURRENT | MB_WATERFALL | MB_MUDDY_SLOPE => {
-            Some(Direction::South)
-        }
+        MB_EASTWARD_CURRENT => Some(Direction::East),
+        MB_WESTWARD_CURRENT => Some(Direction::West),
+        MB_NORTHWARD_CURRENT => Some(Direction::North),
+        MB_SOUTHWARD_CURRENT | MB_WATERFALL | MB_MUDDY_SLOPE => Some(Direction::South),
         MB_ICE | MB_TRICK_HOUSE_PUZZLE_8_FLOOR => Some(movement_direction),
         _ => None,
     }
@@ -2034,8 +2271,10 @@ mod tests {
     }
 
     /// Upstream dispatches forced movement from the metatile the player is
-    /// already standing on before it ever reads the keypad
-    /// (`field_player_avatar.c:342-347`, `:407-427`).
+    /// already standing on before it ever reads the keypad, and
+    /// `DoForcedMovement` moves in that tile's own direction on a clear
+    /// route regardless of the caller's held direction
+    /// (`field_player_avatar.c:342-347`, `:407-470`) `(behavioral-fidelity)`.
     #[test]
     fn a_forced_movement_tile_does_not_honour_the_callers_direction() {
         let runtime = slide_east_runtime();
@@ -2055,21 +2294,38 @@ mod tests {
 
         assert_eq!(
             player.step(Some(Direction::West), &runtime, &no_connections, &NO_FLAGS),
-            StepOutcome::Blocked {
-                direction: Direction::West,
-                collision: super::super::collision::Collision::Impassable,
+            StepOutcome::Advanced {
+                from: (2, 2),
+                to: (3, 2),
             },
-            "a forced-movement metatile must not accept the caller's westward step"
+            "the slide tile dispatches its own eastward direction, never the \
+             caller's held westward one"
         );
-        assert_eq!(player.position(), (2, 2));
+        assert_eq!(
+            player.facing(),
+            Direction::East,
+            "the tile's own direction is what actually moved the player, not \
+             the caller's West poll"
+        );
+        assert_eq!(player.position(), (3, 2));
     }
 
-    /// The forced-movement check runs ahead of the turn branch, as upstream's
-    /// `PlayerStep` reaches it before any keypad handling
-    /// (`field_player_avatar.c:342-349`) `(behavioral-fidelity)`.
+    /// A blocked forced route falls through to the keypad on the very poll
+    /// that found it blocked -- `DoForcedMovement`'s collision branch never
+    /// denies the poll outright, it just skips `moveFunc` and lets
+    /// `MovePlayerAvatarUsingKeypadInput` run (`field_player_avatar.c:344-349`,
+    /// `:443-462`) -- but the guard itself stays armed, since
+    /// `GetForcedMovementByMetatileBehavior` re-reads the standing tile
+    /// fresh every poll rather than latching a one-time verdict (`:409-426`):
+    /// only leaving the tile or a successful dispatch consumes it, so a
+    /// later poll retries the same dispatch. A blocked dispatch attempt
+    /// leaves `runningState` (this port's movement streak) untouched, same
+    /// as `DoForcedMovement`'s collision branch (`:443-462`), so the retry
+    /// still turns in place first rather than stepping immediately
+    /// `(behavioral-fidelity)`.
     #[test]
-    fn a_forced_movement_tile_denies_even_a_turn_after_the_streak_ends() {
-        let runtime = slide_east_runtime();
+    fn a_blocked_forced_movement_tile_stays_armed_and_still_turns_after_an_idle_poll() {
+        let runtime = blocked_slide_east_runtime();
 
         let mut player = PlayerState::new((1, 2), 3, Direction::East);
         assert_eq!(
@@ -2078,62 +2334,226 @@ mod tests {
                 from: (1, 2),
                 to: (2, 2),
             },
-            "fixture precondition: the slide tile is entered like ordinary ground"
+            "fixture precondition: the slide tile is entered like ordinary ground, \
+             which is what arms the guard"
         );
         for _ in 0..WALK_FRAMES_PER_TILE {
             player.tick();
         }
+        assert!(
+            player.forced_movement_armed(),
+            "fixture precondition: the slide tile arms the guard on landing"
+        );
+
         assert_eq!(
             player.step(None, &runtime, &no_connections, &NO_FLAGS),
             StepOutcome::Idle,
-            "fixture precondition: releasing input ends the movement streak"
+            "the forced eastward route is blocked at (3, 2), so the no-input \
+             dispatch attempt fails and idles rather than moving"
+        );
+        assert!(
+            player.forced_movement_armed(),
+            "a blocked forced route must not clear the guard while the player \
+             still stands on the same tile, so a later poll can retry once \
+             whatever blocked it no longer does"
         );
 
         assert_eq!(
             player.step(Some(Direction::West), &runtime, &no_connections, &NO_FLAGS),
-            StepOutcome::Blocked {
-                direction: Direction::West,
-                collision: super::super::collision::Collision::Impassable,
-            },
-            "forced movement stays armed on this tile even once the streak has \
-             ended, so a would-be turn must fail closed too"
+            StepOutcome::Turned(Direction::West),
+            "the retried dispatch is still blocked and never touched the \
+             movement streak the idle poll ended, so this poll turns in \
+             place like any other direction change from standstill"
         );
         assert_eq!(player.position(), (2, 2));
     }
 
-    /// A denied keypad direction never reaches the avatar's facing, which
-    /// upstream leaves untouched while forced movement is armed
-    /// (`field_player_avatar.c:342-349`) `(behavioral-fidelity)`.
+    /// A dispatched forced tile's own direction sets the avatar's facing --
+    /// not the direction it happened to be entered from, and not the
+    /// caller's held poll -- `ForcedMovement_WalkEast` never sets
+    /// `facingDirectionLocked`, so `SetObjectEventDirection` adopts the
+    /// dispatched direction (`field_player_avatar.c:486-503`,
+    /// `event_object_movement.c:2361-2370`). Entering from the north
+    /// (facing South) and dispatching a `MB_WALK_EAST` proves both
+    /// independently `(behavioral-fidelity)`.
     #[test]
-    fn a_forced_movement_tile_does_not_turn_the_player() {
-        let runtime = slide_east_runtime();
+    fn a_dispatched_walk_tile_faces_its_own_direction_not_the_entrants() {
+        let runtime = walk_east_runtime();
 
-        let mut player = PlayerState::new((1, 2), 3, Direction::East);
+        let mut player = PlayerState::new((2, 1), 3, Direction::South);
         assert_eq!(
-            player.step(Some(Direction::East), &runtime, &no_connections, &NO_FLAGS),
+            player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS),
             StepOutcome::Advanced {
-                from: (1, 2),
+                from: (2, 1),
                 to: (2, 2),
             },
-            "fixture precondition: the slide tile is entered like ordinary ground"
+            "fixture precondition: the walk tile is entered like ordinary \
+             ground, from the north this time"
         );
         for _ in 0..WALK_FRAMES_PER_TILE {
             player.tick();
         }
         assert_eq!(
             player.facing(),
-            Direction::East,
-            "fixture precondition: the player stands on the slide tile facing east"
+            Direction::South,
+            "fixture precondition: the entry step still faces the entered direction"
         );
 
-        let _ = player.step(Some(Direction::West), &runtime, &no_connections, &NO_FLAGS);
-
+        assert_eq!(
+            player.step(Some(Direction::West), &runtime, &no_connections, &NO_FLAGS),
+            StepOutcome::Advanced {
+                from: (2, 2),
+                to: (3, 2),
+            },
+            "the walk tile's own eastward direction dispatches regardless of \
+             the entry direction or the caller's held West"
+        );
         assert_eq!(
             player.facing(),
             Direction::East,
-            "a denied forced-movement poll must not turn the avatar: upstream never \
-             reads the keypad while forced movement is armed"
+            "the dispatched mover's own direction sets facing, not the \
+             direction the player entered from or the caller's held poll"
         );
+    }
+
+    /// Unlike a walk tile, `ForcedMovement_Slide` sets
+    /// `facingDirectionLocked` before moving, so `SetObjectEventDirection`
+    /// updates only `movementDirection`, leaving the sprite's rendered
+    /// facing exactly where it was (`field_player_avatar.c:526-532`,
+    /// `event_object_movement.c:2361-2370`). Entering from the north
+    /// (facing South) and dispatching a `MB_SLIDE_EAST` proves the avatar
+    /// moves east while still rendering as facing south
+    /// `(behavioral-fidelity)`.
+    #[test]
+    fn a_dispatched_slide_tile_keeps_the_entrants_facing_locked() {
+        let runtime = slide_east_runtime();
+
+        let mut player = PlayerState::new((2, 1), 3, Direction::South);
+        assert_eq!(
+            player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS),
+            StepOutcome::Advanced {
+                from: (2, 1),
+                to: (2, 2),
+            },
+            "fixture precondition: the slide tile is entered like ordinary \
+             ground, from the north this time"
+        );
+        for _ in 0..WALK_FRAMES_PER_TILE {
+            player.tick();
+        }
+        assert_eq!(
+            player.facing(),
+            Direction::South,
+            "fixture precondition: the entry step still faces the entered direction"
+        );
+
+        assert_eq!(
+            player.step(Some(Direction::West), &runtime, &no_connections, &NO_FLAGS),
+            StepOutcome::Advanced {
+                from: (2, 2),
+                to: (3, 2),
+            },
+            "the slide tile's own eastward direction dispatches regardless of \
+             the entry direction or the caller's held West"
+        );
+        assert_eq!(
+            player.facing(),
+            Direction::South,
+            "a slide locks the rendered facing to its pre-dispatch value: the \
+             avatar moves east while still facing south"
+        );
+    }
+
+    /// `ForcedMovement_Slide`'s `disableAnim` leaves the sprite paused after
+    /// the crossing (`field_player_avatar.c:525-531`); the next keypad poll or
+    /// scripted facing restarts the animation
+    /// (`event_object_movement.c:7302-7313`) `(behavioral-fidelity)`.
+    #[test]
+    fn a_finished_slide_holds_its_pose_until_the_next_movement() {
+        let runtime = slide_east_runtime();
+        let mut player = PlayerState::new((2, 1), 3, Direction::South);
+        player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS);
+        for _ in 0..WALK_FRAMES_PER_TILE {
+            player.tick();
+        }
+        player.step(None, &runtime, &no_connections, &NO_FLAGS);
+        assert!(!player.slide_pose_held(), "the pose is held only at rest");
+        for _ in 0..SLIDE_FRAMES_PER_TILE {
+            player.tick();
+        }
+        assert!(!player.in_transit());
+        assert!(player.slide_pose_held());
+        player.tick();
+        assert!(player.slide_pose_held(), "ticking alone keeps the pause");
+
+        let mut idle = player;
+        idle.step(None, &runtime, &no_connections, &NO_FLAGS);
+        assert!(
+            !idle.slide_pose_held(),
+            "an idle poll faces the standing cell"
+        );
+
+        let mut stepping = player;
+        stepping.step(Some(Direction::East), &runtime, &no_connections, &NO_FLAGS);
+        assert!(!stepping.slide_pose_held(), "a step restarts the animation");
+
+        let mut turning = player;
+        turning.step(Some(Direction::North), &runtime, &no_connections, &NO_FLAGS);
+        assert!(!turning.slide_pose_held(), "a turn restarts the animation");
+
+        let mut frozen = player;
+        frozen.clear_turn_lock();
+        assert!(
+            !frozen.slide_pose_held(),
+            "a field lock faces the standing cell"
+        );
+
+        let mut faced = player;
+        faced.face(Direction::West);
+        assert!(!faced.slide_pose_held(), "a scripted facing restarts it");
+    }
+
+    /// A walk-east tile, for proving facing follows dispatch on a family
+    /// that never locks it (unlike [`slide_east_runtime`]).
+    fn walk_east_runtime() -> MapRuntime<'static> {
+        let mut bytes = Vec::new();
+        for y in 0..5u16 {
+            for x in 0..5u16 {
+                let raw = MetatileCell {
+                    metatile_id: u16::from((x, y) == (2, 2)),
+                    collision: 0,
+                    elevation: 3,
+                }
+                .pack();
+                bytes.extend_from_slice(&raw.to_le_bytes());
+            }
+        }
+        let attrs = [
+            u16::from(MB_NORMAL).to_le_bytes(),
+            u16::from(MB_WALK_EAST).to_le_bytes(),
+        ]
+        .concat();
+        let layout = assets::MapLayout {
+            id: assets::LayoutId("MAP_TEST"),
+            name: "MapTest",
+            width: 5,
+            height: 5,
+            primary_tileset: "gTileset_General",
+            secondary_tileset: "gTileset_General",
+        };
+        let (_, header, events) = flat_runtime(1, 1, |_, _| 0);
+        let bytes = Box::leak(bytes.into_boxed_slice());
+        let attrs = Box::leak(attrs.into_boxed_slice());
+        let header = Box::leak(Box::new(header));
+        let events = Box::leak(Box::new(events));
+        MapRuntime::new(
+            assets::MapId("MAP_TEST"),
+            header,
+            events,
+            layout.grid(bytes).unwrap(),
+            MetatileAttributeTable::new(attrs),
+            MetatileAttributeTable::new(&[]),
+        )
     }
 
     /// A slide-east tile whose eastward destination is impassable.
@@ -2210,6 +2630,10 @@ mod tests {
         );
         assert_eq!(player.position(), (1, 2));
     }
+
+    /// Table-driven forced-mover dispatch, cadence, and fallback
+    /// regressions over every `MB_WALK_*`/`MB_SLIDE_*` tile.
+    mod forced_movement_tests;
 
     /// `forcedMove` closes only the `T_TILE_CENTER` arm of
     /// `FieldGetPlayerInput`'s gate, so input suppression lasts the landing's

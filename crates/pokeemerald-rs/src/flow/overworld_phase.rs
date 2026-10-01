@@ -30,6 +30,7 @@
 //! menu and the save sync behind its `SAVE` action), and [`placement`]
 //! (where a continued save puts the player).
 
+use engine::overworld::object_event::ObjectEventCollection;
 use engine::overworld::{PlayerState, TilePos, WildEncounterState};
 use engine::save::{SaveBlock1, SaveBlock2, WarpData};
 use std::cell::OnceCell;
@@ -158,6 +159,11 @@ pub(crate) struct OverworldPhase {
     scene: OverworldScene,
     pub(super) player: PlayerState,
     pub(super) map_id: assets::MapId,
+    /// Live object events for the current map visit, seeded from the same
+    /// resolved events the scene simulates
+    /// ([`connections::seed_object_events`]) and replaced only by a
+    /// completed map transition.
+    object_events: ObjectEventCollection,
     pub(super) save1: SaveBlock1,
     pub(super) save2: SaveBlock2,
     /// Destination latched at step start for warp processing at step
@@ -457,10 +463,13 @@ impl OverworldPhase {
         let position = (i32::from(block1.pos.x), i32::from(block1.pos.y));
         let (elevation, tile_facing) = placement::saved_tile_placement(&scene, map_id, position);
         let facing = placement::saved_facing(&block1, tile_facing);
+        let object_events = connections::seed_object_events(&scene, map_id)
+            .expect("a loaded scene's map has event data");
         let mut phase = Self {
             scene,
             player: PlayerState::new(position, elevation, facing),
             map_id,
+            object_events,
             save1: block1,
             save2: block2,
             pending_landing: None,
@@ -572,10 +581,13 @@ impl OverworldPhase {
             &mut save1.event_data,
             save2.player_gender,
         );
+        let object_events = connections::seed_object_events(&scene, map_id)
+            .expect("a loaded scene's map has event data");
         Self {
             scene,
             player,
             map_id,
+            object_events,
             save1,
             save2,
             pending_landing: None,
