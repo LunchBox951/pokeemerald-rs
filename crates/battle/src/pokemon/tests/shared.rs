@@ -24,7 +24,7 @@ pub(super) const MAX_IVS: Ivs = Ivs {
 };
 
 pub(super) const BULBASAUR: SpeciesId = SpeciesId(1);
-pub(super) const TACKLE: MoveId = MoveId(33);
+pub(super) const TACKLE: MoveId = MoveId::TACKLE;
 pub(super) const HARDY_PERSONALITY: u32 = 0x1234_5663;
 
 pub(super) fn sample_mon(dex: &Dex) -> BattlePokemon {

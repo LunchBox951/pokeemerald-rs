@@ -19,10 +19,10 @@ const ANORITH: SpeciesId = SpeciesId(390);
 /// `SPECIES_SHEDINJA`: Wonder Guard in its primary (and only) ability slot.
 const SHEDINJA: SpeciesId = SpeciesId(303);
 
-const TACKLE: MoveId = MoveId(33);
-const ABSORB: MoveId = MoveId(71);
-const MEGA_DRAIN: MoveId = MoveId(72);
-const GIGA_DRAIN: MoveId = MoveId(202);
+const TACKLE: MoveId = MoveId::TACKLE;
+const ABSORB: MoveId = MoveId::ABSORB;
+const MEGA_DRAIN: MoveId = MoveId::MEGA_DRAIN;
+const GIGA_DRAIN: MoveId = MoveId::GIGA_DRAIN;
 const UNKNOWN_MOVE: MoveId = MoveId(60_000);
 
 const STENCH: AbilityId = AbilityId(1);

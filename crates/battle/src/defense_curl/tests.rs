@@ -9,8 +9,8 @@ use crate::stat_change::{ChangedStat, StatChangeDirection, StatChangeEffect, Sta
 use crate::stat_stage::StatStage;
 use assets::{MoveId, SpeciesId};
 
-const DEFENSE_CURL: MoveId = MoveId(111);
-const TACKLE: MoveId = MoveId(33);
+const DEFENSE_CURL: MoveId = MoveId::DEFENSE_CURL;
+const TACKLE: MoveId = MoveId::TACKLE;
 const TEST_SPECIES: SpeciesId = SpeciesId(1);
 const TEST_LEVEL: u8 = 5;
 const TEST_PERSONALITY: u32 = 0;

@@ -18,8 +18,8 @@ use battle::{
 #[test]
 fn a_successful_run_ends_the_battle_immediately_without_either_mon_acting() {
     let dex = Dex::new();
-    let player = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]);
-    let enemy = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]);
+    let player = max_iv_mon(&dex, 4, 50, vec![MoveId::TACKLE]);
+    let enemy = max_iv_mon(&dex, 19, 5, vec![MoveId::TACKLE]);
     let player_hp = player.current_hp();
     let enemy_hp = enemy.current_hp();
 
@@ -52,7 +52,7 @@ fn a_successful_run_ends_the_battle_immediately_without_either_mon_acting() {
 fn a_failed_run_burns_the_turn_and_the_enemy_still_acts() {
     let dex = Dex::new();
     let player = slow_runner_rattata(&dex);
-    let enemy = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]);
+    let enemy = max_iv_mon(&dex, 4, 50, vec![MoveId::TACKLE]);
 
     let escape_roll_that_fails: u16 = 65_000;
     let mut rng = SequenceRng::new([0, 0, 0, escape_roll_that_fails, 0, 1, 0, 0]);
@@ -81,7 +81,7 @@ fn a_failed_run_lets_the_enemys_forced_struggle_execute_afterward() {
     let dex = Dex::new();
     let player = slow_runner_rattata(&dex);
     let player_max_hp = player.stats().max_hp;
-    let mut enemy = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]);
+    let mut enemy = max_iv_mon(&dex, 4, 50, vec![MoveId::TACKLE]);
     for _ in 0..enemy.moves()[0].pp {
         enemy.deduct_pp(0).unwrap();
     }
@@ -129,8 +129,8 @@ fn a_failed_run_lets_the_enemys_forced_struggle_execute_afterward() {
 #[test]
 fn an_all_spent_enemy_still_lets_a_successful_run_end_the_battle() {
     let dex = Dex::new();
-    let player = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]);
-    let mut enemy = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]);
+    let player = max_iv_mon(&dex, 4, 50, vec![MoveId::TACKLE]);
+    let mut enemy = max_iv_mon(&dex, 19, 5, vec![MoveId::TACKLE]);
     for _ in 0..enemy.moves()[0].pp {
         enemy.deduct_pp(0).unwrap();
     }
@@ -161,7 +161,7 @@ fn escape_uses_raw_speed_while_turn_order_uses_effective_speed() {
     // order reads stage-modified effective speed instead.
     let dex = Dex::new();
     let stage_boosted = |dex: &Dex| {
-        let mut mon = max_iv_mon(dex, 1, 10, vec![MoveId(33)]);
+        let mut mon = max_iv_mon(dex, 1, 10, vec![MoveId::TACKLE]);
         mon.stages_mut().speed = StatStage::new(6).unwrap();
         mon
     };
@@ -170,7 +170,7 @@ fn escape_uses_raw_speed_while_turn_order_uses_effective_speed() {
     // threshold escapes. Effective 68 >= 40 would instead escape
     // unconditionally and leave this roll undrawn.
     let escape_roll_below_threshold: u16 = 10;
-    let enemy = max_iv_mon(&dex, 19, 20, vec![MoveId(33)]);
+    let enemy = max_iv_mon(&dex, 19, 20, vec![MoveId::TACKLE]);
     let mut rng = SequenceRng::new([0, 0, 0, escape_roll_below_threshold]);
     let mut battle = Battle::new(dex.clone(), stage_boosted(&dex), enemy, false, &mut rng).unwrap();
     let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
@@ -188,7 +188,7 @@ fn escape_uses_raw_speed_while_turn_order_uses_effective_speed() {
     // Effective 68 > 40 seats the boosted Bulbasaur first despite its raw
     // 17 < 40; reading raw speed for turn order would seat the enemy first
     // instead.
-    let enemy = max_iv_mon(&dex, 19, 20, vec![MoveId(33)]);
+    let enemy = max_iv_mon(&dex, 19, 20, vec![MoveId::TACKLE]);
     let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0]);
     let mut battle = Battle::new(dex.clone(), stage_boosted(&dex), enemy, false, &mut rng).unwrap();
     let events = battle
@@ -201,13 +201,13 @@ fn escape_uses_raw_speed_while_turn_order_uses_effective_speed() {
         vec![
             BattleEvent::Hit {
                 by_player: true,
-                move_id: MoveId(33),
+                move_id: MoveId::TACKLE,
                 damage: bulbasaur_tackle_damage,
                 is_critical: false,
             },
             BattleEvent::Hit {
                 by_player: false,
-                move_id: MoveId(33),
+                move_id: MoveId::TACKLE,
                 damage: rattata_tackle_damage,
                 is_critical: false,
             },
@@ -228,7 +228,7 @@ fn each_failed_run_raises_the_next_attempts_odds_through_run_tries() {
 
     let dex = Dex::new();
     let player = slow_runner_rattata(&dex);
-    let enemy = max_iv_mon(&dex, 4, 10, vec![MoveId(33)]);
+    let enemy = max_iv_mon(&dex, 4, 10, vec![MoveId::TACKLE]);
 
     // The same roll fails turn 1's escape threshold and clears turn 2's
     // higher one, so turn 2 can only succeed if run_tries fed the formula.
@@ -276,7 +276,7 @@ fn an_equal_speed_run_turn_never_consumes_the_tie_draw() {
     // A Run is seated first before `GetWhoStrikesFirst` can draw a
     // speed tie (`battle_main.c:4784-4813`).
     let player = slow_runner_rattata(&dex);
-    let enemy = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]);
+    let enemy = max_iv_mon(&dex, 19, 5, vec![MoveId::TACKLE]);
     let mut rng = SequenceRng::new([0, 0, 0, 0]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     assert_eq!(
@@ -309,7 +309,7 @@ fn run_tries_wraps_at_256_like_upstreams_byte_counter() {
     // Draining only the first move keeps the enemy's moveset partially
     // spent, so its pick always fails via FailedNoPp instead of diverting
     // to the forced-Struggle fallback exercised above.
-    let mut enemy = max_iv_mon(&dex, 4, 50, vec![MoveId(33), MoveId(10)]);
+    let mut enemy = max_iv_mon(&dex, 4, 50, vec![MoveId::TACKLE, MoveId::SCRATCH]);
     for _ in 0..enemy.moves()[0].pp {
         enemy.deduct_pp(0).unwrap();
     }
@@ -360,9 +360,9 @@ fn the_slow_runner_fixture_does_not_carry_run_away() {
 #[test]
 fn run_away_escapes_without_an_escape_roll_or_a_run_try() {
     let dex = Dex::new();
-    let player = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]);
+    let player = max_iv_mon(&dex, 19, 5, vec![MoveId::TACKLE]);
     assert_eq!(player.ability(), AbilityId::RUN_AWAY);
-    let enemy = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]);
+    let enemy = max_iv_mon(&dex, 4, 50, vec![MoveId::TACKLE]);
 
     let mut rng = SequenceRng::new([0, 0, 0]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
@@ -390,9 +390,9 @@ fn run_away_escapes_without_an_escape_roll_or_a_run_try() {
 fn shadow_tag_refuses_a_nominally_successful_run() {
     let dex = Dex::new();
     // Faster than the enemy, so only Shadow Tag explains the refusal.
-    let player = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]);
+    let player = max_iv_mon(&dex, 4, 50, vec![MoveId::TACKLE]);
     let wobbuffet_species_id = 202;
-    let enemy = max_iv_mon(&dex, wobbuffet_species_id, 5, vec![MoveId(33)]);
+    let enemy = max_iv_mon(&dex, wobbuffet_species_id, 5, vec![MoveId::TACKLE]);
     assert_eq!(enemy.ability(), AbilityId::SHADOW_TAG);
 
     let mut rng = SequenceRng::new([0]);
@@ -420,13 +420,13 @@ fn arena_trap_refuses_a_grounded_nominally_successful_run() {
     let dex = Dex::new();
     // Faster than the enemy and grounded, so only Arena Trap explains the
     // refusal.
-    let player = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]);
+    let player = max_iv_mon(&dex, 4, 50, vec![MoveId::TACKLE]);
     let trapinch_species_id = 332;
     let enemy = max_iv_mon_with_personality(
         &dex,
         trapinch_species_id,
         5,
-        vec![MoveId(33)],
+        vec![MoveId::TACKLE],
         SECONDARY_ABILITY_PERSONALITY,
     );
     assert_eq!(enemy.ability(), AbilityId::ARENA_TRAP);
@@ -449,14 +449,14 @@ fn arena_trap_refuses_a_grounded_nominally_successful_run() {
 fn arena_trap_exempts_a_levitate_runner() {
     let dex = Dex::new();
     let haunter_species_id = 93;
-    let player = max_iv_mon(&dex, haunter_species_id, 5, vec![MoveId(33)]);
+    let player = max_iv_mon(&dex, haunter_species_id, 5, vec![MoveId::TACKLE]);
     assert_eq!(player.ability(), AbilityId::LEVITATE);
     let trapinch_species_id = 332;
     let enemy = max_iv_mon_with_personality(
         &dex,
         trapinch_species_id,
         5,
-        vec![MoveId(33)],
+        vec![MoveId::TACKLE],
         SECONDARY_ABILITY_PERSONALITY,
     );
     assert_eq!(enemy.ability(), AbilityId::ARENA_TRAP);
@@ -481,14 +481,14 @@ fn arena_trap_exempts_a_levitate_runner() {
 fn arena_trap_exempts_a_flying_runner() {
     let dex = Dex::new();
     let pidgey_species_id = 16;
-    let player = max_iv_mon(&dex, pidgey_species_id, 5, vec![MoveId(33)]);
+    let player = max_iv_mon(&dex, pidgey_species_id, 5, vec![MoveId::TACKLE]);
     assert!(player.types().contains(&Type::Flying));
     let trapinch_species_id = 332;
     let enemy = max_iv_mon_with_personality(
         &dex,
         trapinch_species_id,
         5,
-        vec![MoveId(33)],
+        vec![MoveId::TACKLE],
         SECONDARY_ABILITY_PERSONALITY,
     );
     assert_eq!(enemy.ability(), AbilityId::ARENA_TRAP);
@@ -514,10 +514,10 @@ fn magnet_pull_refuses_a_steel_type_nominally_successful_run() {
     let dex = Dex::new();
     // Faster than the enemy, so only Magnet Pull explains the refusal.
     let aron_species_id = 382;
-    let player = max_iv_mon(&dex, aron_species_id, 50, vec![MoveId(33)]);
+    let player = max_iv_mon(&dex, aron_species_id, 50, vec![MoveId::TACKLE]);
     assert!(player.types().contains(&Type::Steel));
     let magnemite_species_id = 81;
-    let enemy = max_iv_mon(&dex, magnemite_species_id, 5, vec![MoveId(33)]);
+    let enemy = max_iv_mon(&dex, magnemite_species_id, 5, vec![MoveId::TACKLE]);
     assert_eq!(enemy.ability(), AbilityId::MAGNET_PULL);
 
     let mut rng = SequenceRng::new([0]);
@@ -537,10 +537,10 @@ fn magnet_pull_refuses_a_steel_type_nominally_successful_run() {
 #[test]
 fn magnet_pull_does_not_refuse_a_non_steel_runner() {
     let dex = Dex::new();
-    let player = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]);
+    let player = max_iv_mon(&dex, 4, 50, vec![MoveId::TACKLE]);
     assert!(!player.types().contains(&Type::Steel));
     let magnemite_species_id = 81;
-    let enemy = max_iv_mon(&dex, magnemite_species_id, 5, vec![MoveId(33)]);
+    let enemy = max_iv_mon(&dex, magnemite_species_id, 5, vec![MoveId::TACKLE]);
     assert_eq!(enemy.ability(), AbilityId::MAGNET_PULL);
 
     let mut rng = SequenceRng::new([0, 0, 0]);

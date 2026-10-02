@@ -20,9 +20,9 @@ use crate::common::{max_iv_mon, SequenceRng};
 use assets::{AbilityId, MoveId};
 use battle::{Battle, BattleError, BattleEvent, BattleOutcome, ChangedStat, Dex, PlayerAction};
 
-const TACKLE: MoveId = MoveId(33);
-const GROWL: MoveId = MoveId(45);
-const SLASH: MoveId = MoveId(163);
+const TACKLE: MoveId = MoveId::TACKLE;
+const GROWL: MoveId = MoveId::GROWL;
+const SLASH: MoveId = MoveId::SLASH;
 
 #[test]
 fn run_is_forbidden_before_any_draw_and_leaves_the_battle_usable() {
