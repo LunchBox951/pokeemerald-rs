@@ -46,10 +46,6 @@
 //! `GetBorderBlockAt` and `MapGridGetMetatileIdAt` in
 //! `pokeemerald/src/fieldmap.c`. The camera therefore keeps moving at an edge
 //! without exposing undefined map content.
-//!
-//! # Fidelity differences
-//!
-//! - Walking does not alternate the leading foot between steps.
 
 use assets::{
     AssetError, AssetPack, BorderGrid, ImageRef, LayoutId, MapEventsTable, MapLayout,

@@ -527,3 +527,33 @@ fn a_slides_movement_direction_resyncs_to_facing_on_the_first_poll_off_the_tile(
          facing on the first poll off the forced tile"
     );
 }
+
+/// A dispatched walk or slide tile selects the other foot on its first
+/// command (`field_player_avatar.c:526-537`, `event_object_movement.c:5101-5107`)
+/// `(behavioral-fidelity)`.
+#[test]
+fn a_dispatched_forced_crossing_selects_the_other_foot() {
+    for &(behavior, direction, _frames) in &FORCED_MOVERS {
+        let runtime = forced_mover_runtime(behavior, direction, false);
+        let mut player = enter_forced_tile(&runtime, direction);
+        let entry_foot = player.second_foot_leads();
+        player.step(None, &runtime, &no_connections, &NO_FLAGS);
+        assert_eq!(player.second_foot_leads(), !entry_foot, "{behavior:#x}");
+    }
+}
+
+/// A finished slide's paused foot command is left unchanged by the next
+/// dispatched crossing (`event_object_movement.c:4582-4598`).
+#[test]
+fn a_held_slide_pose_keeps_its_foot_across_the_next_crossing() {
+    let runtime = forced_mover_runtime(MB_SLIDE_EAST, Direction::East, false);
+    let mut player = enter_forced_tile(&runtime, Direction::East);
+    player.step(None, &runtime, &no_connections, &NO_FLAGS);
+    for _ in 0..SLIDE_FRAMES_PER_TILE {
+        player.tick();
+    }
+    assert!(player.slide_pose_held());
+    let held_foot = player.second_foot_leads();
+    player.advance_step_parity(player.slide_pose_held());
+    assert_eq!(player.second_foot_leads(), held_foot);
+}

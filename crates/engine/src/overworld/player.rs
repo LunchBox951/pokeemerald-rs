@@ -64,6 +64,13 @@ impl TransitCadence {
     };
 }
 
+/// Which of a walk animation's two forward-foot cells leads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LeadingFoot {
+    First,
+    Second,
+}
+
 /// The sprite pose the player holds at rest.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RestPose {
@@ -93,6 +100,10 @@ pub struct PlayerState {
     forced_movement_armed: bool,
     forced_input_tile_center: bool,
     rest_pose: RestPose,
+    /// The foot the latest animated step or turn led with (`sAnim_Go*` alternate
+    /// cells, `object_event_anims.h:202-272`). Starts on the second so the first
+    /// leads with the first.
+    leading_foot: LeadingFoot,
 }
 
 /// The result of one directional-input poll.
@@ -191,6 +202,7 @@ impl PlayerState {
             forced_movement_armed: false,
             forced_input_tile_center: false,
             rest_pose: RestPose::Standing,
+            leading_foot: LeadingFoot::Second,
         }
     }
 
@@ -317,6 +329,23 @@ impl PlayerState {
     #[must_use]
     pub const fn slide_pose_held(&self) -> bool {
         matches!(self.rest_pose, RestPose::SlidePaused)
+    }
+
+    /// Returns whether the latest animated step or turn led with the second foot.
+    #[must_use]
+    pub const fn second_foot_leads(&self) -> bool {
+        matches!(self.leading_foot, LeadingFoot::Second)
+    }
+
+    /// `SetStepAnimHandleAlternation` leaves a paused foot command unchanged
+    /// (`event_object_movement.c:4582-4598`), so a held slide pose keeps its foot.
+    fn advance_step_parity(&mut self, slide_pose_held: bool) {
+        if !slide_pose_held {
+            self.leading_foot = match self.leading_foot {
+                LeadingFoot::First => LeadingFoot::Second,
+                LeadingFoot::Second => LeadingFoot::First,
+            };
+        }
     }
 
     /// Returns whether a tile crossing is still in progress.
@@ -505,6 +534,7 @@ impl PlayerState {
             self.facing = direction;
             self.movement_direction = direction;
             self.turn_frames_remaining = TURN_IN_PLACE_FRAMES;
+            self.advance_step_parity(self.slide_pose_held());
             return StepOutcome::Turned(direction);
         }
 
@@ -640,12 +670,14 @@ impl PlayerState {
             .map_or(self.collision_elevation, |origin_cell| {
                 origin_cell.elevation
             });
+        let was_slide_paused = self.slide_pose_held();
         self.position = landing.position;
         self.adopt_elevation(origin_elevation, landing.cell.elevation);
         self.landing_elevation = landing.cell.elevation;
         self.transit_direction = Some(direction);
         self.transit_frames = Some(0);
         self.transit_cadence = cadence;
+        self.advance_step_parity(was_slide_paused);
         self.rest_pose = RestPose::Standing;
         // The dispatch set guards movement, the wider input set holds field
         // input (`field_player_avatar.c:144-164`, `metatile_behavior.c:338-351`).
@@ -2740,6 +2772,9 @@ mod tests {
     /// Table-driven forced-mover dispatch, cadence, and fallback
     /// regressions over every `MB_WALK_*`/`MB_SLIDE_*` tile.
     mod forced_movement_tests;
+
+    /// Leading-foot parity across steps, turns, and rejected polls.
+    mod step_parity_tests;
 
     /// `forcedMove` closes only the `T_TILE_CENTER` arm of
     /// `FieldGetPlayerInput`'s gate, so input suppression lasts the landing's
