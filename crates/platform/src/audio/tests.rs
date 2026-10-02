@@ -478,6 +478,44 @@ fn the_test_hooks_publish_a_measured_playback_position_on_the_null_backend() {
     // Monotonic even for the fake clock: a lower value must not regress it.
     output.advance_sounded_frames_for_test(1);
     assert_eq!(output.playback_progress().unwrap().sounded_frames, 4);
+    assert_eq!(
+        output.playback_progress().unwrap().valid_timestamp_callbacks,
+        2,
+        "every hook call stands for one usable-timestamp callback, flat or not"
+    );
+}
+
+#[test]
+fn a_usable_callback_is_counted_even_when_its_estimate_does_not_grow() {
+    let clock = PlaybackClock::new();
+    clock.record(100, |_| Some(60));
+    clock.record(100, |_| Some(60)); // repeated estimate
+    clock.record(100, |_| Some(40)); // regressed estimate
+    assert_eq!(clock.sounded_frames.load(Ordering::Acquire), 60);
+    assert_eq!(clock.valid_timestamp_callbacks.load(Ordering::Acquire), 3);
+    assert_eq!(clock.submitted_frames.load(Ordering::Acquire), 300);
+}
+
+#[test]
+fn a_stale_callback_advances_submitted_frames_without_the_validity_count() {
+    let clock = PlaybackClock::new();
+    clock.record(100, |_| Some(60));
+    clock.record(100, |_| None);
+    assert_eq!(clock.valid_timestamp_callbacks.load(Ordering::Acquire), 1);
+    assert_eq!(clock.submitted_frames.load(Ordering::Acquire), 200);
+}
+
+#[test]
+fn the_submitted_store_lands_after_the_estimate_and_validity_stores() {
+    let clock = PlaybackClock::new();
+    clock.record(100, |start| {
+        // Mid-callback, between the estimate and the stores: the frames are
+        // not yet published, so a reader cannot see them ahead of the count.
+        assert_eq!(start, 0);
+        assert_eq!(clock.submitted_frames.load(Ordering::Acquire), 0);
+        Some(10)
+    });
+    assert_eq!(clock.submitted_frames.load(Ordering::Acquire), 100);
 }
 
 #[test]
