@@ -102,3 +102,30 @@ fn blocked_and_busy_polls_leave_the_parity_alone() {
     );
     assert_eq!(player.second_foot_leads(), during);
 }
+
+/// A keypad step off a held slide pose keeps the slide's paused foot
+/// (`SetStepAnimHandleAlternation`, `event_object_movement.c:4582-4598`).
+#[test]
+fn a_step_off_a_held_slide_pose_keeps_the_slides_foot() {
+    let runtime = slide_east_runtime();
+    let mut player = PlayerState::new((2, 1), 3, Direction::South);
+    player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS);
+    for _ in 0..WALK_FRAMES_PER_TILE {
+        player.tick();
+    }
+    player.step(None, &runtime, &no_connections, &NO_FLAGS);
+    for _ in 0..SLIDE_FRAMES_PER_TILE {
+        player.tick();
+    }
+    assert!(player.slide_pose_held());
+    let slide_foot = player.second_foot_leads();
+    let outcome = player.step(Some(Direction::East), &runtime, &no_connections, &NO_FLAGS);
+    assert_eq!(
+        outcome,
+        StepOutcome::Advanced {
+            from: (3, 2),
+            to: (4, 2)
+        }
+    );
+    assert_eq!(player.second_foot_leads(), slide_foot);
+}

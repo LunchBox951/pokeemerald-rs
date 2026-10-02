@@ -500,6 +500,7 @@ impl PlayerState {
         // Any poll that reaches the keypad, idle included, restarts the sprite
         // animation: `ForcedMovement_None` sets `enableAnim`, and a no-input poll
         // faces the standing cell (`field_player_avatar.c:429-440, 588-600`).
+        let slide_pose_held = self.slide_pose_held();
         self.rest_pose = RestPose::Standing;
         let Some(direction) = input else {
             self.movement_streak_active = false;
@@ -534,7 +535,7 @@ impl PlayerState {
             self.facing = direction;
             self.movement_direction = direction;
             self.turn_frames_remaining = TURN_IN_PLACE_FRAMES;
-            self.advance_step_parity(self.slide_pose_held());
+            self.advance_step_parity(slide_pose_held);
             return StepOutcome::Turned(direction);
         }
 
@@ -547,21 +548,25 @@ impl PlayerState {
                 let from = self.position;
                 let to = landing.position;
                 let to_map = landing.to_map;
-                match self.try_start_resolved_step(
+                let started = self.try_start_resolved_step(
                     direction,
                     runtime,
                     event_data,
                     standing_behavior,
                     landing,
                     TransitCadence::WALK,
-                ) {
-                    Ok(()) => match to_map {
-                        Some(to_map) => StepOutcome::Crossed {
-                            to_map,
-                            to_position: to,
-                        },
-                        None => StepOutcome::Advanced { from, to },
-                    },
+                );
+                match started {
+                    Ok(()) => {
+                        self.advance_step_parity(slide_pose_held);
+                        match to_map {
+                            Some(to_map) => StepOutcome::Crossed {
+                                to_map,
+                                to_position: to,
+                            },
+                            None => StepOutcome::Advanced { from, to },
+                        }
+                    }
                     Err(collision) => StepOutcome::Blocked {
                         direction,
                         collision,
@@ -670,14 +675,12 @@ impl PlayerState {
             .map_or(self.collision_elevation, |origin_cell| {
                 origin_cell.elevation
             });
-        let was_slide_paused = self.slide_pose_held();
         self.position = landing.position;
         self.adopt_elevation(origin_elevation, landing.cell.elevation);
         self.landing_elevation = landing.cell.elevation;
         self.transit_direction = Some(direction);
         self.transit_frames = Some(0);
         self.transit_cadence = cadence;
-        self.advance_step_parity(was_slide_paused);
         self.rest_pose = RestPose::Standing;
         // The dispatch set guards movement, the wider input set holds field
         // input (`field_player_avatar.c:144-164`, `metatile_behavior.c:338-351`).
@@ -704,6 +707,7 @@ impl PlayerState {
         let from = self.position;
         let to = landing.position;
         let to_map = landing.to_map;
+        let was_slide_paused = self.slide_pose_held();
         self.try_start_resolved_step(
             direction,
             runtime,
@@ -713,6 +717,7 @@ impl PlayerState {
             mover.cadence,
         )
         .ok()?;
+        self.advance_step_parity(was_slide_paused);
 
         self.movement_streak_active = true;
         self.movement_direction = direction;
