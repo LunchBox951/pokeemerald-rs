@@ -400,3 +400,16 @@ fn a_torn_rotation_zero_write_stays_refused_with_one_unusable_tail_sector() {
         }
     }
 }
+
+/// A sixth sector torn mid-payload keeps its predecessor's footer (counter
+/// 12) under a failing checksum; the write is still torn after six sectors.
+#[test]
+fn a_sixth_sector_torn_before_its_footer_still_reads_error() {
+    let mut store = SaveStore::new();
+    write_full_slot_rotated(&mut store, 1, 1, 12);
+    let old_footer_sector = store.read_physical(1, 5);
+    tear_rotation_zero_write(&mut store, 1, 5, 14);
+    store.write_physical(1, 5, &old_footer_sector);
+    store.corrupt_byte(1, 5, 0);
+    assert_eq!(store.scan_slot(1).integrity, SlotIntegrity::Error);
+}

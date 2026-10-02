@@ -96,7 +96,7 @@ pub(super) struct SlotSurvey {
     head_is_identity: bool,
     tail_signature_seen: bool,
     tail_unusable_count: usize,
-    tail_unusable_counter: u32,
+    tail_unusable_at_first_tail_position: bool,
     /// The footer counter of each checksum-valid tail sector, in position
     /// order; only the first `tail_valid_count` entries are meaningful.
     tail_counters: [u32; PKMN_STORAGE_CHUNKS],
@@ -132,7 +132,7 @@ impl SlotSurvey {
             head_is_identity: true,
             tail_signature_seen: false,
             tail_unusable_count: 0,
-            tail_unusable_counter: 0,
+            tail_unusable_at_first_tail_position: false,
             tail_counters: [0; PKMN_STORAGE_CHUNKS],
             tail_valid_count: 0,
             tail_rotations: [0; PKMN_STORAGE_CHUNKS],
@@ -163,7 +163,8 @@ impl SlotSurvey {
         let is_valid_sector = sector_payload_len(id).is_some_and(|len| sector.is_valid(len));
         if in_tail && !is_valid_sector {
             self.tail_unusable_count += 1;
-            self.tail_unusable_counter = sector.counter();
+            self.tail_unusable_at_first_tail_position =
+                i == usize::from(SECTOR_ID_PKMN_STORAGE_START);
         }
         if !is_valid_sector {
             return;
@@ -257,11 +258,11 @@ impl SlotSurvey {
         if self.tail_unusable_count > 1 {
             return None;
         }
-        // One unusable sector spends the whole outlier budget, and its own
-        // counter must not be the head's: that is the write's newest sector.
+        // One unusable sector spends the whole outlier budget. A write torn
+        // past five sectors always damages the position after the head's.
         if self.tail_unusable_count == 1
             && (self.tail_valid_count != PKMN_STORAGE_CHUNKS - 1
-                || self.legacy_counter == Some(self.tail_unusable_counter))
+                || self.tail_unusable_at_first_tail_position)
         {
             return None;
         }
