@@ -477,3 +477,57 @@ fn an_identity_legacy_head_survives_one_flipped_stale_tail_id() {
     );
     assert_eq!(&store.base_pokemon_storage[..], &counterpart_storage[..]);
 }
+
+/// A legacy write (counter 14, rotation 4) torn after its first sector puts
+/// id 0 at position 4, over a rotation-12 generation's storage id 6, and
+/// that footer is damaged to id 6. No other sector carries counter 14, so
+/// the relabel guard has no save-block generation to match.
+#[test]
+fn a_relabeled_sole_sector_of_a_torn_legacy_write_is_never_donated() {
+    let mut store = SaveStore::new();
+    write_full_slot(
+        &mut store,
+        0,
+        &sample_block1(),
+        &sample_block2(),
+        &vec![0x0Fu8; PKMN_STORAGE_PAYLOAD_LEN],
+        12,
+    );
+    let sectors: Vec<Sector> = (0..NUM_SECTORS_PER_SLOT)
+        .map(|i| store.read_physical(0, i))
+        .collect();
+    for (id, sector) in sectors.iter().enumerate() {
+        store.write_physical(0, (id + 12) % NUM_SECTORS_PER_SLOT, sector);
+    }
+    // Counter-12 id 0 (position 12) is checksum-damaged.
+    store.corrupt_byte(0, 12, 0);
+    assert_eq!(store.read_physical(0, 4).id(), 6);
+    // Torn legacy write: only id 0 lands, at position (0 + 4) % 5.
+    let block2 = SaveBlock2 {
+        player_name: *b"TORNWR\xFF\0",
+        ..sample_block2()
+    };
+    let block2_bytes = block2.to_bytes();
+    store.write_physical(0, 4, &Sector::write(0, &block2_bytes, 14));
+    relabel_footer_id(&mut store, 0, 4, 6);
+    assert!(store
+        .read_physical(0, 4)
+        .is_valid(sector_payload_len(6).unwrap()));
+
+    write_legacy_slot(&mut store, 1, &sample_block1(), &sample_block2(), 13);
+
+    let scan = store.scan_slot(0);
+    let outcome = store.load();
+    assert_eq!(outcome.status, SaveStatus::Error);
+    assert_eq!(store.save_counter(), 13);
+    let chunk1 =
+        &store.base_pokemon_storage[SECTOR_DATA_SIZE..SECTOR_DATA_SIZE + block2_bytes.len()];
+    assert!(
+        chunk1 != &block2_bytes[..],
+        "SaveBlock2 bytes (trainer name) must never be loaded as a box chunk"
+    );
+    assert!(
+        scan.storage_counter.is_none(),
+        "a relabeled sole save-block sector must not complete a donor set"
+    );
+}

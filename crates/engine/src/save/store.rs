@@ -400,9 +400,9 @@ impl SlotSurvey {
 
     /// The generation a complete, unique storage set belongs to: one
     /// rotation and one counter, with at most one counter outlier (footers
-    /// are unchecksummed, `pokeemerald/src/save.c:674-685`). An outlier
-    /// matching a save-block generation missing one of ids 0-4 is a
-    /// relabeled head sector and withdraws the set.
+    /// are unchecksummed, `pokeemerald/src/save.c:674-685`). An outlier that
+    /// completes no save-block generation and is the next write into this
+    /// slot is a relabeled save-block sector and withdraws the set.
     fn storage_generation(&self) -> Option<u32> {
         if !self.storage_rotation_coherent {
             return None;
@@ -414,32 +414,37 @@ impl SlotSurvey {
                 .count()
                 >= PKMN_STORAGE_CHUNKS - 1
         })?;
-        let outlier_may_be_a_relabeled_save_block = self.storage_counters.iter().any(|&counter| {
-            counter != generation && self.save_block_generation_may_have_relabeled(counter)
+        let outlier_is_accepted = self.storage_counters.iter().all(|&counter| {
+            counter == generation
+                || self.save_block_generation_is_complete(counter)
+                || !self.is_next_write_into_this_slot(generation, counter)
         });
-        (!outlier_may_be_a_relabeled_save_block).then_some(generation)
+        outlier_is_accepted.then_some(generation)
     }
 
-    /// Whether the save-block sectors carrying `counter` could have lost one
-    /// of ids 0-4 to a relabeled footer: some sector of that generation is
-    /// present, and not all five save-block ids are.
-    fn save_block_generation_may_have_relabeled(&self, counter: u32) -> bool {
+    /// Whether `counter` is the write after one this slot already carries:
+    /// upstream alternates slots by counter parity (`save.c:138-173`), so the
+    /// next write into a slot is two counters on.
+    fn is_next_write_into_this_slot(&self, generation: u32, counter: u32) -> bool {
+        let successor_of = |c: u32| c.wrapping_add(NUM_SAVE_SLOTS_U32) == counter;
+        successor_of(generation)
+            || self.save_block_counters[..self.save_block_count]
+                .iter()
+                .any(|&c| successor_of(c))
+    }
+
+    /// Whether the save-block sectors carrying `counter` hold all of ids 0-4.
+    fn save_block_generation_is_complete(&self, counter: u32) -> bool {
         /// Ids 0-4: every save-block payload fits within ids 5-12's, and
         /// the zero padding after the shorter ids 0 and 4 adds nothing to
         /// the word-sum checksum, so each verifies under a storage id.
-        const RELABEL_CAPABLE_IDS: u32 = LEGACY_ERA_IDS_MASK;
-        let mut seen = false;
-        let mut ids_present = 0u32;
-        for (&c, &id) in self.save_block_counters[..self.save_block_count]
+        const SAVE_BLOCK_IDS: u32 = LEGACY_ERA_IDS_MASK;
+        let ids_present = self.save_block_counters[..self.save_block_count]
             .iter()
             .zip(&self.save_block_ids[..self.save_block_count])
-        {
-            if c == counter {
-                seen = true;
-                ids_present |= 1 << id;
-            }
-        }
-        seen && ids_present & RELABEL_CAPABLE_IDS != RELABEL_CAPABLE_IDS
+            .filter(|&(&c, _)| c == counter)
+            .fold(0u32, |ids, (_, &id)| ids | 1 << id);
+        ids_present & SAVE_BLOCK_IDS == SAVE_BLOCK_IDS
     }
 
     /// The generation a stale tail belongs to, as its rotation and
