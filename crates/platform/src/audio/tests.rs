@@ -479,7 +479,10 @@ fn the_test_hooks_publish_a_measured_playback_position_on_the_null_backend() {
     output.advance_sounded_frames_for_test(1);
     assert_eq!(output.playback_progress().unwrap().sounded_frames, 4);
     assert_eq!(
-        output.playback_progress().unwrap().valid_timestamp_callbacks,
+        output
+            .playback_progress()
+            .unwrap()
+            .valid_timestamp_callbacks,
         2,
         "every hook call stands for one usable-timestamp callback, flat or not"
     );
