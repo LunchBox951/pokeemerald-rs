@@ -3,9 +3,6 @@ use crate::save::file::tests::{saved_store, sibling_path, TempDir};
 use crate::save::file::{SaveFile, SAVE_FILE_NAME};
 use crate::save::store::FLASH_IMAGE_LEN;
 
-// Only the platform-gated tests below reach these, so their imports carry the
-// same gate: an import a host compiles out every use of is a `dead_code`
-// warning, and warnings are denied.
 #[cfg(target_os = "linux")]
 use super::super::fill_new_file;
 #[cfg(windows)]
@@ -27,8 +24,6 @@ fn a_staging_name_collision_is_retried_onto_a_fresh_name() {
     let file = SaveFile::at(&path);
     let (store, _, _) = saved_store();
 
-    // The first attempt lands on an occupied name and the second on a free
-    // one, so only a retry that carries on past the collision can write.
     let occupied = sibling_path(&path, ".tmp.occupied");
     std::fs::write(&occupied, b"someone else's file").unwrap();
     let fresh = sibling_path(&path, ".tmp.fresh");
@@ -72,17 +67,15 @@ fn a_staging_name_collision_is_retried_onto_a_fresh_name() {
     assert_eq!(reloaded.flash_image(), store.flash_image());
 }
 
-/// Set in the re-executed child of
-/// [`a_staged_write_that_fails_after_creating_its_file_removes_it`].
 #[cfg(target_os = "linux")]
 const STAGING_WRITE_FAILURE_CHILD: &str = "POKEEMERALD_RS_STAGING_WRITE_FAILURE_CHILD";
 
 #[cfg(target_os = "linux")]
 #[test]
 fn a_staged_write_that_fails_after_creating_its_file_removes_it() {
-    // No in-process API can fail a write to a freshly created file, so the
-    // child re-executes this test under a file-size limit that the flash
-    // image exceeds, with SIGXFSZ ignored so the failure surfaces as EFBIG.
+    // The flash image exceeds the child's one-block file limit; SIGXFSZ is
+    // ignored so the failure is EFBIG (`FileTooLarge`), not process death.
+    const STAGING_FILE_LIMIT_BLOCKS: &str = "1";
     if std::env::var_os(STAGING_WRITE_FAILURE_CHILD).is_some() {
         let dir = TempDir::new("staging-write-failure");
         let staged = dir.join("staged.tmp");
@@ -99,7 +92,9 @@ fn a_staged_write_that_fails_after_creating_its_file_removes_it() {
     let exe = std::env::current_exe().expect("the test binary must be locatable");
     let output = std::process::Command::new("bash")
         .arg("-c")
-        .arg(r#"trap "" XFSZ; ulimit -f 1; exec "$0" "$1" --exact --nocapture"#)
+        .arg(format!(
+            r#"trap "" XFSZ; ulimit -f {STAGING_FILE_LIMIT_BLOCKS}; exec "$0" "$1" --exact --nocapture"#
+        ))
         .arg(&exe)
         .arg("save::file::staging::tests::creation_and_cleanup::a_staged_write_that_fails_after_creating_its_file_removes_it")
         .env(STAGING_WRITE_FAILURE_CHILD, "1")
@@ -122,9 +117,6 @@ fn a_symlink_planted_at_the_guessable_pid_staging_name_is_not_followed() {
     let bystander = dir.join("bystander");
     std::fs::write(&bystander, b"not a save file").unwrap();
 
-    // A symlink here targets the one name an attacker without this process's
-    // clock or entropy could still guess; the real staging name never
-    // matches it, and `create_new` refuses a symlink regardless.
     std::os::unix::fs::symlink(&bystander, guessable_pid_staging_path(&path)).unwrap();
 
     let file = SaveFile::at(&path);
@@ -154,8 +146,6 @@ fn a_symlink_at_the_staging_path_the_write_actually_uses_is_refused() {
     let bystander = dir.join("bystander");
     std::fs::write(&bystander, b"not a save file").unwrap();
 
-    // The symlink sits on the very name the staging attempt opens, so only
-    // the exclusive `create_new` open can keep the flash image off its target.
     let staging = sibling_path(&path, ".tmp.planted");
     std::os::unix::fs::symlink(&bystander, &staging).unwrap();
 
@@ -236,14 +226,8 @@ fn cleaning_up_a_failed_staged_write_leaves_the_entry_that_replaced_it_alone() {
     );
 }
 
-/// A directory the ownership check can see before the unlink runs is never a
-/// regular file, so it is caught by [`StagedSave::still_ours`] and no unlink
-/// is even attempted -- `remove_after` only ever calls `std::fs::remove_file`
-/// on an entry the check just confirmed is still this call's own staged
-/// file. Only a peer that lands the swap in the narrow gap between that
-/// check and the unlink -- the same accepted bound the rename window above
-/// documents -- could make the unlink itself observe a directory there, and
-/// no cheap seam exists to force that exact interleaving deterministically.
+// Ownership is checked before the unlink, so a swapped-in directory survives.
+// A check-to-unlink race remains; no seam forces that interleaving here.
 #[cfg(unix)]
 #[test]
 fn a_directory_that_replaces_the_staging_entry_survives_cleanup() {
@@ -277,10 +261,7 @@ fn a_directory_that_replaces_the_staging_entry_survives_cleanup() {
     );
 }
 
-/// Points the directory junction at `link` at `target`, replacing whatever
-/// it named before. Unlike a directory symlink this needs no privilege, so
-/// the ancestor-retarget regressions below never have to skip (mirrors
-/// `crates/rom-import/src/lib.rs`'s test helper of the same shape).
+// Junctions need no symlink privilege, unlike directory symlinks.
 #[cfg(windows)]
 fn junction(link: &Path, target: &Path) {
     let status = std::process::Command::new("cmd")
@@ -298,13 +279,8 @@ fn junction(link: &Path, target: &Path) {
     );
 }
 
-/// Issue #1132's "swapped entry must survive" regression: the peer never
-/// touches the staged entry itself, only an *ancestor* the staging path
-/// walks through, after [`StagedSave::release_hold`] has already given up
-/// the deny-all hold ([`StagedSave::remove_after`] releases it before this
-/// call even runs). Only the identity `remove_through_verified_handle`
-/// binds to the handle it opens for the delete -- not a fresh trust in
-/// whatever the path now resolves to -- can tell the two apart.
+// The hold is released before cleanup reopens the file, so deletion must
+// verify identity on its own handle, not trust the retargeted path.
 #[cfg(windows)]
 #[test]
 fn cleanup_leaves_a_file_reached_through_a_retargeted_ancestor_alone() {
@@ -340,11 +316,8 @@ fn cleanup_leaves_a_file_reached_through_a_retargeted_ancestor_alone() {
     );
 }
 
-/// An ancestor retargeted to an empty directory leaves the staging path
-/// reaching nothing while the staged image still sits under the junction's
-/// original target. Cleanup cannot remove it and must say so, folding the
-/// `NotFound` into the returned error the way the non-Windows arm folds its
-/// own, rather than returning the rename error alone.
+// A retarget to an empty directory orphans the staged image; cleanup must
+// report that, not return only the rename error.
 #[cfg(windows)]
 #[test]
 fn cleanup_reports_a_staged_image_an_ancestor_retarget_orphaned() {
@@ -382,14 +355,8 @@ fn cleanup_reports_a_staged_image_an_ancestor_retarget_orphaned() {
     );
 }
 
-/// The ancestor-retarget test above completes its swap before cleanup ever
-/// starts, so an implementation that re-resolves `path` for both the check
-/// and the delete would already pass it. This exercises the narrower
-/// window: `before_delete` retargets the ancestor after
-/// `remove_through_verified_handle_with` has already opened and
-/// identity-checked its handle, and only then may it delete. A handle-bound
-/// delete must still remove exactly the object it opened; it must never
-/// reach whatever the retargeted path now resolves to.
+// The retarget lands after the handle is identity-checked; the delete must
+// stay bound to that handle, never re-resolve the path.
 #[cfg(windows)]
 #[test]
 fn deletion_survives_an_ancestor_retargeted_between_the_check_and_the_delete() {
@@ -427,9 +394,8 @@ fn deletion_survives_an_ancestor_retargeted_between_the_check_and_the_delete() {
     );
 }
 
-/// A directory opens only with `FILE_FLAG_BACKUP_SEMANTICS`; without it the
-/// verifying open fails as access denied and cleanup reports a staging file
-/// that is already gone as left behind.
+// Opening a directory needs `FILE_FLAG_BACKUP_SEMANTICS`; without it the
+// verifying open fails as access denied.
 #[cfg(windows)]
 #[test]
 fn cleanup_leaves_a_directory_that_took_the_staging_name_alone() {
@@ -451,9 +417,8 @@ fn cleanup_leaves_a_directory_that_took_the_staging_name_alone() {
     );
 }
 
-/// A scanner or indexer opening the freshly written staging file must not
-/// turn cleanup into a sharing violation, and a POSIX delete must free the
-/// name while that reader still holds its handle.
+// A POSIX delete frees the name while a reader holds the file; the fallback
+// may stay `Pending` until the reader closes.
 #[cfg(windows)]
 #[test]
 fn cleanup_deletes_a_staged_file_another_process_still_reads() {
