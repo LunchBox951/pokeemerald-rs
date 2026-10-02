@@ -68,8 +68,24 @@ impl PackSource {
     ///
     /// See [`AssetPack::load`].
     pub(crate) fn load(self) -> Result<AssetPack, PackError> {
+        #[cfg(test)]
+        PACK_LOADS.with(|loads| loads.set(loads.get() + 1));
         AssetPack::load(&self.path())
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many times [`PackSource::load`] has run on this test thread.
+    static PACK_LOADS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Test-only: [`PackSource::load`] calls on this thread so far, so a test
+/// can pin how many full pack reads a code path performs. Per-thread, so
+/// concurrently running tests never see each other's loads.
+#[cfg(test)]
+pub(crate) fn pack_loads_on_this_thread() -> usize {
+    PACK_LOADS.with(std::cell::Cell::get)
 }
 
 #[cfg(test)]

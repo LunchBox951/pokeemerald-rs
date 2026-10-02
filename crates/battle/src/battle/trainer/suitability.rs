@@ -304,9 +304,9 @@ mod tests {
         const SANDSHREW: SpeciesId = SpeciesId(27);
         const MUDKIP: SpeciesId = SpeciesId(283);
         const PICHU: SpeciesId = SpeciesId(172);
-        const MEGA_KICK: MoveId = MoveId(25);
-        const TACKLE: MoveId = MoveId(33);
-        const WATER_GUN: MoveId = MoveId(55);
+        const MEGA_KICK: MoveId = MoveId::MEGA_KICK;
+        const TACKLE: MoveId = MoveId::TACKLE;
+        const WATER_GUN: MoveId = MoveId::WATER_GUN;
 
         let dex = Dex::new();
         let mon = |species, level, moves: Vec<MoveId>| {
@@ -347,9 +347,9 @@ mod tests {
         const GLIGAR: SpeciesId = SpeciesId(207);
         const PINSIR: SpeciesId = SpeciesId(127);
         const PICHU: SpeciesId = SpeciesId(172);
-        const MEGA_KICK: MoveId = MoveId(25);
-        const GUILLOTINE: MoveId = MoveId(12);
-        const THUNDER_SHOCK: MoveId = MoveId(84);
+        const MEGA_KICK: MoveId = MoveId::MEGA_KICK;
+        const GUILLOTINE: MoveId = MoveId::GUILLOTINE;
+        const THUNDER_SHOCK: MoveId = MoveId::THUNDER_SHOCK;
 
         let dex = Dex::new();
         let mon = |species, level, moves: Vec<MoveId>| {
@@ -389,9 +389,9 @@ mod tests {
     fn the_typing_pass_rejects_a_ground_move_the_players_levitate_refuses() {
         const KOFFING: SpeciesId = SpeciesId(109);
         const PICHU: SpeciesId = SpeciesId(172);
-        const EARTHQUAKE: MoveId = MoveId(89);
-        const CONFUSION: MoveId = MoveId(93);
-        const TACKLE: MoveId = MoveId(33);
+        const EARTHQUAKE: MoveId = MoveId::EARTHQUAKE;
+        const CONFUSION: MoveId = MoveId::CONFUSION;
+        const TACKLE: MoveId = MoveId::TACKLE;
 
         let dex = Dex::new();
         let mon = |species, level, moves: Vec<MoveId>| {
@@ -427,7 +427,7 @@ mod tests {
         // is reachable through `with_ability_slot`.
         const DELIBIRD: SpeciesId = SpeciesId(225);
         const SQUIRTLE: SpeciesId = SpeciesId(7);
-        const TACKLE: MoveId = MoveId(33);
+        const TACKLE: MoveId = MoveId::TACKLE;
 
         let dex = Dex::new();
         let hustle_fainted =
@@ -473,9 +473,9 @@ mod tests {
         const GLIGAR: SpeciesId = SpeciesId(207);
         const TORCHIC: SpeciesId = SpeciesId(280);
         const MUDKIP: SpeciesId = SpeciesId(283);
-        const THUNDER_SHOCK: MoveId = MoveId(84);
-        const WATER_GUN: MoveId = MoveId(55);
-        const TACKLE: MoveId = MoveId(33);
+        const THUNDER_SHOCK: MoveId = MoveId::THUNDER_SHOCK;
+        const WATER_GUN: MoveId = MoveId::WATER_GUN;
+        const TACKLE: MoveId = MoveId::TACKLE;
 
         let dex = Dex::new();
         let mon = |species, level, moves: Vec<MoveId>| {
@@ -515,9 +515,9 @@ mod tests {
         const METAGROSS: SpeciesId = SpeciesId(400);
         const KOFFING: SpeciesId = SpeciesId(109);
         const PICHU: SpeciesId = SpeciesId(172);
-        const MEGA_KICK: MoveId = MoveId(25);
-        const EARTHQUAKE: MoveId = MoveId(89);
-        const TACKLE: MoveId = MoveId(33);
+        const MEGA_KICK: MoveId = MoveId::MEGA_KICK;
+        const EARTHQUAKE: MoveId = MoveId::EARTHQUAKE;
+        const TACKLE: MoveId = MoveId::TACKLE;
 
         let dex = Dex::new();
         let mon = |species, level, moves: Vec<MoveId>| {

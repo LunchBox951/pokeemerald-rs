@@ -226,9 +226,15 @@ fn a_flag_set_mid_visit_leaves_the_entry_time_placement_in_force() {
         let (oam, _) = phase
             .scene
             .oam_entries_and_bg_scroll(&phase.player, &phase.save1.event_data);
-        let player = oam[0];
-        oam.into_iter().skip(1).find(|entry| {
-            entry.x() == player.x() && i32::from(entry.y()) == i32::from(player.y()) + 16
+        // Depth ordering moves the player's slot; its palette bank is 0.
+        let player = *oam
+            .iter()
+            .find(|entry| entry.palette_bank() == 0)
+            .expect("the player is drawn");
+        oam.into_iter().find(|entry| {
+            entry.palette_bank() != 0
+                && entry.x() == player.x()
+                && i32::from(entry.y()) == i32::from(player.y()) + 16
         })
     };
     assert_eq!(

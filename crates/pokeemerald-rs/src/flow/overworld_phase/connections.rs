@@ -149,6 +149,28 @@ pub(super) fn run_on_transition_map_script(
     }
 }
 
+/// [`OverworldPhase::prepare_map_entry_event_data`]'s phase-free core:
+/// `base` with temp field data cleared and the supported on-transition
+/// effects for `map` applied, returned uncommitted. Free so
+/// [`OverworldPhase::continue_saved_game`] can stage a flagged save's
+/// destination before any phase exists, loading it only once.
+pub(super) fn map_entry_event_data(
+    base: &engine::event_data::EventData,
+    map: assets::MapId,
+    player_gender: engine::save::PlayerGender,
+) -> engine::event_data::EventData {
+    let mut event_data = base.clone();
+    event_data.clear_temp_field_event_data();
+    run_on_transition_map_script(map, &mut event_data);
+    super::first_battle_trigger::sync_route_101_state_on_entry(map, &mut event_data);
+    super::route103_rival_trigger::setup_rival_gfx_id_on_transition(
+        map,
+        &mut event_data,
+        player_gender,
+    );
+    event_data
+}
+
 impl OverworldPhase {
     /// Clears temp field event data, then applies the supported
     /// on-transition script effects, in upstream's own ordering
@@ -160,16 +182,7 @@ impl OverworldPhase {
         map: assets::MapId,
         player_gender: engine::save::PlayerGender,
     ) -> engine::event_data::EventData {
-        let mut event_data = self.save1.event_data.clone();
-        event_data.clear_temp_field_event_data();
-        run_on_transition_map_script(map, &mut event_data);
-        super::first_battle_trigger::sync_route_101_state_on_entry(map, &mut event_data);
-        super::route103_rival_trigger::setup_rival_gfx_id_on_transition(
-            map,
-            &mut event_data,
-            player_gender,
-        );
-        event_data
+        map_entry_event_data(&self.save1.event_data, map, player_gender)
     }
 
     /// Prepares `map`'s post-transition event data, scene, and live object
@@ -366,7 +379,8 @@ impl OverworldPhase {
     /// `destination`'s three branches in upstream's own order.
     ///
     /// Same shape as [`OverworldPhase::warp_to`] otherwise, including its
-    /// failure contract.
+    /// failure contract. Returns whether the warp landed: `false` means the
+    /// phase is untouched.
     ///
     /// Unlike [`OverworldPhase::warp_to_position`], `save1.location` is set
     /// to `destination` **verbatim**, warp id included: a later white-out
@@ -376,41 +390,55 @@ impl OverworldPhase {
     /// # Panics
     ///
     /// Same as [`OverworldPhase::warp_to`].
-    pub(super) fn warp_to_saved_location(&mut self, map: assets::MapId, destination: WarpData) {
+    pub(super) fn warp_to_saved_location(
+        &mut self,
+        map: assets::MapId,
+        destination: WarpData,
+    ) -> bool {
         let Ok(header) = MapHeaderTable::new().header(map) else {
             eprintln!("warp: unknown destination map {map:?} -- staying put");
-            return;
+            return false;
         };
         let Ok(events) = MapEventsTable::new().resolve(map) else {
             eprintln!("warp: no event data for destination map {map:?} -- staying put");
-            return;
+            return false;
         };
         let Some((transitioned_event_data, scene, object_events)) = self.stage_transition(map)
         else {
             eprintln!("warp: failed to load destination map {map:?} -- staying put");
-            return;
+            return false;
         };
-        let position = {
-            let runtime = scene.runtime(map, header, events);
-            saved_warp_position(&runtime, events, destination).map(|(x, y, elevation)| {
-                let behavior = runtime
-                    .metatile_behavior(i32::from(x), i32::from(y))
-                    .unwrap_or(engine::overworld::metatile_behavior::MB_NORMAL);
-                (x, y, elevation, warp_in_facing(behavior))
-            })
+        let Some(landing) = saved_location_landing(&scene, map, header, events, destination) else {
+            return false;
         };
-        let Some((x, y, elevation, facing)) = position else {
-            eprintln!(
-                "warp: saved location {destination:?} names no position inside map {map:?} -- \
-                 staying put"
-            );
-            return;
-        };
+        self.scene = scene;
+        self.commit_saved_location_landing(
+            map,
+            destination,
+            landing,
+            transitioned_event_data,
+            object_events,
+        );
+        true
+    }
 
+    /// The commit half of [`Self::warp_to_saved_location`], for a `landing`
+    /// already resolved ([`saved_location_landing`]) against the scene
+    /// `self.scene` already holds for `map`: every field the warp rebinds
+    /// except the scene itself. Split out so
+    /// [`Self::continue_saved_game`] can land a flagged save on the one
+    /// scene it loaded instead of loading the destination a second time.
+    pub(super) fn commit_saved_location_landing(
+        &mut self,
+        map: assets::MapId,
+        destination: WarpData,
+        (x, y, elevation, facing): SavedLanding,
+        transitioned_event_data: engine::event_data::EventData,
+        object_events: ObjectEventCollection,
+    ) {
         self.player =
             engine::overworld::PlayerState::new((i32::from(x), i32::from(y)), elevation, facing);
         self.pending_landing = None;
-        self.scene = scene;
         self.object_events = object_events;
         self.map_id = map;
         self.tick = 0;
@@ -503,6 +531,37 @@ pub(super) fn seed_object_events(
     Some(ObjectEventCollection::from_templates(
         scene.map_events(map).ok()?.object_events,
     ))
+}
+
+/// A saved-location landing: position, elevation, and warp-in facing.
+pub(super) type SavedLanding = (i16, i16, u8, engine::overworld::Direction);
+
+/// Resolves where a saved-location warp to `destination` lands inside
+/// `scene` (already loaded for `map`): [`saved_warp_position`], faced the
+/// way the landing tile's metatile behavior dictates ([`warp_in_facing`]).
+/// Logs and returns `None` when `destination` names no position inside
+/// `map`.
+pub(super) fn saved_location_landing(
+    scene: &overworld::OverworldScene,
+    map: assets::MapId,
+    header: &assets::MapHeader,
+    events: &assets::MapEvents,
+    destination: WarpData,
+) -> Option<SavedLanding> {
+    let runtime = scene.runtime(map, header, events);
+    let landing = saved_warp_position(&runtime, events, destination).map(|(x, y, elevation)| {
+        let behavior = runtime
+            .metatile_behavior(i32::from(x), i32::from(y))
+            .unwrap_or(engine::overworld::metatile_behavior::MB_NORMAL);
+        (x, y, elevation, warp_in_facing(behavior))
+    });
+    if landing.is_none() {
+        eprintln!(
+            "warp: saved location {destination:?} names no position inside map {map:?} -- \
+             staying put"
+        );
+    }
+    landing
 }
 
 /// `SetPlayerCoordsFromWarp` (`src/overworld.c:603-624`): a

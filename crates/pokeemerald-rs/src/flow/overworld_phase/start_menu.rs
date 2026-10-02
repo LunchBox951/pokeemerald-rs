@@ -285,12 +285,13 @@ impl OverworldPhase {
     /// not on this path; it belongs to `NewGameInitData` and the battle
     /// facilities.
     ///
-    /// **Object events** (`SaveObjectEvents`): only the player's two
-    /// direction nibbles ([`engine::save::SavedObjectEvent`]'s own docs),
-    /// each from its own field. They differ only on a slide's landing
-    /// frame, where START is claimed before `ForcedMovement_None` resets
-    /// `movementDirection` to the locked facing
-    /// (`src/field_player_avatar.c:429-440, 526-532`, `src/overworld.c:1444-1455`).
+    /// **Object events** (`SaveObjectEvents`): the player's two direction
+    /// nibbles, each from its own field, plus the current/previous elevation
+    /// pair and the active bit ([`engine::save::SavedObjectEvent`]'s own
+    /// docs). The nibbles differ only on a slide's landing frame, where START
+    /// is claimed before `ForcedMovement_None` resets `movementDirection` to
+    /// the locked facing (`src/field_player_avatar.c:429-440, 526-532`,
+    /// `src/overworld.c:1444-1455`).
     pub(super) fn copy_party_and_objects_to_save(&mut self) {
         let slot = self.party_lead_slot;
         if let Some(lead) = &self.party_lead {
@@ -310,6 +311,9 @@ impl OverworldPhase {
         self.save1.player_object_event = SavedObjectEvent {
             facing_direction: self.player.facing().to_dir_id(),
             movement_direction: self.player.movement_direction().to_dir_id(),
+            active: true,
+            current_elevation: self.player.elevation(),
+            previous_elevation: self.player.previous_elevation(),
         };
     }
 
