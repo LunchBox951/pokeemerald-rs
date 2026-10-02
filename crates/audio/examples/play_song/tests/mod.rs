@@ -23,17 +23,17 @@ mod validity;
 
 /// A snapshot from a device whose callbacks never carry a usable timestamp.
 fn progress(sounded_frames: u64, submitted_frames: u64) -> PlaybackProgress {
-    progress_valid(sounded_frames, submitted_frames, 0)
+    progress_usable(sounded_frames, submitted_frames, 0)
 }
 
-fn progress_valid(
+fn progress_usable(
     sounded_frames: u64,
     submitted_frames: u64,
-    valid_timestamp_callbacks: u64,
+    usable_through_frames: u64,
 ) -> PlaybackProgress {
     PlaybackProgress {
         submitted_frames,
         sounded_frames,
-        valid_timestamp_callbacks,
+        usable_through_frames,
     }
 }

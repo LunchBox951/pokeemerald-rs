@@ -1,4 +1,4 @@
-//! The validity count: usable timestamps keep the measured wait in force.
+//! The usable mark: usable timestamps keep the measured wait in force.
 
 use super::*;
 
@@ -13,6 +13,8 @@ fn a_valid_then_stale_transition_keeps_the_capped_budget() {
     let start = std::time::Instant::now();
     let clock = Rc::new(RefCell::new(start));
     let submitted = Cell::new(100_u64);
+    // Callbacks are usable until 300 ms, then stale.
+    let usable = Cell::new(0_u64);
 
     let result = wait_for_measured_tail(
         100,
@@ -21,14 +23,14 @@ fn a_valid_then_stale_transition_keeps_the_capped_budget() {
         &policy,
         || {
             let ms = clock.borrow().duration_since(start).as_millis();
-            Some(progress_valid(
+            Some(progress_usable(
                 if ms < 300 {
                     u64::try_from(ms / 10).unwrap_or(0)
                 } else {
                     30
                 },
                 submitted.get(),
-                u64::try_from((ms / 10).min(30)).unwrap_or(0),
+                usable.get(),
             ))
         },
         || 0,
@@ -36,6 +38,9 @@ fn a_valid_then_stale_transition_keeps_the_capped_budget() {
         |duration| {
             *clock.borrow_mut() += duration;
             submitted.set(submitted.get() + 1);
+            if clock.borrow().duration_since(start).as_millis() < 300 {
+                usable.set(submitted.get());
+            }
         },
     );
 
@@ -56,7 +61,7 @@ fn a_fresh_sounded_estimate_below_target_is_not_overridden_by_the_tail() {
     // 1 s submitted before the drain; 400 ms of output latency.
     let submitted = Cell::new(48_000_u64);
     let sounded = Cell::new(48_000_u64 - 19_200);
-    let valid = Cell::new(0_u64);
+    let usable = Cell::new(0_u64);
 
     let result = wait_for_measured_tail(
         48_000,
@@ -65,7 +70,13 @@ fn a_fresh_sounded_estimate_below_target_is_not_overridden_by_the_tail() {
         std::time::Duration::from_millis(250),
         48_000,
         &policy,
-        || Some(progress_valid(sounded.get(), submitted.get(), valid.get())),
+        || {
+            Some(progress_usable(
+                sounded.get(),
+                submitted.get(),
+                usable.get(),
+            ))
+        },
         || 0,
         || *clock.borrow(),
         |duration| {
@@ -77,8 +88,8 @@ fn a_fresh_sounded_estimate_below_target_is_not_overridden_by_the_tail() {
                 .is_multiple_of(100)
             {
                 // Every 100 ms callback carries a usable timestamp.
-                valid.set(valid.get() + 1);
                 submitted.set(submitted.get() + 4_800);
+                usable.set(submitted.get());
                 sounded.set(sounded.get() + 4_800);
             }
         },
@@ -105,14 +116,20 @@ fn a_preempted_sounded_store_is_not_stale_evidence() {
     let clock = Rc::new(RefCell::new(start));
     let submitted = Cell::new(48_000_u64);
     let sounded = Cell::new(48_000_u64 - 19_200);
-    let valid = Cell::new(0_u64);
+    let usable = Cell::new(0_u64);
 
     let result = wait_for_measured_tail(
         48_000,
         std::time::Duration::from_millis(200),
         48_000,
         &policy,
-        || Some(progress_valid(sounded.get(), submitted.get(), valid.get())),
+        || {
+            Some(progress_usable(
+                sounded.get(),
+                submitted.get(),
+                usable.get(),
+            ))
+        },
         || 0,
         || *clock.borrow(),
         |duration| {
@@ -120,9 +137,9 @@ fn a_preempted_sounded_store_is_not_stale_evidence() {
             let ms = clock.borrow().duration_since(start).as_millis();
             if ms == 50 {
                 // 200 ms of playback; the callback is preempted before its
-                // sounded store, but its validity count is already out.
-                valid.set(valid.get() + 1);
+                // sounded store, but its usable mark is already out.
                 submitted.set(submitted.get() + 9_600);
+                usable.set(submitted.get());
             }
             if ms == 300 {
                 sounded.set(48_000);
@@ -142,7 +159,7 @@ fn a_preempted_sounded_store_is_not_stale_evidence() {
 /// `a_fresh_sounded_estimate_below_target_is_not_overridden_by_the_tail`,
 /// but let one snapshot field lag the other by a poll, as separately
 /// loaded atomics can: the sounded estimate when `sounded_lags`, else the
-/// submitted frames (so the validity count is seen a poll early). Returns
+/// submitted frames (so the usable mark is seen a poll early). Returns
 /// the wait's result and its elapsed time.
 fn torn_snapshot_wait(sounded_lags: bool) -> (Result<(), DrainError>, std::time::Duration) {
     let policy = RetryPolicy {
@@ -153,7 +170,7 @@ fn torn_snapshot_wait(sounded_lags: bool) -> (Result<(), DrainError>, std::time:
     let clock = Rc::new(RefCell::new(start));
     let submitted = Cell::new(48_000_u64);
     let sounded = Cell::new(48_000_u64 - 19_200);
-    let valid = Cell::new(0_u64);
+    let usable = Cell::new(0_u64);
     // The field the poll sees one interval late, as (seen, actual).
     let initial = if sounded_lags {
         sounded.get()
@@ -169,9 +186,9 @@ fn torn_snapshot_wait(sounded_lags: bool) -> (Result<(), DrainError>, std::time:
         || {
             let (seen, _) = lagging.get();
             Some(if sounded_lags {
-                progress_valid(seen, submitted.get(), valid.get())
+                progress_usable(seen, submitted.get(), usable.get())
             } else {
-                progress_valid(sounded.get(), seen, valid.get())
+                progress_usable(sounded.get(), seen, usable.get())
             })
         },
         || 0,
@@ -187,7 +204,7 @@ fn torn_snapshot_wait(sounded_lags: bool) -> (Result<(), DrainError>, std::time:
             {
                 submitted.set(submitted.get() + 4_800);
                 sounded.set(sounded.get() + 4_800);
-                valid.set(valid.get() + 1);
+                usable.set(submitted.get());
             }
             let current = if sounded_lags {
                 sounded.get()
@@ -202,8 +219,8 @@ fn torn_snapshot_wait(sounded_lags: bool) -> (Result<(), DrainError>, std::time:
     (result, elapsed)
 }
 
-/// A poll that sees a usable callback's submitted frames and validity
-/// count before its sounded estimate must not read it as timestamp-stale.
+/// A poll that sees a usable callback's submitted frames and usable
+/// mark before its sounded estimate must not read it as timestamp-stale.
 #[test]
 fn a_submitted_advance_seen_before_its_sounded_update_is_not_stale() {
     let (result, elapsed) = torn_snapshot_wait(true);
@@ -215,10 +232,10 @@ fn a_submitted_advance_seen_before_its_sounded_update_is_not_stale() {
     );
 }
 
-/// A poll that sees a usable callback's validity count before its
+/// A poll that sees a usable callback's usable mark before its
 /// submitted frames must not read the next poll's advance as stale.
 #[test]
-fn a_validity_count_seen_before_its_submitted_advance_is_not_stale() {
+fn a_usable_mark_seen_before_its_submitted_advance_is_not_stale() {
     let (result, elapsed) = torn_snapshot_wait(false);
 
     assert!(result.is_ok());
@@ -240,20 +257,20 @@ fn usable_estimates_that_stay_flat_are_not_stale_timestamps() {
     let start = std::time::Instant::now();
     let clock = Rc::new(RefCell::new(start));
     let submitted = Cell::new(4_800_u64);
-    let valid = Cell::new(0_u64);
+    let usable = Cell::new(0_u64);
 
     let result = wait_for_measured_tail(
         9_600,
         std::time::Duration::from_millis(200),
         48_000,
         &policy,
-        || Some(progress_valid(100, submitted.get(), valid.get())),
+        || Some(progress_usable(100, submitted.get(), usable.get())),
         || 0,
         || *clock.borrow(),
         |duration| {
             *clock.borrow_mut() += duration;
-            valid.set(valid.get() + 1);
             submitted.set(submitted.get() + 480);
+            usable.set(submitted.get());
         },
     );
     let elapsed = clock.borrow().duration_since(start);
@@ -268,7 +285,7 @@ fn usable_estimates_that_stay_flat_are_not_stale_timestamps() {
     );
 }
 
-/// The same descheduled poll, but the validity count moved with the
+/// The same descheduled poll, but the usable mark moved with the
 /// aggregate: usable timestamps keep the measured wait in force.
 #[test]
 fn a_lone_aggregate_with_usable_timestamps_times_out_at_the_deadline() {
@@ -279,7 +296,7 @@ fn a_lone_aggregate_with_usable_timestamps_times_out_at_the_deadline() {
     let start = std::time::Instant::now();
     let clock = Rc::new(RefCell::new(start));
     let submitted = Cell::new(4_u64);
-    let valid = Cell::new(0_u64);
+    let usable = Cell::new(0_u64);
     let mut first_sleep = true;
 
     let result = wait_for_measured_tail(
@@ -287,14 +304,14 @@ fn a_lone_aggregate_with_usable_timestamps_times_out_at_the_deadline() {
         std::time::Duration::from_millis(200),
         48_000,
         &policy,
-        || Some(progress_valid(0, submitted.get(), valid.get())),
+        || Some(progress_usable(0, submitted.get(), usable.get())),
         || 0,
         || *clock.borrow(),
         |duration| {
             if std::mem::take(&mut first_sleep) {
                 *clock.borrow_mut() += std::time::Duration::from_millis(310);
                 submitted.set(submitted.get() + 12_000);
-                valid.set(valid.get() + 1);
+                usable.set(submitted.get());
             } else {
                 *clock.borrow_mut() += duration;
             }
@@ -305,4 +322,61 @@ fn a_lone_aggregate_with_usable_timestamps_times_out_at_the_deadline() {
         result,
         Err(DrainError::MeasuredTailTimedOut { .. })
     ));
+}
+
+/// The first callback's usable mark can be published one poll before its
+/// submitted frames (`PlaybackClock::record` stores the mark first). When the
+/// wait's initial snapshot already holds that mark, the callback's submitted
+/// advance is still a usable callback, not stale evidence: the wait must hold
+/// for the measured target rather than finishing on the derived tail.
+#[test]
+fn a_usable_mark_published_before_the_first_snapshot_is_not_stale_evidence() {
+    let policy = RetryPolicy {
+        interval: std::time::Duration::from_millis(10),
+        max_wait: std::time::Duration::from_secs(1),
+    };
+    let start = std::time::Instant::now();
+    let clock = Rc::new(RefCell::new(start));
+    // The in-flight 200 ms callback has stored its usable mark (57 600) but
+    // not yet its submitted frames.
+    let submitted = Cell::new(48_000_u64);
+    let sounded = Cell::new(28_800_u64);
+    let usable = Cell::new(57_600_u64);
+
+    let result = wait_for_measured_tail(
+        57_600,
+        // `device_tail_wait(None, 48_000)`.
+        DEVICE_TAIL_FALLBACK,
+        48_000,
+        &policy,
+        || {
+            Some(progress_usable(
+                sounded.get(),
+                submitted.get(),
+                usable.get(),
+            ))
+        },
+        || 0,
+        || *clock.borrow(),
+        |duration| {
+            *clock.borrow_mut() += duration;
+            let ms = clock.borrow().duration_since(start).as_millis();
+            if ms == 10 {
+                // The pending submitted store of the already-marked callback.
+                submitted.set(57_600);
+            } else if ms % 200 == 10 {
+                // Every later 200 ms callback carries a usable timestamp.
+                submitted.set(submitted.get() + 9_600);
+                usable.set(submitted.get());
+                sounded.set(sounded.get() + 9_600);
+            }
+        },
+    );
+    let elapsed = clock.borrow().duration_since(start);
+
+    assert!(result.is_ok());
+    assert!(
+        elapsed >= std::time::Duration::from_millis(600),
+        "finished at {elapsed:?}, before the measured target sounded"
+    );
 }

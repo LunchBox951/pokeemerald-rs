@@ -338,3 +338,39 @@ fn a_stream_error_during_the_derived_tail_fallback_fails_the_drain() {
         Err(DrainError::StreamStoppedDuringTail { errors: 1 })
     ));
 }
+
+/// A 600 ms gap between healthy 600 ms callbacks is one period, not a stall,
+/// even though it is over half a capped one-second tail.
+#[test]
+fn repeated_phase_shifted_600_ms_callbacks_at_a_capped_tail_take_the_fallback() {
+    let policy = RetryPolicy {
+        interval: std::time::Duration::from_millis(10),
+        max_wait: std::time::Duration::from_secs(1),
+    };
+    let start = std::time::Instant::now();
+    let clock = Rc::new(RefCell::new(start));
+    let submitted = Cell::new(28_800_u64);
+
+    let result = wait_for_measured_tail(
+        28_800,
+        std::time::Duration::from_secs(1),
+        48_000,
+        &policy,
+        || Some(progress(0, submitted.get())),
+        || 0,
+        || *clock.borrow(),
+        |duration| {
+            *clock.borrow_mut() += duration;
+            // Healthy callbacks every 600 ms, phase-shifted to 100 and 700 ms.
+            let ms = clock.borrow().duration_since(start).as_millis();
+            if ms == 100 || ms == 700 {
+                submitted.set(submitted.get() + 28_800);
+            }
+        },
+    );
+
+    assert!(
+        !matches!(result, Err(DrainError::MeasuredTailTimedOut { .. })),
+        "steady 600 ms callbacks must not time out"
+    );
+}

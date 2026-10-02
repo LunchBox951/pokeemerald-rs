@@ -515,15 +515,17 @@ fn wait_for_device_tail(
 /// error before the target is reached is not a finish either. The signal
 /// disappearing mid-wait is not itself a failure.
 ///
-/// Stale timestamps are read from `valid_timestamp_callbacks`, never from the
-/// sounded estimate's shape: a submitted advance with no increase in that
-/// count is stale evidence at once, and any increase discards the evidence
-/// (a usable callback keeps the measured wait in force). Evidence of at least
+/// Stale timestamps are read from `usable_through_frames`, never from the
+/// sounded estimate's shape: a submitted advance `(from, to]` is stale evidence
+/// at once when that mark does not exceed `from`, and one that does discards
+/// the evidence (a usable callback keeps the measured wait in force). Evidence of at least
 /// `derived_tail / 4` (a span of advances, or one covering that much
 /// playback) with the latest advance within one recent inter-advance gap
 /// (over the last [`CADENCE_WINDOW`]) plus two polls means live callbacks,
 /// and once `derived_tail` has run from the start of the wait the wait
-/// finishes as [`wait_for_device_tail`] would. A gap past half `derived_tail`
+/// finishes as [`wait_for_device_tail`] would. A gap that outruns both the
+/// recent cadence and the playback the previous advance covered by a tenth of
+/// `derived_tail` (and over a quarter of it, or half before a cadence is seen)
 /// is a stall: evidence and cadence restart from the playback the resumed
 /// callback covers, and that callback alone is no evidence.
 ///
@@ -547,15 +549,12 @@ fn wait_for_measured_tail(
 ) -> Result<(), DrainError> {
     let started = now();
     let deadline = started + policy.max_wait;
-    let mut last_valid = None;
     let mut last_submitted = None;
     let mut last_poll = started;
     let mut last_advance = None;
     let mut recent_cadence = [Duration::ZERO; CADENCE_WINDOW];
     let mut advances = 0_usize;
-    // A usable callback stores its validity count before its submitted frames,
-    // so a poll can see the count a poll before the frames it accompanies.
-    let mut valid_ahead = false;
+    let mut last_played = Duration::ZERO;
     let mut first_stale = None;
     let mut last_stale = None;
     let mut max_stale_advance = Duration::ZERO;
@@ -569,7 +568,7 @@ fn wait_for_measured_tail(
         let Some(PlaybackProgress {
             sounded_frames: sounded,
             submitted_frames: submitted,
-            valid_timestamp_callbacks: valid,
+            usable_through_frames: usable_through,
         }) = snapshot
         else {
             return Ok(());
@@ -578,13 +577,6 @@ fn wait_for_measured_tail(
             return Ok(());
         }
         let current = now();
-        let valid_advanced = last_valid.is_some_and(|last| valid > last);
-        if valid_advanced {
-            first_stale = None;
-            last_stale = None;
-            max_stale_advance = Duration::ZERO;
-            after_stall = false;
-        }
         if let Some(previous) = last_submitted.filter(|&last| submitted > last) {
             let frames = u32::try_from(submitted - previous).unwrap_or(u32::MAX);
             let played = if device_sample_rate > 0 {
@@ -600,11 +592,29 @@ fn wait_for_measured_tail(
             let gap = last_advance.map_or(Duration::ZERO, |previous_at| {
                 at.saturating_duration_since(previous_at)
             });
-            // A healthy period is under half the derived tail (two queued
-            // periods plus margin), so a longer gap is a stall: what came
-            // before says nothing about the resumed callbacks, and the gap
-            // itself is not their cadence.
-            let cadence_sample = if gap > derived_tail / 2 {
+            // The span `(previous, submitted]` held a usable callback when the
+            // mark (stored before the frames it covers) lies past `previous`.
+            let usable = usable_through > previous;
+            if usable {
+                first_stale = None;
+                last_stale = None;
+                max_stale_advance = Duration::ZERO;
+                after_stall = false;
+            }
+            // A healthy gap is about one period: what the window has seen, or
+            // the playback the last advance covered. One that outruns both by
+            // a tenth of the tail is a stall: what came before says nothing
+            // about the resumed callbacks, and the gap itself is not their
+            // cadence.
+            let seen = recent_cadence.iter().copied().max().unwrap_or_default();
+            // With one advance seen there is no cadence yet, only the gap.
+            let floor = if advances >= 2 {
+                derived_tail / 4
+            } else {
+                derived_tail / 2
+            };
+            let stalled = gap > floor && gap > seen.max(last_played) + derived_tail / 10;
+            let cadence_sample = if stalled {
                 first_stale = None;
                 last_stale = None;
                 max_stale_advance = Duration::ZERO;
@@ -617,17 +627,14 @@ fn wait_for_measured_tail(
             recent_cadence[advances % CADENCE_WINDOW] = cadence_sample;
             advances = advances.wrapping_add(1);
             last_advance = Some(at);
-            if !valid_advanced && !valid_ahead {
+            last_played = played;
+            if !usable {
                 first_stale.get_or_insert(at);
                 last_stale = Some(at);
                 max_stale_advance = max_stale_advance.max(played);
             }
-            valid_ahead = false;
-        } else if valid_advanced {
-            valid_ahead = true;
         }
         last_poll = current;
-        last_valid = Some(valid);
         last_submitted = Some(submitted);
         let cadence = recent_cadence.iter().copied().max().unwrap_or_default();
         let quarter_tail = derived_tail / 4;
