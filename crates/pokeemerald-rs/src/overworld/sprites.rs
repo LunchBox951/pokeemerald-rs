@@ -44,18 +44,19 @@ impl SceneSprites {
         })
     }
 
-    /// Returns the player first because lower OAM indices win same-priority
-    /// ties, making the player draw over an overlapping NPC.
+    /// Lists the player first, then NPCs in template order, then orders each
+    /// priority group by upstream's y-derived subpriority
+    /// ([`npc::order_by_depth`]); the player leads a tie in every sort key.
     #[must_use]
     pub(super) fn entries(&self, player: &PlayerState, event_data: &EventData) -> Vec<OamEntry> {
-        let mut entries = vec![avatar::player_entry(player)];
-        entries.extend(npc::oam_entries(
+        let mut entries = vec![(avatar::player_entry(player), player.previous_elevation())];
+        entries.extend(npc::elevated_oam_entries(
             self.object_events,
             &self.bindings,
             player,
             event_data,
         ));
-        entries
+        npc::order_by_depth(&entries)
     }
 
     pub(super) const fn tiles(&self) -> &Tileset {

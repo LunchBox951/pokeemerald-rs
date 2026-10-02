@@ -37,10 +37,10 @@
 
 use engine::event_data::EventData;
 use engine::overworld::{Direction, PlayerState};
-use engine::save::{BoxPokemon, Pokemon, SaveBlock1, SaveBlock2};
+use engine::save::{BoxPokemon, Pokemon, SaveBlock1, SaveBlock2, WarpData};
 use platform::Buttons;
 
-use super::overworld_phase::{saved_map_id, OverworldPhase};
+use super::overworld_phase::{saved_map_id, take_continue_game_warp, OverworldPhase};
 use super::tests::{drive_through_fade_wait, held, pressed, TempSave};
 use super::{menu_type_for, AppScene, MainMenuState};
 use crate::game_save::SaveSlot;
@@ -924,6 +924,113 @@ fn a_save_pointing_at_no_known_map_does_not_resume() {
     );
 }
 
+/// A block pair whose `location` and `continue_game_warp` name different,
+/// real maps, so a continue that lands at the wrong one is visible.
+fn blocks_with_divergent_continue_game_warp(flagged: bool) -> (SaveBlock1, SaveBlock2) {
+    let block1 = SaveBlock1 {
+        location: WarpData {
+            map_group: 1,
+            map_num: 0,
+            warp_id: -1,
+            x: 3,
+            y: 4,
+        },
+        continue_game_warp: WarpData {
+            map_group: new_game::SPAWN_MAP_GROUP,
+            map_num: new_game::SPAWN_MAP_NUM,
+            warp_id: -1,
+            x: 5,
+            y: 6,
+        },
+        ..SaveBlock1::default()
+    };
+    let block2 = SaveBlock2 {
+        special_save_warp_flags: if flagged {
+            SaveBlock2::CONTINUE_GAME_WARP | 0x80
+        } else {
+            0x80
+        },
+        ..SaveBlock2::default()
+    };
+    (block1, block2)
+}
+
+/// `UseContinueGameWarp` (`src/load_save.c:134-137`): a flagged save takes
+/// the warp branch, and `ClearContinueGameWarpStatus` (`:139-142`) clears
+/// only that bit -- the saved destination itself is left for the landing.
+#[test]
+fn a_flagged_save_takes_the_continue_game_warp_and_consumes_only_its_bit() {
+    let (block1, mut block2) = blocks_with_divergent_continue_game_warp(true);
+    let taken = take_continue_game_warp(&block1, &mut block2)
+        .expect("a real destination resolves")
+        .expect("the flag selects the warp branch");
+    assert_eq!(taken.0, new_game::SPAWN_MAP_ID);
+    assert_eq!(taken.1, block1.continue_game_warp);
+    assert_ne!(taken.1, block1.location, "the fixture must diverge");
+    assert!(!block2.continue_game_warp_pending());
+    assert_eq!(block2.special_save_warp_flags, 0x80);
+}
+
+/// An unflagged continue keeps the `InitMapFromSavedGame`-equivalent
+/// restore: no warp is chosen and `block2` is untouched.
+#[test]
+fn an_unflagged_save_keeps_the_ordinary_restore() {
+    let (block1, mut block2) = blocks_with_divergent_continue_game_warp(false);
+    let before = block2.clone();
+    assert!(take_continue_game_warp(&block1, &mut block2)
+        .expect("nothing to resolve")
+        .is_none());
+    assert_eq!(block2, before);
+}
+
+/// A flagged save whose `continue_game_warp` names no map fails closed,
+/// without needing a pack, instead of resuming at `location`.
+#[test]
+fn a_flagged_save_with_an_unknown_continue_game_warp_does_not_resume() {
+    let (mut block1, block2) = blocks_with_divergent_continue_game_warp(true);
+    block1.continue_game_warp.map_group = 127;
+    let Err(err) = OverworldPhase::continue_saved_game(
+        crate::pack_source::PackSource::Runtime,
+        block1,
+        block2,
+    ) else {
+        panic!("an unresolvable continue-game warp must not resume at `location`");
+    };
+    assert!(
+        err.to_string().contains("continue-game warp"),
+        "the diagnostic must say why: {err}"
+    );
+}
+
+/// A flagged save whose `continue_game_warp` names a known map but cannot
+/// land (here: no pack loads the destination, and equally for a
+/// `warp_id = -1` warp with out-of-bounds coordinates) must not resume,
+/// even when it equals the phase's own `location` -- identity with the
+/// destination is not evidence the warp ran.
+#[test]
+fn a_flagged_warp_equal_to_location_that_cannot_land_does_not_resume() {
+    let mut phase = new_game_phase();
+    let destination = WarpData {
+        map_group: new_game::SPAWN_MAP_GROUP,
+        map_num: new_game::SPAWN_MAP_NUM,
+        warp_id: -1,
+        x: i16::MAX,
+        y: i16::MAX,
+    };
+    phase.save1.location = destination;
+    phase.save1.continue_game_warp = destination;
+    phase.save2.special_save_warp_flags |= SaveBlock2::CONTINUE_GAME_WARP;
+    assert!(
+        OverworldPhase::continue_saved_game(
+            crate::pack_source::PackSource::Runtime,
+            phase.save1.clone(),
+            phase.save2.clone(),
+        )
+        .is_err(),
+        "a refused warp must fail the continue"
+    );
+}
+
 /// The `#[ignore]`d half of the round trip (module docs): the whole
 /// `CONTINUE` press, through `advance_scene` and the real
 /// `OverworldPhase::continue_saved_game` -> `crate::overworld::load_room`.
@@ -1173,4 +1280,58 @@ fn saving_twice_in_one_session_files_the_same_bytes() {
         second.to_bytes(),
         "a second save with no play in between must file the same record"
     );
+}
+
+/// The landing half of `UseContinueGameWarp`, on the real-pack lane (no
+/// pack-free seam reaches a landed saved-location warp): a flagged save
+/// resumes at `continue_game_warp` rather than `location`, the flag is gone,
+/// temp field data is cleared, the supported on-transition effect (the
+/// bedroom's decoration flags) ran, and the destination was loaded from the
+/// pack exactly once.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn real_pack_flagged_continue_lands_at_the_continue_game_warp() {
+    const FLAG_TEMP_1: u16 = 0x1;
+    let downstairs = assets::MapHeaderTable::new()
+        .header(assets::MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F"))
+        .expect("the 1F map exists");
+    let (mut block1, mut block2) = blocks_with_divergent_continue_game_warp(true);
+    block1.location = WarpData {
+        map_group: i8::try_from(downstairs.group).unwrap(),
+        map_num: i8::try_from(downstairs.num).unwrap(),
+        warp_id: -1,
+        x: 3,
+        y: 3,
+    };
+    block1.continue_game_warp = WarpData {
+        warp_id: -1,
+        x: i16::try_from(new_game::SPAWN_POSITION.0).unwrap(),
+        y: i16::try_from(new_game::SPAWN_POSITION.1).unwrap(),
+        ..block1.continue_game_warp
+    };
+    block2.player_gender = engine::save::PlayerGender::Male;
+    block1.event_data.flag_set(FLAG_TEMP_1).unwrap();
+    let decoration = assets::object_event_flags::DECORATION_FLAGS[0];
+    assert!(!block1.event_data.flag_get(decoration).unwrap());
+
+    let loads_before = crate::pack_source::pack_loads_on_this_thread();
+    let phase = OverworldPhase::continue_saved_game(
+        crate::pack_source::PackSource::Runtime,
+        block1.clone(),
+        block2,
+    )
+    .expect("run `cargo xtask extract` first");
+
+    assert_eq!(
+        crate::pack_source::pack_loads_on_this_thread() - loads_before,
+        1,
+        "a flagged continue loads its destination's pack exactly once"
+    );
+    assert_eq!(phase.map_id, new_game::SPAWN_MAP_ID);
+    assert_eq!(phase.player.position(), new_game::SPAWN_POSITION);
+    assert_eq!(phase.save1.location, block1.continue_game_warp);
+    assert!(!phase.save2.continue_game_warp_pending());
+    assert_eq!(phase.save2.special_save_warp_flags, 0x80);
+    assert!(!phase.save1.event_data.flag_get(FLAG_TEMP_1).unwrap());
+    assert!(phase.save1.event_data.flag_get(decoration).unwrap());
 }
