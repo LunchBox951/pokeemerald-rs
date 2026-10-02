@@ -1343,3 +1343,37 @@ mod tests {
         let _ = std::fs::remove_file(report.output_path);
     }
 }
+
+#[cfg(test)]
+mod title_source_tests {
+    use super::{extract_title_screen, ExtractError, PackWriter};
+
+    #[test]
+    fn a_title_directory_missing_a_required_source_is_refused() {
+        let upstream = std::env::temp_dir().join(format!(
+            "pokeemerald-rs-extract-missing-title-source-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&upstream);
+        let dir = upstream.join("graphics/title_screen");
+        std::fs::create_dir_all(&dir).unwrap();
+        // Every required source except `rayquaza.bin`; contents are never
+        // read because the presence check runs first.
+        for stem in super::scope::TITLE_SCREEN_IMAGES {
+            std::fs::write(dir.join(format!("{stem}.png")), b"").unwrap();
+        }
+        for stem in ["clouds", "pokemon_logo"] {
+            std::fs::write(dir.join(format!("{stem}.bin")), b"").unwrap();
+        }
+        for stem in super::scope::TITLE_SCREEN_FILE_PALETTES {
+            std::fs::write(dir.join(format!("{stem}.pal")), b"").unwrap();
+        }
+
+        let err = extract_title_screen(&upstream, &mut PackWriter::new()).unwrap_err();
+        let _ = std::fs::remove_dir_all(&upstream);
+        assert!(
+            matches!(&err, ExtractError::ReadFailed(path, _) if path == &dir.join("rayquaza.bin")),
+            "{err:?}"
+        );
+    }
+}
