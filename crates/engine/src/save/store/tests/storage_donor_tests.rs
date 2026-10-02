@@ -531,3 +531,60 @@ fn a_relabeled_sole_sector_of_a_torn_legacy_write_is_never_donated() {
         "a relabeled sole save-block sector must not complete a donor set"
     );
 }
+
+/// Full generations 13 (slot 1, rotation 13) and 14 (slot 0, rotation 0,
+/// one storage chunk damaged), then legacy saves 15-18 at rotations 1-4.
+/// Relabelling generation 17's `SaveBlock1` chunk (id 1, position 4) as
+/// storage id 5 must not let slot 1 donate a storage set built from it.
+#[test]
+fn a_relabelled_save_block_chunk_after_repeated_legacy_writes_never_donates() {
+    let block2 = sample_block2();
+    let block1 = sample_block1();
+    let storage_bytes = vec![0xABu8; PKMN_STORAGE_PAYLOAD_LEN];
+    let block1_bytes = block1.to_bytes(block2.encryption_key);
+    let block2_bytes = block2.to_bytes();
+    let payload = |id: u16| -> Vec<u8> {
+        let len = sector_payload_len(id).unwrap();
+        if id == SECTOR_ID_SAVEBLOCK2 {
+            block2_bytes[..len].to_vec()
+        } else if id < SECTOR_ID_PKMN_STORAGE_START {
+            let o = usize::from(id - SECTOR_ID_SAVEBLOCK1_START) * SECTOR_DATA_SIZE;
+            block1_bytes[o..o + len].to_vec()
+        } else {
+            let o = usize::from(id - SECTOR_ID_PKMN_STORAGE_START) * SECTOR_DATA_SIZE;
+            storage_bytes[o..o + len].to_vec()
+        }
+    };
+    let mut store = SaveStore::new();
+    for (slot, counter, rotation) in [(1usize, 13u32, 13u16), (0, 14, 0)] {
+        for id in 0..NUM_SECTORS_PER_SLOT_U16 {
+            let pos = usize::from((id + rotation) % NUM_SECTORS_PER_SLOT_U16);
+            store.write_physical(slot, pos, &Sector::write(id, &payload(id), counter));
+        }
+    }
+    store.corrupt_byte(0, 7, 4);
+    for (counter, rotation) in [(15u32, 1u16), (16, 2), (17, 3), (18, 4)] {
+        let slot = (counter % 2) as usize;
+        write_legacy_slot_rotated(&mut store, slot, &block1, &block2, counter, rotation);
+    }
+    // Generation 17 put id 1 at (1 + 3) % 5 = 4; relabel it as id 5.
+    let mut bytes = *store.read_physical(1, 4).as_bytes();
+    assert_eq!(
+        u16::from_le_bytes([bytes[SECTOR_SIZE - 12], bytes[SECTOR_SIZE - 11]]),
+        1
+    );
+    bytes[SECTOR_SIZE - 12..SECTOR_SIZE - 10].copy_from_slice(&5u16.to_le_bytes());
+    store.write_physical(1, 4, &Sector::from_bytes(bytes));
+
+    assert_eq!(
+        store.scan_slot(1).storage_counter,
+        None,
+        "generation 17 lacks id 1, so its relabelled chunk must not complete a storage set"
+    );
+    let _ = store.load();
+    assert_ne!(
+        &store.base_pokemon_storage[..SECTOR_DATA_SIZE],
+        &payload(1)[..SECTOR_DATA_SIZE],
+        "SaveBlock1 bytes must never load as box storage"
+    );
+}

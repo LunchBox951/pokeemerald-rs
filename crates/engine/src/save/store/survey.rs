@@ -15,6 +15,9 @@ const LEGACY_ERA_IDS_MASK: u32 = (1 << SECTOR_ID_PKMN_STORAGE_START) - 1;
 const PKMN_STORAGE_IDS_MASK: u32 =
     ((1u32 << PKMN_STORAGE_CHUNKS) - 1) << SECTOR_ID_PKMN_STORAGE_START;
 
+/// Ids 0-4: the sectors `GetSaveValidStatus` requires of a generation.
+const SAVE_BLOCK_IDS: u32 = LEGACY_ERA_IDS_MASK;
+
 /// Compares counters from adjacent save generations, including the sole
 /// `u32::MAX` to zero wrap.
 #[must_use]
@@ -213,7 +216,9 @@ impl SlotSurvey {
 
     /// The counter of the one complete storage set (ids 5-13) in this slot, if
     /// any; upstream never donates storage across generations
-    /// (`pokeemerald/src/save.c:514-585`), so this stays strictly narrower.
+    /// (`pokeemerald/src/save.c:514-585`). A counter outlier withdraws it when
+    /// its save-block generation lacks one of ids 0-4, or, if no save-block
+    /// sector carries it, when it is the next write into this slot.
     fn storage_generation(&self) -> Option<u32> {
         if !self.storage_rotation_coherent {
             return None;
@@ -227,8 +232,10 @@ impl SlotSurvey {
         })?;
         let outlier_is_accepted = self.storage_counters.iter().all(|&counter| {
             counter == generation
-                || self.save_block_generation_is_complete(counter)
-                || !self.is_next_write_into_this_slot(generation, counter)
+                || match self.save_block_ids_carrying(counter) {
+                    0 => !self.is_next_write_into_this_slot(generation, counter),
+                    ids => ids & SAVE_BLOCK_IDS == SAVE_BLOCK_IDS,
+                }
         });
         outlier_is_accepted.then_some(generation)
     }
@@ -243,16 +250,13 @@ impl SlotSurvey {
                 .any(|&c| successor_of(c))
     }
 
-    /// Whether the save-block sectors carrying `counter` hold all of ids 0-4.
-    fn save_block_generation_is_complete(&self, counter: u32) -> bool {
-        /// Ids 0-4: the sectors `GetSaveValidStatus` requires of a generation.
-        const SAVE_BLOCK_IDS: u32 = LEGACY_ERA_IDS_MASK;
-        let ids_present = self.save_block_counters[..self.save_block_count]
+    /// The ids 0-4 present among the save-block sectors carrying `counter`.
+    fn save_block_ids_carrying(&self, counter: u32) -> u32 {
+        self.save_block_counters[..self.save_block_count]
             .iter()
             .zip(&self.save_block_ids[..self.save_block_count])
             .filter(|&(&c, _)| c == counter)
-            .fold(0u32, |ids, (_, &id)| ids | 1 << id);
-        ids_present & SAVE_BLOCK_IDS == SAVE_BLOCK_IDS
+            .fold(0u32, |ids, (_, &id)| ids | 1 << id)
     }
 
     /// The rotation and counter of the stale tail behind a legacy head, if one
