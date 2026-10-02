@@ -340,8 +340,7 @@ impl SaveStore {
 
     /// Writes all 14 logical sectors into the next rotated physical slot
     /// under one save counter, as upstream's `WriteSaveSectorOrSlot` does
-    /// (`pokeemerald/src/save.c:138-173`). `PokemonStorage` chunks are
-    /// rewritten unchanged so every generation stays fully checksummed.
+    /// (`pokeemerald/src/save.c:138-173`).
     pub fn save(&mut self, block1: &SaveBlock1, block2: &SaveBlock2) {
         let mut block2_bytes = self.base_block2.clone();
         let mut block1_bytes = self.base_block1.clone();

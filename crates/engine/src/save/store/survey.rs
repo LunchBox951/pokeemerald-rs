@@ -87,9 +87,6 @@ pub(super) struct Resolution {
 
 /// The per-position observations [`super::SaveStore::scan_slot`] accumulates over a
 /// slot's 14 physical sectors, and the verdict it draws from them.
-///
-/// Split from `scan_slot` so the reading of each sector and the judgement
-/// made from the whole slot stay separately legible.
 #[expect(
     clippy::struct_excessive_bools,
     reason = "each flag is an independent tally over one scan loop, not caller configuration; \
@@ -183,15 +180,9 @@ impl SlotSurvey {
             self.save_block_ids[self.save_block_count] = id;
             self.save_block_count += 1;
         }
-        // Tracked over the whole slot, not just positions 5-13: a rotated
-        // full generation scatters its storage ids across every position,
-        // and a damaged slot's surviving storage is worth just as much.
+        // Storage ids are tracked at every physical position.
         if id >= SECTOR_ID_PKMN_STORAGE_START {
-            // One generation writes each id once. A second checksum-valid
-            // copy under the same counter can only be a save-block sector
-            // whose unchecksummed footer id was damaged into this one (every
-            // save-block payload fits within ids 5-12's), and `load`'s donor copy
-            // would splice it over the real chunk.
+            // A generation writes each id once; a repeat is not a donor set.
             if self.storage_valid_ids & (1 << id) != 0 {
                 self.storage_ids_unique = false;
             }
@@ -220,11 +211,9 @@ impl SlotSurvey {
         }
     }
 
-    /// The generation a complete, unique storage set belongs to: one
-    /// rotation and one counter, with at most one counter outlier (footers
-    /// are unchecksummed, `pokeemerald/src/save.c:674-685`). An outlier that
-    /// completes no save-block generation and is the next write into this
-    /// slot is a relabeled save-block sector and withdraws the set.
+    /// The counter of the one complete storage set (ids 5-13) in this slot, if
+    /// any; upstream never donates storage across generations
+    /// (`pokeemerald/src/save.c:514-585`), so this stays strictly narrower.
     fn storage_generation(&self) -> Option<u32> {
         if !self.storage_rotation_coherent {
             return None;
@@ -244,9 +233,8 @@ impl SlotSurvey {
         outlier_is_accepted.then_some(generation)
     }
 
-    /// Whether `counter` is the write after one this slot already carries:
-    /// upstream alternates slots by counter parity (`save.c:138-173`), so the
-    /// next write into a slot is two counters on.
+    /// Whether `counter` follows one this slot carries by the two-slot stride
+    /// of upstream's `WriteSaveSectorOrSlot` (`pokeemerald/src/save.c:138-173`).
     fn is_next_write_into_this_slot(&self, generation: u32, counter: u32) -> bool {
         let successor_of = |c: u32| c.wrapping_add(NUM_SAVE_SLOTS_U32) == counter;
         successor_of(generation)
@@ -257,9 +245,7 @@ impl SlotSurvey {
 
     /// Whether the save-block sectors carrying `counter` hold all of ids 0-4.
     fn save_block_generation_is_complete(&self, counter: u32) -> bool {
-        /// Ids 0-4: every save-block payload fits within ids 5-12's, and
-        /// the zero padding after the shorter ids 0 and 4 adds nothing to
-        /// the word-sum checksum, so each verifies under a storage id.
+        /// Ids 0-4: the sectors `GetSaveValidStatus` requires of a generation.
         const SAVE_BLOCK_IDS: u32 = LEGACY_ERA_IDS_MASK;
         let ids_present = self.save_block_counters[..self.save_block_count]
             .iter()
@@ -269,11 +255,8 @@ impl SlotSurvey {
         ids_present & SAVE_BLOCK_IDS == SAVE_BLOCK_IDS
     }
 
-    /// The generation a stale tail belongs to, as its rotation and
-    /// counter: one layout and one counter, each with at most one outlier
-    /// sector (both footers are unchecksummed). A rotation outlier under the
-    /// head's own counter is refused; that is a torn full write, not a
-    /// remnant.
+    /// The rotation and counter of the stale tail behind a legacy head, if one
+    /// is identifiable; upstream has no such tail (`pokeemerald/src/save.c:514-585`).
     fn tail_generation(&self) -> Option<(usize, u32)> {
         let counters = &self.tail_counters[..self.tail_valid_count];
         let rotations = &self.tail_rotations[..self.tail_valid_count];
@@ -309,10 +292,8 @@ impl SlotSurvey {
                 .is_some_and(|(legacy, tail)| older_generation_precedes(tail, legacy))
             && !ambiguous_with_a_torn_full_write;
 
-        // Only an identity head can be a torn full write, so a rotated head
-        // is accepted over any remnant, unless a tail sector carries its own
-        // counter: the five-sector writer never wrote positions 5-13, so
-        // that head is a full generation missing an id, Error upstream.
+        // A rotated head is no torn full write unless a tail sector shares its
+        // counter; that is a full generation missing an id, Error upstream.
         let tail_shares_head_generation = self.legacy_counter.is_some_and(|legacy| {
             self.tail_counters[..self.tail_valid_count].contains(&legacy)
                 && !tail_counter.is_some_and(|tail| older_generation_precedes(tail, legacy))
@@ -332,20 +313,14 @@ impl SlotSurvey {
         } else {
             SlotIntegrity::Error
         };
-        // A stale tail is scanned after the legacy head, so the trailing
-        // `counter` above would otherwise report the tail's older counter
-        // instead of the legacy generation's own.
+        // A legacy slot reports its head's counter, not the tail's.
         let counter = if legacy_intact {
             self.legacy_counter
                 .expect("legacy_intact requires a legacy head counter")
         } else {
             self.counter
         };
-        // Only a complete set holding each id exactly once is worth
-        // donating. It also fills all nine tail positions when it is a
-        // legacy head's stale tail, so such a tail can never carry the id-0
-        // remnant that would steal the head's rotation in
-        // `copy_valid_slot_payloads`.
+        // Only a complete set holding each id once may donate.
         let storage_counter =
             if self.storage_valid_ids == PKMN_STORAGE_IDS_MASK && self.storage_ids_unique {
                 self.storage_generation()
@@ -403,9 +378,7 @@ pub(super) fn resolve(slot0: &SlotScan, slot1: &SlotScan) -> Resolution {
     }
 }
 
-/// The `(Ok, Ok)` half of [`resolve`], split out because it is
-/// the only combination where a slot's fields can be worth merging from
-/// its counterpart.
+/// The `(Ok, Ok)` half of [`resolve`]: the newer counter wins.
 fn resolve_both_ok(slot0: &SlotScan, slot1: &SlotScan) -> (SaveStatus, u32, Option<usize>, bool) {
     if slot0.legacy == slot1.legacy {
         let counter = if second_counter_is_newer(slot0.counter, slot1.counter) {
