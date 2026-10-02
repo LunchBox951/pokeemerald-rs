@@ -1,0 +1,131 @@
+//! Walk-cycle parity across ordinary steps, turns, and rejected polls. Split
+//! from `tests` for the same reason as `forced_movement_tests`: one module,
+//! one concept `(oop-boundaries)`.
+
+use super::*;
+
+const DIRECTIONS: [Direction; 4] = [
+    Direction::South,
+    Direction::North,
+    Direction::West,
+    Direction::East,
+];
+
+/// A 9x9 runtime of plain ground with a collision bit on `blocked_row`.
+fn open_runtime(blocked_row: Option<u16>) -> MapRuntime<'static> {
+    let (bytes, header, events) = flat_runtime(9, 9, |_, y| u8::from(Some(y) == blocked_row));
+    let layout = assets::MapLayout {
+        id: assets::LayoutId("MAP_TEST"),
+        name: "MapTest",
+        width: 9,
+        height: 9,
+        primary_tileset: "gTileset_General",
+        secondary_tileset: "gTileset_General",
+    };
+    let bytes = Box::leak(bytes.into_boxed_slice());
+    MapRuntime::new(
+        MapId("MAP_TEST"),
+        Box::leak(Box::new(header)),
+        Box::leak(Box::new(events)),
+        layout.grid(bytes).unwrap(),
+        MetatileAttributeTable::new(&[]),
+        MetatileAttributeTable::new(&[]),
+    )
+}
+
+fn finish_crossing(player: &mut PlayerState) {
+    for _ in 0..WALK_FRAMES_PER_TILE {
+        player.tick();
+    }
+}
+
+/// Consecutive completed steps in every facing alternate the leading foot
+/// (`SetStepAnimHandleAlternation`, `event_object_movement.c:4582-4598`)
+/// `(behavioral-fidelity)`.
+#[test]
+fn consecutive_steps_alternate_the_leading_foot_in_every_facing() {
+    for facing in DIRECTIONS {
+        let runtime = open_runtime(None);
+        let mut player = PlayerState::new((4, 4), 3, facing);
+        let mut feet = Vec::new();
+        for _ in 0..4 {
+            assert!(matches!(
+                player.step(Some(facing), &runtime, &no_connections, &NO_FLAGS),
+                StepOutcome::Advanced { .. }
+            ));
+            feet.push(player.second_foot_leads());
+            finish_crossing(&mut player);
+            assert_eq!(player.second_foot_leads(), *feet.last().unwrap());
+        }
+        assert_eq!(feet, [false, true, false, true], "{facing:?}");
+    }
+}
+
+/// A standstill turn runs the same alternating `sAnim_GoFast*`, so it
+/// consumes a half-cycle (`event_object_movement.c:5704-5721`).
+#[test]
+fn a_turn_in_place_consumes_a_half_cycle() {
+    let runtime = open_runtime(None);
+    let mut player = PlayerState::new((4, 4), 3, Direction::South);
+    assert_eq!(
+        player.step(Some(Direction::North), &runtime, &no_connections, &NO_FLAGS),
+        StepOutcome::Turned(Direction::North)
+    );
+    assert!(!player.second_foot_leads());
+    for _ in 0..TURN_IN_PLACE_FRAMES {
+        player.tick();
+    }
+    player.step(None, &runtime, &no_connections, &NO_FLAGS);
+    player.step(Some(Direction::North), &runtime, &no_connections, &NO_FLAGS);
+    assert!(player.second_foot_leads());
+}
+
+/// Rust models no bump animation for a collision-blocked step, so a
+/// rejected or still-busy poll leaves the parity alone.
+#[test]
+fn blocked_and_busy_polls_leave_the_parity_alone() {
+    let runtime = open_runtime(Some(5));
+    let mut player = PlayerState::new((4, 4), 3, Direction::South);
+    let before = player.second_foot_leads();
+    assert!(matches!(
+        player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS),
+        StepOutcome::Blocked { .. }
+    ));
+    assert_eq!(player.second_foot_leads(), before);
+
+    let mut player = PlayerState::new((4, 3), 3, Direction::West);
+    player.step(Some(Direction::West), &runtime, &no_connections, &NO_FLAGS);
+    let during = player.second_foot_leads();
+    assert_eq!(
+        player.step(Some(Direction::West), &runtime, &no_connections, &NO_FLAGS),
+        StepOutcome::Idle
+    );
+    assert_eq!(player.second_foot_leads(), during);
+}
+
+/// A keypad step off a held slide pose keeps the slide's paused foot
+/// (`SetStepAnimHandleAlternation`, `event_object_movement.c:4582-4598`).
+#[test]
+fn a_step_off_a_held_slide_pose_keeps_the_slides_foot() {
+    let runtime = slide_east_runtime();
+    let mut player = PlayerState::new((2, 1), 3, Direction::South);
+    player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS);
+    for _ in 0..WALK_FRAMES_PER_TILE {
+        player.tick();
+    }
+    player.step(None, &runtime, &no_connections, &NO_FLAGS);
+    for _ in 0..SLIDE_FRAMES_PER_TILE {
+        player.tick();
+    }
+    assert!(player.slide_pose_held());
+    let slide_foot = player.second_foot_leads();
+    let outcome = player.step(Some(Direction::East), &runtime, &no_connections, &NO_FLAGS);
+    assert_eq!(
+        outcome,
+        StepOutcome::Advanced {
+            from: (3, 2),
+            to: (4, 2)
+        }
+    );
+    assert_eq!(player.second_foot_leads(), slide_foot);
+}
