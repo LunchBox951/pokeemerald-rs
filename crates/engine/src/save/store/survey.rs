@@ -29,9 +29,8 @@ pub(super) fn second_counter_is_newer(first: u32, second: u32) -> bool {
     }
 }
 
-/// Whether `older` precedes `newer` as a wrapping serial number (RFC 1982).
-/// Sound for any generation gap, unlike [`second_counter_is_newer`], which
-/// assumes adjacent generations.
+/// Whether `older` precedes `newer` as a wrapping serial number (RFC 1982),
+/// for any gap; [`second_counter_is_newer`] assumes adjacent generations.
 #[must_use]
 pub(super) fn older_generation_precedes(older: u32, newer: u32) -> bool {
     let delta = newer.wrapping_sub(older);
@@ -62,9 +61,8 @@ pub(super) struct SlotScan {
     /// Whether an `Ok` integrity came from the legacy five-sector fallback
     /// rather than all 14 sectors validating. See [`resolve`].
     pub(super) legacy: bool,
-    /// The generation of a complete, checksum-valid storage set (ids 5-13)
-    /// found anywhere in this slot, whatever the slot's own integrity; see
-    /// `SlotSurvey::storage_generation` for what qualifies.
+    /// Generation of a complete storage set (ids 5-13) in this slot,
+    /// whatever the slot's own integrity (`SlotSurvey::storage_generation`).
     pub(super) storage_counter: Option<u32>,
 }
 
@@ -72,19 +70,14 @@ pub(super) struct SlotScan {
 /// from.
 pub(super) struct Resolution {
     pub(super) status: SaveStatus,
-    /// The adopted generation number: reported by `save_counter()` and used
-    /// to pick both the next save's physical slot and (absent a merge) the
-    /// slot every field is copied from.
+    /// The adopted generation number, which picks the next save's slot and
+    /// the slot fields copy from.
     pub(super) counter: u32,
-    /// The physical slot to source `PokemonStorage` from when the adopted
-    /// generation carries none of its own ([`storage_donor`]). A
-    /// scanned index, not a counter: an assembled image need not keep the
-    /// parity [`super::SaveStore::save`] maintains.
+    /// Scanned slot index donating `PokemonStorage` when the adopted
+    /// generation carries none ([`storage_donor`]).
     pub(super) storage_from_slot: Option<usize>,
-    /// Whether `counter`'s own slot was accepted through the legacy
-    /// five-sector fallback: [`super::SaveStore::copy_valid_slot_payloads`] must
-    /// then never read that slot's physical positions 5-13, whether erased
-    /// or a stale tolerated tail (see [`super::SaveStore::scan_slot`]).
+    /// Whether `counter`'s slot is a five-sector head, so its positions 5-13
+    /// are never read as progress.
     pub(super) legacy: bool,
 }
 
@@ -119,9 +112,8 @@ pub(super) struct SlotSurvey {
     /// while they all imply the same one.
     storage_rotation: Option<usize>,
     storage_rotation_coherent: bool,
-    /// The footer counter and id of every checksum-valid save-block sector
-    /// (ids 0-4) anywhere in the slot, in position order; only the first
-    /// `save_block_count` entries are meaningful.
+    /// Footer counter and id of every valid save-block sector (ids 0-4) in
+    /// position order; `save_block_count` entries are meaningful.
     save_block_counters: [u32; NUM_SECTORS_PER_SLOT],
     save_block_ids: [u16; NUM_SECTORS_PER_SLOT],
     save_block_count: usize,
@@ -214,11 +206,8 @@ impl SlotSurvey {
         }
     }
 
-    /// The counter of the one complete storage set (ids 5-13) in this slot, if
-    /// any; upstream never donates storage across generations
-    /// (`pokeemerald/src/save.c:514-585`). A counter outlier withdraws it when
-    /// its save-block generation lacks one of ids 0-4, or, if no save-block
-    /// sector carries it, when it is the next write into this slot.
+    /// Counter of the one complete storage set here, unless an outlier is a
+    /// partial save-block generation or the slot's next write.
     fn storage_generation(&self) -> Option<u32> {
         if !self.storage_rotation_coherent {
             return None;
@@ -340,9 +329,8 @@ impl SlotSurvey {
     }
 }
 
-/// Picks the generation to load. The newer intact slot wins; when it is
-/// a five-sector generation, `PokemonStorage` comes from the newest
-/// complete verified storage set in either slot instead of zeros.
+/// Picks the generation to load: the newer intact slot, with a five-sector
+/// head taking `PokemonStorage` from the newest verified set in either slot.
 pub(super) fn resolve(slot0: &SlotScan, slot1: &SlotScan) -> Resolution {
     use SlotIntegrity::{Empty, Error, Ok};
     let (status, counter, storage_from_slot, legacy) = match (slot0.integrity, slot1.integrity) {
@@ -412,9 +400,8 @@ fn resolve_both_ok(slot0: &SlotScan, slot1: &SlotScan) -> (SaveStatus, u32, Opti
     }
 }
 
-/// The storage donor for an adopted five-sector generation: whichever
-/// slot holds the newest complete verified storage set, even one too
-/// damaged to be `Ok` itself. Counters compare as wrapping serials.
+/// The slot holding the newest complete verified storage set, even one
+/// too damaged to be `Ok` itself.
 fn storage_donor(adopted_is_legacy: bool, slot0: &SlotScan, slot1: &SlotScan) -> Option<usize> {
     if !adopted_is_legacy {
         return None;

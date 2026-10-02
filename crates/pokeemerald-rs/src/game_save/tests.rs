@@ -820,10 +820,8 @@ fn a_stale_session_is_refused_even_across_the_counter_wrap() {
     );
 }
 
-/// [`SaveBlock1`] chunk `chunk_num`, mirroring the private
-/// `engine::save::store::chunk_len` (`pokeemerald/src/save.c:44-49`
-/// `SAVEBLOCK_CHUNK`): full `SECTOR_DATA_SIZE` chunks, with a shorter final
-/// remainder.
+/// [`SaveBlock1`] chunk `chunk_num` per upstream's `SAVEBLOCK_CHUNK`
+/// (`pokeemerald/src/save.c:44-49`).
 fn legacy_block1_chunk(bytes: &[u8; SaveBlock1::PAYLOAD_LEN], chunk_num: usize) -> &[u8] {
     let offset = chunk_num * SECTOR_DATA_SIZE;
     let len = (SaveBlock1::PAYLOAD_LEN - offset).min(SECTOR_DATA_SIZE);

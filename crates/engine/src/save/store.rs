@@ -1,6 +1,5 @@
-//! Two-slot rotating save storage over upstream's fourteen-sector
-//! `sSaveSlotLayout` (`pokeemerald/src/save.c:43-72`); [`SaveStore::load`]
-//! also accepts this project's five-sector format.
+//! Two-slot rotating save storage over upstream's `sSaveSlotLayout`
+//! (`pokeemerald/src/save.c:43-72`), also reading five-sector saves.
 
 use super::block::{SaveBlock1, SaveBlock2};
 use super::sector::{Sector, SECTOR_DATA_SIZE, SECTOR_SIZE};
@@ -38,16 +37,11 @@ const _: () =
     assert!(SECTOR_ID_PKMN_STORAGE_START as usize + PKMN_STORAGE_CHUNKS == NUM_SECTORS_PER_SLOT);
 const _: () = assert!(NUM_SAVE_SLOTS * NUM_SECTORS_PER_SLOT <= NUM_SECTORS);
 
-/// Exact `sizeof(struct PokemonStorage)`
-/// (`pokeemerald/include/pokemon_storage_system.h:20-24`): `currentBox`
-/// plus padding, 14x30 `BoxPokemon`, `boxNames`, and `boxWallpapers`.
+/// `sizeof(struct PokemonStorage)`
+/// (`pokeemerald/include/pokemon_storage_system.h:20-24`).
 pub const PKMN_STORAGE_PAYLOAD_LEN: usize = 0x83D0;
 
-/// Exact byte length of a [`SaveStore`] flash image.
-///
-/// Two 14-sector slots plus the four unmodelled Hall-of-Fame/Trainer-Hill/
-/// Recorded-Battle sectors fill the 128 KiB chip
-/// (`pokeemerald/src/save.c:24-31` sector layout comment).
+/// Byte length of the 128 KiB flash image (`pokeemerald/src/save.c:24-31`).
 pub const FLASH_IMAGE_LEN: usize = NUM_SECTORS * SECTOR_SIZE;
 
 #[expect(
@@ -85,11 +79,8 @@ pub enum SaveStatus {
     Error,
 }
 
-/// State reconstructed by [`SaveStore::load`].
-///
-/// Fields from invalid sectors use plaintext defaults. Key-encrypted
-/// [`SaveBlock1`] fields are retained only when both their chunk and the
-/// [`SaveBlock2`] key sector validate.
+/// State reconstructed by [`SaveStore::load`]; key-encrypted fields need
+/// both their chunk and the [`SaveBlock2`] key sector valid.
 #[derive(Debug, Clone)]
 pub struct LoadOutcome {
     /// Result of validating both save slots.
@@ -191,9 +182,8 @@ struct CopiedSlotPayloads {
     block2_valid: bool,
 }
 
-/// Raw payloads retained across saves for fields the model does not own:
-/// [`SaveBlock1`], [`SaveBlock2`], and the nine opaque `PokemonStorage`
-/// chunks (ids 5-13).
+/// Raw [`SaveBlock1`], [`SaveBlock2`], and `PokemonStorage` payloads
+/// retained for the fields the model does not own.
 #[derive(Debug, Clone)]
 pub struct BaseSnapshot {
     block1: Box<[u8; SaveBlock1::PAYLOAD_LEN]>,
@@ -219,10 +209,7 @@ impl Default for SaveStore {
 }
 
 impl SaveStore {
-    /// Creates a fully erased flash image.
-    ///
-    /// Erased all-one footer IDs cannot be mistaken for
-    /// [`SECTOR_ID_SAVEBLOCK2`] when loading recovers the rotation offset.
+    /// Creates a fully erased (all-ones) flash image.
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -235,18 +222,15 @@ impl SaveStore {
         }
     }
 
-    /// Returns the complete persistent flash image.
-    ///
-    /// Runtime counters are excluded and reconstructed from sector footers by
-    /// [`SaveStore::load`].
+    /// Returns the persistent flash image; [`SaveStore::load`] rebuilds the
+    /// runtime counters from its footers.
     #[must_use]
     pub fn flash_image(&self) -> &[u8] {
         &self.buffer
     }
 
-    /// Rebuilds a store from an exact-length flash image. Call
-    /// [`SaveStore::load`] before [`SaveStore::save`]: counters and retained
-    /// bytes start blank until the image is read.
+    /// Rebuilds a store from an exact-length flash image; [`SaveStore::load`]
+    /// must run before [`SaveStore::save`].
     #[must_use]
     pub fn from_flash_image(image: &[u8]) -> Option<Self> {
         if image.len() != FLASH_IMAGE_LEN {
@@ -268,11 +252,7 @@ impl SaveStore {
         self.last_written_sector
     }
 
-    /// Copies the retained raw payloads used as the base of the next save.
-    ///
-    /// A session can restore this snapshot before healing a corrupt image so
-    /// unmodelled bytes come from that session rather than an older fallback
-    /// slot.
+    /// Copies the retained raw payloads that base the next save.
     #[must_use]
     pub fn base_snapshot(&self) -> BaseSnapshot {
         BaseSnapshot {
@@ -332,9 +312,8 @@ impl SaveStore {
             .expect("id must be present in a fully-written slot")
     }
 
-    /// Writes all 14 logical sectors into the next rotated physical slot
-    /// under one save counter, as upstream's `WriteSaveSectorOrSlot` does
-    /// (`pokeemerald/src/save.c:138-173`).
+    /// Writes all 14 sectors into the next rotated slot as upstream's
+    /// `WriteSaveSectorOrSlot` (`pokeemerald/src/save.c:138-173`).
     pub fn save(&mut self, block1: &SaveBlock1, block2: &SaveBlock2) {
         let mut block2_bytes = self.base_block2.clone();
         let mut block1_bytes = self.base_block1.clone();
@@ -370,11 +349,8 @@ impl SaveStore {
         self.base_pokemon_storage = storage_bytes;
     }
 
-    /// Scans all 14 physical positions of `slot`, matching upstream's
-    /// `GetSaveValidStatus` (`pokeemerald/src/save.c:514-585`): intact when
-    /// all 14 ids validate, or when positions 0-4 hold ids 0-4 under one
-    /// counter (this project's former five-sector format). A stale tail
-    /// behind such a head is a storage-donor candidate only, never progress.
+    /// Surveys `slot` as upstream's `GetSaveValidStatus`
+    /// (`pokeemerald/src/save.c:514-585`), also accepting a five-sector head.
     fn scan_slot(&self, slot: usize) -> SlotScan {
         let mut survey = SlotSurvey::new();
         for i in 0..NUM_SECTORS_PER_SLOT {
@@ -383,10 +359,8 @@ impl SaveStore {
         survey.verdict()
     }
 
-    /// `legacy` marks the copy that owns a five-sector generation's
-    /// progress: positions 5-13 are skipped rather than read as its blocks.
-    /// [`SaveStore::load`]'s storage-donor pass passes `false` to harvest
-    /// exactly those positions.
+    /// Copies valid payloads from `slot`; `legacy` skips positions 5-13,
+    /// which a five-sector generation never wrote.
     fn copy_valid_slot_payloads(&mut self, slot: usize, legacy: bool) -> CopiedSlotPayloads {
         let mut copied = CopiedSlotPayloads {
             block1: Box::new([0; SaveBlock1::PAYLOAD_LEN]),
@@ -437,10 +411,8 @@ impl SaveStore {
         copied
     }
 
-    /// Validates both slots and loads payloads from the resolved counter's
-    /// parity slot, as upstream's `CopySaveSlotData` does. A storage donor,
-    /// if any, is copied first so the progress copy is the one that recovers
-    /// [`SaveStore::last_written_sector`].
+    /// Loads the resolved counter's parity slot as upstream's
+    /// `CopySaveSlotData`, after any storage donor.
     #[must_use]
     pub fn load(&mut self) -> LoadOutcome {
         let scans = [self.scan_slot(0), self.scan_slot(1)];
