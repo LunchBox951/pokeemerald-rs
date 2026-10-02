@@ -16,6 +16,7 @@ fn sample_block2() -> SaveBlock2 {
         player_name: *b"RUSTY\xFF\0\0",
         player_gender: PlayerGender::Female,
         player_trainer_id: [1, 2, 3, 4],
+        special_save_warp_flags: 0,
         encryption_key: 0xA1B2_C3D4,
         options_text_speed: 1,
         options_window_frame_type: 5,
