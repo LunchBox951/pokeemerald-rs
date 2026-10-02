@@ -95,7 +95,8 @@ pub(super) struct SlotSurvey {
     head_valid_ids: u32,
     head_is_identity: bool,
     tail_signature_seen: bool,
-    tail_all_recognized_valid: bool,
+    tail_unusable_count: usize,
+    tail_unusable_counter: u32,
     /// The footer counter of each checksum-valid tail sector, in position
     /// order; only the first `tail_valid_count` entries are meaningful.
     tail_counters: [u32; PKMN_STORAGE_CHUNKS],
@@ -130,7 +131,8 @@ impl SlotSurvey {
             head_valid_ids: 0,
             head_is_identity: true,
             tail_signature_seen: false,
-            tail_all_recognized_valid: true,
+            tail_unusable_count: 0,
+            tail_unusable_counter: 0,
             tail_counters: [0; PKMN_STORAGE_CHUNKS],
             tail_valid_count: 0,
             tail_rotations: [0; PKMN_STORAGE_CHUNKS],
@@ -160,7 +162,8 @@ impl SlotSurvey {
         let id = sector.id();
         let is_valid_sector = sector_payload_len(id).is_some_and(|len| sector.is_valid(len));
         if in_tail && !is_valid_sector {
-            self.tail_all_recognized_valid = false;
+            self.tail_unusable_count += 1;
+            self.tail_unusable_counter = sector.counter();
         }
         if !is_valid_sector {
             return;
@@ -251,6 +254,17 @@ impl SlotSurvey {
     /// The rotation and counter of the stale tail behind a legacy head, if one
     /// is identifiable; upstream has no such tail (`pokeemerald/src/save.c:514-585`).
     fn tail_generation(&self) -> Option<(usize, u32)> {
+        if self.tail_unusable_count > 1 {
+            return None;
+        }
+        // One unusable sector spends the whole outlier budget, and its own
+        // counter must not be the head's: that is the write's newest sector.
+        if self.tail_unusable_count == 1
+            && (self.tail_valid_count != PKMN_STORAGE_CHUNKS - 1
+                || self.legacy_counter == Some(self.tail_unusable_counter))
+        {
+            return None;
+        }
         let counters = &self.tail_counters[..self.tail_valid_count];
         let rotations = &self.tail_rotations[..self.tail_valid_count];
         let rotation = one_outlier_consensus(rotations)?;
@@ -260,7 +274,7 @@ impl SlotSurvey {
             .zip(counters)
             .filter(|&(&r, &c)| r != rotation || c != counter);
         let outlier = outliers.next();
-        if outliers.next().is_some() {
+        if outliers.next().is_some() || (outlier.is_some() && self.tail_unusable_count == 1) {
             return None;
         }
         let rotation_outlier_is_the_heads_generation =
@@ -277,7 +291,6 @@ impl SlotSurvey {
             && tail.is_some_and(|(rotation, _)| rotation == TORN_WRITE_PREDECESSOR_ROTATION);
 
         let stale_tail_is_donor_only = self.tail_signature_seen
-            && self.tail_all_recognized_valid
             && tail_counter.is_some()
             && self
                 .legacy_counter
