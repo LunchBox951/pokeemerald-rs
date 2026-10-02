@@ -511,43 +511,27 @@ fn wait_for_device_tail(
 /// `policy.max_wait` bounds how long a stream is held open, but unlike the
 /// derived [`wait_for_device_tail`]'s fixed sleep the measured wait knows
 /// whether the target was reached: a position still short of it at the
-/// deadline is reported as [`DrainError::MeasuredTailTimedOut`] rather than
-/// read as a finish. A stream error before the target is reached is not a
-/// successful finish either, matching [`wait_for_device_tail`]. The signal
+/// deadline is [`DrainError::MeasuredTailTimedOut`], not a finish. A stream
+/// error before the target is reached is not a finish either. The signal
 /// disappearing mid-wait is not itself a failure.
 ///
-/// The sounded estimate only moves when a callback's timestamps are usable, so
-/// a stationary estimate alone cannot tell a stalled device from stale
-/// timestamps. The wait therefore keeps the two fields' histories apart: any
-/// submitted advance shows the callbacks running, but only one with the sounded
-/// estimate standing still at the polls before, of, and after it counts as
-/// stale-timestamp evidence (the fields are separate atomics, so one callback's
-/// two updates can land a poll apart), and any sounded advance discards that
-/// evidence, so a fresh estimate below `target` is never overridden. The wait
-/// sizes the callback cadence from what it observes (the largest gap between,
-/// or size of, the last [`CADENCE_WINDOW`] advances, converted to time at
-/// `device_sample_rate`), never from the advertised buffer range, so an
-/// aggregate one late poll saw does not widen the cadence for good. A gap past
-/// half `derived_tail` that also outruns the playback closing it by a
-/// quarter-tail is a stall, not cadence, and restarts both the evidence and the
-/// cadence from the resumed callback. Callbacks are alive when the stale
-/// evidence spans at least a quarter of `derived_tail` (or one such advance
-/// alone covered that much playback) and the latest advance is within one
-/// observed cadence, plus two poll intervals, of now. An advance seen at a late
-/// poll is credited no later than the playback it covers past the previous
-/// poll, so an aggregate of callbacks that then stalled reads as stale. Once
-/// `derived_tail` has run from the start of the wait with the callbacks alive,
-/// the wait ends early as a finish, as [`wait_for_device_tail`] would; usable
-/// timestamps along the way do not restart it.
+/// Stale timestamps are read from `valid_timestamp_callbacks`, never from the
+/// sounded estimate's shape: a submitted advance with no increase in that
+/// count is stale evidence at once, and any increase discards the evidence
+/// (a usable callback keeps the measured wait in force). Evidence of at least
+/// `derived_tail / 4` (a span of advances, or one covering that much
+/// playback) with the latest advance within one recent inter-advance gap
+/// (over the last [`CADENCE_WINDOW`]) plus two polls means live callbacks,
+/// and once `derived_tail` has run from the start of the wait the wait
+/// finishes as [`wait_for_device_tail`] would. A gap past half `derived_tail`
+/// is a stall: evidence and cadence restart from the playback the resumed
+/// callback covers, and that callback alone is no evidence.
 ///
-/// `policy.max_wait` still bounds the wait: a poll past the deadline reports
-/// the timeout unless `derived_tail` fits within `max_wait`
-/// (so the production tail, capped at `max_wait`, still qualifies when a real
-/// sleep overshoots it) and the callbacks were alive at that poll. A
-/// `derived_tail` that cannot elapse within `max_wait` never takes effect.
+/// The tail finish needs `derived_tail <= policy.max_wait`; a poll past the
+/// deadline takes it only with live callbacks and otherwise times out.
 /// `progress`, `stream_errors`, `now`, and `sleep` are injected as in
 /// [`push_frame`].
-#[allow(
+#[expect(
     clippy::too_many_arguments,
     reason = "the injected clock, sleep, and stream hooks are the seam the tests drive"
 )]
@@ -563,17 +547,19 @@ fn wait_for_measured_tail(
 ) -> Result<(), DrainError> {
     let started = now();
     let deadline = started + policy.max_wait;
-    let mut last_sounded = None;
+    let mut last_valid = None;
     let mut last_submitted = None;
     let mut last_poll = started;
     let mut last_advance = None;
     let mut recent_cadence = [Duration::ZERO; CADENCE_WINDOW];
     let mut advances = 0_usize;
-    let mut sounded_advanced_before = false;
-    let mut pending_stale = None;
+    // A usable callback stores its validity count before its submitted frames,
+    // so a poll can see the count a poll before the frames it accompanies.
+    let mut valid_ahead = false;
     let mut first_stale = None;
     let mut last_stale = None;
     let mut max_stale_advance = Duration::ZERO;
+    let mut after_stall = false;
     loop {
         let snapshot = progress();
         let errors = stream_errors();
@@ -583,6 +569,7 @@ fn wait_for_measured_tail(
         let Some(PlaybackProgress {
             sounded_frames: sounded,
             submitted_frames: submitted,
+            valid_timestamp_callbacks: valid,
         }) = snapshot
         else {
             return Ok(());
@@ -591,23 +578,12 @@ fn wait_for_measured_tail(
             return Ok(());
         }
         let current = now();
-        // A sounded advance means a usable timestamp landed, so the estimate
-        // is fresh: forget the stale-callback evidence. The two fields are
-        // separate atomics, so one callback's submitted and sounded updates
-        // can land a poll apart in either order. A submitted advance is
-        // therefore stale evidence only once the estimate stood still at the
-        // poll before it, at its own poll, and at the poll after it; until
-        // that next poll it is held pending.
-        let sounded_advanced = last_sounded.is_some_and(|last| sounded > last);
-        if sounded_advanced {
-            pending_stale = None;
+        let valid_advanced = last_valid.is_some_and(|last| valid > last);
+        if valid_advanced {
             first_stale = None;
             last_stale = None;
             max_stale_advance = Duration::ZERO;
-        } else if let Some((at, played)) = pending_stale.take() {
-            first_stale.get_or_insert(at);
-            last_stale = Some(at);
-            max_stale_advance = max_stale_advance.max(played);
+            after_stall = false;
         }
         if let Some(previous) = last_submitted.filter(|&last| submitted > last) {
             let frames = u32::try_from(submitted - previous).unwrap_or(u32::MAX);
@@ -625,34 +601,43 @@ fn wait_for_measured_tail(
                 at.saturating_duration_since(previous_at)
             });
             // A healthy period is under half the derived tail (two queued
-            // periods plus margin) or hands over about a period of playback,
-            // so a gap past half the tail that also outruns the playback
-            // closing it by a quarter-tail is a stall, not cadence: the
-            // evidence and cadence before it say nothing about the resumed
-            // callbacks, so start both afresh.
-            if gap > derived_tail / 2 && gap > played + derived_tail / 4 {
-                pending_stale = None;
+            // periods plus margin), so a longer gap is a stall: what came
+            // before says nothing about the resumed callbacks, and the gap
+            // itself is not their cadence.
+            let cadence_sample = if gap > derived_tail / 2 {
                 first_stale = None;
                 last_stale = None;
                 max_stale_advance = Duration::ZERO;
                 recent_cadence = [Duration::ZERO; CADENCE_WINDOW];
-            }
-            recent_cadence[advances % CADENCE_WINDOW] = gap.max(played);
+                after_stall = true;
+                played
+            } else {
+                gap.max(played)
+            };
+            recent_cadence[advances % CADENCE_WINDOW] = cadence_sample;
             advances = advances.wrapping_add(1);
             last_advance = Some(at);
-            if !sounded_advanced && !sounded_advanced_before {
-                pending_stale = Some((at, played));
+            if !valid_advanced && !valid_ahead {
+                first_stale.get_or_insert(at);
+                last_stale = Some(at);
+                max_stale_advance = max_stale_advance.max(played);
             }
+            valid_ahead = false;
+        } else if valid_advanced {
+            valid_ahead = true;
         }
-        sounded_advanced_before = sounded_advanced;
         last_poll = current;
-        last_sounded = Some(sounded);
+        last_valid = Some(valid);
         last_submitted = Some(submitted);
         let cadence = recent_cadence.iter().copied().max().unwrap_or_default();
-        let callbacks_alive = first_stale.zip(last_stale).is_some_and(|(first, last)| {
-            last.duration_since(first).max(max_stale_advance) >= derived_tail / 4
-        }) && last_advance
-            .is_some_and(|last| current.duration_since(last) <= cadence + policy.interval * 2);
+        let quarter_tail = derived_tail / 4;
+        let evidence = first_stale
+            .zip(last_stale)
+            .is_some_and(|(first, last)| last.duration_since(first) >= quarter_tail)
+            || (!after_stall && max_stale_advance >= quarter_tail);
+        let callbacks_alive = evidence
+            && last_advance
+                .is_some_and(|last| current.duration_since(last) <= cadence + policy.interval * 2);
         // Everything submitted before the drain began has sounded once the
         // tail has run from `started`; a usable timestamp mid-wait does not
         // restart it, so a valid-then-stale device keeps its budget.
@@ -680,7 +665,7 @@ fn wait_for_measured_tail(
 /// [`device_tail_wait`] result) via [`wait_for_device_tail`] -- see the
 /// module docs. `progress`, `stream_errors`, `now`, and `sleep` are
 /// injected as in [`push_frame`].
-#[allow(
+#[expect(
     clippy::too_many_arguments,
     reason = "the injected clock, sleep, and stream hooks are the seam the tests drive"
 )]
@@ -1298,10 +1283,20 @@ mod tests {
         assert_eq!(measured_drain_target(u64::MAX, 5), u64::MAX);
     }
 
+    /// A snapshot from a device whose callbacks never carry a usable timestamp.
     fn progress(sounded_frames: u64, submitted_frames: u64) -> PlaybackProgress {
+        progress_valid(sounded_frames, submitted_frames, 0)
+    }
+
+    fn progress_valid(
+        sounded_frames: u64,
+        submitted_frames: u64,
+        valid_timestamp_callbacks: u64,
+    ) -> PlaybackProgress {
         PlaybackProgress {
             submitted_frames,
             sounded_frames,
+            valid_timestamp_callbacks,
         }
     }
 
@@ -1727,13 +1722,14 @@ mod tests {
             &policy,
             || {
                 let ms = clock.borrow().duration_since(start).as_millis();
-                Some(progress(
+                Some(progress_valid(
                     if ms < 300 {
                         u64::try_from(ms / 10).unwrap_or(0)
                     } else {
                         30
                     },
                     submitted.get(),
+                    u64::try_from((ms / 10).min(30)).unwrap_or(0),
                 ))
             },
             || 0,
@@ -1800,6 +1796,7 @@ mod tests {
         // 1 s submitted before the drain; 400 ms of output latency.
         let submitted = Cell::new(48_000_u64);
         let sounded = Cell::new(48_000_u64 - 19_200);
+        let valid = Cell::new(0_u64);
 
         let result = wait_for_measured_tail(
             48_000,
@@ -1808,7 +1805,7 @@ mod tests {
             std::time::Duration::from_millis(250),
             48_000,
             &policy,
-            || Some(progress(sounded.get(), submitted.get())),
+            || Some(progress_valid(sounded.get(), submitted.get(), valid.get())),
             || 0,
             || *clock.borrow(),
             |duration| {
@@ -1820,6 +1817,7 @@ mod tests {
                     .is_multiple_of(100)
                 {
                     // Every 100 ms callback carries a usable timestamp.
+                    valid.set(valid.get() + 1);
                     submitted.set(submitted.get() + 4_800);
                     sounded.set(sounded.get() + 4_800);
                 }
@@ -1889,10 +1887,76 @@ mod tests {
         ));
     }
 
+    /// A callback preempted between its submitted and sounded stores for far
+    /// longer than one poll is not stale-timestamp evidence: its timestamp was
+    /// usable, so the wait must hold for the measured target.
+    #[test]
+    fn a_preempted_sounded_store_is_not_stale_evidence() {
+        let policy = RetryPolicy {
+            interval: std::time::Duration::from_millis(10),
+            max_wait: std::time::Duration::from_secs(1),
+        };
+        let start = std::time::Instant::now();
+        let clock = Rc::new(RefCell::new(start));
+        let submitted = Cell::new(48_000_u64);
+        let sounded = Cell::new(48_000_u64 - 19_200);
+        let valid = Cell::new(0_u64);
+
+        let result = wait_for_measured_tail(
+            48_000,
+            std::time::Duration::from_millis(200),
+            48_000,
+            &policy,
+            || Some(progress_valid(sounded.get(), submitted.get(), valid.get())),
+            || 0,
+            || *clock.borrow(),
+            |duration| {
+                *clock.borrow_mut() += duration;
+                let ms = clock.borrow().duration_since(start).as_millis();
+                if ms == 50 {
+                    // 200 ms of playback; the callback is preempted before its
+                    // sounded store, but its validity count is already out.
+                    valid.set(valid.get() + 1);
+                    submitted.set(submitted.get() + 9_600);
+                }
+                if ms == 300 {
+                    sounded.set(48_000);
+                }
+            },
+        );
+        let elapsed = clock.borrow().duration_since(start);
+
+        assert!(result.is_ok());
+        assert!(
+            elapsed >= std::time::Duration::from_millis(300),
+            "finished at {elapsed:?}, before the measured target sounded"
+        );
+    }
+
+    /// Callbacks that stall past half the tail, resume briefly, and stop again
+    /// must not read as alive on the strength of the stall gap itself.
+    #[test]
+    fn the_stall_gap_does_not_survive_the_cadence_reset() {
+        let result = cadence_wait(
+            1_000,
+            1_000,
+            1,
+            |ms| matches!(ms, 50 | 600 | 700 | 800 | 850),
+            None,
+        );
+
+        assert!(matches!(
+            result,
+            Err(DrainError::MeasuredTailTimedOut { .. })
+        ));
+    }
+
     /// Drive the high-latency, all-usable-timestamps device of
     /// `a_fresh_sounded_estimate_below_target_is_not_overridden_by_the_tail`,
-    /// but let one snapshot field lag the other by a poll, as two separately
-    /// loaded atomics can. Returns the wait's result and its elapsed time.
+    /// but let one snapshot field lag the other by a poll, as separately
+    /// loaded atomics can: the sounded estimate when `sounded_lags`, else the
+    /// submitted frames (so the validity count is seen a poll early). Returns
+    /// the wait's result and its elapsed time.
     fn torn_snapshot_wait(sounded_lags: bool) -> (Result<(), DrainError>, std::time::Duration) {
         let policy = RetryPolicy {
             interval: std::time::Duration::from_millis(10),
@@ -1902,6 +1966,7 @@ mod tests {
         let clock = Rc::new(RefCell::new(start));
         let submitted = Cell::new(48_000_u64);
         let sounded = Cell::new(48_000_u64 - 19_200);
+        let valid = Cell::new(0_u64);
         // The field the poll sees one interval late, as (seen, actual).
         let initial = if sounded_lags {
             sounded.get()
@@ -1917,9 +1982,9 @@ mod tests {
             || {
                 let (seen, _) = lagging.get();
                 Some(if sounded_lags {
-                    progress(seen, submitted.get())
+                    progress_valid(seen, submitted.get(), valid.get())
                 } else {
-                    progress(sounded.get(), seen)
+                    progress_valid(sounded.get(), seen, valid.get())
                 })
             },
             || 0,
@@ -1935,6 +2000,7 @@ mod tests {
                 {
                     submitted.set(submitted.get() + 4_800);
                     sounded.set(sounded.get() + 4_800);
+                    valid.set(valid.get() + 1);
                 }
                 let current = if sounded_lags {
                     sounded.get()
@@ -1949,8 +2015,8 @@ mod tests {
         (result, elapsed)
     }
 
-    /// A poll that sees a usable callback's submitted frames before its
-    /// sounded estimate must not read that callback as timestamp-stale.
+    /// A poll that sees a usable callback's submitted frames and validity
+    /// count before its sounded estimate must not read it as timestamp-stale.
     #[test]
     fn a_submitted_advance_seen_before_its_sounded_update_is_not_stale() {
         let (result, elapsed) = torn_snapshot_wait(true);
@@ -1962,10 +2028,10 @@ mod tests {
         );
     }
 
-    /// A poll that sees a usable callback's sounded estimate before its
+    /// A poll that sees a usable callback's validity count before its
     /// submitted frames must not read the next poll's advance as stale.
     #[test]
-    fn a_sounded_update_seen_before_its_submitted_advance_is_not_stale() {
+    fn a_validity_count_seen_before_its_submitted_advance_is_not_stale() {
         let (result, elapsed) = torn_snapshot_wait(false);
 
         assert!(result.is_ok());
@@ -1973,6 +2039,135 @@ mod tests {
             elapsed >= std::time::Duration::from_millis(400),
             "finished at {elapsed:?}, before the measured target sounded"
         );
+    }
+
+    /// Usable estimates that stay flat (equal, or backward under growing
+    /// device delay) are not stale timestamps: the wait holds for the
+    /// measured target and times out at the deadline, never taking the tail.
+    #[test]
+    fn usable_estimates_that_stay_flat_are_not_stale_timestamps() {
+        let policy = RetryPolicy {
+            interval: std::time::Duration::from_millis(10),
+            max_wait: std::time::Duration::from_millis(500),
+        };
+        let start = std::time::Instant::now();
+        let clock = Rc::new(RefCell::new(start));
+        let submitted = Cell::new(4_800_u64);
+        let valid = Cell::new(0_u64);
+
+        let result = wait_for_measured_tail(
+            9_600,
+            std::time::Duration::from_millis(200),
+            48_000,
+            &policy,
+            || Some(progress_valid(100, submitted.get(), valid.get())),
+            || 0,
+            || *clock.borrow(),
+            |duration| {
+                *clock.borrow_mut() += duration;
+                valid.set(valid.get() + 1);
+                submitted.set(submitted.get() + 480);
+            },
+        );
+        let elapsed = clock.borrow().duration_since(start);
+
+        assert!(matches!(
+            result,
+            Err(DrainError::MeasuredTailTimedOut { .. })
+        ));
+        assert!(
+            elapsed >= policy.max_wait,
+            "gave up at {elapsed:?}, before the deadline"
+        );
+    }
+
+    /// Stale callbacks at 100 ms and 900 ms that each cover 600 ms of playback:
+    /// the idle gap between them is a stall, and a large resumed buffer does
+    /// not excuse it.
+    #[test]
+    fn a_large_resumed_buffer_does_not_excuse_the_stall_before_it() {
+        let result = cadence_wait(1_000, 1_000, 28_800, |ms| ms == 100 || ms == 900, None);
+
+        assert!(matches!(
+            result,
+            Err(DrainError::MeasuredTailTimedOut { .. })
+        ));
+    }
+
+    /// A poll thread descheduled for the whole `max_wait` sees one aggregate
+    /// advance from stale callbacks; it is judged at the deadline poll
+    /// itself, with no following poll to confirm it.
+    #[test]
+    fn a_lone_aggregate_at_the_deadline_poll_is_judged_there() {
+        let policy = RetryPolicy {
+            interval: std::time::Duration::from_millis(10),
+            max_wait: std::time::Duration::from_millis(300),
+        };
+        let start = std::time::Instant::now();
+        let clock = Rc::new(RefCell::new(start));
+        let submitted = Cell::new(4_u64);
+        let mut first_sleep = true;
+
+        let result = wait_for_measured_tail(
+            4,
+            std::time::Duration::from_millis(200),
+            48_000,
+            &policy,
+            || Some(progress(0, submitted.get())),
+            || 0,
+            || *clock.borrow(),
+            |duration| {
+                if std::mem::take(&mut first_sleep) {
+                    // The poll thread sleeps through the whole budget; the
+                    // callbacks that ran covered 250 ms.
+                    *clock.borrow_mut() += std::time::Duration::from_millis(310);
+                    submitted.set(submitted.get() + 12_000);
+                } else {
+                    *clock.borrow_mut() += duration;
+                }
+            },
+        );
+
+        assert!(result.is_ok(), "stale live callbacks finish the tail");
+    }
+
+    /// The same descheduled poll, but the validity count moved with the
+    /// aggregate: usable timestamps keep the measured wait in force.
+    #[test]
+    fn a_lone_aggregate_with_usable_timestamps_times_out_at_the_deadline() {
+        let policy = RetryPolicy {
+            interval: std::time::Duration::from_millis(10),
+            max_wait: std::time::Duration::from_millis(300),
+        };
+        let start = std::time::Instant::now();
+        let clock = Rc::new(RefCell::new(start));
+        let submitted = Cell::new(4_u64);
+        let valid = Cell::new(0_u64);
+        let mut first_sleep = true;
+
+        let result = wait_for_measured_tail(
+            4,
+            std::time::Duration::from_millis(200),
+            48_000,
+            &policy,
+            || Some(progress_valid(0, submitted.get(), valid.get())),
+            || 0,
+            || *clock.borrow(),
+            |duration| {
+                if std::mem::take(&mut first_sleep) {
+                    *clock.borrow_mut() += std::time::Duration::from_millis(310);
+                    submitted.set(submitted.get() + 12_000);
+                    valid.set(valid.get() + 1);
+                } else {
+                    *clock.borrow_mut() += duration;
+                }
+            },
+        );
+
+        assert!(matches!(
+            result,
+            Err(DrainError::MeasuredTailTimedOut { .. })
+        ));
     }
 
     #[test]
