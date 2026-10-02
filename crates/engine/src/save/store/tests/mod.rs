@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::save::block::{Coords16, PlayerGender, WarpData, TRAINER_ID_LENGTH};
+use crate::save::sector::SECTOR_SIGNATURE;
 use crate::save::{BoxPokemon, ItemSlot, Pokemon, PokemonSubstructures};
 
 mod corruption_tests;
