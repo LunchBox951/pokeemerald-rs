@@ -39,7 +39,7 @@
 //!
 //! Reads `sound/songs/midi/midi.cfg` and [`SONG_MIDI_FILENAME`] from the
 //! upstream checkout and writes the compiled result as one
-//! [`PackKind::Raw`] entry under [`SONG_PACK_ID`] (`crate::extract`'s
+//! [`pack_format::EntryKind::Raw`] entry under [`SONG_PACK_ID`] (`crate::extract`'s
 //! "Asset id scheme" docs).
 
 mod cfg;
@@ -68,7 +68,7 @@ pub(crate) const SONG_PACK_ID: &str = "audio/song/mus_title";
 
 /// Compile [`SONG_MIDI_FILENAME`] into its normalized [`event::SongEvent`]
 /// streams (per [`compile::compile`]'s own semantics) and write it as a
-/// [`EntryKind::Raw`] entry under [`SONG_PACK_ID`].
+/// [`pack_format::EntryKind::Raw`] entry under [`SONG_PACK_ID`].
 ///
 /// # Errors
 ///
