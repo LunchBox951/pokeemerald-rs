@@ -152,12 +152,8 @@ fn a_newer_legacy_slot_merges_its_blocks_with_the_older_full_slots_storage() {
     );
 }
 
-/// Migrating a five-sector file must not cost the player the progress it
-/// holds. When the legacy slot carries the newer counter, its
-/// SaveBlock1/SaveBlock2 are the player's latest state and the older
-/// full slot's only unique contribution is its opaque `PokemonStorage`:
-/// keeping both loses nothing, while preferring the full slot wholesale
-/// silently reverts the save to the older generation under status Ok.
+/// A newer five-sector slot keeps its progress; the older full slot
+/// contributes only its opaque `PokemonStorage`.
 #[test]
 fn migrating_a_newer_legacy_slot_keeps_its_progress_and_the_full_slot_storage() {
     let block2 = sample_block2();

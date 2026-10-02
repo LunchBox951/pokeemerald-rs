@@ -140,12 +140,9 @@ fn a_full_write_torn_past_the_head_is_never_a_stale_tail_with_one_outlier() {
     );
 }
 
-/// Why the legacy head, unlike its stale tail, stays unanimous: a
-/// five-sector write torn after four sectors over an imported rotation-10
-/// generation leaves ids 4, 0, 1, 2, 3 in positions 0-4 -- every head id
-/// once, all checksum-valid, four footers agreeing -- yet id 4 is
-/// `SaveBlock1` from a different generation. A four-of-five consensus
-/// would load that splice as `Ok`.
+/// A five-sector write torn after four sectors over a rotation-10 remnant
+/// leaves every head id once, checksum-valid, with four footers agreeing;
+/// the head must stay unanimous or the splice loads as `Ok`.
 #[test]
 fn a_torn_legacy_write_over_a_rotated_remnant_is_never_an_intact_head() {
     let block1 = sample_block1();

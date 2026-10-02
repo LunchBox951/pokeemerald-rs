@@ -1,12 +1,6 @@
-//! Two-slot rotating save storage.
-//!
-//! [`SaveStore`] rotates, scans, and rewrites all fourteen physical sectors
-//! of each slot, matching upstream's `sSaveSlotLayout`
-//! (`pokeemerald/src/save.c:43-72`): id 0 is [`SaveBlock2`], ids 1-4 are
-//! [`SaveBlock1`] chunks, and ids 5-13 are opaque `PokemonStorage` chunks.
-//! [`SaveStore::load`] also accepts this project's five-sector format (ids
-//! 0-4 only) and the next [`SaveStore::save`] rewrites it in full. File
-//! persistence belongs to [`super::file`].
+//! Two-slot rotating save storage over upstream's fourteen-sector
+//! `sSaveSlotLayout` (`pokeemerald/src/save.c:43-72`); [`SaveStore::load`]
+//! also accepts this project's five-sector format.
 
 use super::block::{SaveBlock1, SaveBlock2};
 use super::sector::{Sector, SECTOR_DATA_SIZE, SECTOR_SIZE};
