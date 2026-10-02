@@ -52,6 +52,7 @@ pub mod jasc_pal;
 mod layouts_json;
 pub(crate) mod midi;
 pub mod png;
+pub(crate) mod scope;
 mod text_window;
 pub(crate) mod voicegroups;
 mod wav;
@@ -61,6 +62,10 @@ use std::path::{Path, PathBuf};
 pub use error::ExtractError;
 pub use pack_format::OUTPUT_RELATIVE_PATH;
 use pack_format::{EntryShapeError, PackEntry, PackWriter};
+
+use scope::{
+    TilesetSource, TILESETS, TITLE_SCREEN_EMBEDDED_PALETTE_SHEETS, TITLE_SCREEN_PALETTE_CUTS,
+};
 
 /// Serializes tests that read or replace the checkout-local pack.
 #[cfg(test)]
@@ -429,34 +434,6 @@ impl StagedPack {
     }
 }
 
-#[derive(Clone, Copy)]
-struct TilesetSource {
-    category: &'static str,
-    name: &'static str,
-}
-
-const TILESETS: [TilesetSource; 5] = [
-    TilesetSource {
-        category: "primary",
-        name: "general",
-    },
-    TilesetSource {
-        category: "primary",
-        name: "building",
-    },
-    TilesetSource {
-        category: "secondary",
-        name: "petalburg",
-    },
-    TilesetSource {
-        category: "secondary",
-        name: "brendans_mays_house",
-    },
-    TilesetSource {
-        category: "secondary",
-        name: "lab",
-    },
-];
 const TILESET_PALETTE_COUNT: u8 = 16;
 
 fn read_file(path: &Path) -> Result<Vec<u8>, ExtractError> {
@@ -568,11 +545,7 @@ fn extract_tileset(
         .join(source.category)
         .join(source.name);
 
-    push_png_entry(
-        &base.join("tiles.png"),
-        format!("tileset/{}/tiles", source.name),
-        writer,
-    )?;
+    push_png_entry(&base.join("tiles.png"), source.tiles_id(), writer)?;
 
     let anim_dir = base.join("anim");
     if anim_dir.is_dir() {
@@ -613,13 +586,35 @@ fn extract_tileset(
     Ok(())
 }
 
-// `src/graphics.c`'s `gTitleScreenEmeraldVersionPal` and
-// `gTitleScreenPressStartPal` declarations build these palettes from each
-// PNG's embedded `PLTE` chunk instead of a sibling `.pal` file.
-const TITLE_SCREEN_EMBEDDED_PALETTE_SHEETS: [&str; 2] = ["emerald_version", "press_start"];
-
-// `graphics_file_rules.mk` builds `pokemon_logo.gbapal` with this limit.
-const TITLE_SCREEN_PALETTE_CUTS: [(&str, usize); 1] = [("pokemon_logo", 224)];
+/// Refuse a title directory missing a source the generator requires.
+fn require_title_sources(dir: &Path, entries: &[PathBuf]) -> Result<(), ExtractError> {
+    let required = scope::TITLE_SCREEN_IMAGES
+        .iter()
+        .chain(&scope::TITLE_SCREEN_EMBEDDED_PALETTE_SHEETS)
+        .map(|stem| format!("{stem}.png"))
+        .chain(
+            scope::TITLE_SCREEN_TILEMAPS
+                .iter()
+                .map(|stem| format!("{stem}.bin")),
+        )
+        .chain(
+            scope::TITLE_SCREEN_FILE_PALETTES
+                .iter()
+                .map(|stem| format!("{stem}.pal")),
+        );
+    for name in required {
+        if !entries
+            .iter()
+            .any(|p| p.file_name().is_some_and(|f| *f == *name))
+        {
+            return Err(ExtractError::ReadFailed(
+                dir.join(&name),
+                "required title screen source is missing".to_owned(),
+            ));
+        }
+    }
+    Ok(())
+}
 
 fn extract_title_screen(upstream: &Path, writer: &mut PackWriter) -> Result<(), ExtractError> {
     let dir = upstream.join("graphics/title_screen");
@@ -631,6 +626,7 @@ fn extract_title_screen(upstream: &Path, writer: &mut PackWriter) -> Result<(), 
         })
         .map_err(|e| ExtractError::ReadFailed(dir.clone(), e.to_string()))?;
     entries.sort();
+    require_title_sources(&dir, &entries)?;
 
     for path in entries {
         let Some(stem) = path.file_stem().map(|s| s.to_string_lossy().into_owned()) else {
@@ -905,7 +901,7 @@ mod tests {
         let path = scratch_path("embedded-palettes");
         let report = extract_to(&path).expect("extraction should succeed against a real checkout");
         let bytes = std::fs::read(&report.output_path).unwrap();
-        for name in super::TITLE_SCREEN_EMBEDDED_PALETTE_SHEETS {
+        for name in super::scope::TITLE_SCREEN_EMBEDDED_PALETTE_SHEETS {
             let id = format!("title/palette/{name}");
             assert_pack_contains_entry_id(&bytes, &id);
         }
