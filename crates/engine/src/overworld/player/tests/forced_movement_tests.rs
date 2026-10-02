@@ -557,3 +557,25 @@ fn a_held_slide_pose_keeps_its_foot_across_the_next_crossing() {
     player.advance_step_parity(player.slide_pose_held());
     assert_eq!(player.second_foot_leads(), held_foot);
 }
+
+/// A finished slide's held foot survives the next slide crossing that
+/// `step` itself dispatches (`event_object_movement.c:4582-4598`).
+#[test]
+fn a_held_slide_pose_keeps_its_foot_across_the_next_dispatched_crossing() {
+    let runtime = chained_forced_mover_runtime(MB_SLIDE_EAST);
+    let mut player = enter_forced_tile(&runtime, Direction::East);
+    player.step(None, &runtime, &no_connections, &NO_FLAGS);
+    for _ in 0..SLIDE_FRAMES_PER_TILE {
+        player.tick();
+    }
+    assert!(player.slide_pose_held());
+    let held_foot = player.second_foot_leads();
+    assert_eq!(
+        player.step(None, &runtime, &no_connections, &NO_FLAGS),
+        StepOutcome::Advanced {
+            from: (3, 2),
+            to: (4, 2),
+        }
+    );
+    assert_eq!(player.second_foot_leads(), held_foot);
+}
