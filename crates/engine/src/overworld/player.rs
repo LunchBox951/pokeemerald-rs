@@ -67,6 +67,9 @@ impl TransitCadence {
 /// Which of a walk animation's two forward-foot cells leads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LeadingFoot {
+    /// Fresh command 0, before any step, turn, or idle face. A direct first
+    /// step or turn leads with the first foot; an idle face moves it to `First`.
+    Fresh,
     First,
     Second,
 }
@@ -100,9 +103,8 @@ pub struct PlayerState {
     forced_movement_armed: bool,
     forced_input_tile_center: bool,
     rest_pose: RestPose,
-    /// The foot the latest animated step or turn led with (`sAnim_Go*` alternate
-    /// cells, `object_event_anims.h:202-272`). Starts on the second so the first
-    /// leads with the first.
+    /// The current walk-cycle phase (`sAnim_Go*` alternate cells,
+    /// `object_event_anims.h:202-272`).
     leading_foot: LeadingFoot,
 }
 
@@ -202,7 +204,7 @@ impl PlayerState {
             forced_movement_armed: false,
             forced_input_tile_center: false,
             rest_pose: RestPose::Standing,
-            leading_foot: LeadingFoot::Second,
+            leading_foot: LeadingFoot::Fresh,
         }
     }
 
@@ -331,7 +333,7 @@ impl PlayerState {
         matches!(self.rest_pose, RestPose::SlidePaused)
     }
 
-    /// Returns whether the latest animated step or turn led with the second foot.
+    /// Returns whether the current walk-cycle phase is the second foot.
     #[must_use]
     pub const fn second_foot_leads(&self) -> bool {
         matches!(self.leading_foot, LeadingFoot::Second)
@@ -343,7 +345,7 @@ impl PlayerState {
         if !slide_pose_held {
             self.leading_foot = match self.leading_foot {
                 LeadingFoot::First => LeadingFoot::Second,
-                LeadingFoot::Second => LeadingFoot::First,
+                LeadingFoot::Fresh | LeadingFoot::Second => LeadingFoot::First,
             };
         }
     }
@@ -503,6 +505,13 @@ impl PlayerState {
         let slide_pose_held = self.slide_pose_held();
         self.rest_pose = RestPose::Standing;
         let Some(direction) = input else {
+            // A fresh command 0 faces at command 1 (`SetStepAnim` seeks
+            // `animPos[0]`, `event_object_movement.c:4613-4617, 5048-5054`), so
+            // the next step or turn selects command 2, the second foot. A
+            // started cycle, held slide foot included, is kept.
+            if self.leading_foot == LeadingFoot::Fresh {
+                self.leading_foot = LeadingFoot::First;
+            }
             self.movement_streak_active = false;
             return StepOutcome::Idle;
         };

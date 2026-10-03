@@ -39,6 +39,55 @@ fn finish_crossing(player: &mut PlayerState) {
     }
 }
 
+/// A fresh idle face seeks command 1; the next crossing or turn selects
+/// command 2 (`SetStepAnim`, `SetStepAnimHandleAlternation`)
+/// `(behavioral-fidelity)`.
+#[test]
+fn idle_then_first_step_or_turn_leads_with_the_second_foot() {
+    let runtime = open_runtime(None);
+
+    let mut stepping = PlayerState::new((4, 4), 3, Direction::South);
+    assert_eq!(
+        stepping.step(None, &runtime, &no_connections, &NO_FLAGS),
+        StepOutcome::Idle
+    );
+    assert_eq!(
+        stepping.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS),
+        StepOutcome::Advanced {
+            from: (4, 4),
+            to: (4, 5),
+        }
+    );
+    assert!(stepping.second_foot_leads());
+
+    let mut turning = PlayerState::new((4, 4), 3, Direction::South);
+    assert_eq!(
+        turning.step(None, &runtime, &no_connections, &NO_FLAGS),
+        StepOutcome::Idle
+    );
+    assert_eq!(
+        turning.step(Some(Direction::North), &runtime, &no_connections, &NO_FLAGS),
+        StepOutcome::Turned(Direction::North)
+    );
+    assert!(turning.second_foot_leads());
+}
+
+/// Idling after a completed second-foot step keeps command 3, so the next
+/// step leads with the first foot: the idle normalisation is not a reset.
+#[test]
+fn idle_after_a_second_foot_step_does_not_reset_the_phase() {
+    let runtime = open_runtime(None);
+    let mut player = PlayerState::new((4, 4), 3, Direction::South);
+    for expect_second in [false, true] {
+        player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS);
+        assert_eq!(player.second_foot_leads(), expect_second);
+        finish_crossing(&mut player);
+    }
+    player.step(None, &runtime, &no_connections, &NO_FLAGS);
+    player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS);
+    assert!(!player.second_foot_leads());
+}
+
 /// Consecutive completed steps in every facing alternate the leading foot
 /// (`SetStepAnimHandleAlternation`, `event_object_movement.c:4582-4598`)
 /// `(behavioral-fidelity)`.
