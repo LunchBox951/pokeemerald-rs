@@ -177,6 +177,14 @@ struct PlaybackClock {
     /// timestamp pair doesn't support an estimate (see
     /// [`estimate_sounded_frames`]) does not undo an earlier one that did.
     timestamp_available: AtomicBool,
+    /// The `submitted_frames` total at the end of the most recent callback
+    /// that carried a usable timestamp (see [`estimate_sounded_frames`]).
+    /// Unlike `sounded_frames`, which `fetch_max` leaves flat for an estimate
+    /// that repeats or moves backward, this advances for every usable
+    /// callback. Stored before that callback's `submitted_frames`, so a
+    /// reader can ask whether any usable callback lies in a span of submitted
+    /// frames without needing the two stores to be observed together.
+    usable_through_frames: AtomicU64,
 }
 
 impl PlaybackClock {
@@ -185,6 +193,7 @@ impl PlaybackClock {
             submitted_frames: AtomicU64::new(0),
             sounded_frames: AtomicU64::new(0),
             timestamp_available: AtomicBool::new(false),
+            usable_through_frames: AtomicU64::new(0),
         }
     }
 
@@ -195,22 +204,36 @@ impl PlaybackClock {
     ///
     /// A callback whose timestamp pair does not support an estimate this
     /// time (see [`estimate_sounded_frames`]) simply leaves the published
-    /// estimate where it was.
+    /// estimate and the usable frame mark where they were.
     fn record_callback(
         &self,
         frame_count: u64,
         info: &cpal::OutputCallbackInfo,
         device_sample_rate: u32,
     ) {
-        let callback_start_frame = self
-            .submitted_frames
-            .fetch_add(frame_count, Ordering::Release);
-        if let Some(sounded) =
+        self.record(frame_count, |callback_start_frame| {
             estimate_sounded_frames(callback_start_frame, info.timestamp(), device_sample_rate)
-        {
+        });
+    }
+
+    /// The store order behind [`Self::record_callback`]. The callback thread
+    /// is the only writer, so `submitted_frames` is loaded and stored rather
+    /// than `fetch_add`ed, and stored *last*: a reader that loads
+    /// `submitted_frames` first and sees the callback's frames therefore also
+    /// sees its estimate and usable mark, however long the callback thread is
+    /// preempted between the stores. The mark may be seen *before* the frames
+    /// it covers; see `PlaybackProgress::usable_through_frames`.
+    fn record(&self, frame_count: u64, estimate: impl FnOnce(u64) -> Option<u64>) {
+        let callback_start_frame = self.submitted_frames.load(Ordering::Relaxed);
+        let callback_end_frame = callback_start_frame.saturating_add(frame_count);
+        if let Some(sounded) = estimate(callback_start_frame) {
             self.sounded_frames.fetch_max(sounded, Ordering::Release);
+            self.usable_through_frames
+                .store(callback_end_frame, Ordering::Release);
             self.timestamp_available.store(true, Ordering::Release);
         }
+        self.submitted_frames
+            .store(callback_end_frame, Ordering::Release);
     }
 }
 
@@ -228,6 +251,15 @@ pub struct PlaybackProgress {
     /// should trust each field's own history across calls rather than their
     /// exact relationship within one snapshot.
     pub sounded_frames: u64,
+    /// The `submitted_frames` total at the end of the latest callback with a
+    /// usable timestamp, whether or not it moved `sounded_frames` (an estimate
+    /// that repeats or regresses leaves that flat). A span of submitted frames
+    /// `(from, to]` held a usable callback if this exceeds `from`; if it does
+    /// not, every callback in the span had a stale timestamp. It is stored
+    /// before the frames it covers, so a reader never sees a usable callback's
+    /// frames ahead of its mark; it can lead `submitted_frames` by the
+    /// callback in flight and trails them across stale callbacks.
+    pub usable_through_frames: u64,
 }
 
 /// `delay` (a callback-to-playback gap from a [`cpal::OutputStreamTimestamp`])
@@ -606,9 +638,15 @@ impl AudioOutput {
         {
             return None;
         }
+        // `submitted_frames` first: see `PlaybackClock::record`.
+        let submitted_frames = self.playback_clock.submitted_frames.load(Ordering::Acquire);
         Some(PlaybackProgress {
-            submitted_frames: self.playback_clock.submitted_frames.load(Ordering::Acquire),
+            submitted_frames,
             sounded_frames: self.playback_clock.sounded_frames.load(Ordering::Acquire),
+            usable_through_frames: self
+                .playback_clock
+                .usable_through_frames
+                .load(Ordering::Acquire),
         })
     }
 
@@ -644,7 +682,9 @@ impl AudioOutput {
     /// Advances this instance's fake sounded-frame position for a
     /// null-backed test, the way a real device callback's own estimate
     /// would — clamped to monotonic non-decreasing, so a lower `frames`
-    /// never moves it backward. Has no effect on
+    /// never moves it backward. Also marks every frame submitted so far
+    /// as covered by a usable callback (`PlaybackProgress::usable_through_frames`),
+    /// moved or not. Has no effect on
     /// [`Self::playback_progress`] until
     /// [`Self::enable_playback_progress_for_test`] has been called.
     #[doc(hidden)]
@@ -652,6 +692,10 @@ impl AudioOutput {
         self.playback_clock
             .sounded_frames
             .fetch_max(frames, Ordering::Release);
+        let submitted = self.playback_clock.submitted_frames.load(Ordering::Acquire);
+        self.playback_clock
+            .usable_through_frames
+            .fetch_max(submitted, Ordering::Release);
     }
 
     /// Drive the null backend by hand, filling `out` through the exact same
