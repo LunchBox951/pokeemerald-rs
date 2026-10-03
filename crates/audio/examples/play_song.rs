@@ -504,6 +504,17 @@ fn wait_for_device_tail(
     }
 }
 
+/// The playback `frames` device frames cover at `device_sample_rate`; zero
+/// when the rate is unknown.
+fn frames_duration(frames: u64, device_sample_rate: u32) -> Duration {
+    let frames = u32::try_from(frames).unwrap_or(u32::MAX);
+    if device_sample_rate > 0 {
+        Duration::from_secs_f64(f64::from(frames) / f64::from(device_sample_rate))
+    } else {
+        Duration::ZERO
+    }
+}
+
 /// Wait, within `policy`, for the device's measured playback position (see
 /// `platform::AudioOutput::playback_progress`) to reach `target` submitted
 /// device frames, polling `progress` at `policy.interval`.
@@ -516,9 +527,10 @@ fn wait_for_device_tail(
 /// disappearing mid-wait is not itself a failure.
 ///
 /// Stale timestamps are read from `usable_through_frames`, never from the
-/// sounded estimate's shape: a submitted advance `(from, to]` is stale evidence
-/// at once when that mark does not exceed `from`, and one that does discards
-/// the evidence (a usable callback keeps the measured wait in force). Evidence of at least
+/// sounded estimate's shape: a mark past `from` in a submitted advance
+/// `(from, to]` discards the pending evidence (a usable callback keeps the
+/// measured wait in force), and the frames past both `from` and the mark are
+/// stale evidence at once. Evidence of at least
 /// `derived_tail / 4` (a span of advances, or one covering that much
 /// playback) with the latest advance within one recent inter-advance gap
 /// (over the last [`CADENCE_WINDOW`]) plus two polls means live callbacks,
@@ -589,12 +601,7 @@ fn wait_for_measured_tail(
             after_stall = false;
         }
         if let Some(previous) = last_submitted.filter(|&last| submitted > last) {
-            let frames = u32::try_from(submitted - previous).unwrap_or(u32::MAX);
-            let played = if device_sample_rate > 0 {
-                Duration::from_secs_f64(f64::from(frames) / f64::from(device_sample_rate))
-            } else {
-                Duration::ZERO
-            };
+            let played = frames_duration(submitted - previous, device_sample_rate);
             // The advance happened somewhere since the previous poll. A late
             // poll can fold many callbacks into it, so credit it no later
             // than the playback it covers past that poll rather than
@@ -634,10 +641,15 @@ fn wait_for_measured_tail(
             advances = advances.wrapping_add(1);
             last_advance = Some(at);
             last_played = played;
-            if !usable {
+            // Frames past both the previous poll and the usable mark came
+            // from callbacks after the last usable one: stale evidence, even
+            // when one late poll folds a usable callback in ahead of them.
+            let stale_frames = submitted.saturating_sub(previous.max(usable_through));
+            if stale_frames > 0 {
                 first_stale.get_or_insert(at);
                 last_stale = Some(at);
-                max_stale_advance = max_stale_advance.max(played);
+                let stale = frames_duration(stale_frames, device_sample_rate);
+                max_stale_advance = max_stale_advance.max(stale);
             }
         }
         last_poll = current;

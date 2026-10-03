@@ -437,3 +437,41 @@ fn a_usable_mark_seen_before_its_submitted_advance_clears_stale_evidence() {
     assert_eq!(elapsed, Duration::from_millis(400));
     assert_eq!(sounded.get(), 48_000);
 }
+
+/// A poll starved through the whole budget sees one aggregate whose first
+/// callback was usable and whose 200 ms suffix was stale: the suffix past the
+/// usable mark is stale evidence, as the same frames all-stale would be.
+#[test]
+fn the_stale_suffix_of_a_mixed_aggregate_at_the_deadline_poll_is_evidence() {
+    let policy = RetryPolicy {
+        interval: std::time::Duration::from_millis(10),
+        max_wait: std::time::Duration::from_millis(300),
+    };
+    let start = std::time::Instant::now();
+    let clock = Rc::new(RefCell::new(start));
+    let submitted = Cell::new(4_u64);
+    let usable = Cell::new(0_u64);
+    let mut first_sleep = true;
+
+    let result = wait_for_measured_tail(
+        4,
+        std::time::Duration::from_millis(200),
+        48_000,
+        &policy,
+        || Some(progress_usable(0, submitted.get(), usable.get())),
+        || 0,
+        || *clock.borrow(),
+        |duration| {
+            if std::mem::take(&mut first_sleep) {
+                *clock.borrow_mut() += std::time::Duration::from_millis(310);
+                // One usable 10 ms callback, then 200 ms of stale ones.
+                usable.set(submitted.get() + 480);
+                submitted.set(submitted.get() + 480 + 9_600);
+            } else {
+                *clock.borrow_mut() += duration;
+            }
+        },
+    );
+
+    assert!(result.is_ok(), "the stale suffix finishes the tail");
+}
