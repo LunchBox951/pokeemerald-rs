@@ -411,3 +411,39 @@ fn semi_transparent_obj_reblend_brightens_with_a_deeper_enabled_target2_bg() {
         "no target2 anywhere -> the semi-transparent OBJ is brightened to white"
     );
 }
+
+#[test]
+fn masked_duplicate_bg_cannot_be_its_own_second_target() {
+    let (tiles_a, palette_a, map_a) = opaque_bg_fixture(31);
+    let (tiles_b, palette_b, map_b) = opaque_bg_fixture(0);
+    let layer_a = crate::bg::BgLayer::new(&tiles_a, &palette_a, &map_a);
+    let layer_b = crate::bg::BgLayer::new(&tiles_b, &palette_b, &map_b);
+    // Index 4 masks to BG0: one physical BG0 has no second BG0 to blend with.
+    let slots = [
+        BgSlot::new(layer_a, 0, 0, 0, 0, true),
+        BgSlot::new(layer_b, 4, 0, 0, 0, true),
+    ];
+    let entries: [OamEntry; 0] = [];
+    let no_sprite_tiles = Tileset::decode(BitDepth::Bpp4, &[]).unwrap();
+    let sprites = empty_sprite_layer(&entries, &no_sprite_tiles);
+    let bg0_only = LayerTargets {
+        bg: [true, false, false, false],
+        obj: false,
+        backdrop: false,
+    };
+    let effects = FrameEffects {
+        color: EffectsConfig {
+            effect: ColorEffect::AlphaBlend,
+            target1: bg0_only,
+            target2: bg0_only,
+            eva: 8,
+            evb: 8,
+            evy: 0,
+        },
+        ..FrameEffects::default()
+    };
+    let fb = compose_frame_with_effects(&sprites, &slots, &effects);
+    let single = compose_frame_with_effects(&sprites, &slots[..1], &effects);
+    assert_eq!(single.pixel(0, 0), Some(Rgb888 { r: 255, g: 0, b: 0 }));
+    assert_eq!(fb.pixels(), single.pixels());
+}
