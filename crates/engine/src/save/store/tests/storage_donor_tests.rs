@@ -383,16 +383,6 @@ fn an_identity_legacy_head_over_a_complete_tail_keeps_its_counter_despite_one_da
     assert_eq!(&store.base_pokemon_storage[..], &counter_14_storage[..]);
 }
 
-/// Rewrites the unchecksummed footer id of the sector at `position`,
-/// leaving its payload, checksum, signature and counter untouched.
-fn relabel_footer_id(store: &mut SaveStore, slot: usize, position: usize, id: u16) {
-    // The footer ends id (u16), checksum (u16), signature, counter (u32s).
-    let id_offset = SECTOR_SIZE - 2 * size_of::<u32>() - 2 * size_of::<u16>();
-    let mut bytes = *store.read_physical(slot, position).as_bytes();
-    bytes[id_offset..id_offset + 2].copy_from_slice(&id.to_le_bytes());
-    store.write_physical(slot, position, &Sector::from_bytes(bytes));
-}
-
 /// Ids 0 and 4 are zero-padded and the checksum sums words, so either
 /// verifies at a storage id's length. Relabeled into the lost id 5 at
 /// position 4, each would complete a coherent set from a generation still

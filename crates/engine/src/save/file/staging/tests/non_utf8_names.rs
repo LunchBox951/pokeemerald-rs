@@ -12,15 +12,11 @@ use crate::save::file::SaveFile;
 #[cfg(unix)]
 use crate::save::store::FLASH_IMAGE_LEN;
 
-/// Whether `dir`'s filesystem will hold an entry whose name is not valid
-/// UTF-8. Not every one will: APFS and HFS+ validate the bytes of every
-/// name a syscall hands them and refuse `sa\xFFv` outright with `EILSEQ`
-/// ("Illegal byte sequence"), so on macOS the save path the test below
-/// needs cannot be brought into existence at all and there is nothing
-/// there to assert about. Probed through the very operation that test
-/// depends on -- the rename that publishes the staged image onto such a
-/// name -- rather than assumed from `target_os`, so a host that does
-/// accept one keeps the coverage.
+#[cfg(unix)]
+const INVALID_UTF8_BYTE: u8 = 0xFF;
+
+/// APFS and HFS+ reject non-UTF-8 names with `EILSEQ`; probe the rename that
+/// publishes the save rather than assuming support from `target_os`.
 #[cfg(unix)]
 fn host_accepts_a_non_utf8_filename(dir: &Path) -> bool {
     use std::ffi::OsString;
@@ -30,17 +26,12 @@ fn host_accepts_a_non_utf8_filename(dir: &Path) -> bool {
     if std::fs::write(&valid, b"probe").is_err() {
         return false;
     }
-    let raw = dir.join(OsString::from_vec(vec![b'p', 0xFF, b'e']));
+    let raw = dir.join(OsString::from_vec(vec![b'p', INVALID_UTF8_BYTE, b'e']));
     let accepted = std::fs::rename(&valid, &raw).is_ok();
     drop(std::fs::remove_file(if accepted { &raw } else { &valid }));
     accepted
 }
 
-/// A save path whose basename is invalid UTF-8 must still be writable, and
-/// the sibling it stages under must land beside it, in the same directory:
-/// `staging_path_with_caps` renders that basename through `to_string_lossy`
-/// and a char-boundary truncation, which is only exercised by a non-UTF-8
-/// input.
 #[cfg(unix)]
 #[test]
 fn a_non_utf8_basename_stages_and_writes_in_the_same_directory() {
@@ -51,9 +42,12 @@ fn a_non_utf8_basename_stages_and_writes_in_the_same_directory() {
     if !host_accepts_a_non_utf8_filename(&dir.path) {
         return;
     }
-    let path = dir
-        .path
-        .join(OsString::from_vec(vec![b's', b'a', 0xFF, b'v']));
+    let path = dir.path.join(OsString::from_vec(vec![
+        b's',
+        b'a',
+        INVALID_UTF8_BYTE,
+        b'v',
+    ]));
     assert!(path.file_name().unwrap().to_str().is_none());
     let file = SaveFile::at(&path);
     let (store, _, _) = saved_store();
@@ -78,28 +72,22 @@ fn a_non_utf8_basename_stages_and_writes_in_the_same_directory() {
     assert_eq!(reloaded.flash_image(), store.flash_image());
 }
 
-/// A non-UTF-8 basename's lossy rendering can be longer than its raw bytes
-/// -- each invalid byte becomes a three-byte replacement character -- so the
-/// first-guess candidate built from it can be longer than the raw basename
-/// would need. The shrink chain must still bring it under an injected limit
-/// the raw basename alone would have satisfied.
+/// A raw basename can fit a component limit while its lossy staging name
+/// exceeds it; shrinking must still satisfy the limit.
 #[cfg(unix)]
 #[test]
 fn a_non_utf8_basename_whose_lossy_form_is_longer_still_respects_an_injected_limit() {
     use std::ffi::OsString;
     use std::os::unix::ffi::OsStringExt as _;
 
-    // A limit the lossy candidate (15-byte inflated stem plus the 15-byte
-    // suffix) exceeds, but that the 5-byte raw basename plus the suffix
-    // would not have -- isolating the lossy-inflation scenario specifically.
-    const INJECTED_LIMIT: usize = 20;
+    const RAW_BASENAME_LEN: usize = 5;
+    const WIDEST_SUFFIX_LEN: usize = 15;
+    const LOSSY_STEM_LEN: usize = RAW_BASENAME_LEN * '\u{FFFD}'.len_utf8();
+    const INJECTED_LIMIT: usize = RAW_BASENAME_LEN + WIDEST_SUFFIX_LEN;
 
-    // Five invalid bytes, each rendered as a three-byte U+FFFD replacement
-    // character, so the lossy stem (15 bytes) is three times longer than
-    // the raw basename (5 bytes) it was built from.
-    let raw_basename = vec![0xFFu8; 5];
+    let raw_basename = vec![INVALID_UTF8_BYTE; RAW_BASENAME_LEN];
     assert!(std::str::from_utf8(&raw_basename).is_err());
-    assert!(raw_basename.len() + 15 <= INJECTED_LIMIT);
+    assert!(raw_basename.len() + WIDEST_SUFFIX_LEN <= INJECTED_LIMIT);
 
     let dir = TempDir::new("non-utf8-lossy-limit");
     let path = dir.path.join(OsString::from_vec(raw_basename.clone()));
@@ -129,7 +117,7 @@ fn a_non_utf8_basename_whose_lossy_form_is_longer_still_respects_an_injected_lim
          rendering of a non-UTF-8 basename is longer than its raw bytes: {final_component_len} bytes"
     );
     assert!(
-        final_component_len < raw_basename.len() + 15 + 15,
+        final_component_len < raw_basename.len() + LOSSY_STEM_LEN + WIDEST_SUFFIX_LEN,
         "the stem must actually have been shortened from the lossy first-guess \
          candidate, not merely have succeeded by chance: {final_component_len} bytes"
     );
