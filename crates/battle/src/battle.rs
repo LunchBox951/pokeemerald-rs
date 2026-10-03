@@ -594,6 +594,17 @@ impl Battle {
         }
     }
 
+    /// Whether a validated action is a `Run` that cannot fail, so the enemy
+    /// can never act on this turn and its moveset needs no re-screen. Run
+    /// Away and equal-or-greater raw Speed escape without a draw
+    /// (`pokeemerald/src/battle_util.c:427`-`:447`, `:463`-`:465`), and a
+    /// successful escape ends the turn before the enemy acts (`:478`-`:481`).
+    fn escape_is_guaranteed(&self, action: ValidatedPlayerAction) -> bool {
+        matches!(action, ValidatedPlayerAction::Run)
+            && (self.player.ability() == AbilityId::RUN_AWAY
+                || self.player.stats().speed >= self.enemy.stats().speed)
+    }
+
     fn resolve_turn(
         &mut self,
         player_action: PlayerAction,
@@ -601,7 +612,9 @@ impl Battle {
         events: &mut Vec<BattleEvent>,
     ) -> Result<(), BattleError> {
         let player_action = self.validate_player_action(player_action)?;
-        self.revalidate_enemy_admission()?;
+        if !self.escape_is_guaranteed(player_action) {
+            self.revalidate_enemy_admission()?;
+        }
         self.start_turn(rng);
         let enemy_action = self.choose_enemy_action(rng)?;
 
