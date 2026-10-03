@@ -3,9 +3,10 @@ use crate::save::block::SaveBlock1;
 use crate::save::file::tests::{guessable_pid_staging_path, saved_store, TempDir};
 use crate::save::file::{SaveFile, SAVE_FILE_NAME};
 
-/// Whether `err` is Windows reporting that an open handle's share mode
-/// admits no one else. `std` categorises `ERROR_SHARING_VIOLATION` on some
-/// Windows versions and not others, so both spellings count.
+const SECOND_WRITER_MONEY: u32 = 222_222;
+
+/// `std` maps `ERROR_SHARING_VIOLATION` to `PermissionDenied` on some Windows
+/// versions only, so accept either spelling.
 #[cfg(windows)]
 fn is_a_sharing_violation(err: &std::io::Error) -> bool {
     const ERROR_SHARING_VIOLATION: i32 = 32;
@@ -14,12 +15,8 @@ fn is_a_sharing_violation(err: &std::io::Error) -> bool {
         || err.raw_os_error() == Some(ERROR_SHARING_VIOLATION)
 }
 
-/// The Windows counterpart to the unix swap tests: rather than catching a
-/// replacement between the write and the rename, the hold makes one
-/// impossible. Those tests plant their swap by unlinking the staged entry
-/// and taking its name; here neither step can even be attempted, which is
-/// why the regular-file test is all [`StagedSave::still_ours`] has left to
-/// ask off unix.
+/// On Windows the live hold makes replacement impossible; it must be released
+/// before the promoting rename.
 #[cfg(windows)]
 #[test]
 fn a_staged_image_cannot_be_opened_or_removed_while_its_hold_lives() {
@@ -75,10 +72,6 @@ fn two_save_files_on_one_path_never_share_a_staging_name() {
     let dir = TempDir::new("same-path-staging-names");
     let path = dir.join(SAVE_FILE_NAME);
 
-    // Two independent `SaveFile` values on the identical path, not clones of
-    // one -- each must derive its own staging name. Observed directly: a
-    // race between two writers proves nothing when either can finish staging
-    // before the other one even starts.
     let first = SaveFile::at(&path);
     let second = SaveFile::at(&path);
     let first_staging = area(&first).first_name();
@@ -98,8 +91,6 @@ fn two_save_files_on_one_path_never_share_a_staging_name() {
         "the staging name must not be the guessable, symlink-plantable <save>.tmp.<pid> form"
     );
 
-    // Distinct staging names also mean two writers on one path can be
-    // sequenced without either clobbering the other's in-flight staging file.
     let (first_store, _, block2) = saved_store();
     first
         .write(&first_store)
@@ -108,7 +99,7 @@ fn two_save_files_on_one_path_never_share_a_staging_name() {
     let mut second_store = first_store.clone();
     second_store.save(
         &SaveBlock1 {
-            money: 222_222,
+            money: SECOND_WRITER_MONEY,
             ..SaveBlock1::default()
         },
         &block2,

@@ -1,6 +1,3 @@
-//! Pins the staged sibling's name, its exclusive creation, the retries a
-//! host's real limits force, and the cleanup that abandons it.
-
 mod shared;
 
 mod creation_and_cleanup;
