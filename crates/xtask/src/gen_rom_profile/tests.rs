@@ -941,9 +941,9 @@ fn a_pack_missing_the_whole_tileset_domain_is_refused() {
     with_context("no-tilesets", &rom, vec![unrelated_entry()], |ctx| {
         let mut report = Vec::new();
         let err = super::tilesets::locate(ctx, &mut report)
-            .expect_err("a pack with no tileset/*/tiles entries must be refused");
+            .expect_err("a pack with no fixed tileset roots must be refused");
         assert!(
-            matches!(&err, GenRomProfileError::MissingPackEntry(id) if id == "tileset/*/tiles"),
+            matches!(&err, GenRomProfileError::MissingPackEntry(id) if id == "tileset/general/tiles"),
             "{err:?}"
         );
         assert!(

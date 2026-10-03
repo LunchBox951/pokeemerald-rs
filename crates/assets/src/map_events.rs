@@ -1,138 +1,10 @@
-//! Map events (S-4): object/warp/coord/bg events — the upstream `struct
-//! MapEvents` table (`pokeemerald/include/global.fieldmap.h`).
+//! Per-map object, warp, coordinate, and background events, mirroring
+//! upstream `struct MapEvents` (`include/global.fieldmap.h`).
 //!
-//! Ports every map's four event lists from
-//! `pokeemerald/data/maps/<Name>/map.json`'s `object_events` / `warp_events`
-//! / `coord_events` / `bg_events` arrays (518 maps, in the same
-//! `map_groups.json` group/position order as
-//! [`map_headers::MAP_GROUPS`](crate::map_headers)) — the part of each
-//! map.json the `map_headers` module explicitly left out (see that module's
-//! docs). Script *content* is out of scope (issue #77 is about the typed
-//! event shapes, not script behaviour — S-5); event *behaviour* (movement,
-//! trainer sight checks, warp transitions, flag effects) is likewise out of
-//! scope.
-//!
-//! **Struct provenance.** The four event structs mirror upstream 1:1:
-//! `struct ObjectEventTemplate`, `struct WarpEvent`, `struct CoordEvent`,
-//! `struct BgEvent` (all in `global.fieldmap.h`). [`ObjectEvent`] adds one
-//! field beyond the issue's own field list — `local_id` — because it is a
-//! real, load-bearing byte in `ObjectEventTemplate` (`/*0x00*/ u8 localId;`):
-//! scripts and other object events reference NPCs by it (`LOCALID_*`
-//! symbols in map.json are just `#define`s for particular local ids, not a
-//! separate field). Upstream's own generator
-//! (`pokeemerald/tools/mapjson/mapjson.cpp`,
-//! `generate_map_events_text`/`object_event`) always assigns `local_id` from
-//! the object's *position* in `object_events` (`index + 1`) regardless of
-//! whether a `local_id` name is present in the JSON — this module transcribes
-//! that same computed value, not a name.
-//!
-//! **Open vs. closed reference spaces.** Per the issue's own guidance:
-//! - Open (no complete/self-contained upstream enum, or genuinely
-//!   extensible): `graphics_id` (`OBJ_EVENT_GFX_*`,
-//!   `pokeemerald/src/data/object_events/object_event_graphics_info_pointers.h`,
-//!   256+ symbols), `script` (`0x0` means `NULL`, i.e. no script), `flag`
-//!   (`0` means no flag), `var` (coord-event trigger variable), and
-//!   `trainer_sight_or_berry_tree_id` (either a plain sight-range integer as
-//!   a string, or — when the object is a berry tree
-//!   (`MOVEMENT_TYPE_BERRY_TREE_GROWTH`) — a `BERRY_TREE_*` name). All of
-//!   these are transcribed as plain `&'static str`, exactly as they appear in
-//!   map.json, including the literal `"0"`/`"0x0"` sentinels — this crate
-//!   owns neither the flags/vars store (that's the `engine` crate's S-5
-//!   event-flags-and-vars slice) nor a berry-tree table, so turning these
-//!   into numbers would mean inventing a mapping rather than transcribing
-//!   one.
-//! - Closed (a complete, self-contained upstream header exists) become real
-//!   Rust enums, mirroring [`map_headers::Weather`](crate::map_headers::Weather)
-//!   /[`MapType`](crate::map_headers::MapType): [`MovementType`]
-//!   (`constants/event_object_movement.h`, `MOVEMENT_TYPE_*`, 81 values),
-//!   [`TrainerType`] (`constants/trainer_types.h`, `TRAINER_TYPE_*`, 4
-//!   values), [`FacingDirection`] (`constants/event_bg.h`,
-//!   `BG_EVENT_PLAYER_FACING_*`, 5 values), and [`CoordWeather`]
-//!   (`constants/weather.h`, `COORD_EVENT_WEATHER_*`, 12 values — **not**
-//!   the same numbering as [`map_headers::Weather`](crate::map_headers::Weather);
-//!   e.g. `COORD_EVENT_WEATHER_DROUGHT` is `11` but `WEATHER_DROUGHT` is
-//!   `12`, so the two enums are deliberately kept distinct rather than
-//!   unified).
-//! - `item` (hidden-item bg events) resolves to the already-extracted
-//!   [`items::ItemId`](crate::items::ItemId) (numeric, via
-//!   `constants/items.h`'s `ITEM_*` defines) rather than a string — this
-//!   crate *does* own the full item table ([`items::ItemTable`]), so, per the
-//!   same reasoning [`map_headers::MusicId`](crate::map_headers::MusicId) used
-//!   for `MUS_*`, resolving to the real numeric id at extraction time is
-//!   honest transcription, not invention.
-//! - `secret_base_id` wraps the symbolic `SECRET_BASE_*` name in
-//!   [`SecretBaseId`] rather than the numeric id `constants/secret_bases.h`
-//!   defines. Unlike `weather.h`/`event_bg.h`/`trainer_types.h`, several of
-//!   that header's ids are computed via a `SECRET_BASE_GROUP(n)` macro rather
-//!   than listed as plain literals, and this crate has no owned secret-base
-//!   table to validate a re-derived number against (secret base contents are
-//!   a separate, not-yet-extracted slice) — so, per the same reasoning as
-//!   [`map_headers::RegionMapSectionId`](crate::map_headers::RegionMapSectionId),
-//!   the name is transcribed rather than a number risking a silent arithmetic
-//!   mistake.
-//!
-//! **`MAP_DYNAMIC`/`WARP_ID_DYNAMIC`/`WARP_ID_SECRET_BASE`
-//! (`pokeemerald/include/constants/maps.h`), handled explicitly.** A handful
-//! of warps (elevators, the truck, Union Room, secret bases, trade/record
-//! rooms — 21 `WARP_ID_DYNAMIC` + 24 `WARP_ID_SECRET_BASE` across the whole
-//! table) don't name a fixed destination: their `dest_map` is the sentinel
-//! `MAP_DYNAMIC` and `dest_warp_id` is one of the two sentinel warp ids,
-//! meaning "resolve at runtime" (from `gSaveBlock1Ptr->dynamicWarp`, or the
-//! visited secret base) rather than "warp `N` in `dest_map`". [`WarpDestination`]
-//! and [`WarpId`] model this as an explicit enum rather than smuggling the
-//! sentinel through as a magic `MapId`/index, so callers cannot accidentally
-//! treat a dynamic warp as pointing at a real, static map.
-//!
-//! **`shared_events_map`.** Eleven maps (the five contest-hall-by-category
-//! variants, six unused contest-hall duplicates) carry no event lists of
-//! their own — upstream's `struct MapHeader.events` pointer for them
-//! literally aliases another map's `MapEvents` (`ContestHall`'s). Rather
-//! than duplicating that map's events into each alias (which upstream does
-//! *not* do — they share one pointer, so behaviourally editing one edits
-//! all), each alias's [`MapEvents`] carries empty event slices plus
-//! [`MapEvents::shared_events_map`] naming the real owner;
-//! [`MapEventsTable::resolve`] follows that indirection for callers that want
-//! "the events that actually fire here" without caring which map defines them.
-//!
-//! **Coord events: `trigger` vs. `weather`.** The issue's own field list
-//! ("var, var value, script") describes only the common `trigger` shape, but
-//! `coord_events` also has a `weather` variant (86 of 375 across the table,
-//! upstream's `coord_weather_event` macro) that sets ambient weather instead
-//! of running a script. [`CoordEventKind`] models both explicitly rather than
-//! dropping the rarer one.
-//!
-//! **No `clone`-type object events.** Upstream's own generator
-//! (`mapjson.cpp`) supports an alternate `"type": "clone"` object-event shape
-//! (`target_local_id`/`target_map` instead of the normal fields), but no
-//! Emerald map.json actually uses it — every one of the 2,776 object events
-//! in this checkout is a plain `"object"` (or has no `type` key, the same
-//! default). Not modelled here; a real occurrence would need this module
-//! extended, not silently coerced into [`ObjectEvent`].
-//!
-//! **Re-running the extraction.** As with `map_headers`/`map_layouts`, this
-//! module's transcribed table was produced by a development-time-only
-//! script, not checked into the workspace. To regenerate: walk
-//! `map_groups.json`'s `group_order` exactly as `map_headers` does (same
-//! order, so [`MAP_EVENTS`] and [`map_headers::MAP_GROUPS`](crate::map_headers)
-//! index the same map at the same position), and for each map's
-//! `data/maps/<Name>/map.json`:
-//! - if `shared_events_map` is present, resolve that *Porymap `name`* (not a
-//!   `MAP_*` id) to its owning map's `id` (by scanning every map.json's own
-//!   `name`/`id` pair once) and emit an all-empty [`MapEvents`] naming it;
-//! - otherwise transcribe `object_events` (assigning `local_id` from array
-//!   position as described above), `warp_events`, `coord_events`, and
-//!   `bg_events` verbatim, resolving `movement_type`/`trainer_type`/
-//!   `player_facing_dir`/`weather`(coord)/`item` against the closed
-//!   enums/[`items::ItemId`] described above and leaving every other
-//!   reference as the literal map.json string.
-//!
-//! The upstream-tie tests at the bottom pin Littleroot Town's object events
-//! (the twin, Mom, the truck, the rival, Professor Birch) and warps, a
-//! Route 101 coord trigger, a Route 104 hidden item, a Route 111 secret
-//! base, and a trainer's movement/sight fields, plus structural checks over
-//! the whole table (every map id resolves, every warp's static destination
-//! names a real map header, `shared_events_map` resolves for all eleven
-//! aliases).
+//! Script, flag, variable, and graphics references stay the strings written in
+//! `data/maps/*/map.json`; no complete table exists here to resolve them against.
+//! The string `"0x0"` in a `script` and the string `"0"` in a `flag` mean
+//! "none". Identities with a complete upstream header are enums.
 
 use crate::error::AssetError;
 use crate::items::ItemId;
@@ -404,9 +276,11 @@ impl FacingDirection {
 }
 
 /// The weather a weather-trigger [`CoordEvent`] sets, matching the upstream
-/// `COORD_EVENT_WEATHER_*` identifiers (a distinct, smaller numbering from
-/// [`map_headers::Weather`](crate::map_headers::Weather) — the two do not share ids)
-/// (`pokeemerald/include/constants/weather.h`).
+/// `COORD_EVENT_WEATHER_*` identifiers (`include/constants/weather.h`).
+///
+/// These ids differ from `WEATHER_*` (and so from
+/// [`map_headers::Weather`](crate::map_headers::Weather)); for example drought
+/// is `11` here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum CoordWeather {
@@ -457,9 +331,10 @@ impl CoordWeather {
     }
 }
 
-/// A secret-base location id — the upstream `SECRET_BASE_*` name (see the
-/// module docs for why this wraps the symbolic name rather than a derived
-/// number).
+/// A secret-base location, kept as the symbolic upstream `SECRET_BASE_*` name
+/// because several of `include/constants/secret_bases.h`'s numeric ids come
+/// from the `SECRET_BASE_GROUP` macro and this crate has no secret-base table
+/// to validate re-derived numbers against.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SecretBaseId(pub &'static str);
 
@@ -471,222 +346,195 @@ impl SecretBaseId {
     }
 }
 
-/// One `object_events` entry — the owned form of upstream `struct
-/// ObjectEventTemplate` (an NPC or interactable prop).
+/// One `object_events` entry: an NPC or interactable prop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ObjectEvent {
-    /// This object's id within its map (upstream `localId`): its 1-based
-    /// position in this map's `object_events` array — see the module docs
-    /// for why this is a computed position, not a transcribed field.
+    /// The object's 1-based position in its map's `object_events` array.
+    ///
+    /// `tools/mapjson/mapjson.cpp` (`generate_map_events_text`) assigns
+    /// `localId` from this position, ignoring any `local_id` symbol in the JSON.
     pub local_id: u8,
-    /// This object's sprite/graphics set (upstream `graphicsId`, e.g.
-    /// `"OBJ_EVENT_GFX_MOM"`). Open reference — see the module docs.
+    /// The `OBJ_EVENT_GFX_*` name of the sprite set.
     pub graphics_id: &'static str,
-    /// This object's x position, in metatiles (upstream `x`).
+    /// Horizontal position, in metatiles.
     pub x: i16,
-    /// This object's y position, in metatiles (upstream `y`).
+    /// Vertical position, in metatiles.
     pub y: i16,
-    /// This object's elevation/layer (upstream `elevation`).
+    /// Elevation layer.
     pub elevation: u8,
-    /// This object's scripted idle behaviour (upstream `movementType`).
+    /// Idle or wander behaviour.
     pub movement_type: MovementType,
-    /// The horizontal half-range of this object's movement, in metatiles
-    /// (upstream `movementRangeX`, a 4-bit field: `0..=15`).
+    /// Horizontal half-range of movement, in metatiles (`0..=15`, four bits upstream).
     pub movement_range_x: u8,
-    /// The vertical half-range of this object's movement, in metatiles
-    /// (upstream `movementRangeY`, a 4-bit field: `0..=15`).
+    /// Vertical half-range of movement, in metatiles (`0..=15`, four bits upstream).
     pub movement_range_y: u8,
-    /// This object's trainer-battle behaviour (upstream `trainerType`).
+    /// Trainer-battle behaviour.
     pub trainer_type: TrainerType,
-    /// Either a trainer's sight range or (for `MOVEMENT_TYPE_BERRY_TREE_GROWTH`
-    /// objects) a `BERRY_TREE_*` id — upstream's overloaded
-    /// `trainerRange_berryTreeId` field. Open reference — see the module docs.
+    /// A trainer's sight range as an integer string, or, for
+    /// [`MovementType::BerryTreeGrowth`] objects, a `BERRY_TREE_*` name.
+    ///
+    /// Upstream overloads one field (`trainerRange_berryTreeId` in
+    /// `ObjectEventTemplate`) for both meanings.
     pub trainer_sight_or_berry_tree_id: &'static str,
-    /// The script run when this object is interacted with (upstream
-    /// `script`); `"0x0"` means no script (`NULL`). Open reference — script
-    /// content is out of scope (S-5).
+    /// The script run on interaction; `"0x0"` means no script.
     pub script: &'static str,
-    /// The flag that hides this object when set (upstream `flagId`); `"0"`
-    /// means no flag. Open reference — flags/vars are out of scope (S-5,
-    /// the `engine` crate's event-flags-and-vars store).
+    /// The flag that hides this object while set; `"0"` means no flag.
     pub flag: &'static str,
 }
 
-/// The static destination of a [`WarpEvent`] — either a real map, or the
-/// `MAP_DYNAMIC` sentinel meaning "resolved at runtime" (see the module
-/// docs).
+/// The destination map of a [`WarpEvent`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum WarpDestination {
-    /// A specific destination map (upstream `mapGroup`/`mapNum` resolved to
-    /// a [`MapId`]).
+    /// A specific map.
     Map(MapId),
-    /// The upstream `MAP_DYNAMIC` sentinel: the actual destination is
-    /// resolved at runtime from `gSaveBlock1Ptr->dynamicWarp`.
+    /// `MAP_DYNAMIC`: the destination is chosen at runtime, not by the warp.
     Dynamic,
 }
 
-/// The destination warp index of a [`WarpEvent`] within its [`WarpDestination`]
-/// map — either a fixed index, or one of the two dynamic sentinels (see the
-/// module docs).
+/// Which warp of the destination map a [`WarpEvent`] arrives at.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum WarpId {
-    /// A fixed index into the destination map's `warp_events` array (upstream
-    /// `warpId`).
+    /// An index into the destination map's `warp_events`.
     Fixed(u8),
-    /// The upstream `WARP_ID_DYNAMIC` (`0x7F`) sentinel.
+    /// `WARP_ID_DYNAMIC`.
     Dynamic,
-    /// The upstream `WARP_ID_SECRET_BASE` (`0x7E`) sentinel: resolves to the
-    /// visited secret base's entrance.
+    /// `WARP_ID_SECRET_BASE`.
     SecretBase,
 }
 
+/// Raw `WARP_ID_SECRET_BASE` byte (`include/constants/maps.h`).
+const WARP_ID_SECRET_BASE: u8 = 0x7E;
+/// Raw `WARP_ID_DYNAMIC` byte (`include/constants/maps.h`).
+const WARP_ID_DYNAMIC: u8 = 0x7F;
+
 impl WarpId {
-    /// The raw upstream byte for this warp id (`WARP_ID_DYNAMIC` = `0x7F`,
-    /// `WARP_ID_SECRET_BASE` = `0x7E`, otherwise the fixed index).
+    /// The raw upstream byte: a sentinel for the two dynamic variants,
+    /// otherwise the fixed index.
     #[must_use]
     pub const fn raw(self) -> u8 {
         match self {
             Self::Fixed(id) => id,
-            Self::SecretBase => 0x7E,
-            Self::Dynamic => 0x7F,
+            Self::SecretBase => WARP_ID_SECRET_BASE,
+            Self::Dynamic => WARP_ID_DYNAMIC,
         }
     }
 
     /// Decode a raw upstream warp-id byte. Infallible: every byte is either
-    /// one of the two sentinels or a fixed index.
+    /// a sentinel or a fixed index.
     #[must_use]
     pub const fn from_raw(raw: u8) -> Self {
         match raw {
-            0x7E => Self::SecretBase,
-            0x7F => Self::Dynamic,
+            WARP_ID_SECRET_BASE => Self::SecretBase,
+            WARP_ID_DYNAMIC => Self::Dynamic,
             other => Self::Fixed(other),
         }
     }
 }
 
-/// One `warp_events` entry — the owned form of upstream `struct WarpEvent`.
+/// One `warp_events` entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct WarpEvent {
-    /// This warp's x position, in metatiles (upstream `x`).
+    /// Horizontal position, in metatiles.
     pub x: i16,
-    /// This warp's y position, in metatiles (upstream `y`).
+    /// Vertical position, in metatiles.
     pub y: i16,
-    /// This warp's elevation/layer (upstream `elevation`).
+    /// Elevation layer.
     pub elevation: u8,
-    /// The map this warp leads to (upstream `mapGroup`/`mapNum`).
+    /// The map this warp leads to.
     pub dest_map: WarpDestination,
-    /// The warp index within `dest_map` this warp arrives at (upstream
-    /// `warpId`).
+    /// The warp within `dest_map` this warp arrives at.
     pub dest_warp_id: WarpId,
 }
 
-/// What kind of trigger a [`CoordEvent`] is — the upstream `struct CoordEvent`
-/// is a single flat layout, but the game treats it as a weather trigger "if
-/// its script is NULL" (`coord_weather_event`'s expansion); this enum makes
-/// map.json's own explicit `"type"` tag (`"trigger"`/`"weather"`) the source
-/// of truth instead of relying on that null-script convention.
+/// What a [`CoordEvent`] does when stepped on.
+///
+/// Upstream stores both kinds in one `CoordEvent` layout and treats a NULL
+/// script as a weather trigger (`TryRunCoordEventScript` in
+/// `src/field_control_avatar.c`). This enum follows map.json's explicit
+/// `"type"` tag instead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CoordEventKind {
-    /// A script trigger: stepping onto this tile runs `script` if `var`
-    /// currently equals `var_value`.
+    /// Runs `script` when `var` equals `var_value`.
     Trigger {
-        /// The variable checked (upstream `trigger`, e.g.
-        /// `"VAR_LITTLEROOT_TOWN_STATE"`). Open reference — vars are out of
-        /// scope (S-5).
+        /// The variable name checked.
         var: &'static str,
-        /// The value `var` must equal for `script` to run (upstream `index`,
-        /// reinterpreted as a plain value for this variant).
+        /// The value `var` must equal.
         var_value: u16,
-        /// The script run (upstream `script`). Open reference — script
-        /// content is out of scope (S-5).
+        /// The script run.
         script: &'static str,
     },
-    /// A weather trigger: stepping onto this tile sets the map's ambient
-    /// weather (upstream `coord_weather_event`, encoded as a `Trigger` whose
-    /// `script` is `NULL`).
+    /// Sets the map's ambient weather.
     Weather(CoordWeather),
 }
 
-/// One `coord_events` entry — the owned form of upstream `struct CoordEvent`.
+/// One `coord_events` entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CoordEvent {
-    /// This trigger's x position, in metatiles (upstream `x`).
+    /// Horizontal position, in metatiles.
     pub x: i16,
-    /// This trigger's y position, in metatiles (upstream `y`).
+    /// Vertical position, in metatiles.
     pub y: i16,
-    /// This trigger's elevation/layer (upstream `elevation`).
+    /// Elevation layer.
     pub elevation: u8,
-    /// What this trigger does.
+    /// What stepping on this tile does.
     pub kind: CoordEventKind,
 }
 
-/// What kind of background event a [`BgEvent`] is — the upstream `struct
-/// BgEvent`'s `bgUnion`, tagged by `kind` (map.json's own `"type"`).
+/// What a [`BgEvent`] is, tagged by map.json's `"type"`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BgEventKind {
-    /// A readable sign (upstream `BG_EVENT_PLAYER_FACING_*` kind values).
+    /// A readable sign.
     Sign {
-        /// The player-facing direction required to read this sign.
+        /// The direction the player must face to read it.
         facing: FacingDirection,
-        /// The script run when read. Open reference — script content is out
-        /// of scope (S-5).
+        /// The script run when read.
         script: &'static str,
     },
-    /// A hidden item, revealed by Itemfinder (upstream `BG_EVENT_HIDDEN_ITEM`).
+    /// A hidden item found with the Itemfinder.
     HiddenItem {
-        /// The item found here, resolved to the extracted item table's id.
+        /// The item found.
         item: ItemId,
-        /// The flag set once this item has been picked up. Open reference —
-        /// flags are out of scope (S-5).
+        /// The flag set once the item is picked up.
         flag: &'static str,
     },
-    /// A secret base entrance (upstream `BG_EVENT_SECRET_BASE`).
+    /// A secret-base entrance.
     SecretBase(SecretBaseId),
 }
 
-/// One `bg_events` entry — the owned form of upstream `struct BgEvent`.
+/// One `bg_events` entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct BgEvent {
-    /// This event's x position, in metatiles (upstream `x`; `u16` in
-    /// upstream's own struct, unlike the `s16` of the other three event
-    /// kinds).
+    /// Horizontal position, in metatiles. Unsigned, unlike the other event
+    /// kinds, because upstream `BgEvent` declares `u16` coordinates.
     pub x: u16,
-    /// This event's y position, in metatiles (upstream `y`).
+    /// Vertical position, in metatiles (unsigned, like `x`).
     pub y: u16,
-    /// This event's elevation/layer (upstream `elevation`).
+    /// Elevation layer.
     pub elevation: u8,
     /// What kind of background event this is.
     pub kind: BgEventKind,
 }
 
-/// One map's full event data — the owned form of upstream `struct MapEvents`
-/// (plus `shared_events_map`, which upstream expresses as a shared pointer
-/// rather than a struct field; see the module docs).
+/// One map's event lists.
+///
+/// A map whose upstream header shares another map's events pointer (the
+/// contest-hall variants) has empty lists and names the owner in
+/// `shared_events_map`; see [`MapEventsTable::resolve`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MapEvents {
-    /// This map's id (upstream `MAP_*` name).
+    /// The map these events belong to.
     pub id: MapId,
-    /// If this map's events are aliased from another map's `MapEvents`
-    /// (upstream: they share one pointer), the owning map's id. `None` for
-    /// every map that owns its events lists. See
-    /// [`MapEventsTable::resolve`].
+    /// The map that owns the events this map shares, or `None` if it owns its own.
     pub shared_events_map: Option<MapId>,
-    /// This map's object (NPC/prop) events. Empty (not aliased) when
-    /// `shared_events_map` is `Some`.
+    /// Object (NPC or prop) events.
     pub object_events: &'static [ObjectEvent],
-    /// This map's warp events. Empty (not aliased) when `shared_events_map`
-    /// is `Some`.
+    /// Warp events.
     pub warp_events: &'static [WarpEvent],
-    /// This map's coordinate (script/weather trigger) events. Empty (not
-    /// aliased) when `shared_events_map` is `Some`.
+    /// Coordinate (script or weather trigger) events.
     pub coord_events: &'static [CoordEvent],
-    /// This map's background (sign/hidden item/secret base) events. Empty
-    /// (not aliased) when `shared_events_map` is `Some`.
+    /// Background (sign, hidden item, secret base) events.
     pub bg_events: &'static [BgEvent],
 }
-
-// --- GENERATED: transcribed from pokeemerald/data/maps/map_groups.json and
-// pokeemerald/data/maps/*/map.json ---
 
 static MAP_EVENTS: [MapEvents; MAP_EVENTS_COUNT] = [
     MapEvents {
@@ -63232,20 +63080,17 @@ static MAP_EVENTS: [MapEvents; MAP_EVENTS_COUNT] = [
     },
 ];
 
-// --- end generated ---
-
-/// The map-events table: owned, read-only access to every map's event lists
-/// with typed lookup `(oop-boundaries)`.
+/// Read-only access to every map's event lists.
 #[derive(Debug, Clone, Copy)]
 pub struct MapEventsTable {
     events: &'static [MapEvents; MAP_EVENTS_COUNT],
 }
 
 impl MapEventsTable {
-    /// The number of entries in the table ([`MAP_EVENTS_COUNT`]).
+    /// The number of entries in the table.
     pub const LEN: usize = MAP_EVENTS_COUNT;
 
-    /// Build the table over the extracted upstream data.
+    /// A table over the checked-in upstream event data.
     #[must_use]
     pub const fn new() -> Self {
         Self {
@@ -63268,9 +63113,8 @@ impl MapEventsTable {
         self.get(id).ok_or(AssetError::UnknownMapEvents(id.0))
     }
 
-    /// The event lists that actually fire on `id`, following
-    /// [`MapEvents::shared_events_map`] once if `id`'s own entry aliases
-    /// another map (see the module docs — eleven maps do this).
+    /// The event lists that fire on `id`, following
+    /// [`MapEvents::shared_events_map`] once if `id`'s entry aliases another map.
     ///
     /// # Errors
     ///
@@ -63284,19 +63128,19 @@ impl MapEventsTable {
         }
     }
 
-    /// Iterate over every map's event lists, in upstream group/position
-    /// order (matching [`map_headers::MAP_GROUPS`](crate::map_headers)).
+    /// Every map's event lists, in the `map_groups.json` group and position
+    /// order that `tools/mapjson/mapjson.cpp` iterates.
     pub fn iter(&self) -> impl Iterator<Item = &'static MapEvents> {
         self.events.iter()
     }
 
-    /// The number of entries in the table (`MAP_EVENTS_COUNT`).
+    /// The number of entries in the table.
     #[must_use]
     pub const fn len(&self) -> usize {
         MAP_EVENTS_COUNT
     }
 
-    /// Always `false` — the table is never empty. Present for API convention.
+    /// Always `false`; the table is never empty.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         false
@@ -63341,9 +63185,6 @@ mod tests {
 
     #[test]
     fn upstream_tie_littleroot_town_object_events() {
-        // The twin, the fat man, the boy, Mom, the two moving-truck props,
-        // the rival, and Professor Birch — all present exactly once, in
-        // map.json order, with local_id assigned by position (1-based).
         let table = MapEventsTable::new();
         let e = table.events(MapId("MAP_LITTLEROOT_TOWN")).unwrap();
         assert_eq!(e.object_events.len(), 8);
@@ -63373,8 +63214,6 @@ mod tests {
 
     #[test]
     fn upstream_tie_littleroot_town_warps() {
-        // Three warps: May's house, Brendan's house, Birch's lab — each a
-        // fixed destination (never dynamic in this town).
         let table = MapEventsTable::new();
         let e = table.events(MapId("MAP_LITTLEROOT_TOWN")).unwrap();
         assert_eq!(e.warp_events.len(), 3);
@@ -63444,7 +63283,10 @@ mod tests {
             (7, 6, 3)
         );
         match super_potion.kind {
-            BgEventKind::HiddenItem { item, .. } => assert_eq!(item, ItemId(22)), // ITEM_SUPER_POTION
+            BgEventKind::HiddenItem { item, .. } => {
+                assert_eq!(item, ItemId::SUPER_POTION);
+                assert_eq!(item.0, 22);
+            }
             _ => unreachable!(),
         }
     }
@@ -63468,8 +63310,6 @@ mod tests {
 
     #[test]
     fn upstream_tie_trainer_movement_and_sight() {
-        // AbandonedShip_Corridors_1F's Charlie: a normal trainer with a
-        // sight range of 3 and an unusual 4x7 patrol range.
         let table = MapEventsTable::new();
         let e = table
             .events(MapId("MAP_ABANDONED_SHIP_CORRIDORS_1F"))
@@ -63490,8 +63330,6 @@ mod tests {
 
     #[test]
     fn shared_events_map_resolves_for_all_aliases() {
-        // The eleven contest-hall aliases all carry empty event lists of
-        // their own and resolve, through `resolve`, to ContestHall's.
         let table = MapEventsTable::new();
         let aliases = [
             "MAP_CONTEST_HALL_BEAUTY",
@@ -63523,7 +63361,6 @@ mod tests {
         }
         assert_eq!(alias_count, 11);
 
-        // A map with no indirection resolves to itself.
         let direct = table.resolve(MapId("MAP_LITTLEROOT_TOWN")).unwrap();
         assert_eq!(direct.id, MapId("MAP_LITTLEROOT_TOWN"));
     }
@@ -63538,9 +63375,6 @@ mod tests {
 
     #[test]
     fn warp_static_destinations_name_a_real_map_header() {
-        // Every warp whose destination is a real map (not the MAP_DYNAMIC
-        // sentinel) names a map that actually has an entry in this table —
-        // i.e. no warp points at a nonexistent map.
         let table = MapEventsTable::new();
         let mut checked_static = 0;
         let mut checked_dynamic = 0;
@@ -63566,10 +63400,6 @@ mod tests {
 
     #[test]
     fn dynamic_warp_ids_only_pair_with_the_dynamic_destination() {
-        // In this checkout, WARP_ID_DYNAMIC/WARP_ID_SECRET_BASE always
-        // co-occur with a MAP_DYNAMIC destination (never a real map) — this
-        // pins that observed invariant so a future regeneration would flag
-        // if it ever stopped holding.
         let table = MapEventsTable::new();
         for e in table.iter() {
             for w in e.warp_events {
@@ -63582,33 +63412,30 @@ mod tests {
 
     #[test]
     fn event_kind_counts_match_extraction_totals() {
-        // Structural guard over the whole table: totals line up with what
-        // the generator reported at extraction time (2,776 object events,
-        // 1,313 warps, 375 coord events, 720 bg events).
         let table = MapEventsTable::new();
-        let mut obj = 0usize;
-        let mut warp = 0usize;
-        let mut coord = 0usize;
-        let mut bg = 0usize;
-        let mut shared = 0usize;
+        let mut object_event_count = 0usize;
+        let mut warp_event_count = 0usize;
+        let mut coord_event_count = 0usize;
+        let mut bg_event_count = 0usize;
+        let mut shared_events_map_count = 0usize;
         for e in table.iter() {
-            obj += e.object_events.len();
-            warp += e.warp_events.len();
-            coord += e.coord_events.len();
-            bg += e.bg_events.len();
+            object_event_count += e.object_events.len();
+            warp_event_count += e.warp_events.len();
+            coord_event_count += e.coord_events.len();
+            bg_event_count += e.bg_events.len();
             if e.shared_events_map.is_some() {
-                shared += 1;
+                shared_events_map_count += 1;
                 assert!(e.object_events.is_empty());
                 assert!(e.warp_events.is_empty());
                 assert!(e.coord_events.is_empty());
                 assert!(e.bg_events.is_empty());
             }
         }
-        assert_eq!(obj, 2776);
-        assert_eq!(warp, 1313);
-        assert_eq!(coord, 375);
-        assert_eq!(bg, 720);
-        assert_eq!(shared, 11);
+        assert_eq!(object_event_count, 2776);
+        assert_eq!(warp_event_count, 1313);
+        assert_eq!(coord_event_count, 375);
+        assert_eq!(bg_event_count, 720);
+        assert_eq!(shared_events_map_count, 11);
     }
 
     #[test]

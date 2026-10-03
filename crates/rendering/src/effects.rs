@@ -249,11 +249,9 @@ pub struct PixelWindowEffects {
     pub objwin_slow_path: bool,
     /// Whether the span that wrote the front OBJ's color let it take mGBA's
     /// draw-time brighten/darken variant palette: that span enables color
-    /// effects and, where `OBJWIN` resolves this pixel, `OBJWIN` does too
-    /// (`mgba/src/gba/renderers/software-obj.c:177-179,206-208`). This is
-    /// `static_span_enabled && enabled` except on an affine mosaic trailing
-    /// spill, whose color an earlier span baked
-    /// (`mgba/src/gba/renderers/software-obj.c:227-242`) `(behavioral-fidelity)`.
+    /// effects and, if an `OBJWIN` write preceded the color's, `OBJWIN` does
+    /// too (`mgba/src/gba/renderers/software-obj.c:94-105,177-179,206-208`)
+    /// `(behavioral-fidelity)`.
     pub color_variant_enabled: bool,
     /// `objwin_slow_path` as the span that wrote the front OBJ's color saw it,
     /// which alone decides whether that color skipped the variant palette
