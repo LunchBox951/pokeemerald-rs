@@ -372,3 +372,44 @@ fn a_torn_rotation_zero_write_never_passes_a_one_outlier_tail_rotation() {
         );
     }
 }
+
+/// One unusable tail sector never turns a torn full write into a legacy
+/// head: the budget it spends is the one the torn shape needs, and a sector
+/// carrying the head's counter is the write's own.
+#[test]
+fn a_torn_rotation_zero_write_stays_refused_with_one_unusable_tail_sector() {
+    for by_footer_id in [true, false] {
+        for predecessor_rotation in 1..NUM_SECTORS_PER_SLOT {
+            for written in 5..NUM_SECTORS_PER_SLOT_U16 {
+                for position in usize::from(SECTOR_ID_PKMN_STORAGE_START)..NUM_SECTORS_PER_SLOT {
+                    let mut store = SaveStore::new();
+                    write_full_slot_rotated(&mut store, 1, predecessor_rotation, 12);
+                    tear_rotation_zero_write(&mut store, 1, written, 14);
+                    make_unusable(&mut store, 1, position, by_footer_id);
+                    let must_refuse = written >= 6 || predecessor_rotation == 12;
+                    if must_refuse {
+                        assert_eq!(
+                            store.scan_slot(1).integrity,
+                            SlotIntegrity::Error,
+                            "predecessor {predecessor_rotation}, torn after {written}, \
+                             position {position} unusable (footer id: {by_footer_id})"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// A sixth sector torn mid-payload keeps its predecessor's footer (counter
+/// 12) under a failing checksum; the write is still torn after six sectors.
+#[test]
+fn a_sixth_sector_torn_before_its_footer_still_reads_error() {
+    let mut store = SaveStore::new();
+    write_full_slot_rotated(&mut store, 1, 1, 12);
+    let old_footer_sector = store.read_physical(1, 5);
+    tear_rotation_zero_write(&mut store, 1, 5, 14);
+    store.write_physical(1, 5, &old_footer_sector);
+    store.corrupt_byte(1, 5, 0);
+    assert_eq!(store.scan_slot(1).integrity, SlotIntegrity::Error);
+}
