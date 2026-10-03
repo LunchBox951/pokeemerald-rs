@@ -50,7 +50,8 @@ fn names_offered(hex_digits: usize) -> usize {
 /// On Windows the returned handle shares nothing, so until it is dropped no
 /// other opener -- in this process or any other -- can open, delete, or
 /// rename that entry: the name cannot be made to mean a different file
-/// while the handle lives. Windows counts the promoting rename among the
+/// while the handle lives, though an ancestor directory can still be
+/// retargeted, which [`StagedSave::still_ours`] detects by identity. Windows counts the promoting rename among the
 /// things it bars, so the handle has to be given up first; see
 /// [`StagedSave::release_hold`].
 pub(super) fn create_new_exclusive(path: &Path) -> std::io::Result<std::fs::File> {
@@ -513,36 +514,58 @@ fn fold_cleanup_error(
     )
 }
 
-/// Whether `found` describes the very file `hold` holds open: same device
-/// and inode.
+/// Whether the entry at `path` is the very file `hold` holds open: same
+/// device and inode.
 #[cfg(unix)]
-fn is_the_held_file(hold: &Hold, found: &std::fs::Metadata) -> std::io::Result<bool> {
+fn is_the_held_file(hold: &Hold, _path: &Path, found: &std::fs::Metadata) -> std::io::Result<bool> {
     use std::os::unix::fs::MetadataExt as _;
 
     let staged = hold.metadata()?;
     Ok((staged.dev(), staged.ino()) == (found.dev(), found.ino()))
 }
 
-/// Whether `found` describes the very file `hold` holds open. Off unix
-/// there is no identity to read back -- the Windows file index sits behind
-/// the unstable `windows_by_handle` feature -- so the answer rests on what
-/// the hold forbids (see [`create_new_exclusive`]) rather than on what a
-/// reading shows.
+/// Whether the entry at `path` is the very file `hold` holds open: the
+/// volume serial and file ID of a fresh handle on `path` match the identity
+/// captured when the staged file was created.
 ///
-/// On Windows that leaves [`StagedSave::still_ours`]'s regular-file test as
-/// the whole remaining question -- while the hold lives. Once
-/// [`StagedSave::release_hold`] empties it, [`StagedSave::remove_after`]
-/// no longer goes through `still_ours` at all on Windows; it deletes through
-/// [`remove_through_verified_handle`] instead, bound to the identity
-/// captured when the staged file was created. On any other non-unix host
-/// the hold is an ordinary handle, and a regular file that replaced the
-/// entry would go undetected.
-#[cfg(not(unix))]
+/// The hold blocks data and delete opens of the final entry, but not an
+/// ancestor directory being retargeted, so a regular file reached through
+/// the new target passes the file-type test alone. The comparison therefore
+/// opens `path` afresh, with no access rights (a metadata-only open that a
+/// share-nothing hold admits), without following a final-component reparse
+/// point, and compares against the retained `identity`, which outlives
+/// [`StagedSave::release_hold`]. An open that fails surfaces instead of
+/// passing for ownership.
+#[cfg(windows)]
+fn is_the_held_file(hold: &Hold, path: &Path, _found: &std::fs::Metadata) -> std::io::Result<bool> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE,
+        FILE_SHARE_READ, FILE_SHARE_WRITE,
+    };
+
+    let handle = std::fs::OpenOptions::new()
+        .access_mode(0)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)?;
+    Ok(handle.metadata()?.file_type().is_file()
+        && WindowsFileIdentity::of(&handle)? == hold.identity)
+}
+
+/// Whether the entry at `path` is the very file `hold` holds open. Hosts
+/// that are neither unix nor Windows have no identity to read back, so a
+/// regular file that replaced the entry would go undetected.
+#[cfg(not(any(unix, windows)))]
 #[expect(
     clippy::unnecessary_wraps,
-    reason = "one signature for both platforms; only the unix arm can fail to read an identity"
+    reason = "one signature across platforms; the unix and Windows arms can fail to read an identity"
 )]
-fn is_the_held_file(_hold: &Hold, _found: &std::fs::Metadata) -> std::io::Result<bool> {
+fn is_the_held_file(
+    _hold: &Hold,
+    _path: &Path,
+    _found: &std::fs::Metadata,
+) -> std::io::Result<bool> {
     Ok(true)
 }
 
@@ -561,14 +584,15 @@ impl StagedSave {
     /// passing for "replaced".
     pub(super) fn still_ours(&self) -> std::io::Result<bool> {
         let found = std::fs::symlink_metadata(&self.path)?;
-        Ok(found.file_type().is_file() && is_the_held_file(&self.hold, &found)?)
+        Ok(found.file_type().is_file() && is_the_held_file(&self.hold, &self.path, &found)?)
     }
 
     /// Gives up the hold, so that the rename which promotes the staged
     /// image -- or the unlink which abandons it -- can take its name.
     ///
     /// Call this only after the last [`Self::still_ours`] whose answer the
-    /// caller relies on: off unix that answer rests on the hold (see
+    /// caller relies on: the identity it compares is retained across the
+    /// release, but the pathname is not pinned afterwards (see
     /// [`is_the_held_file`]). What is left once the hold ends is the window
     /// [`SaveFile::write_with`](super::SaveFile::write_with) documents.
     pub(super) fn release_hold(&mut self) {
