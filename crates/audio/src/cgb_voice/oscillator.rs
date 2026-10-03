@@ -79,10 +79,6 @@ impl Oscillator {
         }
     }
 
-    pub(super) fn disabled_at_trigger(&self) -> bool {
-        matches!(self, Self::Square(square) if square.is_disabled())
-    }
-
     /// Carries a square oscillator's duty position forward onto its replacement
     /// ([`SquareChannel::continue_duty_from`]'s doc); a no-op for Wave/Noise.
     pub(super) fn carry_duty_phase_from(&mut self, other: &Self) {
