@@ -262,6 +262,14 @@ impl SaveStore {
         }
     }
 
+    /// Whether the retained raw payloads equal `snapshot`, without copying.
+    #[must_use]
+    pub fn base_matches(&self, snapshot: &BaseSnapshot) -> bool {
+        self.base_block1 == snapshot.block1
+            && self.base_block2 == snapshot.block2
+            && self.base_pokemon_storage == snapshot.pokemon_storage
+    }
+
     /// Restores raw payloads returned by [`SaveStore::base_snapshot`].
     pub fn restore_base(&mut self, snapshot: BaseSnapshot) {
         self.base_block1 = snapshot.block1;
