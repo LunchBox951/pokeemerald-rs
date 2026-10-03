@@ -374,3 +374,40 @@ fn repeated_phase_shifted_600_ms_callbacks_at_a_capped_tail_take_the_fallback() 
         "steady 600 ms callbacks must not time out"
     );
 }
+
+/// Callbacks silent from the start of the wait, then one large stale buffer
+/// late in the tail: the idle span before it is a stall, not cadence, so the
+/// lone buffer does not prove the callbacks alive.
+#[test]
+fn an_initial_idle_span_before_one_large_late_buffer_is_a_stall() {
+    let policy = RetryPolicy {
+        interval: std::time::Duration::from_millis(10),
+        max_wait: std::time::Duration::from_millis(300),
+    };
+    let start = std::time::Instant::now();
+    let clock = Rc::new(RefCell::new(start));
+    let submitted = Cell::new(4_u64);
+
+    let result = wait_for_measured_tail(
+        4,
+        std::time::Duration::from_millis(200),
+        48_000,
+        &policy,
+        || Some(progress(0, submitted.get())),
+        || 0,
+        || *clock.borrow(),
+        |duration| {
+            *clock.borrow_mut() += duration;
+            if clock.borrow().duration_since(start) == std::time::Duration::from_millis(190) {
+                // One 100 ms callback's worth of frames at 48 kHz.
+                submitted.set(submitted.get() + 4_800);
+            }
+        },
+    );
+    let held = clock.borrow().duration_since(start);
+
+    assert!(
+        matches!(result, Err(DrainError::MeasuredTailTimedOut { .. })),
+        "callbacks idle until 190 ms then one buffer finished at {held:?}"
+    );
+}

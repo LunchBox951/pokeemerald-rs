@@ -600,9 +600,9 @@ fn wait_for_measured_tail(
             // than the playback it covers past that poll rather than
             // stamping it with the (possibly much later) observation time.
             let at = current.min(last_poll + played);
-            let gap = last_advance.map_or(Duration::ZERO, |previous_at| {
-                at.saturating_duration_since(previous_at)
-            });
+            // The first advance's gap runs from the start of the wait, so
+            // callbacks idle from the start are a stall like any other.
+            let gap = at.saturating_duration_since(last_advance.unwrap_or(started));
             // A healthy gap is about one period: what the window has seen, or
             // the playback the last advance covered. One that outruns both by
             // a tenth of the tail is a stall: what came before says nothing
@@ -615,6 +615,10 @@ fn wait_for_measured_tail(
             } else {
                 derived_tail / 2
             };
+            // Before any advance, the only period to hold the gap to is this buffer.
+            if advances == 0 {
+                last_played = played;
+            }
             let stalled = gap > floor && gap > seen.max(last_played) + derived_tail / 10;
             let cadence_sample = if stalled {
                 first_stale = None;
