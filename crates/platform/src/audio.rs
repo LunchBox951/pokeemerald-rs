@@ -256,8 +256,9 @@ pub struct PlaybackProgress {
     /// that repeats or regresses leaves that flat). A span of submitted frames
     /// `(from, to]` held a usable callback if this exceeds `from`; if it does
     /// not, every callback in the span had a stale timestamp. It is stored
-    /// before the frames it covers, so it can run ahead of `submitted_frames`
-    /// by the callback in flight, never behind it.
+    /// before the frames it covers, so a reader never sees a usable callback's
+    /// frames ahead of its mark; it can lead `submitted_frames` by the
+    /// callback in flight and trails them across stale callbacks.
     pub usable_through_frames: u64,
 }
 
