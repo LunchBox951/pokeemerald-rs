@@ -28,7 +28,7 @@ use crate::framebuffer::Framebuffer;
 use crate::mosaic::{MosaicConfig, MosaicSize};
 use crate::palette::Rgb888;
 use crate::sprite::{SpriteLayer, SpritePixel, WindowSpans};
-use crate::window::{WindowConfig, WindowLayerEnable, WindowRegion};
+use crate::window::{WindowConfig, WindowLayerEnable};
 
 /// A BG slot's per-pixel sampling mode: regular (scrolling) or affine.
 #[derive(Debug, Clone, Copy)]
@@ -514,7 +514,7 @@ fn compose_pixel(
 
     let objwin_mask = effects.windows.obj_window.is_some()
         && sprites.objwin_mask_with_mosaic(x, y, effects.mosaic.obj);
-    let (window, region) = effects.windows.classify_with_region(wx, wy, objwin_mask);
+    let (window, _) = effects.windows.classify_with_region(wx, wy, objwin_mask);
 
     // An `OBJWIN` mask never partitions the scanline, so the enable bits
     // that decide whether a span runs a layer's draw routine at all come
@@ -534,13 +534,8 @@ fn compose_pixel(
         .obj
         .then(|| sprites.resolve_pixel_with_mosaic_windowed(x, y, effects.mosaic.obj, window_spans))
         .flatten();
-    let window_effects = pixel_window_effects(
-        &effects.windows,
-        sprite,
-        (window, region),
-        partition_control,
-        wy,
-    );
+    let window_effects =
+        pixel_window_effects(&effects.windows, sprite, window, partition_control, wy);
 
     let mut front = None;
     let mut next = None;
@@ -613,7 +608,7 @@ fn compose_pixel(
 }
 
 /// Resolves [`compose_pixel`]'s [`effects::PixelWindowEffects`] from the
-/// pixel's `OBJWIN`-mask-resolved `window` and `region`, its
+/// pixel's `OBJWIN`-mask-resolved `window`, its
 /// `OBJWIN`-independent `partition_control` span, and the resolved `sprite`.
 ///
 /// mGBA bakes an OBJ's variant color and target-1/reblend flags from the span
@@ -625,7 +620,7 @@ fn compose_pixel(
 fn pixel_window_effects(
     windows: &WindowConfig,
     sprite: Option<SpritePixel>,
-    (window, region): (WindowLayerEnable, WindowRegion),
+    window: WindowLayerEnable,
     partition_control: WindowLayerEnable,
     y: u8,
 ) -> effects::PixelWindowEffects {
@@ -658,11 +653,12 @@ fn pixel_window_effects(
         enabled: window.effects,
         static_span_enabled: flags_span_effects,
         objwin_slow_path: objwin_slow_path(flags_span_effects),
-        // Where `OBJWIN` resolves this pixel, mGBA draws from
-        // `objwinPalette`, the variant only when `OBJWIN` also enables
-        // effects (`software-obj.c:206-208`).
+        // A color written after an `OBJWIN` write draws from `objwinPalette`,
+        // the variant only when `OBJWIN` enables effects
+        // (`software-obj.c:94-105,206-208`).
         color_variant_enabled: color_span_effects
-            && (region != WindowRegion::ObjWindow || window.effects),
+            && !(sprite.is_some_and(|pixel| pixel.color_objwin_masked)
+                && windows.obj_window.is_some_and(|enable| !enable.effects)),
         color_objwin_slow_path: objwin_slow_path(color_span_effects),
     }
 }
