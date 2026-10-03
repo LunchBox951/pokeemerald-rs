@@ -1179,3 +1179,46 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod deferred_idle_settlement_tests {
+    use super::*;
+
+    const DEFERRED: usize = 37;
+
+    fn pair() -> (SquareChannel, SquareChannel) {
+        let mut deferred = SquareChannel::new(2, 0x400, None);
+        let mut eager = deferred.clone();
+        deferred.defer_idle_samples(DEFERRED);
+        eager.advance_silently(DEFERRED);
+        (deferred, eager)
+    }
+
+    #[test]
+    fn a_pitch_write_settles_deferred_silence_at_the_old_frequency() {
+        let (mut deferred, mut eager) = pair();
+        deferred.set_frequency(0x700);
+        eager.set_frequency(0x700);
+        assert_eq!(deferred.idle_samples, 0);
+        assert_eq!(deferred.phase, eager.phase);
+    }
+
+    #[test]
+    fn a_trigger_settles_deferred_silence_at_the_old_frequency() {
+        let (mut deferred, mut eager) = pair();
+        let _ = deferred.retrigger();
+        let _ = eager.retrigger();
+        assert_eq!(deferred.idle_samples, 0);
+        assert_eq!(deferred.phase, eager.phase);
+    }
+
+    #[test]
+    fn the_first_audible_sample_settles_deferred_silence() {
+        let (mut deferred, mut eager) = pair();
+        let a: Vec<i8> = (0..64).map(|_| deferred.sample()).collect();
+        let b: Vec<i8> = (0..64).map(|_| eager.sample()).collect();
+        assert_eq!(a, b);
+        assert_eq!(deferred.idle_samples, 0);
+        assert_eq!(deferred.phase, eager.phase);
+    }
+}
