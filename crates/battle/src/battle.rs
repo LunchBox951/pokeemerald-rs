@@ -594,11 +594,8 @@ impl Battle {
         }
     }
 
-    /// Whether a validated action is a `Run` that cannot fail, so the enemy
-    /// can never act on this turn and its moveset needs no re-screen. Run
-    /// Away and equal-or-greater raw Speed escape without a draw
-    /// (`pokeemerald/src/battle_util.c:427`-`:447`, `:463`-`:465`), and a
-    /// successful escape ends the turn before the enemy acts (`:478`-`:481`).
+    /// Run Away or equal-or-greater raw Speed escapes without a draw and ends
+    /// the turn before the enemy acts (`pokeemerald/src/battle_util.c:427-447,463-481`).
     fn escape_is_guaranteed(&self, action: ValidatedPlayerAction) -> bool {
         matches!(action, ValidatedPlayerAction::Run)
             && (self.player.ability() == AbilityId::RUN_AWAY

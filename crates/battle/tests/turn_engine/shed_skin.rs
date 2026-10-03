@@ -409,7 +409,6 @@ fn slower_player_run_after_a_shed_skin_cure_still_refuses_serene_grace() {
     let mut player = max_iv_mon(&dex, DRATINI, 10, vec![TACKLE]);
     player.set_status1(Status1::Poisoned);
     let mut enemy = max_iv_mon(&dex, DUNSPARCE, 10, vec![POISON_STING]);
-    // Raise the enemy above the player's raw Speed.
     while enemy.stats().speed <= player.stats().speed {
         enemy = max_iv_mon(&dex, DUNSPARCE, enemy.level() + 5, vec![POISON_STING]);
     }
