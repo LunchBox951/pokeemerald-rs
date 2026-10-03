@@ -12,7 +12,7 @@ use super::super::{
 };
 #[cfg(unix)]
 use crate::save::file::tests::guessable_pid_staging_path;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use crate::save::file::SaveFileError;
 #[cfg(windows)]
 use std::path::Path;
@@ -441,4 +441,77 @@ fn cleanup_deletes_a_staged_file_another_process_still_reads() {
         VerifiedRemoval::NotOurs => panic!("the verified file was still at its name"),
     }
     drop(reader);
+}
+
+// The hold forbids a replacement of the final entry but not a retarget of an
+// ancestor, so only the captured identity can tell the impostor reached
+// through the retargeted junction from the image this call staged.
+#[cfg(windows)]
+#[test]
+fn an_impostor_reached_through_a_retargeted_ancestor_is_never_promoted() {
+    let dir = TempDir::new("staging-promotion-ancestor-swap");
+    let target = dir.join("a");
+    let elsewhere = dir.join("b");
+    std::fs::create_dir(&target).unwrap();
+    std::fs::create_dir(&elsewhere).unwrap();
+    let link = dir.join("link");
+    junction(&link, &target);
+
+    let path = target.join(SAVE_FILE_NAME);
+    let file = SaveFile::at(&path);
+    let (store, _, _) = saved_store();
+    file.write(&store).unwrap();
+    let original = std::fs::read(&path).unwrap();
+    let staging = link.join("staged.tmp");
+    let victim = elsewhere.join("staged.tmp");
+    std::fs::write(&victim, b"someone else's file").unwrap();
+
+    let err = file
+        .write_with(
+            &store,
+            SaveFile::sync_directory_best_effort,
+            |bytes| {
+                stage_at_first_free_name(
+                    std::iter::once(staging.clone()),
+                    create_new_exclusive,
+                    bytes,
+                )
+            },
+            |_| {
+                std::fs::remove_dir(&link).unwrap();
+                junction(&link, &elsewhere);
+            },
+        )
+        .expect_err("a retargeted staging impostor must not be promoted");
+
+    assert!(
+        matches!(&err, SaveFileError::Write { source, .. }
+            if source.kind() == std::io::ErrorKind::InvalidData),
+        "{err:?}"
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), original);
+    assert_eq!(std::fs::read(&victim).unwrap(), b"someone else's file");
+}
+
+// The identity outlives the released handle, and a regular file at the same
+// name is told apart from the staged one by it.
+#[cfg(windows)]
+#[test]
+fn still_ours_compares_the_retained_identity_before_and_after_release() {
+    let dir = TempDir::new("staging-still-ours-identity");
+    let staging = dir.join("staged.tmp");
+    let mut staged = stage_at_first_free_name(
+        std::iter::once(staging.clone()),
+        create_new_exclusive,
+        &vec![0u8; FLASH_IMAGE_LEN],
+    )
+    .expect("the exclusive staging write must succeed");
+
+    assert!(staged.still_ours().unwrap());
+    staged.release_hold();
+    assert!(staged.still_ours().unwrap());
+
+    std::fs::rename(&staging, dir.join("moved.tmp")).unwrap();
+    std::fs::write(&staging, b"someone else's file").unwrap();
+    assert!(!staged.still_ours().unwrap());
 }
