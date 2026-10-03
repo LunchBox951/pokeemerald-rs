@@ -308,6 +308,13 @@ impl SquareChannel {
             .wrapping_add(self.step_delta.wrapping_mul(self.idle_samples))
     }
 
+    /// Catches the duty position up over the deferred idle samples at the
+    /// current frequency, as a register write does (`mgba/src/gb/audio.c:162-171`).
+    fn settle_idle_samples(&mut self) {
+        self.phase = self.settled_phase();
+        self.idle_samples = 0;
+    }
+
     /// Continues the duty position of `previous`, the note this one replaces
     /// on the same hardware slot: a restart keeps the duty index and the time
     /// since the last step (`mgba/src/gb/audio.c:168-194`, `:493-510`).
@@ -357,6 +364,7 @@ impl SquareChannel {
     /// write does through both `NR13` and `NR14`
     /// (`pokeemerald/src/m4a.c:1198-1203`).
     pub fn set_frequency(&mut self, freq_reg: u16) {
+        self.settle_idle_samples();
         let freq_reg = freq_reg.min(MAX_FREQUENCY_REGISTER);
         self.note_high_bits = freq_reg & FREQUENCY_HIGH_BITS;
         self.play_frequency(freq_reg);
@@ -380,6 +388,7 @@ impl SquareChannel {
     /// Returns whether the channel still plays.
     #[must_use]
     pub fn retrigger(&mut self) -> bool {
+        self.settle_idle_samples();
         self.play_frequency(self.note_high_bits | (self.frequency & FREQUENCY_LOW_BYTE));
         let Some(sweep) = self.sweep.as_mut() else {
             return true;
@@ -411,6 +420,7 @@ impl SquareChannel {
 
     /// Produces the next bipolar unit sample.
     pub fn sample(&mut self) -> i8 {
+        self.settle_idle_samples();
         let pattern = self.duty.pattern();
         let step = (self.phase / PHASE_ONE) as usize % pattern.len();
         self.phase = self.phase.wrapping_add(self.step_delta);
