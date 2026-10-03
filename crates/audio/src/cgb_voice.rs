@@ -576,10 +576,27 @@ impl CgbVoice {
         self.frame_gain = i32::try_from(envelope_gain).unwrap_or(i32::MAX);
     }
 
+    /// A square held at hardware level 0 skips its duty catch-up
+    /// (`mgba/src/gb/audio.c:493-503,948-954`).
+    fn is_dead_at_zero(&self) -> bool {
+        matches!(self.oscillator, Oscillator::Square(_))
+            && self.envelope.is_active()
+            && self.frame_gain == 0
+            && self.hardware_envelope_volume.volume() == 0
+            && !self
+                .envelope
+                .hardware_envelope_pacing()
+                .is_some_and(|pacing| pacing.increasing)
+    }
+
     /// Accumulate this voice into one frame after [`Self::begin_frame`].
     /// `sweep_ticks` must contain ascending sample offsets from the shared
     /// 128 Hz CGB frame sequencer.
     pub fn render(&mut self, acc: &mut [StereoAcc], sweep_ticks: &[usize]) {
+        if self.is_dead_at_zero() {
+            self.advance_idle_duty(acc.len(), sweep_ticks);
+            return;
+        }
         if self.hardware_muted {
             self.oscillator.advance_silently(acc.len());
             return;
