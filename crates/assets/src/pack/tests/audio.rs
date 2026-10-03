@@ -1,9 +1,8 @@
-//! Pins the audio-schema accessors — `song`/`voicegroup`/`sample` — against
-//! the synthetic fixture's well-formed and malformed entries: successful
-//! decode, missing entry, wrong kind, and malformed payload, per accessor.
-
 use super::super::{AssetPack, PackError};
-use super::shared::write_synthetic_pack;
+use super::shared::{
+    write_synthetic_pack, EXCESS_VOICE_SLOT_COUNT_BYTE, PROGRAMMABLE_WAVE_BYTE_COUNT,
+    UNKNOWN_SAMPLE_KIND_TAG,
+};
 use crate::audio::{Sample, SampleId, SongEvent, VoiceEntry, VoiceGroupId};
 
 #[test]
@@ -96,10 +95,6 @@ fn voicegroup_accessor_reports_a_missing_entry() {
     let _ = std::fs::remove_file(path);
 }
 
-/// The `WrongKind` arm, per accessor: `voicegroup` and `sample` take a full
-/// pack id, so pointing each at the fixture's `Image` entry exercises the
-/// same `raw()` kind check [`song_accessor_reports_the_wrong_kind`] pins for
-/// the name-formatting accessor.
 #[test]
 fn voicegroup_and_sample_accessors_report_the_wrong_kind() {
     let path = write_synthetic_pack("audio-wrong-kind");
@@ -132,8 +127,8 @@ fn voicegroup_accessor_reports_a_malformed_payload() {
         pack.voicegroup(&id),
         Err(PackError::AudioDecode {
             id: ref got,
-            source: crate::audio::AudioError::TooManyVoiceSlots(200),
-        }) if got == &id.0
+            source: crate::audio::AudioError::TooManyVoiceSlots(slot_count),
+        }) if got == &id.0 && slot_count == usize::from(EXCESS_VOICE_SLOT_COUNT_BYTE)
     ));
     let _ = std::fs::remove_file(path);
 }
@@ -155,7 +150,7 @@ fn sample_accessor_decodes_direct_sound_and_programmable_wave_entries() {
     let Sample::ProgrammableWave(wave) = pack.sample(&wave_id).unwrap() else {
         panic!("expected a ProgrammableWave sample");
     };
-    assert_eq!(wave.table, [7; 16]);
+    assert_eq!(wave.table, [7; PROGRAMMABLE_WAVE_BYTE_COUNT]);
 
     let _ = std::fs::remove_file(path);
 }
@@ -178,7 +173,7 @@ fn sample_accessor_reports_a_malformed_payload() {
         pack.sample(&id),
         Err(PackError::AudioDecode {
             id: ref got,
-            source: crate::audio::AudioError::UnknownSampleKind(0xFF),
+            source: crate::audio::AudioError::UnknownSampleKind(UNKNOWN_SAMPLE_KIND_TAG),
         }) if got == &id.0
     ));
     let _ = std::fs::remove_file(path);

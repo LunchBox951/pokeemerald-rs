@@ -1,12 +1,12 @@
-//! Pins the generic container: loading the synthetic fixture's untyped
-//! entry kinds, and the header/directory error paths (bad magic, version
-//! skew, truncation, unknown ids, wrong kinds) independent of any one typed
-//! accessor.
-
 use super::super::{AssetPack, EntryKind, PackError, FORMAT_VERSION};
 use super::shared::{
     image_meta, pack_bytes, synthetic_pack, write_pack, write_synthetic_pack, Entry,
+    EXPECTED_FRAME_HEIGHT, EXPECTED_FRAME_WIDTH, IMAGE_KIND_TAG, PALETTE_KIND_TAG,
+    TEXT_WINDOW_BIT_DEPTH, TEXT_WINDOW_PALETTE_COLOR_COUNT,
 };
+
+const UNSUPPORTED_NEWER_FORMAT_VERSION: u32 = 99;
+const FORMAT_VERSION_FIELD: std::ops::Range<usize> = 8..12;
 
 #[test]
 fn loads_and_reads_every_entry_kind() {
@@ -45,9 +45,6 @@ fn entries_walks_the_whole_directory_in_sorted_order() {
     sorted.sort_unstable();
     assert_eq!(ids, sorted);
 
-    // Every entry's offset/length addresses the same payload the typed
-    // accessors hand out, so a caller can compare two packs entry by entry
-    // without going through a lookup id.
     let entry = pack
         .entries()
         .find(|e| e.id == "tileset/test/metatiles")
@@ -63,9 +60,6 @@ fn entries_walks_the_whole_directory_in_sorted_order() {
 
 #[test]
 fn tileset_handle_needs_all_sixteen_palettes() {
-    // The synthetic pack only has palette slot 00, not 01..15, so bundling
-    // should fail with UnknownAsset for the first missing slot rather than
-    // panicking.
     let path = write_synthetic_pack("missing-slots");
     let pack = AssetPack::load(&path).unwrap();
     let err = pack.tileset("test").unwrap_err();
@@ -127,13 +121,13 @@ fn bad_magic_is_rejected() {
 fn unsupported_version_is_rejected() {
     let path = write_synthetic_pack("bad-version");
     let mut bytes = synthetic_pack();
-    bytes[8..12].copy_from_slice(&99u32.to_le_bytes());
+    bytes[FORMAT_VERSION_FIELD].copy_from_slice(&UNSUPPORTED_NEWER_FORMAT_VERSION.to_le_bytes());
     std::fs::write(&path, &bytes).unwrap();
     let err = AssetPack::load(&path).unwrap_err();
-    assert_eq!(err, PackError::UnsupportedVersion(99));
-    // Same two audiences as the missing-pack diagnostic: an incompatible
-    // pack (99 postdates this build's FORMAT_VERSION) is rebuilt by
-    // whichever route built it in the first place.
+    assert_eq!(
+        err,
+        PackError::UnsupportedVersion(UNSUPPORTED_NEWER_FORMAT_VERSION)
+    );
     assert_eq!(
         err.to_string(),
         "asset pack: unsupported format version `99`: the pack uses a newer format than \
@@ -166,7 +160,7 @@ fn a_pack_older_than_this_build_is_described_as_predating_it() {
     let path = write_synthetic_pack("older-version");
     let mut bytes = synthetic_pack();
     let older = FORMAT_VERSION - 1;
-    bytes[8..12].copy_from_slice(&older.to_le_bytes());
+    bytes[FORMAT_VERSION_FIELD].copy_from_slice(&older.to_le_bytes());
     std::fs::write(&path, &bytes).unwrap();
     let err = AssetPack::load(&path).unwrap_err();
     assert_eq!(err, PackError::UnsupportedVersion(older));
@@ -191,22 +185,15 @@ fn truncated_pack_is_rejected() {
     let _ = std::fs::remove_file(path);
 }
 
-/// A payload that contradicts the shape its own metadata declares never
-/// reaches an accessor: the format owns that invariant
-/// (`pack_format::parse_directory`), so the whole pack is refused at load
-/// rather than each typed accessor catching its own entry. `PaletteRef` and
-/// `ImageRef` promise those shapes to every consumer, and the ones outside
-/// the text-window family (the overworld's and the title screen's palette
-/// walks) read them without a second check.
 #[test]
 fn an_entry_whose_payload_contradicts_its_metadata_is_refused_at_load() {
     let truncated_palette = write_pack(
         "misshapen-palette",
         &pack_bytes(vec![Entry {
             id: "text-window/palette/text_pal2",
-            kind_tag: 1,
-            meta: 16u16.to_le_bytes().to_vec(),
-            payload: vec![0x55, 0x00, 0x66, 0x00, 0x77, 0x00, 0x88, 0x00],
+            kind_tag: PALETTE_KIND_TAG,
+            meta: TEXT_WINDOW_PALETTE_COLOR_COUNT.to_le_bytes().to_vec(),
+            payload: vec![0x55u8, 0x00, 0x66, 0x00, 0x77, 0x00, 0x88, 0x00],
         }]),
     );
     assert!(matches!(
@@ -219,9 +206,13 @@ fn an_entry_whose_payload_contradicts_its_metadata_is_refused_at_load() {
         "misshapen-image",
         &pack_bytes(vec![Entry {
             id: "text-window/image/4",
-            kind_tag: 0,
-            meta: image_meta(24, 24, 4),
-            payload: vec![0, 1, 2],
+            kind_tag: IMAGE_KIND_TAG,
+            meta: image_meta(
+                EXPECTED_FRAME_WIDTH,
+                EXPECTED_FRAME_HEIGHT,
+                TEXT_WINDOW_BIT_DEPTH,
+            ),
+            payload: vec![0u8, 1, 2],
         }]),
     );
     assert!(matches!(
@@ -233,8 +224,6 @@ fn an_entry_whose_payload_contradicts_its_metadata_is_refused_at_load() {
 
 #[test]
 fn default_path_ends_with_expected_relative_path() {
-    // Rungs 1 to 3 of `pack_format::default_pack_path` redirect the path on
-    // purpose; only the plain developer checkout is deterministic.
     if std::env::var_os(pack_format::PACK_PATH_ENV).is_some()
         || pack_format::user_pack_path().is_some_and(|p| p.is_file())
     {
@@ -244,12 +233,6 @@ fn default_path_ends_with_expected_relative_path() {
     assert!(path.ends_with("assets-pack/pokeemerald.pack"));
 }
 
-/// What a checkout-validation gate needs from
-/// [`AssetPack::repo_pack_path`], and all it needs: an absolute path to
-/// `cargo xtask extract`'s output inside *this* workspace, identified by
-/// the root that holds the workspace manifest. Holds whatever
-/// [`AssetPack::default_path`] resolves to for a running game, and on a
-/// machine with any number of packs installed elsewhere.
 #[test]
 fn repo_pack_path_is_the_workspace_roots_own_extract_output() {
     let path = AssetPack::repo_pack_path();
