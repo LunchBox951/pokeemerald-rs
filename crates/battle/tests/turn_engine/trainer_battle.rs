@@ -1250,37 +1250,37 @@ fn an_empty_party_or_unknown_trainer_is_rejected_before_any_draw() {
     );
 }
 
-/// The replacement selector only runs once `HandleAction_ActionFinished` has
-/// cleared `gCurrentMove` (`pokeemerald/src/battle_util.c:657`-`:670`), ahead
-/// of `BattleTurnPassed`'s own residual pass
-/// (`pokeemerald/src/battle_main.c:3956`-`:3969`) -- see the ledger's
-/// `GetMostSuitableMonToSwitchInto` entry for what a cleared versus stale
-/// base damage does to the most-damage pass's outcome.
+/// `HandleAction_ActionFinished` clears `gCurrentMove` (`pokeemerald/src/battle_util.c:658-670`)
+/// before `BattleTurnPassed` scores replacements (`pokeemerald/src/battle_main.c:3956-3969`).
 #[test]
 fn a_residual_poison_knockout_scores_replacements_with_no_move_resolving() {
+    const NO_LEVEL_UP_LEVEL: u8 = 100;
+    const BENCH_LEVEL: u8 = 5;
+    const NONCRITICAL_MIN_DAMAGE_DRAW: u16 = u16::MAX;
+    const RNG_DRAW_BUDGET: usize = 128;
+    const MEGA_KICK_SLOT: usize = 0;
+    const BENCH_REMAINING_AFTER_SEND_OUT: usize = 1;
+
     let dex = Dex::new();
-    // Chansey: pure Normal, so nothing on the bench is super effective and
-    // the selector always reaches the most-damage pass; slower than
-    // Kangaskhan, so the turn's last action -- and so the stale move -- is
-    // the player's own Mega Kick. Level 100 keeps the knockout's award from
-    // deferring the send-out behind a level-up prompt.
-    let player = max_iv_mon(&dex, CHANSEY, 100, vec![MEGA_KICK]);
-    let mut lead = max_iv_mon(&dex, KANGASKHAN, 100, vec![GROWL]);
+    // No bench move is super effective on Chansey, so the damage pass decides;
+    // Chansey acts last, so a missing reset leaves Mega Kick as the stale move.
+    let player = max_iv_mon(&dex, CHANSEY, NO_LEVEL_UP_LEVEL, vec![MEGA_KICK]);
+    let mut lead = max_iv_mon(&dex, KANGASKHAN, NO_LEVEL_UP_LEVEL, vec![GROWL]);
     lead.set_status1(Status1::Poisoned);
     let residual = poison_residual_damage(lead.stats().max_hp);
     lead.apply_damage(lead.stats().max_hp - residual);
     let party = vec![
         lead,
-        max_iv_mon(&dex, PICHU, 5, vec![TACKLE]),
-        max_iv_mon(&dex, MUDKIP, 5, vec![WATER_GUN]),
+        max_iv_mon(&dex, PICHU, BENCH_LEVEL, vec![TACKLE]),
+        max_iv_mon(&dex, MUDKIP, BENCH_LEVEL, vec![WATER_GUN]),
     ];
 
-    let mut rng = SequenceRng::new([u16::MAX; 128]);
+    let mut rng = SequenceRng::new([NONCRITICAL_MIN_DAMAGE_DRAW; RNG_DRAW_BUDGET]);
     let mut battle =
         Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, party, &mut rng).unwrap();
 
     let events = battle
-        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .take_turn(PlayerAction::UseMove(MEGA_KICK_SLOT), &mut rng)
         .unwrap();
 
     let tick_index = events
@@ -1307,7 +1307,7 @@ fn a_residual_poison_knockout_scores_replacements_with_no_move_resolving() {
         events[sent_out_index],
         BattleEvent::TrainerSentOut {
             species: SpeciesId(PICHU),
-            bench_remaining: 1,
+            bench_remaining: BENCH_REMAINING_AFTER_SEND_OUT,
         },
         "a cleared gCurrentMove scores every candidate off the floor base, \
          so Tackle's STAB keeps party-order-first Pichu: {events:?}"
