@@ -56,6 +56,7 @@ mod emit;
 mod error;
 mod fonts;
 mod images;
+mod inventory;
 mod layouts;
 mod locate;
 mod map_file;
@@ -157,6 +158,24 @@ pub struct Context<'a> {
     pub upstream: PathBuf,
 }
 
+/// Locate every domain, after checking the pack holds every fixed root.
+fn locate_profile(
+    ctx: &Context<'_>,
+    lines: &mut Vec<ReportLine>,
+) -> Result<ProfilePlan, GenRomProfileError> {
+    inventory::preflight(ctx.pack)?;
+    Ok(ProfilePlan {
+        tilesets: tilesets::locate(ctx, lines)?,
+        title_screen: title::locate(ctx, lines)?,
+        sprites: sprites::locate(ctx, lines)?,
+        layouts: layouts::locate(ctx, lines)?,
+        fonts: fonts::locate(ctx, lines)?,
+        text_window: text_window::locate(ctx, lines)?,
+        interface: locate_interface_palettes(ctx, lines)?,
+        audio: audio::locate(ctx, lines)?,
+    })
+}
+
 /// Derive the profile and write it.
 ///
 /// # Errors
@@ -223,16 +242,7 @@ pub fn run(options: &Options) -> Result<GenReport, GenRomProfileError> {
     };
 
     let mut lines = Vec::new();
-    let plan = ProfilePlan {
-        tilesets: tilesets::locate(&ctx, &mut lines)?,
-        title_screen: title::locate(&ctx, &mut lines)?,
-        sprites: sprites::locate(&ctx, &mut lines)?,
-        layouts: layouts::locate(&ctx, &mut lines)?,
-        fonts: fonts::locate(&ctx, &mut lines)?,
-        text_window: text_window::locate(&ctx, &mut lines)?,
-        interface: locate_interface_palettes(&ctx, &mut lines)?,
-        audio: audio::locate(&ctx, &mut lines)?,
-    };
+    let plan = locate_profile(&ctx, &mut lines)?;
 
     let map = cross_check(options.map.as_deref(), &mut lines)?;
 
@@ -496,5 +506,7 @@ fn temp_sibling(path: &Path) -> PathBuf {
     ))
 }
 
+#[cfg(test)]
+mod inventory_tests;
 #[cfg(test)]
 mod tests;

@@ -59,9 +59,8 @@ pub enum BattleError {
     /// preceding damage have occurred.
     UnportedSecondaryEffect(MoveId),
 
-    /// A move met a defender whose ability rewrites the outcome in a way no
-    /// pipeline models. The pre-turn screens report it before the move draws
-    /// or spends PP.
+    /// A battler's ability rewrites the outcome in a way no pipeline models,
+    /// reported by the pre-turn and constructor screens before any draw.
     UnportedAbilityInteraction(AbilityId),
 
     /// A species was an empty or compatibility placeholder:
@@ -149,7 +148,7 @@ impl fmt::Display for BattleError {
             ),
             Self::UnportedAbilityInteraction(id) => write!(
                 f,
-                "defender ability `{}` alters this move in an unmodelled way",
+                "ability `{}` alters this battle in an unmodelled way",
                 id.0
             ),
             Self::PlaceholderSpecies => {

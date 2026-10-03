@@ -13,8 +13,8 @@
 //! and out of frame order, with padding in between, and nothing points at
 //! them from the struct, so each frame is matched on its own bytes.
 //!
-//! The domain is fixed, not discovered: a pack with zero `tileset/*/tiles`
-//! entries is missing the domain, not empty of it, and is refused.
+//! The domain is fixed, not discovered: a pack missing any root of
+//! [`crate::extract::scope::TILESETS`] is refused.
 
 use std::collections::BTreeMap;
 
@@ -53,8 +53,8 @@ const TILE_BYTES: usize = 32;
 ///
 /// # Errors
 ///
-/// [`GenRomProfileError::MissingPackEntry`] if the pack holds no
-/// `tileset/*/tiles` entries at all, or any other [`GenRomProfileError`] a
+/// [`GenRomProfileError::MissingPackEntry`] if the pack lacks a fixed
+/// tileset root, or any other [`GenRomProfileError`] a
 /// locator raises: a missing pack entry, a root that matches nothing or
 /// matches twice, or a struct whose fields do not agree with the tables
 /// they should point at.
@@ -62,14 +62,9 @@ pub fn locate(
     ctx: &Context<'_>,
     report: &mut Vec<ReportLine>,
 ) -> Result<Vec<TilesetPlan>, GenRomProfileError> {
-    let names = tileset_names(ctx);
-    if names.is_empty() {
-        return Err(GenRomProfileError::MissingPackEntry(
-            "tileset/*/tiles".to_owned(),
-        ));
-    }
+    super::inventory::require_tilesets(ctx.pack)?;
     let mut plans = Vec::new();
-    for name in names {
+    for name in tileset_names(ctx) {
         plans.push(locate_one(ctx, &name, report)?);
     }
     Ok(plans)
