@@ -1250,10 +1250,8 @@ fn an_empty_party_or_unknown_trainer_is_rejected_before_any_draw() {
     );
 }
 
-/// Residual replacement scoring must not inherit the last action's move:
-/// `HandleAction_ActionFinished` clears `gCurrentMove`
-/// (`pokeemerald/src/battle_util.c:658-670`) before `BattleTurnPassed`
-/// runs residuals and fainted-mon actions (`pokeemerald/src/battle_main.c:3956-3969`).
+/// `HandleAction_ActionFinished` clears `gCurrentMove` (`pokeemerald/src/battle_util.c:658-670`)
+/// before `BattleTurnPassed` scores replacements (`pokeemerald/src/battle_main.c:3956-3969`).
 #[test]
 fn a_residual_poison_knockout_scores_replacements_with_no_move_resolving() {
     const NO_LEVEL_UP_LEVEL: u8 = 100;
@@ -1264,9 +1262,8 @@ fn a_residual_poison_knockout_scores_replacements_with_no_move_resolving() {
     const BENCH_REMAINING_AFTER_SEND_OUT: usize = 1;
 
     let dex = Dex::new();
-    // Neither bench move may be super effective against Chansey: the damage
-    // pass must decide. Chansey must act last so a missing reset leaves
-    // Mega Kick, not Growl, as the stale move.
+    // No bench move is super effective on Chansey, so the damage pass decides;
+    // Chansey acts last, so a missing reset leaves Mega Kick as the stale move.
     let player = max_iv_mon(&dex, CHANSEY, NO_LEVEL_UP_LEVEL, vec![MEGA_KICK]);
     let mut lead = max_iv_mon(&dex, KANGASKHAN, NO_LEVEL_UP_LEVEL, vec![GROWL]);
     lead.set_status1(Status1::Poisoned);
