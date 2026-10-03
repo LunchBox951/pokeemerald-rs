@@ -896,3 +896,173 @@ fn a_legacy_five_sector_save_file_loads_ok_and_migrates_on_the_next_store() {
     assert_eq!(reloaded.block1.money, 54_321);
     assert_eq!(reloaded.block2.encryption_key, 0x1234_5678);
 }
+
+const LEGACY_HEAD_COUNTER: u32 = 3;
+const DONOR_COUNTER: u32 = 2;
+const DONOR_STORAGE_FILL: u8 = 0xAB;
+const FIRST_STORAGE_SECTOR_ID: u16 = 5;
+const SECTORS_PER_SLOT: usize = 14;
+const STORAGE_SECTOR_COUNT: usize = 9;
+
+fn storage_chunk(storage: &[u8], id: u16) -> &[u8] {
+    let offset = usize::from(id - FIRST_STORAGE_SECTOR_ID) * SECTOR_DATA_SIZE;
+    &storage[offset..(offset + SECTOR_DATA_SIZE).min(storage.len())]
+}
+
+/// A full-format donor generation (counter 2, slot 0) under an intact
+/// legacy five-sector head (counter 3, slot 1) that carries the progress.
+fn write_legacy_head_with_donor(temp: &TempSave) -> (SaveBlock1, SaveBlock2, Vec<u8>) {
+    let block1 = SaveBlock1 {
+        money: 8_888,
+        ..SaveBlock1::default()
+    };
+    let block2 = SaveBlock2 {
+        encryption_key: 0x0BAD_CAFE,
+        ..SaveBlock2::default()
+    };
+    let block1_bytes = block1.to_bytes(block2.encryption_key);
+    let block2_bytes = block2.to_bytes();
+    let storage = vec![DONOR_STORAGE_FILL; engine::save::store::PKMN_STORAGE_PAYLOAD_LEN];
+    let mut image = vec![0xFFu8; engine::save::FLASH_IMAGE_LEN];
+    for id in 0..u16::try_from(SECTORS_PER_SLOT).unwrap() {
+        let payload: &[u8] = if id == SAVEBLOCK2_SECTOR_ID {
+            &block2_bytes[..]
+        } else if id < FIRST_STORAGE_SECTOR_ID {
+            legacy_block1_chunk(&block1_bytes, usize::from(id - FIRST_SAVEBLOCK1_SECTOR_ID))
+        } else {
+            storage_chunk(&storage, id)
+        };
+        let donor = Sector::write(id, payload, DONOR_COUNTER);
+        write_sector(&mut image, usize::from(id), &donor);
+        if id < FIRST_STORAGE_SECTOR_ID {
+            let head = Sector::write(id, payload, LEGACY_HEAD_COUNTER);
+            write_sector(&mut image, SECTORS_PER_SLOT + usize::from(id), &head);
+        }
+    }
+    std::fs::write(&temp.path, &image).unwrap();
+    (block1, block2, storage)
+}
+
+fn boot_legacy_head_with_donor(temp: &TempSave) -> (SaveSlot, SaveBlock1, SaveBlock2, Vec<u8>) {
+    let (block1, block2, storage) = write_legacy_head_with_donor(temp);
+    let mut slot = temp.slot();
+    let saved = slot.load();
+    assert_eq!(saved.status, SaveFileStatus::Ok);
+    assert_eq!(saved.block1.money, 8_888);
+    assert_eq!(slot.session_counter, Some(LEGACY_HEAD_COUNTER));
+    (slot, block1, block2, storage)
+}
+
+/// Corrupts the donor's nine storage sectors on disk, leaving the head.
+fn damage_donor_storage(temp: &TempSave) {
+    let mut image = std::fs::read(&temp.path).unwrap();
+    let mut damaged = 0;
+    for index in 0..image.len() / SECTOR_SIZE {
+        let sector = read_sector(&image, index);
+        if sector.signature() == SECTOR_SIGNATURE
+            && sector.counter() == DONOR_COUNTER
+            && sector.id() >= FIRST_STORAGE_SECTOR_ID
+        {
+            corrupt_sector_payload(&mut image, index);
+            damaged += 1;
+        }
+    }
+    assert_eq!(damaged, STORAGE_SECTOR_COUNT);
+    std::fs::write(&temp.path, &image).unwrap();
+}
+
+/// Asserts generation `counter`'s storage sectors equal `storage` when
+/// `survives`, or are all zero otherwise.
+fn assert_newest_storage(temp: &TempSave, counter: u32, storage: &[u8], survives: bool) {
+    let image = std::fs::read(&temp.path).unwrap();
+    let mut checked = 0;
+    for index in 0..image.len() / SECTOR_SIZE {
+        let sector = read_sector(&image, index);
+        if sector.signature() == SECTOR_SIGNATURE
+            && sector.counter() == counter
+            && sector.id() >= FIRST_STORAGE_SECTOR_ID
+        {
+            let want = storage_chunk(storage, sector.id());
+            let got = &sector.data()[..want.len()];
+            if survives {
+                assert_eq!(got, want, "storage sector {} must survive", sector.id());
+            } else {
+                assert!(got.iter().all(|&b| b == 0), "storage must be cleared");
+            }
+            checked += 1;
+        }
+    }
+    assert_eq!(checked, STORAGE_SECTOR_COUNT);
+}
+
+#[test]
+fn equal_counter_donor_loss_heals_the_boxes_on_the_next_save() {
+    let temp = TempSave::new("donor-loss-heal");
+    let (mut slot, block1, block2, storage) = boot_legacy_head_with_donor(&temp);
+    damage_donor_storage(&temp);
+    let outcome = slot
+        .store(&block1, &block2, SaveLineage::Continued)
+        .unwrap();
+    assert_eq!(outcome, super::StoreOutcome::Written);
+    assert_newest_storage(&temp, LEGACY_HEAD_COUNTER + 1, &storage, true);
+}
+
+#[test]
+fn equal_counter_same_image_does_not_restore_the_base_on_ordinary_saves() {
+    assert!(!super::base_needs_restore(3, 3, true));
+    assert!(super::base_needs_restore(3, 3, false));
+    assert!(super::base_needs_restore(2, 3, true));
+    assert!(!super::base_needs_restore(4, 3, false));
+
+    let temp = TempSave::new("donor-same-image");
+    let (mut slot, block1, block2, storage) = boot_legacy_head_with_donor(&temp);
+    for generation in 1..=2 {
+        let outcome = slot
+            .store(&block1, &block2, SaveLineage::Continued)
+            .unwrap();
+        assert_eq!(outcome, super::StoreOutcome::Written);
+        assert_newest_storage(&temp, LEGACY_HEAD_COUNTER + generation, &storage, true);
+    }
+}
+
+#[test]
+fn donor_loss_does_not_bypass_refused_stale_session() {
+    let temp = TempSave::new("donor-loss-stale");
+    let (mut slot, block1, block2, _storage) = boot_legacy_head_with_donor(&temp);
+    damage_donor_storage(&temp);
+    let mut other = temp.slot();
+    other.load();
+    other
+        .store(&block1, &block2, SaveLineage::Continued)
+        .unwrap();
+    let before = std::fs::read(&temp.path).unwrap();
+    let outcome = slot
+        .store(&block1, &block2, SaveLineage::Continued)
+        .unwrap();
+    assert_eq!(outcome, super::StoreOutcome::RefusedStaleSession);
+    assert_eq!(std::fs::read(&temp.path).unwrap(), before);
+    assert_eq!(slot.session_counter, Some(LEGACY_HEAD_COUNTER));
+}
+
+#[test]
+fn equal_counter_donor_loss_respects_clears_base_for_a_new_game() {
+    let temp = TempSave::new("donor-loss-clears-base");
+    let (mut slot, block1, block2, storage) = boot_legacy_head_with_donor(&temp);
+    damage_donor_storage(&temp);
+    let outcome = slot.store(&block1, &block2, SaveLineage::NewGame).unwrap();
+    assert_eq!(outcome, super::StoreOutcome::Written);
+    assert_newest_storage(&temp, LEGACY_HEAD_COUNTER + 1, &storage, false);
+}
+
+#[test]
+fn equal_counter_donor_loss_does_not_bypass_the_foreign_save_refusal() {
+    let temp = TempSave::new("donor-loss-foreign");
+    let (mut slot, block1, block2, _storage) = boot_legacy_head_with_donor(&temp);
+    damage_donor_storage(&temp);
+    let before = std::fs::read(&temp.path).unwrap();
+    let outcome = slot
+        .store_unless_foreign_save(&block1, &block2, SaveLineage::Continued)
+        .unwrap();
+    assert_eq!(outcome, super::StoreOutcome::RefusedExistingSave);
+    assert_eq!(std::fs::read(&temp.path).unwrap(), before);
+}

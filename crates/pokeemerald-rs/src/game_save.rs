@@ -132,6 +132,14 @@ const fn counter_is_ahead(baseline: u32, candidate: u32) -> bool {
     candidate != baseline && candidate.wrapping_sub(baseline) < SERIAL_COUNTER_HALF_RANGE
 }
 
+/// Whether a reload must be put back on the session's cached base: the disk
+/// fell back past the session's generation, or it holds the same generation
+/// with a different base (the merged donor was lost). Equal counters over an
+/// identical base -- every ordinary save -- never restore.
+const fn base_needs_restore(disk: u32, session: u32, same_base: bool) -> bool {
+    counter_is_ahead(disk, session) || (disk == session && !same_base)
+}
+
 /// This session's save medium: the one file boot loads from and writes back to.
 #[derive(Debug)]
 pub(crate) struct SaveSlot {
@@ -320,19 +328,25 @@ impl SaveSlot {
                 return Ok(StoreOutcome::RefusedStaleSession);
             }
         }
+        if refuse_foreign && disk_status.menu_shows_continue() {
+            return Ok(StoreOutcome::RefusedExistingSave);
+        }
         if !clear_base {
             if let (Some(session_counter), Some(session_base)) =
                 (self.session_counter, &self.session_base)
             {
                 // The reload above fell back past a generation damaged since
-                // the session read it (tests::healing_a_damaged_newest_slot_*).
-                if counter_is_ahead(disk_counter, session_counter) {
+                // the session read it (tests::healing_a_damaged_newest_slot_*),
+                // or kept the same legacy head but lost the donor that
+                // supplied its storage (tests::equal_counter_donor_loss_*).
+                if base_needs_restore(
+                    disk_counter,
+                    session_counter,
+                    store.base_matches(session_base),
+                ) {
                     store.restore_base(session_base.clone());
                 }
             }
-        }
-        if refuse_foreign && disk_status.menu_shows_continue() {
-            return Ok(StoreOutcome::RefusedExistingSave);
         }
         if clear_base {
             store.clear_base();
