@@ -136,7 +136,7 @@ fn programmable_wave_entry(upstream: &Path, number: u32) -> Result<PackEntry, Ex
 
 /// Extracts every `DirectSound`/programmable-wave sample [`DIRECT_SOUND_SAMPLES`]/
 /// [`PROGRAMMABLE_WAVE_SAMPLES`] name (see the module docs for how that set
-/// was derived) as `audio/sample/*` [`EntryKind::Raw`] entries.
+/// was derived) as `audio/sample/*` [`pack_format::EntryKind::Raw`] entries.
 ///
 /// # Errors
 ///
