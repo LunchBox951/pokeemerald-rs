@@ -29,7 +29,7 @@
 
 use std::path::Path;
 
-use assets::audio::{DirectSoundSample, Sample};
+use assets::audio::{DirectSoundSample, ProgrammableWave, Sample};
 
 use crate::extract::midi::SONG_PACK_ID as SUPPORTED_SONG_ID;
 use crate::extract::voicegroups::parser::{RawSlot, RawVoiceGroup};
@@ -325,6 +325,30 @@ fn wave_table_len() -> u32 {
     u32::try_from(WAVE_TABLE_BYTES).expect("16 fits in u32")
 }
 
+/// Decode a programmable-wave pack entry through the canonical sample schema.
+///
+/// # Errors
+///
+/// [`GenRomProfileError::EntryShape`] naming `id` when the payload does not
+/// decode as a programmable-wave table.
+fn programmable_wave_of(
+    ctx: &Context<'_>,
+    id: &str,
+) -> Result<ProgrammableWave, GenRomProfileError> {
+    let payload = &ctx.pack.get(id)?.payload;
+    match Sample::decode(payload) {
+        Ok(Sample::ProgrammableWave(wave)) => Ok(wave),
+        Ok(Sample::DirectSound(_)) => Err(GenRomProfileError::EntryShape {
+            id: id.to_owned(),
+            reason: "decoded as a DirectSound sample under a programmable-wave id".to_owned(),
+        }),
+        Err(err) => Err(GenRomProfileError::EntryShape {
+            id: id.to_owned(),
+            reason: err.to_string(),
+        }),
+    }
+}
+
 /// Locate every programmable-wave table by its 16 bytes.
 fn locate_programmable_wave(
     ctx: &Context<'_>,
@@ -333,15 +357,7 @@ fn locate_programmable_wave(
     let ids = ctx.pack.ids_with_prefix(PROGRAMMABLE_WAVE_PREFIX);
     let mut needles = Vec::with_capacity(ids.len());
     for id in &ids {
-        let payload = &ctx.pack.get(id)?.payload;
-        let table =
-            payload
-                .get(1..1 + WAVE_TABLE_BYTES)
-                .ok_or_else(|| GenRomProfileError::EntryShape {
-                    id: id.clone(),
-                    reason: "a programmable-wave payload is not a 16-byte table".to_owned(),
-                })?;
-        needles.push(table.to_vec());
+        needles.push(programmable_wave_of(ctx, id)?.table.to_vec());
     }
     let hits = ctx.raw.find_all(&needles);
 
@@ -676,11 +692,13 @@ fn parse_song_constant(text: &str, symbol: &str) -> Option<u16> {
 #[cfg(test)]
 mod tests {
     use super::{
-        keysplit_symbol, locate_direct_sound, parse_song_constant, voicegroup_symbol,
-        WAVE_STATUS_LOOP,
+        keysplit_symbol, locate_direct_sound, locate_programmable_wave, parse_song_constant,
+        voicegroup_symbol, WAVE_STATUS_LOOP,
     };
     use crate::gen_rom_profile::plan::SymbolExpectation;
+    use crate::gen_rom_profile::plan::{ReportLine, SamplePlan};
     use crate::gen_rom_profile::tests::with_context;
+    use assets::audio::{ProgrammableWave, Sample};
     use rom_import::fixture::RomFixture;
 
     /// PCM distinctive enough to occur exactly once in a fixture image.
@@ -835,6 +853,94 @@ mod tests {
             ),
             "a non-canonical sample payload located successfully: {err}"
         );
+    }
+
+    const WAVE_ID: &str = "audio/sample/programmable-wave/01";
+    const WAVE_TABLE: [u8; 16] = [
+        0x13, 0x57, 0x9B, 0xDF, 0x24, 0x68, 0xAC, 0xE0, 0x31, 0x75, 0xB9, 0xFD, 0x42, 0x86, 0xCA,
+        0x0E,
+    ];
+
+    fn programmable_wave_payload() -> Vec<u8> {
+        Sample::ProgrammableWave(ProgrammableWave { table: WAVE_TABLE }).encode()
+    }
+
+    fn locate_one_wave(
+        name: &str,
+        payload: Vec<u8>,
+        planted: &[u8],
+    ) -> Result<(Vec<SamplePlan>, Vec<ReportLine>), crate::gen_rom_profile::GenRomProfileError>
+    {
+        let rom = RomFixture::new()
+            .emerald_header()
+            .write(0x10_0000, planted)
+            .finish();
+        let entry = pack_format::raw_entry(WAVE_ID.to_owned(), payload);
+        with_context(name, &rom, vec![entry], |ctx| {
+            let mut report = Vec::new();
+            locate_programmable_wave(ctx, &mut report).map(|plans| (plans, report))
+        })
+    }
+
+    fn assert_wave_entry_shape(name: &str, payload: Vec<u8>, planted: &[u8]) {
+        let err = locate_one_wave(name, payload, planted)
+            .expect_err("a non-canonical programmable-wave entry must be refused");
+        assert!(
+            matches!(
+                &err,
+                crate::gen_rom_profile::GenRomProfileError::EntryShape { id, .. } if id == WAVE_ID
+            ),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_valid_programmable_wave_table_locates() {
+        let (plans, report) =
+            locate_one_wave("wave-valid", programmable_wave_payload(), &WAVE_TABLE)
+                .expect("a valid table locates");
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].id, WAVE_ID);
+        assert_eq!(plans[0].addr, 0x0810_0000);
+        assert_eq!(plans[0].header_len, 0);
+        assert_eq!(plans[0].data_len, 16);
+        assert_eq!(report.len(), 1);
+        assert_eq!(report[0].addr, 0x0810_0000);
+        assert_eq!(report[0].len, 16);
+    }
+
+    #[test]
+    fn a_programmable_wave_payload_with_a_wrong_kind_tag_is_rejected() {
+        for (name, tag) in [("wave-ds-tag", 0), ("wave-unknown-tag", u8::MAX)] {
+            let mut payload = programmable_wave_payload();
+            payload[0] = tag;
+            assert_wave_entry_shape(name, payload, &WAVE_TABLE);
+        }
+    }
+
+    #[test]
+    fn a_direct_sound_sample_under_a_programmable_wave_id_is_rejected() {
+        let payload = direct_sound_payload(1 << 20, None, &pcm());
+        let planted = payload[1..17].to_vec();
+        assert_wave_entry_shape("wave-wrong-variant", payload, &planted);
+    }
+
+    #[test]
+    fn a_programmable_wave_payload_with_trailing_bytes_is_rejected() {
+        let mut payload = programmable_wave_payload();
+        payload.push(0xA5);
+        assert_wave_entry_shape("wave-trailing", payload, &WAVE_TABLE);
+    }
+
+    #[test]
+    fn a_programmable_wave_payload_with_a_malformed_length_is_rejected() {
+        // Short payloads were already refused by the raw slice; this pins that
+        // refusal through the canonical decoder (the oversized case is the
+        // trailing-bytes test, which is the regression).
+        let mut payload = programmable_wave_payload();
+        payload.pop();
+        assert_wave_entry_shape("wave-truncated", payload, &WAVE_TABLE);
+        assert_wave_entry_shape("wave-empty", Vec::new(), &WAVE_TABLE);
     }
 
     #[test]
