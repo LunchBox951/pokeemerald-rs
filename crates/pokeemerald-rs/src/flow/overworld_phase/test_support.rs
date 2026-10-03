@@ -1,5 +1,4 @@
-//! Shared test fixtures, helpers, and constants for the
-//! [`super::OverworldPhase`] test suite.
+//! Fixtures and input helpers shared by the [`super::OverworldPhase`] tests.
 
 use super::OverworldPhase;
 use crate::overworld::OverworldScene;
@@ -18,36 +17,21 @@ pub(super) use crate::flow::tests::held;
 pub(super) use super::connections::warp_data_index;
 pub(super) use super::input::{advance_player_one_frame, held_direction};
 
-/// `VAR_ROUTE101_STATE` (`include/constants/vars.h:116`), transcribed
-/// independently of `first_battle_trigger`'s own (private) copy so these
-/// tests pin the real upstream id rather than restating that module's.
-/// Shared between the connection-crossing and first-battle-trigger test
-/// modules, which both drive Route 101's on-frame rescue-state bookkeeping.
+/// `VAR_ROUTE101_STATE`, transcribed from `include/constants/vars.h:116`
+/// independently of `first_battle_trigger`'s private copy so the tests pin the
+/// upstream id rather than that module's value.
 pub(super) const VAR_ROUTE101_STATE: u16 = 0x4060;
 
-/// A fresh event-flag store: nothing hidden. Used by the
-/// [`advance_player_one_frame`] tests in `connections_tests`, whose fixture map
-/// ([`flat_runtime`]) has no object events at all -- the phase-level tests
-/// instead go through [`OverworldPhase::step`], which threads the phase's
-/// own real save state.
+/// An event-flag store with nothing hidden.
 pub(super) const NO_FLAGS: EventData = EventData::new();
 
-/// No map is ever connected -- mirrors
-/// `engine::overworld::player::tests::no_connections` (that module's own
-/// private fixture), needed here too now that [`advance_player_one_frame`]
-/// takes its `maps` resolver generically (issue #177) rather than
-/// hardcoding [`super::connections::MapConnections`].
+/// A map resolver under which no map is connected.
 pub(super) fn no_connections(_: MapId) -> Option<(u16, u16)> {
     None
 }
 
-/// A single connected neighbour map, keyed by id -- the coordinate-
-/// translation fixture for `connections_tests`' headless crossing tests. Mirrors
-/// `engine::overworld::player::tests::SingleConnectedMap` (that module's own
-/// private fixture): this crate can't import it directly (private to
-/// `engine`), but the shape this issue's [`ConnectedMapData`] consumers
-/// need is identical -- a neighbour's dimensions plus one decoded landing
-/// cell and its behavior.
+/// One connected neighbour map: its dimensions plus a single decoded landing
+/// cell and that cell's behavior.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct SingleConnectedMap {
     pub(super) id: MapId,
@@ -71,21 +55,15 @@ impl ConnectedMapData for SingleConnectedMap {
     }
 }
 
-/// A single freshly-pressed button this frame (`is_newly_pressed` true,
-/// unlike `crate::flow::tests::held`'s deliberately *not*-fresh two-frame
-/// hold) -- mirrors that module's own private `pressed` helper, needed
-/// here too for the A-button edges `frame_tests`' NPC dialog tests drive.
+/// A button that is newly pressed this frame, unlike [`held`], which is not.
 pub(super) fn pressed(button: Buttons) -> ButtonState {
     let mut state = ButtonState::new();
     state.update(button);
     state
 }
 
-/// The `((x, y), metatile behavior)` of `map`'s `warp_index`-th warp
-/// event's own tile, read out of the extracted pack -- so the
-/// warp-facing tests in `warp_tests` assert against the real attribute data
-/// `OverworldPhase::warp_to` reads at runtime, not a restatement of
-/// their own expectations. Pack-dependent: `#[ignore]`d callers only.
+/// The `((x, y), metatile behavior)` of `map`'s `warp_index`-th warp event
+/// tile, read from the extracted pack. Requires the pack.
 pub(super) fn warp_tile_behavior(map: assets::MapId, warp_index: usize) -> ((i16, i16), u8) {
     let scene = crate::overworld::load_room(
         map,
@@ -107,13 +85,15 @@ pub(super) fn warp_tile_behavior(map: assets::MapId, warp_index: usize) -> ((i16
     ((warp.x, warp.y), behavior)
 }
 
-/// A small, open (no collision anywhere), leaked-`'static` flat map --
-/// mirrors `engine::overworld::player::tests::flat_runtime` (that
-/// module's own fixture, private to its crate) so
-/// [`advance_player_one_frame`] is testable against a real
-/// [`MapRuntime`] without needing a local asset pack (`OverworldScene`,
-/// unlike `MapRuntime`, is pack-backed -- see the sibling test modules'
-/// pack-dependent, `#[ignore]`d tests).
+const FIXTURE_FLOOR_METATILE_ID: u16 = 1;
+const PASSABLE_COLLISION: u8 = 0;
+const FIXTURE_FLOOR_ELEVATION: u8 = 3;
+const FIXTURE_MAP_GROUP: u8 = 0;
+const FIXTURE_MAP_NUMBER: u8 = 0;
+const FIXTURE_MUSIC_ID: u16 = 0;
+
+/// An open (no collision) map of `width` by `height`, with no connections and
+/// no pack dependency. The map data is leaked to satisfy `'static`.
 pub(super) fn flat_runtime(width: u16, height: u16) -> MapRuntime<'static> {
     runtime_with_connections(width, height, &[])
 }
@@ -123,12 +103,13 @@ fn runtime_with_connections(
     height: u16,
     connections: &'static [assets::MapConnection],
 ) -> MapRuntime<'static> {
-    let mut bytes = Vec::with_capacity(usize::from(width) * usize::from(height) * 2);
-    for _ in 0..width * height {
+    let cell_count = usize::from(width) * usize::from(height);
+    let mut bytes = Vec::with_capacity(cell_count * size_of::<u16>());
+    for _ in 0..cell_count {
         let raw = MetatileCell {
-            metatile_id: 1,
-            collision: 0,
-            elevation: 3,
+            metatile_id: FIXTURE_FLOOR_METATILE_ID,
+            collision: PASSABLE_COLLISION,
+            elevation: FIXTURE_FLOOR_ELEVATION,
         }
         .pack();
         bytes.extend_from_slice(&raw.to_le_bytes());
@@ -137,11 +118,11 @@ fn runtime_with_connections(
 
     let header: &'static MapHeader = Box::leak(Box::new(MapHeader {
         id: MapId("MAP_TEST"),
-        group: 0,
-        num: 0,
+        group: FIXTURE_MAP_GROUP,
+        num: FIXTURE_MAP_NUMBER,
         name: "MapTest",
         layout: assets::LayoutId("MAP_TEST"),
-        music: assets::MusicId(0),
+        music: assets::MusicId(FIXTURE_MUSIC_ID),
         region_map_section: assets::RegionMapSectionId("MAPSEC_NONE"),
         requires_flash: false,
         weather: assets::Weather::None,
@@ -182,79 +163,43 @@ fn runtime_with_connections(
     )
 }
 
-// -- Headless phase fixtures -------------------------------------------------
-
-/// Brendan's House 1F: the map `frame_tests`/`step_tests`' headless
-/// interaction tests drive,
-/// picked because its real object events include Mom at `(2, 6)` — script
-/// `PlayersHouse_1F_EventScript_Mom`, the one
-/// [`crate::overworld::npc_scripts::script_text`] recognizes — visible on a
-/// fresh save.
-///
-/// Those object events are *solid* (issue #161's collision fix — see
-/// [`engine::overworld::PlayerState::step`]'s "# Collision" section), so
-/// the routes below deliberately avoid occupied tiles. Under the fresh-save
-/// state [`OverworldPhase::for_test`] builds, exactly **three** of this
-/// map's seven object events are visible and therefore block: `(2, 6)` Mom
-/// and the two Vigoroth at `(1, 3)` and `(4, 5)`. The other four are hidden,
-/// by two different scripts:
-///
-/// - `EventScript_ResetAllMapFlags` (`data/scripts/new_game.inc`) hides Dad
-///   at `(5, 6)` (`FLAG_HIDE_PLAYERS_HOUSE_DAD`) and the rival at `(8, 8)`
-///   (`FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_BRENDAN`).
-/// - The male branch of the skipped truck sequence
-///   (`data/maps/InsideOfTruck/scripts.inc:29-30`, applied by
-///   [`crate::new_game::init_save_blocks`]) hides the *rival's* mother at
-///   `(2, 7)` and the rival's sibling at `(1, 5)` — they belong in May's
-///   house, not this one.
-///
-/// Both of the latter two used to be visible here, which is why some routes
-/// below still avoid `(2, 7)`: harmless now, and left alone rather than
-/// re-routed for its own sake.
+/// Brendan's House 1F. Its real object events include Mom at `(2, 6)`, whose
+/// script [`crate::overworld::npc_scripts::script_text`] recognizes, and she
+/// is visible on a fresh save. Visible object events are solid, so routes
+/// through this map avoid occupied tiles.
 pub(super) const ONE_F: MapId = MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F");
 
-/// An [`OverworldPhase`] over a **synthetic** 10x10 open room
-/// (`crate::overworld::tests::synthetic_scene`) but a *real* `map_id`, so
-/// no local pack is needed while [`OverworldPhase::step`]'s per-frame
-/// `MapHeaderTable`/`MapEventsTable` lookups still resolve and its
-/// collision/interaction run against that map's real object events. The
-/// scene only supplies the layout grid the runtime walks -- flat, open, and
-/// large enough for every position these tests use.
+const HOUSE_SCENE_DIMENSIONS: (u16, u16) = (10, 10);
+const TOWN_SCENE_DIMENSIONS: (u16, u16) = (20, 20);
+
+/// An [`OverworldPhase`] over a synthetic open room but the real [`ONE_F`]
+/// map id. No pack is needed, while [`OverworldPhase::step`] still resolves
+/// the real header and object events for collision and interaction.
 pub(super) fn synthetic_phase(
     player: PlayerState,
     dialog: Option<crate::overworld::NpcDialog>,
 ) -> OverworldPhase {
     OverworldPhase::for_test(
-        crate::overworld::tests::synthetic_scene(10, 10),
+        crate::overworld::tests::synthetic_scene(
+            HOUSE_SCENE_DIMENSIONS.0,
+            HOUSE_SCENE_DIMENSIONS.1,
+        ),
         ONE_F,
         player,
         dialog,
     )
 }
 
-/// A [`MapRuntime`] over `phase`'s own scene and [`ONE_F`]'s real event
-/// data -- the exact runtime [`OverworldPhase::step`] rebuilds each frame.
+/// The [`MapRuntime`] [`OverworldPhase::step`] builds from `phase`'s scene and
+/// [`ONE_F`]'s real event data.
 pub(super) fn runtime_for(phase: &OverworldPhase) -> MapRuntime<'_> {
     let header = assets::MapHeaderTable::new().header(ONE_F).unwrap();
     let events = assets::MapEventsTable::new().resolve(ONE_F).unwrap();
     phase.scene.runtime(ONE_F, header, events)
 }
 
-// -- Map-edge connection crossing (issue #177): coordinate translation -----
-//
-// Headless, pack-free: `advance_player_one_frame`'s `maps` parameter is
-// generic (this module's own doc comment on why), so these exercise the
-// exact integration function `OverworldPhase::step` calls, over a synthetic
-// two-map graph, without needing a local asset pack. The real
-// Littleroot Town <-> Route 101 crossing (offset 0 in both directions) is
-// additionally pinned end to end, through the whole `OverworldPhase`, by
-// `connections_tests`' `#[ignore]`d `real_pack_*` crossing tests.
-
-/// A small flat map whose header carries one connection in `direction`, to
-/// `target` with `offset` -- the fixture the coordinate-translation tests
-/// below step off the edge of. Mirrors [`flat_runtime`] plus
-/// `engine::overworld::map_runtime::tests::south_connected_runtime`'s own
-/// shape (that fixture is private to `engine`).
+/// A flat map with one connection from `direction` edge to `target` at
+/// `offset`.
 pub(super) fn connected_runtime(
     width: u16,
     height: u16,
@@ -271,9 +216,8 @@ pub(super) fn connected_runtime(
     runtime_with_connections(width, height, connections)
 }
 
-/// A phase standing on 1F's own floor, for `warp_tests`' doormat tests: a real
-/// pack-loaded [`ONE_F`] scene with the player placed at `position` facing
-/// `facing`, at rest.
+/// A phase on the pack-loaded [`ONE_F`] scene with the player at `position`
+/// facing `facing`, at rest. Requires the pack.
 pub(super) fn one_f_phase(position: (i32, i32), facing: Direction) -> OverworldPhase {
     OverworldPhase::for_test(
         crate::overworld::load_room(
@@ -283,160 +227,180 @@ pub(super) fn one_f_phase(position: (i32, i32), facing: Direction) -> OverworldP
         )
         .expect("run `cargo xtask extract` first"),
         ONE_F,
-        PlayerState::new(position, 3, facing),
+        PlayerState::new(position, FIXTURE_FLOOR_ELEVATION, facing),
         None,
     )
 }
 
-/// The shared fixture behind the two tests above: the doormat's own real,
-/// static warp-event data on a **synthetic** scene where the tile south of
-/// it is walkable (see
-/// [`a_legal_step_in_the_arrow_direction_warps_instead_of_stepping`]'s doc
-/// comment for why no real map can stand in). Asserts its own
-/// preconditions, so a fixture that stopped describing the intended scene
-/// fails loudly rather than passing vacuously.
+const ONE_F_DOORMAT_WARP_INDEX: usize = 1;
+const ONE_F_DOORMAT_EVENT_TILE: (i16, i16) = (8, 8);
+const ONE_F_DOORMAT_SCENE_TILE: (u16, u16) = (8, 8);
+const ONE_F_DOORMAT_PLAYER_TILE: (i32, i32) = (8, 8);
+const ONE_F_DOORMAT_EXIT_TILE: (i32, i32) = (8, 9);
+
+/// A phase on the real 1F doormat warp event, over a synthetic scene whose
+/// tile south of the doormat is walkable. The real doormat's south tile is off
+/// the map, so a walkable exit is needed to prove the arrow warp preempts a
+/// legal step. Asserts its own preconditions so a drifted fixture fails
+/// instead of passing vacuously.
 pub(super) fn walkable_south_arrow_phase() -> OverworldPhase {
-    // `MapEventsTable` is generated at build time from checked-in map data
-    // (`warp_tile_behavior`'s own doc comment), so this real warp event is
-    // available with no `cargo xtask extract` pack.
+    // The map-events table is generated at build time, so no pack is needed.
     let events = assets::MapEventsTable::new()
         .resolve(ONE_F)
         .expect("ONE_F must resolve in the generated map-events table");
-    let doormat = events.warp_events[1];
+    let doormat = events.warp_events[ONE_F_DOORMAT_WARP_INDEX];
     assert_eq!(
         (doormat.x, doormat.y),
-        (8, 8),
-        "1F's warp #1: the doormat inside"
+        ONE_F_DOORMAT_EVENT_TILE,
+        "fixture precondition: 1F's doormat warp event position"
     );
 
     let scene = crate::overworld::tests::synthetic_scene_with_special_tile(
-        10,
-        10,
-        (8, 8),
+        HOUSE_SCENE_DIMENSIONS.0,
+        HOUSE_SCENE_DIMENSIONS.1,
+        ONE_F_DOORMAT_SCENE_TILE,
         MB_SOUTH_ARROW_WARP,
     );
     let phase = OverworldPhase::for_test(
         scene,
         ONE_F,
-        PlayerState::new((8, 8), 3, Direction::South),
+        PlayerState::new(
+            ONE_F_DOORMAT_PLAYER_TILE,
+            FIXTURE_FLOOR_ELEVATION,
+            Direction::South,
+        ),
         None,
     );
 
-    // Fixture preconditions: the fabricated tile really is the arrow
-    // behavior these tests mean to exercise, and the tile south of it --
-    // unlike the real doormat's off-map `(8, 9)` -- really is walkable.
     let runtime = runtime_for(&phase);
-    assert_eq!(runtime.metatile_behavior(8, 8), Some(MB_SOUTH_ARROW_WARP));
+    assert_eq!(
+        runtime.metatile_behavior(ONE_F_DOORMAT_PLAYER_TILE.0, ONE_F_DOORMAT_PLAYER_TILE.1),
+        Some(MB_SOUTH_ARROW_WARP)
+    );
     assert!(
         runtime
-            .metatile_cell(8, 9)
-            .is_some_and(|cell| cell.collision == 0),
-        "fixture precondition: (8, 9) must be walkable, unlike the real doormat's off-map tile"
+            .metatile_cell(ONE_F_DOORMAT_EXIT_TILE.0, ONE_F_DOORMAT_EXIT_TILE.1)
+            .is_some_and(|cell| cell.collision == PASSABLE_COLLISION),
+        "fixture precondition: the tile south of the doormat must be walkable"
     );
 
     phase
 }
 
-/// Littleroot Town's own lab-door warp event -- real event data, available
-/// pack-free (`warp_tile_behavior`'s own doc comment) -- combined with a
-/// **synthetic**, walkable `MB_ANIMATED_DOOR` tile at that same position,
-/// `(7, 16)`, matching what the real extracted attribute data decodes there
-/// (issue #851). Walkable so a regressed (no-op) door check would let the
-/// player step onto it instead of the fixture's own solidity doing the
-/// preempting's job; the pack-gated sibling tests cover the real room.
+const LITTLEROOT: MapId = MapId("MAP_LITTLEROOT_TOWN");
+const LITTLEROOT_LAB_WARP_INDEX: usize = 2;
+const LITTLEROOT_LAB_EVENT_TILE: (i16, i16) = (7, 16);
+const LITTLEROOT_LAB_SCENE_TILE: (u16, u16) = (7, 16);
+const LITTLEROOT_LAB_PRESS_TILE: (i32, i32) = (7, 17);
+const LITTLEROOT_LAB_APPROACH_TILE: (i32, i32) = (7, 19);
+
+/// Littleroot Town's real lab-door warp event over a synthetic scene where
+/// that tile is a walkable `MB_ANIMATED_DOOR`. The tile is walkable so a
+/// broken door check would let the player step onto it, rather than collision
+/// masking the failure. Needs no pack.
 pub(super) fn littleroot_lab_door_scene() -> OverworldScene {
     let events = assets::MapEventsTable::new()
-        .resolve(MapId("MAP_LITTLEROOT_TOWN"))
+        .resolve(LITTLEROOT)
         .expect("MAP_LITTLEROOT_TOWN must resolve in the generated map-events table");
-    let door = events.warp_events[2];
+    let door = events.warp_events[LITTLEROOT_LAB_WARP_INDEX];
     assert_eq!(
         (door.x, door.y),
-        (7, 16),
-        "fixture precondition: Littleroot's warp #2 is the lab door"
+        LITTLEROOT_LAB_EVENT_TILE,
+        "fixture precondition: Littleroot's lab door warp position"
     );
 
-    crate::overworld::tests::synthetic_scene_with_special_tile(20, 20, (7, 16), MB_ANIMATED_DOOR)
+    crate::overworld::tests::synthetic_scene_with_special_tile(
+        TOWN_SCENE_DIMENSIONS.0,
+        TOWN_SCENE_DIMENSIONS.1,
+        LITTLEROOT_LAB_SCENE_TILE,
+        MB_ANIMATED_DOOR,
+    )
 }
 
-/// A runtime over `scene` bound to Littleroot's real header and events, for
-/// a caller testing a decision against the map directly rather than driving
-/// whole frames through an [`OverworldPhase`].
+/// A runtime over `scene` bound to Littleroot's real header and events.
 pub(super) fn littleroot_runtime(scene: &OverworldScene) -> MapRuntime<'_> {
-    let littleroot = MapId("MAP_LITTLEROOT_TOWN");
     let header = assets::MapHeaderTable::new()
-        .header(littleroot)
+        .header(LITTLEROOT)
         .expect("MAP_LITTLEROOT_TOWN must resolve in the generated map-header table");
     let events = assets::MapEventsTable::new()
-        .resolve(littleroot)
+        .resolve(LITTLEROOT)
         .expect("MAP_LITTLEROOT_TOWN must resolve in the generated map-events table");
-    scene.runtime(littleroot, header, events)
+    scene.runtime(LITTLEROOT, header, events)
 }
 
-/// [`littleroot_lab_door_scene`] with the player standing one tile south of
-/// the door, for a stationary press.
+/// [`littleroot_lab_door_scene`] with the player one tile south of the door,
+/// for a stationary press.
 pub(super) fn facing_littleroot_lab_door_phase(facing: Direction) -> OverworldPhase {
     OverworldPhase::for_test(
         littleroot_lab_door_scene(),
-        MapId("MAP_LITTLEROOT_TOWN"),
-        PlayerState::new((7, 17), 3, facing),
+        LITTLEROOT,
+        PlayerState::new(LITTLEROOT_LAB_PRESS_TILE, FIXTURE_FLOOR_ELEVATION, facing),
         None,
     )
 }
 
-/// [`facing_littleroot_lab_door_phase`]'s own fixture, but the player starts
-/// three tiles south of the door, already facing North, so a caller can
-/// drive a genuine *walked* approach (holding Up the whole way, two full
-/// tile crossings) instead of a stationary press -- exercising the frame on
-/// which a completed crossing first becomes visible to the pre-movement
-/// door check (`super::animated_door`'s own module docs).
+/// [`littleroot_lab_door_scene`] with the player three tiles south of the
+/// door, facing north, so a test can walk two full tiles up to it and observe
+/// the frame on which the completed crossing reaches the pre-movement door
+/// check (see `super::animated_door`).
 pub(super) fn approaching_littleroot_lab_door_phase() -> OverworldPhase {
     OverworldPhase::for_test(
         littleroot_lab_door_scene(),
-        MapId("MAP_LITTLEROOT_TOWN"),
-        PlayerState::new((7, 19), 3, Direction::North),
+        LITTLEROOT,
+        PlayerState::new(
+            LITTLEROOT_LAB_APPROACH_TILE,
+            FIXTURE_FLOOR_ELEVATION,
+            Direction::North,
+        ),
         None,
     )
 }
 
-/// Littleroot Town's Brendan's-house door warp at `(5, 8)` -- the one tile
-/// in bundled data where a scripted object event (Mom outside,
-/// `LittlerootTown_EventScript_Mom`) stands on a house door -- pinned to
-/// `MB_ANIMATED_DOOR` on a synthetic scene the same way
-/// [`littleroot_lab_door_scene`] pins the lab door. Mom outside is hidden on
-/// a fresh save, so her hide flag is cleared here: this fixture is exactly
-/// upstream's "an NPC is standing in the doorway" frame.
+const LITTLEROOT_HOUSE_WARP_INDEX: usize = 1;
+const LITTLEROOT_MOM_OBJECT_INDEX: usize = 3;
+const LITTLEROOT_HOUSE_EVENT_TILE: (i16, i16) = (5, 8);
+const LITTLEROOT_HOUSE_SCENE_TILE: (u16, u16) = (5, 8);
+const LITTLEROOT_HOUSE_PRESS_TILE: (i32, i32) = (5, 9);
+const NULL_EVENT_SCRIPT: &str = "0x0";
+
+/// A phase with Mom standing on Brendan's-house door tile in Littleroot Town,
+/// an `MB_ANIMATED_DOOR` on a synthetic scene like [`littleroot_lab_door_scene`].
+/// Her hide flag is cleared because she is hidden on a fresh save.
 pub(super) fn mom_standing_in_the_house_door_phase() -> OverworldPhase {
-    let littleroot = MapId("MAP_LITTLEROOT_TOWN");
     let events = assets::MapEventsTable::new()
-        .resolve(littleroot)
+        .resolve(LITTLEROOT)
         .expect("MAP_LITTLEROOT_TOWN must resolve in the generated map-events table");
-    let door = events.warp_events[1];
+    let door = events.warp_events[LITTLEROOT_HOUSE_WARP_INDEX];
     assert_eq!(
         (door.x, door.y),
-        (5, 8),
-        "fixture precondition: Littleroot's warp #1 is Brendan's house door"
+        LITTLEROOT_HOUSE_EVENT_TILE,
+        "fixture precondition: Brendan's house door warp position"
     );
-    let mom = events.object_events[3];
+    let mom = events.object_events[LITTLEROOT_MOM_OBJECT_INDEX];
     assert_eq!(
         (mom.x, mom.y),
-        (5, 8),
-        "fixture precondition: Mom outside stands on that same door tile"
+        LITTLEROOT_HOUSE_EVENT_TILE,
+        "fixture precondition: Mom stands on the house door tile"
     );
     assert_ne!(
-        mom.script, "0x0",
-        "fixture precondition: Mom's script is a real one, so A interacts"
+        mom.script, NULL_EVENT_SCRIPT,
+        "fixture precondition: Mom has a real script, so A interacts"
     );
 
     let scene = crate::overworld::tests::synthetic_scene_with_special_tile(
-        20,
-        20,
-        (5, 8),
+        TOWN_SCENE_DIMENSIONS.0,
+        TOWN_SCENE_DIMENSIONS.1,
+        LITTLEROOT_HOUSE_SCENE_TILE,
         MB_ANIMATED_DOOR,
     );
     let mut phase = OverworldPhase::for_test(
         scene,
-        littleroot,
-        PlayerState::new((5, 9), 3, Direction::North),
+        LITTLEROOT,
+        PlayerState::new(
+            LITTLEROOT_HOUSE_PRESS_TILE,
+            FIXTURE_FLOOR_ELEVATION,
+            Direction::North,
+        ),
         None,
     );
     let hide_mom = assets::object_event_flags::resolve(mom.flag)
@@ -449,38 +413,36 @@ pub(super) fn mom_standing_in_the_house_door_phase() -> OverworldPhase {
     phase
 }
 
-/// The tile row Route 101's own extracted layout makes solid tall grass:
-/// `y == 4`, `x` in `0..=5` (the same real data
-/// [`crate::flow::wild_encounter::tests`]' own real-pack lane walks, one row
-/// over). Six tiles in a straight line is exactly what the two
-/// immunity-window tests below need -- four immune steps and then a fifth
-/// that really rolls, with no direction change to complicate the frame
-/// counting.
-pub(super) const ROUTE_101_GRASS_ROW: [(i32, i32); 6] =
-    [(0, 4), (1, 4), (2, 4), (3, 4), (4, 4), (5, 4)];
+const ROUTE_101_GRASS_ROW_Y: i32 = 4;
 
-/// Route 101's own elevation on [`ROUTE_101_GRASS_ROW`].
+/// Six consecutive tall-grass tiles on Route 101's real layout: enough for
+/// four immune steps followed by one that rolls, without a direction change.
+pub(super) const ROUTE_101_GRASS_ROW: [(i32, i32); 6] = [
+    (0, ROUTE_101_GRASS_ROW_Y),
+    (1, ROUTE_101_GRASS_ROW_Y),
+    (2, ROUTE_101_GRASS_ROW_Y),
+    (3, ROUTE_101_GRASS_ROW_Y),
+    (4, ROUTE_101_GRASS_ROW_Y),
+    (5, ROUTE_101_GRASS_ROW_Y),
+];
+
+/// Route 101's elevation on [`ROUTE_101_GRASS_ROW`].
 pub(super) const ROUTE_101_GRASS_ELEVATION: u8 = 3;
 
-/// A seed whose first four draws are all non-zero, so "the stream never
-/// moved" and "the stream moved" are distinguishable by state alone. Any
-/// seed would do; this is [`crate::flow::wild_encounter::tests`]' own
-/// `ENCOUNTER_SEED`, reused so the two files' scenarios stay comparable.
+/// An RNG seed whose first four draws are non-zero, so an untouched stream
+/// and an advanced one differ by state alone.
 pub(super) const IMMUNITY_SEED: u32 = 17;
 
-/// Walk one whole tile in `button`'s direction, let its walk animation
-/// drain, and then give the completed step the landing call it is observed
-/// on.
+/// Walk one tile in `button`'s direction: hold it for the whole crossing, then
+/// make one neutral call.
 ///
-/// The 16 held calls are the crossing itself; the 17th is upstream's
-/// `T_TILE_CENTER` CB1, where the coordinate event, the door-shaped warp
-/// and the encounter roll actually run (`OverworldPhase::step`'s "Frame
-/// shape" docs, issue #1039). That call is deliberately *neutral* rather
-/// than another held frame: a held direction there would start the next
-/// crossing too, which is continuous walking, not "walk one tile".
+/// The extra call is where upstream's tile-center callback runs the coordinate
+/// event, door warp, and encounter roll (see `OverworldPhase::step`'s "Frame
+/// shape"). It is neutral because a held direction there would start the next
+/// crossing, which is continuous walking.
 ///
-/// The caller must already be facing `button`'s direction, or the first
-/// call spends itself turning and the tile is never crossed.
+/// The player must already face `button`'s direction, or the first call only
+/// turns.
 pub(super) fn walk_one_tile(phase: &mut OverworldPhase, button: Buttons) {
     for _ in 0..WALK_FRAMES_PER_TILE {
         phase.step(held(button));
@@ -488,22 +450,18 @@ pub(super) fn walk_one_tile(phase: &mut OverworldPhase, button: Buttons) {
     phase.step(ButtonState::new());
 }
 
-/// [`walk_one_tile`] east, the direction most of these tests walk.
+/// [`walk_one_tile`] east.
 pub(super) fn walk_one_tile_east(phase: &mut OverworldPhase) {
     walk_one_tile(phase, Buttons::RIGHT);
 }
 
-/// [`walk_one_tile`] for a direction the player is *not* already facing and
-/// has no movement streak in: turn in place first, wait out the turn's own
-/// busy window, then cross.
+/// [`walk_one_tile`] for a player at rest, not facing `button`'s direction and
+/// with no movement streak.
 ///
-/// A player at rest who is handed a new direction only turns
-/// ([`PlayerState::step`]'s `movement_streak_active`/`TURN_IN_PLACE_FRAMES`
-/// branch, upstream's `PlayerNotOnBikeTurningInPlace`), and stays busy for
-/// [`TURN_IN_PLACE_FRAMES`] calls before any step can start -- so a
-/// reversal costs those calls on top of the crossing's own. Continuous
-/// walking never pays them, which is why [`walk_one_tile`] does not: its
-/// trailing neutral call is what drops the streak in the first place.
+/// Such a player only turns in place and stays busy for
+/// [`TURN_IN_PLACE_FRAMES`] calls (upstream's `PlayerNotOnBikeTurningInPlace`;
+/// see [`PlayerState::step`]) before a step can start. Continuous walking skips
+/// the turn, which is why [`walk_one_tile`] does not pay it.
 pub(super) fn turn_and_walk_one_tile(phase: &mut OverworldPhase, button: Buttons) {
     for _ in 0..TURN_IN_PLACE_FRAMES {
         phase.step(held(button));
@@ -511,15 +469,9 @@ pub(super) fn turn_and_walk_one_tile(phase: &mut OverworldPhase, button: Buttons
     walk_one_tile(phase, button);
 }
 
-/// Drive `state` through one more step onto tall grass against Route 101's
-/// *real* wild table, reporting whether that step touched `rng`.
-///
-/// The two tests below use this to assert the shape of the window a map
-/// transition restarts: four steps that draw nothing at all, then one that
-/// does. It goes through [`super::OverworldPhase::wild`] rather than a fresh
-/// [`engine::overworld::wild_encounter::WildEncounterState`] precisely
-/// because the claim under test is about *the phase's own* state after the
-/// transition, not about the counter in the abstract.
+/// Take one more grass step against Route 101's real wild table and report
+/// whether it touched `rng`. Takes the encounter state explicitly so callers
+/// can pass the phase's own state after a map transition.
 pub(super) fn grass_step_draws(
     state: &mut engine::overworld::wild_encounter::WildEncounterState,
     rng: &mut Rng,

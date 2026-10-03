@@ -14,7 +14,7 @@
 //! (`graphics_file_rules.mk`'s `-num_colors 224`) while its `.pal` file
 //! holds 256, the last 32 of them black, and `cargo xtask extract` used to
 //! emit all 256. It now honours the cut
-//! (`xtask::extract::TITLE_SCREEN_PALETTE_CUTS`), so the pack and the ROM
+//! (`xtask::extract::scope::TITLE_SCREEN_PALETTE_CUTS`), so the pack and the ROM
 //! agree and the walk settles on its first candidate. It is kept rather
 //! than replaced by an exact match: it is the check that the palette really
 //! is adjacent, and it still reports honestly if upstream's rule changes
@@ -46,6 +46,7 @@ pub fn locate(
     ctx: &Context<'_>,
     report: &mut Vec<ReportLine>,
 ) -> Result<TitleScreenPlan, GenRomProfileError> {
+    super::inventory::require_title(ctx.pack)?;
     let queries: Vec<ImageQuery> = ctx
         .pack
         .ids_with_prefix("title/image/")

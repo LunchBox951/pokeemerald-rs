@@ -18,6 +18,8 @@ mod move_resolution;
 mod move_selection;
 #[path = "turn_engine/paralysis.rs"]
 mod paralysis;
+#[path = "turn_engine/participant_admission.rs"]
+mod participant_admission;
 #[path = "turn_engine/pipelines.rs"]
 mod pipelines;
 #[path = "turn_engine/poison.rs"]
@@ -28,6 +30,8 @@ mod pressure;
 mod shed_skin;
 #[path = "turn_engine/stat_changes.rs"]
 mod stat_changes;
+#[path = "turn_engine/status_ability_matrix.rs"]
+mod status_ability_matrix;
 #[path = "turn_engine/trainer_battle.rs"]
 mod trainer_battle;
 #[path = "turn_engine/turn_order.rs"]
