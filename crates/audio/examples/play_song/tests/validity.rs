@@ -380,3 +380,60 @@ fn a_usable_mark_published_before_the_first_snapshot_is_not_stale_evidence() {
         "finished at {elapsed:?}, before the measured target sounded"
     );
 }
+
+/// A usable mark published ahead of its submitted frames, on a poll where
+/// submitted frames did not move, discards the pending stale evidence: the
+/// tail exit must not fire on the stale callbacks it already outdates.
+#[test]
+fn a_usable_mark_seen_before_its_submitted_advance_clears_stale_evidence() {
+    use std::time::{Duration, Instant};
+
+    let policy = RetryPolicy {
+        interval: Duration::from_millis(10),
+        max_wait: Duration::from_secs(1),
+    };
+    let start = Instant::now();
+    let clock = Rc::new(RefCell::new(start));
+    let submitted = Cell::new(48_000_u64);
+    let sounded = Cell::new(28_800_u64);
+    let usable = Cell::new(0_u64);
+
+    let result = wait_for_measured_tail(
+        48_000,
+        Duration::from_millis(250),
+        48_000,
+        &policy,
+        || {
+            Some(progress_usable(
+                sounded.get(),
+                submitted.get(),
+                usable.get(),
+            ))
+        },
+        || 0,
+        || *clock.borrow(),
+        |duration| {
+            *clock.borrow_mut() += duration;
+            match clock.borrow().duration_since(start).as_millis() {
+                // Two stale 100 ms callbacks accumulate tail evidence.
+                100 | 200 => submitted.set(submitted.get() + 4_800),
+                // Only the usable mark appears at the tail boundary.
+                250 => usable.set(62_400),
+                // The marked callback's submitted store arrives next poll.
+                260 => submitted.set(62_400),
+                // A later usable callback confirms the measured target.
+                400 => {
+                    sounded.set(48_000);
+                    usable.set(67_200);
+                    submitted.set(67_200);
+                }
+                _ => {}
+            }
+        },
+    );
+
+    let elapsed = clock.borrow().duration_since(start);
+    assert!(result.is_ok());
+    assert_eq!(elapsed, Duration::from_millis(400));
+    assert_eq!(sounded.get(), 48_000);
+}

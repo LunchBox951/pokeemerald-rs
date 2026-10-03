@@ -577,6 +577,17 @@ fn wait_for_measured_tail(
             return Ok(());
         }
         let current = now();
+        // A mark past the previous poll's submitted total belongs to a
+        // usable callback. It is stored before the frames it covers, so it
+        // can be seen a poll ahead of them; it discards pending stale
+        // evidence on the poll it is seen, whether or not frames moved.
+        let usable = last_submitted.is_some_and(|previous| usable_through > previous);
+        if usable {
+            first_stale = None;
+            last_stale = None;
+            max_stale_advance = Duration::ZERO;
+            after_stall = false;
+        }
         if let Some(previous) = last_submitted.filter(|&last| submitted > last) {
             let frames = u32::try_from(submitted - previous).unwrap_or(u32::MAX);
             let played = if device_sample_rate > 0 {
@@ -592,15 +603,6 @@ fn wait_for_measured_tail(
             let gap = last_advance.map_or(Duration::ZERO, |previous_at| {
                 at.saturating_duration_since(previous_at)
             });
-            // The span `(previous, submitted]` held a usable callback when the
-            // mark (stored before the frames it covers) lies past `previous`.
-            let usable = usable_through > previous;
-            if usable {
-                first_stale = None;
-                last_stale = None;
-                max_stale_advance = Duration::ZERO;
-                after_stall = false;
-            }
             // A healthy gap is about one period: what the window has seen, or
             // the playback the last advance covered. One that outruns both by
             // a tenth of the tail is a stall: what came before says nothing
