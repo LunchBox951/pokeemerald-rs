@@ -91,3 +91,14 @@ fn one_unusable_sector_and_one_valid_outlier_reject_the_legacy_head() {
         assert_eq!(store.scan_slot(1).integrity, SlotIntegrity::Error);
     }
 }
+
+/// One unusable sector at the first tail position of a rotation-0 stale tail
+/// keeps the head when the other eight tail sectors verify the stale generation.
+#[test]
+fn a_legacy_head_survives_one_unusable_sector_at_the_first_tail_position() {
+    for by_footer_id in [true, false] {
+        let (mut store, counterpart) = legacy_head_over_stale_tail();
+        make_unusable(&mut store, 1, 5, by_footer_id);
+        assert_head_loads(&mut store, &counterpart);
+    }
+}

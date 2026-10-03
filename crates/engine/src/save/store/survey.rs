@@ -258,18 +258,24 @@ impl SlotSurvey {
         if self.tail_unusable_count > 1 {
             return None;
         }
-        // One unusable sector spends the whole outlier budget. A write torn
-        // past five sectors always damages the position after the head's.
-        if self.tail_unusable_count == 1
-            && (self.tail_valid_count != PKMN_STORAGE_CHUNKS - 1
-                || self.tail_unusable_at_first_tail_position)
-        {
+        // One unusable sector spends the whole outlier budget.
+        if self.tail_unusable_count == 1 && self.tail_valid_count != PKMN_STORAGE_CHUNKS - 1 {
             return None;
         }
         let counters = &self.tail_counters[..self.tail_valid_count];
         let rotations = &self.tail_rotations[..self.tail_valid_count];
         let rotation = one_outlier_consensus(rotations)?;
         let counter = one_outlier_consensus(counters)?;
+        // A write torn past five sectors always damages the position after
+        // the head's, over a predecessor it rotated away from. A rotated tail
+        // behind that damage is refused by layout; a rotation-0 tail there
+        // was never that write's predecessor and can only be a legacy head's.
+        if self.tail_unusable_count == 1
+            && self.tail_unusable_at_first_tail_position
+            && rotation != 0
+        {
+            return None;
+        }
         let mut outliers = rotations
             .iter()
             .zip(counters)
