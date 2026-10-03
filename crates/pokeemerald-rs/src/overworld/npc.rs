@@ -365,26 +365,18 @@ fn subpriority(entry: OamEntry, elevation: u8) -> u16 {
     base + (16 - (bottom_plus_bias >> 4)) * 2 + 1
 }
 
-/// Reorders `(entry, elevation)` pairs so that, within each OBJ priority, a
-/// lower subpriority takes the lower OAM index and wins the overlap, as
-/// upstream's sprite sort draws it. Equal subpriorities fall to the lower
-/// on-screen `y` first (`SortSprites`, `sprite.c:413-415`), and full ties keep
-/// their given order. Entries keep their slots across priorities.
+/// Orders pairs as upstream emits OAM: ascending OBJ priority, then subpriority,
+/// then lower on-screen `y` (`SortSprites`, `sprite.c:413-419`); ties keep input order.
 pub(super) fn order_by_depth(entries: &[(OamEntry, u8)]) -> Vec<OamEntry> {
-    let mut ordered: Vec<OamEntry> = entries.iter().map(|&(entry, _)| entry).collect();
-    for priority in 0..=3 {
-        let slots: Vec<usize> = (0..entries.len())
-            .filter(|&i| entries[i].0.priority() == priority)
-            .collect();
-        let mut group: Vec<(OamEntry, u8)> = slots.iter().map(|&i| entries[i]).collect();
-        group.sort_by_key(|&(entry, elevation)| {
-            (subpriority(entry, elevation), std::cmp::Reverse(entry.y()))
-        });
-        for (slot, (entry, _)) in slots.into_iter().zip(group) {
-            ordered[slot] = entry;
-        }
-    }
-    ordered
+    let mut ordered = entries.to_vec();
+    ordered.sort_by_key(|&(entry, elevation)| {
+        (
+            entry.priority(),
+            subpriority(entry, elevation),
+            std::cmp::Reverse(entry.y()),
+        )
+    });
+    ordered.into_iter().map(|(entry, _)| entry).collect()
 }
 
 /// Builds OAM entries for visible events with resolved sprite bindings.
@@ -1282,5 +1274,39 @@ mod tests {
                 "{direction:?}: the settled position must match a fresh player already there"
             );
         }
+    }
+
+    /// Hardware retags a written pixel from a later transparent texel (`software-obj.c:120-125`).
+    #[test]
+    fn order_by_depth_keeps_transparent_higher_priority_entry_from_raising_player() {
+        let at = |tile: u16, priority: u8| {
+            OamEntry::new(
+                120,
+                64,
+                tile,
+                0,
+                rendering::BitDepth::Bpp4,
+                false,
+                false,
+                rendering::ObjShape::Square,
+                0,
+                priority,
+                true,
+            )
+        };
+        // Tile 0 is opaque (index 1); tile 1 is fully transparent.
+        let mut bytes = vec![0x11_u8; 32];
+        bytes.extend([0_u8; 32]);
+        let tiles = rendering::Tileset::decode(rendering::BitDepth::Bpp4, &bytes).expect("tiles");
+        let mut colors = [rendering::Bgr555::from_raw(0); rendering::Palette::LEN];
+        colors[1] = rendering::Bgr555::from_raw(0x7FFF);
+        let palette = rendering::Palette::new(colors);
+        let player = at(0, 2);
+        let npc = at(1, 1);
+        let ordered = order_by_depth(&[(player, 3), (npc, 4)]);
+        let pixel = rendering::SpriteLayer::new(&ordered, &tiles, &tiles, &palette)
+            .resolve_pixel(122, 66)
+            .expect("player texel is opaque");
+        assert_eq!(pixel.priority, 2, "player keeps its own OBJ priority");
     }
 }
