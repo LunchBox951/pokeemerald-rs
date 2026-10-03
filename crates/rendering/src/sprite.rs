@@ -64,6 +64,10 @@ pub struct SpritePixel {
     /// [`span_start`](Self::span_start) for the same flag-only-overwrite
     /// reason as [`color_semi_transparent`](Self::color_semi_transparent).
     pub color_span_start: usize,
+    /// Whether an earlier-drawn `OBJWIN` entry had already set this pixel's
+    /// row mask when [`color`](Self::color) was written, so mGBA drew it from
+    /// `objwinPalette` (`software-obj.c:88-105`).
+    pub color_objwin_masked: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -300,6 +304,7 @@ impl<'a> SpriteLayer<'a> {
         }
 
         let mut resolved: Option<SpritePixel> = None;
+        let mut objwin_written = false;
         self.with_admission(y, |admission| {
             for (index, entry) in self.entries.iter().enumerate() {
                 if !admission.is_admitted(index) {
@@ -316,6 +321,10 @@ impl<'a> SpriteLayer<'a> {
                 if matches!(texel, Texel::Outside) {
                     continue;
                 }
+                // An opaque `OBJWIN` write sets the row mask whatever its
+                // priority (`software-obj.c:94-105`).
+                objwin_written |=
+                    entry.mode() == ObjMode::Window && matches!(texel, Texel::Opaque(_));
                 if resolved.is_some_and(|pixel| entry.priority() >= pixel.priority) {
                     continue;
                 }
@@ -331,6 +340,7 @@ impl<'a> SpriteLayer<'a> {
                             color_semi_transparent: semi_transparent,
                             span_start,
                             color_span_start: span_start,
+                            color_objwin_masked: objwin_written,
                         });
                     }
                     (mode, Texel::Transparent) => {
