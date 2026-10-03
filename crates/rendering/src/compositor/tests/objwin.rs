@@ -244,3 +244,150 @@ fn objwin_slow_path_reblends_a_normal_obj_that_is_not_a_target1_layer() {
         "without objwin_slow_path, a non-target1 Normal OBJ is never reblended"
     );
 }
+
+/// Draws overlapping solid sprites under Brighten with OBJWIN effects off,
+/// returning the composed pixel and whether the final OBJWIN mask covers it.
+fn objwin_variant_pixel(entries: &[OamEntry]) -> (Option<Rgb888>, bool) {
+    // Tile 0 is solid index 15; tile 1 is fully transparent.
+    let mut tile_bytes = [0u8; 64];
+    tile_bytes[..32].fill(0xFF);
+    let sprite_tileset = Tileset::decode(BitDepth::Bpp4, &tile_bytes).unwrap();
+    let mut sprite_colors = [Bgr555::default(); Palette::LEN];
+    sprite_colors[15] = Bgr555::from_channels(16, 16, 16);
+    let sprite_palette = Palette::new(sprite_colors);
+    let sprites = SpriteLayer::new(entries, &sprite_tileset, &sprite_tileset, &sprite_palette);
+
+    let mut winout = WindowLayerEnable::NONE;
+    winout.obj = true;
+    winout.effects = true;
+    let mut obj_window = WindowLayerEnable::NONE;
+    obj_window.obj = true; // OBJWIN effects stay off
+
+    let effects = FrameEffects {
+        windows: WindowConfig {
+            win0: None,
+            win1: None,
+            obj_window: Some(obj_window),
+            winout,
+        },
+        color: EffectsConfig {
+            effect: ColorEffect::Brighten,
+            target1: LayerTargets {
+                bg: [false; 4],
+                obj: true,
+                backdrop: false,
+            },
+            target2: LayerTargets::default(),
+            eva: 0,
+            evb: 0,
+            evy: 16,
+        },
+        backdrop: Rgb888::BLACK,
+        ..FrameEffects::default()
+    };
+    let fb = compose_frame_with_effects(&sprites, &[], &effects);
+    (fb.pixel(0, 0), sprites.objwin_mask(0, 0))
+}
+
+fn solid_sprite(priority: u8, mode: ObjMode) -> OamEntry {
+    OamEntry::new(
+        0,
+        0,
+        0,
+        0,
+        BitDepth::Bpp4,
+        false,
+        false,
+        ObjShape::Square,
+        0,
+        priority,
+        true,
+    )
+    .with_mode(mode)
+}
+
+fn transparent_sprite(priority: u8) -> OamEntry {
+    OamEntry::new(
+        0,
+        0,
+        1,
+        0,
+        BitDepth::Bpp4,
+        false,
+        false,
+        ObjShape::Square,
+        0,
+        priority,
+        true,
+    )
+}
+
+#[test]
+fn objwin_sprite_drawn_after_a_normal_sprite_keeps_its_brighten_variant() {
+    // mGBA picks the palette from the row mask at write time, and an OBJWIN
+    // write only sets it afterwards (`software-obj.c:88-105`).
+    let white = Bgr555::from_channels(31, 31, 31).to_rgb888();
+    let gray = Bgr555::from_channels(16, 16, 16).to_rgb888();
+
+    let (normal_first, masked) = objwin_variant_pixel(&[
+        solid_sprite(1, ObjMode::Normal),
+        solid_sprite(0, ObjMode::Window),
+    ]);
+    assert!(masked, "the OBJWIN sprite covers the pixel either way");
+    assert_eq!(
+        normal_first,
+        Some(white),
+        "a later OBJWIN sprite must not retroactively strip the earlier variant"
+    );
+
+    let (objwin_first, masked) = objwin_variant_pixel(&[
+        solid_sprite(0, ObjMode::Window),
+        solid_sprite(1, ObjMode::Normal),
+    ]);
+    assert!(masked);
+    assert_eq!(
+        objwin_first,
+        Some(gray),
+        "an earlier OBJWIN sprite draws the later sprite from objwinPalette, \
+         with effects off there"
+    );
+}
+
+#[test]
+fn objwin_write_time_mask_survives_a_flag_only_priority_overwrite() {
+    // A better-priority transparent texel keeps the stored color's palette
+    // choice (`software-obj.c:120-126`); the mask write itself ignores
+    // priority (`software-obj.c:94-105`).
+    let white = Bgr555::from_channels(31, 31, 31).to_rgb888();
+    let gray = Bgr555::from_channels(16, 16, 16).to_rgb888();
+    // Opaque nonzero palette index everywhere, so only order differs.
+    let (kept, _) = objwin_variant_pixel(&[
+        solid_sprite(2, ObjMode::Normal),
+        solid_sprite(3, ObjMode::Window),
+        transparent_sprite(0),
+    ]);
+    assert_eq!(kept, Some(white), "the earlier variant survives promotion");
+
+    let (kept, _) = objwin_variant_pixel(&[
+        solid_sprite(3, ObjMode::Window),
+        solid_sprite(2, ObjMode::Normal),
+        transparent_sprite(0),
+    ]);
+    assert_eq!(
+        kept,
+        Some(gray),
+        "the objwinPalette color survives promotion"
+    );
+
+    // Control: an opaque priority-0 sprite recolors after the OBJWIN write.
+    let (recolored, _) = objwin_variant_pixel(&[
+        solid_sprite(2, ObjMode::Normal),
+        solid_sprite(3, ObjMode::Window),
+        solid_sprite(0, ObjMode::Normal),
+    ]);
+    assert_eq!(
+        recolored,
+        Some(gray),
+        "a color written after OBJWIN uses its palette"
+    );
+}

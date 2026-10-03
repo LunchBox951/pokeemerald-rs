@@ -11,6 +11,7 @@ mod legacy_migration_tests;
 mod round_trip_tests;
 mod storage_donor_tests;
 mod torn_write_tests;
+mod unusable_tail_tests;
 
 fn sample_block2() -> SaveBlock2 {
     SaveBlock2 {
@@ -193,5 +194,25 @@ fn write_legacy_slot_rotated(
         };
         let physical = usize::from((id + rotation) % SECTOR_ID_PKMN_STORAGE_START);
         store.write_physical(slot, physical, &Sector::write(id, payload, counter));
+    }
+}
+
+/// Rewrites the unchecksummed footer id of the sector at `position`,
+/// leaving its payload, checksum, signature and counter untouched.
+fn relabel_footer_id(store: &mut SaveStore, slot: usize, position: usize, id: u16) {
+    // The footer ends id (u16), checksum (u16), signature, counter (u32s).
+    let id_offset = SECTOR_SIZE - 2 * size_of::<u32>() - 2 * size_of::<u16>();
+    let mut bytes = *store.read_physical(slot, position).as_bytes();
+    bytes[id_offset..id_offset + 2].copy_from_slice(&id.to_le_bytes());
+    store.write_physical(slot, position, &Sector::from_bytes(bytes));
+}
+
+/// Leaves the sector at `position` signed but unusable: a footer id outside
+/// 0-13, or a payload byte flipped past its checksum.
+fn make_unusable(store: &mut SaveStore, slot: usize, position: usize, by_footer_id: bool) {
+    if by_footer_id {
+        relabel_footer_id(store, slot, position, 15);
+    } else {
+        store.corrupt_byte(slot, position, 0);
     }
 }

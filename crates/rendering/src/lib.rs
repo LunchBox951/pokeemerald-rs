@@ -1,49 +1,16 @@
-//! Rendering subsystem (S-2): 240x160 tile / sprite / layer renderer.
+//! Headless 240x160 GBA tile and sprite rendering.
 //!
-//! Headless, testable core: an owned [`Framebuffer`], faithful GBA
-//! BGR555 -> RGB888 palette conversion ([`Bgr555::to_rgb888`]), and
-//! 4bpp/8bpp indexed tile decoding ([`Tileset`]). Regular ([`BgLayer`])
-//! and affine/rotation-scaling ([`AffineBgLayer`]) background tile
-//! layers, plus an OAM-equivalent sprite layer ([`SpriteLayer`],
-//! [`OamEntry`]) with affine and double-size sampling, all composite
-//! through [`compose_frame`], which orders up to four BG layers plus
-//! sprites the way the GBA PPU does.
+//! [`compose_frame`] composites [`BgLayer`], [`AffineBgLayer`], and
+//! [`SpriteLayer`] inputs into an owned [`Framebuffer`].
+//! [`compose_frame_with_effects`] adds windows, color special effects, and
+//! mosaic, configured through [`FrameEffects`]; [`compose_frame`] is the same
+//! call with default effects.
 //!
-//! [`compositor::compose_frame_with_effects`] extends composition with
-//! the full hardware effect group: windows (`WIN0`/`WIN1`/`OBJWIN`/
-//! `WINOUT`, [`window`]), color special effects (alpha blend, brighten,
-//! darken, [`effects`]), and mosaic ([`mosaic`]), all controlled by the
-//! [`compositor::FrameEffects`] parameter struct. [`compose_frame`]
-//! delegates to it with [`compositor::FrameEffects::default`]. Affine OBJ
-//! mosaic sampling reruns once per hardware-window span rather than once per
-//! scanline, restarting its held source column at each span's own start
-//! (`sprite::SpriteLayer::sample_affine_local`).
+//! Layer ordering, sprite admission, and palette fades are specified in the
+//! module documentation ([`compositor`], [`sprite`], [`palette_fade`]).
 //!
-//! [`SpriteLayer`] gates both visible resolution and OBJWIN masking through
-//! a shared per-scanline OAM admission stage (`oam_budget`, private but see
-//! [`sprite`]'s module docs) modelling the GBA's fixed per-scanline OBJ
-//! cycle budget (S-2, issue #329) — a late sprite past the budget is
-//! dropped from both consistently, the way real hardware (and the pinned
-//! mgba renderer) drops it.
-//!
-//! The `pokeemerald_rs` crate's `frame` module bridges this crate's
-//! [`Framebuffer`] to `platform`'s presentation surface, converting a
-//! composed frame into `platform`'s pixel format for the frame loop
-//! (windowed or headless) to present.
-//!
-//! [`palette_fade`] models the front-end's normal CPU palette fade
-//! (`BeginNormalPaletteFade`/`UpdatePaletteFade`'s `NORMAL_FADE` scheduling,
-//! `pokeemerald/src/palette.c`) over a retained [`Framebuffer`], using
-//! `BlendPalette`'s per-channel signed delta (`pokeemerald/src/util.c`) —
-//! deliberately distinct from [`effects::brighten`]/[`effects::darken`]'s
-//! hardware `BLDY` packed-lane rounding.
-//!
-//! `std`-only, no FFI, no dependency on `platform` `(minimal-deps, no-ffi)`.
-//! Behaviour is transcribed from `pokeemerald/src/palette.c`,
-//! `pokeemerald/src/bg.c`, `pokeemerald/src/sprite.c`, and
-//! `pokeemerald/src/util.c` — verified against `mgba`'s software renderer as
-//! the hardware-behaviour reference — never copied verbatim
-//! `(no-verbatim, behavioral-fidelity)`.
+//! Uses only `std`, with no FFI and no dependency on `platform`
+//! `(minimal-deps, no-ffi)`.
 
 pub mod affine;
 pub mod bg;

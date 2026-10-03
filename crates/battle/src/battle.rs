@@ -33,6 +33,7 @@ use crate::status1::{draws_full_paralysis, draws_shed_skin_cure, poison_residual
 use crate::turn_order::{resolve_order, Order};
 use crate::volatile::draws_confusion_self_hit;
 
+mod admission;
 mod events;
 mod execute;
 pub(crate) mod opponent_ai;
@@ -228,7 +229,10 @@ impl Battle {
     /// participant, or the first move or ability validation error from the
     /// enemy's moveset against the active member or any non-fainted reserve.
     /// A fainted reserve is admitted: it models a player party that already
-    /// lost a member before the battle. Errors leave the RNG untouched.
+    /// lost a member before the battle. A non-fainted
+    /// participant with a Paralysed Limber or Poisoned Immunity status fails
+    /// with [`BattleError::UnportedAbilityInteraction`]. Errors leave the RNG
+    /// untouched.
     pub fn new_with_player_reserves(
         dex: Dex,
         player: BattlePokemon,
@@ -269,6 +273,13 @@ impl Battle {
                 }
             }
         }
+        admission::ensure_participants_admissible(
+            [&player, &enemy].into_iter().chain(
+                player_reserves
+                    .iter()
+                    .filter(|reserve| !reserve.is_fainted()),
+            ),
+        )?;
         let random_turn_number = initialize_turn_rng_state(&player, &enemy, rng);
         Ok(Self {
             dex,
@@ -358,6 +369,16 @@ impl Battle {
                 }
             }
         }
+
+        admission::ensure_participants_admissible(
+            std::iter::once(&player)
+                .chain(party.iter().filter(|mon| !mon.is_fainted()))
+                .chain(
+                    player_reserves
+                        .iter()
+                        .filter(|reserve| !reserve.is_fainted()),
+                ),
+        )?;
 
         let enemy = party.remove(0);
         let random_turn_number = initialize_turn_rng_state(&player, &enemy, rng);

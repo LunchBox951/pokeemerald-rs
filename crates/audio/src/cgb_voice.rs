@@ -157,6 +157,9 @@ pub struct CgbVoice {
     /// A retrigger owed to the oscillator, applied at the next
     /// `begin_frame` after this tick's pitch writes (`m4a.c:1185-1226`).
     pending_retrigger: bool,
+    /// The note-on trigger, owed until the first frame so a pre-render retune
+    /// reaches the sweep (`m4a.c:988-994,1219-1225`).
+    pending_initial_trigger: bool,
     /// Set when a sweep overflow silences the hardware channel, whether at a
     /// trigger or on a later 128 Hz tick; the envelope stays alive so a safe
     /// trigger can revive it (`mgba/src/gb/audio.c:180-186`, `:667-672`).
@@ -253,8 +256,7 @@ impl CgbVoice {
             .filter(|_| channel == CgbChannelNumber::Square1)
             .map(|b| crate::psg::Sweep::from_byte(b, freq_reg));
         let oscillator = Oscillator::Square(SquareChannel::new(duty, freq_reg, sweep));
-        let muted_at_trigger = oscillator.disabled_at_trigger();
-        let mut voice = Self::new(
+        Self::new(
             channel,
             oscillator,
             adsr,
@@ -268,9 +270,7 @@ impl CgbVoice {
             rhythm_pan,
             echo_volume,
             echo_length,
-        );
-        voice.hardware_muted = muted_at_trigger;
-        voice
+        )
     }
 
     /// Start a programmable-wave voice from 32 decoded wave-RAM samples.
@@ -388,6 +388,7 @@ impl CgbVoice {
             identity: VoiceIdentity::new(track, midi_key),
             dac_correction,
             pending_retrigger: false,
+            pending_initial_trigger: true,
             hardware_muted: false,
             hardware_envelope_volume,
         }
@@ -536,6 +537,10 @@ impl CgbVoice {
     /// CGB output at full scale (`pokeemerald/src/m4a.c:267-275,365-373`).
     pub fn begin_frame(&mut self, extra_envelope_iteration: bool) {
         let retriggered_by_note_off = std::mem::take(&mut self.pending_retrigger);
+        // A note stopped before its first pass jumps to the off-write and
+        // never reaches the note-on hardware writes (`m4a.c:1043-1056`).
+        let initial_trigger =
+            std::mem::take(&mut self.pending_initial_trigger) && !self.envelope.is_stopping();
         // The goal `CgbModVol` would compute right now from the current side
         // volumes/pan; folded in only at a real boundary (`step_frame`'s doc).
         let live_goal = self.routing.envelope_goal();
@@ -555,7 +560,7 @@ impl CgbVoice {
             self.routing.commit_pan();
         }
         let hardware_write = retriggered_by_note_off || retriggered_by_transition;
-        if hardware_write {
+        if hardware_write || initial_trigger {
             self.apply_retrigger();
         }
         let software_volume = self.envelope.volume();
@@ -654,6 +659,10 @@ mod envelope_tests;
 #[cfg(test)]
 #[path = "cgb_voice_sweep.rs"]
 mod sweep_tests;
+
+#[cfg(test)]
+#[path = "cgb_voice_sweep_start.rs"]
+mod sweep_start_tests;
 
 #[cfg(test)]
 #[path = "cgb_voice_pitch.rs"]
