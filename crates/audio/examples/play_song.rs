@@ -3,7 +3,7 @@
 //!
 //! `main` is a manual, not-run-in-CI "does sound actually come out?" check —
 //! on a headless machine with no audio device it prints a note and exits
-//! cleanly. The helper tests below do run under `cargo test`; see this
+//! cleanly. The helper tests (`play_song/tests/`) do run under `cargo test`; see this
 //! crate's `Cargo.toml`.
 //!
 //! Run with: `cargo run -p audio --example play_song`.
@@ -13,6 +13,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use audio::{decode_track, Adsr, Instrument, Sequencer, Song, ToneData, WaveData, MIXER_RATE};
+use platform::audio::PlaybackProgress;
 use platform::{AudioOutput, PlatformError, Producer, GBA_FRAME_PERIOD};
 
 const RING_CAPACITY_FRAMES: usize = 4096;
@@ -40,6 +41,13 @@ const DEVICE_TAIL_FALLBACK: Duration = Duration::from_millis(200);
 /// buffer it *supports*, not the default it selects, and can run to seconds;
 /// this keeps a manual smoke run from looking hung after the last note.
 const DEVICE_TAIL_MAX: Duration = Duration::from_secs(1);
+
+/// How many of the most recent submitted-frame advances size the callback
+/// cadence in [`wait_for_measured_tail`]: enough to ride out a jittery
+/// period, few enough to adapt when callbacks change their real pace. Advances
+/// observed after a polling pause are judged at that poll, but are not
+/// retained as cadence: they may aggregate many shorter callbacks.
+const CADENCE_WINDOW: usize = 4;
 
 fn main() -> ExitCode {
     let song = build_song();
@@ -147,12 +155,9 @@ fn main() -> ExitCode {
     let tail_result = wait_for_device_tail_or_measured(
         submitted_target,
         derived_tail,
+        output.device_sample_rate(),
         &policy,
-        || {
-            output
-                .playback_progress()
-                .map(|progress| progress.sounded_frames)
-        },
+        || output.playback_progress(),
         || output.stream_errors(),
         Instant::now,
         std::thread::sleep,
@@ -500,40 +505,323 @@ fn wait_for_device_tail(
     }
 }
 
+/// The playback `frames` device frames cover at `device_sample_rate`; zero
+/// when the rate is unknown.
+fn frames_duration(frames: u64, device_sample_rate: u32) -> Duration {
+    let frames = u32::try_from(frames).unwrap_or(u32::MAX);
+    if device_sample_rate > 0 {
+        Duration::from_secs_f64(f64::from(frames) / f64::from(device_sample_rate))
+    } else {
+        Duration::ZERO
+    }
+}
+
+/// The longest of `samples`, or zero when there are none.
+fn longest(samples: impl IntoIterator<Item = Duration>) -> Duration {
+    samples.into_iter().max().unwrap_or_default()
+}
+
+/// When a usable reading with `sounded` frames sounded, seen at a poll at
+/// `seen_at` with `submitted` frames and the reading's `usable_through` mark,
+/// lets `target` sound: the reading's remaining frames at
+/// `device_sample_rate`, run from `seen_at` less the reading's age.
+///
+/// The snapshot carries no reading time, and the frames the stale callbacks
+/// submitted after the mark are not elapsed time: a host refilling its queue
+/// runs callbacks faster than playback. So those frames count as age only up
+/// to `max_age`. At the first snapshot that is none past the
+/// [`HOST_QUEUED_PERIODS`] of queue the derived tail already covers (see
+/// [`device_tail_wait`]), so a mark seconds behind is mostly paid while one a
+/// few callbacks behind keeps its whole debt. Inside the wait the caller also
+/// holds the due to the previous poll plus the usable buffer, which credits at
+/// most the poll gap. An extrapolation, not a bound: a host that queues more
+/// than the derived tail still makes a reading look older than it is. `None` only when the stamp lies before the
+/// clock's origin.
+fn reading_due(
+    seen_at: Instant,
+    target: u64,
+    sounded: u64,
+    progress: (u64, u64),
+    max_age: Duration,
+    device_sample_rate: u32,
+) -> Option<Instant> {
+    let (submitted, usable_through) = progress;
+    let owed = frames_duration(target.saturating_sub(sounded), device_sample_rate);
+    let age =
+        frames_duration(submitted.saturating_sub(usable_through), device_sample_rate).min(max_age);
+    match owed.checked_sub(age) {
+        Some(ahead) => Some(seen_at + ahead),
+        None => seen_at.checked_sub(age.saturating_sub(owed)),
+    }
+}
+
+/// How this wait has actually been polling: the shortest of the recent poll
+/// gaps, never under the requested `interval`. A scheduler that holds every
+/// sleep late raises it; one late poll among prompt ones does not.
+fn usual_poll_gap(poll_gaps: &[Duration], interval: Duration) -> Duration {
+    poll_gaps
+        .iter()
+        .copied()
+        .min()
+        .unwrap_or_default()
+        .max(interval)
+}
+
+/// The cadence samples still meaningful at polling resolution `usual_poll`:
+/// a sample seen while polling ran more than twice as coarse measured that
+/// resolution rather than the callbacks, so it lapses once polling is prompt
+/// again.
+fn retained_cadence(
+    samples: &[(Duration, Duration)],
+    usual_poll: Duration,
+) -> impl Iterator<Item = Duration> + '_ {
+    samples
+        .iter()
+        .filter(move |&&(_, seen_at)| seen_at <= usual_poll * 2)
+        .map(|&(sample, _)| sample)
+}
+
+/// Whether a usable callback ended inside the submitted advance `(from, to]`
+/// that a `usable_through` mark describes: only a mark within the span proves
+/// it. A mark past `to` belongs to a callback still in flight, whose frames
+/// have not landed, so it says nothing about the callbacks already submitted.
+fn usable_callback_in_span(from: u64, to: u64, usable_through: u64) -> bool {
+    from < usable_through && usable_through <= to
+}
+
 /// Wait, within `policy`, for the device's measured playback position (see
 /// `platform::AudioOutput::playback_progress`) to reach `target` submitted
-/// device frames, polling `sounded_frames` at `policy.interval`.
+/// device frames, polling `progress` at `policy.interval`.
 ///
 /// `policy.max_wait` bounds how long a stream is held open, but unlike the
 /// derived [`wait_for_device_tail`]'s fixed sleep the measured wait knows
 /// whether the target was reached: a position still short of it at the
-/// deadline is reported as [`DrainError::MeasuredTailTimedOut`] rather than
-/// read as a finish. A stream error before the target is reached is not a
-/// successful finish either, matching [`wait_for_device_tail`]. The signal
-/// disappearing mid-wait is not itself a failure. `sounded_frames`,
-/// `stream_errors`, `now`, and `sleep` are injected as in [`push_frame`].
+/// deadline is [`DrainError::MeasuredTailTimedOut`], not a finish. A stream
+/// error before the target is reached is not a finish either. The signal
+/// disappearing mid-wait is not itself a failure.
+///
+/// Stale timestamps are read from `usable_through_frames`, never from the
+/// sounded estimate's shape: a mark inside a submitted advance `(from, to]`
+/// discards the pending evidence (a usable callback keeps the measured wait
+/// in force), and the frames past both `from` and the mark are stale evidence
+/// at once. A mark past `to` is a callback in flight: it keeps the evidence
+/// but vetoes the finish, and discards it only once its frames land. Evidence of at least
+/// `derived_tail / 4` (a span of advances, or one covering that much
+/// playback) with the latest advance within one recent inter-advance gap
+/// (over the last [`CADENCE_WINDOW`], an aggregate a polling pause folded
+/// together counting only on the poll that saw it, which may finish the wait
+/// only at the deadline) plus two polls means live callbacks,
+/// and once `derived_tail` has run from the start of the wait, or from the
+/// callbacks that resumed after a stall, and once the playback the latest
+/// usable reading inside the wait or in its first snapshot still owed the
+/// target (see [`reading_due`]) has run at the device rate, the wait finishes as [`wait_for_device_tail`] would. A gap that outruns both the
+/// recent cadence and the playback the previous advance covered by a tenth of
+/// `derived_tail` (and over a quarter of it, or half before a cadence is seen)
+/// is a stall: evidence and cadence restart from the playback the resumed
+/// callback covers, and that callback alone is no evidence.
+///
+/// The tail finish needs the restarted tail to end within `policy.max_wait`
+/// of the start; a poll at or past the deadline takes it only with live callbacks
+/// and otherwise times out.
+/// `progress`, `stream_errors`, `now`, and `sleep` are injected as in
+/// [`push_frame`].
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the injected clock, sleep, and stream hooks are the seam the tests drive"
+)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one poll loop whose evidence, cadence, and tail state interlock per poll"
+)]
 fn wait_for_measured_tail(
     target: u64,
+    derived_tail: Duration,
+    device_sample_rate: u32,
     policy: &RetryPolicy,
-    mut sounded_frames: impl FnMut() -> Option<u64>,
+    mut progress: impl FnMut() -> Option<PlaybackProgress>,
     mut stream_errors: impl FnMut() -> u64,
     mut now: impl FnMut() -> Instant,
     mut sleep: impl FnMut(Duration),
 ) -> Result<(), DrainError> {
-    let deadline = now() + policy.max_wait;
+    let started = now();
+    let deadline = started + policy.max_wait;
+    let mut tail_started = started;
+    let mut measured_due = started;
+    let mut last_submitted = None;
+    let mut last_poll = started;
+    let mut last_advance = None;
+    // Each cadence sample beside the polling resolution it was seen at.
+    let mut recent_cadence = [(Duration::ZERO, Duration::ZERO); CADENCE_WINDOW];
+    let mut advances = 0_usize;
+    let mut last_played = Duration::ZERO;
+    let mut first_stale = None;
+    let mut last_stale = None;
+    let mut max_stale_advance = Duration::ZERO;
+    let mut after_stall = false;
+    let mut poll_gaps = [policy.interval; CADENCE_WINDOW];
+    let mut polls = 0_usize;
     loop {
-        let sounded = sounded_frames();
+        let snapshot = progress();
         let errors = stream_errors();
         if errors > 0 {
             return Err(DrainError::StreamStoppedDuringTail { errors });
         }
-        let sounded = match sounded {
-            Some(sounded) if sounded >= target => return Ok(()),
-            Some(sounded) => sounded,
-            None => return Ok(()),
+        let Some(PlaybackProgress {
+            sounded_frames: sounded,
+            submitted_frames: submitted,
+            usable_through_frames: usable_through,
+        }) = snapshot
+        else {
+            return Ok(());
         };
-        if now() >= deadline {
-            return Err(DrainError::MeasuredTailTimedOut { sounded, target });
+        if sounded >= target {
+            return Ok(());
+        }
+        let current = now();
+        // A usable reading already in the first snapshot owes its playback
+        // too (see [`reading_due`]). A mark ahead of the submitted total is a
+        // callback in flight, judged once its frames land.
+        if last_submitted.is_none() && usable_through > 0 && usable_through <= submitted {
+            // No wall clock has run since the mark yet: only frames past the
+            // queue the derived tail covers count as its age.
+            let queued = frames_duration(submitted - usable_through, device_sample_rate)
+                .saturating_sub(derived_tail);
+            let due = reading_due(
+                current,
+                target,
+                sounded,
+                (submitted, usable_through),
+                queued,
+                device_sample_rate,
+            );
+            measured_due = measured_due.max(due.unwrap_or(measured_due));
+        }
+        // A mark past the submitted total is a callback in flight, proving
+        // nothing about the frames submitted; once they land it discards the
+        // pending stale evidence.
+        let in_flight = usable_through > submitted;
+        if let Some(prev) =
+            last_submitted.filter(|&prev| usable_callback_in_span(prev, submitted, usable_through))
+        {
+            (first_stale, last_stale, max_stale_advance) = (None, None, Duration::ZERO);
+            after_stall = false;
+            // A usable reading short of the target says how much playback it
+            // still owed: stale callbacks after it must not finish the wait
+            // before that has run at the device rate from the reading. The
+            // snapshot carries no reading time, so stamp it at the later of
+            // two estimates: the previous poll plus the usable frames past it
+            // (late when the poll was prompt) and this poll less the stale
+            // playback since the mark (see [`reading_due`]; late when the poll
+            // was delayed). Neither is a bound, but the later never finishes
+            // sooner than either. Never lowered by a later reading.
+            let played = frames_duration(usable_through - prev, device_sample_rate);
+            let credited = current.min(last_poll + played)
+                + frames_duration(target - sounded, device_sample_rate);
+            // The previous-poll stamp already holds the due to at least the
+            // poll gap's worth of age, so the stale frames need no cap here.
+            let seen = reading_due(
+                current,
+                target,
+                sounded,
+                (submitted, usable_through),
+                Duration::MAX,
+                device_sample_rate,
+            );
+            measured_due = measured_due.max(credited).max(seen.unwrap_or(credited));
+        }
+        let mut pause_sample = None;
+        if let Some(previous) = last_submitted.filter(|&last| submitted > last) {
+            let played = frames_duration(submitted - previous, device_sample_rate);
+            // The advance happened somewhere since the previous poll. A late
+            // poll can fold many callbacks into it, so credit it no later
+            // than the playback it covers past that poll rather than
+            // stamping it with the (possibly much later) observation time.
+            let at = current.min(last_poll + played);
+            // The first advance's gap runs from the start of the wait, so
+            // callbacks idle from the start are a stall like any other.
+            let gap = at.saturating_duration_since(last_advance.unwrap_or(started));
+            // A healthy gap is about one period: what the window has seen, or
+            // the playback the last advance covered. One that outruns both by
+            // a tenth of the tail is a stall: what came before says nothing
+            // about the resumed callbacks, and the gap itself is not their
+            // cadence.
+            let usual_poll = usual_poll_gap(&poll_gaps, policy.interval);
+            let seen = longest(retained_cadence(&recent_cadence, usual_poll));
+            // With one advance seen there is no cadence yet, only the gap.
+            let floor = derived_tail / if advances >= 2 { 4 } else { 2 };
+            // Before any advance, the only period to hold the gap to is this buffer.
+            if advances == 0 {
+                last_played = played;
+            }
+            let stalled = gap > floor && gap > seen.max(last_played) + derived_tail / 10;
+            let cadence_sample = if stalled {
+                (first_stale, last_stale, max_stale_advance) = (None, None, Duration::ZERO);
+                recent_cadence = [(Duration::ZERO, Duration::ZERO); CADENCE_WINDOW];
+                after_stall = true;
+                // Audio the resumed callbacks submit sounds a tail later.
+                tail_started = current;
+                played
+            } else {
+                gap.max(played)
+            };
+            // A polling pause can fold many short callbacks into one advance,
+            // and its backdated `at` can hide the idle span before them. It
+            // widens freshness only on this poll and finishes only at the
+            // deadline, where no later poll can confirm it. A pause is late
+            // against how this thread has actually been polling (see
+            // [`usual_poll_gap`]), so a poller the scheduler holds
+            // systematically late still settles.
+            let settled = current.duration_since(last_poll) <= usual_poll * 2;
+            recent_cadence[advances % CADENCE_WINDOW] = if settled {
+                (cadence_sample, usual_poll)
+            } else {
+                pause_sample = Some(cadence_sample);
+                (Duration::ZERO, Duration::ZERO)
+            };
+            advances = advances.wrapping_add(1);
+            last_advance = Some(at);
+            last_played = played;
+            // Frames past both the previous poll and the usable mark came
+            // from callbacks after the last usable one: stale evidence, even
+            // when one late poll folds a usable callback in ahead of them.
+            let stale_frames = submitted.saturating_sub(previous.max(usable_through));
+            if stale_frames > 0 && !in_flight {
+                first_stale.get_or_insert(at);
+                last_stale = Some(at);
+                let stale = frames_duration(stale_frames, device_sample_rate);
+                max_stale_advance = max_stale_advance.max(stale);
+            }
+        }
+        poll_gaps[polls % CADENCE_WINDOW] = current.duration_since(last_poll);
+        polls = polls.wrapping_add(1);
+        last_poll = current;
+        last_submitted = Some(submitted);
+        let usual_poll = usual_poll_gap(&poll_gaps, policy.interval);
+        let cadence = longest(retained_cadence(&recent_cadence, usual_poll).chain(pause_sample));
+        let evidence = first_stale
+            .zip(last_stale)
+            .is_some_and(|(first, last)| last.duration_since(first) >= derived_tail / 4)
+            || (!after_stall && max_stale_advance >= derived_tail / 4);
+        let callbacks_alive = evidence
+            && last_advance
+                .is_some_and(|last| current.duration_since(last) <= cadence + policy.interval * 2);
+        // The tail runs from `started` or from the resumption after a stall;
+        // a usable reading does not restart it, so a valid-then-stale device
+        // keeps its budget, but the finish waits for the playback the latest
+        // usable reading still owed. A callback in flight vetoes the finish.
+        let tail_due = (tail_started + derived_tail).max(measured_due);
+        let stale_tail_elapsed = !in_flight && callbacks_alive && current >= tail_due;
+        if current >= deadline {
+            // The first poll at or past the deadline is the last: the tail may
+            // finish it only if it could have elapsed within the budget.
+            return if stale_tail_elapsed && tail_due <= deadline {
+                Ok(())
+            } else {
+                Err(DrainError::MeasuredTailTimedOut { sounded, target })
+            };
+        }
+        if stale_tail_elapsed && pause_sample.is_none() {
+            return Ok(());
         }
         sleep(policy.interval);
     }
@@ -544,19 +832,33 @@ fn wait_for_measured_tail(
 /// `AudioOutput::playback_progress` returned a value when `main` checked),
 /// otherwise fall back to sleeping `derived_tail` (`main`'s
 /// [`device_tail_wait`] result) via [`wait_for_device_tail`] -- see the
-/// module docs. `sounded_frames`, `stream_errors`, `now`, and `sleep` are
+/// module docs. `progress`, `stream_errors`, `now`, and `sleep` are
 /// injected as in [`push_frame`].
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the injected clock, sleep, and stream hooks are the seam the tests drive"
+)]
 fn wait_for_device_tail_or_measured(
     submitted_target: Option<u64>,
     derived_tail: Duration,
+    device_sample_rate: u32,
     policy: &RetryPolicy,
-    sounded_frames: impl FnMut() -> Option<u64>,
+    progress: impl FnMut() -> Option<PlaybackProgress>,
     stream_errors: impl FnMut() -> u64,
     now: impl FnMut() -> Instant,
     sleep: impl FnMut(Duration),
 ) -> Result<(), DrainError> {
     if let Some(target) = submitted_target {
-        wait_for_measured_tail(target, policy, sounded_frames, stream_errors, now, sleep)
+        wait_for_measured_tail(
+            target,
+            derived_tail,
+            device_sample_rate,
+            policy,
+            progress,
+            stream_errors,
+            now,
+            sleep,
+        )
     } else {
         wait_for_device_tail(derived_tail, stream_errors, sleep)
     }
@@ -596,686 +898,5 @@ fn build_song() -> Song {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::cell::{Cell, RefCell};
-    use std::rc::Rc;
-
-    use audio::Sequencer;
-    use platform::{AudioOutput, PlatformError};
-
-    use super::{
-        build_song, classify_open_error, device_tail_wait, measured_drain_target,
-        prefill_then_start, push_frame, start_playback, wait_for_device_tail,
-        wait_for_device_tail_or_measured, wait_for_drain, wait_for_frame_deadline,
-        wait_for_measured_tail, DrainError, OpenOutcome, PushError, RetryPolicy, StartOutcome,
-        DEVICE_TAIL_FALLBACK, DEVICE_TAIL_MARGIN, DEVICE_TAIL_MAX,
-    };
-
-    #[test]
-    fn no_audio_device_is_the_expected_headless_case() {
-        assert_eq!(
-            classify_open_error(&PlatformError::NoAudioDevice),
-            OpenOutcome::ExpectedHeadless
-        );
-    }
-
-    /// A device that answered and then refused must not read as headless.
-    /// A failed stream build's `PlatformError::Audio(cpal::Error)` takes
-    /// this same wildcard arm, but `cpal` is not a dependency of this crate,
-    /// so `platform`'s own `a_lost_device_after_the_query_stays_an_audio_error`
-    /// pins that the build stage keeps the `Audio` variant this arm catches.
-    #[test]
-    fn an_unsupported_audio_config_is_a_playback_setup_failure() {
-        assert_eq!(
-            classify_open_error(&PlatformError::UnsupportedAudioConfig),
-            OpenOutcome::PlaybackSetupFailure
-        );
-    }
-
-    /// A device that answered `open` can still refuse `play`
-    /// (`platform/src/audio.rs`); the refusal must come back as the reported
-    /// failure outcome, never as a panic.
-    #[test]
-    fn a_device_that_refuses_to_start_is_a_reported_playback_setup_failure() {
-        let mut output = AudioOutput::null(4);
-
-        assert_eq!(
-            start_playback(&mut output, |_| Err(PlatformError::UnsupportedAudioConfig)),
-            StartOutcome::PlaybackSetupFailure,
-            "a refused start must be reported and handed back, not panicked on"
-        );
-        assert!(
-            !output.is_running(),
-            "a refused start must not read as playing"
-        );
-
-        assert_eq!(
-            start_playback(&mut output, AudioOutput::start),
-            StartOutcome::Playing,
-            "the null backend always starts"
-        );
-        assert!(output.is_running(), "an accepted start must play");
-    }
-
-    /// The device's first callback can fire the instant `start` returns, so
-    /// samples must already be sitting in the ring before that call — not
-    /// queued afterward, by which point a real callback could already have
-    /// drained an empty ring into an underrun.
-    ///
-    /// This drives `prefill_then_start`, the single startup step `main`
-    /// performs, rather than sequencing the two halves here: reversing them
-    /// at that call site leaves the starter looking at an untouched ring and
-    /// fails this test, which reproducing the order locally would not catch.
-    #[test]
-    fn samples_are_queued_before_the_starter_runs() {
-        let mut output = AudioOutput::null(512);
-        let producer = output.producer();
-        let capacity = producer.capacity();
-        let mut seq = Sequencer::new(build_song());
-        let mut buffer = vec![0.0_f32; Sequencer::FRAME_SAMPLES];
-        let starter_saw_queued_samples = Cell::new(false);
-
-        let result = prefill_then_start(
-            &mut seq,
-            &producer,
-            &mut buffer,
-            &mut output,
-            |chunk| producer.push(chunk),
-            |output| {
-                starter_saw_queued_samples.set(producer.available_space() < capacity);
-                AudioOutput::start(output)
-            },
-        );
-
-        assert_eq!(
-            result,
-            StartOutcome::Playing,
-            "a fresh ring must accept the whole prefill with room to spare"
-        );
-        assert!(
-            starter_saw_queued_samples.get(),
-            "samples must already be queued when the starter is invoked, not after"
-        );
-        assert!(output.is_running(), "an accepted start must play");
-    }
-
-    /// A ring that refuses part of the prefill means the startup assumption
-    /// this file rests on is broken, so the stream must never be started on
-    /// that short fill — the empty-ring underrun the prefill exists to
-    /// prevent would simply happen a frame later.
-    #[test]
-    fn a_refused_prefill_is_a_setup_failure_and_never_starts_the_device() {
-        let mut output = AudioOutput::null(512);
-        let producer = output.producer();
-        let capacity = producer.capacity();
-        let mut seq = Sequencer::new(build_song());
-        let mut buffer = vec![0.0_f32; Sequencer::FRAME_SAMPLES];
-        let starter_ran = Cell::new(false);
-
-        let result = prefill_then_start(
-            &mut seq,
-            &producer,
-            &mut buffer,
-            &mut output,
-            // One sample short of the frame, every frame: the accounting
-            // `platform::Producer::push` documents for a refused tail.
-            |chunk| producer.push(&chunk[..chunk.len().saturating_sub(1)]),
-            |output| {
-                starter_ran.set(true);
-                AudioOutput::start(output)
-            },
-        );
-
-        assert_eq!(result, StartOutcome::PlaybackSetupFailure);
-        assert!(
-            !starter_ran.get(),
-            "a prefill the ring refused must not reach the starter"
-        );
-        assert!(
-            !output.is_running(),
-            "a refused prefill must not leave the device playing"
-        );
-        assert!(
-            producer.available_space() < capacity,
-            "the accepted head of the prefill is still queued; only the tail was refused"
-        );
-    }
-
-    /// Pacing must subtract render/push work already spent from each wait
-    /// rather than sleeping a full period on top of it, and a late iteration
-    /// must not let that deficit compound into the next one.
-    #[test]
-    fn frame_deadline_waits_subtract_work_without_accumulating_drift() {
-        let period = std::time::Duration::from_millis(10);
-        let start = std::time::Instant::now();
-        let clock = Rc::new(RefCell::new(start));
-        let sleeps = Rc::new(RefCell::new(Vec::new()));
-        let mut next_deadline = start + period;
-
-        // Five iterations whose simulated work comfortably fits under the
-        // period, the steady-state case.
-        for _ in 0..5 {
-            *clock.borrow_mut() += std::time::Duration::from_millis(3);
-            let clock_now = Rc::clone(&clock);
-            let clock_sleep = Rc::clone(&clock);
-            let sleeps_sleep = Rc::clone(&sleeps);
-            wait_for_frame_deadline(
-                &mut next_deadline,
-                period,
-                move || *clock_now.borrow(),
-                move |duration| {
-                    sleeps_sleep.borrow_mut().push(duration);
-                    *clock_sleep.borrow_mut() += duration;
-                },
-            );
-        }
-        assert_eq!(
-            *sleeps.borrow(),
-            vec![std::time::Duration::from_millis(7); 5],
-            "work already spent must be subtracted from each wait, not added on top of it"
-        );
-        assert_eq!(
-            *clock.borrow(),
-            start + 5 * period,
-            "five rounds of work-plus-wait must land on exactly five periods elapsed, proving no \
-             drift accumulated"
-        );
-        assert_eq!(next_deadline, start + 6 * period);
-
-        // A sixth iteration whose work overruns the period entirely.
-        sleeps.borrow_mut().clear();
-        *clock.borrow_mut() += std::time::Duration::from_millis(15);
-        let clock_now = Rc::clone(&clock);
-        let sleeps_sleep = Rc::clone(&sleeps);
-        wait_for_frame_deadline(
-            &mut next_deadline,
-            period,
-            move || *clock_now.borrow(),
-            move |duration| sleeps_sleep.borrow_mut().push(duration),
-        );
-
-        assert_eq!(
-            *sleeps.borrow(),
-            vec![std::time::Duration::ZERO],
-            "a late iteration must not sleep a negative duration"
-        );
-        assert_eq!(
-            next_deadline,
-            start + 7 * period,
-            "the cadence must still advance by exactly one period from the missed deadline, not \
-             reset from the late clock reading"
-        );
-    }
-
-    #[test]
-    fn a_stream_error_aborts_the_retry_without_waiting_out_the_deadline() {
-        let push_calls = Cell::new(0_u32);
-        let policy = RetryPolicy {
-            interval: std::time::Duration::from_millis(1),
-            max_wait: std::time::Duration::from_mins(1),
-        };
-        let samples = [0.0_f32; 4];
-        let start = std::time::Instant::now();
-
-        let result = push_frame(
-            &samples,
-            &policy,
-            |_chunk| {
-                push_calls.set(push_calls.get() + 1);
-                0
-            },
-            // Healthy on the pre-push check, unhealthy immediately after —
-            // the "error lands mid-push" case the double check exists for.
-            || u64::from(push_calls.get() > 0),
-            || start,
-            |_| panic!("a stream error must abort before any retry sleep"),
-        );
-
-        assert!(
-            matches!(
-                result,
-                Err(PushError::StreamStopped {
-                    errors: 1,
-                    dropped: 4
-                })
-            ),
-            "expected a StreamStopped error dropping the whole frame"
-        );
-        assert_eq!(push_calls.get(), 1, "must not retry once the stream errors");
-    }
-
-    #[test]
-    fn a_stalled_ring_with_no_stream_error_gives_up_at_the_deadline() {
-        // A real (but headless) ring buffer, filled completely and never
-        // drained — `Producer::push` genuinely returns 0 forever, the same
-        // as a stopped device callback that never reports a stream error.
-        let output = AudioOutput::null(1);
-        let producer = output.producer();
-        assert_eq!(producer.push(&[0.0; 2]), 2, "fill the null ring solid");
-
-        let policy = RetryPolicy {
-            interval: std::time::Duration::from_millis(10),
-            max_wait: std::time::Duration::from_millis(30),
-        };
-        let clock = Rc::new(RefCell::new(std::time::Instant::now()));
-        let sleeps = Cell::new(0_u32);
-
-        let result = push_frame(
-            &[0.0_f32; 2],
-            &policy,
-            |chunk| producer.push(chunk),
-            || output.stream_errors(),
-            || *clock.borrow(),
-            |duration| {
-                sleeps.set(sleeps.get() + 1);
-                *clock.borrow_mut() += duration;
-            },
-        );
-
-        assert!(
-            matches!(result, Err(PushError::DeadlineExceeded { dropped: 2 })),
-            "a permanently full ring with no stream error must time out, not hang"
-        );
-        assert_eq!(output.stream_errors(), 0, "the null backend never errors");
-        assert!(
-            sleeps.get() > 0,
-            "must have retried at least once before giving up"
-        );
-    }
-
-    #[test]
-    fn a_push_that_completes_before_the_deadline_succeeds() {
-        let output = AudioOutput::null(64);
-        let producer = output.producer();
-        let policy = RetryPolicy {
-            interval: std::time::Duration::from_millis(1),
-            max_wait: std::time::Duration::from_secs(1),
-        };
-
-        let result = push_frame(
-            &[0.0_f32; 4],
-            &policy,
-            |chunk| producer.push(chunk),
-            || output.stream_errors(),
-            std::time::Instant::now,
-            |_| panic!("plenty of room; must not need to retry"),
-        );
-
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn wait_for_drain_succeeds_immediately_once_the_ring_is_already_empty() {
-        let policy = RetryPolicy {
-            interval: std::time::Duration::from_millis(1),
-            max_wait: std::time::Duration::from_secs(1),
-        };
-
-        let result = wait_for_drain(
-            4,
-            &policy,
-            || 4, // fully free: nothing queued
-            || 0,
-            std::time::Instant::now,
-            |_| panic!("an already-empty ring must not need to retry"),
-        );
-
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn an_empty_ring_with_a_stream_error_is_not_a_successful_finish() {
-        // A callback that dequeues the last samples and then reports an
-        // asynchronous device failure must not read as a successful drain
-        // just because the ring happens to be empty.
-        let policy = RetryPolicy {
-            interval: std::time::Duration::from_millis(1),
-            max_wait: std::time::Duration::from_mins(1),
-        };
-        let start = std::time::Instant::now();
-
-        let result = wait_for_drain(
-            4,
-            &policy,
-            || 4, // fully free: the ring drained
-            || 1, // but the stream is already unhealthy
-            || start,
-            |_| panic!("a stream error must abort before any retry sleep"),
-        );
-
-        assert!(
-            matches!(
-                result,
-                Err(DrainError::StreamStopped {
-                    errors: 1,
-                    remaining: 0
-                })
-            ),
-            "an empty ring must not mask a reported stream error"
-        );
-    }
-
-    #[test]
-    fn an_error_that_lands_exactly_as_the_ring_reports_empty_is_still_caught() {
-        // The real race this guards: the callback drains the last sample and
-        // raises a stream error in the same instant. Here `available_space`
-        // itself is what makes the error visible, so a `stream_errors` read
-        // taken *before* `available_space` would still observe the old,
-        // healthy count and wrongly report success once it sees the ring
-        // empty.
-        let errors = Rc::new(Cell::new(0_u64));
-        let errors_probe = Rc::clone(&errors);
-        let policy = RetryPolicy {
-            interval: std::time::Duration::from_millis(1),
-            max_wait: std::time::Duration::from_mins(1),
-        };
-        let start = std::time::Instant::now();
-
-        let result = wait_for_drain(
-            4,
-            &policy,
-            move || {
-                errors_probe.set(1);
-                4 // fully free: the ring drained in the same instant
-            },
-            move || errors.get(),
-            || start,
-            |_| panic!("a stream error must abort before any retry sleep"),
-        );
-
-        assert!(
-            matches!(
-                result,
-                Err(DrainError::StreamStopped {
-                    errors: 1,
-                    remaining: 0
-                })
-            ),
-            "an error surfacing exactly as the ring empties must not be missed"
-        );
-    }
-
-    #[test]
-    fn wait_for_drain_reports_a_stream_error_instead_of_waiting_out_the_deadline() {
-        let policy = RetryPolicy {
-            interval: std::time::Duration::from_millis(1),
-            max_wait: std::time::Duration::from_mins(1),
-        };
-        let start = std::time::Instant::now();
-
-        let result = wait_for_drain(
-            4,
-            &policy,
-            || 0, // the ring never drains
-            || 1, // already unhealthy
-            || start,
-            |_| panic!("a stream error must abort before any retry sleep"),
-        );
-
-        assert!(
-            matches!(
-                result,
-                Err(DrainError::StreamStopped {
-                    errors: 1,
-                    remaining: 4
-                })
-            ),
-            "expected a StreamStopped error naming every sample still queued"
-        );
-    }
-
-    #[test]
-    fn wait_for_drain_times_out_when_the_ring_never_empties_and_reports_no_stream_error() {
-        // A real (but headless) ring buffer, filled completely and never
-        // drained: `available_space` genuinely stays at 0 forever, the same
-        // as a device callback that stopped consuming without ever
-        // reporting a stream error. Checking only `stream_errors() == 0`
-        // here would declare success regardless — this is exactly the case
-        // that let a stopped callback pass as a successful finish.
-        let output = AudioOutput::null(1);
-        let producer = output.producer();
-        assert_eq!(producer.push(&[0.0; 2]), 2, "fill the null ring solid");
-
-        let policy = RetryPolicy {
-            interval: std::time::Duration::from_millis(10),
-            max_wait: std::time::Duration::from_millis(30),
-        };
-        let clock = Rc::new(RefCell::new(std::time::Instant::now()));
-
-        let result = wait_for_drain(
-            2,
-            &policy,
-            || producer.available_space(),
-            || output.stream_errors(),
-            || *clock.borrow(),
-            |duration| *clock.borrow_mut() += duration,
-        );
-
-        assert!(
-            matches!(result, Err(DrainError::DeadlineExceeded { remaining: 2 })),
-            "a permanently full ring with no stream error must time out, not report success"
-        );
-        assert_eq!(output.stream_errors(), 0, "the null backend never errors");
-    }
-
-    #[test]
-    fn a_stream_error_during_the_device_tail_is_not_a_successful_finish() {
-        let mut slept = Vec::new();
-        let mut errors_seen = 0_u64;
-
-        let result = wait_for_device_tail(
-            std::time::Duration::from_millis(200),
-            || {
-                // The disconnect lands while the device plays its last buffer:
-                // the counter is clean when the drain ended and nonzero after
-                // the tail wait.
-                errors_seen += 1;
-                errors_seen
-            },
-            |d| slept.push(d),
-        );
-
-        assert_eq!(slept, [std::time::Duration::from_millis(200)]);
-        assert!(matches!(
-            result,
-            Err(DrainError::StreamStoppedDuringTail { errors: 1 })
-        ));
-    }
-
-    #[test]
-    fn a_clean_device_tail_finishes_successfully() {
-        let result = wait_for_device_tail(std::time::Duration::from_millis(200), || 0, |_| {});
-
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn the_device_tail_is_derived_from_the_advertised_callback_bound() {
-        // 12 000 frames at 48 kHz is a quarter second per period, so the
-        // host's two queued periods hold half a second: longer than the
-        // fixed fallback, which would have clipped it.
-        let tail = device_tail_wait(Some(12_000), 48_000);
-        assert_eq!(
-            tail,
-            std::time::Duration::from_millis(500) + DEVICE_TAIL_MARGIN
-        );
-        assert!(tail > DEVICE_TAIL_FALLBACK);
-    }
-
-    #[test]
-    fn the_device_tail_covers_every_queued_host_period() {
-        // A 160 ms period exceeds the fallback on its own only once the
-        // second queued period is counted.
-        let tail = device_tail_wait(Some(7_680), 48_000);
-        assert_eq!(
-            tail,
-            std::time::Duration::from_millis(320) + DEVICE_TAIL_MARGIN
-        );
-    }
-
-    #[test]
-    fn an_unknown_callback_bound_falls_back_to_the_fixed_tail() {
-        assert_eq!(device_tail_wait(None, 48_000), DEVICE_TAIL_FALLBACK);
-        assert_eq!(device_tail_wait(Some(4_096), 0), DEVICE_TAIL_FALLBACK);
-    }
-
-    #[test]
-    fn the_derived_tail_never_undercuts_the_conservative_floor() {
-        // The advertised callback size bounds one callback slice, not the
-        // host pipeline's presentation latency: cpal opens the stream with
-        // `BufferSize::Default` and its ALSA path then keeps DEFAULT_PERIODS
-        // (2) periods queued behind the callback, while JACK advertises
-        // min == max == its period. A device advertising 512 frames at 48 kHz
-        // must therefore still wait out at least the fixed fallback.
-        assert!(device_tail_wait(Some(512), 48_000) >= DEVICE_TAIL_FALLBACK);
-    }
-
-    #[test]
-    fn an_oversized_advertised_buffer_is_capped_rather_than_slept_out() {
-        // ALSA-style backends advertise maxima of seconds; the *selected*
-        // callback buffer is far smaller, so waiting the maximum would look
-        // like a hang.
-        assert_eq!(device_tail_wait(Some(480_000), 48_000), DEVICE_TAIL_MAX);
-    }
-
-    #[test]
-    fn measured_drain_target_adds_the_settle_margin() {
-        assert_eq!(measured_drain_target(100, 8), 108);
-        assert_eq!(measured_drain_target(100, 0), 100);
-    }
-
-    #[test]
-    fn measured_drain_target_saturates_rather_than_overflowing() {
-        assert_eq!(measured_drain_target(u64::MAX, 5), u64::MAX);
-    }
-
-    #[test]
-    fn measured_wait_succeeds_immediately_once_the_target_is_already_reached() {
-        let policy = RetryPolicy {
-            interval: std::time::Duration::from_millis(1),
-            max_wait: std::time::Duration::from_secs(1),
-        };
-
-        let result = wait_for_measured_tail(
-            4,
-            &policy,
-            || Some(4),
-            || 0,
-            std::time::Instant::now,
-            |_| panic!("the target is already reached; must not sleep"),
-        );
-
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn measured_wait_reports_a_stream_error_before_the_target_is_reached() {
-        let policy = RetryPolicy {
-            interval: std::time::Duration::from_millis(1),
-            max_wait: std::time::Duration::from_mins(1),
-        };
-        let start = std::time::Instant::now();
-
-        let result = wait_for_measured_tail(
-            4,
-            &policy,
-            || Some(0), // stationary, well short of the target
-            || 1,       // already unhealthy
-            || start,
-            |_| panic!("a stream error must abort before any retry sleep"),
-        );
-
-        assert!(matches!(
-            result,
-            Err(DrainError::StreamStoppedDuringTail { errors: 1 })
-        ));
-    }
-
-    #[test]
-    fn measured_wait_reports_a_stalled_target_at_the_deadline() {
-        // A position still short of the target when the bound elapses is a
-        // stalled device, not a finish: the tool must not exit successfully
-        // with the final audio unconfirmed.
-        let policy = RetryPolicy {
-            interval: std::time::Duration::from_millis(10),
-            max_wait: std::time::Duration::from_millis(30),
-        };
-        let clock = Rc::new(RefCell::new(std::time::Instant::now()));
-        let sleeps = Cell::new(0_u32);
-
-        let result = wait_for_measured_tail(
-            4,
-            &policy,
-            || Some(0), // never reaches the target
-            || 0,
-            || *clock.borrow(),
-            |duration| {
-                sleeps.set(sleeps.get() + 1);
-                *clock.borrow_mut() += duration;
-            },
-        );
-
-        assert!(
-            matches!(
-                result,
-                Err(DrainError::MeasuredTailTimedOut {
-                    sounded: 0,
-                    target: 4
-                })
-            ),
-            "an unmet measured target must not exit successfully"
-        );
-        assert!(
-            sleeps.get() > 0,
-            "must have retried at least once before giving up"
-        );
-    }
-
-    #[test]
-    fn the_orchestrator_prefers_the_measured_target_when_available() {
-        let policy = RetryPolicy {
-            interval: std::time::Duration::from_millis(1),
-            max_wait: std::time::Duration::from_secs(1),
-        };
-
-        let result = wait_for_device_tail_or_measured(
-            Some(4),
-            std::time::Duration::from_millis(200),
-            &policy,
-            || Some(4),
-            || 0,
-            std::time::Instant::now,
-            |_| panic!("the measured target is already reached; must not sleep"),
-        );
-
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn the_orchestrator_falls_back_to_the_derived_tail_with_no_measured_target() {
-        let policy = RetryPolicy {
-            interval: std::time::Duration::from_millis(1),
-            max_wait: std::time::Duration::from_secs(1),
-        };
-        let derived_tail = device_tail_wait(Some(12_000), 48_000);
-        let slept = Rc::new(RefCell::new(Vec::new()));
-        let slept_sleep = Rc::clone(&slept);
-
-        let result = wait_for_device_tail_or_measured(
-            None,
-            derived_tail,
-            &policy,
-            || panic!("the measured path must not be consulted once no target is available"),
-            || 0,
-            std::time::Instant::now,
-            move |d| slept_sleep.borrow_mut().push(d),
-        );
-
-        assert!(result.is_ok());
-        assert_eq!(
-            *slept.borrow(),
-            vec![std::time::Duration::from_millis(500) + DEVICE_TAIL_MARGIN],
-            "the fallback must sleep the single derived tail duration, not poll"
-        );
-    }
-}
+#[path = "play_song/tests/mod.rs"]
+mod tests;

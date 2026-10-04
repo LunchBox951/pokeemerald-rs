@@ -59,7 +59,7 @@
 //! actually matters for correctness — are pure and fully unit tested
 //! against [`AudioOutput::null`] and the `ring`/`resample` modules directly.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{fence, AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -177,6 +177,40 @@ struct PlaybackClock {
     /// timestamp pair doesn't support an estimate (see
     /// [`estimate_sounded_frames`]) does not undo an earlier one that did.
     timestamp_available: AtomicBool,
+    /// The `submitted_frames` total at the end of the most recent callback
+    /// that carried a usable timestamp (see [`estimate_sounded_frames`]).
+    /// Unlike `sounded_frames`, which `fetch_max` leaves flat for an estimate
+    /// that repeats or moves backward, this advances for every usable
+    /// callback. Stored before that callback's `submitted_frames`, so the live
+    /// mark can lead the live submitted total; readers take both from the
+    /// published copy (see [`PlaybackClock::write`]), where it cannot.
+    usable_through_frames: AtomicU64,
+    /// Two published copies of the three counters, each under its own
+    /// sequence (see [`Self::write`]); `published_slot` names the one a
+    /// reader takes.
+    published: [PublishedSlot; 2],
+    /// Which of `published` holds the latest completed callback's counters.
+    published_slot: AtomicUsize,
+}
+
+/// One published copy of [`PlaybackClock`]'s three counters, guarded by a
+/// sequence that is odd while the writer is storing into it.
+struct PublishedSlot {
+    sequence: AtomicU64,
+    submitted_frames: AtomicU64,
+    sounded_frames: AtomicU64,
+    usable_through_frames: AtomicU64,
+}
+
+impl PublishedSlot {
+    fn new() -> Self {
+        Self {
+            sequence: AtomicU64::new(0),
+            submitted_frames: AtomicU64::new(0),
+            sounded_frames: AtomicU64::new(0),
+            usable_through_frames: AtomicU64::new(0),
+        }
+    }
 }
 
 impl PlaybackClock {
@@ -185,6 +219,88 @@ impl PlaybackClock {
             submitted_frames: AtomicU64::new(0),
             sounded_frames: AtomicU64::new(0),
             timestamp_available: AtomicBool::new(false),
+            usable_through_frames: AtomicU64::new(0),
+            published: [PublishedSlot::new(), PublishedSlot::new()],
+            published_slot: AtomicUsize::new(0),
+        }
+    }
+
+    /// Runs `update`, the single writer's stores to the live counters, then
+    /// publishes the result whole: into the slot readers are *not* taking,
+    /// under that slot's sequence (odd before any store, even after all of
+    /// them), and only then names it the published slot. A reader therefore
+    /// always finds the latest completed callback's counters intact, even
+    /// while the next callback is descheduled mid-store, and a read can tear
+    /// only if two more callbacks complete during it, which it detects and
+    /// retries. Allocation- and lock-free, so safe on the real-time callback.
+    fn write(&self, update: impl FnOnce()) {
+        update();
+        let next = 1 - self.published_slot.load(Ordering::Relaxed);
+        self.fill_slot(next);
+        self.published_slot.store(next, Ordering::Release);
+    }
+
+    /// Copies the live counters into `published[index]` under its sequence;
+    /// [`Self::write`] then names it the published slot.
+    fn fill_slot(&self, index: usize) {
+        // The single writer reads back its own stores.
+        let submitted = self.submitted_frames.load(Ordering::Relaxed);
+        let sounded = self.sounded_frames.load(Ordering::Relaxed);
+        let usable_through = self.usable_through_frames.load(Ordering::Relaxed);
+        let slot = &self.published[index];
+        let start = slot.sequence.load(Ordering::Relaxed);
+        slot.sequence
+            .store(start.wrapping_add(1), Ordering::Relaxed);
+        // Orders the odd sequence before the stores below: a reader whose
+        // acquire fence follows a load of one of them sees it.
+        fence(Ordering::Release);
+        slot.submitted_frames.store(submitted, Ordering::Relaxed);
+        slot.sounded_frames.store(sounded, Ordering::Relaxed);
+        slot.usable_through_frames
+            .store(usable_through, Ordering::Relaxed);
+        slot.sequence
+            .store(start.wrapping_add(2), Ordering::Release);
+    }
+
+    /// The latest completed callback's counters, whole: never one field from
+    /// before a callback and another from after it (see [`Self::write`]).
+    fn snapshot(&self) -> PlaybackProgress {
+        self.snapshot_observing(|_| {})
+    }
+
+    /// [`Self::snapshot`], calling `between_loads` after the slot index load
+    /// (`0`) and after each field load (`1` to `3`), so a test can interleave
+    /// a callback's stores deterministically. A read counts only if its slot
+    /// was neither rewritten nor replaced as the published one meanwhile: a
+    /// slot rewritten but not yet published holds counters newer than the
+    /// published ones, and taking them would let the next read go backward.
+    /// Retries until a read lands between two completed callbacks, which
+    /// only a writer completing a callback every few loads could prevent.
+    fn snapshot_observing(&self, mut between_loads: impl FnMut(u32)) -> PlaybackProgress {
+        loop {
+            let index = self.published_slot.load(Ordering::Acquire);
+            between_loads(0);
+            let slot = &self.published[index];
+            let before = slot.sequence.load(Ordering::Acquire);
+            if before.is_multiple_of(2) {
+                let submitted_frames = slot.submitted_frames.load(Ordering::Relaxed);
+                between_loads(1);
+                let usable_through_frames = slot.usable_through_frames.load(Ordering::Relaxed);
+                between_loads(2);
+                let sounded_frames = slot.sounded_frames.load(Ordering::Relaxed);
+                between_loads(3);
+                fence(Ordering::Acquire);
+                if slot.sequence.load(Ordering::Relaxed) == before
+                    && self.published_slot.load(Ordering::Relaxed) == index
+                {
+                    return PlaybackProgress {
+                        submitted_frames,
+                        sounded_frames,
+                        usable_through_frames,
+                    };
+                }
+            }
+            std::hint::spin_loop();
         }
     }
 
@@ -195,20 +311,48 @@ impl PlaybackClock {
     ///
     /// A callback whose timestamp pair does not support an estimate this
     /// time (see [`estimate_sounded_frames`]) simply leaves the published
-    /// estimate where it was.
+    /// estimate and the usable frame mark where they were.
     fn record_callback(
         &self,
         frame_count: u64,
         info: &cpal::OutputCallbackInfo,
         device_sample_rate: u32,
     ) {
-        let callback_start_frame = self
-            .submitted_frames
-            .fetch_add(frame_count, Ordering::Release);
-        if let Some(sounded) =
+        self.record(frame_count, |callback_start_frame| {
             estimate_sounded_frames(callback_start_frame, info.timestamp(), device_sample_rate)
-        {
-            self.sounded_frames.fetch_max(sounded, Ordering::Release);
+        });
+    }
+
+    /// The store order behind [`Self::record_callback`]. The callback thread
+    /// is the only writer, so `submitted_frames` is loaded and stored rather
+    /// than `fetch_add`ed, and stored *last*: a reader that loads
+    /// `submitted_frames` first and sees the callback's frames therefore also
+    /// sees its estimate and usable mark, however long the callback thread is
+    /// preempted between the stores. Likewise the mark is stored after the
+    /// estimate, so a reader that loads the mark before the estimate never
+    /// pairs a callback's mark with an older estimate. The mark may be seen
+    /// *before* the frames it covers; see `PlaybackProgress::usable_through_frames`.
+    /// A reader takes all three only once the callback has finished, through
+    /// [`Self::write`]'s published copy, so a [`Self::snapshot`] never pairs
+    /// this callback's estimate with an older mark either, the one torn read
+    /// the store order alone cannot exclude.
+    fn record(&self, frame_count: u64, estimate: impl FnOnce(u64) -> Option<u64>) {
+        let mut usable = false;
+        self.write(|| {
+            let callback_start_frame = self.submitted_frames.load(Ordering::Relaxed);
+            let callback_end_frame = callback_start_frame.saturating_add(frame_count);
+            if let Some(sounded) = estimate(callback_start_frame) {
+                self.sounded_frames.fetch_max(sounded, Ordering::Release);
+                self.usable_through_frames
+                    .store(callback_end_frame, Ordering::Release);
+                usable = true;
+            }
+            self.submitted_frames
+                .store(callback_end_frame, Ordering::Release);
+        });
+        // After the publish, so a reader that sees a usable timestamp also
+        // finds the callback that carried it in the published counters.
+        if usable {
             self.timestamp_available.store(true, Ordering::Release);
         }
     }
@@ -223,11 +367,19 @@ pub struct PlaybackProgress {
     pub submitted_frames: u64,
     /// The most recent conservative estimate of device frames that have
     /// actually sounded, derived from the host's own callback timestamps
-    /// (monotonic non-decreasing; see the module docs). Read as a separate
-    /// atomic from `submitted_frames`, not one atomic snapshot, so a caller
-    /// should trust each field's own history across calls rather than their
-    /// exact relationship within one snapshot.
+    /// (monotonic non-decreasing; see the module docs). All three fields come
+    /// from the same completed callback, so their relationship within one
+    /// snapshot holds as well as each field's history across calls.
     pub sounded_frames: u64,
+    /// The `submitted_frames` total at the end of the latest callback with a
+    /// usable timestamp, whether or not it moved `sounded_frames` (an estimate
+    /// that repeats or regresses leaves that flat). A usable callback ended at or past
+    /// this mark. For a submitted span `(from, to]`, `from < mark <= to` means
+    /// the span `(from, mark]` held one; `mark <= from` means every callback
+    /// in the span had a stale timestamp. Taken with the other fields from one
+    /// completed callback, it never leads `submitted_frames` within a
+    /// snapshot, and it trails them across stale callbacks.
+    pub usable_through_frames: u64,
 }
 
 /// `delay` (a callback-to-playback gap from a [`cpal::OutputStreamTimestamp`])
@@ -606,10 +758,8 @@ impl AudioOutput {
         {
             return None;
         }
-        Some(PlaybackProgress {
-            submitted_frames: self.playback_clock.submitted_frames.load(Ordering::Acquire),
-            sounded_frames: self.playback_clock.sounded_frames.load(Ordering::Acquire),
-        })
+        // One callback's stores whole: see `PlaybackClock::snapshot`.
+        Some(self.playback_clock.snapshot())
     }
 
     /// Extra device frames, beyond a [`Self::playback_progress`] snapshot's
@@ -644,14 +794,21 @@ impl AudioOutput {
     /// Advances this instance's fake sounded-frame position for a
     /// null-backed test, the way a real device callback's own estimate
     /// would — clamped to monotonic non-decreasing, so a lower `frames`
-    /// never moves it backward. Has no effect on
+    /// never moves it backward. Also marks every frame submitted so far
+    /// as covered by a usable callback (`PlaybackProgress::usable_through_frames`),
+    /// moved or not. Has no effect on
     /// [`Self::playback_progress`] until
     /// [`Self::enable_playback_progress_for_test`] has been called.
     #[doc(hidden)]
     pub fn advance_sounded_frames_for_test(&self, frames: u64) {
-        self.playback_clock
-            .sounded_frames
-            .fetch_max(frames, Ordering::Release);
+        let clock = &self.playback_clock;
+        clock.write(|| {
+            clock.sounded_frames.fetch_max(frames, Ordering::Release);
+            let submitted = clock.submitted_frames.load(Ordering::Acquire);
+            clock
+                .usable_through_frames
+                .fetch_max(submitted, Ordering::Release);
+        });
     }
 
     /// Drive the null backend by hand, filling `out` through the exact same
@@ -669,9 +826,7 @@ impl AudioOutput {
         if let Backend::Null(source) = &mut self.backend {
             let channels = usize::from(self.channels).max(1);
             let frames = u64::try_from(out.len() / channels).unwrap_or(u64::MAX);
-            self.playback_clock
-                .submitted_frames
-                .fetch_add(frames, Ordering::Release);
+            self.playback_clock.record(frames, |_| None);
             source.fill(out);
         }
     }
