@@ -52,7 +52,13 @@ const FLAG_RECEIVED_POTION_OLDALE: u16 = 0x84;
 /// with no interior collision of its own, so any blocked step below is
 /// caused by an object event, never the grid.
 fn oldale_phase(player: PlayerState) -> OverworldPhase {
-    let events = oldale_town_npc_reposition::resolve_map_events(OLDALE_TOWN, &EventData::new())
+    oldale_phase_with(player, &EventData::new())
+}
+
+/// [`oldale_phase`], with its object events resolved against `event_data`
+/// instead of a fresh store.
+fn oldale_phase_with(player: PlayerState, event_data: &EventData) -> OverworldPhase {
+    let events = oldale_town_npc_reposition::resolve_map_events(OLDALE_TOWN, event_data)
         .expect("MAP_OLDALE_TOWN must resolve");
     let events: &'static assets::MapEvents = Box::leak(Box::new(events));
     OverworldPhase::for_test(
@@ -523,4 +529,78 @@ fn a_successful_transition_replaces_the_live_object_events() {
     assert_replaced(&phase, local_id, "the connection crossing");
 
     let _ = std::fs::remove_file(&path);
+}
+
+/// A session saved in Oldale Town with both gating flags set, then resumed
+/// through the production `continue_saved_game`, rebuilds the scene from the
+/// saved [`EventData`]: both NPCs stand on their bare map.json tiles. Every
+/// other phase here is built from a fresh `EventData`, so none of them would
+/// notice the continue path dropping the saved flags. Needs the real pack:
+/// `continue_saved_game` also loads Oldale's real tilesets.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn real_pack_continue_restores_oldale_npcs_at_their_map_json_tiles() {
+    use crate::flow::save_continue_tests::save_from_the_start_menu;
+    use crate::flow::tests::TempSave;
+    use crate::pack_source::PackSource;
+
+    let temp = TempSave::new("oldale-continue-flags");
+    let mut slot = temp.slot();
+    // The session being saved already stands in the flagged visit: its NPCs
+    // are on their map.json tiles before the save, so continue must keep
+    // them there rather than relocate anything.
+    let mut event_data = EventData::new();
+    for flag in [FLAG_ADVENTURE_STARTED, FLAG_RECEIVED_POTION_OLDALE] {
+        event_data.flag_set(flag).unwrap();
+    }
+    let mut phase = oldale_phase_with(PlayerState::new((5, 5), 3, Direction::South), &event_data);
+    phase.save1.event_data = event_data;
+    let header = assets::MapHeaderTable::new()
+        .header(OLDALE_TOWN)
+        .expect("MAP_OLDALE_TOWN must have a header");
+    phase.save1.location = engine::save::WarpData {
+        map_group: i8::try_from(header.group).unwrap(),
+        map_num: i8::try_from(header.num).unwrap(),
+        warp_id: -1,
+        x: 5,
+        y: 5,
+    };
+    save_from_the_start_menu(&mut phase, &mut slot);
+
+    let saved = slot.load();
+    assert!(saved.status.menu_shows_continue());
+    for flag in [FLAG_ADVENTURE_STARTED, FLAG_RECEIVED_POTION_OLDALE] {
+        assert!(saved.block1.event_data.flag_get(flag).unwrap());
+    }
+    let resumed =
+        OverworldPhase::continue_saved_game(PackSource::Runtime, saved.block1, saved.block2)
+            .expect("run `cargo xtask extract` first");
+    assert_eq!(resumed.map_id, OLDALE_TOWN);
+
+    let events = resumed.scene.map_events(OLDALE_TOWN).unwrap();
+    for (graphics_id, tile) in [
+        ("OBJ_EVENT_GFX_MANIAC", FOOTPRINTS_MAN_OLD_TILE),
+        ("OBJ_EVENT_GFX_MART_EMPLOYEE", MART_EMPLOYEE_OLD_TILE),
+    ] {
+        let template = events
+            .object_events
+            .iter()
+            .find(|event| event.graphics_id == graphics_id)
+            .expect("the Oldale NPC must exist");
+        assert_eq!(
+            (i32::from(template.x), i32::from(template.y)),
+            tile,
+            "{graphics_id}: continue must resolve the saved flags"
+        );
+        assert_eq!(
+            resumed
+                .object_events
+                .get(template.local_id)
+                .unwrap()
+                .state()
+                .position(),
+            tile,
+            "{graphics_id}: the live placement must match the resumed scene"
+        );
+    }
 }
