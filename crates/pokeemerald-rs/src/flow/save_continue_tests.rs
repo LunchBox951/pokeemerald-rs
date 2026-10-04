@@ -1340,6 +1340,7 @@ fn real_pack_flagged_continue_lands_at_the_continue_game_warp() {
 /// the start-menu save, and `continue_saved_game`. The selected identity is
 /// explicit; the chooser UI is not involved.
 #[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn each_selected_gender_loads_saves_and_continues_into_its_own_room() {
     use crate::overworld::PlayerCharacter;
 
