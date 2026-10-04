@@ -435,7 +435,6 @@ impl Sequencer {
     }
 
     fn do_tick(&mut self) {
-        self.mixer.tick_gates();
         let Self {
             song,
             tracks,
@@ -445,6 +444,11 @@ impl Sequencer {
             ..
         } = self;
         for (track_id, track) in tracks.iter_mut().enumerate() {
+            // Per-track gate expiry precedes that track's commands, as in
+            // `MPlayMain`'s per-track chain walk (`m4a_1.s:1191`-`:1212`).
+            if !track.ended {
+                mixer.tick_gates(track_id);
+            }
             Self::process_track(song, track, mixer, track_id, tempo_i, mem_acc);
         }
     }
@@ -3984,5 +3988,116 @@ mod tests {
                 .all(|voice| voice.track().is_some_and(|track| track < 5)),
             "the sixth track's weaker note must never have started"
         );
+    }
+
+    #[test]
+    fn later_track_gate_expiry_does_not_change_earlier_track_slot_selection() {
+        // Upstream expires a track's gates during that track's own pass
+        // (`m4a_1.s:1191`-`:1212`), so track 1's gate-1 voice is still live
+        // when track 0 allocates: track 0 steals its own weaker tied voice.
+        let tracks = vec![
+            vec![
+                Event::Priority(10),
+                tied_note(50),
+                Event::Wait(1),
+                Event::Priority(20),
+                tied_note(64),
+                Event::Wait(8),
+            ],
+            vec![
+                Event::Priority(20),
+                Event::Note {
+                    key: 60,
+                    velocity: 127,
+                    gate: 1,
+                },
+                Event::Wait(8),
+            ],
+        ];
+        let mut seq = Sequencer::with_config(test_song(tracks, 150), DEFAULT_MASTER_VOLUME, 2);
+        seq.do_tick();
+        assert_eq!(seq.mixer.voices()[0].midi_key(), 50);
+        assert_eq!(seq.mixer.voices()[1].midi_key(), 60);
+        assert!(!seq.mixer.voices()[1].is_stopping());
+
+        seq.do_tick();
+        let occupants: Vec<_> = seq
+            .mixer
+            .voices()
+            .iter()
+            .map(|v| (v.track(), v.midi_key(), v.priority(), v.is_stopping()))
+            .collect();
+        assert_eq!(
+            occupants,
+            vec![(Some(0), 64, 20, false), (Some(1), 60, 20, true)]
+        );
+    }
+
+    #[test]
+    fn higher_priority_later_track_voice_survives_earlier_track_allocation_on_expiry_tick() {
+        let tracks = vec![
+            vec![
+                Event::Priority(10),
+                Event::Wait(1),
+                tied_note(64),
+                Event::Wait(8),
+            ],
+            vec![
+                Event::Priority(20),
+                Event::Note {
+                    key: 60,
+                    velocity: 127,
+                    gate: 1,
+                },
+                Event::Wait(8),
+            ],
+        ];
+        let mut seq = Sequencer::with_config(test_song(tracks, 150), DEFAULT_MASTER_VOLUME, 1);
+        seq.do_tick();
+        seq.do_tick();
+        let occupants: Vec<_> = seq
+            .mixer
+            .voices()
+            .iter()
+            .map(|v| (v.track(), v.midi_key()))
+            .collect();
+        assert_eq!(occupants, vec![(Some(1), 60)]);
+    }
+
+    #[test]
+    fn higher_priority_later_track_cgb_voice_survives_earlier_track_allocation_on_expiry_tick() {
+        let voices = vec![Instrument::CgbSquare1(SquareTone {
+            duty: 2,
+            sweep: 0,
+            adsr: CgbAdsr::flat(),
+            fixed_rate: false,
+        })];
+        let tracks = vec![
+            vec![
+                Event::Voice(0),
+                Event::Priority(10),
+                Event::Wait(1),
+                tied_note(64),
+                Event::Wait(8),
+            ],
+            vec![
+                Event::Voice(0),
+                Event::Priority(20),
+                Event::Note {
+                    key: 60,
+                    velocity: 127,
+                    gate: 1,
+                },
+                Event::Wait(8),
+            ],
+        ];
+        let mut seq = Sequencer::new(Song::new(voices, tracks, 150));
+        seq.do_tick();
+        seq.do_tick();
+        let square1 = seq.mixer.cgb_voices()[CgbChannelNumber::Square1.slot()]
+            .as_ref()
+            .expect("track 1's voice must still occupy Square1");
+        assert_eq!((square1.track(), square1.midi_key()), (1, 60));
+        assert!(square1.is_stopping());
     }
 }

@@ -215,13 +215,24 @@ impl Mixer {
         true
     }
 
-    /// Tick every voice's note-off gate down by one sequencer tick.
-    pub fn tick_gates(&mut self) {
+    /// Tick the note-off gate of every voice currently owned by `track` down
+    /// by one sequencer tick.
+    ///
+    /// Upstream `MPlayMain` walks each track's own channel chain at the top
+    /// of that track's pass (`m4a_1.s:1191`-`:1212`), so a later track's gate
+    /// cannot expire before an earlier track allocates. Ownership is the
+    /// voice's current track: a voice stolen by an earlier track is no longer
+    /// on this track's chain.
+    pub fn tick_gates(&mut self, track: usize) {
         for voice in self.direct_sound_slots.iter_mut().flatten() {
-            voice.tick_gate();
+            if voice.track() == Some(track) {
+                voice.tick_gate();
+            }
         }
         for voice in self.cgb_slots.iter_mut().flatten() {
-            voice.tick_gate();
+            if voice.track() == track {
+                voice.tick_gate();
+            }
         }
     }
 
