@@ -474,6 +474,9 @@ impl CgbVoice {
     /// the next note-on ([`SquareChannel::defer_idle_samples`]'s doc), so the
     /// silence is rated at the frequency the sweep finally reaches.
     pub(crate) fn advance_idle_duty(&mut self, samples: usize, sweep_ticks: &[usize]) {
+        // Mark the deferral first so the sweep retunes below leave the
+        // inherited duty remainder unrated until settlement.
+        self.oscillator.defer_idle_samples(samples);
         if !self.hardware_muted {
             for _ in sweep_ticks {
                 if !self.oscillator.step_sweep_tick() {
@@ -482,7 +485,6 @@ impl CgbVoice {
                 }
             }
         }
-        self.oscillator.defer_idle_samples(samples);
     }
 
     /// Return whether `ply_endtie` may select this voice

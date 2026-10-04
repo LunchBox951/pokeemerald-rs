@@ -520,3 +520,46 @@ fn a_zero_volume_square_keeps_deferring_across_frames() {
     let phase = |voice: &CgbVoice| voice.square_oscillator().expect("square").duty_phase();
     assert_eq!(phase(&silent), phase(&deferred));
 }
+
+/// A dead square inherits a nonzero duty remainder; silent sweep ticks leave
+/// it unrated and settlement retimes it once at the final frequency
+/// (`mgba/src/gb/audio.c:493-503,975-979`).
+#[test]
+fn a_dead_square_preserves_its_inherited_remainder_across_silent_sweep_ticks() {
+    const FIRST_FREQUENCY: u16 = 0x400;
+    const FINAL_FREQUENCY: u16 = 0x640;
+    const SWEEP_BYTE: u8 = 0x12;
+    const FRAME_SAMPLES: usize = 17;
+
+    let mut silent = square_voice(
+        CgbChannelNumber::Square1,
+        Some(SWEEP_BYTE),
+        TestNote {
+            track_right: 0,
+            track_left: 0,
+            ..TestNote::at_key(0)
+        },
+    );
+    silent.begin_frame(false);
+    assert!(silent.is_dead_at_zero());
+
+    let sweep = crate::psg::Sweep::from_byte(SWEEP_BYTE, FIRST_FREQUENCY);
+    let mut inherited = SquareChannel::new(HALF_DUTY, FIRST_FREQUENCY, Some(sweep));
+    for _ in 0..13 {
+        let _ = inherited.sample();
+    }
+    silent.oscillator = Oscillator::Square(inherited.clone());
+
+    let mut expected = SquareChannel::new(HALF_DUTY, FINAL_FREQUENCY, None);
+    expected.continue_duty_from(&inherited);
+    expected.advance_silently(FRAME_SAMPLES);
+
+    let mut acc = vec![(0i32, 0i32); FRAME_SAMPLES];
+    silent.render(&mut acc, &[4, 12]);
+    assert!(acc.iter().all(|&(left, right)| left == 0 && right == 0));
+    assert_eq!(silent.sweep_frequency(), Some(FINAL_FREQUENCY));
+    assert_eq!(
+        silent.square_oscillator().expect("square").duty_phase(),
+        expected.duty_phase(),
+    );
+}

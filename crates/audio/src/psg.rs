@@ -263,6 +263,12 @@ pub struct SquareChannel {
     /// sweep retuning meanwhile does not rate those samples
     /// ([`Self::defer_idle_samples`]'s doc).
     idle_samples: u32,
+    /// The step rate `phase`'s fractional remainder was encoded at when the
+    /// current deferral began. While set, sweep retunes leave `phase`
+    /// untouched (the hardware keeps the index and last-update time while
+    /// dead, `mgba/src/gb/audio.c:493-503,975-979`) and
+    /// [`Self::settled_phase`] retimes it once at the final rate.
+    idle_step_delta: Option<u32>,
 }
 
 impl SquareChannel {
@@ -280,6 +286,7 @@ impl SquareChannel {
             sweep,
             disabled_at_trigger,
             idle_samples: 0,
+            idle_step_delta: None,
         };
         chan.set_frequency(freq_reg);
         chan
@@ -304,7 +311,10 @@ impl SquareChannel {
     /// The duty position once the deferred idle samples are rated at the
     /// current frequency.
     fn settled_phase(&self) -> u32 {
-        self.phase
+        self.idle_step_delta
+            .map_or(self.phase, |from_delta| {
+                retime_step_remainder(self.phase, from_delta, self.step_delta)
+            })
             .wrapping_add(self.step_delta.wrapping_mul(self.idle_samples))
     }
 
@@ -313,6 +323,7 @@ impl SquareChannel {
     fn settle_idle_samples(&mut self) {
         self.phase = self.settled_phase();
         self.idle_samples = 0;
+        self.idle_step_delta = None;
     }
 
     /// Continues the duty position of `previous`, the note this one replaces
@@ -325,6 +336,7 @@ impl SquareChannel {
             self.step_delta,
         );
         self.idle_samples = 0;
+        self.idle_step_delta = None;
     }
 
     /// Records `samples` of an idle slot's silence without advancing the duty
@@ -334,6 +346,7 @@ impl SquareChannel {
     /// sweep has reached by then (`:162-171`), not at each intermediate one.
     pub(crate) fn defer_idle_samples(&mut self, samples: usize) {
         let samples = u32::try_from(samples).unwrap_or(u32::MAX);
+        self.idle_step_delta.get_or_insert(self.step_delta);
         self.idle_samples = self.idle_samples.wrapping_add(samples);
     }
 
@@ -342,6 +355,7 @@ impl SquareChannel {
     /// its registers, including the note-on of whichever note replaces it
     /// (`mgba/src/gb/audio.c:140-141,493-501`).
     pub(crate) fn advance_silently(&mut self, samples: usize) {
+        self.settle_idle_samples();
         let samples = u32::try_from(samples).unwrap_or(u32::MAX);
         self.phase = self
             .phase
@@ -377,7 +391,9 @@ impl SquareChannel {
         self.frequency = freq_reg;
         let hz = register_frequency_hz(freq_reg, SQUARE_CLOCK_HZ);
         let step_delta = phase_delta(hz, SQUARE_STEPS_PER_CYCLE);
-        self.phase = retime_step_remainder(self.phase, self.step_delta, step_delta);
+        if self.idle_step_delta.is_none() {
+            self.phase = retime_step_remainder(self.phase, self.step_delta, step_delta);
+        }
         self.step_delta = step_delta;
     }
 
@@ -1220,5 +1236,39 @@ mod deferred_idle_settlement_tests {
         assert_eq!(a, b);
         assert_eq!(deferred.idle_samples, 0);
         assert_eq!(deferred.phase, eager.phase);
+    }
+
+    #[test]
+    fn silent_sweep_ticks_rate_the_inherited_remainder_at_the_final_frequency() {
+        const FIRST_FREQUENCY: u16 = 0x400;
+        const FINAL_FREQUENCY: u16 = 0x640;
+        const FIRST_SPAN: usize = 8;
+        const SECOND_SPAN: usize = 9;
+        const TOTAL_SAMPLES: u32 = 17;
+
+        let sweep = Sweep::from_byte((1 << 4) | 2, FIRST_FREQUENCY);
+        let mut square = SquareChannel::new(2, FIRST_FREQUENCY, Some(sweep));
+        square.phase = PHASE_ONE - 1;
+        let inherited_phase = square.phase;
+        let inherited_delta = square.step_delta;
+
+        square.defer_idle_samples(FIRST_SPAN);
+        assert!(square.step_sweep_tick());
+        assert_eq!(square.frequency, 0x500);
+        square.defer_idle_samples(SECOND_SPAN);
+        assert!(square.step_sweep_tick());
+        assert_eq!(square.frequency, FINAL_FREQUENCY);
+
+        let expected = retime_step_remainder(inherited_phase, inherited_delta, square.step_delta)
+            .wrapping_add(square.step_delta.wrapping_mul(TOTAL_SAMPLES));
+        assert_eq!(expected / PHASE_ONE, 5);
+        assert_eq!(square.duty_phase() / PHASE_ONE, expected / PHASE_ONE);
+        assert_eq!(square.duty_phase(), expected);
+
+        square.settle_idle_samples();
+        assert_eq!(square.idle_samples, 0);
+        assert_eq!(square.phase, expected);
+        let _ = square.sample();
+        assert_eq!(square.phase, expected.wrapping_add(square.step_delta));
     }
 }
