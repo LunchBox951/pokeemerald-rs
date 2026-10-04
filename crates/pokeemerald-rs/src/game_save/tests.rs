@@ -1153,7 +1153,7 @@ fn assert_slot_storage(temp: &TempSave, slot: usize, counter: u32, fill: u8) {
     assert_eq!(checked, STORAGE_SECTOR_COUNT);
 }
 
-/// Codex P1 on #1711: a continued session over save A must not carry A's
+/// A continued session over save A must not carry A's
 /// storage over a same-counter save B swapped in after load. Restoring the
 /// session base would put A's storage in the next generation, and the save
 /// after that would overwrite B's slot too.
@@ -1216,7 +1216,7 @@ fn a_merged_donor_session_refuses_a_full_format_replacement_at_its_counter() {
     assert_eq!(std::fs::read(&temp.path).unwrap(), replacement);
 }
 
-/// Codex P1 on #1711: a replacement that keeps the same legacy head but
+/// A replacement that keeps the same legacy head but
 /// supplies a different valid donor still reloads as a merged donor with
 /// matching head blocks. A donor that is present is not lost, so the session
 /// refuses rather than restoring its boxes over the replacement donor.
