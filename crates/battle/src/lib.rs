@@ -282,6 +282,7 @@ pub mod wild;
 mod script_rng;
 
 pub use ability::{inverts_drain, pinch_boosts_power, LIQUID_OOZE, OVERGROW};
+pub use battle::admission::ensure_participant_admissible;
 pub use battle::trainer::{
     build_trainer_pokemon, ensure_trainer_party_startable, fixed_ivs, roll_non_shiny_ot_id,
     shiny_value, trainer_data, trainer_money, TrainerContext, TrainerPartyMon, SHINY_ODDS,
