@@ -49,6 +49,10 @@ enum BgKind<'a> {
 
 /// Up to four of these compose into one frame: a regular or affine BG layer
 /// plus the per-frame register state that governs its priority and sampling.
+///
+/// The hardware has four BGs, so the compositor admits at most four slots with
+/// distinct (masked) BG identities; see [`compose_frame_with_effects`] for how
+/// excess or duplicate slots are ignored.
 #[derive(Debug, Clone, Copy)]
 pub struct BgSlot<'a> {
     kind: BgKind<'a>,
@@ -285,7 +289,9 @@ fn insert_candidate(
 /// docs).
 ///
 /// `bg_slots` need not have exactly four entries (a scene may use fewer BG
-/// layers); disabled slots contribute nothing. Pixels covered by no enabled,
+/// layers); disabled slots contribute nothing. Only the first four entries are
+/// considered, and the first slot per BG identity wins; see
+/// [`compose_frame_with_effects`]. Pixels covered by no enabled,
 /// opaque layer are left at the framebuffer's default backdrop
 /// ([`Rgb888::BLACK`](crate::palette::Rgb888::BLACK)).
 ///
@@ -364,6 +370,17 @@ impl PaletteStage<'_> {
 /// resolves the front layer through [`effects::resolve_pixel_color`] against
 /// the next layer or the backdrop — see that function's docs for which
 /// second target is eligible.
+///
+/// # BG slot admission
+///
+/// The hardware has four BGs, each with one identity (`bg_index`, already
+/// masked to `0..=3` by the [`BgSlot`] constructors). Malformed input is
+/// ignored deterministically rather than rejected: only the first four
+/// entries of `bg_slots` are inspected, and among those the first slot for each
+/// BG identity wins (even if it is disabled); later duplicates are dropped
+/// and never refilled from the tail. Dropped slots contribute no candidates
+/// and no effect targets. This is a policy for invalid input, not a
+/// hardware behavior.
 #[must_use]
 pub fn compose_frame_with_effects(
     sprites: &SpriteLayer<'_>,
@@ -374,21 +391,26 @@ pub fn compose_frame_with_effects(
     // backdrop target2 bit, OR any BG that is a BLDCNT target2 *and* enabled.
     // See effects::resolve_pixel_color's docs for what this drives. It is a
     // per-frame constant, so compute it once rather than per pixel.
+    let mut selected: [Option<BgSlot<'_>>; 4] = [None; 4];
+    for slot in bg_slots.iter().take(4) {
+        selected[usize::from(slot.bg_index)].get_or_insert(*slot);
+    }
+    let bg_slots = &selected;
+
     let any_target2 = effects.color.target2.backdrop
-        || bg_slots.iter().any(|slot| {
+        || bg_slots.iter().flatten().any(|slot| {
             slot.enabled && effects.color.target2.contains(LayerKind::Bg(slot.bg_index))
         });
 
-    // Positionally paired with `bg_slots`; `None` where a slot needs no
-    // hold. Every column of the scanline must advance these, open or closed:
-    // a hold detects a window-closed gap only by being told about it.
-    let mut affine_mosaic_holds: Vec<Option<AffineMosaicHold>> = bg_slots
-        .iter()
-        .map(|slot| {
-            slot.needs_affine_mosaic_hold()
-                .then(AffineMosaicHold::default)
-        })
-        .collect();
+    // Indexed like `bg_slots` (by BG identity); `None` where a slot is absent
+    // or needs no hold. Every column of the scanline must advance these, open
+    // or closed: a hold detects a window-closed gap only by being told about
+    // it.
+    let mut affine_mosaic_holds: [Option<AffineMosaicHold>; 4] = std::array::from_fn(|i| {
+        bg_slots[i]
+            .is_some_and(|slot| slot.needs_affine_mosaic_hold())
+            .then(AffineMosaicHold::default)
+    });
 
     let mut framebuffer = Framebuffer::new();
     let width = framebuffer.width();
@@ -487,8 +509,8 @@ fn affine_mosaic_hold_participates(
 
 /// Resolve one pixel's final color for [`compose_frame_with_effects`].
 ///
-/// `affine_mosaic_holds` pairs positionally with `bg_slots` — one
-/// [`AffineMosaicHold`] (or `None`) per slot, advanced one column at a time
+/// `affine_mosaic_holds` pairs positionally with `bg_slots` (indexed by BG
+/// identity) — one [`AffineMosaicHold`] (or `None`) per slot, advanced one column at a time
 /// across a scanline; see [`compose_frame_with_effects`]'s docs.
 ///
 /// `window_spans` carries this scanline's hardware-window spans and which of
@@ -502,10 +524,10 @@ fn affine_mosaic_hold_participates(
 )]
 fn compose_pixel(
     sprites: &SpriteLayer<'_>,
-    bg_slots: &[BgSlot<'_>],
+    bg_slots: &[Option<BgSlot<'_>>; 4],
     effects: &FrameEffects<'_>,
     any_target2: bool,
-    affine_mosaic_holds: &mut [Option<AffineMosaicHold>],
+    affine_mosaic_holds: &mut [Option<AffineMosaicHold>; 4],
     window_spans: WindowSpans<'_>,
     x: usize,
     y: usize,
@@ -554,6 +576,9 @@ fn compose_pixel(
         );
     }
     for (slot, affine_mosaic_hold) in bg_slots.iter().zip(affine_mosaic_holds.iter_mut()) {
+        let Some(slot) = slot else {
+            continue;
+        };
         if !slot.enabled {
             continue;
         }
