@@ -235,6 +235,7 @@ pub fn start_npc_trainer_battle(
         })
         .collect();
     battle::ensure_trainer_party_startable(&dex, trainer, &specs)?;
+    battle::ensure_participant_admissible(&player_lead)?;
 
     let mut party = Vec::with_capacity(entries.len());
     for ((entry, personality), moves) in entries.iter().zip(personalities).zip(movesets) {
@@ -334,6 +335,36 @@ mod tests {
             rng.state(),
             before,
             "a refused construction must draw nothing at all"
+        );
+    }
+
+    #[test]
+    fn statused_limber_lead_is_refused_before_any_ot_id_draw() {
+        let mut lead = BattlePokemon::new(
+            &Dex::new(),
+            SpeciesId(53),
+            TEST_LEVEL,
+            battle::fixed_ivs(TEST_PARTY_IV),
+            TEST_PERSONALITY,
+            vec![MoveId::TACKLE],
+        )
+        .expect("Persian/Tackle is a valid pairing");
+        assert_eq!(lead.ability(), assets::AbilityId::LIMBER, "setup: Limber");
+        lead.set_status1(battle::Status1::Paralysed);
+
+        let mut rng = Rng::new(1);
+        let before = rng.state();
+        let result = start_npc_trainer_battle(lead, TrainerId::MAY_ROUTE_103_MUDKIP, &mut rng);
+        assert_eq!(
+            result.err(),
+            Some(NpcTrainerBattleError::Battle(
+                BattleError::UnportedAbilityInteraction(assets::AbilityId::LIMBER)
+            )),
+        );
+        assert_eq!(
+            rng.state(),
+            before,
+            "the statused-entrant refusal must precede every OT-ID draw"
         );
     }
 }
