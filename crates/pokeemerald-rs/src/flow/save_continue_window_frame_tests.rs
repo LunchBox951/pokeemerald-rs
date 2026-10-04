@@ -1,66 +1,11 @@
 //! Issue #795: the main-menu window-frame chrome a continuable save renders
-//! with.
+//! with. Synthetic packs come from the shared [`crate::pack_test_support`].
 
 use super::save_continue_tests::{new_game_phase, save_from_the_start_menu};
 use super::tests::TempSave;
 use super::{menu_type_for, window_frame_for};
 use crate::main_menu::{MainMenuScene, MainMenuType};
-
-/// One directory entry for [`synthetic_two_frame_pack_bytes`] -- a small
-/// independent copy of `main_menu::tests`' own fixture-building style, not a
-/// shared one (that module's helper is private to `main_menu::tests`, and
-/// this test lives in a different module tree).
-struct PackEntry {
-    id: &'static str,
-    kind_tag: u8,
-    meta: Vec<u8>,
-    payload: Vec<u8>,
-}
-
-fn image_meta(width: u32, height: u32, bit_depth: u8) -> Vec<u8> {
-    let mut m = Vec::new();
-    m.extend_from_slice(&width.to_le_bytes());
-    m.extend_from_slice(&height.to_le_bytes());
-    m.push(bit_depth);
-    m
-}
-
-fn palette_meta(color_count: u16) -> Vec<u8> {
-    color_count.to_le_bytes().to_vec()
-}
-
-fn write_synthetic_pack(mut entries: Vec<PackEntry>) -> Vec<u8> {
-    entries.sort_by(|a, b| a.id.cmp(b.id));
-
-    let header_size = 8 + 4 + 4;
-    let mut directory_size = 0usize;
-    for e in &entries {
-        directory_size += 2 + e.id.len() + 1 + 8 + 8 + e.meta.len();
-    }
-    let mut offset = header_size + directory_size;
-    let mut offsets = Vec::new();
-    for e in &entries {
-        offsets.push(offset);
-        offset += e.payload.len();
-    }
-
-    let mut out = Vec::new();
-    out.extend_from_slice(&assets::pack::MAGIC);
-    out.extend_from_slice(&assets::pack::FORMAT_VERSION.to_le_bytes());
-    out.extend_from_slice(&u32::try_from(entries.len()).unwrap().to_le_bytes());
-    for (e, &off) in entries.iter().zip(&offsets) {
-        out.extend_from_slice(&u16::try_from(e.id.len()).unwrap().to_le_bytes());
-        out.extend_from_slice(e.id.as_bytes());
-        out.push(e.kind_tag);
-        out.extend_from_slice(&u64::try_from(off).unwrap().to_le_bytes());
-        out.extend_from_slice(&u64::try_from(e.payload.len()).unwrap().to_le_bytes());
-        out.extend_from_slice(&e.meta);
-    }
-    for e in &entries {
-        out.extend_from_slice(&e.payload);
-    }
-    out
-}
+use crate::pack_test_support::{image_entry, pack_bytes, palette_entry_with_color};
 
 /// A minimal pack covering what [`MainMenuScene::from_pack_with_window_frame`]
 /// needs, with two distinguishable selectable window frames -- frame 0
@@ -69,60 +14,23 @@ fn write_synthetic_pack(mut entries: Vec<PackEntry>) -> Vec<u8> {
 /// `synthetic_main_menu_pack_bytes` so which of the two a scene drew is
 /// readable from one border pixel.
 fn synthetic_two_frame_pack_bytes() -> Vec<u8> {
-    let frame0_pixels = vec![1u8; 24 * 24];
-    let mut frame0_palette = vec![0u8; 32];
-    let green = rendering::Bgr555::from_channels(0, 31, 0).raw();
-    frame0_palette[2..4].copy_from_slice(&green.to_le_bytes());
+    let green = rendering::Bgr555::from_channels(0, 31, 0);
+    let red = rendering::Bgr555::from_channels(31, 0, 0);
+    let dark_blue = rendering::Bgr555::from_channels(4, 4, 16);
 
-    let frame5_pixels = vec![1u8; 24 * 24];
-    let mut frame5_palette = vec![0u8; 32];
-    let red = rendering::Bgr555::from_channels(31, 0, 0).raw();
-    frame5_palette[2..4].copy_from_slice(&red.to_le_bytes());
-
-    let font_pixels =
-        vec![0u8; (assets::fonts::SHEET_WIDTH * assets::fonts::SHEET_HEIGHT) as usize];
-
-    let mut bg_palette = vec![0u8; 32];
-    let dark_blue = rendering::Bgr555::from_channels(4, 4, 16).raw();
-    bg_palette[0..2].copy_from_slice(&dark_blue.to_le_bytes());
-
-    write_synthetic_pack(vec![
-        PackEntry {
-            id: "text-window/image/1",
-            kind_tag: 0,
-            meta: image_meta(24, 24, 4),
-            payload: frame0_pixels,
-        },
-        PackEntry {
-            id: "text-window/palette/1",
-            kind_tag: 1,
-            meta: palette_meta(16),
-            payload: frame0_palette,
-        },
-        PackEntry {
-            id: "text-window/image/6",
-            kind_tag: 0,
-            meta: image_meta(24, 24, 4),
-            payload: frame5_pixels,
-        },
-        PackEntry {
-            id: "text-window/palette/6",
-            kind_tag: 1,
-            meta: palette_meta(16),
-            payload: frame5_palette,
-        },
-        PackEntry {
-            id: "font/normal/glyphs",
-            kind_tag: 0,
-            meta: image_meta(assets::fonts::SHEET_WIDTH, assets::fonts::SHEET_HEIGHT, 2),
-            payload: font_pixels,
-        },
-        PackEntry {
-            id: "interface/palette/main_menu_bg",
-            kind_tag: 1,
-            meta: palette_meta(16),
-            payload: bg_palette,
-        },
+    pack_bytes(vec![
+        image_entry("text-window/image/1", 24, 24, 4, 1),
+        palette_entry_with_color("text-window/palette/1", 16, 1, green),
+        image_entry("text-window/image/6", 24, 24, 4, 1),
+        palette_entry_with_color("text-window/palette/6", 16, 1, red),
+        image_entry(
+            "font/normal/glyphs",
+            assets::fonts::SHEET_WIDTH,
+            assets::fonts::SHEET_HEIGHT,
+            2,
+            0,
+        ),
+        palette_entry_with_color("interface/palette/main_menu_bg", 16, 0, dark_blue),
     ])
 }
 
