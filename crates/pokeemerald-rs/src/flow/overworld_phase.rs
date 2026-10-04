@@ -46,6 +46,7 @@ mod first_battle_conclusion;
 mod first_battle_trigger;
 mod frame;
 mod input;
+mod lead_owner;
 mod placement;
 mod route103_rival_trigger;
 mod sight_trainer_approach;
@@ -897,6 +898,8 @@ mod frame_tests;
 mod input_tests;
 /// `crate::overworld::oldale_town_npc_reposition` collision tests reachable
 /// from this module; its own unit tests live with that module instead.
+#[cfg(test)]
+mod lead_owner_tests;
 #[cfg(test)]
 mod oldale_reposition_tests;
 /// Wild and scripted first-battle opponents carry the save owner's OT id.
