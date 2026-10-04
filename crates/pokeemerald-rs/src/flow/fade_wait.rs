@@ -46,10 +46,9 @@ fn begin_on_press_frame(target: PaletteFadeTarget) -> NormalPaletteFade {
     fade
 }
 
-/// The composed `source` frame with the fade's BG blend applied uniformly.
-/// An interim bridge that keeps #1328's uniform per-frame blend until the
-/// title and menu scenes compose through `fade.palette_stage()` (#1553); it
-/// does not yet stagger OBJ against BG.
+/// The composed `source` frame with the fade's BG blend applied uniformly to
+/// every pixel; OBJ pixels take the BG coefficient here rather than their own
+/// bank's.
 fn faded_frame(source: &Framebuffer, fade: &NormalPaletteFade) -> Box<Frame> {
     let blend = fade.bg_blend();
     let mut faded = source.clone();
