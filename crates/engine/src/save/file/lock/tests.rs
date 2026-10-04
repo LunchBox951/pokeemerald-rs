@@ -903,3 +903,32 @@ fn a_search_only_save_directory_is_still_lockable() {
         "a write/search-only directory must stay lockable: {outcome:?}"
     );
 }
+
+/// The parent can be retargeted to a FIFO after the identity read a directory;
+/// acquisition must never reopen the path in a way that blocks there.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn recording_a_parent_retargeted_to_a_fifo_mid_acquisition_does_not_block() {
+    let dir = TempDir::new("lock-pin-fifo-race");
+    let fifo = dir.join("fifo");
+    assert!(std::process::Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .unwrap()
+        .success());
+    let (tx, rx) = std::sync::mpsc::channel();
+    let probe = fifo.clone();
+    std::thread::spawn(move || {
+        let _ = super::LockedDirectory::open(&probe);
+        let _ = tx.send(());
+    });
+    let finished = rx.recv_timeout(std::time::Duration::from_secs(2)).is_ok();
+    if !finished {
+        // Unblock the stuck open so the test process can exit.
+        let _ = std::fs::OpenOptions::new().write(true).open(&fifo);
+    }
+    assert!(
+        finished,
+        "recording the parent blocked on a FIFO swapped in for it"
+    );
+}

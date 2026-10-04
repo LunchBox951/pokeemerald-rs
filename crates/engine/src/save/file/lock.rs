@@ -454,9 +454,11 @@ mod tests;
 /// file, and pins no ancestor symlink or junction.
 #[derive(Debug)]
 pub(super) struct LockedDirectory {
-    /// A handle that keeps the directory's identity from being reused while
-    /// the guard lives. Best effort: a directory without list permission
-    /// cannot be opened on Unix, and the identity comparison needs no handle.
+    /// Windows keeps the directory open so its identity cannot be reused
+    /// while the guard lives. Unix holds no handle: opening the path again
+    /// could block on a FIFO swapped in for it, or be refused for a directory
+    /// without list permission, and the `stat` identity needs neither.
+    #[cfg(windows)]
     _pin: Option<std::fs::File>,
     identity: DirectoryIdentity,
 }
@@ -472,6 +474,7 @@ impl LockedDirectory {
     fn open(directory: &Path) -> std::io::Result<Self> {
         let identity = Self::identity_at(directory)?;
         Ok(Self {
+            #[cfg(windows)]
             _pin: Self::pin(directory),
             identity,
         })
@@ -491,13 +494,6 @@ impl LockedDirectory {
         let metadata = std::fs::metadata(directory)?;
         Self::refuse_a_non_directory(&metadata)?;
         Ok((metadata.dev(), metadata.ino()))
-    }
-
-    /// Opens the directory the identity was just read from; only done for a
-    /// directory, since a FIFO swapped in since would block a plain open.
-    #[cfg(unix)]
-    fn pin(directory: &Path) -> Option<std::fs::File> {
-        std::fs::File::open(directory).ok()
     }
 
     #[cfg(windows)]
