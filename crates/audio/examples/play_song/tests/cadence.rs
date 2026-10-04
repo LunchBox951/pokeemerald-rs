@@ -345,3 +345,106 @@ fn an_aggregate_from_a_polling_pause_does_not_excuse_the_silence_after_it() {
         );
     }
 }
+
+/// Drive `wait_for_measured_tail` with stale timestamps, a requested poll
+/// interval of `interval_us`, and every sleep actually taking `step_us`, as a
+/// loaded scheduler or a coarse sleep timer can: callbacks of `period_ms`
+/// (at 48 kHz) land at `phase_ms` and every period after. Returns the result
+/// and when the wait ended.
+fn late_poll_wait(
+    interval_us: u64,
+    step_us: u64,
+    period_ms: u64,
+    phase_ms: u64,
+    tail_ms: u64,
+) -> (Result<(), DrainError>, Duration) {
+    let policy = RetryPolicy {
+        interval: Duration::from_micros(interval_us),
+        max_wait: Duration::from_secs(1),
+    };
+    let start = Instant::now();
+    let clock = Rc::new(RefCell::new(start));
+    let submitted = Cell::new(4_u64);
+    // Callbacks landed by `us` microseconds into the wait.
+    let landed =
+        |us: u64| (us + period_ms * 1_000).saturating_sub(phase_ms * 1_000) / (period_ms * 1_000);
+    let result = wait_for_measured_tail(
+        4,
+        Duration::from_millis(tail_ms),
+        48_000,
+        &policy,
+        || Some(progress(0, submitted.get())),
+        || 0,
+        || *clock.borrow(),
+        |_| {
+            let before =
+                u64::try_from(clock.borrow().duration_since(start).as_micros()).unwrap_or(0);
+            *clock.borrow_mut() += Duration::from_micros(step_us);
+            let callbacks = landed(before + step_us) - landed(before);
+            submitted.set(submitted.get() + callbacks * period_ms * 48);
+        },
+    );
+    let held = clock.borrow().duration_since(start);
+    (result, held)
+}
+
+/// A poller the scheduler holds systematically late is not pausing: with the
+/// example's quarter-frame interval (4.167 ms) and every sleep taking 15.6 ms
+/// or 12 ms, healthy 50 ms callbacks take the fallback once the tail has run
+/// rather than being held to the deadline or timing out there.
+#[test]
+fn systematically_late_polls_with_healthy_callbacks_take_the_fallback() {
+    let (result, held) = late_poll_wait(4_167, 15_600, 50, 23, 250);
+    assert!(result.is_ok(), "15.6 ms polls; finished at {held:?}");
+    assert!(
+        held < Duration::from_millis(300),
+        "held to {held:?}, past the 250 ms tail"
+    );
+
+    let (result, held) = late_poll_wait(4_167, 12_000, 50, 31, 1_000);
+    assert!(
+        result.is_ok(),
+        "12 ms polls at the capped tail; ended at {held:?}"
+    );
+}
+
+/// Five 100 ms polls under 10 ms callbacks make 100 ms the polling resolution,
+/// and the cadence seen at it lapses once polling is prompt again: callbacks
+/// that stop at 500 ms are not alive 100 ms later on the strength of it,
+/// while callbacks that keep running still take the fallback.
+#[test]
+fn a_cadence_seen_at_slow_polling_lapses_once_polling_is_prompt() {
+    for stop_ms in [500_u64, u64::MAX] {
+        let policy = RetryPolicy {
+            interval: Duration::from_millis(10),
+            max_wait: Duration::from_secs(1),
+        };
+        let start = Instant::now();
+        let clock = Rc::new(RefCell::new(start));
+        let ms = || u64::try_from(clock.borrow().duration_since(start).as_millis()).unwrap_or(0);
+
+        let result = wait_for_measured_tail(
+            4,
+            Duration::from_millis(600),
+            48_000,
+            &policy,
+            // 480 frames (10 ms) per callback until `stop_ms`.
+            || Some(progress(0, 4 + ms().min(stop_ms) / 10 * 480)),
+            || 0,
+            || *clock.borrow(),
+            |_| {
+                let step = if ms() < 500 { 100 } else { 10 };
+                *clock.borrow_mut() += Duration::from_millis(step);
+            },
+        );
+
+        if stop_ms == u64::MAX {
+            assert!(result.is_ok(), "live callbacks take the fallback");
+        } else {
+            assert!(
+                matches!(result, Err(DrainError::MeasuredTailTimedOut { .. })),
+                "callbacks stopped at {stop_ms} ms must not read as alive"
+            );
+        }
+    }
+}

@@ -521,6 +521,32 @@ fn longest(samples: impl IntoIterator<Item = Duration>) -> Duration {
     samples.into_iter().max().unwrap_or_default()
 }
 
+/// How this wait has actually been polling: the shortest of the recent poll
+/// gaps, never under the requested `interval`. A scheduler that holds every
+/// sleep late raises it; one late poll among prompt ones does not.
+fn usual_poll_gap(poll_gaps: &[Duration], interval: Duration) -> Duration {
+    poll_gaps
+        .iter()
+        .copied()
+        .min()
+        .unwrap_or_default()
+        .max(interval)
+}
+
+/// The cadence samples still meaningful at polling resolution `usual_poll`:
+/// a sample seen while polling ran more than twice as coarse measured that
+/// resolution rather than the callbacks, so it lapses once polling is prompt
+/// again.
+fn retained_cadence(
+    samples: &[(Duration, Duration)],
+    usual_poll: Duration,
+) -> impl Iterator<Item = Duration> + '_ {
+    samples
+        .iter()
+        .filter(move |&&(_, seen_at)| seen_at <= usual_poll * 2)
+        .map(|&(sample, _)| sample)
+}
+
 /// Whether a usable callback ended inside the submitted advance `(from, to]`
 /// that a `usable_through` mark describes: only a mark within the span proves
 /// it. A mark past `to` belongs to a callback still in flight, whose frames
@@ -590,13 +616,16 @@ fn wait_for_measured_tail(
     let mut last_submitted = None;
     let mut last_poll = started;
     let mut last_advance = None;
-    let mut recent_cadence = [Duration::ZERO; CADENCE_WINDOW];
+    // Each cadence sample beside the polling resolution it was seen at.
+    let mut recent_cadence = [(Duration::ZERO, Duration::ZERO); CADENCE_WINDOW];
     let mut advances = 0_usize;
     let mut last_played = Duration::ZERO;
     let mut first_stale = None;
     let mut last_stale = None;
     let mut max_stale_advance = Duration::ZERO;
     let mut after_stall = false;
+    let mut poll_gaps = [policy.interval; CADENCE_WINDOW];
+    let mut polls = 0_usize;
     loop {
         let snapshot = progress();
         let errors = stream_errors();
@@ -651,7 +680,8 @@ fn wait_for_measured_tail(
             // a tenth of the tail is a stall: what came before says nothing
             // about the resumed callbacks, and the gap itself is not their
             // cadence.
-            let seen = recent_cadence.iter().copied().max().unwrap_or_default();
+            let usual_poll = usual_poll_gap(&poll_gaps, policy.interval);
+            let seen = longest(retained_cadence(&recent_cadence, usual_poll));
             // With one advance seen there is no cadence yet, only the gap.
             let floor = derived_tail / if advances >= 2 { 4 } else { 2 };
             // Before any advance, the only period to hold the gap to is this buffer.
@@ -661,7 +691,7 @@ fn wait_for_measured_tail(
             let stalled = gap > floor && gap > seen.max(last_played) + derived_tail / 10;
             let cadence_sample = if stalled {
                 (first_stale, last_stale, max_stale_advance) = (None, None, Duration::ZERO);
-                recent_cadence = [Duration::ZERO; CADENCE_WINDOW];
+                recent_cadence = [(Duration::ZERO, Duration::ZERO); CADENCE_WINDOW];
                 after_stall = true;
                 // Audio the resumed callbacks submit sounds a tail later.
                 tail_started = current;
@@ -672,13 +702,16 @@ fn wait_for_measured_tail(
             // A polling pause can fold many short callbacks into one advance,
             // and its backdated `at` can hide the idle span before them. It
             // widens freshness only on this poll and finishes only at the
-            // deadline, where no later poll can confirm it.
-            let settled = current.duration_since(last_poll) <= policy.interval * 2;
+            // deadline, where no later poll can confirm it. A pause is late
+            // against how this thread has actually been polling (see
+            // [`usual_poll_gap`]), so a poller the scheduler holds
+            // systematically late still settles.
+            let settled = current.duration_since(last_poll) <= usual_poll * 2;
             recent_cadence[advances % CADENCE_WINDOW] = if settled {
-                cadence_sample
+                (cadence_sample, usual_poll)
             } else {
                 pause_sample = Some(cadence_sample);
-                Duration::ZERO
+                (Duration::ZERO, Duration::ZERO)
             };
             advances = advances.wrapping_add(1);
             last_advance = Some(at);
@@ -694,9 +727,12 @@ fn wait_for_measured_tail(
                 max_stale_advance = max_stale_advance.max(stale);
             }
         }
+        poll_gaps[polls % CADENCE_WINDOW] = current.duration_since(last_poll);
+        polls = polls.wrapping_add(1);
         last_poll = current;
         last_submitted = Some(submitted);
-        let cadence = longest(recent_cadence.into_iter().chain(pause_sample));
+        let usual_poll = usual_poll_gap(&poll_gaps, policy.interval);
+        let cadence = longest(retained_cadence(&recent_cadence, usual_poll).chain(pause_sample));
         let evidence = first_stale
             .zip(last_stale)
             .is_some_and(|(first, last)| last.duration_since(first) >= derived_tail / 4)
