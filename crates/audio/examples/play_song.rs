@@ -529,12 +529,13 @@ fn longest(samples: impl IntoIterator<Item = Duration>) -> Duration {
 /// The snapshot carries no reading time, and the frames the stale callbacks
 /// submitted after the mark are not elapsed time: a host refilling its queue
 /// runs callbacks faster than playback. So those frames count as age only up
-/// to `max_age`, what the caller has wall-clock or queue-depth evidence for:
-/// inside the wait, the poll gap the usable callback landed in; at the first
-/// snapshot, none past the [`HOST_QUEUED_PERIODS`] of queue the derived tail
-/// already covers (see [`device_tail_wait`]), so a mark seconds behind is
-/// mostly paid while one a few callbacks behind keeps its whole debt. An
-/// extrapolation, not a bound. `None` only when the stamp lies before the
+/// to `max_age`. At the first snapshot that is none past the
+/// [`HOST_QUEUED_PERIODS`] of queue the derived tail already covers (see
+/// [`device_tail_wait`]), so a mark seconds behind is mostly paid while one a
+/// few callbacks behind keeps its whole debt. Inside the wait the caller also
+/// holds the due to the previous poll plus the usable buffer, which credits at
+/// most the poll gap. An extrapolation, not a bound: a host that queues more
+/// than the derived tail still makes a reading look older than it is. `None` only when the stamp lies before the
 /// clock's origin.
 fn reading_due(
     seen_at: Instant,
@@ -716,14 +717,14 @@ fn wait_for_measured_tail(
             let played = frames_duration(usable_through - prev, device_sample_rate);
             let credited = current.min(last_poll + played)
                 + frames_duration(target - sounded, device_sample_rate);
-            // The usable callback landed after the previous poll, so it is no
-            // older than the gap since.
+            // The previous-poll stamp already holds the due to at least the
+            // poll gap's worth of age, so the stale frames need no cap here.
             let seen = reading_due(
                 current,
                 target,
                 sounded,
                 (submitted, usable_through),
-                current.duration_since(last_poll),
+                Duration::MAX,
                 device_sample_rate,
             );
             measured_due = measured_due.max(credited).max(seen.unwrap_or(credited));
