@@ -10,7 +10,8 @@
 //!
 //! The menu's *internal* state machine -- the `sSaveDialogCallback` chain,
 //! its prompts, and which `TrySavingData` arm each answer reaches -- is
-//! unit-tested against a fake save medium in `crate::start_menu::tests`.
+//! unit-tested against a fake save medium in `crate::start_menu::save_input_tests`
+//! and `crate::start_menu::dialog_timing_tests`.
 
 use platform::{ButtonState, Buttons, GBA_WIDTH};
 
