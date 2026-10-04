@@ -912,6 +912,15 @@ fn storage_chunk(storage: &[u8], id: u16) -> &[u8] {
 /// A full-format donor generation (counter 2, slot 0) under an intact
 /// legacy five-sector head (counter 3, slot 1) that carries the progress.
 fn write_legacy_head_with_donor(temp: &TempSave) -> (SaveBlock1, SaveBlock2, Vec<u8>) {
+    write_legacy_head_with_donor_filled(temp, DONOR_STORAGE_FILL)
+}
+
+/// [`write_legacy_head_with_donor`] with every donor storage byte set to
+/// `storage_fill`.
+fn write_legacy_head_with_donor_filled(
+    temp: &TempSave,
+    storage_fill: u8,
+) -> (SaveBlock1, SaveBlock2, Vec<u8>) {
     let block1 = SaveBlock1 {
         money: 8_888,
         ..SaveBlock1::default()
@@ -922,7 +931,7 @@ fn write_legacy_head_with_donor(temp: &TempSave) -> (SaveBlock1, SaveBlock2, Vec
     };
     let block1_bytes = block1.to_bytes(block2.encryption_key);
     let block2_bytes = block2.to_bytes();
-    let storage = vec![DONOR_STORAGE_FILL; engine::save::store::PKMN_STORAGE_PAYLOAD_LEN];
+    let storage = vec![storage_fill; engine::save::store::PKMN_STORAGE_PAYLOAD_LEN];
     let mut image = vec![0xFFu8; engine::save::FLASH_IMAGE_LEN];
     for id in 0..u16::try_from(SECTORS_PER_SLOT).unwrap() {
         let payload: &[u8] = if id == SAVEBLOCK2_SECTOR_ID {
@@ -1205,4 +1214,52 @@ fn a_merged_donor_session_refuses_a_full_format_replacement_at_its_counter() {
         .unwrap();
     assert_eq!(outcome, super::StoreOutcome::RefusedConflictingSave);
     assert_eq!(std::fs::read(&temp.path).unwrap(), replacement);
+}
+
+/// Codex P1 on #1711: a replacement that keeps the same legacy head but
+/// supplies a different valid donor still reloads as a merged donor with
+/// matching head blocks. A donor that is present is not lost, so the session
+/// refuses rather than restoring its boxes over the replacement donor.
+#[test]
+fn a_replacement_donor_under_the_same_legacy_head_is_refused() {
+    let temp = TempSave::new("replacement-donor");
+    let (mut slot, block1, block2, _storage) = boot_legacy_head_with_donor(&temp);
+    write_legacy_head_with_donor_filled(&temp, REPLACEMENT_STORAGE_FILL);
+    assert_eq!(temp.slot().load().status, SaveFileStatus::Ok);
+    let replacement = std::fs::read(&temp.path).unwrap();
+
+    for _ in 0..2 {
+        let outcome = slot
+            .store(&block1, &block2, SaveLineage::Continued)
+            .unwrap();
+        assert_eq!(outcome, super::StoreOutcome::RefusedConflictingSave);
+        assert_eq!(std::fs::read(&temp.path).unwrap(), replacement);
+        assert_eq!(slot.session_counter, Some(LEGACY_HEAD_COUNTER));
+    }
+    assert_slot_storage(&temp, 0, DONOR_COUNTER, REPLACEMENT_STORAGE_FILL);
+}
+
+/// One damaged donor storage sector withdraws the whole donor (only a
+/// complete set of nine valid sectors may donate), so partial damage reloads
+/// with no donor and still heals rather than being refused.
+#[test]
+fn partial_donor_damage_still_heals_the_boxes_on_the_next_save() {
+    let temp = TempSave::new("partial-donor-loss");
+    let (mut slot, block1, block2, storage) = boot_legacy_head_with_donor(&temp);
+    let mut image = std::fs::read(&temp.path).unwrap();
+    let index = (0..image.len() / SECTOR_SIZE)
+        .find(|&index| {
+            let sector = read_sector(&image, index);
+            sector.signature() == SECTOR_SIGNATURE
+                && sector.counter() == DONOR_COUNTER
+                && sector.id() >= FIRST_STORAGE_SECTOR_ID
+        })
+        .unwrap();
+    corrupt_sector_payload(&mut image, index);
+    std::fs::write(&temp.path, &image).unwrap();
+    let outcome = slot
+        .store(&block1, &block2, SaveLineage::Continued)
+        .unwrap();
+    assert_eq!(outcome, super::StoreOutcome::Written);
+    assert_newest_storage(&temp, LEGACY_HEAD_COUNTER + 1, &storage, true);
 }

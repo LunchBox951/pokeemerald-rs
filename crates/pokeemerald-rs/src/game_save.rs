@@ -177,17 +177,26 @@ const fn reconcile_base(
 ///
 /// All three must hold: the session's load merged a legacy donor's storage
 /// (`session_merged_donor`); the reload still adopts a five-sector legacy head
-/// (`disk_source`), whose storage is never its own; and that head's block
-/// payloads are byte-identical to the session's (`same_blocks`). Then only
-/// donor-supplied storage differs, and the session's copy is the one it loaded.
-/// Store-level provenance of which generation donated is not needed: the
-/// head's identity and its legacy shape are the evidence.
+/// but finds no donor at all (`disk_source` is
+/// [`StorageSource::LegacyWithoutDonor`]); and that head's block payloads are
+/// byte-identical to the session's (`same_blocks`). Then the head is the one
+/// the session loaded and its storage is gone, so the session's copy is the
+/// only one left.
+///
+/// A reload that still finds a donor ([`StorageSource::LegacyDonor`]) is not
+/// donor loss: a donor is accepted only as a complete set of nine valid
+/// storage sectors (`SlotSurvey::verdict`), so damage to the merged donor
+/// withdraws it rather than yielding a damaged one, and a different valid
+/// donor may be a replacement's boxes. That reload is refused, including the
+/// case where the merged donor was damaged and an older complete set took its
+/// place; refusing leaves the file intact where a restore could not be proven
+/// safe.
 const fn donor_was_lost(
     session_merged_donor: bool,
     disk_source: StorageSource,
     same_blocks: bool,
 ) -> bool {
-    session_merged_donor && disk_source.is_legacy_head() && same_blocks
+    session_merged_donor && matches!(disk_source, StorageSource::LegacyWithoutDonor) && same_blocks
 }
 
 /// This session's save medium: the one file boot loads from and writes back to.
