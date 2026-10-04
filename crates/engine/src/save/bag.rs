@@ -219,9 +219,21 @@ fn add_to_pocket<const N: usize>(
     }
 
     for slot in staged.iter_mut().filter(|slot| slot.item_id == id) {
-        let taken = slot_capacity.saturating_sub(slot.quantity).min(remaining);
-        slot.quantity += taken;
-        remaining -= taken;
+        let owned = slot.quantity;
+        if u32::from(owned) + u32::from(remaining) <= u32::from(slot_capacity) {
+            slot.quantity = owned + remaining;
+            remaining = 0;
+            break;
+        }
+        // The stack is filled to the limit. A decoded stack already over the
+        // limit is capped, and its excess joins what is still to place; the
+        // count is 16 bits wide, so an excess that exactly cancels it ends the
+        // search, as upstream's does.
+        remaining = remaining.wrapping_add(owned).wrapping_sub(slot_capacity);
+        slot.quantity = slot_capacity;
+        if remaining == 0 {
+            break;
+        }
     }
     for slot in staged.iter_mut().filter(|slot| slot.item_id == 0) {
         if remaining == 0 {
@@ -582,15 +594,15 @@ mod tests {
     }
 
     #[test]
-    fn a_malformed_over_capacity_stack_is_left_alone_not_overwritten() {
+    fn an_over_capacity_decoded_stack_is_capped_like_upstream_add_bag_item() {
         let mut bag = Bag::default();
         bag.poke_balls[0] = slot(BALL, u16::MAX);
-        let bytes = bag.to_bytes(0);
-        let mut loaded = Bag::from_bytes(bytes, 0);
+        let mut loaded = Bag::from_bytes(bag.to_bytes(0), 0);
+        assert!(loaded.check_has_space(BALL, 100));
         assert!(loaded.add_item(BALL, 100));
-        assert_eq!(loaded.poke_balls[0], slot(BALL, u16::MAX));
-        assert_eq!(loaded.poke_balls[1], slot(BALL, 99));
-        assert_eq!(loaded.poke_balls[2], slot(BALL, 1));
+        assert_eq!(loaded.poke_balls[0], slot(BALL, 99));
+        assert_eq!(loaded.poke_balls[1], ItemSlot::default());
+        assert_eq!(loaded.poke_balls[2], ItemSlot::default());
     }
 
     #[test]
