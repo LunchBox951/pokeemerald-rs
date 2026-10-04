@@ -181,9 +181,9 @@ struct PlaybackClock {
     /// that carried a usable timestamp (see [`estimate_sounded_frames`]).
     /// Unlike `sounded_frames`, which `fetch_max` leaves flat for an estimate
     /// that repeats or moves backward, this advances for every usable
-    /// callback. Stored before that callback's `submitted_frames`, so a
-    /// reader can ask whether any usable callback lies in a span of submitted
-    /// frames without needing the two stores to be observed together.
+    /// callback. Stored before that callback's `submitted_frames`, so a mark
+    /// can lead the submitted total; a reader must not read it as covering
+    /// frames it has not yet seen land.
     usable_through_frames: AtomicU64,
 }
 
@@ -253,12 +253,14 @@ pub struct PlaybackProgress {
     pub sounded_frames: u64,
     /// The `submitted_frames` total at the end of the latest callback with a
     /// usable timestamp, whether or not it moved `sounded_frames` (an estimate
-    /// that repeats or regresses leaves that flat). A span of submitted frames
-    /// `(from, to]` held a usable callback if this exceeds `from`; if it does
-    /// not, every callback in the span had a stale timestamp. It is stored
-    /// before the frames it covers, so a reader never sees a usable callback's
-    /// frames ahead of its mark; it can lead `submitted_frames` by the
-    /// callback in flight and trails them across stale callbacks.
+    /// that repeats or regresses leaves that flat). A usable callback ended at or past
+    /// this mark. For a submitted span `(from, to]`, `from < mark <= to` means
+    /// the span `(from, mark]` held one; `mark <= from` means every callback
+    /// in the span had a stale timestamp; `mark > to` may be the callback in
+    /// flight, whose frames are not yet in `submitted_frames`, and proves
+    /// nothing about the callbacks already submitted. It is stored before the
+    /// frames it covers, so it can lead `submitted_frames` by that callback,
+    /// and it trails them across stale callbacks.
     pub usable_through_frames: u64,
 }
 

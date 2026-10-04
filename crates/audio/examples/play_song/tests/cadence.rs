@@ -1,6 +1,7 @@
 //! Callback cadence, stalls, and aggregate advances seen by a late poll.
 
 use super::*;
+use std::time::{Duration, Instant};
 
 /// Drive `wait_for_measured_tail` with a 10 ms poll, stale timestamps, and
 /// submitted frames advancing by `frames` whenever `advance_at` says so.
@@ -238,4 +239,66 @@ fn a_lone_aggregate_at_the_deadline_poll_is_judged_there() {
     );
 
     assert!(result.is_ok(), "stale live callbacks finish the tail");
+}
+
+/// Drive `wait_for_measured_tail` with stale timestamps, silent callbacks
+/// until 400 ms, then a 100 ms buffer every 100 ms. With `late_poll` the
+/// poll at 630 ms oversleeps to 700 ms. Returns the result and the time the
+/// wait ended.
+fn resumed_tail_wait(max_wait_ms: u64, late_poll: bool) -> (Result<(), DrainError>, Duration) {
+    let policy = RetryPolicy {
+        interval: Duration::from_millis(10),
+        max_wait: Duration::from_millis(max_wait_ms),
+    };
+    let start = Instant::now();
+    let clock = Rc::new(RefCell::new(start));
+    let submitted = Cell::new(48_000_u64);
+    let result = wait_for_measured_tail(
+        48_008,
+        Duration::from_millis(250),
+        48_000,
+        &policy,
+        || Some(progress(28_800, submitted.get())),
+        || 0,
+        || *clock.borrow(),
+        |duration| {
+            let before = clock.borrow().duration_since(start).as_millis();
+            *clock.borrow_mut() += if late_poll && before == 630 {
+                Duration::from_millis(70)
+            } else {
+                duration
+            };
+            let ms = clock.borrow().duration_since(start).as_millis();
+            if ms >= 400 && ms.is_multiple_of(100) {
+                submitted.set(submitted.get() + 4_800);
+            }
+        },
+    );
+    let elapsed = clock.borrow().duration_since(start);
+    (result, elapsed)
+}
+
+/// The audio the resumed callbacks submit sounds a full tail after they
+/// resume, not a tail after the wait began.
+#[test]
+fn the_tail_restarts_from_callbacks_resumed_after_a_stall() {
+    let (result, elapsed) = resumed_tail_wait(1_000, false);
+    assert!(result.is_ok());
+    assert!(
+        elapsed >= Duration::from_millis(650),
+        "finished at {elapsed:?}"
+    );
+    assert!(elapsed <= Duration::from_millis(1_010));
+}
+
+/// The restarted tail still has to fit the original budget.
+#[test]
+fn a_restarted_tail_must_fit_inside_the_original_budget() {
+    for (budget, late) in [(600, false), (640, true)] {
+        let (result, elapsed) = resumed_tail_wait(budget, late);
+        assert!(
+            matches!(result, Err(DrainError::MeasuredTailTimedOut { .. })),
+            "budget={budget} elapsed={elapsed:?}"
+        );
+    }
 }

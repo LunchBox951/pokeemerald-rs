@@ -515,6 +515,14 @@ fn frames_duration(frames: u64, device_sample_rate: u32) -> Duration {
     }
 }
 
+/// Whether a usable callback ended inside the submitted advance `(from, to]`
+/// that a `usable_through` mark describes: only a mark within the span proves
+/// it. A mark past `to` belongs to a callback still in flight, whose frames
+/// have not landed, so it says nothing about the callbacks already submitted.
+fn usable_callback_in_span(from: u64, to: u64, usable_through: u64) -> bool {
+    from < usable_through && usable_through <= to
+}
+
 /// Wait, within `policy`, for the device's measured playback position (see
 /// `platform::AudioOutput::playback_progress`) to reach `target` submitted
 /// device frames, polling `progress` at `policy.interval`.
@@ -527,22 +535,24 @@ fn frames_duration(frames: u64, device_sample_rate: u32) -> Duration {
 /// disappearing mid-wait is not itself a failure.
 ///
 /// Stale timestamps are read from `usable_through_frames`, never from the
-/// sounded estimate's shape: a mark past `from` in a submitted advance
-/// `(from, to]` discards the pending evidence (a usable callback keeps the
-/// measured wait in force), and the frames past both `from` and the mark are
-/// stale evidence at once. Evidence of at least
+/// sounded estimate's shape: a mark inside a submitted advance `(from, to]`
+/// discards the pending evidence (a usable callback keeps the measured wait
+/// in force), and the frames past both `from` and the mark are stale evidence
+/// at once. A mark past `to` is a callback in flight: it keeps the evidence
+/// but vetoes the finish, and discards it only once its frames land. Evidence of at least
 /// `derived_tail / 4` (a span of advances, or one covering that much
 /// playback) with the latest advance within one recent inter-advance gap
 /// (over the last [`CADENCE_WINDOW`]) plus two polls means live callbacks,
-/// and once `derived_tail` has run from the start of the wait the wait
-/// finishes as [`wait_for_device_tail`] would. A gap that outruns both the
+/// and once `derived_tail` has run from the start of the wait, or from the
+/// callbacks that resumed after a stall, the wait finishes as [`wait_for_device_tail`] would. A gap that outruns both the
 /// recent cadence and the playback the previous advance covered by a tenth of
 /// `derived_tail` (and over a quarter of it, or half before a cadence is seen)
 /// is a stall: evidence and cadence restart from the playback the resumed
 /// callback covers, and that callback alone is no evidence.
 ///
-/// The tail finish needs `derived_tail <= policy.max_wait`; a poll past the
-/// deadline takes it only with live callbacks and otherwise times out.
+/// The tail finish needs the restarted tail to end within `policy.max_wait`
+/// of the start; a poll past the deadline takes it only with live callbacks
+/// and otherwise times out.
 /// `progress`, `stream_errors`, `now`, and `sleep` are injected as in
 /// [`push_frame`].
 #[expect(
@@ -561,6 +571,7 @@ fn wait_for_measured_tail(
 ) -> Result<(), DrainError> {
     let started = now();
     let deadline = started + policy.max_wait;
+    let mut tail_started = started;
     let mut last_submitted = None;
     let mut last_poll = started;
     let mut last_advance = None;
@@ -589,15 +600,14 @@ fn wait_for_measured_tail(
             return Ok(());
         }
         let current = now();
-        // A mark past the previous poll's submitted total belongs to a
-        // usable callback. It is stored before the frames it covers, so it
-        // can be seen a poll ahead of them; it discards pending stale
-        // evidence on the poll it is seen, whether or not frames moved.
-        let usable = last_submitted.is_some_and(|previous| usable_through > previous);
-        if usable {
-            first_stale = None;
-            last_stale = None;
-            max_stale_advance = Duration::ZERO;
+        // A mark past the submitted total is a callback in flight, proving
+        // nothing about the frames submitted; once they land it discards the
+        // pending stale evidence.
+        let in_flight = usable_through > submitted;
+        if last_submitted
+            .is_some_and(|prev| usable_callback_in_span(prev, submitted, usable_through))
+        {
+            (first_stale, last_stale, max_stale_advance) = (None, None, Duration::ZERO);
             after_stall = false;
         }
         if let Some(previous) = last_submitted.filter(|&last| submitted > last) {
@@ -628,11 +638,11 @@ fn wait_for_measured_tail(
             }
             let stalled = gap > floor && gap > seen.max(last_played) + derived_tail / 10;
             let cadence_sample = if stalled {
-                first_stale = None;
-                last_stale = None;
-                max_stale_advance = Duration::ZERO;
+                (first_stale, last_stale, max_stale_advance) = (None, None, Duration::ZERO);
                 recent_cadence = [Duration::ZERO; CADENCE_WINDOW];
                 after_stall = true;
+                // Audio the resumed callbacks submit sounds a tail later.
+                tail_started = current;
                 played
             } else {
                 gap.max(played)
@@ -645,7 +655,7 @@ fn wait_for_measured_tail(
             // from callbacks after the last usable one: stale evidence, even
             // when one late poll folds a usable callback in ahead of them.
             let stale_frames = submitted.saturating_sub(previous.max(usable_through));
-            if stale_frames > 0 {
+            if stale_frames > 0 && !in_flight {
                 first_stale.get_or_insert(at);
                 last_stale = Some(at);
                 let stale = frames_duration(stale_frames, device_sample_rate);
@@ -655,22 +665,22 @@ fn wait_for_measured_tail(
         last_poll = current;
         last_submitted = Some(submitted);
         let cadence = recent_cadence.iter().copied().max().unwrap_or_default();
-        let quarter_tail = derived_tail / 4;
         let evidence = first_stale
             .zip(last_stale)
-            .is_some_and(|(first, last)| last.duration_since(first) >= quarter_tail)
-            || (!after_stall && max_stale_advance >= quarter_tail);
+            .is_some_and(|(first, last)| last.duration_since(first) >= derived_tail / 4)
+            || (!after_stall && max_stale_advance >= derived_tail / 4);
         let callbacks_alive = evidence
             && last_advance
                 .is_some_and(|last| current.duration_since(last) <= cadence + policy.interval * 2);
-        // Everything submitted before the drain began has sounded once the
-        // tail has run from `started`; a usable timestamp mid-wait does not
-        // restart it, so a valid-then-stale device keeps its budget.
-        let stale_tail_elapsed = callbacks_alive && current.duration_since(started) >= derived_tail;
+        // The tail runs from `started`, or from the resumption after a stall;
+        // a usable timestamp does not restart it, so a valid-then-stale
+        // device keeps its budget. A callback in flight vetoes the finish.
+        let tail_due = tail_started + derived_tail;
+        let stale_tail_elapsed = !in_flight && callbacks_alive && current >= tail_due;
         if current > deadline {
             // The first poll past the deadline is the last: the tail may finish
             // it only if it could have elapsed within the budget.
-            return if stale_tail_elapsed && derived_tail <= policy.max_wait {
+            return if stale_tail_elapsed && tail_due <= deadline {
                 Ok(())
             } else {
                 Err(DrainError::MeasuredTailTimedOut { sounded, target })

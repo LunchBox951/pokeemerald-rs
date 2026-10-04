@@ -475,3 +475,20 @@ fn the_stale_suffix_of_a_mixed_aggregate_at_the_deadline_poll_is_evidence() {
 
     assert!(result.is_ok(), "the stale suffix finishes the tail");
 }
+
+/// The mark is stored before the frames it covers: with a stale callback
+/// ending at 200 and the next usable callback's mark already at 300, the
+/// submitted span `(100, 200]` holds no usable callback despite `mark > from`.
+#[test]
+fn an_in_flight_mark_does_not_prove_a_usable_callback_in_the_submitted_span() {
+    let snapshot = progress_usable(60, 200, 300);
+    assert!(!usable_callback_in_span(
+        100,
+        snapshot.submitted_frames,
+        snapshot.usable_through_frames,
+    ));
+    // Once the marked callback's frames land the span holds it.
+    assert!(usable_callback_in_span(100, 300, 300));
+    // A mark at or before `from` leaves a later span entirely stale.
+    assert!(!usable_callback_in_span(300, 400, 300));
+}
