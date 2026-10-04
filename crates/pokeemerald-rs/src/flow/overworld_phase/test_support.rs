@@ -1,6 +1,6 @@
 //! Fixtures and input helpers shared by the [`super::OverworldPhase`] tests.
 
-use super::OverworldPhase;
+use super::{OverworldPhase, SyntheticStartMenu};
 use crate::overworld::OverworldScene;
 use assets::{MapEvents, MapHeader, MapId, MapLayout, MetatileCell};
 use engine::event_data::EventData;
@@ -480,4 +480,50 @@ pub(super) fn grass_step_draws(
     let before = rng.state();
     state.check_standard_wild_encounter(MB_TALL_GRASS, header, rng);
     rng.state() != before
+}
+
+/// Slides the player east across an `MB_SLIDE_EAST` tile at `(6, 4)` it
+/// entered facing North, stopping on the landing frame at `(7, 4)` --
+/// the first `T_TILE_CENTER` CB1 off the forced tile, before any
+/// `PlayerStep` poll has run there.
+pub(super) fn phase_on_a_perpendicular_slides_landing_frame() -> OverworldPhase {
+    let scene = crate::overworld::tests::synthetic_scene_with_special_tile(
+        10,
+        10,
+        (6, 4),
+        engine::overworld::metatile_behavior::MB_SLIDE_EAST,
+    );
+    let mut phase = OverworldPhase::for_test(
+        scene,
+        ONE_F,
+        PlayerState::new((6, 5), 3, Direction::North),
+        None,
+    );
+    phase.synthetic_start_menu = SyntheticStartMenu::Builds;
+    for _ in 0..u32::from(WALK_FRAMES_PER_TILE) {
+        phase.step(held(Buttons::UP));
+    }
+    assert_eq!(
+        phase.player.position(),
+        (6, 4),
+        "setup: the held step must have crossed onto the slide tile"
+    );
+    phase.step(ButtonState::default());
+    assert_eq!(
+        phase.player.position(),
+        (7, 4),
+        "setup: the slide must have dispatched east"
+    );
+    for _ in 0..16 {
+        if !phase.player.in_transit() {
+            break;
+        }
+        phase.step(ButtonState::default());
+    }
+    assert!(
+        !phase.player.in_transit(),
+        "setup: the slide crossing must have drained"
+    );
+    assert_eq!(phase.player.facing(), Direction::North);
+    phase
 }

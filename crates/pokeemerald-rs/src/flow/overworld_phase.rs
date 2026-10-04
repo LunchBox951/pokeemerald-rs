@@ -880,9 +880,15 @@ pub(super) fn saved_map_id(warp: WarpData) -> Option<assets::MapId> {
 }
 
 #[cfg(test)]
+mod active_battle_dispatch_tests;
+#[cfg(test)]
+mod bedroom_collision_tests;
+#[cfg(test)]
 mod connections_tests;
 #[cfg(test)]
 mod decoration_tests;
+#[cfg(test)]
+mod dialog_pacing_tests;
 /// Continue's active-battler selection ([`party::select_active_battler`])
 /// against both battle handoffs and the write-back merge that follows.
 #[cfg(test)]
@@ -891,6 +897,8 @@ mod fainted_lead_party_tests;
 mod first_battle_conclusion_tests;
 #[cfg(test)]
 mod first_battle_trigger_tests;
+#[cfg(test)]
+mod forced_movement_encounter_tests;
 #[cfg(test)]
 mod frame_tests;
 #[cfg(test)]
