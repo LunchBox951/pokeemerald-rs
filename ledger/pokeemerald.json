@@ -17487,7 +17487,7 @@
         },
         "hidden_item_flags": {
           "reason": "Canonical hidden-item flag names mapped to absolute EventData flag ids for background-event resolution.",
-          "rust_target": "crates/engine/src/overworld/hidden_item_flags.rs",
+          "rust_target": "crates/assets/src/hidden_item_flags.rs",
           "spec": "S-5",
           "status": "ported"
         },

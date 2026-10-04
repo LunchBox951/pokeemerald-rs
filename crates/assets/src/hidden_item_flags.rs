@@ -124,14 +124,13 @@ const HIDDEN_ITEM_FLAGS: &[(&str, u16)] = &[
 ];
 
 /// Resolves a `FLAG_HIDDEN_ITEM_*` name to its absolute flag id.
-pub(super) fn resolve(flag: &str) -> Option<u16> {
+#[must_use]
+pub fn resolve(flag: &str) -> Option<u16> {
     HIDDEN_ITEM_FLAGS
         .iter()
         .find(|(name, _)| *name == flag)
         .map(|(_, id)| *id)
 }
 
-#[cfg(test)]
-pub(super) fn names() -> impl Iterator<Item = &'static str> {
-    HIDDEN_ITEM_FLAGS.iter().map(|(name, _)| *name)
-}
+/// The number of canonical hidden-item flags.
+pub const HIDDEN_ITEM_FLAG_COUNT: usize = HIDDEN_ITEM_FLAGS.len();

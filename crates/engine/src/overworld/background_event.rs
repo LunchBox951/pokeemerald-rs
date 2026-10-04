@@ -16,9 +16,6 @@ use super::collision::ELEVATION_TRANSITION;
 use super::direction::Direction;
 use crate::event_data::EventData;
 
-#[path = "hidden_item_flags.rs"]
-mod hidden_item_flags;
-
 /// Upstream's script for a sign whose `script` is null.
 const NULL_SIGN_SCRIPT: &str = "EventScript_TestSignpostMsg";
 /// `"0x0"` in map data is a null script pointer.
@@ -105,7 +102,7 @@ pub fn resolve_background_event(
             }
         }
         BgEventKind::HiddenItem { item, flag } => {
-            let flag = hidden_item_flags::resolve(flag)?;
+            let flag = assets::hidden_item_flags::resolve(flag)?;
             if event_data.flag_get(flag).ok()? {
                 return None;
             }
@@ -338,7 +335,7 @@ mod tests {
         for map in MapEventsTable::new().iter() {
             for event in map.bg_events {
                 if let BgEventKind::HiddenItem { flag, .. } = event.kind {
-                    let id = hidden_item_flags::resolve(flag)
+                    let id = assets::hidden_item_flags::resolve(flag)
                         .unwrap_or_else(|| panic!("unresolved {flag}"));
                     assert!(EventData::new().flag_get(id).is_ok(), "{flag}");
                     seen += 1;
@@ -346,6 +343,6 @@ mod tests {
             }
         }
         assert!(seen > 0);
-        assert_eq!(hidden_item_flags::names().count(), 112);
+        assert_eq!(assets::hidden_item_flags::HIDDEN_ITEM_FLAG_COUNT, 112);
     }
 }
