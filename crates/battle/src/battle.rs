@@ -33,7 +33,7 @@ use crate::status1::{draws_full_paralysis, draws_shed_skin_cure, poison_residual
 use crate::turn_order::{resolve_order, Order};
 use crate::volatile::draws_confusion_self_hit;
 
-mod admission;
+pub(crate) mod admission;
 mod events;
 mod execute;
 pub(crate) mod opponent_ai;

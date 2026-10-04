@@ -28,8 +28,8 @@ pub(super) const FRAME_BLOCK_TILES: u16 = NUM_WALK_FRAMES as u16 * FRAME_TILES;
 pub(super) const FRAME_SOUTH_STAND: u16 = 0;
 pub(super) const FRAME_NORTH_STAND: u16 = 1;
 pub(super) const FRAME_WEST_STAND: u16 = 2;
-/// Upstream's `sAnim_Go*`/`sAnim_GoFast*` alternate the forward foot across
-/// steps ([`PlayerState`] has no step parity); this port always shows the first.
+/// The first forward-foot cell of `sAnim_Go*`/`sAnim_GoFast*`; the second
+/// foot is the next cell.
 const FRAME_SOUTH_STEP: u16 = 3;
 const FRAME_NORTH_STEP: u16 = 5;
 const FRAME_WEST_STEP: u16 = 7;
@@ -198,7 +198,7 @@ fn frame_for(player: &PlayerState) -> (u16, bool) {
         Direction::South => FRAME_SOUTH_STEP,
         Direction::North => FRAME_NORTH_STEP,
         Direction::West | Direction::East => FRAME_WEST_STEP,
-    };
+    } + u16::from(player.second_foot_leads());
     let walking_foot_forward = player.slide_pose_held()
         || (player.in_transit()
             && (player.transit_animation_disabled()
@@ -383,6 +383,37 @@ mod tests {
         );
     }
 
+    /// Consecutive steps alternate the forward foot in every facing, East
+    /// mirroring West's cells (`sAnim_Go*`, `object_event_anims.h:202-272`).
+    #[test]
+    fn frame_for_alternates_the_forward_foot_across_consecutive_steps() {
+        let (bytes, header, events) = flat_test_map();
+        let runtime = flat_runtime(&bytes, &header, &events);
+        let no_connections = |_: assets::MapId| -> Option<(u16, u16)> { None };
+
+        for (facing, first, flipped) in [
+            (Direction::South, FRAME_SOUTH_STEP, false),
+            (Direction::North, FRAME_NORTH_STEP, false),
+            (Direction::West, FRAME_WEST_STEP, false),
+            (Direction::East, FRAME_WEST_STEP, true),
+        ] {
+            let mut player = player_at((2, 2), facing);
+            let mut forward_feet = Vec::new();
+            for _ in 0..2 {
+                player.step(Some(facing), &runtime, &no_connections, &NO_FLAGS);
+                forward_feet.push(frame_for(&player));
+                for _ in 0..WALK_FRAMES_PER_TILE {
+                    player.tick();
+                }
+            }
+            assert_eq!(
+                forward_feet,
+                [(first, flipped), (first + 1, flipped)],
+                "{facing:?}"
+            );
+        }
+    }
+
     /// A 5x5 map whose `(2, 2)` tile is `MB_SLIDE_EAST`, otherwise plain
     /// ground, for proving [`frame_for`] reads the active crossing's own
     /// duration rather than assuming [`WALK_FRAMES_PER_TILE`].
@@ -464,7 +495,7 @@ mod tests {
         for elapsed in 0..engine::overworld::SLIDE_FRAMES_PER_TILE {
             assert_eq!(
                 frame_for(&player),
-                (FRAME_WEST_STEP, true),
+                (FRAME_WEST_STEP + 1, true),
                 "slide frame {elapsed} must hold the paused forward-foot pose"
             );
             player.tick();
@@ -496,7 +527,10 @@ mod tests {
         }
         assert_eq!(
             rendered,
-            vec![(FRAME_WEST_STEP, true); usize::from(engine::overworld::SLIDE_FRAMES_PER_TILE)]
+            vec![
+                (FRAME_WEST_STEP + 1, true);
+                usize::from(engine::overworld::SLIDE_FRAMES_PER_TILE)
+            ]
         );
     }
 
