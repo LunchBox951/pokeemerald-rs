@@ -551,7 +551,7 @@ fn usable_callback_in_span(from: u64, to: u64, usable_through: u64) -> bool {
 /// callback covers, and that callback alone is no evidence.
 ///
 /// The tail finish needs the restarted tail to end within `policy.max_wait`
-/// of the start; a poll past the deadline takes it only with live callbacks
+/// of the start; a poll at or past the deadline takes it only with live callbacks
 /// and otherwise times out.
 /// `progress`, `stream_errors`, `now`, and `sleep` are injected as in
 /// [`push_frame`].
@@ -677,9 +677,9 @@ fn wait_for_measured_tail(
         // device keeps its budget. A callback in flight vetoes the finish.
         let tail_due = tail_started + derived_tail;
         let stale_tail_elapsed = !in_flight && callbacks_alive && current >= tail_due;
-        if current > deadline {
-            // The first poll past the deadline is the last: the tail may finish
-            // it only if it could have elapsed within the budget.
+        if current >= deadline {
+            // The first poll at or past the deadline is the last: the tail may
+            // finish it only if it could have elapsed within the budget.
             return if stale_tail_elapsed && tail_due <= deadline {
                 Ok(())
             } else {
