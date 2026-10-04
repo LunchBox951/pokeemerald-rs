@@ -216,7 +216,9 @@ impl<'a> MapRuntime<'a> {
     /// axis lands at the target's opposite edge. Upstream delays the map swap
     /// within its camera's padded backing grid; this runtime has neither, so
     /// it resolves as soon as a step leaves the decoded grid
-    /// (`fieldmap.c:578-622,691-742`).
+    /// (`fieldmap.c:578-622,691-742`). The crossed-axis coordinate must be
+    /// exactly one step beyond the edge being crossed; anything farther out
+    /// resolves to no connection.
     #[must_use]
     pub fn resolve_connection(
         &self,
@@ -225,6 +227,16 @@ impl<'a> MapRuntime<'a> {
         y: i32,
         maps: &impl ConnectedMapData,
     ) -> Option<ConnectionCrossing> {
+        let (width, height) = (i32::from(self.grid.width()), i32::from(self.grid.height()));
+        let edge_adjacent = match direction {
+            Direction::North => y == -1,
+            Direction::South => y == height,
+            Direction::West => x == -1,
+            Direction::East => x == width,
+        };
+        if !edge_adjacent {
+            return None;
+        }
         let wanted = direction.to_connection_direction();
         for connection in self.header.connections {
             if connection.direction != wanted {
@@ -816,6 +828,93 @@ mod tests {
         assert!(runtime
             .resolve_connection(Direction::North, 3, -1, &dims)
             .is_none());
+
+        // Two steps past the edge, or an in-grid crossed axis, is no crossing.
+        assert!(runtime
+            .resolve_connection(Direction::South, 3, 11, &dims)
+            .is_none());
+        assert!(runtime
+            .resolve_connection(Direction::South, 3, 9, &dims)
+            .is_none());
+        // A crossed-axis coordinate beyond the opposite edge is no crossing.
+        assert!(runtime
+            .resolve_connection(Direction::South, 3, -1, &dims)
+            .is_none());
+        // The perpendicular axis does not stand in for the crossed axis.
+        assert!(runtime
+            .resolve_connection(Direction::South, 10, 3, &dims)
+            .is_none());
+    }
+
+    #[test]
+    fn resolve_connection_requires_edge_adjacent_crossed_axis_in_every_direction() {
+        let connections: &'static [MapConnection] = Box::leak(Box::new([
+            MapConnection {
+                direction: assets::Direction::North,
+                offset: 0,
+                target: MapId("MAP_N"),
+            },
+            MapConnection {
+                direction: assets::Direction::South,
+                offset: 0,
+                target: MapId("MAP_S"),
+            },
+            MapConnection {
+                direction: assets::Direction::West,
+                offset: 0,
+                target: MapId("MAP_W"),
+            },
+            MapConnection {
+                direction: assets::Direction::East,
+                offset: 0,
+                target: MapId("MAP_E"),
+            },
+        ]));
+        let hdr = header("MAP_CENTER", connections);
+        let events = empty_events("MAP_CENTER");
+        let bytes = grid_bytes(10, 10, cell(0, 0, 0));
+        let layout = assets::MapLayout {
+            id: assets::LayoutId("MAP_CENTER"),
+            name: "MapCenter",
+            width: 10,
+            height: 10,
+            primary_tileset: "gTileset_General",
+            secondary_tileset: "gTileset_General",
+        };
+        let grid = layout.grid(&bytes).unwrap();
+        let runtime = MapRuntime::new(
+            MapId("MAP_CENTER"),
+            Box::leak(Box::new(hdr)),
+            Box::leak(Box::new(events)),
+            grid,
+            MetatileAttributeTable::new(&[]),
+            MetatileAttributeTable::new(&[]),
+        );
+        let dims = |_: MapId| -> Option<(u16, u16)> { Some((10, 10)) };
+
+        // (direction, one step beyond the edge, two steps beyond, in grid).
+        let cases = [
+            (Direction::North, (4, -1), (4, -2), (4, 0)),
+            (Direction::South, (4, 10), (4, 11), (4, 9)),
+            (Direction::West, (-1, 4), (-2, 4), (0, 4)),
+            (Direction::East, (10, 4), (11, 4), (9, 4)),
+        ];
+        for (direction, adjacent, far, inside) in cases {
+            assert!(
+                runtime
+                    .resolve_connection(direction, adjacent.0, adjacent.1, &dims)
+                    .is_some(),
+                "{direction:?} one step off-grid should resolve"
+            );
+            for (label, pos) in [("two steps off-grid", far), ("in grid", inside)] {
+                assert!(
+                    runtime
+                        .resolve_connection(direction, pos.0, pos.1, &dims)
+                        .is_none(),
+                    "{direction:?} {label} should not resolve"
+                );
+            }
+        }
     }
 
     #[test]
