@@ -6,9 +6,15 @@ use crate::save::file::tests::{saved_store, TempDir};
 use crate::save::file::SaveFile;
 use crate::save::store::FLASH_IMAGE_LEN;
 
-/// Every save path whose own name is valid gets a valid staging sibling:
-/// the unique suffix is fixed-width, and a basename at the component limit
-/// is cut to make room for it rather than pushed over.
+const STAGING_MARKER: &str = ".tmp.";
+const FULL_SUFFIX_LEN: usize = STAGING_MARKER.len() + WIDEST_HEX_DIGITS;
+const ONE_HEX_DIGIT: usize = 1;
+const ONE_DIGIT_SUFFIX_LEN: usize = STAGING_MARKER.len() + ONE_HEX_DIGIT;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+const TARGET_HEADROOM: usize = 9;
+const ONE_DIGIT_NAMES: usize = 16;
+const DRAWS_EXHAUSTING_ONE_DIGIT_NAMES: usize = 4_096;
+
 #[test]
 fn a_basename_at_the_component_limit_still_gets_a_valid_staging_sibling() {
     let file = SaveFile::at(Path::new(&"s".repeat(MAX_COMPONENT_LEN)));
@@ -16,10 +22,10 @@ fn a_basename_at_the_component_limit_still_gets_a_valid_staging_sibling() {
     let sibling = area(&file).first_name();
     let component = sibling.file_name().unwrap().to_str().unwrap();
     assert_eq!(component.len(), MAX_COMPONENT_LEN, "{component}");
-    let suffix_at = component.len() - ".tmp.".len() - WIDEST_HEX_DIGITS;
+    let suffix_at = component.len() - FULL_SUFFIX_LEN;
     assert!(component[..suffix_at].bytes().all(|byte| byte == b's'));
-    assert!(component[suffix_at..].starts_with(".tmp."));
-    assert!(component[suffix_at + 5..]
+    assert!(component[suffix_at..].starts_with(STAGING_MARKER));
+    assert!(component[suffix_at + STAGING_MARKER.len()..]
         .bytes()
         .all(|byte| byte.is_ascii_hexdigit()));
 
@@ -30,23 +36,16 @@ fn a_basename_at_the_component_limit_still_gets_a_valid_staging_sibling() {
     );
 }
 
-/// A staging candidate is always a sibling of the save path, never the save
-/// path itself. A save whose own basename already has the `.tmp.<hex>`
-/// shape the generator renders can otherwise be drawn exactly -- a save
-/// named `.tmp.a`, once the shrink chain has reached an empty stem and a
-/// single hex digit, is one of only sixteen names the generator can produce
-/// there -- and `create_new` succeeds on a destination no save occupies yet,
-/// so the image would be written in place instead of staged: visible while
-/// half-written, and a partial file left behind by a crash where the rename
-/// is supposed to publish a whole one.
+/// A save named like a generated `.tmp.<hex>` name must not be drawn as its own
+/// staging candidate: `create_new` would succeed and write the image in place.
 #[test]
 fn a_staging_candidate_is_never_the_save_path_itself() {
     let path = Path::new("/saves/.tmp.a");
     let file = SaveFile::at(path);
 
     let mut drawn = std::collections::BTreeSet::new();
-    for _ in 0..4_096 {
-        let candidate = area(&file).first_name_under(0, 1);
+    for _ in 0..DRAWS_EXHAUSTING_ONE_DIGIT_NAMES {
+        let candidate = area(&file).first_name_under(0, ONE_HEX_DIGIT);
         assert_ne!(
             candidate, *path,
             "a staging candidate must never be the save path itself"
@@ -56,23 +55,21 @@ fn a_staging_candidate_is_never_the_save_path_itself() {
 
     assert_eq!(
         drawn.len(),
-        15,
+        ONE_DIGIT_NAMES - 1,
         "escaping the save path must cost only that one name, not narrow the \
          floor further: {drawn:?}"
     );
 }
 
-/// A case-insensitive volume treats `.tmp.a` and `.TMP.A` as one entry, so
-/// the walk must also skip a candidate that differs from the save path only
-/// by ASCII case; otherwise `create_new` opens the destination itself there.
+/// Case-insensitive volumes treat `.tmp.a` and `.TMP.A` as one entry.
 #[test]
 fn a_staging_candidate_never_aliases_the_save_path_by_ascii_case() {
     let path = Path::new("/saves/.TMP.A");
     let file = SaveFile::at(path);
 
     let mut drawn = std::collections::BTreeSet::new();
-    for _ in 0..4_096 {
-        let candidate = area(&file).first_name_under(0, 1);
+    for _ in 0..DRAWS_EXHAUSTING_ONE_DIGIT_NAMES {
+        let candidate = area(&file).first_name_under(0, ONE_HEX_DIGIT);
         let name = candidate.file_name().expect("candidate has a file name");
         assert!(
             !name.as_encoded_bytes().eq_ignore_ascii_case(b".TMP.A"),
@@ -83,21 +80,18 @@ fn a_staging_candidate_never_aliases_the_save_path_by_ascii_case() {
 
     assert_eq!(
         drawn.len(),
-        15,
+        ONE_DIGIT_NAMES - 1,
         "escaping the case alias must cost only that one name: {drawn:?}"
     );
 }
 
-/// The shortest save basename whose staging sibling would exceed the
-/// component limit must still be writable: the stem is cut to make room for
-/// the fixed-width suffix rather than the sibling being refused.
 #[test]
 fn a_basename_the_fixed_width_suffix_pushes_over_the_limit_still_writes() {
     let dir = TempDir::new("longname");
-    let basename_len = MAX_COMPONENT_LEN - ".tmp.".len() - WIDEST_HEX_DIGITS + 1;
+    let basename_len = MAX_COMPONENT_LEN - FULL_SUFFIX_LEN + 1;
     assert!(
-        basename_len + ".tmp.".len() + WIDEST_HEX_DIGITS > MAX_COMPONENT_LEN,
-        "the suffix must actually carry this basename over the limit, or nothing is cut"
+        basename_len + FULL_SUFFIX_LEN > MAX_COMPONENT_LEN,
+        "the suffix must carry this basename over the limit"
     );
     let file = SaveFile::at(dir.join(&"s".repeat(basename_len)));
     let (store, _, _) = saved_store();
@@ -106,9 +100,6 @@ fn a_basename_the_fixed_width_suffix_pushes_over_the_limit_still_writes() {
     assert!(file.exists());
 }
 
-/// The longest basename `parent` accepts as a save file, found by growing
-/// one byte at a time until the host refuses it -- pinpointing the exact
-/// boundary rather than assuming a constant for it.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn longest_valid_basename(parent: &Path) -> usize {
     (1..=MAX_COMPONENT_LEN)
@@ -129,23 +120,13 @@ fn longest_valid_basename(parent: &Path) -> usize {
         .unwrap_or(0)
 }
 
-/// A save path at the host's real, unpredictable whole-path ceiling --
-/// discovered by probing rather than assumed from a constant, since a
-/// symlinked temp root (macOS's `/var/folders` -> `/private/var`) can make
-/// the kernel's resolved length longer than the one this process measures --
-/// must still be writable, even when the directory leaves less than the
-/// widest suffix's own 15 bytes of room. Neither the first-guess candidate
-/// nor an empty stem carrying that widest suffix fits there -- asserted
-/// below, so the scenario is reached rather than merely approached -- so the
-/// write can only succeed by narrowing the suffix too.
+/// Probes the host limit: a symlinked temp root (macOS `/var/folders`) resolves
+/// longer than the path measured here.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn a_save_path_near_the_hosts_real_path_limit_still_writes() {
     let dir = TempDir::new("path-limit");
 
-    // Coarse phase: nest maximally sized directories until the host refuses
-    // one, to approach its real ceiling quickly without assuming a specific
-    // number for it.
     let mut parent = dir.path.clone();
     loop {
         let candidate = parent.join("d".repeat(MAX_COMPONENT_LEN));
@@ -158,17 +139,10 @@ fn a_save_path_near_the_hosts_real_path_limit_still_writes() {
         }
     }
 
-    // Fine phase: narrow further, one directory at a time, until fewer than
-    // 15 bytes of headroom remain -- less than even the fixed-width
-    // `.tmp.<hex>` suffix needs on its own, so an empty stem is not enough
-    // and the hex component must narrow too -- but still at least 10, so a
-    // one-digit `.tmp.<hex>` suffix (6 bytes) has room to land in. Nesting a
-    // directory `headroom - 10` bytes long leaves exactly 9 bytes of
-    // headroom behind it (one byte of every step goes to the new
-    // separator), so this converges in a single pass.
+    // The `- 1` is the new directory's separator byte.
     let mut headroom = longest_valid_basename(&parent);
-    while headroom >= 15 {
-        let nested_len = (headroom - 10).min(MAX_COMPONENT_LEN);
+    while headroom >= FULL_SUFFIX_LEN {
+        let nested_len = (headroom - TARGET_HEADROOM - 1).min(MAX_COMPONENT_LEN);
         let nested = parent.join("d".repeat(nested_len));
         std::fs::create_dir(&nested)
             .expect("nesting further to tighten the remaining headroom must succeed");
@@ -176,9 +150,8 @@ fn a_save_path_near_the_hosts_real_path_limit_still_writes() {
         headroom = longest_valid_basename(&parent);
     }
     assert!(
-        (6..15).contains(&headroom),
-        "test setup must leave room for at least the one-digit `.tmp.<hex>` suffix (6 \
-         bytes) but less than the full-width one (15 bytes): {headroom} bytes"
+        (ONE_DIGIT_SUFFIX_LEN..FULL_SUFFIX_LEN).contains(&headroom),
+        "test setup must leave room for the one-digit suffix but not the full one: {headroom} bytes"
     );
 
     let save_path = parent.join("s");
@@ -187,8 +160,6 @@ fn a_save_path_near_the_hosts_real_path_limit_still_writes() {
         .expect("a save path this close to the host's real limit must itself be a valid path");
     std::fs::remove_file(&save_path).unwrap();
 
-    // Neither the first-guess candidate nor an empty stem carrying the
-    // widest suffix fits here; this is exactly the scenario under test.
     let naive_candidate = area(&file).first_name();
     assert!(
         std::fs::OpenOptions::new()
@@ -196,7 +167,7 @@ fn a_save_path_near_the_hosts_real_path_limit_still_writes() {
             .write(true)
             .open(&naive_candidate)
             .is_err_and(|err| err.kind() == std::io::ErrorKind::InvalidFilename),
-        "test setup must actually exceed the host's real limit, not merely approach it"
+        "the first-guess candidate must exceed the host limit"
     );
     let empty_stem_candidate = area(&file).first_name_under(0, WIDEST_HEX_DIGITS);
     assert!(
@@ -205,8 +176,7 @@ fn a_save_path_near_the_hosts_real_path_limit_still_writes() {
             .write(true)
             .open(&empty_stem_candidate)
             .is_err_and(|err| err.kind() == std::io::ErrorKind::InvalidFilename),
-        "test setup must exceed even the fixed-width suffix's own floor, not just the \
-         first-guess candidate, or this would not exercise the hex-digit shrink"
+        "an empty stem with the full suffix must exceed the host limit"
     );
 
     let (store, _, _) = saved_store();
@@ -220,24 +190,13 @@ fn a_save_path_near_the_hosts_real_path_limit_still_writes() {
     assert_eq!(reloaded.flash_image(), store.flash_image());
 }
 
-/// A host whose real per-component limit sits well under
-/// [`MAX_COMPONENT_LEN`]'s first guess -- eCryptfs caps a
-/// component at 143 bytes, not 255 -- must still get a valid staging
-/// sibling: the first-guess candidate is refused outright, and that must
-/// shrink the stem and retry rather than propagate immediately. Pinned
-/// through an injected `open` rather than a real eCryptfs mount, so this
-/// holds on every platform this crate builds for, not just whichever one
-/// happens to have such a filesystem mounted.
+/// Injected `open`, so the host limit holds on every platform.
 #[test]
 fn a_host_component_limit_below_the_first_guess_still_gets_a_staging_sibling() {
-    const HOST_NAME_MAX: usize = 143;
-    // Long enough that the 15-byte suffix carries it past the host's real
-    // limit, and short enough that `MAX_COMPONENT_LEN`'s 255-byte first
-    // guess does not truncate it at all, so the very first candidate is
-    // refused outright.
+    const ECRYPTFS_NAME_MAX: usize = 143;
     const BASENAME_LEN: usize = 131;
-    const { assert!(BASENAME_LEN + 15 > HOST_NAME_MAX) };
-    const { assert!(BASENAME_LEN < MAX_COMPONENT_LEN - 15) };
+    const { assert!(BASENAME_LEN + FULL_SUFFIX_LEN > ECRYPTFS_NAME_MAX) };
+    const { assert!(BASENAME_LEN < MAX_COMPONENT_LEN - FULL_SUFFIX_LEN) };
 
     let dir = TempDir::new("host-component-limit");
     let path = dir.join(&"s".repeat(BASENAME_LEN));
@@ -247,7 +206,7 @@ fn a_host_component_limit_below_the_first_guess_still_gets_a_staging_sibling() {
         let component_len = candidate
             .file_name()
             .map_or(0, |name| name.as_encoded_bytes().len());
-        if component_len > HOST_NAME_MAX {
+        if component_len > ECRYPTFS_NAME_MAX {
             return Err(std::io::Error::from(std::io::ErrorKind::InvalidFilename));
         }
         create_new_exclusive(candidate)
@@ -265,13 +224,12 @@ fn a_host_component_limit_below_the_first_guess_still_gets_a_staging_sibling() {
         .file_name()
         .map_or(0, |name| name.as_encoded_bytes().len());
     assert!(
-        final_component_len <= HOST_NAME_MAX,
+        final_component_len <= ECRYPTFS_NAME_MAX,
         "the staged sibling must respect the host's real limit: {final_component_len} bytes"
     );
     assert!(
-        final_component_len < BASENAME_LEN + 15,
-        "the stem must actually have been shortened from the first-guess candidate, not \
-         merely have succeeded by chance: {final_component_len} bytes"
+        final_component_len < BASENAME_LEN + FULL_SUFFIX_LEN,
+        "the stem must have been shortened below the first-guess length: {final_component_len} bytes"
     );
 
     let staged_path = staged.path.clone();
@@ -279,13 +237,8 @@ fn a_host_component_limit_below_the_first_guess_still_gets_a_staging_sibling() {
     std::fs::remove_file(staged_path).unwrap();
 }
 
-/// A directory with less room than the widest `.tmp.<hex>` suffix needs must
-/// still get a staging sibling: an empty stem alone is not enough once the
-/// suffix itself no longer fits, so the retries must narrow
-/// [`WIDEST_HEX_DIGITS`] too. Pinned through an injected
-/// `open` that refuses anything longer than the save path plus 6 bytes --
-/// tighter than even an empty stem's full-width suffix allows -- so only
-/// narrowing the hex component can satisfy it.
+/// Injected `open` refuses anything longer than the save path plus the
+/// one-digit suffix, which only a narrowed hex component can satisfy.
 #[test]
 fn a_directory_too_tight_for_the_fixed_width_suffix_still_gets_a_staging_sibling() {
     let dir = TempDir::new("hex-digit-shrink");
@@ -293,7 +246,7 @@ fn a_directory_too_tight_for_the_fixed_width_suffix_still_gets_a_staging_sibling
     let file = SaveFile::at(&path);
 
     let save_path_len = path.as_os_str().as_encoded_bytes().len();
-    let injected_limit = save_path_len + 6;
+    let injected_limit = save_path_len + ONE_DIGIT_SUFFIX_LEN;
 
     let refuse_long_paths = |candidate: &Path| -> std::io::Result<std::fs::File> {
         if candidate.as_os_str().as_encoded_bytes().len() > injected_limit {
@@ -317,8 +270,8 @@ fn a_directory_too_tight_for_the_fixed_width_suffix_still_gets_a_staging_sibling
         .file_name()
         .map_or(0, |name| name.as_encoded_bytes().len());
     assert!(
-        final_component_len <= original_basename_len + 6,
-        "the staged sibling's component must be at most 6 bytes over the save name: \
+        final_component_len <= original_basename_len + ONE_DIGIT_SUFFIX_LEN,
+        "the staged sibling's component must be at most the one-digit suffix over the save name: \
          {final_component_len} bytes vs a {original_basename_len}-byte save name"
     );
 

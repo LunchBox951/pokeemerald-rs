@@ -1,72 +1,44 @@
-//! Audio subsystem (S-3): the M4A ("MP2K"/"Sappy") sequence engine.
+//! M4A (MP2K/Sappy) sequencing and software mixing.
 //!
-//! This crate re-implements the *behaviour* of `pokeemerald`'s M4A sound
-//! driver `(behavioral-fidelity)` — no GBA emulation, no transliterated C
-//! `(no-verbatim)`. Slice 1 covers the DirectSound (PCM) music path; slice 2
-//! adds the four CGB PSG channels, LFO/vibrato, and pattern execution:
+//! This crate implements pokeemerald's sound-driver behaviour
+//! `(behavioral-fidelity)` without GBA emulation or transliterated C
+//! `(no-verbatim)`. [`Song`] holds a voicegroup and decoded
+//! tracks; [`Sequencer`] executes their events and drives an owned [`Mixer`].
 //!
-//! - [`sequence`] — the typed track model and the decoder that turns MP2K's
-//!   byte-coded command stream into [`Event`]s once, ahead of playback.
-//! - [`song`] — a loaded [`Song`] (voicegroup + decoded tracks); its
-//!   [`song::Instrument`] selects a DirectSound sample or a CGB PSG kind.
-//! - [`envelope`] — the per-voice DirectSound ADSR state machine.
-//! - [`voice`] — one playing DirectSound [`Voice`]: pitch-stepped, interpolated
-//!   sample playback shaped by an envelope.
-//! - [`cgb_pitch`] — MIDI key → CGB hardware frequency register / noise
-//!   control byte.
-//! - [`psg`] — the four CGB PSG waveform generators (square/wave/noise).
-//! - [`cgb_envelope`] — the CGB hardware's coarse `0..=15` envelope, plus its
-//!   `CgbPan`/`CgbModVol` stereo-routing helpers.
-//! - [`cgb_voice`] — one playing CGB [`cgb_voice::CgbVoice`], tying an
-//!   oscillator, envelope, and panning together.
-//! - [`mixer`] — the software [`Mixer`] that sums DirectSound and CGB voices
-//!   to interleaved stereo `f32` and clips.
-//! - [`sequencer`] — the owned [`Sequencer`] tying it together: the tick engine
-//!   (including LFO/vibrato, `PATT`/`PEND`/`REPT` pattern execution, and
-//!   `MEMACC`) plus an offline, device-free rendering path
-//!   ([`Sequencer::mix_into`]).
-//! - [`pitch`] — the MIDI-key → frequency table and the fixed-point step math.
+//! - [`sequence`] decodes MP2K track bytecode into typed [`Event`]s.
+//! - [`song`] models DirectSound and CGB instruments, including
+//!   [`KeySplit`], [`Rhythm`], and fixed-rate [`ToneData`].
+//! - [`sample`], [`pitch`], [`envelope`], and [`voice`] implement signed
+//!   8-bit PCM playback, pitch stepping, ADSR, and DirectSound [`Voice`]s.
+//! - [`cgb_pitch`], [`psg`], [`cgb_envelope`], and [`cgb_voice`] implement
+//!   the four CGB channels: two squares, programmable wave, and noise.
+//! - [`mixer`] allocates voices by priority and track, mixes DirectSound
+//!   and CGB output, and produces clipped interleaved stereo `f32` samples.
+//! - [`sequencer`] handles track timing, LFO modulation, pattern calls,
+//!   repeats, memory-accumulator mutations and conditional jumps, and the
+//!   `xIECV`/`xIECL` pseudo-echo commands.
 //!
-//! Slice 3 adds key-split (`TONEDATA_TYPE_SPL`) and rhythm
-//! (`TONEDATA_TYPE_RHY`) voice indirection ([`song::KeySplit`],
-//! [`song::Rhythm`]), fixed-rate DirectSound (`TONEDATA_TYPE_FIX`,
-//! [`song::ToneData::fixed`]), and the `xIECV`/`xIECL` pseudo-echo `XCMD`s
-//! for both DirectSound and CGB voices.
+//! [`Sequencer::mix_into`] renders whole frames offline, deterministically
+//! and without an audio device or wall clock. Each frame contains
+//! [`SAMPLES_PER_FRAME`] stereo sample frames. [`MIXER_RATE`] is the rounded
+//! nominal PCM rate, 13,379 Hz, matching the platform producer's
+//! `platform::AudioOutput::M4A_MIXER_RATE` contract.
 //!
-//! Slice 4 (S-3, issue #185) adds the master-mix reverb/pseudo-echo stage
-//! ([`reverb`], wired into [`mixer::Mixer`]) — a song's [`song::Song::reverb`]
-//! level seeds a feedback delay line the mixer reads before each frame's
-//! voices mix additively on top of it, producing the game's characteristic
-//! decaying echo. Continuous, frame-driven playback (the App advancing one
-//! frame of audio per game frame and looping via the song's own internal
-//! jump commands, per Discussion #227's owner decision) is the integration
-//! crate's job, not this one's — see `pokeemerald_rs::music`.
+//! The private `reverb` module supplies feedback reverb for the DirectSound
+//! mix; CGB output does not enter its delay ring. [`Song::with_reverb`] sets
+//! the song override and [`Song::reverb`] reads its level. Callers can supply
+//! a resolved session level through [`Sequencer::with_resolved_reverb`].
 //!
-//! Slice 5 (S-3, issue #394) executes the memory accumulator (`MEMACC`,
-//! `ply_memacc`) in the [`sequencer`]: both the cell-mutating ops and the
-//! conditional-jump family run, against an accumulator area owned per
-//! [`Sequencer`] rather than upstream's single global — see [`sequencer`]'s
-//! module docs for that divergence and why canonical song data cannot
-//! observe it.
+//! ## Limitations
 //!
-//! Everything renders at exactly [`pitch::MIXER_RATE`] (13379 Hz), the rate the
-//! `platform` producer expects; a unit test pins the two together.
-//!
-//! ## Out of scope for this slice
-//!
-//! Cross-song SFX priority/interruption (which needs the M4A player command
-//! interface `MPlayStart`/`m4aSongNumStart` layers this crate does not model)
-//! and compressed/reversed DirectSound waves. Within a single song,
-//! `ply_note`'s priority-driven channel allocation *is* implemented — see
-//! [`mixer`]'s module docs. `PORT` and every `XCMD` sub-command other than
-//! `xIECV`/`xIECL` are still only *decoded*, not executed, so the byte
-//! stream stays in sync; `tools/mid2agb` emits none of them, so no
-//! canonical song reaches those arms ([`sequencer`]'s module docs).
+//! Cross-song SFX priority/interruption and compressed or reversed
+//! DirectSound waves are not implemented. Single-song voice allocation is
+//! implemented. `PORT` and `XCMD` commands other than `xIECV`/`xIECL` are
+//! decoded but not executed.
 
-// This crate's docs cite upstream C symbols and hardware names heavily
-// (DirectSound, MP2K, SongHeader, …); backticking every prose mention adds
-// noise without clarity. The volume/pitch pipeline also has intrinsically
-// close names (volMR/volML, keyM/pitM) taken verbatim from the reference.
+// M4A documentation uses hardware names and upstream symbols in prose;
+// repetitive backticks obscure the explanation. Related volume and pitch
+// variables retain the driver's closely related names.
 #![allow(clippy::doc_markdown, clippy::similar_names)]
 
 pub mod cgb_envelope;
@@ -82,9 +54,9 @@ pub mod sequencer;
 pub mod song;
 pub mod voice;
 
-/// The master-mix reverb/pseudo-echo stage (S-3, issue #185). Crate-private:
-/// a [`song::Song`]'s [`song::Song::reverb`] level is the only public knob —
-/// see [`reverb::Reverb`]'s own docs and [`mixer::Mixer::with_reverb_level`].
+/// Internal DirectSound feedback reverb, configured from [`Song::reverb`]
+/// through `Mixer::with_reverb_level`. Public callers set the song override
+/// with [`Song::with_reverb`] or use [`Sequencer::with_resolved_reverb`].
 mod reverb;
 
 pub use cgb_envelope::{CgbAdsr, CgbEnvelope};
@@ -101,29 +73,39 @@ pub use song::{
 pub use voice::Voice;
 
 #[cfg(test)]
-// The round-trip through the ring buffer preserves samples bit-for-bit, so the
-// buffer equality check is exact on purpose.
+// The direct null backend copies samples without resampling; exact float
+// equality verifies that this ring-buffer round-trip leaves them unchanged.
 #[allow(clippy::float_cmp)]
 mod tests {
     use std::sync::Arc;
 
     use super::*;
 
-    /// The crate's render rate must equal the platform producer's nominal
-    /// rate, or every song would play at the wrong pitch and timing.
+    /// Pins the audio crate's nominal PCM rate to the platform producer contract.
     #[test]
     fn mixer_rate_matches_platform_producer() {
         assert_eq!(MIXER_RATE, platform::AudioOutput::M4A_MIXER_RATE);
     }
 
-    /// A tiny song built from a decoded byte program, rendered offline and fed
-    /// through the real (headless/null) `platform::AudioOutput` producer — the
-    /// end-to-end smoke path, with no audio device.
+    /// Decodes and renders a small song offline, then verifies an exact
+    /// producer-to-null-consumer round-trip without opening an audio device.
     #[test]
     fn renders_a_decoded_song_through_the_platform_producer() {
-        // VOICE 0; note N24 key 60 vel 127; W48; FINE.
         let bytes = [0xBD, 0x00, 0xE7, 60, 127, 0xB0, 0xB1];
         let events = decode_track(&bytes).expect("valid track");
+        assert_eq!(
+            events,
+            [
+                Event::Voice(0),
+                Event::Note {
+                    key: 60,
+                    velocity: 127,
+                    gate: 24
+                },
+                Event::Wait(96),
+                Event::Fine,
+            ]
+        );
 
         let wave = Arc::new(WaveData::one_shot(
             13_697_024,
@@ -136,7 +118,7 @@ mod tests {
         );
         let mut seq = Sequencer::new(song);
 
-        // Render two frames' worth of audio.
+        // Render two sequencer frames of interleaved stereo samples offline.
         let mut buffer = vec![0.0_f32; Sequencer::FRAME_SAMPLES * 2];
         seq.mix_into(&mut buffer);
         assert!(
@@ -144,8 +126,8 @@ mod tests {
             "expected audible output"
         );
 
-        // Push it through the platform producer and pull it back out via the
-        // null backend — exactly the path a real device callback would drain.
+        // Push the rendered samples into the ring, then drain its direct null
+        // consumer without a device callback or resampling.
         let mut output = platform::AudioOutput::null(Sequencer::FRAME_SAMPLES * 2);
         let produced = output.producer().push(&buffer);
         assert_eq!(produced, buffer.len());
