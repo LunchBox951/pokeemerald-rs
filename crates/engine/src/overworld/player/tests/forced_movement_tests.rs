@@ -612,13 +612,8 @@ fn placed(continued: bool, facing: Direction) -> PlayerState {
     }
 }
 
-/// Upstream places the player with `PLAYER_AVATAR_FLAG_CONTROLLABLE` set
-/// (`InitPlayerAvatar`, `field_player_avatar.c:1404-1410`; the resumed-save
-/// path restores it, `:896-899`), and `GetForcedMovementByMetatileBehavior`
-/// dispatches only while that flag is clear (`:416-425`). Only a keypad poll
-/// that starts a step clears it (`:401-405`). A warp or save-continue placement
-/// onto a dispatched tile therefore stays controllable: a `None` poll idles and
-/// the first directional poll is an ordinary manual step `(behavioral-fidelity)`.
+/// Placement onto a dispatched forced tile stays controllable: a `None` poll
+/// idles and the first directional poll is a manual step (`field_player_avatar.c:416-425`, `:1404-1410`).
 #[test]
 fn placement_onto_a_supported_forced_tile_stays_controllable_like_upstream() {
     for continued in [false, true] {
