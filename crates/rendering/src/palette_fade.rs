@@ -8,16 +8,13 @@
 //! `BlendPalette`'s per-channel signed delta, `base + (((target - base) *
 //! coeff) >> 4)`, computed over 5-bit `PlttData` channels
 //! (`pokeemerald/src/util.c:264-278`), upstream's native palette-RAM
-//! precision: a nonzero coefficient compresses the retained composed
-//! [`Framebuffer`]'s 8-bit channel to 5 bits, blends, and expands the result
-//! back (`crate::palette::compress_8_to_5`/`expand_5_to_8`). Coefficient 0
-//! is the identity on the 8-bit channel directly, without that round-trip,
-//! because upstream's own coefficient-0 `BlendPalette` call leaves an
-//! unfaded palette entry untouched rather than rounding it onto the nearest
-//! 5-bit value, and this primitive's only retained state is the crate's
-//! 8-bit [`Framebuffer`], which can hold precision (an alpha-blended pixel
-//! is not generally 5-bit-aligned) that upstream never had to represent at
-//! coefficient 0. Coefficient 16 lands exactly on the target.
+//! precision: a nonzero coefficient compresses a sampled colour's 8-bit
+//! channel to 5 bits, blends, and expands the result back
+//! (`crate::palette::compress_8_to_5`/`expand_5_to_8`). A palette colour is
+//! already 5-bit aligned, so that round-trip is lossless at coefficient 0;
+//! the identity there is kept exact on the 8-bit channel anyway so a value
+//! that is not palette-aligned passes through untouched. Coefficient 16
+//! lands exactly on the target.
 //!
 //! This is a CPU blend, not a hardware register effect, and it is
 //! implemented independently of [`crate::effects::brighten`]/
@@ -26,18 +23,14 @@
 //! precision; both diverge from this blend's 5-bit round-trip once the
 //! coefficient is nonzero (see this module's tests).
 //!
-//! Known representation limit: upstream blends separate BG and OBJ palette
-//! banks on alternating calls, so for one call at a time the two banks can
-//! sit at different coefficients before the next call catches the other up,
-//! and that blend happens before layer composition and any hardware color
-//! effect. This primitive instead blends the single already-composed
-//! [`Framebuffer`] uniformly at the current coefficient on every call — the
-//! BG/OBJ alternation still governs exactly when that coefficient steps and
-//! when finishing is polled, matched call-for-call against upstream
-//! (see [`NormalPaletteFade`]'s tests), but the crate has no per-layer
-//! palette buffer to blend separately. Reproducing hardware's exact BG/OBJ
-//! pixel staggering, or ordering this blend against a simultaneously active
-//! hardware color effect, is outside this primitive's representation.
+//! The fade drives palette state, not pixels. Upstream blends the BG and OBJ
+//! palette halves on alternating calls, so for one call at a time the two
+//! sit at different coefficients. [`NormalPaletteFade`] therefore holds one
+//! [`PaletteFadeBlend`] per half, exposed independently
+//! ([`NormalPaletteFade::bg_blend`], [`NormalPaletteFade::obj_blend`]) and as
+//! a compositor [`PaletteStage`] ([`NormalPaletteFade::palette_stage`]), so
+//! the blend applies to palette colours before composition and any hardware
+//! color effect.
 //!
 //! Out of scope for this primitive: palette masks other than all, nonzero
 //! delay, other start/target coefficients, `FAST_FADE`/`HARDWARE_FADE`,
@@ -45,7 +38,7 @@
 //! caller, and all flow-level wiring (holding a scene through the fade,
 //! dispatching once it completes).
 
-use crate::framebuffer::Framebuffer;
+use crate::compositor::{PaletteColorTransform, PaletteStage};
 use crate::palette::{compress_8_to_5, expand_5_to_8, Rgb888};
 
 /// The blend coefficient upstream calls `deltaY`: the fixed per-pair step
@@ -114,7 +107,47 @@ enum Half {
     Object,
 }
 
-/// A normal CPU palette fade over a retained composed [`Framebuffer`].
+/// One palette half's current blend: the target and `BlendPalette`
+/// coefficient (`gPaletteFade.y` at that half's last call) it applies to the
+/// colours of that half.
+///
+/// As a [`PaletteColorTransform`] it maps a palette colour through
+/// `BlendPalette`'s signed 5-bit per-channel delta
+/// (`pokeemerald/src/util.c:264-278`), before RGB888 composition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PaletteFadeBlend {
+    target: PaletteFadeTarget,
+    coefficient: u8,
+}
+
+impl PaletteFadeBlend {
+    const fn new(target: PaletteFadeTarget) -> Self {
+        Self {
+            target,
+            coefficient: 0,
+        }
+    }
+
+    /// The colour this blend fades toward.
+    #[must_use]
+    pub const fn target(self) -> PaletteFadeTarget {
+        self.target
+    }
+
+    /// The blend coefficient, 0 (unfaded) to 16 (the target).
+    #[must_use]
+    pub const fn coefficient(self) -> u8 {
+        self.coefficient
+    }
+}
+
+impl PaletteColorTransform for PaletteFadeBlend {
+    fn transform(&self, color: Rgb888) -> Rgb888 {
+        blend_pixel(color, self.target, self.coefficient)
+    }
+}
+
+/// A normal CPU palette fade driving independent BG and OBJ palette blends.
 ///
 /// Construct with [`NormalPaletteFade::begin`], which performs the
 /// immediate first update `BeginNormalPaletteFade` runs before returning
@@ -123,13 +156,11 @@ enum Half {
 /// [`PaletteFadeStatus::Done`].
 #[derive(Debug, Clone)]
 pub struct NormalPaletteFade {
-    /// The unfaded composed frame every update blends from, mirroring
-    /// `gPlttBufferUnfaded` (`pokeemerald/src/util.c:269-274`).
-    source: Framebuffer,
-    /// The current faded frame, mirroring `gPlttBufferFaded`.
-    output: Framebuffer,
-    target: PaletteFadeTarget,
-    /// The current blend coefficient, `gPaletteFade.y`.
+    /// The BG half's blend, updated on background calls.
+    bg: PaletteFadeBlend,
+    /// The OBJ half's blend, updated on object calls.
+    obj: PaletteFadeBlend,
+    /// The scheduler's current coefficient, `gPaletteFade.y`.
     coefficient: u8,
     /// The half the next processing call handles.
     next_half: Half,
@@ -143,22 +174,20 @@ pub struct NormalPaletteFade {
 }
 
 impl NormalPaletteFade {
-    /// Begin a normal palette fade of `framebuffer` toward `target`,
-    /// equivalent to `BeginNormalPaletteFade(PALETTES_ALL, 0, 0, 16,
-    /// blendColor)` (`pokeemerald/src/palette.c:156-199`).
+    /// Begin a normal palette fade toward `target`, equivalent to
+    /// `BeginNormalPaletteFade(PALETTES_ALL, 0, 0, 16, blendColor)`
+    /// (`pokeemerald/src/palette.c:156-199`).
     ///
     /// Performs the immediate first update before returning, exactly as
     /// upstream's `BeginNormalPaletteFade` calls `UpdatePaletteFade` once
-    /// before it returns (`pokeemerald/src/palette.c:189`). Because the
-    /// blend's coefficient starts at 0 and 0 is this blend's identity (see
-    /// the module docs), that immediate call leaves `framebuffer`'s pixels
-    /// unchanged.
+    /// before it returns (`pokeemerald/src/palette.c:189`): the BG half
+    /// blends at coefficient 0 while the OBJ half waits for the next call.
     #[must_use]
-    pub fn begin(framebuffer: Framebuffer, target: PaletteFadeTarget) -> Self {
+    pub fn begin(target: PaletteFadeTarget) -> Self {
+        let blend = PaletteFadeBlend::new(target);
         let mut fade = Self {
-            source: framebuffer.clone(),
-            output: framebuffer,
-            target,
+            bg: blend,
+            obj: blend,
             coefficient: 0,
             next_half: Half::Background,
             finishing: false,
@@ -176,16 +205,26 @@ impl NormalPaletteFade {
         self.advance()
     }
 
-    /// The current faded frame, ready for presentation.
+    /// The BG half's current blend.
     #[must_use]
-    pub fn framebuffer(&self) -> &Framebuffer {
-        &self.output
+    pub const fn bg_blend(&self) -> PaletteFadeBlend {
+        self.bg
     }
 
-    /// Consume the fade, returning its current (or final) frame.
+    /// The OBJ half's current blend.
     #[must_use]
-    pub fn into_framebuffer(self) -> Framebuffer {
-        self.output
+    pub const fn obj_blend(&self) -> PaletteFadeBlend {
+        self.obj
+    }
+
+    /// The current blends as the compositor's palette stage, applied to
+    /// palette colours before composition and any hardware color effect.
+    #[must_use]
+    pub fn palette_stage(&self) -> PaletteStage<'_> {
+        PaletteStage {
+            bg: Some(&self.bg),
+            obj: Some(&self.obj),
+        }
     }
 
     /// Whether the fade has finished (`!gPaletteFade.active`).
@@ -210,7 +249,11 @@ impl NormalPaletteFade {
     /// coefficient, then, only once both halves of the pair have run, arm
     /// finishing at the target coefficient or step toward it.
     fn process_half(&mut self) {
-        self.output = blend_framebuffer(&self.source, self.target, self.coefficient);
+        let half = match self.next_half {
+            Half::Background => &mut self.bg,
+            Half::Object => &mut self.obj,
+        };
+        half.coefficient = self.coefficient;
         self.next_half = match self.next_half {
             Half::Background => Half::Object,
             Half::Object => {
@@ -240,28 +283,9 @@ impl NormalPaletteFade {
     }
 }
 
-/// `BlendPalette`'s per-channel signed delta
-/// (`pokeemerald/src/util.c:264-278`), applied to every pixel of `source`
-/// (see the module docs for the coefficient-0 identity and the 5-bit
-/// round-trip every nonzero coefficient blends through).
-fn blend_framebuffer(source: &Framebuffer, target: PaletteFadeTarget, coeff: u8) -> Framebuffer {
-    let mut blended = source.clone();
-    for y in 0..source.height() {
-        for x in 0..source.width() {
-            let Some(pixel) = source.pixel(x, y) else {
-                continue;
-            };
-            blended.set_pixel(x, y, blend_pixel(pixel, target, coeff));
-        }
-    }
-    blended
-}
-
-/// Blends one pixel, matching `BlendPalette`'s own coefficient-0 shortcut:
-/// the caller never darkens/lightens the unfaded buffer at `y == 0`
-/// (`pokeemerald/src/util.c:269-274`), so this returns `pixel` untouched
-/// rather than rounding it through the 5-bit compress/expand round-trip
-/// every nonzero coefficient uses.
+/// Blends one colour per `BlendPalette` (`pokeemerald/src/util.c:264-278`).
+/// Coefficient 0 returns `pixel` untouched rather than rounding it through
+/// the 5-bit compress/expand round-trip every nonzero coefficient uses.
 fn blend_pixel(pixel: Rgb888, target: PaletteFadeTarget, coeff: u8) -> Rgb888 {
     if coeff == 0 {
         return pixel;
@@ -309,24 +333,19 @@ mod tests {
         blend_channel, blend_pixel, Half, NormalPaletteFade, PaletteFadeStatus, PaletteFadeTarget,
         DELTA_Y, TARGET_Y,
     };
-    use crate::framebuffer::Framebuffer;
+    use crate::compositor::PaletteColorTransform;
     use crate::palette::{Bgr555, Rgb888};
 
-    fn framebuffer_of(color: Rgb888) -> Framebuffer {
-        let mut fb = Framebuffer::new();
-        fb.fill(color);
-        fb
-    }
-
-    fn gray(v: u8) -> Rgb888 {
-        Rgb888 { r: v, g: v, b: v }
-    }
-
-    /// A pixel built from 5-bit BGR555 channels, exactly representable at
-    /// `BlendPalette`'s native precision (unlike an arbitrary 8-bit
-    /// [`Rgb888`] literal).
     fn pixel5(r: u8, g: u8, b: u8) -> Rgb888 {
         Bgr555::from_channels(r, g, b).to_rgb888()
+    }
+
+    /// The BG and OBJ coefficients, in that order.
+    fn coefficients(fade: &NormalPaletteFade) -> (u8, u8) {
+        (
+            fade.bg_blend().coefficient(),
+            fade.obj_blend().coefficient(),
+        )
     }
 
     // --- begin/update status trace: BG/OBJ cadence, coefficient steps, four
@@ -335,71 +354,76 @@ mod tests {
 
     #[test]
     fn begin_performs_the_immediate_first_background_update() {
-        let fade = NormalPaletteFade::begin(framebuffer_of(gray(20)), PaletteFadeTarget::White);
+        let fade = NormalPaletteFade::begin(PaletteFadeTarget::White);
         // The immediate call inside `begin` processes the background half at
         // coefficient 0, then hands off to the object half without moving
         // the coefficient yet.
         assert_eq!(fade.next_half, Half::Object);
         assert_eq!(fade.coefficient, 0);
         assert!(!fade.is_done());
+        assert_eq!(coefficients(&fade), (0, 0));
     }
 
     #[test]
-    fn begin_at_coefficient_zero_is_the_identity_even_for_a_non_palette_aligned_value() {
-        // An effect-produced composited value (e.g. an alpha-blend output)
-        // is not generally aligned to a 5-bit palette grid. Coefficient 0
-        // must leave it untouched exactly the way upstream's own
-        // coefficient-0 BlendPalette call leaves an unfaded palette entry
-        // untouched, rather than rounding it onto the nearest 5-bit value.
-        let fade = NormalPaletteFade::begin(
-            framebuffer_of(Rgb888 { r: 127, g: 0, b: 0 }),
-            PaletteFadeTarget::White,
-        );
-        assert_eq!(
-            fade.framebuffer().pixel(0, 0),
-            Some(Rgb888 { r: 127, g: 0, b: 0 })
-        );
+    fn begin_bank_states_are_the_identity_on_palette_colours() {
+        for target in [PaletteFadeTarget::White, PaletteFadeTarget::Black] {
+            let fade = NormalPaletteFade::begin(target);
+            assert_eq!(fade.bg_blend().target(), target);
+            assert_eq!(fade.obj_blend().target(), target);
+            assert_eq!(coefficients(&fade), (0, 0));
+            for r in 0..32 {
+                let color = pixel5(r, 31 - r, r / 2);
+                assert_eq!(fade.bg_blend().transform(color), color);
+                assert_eq!(fade.obj_blend().transform(color), color);
+            }
+        }
+    }
+
+    #[test]
+    fn coefficient_zero_leaves_a_non_palette_aligned_colour_untouched() {
+        let fade = NormalPaletteFade::begin(PaletteFadeTarget::White);
+        let color = Rgb888 { r: 127, g: 0, b: 0 };
+        assert_eq!(fade.bg_blend().transform(color), color);
     }
 
     #[test]
     fn update_alternates_background_and_object_halves_before_stepping_the_coefficient() {
-        let mut fade = NormalPaletteFade::begin(framebuffer_of(gray(0)), PaletteFadeTarget::White);
+        let mut fade = NormalPaletteFade::begin(PaletteFadeTarget::White);
         // begin() already ran the first (background) half.
-        let mut halves_and_coefficients = vec![(fade.next_half, fade.coefficient)];
+        let mut trace = vec![(fade.next_half, fade.coefficient, coefficients(&fade))];
         for _ in 0..17 {
             fade.update();
-            halves_and_coefficients.push((fade.next_half, fade.coefficient));
+            trace.push((fade.next_half, fade.coefficient, coefficients(&fade)));
         }
-        let expected: Vec<(Half, u8)> = [
-            (Half::Object, 0),
-            (Half::Background, 2),
-            (Half::Object, 2),
-            (Half::Background, 4),
-            (Half::Object, 4),
-            (Half::Background, 6),
-            (Half::Object, 6),
-            (Half::Background, 8),
-            (Half::Object, 8),
-            (Half::Background, 10),
-            (Half::Object, 10),
-            (Half::Background, 12),
-            (Half::Object, 12),
-            (Half::Background, 14),
-            (Half::Object, 14),
-            (Half::Background, 16),
-            (Half::Object, 16),
-            (Half::Background, 16),
+        let expected: Vec<(Half, u8, (u8, u8))> = [
+            (Half::Object, 0, (0, 0)),
+            (Half::Background, 2, (0, 0)),
+            (Half::Object, 2, (2, 0)),
+            (Half::Background, 4, (2, 2)),
+            (Half::Object, 4, (4, 2)),
+            (Half::Background, 6, (4, 4)),
+            (Half::Object, 6, (6, 4)),
+            (Half::Background, 8, (6, 6)),
+            (Half::Object, 8, (8, 6)),
+            (Half::Background, 10, (8, 8)),
+            (Half::Object, 10, (10, 8)),
+            (Half::Background, 12, (10, 10)),
+            (Half::Object, 12, (12, 10)),
+            (Half::Background, 14, (12, 12)),
+            (Half::Object, 14, (14, 12)),
+            (Half::Background, 16, (14, 14)),
+            (Half::Object, 16, (16, 14)),
+            (Half::Background, 16, (16, 16)),
         ]
         .to_vec();
-        assert_eq!(halves_and_coefficients, expected);
+        assert_eq!(trace, expected);
         assert_eq!(TARGET_Y, 16);
         assert_eq!(DELTA_Y, 2);
     }
 
     #[test]
     fn full_trace_from_begin_is_22_actives_then_done() {
-        let mut fade = NormalPaletteFade::begin(framebuffer_of(gray(10)), PaletteFadeTarget::Black);
-        // `begin` already consumed the first of the 22 active calls.
+        let mut fade = NormalPaletteFade::begin(PaletteFadeTarget::Black);
         let mut statuses = Vec::new();
         loop {
             let status = fade.update();
@@ -421,57 +445,92 @@ mod tests {
     }
 
     #[test]
+    fn finishing_polls_keep_both_banks_at_the_target_coefficient() {
+        let mut fade = NormalPaletteFade::begin(PaletteFadeTarget::White);
+        // Run until the object half completes the 16 coefficient and arms
+        // finishing.
+        while !fade.finishing {
+            fade.update();
+        }
+        assert_eq!(coefficients(&fade), (16, 16));
+        for _ in 0..4 {
+            assert_eq!(fade.update(), PaletteFadeStatus::Active);
+            assert_eq!(coefficients(&fade), (16, 16));
+        }
+        assert_eq!(fade.update(), PaletteFadeStatus::Done);
+        assert_eq!(coefficients(&fade), (16, 16));
+    }
+
+    #[test]
     fn updates_after_done_stay_done() {
-        let mut fade = NormalPaletteFade::begin(framebuffer_of(gray(0)), PaletteFadeTarget::White);
+        let mut fade = NormalPaletteFade::begin(PaletteFadeTarget::White);
         while fade.update() != PaletteFadeStatus::Done {}
         assert_eq!(fade.update(), PaletteFadeStatus::Done);
         assert_eq!(fade.update(), PaletteFadeStatus::Done);
+        assert_eq!(coefficients(&fade), (16, 16));
     }
 
     #[test]
-    fn finished_fade_reaches_the_exact_target_color() {
-        let mut fade = NormalPaletteFade::begin(
-            framebuffer_of(Rgb888 { r: 10, g: 20, b: 5 }),
-            PaletteFadeTarget::White,
+    fn finished_bank_states_reach_the_exact_target_colour() {
+        for (target, expected) in [
+            (
+                PaletteFadeTarget::White,
+                Rgb888 {
+                    r: 255,
+                    g: 255,
+                    b: 255,
+                },
+            ),
+            (PaletteFadeTarget::Black, Rgb888 { r: 0, g: 0, b: 0 }),
+        ] {
+            let mut fade = NormalPaletteFade::begin(target);
+            while fade.update() != PaletteFadeStatus::Done {}
+            for color in [pixel5(1, 4, 0), pixel5(31, 0, 17), Rgb888::BLACK] {
+                assert_eq!(fade.bg_blend().transform(color), expected);
+                assert_eq!(fade.obj_blend().transform(color), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn bank_transforms_are_stateless_and_do_not_compound() {
+        // Each transform blends from the original palette colour at its
+        // bank's own coefficient, never from its previous output.
+        let mut fade = NormalPaletteFade::begin(PaletteFadeTarget::White);
+        fade.update(); // OBJ at 0, scheduler at 2
+        fade.update(); // BG at 2, scheduler stays 2
+        assert_eq!(coefficients(&fade), (2, 0));
+        let color = pixel5(16, 16, 16);
+        let once = fade.bg_blend().transform(color);
+        assert_eq!(once, pixel5(17, 17, 17));
+        assert_eq!(fade.bg_blend().transform(color), once);
+        assert_eq!(fade.obj_blend().transform(color), color);
+    }
+
+    #[test]
+    fn palette_stage_exposes_the_current_independent_bank_states() {
+        let mut fade = NormalPaletteFade::begin(PaletteFadeTarget::White);
+        fade.update();
+        fade.update();
+        let color = pixel5(16, 16, 16);
+        let snapshot = fade.bg_blend();
+        {
+            let stage = fade.palette_stage();
+            assert_eq!(
+                stage.bg.map(|t| t.transform(color)),
+                Some(fade.bg_blend().transform(color))
+            );
+            assert_eq!(stage.obj.map(|t| t.transform(color)), Some(color));
+        }
+        fade.update(); // OBJ catches up to 2
+        assert_eq!(coefficients(&fade), (2, 2));
+        let stage = fade.palette_stage();
+        assert_eq!(
+            stage.obj.map(|t| t.transform(color)),
+            Some(pixel5(17, 17, 17))
         );
-        while fade.update() != PaletteFadeStatus::Done {}
-        assert!(fade.framebuffer().pixels().iter().all(|&p| p
-            == Rgb888 {
-                r: 255,
-                g: 255,
-                b: 255
-            }));
-
-        let mut fade = NormalPaletteFade::begin(
-            framebuffer_of(Rgb888 { r: 10, g: 20, b: 5 }),
-            PaletteFadeTarget::Black,
-        );
-        while fade.update() != PaletteFadeStatus::Done {}
-        assert!(fade
-            .framebuffer()
-            .pixels()
-            .iter()
-            .all(|&p| p == Rgb888 { r: 0, g: 0, b: 0 }));
-    }
-
-    #[test]
-    fn source_is_retained_so_repeated_coefficients_do_not_compound() {
-        // The background and object halves of one pair both blend at the
-        // *same* coefficient from the retained source, so the framebuffer
-        // must be identical after each half of a pair, never doubled.
-        let mut fade = NormalPaletteFade::begin(framebuffer_of(gray(16)), PaletteFadeTarget::White);
-        let after_background = fade.framebuffer().pixel(0, 0);
-        fade.update(); // the paired object half, same coefficient
-        let after_object = fade.framebuffer().pixel(0, 0);
-        assert_eq!(after_background, after_object);
-    }
-
-    #[test]
-    fn into_framebuffer_returns_the_current_frame() {
-        let fade = NormalPaletteFade::begin(framebuffer_of(gray(1)), PaletteFadeTarget::Black);
-        let expected = fade.framebuffer().clone();
-        let fb = fade.into_framebuffer();
-        assert_eq!(fb.pixels(), expected.pixels());
+        // The earlier copy is a value snapshot, unaffected by the update.
+        assert_eq!(snapshot.coefficient(), 2);
     }
 
     // --- BlendPalette oracle: white and black targets, representative and
