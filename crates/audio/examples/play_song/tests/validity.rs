@@ -492,3 +492,50 @@ fn an_in_flight_mark_does_not_prove_a_usable_callback_in_the_submitted_span() {
     // A mark at or before `from` leaves a later span entirely stale.
     assert!(!usable_callback_in_span(300, 400, 300));
 }
+
+/// Usable timestamps past the derived tail that still show the target short
+/// prove the tail under-estimated: with a 200 ms tail, 50 ms callbacks usable
+/// through 500 ms and stale from 550 ms, the first stale callback must not
+/// finish the wait; the fallback tail runs again from the last usable reading.
+#[test]
+fn a_usable_reading_past_the_tail_restarts_the_fallback() {
+    let policy = RetryPolicy {
+        interval: std::time::Duration::from_millis(10),
+        max_wait: std::time::Duration::from_secs(1),
+    };
+    let start = std::time::Instant::now();
+    let clock = Rc::new(RefCell::new(start));
+    let submitted = Cell::new(4_u64);
+    let usable = Cell::new(4_u64);
+
+    let result = wait_for_measured_tail(
+        1_000_000,
+        std::time::Duration::from_millis(200),
+        48_000,
+        &policy,
+        || Some(progress_usable(0, submitted.get(), usable.get())),
+        || 0,
+        || *clock.borrow(),
+        |duration| {
+            *clock.borrow_mut() += duration;
+            let ms = clock.borrow().duration_since(start).as_millis();
+            if ms.is_multiple_of(50) {
+                // One 50 ms callback (2 400 frames at 48 kHz).
+                submitted.set(submitted.get() + 2_400);
+                if ms <= 500 {
+                    usable.set(submitted.get());
+                }
+            }
+        },
+    );
+    let held = clock.borrow().duration_since(start);
+
+    assert!(
+        result.is_ok(),
+        "stale live callbacks still finish in budget"
+    );
+    assert!(
+        held >= std::time::Duration::from_millis(700),
+        "the tail must run again from the 500 ms reading; finished at {held:?}"
+    );
+}

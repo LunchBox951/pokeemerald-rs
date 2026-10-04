@@ -552,7 +552,8 @@ fn usable_callback_in_span(from: u64, to: u64, usable_through: u64) -> bool {
 /// together counting only on the poll that saw it, which may finish the wait
 /// only at the deadline) plus two polls means live callbacks,
 /// and once `derived_tail` has run from the start of the wait, or from the
-/// callbacks that resumed after a stall, the wait finishes as [`wait_for_device_tail`] would. A gap that outruns both the
+/// callbacks that resumed after a stall, or from a usable reading still short
+/// once the tail had run from the start, the wait finishes as [`wait_for_device_tail`] would. A gap that outruns both the
 /// recent cadence and the playback the previous advance covered by a tenth of
 /// `derived_tail` (and over a quarter of it, or half before a cadence is seen)
 /// is a stall: evidence and cadence restart from the playback the resumed
@@ -566,6 +567,10 @@ fn usable_callback_in_span(from: u64, to: u64, usable_through: u64) -> bool {
 #[expect(
     clippy::too_many_arguments,
     reason = "the injected clock, sleep, and stream hooks are the seam the tests drive"
+)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one poll loop whose evidence, cadence, and tail state interlock per poll"
 )]
 fn wait_for_measured_tail(
     target: u64,
@@ -612,11 +617,20 @@ fn wait_for_measured_tail(
         // nothing about the frames submitted; once they land it discards the
         // pending stale evidence.
         let in_flight = usable_through > submitted;
-        if last_submitted
-            .is_some_and(|prev| usable_callback_in_span(prev, submitted, usable_through))
+        if let Some(prev) =
+            last_submitted.filter(|&prev| usable_callback_in_span(prev, submitted, usable_through))
         {
             (first_stale, last_stale, max_stale_advance) = (None, None, Duration::ZERO);
             after_stall = false;
+            // A usable reading still short once the tail has run from the
+            // start proves the tail under-estimated: run it again from that
+            // reading, credited like an advance no later than the playback
+            // its callback ended past the previous poll.
+            let played = frames_duration(usable_through - prev, device_sample_rate);
+            let read_at = current.min(last_poll + played);
+            if read_at >= started + derived_tail {
+                tail_started = tail_started.max(read_at);
+            }
         }
         let mut pause_sample = None;
         if let Some(previous) = last_submitted.filter(|&last| submitted > last) {
@@ -687,9 +701,10 @@ fn wait_for_measured_tail(
         let callbacks_alive = evidence
             && last_advance
                 .is_some_and(|last| current.duration_since(last) <= cadence + policy.interval * 2);
-        // The tail runs from `started`, or from the resumption after a stall;
-        // a usable timestamp does not restart it, so a valid-then-stale
-        // device keeps its budget. A callback in flight vetoes the finish.
+        // The tail runs from `started`, from the resumption after a stall, or
+        // from a usable reading that came after it had run; an earlier usable
+        // reading does not restart it, so a valid-then-stale device keeps its
+        // budget. A callback in flight vetoes the finish.
         let tail_due = tail_started + derived_tail;
         let stale_tail_elapsed = !in_flight && callbacks_alive && current >= tail_due;
         if current >= deadline {
