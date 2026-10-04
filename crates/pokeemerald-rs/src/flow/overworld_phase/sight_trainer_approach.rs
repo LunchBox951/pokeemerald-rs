@@ -72,13 +72,8 @@ use super::{ActiveBattle, OverworldPhase};
 const EXCLAMATION_ICON_FRAMES: u8 = 60;
 
 /// Frames between the icon's last animation frame and the first walked tile:
-/// `ContinueAnim` spends its own call dispatching `ANIMCMD_END`
-/// (`sprite.c:943-965`), `SpriteCB_TrainerIcons` sees `animEnded` and calls
-/// `FieldEffectStop` on the next frame (`trainer_see.c:745-752`; callbacks run
-/// before animation, `sprite.c:317-320`), and `WaitTrainerExclamationMark`
-/// observes the removal on the frame after that (`:471-487`; tasks run before
-/// callbacks, `overworld.c:1467-1469`) and chains into the first tile
-/// (`:438-448`).
+/// `ANIMCMD_END` dispatch, the sprite callback's removal, then the trainer
+/// task observing it (`sprite.c:943-965`; `trainer_see.c:745-752`, `:438-448`).
 const EXCLAMATION_DISPATCH_FRAMES: u8 = 3;
 
 /// Non-icon frames of [`ApproachStage::LockHandoff`] for a player standing

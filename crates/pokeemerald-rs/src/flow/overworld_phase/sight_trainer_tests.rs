@@ -1649,14 +1649,8 @@ fn a_trigger_frame_that_drains_the_step_still_spends_the_after_drain_handoff() {
     );
 }
 
-/// Upstream's frames between the icon's sixtieth animation frame and the
-/// first walked tile, from the production trigger: `ContinueAnim` spends its
-/// own call dispatching `ANIMCMD_END` (`sprite.c:943-965`), the sprite
-/// callback removes the icon the frame after (`trainer_see.c:745-752`, sprite
-/// callbacks run before animation, `sprite.c:317-320`), and the trainer task
-/// -- which runs before the callbacks (`overworld.c:1467-1469`) -- observes
-/// the removal the frame after that and chains straight into the first tile
-/// (`trainer_see.c:438-448`).
+/// The production counterpart of `EXCLAMATION_DISPATCH_FRAMES`: frames between
+/// the icon's sixtieth animation frame and the first walked tile.
 const ICON_DISPATCH_FRAMES: usize = 3;
 
 /// The trigger-to-first-tile count in production order: the real cone, the
