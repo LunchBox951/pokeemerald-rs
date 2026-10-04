@@ -5,7 +5,7 @@ use super::shared::{empty_sprite_layer, opaque_affine_bg_fixture, opaque_bg_fixt
 use crate::affine::AffineMatrix;
 use crate::bg_affine::{AffineBgLayer, Overflow};
 use crate::oam::{OamEntry, ObjShape};
-use crate::palette::{Bgr555, Palette};
+use crate::palette::{Bgr555, Palette, Rgb888};
 use crate::sprite::SpriteLayer;
 use crate::tile::{BitDepth, Tileset};
 
@@ -285,4 +285,102 @@ fn disabled_affine_bg_slot_contributes_nothing() {
 
     let fb = compose_frame(&sprites, &slots);
     assert_eq!(fb.pixel(0, 0), Some(crate::palette::Rgb888::BLACK));
+}
+
+fn single_color_frame(color: u8) -> crate::framebuffer::Framebuffer {
+    let (tiles, palette, map) = opaque_bg_fixture(color);
+    let layer = crate::bg::BgLayer::new(&tiles, &palette, &map);
+    let entries: [OamEntry; 0] = [];
+    let no_sprite_tiles = Tileset::decode(BitDepth::Bpp4, &[]).unwrap();
+    let sprites = empty_sprite_layer(&entries, &no_sprite_tiles);
+    compose_frame(&sprites, &[BgSlot::new(layer, 0, 0, 0, 0, true)])
+}
+
+#[test]
+fn fifth_enabled_slot_is_ignored() {
+    let fx: Vec<_> = (1..=5).map(opaque_bg_fixture).collect();
+    let layers: Vec<_> = fx
+        .iter()
+        .map(|(t, p, m)| crate::bg::BgLayer::new(t, p, m))
+        .collect();
+    // Four distinct BGs at priority 3, then a fifth (index 4 -> BG0) at
+    // priority 0 that would win if admitted.
+    let slots = [
+        BgSlot::new(layers[0], 0, 3, 0, 0, true),
+        BgSlot::new(layers[1], 1, 3, 0, 0, true),
+        BgSlot::new(layers[2], 2, 3, 0, 0, true),
+        BgSlot::new(layers[3], 3, 3, 0, 0, true),
+        BgSlot::new(layers[4], 4, 0, 0, 0, true),
+    ];
+    let entries: [OamEntry; 0] = [];
+    let no_sprite_tiles = Tileset::decode(BitDepth::Bpp4, &[]).unwrap();
+    let sprites = empty_sprite_layer(&entries, &no_sprite_tiles);
+    let five = compose_frame(&sprites, &slots);
+    let four = compose_frame(&sprites, &slots[..4]);
+    assert_eq!(five.pixels(), four.pixels());
+    assert_eq!(
+        five.pixel(0, 0),
+        Some(Bgr555::from_channels(1, 0, 0).to_rgb888())
+    );
+}
+
+#[test]
+fn duplicate_masked_identity_first_slot_wins() {
+    let (ta, pa, ma) = opaque_bg_fixture(1);
+    let (tb, pb, mb) = opaque_bg_fixture(2);
+    let a = crate::bg::BgLayer::new(&ta, &pa, &ma);
+    let b = crate::bg::BgLayer::new(&tb, &pb, &mb);
+    let entries: [OamEntry; 0] = [];
+    let no_sprite_tiles = Tileset::decode(BitDepth::Bpp4, &[]).unwrap();
+    let sprites = empty_sprite_layer(&entries, &no_sprite_tiles);
+    // Index 4 masks to BG0; the better-priority duplicate must not win.
+    let dup = compose_frame(
+        &sprites,
+        &[
+            BgSlot::new(a, 0, 3, 0, 0, true),
+            BgSlot::new(b, 4, 0, 0, 0, true),
+        ],
+    );
+    assert_eq!(dup.pixels(), single_color_frame(1).pixels());
+}
+
+#[test]
+fn disabled_first_occurrence_reserves_the_identity() {
+    let (ta, pa, ma) = opaque_bg_fixture(1);
+    let (tb, pb, mb) = opaque_bg_fixture(2);
+    let a = crate::bg::BgLayer::new(&ta, &pa, &ma);
+    let b = crate::bg::BgLayer::new(&tb, &pb, &mb);
+    let entries: [OamEntry; 0] = [];
+    let no_sprite_tiles = Tileset::decode(BitDepth::Bpp4, &[]).unwrap();
+    let sprites = empty_sprite_layer(&entries, &no_sprite_tiles);
+    let fb = compose_frame(
+        &sprites,
+        &[
+            BgSlot::new(a, 0, 0, 0, 0, false),
+            BgSlot::new(b, 4, 0, 0, 0, true),
+        ],
+    );
+    assert_eq!(fb.pixel(0, 0), Some(Rgb888::BLACK));
+}
+
+#[test]
+fn duplicates_do_not_refill_the_four_entry_window() {
+    let (ta, pa, ma) = opaque_bg_fixture(1);
+    let (tb, pb, mb) = opaque_bg_fixture(2);
+    let a = crate::bg::BgLayer::new(&ta, &pa, &ma);
+    let b = crate::bg::BgLayer::new(&tb, &pb, &mb);
+    let entries: [OamEntry; 0] = [];
+    let no_sprite_tiles = Tileset::decode(BitDepth::Bpp4, &[]).unwrap();
+    let sprites = empty_sprite_layer(&entries, &no_sprite_tiles);
+    let fb = compose_frame(
+        &sprites,
+        &[
+            BgSlot::new(a, 0, 3, 0, 0, true),
+            BgSlot::new(a, 0, 3, 0, 0, true),
+            BgSlot::new(a, 4, 3, 0, 0, true),
+            BgSlot::new(a, 0, 3, 0, 0, true),
+            BgSlot::new(b, 1, 0, 0, 0, true),
+        ],
+    );
+    assert_eq!(fb.pixels(), single_color_frame(1).pixels());
 }
