@@ -1,7 +1,7 @@
 //! The regression `crate::scenario`'s boundary change (issue #412) must not
 //! reopen: with `$POKEEMERALD_PACK` naming a path that cannot possibly hold
 //! a real pack, a headless-real scenario must still reach every milestone
-//! through `App::new_headless_real`'s owned checkout pin -- not just the
+//! through `App::new_headless_real_at`'s owned pack, copied from the checkout's, -- not just the
 //! title screen `App::boot` loads eagerly, but the `Title` -> `MainMenu`
 //! transition's lazily-loaded main menu too.
 //!

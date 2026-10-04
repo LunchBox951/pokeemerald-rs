@@ -46,7 +46,7 @@ commands:
   record-snapshot --scene <name>
                      record a deterministic frame capture; <name> is
                      title | main-menu-new-game | main-menu-option
-  scenario --name <name>
+  scenario --name <name> [--rom <path>]
                      run a scripted gameplay scenario; <name> is
                      boot-to-main-menu | boot-to-first-fight
   e2e --suite <s> [--release]
@@ -326,10 +326,13 @@ pub enum Command {
         /// The scene to capture.
         scene: Scene,
     },
-    /// `scenario --name <name>`
+    /// `scenario --name <name> [--rom <path>]`
     Scenario {
         /// The scripted run to execute.
         name: ScenarioName,
+        /// A supported ROM to import into the run's own pack, instead of
+        /// copying the checkout-extracted one.
+        rom: Option<std::path::PathBuf>,
     },
     /// `e2e --suite <suite> [--release]`
     E2e {
@@ -379,7 +382,9 @@ pub fn parse(args: &[OsString]) -> Result<Command, XtaskError> {
         "record-snapshot" => {
             parse_record_snapshot(&decode(rest)?).map(|scene| Command::RecordSnapshot { scene })
         }
-        "scenario" => parse_scenario(&decode(rest)?).map(|name| Command::Scenario { name }),
+        "scenario" => {
+            parse_scenario(&decode(rest)?).map(|(name, rom)| Command::Scenario { name, rom })
+        }
         "e2e" => parse_e2e(&decode(rest)?).map(|(suite, release)| Command::E2e { suite, release }),
         other => Err(XtaskError::UnknownCommand(other.to_owned())),
     }
@@ -497,9 +502,13 @@ fn parse_gen_rom_profile(rest: &[OsString]) -> Result<gen_rom_profile::Options, 
     })
 }
 
-/// Parse `scenario --name <value>`, with exactly one required name.
-fn parse_scenario(rest: &[String]) -> Result<ScenarioName, XtaskError> {
+/// Parse `scenario --name <value> [--rom <path>]`, with exactly one required
+/// name and at most one ROM.
+fn parse_scenario(
+    rest: &[String],
+) -> Result<(ScenarioName, Option<std::path::PathBuf>), XtaskError> {
     let mut name: Option<ScenarioName> = None;
+    let mut rom: Option<std::path::PathBuf> = None;
     let mut i = 0;
     while i < rest.len() {
         match rest[i].as_str() {
@@ -508,10 +517,17 @@ fn parse_scenario(rest: &[String]) -> Result<ScenarioName, XtaskError> {
                 name = Some(ScenarioName::parse(value)?);
                 i += 2;
             }
+            "--rom" if rom.is_none() => {
+                let value = rest
+                    .get(i + 1)
+                    .ok_or_else(|| XtaskError::UnexpectedArg("--rom".to_owned()))?;
+                rom = Some(value.into());
+                i += 2;
+            }
             other => return Err(XtaskError::UnexpectedArg(other.to_owned())),
         }
     }
-    name.ok_or(XtaskError::MissingScenarioName)
+    Ok((name.ok_or(XtaskError::MissingScenarioName)?, rom))
 }
 
 /// Parse the arguments following the `e2e` subcommand:
@@ -621,9 +637,9 @@ fn dispatch(cmd: &Command) -> Result<(), XtaskError> {
         #[cfg(not(feature = "scenes"))]
         Command::RecordSnapshot { .. } => Err(XtaskError::RecordSnapshotUnavailable),
         #[cfg(feature = "scenario")]
-        Command::Scenario { name } => {
-            let report =
-                scenario::run(*name).map_err(|err| XtaskError::ScenarioFailed(err.to_string()))?;
+        Command::Scenario { name, rom } => {
+            let report = scenario::run_with(*name, rom.as_deref())
+                .map_err(|err| XtaskError::ScenarioFailed(err.to_string()))?;
             println!(
                 "scenario `{}` passed: {} frame(s), milestones {:?}, first battle outcome {:?}",
                 name.name(),
@@ -903,9 +919,45 @@ mod tests {
         assert_eq!(
             parse(&args(&["scenario", "--name", "boot-to-main-menu"])).unwrap(),
             Command::Scenario {
-                name: ScenarioName::BootToMainMenu
+                name: ScenarioName::BootToMainMenu,
+                rom: None,
             }
         );
+        assert_eq!(
+            parse(&args(&[
+                "scenario",
+                "--name",
+                "boot-to-main-menu",
+                "--rom",
+                "emerald.gba"
+            ]))
+            .unwrap(),
+            Command::Scenario {
+                name: ScenarioName::BootToMainMenu,
+                rom: Some("emerald.gba".into()),
+            }
+        );
+    }
+
+    #[test]
+    fn parse_scenario_rejects_a_valueless_or_repeated_rom() {
+        for bad in [
+            &["scenario", "--name", "boot-to-main-menu", "--rom"][..],
+            &[
+                "scenario",
+                "--rom",
+                "a",
+                "--rom",
+                "b",
+                "--name",
+                "boot-to-main-menu",
+            ][..],
+        ] {
+            assert!(matches!(
+                parse(&args(bad)).unwrap_err(),
+                XtaskError::UnexpectedArg(_)
+            ));
+        }
     }
 
     #[test]
@@ -1197,7 +1249,7 @@ mod tests {
     // The other half of `scenario`'s wiring proof, mirroring
     // `record_snapshot_dispatch_fails_closed_without_a_pack` below: with
     // the feature-enabled arm compiled in, dispatch must really reach
-    // `scenario::run` -- an arm that swallowed the error (or returned
+    // `scenario::run_with` -- an arm that swallowed the error (or returned
     // `Ok(())` without running anything) would let `cargo xtask scenario`
     // report success with zero validation `(gated-by-default)`
     // `(test-ratchet)`. Checked through the pack-missing failure path so a
@@ -1229,7 +1281,7 @@ mod tests {
     // --ignored`, pack present): the one automated invocation that drives
     // the feature-enabled `Command::Scenario` arm end to end.
     // `crate::scenario`'s own ignored real-pack test proves the runner but
-    // calls `scenario::run` directly, bypassing dispatch.
+    // calls `scenario::run_with` directly, bypassing dispatch.
     #[test]
     #[cfg(feature = "scenario")]
     #[ignore = "needs a local pack produced by `cargo xtask extract`"]

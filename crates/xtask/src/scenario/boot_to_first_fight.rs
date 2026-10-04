@@ -358,7 +358,7 @@ mod tests {
         let _pack = crate::extract::REAL_PACK_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let report = crate::scenario::run(ScenarioName::BootToFirstFight)
+        let report = crate::scenario::run_with(ScenarioName::BootToFirstFight, None)
             .expect("boot-to-first-fight should pass against the real pack");
         assert_eq!(
             report.frames_run,

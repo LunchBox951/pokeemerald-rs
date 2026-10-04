@@ -206,7 +206,7 @@ fn boot_opens_no_platform_when_the_title_screen_fails_to_load() {
         },
         || {
             save_opened = true;
-            SaveSlot::disabled()
+            Ok(SaveSlot::disabled())
         },
         crate::pack_source::PackSource::Runtime,
     ) else {
@@ -234,7 +234,7 @@ fn real_pack_boot_propagates_a_platform_opener_error() {
     let Err(err) = App::boot(
         crate::title::load_repo,
         || Err(platform::PlatformError::NoAudioDevice),
-        SaveSlot::disabled,
+        || Ok(SaveSlot::disabled()),
         crate::pack_source::PackSource::Repo,
     ) else {
         panic!("the opener failed, so boot must fail");
@@ -852,5 +852,25 @@ fn failed_menu_load_after_title_fade_wait_leaves_title_music_playing() {
         "the recovered title must still have audible title music, got music present={} faded={:?}",
         music.is_some(),
         music.map(crate::music::MusicPlayer::fade_finished)
+    );
+}
+
+/// A missing pack fails the explicit-media constructor with the title
+/// error and never opens (so never creates) the save medium.
+#[test]
+fn explicit_media_boot_with_a_missing_pack_fails_before_touching_the_save() {
+    let dir =
+        std::env::temp_dir().join(format!("pokeemerald-explicit-boot-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let result = App::new_headless_real_at(&dir.join("no.pack"), &dir.join("save").join("a.sav"));
+    let save_dir_created = dir.exists();
+    let _ = std::fs::remove_dir_all(&dir);
+    let Err(err) = result else {
+        panic!("a missing pack must not boot");
+    };
+    assert!(matches!(err, AppError::Title(_)), "got: {err}");
+    assert!(
+        !save_dir_created,
+        "a failed pack load must not open the save"
     );
 }
