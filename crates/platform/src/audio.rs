@@ -221,8 +221,10 @@ impl PlaybackClock {
     /// than `fetch_add`ed, and stored *last*: a reader that loads
     /// `submitted_frames` first and sees the callback's frames therefore also
     /// sees its estimate and usable mark, however long the callback thread is
-    /// preempted between the stores. The mark may be seen *before* the frames
-    /// it covers; see `PlaybackProgress::usable_through_frames`.
+    /// preempted between the stores. Likewise the mark is stored after the
+    /// estimate, so a reader that loads the mark before the estimate never
+    /// pairs a callback's mark with an older estimate. The mark may be seen
+    /// *before* the frames it covers; see `PlaybackProgress::usable_through_frames`.
     fn record(&self, frame_count: u64, estimate: impl FnOnce(u64) -> Option<u64>) {
         let callback_start_frame = self.submitted_frames.load(Ordering::Relaxed);
         let callback_end_frame = callback_start_frame.saturating_add(frame_count);
@@ -640,15 +642,20 @@ impl AudioOutput {
         {
             return None;
         }
-        // `submitted_frames` first: see `PlaybackClock::record`.
+        // Load in the reverse of `PlaybackClock::record`'s store order:
+        // `submitted_frames` first, then the usable mark, then the sounded
+        // estimate, so a snapshot carrying a callback's mark (even one still
+        // in flight) also carries the estimate that callback published.
         let submitted_frames = self.playback_clock.submitted_frames.load(Ordering::Acquire);
+        let usable_through_frames = self
+            .playback_clock
+            .usable_through_frames
+            .load(Ordering::Acquire);
+        let sounded_frames = self.playback_clock.sounded_frames.load(Ordering::Acquire);
         Some(PlaybackProgress {
             submitted_frames,
-            sounded_frames: self.playback_clock.sounded_frames.load(Ordering::Acquire),
-            usable_through_frames: self
-                .playback_clock
-                .usable_through_frames
-                .load(Ordering::Acquire),
+            sounded_frames,
+            usable_through_frames,
         })
     }
 
