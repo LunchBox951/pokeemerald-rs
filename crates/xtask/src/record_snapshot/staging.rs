@@ -1,7 +1,7 @@
 //! Staged through a held directory ([`stage_in`]), the file is looked up and
 //! renamed relative to that directory, so publication cannot land elsewhere.
 //!
-//! [`stage`] fills a `create_new`-held file and [`StagedFile::publish`]
+//! [`stage_in`] fills a `create_new`-held file and [`StagedFile::publish`]
 //! re-verifies that handle's identity before the promoting rename, so a
 //! symlink planted at the name is refused rather than followed or published.
 //! On Unix the same handle survives the rename, so publication also
@@ -48,7 +48,7 @@ pub(super) fn stage(path: &Path, bytes: &[u8]) -> std::io::Result<StagedFile> {
     stage_file(create_new_exclusive(path)?, path, bytes)
 }
 
-/// [`stage`], creating the file relative to the held directory `dir` under
+/// [`stage_in`] creates the file relative to the held directory `dir` under
 /// `path`'s final component, so the entry can only appear in that directory.
 /// The staged file then publishes relative to `dir` as well.
 #[cfg(unix)]
