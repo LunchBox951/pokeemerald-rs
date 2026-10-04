@@ -737,16 +737,17 @@ fn a_usable_entry_reading_owing_past_max_wait_times_out() {
     assert_eq!(held, std::time::Duration::from_millis(400));
 }
 
-/// An entry mark two seconds of submitted frames behind: the stale callbacks
-/// since have played those two seconds, so its 2.2 s-short estimate owes only
-/// 200 ms, and a device whose timestamps went stale long ago still finishes on
-/// the derived tail rather than being held to the deadline.
+/// An entry mark two seconds of submitted frames behind: past the 200 ms of
+/// queue the derived tail covers, the stale callbacks since have played
+/// 1.8 s, so its 2.2 s-short estimate owes 400 ms, and a device whose
+/// timestamps went stale long ago finishes inside the budget rather than
+/// being held to the deadline.
 #[test]
 fn an_old_usable_entry_mark_is_long_since_paid() {
     let (result, held) = entry_reading_wait(144_000, 48_000, 38_400, 1_000);
 
     assert!(result.is_ok());
-    assert_eq!(held, std::time::Duration::from_millis(200));
+    assert_eq!(held, std::time::Duration::from_millis(400));
 }
 
 /// A usable reading one stale callback before the drain still owes its
@@ -1060,5 +1061,105 @@ fn a_stale_buffer_past_the_tail_size_after_a_usable_one_does_not_overstate_its_a
     assert!(
         held >= std::time::Duration::from_millis(400),
         "the target sounds at 400 ms; finished at {held:?}"
+    );
+}
+
+/// A stale callback the host ran ahead of playback, refilling its queue,
+/// between latching the target and the first snapshot: its 50 ms of frames
+/// are queued, not played, so the entry reading's 500 ms debt (24 000 of
+/// 48 000 frames sounded) stands in full.
+#[test]
+fn a_queued_stale_callback_at_entry_is_not_elapsed_playback() {
+    let policy = RetryPolicy {
+        interval: std::time::Duration::from_millis(10),
+        max_wait: std::time::Duration::from_secs(1),
+    };
+    let start = std::time::Instant::now();
+    let clock = Rc::new(RefCell::new(start));
+    let submitted = Cell::new(50_400_u64);
+
+    let result = wait_for_measured_tail(
+        48_000,
+        std::time::Duration::from_millis(200),
+        48_000,
+        &policy,
+        || Some(progress_usable(24_000, submitted.get(), 48_000)),
+        || 0,
+        || *clock.borrow(),
+        |duration| {
+            *clock.borrow_mut() += duration;
+            if clock
+                .borrow()
+                .duration_since(start)
+                .as_millis()
+                .is_multiple_of(50)
+            {
+                submitted.set(submitted.get() + 2_400);
+            }
+        },
+    );
+    let held = clock.borrow().duration_since(start);
+
+    assert!(result.is_ok(), "finished in budget");
+    assert!(
+        held >= std::time::Duration::from_millis(500),
+        "the entry reading owed 500 ms; finished at {held:?}"
+    );
+}
+
+/// A usable callback at 101 ms owing 500 ms (the target sounds at 601 ms),
+/// then stale callbacks bursting 300 ms of frames at 105 ms, all inside one
+/// 10 ms poll gap, then stale 50 ms callbacks from 150 ms: the burst is at
+/// most the gap old, so the wait still holds for what the reading owed.
+#[test]
+fn a_stale_burst_inside_one_poll_gap_is_not_elapsed_playback() {
+    let policy = RetryPolicy {
+        interval: std::time::Duration::from_millis(10),
+        max_wait: std::time::Duration::from_secs(1),
+    };
+    let start = std::time::Instant::now();
+    let clock = Rc::new(RefCell::new(start));
+    let submitted = Cell::new(48_000_u64);
+    let sounded = Cell::new(0_u64);
+    let usable = Cell::new(0_u64);
+
+    let result = wait_for_measured_tail(
+        48_000,
+        std::time::Duration::from_millis(200),
+        48_000,
+        &policy,
+        || {
+            Some(progress_usable(
+                sounded.get(),
+                submitted.get(),
+                usable.get(),
+            ))
+        },
+        || 0,
+        || *clock.borrow(),
+        |duration| {
+            let before = clock.borrow().duration_since(start).as_millis();
+            *clock.borrow_mut() += duration;
+            let after = clock.borrow().duration_since(start).as_millis();
+            for ms in (before + 1)..=after {
+                if ms == 101 {
+                    let callback_start = submitted.get();
+                    submitted.set(callback_start + 2_400);
+                    sounded.set(callback_start - 500 * 48);
+                    usable.set(submitted.get());
+                } else if ms == 105 {
+                    submitted.set(submitted.get() + 14_400);
+                } else if ms >= 150 && ms.is_multiple_of(50) {
+                    submitted.set(submitted.get() + 2_400);
+                }
+            }
+        },
+    );
+    let held = clock.borrow().duration_since(start);
+
+    assert!(result.is_ok(), "finished in budget");
+    assert!(
+        held >= std::time::Duration::from_millis(601),
+        "the target sounds at 601 ms; finished at {held:?}"
     );
 }

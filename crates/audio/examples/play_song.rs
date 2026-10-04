@@ -524,27 +524,33 @@ fn longest(samples: impl IntoIterator<Item = Duration>) -> Duration {
 /// When a usable reading with `sounded` frames sounded, seen at a poll at
 /// `seen_at` with `submitted` frames and the reading's `usable_through` mark,
 /// lets `target` sound: the reading's remaining frames at
-/// `device_sample_rate`, run from `seen_at` less the playback of the stale
-/// callbacks submitted after the mark. That subtraction is a stable-rate
-/// extrapolation, the premise the derived-tail fallback already rests on:
-/// callbacks after the reading ran about one period apart, so the reading is
-/// about their playback old, and a mark seconds behind is long since paid. It
-/// is not a bound: the snapshot carries no reading time, and callbacks of
-/// varying size or bursting faster than playback make the reading look older
-/// than it is. `None` only when the stamp lies before the clock's origin.
+/// `device_sample_rate`, run from `seen_at` less the reading's age.
+///
+/// The snapshot carries no reading time, and the frames the stale callbacks
+/// submitted after the mark are not elapsed time: a host refilling its queue
+/// runs callbacks faster than playback. So those frames count as age only up
+/// to `max_age`, what the caller has wall-clock or queue-depth evidence for:
+/// inside the wait, the poll gap the usable callback landed in; at the first
+/// snapshot, none past the [`HOST_QUEUED_PERIODS`] of queue the derived tail
+/// already covers (see [`device_tail_wait`]), so a mark seconds behind is
+/// mostly paid while one a few callbacks behind keeps its whole debt. An
+/// extrapolation, not a bound. `None` only when the stamp lies before the
+/// clock's origin.
 fn reading_due(
     seen_at: Instant,
     target: u64,
     sounded: u64,
     progress: (u64, u64),
+    max_age: Duration,
     device_sample_rate: u32,
 ) -> Option<Instant> {
     let (submitted, usable_through) = progress;
     let owed = frames_duration(target.saturating_sub(sounded), device_sample_rate);
-    let since = frames_duration(submitted.saturating_sub(usable_through), device_sample_rate);
-    match owed.checked_sub(since) {
+    let age =
+        frames_duration(submitted.saturating_sub(usable_through), device_sample_rate).min(max_age);
+    match owed.checked_sub(age) {
         Some(ahead) => Some(seen_at + ahead),
-        None => seen_at.checked_sub(since.saturating_sub(owed)),
+        None => seen_at.checked_sub(age.saturating_sub(owed)),
     }
 }
 
@@ -675,11 +681,16 @@ fn wait_for_measured_tail(
         // too (see [`reading_due`]). A mark ahead of the submitted total is a
         // callback in flight, judged once its frames land.
         if last_submitted.is_none() && usable_through > 0 && usable_through <= submitted {
+            // No wall clock has run since the mark yet: only frames past the
+            // queue the derived tail covers count as its age.
+            let queued = frames_duration(submitted - usable_through, device_sample_rate)
+                .saturating_sub(derived_tail);
             let due = reading_due(
                 current,
                 target,
                 sounded,
                 (submitted, usable_through),
+                queued,
                 device_sample_rate,
             );
             measured_due = measured_due.max(due.unwrap_or(measured_due));
@@ -705,11 +716,14 @@ fn wait_for_measured_tail(
             let played = frames_duration(usable_through - prev, device_sample_rate);
             let credited = current.min(last_poll + played)
                 + frames_duration(target - sounded, device_sample_rate);
+            // The usable callback landed after the previous poll, so it is no
+            // older than the gap since.
             let seen = reading_due(
                 current,
                 target,
                 sounded,
                 (submitted, usable_through),
+                current.duration_since(last_poll),
                 device_sample_rate,
             );
             measured_due = measured_due.max(credited).max(seen.unwrap_or(credited));
