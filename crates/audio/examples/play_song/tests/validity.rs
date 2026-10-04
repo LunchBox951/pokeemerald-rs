@@ -737,13 +737,70 @@ fn a_usable_entry_reading_owing_past_max_wait_times_out() {
     assert_eq!(held, std::time::Duration::from_millis(400));
 }
 
-/// An entry mark two seconds of submitted frames behind belongs to a callback
-/// of unknown age: its estimate (2.2 s short) must not hold a device whose
-/// timestamps went stale long ago, which finishes on the derived tail.
+/// An entry mark two seconds of submitted frames behind: the stale callbacks
+/// since have played those two seconds, so its 2.2 s-short estimate owes only
+/// 200 ms, and a device whose timestamps went stale long ago still finishes on
+/// the derived tail.
 #[test]
 fn an_old_usable_entry_mark_does_not_seed_the_bound() {
     let (result, held) = entry_reading_wait(144_000, 48_000, 38_400, 1_000);
 
     assert!(result.is_ok());
     assert_eq!(held, std::time::Duration::from_millis(200));
+}
+
+/// A usable reading one stale callback before the drain still owes its
+/// playback: the first snapshot's mark trails submitted frames by one 50 ms
+/// callback, but the 450 ms latency it measured must not be cut to the
+/// derived tail.
+#[test]
+fn a_usable_mark_one_stale_callback_behind_at_entry_still_owes_its_playback() {
+    use std::time::{Duration, Instant};
+
+    let policy = RetryPolicy {
+        interval: Duration::from_millis(10),
+        max_wait: Duration::from_secs(1),
+    };
+    let start = Instant::now();
+    let clock = Rc::new(RefCell::new(start));
+    // The last usable callback (43 200..45 600) measured 450 ms of latency;
+    // one stale 50 ms callback (45 600..48 000) followed it.
+    let submitted = Cell::new(48_000_u64);
+    let sounded = Cell::new(21_600_u64);
+    let usable = Cell::new(45_600_u64);
+
+    let result = wait_for_measured_tail(
+        48_000,
+        Duration::from_millis(200),
+        48_000,
+        &policy,
+        || {
+            Some(progress_usable(
+                sounded.get(),
+                submitted.get(),
+                usable.get(),
+            ))
+        },
+        || 0,
+        || *clock.borrow(),
+        |duration| {
+            *clock.borrow_mut() += duration;
+            if clock
+                .borrow()
+                .duration_since(start)
+                .as_millis()
+                .is_multiple_of(50)
+            {
+                // Stale 50 ms callbacks keep landing.
+                submitted.set(submitted.get() + 2_400);
+            }
+        },
+    );
+    let elapsed = clock.borrow().duration_since(start);
+
+    // The target sounds ~500 ms after entry (550 ms owed, read 50 ms ago).
+    assert!(
+        result.is_err() || elapsed >= Duration::from_millis(450),
+        "finished at {elapsed:?}, before the measured target sounded"
+    );
 }

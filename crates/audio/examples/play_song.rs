@@ -521,6 +521,25 @@ fn longest(samples: impl IntoIterator<Item = Duration>) -> Duration {
     samples.into_iter().max().unwrap_or_default()
 }
 
+/// What a usable reading with `sounded` frames sounded still owes `target` as
+/// of a poll that sees `submitted` frames and the reading's `usable_through`
+/// mark: its remaining frames at `device_sample_rate`, less the frames the
+/// callbacks after the mark have submitted since. That subtraction is a
+/// stable-rate extrapolation, the premise the derived-tail fallback already
+/// rests on: callbacks after the reading ran one period apart, so the reading
+/// is at least their playback old, and a mark seconds behind owes nothing.
+fn owed_after_reading(
+    target: u64,
+    sounded: u64,
+    submitted: u64,
+    usable_through: u64,
+    device_sample_rate: u32,
+) -> Duration {
+    frames_duration(target.saturating_sub(sounded), device_sample_rate).saturating_sub(
+        frames_duration(submitted.saturating_sub(usable_through), device_sample_rate),
+    )
+}
+
 /// How this wait has actually been polling: the shortest of the recent poll
 /// gaps, never under the requested `interval`. A scheduler that holds every
 /// sleep late raises it; one late poll among prompt ones does not.
@@ -579,9 +598,8 @@ fn usable_callback_in_span(from: u64, to: u64, usable_through: u64) -> bool {
 /// only at the deadline) plus two polls means live callbacks,
 /// and once `derived_tail` has run from the start of the wait, or from the
 /// callbacks that resumed after a stall, and once the playback the latest
-/// usable reading inside the wait (or in its first snapshot, when the latest
-/// landed callback was usable) still owed the target has run at the device
-/// rate, the wait finishes as [`wait_for_device_tail`] would. A gap that outruns both the
+/// usable reading inside the wait or in its first snapshot still owed the
+/// target (see [`owed_after_reading`]) has run at the device rate, the wait finishes as [`wait_for_device_tail`] would. A gap that outruns both the
 /// recent cadence and the playback the previous advance covered by a tenth of
 /// `derived_tail` (and over a quarter of it, or half before a cadence is seen)
 /// is a stall: evidence and cadence restart from the playback the resumed
@@ -645,12 +663,19 @@ fn wait_for_measured_tail(
             return Ok(());
         }
         let current = now();
-        // A first snapshot whose latest landed callback was usable carries a
-        // reading no older than that callback: what it owes holds from now. A
-        // mark behind the submitted total is of unknown age, and one ahead of
-        // it is a callback in flight, judged once its frames land.
-        if last_submitted.is_none() && usable_through > 0 && usable_through == submitted {
-            measured_due = current + frames_duration(target - sounded, device_sample_rate);
+        // A usable reading already in the first snapshot owes its playback
+        // too, less what the stale callbacks submitted since its mark have
+        // played (see [`owed_after_reading`]). A mark ahead of the submitted
+        // total is a callback in flight, judged once its frames land.
+        if last_submitted.is_none() && usable_through > 0 && usable_through <= submitted {
+            measured_due = current
+                + owed_after_reading(
+                    target,
+                    sounded,
+                    submitted,
+                    usable_through,
+                    device_sample_rate,
+                );
         }
         // A mark past the submitted total is a callback in flight, proving
         // nothing about the frames submitted; once they land it discards the
