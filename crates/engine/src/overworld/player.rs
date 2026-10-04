@@ -67,8 +67,9 @@ impl TransitCadence {
 /// Which of a walk animation's two forward-foot cells leads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LeadingFoot {
-    /// Fresh command 0, before any step, turn, or idle face. A direct first
-    /// step or turn leads with the first foot; an idle face moves it to `First`.
+    /// Fresh command 0, before any step, turn, or face. A direct first step
+    /// or turn leads with the first foot; an idle face, a field lock, or a
+    /// scripted face moves it to `First`.
     Fresh,
     First,
     Second,
@@ -264,8 +265,11 @@ impl PlayerState {
 
     /// Changes facing without starting or interrupting a step, carrying the
     /// movement direction with it as upstream's `SetObjectEventDirection`
-    /// does (`event_object_movement.c:2361-2371`).
+    /// does (`event_object_movement.c:2361-2371`). Callers model a face
+    /// movement action, whose `FaceDirection` normalises a fresh walk cycle
+    /// (`event_object_movement.c:5048-5054`).
     pub const fn face(&mut self, direction: Direction) {
+        self.normalise_fresh_step_parity();
         self.rest_pose = RestPose::Standing;
         self.facing = direction;
         self.movement_direction = direction;
@@ -273,7 +277,11 @@ impl PlayerState {
 
     /// Ends a standstill turn's busy window early, as `PlayerFreeze` does
     /// the instant the field lock engages (`field_player_avatar.c:1039-1046`).
+    /// Its forced face normalises a fresh walk cycle, so an owner that claims
+    /// the first frame before any idle poll still leaves the second foot to
+    /// lead the next step.
     pub const fn clear_turn_lock(&mut self) {
+        self.normalise_fresh_step_parity();
         self.rest_pose = RestPose::Standing;
         self.turn_frames_remaining = 0;
     }
@@ -337,6 +345,17 @@ impl PlayerState {
     #[must_use]
     pub const fn second_foot_leads(&self) -> bool {
         matches!(self.leading_foot, LeadingFoot::Second)
+    }
+
+    /// A fresh command 0 faces at command 1 (`SetStepAnim` seeks
+    /// `animPos[0]`, `event_object_movement.c:4613-4617, 5048-5054`), so the
+    /// next step or turn selects command 2, the second foot. A started cycle,
+    /// held slide foot included, is kept. Every face upstream runs, the idle
+    /// poll's, `PlayerFreeze`'s, and a scripted face's, goes through it.
+    const fn normalise_fresh_step_parity(&mut self) {
+        if matches!(self.leading_foot, LeadingFoot::Fresh) {
+            self.leading_foot = LeadingFoot::First;
+        }
     }
 
     /// `SetStepAnimHandleAlternation` leaves a paused foot command unchanged
@@ -505,13 +524,7 @@ impl PlayerState {
         let slide_pose_held = self.slide_pose_held();
         self.rest_pose = RestPose::Standing;
         let Some(direction) = input else {
-            // A fresh command 0 faces at command 1 (`SetStepAnim` seeks
-            // `animPos[0]`, `event_object_movement.c:4613-4617, 5048-5054`), so
-            // the next step or turn selects command 2, the second foot. A
-            // started cycle, held slide foot included, is kept.
-            if self.leading_foot == LeadingFoot::Fresh {
-                self.leading_foot = LeadingFoot::First;
-            }
+            self.normalise_fresh_step_parity();
             self.movement_streak_active = false;
             return StepOutcome::Idle;
         };

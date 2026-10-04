@@ -72,6 +72,35 @@ fn idle_then_first_step_or_turn_leads_with_the_second_foot() {
     assert!(turning.second_foot_leads());
 }
 
+/// `PlayerFreeze` and a scripted face both run `FaceDirection`, so a field
+/// lock or face that claims the first frame before any idle poll still
+/// normalises the fresh cycle (`field_player_avatar.c:1039-1046`,
+/// `trainer_see.c:524-525`) `(behavioral-fidelity)`.
+#[test]
+fn a_field_lock_or_face_before_any_idle_poll_leaves_the_second_foot_to_lead() {
+    let runtime = open_runtime(None);
+
+    let mut locked = PlayerState::new((4, 4), 3, Direction::South);
+    locked.clear_turn_lock();
+    locked.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS);
+    assert!(locked.second_foot_leads());
+
+    let mut faced = PlayerState::new((4, 4), 3, Direction::South);
+    faced.face(Direction::North);
+    faced.step(Some(Direction::North), &runtime, &no_connections, &NO_FLAGS);
+    assert!(faced.second_foot_leads());
+
+    let mut walked = PlayerState::new((4, 4), 3, Direction::South);
+    walked.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS);
+    finish_crossing(&mut walked);
+    walked.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS);
+    finish_crossing(&mut walked);
+    walked.clear_turn_lock();
+    walked.face(Direction::South);
+    walked.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS);
+    assert!(!walked.second_foot_leads(), "a started cycle is not reset");
+}
+
 /// Idling after a completed second-foot step keeps command 3, so the next
 /// step leads with the first foot: the idle normalisation is not a reset.
 #[test]
