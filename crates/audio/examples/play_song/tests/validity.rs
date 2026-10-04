@@ -493,42 +493,60 @@ fn an_in_flight_mark_does_not_prove_a_usable_callback_in_the_submitted_span() {
     assert!(!usable_callback_in_span(300, 400, 300));
 }
 
-/// Usable timestamps past the derived tail that still show the target short
-/// prove the tail under-estimated: with a 200 ms tail, 50 ms callbacks usable
-/// through 500 ms and stale from 550 ms, the first stale callback must not
-/// finish the wait; the fallback tail runs again from the last usable reading.
-#[test]
-fn a_usable_reading_past_the_tail_restarts_the_fallback() {
+/// Drive a device with `delay_ms` of output latency and a 200 ms derived
+/// tail: 50 ms callbacks (2 400 frames at 48 kHz) from 48 000 submitted, the
+/// target, usable through 500 ms and stale from 550 ms. Each usable callback
+/// estimates its start frame less the delay, so the target sounds at
+/// `delay_ms + 50` ms. Returns the result and when the wait ended.
+fn late_usable_wait(delay_ms: u64) -> (Result<(), DrainError>, std::time::Duration) {
     let policy = RetryPolicy {
         interval: std::time::Duration::from_millis(10),
         max_wait: std::time::Duration::from_secs(1),
     };
     let start = std::time::Instant::now();
     let clock = Rc::new(RefCell::new(start));
-    let submitted = Cell::new(4_u64);
-    let usable = Cell::new(4_u64);
+    let submitted = Cell::new(48_000_u64);
+    let sounded = Cell::new(0_u64);
+    let usable = Cell::new(0_u64);
 
     let result = wait_for_measured_tail(
-        1_000_000,
+        48_000,
         std::time::Duration::from_millis(200),
         48_000,
         &policy,
-        || Some(progress_usable(0, submitted.get(), usable.get())),
+        || {
+            Some(progress_usable(
+                sounded.get(),
+                submitted.get(),
+                usable.get(),
+            ))
+        },
         || 0,
         || *clock.borrow(),
         |duration| {
             *clock.borrow_mut() += duration;
             let ms = clock.borrow().duration_since(start).as_millis();
             if ms.is_multiple_of(50) {
-                // One 50 ms callback (2 400 frames at 48 kHz).
-                submitted.set(submitted.get() + 2_400);
+                let callback_start = submitted.get();
+                submitted.set(callback_start + 2_400);
                 if ms <= 500 {
+                    sounded.set(callback_start.saturating_sub(delay_ms * 48));
                     usable.set(submitted.get());
                 }
             }
         },
     );
     let held = clock.borrow().duration_since(start);
+    (result, held)
+}
+
+/// Usable timestamps past the derived tail that still show the target short
+/// prove the tail under-estimated: with 650 ms of latency the 500 ms reading
+/// still owes 200 ms, so the first stale callback must not finish the wait;
+/// it holds until the target sounds at 700 ms.
+#[test]
+fn a_usable_reading_past_the_tail_holds_the_fallback_for_what_it_owes() {
+    let (result, held) = late_usable_wait(650);
 
     assert!(
         result.is_ok(),
@@ -536,6 +554,114 @@ fn a_usable_reading_past_the_tail_restarts_the_fallback() {
     );
     assert!(
         held >= std::time::Duration::from_millis(700),
-        "the tail must run again from the 500 ms reading; finished at {held:?}"
+        "the 500 ms reading owed 200 ms; finished at {held:?}"
     );
+}
+
+/// A late usable reading owing less than a full tail holds the wait only for
+/// what it owes, not for another derived tail: with 460 ms of latency the
+/// 500 ms reading owes 10 ms, so the first stale callback at 550 ms finishes.
+#[test]
+fn a_late_usable_reading_owing_little_does_not_rerun_the_tail() {
+    let (result, held) = late_usable_wait(460);
+
+    assert!(result.is_ok());
+    assert!(
+        held >= std::time::Duration::from_millis(510),
+        "finished at {held:?}, before the target sounded"
+    );
+    assert!(
+        held < std::time::Duration::from_millis(700),
+        "held a whole extra tail to {held:?}"
+    );
+}
+
+/// The valid-to-stale boundary of a 250 ms derived tail: 100 ms callbacks
+/// (4 800 frames) at 50, 150, 250 ms and on from 48 000 submitted, the target;
+/// the first two carry usable timestamps with `delay_ms` of latency, the rest
+/// are stale. The target sounds at `delay_ms + 50` ms.
+fn valid_then_stale_wait(
+    delay_ms: u64,
+    max_wait_ms: u64,
+) -> (Result<(), DrainError>, std::time::Duration) {
+    let policy = RetryPolicy {
+        interval: std::time::Duration::from_millis(10),
+        max_wait: std::time::Duration::from_millis(max_wait_ms),
+    };
+    let start = std::time::Instant::now();
+    let clock = Rc::new(RefCell::new(start));
+    let submitted = Cell::new(48_000_u64);
+    let sounded = Cell::new(0_u64);
+    let usable = Cell::new(0_u64);
+
+    let result = wait_for_measured_tail(
+        48_000,
+        std::time::Duration::from_millis(250),
+        48_000,
+        &policy,
+        || {
+            Some(progress_usable(
+                sounded.get(),
+                submitted.get(),
+                usable.get(),
+            ))
+        },
+        || 0,
+        || *clock.borrow(),
+        |duration| {
+            *clock.borrow_mut() += duration;
+            let ms = clock.borrow().duration_since(start).as_millis();
+            if ms % 100 == 50 {
+                let callback_start = submitted.get();
+                submitted.set(callback_start + 4_800);
+                if ms <= 150 {
+                    sounded.set(callback_start.saturating_sub(delay_ms * 48));
+                    usable.set(submitted.get());
+                }
+            }
+        },
+    );
+    let held = clock.borrow().duration_since(start);
+    (result, held)
+}
+
+/// Usable readings consistent with the derived tail leave its finish alone:
+/// with 200 ms of latency the 150 ms reading owes 100 ms, and the stale
+/// callback at 250 ms finishes there.
+#[test]
+fn usable_readings_consistent_with_the_tail_keep_its_finish() {
+    let (result, held) = valid_then_stale_wait(200, 1_000);
+
+    assert!(result.is_ok());
+    assert_eq!(held, std::time::Duration::from_millis(250));
+}
+
+/// A usable reading far short of the target bounds the fallback: with 350 ms
+/// of latency the 150 ms reading owes 250 ms, so the stale callback at 250 ms
+/// must not finish the wait before the target sounds at 400 ms.
+#[test]
+fn a_far_short_usable_reading_holds_the_fallback_past_the_tail() {
+    let (result, held) = valid_then_stale_wait(350, 1_000);
+
+    assert!(
+        result.is_ok(),
+        "stale live callbacks still finish in budget"
+    );
+    assert!(
+        held >= std::time::Duration::from_millis(400),
+        "the 150 ms reading owed 250 ms; finished at {held:?}"
+    );
+}
+
+/// What a usable reading owes still has to fit `max_wait`: with 350 ms of
+/// latency and a 300 ms budget the target sounds past the deadline.
+#[test]
+fn a_usable_reading_owing_past_max_wait_times_out() {
+    let (result, held) = valid_then_stale_wait(350, 300);
+
+    assert!(matches!(
+        result,
+        Err(DrainError::MeasuredTailTimedOut { target: 48_000, .. })
+    ));
+    assert_eq!(held, std::time::Duration::from_millis(300));
 }
