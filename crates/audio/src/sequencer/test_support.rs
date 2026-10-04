@@ -1,9 +1,5 @@
 //! Shared song and track fixtures for the sequencer test modules.
 
-// The reciprocal wave-frequency the test song derives narrows to `u32` (well
-// within range for these inputs); silence/pan checks compare exact `0.0`.
-#![allow(clippy::cast_possible_truncation, clippy::float_cmp)]
-
 use std::sync::Arc;
 
 use super::*;
@@ -28,6 +24,10 @@ const FREQUENCY_PROBE_SHIFT: u32 = 20;
 pub(super) fn test_song(tracks: Vec<Vec<Event>>, tempo: u16) -> Song {
     let target = unity_freq();
     let ratio60 = pitch::midi_key_to_freq(1 << FREQUENCY_PROBE_SHIFT, TEST_REFERENCE_KEY, 0);
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "the reciprocal wave frequency is well within u32 for these inputs"
+    )]
     let freq = ((u64::from(target) << FREQUENCY_PROBE_SHIFT) / u64::from(ratio60)) as u32;
     let wave = Arc::new(WaveData::one_shot(freq, vec![100; SAMPLES_PER_FRAME * 4]));
     let voices = vec![Instrument::DirectSound(ToneData::new(wave, Adsr::flat()))];

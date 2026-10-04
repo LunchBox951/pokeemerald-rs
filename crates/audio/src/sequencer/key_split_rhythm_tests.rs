@@ -1,9 +1,5 @@
 //! Indirection selects the correct leaf, pitch key, and rhythm pan without nested resolution.
 
-// The reciprocal wave-frequency the test song derives narrows to `u32` (well
-// within range for these inputs); silence/pan checks compare exact `0.0`.
-#![allow(clippy::cast_possible_truncation, clippy::float_cmp)]
-
 use super::test_support::*;
 use super::*;
 use crate::song::{rhythm_pan_from_pan_sweep, KeySplit, Rhythm, RhythmChild, KEY_SLOTS};

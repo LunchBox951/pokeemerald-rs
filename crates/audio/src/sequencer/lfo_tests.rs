@@ -1,9 +1,5 @@
 //! Pitch/volume arithmetic and LFO reset, delay, and allocation timing match M4A.
 
-// The reciprocal wave-frequency the test song derives narrows to `u32` (well
-// within range for these inputs); silence/pan checks compare exact `0.0`.
-#![allow(clippy::cast_possible_truncation, clippy::float_cmp)]
-
 use std::sync::Arc;
 
 use super::test_support::*;

@@ -1,9 +1,5 @@
 //! PSG instruments sound through the sequencer with correct channel and fixed-rate routing.
 
-// The reciprocal wave-frequency the test song derives narrows to `u32` (well
-// within range for these inputs); silence/pan checks compare exact `0.0`.
-#![allow(clippy::cast_possible_truncation, clippy::float_cmp)]
-
 use super::*;
 use crate::cgb_envelope::CgbAdsr;
 use crate::song::{NoiseTone, SquareTone, WaveTone};
@@ -75,6 +71,10 @@ fn rendered_cgb_frames(instrument: Instrument, frames: usize) -> Vec<f32> {
 /// [`cgb_test_track`]'s key lands on a register `cgb_dac_correct`
 /// rounds to a different playback rate, so the two renders must
 /// diverge.
+#[expect(
+    clippy::float_cmp,
+    reason = "the test asserts the rendered frames differ exactly, bit for bit"
+)]
 #[test]
 fn a_fixed_rate_cgb_square_audibly_differs_from_a_plain_one() {
     let tone = |fixed_rate| {
@@ -96,6 +96,10 @@ fn a_fixed_rate_cgb_square_audibly_differs_from_a_plain_one() {
 /// [`WaveTone::fixed_rate`]'s counterpart to
 /// [`a_fixed_rate_cgb_square_audibly_differs_from_a_plain_one`] -- the
 /// wave channel threads the same flag through `CgbVoice::wave`.
+#[expect(
+    clippy::float_cmp,
+    reason = "the test asserts the rendered frames differ exactly, bit for bit"
+)]
 #[test]
 fn a_fixed_rate_cgb_wave_audibly_differs_from_a_plain_one() {
     // Decodes to alternating 0/15 samples: a full-swing waveform, so a
