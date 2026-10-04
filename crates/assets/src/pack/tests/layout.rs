@@ -1,14 +1,24 @@
-//! Pins the layout/font/text-window integration: decoding the raw
-//! `layout_map`/`layout_border`/`font` bytes this crate hands out through
-//! `crate::map_layouts` and `crate::fonts`'s own typed grids, plus the
-//! text-window frame/message-box/extra-palette accessors that bundle tiles
-//! with a PNG-derived palette.
-
 use super::super::{AssetPack, PackError, TilesetHandle};
 use super::shared::{
     frame_pixels, message_box_pixels, text_window_palette_colors, write_synthetic_pack,
+    EXPECTED_FRAME_HEIGHT, EXPECTED_FRAME_WIDTH, EXPECTED_MESSAGE_BOX_HEIGHT,
+    EXPECTED_MESSAGE_BOX_WIDTH, FIRST_PIXEL_OUTSIDE_TEXT_WINDOW_PALETTE,
+    SHORT_TEXT_WINDOW_PALETTE_BYTE_COUNT, SHORT_TEXT_WINDOW_PALETTE_COLOR_COUNT,
+    TEXT_WINDOW_PALETTE_COLOR_COUNT, WRONG_FRAME_HEIGHT, WRONG_FRAME_WIDTH,
 };
 use crate::fonts::FontId;
+
+const DEFAULT_FRAME_ID: u8 = 0;
+const FRAME_WITH_SHORT_PALETTE_ID: u8 = 1;
+const FRAME_WITH_UNMAPPABLE_PIXEL_ID: u8 = 2;
+const FRAME_WITH_WRONG_DIMENSIONS_ID: u8 = 4;
+const LAST_VALID_FRAME_ID: u8 = 19;
+const FIRST_OUT_OF_RANGE_FRAME_ID: u8 = 20;
+const EXPECTED_TILESET_PALETTE_BANK_COUNT: usize = 16;
+const NORMAL_LAYER_ATTRIBUTE_RAW: u16 = 0x0001;
+const COVERED_LAYER_ATTRIBUTE_RAW: u16 = 0x1002;
+const SPLIT_LAYER_ATTRIBUTE_RAW: u16 = 0x2003;
+const EXPECTED_METATILE_ATTRIBUTE_COUNT: usize = 3;
 
 #[test]
 fn layout_map_and_border_are_raw_blobs() {
@@ -16,12 +26,12 @@ fn layout_map_and_border_are_raw_blobs() {
     let pack = AssetPack::load(&path).unwrap();
 
     let map_bytes = pack.layout_map("test").unwrap();
-    assert_eq!(map_bytes, &[0x01, 0x00, 0x02, 0x00]);
+    assert_eq!(map_bytes, &[0x01u8, 0x00, 0x02, 0x00]);
 
     let border_bytes = pack.layout_border("test").unwrap();
     assert_eq!(
         border_bytes,
-        &[0x01, 0x00, 0x02, 0x00, 0x03, 0x00, 0x04, 0x00]
+        &[0x01u8, 0x00, 0x02, 0x00, 0x03, 0x00, 0x04, 0x00]
     );
 
     let _ = std::fs::remove_file(path);
@@ -29,10 +39,6 @@ fn layout_map_and_border_are_raw_blobs() {
 
 #[test]
 fn layout_map_bytes_decode_through_map_layouts_layout_grid() {
-    // Exercises the intended pipeline end to end: pack bytes -> a caller-
-    // supplied `MapLayout` -> `LayoutGrid` decode. This crate's pack loader
-    // never constructs a `LayoutGrid` itself (see `pack`'s module docs);
-    // this test proves the two sides agree on the byte shape regardless.
     use crate::map_layouts::{LayoutGrid, LayoutId, MapLayout, MetatileCell};
 
     let path = write_synthetic_pack("layout-decode");
@@ -104,25 +110,25 @@ fn text_window_frame_bundles_tiles_and_its_own_plte_derived_palette() {
     let path = write_synthetic_pack("text-window-frame");
     let pack = AssetPack::load(&path).unwrap();
 
-    let frame = pack.text_window_frame(0).unwrap();
-    assert_eq!(frame.tiles.width, 24);
-    assert_eq!(frame.tiles.height, 24);
+    let frame = pack.text_window_frame(DEFAULT_FRAME_ID).unwrap();
+    assert_eq!(frame.tiles.width, EXPECTED_FRAME_WIDTH);
+    assert_eq!(frame.tiles.height, EXPECTED_FRAME_HEIGHT);
     assert_eq!(frame.tiles.pixels, frame_pixels(0).as_slice());
-    assert_eq!(frame.palette.color_count, 16);
+    assert_eq!(frame.palette.color_count, TEXT_WINDOW_PALETTE_COLOR_COUNT);
     assert_eq!(frame.palette.color(0), Some(0x0011));
     assert_eq!(frame.palette.color(1), Some(0x0022));
 
     let err = pack.text_window_frame(5).unwrap_err();
     assert!(matches!(err, PackError::UnknownAsset(id) if id == "text-window/image/6"));
 
-    let last = pack.text_window_frame(19).unwrap();
+    let last = pack.text_window_frame(LAST_VALID_FRAME_ID).unwrap();
     assert_eq!(last.tiles.pixels, frame_pixels(3).as_slice());
     assert_eq!(
         last.palette.colors().collect::<Vec<_>>(),
         text_window_palette_colors(0x0077, 0x0088)
     );
 
-    let fallback = pack.text_window_frame(20).unwrap();
+    let fallback = pack.text_window_frame(FIRST_OUT_OF_RANGE_FRAME_ID).unwrap();
     assert_eq!(fallback.tiles.pixels, frame.tiles.pixels);
     assert_eq!(
         fallback.palette.colors().collect::<Vec<_>>(),
@@ -141,10 +147,10 @@ fn message_box_bundles_its_own_tiles_and_palette() {
     let pack = AssetPack::load(&path).unwrap();
 
     let handle = pack.message_box().unwrap();
-    assert_eq!(handle.tiles.width, 56);
-    assert_eq!(handle.tiles.height, 16);
+    assert_eq!(handle.tiles.width, EXPECTED_MESSAGE_BOX_WIDTH);
+    assert_eq!(handle.tiles.height, EXPECTED_MESSAGE_BOX_HEIGHT);
     assert_eq!(handle.tiles.pixels, message_box_pixels().as_slice());
-    assert_eq!(handle.palette.color_count, 16);
+    assert_eq!(handle.palette.color_count, TEXT_WINDOW_PALETTE_COLOR_COUNT);
     assert_eq!(handle.palette.color(0), Some(0x0033));
     assert_eq!(handle.palette.color(1), Some(0x0044));
 
@@ -156,49 +162,44 @@ fn malformed_text_window_palettes_are_rejected_on_read() {
     let path = write_synthetic_pack("malformed-text-window-palette");
     let pack = AssetPack::load(&path).unwrap();
 
-    // Frame id 1 selects source `2`: its image entry is fine, but the
-    // palette declares 2 colours in 4 bytes — the typed handle's
-    // 16-colour invariant would be false.
-    let err = pack.text_window_frame(1).unwrap_err();
+    let err = pack
+        .text_window_frame(FRAME_WITH_SHORT_PALETTE_ID)
+        .unwrap_err();
     assert!(matches!(
         &err,
         PackError::MalformedTextWindowPalette {
             id,
-            color_count: 2,
-            byte_len: 4,
+            color_count: SHORT_TEXT_WINDOW_PALETTE_COLOR_COUNT,
+            byte_len: SHORT_TEXT_WINDOW_PALETTE_BYTE_COUNT,
         } if id == "text-window/palette/2"
     ));
 
-    // Frame id 2 selects source `3`: a valid 16-colour palette, but an
-    // 8-bit-indexed tile bitmap holding pixel 16 — the read side must
-    // reject the pair rather than hand a renderer an unmappable pixel.
-    let err = pack.text_window_frame(2).unwrap_err();
+    let err = pack
+        .text_window_frame(FRAME_WITH_UNMAPPABLE_PIXEL_ID)
+        .unwrap_err();
     assert!(matches!(
         &err,
         PackError::TextWindowPixelOutsidePalette {
             id,
-            pixel: 16,
-            palette_len: 16,
+            pixel: FIRST_PIXEL_OUTSIDE_TEXT_WINDOW_PALETTE,
+            palette_len: TEXT_WINDOW_PALETTE_COLOR_COUNT,
         } if id == "text-window/image/3"
     ));
 
-    // Frame id 4 selects source `5`: a self-consistent 8x8 bitmap — but a
-    // border frame must be the complete 3x3 grid of 8x8 tiles (24x24), so
-    // the typed accessor rejects the wrong shape outright.
-    let err = pack.text_window_frame(4).unwrap_err();
+    let err = pack
+        .text_window_frame(FRAME_WITH_WRONG_DIMENSIONS_ID)
+        .unwrap_err();
     assert!(matches!(
         &err,
         PackError::TextWindowImageWrongDimensions {
             id,
-            width: 8,
-            height: 8,
-            expected_width: 24,
-            expected_height: 24,
+            width: WRONG_FRAME_WIDTH,
+            height: WRONG_FRAME_HEIGHT,
+            expected_width: EXPECTED_FRAME_WIDTH,
+            expected_height: EXPECTED_FRAME_HEIGHT,
         } if id == "text-window/image/5"
     ));
 
-    // The generic untyped accessors still expose the entries as-is; only
-    // the typed text-window accessors enforce the pairing invariants.
     assert!(pack.palette("text-window/palette/2").is_ok());
     assert!(pack.image("text-window/image/3").is_ok());
 
@@ -233,22 +234,26 @@ fn unknown_layout_name_reports_missing_asset() {
 fn tileset_metatile_attribute_table_decodes_from_the_bundled_raw_bytes() {
     use crate::metatile_attributes::MetatileAttribute;
 
-    // Build the handle from the synthetic pack's typed entries so this
-    // exercises `TilesetHandle::metatile_attribute_table` without needing
-    // all 16 distinct palette slots the full `tileset()` bundler requires.
     let path = write_synthetic_pack("metatile-attrs");
     let pack = AssetPack::load(&path).unwrap();
     let palette = pack.palette("tileset/test/palette/00").unwrap();
     let handle = TilesetHandle {
         tiles: pack.image("tileset/test/tiles").unwrap(),
-        palettes: [palette; 16],
+        palettes: [palette; EXPECTED_TILESET_PALETTE_BANK_COUNT],
         metatiles: pack.raw("tileset/test/metatiles").unwrap(),
         metatile_attributes: pack.raw("tileset/test/metatile_attributes").unwrap(),
     };
 
     let table = handle.metatile_attribute_table();
-    assert_eq!(table.len(), 3);
-    for (id, raw) in [0x0001u16, 0x1002, 0x2003].into_iter().enumerate() {
+    assert_eq!(table.len(), EXPECTED_METATILE_ATTRIBUTE_COUNT);
+    for (id, raw) in [
+        NORMAL_LAYER_ATTRIBUTE_RAW,
+        COVERED_LAYER_ATTRIBUTE_RAW,
+        SPLIT_LAYER_ATTRIBUTE_RAW,
+    ]
+    .into_iter()
+    .enumerate()
+    {
         let attr = table
             .attribute_at(u16::try_from(id).unwrap())
             .unwrap()
