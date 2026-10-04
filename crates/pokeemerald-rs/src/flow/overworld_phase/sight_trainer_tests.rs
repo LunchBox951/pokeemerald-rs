@@ -875,8 +875,9 @@ fn the_approach_owns_every_frame_and_walks_one_tile_per_sixteen() {
     let mut phase = route_103_phase(PlayerState::new(start, 3, Direction::South));
     seed_approach(&mut phase, 1);
 
-    // Frames 1..=60: the handoff frame plus icon frames 1..=59; frame 61 commits.
-    for frame in 1..=EXCLAMATION_ICON_FRAMES {
+    // Frames 1..=63: the handoff frame, the icon animation and its dispatch
+    // frames, less the one frame that commits; frame 64 commits.
+    for frame in 1..=EXCLAMATION_ICON_FRAMES + ICON_DISPATCH_FRAMES {
         phase.step(held(Buttons::DOWN));
         assert_eq!(
             approaching_trainer(&phase).position(),
@@ -894,8 +895,8 @@ fn the_approach_owns_every_frame_and_walks_one_tile_per_sixteen() {
         );
     }
 
-    // The icon's last frame (the sixty-first after the trigger) is the first
-    // walked tile's own start.
+    // The trainer task's observation of the icon's removal (the sixty-fourth
+    // frame after the seeded trigger) is the first walked tile's own start.
     phase.step(held(Buttons::DOWN));
     assert_eq!(approaching_trainer(&phase).position(), (rx, ry + 1));
     assert_eq!(
@@ -937,9 +938,13 @@ fn the_trainer_stops_beside_the_player_and_both_turn_to_face_each_other() {
     let mut phase = route_103_phase(PlayerState::new(start, 3, Direction::South));
     seed_approach(&mut phase, 1);
 
-    // The lock handoff, sixty icon frames, sixteen walk frames, one frame for
-    // the trainer's own `MOVEMENT_ACTION_FACE_PLAYER`, then the stop itself.
-    for _ in 0..=LOCK_HANDOFF_AT_REST + EXCLAMATION_ICON_FRAMES + usize::from(WALK_FRAMES_PER_TILE)
+    // The lock handoff, sixty icon frames, the icon's dispatch frames, sixteen
+    // walk frames, one frame for the trainer's own `MOVEMENT_ACTION_FACE_PLAYER`,
+    // then the stop itself.
+    for _ in 0..=LOCK_HANDOFF_AT_REST
+        + EXCLAMATION_ICON_FRAMES
+        + ICON_DISPATCH_FRAMES
+        + usize::from(WALK_FRAMES_PER_TILE)
     {
         phase.step(ButtonState::new());
     }
@@ -1207,9 +1212,10 @@ fn the_icon_countdown_holds_until_the_players_step_drains() {
 
     // The drain-completing frame is not an icon frame, and neither are the
     // two frames the freeze task and the native poll spend after it, so the
-    // first walked tile commits on the icon's sixtieth frame -- the
-    // `LOCK_HANDOFF_AFTER_DRAIN + EXCLAMATION_ICON_FRAMES`th after the drain.
-    for frame in 1..LOCK_HANDOFF_AFTER_DRAIN + EXCLAMATION_ICON_FRAMES {
+    // first walked tile commits once the icon's removal is seen -- the
+    // `LOCK_HANDOFF_AFTER_DRAIN + EXCLAMATION_ICON_FRAMES + ICON_DISPATCH_FRAMES`th
+    // after the drain.
+    for frame in 1..LOCK_HANDOFF_AFTER_DRAIN + EXCLAMATION_ICON_FRAMES + ICON_DISPATCH_FRAMES {
         phase.step(held(Buttons::DOWN));
         assert_eq!(
             approaching_trainer(&phase).position(),
@@ -1222,8 +1228,8 @@ fn the_icon_countdown_holds_until_the_players_step_drains() {
     assert_eq!(
         approaching_trainer(&phase).position(),
         (rx, ry + 1),
-        "the sixtieth icon frame, two handoff frames after the drain, commits the first \
-         walked tile"
+        "the frame the task sees the icon removed, two handoff frames after the drain, \
+         commits the first walked tile"
     );
 }
 
@@ -1237,7 +1243,7 @@ fn an_at_rest_approach_spends_a_handoff_frame_before_the_icon() {
     let mut phase = route_103_phase(PlayerState::new((rx, ry + 2), 3, Direction::South));
     seed_approach(&mut phase, 1);
 
-    for _ in 0..LOCK_HANDOFF_AT_REST + EXCLAMATION_ICON_FRAMES - 1 {
+    for _ in 0..LOCK_HANDOFF_AT_REST + EXCLAMATION_ICON_FRAMES + ICON_DISPATCH_FRAMES - 1 {
         phase.step(ButtonState::new());
         assert_eq!(approaching_trainer(&phase).position(), RHETT_TILE);
     }
@@ -1640,5 +1646,53 @@ fn a_trigger_frame_that_drains_the_step_still_spends_the_after_drain_handoff() {
     assert_eq!(
         frames_after_drain, LOCK_HANDOFF_AFTER_DRAIN,
         "the icon must start only after both after-drain handoff frames"
+    );
+}
+
+/// Upstream's frames between the icon's sixtieth animation frame and the
+/// first walked tile, from the production trigger: `ContinueAnim` spends its
+/// own call dispatching `ANIMCMD_END` (`sprite.c:943-965`), the sprite
+/// callback removes the icon the frame after (`trainer_see.c:745-752`, sprite
+/// callbacks run before animation, `sprite.c:317-320`), and the trainer task
+/// -- which runs before the callbacks (`overworld.c:1467-1469`) -- observes
+/// the removal the frame after that and chains straight into the first tile
+/// (`trainer_see.c:438-448`).
+const ICON_DISPATCH_FRAMES: usize = 3;
+
+/// The trigger-to-first-tile count in production order: the real cone, the
+/// real trigger frame and the pre-icon handoff, no seeded approach. Frame 0
+/// is the trigger frame; the icon's own sixty frames start after the handoff,
+/// and the first tile lands only once the icon has been removed and the task
+/// has seen it.
+#[test]
+fn a_standing_trigger_walks_its_first_tile_after_the_icon_dispatch_frames() {
+    let (rx, ry) = RHETT_TILE;
+    let mut phase = route_103_phase(PlayerState::new((rx, ry + 2), 3, Direction::South));
+    phase.rng = engine::rng::Rng::new(7);
+    phase.party_lead = Some(overwhelming_lead());
+    phase.synthetic_sight_trainer = Some(assets::trainers::TrainerId(STAND_IN_TRAINER));
+    phase.step(ButtonState::new());
+    assert!(phase.sight_approach.is_some(), "setup: frame 0 triggers");
+    let rng_after_trigger = phase.rng.state();
+
+    let first_tile_frame = LOCK_HANDOFF_AT_REST + EXCLAMATION_ICON_FRAMES + ICON_DISPATCH_FRAMES;
+    for frame in 1..first_tile_frame {
+        phase.step(ButtonState::new());
+        assert_eq!(
+            approaching_trainer(&phase).position(),
+            RHETT_TILE,
+            "frame {frame}: the icon is still up or not yet seen removed"
+        );
+    }
+    phase.step(ButtonState::new());
+    assert_eq!(
+        approaching_trainer(&phase).position(),
+        (rx, ry + 1),
+        "frame {first_tile_frame} commits the first tile"
+    );
+    assert_eq!(
+        phase.rng.state(),
+        rng_after_trigger,
+        "the approach draws no RNG"
     );
 }
