@@ -25527,6 +25527,12 @@
           "rust_target": "crates/pokeemerald-rs/src/overworld/avatar.rs",
           "spec": "I-3",
           "status": "rewritten"
+        },
+        "sStepAnimTables": {
+          "reason": "Player entry only: sAnimTable_BrendanMayNormal's animPos {1,3,0,2} is ported as PlayerState's LeadingFoot phase, which alternates the forward-foot cell across walking steps, standstill turns, and dispatched forced crossings, and avatar::frame_for adds second_foot_leads() to the step cell (issue #1558). The other table rows (QuintyPlump, Standard, and the rest) drive NPC sprites, which have no step animation in this port and stay unported.",
+          "rust_target": "crates/engine/src/overworld/player.rs",
+          "spec": "I-3",
+          "status": "rewritten"
         }
       },
       "category": "code.header",
@@ -26198,6 +26204,12 @@
         "SetSpritePosToMapCoords": {
           "reason": "Player-OBJ screen-position derivation: for the player's own object event mapX/mapY == gSaveBlock1Ptr->pos always, collapsing this to a per-frame-constant OAM origin (PLAYER_OBJ_X/PLAYER_OBJ_Y); the camera/BG scrolls instead (viewport::build_tilemaps). PLAYER_OBJ_Y also folds in centerToCornerVecY (-16) and the resting gSpriteCoordOffsetY bias (-sVerticalCameraPan - 8 == -40, UpdateCameraPanning's own entry) via RESTING_SCROLL_Y (issue #977), landing the player's fixed OAM row at 56 -- matching upstream's resting 7*16 - 16 - 40. Bike pan-ahead (the only thing that would move dx/dy away from 0) is not modelled yet -- deferred, still in v1 scope.",
           "rust_target": "crates/pokeemerald-rs/src/overworld/avatar.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        },
+        "SetStepAnimHandleAlternation": {
+          "reason": "Player avatar only: PlayerState::advance_step_parity swaps command 1 to 2 and 3 to 0 on each ordinary, connection, or dispatched forced crossing and each turn-in-place, and leaves a held slide foot unchanged; a fresh phase is normalised by the idle face (issue #1558). Not applied to NPC object events, and the collision bump (WalkInPlaceSlow) is not modeled, so a blocked step leaves the phase unchanged.",
+          "rust_target": "crates/engine/src/overworld/player.rs",
           "spec": "I-3",
           "status": "rewritten"
         },
