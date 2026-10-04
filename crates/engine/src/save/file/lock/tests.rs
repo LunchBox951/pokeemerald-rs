@@ -774,3 +774,132 @@ fn two_spellings_of_one_save_directory_contend_for_one_lock() {
     );
     drop(guard);
 }
+
+/// A second `SaveFile` reached through a retargeted ancestor locks the new
+/// directory's own slot and cannot learn of the first guard, so the first
+/// guard's read and write must be the ones to fail closed.
+#[cfg(unix)]
+#[test]
+fn a_retargeted_ancestor_symlink_fails_the_guarded_read_and_write_closed() {
+    let dir = TempDir::new("lock-retargeted-ancestor");
+    let first = dir.join("a");
+    let second = dir.join("b");
+    std::fs::create_dir(&first).unwrap();
+    std::fs::create_dir(&second).unwrap();
+    let link = dir.join("link");
+    std::os::unix::fs::symlink(&first, &link).unwrap();
+
+    let file = SaveFile::at(link.join(SAVE_FILE_NAME));
+    let clone = file.clone();
+    let guard = file.lock().expect("the first locker takes the lock");
+
+    std::fs::remove_file(&link).unwrap();
+    std::os::unix::fs::symlink(&second, &link).unwrap();
+
+    let second_locker = SaveFile::at(link.join(SAVE_FILE_NAME));
+    let second_guard = second_locker
+        .lock()
+        .expect("the retargeted directory has its own, unheld lock slot");
+
+    let (store, _, _) = saved_store();
+    for (what, outcome) in [
+        ("write", file.write(&store).err()),
+        ("clone write", clone.write(&store).err()),
+        ("read", file.read().err()),
+    ] {
+        assert!(
+            matches!(outcome, Some(SaveFileError::SaveParentRetargeted { .. })),
+            "the first guard's {what} must fail closed once its directory is retargeted: \
+             {outcome:?}"
+        );
+    }
+    for directory in [&first, &second] {
+        assert!(
+            !directory.join(SAVE_FILE_NAME).exists(),
+            "no save may land in {} through the retargeted path",
+            directory.display()
+        );
+    }
+    let staged_leftovers = std::fs::read_dir(&second)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .filter(|name| name != LOCK_FILE_NAME)
+        .count();
+    assert_eq!(
+        staged_leftovers, 0,
+        "nothing may be staged in the new directory"
+    );
+
+    drop(second_guard);
+    drop(guard);
+    file.write(&store)
+        .expect("with the stale guard gone, the path writes through its current directory");
+    assert!(second.join(SAVE_FILE_NAME).exists());
+}
+
+#[test]
+fn an_unretargeted_guard_still_reads_and_writes_its_save() {
+    let dir = TempDir::new("lock-stable-parent");
+    let file = SaveFile::at(dir.join(SAVE_FILE_NAME));
+    let guard = file.lock().expect("the lock is taken");
+    let (store, _, _) = saved_store();
+    file.write(&store)
+        .expect("a guarded write in a stable directory");
+    assert!(file.read().expect("a guarded read").is_some());
+    drop(guard);
+}
+
+/// A parent retargeted to a FIFO must fail the guarded read, not block on
+/// the FIFO's missing writer.
+#[cfg(unix)]
+#[test]
+fn a_parent_retargeted_to_a_fifo_fails_closed_without_blocking() {
+    let dir = TempDir::new("lock-retargeted-to-fifo");
+    let first = dir.join("a");
+    std::fs::create_dir(&first).unwrap();
+    let link = dir.join("link");
+    std::os::unix::fs::symlink(&first, &link).unwrap();
+    let fifo = dir.join("fifo");
+    let status = std::process::Command::new("mkfifo").arg(&fifo).status();
+    if !status.is_ok_and(|status| status.success()) {
+        eprintln!("skipping: mkfifo is unavailable on this host");
+        return;
+    }
+
+    let file = SaveFile::at(link.join(SAVE_FILE_NAME));
+    let guard = file.lock().expect("the lock is taken through the link");
+    std::fs::remove_file(&link).unwrap();
+    std::os::unix::fs::symlink(&fifo, &link).unwrap();
+
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let reader = file.clone();
+    std::thread::spawn(move || drop(sender.send(reader.read().err())));
+    let outcome = receiver
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("the parent check must not block on a FIFO");
+    assert!(
+        outcome.is_some(),
+        "a non-directory parent must refuse the read"
+    );
+    drop(guard);
+}
+
+/// A save directory with search and write permission but no list permission
+/// stays lockable.
+#[cfg(unix)]
+#[test]
+fn a_search_only_save_directory_is_still_lockable() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let dir = TempDir::new("lock-unlistable-directory");
+    let sealed = dir.join("sealed");
+    std::fs::create_dir(&sealed).unwrap();
+    std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o300)).unwrap();
+    let file = SaveFile::at(sealed.join(SAVE_FILE_NAME));
+    let outcome = file.lock().map(drop);
+    std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(
+        outcome.is_ok(),
+        "a write/search-only directory must stay lockable: {outcome:?}"
+    );
+}

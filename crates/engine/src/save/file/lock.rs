@@ -6,6 +6,7 @@
 //! this module shares with [`SaveFile::write`] stays in the parent module.
 
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, PoisonError, Weak};
 
 use super::open::{
     open_refused_a_symlink, refuse_an_unusable_entry, refuse_an_unusable_open,
@@ -51,6 +52,13 @@ impl SaveFile {
         let parent = self.create_parent_directory()?;
 
         let path = self.lock_path();
+        let directory =
+            LockedDirectory::open(parent.unwrap_or_else(|| Path::new("."))).map_err(|source| {
+                SaveFileError::Lock {
+                    path: path.clone(),
+                    source,
+                }
+            })?;
         let file = self.open_lock_slot()?;
         file.lock().map_err(|source| SaveFileError::Lock {
             path: path.clone(),
@@ -62,12 +70,50 @@ impl SaveFile {
         if self.resolves_to(&path, &file)? {
             return Err(SaveFileError::LockPathIsSave { path });
         }
+        self.refuse_a_retargeted_parent(Some(&directory))?;
         if first_save {
             if let Some(parent) = parent {
                 Self::sync_ancestor_chain(parent, sync_directory);
             }
         }
-        Ok(SaveFileGuard { _lock_file: file })
+        self.refuse_a_retargeted_parent(Some(&directory))?;
+        let directory = self.held_directory.publish(directory, &self.path)?;
+        Ok(SaveFileGuard {
+            _lock_file: file,
+            _directory: directory,
+        })
+    }
+
+    /// Fails closed unless this save path's parent still resolves to the
+    /// directory `held` pinned; `None` means no guard is live, so nothing
+    /// is promised and nothing is checked.
+    ///
+    /// # Errors
+    ///
+    /// [`SaveFileError::SaveParentRetargeted`] if the parent names another
+    /// directory; [`SaveFileError::Lock`] if it could not be inspected.
+    pub(super) fn refuse_a_retargeted_parent(
+        &self,
+        held: Option<&LockedDirectory>,
+    ) -> Result<(), SaveFileError> {
+        let Some(held) = held else {
+            return Ok(());
+        };
+        let parent = self
+            .path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        match held.is_named_by(parent) {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(SaveFileError::SaveParentRetargeted {
+                path: self.path.clone(),
+            }),
+            Err(source) => Err(SaveFileError::Lock {
+                path: self.lock_path(),
+                source,
+            }),
+        }
     }
 
     /// Opens this directory's vetted lock slot, without locking it. The
@@ -402,3 +448,142 @@ impl SaveFile {
 
 #[cfg(test)]
 mod tests;
+
+/// The parent directory a [`SaveFileGuard`] locked, recorded by identity so
+/// the path's parent can later be compared against it: the lock slot is a
+/// file, and pins no ancestor symlink or junction.
+#[derive(Debug)]
+pub(super) struct LockedDirectory {
+    /// A handle that keeps the directory's identity from being reused while
+    /// the guard lives. Best effort: a directory without list permission
+    /// cannot be opened on Unix, and the identity comparison needs no handle.
+    _pin: Option<std::fs::File>,
+    identity: DirectoryIdentity,
+}
+
+#[cfg(unix)]
+type DirectoryIdentity = (u64, u64);
+#[cfg(windows)]
+type DirectoryIdentity = super::open::WindowsFileIdentity;
+
+impl LockedDirectory {
+    /// Records which directory `directory` names now, following symlinks
+    /// (and, on Windows, junctions).
+    fn open(directory: &Path) -> std::io::Result<Self> {
+        let identity = Self::identity_at(directory)?;
+        Ok(Self {
+            _pin: Self::pin(directory),
+            identity,
+        })
+    }
+
+    /// Whether `directory` resolves to the directory this one recorded.
+    fn is_named_by(&self, directory: &Path) -> std::io::Result<bool> {
+        Ok(Self::identity_at(directory)? == self.identity)
+    }
+
+    /// Unix reads the identity by `stat`, which neither needs list
+    /// permission nor can block on a FIFO the path was retargeted to.
+    #[cfg(unix)]
+    fn identity_at(directory: &Path) -> std::io::Result<DirectoryIdentity> {
+        use std::os::unix::fs::MetadataExt as _;
+
+        let metadata = std::fs::metadata(directory)?;
+        Self::refuse_a_non_directory(&metadata)?;
+        Ok((metadata.dev(), metadata.ino()))
+    }
+
+    /// Opens the directory the identity was just read from; only done for a
+    /// directory, since a FIFO swapped in since would block a plain open.
+    #[cfg(unix)]
+    fn pin(directory: &Path) -> Option<std::fs::File> {
+        std::fs::File::open(directory).ok()
+    }
+
+    #[cfg(windows)]
+    fn identity_at(directory: &Path) -> std::io::Result<DirectoryIdentity> {
+        let handle = Self::open_handle(directory)?;
+        super::open::WindowsFileIdentity::of(&handle)
+    }
+
+    #[cfg(windows)]
+    fn pin(directory: &Path) -> Option<std::fs::File> {
+        Self::open_handle(directory).ok()
+    }
+
+    /// Metadata-only access with backup semantics, the way Windows opens a
+    /// directory; no `OPEN_REPARSE_POINT`, so a junction is followed to its
+    /// target, and no `FILE_SHARE_DELETE`, so the directory cannot be
+    /// renamed or removed while it is held.
+    #[cfg(windows)]
+    fn open_handle(directory: &Path) -> std::io::Result<std::fs::File> {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_READ, FILE_SHARE_WRITE,
+        };
+
+        let handle = std::fs::OpenOptions::new()
+            .access_mode(0)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(directory)?;
+        Self::refuse_a_non_directory(&handle.metadata()?)?;
+        Ok(handle)
+    }
+
+    fn refuse_a_non_directory(metadata: &std::fs::Metadata) -> std::io::Result<()> {
+        if metadata.is_dir() {
+            Ok(())
+        } else {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::NotADirectory,
+                "the save's parent is not a directory",
+            ))
+        }
+    }
+}
+
+/// The [`LockedDirectory`] of the guard currently live on a [`SaveFile`] or
+/// any of its clones, held weakly so the lock outlives nothing but its guard.
+#[derive(Debug, Clone, Default)]
+pub(super) struct HeldDirectory(Arc<Mutex<Weak<LockedDirectory>>>);
+
+impl HeldDirectory {
+    /// The directory a live guard pinned, if there is one; holding the
+    /// returned handle keeps it live for as long as the caller's operation.
+    pub(super) fn current(&self) -> Option<Arc<LockedDirectory>> {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .upgrade()
+    }
+
+    /// Records `directory` as the live guard's, or joins the live guard's
+    /// when it is the same directory. The mutex is never held across
+    /// blocking I/O.
+    ///
+    /// # Errors
+    ///
+    /// [`SaveFileError::SaveParentRetargeted`] if a guard on another
+    /// directory is still live on this `SaveFile`: its context is never
+    /// overwritten.
+    fn publish(
+        &self,
+        directory: LockedDirectory,
+        save: &Path,
+    ) -> Result<Arc<LockedDirectory>, SaveFileError> {
+        let mut live = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(existing) = live.upgrade() {
+            return if existing.identity == directory.identity {
+                Ok(existing)
+            } else {
+                Err(SaveFileError::SaveParentRetargeted {
+                    path: save.to_path_buf(),
+                })
+            };
+        }
+        let directory = Arc::new(directory);
+        *live = Arc::downgrade(&directory);
+        Ok(directory)
+    }
+}
