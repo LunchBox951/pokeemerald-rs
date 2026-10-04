@@ -302,3 +302,46 @@ fn a_restarted_tail_must_fit_inside_the_original_budget() {
         );
     }
 }
+
+/// A poll paused 500 ms while 10 ms stale callbacks ran folds them into one
+/// aggregate; when the callbacks then stop, that aggregate must not stay the
+/// cadence that keeps a 500 ms silence reading as alive at the deadline.
+#[test]
+fn an_aggregate_from_a_polling_pause_does_not_excuse_the_silence_after_it() {
+    for pause_at in [0_u128, 10, 100, 250] {
+        let policy = RetryPolicy {
+            interval: Duration::from_millis(10),
+            max_wait: Duration::from_secs(1),
+        };
+        let start = Instant::now();
+        let clock = Rc::new(RefCell::new(start));
+        let elapsed = || clock.borrow().duration_since(start).as_millis();
+
+        let result = wait_for_measured_tail(
+            4,
+            Duration::from_secs(1),
+            48_000,
+            &policy,
+            // 480 frames (10 ms) per callback until the pause ends, then none.
+            || {
+                let ran = elapsed().min(pause_at + 500) / 10;
+                Some(progress(0, 4 + u64::try_from(ran).unwrap_or(0) * 480))
+            },
+            || 0,
+            || *clock.borrow(),
+            |duration| {
+                let step = if elapsed() == pause_at {
+                    Duration::from_millis(500)
+                } else {
+                    duration
+                };
+                *clock.borrow_mut() += step;
+            },
+        );
+
+        assert!(
+            matches!(result, Err(DrainError::MeasuredTailTimedOut { .. })),
+            "a pause at {pause_at} ms must not hide the stall after it"
+        );
+    }
+}

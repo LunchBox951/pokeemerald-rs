@@ -44,8 +44,9 @@ const DEVICE_TAIL_MAX: Duration = Duration::from_secs(1);
 
 /// How many of the most recent submitted-frame advances size the callback
 /// cadence in [`wait_for_measured_tail`]: enough to ride out a jittery
-/// period, few enough that one aggregate a late poll folded together ages out
-/// once callbacks resume at their real pace.
+/// period, few enough to adapt when callbacks change their real pace. Advances
+/// observed after a polling pause are judged at that poll, but are not
+/// retained as cadence: they may aggregate many shorter callbacks.
 const CADENCE_WINDOW: usize = 4;
 
 fn main() -> ExitCode {
@@ -542,7 +543,8 @@ fn usable_callback_in_span(from: u64, to: u64, usable_through: u64) -> bool {
 /// but vetoes the finish, and discards it only once its frames land. Evidence of at least
 /// `derived_tail / 4` (a span of advances, or one covering that much
 /// playback) with the latest advance within one recent inter-advance gap
-/// (over the last [`CADENCE_WINDOW`]) plus two polls means live callbacks,
+/// (over the last [`CADENCE_WINDOW`], an aggregate a polling pause folded
+/// together counting only on the poll that saw it) plus two polls means live callbacks,
 /// and once `derived_tail` has run from the start of the wait, or from the
 /// callbacks that resumed after a stall, the wait finishes as [`wait_for_device_tail`] would. A gap that outruns both the
 /// recent cadence and the playback the previous advance covered by a tenth of
@@ -610,6 +612,7 @@ fn wait_for_measured_tail(
             (first_stale, last_stale, max_stale_advance) = (None, None, Duration::ZERO);
             after_stall = false;
         }
+        let mut poll_cadence = Duration::ZERO;
         if let Some(previous) = last_submitted.filter(|&last| submitted > last) {
             let played = frames_duration(submitted - previous, device_sample_rate);
             // The advance happened somewhere since the previous poll. A late
@@ -627,11 +630,7 @@ fn wait_for_measured_tail(
             // cadence.
             let seen = recent_cadence.iter().copied().max().unwrap_or_default();
             // With one advance seen there is no cadence yet, only the gap.
-            let floor = if advances >= 2 {
-                derived_tail / 4
-            } else {
-                derived_tail / 2
-            };
+            let floor = derived_tail / if advances >= 2 { 4 } else { 2 };
             // Before any advance, the only period to hold the gap to is this buffer.
             if advances == 0 {
                 last_played = played;
@@ -647,7 +646,16 @@ fn wait_for_measured_tail(
             } else {
                 gap.max(played)
             };
-            recent_cadence[advances % CADENCE_WINDOW] = cadence_sample;
+            // A polling pause can fold many short callbacks into one advance.
+            // Judge that advance now (including at the deadline), but do not
+            // let the ambiguous aggregate widen freshness on later polls.
+            poll_cadence = cadence_sample;
+            let settled = current.duration_since(last_poll) <= policy.interval * 2;
+            recent_cadence[advances % CADENCE_WINDOW] = if settled {
+                cadence_sample
+            } else {
+                Duration::ZERO
+            };
             advances = advances.wrapping_add(1);
             last_advance = Some(at);
             last_played = played;
@@ -664,7 +672,7 @@ fn wait_for_measured_tail(
         }
         last_poll = current;
         last_submitted = Some(submitted);
-        let cadence = recent_cadence.iter().copied().max().unwrap_or_default();
+        let cadence = poll_cadence.max(recent_cadence.iter().copied().max().unwrap_or_default());
         let evidence = first_stale
             .zip(last_stale)
             .is_some_and(|(first, last)| last.duration_since(first) >= derived_tail / 4)
