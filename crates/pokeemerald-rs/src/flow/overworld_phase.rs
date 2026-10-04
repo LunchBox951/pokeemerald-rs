@@ -882,6 +882,8 @@ pub(super) fn saved_map_id(warp: WarpData) -> Option<assets::MapId> {
 #[cfg(test)]
 mod active_battle_dispatch_tests;
 #[cfg(test)]
+mod animation_tick_tests;
+#[cfg(test)]
 mod bedroom_collision_tests;
 #[cfg(test)]
 mod connections_tests;
@@ -893,6 +895,8 @@ mod dialog_pacing_tests;
 /// against both battle handoffs and the write-back merge that follows.
 #[cfg(test)]
 mod fainted_lead_party_tests;
+#[cfg(test)]
+mod field_input_ordering_tests;
 #[cfg(test)]
 mod first_battle_conclusion_tests;
 #[cfg(test)]
