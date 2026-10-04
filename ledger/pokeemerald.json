@@ -17527,6 +17527,14 @@
       "status": "pending"
     },
     "include/constants/items.h": {
+      "artifacts": {
+        "BagStackLimits": {
+          "reason": "Normal bag stack capacity 99 and berry capacity 999",
+          "rust_target": "crates/engine/src/save/bag.rs",
+          "spec": "C-2",
+          "status": "rewritten"
+        }
+      },
       "category": "code.constants",
       "kind": "file",
       "status": "pending"
@@ -18123,6 +18131,12 @@
     },
     "include/global.h": {
       "artifacts": {
+        "GcnLinkFlags": {
+          "reason": "Persists the full u32 gcnLinkFlags at SaveBlock2 offset 0xA8",
+          "rust_target": "crates/engine/src/save/block.rs",
+          "spec": "C-2",
+          "status": "rewritten"
+        },
         "ItemSlotAndBagPocketLayouts": {
           "reason": "ItemSlot layout and Emerald fixed pocket capacities implemented as the typed Bag serialization boundary",
           "rust_target": "crates/engine/src/save/bag.rs",
@@ -26808,10 +26822,28 @@
     },
     "src/item.c": {
       "artifacts": {
+        "AddBagItem": {
+          "reason": "Atomic normal-bag insertion with metadata pocket routing and upstream stacking limits; Battle Pyramid bag dispatch remains pending",
+          "rust_target": "crates/engine/src/save/bag.rs",
+          "spec": "C-2",
+          "status": "rewritten"
+        },
         "BagQuantityEncryption": {
           "reason": "Bag quantity XOR serialization with the encryption key low 16 bits re-implemented while inventory mutation behavior remains pending",
           "rust_target": "crates/engine/src/save/bag.rs",
           "spec": "S-5",
+          "status": "rewritten"
+        },
+        "CheckBagHasSpace": {
+          "reason": "Nonmutating normal-bag capacity check that agrees with insertion; Battle Pyramid dispatch remains pending",
+          "rust_target": "crates/engine/src/save/bag.rs",
+          "spec": "C-2",
+          "status": "rewritten"
+        },
+        "GetItemPocket": {
+          "reason": "ItemTable::pocket selects the bag pocket from item metadata, sanitizing out-of-range ids to the ITEM_NONE row",
+          "rust_target": "crates/assets/src/items.rs",
+          "spec": "C-2",
           "status": "rewritten"
         }
       },
@@ -28137,6 +28169,14 @@
       "status": "pending"
     },
     "src/save_location.c": {
+      "artifacts": {
+        "SetUnlockedPokedexFlags": {
+          "reason": "ORs bits 0-5 and 15 into saved GCN link flags without touching other bits",
+          "rust_target": "crates/engine/src/save/block.rs",
+          "spec": "C-2",
+          "status": "rewritten"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
