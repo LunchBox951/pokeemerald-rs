@@ -336,6 +336,14 @@ impl SaveTarget for PhaseSaveTarget<'_> {
                 );
                 false
             }
+            Ok(StoreOutcome::RefusedConflictingSave) => {
+                eprintln!(
+                    "save: the save on disk has this session's save count but different \
+                     contents (was it replaced?) -- refusing to overwrite it; the game \
+                     was not saved"
+                );
+                false
+            }
             Err(err) => {
                 eprintln!("save: {err} -- the game was not saved");
                 false
