@@ -1335,3 +1335,66 @@ fn real_pack_flagged_continue_lands_at_the_continue_game_warp() {
     assert!(!phase.save1.event_data.flag_get(FLAG_TEMP_1).unwrap());
     assert!(phase.save1.event_data.flag_get(decoration).unwrap());
 }
+
+/// I-3 (#1648): both genders through the production `OverworldPhase::load`,
+/// the start-menu save, and `continue_saved_game`. The selected identity is
+/// explicit; the chooser UI is not involved.
+#[test]
+fn each_selected_gender_loads_saves_and_continues_into_its_own_room() {
+    use crate::overworld::PlayerCharacter;
+
+    for (gender, name, character, rival) in [
+        (
+            engine::save::PlayerGender::Male,
+            "RED",
+            PlayerCharacter::Brendan,
+            super::route103_rival::Rival::May,
+        ),
+        (
+            engine::save::PlayerGender::Female,
+            "LEAF",
+            PlayerCharacter::May,
+            super::route103_rival::Rival::Brendan,
+        ),
+    ] {
+        let identity = new_game::NewGameIdentity::new(name, gender).unwrap();
+        let arrival = new_game::bedroom_arrival(gender);
+        let mut phase = OverworldPhase::load(
+            crate::pack_source::PackSource::Runtime,
+            new_game::NewGameOptions::DEFAULT,
+            identity,
+        )
+        .expect("run `cargo xtask extract` first");
+        assert_eq!(phase.map_id, arrival.map_id);
+        assert_eq!(phase.player.position(), arrival.position);
+        assert_eq!(phase.save2().player_gender, gender);
+        assert_eq!(
+            super::route103_rival::Rival::for_gender(phase.save2().player_gender),
+            Some(rival)
+        );
+        assert_eq!(character, PlayerCharacter::from(gender));
+
+        let temp = TempSave::new(&format!("i3-gender-{name}"));
+        let mut slot = temp.slot();
+        save_from_the_start_menu(&mut phase, &mut slot);
+        let saved = slot.load();
+        assert_eq!(saved.block2.player_gender, gender);
+        assert_eq!(
+            engine::text::decode_to_string(&saved.block2.player_name).unwrap(),
+            name
+        );
+        let resumed = OverworldPhase::continue_saved_game(
+            crate::pack_source::PackSource::Runtime,
+            saved.block1,
+            saved.block2,
+        )
+        .unwrap_or_else(|_| panic!("continue must resume {name}'s save"));
+        assert_eq!(resumed.map_id, arrival.map_id);
+        assert_eq!(resumed.player.position(), arrival.position);
+        assert_eq!(resumed.save2().player_gender, gender);
+        assert_eq!(
+            resumed.save1().last_heal_location,
+            new_game::default_last_heal_location(gender)
+        );
+    }
+}

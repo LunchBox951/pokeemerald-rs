@@ -359,6 +359,7 @@ impl OverworldPhase {
         Self::load(
             crate::pack_source::PackSource::Runtime,
             new_game::NewGameOptions::DEFAULT,
+            new_game::NewGameIdentity::DEFAULT,
         )
     }
 
@@ -372,17 +373,33 @@ impl OverworldPhase {
     pub(super) fn load(
         source: crate::pack_source::PackSource,
         options: new_game::NewGameOptions,
+        identity: new_game::NewGameIdentity,
     ) -> Result<Self, OverworldSceneError> {
-        let scene = overworld::load_default_room_from_source(
-            source,
-            &engine::event_data::EventData::new(),
-        )?;
-        let player = PlayerState::new(
-            new_game::SPAWN_POSITION,
-            new_game::SPAWN_ELEVATION,
-            new_game::SPAWN_FACING,
+        // The identity is committed to the save first; the first scene then
+        // loads with that save's event data and the selected avatar, so no
+        // male or empty-flag frame is ever composed.
+        let (initial_save1, initial_save2) = new_game::init_save_blocks_with_identity(
+            &mut engine::rng::Rng::new(new_game::NEW_GAME_RNG_SEED),
+            options,
+            identity,
         );
-        let mut phase = Self::new(scene, new_game::SPAWN_MAP_ID, player, None, source, options);
+        let arrival = new_game::bedroom_arrival(initial_save2.player_gender);
+        let scene = overworld::load_room_from_source(
+            source,
+            arrival.map_id,
+            initial_save2.player_gender.into(),
+            &initial_save1.event_data,
+        )?;
+        let player = PlayerState::new(arrival.position, arrival.elevation, arrival.facing);
+        let mut phase = Self::new(
+            scene,
+            arrival.map_id,
+            player,
+            None,
+            source,
+            options,
+            identity,
+        );
         // The stand-in for the un-ported starter handout: without a lead,
         // every encounter would be rolled and dropped. Deliberately draws
         // nothing from `phase.rng` -- see `new_game::provisional_starter`'s
@@ -653,6 +670,7 @@ impl OverworldPhase {
             dialog,
             crate::pack_source::PackSource::Runtime,
             new_game::NewGameOptions::DEFAULT,
+            new_game::NewGameIdentity::DEFAULT,
         )
     }
 
@@ -668,9 +686,11 @@ impl OverworldPhase {
         dialog: Option<NpcDialog>,
         pack_source: crate::pack_source::PackSource,
         options: new_game::NewGameOptions,
+        identity: new_game::NewGameIdentity,
     ) -> Self {
         let mut rng = engine::rng::Rng::new(new_game::NEW_GAME_RNG_SEED);
-        let (mut save1, save2) = new_game::init_save_blocks_with_options(&mut rng, options);
+        let (mut save1, save2) =
+            new_game::init_save_blocks_with_identity(&mut rng, options, identity);
         connections::run_on_transition_map_script(map_id, &mut save1.event_data);
         first_battle_trigger::sync_route_101_state_on_entry(map_id, &mut save1.event_data);
         route103_rival_trigger::setup_rival_gfx_id_on_transition(
