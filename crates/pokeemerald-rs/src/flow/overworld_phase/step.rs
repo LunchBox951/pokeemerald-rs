@@ -515,7 +515,7 @@ impl OverworldPhase {
             let crossed_to = advance_or_skip_for_preempt(
                 &mut self.player,
                 &mut self.pending_landing,
-                direction,
+                buttons,
                 &runtime,
                 &maps,
                 &self.save1.event_data,

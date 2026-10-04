@@ -24967,6 +24967,20 @@
       "status": "pending"
     },
     "src/bike.c": {
+      "artifacts": {
+        "IsRunningDisallowed": {
+          "reason": "The gMapHeader.allowRunning half of the run gate, read from runtime.header().allow_run on every eligible poll (bike.c:1056-1062); bike movement is not ported.",
+          "rust_target": "crates/engine/src/overworld/player.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "IsRunningDisallowedByMetatile": {
+          "reason": "running_disallowed_by_metatile: departure behavior forbids running, and a Fortree bridge forbids it at even previous elevation (bike.c:1056-1062).",
+          "rust_target": "crates/engine/src/overworld/player.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -27364,6 +27378,12 @@
         "MetatileBehavior_IsNorthwardCurrent": {
           "reason": "Reimplemented as an arm of is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsRunningDisallowed": {
+          "reason": "running_disallowed_by_metatile covers MB_NO_RUNNING, MB_LONG_GRASS, MB_HOT_SPRINGS and the four Pacifidlog logs (metatile_behavior.c:1258-1266).",
+          "rust_target": "crates/engine/src/overworld/player.rs",
           "spec": "S-5",
           "status": "rewritten"
         },

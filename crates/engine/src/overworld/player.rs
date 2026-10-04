@@ -6,10 +6,10 @@ use super::collision::{directionally_impassable, elevation_mismatch, Collision};
 use super::direction::Direction;
 use super::map_runtime::{ConnectedMapData, MapRuntime};
 use super::metatile_behavior::{
-    is_forced_movement, is_forced_movement_input_tile, MB_EASTWARD_CURRENT, MB_ICE, MB_MUDDY_SLOPE,
-    MB_NORMAL, MB_NORTHWARD_CURRENT, MB_SLIDE_EAST, MB_SLIDE_NORTH, MB_SLIDE_SOUTH, MB_SLIDE_WEST,
-    MB_SOUTHWARD_CURRENT, MB_TRICK_HOUSE_PUZZLE_8_FLOOR, MB_WALK_EAST, MB_WALK_NORTH,
-    MB_WALK_SOUTH, MB_WALK_WEST, MB_WATERFALL, MB_WESTWARD_CURRENT,
+    is_forced_movement, is_forced_movement_input_tile, MB_EASTWARD_CURRENT, MB_ICE, MB_LONG_GRASS,
+    MB_MUDDY_SLOPE, MB_NORMAL, MB_NORTHWARD_CURRENT, MB_SLIDE_EAST, MB_SLIDE_NORTH, MB_SLIDE_SOUTH,
+    MB_SLIDE_WEST, MB_SOUTHWARD_CURRENT, MB_TRICK_HOUSE_PUZZLE_8_FLOOR, MB_WALK_EAST,
+    MB_WALK_NORTH, MB_WALK_SOUTH, MB_WALK_WEST, MB_WATERFALL, MB_WESTWARD_CURRENT,
 };
 use super::object_event::visible_object_event_at;
 use crate::event_data::EventData;
@@ -26,6 +26,32 @@ pub const WALK_FRAMES_PER_TILE: u8 = 16;
 /// (`field_player_avatar.c:526-552, 979-982`; `sStepTimes[MOVE_SPEED_FAST_1]
 /// == ARRAY_COUNT(sStep2Funcs) == 8`, `event_object_movement.c:8233-8298`).
 pub const SLIDE_FRAMES_PER_TILE: u8 = 8;
+
+/// Frames a held-B run crosses one tile in: upstream's `PlayerRun` mover
+/// initialises `MOVE_SPEED_FAST_1`, so `sStepTimes` gives 8 two-pixel updates
+/// (`field_player_avatar.c:995-998`, `event_object_movement.c:5110-5124,
+/// 8233-8298`).
+pub const RUN_FRAMES_PER_TILE: u8 = 8;
+
+/// `FLAG_SYS_B_DASH` (`SYSTEM_FLAGS + 0x60`): the running shoes were received
+/// (`include/constants/flags.h:1462`).
+const FLAG_SYS_B_DASH: u16 = 0x8C0;
+
+const MB_NO_RUNNING: u8 = 0x0A;
+const MB_HOT_SPRINGS: u8 = 0x28;
+const MB_PACIFIDLOG_VERTICAL_LOG_TOP: u8 = 0x74;
+const MB_PACIFIDLOG_HORIZONTAL_LOG_RIGHT: u8 = 0x77;
+const MB_FORTREE_BRIDGE: u8 = 0x78;
+
+/// `MetatileBehavior_IsRunningDisallowed` plus the Fortree bridge's
+/// even-elevation rule from `IsRunningDisallowedByMetatile`
+/// (`metatile_behavior.c:1258-1266`, `bike.c:1056-1062`).
+const fn running_disallowed_by_metatile(behavior: u8, elevation: u8) -> bool {
+    matches!(behavior, MB_NO_RUNNING | MB_LONG_GRASS | MB_HOT_SPRINGS)
+        || (behavior >= MB_PACIFIDLOG_VERTICAL_LOG_TOP
+            && behavior <= MB_PACIFIDLOG_HORIZONTAL_LOG_RIGHT)
+        || (behavior == MB_FORTREE_BRIDGE && elevation & 1 == 0)
+}
 
 /// Frames a standstill turn busies movement input for: upstream's
 /// `WALK_IN_PLACE_FAST` action (`event_object_movement.c:5704-5721`).
@@ -61,6 +87,12 @@ impl TransitCadence {
     const SLIDE: Self = Self {
         duration: SLIDE_FRAMES_PER_TILE,
         animation_disabled: true,
+    };
+
+    /// A held-B run's pace: fast, with the walk animation left running.
+    const RUN: Self = Self {
+        duration: RUN_FRAMES_PER_TILE,
+        animation_disabled: false,
     };
 }
 
@@ -484,6 +516,28 @@ impl PlayerState {
         maps: &impl ConnectedMapData,
         event_data: &EventData,
     ) -> StepOutcome {
+        self.step_with_run(input, false, runtime, maps, event_data)
+    }
+
+    /// [`Self::step`] with the held state of B.
+    ///
+    /// # Running
+    ///
+    /// A step that clears collision runs, at [`RUN_FRAMES_PER_TILE`], when
+    /// `run_held` is set, `FLAG_SYS_B_DASH` is set in `event_data`, the
+    /// map header allows running, and the departure tile's behavior permits
+    /// it (`field_player_avatar.c:658-668`, `bike.c:1056-1062`). The
+    /// permission is read at each eligible poll rather than cached, and a
+    /// crossing already under way keeps the pace it started with. Turns,
+    /// blocked attempts, and forced movement are never run.
+    pub fn step_with_run(
+        &mut self,
+        input: Option<Direction>,
+        run_held: bool,
+        runtime: &MapRuntime<'_>,
+        maps: &impl ConnectedMapData,
+        event_data: &EventData,
+    ) -> StepOutcome {
         if self.in_transit() || self.turn_frames_remaining > 0 {
             return StepOutcome::Idle;
         }
@@ -570,13 +624,21 @@ impl PlayerState {
                 let from = self.position;
                 let to = landing.position;
                 let to_map = landing.to_map;
+                let running = run_held
+                    && event_data.flag_get(FLAG_SYS_B_DASH).unwrap_or(false)
+                    && runtime.header().allow_run
+                    && !running_disallowed_by_metatile(standing_behavior, self.render_elevation);
                 let started = self.try_start_resolved_step(
                     direction,
                     runtime,
                     event_data,
                     standing_behavior,
                     landing,
-                    TransitCadence::WALK,
+                    if running {
+                        TransitCadence::RUN
+                    } else {
+                        TransitCadence::WALK
+                    },
                 );
                 match started {
                     Ok(()) => {
@@ -2802,6 +2864,9 @@ mod tests {
 
     /// Leading-foot parity across steps, turns, and rejected polls.
     mod step_parity_tests;
+
+    /// Held-B running: its gates, cadence, and preserved interactions.
+    mod running_tests;
 
     /// `forcedMove` closes only the `T_TILE_CENTER` arm of
     /// `FieldGetPlayerInput`'s gate, so input suppression lasts the landing's

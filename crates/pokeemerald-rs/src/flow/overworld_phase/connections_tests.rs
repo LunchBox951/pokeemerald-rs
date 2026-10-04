@@ -33,6 +33,7 @@ fn advance_player_one_frame_crosses_a_zero_offset_connection_unchanged() {
     let outcome = advance_player_one_frame(
         &mut player,
         Some(Direction::South),
+        false,
         &runtime,
         &maps,
         &NO_FLAGS,
@@ -70,6 +71,7 @@ fn crossing_onto_a_forced_landing_tile_arms_the_guards_through_this_lane() {
     advance_player_one_frame(
         &mut player,
         Some(Direction::South),
+        false,
         &runtime,
         &maps,
         &NO_FLAGS,
@@ -117,6 +119,7 @@ fn advance_player_one_frame_crosses_an_offset_connection_shifting_the_cross_axis
     let outcome = advance_player_one_frame(
         &mut player,
         Some(Direction::East),
+        false,
         &runtime,
         &maps,
         &NO_FLAGS,
@@ -158,6 +161,7 @@ fn advance_player_one_frame_crosses_an_offset_north_connection_shifting_x() {
     let outcome = advance_player_one_frame(
         &mut player,
         Some(Direction::North),
+        false,
         &runtime,
         &maps,
         &NO_FLAGS,
@@ -197,6 +201,7 @@ fn advance_player_one_frame_crossing_at_different_lateral_positions_lands_at_the
         let outcome = advance_player_one_frame(
             &mut player,
             Some(Direction::North),
+            false,
             &runtime,
             &maps,
             &NO_FLAGS,
@@ -238,6 +243,7 @@ fn advance_player_one_frame_rejects_a_crossing_outside_the_neighbours_bounds() {
     let outcome = advance_player_one_frame(
         &mut player,
         Some(Direction::South),
+        false,
         &runtime,
         &maps,
         &NO_FLAGS,
