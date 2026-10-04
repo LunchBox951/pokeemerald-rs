@@ -1,5 +1,6 @@
-//! On-foot movement, map and object queries, collision, warps, wild encounters, and trainer sight.
+//! On-foot movement, map and object queries, collision, warps, wild encounters, trainer sight, and background-event targets.
 
+pub mod background_event;
 pub mod collision;
 pub mod direction;
 pub mod map_runtime;
@@ -10,6 +11,9 @@ pub mod trainer_sight;
 pub mod warp;
 pub mod wild_encounter;
 
+pub use background_event::{
+    resolve_background_event, BackgroundEventTarget, HiddenItemContext, SecretBaseContext,
+};
 pub use collision::{
     directionally_impassable, elevation_mismatch, elevations_compatible, Collision,
     ELEVATION_MULTI_LEVEL, ELEVATION_TRANSITION,
