@@ -46,6 +46,7 @@ mod first_battle_conclusion;
 mod first_battle_trigger;
 mod frame;
 mod input;
+mod interaction;
 mod placement;
 mod route103_rival_trigger;
 mod sight_trainer_approach;
@@ -880,9 +881,13 @@ pub(super) fn saved_map_id(warp: WarpData) -> Option<assets::MapId> {
 }
 
 #[cfg(test)]
+mod animated_door_elevation_tests;
+#[cfg(test)]
 mod connections_tests;
 #[cfg(test)]
 mod decoration_tests;
+#[cfg(test)]
+mod door_sequencing_tests;
 /// Continue's active-battler selection ([`party::select_active_battler`])
 /// against both battle handoffs and the write-back merge that follows.
 #[cfg(test)]
@@ -892,9 +897,13 @@ mod first_battle_conclusion_tests;
 #[cfg(test)]
 mod first_battle_trigger_tests;
 #[cfg(test)]
+mod forced_landing_field_input_gate_tests;
+#[cfg(test)]
 mod frame_tests;
 #[cfg(test)]
 mod input_tests;
+#[cfg(test)]
+mod landing_call_arrow_elevation_tests;
 /// `crate::overworld::oldale_town_npc_reposition` collision tests reachable
 /// from this module; its own unit tests live with that module instead.
 #[cfg(test)]
@@ -902,6 +911,8 @@ mod oldale_reposition_tests;
 /// Wild and scripted first-battle opponents carry the save owner's OT id.
 #[cfg(test)]
 mod opponent_ot_id_tests;
+#[cfg(test)]
+mod pre_movement_arrow_elevation_tests;
 #[cfg(test)]
 mod route103_rival_tests;
 #[cfg(test)]
