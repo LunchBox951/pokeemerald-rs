@@ -1,7 +1,8 @@
 //! Combined overworld sprite resources and per-frame OAM entries.
 //!
-//! [`rendering::SpriteLayer`] accepts one tileset and palette. Player frames
-//! occupy the first tile block; distinct NPC sheets follow, with palette banks
+//! [`rendering::SpriteLayer`] accepts one tileset and palette. Player walking
+//! frames occupy the first tile block; distinct NPC sheets follow, then the
+//! player's running frames, with palette banks
 //! assigned by [`npc::build_combined_palette`].
 
 use std::collections::HashMap;
@@ -20,6 +21,9 @@ use super::OverworldSceneError;
 pub(super) struct SceneSprites {
     tiles: Tileset,
     palette: Palette,
+    /// First tile of the player's running sheet, packed after every NPC sheet
+    /// so NPC blocks keep their offsets from the walking block.
+    run_base_tile: u16,
     object_events: &'static [ObjectEvent],
     bindings: HashMap<&'static str, SpriteBinding>,
 }
@@ -36,8 +40,18 @@ impl SceneSprites {
         let mut bytes = avatar::pack_people_sheet_frames("sprite/*/walking", sprite_image)?;
         let bindings =
             npc::resolve_bindings(pack, player, events.object_events, &mut bytes, event_data)?;
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "a scene contains only a small number of NPC sheets"
+        )]
+        let run_base_tile = (bytes.len() / BitDepth::Bpp4.tile_byte_len()) as u16;
+        bytes.extend(avatar::pack_people_sheet_frames(
+            "sprite/*/running",
+            pack.sprite(player.run_sprite_path())?,
+        )?);
         Ok(Self {
             tiles: Tileset::decode(BitDepth::Bpp4, &bytes)?,
+            run_base_tile,
             palette: npc::build_combined_palette(pack, player, palette_ref)?,
             object_events: events.object_events,
             bindings,
@@ -49,7 +63,10 @@ impl SceneSprites {
     /// ([`npc::order_by_depth`]); the player leads a tie in every sort key.
     #[must_use]
     pub(super) fn entries(&self, player: &PlayerState, event_data: &EventData) -> Vec<OamEntry> {
-        let mut entries = vec![(avatar::player_entry(player), player.previous_elevation())];
+        let mut entries = vec![(
+            avatar::player_entry(player, self.run_base_tile),
+            player.previous_elevation(),
+        )];
         entries.extend(npc::elevated_oam_entries(
             self.object_events,
             &self.bindings,

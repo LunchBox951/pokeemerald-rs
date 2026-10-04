@@ -74,6 +74,9 @@ struct TransitCadence {
     /// reaches its standing half; the four `ForcedMovement_Walk*` and every
     /// ordinary step never set it.
     animation_disabled: bool,
+    /// Whether the crossing plays `sAnim_Run*` on the running sheet rather
+    /// than `sAnim_Go*` on the walking sheet (`event_object_movement.c:5120-5124`).
+    running: bool,
 }
 
 impl TransitCadence {
@@ -81,18 +84,21 @@ impl TransitCadence {
     const WALK: Self = Self {
         duration: WALK_FRAMES_PER_TILE,
         animation_disabled: false,
+        running: false,
     };
 
     /// A dispatched slide tile's pace.
     const SLIDE: Self = Self {
         duration: SLIDE_FRAMES_PER_TILE,
         animation_disabled: true,
+        running: false,
     };
 
     /// A held-B run's pace: fast, with the walk animation left running.
     const RUN: Self = Self {
         duration: RUN_FRAMES_PER_TILE,
         animation_disabled: false,
+        running: true,
     };
 }
 
@@ -113,6 +119,10 @@ enum RestPose {
     Standing,
     /// A finished slide crossing's animation-paused forward foot.
     SlidePaused,
+    /// A finished run crossing's neutral running cell, held until the next
+    /// keypad poll (`MovementAction_PlayerRun*_Step1` pauses the animation
+    /// at the step's end, `event_object_movement.c:6020-6081`).
+    RunPaused,
 }
 
 /// The player's tile position, facing, elevation, and step progress.
@@ -373,6 +383,21 @@ impl PlayerState {
         matches!(self.rest_pose, RestPose::SlidePaused)
     }
 
+    /// Returns whether the active tile crossing is a held-B run, drawn from
+    /// the running sheet. Only meaningful while
+    /// [`step_direction`](Self::step_direction) is `Some`; stale at rest.
+    #[must_use]
+    pub const fn transit_running(&self) -> bool {
+        self.transit_cadence.running
+    }
+
+    /// Returns whether a finished run still holds its neutral running pose
+    /// until the next keypad poll or field lock.
+    #[must_use]
+    pub const fn run_pose_held(&self) -> bool {
+        matches!(self.rest_pose, RestPose::RunPaused)
+    }
+
     /// Returns whether the current walk-cycle phase is the second foot.
     #[must_use]
     pub const fn second_foot_leads(&self) -> bool {
@@ -447,6 +472,8 @@ impl PlayerState {
                 self.adopt_elevation(self.landing_elevation, self.landing_elevation);
                 if self.transit_cadence.animation_disabled {
                     self.rest_pose = RestPose::SlidePaused;
+                } else if self.transit_cadence.running {
+                    self.rest_pose = RestPose::RunPaused;
                 }
             }
         }
