@@ -382,9 +382,7 @@ pub fn parse(args: &[OsString]) -> Result<Command, XtaskError> {
         "record-snapshot" => {
             parse_record_snapshot(&decode(rest)?).map(|scene| Command::RecordSnapshot { scene })
         }
-        "scenario" => {
-            parse_scenario(&decode(rest)?).map(|(name, rom)| Command::Scenario { name, rom })
-        }
+        "scenario" => parse_scenario(rest).map(|(name, rom)| Command::Scenario { name, rom }),
         "e2e" => parse_e2e(&decode(rest)?).map(|(suite, release)| Command::E2e { suite, release }),
         other => Err(XtaskError::UnknownCommand(other.to_owned())),
     }
@@ -503,28 +501,33 @@ fn parse_gen_rom_profile(rest: &[OsString]) -> Result<gen_rom_profile::Options, 
 }
 
 /// Parse `scenario --name <value> [--rom <path>]`, with exactly one required
-/// name and at most one ROM.
+/// name and at most one ROM. Only the option and scenario names are decoded
+/// as UTF-8; the ROM stays an [`OsString`] path, since a valid filename need
+/// not be UTF-8.
 fn parse_scenario(
-    rest: &[String],
+    rest: &[OsString],
 ) -> Result<(ScenarioName, Option<std::path::PathBuf>), XtaskError> {
+    let unexpected = |arg: &OsString| XtaskError::UnexpectedArg(arg.to_string_lossy().into_owned());
     let mut name: Option<ScenarioName> = None;
     let mut rom: Option<std::path::PathBuf> = None;
     let mut i = 0;
     while i < rest.len() {
-        match rest[i].as_str() {
-            "--name" if name.is_none() => {
+        match rest[i].to_str() {
+            Some("--name") if name.is_none() => {
                 let value = rest.get(i + 1).ok_or(XtaskError::MissingScenarioName)?;
-                name = Some(ScenarioName::parse(value)?);
+                name = Some(ScenarioName::parse(
+                    value.to_str().ok_or_else(|| unexpected(value))?,
+                )?);
                 i += 2;
             }
-            "--rom" if rom.is_none() => {
+            Some("--rom") if rom.is_none() => {
                 let value = rest
                     .get(i + 1)
                     .ok_or_else(|| XtaskError::UnexpectedArg("--rom".to_owned()))?;
                 rom = Some(value.into());
                 i += 2;
             }
-            other => return Err(XtaskError::UnexpectedArg(other.to_owned())),
+            _ => return Err(unexpected(&rest[i])),
         }
     }
     Ok((name.ok_or(XtaskError::MissingScenarioName)?, rom))
@@ -935,6 +938,29 @@ mod tests {
             Command::Scenario {
                 name: ScenarioName::BootToMainMenu,
                 rom: Some("emerald.gba".into()),
+            }
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scenario_rom_path_survives_bytes_no_string_can_hold() {
+        use std::os::unix::ffi::OsStringExt as _;
+        let rom = OsString::from_vec(b"/tmp/emerald-\xff.gba".to_vec());
+        assert!(rom.to_str().is_none(), "the fixture must be undecodable");
+        let cmd = parse(&[
+            OsString::from("scenario"),
+            OsString::from("--name"),
+            OsString::from("boot-to-main-menu"),
+            OsString::from("--rom"),
+            rom.clone(),
+        ])
+        .expect("an undecodable ROM path is still a valid path");
+        assert_eq!(
+            cmd,
+            Command::Scenario {
+                name: ScenarioName::BootToMainMenu,
+                rom: Some(std::path::PathBuf::from(rom)),
             }
         );
     }

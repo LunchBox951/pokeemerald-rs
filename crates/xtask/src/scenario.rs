@@ -661,8 +661,11 @@ mod tests {
         let _pack = crate::extract::REAL_PACK_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let Ok(rom) = std::env::var("POKEEMERALD_ROM") else {
-            panic!("set POKEEMERALD_ROM to the supported cartridge image");
+        // Skip, never fail, without a ROM: CI's `--ignored` legs run with none
+        // (`rom-import`'s equivalence gate does the same `(gated-by-default)`).
+        let Some(rom) = std::env::var_os("POKEEMERALD_ROM").filter(|rom| !rom.is_empty()) else {
+            eprintln!("skipped: set POKEEMERALD_ROM to a supported cartridge image to run this");
+            return;
         };
         let report = super::run_with(
             ScenarioName::BootToMainMenu,
