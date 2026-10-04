@@ -656,6 +656,29 @@ impl OverworldPhase {
         )
     }
 
+    /// Test-only: [`Self::for_test`] with an explicit `pack_source`, so a
+    /// test that later lazy-loads a room, warp, dialog, or connection reads
+    /// the pack that source names. Pass [`PackSource::Repo`](crate::pack_source::PackSource::Repo)
+    /// to read this checkout's own pack rather than `default_path()`;
+    /// [`Self::for_test`] stays on `PackSource::Runtime` for pack-free tests.
+    #[cfg(test)]
+    pub(super) fn for_test_with_source(
+        scene: OverworldScene,
+        map_id: assets::MapId,
+        player: PlayerState,
+        dialog: Option<NpcDialog>,
+        pack_source: crate::pack_source::PackSource,
+    ) -> Self {
+        Self::new(
+            scene,
+            map_id,
+            player,
+            dialog,
+            pack_source,
+            new_game::NewGameOptions::DEFAULT,
+        )
+    }
+
     /// Build a new overworld run. New-game initialization consumes exactly
     /// one RNG draw, for the trainer id's high half -- the low half is the
     /// seed itself, not a second draw
@@ -914,3 +937,35 @@ mod test_support;
 mod warp_tests;
 #[cfg(test)]
 mod wild_battle_tests;
+
+#[cfg(test)]
+mod pinned_source_tests {
+    use super::*;
+    use crate::pack_source::PackSource;
+    use engine::overworld::Direction;
+
+    /// The source-aware fixture retains the supplied source, and
+    /// `for_test` stays on the runtime resolver. Needs no pack.
+    #[test]
+    fn for_test_with_source_retains_the_supplied_pack_source() {
+        let build = |source| {
+            OverworldPhase::for_test_with_source(
+                crate::overworld::tests::synthetic_scene(10, 10),
+                assets::MapId("MAP_LITTLEROOT_TOWN"),
+                PlayerState::new((1, 1), 3, Direction::North),
+                None,
+                source,
+            )
+        };
+        assert_eq!(build(PackSource::Repo).pack_source, PackSource::Repo);
+        assert_eq!(build(PackSource::Runtime).pack_source, PackSource::Runtime);
+
+        let default = OverworldPhase::for_test(
+            crate::overworld::tests::synthetic_scene(10, 10),
+            assets::MapId("MAP_LITTLEROOT_TOWN"),
+            PlayerState::new((1, 1), 3, Direction::North),
+            None,
+        );
+        assert_eq!(default.pack_source, PackSource::Runtime);
+    }
+}
