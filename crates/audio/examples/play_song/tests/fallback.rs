@@ -411,3 +411,50 @@ fn an_initial_idle_span_before_one_large_late_buffer_is_a_stall() {
         "callbacks idle until 190 ms then one buffer finished at {held:?}"
     );
 }
+
+/// The same lone late buffer, but the first poll oversleeps past it: the
+/// backdated advance must not hide the initial idle span.
+#[test]
+fn an_initial_idle_span_hidden_by_an_oversleeping_first_poll_is_still_a_stall() {
+    let policy = RetryPolicy {
+        interval: std::time::Duration::from_millis(10),
+        max_wait: std::time::Duration::from_millis(300),
+    };
+    let start = std::time::Instant::now();
+    let clock = Rc::new(RefCell::new(start));
+    let submitted = Cell::new(4_u64);
+    let first = Cell::new(true);
+    let fired = Cell::new(false);
+
+    let result = wait_for_measured_tail(
+        12,
+        std::time::Duration::from_millis(200),
+        48_000,
+        &policy,
+        || Some(progress(0, submitted.get())),
+        || 0,
+        || *clock.borrow(),
+        |duration| {
+            let step = if first.replace(false) {
+                std::time::Duration::from_millis(200)
+            } else {
+                duration
+            };
+            *clock.borrow_mut() += step;
+            if !fired.get()
+                && clock.borrow().duration_since(start) >= std::time::Duration::from_millis(190)
+            {
+                fired.set(true);
+                // One 100 ms callback's worth of frames at 48 kHz, at 190 ms.
+                submitted.set(submitted.get() + 4_800);
+            }
+        },
+    );
+    let held = clock.borrow().duration_since(start);
+
+    assert!(
+        matches!(result, Err(DrainError::MeasuredTailTimedOut { .. })),
+        "callbacks idle until 190 ms then one buffer; ok={} at {held:?}",
+        result.is_ok()
+    );
+}

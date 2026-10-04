@@ -516,6 +516,11 @@ fn frames_duration(frames: u64, device_sample_rate: u32) -> Duration {
     }
 }
 
+/// The longest of `samples`, or zero when there are none.
+fn longest(samples: impl IntoIterator<Item = Duration>) -> Duration {
+    samples.into_iter().max().unwrap_or_default()
+}
+
 /// Whether a usable callback ended inside the submitted advance `(from, to]`
 /// that a `usable_through` mark describes: only a mark within the span proves
 /// it. A mark past `to` belongs to a callback still in flight, whose frames
@@ -544,7 +549,8 @@ fn usable_callback_in_span(from: u64, to: u64, usable_through: u64) -> bool {
 /// `derived_tail / 4` (a span of advances, or one covering that much
 /// playback) with the latest advance within one recent inter-advance gap
 /// (over the last [`CADENCE_WINDOW`], an aggregate a polling pause folded
-/// together counting only on the poll that saw it) plus two polls means live callbacks,
+/// together counting only on the poll that saw it, which may finish the wait
+/// only at the deadline) plus two polls means live callbacks,
 /// and once `derived_tail` has run from the start of the wait, or from the
 /// callbacks that resumed after a stall, the wait finishes as [`wait_for_device_tail`] would. A gap that outruns both the
 /// recent cadence and the playback the previous advance covered by a tenth of
@@ -612,7 +618,7 @@ fn wait_for_measured_tail(
             (first_stale, last_stale, max_stale_advance) = (None, None, Duration::ZERO);
             after_stall = false;
         }
-        let mut poll_cadence = Duration::ZERO;
+        let mut pause_sample = None;
         if let Some(previous) = last_submitted.filter(|&last| submitted > last) {
             let played = frames_duration(submitted - previous, device_sample_rate);
             // The advance happened somewhere since the previous poll. A late
@@ -646,14 +652,15 @@ fn wait_for_measured_tail(
             } else {
                 gap.max(played)
             };
-            // A polling pause can fold many short callbacks into one advance.
-            // Judge that advance now (including at the deadline), but do not
-            // let the ambiguous aggregate widen freshness on later polls.
-            poll_cadence = cadence_sample;
+            // A polling pause can fold many short callbacks into one advance,
+            // and its backdated `at` can hide the idle span before them. It
+            // widens freshness only on this poll and finishes only at the
+            // deadline, where no later poll can confirm it.
             let settled = current.duration_since(last_poll) <= policy.interval * 2;
             recent_cadence[advances % CADENCE_WINDOW] = if settled {
                 cadence_sample
             } else {
+                pause_sample = Some(cadence_sample);
                 Duration::ZERO
             };
             advances = advances.wrapping_add(1);
@@ -672,7 +679,7 @@ fn wait_for_measured_tail(
         }
         last_poll = current;
         last_submitted = Some(submitted);
-        let cadence = poll_cadence.max(recent_cadence.iter().copied().max().unwrap_or_default());
+        let cadence = longest(recent_cadence.into_iter().chain(pause_sample));
         let evidence = first_stale
             .zip(last_stale)
             .is_some_and(|(first, last)| last.duration_since(first) >= derived_tail / 4)
@@ -694,7 +701,7 @@ fn wait_for_measured_tail(
                 Err(DrainError::MeasuredTailTimedOut { sounded, target })
             };
         }
-        if stale_tail_elapsed {
+        if stale_tail_elapsed && pause_sample.is_none() {
             return Ok(());
         }
         sleep(policy.interval);
