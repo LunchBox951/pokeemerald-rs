@@ -19,4 +19,4 @@ pub use pokemon::{
     BoxPokemon, Pokemon, PokemonError, PokemonSubstructures, BOX_NICKNAME_LEN, SUBSTRUCTURE_LEN,
 };
 pub use sector::{Sector, SECTOR_DATA_SIZE, SECTOR_SIGNATURE, SECTOR_SIZE};
-pub use store::{BaseSnapshot, LoadOutcome, SaveStatus, SaveStore, FLASH_IMAGE_LEN};
+pub use store::{BaseSnapshot, LoadOutcome, SaveStatus, SaveStore, StorageSource, FLASH_IMAGE_LEN};

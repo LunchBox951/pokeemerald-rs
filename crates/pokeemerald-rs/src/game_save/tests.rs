@@ -950,6 +950,7 @@ fn boot_legacy_head_with_donor(temp: &TempSave) -> (SaveSlot, SaveBlock1, SaveBl
     assert_eq!(saved.status, SaveFileStatus::Ok);
     assert_eq!(saved.block1.money, 8_888);
     assert_eq!(slot.session_counter, Some(LEGACY_HEAD_COUNTER));
+    assert!(slot.session_merged_donor);
     (slot, block1, block2, storage)
 }
 
@@ -1009,10 +1010,12 @@ fn equal_counter_donor_loss_heals_the_boxes_on_the_next_save() {
 
 #[test]
 fn equal_counter_same_image_does_not_restore_the_base_on_ordinary_saves() {
-    assert!(!super::base_needs_restore(3, 3, true));
-    assert!(super::base_needs_restore(3, 3, false));
-    assert!(super::base_needs_restore(2, 3, true));
-    assert!(!super::base_needs_restore(4, 3, false));
+    use super::{reconcile_base, BaseReconcile};
+    assert_eq!(reconcile_base(3, 3, true, false), BaseReconcile::Keep);
+    assert_eq!(reconcile_base(3, 3, false, true), BaseReconcile::Restore);
+    assert_eq!(reconcile_base(3, 3, false, false), BaseReconcile::Refuse);
+    assert_eq!(reconcile_base(2, 3, true, false), BaseReconcile::Restore);
+    assert_eq!(reconcile_base(4, 3, false, false), BaseReconcile::Keep);
 
     let temp = TempSave::new("donor-same-image");
     let (mut slot, block1, block2, storage) = boot_legacy_head_with_donor(&temp);
@@ -1065,4 +1068,141 @@ fn equal_counter_donor_loss_does_not_bypass_the_foreign_save_refusal() {
         .unwrap();
     assert_eq!(outcome, super::StoreOutcome::RefusedExistingSave);
     assert_eq!(std::fs::read(&temp.path).unwrap(), before);
+}
+
+const REPLACED_COUNTER: u32 = 2;
+const SESSION_STORAGE_FILL: u8 = 0x11;
+const REPLACEMENT_STORAGE_FILL: u8 = 0x22;
+
+/// The blocks both images of the equal-counter replacement share.
+fn replacement_blocks() -> (SaveBlock1, SaveBlock2) {
+    (
+        SaveBlock1 {
+            money: 4_242,
+            ..SaveBlock1::default()
+        },
+        SaveBlock2 {
+            encryption_key: 0x1234_5678,
+            ..SaveBlock2::default()
+        },
+    )
+}
+
+/// Writes one intact full-format generation `counter` into its parity slot of
+/// an otherwise erased image, with every storage byte set to `storage_fill`.
+fn write_full_generation(
+    temp: &TempSave,
+    counter: u32,
+    block1: &SaveBlock1,
+    block2: &SaveBlock2,
+    storage_fill: u8,
+) {
+    let block1_bytes = block1.to_bytes(block2.encryption_key);
+    let block2_bytes = block2.to_bytes();
+    let storage = vec![storage_fill; engine::save::store::PKMN_STORAGE_PAYLOAD_LEN];
+    let first = usize::try_from(counter % 2).unwrap() * SECTORS_PER_SLOT;
+    let mut image = vec![0xFFu8; engine::save::FLASH_IMAGE_LEN];
+    for id in 0..u16::try_from(SECTORS_PER_SLOT).unwrap() {
+        let payload: &[u8] = if id == SAVEBLOCK2_SECTOR_ID {
+            &block2_bytes[..]
+        } else if id < FIRST_STORAGE_SECTOR_ID {
+            legacy_block1_chunk(&block1_bytes, usize::from(id - FIRST_SAVEBLOCK1_SECTOR_ID))
+        } else {
+            storage_chunk(&storage, id)
+        };
+        write_sector(
+            &mut image,
+            first + usize::from(id),
+            &Sector::write(id, payload, counter),
+        );
+    }
+    std::fs::write(&temp.path, &image).unwrap();
+}
+
+/// Asserts all nine storage sectors of physical `slot` belong to generation
+/// `counter` and hold `fill`.
+fn assert_slot_storage(temp: &TempSave, slot: usize, counter: u32, fill: u8) {
+    let image = std::fs::read(&temp.path).unwrap();
+    let mut checked = 0;
+    for index in slot * SECTORS_PER_SLOT..(slot + 1) * SECTORS_PER_SLOT {
+        let sector = read_sector(&image, index);
+        if sector.id() >= FIRST_STORAGE_SECTOR_ID {
+            assert_eq!(sector.counter(), counter, "slot {slot} storage generation");
+            let want = storage_chunk(
+                &vec![fill; engine::save::store::PKMN_STORAGE_PAYLOAD_LEN],
+                sector.id(),
+            )
+            .len();
+            assert!(
+                sector.data()[..want].iter().all(|&b| b == fill),
+                "slot {slot} storage sector {} must hold {fill:#04x}",
+                sector.id()
+            );
+            checked += 1;
+        }
+    }
+    assert_eq!(checked, STORAGE_SECTOR_COUNT);
+}
+
+/// Codex P1 on #1711: a continued session over save A must not carry A's
+/// storage over a same-counter save B swapped in after load. Restoring the
+/// session base would put A's storage in the next generation, and the save
+/// after that would overwrite B's slot too.
+#[test]
+fn an_equal_counter_replacement_is_refused_rather_than_overwritten() {
+    let temp = TempSave::new("equal-counter-replacement");
+    let (block1, block2) = replacement_blocks();
+    write_full_generation(
+        &temp,
+        REPLACED_COUNTER,
+        &block1,
+        &block2,
+        SESSION_STORAGE_FILL,
+    );
+    let mut slot = temp.slot();
+    assert_eq!(slot.load().status, SaveFileStatus::Ok);
+    assert_eq!(slot.session_counter, Some(REPLACED_COUNTER));
+
+    write_full_generation(
+        &temp,
+        REPLACED_COUNTER,
+        &block1,
+        &block2,
+        REPLACEMENT_STORAGE_FILL,
+    );
+    assert_eq!(temp.slot().load().status, SaveFileStatus::Ok);
+    let replacement = std::fs::read(&temp.path).unwrap();
+
+    for _ in 0..2 {
+        let outcome = slot
+            .store(&block1, &block2, SaveLineage::Continued)
+            .unwrap();
+        assert_eq!(outcome, super::StoreOutcome::RefusedConflictingSave);
+        assert_eq!(std::fs::read(&temp.path).unwrap(), replacement);
+        assert_eq!(slot.session_counter, Some(REPLACED_COUNTER));
+    }
+    assert_slot_storage(&temp, 0, REPLACED_COUNTER, REPLACEMENT_STORAGE_FILL);
+}
+
+/// A session that merged a legacy donor still refuses a same-counter
+/// replacement whose head is no longer a five-sector legacy head: the
+/// session's provenance alone does not prove the donor was lost.
+#[test]
+fn a_merged_donor_session_refuses_a_full_format_replacement_at_its_counter() {
+    let temp = TempSave::new("donor-session-replacement");
+    let (mut slot, block1, block2, _storage) = boot_legacy_head_with_donor(&temp);
+    write_full_generation(
+        &temp,
+        LEGACY_HEAD_COUNTER,
+        &block1,
+        &block2,
+        REPLACEMENT_STORAGE_FILL,
+    );
+    assert_eq!(temp.slot().load().status, SaveFileStatus::Ok);
+    let replacement = std::fs::read(&temp.path).unwrap();
+    let outcome = slot
+        .store(&block1, &block2, SaveLineage::Continued)
+        .unwrap();
+    assert_eq!(outcome, super::StoreOutcome::RefusedConflictingSave);
+    assert_eq!(std::fs::read(&temp.path).unwrap(), replacement);
 }

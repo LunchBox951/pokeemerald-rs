@@ -89,6 +89,29 @@ pub struct LoadOutcome {
     pub block1: SaveBlock1,
     /// Reconstructed [`SaveBlock2`] state.
     pub block2: SaveBlock2,
+    /// Where the retained `PokemonStorage` payload came from.
+    pub storage_source: StorageSource,
+}
+
+/// The provenance of a load's `PokemonStorage`, for callers that must tell a
+/// lost storage donor from a different save.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StorageSource {
+    /// The adopted generation's own storage sectors, or none for an empty or
+    /// corrupt image.
+    Own,
+    /// A five-sector legacy head merged with a donor's verified storage set.
+    LegacyDonor,
+    /// A five-sector legacy head with no donor; the storage is zeroed.
+    LegacyWithoutDonor,
+}
+
+impl StorageSource {
+    /// Whether the adopted generation is a five-sector legacy head.
+    #[must_use]
+    pub const fn is_legacy_head(self) -> bool {
+        matches!(self, Self::LegacyDonor | Self::LegacyWithoutDonor)
+    }
 }
 
 const fn chunk_len(total_len: usize, chunk_num: usize) -> usize {
@@ -270,6 +293,13 @@ impl SaveStore {
             && self.base_pokemon_storage == snapshot.pokemon_storage
     }
 
+    /// Whether the retained [`SaveBlock1`] and [`SaveBlock2`] payloads equal
+    /// `snapshot`'s, ignoring `PokemonStorage`.
+    #[must_use]
+    pub fn base_blocks_match(&self, snapshot: &BaseSnapshot) -> bool {
+        self.base_block1 == snapshot.block1 && self.base_block2 == snapshot.block2
+    }
+
     /// Restores raw payloads returned by [`SaveStore::base_snapshot`].
     pub fn restore_base(&mut self, snapshot: BaseSnapshot) {
         self.base_block1 = snapshot.block1;
@@ -430,6 +460,11 @@ impl SaveStore {
             self.last_written_sector = 0;
         }
         let status = resolution.status;
+        let storage_source = match (resolution.legacy, resolution.storage_from_slot) {
+            (false, _) => StorageSource::Own,
+            (true, Some(_)) => StorageSource::LegacyDonor,
+            (true, None) => StorageSource::LegacyWithoutDonor,
+        };
         let storage_override = resolution.storage_from_slot.map(|slot| {
             // storage_from_slot is a scanned index (SaveStore::resolve):
             // a full-format slot's own storage, or a legacy slot's verified
@@ -471,6 +506,7 @@ impl SaveStore {
             status,
             block1,
             block2,
+            storage_source,
         }
     }
 }
