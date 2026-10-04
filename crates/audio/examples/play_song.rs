@@ -521,23 +521,31 @@ fn longest(samples: impl IntoIterator<Item = Duration>) -> Duration {
     samples.into_iter().max().unwrap_or_default()
 }
 
-/// What a usable reading with `sounded` frames sounded still owes `target` as
-/// of a poll that sees `submitted` frames and the reading's `usable_through`
-/// mark: its remaining frames at `device_sample_rate`, less the frames the
-/// callbacks after the mark have submitted since. That subtraction is a
-/// stable-rate extrapolation, the premise the derived-tail fallback already
-/// rests on: callbacks after the reading ran one period apart, so the reading
-/// is at least their playback old, and a mark seconds behind owes nothing.
-fn owed_after_reading(
+/// When a usable reading with `sounded` frames sounded, seen at a poll at
+/// `seen_at` with `submitted` frames and the reading's `usable_through` mark,
+/// lets `target` sound: the reading's remaining frames at
+/// `device_sample_rate`, run from `seen_at` less the playback of the stale
+/// callbacks submitted after the mark. That subtraction is a stable-rate
+/// extrapolation, the premise the derived-tail fallback already rests on:
+/// callbacks after the reading ran about one period apart, so the reading is
+/// about their playback old, and a mark seconds behind is long since paid. It
+/// is not a bound: the snapshot carries no reading time, and callbacks of
+/// varying size or bursting faster than playback make the reading look older
+/// than it is. `None` only when the stamp lies before the clock's origin.
+fn reading_due(
+    seen_at: Instant,
     target: u64,
     sounded: u64,
-    submitted: u64,
-    usable_through: u64,
+    progress: (u64, u64),
     device_sample_rate: u32,
-) -> Duration {
-    frames_duration(target.saturating_sub(sounded), device_sample_rate).saturating_sub(
-        frames_duration(submitted.saturating_sub(usable_through), device_sample_rate),
-    )
+) -> Option<Instant> {
+    let (submitted, usable_through) = progress;
+    let owed = frames_duration(target.saturating_sub(sounded), device_sample_rate);
+    let since = frames_duration(submitted.saturating_sub(usable_through), device_sample_rate);
+    match owed.checked_sub(since) {
+        Some(ahead) => Some(seen_at + ahead),
+        None => seen_at.checked_sub(since.saturating_sub(owed)),
+    }
 }
 
 /// How this wait has actually been polling: the shortest of the recent poll
@@ -599,7 +607,7 @@ fn usable_callback_in_span(from: u64, to: u64, usable_through: u64) -> bool {
 /// and once `derived_tail` has run from the start of the wait, or from the
 /// callbacks that resumed after a stall, and once the playback the latest
 /// usable reading inside the wait or in its first snapshot still owed the
-/// target (see [`owed_after_reading`]) has run at the device rate, the wait finishes as [`wait_for_device_tail`] would. A gap that outruns both the
+/// target (see [`reading_due`]) has run at the device rate, the wait finishes as [`wait_for_device_tail`] would. A gap that outruns both the
 /// recent cadence and the playback the previous advance covered by a tenth of
 /// `derived_tail` (and over a quarter of it, or half before a cadence is seen)
 /// is a stall: evidence and cadence restart from the playback the resumed
@@ -664,18 +672,17 @@ fn wait_for_measured_tail(
         }
         let current = now();
         // A usable reading already in the first snapshot owes its playback
-        // too, less what the stale callbacks submitted since its mark have
-        // played (see [`owed_after_reading`]). A mark ahead of the submitted
-        // total is a callback in flight, judged once its frames land.
+        // too (see [`reading_due`]). A mark ahead of the submitted total is a
+        // callback in flight, judged once its frames land.
         if last_submitted.is_none() && usable_through > 0 && usable_through <= submitted {
-            measured_due = current
-                + owed_after_reading(
-                    target,
-                    sounded,
-                    submitted,
-                    usable_through,
-                    device_sample_rate,
-                );
+            let due = reading_due(
+                current,
+                target,
+                sounded,
+                (submitted, usable_through),
+                device_sample_rate,
+            );
+            measured_due = measured_due.max(due.unwrap_or(measured_due));
         }
         // A mark past the submitted total is a callback in flight, proving
         // nothing about the frames submitted; once they land it discards the
@@ -688,14 +695,24 @@ fn wait_for_measured_tail(
             after_stall = false;
             // A usable reading short of the target says how much playback it
             // still owed: stale callbacks after it must not finish the wait
-            // before that has run at the device rate from the reading,
-            // credited like an advance no later than the playback its callback
-            // ended past the previous poll. An extrapolation, not an exact
-            // bound, and never lowered by a later reading.
+            // before that has run at the device rate from the reading. The
+            // snapshot carries no reading time, so stamp it at the later of
+            // two estimates: the previous poll plus the usable frames past it
+            // (late when the poll was prompt) and this poll less the stale
+            // playback since the mark (see [`reading_due`]; late when the poll
+            // was delayed). Neither is a bound, but the later never finishes
+            // sooner than either. Never lowered by a later reading.
             let played = frames_duration(usable_through - prev, device_sample_rate);
-            let read_at = current.min(last_poll + played);
-            let owed = frames_duration(target - sounded, device_sample_rate);
-            measured_due = measured_due.max(read_at + owed);
+            let credited = current.min(last_poll + played)
+                + frames_duration(target - sounded, device_sample_rate);
+            let seen = reading_due(
+                current,
+                target,
+                sounded,
+                (submitted, usable_through),
+                device_sample_rate,
+            );
+            measured_due = measured_due.max(credited).max(seen.unwrap_or(credited));
         }
         let mut pause_sample = None;
         if let Some(previous) = last_submitted.filter(|&last| submitted > last) {
