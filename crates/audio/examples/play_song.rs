@@ -579,7 +579,8 @@ fn usable_callback_in_span(from: u64, to: u64, usable_through: u64) -> bool {
 /// only at the deadline) plus two polls means live callbacks,
 /// and once `derived_tail` has run from the start of the wait, or from the
 /// callbacks that resumed after a stall, and once the playback the latest
-/// usable reading inside the wait still owed the target has run at the device
+/// usable reading inside the wait (or in its first snapshot, when the latest
+/// landed callback was usable) still owed the target has run at the device
 /// rate, the wait finishes as [`wait_for_device_tail`] would. A gap that outruns both the
 /// recent cadence and the playback the previous advance covered by a tenth of
 /// `derived_tail` (and over a quarter of it, or half before a cadence is seen)
@@ -644,6 +645,13 @@ fn wait_for_measured_tail(
             return Ok(());
         }
         let current = now();
+        // A first snapshot whose latest landed callback was usable carries a
+        // reading no older than that callback: what it owes holds from now. A
+        // mark behind the submitted total is of unknown age, and one ahead of
+        // it is a callback in flight, judged once its frames land.
+        if last_submitted.is_none() && usable_through > 0 && usable_through == submitted {
+            measured_due = current + frames_duration(target - sounded, device_sample_rate);
+        }
         // A mark past the submitted total is a callback in flight, proving
         // nothing about the frames submitted; once they land it discards the
         // pending stale evidence.

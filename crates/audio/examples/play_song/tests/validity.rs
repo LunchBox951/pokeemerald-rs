@@ -665,3 +665,85 @@ fn a_usable_reading_owing_past_max_wait_times_out() {
     ));
     assert_eq!(held, std::time::Duration::from_millis(300));
 }
+
+/// Enter the wait with `submitted` frames submitted, the target, the entry
+/// snapshot's usable mark at `mark` and its sounded estimate at `sounded`,
+/// then 50 ms stale callbacks (2 400 frames) under a 200 ms derived tail.
+/// Returns the result and when the wait ended.
+fn entry_reading_wait(
+    submitted: u64,
+    mark: u64,
+    sounded: u64,
+    max_wait_ms: u64,
+) -> (Result<(), DrainError>, std::time::Duration) {
+    let policy = RetryPolicy {
+        interval: std::time::Duration::from_millis(10),
+        max_wait: std::time::Duration::from_millis(max_wait_ms),
+    };
+    let start = std::time::Instant::now();
+    let clock = Rc::new(RefCell::new(start));
+    let frames = Cell::new(submitted);
+
+    let result = wait_for_measured_tail(
+        submitted,
+        std::time::Duration::from_millis(200),
+        48_000,
+        &policy,
+        || Some(progress_usable(sounded, frames.get(), mark)),
+        || 0,
+        || *clock.borrow(),
+        |duration| {
+            *clock.borrow_mut() += duration;
+            if clock
+                .borrow()
+                .duration_since(start)
+                .as_millis()
+                .is_multiple_of(50)
+            {
+                frames.set(frames.get() + 2_400);
+            }
+        },
+    );
+    let held = clock.borrow().duration_since(start);
+    (result, held)
+}
+
+/// The entry snapshot's latest callback was usable and still owed 500 ms
+/// (24 000 of 48 000 frames sounded): the stale callbacks after it must not
+/// finish on the 200 ms tail.
+#[test]
+fn a_usable_entry_reading_bounds_the_fallback() {
+    let (result, held) = entry_reading_wait(48_000, 48_000, 24_000, 1_000);
+
+    assert!(
+        result.is_ok(),
+        "stale live callbacks still finish in budget"
+    );
+    assert!(
+        held >= std::time::Duration::from_millis(500),
+        "the entry reading owed 500 ms; finished at {held:?}"
+    );
+}
+
+/// What the entry reading owes still has to fit `max_wait`.
+#[test]
+fn a_usable_entry_reading_owing_past_max_wait_times_out() {
+    let (result, held) = entry_reading_wait(48_000, 48_000, 24_000, 400);
+
+    assert!(matches!(
+        result,
+        Err(DrainError::MeasuredTailTimedOut { .. })
+    ));
+    assert_eq!(held, std::time::Duration::from_millis(400));
+}
+
+/// An entry mark two seconds of submitted frames behind belongs to a callback
+/// of unknown age: its estimate (2.2 s short) must not hold a device whose
+/// timestamps went stale long ago, which finishes on the derived tail.
+#[test]
+fn an_old_usable_entry_mark_does_not_seed_the_bound() {
+    let (result, held) = entry_reading_wait(144_000, 48_000, 38_400, 1_000);
+
+    assert!(result.is_ok());
+    assert_eq!(held, std::time::Duration::from_millis(200));
+}
