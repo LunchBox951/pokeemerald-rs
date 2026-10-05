@@ -147,14 +147,14 @@
 //! shapes, both refused downstream), so the screen here is retired outright
 //! rather than left in place as now-unreachable dead code
 //! -- see
-//! `route103_rival_tests::a_lost_route_101_first_battle_still_lets_the_healed_lead_fight_the_rival`
+//! `route103_rival_driver_tests::a_lost_route_101_first_battle_still_lets_the_healed_lead_fight_the_rival`
 //! for the replacement, strictly *stronger* pin (`(test-ratchet)`: it
 //! proves the fainted precondition itself can no longer arise, which the
 //! deleted screen's own unit test could never show by construction) and its
 //! own doc comment for exactly what it retires. See also
-//! `route103_rival_tests::losing_the_rival_battle_now_heals_halves_money_and_leaves_the_hide_flag_clear`
+//! `route103_rival_driver_tests::losing_the_rival_battle_now_heals_halves_money_and_leaves_the_hide_flag_clear`
 //! (plus its pack-gated companion
-//! `route103_rival_tests::real_pack_losing_the_rival_battle_warps_home_to_the_default_heal_location`)
+//! `route103_rival_driver_tests::real_pack_losing_the_rival_battle_warps_home_to_the_default_heal_location`)
 //! for the ordinary rival/wild-loss pins issue #261 already established.
 //!
 //! # RNG stream
@@ -331,7 +331,7 @@ impl OverworldPhase {
     /// `super::first_battle_conclusion::OverworldPhase::conclude_first_battle`
     /// now heals the lead in the same frame that battle ends, on every
     /// outcome. See
-    /// `super::route103_rival_tests::a_lost_route_101_first_battle_still_lets_the_healed_lead_fight_the_rival`
+    /// `super::route103_rival_driver_tests::a_lost_route_101_first_battle_still_lets_the_healed_lead_fight_the_rival`
     /// for the replacement, strictly stronger pin.
     ///
     /// This method reads the same [`OverworldPhase::party_lead`] the sight
