@@ -15203,6 +15203,20 @@
       "status": "pending"
     },
     "graphics/pokemon/mudkip": {
+      "artifacts": {
+        "front.png": {
+          "reason": "Shared normal front image extracted for typed starter previews; other species graphics remain pending.",
+          "rust_target": "crates/xtask/src/extract/starter_chooser.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "normal.pal": {
+          "reason": "Sixteen-colour JASC normal palette extracted for the shared front image; shiny and other graphics remain pending.",
+          "rust_target": "crates/xtask/src/extract/starter_chooser.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.pokemon",
       "kind": "dir",
       "spec_owner": "S-4",
@@ -16001,6 +16015,20 @@
       "status": "pending"
     },
     "graphics/pokemon/torchic": {
+      "artifacts": {
+        "front.png": {
+          "reason": "Shared normal front image extracted for typed starter previews; other species graphics remain pending.",
+          "rust_target": "crates/xtask/src/extract/starter_chooser.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "normal.pal": {
+          "reason": "Sixteen-colour JASC normal palette extracted for the shared front image; shiny and other graphics remain pending.",
+          "rust_target": "crates/xtask/src/extract/starter_chooser.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.pokemon",
       "kind": "dir",
       "spec_owner": "S-4",
@@ -16025,6 +16053,20 @@
       "status": "pending"
     },
     "graphics/pokemon/treecko": {
+      "artifacts": {
+        "front.png": {
+          "reason": "Shared normal front image extracted for typed starter previews; other species graphics remain pending.",
+          "rust_target": "crates/xtask/src/extract/starter_chooser.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "normal.pal": {
+          "reason": "Sixteen-colour JASC normal palette extracted for the shared front image; shiny and other graphics remain pending.",
+          "rust_target": "crates/xtask/src/extract/starter_chooser.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.pokemon",
       "kind": "dir",
       "spec_owner": "S-4",
@@ -16327,8 +16369,10 @@
     "graphics/starter_choose": {
       "category": "graphics.ui",
       "kind": "dir",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Complete chooser graphics directory extracted: three indexed PNG sheets with their embedded palettes and both raw tilemaps; exposed by typed starter chooser handles. No chooser rendering or ROM extraction claimed.",
+      "rust_target": "crates/xtask/src/extract/starter_chooser.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/summary_screen": {
       "category": "graphics.ui",

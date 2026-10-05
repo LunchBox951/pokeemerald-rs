@@ -163,6 +163,13 @@ pub enum ExtractError {
         /// Embedded palette colour count.
         usize,
     ),
+    /// A starter-chooser source differs from its upstream graphic's shape.
+    StarterChooserAssetMismatch {
+        /// Source path.
+        path: PathBuf,
+        /// What differs from the expected shape.
+        detail: String,
+    },
     /// A direct-sound sample violates the supported WAV contract.
     Wav(
         /// Source path.
@@ -325,6 +332,9 @@ impl fmt::Display for ExtractError {
                  {palette_colour_count} colours",
                 path.display()
             ),
+            Self::StarterChooserAssetMismatch { path, detail } => {
+                write!(f, "starter-chooser asset `{}` {detail}", path.display())
+            }
             Self::Wav(path, error) => {
                 write!(f, "decoding `{}` failed: {error}", path.display())
             }
