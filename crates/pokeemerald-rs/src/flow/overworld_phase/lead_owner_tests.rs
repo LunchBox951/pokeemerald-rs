@@ -139,6 +139,47 @@ fn a_lent_lead_returns_to_the_same_record_with_its_battle_damage() {
 }
 
 #[test]
+#[should_panic(expected = "never lent out")]
+fn restoring_a_lead_that_was_never_lent_out_panics() {
+    let mut phase = continued(&[starter()], 1);
+    let duplicate = phase.lead_battler().cloned().unwrap();
+    phase.restore_lead_battler(duplicate);
+}
+
+#[test]
+#[should_panic(expected = "never lent out")]
+fn restoring_a_lent_lead_twice_panics() {
+    let mut phase = continued(&[starter()], 1);
+    let lent = phase.take_lead_battler().unwrap();
+    phase.restore_lead_battler(lent.clone());
+    phase.restore_lead_battler(lent);
+}
+
+#[test]
+#[should_panic(expected = "different party member")]
+fn a_different_battler_cannot_be_restored_into_a_saved_leads_slot() {
+    let mut phase = continued(&[starter()], 1);
+    let lent = phase.take_lead_battler().unwrap();
+    let other_trainer = lent.original_trainer_id() ^ 1;
+    phase.restore_lead_battler(starter().with_original_trainer_id(other_trainer));
+}
+
+#[test]
+fn an_unsaved_fresh_lead_is_lent_and_restored_without_a_backing_record() {
+    let mut phase = new_game_phase();
+    phase.save1.player_party_count = 0;
+    phase.set_fresh_lead_for_test(starter());
+    let mut lent = phase.take_lead_battler().unwrap();
+    lent.apply_damage(2);
+    let hp = lent.current_hp();
+    phase.restore_lead_battler(lent);
+
+    phase.assert_lead_at_slot_for_test(0);
+    phase.flush_lead_to_save();
+    assert_eq!(u32::from(phase.save1.player_party[0].hp), hp);
+}
+
+#[test]
 fn healing_files_a_damaged_ev_trained_lead_at_full() {
     const EV_HP_BONUS: u16 = 7;
     let mut phase = new_game_phase();

@@ -46,7 +46,26 @@ impl OverworldPhase {
 
     /// Restore: returns the battler a battle borrowed, keeping the retained
     /// slot and offset.
+    ///
+    /// # Panics
+    ///
+    /// As [`party::LoadedLead::restore_battler`] does: panics if the battler
+    /// was not lent out, or if a saved party (nonzero stored count) backs the
+    /// lead and `battler` is not the mon in the selected slot (personality
+    /// and original trainer id). An unsaved lead has no record to match; the
+    /// next flush files it fresh.
     pub(super) fn restore_lead_battler(&mut self, battler: BattlePokemon) {
+        assert!(
+            self.party_lead.is_none(),
+            "the loaded lead's battler was never lent out"
+        );
+        let record = &self.save1.player_party[self.party_lead_slot].box_data;
+        assert!(
+            self.save1.player_party_count == 0
+                || (battler.personality() == record.personality()
+                    && battler.original_trainer_id() == record.ot_id()),
+            "a different party member cannot take the loaded lead's place"
+        );
         self.party_lead = Some(battler);
     }
 
