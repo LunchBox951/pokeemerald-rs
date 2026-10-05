@@ -702,6 +702,7 @@ impl OverworldPhase {
             dialog,
             pack_source,
             new_game::NewGameOptions::DEFAULT,
+            new_game::NewGameIdentity::DEFAULT,
         )
     }
 
