@@ -1,5 +1,5 @@
 //! Synthetic [`assets::pack::AssetPack`] fixtures shared by the crate's scene
-//! test suites; the consumers are the test modules that import this one.
+//! test suites.
 
 use pack_format::{PackEntry, PackWriter};
 use rendering::Bgr555;
