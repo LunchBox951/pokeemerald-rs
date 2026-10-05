@@ -20,7 +20,11 @@ use crate::party;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum LeadLoan {
     NotLent,
-    Lent,
+    /// Lent, remembering the lent mon's identity so only that mon returns.
+    Lent {
+        personality: u32,
+        ot_id: u32,
+    },
 }
 
 /// The slot a lead-less phase reports; never read while no lead is present.
@@ -47,15 +51,23 @@ impl OverworldPhase {
 
     /// Lend: moves the battler out for a battle. The selected slot and the
     /// hidden-HP offset stay with the owner, so [`Self::restore_lead_battler`]
-    /// merges back into the same record.
+    /// merges back into the same record. `None` when no lead is loaded.
+    ///
+    /// # Panics
+    ///
+    /// As [`party::LoadedLead::take_battler`] does: panics if the battler is
+    /// already lent out.
     pub(super) fn take_lead_battler(&mut self) -> Option<BattlePokemon> {
-        let lent = self.party_lead.take();
-        self.lead_loan = if lent.is_some() {
-            LeadLoan::Lent
-        } else {
-            LeadLoan::NotLent
+        assert!(
+            self.lead_loan == LeadLoan::NotLent,
+            "the loaded lead's battler is lent out to a battle"
+        );
+        let lent = self.party_lead.take()?;
+        self.lead_loan = LeadLoan::Lent {
+            personality: lent.personality(),
+            ot_id: lent.original_trainer_id(),
         };
-        lent
+        Some(lent)
     }
 
     /// Restore: returns the battler a battle borrowed, keeping the retained
@@ -66,20 +78,19 @@ impl OverworldPhase {
     /// As [`party::LoadedLead::restore_battler`] does: panics if the battler
     /// was not lent out by [`Self::take_lead_battler`] (an absent lead that
     /// was never loaded, such as a zero-count or undecodable save, does not
-    /// count), or if a saved party (nonzero stored count) backs the
-    /// lead and `battler` is not the mon in the selected slot (personality
-    /// and original trainer id). An unsaved lead has no record to match; the
-    /// next flush files it fresh.
+    /// count), or if `battler` is not the mon that was lent (personality and
+    /// original trainer id, recorded at the lend whether or not a saved
+    /// record backs the lead).
     pub(super) fn restore_lead_battler(&mut self, battler: BattlePokemon) {
+        let LeadLoan::Lent { personality, ot_id } = self.lead_loan else {
+            panic!("the loaded lead's battler was never lent out");
+        };
         assert!(
-            self.lead_loan == LeadLoan::Lent && self.party_lead.is_none(),
+            self.party_lead.is_none(),
             "the loaded lead's battler was never lent out"
         );
-        let record = &self.save1.player_party[self.party_lead_slot].box_data;
         assert!(
-            self.save1.player_party_count == 0
-                || (battler.personality() == record.personality()
-                    && battler.original_trainer_id() == record.ot_id()),
+            battler.personality() == personality && battler.original_trainer_id() == ot_id,
             "a different party member cannot take the loaded lead's place"
         );
         self.party_lead = Some(battler);

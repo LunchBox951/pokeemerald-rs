@@ -182,6 +182,51 @@ fn a_reload_after_a_lend_cancels_the_loan() {
 }
 
 #[test]
+#[should_panic(expected = "lent out to a battle")]
+fn a_second_take_while_the_lead_is_lent_panics() {
+    let mut phase = continued(&[starter()], 1);
+    let _lent = phase.take_lead_battler().unwrap();
+    let _ = phase.take_lead_battler();
+}
+
+#[test]
+fn taking_without_a_lead_lends_nothing() {
+    let mut phase = continued(&[starter()], 0);
+    assert!(phase.take_lead_battler().is_none());
+    assert!(phase.take_lead_battler().is_none(), "no loan was opened");
+}
+
+#[test]
+fn a_fresh_lead_over_a_saved_party_is_lent_and_restored() {
+    let mut phase = continued(&[starter()], 1);
+    let other_trainer = phase.lead_battler().unwrap().original_trainer_id() ^ 1;
+    phase.set_fresh_lead_for_test(starter().with_original_trainer_id(other_trainer));
+
+    let mut lent = phase.take_lead_battler().unwrap();
+    lent.apply_damage(2);
+    let hp = lent.current_hp();
+    phase.restore_lead_battler(lent);
+
+    phase.assert_lead_at_slot_for_test(0);
+    assert_eq!(phase.lead_battler().unwrap().current_hp(), hp);
+    assert_eq!(
+        phase.lead_battler().unwrap().original_trainer_id(),
+        other_trainer
+    );
+}
+
+#[test]
+#[should_panic(expected = "different party member")]
+fn a_different_battler_cannot_replace_a_lent_unsaved_lead() {
+    let mut phase = new_game_phase();
+    phase.save1.player_party_count = 0;
+    phase.set_fresh_lead_for_test(starter());
+    let lent = phase.take_lead_battler().unwrap();
+    let other_trainer = lent.original_trainer_id() ^ 1;
+    phase.restore_lead_battler(starter().with_original_trainer_id(other_trainer));
+}
+
+#[test]
 #[should_panic(expected = "different party member")]
 fn a_different_battler_cannot_be_restored_into_a_saved_leads_slot() {
     let mut phase = continued(&[starter()], 1);
