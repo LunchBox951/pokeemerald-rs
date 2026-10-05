@@ -5,6 +5,11 @@
 //! module, one concept `(oop-boundaries)`.
 
 use super::*;
+use crate::overworld::metatile_behavior::{
+    MB_CRACKED_FLOOR, MB_EASTWARD_CURRENT, MB_ICE, MB_MUDDY_SLOPE, MB_NORTHWARD_CURRENT,
+    MB_SECRET_BASE_JUMP_MAT, MB_SECRET_BASE_SPIN_MAT, MB_SOUTHWARD_CURRENT,
+    MB_TRICK_HOUSE_PUZZLE_8_FLOOR, MB_WATERFALL, MB_WESTWARD_CURRENT,
+};
 
 /// The eight standing tiles [`supported_forced_mover`] dispatches, paired
 /// with the fixed direction and per-tile frame count their own
@@ -578,4 +583,89 @@ fn a_held_slide_pose_keeps_its_foot_across_the_next_dispatched_crossing() {
         }
     );
     assert_eq!(player.second_foot_leads(), held_foot);
+}
+
+/// Forced behaviours `step` does not dispatch, plus plain ground and a cracked
+/// floor: a placement on any of them must stay disarmed.
+const UNDISPATCHED: [u8; 12] = [
+    MB_ICE,
+    MB_EASTWARD_CURRENT,
+    MB_WESTWARD_CURRENT,
+    MB_NORTHWARD_CURRENT,
+    MB_SOUTHWARD_CURRENT,
+    MB_TRICK_HOUSE_PUZZLE_8_FLOOR,
+    MB_WATERFALL,
+    MB_MUDDY_SLOPE,
+    MB_SECRET_BASE_JUMP_MAT,
+    MB_SECRET_BASE_SPIN_MAT,
+    MB_CRACKED_FLOOR,
+    MB_NORMAL,
+];
+
+/// Builds a placement as a warp (`new`) or a save-continue
+/// (`with_saved_elevations`) would.
+fn placed(continued: bool, facing: Direction) -> PlayerState {
+    if continued {
+        PlayerState::with_saved_elevations((2, 2), 3, 3, facing)
+    } else {
+        PlayerState::new((2, 2), 3, facing)
+    }
+}
+
+/// Placement onto a dispatched forced tile stays controllable: a `None` poll
+/// idles and the first directional poll is a manual step (`field_player_avatar.c:416-425`, `:1404-1410`).
+#[test]
+fn placement_onto_a_supported_forced_tile_stays_controllable_like_upstream() {
+    for continued in [false, true] {
+        for &(behavior, direction, _frames) in &FORCED_MOVERS {
+            let runtime = forced_mover_runtime(behavior, direction, false);
+
+            let mut idle = placed(continued, direction);
+            assert_eq!(
+                idle.step(None, &runtime, &no_connections, &NO_FLAGS),
+                StepOutcome::Idle,
+                "behavior {behavior:#x} continued={continued}"
+            );
+            assert!(!idle.forced_movement_armed());
+
+            let manual = opposite(direction);
+            let (dx, dy) = manual.delta();
+            let mut walker = placed(continued, manual);
+            assert_eq!(
+                walker.step(Some(manual), &runtime, &no_connections, &NO_FLAGS),
+                StepOutcome::Advanced {
+                    from: (2, 2),
+                    to: (2 + dx, 2 + dy),
+                },
+                "behavior {behavior:#x} continued={continued}: first manual poll"
+            );
+        }
+    }
+}
+
+/// Placement onto a forced tile without a dispatched handler stays disarmed
+/// and controllable.
+#[test]
+fn placement_onto_an_undispatched_tile_stays_disarmed() {
+    for continued in [false, true] {
+        for behavior in UNDISPATCHED {
+            let runtime = forced_mover_runtime(behavior, Direction::East, false);
+            let mut player = placed(continued, Direction::East);
+
+            assert_eq!(
+                player.step(None, &runtime, &no_connections, &NO_FLAGS),
+                StepOutcome::Idle,
+                "behavior {behavior:#x} continued={continued}"
+            );
+            assert!(!player.forced_movement_armed());
+            assert_eq!(
+                player.step(Some(Direction::East), &runtime, &no_connections, &NO_FLAGS),
+                StepOutcome::Advanced {
+                    from: (2, 2),
+                    to: (3, 2),
+                },
+                "behavior {behavior:#x} continued={continued}: first manual poll"
+            );
+        }
+    }
 }

@@ -46,6 +46,7 @@ mod first_battle_conclusion;
 mod first_battle_trigger;
 mod frame;
 mod input;
+mod lead_owner;
 mod placement;
 mod route103_rival_trigger;
 mod sight_trainer_approach;
@@ -269,6 +270,12 @@ pub(crate) struct OverworldPhase {
     /// by its other two (empty count, clean decode); diagnostic only, and
     /// never a save-time decision input.
     pub(super) undecodable_lead_retained: bool,
+    /// Whether [`Self::party_lead`] is `None` because
+    /// [`Self::take_lead_battler`] lent it to a battle, rather than because
+    /// no lead was loaded. Only a lent lead may be restored
+    /// ([`Self::restore_lead_battler`]), as `party::LoadedLead`'s battler is
+    /// absent only while lent. Reset to `NotLent` whenever the lead is rebuilt.
+    lead_loan: lead_owner::LeadLoan,
     /// The battle currently being played out, if any -- struct docs on
     /// [`ActiveBattle`]. `Some` freezes the overworld for the frame -- the
     /// same shape [`Self::dialog`] uses -- while
@@ -585,6 +592,7 @@ impl OverworldPhase {
             party_lead_slot: 0,
             lead_hp_hidden_by_load: 0,
             undecodable_lead_retained: false,
+            lead_loan: lead_owner::LeadLoan::NotLent,
             active_battle: None,
             different_save_file: false,
             new_game_session: false,
@@ -699,6 +707,7 @@ impl OverworldPhase {
             party_lead_slot: 0,
             lead_hp_hidden_by_load: 0,
             undecodable_lead_retained: false,
+            lead_loan: lead_owner::LeadLoan::NotLent,
             active_battle: None,
             different_save_file: true,
             new_game_session: true,
@@ -897,6 +906,8 @@ mod frame_tests;
 mod input_tests;
 /// `crate::overworld::oldale_town_npc_reposition` collision tests reachable
 /// from this module; its own unit tests live with that module instead.
+#[cfg(test)]
+mod lead_owner_tests;
 #[cfg(test)]
 mod oldale_reposition_tests;
 /// Wild and scripted first-battle opponents carry the save owner's OT id.
