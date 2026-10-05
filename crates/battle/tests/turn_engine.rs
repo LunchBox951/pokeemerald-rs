@@ -22,8 +22,18 @@ mod paralysis;
 mod participant_admission;
 #[path = "turn_engine/pipelines.rs"]
 mod pipelines;
-#[path = "turn_engine/poison.rs"]
-mod poison;
+#[path = "turn_engine/poison_player_reserve_admission.rs"]
+mod poison_player_reserve_admission;
+#[path = "turn_engine/poison_residual_ordering.rs"]
+mod poison_residual_ordering;
+#[path = "turn_engine/poison_status_stats.rs"]
+mod poison_status_stats;
+#[path = "turn_engine/poison_support.rs"]
+mod poison_support;
+#[path = "turn_engine/poison_synchronize.rs"]
+mod poison_synchronize;
+#[path = "turn_engine/poison_trainer_aftermath.rs"]
+mod poison_trainer_aftermath;
 #[path = "turn_engine/pressure.rs"]
 mod pressure;
 #[path = "turn_engine/shed_skin.rs"]
