@@ -618,9 +618,7 @@ fn env(a: u8, d: u8, s: u8, r: u8) -> Envelope {
     }
 }
 
-/// Resolve one leaf placed at `starting_note` 3 and return the slot that
-/// landed there, checking the surrounding padding on the way.
-fn resolve_leaf(slot: RawSlot) -> VoiceSlot {
+fn resolve_lone_leaf_at_note_3(slot: RawSlot) -> VoiceSlot {
     let raw = groups(vec![raw_group("top", 3, vec![slot])]);
     let resolved = resolve_voice_groups("top", &raw, &no_keysplit_tables()).unwrap();
     assert_eq!(resolved.len(), 1);
@@ -637,7 +635,7 @@ fn resolve_leaf(slot: RawSlot) -> VoiceSlot {
 #[test]
 fn a_square1_leaf_converts_every_field() {
     for fixed_rate in [true, false] {
-        let got = resolve_leaf(RawSlot::Square1 {
+        let got = resolve_lone_leaf_at_note_3(RawSlot::Square1 {
             base_key: 61,
             length: 23,
             sweep: 5,
@@ -662,7 +660,7 @@ fn a_square1_leaf_converts_every_field() {
 #[test]
 fn a_square2_leaf_converts_every_field() {
     for fixed_rate in [true, false] {
-        let got = resolve_leaf(RawSlot::Square2 {
+        let got = resolve_lone_leaf_at_note_3(RawSlot::Square2 {
             base_key: 62,
             length: 24,
             duty: 3,
@@ -685,7 +683,7 @@ fn a_square2_leaf_converts_every_field() {
 #[test]
 fn a_programmable_wave_leaf_converts_every_field_and_derives_the_wave_id() {
     for fixed_rate in [true, false] {
-        let got = resolve_leaf(RawSlot::ProgrammableWave {
+        let got = resolve_lone_leaf_at_note_3(RawSlot::ProgrammableWave {
             base_key: 63,
             length: 25,
             wave_symbol: "ProgrammableWaveData_2".to_owned(),
@@ -708,7 +706,7 @@ fn a_programmable_wave_leaf_converts_every_field_and_derives_the_wave_id() {
 #[test]
 fn a_noise_leaf_converts_every_field() {
     for fixed_rate in [true, false] {
-        let got = resolve_leaf(RawSlot::Noise {
+        let got = resolve_lone_leaf_at_note_3(RawSlot::Noise {
             base_key: 65,
             length: 26,
             period: 1,
@@ -731,7 +729,7 @@ fn a_noise_leaf_converts_every_field() {
 #[test]
 fn a_non_default_direct_sound_leaf_keeps_its_pan_and_mode() {
     for mode in [DirectSoundMode::Fixed, DirectSoundMode::Reverse] {
-        let got = resolve_leaf(RawSlot::DirectSound {
+        let got = resolve_lone_leaf_at_note_3(RawSlot::DirectSound {
             base_key: 64,
             pan: Some(17),
             sample_symbol: "DirectSoundWaveData_nondefault".to_owned(),
