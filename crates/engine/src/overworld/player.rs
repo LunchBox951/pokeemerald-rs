@@ -898,10 +898,8 @@ mod tests {
         (bytes, header, events)
     }
 
-    /// A `width` x `height` map of plain ground with empty metatile
-    /// attributes, no connections, and no events; `collision_at` sets each
-    /// cell's collision bits. The fixture is leaked so the runtime is
-    /// `'static`, the way the specialised fixtures below do.
+    /// A `width` x `height` map of plain ground whose only variation is the
+    /// collision bits `collision_at` assigns per cell.
     fn flat_map_runtime(
         width: u16,
         height: u16,
