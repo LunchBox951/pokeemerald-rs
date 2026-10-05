@@ -622,6 +622,13 @@ fn affine_mosaic_hold_advances_through_pixels_hidden_by_objwin() {
         "x=6 (unmasked again) must still show column 0's held texel -- the \
          hidden columns advanced the hold invisibly rather than resetting it"
     );
+    assert_eq!(
+        fb.pixel(7, 0),
+        Some(Bgr555::from_channels(5, 0, 0).to_rgb888()),
+        "x=7 reloads the hold at column 4 only if hidden x=4..5 decremented \
+         the counter; a hold paused across the hidden columns would still \
+         show column 0 here"
+    );
 }
 
 #[test]
