@@ -15203,6 +15203,20 @@
       "status": "pending"
     },
     "graphics/pokemon/mudkip": {
+      "artifacts": {
+        "front.png": {
+          "reason": "Shared normal front image extracted for typed starter previews; other species graphics remain pending.",
+          "rust_target": "crates/xtask/src/extract/starter_chooser.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "normal.pal": {
+          "reason": "Sixteen-colour JASC normal palette extracted for the shared front image; shiny and other graphics remain pending.",
+          "rust_target": "crates/xtask/src/extract/starter_chooser.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.pokemon",
       "kind": "dir",
       "spec_owner": "S-4",
@@ -16001,6 +16015,20 @@
       "status": "pending"
     },
     "graphics/pokemon/torchic": {
+      "artifacts": {
+        "front.png": {
+          "reason": "Shared normal front image extracted for typed starter previews; other species graphics remain pending.",
+          "rust_target": "crates/xtask/src/extract/starter_chooser.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "normal.pal": {
+          "reason": "Sixteen-colour JASC normal palette extracted for the shared front image; shiny and other graphics remain pending.",
+          "rust_target": "crates/xtask/src/extract/starter_chooser.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.pokemon",
       "kind": "dir",
       "spec_owner": "S-4",
@@ -16025,6 +16053,20 @@
       "status": "pending"
     },
     "graphics/pokemon/treecko": {
+      "artifacts": {
+        "front.png": {
+          "reason": "Shared normal front image extracted for typed starter previews; other species graphics remain pending.",
+          "rust_target": "crates/xtask/src/extract/starter_chooser.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "normal.pal": {
+          "reason": "Sixteen-colour JASC normal palette extracted for the shared front image; shiny and other graphics remain pending.",
+          "rust_target": "crates/xtask/src/extract/starter_chooser.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.pokemon",
       "kind": "dir",
       "spec_owner": "S-4",
@@ -16327,8 +16369,10 @@
     "graphics/starter_choose": {
       "category": "graphics.ui",
       "kind": "dir",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Complete chooser graphics directory extracted: three indexed PNG sheets with their embedded palettes and both raw tilemaps; exposed by typed starter chooser handles. No chooser rendering or ROM extraction claimed.",
+      "rust_target": "crates/xtask/src/extract/starter_chooser.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/summary_screen": {
       "category": "graphics.ui",
@@ -27794,7 +27838,7 @@
           "status": "rewritten"
         },
         "CreateBoxMon": {
-          "reason": "CreateBoxMon's default-field stamps (:2251-2263) for a record built from scratch are pokeemerald_rs::party::to_save_pokemon (issue #869): nickname (the species' display name, :2251), language (GAME_LANGUAGE, :2252), met level (the level the battler was created at, :2259), met game (VERSION_EMERALD) and poke ball (ITEM_POKE_BALL), plus base friendship. Its RNG branches (personality, IVs, OT id, ability bit) are covered under src/pokemon.c#CreateMonWithNature and #GetAbilityBySpecies. Since issue #1208, SetBoxMonData(MON_DATA_SPECIES)'s own hasSpecies derivation (:4220-4227) is modelled too -- BoxPokemon::set_has_species raises the unencrypted header's sanity bit whenever the species just written is nonzero, applied both at to_save_pokemon and at merge_into_save_pokemon's retained-record branch, which re-files growth species on every save. Still deferred: OT name, met location, and OT gender, which need the current save's player identity and map that to_save_pokemon does not receive, and the checksum/encryption round-trip.",
+          "reason": "CreateBoxMon's default-field stamps (:2251-2263) for a record built from scratch are pokeemerald_rs::party::to_save_pokemon (issue #869): nickname (the species' display name, :2251), language (GAME_LANGUAGE, :2252), met level (the level the battler was created at, :2259), met game (VERSION_EMERALD) and poke ball (ITEM_POKE_BALL), plus base friendship. Its RNG branches (personality, IVs, OT id, ability bit) are covered under src/pokemon.c#CreateMonWithNature and #GetAbilityBySpecies. Since issue #1208, SetBoxMonData(MON_DATA_SPECIES)'s own hasSpecies derivation (:4220-4227) is modelled too -- BoxPokemon::set_has_species raises the unencrypted header's sanity bit whenever the species just written is nonzero, applied both at to_save_pokemon and at merge_into_save_pokemon's retained-record branch, which re-files growth species on every save. The OT name, met location, and OT gender stamps (:2253-2263) are written by the level-five starter grant (crates/pokeemerald-rs/src/party/starter.rs, I-4, #1662), which holds the save's player identity and takes the map's region-map section from its caller; to_save_pokemon itself still leaves them zero. The checksum/encryption round-trip is engine::save::BoxPokemon.",
           "rust_target": "crates/pokeemerald-rs/src/party.rs",
           "spec": "I-6",
           "status": "stubbed"
@@ -28429,6 +28473,12 @@
           "rust_target": "crates/battle/src/pokemon.rs",
           "spec": "I-4",
           "status": "rewritten"
+        },
+        "ScriptGiveMon": {
+          "reason": "The level-five starter grant, ScriptGiveMon(starter, 5, ITEM_NONE, 0, 0, 0) (battle_setup.c:921-923): CreateMon's four consecutive draws (personality low/high, then two IV words), player OT id, first seven OT-name bytes and gender bit, base friendship, ITEM_POKE_BALL, VERSION_EMERALD, met level five, caller-supplied numeric met location, and GiveBoxMonInitialMoveset moves, filed as the only member of an empty party with the battler and record encoded together. Still deferred: the Pokedex seen/caught flags (:75-81), GiveMonToPlayer's later party slots and PC routing, a non-empty held item, and the generic script-driven grant (#1679).",
+          "rust_target": "crates/pokeemerald-rs/src/party/starter.rs",
+          "spec": "I-4",
+          "status": "stubbed"
         }
       },
       "category": "code.source",
