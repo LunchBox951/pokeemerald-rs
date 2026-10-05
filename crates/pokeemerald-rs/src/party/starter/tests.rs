@@ -200,8 +200,19 @@ fn refused_grants_leave_rng_and_save_untouched() {
 fn met_level_survives_a_level_up_and_merge() {
     let dex = Dex::new();
     let (mut lead, _, _) = grant(Starter::Torchic, PlayerGender::Male);
-    let _ = lead.battler_mut();
+    let growth_rate = dex.species(lead.battler().species()).unwrap().growth_rate;
+    let level_seven = assets::experience_for_level(growth_rate, 7).unwrap();
+    let award = level_seven - lead.battler().experience();
+    assert!(
+        lead.battler_mut()
+            .apply_experience(&dex, award)
+            .expect("no move-learn prompt is pending")
+            .is_none(),
+        "two of the four slots are free, so no move-learn prompt opens"
+    );
+    assert_eq!(lead.battler().level(), 7, "fixture sanity: the level moved");
     let merged = lead.merge_and_save(&dex);
+    assert_eq!(merged.level, 7);
     assert_eq!(
         u16::from_le_bytes([misc(&merged)[2], misc(&merged)[3]]) & 0x7F,
         5
