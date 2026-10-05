@@ -26402,19 +26402,17 @@
           "spec": "I-3",
           "status": "rewritten"
         },
-<<<<<<< HEAD
         "GetInteractedBackgroundEventScript": {
           "reason": "Typed sign and hidden-item selection with collected flags; north-facing secret-base entrance context only, saved-base eligibility and special-variable setup remain deferred.",
           "rust_target": "crates/engine/src/overworld/background_event.rs",
           "spec": "S-5",
           "status": "stubbed"
-=======
+        },
         "GetInteractedMetatileScript.script_targets": {
           "reason": "Classifies all 24 script-returning metatile branches into 23 typed targets, preserving north-facing gates and exact secret-base elevation equality. Furniture and poster save bookkeeping, script launch, services, water-move gating, and cross-kind precedence remain outside this sub-artifact.",
           "rust_target": "crates/engine/src/overworld/metatile_interaction.rs",
           "spec": "S-5",
           "status": "rewritten"
->>>>>>> origin/dev
         },
         "IsArrowWarpMetatileBehavior": {
           "reason": "engine::overworld::warp::is_arrow_warp_trigger: dispatches by direction to metatile_behavior::is_{north,south,west,east}_arrow_warp exactly as upstream's sArrowWarpMetatileBehaviorChecks table does (field_player_avatar.c:226-232). Issue #174.",
