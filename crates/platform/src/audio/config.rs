@@ -15,7 +15,7 @@ pub(super) fn sample_format_rank(format: cpal::SampleFormat) -> u8 {
     }
 }
 
-/// Whether [`build_stream`] can actually open a stream in this sample format.
+/// Whether [`build_stream`](super::stream::build_stream) can actually open a stream in this sample format.
 /// Only `f32` and `i16` are convertible to/from the ring buffer's `f32`
 /// samples; any other format (e.g. `u16`) hits `build_stream`'s `_ =>` error
 /// arm, so it must never be selected — see [`select_config`].
@@ -27,7 +27,7 @@ fn is_openable_format(format: cpal::SampleFormat) -> bool {
 /// `(sample_format, min_rate, max_rate)` tuples, so it is unit-testable
 /// without a `cpal` device (see the tests below).
 ///
-/// Candidates are first restricted to formats [`build_stream`] can open
+/// Candidates are first restricted to formats [`build_stream`](super::stream::build_stream) can open
 /// (`f32`/`i16`) — a `u16`-only config whose rate range happens to cover the
 /// target must never win, or `AudioOutput::open` would hard-fail instead of
 /// resampling on an available openable format. Each openable candidate is then
@@ -39,7 +39,7 @@ fn is_openable_format(format: cpal::SampleFormat) -> bool {
 ///   format or the order the device enumerated its ranges. A range that
 ///   covers `target` has distance `0`, so an exact-rate candidate always
 ///   beats one that needs resampling further — an exact-Hz device still
-///   builds a [`Resampler`] (see [`Source`]'s docs), but with a step nearest
+///   builds a [`Resampler`](crate::resample::Resampler) (see [`Source`](super::Source)'s docs), but with a step nearest
 ///   `1.0`, minimizing interpolation error — so it must not lose to a mere
 ///   format preference.
 /// - **Format rank is the tie-break** ([`sample_format_rank`]: `f32` before
@@ -97,7 +97,7 @@ pub(super) fn negotiate<D: OutputDevice>(
 /// it is reported as such.
 ///
 /// Only this stage collapses that way. A device that answered the query is
-/// real, so [`build_stream`] losing it afterwards stays on the plain
+/// real, so [`build_stream`](super::stream::build_stream) losing it afterwards stays on the plain
 /// [`From<cpal::Error>`] mapping to [`PlatformError::Audio`] — a caller that
 /// tolerates a headless run must still hear about a device that vanished
 /// mid-setup. `a_lost_device_after_the_query_stays_an_audio_error` pins that
@@ -116,7 +116,7 @@ pub(super) fn classify_query_error(err: cpal::Error) -> PlatformError {
 /// advertised value — [`AudioOutput::max_callback_frames`] exposes it
 /// unmodified for callers that need the device's actual claim (e.g.
 /// tail-wait timing). Consumers that pre-size real-time scratch off it cap
-/// it first — see [`MAX_SCRATCH_CALLBACK_FRAMES`] and [`Resampler::new`].
+/// it first — see [`MAX_SCRATCH_CALLBACK_FRAMES`](super::stream::MAX_SCRATCH_CALLBACK_FRAMES) and [`Resampler::new`](crate::resample::Resampler::new).
 pub(super) fn max_buffer_frames(config: &cpal::SupportedStreamConfig) -> usize {
     match config.buffer_size() {
         cpal::SupportedBufferSize::Range { max, .. } => usize::try_from(*max).unwrap_or(0),
