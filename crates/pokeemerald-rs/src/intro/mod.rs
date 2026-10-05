@@ -24,7 +24,7 @@ use engine::text::window::MessageBoxLayout;
 use engine::text::Token;
 use rendering::{Framebuffer, Rgb888};
 
-use crate::new_game::NewGameOptions;
+use crate::new_game::{NewGameIdentity, NewGameOptions};
 use crate::textbox::{self, FrameAssets, WindowOp};
 
 pub use speech::NUM_PAGES;
@@ -195,6 +195,10 @@ pub struct IntroScene {
     /// verdicts carry their recovered `SaveBlock2` bytes here instead of
     /// [`NewGameOptions::DEFAULT`].
     new_game_options: NewGameOptions,
+    /// The gender and name the new game commits at the handoff; the
+    /// unselected default until the chooser and naming screens supply one
+    /// ([`Self::with_identity`]).
+    new_game_identity: NewGameIdentity,
 }
 
 impl IntroScene {
@@ -227,7 +231,26 @@ impl IntroScene {
             ops: Vec::new(),
             finished: false,
             new_game_options,
+            new_game_identity: NewGameIdentity::DEFAULT,
         }
+    }
+
+    /// Replaces the identity the handoff will commit with a selected one.
+    #[must_use]
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the chooser UI (#1649) is the production caller")
+    )]
+    pub(crate) const fn with_identity(mut self, identity: NewGameIdentity) -> Self {
+        self.new_game_identity = identity;
+        self
+    }
+
+    /// The identity [`crate::new_game::init_save_blocks_with_identity`]
+    /// commits once the intro finishes.
+    #[must_use]
+    pub(crate) const fn new_game_identity(&self) -> NewGameIdentity {
+        self.new_game_identity
     }
 
     /// Loads owned rendering assets from `pack` at the default text speed.
