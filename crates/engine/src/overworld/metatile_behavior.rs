@@ -3,6 +3,8 @@
 //! Constants retain their encoded byte values because extracted metatile
 //! attributes store behavior identities directly.
 
+use super::direction::Direction;
+
 /// Ordinary ground with no behavior-specific handling.
 pub const MB_NORMAL: u8 = 0;
 
@@ -311,6 +313,224 @@ pub const fn is_south_arrow_warp(behavior: u8) -> bool {
     )
 }
 
+// Script-backed interaction targets from `GetInteractedMetatileScript`.
+
+/// Behavior identity of a television screen.
+pub const MB_TELEVISION: u8 = 0x86;
+
+/// Behavior identity of a PC.
+pub const MB_PC: u8 = 0x83;
+
+/// Behavior identity of Sootopolis's closed door.
+pub const MB_CLOSED_SOOTOPOLIS_DOOR: u8 = 0x8B;
+
+/// Behavior identity of Sky Pillar's closed door.
+pub const MB_SKY_PILLAR_CLOSED_DOOR: u8 = 0xEA;
+
+/// Behavior identity of the first cable-club results box.
+pub const MB_CABLE_BOX_RESULTS_1: u8 = 0x84;
+
+/// Behavior identity of a Pokeblock feeder.
+pub const MB_POKEBLOCK_FEEDER: u8 = 0x87;
+
+/// Behavior identity of a Trick House puzzle door.
+pub const MB_TRICK_HOUSE_PUZZLE_DOOR: u8 = 0x8C;
+
+/// Behavior identity of a region map.
+pub const MB_REGION_MAP: u8 = 0x85;
+
+/// Behavior identity of the Running Shoes manual.
+pub const MB_RUNNING_SHOES_INSTRUCTION: u8 = 0x8E;
+
+/// Behavior identity of a picture bookshelf.
+pub const MB_PICTURE_BOOK_SHELF: u8 = 0xE0;
+
+/// Behavior identity of a bookshelf.
+pub const MB_BOOKSHELF: u8 = 0xE1;
+
+/// Behavior identity of a Pokemon Center bookshelf.
+pub const MB_POKEMON_CENTER_BOOKSHELF: u8 = 0xE2;
+
+/// Behavior identity of a vase.
+pub const MB_VASE: u8 = 0xE3;
+
+/// Behavior identity of a trash can.
+pub const MB_TRASH_CAN: u8 = 0xE4;
+
+/// Behavior identity of a shop shelf.
+pub const MB_SHOP_SHELF: u8 = 0xE5;
+
+/// Behavior identity of a blueprint.
+pub const MB_BLUEPRINT: u8 = 0xE6;
+
+/// Behavior identity of a wireless-club results box.
+pub const MB_WIRELESS_BOX_RESULTS: u8 = 0xE8;
+
+/// Behavior identity of the second cable-club results box.
+pub const MB_CABLE_BOX_RESULTS_2: u8 = 0xE7;
+
+/// Behavior identity of a questionnaire.
+pub const MB_QUESTIONNAIRE: u8 = 0x8F;
+
+/// Behavior identity of the Trainer Hill timer.
+pub const MB_TRAINER_HILL_TIMER: u8 = 0xE9;
+
+/// Behavior identity of a secret-base PC.
+pub const MB_SECRET_BASE_PC: u8 = 0xB0;
+
+/// Behavior identity of a secret-base record-mixing PC.
+pub const MB_SECRET_BASE_REGISTER_PC: u8 = 0xB1;
+
+/// Behavior identity of a secret-base sand ornament.
+pub const MB_SECRET_BASE_SAND_ORNAMENT: u8 = 0xBF;
+
+/// Behavior identity of a secret-base shield or toy TV.
+pub const MB_SECRET_BASE_TV_SHIELD: u8 = 0xC4;
+
+/// Returns whether a behavior is a television screen read while facing north.
+#[must_use]
+pub const fn is_player_facing_tv_screen(behavior: u8, direction: Direction) -> bool {
+    behavior == MB_TELEVISION && matches!(direction, Direction::North)
+}
+
+/// Returns whether a behavior is a PC.
+#[must_use]
+pub const fn is_pc(behavior: u8) -> bool {
+    behavior == MB_PC
+}
+
+/// Returns whether a behavior is Sootopolis's closed door.
+#[must_use]
+pub const fn is_closed_sootopolis_door(behavior: u8) -> bool {
+    behavior == MB_CLOSED_SOOTOPOLIS_DOOR
+}
+
+/// Returns whether a behavior is Sky Pillar's closed door.
+#[must_use]
+pub const fn is_sky_pillar_closed_door(behavior: u8) -> bool {
+    behavior == MB_SKY_PILLAR_CLOSED_DOOR
+}
+
+/// Returns whether a behavior is the first cable-club results box.
+#[must_use]
+pub const fn is_cable_box_results_1(behavior: u8) -> bool {
+    behavior == MB_CABLE_BOX_RESULTS_1
+}
+
+/// Returns whether a behavior is a Pokeblock feeder.
+#[must_use]
+pub const fn is_pokeblock_feeder(behavior: u8) -> bool {
+    behavior == MB_POKEBLOCK_FEEDER
+}
+
+/// Returns whether a behavior is a Trick House puzzle door.
+#[must_use]
+pub const fn is_trick_house_puzzle_door(behavior: u8) -> bool {
+    behavior == MB_TRICK_HOUSE_PUZZLE_DOOR
+}
+
+/// Returns whether a behavior is a region map.
+#[must_use]
+pub const fn is_region_map(behavior: u8) -> bool {
+    behavior == MB_REGION_MAP
+}
+
+/// Returns whether a behavior is the Running Shoes manual.
+#[must_use]
+pub const fn is_running_shoes_manual(behavior: u8) -> bool {
+    behavior == MB_RUNNING_SHOES_INSTRUCTION
+}
+
+/// Returns whether a behavior is a picture bookshelf.
+#[must_use]
+pub const fn is_picture_bookshelf(behavior: u8) -> bool {
+    behavior == MB_PICTURE_BOOK_SHELF
+}
+
+/// Returns whether a behavior is a bookshelf.
+#[must_use]
+pub const fn is_bookshelf(behavior: u8) -> bool {
+    behavior == MB_BOOKSHELF
+}
+
+/// Returns whether a behavior is a Pokemon Center bookshelf.
+#[must_use]
+pub const fn is_pokemon_center_bookshelf(behavior: u8) -> bool {
+    behavior == MB_POKEMON_CENTER_BOOKSHELF
+}
+
+/// Returns whether a behavior is a vase.
+#[must_use]
+pub const fn is_vase(behavior: u8) -> bool {
+    behavior == MB_VASE
+}
+
+/// Returns whether a behavior is a trash can.
+#[must_use]
+pub const fn is_trash_can(behavior: u8) -> bool {
+    behavior == MB_TRASH_CAN
+}
+
+/// Returns whether a behavior is a shop shelf.
+#[must_use]
+pub const fn is_shop_shelf(behavior: u8) -> bool {
+    behavior == MB_SHOP_SHELF
+}
+
+/// Returns whether a behavior is a blueprint.
+#[must_use]
+pub const fn is_blueprint(behavior: u8) -> bool {
+    behavior == MB_BLUEPRINT
+}
+
+/// Returns whether a behavior is a wireless-club results box read while facing north.
+#[must_use]
+pub const fn is_player_facing_wireless_box_results(behavior: u8, direction: Direction) -> bool {
+    behavior == MB_WIRELESS_BOX_RESULTS && matches!(direction, Direction::North)
+}
+
+/// Returns whether a behavior is the second cable-club results box read while facing north.
+#[must_use]
+pub const fn is_cable_box_results_2(behavior: u8, direction: Direction) -> bool {
+    behavior == MB_CABLE_BOX_RESULTS_2 && matches!(direction, Direction::North)
+}
+
+/// Returns whether a behavior is a questionnaire.
+#[must_use]
+pub const fn is_questionnaire(behavior: u8) -> bool {
+    behavior == MB_QUESTIONNAIRE
+}
+
+/// Returns whether a behavior is the Trainer Hill timer.
+#[must_use]
+pub const fn is_trainer_hill_timer(behavior: u8) -> bool {
+    behavior == MB_TRAINER_HILL_TIMER
+}
+
+/// Returns whether a behavior is a secret-base PC.
+#[must_use]
+pub const fn is_secret_base_pc(behavior: u8) -> bool {
+    behavior == MB_SECRET_BASE_PC
+}
+
+/// Returns whether a behavior is a secret-base record-mixing PC.
+#[must_use]
+pub const fn is_record_mixing_secret_base_pc(behavior: u8) -> bool {
+    behavior == MB_SECRET_BASE_REGISTER_PC
+}
+
+/// Returns whether a behavior is a secret-base sand ornament.
+#[must_use]
+pub const fn is_secret_base_sand_ornament(behavior: u8) -> bool {
+    behavior == MB_SECRET_BASE_SAND_ORNAMENT
+}
+
+/// Returns whether a behavior is a secret-base shield or toy TV.
+#[must_use]
+pub const fn is_secret_base_shield_or_toy_tv(behavior: u8) -> bool {
+    behavior == MB_SECRET_BASE_TV_SHIELD
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -601,5 +821,127 @@ mod tests {
         assert!(!is_forced_movement(MB_TALL_GRASS));
         assert!(!is_forced_movement(MB_NON_ANIMATED_DOOR));
         assert!(!is_forced_movement(MB_SECRET_BASE_BREAKABLE_DOOR));
+    }
+
+    type UnaryPredicate = fn(u8) -> bool;
+    type FacingPredicate = fn(u8, Direction) -> bool;
+
+    const SCRIPT_TARGET_IDS: [(u8, u8); 24] = [
+        (MB_TELEVISION, 0x86),
+        (MB_PC, 0x83),
+        (MB_CLOSED_SOOTOPOLIS_DOOR, 0x8B),
+        (MB_SKY_PILLAR_CLOSED_DOOR, 0xEA),
+        (MB_CABLE_BOX_RESULTS_1, 0x84),
+        (MB_POKEBLOCK_FEEDER, 0x87),
+        (MB_TRICK_HOUSE_PUZZLE_DOOR, 0x8C),
+        (MB_REGION_MAP, 0x85),
+        (MB_RUNNING_SHOES_INSTRUCTION, 0x8E),
+        (MB_PICTURE_BOOK_SHELF, 0xE0),
+        (MB_BOOKSHELF, 0xE1),
+        (MB_POKEMON_CENTER_BOOKSHELF, 0xE2),
+        (MB_VASE, 0xE3),
+        (MB_TRASH_CAN, 0xE4),
+        (MB_SHOP_SHELF, 0xE5),
+        (MB_BLUEPRINT, 0xE6),
+        (MB_WIRELESS_BOX_RESULTS, 0xE8),
+        (MB_CABLE_BOX_RESULTS_2, 0xE7),
+        (MB_QUESTIONNAIRE, 0x8F),
+        (MB_TRAINER_HILL_TIMER, 0xE9),
+        (MB_SECRET_BASE_PC, 0xB0),
+        (MB_SECRET_BASE_REGISTER_PC, 0xB1),
+        (MB_SECRET_BASE_SAND_ORNAMENT, 0xBF),
+        (MB_SECRET_BASE_TV_SHIELD, 0xC4),
+    ];
+
+    #[test]
+    fn script_target_ids_have_expected_encoded_values() {
+        let actual = [
+            MB_TELEVISION,
+            MB_PC,
+            MB_CLOSED_SOOTOPOLIS_DOOR,
+            MB_SKY_PILLAR_CLOSED_DOOR,
+            MB_CABLE_BOX_RESULTS_1,
+            MB_POKEBLOCK_FEEDER,
+            MB_TRICK_HOUSE_PUZZLE_DOOR,
+            MB_REGION_MAP,
+            MB_RUNNING_SHOES_INSTRUCTION,
+            MB_PICTURE_BOOK_SHELF,
+            MB_BOOKSHELF,
+            MB_POKEMON_CENTER_BOOKSHELF,
+            MB_VASE,
+            MB_TRASH_CAN,
+            MB_SHOP_SHELF,
+            MB_BLUEPRINT,
+            MB_WIRELESS_BOX_RESULTS,
+            MB_CABLE_BOX_RESULTS_2,
+            MB_QUESTIONNAIRE,
+            MB_TRAINER_HILL_TIMER,
+            MB_SECRET_BASE_PC,
+            MB_SECRET_BASE_REGISTER_PC,
+            MB_SECRET_BASE_SAND_ORNAMENT,
+            MB_SECRET_BASE_TV_SHIELD,
+        ];
+        for ((id, expected), actual) in SCRIPT_TARGET_IDS.iter().zip(actual) {
+            assert_eq!(*id, actual);
+            assert_eq!(*id, *expected);
+        }
+    }
+
+    #[test]
+    fn unary_interaction_predicates_accept_exactly_their_behavior() {
+        let table: [(UnaryPredicate, u8); 21] = [
+            (is_pc, MB_PC),
+            (is_closed_sootopolis_door, MB_CLOSED_SOOTOPOLIS_DOOR),
+            (is_sky_pillar_closed_door, MB_SKY_PILLAR_CLOSED_DOOR),
+            (is_cable_box_results_1, MB_CABLE_BOX_RESULTS_1),
+            (is_pokeblock_feeder, MB_POKEBLOCK_FEEDER),
+            (is_trick_house_puzzle_door, MB_TRICK_HOUSE_PUZZLE_DOOR),
+            (is_region_map, MB_REGION_MAP),
+            (is_running_shoes_manual, MB_RUNNING_SHOES_INSTRUCTION),
+            (is_picture_bookshelf, MB_PICTURE_BOOK_SHELF),
+            (is_bookshelf, MB_BOOKSHELF),
+            (is_pokemon_center_bookshelf, MB_POKEMON_CENTER_BOOKSHELF),
+            (is_vase, MB_VASE),
+            (is_trash_can, MB_TRASH_CAN),
+            (is_shop_shelf, MB_SHOP_SHELF),
+            (is_blueprint, MB_BLUEPRINT),
+            (is_questionnaire, MB_QUESTIONNAIRE),
+            (is_trainer_hill_timer, MB_TRAINER_HILL_TIMER),
+            (is_secret_base_pc, MB_SECRET_BASE_PC),
+            (is_record_mixing_secret_base_pc, MB_SECRET_BASE_REGISTER_PC),
+            (is_secret_base_sand_ornament, MB_SECRET_BASE_SAND_ORNAMENT),
+            (is_secret_base_shield_or_toy_tv, MB_SECRET_BASE_TV_SHIELD),
+        ];
+        for (predicate, expected) in table {
+            let matching: Vec<u8> = (0..=u8::MAX).filter(|b| predicate(*b)).collect();
+            assert_eq!(matching, [expected]);
+        }
+    }
+
+    #[test]
+    fn facing_interaction_predicates_accept_only_north() {
+        let table: [(FacingPredicate, u8); 3] = [
+            (is_player_facing_tv_screen, MB_TELEVISION),
+            (
+                is_player_facing_wireless_box_results,
+                MB_WIRELESS_BOX_RESULTS,
+            ),
+            (is_cable_box_results_2, MB_CABLE_BOX_RESULTS_2),
+        ];
+        for (predicate, expected) in table {
+            for direction in [
+                Direction::South,
+                Direction::North,
+                Direction::West,
+                Direction::East,
+            ] {
+                for behavior in 0..=u8::MAX {
+                    assert_eq!(
+                        predicate(behavior, direction),
+                        behavior == expected && direction == Direction::North
+                    );
+                }
+            }
+        }
     }
 }
