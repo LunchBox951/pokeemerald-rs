@@ -658,10 +658,14 @@ fn placement_onto_an_undispatched_tile_stays_disarmed() {
                 "behavior {behavior:#x} continued={continued}"
             );
             assert!(!player.forced_movement_armed());
-            assert!(matches!(
+            assert_eq!(
                 player.step(Some(Direction::East), &runtime, &no_connections, &NO_FLAGS),
-                StepOutcome::Advanced { .. }
-            ));
+                StepOutcome::Advanced {
+                    from: (2, 2),
+                    to: (3, 2),
+                },
+                "behavior {behavior:#x} continued={continued}: first manual poll"
+            );
         }
     }
 }
