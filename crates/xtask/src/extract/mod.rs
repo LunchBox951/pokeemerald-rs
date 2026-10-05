@@ -24,6 +24,9 @@
 //! - the map and border grids named by `LAYOUTS`;
 //! - the five Latin font sheets, every text-window image and palette, and the
 //!   main-menu background palette; and
+//! - the starter chooser's tile, Poké Ball, and circle sheets with their
+//!   palettes, both Birch tilemaps, and the shared normal front image and
+//!   palette of Treecko, Torchic, and Mudkip; and
 //! - `mus_title`, its transitive voicegroup tree, and every sample that tree
 //!   references.
 //!
@@ -38,6 +41,8 @@
 //! - `font/<name>/glyphs`
 //! - `text-window/{image,palette}/<stem>`
 //! - `interface/palette/main_menu_bg`
+//! - `starter-chooser/{image,palette,raw}/<stem>`
+//! - `pokemon/<species>/front` and `pokemon/<species>/palette/normal`
 //! - `audio/sample/{direct-sound,programmable-wave}/<name>`
 //! - `audio/voicegroup/<label>` and `audio/song/<name>`
 //!
@@ -53,6 +58,7 @@ mod layouts_json;
 pub(crate) mod midi;
 pub mod png;
 pub(crate) mod scope;
+mod starter_chooser;
 mod text_window;
 pub(crate) mod voicegroups;
 mod wav;
@@ -125,6 +131,7 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     fonts::extract_fonts(&upstream, &mut writer)?;
     text_window::extract_text_window(&upstream, &mut writer)?;
     extract_interface_palettes(&upstream, &mut writer)?;
+    starter_chooser::extract_starter_chooser(&upstream, &mut writer)?;
     audio_samples::extract_audio_samples(&upstream, &mut writer)?;
     voicegroups::extract_voicegroups(&upstream, &mut writer)?;
     midi::extract_song(&upstream, &mut writer)?;
