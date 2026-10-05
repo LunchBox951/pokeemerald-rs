@@ -26376,6 +26376,12 @@
           "spec": "I-3",
           "status": "rewritten"
         },
+        "GetInteractedMetatileScript.script_targets": {
+          "reason": "Classifies all 24 script-returning metatile branches into 23 typed targets, preserving north-facing gates and exact secret-base elevation equality. Furniture and poster save bookkeeping, script launch, services, water-move gating, and cross-kind precedence remain outside this sub-artifact.",
+          "rust_target": "crates/engine/src/overworld/metatile_interaction.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
         "IsArrowWarpMetatileBehavior": {
           "reason": "engine::overworld::warp::is_arrow_warp_trigger: dispatches by direction to metatile_behavior::is_{north,south,west,east}_arrow_warp exactly as upstream's sArrowWarpMetatileBehaviorChecks table does (field_player_avatar.c:226-232). Issue #174.",
           "rust_target": "crates/engine/src/overworld/warp.rs",
@@ -27327,6 +27333,36 @@
     },
     "src/metatile_behavior.c": {
       "artifacts": {
+        "MetatileBehavior_IsBlueprint": {
+          "reason": "Script-target behavior identity and applicable north-facing gate reimplemented as a pure predicate with exhaustive byte-domain tests.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsBookShelf": {
+          "reason": "Script-target behavior identity and applicable north-facing gate reimplemented as a pure predicate with exhaustive byte-domain tests.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsCableBoxResults1": {
+          "reason": "Script-target behavior identity and applicable north-facing gate reimplemented as a pure predicate with exhaustive byte-domain tests.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsCableBoxResults2": {
+          "reason": "Script-target behavior identity and applicable north-facing gate reimplemented as a pure predicate with exhaustive byte-domain tests.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsClosedSootopolisDoor": {
+          "reason": "Script-target behavior identity and applicable north-facing gate reimplemented as a pure predicate with exhaustive byte-domain tests.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
         "MetatileBehavior_IsCrackedFloor": {
           "reason": "Reimplemented as an arm of is_forced_movement_input_tile, reproducing this single-behavior-ID equality test exactly; the Sky Pillar collapsing-floor consumers that also read it stay unported (deferred, still in v1 scope).",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
@@ -27411,14 +27447,104 @@
           "spec": "S-5",
           "status": "rewritten"
         },
+        "MetatileBehavior_IsPC": {
+          "reason": "Script-target behavior identity and applicable north-facing gate reimplemented as a pure predicate with exhaustive byte-domain tests.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsPictureBookShelf": {
+          "reason": "Script-target behavior identity and applicable north-facing gate reimplemented as a pure predicate with exhaustive byte-domain tests.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsPlayerFacingTVScreen": {
+          "reason": "Script-target behavior identity and applicable north-facing gate reimplemented as a pure predicate with exhaustive byte-domain tests.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsPlayerFacingWirelessBoxResults": {
+          "reason": "Script-target behavior identity and applicable north-facing gate reimplemented as a pure predicate with exhaustive byte-domain tests.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsPokeCenterBookShelf": {
+          "reason": "Script-target behavior identity and applicable north-facing gate reimplemented as a pure predicate with exhaustive byte-domain tests.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsPokeblockFeeder": {
+          "reason": "Script-target behavior identity and applicable north-facing gate reimplemented as a pure predicate with exhaustive byte-domain tests.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsQuestionnaire": {
+          "reason": "Script-target behavior identity and applicable north-facing gate reimplemented as a pure predicate with exhaustive byte-domain tests.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsRecordMixingSecretBasePC": {
+          "reason": "Script-target behavior identity and applicable north-facing gate reimplemented as a pure predicate with exhaustive byte-domain tests.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsRegionMap": {
+          "reason": "Script-target behavior identity and applicable north-facing gate reimplemented as a pure predicate with exhaustive byte-domain tests.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsRunningShoesManual": {
+          "reason": "Script-target behavior identity and applicable north-facing gate reimplemented as a pure predicate with exhaustive byte-domain tests.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
         "MetatileBehavior_IsSecretBaseJumpMat": {
           "reason": "Reimplemented as an arm of is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
           "status": "rewritten"
         },
+        "MetatileBehavior_IsSecretBasePC": {
+          "reason": "Script-target behavior identity and applicable north-facing gate reimplemented as a pure predicate with exhaustive byte-domain tests.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsSecretBaseSandOrnament": {
+          "reason": "Script-target behavior identity and applicable north-facing gate reimplemented as a pure predicate with exhaustive byte-domain tests.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsSecretBaseShieldOrToyTV": {
+          "reason": "Script-target behavior identity and applicable north-facing gate reimplemented as a pure predicate with exhaustive byte-domain tests.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
         "MetatileBehavior_IsSecretBaseSpinMat": {
           "reason": "Reimplemented as an arm of is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsShopShelf": {
+          "reason": "Script-target behavior identity and applicable north-facing gate reimplemented as a pure predicate with exhaustive byte-domain tests.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsSkyPillarClosedDoor": {
+          "reason": "Script-target behavior identity and applicable north-facing gate reimplemented as a pure predicate with exhaustive byte-domain tests.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
           "status": "rewritten"
@@ -27465,8 +27591,32 @@
           "spec": "S-5",
           "status": "rewritten"
         },
+        "MetatileBehavior_IsTrainerHillTimer": {
+          "reason": "Script-target behavior identity and applicable north-facing gate reimplemented as a pure predicate with exhaustive byte-domain tests.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsTrashCan": {
+          "reason": "Script-target behavior identity and applicable north-facing gate reimplemented as a pure predicate with exhaustive byte-domain tests.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsTrickHousePuzzleDoor": {
+          "reason": "Script-target behavior identity and applicable north-facing gate reimplemented as a pure predicate with exhaustive byte-domain tests.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
         "MetatileBehavior_IsTrickHouseSlipperyFloor": {
           "reason": "Reimplemented as an arm of is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsVase": {
+          "reason": "Script-target behavior identity and applicable north-facing gate reimplemented as a pure predicate with exhaustive byte-domain tests.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
           "status": "rewritten"
