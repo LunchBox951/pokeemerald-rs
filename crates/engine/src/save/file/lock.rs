@@ -452,6 +452,23 @@ mod tests;
 /// The parent directory a [`SaveFileGuard`] locked, recorded by identity so
 /// the path's parent can later be compared against it: the lock slot is a
 /// file, and pins no ancestor symlink or junction.
+///
+/// # Identity contract
+///
+/// On Unix the identity is the directory's `(dev, ino)` and no handle is held
+/// (see the field note); a nonblocking one would need the `libc` crate, which
+/// the engine does not name. So the guarantee is bounded: a path naming any directory that is *distinct from the locked one while
+/// the locked one still exists* fails closed. A filesystem may recycle an
+/// inode number only after the directory has been removed, and removing the
+/// locked directory requires first taking the held lock slot's entry out of
+/// it, by unlink or by renaming it away. Either already defeats
+/// directory-based exclusion on Unix (a later locker creates a new slot),
+/// which is a documented limitation of advisory locks outside this guard's
+/// contract; this check does not claim to survive it. Windows keeps a handle
+/// without `FILE_SHARE_DELETE`, so while that handle is retained the
+/// directory cannot be removed or renamed; the retention is best-effort
+/// (`pin` yields `None` if the open fails), so it narrows rather than closes
+/// the same window.
 #[derive(Debug)]
 pub(super) struct LockedDirectory {
     /// Windows keeps the directory open so its identity cannot be reused

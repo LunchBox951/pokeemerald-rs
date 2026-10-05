@@ -837,6 +837,40 @@ fn a_retargeted_ancestor_symlink_fails_the_guarded_read_and_write_closed() {
     assert!(second.join(SAVE_FILE_NAME).exists());
 }
 
+/// Pins the Unix identity contract (see `LockedDirectory`): while the locked
+/// directory still exists, a different directory at its path is refused, and
+/// the very same directory renamed away and back is still accepted.
+#[cfg(unix)]
+#[test]
+fn identity_distinguishes_a_live_replacement_but_follows_the_same_directory() {
+    let dir = TempDir::new("lock-identity-contract");
+    let held = dir.join("held");
+    let moved = dir.join("moved");
+    std::fs::create_dir(&held).unwrap();
+    let file = SaveFile::at(held.join(SAVE_FILE_NAME));
+    let guard = file.lock().expect("the lock is taken");
+    let (store, _, _) = saved_store();
+
+    // The locked directory stays alive at `moved`, so its inode cannot be
+    // recycled for the replacement now standing at the held path.
+    std::fs::rename(&held, &moved).unwrap();
+    std::fs::create_dir(&held).unwrap();
+    assert!(
+        matches!(
+            file.write(&store).err(),
+            Some(SaveFileError::SaveParentRetargeted { .. })
+        ),
+        "a distinct directory at the path must fail the guarded write closed"
+    );
+    assert!(!held.join(SAVE_FILE_NAME).exists());
+
+    std::fs::remove_dir(&held).unwrap();
+    std::fs::rename(&moved, &held).unwrap();
+    file.write(&store)
+        .expect("the same directory, named by its path again, is accepted");
+    drop(guard);
+}
+
 #[test]
 fn an_unretargeted_guard_still_reads_and_writes_its_save() {
     let dir = TempDir::new("lock-stable-parent");
