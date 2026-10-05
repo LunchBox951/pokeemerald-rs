@@ -22,8 +22,8 @@ use super::Context;
 ///
 /// [`GenRomProfileError::MissingPackEntry`] if the pack holds no
 /// `font/*/glyphs` entries at all, [`GenRomProfileError::EntryShape`] if a
-/// sheet is not the 256x512 2bpp shape the layout assumes, or
-/// [`GenRomProfileError::NotFound`] / [`GenRomProfileError::Ambiguous`] if
+/// sheet is not the 256x512 2bpp shape the layout assumes or holds a pixel
+/// index outside `0..=3`, or [`GenRomProfileError::NotFound`] / [`GenRomProfileError::Ambiguous`] if
 /// one does not turn up exactly once.
 pub fn locate(
     ctx: &Context<'_>,
