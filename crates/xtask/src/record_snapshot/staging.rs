@@ -1,6 +1,6 @@
-//! Staged through a held directory (`stage_in` on Unix; `stage` elsewhere),
-//! the file is looked up and renamed relative to that directory, so
-//! publication cannot land elsewhere.
+//! On Unix the file is staged through a held directory (`stage_in`): it is
+//! looked up and renamed relative to that directory, so publication cannot
+//! land elsewhere. Other platforms stage by path (`stage`).
 //!
 //! Staging fills a `create_new`-held file and [`StagedFile::publish`]
 //! re-verifies that handle's identity before the promoting rename, so a
