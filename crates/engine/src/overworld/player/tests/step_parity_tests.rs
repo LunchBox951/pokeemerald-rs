@@ -13,24 +13,7 @@ const DIRECTIONS: [Direction; 4] = [
 
 /// A 9x9 runtime of plain ground with a collision bit on `blocked_row`.
 fn open_runtime(blocked_row: Option<u16>) -> MapRuntime<'static> {
-    let (bytes, header, events) = flat_runtime(9, 9, |_, y| u8::from(Some(y) == blocked_row));
-    let layout = assets::MapLayout {
-        id: assets::LayoutId("MAP_TEST"),
-        name: "MapTest",
-        width: 9,
-        height: 9,
-        primary_tileset: "gTileset_General",
-        secondary_tileset: "gTileset_General",
-    };
-    let bytes = Box::leak(bytes.into_boxed_slice());
-    MapRuntime::new(
-        MapId("MAP_TEST"),
-        Box::leak(Box::new(header)),
-        Box::leak(Box::new(events)),
-        layout.grid(bytes).unwrap(),
-        MetatileAttributeTable::new(&[]),
-        MetatileAttributeTable::new(&[]),
-    )
+    flat_map_runtime(9, 9, |_, y| u8::from(Some(y) == blocked_row))
 }
 
 fn finish_crossing(player: &mut PlayerState) {
