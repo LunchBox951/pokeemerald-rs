@@ -318,19 +318,7 @@ fn a_scrubbed_environment_still_resolves_to_the_repo_path() {
         return;
     }
     let path = resolve(&env_of(&[]), None, &exists_of(&[]), DataDirRule::Xdg);
-    if super::RELEASE_CHANNEL == "dev" {
-        assert_eq!(path, repo_pack_path());
-    } else {
-        // With no `HOME` and no executable directory (`None` here), a
-        // channel build falls to `exe_dir.unwrap_or(".")` instead of the
-        // checkout fallback `dev` reaches.
-        assert_eq!(
-            path,
-            Path::new(".")
-                .join(super::APP_DATA_SUBDIRECTORY)
-                .join("pokeemerald.pack")
-        );
-    }
+    assert_eq!(path, repo_pack_path());
 }
 
 #[test]
