@@ -248,9 +248,9 @@ const LATIN_FONT_COLUMNS: usize = 16;
 ///
 /// [`GenRomProfileError::WrongPackEntryKind`] if `id` is not an image;
 /// [`GenRomProfileError::EntryShape`] if the sheet is not the 256x512 2bpp
-/// shape the layout assumes, or its payload is not one byte per pixel of
-/// that shape — the directory bounds a payload against the file, not
-/// against the entry's own metadata.
+/// shape the layout assumes, its payload is not one byte per pixel of that
+/// shape — the directory bounds a payload against the file, not against the
+/// entry's own metadata — or any pixel index exceeds the 2bpp range `0..=3`.
 pub fn latin_font_bytes(pack: &PackSource, id: &str) -> Result<Vec<u8>, GenRomProfileError> {
     let asset = pack.get(id)?;
     let (_, width, height, bit_depth) = asset.image_raster(id)?;
