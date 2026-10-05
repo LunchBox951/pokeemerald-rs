@@ -837,3 +837,16 @@ fn real_pack_composes_a_non_blank_intro_frame() {
         "the real dialogue box must look different from the empty backdrop around it"
     );
 }
+
+#[test]
+fn a_selected_identity_replaces_the_default_for_the_handoff() {
+    let pixels = transparent_glyph_sheet_pixels();
+    let scene = synthetic_scene(&pixels, TextSpeed::Mid);
+    assert_eq!(
+        scene.new_game_identity(),
+        crate::new_game::NewGameIdentity::DEFAULT
+    );
+    let selected =
+        crate::new_game::NewGameIdentity::new("LEAF", engine::save::PlayerGender::Female).unwrap();
+    assert_eq!(scene.with_identity(selected).new_game_identity(), selected);
+}
