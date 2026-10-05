@@ -52,9 +52,8 @@ fn a_non_losing_wild_battle_reinitialises_the_tileset_animation_counter() {
         "the headless `PlayerAction::Run` battle must not have whited out -- \
          a white-out warp resets the counter for an unrelated reason"
     );
-    // The bedroom fixture's heal location is this same map, so the map check
-    // above cannot see a white-out; the heal warp moves the player and the
-    // white-out halves money, so these two can.
+    // The bedroom fixture heals on this same map, so only position and money
+    // can see a white-out.
     assert_eq!(
         phase.player.position(),
         position_before,
