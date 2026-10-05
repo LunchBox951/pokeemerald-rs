@@ -15,6 +15,14 @@ use battle::{BattleError, BattlePokemon, Dex};
 use super::OverworldPhase;
 use crate::party;
 
+/// Whether an absent lead is out on loan to a battle
+/// ([`OverworldPhase::take_lead_battler`]) or was simply never loaded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum LeadLoan {
+    NotLent,
+    Lent,
+}
+
 /// The slot a lead-less phase reports; never read while no lead is present.
 const NO_LEAD_SLOT: usize = 0;
 
@@ -41,7 +49,13 @@ impl OverworldPhase {
     /// hidden-HP offset stay with the owner, so [`Self::restore_lead_battler`]
     /// merges back into the same record.
     pub(super) fn take_lead_battler(&mut self) -> Option<BattlePokemon> {
-        self.party_lead.take()
+        let lent = self.party_lead.take();
+        self.lead_loan = if lent.is_some() {
+            LeadLoan::Lent
+        } else {
+            LeadLoan::NotLent
+        };
+        lent
     }
 
     /// Restore: returns the battler a battle borrowed, keeping the retained
@@ -50,13 +64,15 @@ impl OverworldPhase {
     /// # Panics
     ///
     /// As [`party::LoadedLead::restore_battler`] does: panics if the battler
-    /// was not lent out, or if a saved party (nonzero stored count) backs the
+    /// was not lent out by [`Self::take_lead_battler`] (an absent lead that
+    /// was never loaded, such as a zero-count or undecodable save, does not
+    /// count), or if a saved party (nonzero stored count) backs the
     /// lead and `battler` is not the mon in the selected slot (personality
     /// and original trainer id). An unsaved lead has no record to match; the
     /// next flush files it fresh.
     pub(super) fn restore_lead_battler(&mut self, battler: BattlePokemon) {
         assert!(
-            self.party_lead.is_none(),
+            self.lead_loan == LeadLoan::Lent && self.party_lead.is_none(),
             "the loaded lead's battler was never lent out"
         );
         let record = &self.save1.player_party[self.party_lead_slot].box_data;
@@ -67,6 +83,7 @@ impl OverworldPhase {
             "a different party member cannot take the loaded lead's place"
         );
         self.party_lead = Some(battler);
+        self.lead_loan = LeadLoan::NotLent;
     }
 
     /// Installs a lead with no saved backing: slot 0, no hidden HP, and no
@@ -76,6 +93,7 @@ impl OverworldPhase {
         self.party_lead_slot = NO_LEAD_SLOT;
         self.lead_hp_hidden_by_load = 0;
         self.undecodable_lead_retained = false;
+        self.lead_loan = LeadLoan::NotLent;
     }
 
     /// Save flush: merges the live battler into its selected slot (the party
@@ -145,6 +163,7 @@ impl OverworldPhase {
                     self.party_lead = Some(mon);
                     self.party_lead_slot = slot;
                     self.undecodable_lead_retained = false;
+                    self.lead_loan = LeadLoan::NotLent;
                 }
             }
             Err(err) => {

@@ -505,6 +505,7 @@ impl OverworldPhase {
             crate::party::hp_hidden_by_load(&battle::Dex::new(), &record, &battler);
         self.party_lead = Some(battler);
         self.undecodable_lead_retained = false;
+        self.lead_loan = super::lead_owner::LeadLoan::NotLent;
     }
 
     /// Leaves the phase without a lead; saved bytes are not erased.
@@ -513,6 +514,7 @@ impl OverworldPhase {
         self.party_lead_slot = 0;
         self.lead_hp_hidden_by_load = 0;
         self.undecodable_lead_retained = false;
+        self.lead_loan = super::lead_owner::LeadLoan::NotLent;
     }
 
     pub(in crate::flow) fn lead_for_test(&self) -> Option<&battle::BattlePokemon> {

@@ -156,6 +156,32 @@ fn restoring_a_lent_lead_twice_panics() {
 }
 
 #[test]
+#[should_panic(expected = "never lent out")]
+fn restoring_into_a_zero_count_save_that_lent_nothing_panics() {
+    let mut phase = continued(&[starter()], 0);
+    assert!(phase.lead_battler().is_none(), "a zero count loads no lead");
+    phase.restore_lead_battler(starter());
+}
+
+#[test]
+#[should_panic(expected = "never lent out")]
+fn restoring_into_a_cleared_lead_that_lent_nothing_panics() {
+    let mut phase = continued(&[starter()], 1);
+    phase.clear_lead_for_test();
+    phase.restore_lead_battler(starter());
+}
+
+#[test]
+#[should_panic(expected = "never lent out")]
+fn a_reload_after_a_lend_cancels_the_loan() {
+    let mut phase = continued(&[starter()], 0);
+    phase.set_fresh_lead_for_test(starter());
+    let lent = phase.take_lead_battler().unwrap();
+    phase.load_lead_from_save();
+    phase.restore_lead_battler(lent);
+}
+
+#[test]
 #[should_panic(expected = "different party member")]
 fn a_different_battler_cannot_be_restored_into_a_saved_leads_slot() {
     let mut phase = continued(&[starter()], 1);
