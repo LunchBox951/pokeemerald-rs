@@ -12,10 +12,14 @@ mod publishing;
 mod support;
 mod temporary_naming;
 
+#[cfg(unix)]
 use std::fs;
 
-use super::{import_to_with, TEMP_PREFIX};
+#[cfg(unix)]
+use super::import_to_with;
+use super::TEMP_PREFIX;
 pub(super) use support::TempDir;
+#[cfg(unix)]
 use support::{fake_pack, SourceRom};
 #[cfg(unix)]
 pub(super) use support::{
