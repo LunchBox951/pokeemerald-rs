@@ -918,6 +918,11 @@ mod tests {
             0,
             "the retune must discard the elapsed fraction of the old step",
         );
+        assert_eq!(
+            wave.phase / PHASE_ONE,
+            last_step_index,
+            "the retune must keep the sample index",
+        );
         let retuned_period = f64::from(PHASE_ONE) / f64::from(wave.step_delta);
 
         let next_step = f64::from(samples_until_next_wave_step(wave));
