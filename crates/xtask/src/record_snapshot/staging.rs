@@ -1,7 +1,8 @@
-//! Staged through a held directory ([`stage_in`]), the file is looked up and
-//! renamed relative to that directory, so publication cannot land elsewhere.
+//! Staged through a held directory (`stage_in` on Unix; `stage` elsewhere),
+//! the file is looked up and renamed relative to that directory, so
+//! publication cannot land elsewhere.
 //!
-//! [`stage_in`] fills a `create_new`-held file and [`StagedFile::publish`]
+//! Staging fills a `create_new`-held file and [`StagedFile::publish`]
 //! re-verifies that handle's identity before the promoting rename, so a
 //! symlink planted at the name is refused rather than followed or published.
 //! On Unix the same handle survives the rename, so publication also
