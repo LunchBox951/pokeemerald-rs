@@ -111,7 +111,10 @@ pub use new_game_flags::{
 // `items` module path.
 pub use items::{BattleUsage, HoldEffect, ItemData, ItemTable, ItemType, Pocket, ITEMS_COUNT};
 pub use move_names::MoveNames;
-pub use pack::{AssetPack, EntryKind, ImageRef, PackError, PaletteRef, TilesetHandle};
+pub use pack::{
+    AssetPack, EntryKind, ImageRef, PackError, PaletteRef, PalettedImage, StarterChooserHandle,
+    StarterPreviewHandle, StarterSpecies, TilesetHandle,
+};
 pub use species::{
     AbilityId, BaseStats, BodyColor, EggGroup, EvYield, GenderRatio, GrowthRate, ItemId, SpeciesId,
     SpeciesTable,
