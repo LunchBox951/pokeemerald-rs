@@ -535,11 +535,10 @@ fn a_successful_transition_replaces_the_live_object_events() {
 /// through the production `continue_saved_game`, rebuilds the scene from the
 /// saved [`EventData`]: both NPCs stand on their bare map.json tiles. Every
 /// other phase here is built from a fresh `EventData`, so none of them would
-/// notice the continue path dropping the saved flags. Needs the real pack:
-/// `continue_saved_game` also loads Oldale's real tilesets.
+/// notice the continue path dropping the saved flags. Loads through the
+/// synthetic Oldale layout pack, so it runs without a local pack.
 #[test]
-#[ignore = "needs a local pack: run `cargo xtask extract` first"]
-fn real_pack_continue_restores_oldale_npcs_at_their_map_json_tiles() {
+fn continue_restores_oldale_npcs_at_their_map_json_tiles() {
     use crate::flow::save_continue_tests::save_from_the_start_menu;
     use crate::flow::tests::TempSave;
     use crate::pack_source::PackSource;
@@ -572,9 +571,22 @@ fn real_pack_continue_restores_oldale_npcs_at_their_map_json_tiles() {
     for flag in [FLAG_ADVENTURE_STARTED, FLAG_RECEIVED_POTION_OLDALE] {
         assert!(saved.block1.event_data.flag_get(flag).unwrap());
     }
-    let resumed =
-        OverworldPhase::continue_saved_game(PackSource::Runtime, saved.block1, saved.block2)
-            .expect("run `cargo xtask extract` first");
+    let path = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-oldale-continue-{}-{:?}.pack",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    crate::overworld::tests::write_oldale_layout_pack(
+        &path,
+        &["girl_3", "mart_employee", "maniac"],
+    );
+    let leaked_path: &'static std::path::Path = Box::leak(path.clone().into_boxed_path());
+    let resumed = OverworldPhase::continue_saved_game(
+        PackSource::Test(leaked_path),
+        saved.block1,
+        saved.block2,
+    )
+    .expect("the synthetic Oldale pack must load");
     assert_eq!(resumed.map_id, OLDALE_TOWN);
 
     let events = resumed.scene.map_events(OLDALE_TOWN).unwrap();
@@ -603,4 +615,6 @@ fn real_pack_continue_restores_oldale_npcs_at_their_map_json_tiles() {
             "{graphics_id}: the live placement must match the resumed scene"
         );
     }
+
+    let _ = std::fs::remove_file(&path);
 }
