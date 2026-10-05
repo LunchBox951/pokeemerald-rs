@@ -332,6 +332,7 @@ pub(crate) fn init_save_blocks_with_identity(
         player_gender: identity.gender(),
         player_trainer_id: trainer_id_bytes(trainer_id_low, rng),
         special_save_warp_flags: 0,
+        gcn_link_flags: 0,
         encryption_key: 0,
         options_text_speed: options.text_speed,
         options_window_frame_type: options.window_frame_type,
