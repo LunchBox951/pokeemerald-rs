@@ -1,38 +1,34 @@
-//! The owned mirror of `rom_import::Roots` the generator builds, plus the
-//! per-root report it prints.
+//! Owned mirror of `rom_import::Roots`, plus the per-root report.
 //!
-//! `Roots` and everything under it is `&'static`, which a running generator
-//! cannot build. These types hold the same facts with owned strings and
-//! vectors; [`super::emit`] turns them into the `const` the profile module
-//! ships.
+//! `Roots` is all `&'static` data, which a running generator cannot build.
+//! These types hold the same facts as owned strings and vectors;
+//! [`super::emit`] turns them into the `const` the profile module ships.
 
 use rom_import::Encoding;
 
-/// How a located root was pinned down, for the report and for the
-/// `--map` cross-check.
+/// How a located root's address was settled, for the report and the `--map`
+/// cross-check.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Resolution {
     /// Exactly one place in the ROM held the expected bytes.
     UniqueSignature,
-    /// The bytes appeared more than once, and a struct field or an
-    /// adjacent, already-unique root chose between them.
+    /// The bytes appeared more than once; a struct field or an adjacent,
+    /// already-unique root chose between them.
     StructDerived,
     /// The address came from a pointer inside an already-located struct,
     /// never from a search.
     PointerWalk,
-    /// Several addresses held the root's bytes, every one of them held the
-    /// *same* bytes, and nothing in the ROM distinguishes them. The choice
-    /// between them is arbitrary and is recorded as such.
+    /// Several addresses held the root's bytes, all identical, and nothing
+    /// in the ROM distinguishes them, so the choice is arbitrary.
     ///
-    /// Sound only because it changes nothing downstream: the importer reads
-    /// bytes, and every candidate holds identical ones, so the pack entry
-    /// is the same whichever was picked. Never use it where the copies
-    /// differ, or where a table or an adjacency could decide.
+    /// Sound only because the importer reads bytes: every candidate yields
+    /// the same pack entry. Never use it where the copies differ, or where a
+    /// table or an adjacency could decide.
     ArbitraryAmongIdentical,
 }
 
 impl Resolution {
-    /// The short word the report prints.
+    /// The word the report prints for this resolution.
     pub const fn label(self) -> &'static str {
         match self {
             Self::UniqueSignature => "unique",
@@ -43,26 +39,24 @@ impl Resolution {
     }
 }
 
-/// What a linker map should say about a root's address.
+/// What the `--map` cross-check asserts about the linker-map symbol at a
+/// root's address.
 ///
-/// The `--map` cross-check is only as strong as what it can assert. Where
-/// upstream's symbol name follows from the pack id, the check is exact.
-/// Where it does not (a map layout's symbol is generated at build time and
-/// exists nowhere in the checkout), the check only asserts that *some*
-/// symbol starts there. Where the address is deliberately inside another
-/// symbol, there is nothing to assert at all.
+/// Exact where the symbol name follows from the pack id; only "some symbol
+/// starts here" where it does not (a map layout's symbol is generated at
+/// build time and is absent from the checkout); nothing where the address is
+/// deliberately inside another symbol.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SymbolExpectation {
-    /// The address is interior to another symbol. Not checkable.
+    /// The address is inside another symbol; nothing to assert.
     Interior,
-    /// A symbol must start here, but its name is not derivable.
+    /// Some symbol must start here; its name is not derivable.
     Unnamed,
     /// A symbol with exactly this name must start here.
     Exact(String),
-    /// A symbol whose name contains every one of these fragments must
-    /// start here. For the conventions upstream follows loosely, where a
-    /// `static` and a global spelling of the same asset differ only in
-    /// their prefix.
+    /// A symbol whose name contains every one of these fragments must start
+    /// here. For assets whose `static` and global spellings differ only in
+    /// prefix.
     Contains(Vec<String>),
 }
 
@@ -80,13 +74,13 @@ pub struct ReportLine {
     pub resolution: Resolution,
     /// What a linker map should say about this address.
     pub symbol: SymbolExpectation,
-    /// Anything a reader of the report needs to know: a duplicate that was
-    /// resolved, or a pack entry the ROM disagrees with.
+    /// A resolved duplicate, or a pack entry the ROM disagrees with.
     pub note: Option<String>,
 }
 
 impl ReportLine {
-    /// A line for a root pinned by a unique byte signature.
+    /// A line for a root found at a unique byte signature, with no symbol
+    /// name derived.
     pub fn unique(id: impl Into<String>, addr: u32, len: u32) -> Self {
         Self {
             id: id.into(),
@@ -98,7 +92,7 @@ impl ReportLine {
         }
     }
 
-    /// Set how the address was settled.
+    /// Replace the resolution.
     #[must_use]
     pub const fn with(mut self, resolution: Resolution) -> Self {
         self.resolution = resolution;
@@ -130,7 +124,7 @@ impl ReportLine {
         self
     }
 
-    /// Attach an explanatory note.
+    /// Set the report note.
     #[must_use]
     pub fn note(mut self, note: impl Into<String>) -> Self {
         self.note = Some(note.into());
@@ -333,6 +327,7 @@ pub struct KeysplitPlan {
     pub addr: u32,
     /// The declared `starting_note` bias.
     pub starting_note: u8,
+    /// How many notes the table maps.
     pub len: u16,
 }
 
@@ -354,9 +349,8 @@ pub struct SamplePlan {
 pub struct AudioPlan {
     /// `gSongTable`.
     pub song_table: u32,
-    /// The one song `audio::locate` supports today (`MUS_TITLE`), kept as
-    /// a `Vec` because the emitter and the runtime importer already
-    /// iterate every song generically.
+    /// Every located song. A `Vec` because the emitter and the runtime
+    /// importer iterate songs generically.
     pub songs: Vec<SongPlan>,
     /// Every voicegroup reached from that song.
     pub voicegroups: Vec<VoicegroupPlan>,
@@ -371,7 +365,7 @@ pub struct AudioPlan {
 /// Everything one generator run derived.
 #[derive(Debug, Clone)]
 pub struct ProfilePlan {
-    /// The five bundled tilesets.
+    /// The bundled tilesets.
     pub tilesets: Vec<TilesetPlan>,
     /// The title screen.
     pub title_screen: TitleScreenPlan,
@@ -379,7 +373,7 @@ pub struct ProfilePlan {
     pub sprites: SpritePlan,
     /// The bundled map layouts.
     pub layouts: Vec<MapLayoutPlan>,
-    /// The five Latin glyph sheets.
+    /// The Latin glyph sheets.
     pub fonts: Vec<FontPlan>,
     /// Text-window frames and palettes.
     pub text_window: TextWindowPlan,
