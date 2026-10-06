@@ -46,6 +46,7 @@ mod first_battle_conclusion;
 mod first_battle_trigger;
 mod frame;
 mod input;
+mod interaction;
 mod lead_owner;
 mod placement;
 mod route103_rival_trigger;
@@ -682,6 +683,30 @@ impl OverworldPhase {
         )
     }
 
+    /// Test-only: [`Self::for_test`] with an explicit `pack_source`, so a
+    /// test that later lazy-loads a room, warp, dialog, or connection reads
+    /// the pack that source names. Pass [`PackSource::Repo`](crate::pack_source::PackSource::Repo)
+    /// to read this checkout's own pack rather than `default_path()`;
+    /// [`Self::for_test`] stays on `PackSource::Runtime` for pack-free tests.
+    #[cfg(test)]
+    pub(super) fn for_test_with_source(
+        scene: OverworldScene,
+        map_id: assets::MapId,
+        player: PlayerState,
+        dialog: Option<NpcDialog>,
+        pack_source: crate::pack_source::PackSource,
+    ) -> Self {
+        Self::new(
+            scene,
+            map_id,
+            player,
+            dialog,
+            pack_source,
+            new_game::NewGameOptions::DEFAULT,
+            new_game::NewGameIdentity::DEFAULT,
+        )
+    }
+
     /// Build a new overworld run. New-game initialization consumes exactly
     /// one RNG draw, for the trainer id's high half -- the low half is the
     /// seed itself, not a second draw
@@ -909,21 +934,41 @@ pub(super) fn saved_map_id(warp: WarpData) -> Option<assets::MapId> {
 }
 
 #[cfg(test)]
+mod active_battle_dispatch_tests;
+#[cfg(test)]
+mod animated_door_elevation_tests;
+#[cfg(test)]
+mod animation_tick_tests;
+#[cfg(test)]
+mod bedroom_collision_tests;
+#[cfg(test)]
 mod connections_tests;
 #[cfg(test)]
 mod decoration_tests;
+#[cfg(test)]
+mod dialog_pacing_tests;
+#[cfg(test)]
+mod door_sequencing_tests;
 /// Continue's active-battler selection ([`party::select_active_battler`])
 /// against both battle handoffs and the write-back merge that follows.
 #[cfg(test)]
 mod fainted_lead_party_tests;
 #[cfg(test)]
+mod field_input_ordering_tests;
+#[cfg(test)]
 mod first_battle_conclusion_tests;
 #[cfg(test)]
 mod first_battle_trigger_tests;
 #[cfg(test)]
+mod forced_landing_field_input_gate_tests;
+#[cfg(test)]
+mod forced_movement_encounter_tests;
+#[cfg(test)]
 mod frame_tests;
 #[cfg(test)]
 mod input_tests;
+#[cfg(test)]
+mod landing_call_arrow_elevation_tests;
 /// `crate::overworld::oldale_town_npc_reposition` collision tests reachable
 /// from this module; its own unit tests live with that module instead.
 #[cfg(test)]
@@ -934,7 +979,17 @@ mod oldale_reposition_tests;
 #[cfg(test)]
 mod opponent_ot_id_tests;
 #[cfg(test)]
+mod pre_movement_arrow_elevation_tests;
+#[cfg(test)]
+mod route103_rival_driver_tests;
+#[cfg(test)]
+mod route103_rival_frame_order_tests;
+#[cfg(test)]
+mod route103_rival_test_support;
+#[cfg(test)]
 mod route103_rival_tests;
+#[cfg(test)]
+mod running_tests;
 #[cfg(test)]
 mod sight_trainer_tests;
 #[cfg(test)]
@@ -945,3 +1000,35 @@ mod test_support;
 mod warp_tests;
 #[cfg(test)]
 mod wild_battle_tests;
+
+#[cfg(test)]
+mod pinned_source_tests {
+    use super::*;
+    use crate::pack_source::PackSource;
+    use engine::overworld::Direction;
+
+    /// The source-aware fixture retains the supplied source, and
+    /// `for_test` stays on the runtime resolver. Needs no pack.
+    #[test]
+    fn for_test_with_source_retains_the_supplied_pack_source() {
+        let build = |source| {
+            OverworldPhase::for_test_with_source(
+                crate::overworld::tests::synthetic_scene(10, 10),
+                assets::MapId("MAP_LITTLEROOT_TOWN"),
+                PlayerState::new((1, 1), 3, Direction::North),
+                None,
+                source,
+            )
+        };
+        assert_eq!(build(PackSource::Repo).pack_source, PackSource::Repo);
+        assert_eq!(build(PackSource::Runtime).pack_source, PackSource::Runtime);
+
+        let default = OverworldPhase::for_test(
+            crate::overworld::tests::synthetic_scene(10, 10),
+            assets::MapId("MAP_LITTLEROOT_TOWN"),
+            PlayerState::new((1, 1), 3, Direction::North),
+            None,
+        );
+        assert_eq!(default.pack_source, PackSource::Runtime);
+    }
+}

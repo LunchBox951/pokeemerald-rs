@@ -152,7 +152,7 @@ fn should_retry_overworld_load_only_on_a_fresh_confirm_or_skip_edge() {
 ///
 /// No local pack is ever present in this crate's own `cargo test`
 /// environment (`assets-pack/` isn't written by anything in this repo --
-/// see `crate::title::tests::load_default_reports_pack_missing_when_no_pack_is_extracted`
+/// see `crate::title::pack_palette_tests::load_default_reports_pack_missing_when_no_pack_is_extracted`
 /// for the identical guard/rationale), so `OverworldPhase::load_default`
 /// reliably fails here, exercising the real failure path without
 /// `#[ignore]`. If a local pack *is* present, this test steps aside
@@ -292,14 +292,14 @@ fn main_menu_load_failure_names_its_subsystem_once() {
 }
 
 /// Set only on the child process re-executed below -- see
-/// `app::tests::START_TITLE_MUSIC_BOUNDARY_CHILD` for why this must not be
+/// `app::tests::subprocess_harness::START_TITLE_MUSIC_BOUNDARY_CHILD` for why this must not be
 /// an `#[ignore]`d test picked up on its own by CI's blanket `cargo test -p
 /// pokeemerald-rs -- --ignored` real-pack sweep.
 const MAIN_MENU_LOAD_FAILURE_BOUNDARY_CHILD: &str =
     "POKEEMERALD_RS_923_MAIN_MENU_LOAD_FAILURE_BOUNDARY_CHILD";
 
 /// A scratch, valid but entryless asset pack -- see
-/// `app::tests::write_empty_scratch_pack` for the rationale; duplicated
+/// `app::tests::subprocess_harness::write_empty_scratch_pack` for the rationale; duplicated
 /// because the two boundary tests live in sibling modules with no shared
 /// test-only module to hold it.
 fn write_empty_scratch_pack(label: &str) -> std::path::PathBuf {
