@@ -467,6 +467,7 @@ impl StagedPack {
 
     /// `source`, noting that the promoted entry at `dest` was left where it is
     /// because it could not be verified as the staged file.
+    #[cfg(unix)]
     fn report_unverified(dest: &Path, source: &std::io::Error) -> std::io::Error {
         std::io::Error::new(
             source.kind(),
