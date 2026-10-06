@@ -216,6 +216,39 @@ fn publish_generation_with<F>(
 where
     F: FnOnce() -> Result<(), RecordSnapshotError>,
 {
+    publish_generation_hooked(
+        scene,
+        output_dir,
+        rgb_bytes,
+        meta_bytes,
+        after_rgb_staged,
+        before_rename,
+        after_generation_check,
+        before_pointer_publish,
+        || {},
+    )
+}
+
+/// [`publish_generation_with`] plus a hook just after the pointer's
+/// publication, so tests can replace the generation once the pointer names it.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "four test hooks beside the inputs; production passes no-ops through `publish_generation`"
+)]
+fn publish_generation_hooked<F>(
+    scene: Scene,
+    output_dir: &Path,
+    rgb_bytes: &[u8],
+    meta_bytes: &[u8],
+    after_rgb_staged: F,
+    before_rename: impl FnOnce(),
+    after_generation_check: impl FnOnce(),
+    before_pointer_publish: impl FnOnce(),
+    after_pointer_publish: impl FnOnce(),
+) -> Result<(PathBuf, PathBuf), RecordSnapshotError>
+where
+    F: FnOnce() -> Result<(), RecordSnapshotError>,
+{
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT_GENERATION: AtomicU64 = AtomicU64::new(0);
@@ -250,6 +283,11 @@ where
     let staged_meta = staged_dir.join(&meta_name);
 
     let mut renamed = false;
+    let require_generation = |claim: &StagedDirClaim| {
+        claim
+            .require_entry_in(&output_claim, &generation_dir)
+            .map_err(|error| RecordSnapshotError::Write(generation_dir.clone(), error.to_string()))
+    };
     let result = (|| {
         staged_dir_claim
             .write_payload(&staged_dir, &rgb_name, rgb_bytes)
@@ -274,11 +312,7 @@ where
         // Looked up in the held output directory, so the generation the
         // pointer will name is proven to sit beside it, not merely somewhere
         // the `output_dir` pathname led at the time.
-        staged_dir_claim
-            .require_entry_in(&output_claim, &generation_dir)
-            .map_err(|error| {
-                RecordSnapshotError::Write(generation_dir.clone(), error.to_string())
-            })?;
+        require_generation(&staged_dir_claim)?;
         after_generation_check();
         // The generation was verified under `output_dir`; the pointer must land
         // in that same directory, not in whatever the pathname names now.
@@ -300,10 +334,17 @@ where
             require_output_dir()?;
         }
         before_pointer_publish();
+        // The only check that sits between the last hook and the rename: a
+        // generation replaced after the earlier verification must not be named.
+        require_generation(&staged_dir_claim)?;
         staged_pointer
             .publish(&pointer_path)
             .map_err(|e| RecordSnapshotError::Write(pointer_path.clone(), e.to_string()))?;
+        after_pointer_publish();
         require_output_dir()?;
+        // The pointer is already replaced; success is still reported only
+        // while the generation it names is the one this capture holds.
+        require_generation(&staged_dir_claim)?;
         Ok((
             generation_dir.join(format!("{}.rgb", scene.name())),
             generation_dir.join(format!("{}.meta", scene.name())),
