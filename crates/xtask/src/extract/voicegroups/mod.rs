@@ -48,6 +48,9 @@ pub(crate) struct VoiceGroupSourceIndex {
     labels_by_relative_path: HashMap<String, String>,
 }
 
+/// One entry of `sound/voice_groups.inc`'s linked order: a parsed voicegroup
+/// (by label) or a foreign include, which bounds successor borrowing and
+/// predecessor aliasing alike.
 pub(super) enum IndexedLinkOrderItem {
     VoiceGroup(String),
     ForeignInclude,

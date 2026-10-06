@@ -182,6 +182,9 @@ pub(super) fn resolve_voice_groups_with_link_successors(
     resolve_voice_groups_with_link_order(top_label, raw_groups, keysplit_tables, &link_order)
 }
 
+/// Resolves `top_label` and its transitive groups, using `link_order` for the
+/// top group's trailing successor slots and every biased group's aliased
+/// predecessor slots.
 pub(super) fn resolve_voice_groups_with_link_order(
     top_label: &str,
     raw_groups: &HashMap<String, RawVoiceGroup>,
