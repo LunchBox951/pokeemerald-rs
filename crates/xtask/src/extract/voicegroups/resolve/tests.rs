@@ -608,3 +608,292 @@ fn a_borrowed_indirection_slots_oversize_child_id_names_the_successor_not_the_bo
         }
     );
 }
+
+fn env(a: u8, d: u8, s: u8, r: u8) -> Envelope {
+    Envelope {
+        attack: a,
+        decay: d,
+        sustain: s,
+        release: r,
+    }
+}
+
+fn resolve_lone_leaf_at_note_3(slot: RawSlot) -> VoiceSlot {
+    let raw = groups(vec![raw_group("top", 3, vec![slot])]);
+    let resolved = resolve_voice_groups("top", &raw, &no_keysplit_tables()).unwrap();
+    assert_eq!(resolved.len(), 1);
+    assert_eq!(resolved[0].slots.len(), VOICE_SLOT_COUNT);
+    for slot in &resolved[0].slots[..3] {
+        assert_eq!(*slot, VoiceSlot::Empty);
+    }
+    for slot in &resolved[0].slots[4..] {
+        assert_eq!(*slot, VoiceSlot::Empty);
+    }
+    resolved[0].slots[3].clone()
+}
+
+#[test]
+fn a_square1_leaf_converts_every_field() {
+    for fixed_rate in [true, false] {
+        let got = resolve_lone_leaf_at_note_3(RawSlot::Square1 {
+            base_key: 61,
+            length: 23,
+            sweep: 5,
+            duty: 2,
+            envelope: env(7, 8, 9, 10),
+            fixed_rate,
+        });
+        assert_eq!(
+            got,
+            VoiceSlot::Square1 {
+                base_key: 61,
+                length: 23,
+                sweep: 5,
+                duty: 2,
+                envelope: env(7, 8, 9, 10),
+                fixed_rate,
+            }
+        );
+    }
+}
+
+#[test]
+fn a_square2_leaf_converts_every_field() {
+    for fixed_rate in [true, false] {
+        let got = resolve_lone_leaf_at_note_3(RawSlot::Square2 {
+            base_key: 62,
+            length: 24,
+            duty: 3,
+            envelope: env(11, 12, 13, 14),
+            fixed_rate,
+        });
+        assert_eq!(
+            got,
+            VoiceSlot::Square2 {
+                base_key: 62,
+                length: 24,
+                duty: 3,
+                envelope: env(11, 12, 13, 14),
+                fixed_rate,
+            }
+        );
+    }
+}
+
+#[test]
+fn a_programmable_wave_leaf_converts_every_field_and_derives_the_wave_id() {
+    for fixed_rate in [true, false] {
+        let got = resolve_lone_leaf_at_note_3(RawSlot::ProgrammableWave {
+            base_key: 63,
+            length: 25,
+            wave_symbol: "ProgrammableWaveData_2".to_owned(),
+            envelope: env(15, 16, 17, 18),
+            fixed_rate,
+        });
+        assert_eq!(
+            got,
+            VoiceSlot::ProgrammableWave {
+                base_key: 63,
+                length: 25,
+                wave_id: "audio/sample/programmable-wave/02".to_owned(),
+                envelope: env(15, 16, 17, 18),
+                fixed_rate,
+            }
+        );
+    }
+}
+
+#[test]
+fn a_noise_leaf_converts_every_field() {
+    for fixed_rate in [true, false] {
+        let got = resolve_lone_leaf_at_note_3(RawSlot::Noise {
+            base_key: 65,
+            length: 26,
+            period: 1,
+            envelope: env(19, 20, 21, 22),
+            fixed_rate,
+        });
+        assert_eq!(
+            got,
+            VoiceSlot::Noise {
+                base_key: 65,
+                length: 26,
+                period: 1,
+                envelope: env(19, 20, 21, 22),
+                fixed_rate,
+            }
+        );
+    }
+}
+
+#[test]
+fn a_non_default_direct_sound_leaf_keeps_its_pan_and_mode() {
+    for mode in [DirectSoundMode::Fixed, DirectSoundMode::Reverse] {
+        let got = resolve_lone_leaf_at_note_3(RawSlot::DirectSound {
+            base_key: 64,
+            pan: Some(17),
+            sample_symbol: "DirectSoundWaveData_nondefault".to_owned(),
+            envelope: env(101, 102, 103, 104),
+            mode,
+        });
+        assert_eq!(
+            got,
+            VoiceSlot::DirectSound {
+                base_key: 64,
+                pan: Some(17),
+                sample_id: "audio/sample/direct-sound/nondefault".to_owned(),
+                envelope: env(101, 102, 103, 104),
+                mode,
+            }
+        );
+    }
+}
+
+#[test]
+fn a_group_mixing_every_leaf_kind_keeps_each_slot_in_order() {
+    let raw = groups(vec![raw_group(
+        "mix",
+        0,
+        vec![
+            RawSlot::Noise {
+                base_key: 65,
+                length: 26,
+                period: 1,
+                envelope: env(19, 20, 21, 22),
+                fixed_rate: false,
+            },
+            RawSlot::Square1 {
+                base_key: 61,
+                length: 23,
+                sweep: 5,
+                duty: 2,
+                envelope: env(7, 8, 9, 10),
+                fixed_rate: false,
+            },
+            RawSlot::ProgrammableWave {
+                base_key: 63,
+                length: 25,
+                wave_symbol: "ProgrammableWaveData_2".to_owned(),
+                envelope: env(15, 16, 17, 18),
+                fixed_rate: false,
+            },
+            RawSlot::Square2 {
+                base_key: 62,
+                length: 24,
+                duty: 3,
+                envelope: env(11, 12, 13, 14),
+                fixed_rate: false,
+            },
+        ],
+    )]);
+    let slots = &resolve_voice_groups("mix", &raw, &no_keysplit_tables()).unwrap()[0].slots;
+    assert!(matches!(slots[0], VoiceSlot::Noise { base_key: 65, .. }));
+    assert!(matches!(slots[1], VoiceSlot::Square1 { base_key: 61, .. }));
+    assert!(matches!(
+        slots[2],
+        VoiceSlot::ProgrammableWave { base_key: 63, .. }
+    ));
+    assert!(matches!(slots[3], VoiceSlot::Square2 { base_key: 62, .. }));
+    for slot in &slots[4..] {
+        assert_eq!(*slot, VoiceSlot::Empty);
+    }
+}
+
+#[test]
+fn every_leaf_slot_kind_carries_its_own_fields_through_resolution() {
+    let raw = groups(vec![raw_group(
+        "top",
+        0,
+        vec![
+            RawSlot::DirectSound {
+                base_key: 45,
+                pan: Some(100),
+                sample_symbol: "DirectSoundWaveData_bell".to_owned(),
+                envelope: envelope(),
+                mode: DirectSoundMode::Reverse,
+            },
+            RawSlot::Square1 {
+                base_key: 61,
+                length: 1,
+                sweep: 2,
+                duty: 3,
+                envelope: envelope(),
+                fixed_rate: true,
+            },
+            RawSlot::Square2 {
+                base_key: 62,
+                length: 4,
+                duty: 1,
+                envelope: envelope(),
+                fixed_rate: false,
+            },
+            RawSlot::ProgrammableWave {
+                base_key: 63,
+                length: 5,
+                wave_symbol: "ProgrammableWaveData_7".to_owned(),
+                envelope: envelope(),
+                fixed_rate: true,
+            },
+            RawSlot::Noise {
+                base_key: 64,
+                length: 6,
+                period: 1,
+                envelope: envelope(),
+                fixed_rate: false,
+            },
+        ],
+    )]);
+    let resolved = resolve_voice_groups("top", &raw, &no_keysplit_tables()).unwrap();
+    let top = &resolved[0];
+    assert_eq!(
+        top.slots[0],
+        VoiceSlot::DirectSound {
+            base_key: 45,
+            pan: Some(100),
+            sample_id: "audio/sample/direct-sound/bell".to_owned(),
+            envelope: envelope(),
+            mode: DirectSoundMode::Reverse,
+        }
+    );
+    assert_eq!(
+        top.slots[1],
+        VoiceSlot::Square1 {
+            base_key: 61,
+            length: 1,
+            sweep: 2,
+            duty: 3,
+            envelope: envelope(),
+            fixed_rate: true,
+        }
+    );
+    assert_eq!(
+        top.slots[2],
+        VoiceSlot::Square2 {
+            base_key: 62,
+            length: 4,
+            duty: 1,
+            envelope: envelope(),
+            fixed_rate: false,
+        }
+    );
+    assert_eq!(
+        top.slots[3],
+        VoiceSlot::ProgrammableWave {
+            base_key: 63,
+            length: 5,
+            wave_id: "audio/sample/programmable-wave/07".to_owned(),
+            envelope: envelope(),
+            fixed_rate: true,
+        }
+    );
+    assert_eq!(
+        top.slots[4],
+        VoiceSlot::Noise {
+            base_key: 64,
+            length: 6,
+            period: 1,
+            envelope: envelope(),
+            fixed_rate: false,
+        }
+    );
+}

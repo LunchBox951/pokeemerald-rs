@@ -20,7 +20,7 @@ use super::{blob, check_pointer, image, palette};
 use crate::error::ImportError;
 use crate::reader::{GbaPtr, RomReader};
 use crate::rom::Rom;
-use crate::roots::{Roots, TilesetRoot};
+use crate::roots::{Encoding, Roots, TilesetRoot};
 
 /// Offset of `isCompressed` in `struct Tileset`.
 const FIELD_IS_COMPRESSED: usize = 0x00;
@@ -88,6 +88,14 @@ fn corroborate(reader: &RomReader<'_>, tileset: &TilesetRoot) -> Result<(), Impo
         name,
         "Tileset.isCompressed",
     )?;
+    // `image` decodes by `tiles.encoding` alone, so the corroborated flag
+    // must agree with it or the tile sheet is read in the wrong mode.
+    if tileset.is_compressed != (tileset.tiles.encoding == Encoding::Lz77) {
+        return Err(ImportError::StructMismatch {
+            root: name,
+            field: "Tileset.isCompressed",
+        });
+    }
     flag(
         reader,
         base,

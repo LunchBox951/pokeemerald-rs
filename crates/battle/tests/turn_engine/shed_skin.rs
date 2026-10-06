@@ -377,3 +377,57 @@ fn serene_grace_poison_sting_after_a_shed_skin_cure_is_not_silently_undoubled() 
         "a pre-turn rejection runs no move"
     );
 }
+
+/// A faster player's wild escape never lets the enemy act
+/// (`src/battle_util.c:463`-`:465`), so the Shed Skin cure that flips Serene
+/// Grace Poison Sting's admission must not refuse `PlayerAction::Run`.
+#[test]
+fn faster_player_can_still_run_after_a_shed_skin_cure_flips_serene_grace_admission() {
+    let dex = Dex::new();
+    let mut player = max_iv_mon(&dex, DRATINI, 10, vec![TACKLE]);
+    player.set_status1(Status1::Poisoned);
+    let enemy = max_iv_mon(&dex, DUNSPARCE, 10, vec![POISON_STING]);
+    assert!(player.stats().speed >= enemy.stats().speed);
+
+    let mut rng = SequenceRng::new([48u16; 256]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    assert_eq!(battle.player().status1(), Status1::Healthy);
+
+    let ran = battle.take_turn(PlayerAction::Run, &mut rng);
+    assert!(ran.is_ok(), "a guaranteed escape is refused: {ran:?}");
+    assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerRan));
+}
+
+/// A cured player who is slower than the enemy can fail to escape, letting
+/// Poison Sting execute undoubled, so that Run keeps the pre-turn refusal.
+#[test]
+fn slower_player_run_after_a_shed_skin_cure_still_refuses_serene_grace() {
+    let dex = Dex::new();
+    let mut player = max_iv_mon(&dex, DRATINI, 10, vec![TACKLE]);
+    player.set_status1(Status1::Poisoned);
+    let mut enemy = max_iv_mon(&dex, DUNSPARCE, 10, vec![POISON_STING]);
+    while enemy.stats().speed <= player.stats().speed {
+        enemy = max_iv_mon(&dex, DUNSPARCE, enemy.level() + 5, vec![POISON_STING]);
+    }
+
+    let mut rng = SequenceRng::new([48u16; 256]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    assert_eq!(battle.player().status1(), Status1::Healthy);
+
+    let draws = rng.draws();
+    let err = battle
+        .take_turn(PlayerAction::Run, &mut rng)
+        .expect_err("a run that can fail must still be re-screened");
+    assert_eq!(rng.draws(), draws);
+    assert_eq!(
+        err.error(),
+        BattleError::UnportedAbilityInteraction(assets::AbilityId::SERENE_GRACE)
+    );
+    assert!(err.events().is_empty());
+}
