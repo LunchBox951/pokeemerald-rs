@@ -277,7 +277,6 @@ impl SaveSlot {
     }
 
     /// A slot at an explicit `file`, so each test thread gets a scratch save.
-    #[cfg(test)]
     pub(crate) fn at(file: SaveFile) -> Self {
         Self {
             file: Some(file),
@@ -287,6 +286,23 @@ impl SaveSlot {
             session_status: None,
             absent_status: SaveFileStatus::NoFlash,
         }
+    }
+
+    /// A durable slot at `path`, proven usable up front: the save directory
+    /// is created and locked and any existing image read, so a medium that
+    /// cannot hold a save fails here instead of degrading to
+    /// [`Self::disabled`] or [`Self::none`] mid-session the way
+    /// [`Self::default_location`] and [`Self::load`] do. An absent file is a
+    /// fresh medium (`Ok`), as on a never-saved cartridge.
+    ///
+    /// # Errors
+    ///
+    /// Whatever [`SaveFile::lock`] or [`SaveFile::read`] reports for `path`.
+    pub(crate) fn at_path(path: impl Into<std::path::PathBuf>) -> Result<Self, SaveFileError> {
+        let file = SaveFile::at(path);
+        drop(file.lock()?);
+        file.read()?;
+        Ok(Self::at(file))
     }
 
     /// Returns the boot load's status, or [`SaveFileStatus::Empty`] before the

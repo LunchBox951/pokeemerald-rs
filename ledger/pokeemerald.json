@@ -15203,6 +15203,20 @@
       "status": "pending"
     },
     "graphics/pokemon/mudkip": {
+      "artifacts": {
+        "front.png": {
+          "reason": "Shared normal front image extracted for typed starter previews; other species graphics remain pending.",
+          "rust_target": "crates/xtask/src/extract/starter_chooser.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "normal.pal": {
+          "reason": "Sixteen-colour JASC normal palette extracted for the shared front image; shiny and other graphics remain pending.",
+          "rust_target": "crates/xtask/src/extract/starter_chooser.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.pokemon",
       "kind": "dir",
       "spec_owner": "S-4",
@@ -16001,6 +16015,20 @@
       "status": "pending"
     },
     "graphics/pokemon/torchic": {
+      "artifacts": {
+        "front.png": {
+          "reason": "Shared normal front image extracted for typed starter previews; other species graphics remain pending.",
+          "rust_target": "crates/xtask/src/extract/starter_chooser.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "normal.pal": {
+          "reason": "Sixteen-colour JASC normal palette extracted for the shared front image; shiny and other graphics remain pending.",
+          "rust_target": "crates/xtask/src/extract/starter_chooser.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.pokemon",
       "kind": "dir",
       "spec_owner": "S-4",
@@ -16025,6 +16053,20 @@
       "status": "pending"
     },
     "graphics/pokemon/treecko": {
+      "artifacts": {
+        "front.png": {
+          "reason": "Shared normal front image extracted for typed starter previews; other species graphics remain pending.",
+          "rust_target": "crates/xtask/src/extract/starter_chooser.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "normal.pal": {
+          "reason": "Sixteen-colour JASC normal palette extracted for the shared front image; shiny and other graphics remain pending.",
+          "rust_target": "crates/xtask/src/extract/starter_chooser.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.pokemon",
       "kind": "dir",
       "spec_owner": "S-4",
@@ -16327,8 +16369,10 @@
     "graphics/starter_choose": {
       "category": "graphics.ui",
       "kind": "dir",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Complete chooser graphics directory extracted: three indexed PNG sheets with their embedded palettes and both raw tilemaps; exposed by typed starter chooser handles. No chooser rendering or ROM extraction claimed.",
+      "rust_target": "crates/xtask/src/extract/starter_chooser.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/summary_screen": {
       "category": "graphics.ui",
@@ -17485,6 +17529,12 @@
           "spec": "S-5",
           "status": "rewritten"
         },
+        "hidden_item_flags": {
+          "reason": "Canonical hidden-item flag names mapped to absolute EventData flag ids for background-event resolution.",
+          "rust_target": "crates/assets/src/hidden_item_flags.rs",
+          "spec": "S-5",
+          "status": "ported"
+        },
         "object_event_hide_flags": {
           "reason": "assets::object_event_flags::resolve transcribes the numeric FLAG_* id for every ObjectEvent::flag name reachable from a map this port's extraction pipeline bundles (the Littleroot Town layout family plus, since issues #177/#248, Route 101, Oldale Town, and Route 103): 53 entries -- the 37 distinct FLAG_HIDE_* ids carried by object events across all nine maps, the twelve generic FLAG_DECORATION_1..12 ids Littleroot's two player-house bedrooms also carry, and four non-hide/non-decoration flags the newly bundled maps' object events name (FLAG_TEMP_12/FLAG_TEMP_13 and the two Route 103 item-ball flags FLAG_ITEM_ROUTE_103_GUARD_SPEC/FLAG_ITEM_ROUTE_103_PP_UP; the literal \"0\" no-flag sentinel is handled by resolve itself, not a table entry). The table is asserted to be exactly that reachable set -- no extra entries, none missing -- and cross-checked against the independently-transcribed new_game_flags::RESET_MAP_FLAGS table where the two overlap. Bounded, not a full flags.h name table: a FLAG_* outside this set can never occur for any map this port renders (see that module's own docs), so extending it further would transcribe data no code here consumes.",
           "rust_target": "crates/assets/src/object_event_flags.rs",
@@ -17527,6 +17577,14 @@
       "status": "pending"
     },
     "include/constants/items.h": {
+      "artifacts": {
+        "BagStackLimits": {
+          "reason": "Normal bag stack capacity 99 and berry capacity 999",
+          "rust_target": "crates/engine/src/save/bag.rs",
+          "spec": "C-2",
+          "status": "rewritten"
+        }
+      },
       "category": "code.constants",
       "kind": "file",
       "status": "pending"
@@ -18123,6 +18181,12 @@
     },
     "include/global.h": {
       "artifacts": {
+        "GcnLinkFlags": {
+          "reason": "Persists the full u32 gcnLinkFlags at SaveBlock2 offset 0xA8",
+          "rust_target": "crates/engine/src/save/block.rs",
+          "spec": "C-2",
+          "status": "rewritten"
+        },
         "ItemSlotAndBagPocketLayouts": {
           "reason": "ItemSlot layout and Emerald fixed pocket capacities implemented as the typed Bag serialization boundary",
           "rust_target": "crates/engine/src/save/bag.rs",
@@ -24967,6 +25031,20 @@
       "status": "pending"
     },
     "src/bike.c": {
+      "artifacts": {
+        "IsRunningDisallowed": {
+          "reason": "The gMapHeader.allowRunning half of the run gate, read from runtime.header().allow_run on every eligible poll (bike.c:1056-1062); bike movement is not ported.",
+          "rust_target": "crates/engine/src/overworld/player.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "IsRunningDisallowedByMetatile": {
+          "reason": "running_disallowed_by_metatile: departure behavior forbids running, and a Fortree bridge forbids it at even previous elevation (bike.c:1056-1062).",
+          "rust_target": "crates/engine/src/overworld/player.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -25528,6 +25606,30 @@
           "spec": "I-3",
           "status": "rewritten"
         },
+        "sAnim_RunEast": {
+          "reason": "avatar/run.rs draws the leading foot for five rendered frames then the neutral cell for three (ANIMCMD_FRAME(.., 5) then (.., 3)), alternating feet per crossing through PlayerState's leading-foot state; East flips West (object_event_anims.h:346-379).",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/avatar/run.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "sAnim_RunNorth": {
+          "reason": "avatar/run.rs draws the leading foot for five rendered frames then the neutral cell for three (ANIMCMD_FRAME(.., 5) then (.., 3)), alternating feet per crossing through PlayerState's leading-foot state; East flips West (object_event_anims.h:346-379).",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/avatar/run.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "sAnim_RunSouth": {
+          "reason": "avatar/run.rs draws the leading foot for five rendered frames then the neutral cell for three (ANIMCMD_FRAME(.., 5) then (.., 3)), alternating feet per crossing through PlayerState's leading-foot state; East flips West (object_event_anims.h:346-379).",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/avatar/run.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "sAnim_RunWest": {
+          "reason": "avatar/run.rs draws the leading foot for five rendered frames then the neutral cell for three (ANIMCMD_FRAME(.., 5) then (.., 3)), alternating feet per crossing through PlayerState's leading-foot state; East flips West (object_event_anims.h:346-379).",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/avatar/run.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
         "sStepAnimTables": {
           "reason": "Player entry only: sAnimTable_BrendanMayNormal's animPos {1,3,0,2} is ported as PlayerState's LeadingFoot phase, which alternates the forward-foot cell across walking steps, standstill turns, and dispatched forced crossings, and avatar::frame_for adds second_foot_leads() to the step cell (issue #1558). The other table rows (QuintyPlump, Standard, and the rest) drive NPC sprites, which have no step animation in this port and stay unported.",
           "rust_target": "crates/engine/src/overworld/player.rs",
@@ -25583,7 +25685,7 @@
           "status": "rewritten"
         },
         "sPicTable_BrendanNormal": {
-          "reason": "9-frame walking-sheet layout (2x4-tile frames, on-foot subset only) ported into avatar::pack_people_sheet_frames, whose packed bytes seed the scene's combined sprite tileset (overworld::sprites::SceneSprites) at base tile 0. sPicTable_MayNormal is now reached by two code paths, not one: as this run's own PlayerCharacter::May walking sheet, and (issue #161 review) as the sheet an OBJ_EVENT_GFX_RIVAL_MAY_NORMAL object event draws from when the player is Brendan -- upstream's gObjectEventGraphicsInfo_RivalMayNormal points .images at this very table (object_event_graphics_info.h:2015-2032); there is no rival-specific pic table or PNG. Both paths go through the same avatar::pack_people_sheet_frames packer; the rival case appends its own frame block after the player's rather than reusing base tile 0, and draws from its own palette bank (upstream PALSLOT_NPC_SPECIAL). Same for sPicTable_BrendanNormal with the genders swapped. Running frames are not modelled yet -- deferred, still in v1 scope.",
+          "reason": "9-frame walking-sheet layout (2x4-tile frames, on-foot subset only) ported into avatar::pack_people_sheet_frames, whose packed bytes seed the scene's combined sprite tileset (overworld::sprites::SceneSprites) at base tile 0. sPicTable_MayNormal is now reached by two code paths, not one: as this run's own PlayerCharacter::May walking sheet, and (issue #161 review) as the sheet an OBJ_EVENT_GFX_RIVAL_MAY_NORMAL object event draws from when the player is Brendan -- upstream's gObjectEventGraphicsInfo_RivalMayNormal points .images at this very table (object_event_graphics_info.h:2015-2032); there is no rival-specific pic table or PNG. Both paths go through the same avatar::pack_people_sheet_frames packer; the rival case appends its own frame block after the player's rather than reusing base tile 0, and draws from its own palette bank (upstream PALSLOT_NPC_SPECIAL). Same for sPicTable_BrendanNormal with the genders swapped. Running frames (cells 9..=17, sAnim_Run*) are packed from the running sheet by overworld::avatar::run after the walking block, so a held-B crossing draws from the same combined tileset.",
           "rust_target": "crates/pokeemerald-rs/src/overworld/avatar.rs",
           "spec": "I-3",
           "status": "rewritten"
@@ -26195,6 +26297,30 @@
           "spec": "I-3",
           "status": "rewritten"
         },
+        "MovementAction_PlayerRunDown_Step0": {
+          "reason": "Run Step0 initialises MOVE_SPEED_FAST_1 and applies the first 2px update at once; PlayerState commits the landing tile and the field loop ticks the first of eight frames in the same call (event_object_movement.c:6020-6081, 8252-8298).",
+          "rust_target": "crates/engine/src/overworld/player.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MovementAction_PlayerRunLeft_Step0": {
+          "reason": "Run Step0 initialises MOVE_SPEED_FAST_1 and applies the first 2px update at once; PlayerState commits the landing tile and the field loop ticks the first of eight frames in the same call (event_object_movement.c:6020-6081, 8252-8298).",
+          "rust_target": "crates/engine/src/overworld/player.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MovementAction_PlayerRunRight_Step0": {
+          "reason": "Run Step0 initialises MOVE_SPEED_FAST_1 and applies the first 2px update at once; PlayerState commits the landing tile and the field loop ticks the first of eight frames in the same call (event_object_movement.c:6020-6081, 8252-8298).",
+          "rust_target": "crates/engine/src/overworld/player.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MovementAction_PlayerRunUp_Step0": {
+          "reason": "Run Step0 initialises MOVE_SPEED_FAST_1 and applies the first 2px update at once; PlayerState commits the landing tile and the field loop ticks the first of eight frames in the same call (event_object_movement.c:6020-6081, 8252-8298).",
+          "rust_target": "crates/engine/src/overworld/player.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
         "ObjectEventUpdateElevation": {
           "reason": "Current-vs-previous elevation split (issue #218): PlayerState::adopt_elevation reproduces the early-return-on-either-side-ELEVATION_MULTI_LEVEL guard and the unconditional currentElevation adopt / non-transition-only previousElevation adopt, called from both of PlayerState::step's arrival sites (same-map and connection-crossing). previousElevation now exposed as PlayerState::previous_elevation, feeding the player OBJ's elevation-driven render priority. Modelled in two halves (issue #379): PlayerState::adopt_elevation is the per-step half above, and engine::overworld::MapRuntime::arrival_elevation (crates/engine/src/overworld/map_runtime.rs) is the spawn/arrival half, the single grid read shared by warp_destination_position (a resolved warp event), OverworldPhase::warp_to_position (an explicit-coordinate warp), and saved_tile_placement (a continued save). arrival_elevation takes one coordinate pair rather than two because a freshly spawned object event's previousCoords are seeded equal to its currentCoords (InitObjectEventStateFromTemplate, :1309-1312), so the prevElevation half of the :7764-7765 guard collapses into the curElevation half there; it returns ELEVATION_TRANSITION for a multi-level landing cell rather than modelling upstream's no-op early return, since the player it places is fresh and upstream's own spawn-time initialization already left that field at ELEVATION_TRANSITION.",
           "rust_target": "crates/engine/src/overworld/player.rs",
@@ -26211,6 +26337,12 @@
           "reason": "Player avatar only: PlayerState::advance_step_parity swaps command 1 to 2 and 3 to 0 on each ordinary, connection, or dispatched forced crossing and each turn-in-place, and leaves a held slide foot unchanged; a fresh phase is normalised by the idle face (issue #1558). Not applied to NPC object events, and the collision bump (WalkInPlaceSlow) is not modeled, so a blocked step leaves the phase unchanged.",
           "rust_target": "crates/engine/src/overworld/player.rs",
           "spec": "I-3",
+          "status": "rewritten"
+        },
+        "StartRunningAnim": {
+          "reason": "The run animation is selected by facing and drawn from the running sheet for the whole crossing, then held on its neutral cell until the next poll (event_object_movement.c:5120-5124).",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/avatar/run.rs",
+          "spec": "S-5",
           "status": "rewritten"
         },
         "TrySpawnObjectEventTemplate": {
@@ -26246,6 +26378,12 @@
         "gOppositeDirectionBlockedMetatileFuncs": {
           "reason": "The direction-to-predicate pairing is folded into collision::directionally_impassable's match rather than transcribed as a function-pointer array (no-verbatim; Rust has no DIR_* index to key on -- Direction is an enum). This table pairs each direction with its own predicate and is applied to objectEvent->currentMetatileBehavior, the tile the mover stands on (:4717); its sibling gDirectionBlockedMetatileFuncs supplies the opposite pairing for the destination. Both pairings are pinned by their own tests in collision.rs, since swapping them is the failure mode this table's name invites.",
           "rust_target": "crates/engine/src/overworld/collision.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "gPlayerRunMovementActions": {
+          "reason": "The four-direction run action table collapses to TransitCadence::RUN at the crossing's chosen direction (event_object_movement.c:968-974).",
+          "rust_target": "crates/engine/src/overworld/player.rs",
           "spec": "S-5",
           "status": "rewritten"
         }
@@ -26326,10 +26464,28 @@
           "spec": "S-5",
           "status": "stubbed"
         },
+        "GetBackgroundEventAtPosition": {
+          "reason": "Ordered background-event lookup with event-zero-or-equal elevation matching.",
+          "rust_target": "crates/engine/src/overworld/background_event.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
         "GetInFrontOfPlayerPosition": {
           "reason": "The facing-tile position (GetXYCoordsOneStepInFrontOfPlayer, player position + facing delta) plus the own-tile-elevation wildcard rule rewritten as engine::overworld::facing_object_event's query-elevation derivation: the player's own grid cell's elevation, unless it is itself ELEVATION_TRANSITION, in which case the query elevation is the wildcard too.",
           "rust_target": "crates/engine/src/overworld/object_event.rs",
           "spec": "I-3",
+          "status": "rewritten"
+        },
+        "GetInteractedBackgroundEventScript": {
+          "reason": "Typed sign and hidden-item selection with collected flags; north-facing secret-base entrance context only, saved-base eligibility and special-variable setup remain deferred.",
+          "rust_target": "crates/engine/src/overworld/background_event.rs",
+          "spec": "S-5",
+          "status": "stubbed"
+        },
+        "GetInteractedMetatileScript.script_targets": {
+          "reason": "Classifies all 24 script-returning metatile branches into 23 typed targets, preserving north-facing gates and exact secret-base elevation equality. Furniture and poster save bookkeeping, script launch, services, water-move gating, and cross-kind precedence remain outside this sub-artifact.",
+          "rust_target": "crates/engine/src/overworld/metatile_interaction.rs",
+          "spec": "S-5",
           "status": "rewritten"
         },
         "IsArrowWarpMetatileBehavior": {
@@ -26352,13 +26508,13 @@
         },
         "TryDoorWarp": {
           "fold_target": "crates/engine/src/overworld/warp.rs",
-          "reason": "GetInFrontOfPlayerPosition + MetatileBehavior_IsWarpDoor + GetWarpEventAtMapPosition's animated-door gate absorbed into engine::overworld::warp::trigger_animated_door_warp, a new entry point distinct from the completed-step trigger_door_warp. The flow-side decision (facing tile + that gate) is owned by crates/pokeemerald-rs/src/flow/overworld_phase/animated_door.rs; OverworldPhase::step only sequences its outcome, pre-movement only (the at-rest preempt, gated on input->heldDirection2 && input->dpadDirection == playerDirection, field_control_avatar.c:175-178, the same held-direction value already computed for the arrow-warp poll). There is no post-movement poll; crates/pokeemerald-rs/src/flow/overworld_phase/animated_door.rs owns the timing derivation. The check additionally requires direction == DIR_NORTH (:833-841). Issue #851: a real animated-door tile is always solid, so trigger_door_warp's own completed-step poll (issue #174's TryStartWarpEventScript path) can never reach one -- PlayerState::try_start_resolved_step rejects any nonzero-collision landing before it can exist. Pinned by real Littleroot Town regressions (the Professor Birch's-lab front door, both a stationary approach and a walked one) in flow/overworld_phase/warp_tests.rs, by animated_door.rs's own decision tests, and by step.rs's drain-call sequencing ratchet (a pack-free whole-frame test cannot observe that one: a failed warp_to preserves map_id and position). Not modelled: TryDoorWarp's secret-base branch, and DoDoorWarp's opening-animation sequence (the warp still resolves immediately, matching every other warp path in this port). Issue #1039 left the pre-movement placement itself untouched but gave it the same frame boundary as every other field-input check: the completed step that the previous call's animation drained is processed at the start of this call, above it, so a coord event, a door-shaped warp or a wild encounter on that landing returns from ProcessPlayerFieldInput (:155-162) before this check at :170-178 runs. A walked approach's door therefore still opens on the call after the approach's animation drains -- upstream's first T_TILE_CENTER CB1 for that crossing -- which is the timing animated_door.rs already derived.",
+          "reason": "GetInFrontOfPlayerPosition + MetatileBehavior_IsWarpDoor + GetWarpEventAtMapPosition's animated-door gate absorbed into engine::overworld::warp::trigger_animated_door_warp, a new entry point distinct from the completed-step trigger_door_warp. The flow-side decision (facing tile + that gate) is owned by crates/pokeemerald-rs/src/flow/overworld_phase/animated_door.rs; OverworldPhase::step only sequences its outcome, pre-movement only (the at-rest preempt, gated on input->heldDirection2 && input->dpadDirection == playerDirection, field_control_avatar.c:175-178, the same held-direction value already computed for the arrow-warp poll). There is no post-movement poll; crates/pokeemerald-rs/src/flow/overworld_phase/animated_door.rs owns the timing derivation. The check additionally requires direction == DIR_NORTH (:833-841). Issue #851: a real animated-door tile is always solid, so trigger_door_warp's own completed-step poll (issue #174's TryStartWarpEventScript path) can never reach one -- PlayerState::try_start_resolved_step rejects any nonzero-collision landing before it can exist. Pinned by real Littleroot Town regressions (the Professor Birch's-lab front door, both a stationary approach and a walked one) in flow/overworld_phase/warp_tests.rs, by animated_door.rs's own decision tests, and by door_sequencing_tests.rs's drain-call sequencing ratchet (a pack-free whole-frame test cannot observe that one: a failed warp_to preserves map_id and position). Not modelled: TryDoorWarp's secret-base branch, and DoDoorWarp's opening-animation sequence (the warp still resolves immediately, matching every other warp path in this port). Issue #1039 left the pre-movement placement itself untouched but gave it the same frame boundary as every other field-input check: the completed step that the previous call's animation drained is processed at the start of this call, above it, so a coord event, a door-shaped warp or a wild encounter on that landing returns from ProcessPlayerFieldInput (:155-162) before this check at :170-178 runs. A walked approach's door therefore still opens on the call after the approach's animation drains -- upstream's first T_TILE_CENTER CB1 for that crossing -- which is the timing animated_door.rs already derived.",
           "spec": "S-5",
           "status": "folded"
         },
         "TryStartInteractionScript": {
           "reason": "OverworldPhase::step's A-press handling covers only the object-event branch of GetInteractionScript (GetInteractedObjectEventScript, via engine::overworld::facing_object_event), routed to a NpcDialog through crate::overworld::npc_scripts::script_text's own small, hardcoded msgbox-style script-text table (issue's own DoD: 'a direct msgbox-style script subset is enough'). Not modelled: GetInteractedBackgroundEventScript/GetInteractedMetatileScript/GetInteractedWaterScript's fallback chain (sign posts, counters, water-adjacent interactions), GetInteractedLinkPlayerScript, RamScript, and the interaction sound effect (PlaySE(SE_SELECT)). Issue #435: the lookup runs from the frame-start (pre-movement) player position and facing, before PlayerStep could turn or step the player, matching ProcessPlayerFieldInput reading playerDirection/position before ever calling PlayerStep (field_control_avatar.c:143-145, overworld.c:1444-1455). A successful interaction, or a found object event whose script is real but unrecognized by this table, consumes the frame and preempts movement outright (InteractionOutcome::Unmodelled), matching TryStartInteractionScript returning TRUE for any non-NULL script (:172). Only the literal '0x0' NULL-script sentinel, or no object event found at all, lets the frame's direction input reach PlayerState unconsumed. Issue #1039 placed it below the completed step's own events, as upstream does: a landing whose walk animation drained is now processed at the start of the *next* step call (upstream's T_TILE_CENTER CB1, field_player_avatar.c:901-915 over main.c:188-195 / overworld.c:1438-1469), and a coord event, a door-shaped warp or a wild encounter claiming that landing (TryStartStepBasedScript :155-161, CheckStandardWildEncounter :162) returns from ProcessPlayerFieldInput before this check at :172 is ever reached, so the A press is not consumed on that frame.",
-          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/step.rs",
+          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/interaction.rs",
           "spec": "I-3",
           "status": "stubbed"
         }
@@ -26483,6 +26639,12 @@
         },
         "PlayerNotOnBikeTurningInPlace": {
           "reason": "On-foot standstill direction changes are re-implemented by PlayerState::step as StepOutcome::Turned: facing updates without tile movement, and an eight-frame WALK_IN_PLACE_FAST-equivalent busy timer (TURN_IN_PLACE_FRAMES) now starts, keeping ordinary direction polls Idle through frames 2-8 so a held direction can only begin moving on frame 9 (issue #976). A dialog or the start menu clears that timer immediately on the frame it takes the field lock (PlayerState::clear_turn_lock), matching PlayerFreeze forcing a one-frame face-direction action over an in-flight turn (field_player_avatar.c:1039-1046) so input is live again the frame the overlay closes.",
+          "rust_target": "crates/engine/src/overworld/player.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "PlayerRun": {
+          "reason": "A held-B step that clears collision crosses its tile at RUN_FRAMES_PER_TILE (8) frames through PlayerState::step_with_run, plays the running-sheet cells of avatar/run.rs, and drops to walking or standing on the next poll after B is released (field_player_avatar.c:658-668, 995-998). Sound and the bike branch are not ported.",
           "rust_target": "crates/engine/src/overworld/player.rs",
           "spec": "S-5",
           "status": "rewritten"
@@ -26808,10 +26970,28 @@
     },
     "src/item.c": {
       "artifacts": {
+        "AddBagItem": {
+          "reason": "Atomic normal-bag insertion with metadata pocket routing and upstream stacking limits; Battle Pyramid bag dispatch remains pending",
+          "rust_target": "crates/engine/src/save/bag.rs",
+          "spec": "C-2",
+          "status": "rewritten"
+        },
         "BagQuantityEncryption": {
           "reason": "Bag quantity XOR serialization with the encryption key low 16 bits re-implemented while inventory mutation behavior remains pending",
           "rust_target": "crates/engine/src/save/bag.rs",
           "spec": "S-5",
+          "status": "rewritten"
+        },
+        "CheckBagHasSpace": {
+          "reason": "Nonmutating normal-bag capacity check that agrees with insertion; Battle Pyramid dispatch remains pending",
+          "rust_target": "crates/engine/src/save/bag.rs",
+          "spec": "C-2",
+          "status": "rewritten"
+        },
+        "GetItemPocket": {
+          "reason": "ItemTable::pocket selects the bag pocket from item metadata, sanitizing out-of-range ids to the ITEM_NONE row",
+          "rust_target": "crates/assets/src/items.rs",
+          "spec": "C-2",
           "status": "rewritten"
         }
       },
@@ -27283,6 +27463,36 @@
     },
     "src/metatile_behavior.c": {
       "artifacts": {
+        "MetatileBehavior_IsBlueprint": {
+          "reason": "Script-target behavior identity and applicable north-facing gate reimplemented as a pure predicate with exhaustive byte-domain tests.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsBookShelf": {
+          "reason": "Script-target behavior identity and applicable north-facing gate reimplemented as a pure predicate with exhaustive byte-domain tests.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsCableBoxResults1": {
+          "reason": "Script-target behavior identity and applicable north-facing gate reimplemented as a pure predicate with exhaustive byte-domain tests.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsCableBoxResults2": {
+          "reason": "Script-target behavior identity and applicable north-facing gate reimplemented as a pure predicate with exhaustive byte-domain tests.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsClosedSootopolisDoor": {
+          "reason": "Script-target behavior identity and applicable north-facing gate reimplemented as a pure predicate with exhaustive byte-domain tests.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
         "MetatileBehavior_IsCrackedFloor": {
           "reason": "Reimplemented as an arm of is_forced_movement_input_tile, reproducing this single-behavior-ID equality test exactly; the Sky Pillar collapsing-floor consumers that also read it stay unported (deferred, still in v1 scope).",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
@@ -27367,14 +27577,110 @@
           "spec": "S-5",
           "status": "rewritten"
         },
+        "MetatileBehavior_IsPC": {
+          "reason": "Script-target behavior identity and applicable north-facing gate reimplemented as a pure predicate with exhaustive byte-domain tests.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsPictureBookShelf": {
+          "reason": "Script-target behavior identity and applicable north-facing gate reimplemented as a pure predicate with exhaustive byte-domain tests.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsPlayerFacingTVScreen": {
+          "reason": "Script-target behavior identity and applicable north-facing gate reimplemented as a pure predicate with exhaustive byte-domain tests.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsPlayerFacingWirelessBoxResults": {
+          "reason": "Script-target behavior identity and applicable north-facing gate reimplemented as a pure predicate with exhaustive byte-domain tests.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsPokeCenterBookShelf": {
+          "reason": "Script-target behavior identity and applicable north-facing gate reimplemented as a pure predicate with exhaustive byte-domain tests.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsPokeblockFeeder": {
+          "reason": "Script-target behavior identity and applicable north-facing gate reimplemented as a pure predicate with exhaustive byte-domain tests.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsQuestionnaire": {
+          "reason": "Script-target behavior identity and applicable north-facing gate reimplemented as a pure predicate with exhaustive byte-domain tests.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsRecordMixingSecretBasePC": {
+          "reason": "Script-target behavior identity and applicable north-facing gate reimplemented as a pure predicate with exhaustive byte-domain tests.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsRegionMap": {
+          "reason": "Script-target behavior identity and applicable north-facing gate reimplemented as a pure predicate with exhaustive byte-domain tests.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsRunningDisallowed": {
+          "reason": "running_disallowed_by_metatile covers MB_NO_RUNNING, MB_LONG_GRASS, MB_HOT_SPRINGS and the four Pacifidlog logs (metatile_behavior.c:1258-1266).",
+          "rust_target": "crates/engine/src/overworld/player.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsRunningShoesManual": {
+          "reason": "Script-target behavior identity and applicable north-facing gate reimplemented as a pure predicate with exhaustive byte-domain tests.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
         "MetatileBehavior_IsSecretBaseJumpMat": {
           "reason": "Reimplemented as an arm of is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
           "status": "rewritten"
         },
+        "MetatileBehavior_IsSecretBasePC": {
+          "reason": "Script-target behavior identity and applicable north-facing gate reimplemented as a pure predicate with exhaustive byte-domain tests.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsSecretBaseSandOrnament": {
+          "reason": "Script-target behavior identity and applicable north-facing gate reimplemented as a pure predicate with exhaustive byte-domain tests.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsSecretBaseShieldOrToyTV": {
+          "reason": "Script-target behavior identity and applicable north-facing gate reimplemented as a pure predicate with exhaustive byte-domain tests.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
         "MetatileBehavior_IsSecretBaseSpinMat": {
           "reason": "Reimplemented as an arm of is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsShopShelf": {
+          "reason": "Script-target behavior identity and applicable north-facing gate reimplemented as a pure predicate with exhaustive byte-domain tests.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsSkyPillarClosedDoor": {
+          "reason": "Script-target behavior identity and applicable north-facing gate reimplemented as a pure predicate with exhaustive byte-domain tests.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
           "status": "rewritten"
@@ -27421,8 +27727,32 @@
           "spec": "S-5",
           "status": "rewritten"
         },
+        "MetatileBehavior_IsTrainerHillTimer": {
+          "reason": "Script-target behavior identity and applicable north-facing gate reimplemented as a pure predicate with exhaustive byte-domain tests.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsTrashCan": {
+          "reason": "Script-target behavior identity and applicable north-facing gate reimplemented as a pure predicate with exhaustive byte-domain tests.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsTrickHousePuzzleDoor": {
+          "reason": "Script-target behavior identity and applicable north-facing gate reimplemented as a pure predicate with exhaustive byte-domain tests.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
         "MetatileBehavior_IsTrickHouseSlipperyFloor": {
           "reason": "Reimplemented as an arm of is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsVase": {
+          "reason": "Script-target behavior identity and applicable north-facing gate reimplemented as a pure predicate with exhaustive byte-domain tests.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
           "status": "rewritten"
@@ -27587,7 +27917,7 @@
     "src/new_game.c": {
       "artifacts": {
         "NewGameInitData": {
-          "reason": "NewGameInitData (new_game.c:149-207) re-implemented for the fields engine::save::block's SaveBlock1/SaveBlock2 model covers (encryption key, trainer id, party/count zeroing, starting money, bag, event data, fixed default player name/gender); WarpToTruck's truck-map warp is replaced by a direct spawn into the protagonist's bedroom (see new_game module docs), and every other NewGameInitData call (pokedex, TV, secret bases, PC items, etc.) has no typed home yet. RunScriptImmediately(EventScript_ResetAllMapFlags)'s 159 setflag ops are applied at init_save_blocks via assets::RESET_MAP_FLAGS (issue #164); only the trailing call EventScript_ResetAllBerries half remains deferred, tracked as data/scripts/new_game.inc#EventScript_ResetAllBerries pending typed berry-tree save state, and the flags themselves are stored save state with no consumer until #161's object-event filtering reads them. Post-spawn warp processing (the bedroom stair warp, issue #163) is handled by flow's OverworldPhase, which processes StepOutcome landings on step completion. Issue #1125: NewGameInitData never touches optionsTextSpeed/optionsWindowFrameType itself, so init_save_blocks_with_options now seeds those two SaveBlock2 fields from a NewGameOptions the flow derives from the boot-recovered save -- flow::new_game_options_for owns which boot verdict reaches which value (see that function's own doc comment for the contract, not a copy of it here). init_save_blocks keeps NewGameOptions::DEFAULT for every other caller with no boot-recovered save to carry options from.",
+          "reason": "NewGameInitData (new_game.c:149-207) re-implemented for the fields engine::save::block's SaveBlock1/SaveBlock2 model covers (encryption key, trainer id, party/count zeroing, starting money, bag, event data). Issue #1648: the selected NewGameIdentity (validated gender and name) is committed by init_save_blocks_with_identity before any gender-dependent field is derived; bedroom arrival, heal location, truck-intro flags/vars, and the avatar and rival all follow the committed gender for both branches, through OverworldPhase::load, save, and continue. new_game::truck_exit exposes the gender-dependent dynamic warp and moving-in tile for the full opening. Still deferred: WarpToTruck (the direct bedroom spawn remains the endpoint until #1695 supplies the truck sequence), the persisted dynamic warp (SaveBlock1 has no dynamic_warp field), the chooser/naming UI feeding IntroScene::with_identity (#1649, #1599), the Brendan/May house transition scripts (#1696), and the untyped NewGameInitData calls (pokedex, TV, secret bases, PC items, berries via data/scripts/new_game.inc#EventScript_ResetAllBerries). Issue #1125: init_save_blocks_with_options seeds optionsTextSpeed/optionsWindowFrameType from NewGameOptions; flow::new_game_options_for owns the boot-verdict contract.",
           "rust_target": "crates/pokeemerald-rs/src/new_game.rs",
           "spec": "I-3",
           "status": "stubbed"
@@ -27794,7 +28124,7 @@
           "status": "rewritten"
         },
         "CreateBoxMon": {
-          "reason": "CreateBoxMon's default-field stamps (:2251-2263) for a record built from scratch are pokeemerald_rs::party::to_save_pokemon (issue #869): nickname (the species' display name, :2251), language (GAME_LANGUAGE, :2252), met level (the level the battler was created at, :2259), met game (VERSION_EMERALD) and poke ball (ITEM_POKE_BALL), plus base friendship. Its RNG branches (personality, IVs, OT id, ability bit) are covered under src/pokemon.c#CreateMonWithNature and #GetAbilityBySpecies. Since issue #1208, SetBoxMonData(MON_DATA_SPECIES)'s own hasSpecies derivation (:4220-4227) is modelled too -- BoxPokemon::set_has_species raises the unencrypted header's sanity bit whenever the species just written is nonzero, applied both at to_save_pokemon and at merge_into_save_pokemon's retained-record branch, which re-files growth species on every save. Still deferred: OT name, met location, and OT gender, which need the current save's player identity and map that to_save_pokemon does not receive, and the checksum/encryption round-trip.",
+          "reason": "CreateBoxMon's default-field stamps (:2251-2263) for a record built from scratch are pokeemerald_rs::party::to_save_pokemon (issue #869): nickname (the species' display name, :2251), language (GAME_LANGUAGE, :2252), met level (the level the battler was created at, :2259), met game (VERSION_EMERALD) and poke ball (ITEM_POKE_BALL), plus base friendship. Its RNG branches (personality, IVs, OT id, ability bit) are covered under src/pokemon.c#CreateMonWithNature and #GetAbilityBySpecies. Since issue #1208, SetBoxMonData(MON_DATA_SPECIES)'s own hasSpecies derivation (:4220-4227) is modelled too -- BoxPokemon::set_has_species raises the unencrypted header's sanity bit whenever the species just written is nonzero, applied both at to_save_pokemon and at merge_into_save_pokemon's retained-record branch, which re-files growth species on every save. The OT name, met location, and OT gender stamps (:2253-2263) are written by the level-five starter grant (crates/pokeemerald-rs/src/party/starter.rs, I-4, #1662), which holds the save's player identity and takes the map's region-map section from its caller; to_save_pokemon itself still leaves them zero. The checksum/encryption round-trip is engine::save::BoxPokemon.",
           "rust_target": "crates/pokeemerald-rs/src/party.rs",
           "spec": "I-6",
           "status": "stubbed"
@@ -28137,6 +28467,14 @@
       "status": "pending"
     },
     "src/save_location.c": {
+      "artifacts": {
+        "SetUnlockedPokedexFlags": {
+          "reason": "ORs bits 0-5 and 15 into saved GCN link flags without touching other bits",
+          "rust_target": "crates/engine/src/save/block.rs",
+          "spec": "C-2",
+          "status": "rewritten"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -28429,6 +28767,12 @@
           "rust_target": "crates/battle/src/pokemon.rs",
           "spec": "I-4",
           "status": "rewritten"
+        },
+        "ScriptGiveMon": {
+          "reason": "The level-five starter grant, ScriptGiveMon(starter, 5, ITEM_NONE, 0, 0, 0) (battle_setup.c:921-923): CreateMon's four consecutive draws (personality low/high, then two IV words), player OT id, first seven OT-name bytes and gender bit, base friendship, ITEM_POKE_BALL, VERSION_EMERALD, met level five, caller-supplied numeric met location, and GiveBoxMonInitialMoveset moves, filed as the only member of an empty party with the battler and record encoded together. Still deferred: the Pokedex seen/caught flags (:75-81), GiveMonToPlayer's later party slots and PC routing, a non-empty held item, and the generic script-driven grant (#1679).",
+          "rust_target": "crates/pokeemerald-rs/src/party/starter.rs",
+          "spec": "I-4",
+          "status": "stubbed"
         }
       },
       "category": "code.source",

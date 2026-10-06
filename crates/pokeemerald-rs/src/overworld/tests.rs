@@ -221,6 +221,8 @@ const WALKABLE_ELEVATION: u8 = 3;
 const FIRST_SPECIAL_METATILE_ID: u16 = 1;
 const GROUND_PALETTE_INDEX: u8 = 5;
 const SPRITE_PIXEL_PALETTE_INDEX: u8 = 9;
+/// The synthetic running sheet's opaque index, distinct from walking's.
+const RUN_SPRITE_PIXEL_PALETTE_INDEX: u8 = 10;
 const RED_BGR555: u16 = 0x001F;
 const BLUE_BGR555: u16 = 0x7C00;
 const TILESET_PALETTE_BANK_COUNT: u8 = 16;
@@ -292,9 +294,10 @@ fn synthetic_overworld_pack_bytes_for(tileset: &str, width: u16, height: u16) ->
 /// one entry deliberately before writing the pack.
 ///
 /// [`push_general_anim_frames`]'s frames (fabricated only for `"general"`)
-/// land in tile padding this fixture's one metatile never references, so
-/// `AnimatedTileset` patching stays exercised without changing a composed
-/// pixel.
+/// land in tile padding this default fixture's one metatile never references,
+/// so `AnimatedTileset` patching stays exercised without changing a composed
+/// pixel; [`synthetic_animated_flower_pack_bytes`] overrides that to observe
+/// animated output.
 fn synthetic_overworld_pack_entries_for(tileset: &str, width: u16, height: u16) -> Vec<Entry> {
     let tile_pixels = vec![GROUND_PALETTE_INDEX; 8 * 8];
 
@@ -361,6 +364,14 @@ fn synthetic_overworld_pack_entries_for(tileset: &str, width: u16, height: u16) 
             // Opaque and distinct from GROUND_PALETTE_INDEX, so a composed
             // frame can tell the sprite layer from the world layer.
             payload: vec![SPRITE_PIXEL_PALETTE_INDEX; 144 * 32],
+        },
+        Entry {
+            id: "sprite/brendan/running",
+            kind_tag: IMAGE_KIND_TAG,
+            meta: image_meta(144, 32, 8),
+            // A different opaque index from walking, so a composed frame can
+            // tell which sheet the avatar drew from.
+            payload: vec![RUN_SPRITE_PIXEL_PALETTE_INDEX; 144 * 32],
         },
         Entry {
             id: "sprite/palette/brendan",
@@ -1802,7 +1813,7 @@ fn real_pack_route_103_rival_binds_to_the_opposite_protagonists_sheet() {
 /// background-NPC `graphics_id` really decodes against the real extracted
 /// pack -- not just that [`super::npc::resolve_sprite_source`] names a
 /// `sprite/<path>` id (already pinned pack-free by
-/// `npc::tests::resolve_sprite_source_resolves_the_oldale_and_route_103_background_npcs`),
+/// `npc::binding_tests::resolve_sprite_source_resolves_the_oldale_and_route_103_background_npcs`),
 /// but that `AssetPack::sprite` actually finds that entry and
 /// `avatar::pack_people_sheet_frames` accepts its real dimensions (any
 /// mismatch is a real, real-pack-only failure mode --
@@ -2644,7 +2655,7 @@ fn equal_priority_overlap_orders_the_player_and_npc_by_screen_depth() {
             .resolve_pixel(x, y)
             .map(|p| p.color)
         };
-        let player_entry = super::avatar::player_entry(&player);
+        let player_entry = super::avatar::player_entry(&player, 0);
         let player_only = color_at(&[player_entry]);
         let npc_only = color_at(
             &entries
@@ -2699,4 +2710,87 @@ pub(crate) fn write_oldale_layout_pack(path: &std::path::Path, sprite_paths: &[&
         });
     }
     std::fs::write(path, write_synthetic_pack(entries)).unwrap();
+}
+
+// -- Default-CI tileset animation through compose ----------------------------
+
+/// [`synthetic_overworld_pack_bytes`] with its metatile drawing the General
+/// flower tile (508) and flower frames 0/1/2 painted in distinct opaque
+/// colors, so a composed pixel names the frame patched into that tile.
+fn synthetic_animated_flower_pack_bytes() -> Vec<u8> {
+    const FLOWER_START_TILE: u16 = 508;
+    let mut entries = synthetic_overworld_pack_entries_for("general", 4, 4);
+
+    let metatiles = entries
+        .iter_mut()
+        .find(|e| e.id == "tileset/general/metatiles")
+        .expect("the general fixture always fabricates its own metatiles entry");
+    metatiles.payload = std::iter::repeat_n(FLOWER_START_TILE.to_le_bytes(), 8)
+        .flatten()
+        .collect();
+
+    let bank0 = entries
+        .iter_mut()
+        .find(|e| e.id == "tileset/general/palette/00")
+        .expect("the general fixture always fabricates its own bank-0 palette");
+    bank0.meta = 8u16.to_le_bytes().to_vec();
+    bank0.payload.extend_from_slice(&0x03E0u16.to_le_bytes()); // index 6: green.
+    bank0.payload.extend_from_slice(&0x7C00u16.to_le_bytes()); // index 7: blue.
+
+    for (asset, palette_index) in [(0u8, 5u8), (1, 6), (2, 7)] {
+        let id = format!("tileset/general/anim/flower/{asset}");
+        let frame = entries
+            .iter_mut()
+            .find(|e| e.id == id)
+            .expect("push_general_anim_frames fabricates flower assets 0..3");
+        frame.payload = vec![palette_index; 8 * 8 * 4];
+    }
+
+    write_synthetic_pack(entries)
+}
+
+/// Tick-to-pixel coverage that needs no local pack: flower frames latch as
+/// `[0, 1, 0, 2]` every 16 ticks (`super::tileset_anims::GENERAL_REGIONS`).
+#[test]
+fn compose_paints_each_latched_flower_frame_into_the_animated_tile_range() {
+    let color = |raw: u16| rendering::Bgr555::from_raw(raw).to_rgb888();
+    let scene = synthetic_scene_result(
+        synthetic_animated_flower_pack_bytes(),
+        "gTileset_General",
+        4,
+        4,
+    )
+    .expect("the animated-flower synthetic pack should decode cleanly");
+
+    let player = PlayerState::new((0, 0), 3, Direction::South);
+    let event_data = engine::event_data::EventData::new();
+    let sample = |tick: u32| {
+        scene
+            .compose(&player, &event_data, tick)
+            .pixel(4, 4)
+            .expect("(4, 4) is on screen and away from the player sprite")
+    };
+
+    let at_first_fire = sample(16);
+    assert_ne!(
+        sample(0),
+        at_first_fire,
+        "tick must reach composed pixels: tick 0 shows base art, tick 16 the first \
+         latched flower frame"
+    );
+    assert_eq!(
+        at_first_fire,
+        color(0x03E0),
+        "tick 16 latches sequence position 1 -- flower asset 1 (green)"
+    );
+    assert_eq!(
+        sample(32),
+        color(0x001F),
+        "tick 32 latches sequence position 2 -- flower asset 0 (red)"
+    );
+    assert_eq!(
+        sample(48),
+        color(0x7C00),
+        "tick 48 latches sequence position 3 -- flower asset 2 (blue)"
+    );
 }

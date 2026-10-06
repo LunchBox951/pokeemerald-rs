@@ -6,10 +6,10 @@ use super::collision::{directionally_impassable, elevation_mismatch, Collision};
 use super::direction::Direction;
 use super::map_runtime::{ConnectedMapData, MapRuntime};
 use super::metatile_behavior::{
-    is_forced_movement, is_forced_movement_input_tile, MB_EASTWARD_CURRENT, MB_ICE, MB_MUDDY_SLOPE,
-    MB_NORMAL, MB_NORTHWARD_CURRENT, MB_SLIDE_EAST, MB_SLIDE_NORTH, MB_SLIDE_SOUTH, MB_SLIDE_WEST,
-    MB_SOUTHWARD_CURRENT, MB_TRICK_HOUSE_PUZZLE_8_FLOOR, MB_WALK_EAST, MB_WALK_NORTH,
-    MB_WALK_SOUTH, MB_WALK_WEST, MB_WATERFALL, MB_WESTWARD_CURRENT,
+    is_forced_movement, is_forced_movement_input_tile, MB_EASTWARD_CURRENT, MB_ICE, MB_LONG_GRASS,
+    MB_MUDDY_SLOPE, MB_NORMAL, MB_NORTHWARD_CURRENT, MB_SLIDE_EAST, MB_SLIDE_NORTH, MB_SLIDE_SOUTH,
+    MB_SLIDE_WEST, MB_SOUTHWARD_CURRENT, MB_TRICK_HOUSE_PUZZLE_8_FLOOR, MB_WALK_EAST,
+    MB_WALK_NORTH, MB_WALK_SOUTH, MB_WALK_WEST, MB_WATERFALL, MB_WESTWARD_CURRENT,
 };
 use super::object_event::visible_object_event_at;
 use crate::event_data::EventData;
@@ -26,6 +26,32 @@ pub const WALK_FRAMES_PER_TILE: u8 = 16;
 /// (`field_player_avatar.c:526-552, 979-982`; `sStepTimes[MOVE_SPEED_FAST_1]
 /// == ARRAY_COUNT(sStep2Funcs) == 8`, `event_object_movement.c:8233-8298`).
 pub const SLIDE_FRAMES_PER_TILE: u8 = 8;
+
+/// Frames a held-B run crosses one tile in: upstream's `PlayerRun` mover
+/// initialises `MOVE_SPEED_FAST_1`, so `sStepTimes` gives 8 two-pixel updates
+/// (`field_player_avatar.c:995-998`, `event_object_movement.c:5110-5124,
+/// 8233-8298`).
+pub const RUN_FRAMES_PER_TILE: u8 = 8;
+
+/// `FLAG_SYS_B_DASH` (`SYSTEM_FLAGS + 0x60`): the running shoes were received
+/// (`include/constants/flags.h:1462`).
+const FLAG_SYS_B_DASH: u16 = 0x8C0;
+
+const MB_NO_RUNNING: u8 = 0x0A;
+const MB_HOT_SPRINGS: u8 = 0x28;
+const MB_PACIFIDLOG_VERTICAL_LOG_TOP: u8 = 0x74;
+const MB_PACIFIDLOG_HORIZONTAL_LOG_RIGHT: u8 = 0x77;
+const MB_FORTREE_BRIDGE: u8 = 0x78;
+
+/// `MetatileBehavior_IsRunningDisallowed` plus the Fortree bridge's
+/// even-elevation rule from `IsRunningDisallowedByMetatile`
+/// (`metatile_behavior.c:1258-1266`, `bike.c:1056-1062`).
+const fn running_disallowed_by_metatile(behavior: u8, elevation: u8) -> bool {
+    matches!(behavior, MB_NO_RUNNING | MB_LONG_GRASS | MB_HOT_SPRINGS)
+        || (behavior >= MB_PACIFIDLOG_VERTICAL_LOG_TOP
+            && behavior <= MB_PACIFIDLOG_HORIZONTAL_LOG_RIGHT)
+        || (behavior == MB_FORTREE_BRIDGE && elevation & 1 == 0)
+}
 
 /// Frames a standstill turn busies movement input for: upstream's
 /// `WALK_IN_PLACE_FAST` action (`event_object_movement.c:5704-5721`).
@@ -48,6 +74,9 @@ struct TransitCadence {
     /// reaches its standing half; the four `ForcedMovement_Walk*` and every
     /// ordinary step never set it.
     animation_disabled: bool,
+    /// Whether the crossing plays `sAnim_Run*` on the running sheet rather
+    /// than `sAnim_Go*` on the walking sheet (`event_object_movement.c:5120-5124`).
+    running: bool,
 }
 
 impl TransitCadence {
@@ -55,12 +84,21 @@ impl TransitCadence {
     const WALK: Self = Self {
         duration: WALK_FRAMES_PER_TILE,
         animation_disabled: false,
+        running: false,
     };
 
     /// A dispatched slide tile's pace.
     const SLIDE: Self = Self {
         duration: SLIDE_FRAMES_PER_TILE,
         animation_disabled: true,
+        running: false,
+    };
+
+    /// A held-B run's pace: fast, with the walk animation left running.
+    const RUN: Self = Self {
+        duration: RUN_FRAMES_PER_TILE,
+        animation_disabled: false,
+        running: true,
     };
 }
 
@@ -81,6 +119,10 @@ enum RestPose {
     Standing,
     /// A finished slide crossing's animation-paused forward foot.
     SlidePaused,
+    /// A finished run crossing's neutral running cell, held until the next
+    /// keypad poll (`MovementAction_PlayerRun*_Step1` pauses the animation
+    /// at the step's end, `event_object_movement.c:6020-6081`).
+    RunPaused,
 }
 
 /// The player's tile position, facing, elevation, and step progress.
@@ -341,6 +383,30 @@ impl PlayerState {
         matches!(self.rest_pose, RestPose::SlidePaused)
     }
 
+    /// Returns whether the active tile crossing is a held-B run, drawn from
+    /// the running sheet. Only meaningful while
+    /// [`step_direction`](Self::step_direction) is `Some`; stale at rest.
+    #[must_use]
+    pub const fn transit_running(&self) -> bool {
+        self.transit_cadence.running
+    }
+
+    /// Returns whether a finished run still holds its neutral running pose
+    /// until the next keypad poll or field lock.
+    #[must_use]
+    pub const fn run_pose_held(&self) -> bool {
+        matches!(self.rest_pose, RestPose::RunPaused)
+    }
+
+    /// Drops a finished run's held neutral pose, as a field lock does
+    /// (`ScriptContext` and battle starts reset the avatar through
+    /// `SetPlayerAvatarTransitionFlags`, `field_player_avatar.c:150-162`).
+    pub fn release_run_pose(&mut self) {
+        if self.run_pose_held() {
+            self.rest_pose = RestPose::Standing;
+        }
+    }
+
     /// Returns whether the current walk-cycle phase is the second foot.
     #[must_use]
     pub const fn second_foot_leads(&self) -> bool {
@@ -415,6 +481,8 @@ impl PlayerState {
                 self.adopt_elevation(self.landing_elevation, self.landing_elevation);
                 if self.transit_cadence.animation_disabled {
                     self.rest_pose = RestPose::SlidePaused;
+                } else if self.transit_cadence.running {
+                    self.rest_pose = RestPose::RunPaused;
                 }
             }
         }
@@ -480,6 +548,28 @@ impl PlayerState {
     pub fn step(
         &mut self,
         input: Option<Direction>,
+        runtime: &MapRuntime<'_>,
+        maps: &impl ConnectedMapData,
+        event_data: &EventData,
+    ) -> StepOutcome {
+        self.step_with_run(input, false, runtime, maps, event_data)
+    }
+
+    /// [`Self::step`] with the held state of B.
+    ///
+    /// # Running
+    ///
+    /// A step that clears collision runs, at [`RUN_FRAMES_PER_TILE`], when
+    /// `run_held` is set, `FLAG_SYS_B_DASH` is set in `event_data`, the
+    /// map header allows running, and the departure tile's behavior permits
+    /// it (`field_player_avatar.c:658-668`, `bike.c:1056-1062`). The
+    /// permission is read at each eligible poll rather than cached, and a
+    /// crossing already under way keeps the pace it started with. Turns,
+    /// blocked attempts, and forced movement are never run.
+    pub fn step_with_run(
+        &mut self,
+        input: Option<Direction>,
+        run_held: bool,
         runtime: &MapRuntime<'_>,
         maps: &impl ConnectedMapData,
         event_data: &EventData,
@@ -570,13 +660,21 @@ impl PlayerState {
                 let from = self.position;
                 let to = landing.position;
                 let to_map = landing.to_map;
+                let running = run_held
+                    && event_data.flag_get(FLAG_SYS_B_DASH).unwrap_or(false)
+                    && runtime.header().allow_run
+                    && !running_disallowed_by_metatile(standing_behavior, self.render_elevation);
                 let started = self.try_start_resolved_step(
                     direction,
                     runtime,
                     event_data,
                     standing_behavior,
                     landing,
-                    TransitCadence::WALK,
+                    if running {
+                        TransitCadence::RUN
+                    } else {
+                        TransitCadence::WALK
+                    },
                 );
                 match started {
                     Ok(()) => {
@@ -898,6 +996,33 @@ mod tests {
         (bytes, header, events)
     }
 
+    /// A `width` x `height` map of plain ground whose only variation is the
+    /// collision bits `collision_at` assigns per cell.
+    fn flat_map_runtime(
+        width: u16,
+        height: u16,
+        collision_at: impl Fn(u16, u16) -> u8,
+    ) -> MapRuntime<'static> {
+        let (bytes, header, events) = flat_runtime(width, height, collision_at);
+        let layout = assets::MapLayout {
+            id: assets::LayoutId("MAP_TEST"),
+            name: "MapTest",
+            width,
+            height,
+            primary_tileset: "gTileset_General",
+            secondary_tileset: "gTileset_General",
+        };
+        let bytes: &'static [u8] = Box::leak(bytes.into_boxed_slice());
+        MapRuntime::new(
+            assets::MapId("MAP_TEST"),
+            Box::leak(Box::new(header)),
+            Box::leak(Box::new(events)),
+            layout.grid(bytes).unwrap(),
+            MetatileAttributeTable::new(&[]),
+            MetatileAttributeTable::new(&[]),
+        )
+    }
+
     fn no_connections(_: MapId) -> Option<(u16, u16)> {
         None
     }
@@ -962,24 +1087,7 @@ mod tests {
         assert!(!player.in_transit());
         assert_eq!(player.step_direction(), None);
 
-        let (bytes, header, events) = flat_runtime(5, 5, |_, _| 0);
-        let layout = assets::MapLayout {
-            id: assets::LayoutId("MAP_TEST"),
-            name: "MapTest",
-            width: 5,
-            height: 5,
-            primary_tileset: "gTileset_General",
-            secondary_tileset: "gTileset_General",
-        };
-        let grid = layout.grid(&bytes).unwrap();
-        let runtime = MapRuntime::new(
-            assets::MapId("MAP_TEST"),
-            &header,
-            &events,
-            grid,
-            MetatileAttributeTable::new(&[]),
-            MetatileAttributeTable::new(&[]),
-        );
+        let runtime = flat_map_runtime(5, 5, |_, _| 0);
         let mut player = PlayerState::new((2, 2), 3, Direction::South);
         player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS);
         let progress = player.step_progress();
@@ -998,24 +1106,7 @@ mod tests {
 
     #[test]
     fn fresh_pressing_the_facing_direction_steps_immediately() {
-        let (bytes, header, events) = flat_runtime(5, 5, |_, _| 0);
-        let layout = assets::MapLayout {
-            id: assets::LayoutId("MAP_TEST"),
-            name: "MapTest",
-            width: 5,
-            height: 5,
-            primary_tileset: "gTileset_General",
-            secondary_tileset: "gTileset_General",
-        };
-        let grid = layout.grid(&bytes).unwrap();
-        let runtime = MapRuntime::new(
-            assets::MapId("MAP_TEST"),
-            &header,
-            &events,
-            grid,
-            MetatileAttributeTable::new(&[]),
-            MetatileAttributeTable::new(&[]),
-        );
+        let runtime = flat_map_runtime(5, 5, |_, _| 0);
 
         let mut player = PlayerState::new((2, 2), 3, Direction::South);
         let outcome = player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS);
@@ -1032,24 +1123,7 @@ mod tests {
 
     #[test]
     fn pressing_a_new_direction_from_standstill_turns_without_stepping() {
-        let (bytes, header, events) = flat_runtime(5, 5, |_, _| 0);
-        let layout = assets::MapLayout {
-            id: assets::LayoutId("MAP_TEST"),
-            name: "MapTest",
-            width: 5,
-            height: 5,
-            primary_tileset: "gTileset_General",
-            secondary_tileset: "gTileset_General",
-        };
-        let grid = layout.grid(&bytes).unwrap();
-        let runtime = MapRuntime::new(
-            assets::MapId("MAP_TEST"),
-            &header,
-            &events,
-            grid,
-            MetatileAttributeTable::new(&[]),
-            MetatileAttributeTable::new(&[]),
-        );
+        let runtime = flat_map_runtime(5, 5, |_, _| 0);
 
         let mut player = PlayerState::new((2, 2), 3, Direction::South);
         let outcome = player.step(Some(Direction::East), &runtime, &no_connections, &NO_FLAGS);
@@ -1095,24 +1169,7 @@ mod tests {
 
     #[test]
     fn changing_direction_mid_movement_steps_immediately_without_a_turn_frame() {
-        let (bytes, header, events) = flat_runtime(5, 5, |_, _| 0);
-        let layout = assets::MapLayout {
-            id: assets::LayoutId("MAP_TEST"),
-            name: "MapTest",
-            width: 5,
-            height: 5,
-            primary_tileset: "gTileset_General",
-            secondary_tileset: "gTileset_General",
-        };
-        let grid = layout.grid(&bytes).unwrap();
-        let runtime = MapRuntime::new(
-            assets::MapId("MAP_TEST"),
-            &header,
-            &events,
-            grid,
-            MetatileAttributeTable::new(&[]),
-            MetatileAttributeTable::new(&[]),
-        );
+        let runtime = flat_map_runtime(5, 5, |_, _| 0);
 
         let mut player = PlayerState::new((2, 2), 3, Direction::South);
         assert!(matches!(
@@ -1136,24 +1193,7 @@ mod tests {
 
     #[test]
     fn release_during_transit_does_not_end_the_movement_streak() {
-        let (bytes, header, events) = flat_runtime(5, 5, |_, _| 0);
-        let layout = assets::MapLayout {
-            id: assets::LayoutId("MAP_TEST"),
-            name: "MapTest",
-            width: 5,
-            height: 5,
-            primary_tileset: "gTileset_General",
-            secondary_tileset: "gTileset_General",
-        };
-        let grid = layout.grid(&bytes).unwrap();
-        let runtime = MapRuntime::new(
-            assets::MapId("MAP_TEST"),
-            &header,
-            &events,
-            grid,
-            MetatileAttributeTable::new(&[]),
-            MetatileAttributeTable::new(&[]),
-        );
+        let runtime = flat_map_runtime(5, 5, |_, _| 0);
 
         let mut player = PlayerState::new((2, 2), 3, Direction::South);
         assert!(matches!(
@@ -1181,24 +1221,7 @@ mod tests {
 
     #[test]
     fn releasing_input_resets_to_not_moving_so_the_next_direction_turns_first() {
-        let (bytes, header, events) = flat_runtime(5, 5, |_, _| 0);
-        let layout = assets::MapLayout {
-            id: assets::LayoutId("MAP_TEST"),
-            name: "MapTest",
-            width: 5,
-            height: 5,
-            primary_tileset: "gTileset_General",
-            secondary_tileset: "gTileset_General",
-        };
-        let grid = layout.grid(&bytes).unwrap();
-        let runtime = MapRuntime::new(
-            assets::MapId("MAP_TEST"),
-            &header,
-            &events,
-            grid,
-            MetatileAttributeTable::new(&[]),
-            MetatileAttributeTable::new(&[]),
-        );
+        let runtime = flat_map_runtime(5, 5, |_, _| 0);
 
         let mut player = PlayerState::new((2, 2), 3, Direction::South);
         assert!(matches!(
@@ -1218,24 +1241,7 @@ mod tests {
 
     #[test]
     fn in_transit_step_calls_are_a_no_op() {
-        let (bytes, header, events) = flat_runtime(5, 5, |_, _| 0);
-        let layout = assets::MapLayout {
-            id: assets::LayoutId("MAP_TEST"),
-            name: "MapTest",
-            width: 5,
-            height: 5,
-            primary_tileset: "gTileset_General",
-            secondary_tileset: "gTileset_General",
-        };
-        let grid = layout.grid(&bytes).unwrap();
-        let runtime = MapRuntime::new(
-            assets::MapId("MAP_TEST"),
-            &header,
-            &events,
-            grid,
-            MetatileAttributeTable::new(&[]),
-            MetatileAttributeTable::new(&[]),
-        );
+        let runtime = flat_map_runtime(5, 5, |_, _| 0);
 
         let mut player = PlayerState::new((2, 2), 3, Direction::South);
         assert!(matches!(
@@ -1255,24 +1261,7 @@ mod tests {
 
     #[test]
     fn collision_bit_blocks_the_step_and_leaves_position_unchanged() {
-        let (bytes, header, events) = flat_runtime(5, 5, |_, y| u8::from(y == 3));
-        let layout = assets::MapLayout {
-            id: assets::LayoutId("MAP_TEST"),
-            name: "MapTest",
-            width: 5,
-            height: 5,
-            primary_tileset: "gTileset_General",
-            secondary_tileset: "gTileset_General",
-        };
-        let grid = layout.grid(&bytes).unwrap();
-        let runtime = MapRuntime::new(
-            assets::MapId("MAP_TEST"),
-            &header,
-            &events,
-            grid,
-            MetatileAttributeTable::new(&[]),
-            MetatileAttributeTable::new(&[]),
-        );
+        let runtime = flat_map_runtime(5, 5, |_, y| u8::from(y == 3));
 
         let mut player = PlayerState::new((2, 2), 3, Direction::South);
         let outcome = player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS);
@@ -2000,24 +1989,7 @@ mod tests {
 
     #[test]
     fn stepping_off_the_edge_without_a_connection_is_blocked() {
-        let (bytes, header, events) = flat_runtime(5, 5, |_, _| 0);
-        let layout = assets::MapLayout {
-            id: assets::LayoutId("MAP_TEST"),
-            name: "MapTest",
-            width: 5,
-            height: 5,
-            primary_tileset: "gTileset_General",
-            secondary_tileset: "gTileset_General",
-        };
-        let grid = layout.grid(&bytes).unwrap();
-        let runtime = MapRuntime::new(
-            assets::MapId("MAP_TEST"),
-            &header,
-            &events,
-            grid,
-            MetatileAttributeTable::new(&[]),
-            MetatileAttributeTable::new(&[]),
-        );
+        let runtime = flat_map_runtime(5, 5, |_, _| 0);
 
         let mut player = PlayerState::new((2, 4), 3, Direction::South);
         let outcome = player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS);
@@ -2802,6 +2774,9 @@ mod tests {
 
     /// Leading-foot parity across steps, turns, and rejected polls.
     mod step_parity_tests;
+
+    /// Held-B running: its gates, cadence, and preserved interactions.
+    mod running_tests;
 
     /// `forcedMove` closes only the `T_TILE_CENTER` arm of
     /// `FieldGetPlayerInput`'s gate, so input suppression lasts the landing's
