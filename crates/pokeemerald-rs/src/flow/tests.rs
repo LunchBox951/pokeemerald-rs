@@ -152,7 +152,7 @@ fn should_retry_overworld_load_only_on_a_fresh_confirm_or_skip_edge() {
 ///
 /// No local pack is ever present in this crate's own `cargo test`
 /// environment (`assets-pack/` isn't written by anything in this repo --
-/// see `crate::title::tests::load_default_reports_pack_missing_when_no_pack_is_extracted`
+/// see `crate::title::pack_palette_tests::load_default_reports_pack_missing_when_no_pack_is_extracted`
 /// for the identical guard/rationale), so `OverworldPhase::load_default`
 /// reliably fails here, exercising the real failure path without
 /// `#[ignore]`. If a local pack *is* present, this test steps aside

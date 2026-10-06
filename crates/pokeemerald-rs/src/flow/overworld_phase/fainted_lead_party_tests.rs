@@ -11,7 +11,7 @@ use crate::new_game;
 use super::{ActiveBattle, OverworldPhase};
 
 /// Route 101's slot-0 land table entry -- the same fightable wild species
-/// `crate::flow::wild_encounter::tests` exercises.
+/// `crate::flow::wild_encounter::test_support::WURMPLE` names.
 const WURMPLE: SpeciesId = SpeciesId(290);
 
 /// `SPECIES_TREECKO`/`SLASH`.

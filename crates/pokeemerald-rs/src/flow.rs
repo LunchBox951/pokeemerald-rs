@@ -503,7 +503,11 @@ pub(crate) fn advance_scene(
             let status = intro_scene.tick(intro_printer_input(buttons));
 
             if status == IntroStatus::Finished {
-                match OverworldPhase::load(pack_source, intro_scene.new_game_options()) {
+                match OverworldPhase::load(
+                    pack_source,
+                    intro_scene.new_game_options(),
+                    intro_scene.new_game_identity(),
+                ) {
                     Ok(phase) => {
                         log_new_game_started(&phase);
                         let frame = phase.compose_frame();
@@ -528,7 +532,11 @@ pub(crate) fn advance_scene(
         }
         AppScene::OverworldLoadFailed(intro_scene) => {
             if should_retry_overworld_load(buttons) {
-                match OverworldPhase::load(pack_source, intro_scene.new_game_options()) {
+                match OverworldPhase::load(
+                    pack_source,
+                    intro_scene.new_game_options(),
+                    intro_scene.new_game_identity(),
+                ) {
                     Ok(phase) => {
                         log_new_game_started(&phase);
                         let frame = phase.compose_frame();
