@@ -46,6 +46,7 @@ impl OverworldPhase {
     /// runs before that frame is drawn (`overworld.c:1465-1476`).
     pub(super) const fn take_field_lock(&mut self) {
         self.player.clear_turn_lock();
+        self.pending_turn = None;
     }
 
     /// [`crate::overworld::OverworldScene::compose`] against this phase's

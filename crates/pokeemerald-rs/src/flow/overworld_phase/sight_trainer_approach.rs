@@ -444,6 +444,7 @@ impl OverworldPhase {
             self.player.release_run_pose();
         }
         self.pending_landing = None;
+        self.pending_turn = None;
     }
 
     /// Play one frame of an in-progress sight-trainer approach, if there is
