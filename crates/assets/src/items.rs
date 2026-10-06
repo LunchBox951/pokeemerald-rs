@@ -820,6 +820,19 @@ impl ItemTable {
             .ok_or(AssetError::UnknownItem(id.index()))
     }
 
+    /// Returns the bag pocket upstream `GetItemPocket` selects for `id`.
+    ///
+    /// An index outside the table is sanitized to [`ItemId::NONE`], whose
+    /// pocket is [`Pocket::Items`] (`pokeemerald/src/item.c:865-870,915-917`),
+    /// so unlike [`Self::get`] this never fails.
+    #[must_use]
+    pub fn pocket(&self, id: ItemId) -> Pocket {
+        self.items
+            .get(id.index() as usize)
+            .unwrap_or(&self.items[0])
+            .pocket
+    }
+
     /// Iterates in ascending [`ItemId`] order.
     pub fn iter(&self) -> impl Iterator<Item = &ItemData> {
         self.items.iter()
@@ -954,6 +967,10 @@ mod tests {
         assert_eq!(poke_ball.price, 200);
         assert_eq!(poke_ball.item_type, ItemType(3));
         assert_eq!(poke_ball.secondary_id, 3);
+
+        assert_eq!(table.pocket(ItemId::POKE_BALL), Pocket::PokeBalls);
+        assert_eq!(table.pocket(ItemId(377)), Pocket::Items);
+        assert_eq!(table.pocket(ItemId(u16::MAX)), Pocket::Items);
 
         let potion = get(ItemId::POTION);
         assert_eq!(potion.price, 300);

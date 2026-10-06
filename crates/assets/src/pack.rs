@@ -14,6 +14,7 @@
 mod error;
 mod format;
 mod handles;
+mod starter_chooser;
 
 use std::path::{Path, PathBuf};
 
@@ -23,6 +24,9 @@ use crate::fonts::{FontId, FontImageRef};
 pub use error::PackError;
 pub use format::{DirectoryEntry, EntryKind, FORMAT_VERSION, MAGIC};
 pub use handles::{ImageRef, PaletteRef, TilesetHandle, WindowFrameHandle};
+pub use starter_chooser::{
+    PalettedImage, StarterChooserHandle, StarterPreviewHandle, StarterSpecies,
+};
 
 use format::kind_label;
 
