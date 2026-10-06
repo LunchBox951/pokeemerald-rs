@@ -47,8 +47,9 @@
 //! the one group a song references directly (issue #201) and pads every
 //! other group with `Empty`. This reader does the same: a group some song's
 //! header points at reads [`VoicegroupRoot::addressable_slots`] contiguous
-//! slots; any other reads its `declared_slots` after `starting_note` empty
-//! ones and pads the rest.
+//! slots; any other reads `starting_note + declared_slots` contiguous slots
+//! from its alias address, so a biased group's leading slots are the ToneData
+//! the linker placed before it, and pads the rest.
 
 use assets::{
     DirectSoundMode, DirectSoundSample, DirectSoundVoice, Envelope, KeySplitVoice, NoiseVoice,
