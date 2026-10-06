@@ -10,7 +10,8 @@
 //!
 //! The menu's *internal* state machine -- the `sSaveDialogCallback` chain,
 //! its prompts, and which `TrySavingData` arm each answer reaches -- is
-//! unit-tested against a fake save medium in `crate::start_menu::tests`.
+//! unit-tested against a fake save medium in `crate::start_menu::save_input_tests`
+//! and `crate::start_menu::dialog_timing_tests`.
 
 use platform::{ButtonState, Buttons, GBA_WIDTH};
 
@@ -53,7 +54,7 @@ fn the_start_menu_does_not_open_mid_battle() {
         sp_defense: MAX_IV,
     };
     // Level-50 Treecko with Pound vs a Route 101 Wurmple -- the same
-    // fixture `wild_encounter::tests` fights full battles with.
+    // fixture `wild_encounter::encounter_roll_tests` fights full battles with.
     let lead = BattlePokemon::new(
         &Dex::new(),
         assets::SpeciesId(277),

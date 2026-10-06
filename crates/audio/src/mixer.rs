@@ -445,12 +445,34 @@ fn normalise_s8(sample: i32) -> f32 {
 }
 
 #[cfg(test)]
+#[path = "mixer_test_support.rs"]
+mod test_support;
+
+#[cfg(test)]
 #[expect(
     clippy::cast_precision_loss,
-    clippy::float_cmp,
     reason = "expected values are computed from small integer terms whose casts \
-              are exact at these magnitudes, and silence checks compare \
-              exactly-representable 0.0/-1.0 values on purpose"
+              are exact at these magnitudes"
 )]
 #[path = "mixer_mixing.rs"]
 mod tests;
+
+#[cfg(test)]
+#[expect(
+    clippy::float_cmp,
+    reason = "silence checks compare exactly-representable zero on purpose"
+)]
+#[path = "mixer_tie.rs"]
+mod tie_tests;
+
+#[cfg(test)]
+#[path = "mixer_sweep.rs"]
+mod sweep_tests;
+
+#[cfg(test)]
+#[path = "mixer_reverb.rs"]
+mod reverb_tests;
+
+#[cfg(test)]
+#[path = "mixer_idle_duty.rs"]
+mod idle_duty_tests;

@@ -117,7 +117,7 @@
 //! discards a same-frame interaction — exactly the "consumes the frame's
 //! field input" contract `crate::flow::wild_encounter::field_input_consumed`
 //! applies to any fired warp or a fired encounter (pinned by
-//! `crate::flow::wild_encounter::tests::a_fired_encounter_consumes_the_frames_field_input`).
+//! `crate::flow::wild_encounter::warp_precedence_tests::a_fired_encounter_consumes_the_frames_field_input`).
 //!
 //! **How much of that is *pinned*, and how much is only encoded.** The
 //! wild-encounter half is a real behavioural test: the trigger tile is
@@ -137,7 +137,7 @@
 //! ordering is encoded and unit-pinned, the same treatment
 //! `crate::flow::wild_encounter::arrow_poll_open`'s own equally-unreachable
 //! encounter arm gets in
-//! `crate::flow::wild_encounter::tests::a_fired_encounter_closes_the_arrow_warp_poll`.
+//! `crate::flow::wild_encounter::warp_precedence_tests::a_fired_encounter_closes_the_arrow_warp_poll`.
 //!
 //! # RNG stream
 //!

@@ -1,6 +1,6 @@
 //! Fixtures and input helpers shared by the [`super::OverworldPhase`] tests.
 
-use super::OverworldPhase;
+use super::{OverworldPhase, SyntheticStartMenu};
 use crate::overworld::OverworldScene;
 use assets::{MapEvents, MapHeader, MapId, MapLayout, MetatileCell};
 use engine::event_data::EventData;
@@ -480,4 +480,102 @@ pub(super) fn grass_step_draws(
     let before = rng.state();
     state.check_standard_wild_encounter(MB_TALL_GRASS, header, rng);
     rng.state() != before
+}
+
+/// Slides the player east across an `MB_SLIDE_EAST` tile at `(6, 4)` it
+/// entered facing North, stopping on the landing frame at `(7, 4)` --
+/// the first `T_TILE_CENTER` CB1 off the forced tile, before any
+/// `PlayerStep` poll has run there.
+pub(super) fn phase_on_a_perpendicular_slides_landing_frame() -> OverworldPhase {
+    let scene = crate::overworld::tests::synthetic_scene_with_special_tile(
+        10,
+        10,
+        (6, 4),
+        engine::overworld::metatile_behavior::MB_SLIDE_EAST,
+    );
+    let mut phase = OverworldPhase::for_test(
+        scene,
+        ONE_F,
+        PlayerState::new((6, 5), 3, Direction::North),
+        None,
+    );
+    phase.synthetic_start_menu = SyntheticStartMenu::Builds;
+    for _ in 0..u32::from(WALK_FRAMES_PER_TILE) {
+        phase.step(held(Buttons::UP));
+    }
+    assert_eq!(
+        phase.player.position(),
+        (6, 4),
+        "setup: the held step must have crossed onto the slide tile"
+    );
+    phase.step(ButtonState::default());
+    assert_eq!(
+        phase.player.position(),
+        (7, 4),
+        "setup: the slide must have dispatched east"
+    );
+    for _ in 0..16 {
+        if !phase.player.in_transit() {
+            break;
+        }
+        phase.step(ButtonState::default());
+    }
+    assert!(
+        !phase.player.in_transit(),
+        "setup: the slide crossing must have drained"
+    );
+    assert_eq!(phase.player.facing(), Direction::North);
+    phase
+}
+
+/// Lead construction and inspection for tests, so a test never names the
+/// `party_lead` triad directly (see [`super::lead_owner`]).
+impl OverworldPhase {
+    /// Installs `battler` as an unbacked lead (slot 0, no hidden HP).
+    pub(in crate::flow) fn set_fresh_lead_for_test(&mut self, battler: battle::BattlePokemon) {
+        self.install_fresh_lead(battler);
+    }
+
+    /// Files `record` in `slot` and installs `battler` as its lead, measuring
+    /// the hidden-HP offset against that same pair. The party count and every
+    /// other record are left as they were.
+    pub(in crate::flow) fn set_backed_lead_for_test(
+        &mut self,
+        slot: usize,
+        record: engine::save::Pokemon,
+        battler: battle::BattlePokemon,
+    ) {
+        self.save1.player_party[slot] = record;
+        self.party_lead_slot = slot;
+        self.lead_hp_hidden_by_load =
+            crate::party::hp_hidden_by_load(&battle::Dex::new(), &record, &battler);
+        self.party_lead = Some(battler);
+        self.undecodable_lead_retained = false;
+        self.lead_loan = super::lead_owner::LeadLoan::NotLent;
+    }
+
+    /// Leaves the phase without a lead; saved bytes are not erased.
+    pub(in crate::flow) fn clear_lead_for_test(&mut self) {
+        self.party_lead = None;
+        self.party_lead_slot = 0;
+        self.lead_hp_hidden_by_load = 0;
+        self.undecodable_lead_retained = false;
+        self.lead_loan = super::lead_owner::LeadLoan::NotLent;
+    }
+
+    pub(in crate::flow) fn lead_for_test(&self) -> Option<&battle::BattlePokemon> {
+        self.lead_battler()
+    }
+
+    pub(in crate::flow) fn lead_mut_for_test(&mut self) -> Option<&mut battle::BattlePokemon> {
+        self.lead_battler_mut()
+    }
+
+    /// Asserts a lead is present and backed by saved slot `expected_slot`.
+    pub(in crate::flow) fn assert_lead_at_slot_for_test(&self, expected_slot: usize) {
+        assert!(
+            self.owns_lead_slot(expected_slot),
+            "expected a live lead backed by slot {expected_slot}"
+        );
+    }
 }

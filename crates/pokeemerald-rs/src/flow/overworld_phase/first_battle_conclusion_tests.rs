@@ -100,7 +100,7 @@ fn play_first_battle_to_conclusion(phase: &mut OverworldPhase) {
 /// A deliberately fragile level-1 Treecko (zero Defense IV, Pound only)
 /// whose max HP a level-2 Zigzagoon's Tackle can overkill in one hit from
 /// above the `AI_FirstBattle` flee threshold -- see
-/// `crate::flow::wild_encounter::tests::a_lost_route_101_first_battle_heals_the_lead_instead_of_leaving_it_fainted`'s
+/// `crate::flow::wild_encounter::first_battle_recovery_tests::a_lost_route_101_first_battle_heals_the_lead_instead_of_leaving_it_fainted`'s
 /// own doc comment for the full derivation of why seed `1` reliably
 /// produces [`BattleOutcome::PlayerLost`] with this exact lead.
 fn fragile_treecko_lead() -> BattlePokemon {
