@@ -1,21 +1,27 @@
-//! On-foot movement, map and object queries, collision, warps, wild encounters, and trainer sight.
+//! On-foot movement, map and object queries, collision, warps, wild encounters, trainer sight, and background-event targets.
 
+pub mod background_event;
 pub mod collision;
 pub mod direction;
 pub mod map_runtime;
 pub mod metatile_behavior;
+pub mod metatile_interaction;
 pub mod object_event;
 pub mod player;
 pub mod trainer_sight;
 pub mod warp;
 pub mod wild_encounter;
 
+pub use background_event::{
+    resolve_background_event, BackgroundEventTarget, HiddenItemContext, SecretBaseContext,
+};
 pub use collision::{
     directionally_impassable, elevation_mismatch, elevations_compatible, Collision,
     ELEVATION_MULTI_LEVEL, ELEVATION_TRANSITION,
 };
 pub use direction::Direction;
 pub use map_runtime::{ConnectedMapData, ConnectionCrossing, MapRuntime, NUM_METATILES_IN_PRIMARY};
+pub use metatile_interaction::{classify_metatile_interaction, MetatileInteractionTarget};
 pub use object_event::{
     facing_object_event, initial_facing_direction, object_event_is_in_view,
     object_event_is_visible, trainer_facing_movement_type, visible_object_event_at,

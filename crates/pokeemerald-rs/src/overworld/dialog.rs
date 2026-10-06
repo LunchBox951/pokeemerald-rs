@@ -819,7 +819,7 @@ mod tests {
 
     /// The smallest pack [`NpcDialog::from_pack_at_speed`] accepts: the
     /// standard message box frame and the normal font sheet. Mirrors
-    /// `crate::start_menu::tests::synthetic_start_menu_pack_bytes`'s own
+    /// `crate::start_menu::pack_fixture::synthetic_start_menu_pack_bytes`'s own
     /// fixture.
     fn synthetic_field_dialog_pack_bytes() -> Vec<u8> {
         use crate::pack_test_support::{image_entry, pack_bytes, palette_entry};

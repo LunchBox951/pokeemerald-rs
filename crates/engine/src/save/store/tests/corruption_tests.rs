@@ -248,6 +248,7 @@ fn equal_and_opposite_checksum_byte_mutations_keep_newer_slot_selected() {
         player_gender: PlayerGender::Female,
         player_trainer_id: [0x22; TRAINER_ID_LENGTH],
         special_save_warp_flags: 0,
+        gcn_link_flags: 0,
         encryption_key: 0xA1B2_C3D4,
         options_text_speed: 1,
         options_window_frame_type: 5,
