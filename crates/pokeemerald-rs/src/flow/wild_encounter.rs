@@ -194,4 +194,14 @@ pub(super) fn advance_wild_battle(
 }
 
 #[cfg(test)]
-mod tests;
+mod battle_write_back_tests;
+#[cfg(test)]
+mod encounter_roll_tests;
+#[cfg(test)]
+mod first_battle_recovery_tests;
+#[cfg(test)]
+mod test_support;
+#[cfg(test)]
+mod warp_precedence_tests;
+#[cfg(test)]
+mod white_out_tests;

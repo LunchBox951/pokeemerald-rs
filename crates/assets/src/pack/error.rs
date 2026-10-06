@@ -75,6 +75,13 @@ pub enum PackError {
         /// Bundled palette length.
         palette_len: u16,
     },
+    /// A starter-chooser entry differs from the upstream graphic's shape.
+    MalformedStarterAsset {
+        /// Asset id.
+        id: String,
+        /// What differs from the expected shape.
+        detail: String,
+    },
     /// A raw audio entry failed its schema's structural decode.
     AudioDecode {
         /// Audio asset id.
@@ -163,6 +170,9 @@ impl fmt::Display for PackError {
                 "asset pack: text-window image `{id}` has pixel index {pixel}: its bundled \
                  palette only has {palette_len} colours"
             ),
+            Self::MalformedStarterAsset { id, detail } => {
+                write!(f, "asset pack: starter-chooser entry `{id}` {detail}")
+            }
             Self::AudioDecode { id, source } => {
                 write!(
                     f,
@@ -189,7 +199,8 @@ impl std::error::Error for PackError {
             | Self::MalformedTextWindowPalette { .. }
             | Self::TextWindowImageWrongDimensions { .. }
             | Self::MalformedTextWindowImage { .. }
-            | Self::TextWindowPixelOutsidePalette { .. } => None,
+            | Self::TextWindowPixelOutsidePalette { .. }
+            | Self::MalformedStarterAsset { .. } => None,
         }
     }
 }

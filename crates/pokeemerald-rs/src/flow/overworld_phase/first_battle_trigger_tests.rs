@@ -39,7 +39,7 @@ const UNEXECUTABLE_MOVE: MoveId = MoveId::PURSUIT;
 /// `MAP_ROUTE101`: the layout grid is fabricated, but `map_id` still resolves
 /// to Route 101's *real* generated [`assets::MapEventsTable`] entry -- the
 /// same "real events over a synthetic grid" split
-/// `crate::flow::wild_encounter::tests::route_101_phase` uses for the wild
+/// `crate::flow::wild_encounter::test_support::route_101_phase` uses for the wild
 /// table, here for the coord-event trigger instead. 25x25 is large enough to
 /// place the player next to [`ROUTE_101_TRIGGER_TILE`].
 fn route_101_trigger_phase(player: PlayerState) -> OverworldPhase {
@@ -778,7 +778,7 @@ fn an_aborted_first_battle_still_consumes_the_route_101_trigger() {
 /// fixture really would have rolled.
 #[test]
 fn the_route_101_trigger_suppresses_the_wild_encounter_roll_on_its_own_tile() {
-    // `crate::flow::wild_encounter::tests`' own `ENCOUNTER_SEED`: its first
+    // `crate::flow::wild_encounter::test_support`'s `ENCOUNTER_SEED`: its first
     // draws make the first *rolled* grass step produce a real encounter, so
     // the control below is unambiguous.
     const SEED: u32 = 17;
@@ -916,7 +916,7 @@ fn a_forced_movement_landing_on_the_trigger_tile_must_not_fire_the_coord_event()
 /// data can make a warp and this coord event contend for the same frame; the
 /// precedence is encoded and unit-pinned rather than driven end to end,
 /// exactly as
-/// `crate::flow::wild_encounter::tests::a_fired_encounter_closes_the_arrow_warp_poll`
+/// `crate::flow::wild_encounter::warp_precedence_tests::a_fired_encounter_closes_the_arrow_warp_poll`
 /// pins `arrow_poll_open`'s own equally-unreachable encounter arm.
 ///
 /// What this test *does* pin is that reachability argument itself — the

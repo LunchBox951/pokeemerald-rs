@@ -1,6 +1,5 @@
-//! Synthetic [`assets::pack::AssetPack`] fixtures shared by the scene test
-//! suites [`crate::main_menu::tests`], [`crate::intro::tests`], and
-//! [`crate::start_menu::palette_tests`].
+//! Synthetic [`assets::pack::AssetPack`] fixtures shared by the crate's scene
+//! test suites.
 
 use pack_format::{PackEntry, PackWriter};
 use rendering::Bgr555;

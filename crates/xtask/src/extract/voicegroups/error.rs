@@ -66,6 +66,11 @@ pub(crate) enum VoiceGroupError {
         label: String,
         expanded_len: usize,
     },
+    KeySplitTableNoteOutOfRange {
+        label: String,
+        starting_note: u8,
+        expanded_len: usize,
+    },
     DanglingVoiceGroupReference {
         referrer: String,
         target: String,
@@ -201,6 +206,16 @@ impl fmt::Display for VoiceGroupError {
                 f,
                 "keysplit table `{label}`: expanded length {expanded_len} exceeds the maximum of {}",
                 super::VOICE_SLOT_COUNT
+            ),
+            Self::KeySplitTableNoteOutOfRange {
+                label,
+                starting_note,
+                expanded_len,
+            } => write!(
+                f,
+                "keysplit table `{label}`: starting_note {starting_note} + {expanded_len} entries \
+                 runs past the last playable note {}",
+                super::VOICE_SLOT_COUNT - 1
             ),
             Self::DanglingVoiceGroupReference { referrer, target } => write!(
                 f,
