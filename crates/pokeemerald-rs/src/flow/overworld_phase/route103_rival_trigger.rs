@@ -6,7 +6,7 @@
 //! doc style, trigger-then-driver pair) with one structural difference: the
 //! Route 101 rescue is a *coord-event* trigger (stepping onto a tile), while
 //! this one is an *interaction* trigger (facing the rival and pressing A) --
-//! [`super::step::OverworldPhase::interaction_tokens_this_frame`]'s own
+//! [`super::OverworldPhase::interaction_tokens_this_frame`]'s own
 //! `InteractionOutcome` split is what keeps this from colliding with Mom's
 //! ordinary NPC dialog path.
 //!
@@ -286,7 +286,7 @@ pub(super) fn setup_rival_gfx_id_on_transition(
 /// Any other map reports `false` on the strength of [`ROUTE_103`] alone, so
 /// no other bundled map's object event can accidentally match
 /// [`RIVAL_SCRIPT`] (none currently does, but the check does not rely on
-/// that). [`super::step::OverworldPhase::find_interaction_outcome`] is the
+/// that). [`super::OverworldPhase::find_interaction_outcome`] is the
 /// only caller: [`crate::overworld::npc_scripts::script_text`] never
 /// recognizes [`RIVAL_SCRIPT`] as a dialog (it is deliberately out of that
 /// module's own bounded table), so without this check the rival would
