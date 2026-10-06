@@ -125,7 +125,7 @@ pub(crate) enum PartyError {
     Substructures(engine::save::PokemonError),
     /// The decoded species, level, or moveset was not battle-ready.
     Battler(battle::BattleError),
-    /// The record is an egg -- never a battler, upstream's own
+    /// The record is an egg or Bad Egg -- never a battler, upstream's own
     /// `SetBattlePartyIds` egg exclusion (`pokeemerald/src/battle_controllers.c:601-602`).
     Egg,
 }
@@ -624,18 +624,19 @@ pub(crate) fn from_save_pokemon(dex: &Dex, saved: &Pokemon) -> Result<BattlePoke
     Ok(mon)
 }
 
-/// Whether `record`'s secure-region IV word carries Emerald's egg flag,
-/// checked ahead of decode since [`from_save_pokemon`] itself does not
-/// reject an egg.
-fn record_is_egg(record: &Pokemon) -> bool {
-    record
-        .box_data
-        .substructures()
-        .is_ok_and(|substructures| read_u32(&substructures.misc, MISC_IV_WORD) & IS_EGG_BIT != 0)
+/// Whether `record` is an egg or Bad Egg: the unencrypted header's
+/// `isBadEgg` bit, or the secure-region IV word's egg flag. Checked ahead
+/// of decode since [`from_save_pokemon`] itself does not reject either, and
+/// the header bit survives a valid secure checksum.
+fn record_is_egg_or_bad_egg(record: &Pokemon) -> bool {
+    record.box_data.is_bad_egg()
+        || record.box_data.substructures().is_ok_and(|substructures| {
+            read_u32(&substructures.misc, MISC_IV_WORD) & IS_EGG_BIT != 0
+        })
 }
 
 /// Selects which saved slot is the active battler on continue: the first
-/// non-egg, non-fainted slot in `party` -- `SetBattlePartyIds`'s
+/// non-egg, non-Bad-Egg, non-fainted slot in `party` -- `SetBattlePartyIds`'s
 /// player-side scan (`pokeemerald/src/battle_controllers.c:585-606`,
 /// called by `InitBattleControllers` at `:97`). Falls back to slot 0's own
 /// decode when nothing qualifies, fainted or not -- but never to an egg
@@ -655,7 +656,7 @@ pub(crate) fn select_active_battler(
     party: &[Pokemon],
 ) -> Result<(usize, BattlePokemon), PartyError> {
     for (slot, record) in party.iter().enumerate() {
-        if record_is_egg(record) {
+        if record_is_egg_or_bad_egg(record) {
             continue;
         }
         match from_save_pokemon(dex, record) {
@@ -666,7 +667,7 @@ pub(crate) fn select_active_battler(
             Err(err) => eprintln!("continue: slot {slot}'s record {err} -- skipped"),
         }
     }
-    if record_is_egg(&party[0]) {
+    if record_is_egg_or_bad_egg(&party[0]) {
         return Err(PartyError::Egg);
     }
     from_save_pokemon(dex, &party[0]).map(|mon| (0, mon))
