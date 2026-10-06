@@ -958,6 +958,12 @@ mod oldale_reposition_tests;
 #[cfg(test)]
 mod opponent_ot_id_tests;
 #[cfg(test)]
+mod route103_rival_driver_tests;
+#[cfg(test)]
+mod route103_rival_frame_order_tests;
+#[cfg(test)]
+mod route103_rival_test_support;
+#[cfg(test)]
 mod route103_rival_tests;
 #[cfg(test)]
 mod sight_trainer_tests;

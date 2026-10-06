@@ -169,7 +169,7 @@
 //! merely guarded (`(test-ratchet)`; see
 //! `crate::flow::wild_encounter::first_battle_recovery_tests::a_lost_route_101_first_battle_heals_the_lead_instead_of_leaving_it_fainted`
 //! and
-//! `super::route103_rival_tests::a_lost_route_101_first_battle_still_lets_the_healed_lead_fight_the_rival`
+//! `super::route103_rival_driver_tests::a_lost_route_101_first_battle_still_lets_the_healed_lead_fight_the_rival`
 //! for the replacement tests and their own doc comments for exactly what
 //! they retire).
 //!
