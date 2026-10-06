@@ -117,7 +117,7 @@ fn a_missed_accuracy_check_still_costs_its_one_draw() {
     let dex = Dex::new();
     let attacker = mon(&dex, WURMPLE, 10, vec![STUN_SPORE]);
     let defender = mon(&dex, ZIGZAGOON, 10, vec![TACKLE]);
-    // Stun Spore's 75 accuracy: roll 96 (95 % 100 + 1) exceeds the threshold.
+    // Draw 95 rolls 95 % 100 + 1 = 96, above Stun Spore's 75 accuracy.
     let mut rng = SequenceRng::new([95]);
     let outcome = resolve_paralyze_move(&dex, STUN_SPORE, &attacker, &defender, &mut rng).unwrap();
     assert_eq!(outcome, ParalyzeOutcome::Miss);
@@ -227,7 +227,7 @@ fn a_healthy_synchronize_defender_is_admitted_and_paralysed() {
     assert_eq!(
         outcome,
         ParalyzeOutcome::Applied,
-        "ensure_admissible no longer refuses Synchronize; the caller in \
+        "Synchronize does not refuse the move; the caller in \
          crate::battle::execute reflects the status at move end"
     );
     assert_eq!(
@@ -255,9 +255,8 @@ fn an_already_paralysed_synchronize_defender_is_admitted_not_refused() {
     assert_eq!(rng.draws(), 0, "the exit precedes accuracycheck");
 }
 
-/// Why [`ensure_admissible`]'s type-immunity arm carries no fixture: no
-/// Synchronize holder in the species table is immune to a paralyze move, so
-/// the guard that would admit one is unreachable through real data.
+/// No Synchronize holder in the species table is type-immune to a paralyze
+/// move, so no fixture can exercise that combination.
 #[test]
 fn no_synchronize_holder_is_type_immune_to_a_paralyze_move() {
     use assets::{Effectiveness, SpeciesTable};
@@ -306,8 +305,8 @@ fn a_paralysed_attacker_is_admitted_against_a_synchronize_defender() {
     assert_eq!(
         outcome,
         ParalyzeOutcome::Applied,
-        "ensure_admissible no longer reads the attacker's status at all; the \
-         reflection itself is resolved separately by resolve_synchronize_reflection"
+        "the attacker's status does not affect the defender's outcome; the \
+         reflection is resolved separately by resolve_synchronize_reflection"
     );
     assert_eq!(rng.draws(), 1, "only accuracycheck draws");
 }
@@ -437,9 +436,9 @@ fn a_hustle_attacker_lowers_the_threshold_of_a_physical_paralyze_move() {
     let attacker = mon(&dex, REMORAID, 10, vec![GLARE]);
     assert_eq!(attacker.ability(), assets::AbilityId::HUSTLE);
     let defender = mon(&dex, ZIGZAGOON, 10, vec![TACKLE]);
-    // Glare's 75 accuracy hits an ordinary attacker on roll 65, but Hustle's
-    // physical-move guard lowers the threshold to 75 * 80 / 100 = 60, which
-    // that roll exceeds (`battle_script_commands.c:1156-1157`).
+    // Draw 64 rolls 65: within Glare's 75 accuracy, but above the 75 * 80 / 100
+    // = 60 threshold Hustle sets for physical moves
+    // (`battle_script_commands.c:1156-1157`).
     let mut rng = SequenceRng::new([64]);
     let outcome = resolve_paralyze_move(&dex, GLARE, &attacker, &defender, &mut rng).unwrap();
     assert_eq!(outcome, ParalyzeOutcome::Miss);
@@ -452,8 +451,8 @@ fn hustle_does_not_lower_the_threshold_of_a_special_paralyze_move() {
     let attacker = mon(&dex, REMORAID, 10, vec![STUN_SPORE]);
     assert_eq!(attacker.ability(), assets::AbilityId::HUSTLE);
     let defender = mon(&dex, ZIGZAGOON, 10, vec![TACKLE]);
-    // Stun Spore is Grass, so Hustle's physical-only guard leaves its 75
-    // threshold untouched and roll 65 still hits.
+    // Stun Spore is Grass, so Hustle leaves its 75 threshold unchanged and
+    // roll 65 still hits.
     let mut rng = SequenceRng::new([64]);
     let outcome = resolve_paralyze_move(&dex, STUN_SPORE, &attacker, &defender, &mut rng).unwrap();
     assert_eq!(outcome, ParalyzeOutcome::Applied);
@@ -498,9 +497,8 @@ fn a_marvel_scale_defender_is_newly_paralysed_not_refused() {
     assert_eq!(rng.draws(), 1, "only accuracycheck draws");
 }
 
-/// Every ability this crate admits for a fresh paralysis -- the stat-reading
-/// pair at the accessor boundary, and Shed Skin's end-turn cure draw -- is
-/// admitted for every paralyzing move, not just one.
+/// These three abilities do not block any paralyze move: the Guts, Marvel
+/// Scale, and Shed Skin fixture species are paralysed by all three moves.
 #[test]
 fn every_paralyze_move_admits_every_modelled_ability() {
     let dex = Dex::new();
