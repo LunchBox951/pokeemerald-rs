@@ -40,7 +40,7 @@ impl SceneSprites {
         let mut bytes = avatar::pack_people_sheet_frames("sprite/*/walking", sprite_image)?;
         let bindings =
             npc::resolve_bindings(pack, player, events.object_events, &mut bytes, event_data)?;
-        #[allow(
+        #[expect(
             clippy::cast_possible_truncation,
             reason = "a scene contains only a small number of NPC sheets"
         )]
