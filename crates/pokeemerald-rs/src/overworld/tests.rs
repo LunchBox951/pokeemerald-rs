@@ -1813,7 +1813,7 @@ fn real_pack_route_103_rival_binds_to_the_opposite_protagonists_sheet() {
 /// background-NPC `graphics_id` really decodes against the real extracted
 /// pack -- not just that [`super::npc::resolve_sprite_source`] names a
 /// `sprite/<path>` id (already pinned pack-free by
-/// `npc::tests::resolve_sprite_source_resolves_the_oldale_and_route_103_background_npcs`),
+/// `npc::binding_tests::resolve_sprite_source_resolves_the_oldale_and_route_103_background_npcs`),
 /// but that `AssetPack::sprite` actually finds that entry and
 /// `avatar::pack_people_sheet_frames` accepts its real dimensions (any
 /// mismatch is a real, real-pack-only failure mode --
