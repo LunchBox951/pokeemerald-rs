@@ -1,24 +1,18 @@
 //! Locating the title screen.
 //!
-//! The graphics and tilemaps are ordinary: every one is an LZ77 stream, so
-//! [`super::images`] and a compressed search settle them.
+//! Graphics and tilemaps are LZ77 streams, located through [`super::images`]
+//! and a compressed search.
 //!
-//! The palettes are not. `gTitleScreenBgPalettes` concatenates the logo's
-//! palette with the rayquaza/clouds palette, so the logo palette has no
-//! boundary of its own to search for: it is simply what sits immediately
-//! before the rayquaza palette. [`locate_trimmed_palette`] finds it that
-//! way, walking cuts longest-first.
+//! `gTitleScreenBgPalettes` concatenates the logo palette and the
+//! rayquaza/clouds palette, so the logo palette is located as whatever sits
+//! immediately before the rayquaza palette ([`locate_trimmed_palette`]),
+//! trying cuts longest-first.
 //!
-//! The walk is what it is because the two ends disagreed. Upstream's build
-//! rule cuts the logo palette to 224 colours
-//! (`graphics_file_rules.mk`'s `-num_colors 224`) while its `.pal` file
-//! holds 256, the last 32 of them black, and `cargo xtask extract` used to
-//! emit all 256. It now honours the cut
-//! (`xtask::extract::scope::TITLE_SCREEN_PALETTE_CUTS`), so the pack and the ROM
-//! agree and the walk settles on its first candidate. It is kept rather
-//! than replaced by an exact match: it is the check that the palette really
-//! is adjacent, and it still reports honestly if upstream's rule changes
-//! again.
+//! Upstream's build rule cuts the logo palette to 224 colours
+//! (`graphics_file_rules.mk`'s `-num_colors 224`) while its `.pal` holds 256
+//! with the last 32 black. `xtask::extract::scope::TITLE_SCREEN_PALETTE_CUTS`
+//! applies the same cut, so the first candidate normally matches. The walk
+//! stays as the adjacency check and still reports a changed upstream cut.
 
 use rom_import::Encoding;
 
@@ -65,7 +59,7 @@ pub fn locate(
     })
 }
 
-/// Locate the three `title/raw/*` tile arrangements, all LZ77 streams.
+/// Locate the `title/raw/*` tilemaps, all LZ77 streams.
 fn locate_tilemaps(
     ctx: &Context<'_>,
     report: &mut Vec<ReportLine>,
@@ -137,8 +131,8 @@ fn locate_palettes(
 
 /// What a linker map should say at one title palette's address.
 ///
-/// The logo palette *is* `gTitleScreenBgPalettes`, and the rayquaza/clouds
-/// palette sits 224 colours inside it, so only the first is a symbol.
+/// The logo palette starts `gTitleScreenBgPalettes` and the rayquaza/clouds
+/// palette sits inside it, so only the logo palette has a symbol of its own.
 fn palette_symbol(id: &str) -> SymbolExpectation {
     match id {
         ADJACENT_PALETTE => SymbolExpectation::Interior,
@@ -148,8 +142,8 @@ fn palette_symbol(id: &str) -> SymbolExpectation {
         "title/palette/press_start" => {
             SymbolExpectation::Exact("gTitleScreenPressStartPal".to_owned())
         }
-        // `sUnusedUnknownPal` is a `static` with no live caller; assert
-        // only that a symbol starts there.
+        // `sUnusedUnknownPal` is a `static` with no caller; assert only that
+        // some symbol starts there.
         _ => SymbolExpectation::Unnamed,
     }
 }
@@ -165,8 +159,7 @@ fn locate_trimmed_palette(
     let asset = ctx.pack.get(TRIMMED_PALETTE)?;
     let (payload, pack_colors) = asset.palette_payload(TRIMMED_PALETTE)?;
 
-    // Walk the possible cuts, longest first: the ROM holds some prefix of
-    // the pack's colours, ending where the next palette begins.
+    // The ROM holds a prefix of the pack's colours; the rest must be black.
     for colors in (1..=pack_colors).rev() {
         let bytes = usize::from(colors) * 2;
         let Some(addr) = adjacent.checked_sub(u32::from(colors) * 2) else {
