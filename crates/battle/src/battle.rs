@@ -4,7 +4,7 @@
 //! and trainer parties. An accepted turn chooses the opponent's action before
 //! resolving a run or move order, skips queued actions once either battler
 //! faints, settles the knockouts that leaves, and then applies end-of-turn
-//! residuals in that same turn order.
+//! residuals in an end-turn order rebuilt from current Speed.
 //!
 //! Construction consumes a turn-number draw and a conditional Speed-tie draw.
 //! Each accepted turn consumes another turn-number draw before opponent action
@@ -124,7 +124,7 @@ pub struct Battle {
     kind: BattleKind,
     turn_counter: u8,
     turn_has_started: bool,
-    pending_residual_order: Option<Order>,
+    pending_residual_selection: Option<ChosenMoves>,
     /// `gCurrentMove` (`pokeemerald/include/battle.h`): the most recently
     /// attempted move, `MOVE_NONE` before any has been. A forced trainer
     /// replacement's most-damage fallback reads this stale value as its
@@ -138,6 +138,38 @@ enum BattleKind {
     Wild,
     FirstBattle,
     Trainer(TrainerContext),
+}
+
+/// What one battler selected this turn, as `GetWhoStrikesFirst(.., FALSE)`
+/// still sees it when the end-turn pass rebuilds its order: the chosen move
+/// position, read from whichever battler holds it at that point, so a faint
+/// replacement or a spent slot changes the priority
+/// (`pokeemerald/src/battle_util.c:1199`-`:1210`,
+/// `pokeemerald/src/battle_main.c:4690`-`:4748`).
+#[derive(Debug, Clone, Copy)]
+enum Selection {
+    /// A run or flee: no move is selected.
+    NoMove,
+    /// The move slot chosen at selection.
+    Slot(usize),
+    /// A forced Struggle. Upstream keeps the retained slot here; this crate
+    /// does not carry it, so Struggle's own priority stands in.
+    Struggle,
+}
+
+/// Both battlers' selections. Only the selection is retained from the action
+/// phase, never which battler won it.
+#[derive(Debug, Clone, Copy)]
+struct ChosenMoves {
+    player: Selection,
+    enemy: Selection,
+}
+
+/// A resolved priority pair for one comparison.
+#[derive(Debug, Clone, Copy)]
+struct ResidualPriorities {
+    player: i8,
+    enemy: i8,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -297,7 +329,7 @@ impl Battle {
             },
             turn_counter: 0,
             turn_has_started: false,
-            pending_residual_order: None,
+            pending_residual_selection: None,
             last_move_used: MOVE_NONE,
         })
     }
@@ -394,7 +426,7 @@ impl Battle {
             kind: BattleKind::Trainer(TrainerContext::new(trainer, data, party)),
             turn_counter: 0,
             turn_has_started: false,
-            pending_residual_order: None,
+            pending_residual_selection: None,
             last_move_used: MOVE_NONE,
         })
     }
@@ -514,13 +546,13 @@ impl Battle {
             // Upstream's yes/no box sits inside `HandleFaintedMonActions`,
             // which every path to the residual pass crosses first
             // (`src/battle_util.c:1912`-`:1923`).
-            if let Some(order) = self.pending_residual_order.take() {
+            if let Some(chosen) = self.pending_residual_selection.take() {
                 // Upstream zeroes `gCurrentMove` as each action closes, before
                 // the residual pass runs, regardless of a move-learn prompt
                 // deferring that pass to this later call
                 // (`pokeemerald/src/battle_util.c:658`-`:671`).
                 self.last_move_used = MOVE_NONE;
-                self.residual_effects(order, &mut events, rng);
+                self.residual_effects(chosen, &mut events, rng)?;
                 self.handle_fainted_mons(&mut events)?;
             }
         }
@@ -615,22 +647,34 @@ impl Battle {
         self.start_turn(rng);
         let enemy_action = self.choose_enemy_action(rng)?;
 
-        let order = match player_action {
+        let chosen = ChosenMoves {
+            player: match player_action {
+                ValidatedPlayerAction::UseMove {
+                    slot: Some(slot), ..
+                } => Selection::Slot(slot),
+                ValidatedPlayerAction::UseMove { slot: None, .. } => Selection::Struggle,
+                ValidatedPlayerAction::Run => Selection::NoMove,
+            },
+            enemy: match enemy_action {
+                EnemyAction::Move(slot) => Selection::Slot(slot),
+                EnemyAction::Struggle => Selection::Struggle,
+                EnemyAction::Flee => Selection::NoMove,
+            },
+        };
+        let priorities = self.priorities_of(chosen)?;
+        match player_action {
             ValidatedPlayerAction::UseMove { slot, move_id } => {
-                self.resolve_move_exchange(slot, move_id, enemy_action, rng, events)?
+                self.resolve_move_exchange(slot, move_id, priorities, enemy_action, rng, events)?;
             }
             ValidatedPlayerAction::Run => {
                 self.resolve_run_attempt(enemy_action, rng, events)?;
                 if self.outcome.is_some() {
                     return Ok(());
                 }
-                // A chosen run always takes the first slot in
-                // `gBattlerByTurnOrder` (`src/battle_main.c:4797`-`:4808`).
-                Order::AttackerFirst
             }
-        };
+        }
 
-        self.pass_turn(order, events, rng)
+        self.pass_turn(chosen, events, rng)
     }
 
     fn validate_player_action(
@@ -744,27 +788,34 @@ impl Battle {
         self.resolve_enemy_action(enemy_action, rng, events)
     }
 
+    /// Priorities of the two selections against the battlers as they stand
+    /// now; a missing slot reads as no move.
+    fn priorities_of(&self, chosen: ChosenMoves) -> Result<ResidualPriorities, BattleError> {
+        let priority = |selection: Selection, battler: &BattlePokemon| match selection {
+            Selection::NoMove => Ok(NO_MOVE_PRIORITY),
+            Selection::Slot(slot) => battler.moves().get(slot).map_or(Ok(NO_MOVE_PRIORITY), |m| {
+                self.dex.move_data(m.move_id).map(|data| data.priority)
+            }),
+            Selection::Struggle => self.dex.move_data(STRUGGLE).map(|data| data.priority),
+        };
+        Ok(ResidualPriorities {
+            player: priority(chosen.player, &self.player)?,
+            enemy: priority(chosen.enemy, &self.enemy)?,
+        })
+    }
+
     fn resolve_move_exchange(
         &mut self,
         player_slot: Option<usize>,
         player_move: MoveId,
+        priorities: ResidualPriorities,
         enemy_action: EnemyAction,
         rng: &mut impl BattleRng,
         events: &mut Vec<BattleEvent>,
-    ) -> Result<Order, BattleError> {
-        let player_priority = self.dex.move_data(player_move)?.priority;
-        let enemy_priority = match enemy_action {
-            EnemyAction::Move(slot) => {
-                self.dex
-                    .move_data(self.enemy.moves()[slot].move_id)?
-                    .priority
-            }
-            EnemyAction::Struggle => self.dex.move_data(STRUGGLE)?.priority,
-            EnemyAction::Flee => NO_MOVE_PRIORITY,
-        };
+    ) -> Result<(), BattleError> {
         let order = resolve_order(
-            player_priority,
-            enemy_priority,
+            priorities.player,
+            priorities.enemy,
             self.player.speed_for_turn_order(),
             self.enemy.speed_for_turn_order(),
             rng,
@@ -784,7 +835,7 @@ impl Battle {
                 }
             }
         }
-        Ok(order)
+        Ok(())
     }
 
     fn both_battlers_can_act(&self) -> bool {
@@ -793,7 +844,7 @@ impl Battle {
 
     fn pass_turn(
         &mut self,
-        order: Order,
+        chosen: ChosenMoves,
         events: &mut Vec<BattleEvent>,
         rng: &mut impl BattleRng,
     ) -> Result<(), BattleError> {
@@ -802,27 +853,39 @@ impl Battle {
         // residual pass (`src/battle_main.c:549`, `:3960`-`:3968`).
         self.handle_fainted_mons(events)?;
         if self.player.pending_move_learn().is_some() {
-            self.pending_residual_order = Some(order);
+            self.pending_residual_selection = Some(chosen);
             return Ok(());
         }
         // Upstream zeroes `gCurrentMove` as each action closes, before the
         // residual pass runs (`pokeemerald/src/battle_util.c:658`-`:671`).
         self.last_move_used = MOVE_NONE;
-        self.residual_effects(order, events, rng);
+        self.residual_effects(chosen, events, rng)?;
         self.handle_fainted_mons(events)
     }
 
     fn residual_effects(
         &mut self,
-        order: Order,
+        chosen: ChosenMoves,
         events: &mut Vec<BattleEvent>,
         rng: &mut impl BattleRng,
-    ) {
+    ) -> Result<(), BattleError> {
         if self.outcome.is_some() {
-            return;
+            return Ok(());
         }
-        // `DoBattlerEndTurnEffects` walks `gBattlerByTurnOrder` -- this turn's
-        // own move order -- and within each battler's pass reaches
+        // `DoFieldEndTurnEffects` rebuilds `gBattlerByTurnOrder` from battler
+        // identity and compares the pair afresh, at the battlers' current
+        // Speed, so a Speed-stage change or a surviving tie is re-decided
+        // rather than inherited from the action phase
+        // (`src/battle_util.c:1199`-`:1210`).
+        let priorities = self.priorities_of(chosen)?;
+        let order = resolve_order(
+            priorities.player,
+            priorities.enemy,
+            self.player.speed_for_turn_order(),
+            self.enemy.speed_for_turn_order(),
+            rng,
+        );
+        // `DoBattlerEndTurnEffects` walks that rebuilt order and within each battler's pass reaches
         // ENDTURN_ABILITIES (Shed Skin) before ENDTURN_POISON, and
         // ENDTURN_POISON before ENDTURN_CHARGE
         // (`src/battle_util.c:1442`-`:1474`, `:1494`-`:1535`).
@@ -855,6 +918,7 @@ impl Battle {
                 }
             }
         }
+        Ok(())
     }
 
     fn fainting_decides_the_battle(&self, is_player: bool) -> bool {
@@ -1305,7 +1369,7 @@ mod tests {
             kind: BattleKind::Trainer(trainer),
             turn_counter: 0,
             turn_has_started: false,
-            pending_residual_order: None,
+            pending_residual_selection: None,
             last_move_used: MOVE_NONE,
         };
         (battle, player_max_hp, player_move_max_pp)
