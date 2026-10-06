@@ -398,7 +398,10 @@ fn objwin_write_time_mask_survives_a_flag_only_priority_overwrite() {
 /// and an unmasked one (x=0). `window_effects` is the OBJWIN effects bit,
 /// `target1` whether the BG is target 1, `win0` whether WIN0 covers the mask.
 /// One OBJWIN-over-BG scenario; the independent switches are plain flags.
-#[allow(clippy::struct_excessive_bools)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent scenario switches of one test fixture, not a state machine"
+)]
 #[derive(Clone, Copy)]
 struct BgCase {
     affine: bool,
