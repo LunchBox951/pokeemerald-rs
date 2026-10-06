@@ -25601,7 +25601,7 @@
     "src/data/object_events/object_event_anims.h": {
       "artifacts": {
         "sAnimTable_BrendanMayNormal": {
-          "reason": "Facing and Go/GoFast frame selection alternates the leading foot across completed walking steps, standstill turns, and dispatched forced crossings, tracked by PlayerState (issue #1558). A finished slide holds its paused foot for the next dispatched crossing. East mirrors West. Collision-bump (walk-in-place) animation is not modeled, so a blocked step leaves the parity unchanged; this is deferred.",
+          "reason": "Facing and Go/GoFast frame selection alternates the leading foot across completed walking steps, standstill turns, and dispatched forced crossings, tracked by PlayerState (issue #1558). Ordinary Go crossings show eight presented forward-foot frames then eight standing frames under tick-before-render ordering, covered in all four directions (issue #1791). A finished slide holds its paused foot for the next dispatched crossing. East mirrors West. Collision-bump (walk-in-place) animation is not modeled, so a blocked step leaves the parity unchanged; this is deferred.",
           "rust_target": "crates/pokeemerald-rs/src/overworld/avatar.rs",
           "spec": "I-3",
           "status": "rewritten"
