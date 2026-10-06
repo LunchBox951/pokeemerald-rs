@@ -373,9 +373,8 @@ mod tests {
         )
     }
 
-    /// Production polls input, ticks, then composes, so the presented frames
-    /// are progress 1..=16: eight with the forward foot, then eight standing
-    /// (`sAnim_Go*` hold each pose 8 frames, `object_event_anims.h:202-235`).
+    /// Each Go pose is held 8 presented frames, ticking before composing
+    /// (`sAnim_Go*`, `object_event_anims.h:202-235`).
     #[test]
     fn frame_for_draws_eight_foot_frames_then_eight_standing_frames_in_every_direction() {
         let (bytes, header, events) = flat_test_map();
