@@ -1,11 +1,7 @@
 //! The running sheet and `sAnim_Run*` timing for a held-B crossing.
 //!
-//! `sPicTable_{Brendan,May}Normal` append the running cells after the nine
-//! walking cells (`object_event_pic_tables.h:992-1011`), and
-//! `sAnim_Run{South,North,West,East}` reference them as 9..=17
-//! (`object_event_anims.h:346-379`), so a running sheet's local cells line up
-//! one-for-one with the walking sheet's: neutral south/north/west, then two
-//! feet per facing. Only the tile bank differs, and East flips West's cells.
+//! A running sheet's local cells mirror the walking sheet's one-for-one
+//! (`object_event_pic_tables.h:992-1011`, `object_event_anims.h:346-379`).
 
 use engine::overworld::PlayerState;
 
