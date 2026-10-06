@@ -340,6 +340,50 @@ fn a_whole_tileset_reads_into_entries() {
 }
 
 #[test]
+fn raw_tiles_declared_on_a_compressed_struct_are_refused() {
+    static PROFILE: [TilesetRoot; 1] = [TilesetRoot {
+        tiles: ImageRoot {
+            encoding: Encoding::Raw,
+            ..TILESET.tiles
+        },
+        ..TILESET
+    }];
+    let result = run_with(fixture(), &PROFILE);
+    assert!(
+        matches!(
+            result,
+            Err(ImportError::StructMismatch {
+                root: "t",
+                field: "Tileset.isCompressed"
+            })
+        ),
+        "expected a refusal, got {:?}",
+        result.map(|bytes| bytes.len())
+    );
+}
+
+#[test]
+fn lz77_tiles_declared_on_a_raw_struct_are_refused() {
+    static PROFILE: [TilesetRoot; 1] = [TilesetRoot {
+        is_compressed: false,
+        ..TILESET
+    }];
+    let raw = fixture().write(STRUCT, &[0]).write(TILES, &tile_bytes());
+    let result = run_with(raw, &PROFILE);
+    assert!(
+        matches!(
+            result,
+            Err(ImportError::StructMismatch {
+                root: "t",
+                field: "Tileset.isCompressed"
+            })
+        ),
+        "expected a refusal, got {:?}",
+        result.map(|bytes| bytes.len())
+    );
+}
+
+#[test]
 fn a_struct_bool_outside_zero_or_one_is_refused() {
     let err = run(fixture().write(STRUCT, &[2])).unwrap_err();
     assert!(matches!(

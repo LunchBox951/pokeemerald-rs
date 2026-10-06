@@ -25,6 +25,7 @@ const OPTIONS_TEXT_SPEED_SHIFT: u32 = 0;
 const OPTIONS_TEXT_SPEED_MASK: u16 = 0x07 << OPTIONS_TEXT_SPEED_SHIFT;
 const OPTIONS_WINDOW_FRAME_TYPE_SHIFT: u32 = 3;
 const OPTIONS_WINDOW_FRAME_TYPE_MASK: u16 = 0x1F << OPTIONS_WINDOW_FRAME_TYPE_SHIFT;
+const GCN_LINK_FLAGS_OFFSET: usize = 0xA8;
 const ENCRYPTION_KEY_OFFSET: usize = 0xAC;
 
 const POSITION_OFFSET: usize = 0x00;
@@ -269,6 +270,11 @@ pub struct SaveBlock2 {
     /// [`Self::clear_continue_game_warp`]); the whole byte is kept so every
     /// sibling flag survives a decode and re-encode untouched.
     pub special_save_warp_flags: u8,
+    /// Raw `gcnLinkFlags` word (`pokeemerald/include/global.h:531`). Only
+    /// [`Self::set_unlocked_pokedex_flags`] writes it; every other bit is kept
+    /// so a decode and re-encode leaves it untouched. Seen and caught records
+    /// live elsewhere.
+    pub gcn_link_flags: u32,
     /// Key used to serialize money and item quantities.
     pub encryption_key: u32,
     /// `optionsTextSpeed` (`pokeemerald/include/global.h:519`): the
@@ -297,6 +303,16 @@ impl SaveBlock2 {
     /// `specialSaveWarpFlags` bit asking the next continue to land at
     /// `SaveBlock1::continue_game_warp`.
     pub const CONTINUE_GAME_WARP: u8 = 1 << 0;
+
+    /// The `gcnLinkFlags` bits `SetUnlockedPokedexFlags` sets: bits 0-5 and 15
+    /// (`pokeemerald/src/save_location.c:125-133`).
+    pub const UNLOCKED_POKEDEX_FLAGS: u32 = 0x0000_803F;
+
+    /// `SetUnlockedPokedexFlags`: ORs [`Self::UNLOCKED_POKEDEX_FLAGS`] into
+    /// [`Self::gcn_link_flags`], leaving every other bit as it was.
+    pub const fn set_unlocked_pokedex_flags(&mut self) {
+        self.gcn_link_flags |= Self::UNLOCKED_POKEDEX_FLAGS;
+    }
 
     /// `UseContinueGameWarp` (`pokeemerald/src/load_save.c:134-137`).
     #[must_use]
@@ -342,6 +358,8 @@ impl SaveBlock2 {
                 & OPTIONS_WINDOW_FRAME_TYPE_MASK;
         base[OPTIONS_OFFSET..OPTIONS_OFFSET + SERIALIZED_U16_LEN]
             .copy_from_slice(&options.to_le_bytes());
+        base[GCN_LINK_FLAGS_OFFSET..GCN_LINK_FLAGS_OFFSET + SERIALIZED_U32_LEN]
+            .copy_from_slice(&self.gcn_link_flags.to_le_bytes());
         base[ENCRYPTION_KEY_OFFSET..ENCRYPTION_KEY_OFFSET + SERIALIZED_U32_LEN]
             .copy_from_slice(&self.encryption_key.to_le_bytes());
     }
@@ -372,6 +390,7 @@ impl SaveBlock2 {
             player_gender,
             player_trainer_id,
             special_save_warp_flags: bytes[SPECIAL_SAVE_WARP_FLAGS_OFFSET],
+            gcn_link_flags: read_u32(bytes, GCN_LINK_FLAGS_OFFSET),
             encryption_key: read_u32(bytes, ENCRYPTION_KEY_OFFSET),
             options_text_speed,
             options_window_frame_type,
@@ -777,6 +796,7 @@ mod tests {
             player_gender: PlayerGender::Female,
             player_trainer_id: [0x12, 0x34, 0x56, 0x78],
             special_save_warp_flags: 0x81,
+            gcn_link_flags: 0x1234_5678,
             encryption_key: 0x89AB_CDEF,
             options_text_speed: 2,
             options_window_frame_type: 19,
@@ -795,6 +815,7 @@ mod tests {
         // starts from a zero-filled payload.
         assert_eq!(bytes[0x14], 0x9A);
         assert_eq!(bytes[0x15], 0x00);
+        assert_eq!(&bytes[0xA8..0xAC], &[0x78, 0x56, 0x34, 0x12]);
         assert_eq!(&bytes[0xAC..0xB0], &[0xEF, 0xCD, 0xAB, 0x89]);
         assert_eq!(SaveBlock2::from_bytes(&bytes).unwrap(), block);
     }
@@ -896,6 +917,7 @@ mod tests {
             player_gender: PlayerGender::Female,
             player_trainer_id: [0x12, 0x34, 0x56, 0x78],
             special_save_warp_flags: 0x81,
+            gcn_link_flags: 0x1234_5678,
             encryption_key: 0x89AB_CDEF,
             options_text_speed: 2,
             options_window_frame_type: 19,
@@ -911,6 +933,42 @@ mod tests {
             &[],
         );
         assert_eq!(SaveBlock2::from_bytes(&patched).unwrap(), block);
+    }
+
+    #[test]
+    fn unlocking_the_pokedex_sets_only_the_upstream_link_bits() {
+        assert_eq!(SaveBlock2::UNLOCKED_POKEDEX_FLAGS, 0b1000_0000_0011_1111);
+        for old in [0, 0x0000_7FC0, 0xFFFF_0000, 0xDEAD_BEEF, u32::MAX] {
+            let mut block = SaveBlock2 {
+                gcn_link_flags: old,
+                ..SaveBlock2::default()
+            };
+            block.set_unlocked_pokedex_flags();
+            assert_eq!(block.gcn_link_flags, old | 0x0000_803F);
+            let once = block.gcn_link_flags;
+            block.set_unlocked_pokedex_flags();
+            assert_eq!(block.gcn_link_flags, once, "unlocking is idempotent");
+        }
+    }
+
+    #[test]
+    fn unlocking_the_pokedex_persists_over_an_imported_base_without_other_changes() {
+        let mut block = SaveBlock2 {
+            gcn_link_flags: 0x00F0_4A40,
+            encryption_key: 0xA1B2_C3D4,
+            ..SaveBlock2::default()
+        };
+        block.set_unlocked_pokedex_flags();
+        let mut base = [0xEE_u8; SaveBlock2::PAYLOAD_LEN];
+        block.patch_bytes(&mut base);
+        assert_eq!(&base[0xA8..0xAC], &0x00F0_CA7F_u32.to_le_bytes());
+        assert_eq!(&base[0xAC..0xB0], &0xA1B2_C3D4_u32.to_le_bytes());
+        assert_eq!(base[0xA7], 0xEE);
+        assert_eq!(base[0xB0], 0xEE);
+        assert_eq!(
+            SaveBlock2::from_bytes(&base).unwrap().gcn_link_flags,
+            0x00F0_CA7F
+        );
     }
 
     #[test]
