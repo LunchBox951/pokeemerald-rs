@@ -717,7 +717,10 @@ impl PlayerState {
 
     /// Resolves and starts the step a keypad poll asked for, or starts the
     /// collision bump when it is denied.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one blocked-step attempt reads every input the collision mover does"
+    )]
     fn attempt_manual_step(
         &mut self,
         direction: Direction,
