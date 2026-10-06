@@ -248,9 +248,9 @@ const LATIN_FONT_COLUMNS: usize = 16;
 ///
 /// [`GenRomProfileError::WrongPackEntryKind`] if `id` is not an image;
 /// [`GenRomProfileError::EntryShape`] if the sheet is not the 256x512 2bpp
-/// shape the layout assumes, or its payload is not one byte per pixel of
-/// that shape — the directory bounds a payload against the file, not
-/// against the entry's own metadata.
+/// shape the layout assumes, its payload is not one byte per pixel of that
+/// shape — the directory bounds a payload against the file, not against the
+/// entry's own metadata — or any pixel index exceeds the 2bpp range `0..=3`.
 pub fn latin_font_bytes(pack: &PackSource, id: &str) -> Result<Vec<u8>, GenRomProfileError> {
     let asset = pack.get(id)?;
     let (_, width, height, bit_depth) = asset.image_raster(id)?;
@@ -263,16 +263,28 @@ pub fn latin_font_bytes(pack: &PackSource, id: &str) -> Result<Vec<u8>, GenRomPr
         });
     }
 
+    // A 2bpp sheet holds indices 0..=3. Packing would drop higher bits, so an
+    // altered raster would match the ROM bytes while disagreeing with itself.
+    if let Some((at, &index)) = asset.payload.iter().enumerate().find(|(_, p)| **p > 3) {
+        return Err(GenRomProfileError::EntryShape {
+            id: id.to_owned(),
+            reason: format!(
+                "pixel {} (x {}, y {}) has index {index}, but a 2bpp glyph sheet holds 0..=3",
+                at,
+                at % width as usize,
+                at / width as usize
+            ),
+        });
+    }
+
     // First pack the raster to 2bpp rows, the shape `gbagfx` reads.
     let mut rows = vec![0u8; (height as usize) * LATIN_FONT_ROW_BYTES];
     for y in 0..height as usize {
         for x4 in 0..LATIN_FONT_ROW_BYTES {
             let base = y * width as usize + x4 * 4;
             let quad = &asset.payload[base..base + 4];
-            rows[y * LATIN_FONT_ROW_BYTES + x4] = (quad[0] << 6)
-                | ((quad[1] & 0x03) << 4)
-                | ((quad[2] & 0x03) << 2)
-                | (quad[3] & 0x03);
+            rows[y * LATIN_FONT_ROW_BYTES + x4] =
+                (quad[0] << 6) | (quad[1] << 4) | (quad[2] << 2) | quad[3];
         }
     }
 
@@ -382,6 +394,54 @@ mod tests {
             "{err}"
         );
         assert!(err.to_string().contains("131072"), "{err}");
+    }
+
+    #[test]
+    fn a_glyph_sheet_pixel_outside_two_bits_is_an_error_not_masked() {
+        // A 2bpp sheet holds indices 0..=3; an index of 4 would pack to the
+        // same bytes as 0 and so match the ROM while the raster disagrees.
+        let mut payload = vec![0u8; 256 * 512];
+        payload[1] = 4;
+        let source = source_with(
+            "fonts/latin_normal",
+            EntryKind::Image {
+                width: 256,
+                height: 512,
+                bit_depth: 2,
+            },
+            payload,
+        );
+        let result = latin_font_bytes(&source, "fonts/latin_normal");
+        assert!(
+            matches!(result, Err(GenRomProfileError::EntryShape { .. })),
+            "an out-of-range pixel index must be rejected, got {:?}",
+            result.as_ref().map(|bytes| bytes[..4].to_vec())
+        );
+        let err = latin_font_bytes(&source, "fonts/latin_normal").unwrap_err();
+        let text = err.to_string();
+        assert!(
+            text.contains("fonts/latin_normal") && text.contains("index 4"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_glyph_sheet_packs_every_valid_two_bit_index() {
+        // Pixels 0,1,2,3 pack MSB-first into 0b00_01_10_11; `.latfont` writes
+        // the tile row's two bytes swapped, so the right-hand byte leads.
+        let mut payload = vec![0u8; 256 * 512];
+        payload[..4].copy_from_slice(&[0, 1, 2, 3]);
+        let source = source_with(
+            "fonts/latin_normal",
+            EntryKind::Image {
+                width: 256,
+                height: 512,
+                bit_depth: 2,
+            },
+            payload,
+        );
+        let bytes = latin_font_bytes(&source, "fonts/latin_normal").unwrap();
+        assert_eq!(&bytes[..2], &[0x00, 0x1B]);
     }
 
     #[test]

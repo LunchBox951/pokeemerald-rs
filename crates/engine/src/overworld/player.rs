@@ -987,6 +987,33 @@ mod tests {
         (bytes, header, events)
     }
 
+    /// A `width` x `height` map of plain ground whose only variation is the
+    /// collision bits `collision_at` assigns per cell.
+    fn flat_map_runtime(
+        width: u16,
+        height: u16,
+        collision_at: impl Fn(u16, u16) -> u8,
+    ) -> MapRuntime<'static> {
+        let (bytes, header, events) = flat_runtime(width, height, collision_at);
+        let layout = assets::MapLayout {
+            id: assets::LayoutId("MAP_TEST"),
+            name: "MapTest",
+            width,
+            height,
+            primary_tileset: "gTileset_General",
+            secondary_tileset: "gTileset_General",
+        };
+        let bytes: &'static [u8] = Box::leak(bytes.into_boxed_slice());
+        MapRuntime::new(
+            assets::MapId("MAP_TEST"),
+            Box::leak(Box::new(header)),
+            Box::leak(Box::new(events)),
+            layout.grid(bytes).unwrap(),
+            MetatileAttributeTable::new(&[]),
+            MetatileAttributeTable::new(&[]),
+        )
+    }
+
     fn no_connections(_: MapId) -> Option<(u16, u16)> {
         None
     }
@@ -1051,24 +1078,7 @@ mod tests {
         assert!(!player.in_transit());
         assert_eq!(player.step_direction(), None);
 
-        let (bytes, header, events) = flat_runtime(5, 5, |_, _| 0);
-        let layout = assets::MapLayout {
-            id: assets::LayoutId("MAP_TEST"),
-            name: "MapTest",
-            width: 5,
-            height: 5,
-            primary_tileset: "gTileset_General",
-            secondary_tileset: "gTileset_General",
-        };
-        let grid = layout.grid(&bytes).unwrap();
-        let runtime = MapRuntime::new(
-            assets::MapId("MAP_TEST"),
-            &header,
-            &events,
-            grid,
-            MetatileAttributeTable::new(&[]),
-            MetatileAttributeTable::new(&[]),
-        );
+        let runtime = flat_map_runtime(5, 5, |_, _| 0);
         let mut player = PlayerState::new((2, 2), 3, Direction::South);
         player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS);
         let progress = player.step_progress();
@@ -1087,24 +1097,7 @@ mod tests {
 
     #[test]
     fn fresh_pressing_the_facing_direction_steps_immediately() {
-        let (bytes, header, events) = flat_runtime(5, 5, |_, _| 0);
-        let layout = assets::MapLayout {
-            id: assets::LayoutId("MAP_TEST"),
-            name: "MapTest",
-            width: 5,
-            height: 5,
-            primary_tileset: "gTileset_General",
-            secondary_tileset: "gTileset_General",
-        };
-        let grid = layout.grid(&bytes).unwrap();
-        let runtime = MapRuntime::new(
-            assets::MapId("MAP_TEST"),
-            &header,
-            &events,
-            grid,
-            MetatileAttributeTable::new(&[]),
-            MetatileAttributeTable::new(&[]),
-        );
+        let runtime = flat_map_runtime(5, 5, |_, _| 0);
 
         let mut player = PlayerState::new((2, 2), 3, Direction::South);
         let outcome = player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS);
@@ -1121,24 +1114,7 @@ mod tests {
 
     #[test]
     fn pressing_a_new_direction_from_standstill_turns_without_stepping() {
-        let (bytes, header, events) = flat_runtime(5, 5, |_, _| 0);
-        let layout = assets::MapLayout {
-            id: assets::LayoutId("MAP_TEST"),
-            name: "MapTest",
-            width: 5,
-            height: 5,
-            primary_tileset: "gTileset_General",
-            secondary_tileset: "gTileset_General",
-        };
-        let grid = layout.grid(&bytes).unwrap();
-        let runtime = MapRuntime::new(
-            assets::MapId("MAP_TEST"),
-            &header,
-            &events,
-            grid,
-            MetatileAttributeTable::new(&[]),
-            MetatileAttributeTable::new(&[]),
-        );
+        let runtime = flat_map_runtime(5, 5, |_, _| 0);
 
         let mut player = PlayerState::new((2, 2), 3, Direction::South);
         let outcome = player.step(Some(Direction::East), &runtime, &no_connections, &NO_FLAGS);
@@ -1184,24 +1160,7 @@ mod tests {
 
     #[test]
     fn changing_direction_mid_movement_steps_immediately_without_a_turn_frame() {
-        let (bytes, header, events) = flat_runtime(5, 5, |_, _| 0);
-        let layout = assets::MapLayout {
-            id: assets::LayoutId("MAP_TEST"),
-            name: "MapTest",
-            width: 5,
-            height: 5,
-            primary_tileset: "gTileset_General",
-            secondary_tileset: "gTileset_General",
-        };
-        let grid = layout.grid(&bytes).unwrap();
-        let runtime = MapRuntime::new(
-            assets::MapId("MAP_TEST"),
-            &header,
-            &events,
-            grid,
-            MetatileAttributeTable::new(&[]),
-            MetatileAttributeTable::new(&[]),
-        );
+        let runtime = flat_map_runtime(5, 5, |_, _| 0);
 
         let mut player = PlayerState::new((2, 2), 3, Direction::South);
         assert!(matches!(
@@ -1225,24 +1184,7 @@ mod tests {
 
     #[test]
     fn release_during_transit_does_not_end_the_movement_streak() {
-        let (bytes, header, events) = flat_runtime(5, 5, |_, _| 0);
-        let layout = assets::MapLayout {
-            id: assets::LayoutId("MAP_TEST"),
-            name: "MapTest",
-            width: 5,
-            height: 5,
-            primary_tileset: "gTileset_General",
-            secondary_tileset: "gTileset_General",
-        };
-        let grid = layout.grid(&bytes).unwrap();
-        let runtime = MapRuntime::new(
-            assets::MapId("MAP_TEST"),
-            &header,
-            &events,
-            grid,
-            MetatileAttributeTable::new(&[]),
-            MetatileAttributeTable::new(&[]),
-        );
+        let runtime = flat_map_runtime(5, 5, |_, _| 0);
 
         let mut player = PlayerState::new((2, 2), 3, Direction::South);
         assert!(matches!(
@@ -1270,24 +1212,7 @@ mod tests {
 
     #[test]
     fn releasing_input_resets_to_not_moving_so_the_next_direction_turns_first() {
-        let (bytes, header, events) = flat_runtime(5, 5, |_, _| 0);
-        let layout = assets::MapLayout {
-            id: assets::LayoutId("MAP_TEST"),
-            name: "MapTest",
-            width: 5,
-            height: 5,
-            primary_tileset: "gTileset_General",
-            secondary_tileset: "gTileset_General",
-        };
-        let grid = layout.grid(&bytes).unwrap();
-        let runtime = MapRuntime::new(
-            assets::MapId("MAP_TEST"),
-            &header,
-            &events,
-            grid,
-            MetatileAttributeTable::new(&[]),
-            MetatileAttributeTable::new(&[]),
-        );
+        let runtime = flat_map_runtime(5, 5, |_, _| 0);
 
         let mut player = PlayerState::new((2, 2), 3, Direction::South);
         assert!(matches!(
@@ -1307,24 +1232,7 @@ mod tests {
 
     #[test]
     fn in_transit_step_calls_are_a_no_op() {
-        let (bytes, header, events) = flat_runtime(5, 5, |_, _| 0);
-        let layout = assets::MapLayout {
-            id: assets::LayoutId("MAP_TEST"),
-            name: "MapTest",
-            width: 5,
-            height: 5,
-            primary_tileset: "gTileset_General",
-            secondary_tileset: "gTileset_General",
-        };
-        let grid = layout.grid(&bytes).unwrap();
-        let runtime = MapRuntime::new(
-            assets::MapId("MAP_TEST"),
-            &header,
-            &events,
-            grid,
-            MetatileAttributeTable::new(&[]),
-            MetatileAttributeTable::new(&[]),
-        );
+        let runtime = flat_map_runtime(5, 5, |_, _| 0);
 
         let mut player = PlayerState::new((2, 2), 3, Direction::South);
         assert!(matches!(
@@ -1344,24 +1252,7 @@ mod tests {
 
     #[test]
     fn collision_bit_blocks_the_step_and_leaves_position_unchanged() {
-        let (bytes, header, events) = flat_runtime(5, 5, |_, y| u8::from(y == 3));
-        let layout = assets::MapLayout {
-            id: assets::LayoutId("MAP_TEST"),
-            name: "MapTest",
-            width: 5,
-            height: 5,
-            primary_tileset: "gTileset_General",
-            secondary_tileset: "gTileset_General",
-        };
-        let grid = layout.grid(&bytes).unwrap();
-        let runtime = MapRuntime::new(
-            assets::MapId("MAP_TEST"),
-            &header,
-            &events,
-            grid,
-            MetatileAttributeTable::new(&[]),
-            MetatileAttributeTable::new(&[]),
-        );
+        let runtime = flat_map_runtime(5, 5, |_, y| u8::from(y == 3));
 
         let mut player = PlayerState::new((2, 2), 3, Direction::South);
         let outcome = player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS);
@@ -2089,24 +1980,7 @@ mod tests {
 
     #[test]
     fn stepping_off_the_edge_without_a_connection_is_blocked() {
-        let (bytes, header, events) = flat_runtime(5, 5, |_, _| 0);
-        let layout = assets::MapLayout {
-            id: assets::LayoutId("MAP_TEST"),
-            name: "MapTest",
-            width: 5,
-            height: 5,
-            primary_tileset: "gTileset_General",
-            secondary_tileset: "gTileset_General",
-        };
-        let grid = layout.grid(&bytes).unwrap();
-        let runtime = MapRuntime::new(
-            assets::MapId("MAP_TEST"),
-            &header,
-            &events,
-            grid,
-            MetatileAttributeTable::new(&[]),
-            MetatileAttributeTable::new(&[]),
-        );
+        let runtime = flat_map_runtime(5, 5, |_, _| 0);
 
         let mut player = PlayerState::new((2, 4), 3, Direction::South);
         let outcome = player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS);

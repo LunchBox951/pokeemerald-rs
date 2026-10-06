@@ -294,9 +294,10 @@ fn synthetic_overworld_pack_bytes_for(tileset: &str, width: u16, height: u16) ->
 /// one entry deliberately before writing the pack.
 ///
 /// [`push_general_anim_frames`]'s frames (fabricated only for `"general"`)
-/// land in tile padding this fixture's one metatile never references, so
-/// `AnimatedTileset` patching stays exercised without changing a composed
-/// pixel.
+/// land in tile padding this default fixture's one metatile never references,
+/// so `AnimatedTileset` patching stays exercised without changing a composed
+/// pixel; [`synthetic_animated_flower_pack_bytes`] overrides that to observe
+/// animated output.
 fn synthetic_overworld_pack_entries_for(tileset: &str, width: u16, height: u16) -> Vec<Entry> {
     let tile_pixels = vec![GROUND_PALETTE_INDEX; 8 * 8];
 
@@ -2709,4 +2710,87 @@ pub(crate) fn write_oldale_layout_pack(path: &std::path::Path, sprite_paths: &[&
         });
     }
     std::fs::write(path, write_synthetic_pack(entries)).unwrap();
+}
+
+// -- Default-CI tileset animation through compose ----------------------------
+
+/// [`synthetic_overworld_pack_bytes`] with its metatile drawing the General
+/// flower tile (508) and flower frames 0/1/2 painted in distinct opaque
+/// colors, so a composed pixel names the frame patched into that tile.
+fn synthetic_animated_flower_pack_bytes() -> Vec<u8> {
+    const FLOWER_START_TILE: u16 = 508;
+    let mut entries = synthetic_overworld_pack_entries_for("general", 4, 4);
+
+    let metatiles = entries
+        .iter_mut()
+        .find(|e| e.id == "tileset/general/metatiles")
+        .expect("the general fixture always fabricates its own metatiles entry");
+    metatiles.payload = std::iter::repeat_n(FLOWER_START_TILE.to_le_bytes(), 8)
+        .flatten()
+        .collect();
+
+    let bank0 = entries
+        .iter_mut()
+        .find(|e| e.id == "tileset/general/palette/00")
+        .expect("the general fixture always fabricates its own bank-0 palette");
+    bank0.meta = 8u16.to_le_bytes().to_vec();
+    bank0.payload.extend_from_slice(&0x03E0u16.to_le_bytes()); // index 6: green.
+    bank0.payload.extend_from_slice(&0x7C00u16.to_le_bytes()); // index 7: blue.
+
+    for (asset, palette_index) in [(0u8, 5u8), (1, 6), (2, 7)] {
+        let id = format!("tileset/general/anim/flower/{asset}");
+        let frame = entries
+            .iter_mut()
+            .find(|e| e.id == id)
+            .expect("push_general_anim_frames fabricates flower assets 0..3");
+        frame.payload = vec![palette_index; 8 * 8 * 4];
+    }
+
+    write_synthetic_pack(entries)
+}
+
+/// Tick-to-pixel coverage that needs no local pack: flower frames latch as
+/// `[0, 1, 0, 2]` every 16 ticks (`super::tileset_anims::GENERAL_REGIONS`).
+#[test]
+fn compose_paints_each_latched_flower_frame_into_the_animated_tile_range() {
+    let color = |raw: u16| rendering::Bgr555::from_raw(raw).to_rgb888();
+    let scene = synthetic_scene_result(
+        synthetic_animated_flower_pack_bytes(),
+        "gTileset_General",
+        4,
+        4,
+    )
+    .expect("the animated-flower synthetic pack should decode cleanly");
+
+    let player = PlayerState::new((0, 0), 3, Direction::South);
+    let event_data = engine::event_data::EventData::new();
+    let sample = |tick: u32| {
+        scene
+            .compose(&player, &event_data, tick)
+            .pixel(4, 4)
+            .expect("(4, 4) is on screen and away from the player sprite")
+    };
+
+    let at_first_fire = sample(16);
+    assert_ne!(
+        sample(0),
+        at_first_fire,
+        "tick must reach composed pixels: tick 0 shows base art, tick 16 the first \
+         latched flower frame"
+    );
+    assert_eq!(
+        at_first_fire,
+        color(0x03E0),
+        "tick 16 latches sequence position 1 -- flower asset 1 (green)"
+    );
+    assert_eq!(
+        sample(32),
+        color(0x001F),
+        "tick 32 latches sequence position 2 -- flower asset 0 (red)"
+    );
+    assert_eq!(
+        sample(48),
+        color(0x7C00),
+        "tick 48 latches sequence position 3 -- flower asset 2 (blue)"
+    );
 }

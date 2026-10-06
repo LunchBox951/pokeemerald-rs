@@ -322,9 +322,9 @@ const MAX_PAN_OVERRIDE: u8 = 127;
 const MAX_SQUARE_DUTY: u8 = 3;
 const MAX_NOISE_PERIOD: u8 = 1;
 /// The largest CGB envelope attack, decay, or release value that survives
-/// upstream's `& 0x7` mask (`pokeemerald/asm/macros/music_voice.inc:60-63`
-/// (`_voice_square_1`), `:85-88` (`_voice_square_2`), `:109-112`
-/// (`_voice_programmable_wave`), `:134-137` (`_voice_noise`)).
+/// upstream's `& 0x7` mask (`pokeemerald/asm/macros/music_voice.inc:50-53`
+/// (`_voice_square_1`), `:75-78` (`_voice_square_2`), `:99-102`
+/// (`_voice_programmable_wave`), `:124-127` (`_voice_noise`)).
 const MAX_CGB_ENVELOPE_ATTACK_DECAY_RELEASE: u8 = 0x7;
 /// The largest CGB envelope sustain value that survives upstream's `& 0xF`
 /// mask (same macro lines as [`MAX_CGB_ENVELOPE_ATTACK_DECAY_RELEASE`]).
@@ -364,7 +364,7 @@ fn check_noise_period(period: u8) -> Result<(), AudioError> {
 }
 
 /// `_voice_directsound` stores its envelope unmasked
-/// (`pokeemerald/asm/macros/music_voice.inc:35-38`), so
+/// (`pokeemerald/asm/macros/music_voice.inc:25-28`), so
 /// [`DirectSoundVoice`] skips this check.
 fn check_cgb_envelope(voice_kind: &'static str, envelope: Envelope) -> Result<(), AudioError> {
     let fields = [

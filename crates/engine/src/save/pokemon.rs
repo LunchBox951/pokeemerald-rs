@@ -23,6 +23,13 @@ const LANGUAGE_OFFSET: usize = 18;
 /// The unencrypted header's sanity bitfield byte
 /// (`struct BoxPokemon`, `pokeemerald/include/pokemon.h:202-206`).
 const SANITY_FLAGS_OFFSET: usize = 19;
+/// The unencrypted header's original-trainer name field
+/// (`struct BoxPokemon::otName`, `pokeemerald/include/pokemon.h:207`).
+const OT_NAME_OFFSET: usize = 20;
+/// Fixed byte length of `BoxPokemon`'s OT name (`PLAYER_NAME_LENGTH`,
+/// `pokeemerald/include/constants/global.h:96`): the player's name without
+/// its eighth, terminator-only buffer byte.
+pub const BOX_OT_NAME_LEN: usize = 7;
 /// `hasSpecies`, bit 1 of the sanity bitfield byte
 /// (`pokeemerald/include/pokemon.h:203`).
 const HAS_SPECIES_BIT: u8 = 1 << 1;
@@ -214,6 +221,11 @@ impl BoxPokemon {
     /// changes only the checksum and encrypted secure region.
     pub fn set_nickname(&mut self, nickname: [u8; BOX_NICKNAME_LEN]) {
         self.bytes[NICKNAME_OFFSET..NICKNAME_OFFSET + BOX_NICKNAME_LEN].copy_from_slice(&nickname);
+    }
+
+    /// Overwrites the unencrypted header's original-trainer name field.
+    pub fn set_ot_name(&mut self, ot_name: [u8; BOX_OT_NAME_LEN]) {
+        self.bytes[OT_NAME_OFFSET..OT_NAME_OFFSET + BOX_OT_NAME_LEN].copy_from_slice(&ot_name);
     }
 
     /// Overwrites the unencrypted header's language byte.
@@ -556,6 +568,7 @@ mod tests {
 
         boxed.set_nickname(*b"TREECKO\xFF\0\0");
         boxed.set_language(2);
+        boxed.set_ot_name(*b"ABCDEF\xFF");
         boxed.set_has_species(true);
         let after = boxed.to_bytes();
 
@@ -572,6 +585,7 @@ mod tests {
         expected[NICKNAME_OFFSET..NICKNAME_OFFSET + BOX_NICKNAME_LEN]
             .copy_from_slice(b"TREECKO\xFF\0\0");
         expected[LANGUAGE_OFFSET] = 2;
+        expected[OT_NAME_OFFSET..OT_NAME_OFFSET + BOX_OT_NAME_LEN].copy_from_slice(b"ABCDEF\xFF");
         expected[SANITY_FLAGS_OFFSET] = HAS_SPECIES_BIT;
         assert_eq!(after, expected);
         assert_eq!(boxed.substructures().unwrap(), distinct_substructures());

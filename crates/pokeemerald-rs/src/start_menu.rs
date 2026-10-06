@@ -317,4 +317,14 @@ pub(crate) fn synthetic_start_menu_at(cursor: usize) -> StartMenu {
 }
 
 #[cfg(test)]
-mod tests;
+mod dialog_timing_tests;
+#[cfg(test)]
+mod framebuffer_tests;
+#[cfg(test)]
+mod pack_fixture;
+#[cfg(test)]
+mod palette_tests;
+#[cfg(test)]
+mod save_input_tests;
+#[cfg(test)]
+mod test_support;
