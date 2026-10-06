@@ -478,6 +478,45 @@ fn the_test_hooks_publish_a_measured_playback_position_on_the_null_backend() {
     // Monotonic even for the fake clock: a lower value must not regress it.
     output.advance_sounded_frames_for_test(1);
     assert_eq!(output.playback_progress().unwrap().sounded_frames, 4);
+    assert_eq!(
+        output.playback_progress().unwrap().usable_through_frames,
+        4,
+        "a hook call marks every frame submitted so far as usable"
+    );
+}
+
+#[test]
+fn a_usable_callback_is_counted_even_when_its_estimate_does_not_grow() {
+    let clock = PlaybackClock::new();
+    clock.record(100, |_| Some(60));
+    clock.record(100, |_| Some(60)); // repeated estimate
+    clock.record(100, |_| Some(40)); // regressed estimate
+    assert_eq!(clock.sounded_frames.load(Ordering::Acquire), 60);
+    assert_eq!(clock.usable_through_frames.load(Ordering::Acquire), 300);
+    assert_eq!(clock.submitted_frames.load(Ordering::Acquire), 300);
+}
+
+#[test]
+fn a_stale_callback_advances_submitted_frames_without_the_usable_mark() {
+    let clock = PlaybackClock::new();
+    clock.record(100, |_| Some(60));
+    clock.record(100, |_| None);
+    assert_eq!(clock.usable_through_frames.load(Ordering::Acquire), 100);
+    assert_eq!(clock.submitted_frames.load(Ordering::Acquire), 200);
+}
+
+#[test]
+fn the_submitted_store_lands_after_the_estimate_and_usable_mark_stores() {
+    let clock = PlaybackClock::new();
+    clock.record(100, |start| {
+        // Mid-callback, between the estimate and the stores: the frames are
+        // not yet published, so a reader cannot see them ahead of the mark.
+        assert_eq!(start, 0);
+        assert_eq!(clock.submitted_frames.load(Ordering::Acquire), 0);
+        Some(10)
+    });
+    assert_eq!(clock.submitted_frames.load(Ordering::Acquire), 100);
+    assert_eq!(clock.usable_through_frames.load(Ordering::Acquire), 100);
 }
 
 #[test]
@@ -704,4 +743,128 @@ fn select_config_clamps_to_nearest_when_no_openable_format_covers_target() {
 fn select_config_returns_none_with_no_openable_format() {
     let candidates = [(cpal::SampleFormat::U16, 8_000, 48_000)];
     assert_eq!(select_config(&candidates, 13_379), None);
+}
+
+#[test]
+fn a_snapshot_never_pairs_a_new_estimate_with_an_older_mark() {
+    // Stale callbacks have left the mark behind the submitted frames; a new
+    // usable callback then completes between the reader's mark and estimate
+    // loads. Loading the live counters would see the old submitted total and
+    // mark with the new, still-short estimate.
+    let clock = PlaybackClock::new();
+    clock.record(100, |_| Some(10));
+    clock.record(100, |_| None);
+    let mut interleaved = false;
+    let snapshot = clock.snapshot_observing(|loads| {
+        if loads == 2 && !std::mem::replace(&mut interleaved, true) {
+            clock.record(100, |_| Some(150));
+        }
+    });
+
+    assert!(interleaved);
+    assert_eq!(
+        snapshot,
+        PlaybackProgress {
+            submitted_frames: 300,
+            sounded_frames: 150,
+            usable_through_frames: 300,
+        },
+        "the retried read takes the new callback whole"
+    );
+}
+
+#[test]
+fn a_snapshot_two_callbacks_overtake_is_retried_whole() {
+    // Two callbacks complete during one read, rewriting the copy it was
+    // reading: it must retry rather than mix the two.
+    let clock = PlaybackClock::new();
+    clock.record(100, |_| Some(10));
+    clock.record(100, |_| None);
+    let mut interleaved = false;
+    let snapshot = clock.snapshot_observing(|loads| {
+        if loads == 2 && !std::mem::replace(&mut interleaved, true) {
+            clock.record(100, |_| Some(150));
+            clock.record(100, |_| Some(160));
+        }
+    });
+
+    assert!(interleaved);
+    assert_eq!(
+        snapshot,
+        PlaybackProgress {
+            submitted_frames: 400,
+            sounded_frames: 160,
+            usable_through_frames: 400,
+        }
+    );
+}
+
+#[test]
+fn a_snapshot_during_a_callback_mid_store_reads_the_last_completed_one() {
+    // No snapshot taken before: the callback is descheduled mid-store, with
+    // its estimate published to the live counters but not its mark.
+    let clock = PlaybackClock::new();
+    clock.record(100, |_| Some(10));
+    clock.record(100, |_| None);
+    let mut during = None;
+    clock.write(|| {
+        clock.sounded_frames.fetch_max(150, Ordering::Release);
+        during = Some(clock.snapshot());
+        clock.usable_through_frames.store(300, Ordering::Release);
+        clock.submitted_frames.store(300, Ordering::Release);
+    });
+
+    assert_eq!(
+        during,
+        Some(PlaybackProgress {
+            submitted_frames: 200,
+            sounded_frames: 10,
+            usable_through_frames: 100,
+        })
+    );
+    assert_eq!(
+        clock.snapshot(),
+        PlaybackProgress {
+            submitted_frames: 300,
+            sounded_frames: 150,
+            usable_through_frames: 300,
+        }
+    );
+}
+
+#[test]
+fn a_snapshot_never_takes_a_rewritten_slot_before_it_is_published() {
+    // The reader takes the published slot's index; a callback then publishes
+    // the other slot, and the next one rewrites the first and is descheduled
+    // before naming it published. At either pause point the read must return
+    // only published counters, so the following read cannot go backward.
+    for pause_at in [0_u32, 3] {
+        let clock = PlaybackClock::new();
+        clock.record(100, |_| Some(10));
+        let mut interleaved = false;
+        let first = clock.snapshot_observing(|loads| {
+            if loads == pause_at && !std::mem::replace(&mut interleaved, true) {
+                clock.record(100, |_| Some(20));
+                clock.submitted_frames.store(300, Ordering::Release);
+                let unpublished = 1 - clock.published_slot.load(Ordering::Relaxed);
+                clock.fill_slot(unpublished);
+            }
+        });
+        let second = clock.snapshot();
+
+        assert!(interleaved);
+        assert!(
+            first.submitted_frames <= second.submitted_frames,
+            "pause at {pause_at}: {first:?} then {second:?}"
+        );
+        assert_eq!(
+            second,
+            PlaybackProgress {
+                submitted_frames: 200,
+                sounded_frames: 20,
+                usable_through_frames: 200,
+            },
+            "pause at {pause_at}: only the published callback is read"
+        );
+    }
 }

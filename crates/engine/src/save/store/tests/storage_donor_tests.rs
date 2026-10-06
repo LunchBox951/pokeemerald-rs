@@ -578,3 +578,30 @@ fn a_relabelled_save_block_chunk_after_repeated_legacy_writes_never_donates() {
         "SaveBlock1 bytes must never load as box storage"
     );
 }
+
+/// `LoadOutcome::storage_source` names where the boxes came from, so the
+/// session layer can tell a lost donor from a different save.
+#[test]
+fn a_load_reports_whether_its_storage_came_from_a_legacy_donor() {
+    let block1 = sample_block1();
+    let block2 = sample_block2();
+    let storage_bytes = vec![0xABu8; PKMN_STORAGE_PAYLOAD_LEN];
+
+    let mut own = SaveStore::new();
+    write_full_slot(&mut own, 0, &block1, &block2, &storage_bytes, 2);
+    assert_eq!(own.load().storage_source, StorageSource::Own);
+
+    let mut merged = SaveStore::new();
+    write_full_slot(&mut merged, 0, &block1, &block2, &storage_bytes, 2);
+    write_legacy_slot(&mut merged, 1, &block1, &block2, 3);
+    let outcome = merged.load();
+    assert_eq!(outcome.storage_source, StorageSource::LegacyDonor);
+    assert!(outcome.storage_source.is_legacy_head());
+
+    let mut bare = SaveStore::new();
+    write_legacy_slot(&mut bare, 1, &block1, &block2, 3);
+    let outcome = bare.load();
+    assert_eq!(outcome.storage_source, StorageSource::LegacyWithoutDonor);
+    assert!(outcome.storage_source.is_legacy_head());
+    assert!(!StorageSource::Own.is_legacy_head());
+}

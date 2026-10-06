@@ -219,6 +219,7 @@ impl OverworldPhase {
     /// [`OverworldPhase::undecodable_lead_retained`]; no replacement starter is
     /// fabricated, because that would hand the player a Pokemon they did not save.
     pub(super) fn copy_party_and_objects_from_save(&mut self) {
+        self.lead_loan = super::lead_owner::LeadLoan::NotLent;
         if self.save1.player_party_count == 0 {
             self.set_no_party_lead(false);
             return;
@@ -333,6 +334,14 @@ impl SaveTarget for PhaseSaveTarget<'_> {
                     "save: the save on disk changed since this session loaded it \
                      (another instance saved?) -- refusing to overwrite newer \
                      progress with stale state; the game was not saved"
+                );
+                false
+            }
+            Ok(StoreOutcome::RefusedConflictingSave) => {
+                eprintln!(
+                    "save: the save on disk has this session's save count but different \
+                     contents (was it replaced?) -- refusing to overwrite it; the game \
+                     was not saved"
                 );
                 false
             }

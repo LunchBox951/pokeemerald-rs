@@ -64,6 +64,17 @@ impl TransitCadence {
     };
 }
 
+/// Which of a walk animation's two forward-foot cells leads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LeadingFoot {
+    /// Fresh command 0, before any step, turn, or face. A direct first step
+    /// or turn leads with the first foot; an idle face, a field lock, or a
+    /// scripted face moves it to `First`.
+    Fresh,
+    First,
+    Second,
+}
+
 /// The sprite pose the player holds at rest.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RestPose {
@@ -93,6 +104,9 @@ pub struct PlayerState {
     forced_movement_armed: bool,
     forced_input_tile_center: bool,
     rest_pose: RestPose,
+    /// The current walk-cycle phase (`sAnim_Go*` alternate cells,
+    /// `object_event_anims.h:202-272`).
+    leading_foot: LeadingFoot,
 }
 
 /// The result of one directional-input poll.
@@ -191,6 +205,7 @@ impl PlayerState {
             forced_movement_armed: false,
             forced_input_tile_center: false,
             rest_pose: RestPose::Standing,
+            leading_foot: LeadingFoot::Fresh,
         }
     }
 
@@ -250,8 +265,11 @@ impl PlayerState {
 
     /// Changes facing without starting or interrupting a step, carrying the
     /// movement direction with it as upstream's `SetObjectEventDirection`
-    /// does (`event_object_movement.c:2361-2371`).
+    /// does (`event_object_movement.c:2361-2371`). Callers model a face
+    /// movement action, whose `FaceDirection` normalises a fresh walk cycle
+    /// (`event_object_movement.c:5048-5054`).
     pub const fn face(&mut self, direction: Direction) {
+        self.normalise_fresh_step_parity();
         self.rest_pose = RestPose::Standing;
         self.facing = direction;
         self.movement_direction = direction;
@@ -259,7 +277,11 @@ impl PlayerState {
 
     /// Ends a standstill turn's busy window early, as `PlayerFreeze` does
     /// the instant the field lock engages (`field_player_avatar.c:1039-1046`).
+    /// Its forced face normalises a fresh walk cycle, so an owner that claims
+    /// the first frame before any idle poll still leaves the second foot to
+    /// lead the next step.
     pub const fn clear_turn_lock(&mut self) {
+        self.normalise_fresh_step_parity();
         self.rest_pose = RestPose::Standing;
         self.turn_frames_remaining = 0;
     }
@@ -317,6 +339,34 @@ impl PlayerState {
     #[must_use]
     pub const fn slide_pose_held(&self) -> bool {
         matches!(self.rest_pose, RestPose::SlidePaused)
+    }
+
+    /// Returns whether the current walk-cycle phase is the second foot.
+    #[must_use]
+    pub const fn second_foot_leads(&self) -> bool {
+        matches!(self.leading_foot, LeadingFoot::Second)
+    }
+
+    /// A fresh command 0 faces at command 1 (`SetStepAnim` seeks
+    /// `animPos[0]`, `event_object_movement.c:4613-4617, 5048-5054`), so the
+    /// next step or turn selects command 2, the second foot. A started cycle,
+    /// held slide foot included, is kept. Every face upstream runs, the idle
+    /// poll's, `PlayerFreeze`'s, and a scripted face's, goes through it.
+    const fn normalise_fresh_step_parity(&mut self) {
+        if matches!(self.leading_foot, LeadingFoot::Fresh) {
+            self.leading_foot = LeadingFoot::First;
+        }
+    }
+
+    /// `SetStepAnimHandleAlternation` leaves a paused foot command unchanged
+    /// (`event_object_movement.c:4582-4598`), so a held slide pose keeps its foot.
+    fn advance_step_parity(&mut self, slide_pose_held: bool) {
+        if !slide_pose_held {
+            self.leading_foot = match self.leading_foot {
+                LeadingFoot::First => LeadingFoot::Second,
+                LeadingFoot::Fresh | LeadingFoot::Second => LeadingFoot::First,
+            };
+        }
     }
 
     /// Returns whether a tile crossing is still in progress.
@@ -471,8 +521,10 @@ impl PlayerState {
         // Any poll that reaches the keypad, idle included, restarts the sprite
         // animation: `ForcedMovement_None` sets `enableAnim`, and a no-input poll
         // faces the standing cell (`field_player_avatar.c:429-440, 588-600`).
+        let slide_pose_held = self.slide_pose_held();
         self.rest_pose = RestPose::Standing;
         let Some(direction) = input else {
+            self.normalise_fresh_step_parity();
             self.movement_streak_active = false;
             return StepOutcome::Idle;
         };
@@ -505,6 +557,7 @@ impl PlayerState {
             self.facing = direction;
             self.movement_direction = direction;
             self.turn_frames_remaining = TURN_IN_PLACE_FRAMES;
+            self.advance_step_parity(slide_pose_held);
             return StepOutcome::Turned(direction);
         }
 
@@ -517,21 +570,25 @@ impl PlayerState {
                 let from = self.position;
                 let to = landing.position;
                 let to_map = landing.to_map;
-                match self.try_start_resolved_step(
+                let started = self.try_start_resolved_step(
                     direction,
                     runtime,
                     event_data,
                     standing_behavior,
                     landing,
                     TransitCadence::WALK,
-                ) {
-                    Ok(()) => match to_map {
-                        Some(to_map) => StepOutcome::Crossed {
-                            to_map,
-                            to_position: to,
-                        },
-                        None => StepOutcome::Advanced { from, to },
-                    },
+                );
+                match started {
+                    Ok(()) => {
+                        self.advance_step_parity(slide_pose_held);
+                        match to_map {
+                            Some(to_map) => StepOutcome::Crossed {
+                                to_map,
+                                to_position: to,
+                            },
+                            None => StepOutcome::Advanced { from, to },
+                        }
+                    }
                     Err(collision) => StepOutcome::Blocked {
                         direction,
                         collision,
@@ -672,6 +729,7 @@ impl PlayerState {
         let from = self.position;
         let to = landing.position;
         let to_map = landing.to_map;
+        let was_slide_paused = self.slide_pose_held();
         self.try_start_resolved_step(
             direction,
             runtime,
@@ -681,6 +739,7 @@ impl PlayerState {
             mover.cadence,
         )
         .ok()?;
+        self.advance_step_parity(was_slide_paused);
 
         self.movement_streak_active = true;
         self.movement_direction = direction;
@@ -839,6 +898,33 @@ mod tests {
         (bytes, header, events)
     }
 
+    /// A `width` x `height` map of plain ground whose only variation is the
+    /// collision bits `collision_at` assigns per cell.
+    fn flat_map_runtime(
+        width: u16,
+        height: u16,
+        collision_at: impl Fn(u16, u16) -> u8,
+    ) -> MapRuntime<'static> {
+        let (bytes, header, events) = flat_runtime(width, height, collision_at);
+        let layout = assets::MapLayout {
+            id: assets::LayoutId("MAP_TEST"),
+            name: "MapTest",
+            width,
+            height,
+            primary_tileset: "gTileset_General",
+            secondary_tileset: "gTileset_General",
+        };
+        let bytes: &'static [u8] = Box::leak(bytes.into_boxed_slice());
+        MapRuntime::new(
+            assets::MapId("MAP_TEST"),
+            Box::leak(Box::new(header)),
+            Box::leak(Box::new(events)),
+            layout.grid(bytes).unwrap(),
+            MetatileAttributeTable::new(&[]),
+            MetatileAttributeTable::new(&[]),
+        )
+    }
+
     fn no_connections(_: MapId) -> Option<(u16, u16)> {
         None
     }
@@ -903,24 +989,7 @@ mod tests {
         assert!(!player.in_transit());
         assert_eq!(player.step_direction(), None);
 
-        let (bytes, header, events) = flat_runtime(5, 5, |_, _| 0);
-        let layout = assets::MapLayout {
-            id: assets::LayoutId("MAP_TEST"),
-            name: "MapTest",
-            width: 5,
-            height: 5,
-            primary_tileset: "gTileset_General",
-            secondary_tileset: "gTileset_General",
-        };
-        let grid = layout.grid(&bytes).unwrap();
-        let runtime = MapRuntime::new(
-            assets::MapId("MAP_TEST"),
-            &header,
-            &events,
-            grid,
-            MetatileAttributeTable::new(&[]),
-            MetatileAttributeTable::new(&[]),
-        );
+        let runtime = flat_map_runtime(5, 5, |_, _| 0);
         let mut player = PlayerState::new((2, 2), 3, Direction::South);
         player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS);
         let progress = player.step_progress();
@@ -939,24 +1008,7 @@ mod tests {
 
     #[test]
     fn fresh_pressing_the_facing_direction_steps_immediately() {
-        let (bytes, header, events) = flat_runtime(5, 5, |_, _| 0);
-        let layout = assets::MapLayout {
-            id: assets::LayoutId("MAP_TEST"),
-            name: "MapTest",
-            width: 5,
-            height: 5,
-            primary_tileset: "gTileset_General",
-            secondary_tileset: "gTileset_General",
-        };
-        let grid = layout.grid(&bytes).unwrap();
-        let runtime = MapRuntime::new(
-            assets::MapId("MAP_TEST"),
-            &header,
-            &events,
-            grid,
-            MetatileAttributeTable::new(&[]),
-            MetatileAttributeTable::new(&[]),
-        );
+        let runtime = flat_map_runtime(5, 5, |_, _| 0);
 
         let mut player = PlayerState::new((2, 2), 3, Direction::South);
         let outcome = player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS);
@@ -973,24 +1025,7 @@ mod tests {
 
     #[test]
     fn pressing_a_new_direction_from_standstill_turns_without_stepping() {
-        let (bytes, header, events) = flat_runtime(5, 5, |_, _| 0);
-        let layout = assets::MapLayout {
-            id: assets::LayoutId("MAP_TEST"),
-            name: "MapTest",
-            width: 5,
-            height: 5,
-            primary_tileset: "gTileset_General",
-            secondary_tileset: "gTileset_General",
-        };
-        let grid = layout.grid(&bytes).unwrap();
-        let runtime = MapRuntime::new(
-            assets::MapId("MAP_TEST"),
-            &header,
-            &events,
-            grid,
-            MetatileAttributeTable::new(&[]),
-            MetatileAttributeTable::new(&[]),
-        );
+        let runtime = flat_map_runtime(5, 5, |_, _| 0);
 
         let mut player = PlayerState::new((2, 2), 3, Direction::South);
         let outcome = player.step(Some(Direction::East), &runtime, &no_connections, &NO_FLAGS);
@@ -1036,24 +1071,7 @@ mod tests {
 
     #[test]
     fn changing_direction_mid_movement_steps_immediately_without_a_turn_frame() {
-        let (bytes, header, events) = flat_runtime(5, 5, |_, _| 0);
-        let layout = assets::MapLayout {
-            id: assets::LayoutId("MAP_TEST"),
-            name: "MapTest",
-            width: 5,
-            height: 5,
-            primary_tileset: "gTileset_General",
-            secondary_tileset: "gTileset_General",
-        };
-        let grid = layout.grid(&bytes).unwrap();
-        let runtime = MapRuntime::new(
-            assets::MapId("MAP_TEST"),
-            &header,
-            &events,
-            grid,
-            MetatileAttributeTable::new(&[]),
-            MetatileAttributeTable::new(&[]),
-        );
+        let runtime = flat_map_runtime(5, 5, |_, _| 0);
 
         let mut player = PlayerState::new((2, 2), 3, Direction::South);
         assert!(matches!(
@@ -1077,24 +1095,7 @@ mod tests {
 
     #[test]
     fn release_during_transit_does_not_end_the_movement_streak() {
-        let (bytes, header, events) = flat_runtime(5, 5, |_, _| 0);
-        let layout = assets::MapLayout {
-            id: assets::LayoutId("MAP_TEST"),
-            name: "MapTest",
-            width: 5,
-            height: 5,
-            primary_tileset: "gTileset_General",
-            secondary_tileset: "gTileset_General",
-        };
-        let grid = layout.grid(&bytes).unwrap();
-        let runtime = MapRuntime::new(
-            assets::MapId("MAP_TEST"),
-            &header,
-            &events,
-            grid,
-            MetatileAttributeTable::new(&[]),
-            MetatileAttributeTable::new(&[]),
-        );
+        let runtime = flat_map_runtime(5, 5, |_, _| 0);
 
         let mut player = PlayerState::new((2, 2), 3, Direction::South);
         assert!(matches!(
@@ -1122,24 +1123,7 @@ mod tests {
 
     #[test]
     fn releasing_input_resets_to_not_moving_so_the_next_direction_turns_first() {
-        let (bytes, header, events) = flat_runtime(5, 5, |_, _| 0);
-        let layout = assets::MapLayout {
-            id: assets::LayoutId("MAP_TEST"),
-            name: "MapTest",
-            width: 5,
-            height: 5,
-            primary_tileset: "gTileset_General",
-            secondary_tileset: "gTileset_General",
-        };
-        let grid = layout.grid(&bytes).unwrap();
-        let runtime = MapRuntime::new(
-            assets::MapId("MAP_TEST"),
-            &header,
-            &events,
-            grid,
-            MetatileAttributeTable::new(&[]),
-            MetatileAttributeTable::new(&[]),
-        );
+        let runtime = flat_map_runtime(5, 5, |_, _| 0);
 
         let mut player = PlayerState::new((2, 2), 3, Direction::South);
         assert!(matches!(
@@ -1159,24 +1143,7 @@ mod tests {
 
     #[test]
     fn in_transit_step_calls_are_a_no_op() {
-        let (bytes, header, events) = flat_runtime(5, 5, |_, _| 0);
-        let layout = assets::MapLayout {
-            id: assets::LayoutId("MAP_TEST"),
-            name: "MapTest",
-            width: 5,
-            height: 5,
-            primary_tileset: "gTileset_General",
-            secondary_tileset: "gTileset_General",
-        };
-        let grid = layout.grid(&bytes).unwrap();
-        let runtime = MapRuntime::new(
-            assets::MapId("MAP_TEST"),
-            &header,
-            &events,
-            grid,
-            MetatileAttributeTable::new(&[]),
-            MetatileAttributeTable::new(&[]),
-        );
+        let runtime = flat_map_runtime(5, 5, |_, _| 0);
 
         let mut player = PlayerState::new((2, 2), 3, Direction::South);
         assert!(matches!(
@@ -1196,24 +1163,7 @@ mod tests {
 
     #[test]
     fn collision_bit_blocks_the_step_and_leaves_position_unchanged() {
-        let (bytes, header, events) = flat_runtime(5, 5, |_, y| u8::from(y == 3));
-        let layout = assets::MapLayout {
-            id: assets::LayoutId("MAP_TEST"),
-            name: "MapTest",
-            width: 5,
-            height: 5,
-            primary_tileset: "gTileset_General",
-            secondary_tileset: "gTileset_General",
-        };
-        let grid = layout.grid(&bytes).unwrap();
-        let runtime = MapRuntime::new(
-            assets::MapId("MAP_TEST"),
-            &header,
-            &events,
-            grid,
-            MetatileAttributeTable::new(&[]),
-            MetatileAttributeTable::new(&[]),
-        );
+        let runtime = flat_map_runtime(5, 5, |_, y| u8::from(y == 3));
 
         let mut player = PlayerState::new((2, 2), 3, Direction::South);
         let outcome = player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS);
@@ -1941,24 +1891,7 @@ mod tests {
 
     #[test]
     fn stepping_off_the_edge_without_a_connection_is_blocked() {
-        let (bytes, header, events) = flat_runtime(5, 5, |_, _| 0);
-        let layout = assets::MapLayout {
-            id: assets::LayoutId("MAP_TEST"),
-            name: "MapTest",
-            width: 5,
-            height: 5,
-            primary_tileset: "gTileset_General",
-            secondary_tileset: "gTileset_General",
-        };
-        let grid = layout.grid(&bytes).unwrap();
-        let runtime = MapRuntime::new(
-            assets::MapId("MAP_TEST"),
-            &header,
-            &events,
-            grid,
-            MetatileAttributeTable::new(&[]),
-            MetatileAttributeTable::new(&[]),
-        );
+        let runtime = flat_map_runtime(5, 5, |_, _| 0);
 
         let mut player = PlayerState::new((2, 4), 3, Direction::South);
         let outcome = player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS);
@@ -2740,6 +2673,9 @@ mod tests {
     /// Table-driven forced-mover dispatch, cadence, and fallback
     /// regressions over every `MB_WALK_*`/`MB_SLIDE_*` tile.
     mod forced_movement_tests;
+
+    /// Leading-foot parity across steps, turns, and rejected polls.
+    mod step_parity_tests;
 
     /// `forcedMove` closes only the `T_TILE_CENTER` arm of
     /// `FieldGetPlayerInput`'s gate, so input suppression lasts the landing's

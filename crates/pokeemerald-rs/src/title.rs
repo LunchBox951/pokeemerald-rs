@@ -751,7 +751,19 @@ fn affine_tilemap_from_raw(raw: &[u8]) -> Result<AffineTilemap, TitleSceneError>
 }
 
 #[cfg(test)]
-mod tests;
+mod test_support;
+
+#[cfg(test)]
+mod tile_conversion_tests;
+
+#[cfg(test)]
+mod pack_palette_tests;
+
+#[cfg(test)]
+mod frame_sprite_tests;
+
+#[cfg(test)]
+mod framebuffer_tests;
 
 #[cfg(test)]
 mod tile_roundtrip_tests;

@@ -215,13 +215,24 @@ impl Mixer {
         true
     }
 
-    /// Tick every voice's note-off gate down by one sequencer tick.
-    pub fn tick_gates(&mut self) {
+    /// Tick the note-off gate of every voice currently owned by `track` down
+    /// by one sequencer tick.
+    ///
+    /// Upstream `MPlayMain` walks each track's own channel chain at the top
+    /// of that track's pass (`m4a_1.s:1191`-`:1212`), so a later track's gate
+    /// cannot expire before an earlier track allocates. Ownership is the
+    /// voice's current track: a voice stolen by an earlier track is no longer
+    /// on this track's chain.
+    pub fn tick_gates(&mut self, track: usize) {
         for voice in self.direct_sound_slots.iter_mut().flatten() {
-            voice.tick_gate();
+            if voice.track() == Some(track) {
+                voice.tick_gate();
+            }
         }
         for voice in self.cgb_slots.iter_mut().flatten() {
-            voice.tick_gate();
+            if voice.track() == track {
+                voice.tick_gate();
+            }
         }
     }
 
@@ -434,12 +445,34 @@ fn normalise_s8(sample: i32) -> f32 {
 }
 
 #[cfg(test)]
+#[path = "mixer_test_support.rs"]
+mod test_support;
+
+#[cfg(test)]
 #[expect(
     clippy::cast_precision_loss,
-    clippy::float_cmp,
     reason = "expected values are computed from small integer terms whose casts \
-              are exact at these magnitudes, and silence checks compare \
-              exactly-representable 0.0/-1.0 values on purpose"
+              are exact at these magnitudes"
 )]
 #[path = "mixer_mixing.rs"]
 mod tests;
+
+#[cfg(test)]
+#[expect(
+    clippy::float_cmp,
+    reason = "silence checks compare exactly-representable zero on purpose"
+)]
+#[path = "mixer_tie.rs"]
+mod tie_tests;
+
+#[cfg(test)]
+#[path = "mixer_sweep.rs"]
+mod sweep_tests;
+
+#[cfg(test)]
+#[path = "mixer_reverb.rs"]
+mod reverb_tests;
+
+#[cfg(test)]
+#[path = "mixer_idle_duty.rs"]
+mod idle_duty_tests;

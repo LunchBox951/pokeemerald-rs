@@ -58,7 +58,10 @@
 //! rather than static, so a residual that cures a primary status can flip a
 //! verdict construction already gave. `Battle` re-screens the enemy's
 //! admissible moves once at the start of every turn, before that turn's own
-//! RNG, restoring the guarantee above for the life of the battle.
+//! RNG, restoring the guarantee above for the life of the battle. The one
+//! exception is a guaranteed escape (Run Away, or raw Speed at or above the
+//! enemy's): that turn ends before the enemy acts, so it skips the re-screen
+//! (`pokeemerald/src/battle_util.c:427`-`:447`).
 //!
 //! Issue #187 adds `BATTLE_TYPE_FIRST_BATTLE` — the Route 101 intro
 //! Zigzagoon fight's rules — as [`battle::Battle::new`]'s `first_battle`
@@ -282,6 +285,7 @@ pub mod wild;
 mod script_rng;
 
 pub use ability::{inverts_drain, pinch_boosts_power, LIQUID_OOZE, OVERGROW};
+pub use battle::admission::ensure_participant_admissible;
 pub use battle::trainer::{
     build_trainer_pokemon, ensure_trainer_party_startable, fixed_ivs, roll_non_shiny_ot_id,
     shiny_value, trainer_data, trainer_money, TrainerContext, TrainerPartyMon, SHINY_ODDS,

@@ -8,7 +8,7 @@
 
 use engine::save::{
     BaseSnapshot, SaveBlock1, SaveBlock2, SaveFile, SaveFileError, SaveFileGuard, SaveStatus,
-    SaveStore,
+    SaveStore, StorageSource,
 };
 
 /// The save status used to choose the boot menu — upstream `gSaveFileStatus`'s
@@ -100,6 +100,10 @@ pub(crate) enum StoreOutcome {
     /// Another process persisted newer progress after this session loaded.
     /// The file is unchanged.
     RefusedStaleSession,
+    /// The disk holds this session's generation number over a different
+    /// base that donor loss does not explain, so it may be another save
+    /// swapped in after load. The file is unchanged.
+    RefusedConflictingSave,
 }
 
 /// The source of unmodelled bytes retained when serializing a save.
@@ -132,12 +136,78 @@ const fn counter_is_ahead(baseline: u32, candidate: u32) -> bool {
     candidate != baseline && candidate.wrapping_sub(baseline) < SERIAL_COUNTER_HALF_RANGE
 }
 
+/// What a continued session does with a reload's base before writing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BaseReconcile {
+    /// Write over the reloaded base unchanged.
+    Keep,
+    /// Put the reload back on the session's cached base.
+    Restore,
+    /// Refuse the write: the base differs for a reason not proven safe.
+    Refuse,
+}
+
+/// Reconciles a reload at `disk` with a continued session at `session`.
+///
+/// The disk falling back past the session's generation restores, as before.
+/// Equal counters over an identical base -- every ordinary save -- keep it.
+/// Equal counters over a different base restore only on `donor_lost`
+/// ([`donor_was_lost`]); anything else is refused, because equal counters
+/// prove neither common lineage nor equal contents, and a restore would put
+/// this session's storage into both slots within two saves.
+const fn reconcile_base(
+    disk: u32,
+    session: u32,
+    same_base: bool,
+    donor_lost: bool,
+) -> BaseReconcile {
+    if counter_is_ahead(disk, session) {
+        BaseReconcile::Restore
+    } else if disk != session || same_base {
+        BaseReconcile::Keep
+    } else if donor_lost {
+        BaseReconcile::Restore
+    } else {
+        BaseReconcile::Refuse
+    }
+}
+
+/// Whether an equal-counter base mismatch is the loss of the storage donor
+/// this session merged at boot, rather than a different save.
+///
+/// All three must hold: the session's load merged a legacy donor's storage
+/// (`session_merged_donor`); the reload still adopts a five-sector legacy head
+/// but finds no donor at all (`disk_source` is
+/// [`StorageSource::LegacyWithoutDonor`]); and that head's block payloads are
+/// byte-identical to the session's (`same_blocks`). Then the head is the one
+/// the session loaded and its storage is gone, so the session's copy is the
+/// only one left.
+///
+/// A reload that still finds a donor ([`StorageSource::LegacyDonor`]) is not
+/// donor loss: a donor is accepted only as a complete set of nine valid
+/// storage sectors (`SlotSurvey::verdict`), so damage to the merged donor
+/// withdraws it rather than yielding a damaged one, and a different valid
+/// donor may be a replacement's boxes. That reload is refused, including the
+/// case where the merged donor was damaged and an older complete set took its
+/// place; refusing leaves the file intact where a restore could not be proven
+/// safe.
+const fn donor_was_lost(
+    session_merged_donor: bool,
+    disk_source: StorageSource,
+    same_blocks: bool,
+) -> bool {
+    session_merged_donor && matches!(disk_source, StorageSource::LegacyWithoutDonor) && same_blocks
+}
+
 /// This session's save medium: the one file boot loads from and writes back to.
 #[derive(Debug)]
 pub(crate) struct SaveSlot {
     file: Option<SaveFile>,
     session_counter: Option<u32>,
     session_base: Option<BaseSnapshot>,
+    /// Whether `session_base`'s storage was merged from a legacy donor at
+    /// boot and no write has since replaced it ([`donor_was_lost`]).
+    session_merged_donor: bool,
     session_status: Option<SaveFileStatus>,
     /// The status [`Self::load`] reports (and defaults blocks under) when
     /// `file` is `None` -- distinguishes a medium that is unusable
@@ -159,6 +229,7 @@ impl SaveSlot {
             file: None,
             session_counter: None,
             session_base: None,
+            session_merged_donor: false,
             session_status: None,
             absent_status: SaveFileStatus::NoFlash,
         }
@@ -180,6 +251,7 @@ impl SaveSlot {
             file: None,
             session_counter: None,
             session_base: None,
+            session_merged_donor: false,
             session_status: None,
             absent_status: SaveFileStatus::Empty,
         }
@@ -193,6 +265,7 @@ impl SaveSlot {
                 file: Some(file),
                 session_counter: None,
                 session_base: None,
+                session_merged_donor: false,
                 session_status: None,
                 absent_status: SaveFileStatus::NoFlash,
             },
@@ -210,6 +283,7 @@ impl SaveSlot {
             file: Some(file),
             session_counter: None,
             session_base: None,
+            session_merged_donor: false,
             session_status: None,
             absent_status: SaveFileStatus::NoFlash,
         }
@@ -246,6 +320,7 @@ impl SaveSlot {
         let outcome = store.load();
         self.session_counter = Some(store.save_counter());
         self.session_base = Some(store.base_snapshot());
+        self.session_merged_donor = outcome.storage_source == StorageSource::LegacyDonor;
         let status = SaveFileStatus::from_store(outcome.status);
         self.session_status = Some(status);
         SavedGame {
@@ -312,7 +387,8 @@ impl SaveSlot {
         let file = self.file.as_ref().ok_or(SaveFileError::NoDataDirectory)?;
         let _read_modify_write_lock = lock(file)?;
         let mut store = file.read()?.unwrap_or_else(SaveStore::new);
-        let disk_status = SaveFileStatus::from_store(store.load().status);
+        let disk_load = store.load();
+        let disk_status = SaveFileStatus::from_store(disk_load.status);
         let disk_counter = store.save_counter();
         if let Some(session_counter) = self.session_counter {
             if counter_is_ahead(session_counter, disk_counter) && disk_status.menu_shows_continue()
@@ -320,19 +396,32 @@ impl SaveSlot {
                 return Ok(StoreOutcome::RefusedStaleSession);
             }
         }
+        if refuse_foreign && disk_status.menu_shows_continue() {
+            return Ok(StoreOutcome::RefusedExistingSave);
+        }
         if !clear_base {
             if let (Some(session_counter), Some(session_base)) =
                 (self.session_counter, &self.session_base)
             {
                 // The reload above fell back past a generation damaged since
-                // the session read it (tests::healing_a_damaged_newest_slot_*).
-                if counter_is_ahead(disk_counter, session_counter) {
-                    store.restore_base(session_base.clone());
+                // the session read it (tests::healing_a_damaged_newest_slot_*),
+                // or kept the same legacy head but lost the donor that
+                // supplied its storage (tests::equal_counter_donor_loss_*);
+                // any other equal-counter mismatch is refused
+                // (tests::an_equal_counter_replacement_is_refused_*).
+                let same_base = store.base_matches(session_base);
+                let donor_lost = !same_base
+                    && donor_was_lost(
+                        self.session_merged_donor,
+                        disk_load.storage_source,
+                        store.base_blocks_match(session_base),
+                    );
+                match reconcile_base(disk_counter, session_counter, same_base, donor_lost) {
+                    BaseReconcile::Keep => {}
+                    BaseReconcile::Restore => store.restore_base(session_base.clone()),
+                    BaseReconcile::Refuse => return Ok(StoreOutcome::RefusedConflictingSave),
                 }
             }
-        }
-        if refuse_foreign && disk_status.menu_shows_continue() {
-            return Ok(StoreOutcome::RefusedExistingSave);
         }
         if clear_base {
             store.clear_base();
@@ -341,6 +430,8 @@ impl SaveSlot {
         file.write(&store)?;
         self.session_counter = Some(store.save_counter());
         self.session_base = Some(store.base_snapshot());
+        // The write is full-format, so its storage is its own from here on.
+        self.session_merged_donor = false;
         Ok(StoreOutcome::Written)
     }
 }
