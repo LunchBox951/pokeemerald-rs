@@ -1,6 +1,5 @@
 //! A collision-blocked step's interruptible slow in-place walk
-//! (`PlayerNotOnBikeCollide`, `TryInterruptObjectEventSpecialAnim`). Split
-//! from `tests` like `forced_movement_tests` `(oop-boundaries)`.
+//! (`PlayerNotOnBikeCollide`, `TryInterruptObjectEventSpecialAnim`).
 
 use super::*;
 
