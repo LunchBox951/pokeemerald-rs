@@ -1,5 +1,3 @@
-//! Valid input compiling to the expected event stream: notes, ties, waits, and loops.
-
 use super::super::{compile, SongEvent};
 use super::support::*;
 
