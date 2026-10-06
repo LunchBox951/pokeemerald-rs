@@ -30,11 +30,13 @@ pub enum Status1 {
 }
 
 impl Status1 {
+    /// Whether this status is [`Status1::Paralysed`].
     #[must_use]
     pub const fn is_paralysed(self) -> bool {
         matches!(self, Self::Paralysed)
     }
 
+    /// Whether this status is [`Status1::Poisoned`].
     #[must_use]
     pub const fn is_poisoned(self) -> bool {
         matches!(self, Self::Poisoned)
