@@ -33,6 +33,8 @@ mod gen_rom_profile;
 mod record_snapshot;
 #[cfg(any(feature = "scenario", all(test, feature = "scenes")))]
 mod scenario;
+#[cfg(windows)]
+mod windows_file_identity;
 
 /// Usage text shown on stderr for any parse error.
 const USAGE: &str = "\

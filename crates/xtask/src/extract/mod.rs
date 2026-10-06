@@ -65,6 +65,9 @@ mod wav;
 
 use std::path::{Path, PathBuf};
 
+#[cfg(windows)]
+use crate::windows_file_identity::WindowsFileIdentity;
+
 pub use error::ExtractError;
 pub use pack_format::OUTPUT_RELATIVE_PATH;
 use pack_format::{EntryShapeError, PackEntry, PackWriter};
@@ -298,7 +301,10 @@ fn fill_new_file(path: &Path, bytes: &[u8]) -> std::io::Result<StagedPack> {
     #[cfg(not(windows))]
     let hold = file;
     #[cfg(windows)]
-    let hold = Some(file);
+    let hold = match WindowsHold::new(file) {
+        Ok(hold) => hold,
+        Err(source) => return Err(retained_error(path, &source)),
+    };
     let staged = StagedPack {
         path: path.to_path_buf(),
         hold,
@@ -321,7 +327,27 @@ type Hold = std::fs::File;
 /// by this process either, which is why it is an `Option`:
 /// [`StagedPack::release_hold`] empties it when the name has to be given up.
 #[cfg(windows)]
-type Hold = Option<std::fs::File>;
+type Hold = WindowsHold;
+
+/// The Windows hold: the exclusive handle while it lives, and the identity
+/// read from it before it is released, so the file can be recognised by that
+/// identity after the name is given up.
+#[cfg(windows)]
+struct WindowsHold {
+    file: Option<std::fs::File>,
+    identity: WindowsFileIdentity,
+}
+
+#[cfg(windows)]
+impl WindowsHold {
+    fn new(file: std::fs::File) -> std::io::Result<Self> {
+        let identity = WindowsFileIdentity::of(&file)?;
+        Ok(Self {
+            file: Some(file),
+            identity,
+        })
+    }
+}
 
 /// Ends `hold` where the platform needs it ended.
 #[cfg(not(windows))]
@@ -333,30 +359,69 @@ fn release(_hold: &mut Hold) {}
 /// staging name.
 #[cfg(windows)]
 fn release(hold: &mut Hold) {
-    drop(hold.take());
+    drop(hold.file.take());
 }
 
 /// Whether `found` describes the very file `hold` holds open: same device
 /// and inode.
 #[cfg(unix)]
-fn is_the_held_file(hold: &Hold, found: &std::fs::Metadata) -> std::io::Result<bool> {
+fn is_the_held_file(hold: &Hold, _path: &Path, found: &std::fs::Metadata) -> std::io::Result<bool> {
     use std::os::unix::fs::MetadataExt as _;
 
     let staged = hold.metadata()?;
     Ok((staged.dev(), staged.ino()) == (found.dev(), found.ino()))
 }
 
-/// Whether `found` describes the very file `hold` holds open. Off unix there
-/// is no identity to read back, so the answer rests on what the hold forbids:
-/// on Windows it forbids everything, so the name cannot have come to mean
-/// another file while it lives.
-#[cfg(not(unix))]
+/// Whether the entry at `path` is the very file `hold` identified: a fresh
+/// open that asks for no access and shares everything, so it coexists with the
+/// exclusive hold, and does not follow a final symlink, is read for the same
+/// volume and file ID. Works after the hold is released, too.
+#[cfg(windows)]
+fn is_the_held_file(hold: &Hold, path: &Path, found: &std::fs::Metadata) -> std::io::Result<bool> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+
+    const FILE_SHARE_ALL: u32 = 0x1 | 0x2 | 0x4;
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+
+    if !found.file_type().is_file() {
+        return Ok(false);
+    }
+    let fresh = std::fs::OpenOptions::new()
+        .access_mode(0)
+        .share_mode(FILE_SHARE_ALL)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)?;
+    Ok(
+        fresh.metadata()?.file_type().is_file()
+            && WindowsFileIdentity::of(&fresh)? == hold.identity,
+    )
+}
+
+/// Whether `found` describes the very file `hold` holds open. Where there is
+/// no identity to read back the answer is that it does.
+#[cfg(not(any(unix, windows)))]
 #[expect(
     clippy::unnecessary_wraps,
-    reason = "one signature for both platforms; only the unix arm can fail to read an identity"
+    reason = "one signature for every platform; only the unix and windows arms can fail to read an identity"
 )]
-fn is_the_held_file(_hold: &Hold, _found: &std::fs::Metadata) -> std::io::Result<bool> {
+fn is_the_held_file(
+    _hold: &Hold,
+    _path: &Path,
+    _found: &std::fs::Metadata,
+) -> std::io::Result<bool> {
     Ok(true)
+}
+
+/// `source`, noting that the staging entry at `path` was left where it is.
+fn retained_error(path: &Path, source: &std::io::Error) -> std::io::Error {
+    std::io::Error::new(
+        source.kind(),
+        format!(
+            "{source}; the staging file {} was left in place",
+            path.display()
+        ),
+    )
 }
 
 /// A staged pack and the hold that keeps the staging name its own.
@@ -371,7 +436,7 @@ impl StagedPack {
     /// identity.
     fn matches(&self, path: &Path) -> std::io::Result<bool> {
         let found = std::fs::symlink_metadata(path)?;
-        Ok(found.file_type().is_file() && is_the_held_file(&self.hold, &found)?)
+        Ok(found.file_type().is_file() && is_the_held_file(&self.hold, path, &found)?)
     }
 
     /// Gives up the hold, so that the rename which promotes the staged pack
@@ -383,9 +448,9 @@ impl StagedPack {
     /// Verifies ownership, then promotes the staged pack to `dest` by rename.
     /// A replaced or unverifiable staging path is refused and left in place;
     /// a destination that does not verify afterwards is reported, never
-    /// unlinked. The post-rename check is Unix-only: on Windows the exclusive
-    /// hold must be released before the rename, no file identity is read
-    /// back, and the window between the check and the rename stays open.
+    /// unlinked. On Windows the exclusive hold must be released before the
+    /// rename, so a swap in that window is detected afterwards by file
+    /// identity, not prevented, and nothing is rolled back.
     fn publish(self, dest: &Path) -> std::io::Result<()> {
         self.publish_with(dest, || {}, || {})
     }
@@ -425,7 +490,7 @@ impl StagedPack {
             on_rename_failure();
             return Err(self.report_retained(&error));
         }
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         match self.matches(dest) {
             Ok(true) => {}
             Ok(false) => {
@@ -456,18 +521,12 @@ impl StagedPack {
     /// `source`, noting that the staging entry was left where it is: its
     /// pathname may name another file by now, so it is never unlinked.
     fn report_retained(&self, source: &std::io::Error) -> std::io::Error {
-        std::io::Error::new(
-            source.kind(),
-            format!(
-                "{source}; the staging file {} was left in place",
-                self.path.display()
-            ),
-        )
+        retained_error(&self.path, source)
     }
 
     /// `source`, noting that the promoted entry at `dest` was left where it is
     /// because it could not be verified as the staged file.
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     fn report_unverified(dest: &Path, source: &std::io::Error) -> std::io::Error {
         std::io::Error::new(
             source.kind(),
@@ -1368,7 +1427,7 @@ mod tests {
 
     /// Stages `bytes` at the deterministic name and publishes it with `plant`
     /// run between the ownership check and the rename.
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     fn assert_swap_before_rename_is_refused(
         label: &str,
         plant: impl FnOnce(&std::path::Path, &std::path::Path),
@@ -1412,7 +1471,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[test]
     fn a_regular_file_swapped_in_just_before_the_rename_is_refused_and_left_in_place() {
         assert_swap_before_rename_is_refused("swap-before-rename-file", |staging, _| {
@@ -1426,6 +1485,48 @@ mod tests {
         assert_swap_before_rename_is_refused("swap-before-rename-link", |staging, bystander| {
             std::os::unix::fs::symlink(bystander, staging).unwrap();
         });
+    }
+
+    /// Needs symlink privilege (Developer Mode or an elevated token); creation
+    /// failing is a failure, never a skip.
+    #[cfg(windows)]
+    #[test]
+    fn a_symlink_swapped_in_just_before_the_rename_is_refused_and_left_in_place() {
+        assert_swap_before_rename_is_refused("swap-before-rename-link", |staging, bystander| {
+            std::os::windows::fs::symlink_file(bystander, staging).unwrap();
+        });
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_file_replacing_the_staged_one_after_the_hold_is_released_is_refused_before_the_rename() {
+        let dir = scratch_dir("windows-replaced-after-release");
+        let output_path = dir.join("pokeemerald.pack");
+        std::fs::write(&output_path, b"existing destination").unwrap();
+        let staging_path = staging_path_with_value(&output_path, TEST_STAGING_VALUE);
+        let carried = dir.join("carried-away");
+
+        let mut staged =
+            super::stage_at_first_free_name(std::iter::once(staging_path.clone()), b"our pack")
+                .unwrap();
+        staged.release_hold();
+        std::fs::rename(&staging_path, &carried).unwrap();
+        std::fs::write(&staging_path, b"an intruder's file").unwrap();
+        let err = staged.publish(&output_path).unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("was replaced before it could be published"),
+            "the retained identity must refuse the replacement: {err}"
+        );
+        assert_eq!(
+            std::fs::read(&output_path).unwrap(),
+            b"existing destination"
+        );
+        assert_eq!(std::fs::read(&staging_path).unwrap(), b"an intruder's file");
+        assert_eq!(std::fs::read(&carried).unwrap(), b"our pack");
+
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[cfg(unix)]
