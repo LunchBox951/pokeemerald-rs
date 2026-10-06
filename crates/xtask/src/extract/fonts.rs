@@ -2,37 +2,9 @@
 
 use std::path::Path;
 
+use super::scope::FONTS;
 use super::{build_image_entry, png, read_file, ExtractError};
 use pack_format::PackWriter;
-
-#[derive(Clone, Copy)]
-struct FontSource {
-    filename: &'static str,
-    pack_id: &'static str,
-}
-
-const FONTS: [FontSource; 5] = [
-    FontSource {
-        filename: "latin_small.png",
-        pack_id: "font/small/glyphs",
-    },
-    FontSource {
-        filename: "latin_normal.png",
-        pack_id: "font/normal/glyphs",
-    },
-    FontSource {
-        filename: "latin_short.png",
-        pack_id: "font/short/glyphs",
-    },
-    FontSource {
-        filename: "latin_narrow.png",
-        pack_id: "font/narrow/glyphs",
-    },
-    FontSource {
-        filename: "latin_small_narrow.png",
-        pack_id: "font/small_narrow/glyphs",
-    },
-];
 
 const FONT_SHEET_WIDTH: u32 = 256;
 const FONT_SHEET_HEIGHT: u32 = 512;
@@ -68,10 +40,11 @@ fn validate_font_sheet(path: &Path, image: &png::IndexedImage) -> Result<(), Ext
 
 #[cfg(test)]
 mod tests {
+    use super::super::scope::{FontSource, FONTS};
     use super::super::{extract_to, png, upstream_present};
     use super::{
-        validate_font_sheet, ExtractError, FontSource, FONTS, FONT_SHEET_BIT_DEPTH,
-        FONT_SHEET_HEIGHT, FONT_SHEET_WIDTH,
+        validate_font_sheet, ExtractError, FONT_SHEET_BIT_DEPTH, FONT_SHEET_HEIGHT,
+        FONT_SHEET_WIDTH,
     };
 
     fn scratch_path(name: &str) -> std::path::PathBuf {
