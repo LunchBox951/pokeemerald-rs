@@ -1263,3 +1263,39 @@ fn partial_donor_damage_still_heals_the_boxes_on_the_next_save() {
     assert_eq!(outcome, super::StoreOutcome::Written);
     assert_newest_storage(&temp, LEGACY_HEAD_COUNTER + 1, &storage, true);
 }
+
+#[test]
+fn at_path_accepts_an_absent_file_as_a_fresh_durable_medium() {
+    let save = TempSave::new("at-path-fresh");
+    let slot = SaveSlot::at_path(&save.path).expect("an absent save is a fresh medium");
+    assert!(
+        slot.file.is_some(),
+        "the slot must be file-backed, not none()/disabled()"
+    );
+}
+
+#[test]
+fn at_path_reopens_what_an_earlier_session_wrote() {
+    let save = TempSave::new("at-path-restart");
+    let image = SaveStore::new().flash_image().to_vec();
+    std::fs::write(&save.path, &image).unwrap();
+    let slot = SaveSlot::at_path(&save.path).expect("a valid image reopens");
+    assert_eq!(
+        slot.file.as_ref().map(SaveFile::path),
+        Some(save.path.as_path())
+    );
+}
+
+#[test]
+fn at_path_fails_closed_when_the_medium_is_unusable() {
+    let save = TempSave::new("at-path-unusable");
+    std::fs::write(&save.path, b"wrong length").unwrap();
+    assert!(matches!(
+        SaveSlot::at_path(&save.path),
+        Err(SaveFileError::BadLength { .. })
+    ));
+
+    std::fs::remove_file(&save.path).unwrap();
+    std::fs::create_dir(&save.path).unwrap();
+    assert!(SaveSlot::at_path(&save.path).is_err());
+}

@@ -24,6 +24,9 @@
 //! - the map and border grids named by `LAYOUTS`;
 //! - the five Latin font sheets, every text-window image and palette, and the
 //!   main-menu background palette; and
+//! - the starter chooser's tile, Poké Ball, and circle sheets with their
+//!   palettes, both Birch tilemaps, and the shared normal front image and
+//!   palette of Treecko, Torchic, and Mudkip; and
 //! - `mus_title`, its transitive voicegroup tree, and every sample that tree
 //!   references.
 //!
@@ -38,6 +41,8 @@
 //! - `font/<name>/glyphs`
 //! - `text-window/{image,palette}/<stem>`
 //! - `interface/palette/main_menu_bg`
+//! - `starter-chooser/{image,palette,raw}/<stem>`
+//! - `pokemon/<species>/front` and `pokemon/<species>/palette/normal`
 //! - `audio/sample/{direct-sound,programmable-wave}/<name>`
 //! - `audio/voicegroup/<label>` and `audio/song/<name>`
 //!
@@ -53,6 +58,7 @@ mod layouts_json;
 pub(crate) mod midi;
 pub mod png;
 pub(crate) mod scope;
+mod starter_chooser;
 mod text_window;
 pub(crate) mod voicegroups;
 mod wav;
@@ -125,6 +131,7 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     fonts::extract_fonts(&upstream, &mut writer)?;
     text_window::extract_text_window(&upstream, &mut writer)?;
     extract_interface_palettes(&upstream, &mut writer)?;
+    starter_chooser::extract_starter_chooser(&upstream, &mut writer)?;
     audio_samples::extract_audio_samples(&upstream, &mut writer)?;
     voicegroups::extract_voicegroups(&upstream, &mut writer)?;
     midi::extract_song(&upstream, &mut writer)?;
@@ -168,52 +175,11 @@ fn write_pack_atomically_with_names(
         ExtractError::WriteFailed(output_path.to_path_buf(), error.to_string())
     };
 
-    let mut staged = match stage_at_first_free_name(candidates, bytes) {
+    let staged = match stage_at_first_free_name(candidates, bytes) {
         Ok(staged) => staged,
         Err(error) => return Err(write_failed(error)),
     };
-
-    match staged.still_ours() {
-        Ok(true) => {}
-        Ok(false) => {
-            return Err(write_failed(std::io::Error::other(format!(
-                "staging file {} was replaced before it could be published",
-                staged.path.display()
-            ))));
-        }
-        Err(error) => {
-            return Err(write_failed(std::io::Error::new(
-                error.kind(),
-                format!(
-                    "ownership of the staging file {} could not be confirmed before publishing, so it was left in place: {error}",
-                    staged.path.display()
-                ),
-            )));
-        }
-    }
-
-    staged.release_hold();
-    if let Err(error) = std::fs::rename(&staged.path, output_path) {
-        return Err(write_failed(staged.remove_after(error)));
-    }
-    Ok(())
-}
-
-fn remove_abandoned_staging_file(
-    staging_path: &Path,
-    original_error: std::io::Error,
-) -> std::io::Error {
-    match std::fs::remove_file(staging_path) {
-        Ok(()) => original_error,
-        Err(cleanup_error) if cleanup_error.kind() == std::io::ErrorKind::NotFound => original_error,
-        Err(cleanup_error) => std::io::Error::new(
-            original_error.kind(),
-            format!(
-                "{original_error} (additionally, failed to remove abandoned staging file `{}`: {cleanup_error})",
-                staging_path.display()
-            ),
-        ),
-    }
+    staged.publish(output_path).map_err(write_failed)
 }
 
 /// Width of the staging suffix's hex digits: wide enough that guessing a
@@ -316,8 +282,9 @@ fn stage_at_first_free_name(
 }
 
 /// Writes and syncs `bytes` into a `path` `create_new_exclusive` has just
-/// claimed, removing `path` again on any failure past that open so this call
-/// never deletes an entry a different caller put there.
+/// claimed. A failure past that open leaves the entry where it is and says so:
+/// the name may no longer be ours to unlink, and unlinking by pathname cannot
+/// tell.
 fn fill_new_file(path: &Path, bytes: &[u8]) -> std::io::Result<StagedPack> {
     use std::io::Write as _;
 
@@ -332,13 +299,13 @@ fn fill_new_file(path: &Path, bytes: &[u8]) -> std::io::Result<StagedPack> {
     let hold = file;
     #[cfg(windows)]
     let hold = Some(file);
-    let mut staged = StagedPack {
+    let staged = StagedPack {
         path: path.to_path_buf(),
         hold,
     };
     match result {
         Ok(()) => Ok(staged),
-        Err(source) => Err(staged.remove_after(source)),
+        Err(source) => Err(staged.report_retained(&source)),
     }
 }
 
@@ -369,8 +336,8 @@ fn release(hold: &mut Hold) {
     drop(hold.take());
 }
 
-/// Whether `found` describes the very file `hold` holds open: same device and
-/// inode.
+/// Whether `found` describes the very file `hold` holds open: same device
+/// and inode.
 #[cfg(unix)]
 fn is_the_held_file(hold: &Hold, found: &std::fs::Metadata) -> std::io::Result<bool> {
     use std::os::unix::fs::MetadataExt as _;
@@ -399,38 +366,116 @@ struct StagedPack {
 }
 
 impl StagedPack {
-    /// Whether the staging path still names this staged file, rather than a
-    /// symlink, directory, or other entry that took its name.
-    fn still_ours(&self) -> std::io::Result<bool> {
-        let found = std::fs::symlink_metadata(&self.path)?;
+    /// Whether `path` names this staged file, rather than a symlink,
+    /// directory, or other entry, judged against the retained handle's
+    /// identity.
+    fn matches(&self, path: &Path) -> std::io::Result<bool> {
+        let found = std::fs::symlink_metadata(path)?;
         Ok(found.file_type().is_file() && is_the_held_file(&self.hold, &found)?)
     }
 
     /// Gives up the hold, so that the rename which promotes the staged pack
-    /// -- or the unlink which abandons it -- can take its name.
+    /// can take its name.
     fn release_hold(&mut self) {
         release(&mut self.hold);
     }
 
-    /// Removes this staged file after `source`, folding a cleanup failure
-    /// into the returned error. An entry that replaced it belongs to whoever
-    /// put it there and is left where it is; ownership that could not be read
-    /// at all leaves the same file behind, and is reported as such.
-    fn remove_after(&mut self, source: std::io::Error) -> std::io::Error {
-        match self.still_ours() {
-            Ok(false) => source,
-            Ok(true) => {
-                self.release_hold();
-                remove_abandoned_staging_file(&self.path, source)
-            }
-            Err(unreadable) => std::io::Error::new(
-                source.kind(),
-                format!(
-                    "{source}; additionally, ownership of the abandoned staging file {} could not be confirmed: {unreadable}",
+    /// Verifies ownership, then promotes the staged pack to `dest` by rename.
+    /// A replaced or unverifiable staging path is refused and left in place;
+    /// a destination that does not verify afterwards is reported, never
+    /// unlinked. The post-rename check is Unix-only: on Windows the exclusive
+    /// hold must be released before the rename, no file identity is read
+    /// back, and the window between the check and the rename stays open.
+    fn publish(self, dest: &Path) -> std::io::Result<()> {
+        self.publish_with(dest, || {}, || {})
+    }
+
+    /// [`Self::publish`], plus `before_rename` run immediately before the
+    /// promoting rename and `on_rename_failure` run right after a failed one.
+    /// Production passes no-ops; tests use them to land a replacement at the
+    /// staging pathname inside those windows.
+    fn publish_with(
+        mut self,
+        dest: &Path,
+        before_rename: impl FnOnce(),
+        on_rename_failure: impl FnOnce(),
+    ) -> std::io::Result<()> {
+        match self.matches(&self.path) {
+            Ok(true) => {}
+            Ok(false) => {
+                return Err(self.report_retained(&std::io::Error::other(format!(
+                    "staging file {} was replaced before it could be published",
                     self.path.display()
-                ),
-            ),
+                ))));
+            }
+            Err(error) => {
+                let wrapped = std::io::Error::new(
+                    error.kind(),
+                    format!(
+                        "ownership of the staging file {} could not be confirmed before publishing: {error}",
+                        self.path.display()
+                    ),
+                );
+                return Err(self.report_retained(&wrapped));
+            }
         }
+        self.release_hold();
+        before_rename();
+        if let Err(error) = std::fs::rename(&self.path, dest) {
+            on_rename_failure();
+            return Err(self.report_retained(&error));
+        }
+        #[cfg(unix)]
+        match self.matches(dest) {
+            Ok(true) => {}
+            Ok(false) => {
+                return Err(Self::report_unverified(
+                    dest,
+                    &std::io::Error::other(format!(
+                        "the promoted pack {} does not match the staged file",
+                        dest.display()
+                    )),
+                ));
+            }
+            Err(error) => {
+                return Err(Self::report_unverified(
+                    dest,
+                    &std::io::Error::new(
+                        error.kind(),
+                        format!(
+                            "the promoted pack {} could not be confirmed after publishing: {error}",
+                            dest.display()
+                        ),
+                    ),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// `source`, noting that the staging entry was left where it is: its
+    /// pathname may name another file by now, so it is never unlinked.
+    fn report_retained(&self, source: &std::io::Error) -> std::io::Error {
+        std::io::Error::new(
+            source.kind(),
+            format!(
+                "{source}; the staging file {} was left in place",
+                self.path.display()
+            ),
+        )
+    }
+
+    /// `source`, noting that the promoted entry at `dest` was left where it is
+    /// because it could not be verified as the staged file.
+    #[cfg(unix)]
+    fn report_unverified(dest: &Path, source: &std::io::Error) -> std::io::Error {
+        std::io::Error::new(
+            source.kind(),
+            format!(
+                "{source}; the unverified entry at {} was left in place",
+                dest.display()
+            ),
+        )
     }
 }
 
@@ -968,7 +1013,7 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_rename_removes_the_staging_file_and_leaves_the_destination_untouched() {
+    fn a_failed_rename_retains_the_staging_file_and_leaves_the_destination_untouched() {
         let dir = scratch_dir("rename");
         let output_path = dir.join("destination");
         std::fs::create_dir(&output_path).unwrap();
@@ -986,9 +1031,15 @@ mod tests {
             matches!(&err, ExtractError::WriteFailed(path, _) if path == &output_path),
             "{err:?}"
         );
+        assert_eq!(
+            std::fs::read(&staging_path).unwrap(),
+            b"replacement",
+            "a failed rename must retain its staging file, not unlink by pathname"
+        );
         assert!(
-            !staging_path.exists(),
-            "a failed rename must not leave its staging file behind"
+            err.to_string()
+                .contains(&staging_path.display().to_string()),
+            "the retained staging file must be named: {err}"
         );
         assert_eq!(std::fs::read(&marker_path).unwrap(), b"unchanged");
 
@@ -1015,34 +1066,6 @@ mod tests {
         assert!(
             !err.to_string().contains("abandoned staging file"),
             "nothing was staged, so nothing was abandoned: {err}"
-        );
-
-        let _ = std::fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn a_failed_staging_cleanup_names_the_artifact_it_left_behind() {
-        let dir = scratch_dir("cleanup");
-        let staging_path = dir.join("pokeemerald.pack.tmp.occupant");
-        std::fs::create_dir(&staging_path).unwrap();
-        std::fs::write(staging_path.join("occupant"), b"occupant").unwrap();
-
-        // Exercised directly, rather than through `write_pack_atomically_with_names`:
-        // a name `create_new_exclusive` finds already taken is someone else's, so the
-        // production path must never try to remove it. This tests
-        // `remove_abandoned_staging_file`'s own contract -- naming what it left behind
-        // when it is asked to clean up a path this call *did* stage and own.
-        let original_error = std::io::Error::other("synthetic publish failure");
-        let err = super::remove_abandoned_staging_file(&staging_path, original_error);
-
-        assert!(
-            staging_path.is_dir(),
-            "cleanup should have failed, leaving the staging directory behind"
-        );
-        assert!(
-            err.to_string()
-                .contains(&staging_path.display().to_string()),
-            "a failed cleanup must name the artifact it left behind: {err}"
         );
 
         let _ = std::fs::remove_dir_all(dir);
@@ -1341,6 +1364,104 @@ mod tests {
             }
         }
         let _ = std::fs::remove_file(report.output_path);
+    }
+
+    /// Stages `bytes` at the deterministic name and publishes it with `plant`
+    /// run between the ownership check and the rename.
+    #[cfg(unix)]
+    fn assert_swap_before_rename_is_refused(
+        label: &str,
+        plant: impl FnOnce(&std::path::Path, &std::path::Path),
+    ) {
+        let dir = scratch_dir(label);
+        let output_path = dir.join("pokeemerald.pack");
+        let bystander = dir.join("bystander");
+        std::fs::write(&bystander, b"not a pack").unwrap();
+        let staging_path = staging_path_with_value(&output_path, TEST_STAGING_VALUE);
+        let carried = dir.join("carried-away");
+
+        let staged =
+            super::stage_at_first_free_name(std::iter::once(staging_path.clone()), b"our pack")
+                .unwrap();
+        let err = staged
+            .publish_with(
+                &output_path,
+                || {
+                    std::fs::rename(&staging_path, &carried).unwrap();
+                    plant(&staging_path, &bystander);
+                },
+                || {},
+            )
+            .unwrap_err();
+
+        assert!(
+            err.to_string().contains("does not match the staged file"),
+            "the post-rename identity check must refuse the swap: {err}"
+        );
+        assert!(
+            err.to_string().contains(&output_path.display().to_string()),
+            "the unverified destination must be named: {err}"
+        );
+        assert_eq!(std::fs::read(&carried).unwrap(), b"our pack");
+        assert_eq!(std::fs::read(&bystander).unwrap(), b"not a pack");
+        assert!(
+            std::fs::symlink_metadata(&output_path).is_ok(),
+            "an unverified destination must be left in place, not unlinked"
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_regular_file_swapped_in_just_before_the_rename_is_refused_and_left_in_place() {
+        assert_swap_before_rename_is_refused("swap-before-rename-file", |staging, _| {
+            std::fs::write(staging, b"an intruder's file").unwrap();
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_swapped_in_just_before_the_rename_is_refused_and_left_in_place() {
+        assert_swap_before_rename_is_refused("swap-before-rename-link", |staging, bystander| {
+            std::os::unix::fs::symlink(bystander, staging).unwrap();
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_replacement_landing_after_a_failed_rename_is_never_unlinked() {
+        let dir = scratch_dir("swap-after-failed-rename");
+        let output_path = dir.join("destination");
+        std::fs::create_dir(&output_path).unwrap();
+        let staging_path = staging_path_with_value(&output_path, TEST_STAGING_VALUE);
+
+        let staged =
+            super::stage_at_first_free_name(std::iter::once(staging_path.clone()), b"our pack")
+                .unwrap();
+        let err = staged
+            .publish_with(
+                &output_path,
+                || {},
+                || {
+                    std::fs::remove_file(&staging_path).unwrap();
+                    std::fs::write(&staging_path, b"an intruder's file").unwrap();
+                },
+            )
+            .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains(&staging_path.display().to_string()),
+            "{err}"
+        );
+        assert_eq!(
+            std::fs::read(&staging_path).unwrap(),
+            b"an intruder's file",
+            "failure cleanup removed a file it could not prove was its own"
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
 

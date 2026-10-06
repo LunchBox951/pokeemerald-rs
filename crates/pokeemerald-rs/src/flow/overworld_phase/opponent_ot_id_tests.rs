@@ -7,7 +7,7 @@ use super::{ActiveBattle, OverworldPhase};
 use crate::flow::save_continue_tests::new_game_phase;
 
 /// `SPECIES_WURMPLE`, the same ordinary fightable wild species
-/// `crate::flow::wild_encounter::tests` already uses.
+/// `crate::flow::wild_encounter::test_support::WURMPLE` already names.
 const WURMPLE: assets::SpeciesId = assets::SpeciesId(290);
 
 /// The save owner's trainer id -- any nonzero id a real player file can

@@ -27,7 +27,8 @@
 //! and OT gender instead come from the current save's player identity and
 //! map upstream, which `to_save_pokemon` has no way to see; those three stay
 //! zero, same as every other field `battle` does not model, until a caller
-//! that holds that state is threaded through.
+//! that holds that state is threaded through -- [`starter`]'s level-five grant
+//! is the first such caller and stamps all three.
 //!
 //! Non-volatile status is likewise retained rather than merged: `battle`
 //! now models [`battle::Status1::Paralysed`] and [`battle::Status1::Poisoned`]
@@ -88,6 +89,9 @@ const MISC_MET_DATA: Range<usize> = 2..4;
 const MET_LEVEL_MASK: u16 = 0x7F;
 const MET_GAME_SHIFT: u16 = 7;
 const POKE_BALL_SHIFT: u16 = 11;
+const OT_GENDER_SHIFT: u16 = 15;
+/// `PokemonSubstruct3::metLocation`, the misc substructure's second byte.
+const MISC_MET_LOCATION: usize = 1;
 
 /// `VERSION_EMERALD` (`pokeemerald/include/constants/global.h:8-16`) --
 /// `gGameVersion`'s fixed value for this build, not player state, so
@@ -104,6 +108,15 @@ const ABILITY_SLOT_SHIFT: usize = 31;
 
 const MOVE_ID_WIDTH: usize = size_of::<u16>();
 const ATTACK_PP_OFFSET: usize = MAX_MON_MOVES * MOVE_ID_WIDTH;
+
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "no production caller until the starter chooser (#1663)"
+    )
+)]
+mod starter;
 
 /// Why a saved party member could not be converted into a battler.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -711,6 +724,18 @@ impl LoadedLead {
             record,
             lead_hp_hidden_by_load,
         })
+    }
+
+    /// Adopts a member just created into slot 0: its battler and the record
+    /// encoded from it, with the hidden-HP offset measured against that record.
+    fn created(dex: &Dex, battler: BattlePokemon, record: Pokemon) -> Self {
+        let lead_hp_hidden_by_load = hp_hidden_by_load(dex, &record, &battler);
+        Self {
+            slot: 0,
+            battler: Some(battler),
+            record,
+            lead_hp_hidden_by_load,
+        }
     }
 
     /// The selected party slot.

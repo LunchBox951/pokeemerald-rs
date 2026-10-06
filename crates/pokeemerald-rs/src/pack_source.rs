@@ -44,6 +44,13 @@ pub(crate) enum PackSource {
     /// `Box::leak` it once.
     #[cfg(test)]
     Test(&'static std::path::Path),
+    /// A caller-owned pack at a fixed path ([`crate::App::new_headless_real_at`]):
+    /// a checkout-extracted pack or a ROM-imported one the caller placed
+    /// itself. Never consults the environment or any other location, so a
+    /// missing file is a load error, not a fallback. `Copy` threading
+    /// through every scene load needs a `'static` path, so the
+    /// constructor leaks one small path per `App` it builds.
+    Explicit(&'static std::path::Path),
 }
 
 impl PackSource {
@@ -59,6 +66,7 @@ impl PackSource {
             Self::Repo => AssetPack::repo_pack_path(),
             #[cfg(test)]
             Self::Test(path) => path.to_path_buf(),
+            Self::Explicit(path) => path.to_path_buf(),
         }
     }
 
@@ -114,5 +122,25 @@ mod tests {
     #[test]
     fn repo_pins_to_the_checkout_path_pack_format_itself_names() {
         assert_eq!(PackSource::Repo.path(), pack_format::repo_pack_path());
+    }
+
+    /// An explicit source resolves to exactly the path it was given, never
+    /// the runtime or checkout location.
+    #[test]
+    fn explicit_resolves_to_its_own_path_alone() {
+        let path = std::path::Path::new("/nonexistent/explicit-source.pack");
+        let source = PackSource::Explicit(path);
+        assert_eq!(source.path(), path);
+        assert_ne!(source.path(), PackSource::Repo.path());
+        assert_ne!(source.path(), PackSource::Runtime.path());
+    }
+
+    /// A missing explicit pack is a load error, never a fallback to
+    /// another source.
+    #[test]
+    fn explicit_missing_pack_fails_to_load() {
+        let source =
+            PackSource::Explicit(std::path::Path::new("/nonexistent/explicit-source.pack"));
+        assert!(source.load().is_err());
     }
 }

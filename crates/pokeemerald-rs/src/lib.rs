@@ -162,6 +162,6 @@ pub use platform::Buttons as AppButtons;
 mod voicegroup_pack_tests;
 
 /// Synthetic `AssetPack` fixture helpers shared by [`main_menu::tests`],
-/// [`intro::tests`], and [`start_menu::tests`].
+/// [`intro::tests`], and [`start_menu::palette_tests`].
 #[cfg(test)]
 mod pack_test_support;

@@ -1,6 +1,7 @@
 //! Tests for [`super::input::advance_player_one_frame`] and
 //! [`super::input::held_direction`].
 
+use super::input::run_held;
 use super::test_support::*;
 use engine::overworld::{Direction, PlayerState, StepOutcome};
 use platform::{ButtonState, Buttons};
@@ -26,6 +27,7 @@ fn advance_player_one_frame_shows_progress_1_on_the_frame_a_step_begins_and_take
     advance_player_one_frame(
         &mut player,
         Some(Direction::South),
+        false,
         &runtime,
         &no_connections,
         &NO_FLAGS,
@@ -46,6 +48,7 @@ fn advance_player_one_frame_shows_progress_1_on_the_frame_a_step_begins_and_take
         advance_player_one_frame(
             &mut player,
             Some(Direction::South),
+            false,
             &runtime,
             &no_connections,
             &NO_FLAGS,
@@ -63,6 +66,7 @@ fn advance_player_one_frame_shows_progress_1_on_the_frame_a_step_begins_and_take
     advance_player_one_frame(
         &mut player,
         Some(Direction::South),
+        false,
         &runtime,
         &no_connections,
         &NO_FLAGS,
@@ -81,6 +85,7 @@ fn advance_player_one_frame_turning_in_place_never_enters_transit() {
     advance_player_one_frame(
         &mut player,
         Some(Direction::East),
+        false,
         &runtime,
         &no_connections,
         &NO_FLAGS,
@@ -101,6 +106,7 @@ fn advance_player_one_frame_swallows_input_through_the_turns_busy_window_before_
     let outcome = advance_player_one_frame(
         &mut player,
         Some(Direction::East),
+        false,
         &runtime,
         &no_connections,
         &NO_FLAGS,
@@ -111,6 +117,7 @@ fn advance_player_one_frame_swallows_input_through_the_turns_busy_window_before_
         let outcome = advance_player_one_frame(
             &mut player,
             Some(Direction::East),
+            false,
             &runtime,
             &no_connections,
             &NO_FLAGS,
@@ -126,6 +133,7 @@ fn advance_player_one_frame_swallows_input_through_the_turns_busy_window_before_
     let outcome = advance_player_one_frame(
         &mut player,
         Some(Direction::East),
+        false,
         &runtime,
         &no_connections,
         &NO_FLAGS,
@@ -161,4 +169,41 @@ fn held_direction_prioritizes_up_over_every_other_direction() {
     );
     assert_eq!(held_direction(held(Buttons::RIGHT)), Some(Direction::East));
     assert_eq!(held_direction(ButtonState::new()), None);
+}
+
+#[test]
+fn run_held_follows_the_held_b_bit_not_the_press_edge() {
+    assert!(run_held(held(Buttons::B | Buttons::UP)));
+    assert!(!run_held(held(Buttons::UP)));
+    assert!(!run_held(ButtonState::new()));
+}
+
+#[test]
+fn held_b_with_the_shoes_flag_crosses_a_tile_in_eight_rendered_frames() {
+    let runtime = flat_runtime(5, 5);
+    let mut player = PlayerState::new((2, 2), 3, Direction::South);
+    let mut shoes = engine::event_data::EventData::new();
+    shoes.flag_set(0x8C0).unwrap();
+    advance_player_one_frame(
+        &mut player,
+        Some(Direction::South),
+        true,
+        &runtime,
+        &no_connections,
+        &shoes,
+    );
+    assert_eq!(player.step_progress(), 1);
+    for expected in 2..engine::overworld::RUN_FRAMES_PER_TILE {
+        advance_player_one_frame(
+            &mut player,
+            Some(Direction::South),
+            true,
+            &runtime,
+            &no_connections,
+            &shoes,
+        );
+        assert_eq!(player.step_progress(), expected);
+    }
+    advance_player_one_frame(&mut player, None, true, &runtime, &no_connections, &shoes);
+    assert!(!player.in_transit(), "the eighth frame drains the run");
 }
