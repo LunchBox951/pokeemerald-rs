@@ -273,7 +273,7 @@ pub struct VoicegroupRoot {
     pub label: &'static str,
     /// The address the ROM's own pointers carry. A group declared with a
     /// `starting_note` bias is addressed *before* its first slot, exactly
-    /// as the mixer indexes it: slots `0..starting_note` are the ToneData
+    /// as the mixer indexes it: slots `0..starting_note` are the `ToneData`
     /// records preceding the declared ones.
     pub addr: GbaPtr,
     /// The `starting_note` bias, `0` for an unbiased group.

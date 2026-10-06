@@ -20,7 +20,7 @@
 //! trailing entries; any unfilled trailing position remains
 //! [`VoiceSlot::Empty`].
 //!
-//! A nonzero `starting_note` aliases the group label that many ToneData
+//! A nonzero `starting_note` aliases the group label that many `ToneData`
 //! records before its first declared one, so slots `0..starting_note` are the
 //! physically preceding linked records (see
 //! `Resolver::collect_alias_predecessors`). A missing or insufficient
@@ -440,7 +440,7 @@ impl<'a> Resolver<'a> {
         })
     }
 
-    /// Upstream's `voice_group label, N` sets the label `N` ToneData records
+    /// Upstream's `voice_group label, N` sets the label `N` `ToneData` records
     /// before the group's first declared record (`asm/macros/m4a.inc`), so
     /// slots `0..N` are the `N` physically preceding linked records, never
     /// empty positions. Predecessor groups contribute their raw declared
