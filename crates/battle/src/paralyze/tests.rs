@@ -436,9 +436,8 @@ fn a_hustle_attacker_lowers_the_threshold_of_a_physical_paralyze_move() {
     let attacker = mon(&dex, REMORAID, 10, vec![GLARE]);
     assert_eq!(attacker.ability(), assets::AbilityId::HUSTLE);
     let defender = mon(&dex, ZIGZAGOON, 10, vec![TACKLE]);
-    // Draw 64 rolls 65: within Glare's 75 accuracy, but above the 75 * 80 / 100
-    // = 60 threshold Hustle sets for physical moves
-    // (`battle_script_commands.c:1156-1157`).
+    // Draw 64 rolls 65: under Glare's 75, over Hustle's 75 * 80 / 100 = 60
+    // physical threshold (`battle_script_commands.c:1156-1157`).
     let mut rng = SequenceRng::new([64]);
     let outcome = resolve_paralyze_move(&dex, GLARE, &attacker, &defender, &mut rng).unwrap();
     assert_eq!(outcome, ParalyzeOutcome::Miss);

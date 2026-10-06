@@ -269,10 +269,8 @@ fn a_type_immune_thunder_wave_still_spends_pp_unlike_a_cancelled_move() {
 
 #[test]
 fn a_paralysed_forced_struggle_enemy_is_cancelled_before_the_struggle_error() {
-    // Struggle shares `BattleScript_HitFromAtkCanceler` with every ordinary
-    // move (`data/battle_scripts_1.s:241`-`:247`), so a paralysed enemy forced
-    // into it draws the full-paralysis check first; the "cannot execute
-    // Struggle" error is only reachable past that check.
+    // Struggle shares `BattleScript_HitFromAtkCanceler` with ordinary moves
+    // (`data/battle_scripts_1.s:241`-`:247`): the full-paralysis check runs first.
     let dex = Dex::new();
     let player = max_iv_mon(&dex, RATTATA, 5, vec![TACKLE]);
     let mut enemy = max_iv_mon(&dex, BULBASAUR, 5, vec![TACKLE]);
@@ -699,9 +697,8 @@ const SEVIPER: u16 = 379;
 /// speed-tie draw.
 const ABRA: u16 = 63;
 
-/// A fresh paralysis on a Shed Skin holder is applied like any other, and the
-/// end-turn pass (`Battle::residual_effects`) then rolls Shed Skin's cure
-/// chance for the newly statused holder (`src/battle_util.c:2620`-`:2621`).
+/// A fresh paralysis on a Shed Skin holder lands, and the same end turn rolls
+/// the cure for the newly statused holder (`src/battle_util.c:2620`-`:2621`).
 #[test]
 fn a_shed_skin_defender_is_newly_paralysed_not_refused() {
     let dex = Dex::new();
