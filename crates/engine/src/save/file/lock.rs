@@ -48,28 +48,42 @@ impl SaveFile {
         &self,
         sync_directory: impl FnMut(&Path),
     ) -> Result<SaveFileGuard, SaveFileError> {
+        self.lock_observing(sync_directory, || {})
+    }
+
+    /// As [`SaveFile::lock_with`], running `between_resolutions` after the
+    /// parent's identity is recorded and again after the slot is locked and
+    /// vetted, the two points a retarget could split acquisition across.
+    pub(super) fn lock_observing(
+        &self,
+        sync_directory: impl FnMut(&Path),
+        mut between_resolutions: impl FnMut(),
+    ) -> Result<SaveFileGuard, SaveFileError> {
         let first_save = !self.exists();
         let parent = self.create_parent_directory()?;
 
         let path = self.lock_path();
-        let directory =
-            LockedDirectory::open(parent.unwrap_or_else(|| Path::new("."))).map_err(|source| {
-                SaveFileError::Lock {
-                    path: path.clone(),
-                    source,
-                }
-            })?;
-        let file = self.open_lock_slot()?;
-        file.lock().map_err(|source| SaveFileError::Lock {
+        let lock_error = |source| SaveFileError::Lock {
             path: path.clone(),
             source,
-        })?;
+        };
+        let parent_or_here = parent.unwrap_or_else(|| Path::new("."));
+        let identity = LockedDirectory::identity_at(parent_or_here).map_err(lock_error)?;
+        between_resolutions();
+        let file = self.open_lock_slot()?;
+        file.lock().map_err(lock_error)?;
+        // The identity and the slot came from two resolutions of the path,
+        // so the directory is bound to the slot actually locked: every
+        // later check also requires the parent's slot entry to be that file.
+        let directory =
+            LockedDirectory::bind(parent_or_here, identity, &file).map_err(lock_error)?;
         if !Self::names_its_own_entry(&path, &file)? {
             return Err(SaveFileError::LockPathIsAlias { path });
         }
         if self.resolves_to(&path, &file)? {
             return Err(SaveFileError::LockPathIsSave { path });
         }
+        between_resolutions();
         self.refuse_a_retargeted_parent(Some(&directory))?;
         if first_save {
             if let Some(parent) = parent {
@@ -85,13 +99,15 @@ impl SaveFile {
     }
 
     /// Fails closed unless this save path's parent still resolves to the
-    /// directory `held` pinned; `None` means no guard is live, so nothing
-    /// is promised and nothing is checked.
+    /// directory `held` pinned and its lock slot is still the file `held`
+    /// locked; `None` means no guard is live, so nothing is promised and
+    /// nothing is checked.
     ///
     /// # Errors
     ///
     /// [`SaveFileError::SaveParentRetargeted`] if the parent names another
-    /// directory; [`SaveFileError::Lock`] if it could not be inspected.
+    /// directory or its slot is not the locked file; [`SaveFileError::Lock`]
+    /// if either could not be inspected.
     pub(super) fn refuse_a_retargeted_parent(
         &self,
         held: Option<&LockedDirectory>,
@@ -104,7 +120,7 @@ impl SaveFile {
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
             .unwrap_or_else(|| Path::new("."));
-        match held.is_named_by(parent) {
+        match held.is_named_by(parent, &parent.join(LOCK_FILE_NAME)) {
             Ok(true) => Ok(()),
             Ok(false) => Err(SaveFileError::SaveParentRetargeted {
                 path: self.path.clone(),
@@ -478,28 +494,94 @@ pub(super) struct LockedDirectory {
     #[cfg(windows)]
     _pin: Option<std::fs::File>,
     identity: DirectoryIdentity,
+    /// The lock file this guard actually holds. The directory identity and
+    /// the slot are read through separate resolutions of the path, so an
+    /// ancestor retargeted between them and back again could otherwise
+    /// record one directory while locking another's slot.
+    slot: SlotIdentity,
 }
 
 #[cfg(unix)]
 type DirectoryIdentity = (u64, u64);
 #[cfg(windows)]
 type DirectoryIdentity = super::open::WindowsFileIdentity;
+#[cfg(unix)]
+type SlotIdentity = (u64, u64);
+#[cfg(windows)]
+type SlotIdentity = super::open::WindowsFileIdentity;
 
 impl LockedDirectory {
-    /// Records which directory `directory` names now, following symlinks
-    /// (and, on Windows, junctions).
-    fn open(directory: &Path) -> std::io::Result<Self> {
-        let identity = Self::identity_at(directory)?;
+    /// Binds `identity`, which [`Self::identity_at`] read from `directory`
+    /// (following symlinks and, on Windows, junctions), to the lock file
+    /// `slot` the guard holds; Windows also pins `directory`, best-effort.
+    fn bind(
+        #[cfg_attr(not(windows), allow(unused_variables))] directory: &Path,
+        identity: DirectoryIdentity,
+        slot: &std::fs::File,
+    ) -> std::io::Result<Self> {
         Ok(Self {
             #[cfg(windows)]
             _pin: Self::pin(directory),
             identity,
+            slot: Self::slot_identity_of(slot)?,
         })
     }
 
-    /// Whether `directory` resolves to the directory this one recorded.
-    fn is_named_by(&self, directory: &Path) -> std::io::Result<bool> {
-        Ok(Self::identity_at(directory)? == self.identity)
+    /// Whether `directory` resolves to the directory this one recorded and
+    /// its lock slot `slot` is still the file this guard locked.
+    fn is_named_by(&self, directory: &Path, slot: &Path) -> std::io::Result<bool> {
+        Ok(Self::identity_at(directory)? == self.identity
+            && Self::slot_identity_at(slot)? == Some(self.slot))
+    }
+
+    #[cfg(unix)]
+    fn slot_identity_of(slot: &std::fs::File) -> std::io::Result<SlotIdentity> {
+        use std::os::unix::fs::MetadataExt as _;
+
+        let metadata = slot.metadata()?;
+        Ok((metadata.dev(), metadata.ino()))
+    }
+
+    /// The unfollowed entry at `slot`, so a symlink there never matches; a
+    /// missing slot is no match rather than an error.
+    #[cfg(unix)]
+    fn slot_identity_at(slot: &Path) -> std::io::Result<Option<SlotIdentity>> {
+        use std::os::unix::fs::MetadataExt as _;
+
+        match std::fs::symlink_metadata(slot) {
+            Ok(metadata) => Ok(Some((metadata.dev(), metadata.ino()))),
+            Err(missing) if missing.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(other) => Err(other),
+        }
+    }
+
+    #[cfg(windows)]
+    fn slot_identity_of(slot: &std::fs::File) -> std::io::Result<SlotIdentity> {
+        super::open::WindowsFileIdentity::of(slot)
+    }
+
+    /// Opens the slot entry itself (`FILE_FLAG_OPEN_REPARSE_POINT`) for
+    /// metadata only, sharing everything so the held handle's denial of
+    /// delete sharing does not refuse it; a missing slot is no match.
+    #[cfg(windows)]
+    fn slot_identity_at(slot: &Path) -> std::io::Result<Option<SlotIdentity>> {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE,
+            FILE_SHARE_READ, FILE_SHARE_WRITE,
+        };
+
+        let handle = match std::fs::OpenOptions::new()
+            .access_mode(0)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(slot)
+        {
+            Ok(handle) => handle,
+            Err(missing) if missing.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(other) => return Err(other),
+        };
+        super::open::WindowsFileIdentity::of(&handle).map(Some)
     }
 
     /// Unix reads the identity by `stat`, which neither needs list
@@ -587,7 +669,7 @@ impl HeldDirectory {
     ) -> Result<Arc<LockedDirectory>, SaveFileError> {
         let mut live = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(existing) = live.upgrade() {
-            return if existing.identity == directory.identity {
+            return if (existing.identity, existing.slot) == (directory.identity, directory.slot) {
                 Ok(existing)
             } else {
                 Err(SaveFileError::SaveParentRetargeted {

@@ -2,7 +2,7 @@
 //! back [`SaveFile::lock`](super::SaveFile::lock): the basename, staging,
 //! and aliasing boundaries [`super`] enforces before a lock is granted.
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(unix)]
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -953,7 +953,7 @@ fn recording_a_parent_retargeted_to_a_fifo_mid_acquisition_does_not_block() {
     let (tx, rx) = std::sync::mpsc::channel();
     let probe = fifo.clone();
     std::thread::spawn(move || {
-        let _ = super::LockedDirectory::open(&probe);
+        let _ = super::LockedDirectory::identity_at(&probe);
         let _ = tx.send(());
     });
     let finished = rx.recv_timeout(std::time::Duration::from_secs(2)).is_ok();
@@ -965,4 +965,55 @@ fn recording_a_parent_retargeted_to_a_fifo_mid_acquisition_does_not_block() {
         finished,
         "recording the parent blocked on a FIFO swapped in for it"
     );
+}
+
+/// A retarget to another directory and back, landing between the parent's
+/// identity read and the slot's open and then after the slot is vetted,
+/// must not leave a guard that records one directory while locking the
+/// other: a second locker could then take the recorded directory's own
+/// slot while this guard still writes there.
+#[cfg(unix)]
+#[test]
+fn an_ancestor_retargeted_and_restored_mid_acquisition_cannot_bind_the_wrong_directory() {
+    let dir = TempDir::new("lock-retarget-aba");
+    let first = dir.join("a");
+    let second = dir.join("b");
+    std::fs::create_dir(&first).unwrap();
+    std::fs::create_dir(&second).unwrap();
+    let link = dir.join("link");
+    std::os::unix::fs::symlink(&first, &link).unwrap();
+    let point_link_at = |target: &Path| {
+        std::fs::remove_file(&link).unwrap();
+        std::os::unix::fs::symlink(target, &link).unwrap();
+    };
+
+    let file = SaveFile::at(link.join(SAVE_FILE_NAME));
+    let mut step = 0;
+    let acquired = file.lock_observing(
+        |_| {},
+        || {
+            step += 1;
+            point_link_at(if step == 1 { &second } else { &first });
+        },
+    );
+    let (store, _, _) = saved_store();
+    let outcome = match &acquired {
+        Ok(_) => file.write(&store).err(),
+        Err(_) => None,
+    };
+    assert!(
+        matches!(
+            (&acquired, &outcome),
+            (Err(SaveFileError::SaveParentRetargeted { .. }), _)
+                | (Ok(_), Some(SaveFileError::SaveParentRetargeted { .. }))
+        ),
+        "a guard holding b's slot must not pass as a's: acquired {acquired:?}, write {outcome:?}"
+    );
+    assert!(
+        !first.join(SAVE_FILE_NAME).exists(),
+        "nothing may be written into a under b's lock"
+    );
+    let rival = SaveFile::at(first.join(SAVE_FILE_NAME));
+    drop(rival.lock().expect("a's own slot was never locked"));
+    drop(acquired);
 }
