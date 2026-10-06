@@ -356,9 +356,17 @@ impl Battle {
             return Err(BattleError::FaintedBattler(false));
         }
         for mon in &party {
-            for slot in mon.moves() {
-                trainer::ensure_move_playable(&dex, slot.move_id)?;
+            for (index, slot) in mon.moves().iter().enumerate() {
+                // A depleted slot must still be real move data, but the AI
+                // discards zero-PP slots before scoring and the no-PP abort
+                // precedes any effect, so executable/scoreable admission
+                // applies only to slots with PP remaining.
+                if slot.move_id == MOVE_NONE {
+                    return Err(BattleError::PlaceholderMove(index));
+                }
+                dex.move_data(slot.move_id)?;
                 if slot.pp > 0 {
+                    trainer::ensure_move_playable(&dex, slot.move_id)?;
                     for defender in std::iter::once(&player).chain(
                         player_reserves
                             .iter()
