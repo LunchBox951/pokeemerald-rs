@@ -165,7 +165,7 @@ impl Resampler {
     /// `device_rate` Hz.
     ///
     /// `max_output_frames` is the device's largest advertised callback size
-    /// in frames (`0` if the device advertises none); [`scratch_layout`]
+    /// in frames (`0` if the device advertises none); `scratch_layout`
     /// caps it (and the rate ratio it combines with) before it bounds, and
     /// lets the constructor preallocate, the per-chunk source scratch
     /// buffer, and bounds each chunk [`Self::fill`] processes an oversized
@@ -176,7 +176,7 @@ impl Resampler {
     ///
     /// Returns [`PlatformError::UnsupportedResampleRatio`] if `source_rate`
     /// is not finite and positive, or if `source_rate / device_rate` exceeds
-    /// [`MAX_SCRATCH_SOURCE_FRAMES`]: one output frame would then need more
+    /// `MAX_SCRATCH_SOURCE_FRAMES`: one output frame would then need more
     /// source frames than the scratch cap holds, breaking the `frac`
     /// invariant (see the field doc).
     pub fn new(

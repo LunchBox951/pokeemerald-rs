@@ -21,7 +21,7 @@
 //!   upstream's M4A engine actually renders PCM at — see the const's docs) is
 //!   the ring buffer's nominal rate for pitch/synthesis purposes; the `audio`
 //!   crate renders at this rate unconditionally. The ring buffer's *actual*
-//!   production cadence is [`AudioOutput::source_cadence_hz`] instead.
+//!   production cadence is `AudioOutput::source_cadence_hz` instead.
 //!   Devices virtually never advertise 13379 Hz, so a
 //!   [`crate::resample::Resampler`] bridging nominal to actual rate inside
 //!   the callback (`Source::Resampled`) is the common path; direct 1:1
@@ -54,7 +54,7 @@
 //! CI is headless, so nothing here opens a real cpal stream in a test: only
 //! [`AudioOutput::open`] and the private `negotiate`/stream-building helpers
 //! touch `cpal` directly. Both take their cpal calls behind
-//! [`OutputDevice`](stream::OutputDevice), so each stage's error mapping is testable against a
+//! `OutputDevice`, so each stage's error mapping is testable against a
 //! fake that opens no device. The ring buffer and resampler — the logic that
 //! actually matters for correctness — are pure and fully unit tested
 //! against [`AudioOutput::null`] and the `ring`/`resample` modules directly.
@@ -507,7 +507,7 @@ impl AudioOutput {
     /// - [`PlatformError::NoAudioDevice`] if there is no default output
     ///   device, or the one the host named cannot be reached at all
     ///   (headless CI, no audio hardware, no driver running) — see
-    ///   [`classify_query_error`](config::classify_query_error).
+    ///   `classify_query_error`.
     /// - [`PlatformError::UnsupportedAudioConfig`] if the device has no
     ///   usable stereo output configuration.
     /// - [`PlatformError::Audio`] if `cpal` fails to query a reachable
@@ -515,7 +515,7 @@ impl AudioOutput {
     ///   query stays here rather than collapsing into `NoAudioDevice`: the
     ///   device was real, so losing it is a failure, not a headless run.
     /// - [`PlatformError::UnsupportedResampleRatio`] if the negotiated
-    ///   device rate pairs with [`Self::source_cadence_hz`] into a ratio the
+    ///   device rate pairs with `Self::source_cadence_hz` into a ratio the
     ///   resampler's bounded scratch cannot carry (see
     ///   [`crate::resample::Resampler::new`]).
     pub fn open(ring_capacity_frames: usize) -> Result<Self, PlatformError> {

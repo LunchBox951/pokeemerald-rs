@@ -405,7 +405,7 @@ fn stage_pointer_with_candidates(
     stage_first_free(bytes, candidates, staging::stage)
 }
 
-/// [`stage_pointer_with_candidates`] with the staging step supplied.
+/// `stage_pointer_with_candidates` with the staging step supplied.
 fn stage_first_free(
     bytes: &[u8],
     candidates: impl IntoIterator<Item = PathBuf>,

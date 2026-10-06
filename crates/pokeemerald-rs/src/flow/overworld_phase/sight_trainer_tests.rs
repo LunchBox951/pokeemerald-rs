@@ -116,7 +116,7 @@ fn route_103_phase(player: PlayerState) -> OverworldPhase {
 }
 
 /// A battle-ready lead of `species`/`level` with a single `move_id`, mirroring
-/// `route103_rival_tests::lead`.
+/// `route103_rival_test_support::lead`.
 fn lead(species: u16, level: u8, move_id: u16) -> BattlePokemon {
     let ivs = Ivs {
         hp: battle::MAX_IV,
@@ -153,7 +153,7 @@ fn overmatched_lead() -> BattlePokemon {
 /// Play turns of `phase`'s in-progress sight-trainer battle, one per idle
 /// [`OverworldPhase::step`] call, until it reports a terminal outcome or
 /// `budget` turns have passed -- mirrors
-/// `route103_rival_tests::play_out_rival_battle`.
+/// `route103_rival_test_support::play_out_rival_battle`.
 fn play_out_sight_battle(phase: &mut OverworldPhase, budget: usize) -> Option<BattleOutcome> {
     for _ in 0..budget {
         phase.step(ButtonState::new());
@@ -539,7 +539,7 @@ fn winning_sets_the_defeated_flag_and_the_fight_cannot_restart() {
 
 /// `AddMoney` (`pokeemerald/src/money.c:90-108`) saturates at `MAX_MONEY`
 /// (`999999`) rather than wrapping or overshooting it -- the sight-trainer
-/// driver's own counterpart to `route103_rival_tests`'
+/// driver's own counterpart to `route103_rival_driver_tests`'
 /// `winning_the_rival_battle_saturates_money_at_the_upstream_cap`.
 #[test]
 fn winning_sets_the_defeated_flag_and_saturates_money_at_the_upstream_cap() {
@@ -602,14 +602,14 @@ fn the_defeated_flag_survives_a_save_continue_round_trip() {
 
 /// A loss heals the party, halves the player's money, and leaves the
 /// defeated flag clear (`SetBattledTrainersFlags` only runs on a win) --
-/// mirrors `route103_rival_tests::losing_the_rival_battle_now_heals_halves_money_and_leaves_the_hide_flag_clear`.
+/// mirrors `route103_rival_driver_tests::losing_the_rival_battle_now_heals_halves_money_and_leaves_the_hide_flag_clear`.
 #[test]
 fn losing_heals_halves_money_and_leaves_the_defeated_flag_clear() {
     let (rx, ry) = RHETT_TILE;
     let mut phase = route_103_phase(PlayerState::new((rx, ry + 1), 3, Direction::North));
     phase.save1.money = 2001;
     // The same overmatched-level-1-lead / seed-2024 combination
-    // `route103_rival_tests::losing_the_rival_battle_now_heals_halves_money_and_leaves_the_hide_flag_clear`
+    // `route103_rival_driver_tests::losing_the_rival_battle_now_heals_halves_money_and_leaves_the_hide_flag_clear`
     // already proves loses against `STAND_IN_TRAINER` (`TrainerId(532)`).
     seed_battle(&mut phase, TRAINER_RHETT, overmatched_lead(), 2024);
     assert!(phase.is_sight_trainer_battle_active(), "setup: seeded");
