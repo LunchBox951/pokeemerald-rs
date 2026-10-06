@@ -64,20 +64,17 @@ use crate::overworld::NpcDialog;
 use super::sight_trainer_trigger::SightTrainerOutcome;
 use super::{ActiveBattle, OverworldPhase};
 
-/// How long the exclamation-mark icon lives, in frames:
+/// How long the exclamation-mark icon animates, in frames:
 /// `sSpriteAnim_Icons1`'s single `ANIMCMD_FRAME(0, 60)`
-/// (`trainer_see.c:150-154`), after which `SpriteCB_TrainerIcons` sees
-/// `animEnded` and calls `FieldEffectStop` (`:745-752`) -- which is exactly
-/// what `WaitTrainerExclamationMark`'s `FieldEffectActiveListContains` poll
-/// is waiting for (`:471-487`).
-///
-/// Upstream's own count is one or two frames longer (the frame
-/// `FieldEffectStart` runs on, plus `ANIMCMD_END`'s own dispatch); this
-/// module spends the round sixty. A frame either way is below what any part
-/// of this port can observe -- nothing draws from the same stream during the
-/// approach, and the RNG is untouched by the whole sequence. The frames
-/// *before* the icon are not rounded away: [`ApproachStage::LockHandoff`].
+/// (`trainer_see.c:150-154`). The icon outlives it by
+/// [`EXCLAMATION_DISPATCH_FRAMES`]. The frames *before* the icon are not
+/// rounded away either: [`ApproachStage::LockHandoff`].
 const EXCLAMATION_ICON_FRAMES: u8 = 60;
+
+/// Frames between the icon's last animation frame and the first walked tile:
+/// `ANIMCMD_END` dispatch, the sprite callback's removal, then the trainer
+/// task observing it (`sprite.c:943-965`; `trainer_see.c:745-752`, `:438-448`).
+const EXCLAMATION_DISPATCH_FRAMES: u8 = 3;
 
 /// Non-icon frames of [`ApproachStage::LockHandoff`] for a player standing
 /// still on the trigger frame: `lockfortrainer`'s freeze task and native poll
@@ -109,9 +106,9 @@ enum ApproachStage {
         frames_left: u8,
     },
     /// `TRSEE_EXCLAMATION`/`_EXCLAMATION_WAIT`: the icon is up and the
-    /// trainer is standing still under it.
+    /// trainer is standing still under it, until the task sees it removed.
     ExclamationIcon {
-        /// Frames of icon animation still to run.
+        /// Frames of icon animation and dispatch still to run.
         frames_left: u8,
     },
     /// `TRSEE_MOVE_TO_PLAYER`: walking the `approachDistance - 1` tiles
@@ -241,7 +238,7 @@ impl SightApproach {
         };
         self.stage = if frames_left == 0 {
             ApproachStage::ExclamationIcon {
-                frames_left: EXCLAMATION_ICON_FRAMES,
+                frames_left: EXCLAMATION_ICON_FRAMES + EXCLAMATION_DISPATCH_FRAMES,
             }
         } else {
             ApproachStage::LockHandoff { frames_left }
@@ -254,8 +251,8 @@ impl SightApproach {
     /// Stage changes happen *within* the frame that earns them, matching
     /// `Task_RunTrainerSeeFuncList`'s own
     /// `while (sTrainerSeeFuncList[task->tFuncId](...))` chaining
-    /// (`trainer_see.c:438-448`): the frame the icon's last animation frame
-    /// runs on is also the frame the first walked tile is committed on, and
+    /// (`trainer_see.c:438-448`): the frame the task sees the icon removed
+    /// is also the frame the first walked tile is committed on, and
     /// the frame the last tile's animation ends on is also the frame the
     /// trainer turns to the player.
     fn advance_movement(&mut self, player_position: TilePos) {
@@ -684,6 +681,9 @@ impl OverworldPhase {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The whole icon stage: the animation and the dispatch frames after it.
+    const ICON_STAGE_FRAMES: u8 = EXCLAMATION_ICON_FRAMES + EXCLAMATION_DISPATCH_FRAMES;
     use assets::MovementType;
 
     /// `GetDirectionToFace`'s exact branch order, ties included.
@@ -706,7 +706,7 @@ mod tests {
     }
 
     /// The pure movement half, frame by frame, with no `OverworldPhase`
-    /// around it: sixty frames of icon, then sixteen per tile, with the
+    /// around it: sixty frames of icon plus its dispatch frames, then sixteen per tile, with the
     /// destination tile committed at the *start* of each tile
     /// (`InitNpcForMovement`) and the last frame of the last tile also being
     /// the frame the trainer turns to the player.
@@ -715,12 +715,12 @@ mod tests {
         let mut approach = approaching_from((10, 5), Direction::South, 2);
         let player = (10, 8);
 
-        for frame in 1..EXCLAMATION_ICON_FRAMES {
+        for frame in 1..ICON_STAGE_FRAMES {
             approach.advance_movement(player);
             assert_eq!(
                 approach.stage,
                 ApproachStage::ExclamationIcon {
-                    frames_left: EXCLAMATION_ICON_FRAMES - frame
+                    frames_left: ICON_STAGE_FRAMES - frame
                 },
                 "frame {frame} must still be icon time"
             );
@@ -731,7 +731,8 @@ mod tests {
             );
         }
 
-        // The icon's last frame is also the first walked tile's own start.
+        // The frame the task sees the icon removed is also the first walked
+        // tile's own start.
         approach.advance_movement(player);
         assert_eq!(
             approach.stage,
@@ -785,7 +786,7 @@ mod tests {
     #[test]
     fn an_adjacent_trainer_walks_nothing() {
         let mut approach = approaching_from((10, 5), Direction::South, 0);
-        for _ in 0..EXCLAMATION_ICON_FRAMES {
+        for _ in 0..ICON_STAGE_FRAMES {
             approach.advance_movement((10, 6));
         }
         assert_eq!(approach.stage, ApproachStage::PlayerFacesTrainer);
@@ -802,7 +803,7 @@ mod tests {
     #[test]
     fn stopping_pins_the_movement_type_and_writes_the_template_back() {
         let mut approach = approaching_from((10, 5), Direction::East, 1);
-        for _ in 0..EXCLAMATION_ICON_FRAMES + WALK_FRAMES_PER_TILE {
+        for _ in 0..ICON_STAGE_FRAMES + WALK_FRAMES_PER_TILE {
             approach.advance_movement((12, 5));
         }
         assert_eq!(approach.stage, ApproachStage::PlayerFacesTrainer);
@@ -862,7 +863,7 @@ mod tests {
         // These tests drive the icon and the walk-up; the lock handoff in
         // front of them has its own coverage in `sight_trainer_tests`.
         approach.stage = ApproachStage::ExclamationIcon {
-            frames_left: EXCLAMATION_ICON_FRAMES,
+            frames_left: ICON_STAGE_FRAMES,
         };
         approach
     }
