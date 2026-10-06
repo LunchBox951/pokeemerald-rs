@@ -17529,6 +17529,12 @@
           "spec": "S-5",
           "status": "rewritten"
         },
+        "hidden_item_flags": {
+          "reason": "Canonical hidden-item flag names mapped to absolute EventData flag ids for background-event resolution.",
+          "rust_target": "crates/assets/src/hidden_item_flags.rs",
+          "spec": "S-5",
+          "status": "ported"
+        },
         "object_event_hide_flags": {
           "reason": "assets::object_event_flags::resolve transcribes the numeric FLAG_* id for every ObjectEvent::flag name reachable from a map this port's extraction pipeline bundles (the Littleroot Town layout family plus, since issues #177/#248, Route 101, Oldale Town, and Route 103): 53 entries -- the 37 distinct FLAG_HIDE_* ids carried by object events across all nine maps, the twelve generic FLAG_DECORATION_1..12 ids Littleroot's two player-house bedrooms also carry, and four non-hide/non-decoration flags the newly bundled maps' object events name (FLAG_TEMP_12/FLAG_TEMP_13 and the two Route 103 item-ball flags FLAG_ITEM_ROUTE_103_GUARD_SPEC/FLAG_ITEM_ROUTE_103_PP_UP; the literal \"0\" no-flag sentinel is handled by resolve itself, not a table entry). The table is asserted to be exactly that reachable set -- no extra entries, none missing -- and cross-checked against the independently-transcribed new_game_flags::RESET_MAP_FLAGS table where the two overlap. Bounded, not a full flags.h name table: a FLAG_* outside this set can never occur for any map this port renders (see that module's own docs), so extending it further would transcribe data no code here consumes.",
           "rust_target": "crates/assets/src/object_event_flags.rs",
@@ -26384,11 +26390,23 @@
           "spec": "S-5",
           "status": "stubbed"
         },
+        "GetBackgroundEventAtPosition": {
+          "reason": "Ordered background-event lookup with event-zero-or-equal elevation matching.",
+          "rust_target": "crates/engine/src/overworld/background_event.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
         "GetInFrontOfPlayerPosition": {
           "reason": "The facing-tile position (GetXYCoordsOneStepInFrontOfPlayer, player position + facing delta) plus the own-tile-elevation wildcard rule rewritten as engine::overworld::facing_object_event's query-elevation derivation: the player's own grid cell's elevation, unless it is itself ELEVATION_TRANSITION, in which case the query elevation is the wildcard too.",
           "rust_target": "crates/engine/src/overworld/object_event.rs",
           "spec": "I-3",
           "status": "rewritten"
+        },
+        "GetInteractedBackgroundEventScript": {
+          "reason": "Typed sign and hidden-item selection with collected flags; north-facing secret-base entrance context only, saved-base eligibility and special-variable setup remain deferred.",
+          "rust_target": "crates/engine/src/overworld/background_event.rs",
+          "spec": "S-5",
+          "status": "stubbed"
         },
         "GetInteractedMetatileScript.script_targets": {
           "reason": "Classifies all 24 script-returning metatile branches into 23 typed targets, preserving north-facing gates and exact secret-base elevation equality. Furniture and poster save bookkeeping, script launch, services, water-move gating, and cross-kind precedence remain outside this sub-artifact.",

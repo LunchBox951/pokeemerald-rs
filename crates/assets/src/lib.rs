@@ -43,6 +43,7 @@ pub mod error;
 pub mod evolution;
 pub mod experience;
 pub mod fonts;
+pub mod hidden_item_flags;
 pub mod items;
 pub mod level_up_learnsets;
 pub mod map_events;
