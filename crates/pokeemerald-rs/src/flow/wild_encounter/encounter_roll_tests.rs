@@ -552,3 +552,44 @@ fn no_fightable_land_table_can_roll_a_trapping_opponent() {
         }
     }
 }
+
+/// A held-B run whose landing fires an encounter must not come back from the
+/// battle still holding the running sheet's neutral cell.
+#[test]
+fn a_run_onto_an_encounter_returns_from_battle_standing() {
+    let mut phase = route_101_phase(PlayerState::new((2, 5), 3, Direction::East), (7, 5));
+    phase.rng = Rng::new(ENCOUNTER_SEED);
+    phase.party_lead = Some(player_mon(277, 50, vec![MoveId::POUND]));
+    phase.save1.event_data.flag_set(0x8C0).unwrap();
+    for _ in 1..=4 {
+        walk_east_and_land(&mut phase, 1);
+    }
+    let mut run = ButtonState::new();
+    run.update(Buttons::B | Buttons::RIGHT);
+    run.update(Buttons::B | Buttons::RIGHT);
+    for _ in 0..engine::overworld::RUN_FRAMES_PER_TILE {
+        phase.step(run);
+    }
+    assert_eq!(phase.player.position(), (7, 5));
+    assert!(!phase.player.in_transit());
+    assert!(
+        phase.player.run_pose_held(),
+        "precondition: completed run holds RunPaused"
+    );
+    phase.step(ButtonState::new());
+    assert!(
+        phase.is_wild_battle_active(),
+        "precondition: the landing fires an encounter"
+    );
+    let mut frames = 0;
+    while phase.is_wild_battle_active() {
+        phase.step(ButtonState::new());
+        frames += 1;
+        assert!(frames < 200);
+    }
+    assert_eq!(phase.player.position(), (7, 5), "no white-out");
+    assert!(
+        !phase.player.run_pose_held(),
+        "returning from the battle must not keep the running sheet's neutral pose"
+    );
+}

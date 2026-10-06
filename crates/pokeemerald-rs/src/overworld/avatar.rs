@@ -8,6 +8,10 @@ use engine::overworld::{Direction, PlayerState, TURN_IN_PLACE_FRAMES};
 use engine::save::PlayerGender;
 use rendering::{Bgr555, BitDepth, OamEntry, ObjShape, Palette};
 
+mod run;
+#[cfg(test)]
+mod run_tests;
+
 use super::{OverworldSceneError, METATILE_PX, PLAYER_VIEW_COL, PLAYER_VIEW_ROW, RESTING_SCROLL_Y};
 
 pub(super) const FRAME_W: usize = 16;
@@ -200,7 +204,9 @@ fn frame_for(player: &PlayerState) -> (u16, bool) {
         Direction::West | Direction::East => FRAME_WEST_STEP,
     } + u16::from(player.second_foot_leads());
     let walking_foot_forward = player.slide_pose_held()
+        || run::running_foot_forward(player)
         || (player.in_transit()
+            && !player.transit_running()
             && (player.transit_animation_disabled()
                 || player.step_progress() < player.transit_duration() / 2));
     let turning_foot_forward = player.turn_frames_remaining() >= TURN_FRAME_HALF;
@@ -212,12 +218,20 @@ fn frame_for(player: &PlayerState) -> (u16, bool) {
     (frame, h_flip)
 }
 
-pub(super) fn player_entry(player: &PlayerState) -> OamEntry {
+/// `run_base_tile` is where the player's running sheet starts in the
+/// combined tileset; it is drawn from instead of the walking sheet at tile 0
+/// while [`run::draws_running_sheet`].
+pub(super) fn player_entry(player: &PlayerState, run_base_tile: u16) -> OamEntry {
     let (frame, h_flip) = frame_for(player);
+    let sheet_base = if run::draws_running_sheet(player) {
+        run_base_tile
+    } else {
+        0
+    };
     OamEntry::new(
         PLAYER_OBJ_X,
         PLAYER_OBJ_Y,
-        frame * FRAME_TILES,
+        sheet_base + frame * FRAME_TILES,
         PLAYER_PALETTE_BANK,
         BitDepth::Bpp4,
         h_flip,
@@ -311,7 +325,7 @@ mod tests {
         assert_eq!(tile.index(7, 7), expected_pixel);
     }
 
-    fn player_at(position: TilePos, facing: Direction) -> PlayerState {
+    pub(super) fn player_at(position: TilePos, facing: Direction) -> PlayerState {
         PlayerState::new(position, 3, facing)
     }
 
@@ -336,7 +350,7 @@ mod tests {
         );
     }
 
-    fn flat_runtime<'a>(
+    pub(super) fn flat_runtime<'a>(
         bytes: &'a [u8],
         header: &'a assets::MapHeader,
         events: &'a assets::MapEvents,
@@ -572,7 +586,7 @@ mod tests {
         );
     }
 
-    fn flat_test_map() -> (Vec<u8>, assets::MapHeader, assets::MapEvents) {
+    pub(super) fn flat_test_map() -> (Vec<u8>, assets::MapHeader, assets::MapEvents) {
         let mut bytes = Vec::new();
         for _ in 0..25 {
             bytes.extend_from_slice(
@@ -616,7 +630,7 @@ mod tests {
 
     #[test]
     fn player_entry_uses_the_fixed_screen_position_and_expected_shape() {
-        let entry = player_entry(&player_at((0, 0), Direction::South));
+        let entry = player_entry(&player_at((0, 0), Direction::South), 0);
         assert_eq!(entry.x(), i16::try_from(PLAYER_OBJ_X).unwrap());
         assert_eq!(entry.y(), PLAYER_OBJ_Y);
         assert_eq!(entry.dimensions(), (16, 32));
@@ -630,7 +644,7 @@ mod tests {
     /// rectangle the avatar has moved out of (issue #1013).
     #[test]
     fn public_screen_box_matches_the_player_entry_the_scene_emits() {
-        let entry = player_entry(&player_at((0, 0), Direction::South));
+        let entry = player_entry(&player_at((0, 0), Direction::South), 0);
         let screen_box = super::super::PLAYER_AVATAR_SCREEN_BOX;
         assert_eq!(
             i16::try_from(screen_box.left).unwrap(),
@@ -671,11 +685,14 @@ mod tests {
     #[test]
     fn player_entry_raises_the_oam_priority_on_a_raised_elevation_tile() {
         let on_the_floor = PlayerState::new((0, 0), 3, Direction::South);
-        assert_eq!(player_entry(&on_the_floor).priority(), PLAYER_OBJ_PRIORITY);
+        assert_eq!(
+            player_entry(&on_the_floor, 0).priority(),
+            PLAYER_OBJ_PRIORITY
+        );
 
         let on_the_bed_edge = PlayerState::new((0, 0), 4, Direction::South);
         assert_eq!(
-            player_entry(&on_the_bed_edge).priority(),
+            player_entry(&on_the_bed_edge, 0).priority(),
             RAISED_OBJ_PRIORITY,
             "elevation 4 (the protagonist bedroom bed's raised edge tiles) \
              must draw at the raised priority, not the flat default"

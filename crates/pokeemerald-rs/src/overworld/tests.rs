@@ -221,6 +221,8 @@ const WALKABLE_ELEVATION: u8 = 3;
 const FIRST_SPECIAL_METATILE_ID: u16 = 1;
 const GROUND_PALETTE_INDEX: u8 = 5;
 const SPRITE_PIXEL_PALETTE_INDEX: u8 = 9;
+/// The synthetic running sheet's opaque index, distinct from walking's.
+const RUN_SPRITE_PIXEL_PALETTE_INDEX: u8 = 10;
 const RED_BGR555: u16 = 0x001F;
 const BLUE_BGR555: u16 = 0x7C00;
 const TILESET_PALETTE_BANK_COUNT: u8 = 16;
@@ -362,6 +364,14 @@ fn synthetic_overworld_pack_entries_for(tileset: &str, width: u16, height: u16) 
             // Opaque and distinct from GROUND_PALETTE_INDEX, so a composed
             // frame can tell the sprite layer from the world layer.
             payload: vec![SPRITE_PIXEL_PALETTE_INDEX; 144 * 32],
+        },
+        Entry {
+            id: "sprite/brendan/running",
+            kind_tag: IMAGE_KIND_TAG,
+            meta: image_meta(144, 32, 8),
+            // A different opaque index from walking, so a composed frame can
+            // tell which sheet the avatar drew from.
+            payload: vec![RUN_SPRITE_PIXEL_PALETTE_INDEX; 144 * 32],
         },
         Entry {
             id: "sprite/palette/brendan",
@@ -1803,7 +1813,7 @@ fn real_pack_route_103_rival_binds_to_the_opposite_protagonists_sheet() {
 /// background-NPC `graphics_id` really decodes against the real extracted
 /// pack -- not just that [`super::npc::resolve_sprite_source`] names a
 /// `sprite/<path>` id (already pinned pack-free by
-/// `npc::tests::resolve_sprite_source_resolves_the_oldale_and_route_103_background_npcs`),
+/// `npc::binding_tests::resolve_sprite_source_resolves_the_oldale_and_route_103_background_npcs`),
 /// but that `AssetPack::sprite` actually finds that entry and
 /// `avatar::pack_people_sheet_frames` accepts its real dimensions (any
 /// mismatch is a real, real-pack-only failure mode --
@@ -2645,7 +2655,7 @@ fn equal_priority_overlap_orders_the_player_and_npc_by_screen_depth() {
             .resolve_pixel(x, y)
             .map(|p| p.color)
         };
-        let player_entry = super::avatar::player_entry(&player);
+        let player_entry = super::avatar::player_entry(&player, 0);
         let player_only = color_at(&[player_entry]);
         let npc_only = color_at(
             &entries
