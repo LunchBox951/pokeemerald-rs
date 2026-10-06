@@ -9,7 +9,6 @@
 //! against some other source. Nothing here touches the process environment.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use pokeemerald_rs::App;
 
@@ -53,17 +52,18 @@ struct Scratch(PathBuf);
 
 impl Scratch {
     fn create() -> std::io::Result<Self> {
-        static NEXT: AtomicU64 = AtomicU64::new(0);
+        // The exclusive `create_dir` is the only arbiter of uniqueness: the
+        // first caller to claim a name owns it, so a counter needs no state
+        // beyond this loop.
+        let mut n: u64 = 0;
         loop {
-            let path = std::env::temp_dir().join(format!(
-                "pokeemerald-scenario-{}-{}",
-                std::process::id(),
-                NEXT.fetch_add(1, Ordering::Relaxed)
-            ));
+            let path = std::env::temp_dir()
+                .join(format!("pokeemerald-scenario-{}-{n}", std::process::id()));
             match std::fs::create_dir(&path) {
                 Ok(()) => return Ok(Self(path)),
-                // A directory left by an earlier process with a recycled id.
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                // Taken by another session in this process, or left by an
+                // earlier process with a recycled id.
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => n += 1,
                 Err(error) => return Err(error),
             }
         }
