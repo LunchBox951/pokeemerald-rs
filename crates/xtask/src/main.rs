@@ -29,6 +29,7 @@ use std::process::ExitCode;
 mod e2e;
 mod extract;
 mod gen_rom_profile;
+mod profile_launch;
 #[cfg(feature = "scenes")]
 mod record_snapshot;
 #[cfg(any(feature = "scenario", all(test, feature = "scenes")))]
@@ -99,6 +100,9 @@ pub enum XtaskError {
     /// `e2e --suite smoke` ran but did not report a clean boot. Carries
     /// `e2e::E2eError`'s rendered message.
     SmokeFailed(String),
+    /// `e2e --suite smoke --release` could not run the release child that
+    /// Cargo's release profile requires. Never falls back to a debug run.
+    E2eReleaseFailed(String),
     /// `e2e --suite smoke` was requested, but this binary lacks the `smoke`
     /// feature, so `mod e2e` was not compiled in.
     SmokeUnavailable,
@@ -165,6 +169,9 @@ impl fmt::Display for XtaskError {
             }
             Self::SmokeFailed(reason) => {
                 return write!(f, "error: `e2e --suite smoke` failed: {reason}");
+            }
+            Self::E2eReleaseFailed(reason) => {
+                return write!(f, "error: `e2e --suite smoke --release` failed: {reason}");
             }
             Self::SmokeUnavailable => {
                 return write!(
@@ -654,18 +661,59 @@ fn dispatch(cmd: &Command) -> Result<(), XtaskError> {
         }
         #[cfg(not(feature = "scenario"))]
         Command::Scenario { .. } => Err(XtaskError::ScenarioUnavailable),
-        #[cfg(feature = "smoke")]
-        Command::E2e {
-            suite: Suite::Smoke,
-            ..
-        } => e2e::run_smoke().map_err(|err| XtaskError::SmokeFailed(err.to_string())),
-        #[cfg(not(feature = "smoke"))]
-        Command::E2e {
-            suite: Suite::Smoke,
-            ..
-        } => Err(XtaskError::SmokeUnavailable),
-        Command::E2e { .. } => Err(XtaskError::NotImplemented("e2e")),
+        Command::E2e { suite, release } => dispatch_e2e(
+            *suite,
+            *release,
+            profile_launch::built_for_release(),
+            profile_launch::launch,
+            smoke_in_process,
+        ),
     }
+}
+
+/// Runs the smoke check in this process.
+fn smoke_in_process() -> Result<(), XtaskError> {
+    #[cfg(feature = "smoke")]
+    {
+        e2e::run_smoke().map_err(|err| XtaskError::SmokeFailed(err.to_string()))
+    }
+    #[cfg(not(feature = "smoke"))]
+    {
+        Err(XtaskError::SmokeUnavailable)
+    }
+}
+
+/// Dispatches `e2e`, honouring `--release` (F-3, V-1; issue #1878).
+///
+/// A release request against a non-release binary re-executes under Cargo's
+/// release profile through `launch` and returns its result; it never also
+/// runs the debug smoke. `full` and `soak` stay fail-closed stubs.
+fn dispatch_e2e<L, S>(
+    suite: Suite,
+    release: bool,
+    already_release: bool,
+    mut launch: L,
+    smoke: S,
+) -> Result<(), XtaskError>
+where
+    L: FnMut(&mut std::process::Command) -> Result<(), XtaskError>,
+    S: FnOnce() -> Result<(), XtaskError>,
+{
+    if suite != Suite::Smoke {
+        return Err(XtaskError::NotImplemented("e2e"));
+    }
+    if !cfg!(feature = "smoke") {
+        return Err(XtaskError::SmokeUnavailable);
+    }
+    if release && !already_release {
+        let mut command = profile_launch::smoke_release_command(
+            &profile_launch::cargo_executable(),
+            &extract::repo_root(),
+            &profile_launch::enabled_features(),
+        );
+        return launch(&mut command);
+    }
+    smoke()
 }
 
 /// Parse and dispatch a single invocation.
@@ -697,9 +745,10 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::{
-        extract, gen_rom_profile, parse, run, Command, OsString, ScenarioName, Scene, Suite,
-        XtaskError, USAGE,
+        dispatch_e2e, extract, gen_rom_profile, parse, run, Command, OsString, ScenarioName, Scene,
+        Suite, XtaskError, USAGE,
     };
+    use std::ffi::OsStr;
 
     fn args(parts: &[&str]) -> Vec<OsString> {
         parts.iter().map(|s| OsString::from(*s)).collect()
@@ -1175,6 +1224,80 @@ mod tests {
             Suite::parse("nope").unwrap_err(),
             XtaskError::InvalidSuite(_)
         ));
+    }
+
+    #[test]
+    fn release_smoke_dispatch_launches_cargo_before_running_smoke() {
+        let Command::E2e { suite, release } =
+            parse(&args(&["e2e", "--suite", "smoke", "--release"])).unwrap()
+        else {
+            panic!("expected e2e");
+        };
+        assert!(release);
+        let mut launched = false;
+        let result = dispatch_e2e(
+            suite,
+            release,
+            false,
+            |child| {
+                launched = true;
+                let argv: Vec<&OsStr> = child.get_args().collect();
+                let split = argv.iter().position(|a| *a == OsStr::new("--")).unwrap();
+                assert!(argv[..split].contains(&OsStr::new("--release")));
+                assert!(argv[..split].contains(&OsStr::new("--locked")));
+                assert_eq!(
+                    argv[split + 1..],
+                    ["e2e", "--suite", "smoke", "--release"].map(OsStr::new)
+                );
+                Err(XtaskError::E2eReleaseFailed("sentinel".into()))
+            },
+            || panic!("debug smoke must not run after release is requested"),
+        );
+        if cfg!(feature = "smoke") {
+            assert!(launched);
+            assert!(matches!(result, Err(XtaskError::E2eReleaseFailed(s)) if s == "sentinel"));
+        } else {
+            assert!(!launched);
+            assert!(matches!(result, Err(XtaskError::SmokeUnavailable)));
+        }
+    }
+
+    #[test]
+    fn smoke_dispatch_runs_in_process_when_no_launch_is_needed() {
+        for (release, already) in [(false, false), (false, true), (true, true)] {
+            let mut ran = false;
+            let result = dispatch_e2e(
+                Suite::Smoke,
+                release,
+                already,
+                |_| panic!("must not launch"),
+                || {
+                    ran = true;
+                    Ok(())
+                },
+            );
+            if cfg!(feature = "smoke") {
+                assert!(result.is_ok() && ran);
+            } else {
+                assert!(matches!(result, Err(XtaskError::SmokeUnavailable)) && !ran);
+            }
+        }
+    }
+
+    #[test]
+    fn full_and_soak_dispatch_never_launch_or_run() {
+        for suite in [Suite::Full, Suite::Soak] {
+            for (release, already) in [(false, false), (true, false), (true, true)] {
+                let result = dispatch_e2e(
+                    suite,
+                    release,
+                    already,
+                    |_| panic!("must not launch"),
+                    || panic!("must not run"),
+                );
+                assert!(matches!(result, Err(XtaskError::NotImplemented("e2e"))));
+            }
+        }
     }
 
     #[test]
