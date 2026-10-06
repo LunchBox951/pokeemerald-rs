@@ -48,7 +48,7 @@ pub(crate) struct VoiceGroupSourceIndex {
     labels_by_relative_path: HashMap<String, String>,
 }
 
-enum IndexedLinkOrderItem {
+pub(super) enum IndexedLinkOrderItem {
     VoiceGroup(String),
     ForeignInclude,
 }
@@ -78,7 +78,7 @@ fn discover_voicegroup_sources(dir: &Path) -> Result<Vec<PathBuf>, ExtractError>
 /// Reads and fully parses every voicegroup `.inc` file under
 /// `sound/voicegroups/`, keyed by declared label, alongside each file's path
 /// relative to `sound/voicegroups/` keyed the same way (what
-/// [`link_order_successors`] needs to resolve `sound/voice_groups.inc`'s
+/// [`index_link_order`] needs to resolve `sound/voice_groups.inc`'s
 /// path-based `.include` targets to labels).
 pub(crate) fn index_voicegroup_sources(
     upstream: &Path,
@@ -115,11 +115,13 @@ pub(crate) fn index_voicegroup_sources(
     })
 }
 
-fn link_order_successors(
+/// Resolves `sound/voice_groups.inc` into the linked order of known groups and
+/// foreign-include barriers: successors fill an under-declared top-level group,
+/// and a biased group aliases the records physically preceding it.
+fn index_link_order(
     upstream: &Path,
-    root_label: &str,
     labels_by_relative_path: &HashMap<String, String>,
-) -> Result<Vec<String>, ExtractError> {
+) -> Result<Vec<IndexedLinkOrderItem>, ExtractError> {
     let path = upstream.join("sound/voice_groups.inc");
     let text = read_text(&path)?;
 
@@ -137,7 +139,18 @@ fn link_order_successors(
             parser::LinkOrderItem::Foreign => link_order.push(IndexedLinkOrderItem::ForeignInclude),
         }
     }
+    Ok(link_order)
+}
 
+/// The labels linked directly after `root_label`, up to the first foreign
+/// include; empty when the root is unlinked or last.
+#[cfg(test)]
+fn link_order_successors(
+    upstream: &Path,
+    root_label: &str,
+    labels_by_relative_path: &HashMap<String, String>,
+) -> Result<Vec<String>, ExtractError> {
+    let link_order = index_link_order(upstream, labels_by_relative_path)?;
     let Some(index) = link_order.iter().position(
         |item| matches!(item, IndexedLinkOrderItem::VoiceGroup(label) if label == root_label),
     ) else {
@@ -159,22 +172,18 @@ pub(super) fn extract_voicegroups(
     writer: &mut PackWriter,
 ) -> Result<(), ExtractError> {
     let source_index = index_voicegroup_sources(upstream)?;
-    let link_successors = link_order_successors(
-        upstream,
-        TITLE_VOICEGROUP_LABEL,
-        &source_index.labels_by_relative_path,
-    )?;
+    let link_order = index_link_order(upstream, &source_index.labels_by_relative_path)?;
 
     let keysplit_path = upstream.join("sound/keysplit_tables.inc");
     let keysplit_text = read_text(&keysplit_path)?;
     let keysplit_tables = parser::parse_keysplit_tables(&keysplit_text)
         .map_err(|e| ExtractError::VoiceGroupFile(keysplit_path, e))?;
 
-    let resolved_groups = resolve::resolve_voice_groups_with_link_successors(
+    let resolved_groups = resolve::resolve_voice_groups_with_link_order(
         TITLE_VOICEGROUP_LABEL,
         &source_index.groups_by_label,
         &keysplit_tables,
-        &link_successors,
+        &link_order,
     )
     .map_err(ExtractError::VoiceGroup)?;
 
@@ -190,8 +199,8 @@ pub(super) fn extract_voicegroups(
 #[cfg(test)]
 mod tests {
     use super::{
-        discover_voicegroup_sources, extract_voicegroups, index_voicegroup_sources,
-        link_order_successors, TITLE_VOICEGROUP_LABEL,
+        discover_voicegroup_sources, extract_voicegroups, index_link_order,
+        index_voicegroup_sources, link_order_successors, TITLE_VOICEGROUP_LABEL,
     };
     use pack_format::PackWriter;
 
@@ -199,6 +208,7 @@ mod tests {
     const TITLE_DECLARED_SLOT_COUNT: usize = 89;
     const RS_DRUMSET_FIRST_DECLARED_SLOT: usize = 36;
     const RS_DRUMSET_DECLARED_SLOT_COUNT: usize = 29;
+    const DUMMY_DECLARED_SLOT_COUNT: usize = 98;
     const TITLE_DEPENDENCY_LABELS: [&str; 7] = [
         "french_horn_keysplit",
         "piano_keysplit",
@@ -261,21 +271,16 @@ mod tests {
         assert!(super::super::upstream_present(), "run ./init.sh first");
         let upstream = super::super::repo_root().join("pokeemerald");
         let index = index_voicegroup_sources(&upstream).unwrap();
-        let link_successors = link_order_successors(
-            &upstream,
-            TITLE_VOICEGROUP_LABEL,
-            &index.labels_by_relative_path,
-        )
-        .unwrap();
+        let link_order = index_link_order(&upstream, &index.labels_by_relative_path).unwrap();
         let keysplit_text =
             std::fs::read_to_string(upstream.join("sound/keysplit_tables.inc")).unwrap();
         let keysplit_tables = super::parser::parse_keysplit_tables(&keysplit_text).unwrap();
 
-        let groups = super::resolve::resolve_voice_groups_with_link_successors(
+        let groups = super::resolve::resolve_voice_groups_with_link_order(
             TITLE_VOICEGROUP_LABEL,
             &index.groups_by_label,
             &keysplit_tables,
-            &link_successors,
+            &link_order,
         )
         .expect("MUS_TITLE's real dependency tree should resolve cleanly");
 
@@ -322,9 +327,44 @@ mod tests {
         assert_eq!(raw_rs_drumset.slots.len(), RS_DRUMSET_DECLARED_SLOT_COUNT);
         let after_last_declared_slot =
             RS_DRUMSET_FIRST_DECLARED_SLOT + RS_DRUMSET_DECLARED_SLOT_COUNT;
+        // `voice_group rs_drumset, 36` aliases the 36 records before it:
+        // dummy.inc's last 36, linked immediately ahead (sound/voice_groups.inc).
+        let dummy = &index.groups_by_label["dummy"];
+        assert_eq!(dummy.slots.len(), DUMMY_DECLARED_SLOT_COUNT);
         for slot in &rs_drumset.slots[..RS_DRUMSET_FIRST_DECLARED_SLOT] {
-            assert_eq!(*slot, super::resolve::VoiceSlot::Empty);
+            assert_ne!(*slot, super::resolve::VoiceSlot::Empty);
         }
+        assert!(matches!(
+            &rs_drumset.slots[11],
+            super::resolve::VoiceSlot::ProgrammableWave { wave_id, .. }
+                if wave_id == "audio/sample/programmable-wave/01"
+        ));
+        assert!(matches!(
+            &rs_drumset.slots[19],
+            super::resolve::VoiceSlot::ProgrammableWave { wave_id, .. }
+                if wave_id == "audio/sample/programmable-wave/03"
+        ));
+        for slot in &rs_drumset.slots[28..RS_DRUMSET_FIRST_DECLARED_SLOT] {
+            assert!(matches!(
+                slot,
+                super::resolve::VoiceSlot::DirectSound { .. }
+            ));
+        }
+        assert_eq!(
+            rs_drumset.slots[RS_DRUMSET_FIRST_DECLARED_SLOT - 1],
+            super::resolve::VoiceSlot::DirectSound {
+                base_key: 60,
+                pan: None,
+                sample_id: "audio/sample/direct-sound/ethnic_flavours_hyoushigi".to_owned(),
+                envelope: super::parser::Envelope {
+                    attack: 255,
+                    decay: 0,
+                    sustain: 255,
+                    release: 0,
+                },
+                mode: super::parser::DirectSoundMode::Resampled,
+            }
+        );
         for slot in &rs_drumset.slots[RS_DRUMSET_FIRST_DECLARED_SLOT..after_last_declared_slot] {
             assert_ne!(*slot, super::resolve::VoiceSlot::Empty);
         }

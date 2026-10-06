@@ -18980,8 +18980,10 @@
     "sound/direct_sound_samples/classical_choir_voice_ahhs.wav": {
       "category": "audio.sample",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "DirectSound instrument sample reached by voicegroup_rs_drumset's aliased predecessor slots (dummy.inc entries 62..=97, issue #1789) as DirectSoundWaveData_classical_choir_voice_ahhs. Decoded by the same .wav parser as the other title samples (crates/xtask/src/extract/wav.rs) and emitted via cargo xtask extract as pack id audio/sample/direct-sound/classical_choir_voice_ahhs; also read from the player's own ROM by crates/rom-import/src/domains/audio.rs, equivalence-checked byte-for-byte by crates/rom-import/tests/equivalence.rs.",
+      "rust_target": "crates/xtask/src/extract/wav.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "sound/direct_sound_samples/dance_drums_ride_bell.wav": {
       "category": "audio.sample",
@@ -19004,8 +19006,10 @@
     "sound/direct_sound_samples/ethnic_flavours_hyoushigi.wav": {
       "category": "audio.sample",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "DirectSound instrument sample reached by voicegroup_rs_drumset's aliased predecessor slots (dummy.inc entries 62..=97, issue #1789) as DirectSoundWaveData_ethnic_flavours_hyoushigi. Decoded by the same .wav parser as the other title samples (crates/xtask/src/extract/wav.rs) and emitted via cargo xtask extract as pack id audio/sample/direct-sound/ethnic_flavours_hyoushigi; also read from the player's own ROM by crates/rom-import/src/domains/audio.rs, equivalence-checked byte-for-byte by crates/rom-import/tests/equivalence.rs.",
+      "rust_target": "crates/xtask/src/extract/wav.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "sound/direct_sound_samples/ethnic_flavours_kotsuzumi.wav": {
       "category": "audio.sample",
@@ -19016,8 +19020,10 @@
     "sound/direct_sound_samples/ethnic_flavours_ohtsuzumi.wav": {
       "category": "audio.sample",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "DirectSound instrument sample reached by voicegroup_rs_drumset's aliased predecessor slots (dummy.inc entries 62..=97, issue #1789) as DirectSoundWaveData_ethnic_flavours_ohtsuzumi. Decoded by the same .wav parser as the other title samples (crates/xtask/src/extract/wav.rs) and emitted via cargo xtask extract as pack id audio/sample/direct-sound/ethnic_flavours_ohtsuzumi; also read from the player's own ROM by crates/rom-import/src/domains/audio.rs, equivalence-checked byte-for-byte by crates/rom-import/tests/equivalence.rs.",
+      "rust_target": "crates/xtask/src/extract/wav.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "sound/direct_sound_samples/heart_of_asia_gamelan.wav": {
       "category": "audio.sample",
@@ -19390,8 +19396,10 @@
     "sound/direct_sound_samples/sd90_classical_oboe.wav": {
       "category": "audio.sample",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "DirectSound instrument sample reached by voicegroup_rs_drumset's aliased predecessor slots (dummy.inc entries 62..=97, issue #1789) as DirectSoundWaveData_sd90_classical_oboe. Decoded by the same .wav parser as the other title samples (crates/xtask/src/extract/wav.rs) and emitted via cargo xtask extract as pack id audio/sample/direct-sound/sd90_classical_oboe; also read from the player's own ROM by crates/rom-import/src/domains/audio.rs, equivalence-checked byte-for-byte by crates/rom-import/tests/equivalence.rs.",
+      "rust_target": "crates/xtask/src/extract/wav.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "sound/direct_sound_samples/sd90_classical_overdrive_guitar.wav": {
       "category": "audio.sample",
@@ -19620,8 +19628,10 @@
     "sound/direct_sound_samples/unknown_snare.wav": {
       "category": "audio.sample",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "DirectSound instrument sample reached by voicegroup_rs_drumset's aliased predecessor slots (dummy.inc entries 62..=97, issue #1789) as DirectSoundWaveData_unknown_snare. Decoded by the same .wav parser as the other title samples (crates/xtask/src/extract/wav.rs) and emitted via cargo xtask extract as pack id audio/sample/direct-sound/unknown_snare; also read from the player's own ROM by crates/rom-import/src/domains/audio.rs, equivalence-checked byte-for-byte by crates/rom-import/tests/equivalence.rs.",
+      "rust_target": "crates/xtask/src/extract/wav.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "sound/direct_sound_samples/unknown_synth_snare.wav": {
       "category": "audio.sample",
@@ -19632,8 +19642,10 @@
     "sound/direct_sound_samples/unused_guitar_separates_power_chord.wav": {
       "category": "audio.sample",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "DirectSound instrument sample reached by voicegroup_rs_drumset's aliased predecessor slots (dummy.inc entries 62..=97, issue #1789) as DirectSoundWaveData_unused_guitar_separates_power_chord. Decoded by the same .wav parser as the other title samples (crates/xtask/src/extract/wav.rs) and emitted via cargo xtask extract as pack id audio/sample/direct-sound/unused_guitar_separates_power_chord; also read from the player's own ROM by crates/rom-import/src/domains/audio.rs, equivalence-checked byte-for-byte by crates/rom-import/tests/equivalence.rs.",
+      "rust_target": "crates/xtask/src/extract/wav.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "sound/direct_sound_samples/unused_heart_of_asia_indian_drum.wav": {
       "category": "audio.sample",
@@ -19652,14 +19664,18 @@
     "sound/direct_sound_samples/unused_sc88pro_unison_slap.wav": {
       "category": "audio.sample",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "DirectSound instrument sample reached by voicegroup_rs_drumset's aliased predecessor slots (dummy.inc entries 62..=97, issue #1789) as DirectSoundWaveData_unused_sc88pro_unison_slap. Decoded by the same .wav parser as the other title samples (crates/xtask/src/extract/wav.rs) and emitted via cargo xtask extract as pack id audio/sample/direct-sound/unused_sc88pro_unison_slap; also read from the player's own ROM by crates/rom-import/src/domains/audio.rs, equivalence-checked byte-for-byte by crates/rom-import/tests/equivalence.rs.",
+      "rust_target": "crates/xtask/src/extract/wav.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "sound/direct_sound_samples/unused_sd90_oboe.wav": {
       "category": "audio.sample",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "DirectSound instrument sample reached by voicegroup_rs_drumset's aliased predecessor slots (dummy.inc entries 62..=97, issue #1789) as DirectSoundWaveData_unused_sd90_oboe. Decoded by the same .wav parser as the other title samples (crates/xtask/src/extract/wav.rs) and emitted via cargo xtask extract as pack id audio/sample/direct-sound/unused_sd90_oboe; also read from the player's own ROM by crates/rom-import/src/domains/audio.rs, equivalence-checked byte-for-byte by crates/rom-import/tests/equivalence.rs.",
+      "rust_target": "crates/xtask/src/extract/wav.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "sound/direct_sound_samples/unused_unknown_male_voice.wav": {
       "category": "audio.sample",
@@ -19706,8 +19722,10 @@
     "sound/programmable_wave_samples/03.pcm": {
       "category": "audio.sample",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "Programmable wave table reached by voicegroup_rs_drumset's aliased predecessor slot 19 (dummy.inc entry 81, ProgrammableWaveData_3, issue #1789), emitted via cargo xtask extract as pack id audio/sample/programmable-wave/03; also read from the player's own ROM by crates/rom-import/src/domains/audio.rs, equivalence-checked byte-for-byte by crates/rom-import/tests/equivalence.rs.",
+      "rust_target": "crates/xtask/src/extract/audio_samples.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "sound/programmable_wave_samples/04.pcm": {
       "category": "audio.sample",
@@ -23242,12 +23260,20 @@
     "sound/voicegroups/drumsets/rs.inc": {
       "category": "audio.voicegroup",
       "kind": "file",
-      "reason": "Rhythm (drum-kit) voicegroup MUS_TITLE's voicegroup references via voice_keysplit_all voicegroup_rs_drumset (title.inc slot 0). Parsed by xtask::extract::voicegroups (voice_group rs_drumset, 36 -- the starting_note bias aligns real MIDI note 36 = General MIDI bass drum), normalized to the 128-slot VoiceGroup schema (36 leading Empty slots for the bias, 29 real entries filling slots 36..=64, trailing Empty padding) and emitted as audio/voicegroup/rs_drumset (issue #182, S-4 #115 child 3). Since the #122 ROM-import series the same normalized pack entries are also produced directly from the player's own ROM by crates/rom-import/src/domains/audio.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+      "reason": "Rhythm (drum-kit) voicegroup MUS_TITLE's voicegroup references via voice_keysplit_all voicegroup_rs_drumset (title.inc slot 0). Parsed by xtask::extract::voicegroups (voice_group rs_drumset, 36 -- the starting_note bias aligns real MIDI note 36 = General MIDI bass drum). The bias is an address alias, not padding (asm/macros/m4a.inc): slots 0..=35 are the 36 ToneData records linked before it (dummy.inc entries 62..=97, see that artifact), the 29 real entries fill slots 36..=64, and trailing Empty padding completes the 128-slot VoiceGroup schema. Emitted as audio/voicegroup/rs_drumset (issues #182, #1789, S-4 #115 child 3). The same normalized pack entries are also produced directly from the player's own ROM by crates/rom-import/src/domains/audio.rs (--import-rom, reading from the alias address), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
       "rust_target": "crates/xtask/src/extract/voicegroups/mod.rs",
       "spec": "S-4",
       "status": "ported"
     },
     "sound/voicegroups/dummy.inc": {
+      "artifacts": {
+        "entries-62-97": {
+          "reason": "Biased-alias source (issue #1789): entries 62..=97 are the 36 ToneData records physically preceding voicegroup_rs_drumset (sound/voice_groups.inc links dummy.inc immediately before drumsets/rs.inc; asm/macros/m4a.inc aliases a biased voice_group label starting_note*0xC bytes back), materialized into audio/voicegroup/rs_drumset slots 0..=35 by Resolver::collect_alias_predecessors. The file's own group (entries 0..=61 and its emission as audio/voicegroup/dummy) remains pending. The same slots are read directly from the player's ROM by crates/rom-import/src/domains/audio.rs, equivalence-checked byte-for-byte by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/voicegroups/resolve.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "audio.voicegroup",
       "kind": "file",
       "spec_owner": "S-3",
@@ -24078,7 +24104,7 @@
     "sound/voicegroups/title.inc": {
       "category": "audio.voicegroup",
       "kind": "file",
-      "reason": "Voicegroup resolver + 128-slot normalization (issue #182, S-4 #115 child 3): parsed by xtask::extract::voicegroups (parser.rs/resolve.rs/encode.rs), resolving MUS_TITLE's own voicegroup (voice_group title -> voicegroup_title, per sound/songs/midi/midi.cfg mus_title.mid: -G_title) plus every key-split/rhythm child it transitively references, cycle-safe and rejecting a second level of indirection (upstream ply_note single-level limit). Normalized to crates/assets/src/audio/voicegroup.rs's VoiceGroup schema and emitted as audio/voicegroup/title in the local asset pack (FORMAT_VERSION 4). MODELED LINK-ADJACENCY READ (issue #201): title.inc declares only 89 of the 128 addressable slots; sound/voice_groups.inc:66-67 links intro.inc contiguously after title.inc, and m4a_1.s's unchecked voice*12 fetch (ply_voice) resolves an undeclared slot (e.g. 127, which mus_title.mid selects) into voicegroup_intro's own entries. link_order_successors parses sound/voice_groups.inc's linked order and resolve_voice_groups_with_link_successors materializes title's slots 89..=127 from voicegroup_intro's entries 0..=38 (through the same leaf/indirection resolution as a declared slot), instead of Empty -- fail-closed to Empty only if a top-level group is last in the linked order or its successors run out first. A key-split/rhythm child's own under/over-range access (e.g. rs_drumset's starting_note bias) is a different mechanism (the keysplit table itself) and stays Empty-padded, out of scope. Read back and decoded with VoiceGroup::decode (crates/pokeemerald-rs/src/voicegroup_pack_tests.rs pins the adjacency mapping itself: slot 89 = intro entry 0, a Rhythm to rs_drumset; slot 127 = intro entry 38, a real Square1 voice). Sample payloads are not extracted here (issue #183). Since the #122 ROM-import series the same normalized pack entries are also produced directly from the player's own ROM by crates/rom-import/src/domains/audio.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+      "reason": "Voicegroup resolver + 128-slot normalization (issue #182, S-4 #115 child 3): parsed by xtask::extract::voicegroups (parser.rs/resolve.rs/encode.rs), resolving MUS_TITLE's own voicegroup (voice_group title -> voicegroup_title, per sound/songs/midi/midi.cfg mus_title.mid: -G_title) plus every key-split/rhythm child it transitively references, cycle-safe and rejecting a second level of indirection (upstream ply_note single-level limit). Normalized to crates/assets/src/audio/voicegroup.rs's VoiceGroup schema and emitted as audio/voicegroup/title in the local asset pack (FORMAT_VERSION 4). MODELED LINK-ADJACENCY READ (issue #201): title.inc declares only 89 of the 128 addressable slots; sound/voice_groups.inc:66-67 links intro.inc contiguously after title.inc, and m4a_1.s's unchecked voice*12 fetch (ply_voice) resolves an undeclared slot (e.g. 127, which mus_title.mid selects) into voicegroup_intro's own entries. index_link_order parses sound/voice_groups.inc's linked order and resolve_voice_groups_with_link_order materializes title's slots 89..=127 from voicegroup_intro's entries 0..=38 (through the same leaf/indirection resolution as a declared slot), instead of Empty -- fail-closed to Empty only if a top-level group is last in the linked order or its successors run out first. A biased child's predecessor access (rs_drumset's starting_note 36) is the same adjacency mechanism read backward: its slots 0..=35 are the preceding linked dummy.inc records (issue #1789, asm/macros/m4a.inc), not Empty padding. Read back and decoded with VoiceGroup::decode (crates/pokeemerald-rs/src/voicegroup_pack_tests.rs pins the adjacency mapping itself: slot 89 = intro entry 0, a Rhythm to rs_drumset; slot 127 = intro entry 38, a real Square1 voice). Sample payloads are not extracted here (issue #183). Since the #122 ROM-import series the same normalized pack entries are also produced directly from the player's own ROM by crates/rom-import/src/domains/audio.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
       "rust_target": "crates/xtask/src/extract/voicegroups/mod.rs",
       "spec": "S-4",
       "status": "ported"

@@ -96,8 +96,25 @@ fn a_key_split_slot_resolves_its_table_and_emits_its_child_group() {
     assert!(resolved.iter().any(|g| g.label == "child"));
 }
 
+fn link_order(labels: &[&str]) -> Vec<IndexedLinkOrderItem> {
+    labels
+        .iter()
+        .map(|label| IndexedLinkOrderItem::VoiceGroup((*label).to_owned()))
+        .collect()
+}
+
+fn direct_sound_slot(sample: &str) -> VoiceSlot {
+    VoiceSlot::DirectSound {
+        base_key: 60,
+        pan: None,
+        sample_id: format!("audio/sample/direct-sound/{sample}"),
+        envelope: envelope(),
+        mode: DirectSoundMode::Resampled,
+    }
+}
+
 #[test]
-fn a_rhythm_slot_resolves_its_child_group_with_the_starting_note_bias_padded_as_empty() {
+fn a_rhythm_slot_resolves_its_child_group_with_the_starting_note_bias_aliasing_its_predecessor() {
     let raw = groups(vec![
         raw_group(
             "top",
@@ -107,12 +124,19 @@ fn a_rhythm_slot_resolves_its_child_group_with_the_starting_note_bias_padded_as_
             }],
         ),
         raw_group(
+            "before",
+            0,
+            (0..36).map(|i| direct_sound(&format!("b{i}"))).collect(),
+        ),
+        raw_group(
             "drumset",
             36,
             vec![direct_sound("kick"), direct_sound("snare")],
         ),
     ]);
-    let resolved = resolve_voice_groups("top", &raw, &no_keysplit_tables()).unwrap();
+    let order = link_order(&["top", "before", "drumset"]);
+    let resolved =
+        resolve_voice_groups_with_link_order("top", &raw, &no_keysplit_tables(), &order).unwrap();
 
     let top = resolved.iter().find(|g| g.label == "top").unwrap();
     assert_eq!(
@@ -124,25 +148,122 @@ fn a_rhythm_slot_resolves_its_child_group_with_the_starting_note_bias_padded_as_
 
     let drumset = resolved.iter().find(|g| g.label == "drumset").unwrap();
     assert_eq!(drumset.slots.len(), VOICE_SLOT_COUNT);
-    for slot in &drumset.slots[0..36] {
-        assert_eq!(
-            *slot,
-            VoiceSlot::Empty,
-            "leading bias slots must stay Empty"
-        );
+    for (i, slot) in drumset.slots[0..36].iter().enumerate() {
+        assert_eq!(*slot, direct_sound_slot(&format!("b{i}")));
     }
+    assert_eq!(drumset.slots[36], direct_sound_slot("kick"));
+    assert_eq!(drumset.slots[37], direct_sound_slot("snare"));
+    assert_eq!(drumset.slots[38], VoiceSlot::Empty);
+    assert_eq!(drumset.slots[127], VoiceSlot::Empty);
+}
+
+#[test]
+fn a_bias_spanning_several_predecessors_takes_their_records_in_link_order() {
+    let raw = groups(vec![
+        raw_group("far", 0, vec![direct_sound("f0"), direct_sound("f1")]),
+        raw_group("near", 0, vec![direct_sound("n0"), direct_sound("n1")]),
+        raw_group("top", 3, vec![direct_sound("own")]),
+    ]);
+    let order = link_order(&["far", "near", "top"]);
+    let resolved =
+        resolve_voice_groups_with_link_order("top", &raw, &no_keysplit_tables(), &order).unwrap();
+    let slots = &resolved[0].slots;
+    assert_eq!(slots[0], direct_sound_slot("f1"));
+    assert_eq!(slots[1], direct_sound_slot("n0"));
+    assert_eq!(slots[2], direct_sound_slot("n1"));
+    assert_eq!(slots[3], direct_sound_slot("own"));
+    assert_eq!(slots[4], VoiceSlot::Empty);
+}
+
+#[test]
+fn a_biased_predecessor_contributes_only_its_declared_records_without_its_own_alias() {
+    let raw = groups(vec![
+        raw_group("older", 0, vec![direct_sound("o0")]),
+        raw_group("mid", 1, vec![direct_sound("m0")]),
+        raw_group("top", 1, vec![direct_sound("own")]),
+    ]);
+    let order = link_order(&["older", "mid", "top"]);
+    let resolved =
+        resolve_voice_groups_with_link_order("top", &raw, &no_keysplit_tables(), &order).unwrap();
+    assert_eq!(resolved[0].slots[0], direct_sound_slot("m0"));
+    assert_eq!(resolved[0].slots[1], direct_sound_slot("own"));
+}
+
+#[test]
+fn a_bias_with_too_few_or_unlinked_predecessors_is_a_hard_error() {
+    let raw = groups(vec![
+        raw_group("before", 0, vec![direct_sound("b0")]),
+        raw_group("top", 2, vec![direct_sound("own")]),
+    ]);
+    let short = resolve_voice_groups_with_link_order(
+        "top",
+        &raw,
+        &no_keysplit_tables(),
+        &link_order(&["before", "top"]),
+    )
+    .unwrap_err();
     assert_eq!(
-        drumset.slots[36],
-        VoiceSlot::DirectSound {
-            base_key: 60,
-            pan: None,
-            sample_id: "audio/sample/direct-sound/kick".to_owned(),
-            envelope: envelope(),
-            mode: DirectSoundMode::Resampled,
+        short,
+        VoiceGroupError::InsufficientAliasPredecessors {
+            group: "top".to_owned(),
+            starting_note: 2,
+            available: 1,
         }
     );
-    assert!(matches!(drumset.slots[37], VoiceSlot::DirectSound { .. }));
-    assert_eq!(drumset.slots[127], VoiceSlot::Empty);
+
+    let barrier = resolve_voice_groups_with_link_order(
+        "top",
+        &raw,
+        &no_keysplit_tables(),
+        &[
+            IndexedLinkOrderItem::VoiceGroup("before".to_owned()),
+            IndexedLinkOrderItem::ForeignInclude,
+            IndexedLinkOrderItem::VoiceGroup("top".to_owned()),
+        ],
+    )
+    .unwrap_err();
+    assert!(matches!(
+        barrier,
+        VoiceGroupError::InsufficientAliasPredecessors { available: 0, .. }
+    ));
+
+    let unlinked = resolve_voice_groups("top", &raw, &no_keysplit_tables()).unwrap_err();
+    assert!(matches!(
+        unlinked,
+        VoiceGroupError::InsufficientAliasPredecessors { available: 0, .. }
+    ));
+}
+
+#[test]
+fn an_aliased_indirection_record_under_an_indirection_target_is_rejected() {
+    let raw = groups(vec![
+        raw_group(
+            "top",
+            0,
+            vec![RawSlot::Rhythm {
+                child_label: "child".to_owned(),
+            }],
+        ),
+        raw_group(
+            "before",
+            0,
+            vec![RawSlot::Rhythm {
+                child_label: "top".to_owned(),
+            }],
+        ),
+        raw_group("child", 1, vec![direct_sound("own")]),
+    ]);
+    let err = resolve_voice_groups_with_link_order(
+        "top",
+        &raw,
+        &no_keysplit_tables(),
+        &link_order(&["top", "before", "child"]),
+    );
+    // `before` links ahead of `child`, so the aliased record is its rhythm slot.
+    assert!(matches!(
+        err,
+        Err(VoiceGroupError::NestedIndirection { .. })
+    ));
 }
 
 #[test]
@@ -619,12 +740,25 @@ fn env(a: u8, d: u8, s: u8, r: u8) -> Envelope {
 }
 
 fn resolve_lone_leaf_at_note_3(slot: RawSlot) -> VoiceSlot {
-    let raw = groups(vec![raw_group("top", 3, vec![slot])]);
-    let resolved = resolve_voice_groups("top", &raw, &no_keysplit_tables()).unwrap();
+    let raw = groups(vec![
+        raw_group(
+            "before",
+            0,
+            vec![direct_sound("p0"), direct_sound("p1"), direct_sound("p2")],
+        ),
+        raw_group("top", 3, vec![slot]),
+    ]);
+    let resolved = resolve_voice_groups_with_link_order(
+        "top",
+        &raw,
+        &no_keysplit_tables(),
+        &link_order(&["before", "top"]),
+    )
+    .unwrap();
     assert_eq!(resolved.len(), 1);
     assert_eq!(resolved[0].slots.len(), VOICE_SLOT_COUNT);
-    for slot in &resolved[0].slots[..3] {
-        assert_eq!(*slot, VoiceSlot::Empty);
+    for (i, slot) in resolved[0].slots[..3].iter().enumerate() {
+        assert_eq!(*slot, direct_sound_slot(&format!("p{i}")));
     }
     for slot in &resolved[0].slots[4..] {
         assert_eq!(*slot, VoiceSlot::Empty);
