@@ -433,8 +433,23 @@ impl OverworldPhase {
     /// drain frame alone is safe for the same reason the tick is: no new
     /// landing can be latched while the approach owns every frame, so the
     /// only one this can ever clear is the pre-cutscene one it is meant to.
+    ///
+    /// # A finished run stands back up
+    ///
+    /// `Task_FreezeObjectAndPlayer` calls `PlayerFreeze` once
+    /// `IsPlayerStandingStill` (`event_object_lock.c:130-146`), and its
+    /// forced face movement replaces a finished run's paused running cell
+    /// with the standing pose (`field_player_avatar.c:1039-1046`). The task
+    /// polls the state the previous frame left, so the drain frame itself
+    /// still shows the running cell and the release lands on the first
+    /// frame that begins at rest -- the trigger frame for a player already
+    /// standing still.
     pub(super) fn tick_player_under_approach_lock(&mut self) {
+        let settled = !self.player.in_transit();
         self.player.tick();
+        if settled {
+            self.player.release_run_pose();
+        }
         self.pending_landing = None;
     }
 
