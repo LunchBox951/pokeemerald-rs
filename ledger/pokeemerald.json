@@ -29041,7 +29041,7 @@
         },
         "SpriteCB_PressStartCopyrightBanner": {
           "reason": "Blink cadence (visible 16 ticks, invisible 16, alternating forever) transcribed as the pure fn press_start_visible(frame) -- issue #116. The copyright banner's own sAnimate is never set upstream, so it stays always-visible, matching this callback's else branch; that half needs no port of its own.",
-          "rust_target": "crates/pokeemerald-rs/src/title.rs",
+          "rust_target": "crates/pokeemerald-rs/src/title/idle_frame.rs",
           "spec": "I-2",
           "status": "rewritten"
         },
@@ -29053,7 +29053,7 @@
         },
         "cloud_scroll": {
           "reason": "Task_TitleScreenPhase3's cloud vertical scroll (tCounter/tBg1Y/gBattle_BG1_Y -> BG1VOFS) transcribed as the pure fn cloud_scroll_y(frame) (issue #116); confirmed vertical, not horizontal, by reading the actual code (BG1HOFS is only ever set once, statically, by ScanlineEffect_InitWave during boot). The legendary-marking palette pulse (UpdateLegendaryMarkingColor) in the same function is out of scope and stays pending.",
-          "rust_target": "crates/pokeemerald-rs/src/title.rs",
+          "rust_target": "crates/pokeemerald-rs/src/title/idle_frame.rs",
           "spec": "I-2",
           "status": "rewritten"
         },
@@ -29065,7 +29065,7 @@
         },
         "press_start_copyright_anim_frames": {
           "reason": "sAnim_PressStart_0..4 and sAnim_Copyright_0..4's ANIMCMD_FRAME tile selection (1,5,9,13,17 and 21,25,29,33,37, applied unscaled by BeginAnim, sprite.c:936) is reproduced by PRESS_START_BASE_TILE/COPYRIGHT_BASE_TILE and sprite_entries' per-frame arithmetic; press_start_tileset packs press_start.png in the upstream sheet's own 41-tile raster order (0x520 bytes, title_screen.c:299) so those indices resolve to the same tiles (issue #1156).",
-          "rust_target": "crates/pokeemerald-rs/src/title.rs",
+          "rust_target": "crates/pokeemerald-rs/src/title/idle_frame.rs",
           "spec": "I-2",
           "status": "rewritten"
         }
