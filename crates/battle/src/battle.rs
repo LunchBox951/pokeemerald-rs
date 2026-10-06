@@ -152,9 +152,12 @@ enum Selection {
     NoMove,
     /// The move slot chosen at selection.
     Slot(usize),
-    /// A forced Struggle. Upstream keeps the retained slot here; this crate
-    /// does not carry it, so Struggle's own priority stands in.
-    Struggle,
+    /// A forced Struggle: it replaces the move for the action only, since
+    /// executing it clears `noValidMoves`
+    /// (`pokeemerald/src/battle_util.c:100`-`:104`), so the end-turn comparison
+    /// reads the retained slot's own move. `retained` is `None` for an enemy
+    /// whose forced Struggle names no slot; Struggle's priority stands in.
+    Struggle { retained: Option<usize> },
 }
 
 /// Both battlers' selections. Only the selection is retained from the action
@@ -181,6 +184,9 @@ enum ValidatedPlayerAction {
     UseMove {
         slot: Option<usize>,
         move_id: MoveId,
+        /// The slot the player's cursor named, retained for the end-turn
+        /// comparison even when a forced Struggle replaces the move.
+        cursor: usize,
     },
     Run,
 }
@@ -652,18 +658,22 @@ impl Battle {
                 ValidatedPlayerAction::UseMove {
                     slot: Some(slot), ..
                 } => Selection::Slot(slot),
-                ValidatedPlayerAction::UseMove { slot: None, .. } => Selection::Struggle,
+                ValidatedPlayerAction::UseMove {
+                    slot: None, cursor, ..
+                } => Selection::Struggle {
+                    retained: Some(cursor),
+                },
                 ValidatedPlayerAction::Run => Selection::NoMove,
             },
             enemy: match enemy_action {
                 EnemyAction::Move(slot) => Selection::Slot(slot),
-                EnemyAction::Struggle => Selection::Struggle,
+                EnemyAction::Struggle => Selection::Struggle { retained: None },
                 EnemyAction::Flee => Selection::NoMove,
             },
         };
-        let priorities = self.priorities_of(chosen)?;
+        let priorities = self.priorities_of(chosen, false)?;
         match player_action {
-            ValidatedPlayerAction::UseMove { slot, move_id } => {
+            ValidatedPlayerAction::UseMove { slot, move_id, .. } => {
                 self.resolve_move_exchange(slot, move_id, priorities, enemy_action, rng, events)?;
             }
             ValidatedPlayerAction::Run => {
@@ -716,11 +726,13 @@ impl Battle {
                 Ok(ValidatedPlayerAction::UseMove {
                     slot: None,
                     move_id: STRUGGLE,
+                    cursor: slot,
                 })
             }
             PlayerAction::UseMove(slot) => Ok(ValidatedPlayerAction::UseMove {
                 slot: Some(slot),
                 move_id: self.validate_player_move(slot)?,
+                cursor: slot,
             }),
         }
     }
@@ -790,13 +802,26 @@ impl Battle {
 
     /// Priorities of the two selections against the battlers as they stand
     /// now; a missing slot reads as no move.
-    fn priorities_of(&self, chosen: ChosenMoves) -> Result<ResidualPriorities, BattleError> {
+    ///
+    /// `end_turn` is the rebuilt end-turn comparison, which reads a forced
+    /// Struggle's retained slot instead of Struggle.
+    fn priorities_of(
+        &self,
+        chosen: ChosenMoves,
+        end_turn: bool,
+    ) -> Result<ResidualPriorities, BattleError> {
+        let slot_priority = |battler: &BattlePokemon, slot: usize| {
+            battler.moves().get(slot).map_or(Ok(NO_MOVE_PRIORITY), |m| {
+                self.dex.move_data(m.move_id).map(|data| data.priority)
+            })
+        };
         let priority = |selection: Selection, battler: &BattlePokemon| match selection {
             Selection::NoMove => Ok(NO_MOVE_PRIORITY),
-            Selection::Slot(slot) => battler.moves().get(slot).map_or(Ok(NO_MOVE_PRIORITY), |m| {
-                self.dex.move_data(m.move_id).map(|data| data.priority)
-            }),
-            Selection::Struggle => self.dex.move_data(STRUGGLE).map(|data| data.priority),
+            Selection::Slot(slot) => slot_priority(battler, slot),
+            Selection::Struggle {
+                retained: Some(slot),
+            } if end_turn => slot_priority(battler, slot),
+            Selection::Struggle { .. } => self.dex.move_data(STRUGGLE).map(|data| data.priority),
         };
         Ok(ResidualPriorities {
             player: priority(chosen.player, &self.player)?,
@@ -877,7 +902,7 @@ impl Battle {
         // Speed, so a Speed-stage change or a surviving tie is re-decided
         // rather than inherited from the action phase
         // (`src/battle_util.c:1199`-`:1210`).
-        let priorities = self.priorities_of(chosen)?;
+        let priorities = self.priorities_of(chosen, true)?;
         let order = resolve_order(
             priorities.player,
             priorities.enemy,

@@ -492,3 +492,37 @@ fn an_unequal_priority_selection_consumes_no_end_turn_tie_draw() {
     assert_eq!(ticks, [true, false], "{events:?}");
     assert_eq!(rng.draws(), 12);
 }
+
+/// A forced Struggle replaces the move only for the action itself: executing
+/// it clears `noValidMoves` (`pokeemerald/src/battle_util.c:100`-`:104`), so
+/// the end-turn comparison reads the retained slot's own move
+/// (`pokeemerald/src/battle_main.c:4697`-`:4714`). A depleted Quick Attack
+/// still outranks the enemy's Tackle there, so no tie is drawn.
+#[test]
+fn a_forced_struggle_is_compared_by_its_retained_slot_at_the_end_turn() {
+    let dex = Dex::new();
+    let mut player = max_iv_mon(&dex, RATTATA, 5, vec![assets::MoveId::QUICK_ATTACK]);
+    for _ in 0..player.moves()[0].pp {
+        player.deduct_pp(0).unwrap();
+    }
+    player.set_status1(Status1::Poisoned);
+    let mut enemy = max_iv_mon(&dex, RATTATA, 5, vec![TACKLE]);
+    enemy.set_status1(Status1::Poisoned);
+
+    let mut rng = SequenceRng::new([
+        0, 0, // Battle::new: turn number, seeding tie
+        0, 0, // turn number, enemy pick
+        0, // action tie (Struggle 0 vs Tackle 0): player first
+        0, 1, 0, // Struggle
+        0, 1, 0, 0, // Tackle
+        1, // an end-turn tie draw, if one were wrongly taken: enemy first
+    ]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    let (hits, ticks) = hit_and_tick_sides(&events);
+    assert_eq!(hits, [true, false], "{events:?}");
+    assert_eq!(ticks, [true, false], "{events:?}");
+    assert_eq!(rng.draws(), 12, "no end-turn tie draw: {events:?}");
+}
