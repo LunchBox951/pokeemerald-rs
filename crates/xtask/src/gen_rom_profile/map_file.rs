@@ -1,43 +1,21 @@
-//! A tolerant reader for GNU `ld`'s `.map` output.
-//!
-//! Optional, and deliberately so: nobody needs a built decomp to generate a
-//! profile, and the generator's own signature matching is the primary
-//! evidence. A map turns that evidence into a second, independent one. If
-//! the owner ever builds `pokeemerald` with `agbcc`, `--map` says whether
-//! every address the generator derived is a symbol's own address rather
-//! than a coincidence somewhere inside one.
-//!
-//! The check runs by address, not by name. Making it by name would mean
-//! carrying a table of a few hundred upstream symbol names in the
-//! generator, which is exactly the hand-maintained knowledge this whole
-//! design exists to avoid. Instead each generated address is looked up in
-//! the map, and the symbols found there are reported.
-//!
-//! The parser only recognises the one line shape that matters -- an address
-//! and a name, alone on a line -- and ignores everything else, because the
-//! map's other sections vary between `ld` versions and none of them carry
-//! symbol addresses.
-
 use std::collections::BTreeMap;
 use std::path::Path;
 
 use super::error::GenRomProfileError;
 
-/// Every symbol a map file names, indexed by address.
+/// Symbol names indexed by exact start address.
 #[derive(Debug, Default, Clone)]
 pub struct SymbolMap {
     by_addr: BTreeMap<u32, Vec<String>>,
 }
 
 impl SymbolMap {
-    /// Read and parse the map at `path`.
+    /// Loads a map containing at least one supported symbol line.
     ///
     /// # Errors
     ///
-    /// [`GenRomProfileError::MapUnreadable`] if the file cannot be read, or
-    /// if it names no symbol at all (which means the shape assumed here is
-    /// not the shape the file has, and a silent pass would be worse than a
-    /// failure).
+    /// [`GenRomProfileError::MapUnreadable`] if the file cannot be read as text
+    /// or contains no supported symbol lines.
     pub fn load(path: &Path) -> Result<Self, GenRomProfileError> {
         let text =
             std::fs::read_to_string(path).map_err(|err| GenRomProfileError::MapUnreadable {
@@ -54,7 +32,8 @@ impl SymbolMap {
         Ok(parsed)
     }
 
-    /// Parse map text.
+    /// Accepts standalone `0x<address> <symbol>` lines whose addresses fit `u32`.
+    /// Unsupported lines are ignored; an input with no symbols yields an empty map.
     pub fn parse(text: &str) -> Self {
         let mut by_addr: BTreeMap<u32, Vec<String>> = BTreeMap::new();
         for line in text.lines() {
@@ -70,18 +49,18 @@ impl SymbolMap {
         Self { by_addr }
     }
 
-    /// Whether the map names nothing.
+    /// Whether no symbol was parsed.
     pub fn is_empty(&self) -> bool {
         self.by_addr.is_empty()
     }
 
-    /// The symbols defined at `addr`, if any.
+    /// Returns sorted, distinct symbol names starting exactly at `addr`.
+    /// Returns an empty slice if no symbol starts there.
     pub fn symbols_at(&self, addr: u32) -> &[String] {
         self.by_addr.get(&addr).map_or(&[], Vec::as_slice)
     }
 }
 
-/// Recognise a line that is exactly an address and a symbol name.
 fn symbol_line(line: &str) -> Option<(u32, &str)> {
     let mut tokens = line.split_whitespace();
     let addr = tokens.next()?;
@@ -90,11 +69,6 @@ fn symbol_line(line: &str) -> Option<(u32, &str)> {
         return None;
     }
     let digits = addr.strip_prefix("0x")?;
-    // `ld` writes 64-bit addresses on some hosts, zero-extending the 32-bit
-    // cartridge address rather than reusing its high bits for anything --
-    // so a value that does not fit `u32` is a genuinely different address,
-    // not a wider encoding of one that does, and must be rejected rather
-    // than masked down to a colliding low 32 bits.
     let value = u64::from_str_radix(digits, 16).ok()?;
     if !is_symbol_name(name) {
         return None;
@@ -102,8 +76,6 @@ fn symbol_line(line: &str) -> Option<(u32, &str)> {
     u32::try_from(value).ok().map(|addr| (addr, name))
 }
 
-/// Whether `name` looks like a linker symbol rather than a section or a
-/// fragment of some other line.
 fn is_symbol_name(name: &str) -> bool {
     let mut chars = name.chars();
     let Some(first) = chars.next() else {
@@ -120,10 +92,7 @@ fn is_symbol_name(name: &str) -> bool {
 mod tests {
     use super::SymbolMap;
 
-    /// A synthetic excerpt in the shapes `ld` actually emits: a section
-    /// line, a 64-bit-formatted symbol line, a 32-bit one, an aliased
-    /// address, and lines that must be ignored.
-    const EXCERPT: &str = "\
+    const SYNTHETIC_LD_MAP_EXCERPT: &str = "\
 Memory Configuration
 
  .rodata.gTileset_General
@@ -139,7 +108,7 @@ Memory Configuration
 
     #[test]
     fn symbol_lines_are_recognised_in_both_address_widths() {
-        let map = SymbolMap::parse(EXCERPT);
+        let map = SymbolMap::parse(SYNTHETIC_LD_MAP_EXCERPT);
         assert_eq!(map.symbols_at(0x083D_F704), ["gTileset_General"]);
         assert_eq!(
             map.symbols_at(0x083D_F71C),
@@ -150,10 +119,6 @@ Memory Configuration
 
     #[test]
     fn an_address_with_nonzero_high_bits_is_rejected_not_masked() {
-        // High bits nonzero, unlike the zero-extended 64-bit-width case
-        // `symbol_lines_are_recognised_in_both_address_widths` covers:
-        // masking down to the low 32 bits would wrongly report this as a
-        // symbol at `0x083df704`, colliding with the real one there.
         let map = SymbolMap::parse(
             "                0x00000001083df704                gBogusOutOfRange\n",
         );
@@ -163,17 +128,14 @@ Memory Configuration
 
     #[test]
     fn non_symbol_lines_are_ignored() {
-        let map = SymbolMap::parse(EXCERPT);
-        // A section header with a size and an object file has three tokens
-        // after the address, so it is not a symbol.
+        let map = SymbolMap::parse(SYNTHETIC_LD_MAP_EXCERPT);
         assert!(map.symbols_at(0x0864_C2E4).is_empty());
-        // `. = ALIGN (0x4)` is not a name.
         assert!(map.symbols_at(0x0800_0000).is_empty());
     }
 
     #[test]
     fn an_address_with_no_symbol_reports_nothing() {
-        let map = SymbolMap::parse(EXCERPT);
+        let map = SymbolMap::parse(SYNTHETIC_LD_MAP_EXCERPT);
         assert!(map.symbols_at(0x0812_3456).is_empty());
         assert!(!map.is_empty());
     }
