@@ -219,6 +219,7 @@ impl OverworldPhase {
     /// [`OverworldPhase::undecodable_lead_retained`]; no replacement starter is
     /// fabricated, because that would hand the player a Pokemon they did not save.
     pub(super) fn copy_party_and_objects_from_save(&mut self) {
+        self.lead_loan = super::lead_owner::LeadLoan::NotLent;
         if self.save1.player_party_count == 0 {
             self.set_no_party_lead(false);
             return;

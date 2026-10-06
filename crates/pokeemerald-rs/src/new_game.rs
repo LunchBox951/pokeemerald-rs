@@ -1,6 +1,9 @@
 //! New-game identity, save blocks, spawn, and skipped truck-exit state.
 //!
-//! The flow starts directly in Brendan's bedroom with a fixed name, gender, and
+//! The selected [`NewGameIdentity`] is committed to the save before any
+//! gender-dependent field is derived from it. The flow starts directly in the
+//! selected gender's bedroom (a shortcut past the truck sequence; see
+//! [`TruckExit`] for the state the full sequence needs) with a provisional
 //! starter. It applies the skipped truck exit's gender-specific heal location,
 //! flags, and variables so the houses match a normal playthrough.
 //! Berry-tree initialization remains unmodeled because the save blocks have no
@@ -13,10 +16,10 @@ use engine::text;
 
 use crate::overworld::PlayerCharacter;
 
-/// Fixed player name for the direct-start flow.
+/// Name used when no identity was selected (the chooser UI is not wired yet).
 pub const DEFAULT_PLAYER_NAME: &str = "STU";
 
-/// Fixed player gender for the direct-start flow.
+/// Gender used when no identity was selected.
 pub const DEFAULT_PLAYER_GENDER: PlayerGender = PlayerGender::Male;
 
 /// Overworld character paired with [`DEFAULT_PLAYER_GENDER`].
@@ -58,7 +61,7 @@ pub fn provisional_starter() -> battle::BattlePokemon {
     .expect("the provisional starter's species and level-up moves are in the dex")
 }
 
-/// Bedroom stair tile where the intro hands control to the overworld.
+/// Brendan's bedroom stair tile; the male fixture of [`bedroom_arrival`].
 pub const SPAWN_POSITION: TilePos = (7, 1);
 
 /// Elevation of [`SPAWN_POSITION`].
@@ -67,7 +70,7 @@ pub const SPAWN_ELEVATION: u8 = 0;
 /// Direction faced after the port's direct bedroom spawn.
 pub const SPAWN_FACING: Direction = Direction::South;
 
-/// Bedroom map where the intro hands control to the overworld.
+/// Brendan's bedroom; the male fixture of [`bedroom_arrival`].
 pub const SPAWN_MAP_ID: assets::MapId = assets::MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F");
 
 /// Map-group index of [`SPAWN_MAP_ID`] in the generated header table.
@@ -146,6 +149,142 @@ pub fn default_last_heal_location(gender: PlayerGender) -> WarpData {
     }
 }
 
+/// Why a selected identity cannot start a new game.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IdentityError {
+    /// Upstream's selection menu offers only the male and female branches.
+    UnsupportedGender,
+    /// The name has no glyphs, or more than `PLAYER_NAME_LENGTH` (seven).
+    NameLength,
+    /// The name contains a character outside the Gen-3 charset.
+    NameEncoding,
+}
+
+/// The gender and name a NEW GAME commits before gender-dependent
+/// initialization (`pokeemerald/src/main_menu.c:1501-1518,1597-1605`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NewGameIdentity {
+    gender: PlayerGender,
+    name: [u8; engine::save::block::PLAYER_NAME_BUF_LEN],
+}
+
+impl NewGameIdentity {
+    /// The identity used until the chooser and naming screens feed one in.
+    pub const DEFAULT: Self = Self {
+        gender: DEFAULT_PLAYER_GENDER,
+        // "STU" in the Gen-3 charset, padded with EOS.
+        name: [0xCD, 0xCE, 0xCF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF],
+    };
+
+    /// Validates and encodes a selection.
+    ///
+    /// # Errors
+    ///
+    /// See [`IdentityError`].
+    pub fn new(name: &str, gender: PlayerGender) -> Result<Self, IdentityError> {
+        const GEN_3_END_OF_STRING: u8 = 0xFF;
+        if !matches!(gender, PlayerGender::Male | PlayerGender::Female) {
+            return Err(IdentityError::UnsupportedGender);
+        }
+        let encoded = text::encode_str(name).map_err(|_| IdentityError::NameEncoding)?;
+        // `encode_str` appends the terminator.
+        let glyphs = encoded
+            .strip_suffix(&[GEN_3_END_OF_STRING])
+            .unwrap_or(&encoded);
+        if glyphs.is_empty() || glyphs.len() >= engine::save::block::PLAYER_NAME_BUF_LEN {
+            return Err(IdentityError::NameLength);
+        }
+        let mut buf = [GEN_3_END_OF_STRING; engine::save::block::PLAYER_NAME_BUF_LEN];
+        buf[..glyphs.len()].copy_from_slice(glyphs);
+        Ok(Self { gender, name: buf })
+    }
+
+    /// The committed gender.
+    #[must_use]
+    pub const fn gender(&self) -> PlayerGender {
+        self.gender
+    }
+
+    /// The encoded, EOS-padded name as stored in `SaveBlock2`.
+    #[must_use]
+    pub const fn encoded_name(&self) -> [u8; engine::save::block::PLAYER_NAME_BUF_LEN] {
+        self.name
+    }
+}
+
+/// A map, tile, and facing the player is placed at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Arrival {
+    /// Destination map.
+    pub map_id: assets::MapId,
+    /// Save-format map group.
+    pub map_group: i8,
+    /// Save-format map index within the group.
+    pub map_num: i8,
+    /// Destination tile.
+    pub position: TilePos,
+    /// Destination elevation.
+    pub elevation: u8,
+    /// Direction faced on arrival.
+    pub facing: Direction,
+}
+
+/// Player's own bedroom stair arrival, which the direct-start flow uses
+/// (`pokeemerald/data/maps/LittlerootTown_{Brendans,Mays}House_2F/map.json`).
+/// Unsupported genders fall back to the male room, matching
+/// [`PlayerCharacter::from`].
+#[must_use]
+pub const fn bedroom_arrival(gender: PlayerGender) -> Arrival {
+    match gender {
+        PlayerGender::Female => Arrival {
+            map_id: assets::MapId("MAP_LITTLEROOT_TOWN_MAYS_HOUSE_2F"),
+            map_group: 1,
+            map_num: DEFAULT_HEAL_LOCATION_FEMALE_MAP_NUM,
+            position: (1, 1),
+            elevation: SPAWN_ELEVATION,
+            facing: SPAWN_FACING,
+        },
+        _ => Arrival {
+            map_id: SPAWN_MAP_ID,
+            map_group: SPAWN_MAP_GROUP,
+            map_num: SPAWN_MAP_NUM,
+            position: SPAWN_POSITION,
+            elevation: SPAWN_ELEVATION,
+            facing: SPAWN_FACING,
+        },
+    }
+}
+
+/// Gender-dependent truck-exit destinations the full opening sequence
+/// consumes (`pokeemerald/data/maps/InsideOfTruck/scripts.inc:16-48`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TruckExit {
+    /// Dynamic warp into Littleroot Town (`SetDynamicWarpWithCoords`).
+    pub dynamic_warp: WarpData,
+    /// Tile in the player's 1F the moving-in sequence walks to.
+    pub moving_in_1f_position: TilePos,
+}
+
+/// The [`TruckExit`] for `gender`, or `None` where upstream has no branch.
+#[must_use]
+pub const fn truck_exit(gender: PlayerGender) -> Option<TruckExit> {
+    let (x, moving_in_1f_position) = match gender {
+        PlayerGender::Male => (3, (8, 8)),
+        PlayerGender::Female => (12, (2, 8)),
+        PlayerGender::Other(_) => return None,
+    };
+    Some(TruckExit {
+        dynamic_warp: WarpData {
+            map_group: 0,
+            map_num: 9,
+            warp_id: NO_WARP_EVENT,
+            x,
+            y: 10,
+        },
+        moving_in_1f_position,
+    })
+}
+
 /// [`init_save_blocks_with_options`] at [`NewGameOptions::DEFAULT`] -- every
 /// caller that has no boot-recovered save to carry options from (most of
 /// this module's own tests, and every other standalone caller).
@@ -156,6 +295,15 @@ pub fn default_last_heal_location(gender: PlayerGender) -> WarpData {
 #[must_use]
 pub fn init_save_blocks(rng: &mut Rng) -> (SaveBlock1, SaveBlock2) {
     init_save_blocks_with_options(rng, NewGameOptions::DEFAULT)
+}
+
+/// [`init_save_blocks_with_identity`] for the unselected [`NewGameIdentity::DEFAULT`].
+#[must_use]
+pub(crate) fn init_save_blocks_with_options(
+    rng: &mut Rng,
+    options: NewGameOptions,
+) -> (SaveBlock1, SaveBlock2) {
+    init_save_blocks_with_identity(rng, options, NewGameIdentity::DEFAULT)
 }
 
 /// Builds fresh save blocks for every modeled new-game field, seeding
@@ -173,27 +321,30 @@ pub fn init_save_blocks(rng: &mut Rng) -> (SaveBlock1, SaveBlock2) {
 /// Panics if the static spawn coordinates or generated new-game IDs exceed the
 /// save model's supported ranges.
 #[must_use]
-pub(crate) fn init_save_blocks_with_options(
+pub(crate) fn init_save_blocks_with_identity(
     rng: &mut Rng,
     options: NewGameOptions,
+    identity: NewGameIdentity,
 ) -> (SaveBlock1, SaveBlock2) {
     let trainer_id_low = rng.state();
     let block2 = SaveBlock2 {
-        player_name: encode_default_player_name(),
-        player_gender: DEFAULT_PLAYER_GENDER,
+        player_name: identity.encoded_name(),
+        player_gender: identity.gender(),
         player_trainer_id: trainer_id_bytes(trainer_id_low, rng),
         special_save_warp_flags: 0,
+        gcn_link_flags: 0,
         encryption_key: 0,
         options_text_speed: options.text_speed,
         options_window_frame_type: options.window_frame_type,
     };
 
+    let arrival = bedroom_arrival(block2.player_gender);
     let spawn = WarpData {
-        map_group: SPAWN_MAP_GROUP,
-        map_num: SPAWN_MAP_NUM,
+        map_group: arrival.map_group,
+        map_num: arrival.map_num,
         warp_id: NO_WARP_EVENT,
-        x: i16::try_from(SPAWN_POSITION.0).expect("SPAWN_POSITION x fits the save format"),
-        y: i16::try_from(SPAWN_POSITION.1).expect("SPAWN_POSITION y fits the save format"),
+        x: i16::try_from(arrival.position.0).expect("arrival x fits the save format"),
+        y: i16::try_from(arrival.position.1).expect("arrival y fits the save format"),
     };
     let mut block1 = SaveBlock1 {
         pos: Coords16 {
@@ -252,20 +403,6 @@ pub const NEW_GAME_RNG_SEED: u32 = 0;
 pub fn init_save_blocks_for_new_game() -> (SaveBlock1, SaveBlock2) {
     let mut rng = Rng::new(NEW_GAME_RNG_SEED);
     init_save_blocks(&mut rng)
-}
-
-fn encode_default_player_name() -> [u8; engine::save::block::PLAYER_NAME_BUF_LEN] {
-    const GEN_3_END_OF_STRING: u8 = 0xFF;
-
-    let encoded =
-        text::encode_str(DEFAULT_PLAYER_NAME).expect("DEFAULT_PLAYER_NAME is Gen-3 encodable");
-    let mut buf = [GEN_3_END_OF_STRING; engine::save::block::PLAYER_NAME_BUF_LEN];
-    assert!(
-        encoded.len() <= buf.len(),
-        "DEFAULT_PLAYER_NAME must fit PLAYER_NAME_BUF_LEN"
-    );
-    buf[..encoded.len()].copy_from_slice(&encoded);
-    buf
 }
 
 fn trainer_id_bytes(
@@ -765,5 +902,129 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn default_identity_is_the_encoded_stu_male_fixture() {
+        assert_eq!(
+            NewGameIdentity::new("STU", PlayerGender::Male).unwrap(),
+            NewGameIdentity::DEFAULT
+        );
+    }
+
+    #[test]
+    fn identity_rejects_unsupported_gender_and_bad_names() {
+        assert_eq!(
+            NewGameIdentity::new("MAY", PlayerGender::Other(UNRECOGNIZED_GENDER_BYTE)),
+            Err(IdentityError::UnsupportedGender)
+        );
+        assert_eq!(
+            NewGameIdentity::new("", PlayerGender::Male),
+            Err(IdentityError::NameLength)
+        );
+        assert_eq!(
+            NewGameIdentity::new("ABCDEFGH", PlayerGender::Male),
+            Err(IdentityError::NameLength)
+        );
+        assert!(NewGameIdentity::new("ABCDEFG", PlayerGender::Female).is_ok());
+        assert_eq!(
+            NewGameIdentity::new("\u{1F600}", PlayerGender::Male),
+            Err(IdentityError::NameEncoding)
+        );
+    }
+
+    /// Upstream values for each branch, spelled as literals rather than
+    /// re-read from production tables: bedroom group/num and stair tile
+    /// (`map_headers.rs`, `*_House_2F/map.json:228-234`), heal location
+    /// (`heal_locations.json`), and `InsideOfTruck/scripts.inc:16-48`.
+    #[test]
+    fn each_gender_derives_its_own_room_heal_location_and_truck_exit_state() {
+        for (gender, name, map, num, pos, heal_num, intro, house_var, dyn_x, moving_in) in [
+            (
+                PlayerGender::Male,
+                "RED",
+                "MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F",
+                1,
+                (7, 1),
+                1,
+                1,
+                0x408C,
+                3,
+                (8, 8),
+            ),
+            (
+                PlayerGender::Female,
+                "LEAF",
+                "MAP_LITTLEROOT_TOWN_MAYS_HOUSE_2F",
+                3,
+                (1, 1),
+                3,
+                2,
+                0x4082,
+                12,
+                (2, 8),
+            ),
+        ] {
+            let identity = NewGameIdentity::new(name, gender).unwrap();
+            let (block1, block2) = init_save_blocks_with_identity(
+                &mut Rng::new(NEW_GAME_RNG_SEED),
+                NewGameOptions::DEFAULT,
+                identity,
+            );
+            assert_eq!(block2.player_gender, gender);
+            assert_eq!(text::decode_to_string(&block2.player_name).unwrap(), name);
+
+            let arrival = bedroom_arrival(gender);
+            assert_eq!(arrival.map_id.0, map);
+            assert_eq!(arrival.position, pos);
+            assert_eq!(arrival.facing, Direction::South);
+            assert_eq!(
+                (block1.location.map_group, block1.location.map_num),
+                (1, num)
+            );
+            assert_eq!(
+                (block1.pos.x, block1.pos.y),
+                (i16::try_from(pos.0).unwrap(), i16::try_from(pos.1).unwrap())
+            );
+            assert_eq!(block1.last_heal_location.map_num, heal_num);
+            assert_eq!(
+                block1.event_data.var_get(0x4092).unwrap(),
+                intro,
+                "VAR_LITTLEROOT_INTRO_STATE"
+            );
+            assert_eq!(block1.event_data.var_get(house_var).unwrap(), 1);
+
+            let exit = truck_exit(gender).unwrap();
+            assert_eq!(exit.dynamic_warp.x, dyn_x);
+            assert_eq!(
+                (
+                    exit.dynamic_warp.map_group,
+                    exit.dynamic_warp.map_num,
+                    exit.dynamic_warp.y
+                ),
+                (0, 9, 10)
+            );
+            assert_eq!(exit.moving_in_1f_position, moving_in);
+        }
+        assert_eq!(truck_exit(PlayerGender::Other(1)), None);
+    }
+
+    #[test]
+    fn identity_does_not_change_the_trainer_id_draw() {
+        let mut male = Rng::new(NONDEGENERATE_TRAINER_ID_SEED);
+        let mut female = Rng::new(NONDEGENERATE_TRAINER_ID_SEED);
+        let (_, a) = init_save_blocks_with_identity(
+            &mut male,
+            NewGameOptions::DEFAULT,
+            NewGameIdentity::new("A", PlayerGender::Male).unwrap(),
+        );
+        let (_, b) = init_save_blocks_with_identity(
+            &mut female,
+            NewGameOptions::DEFAULT,
+            NewGameIdentity::new("B", PlayerGender::Female).unwrap(),
+        );
+        assert_eq!(a.player_trainer_id, NONDEGENERATE_TRAINER_ID);
+        assert_eq!(b.player_trainer_id, NONDEGENERATE_TRAINER_ID);
+        assert_eq!(male.state(), female.state());
     }
 }
