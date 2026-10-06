@@ -84,6 +84,7 @@ pub(super) fn advance_or_skip_for_preempt(
              ahead of this function"
         );
         player.tick();
+        player.release_run_pose();
         return None;
     }
 

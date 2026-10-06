@@ -398,6 +398,15 @@ impl PlayerState {
         matches!(self.rest_pose, RestPose::RunPaused)
     }
 
+    /// Drops a finished run's held neutral pose, as a field lock does
+    /// (`ScriptContext` and battle starts reset the avatar through
+    /// `SetPlayerAvatarTransitionFlags`, `field_player_avatar.c:150-162`).
+    pub fn release_run_pose(&mut self) {
+        if self.run_pose_held() {
+            self.rest_pose = RestPose::Standing;
+        }
+    }
+
     /// Returns whether the current walk-cycle phase is the second foot.
     #[must_use]
     pub const fn second_foot_leads(&self) -> bool {
