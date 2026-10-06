@@ -25031,6 +25031,20 @@
       "status": "pending"
     },
     "src/bike.c": {
+      "artifacts": {
+        "IsRunningDisallowed": {
+          "reason": "The gMapHeader.allowRunning half of the run gate, read from runtime.header().allow_run on every eligible poll (bike.c:1056-1062); bike movement is not ported.",
+          "rust_target": "crates/engine/src/overworld/player.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "IsRunningDisallowedByMetatile": {
+          "reason": "running_disallowed_by_metatile: departure behavior forbids running, and a Fortree bridge forbids it at even previous elevation (bike.c:1056-1062).",
+          "rust_target": "crates/engine/src/overworld/player.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -25592,6 +25606,30 @@
           "spec": "I-3",
           "status": "rewritten"
         },
+        "sAnim_RunEast": {
+          "reason": "avatar/run.rs draws the leading foot for five rendered frames then the neutral cell for three (ANIMCMD_FRAME(.., 5) then (.., 3)), alternating feet per crossing through PlayerState's leading-foot state; East flips West (object_event_anims.h:346-379).",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/avatar/run.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "sAnim_RunNorth": {
+          "reason": "avatar/run.rs draws the leading foot for five rendered frames then the neutral cell for three (ANIMCMD_FRAME(.., 5) then (.., 3)), alternating feet per crossing through PlayerState's leading-foot state; East flips West (object_event_anims.h:346-379).",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/avatar/run.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "sAnim_RunSouth": {
+          "reason": "avatar/run.rs draws the leading foot for five rendered frames then the neutral cell for three (ANIMCMD_FRAME(.., 5) then (.., 3)), alternating feet per crossing through PlayerState's leading-foot state; East flips West (object_event_anims.h:346-379).",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/avatar/run.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "sAnim_RunWest": {
+          "reason": "avatar/run.rs draws the leading foot for five rendered frames then the neutral cell for three (ANIMCMD_FRAME(.., 5) then (.., 3)), alternating feet per crossing through PlayerState's leading-foot state; East flips West (object_event_anims.h:346-379).",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/avatar/run.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
         "sStepAnimTables": {
           "reason": "Player entry only: sAnimTable_BrendanMayNormal's animPos {1,3,0,2} is ported as PlayerState's LeadingFoot phase, which alternates the forward-foot cell across walking steps, standstill turns, and dispatched forced crossings, and avatar::frame_for adds second_foot_leads() to the step cell (issue #1558). The other table rows (QuintyPlump, Standard, and the rest) drive NPC sprites, which have no step animation in this port and stay unported.",
           "rust_target": "crates/engine/src/overworld/player.rs",
@@ -25647,7 +25685,7 @@
           "status": "rewritten"
         },
         "sPicTable_BrendanNormal": {
-          "reason": "9-frame walking-sheet layout (2x4-tile frames, on-foot subset only) ported into avatar::pack_people_sheet_frames, whose packed bytes seed the scene's combined sprite tileset (overworld::sprites::SceneSprites) at base tile 0. sPicTable_MayNormal is now reached by two code paths, not one: as this run's own PlayerCharacter::May walking sheet, and (issue #161 review) as the sheet an OBJ_EVENT_GFX_RIVAL_MAY_NORMAL object event draws from when the player is Brendan -- upstream's gObjectEventGraphicsInfo_RivalMayNormal points .images at this very table (object_event_graphics_info.h:2015-2032); there is no rival-specific pic table or PNG. Both paths go through the same avatar::pack_people_sheet_frames packer; the rival case appends its own frame block after the player's rather than reusing base tile 0, and draws from its own palette bank (upstream PALSLOT_NPC_SPECIAL). Same for sPicTable_BrendanNormal with the genders swapped. Running frames are not modelled yet -- deferred, still in v1 scope.",
+          "reason": "9-frame walking-sheet layout (2x4-tile frames, on-foot subset only) ported into avatar::pack_people_sheet_frames, whose packed bytes seed the scene's combined sprite tileset (overworld::sprites::SceneSprites) at base tile 0. sPicTable_MayNormal is now reached by two code paths, not one: as this run's own PlayerCharacter::May walking sheet, and (issue #161 review) as the sheet an OBJ_EVENT_GFX_RIVAL_MAY_NORMAL object event draws from when the player is Brendan -- upstream's gObjectEventGraphicsInfo_RivalMayNormal points .images at this very table (object_event_graphics_info.h:2015-2032); there is no rival-specific pic table or PNG. Both paths go through the same avatar::pack_people_sheet_frames packer; the rival case appends its own frame block after the player's rather than reusing base tile 0, and draws from its own palette bank (upstream PALSLOT_NPC_SPECIAL). Same for sPicTable_BrendanNormal with the genders swapped. Running frames (cells 9..=17, sAnim_Run*) are packed from the running sheet by overworld::avatar::run after the walking block, so a held-B crossing draws from the same combined tileset.",
           "rust_target": "crates/pokeemerald-rs/src/overworld/avatar.rs",
           "spec": "I-3",
           "status": "rewritten"
@@ -26259,6 +26297,30 @@
           "spec": "I-3",
           "status": "rewritten"
         },
+        "MovementAction_PlayerRunDown_Step0": {
+          "reason": "Run Step0 initialises MOVE_SPEED_FAST_1 and applies the first 2px update at once; PlayerState commits the landing tile and the field loop ticks the first of eight frames in the same call (event_object_movement.c:6020-6081, 8252-8298).",
+          "rust_target": "crates/engine/src/overworld/player.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MovementAction_PlayerRunLeft_Step0": {
+          "reason": "Run Step0 initialises MOVE_SPEED_FAST_1 and applies the first 2px update at once; PlayerState commits the landing tile and the field loop ticks the first of eight frames in the same call (event_object_movement.c:6020-6081, 8252-8298).",
+          "rust_target": "crates/engine/src/overworld/player.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MovementAction_PlayerRunRight_Step0": {
+          "reason": "Run Step0 initialises MOVE_SPEED_FAST_1 and applies the first 2px update at once; PlayerState commits the landing tile and the field loop ticks the first of eight frames in the same call (event_object_movement.c:6020-6081, 8252-8298).",
+          "rust_target": "crates/engine/src/overworld/player.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MovementAction_PlayerRunUp_Step0": {
+          "reason": "Run Step0 initialises MOVE_SPEED_FAST_1 and applies the first 2px update at once; PlayerState commits the landing tile and the field loop ticks the first of eight frames in the same call (event_object_movement.c:6020-6081, 8252-8298).",
+          "rust_target": "crates/engine/src/overworld/player.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
         "ObjectEventUpdateElevation": {
           "reason": "Current-vs-previous elevation split (issue #218): PlayerState::adopt_elevation reproduces the early-return-on-either-side-ELEVATION_MULTI_LEVEL guard and the unconditional currentElevation adopt / non-transition-only previousElevation adopt, called from both of PlayerState::step's arrival sites (same-map and connection-crossing). previousElevation now exposed as PlayerState::previous_elevation, feeding the player OBJ's elevation-driven render priority. Modelled in two halves (issue #379): PlayerState::adopt_elevation is the per-step half above, and engine::overworld::MapRuntime::arrival_elevation (crates/engine/src/overworld/map_runtime.rs) is the spawn/arrival half, the single grid read shared by warp_destination_position (a resolved warp event), OverworldPhase::warp_to_position (an explicit-coordinate warp), and saved_tile_placement (a continued save). arrival_elevation takes one coordinate pair rather than two because a freshly spawned object event's previousCoords are seeded equal to its currentCoords (InitObjectEventStateFromTemplate, :1309-1312), so the prevElevation half of the :7764-7765 guard collapses into the curElevation half there; it returns ELEVATION_TRANSITION for a multi-level landing cell rather than modelling upstream's no-op early return, since the player it places is fresh and upstream's own spawn-time initialization already left that field at ELEVATION_TRANSITION.",
           "rust_target": "crates/engine/src/overworld/player.rs",
@@ -26275,6 +26337,12 @@
           "reason": "Player avatar only: PlayerState::advance_step_parity swaps command 1 to 2 and 3 to 0 on each ordinary, connection, or dispatched forced crossing and each turn-in-place, and leaves a held slide foot unchanged; a fresh phase is normalised by the idle face (issue #1558). Not applied to NPC object events, and the collision bump (WalkInPlaceSlow) is not modeled, so a blocked step leaves the phase unchanged.",
           "rust_target": "crates/engine/src/overworld/player.rs",
           "spec": "I-3",
+          "status": "rewritten"
+        },
+        "StartRunningAnim": {
+          "reason": "The run animation is selected by facing and drawn from the running sheet for the whole crossing, then held on its neutral cell until the next poll (event_object_movement.c:5120-5124).",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/avatar/run.rs",
+          "spec": "S-5",
           "status": "rewritten"
         },
         "TrySpawnObjectEventTemplate": {
@@ -26310,6 +26378,12 @@
         "gOppositeDirectionBlockedMetatileFuncs": {
           "reason": "The direction-to-predicate pairing is folded into collision::directionally_impassable's match rather than transcribed as a function-pointer array (no-verbatim; Rust has no DIR_* index to key on -- Direction is an enum). This table pairs each direction with its own predicate and is applied to objectEvent->currentMetatileBehavior, the tile the mover stands on (:4717); its sibling gDirectionBlockedMetatileFuncs supplies the opposite pairing for the destination. Both pairings are pinned by their own tests in collision.rs, since swapping them is the failure mode this table's name invites.",
           "rust_target": "crates/engine/src/overworld/collision.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "gPlayerRunMovementActions": {
+          "reason": "The four-direction run action table collapses to TransitCadence::RUN at the crossing's chosen direction (event_object_movement.c:968-974).",
+          "rust_target": "crates/engine/src/overworld/player.rs",
           "spec": "S-5",
           "status": "rewritten"
         }
@@ -26565,6 +26639,12 @@
         },
         "PlayerNotOnBikeTurningInPlace": {
           "reason": "On-foot standstill direction changes are re-implemented by PlayerState::step as StepOutcome::Turned: facing updates without tile movement, and an eight-frame WALK_IN_PLACE_FAST-equivalent busy timer (TURN_IN_PLACE_FRAMES) now starts, keeping ordinary direction polls Idle through frames 2-8 so a held direction can only begin moving on frame 9 (issue #976). A dialog or the start menu clears that timer immediately on the frame it takes the field lock (PlayerState::clear_turn_lock), matching PlayerFreeze forcing a one-frame face-direction action over an in-flight turn (field_player_avatar.c:1039-1046) so input is live again the frame the overlay closes.",
+          "rust_target": "crates/engine/src/overworld/player.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "PlayerRun": {
+          "reason": "A held-B step that clears collision crosses its tile at RUN_FRAMES_PER_TILE (8) frames through PlayerState::step_with_run, plays the running-sheet cells of avatar/run.rs, and drops to walking or standing on the next poll after B is released (field_player_avatar.c:658-668, 995-998). Sound and the bike branch are not ported.",
           "rust_target": "crates/engine/src/overworld/player.rs",
           "spec": "S-5",
           "status": "rewritten"
@@ -27548,6 +27628,12 @@
         "MetatileBehavior_IsRegionMap": {
           "reason": "Script-target behavior identity and applicable north-facing gate reimplemented as a pure predicate with exhaustive byte-domain tests.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsRunningDisallowed": {
+          "reason": "running_disallowed_by_metatile covers MB_NO_RUNNING, MB_LONG_GRASS, MB_HOT_SPRINGS and the four Pacifidlog logs (metatile_behavior.c:1258-1266).",
+          "rust_target": "crates/engine/src/overworld/player.rs",
           "spec": "S-5",
           "status": "rewritten"
         },
