@@ -100,7 +100,7 @@ fn a_finished_fade_keeps_sounding_the_reverb_tail_the_ring_still_holds() {
     let mut past_terminal = false;
     for _ in 0..FRAMES {
         // The contract `App::advance_music` is built on -- and which
-        // `app::tests::a_faded_reverbed_songs_tail_keeps_sounding_past_the_terminal_fade_step`
+        // `app::tests::music_lifecycle::a_faded_reverbed_songs_tail_keeps_sounding_past_the_terminal_fade_step`
         // drives through the app itself: render frames until the fade has
         // finished and its tail is silent, then only poll `drained`.
         if player.fade_finished() && !player.tail_sounding() {
