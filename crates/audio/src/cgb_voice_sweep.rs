@@ -459,3 +459,107 @@ fn a_trigger_time_sweep_overflow_only_mutes_the_channel_until_the_next_safe_trig
         "a later safe trigger must revive the muted voice, not find it retired"
     );
 }
+
+/// A zero-volume square holds hardware's `dead == 2` envelope, so its duty
+/// catch-up is deferred like an idle slot's and rated at the frequency the
+/// sweep finally reaches (`mgba/src/gb/audio.c:493-501,946-950`).
+#[test]
+fn a_zero_volume_square_defers_its_duty_catch_up_across_sweep_ticks() {
+    const FRAME_SAMPLES: usize = 300;
+    const TICK: usize = 100;
+    let mut silent = square_voice(
+        CgbChannelNumber::Square1,
+        Some(upward_sweep(1, 1)),
+        TestNote {
+            track_right: 0,
+            track_left: 0,
+            ..TestNote::at_key(0)
+        },
+    );
+    let start = silent.clone();
+    silent.begin_frame(false);
+    assert!(silent.is_active(), "nonzero sustain keeps the voice active");
+    assert_eq!(silent.envelope.volume(), 0, "the zero goal holds volume 0");
+    let mut acc = vec![(0i32, 0i32); FRAME_SAMPLES];
+    silent.render(&mut acc, &[TICK]);
+    assert!(acc.iter().all(|&(l, r)| l == 0 && r == 0));
+
+    let phase = |voice: &CgbVoice| voice.square_oscillator().expect("square").duty_phase();
+    let mut deferred = start;
+    assert!(deferred.oscillator.step_sweep_tick());
+    deferred.oscillator.advance_silently(FRAME_SAMPLES);
+    assert_eq!(
+        phase(&silent),
+        phase(&deferred),
+        "a dead == 2 channel's silence must be rated at the swept frequency, not each intermediate one"
+    );
+}
+
+/// The deferral survives frame boundaries: a later sweep tick retunes the
+/// still-unsettled silence, which is rated once at the final frequency.
+#[test]
+fn a_zero_volume_square_keeps_deferring_across_frames() {
+    const FRAME_SAMPLES: usize = 300;
+    let mut silent = square_voice(
+        CgbChannelNumber::Square1,
+        Some(upward_sweep(1, 1)),
+        TestNote {
+            track_right: 0,
+            track_left: 0,
+            ..TestNote::at_key(0)
+        },
+    );
+    let mut deferred = silent.clone();
+    for _ in 0..2 {
+        silent.begin_frame(false);
+        let mut acc = vec![(0i32, 0i32); FRAME_SAMPLES];
+        silent.render(&mut acc, &[100]);
+        assert!(deferred.oscillator.step_sweep_tick());
+    }
+    deferred.oscillator.advance_silently(2 * FRAME_SAMPLES);
+    let phase = |voice: &CgbVoice| voice.square_oscillator().expect("square").duty_phase();
+    assert_eq!(phase(&silent), phase(&deferred));
+}
+
+/// A dead square inherits a nonzero duty remainder; silent sweep ticks leave
+/// it unrated and settlement retimes it once at the final frequency
+/// (`mgba/src/gb/audio.c:493-503,975-979`).
+#[test]
+fn a_dead_square_preserves_its_inherited_remainder_across_silent_sweep_ticks() {
+    const FIRST_FREQUENCY: u16 = 0x400;
+    const FINAL_FREQUENCY: u16 = 0x640;
+    const SWEEP_BYTE: u8 = 0x12;
+    const FRAME_SAMPLES: usize = 17;
+
+    let mut silent = square_voice(
+        CgbChannelNumber::Square1,
+        Some(SWEEP_BYTE),
+        TestNote {
+            track_right: 0,
+            track_left: 0,
+            ..TestNote::at_key(0)
+        },
+    );
+    silent.begin_frame(false);
+    assert!(silent.is_dead_at_zero());
+
+    let sweep = crate::psg::Sweep::from_byte(SWEEP_BYTE, FIRST_FREQUENCY);
+    let mut inherited = SquareChannel::new(HALF_DUTY, FIRST_FREQUENCY, Some(sweep));
+    for _ in 0..13 {
+        let _ = inherited.sample();
+    }
+    silent.oscillator = Oscillator::Square(inherited.clone());
+
+    let mut expected = SquareChannel::new(HALF_DUTY, FINAL_FREQUENCY, None);
+    expected.continue_duty_from(&inherited);
+    expected.advance_silently(FRAME_SAMPLES);
+
+    let mut acc = vec![(0i32, 0i32); FRAME_SAMPLES];
+    silent.render(&mut acc, &[4, 12]);
+    assert!(acc.iter().all(|&(left, right)| left == 0 && right == 0));
+    assert_eq!(silent.sweep_frequency(), Some(FINAL_FREQUENCY));
+    assert_eq!(
+        silent.square_oscillator().expect("square").duty_phase(),
+        expected.duty_phase(),
+    );
+}
