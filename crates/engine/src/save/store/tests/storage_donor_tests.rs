@@ -605,3 +605,74 @@ fn a_load_reports_whether_its_storage_came_from_a_legacy_donor() {
     assert!(outcome.storage_source.is_legacy_head());
     assert!(!StorageSource::Own.is_legacy_head());
 }
+
+/// A mixed legacy/full pair whose legacy slot carries the newer verified
+/// storage tail must donate that tail, and two saves must keep it.
+#[test]
+fn a_mixed_merge_preserves_the_newest_verified_tail_through_two_saves() {
+    let block2 = sample_block2();
+    let legacy_block2 = SaveBlock2 {
+        encryption_key: 0x1111_2222,
+        ..sample_block2()
+    };
+    let older_block1 = SaveBlock1 {
+        money: 111,
+        ..sample_block1()
+    };
+    let legacy_block1 = SaveBlock1 {
+        money: 222,
+        ..sample_block1()
+    };
+    let older_storage = vec![0xAAu8; PKMN_STORAGE_PAYLOAD_LEN];
+    let newer_storage = vec![0xBBu8; PKMN_STORAGE_PAYLOAD_LEN];
+
+    for (legacy_slot, full_counter, tail_counter, head_counter) in
+        [(0usize, 3u32, 4u32, 6u32), (1, 2, 3, 5)]
+    {
+        let full_slot = 1 - legacy_slot;
+        let mut store = SaveStore::new();
+        write_full_slot(
+            &mut store,
+            full_slot,
+            &older_block1,
+            &block2,
+            &older_storage,
+            full_counter,
+        );
+        write_full_slot(
+            &mut store,
+            legacy_slot,
+            &older_block1,
+            &block2,
+            &newer_storage,
+            tail_counter,
+        );
+        write_legacy_slot_rotated(
+            &mut store,
+            legacy_slot,
+            &legacy_block1,
+            &legacy_block2,
+            head_counter,
+            1,
+        );
+
+        let outcome = store.load();
+        assert_eq!(outcome.status, SaveStatus::Ok);
+        assert_eq!(outcome.storage_source, StorageSource::LegacyDonor);
+        assert_eq!(store.save_counter(), head_counter);
+        assert_eq!(outcome.block1.money, legacy_block1.money);
+        assert_eq!(&store.base_pokemon_storage[..], &newer_storage[..]);
+
+        store.save(&outcome.block1, &outcome.block2);
+        store.save(&outcome.block1, &outcome.block2);
+        assert_eq!(store.save_counter(), head_counter + 2);
+
+        let mut reopened = SaveStore::from_flash_image(store.flash_image()).unwrap();
+        let reloaded = reopened.load();
+        assert_eq!(reloaded.status, SaveStatus::Ok);
+        assert_eq!(reloaded.storage_source, StorageSource::Own);
+        assert_eq!(reopened.save_counter(), head_counter + 2);
+        assert_eq!(reloaded.block1.money, legacy_block1.money);
+        assert_eq!(&reopened.base_pokemon_storage[..], &newer_storage[..]);
+    }
+}

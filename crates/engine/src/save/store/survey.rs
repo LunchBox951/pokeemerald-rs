@@ -411,10 +411,14 @@ fn resolve_both_ok(slot0: &SlotScan, slot1: &SlotScan) -> (SaveStatus, u32, Opti
         (slot1, slot0)
     };
     if second_counter_is_newer(full.counter, legacy.counter) {
-        // The full slot is whichever one `legacy` is not: slot 1 when
-        // slot 0 holds the legacy generation, slot 0 otherwise.
-        let full_slot = usize::from(slot0.legacy);
-        (SaveStatus::Ok, legacy.counter, Some(full_slot), true)
+        // The newer legacy head borrows whichever slot holds the newest
+        // verified storage set, not necessarily the full slot.
+        (
+            SaveStatus::Ok,
+            legacy.counter,
+            storage_donor(true, slot0, slot1),
+            true,
+        )
     } else {
         (SaveStatus::Ok, full.counter, None, false)
     }
