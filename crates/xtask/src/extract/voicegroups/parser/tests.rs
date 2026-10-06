@@ -774,6 +774,65 @@ fn a_keysplit_table_longer_than_128_entries_is_rejected() {
 }
 
 #[test]
+fn a_keysplit_table_whose_notes_run_past_127_is_rejected() {
+    let text = "keysplit demo, 127\n\tsplit 0, 129\n";
+    assert_eq!(
+        parse_keysplit_tables(text),
+        Err(VoiceGroupError::KeySplitTableNoteOutOfRange {
+            label: "demo".to_owned(),
+            starting_note: 127,
+            expanded_len: 2,
+        })
+    );
+}
+
+#[test]
+fn a_keysplit_table_ending_at_note_127_is_accepted() {
+    let text = "keysplit demo, 127\n\tsplit 0, 128\n";
+    assert_eq!(
+        parse_keysplit_tables(text).map(|tables| tables["demo"].clone()),
+        Ok(RawKeySplitTable {
+            starting_note: 127,
+            table: vec![0],
+        })
+    );
+}
+
+#[test]
+fn an_out_of_range_keysplit_table_is_rejected_when_another_block_follows() {
+    let text = "keysplit demo, 127\n\tsplit 0, 129\nkeysplit next, 0\n\tsplit 0, 4\n";
+    assert!(matches!(
+        parse_keysplit_tables(text),
+        Err(VoiceGroupError::KeySplitTableNoteOutOfRange { .. })
+    ));
+}
+
+#[test]
+fn an_empty_keysplit_table_is_accepted_at_any_starting_note() {
+    let text = "keysplit demo, 255\n";
+    assert_eq!(
+        parse_keysplit_tables(text).map(|tables| tables["demo"].clone()),
+        Ok(RawKeySplitTable {
+            starting_note: 255,
+            table: Vec::new(),
+        })
+    );
+}
+
+#[test]
+#[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
+fn every_real_keysplit_table_stays_within_the_note_range() {
+    assert!(
+        super::super::super::upstream_present(),
+        "run ./init.sh first"
+    );
+    let path = super::super::super::repo_root().join("pokeemerald/sound/keysplit_tables.inc");
+    let text = std::fs::read_to_string(path).unwrap();
+    let tables = parse_keysplit_tables(&text).expect("every real keysplit table should parse");
+    assert!(!tables.is_empty());
+}
+
+#[test]
 fn parse_link_order_marks_foreign_includes_as_barriers_in_file_order() {
     let text = "\
 @ drumsets

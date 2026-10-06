@@ -63,16 +63,16 @@ pub(super) fn fill_i16_output(source: &mut Source, scratch: &mut [f32], data: &m
     }
 }
 
-/// The two `cpal` calls [`AudioOutput::open`] makes against a device,
+/// The two `cpal` calls [`AudioOutput::open`](super::AudioOutput::open) makes against a device,
 /// behind a seam.
 ///
-/// Which of the two failed is the whole distinction [`classify_query_error`]
+/// Which of the two failed is the whole distinction [`classify_query_error`](super::config::classify_query_error)
 /// draws: a query failure means the device was never reachable, a build
 /// failure means a reachable device was lost. Naming both calls lets tests
 /// force either failure with no audio device present, which the module
 /// docs' headless rule requires.
 ///
-/// [`negotiate`] collects the query's configurations anyway, so the seam
+/// [`negotiate`](super::config::negotiate) collects the query's configurations anyway, so the seam
 /// hands back a `Vec` rather than `cpal`'s associated iterator type: it
 /// costs nothing and spares every implementor an associated type.
 pub(super) trait OutputDevice {
@@ -118,10 +118,10 @@ impl OutputDevice for cpal::Device {
 
 /// Build (but do not start) the output stream for `config`, driven by
 /// `source`. Asynchronous stream errors are recorded into `stream_errors`,
-/// the counter [`AudioOutput::stream_errors`] reads. Every callback also
+/// the counter [`AudioOutput::stream_errors`](super::AudioOutput::stream_errors) reads. Every callback also
 /// records its device-frame count and the host's callback timestamp into
 /// `playback_clock` (see [`PlaybackClock::record_callback`]) *before*
-/// `source` consumes them, the signal [`AudioOutput::playback_progress`]
+/// `source` consumes them, the signal [`AudioOutput::playback_progress`](super::AudioOutput::playback_progress)
 /// reads.
 pub(super) fn build_stream<D: OutputDevice>(
     device: &D,
