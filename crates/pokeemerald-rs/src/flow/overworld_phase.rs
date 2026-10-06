@@ -46,6 +46,7 @@ mod first_battle_conclusion;
 mod first_battle_trigger;
 mod frame;
 mod input;
+mod lead_owner;
 mod placement;
 mod route103_rival_trigger;
 mod sight_trainer_approach;
@@ -269,6 +270,12 @@ pub(crate) struct OverworldPhase {
     /// by its other two (empty count, clean decode); diagnostic only, and
     /// never a save-time decision input.
     pub(super) undecodable_lead_retained: bool,
+    /// Whether [`Self::party_lead`] is `None` because
+    /// [`Self::take_lead_battler`] lent it to a battle, rather than because
+    /// no lead was loaded. Only a lent lead may be restored
+    /// ([`Self::restore_lead_battler`]), as `party::LoadedLead`'s battler is
+    /// absent only while lent. Reset to `NotLent` whenever the lead is rebuilt.
+    lead_loan: lead_owner::LeadLoan,
     /// The battle currently being played out, if any -- struct docs on
     /// [`ActiveBattle`]. `Some` freezes the overworld for the frame -- the
     /// same shape [`Self::dialog`] uses -- while
@@ -359,6 +366,7 @@ impl OverworldPhase {
         Self::load(
             crate::pack_source::PackSource::Runtime,
             new_game::NewGameOptions::DEFAULT,
+            new_game::NewGameIdentity::DEFAULT,
         )
     }
 
@@ -372,17 +380,33 @@ impl OverworldPhase {
     pub(super) fn load(
         source: crate::pack_source::PackSource,
         options: new_game::NewGameOptions,
+        identity: new_game::NewGameIdentity,
     ) -> Result<Self, OverworldSceneError> {
-        let scene = overworld::load_default_room_from_source(
-            source,
-            &engine::event_data::EventData::new(),
-        )?;
-        let player = PlayerState::new(
-            new_game::SPAWN_POSITION,
-            new_game::SPAWN_ELEVATION,
-            new_game::SPAWN_FACING,
+        // The identity is committed to the save first; the first scene then
+        // loads with that save's event data and the selected avatar, so no
+        // male or empty-flag frame is ever composed.
+        let (initial_save1, initial_save2) = new_game::init_save_blocks_with_identity(
+            &mut engine::rng::Rng::new(new_game::NEW_GAME_RNG_SEED),
+            options,
+            identity,
         );
-        let mut phase = Self::new(scene, new_game::SPAWN_MAP_ID, player, None, source, options);
+        let arrival = new_game::bedroom_arrival(initial_save2.player_gender);
+        let scene = overworld::load_room_from_source(
+            source,
+            arrival.map_id,
+            initial_save2.player_gender.into(),
+            &initial_save1.event_data,
+        )?;
+        let player = PlayerState::new(arrival.position, arrival.elevation, arrival.facing);
+        let mut phase = Self::new(
+            scene,
+            arrival.map_id,
+            player,
+            None,
+            source,
+            options,
+            identity,
+        );
         // The stand-in for the un-ported starter handout: without a lead,
         // every encounter would be rolled and dropped. Deliberately draws
         // nothing from `phase.rng` -- see `new_game::provisional_starter`'s
@@ -585,6 +609,7 @@ impl OverworldPhase {
             party_lead_slot: 0,
             lead_hp_hidden_by_load: 0,
             undecodable_lead_retained: false,
+            lead_loan: lead_owner::LeadLoan::NotLent,
             active_battle: None,
             different_save_file: false,
             new_game_session: false,
@@ -653,6 +678,31 @@ impl OverworldPhase {
             dialog,
             crate::pack_source::PackSource::Runtime,
             new_game::NewGameOptions::DEFAULT,
+            new_game::NewGameIdentity::DEFAULT,
+        )
+    }
+
+    /// Test-only: [`Self::for_test`] with an explicit `pack_source`, so a
+    /// test that later lazy-loads a room, warp, dialog, or connection reads
+    /// the pack that source names. Pass [`PackSource::Repo`](crate::pack_source::PackSource::Repo)
+    /// to read this checkout's own pack rather than `default_path()`;
+    /// [`Self::for_test`] stays on `PackSource::Runtime` for pack-free tests.
+    #[cfg(test)]
+    pub(super) fn for_test_with_source(
+        scene: OverworldScene,
+        map_id: assets::MapId,
+        player: PlayerState,
+        dialog: Option<NpcDialog>,
+        pack_source: crate::pack_source::PackSource,
+    ) -> Self {
+        Self::new(
+            scene,
+            map_id,
+            player,
+            dialog,
+            pack_source,
+            new_game::NewGameOptions::DEFAULT,
+            new_game::NewGameIdentity::DEFAULT,
         )
     }
 
@@ -668,9 +718,11 @@ impl OverworldPhase {
         dialog: Option<NpcDialog>,
         pack_source: crate::pack_source::PackSource,
         options: new_game::NewGameOptions,
+        identity: new_game::NewGameIdentity,
     ) -> Self {
         let mut rng = engine::rng::Rng::new(new_game::NEW_GAME_RNG_SEED);
-        let (mut save1, save2) = new_game::init_save_blocks_with_options(&mut rng, options);
+        let (mut save1, save2) =
+            new_game::init_save_blocks_with_identity(&mut rng, options, identity);
         connections::run_on_transition_map_script(map_id, &mut save1.event_data);
         first_battle_trigger::sync_route_101_state_on_entry(map_id, &mut save1.event_data);
         route103_rival_trigger::setup_rival_gfx_id_on_transition(
@@ -699,6 +751,7 @@ impl OverworldPhase {
             party_lead_slot: 0,
             lead_hp_hidden_by_load: 0,
             undecodable_lead_retained: false,
+            lead_loan: lead_owner::LeadLoan::NotLent,
             active_battle: None,
             different_save_file: true,
             new_game_session: true,
@@ -898,6 +951,8 @@ mod input_tests;
 /// `crate::overworld::oldale_town_npc_reposition` collision tests reachable
 /// from this module; its own unit tests live with that module instead.
 #[cfg(test)]
+mod lead_owner_tests;
+#[cfg(test)]
 mod oldale_reposition_tests;
 /// Wild and scripted first-battle opponents carry the save owner's OT id.
 #[cfg(test)]
@@ -920,3 +975,35 @@ mod test_support;
 mod warp_tests;
 #[cfg(test)]
 mod wild_battle_tests;
+
+#[cfg(test)]
+mod pinned_source_tests {
+    use super::*;
+    use crate::pack_source::PackSource;
+    use engine::overworld::Direction;
+
+    /// The source-aware fixture retains the supplied source, and
+    /// `for_test` stays on the runtime resolver. Needs no pack.
+    #[test]
+    fn for_test_with_source_retains_the_supplied_pack_source() {
+        let build = |source| {
+            OverworldPhase::for_test_with_source(
+                crate::overworld::tests::synthetic_scene(10, 10),
+                assets::MapId("MAP_LITTLEROOT_TOWN"),
+                PlayerState::new((1, 1), 3, Direction::North),
+                None,
+                source,
+            )
+        };
+        assert_eq!(build(PackSource::Repo).pack_source, PackSource::Repo);
+        assert_eq!(build(PackSource::Runtime).pack_source, PackSource::Runtime);
+
+        let default = OverworldPhase::for_test(
+            crate::overworld::tests::synthetic_scene(10, 10),
+            assets::MapId("MAP_LITTLEROOT_TOWN"),
+            PlayerState::new((1, 1), 3, Direction::North),
+            None,
+        );
+        assert_eq!(default.pack_source, PackSource::Runtime);
+    }
+}

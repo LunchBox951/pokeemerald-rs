@@ -176,7 +176,7 @@ fn winning_the_rival_battle_sets_the_exact_fought_trainers_defeated_flag_for_eve
 /// (`pokeemerald/src/overworld.c:361-362`).
 ///
 /// Pack-free by construction, same reasoning as
-/// `crate::flow::wild_encounter::tests::a_lost_battle_now_heals_the_party_and_halves_money`:
+/// `crate::flow::wild_encounter::white_out_tests::a_lost_battle_now_heals_the_party_and_halves_money`:
 /// every assertion is about state `white_out` writes *before* it attempts
 /// the warp home, so it holds whether or not a local pack is extracted. The
 /// warp landing itself (and thus whether the rival is still reachable at
@@ -375,7 +375,7 @@ fn an_out_of_range_starter_var_starts_no_battle() {
 /// Drives the Route 101 loss through the real trigger/driver on its own
 /// synthetic `MAP_ROUTE101` phase (the same crafted level-1, zero-Defense-IV
 /// Treecko and seed `1` as
-/// `crate::flow::wild_encounter::tests::a_lost_route_101_first_battle_heals_the_lead_instead_of_leaving_it_fainted`
+/// `crate::flow::wild_encounter::first_battle_recovery_tests::a_lost_route_101_first_battle_heals_the_lead_instead_of_leaving_it_fainted`
 /// -- that test's own doc comment has the full derivation), then carries
 /// the concluded lead and `VAR_STARTER_MON` over onto this file's own
 /// `MAP_ROUTE103` fixture -- the same "each test file owns its own map

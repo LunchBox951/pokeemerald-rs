@@ -518,6 +518,16 @@ fn finish_keysplit_block(
             expanded_len: builder.table.len(),
         });
     }
+    // Mirrors the asset decoder's `check_key_split_table_note_range`.
+    if !builder.table.is_empty()
+        && usize::from(builder.starting_note) + builder.table.len() > super::VOICE_SLOT_COUNT
+    {
+        return Err(VoiceGroupError::KeySplitTableNoteOutOfRange {
+            label: builder.label,
+            starting_note: builder.starting_note,
+            expanded_len: builder.table.len(),
+        });
+    }
     let previous = out.insert(
         builder.label.clone(),
         RawKeySplitTable {
