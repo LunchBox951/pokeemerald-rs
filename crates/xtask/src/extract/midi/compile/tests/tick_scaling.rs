@@ -1,5 +1,3 @@
-//! Conversion of source ticks to the output timebase, including overflow and grid-iteration bounds.
-
 use super::super::{compile, MidiError, SongEvent};
 use super::support::*;
 

@@ -1,7 +1,7 @@
 //! Table-driven regressions for every `MB_WALK_*`/`MB_SLIDE_*` forced
 //! dispatch: no-input first dispatch, cadence, held-opposite input,
 //! blocked-route fallback, and chaining. Split from `tests` for the same
-//! reason `crate::flow::save_continue_tests` split from `tests`: one
+//! reason `crate::flow::save_continue_round_trip_tests` split from `tests`: one
 //! module, one concept `(oop-boundaries)`.
 
 use super::*;

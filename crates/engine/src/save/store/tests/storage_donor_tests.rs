@@ -605,3 +605,165 @@ fn a_load_reports_whether_its_storage_came_from_a_legacy_donor() {
     assert!(outcome.storage_source.is_legacy_head());
     assert!(!StorageSource::Own.is_legacy_head());
 }
+
+/// A mixed legacy/full pair whose legacy slot carries the newer verified
+/// storage tail must donate that tail, and two saves must keep it.
+#[test]
+fn a_mixed_merge_preserves_the_newest_verified_tail_through_two_saves() {
+    let block2 = sample_block2();
+    let legacy_block2 = SaveBlock2 {
+        encryption_key: 0x1111_2222,
+        ..sample_block2()
+    };
+    let older_block1 = SaveBlock1 {
+        money: 111,
+        ..sample_block1()
+    };
+    let legacy_block1 = SaveBlock1 {
+        money: 222,
+        ..sample_block1()
+    };
+    let older_storage = vec![0xAAu8; PKMN_STORAGE_PAYLOAD_LEN];
+    let newer_storage = vec![0xBBu8; PKMN_STORAGE_PAYLOAD_LEN];
+
+    for (legacy_slot, full_counter, tail_counter, head_counter) in
+        [(0usize, 3u32, 4u32, 6u32), (1, 2, 3, 5)]
+    {
+        let full_slot = 1 - legacy_slot;
+        let mut store = SaveStore::new();
+        write_full_slot(
+            &mut store,
+            full_slot,
+            &older_block1,
+            &block2,
+            &older_storage,
+            full_counter,
+        );
+        write_full_slot(
+            &mut store,
+            legacy_slot,
+            &older_block1,
+            &block2,
+            &newer_storage,
+            tail_counter,
+        );
+        write_legacy_slot_rotated(
+            &mut store,
+            legacy_slot,
+            &legacy_block1,
+            &legacy_block2,
+            head_counter,
+            1,
+        );
+
+        let outcome = store.load();
+        assert_eq!(outcome.status, SaveStatus::Ok);
+        assert_eq!(outcome.storage_source, StorageSource::LegacyDonor);
+        assert_eq!(store.save_counter(), head_counter);
+        assert_eq!(outcome.block1.money, legacy_block1.money);
+        assert_eq!(&store.base_pokemon_storage[..], &newer_storage[..]);
+
+        store.save(&outcome.block1, &outcome.block2);
+        store.save(&outcome.block1, &outcome.block2);
+        assert_eq!(store.save_counter(), head_counter + 2);
+
+        let mut reopened = SaveStore::from_flash_image(store.flash_image()).unwrap();
+        let reloaded = reopened.load();
+        assert_eq!(reloaded.status, SaveStatus::Ok);
+        assert_eq!(reloaded.storage_source, StorageSource::Own);
+        assert_eq!(reopened.save_counter(), head_counter + 2);
+        assert_eq!(reloaded.block1.money, legacy_block1.money);
+        assert_eq!(&reopened.base_pokemon_storage[..], &newer_storage[..]);
+    }
+}
+
+/// Rewrites the unchecksummed footer counter of the sector at `position`,
+/// leaving its payload, id, checksum and signature untouched.
+fn restamp_footer_counter(store: &mut SaveStore, slot: usize, position: usize, counter: u32) {
+    let counter_offset = SECTOR_SIZE - size_of::<u32>();
+    let mut bytes = *store.read_physical(slot, position).as_bytes();
+    bytes[counter_offset..].copy_from_slice(&counter.to_le_bytes());
+    store.write_physical(slot, position, &Sector::from_bytes(bytes));
+}
+
+/// Two storage footers whose counters alone are damaged leave the full slot
+/// intact by upstream's checksum-only test (`pokeemerald/src/save.c:512-570`)
+/// but deny it a verified storage generation. A newer legacy head must still
+/// borrow that slot's storage rather than load zeroed boxes, and must prefer
+/// it over a legacy tail older than the full slot's own generation.
+#[test]
+fn a_mixed_merge_keeps_an_intact_full_slots_storage_without_verified_counters() {
+    let block2 = sample_block2();
+    let older_block1 = SaveBlock1 {
+        money: 111,
+        ..sample_block1()
+    };
+    let legacy_block1 = SaveBlock1 {
+        money: 222,
+        ..sample_block1()
+    };
+    let stale_storage = vec![0xAAu8; PKMN_STORAGE_PAYLOAD_LEN];
+    let full_storage = vec![0xCCu8; PKMN_STORAGE_PAYLOAD_LEN];
+
+    // (legacy slot, legacy tail counter if any, full counter, head counter,
+    // restamped full-slot positions and their damaged counters)
+    let early = [(5usize, 0xDEAD_0001u32), (6, 0xDEAD_0002)];
+    // Damage reaching the final sector also corrupts the counter upstream
+    // reads as the slot's own (the last checksum-valid sector's).
+    let final_pair = [(12usize, 0u32), (13, 1)];
+    for (legacy_slot, tail_counter, full_counter, head_counter, damage) in [
+        (0usize, None, 3u32, 6u32, early),
+        (1, None, 2, 5, early),
+        (0, Some(2u32), 5, 8, early),
+        (1, Some(1), 4, 7, early),
+        (0, Some(4), 5, 8, final_pair),
+        (1, Some(4), 5, 9, final_pair),
+    ] {
+        let full_slot = 1 - legacy_slot;
+        let mut store = SaveStore::new();
+        write_full_slot(
+            &mut store,
+            full_slot,
+            &older_block1,
+            &block2,
+            &full_storage,
+            full_counter,
+        );
+        for (position, counter) in damage {
+            restamp_footer_counter(&mut store, full_slot, position, counter);
+        }
+        if let Some(tail_counter) = tail_counter {
+            write_full_slot(
+                &mut store,
+                legacy_slot,
+                &older_block1,
+                &block2,
+                &stale_storage,
+                tail_counter,
+            );
+        }
+        write_legacy_slot_rotated(
+            &mut store,
+            legacy_slot,
+            &legacy_block1,
+            &block2,
+            head_counter,
+            1,
+        );
+
+        let full_scan = store.scan_slot(full_slot);
+        assert_eq!(full_scan.integrity, SlotIntegrity::Ok);
+        assert_eq!(full_scan.storage_counter, None);
+
+        let outcome = store.load();
+        assert_eq!(outcome.status, SaveStatus::Ok);
+        assert_eq!(outcome.storage_source, StorageSource::LegacyDonor);
+        assert_eq!(store.save_counter(), head_counter);
+        assert_eq!(outcome.block1.money, legacy_block1.money);
+        assert_eq!(
+            &store.base_pokemon_storage[..],
+            &full_storage[..],
+            "legacy slot {legacy_slot}, tail {tail_counter:?}, damage {damage:?}"
+        );
+    }
+}

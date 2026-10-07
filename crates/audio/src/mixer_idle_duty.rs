@@ -5,6 +5,14 @@ use super::*;
 use crate::cgb_envelope::CgbAdsr;
 use crate::cgb_voice::CgbChannelNumber;
 
+/// Fixture: a voice whose initial trigger has already been written to
+/// hardware, so stopping it retires real hardware state. A note stopped
+/// before its first frame never wrote anything (`Mixer::stop_track`).
+fn committed_voice(mut voice: CgbVoice) -> CgbVoice {
+    voice.begin_frame(false);
+    voice
+}
+
 /// A note taking over an occupied square slot must pick the duty phase up
 /// where the note it replaced left it (`SquareChannel::continue_duty_from`'s doc).
 #[test]
@@ -56,7 +64,7 @@ fn a_square_note_on_a_slot_stop_track_vacated_continues_the_idle_duty_phase() {
     let mut idle_rate_reference = cgb_keyed_voice(TRACK, KEY);
     idle_rate_reference.apply_hardware_off_write();
     assert!(occupied.add_cgb_voice(idle_rate_reference));
-    assert!(vacated.add_cgb_voice(cgb_keyed_voice(TRACK, KEY)));
+    assert!(vacated.add_cgb_voice(committed_voice(cgb_keyed_voice(TRACK, KEY))));
     vacated.stop_track(TRACK);
 
     let mut occupied_out = vec![0.0; SAMPLES_PER_FRAME * 2];
@@ -95,7 +103,7 @@ fn a_square_note_on_a_naturally_retired_slot_continues_the_idle_duty_phase() {
     let mut occupied = Mixer::new(MAX_MASTER_VOLUME, 1);
     let mut retired = Mixer::new(MAX_MASTER_VOLUME, 1);
     assert!(occupied.add_cgb_voice(cgb_keyed_voice(TRACK, KEY)));
-    assert!(retired.add_cgb_voice(cgb_keyed_voice(TRACK, KEY)));
+    assert!(retired.add_cgb_voice(committed_voice(cgb_keyed_voice(TRACK, KEY))));
     retired.note_off_track(TRACK, KEY);
 
     let mut occupied_out = vec![0.0; SAMPLES_PER_FRAME * 2];
@@ -235,7 +243,7 @@ fn frame_after_idling_a_stopped_square1(
     const TRACK: usize = 0;
 
     let mut mixer = Mixer::new(MAX_MASTER_VOLUME, 1);
-    assert!(mixer.add_cgb_voice(cgb_swept_voice(TRACK, key, sweep)));
+    assert!(mixer.add_cgb_voice(committed_voice(cgb_swept_voice(TRACK, key, sweep))));
     mixer.stop_track(TRACK);
     let mut out = vec![0.0; SAMPLES_PER_FRAME * 2];
     for _ in 0..idle_frames {
@@ -259,4 +267,52 @@ fn verify_idle_square1_sweep_keeps_ticking_after_stop_track() {
         frame_after_idling_a_stopped_square1(None, KEY, 3),
         "an idle slot's sweep must retune the duty rate the next note continues",
     );
+}
+
+/// A pending replacement cancelled before its first frame never wrote its
+/// NR10/NR13 (upstream START|STOP jumps straight to the oscillator-off), so
+/// the established note's hardware, not the cancelled note's, takes the
+/// off-write and is inherited by the next audible note.
+#[test]
+fn cancelled_pending_square_preserves_committed_hardware() {
+    for (channel, old_sweep, pending_sweep) in [
+        (CgbChannelNumber::Square1, Some(0x00), Some(0x00)),
+        (CgbChannelNumber::Square1, Some(0x70), Some(0x19)),
+        (CgbChannelNumber::Square2, None, None),
+    ] {
+        let slot = channel.slot();
+        let mut cancelled = Mixer::new(MAX_MASTER_VOLUME, 1);
+        let mut stopped = Mixer::new(MAX_MASTER_VOLUME, 1);
+        let mut actual = vec![0.0; SAMPLES_PER_FRAME * 2];
+        let mut expected = actual.clone();
+        assert!(cancelled.add_cgb_voice(cgb_square_voice(channel, 0, 60, old_sweep)));
+        assert!(stopped.add_cgb_voice(cgb_square_voice(channel, 0, 60, old_sweep)));
+        cancelled.mix_frame(&mut actual);
+        stopped.mix_frame(&mut expected);
+        assert_eq!(actual, expected);
+        assert!(actual.iter().any(|&sample| sample != 0.0));
+
+        assert!(cancelled.add_cgb_voice(cgb_square_voice(channel, 0, 61, pending_sweep)));
+        cancelled.note_off_track(0, 61);
+        stopped.stop_track(0);
+        for _ in 0..4 {
+            cancelled.mix_frame(&mut actual);
+            stopped.mix_frame(&mut expected);
+            assert!(cancelled.cgb_slots[slot].is_none());
+            assert!(actual.iter().all(|&sample| sample == 0.0));
+            assert_eq!(actual, expected);
+        }
+
+        assert!(cancelled.add_cgb_voice(cgb_square_voice(channel, 0, 60, None)));
+        assert!(stopped.add_cgb_voice(cgb_square_voice(channel, 0, 60, None)));
+        for _ in 0..4 {
+            cancelled.mix_frame(&mut actual);
+            stopped.mix_frame(&mut expected);
+            assert!(actual.iter().any(|&sample| sample != 0.0));
+            assert_eq!(
+                actual, expected,
+                "later audible note must inherit identical duty"
+            );
+        }
+    }
 }
