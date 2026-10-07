@@ -87,9 +87,7 @@ fn a_direct_hit_kos_reward_is_paid_before_the_residual_tick_that_fells_the_winne
 /// `MOVE_LEER`, non-damaging: with [`GROWL`], no direct action can change
 /// HP, so the residual pass alone decides the battle.
 const LEER: MoveId = MoveId::LEER;
-/// `MOVE_GROWL`, the player's own non-damaging move.
 const GROWL: MoveId = MoveId::GROWL;
-/// `TRAINER_MAY_ROUTE_103_MUDKIP`.
 const MAY_ROUTE_103_MUDKIP: assets::trainers::TrainerId = assets::trainers::TrainerId(529);
 
 /// `BattleScript_DoTurnDmgEnd`'s `checkteamslost`
@@ -152,13 +150,10 @@ fn a_trainer_last_mons_lethal_residual_tick_ends_the_battle_before_the_players_o
     assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerWon));
 }
 
-/// `SPECIES_TORCHIC`, whose level-16 learnset entry is Peck.
+/// `SPECIES_TORCHIC`: its level-16 learnset entry is Peck.
 const TORCHIC: u16 = 280;
-/// `SPECIES_TREECKO`.
 const TREECKO: u16 = 277;
-/// `MOVE_SCRATCH`.
 const SCRATCH: MoveId = MoveId::SCRATCH;
-/// `MOVE_POUND`.
 const POUND: MoveId = MoveId::POUND;
 /// `MOVE_PECK`, the level-16 entry Torchic has no free slot for.
 const PECK: MoveId = MoveId::PECK;

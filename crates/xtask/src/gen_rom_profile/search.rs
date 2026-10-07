@@ -1,41 +1,42 @@
 //! Finding known bytes inside a 16 MiB ROM.
 //!
-//! Every locator asks the same question: "where does this exact byte string
-//! live, and does it live anywhere else?". The answer has to come from one
-//! or two passes over the image, not one pass per root: a domain can ask
-//! about several thousand candidate byte strings at once (a sprite sheet is
-//! searched under every metatile shape that divides its tile grid), and a
-//! naive per-needle scan would be minutes of work in a debug build.
+//! Every locator asks where an exact byte string lives and whether it lives
+//! anywhere else. Each search type answers a whole batch of needles in one
+//! pass over the image, never one pass per needle: a domain can ask about
+//! several thousand candidates at once (a sprite sheet is searched under
+//! every metatile shape that divides its tile grid), which a per-needle scan
+//! would make minutes of debug-build work.
 //!
-//! [`RawSearch`] answers a whole batch in one pass. Each needle is anchored
-//! at an eight-byte window chosen for how *unlikely* it is: sprite art
-//! usually starts with a run of transparent pixels, so anchoring on the
-//! head would funnel thousands of needles into one bucket and turn the pass
-//! quadratic. [`Lz77Search`] answers the compressed batch the same way, by
-//! walking only the offsets that could start a stream of a wanted size.
+//! [`RawSearch`] anchors each needle at an eight-byte window chosen to be
+//! distinctive: sprite art usually starts with a run of transparent pixels,
+//! so anchoring on the head would put thousands of needles in one bucket and
+//! make the pass quadratic. [`Lz77Search`] walks only the offsets that could
+//! start a stream of a wanted decompressed size.
+//!
+//! Both return ROM offsets, not bus addresses, and cap each needle at
+//! [`MATCH_LIMIT`] hits.
 
 use std::collections::HashMap;
 
 use rom_import::{lz77_decompress, LZ77_TYPE, ROM_BASE, ROM_WINDOW_END};
 
-/// The anchor window's length, in bytes. Eight bytes is a `u64` key and is
-/// short enough that every root in the pack has one.
+/// The anchor window's length in bytes: one `u64` key, and short enough that
+/// every root in the pack is at least this long.
 const ANCHOR: usize = 8;
 
-/// How many matches a search reports before it stops counting.
+/// The most hits a search records per needle.
 ///
-/// A locator only ever needs to know "one" or "more than one", plus enough
-/// context to name the duplicates in an error. A blob short enough to
-/// repeat hundreds of times would otherwise cost a large allocation.
+/// A locator needs only "one" or "more than one", plus enough addresses to
+/// name the duplicates in an error. The cap bounds memory for a short blob
+/// that repeats hundreds of times.
 pub const MATCH_LIMIT: usize = 16;
 
-/// How distinct an eight-byte window must be to serve as an anchor.
+/// The fewest distinct byte values an eight-byte window needs to serve as an
+/// anchor.
 const ANCHOR_DISTINCT_BYTES: usize = 5;
 
-/// Pick the anchor window for `needle`: the first eight-byte window with at
+/// The offset within `needle` of the first [`ANCHOR`]-byte window with at
 /// least [`ANCHOR_DISTINCT_BYTES`] distinct byte values, or `0` if none has.
-///
-/// Returns the window's offset within the needle.
 fn anchor_offset(needle: &[u8]) -> usize {
     if needle.len() <= ANCHOR {
         return 0;
@@ -57,7 +58,7 @@ fn anchor_offset(needle: &[u8]) -> usize {
     0
 }
 
-/// Read an eight-byte key at `off`, or `None` if it runs past the end.
+/// The little-endian `u64` key at `off`, or `None` if it runs past the end.
 fn key_at(bytes: &[u8], off: usize) -> Option<u64> {
     bytes
         .get(off..off + ANCHOR)
@@ -77,16 +78,14 @@ impl<'a> RawSearch<'a> {
 
     /// Find every occurrence of each needle, in one pass.
     ///
-    /// Returns one match list per needle, in the order given, each capped
-    /// at [`MATCH_LIMIT`] and sorted ascending. A needle shorter than eight
-    /// bytes, or longer than the ROM, gets an empty list: an anchor needs
-    /// eight bytes, and no root in the pack is shorter than that. Use
-    /// [`PointerIndex`] to chase a four-byte pointer.
+    /// Returns one ROM-offset list per needle, in the order given, each
+    /// capped at [`MATCH_LIMIT`] and sorted ascending. A needle shorter than
+    /// [`ANCHOR`] bytes, or longer than the ROM, gets an empty list. Use
+    /// [`PointerIndex`] to find a four-byte pointer.
     pub fn find_all(&self, needles: &[Vec<u8>]) -> Vec<Vec<u32>> {
         let mut anchors = Vec::with_capacity(needles.len());
-        // A 64 KiB bitmap over the anchor's first two bytes. It rejects
-        // over 99% of ROM offsets with one array index, so the hash lookup
-        // below runs on a small fraction of the image.
+        // Bitmap over the anchor's first two bytes: a one-index filter that
+        // spares most ROM offsets the hash lookup below.
         let mut coarse = vec![false; 1 << 16];
         let mut buckets: HashMap<u64, Vec<usize>> = HashMap::new();
 
@@ -143,24 +142,22 @@ impl<'a> RawSearch<'a> {
     }
 }
 
-/// Every 4-byte-aligned word in the ROM that looks like a cartridge
-/// pointer, indexed by the address it points at.
+/// Every 4-byte-aligned word in the ROM that falls in the cartridge window,
+/// indexed by the address it holds.
 ///
-/// Struct-derived resolution asks "what points at this?" constantly: a
-/// tileset is found through its metatile table, a map layout through its
-/// grid, a song header through its voicegroup. Answering each with its own
-/// pass over the image would cost more than building this once.
+/// Struct-derived resolution repeatedly asks what points at a root: a
+/// tileset through its metatile table, a map layout through its grid, a song
+/// header through its voicegroup. One index build replaces a pass per query.
 ///
-/// Compiler-emitted pointers are always word-aligned, so the index only
-/// looks at aligned words. A pointer forged at an odd offset would be
-/// invisible here, which is the right trade: the generator wants real
-/// symbol references, not coincidences.
+/// Compiler-emitted pointers are word-aligned, so unaligned words are
+/// skipped on purpose: the generator wants real symbol references, not
+/// coincidental byte patterns.
 pub struct PointerIndex {
     by_target: HashMap<u32, Vec<u32>>,
 }
 
 impl PointerIndex {
-    /// Index every aligned cartridge pointer in `rom`.
+    /// Index every aligned cartridge-window word in `rom`.
     pub fn build(rom: &[u8]) -> Self {
         let mut by_target: HashMap<u32, Vec<u32>> = HashMap::new();
         let mut offset = 0usize;
@@ -183,9 +180,9 @@ impl PointerIndex {
 
 /// A batch search for LZ77-compressed payloads.
 ///
-/// A compressed root cannot be matched by its bytes, so this walks the
-/// offsets that *could* start a type `0x10` stream whose declared size is
-/// one a caller asked about, decompresses each once, and compares.
+/// A compressed root cannot be matched by its stored bytes, so this
+/// decompresses each offset that starts a `LZ77_TYPE` stream whose declared
+/// size equals some needle's length, once, and compares the result.
 pub struct Lz77Search<'a> {
     rom: &'a [u8],
 }
@@ -198,7 +195,8 @@ impl<'a> Lz77Search<'a> {
 
     /// Find every stream that decompresses to each needle, in one pass.
     ///
-    /// Returns one match list per needle, capped at [`MATCH_LIMIT`].
+    /// Returns one ROM-offset list per needle, in the order given, each
+    /// capped at [`MATCH_LIMIT`] and sorted ascending.
     pub fn find_all(&self, needles: &[Vec<u8>]) -> Vec<Vec<u32>> {
         let mut by_size: HashMap<usize, Vec<usize>> = HashMap::new();
         for (index, needle) in needles.iter().enumerate() {

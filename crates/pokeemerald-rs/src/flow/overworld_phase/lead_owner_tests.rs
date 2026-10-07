@@ -3,7 +3,7 @@
 
 use battle::{BattlePokemon, Dex};
 
-use crate::flow::save_continue_tests::new_game_phase;
+use crate::flow::save_continue_support::new_game_phase;
 use crate::new_game;
 use crate::party;
 
