@@ -301,7 +301,7 @@ fn fill_new_file(path: &Path, bytes: &[u8]) -> std::io::Result<StagedPack> {
     #[cfg(not(windows))]
     let hold = file;
     #[cfg(windows)]
-    let hold = match WindowsHold::new(file) {
+    let hold = match WindowsHold::new(file, path) {
         Ok(hold) => hold,
         Err(source) => return Err(retained_error(path, &source)),
     };
@@ -329,24 +329,72 @@ type Hold = std::fs::File;
 #[cfg(windows)]
 type Hold = WindowsHold;
 
-/// The Windows hold: the exclusive handle while it lives, and the identity
-/// read from it before it is released, so the file can be recognised by that
-/// identity after the name is given up.
+/// The Windows hold: the exclusive handle while it lives, and a witness
+/// handle that asks for no access, so it survives the hold's release and the
+/// promoting rename without blocking either, and still refers to the staged
+/// file wherever its name has gone.
+///
+/// The file is recognised by the witness's identity read at the moment of
+/// comparison, never by a snapshot taken before the rename: on FAT, where
+/// `FileIdInfo` is refused and the fallback index is the directory entry's
+/// location, a rename that changes the long-name slot count moves the file to
+/// a new entry and so changes its identity.
 #[cfg(windows)]
 struct WindowsHold {
     file: Option<std::fs::File>,
-    identity: WindowsFileIdentity,
+    witness: std::fs::File,
 }
 
 #[cfg(windows)]
 impl WindowsHold {
-    fn new(file: std::fs::File) -> std::io::Result<Self> {
-        let identity = WindowsFileIdentity::of(&file)?;
+    /// Opens the witness at `path` while `file`, the exclusive handle that
+    /// just created it, still shares nothing, so the entry cannot have been
+    /// replaced; the identities are compared anyway.
+    fn new(file: std::fs::File, path: &Path) -> std::io::Result<Self> {
+        let witness = open_without_access(path)?;
+        if WindowsFileIdentity::of(&witness)? != WindowsFileIdentity::of(&file)? {
+            return Err(std::io::Error::other(format!(
+                "the witness opened at {} is not the staged file",
+                path.display()
+            )));
+        }
         Ok(Self {
             file: Some(file),
-            identity,
+            witness,
         })
     }
+}
+
+/// Opens `path` asking for no access and sharing everything, without
+/// following a final symlink: Windows' sharing check does not apply to such
+/// an open, so it coexists with the exclusive hold and never blocks a rename
+/// or delete of the entry.
+#[cfg(windows)]
+fn open_without_access(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+
+    const FILE_SHARE_ALL: u32 = 0x1 | 0x2 | 0x4;
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+
+    std::fs::OpenOptions::new()
+        .access_mode(0)
+        .share_mode(FILE_SHARE_ALL)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)
+}
+
+/// Whether `found` and `held` are one object, judged by identities `read`
+/// from both now. Reading the held side now rather than reusing an earlier
+/// reading is what keeps a file system whose identities move on rename (FAT)
+/// from reporting the very file it just renamed as a replacement.
+#[cfg(any(windows, test))]
+fn is_same_object_now<H, I: PartialEq>(
+    found: &H,
+    held: &H,
+    read: impl Fn(&H) -> std::io::Result<I>,
+) -> std::io::Result<bool> {
+    Ok(read(found)? == read(held)?)
 }
 
 /// Ends `hold` where the platform needs it ended.
@@ -372,30 +420,18 @@ fn is_the_held_file(hold: &Hold, _path: &Path, found: &std::fs::Metadata) -> std
     Ok((staged.dev(), staged.ino()) == (found.dev(), found.ino()))
 }
 
-/// Whether the entry at `path` is the very file `hold` identified: a fresh
-/// open that asks for no access and shares everything, so it coexists with the
-/// exclusive hold, and does not follow a final symlink, is read for the same
-/// volume and file ID. Works after the hold is released, too.
+/// Whether the entry at `path` is the very file `hold`'s witness refers to:
+/// a fresh [`open_without_access`] of `path` has the same volume and file ID
+/// as the witness has now. Works before and after the hold is released, and
+/// after the rename.
 #[cfg(windows)]
 fn is_the_held_file(hold: &Hold, path: &Path, found: &std::fs::Metadata) -> std::io::Result<bool> {
-    use std::os::windows::fs::OpenOptionsExt as _;
-
-    const FILE_SHARE_ALL: u32 = 0x1 | 0x2 | 0x4;
-    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
-    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-
     if !found.file_type().is_file() {
         return Ok(false);
     }
-    let fresh = std::fs::OpenOptions::new()
-        .access_mode(0)
-        .share_mode(FILE_SHARE_ALL)
-        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
-        .open(path)?;
-    Ok(
-        fresh.metadata()?.file_type().is_file()
-            && WindowsFileIdentity::of(&fresh)? == hold.identity,
-    )
+    let fresh = open_without_access(path)?;
+    Ok(fresh.metadata()?.file_type().is_file()
+        && is_same_object_now(&fresh, &hold.witness, WindowsFileIdentity::of)?)
 }
 
 /// Whether `found` describes the very file `hold` holds open. Where there is
@@ -450,7 +486,9 @@ impl StagedPack {
     /// a destination that does not verify afterwards is reported, never
     /// unlinked. On Windows the exclusive hold must be released before the
     /// rename, so a swap in that window is detected afterwards by file
-    /// identity, not prevented, and nothing is rolled back.
+    /// identity, not prevented, and nothing is rolled back; the witness
+    /// handle's identity is re-read for that check, so a file system whose
+    /// identities move on rename still recognises the promoted file.
     fn publish(self, dest: &Path) -> std::io::Result<()> {
         self.publish_with(dest, || {}, || {})
     }
@@ -1423,6 +1461,88 @@ mod tests {
             }
         }
         let _ = std::fs::remove_file(report.output_path);
+    }
+
+    /// A FAT-like volume for [`super::is_same_object_now`]: a file's identity
+    /// is the directory slot its entry occupies, as `FastFAT`'s fallback index
+    /// is, and a rename that needs a different number of long-name slots
+    /// (`pokeemerald.pack.tmp.<10 hex>` needs four, `pokeemerald.pack` three)
+    /// moves the entry to a freshly allocated slot. The Windows CI volume is
+    /// NTFS, whose file ID survives a rename, so this is where that case runs.
+    struct FatLikeVolume {
+        slot_of: std::cell::RefCell<Vec<u64>>,
+        next_free_slot: std::cell::Cell<u64>,
+    }
+
+    /// An open handle on one of the volume's files.
+    struct FatLikeHandle {
+        file: usize,
+    }
+
+    impl FatLikeVolume {
+        fn with_files(count: usize) -> Self {
+            let slots = (0..count as u64).collect::<Vec<_>>();
+            Self {
+                next_free_slot: std::cell::Cell::new(slots.len() as u64),
+                slot_of: std::cell::RefCell::new(slots),
+            }
+        }
+
+        fn rename_to_a_new_slot(&self, file: usize) {
+            self.slot_of.borrow_mut()[file] = self.next_free_slot.get();
+            self.next_free_slot.set(self.next_free_slot.get() + 1);
+        }
+
+        fn identity(&self, handle: &FatLikeHandle) -> u64 {
+            self.slot_of.borrow()[handle.file]
+        }
+    }
+
+    #[test]
+    fn a_rename_that_moves_the_fat_entry_still_matches_the_promoted_file() {
+        let volume = FatLikeVolume::with_files(1);
+        let witness = FatLikeHandle { file: 0 };
+        let before_rename = volume.identity(&witness);
+
+        volume.rename_to_a_new_slot(0);
+        let fresh_open_of_destination = FatLikeHandle { file: 0 };
+
+        assert_ne!(
+            volume.identity(&fresh_open_of_destination),
+            before_rename,
+            "the pre-rename identity no longer names the promoted file"
+        );
+        assert!(
+            super::is_same_object_now(&fresh_open_of_destination, &witness, |h| {
+                Ok(volume.identity(h))
+            })
+            .unwrap(),
+            "the promoted file must match the witness read after the rename"
+        );
+    }
+
+    #[test]
+    fn a_file_renamed_over_the_destination_in_place_of_ours_does_not_match() {
+        let volume = FatLikeVolume::with_files(2);
+        let witness = FatLikeHandle { file: 0 };
+
+        volume.rename_to_a_new_slot(1);
+        let fresh_open_of_destination = FatLikeHandle { file: 1 };
+
+        assert!(
+            !super::is_same_object_now(&fresh_open_of_destination, &witness, |h| {
+                Ok(volume.identity(h))
+            })
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn an_identity_that_cannot_be_read_is_an_error_not_a_match() {
+        let refused = super::is_same_object_now(&(), &(), |()| {
+            Err::<u64, _>(std::io::Error::other("refused"))
+        });
+        assert!(refused.is_err());
     }
 
     /// Stages `bytes` at the deterministic name and publishes it with `plant`
