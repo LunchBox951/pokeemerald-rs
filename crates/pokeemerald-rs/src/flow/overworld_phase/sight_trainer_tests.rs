@@ -20,26 +20,27 @@
 //!
 //! `begin_sight_trainer_approach_if_seen`'s own docs ("Refusals cost
 //! nothing, forever") record an emergent gap
-//! discovered while writing this file: every real Route 103 sight trainer's
+//! discovered while writing these tests: every real Route 103 sight trainer's
 //! own default, level-up-derived moveset currently includes at least one
 //! move this battle engine does not yet implement, so
 //! [`crate::flow::npc_trainer_battle::start_npc_trainer_battle`] fails for
 //! all nine today (pinned generically by
 //! `sight_trainer_trigger::tests::every_sight_trainers_real_party_fails_to_construct_for_exactly_these_reasons`).
 //! That is a genuine, current fact about this port, not a testing
-//! inconvenience to work around invisibly -- so the tests above that only
+//! inconvenience to work around invisibly -- so the `trigger` tests that only
 //! need the trigger/geometry/refusal half
 //! (`standing_in_a_real_trainers_cone_attempts_the_real_handoff_which_currently_fails_to_construct`
 //! and its siblings) exercise Rhett's own real, currently-failing
 //! construction attempt directly, and pin that it fails.
 //!
 //! The win/loss/defeated-flag *driver* half
-//! ([`OverworldPhase::advance_sight_trainer_battle_frame`]) is a different
-//! concern -- it runs identically regardless of *which* trainer's party
-//! constructed -- and leaving it untested would hide real bugs in this
+//! ([`OverworldPhase::advance_sight_trainer_battle_frame`][advance]) is a
+//! different concern -- it runs identically regardless of *which* trainer's
+//! party constructed -- and leaving it untested would hide real bugs in this
 //! module's own glue (the flag id, the white-out call, the outcome channel)
-//! behind an unrelated `battle`-crate move-coverage gap. So [`seed_battle`]
-//! below seeds [`OverworldPhase::active_battle`]'s `SightTrainer` variant
+//! behind an unrelated `battle`-crate move-coverage gap. So
+//! [`support::seed_battle`] seeds
+//! [`OverworldPhase::active_battle`][active]'s `SightTrainer` variant
 //! directly: a real battle, built through the real
 //! `start_npc_trainer_battle`/`advance_npc_trainer_battle` path, against one
 //! of the six Route 103 *rivals* (proven constructible by
@@ -50,6 +51,9 @@
 //! real id the flag ends up keyed to) even though the *party* is borrowed.
 //! Once a future move-coverage slice lets a real sight trainer construct,
 //! the two halves should be merged back into one real end-to-end test.
+//!
+//! [advance]: super::OverworldPhase::advance_sight_trainer_battle_frame
+//! [active]: super::OverworldPhase::active_battle
 //!
 //! # Layout
 //!

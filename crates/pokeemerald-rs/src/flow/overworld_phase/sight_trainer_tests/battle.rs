@@ -131,10 +131,10 @@ fn winning_sets_the_defeated_flag_and_saturates_money_at_the_upstream_cap() {
 /// (`OverworldPhase::from_saved`'s own docs), so the win recorded above
 /// stays won. Checked directly against the resumed phase's own `event_data`
 /// rather than by stepping it back into Rhett's cone: Rhett's own real
-/// construction currently fails regardless of the flag (module docs item
-/// 7), so a `step`-based assertion here could not actually distinguish "the
-/// flag survived" from "construction always refuses anyway" -- the flag
-/// read is the one assertion that can.
+/// construction currently fails regardless of the flag (`sight_trainer_tests`
+/// docs, "The stand-in party"), so a `step`-based assertion here could not
+/// actually distinguish "the flag survived" from "construction always refuses
+/// anyway" -- the flag read is the one assertion that can.
 #[test]
 fn the_defeated_flag_survives_a_save_continue_round_trip() {
     let (rx, ry) = RHETT_TILE;

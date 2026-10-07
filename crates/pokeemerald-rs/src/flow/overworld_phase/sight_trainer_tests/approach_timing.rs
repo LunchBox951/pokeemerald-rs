@@ -1,5 +1,6 @@
 //! The approach cutscene's tile-by-tile timing, lock handoff, and icon
-//! countdown, through the real [`OverworldPhase::step`].
+//! countdown, through the real
+//! [`OverworldPhase::step`](super::super::OverworldPhase::step).
 
 use engine::overworld::{Direction, PlayerState, WALK_FRAMES_PER_TILE};
 use platform::{ButtonState, Buttons};
@@ -10,7 +11,7 @@ use super::support::*;
 
 // -- The approach sequence (S-5, issue #300) ---------------------------------
 //
-// Same honest cut as `seed_battle` above, one stage earlier: no real Route
+// Same honest cut as `support::seed_battle`, one stage earlier: no real Route
 // 103 sight trainer's party constructs today, so
 // `begin_sight_trainer_approach_if_seen` can never *reach* the approach with
 // a real party -- but the sequence it would run is real, and so is the

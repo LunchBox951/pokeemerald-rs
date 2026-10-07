@@ -177,8 +177,8 @@ fn real_pack_the_intro_message_opens_prints_and_dismisses_for_real() {
     );
 
     // The exact real text this trainer's own `seed_approach` intro carries
-    // (module docs' "The stand-in party" section: the object event and the
-    // speech are real, only the party behind the battle is a stand-in).
+    // (`sight_trainer_tests` docs, "The stand-in party": the object event and
+    // the speech are real, only the party behind the battle is a stand-in).
     let expected_tokens =
         crate::authored_message::parse_message("Whoa!\nHow'd you get into a space this small?")
             .expect("this test's own literal intro speech is a valid authored message");

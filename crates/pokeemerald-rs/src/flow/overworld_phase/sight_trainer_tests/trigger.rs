@@ -25,9 +25,9 @@ use super::support::*;
 /// rather than silently swallowed or soft-locking the player. Not a
 /// contradiction of that issue's own "starts the battle" framing so much as a
 /// gap this port's own tests should not paper over -- see
-/// [`winning_sets_the_defeated_flag_and_the_fight_cannot_restart`] and its
-/// siblings below for how the win/loss/defeated-flag *driver* half is still
-/// pinned, with a stand-in constructible party.
+/// `battle::winning_sets_the_defeated_flag_and_the_fight_cannot_restart` and
+/// the rest of `battle` for how the win/loss/defeated-flag *driver* half is
+/// still pinned, with a stand-in constructible party.
 #[test]
 fn standing_in_a_real_trainers_cone_attempts_the_real_handoff_which_currently_fails_to_construct() {
     let (rx, ry) = RHETT_TILE;
@@ -59,7 +59,7 @@ fn standing_in_a_real_trainers_cone_attempts_the_real_handoff_which_currently_fa
 ///
 /// Both halves stand in Rhett's own real cone with a menu that really
 /// builds; only the claiming half's party is the borrowed
-/// [`STAND_IN_TRAINER`] (module docs).
+/// [`STAND_IN_TRAINER`] (`sight_trainer_tests` docs, "The stand-in party").
 #[test]
 fn start_does_not_preempt_the_sight_trainer_scan_on_its_trigger_frame() {
     let (rx, ry) = RHETT_TILE;
@@ -140,10 +140,10 @@ fn standing_in_a_cone_for_many_frames_never_touches_the_rng_stream() {
 
 /// A player one tile beyond a trainer's own sight range must not trigger.
 ///
-/// Uses the constructible [`STAND_IN_TRAINER`] (module docs, "The stand-in
-/// party") rather than Andrew's own real party, so a false-positive cone hit
-/// would be observable as a started approach instead of masked by every
-/// real trainer's own construction refusal.
+/// Uses the constructible [`STAND_IN_TRAINER`] (`sight_trainer_tests` docs,
+/// "The stand-in party") rather than Andrew's own real party, so a
+/// false-positive cone hit would be observable as a started approach instead
+/// of masked by every real trainer's own construction refusal.
 #[test]
 fn a_player_beyond_range_does_not_trigger() {
     let (ax, ay) = ANDREW_TILE;

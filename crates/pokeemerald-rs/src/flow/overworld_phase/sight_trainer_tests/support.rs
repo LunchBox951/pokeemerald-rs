@@ -11,7 +11,7 @@ use platform::ButtonState;
 use super::super::sight_trainer_approach::SightApproach;
 use super::super::{ActiveBattle, OverworldPhase};
 
-/// `MAP_ROUTE103`, used throughout this file.
+/// `MAP_ROUTE103`, used throughout the sight-trainer test modules.
 pub(super) const ROUTE_103: MapId = MapId("MAP_ROUTE103");
 
 /// `TRAINER_FLAGS_START` (module docs on `sight_trainer_trigger`) --
@@ -20,7 +20,7 @@ pub(super) const ROUTE_103: MapId = MapId("MAP_ROUTE103");
 pub(super) const TRAINER_FLAGS_START: u16 = 0x500;
 
 /// `TRAINER_RHETT` (`include/constants/opponents.h`): a single-battle,
-/// no-held-item, level-15 party -- this file's main subject for the
+/// no-held-item, level-15 party -- the main subject for the
 /// trigger/win/loss/defeated-flag tests. His own object event stands at
 /// `(67, 5)`, elevation 3, facing south (`MOVEMENT_TYPE_FACE_DOWN`), sight
 /// range 2.
@@ -54,7 +54,7 @@ pub(super) const MIGUEL_TILE: (i32, i32) = (56, 13);
 pub(super) const AMY_TILE: (i32, i32) = (64, 12);
 
 /// A large-enough-for-every-elevation-3-trainer synthetic open room, paired
-/// with the real `MAP_ROUTE103` object events (module docs).
+/// with the real `MAP_ROUTE103` object events (`sight_trainer_tests` docs).
 pub(super) fn route_103_phase(player: PlayerState) -> OverworldPhase {
     OverworldPhase::for_test(
         crate::overworld::tests::synthetic_scene(80, 16),
@@ -120,14 +120,14 @@ pub(super) fn play_out_sight_battle(
 /// own `route103_rival::tests` fixtures use the identical id/RNG-seed/lead
 /// combination below for an identical "must lose" scenario) -- the
 /// proven-constructible stand-in party [`seed_battle`] and
-/// `OverworldPhase::synthetic_sight_trainer` each borrow (module docs, "The
-/// stand-in party").
+/// `OverworldPhase::synthetic_sight_trainer` each borrow (`sight_trainer_tests`
+/// docs, "The stand-in party").
 pub(super) const STAND_IN_TRAINER: u16 = 532;
 
 /// Seed `phase` with an in-progress sight-trainer battle directly, bypassing
-/// [`OverworldPhase::begin_sight_trainer_battle_if_seen`]'s own construction
-/// attempt (module docs, "The stand-in party"): a *real* battle, built
-/// through the real `start_npc_trainer_battle`, against
+/// [`OverworldPhase::begin_sight_trainer_approach_if_seen`]'s own construction
+/// attempt (`sight_trainer_tests` docs, "The stand-in party"): a *real*
+/// battle, built through the real `start_npc_trainer_battle`, against
 /// [`STAND_IN_TRAINER`] -- but [`ActiveBattle`] (private to `overworld_phase`,
 /// reachable here since this file is one of its own descendant modules) is
 /// keyed to `trainer_id`, the real sight trainer the defeated-flag half
@@ -208,8 +208,8 @@ pub(super) fn seed_approach(phase: &mut OverworldPhase, walk_tiles: u8) {
     ));
 }
 
-/// The approaching trainer's live object-event state, for the assertions
-/// above.
+/// The approaching trainer's live object-event state, for the approach tests'
+/// assertions.
 pub(super) fn approaching_trainer(phase: &OverworldPhase) -> &ObjectEventState {
     phase
         .sight_approach
