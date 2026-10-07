@@ -286,8 +286,12 @@ where
     let mut renamed = false;
     let generation_matches =
         |claim: &StagedDirClaim| claim.require_entry_in(&output_claim, &generation_dir);
+    // The held lookup cannot see `output_dir` replaced meanwhile, and the
+    // returned paths resolve through that pathname, so each check ends with a
+    // lookup through it: when it runs last, it covers the paths returned.
     let require_generation = |claim: &StagedDirClaim| {
         generation_matches(claim)
+            .and_then(|()| claim.require_path(&generation_dir))
             .map_err(|error| RecordSnapshotError::Write(generation_dir.clone(), error.to_string()))
     };
     let result = (|| {

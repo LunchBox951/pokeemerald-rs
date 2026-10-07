@@ -2191,6 +2191,37 @@ fn a_generation_check_resolves_through_the_held_output_directory() {
     assert_eq!(error.kind(), std::io::ErrorKind::NotFound, "{error}");
 }
 
+/// The converse: an output pathname swapped to a directory that lacks the
+/// generation leaves the held lookup satisfied, so only a lookup through the
+/// pathname, the one the returned payload paths take, can refuse it last.
+#[cfg(unix)]
+#[test]
+fn a_generation_check_through_the_pathname_sees_a_swapped_output_directory() {
+    let root = scratch_path("generation-check-swapped-output");
+    let _guard = ScratchGuard(root.clone());
+    let output_dir = root.join("out");
+    let replacement = root.join("replacement");
+    let held_aside = root.join("held-aside");
+    std::fs::create_dir_all(&output_dir).unwrap();
+    std::fs::create_dir_all(replacement.join("generation")).unwrap();
+    let staged = output_dir.join(".generation.staged");
+    let generation = output_dir.join("generation");
+    std::fs::create_dir(&staged).unwrap();
+    let output_claim = super::claim_output_dir(&output_dir).unwrap();
+    let claim = super::claim_staged_dir(&staged).unwrap();
+    super::promote_staged_dir(&output_claim, &staged, &generation, || {}).unwrap();
+
+    std::fs::rename(&output_dir, &held_aside).unwrap();
+    std::fs::rename(&replacement, &output_dir).unwrap();
+
+    claim.require_entry_in(&output_claim, &generation).unwrap();
+    let error = claim.require_path(&generation).unwrap_err().to_string();
+    assert!(
+        error.contains("no longer matches the capture's held directory"),
+        "{error}"
+    );
+}
+
 /// A generation replaced after its identity check but before the pointer is
 /// published must not be named by the pointer: the check repeats at the last
 /// moment, the previous pointer stays intact, and both directories survive.
