@@ -676,3 +676,86 @@ fn a_mixed_merge_preserves_the_newest_verified_tail_through_two_saves() {
         assert_eq!(&reopened.base_pokemon_storage[..], &newer_storage[..]);
     }
 }
+
+/// Rewrites the unchecksummed footer counter of the sector at `position`,
+/// leaving its payload, id, checksum and signature untouched.
+fn restamp_footer_counter(store: &mut SaveStore, slot: usize, position: usize, counter: u32) {
+    let counter_offset = SECTOR_SIZE - size_of::<u32>();
+    let mut bytes = *store.read_physical(slot, position).as_bytes();
+    bytes[counter_offset..].copy_from_slice(&counter.to_le_bytes());
+    store.write_physical(slot, position, &Sector::from_bytes(bytes));
+}
+
+/// Two storage footers whose counters alone are damaged leave the full slot
+/// intact by upstream's checksum-only test (`pokeemerald/src/save.c:512-570`)
+/// but deny it a verified storage generation. A newer legacy head must still
+/// borrow that slot's storage rather than load zeroed boxes, and must prefer
+/// it over a legacy tail older than the full slot's own generation.
+#[test]
+fn a_mixed_merge_keeps_an_intact_full_slots_storage_without_verified_counters() {
+    let block2 = sample_block2();
+    let older_block1 = SaveBlock1 {
+        money: 111,
+        ..sample_block1()
+    };
+    let legacy_block1 = SaveBlock1 {
+        money: 222,
+        ..sample_block1()
+    };
+    let stale_storage = vec![0xAAu8; PKMN_STORAGE_PAYLOAD_LEN];
+    let full_storage = vec![0xCCu8; PKMN_STORAGE_PAYLOAD_LEN];
+
+    // (legacy slot, legacy tail counter if any, full counter, head counter)
+    for (legacy_slot, tail_counter, full_counter, head_counter) in [
+        (0usize, None, 3u32, 6u32),
+        (1, None, 2, 5),
+        (0, Some(2u32), 5, 8),
+        (1, Some(1), 4, 7),
+    ] {
+        let full_slot = 1 - legacy_slot;
+        let mut store = SaveStore::new();
+        write_full_slot(
+            &mut store,
+            full_slot,
+            &older_block1,
+            &block2,
+            &full_storage,
+            full_counter,
+        );
+        restamp_footer_counter(&mut store, full_slot, 5, 0xDEAD_0001);
+        restamp_footer_counter(&mut store, full_slot, 6, 0xDEAD_0002);
+        if let Some(tail_counter) = tail_counter {
+            write_full_slot(
+                &mut store,
+                legacy_slot,
+                &older_block1,
+                &block2,
+                &stale_storage,
+                tail_counter,
+            );
+        }
+        write_legacy_slot_rotated(
+            &mut store,
+            legacy_slot,
+            &legacy_block1,
+            &block2,
+            head_counter,
+            1,
+        );
+
+        let full_scan = store.scan_slot(full_slot);
+        assert_eq!(full_scan.integrity, SlotIntegrity::Ok);
+        assert_eq!(full_scan.storage_counter, None);
+
+        let outcome = store.load();
+        assert_eq!(outcome.status, SaveStatus::Ok);
+        assert_eq!(outcome.storage_source, StorageSource::LegacyDonor);
+        assert_eq!(store.save_counter(), head_counter);
+        assert_eq!(outcome.block1.money, legacy_block1.money);
+        assert_eq!(
+            &store.base_pokemon_storage[..],
+            &full_storage[..],
+            "legacy slot {legacy_slot}, tail {tail_counter:?}"
+        );
+    }
+}

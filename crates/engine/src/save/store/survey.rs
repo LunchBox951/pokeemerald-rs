@@ -411,12 +411,20 @@ fn resolve_both_ok(slot0: &SlotScan, slot1: &SlotScan) -> (SaveStatus, u32, Opti
         (slot1, slot0)
     };
     if second_counter_is_newer(full.counter, legacy.counter) {
-        // The newer legacy head borrows whichever slot holds the newest
-        // verified storage set, not necessarily the full slot.
+        // The newer legacy head borrows the newest storage set. An `Ok` full
+        // slot's storage belongs to its generation even when its footer
+        // counters do not agree: upstream's `GetSaveValidStatus` judges
+        // sectors by checksum alone (`pokeemerald/src/save.c:512-570`).
+        let full_storage = full.storage_counter.or(Some(full.counter));
+        let (left, right) = if slot0.legacy {
+            (slot0.storage_counter, full_storage)
+        } else {
+            (full_storage, slot1.storage_counter)
+        };
         (
             SaveStatus::Ok,
             legacy.counter,
-            storage_donor(true, slot0, slot1),
+            newest_storage_set(left, right),
             true,
         )
     } else {
@@ -430,7 +438,12 @@ fn storage_donor(adopted_is_legacy: bool, slot0: &SlotScan, slot1: &SlotScan) ->
     if !adopted_is_legacy {
         return None;
     }
-    match (slot0.storage_counter, slot1.storage_counter) {
+    newest_storage_set(slot0.storage_counter, slot1.storage_counter)
+}
+
+/// The slot whose storage generation is newer, given each slot's own.
+fn newest_storage_set(slot0: Option<u32>, slot1: Option<u32>) -> Option<usize> {
+    match (slot0, slot1) {
         (Some(left), Some(right)) => Some(usize::from(older_generation_precedes(left, right))),
         (Some(_), None) => Some(0),
         (None, Some(_)) => Some(1),
