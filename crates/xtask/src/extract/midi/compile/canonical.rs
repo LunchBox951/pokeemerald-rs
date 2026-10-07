@@ -1,26 +1,15 @@
-//! Wait canonicalization: this compiler's copy of
-//! `crates/assets/src/audio/song/canonical.rs`, applied to every track
-//! [`super::compile`] emits.
+//! Match `crates/assets/src/audio/song/canonical.rs` without importing the assets canonicalizer.
+//! A shared wait shape lets checkout and ROM backends encode identical packs.
 //!
-//! Duplicated rather than imported for the same reason [`super::super::encode`]
-//! duplicates the wire encoder: this crate never depends on `crates/assets`.
-//! The rule is the pack contract's, stated there and mirrored here by hand:
-//! adjacent `Wait`s merge, a rest over `255` ticks splits into `255`-tick
-//! chunks with the remainder last, an untargeted zero rest vanishes (a
-//! `Goto`-targeted one keeps a `Wait(0)` anchor), and a run never merges
-//! across a `Goto` target. Targets are event indices and move with the
-//! events they name.
-//!
-//! Why this compiler needs it at all: [`super::emit_track`] keeps a split
-//! wherever a silent controller sat between two rests, and the ROM keeps
-//! `tools/mid2agb`'s `W96 W04` chunking. Neither is musical, and the pack
-//! holds one answer so both backends agree byte for byte.
+//! Adjacent `Wait`s merge, a rest over `255` ticks splits into `255`-tick chunks with the
+//! remainder last, a zero rest vanishes unless a `Goto` targets it (then `Wait(0)` stays as
+//! its anchor), and a run never merges across a `Goto` target. `Goto` targets are event
+//! indices and follow the events they name.
 
 use std::collections::BTreeSet;
 
 use super::super::event::SongEvent;
 
-/// Rewrite `track` into the canonical wait shape (module docs).
 pub(super) fn canonicalize_waits(track: &[SongEvent]) -> Vec<SongEvent> {
     let targets: BTreeSet<usize> = track
         .iter()
@@ -41,13 +30,7 @@ pub(super) fn canonicalize_waits(track: &[SongEvent]) -> Vec<SongEvent> {
             continue;
         }
         let start = out.len();
-        // A target boundary (below) always starts a fresh run at the
-        // targeted index, so checking `index` alone tells us whether this
-        // run's anchor is addressed.
         let run_is_targeted = targets.contains(&index);
-        // Find the run's extent first; the tick sum is a separate pass
-        // below, wide enough that it cannot overflow no matter how long
-        // the run gets.
         let mut end = index + 1;
         while let Some(SongEvent::Wait(_)) = track.get(end) {
             if targets.contains(&end) {
@@ -63,9 +46,7 @@ pub(super) fn canonicalize_waits(track: &[SongEvent]) -> Vec<SongEvent> {
             *ticks
         })));
         if run_is_targeted && out.len() == start {
-            // A zero-total run normally emits nothing, but a `Goto` targets
-            // this index, so an anchor must survive for the target to land
-            // on.
+            // Preserve an addressable event for jumps to an otherwise empty rest.
             out.push(SongEvent::Wait(0));
         }
         index = end;
@@ -74,26 +55,22 @@ pub(super) fn canonicalize_waits(track: &[SongEvent]) -> Vec<SongEvent> {
 
     for event in &mut out {
         if let SongEvent::Goto(target) = event {
-            if let Some(&new) = usize::try_from(*target).ok().and_then(|old| map.get(old)) {
-                *target =
-                    u32::try_from(new).expect("a canonical track is no longer than its source");
+            if let Some(&canonical_target) = usize::try_from(*target)
+                .ok()
+                .and_then(|source_target| map.get(source_target))
+            {
+                *target = u32::try_from(canonical_target)
+                    .expect("a canonical track is no longer than its source");
             }
         }
     }
     out
 }
 
-/// Sum a run of adjacent `Wait` tick counts and lazily split the total into
-/// canonical chunks: `255`-tick steps with the remainder last, nothing for a
-/// zero total. [`canonicalize_waits`] adds back a `Wait(0)` anchor when a
-/// zero-total run's source index is a `Goto` target (module docs).
+/// Sum a run of adjacent `Wait` ticks and lazily split the total into canonical chunks.
 ///
-/// The running total is `u64`, not `u32`, for the same reason
-/// `crates/assets::audio::song::canonical`'s copy of this function is: a
-/// run of `u32::MAX` `Wait(255)`s (the per-track event cap the pack
-/// contract documents) sums past `u32::MAX` well before the run ends. No
-/// current producer's output gets close, but the accumulator has to hold
-/// what the type promises.
+/// The total is `u64`: a pack-valid track can hold up to `u32::MAX` waits,
+/// whose combined ticks exceed `u32::MAX`.
 fn wait_run_chunks(ticks: impl Iterator<Item = u8>) -> impl Iterator<Item = SongEvent> {
     let mut total: u64 = ticks.map(u64::from).sum();
     std::iter::from_fn(move || {
@@ -137,8 +114,6 @@ mod tests {
         );
     }
 
-    /// A `Goto`-targeted terminal zero rest keeps its anchor, as
-    /// `crates/assets/src/audio/song/canonical.rs` keeps a targeted `Wait(0)`.
     #[test]
     fn a_targeted_terminal_zero_rest_keeps_an_anchor() {
         assert_eq!(
