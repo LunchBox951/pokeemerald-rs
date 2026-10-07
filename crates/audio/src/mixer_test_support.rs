@@ -56,8 +56,17 @@ pub(super) fn keyed_voice(
 }
 
 pub(super) fn cgb_swept_voice(track: usize, key: u8, sweep: Option<u8>) -> CgbVoice {
+    cgb_square_voice(CgbChannelNumber::Square1, track, key, sweep)
+}
+
+pub(super) fn cgb_square_voice(
+    channel: CgbChannelNumber,
+    track: usize,
+    key: u8,
+    sweep: Option<u8>,
+) -> CgbVoice {
     CgbVoice::square(
-        CgbChannelNumber::Square1,
+        channel,
         2,
         sweep,
         CgbAdsr::flat(),
