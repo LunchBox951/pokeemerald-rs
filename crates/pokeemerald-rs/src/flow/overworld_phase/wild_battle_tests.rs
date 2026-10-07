@@ -5,7 +5,7 @@
 use engine::overworld::wild_encounter::WildEncounter;
 use platform::ButtonState;
 
-use crate::flow::save_continue_tests::new_game_phase;
+use crate::flow::save_continue_support::new_game_phase;
 
 /// `SPECIES_WURMPLE` -- the same ordinary fightable wild species
 /// `opponent_ot_id_tests` uses.

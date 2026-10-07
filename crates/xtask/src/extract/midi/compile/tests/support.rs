@@ -1,5 +1,3 @@
-//! Synthetic MIDI byte builders and default compilation configuration.
-
 use crate::extract::midi::cfg::MidiCfgEntry;
 
 const META_EVENT: u8 = 0xFF;
