@@ -1,5 +1,3 @@
-//! Malformed or unsupported input surfacing as a compile error rather than output.
-
 use super::super::{compile, MidiError};
 use super::support::*;
 

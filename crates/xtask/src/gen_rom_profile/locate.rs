@@ -1,40 +1,39 @@
-//! Shared plumbing for the per-domain locators: addresses, uniqueness, and
-//! pointer back-references.
+//! Shared plumbing for the per-domain locators: address conversion and
+//! uniqueness checks.
 //!
-//! Two rules hold everywhere. A root is only accepted when exactly one
-//! place in the ROM holds its bytes, and an address is only ever a GBA bus
-//! address once it leaves this module, so nothing downstream has to
-//! remember whether it is holding an offset or a pointer.
+//! Two rules hold everywhere. A root is accepted only when exactly one place
+//! in the ROM holds its bytes, and an address leaves this module only as a GBA
+//! bus address, never as a ROM offset.
 
 use rom_import::{ROM_BASE, ROM_WINDOW_END};
 
 use super::error::GenRomProfileError;
 
-/// Turn a ROM offset into the GBA bus address the cartridge is mapped at.
+/// The GBA bus address the cartridge maps `offset` to.
 pub const fn to_addr(offset: u32) -> u32 {
     ROM_BASE + offset
 }
 
-/// Turn a GBA bus address into a ROM offset, or `None` if it is not a
-/// cartridge address at all.
+/// The ROM offset of a GBA bus address, or `None` outside the cartridge
+/// window `ROM_BASE..ROM_WINDOW_END`.
 ///
-/// The cartridge window is half-open: an address at or past
-/// [`ROM_WINDOW_END`] is rejected the same as one below [`ROM_BASE`], so
-/// this stays the one place callers need to check before treating a word as
-/// a pointer.
+/// The window is half-open: [`ROM_WINDOW_END`] itself is rejected, as is
+/// anything below [`ROM_BASE`]. Every pointer check and bus-address read in
+/// the locators goes through this bound.
 pub fn to_offset(addr: u32) -> Option<usize> {
     (ROM_BASE..ROM_WINDOW_END)
         .contains(&addr)
         .then(|| (addr - ROM_BASE) as usize)
 }
 
-/// Accept a search result only when it found exactly one place.
+/// Convert the ROM offsets a search returned into one bus address, failing
+/// unless there is exactly one.
 ///
 /// # Errors
 ///
-/// [`GenRomProfileError::NotFound`] for no match,
-/// [`GenRomProfileError::Ambiguous`] for more than one. An ambiguous root
-/// needs a struct back-reference, not a coin toss.
+/// [`GenRomProfileError::NotFound`] for no hit, [`GenRomProfileError::Ambiguous`]
+/// for more than one. An ambiguous root must be resolved through a struct
+/// back-reference; this never picks among hits.
 pub fn exactly_one(id: &str, hits: &[u32]) -> Result<u32, GenRomProfileError> {
     match hits {
         [] => Err(GenRomProfileError::NotFound { id: id.to_owned() }),
@@ -46,42 +45,45 @@ pub fn exactly_one(id: &str, hits: &[u32]) -> Result<u32, GenRomProfileError> {
     }
 }
 
-/// Read a little-endian `u32` at a ROM offset.
+/// Read a little-endian `u32` at a ROM offset, or `None` if fewer than four
+/// bytes remain. `offset + 4` must not overflow `usize`; the bus-address
+/// readers guarantee that through [`to_offset`].
 pub fn u32_at(rom: &[u8], offset: usize) -> Option<u32> {
     rom.get(offset..offset + 4)
         .map(|bytes| u32::from_le_bytes(bytes.try_into().expect("four bytes")))
 }
 
-/// Read a little-endian `u32` at a GBA bus address.
+/// Read a little-endian `u32` at a GBA bus address, or `None` if the address
+/// or the read falls outside `rom`.
 pub fn u32_at_addr(rom: &[u8], addr: u32) -> Option<u32> {
     u32_at(rom, to_offset(addr)?)
 }
 
-/// Read a little-endian `u16` at a GBA bus address.
+/// Read a little-endian `u16` at a GBA bus address, or `None` if the address
+/// or the read falls outside `rom`.
 pub fn u16_at_addr(rom: &[u8], addr: u32) -> Option<u16> {
     let offset = to_offset(addr)?;
     rom.get(offset..offset + 2)
         .map(|bytes| u16::from_le_bytes(bytes.try_into().expect("two bytes")))
 }
 
-/// Read one byte at a GBA bus address.
+/// Read one byte at a GBA bus address, or `None` outside `rom`.
 pub fn u8_at_addr(rom: &[u8], addr: u32) -> Option<u8> {
     rom.get(to_offset(addr)?).copied()
 }
 
-/// Borrow `len` bytes at a GBA bus address.
+/// Borrow `len` bytes at a GBA bus address, or `None` if the address or the
+/// range falls outside `rom`.
 pub fn slice_at_addr(rom: &[u8], addr: u32, len: usize) -> Option<&[u8]> {
     let offset = to_offset(addr)?;
     rom.get(offset..offset.checked_add(len)?)
 }
 
-/// Turn a normalized `snake_case` pack name into upstream's `CamelCase`
-/// spelling of the same thing: `brendans_mays_house` becomes
-/// `BrendansMaysHouse`.
+/// Convert a normalized `snake_case` pack name to upstream's `CamelCase`
+/// symbol spelling: `brendans_mays_house` becomes `BrendansMaysHouse`.
 ///
-/// Upstream names its symbols after the same assets the pack ids name, in
-/// the other convention, so this is what lets a `--map` cross-check assert
-/// a symbol name without a table of them.
+/// Lets the `--map` cross-check derive an upstream symbol name from a pack id
+/// without a lookup table.
 pub fn camel_case(snake: &str) -> String {
     let mut out = String::with_capacity(snake.len());
     for word in snake.split('_').filter(|word| !word.is_empty()) {
@@ -94,13 +96,13 @@ pub fn camel_case(snake: &str) -> String {
     out
 }
 
-/// How many tiles the ROM stores for an image whose full raster needs
+/// The number of tiles the ROM stores for an image whose full raster is
 /// `expected`.
 ///
 /// Upstream trims all-zero trailing tiles and honours `-num_tiles`, so the
-/// ROM legitimately holds a prefix. Anything else -- a differing byte, a
-/// non-zero tail, a partial tile -- means the locator matched the wrong
-/// thing and must not be trusted.
+/// ROM may legitimately hold a prefix of `expected`. Any other disagreement
+/// (a differing byte, a non-zero tail, a partial tile) means the locator
+/// matched the wrong bytes.
 ///
 /// # Errors
 ///
@@ -141,14 +143,13 @@ pub fn tile_count_of_prefix(
     Ok(u32::try_from(rom_tiles.len() / bytes_per_tile).expect("a tile count fits in u32"))
 }
 
-/// Narrow a list of candidate addresses down to the one that satisfies
-/// `accept`.
+/// The single candidate that satisfies `accept`.
 ///
 /// # Errors
 ///
-/// [`GenRomProfileError::StructMismatch`] if no candidate or more than one
-/// candidate satisfies it. A struct-derived resolution that is itself
-/// ambiguous is no better than the signature it was meant to disambiguate.
+/// [`GenRomProfileError::StructMismatch`] unless exactly one candidate
+/// satisfies it: a struct-derived choice that is still ambiguous resolves
+/// nothing.
 pub fn only_one_matching<T>(
     id: &str,
     what: &str,

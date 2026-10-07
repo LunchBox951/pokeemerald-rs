@@ -305,6 +305,27 @@ fn a_fresh_start_ends_a_turns_busy_window_on_the_frame_the_menu_opens() {
     );
 }
 
+/// A blocked step's slow in-place walk holds through neutral polls and ends
+/// on the frame START takes the field lock (`PlayerFreeze`).
+#[test]
+fn a_wall_bump_swallows_a_release_and_ends_on_the_frame_the_menu_opens() {
+    let mut phase = synthetic_phase(PlayerState::new((3, 6), 3, Direction::West), None);
+    phase.synthetic_start_menu = SyntheticStartMenu::Builds;
+
+    phase.step(held(Buttons::LEFT));
+    assert!(phase.player.bump_active(), "setup: Mom blocks the step");
+
+    phase.step(ButtonState::default());
+    assert!(
+        phase.player.bump_active(),
+        "a released direction does not end the bump"
+    );
+
+    phase.step(pressed(Buttons::START));
+    assert!(phase.start_menu().is_some(), "setup: the menu opened");
+    assert!(!phase.player.bump_active());
+}
+
 /// The interaction claiming the frame is upstream's lock
 /// (`field_control_avatar.c:172`); the box itself needs a pack this suite lacks.
 #[test]

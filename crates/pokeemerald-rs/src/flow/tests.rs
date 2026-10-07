@@ -2,7 +2,7 @@
 //! decisions it acts on.
 //!
 //! The I-6 save/exit/reload round trip lives in its sibling
-//! [`super::save_continue_tests`] instead -- see that module's own docs.
+//! [`super::save_continue_round_trip_tests`] instead -- see that module's own docs.
 
 use super::{
     advance_scene, main_menu_load_failure_message, menu_action, new_game_options_for,
@@ -377,7 +377,7 @@ fn title_to_main_menu_failure_emits_its_subsystem_prefix_once_at_the_eprintln_bo
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_title_transition_borders_the_main_menu_with_the_saves_window_frame() {
-    use super::save_continue_tests::{new_game_phase, save_from_the_start_menu};
+    use super::save_continue_support::{new_game_phase, save_from_the_start_menu};
 
     const SAVED_WINDOW_FRAME: u8 = 5;
 
@@ -387,7 +387,7 @@ fn real_pack_title_transition_borders_the_main_menu_with_the_saves_window_frame(
     let mut save_slot = temp.slot();
     let mut phase = new_game_phase();
     // A mid-game options change, mirroring
-    // `save_continue_tests`' own fixture: not the zeroed fresh-save
+    // `save_continue_support`' own fixture: not the zeroed fresh-save
     // default `new_game::init_save_blocks` starts every session with.
     phase.save2.options_window_frame_type = SAVED_WINDOW_FRAME;
     save_from_the_start_menu(&mut phase, &mut save_slot);
