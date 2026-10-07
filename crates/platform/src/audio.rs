@@ -61,7 +61,7 @@
 
 use std::sync::atomic::{fence, AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use cpal::traits::{HostTrait, StreamTrait};
 
@@ -185,7 +185,18 @@ struct PlaybackClock {
     /// mark can lead the live submitted total; readers take both from the
     /// published copy (see [`PlaybackClock::write`]), where it cannot.
     usable_through_frames: AtomicU64,
-    /// Two published copies of the three counters, each under its own
+    /// When the most recent usable callback was observed, as nanoseconds
+    /// since `origin` plus one; zero while no callback has been usable (see
+    /// [`UsableReading`]). Advances with `usable_through_frames`.
+    reading_stamp: AtomicU64,
+    /// That callback's own sounded estimate, before `fetch_max` folds it into
+    /// `sounded_frames`.
+    reading_sounded_frames: AtomicU64,
+    /// That callback's playback delay beyond the frames submitted before it.
+    reading_startup_delay_frames: AtomicU64,
+    /// The instant `reading_stamp` counts from.
+    origin: Instant,
+    /// Two published copies of the counters, each under its own
     /// sequence (see [`Self::write`]); `published_slot` names the one a
     /// reader takes.
     published: [PublishedSlot; 2],
@@ -193,13 +204,16 @@ struct PlaybackClock {
     published_slot: AtomicUsize,
 }
 
-/// One published copy of [`PlaybackClock`]'s three counters, guarded by a
+/// One published copy of [`PlaybackClock`]'s counters, guarded by a
 /// sequence that is odd while the writer is storing into it.
 struct PublishedSlot {
     sequence: AtomicU64,
     submitted_frames: AtomicU64,
     sounded_frames: AtomicU64,
     usable_through_frames: AtomicU64,
+    reading_stamp: AtomicU64,
+    reading_sounded_frames: AtomicU64,
+    reading_startup_delay_frames: AtomicU64,
 }
 
 impl PublishedSlot {
@@ -209,6 +223,9 @@ impl PublishedSlot {
             submitted_frames: AtomicU64::new(0),
             sounded_frames: AtomicU64::new(0),
             usable_through_frames: AtomicU64::new(0),
+            reading_stamp: AtomicU64::new(0),
+            reading_sounded_frames: AtomicU64::new(0),
+            reading_startup_delay_frames: AtomicU64::new(0),
         }
     }
 }
@@ -220,6 +237,10 @@ impl PlaybackClock {
             sounded_frames: AtomicU64::new(0),
             timestamp_available: AtomicBool::new(false),
             usable_through_frames: AtomicU64::new(0),
+            reading_stamp: AtomicU64::new(0),
+            reading_sounded_frames: AtomicU64::new(0),
+            reading_startup_delay_frames: AtomicU64::new(0),
+            origin: Instant::now(),
             published: [PublishedSlot::new(), PublishedSlot::new()],
             published_slot: AtomicUsize::new(0),
         }
@@ -247,6 +268,9 @@ impl PlaybackClock {
         let submitted = self.submitted_frames.load(Ordering::Relaxed);
         let sounded = self.sounded_frames.load(Ordering::Relaxed);
         let usable_through = self.usable_through_frames.load(Ordering::Relaxed);
+        let reading_stamp = self.reading_stamp.load(Ordering::Relaxed);
+        let reading_sounded = self.reading_sounded_frames.load(Ordering::Relaxed);
+        let reading_startup = self.reading_startup_delay_frames.load(Ordering::Relaxed);
         let slot = &self.published[index];
         let start = slot.sequence.load(Ordering::Relaxed);
         slot.sequence
@@ -258,6 +282,11 @@ impl PlaybackClock {
         slot.sounded_frames.store(sounded, Ordering::Relaxed);
         slot.usable_through_frames
             .store(usable_through, Ordering::Relaxed);
+        slot.reading_stamp.store(reading_stamp, Ordering::Relaxed);
+        slot.reading_sounded_frames
+            .store(reading_sounded, Ordering::Relaxed);
+        slot.reading_startup_delay_frames
+            .store(reading_startup, Ordering::Relaxed);
         slot.sequence
             .store(start.wrapping_add(2), Ordering::Release);
     }
@@ -269,7 +298,7 @@ impl PlaybackClock {
     }
 
     /// [`Self::snapshot`], calling `between_loads` after the slot index load
-    /// (`0`) and after each field load (`1` to `3`), so a test can interleave
+    /// (`0`) and after each field load (`1` to `6`), so a test can interleave
     /// a callback's stores deterministically. A read counts only if its slot
     /// was neither rewritten nor replaced as the published one meanwhile: a
     /// slot rewritten but not yet published holds counters newer than the
@@ -289,6 +318,12 @@ impl PlaybackClock {
                 between_loads(2);
                 let sounded_frames = slot.sounded_frames.load(Ordering::Relaxed);
                 between_loads(3);
+                let reading_stamp = slot.reading_stamp.load(Ordering::Relaxed);
+                between_loads(4);
+                let reading_sounded = slot.reading_sounded_frames.load(Ordering::Relaxed);
+                between_loads(5);
+                let reading_startup = slot.reading_startup_delay_frames.load(Ordering::Relaxed);
+                between_loads(6);
                 fence(Ordering::Acquire);
                 if slot.sequence.load(Ordering::Relaxed) == before
                     && self.published_slot.load(Ordering::Relaxed) == index
@@ -297,11 +332,32 @@ impl PlaybackClock {
                         submitted_frames,
                         sounded_frames,
                         usable_through_frames,
+                        usable_reading: self.reading(
+                            reading_stamp,
+                            reading_sounded,
+                            reading_startup,
+                        ),
                     };
                 }
             }
             std::hint::spin_loop();
         }
+    }
+
+    /// The published reading fields as a [`UsableReading`]; `None` before any
+    /// usable callback.
+    fn reading(
+        &self,
+        stamp: u64,
+        sounded_frames: u64,
+        startup_delay_frames: u64,
+    ) -> Option<UsableReading> {
+        let observed = Duration::from_nanos(stamp.checked_sub(1)?);
+        Some(UsableReading {
+            observed_at: self.origin.checked_add(observed)?,
+            sounded_frames,
+            startup_delay_frames,
+        })
     }
 
     /// Records one real-device callback of `frame_count` device frames,
@@ -318,7 +374,7 @@ impl PlaybackClock {
         info: &cpal::OutputCallbackInfo,
         device_sample_rate: u32,
     ) {
-        self.record(frame_count, |callback_start_frame| {
+        self.record_reading(frame_count, Instant::now(), |callback_start_frame| {
             estimate_sounded_frames(callback_start_frame, info.timestamp(), device_sample_rate)
         });
     }
@@ -337,11 +393,38 @@ impl PlaybackClock {
     /// this callback's estimate with an older mark either, the one torn read
     /// the store order alone cannot exclude.
     fn record(&self, frame_count: u64, estimate: impl FnOnce(u64) -> Option<u64>) {
+        self.record_reading(frame_count, Instant::now(), |start| {
+            estimate(start).map(|sounded| SoundedEstimate {
+                sounded_frames: sounded,
+                startup_delay_frames: 0,
+            })
+        });
+    }
+
+    /// [`Self::record`] for a callback observed at `observed_at`, whose
+    /// estimate also carries the playback delay saturation hid. An
+    /// `observed_at` before the clock's origin leaves the callback stale.
+    fn record_reading(
+        &self,
+        frame_count: u64,
+        observed_at: Instant,
+        estimate: impl FnOnce(u64) -> Option<SoundedEstimate>,
+    ) {
         let mut usable = false;
         self.write(|| {
             let callback_start_frame = self.submitted_frames.load(Ordering::Relaxed);
             let callback_end_frame = callback_start_frame.saturating_add(frame_count);
-            if let Some(sounded) = estimate(callback_start_frame) {
+            let stamp = observed_at
+                .checked_duration_since(self.origin)
+                .and_then(|elapsed| u64::try_from(elapsed.as_nanos()).ok())
+                .and_then(|nanos| nanos.checked_add(1));
+            if let Some((reading, stamp)) = estimate(callback_start_frame).zip(stamp) {
+                let sounded = reading.sounded_frames;
+                self.reading_sounded_frames
+                    .store(sounded, Ordering::Relaxed);
+                self.reading_startup_delay_frames
+                    .store(reading.startup_delay_frames, Ordering::Relaxed);
+                self.reading_stamp.store(stamp, Ordering::Relaxed);
                 self.sounded_frames.fetch_max(sounded, Ordering::Release);
                 self.usable_through_frames
                     .store(callback_end_frame, Ordering::Release);
@@ -380,6 +463,36 @@ pub struct PlaybackProgress {
     /// completed callback, it never leads `submitted_frames` within a
     /// snapshot, and it trails them across stale callbacks.
     pub usable_through_frames: u64,
+    /// The latest usable callback's own reading and when it was observed, from
+    /// the same completed callback as the counters; `None` before any usable
+    /// callback. Unlike `sounded_frames` it moves for every usable callback,
+    /// so a reading followed by any number of stale callbacks keeps its time.
+    pub usable_reading: Option<UsableReading>,
+}
+
+/// One usable callback's reading of the playback position, stamped with when
+/// the callback observed it, so a reader can compute the wall-clock time the
+/// reading still owed however many stale callbacks followed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct UsableReading {
+    /// When the callback ran, on the process's monotonic [`Instant`] clock
+    /// (the callback's own time, not a reader's poll).
+    pub observed_at: Instant,
+    /// This callback's estimate of device frames sounded, not folded into the
+    /// monotonic `sounded_frames`: zero when the first buffer had not begun.
+    pub sounded_frames: u64,
+    /// Device frames past this callback's start that elapse before playback
+    /// reaches frame zero: the delay `sounded_frames` saturated away while
+    /// fewer frames than the delay had been submitted. Zero once playback
+    /// has begun.
+    pub startup_delay_frames: u64,
+}
+
+/// What a usable callback's host timestamp pair says: see [`UsableReading`].
+#[derive(Debug, Eq, PartialEq)]
+struct SoundedEstimate {
+    sounded_frames: u64,
+    startup_delay_frames: u64,
 }
 
 /// `delay` (a callback-to-playback gap from a [`cpal::OutputStreamTimestamp`])
@@ -409,12 +522,15 @@ fn estimate_sounded_frames(
     callback_start_frame: u64,
     timestamp: cpal::OutputStreamTimestamp,
     device_sample_rate: u32,
-) -> Option<u64> {
+) -> Option<SoundedEstimate> {
     let delay = timestamp
         .playback
         .checked_duration_since(timestamp.callback)?;
     let delay_frames = delay_to_frames(delay, device_sample_rate);
-    Some(callback_start_frame.saturating_sub(delay_frames))
+    Some(SoundedEstimate {
+        sounded_frames: callback_start_frame.saturating_sub(delay_frames),
+        startup_delay_frames: delay_frames.saturating_sub(callback_start_frame),
+    })
 }
 
 /// An owned audio-output subsystem: opens (at most) one output stream and
@@ -803,6 +919,20 @@ impl AudioOutput {
     pub fn advance_sounded_frames_for_test(&self, frames: u64) {
         let clock = &self.playback_clock;
         clock.write(|| {
+            // Stamped as a callback observing `frames` now would be.
+            let stamp = clock
+                .origin
+                .elapsed()
+                .as_nanos()
+                .try_into()
+                .map_or(0, |nanos: u64| nanos.saturating_add(1));
+            clock.reading_stamp.store(stamp, Ordering::Relaxed);
+            clock
+                .reading_sounded_frames
+                .store(frames, Ordering::Relaxed);
+            clock
+                .reading_startup_delay_frames
+                .store(0, Ordering::Relaxed);
             clock.sounded_frames.fetch_max(frames, Ordering::Release);
             let submitted = clock.submitted_frames.load(Ordering::Acquire);
             clock

@@ -11,9 +11,14 @@ use crate::tilemap::{ScreenEntry, Tilemap};
 /// bank 0, plus its owning tileset/palette/tilemap (kept alive by the
 /// caller for the lifetime of the returned [`crate::bg::BgLayer`]).
 pub(super) fn opaque_bg_fixture(color_channel: u8) -> (Tileset, Palette, Tilemap) {
+    opaque_bg_color_fixture(Bgr555::from_channels(color_channel, 0, 0))
+}
+
+/// An opaque regular BG fixture with the supplied full palette color.
+pub(super) fn opaque_bg_color_fixture(color: Bgr555) -> (Tileset, Palette, Tilemap) {
     let tileset = Tileset::decode(BitDepth::Bpp4, &[0xFFu8; 32]).unwrap();
     let mut colors = [Bgr555::default(); Palette::LEN];
-    colors[15] = Bgr555::from_channels(color_channel, 0, 0);
+    colors[15] = color;
     let palette = Palette::new(colors);
     let entries = vec![ScreenEntry::new(0, false, false, 0)];
     let tilemap = Tilemap::new(1, 1, entries).unwrap();
@@ -34,9 +39,14 @@ static EMPTY_PALETTE: Palette = Palette::new([Bgr555::from_raw(0); Palette::LEN]
 /// A fully opaque 1x1-tile (8x8px) *affine* BG layer using flat 8bpp
 /// palette index 200, plus its owning tileset/palette/tilemap.
 pub(super) fn opaque_affine_bg_fixture(color_channel: u8) -> (Tileset, Palette, AffineTilemap) {
+    opaque_affine_bg_color_fixture(Bgr555::from_channels(color_channel, 0, 0))
+}
+
+/// An opaque affine BG fixture with the supplied full palette color.
+pub(super) fn opaque_affine_bg_color_fixture(color: Bgr555) -> (Tileset, Palette, AffineTilemap) {
     let tileset = Tileset::decode(BitDepth::Bpp8, &[200u8; 64]).unwrap();
     let mut colors = [Bgr555::default(); Palette::LEN];
-    colors[200] = Bgr555::from_channels(color_channel, 0, 0);
+    colors[200] = color;
     let palette = Palette::new(colors);
     let tilemap = AffineTilemap::new(1, 1, vec![0]).unwrap();
     (tileset, palette, tilemap)

@@ -66,6 +66,17 @@ fn noise_control_byte(note_key: u8, lfsr_width_selector: u8) -> u8 {
     midi_key_to_noise_control(note_key) | width_bit
 }
 
+/// Whether a voice's note-on trigger has reached the (modelled) hardware.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InitialTrigger {
+    /// Owed until the first frame.
+    Pending,
+    /// Written to hardware, so the voice's registers are committed state.
+    Committed,
+    /// Consumed by a cancellation: nothing was ever written.
+    Cancelled,
+}
+
 #[derive(Clone, Copy, Debug)]
 enum DacCorrection {
     None,
@@ -159,7 +170,7 @@ pub struct CgbVoice {
     pending_retrigger: bool,
     /// The note-on trigger, owed until the first frame so a pre-render retune
     /// reaches the sweep (`m4a.c:988-994,1219-1225`).
-    pending_initial_trigger: bool,
+    initial_trigger: InitialTrigger,
     /// Set when a sweep overflow silences the hardware channel, whether at a
     /// trigger or on a later 128 Hz tick; the envelope stays alive so a safe
     /// trigger can revive it (`mgba/src/gb/audio.c:180-186`, `:667-672`).
@@ -388,7 +399,7 @@ impl CgbVoice {
             identity: VoiceIdentity::new(track, midi_key),
             dac_correction,
             pending_retrigger: false,
-            pending_initial_trigger: true,
+            initial_trigger: InitialTrigger::Pending,
             hardware_muted: false,
             hardware_envelope_volume,
         }
@@ -532,6 +543,11 @@ impl CgbVoice {
         self.oscillator.retune(note_key, pit_m, self.dac_correction);
     }
 
+    /// Whether this voice's initial trigger has been written to hardware.
+    pub(crate) fn initial_trigger_committed(&self) -> bool {
+        self.initial_trigger == InitialTrigger::Committed
+    }
+
     /// Advance the software envelope and prepare gain for one render
     /// frame; applies any owed retrigger first ([`Oscillator::retrigger`]'s doc).
     ///
@@ -542,7 +558,14 @@ impl CgbVoice {
         // A note stopped before its first pass jumps to the off-write and
         // never reaches the note-on hardware writes (`m4a.c:1043-1056`).
         let initial_trigger =
-            std::mem::take(&mut self.pending_initial_trigger) && !self.envelope.is_stopping();
+            self.initial_trigger == InitialTrigger::Pending && !self.envelope.is_stopping();
+        if self.initial_trigger == InitialTrigger::Pending {
+            self.initial_trigger = if initial_trigger {
+                InitialTrigger::Committed
+            } else {
+                InitialTrigger::Cancelled
+            };
+        }
         // The goal `CgbModVol` would compute right now from the current side
         // volumes/pan; folded in only at a real boundary (`step_frame`'s doc).
         let live_goal = self.routing.envelope_goal();

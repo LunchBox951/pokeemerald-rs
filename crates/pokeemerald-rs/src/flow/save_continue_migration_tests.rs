@@ -5,7 +5,7 @@ use engine::overworld::Direction;
 use engine::save::{SaveBlock1, SaveBlock2, WarpData};
 
 use super::overworld_phase::OverworldPhase;
-use super::save_continue_tests::{a_damaged_lead, dormant_party_member, new_game_phase};
+use super::save_continue_support::{a_damaged_lead, dormant_party_member, new_game_phase};
 use crate::new_game;
 
 /// `saved_tile_placement`'s one substitution, pinned (issue #214 review),

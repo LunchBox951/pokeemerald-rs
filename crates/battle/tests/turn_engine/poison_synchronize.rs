@@ -19,11 +19,6 @@ fn poison_sting_against_a_synchronize_target_reflects_poison_at_move_end() {
         "fixture sanity: the primary slot fields Synchronize"
     );
 
-    // battle-start turn number, the turn's own turn number, the enemy's
-    // selection, the player's Poison Sting (accuracy, crit, damage, and
-    // effect-chance draws -- the reflection itself draws nothing), then the
-    // enemy's ordinary Tackle (accuracy, crit, damage, and effect-chance
-    // draws).
     let mut rng = SequenceRng::new(POISON_STING_LANDS);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
@@ -93,10 +88,9 @@ fn an_immunity_original_attacker_blocks_its_own_reflected_poison() {
     assert_eq!(player.ability(), AbilityId::IMMUNITY);
     let enemy = max_iv_mon(&dex, RALTS, 5, vec![TACKLE]);
 
-    // Same shape as the reflection test above: Ralts is not itself immune to
-    // Poison Sting, so the initial hit lands and reflects; Zangoose's own
-    // Immunity then blocks the reflection rather than the accuracy draw or
-    // typecalc, so the draw count and positions are unchanged.
+    // Ralts is not immune to Poison Sting, so the hit lands and reflects;
+    // Zangoose's Immunity blocks only the reflection, leaving the draws as in
+    // the reflection test.
     let mut rng = SequenceRng::new(POISON_STING_LANDS);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
@@ -130,9 +124,8 @@ fn a_poison_typed_original_attacker_blocks_its_own_reflected_poison() {
     let player = max_iv_mon(&dex, EKANS, 5, vec![POISON_STING]);
     let enemy = max_iv_mon(&dex, RALTS, 5, vec![TACKLE]);
 
-    // Same shape again: Ekans' own Poison typing earns its own prevention
-    // observable during the reflection, unlike the initial hit's silent
-    // guard against a Poison-type target.
+    // Unlike the initial hit's silent guard against a Poison-type target,
+    // the reflection reports Ekans' Poison typing as an event.
     let mut rng = SequenceRng::new(POISON_STING_LANDS);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
