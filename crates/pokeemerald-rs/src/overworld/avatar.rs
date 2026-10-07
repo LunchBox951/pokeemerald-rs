@@ -208,7 +208,7 @@ fn frame_for(player: &PlayerState) -> (u16, bool) {
         || (player.in_transit()
             && !player.transit_running()
             && (player.transit_animation_disabled()
-                || player.step_progress() < player.transit_duration() / 2));
+                || player.step_progress() <= player.transit_duration() / 2));
     let turning_foot_forward = player.turn_frames_remaining() >= TURN_FRAME_HALF
         || (player.bump_active() && player.bump_foot_forward());
     let frame = if walking_foot_forward || turning_foot_forward {
@@ -251,7 +251,6 @@ mod tests {
     use engine::overworld::{TilePos, WALK_FRAMES_PER_TILE};
 
     const NO_FLAGS: EventData = EventData::new();
-    const STEP_FRAME_HALF: u8 = WALK_FRAMES_PER_TILE / 2;
     use rendering::Tileset;
 
     #[test]
@@ -375,27 +374,45 @@ mod tests {
         )
     }
 
+    /// Each Go pose is held 8 presented frames, ticking before composing
+    /// (`sAnim_Go*`, `object_event_anims.h:202-235`).
     #[test]
-    fn frame_for_shows_the_forward_foot_for_the_first_half_of_a_step() {
+    fn frame_for_draws_eight_foot_frames_then_eight_standing_frames_in_every_direction() {
         let (bytes, header, events) = flat_test_map();
         let runtime = flat_runtime(&bytes, &header, &events);
         let no_connections = |_: assets::MapId| -> Option<(u16, u16)> { None };
 
-        let mut player = player_at((2, 2), Direction::South);
-        assert!(matches!(
-            player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS),
-            engine::overworld::StepOutcome::Advanced { .. }
-        ));
-        assert_eq!(frame_for(&player), (FRAME_SOUTH_STEP, false));
-
-        for _ in 0..STEP_FRAME_HALF {
-            player.tick();
+        for (facing, stand, step, flipped) in [
+            (Direction::South, FRAME_SOUTH_STAND, FRAME_SOUTH_STEP, false),
+            (Direction::North, FRAME_NORTH_STAND, FRAME_NORTH_STEP, false),
+            (Direction::West, FRAME_WEST_STAND, FRAME_WEST_STEP, false),
+            (Direction::East, FRAME_WEST_STAND, FRAME_WEST_STEP, true),
+        ] {
+            let mut player = player_at((2, 2), facing);
+            let mut rendered = Vec::new();
+            for presented in 1..=WALK_FRAMES_PER_TILE {
+                let outcome =
+                    player.step_with_run(Some(facing), false, &runtime, &no_connections, &NO_FLAGS);
+                player.tick();
+                if presented == 1 {
+                    assert!(matches!(
+                        outcome,
+                        engine::overworld::StepOutcome::Advanced { .. }
+                    ));
+                    assert_eq!(player.step_progress(), 1);
+                }
+                rendered.push(frame_for(&player));
+            }
+            let expected: Vec<_> = [(step, flipped); 8]
+                .into_iter()
+                .chain([(stand, flipped); 8])
+                .collect();
+            assert_eq!(rendered, expected, "{facing:?}");
+            assert!(
+                !player.in_transit(),
+                "{facing:?}: frame 16 completes the crossing"
+            );
         }
-        assert_eq!(
-            frame_for(&player),
-            (FRAME_SOUTH_STAND, false),
-            "the second half of a step shows the standing frame"
-        );
     }
 
     /// Consecutive steps alternate the forward foot in every facing, East
