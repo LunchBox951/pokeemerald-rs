@@ -68,6 +68,19 @@ const SUPPORTED_AI_FLAGS: u32 = AiFlags::CHECK_BAD_MOVE.bits()
     | AiFlags::CHECK_VIABILITY.bits()
     | AiFlags::SETUP_FIRST_TURN.bits();
 
+/// Effect IDs `AI_TryToFaint` and `AI_CV_Sweeper`'s most-powerful-move
+/// comparison treats as powerless (`sIgnoredPowerfulMoveEffects`,
+/// `src/battle_ai_script_commands.c:266-280`): Explosion, Dream Eater, Razor
+/// Wind, Sky Attack, Recharge, Skull Bash, Solar Beam, Spit Up, Focus Punch,
+/// Superpower, Eruption, Overheat. A depleted slot holding one is admitted but
+/// still sits in the comparison, so it must be skipped there.
+const IGNORED_POWERFUL_MOVE_EFFECTS: [u8; 12] =
+    [7, 8, 39, 75, 80, 145, 151, 161, 170, 182, 190, 204];
+
+fn is_ignored_powerful_move_effect(effect: MoveEffect) -> bool {
+    IGNORED_POWERFUL_MOVE_EFFECTS.contains(&effect.0)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ScoreableEffect {
     Hit,
@@ -527,7 +540,9 @@ fn compare_move_power(
             continue;
         };
         let candidate_data = dex.move_data(candidate_move)?;
-        if candidate_data.power < MINIMUM_DAMAGING_MOVE_POWER {
+        if candidate_data.power < MINIMUM_DAMAGING_MOVE_POWER
+            || is_ignored_powerful_move_effect(candidate_data.effect)
+        {
             continue;
         }
         *damage = estimated_damage(
