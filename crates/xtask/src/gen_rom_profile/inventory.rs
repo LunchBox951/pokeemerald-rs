@@ -5,7 +5,7 @@
 
 use super::error::GenRomProfileError;
 use super::pack_source::PackSource;
-use crate::extract::scope::{title_ids, TILESETS};
+use crate::extract::scope::{title_ids, FONTS, TILESETS};
 
 /// Require every fixed tileset root.
 ///
@@ -29,6 +29,17 @@ pub fn require_title(pack: &PackSource) -> Result<(), GenRomProfileError> {
         .try_for_each(|id| pack.get(id).map(|_| ()))
 }
 
+/// Require every fixed Latin glyph sheet root.
+///
+/// # Errors
+///
+/// [`GenRomProfileError::MissingPackEntry`] naming the first absent root.
+pub fn require_fonts(pack: &PackSource) -> Result<(), GenRomProfileError> {
+    FONTS
+        .into_iter()
+        .try_for_each(|font| pack.get(font.pack_id).map(|_| ()))
+}
+
 /// Require every fixed root, before any domain writes a report line.
 ///
 /// # Errors
@@ -36,5 +47,6 @@ pub fn require_title(pack: &PackSource) -> Result<(), GenRomProfileError> {
 /// [`GenRomProfileError::MissingPackEntry`] naming the first absent root.
 pub fn preflight(pack: &PackSource) -> Result<(), GenRomProfileError> {
     require_tilesets(pack)?;
-    require_title(pack)
+    require_title(pack)?;
+    require_fonts(pack)
 }

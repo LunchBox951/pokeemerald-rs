@@ -11,6 +11,7 @@
 //! files under the `oop-boundaries` size guideline -- these are still one
 //! concept with [`super::OverworldPhase::step`], just not one file.
 
+use engine::overworld::metatile_behavior::{is_forced_movement_input_tile, MB_NORMAL};
 use engine::overworld::{ConnectedMapData, Direction, PlayerState, StepOutcome, TilePos};
 use platform::{ButtonState, Buttons};
 
@@ -65,7 +66,7 @@ pub(super) fn advance_or_skip_for_preempt(
     maps: &impl ConnectedMapData,
     event_data: &engine::event_data::EventData,
     movement_preempted: bool,
-) -> Option<(assets::MapId, TilePos)> {
+) -> StepOutcome {
     if movement_preempted {
         // The walk-animation tick still advances every frame, even one a
         // warp or interaction preempts movement on (module docs on
@@ -85,7 +86,7 @@ pub(super) fn advance_or_skip_for_preempt(
         );
         player.tick();
         player.release_run_pose();
-        return None;
+        return StepOutcome::Idle;
     }
 
     let outcome = advance_player_one_frame(
@@ -97,13 +98,57 @@ pub(super) fn advance_or_skip_for_preempt(
         event_data,
     );
     latch_landing(pending_landing, outcome);
+    outcome
+}
+
+/// Split a frame's movement outcome into its two deferred follow-ups: a
+/// started turn latches `pending_turn` at the player's tile, and a map-edge
+/// crossing is returned for [`super::OverworldPhase::cross_connection`].
+pub(super) fn settle_outcome(
+    pending_turn: &mut Option<TilePos>,
+    player: &PlayerState,
+    outcome: StepOutcome,
+) -> Option<(assets::MapId, TilePos)> {
     match outcome {
+        StepOutcome::Turned(_) => {
+            *pending_turn = Some(player.position());
+            None
+        }
         StepOutcome::Crossed {
             to_map,
             to_position,
         } => Some((to_map, to_position)),
         _ => None,
     }
+}
+
+/// The tile this frame's encounter check observes: a completed step's
+/// `landed` tile, else a completed stationary turn's. The turn latch is
+/// consumed either way, so it cannot outlive its own observation.
+pub(super) fn observe_tile(
+    pending_turn: &mut Option<TilePos>,
+    player: &PlayerState,
+    runtime: &engine::overworld::MapRuntime<'_>,
+    landed: Option<TilePos>,
+) -> Option<TilePos> {
+    landed.or(take_completed_turn(pending_turn, player, runtime))
+}
+
+/// Take the tile a stationary turn started on, once its busy timer has
+/// drained and the player is at rest -- the turn's tile-centre observation
+/// (`field_player_avatar.c:901-915` exempts turns from the stationary-animation
+/// skip). Always consumed when ready, so a suppressed observation cannot fire
+/// on a later idle frame; returned only when the tile is not a forced-movement
+/// input tile (`field_control_avatar.c:116-122`).
+fn take_completed_turn(
+    pending_turn: &mut Option<TilePos>,
+    player: &PlayerState,
+    runtime: &engine::overworld::MapRuntime<'_>,
+) -> Option<TilePos> {
+    let (x, y) =
+        pending_turn.take_if(|_| !player.in_transit() && player.turn_frames_remaining() == 0)?;
+    let behavior = runtime.metatile_behavior(x, y).unwrap_or(MB_NORMAL);
+    (!is_forced_movement_input_tile(behavior)).then_some((x, y))
 }
 
 /// Latch the tile a just-applied frame of movement started walking onto, if
