@@ -5,7 +5,7 @@ use pack_format::{parse_directory, EntryKind};
 
 use super::error::GenRomProfileError;
 
-/// An owned pack entry; directory parsing does not validate metadata against payload.
+/// An owned pack entry; its public fields admit a payload whose length disagrees with `kind`.
 #[derive(Debug, Clone)]
 pub struct PackAsset {
     /// Entry kind with its declared metadata.
@@ -93,12 +93,12 @@ pub struct PackSource {
 }
 
 impl PackSource {
-    /// Loads a pack without checking payload lengths against entry metadata.
+    /// Loads a pack, rejecting any image or palette whose payload length disagrees with its metadata.
     ///
     /// # Errors
     ///
     /// [`GenRomProfileError::PackUnreadable`] if the file cannot be read;
-    /// [`GenRomProfileError::PackMalformed`] if directory parsing fails.
+    /// [`GenRomProfileError::PackMalformed`] if directory parsing fails, including on a misshapen payload.
     pub fn load(path: &Path) -> Result<Self, GenRomProfileError> {
         let bytes = std::fs::read(path).map_err(|err| GenRomProfileError::PackUnreadable {
             path: path.to_path_buf(),
