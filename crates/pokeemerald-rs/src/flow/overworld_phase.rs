@@ -181,6 +181,11 @@ pub(crate) struct OverworldPhase {
     /// Destination latched at step start for warp processing at step
     /// completion; `None` between steps.
     pending_landing: Option<TilePos>,
+    /// Tile a stationary turn started on, awaiting its tile-centre
+    /// observation once the turn's busy timer drains; `None` otherwise.
+    /// Feeds only the wild-encounter gate -- never the positional
+    /// coord/warp consumers `pending_landing` feeds.
+    pending_turn: Option<TilePos>,
     /// Active NPC dialog. While `Some`, [`OverworldPhase::step`] routes
     /// input to it instead of movement, and
     /// [`OverworldPhase::compose_frame`] draws it over the frame.
@@ -595,6 +600,7 @@ impl OverworldPhase {
             save1: block1,
             save2: block2,
             pending_landing: None,
+            pending_turn: None,
             dialog: None,
             tick: 0,
             connection_pack: OnceCell::new(),
@@ -741,6 +747,7 @@ impl OverworldPhase {
             save1,
             save2,
             pending_landing: None,
+            pending_turn: None,
             dialog,
             tick: 0,
             connection_pack: OnceCell::new(),
