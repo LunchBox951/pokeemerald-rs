@@ -300,7 +300,7 @@ mod tests {
     use assets::MapId;
     use engine::save::{Coords16, WarpData};
 
-    use crate::flow::save_continue_tests::{new_game_phase, save_from_the_start_menu};
+    use crate::flow::save_continue_support::{new_game_phase, save_from_the_start_menu};
     use crate::flow::tests::TempSave;
 
     use super::OverworldPhase;

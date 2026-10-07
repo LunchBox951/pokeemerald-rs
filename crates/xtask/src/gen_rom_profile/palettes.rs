@@ -1,11 +1,9 @@
 //! Locating palette banks.
 //!
-//! A pack palette entry is already GBA-native BGR555, so its payload *is*
-//! the ROM's bytes and no repacking is needed. A 16-colour bank is only 32
-//! bytes, which is short enough to repeat, so a bank that turns up twice is
-//! a hard failure here: the caller that knows a structural way to choose
-//! (a `{data, tag}` table, adjacency to an already-unique root) resolves it
-//! itself.
+//! A pack palette payload is the ROM's own BGR555 bytes. A 16-colour bank is
+//! short enough to repeat, so a bank found twice is an error here; callers
+//! with a structural tie-break (a `{data, tag}` table, adjacency to a unique
+//! root) resolve it themselves.
 
 use super::error::GenRomProfileError;
 use super::locate::exactly_one;
@@ -15,8 +13,8 @@ use super::Context;
 
 /// Locate every palette in `ids`, requiring each to be unique.
 ///
-/// `expect` says what a linker map should find at each id's address; the
-/// caller knows its own domain's naming, this module does not.
+/// `expect` gives the linker-map symbol expected at each id's address; the
+/// caller owns the naming.
 ///
 /// # Errors
 ///

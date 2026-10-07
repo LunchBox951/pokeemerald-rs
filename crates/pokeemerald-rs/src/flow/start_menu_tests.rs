@@ -2,7 +2,7 @@
 //! [`OverworldPhase`] (I-6, issue #232) -- the `START` gate, frame
 //! ownership, and the close paths that must never write.
 //!
-//! Split from the sibling [`super::save_continue_tests`] (`one module = one
+//! Split from the sibling [`super::save_continue_round_trip_tests`] (`one module = one
 //! concept` `(oop-boundaries)`, the same split
 //! `crate::main_menu::saved_game_tests` already makes): that file owns the
 //! save/reload/continue round trip, this one owns "when may a menu open,
@@ -16,7 +16,7 @@
 use platform::{ButtonState, Buttons, GBA_WIDTH};
 
 use super::overworld_phase::{ActiveBattle, OverworldPhase};
-use super::save_continue_tests::{new_game_phase, settle};
+use super::save_continue_support::{new_game_phase, settle};
 use super::tests::{held, pressed, TempSave};
 use crate::new_game;
 use crate::start_menu::{StartMenu, StartMenuItem};
