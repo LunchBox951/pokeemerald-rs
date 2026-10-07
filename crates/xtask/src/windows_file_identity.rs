@@ -14,13 +14,10 @@ pub(crate) struct WindowsFileIdentity {
 impl WindowsFileIdentity {
     /// Reads the volume and file ID of the object `handle` refers to: the
     /// 128-bit `FileIdInfo`, falling back to the zero-extended 64-bit index
-    /// only when the file system rejects that class (not supported, invalid
-    /// parameter, invalid function). Any other query error propagates.
+    /// only when the file system rejects that class ([`rejects_the_class`]).
+    /// Any other query error propagates.
     pub(crate) fn of(handle: &std::fs::File) -> std::io::Result<Self> {
         use std::os::windows::io::AsRawHandle as _;
-        use windows_sys::Win32::Foundation::{
-            ERROR_INVALID_FUNCTION, ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED,
-        };
         use windows_sys::Win32::Storage::FileSystem::{
             FileIdInfo, GetFileInformationByHandle, GetFileInformationByHandleEx,
             BY_HANDLE_FILE_INFORMATION, FILE_ID_INFO,
@@ -48,12 +45,7 @@ impl WindowsFileIdentity {
         let unsupported = refused
             .raw_os_error()
             .and_then(|code| u32::try_from(code).ok())
-            .is_some_and(|code| {
-                matches!(
-                    code,
-                    ERROR_NOT_SUPPORTED | ERROR_INVALID_PARAMETER | ERROR_INVALID_FUNCTION
-                )
-            });
+            .is_some_and(rejects_the_class);
         if !unsupported {
             return Err(refused);
         }
@@ -71,5 +63,58 @@ impl WindowsFileIdentity {
             volume_serial_number: u64::from(info.dwVolumeSerialNumber),
             file_id,
         })
+    }
+}
+
+/// Whether `code`, from a failed `FileIdInfo` query, means the file system
+/// does not serve that class rather than that the query failed: not supported,
+/// invalid parameter (FAT, pre-Windows 8), invalid function, or invalid level
+/// (a CIFS/SMB server that does not know the class, where
+/// `GetFileInformationByHandle` still answers).
+fn rejects_the_class(code: u32) -> bool {
+    use windows_sys::Win32::Foundation::{
+        ERROR_INVALID_FUNCTION, ERROR_INVALID_LEVEL, ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED,
+    };
+
+    matches!(
+        code,
+        ERROR_NOT_SUPPORTED
+            | ERROR_INVALID_PARAMETER
+            | ERROR_INVALID_FUNCTION
+            | ERROR_INVALID_LEVEL
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rejects_the_class;
+    use windows_sys::Win32::Foundation::{
+        ERROR_ACCESS_DENIED, ERROR_INVALID_FUNCTION, ERROR_INVALID_HANDLE, ERROR_INVALID_LEVEL,
+        ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED,
+    };
+
+    /// A share whose server refuses `FileIdInfo` with `ERROR_INVALID_LEVEL`
+    /// falls back to the 64-bit index instead of failing every extract there.
+    #[test]
+    fn an_smb_share_that_refuses_the_class_falls_back() {
+        assert!(rejects_the_class(ERROR_INVALID_LEVEL));
+    }
+
+    #[test]
+    fn the_other_unsupported_class_codes_fall_back() {
+        for code in [
+            ERROR_NOT_SUPPORTED,
+            ERROR_INVALID_PARAMETER,
+            ERROR_INVALID_FUNCTION,
+        ] {
+            assert!(rejects_the_class(code), "code {code} should fall back");
+        }
+    }
+
+    #[test]
+    fn a_real_query_failure_still_propagates() {
+        for code in [ERROR_ACCESS_DENIED, ERROR_INVALID_HANDLE] {
+            assert!(!rejects_the_class(code), "code {code} should propagate");
+        }
     }
 }
