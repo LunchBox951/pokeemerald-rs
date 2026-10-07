@@ -539,7 +539,7 @@ fn a_successful_transition_replaces_the_live_object_events() {
 /// synthetic Oldale layout pack, so it runs without a local pack.
 #[test]
 fn continue_restores_oldale_npcs_at_their_map_json_tiles() {
-    use crate::flow::save_continue_tests::save_from_the_start_menu;
+    use crate::flow::save_continue_support::save_from_the_start_menu;
     use crate::flow::tests::TempSave;
     use crate::pack_source::PackSource;
 

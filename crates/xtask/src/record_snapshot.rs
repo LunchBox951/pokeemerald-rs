@@ -216,13 +216,47 @@ fn publish_generation_with<F>(
 where
     F: FnOnce() -> Result<(), RecordSnapshotError>,
 {
+    publish_generation_hooked(
+        scene,
+        output_dir,
+        rgb_bytes,
+        meta_bytes,
+        after_rgb_staged,
+        before_rename,
+        after_generation_check,
+        before_pointer_publish,
+        || {},
+    )
+}
+
+/// [`publish_generation_with`] plus a hook just after the pointer's
+/// publication, so tests can replace the generation once the pointer names it.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "four test hooks beside the inputs; production passes no-ops through `publish_generation`"
+)]
+fn publish_generation_hooked<F>(
+    scene: Scene,
+    output_dir: &Path,
+    rgb_bytes: &[u8],
+    meta_bytes: &[u8],
+    after_rgb_staged: F,
+    before_rename: impl FnOnce(),
+    after_generation_check: impl FnOnce(),
+    before_pointer_publish: impl FnOnce(),
+    after_pointer_publish: impl FnOnce(),
+) -> Result<(PathBuf, PathBuf), RecordSnapshotError>
+where
+    F: FnOnce() -> Result<(), RecordSnapshotError>,
+{
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT_GENERATION: AtomicU64 = AtomicU64::new(0);
     let output_claim = claim_output_dir(output_dir)
         .map_err(|e| RecordSnapshotError::Write(output_dir.to_path_buf(), e.to_string()))?;
+    let output_dir_matches = || output_claim.require_path(output_dir);
     let require_output_dir = || {
-        output_claim.require_path(output_dir).map_err(|error| {
+        output_dir_matches().map_err(|error| {
             RecordSnapshotError::Write(output_dir.to_path_buf(), error.to_string())
         })
     };
@@ -250,6 +284,16 @@ where
     let staged_meta = staged_dir.join(&meta_name);
 
     let mut renamed = false;
+    let generation_matches =
+        |claim: &StagedDirClaim| claim.require_entry_in(&output_claim, &generation_dir);
+    // The held lookup cannot see `output_dir` replaced meanwhile, and the
+    // returned paths resolve through that pathname, so each check ends with a
+    // lookup through it: when it runs last, it covers the paths returned.
+    let require_generation = |claim: &StagedDirClaim| {
+        generation_matches(claim)
+            .and_then(|()| claim.require_path(&generation_dir))
+            .map_err(|error| RecordSnapshotError::Write(generation_dir.clone(), error.to_string()))
+    };
     let result = (|| {
         staged_dir_claim
             .write_payload(&staged_dir, &rgb_name, rgb_bytes)
@@ -274,11 +318,7 @@ where
         // Looked up in the held output directory, so the generation the
         // pointer will name is proven to sit beside it, not merely somewhere
         // the `output_dir` pathname led at the time.
-        staged_dir_claim
-            .require_entry_in(&output_claim, &generation_dir)
-            .map_err(|error| {
-                RecordSnapshotError::Write(generation_dir.clone(), error.to_string())
-            })?;
+        require_generation(&staged_dir_claim)?;
         after_generation_check();
         // The generation was verified under `output_dir`; the pointer must land
         // in that same directory, not in whatever the pathname names now.
@@ -290,20 +330,34 @@ where
         // names the directory that received the generation.
         require_output_dir()?;
         // See `staging` for the guard this stage-then-publish pair provides.
-        let staged_pointer = stage_pointer(
+        let mut staged_pointer = stage_pointer(
             &output_claim,
             &pointer_path,
             format!("{generation}\n").as_bytes(),
         )
         .map_err(|e| RecordSnapshotError::Write(pointer_path.clone(), e.to_string()))?;
+        // A check failing from here until `publish` takes the staged pointer
+        // retains it and reports its path, as a failed publish would.
         if cfg!(not(unix)) {
-            require_output_dir()?;
+            staged_pointer =
+                pointer_still_publishable(staged_pointer, output_dir, output_dir_matches())?;
         }
         before_pointer_publish();
+        // The only check that sits between the last hook and the rename: a
+        // generation replaced after the earlier verification must not be named.
+        let staged_pointer = pointer_still_publishable(
+            staged_pointer,
+            &generation_dir,
+            generation_matches(&staged_dir_claim),
+        )?;
         staged_pointer
             .publish(&pointer_path)
             .map_err(|e| RecordSnapshotError::Write(pointer_path.clone(), e.to_string()))?;
+        after_pointer_publish();
         require_output_dir()?;
+        // The pointer is already replaced; success is still reported only
+        // while the generation it names is the one this capture holds.
+        require_generation(&staged_dir_claim)?;
         Ok((
             generation_dir.join(format!("{}.rgb", scene.name())),
             generation_dir.join(format!("{}.meta", scene.name())),
@@ -335,6 +389,22 @@ fn promote_staged_dir(
 ) -> std::io::Result<()> {
     before_rename();
     output.promote_without_replacement(staged, generation)
+}
+
+/// Hands `staged` back while `check` passed; otherwise retains it and reports
+/// its last known path beside the failure, as a failed publish would.
+fn pointer_still_publishable(
+    staged: staging::StagedFile,
+    path: &Path,
+    check: std::io::Result<()>,
+) -> Result<staging::StagedFile, RecordSnapshotError> {
+    match check {
+        Ok(()) => Ok(staged),
+        Err(error) => Err(RecordSnapshotError::Write(
+            path.to_path_buf(),
+            staged.retain(&error).to_string(),
+        )),
+    }
 }
 
 // Neither an open handle nor a metadata comparison makes a later pathname

@@ -1,15 +1,12 @@
-//! The Status1-reading ability disposition, pinned through the constructors
-//! (issue #945). Only the Limber and Immunity cures are refused; every other
-//! status-reading ability is either modelled elsewhere or deferred, and is
-//! admitted here.
+//! Battle construction refuses only the Limber (paralysis) and Immunity
+//! (poison) cures (`battle_util.c:2873-2951`); every other status-reading
+//! ability is admitted, whether modelled or deferred.
 //!
-//! Modelled: Guts and Marvel Scale (`pokemon.c:3211-3214`, stat accessors),
-//! Shed Skin (`battle_util.c:2620-2640`, residual), Synchronize on paralysis
-//! and poison (`battle_util.c:2971-2986`). Refused: Limber and Immunity cures
-//! (`battle_util.c:2873-2951`). Deferred because their status or switch
-//! behaviour is absent: Early Bird (`:2030-2037`), Insomnia, Vital Spirit,
-//! Water Veil, Magma Armor (`battle_script_commands.c:2291-2393`), Flash Fire
-//! (`battle_util.c:2703-2705`), Natural Cure (`battle_script_commands.c:9590-9607`).
+//! Upstream: Guts and Marvel Scale stat multipliers (`pokemon.c:3211-3214`),
+//! Shed Skin (`battle_util.c:2620-2640`), Synchronize (`battle_util.c:2971-2986`),
+//! Early Bird (`battle_util.c:2030-2037`), Insomnia/Vital Spirit/Water Veil/Magma
+//! Armor (`battle_script_commands.c:2291-2393`), Flash Fire (`battle_util.c:2703-2705`),
+//! Natural Cure (`battle_script_commands.c:9590-9607`).
 
 use crate::common::{max_iv_mon, SequenceRng};
 use assets::{AbilityId, MoveId, SpeciesId};
@@ -17,8 +14,8 @@ use battle::{Battle, BattleError, BattlePokemon, Dex, Status1};
 
 const STATUSES: [Status1; 3] = [Status1::Healthy, Status1::Paralysed, Status1::Poisoned];
 
-/// Species, saved ability slot, expected ability, and the one status whose
-/// constructor admission is refused, if any.
+/// Columns: name, species, saved ability slot, expected ability, and the one
+/// status whose constructor admission is refused, if any.
 const MATRIX: [(&str, SpeciesId, u8, AbilityId, Option<Status1>); 13] = [
     ("guts", SpeciesId::RATTATA, 1, AbilityId::GUTS, None),
     (
@@ -145,6 +142,8 @@ fn the_constructor_refuses_exactly_the_limber_and_immunity_cures() {
 #[test]
 fn guts_and_marvel_scale_read_each_representable_status() {
     use battle::damage::MoveCategory::Physical;
+    // Both abilities scale the raw stat by 150% with integer truncation
+    // (`pokemon.c:3211-3214`).
     for status in [Status1::Paralysed, Status1::Poisoned] {
         let healthy_guts = holder(SpeciesId::RATTATA, 1, Status1::Healthy);
         let sick_guts = holder(SpeciesId::RATTATA, 1, status);

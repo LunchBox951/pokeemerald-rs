@@ -238,7 +238,7 @@ fn confuse_hit_could_ever_land(defender: &BattlePokemon) -> bool {
 /// onto the original attacker, so there is nothing left here to refuse.
 ///
 /// [`EFFECT_CONFUSE_HIT`] gets the same Serene Grace screen, through
-/// [`confuse_hit_could_ever_land`] rather than [`poison_can_land`]'s full
+/// `confuse_hit_could_ever_land` rather than `poison_can_land`'s full
 /// landing check -- see that function's docs for why the defender's current
 /// confusion volatile is deliberately not read here.
 ///
@@ -295,7 +295,7 @@ pub enum SecondaryApplication {
     /// (`battle_script_commands.c:2261`-`:2264`).
     Poison,
     /// The caller must draw a duration
-    /// ([`crate::confuse::draw_confusion_duration`]) and write it to the
+    /// (`crate::confuse::draw_confusion_duration`) and write it to the
     /// defender's confusion volatile, subject to that same post-damage faint
     /// check: the duration draw itself is inside the guard, not before it
     /// (`battle_script_commands.c:2529-2544`).
