@@ -32,6 +32,9 @@ pub(super) const TRAINER_RHETT: u16 = 703;
 /// all-spent Struggle diversion (`crates/battle/src/battle.rs:491`) out of
 /// the way.
 pub(super) const UNEXECUTABLE_MOVE: u16 = 228;
+
+/// The tile Rhett's object event stands on in `MAP_ROUTE103` (the
+/// `TRAINER_RHETT` docs): every fixture places the player relative to it.
 pub(super) const RHETT_TILE: (i32, i32) = (67, 5);
 
 /// `TRAINER_ANDREW` (`include/constants/opponents.h`): used only for the
@@ -168,11 +171,11 @@ pub(super) fn active_sight_trainer_id(
 /// this crate's usual "each test file cites the upstream fact" convention.
 pub(super) const EXCLAMATION_ICON_FRAMES: usize = 60;
 
-/// Non-icon lock-handoff frames, transcribed independently of
-/// `sight_trainer_approach`'s own constants (`event_object_lock.c:130-146`,
-/// `script.c:80-87`): after the trigger frame for a standing player, and
-/// after the frame an in-flight step drains on.
+/// Non-icon lock-handoff frames after the trigger frame for a standing
+/// player, transcribed independently of `sight_trainer_approach`'s own
+/// constants (`event_object_lock.c:130-146`, `script.c:80-87`).
 pub(super) const LOCK_HANDOFF_AT_REST: usize = 1;
+/// The same handoff counted after the frame an in-flight step drains on.
 pub(super) const LOCK_HANDOFF_AFTER_DRAIN: usize = 2;
 
 /// Rhett's own real object event out of the extracted `MAP_ROUTE103` data.
