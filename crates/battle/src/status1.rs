@@ -1,16 +1,9 @@
-//! Primary status ([`Status1`]), the attacker-side gate that keeps a
-//! paralysed battler from acting roughly a quarter of the time, the end-turn
-//! poison residual's damage floor, and Shed Skin's end-turn cure draw.
+//! Primary status ([`Status1`]), the full-paralysis gate, poison's end-turn
+//! damage, and Shed Skin's end-turn cure draw.
 //!
-//! `gBattleMons[].status1` is a persistent field distinct from the volatile
-//! `status2`/`gStatuses3` bits [`crate::volatile::Volatiles`] carries: a
-//! primary status outlives a switch, where a volatile does not. This slice
-//! models [`Status1::Healthy`], [`Status1::Paralysed`], and
-//! [`Status1::Poisoned`] — sleep, freeze, burn, and toxic are unported, so a
-//! battler can never reach any status this enum has no variant for.
-//! Confusion is `status2`'s own field, not `status1`'s: its duration lives in
-//! [`crate::volatile::Volatiles::confusion_turns`], but no move path can
-//! write it yet, so it stays unreachable here too.
+//! `status1` persists across a switch, unlike the volatile bits in
+//! [`crate::volatile::Volatiles`]. Confusion belongs to those volatile bits
+//! ([`crate::volatile::Volatiles::confusion_turns`]), not to `Status1`.
 //!
 //! Upstream's `status1` is a bitfield with one flag per status
 //! (`pokeemerald/include/constants/battle.h:112`-`:125`), but every
@@ -49,17 +42,15 @@ impl Status1 {
         matches!(self, Self::Poisoned)
     }
 
-    /// Whether this status is [`Status1::Healthy`] — the guard every
-    /// infliction path this crate models shares
-    /// (`pokeemerald/src/battle_script_commands.c:2334`-`:2335`).
+    /// Whether no primary status is set, the guard every infliction path this
+    /// crate models shares (`pokeemerald/src/battle_script_commands.c:2334`-`:2335`).
     #[must_use]
     pub const fn is_healthy(self) -> bool {
         matches!(self, Self::Healthy)
     }
 }
 
-/// `Random() % 4 == 0` -- the denominator of the full-paralysis chance
-/// (`pokeemerald/src/battle_util.c:2189`).
+/// Full paralysis is `Random() % 4 == 0` (`pokeemerald/src/battle_util.c:2189`).
 const FULL_PARALYSIS_CHANCE_DENOMINATOR: u16 = 4;
 
 /// Draws whether a paralysed battler is fully unable to act this turn —
@@ -75,12 +66,11 @@ pub fn draws_full_paralysis(status1: Status1, rng: &mut impl BattleRng) -> bool 
             .is_multiple_of(FULL_PARALYSIS_CHANCE_DENOMINATOR)
 }
 
-/// The denominator of `ENDTURN_POISON`'s damage fraction
-/// (`pokeemerald/src/battle_util.c:1528`).
+/// `ENDTURN_POISON` deals max HP / 8 (`pokeemerald/src/battle_util.c:1528`).
 const POISON_DAMAGE_DENOMINATOR: u32 = 8;
 
-/// `ENDTURN_POISON`'s damage for a battler with `max_hp`: an eighth of
-/// maximum HP, floored to at least one, drawing nothing
+/// `ENDTURN_POISON`'s damage for a battler with `max_hp`: an eighth of it,
+/// never less than one, with no RNG draw
 /// (`pokeemerald/src/battle_util.c:1528-1530`).
 #[must_use]
 pub const fn poison_residual_damage(max_hp: u32) -> u32 {
@@ -92,19 +82,17 @@ pub const fn poison_residual_damage(max_hp: u32) -> u32 {
     }
 }
 
-/// The denominator of Shed Skin's end-turn cure chance
-/// (`pokeemerald/src/battle_util.c:2621`).
+/// Shed Skin cures on `Random() % 3 == 0` (`pokeemerald/src/battle_util.c:2621`).
 const SHED_SKIN_CURE_CHANCE_DENOMINATOR: u16 = 3;
 
-/// Draws whether a living, statused Shed Skin holder cures its primary
-/// status this residual pass — `ABILITY_SHED_SKIN`'s `ABILITYEFFECT_ENDTURN`
-/// case (`pokeemerald/src/battle_util.c:2620`-`:2621`).
+/// Draws whether a Shed Skin holder cures its primary status this residual
+/// pass — `ABILITY_SHED_SKIN`'s `ABILITYEFFECT_ENDTURN` case
+/// (`pokeemerald/src/battle_util.c:2620`-`:2621`).
 ///
 /// Draws nothing, and returns `false`, for a healthy battler: upstream's
-/// `&&` short-circuits before its own `Random()` call. The caller is
-/// responsible for the case's own `hp != 0` guard
-/// (`pokeemerald/src/battle_util.c:2601`-`:2602`) and ability check; this
-/// function only resolves the chance once both already hold.
+/// `&&` short-circuits before its own `Random()` call. The caller owns the
+/// `hp != 0` guard (`pokeemerald/src/battle_util.c:2601`-`:2602`) and the
+/// ability check.
 #[must_use]
 pub fn draws_shed_skin_cure(status1: Status1, rng: &mut impl BattleRng) -> bool {
     !status1.is_healthy()
