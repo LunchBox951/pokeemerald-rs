@@ -33,6 +33,9 @@ pub const BOX_OT_NAME_LEN: usize = 7;
 /// `hasSpecies`, bit 1 of the sanity bitfield byte
 /// (`pokeemerald/include/pokemon.h:203`).
 const HAS_SPECIES_BIT: u8 = 1 << 1;
+/// `isBadEgg`, bit 0 of the sanity bitfield byte
+/// (`pokeemerald/include/pokemon.h:202`).
+const BAD_EGG_BIT: u8 = 1 << 0;
 const CHECKSUM_OFFSET: usize = 28;
 const SECURE_OFFSET: usize = 32;
 
@@ -231,6 +234,13 @@ impl BoxPokemon {
     /// Overwrites the unencrypted header's language byte.
     pub fn set_language(&mut self, language: u8) {
         self.bytes[LANGUAGE_OFFSET] = language;
+    }
+
+    /// Returns whether the unencrypted header marks the record as a Bad Egg
+    /// (`isBadEgg`, `pokeemerald/include/pokemon.h:202`).
+    #[must_use]
+    pub fn is_bad_egg(&self) -> bool {
+        self.bytes[SANITY_FLAGS_OFFSET] & BAD_EGG_BIT != 0
     }
 
     /// Returns whether the unencrypted header marks the slot as occupied
@@ -557,6 +567,21 @@ mod tests {
             corrupt.substructures(),
             Err(PokemonError::ChecksumMismatch { .. })
         ));
+    }
+
+    #[test]
+    fn bad_egg_accessor_reads_only_header_bit_zero() {
+        let mut record = BoxPokemon::new(5, 0xA5A5_5A5A);
+        record.set_substructures(&distinct_substructures());
+        let checksum = record.checksum();
+        for flags in [0u8, 1, 2, 4, 6, 7, 0x80, 0x81] {
+            let mut bytes = record.to_bytes();
+            bytes[SANITY_FLAGS_OFFSET] = flags;
+            let probe = BoxPokemon::from_bytes(bytes);
+            assert_eq!(probe.is_bad_egg(), flags & 1 != 0, "flags {flags:#x}");
+            assert_eq!(probe.checksum(), checksum);
+            assert_eq!(probe.to_bytes(), bytes);
+        }
     }
 
     #[test]

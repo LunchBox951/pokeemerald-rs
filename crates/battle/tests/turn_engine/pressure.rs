@@ -1,35 +1,21 @@
-//! Pressure's extra PP cost against a distinct target
-//! (`battle_script_commands.c:1205`-`:1237`).
-//!
-//! `Cmd_ppreduce` starts `ppToDeduct` at one and increments it once more
-//! when the actual target is a *different* battler carrying Pressure,
-//! saturating the eventual subtraction at zero rather than underflowing. A
-//! self-targeting move (`MOVE_TARGET_USER`) never sees the increment, since
-//! its target is always the user itself.
+//! `Cmd_ppreduce` (`battle_script_commands.c:1205`-`:1237`): for single-target
+//! moves, one PP is added to the cost only when the target is a different
+//! battler with Pressure (`:1224`-`:1225`); the subtraction saturates at zero.
 
 use crate::common::{max_iv_mon, SequenceRng};
 use assets::MoveId;
 use battle::{Battle, BattleEvent, Dex, PlayerAction};
 
-/// `MOVE_SCRATCH`, a single-target Normal-type hit.
 const SCRATCH: MoveId = MoveId::SCRATCH;
-/// `MOVE_SWORDS_DANCE` (`EFFECT_ATTACK_UP_2`), `MOVE_TARGET_USER`.
+/// Targets its user, so it never receives Pressure's extra cost.
 const SWORDS_DANCE: MoveId = MoveId::SWORDS_DANCE;
 
-/// `SPECIES_RATTATA`: base Speed 72, used only by the saturation test below,
-/// where turn order does not matter.
 const RATTATA: u16 = 19;
-/// `SPECIES_DUSCLOPS`: Ghost/Ghost, Pressure in its only ability slot
-/// (immune to Scratch's Normal typing, so the hit's PP spend is the only
-/// thing worth pinning).
+/// Ghost, so Scratch has no effect and only the PP spend is observable.
 const DUSCLOPS: u16 = 362;
-/// `SPECIES_ABSOL`: Dark/Dark, Pressure in its only ability slot too, and
-/// faster than Dusclops. Both battlers below therefore carry Pressure, so a
-/// broken implementation that checked "the opposing battler" without first
-/// exempting a self-targeting move would still see a Pressure holder on the
-/// other side and wrongly double Swords Dance's cost -- unlike a fixture
-/// where only one side carries the ability, which such a bug would pass by
-/// coincidence.
+/// Faster than Dusclops. With Pressure on both sides, an implementation that
+/// checks the opposing battler without exempting self-targeting moves would
+/// double Swords Dance's cost; a one-sided fixture would miss that bug.
 const ABSOL: u16 = 376;
 
 #[test]
@@ -50,10 +36,7 @@ fn pressure_doubles_pp_cost_against_a_distinct_target_but_not_for_a_self_target(
     let scratch_pp = player.moves()[0].pp;
     let swords_dance_pp = enemy.moves()[0].pp;
 
-    // Generous zero-filled RNG: every accuracy/crit/damage-variance roll of
-    // zero hits and Swords Dance's stat-change pipeline draws nothing, so
-    // the exact draw count does not need pinning here -- only the PP
-    // ledgers do.
+    // Over-provisioned: only the PP totals are asserted, not the draw count.
     let mut rng = SequenceRng::new([0u16; 24]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
@@ -80,10 +63,6 @@ fn pressure_doubles_pp_cost_against_a_distinct_target_but_not_for_a_self_target(
     );
 }
 
-/// A Pressure cost larger than the PP left saturates the slot at zero
-/// instead of underflowing (`battle_script_commands.c:1234`-`:1237`). The
-/// second turn is the one that exercises it: one PP left against a two-PP
-/// cost.
 #[test]
 fn two_turns_against_a_pressure_holder_drain_a_three_pp_slot_to_zero_not_one() {
     let dex = Dex::new();

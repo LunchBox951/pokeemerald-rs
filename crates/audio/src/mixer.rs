@@ -51,9 +51,11 @@ enum VoiceSlot {
 pub struct Mixer {
     direct_sound_slots: Vec<Option<Voice>>,
     cgb_slots: [Option<CgbVoice>; 4],
-    /// Square1/Square2's duty position once their slot empties, tracked
-    /// apart from the `Option<CgbVoice>` occupant so a later note-on can
-    /// continue it (`CgbVoice::advance_idle_duty`'s doc). Indices match
+    /// Square1/Square2's committed hardware state (duty position, frequency,
+    /// sweep) once a voice has really triggered it, retained across the slot
+    /// emptying or a pending replacement that has not yet written anything,
+    /// tracked apart from the `Option<CgbVoice>` occupant so a later note-on
+    /// can continue it (`CgbVoice::advance_idle_duty`'s doc). Indices match
     /// `CgbChannelNumber::slot`.
     idle_square_duty: [Option<CgbVoice>; 2],
     master_volume: u8,
@@ -203,15 +205,20 @@ impl Mixer {
             if !reusable {
                 return false;
             }
-            voice.carry_duty_phase_from(occupant);
-        } else if let Some(idle) = self.idle_square_duty.get(slot).and_then(Option::as_ref) {
-            voice.carry_duty_phase_from(idle);
+        }
+        if let Some(hardware) = self.idle_square_duty.get_mut(slot) {
+            if let Some(occupant) = self.cgb_slots[slot]
+                .as_ref()
+                .filter(|voice| voice.initial_trigger_committed())
+            {
+                *hardware = Some(occupant.clone());
+            }
+            if let Some(previous) = hardware.as_ref() {
+                voice.carry_duty_phase_from(previous);
+            }
         }
         voice.set_seq(self.take_note_on_ordinal());
         self.cgb_slots[slot] = Some(voice);
-        if let Some(idle) = self.idle_square_duty.get_mut(slot) {
-            *idle = None;
-        }
         true
     }
 
@@ -313,13 +320,24 @@ impl Mixer {
             if let Some(voice) = slot {
                 if voice.track() == track {
                     if let Some(idle) = self.idle_square_duty.get_mut(index) {
-                        let mut idle_voice = voice.clone();
-                        idle_voice.apply_hardware_off_write();
-                        *idle = Some(idle_voice);
+                        Self::off_write_square_hardware(voice, idle);
                     }
                     *slot = None;
                 }
             }
+        }
+    }
+
+    /// Apply the retirement off-write to the square hardware a slot really
+    /// holds. A voice that never reached its initial trigger (cancelled
+    /// while pending) wrote nothing, so the retained committed state, not
+    /// the cancelled note's own frequency/sweep, takes the off-write.
+    fn off_write_square_hardware(voice: &CgbVoice, hardware: &mut Option<CgbVoice>) {
+        if voice.initial_trigger_committed() {
+            *hardware = Some(voice.clone());
+        }
+        if let Some(committed) = hardware {
+            committed.apply_hardware_off_write();
         }
     }
 
@@ -392,6 +410,11 @@ impl Mixer {
         for (index, slot) in self.cgb_slots.iter_mut().enumerate() {
             if let Some(voice) = slot {
                 voice.begin_frame(extra_envelope_iteration);
+                if voice.initial_trigger_committed() {
+                    if let Some(idle) = self.idle_square_duty.get_mut(index) {
+                        *idle = None;
+                    }
+                }
                 // A voice retiring this frame renders nothing: the idle-duty
                 // loop below accounts for the whole frame's silence, so a
                 // hardware-muted voice's unconditional catch-up in `render`
@@ -401,9 +424,7 @@ impl Mixer {
                 }
                 if !voice.is_active() {
                     if let Some(idle) = self.idle_square_duty.get_mut(index) {
-                        let mut idle_voice = voice.clone();
-                        idle_voice.apply_hardware_off_write();
-                        *idle = Some(idle_voice);
+                        Self::off_write_square_hardware(voice, idle);
                     }
                     *slot = None;
                 }
