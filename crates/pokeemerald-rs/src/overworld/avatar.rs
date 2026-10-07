@@ -209,7 +209,8 @@ fn frame_for(player: &PlayerState) -> (u16, bool) {
             && !player.transit_running()
             && (player.transit_animation_disabled()
                 || player.step_progress() < player.transit_duration() / 2));
-    let turning_foot_forward = player.turn_frames_remaining() >= TURN_FRAME_HALF;
+    let turning_foot_forward = player.turn_frames_remaining() >= TURN_FRAME_HALF
+        || (player.bump_active() && player.bump_foot_forward());
     let frame = if walking_foot_forward || turning_foot_forward {
         step
     } else {
@@ -584,6 +585,31 @@ mod tests {
             ),
             "the turn's animation drains exactly with its busy window"
         );
+    }
+
+    /// A blocked step's slow in-place walk shows its forward foot for the
+    /// first sixteen presented frames and the standing cell for the rest.
+    #[test]
+    fn frame_for_animates_a_wall_bump_in_place() {
+        let (bytes, header, events) = flat_test_map();
+        let runtime = flat_runtime(&bytes, &header, &events);
+        let no_connections = |_: assets::MapId| -> Option<(u16, u16)> { None };
+
+        let mut player = player_at((2, 4), Direction::South);
+        let mut rendered = Vec::new();
+        for _ in 0..engine::overworld::BUMP_IN_PLACE_FRAMES {
+            player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS);
+            player.tick();
+            rendered.push(frame_for(&player).0);
+        }
+
+        assert!(rendered[..16]
+            .iter()
+            .all(|&frame| frame == FRAME_SOUTH_STEP));
+        assert!(rendered[16..]
+            .iter()
+            .all(|&frame| frame == FRAME_SOUTH_STAND));
+        assert_eq!(player.position(), (2, 4));
     }
 
     pub(super) fn flat_test_map() -> (Vec<u8>, assets::MapHeader, assets::MapEvents) {
