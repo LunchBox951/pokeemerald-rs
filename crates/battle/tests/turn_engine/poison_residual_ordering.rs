@@ -526,3 +526,52 @@ fn a_forced_struggle_is_compared_by_its_retained_slot_at_the_end_turn() {
     assert_eq!(ticks, [true, false], "{events:?}");
     assert_eq!(rng.draws(), 12, "no end-turn tie draw: {events:?}");
 }
+
+/// Upstream never assigns a position for a forced Struggle
+/// (`pokeemerald/src/battle_main.c:4183`-`:4190`); the end turn reads the
+/// retained `chosenMovePositions`, zero-initialized, not the submitted cursor.
+/// Slot 0 is Tackle, so the equal-Speed end-turn comparison ties and draws.
+#[test]
+fn adjudicator_player_forced_struggle_ignores_the_submitted_cursor() {
+    let dex = Dex::new();
+    let mut player = max_iv_mon(&dex, RATTATA, 5, vec![TACKLE, assets::MoveId::QUICK_ATTACK]);
+    for slot in 0..2 {
+        for _ in 0..player.moves()[slot].pp {
+            player.deduct_pp(slot).unwrap();
+        }
+    }
+    player.set_status1(Status1::Poisoned);
+    let mut enemy = max_iv_mon(&dex, RATTATA, 5, vec![TACKLE]);
+    enemy.set_status1(Status1::Poisoned);
+    let mut rng = SequenceRng::new([0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(1), &mut rng)
+        .unwrap();
+    assert_eq!(
+        rng.draws(),
+        13,
+        "one end-turn tie draw expected: {events:?}"
+    );
+}
+
+/// The enemy's forced Struggle likewise reads its retained position 0, a
+/// depleted Quick Attack, which outranks Tackle: no end-turn tie draw.
+#[test]
+fn adjudicator_enemy_forced_struggle_reads_its_retained_slot() {
+    let dex = Dex::new();
+    let mut player = max_iv_mon(&dex, RATTATA, 5, vec![TACKLE]);
+    player.set_status1(Status1::Poisoned);
+    let mut enemy = max_iv_mon(&dex, RATTATA, 5, vec![assets::MoveId::QUICK_ATTACK]);
+    for _ in 0..enemy.moves()[0].pp {
+        enemy.deduct_pp(0).unwrap();
+    }
+    enemy.set_status1(Status1::Poisoned);
+    let mut rng = SequenceRng::new([0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    let (_, ticks) = hit_and_tick_sides(&events);
+    assert_eq!(ticks, [false, true], "enemy ticks first: {events:?}");
+}

@@ -125,6 +125,10 @@ pub struct Battle {
     turn_counter: u8,
     turn_has_started: bool,
     pending_residual_selection: Option<ChosenMoves>,
+    /// Each battler's last actually chosen move slot, `[player, enemy]`:
+    /// upstream's `chosenMovePositions`: zero-initialized and never assigned
+    /// for a forced Struggle (`pokeemerald/src/battle_main.c:4183`-`:4189`).
+    retained_slots: [usize; 2],
     /// `gCurrentMove` (`pokeemerald/include/battle.h`): the most recently
     /// attempted move, `MOVE_NONE` before any has been. A forced trainer
     /// replacement's most-damage fallback reads this stale value as its
@@ -152,12 +156,9 @@ enum Selection {
     NoMove,
     /// The move slot chosen at selection.
     Slot(usize),
-    /// A forced Struggle: it replaces the move for the action only, since
-    /// executing it clears `noValidMoves`
-    /// (`pokeemerald/src/battle_util.c:100`-`:104`), so the end-turn comparison
-    /// reads the retained slot's own move. `retained` is `None` for an enemy
-    /// whose forced Struggle names no slot; Struggle's priority stands in.
-    Struggle { retained: Option<usize> },
+    /// A forced Struggle: the end-turn comparison reads the battler's
+    /// retained slot (`pokeemerald/src/battle_util.c:100`-`:104`).
+    Struggle,
 }
 
 /// Both battlers' selections. Only the selection is retained from the action
@@ -184,9 +185,6 @@ enum ValidatedPlayerAction {
     UseMove {
         slot: Option<usize>,
         move_id: MoveId,
-        /// The slot the player's cursor named, retained for the end-turn
-        /// comparison even when a forced Struggle replaces the move.
-        cursor: usize,
     },
     Run,
 }
@@ -336,6 +334,7 @@ impl Battle {
             turn_counter: 0,
             turn_has_started: false,
             pending_residual_selection: None,
+            retained_slots: [0; 2],
             last_move_used: MOVE_NONE,
         })
     }
@@ -433,6 +432,7 @@ impl Battle {
             turn_counter: 0,
             turn_has_started: false,
             pending_residual_selection: None,
+            retained_slots: [0; 2],
             last_move_used: MOVE_NONE,
         })
     }
@@ -658,19 +658,21 @@ impl Battle {
                 ValidatedPlayerAction::UseMove {
                     slot: Some(slot), ..
                 } => Selection::Slot(slot),
-                ValidatedPlayerAction::UseMove {
-                    slot: None, cursor, ..
-                } => Selection::Struggle {
-                    retained: Some(cursor),
-                },
+                ValidatedPlayerAction::UseMove { slot: None, .. } => Selection::Struggle,
                 ValidatedPlayerAction::Run => Selection::NoMove,
             },
             enemy: match enemy_action {
                 EnemyAction::Move(slot) => Selection::Slot(slot),
-                EnemyAction::Struggle => Selection::Struggle { retained: None },
+                EnemyAction::Struggle => Selection::Struggle,
                 EnemyAction::Flee => Selection::NoMove,
             },
         };
+        if let Selection::Slot(slot) = chosen.player {
+            self.retained_slots[0] = slot;
+        }
+        if let Selection::Slot(slot) = chosen.enemy {
+            self.retained_slots[1] = slot;
+        }
         let priorities = self.priorities_of(chosen, false)?;
         match player_action {
             ValidatedPlayerAction::UseMove { slot, move_id, .. } => {
@@ -726,13 +728,11 @@ impl Battle {
                 Ok(ValidatedPlayerAction::UseMove {
                     slot: None,
                     move_id: STRUGGLE,
-                    cursor: slot,
                 })
             }
             PlayerAction::UseMove(slot) => Ok(ValidatedPlayerAction::UseMove {
                 slot: Some(slot),
                 move_id: self.validate_player_move(slot)?,
-                cursor: slot,
             }),
         }
     }
@@ -815,17 +815,16 @@ impl Battle {
                 self.dex.move_data(m.move_id).map(|data| data.priority)
             })
         };
-        let priority = |selection: Selection, battler: &BattlePokemon| match selection {
-            Selection::NoMove => Ok(NO_MOVE_PRIORITY),
-            Selection::Slot(slot) => slot_priority(battler, slot),
-            Selection::Struggle {
-                retained: Some(slot),
-            } if end_turn => slot_priority(battler, slot),
-            Selection::Struggle { .. } => self.dex.move_data(STRUGGLE).map(|data| data.priority),
-        };
+        let priority =
+            |selection: Selection, battler: &BattlePokemon, retained: usize| match selection {
+                Selection::NoMove => Ok(NO_MOVE_PRIORITY),
+                Selection::Slot(slot) => slot_priority(battler, slot),
+                Selection::Struggle if end_turn => slot_priority(battler, retained),
+                Selection::Struggle => self.dex.move_data(STRUGGLE).map(|data| data.priority),
+            };
         Ok(ResidualPriorities {
-            player: priority(chosen.player, &self.player)?,
-            enemy: priority(chosen.enemy, &self.enemy)?,
+            player: priority(chosen.player, &self.player, self.retained_slots[0])?,
+            enemy: priority(chosen.enemy, &self.enemy, self.retained_slots[1])?,
         })
     }
 
@@ -1395,6 +1394,7 @@ mod tests {
             turn_counter: 0,
             turn_has_started: false,
             pending_residual_selection: None,
+            retained_slots: [0; 2],
             last_move_used: MOVE_NONE,
         };
         (battle, player_max_hp, player_move_max_pp)
