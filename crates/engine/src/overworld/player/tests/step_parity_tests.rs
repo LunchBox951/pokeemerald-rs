@@ -141,8 +141,8 @@ fn a_turn_in_place_consumes_a_half_cycle() {
     assert!(player.second_foot_leads());
 }
 
-/// Rust models no bump animation for a collision-blocked step, so a
-/// rejected or still-busy poll leaves the parity alone.
+/// A still-busy poll leaves the parity alone, as does a fresh cycle's first
+/// bump, which only seeks command 1.
 #[test]
 fn blocked_and_busy_polls_leave_the_parity_alone() {
     let runtime = open_runtime(Some(5));
@@ -161,6 +161,26 @@ fn blocked_and_busy_polls_leave_the_parity_alone() {
         player.step(Some(Direction::West), &runtime, &no_connections, &NO_FLAGS),
         StepOutcome::Idle
     );
+    assert_eq!(player.second_foot_leads(), during);
+}
+
+/// A bump started inside an established cycle alternates the foot once, and
+/// swallowed polls during it leave it alone
+/// (`SetStepAnimHandleAlternation`, `event_object_movement.c:4582-4598`).
+#[test]
+fn a_bump_inside_an_established_cycle_alternates_the_foot_once() {
+    let runtime = open_runtime(Some(5));
+    let mut player = PlayerState::new((4, 3), 3, Direction::South);
+    player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS);
+    finish_crossing(&mut player);
+    let before = player.second_foot_leads();
+    assert!(matches!(
+        player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS),
+        StepOutcome::Blocked { .. }
+    ));
+    assert_ne!(player.second_foot_leads(), before);
+    let during = player.second_foot_leads();
+    player.step(None, &runtime, &no_connections, &NO_FLAGS);
     assert_eq!(player.second_foot_leads(), during);
 }
 
