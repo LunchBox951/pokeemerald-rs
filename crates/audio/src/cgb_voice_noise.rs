@@ -42,6 +42,11 @@ fn release_start_volume_write_retriggers_the_noise_lfsr() {
     };
     let mut voice = noise_voice(adsr, WIDE_NOISE, TestNote::default());
     let at_note_on = voice.noise_lfsr();
+    assert_eq!(
+        at_note_on,
+        Some(0),
+        "a trigger resets the LFSR without clocking"
+    );
 
     let mut acc = vec![(0i32, 0i32); 64];
     for _ in 0..3 {
@@ -62,6 +67,7 @@ fn release_start_volume_write_retriggers_the_noise_lfsr() {
          a tick's writes inside the following CgbSound call, not synchronously"
     );
     voice.begin_frame(false);
+    assert_eq!(voice.noise_lfsr(), Some(0));
     assert_eq!(
         voice.noise_lfsr(),
         at_note_on,
