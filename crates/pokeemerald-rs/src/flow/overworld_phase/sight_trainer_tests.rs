@@ -1337,6 +1337,20 @@ fn a_locked_frame_advances_the_players_walk_and_drops_its_latched_landing() {
     );
 }
 
+/// A standing player's held wall bump ends on a locked frame, as the lock's
+/// forced face action does (`PlayerFreeze`, `field_player_avatar.c:1039-1046`).
+#[test]
+fn a_locked_frame_cancels_a_standing_players_wall_bump() {
+    let (rx, ry) = RHETT_TILE;
+    let mut phase = route_103_phase(PlayerState::new((rx, ry + 1), 3, Direction::North));
+    phase.step(held(Buttons::UP));
+    assert!(phase.player.bump_active(), "setup: Rhett blocks the step");
+
+    phase.tick_player_under_approach_lock();
+
+    assert!(!phase.player.bump_active());
+}
+
 /// `EventScript_ShowTrainerIntroMsg` (`trainer_battle.inc:101-107`): the
 /// battle waits for the intro speech, the speech waits for the player, and
 /// only when the box closes does `dotrainerbattle` run -- taking the party
