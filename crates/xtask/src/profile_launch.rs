@@ -93,24 +93,32 @@ mod tests {
     fn command_has_exact_argv() {
         let cmd = smoke_release_command(OsStr::new("cargo"), Path::new("/r"), &["scenes", "smoke"]);
         let argv: Vec<&OsStr> = cmd.get_args().collect();
-        let expected = [
-            "run",
-            "--release",
-            "--locked",
-            "--manifest-path",
-            "/r/Cargo.toml",
-            "-p",
-            "xtask",
-            "--no-default-features",
-            "--features",
-            "scenes,smoke",
-            "--",
-            "e2e",
-            "--suite",
-            "smoke",
-            "--release",
+        // The manifest path takes the platform separator, so it is joined
+        // rather than spelled out.
+        let manifest = Path::new("/r").join("Cargo.toml");
+        let mut expected = vec![
+            OsStr::new("run"),
+            OsStr::new("--release"),
+            OsStr::new("--locked"),
+            OsStr::new("--manifest-path"),
+            manifest.as_os_str(),
         ];
-        assert_eq!(argv, expected.map(OsStr::new));
+        expected.extend(
+            [
+                "-p",
+                "xtask",
+                "--no-default-features",
+                "--features",
+                "scenes,smoke",
+                "--",
+                "e2e",
+                "--suite",
+                "smoke",
+                "--release",
+            ]
+            .map(OsStr::new),
+        );
+        assert_eq!(argv, expected);
         assert_eq!(cmd.get_program(), "cargo");
         assert_eq!(cmd.get_current_dir(), Some(Path::new("/r")));
     }
