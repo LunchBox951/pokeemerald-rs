@@ -5,7 +5,7 @@ use assets::{MoveId, SpeciesId};
 use battle::{BattleOutcome, BattlePokemon, Dex, Ivs};
 use engine::overworld::wild_encounter::WildEncounter;
 
-use crate::flow::save_continue_tests::new_game_phase;
+use crate::flow::save_continue_support::new_game_phase;
 use crate::new_game;
 
 use super::{ActiveBattle, OverworldPhase};

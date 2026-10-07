@@ -89,9 +89,9 @@ impl Error for CliError {}
 ///
 /// `args` is what [`std::env::args_os`] yields after the program name. An
 /// empty slice is [`Command::Play`], the case every player hits. Paths are
-/// bytes on Linux, so the ROM path stays an `OsStr`; only flag tokens need
-/// to be UTF-8. That holds for `--import-rom=<path>` too: the prefix is
-/// matched on bytes, so the path after `=` is never decoded.
+/// native OS strings, so the ROM path stays an `OsStr`; only flag tokens
+/// need to be UTF-8. That holds for `--import-rom=<path>` too: the prefix is
+/// matched on encoded bytes, so the path after `=` is never decoded.
 ///
 /// Arguments are read left to right. `--help` wins wherever it is read as
 /// a flag; the token after `--import-rom` is always a path.
@@ -129,31 +129,19 @@ pub fn parse(args: &[OsString]) -> Result<Command, CliError> {
 
 /// Split `--import-rom=<path>` into its path, without decoding the path.
 ///
-/// On Unix an `OsStr` is bytes, and a ROM path is free to be any of them:
-/// `/roms/pok\xe9mon.gba` is a real filename that is not UTF-8. Testing
-/// the prefix on bytes keeps the whole token from having to decode, so
-/// the inline form accepts exactly the paths the separate form does.
-/// Returns `None` when `arg` is not the inline form at all.
-#[cfg(unix)]
+/// A ROM path is free to be any native string: `/roms/pok\xe9mon.gba` on
+/// Unix or a path with a lone UTF-16 surrogate on Windows is a real
+/// filename that is not Unicode. The ASCII prefix is tested on the encoded
+/// bytes, so the inline form accepts exactly the paths the separate form
+/// does. Returns `None` when `arg` is not the inline form at all.
 fn strip_import_rom_eq(arg: &OsStr) -> Option<&OsStr> {
-    use std::os::unix::ffi::OsStrExt as _;
-
-    arg.as_bytes()
-        .strip_prefix(IMPORT_ROM_EQ.as_bytes())
-        .map(OsStr::from_bytes)
-}
-
-/// Split `--import-rom=<path>` into its path.
-///
-/// Off Unix `std` exposes no byte view of an `OsStr`, so the token is
-/// matched as text and an undecodable one is not the inline form. Windows
-/// paths are UTF-16 and decode here except for unpaired surrogates, which
-/// no file the player can name for us carries.
-#[cfg(not(unix))]
-fn strip_import_rom_eq(arg: &OsStr) -> Option<&OsStr> {
-    arg.to_str()
-        .and_then(|text| text.strip_prefix(IMPORT_ROM_EQ))
-        .map(OsStr::new)
+    let value = arg
+        .as_encoded_bytes()
+        .strip_prefix(IMPORT_ROM_EQ.as_bytes())?;
+    // SAFETY: `value` comes from `arg.as_encoded_bytes()` in this process
+    // and is split immediately after a nonempty ASCII (valid UTF-8) prefix,
+    // a boundary `from_encoded_bytes_unchecked` documents as permitted.
+    Some(unsafe { OsStr::from_encoded_bytes_unchecked(value) })
 }
 
 /// Accept one `--import-rom` value, rejecting a repeat or an empty path.
@@ -253,6 +241,46 @@ mod tests {
         let token = OsString::from_vec(b"--import-rom\xff=/roms/emerald.gba".to_vec());
         assert!(matches!(
             parse(&[token]).unwrap_err(),
+            CliError::UnexpectedArg(_)
+        ));
+    }
+
+    /// Both spellings preserve native Windows paths containing lone surrogates.
+    #[cfg(windows)]
+    #[test]
+    fn a_non_unicode_windows_rom_path_survives_both_forms() {
+        use std::os::windows::ffi::OsStringExt as _;
+
+        for surrogate in [0xd800, 0xdc00] {
+            let mut wide: Vec<u16> = r"C:\roms\".encode_utf16().collect();
+            wide.push(surrogate);
+            wide.extend(".gba".encode_utf16());
+            let path = OsString::from_wide(&wide);
+            assert!(path.to_str().is_none());
+
+            let mut inline = OsString::from("--import-rom=");
+            inline.push(&path);
+            let expected = Command::ImportRom {
+                path: PathBuf::from(path.clone()),
+            };
+            assert_eq!(
+                parse(&[OsString::from("--import-rom"), path]),
+                Ok(expected.clone())
+            );
+            assert_eq!(parse(&[inline]), Ok(expected));
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_non_unicode_windows_token_without_the_inline_prefix_is_rejected() {
+        use std::os::windows::ffi::OsStringExt as _;
+
+        let mut wide: Vec<u16> = "--import-rom".encode_utf16().collect();
+        wide.push(0xd800);
+        wide.extend(r"=C:\roms\emerald.gba".encode_utf16());
+        assert!(matches!(
+            parse(&[OsString::from_wide(&wide)]).unwrap_err(),
             CliError::UnexpectedArg(_)
         ));
     }

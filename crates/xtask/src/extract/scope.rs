@@ -75,3 +75,32 @@ pub(crate) fn title_ids() -> Vec<String> {
         .map(|s| format!("title/palette/{s}"));
     images.into_iter().chain(tilemaps).chain(palettes).collect()
 }
+
+#[derive(Clone, Copy)]
+pub(crate) struct FontSource {
+    pub(crate) filename: &'static str,
+    pub(crate) pack_id: &'static str,
+}
+
+pub(crate) const FONTS: [FontSource; 5] = [
+    FontSource {
+        filename: "latin_small.png",
+        pack_id: "font/small/glyphs",
+    },
+    FontSource {
+        filename: "latin_normal.png",
+        pack_id: "font/normal/glyphs",
+    },
+    FontSource {
+        filename: "latin_short.png",
+        pack_id: "font/short/glyphs",
+    },
+    FontSource {
+        filename: "latin_narrow.png",
+        pack_id: "font/narrow/glyphs",
+    },
+    FontSource {
+        filename: "latin_small_narrow.png",
+        pack_id: "font/small_narrow/glyphs",
+    },
+];
