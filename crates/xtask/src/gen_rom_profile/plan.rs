@@ -74,7 +74,9 @@ pub struct ReportLine {
     pub resolution: Resolution,
     /// What a linker map should say about this address.
     pub symbol: SymbolExpectation,
-    /// A resolved duplicate, or a pack entry the ROM disagrees with.
+    /// Context a report reader needs to interpret the line, such as how a
+    /// duplicate was resolved, what was counted or seeded, or which map
+    /// symbols the `--map` cross-check found.
     pub note: Option<String>,
 }
 
