@@ -1,11 +1,5 @@
-//! Shed Skin's end-turn cure draw, driven through real turns.
-//!
-//! The draw shape lives in `battle::status1::draws_shed_skin_cure`; what is
-//! pinned here is the turn wiring that draw cannot reach on its own: a
-//! healthy holder draws nothing, a statused holder's miss and cure outcomes,
-//! multi-battler residual order, the cure mutation and its event, that the
-//! cure precedes the same battler's poison tick, and that a battle already
-//! decided before residual never reaches the draw at all.
+//! Shed Skin's end-turn cure draw through real turns. The draw itself is
+//! `battle::status1::draws_shed_skin_cure`; these tests cover its turn wiring.
 
 use crate::common::{max_iv_mon, SequenceRng};
 use assets::trainers::TrainerId;
@@ -15,58 +9,45 @@ use battle::{
     Battle, BattleError, BattleEvent, BattleOutcome, Dex, MoveLearnDecision, PlayerAction, Status1,
 };
 
-/// `MOVE_TACKLE`.
 const TACKLE: MoveId = MoveId::TACKLE;
-/// `MOVE_SCRATCH`.
 const SCRATCH: MoveId = MoveId::SCRATCH;
-/// `MOVE_GROWL`.
 const GROWL: MoveId = MoveId::GROWL;
-/// `MOVE_LEER`.
 const LEER: MoveId = MoveId::LEER;
-/// `MOVE_POUND`.
 const POUND: MoveId = MoveId::POUND;
-/// `MOVE_POISON_TAIL`, [`SEVIPER`]'s level-16 learnset entry.
+/// [`SEVIPER`]'s level-16 learnset entry.
 const POISON_TAIL: MoveId = MoveId::POISON_TAIL;
 
-/// `SPECIES_SEVIPER`: Poison, Shed Skin in its only ability slot, raw Speed
-/// 21 at level 10 -- faster than [`ZIGZAGOON`] and [`DRATINI`].
+/// Shed Skin in its only ability slot; at level 10 faster than [`ZIGZAGOON`]
+/// and [`DRATINI`].
 const SEVIPER: u16 = 379;
-/// `SPECIES_ZIGZAGOON`: an ordinary Normal-type opponent with no ability
-/// this residual pass reads, slower than [`SEVIPER`].
+/// Has no ability the residual pass reads; slower than [`SEVIPER`].
 const ZIGZAGOON: u16 = 288;
-/// `SPECIES_DRATINI`: Dragon, Shed Skin in its only ability slot, slower
-/// than [`SEVIPER`].
+/// Shed Skin in its only ability slot; slower than [`SEVIPER`].
 const DRATINI: u16 = 147;
-/// `SPECIES_RATTATA`, a weak level-5 fixture [`SEVIPER`] one-shots with
-/// Tackle at level 50, so the wild win decides the battle before residual
-/// ever runs.
+/// A level-5 Rattata that a level-50 [`SEVIPER`] knocks out in one Tackle.
 const RATTATA: u16 = 19;
-/// `SPECIES_TREECKO`, [`MAY_ROUTE_103_MUDKIP`]'s two-mon bench.
 const TREECKO: u16 = 277;
-/// `SPECIES_DUNSPARCE`: Serene Grace in its primary ability slot, the
-/// ability `secondary::ensure_admissible` refuses to admit once a Poison
-/// Sting could newly land.
+/// Serene Grace in its primary ability slot.
 const DUNSPARCE: u16 = 206;
-/// `MOVE_POISON_STING`, a 30% `EFFECT_POISON_HIT` move Serene Grace doubles
-/// to 60%; this crate does not model that doubling, so
-/// `secondary::ensure_admissible` refuses it instead.
+/// A 30% poison secondary that Serene Grace doubles to 60%. The doubling is
+/// unmodelled, so `secondary::ensure_admissible` refuses the pairing whenever
+/// the poison could newly land.
 const POISON_STING: MoveId = MoveId::POISON_STING;
-/// May's Route 103 starter-rival trainer, whose party this fixture replaces
-/// with two [`TREECKO`] so the bench survives the first knockout.
+/// Its party is replaced with two [`TREECKO`] so the bench survives the first
+/// knockout.
 const MAY_ROUTE_103_MUDKIP: TrainerId = TrainerId(529);
 
-/// Both battlers use Tackle, every roll on its default branch: turn number,
-/// the (absent) speed-tie draw, the enemy's selection, the (absent) order
-/// tie, the player's hit (accuracy / crit / roll / discarded effect chance),
-/// then the enemy's hit the same way.
+/// Draws for a turn where both battlers use Tackle: construction's turn-number
+/// draw, the turn-start draw, the enemy's move selection, then per acting
+/// battler accuracy, crit, damage roll, and a discarded secondary-effect draw.
+/// The `1`s are the crit draws, which do not crit. No speed or order tie draws.
 const BOTH_BATTLERS_TACKLE: [u16; 11] = [0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0];
-/// The player's Tackle fells the enemy before it acts, leaving no residual
-/// pass for the turn to reach.
+/// [`BOTH_BATTLERS_TACKLE`] truncated after the player's hit, which knocks the
+/// enemy out before it acts.
 const PLAYER_ACTS_ALONE: [u16; 7] = [0, 0, 0, 0, 1, 0, 0];
 
-/// A one-in-three draw that misses (`1 % 3 != 0`).
+/// The cure succeeds exactly when the draw is a multiple of three.
 const CURE_MISS_DRAW: u16 = 1;
-/// A one-in-three draw that cures (`0 % 3 == 0`).
 const CURE_HIT_DRAW: u16 = 0;
 
 #[test]
@@ -77,9 +58,7 @@ fn a_healthy_shed_skin_holder_draws_nothing_and_reports_no_cure() {
     assert_eq!(player.status1(), Status1::Healthy);
     let enemy = max_iv_mon(&dex, ZIGZAGOON, 10, vec![TACKLE]);
 
-    // Exactly the draws an ordinary Tackle exchange needs: if a healthy
-    // holder's Shed Skin drew anyway, this array would run out and the turn
-    // would panic instead of completing.
+    // No spare draws: a Shed Skin draw here would exhaust the sequence and panic.
     let mut rng = SequenceRng::new(BOTH_BATTLERS_TACKLE);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
@@ -160,8 +139,8 @@ fn a_statused_shed_skin_holder_that_hits_the_cure_draw_clears_its_status_before_
         !events
             .iter()
             .any(|event| matches!(event, BattleEvent::HurtByPoison { .. })),
-        "ABILITYEFFECT_ENDTURN's Shed Skin case precedes ENDTURN_POISON within the same \
-         battler's pass, so a cured status never ticks the same turn: {events:?}"
+        "Shed Skin (`ABILITYEFFECT_ENDTURN`) runs before `ENDTURN_POISON` in a battler's \
+         pass, so a cured status never ticks: {events:?}"
     );
     assert_eq!(battle.player().status1(), Status1::Healthy);
 }
@@ -214,10 +193,8 @@ fn both_battlers_shed_skin_cures_resolve_in_the_turns_own_order() {
     assert_eq!(battle.enemy().status1(), Status1::Healthy);
 }
 
-/// A won battle routes through `HandleEndTurn_BattleWon`, never
-/// `HandleEndTurn_ContinueBattle`'s `DoBattlerEndTurnEffects`
-/// (`src/battle_main.c:4937`-`:4952`), so a surviving statused winner's own
-/// Shed Skin draw never runs the turn its win is decided.
+/// A won battle takes `HandleEndTurn_BattleWon`, skipping
+/// `DoBattlerEndTurnEffects` (`src/battle_main.c:4937`-`:4952`).
 #[test]
 fn a_direct_hit_wild_ko_ends_the_battle_before_the_winners_shed_skin_cure_can_draw() {
     let dex = Dex::new();
@@ -246,12 +223,9 @@ fn a_direct_hit_wild_ko_ends_the_battle_before_the_winners_shed_skin_cure_can_dr
     assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerWon));
 }
 
-/// `Battle::resolve_move_learn` releases the residual pass a pending prompt
-/// held back (`src/battle_util.c:1912`-`:1923`, `:3960`-`:3968`), so the
-/// caller's `rng` must still feed a Shed Skin holder's own cure draw once
-/// the deferred pass finally runs -- exactly the boundary
-/// `crate::flow::move_learn::settle_move_learn_prompts` threads its own
-/// `rng` across in `crates/pokeemerald-rs`.
+/// The residual pass held back by a move-learn prompt runs when the prompt is
+/// answered (`src/battle_util.c:1912`-`:1923`, `src/battle_main.c:3960`-`:3968`),
+/// so `resolve_move_learn`'s `rng` must feed the deferred cure draw.
 #[test]
 fn resolve_move_learn_threads_rng_into_the_deferred_shed_skin_cure_draw() {
     let dex = Dex::new();
@@ -268,9 +242,7 @@ fn resolve_move_learn_threads_rng_into_the_deferred_shed_skin_cure_draw() {
         max_iv_mon(&dex, TREECKO, 5, vec![POUND, LEER]),
     ];
 
-    // `u16::MAX` clears every accuracy/crit/damage-roll branch's default
-    // arm and is itself a multiple of 3, so every Shed Skin draw it reaches
-    // cures.
+    // `u16::MAX` is a multiple of 3, so every Shed Skin draw cures.
     let mut rng = SequenceRng::new([u16::MAX; 128]);
     let mut battle =
         Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, party, &mut rng).unwrap();
@@ -322,11 +294,10 @@ fn resolve_move_learn_threads_rng_into_the_deferred_shed_skin_cure_draw() {
     assert_eq!(battle.outcome(), None, "the battle plays on");
 }
 
-/// Construction admitted Serene Grace's Poison Sting only because the
-/// statused player could not be poisoned; once Shed Skin cures the player,
-/// the pre-turn re-screen must refuse the next turn before its own RNG runs,
-/// not let Poison Sting silently reach the executor's undoubled 30% chance.
-/// A draw of 48 would land under upstream's doubled 60% threshold.
+/// Construction admits Poison Sting only because the statused player cannot be
+/// poisoned. The draw 48 is a multiple of 3 (cures Shed Skin) and lies in
+/// `30..60`, so it would poison under Serene Grace's doubled chance but not the
+/// executor's undoubled one.
 #[test]
 fn serene_grace_poison_sting_after_a_shed_skin_cure_is_not_silently_undoubled() {
     let dex = Dex::new();
@@ -378,9 +349,8 @@ fn serene_grace_poison_sting_after_a_shed_skin_cure_is_not_silently_undoubled() 
     );
 }
 
-/// A faster player's wild escape never lets the enemy act
-/// (`src/battle_util.c:463`-`:465`), so the Shed Skin cure that flips Serene
-/// Grace Poison Sting's admission must not refuse `PlayerAction::Run`.
+/// A faster player's wild escape always succeeds before the enemy acts
+/// (`src/battle_util.c:463`-`:472`), so the cure must not refuse `Run`.
 #[test]
 fn faster_player_can_still_run_after_a_shed_skin_cure_flips_serene_grace_admission() {
     let dex = Dex::new();
@@ -401,8 +371,7 @@ fn faster_player_can_still_run_after_a_shed_skin_cure_flips_serene_grace_admissi
     assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerRan));
 }
 
-/// A cured player who is slower than the enemy can fail to escape, letting
-/// Poison Sting execute undoubled, so that Run keeps the pre-turn refusal.
+/// A slower player's escape can fail, letting Poison Sting execute undoubled.
 #[test]
 fn slower_player_run_after_a_shed_skin_cure_still_refuses_serene_grace() {
     let dex = Dex::new();

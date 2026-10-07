@@ -305,6 +305,43 @@ fn a_fresh_start_ends_a_turns_busy_window_on_the_frame_the_menu_opens() {
     );
 }
 
+/// A turn the field lock cancels never reaches its tile-centre observation,
+/// so nothing replays once the menu closes.
+#[test]
+fn a_turn_cancelled_by_start_is_never_observed_by_the_wild_check() {
+    let mut phase = synthetic_phase(PlayerState::new((4, 6), 3, Direction::West), None);
+    phase.synthetic_start_menu = SyntheticStartMenu::Builds;
+
+    phase.step(held(Buttons::UP));
+    phase.step(pressed(Buttons::START));
+    phase.start_menu = None;
+    for _ in 0..(2 * engine::overworld::TURN_IN_PLACE_FRAMES) {
+        phase.step(ButtonState::new());
+    }
+    assert_eq!(phase.wild.immunity_steps(), 0);
+}
+
+/// A blocked step's slow in-place walk holds through neutral polls and ends
+/// on the frame START takes the field lock (`PlayerFreeze`).
+#[test]
+fn a_wall_bump_swallows_a_release_and_ends_on_the_frame_the_menu_opens() {
+    let mut phase = synthetic_phase(PlayerState::new((3, 6), 3, Direction::West), None);
+    phase.synthetic_start_menu = SyntheticStartMenu::Builds;
+
+    phase.step(held(Buttons::LEFT));
+    assert!(phase.player.bump_active(), "setup: Mom blocks the step");
+
+    phase.step(ButtonState::default());
+    assert!(
+        phase.player.bump_active(),
+        "a released direction does not end the bump"
+    );
+
+    phase.step(pressed(Buttons::START));
+    assert!(phase.start_menu().is_some(), "setup: the menu opened");
+    assert!(!phase.player.bump_active());
+}
+
 /// The interaction claiming the frame is upstream's lock
 /// (`field_control_avatar.c:172`); the box itself needs a pack this suite lacks.
 #[test]

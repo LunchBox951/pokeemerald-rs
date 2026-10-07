@@ -67,5 +67,5 @@ impl SaveTarget for FakeTarget {
 
 /// Frames one flow gets before a test calls it wedged -- generous enough for
 /// the longest WARNING message at `TextSpeed::Mid`
-/// (`crate::flow::save_continue_tests` documents the arithmetic).
+/// (`crate::flow::save_continue_support` documents the arithmetic).
 pub(super) const FRAME_BUDGET: usize = 4_000;

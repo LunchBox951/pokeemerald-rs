@@ -1,16 +1,14 @@
 //! Locating object-event sprite sheets and their palettes.
 //!
-//! The sheets are ordinary uncompressed art, so [`super::images`] handles
-//! them, duplicates included.
+//! Sheets are uncompressed art located through [`super::images`], which
+//! also handles duplicates.
 //!
-//! The palettes are not. Several object-event banks appear two or three
-//! times in the ROM, and unlike duplicate art the copies are *not*
-//! interchangeable: only one of them is the bank the game loads under a
-//! given tag. The tie is broken through `sObjectEventSpritePalettes`, the
-//! `{data, tag}` table `src/event_object_movement.c` declares. At least one
-//! bank in the set is unique, so its own entry in that table locates the
-//! table; the table's extent then says which copy of an ambiguous bank is
-//! the real one.
+//! Several object-event palette banks appear two or three times in the ROM,
+//! and unlike duplicate art only one copy is the bank the game loads under
+//! a tag. `sObjectEventSpritePalettes`, the `{data, tag}` table in
+//! `src/event_object_movement.c`, picks it. A unique bank's table entry
+//! locates the table, whose extent then selects the real copy of each
+//! ambiguous bank.
 
 use super::error::GenRomProfileError;
 use super::images::{locate_images, ImageQuery};
@@ -19,16 +17,15 @@ use super::plan::{PalettePlan, ReportLine, Resolution, SpritePlan};
 use super::tilesets::len32;
 use super::Context;
 
-/// One `struct SpritePalette` is a pointer, a `u16` tag, and two bytes of
+/// One `struct SpritePalette`: a pointer, a `u16` tag, and two bytes of
 /// padding.
 const RECORD_BYTES: u32 = 8;
 /// Offset of the `tag` field inside a record.
 const FIELD_TAG: u32 = 4;
 /// Offset of the padding after the tag.
 const FIELD_PADDING: u32 = 6;
-/// How far a neighbouring record's tag may sit from the seed's before the
-/// table is assumed to have ended. Object-event tags are allocated as one
-/// dense block, so a neighbour is always close.
+/// Exclusive bound on a neighbour's tag distance from the seed record for it
+/// to still belong to the table. Object-event tags form one dense block.
 const TAG_SPREAD: u16 = 0x100;
 
 /// Locate every object-event sprite sheet and palette.
