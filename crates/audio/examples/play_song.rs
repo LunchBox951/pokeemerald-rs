@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use audio::{decode_track, Adsr, Instrument, Sequencer, Song, ToneData, WaveData, MIXER_RATE};
-use platform::audio::PlaybackProgress;
+use platform::audio::{PlaybackProgress, UsableReading};
 use platform::{AudioOutput, PlatformError, Producer, GBA_FRAME_PERIOD};
 
 const RING_CAPACITY_FRAMES: usize = 4096;
@@ -521,38 +521,18 @@ fn longest(samples: impl IntoIterator<Item = Duration>) -> Duration {
     samples.into_iter().max().unwrap_or_default()
 }
 
-/// When a usable reading with `sounded` frames sounded, seen at a poll at
-/// `seen_at` with `submitted` frames and the reading's `usable_through` mark,
-/// lets `target` sound: the reading's remaining frames at
-/// `device_sample_rate`, run from `seen_at` less the reading's age.
-///
-/// The snapshot carries no reading time, and the frames the stale callbacks
-/// submitted after the mark are not elapsed time: a host refilling its queue
-/// runs callbacks faster than playback. So those frames count as age only up
-/// to `max_age`. At the first snapshot that is none past the
-/// [`HOST_QUEUED_PERIODS`] of queue the derived tail already covers (see
-/// [`device_tail_wait`]), so a mark seconds behind is mostly paid while one a
-/// few callbacks behind keeps its whole debt. Inside the wait the caller also
-/// holds the due to the previous poll plus the usable buffer, which credits at
-/// most the poll gap. An extrapolation, not a bound: a host that queues more
-/// than the derived tail still makes a reading look older than it is. `None` only when the stamp lies before the
-/// clock's origin.
-fn reading_due(
-    seen_at: Instant,
-    target: u64,
-    sounded: u64,
-    progress: (u64, u64),
-    max_age: Duration,
-    device_sample_rate: u32,
-) -> Option<Instant> {
-    let (submitted, usable_through) = progress;
-    let owed = frames_duration(target.saturating_sub(sounded), device_sample_rate);
-    let age =
-        frames_duration(submitted.saturating_sub(usable_through), device_sample_rate).min(max_age);
-    match owed.checked_sub(age) {
-        Some(ahead) => Some(seen_at + ahead),
-        None => seen_at.checked_sub(age.saturating_sub(owed)),
-    }
+/// When `target` sounds according to `reading`: its callback's observation
+/// time plus the frames it still owed, startup delay included, at
+/// `device_sample_rate`. The stamp is the callback's own, so however many
+/// stale callbacks or late polls followed, the reading's debt is exact.
+/// `None` only when the sum overflows the clock.
+fn reading_due(reading: UsableReading, target: u64, device_sample_rate: u32) -> Option<Instant> {
+    let owed = reading
+        .startup_delay_frames
+        .saturating_add(target.saturating_sub(reading.sounded_frames));
+    reading
+        .observed_at
+        .checked_add(frames_duration(owed, device_sample_rate))
 }
 
 /// How this wait has actually been polling: the shortest of the recent poll
@@ -648,6 +628,7 @@ fn wait_for_measured_tail(
     let mut tail_started = started;
     let mut measured_due = started;
     let mut last_submitted = None;
+    let mut last_reading = None;
     let mut last_poll = started;
     let mut last_advance = None;
     // Each cadence sample beside the polling resolution it was seen at.
@@ -670,6 +651,7 @@ fn wait_for_measured_tail(
             sounded_frames: sounded,
             submitted_frames: submitted,
             usable_through_frames: usable_through,
+            usable_reading,
         }) = snapshot
         else {
             return Ok(());
@@ -678,56 +660,25 @@ fn wait_for_measured_tail(
             return Ok(());
         }
         let current = now();
-        // A usable reading already in the first snapshot owes its playback
-        // too (see [`reading_due`]). A mark ahead of the submitted total is a
-        // callback in flight, judged once its frames land.
-        if last_submitted.is_none() && usable_through > 0 && usable_through <= submitted {
-            // No wall clock has run since the mark yet: only frames past the
-            // queue the derived tail covers count as its age.
-            let queued = frames_duration(submitted - usable_through, device_sample_rate)
-                .saturating_sub(derived_tail);
-            let due = reading_due(
-                current,
-                target,
-                sounded,
-                (submitted, usable_through),
-                queued,
-                device_sample_rate,
-            );
-            measured_due = measured_due.max(due.unwrap_or(measured_due));
+        // A usable reading short of the target says how much playback it
+        // still owed: stale callbacks after it must not finish the wait
+        // before that has run at the device rate from the callback that took
+        // it, however many stale callbacks or late polls came since. Never
+        // lowered by a later reading.
+        if let Some(reading) = usable_reading.filter(|&reading| Some(reading) != last_reading) {
+            last_reading = Some(reading);
+            measured_due = measured_due
+                .max(reading_due(reading, target, device_sample_rate).unwrap_or(measured_due));
         }
         // A mark past the submitted total is a callback in flight, proving
         // nothing about the frames submitted; once they land it discards the
         // pending stale evidence.
         let in_flight = usable_through > submitted;
-        if let Some(prev) =
-            last_submitted.filter(|&prev| usable_callback_in_span(prev, submitted, usable_through))
+        if last_submitted
+            .is_some_and(|prev| usable_callback_in_span(prev, submitted, usable_through))
         {
             (first_stale, last_stale, max_stale_advance) = (None, None, Duration::ZERO);
             after_stall = false;
-            // A usable reading short of the target says how much playback it
-            // still owed: stale callbacks after it must not finish the wait
-            // before that has run at the device rate from the reading. The
-            // snapshot carries no reading time, so stamp it at the later of
-            // two estimates: the previous poll plus the usable frames past it
-            // (late when the poll was prompt) and this poll less the stale
-            // playback since the mark (see [`reading_due`]; late when the poll
-            // was delayed). Neither is a bound, but the later never finishes
-            // sooner than either. Never lowered by a later reading.
-            let played = frames_duration(usable_through - prev, device_sample_rate);
-            let credited = current.min(last_poll + played)
-                + frames_duration(target - sounded, device_sample_rate);
-            // The previous-poll stamp already holds the due to at least the
-            // poll gap's worth of age, so the stale frames need no cap here.
-            let seen = reading_due(
-                current,
-                target,
-                sounded,
-                (submitted, usable_through),
-                Duration::MAX,
-                device_sample_rate,
-            );
-            measured_due = measured_due.max(credited).max(seen.unwrap_or(credited));
         }
         let mut pause_sample = None;
         if let Some(previous) = last_submitted.filter(|&last| submitted > last) {
