@@ -1,5 +1,3 @@
-//! Equal-tick semantic ordering after parsing and silent-note retention.
-
 use super::super::{compile, SongEvent};
 use super::support::*;
 
@@ -48,11 +46,8 @@ fn an_over_long_zero_delta_preserves_the_prior_absolute_tick() {
 
 #[test]
 fn a_same_tick_velocity_zero_note_on_precedes_an_extended_command_selector() {
-    // The retained velocity-zero note-on shares tick 4 with the selector.
-    // Upstream's type-zero event sorts before the controller, so the
-    // selector still owns the outgoing 10-tick gap and suppresses its first
-    // wait chunk; ordering it after the selector would give the selector a
-    // zero gap to suppress and surface a Wait(10) instead.
+    // Upstream sorts the retained type-zero note-on before controllers at the same tick
+    // (`tools/mid2agb/midi.cpp:553-557,565-585`; `tools/mid2agb/midi.h:34-50`).
     let mut body = Vec::new();
     push_timed(&mut body, 0, note_on(0, 60, 100));
     push_timed(

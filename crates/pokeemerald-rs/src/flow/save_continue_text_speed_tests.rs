@@ -3,7 +3,7 @@
 use platform::Buttons;
 
 use super::overworld_phase::{saved_map_id, OverworldPhase};
-use super::save_continue_tests::{
+use super::save_continue_support::{
     new_game_phase, save_from_the_start_menu, settle, SAVE_FLOW_FRAME_BUDGET,
 };
 use super::tests::{held, pressed, TempSave};

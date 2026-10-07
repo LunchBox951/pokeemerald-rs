@@ -18,7 +18,6 @@ const MILOTIC: u16 = 329;
 const BEST_DAMAGE_DRAW: u16 = 0;
 /// A damage roll draw producing the minimum 85% roll.
 const WORST_DAMAGE_DRAW: u16 = 15;
-/// A crit draw that never crits.
 const NO_CRIT_DRAW: u16 = 1;
 
 /// Upstream's `STATUS1_POISON` case does not guard Guts
@@ -40,8 +39,8 @@ fn poison_sting_newly_poisons_a_guts_defender_who_then_hits_harder() {
         "fixture sanity: personality 25 fields the secondary ability slot"
     );
 
-    // Battle::new, turn start, and enemy selection, then each mover's
-    // accuracy/crit/damage/effect-chance draws (`secondary::spend_effect_chance_draw`).
+    // Same layout as `POISON_STING_LANDS`, with the damage rolls named
+    // (`secondary::spend_effect_chance_draw` owns the effect-chance draw).
     let mut rng = SequenceRng::new([
         0,
         0,
@@ -108,9 +107,9 @@ fn poison_sting_newly_poisons_a_marvel_scale_defender_who_then_takes_less_damage
         "fixture sanity: the only ability slot fields Marvel Scale"
     );
 
-    // Battle::new, then two turns' worth of turn start, enemy selection,
-    // and each mover's accuracy/crit/damage/effect-chance draws
-    // (`secondary::spend_effect_chance_draw`).
+    // Two turns, each laid out as in `POISON_STING_LANDS` after the
+    // battle-start draw (`secondary::spend_effect_chance_draw` owns the
+    // effect-chance draw).
     let mut rng = SequenceRng::new([
         0,
         0,
