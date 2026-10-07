@@ -108,6 +108,8 @@ pub(super) struct Snapshot {
     pub(super) encryption_key: u32,
 }
 
+/// Captures the player-visible overworld state a save-then-continue round
+/// trip must reproduce, read from the phase rather than from the save bytes.
 pub(super) fn snapshot(phase: &OverworldPhase) -> Snapshot {
     let flags: &EventData = &phase.save1.event_data;
     Snapshot {
