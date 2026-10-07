@@ -494,6 +494,20 @@ fn a_locked_frame_advances_the_players_walk_and_drops_its_latched_landing() {
     );
 }
 
+/// A standing player's held wall bump ends on a locked frame, as the lock's
+/// forced face action does (`PlayerFreeze`, `field_player_avatar.c:1039-1046`).
+#[test]
+fn a_locked_frame_cancels_a_standing_players_wall_bump() {
+    let (rx, ry) = RHETT_TILE;
+    let mut phase = route_103_phase(PlayerState::new((rx, ry + 1), 3, Direction::North));
+    phase.step(held(Buttons::UP));
+    assert!(phase.player.bump_active(), "setup: Rhett blocks the step");
+
+    phase.tick_player_under_approach_lock();
+
+    assert!(!phase.player.bump_active());
+}
+
 /// The trigger frame itself drains the last tick of the player's step: the
 /// drain frame is `step.rs`'s trigger path, not the approach driver, so the
 /// two after-drain handoff frames must still be spent before the icon.
