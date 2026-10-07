@@ -442,6 +442,7 @@ impl OverworldPhase {
         self.player.tick();
         if settled {
             self.player.release_run_pose();
+            self.player.cancel_bump();
         }
         self.pending_landing = None;
     }
