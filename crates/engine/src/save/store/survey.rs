@@ -17,6 +17,7 @@ const PKMN_STORAGE_IDS_MASK: u32 =
 
 /// Ids 0-4: the sectors `GetSaveValidStatus` requires of a generation.
 const SAVE_BLOCK_IDS: u32 = LEGACY_ERA_IDS_MASK;
+const PKMN_STORAGE_FIRST_ID: usize = SECTOR_ID_PKMN_STORAGE_START as usize;
 
 /// Compares counters from adjacent save generations, including the sole
 /// `u32::MAX` to zero wrap.
@@ -64,6 +65,10 @@ pub(super) struct SlotScan {
     /// Generation of a complete storage set (ids 5-13) in this slot,
     /// whatever the slot's own integrity (`SlotSurvey::storage_generation`).
     pub(super) storage_counter: Option<u32>,
+    /// The footer counter a strict majority of the slot's checksum-valid
+    /// sectors carry. Unlike `counter`, which is the last valid sector's (as
+    /// upstream reads it), a minority of damaged footers cannot move it.
+    pub(super) majority_counter: Option<u32>,
 }
 
 /// The physical slots [`super::SaveStore::load`] copies each half of its result
@@ -233,6 +238,21 @@ impl SlotSurvey {
         outlier_is_accepted.then_some(generation)
     }
 
+    /// The counter shared by more than half of the checksum-valid sectors.
+    fn majority_counter(&self) -> Option<u32> {
+        let storage = (0..PKMN_STORAGE_CHUNKS)
+            .filter(|&chunk| self.storage_valid_ids & (1 << (chunk + PKMN_STORAGE_FIRST_ID)) != 0)
+            .map(|chunk| self.storage_counters[chunk]);
+        let counters = self.save_block_counters[..self.save_block_count]
+            .iter()
+            .copied()
+            .chain(storage);
+        let total = counters.clone().count();
+        counters
+            .clone()
+            .find(|&candidate| 2 * counters.clone().filter(|&c| c == candidate).count() > total)
+    }
+
     /// Whether `counter` follows one this slot carries by the two-slot stride
     /// of upstream's `WriteSaveSectorOrSlot` (`pokeemerald/src/save.c:138-173`).
     fn is_next_write_into_this_slot(&self, generation: u32, counter: u32) -> bool {
@@ -345,6 +365,7 @@ impl SlotSurvey {
             counter,
             legacy: legacy_intact,
             storage_counter,
+            majority_counter: self.majority_counter(),
         }
     }
 }
@@ -414,8 +435,13 @@ fn resolve_both_ok(slot0: &SlotScan, slot1: &SlotScan) -> (SaveStatus, u32, Opti
         // The newer legacy head borrows the newest storage set. An `Ok` full
         // slot's storage belongs to its generation even when its footer
         // counters do not agree: upstream's `GetSaveValidStatus` judges
-        // sectors by checksum alone (`pokeemerald/src/save.c:512-570`).
-        let full_storage = full.storage_counter.or(Some(full.counter));
+        // sectors by checksum alone (`pokeemerald/src/save.c:512-570`). That
+        // generation is the majority footer counter, not `full.counter`,
+        // which a damaged final sector would supply.
+        let full_storage = full
+            .storage_counter
+            .or(full.majority_counter)
+            .or(Some(full.counter));
         let (left, right) = if slot0.legacy {
             (slot0.storage_counter, full_storage)
         } else {

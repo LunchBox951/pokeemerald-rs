@@ -705,12 +705,19 @@ fn a_mixed_merge_keeps_an_intact_full_slots_storage_without_verified_counters() 
     let stale_storage = vec![0xAAu8; PKMN_STORAGE_PAYLOAD_LEN];
     let full_storage = vec![0xCCu8; PKMN_STORAGE_PAYLOAD_LEN];
 
-    // (legacy slot, legacy tail counter if any, full counter, head counter)
-    for (legacy_slot, tail_counter, full_counter, head_counter) in [
-        (0usize, None, 3u32, 6u32),
-        (1, None, 2, 5),
-        (0, Some(2u32), 5, 8),
-        (1, Some(1), 4, 7),
+    // (legacy slot, legacy tail counter if any, full counter, head counter,
+    // restamped full-slot positions and their damaged counters)
+    let early = [(5usize, 0xDEAD_0001u32), (6, 0xDEAD_0002)];
+    // Damage reaching the final sector also corrupts the counter upstream
+    // reads as the slot's own (the last checksum-valid sector's).
+    let final_pair = [(12usize, 0u32), (13, 1)];
+    for (legacy_slot, tail_counter, full_counter, head_counter, damage) in [
+        (0usize, None, 3u32, 6u32, early),
+        (1, None, 2, 5, early),
+        (0, Some(2u32), 5, 8, early),
+        (1, Some(1), 4, 7, early),
+        (0, Some(4), 5, 8, final_pair),
+        (1, Some(4), 5, 9, final_pair),
     ] {
         let full_slot = 1 - legacy_slot;
         let mut store = SaveStore::new();
@@ -722,8 +729,9 @@ fn a_mixed_merge_keeps_an_intact_full_slots_storage_without_verified_counters() 
             &full_storage,
             full_counter,
         );
-        restamp_footer_counter(&mut store, full_slot, 5, 0xDEAD_0001);
-        restamp_footer_counter(&mut store, full_slot, 6, 0xDEAD_0002);
+        for (position, counter) in damage {
+            restamp_footer_counter(&mut store, full_slot, position, counter);
+        }
         if let Some(tail_counter) = tail_counter {
             write_full_slot(
                 &mut store,
@@ -755,7 +763,7 @@ fn a_mixed_merge_keeps_an_intact_full_slots_storage_without_verified_counters() 
         assert_eq!(
             &store.base_pokemon_storage[..],
             &full_storage[..],
-            "legacy slot {legacy_slot}, tail {tail_counter:?}"
+            "legacy slot {legacy_slot}, tail {tail_counter:?}, damage {damage:?}"
         );
     }
 }
