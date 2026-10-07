@@ -254,8 +254,9 @@ where
     static NEXT_GENERATION: AtomicU64 = AtomicU64::new(0);
     let output_claim = claim_output_dir(output_dir)
         .map_err(|e| RecordSnapshotError::Write(output_dir.to_path_buf(), e.to_string()))?;
+    let output_dir_matches = || output_claim.require_path(output_dir);
     let require_output_dir = || {
-        output_claim.require_path(output_dir).map_err(|error| {
+        output_dir_matches().map_err(|error| {
             RecordSnapshotError::Write(output_dir.to_path_buf(), error.to_string())
         })
     };
@@ -283,9 +284,10 @@ where
     let staged_meta = staged_dir.join(&meta_name);
 
     let mut renamed = false;
+    let generation_matches =
+        |claim: &StagedDirClaim| claim.require_entry_in(&output_claim, &generation_dir);
     let require_generation = |claim: &StagedDirClaim| {
-        claim
-            .require_entry_in(&output_claim, &generation_dir)
+        generation_matches(claim)
             .map_err(|error| RecordSnapshotError::Write(generation_dir.clone(), error.to_string()))
     };
     let result = (|| {
@@ -324,19 +326,26 @@ where
         // names the directory that received the generation.
         require_output_dir()?;
         // See `staging` for the guard this stage-then-publish pair provides.
-        let staged_pointer = stage_pointer(
+        let mut staged_pointer = stage_pointer(
             &output_claim,
             &pointer_path,
             format!("{generation}\n").as_bytes(),
         )
         .map_err(|e| RecordSnapshotError::Write(pointer_path.clone(), e.to_string()))?;
+        // A check failing from here until `publish` takes the staged pointer
+        // retains it and reports its path, as a failed publish would.
         if cfg!(not(unix)) {
-            require_output_dir()?;
+            staged_pointer =
+                pointer_still_publishable(staged_pointer, output_dir, output_dir_matches())?;
         }
         before_pointer_publish();
         // The only check that sits between the last hook and the rename: a
         // generation replaced after the earlier verification must not be named.
-        require_generation(&staged_dir_claim)?;
+        let staged_pointer = pointer_still_publishable(
+            staged_pointer,
+            &generation_dir,
+            generation_matches(&staged_dir_claim),
+        )?;
         staged_pointer
             .publish(&pointer_path)
             .map_err(|e| RecordSnapshotError::Write(pointer_path.clone(), e.to_string()))?;
@@ -376,6 +385,22 @@ fn promote_staged_dir(
 ) -> std::io::Result<()> {
     before_rename();
     output.promote_without_replacement(staged, generation)
+}
+
+/// Hands `staged` back while `check` passed; otherwise retains it and reports
+/// its last known path beside the failure, as a failed publish would.
+fn pointer_still_publishable(
+    staged: staging::StagedFile,
+    path: &Path,
+    check: std::io::Result<()>,
+) -> Result<staging::StagedFile, RecordSnapshotError> {
+    match check {
+        Ok(()) => Ok(staged),
+        Err(error) => Err(RecordSnapshotError::Write(
+            path.to_path_buf(),
+            staged.retain(&error).to_string(),
+        )),
+    }
 }
 
 // Neither an open handle nor a metadata comparison makes a later pathname

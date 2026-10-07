@@ -157,6 +157,28 @@ fn write_pack(name: &str) -> (PathBuf, ScratchGuard) {
     (path, guard)
 }
 
+/// Fails unless every staged pointer file left in `output_dir` is named by
+/// `error` as a retained path: the retention policy reports what it keeps.
+#[cfg(unix)]
+fn assert_staged_pointers_reported(output_dir: &std::path::Path, error: &str) {
+    for entry in std::fs::read_dir(output_dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .contains(".tmp.")
+        {
+            assert!(
+                error.contains(&format!("last known path: {}", path.display())),
+                "staged pointer {} was left behind unreported: {error}",
+                path.display()
+            );
+        }
+    }
+}
+
 fn visible_generation(output_dir: &std::path::Path, scene: Scene) -> Option<PathBuf> {
     let pointer = output_dir.join(format!("{}.generation", scene.name()));
     std::fs::read_to_string(pointer)
@@ -2229,6 +2251,7 @@ fn a_generation_replaced_before_the_pointer_publication_is_never_published() {
         b"previous\n",
         "the replaced generation must not be published"
     );
+    assert_staged_pointers_reported(&output_dir, &error);
     assert!(generation_dir.join(foreign_marker).is_file());
     assert_eq!(
         std::fs::read(carried.join(format!("{}.rgb", scene.name()))).unwrap(),
@@ -2278,6 +2301,7 @@ fn a_generation_moved_away_before_the_pointer_publication_is_never_published() {
     let error = result.unwrap_err().to_string();
     assert!(error.contains("last known path"), "{error}");
     assert_eq!(visible_generation(&output_dir, scene), None);
+    assert_staged_pointers_reported(&output_dir, &error);
     assert_eq!(
         std::fs::read(carried.join(format!("{}.rgb", scene.name()))).unwrap(),
         b"rgb-bytes"
