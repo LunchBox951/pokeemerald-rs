@@ -6,8 +6,8 @@ use rom_import::fixture::RomFixture;
 
 use super::error::GenRomProfileError;
 use super::tests::with_context;
-use super::{locate_profile, tilesets, title};
-use crate::extract::scope::{title_ids, TILESETS};
+use super::{fonts, inventory, locate_profile, tilesets, title};
+use crate::extract::scope::{title_ids, FONTS, TILESETS};
 
 /// A placeholder for every fixed root; presence is all the preflight reads.
 fn complete_inventory() -> Vec<PackEntry> {
@@ -15,6 +15,7 @@ fn complete_inventory() -> Vec<PackEntry> {
         .iter()
         .map(|tileset| tileset.tiles_id())
         .chain(title_ids())
+        .chain(FONTS.iter().map(|font| font.pack_id.to_owned()))
         .map(|id| raw_entry(id, vec![0]))
         .collect()
 }
@@ -35,6 +36,8 @@ fn assert_refused(label: &str, entries: Vec<PackEntry>, missing: &str, domain: &
 
         let err = if domain == "tilesets" {
             tilesets::locate(ctx, &mut report).map(|_| ())
+        } else if domain == "fonts" {
+            fonts::locate(ctx, &mut report).map(|_| ())
         } else {
             title::locate(ctx, &mut report).map(|_| ())
         }
@@ -56,6 +59,7 @@ fn without(id: &str) -> Vec<PackEntry> {
 #[test]
 fn the_fixed_inventory_holds_the_committed_profile_counts() {
     assert_eq!(TILESETS.len(), 5);
+    assert_eq!(FONTS.len(), 5);
     let ids = title_ids();
     let count = |prefix: &str| ids.iter().filter(|id| id.starts_with(prefix)).count();
     assert_eq!(count("title/image/"), 6);
@@ -104,4 +108,20 @@ fn a_pack_missing_a_title_palette_is_refused() {
         let label = format!("no-{}", id.replace('/', "-"));
         assert_refused(&label, without(id), id, "title");
     }
+}
+
+#[test]
+fn a_pack_missing_a_font_sheet_is_refused() {
+    for font in FONTS {
+        let label = format!("no-{}", font.pack_id.replace('/', "-"));
+        assert_refused(&label, without(font.pack_id), font.pack_id, "fonts");
+    }
+}
+
+#[test]
+fn a_complete_fixed_inventory_passes_preflight() {
+    let rom = RomFixture::new().emerald_header().finish();
+    with_context("complete", &rom, complete_inventory(), |ctx| {
+        inventory::preflight(ctx.pack).expect("a complete inventory passes");
+    });
 }
