@@ -6,10 +6,9 @@ use assets::AbilityId;
 use battle::{Battle, Dex};
 
 /// A non-fainted player reserve is checked against the enemy's moveset
-/// before the battle starts, exactly like the active member: it may become
-/// the enemy's defender with no further checkpoint once sent out. Now that
-/// the reflection is modelled, a Synchronize reserve reachable by an enemy
-/// Poison Sting is admitted just like an active-slot Synchronize defender.
+/// before the battle starts, like the active member, because it can become
+/// the enemy's defender with no further checkpoint. A Synchronize reserve
+/// facing Poison Sting is admitted like an active Synchronize defender.
 #[test]
 fn an_enemy_move_is_admitted_against_a_synchronize_reserve_before_the_battle_starts() {
     let dex = Dex::new();
@@ -22,10 +21,9 @@ fn an_enemy_move_is_admitted_against_a_synchronize_reserve_before_the_battle_sta
         .expect("Synchronize's poison reflection is modelled, so the reserve is admitted");
 }
 
-/// A fainted reserve can never be sent out
-/// (`Battle::send_out_next_player_reserve` skips every fainted entry), so it
-/// models a player party that already lost a member before the battle and
-/// must not refuse construction over an enemy move it will never face.
+/// A fainted reserve is never sent out
+/// (`Battle::send_out_next_player_reserve` skips fainted entries), so it must
+/// not refuse construction over an enemy move it will never face.
 #[test]
 fn a_fainted_synchronize_reserve_does_not_refuse_an_enemy_poison_sting() {
     let dex = Dex::new();
