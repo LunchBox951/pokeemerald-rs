@@ -6,7 +6,8 @@
 //! section, for the upstream citations and contract both states share.
 
 use platform::{ButtonState, Buttons, Frame};
-use rendering::{NormalPaletteFade, PaletteFadeStatus, PaletteFadeTarget};
+use rendering::PaletteColorTransform;
+use rendering::{Framebuffer, NormalPaletteFade, PaletteFadeStatus, PaletteFadeTarget};
 
 use super::{
     intro, log_game_continued, menu_action, new_game_options_for, title_advance_pressed,
@@ -20,6 +21,7 @@ use crate::game_save::SaveSlot;
 /// alongside the fade blending its last composed tick toward white.
 pub(crate) struct TitleFadeWait {
     title: Box<AnimatedTitle>,
+    source: Framebuffer,
     fade: NormalPaletteFade,
 }
 
@@ -30,20 +32,34 @@ pub(crate) struct TitleFadeWait {
 pub(crate) struct MainMenuFadeWait {
     pub(crate) state: Box<MainMenuState>,
     action: MainMenuAction,
+    source: Framebuffer,
     fade: NormalPaletteFade,
 }
 
 /// Upstream's press frame runs two fade updates: `BeginNormalPaletteFade`'s
 /// own, then the scene callback's after `RunTasks`
 /// (`pokeemerald/src/title_screen.c:675-681`, `main_menu.c:532-538`).
-fn begin_on_press_frame(
-    framebuffer: rendering::Framebuffer,
-    target: PaletteFadeTarget,
-) -> NormalPaletteFade {
-    let mut fade = NormalPaletteFade::begin(framebuffer, target);
+fn begin_on_press_frame(target: PaletteFadeTarget) -> NormalPaletteFade {
+    let mut fade = NormalPaletteFade::begin(target);
     let status = fade.update();
     debug_assert_eq!(status, PaletteFadeStatus::Active);
     fade
+}
+
+/// The composed `source` frame with the fade's BG blend applied uniformly to
+/// every pixel; OBJ pixels take the BG coefficient here rather than their own
+/// bank's.
+fn faded_frame(source: &Framebuffer, fade: &NormalPaletteFade) -> Box<Frame> {
+    let blend = fade.bg_blend();
+    let mut faded = source.clone();
+    for y in 0..source.height() {
+        for x in 0..source.width() {
+            if let Some(pixel) = source.pixel(x, y) {
+                faded.set_pixel(x, y, blend.transform(pixel));
+            }
+        }
+    }
+    to_platform_frame(&faded)
 }
 
 /// The [`AppScene::Title`] arm of [`super::advance_scene`]: on a fresh
@@ -61,10 +77,14 @@ pub(super) fn advance_title(
 
     if title_advance_pressed(buttons) {
         let framebuffer = title.scene.compose(title.tick);
-        let fade = begin_on_press_frame(framebuffer, PaletteFadeTarget::White);
-        let frame = to_platform_frame(fade.framebuffer());
+        let fade = begin_on_press_frame(PaletteFadeTarget::White);
+        let frame = faded_frame(&framebuffer, &fade);
         return (
-            AppScene::TitleFadeWait(Box::new(TitleFadeWait { title, fade })),
+            AppScene::TitleFadeWait(Box::new(TitleFadeWait {
+                title,
+                source: framebuffer,
+                fade,
+            })),
             frame,
         );
     }
@@ -89,7 +109,7 @@ pub(super) fn advance_title_fade_wait(
         return (AppScene::Title(wait.title), frame);
     }
     wait.fade.update();
-    let frame = to_platform_frame(wait.fade.framebuffer());
+    let frame = faded_frame(&wait.source, &wait.fade);
     (AppScene::TitleFadeWait(wait), frame)
 }
 
@@ -109,12 +129,13 @@ pub(super) fn advance_main_menu(
         let action = menu_action(state.scene.selected());
         if !matches!(action, MainMenuAction::None) {
             let framebuffer = state.scene.compose();
-            let fade = begin_on_press_frame(framebuffer, PaletteFadeTarget::Black);
-            let frame = to_platform_frame(fade.framebuffer());
+            let fade = begin_on_press_frame(PaletteFadeTarget::Black);
+            let frame = faded_frame(&framebuffer, &fade);
             return (
                 AppScene::MainMenuFadeWait(Box::new(MainMenuFadeWait {
                     state,
                     action,
+                    source: framebuffer,
                     fade,
                 })),
                 frame,
@@ -145,7 +166,7 @@ pub(super) fn advance_main_menu_fade_wait(
         return (AppScene::MainMenu(wait.state), frame);
     }
     wait.fade.update();
-    let frame = to_platform_frame(wait.fade.framebuffer());
+    let frame = faded_frame(&wait.source, &wait.fade);
     (AppScene::MainMenuFadeWait(wait), frame)
 }
 

@@ -15,6 +15,7 @@ mod staging;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
+use self::lock::{HeldDirectory, LockedDirectory};
 use self::open::UnusableEntry;
 #[cfg(not(windows))]
 use self::open::{
@@ -103,6 +104,13 @@ pub enum SaveFileError {
         /// The save path that changed underneath the read.
         path: PathBuf,
     },
+    /// The directory holding the save no longer resolves to the one a live
+    /// [`SaveFile::lock`] guard locked: an ancestor symlink or junction was
+    /// retargeted, so the lock no longer excludes writers of this path.
+    SaveParentRetargeted {
+        /// The save path whose parent changed underneath the guard.
+        path: PathBuf,
+    },
     /// The file length does not match [`store::FLASH_IMAGE_LEN`].
     BadLength {
         /// The file whose length was wrong.
@@ -174,6 +182,13 @@ impl std::fmt::Display for SaveFileError {
                  window, so neither is trusted",
                 path.display()
             ),
+            Self::SaveParentRetargeted { path } => write!(
+                f,
+                "save file: the directory holding {} is no longer the one the save lock \
+                 was taken in -- an ancestor was retargeted, so the lock excludes nobody \
+                 and the save is neither read nor written",
+                path.display()
+            ),
             Self::BadLength {
                 path,
                 expected,
@@ -201,6 +216,7 @@ impl std::error::Error for SaveFileError {
             | Self::SavePathIsAlias { .. }
             | Self::SavePathNotAPlainFile { .. }
             | Self::SavePathRetargeted { .. }
+            | Self::SaveParentRetargeted { .. }
             | Self::BadLength { .. } => None,
         }
     }
@@ -287,16 +303,31 @@ pub fn default_save_path_from(
 }
 
 /// Path-backed persistence for a [`SaveStore`] flash image.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct SaveFile {
     path: PathBuf,
+    /// The parent directory the live [`SaveFileGuard`] locked, shared by
+    /// every clone: guarded reads and writes compare the path's parent
+    /// against it, since the lock slot alone pins no directory.
+    held_directory: HeldDirectory,
 }
+
+impl PartialEq for SaveFile {
+    fn eq(&self, other: &Self) -> bool {
+        self.path == other.path
+    }
+}
+
+impl Eq for SaveFile {}
 
 impl SaveFile {
     /// A save file at an explicit `path`.
     #[must_use]
     pub fn at(path: impl Into<PathBuf>) -> Self {
-        Self { path: path.into() }
+        Self {
+            path: path.into(),
+            held_directory: HeldDirectory::default(),
+        }
     }
 
     /// A save file at [`default_save_path`].
@@ -340,10 +371,22 @@ impl SaveFile {
     /// [`SaveFileError::SavePathRetargeted`] if, on Windows, the path named
     /// a different object by the time its data was read than the one just
     /// verified;
+    /// [`SaveFileError::SaveParentRetargeted`] if a live guard of this
+    /// `SaveFile` (or a clone) locked a different directory than the path's
+    /// parent now resolves to;
     /// [`SaveFileError::Read`] for any other I/O failure than "not found";
     /// [`SaveFileError::BadLength`] if the file is not
     /// [`store::FLASH_IMAGE_LEN`] bytes.
     pub fn read(&self) -> Result<Option<SaveStore>, SaveFileError> {
+        let held = self.held_directory.current();
+        self.refuse_a_retargeted_parent(held.as_deref())?;
+        let image = self.read_image()?;
+        self.refuse_a_retargeted_parent(held.as_deref())?;
+        Ok(image)
+    }
+
+    /// [`Self::read`] without the parent-directory identity checks.
+    fn read_image(&self) -> Result<Option<SaveStore>, SaveFileError> {
         use std::io::Read as _;
 
         let Some(file) = self.open_for_read()? else {
@@ -470,7 +513,11 @@ impl SaveFile {
     /// [`SaveFileError::CreateDirectory`] if the parent directory could not
     /// be created; [`SaveFileError::Write`] if the temporary file could not
     /// be written, synced, or renamed into place, or if something replaced
-    /// it between those two steps.
+    /// it between those two steps; [`SaveFileError::SaveParentRetargeted`] if
+    /// a live guard of this `SaveFile` (or a clone) locked a different
+    /// directory than the path's parent now resolves to, in which case a
+    /// staged file already written is left where it was staged rather than
+    /// unlinked through the retargeted path.
     pub fn write(&self, store: &SaveStore) -> Result<(), SaveFileError> {
         self.write_with(
             store,
@@ -495,6 +542,8 @@ impl SaveFile {
         stage: impl FnOnce(&[u8]) -> std::io::Result<StagedSave>,
         before_rename: impl FnOnce(&Path),
     ) -> Result<(), SaveFileError> {
+        let held = self.held_directory.current();
+        self.refuse_a_retargeted_parent(held.as_deref())?;
         self.ensure_parent_directory()?;
 
         let write_error = |source: std::io::Error| SaveFileError::Write {
@@ -503,6 +552,7 @@ impl SaveFile {
         };
         let mut staged = stage(store.flash_image()).map_err(write_error)?;
         before_rename(&staged.path);
+        self.refuse_a_retargeted_parent(held.as_deref())?;
         // Nothing in `std` fuses this check to the rename below, so a
         // replacement landing between the two is still promoted; the
         // exclusive create, the unguessable name, and the hold kept open
@@ -523,6 +573,7 @@ impl SaveFile {
             }
             Err(unreadable) => return Err(write_error(staged.remove_after(unreadable))),
         }
+        self.refuse_a_retargeted_parent(held.as_deref())?;
         staged.release_hold();
         if let Err(source) = std::fs::rename(&staged.path, &self.path) {
             return Err(write_error(staged.remove_after(source)));
@@ -615,6 +666,7 @@ impl SaveFile {
 #[derive(Debug)]
 pub struct SaveFileGuard {
     _lock_file: std::fs::File,
+    _directory: std::sync::Arc<LockedDirectory>,
 }
 
 #[cfg(test)]

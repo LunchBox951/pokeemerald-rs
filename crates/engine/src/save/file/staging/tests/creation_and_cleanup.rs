@@ -1,4 +1,5 @@
 use super::super::{create_new_exclusive, stage_at_first_free_name};
+use crate::save::file::staging::StagingArea;
 use crate::save::file::tests::{saved_store, sibling_path, TempDir};
 use crate::save::file::{SaveFile, SAVE_FILE_NAME};
 use crate::save::store::FLASH_IMAGE_LEN;
@@ -514,4 +515,75 @@ fn still_ours_compares_the_retained_identity_before_and_after_release() {
     std::fs::rename(&staging, dir.join("moved.tmp")).unwrap();
     std::fs::write(&staging, b"someone else's file").unwrap();
     assert!(!staged.still_ours().unwrap());
+}
+
+// The identity is re-checked at the staged-to-rename seam, where a retarget
+// after staging would otherwise promote the image into the wrong directory.
+#[cfg(unix)]
+#[test]
+fn a_guarded_write_refuses_to_rename_after_the_parent_is_retargeted() {
+    let dir = TempDir::new("staging-guarded-retarget");
+    let first = dir.join("a");
+    let second = dir.join("b");
+    std::fs::create_dir(&first).unwrap();
+    std::fs::create_dir(&second).unwrap();
+    let link = dir.join("link");
+    std::os::unix::fs::symlink(&first, &link).unwrap();
+
+    let file = SaveFile::at(link.join(SAVE_FILE_NAME));
+    let guard = file.lock().expect("the lock is taken through the link");
+    let (store, _, _) = saved_store();
+    let err = file
+        .write_with(
+            &store,
+            SaveFile::sync_directory_best_effort,
+            |bytes| StagingArea::beside(file.path()).stage(bytes),
+            |_| {
+                std::fs::remove_file(&link).unwrap();
+                std::os::unix::fs::symlink(&second, &link).unwrap();
+            },
+        )
+        .expect_err("the rename must not follow a retargeted ancestor");
+    drop(guard);
+
+    assert!(
+        matches!(err, SaveFileError::SaveParentRetargeted { .. }),
+        "a retarget between staging and rename must name itself: {err:?}"
+    );
+    assert!(!first.join(SAVE_FILE_NAME).exists());
+    assert!(!second.join(SAVE_FILE_NAME).exists());
+}
+
+#[cfg(windows)]
+#[test]
+fn a_guarded_write_refuses_to_rename_after_a_junction_parent_is_retargeted() {
+    let dir = TempDir::new("staging-guarded-junction-retarget");
+    let first = dir.join("a");
+    let second = dir.join("b");
+    std::fs::create_dir(&first).unwrap();
+    std::fs::create_dir(&second).unwrap();
+    let link = dir.join("link");
+    junction(&link, &first);
+
+    let file = SaveFile::at(link.join(SAVE_FILE_NAME));
+    let guard = file.lock().expect("the lock is taken through the junction");
+    let (store, _, _) = saved_store();
+    let err = file
+        .write_with(
+            &store,
+            SaveFile::sync_directory_best_effort,
+            |bytes| StagingArea::beside(file.path()).stage(bytes),
+            |_| {
+                std::fs::remove_dir(&link).unwrap();
+                junction(&link, &second);
+            },
+        )
+        .expect_err("the rename must not follow a retargeted junction");
+    drop(guard);
+
+    assert!(
+        matches!(err, SaveFileError::SaveParentRetargeted { .. }),
+        "a retarget between staging and rename must name itself: {err:?}"
+    );
+    assert!(!second.join(SAVE_FILE_NAME).exists());
 }

@@ -188,7 +188,7 @@ fn walking_downstairs_and_talking_to_mom_opens_and_closes_her_dialog() {
 /// frame at once: Mom's OAM `y` and the BG `scroll_y` every layer shares.
 /// The unit-level counterparts -- progress 0 in all four directions, and
 /// the BG scroll's own intermediate value -- live in
-/// `crate::overworld::npc::tests` and `crate::overworld::viewport::tests`.
+/// `crate::overworld::npc::placement_tests` and `crate::overworld::viewport::tests`.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn walking_past_mom_keeps_her_oam_glued_to_the_scrolling_background() {

@@ -1,4 +1,6 @@
 use std::fmt;
+#[cfg(feature = "scenario")]
+use std::path::Path;
 use std::sync::OnceLock;
 
 use pokeemerald_rs::main_menu::MainMenuItem;
@@ -7,6 +9,8 @@ use pokeemerald_rs::{App, AppButtons, AppState, BattleOutcome};
 use crate::ScenarioName;
 
 mod boot_to_first_fight;
+#[cfg(feature = "scenario")]
+mod session;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ScenarioFrame {
@@ -106,6 +110,10 @@ pub enum ScenarioError {
     /// App creation failed.
     #[cfg(feature = "scenario")]
     Start(String),
+    /// The pack or save media a scenario needs could not be prepared, so
+    /// there is no evidence to judge.
+    #[cfg(feature = "scenario")]
+    Setup(String),
     /// The initial app state did not match the scenario.
     InitialState {
         expected: AppState,
@@ -135,6 +143,10 @@ impl fmt::Display for ScenarioError {
         match self {
             #[cfg(feature = "scenario")]
             Self::Start(reason) => write!(f, "real headless app failed to start: {reason}"),
+            #[cfg(feature = "scenario")]
+            Self::Setup(reason) => {
+                write!(f, "scenario media unavailable, no evidence gathered: {reason}")
+            }
             Self::InitialState { expected, actual } => write!(
                 f,
                 "initial milestone mismatch: expected {expected:?}, reached {actual:?}"
@@ -208,22 +220,41 @@ impl ScenarioDriver for App {
     }
 }
 
-/// Runs a named scenario against the checkout's own extracted pack through
-/// the production headless app. [`App::new_headless_real`] pins every lazy
-/// pack load to that pack alone (issue #412), never a process-wide
-/// `$POKEEMERALD_PACK` override, so an installed or inherited pack can never
+/// Runs a named scenario against a private copy of the checkout's extracted
+/// pack and an isolated durable save through the production headless app.
+/// [`App::new_headless_real_at`] pins every lazy pack load to that copy
+/// alone (issue #412), never a process-wide `$POKEEMERALD_PACK` override, so an installed or inherited pack can never
 /// substitute the bytes under a running scenario -- proved hostile-environment
 /// safe by `tests/scenario_pack_pin.rs` (a child process, since handing this
 /// process's own environment a decoy is the global mutable state the change
 /// exists to remove `(oop-boundaries)`).
 ///
+/// With `rom`, the pack is instead imported from that supported ROM into the
+/// run's own scratch directory; without it, the checkout-extracted pack is
+/// copied there.
+///
 /// # Errors
 ///
-/// Returns [`ScenarioError`] if app creation or a scripted frame fails.
+/// Returns [`ScenarioError`] if the media cannot be prepared (missing pack,
+/// failed import or save construction: no evidence) or app creation or a
+/// scripted frame fails.
 #[cfg(feature = "scenario")]
-pub fn run(name: ScenarioName) -> Result<Report, ScenarioError> {
-    let mut app =
-        App::new_headless_real().map_err(|error| ScenarioError::Start(error.to_string()))?;
+pub fn run_with(name: ScenarioName, rom: Option<&Path>) -> Result<Report, ScenarioError> {
+    let selection = rom.map_or_else(session::PackSelection::checkout, |rom| {
+        session::PackSelection::ImportedRom(rom.to_path_buf())
+    });
+    run_selected(name, &selection)
+}
+
+/// [`run_with`] against an explicitly chosen pack source and an isolated durable
+/// save, both owned by the run ([`session::Session`]).
+#[cfg(feature = "scenario")]
+fn run_selected(
+    name: ScenarioName,
+    selection: &session::PackSelection,
+) -> Result<Report, ScenarioError> {
+    let session = session::Session::new(selection)?;
+    let mut app = session.start()?;
     run_with_driver(spec(name), &mut app)
 }
 
@@ -586,13 +617,61 @@ mod tests {
         let _pack = crate::extract::REAL_PACK_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let report = super::run(ScenarioName::BootToMainMenu)
+        let report = super::run_with(ScenarioName::BootToMainMenu, None)
             .expect("boot-to-main-menu should pass against the real pack");
         assert_eq!(
             report.frames_run,
             spec(ScenarioName::BootToMainMenu).frames.len()
         );
         assert_eq!(report.first_battle_outcome, None);
+        assert_eq!(
+            report.milestones,
+            vec![AppState::Title, AppState::MainMenu(MainMenuItem::NewGame)]
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "scenario")]
+    #[ignore = "needs a local pack produced by `cargo xtask extract`"]
+    fn real_pack_runs_on_an_owned_copy_and_restarts_onto_the_same_durable_save() {
+        let _pack = crate::extract::REAL_PACK_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let selection = super::session::PackSelection::checkout();
+        let report = super::run_selected(ScenarioName::BootToMainMenu, &selection)
+            .expect("boot-to-main-menu should pass against an owned copy of the real pack");
+        assert_eq!(
+            report.milestones,
+            vec![AppState::Title, AppState::MainMenu(MainMenuItem::NewGame)]
+        );
+
+        let session = super::session::Session::new(&selection)
+            .expect("the real pack must prepare an owned session");
+        let first = session.start().expect("first boot");
+        assert_eq!(first.state(), AppState::Title);
+        drop(first);
+        let restarted = session.start().expect("restart onto the same save");
+        assert_eq!(restarted.state(), AppState::Title);
+    }
+
+    #[test]
+    #[cfg(feature = "scenario")]
+    #[ignore = "needs $POKEEMERALD_ROM, the supported cartridge image"]
+    fn real_rom_import_runs_boot_to_main_menu_from_its_own_imported_pack() {
+        let _pack = crate::extract::REAL_PACK_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Skip, never fail, without a ROM: CI's `--ignored` legs run with none
+        // (`rom-import`'s equivalence gate does the same `(gated-by-default)`).
+        let Some(rom) = std::env::var_os("POKEEMERALD_ROM").filter(|rom| !rom.is_empty()) else {
+            eprintln!("skipped: set POKEEMERALD_ROM to a supported cartridge image to run this");
+            return;
+        };
+        let report = super::run_with(
+            ScenarioName::BootToMainMenu,
+            Some(std::path::Path::new(&rom)),
+        )
+        .expect("boot-to-main-menu should pass against a pack imported from the ROM");
         assert_eq!(
             report.milestones,
             vec![AppState::Title, AppState::MainMenu(MainMenuItem::NewGame)]

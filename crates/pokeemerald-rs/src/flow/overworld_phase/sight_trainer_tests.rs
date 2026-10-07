@@ -1251,6 +1251,46 @@ fn an_at_rest_approach_spends_a_handoff_frame_before_the_icon() {
     assert_eq!(approaching_trainer(&phase).position(), (rx, ry + 1));
 }
 
+/// `Task_FreezeObjectAndPlayer` runs `PlayerFreeze` the frame after a
+/// caught run drains (`event_object_lock.c:130-146`,
+/// `field_player_avatar.c:1039-1046`), so the running sheet's paused cell
+/// must not survive into the exclamation icon.
+#[test]
+fn a_run_caught_by_a_cone_stands_once_the_lock_sees_it_settle() {
+    let (rx, ry) = RHETT_TILE;
+    let mut phase = route_103_phase(PlayerState::new((rx, ry + 2), 3, Direction::South));
+    phase.save1.event_data.flag_set(0x8C0).unwrap();
+    let mut run = ButtonState::new();
+    run.update(Buttons::B | Buttons::DOWN);
+    run.update(Buttons::B | Buttons::DOWN);
+
+    phase.step(run);
+    assert!(
+        phase.player.in_transit() && phase.player.transit_running(),
+        "fixture precondition: a held-B run is in flight"
+    );
+    seed_approach(&mut phase, 2);
+
+    while phase.player.in_transit() {
+        phase.step(run);
+    }
+    assert!(
+        phase.player.run_pose_held(),
+        "the drain frame still shows the finished run's paused cell"
+    );
+
+    phase.step(run);
+    assert!(
+        !phase.player.run_pose_held(),
+        "the freeze task's `PlayerFreeze` stands the player up on the first settled frame"
+    );
+    assert_eq!(
+        approaching_trainer(&phase).position(),
+        RHETT_TILE,
+        "and does so before the approach leaves the lock handoff"
+    );
+}
+
 /// [`OverworldPhase::tick_player_under_approach_lock`]'s own two-part
 /// contract, pinned directly: one frame of the player's held walk really
 /// runs, and the latched landing is dropped with it.

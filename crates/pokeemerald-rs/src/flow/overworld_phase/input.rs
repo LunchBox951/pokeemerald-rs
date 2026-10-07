@@ -38,6 +38,12 @@ pub(super) fn held_direction(buttons: ButtonState) -> Option<Direction> {
     }
 }
 
+/// Whether B is held this frame: upstream's `heldKeys & B_BUTTON` run input
+/// (`field_player_avatar.c:658-668`), level-triggered rather than a press.
+pub(super) fn run_held(buttons: ButtonState) -> bool {
+    buttons.held().intersects(Buttons::B)
+}
+
 /// Apply this frame's movement, unless `movement_preempted` says a warp or
 /// an NPC interaction already consumed it (issue #435) --
 /// [`super::OverworldPhase::step`]'s movement branch, pulled out (as its own
@@ -54,7 +60,7 @@ pub(super) fn held_direction(buttons: ButtonState) -> Option<Direction> {
 pub(super) fn advance_or_skip_for_preempt(
     player: &mut PlayerState,
     pending_landing: &mut Option<TilePos>,
-    direction: Option<Direction>,
+    buttons: ButtonState,
     runtime: &engine::overworld::MapRuntime<'_>,
     maps: &impl ConnectedMapData,
     event_data: &engine::event_data::EventData,
@@ -78,10 +84,18 @@ pub(super) fn advance_or_skip_for_preempt(
              ahead of this function"
         );
         player.tick();
+        player.release_run_pose();
         return None;
     }
 
-    let outcome = advance_player_one_frame(player, direction, runtime, maps, event_data);
+    let outcome = advance_player_one_frame(
+        player,
+        held_direction(buttons),
+        run_held(buttons),
+        runtime,
+        maps,
+        event_data,
+    );
     latch_landing(pending_landing, outcome);
     match outcome {
         StepOutcome::Crossed {
@@ -179,11 +193,12 @@ fn latch_landing(pending_landing: &mut Option<TilePos>, outcome: StepOutcome) {
 pub(super) fn advance_player_one_frame(
     player: &mut PlayerState,
     direction: Option<Direction>,
+    run_held: bool,
     runtime: &engine::overworld::MapRuntime<'_>,
     maps: &impl ConnectedMapData,
     event_data: &engine::event_data::EventData,
 ) -> StepOutcome {
-    let outcome = player.step(direction, runtime, maps, event_data);
+    let outcome = player.step_with_run(direction, run_held, runtime, maps, event_data);
     player.tick();
     outcome
 }

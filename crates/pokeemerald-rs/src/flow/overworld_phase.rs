@@ -989,6 +989,8 @@ mod route103_rival_test_support;
 #[cfg(test)]
 mod route103_rival_tests;
 #[cfg(test)]
+mod running_tests;
+#[cfg(test)]
 mod sight_trainer_tests;
 #[cfg(test)]
 mod step_tests;

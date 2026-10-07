@@ -45,7 +45,7 @@ pub use framebuffer::Framebuffer;
 pub use mosaic::{MosaicConfig, MosaicSize};
 pub use oam::{obj_dimensions, AffineMode, OamEntry, ObjMode, ObjShape};
 pub use palette::{Bgr555, Palette, Rgb888};
-pub use palette_fade::{NormalPaletteFade, PaletteFadeStatus, PaletteFadeTarget};
+pub use palette_fade::{NormalPaletteFade, PaletteFadeBlend, PaletteFadeStatus, PaletteFadeTarget};
 pub use sprite::{SpriteLayer, SpritePixel};
 pub use tile::{BitDepth, Tile, Tileset};
 pub use tilemap::{ScreenEntry, Tilemap};

@@ -134,6 +134,7 @@ use crate::music::{MusicContext, MusicError, MusicPlayer};
 use crate::scene::BootScene;
 use crate::title::{self, TitleSceneError};
 use battle::BattleOutcome;
+use engine::save::SaveFileError;
 
 /// Compose a fresh [`BootScene`] into a `platform`-ready frame.
 ///
@@ -162,6 +163,9 @@ pub enum AppError {
     /// Loading or decoding the real title screen failed -- see
     /// [`TitleSceneError`], most commonly "no pack extracted yet".
     Title(TitleSceneError),
+    /// The save medium a caller asked for could not be opened -- see
+    /// [`App::new_headless_real_at`].
+    Save(SaveFileError),
 }
 
 impl std::fmt::Display for AppError {
@@ -169,6 +173,7 @@ impl std::fmt::Display for AppError {
         match self {
             Self::Platform(err) => write!(f, "{err}"),
             Self::Title(err) => write!(f, "{err}"),
+            Self::Save(err) => write!(f, "{err}"),
         }
     }
 }
@@ -178,6 +183,12 @@ impl std::error::Error for AppError {}
 impl From<PlatformError> for AppError {
     fn from(err: PlatformError) -> Self {
         Self::Platform(err)
+    }
+}
+
+impl From<SaveFileError> for AppError {
+    fn from(err: SaveFileError) -> Self {
+        Self::Save(err)
     }
 }
 
@@ -371,7 +382,7 @@ impl App {
     /// Returns [`AppError::Title`] if there is no asset pack
     /// yet (check [`TitleSceneError::is_pack_missing`] -- its rendered
     /// message names the exact commands to run, `--import-rom <rom>` for a
-    /// player and `./init.sh`/`cargo xtask extract` for a developer) or is otherwise malformed; whatever `open_platform` fails with
+    /// player and `./init.sh`/`cargo xtask extract` for a developer) or is otherwise malformed; [`AppError::Save`] if `open_save_slot` fails; whatever `open_platform` fails with
     /// (for [`App::new`], [`AppError::Platform`] if the platform's windowing
     /// event loop could not be created) otherwise.
     ///
@@ -384,7 +395,7 @@ impl App {
     fn boot(
         load_title: impl FnOnce() -> Result<title::TitleScene, title::TitleSceneError>,
         open_platform: impl FnOnce() -> Result<Platform, PlatformError>,
-        open_save_slot: impl FnOnce() -> SaveSlot,
+        open_save_slot: impl FnOnce() -> Result<SaveSlot, SaveFileError>,
         pack_source: crate::pack_source::PackSource,
     ) -> Result<Self, AppError> {
         // Load first: no window or save medium is opened if the pack is
@@ -394,7 +405,7 @@ impl App {
         Ok(Self::assemble(
             platform,
             loaded,
-            open_save_slot(),
+            open_save_slot()?,
             pack_source,
         ))
     }
@@ -423,7 +434,7 @@ impl App {
         let mut app = Self::boot(
             title::load_default,
             || Platform::new(title),
-            SaveSlot::default_location,
+            || Ok(SaveSlot::default_location()),
             crate::pack_source::PackSource::Runtime,
         )?;
         app.music = Self::start_title_music(app.pack_source, &mut app.music_context, || {
@@ -475,8 +486,43 @@ impl App {
         Self::boot(
             title::load_repo,
             || Ok(Platform::new_headless()),
-            SaveSlot::none,
+            || Ok(SaveSlot::none()),
             crate::pack_source::PackSource::Repo,
+        )
+    }
+
+    /// [`App::new_headless_real`] against caller-owned media instead of the
+    /// checkout pack and no save: every load reachable through this `App`
+    /// reads the pack at `pack` ([`crate::pack_source::PackSource::Explicit`]),
+    /// and the save medium is the durable file at `save`, so dropping this
+    /// `App` and calling this again with the same `save` restarts onto what
+    /// the first session wrote (`main_menu.c:1067` continues from the
+    /// saved game; `overworld.c:1705-1737`). `pack` may be a
+    /// checkout-extracted or a supported-ROM-imported pack; the two share
+    /// one format. Nothing falls back: a missing `pack` or an unusable `save`
+    /// is an error.
+    ///
+    /// No BGM is started, as in [`App::new_headless_real`].
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::Title`] if `pack` is missing or malformed;
+    /// [`AppError::Save`] if `save` cannot be locked and read
+    /// ([`SaveSlot::at_path`]).
+    pub fn new_headless_real_at(
+        pack: &std::path::Path,
+        save: &std::path::Path,
+    ) -> Result<Self, AppError> {
+        // One small allocation per construction, so `PackSource` stays `Copy`.
+        let pack: &'static std::path::Path = Box::leak(pack.into());
+        Self::boot(
+            || {
+                let pack = assets::AssetPack::load(pack).map_err(TitleSceneError::Pack)?;
+                title::TitleScene::from_pack(&pack)
+            },
+            || Ok(Platform::new_headless()),
+            || SaveSlot::at_path(save),
+            crate::pack_source::PackSource::Explicit(pack),
         )
     }
 
@@ -498,7 +544,7 @@ impl App {
         let mut app = Self::boot(
             title::load_repo,
             || Ok(Platform::new_headless()),
-            SaveSlot::none,
+            || Ok(SaveSlot::none()),
             crate::pack_source::PackSource::Repo,
         )?;
         app.music = Self::start_title_music(app.pack_source, &mut app.music_context, || {
