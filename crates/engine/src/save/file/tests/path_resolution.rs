@@ -111,3 +111,80 @@ fn no_data_directory_is_a_named_error_not_a_guessed_path() {
         "the diagnostic must name the override that fixes it: {err}"
     );
 }
+
+#[test]
+fn relative_user_roots_yield_no_data_directory() {
+    for root in ["home", "./home", "C:home", r"\home"] {
+        for family in [HostFamily::Xdg, HostFamily::MacOs] {
+            assert_eq!(data_dir_for(family, env_of(&[("HOME", root)])), None);
+        }
+    }
+    for root in ["home", "./home", "C:home", r"\home", "/home"] {
+        let pairs = [("APPDATA", root), ("USERPROFILE", root)];
+        assert_eq!(data_dir_for(HostFamily::Windows, env_of(&pairs)), None);
+    }
+}
+
+#[test]
+fn windows_accepts_drive_and_unc_roots_only() {
+    for root in [
+        "C:/roaming",
+        r"C:\roaming",
+        r"\\server\share",
+        "//server/share",
+    ] {
+        assert_eq!(
+            data_dir_for(HostFamily::Windows, env_of(&[("APPDATA", root)])),
+            Some(PathBuf::from(root))
+        );
+    }
+}
+
+#[test]
+fn an_invalid_windows_appdata_falls_back_to_a_valid_userprofile() {
+    let env = env_of(&[("APPDATA", "roaming"), ("USERPROFILE", "C:/Users/May")]);
+    assert_eq!(
+        data_dir_for(HostFamily::Windows, env),
+        Some(
+            PathBuf::from("C:/Users/May")
+                .join("AppData")
+                .join("Roaming")
+        )
+    );
+}
+
+#[test]
+fn a_relative_home_leaves_the_implicit_save_path_unresolvable_but_not_the_override() {
+    let env = env_of(&[("HOME", "home")]);
+    assert!(matches!(
+        default_save_path_from(HostFamily::Xdg, env),
+        Err(SaveFileError::NoDataDirectory)
+    ));
+    let env = env_of(&[(SAVE_PATH_ENV, "mine.sav"), ("HOME", "home")]);
+    assert_eq!(
+        default_save_path_from(HostFamily::Xdg, env).unwrap(),
+        PathBuf::from("mine.sav")
+    );
+}
+
+#[test]
+fn incomplete_unc_roots_are_rejected_in_favour_of_the_userprofile() {
+    for root in [
+        "//",
+        r"\\",
+        "//server",
+        r"\\server",
+        r"\\server\",
+        "///share",
+    ] {
+        let pairs = [("APPDATA", root), ("USERPROFILE", "C:/Users/dev")];
+        assert_eq!(
+            data_dir_for(HostFamily::Windows, env_of(&pairs)),
+            Some(
+                PathBuf::from("C:/Users/dev")
+                    .join("AppData")
+                    .join("Roaming")
+            )
+        );
+    }
+}

@@ -229,20 +229,22 @@ fn resolve(
 
 /// [`user_data_dir`]'s pure core.
 fn data_dir(env: &impl Fn(&str) -> Option<OsString>, rule: DataDirRule) -> Option<PathBuf> {
-    let non_empty = |key: &str| {
+    let absolute_root = |key: &str, is_absolute: fn(&OsStr) -> bool| {
         env(key)
-            .filter(|value| !value.is_empty())
+            .filter(|value| is_absolute(value))
             .map(PathBuf::from)
     };
     match rule {
-        DataDirRule::Xdg => non_empty("XDG_DATA_HOME")
-            .filter(|dir| is_absolute_xdg_path(dir.as_os_str()))
-            .or_else(|| non_empty("HOME").map(|home| home.join(".local").join("share"))),
-        DataDirRule::MacOs => {
-            non_empty("HOME").map(|home| home.join("Library").join("Application Support"))
-        }
-        DataDirRule::Windows => non_empty("APPDATA")
-            .or_else(|| non_empty("USERPROFILE").map(|home| home.join("AppData").join("Roaming"))),
+        DataDirRule::Xdg => absolute_root("XDG_DATA_HOME", is_absolute_xdg_path).or_else(|| {
+            absolute_root("HOME", is_absolute_xdg_path)
+                .map(|home| home.join(".local").join("share"))
+        }),
+        DataDirRule::MacOs => absolute_root("HOME", is_absolute_xdg_path)
+            .map(|home| home.join("Library").join("Application Support")),
+        DataDirRule::Windows => absolute_root("APPDATA", is_absolute_windows_path).or_else(|| {
+            absolute_root("USERPROFILE", is_absolute_windows_path)
+                .map(|home| home.join("AppData").join("Roaming"))
+        }),
     }
 }
 
@@ -260,6 +262,31 @@ fn data_dir(env: &impl Fn(&str) -> Option<OsString>, rule: DataDirRule) -> Optio
 /// [`DataDirRule::Xdg`] on a Windows host in a test.
 fn is_absolute_xdg_path(path: &OsStr) -> bool {
     path.as_encoded_bytes().starts_with(b"/")
+}
+
+/// Whether `path` is absolute under Windows path rules (a drive letter
+/// followed by a separator, or a UNC root naming a server and share), independently of the platform
+/// running this binary. Drive-relative (`C:foo`) and root-relative (`\foo`)
+/// forms depend on the current directory or drive, so they are rejected like
+/// any other relative path.
+fn is_absolute_windows_path(path: &OsStr) -> bool {
+    let bytes = path.as_encoded_bytes();
+    let is_separator = |byte: u8| byte == b'/' || byte == b'\\';
+    let drive_absolute = matches!(
+        bytes,
+        [letter, b':', separator, ..] if letter.is_ascii_alphabetic() && is_separator(*separator)
+    );
+    let unc = match bytes {
+        [first, second, rest @ ..] if is_separator(*first) && is_separator(*second) => {
+            let mut components = rest.split(|byte| is_separator(*byte));
+            matches!(
+                (components.next(), components.next()),
+                (Some(server), Some(share)) if !server.is_empty() && !share.is_empty()
+            )
+        }
+        _ => false,
+    };
+    drive_absolute || unc
 }
 
 /// The checkout's own pack: `<repo root>/`[`OUTPUT_RELATIVE_PATH`], where

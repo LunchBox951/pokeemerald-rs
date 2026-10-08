@@ -669,3 +669,121 @@ fn a_regular_file_at_the_user_data_rung_advances_resolution_to_a_valid_later_run
         );
     }
 }
+
+/// Relative or half-qualified user roots, per rule, that must never be
+/// joined into a candidate path.
+const RELATIVE_ROOTS: [&str; 5] = ["home", "./home", "C:home", r"\home", "/home"];
+
+#[test]
+fn relative_user_roots_yield_no_data_directory() {
+    for root in &RELATIVE_ROOTS[..4] {
+        assert_eq!(data_dir(&env_of(&[("HOME", root)]), DataDirRule::Xdg), None);
+        assert_eq!(
+            data_dir(&env_of(&[("HOME", root)]), DataDirRule::MacOs),
+            None
+        );
+    }
+    for root in &RELATIVE_ROOTS {
+        let windows = [("APPDATA", *root), ("USERPROFILE", *root)];
+        assert_eq!(data_dir(&env_of(&windows), DataDirRule::Windows), None);
+    }
+}
+
+#[test]
+fn windows_accepts_drive_and_unc_roots_only() {
+    for root in [
+        "C:/roaming",
+        r"C:\roaming",
+        r"\\server\share",
+        "//server/share",
+    ] {
+        assert_eq!(
+            data_dir(&env_of(&[("APPDATA", root)]), DataDirRule::Windows),
+            Some(PathBuf::from(root))
+        );
+    }
+}
+
+#[test]
+fn an_invalid_windows_appdata_falls_back_to_a_valid_userprofile() {
+    assert_eq!(
+        data_dir(
+            &env_of(&[("APPDATA", "roaming"), ("USERPROFILE", "C:/Users/dev")]),
+            DataDirRule::Windows
+        ),
+        Some(
+            PathBuf::from("C:/Users/dev")
+                .join("AppData")
+                .join("Roaming")
+        )
+    );
+    assert_eq!(
+        data_dir(
+            &env_of(&[("APPDATA", "D:/roaming"), ("USERPROFILE", "profile")]),
+            DataDirRule::Windows
+        ),
+        Some(PathBuf::from("D:/roaming"))
+    );
+}
+
+#[test]
+fn an_explicit_override_is_kept_even_when_relative_and_roots_are_invalid() {
+    let path = resolve(
+        &env_of(&[(PACK_PATH_ENV, "mine.pack"), ("HOME", "home")]),
+        None,
+        &exists_of(&[]),
+        DataDirRule::Xdg,
+    );
+    assert_eq!(path, PathBuf::from("mine.pack"));
+}
+
+#[test]
+fn release_channel_relative_roots_resolve_through_the_executable_directory() {
+    if super::RELEASE_CHANNEL == "dev" {
+        return;
+    }
+    let probe_must_not_run = |_: &Path| -> Probe { panic!("an invalid root was probed") };
+    let exe = Path::new("/game");
+    let expected = exe
+        .join(super::APP_DATA_SUBDIRECTORY)
+        .join("pokeemerald.pack");
+    let cases: [(DataDirRule, &[(&str, &str)]); 3] = [
+        (
+            DataDirRule::Xdg,
+            &[("XDG_DATA_HOME", "x"), ("HOME", "home")],
+        ),
+        (DataDirRule::MacOs, &[("HOME", "home")]),
+        (
+            DataDirRule::Windows,
+            &[("APPDATA", r"\roaming"), ("USERPROFILE", "C:profile")],
+        ),
+    ];
+    for (rule, pairs) in cases {
+        assert_eq!(
+            resolve(&env_of(pairs), Some(exe), &probe_must_not_run, rule),
+            expected
+        );
+    }
+}
+
+#[test]
+fn incomplete_unc_roots_are_rejected_in_favour_of_the_userprofile() {
+    for root in [
+        "//",
+        r"\\",
+        "//server",
+        r"\\server",
+        r"\\server\",
+        "///share",
+    ] {
+        let pairs = [("APPDATA", root), ("USERPROFILE", "C:/Users/dev")];
+        assert_eq!(
+            data_dir(&env_of(&pairs), DataDirRule::Windows),
+            Some(
+                PathBuf::from("C:/Users/dev")
+                    .join("AppData")
+                    .join("Roaming")
+            )
+        );
+    }
+}

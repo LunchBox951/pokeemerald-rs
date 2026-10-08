@@ -248,24 +248,26 @@ impl HostFamily {
     }
 }
 
-/// Resolves `family`'s data directory through `env`, ignoring empty values.
+/// Resolves `family`'s data directory through `env`, ignoring unset, empty,
+/// and non-absolute roots.
 #[must_use]
 pub fn data_dir_for(family: HostFamily, env: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
-    let non_empty_path = |name: &str| {
+    let absolute_root = |name: &str, is_absolute: fn(&OsStr) -> bool| {
         env(name)
-            .filter(|value| !value.is_empty())
+            .filter(|value| is_absolute(value))
             .map(PathBuf::from)
     };
     match family {
-        HostFamily::Windows => non_empty_path("APPDATA").or_else(|| {
-            non_empty_path("USERPROFILE").map(|home| home.join("AppData").join("Roaming"))
+        HostFamily::Windows => absolute_root("APPDATA", is_absolute_windows_path).or_else(|| {
+            absolute_root("USERPROFILE", is_absolute_windows_path)
+                .map(|home| home.join("AppData").join("Roaming"))
         }),
-        HostFamily::MacOs => {
-            non_empty_path("HOME").map(|home| home.join("Library").join("Application Support"))
-        }
-        HostFamily::Xdg => non_empty_path("XDG_DATA_HOME")
-            .filter(|dir| is_absolute_xdg_path(dir.as_os_str()))
-            .or_else(|| non_empty_path("HOME").map(|home| home.join(".local").join("share"))),
+        HostFamily::MacOs => absolute_root("HOME", is_absolute_xdg_path)
+            .map(|home| home.join("Library").join("Application Support")),
+        HostFamily::Xdg => absolute_root("XDG_DATA_HOME", is_absolute_xdg_path).or_else(|| {
+            absolute_root("HOME", is_absolute_xdg_path)
+                .map(|home| home.join(".local").join("share"))
+        }),
     }
 }
 
@@ -273,6 +275,30 @@ pub fn data_dir_for(family: HostFamily, env: impl Fn(&str) -> Option<OsString>) 
 /// POSIX path rules, independently of the platform running this binary.
 fn is_absolute_xdg_path(path: &OsStr) -> bool {
     path.as_encoded_bytes().starts_with(b"/")
+}
+
+/// Whether `path` is absolute under Windows path rules (a drive letter
+/// followed by a separator, or a UNC root naming a server and share), independently of the platform
+/// running this binary. Drive-relative (`C:foo`) and root-relative (`\foo`)
+/// forms are rejected: they depend on the current directory or drive.
+fn is_absolute_windows_path(path: &OsStr) -> bool {
+    let bytes = path.as_encoded_bytes();
+    let is_separator = |byte: u8| byte == b'/' || byte == b'\\';
+    let drive_absolute = matches!(
+        bytes,
+        [letter, b':', separator, ..] if letter.is_ascii_alphabetic() && is_separator(*separator)
+    );
+    let unc = match bytes {
+        [first, second, rest @ ..] if is_separator(*first) && is_separator(*second) => {
+            let mut components = rest.split(|byte| is_separator(*byte));
+            matches!(
+                (components.next(), components.next()),
+                (Some(server), Some(share)) if !server.is_empty() && !share.is_empty()
+            )
+        }
+        _ => false,
+    };
+    drive_absolute || unc
 }
 
 /// Resolves this host's save-file path.
