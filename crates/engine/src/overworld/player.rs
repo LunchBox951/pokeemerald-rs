@@ -234,8 +234,8 @@ impl Landing {
 impl PlayerState {
     /// Creates a stationary player on `position`.
     ///
-    /// Collision and render elevations both start at `elevation`. Only an
-    /// observed landing arms
+    /// Collision and render elevations both start at `elevation`. Only a
+    /// manual MOVING attempt (landed or blocked) arms
     /// [`forced_movement_armed`](Self::forced_movement_armed), so a placement
     /// onto a forced-movement tile is never trapped there.
     #[must_use]
@@ -343,8 +343,8 @@ impl PlayerState {
     /// dispatch set, `sForcedMovementTestFuncs`
     /// (`field_player_avatar.c:412-427`). [`supported_forced_mover`]
     /// dispatches a `MB_WALK_*`/`MB_SLIDE_*` tile as real movement; every
-    /// other armed tile still refuses manual steps. Armed only by a step
-    /// this state committed, never by placement.
+    /// other armed tile still refuses manual steps. Armed only by a manual
+    /// step attempt (including a blocked one), never by placement.
     #[must_use]
     pub const fn forced_movement_armed(&self) -> bool {
         self.forced_movement_armed
@@ -703,6 +703,14 @@ impl PlayerState {
         self.movement_streak_active = true;
         self.facing = direction;
         self.movement_direction = direction;
+        // Upstream selects MOVING (clearing CONTROLLABLE) before collision
+        // resolves, so a blocked attempt still leaves the standing tile
+        // eligible for forced movement on later no-input polls
+        // (`field_player_avatar.c:401-405`, `:583-595`).
+        // Only tiles with a dispatched handler arm here: a deferred behavior
+        // (mats, ice, currents) would have no handler to release the guard
+        // and would refuse every later manual step.
+        self.forced_movement_armed = supported_forced_mover(standing_behavior).is_some();
 
         self.attempt_manual_step(
             direction,
