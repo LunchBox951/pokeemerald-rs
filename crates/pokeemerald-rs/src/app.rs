@@ -513,7 +513,17 @@ impl App {
         pack: &std::path::Path,
         save: &std::path::Path,
     ) -> Result<Self, AppError> {
-        let source = crate::pack_source::PackSource::Explicit(pack.into());
+        Self::new_headless_real_at_shared(&pack.into(), save)
+    }
+
+    /// [`App::new_headless_real_at`] with the pack path already owned as an
+    /// `Arc`, so the path's lifetime is observable: the boot holds clones
+    /// only as long as the `App` (or the failed attempt) lives.
+    pub(crate) fn new_headless_real_at_shared(
+        pack: &std::sync::Arc<std::path::Path>,
+        save: &std::path::Path,
+    ) -> Result<Self, AppError> {
+        let source = crate::pack_source::PackSource::Explicit(pack.clone());
         Self::boot(
             || {
                 let pack = assets::AssetPack::load(pack).map_err(TitleSceneError::Pack)?;

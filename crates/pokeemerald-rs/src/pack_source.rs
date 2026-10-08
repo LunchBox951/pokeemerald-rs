@@ -143,4 +143,20 @@ mod tests {
             PackSource::Explicit(std::path::Path::new("/nonexistent/explicit-source.pack").into());
         assert!(source.load().is_err());
     }
+
+    /// Dropping an explicit source releases its path: nothing else keeps
+    /// the `Arc` alive, unlike a leaked `&'static Path`.
+    #[test]
+    fn dropping_an_explicit_source_releases_its_path() {
+        let path: std::sync::Arc<std::path::Path> =
+            std::path::Path::new("/nonexistent/explicit-source.pack").into();
+        let weak = std::sync::Arc::downgrade(&path);
+        let source = PackSource::Explicit(path.clone());
+        let clone = source.clone();
+        drop(path);
+        drop(source);
+        assert!(weak.upgrade().is_some(), "a clone still owns the path");
+        drop(clone);
+        assert!(weak.upgrade().is_none());
+    }
 }
