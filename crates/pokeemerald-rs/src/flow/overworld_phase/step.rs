@@ -516,7 +516,7 @@ impl OverworldPhase {
             // (an immutable borrow of `self.scene`) is still needed below.
             let maps = MapConnections {
                 pack: &self.connection_pack,
-                source: self.pack_source,
+                source: self.pack_source.clone(),
             };
             // `interaction` preempts movement too (issue #435), and so do a
             // claimed fresh `START`, the pre-movement animated-door check
@@ -772,7 +772,7 @@ impl OverworldPhase {
             match interaction {
                 Some(InteractionOutcome::Dialog(tokens)) => {
                     let text_speed = self.field_dialog_text_speed();
-                    match NpcDialog::open_at_speed(self.pack_source, tokens, text_speed) {
+                    match NpcDialog::open_at_speed(&self.pack_source, tokens, text_speed) {
                         Ok(dialog) => self.dialog = Some(dialog),
                         Err(err) => eprintln!("npc dialog: {err} -- staying in the overworld"),
                     }

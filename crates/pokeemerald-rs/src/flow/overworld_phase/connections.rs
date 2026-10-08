@@ -200,7 +200,7 @@ impl OverworldPhase {
     )> {
         let event_data = self.prepare_map_entry_event_data(map, self.save2.player_gender);
         let scene = overworld::load_room_from_source(
-            self.pack_source,
+            &self.pack_source,
             map,
             self.save2.player_gender.into(),
             &event_data,
