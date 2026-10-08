@@ -73,7 +73,8 @@ pub use pack_format::OUTPUT_RELATIVE_PATH;
 use pack_format::{EntryShapeError, PackEntry, PackWriter};
 
 use scope::{
-    TilesetSource, TILESETS, TITLE_SCREEN_EMBEDDED_PALETTE_SHEETS, TITLE_SCREEN_PALETTE_CUTS,
+    TilesetSource, LAYOUTS, TILESETS, TITLE_SCREEN_EMBEDDED_PALETTE_SHEETS,
+    TITLE_SCREEN_PALETTE_CUTS,
 };
 
 /// Serializes tests that read or replace the checkout-local pack.
@@ -858,55 +859,6 @@ fn extract_sprites(upstream: &Path, writer: &mut PackWriter) -> Result<(), Extra
     }
     Ok(())
 }
-
-#[derive(Clone, Copy)]
-struct LayoutSource {
-    upstream_id: &'static str,
-    pack_name: &'static str,
-}
-
-const LAYOUTS: [LayoutSource; 10] = [
-    LayoutSource {
-        upstream_id: "LAYOUT_LITTLEROOT_TOWN",
-        pack_name: "littleroot_town",
-    },
-    LayoutSource {
-        upstream_id: "LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F",
-        pack_name: "littleroot_town_brendans_house_1f",
-    },
-    LayoutSource {
-        upstream_id: "LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F",
-        pack_name: "littleroot_town_brendans_house_2f",
-    },
-    LayoutSource {
-        upstream_id: "LAYOUT_LITTLEROOT_TOWN_MAYS_HOUSE_1F",
-        pack_name: "littleroot_town_mays_house_1f",
-    },
-    LayoutSource {
-        upstream_id: "LAYOUT_LITTLEROOT_TOWN_MAYS_HOUSE_2F",
-        pack_name: "littleroot_town_mays_house_2f",
-    },
-    LayoutSource {
-        upstream_id: "LAYOUT_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB",
-        pack_name: "littleroot_town_professor_birchs_lab",
-    },
-    LayoutSource {
-        upstream_id: "LAYOUT_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB_WITH_TABLE",
-        pack_name: "littleroot_town_professor_birchs_lab_with_table",
-    },
-    LayoutSource {
-        upstream_id: "LAYOUT_ROUTE101",
-        pack_name: "route101",
-    },
-    LayoutSource {
-        upstream_id: "LAYOUT_OLDALE_TOWN",
-        pack_name: "oldale_town",
-    },
-    LayoutSource {
-        upstream_id: "LAYOUT_ROUTE103",
-        pack_name: "route103",
-    },
-];
 
 const BORDER_SIDE_CELLS: usize = 2;
 const BORDER_BLOCK_BYTES: usize =
