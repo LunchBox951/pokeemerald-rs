@@ -565,6 +565,18 @@ pub struct AudioOutput {
     settle_margin_frames: u64,
 }
 
+/// Build a ring holding `frames` interleaved frames of `channels` samples.
+///
+/// The ring counts samples, so the frame capacity is multiplied by the
+/// channel count; an overflowing product is refused rather than wrapped into
+/// a smaller ring.
+fn frame_ring(frames: usize, channels: u16) -> Result<(Producer, Consumer), PlatformError> {
+    let samples = frames
+        .checked_mul(usize::from(channels))
+        .ok_or(PlatformError::AudioRingCapacityOverflow { frames, channels })?;
+    Ok(ring_buffer(samples))
+}
+
 impl AudioOutput {
     /// The rate upstream's M4A engine actually renders PCM at — the nominal
     /// producer contract for the ring buffer and the `audio` crate, which
@@ -630,6 +642,9 @@ impl AudioOutput {
     ///   device, or fails to build the stream. A device lost *after* the
     ///   query stays here rather than collapsing into `NoAudioDevice`: the
     ///   device was real, so losing it is a failure, not a headless run.
+    /// - [`PlatformError::AudioRingCapacityOverflow`] if
+    ///   `ring_capacity_frames` times the device channel count overflows
+    ///   `usize`.
     /// - [`PlatformError::UnsupportedResampleRatio`] if the negotiated
     ///   device rate pairs with `Self::source_cadence_hz` into a ratio the
     ///   resampler's bounded scratch cannot carry (see
@@ -643,7 +658,7 @@ impl AudioOutput {
 
         let device_sample_rate = config.sample_rate();
         let channels = config.channels();
-        let (producer, consumer) = ring_buffer(ring_capacity_frames * channels as usize);
+        let (producer, consumer) = frame_ring(ring_capacity_frames, channels)?;
         let source = source_for_device(
             consumer,
             channels,
@@ -686,9 +701,14 @@ impl AudioOutput {
     /// [`Self::playback_settle_margin_frames`] is always `0`; a test that
     /// needs to exercise a resampler's deferred-lookahead tail without a real
     /// `cpal` device wants [`Self::null_resampled`] instead.
+    ///
+    /// # Panics
+    ///
+    /// If `ring_capacity_frames` times [`Self::CHANNELS`] overflows `usize`.
     #[must_use]
     pub fn null(ring_capacity_frames: usize) -> Self {
-        let (producer, consumer) = ring_buffer(ring_capacity_frames * usize::from(Self::CHANNELS));
+        let (producer, consumer) = frame_ring(ring_capacity_frames, Self::CHANNELS)
+            .expect("null ring capacity in frames overflows the interleaved sample count");
         Self {
             backend: Backend::Null(Source::Direct(consumer)),
             producer,
@@ -714,6 +734,8 @@ impl AudioOutput {
     /// # Errors
     ///
     /// See [`crate::resample::Resampler::new`]'s `UnsupportedResampleRatio` doc.
+    /// Also [`PlatformError::AudioRingCapacityOverflow`] if
+    /// `ring_capacity_frames` times the channel count overflows `usize`.
     #[doc(hidden)]
     pub fn null_resampled(
         ring_capacity_frames: usize,
@@ -722,7 +744,7 @@ impl AudioOutput {
         max_output_frames: usize,
     ) -> Result<Self, PlatformError> {
         let channels = Self::CHANNELS;
-        let (producer, consumer) = ring_buffer(ring_capacity_frames * usize::from(channels));
+        let (producer, consumer) = frame_ring(ring_capacity_frames, channels)?;
         // Unlike `source_for_device` (which always resamples from the fixed
         // M4A source cadence), this test seam takes `source_rate` directly so
         // a test can reproduce an exact rate ratio (e.g. the reviewer's
