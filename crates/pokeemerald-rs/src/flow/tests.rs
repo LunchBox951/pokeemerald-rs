@@ -1013,3 +1013,41 @@ fn a_corrupt_boot_falls_back_to_the_default_window_frame() {
         "SAVE_STATUS_ERROR loaded an intact slot and is never cleared"
     );
 }
+
+/// Upstream guards `DPAD_UP` with `tCurrItem > 0` and `DPAD_DOWN` with the
+/// last-item bound (`main_menu.c:903`, `:915`), so a blocked direction falls
+/// through to the other when both are newly pressed together: UP+DOWN at the
+/// top row moves down, and at the bottom row moves up (issue #1960).
+#[test]
+fn main_menu_simultaneous_up_down_falls_through_at_boundaries() {
+    for (menu_type, start_downs, expected) in [
+        (MainMenuType::NoSavedGame, 0, MainMenuItem::Option),
+        (MainMenuType::NoSavedGame, 1, MainMenuItem::NewGame),
+        (MainMenuType::SavedGame, 0, MainMenuItem::NewGame),
+        (MainMenuType::SavedGame, 2, MainMenuItem::NewGame),
+    ] {
+        let (_temp, mut save_slot) = empty_slot("up-down-fallthrough");
+        let mut menu = crate::main_menu::synthetic_scene(menu_type);
+        for _ in 0..start_downs {
+            menu.move_down();
+        }
+        let scene = AppScene::MainMenu(Box::new(MainMenuState {
+            scene: menu,
+            saved: save_slot.load(),
+        }));
+        let (next, _frame) = advance_scene(
+            scene,
+            pressed(Buttons::UP | Buttons::DOWN),
+            &mut save_slot,
+            crate::pack_source::PackSource::Runtime,
+        );
+        let AppScene::MainMenu(state) = next else {
+            panic!("expected to stay on the main menu");
+        };
+        assert_eq!(
+            state.scene.selected(),
+            expected,
+            "{menu_type:?} after {start_downs} downs"
+        );
+    }
+}
