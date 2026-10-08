@@ -60,6 +60,9 @@ pub enum PngError {
     MissingOrBadPalette,
     /// The `PLTE` chunk exceeds PNG's 256-entry limit.
     TooManyPaletteEntries(usize),
+    /// A critical chunk appears out of the order, or more often than, PNG
+    /// allows, or `IEND` carries data.
+    MalformedChunkStructure([u8; 4]),
 }
 
 impl fmt::Display for PngError {
@@ -87,6 +90,11 @@ impl fmt::Display for PngError {
             Self::UnknownCriticalChunk(kind) => write!(
                 f,
                 "PNG has unrecognized critical chunk {}",
+                String::from_utf8_lossy(kind)
+            ),
+            Self::MalformedChunkStructure(kind) => write!(
+                f,
+                "PNG chunk {} is misplaced, repeated, or malformed",
                 String::from_utf8_lossy(kind)
             ),
             Self::MissingOrBadPalette => {
@@ -150,6 +158,36 @@ const CHUNK_ANCILLARY_BIT: u8 = 0x20;
 const MAX_PALETTE_ENTRIES: usize = 256;
 const CRC32_REFLECTED_ISO_3309_POLYNOMIAL: u32 = 0xEDB8_8320;
 
+#[derive(Clone, Copy, Default, PartialEq)]
+enum ChunkStage {
+    #[default]
+    Start,
+    Header,
+    Palette,
+    ImageData,
+    Trailer,
+}
+
+impl ChunkStage {
+    fn advance(self, kind: [u8; CHUNK_KIND_SIZE], data: &[u8]) -> Result<Self, PngError> {
+        let next = match (self, kind) {
+            (Self::Start, IHDR) => Some(Self::Header),
+            (Self::Header, PLTE) => Some(Self::Palette),
+            (Self::Header | Self::Palette | Self::ImageData, IDAT) => Some(Self::ImageData),
+            (Self::Start, _)
+            | (Self::ImageData, IHDR | PLTE)
+            | (Self::Header | Self::Palette | Self::Trailer, IHDR | IDAT)
+            | (Self::Palette | Self::Trailer, PLTE) => None,
+            (Self::ImageData, _) => Some(Self::Trailer),
+            (stage, _) => Some(stage),
+        };
+        match next {
+            Some(stage) if kind != IEND || data.is_empty() => Ok(stage),
+            _ => Err(PngError::MalformedChunkStructure(kind)),
+        }
+    }
+}
+
 struct Chunk<'a> {
     kind: [u8; CHUNK_KIND_SIZE],
     data: &'a [u8],
@@ -174,6 +212,7 @@ fn read_u32(bytes: &[u8]) -> u32 {
 fn read_chunks(mut rest: &[u8]) -> Result<Vec<Chunk<'_>>, PngError> {
     let mut chunks = Vec::new();
     let mut saw_iend = false;
+    let mut stage = ChunkStage::default();
     while !rest.is_empty() {
         let header = rest.get(..CHUNK_HEADER_SIZE).ok_or(PngError::Truncated)?;
         let data_len = read_u32(&header[..CHUNK_LENGTH_SIZE]) as usize;
@@ -200,6 +239,7 @@ fn read_chunks(mut rest: &[u8]) -> Result<Vec<Chunk<'_>>, PngError> {
             return Err(PngError::UnknownCriticalChunk(kind));
         }
         let data = &rest[data_start..data_end];
+        stage = stage.advance(kind, data)?;
         let is_end = kind == IEND;
         chunks.push(Chunk { kind, data });
         rest = &rest[crc_end..];
@@ -780,6 +820,86 @@ mod tests {
             err,
             PngError::TrailingData,
             "an extra, otherwise well-formed chunk after IEND is still trailing data"
+        );
+    }
+
+    type MalformedCase<'a> = (&'a str, [u8; 4], Vec<&'a Vec<u8>>);
+
+    #[test]
+    fn rejects_malformed_critical_chunk_structure() {
+        let ihdr_chunk = chunk(
+            super::IHDR,
+            &ihdr(super::EIGHT_BIT_DEPTH, super::INDEXED_COLOR_TYPE, 1, 1),
+        );
+        let zlib = stored_zlib(&[super::FILTER_NONE, 0]);
+        let idat_chunk = chunk(super::IDAT, &zlib);
+        let plte_chunk = chunk(super::PLTE, &[0, 0, 0]);
+        let iend_chunk = chunk(super::IEND, &[]);
+        let (first_half, second_half) = zlib.split_at(3);
+        let cases: Vec<MalformedCase<'_>> = vec![
+            (
+                "duplicate IHDR",
+                super::IHDR,
+                vec![&ihdr_chunk, &ihdr_chunk, &idat_chunk, &iend_chunk],
+            ),
+            (
+                "IHDR after IDAT",
+                super::IDAT,
+                vec![&idat_chunk, &ihdr_chunk, &iend_chunk],
+            ),
+            (
+                "PLTE after IDAT",
+                super::PLTE,
+                vec![&ihdr_chunk, &idat_chunk, &plte_chunk, &iend_chunk],
+            ),
+            (
+                "duplicate PLTE",
+                super::PLTE,
+                vec![
+                    &ihdr_chunk,
+                    &plte_chunk,
+                    &plte_chunk,
+                    &idat_chunk,
+                    &iend_chunk,
+                ],
+            ),
+        ];
+        for (name, kind, parts) in cases {
+            let mut png = super::SIGNATURE.to_vec();
+            for part in parts {
+                png.extend_from_slice(part);
+            }
+            assert_eq!(
+                decode(&png).unwrap_err(),
+                PngError::MalformedChunkStructure(kind),
+                "{name}"
+            );
+        }
+
+        let split_idat = [
+            chunk(super::IDAT, first_half),
+            chunk(*b"tEXt", b"k\0v"),
+            chunk(super::IDAT, second_half),
+        ]
+        .concat();
+        let mut png = super::SIGNATURE.to_vec();
+        for part in [&ihdr_chunk, &split_idat[..], &iend_chunk] {
+            png.extend_from_slice(part);
+        }
+        assert_eq!(
+            decode(&png).unwrap_err(),
+            PngError::MalformedChunkStructure(super::IDAT),
+            "IDAT split by an ancillary chunk"
+        );
+
+        let mut png = super::SIGNATURE.to_vec();
+        png.extend_from_slice(&ihdr_chunk);
+        png.extend_from_slice(&idat_chunk);
+        png.extend_from_slice(&chunk(super::IEND, &[0]));
+        assert_eq!(
+            decode(&png).unwrap_err(),
+            PngError::MalformedChunkStructure(super::IEND),
+            "nonempty IEND"
         );
     }
 
