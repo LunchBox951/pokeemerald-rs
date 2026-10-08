@@ -29,11 +29,14 @@ const FIRST_WINDOW_PALETTE: &str = "text-window/palette/text_pal1";
 ///
 /// # Errors
 ///
-/// Any [`GenRomProfileError`] a locator raises.
+/// [`GenRomProfileError::MissingPackEntry`] naming the first fixed frame,
+/// message box, or palette the pack lacks, or any other
+/// [`GenRomProfileError`] a locator raises.
 pub fn locate(
     ctx: &Context<'_>,
     report: &mut Vec<ReportLine>,
 ) -> Result<TextWindowPlan, GenRomProfileError> {
+    super::inventory::require_text_window(ctx.pack)?;
     let queries: Vec<ImageQuery> = ctx
         .pack
         .ids_with_prefix("text-window/image/")
