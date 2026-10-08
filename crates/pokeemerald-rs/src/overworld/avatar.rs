@@ -3,10 +3,10 @@
 //! Nine 16x32 frames per sheet, upstream's `overworld_frame(<pic>, 2, 4, n)`
 //! in `object_event_pic_tables.h`; `FRAME_*` follow `object_event_anims.h`.
 
-use assets::{ImageRef, PaletteRef};
+use assets::ImageRef;
 use engine::overworld::{Direction, PlayerState, TURN_IN_PLACE_FRAMES};
 use engine::save::PlayerGender;
-use rendering::{Bgr555, BitDepth, OamEntry, ObjShape, Palette};
+use rendering::{BitDepth, OamEntry, ObjShape};
 
 mod run;
 #[cfg(test)]
@@ -169,22 +169,6 @@ pub(super) fn pack_people_sheet_frames(
         )?);
     }
     Ok(bytes)
-}
-
-pub(super) fn fill_palette_bank(
-    colors: &mut [Bgr555; Palette::LEN],
-    bank: usize,
-    raw: PaletteRef<'_>,
-) {
-    let count = usize::from(raw.color_count).min(Palette::BANK_LEN);
-    let start = bank * Palette::BANK_LEN;
-    for (slot, color) in colors[start..start + Palette::BANK_LEN]
-        .iter_mut()
-        .zip(raw.colors())
-        .take(count)
-    {
-        *slot = Bgr555::from_raw(color);
-    }
 }
 
 pub(super) const fn stand_frame_for(facing: Direction) -> (u16, bool) {

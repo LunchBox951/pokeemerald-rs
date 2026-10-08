@@ -49,19 +49,15 @@ const MAX_LAYOUT_SIDE: u32 = 1024;
 ///
 /// # Errors
 ///
-/// [`GenRomProfileError::MissingPackEntry`] if the pack holds no
-/// `layout/*/map` entries at all, or any other [`GenRomProfileError`] a
+/// [`GenRomProfileError::MissingPackEntry`] naming the first fixed layout
+/// map or border the pack lacks, or any other [`GenRomProfileError`] a
 /// locator raises.
 pub fn locate(
     ctx: &Context<'_>,
     report: &mut Vec<ReportLine>,
 ) -> Result<Vec<MapLayoutPlan>, GenRomProfileError> {
+    super::inventory::require_layouts(ctx.pack)?;
     let names = layout_names(ctx);
-    if names.is_empty() {
-        return Err(GenRomProfileError::MissingPackEntry(
-            "layout/*/map".to_owned(),
-        ));
-    }
     let mut needles = Vec::with_capacity(names.len());
     for name in &names {
         needles.push(ctx.pack.get(&format!("layout/{name}/map"))?.payload.clone());

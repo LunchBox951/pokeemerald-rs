@@ -369,3 +369,22 @@ fn explicit_media_boot_with_a_missing_pack_fails_before_touching_the_save() {
         "a failed pack load must not open the save"
     );
 }
+
+/// A failed explicit-media boot releases the pack path it was handed. The
+/// path is observed through a `Weak` on the shared `Arc`, which a leaked
+/// `&'static Path` could not express at all.
+#[test]
+fn a_failed_explicit_media_boot_releases_the_pack_path() {
+    let dir =
+        std::env::temp_dir().join(format!("pokeemerald-explicit-free-{}", std::process::id()));
+    let pack: std::sync::Arc<std::path::Path> = dir.join("no.pack").into();
+    let weak = std::sync::Arc::downgrade(&pack);
+    let result = App::new_headless_real_at_shared(&pack, &dir.join("save").join("a.sav"));
+    assert!(result.is_err(), "a missing pack must not boot");
+    drop(result);
+    drop(pack);
+    assert!(
+        weak.upgrade().is_none(),
+        "the failed boot retained the path"
+    );
+}

@@ -962,7 +962,7 @@ fn a_pack_missing_the_whole_layout_domain_is_refused() {
         let err = super::layouts::locate(ctx, &mut report)
             .expect_err("a pack with no layout/*/map entries must be refused");
         assert!(
-            matches!(&err, GenRomProfileError::MissingPackEntry(id) if id == "layout/*/map"),
+            matches!(&err, GenRomProfileError::MissingPackEntry(id) if id == "layout/littleroot_town/map"),
             "{err:?}"
         );
         assert!(

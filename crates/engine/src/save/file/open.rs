@@ -94,10 +94,10 @@ fn is_reparse_point(metadata: &std::fs::Metadata) -> bool {
 /// on a FIFO's other end.
 #[cfg(unix)]
 mod open_flags {
-    // Linux's generic `<asm-generic/fcntl.h>`: `O_NOFOLLOW` is `0x20000`,
+    // Linux's and Android's generic `<asm-generic/fcntl.h>`: `O_NOFOLLOW` is `0x20000`,
     // unmodified outside the arm/aarch64/powerpc/powerpc64/m68k override below.
     #[cfg(all(
-        target_os = "linux",
+        any(target_os = "linux", target_os = "android"),
         not(any(
             target_arch = "arm",
             target_arch = "aarch64",
@@ -110,7 +110,7 @@ mod open_flags {
     // `<asm/fcntl.h>` puts `O_NOFOLLOW` at `0x8000` on these: arm, aarch64,
     // and m68k swap it with `O_LARGEFILE`; powerpc has `O_DIRECT` at `0x20000`.
     #[cfg(all(
-        target_os = "linux",
+        any(target_os = "linux", target_os = "android"),
         any(
             target_arch = "arm",
             target_arch = "aarch64",
@@ -123,7 +123,7 @@ mod open_flags {
     // Generic Linux `<asm-generic/fcntl.h>` and `<asm-generic/errno.h>`;
     // MIPS and SPARC use their own `<asm/fcntl.h>` and `<asm/errno.h>`.
     #[cfg(all(
-        target_os = "linux",
+        any(target_os = "linux", target_os = "android"),
         not(any(
             target_arch = "mips",
             target_arch = "mips32r6",
@@ -135,7 +135,7 @@ mod open_flags {
     ))]
     pub(super) const O_NONBLOCK: i32 = 0x0000_0800;
     #[cfg(all(
-        target_os = "linux",
+        any(target_os = "linux", target_os = "android"),
         not(any(
             target_arch = "mips",
             target_arch = "mips32r6",
@@ -148,7 +148,7 @@ mod open_flags {
     pub(super) const ELOOP: i32 = 40;
     // MIPS's `<asm/fcntl.h>` and `<asm/errno.h>`, r6 variants included.
     #[cfg(all(
-        target_os = "linux",
+        any(target_os = "linux", target_os = "android"),
         any(
             target_arch = "mips",
             target_arch = "mips32r6",
@@ -158,7 +158,7 @@ mod open_flags {
     ))]
     pub(super) const O_NONBLOCK: i32 = 0x0000_0080;
     #[cfg(all(
-        target_os = "linux",
+        any(target_os = "linux", target_os = "android"),
         any(
             target_arch = "mips",
             target_arch = "mips32r6",
@@ -169,12 +169,12 @@ mod open_flags {
     pub(super) const ELOOP: i32 = 90;
     // SPARC's `<asm/fcntl.h>` and `<asm/errno.h>`.
     #[cfg(all(
-        target_os = "linux",
+        any(target_os = "linux", target_os = "android"),
         any(target_arch = "sparc", target_arch = "sparc64")
     ))]
     pub(super) const O_NONBLOCK: i32 = 0x0000_4000;
     #[cfg(all(
-        target_os = "linux",
+        any(target_os = "linux", target_os = "android"),
         any(target_arch = "sparc", target_arch = "sparc64")
     ))]
     pub(super) const ELOOP: i32 = 62;
@@ -195,12 +195,25 @@ mod open_flags {
     #[cfg(all(target_os = "linux", target_arch = "sparc64"))]
     const _: () = assert!(O_NONBLOCK == 0x0000_4000 && ELOOP == 62);
 
+    // Android's bionic uses the Linux UAPI values: arm and aarch64 take the
+    // `0x8000` `O_NOFOLLOW` override, x86 and x86_64 the generic `0x20000`.
+    #[cfg(all(
+        target_os = "android",
+        any(target_arch = "x86", target_arch = "x86_64")
+    ))]
+    const _: () = assert!(O_NOFOLLOW == 0x0002_0000 && O_NONBLOCK == 0x0000_0800 && ELOOP == 40);
+    #[cfg(all(
+        target_os = "android",
+        any(target_arch = "arm", target_arch = "aarch64")
+    ))]
+    const _: () = assert!(O_NOFOLLOW == 0x0000_8000 && O_NONBLOCK == 0x0000_0800 && ELOOP == 40);
+
     // macOS's and the BSDs' shared `<sys/fcntl.h>` and `<sys/errno.h>`.
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
     pub(super) const O_NOFOLLOW: i32 = 0x0000_0100;
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
     pub(super) const O_NONBLOCK: i32 = 0x0000_0004;
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
     pub(super) const ELOOP: i32 = 62;
 }
 
