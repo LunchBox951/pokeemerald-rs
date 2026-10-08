@@ -467,7 +467,9 @@ impl CgbVoice {
     /// output latch) forward from the voice this one replaces on a shared
     /// hardware slot.
     pub(crate) fn carry_hardware_state_from(&mut self, other: &Self) {
-        self.oscillator.carry_hardware_state_from(&other.oscillator);
+        let clocked_silent = other.hardware_envelope_volume.volume() == 0;
+        self.oscillator
+            .carry_hardware_state_from(&other.oscillator, clocked_silent);
     }
 
     /// Applies the off-write a voice's slot receives the instant it idles

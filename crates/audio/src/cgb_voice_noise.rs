@@ -121,6 +121,44 @@ fn replacing_a_sounding_noise_voice_keeps_its_output_latch() {
     }
 }
 
+/// mGBA clocks `ch4.sample = lsb * currentVolume` (`gb/audio.c:641`): a
+/// predecessor clocked at hardware volume zero leaves the latch low however
+/// its LFSR polarity reads, and the trigger does not rewrite it.
+#[test]
+fn replacing_a_zero_volume_noise_voice_starts_low() {
+    let adsr = CgbAdsr {
+        attack: 4,
+        ..CgbAdsr::flat()
+    };
+    let mut predecessor = noise_voice(adsr, WIDE_NOISE, TestNote::default());
+    predecessor.begin_frame(false);
+    let mut acc = [(0i32, 0i32); 1];
+    for _ in 0..MAX_SAMPLES_TO_LATCH_HIGH {
+        if predecessor.noise_output_latch() == Some(LATCH_HIGH) {
+            break;
+        }
+        predecessor.render(&mut acc, &[]);
+    }
+    assert!(predecessor.is_active(), "sanity: attack voice still active");
+    assert_eq!(
+        predecessor.envelope_volume(),
+        0,
+        "sanity: clocked at volume zero"
+    );
+    assert_eq!(
+        predecessor.noise_output_latch(),
+        Some(LATCH_HIGH),
+        "sanity: raw polarity high"
+    );
+    let mut mixer = crate::mixer::Mixer::default();
+    assert!(mixer.add_cgb_voice(predecessor));
+    assert!(mixer.add_cgb_voice(slow_noise_replacement(WIDE_NOISE)));
+    assert!(
+        first_mixed_sample(&mut mixer) < 0.0,
+        "a zero-volume predecessor's effective latch is low"
+    );
+}
+
 /// Upstream `CgbOscOff` writes `NR42 = 8; NR44 = 0x80` (`m4a.c:873-874`): a
 /// zero-volume retrigger that keeps the LFSR clocking, and mGBA rewrites
 /// `ch4.sample = lsb * currentVolume` (`gb/audio.c:641`) on every clock, so an

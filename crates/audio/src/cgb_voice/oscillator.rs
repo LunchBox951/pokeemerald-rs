@@ -88,10 +88,14 @@ impl Oscillator {
     /// output latch forward onto its replacement
     /// ([`SquareChannel::continue_duty_from`]'s and
     /// [`NoiseChannel::continue_output_from`]'s docs); a no-op for Wave.
-    pub(super) fn carry_hardware_state_from(&mut self, other: &Self) {
+    /// `previous_volume_zero` is whether the predecessor's hardware volume
+    /// was zero, so its noise clocks latched low.
+    pub(super) fn carry_hardware_state_from(&mut self, other: &Self, previous_volume_zero: bool) {
         match (self, other) {
             (Self::Square(square), Self::Square(previous)) => square.continue_duty_from(previous),
-            (Self::Noise(noise), Self::Noise(previous)) => noise.continue_output_from(previous),
+            (Self::Noise(noise), Self::Noise(previous)) => {
+                noise.continue_output_from(previous, previous_volume_zero);
+            }
             _ => {}
         }
     }

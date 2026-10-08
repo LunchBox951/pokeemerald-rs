@@ -597,8 +597,15 @@ impl NoiseChannel {
     /// Keeps the previous note's output latch across a trigger: `ch4.sample`
     /// is only rewritten when the LFSR clocks, so it persists into the next
     /// note until the first shift (`mgba/src/gb/audio.c:371-383,602-644`).
-    pub fn continue_output_from(&mut self, previous: &Self) {
-        self.output = previous.output;
+    /// Each clock stores `lsb * currentVolume` (`audio.c:641`), so a
+    /// predecessor running at hardware volume zero leaves the latch low
+    /// whatever its LFSR polarity reads.
+    pub fn continue_output_from(&mut self, previous: &Self, previous_volume_zero: bool) {
+        self.output = if previous_volume_zero {
+            -1
+        } else {
+            previous.output
+        };
     }
 
     /// Settles the latch low after the retirement off-write: `CgbOscOff`
