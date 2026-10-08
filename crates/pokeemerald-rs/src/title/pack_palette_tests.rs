@@ -1,14 +1,14 @@
 //! Pack and palette construction contract: title palettes splice from pack entries,
 //! and pack-loading failures report distinct, actionable errors.
 
-use super::test_support::{write_synthetic_palette_pack, GREEN_BGR555_LE, RED_BGR555_LE};
+use super::test_support::{write_synthetic_palette_pack, GREEN_BGR555, RED_BGR555};
 use super::{title_palette_from_refs, TitleSceneError, LOGO_PALETTE_COLORS};
 use assets::AssetPack;
 
 #[test]
 fn title_palette_splices_rayquaza_clouds_after_224_logo_colors() {
-    let logo = RED_BGR555_LE.repeat(256);
-    let rayquaza_clouds = GREEN_BGR555_LE.repeat(16);
+    let logo = vec![RED_BGR555; 256];
+    let rayquaza_clouds = vec![GREEN_BGR555; 16];
     let fixture = write_synthetic_palette_pack(&[
         ("title/palette/pokemon_logo", &logo),
         ("title/palette/rayquaza_and_clouds", &rayquaza_clouds),
@@ -27,8 +27,8 @@ fn title_palette_splices_rayquaza_clouds_after_224_logo_colors() {
 
 #[test]
 fn title_palette_never_reads_past_either_entrys_own_color_count() {
-    let logo = RED_BGR555_LE;
-    let rayquaza_clouds = GREEN_BGR555_LE;
+    let logo = [RED_BGR555];
+    let rayquaza_clouds = [GREEN_BGR555];
     let fixture = write_synthetic_palette_pack(&[
         ("title/palette/pokemon_logo", &logo),
         ("title/palette/rayquaza_and_clouds", &rayquaza_clouds),
