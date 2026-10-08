@@ -510,13 +510,8 @@ mod tests {
         }
     }
 
-    /// Physical slot of the growth, attacks, EVs/condition, and misc
-    /// substructures for each `personality % 24`, transcribed from the
-    /// `SUBSTRUCT_CASE(n, v1, v2, v3, v4)` rows of `GetSubstruct`
-    /// (`pokeemerald/src/pokemon.c:3603-3635`). The macro
-    /// (`pokemon.c:3584-3598`) selects slot `v1` for substruct type 0
-    /// (growth), `v2` for 1 (attacks), `v3` for 2 (EVs/condition), and `v4`
-    /// for 3 (misc). Deliberately independent of `SUBSTRUCTURE_ORDERS`.
+    /// Slots per kind [growth, attacks, EVs, misc], transcribed independently from
+    /// `pokeemerald/src/pokemon.c:3603-3635` and `:3584-3598`, not from `SUBSTRUCTURE_ORDERS`.
     const UPSTREAM_SLOTS_BY_PERSONALITY: [[usize; 4]; 24] = [
         [0, 1, 2, 3],
         [0, 1, 3, 2],
