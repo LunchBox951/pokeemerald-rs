@@ -6,10 +6,11 @@
 //! reproduces the layout from the pack's raster, which makes the sheet a
 //! 32 KiB signature -- as unmistakable as a root gets.
 //!
-//! The domain is fixed, not discovered: a pack with zero `font/*/glyphs`
-//! entries is missing the domain, not empty of it, and is refused.
+//! The domain is fixed, not discovered: a pack missing any of the five
+//! shipped sheets is missing part of the domain and is refused.
 
 use super::error::GenRomProfileError;
+use super::inventory;
 use super::locate::{camel_case, exactly_one};
 use super::pack_source::latin_font_bytes;
 use super::plan::{FontPlan, ReportLine};
@@ -20,8 +21,8 @@ use super::Context;
 ///
 /// # Errors
 ///
-/// [`GenRomProfileError::MissingPackEntry`] if the pack holds no
-/// `font/*/glyphs` entries at all, [`GenRomProfileError::EntryShape`] if a
+/// [`GenRomProfileError::MissingPackEntry`] naming the first of the five
+/// shipped sheets the pack lacks, [`GenRomProfileError::EntryShape`] if a
 /// sheet is not the 256x512 2bpp shape the layout assumes or holds a pixel
 /// index outside `0..=3`, or [`GenRomProfileError::NotFound`] / [`GenRomProfileError::Ambiguous`] if
 /// one does not turn up exactly once.
@@ -29,17 +30,13 @@ pub fn locate(
     ctx: &Context<'_>,
     report: &mut Vec<ReportLine>,
 ) -> Result<Vec<FontPlan>, GenRomProfileError> {
+    inventory::require_fonts(ctx.pack)?;
     let ids: Vec<String> = ctx
         .pack
         .ids_with_prefix("font/")
         .into_iter()
         .filter(|id| id.ends_with("/glyphs"))
         .collect();
-    if ids.is_empty() {
-        return Err(GenRomProfileError::MissingPackEntry(
-            "font/*/glyphs".to_owned(),
-        ));
-    }
     let mut needles = Vec::with_capacity(ids.len());
     for id in &ids {
         needles.push(latin_font_bytes(ctx.pack, id)?);

@@ -181,14 +181,14 @@ impl Battle {
     /// opponent AI.
     ///
     /// A depleted enemy slot needs only real move data, not an executable
-    /// effect: [`Battle::act`] fails it as [`BattleEvent::FailedNoPp`] before
+    /// effect: `Battle::act` fails it as [`BattleEvent::FailedNoPp`] before
     /// running one, matching `Cmd_attackcanceler`'s no-PP jump
     /// (`src/battle_script_commands.c:934`-`:939`). Soundproof's own block
     /// runs earlier still (`:932`-`:933`), but needs only the already-checked
     /// move data, not an executable effect, so it cannot make this unsafe.
     /// Struggle is that jump's one exemption (`:934`) and so the only move a
     /// depleted slot still executes; it has an executable pipeline of its own,
-    /// so the relaxation still reaches [`Battle::execute_move`] with nothing
+    /// so the relaxation still reaches `Battle::execute_move` with nothing
     /// unresolvable.
     ///
     /// # Errors
@@ -220,7 +220,7 @@ impl Battle {
     /// member's; the enemy's moveset is validated against every non-fainted
     /// reserve up front too, since any of them may face it as a defender
     /// with no further checkpoint before that turn. A fainted reserve is
-    /// admitted without that check: [`Battle::send_out_next_player_reserve`]
+    /// admitted without that check: `Battle::send_out_next_player_reserve`
     /// never selects it, so it can never become the enemy's defender.
     ///
     /// # Errors
@@ -356,9 +356,17 @@ impl Battle {
             return Err(BattleError::FaintedBattler(false));
         }
         for mon in &party {
-            for slot in mon.moves() {
-                trainer::ensure_move_playable(&dex, slot.move_id)?;
+            for (index, slot) in mon.moves().iter().enumerate() {
+                // A depleted slot must still be real move data, but the AI
+                // discards zero-PP slots before scoring and the no-PP abort
+                // precedes any effect, so executable/scoreable admission
+                // applies only to slots with PP remaining.
+                if slot.move_id == MOVE_NONE {
+                    return Err(BattleError::PlaceholderMove(index));
+                }
+                dex.move_data(slot.move_id)?;
                 if slot.pp > 0 {
+                    trainer::ensure_move_playable(&dex, slot.move_id)?;
                     for defender in std::iter::once(&player).chain(
                         player_reserves
                             .iter()

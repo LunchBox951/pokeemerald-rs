@@ -28,7 +28,7 @@ use crate::framebuffer::Framebuffer;
 use crate::mosaic::{MosaicConfig, MosaicSize};
 use crate::palette::Rgb888;
 use crate::sprite::{SpriteLayer, SpritePixel, WindowSpans};
-use crate::window::{WindowConfig, WindowLayerEnable};
+use crate::window::{WindowConfig, WindowLayerEnable, WindowRegion};
 
 /// A BG slot's per-pixel sampling mode: regular (scrolling) or affine.
 #[derive(Debug, Clone, Copy)]
@@ -536,7 +536,7 @@ fn compose_pixel(
 
     let objwin_mask = effects.windows.obj_window.is_some()
         && sprites.objwin_mask_with_mosaic(x, y, effects.mosaic.obj);
-    let (window, _) = effects.windows.classify_with_region(wx, wy, objwin_mask);
+    let (window, window_region) = effects.windows.classify_with_region(wx, wy, objwin_mask);
 
     // An `OBJWIN` mask never partitions the scanline, so the enable bits
     // that decide whether a span runs a layer's draw routine at all come
@@ -616,7 +616,20 @@ fn compose_pixel(
         // the backdrop against itself).
         return span_backdrop;
     };
-    let next = next.map(|(_, color, kind, _, _)| (color, kind));
+    // Inside an effects-enabled OBJWIN region a target-1 BG's neighbor color
+    // is its brighten/darken variant, selected before the unmasked
+    // forced-alpha exception (`mgba/src/gba/renderers/software-private.h:156-171`)
+    // `(behavioral-fidelity)`. WIN0/WIN1 outrank OBJWIN, so only the OBJWIN
+    // region qualifies.
+    let next = next.map(|(_, color, kind, _, _)| {
+        let color = match kind {
+            LayerKind::Bg(index) if window_region == WindowRegion::ObjWindow && window.effects => {
+                effects::objwin_bg_variant(&effects.color, index, color)
+            }
+            _ => color,
+        };
+        (color, kind)
+    });
     effects::resolve_pixel_color(
         &effects.color,
         window_effects,
