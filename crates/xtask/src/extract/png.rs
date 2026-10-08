@@ -844,8 +844,8 @@ mod tests {
             ),
             (
                 "IHDR after IDAT",
-                super::IDAT,
-                vec![&idat_chunk, &ihdr_chunk, &iend_chunk],
+                super::IHDR,
+                vec![&ihdr_chunk, &idat_chunk, &ihdr_chunk, &iend_chunk],
             ),
             (
                 "PLTE after IDAT",
