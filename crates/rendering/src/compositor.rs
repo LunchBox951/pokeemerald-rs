@@ -422,32 +422,10 @@ pub fn compose_frame_with_effects(
             clippy::cast_possible_truncation,
             reason = "the framebuffer is 160 scanlines tall, well within u8"
         )]
-        let (span_starts, span_draws_obj, span_suppresses_objwin) = {
-            let scanline = y as u8;
-            let starts = effects.windows.scanline_span_starts(scanline);
-            let draws_obj: Vec<bool> = starts
-                .iter()
-                .map(|&start| span_runs_obj_pass(&effects.windows, start as u8, scanline))
-                .collect();
-            // A span's own WIN0/WIN1-vs-OBJWIN rank, ignoring the per-pixel
-            // OBJWIN mask: mGBA drops an OBJWIN sprite for a whole pass when
-            // that pass's own rank outranks OBJWIN's (`software-obj.c:161`,
-            // `video-software.c:131-134`) `(behavioral-fidelity)`.
-            let suppresses_objwin: Vec<bool> = starts
-                .iter()
-                .map(|&start| {
-                    effects
-                        .windows
-                        .classify_with_region(start as u8, scanline, false)
-                        .1
-                        .suppresses_objwin_hole()
-                })
-                .collect();
-            (starts, draws_obj, suppresses_objwin)
-        };
-        let window_spans = WindowSpans::new(&span_starts, &span_draws_obj, &span_suppresses_objwin);
+        let passes = effects.windows.scanline_passes(y as u8);
+        let window_spans = WindowSpans::new(&passes, effects.windows.obj_window.is_some());
         for x in 0..width {
-            if span_starts.contains(&x) {
+            if passes.iter().any(|pass| pass.start == x) {
                 for hold in affine_mosaic_holds.iter_mut().flatten() {
                     hold.close();
                 }
@@ -466,19 +444,6 @@ pub fn compose_frame_with_effects(
         }
     }
     framebuffer
-}
-
-/// Whether the hardware-window span starting at column `start` runs the OBJ
-/// pass on scanline `y` at all.
-///
-/// mGBA skips a span's whole sprite-preprocessing pass unless that span's own
-/// control enables OBJ or `OBJWIN` is enabled in `DISPCNT`; a skipped span
-/// writes nothing into the once-per-scanline sprite buffer
-/// (`mgba/src/gba/renderers/video-software.c:1052-1062`). A span is one run of
-/// a single window region, so its start column classifies all of it, and an
-/// `OBJWIN` mask never partitions the scanline `(behavioral-fidelity)`.
-fn span_runs_obj_pass(windows: &WindowConfig, start: u8, y: u8) -> bool {
-    windows.classify(start, y, false).obj || windows.obj_window.is_some()
 }
 
 /// Whether `bg_index`'s affine mosaic hold should keep advancing given
@@ -556,8 +521,7 @@ fn compose_pixel(
         .obj
         .then(|| sprites.resolve_pixel_with_mosaic_windowed(x, y, effects.mosaic.obj, window_spans))
         .flatten();
-    let window_effects =
-        pixel_window_effects(&effects.windows, sprite, window, partition_control, wy);
+    let window_effects = pixel_window_effects(&effects.windows, sprite, window, partition_control);
 
     let mut front = None;
     let mut next = None;
@@ -660,21 +624,10 @@ fn pixel_window_effects(
     sprite: Option<SpritePixel>,
     window: WindowLayerEnable,
     partition_control: WindowLayerEnable,
-    y: u8,
 ) -> effects::PixelWindowEffects {
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "a span start is a framebuffer column, below 240"
-    )]
-    let span_effects = |span_start: usize| windows.classify(span_start as u8, y, false).effects;
     let (flags_span_effects, color_span_effects) = sprite.map_or(
         (partition_control.effects, partition_control.effects),
-        |pixel| {
-            (
-                span_effects(pixel.span_start),
-                span_effects(pixel.color_span_start),
-            )
-        },
+        |pixel| (pixel.span_effects, pixel.color_span_effects),
     );
     // mGBA's `objwinSlowPath` (`effects::resolve_pixel_color`'s docs):
     // `OBJWIN`'s own blend-enable bit compared against the writing pass's
