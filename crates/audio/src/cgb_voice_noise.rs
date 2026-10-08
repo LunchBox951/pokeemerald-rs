@@ -121,30 +121,38 @@ fn replacing_a_sounding_noise_voice_keeps_its_output_latch() {
     }
 }
 
+/// Upstream `CgbOscOff` writes `NR42 = 8; NR44 = 0x80` (`m4a.c:873-874`): a
+/// zero-volume retrigger that keeps the LFSR clocking, and mGBA rewrites
+/// `ch4.sample = lsb * currentVolume` (`gb/audio.c:641`) on every clock, so an
+/// idled noise slot settles at the low latch before the next note.
 #[test]
-fn a_noise_note_on_an_emptied_slot_inherits_the_retired_latch() {
+fn a_noise_note_after_retirement_and_idle_frames_starts_low() {
     for width in [WIDE_NOISE, NARROW_NOISE] {
-        for stop_by_track_stop in [false, true] {
-            let mut mixer = crate::mixer::Mixer::default();
-            assert!(mixer.add_cgb_voice(noise_voice_latched_high(width)));
-            if stop_by_track_stop {
-                mixer.stop_track(0);
-            } else {
-                mixer.note_off_track(0, TEST_KEY);
-                first_mixed_sample(&mut mixer);
-            }
-            for _ in 0..3 {
-                assert!(
-                    first_mixed_sample(&mut mixer).abs() < f32::EPSILON,
-                    "the slot is idle"
-                );
-            }
-            assert!(mixer.add_cgb_voice(slow_noise_replacement(width)));
-            assert!(
-                first_mixed_sample(&mut mixer) > 0.0,
-                "a note on the emptied slot must start on the retained latch \
-                 (width {width}, track stop {stop_by_track_stop})"
-            );
+        let mut mixer = crate::mixer::Mixer::default();
+        assert!(mixer.add_cgb_voice(noise_voice_latched_high(width)));
+        mixer.stop_track(0);
+        for _ in 0..3 {
+            first_mixed_sample(&mut mixer);
         }
+        assert!(mixer.add_cgb_voice(slow_noise_replacement(width)));
+        assert!(
+            first_mixed_sample(&mut mixer) < 0.0,
+            "the off-write's zero-volume clocking leaves the latch low (width {width})"
+        );
+    }
+}
+
+#[test]
+fn a_noise_note_after_release_retirement_starts_low() {
+    for width in [WIDE_NOISE, NARROW_NOISE] {
+        let mut mixer = crate::mixer::Mixer::default();
+        assert!(mixer.add_cgb_voice(noise_voice_latched_high(width)));
+        mixer.note_off_track(0, TEST_KEY);
+        first_mixed_sample(&mut mixer);
+        assert!(mixer.add_cgb_voice(slow_noise_replacement(width)));
+        assert!(
+            first_mixed_sample(&mut mixer) < 0.0,
+            "a released note's off-write leaves the latch low (width {width})"
+        );
     }
 }

@@ -63,12 +63,17 @@ impl Oscillator {
     }
 
     /// Applies the hardware off-write's frequency truncation
-    /// ([`SquareChannel::apply_hardware_off_write`]'s doc); a no-op for
-    /// Wave/Noise.
+    /// ([`SquareChannel::apply_hardware_off_write`]'s doc) and the noise
+    /// channel's settling to its low latch
+    /// ([`NoiseChannel::settle_output_low`]'s doc); a no-op for Wave.
     pub(super) fn apply_hardware_off_write(&mut self) -> bool {
         match self {
             Self::Square(square) => square.apply_hardware_off_write(),
-            Self::Wave(_) | Self::Noise(_) => true,
+            Self::Noise(noise) => {
+                noise.settle_output_low();
+                true
+            }
+            Self::Wave(_) => true,
         }
     }
 

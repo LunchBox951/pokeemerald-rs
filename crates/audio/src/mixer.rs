@@ -327,7 +327,7 @@ impl Mixer {
     }
 
     /// Apply the retirement off-write to the hardware a slot really holds
-    /// (a no-op for Wave/Noise, whose latch survives untouched). A voice that never reached its initial trigger (cancelled
+    /// (a no-op for Wave). A voice that never reached its initial trigger (cancelled
     /// while pending) wrote nothing, so the retained committed state, not
     /// the cancelled note's own frequency/sweep, takes the off-write.
     fn off_write_cgb_hardware(voice: &CgbVoice, hardware: &mut Option<CgbVoice>) {

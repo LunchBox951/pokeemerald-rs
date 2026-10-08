@@ -601,6 +601,15 @@ impl NoiseChannel {
         self.output = previous.output;
     }
 
+    /// Settles the latch low after the retirement off-write: `CgbOscOff`
+    /// writes `NR42 = 8; NR44 = 0x80` (`pokeemerald/src/m4a.c:873-874`), a
+    /// zero-volume retrigger that keeps the LFSR clocking, and every clock
+    /// rewrites `ch4.sample = lsb * currentVolume` (`mgba/src/gb/audio.c:641`),
+    /// so the idled channel's latch reads low before the next note.
+    pub fn settle_output_low(&mut self) {
+        self.output = -1;
+    }
+
     fn shift_lfsr(&mut self) {
         let feedback_is_high = (self.lfsr ^ (self.lfsr >> 1)) & 1 == 0;
         let feedback_bits = self.width.feedback_bits();
