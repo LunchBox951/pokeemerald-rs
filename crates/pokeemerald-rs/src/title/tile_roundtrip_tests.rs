@@ -18,23 +18,9 @@ use super::{image_to_tileset, pack_tile_bytes};
 use assets::ImageRef;
 use rendering::{BitDepth, Tileset};
 
-/// A synthetic tile set of `tile_count` tiles at `bytes_per_tile`, filled
-/// with a deterministic byte sequence whose smallest period is the whole
-/// buffer, so a transposed row, tile, or nibble shows up as a mismatch
-/// rather than landing on an equal value.
-///
-/// Byte `i` is `((i * 37 + 11) ^ (i / 256)) % 256`. The `i * 37 + 11` term
-/// alone repeats every 256 bytes (37 is coprime with 256), which would make
-/// the 256-byte tile rows of the 8bpp 4x3 fixture (4 tiles x 64 bytes) and
-/// rows 0 and 2 of the 4bpp one (128-byte rows, 384 bytes total) identical
-/// and hide a row reorder. XOR-ing in the 256-byte block index `i / 256`
-/// perturbs each block differently: for the 384-byte (12 x 32) and 768-byte
-/// (12 x 64) buffers the blocks are 0, 1 (and 2), so no shift by a multiple
-/// of 256 maps the buffer onto itself (the low bits differ by the block
-/// index). A shorter non-multiple period would also have to survive the
-/// 37-stride walk; `the_synthetic_tiles_have_no_shorter_period` checks every
-/// candidate period for the sizes used, and `assert_round_trips` checks that
-/// reversing tile-row order changes each fixture.
+/// A synthetic tile set whose smallest period is the whole buffer. XOR-ing in
+/// the 256-byte block index breaks the `i * 37` walk's 256-byte period, so no
+/// two tile rows are byte-identical and a reordered row shows as a mismatch.
 fn synthetic_tiles(tile_count: usize, bytes_per_tile: usize) -> Vec<u8> {
     (0..tile_count * bytes_per_tile)
         .map(|i| u8::try_from(((i * 37 + 11) ^ (i / 256)) % 256).expect("modulo 256 fits in u8"))
