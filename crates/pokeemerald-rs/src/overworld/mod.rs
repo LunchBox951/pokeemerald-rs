@@ -49,11 +49,11 @@
 
 use assets::{
     AssetError, AssetPack, BorderGrid, ImageRef, LayoutId, MapEventsTable, MapLayout,
-    MetatileAttributeTable,
+    MetatileAttributeTable, PaletteRef,
 };
 use rendering::{
-    compose_frame_with_effects, BgLayer, BgSlot, BitDepth, FrameEffects, Framebuffer, Palette,
-    RenderError, SpriteLayer, Tileset,
+    compose_frame_with_effects, BgLayer, BgSlot, Bgr555, BitDepth, FrameEffects, Framebuffer,
+    Palette, RenderError, SpriteLayer, Tileset,
 };
 
 /// Selects the player avatar assets used to build an overworld scene.
@@ -812,6 +812,21 @@ pub(crate) fn layout_pack_name(layout_id: LayoutId) -> String {
         .strip_prefix("LAYOUT_")
         .unwrap_or(layout_symbol)
         .to_lowercase()
+}
+
+/// Copies `raw` into 4bpp `bank` (0-15) of `colors`: at most
+/// [`Palette::BANK_LEN`] colours, in source order. Slots past a shorter
+/// palette, and every other bank, keep their value.
+fn fill_palette_bank(colors: &mut [Bgr555; Palette::LEN], bank: usize, raw: PaletteRef<'_>) {
+    let count = usize::from(raw.color_count).min(Palette::BANK_LEN);
+    let start = bank * Palette::BANK_LEN;
+    for (slot, color) in colors[start..start + Palette::BANK_LEN]
+        .iter_mut()
+        .zip(raw.colors())
+        .take(count)
+    {
+        *slot = Bgr555::from_raw(color);
+    }
 }
 
 fn pack_4bpp_region(
