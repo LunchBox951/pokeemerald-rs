@@ -128,6 +128,13 @@ pub(crate) enum PartyError {
     /// The record is an egg or Bad Egg -- never a battler, upstream's own
     /// `SetBattlePartyIds` egg exclusion (`pokeemerald/src/battle_controllers.c:601-602`).
     Egg,
+    /// A known move follows an empty (`MOVE_NONE`) slot. Upstream keeps such
+    /// a gap as a real, unselectable slot (`MOVE_LIMITATION_ZEROMOVE`,
+    /// `pokeemerald/src/battle_util.c:1098`; the move menu skips it,
+    /// `pokeemerald/src/battle_controller_player.c:1468`), but the battle
+    /// model only holds a contiguous moveset, so decoding it would drop the
+    /// later moves and PP on the next save.
+    InteriorEmptyMove,
 }
 
 impl std::fmt::Display for PartyError {
@@ -136,6 +143,12 @@ impl std::fmt::Display for PartyError {
             Self::Substructures(err) => write!(f, "saved party member: {err}"),
             Self::Battler(err) => write!(f, "saved party member: {err}"),
             Self::Egg => write!(f, "saved party member: is an egg"),
+            Self::InteriorEmptyMove => {
+                write!(
+                    f,
+                    "saved party member: a known move follows an empty move slot"
+                )
+            }
         }
     }
 }
@@ -563,7 +576,8 @@ impl core::fmt::Display for NotTheBattlersRecord {
 ///
 /// # Errors
 ///
-/// Returns [`PartyError`] when the secure checksum or battler fields are invalid.
+/// Returns [`PartyError`] when the secure checksum or battler fields are
+/// invalid, or a known move follows an empty move slot.
 pub(crate) fn from_save_pokemon(dex: &Dex, saved: &Pokemon) -> Result<BattlePokemon, PartyError> {
     let substructures = saved.box_data.substructures()?;
     let species = assets::SpeciesId(read_u16(&substructures.growth, GROWTH_SPECIES));
@@ -571,12 +585,21 @@ pub(crate) fn from_save_pokemon(dex: &Dex, saved: &Pokemon) -> Result<BattlePoke
     let ability_slot = u8::from(iv_word >> ABILITY_SLOT_SHIFT != 0);
 
     let (move_ids, remaining_pp) = substructures.attacks.split_at(ATTACK_PP_OFFSET);
-    let move_ids: Vec<assets::MoveId> = move_ids
+    let slot_moves: Vec<assets::MoveId> = move_ids
         .chunks_exact(MOVE_ID_WIDTH)
         .map(|bytes| assets::MoveId(u16::from_le_bytes([bytes[0], bytes[1]])))
-        .take_while(|move_id| *move_id != battle::MOVE_NONE)
         .collect();
-    let known_moves = move_ids.len();
+    let known_moves = slot_moves
+        .iter()
+        .take_while(|move_id| **move_id != battle::MOVE_NONE)
+        .count();
+    if slot_moves[known_moves..]
+        .iter()
+        .any(|move_id| *move_id != battle::MOVE_NONE)
+    {
+        return Err(PartyError::InteriorEmptyMove);
+    }
+    let move_ids = slot_moves[..known_moves].to_vec();
 
     // Adopted before any PP is wound back: it is what each slot's *capacity*
     // is, so the spend below counts down from the PP-Up-adjusted maximum
