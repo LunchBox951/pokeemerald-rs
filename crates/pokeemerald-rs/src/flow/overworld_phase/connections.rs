@@ -200,7 +200,7 @@ impl OverworldPhase {
     )> {
         let event_data = self.prepare_map_entry_event_data(map, self.save2.player_gender);
         let scene = overworld::load_room_from_source(
-            self.pack_source,
+            &self.pack_source,
             map,
             self.save2.player_gender.into(),
             &event_data,
@@ -274,6 +274,7 @@ impl OverworldPhase {
         // The departed map's latched door-check tile must not survive into
         // the destination map.
         self.pending_landing = None;
+        self.pending_turn = None;
         self.scene = scene;
         self.object_events = object_events;
         self.map_id = map;
@@ -356,6 +357,7 @@ impl OverworldPhase {
         self.player =
             engine::overworld::PlayerState::new((i32::from(x), i32::from(y)), elevation, facing);
         self.pending_landing = None;
+        self.pending_turn = None;
         self.scene = scene;
         self.object_events = object_events;
         self.map_id = map;
@@ -439,6 +441,7 @@ impl OverworldPhase {
         self.player =
             engine::overworld::PlayerState::new((i32::from(x), i32::from(y)), elevation, facing);
         self.pending_landing = None;
+        self.pending_turn = None;
         self.object_events = object_events;
         self.map_id = map;
         self.tick = 0;
@@ -503,6 +506,7 @@ impl OverworldPhase {
         // crossing step's own landing tile still needs its door check
         // evaluated against `to_map`.
         self.pending_landing = Some(to_position);
+        self.pending_turn = None;
         self.save1.event_data = transitioned_event_data;
         // `RestartWildEncounterImmunitySteps` (`LoadMapFromCameraTransition`,
         // `src/overworld.c:800`).

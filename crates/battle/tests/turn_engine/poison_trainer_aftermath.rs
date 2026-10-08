@@ -18,6 +18,7 @@ fn a_direct_hit_kos_reward_is_paid_before_the_residual_tick_that_fells_the_winne
     let player_lethal = poison_residual_damage(player.stats().max_hp);
     player.apply_damage(player.stats().max_hp - player_lethal);
     let evs_before = player.evs();
+    let exp_before = player.experience();
 
     let lead = max_iv_mon(&dex, RATTATA, 5, vec![TACKLE]);
     let benched = max_iv_mon(&dex, RATTATA, 5, vec![TACKLE]);
@@ -40,6 +41,9 @@ fn a_direct_hit_kos_reward_is_paid_before_the_residual_tick_that_fells_the_winne
         .iter()
         .position(|event| matches!(event, BattleEvent::ExpGained(_)))
         .unwrap_or_else(|| panic!("the direct-hit knockout pays out: {events:?}"));
+    let BattleEvent::ExpGained(exp_gained) = events[exp_index] else {
+        unreachable!("position() matched ExpGained")
+    };
     let sent_out_index = events
         .iter()
         .position(|event| matches!(event, BattleEvent::TrainerSentOut { .. }))
@@ -73,8 +77,9 @@ fn a_direct_hit_kos_reward_is_paid_before_the_residual_tick_that_fells_the_winne
         "the fixture's tick must be lethal: {events:?}"
     );
     assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerLost));
-    assert!(
-        battle.player().experience() > 0,
+    assert_eq!(
+        battle.player().experience(),
+        exp_before + exp_gained,
         "losing the turn must not take back the experience already awarded"
     );
     assert_ne!(
@@ -87,9 +92,7 @@ fn a_direct_hit_kos_reward_is_paid_before_the_residual_tick_that_fells_the_winne
 /// `MOVE_LEER`, non-damaging: with [`GROWL`], no direct action can change
 /// HP, so the residual pass alone decides the battle.
 const LEER: MoveId = MoveId::LEER;
-/// `MOVE_GROWL`, the player's own non-damaging move.
 const GROWL: MoveId = MoveId::GROWL;
-/// `TRAINER_MAY_ROUTE_103_MUDKIP`.
 const MAY_ROUTE_103_MUDKIP: assets::trainers::TrainerId = assets::trainers::TrainerId(529);
 
 /// `BattleScript_DoTurnDmgEnd`'s `checkteamslost`
@@ -152,13 +155,10 @@ fn a_trainer_last_mons_lethal_residual_tick_ends_the_battle_before_the_players_o
     assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerWon));
 }
 
-/// `SPECIES_TORCHIC`, whose level-16 learnset entry is Peck.
+/// `SPECIES_TORCHIC`: its level-16 learnset entry is Peck.
 const TORCHIC: u16 = 280;
-/// `SPECIES_TREECKO`.
 const TREECKO: u16 = 277;
-/// `MOVE_SCRATCH`.
 const SCRATCH: MoveId = MoveId::SCRATCH;
-/// `MOVE_POUND`.
 const POUND: MoveId = MoveId::POUND;
 /// `MOVE_PECK`, the level-16 entry Torchic has no free slot for.
 const PECK: MoveId = MoveId::PECK;

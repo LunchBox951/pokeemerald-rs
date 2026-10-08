@@ -922,9 +922,9 @@ fn a_pack_missing_the_whole_font_domain_is_refused() {
     with_context("no-fonts", &rom, vec![unrelated_entry()], |ctx| {
         let mut report = Vec::new();
         let err = super::fonts::locate(ctx, &mut report)
-            .expect_err("a pack with no font/*/glyphs entries must be refused");
+            .expect_err("a pack with no font/small/glyphs entries must be refused");
         assert!(
-            matches!(&err, GenRomProfileError::MissingPackEntry(id) if id == "font/*/glyphs"),
+            matches!(&err, GenRomProfileError::MissingPackEntry(id) if id == "font/small/glyphs"),
             "{err:?}"
         );
         assert!(
@@ -962,7 +962,7 @@ fn a_pack_missing_the_whole_layout_domain_is_refused() {
         let err = super::layouts::locate(ctx, &mut report)
             .expect_err("a pack with no layout/*/map entries must be refused");
         assert!(
-            matches!(&err, GenRomProfileError::MissingPackEntry(id) if id == "layout/*/map"),
+            matches!(&err, GenRomProfileError::MissingPackEntry(id) if id == "layout/littleroot_town/map"),
             "{err:?}"
         );
         assert!(

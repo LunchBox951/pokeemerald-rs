@@ -45,6 +45,7 @@ pub mod cgb_envelope;
 pub mod cgb_pitch;
 pub mod cgb_voice;
 pub mod envelope;
+mod gate;
 pub mod mixer;
 pub mod pitch;
 pub mod psg;

@@ -1,5 +1,3 @@
-//! XCMD selector suppression, timing-grid boundaries, and retained silent events.
-
 use super::super::{compile, SongEvent};
 use super::support::*;
 
@@ -108,7 +106,7 @@ fn an_extended_command_selector_keeps_an_off_grid_remainder() {
                 velocity: 100,
                 gate: 37
             },
-            SongEvent::Wait(7), // the two rests merge: canonical waits
+            SongEvent::Wait(7),
             SongEvent::PseudoEchoVolume(10),
             SongEvent::Wait(6),
             SongEvent::Fine,
@@ -144,7 +142,7 @@ fn an_extended_command_selector_gap_stops_at_the_timing_grid() {
                 velocity: 100,
                 gate: 4
             },
-            SongEvent::Wait(43), // the two rests merge: canonical waits
+            SongEvent::Wait(43),
             SongEvent::PseudoEchoLength(12),
             SongEvent::Fine,
         ]
@@ -179,7 +177,7 @@ fn an_extended_command_selector_near_a_grid_line_preserves_later_ticks() {
                 velocity: 100,
                 gate: 4
             },
-            SongEvent::Wait(104), // the two rests merge: canonical waits
+            SongEvent::Wait(104),
             SongEvent::PseudoEchoVolume(10),
             SongEvent::Fine,
         ]
@@ -188,11 +186,8 @@ fn an_extended_command_selector_near_a_grid_line_preserves_later_ticks() {
 
 #[test]
 fn a_velocity_zero_note_on_bounds_an_extended_command_selector_gap() {
-    // Upstream retains a velocity-zero note-on as a silent, type-zero track
-    // event even though it also ends the note it matches, but drops an
-    // explicit note-off entirely (`tools/mid2agb/midi.cpp:471-514`). That
-    // silent event still bounds an extended-command selector's suppressed
-    // gap, exactly like any other retained item does.
+    // Upstream retains velocity-zero note-ons as silent boundaries but drops explicit note-offs
+    // (`tools/mid2agb/midi.cpp:473-492,509-514,553-557`).
     fn midi_with_note_end(note_end: [u8; 3]) -> Vec<u8> {
         let mut body = Vec::new();
         push_timed(&mut body, 0, note_on(0, 60, 100));
@@ -207,12 +202,10 @@ fn a_velocity_zero_note_on_bounds_an_extended_command_selector_gap() {
         single_track_midi(24, body)
     }
 
-    // The note-end at tick 14 is a velocity-zero note-on: it is retained as
-    // a silent boundary, so the selector's suppressed gap stops there and
-    // the remaining 10 ticks to the next note surface as an ordinary wait.
-    let velocity_zero = compile(&midi_with_note_end(note_on(0, 60, 0)), &cfg()).unwrap();
+    let compiled_with_silent_note_end =
+        compile(&midi_with_note_end(note_on(0, 60, 0)), &cfg()).unwrap();
     assert_eq!(
-        velocity_zero.tracks[0],
+        compiled_with_silent_note_end.tracks[0],
         vec![
             SongEvent::Volume(127),
             SongEvent::KeyShift(0),
@@ -221,7 +214,7 @@ fn a_velocity_zero_note_on_bounds_an_extended_command_selector_gap() {
                 velocity: 100,
                 gate: 14,
             },
-            SongEvent::Wait(14), // 4 (pre-selector) + 10 (selector to the silent boundary): canonical waits
+            SongEvent::Wait(14),
             SongEvent::Note {
                 key: 64,
                 velocity: 100,
@@ -232,11 +225,10 @@ fn a_velocity_zero_note_on_bounds_an_extended_command_selector_gap() {
         ]
     );
 
-    // The same note-end as an explicit note-off leaves no boundary behind,
-    // so the selector's suppression reaches all the way to the next note.
-    let explicit_off = compile(&midi_with_note_end(note_off(0, 60)), &cfg()).unwrap();
+    let compiled_with_explicit_note_off =
+        compile(&midi_with_note_end(note_off(0, 60)), &cfg()).unwrap();
     assert_eq!(
-        explicit_off.tracks[0],
+        compiled_with_explicit_note_off.tracks[0],
         vec![
             SongEvent::Volume(127),
             SongEvent::KeyShift(0),
@@ -286,7 +278,7 @@ fn a_time_signature_rephases_the_extended_command_timing_grid() {
                 velocity: 100,
                 gate: 4
             },
-            SongEvent::Wait(62), // the two rests merge: canonical waits
+            SongEvent::Wait(62),
             SongEvent::PseudoEchoVolume(10),
             SongEvent::Fine,
         ]
@@ -322,7 +314,7 @@ fn a_silent_controller_after_an_extended_command_selector_keeps_its_wait() {
                 velocity: 100,
                 gate: 30
             },
-            SongEvent::Wait(14), // the two rests merge: canonical waits
+            SongEvent::Wait(14),
             SongEvent::PseudoEchoVolume(10),
             SongEvent::Wait(6),
             SongEvent::Fine,

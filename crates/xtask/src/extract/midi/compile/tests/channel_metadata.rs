@@ -1,5 +1,3 @@
-//! Tempo and song metadata placement and which channels emit tracks.
-
 use super::super::{compile, SongEvent};
 use super::support::*;
 

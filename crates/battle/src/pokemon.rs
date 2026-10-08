@@ -4,7 +4,7 @@
 //! [`BattlePokemon`] does not retain held items. It carries primary status
 //! ([`Status1`]) distinct from [`Volatiles`] — see that type's own docs for
 //! what is and is not modelled. Shedinja's 1-HP special case *is* modelled —
-//! see [`calc_max_hp`].
+//! see `calc_max_hp`.
 //!
 //! [`evs`] owns the whole EV surface: adoption, KO gains, and the one line
 //! [`BattlePokemon::stats`] refuses to cross because of them.
@@ -734,8 +734,7 @@ impl BattlePokemon {
     /// level and total experience at [`MAX_LEVEL`]. Each crossed level
     /// recalculates stats, preserves damage taken, and teaches that level's
     /// complete learnset without filtering unsupported moves — a move this
-    /// crate cannot execute yet is still learned, exactly like upstream (see
-    /// [`BattlePokemon::walk_level_learnset`]). A full moveset pauses the
+    /// crate cannot execute yet is still learned, exactly like upstream. A full moveset pauses the
     /// award and returns a [`PendingMoveLearn`]; the caller must pass its
     /// decision to [`BattlePokemon::resolve_move_learn`] before applying more
     /// experience. [`BattlePokemon::evs`] is not changed here —

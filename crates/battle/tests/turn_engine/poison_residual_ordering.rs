@@ -7,19 +7,19 @@ use battle::status1::poison_residual_damage;
 use battle::{Battle, BattleEvent, BattleOutcome, Dex, PlayerAction, Status1};
 
 /// `SPECIES_ABRA`: faster than [`slow_runner_rattata`]'s Rattata, so a run
-/// is never automatic, and too weak to end the battle before its residuals.
+/// is never automatic, and too weak to end the battle before the residuals.
 const ABRA: u16 = 63;
 
 /// An escape roll that fails for [`slow_runner_rattata`] against [`ABRA`]
 /// (`battle::escape`'s own tests pin the threshold).
 const ESCAPE_ROLL_FAILS: u16 = 65000;
 
-/// Both battlers use a damaging move, every roll on its default branch.
+/// Both battlers attack with no secondary effect; layout as in
+/// [`POISON_STING_LANDS`].
 const BOTH_BATTLERS_ATTACK: [u16; 11] = [0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0];
 
-/// The player's move fells the enemy before it acts.
+/// The player's move fells the enemy before the enemy acts.
 const PLAYER_ACTS_ALONE: [u16; 7] = [0, 0, 0, 0, 1, 0, 0];
-/// A refused run, then the enemy's damaging move.
 const FAILED_RUN_THEN_ENEMY_ATTACK: [u16; 8] = [0, 0, 0, ESCAPE_ROLL_FAILS, 0, 1, 0, 0];
 
 #[test]

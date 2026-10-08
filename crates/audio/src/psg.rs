@@ -570,15 +570,13 @@ impl NoiseChannel {
     #[must_use]
     pub fn from_control_byte(byte: u8) -> Self {
         let control = NoiseControl::from_byte(byte);
-        let mut chan = Self {
+        Self {
             lfsr: 0,
             width: control.width,
             phase: 0,
             step_delta: control.step_delta,
             output: -1,
-        };
-        chan.shift_lfsr();
-        chan
+        }
     }
 
     /// Retunes the clock without resetting the LFSR or its trigger-time width.
@@ -594,7 +592,6 @@ impl NoiseChannel {
     pub fn retrigger(&mut self) {
         self.phase = 0;
         self.lfsr = 0;
-        self.shift_lfsr();
     }
 
     fn shift_lfsr(&mut self) {
@@ -654,6 +651,7 @@ mod tests {
 
     fn lfsr_repeats_within(mut noise: NoiseChannel, steps: usize) -> bool {
         noise.step_delta = PHASE_ONE;
+        noise.sample();
         let initial_state = noise.lfsr;
         (0..steps).any(|_| {
             noise.sample();
@@ -965,6 +963,43 @@ mod tests {
 
         let wide = NoiseChannel::from_control_byte(0);
         assert!(!lfsr_repeats_within(wide, SEVEN_BIT_LFSR_PERIOD));
+    }
+
+    #[test]
+    fn noise_construction_does_not_clock_before_a_full_period() {
+        for (byte, first_lfsr) in [(0, 0x4000), (NoiseControl::WIDTH_BIT, 0x4040)] {
+            let mut noise = NoiseChannel::from_control_byte(byte);
+            assert_eq!((noise.lfsr(), noise.phase, noise.output), (0, 0, -1));
+            noise.step_delta = PHASE_ONE / 2;
+            assert_eq!(noise.sample(), -1);
+            assert_eq!(noise.lfsr(), 0);
+            assert_eq!(noise.sample(), 1);
+            assert_eq!((noise.lfsr(), noise.phase), (first_lfsr, 0));
+        }
+    }
+
+    #[test]
+    fn noise_retrigger_resets_without_clocking_and_keeps_the_output_latch() {
+        for byte in [0, NoiseControl::WIDTH_BIT] {
+            for latch in [-1i8, 1] {
+                let mut noise = NoiseChannel::from_control_byte(byte);
+                noise.step_delta = PHASE_ONE * 3 / 4;
+                while noise.lfsr() == 0 || noise.output != latch || noise.phase == 0 {
+                    noise.sample();
+                }
+                let (width, delta) = (noise.width, noise.step_delta);
+                noise.retrigger();
+                assert_eq!((noise.lfsr(), noise.phase), (0, 0));
+                assert_eq!(
+                    (noise.width, noise.step_delta, noise.output),
+                    (width, delta, latch)
+                );
+                assert_eq!(noise.sample(), latch);
+                assert_eq!(noise.lfsr(), 0);
+                assert_eq!(noise.sample(), 1);
+                assert_ne!(noise.lfsr(), 0);
+            }
+        }
     }
 
     #[test]

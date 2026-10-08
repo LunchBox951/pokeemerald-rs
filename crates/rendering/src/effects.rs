@@ -216,6 +216,25 @@ pub fn backdrop_variant(
     }
 }
 
+/// Selects a BG's brighten/darken variant within an effects-enabled `OBJWIN`
+/// region.
+///
+/// mGBA picks this variant before the unmasked OBJ-reblend normal-palette
+/// exception (`mgba/src/gba/renderers/software-private.h:87-125,156-171`)
+/// `(behavioral-fidelity)`. The caller supplies the region's effects gate.
+#[must_use]
+pub(crate) fn objwin_bg_variant(cfg: &EffectsConfig, bg_index: u8, color: Rgb888) -> Rgb888 {
+    if cfg.target1.contains(LayerKind::Bg(bg_index)) {
+        match cfg.effect {
+            ColorEffect::Brighten => brighten(color, cfg.evy),
+            ColorEffect::Darken => darken(color, cfg.evy),
+            ColorEffect::None | ColorEffect::AlphaBlend => color,
+        }
+    } else {
+        color
+    }
+}
+
 /// The window-derived blend-enable signals [`resolve_pixel_color`] needs,
 /// all resolved once per pixel in `compose_pixel` from the same
 /// [`WindowConfig`](crate::window::WindowConfig). Bundled into one type

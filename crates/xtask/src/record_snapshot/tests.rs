@@ -157,6 +157,28 @@ fn write_pack(name: &str) -> (PathBuf, ScratchGuard) {
     (path, guard)
 }
 
+/// Fails unless every staged pointer file left in `output_dir` is named by
+/// `error` as a retained path: the retention policy reports what it keeps.
+#[cfg(unix)]
+fn assert_staged_pointers_reported(output_dir: &std::path::Path, error: &str) {
+    for entry in std::fs::read_dir(output_dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .contains(".tmp.")
+        {
+            assert!(
+                error.contains(&format!("last known path: {}", path.display())),
+                "staged pointer {} was left behind unreported: {error}",
+                path.display()
+            );
+        }
+    }
+}
+
 fn visible_generation(output_dir: &std::path::Path, scene: Scene) -> Option<PathBuf> {
     let pointer = output_dir.join(format!("{}.generation", scene.name()));
     std::fs::read_to_string(pointer)
@@ -2167,6 +2189,200 @@ fn a_generation_check_resolves_through_the_held_output_directory() {
         .require_entry_in(&output_claim, &generation)
         .unwrap_err();
     assert_eq!(error.kind(), std::io::ErrorKind::NotFound, "{error}");
+}
+
+/// The converse: an output pathname swapped to a directory that lacks the
+/// generation leaves the held lookup satisfied, so only a lookup through the
+/// pathname, the one the returned payload paths take, can refuse it last.
+#[cfg(unix)]
+#[test]
+fn a_generation_check_through_the_pathname_sees_a_swapped_output_directory() {
+    let root = scratch_path("generation-check-swapped-output");
+    let _guard = ScratchGuard(root.clone());
+    let output_dir = root.join("out");
+    let replacement = root.join("replacement");
+    let held_aside = root.join("held-aside");
+    std::fs::create_dir_all(&output_dir).unwrap();
+    std::fs::create_dir_all(replacement.join("generation")).unwrap();
+    let staged = output_dir.join(".generation.staged");
+    let generation = output_dir.join("generation");
+    std::fs::create_dir(&staged).unwrap();
+    let output_claim = super::claim_output_dir(&output_dir).unwrap();
+    let claim = super::claim_staged_dir(&staged).unwrap();
+    super::promote_staged_dir(&output_claim, &staged, &generation, || {}).unwrap();
+
+    std::fs::rename(&output_dir, &held_aside).unwrap();
+    std::fs::rename(&replacement, &output_dir).unwrap();
+
+    claim.require_entry_in(&output_claim, &generation).unwrap();
+    let error = claim.require_path(&generation).unwrap_err().to_string();
+    assert!(
+        error.contains("no longer matches the capture's held directory"),
+        "{error}"
+    );
+}
+
+/// A generation replaced after its identity check but before the pointer is
+/// published must not be named by the pointer: the check repeats at the last
+/// moment, the previous pointer stays intact, and both directories survive.
+#[cfg(unix)]
+#[test]
+fn a_generation_replaced_before_the_pointer_publication_is_never_published() {
+    let scene = Scene::MainMenuNewGame;
+    let output_dir = scratch_path("generation-replaced-before-pointer-publish");
+    let _guard = ScratchGuard(output_dir.clone());
+    std::fs::create_dir_all(&output_dir).unwrap();
+    let pointer = output_dir.join(format!("{}.generation", scene.name()));
+    std::fs::write(&pointer, b"previous\n").unwrap();
+    let carried = output_dir.join("carried");
+    let foreign_marker = "foreign.marker";
+
+    let mut generation_dir = None;
+    let replace_the_generation = || {
+        let generation = std::fs::read_dir(&output_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    .contains(".generation-")
+                    && path.extension().is_none_or(|ext| ext != "staged")
+                    && path.is_dir()
+            })
+            .expect("the promoted generation must exist by now");
+        std::fs::rename(&generation, &carried).unwrap();
+        std::fs::create_dir(&generation).unwrap();
+        std::fs::write(generation.join(foreign_marker), b"foreign").unwrap();
+        generation_dir = Some(generation);
+    };
+
+    let error = super::publish_generation_with(
+        scene,
+        &output_dir,
+        b"rgb-bytes",
+        b"meta-bytes",
+        || Ok(()),
+        || {},
+        || {},
+        replace_the_generation,
+    )
+    .unwrap_err()
+    .to_string();
+    let generation_dir = generation_dir.expect("the hook must have run");
+
+    assert!(
+        error.contains("no longer matches the capture's held directory")
+            && error.contains(&format!("last known path: {}", generation_dir.display())),
+        "{error}"
+    );
+    assert_eq!(
+        std::fs::read(&pointer).unwrap(),
+        b"previous\n",
+        "the replaced generation must not be published"
+    );
+    assert_staged_pointers_reported(&output_dir, &error);
+    assert!(generation_dir.join(foreign_marker).is_file());
+    assert_eq!(
+        std::fs::read(carried.join(format!("{}.rgb", scene.name()))).unwrap(),
+        b"rgb-bytes"
+    );
+}
+
+/// The same replacement with the generation removed outright: the lookup in
+/// the held output directory finds nothing, which is also a refusal.
+#[cfg(unix)]
+#[test]
+fn a_generation_moved_away_before_the_pointer_publication_is_never_published() {
+    let scene = Scene::MainMenuNewGame;
+    let output_dir = scratch_path("generation-moved-before-pointer-publish");
+    let _guard = ScratchGuard(output_dir.clone());
+    std::fs::create_dir_all(&output_dir).unwrap();
+    let carried = output_dir.join("carried");
+
+    let move_the_generation = || {
+        let generation = std::fs::read_dir(&output_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    .contains(".generation-")
+                    && path.extension().is_none_or(|ext| ext != "staged")
+                    && path.is_dir()
+            })
+            .expect("the promoted generation must exist by now");
+        std::fs::rename(&generation, &carried).unwrap();
+    };
+
+    let result = super::publish_generation_with(
+        scene,
+        &output_dir,
+        b"rgb-bytes",
+        b"meta-bytes",
+        || Ok(()),
+        || {},
+        || {},
+        move_the_generation,
+    );
+
+    let error = result.unwrap_err().to_string();
+    assert!(error.contains("last known path"), "{error}");
+    assert_eq!(visible_generation(&output_dir, scene), None);
+    assert_staged_pointers_reported(&output_dir, &error);
+    assert_eq!(
+        std::fs::read(carried.join(format!("{}.rgb", scene.name()))).unwrap(),
+        b"rgb-bytes"
+    );
+}
+
+/// A generation replaced after the pointer already names it cannot be un-published,
+/// but success must not be reported for it; the retained path is reported.
+#[cfg(unix)]
+#[test]
+fn a_generation_replaced_after_the_pointer_publication_is_not_reported_as_published() {
+    let scene = Scene::MainMenuNewGame;
+    let output_dir = scratch_path("generation-replaced-after-pointer-publish");
+    let _guard = ScratchGuard(output_dir.clone());
+    std::fs::create_dir_all(&output_dir).unwrap();
+    let carried = output_dir.join("carried");
+
+    let mut generation_dir = None;
+    let replace_the_generation = || {
+        let generation = visible_generation(&output_dir, scene)
+            .expect("the pointer names the generation by now");
+        std::fs::rename(&generation, &carried).unwrap();
+        std::fs::create_dir(&generation).unwrap();
+        generation_dir = Some(generation);
+    };
+
+    let error = super::publish_generation_hooked(
+        scene,
+        &output_dir,
+        b"rgb-bytes",
+        b"meta-bytes",
+        || Ok(()),
+        || {},
+        || {},
+        || {},
+        replace_the_generation,
+    )
+    .expect_err("a generation replaced after publication must not be reported as published")
+    .to_string();
+    let generation_dir = generation_dir.expect("the hook must have run");
+
+    assert!(
+        error.contains("no longer matches the capture's held directory")
+            && error.contains(&format!("last known path: {}", generation_dir.display())),
+        "{error}"
+    );
+    assert_eq!(
+        std::fs::read(carried.join(format!("{}.rgb", scene.name()))).unwrap(),
+        b"rgb-bytes"
+    );
 }
 
 /// An output directory swapped out after the last pre-publish check still

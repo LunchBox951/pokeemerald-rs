@@ -1,39 +1,12 @@
 use std::path::Path;
 
+use super::scope::{MESSAGE_BOX_STEM, TEXT_WINDOW_IMAGE_STEMS, TEXT_WINDOW_PALETTE_STEMS};
 use super::{build_image_entry, jasc_pal, png, read_file, read_text, ExtractError};
 use pack_format::PackWriter;
 
 const TEXT_WINDOW_DIRECTORY: &str = "graphics/text_window";
 const PNG_EXTENSION: &str = "png";
 const PALETTE_EXTENSION: &str = "pal";
-const MESSAGE_BOX_STEM: &str = "message_box";
-
-const TEXT_WINDOW_IMAGE_STEMS: [&str; 21] = [
-    "1",
-    "2",
-    "3",
-    "4",
-    "5",
-    "6",
-    "7",
-    "8",
-    "9",
-    "10",
-    "11",
-    "12",
-    "13",
-    "14",
-    "15",
-    "16",
-    "17",
-    "18",
-    "19",
-    "20",
-    MESSAGE_BOX_STEM,
-];
-
-const TEXT_WINDOW_PALETTE_STEMS: [&str; 4] = ["text_pal1", "text_pal2", "text_pal3", "text_pal4"];
-
 const COLORS_PER_GBA_PALETTE_BANK: usize = 16;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

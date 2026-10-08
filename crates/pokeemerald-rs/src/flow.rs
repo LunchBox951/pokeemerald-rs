@@ -109,14 +109,33 @@ pub(crate) mod route103_rival;
 mod wild_encounter;
 pub(crate) use overworld_phase::OverworldPhase;
 
-/// I-6 (issue #214) save/exit/reload round-trip tests -- their own file
-/// rather than more cases in `tests` below, because they exercise the whole
-/// `overworld -> file -> main menu -> overworld` loop rather than one scene
-/// transition (`one module = one concept` `(oop-boundaries)`). Holds the
-/// shared save/continue fixtures the sibling `save_continue_*_tests` modules
-/// below also use, plus the round-trip/party-preservation tests themselves.
+/// Shared save/continue fixtures and drivers for the sibling `save_continue_*_tests` modules.
 #[cfg(test)]
-mod save_continue_tests;
+mod save_continue_support;
+
+/// Elevation-history and stale-image regressions across save and continue.
+#[cfg(test)]
+mod save_continue_elevation_tests;
+
+/// I-6 (issue #214) save/exit/reload round-trip tests: the whole `overworld -> file -> main menu -> overworld` loop.
+#[cfg(test)]
+mod save_continue_round_trip_tests;
+
+/// Party preservation across save and continue.
+#[cfg(test)]
+mod save_continue_party_tests;
+
+/// Repeated saves within one session file the same bytes.
+#[cfg(test)]
+mod save_continue_hp_tests;
+
+/// Continue-warp selection and failure handling.
+#[cfg(test)]
+mod save_continue_warp_tests;
+
+/// `#[ignore]`d real-pack lane for continue-time room loading, warps and gender.
+#[cfg(test)]
+mod save_continue_real_pack_tests;
 
 /// Legacy/malformed-save migrations on continue: facing, elevation, heal
 /// location, and fainted-lead fallbacks.
@@ -143,7 +162,7 @@ mod save_continue_window_frame_tests;
 
 /// The field start menu's own behaviour (I-6, issue #232) -- the `START`
 /// gate, frame ownership, and the close paths that write nothing. Split
-/// from [`save_continue_tests`] for the same reason that file split from
+/// from [`save_continue_round_trip_tests`] for the same reason that file split from
 /// [`tests`]: one module, one concept `(oop-boundaries)`.
 #[cfg(test)]
 mod start_menu_tests;
@@ -428,7 +447,7 @@ fn main_menu_load_failure_message(err: &MainMenuSceneError) -> String {
 /// Returns `None`, after logging, if the pack load fails -- the caller stays
 /// on the title screen.
 fn title_to_main_menu(
-    pack_source: crate::pack_source::PackSource,
+    pack_source: &crate::pack_source::PackSource,
     save_slot: &mut SaveSlot,
 ) -> Option<(AppScene, Box<Frame>)> {
     let saved = save_slot.load();
@@ -494,7 +513,7 @@ pub(crate) fn advance_scene(
 ) -> (AppScene, Box<Frame>) {
     match scene {
         AppScene::Title(title) => advance_title(title, buttons),
-        AppScene::TitleFadeWait(wait) => advance_title_fade_wait(wait, save_slot, pack_source),
+        AppScene::TitleFadeWait(wait) => advance_title_fade_wait(wait, save_slot, &pack_source),
         AppScene::MainMenu(state) => advance_main_menu(state, buttons),
         AppScene::MainMenuFadeWait(wait) => advance_main_menu_fade_wait(wait, pack_source),
         // Issue #393: B is an ordinary dialogue-advance button here, not a

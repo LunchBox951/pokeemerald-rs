@@ -1,5 +1,8 @@
 use std::path::Path;
 
+#[cfg(windows)]
+use crate::windows_file_identity::WindowsFileIdentity;
+
 /// Pins the directory used for payload writes. Creating and opening a directory
 /// are separate operations; the claim starts at the successful open.
 pub(super) struct StagedDirClaim {
@@ -391,76 +394,6 @@ pub(super) fn claim_output_dir(path: &Path) -> std::io::Result<OutputDirClaim> {
 #[cfg(not(any(unix, windows)))]
 pub(super) fn claim_output_dir(_path: &Path) -> std::io::Result<OutputDirClaim> {
     Err(std::io::ErrorKind::Unsupported.into())
-}
-
-/// The volume and file ID of the object a handle refers to, read the way
-/// `rom-import`'s `WindowsFileIdentity` does: the 128-bit `FileIdInfo`, or the
-/// zero-extended 64-bit index where the file system rejects that class.
-#[cfg(windows)]
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct WindowsFileIdentity {
-    volume_serial_number: u64,
-    file_id: [u8; 16],
-}
-
-#[cfg(windows)]
-impl WindowsFileIdentity {
-    fn of(handle: &std::fs::File) -> std::io::Result<Self> {
-        use std::os::windows::io::AsRawHandle as _;
-        use windows_sys::Win32::Foundation::{
-            ERROR_INVALID_FUNCTION, ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED,
-        };
-        use windows_sys::Win32::Storage::FileSystem::{
-            FileIdInfo, GetFileInformationByHandle, GetFileInformationByHandleEx,
-            BY_HANDLE_FILE_INFORMATION, FILE_ID_INFO,
-        };
-
-        let mut wide = FILE_ID_INFO::default();
-        let size = u32::try_from(std::mem::size_of::<FILE_ID_INFO>())
-            .expect("FILE_ID_INFO is far smaller than u32::MAX");
-        // SAFETY: `handle` stays open for this call, `FileIdInfo` takes a `FILE_ID_INFO`, and `size` is that structure's exact size.
-        let ok = unsafe {
-            GetFileInformationByHandleEx(
-                handle.as_raw_handle(),
-                FileIdInfo,
-                std::ptr::from_mut(&mut wide).cast(),
-                size,
-            )
-        };
-        if ok != 0 {
-            return Ok(Self {
-                volume_serial_number: wide.VolumeSerialNumber,
-                file_id: wide.FileId.Identifier,
-            });
-        }
-        let refused = std::io::Error::last_os_error();
-        let unsupported = refused
-            .raw_os_error()
-            .and_then(|code| u32::try_from(code).ok())
-            .is_some_and(|code| {
-                matches!(
-                    code,
-                    ERROR_NOT_SUPPORTED | ERROR_INVALID_PARAMETER | ERROR_INVALID_FUNCTION
-                )
-            });
-        if !unsupported {
-            return Err(refused);
-        }
-
-        let mut info = BY_HANDLE_FILE_INFORMATION::default();
-        // SAFETY: `handle` stays open for this call, and `info` is a correctly-sized out parameter the API fills in place.
-        let ok = unsafe { GetFileInformationByHandle(handle.as_raw_handle(), &raw mut info) };
-        if ok == 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        let index = (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow);
-        let mut file_id = [0u8; 16];
-        file_id[..8].copy_from_slice(&index.to_le_bytes());
-        Ok(Self {
-            volume_serial_number: u64::from(info.dwVolumeSerialNumber),
-            file_id,
-        })
-    }
 }
 
 #[cfg(windows)]

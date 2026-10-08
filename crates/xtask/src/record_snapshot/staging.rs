@@ -250,6 +250,13 @@ impl StagedFile {
         )
     }
 
+    /// Gives up publishing this staged file because of a failure found by
+    /// the caller between staging and [`Self::publish`], retaining and
+    /// reporting it exactly as a failed publish would.
+    pub(super) fn retain(self, source: &std::io::Error) -> std::io::Error {
+        self.report_retained(source)
+    }
+
     /// Folds a post-rename identity failure into `source` and reports the
     /// promoted pointer's path. Nothing unlinks it: an unverifiable identity
     /// cannot make a pathname deletion of `dest` conditional on the very
