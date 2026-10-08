@@ -2,6 +2,7 @@
 
 use crate::cgb_envelope::{CgbAdsr, CgbEnvelope, HardwareEnvelopeVolume};
 use crate::cgb_pitch::{midi_key_to_cgb_freq_reg, midi_key_to_noise_control};
+use crate::gate::Gate;
 use crate::psg::{NoiseChannel, SquareChannel, WaveChannel};
 use crate::voice::StereoAcc;
 
@@ -98,37 +99,6 @@ impl DacCorrection {
             // Emerald rounds fixed-rate square and wave registers before
             // initializing the oscillator and sweep shadow (`m4a.c:1184..1202`).
             Self::FixedRate8Bit => (frequency_register + 1) & EVEN_FREQUENCY_REGISTER_MASK,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-enum Gate {
-    Tied,
-    TicksRemaining(u16),
-    Expired,
-}
-
-impl Gate {
-    fn new(gate_time: u16) -> Self {
-        if gate_time == 0 {
-            Self::Tied
-        } else {
-            Self::TicksRemaining(gate_time)
-        }
-    }
-
-    fn tick(&mut self) -> bool {
-        match *self {
-            Self::TicksRemaining(1) => {
-                *self = Self::Expired;
-                true
-            }
-            Self::TicksRemaining(remaining) => {
-                *self = Self::TicksRemaining(remaining - 1);
-                false
-            }
-            Self::Tied | Self::Expired => false,
         }
     }
 }
