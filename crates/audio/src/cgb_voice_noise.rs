@@ -75,3 +75,76 @@ fn release_start_volume_write_retriggers_the_noise_lfsr() {
          the next begin_frame, clearing the LFSR"
     );
 }
+
+const LATCH_HIGH: i8 = 1;
+const SLOW_NOISE_KEY: u8 = 21;
+const MAX_SAMPLES_TO_LATCH_HIGH: usize = 256;
+
+/// A committed noise voice partway through a frame, its output latch high.
+fn noise_voice_latched_high(width_selector: u8) -> CgbVoice {
+    let mut voice = noise_voice(CgbAdsr::flat(), width_selector, TestNote::default());
+    voice.begin_frame(false);
+    let mut acc = [(0i32, 0i32); 1];
+    for _ in 0..MAX_SAMPLES_TO_LATCH_HIGH {
+        if voice.noise_output_latch() == Some(LATCH_HIGH) {
+            return voice;
+        }
+        voice.render(&mut acc, &[]);
+    }
+    panic!("noise latch never reached high");
+}
+
+fn slow_noise_replacement(width_selector: u8) -> CgbVoice {
+    noise_voice(
+        CgbAdsr::flat(),
+        width_selector,
+        TestNote::at_key(SLOW_NOISE_KEY),
+    )
+}
+
+fn first_mixed_sample(mixer: &mut crate::mixer::Mixer) -> f32 {
+    let mut out = vec![0.0f32; crate::SAMPLES_PER_FRAME * 2];
+    mixer.mix_frame(&mut out);
+    out[0]
+}
+
+#[test]
+fn replacing_a_sounding_noise_voice_keeps_its_output_latch() {
+    for width in [WIDE_NOISE, NARROW_NOISE] {
+        let mut mixer = crate::mixer::Mixer::default();
+        assert!(mixer.add_cgb_voice(noise_voice_latched_high(width)));
+        assert!(mixer.add_cgb_voice(slow_noise_replacement(width)));
+        assert!(
+            first_mixed_sample(&mut mixer) > 0.0,
+            "a replacement must start on the predecessor's high latch (width {width})"
+        );
+    }
+}
+
+#[test]
+fn a_noise_note_on_an_emptied_slot_inherits_the_retired_latch() {
+    for width in [WIDE_NOISE, NARROW_NOISE] {
+        for stop_by_track_stop in [false, true] {
+            let mut mixer = crate::mixer::Mixer::default();
+            assert!(mixer.add_cgb_voice(noise_voice_latched_high(width)));
+            if stop_by_track_stop {
+                mixer.stop_track(0);
+            } else {
+                mixer.note_off_track(0, TEST_KEY);
+                first_mixed_sample(&mut mixer);
+            }
+            for _ in 0..3 {
+                assert!(
+                    first_mixed_sample(&mut mixer).abs() < f32::EPSILON,
+                    "the slot is idle"
+                );
+            }
+            assert!(mixer.add_cgb_voice(slow_noise_replacement(width)));
+            assert!(
+                first_mixed_sample(&mut mixer) > 0.0,
+                "a note on the emptied slot must start on the retained latch \
+                 (width {width}, track stop {stop_by_track_stop})"
+            );
+        }
+    }
+}

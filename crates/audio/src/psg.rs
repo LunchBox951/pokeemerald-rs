@@ -594,6 +594,13 @@ impl NoiseChannel {
         self.lfsr = 0;
     }
 
+    /// Keeps the previous note's output latch across a trigger: `ch4.sample`
+    /// is only rewritten when the LFSR clocks, so it persists into the next
+    /// note until the first shift (`mgba/src/gb/audio.c:371-383,602-644`).
+    pub fn continue_output_from(&mut self, previous: &Self) {
+        self.output = previous.output;
+    }
+
     fn shift_lfsr(&mut self) {
         let feedback_is_high = (self.lfsr ^ (self.lfsr >> 1)) & 1 == 0;
         let feedback_bits = self.width.feedback_bits();
@@ -607,6 +614,11 @@ impl NoiseChannel {
     #[cfg(test)]
     pub(crate) fn is_narrow(&self) -> bool {
         self.width == LfsrWidth::SevenBit
+    }
+
+    #[cfg(test)]
+    pub(crate) fn output_latch(&self) -> i8 {
+        self.output
     }
 
     #[cfg(test)]

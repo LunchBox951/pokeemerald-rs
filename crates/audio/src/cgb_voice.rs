@@ -463,10 +463,11 @@ impl CgbVoice {
         self.envelope.is_stopping()
     }
 
-    /// Carries the oscillator's duty phase forward from the voice this one
-    /// replaces on a shared hardware slot.
-    pub(crate) fn carry_duty_phase_from(&mut self, other: &Self) {
-        self.oscillator.carry_duty_phase_from(&other.oscillator);
+    /// Carries the oscillator's hardware state (square duty phase, noise
+    /// output latch) forward from the voice this one replaces on a shared
+    /// hardware slot.
+    pub(crate) fn carry_hardware_state_from(&mut self, other: &Self) {
+        self.oscillator.carry_hardware_state_from(&other.oscillator);
     }
 
     /// Applies the off-write a voice's slot receives the instant it idles
@@ -659,6 +660,13 @@ impl CgbVoice {
     pub(crate) fn sweep_frequency(&self) -> Option<u16> {
         match &self.oscillator {
             Oscillator::Square(s) => s.sweep_frequency(),
+            _ => None,
+        }
+    }
+
+    fn noise_output_latch(&self) -> Option<i8> {
+        match &self.oscillator {
+            Oscillator::Noise(n) => Some(n.output_latch()),
             _ => None,
         }
     }

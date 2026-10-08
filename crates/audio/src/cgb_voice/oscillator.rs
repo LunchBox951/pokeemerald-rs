@@ -79,11 +79,15 @@ impl Oscillator {
         }
     }
 
-    /// Carries a square oscillator's duty position forward onto its replacement
-    /// ([`SquareChannel::continue_duty_from`]'s doc); a no-op for Wave/Noise.
-    pub(super) fn carry_duty_phase_from(&mut self, other: &Self) {
-        if let (Self::Square(square), Self::Square(previous)) = (self, other) {
-            square.continue_duty_from(previous);
+    /// Carries a square oscillator's duty position or a noise oscillator's
+    /// output latch forward onto its replacement
+    /// ([`SquareChannel::continue_duty_from`]'s and
+    /// [`NoiseChannel::continue_output_from`]'s docs); a no-op for Wave.
+    pub(super) fn carry_hardware_state_from(&mut self, other: &Self) {
+        match (self, other) {
+            (Self::Square(square), Self::Square(previous)) => square.continue_duty_from(previous),
+            (Self::Noise(noise), Self::Noise(previous)) => noise.continue_output_from(previous),
+            _ => {}
         }
     }
 
