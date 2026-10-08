@@ -141,9 +141,11 @@ pub(super) fn advance_main_menu(
                 frame,
             );
         }
-    } else if buttons.is_newly_pressed(Buttons::UP) {
+    } else if buttons.is_newly_pressed(Buttons::UP) && state.scene.can_move_up() {
+        // Upstream guards each arm (`main_menu.c:903`, `:915`), so a blocked
+        // Up falls through to Down when both are newly pressed together.
         state.scene.move_up();
-    } else if buttons.is_newly_pressed(Buttons::DOWN) {
+    } else if buttons.is_newly_pressed(Buttons::DOWN) && state.scene.can_move_down() {
         state.scene.move_down();
     }
     let frame = state.scene.compose_frame();
