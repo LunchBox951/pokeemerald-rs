@@ -612,6 +612,94 @@ fn placed(continued: bool, facing: Direction) -> PlayerState {
     }
 }
 
+/// A manual attempt that collides still selects MOVING upstream, so a player
+/// placed on a forced tile who bumps a wall slides on the next no-input poll
+/// (`field_player_avatar.c:401-405`, `:416-426`, `:583-595`).
+#[test]
+fn blocked_placed_slide_dispatches_after_the_bump() {
+    let runtime = forced_mover_runtime(MB_SLIDE_EAST, Direction::West, true);
+    for continued in [false, true] {
+        let mut player = placed(continued, Direction::West);
+        assert_eq!(
+            player.step(None, &runtime, &no_connections, &NO_FLAGS),
+            StepOutcome::Idle,
+        );
+        assert!(matches!(
+            player.step(Some(Direction::West), &runtime, &no_connections, &NO_FLAGS),
+            StepOutcome::Blocked { .. }
+        ));
+        for _ in 0..BUMP_IN_PLACE_FRAMES {
+            assert!(player.bump_active());
+            assert_eq!(
+                player.step(None, &runtime, &no_connections, &NO_FLAGS),
+                StepOutcome::Idle,
+            );
+            player.tick();
+        }
+        assert!(!player.bump_active());
+        assert_eq!(
+            player.step(None, &runtime, &no_connections, &NO_FLAGS),
+            StepOutcome::Advanced {
+                from: (2, 2),
+                to: (3, 2),
+            },
+        );
+    }
+}
+
+/// A blocked attempt from a deferred-handler tile must not arm the guard:
+/// no handler would ever release it, so the player would be trapped.
+#[test]
+fn blocked_placed_deferred_tile_is_not_trapped_by_the_bump() {
+    let runtime = forced_mover_runtime(MB_SECRET_BASE_JUMP_MAT, Direction::West, true);
+    let mut player = placed(false, Direction::West);
+    assert!(matches!(
+        player.step(Some(Direction::West), &runtime, &no_connections, &NO_FLAGS),
+        StepOutcome::Blocked { .. }
+    ));
+    assert!(!player.forced_movement_armed());
+    for _ in 0..BUMP_IN_PLACE_FRAMES {
+        player.step(None, &runtime, &no_connections, &NO_FLAGS);
+        player.tick();
+    }
+    assert_eq!(
+        player.step(Some(Direction::East), &runtime, &no_connections, &NO_FLAGS),
+        StepOutcome::Advanced {
+            from: (2, 2),
+            to: (3, 2),
+        },
+    );
+}
+
+/// A blocked bump from a deferred tile the guard is already armed on must
+/// not clear the guard: the later manual step the guard refuses stays refused.
+#[test]
+fn blocked_bump_keeps_an_already_armed_deferred_guard() {
+    let runtime = forced_mover_runtime(MB_ICE, Direction::East, true);
+    let mut player = enter_forced_tile(&runtime, Direction::East);
+    assert!(matches!(
+        player.step(Some(Direction::East), &runtime, &no_connections, &NO_FLAGS),
+        StepOutcome::Blocked { .. }
+    ));
+    assert!(
+        player.forced_movement_armed(),
+        "a blocked bump must preserve the guard the landing armed"
+    );
+    for _ in 0..BUMP_IN_PLACE_FRAMES {
+        player.step(None, &runtime, &no_connections, &NO_FLAGS);
+        player.tick();
+    }
+    player.step(None, &runtime, &no_connections, &NO_FLAGS);
+    player.step(Some(Direction::North), &runtime, &no_connections, &NO_FLAGS);
+    for _ in 0..TURN_IN_PLACE_FRAMES {
+        player.tick();
+    }
+    assert!(!matches!(
+        player.step(Some(Direction::North), &runtime, &no_connections, &NO_FLAGS),
+        StepOutcome::Advanced { .. }
+    ));
+}
+
 /// Placement onto a dispatched forced tile stays controllable: a `None` poll
 /// idles and the first directional poll is a manual step (`field_player_avatar.c:416-425`, `:1404-1410`).
 #[test]
