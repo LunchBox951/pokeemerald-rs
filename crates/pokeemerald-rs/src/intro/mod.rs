@@ -421,7 +421,7 @@ impl IntroScene {
 /// cannot be decoded.
 pub fn load_default() -> Result<IntroScene, IntroSceneError> {
     load(
-        crate::pack_source::PackSource::Runtime,
+        &crate::pack_source::PackSource::Runtime,
         NewGameOptions::DEFAULT,
     )
 }
@@ -436,7 +436,7 @@ pub fn load_default() -> Result<IntroScene, IntroSceneError> {
 /// Returns an error if the pack cannot be loaded or its rendering assets
 /// cannot be decoded.
 pub(crate) fn load(
-    source: crate::pack_source::PackSource,
+    source: &crate::pack_source::PackSource,
     options: NewGameOptions,
 ) -> Result<IntroScene, IntroSceneError> {
     let pack = source.load()?;

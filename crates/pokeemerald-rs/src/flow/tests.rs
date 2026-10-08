@@ -33,7 +33,7 @@ const MAX_FADE_WAIT_FRAMES: usize = 40;
 pub(super) fn drive_through_fade_wait(
     mut scene: AppScene,
     save_slot: &mut SaveSlot,
-    pack_source: crate::pack_source::PackSource,
+    pack_source: &crate::pack_source::PackSource,
 ) -> (AppScene, Vec<Box<Frame>>, Box<Frame>) {
     let mut wait_frames = Vec::new();
     for _ in 0..MAX_FADE_WAIT_FRAMES {
@@ -44,7 +44,8 @@ pub(super) fn drive_through_fade_wait(
             ),
             "drive_through_fade_wait called on a scene that was not already waiting"
         );
-        let (next, frame) = advance_scene(scene, ButtonState::new(), save_slot, pack_source);
+        let (next, frame) =
+            advance_scene(scene, ButtonState::new(), save_slot, pack_source.clone());
         if matches!(
             next,
             AppScene::TitleFadeWait(_) | AppScene::MainMenuFadeWait(_)
@@ -251,7 +252,7 @@ fn title_a_or_start_button_transitions_to_main_menu() {
         let (next, wait_frames, _destination_frame) = drive_through_fade_wait(
             waiting,
             &mut save_slot,
-            crate::pack_source::PackSource::Runtime,
+            &crate::pack_source::PackSource::Runtime,
         );
         assert!(
             wait_frames.iter().any(|frame| **frame != *press_frame),
@@ -323,7 +324,7 @@ fn title_to_main_menu_failure_emits_its_subsystem_prefix_once_at_the_eprintln_bo
     if std::env::var_os(MAIN_MENU_LOAD_FAILURE_BOUNDARY_CHILD).is_some() {
         let (_temp, mut save_slot) = empty_slot("main-menu-load-failure-boundary-child");
         let transitioned =
-            super::title_to_main_menu(crate::pack_source::PackSource::Runtime, &mut save_slot);
+            super::title_to_main_menu(&crate::pack_source::PackSource::Runtime, &mut save_slot);
         assert!(
             transitioned.is_none(),
             "an entryless pack must fail the main menu load, not build one"
@@ -412,7 +413,7 @@ fn real_pack_title_transition_borders_the_main_menu_with_the_saves_window_frame(
     let (next, _wait_frames, frame) = drive_through_fade_wait(
         waiting,
         &mut save_slot,
-        crate::pack_source::PackSource::Runtime,
+        &crate::pack_source::PackSource::Runtime,
     );
     let AppScene::MainMenu(state) = next else {
         panic!("A on the title screen must transition to the main menu once the fade completes");
@@ -494,7 +495,7 @@ fn main_menu_confirm_on_new_game_transitions_to_intro() {
     let (next, wait_frames, _destination_frame) = drive_through_fade_wait(
         waiting,
         &mut save_slot,
-        crate::pack_source::PackSource::Runtime,
+        &crate::pack_source::PackSource::Runtime,
     );
     assert!(
         wait_frames.iter().any(|frame| **frame != *press_frame),
@@ -560,8 +561,12 @@ fn main_menu_confirm_on_new_game_waits_for_the_fade_before_dispatching() {
     let leaked_path: &'static std::path::Path = Box::leak(pack_path.clone().into_boxed_path());
     let pack_source = crate::pack_source::PackSource::Test(leaked_path);
 
-    let (mut scene, press_frame) =
-        advance_scene(scene, pressed(Buttons::A), &mut save_slot, pack_source);
+    let (mut scene, press_frame) = advance_scene(
+        scene,
+        pressed(Buttons::A),
+        &mut save_slot,
+        pack_source.clone(),
+    );
     assert!(
         matches!(scene, AppScene::MainMenuFadeWait(_)),
         "A on NEW GAME must enter the fade-wait state on the press frame, not dispatch immediately"
@@ -569,8 +574,12 @@ fn main_menu_confirm_on_new_game_waits_for_the_fade_before_dispatching() {
 
     // The press frame runs both of upstream's updates at coefficient 0, so
     // the very next frame already blends at coefficient 2.
-    let (next, first_wait_frame) =
-        advance_scene(scene, ButtonState::new(), &mut save_slot, pack_source);
+    let (next, first_wait_frame) = advance_scene(
+        scene,
+        ButtonState::new(),
+        &mut save_slot,
+        pack_source.clone(),
+    );
     assert_ne!(
         *first_wait_frame, *press_frame,
         "the frame after the press must already show the first fade step, not a second \
@@ -591,7 +600,7 @@ fn main_menu_confirm_on_new_game_waits_for_the_fade_before_dispatching() {
     .cycle()
     .take(19)
     {
-        let (next, _frame) = advance_scene(scene, buttons, &mut save_slot, pack_source);
+        let (next, _frame) = advance_scene(scene, buttons, &mut save_slot, pack_source.clone());
         assert!(
             matches!(next, AppScene::MainMenuFadeWait(_)),
             "must keep waiting until the fade reports done, ignoring input meanwhile"
@@ -603,7 +612,12 @@ fn main_menu_confirm_on_new_game_waits_for_the_fade_before_dispatching() {
     // it still presents the fully black retained menu rather than the
     // destination, as upstream's task only observes the finished fade on
     // the next frame.
-    let (done, done_frame) = advance_scene(scene, ButtonState::new(), &mut save_slot, pack_source);
+    let (done, done_frame) = advance_scene(
+        scene,
+        ButtonState::new(),
+        &mut save_slot,
+        pack_source.clone(),
+    );
     assert!(
         matches!(done, AppScene::MainMenuFadeWait(_)),
         "the frame the fade reports done must still present the retained frame, not dispatch"

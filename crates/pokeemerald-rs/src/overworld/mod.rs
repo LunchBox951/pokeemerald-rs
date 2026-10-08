@@ -684,7 +684,7 @@ impl OverworldScene {
 /// Returns an error if the runtime asset pack cannot be loaded or the initial
 /// room's resources are missing or malformed.
 pub fn load_default_room(event_data: &EventData) -> Result<OverworldScene, OverworldSceneError> {
-    load_default_room_from_source(crate::pack_source::PackSource::Runtime, event_data)
+    load_default_room_from_source(&crate::pack_source::PackSource::Runtime, event_data)
 }
 
 /// [`load_default_room`], pinned to the checkout's own extracted pack
@@ -710,7 +710,7 @@ pub fn load_default_room(event_data: &EventData) -> Result<OverworldScene, Overw
 pub fn load_repo_default_room(
     event_data: &EventData,
 ) -> Result<OverworldScene, OverworldSceneError> {
-    load_default_room_from_source(crate::pack_source::PackSource::Repo, event_data)
+    load_default_room_from_source(&crate::pack_source::PackSource::Repo, event_data)
 }
 
 /// [`load_default_room`]/[`load_repo_default_room`]'s shared core (issue
@@ -725,7 +725,7 @@ pub fn load_repo_default_room(
 ///
 /// See [`load_default_room`].
 pub(crate) fn load_default_room_from_source(
-    source: crate::pack_source::PackSource,
+    source: &crate::pack_source::PackSource,
     event_data: &EventData,
 ) -> Result<OverworldScene, OverworldSceneError> {
     let pack = source.load()?;
@@ -760,7 +760,7 @@ pub fn load_room(
     event_data: &EventData,
 ) -> Result<OverworldScene, OverworldSceneError> {
     load_room_from_source(
-        crate::pack_source::PackSource::Runtime,
+        &crate::pack_source::PackSource::Runtime,
         map_id,
         player,
         event_data,
@@ -779,7 +779,7 @@ pub fn load_room(
 ///
 /// See [`load_room`].
 pub(crate) fn load_room_from_source(
-    source: crate::pack_source::PackSource,
+    source: &crate::pack_source::PackSource,
     map_id: assets::MapId,
     player: PlayerCharacter,
     event_data: &EventData,

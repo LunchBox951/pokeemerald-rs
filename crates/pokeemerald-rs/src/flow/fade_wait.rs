@@ -99,7 +99,7 @@ pub(super) fn advance_title(
 pub(super) fn advance_title_fade_wait(
     mut wait: Box<TitleFadeWait>,
     save_slot: &mut SaveSlot,
-    pack_source: crate::pack_source::PackSource,
+    pack_source: &crate::pack_source::PackSource,
 ) -> (AppScene, Box<Frame>) {
     if wait.fade.is_done() {
         if let Some(result) = title_to_main_menu(pack_source, save_slot) {
@@ -186,7 +186,7 @@ fn dispatch_main_menu_action(
 ) -> Option<(AppScene, Box<Frame>)> {
     match action {
         MainMenuAction::NewGame => {
-            match intro::load(pack_source, new_game_options_for(&state.saved)) {
+            match intro::load(&pack_source, new_game_options_for(&state.saved)) {
                 Ok(intro_scene) => {
                     let frame = intro_scene.compose_frame();
                     Some((AppScene::Intro(Box::new(intro_scene)), frame))

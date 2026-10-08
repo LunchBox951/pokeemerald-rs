@@ -447,7 +447,7 @@ fn main_menu_load_failure_message(err: &MainMenuSceneError) -> String {
 /// Returns `None`, after logging, if the pack load fails -- the caller stays
 /// on the title screen.
 fn title_to_main_menu(
-    pack_source: crate::pack_source::PackSource,
+    pack_source: &crate::pack_source::PackSource,
     save_slot: &mut SaveSlot,
 ) -> Option<(AppScene, Box<Frame>)> {
     let saved = save_slot.load();
@@ -513,7 +513,7 @@ pub(crate) fn advance_scene(
 ) -> (AppScene, Box<Frame>) {
     match scene {
         AppScene::Title(title) => advance_title(title, buttons),
-        AppScene::TitleFadeWait(wait) => advance_title_fade_wait(wait, save_slot, pack_source),
+        AppScene::TitleFadeWait(wait) => advance_title_fade_wait(wait, save_slot, &pack_source),
         AppScene::MainMenu(state) => advance_main_menu(state, buttons),
         AppScene::MainMenuFadeWait(wait) => advance_main_menu_fade_wait(wait, pack_source),
         // Issue #393: B is an ordinary dialogue-advance button here, not a

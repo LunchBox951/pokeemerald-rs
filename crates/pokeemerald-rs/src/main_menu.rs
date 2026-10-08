@@ -300,14 +300,14 @@ pub fn load_default_with_window_frame(
     window_frame: u8,
 ) -> Result<MainMenuScene, MainMenuSceneError> {
     load_with_window_frame(
-        crate::pack_source::PackSource::Runtime,
+        &crate::pack_source::PackSource::Runtime,
         menu_type,
         window_frame,
     )
 }
 
 pub(crate) fn load_with_window_frame(
-    source: crate::pack_source::PackSource,
+    source: &crate::pack_source::PackSource,
     menu_type: MainMenuType,
     window_frame: u8,
 ) -> Result<MainMenuScene, MainMenuSceneError> {

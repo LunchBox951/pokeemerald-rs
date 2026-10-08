@@ -437,7 +437,7 @@ impl App {
             || Ok(SaveSlot::default_location()),
             crate::pack_source::PackSource::Runtime,
         )?;
-        app.music = Self::start_title_music(app.pack_source, &mut app.music_context, || {
+        app.music = Self::start_title_music(&app.pack_source, &mut app.music_context, || {
             platform::AudioOutput::open(crate::music::RING_CAPACITY_FRAMES)
         });
         Ok(app)
@@ -513,8 +513,7 @@ impl App {
         pack: &std::path::Path,
         save: &std::path::Path,
     ) -> Result<Self, AppError> {
-        // One small allocation per construction, so `PackSource` stays `Copy`.
-        let pack: &'static std::path::Path = Box::leak(pack.into());
+        let source = crate::pack_source::PackSource::Explicit(pack.into());
         Self::boot(
             || {
                 let pack = assets::AssetPack::load(pack).map_err(TitleSceneError::Pack)?;
@@ -522,7 +521,7 @@ impl App {
             },
             || Ok(Platform::new_headless()),
             || SaveSlot::at_path(save),
-            crate::pack_source::PackSource::Explicit(pack),
+            source,
         )
     }
 
@@ -547,7 +546,7 @@ impl App {
             || Ok(SaveSlot::none()),
             crate::pack_source::PackSource::Repo,
         )?;
-        app.music = Self::start_title_music(app.pack_source, &mut app.music_context, || {
+        app.music = Self::start_title_music(&app.pack_source, &mut app.music_context, || {
             Ok(platform::AudioOutput::null(
                 crate::music::RING_CAPACITY_FRAMES,
             ))
@@ -570,7 +569,7 @@ impl App {
     /// `$POKEEMERALD_PACK` names. This second load resolving differently
     /// from [`Self::boot`]'s first is exactly the split issue #412 closed.
     fn start_title_music(
-        pack_source: crate::pack_source::PackSource,
+        pack_source: &crate::pack_source::PackSource,
         context: &mut MusicContext,
         open_audio: impl FnOnce() -> Result<platform::AudioOutput, PlatformError>,
     ) -> Option<MusicPlayer> {
@@ -689,8 +688,12 @@ impl App {
             eprintln!("{line}");
         }
         if let Some(scene) = self.scene.take() {
-            let (next, frame) =
-                flow::advance_scene(scene, buttons, &mut self.save_slot, self.pack_source);
+            let (next, frame) = flow::advance_scene(
+                scene,
+                buttons,
+                &mut self.save_slot,
+                self.pack_source.clone(),
+            );
             self.scene = Some(next);
             self.frame = frame;
         }

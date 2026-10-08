@@ -30,7 +30,7 @@ use assets::{AssetPack, PackError};
 /// An explicit choice of where an [`AssetPack`] load reads from, carried by
 /// [`crate::App`] and threaded through every scene load reachable after
 /// construction.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum PackSource {
     /// [`AssetPack::load_default`]'s runtime resolver order.
     Runtime,
@@ -47,10 +47,10 @@ pub(crate) enum PackSource {
     /// A caller-owned pack at a fixed path ([`crate::App::new_headless_real_at`]):
     /// a checkout-extracted pack or a ROM-imported one the caller placed
     /// itself. Never consults the environment or any other location, so a
-    /// missing file is a load error, not a fallback. `Copy` threading
-    /// through every scene load needs a `'static` path, so the
-    /// constructor leaks one small path per `App` it builds.
-    Explicit(&'static std::path::Path),
+    /// missing file is a load error, not a fallback. The path is an owned,
+    /// cheaply cloneable `Arc`, so it is freed once the last clone (a failed
+    /// boot's argument, or the dropped [`crate::App`]) is gone.
+    Explicit(std::sync::Arc<std::path::Path>),
 }
 
 impl PackSource {
@@ -60,7 +60,7 @@ impl PackSource {
     /// [`Self::load`] so the resolution itself is checkable without a pack
     /// on disk (see this module's tests).
     #[must_use]
-    fn path(self) -> PathBuf {
+    fn path(&self) -> PathBuf {
         match self {
             Self::Runtime => AssetPack::default_path(),
             Self::Repo => AssetPack::repo_pack_path(),
@@ -75,7 +75,7 @@ impl PackSource {
     /// # Errors
     ///
     /// See [`AssetPack::load`].
-    pub(crate) fn load(self) -> Result<AssetPack, PackError> {
+    pub(crate) fn load(&self) -> Result<AssetPack, PackError> {
         #[cfg(test)]
         PACK_LOADS.with(|loads| loads.set(loads.get() + 1));
         AssetPack::load(&self.path())
@@ -129,7 +129,7 @@ mod tests {
     #[test]
     fn explicit_resolves_to_its_own_path_alone() {
         let path = std::path::Path::new("/nonexistent/explicit-source.pack");
-        let source = PackSource::Explicit(path);
+        let source = PackSource::Explicit(path.into());
         assert_eq!(source.path(), path);
         assert_ne!(source.path(), PackSource::Repo.path());
         assert_ne!(source.path(), PackSource::Runtime.path());
@@ -140,7 +140,7 @@ mod tests {
     #[test]
     fn explicit_missing_pack_fails_to_load() {
         let source =
-            PackSource::Explicit(std::path::Path::new("/nonexistent/explicit-source.pack"));
+            PackSource::Explicit(std::path::Path::new("/nonexistent/explicit-source.pack").into());
         assert!(source.load().is_err());
     }
 }
