@@ -13,8 +13,8 @@ use engine::overworld::{Direction, PlayerState, NUM_METATILES_IN_PRIMARY};
 use rendering::{Bgr555, BitDepth, Palette, ScreenEntry, Tilemap};
 
 use super::{
-    pack_4bpp_region, OverworldSceneError, METATILE_PX, PAD, PLAYER_VIEW_COL, PLAYER_VIEW_ROW,
-    RESTING_SCROLL_ROW, RESTING_SCROLL_Y, VIEW_COLS, VIEW_ROWS,
+    fill_palette_bank, pack_4bpp_region, OverworldSceneError, METATILE_PX, PAD, PLAYER_VIEW_COL,
+    PLAYER_VIEW_ROW, RESTING_SCROLL_ROW, RESTING_SCROLL_Y, VIEW_COLS, VIEW_ROWS,
 };
 
 /// Fixed primary-tileset slot count from `include/fieldmap.h`.
@@ -101,7 +101,7 @@ pub(super) fn combined_world_palette(
 ) -> Palette {
     let mut colors = [Bgr555::default(); Palette::LEN];
     for (bank, palette) in primary.iter().enumerate().take(PRIMARY_PALETTE_BANKS) {
-        copy_bank(&mut colors, bank, *palette);
+        fill_palette_bank(&mut colors, bank, *palette);
     }
     for (bank, palette) in secondary
         .iter()
@@ -109,22 +109,10 @@ pub(super) fn combined_world_palette(
         .take(WORLD_PALETTE_BANKS)
         .skip(PRIMARY_PALETTE_BANKS)
     {
-        copy_bank(&mut colors, bank, *palette);
+        fill_palette_bank(&mut colors, bank, *palette);
     }
     colors[0] = Bgr555::default();
     Palette::new(colors)
-}
-
-fn copy_bank(colors: &mut [Bgr555; Palette::LEN], bank: usize, palette: PaletteRef<'_>) {
-    let bank_start = bank * Palette::BANK_LEN;
-    let count = usize::from(palette.color_count).min(Palette::BANK_LEN);
-    for (slot, raw) in colors[bank_start..bank_start + Palette::BANK_LEN]
-        .iter_mut()
-        .zip(palette.colors())
-        .take(count)
-    {
-        *slot = Bgr555::from_raw(raw);
-    }
 }
 
 const MAP_OFFSET: i32 = 7;
