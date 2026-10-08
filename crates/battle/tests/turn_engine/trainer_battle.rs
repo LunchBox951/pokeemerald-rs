@@ -1203,6 +1203,64 @@ fn an_unscoreable_party_moveset_is_rejected_before_any_draw() {
     assert_eq!(error, BattleError::UnscoreableMoveEffect(SLASH));
 }
 
+/// `BattleAI_DoAIProcessing` skips a zero-PP slot before its script runs, so
+/// an exhausted move the AI cannot score never reaches scoring; admission must
+/// not reject the party over it.
+#[test]
+fn an_exhausted_unscoreable_move_does_not_block_a_trainer_battle() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, MUDKIP, 100, vec![GROWL]);
+    let mut enemy = max_iv_mon(&dex, TORCHIC, 34, vec![SLASH, SCRATCH]);
+    while enemy.moves()[0].pp > 0 {
+        enemy.deduct_pp(0).unwrap();
+    }
+    let scratch_pp = enemy.moves()[1].pp;
+    let mut rng = SequenceRng::new([u16::MAX; 64]);
+    let mut battle =
+        Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, vec![enemy], &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    assert!(events.iter().any(|event| matches!(
+        event,
+        BattleEvent::Hit {
+            by_player: false,
+            move_id: SCRATCH,
+            ..
+        }
+    )));
+    assert_eq!(battle.enemy().moves()[0].pp, 0);
+    assert_eq!(battle.enemy().moves()[1].pp, scratch_pp - 1);
+}
+
+/// `sIgnoredPowerfulMoveEffects` (`src/battle_ai_script_commands.c:266-280`)
+/// keeps Overheat out of the most-powerful-move comparison; an exhausted one is
+/// admitted yet still sits in the moveset, so it must not make Scratch look
+/// weaker and cost it its `AI_TryToFaint` bonus over Growl.
+#[test]
+fn an_exhausted_ignored_effect_move_does_not_skew_the_power_comparison() {
+    let dex = Dex::new();
+    let mut enemy = max_iv_mon(&dex, TORCHIC, 34, vec![MoveId::OVERHEAT, SCRATCH, GROWL]);
+    while enemy.moves()[0].pp > 0 {
+        enemy.deduct_pp(0).unwrap();
+    }
+    let player = max_iv_mon(&dex, RATTATA, 100, vec![GROWL]);
+    let mut rng = SequenceRng::new([0; 64]);
+    let mut battle =
+        Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, vec![enemy], &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    assert!(events.iter().any(|event| matches!(
+        event,
+        BattleEvent::Hit {
+            by_player: false,
+            move_id: SCRATCH,
+            ..
+        }
+    )));
+}
+
 /// `TRAINER_WINONA_1` (`include/constants/opponents.h:274`) carries
 /// `AI_SCRIPT_RISKY` on top of the three Route 103 scripts
 /// (`src/data/trainers.h:3252`).

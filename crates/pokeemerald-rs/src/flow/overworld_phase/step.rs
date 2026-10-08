@@ -32,7 +32,7 @@ use crate::overworld::NpcDialog;
 use crate::start_menu::StartMenu;
 
 use super::connections::MapConnections;
-use super::input::{advance_or_skip_for_preempt, held_direction};
+use super::input::{advance_or_skip_for_preempt, held_direction, observe_tile, settle_outcome};
 pub(super) use super::interaction::InteractionOutcome;
 use super::sight_trainer_trigger::SightTrainerOutcome;
 use super::OverworldPhase;
@@ -286,6 +286,11 @@ impl OverworldPhase {
     /// in-progress battle owns the whole frame ahead of everything above —
     /// see [`OverworldPhase::advance_active_battle_frame`].
     ///
+    /// A completed stationary turn is the other tile-centre observation
+    /// (`pending_turn`, `field_player_avatar.c:901-915`): it reaches the roll
+    /// once its busy timer drains, minus forced tiles, and never the
+    /// coord-event or door-warp consumers.
+    ///
     /// The frame `arrow_trigger` or `animated_door_trigger` fires is the one
     /// case upstream would still have polled `checkStandardWildEncounter` on
     /// and this port does not: upstream sets that flag at `T_TILE_CENTER`
@@ -414,6 +419,10 @@ impl OverworldPhase {
                 .pending_landing
                 .take_if(|_| !self.player.in_transit())
                 .filter(|_| !self.player.field_input_suppressed());
+            // A stationary turn's own tile-centre observation, taken once its
+            // busy timer has drained (`field_player_avatar.c:901-915`). It
+            // feeds only the encounter gate below -- never the coord-event,
+            // door-warp, or step-script consumers of `stepped_onto`.
             // The Route 101 scripted first-battle coord-event trigger (issue
             // #231, `super::first_battle_trigger`'s own "Precedence" section:
             // it outranks the door warp, the wild-encounter roll, and the
@@ -450,12 +459,13 @@ impl OverworldPhase {
             // (`crate::flow::wild_encounter`'s module docs, "Lead-health
             // eligibility"). The landed tile is the player's own tile by
             // now, and it is what `GetPlayerPosition` would report there.
+            let tile_center = observe_tile(&mut self.pending_turn, &self.player, &runtime, landed);
             let encounter = wild_encounter::roll_for_step(
                 &mut self.wild,
                 &mut self.rng,
                 self.map_id,
                 &runtime,
-                wild_encounter::roll_eligible_landing(landed, door_warp)
+                wild_encounter::roll_eligible_landing(tile_center, door_warp)
                     .filter(|_| wild_table_fightable),
             );
             // Neither consumer of `field_event_fired` can be driven to the
@@ -506,13 +516,13 @@ impl OverworldPhase {
             // (an immutable borrow of `self.scene`) is still needed below.
             let maps = MapConnections {
                 pack: &self.connection_pack,
-                source: self.pack_source,
+                source: self.pack_source.clone(),
             };
             // `interaction` preempts movement too (issue #435), and so do a
             // claimed fresh `START`, the pre-movement animated-door check
             // (issue #851), and every completed-step event above
             // (`landing_claimed`).
-            let crossed_to = advance_or_skip_for_preempt(
+            let outcome = advance_or_skip_for_preempt(
                 &mut self.player,
                 &mut self.pending_landing,
                 buttons,
@@ -555,17 +565,10 @@ impl OverworldPhase {
             // Never coincides with `warp_fired`: a crossing leaves
             // `self.player.in_transit()` true, the same gate that already
             // makes the `warp_trigger` closure above return `None`.
-            if let Some((to_map, to_position)) = crossed_to {
-                if !self.cross_connection(to_map, to_position) {
-                    // A refused rebind must not leave the player standing at
-                    // a position expressed in the *entered* map's coordinate
-                    // space while `map_id`/`scene` still name the departed
-                    // map -- restore the pre-step stance instead, the same
-                    // "leaves the player exactly where they stood" contract
-                    // `warp_to` documents for its own failure cases.
-                    self.player = PlayerState::new(pre.position, pre.elevation, pre.facing);
-                }
-            }
+            self.finish_crossing(
+                outcome,
+                PlayerState::new(pre.position, pre.elevation, pre.facing),
+            );
         } else {
             self.player.tick();
             if self.start_menu_may_open(buttons, false) {
@@ -684,6 +687,30 @@ impl OverworldPhase {
         }
     }
 
+    /// Latches a started turn, then applies [`Self::step`]'s deferred map-edge
+    /// crossing, restoring the pre-step stance when the entered map's rebind
+    /// is refused.
+    fn finish_crossing(
+        &mut self,
+        outcome: engine::overworld::StepOutcome,
+        pre_step_stance: PlayerState,
+    ) {
+        let Some((to_map, to_position)) =
+            settle_outcome(&mut self.pending_turn, &self.player, outcome)
+        else {
+            return;
+        };
+        if !self.cross_connection(to_map, to_position) {
+            // A refused rebind must not leave the player standing at
+            // a position expressed in the *entered* map's coordinate
+            // space while `map_id`/`scene` still name the departed
+            // map -- restore the pre-step stance instead, the same
+            // "leaves the player exactly where they stood" contract
+            // `warp_to` documents for its own failure cases.
+            self.player = pre_step_stance;
+        }
+    }
+
     /// Commits a built menu and takes the field lock on this frame, as
     /// `ShowStartMenu` reaches `PlayerFreeze` inline (`start_menu.c:581-591`).
     fn commit_start_menu(&mut self, ready: Option<StartMenu>) {
@@ -745,7 +772,7 @@ impl OverworldPhase {
             match interaction {
                 Some(InteractionOutcome::Dialog(tokens)) => {
                     let text_speed = self.field_dialog_text_speed();
-                    match NpcDialog::open_at_speed(self.pack_source, tokens, text_speed) {
+                    match NpcDialog::open_at_speed(&self.pack_source, tokens, text_speed) {
                         Ok(dialog) => self.dialog = Some(dialog),
                         Err(err) => eprintln!("npc dialog: {err} -- staying in the overworld"),
                     }

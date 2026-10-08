@@ -90,6 +90,13 @@ fn keysplit_slot(child: GbaPtr, table: GbaPtr) -> [u8; 12] {
 }
 
 fn rom() -> Rom {
+    // The two ToneData records the linker placed before the child's declared
+    // ones: the child's alias address points at them.
+    let preceding: Vec<u8> = [
+        slot(0x00, 61, 0, 0, at(ONE_SHOT).raw(), [255, 0, 255, 10]),
+        slot(0x08, 63, 0, 0xA0, at(LOOPED).raw(), [255, 0, 255, 20]),
+    ]
+    .concat();
     let child: Vec<u8> = [
         slot(0x00, 60, 0, 0, at(LOOPED).raw(), [255, 0, 255, 165]),
         slot(0x08, 62, 0, 0xC0, at(ONE_SHOT).raw(), [255, 0, 255, 242]),
@@ -128,6 +135,7 @@ fn rom() -> Rom {
         .write(DPCM as usize, &wave_data(1, 0, 8, 0, &ONE_SHOT_PCM))
         .write(WAVE as usize, &WAVE_TABLE)
         .write(KEYSPLIT as usize + 2, &KEYSPLIT_TABLE)
+        .write(CHILD as usize, &preceding)
         .write(CHILD as usize + 2 * 12, &child)
         .write(PARENT as usize, &parent)
         .write(SONG as usize, &song)
@@ -318,13 +326,31 @@ fn a_programmable_wave_copies_its_table() {
 }
 
 #[test]
-fn a_child_group_is_padded_around_its_declared_slots() {
+fn a_child_group_aliases_the_records_before_its_declared_slots() {
     let rom = rom();
     let entry = voicegroup(&rom.reader(), &audio(), &CHILD_ROOT).expect("a child group");
     let group = VoiceGroup::decode(&entry.payload).unwrap();
     assert_eq!(group.slots().len(), 8);
-    assert_eq!(group.slot(0), Some(&VoiceEntry::Empty));
-    assert_eq!(group.slot(1), Some(&VoiceEntry::Empty));
+    assert_eq!(
+        group.slot(0),
+        Some(&VoiceEntry::DirectSound(DirectSoundVoice {
+            base_key: 61,
+            pan: None,
+            sample: SampleId("audio/sample/direct-sound/one_shot".into()),
+            envelope: env(255, 0, 255, 10),
+            mode: DirectSoundMode::Resampled,
+        }))
+    );
+    assert_eq!(
+        group.slot(1),
+        Some(&VoiceEntry::DirectSound(DirectSoundVoice {
+            base_key: 63,
+            pan: Some(32),
+            sample: SampleId("audio/sample/direct-sound/looped".into()),
+            envelope: env(255, 0, 255, 20),
+            mode: DirectSoundMode::Fixed,
+        }))
+    );
     assert_eq!(
         group.slot(2),
         Some(&VoiceEntry::DirectSound(DirectSoundVoice {

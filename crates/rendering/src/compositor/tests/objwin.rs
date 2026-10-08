@@ -1,7 +1,9 @@
 //! Pins OBJWIN masking: its WIN0/WIN1 precedence, backdrop variant, and slow-path reblend.
 
 use super::super::{compose_frame_with_effects, BgSlot, FrameEffects};
-use super::shared::opaque_bg_fixture;
+use super::shared::{opaque_affine_bg_color_fixture, opaque_bg_color_fixture, opaque_bg_fixture};
+use crate::affine::AffineMatrix;
+use crate::bg_affine::{AffineBgLayer, Overflow};
 use crate::effects::{ColorEffect, EffectsConfig, LayerTargets};
 use crate::oam::{OamEntry, ObjMode, ObjShape};
 use crate::palette::{Bgr555, Palette, Rgb888};
@@ -390,4 +392,235 @@ fn objwin_write_time_mask_survives_a_flag_only_priority_overwrite() {
         Some(gray),
         "a color written after OBJWIN uses its palette"
     );
+}
+
+/// Composes a semi-transparent OBJ over a BG at an OBJWIN-masked pixel (x=4)
+/// and an unmasked one (x=0). `window_effects` is the OBJWIN effects bit,
+/// `target1` whether the BG is target 1, `win0` whether WIN0 covers the mask.
+/// One OBJWIN-over-BG scenario; the independent switches are plain flags.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent scenario switches of one test fixture, not a state machine"
+)]
+#[derive(Clone, Copy)]
+struct BgCase {
+    affine: bool,
+    objwin_effects: bool,
+    target1: bool,
+    win0: bool,
+}
+
+fn objwin_bg_pixels(
+    effect: ColorEffect,
+    evy: u8,
+    color: Bgr555,
+    case: BgCase,
+) -> (Option<Rgb888>, Option<Rgb888>) {
+    let BgCase {
+        affine,
+        objwin_effects,
+        target1,
+        win0,
+    } = case;
+    let (regular_tiles, regular_palette, regular_map) = opaque_bg_color_fixture(color);
+    let regular = crate::bg::BgLayer::new(&regular_tiles, &regular_palette, &regular_map);
+    let (affine_tiles, affine_palette, affine_map) = opaque_affine_bg_color_fixture(color);
+    let affine_layer = AffineBgLayer::new(&affine_tiles, &affine_palette, &affine_map);
+
+    let sprite_tiles = Tileset::decode(BitDepth::Bpp4, &[0xFFu8; 32]).unwrap();
+    let mut sprite_colors = [Bgr555::default(); Palette::LEN];
+    sprite_colors[15] = color;
+    let sprite_palette = Palette::new(sprite_colors);
+    let mask = OamEntry::new(
+        4,
+        0,
+        0,
+        0,
+        BitDepth::Bpp4,
+        false,
+        false,
+        ObjShape::Square,
+        0,
+        0,
+        true,
+    )
+    .with_mode(ObjMode::Window);
+    let entries = [mask, solid_sprite(0, ObjMode::SemiTransparent)];
+    let sprites = SpriteLayer::new(&entries, &sprite_tiles, &sprite_tiles, &sprite_palette);
+    assert!(!sprites.objwin_mask(0, 0));
+    assert!(sprites.objwin_mask(4, 0));
+
+    let bg_index: u8 = if affine { 2 } else { 0 };
+    let slot = if affine {
+        BgSlot::new_affine(
+            affine_layer,
+            bg_index,
+            1,
+            AffineMatrix::IDENTITY,
+            0,
+            0,
+            Overflow::Transparent,
+            true,
+        )
+    } else {
+        BgSlot::new(regular, bg_index, 1, 0, 0, true)
+    };
+    let mut bg_targets = LayerTargets::default();
+    bg_targets.bg[usize::from(bg_index)] = true;
+    let mut winout = WindowLayerEnable::NONE;
+    winout.bg[usize::from(bg_index)] = true;
+    winout.obj = true;
+    let mut obj_window = winout;
+    obj_window.effects = objwin_effects;
+    let win0_enable = win0.then(|| {
+        let mut enable = winout;
+        enable.effects = true;
+        enable
+    });
+    let effects = FrameEffects {
+        windows: WindowConfig {
+            win0: win0_enable.map(|enable| {
+                (
+                    WindowRect::new(WindowRange::new(0, 16), WindowRange::new(0, 8)),
+                    enable,
+                )
+            }),
+            win1: None,
+            obj_window: Some(obj_window),
+            winout,
+        },
+        color: EffectsConfig {
+            effect,
+            target1: if target1 {
+                bg_targets
+            } else {
+                LayerTargets::default()
+            },
+            target2: bg_targets,
+            eva: 8,
+            evb: 8,
+            evy,
+        },
+        ..FrameEffects::default()
+    };
+    let fb = compose_frame_with_effects(&sprites, &[slot], &effects);
+    (fb.pixel(4, 0), fb.pixel(0, 0))
+}
+
+#[test]
+fn objwin_forced_alpha_uses_the_bg_brighten_and_darken_variants() {
+    let black = Bgr555::from_channels(0, 0, 0);
+    let white = Bgr555::from_channels(31, 31, 31);
+    for affine in [false, true] {
+        let (masked, unmasked) = objwin_bg_pixels(
+            ColorEffect::Brighten,
+            16,
+            black,
+            BgCase {
+                affine,
+                objwin_effects: true,
+                target1: true,
+                win0: false,
+            },
+        );
+        assert_eq!(
+            masked,
+            Some(Rgb888 {
+                r: 127,
+                g: 127,
+                b: 127
+            }),
+            "brighten affine={affine}"
+        );
+        assert_eq!(
+            unmasked,
+            Some(Rgb888::BLACK),
+            "unmasked brighten affine={affine}"
+        );
+
+        let (masked, unmasked) = objwin_bg_pixels(
+            ColorEffect::Darken,
+            8,
+            white,
+            BgCase {
+                affine,
+                objwin_effects: true,
+                target1: true,
+                win0: false,
+            },
+        );
+        assert_eq!(
+            masked,
+            Some(Rgb888 {
+                r: 191,
+                g: 191,
+                b: 191
+            }),
+            "darken affine={affine}"
+        );
+        assert_eq!(
+            unmasked,
+            Some(white.to_rgb888()),
+            "unmasked darken affine={affine}"
+        );
+    }
+}
+
+#[test]
+fn objwin_forced_alpha_keeps_the_raw_bg_without_an_effects_gate() {
+    let black = Bgr555::from_channels(0, 0, 0);
+    for affine in [false, true] {
+        // OBJWIN effects bit off: still forced alpha, but the raw BG.
+        let (masked, _) = objwin_bg_pixels(
+            ColorEffect::Brighten,
+            16,
+            black,
+            BgCase {
+                affine,
+                objwin_effects: false,
+                target1: true,
+                win0: false,
+            },
+        );
+        assert_eq!(masked, Some(Rgb888::BLACK), "effects off affine={affine}");
+        // BG not target 1: no variant.
+        let (masked, _) = objwin_bg_pixels(
+            ColorEffect::Brighten,
+            16,
+            black,
+            BgCase {
+                affine,
+                objwin_effects: true,
+                target1: false,
+                win0: false,
+            },
+        );
+        assert_eq!(masked, Some(Rgb888::BLACK), "not target1 affine={affine}");
+        // WIN0 outranks OBJWIN: no variant even with effects on.
+        let (masked, _) = objwin_bg_pixels(
+            ColorEffect::Brighten,
+            16,
+            black,
+            BgCase {
+                affine,
+                objwin_effects: true,
+                target1: true,
+                win0: true,
+            },
+        );
+        assert_eq!(masked, Some(Rgb888::BLACK), "win0 affine={affine}");
+        // Alpha-only and no effect select no BLDY variant.
+        let (masked, _) = objwin_bg_pixels(
+            ColorEffect::None,
+            16,
+            black,
+            BgCase {
+                affine,
+                objwin_effects: true,
+                target1: true,
+                win0: false,
+            },
+        );
+        assert_eq!(masked, Some(Rgb888::BLACK), "none affine={affine}");
+    }
 }

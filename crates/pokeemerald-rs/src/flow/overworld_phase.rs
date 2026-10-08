@@ -181,6 +181,11 @@ pub(crate) struct OverworldPhase {
     /// Destination latched at step start for warp processing at step
     /// completion; `None` between steps.
     pending_landing: Option<TilePos>,
+    /// Tile a stationary turn started on, awaiting its tile-centre
+    /// observation once the turn's busy timer drains; `None` otherwise.
+    /// Feeds only the wild-encounter gate -- never the positional
+    /// coord/warp consumers `pending_landing` feeds.
+    pending_turn: Option<TilePos>,
     /// Active NPC dialog. While `Some`, [`OverworldPhase::step`] routes
     /// input to it instead of movement, and
     /// [`OverworldPhase::compose_frame`] draws it over the frame.
@@ -393,7 +398,7 @@ impl OverworldPhase {
         );
         let arrival = new_game::bedroom_arrival(initial_save2.player_gender);
         let scene = overworld::load_room_from_source(
-            source,
+            &source,
             arrival.map_id,
             initial_save2.player_gender.into(),
             &initial_save1.event_data,
@@ -454,7 +459,7 @@ impl OverworldPhase {
         // previously set var (e.g. Route 103's rival sprite) must already
         // be here for the first composed frame to resolve it correctly.
         let scene = overworld::load_room_from_source(
-            source,
+            &source,
             map_id,
             block2.player_gender.into(),
             &block1.event_data,
@@ -507,7 +512,7 @@ impl OverworldPhase {
         let event_data =
             connections::map_entry_event_data(&block1.event_data, warp_map, block2.player_gender);
         let scene = overworld::load_room_from_source(
-            source,
+            &source,
             warp_map,
             block2.player_gender.into(),
             &event_data,
@@ -595,6 +600,7 @@ impl OverworldPhase {
             save1: block1,
             save2: block2,
             pending_landing: None,
+            pending_turn: None,
             dialog: None,
             tick: 0,
             connection_pack: OnceCell::new(),
@@ -741,6 +747,7 @@ impl OverworldPhase {
             save1,
             save2,
             pending_landing: None,
+            pending_turn: None,
             dialog,
             tick: 0,
             connection_pack: OnceCell::new(),

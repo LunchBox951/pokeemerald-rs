@@ -1,12 +1,3 @@
-//! Rendering a located profile as the Rust module `rom-import` ships.
-//!
-//! The output is one `const` and nothing else, so the shipped importer pays
-//! no run-time cost for it and a reviewer can diff two generations line by
-//! line. Records are written one per line and the `const` carries
-//! `#[rustfmt::skip]`: left to itself `rustfmt` would explode a few hundred
-//! dense records into a few thousand lines, and a table nobody can scan is
-//! a table nobody checks.
-
 use std::fmt::Write as _;
 
 use rom_import::Encoding;
@@ -15,8 +6,8 @@ use super::plan::{
     BlobPlan, ImagePlan, MapLayoutPlan, PalettePlan, ProfilePlan, TileAnimPlan, TilesetPlan,
 };
 
-/// Render the whole module, ready to write to
-/// `crates/rom-import/src/profiles/bpee_rev0.rs`.
+/// Returns the `bpee_rev0` Rust module with one root-table constant.
+/// Records stay on one line under `#[rustfmt::skip]` for reviewable diffs.
 pub fn module(plan: &ProfilePlan, sha1: &str, root_count: usize) -> String {
     let mut out = String::with_capacity(64 * 1024);
     let _ = writeln!(
@@ -63,7 +54,7 @@ pub const EMERALD_US_REV0_ROOTS: Roots = Roots {{"
             out,
             "        FontRoot {{ id: {:?}, addr: {}, len: {}, width: {}, height: {}, bit_depth: {} }},",
             font.id,
-            ptr(font.addr),
+            gba_ptr_expression(font.addr),
             font.len,
             font.width,
             font.height,
@@ -84,7 +75,6 @@ pub const EMERALD_US_REV0_ROOTS: Roots = Roots {{"
     out
 }
 
-/// Render a `palettes: &[..]` field at `indent`.
 fn palette_slice(out: &mut String, indent: &str, palettes: &[PalettePlan]) {
     let _ = writeln!(out, "{indent}palettes: &[");
     for palette in palettes {
@@ -93,7 +83,6 @@ fn palette_slice(out: &mut String, indent: &str, palettes: &[PalettePlan]) {
     let _ = writeln!(out, "{indent}],");
 }
 
-/// Render an `images: &[..]`-shaped field at `indent`.
 fn image_slice(out: &mut String, indent: &str, field: &str, images: &[ImagePlan]) {
     let _ = writeln!(out, "{indent}{field}: &[");
     for image in images {
@@ -102,7 +91,6 @@ fn image_slice(out: &mut String, indent: &str, field: &str, images: &[ImagePlan]
     let _ = writeln!(out, "{indent}],");
 }
 
-/// Render the title screen.
 fn title_screen_roots(out: &mut String, plan: &ProfilePlan) {
     let title = &plan.title_screen;
     let _ = writeln!(out, "    title_screen: TitleScreenRoots {{");
@@ -113,25 +101,27 @@ fn title_screen_roots(out: &mut String, plan: &ProfilePlan) {
     }
     let _ = writeln!(out, "        ],");
     palette_slice(out, "        ", &title.palettes);
-    let _ = writeln!(out, "        bg_palettes: {},", ptr(title.bg_palettes));
+    let _ = writeln!(
+        out,
+        "        bg_palettes: {},",
+        gba_ptr_expression(title.bg_palettes)
+    );
     let _ = writeln!(out, "    }},");
 }
 
-/// Render the object-event sprites.
 fn sprite_roots(out: &mut String, plan: &ProfilePlan) {
     let sprites = &plan.sprites;
     let _ = writeln!(out, "    sprites: SpriteRoots {{");
     let _ = writeln!(
         out,
         "        palette_table: {},",
-        ptr(sprites.palette_table)
+        gba_ptr_expression(sprites.palette_table)
     );
     image_slice(out, "        ", "sheets", &sprites.sheets);
     palette_slice(out, "        ", &sprites.palettes);
     let _ = writeln!(out, "    }},");
 }
 
-/// Render the text-window domain.
 fn text_window_roots(out: &mut String, plan: &ProfilePlan) {
     let text_window = &plan.text_window;
     let _ = writeln!(out, "    text_window: TextWindowRoots {{");
@@ -140,16 +130,19 @@ fn text_window_roots(out: &mut String, plan: &ProfilePlan) {
     let _ = writeln!(
         out,
         "        window_palettes: {},",
-        ptr(text_window.window_palettes)
+        gba_ptr_expression(text_window.window_palettes)
     );
     let _ = writeln!(out, "    }},");
 }
 
-/// Render the audio domain.
 fn audio_roots(out: &mut String, plan: &ProfilePlan) {
     let audio = &plan.audio;
     let _ = writeln!(out, "    audio: AudioRoots {{");
-    let _ = writeln!(out, "        song_table: {},", ptr(audio.song_table));
+    let _ = writeln!(
+        out,
+        "        song_table: {},",
+        gba_ptr_expression(audio.song_table)
+    );
     let _ = writeln!(out, "        songs: &[");
     for song in &audio.songs {
         let _ = writeln!(
@@ -157,9 +150,9 @@ fn audio_roots(out: &mut String, plan: &ProfilePlan) {
             "            SongRoot {{ id: {:?}, index: {}, header: {}, track_count: {}, voicegroup: {} }},",
             song.id,
             song.index,
-            ptr(song.header),
+            gba_ptr_expression(song.header),
             song.track_count,
-            ptr(song.voicegroup)
+            gba_ptr_expression(song.voicegroup)
         );
     }
     let _ = writeln!(out, "        ],");
@@ -170,7 +163,7 @@ fn audio_roots(out: &mut String, plan: &ProfilePlan) {
             "            VoicegroupRoot {{ id: {:?}, label: {:?}, addr: {}, starting_note: {}, declared_slots: {}, addressable_slots: 128 }},",
             group.id,
             group.label,
-            ptr(group.addr),
+            gba_ptr_expression(group.addr),
             group.starting_note,
             group.declared_slots
         );
@@ -182,7 +175,7 @@ fn audio_roots(out: &mut String, plan: &ProfilePlan) {
             out,
             "            KeysplitRoot {{ label: {:?}, addr: {}, starting_note: {}, len: {} }},",
             split.label,
-            ptr(split.addr),
+            gba_ptr_expression(split.addr),
             split.starting_note,
             split.len
         );
@@ -198,7 +191,7 @@ fn audio_roots(out: &mut String, plan: &ProfilePlan) {
                 out,
                 "            SampleRoot {{ id: {:?}, addr: {}, header_len: {}, data_len: {} }},",
                 sample.id,
-                ptr(sample.addr),
+                gba_ptr_expression(sample.addr),
                 sample.header_len,
                 sample.data_len
             );
@@ -208,14 +201,13 @@ fn audio_roots(out: &mut String, plan: &ProfilePlan) {
     let _ = writeln!(out, "    }},");
 }
 
-/// Render one tileset and everything under it.
 fn tileset_root(out: &mut String, tileset: &TilesetPlan) {
     let _ = writeln!(out, "        TilesetRoot {{");
     let _ = writeln!(out, "            name: {:?},", tileset.name);
     let _ = writeln!(
         out,
         "            struct_addr: {}, is_compressed: {}, is_secondary: {},",
-        ptr(tileset.struct_addr),
+        gba_ptr_expression(tileset.struct_addr),
         tileset.is_compressed,
         tileset.is_secondary
     );
@@ -231,7 +223,11 @@ fn tileset_root(out: &mut String, tileset: &TilesetPlan) {
         "            metatile_attributes: {},",
         blob_root(&tileset.metatile_attributes)
     );
-    let _ = writeln!(out, "            callback: {},", hex32(tileset.callback));
+    let _ = writeln!(
+        out,
+        "            callback: {},",
+        separated_u32_hex_literal(tileset.callback)
+    );
     let _ = writeln!(out, "            anims: &[");
     for anim in &tileset.anims {
         tile_anim_root(out, anim);
@@ -240,7 +236,6 @@ fn tileset_root(out: &mut String, tileset: &TilesetPlan) {
     let _ = writeln!(out, "        }},");
 }
 
-/// Render one tileset animation.
 fn tile_anim_root(out: &mut String, anim: &TileAnimPlan) {
     let _ = writeln!(
         out,
@@ -253,14 +248,13 @@ fn tile_anim_root(out: &mut String, anim: &TileAnimPlan) {
     let _ = writeln!(out, "                ] }},");
 }
 
-/// Render one map layout.
 fn layout_root(out: &mut String, layout: &MapLayoutPlan) {
     let _ = writeln!(out, "        MapLayoutRoot {{");
     let _ = writeln!(
         out,
         "            name: {:?}, struct_addr: {}, width: {}, height: {},",
         layout.name,
-        ptr(layout.struct_addr),
+        gba_ptr_expression(layout.struct_addr),
         layout.width,
         layout.height
     );
@@ -269,19 +263,18 @@ fn layout_root(out: &mut String, layout: &MapLayoutPlan) {
     let _ = writeln!(
         out,
         "            primary_tileset: {}, secondary_tileset: {},",
-        ptr(layout.primary_tileset),
-        ptr(layout.secondary_tileset)
+        gba_ptr_expression(layout.primary_tileset),
+        gba_ptr_expression(layout.secondary_tileset)
     );
     let _ = writeln!(out, "        }},");
 }
 
-/// Render one image root as a single expression.
 fn image_root(image: &ImagePlan) -> String {
     format!(
         "ImageRoot {{ id: {:?}, addr: {}, encoding: {}, rom_bit_depth: {}, pack_bit_depth: {}, width: {}, height: {}, metatile_width: {}, metatile_height: {}, tile_count: {} }}",
         image.id,
-        ptr(image.addr),
-        encoding(image.encoding),
+        gba_ptr_expression(image.addr),
+        encoding_variant_path(image.encoding),
         image.rom_bit_depth,
         image.pack_bit_depth,
         image.width,
@@ -292,40 +285,34 @@ fn image_root(image: &ImagePlan) -> String {
     )
 }
 
-/// Render one palette root as a single expression.
 fn palette_root(palette: &PalettePlan) -> String {
     format!(
         "PaletteRoot {{ id: {:?}, addr: {}, color_count: {} }}",
         palette.id,
-        ptr(palette.addr),
+        gba_ptr_expression(palette.addr),
         palette.color_count
     )
 }
 
-/// Render one blob root as a single expression.
 fn blob_root(blob: &BlobPlan) -> String {
     format!(
         "BlobRoot {{ id: {:?}, addr: {}, encoding: {}, len: {} }}",
         blob.id,
-        ptr(blob.addr),
-        encoding(blob.encoding),
+        gba_ptr_expression(blob.addr),
+        encoding_variant_path(blob.encoding),
         blob.len
     )
 }
 
-/// Render a `GbaPtr` constructor.
-fn ptr(addr: u32) -> String {
-    format!("GbaPtr::at({})", hex32(addr))
+fn gba_ptr_expression(addr: u32) -> String {
+    format!("GbaPtr::at({})", separated_u32_hex_literal(addr))
 }
 
-/// Render a 32-bit value as `0xHHHH_HHHH`, the separated form
-/// `clippy::unreadable_literal` requires.
-fn hex32(value: u32) -> String {
+fn separated_u32_hex_literal(value: u32) -> String {
     format!("0x{:04X}_{:04X}", value >> 16, value & 0xFFFF)
 }
 
-/// Render an [`Encoding`] variant.
-fn encoding(encoding: Encoding) -> &'static str {
+fn encoding_variant_path(encoding: Encoding) -> &'static str {
     match encoding {
         Encoding::Raw => "Encoding::Raw",
         Encoding::Lz77 => "Encoding::Lz77",
@@ -334,21 +321,24 @@ fn encoding(encoding: Encoding) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{blob_root, encoding, hex32, image_root, palette_root, ptr};
+    use super::{
+        blob_root, encoding_variant_path, gba_ptr_expression, image_root, palette_root,
+        separated_u32_hex_literal,
+    };
     use crate::gen_rom_profile::plan::{BlobPlan, ImagePlan, PalettePlan};
     use rom_import::Encoding;
 
     #[test]
     fn addresses_render_as_padded_hex_constructors() {
-        assert_eq!(ptr(0x083D_F704), "GbaPtr::at(0x083D_F704)");
-        assert_eq!(ptr(0), "GbaPtr::at(0x0000_0000)");
-        assert_eq!(hex32(0xDEAD_BEEF), "0xDEAD_BEEF");
+        assert_eq!(gba_ptr_expression(0x083D_F704), "GbaPtr::at(0x083D_F704)");
+        assert_eq!(gba_ptr_expression(0), "GbaPtr::at(0x0000_0000)");
+        assert_eq!(separated_u32_hex_literal(0xDEAD_BEEF), "0xDEAD_BEEF");
     }
 
     #[test]
     fn every_encoding_has_a_path() {
-        assert_eq!(encoding(Encoding::Raw), "Encoding::Raw");
-        assert_eq!(encoding(Encoding::Lz77), "Encoding::Lz77");
+        assert_eq!(encoding_variant_path(Encoding::Raw), "Encoding::Raw");
+        assert_eq!(encoding_variant_path(Encoding::Lz77), "Encoding::Lz77");
     }
 
     #[test]

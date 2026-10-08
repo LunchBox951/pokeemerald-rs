@@ -127,7 +127,7 @@ impl OverworldPhase {
             super::SyntheticStartMenu::RealPack => {}
         }
         match start_menu::open(
-            self.pack_source,
+            &self.pack_source,
             self.start_menu_cursor,
             self.save2.options_window_frame_type,
         ) {

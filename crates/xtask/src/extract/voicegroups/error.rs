@@ -89,6 +89,11 @@ pub(crate) enum VoiceGroupError {
         starting_note: u8,
         slot_count: usize,
     },
+    InsufficientAliasPredecessors {
+        group: String,
+        starting_note: u8,
+        available: usize,
+    },
     PackIdTooLong {
         group: String,
         id_len: usize,
@@ -247,6 +252,16 @@ impl fmt::Display for VoiceGroupError {
                 "voicegroup `{group}`: starting_note {starting_note} + {slot_count} slots \
                  exceeds the maximum of {}",
                 super::VOICE_SLOT_COUNT
+            ),
+            Self::InsufficientAliasPredecessors {
+                group,
+                starting_note,
+                available,
+            } => write!(
+                f,
+                "voicegroup `{group}`: starting_note {starting_note} aliases that many linked \
+                 predecessor records, but only {available} precede it contiguously in \
+                 sound/voice_groups.inc"
             ),
             Self::PackIdTooLong { group, id_len } => write!(
                 f,

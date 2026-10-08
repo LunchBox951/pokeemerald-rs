@@ -57,6 +57,11 @@ const fn running_disallowed_by_metatile(behavior: u8, elevation: u8) -> bool {
 /// `WALK_IN_PLACE_FAST` action (`event_object_movement.c:5704-5721`).
 pub const TURN_IN_PLACE_FRAMES: u8 = 8;
 
+/// Frames a blocked step's slow in-place walk lasts
+/// (`MovementAction_WalkInPlaceSlow*_Step0` starts its counter at 32,
+/// `event_object_movement.c:5724-5735`).
+pub const BUMP_IN_PLACE_FRAMES: u8 = 32;
+
 /// A tile position in the active map's coordinate space.
 pub type TilePos = (i32, i32);
 
@@ -139,6 +144,9 @@ pub struct PlayerState {
     /// `None`.
     transit_cadence: TransitCadence,
     turn_frames_remaining: u8,
+    /// Frames left in a blocked step's interruptible slow in-place walk;
+    /// zero when none is held.
+    bump_frames_remaining: u8,
     transit_direction: Option<Direction>,
     /// The elevation of the cell the active crossing lands on, re-adopted
     /// when the crossing finishes. Stale at rest.
@@ -226,8 +234,8 @@ impl Landing {
 impl PlayerState {
     /// Creates a stationary player on `position`.
     ///
-    /// Collision and render elevations both start at `elevation`. Only an
-    /// observed landing arms
+    /// Collision and render elevations both start at `elevation`. Only a
+    /// manual MOVING attempt (landed or blocked) arms
     /// [`forced_movement_armed`](Self::forced_movement_armed), so a placement
     /// onto a forced-movement tile is never trapped there.
     #[must_use]
@@ -242,6 +250,7 @@ impl PlayerState {
             transit_frames: None,
             transit_cadence: TransitCadence::WALK,
             turn_frames_remaining: 0,
+            bump_frames_remaining: 0,
             transit_direction: None,
             landing_elevation: elevation,
             forced_movement_armed: false,
@@ -313,6 +322,7 @@ impl PlayerState {
     pub const fn face(&mut self, direction: Direction) {
         self.normalise_fresh_step_parity();
         self.rest_pose = RestPose::Standing;
+        self.bump_frames_remaining = 0;
         self.facing = direction;
         self.movement_direction = direction;
     }
@@ -326,14 +336,15 @@ impl PlayerState {
         self.normalise_fresh_step_parity();
         self.rest_pose = RestPose::Standing;
         self.turn_frames_remaining = 0;
+        self.bump_frames_remaining = 0;
     }
 
     /// Returns whether the standing tile is in upstream's forced-movement
     /// dispatch set, `sForcedMovementTestFuncs`
     /// (`field_player_avatar.c:412-427`). [`supported_forced_mover`]
     /// dispatches a `MB_WALK_*`/`MB_SLIDE_*` tile as real movement; every
-    /// other armed tile still refuses manual steps. Armed only by a step
-    /// this state committed, never by placement.
+    /// other armed tile still refuses manual steps. Armed only by a manual
+    /// step attempt (including a blocked one), never by placement.
     #[must_use]
     pub const fn forced_movement_armed(&self) -> bool {
         self.forced_movement_armed
@@ -448,6 +459,28 @@ impl PlayerState {
         self.turn_frames_remaining
     }
 
+    /// Returns whether a blocked step's slow in-place walk is held. Polls
+    /// that do not interrupt it are swallowed (`TryInterruptObjectEventSpecialAnim`,
+    /// `field_player_avatar.c:353-382`).
+    #[must_use]
+    pub const fn bump_active(&self) -> bool {
+        self.bump_frames_remaining > 0
+    }
+
+    /// Drops a held bump, as a field lock does (`PlayerFreeze` forces a face
+    /// action over it, `field_player_avatar.c:1039-1046`).
+    pub const fn cancel_bump(&mut self) {
+        self.bump_frames_remaining = 0;
+    }
+
+    /// Returns whether the held bump shows its forward foot: the first half
+    /// of [`BUMP_IN_PLACE_FRAMES`], of the animation's two foot cells and two
+    /// standing cells (`sAnim_Go*`, `object_event_anims.h:202-235`).
+    #[must_use]
+    pub const fn bump_foot_forward(&self) -> bool {
+        self.bump_frames_remaining >= BUMP_IN_PLACE_FRAMES / 2
+    }
+
     /// Returns the direction committed for the active tile crossing, or `None` at rest.
     ///
     /// Unlike [`facing`](Self::facing), this is fixed for the crossing's whole
@@ -492,6 +525,7 @@ impl PlayerState {
             self.forced_input_tile_center = false;
         }
         self.turn_frames_remaining = self.turn_frames_remaining.saturating_sub(1);
+        self.bump_frames_remaining = self.bump_frames_remaining.saturating_sub(1);
     }
 
     /// `ObjectEventUpdateElevation` (`event_object_movement.c:7725-7737`):
@@ -583,13 +617,28 @@ impl PlayerState {
             .unwrap_or(MB_NORMAL);
         let supported_mover = supported_forced_mover(standing_behavior);
 
+        // `TryInterruptObjectEventSpecialAnim` runs ahead of forced movement
+        // and the keypad.
+        let mut keep_foot = self.slide_pose_held();
+        if self.bump_active() {
+            match self.interrupt_bump(input, standing_behavior, runtime, maps, event_data) {
+                Some(forward_foot) => keep_foot |= forward_foot,
+                None => return StepOutcome::Idle,
+            }
+        }
+
         // Dispatched ahead of the keypad, even on a `None` poll; see
         // `step`'s "Forced movement" section for the contract.
         if self.forced_movement_armed {
             if let Some(mover) = supported_mover {
-                if let Some(outcome) =
-                    self.dispatch_forced_mover(mover, standing_behavior, runtime, maps, event_data)
-                {
+                if let Some(outcome) = self.dispatch_forced_mover(
+                    mover,
+                    standing_behavior,
+                    keep_foot,
+                    runtime,
+                    maps,
+                    event_data,
+                ) {
                     return outcome;
                 }
                 // Blocked: the guard stays set (see `dispatch_forced_mover`'s
@@ -611,7 +660,7 @@ impl PlayerState {
         // Any poll that reaches the keypad, idle included, restarts the sprite
         // animation: `ForcedMovement_None` sets `enableAnim`, and a no-input poll
         // faces the standing cell (`field_player_avatar.c:429-440, 588-600`).
-        let slide_pose_held = self.slide_pose_held();
+        let slide_pose_held = keep_foot;
         self.rest_pose = RestPose::Standing;
         let Some(direction) = input else {
             self.normalise_fresh_step_parity();
@@ -654,7 +703,37 @@ impl PlayerState {
         self.movement_streak_active = true;
         self.facing = direction;
         self.movement_direction = direction;
+        // Upstream enters MOVING before collision resolves, so a blocked attempt
+        // still arms the standing tile (`field_player_avatar.c:401-405`, `:583-595`).
+        self.forced_movement_armed |= supported_forced_mover(standing_behavior).is_some();
 
+        self.attempt_manual_step(
+            direction,
+            run_held,
+            slide_pose_held,
+            standing_behavior,
+            runtime,
+            maps,
+            event_data,
+        )
+    }
+
+    /// Resolves and starts the step a keypad poll asked for, or starts the
+    /// collision bump when it is denied.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one blocked-step attempt reads every input the collision mover does"
+    )]
+    fn attempt_manual_step(
+        &mut self,
+        direction: Direction,
+        run_held: bool,
+        slide_pose_held: bool,
+        standing_behavior: u8,
+        runtime: &MapRuntime<'_>,
+        maps: &impl ConnectedMapData,
+        event_data: &EventData,
+    ) -> StepOutcome {
         match self.resolve_landing(direction, runtime, maps) {
             Ok(landing) => {
                 let from = self.position;
@@ -687,17 +766,68 @@ impl PlayerState {
                             None => StepOutcome::Advanced { from, to },
                         }
                     }
-                    Err(collision) => StepOutcome::Blocked {
-                        direction,
-                        collision,
-                    },
+                    Err(collision) => {
+                        self.start_bump(slide_pose_held);
+                        StepOutcome::Blocked {
+                            direction,
+                            collision,
+                        }
+                    }
                 }
             }
-            Err(collision) => StepOutcome::Blocked {
-                direction,
-                collision,
-            },
+            Err(collision) => {
+                self.start_bump(slide_pose_held);
+                StepOutcome::Blocked {
+                    direction,
+                    collision,
+                }
+            }
         }
+    }
+
+    /// Resolves a poll against the held bump: a neutral poll and a repeat of
+    /// the still-blocked direction are swallowed (`None`); any other poll
+    /// cancels it, reporting whether the forward foot showed so the next
+    /// action keeps that foot (`field_player_avatar.c:353-382`).
+    fn interrupt_bump(
+        &mut self,
+        input: Option<Direction>,
+        standing_behavior: u8,
+        runtime: &MapRuntime<'_>,
+        maps: &impl ConnectedMapData,
+        event_data: &EventData,
+    ) -> Option<bool> {
+        let direction = input?;
+        if direction == self.movement_direction
+            && self.step_blocked(direction, standing_behavior, runtime, maps, event_data)
+        {
+            return None;
+        }
+        let forward_foot = self.bump_foot_forward();
+        self.bump_frames_remaining = 0;
+        Some(forward_foot)
+    }
+
+    /// Starts the slow in-place walk a collision plays
+    /// (`PlayerNotOnBikeCollide`, `field_player_avatar.c:1011-1015`), facing
+    /// the attempted direction already set by the caller.
+    fn start_bump(&mut self, keep_foot: bool) {
+        self.advance_step_parity(keep_foot);
+        self.bump_frames_remaining = BUMP_IN_PLACE_FRAMES;
+    }
+
+    /// Returns whether a step in `direction` would be denied, read-only: the
+    /// collision check without a collision's side effects
+    /// (`CheckForPlayerAvatarStaticCollision`, `field_player_avatar.c:716-727`).
+    fn step_blocked(
+        &self,
+        direction: Direction,
+        standing_behavior: u8,
+        runtime: &MapRuntime<'_>,
+        maps: &impl ConnectedMapData,
+        event_data: &EventData,
+    ) -> bool {
+        self.forced_direction_blocked(direction, runtime, maps, event_data, standing_behavior)
     }
 
     /// Resolves `direction`'s destination tile, read-only: a same-map cell,
@@ -801,6 +931,7 @@ impl PlayerState {
         self.transit_direction = Some(direction);
         self.transit_frames = Some(0);
         self.transit_cadence = cadence;
+        self.bump_frames_remaining = 0;
         self.rest_pose = RestPose::Standing;
         // The dispatch set guards movement, the wider input set holds field
         // input (`field_player_avatar.c:144-164`, `metatile_behavior.c:338-351`).
@@ -817,6 +948,7 @@ impl PlayerState {
         &mut self,
         mover: ForcedMover,
         standing_behavior: u8,
+        keep_foot: bool,
         runtime: &MapRuntime<'_>,
         maps: &impl ConnectedMapData,
         event_data: &EventData,
@@ -827,7 +959,6 @@ impl PlayerState {
         let from = self.position;
         let to = landing.position;
         let to_map = landing.to_map;
-        let was_slide_paused = self.slide_pose_held();
         self.try_start_resolved_step(
             direction,
             runtime,
@@ -837,7 +968,7 @@ impl PlayerState {
             mover.cadence,
         )
         .ok()?;
-        self.advance_step_parity(was_slide_paused);
+        self.advance_step_parity(keep_foot);
 
         self.movement_streak_active = true;
         self.movement_direction = direction;
@@ -2099,16 +2230,19 @@ mod tests {
             "a blocked step must not start a transition"
         );
 
-        for _ in 0..4 {
-            assert!(matches!(
-                player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS),
-                StepOutcome::Blocked {
-                    collision: super::super::collision::Collision::ObjectEvent,
-                    ..
-                }
-            ));
+        // The held bump swallows the still-blocked repeats; the next attempt
+        // lands once its 32 frames are spent.
+        for _ in 0..BUMP_IN_PLACE_FRAMES {
+            player.tick();
             assert_eq!(player.position(), (2, 2));
         }
+        assert!(matches!(
+            player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS),
+            StepOutcome::Blocked {
+                collision: super::super::collision::Collision::ObjectEvent,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -2775,6 +2909,7 @@ mod tests {
     /// Leading-foot parity across steps, turns, and rejected polls.
     mod step_parity_tests;
 
+    mod bump_tests;
     /// Held-B running: its gates, cadence, and preserved interactions.
     mod running_tests;
 

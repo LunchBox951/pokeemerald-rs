@@ -28,7 +28,7 @@ use engine::overworld::{
 use rendering::{Bgr555, BitDepth, OamEntry, Palette};
 
 use super::avatar::{self, PlayerCharacter};
-use super::{OverworldSceneError, METATILE_PX};
+use super::{fill_palette_bank, OverworldSceneError, METATILE_PX};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NpcPaletteTag {
@@ -295,7 +295,7 @@ pub(super) fn build_combined_palette(
     player_bank0: PaletteRef<'_>,
 ) -> Result<Palette, OverworldSceneError> {
     let mut colors = [Bgr555::default(); Palette::LEN];
-    avatar::fill_palette_bank(&mut colors, usize::from(PLAYER_PALETTE_BANK), player_bank0);
+    fill_palette_bank(&mut colors, usize::from(PLAYER_PALETTE_BANK), player_bank0);
     for tag in [
         NpcPaletteTag::Npc1,
         NpcPaletteTag::Npc2,
@@ -303,10 +303,10 @@ pub(super) fn build_combined_palette(
         NpcPaletteTag::Npc4,
     ] {
         let raw = pack.sprite_palette(tag.pack_name())?;
-        avatar::fill_palette_bank(&mut colors, usize::from(tag.bank()), raw);
+        fill_palette_bank(&mut colors, usize::from(tag.bank()), raw);
     }
     let other = pack.sprite_palette(player.other().palette_name())?;
-    avatar::fill_palette_bank(&mut colors, usize::from(OTHER_PROTAGONIST_BANK), other);
+    fill_palette_bank(&mut colors, usize::from(OTHER_PROTAGONIST_BANK), other);
     Ok(Palette::new(colors))
 }
 

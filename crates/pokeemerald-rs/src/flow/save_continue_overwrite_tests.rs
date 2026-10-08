@@ -2,7 +2,7 @@
 //! consent gate (issue #232).
 
 use super::menu_type_for;
-use super::save_continue_tests::{
+use super::save_continue_support::{
     drive_start_menu, new_game_phase, play_a_bit, save_from_the_start_menu,
 };
 use super::tests::TempSave;

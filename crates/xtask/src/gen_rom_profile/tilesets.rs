@@ -1,20 +1,17 @@
 //! Locating the five bundled tilesets.
 //!
-//! A tileset's own `struct Tileset` is found through its metatile table,
-//! not by scanning for the struct: the table is thousands of bytes of
-//! unique data, while the struct is six pointers and two flags. So the
-//! locator matches the two flat tables the pack already holds
-//! (`metatiles.bin`, `metatile_attributes.bin`), asks the pointer index
-//! what references the first, and accepts the one candidate whose fields
-//! line up as `pokeemerald/include/global.fieldmap.h` declares them.
+//! A tileset's `struct Tileset` is small, so it is found through its metatile
+//! table, a large blob that identifies itself. The locator
+//! matches `metatiles.bin` and `metatile_attributes.bin`, asks the pointer
+//! index what references the first, and accepts the one candidate whose
+//! fields agree with `pokeemerald/include/global.fieldmap.h`.
 //!
-//! Everything else in the tileset falls out of that struct's pointers. The
-//! animation frames do not: `src/tileset_anims.c` stores them uncompressed
-//! and out of frame order, with padding in between, and nothing points at
-//! them from the struct, so each frame is matched on its own bytes.
+//! The rest of the tileset follows that struct's pointers, except animation
+//! frames: `src/tileset_anims.c` stores them uncompressed, out of frame
+//! order and padded, with no pointer from the struct, so each frame is
+//! matched on its own bytes.
 //!
-//! The domain is fixed, not discovered: a pack missing any root of
-//! [`crate::extract::scope::TILESETS`] is refused.
+//! A pack missing any root of [`crate::extract::scope::TILESETS`] is refused.
 
 use std::collections::BTreeMap;
 
@@ -31,7 +28,11 @@ use super::plan::{
 };
 use super::Context;
 
-/// Field offsets inside `struct Tileset`.
+/// Offset of the `isCompressed` flag inside `struct Tileset`.
+const FIELD_IS_COMPRESSED: u32 = 0x00;
+/// Offset of the `isSecondary` flag.
+const FIELD_IS_SECONDARY: u32 = 0x01;
+/// Offset of the `tiles` field.
 const FIELD_TILES: u32 = 0x04;
 /// Offset of the `palettes` field.
 const FIELD_PALETTES: u32 = 0x08;
@@ -41,12 +42,14 @@ const FIELD_METATILES: u32 = 0x0C;
 const FIELD_METATILE_ATTRIBUTES: u32 = 0x10;
 /// Offset of the `callback` field.
 const FIELD_CALLBACK: u32 = 0x14;
+/// Size of `struct Tileset`.
+const TILESET_STRUCT_BYTES: u32 = 0x18;
 
-/// Every tileset carries 16 palette banks of 16 colours.
+/// Palette banks per tileset.
 const PALETTE_BANKS: u32 = 16;
-/// One 16-colour GBA bank is 32 bytes.
+/// Bytes in one 16-colour BGR555 bank.
 const BANK_BYTES: u32 = 32;
-/// Tileset art is always 4bpp, so one tile is 32 bytes.
+/// Bytes in one 4bpp tile.
 const TILE_BYTES: usize = 32;
 
 /// Locate every tileset the pack holds.
@@ -70,7 +73,7 @@ pub fn locate(
     Ok(plans)
 }
 
-/// Every tileset name the pack holds, ascending.
+/// Every tileset name in the pack, ascending.
 fn tileset_names(ctx: &Context<'_>) -> Vec<String> {
     ctx.pack
         .ids_with_prefix("tileset/")
@@ -108,8 +111,6 @@ fn locate_one(
     let metatiles_addr = exactly_one(&metatiles_id, &hits[0])?;
     let attributes_addr = exactly_one(&attributes_id, &hits[1])?;
 
-    // The struct is whatever points at the metatile table 0x0C bytes into
-    // itself and agrees about everything else.
     let struct_addr = only_one_matching(
         name,
         "the `struct Tileset` layout",
@@ -120,15 +121,15 @@ fn locate_one(
         |&base| is_tileset_struct(ctx, base, metatiles_addr, attributes_addr),
     )?;
 
-    let is_compressed = u8_at_addr(ctx.rom, struct_addr) == Some(1);
-    let is_secondary = u8_at_addr(ctx.rom, struct_addr + 1) == Some(1);
+    let is_compressed = u8_at_addr(ctx.rom, struct_addr + FIELD_IS_COMPRESSED) == Some(1);
+    let is_secondary = u8_at_addr(ctx.rom, struct_addr + FIELD_IS_SECONDARY) == Some(1);
     let tiles_addr = field(ctx, struct_addr, FIELD_TILES, name)?;
     let palettes_addr = field(ctx, struct_addr, FIELD_PALETTES, name)?;
     let callback = u32_at_addr(ctx.rom, struct_addr + FIELD_CALLBACK).unwrap_or(0);
 
     let upstream = camel_case(name);
     report.push(
-        ReportLine::unique(format!("tileset/{name}"), struct_addr, 0x18)
+        ReportLine::unique(format!("tileset/{name}"), struct_addr, TILESET_STRUCT_BYTES)
             .with(Resolution::StructDerived)
             .symbol(format!("gTileset_{upstream}"))
             .note("found through its metatile table"),
@@ -192,8 +193,8 @@ fn is_tileset_struct(ctx: &Context<'_>, base: u32, metatiles: u32, attributes: u
         u32_at_addr(ctx.rom, base + at)
             .is_some_and(|value| super::locate::to_offset(value).is_some())
     };
-    flag_ok(base)
-        && flag_ok(base + 1)
+    flag_ok(base + FIELD_IS_COMPRESSED)
+        && flag_ok(base + FIELD_IS_SECONDARY)
         && ptr_ok(FIELD_TILES)
         && ptr_ok(FIELD_PALETTES)
         && u32_at_addr(ctx.rom, base + FIELD_METATILES) == Some(metatiles)
@@ -232,8 +233,7 @@ fn locate_tiles(
             reason: "the tiles pointer is not a cartridge address".to_owned(),
         })?;
     let rom_tiles = if is_compressed {
-        // A pointer inside the cartridge window can still lie past this ROM
-        // image's length, so the slice lookup below stays fallible.
+        // A cartridge-window pointer can still lie past this ROM image.
         let stream = ctx
             .rom
             .get(offset..)
@@ -273,7 +273,7 @@ fn locate_tiles(
     })
 }
 
-/// Check all 16 palette banks against the block the struct points at.
+/// Check every palette bank against the block the struct points at.
 fn locate_palettes(
     ctx: &Context<'_>,
     name: &str,
@@ -293,8 +293,8 @@ fn locate_palettes(
                 reason: format!("bank {bank} of the palette block at {base:08X} differs"),
             });
         }
-        // The block itself is a symbol; the 15 banks after the first are
-        // addresses inside it.
+        // Only the block's first bank carries the symbol; the rest are
+        // interior addresses.
         let mut line =
             ReportLine::unique(&id, addr, len32(&asset.payload)).with(Resolution::PointerWalk);
         line = if bank == 0 {
@@ -337,7 +337,7 @@ fn frame_number(id: &str) -> u32 {
         .unwrap_or(u32::MAX)
 }
 
-/// Turn the animation frames' search hits into plans.
+/// Build plans from the animation frames' search hits, which are in `anim_ids` order.
 fn build_anims(
     ctx: &Context<'_>,
     anim_ids: &[(String, Vec<String>)],
