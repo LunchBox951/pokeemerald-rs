@@ -709,8 +709,9 @@ impl PlayerState {
         // (`field_player_avatar.c:401-405`, `:583-595`).
         // Only tiles with a dispatched handler arm here: a deferred behavior
         // (mats, ice, currents) would have no handler to release the guard
-        // and would refuse every later manual step.
-        self.forced_movement_armed = supported_forced_mover(standing_behavior).is_some();
+        // and would refuse every later manual step. Additive: a guard a landing
+        // already armed is never cleared by a bump.
+        self.forced_movement_armed |= supported_forced_mover(standing_behavior).is_some();
 
         self.attempt_manual_step(
             direction,
