@@ -878,6 +878,17 @@ impl OverworldPhase {
         self.pending_landing.is_some() || self.player.in_transit()
     }
 
+    /// Restart the tileset animation cadence on return to the field.
+    ///
+    /// Every upstream `CB2_ReturnToField` reload runs `InitMapView` ->
+    /// `InitTilesetAnimations` (`src/overworld.c:523-530`,
+    /// `src/tileset_anims.c:600-616`), zeroing both animation counters
+    /// (issue #865, #1955). The wild, rival and sight-trainer drivers call this
+    /// when the battle slot empties; a loss's `white_out` warp has already zeroed `tick`.
+    pub(super) fn reinit_field_tileset_animations(&mut self) {
+        self.tick = 0;
+    }
+
     /// Play one frame of whichever battle currently owns the overworld
     /// frame, if any -- the one place any battle's turn is driven. Returns
     /// whether a battle owned this frame.

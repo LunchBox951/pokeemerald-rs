@@ -558,6 +558,9 @@ impl OverworldPhase {
                 self.white_out();
             }
         }
+        if slot.is_none() {
+            self.reinit_field_tileset_animations();
+        }
         // `trainer_id` is dropped along with the rest of
         // `ActiveBattle::SightTrainer` the instant `slot` empties -- an
         // abort clears it too, not only a reported outcome.
