@@ -151,7 +151,7 @@ impl NpcDialog {
     /// Returns [`NpcDialogError::Pack`] when the pack cannot be loaded or read,
     /// and [`NpcDialogError::Font`] when the font sheet cannot be decoded.
     pub(crate) fn open_at_speed(
-        source: crate::pack_source::PackSource,
+        source: &crate::pack_source::PackSource,
         tokens: Vec<Token>,
         text_speed: TextSpeed,
     ) -> Result<Self, NpcDialogError> {

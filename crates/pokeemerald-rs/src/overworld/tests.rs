@@ -4,8 +4,8 @@ use std::collections::HashMap;
 use std::mem::size_of;
 
 use super::{
-    layout_pack_name, pack_4bpp_region, resolve_tileset_pack_name, OverworldSceneError,
-    DEFAULT_ROOM_MAP_ID,
+    fill_palette_bank, layout_pack_name, pack_4bpp_region, resolve_tileset_pack_name,
+    OverworldSceneError, DEFAULT_ROOM_MAP_ID,
 };
 use assets::{AssetPack, ImageRef, LayoutId, MapLayout, MovementType, ObjectEvent, TrainerType};
 use engine::overworld::{Direction, PlayerState};
@@ -117,6 +117,79 @@ fn pack_4bpp_region_rejects_a_palette_index_a_4bpp_tile_cannot_hold() {
             index: 16,
         }
     );
+}
+
+/// Runs `check` with a pack palette of `color_count` colours whose raw values
+/// are `0x8000 | (index + 1)` (bit 15 set, to prove it is cleared).
+fn with_palette(color_count: u16, check: impl FnOnce(assets::PaletteRef<'_>)) {
+    let payload: Vec<u8> = (0..color_count)
+        .flat_map(|i| (0x8000 | (i + 1)).to_le_bytes())
+        .collect();
+    let bytes = write_synthetic_pack(vec![Entry {
+        id: "p",
+        kind_tag: PALETTE_KIND_TAG,
+        meta: color_count.to_le_bytes().to_vec(),
+        payload,
+    }]);
+    let path = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-palette-bank-test-{}-{:?}.pack",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    std::fs::write(&path, bytes).unwrap();
+    let pack = AssetPack::load(&path).unwrap();
+    check(pack.palette("p").unwrap());
+}
+
+fn sentinel_colors() -> [rendering::Bgr555; rendering::Palette::LEN] {
+    [rendering::Bgr555::from_raw(0x7FFF); rendering::Palette::LEN]
+}
+
+#[test]
+fn fill_palette_bank_copies_a_partial_palette_and_leaves_the_rest() {
+    with_palette(3, |palette| {
+        let mut colors = sentinel_colors();
+        fill_palette_bank(&mut colors, 4, palette);
+        for (i, color) in colors.iter().enumerate() {
+            let expected = match i {
+                64..=66 => rendering::Bgr555::from_raw(0x8000 | (u16::try_from(i).unwrap() - 63)),
+                _ => rendering::Bgr555::from_raw(0x7FFF),
+            };
+            assert_eq!(*color, expected, "slot {i}");
+        }
+    });
+}
+
+#[test]
+fn fill_palette_bank_fills_the_last_bank_without_touching_earlier_ones() {
+    with_palette(16, |palette| {
+        let mut colors = sentinel_colors();
+        fill_palette_bank(&mut colors, 15, palette);
+        for (i, color) in colors.iter().enumerate() {
+            let expected = if i >= 240 {
+                rendering::Bgr555::from_raw(0x8000 | (u16::try_from(i).unwrap() - 239))
+            } else {
+                rendering::Bgr555::from_raw(0x7FFF)
+            };
+            assert_eq!(*color, expected, "slot {i}");
+        }
+    });
+}
+
+#[test]
+fn fill_palette_bank_clips_a_palette_longer_than_one_bank() {
+    with_palette(20, |palette| {
+        let mut colors = sentinel_colors();
+        fill_palette_bank(&mut colors, 2, palette);
+        for (i, color) in colors.iter().enumerate() {
+            let expected = if (32..48).contains(&i) {
+                rendering::Bgr555::from_raw(0x8000 | (u16::try_from(i).unwrap() - 31))
+            } else {
+                rendering::Bgr555::from_raw(0x7FFF)
+            };
+            assert_eq!(*color, expected, "slot {i}");
+        }
+    });
 }
 
 #[test]

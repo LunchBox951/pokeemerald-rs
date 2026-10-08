@@ -445,6 +445,7 @@ impl OverworldPhase {
             self.player.cancel_bump();
         }
         self.pending_landing = None;
+        self.pending_turn = None;
     }
 
     /// Play one frame of an in-progress sight-trainer approach, if there is
@@ -580,7 +581,7 @@ impl OverworldPhase {
                 panic!("sight trainer intro speech {intro:?} is malformed: {err}")
             });
             let text_speed = self.field_dialog_text_speed();
-            match NpcDialog::open_at_speed(self.pack_source, tokens, text_speed) {
+            match NpcDialog::open_at_speed(&self.pack_source, tokens, text_speed) {
                 Ok(dialog) => {
                     self.dialog = Some(dialog);
                     if let Some(approach) = &mut self.sight_approach {

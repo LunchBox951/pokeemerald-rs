@@ -293,7 +293,7 @@ impl StartMenu {
 /// Returns [`StartMenuError`] when the pack fails to load, a required entry
 /// is missing, or the font glyph sheet fails to decode.
 pub(crate) fn open(
-    source: crate::pack_source::PackSource,
+    source: &crate::pack_source::PackSource,
     cursor: usize,
     window_frame: u8,
 ) -> Result<StartMenu, StartMenuError> {
