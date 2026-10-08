@@ -18,6 +18,7 @@ fn a_direct_hit_kos_reward_is_paid_before_the_residual_tick_that_fells_the_winne
     let player_lethal = poison_residual_damage(player.stats().max_hp);
     player.apply_damage(player.stats().max_hp - player_lethal);
     let evs_before = player.evs();
+    let exp_before = player.experience();
 
     let lead = max_iv_mon(&dex, RATTATA, 5, vec![TACKLE]);
     let benched = max_iv_mon(&dex, RATTATA, 5, vec![TACKLE]);
@@ -40,6 +41,9 @@ fn a_direct_hit_kos_reward_is_paid_before_the_residual_tick_that_fells_the_winne
         .iter()
         .position(|event| matches!(event, BattleEvent::ExpGained(_)))
         .unwrap_or_else(|| panic!("the direct-hit knockout pays out: {events:?}"));
+    let BattleEvent::ExpGained(exp_gained) = events[exp_index] else {
+        unreachable!("position() matched ExpGained")
+    };
     let sent_out_index = events
         .iter()
         .position(|event| matches!(event, BattleEvent::TrainerSentOut { .. }))
@@ -73,8 +77,9 @@ fn a_direct_hit_kos_reward_is_paid_before_the_residual_tick_that_fells_the_winne
         "the fixture's tick must be lethal: {events:?}"
     );
     assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerLost));
-    assert!(
-        battle.player().experience() > 0,
+    assert_eq!(
+        battle.player().experience(),
+        exp_before + exp_gained,
         "losing the turn must not take back the experience already awarded"
     );
     assert_ne!(
