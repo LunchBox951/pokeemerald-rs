@@ -15,6 +15,7 @@
 use std::sync::Arc;
 
 use crate::envelope::{Adsr, Envelope};
+use crate::gate::Gate;
 use crate::pitch::{self, FRAC_MASK};
 use crate::sample::WaveData;
 
@@ -86,37 +87,6 @@ impl SourcePosition {
         self.sample_index +=
             usize::try_from(self.fractional_phase >> pitch::FRAC_BITS).unwrap_or(0);
         self.fractional_phase &= FRAC_MASK;
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-enum Gate {
-    Tied,
-    TicksRemaining(u16),
-    Expired,
-}
-
-impl Gate {
-    fn new(gate_time: u16) -> Self {
-        if gate_time == 0 {
-            Self::Tied
-        } else {
-            Self::TicksRemaining(gate_time)
-        }
-    }
-
-    fn tick(&mut self) -> bool {
-        match *self {
-            Self::TicksRemaining(1) => {
-                *self = Self::Expired;
-                true
-            }
-            Self::TicksRemaining(remaining) => {
-                *self = Self::TicksRemaining(remaining - 1);
-                false
-            }
-            Self::Tied | Self::Expired => false,
-        }
     }
 }
 
@@ -854,21 +824,5 @@ mod tests {
             (FULL_SCALE_FRAME_GAIN * i32::from(second_sample)) >> SAMPLE_GAIN_BITS,
             "sample 1 exactly, no blend toward sample 2"
         );
-    }
-
-    #[test]
-    fn gate_expiry_releases_the_envelope() {
-        let mut voice = voice(
-            wave(0, vec![50, 50, 50, 50]),
-            approximately_unity_frequency(),
-            u8::MAX,
-            u8::MAX,
-            2,
-        );
-        assert!(!voice.is_stopping());
-        voice.tick_gate();
-        assert!(!voice.is_stopping());
-        voice.tick_gate();
-        assert!(voice.is_stopping());
     }
 }
