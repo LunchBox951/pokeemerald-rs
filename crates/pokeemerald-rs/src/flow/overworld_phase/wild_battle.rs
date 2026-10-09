@@ -58,12 +58,8 @@ impl OverworldPhase {
                 self.white_out();
             }
         }
-        // Every return to the field re-inits the tileset animation cadence
-        // upstream (`InitTilesetAnimations`, `src/overworld.c:523-530`,
-        // `src/tileset_anims.c:600-615`; issue #865) -- a loss's `white_out`
-        // warp above already zeroed `tick` by the time this runs.
         if slot.is_none() {
-            self.tick = 0;
+            self.reinit_field_tileset_animations();
         }
         slot.map(ActiveBattle::Wild)
     }

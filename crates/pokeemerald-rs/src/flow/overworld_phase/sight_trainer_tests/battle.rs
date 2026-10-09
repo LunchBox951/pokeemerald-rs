@@ -49,6 +49,30 @@ fn one_turn_does_not_immediately_end_a_fresh_battle() {
     );
 }
 
+/// Issue #1955: a won sight-trainer battle returns through upstream's
+/// `CB2_ReturnToField` -> `InitTilesetAnimations`, restarting the tick.
+#[test]
+fn winning_reinitialises_the_tileset_animation_tick() {
+    let (rx, ry) = RHETT_TILE;
+    let mut phase = route_103_phase(PlayerState::new((rx, ry + 1), 3, Direction::North));
+    phase.tick = 40;
+    seed_battle(&mut phase, TRAINER_RHETT, overwhelming_lead(), 1);
+    assert!(phase.is_sight_trainer_battle_active(), "setup: seeded");
+
+    let outcome = play_out_sight_battle(&mut phase, 32);
+    assert_eq!(outcome, Some(BattleOutcome::PlayerWon));
+    assert!(!phase.is_sight_trainer_battle_active());
+    assert_eq!(
+        phase.tick, 0,
+        "the battle's ticks must not survive the return"
+    );
+    let _ = phase.compose_frame();
+    assert_eq!(
+        phase.tick, 0,
+        "first composed field frame sees the initial tick"
+    );
+}
+
 // -- Win: the defeated flag, and unrepeatability ----------------------------
 
 /// The defeated flag (issue #264): winning sets
