@@ -18,23 +18,39 @@ use super::{image_to_tileset, pack_tile_bytes};
 use assets::ImageRef;
 use rendering::{BitDepth, Tileset};
 
-/// A synthetic tile set of `tile_count` tiles at `bytes_per_tile`, filled
-/// with a deterministic byte sequence that repeats on no smaller period
-/// than the whole buffer, so a transposed row, tile, or nibble shows up as
-/// a mismatch rather than landing on an equal value.
+/// A synthetic tile set whose smallest period is the whole buffer. XOR-ing in
+/// the 256-byte block index breaks the `i * 37` walk's 256-byte period, so no
+/// two tile rows are byte-identical and a reordered row shows as a mismatch.
 fn synthetic_tiles(tile_count: usize, bytes_per_tile: usize) -> Vec<u8> {
     (0..tile_count * bytes_per_tile)
-        .map(|i| {
-            // 37 is coprime with 256, so the sequence walks every byte
-            // value before repeating.
-            u8::try_from((i * 37 + 11) % 256).expect("modulo 256 fits in u8")
-        })
+        .map(|i| u8::try_from(((i * 37 + 11) ^ (i / 256)) % 256).expect("modulo 256 fits in u8"))
+        .collect()
+}
+
+/// Reverse the order of tile rows in a row-major tile buffer `tiles_wide`
+/// tiles across.
+fn reverse_tile_rows(tiles: &[u8], tiles_wide: usize, bytes_per_tile: usize) -> Vec<u8> {
+    tiles
+        .chunks_exact(tiles_wide * bytes_per_tile)
+        .rev()
+        .flatten()
+        .copied()
         .collect()
 }
 
 /// Assert that unpacking `tiles` into a `width` x `height` raster and
 /// packing that raster back yields exactly `tiles` again.
 fn assert_round_trips(tiles: &[u8], bit_depth: BitDepth, depth_bits: u8, width: u32, height: u32) {
+    // The fixture must be able to detect a tile-row reorder: reversing the
+    // rows has to change it whenever there is more than one row.
+    if height > 8 {
+        let reversed = reverse_tile_rows(tiles, (width / 8) as usize, 8 * usize::from(depth_bits));
+        assert_ne!(
+            tiles, reversed,
+            "{depth_bits}bpp {width}x{height} fixture cannot detect reversed tile rows"
+        );
+    }
+
     let entry = pack_format::image_entry_from_tiles(
         "test/tiles".into(),
         tiles,
@@ -109,4 +125,17 @@ fn a_single_tile_column_survives_unpacking_and_repacking() {
     // 1x4 tiles: proves the unpacker advances down tile rows, which a
     // width-1 grid is the only shape to isolate.
     assert_round_trips(&synthetic_tiles(4, 64), BitDepth::Bpp8, 8, 8, 32);
+}
+
+#[test]
+fn the_synthetic_tiles_have_no_shorter_period() {
+    for (count, bytes) in [(12, 32), (12, 64), (4, 64), (1, 32), (1, 64)] {
+        let buf = synthetic_tiles(count, bytes);
+        for period in 1..buf.len() {
+            assert!(
+                (0..buf.len() - period).any(|i| buf[i] != buf[i + period]),
+                "{count} tiles x {bytes} bytes repeats with period {period}"
+            );
+        }
+    }
 }

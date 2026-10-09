@@ -99,7 +99,7 @@ pub(super) fn advance_title(
 pub(super) fn advance_title_fade_wait(
     mut wait: Box<TitleFadeWait>,
     save_slot: &mut SaveSlot,
-    pack_source: crate::pack_source::PackSource,
+    pack_source: &crate::pack_source::PackSource,
 ) -> (AppScene, Box<Frame>) {
     if wait.fade.is_done() {
         if let Some(result) = title_to_main_menu(pack_source, save_slot) {
@@ -141,9 +141,11 @@ pub(super) fn advance_main_menu(
                 frame,
             );
         }
-    } else if buttons.is_newly_pressed(Buttons::UP) {
+    } else if buttons.is_newly_pressed(Buttons::UP) && state.scene.can_move_up() {
+        // Upstream guards each arm (`main_menu.c:903`, `:915`), so a blocked
+        // Up falls through to Down when both are newly pressed together.
         state.scene.move_up();
-    } else if buttons.is_newly_pressed(Buttons::DOWN) {
+    } else if buttons.is_newly_pressed(Buttons::DOWN) && state.scene.can_move_down() {
         state.scene.move_down();
     }
     let frame = state.scene.compose_frame();
@@ -186,7 +188,7 @@ fn dispatch_main_menu_action(
 ) -> Option<(AppScene, Box<Frame>)> {
     match action {
         MainMenuAction::NewGame => {
-            match intro::load(pack_source, new_game_options_for(&state.saved)) {
+            match intro::load(&pack_source, new_game_options_for(&state.saved)) {
                 Ok(intro_scene) => {
                     let frame = intro_scene.compose_frame();
                     Some((AppScene::Intro(Box::new(intro_scene)), frame))

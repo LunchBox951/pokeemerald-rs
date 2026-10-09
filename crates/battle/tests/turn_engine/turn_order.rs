@@ -167,6 +167,7 @@ fn a_mid_turn_speed_tie_draws_once_between_selection_and_the_first_hit() {
         0, // the mid-turn tie draw: even -> player (attacker) first
         0, 1, 0, 0, // the player's Tackle
         0, 1, 0, 0, // the enemy's Scratch
+        1, // the rebuilt end-turn order's own tie draw (independent of the action tie)
     ]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     assert_eq!(
@@ -197,8 +198,11 @@ fn a_mid_turn_speed_tie_draws_once_between_selection_and_the_first_hit() {
     );
     assert_eq!(
         rng.draws(),
-        13,
-        "2 (battle start) + 2 (turn number, pick) + 1 (tie) + 4 + 4"
+        14,
+        // Upstream rebuilds the end-turn order and calls GetWhoStrikesFirst
+        // again before battler residuals, so a surviving tie draws once more
+        // (`pokeemerald/src/battle_util.c:1199`-`:1210`).
+        "2 (battle start) + 2 (turn number, pick) + 1 (tie) + 4 + 4 + 1 (end-turn tie)"
     );
 }
 

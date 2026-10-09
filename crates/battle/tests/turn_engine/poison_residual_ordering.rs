@@ -122,7 +122,7 @@ fn end_of_turn_poison_damage_matches_the_pinned_formula_and_settles_no_faint() {
 }
 
 #[test]
-fn both_battlers_poisoned_take_residual_damage_in_the_same_turn_order_their_moves_used() {
+fn both_battlers_poisoned_take_residual_damage_in_the_rebuilt_end_turn_order() {
     let dex = Dex::new();
     let mut player = max_iv_mon(&dex, RATTATA, 20, vec![TACKLE]);
     player.set_status1(Status1::Poisoned);
@@ -162,7 +162,7 @@ fn both_battlers_poisoned_take_residual_damage_in_the_same_turn_order_their_move
     assert!(
         player_tick < enemy_tick,
         "the faster Rattata's residual tick must precede the slower \
-         Zigzagoon's, exactly like this turn's own move order: {events:?}"
+         Zigzagoon's, exactly like the end-turn order rebuilt from current Speed: {events:?}"
     );
 }
 
@@ -337,4 +337,241 @@ fn a_direct_hit_wild_ko_ends_the_battle_before_any_residual_can_tick() {
         "the knockout still pays out: {events:?}"
     );
     assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerWon));
+}
+
+/// Projects the sides of every `Hit` and `HurtByPoison` event, in order.
+fn hit_and_tick_sides(events: &[BattleEvent]) -> (Vec<bool>, Vec<bool>) {
+    let hits = events
+        .iter()
+        .filter_map(|event| match event {
+            BattleEvent::Hit { by_player, .. } => Some(*by_player),
+            _ => None,
+        })
+        .collect();
+    let ticks = events
+        .iter()
+        .filter_map(|event| match event {
+            BattleEvent::HurtByPoison { by_player, .. } => Some(*by_player),
+            _ => None,
+        })
+        .collect();
+    (hits, ticks)
+}
+
+/// A surviving Speed tie is decided again when the end-turn order is rebuilt:
+/// one more ordering draw, independent of the action-phase tie
+/// (`pokeemerald/src/battle_util.c:1199`-`:1210`; `GetWhoStrikesFirst`
+/// short-circuits its draw to an exact priority and Speed tie,
+/// `pokeemerald/src/battle_main.c:4595`).
+#[test]
+fn a_surviving_speed_tie_redraws_the_end_turn_order_independently_of_the_action_tie() {
+    for (action_tie, end_turn_tie, hits, ticks) in [
+        (0, 1, [true, false], [false, true]),
+        (1, 0, [false, true], [true, false]),
+    ] {
+        let dex = Dex::new();
+        let mut player = max_iv_mon(&dex, RATTATA, 5, vec![TACKLE]);
+        player.set_status1(Status1::Poisoned);
+        let mut enemy = max_iv_mon(&dex, RATTATA, 5, vec![TACKLE]);
+        enemy.set_status1(Status1::Poisoned);
+
+        let mut rng = SequenceRng::new([
+            0,
+            0, // Battle::new: turn number, initial-seeding tie
+            0,
+            0, // turn number, enemy pick
+            action_tie,
+            0,
+            1,
+            0,
+            0, // first Tackle
+            0,
+            1,
+            0,
+            0, // second Tackle
+            end_turn_tie,
+        ]);
+        let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+        let events = battle
+            .take_turn(PlayerAction::UseMove(0), &mut rng)
+            .unwrap();
+        let (hit_sides, tick_sides) = hit_and_tick_sides(&events);
+        assert_eq!(hit_sides, hits, "{events:?}");
+        assert_eq!(tick_sides, ticks, "{events:?}");
+        assert_eq!(rng.draws(), 14, "2 + 2 + action tie + 4 + 4 + end-turn tie");
+    }
+}
+
+/// A Speed-stage change made during the action phase reorders the same turn's
+/// residuals: the order is rebuilt from current Speed, not inherited.
+#[test]
+fn a_speed_drop_during_the_action_phase_flips_the_same_turns_poison_order() {
+    let dex = Dex::new();
+    // Poochyena (Speed 10) beats Wurmple (Speed 8) in the action phase; the
+    // String Shot it eats drops it to 6 before the residual pass.
+    let mut player = max_iv_mon(&dex, 290, 5, vec![assets::MoveId::STRING_SHOT]);
+    player.set_status1(Status1::Poisoned);
+    let mut enemy = max_iv_mon(&dex, 286, 5, vec![TACKLE]);
+    enemy.set_status1(Status1::Poisoned);
+
+    let mut rng = SequenceRng::new([
+        0, // Battle::new: turn number (8 vs 10, no tie)
+        0, 0, // turn number, enemy pick
+        0, 1, 0, 0, // Poochyena's Tackle
+        0, // Wurmple's String Shot accuracy
+    ]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    let action_sides: Vec<bool> = events
+        .iter()
+        .filter_map(|event| match event {
+            BattleEvent::Hit { by_player, .. } | BattleEvent::StatFell { by_player, .. } => {
+                Some(*by_player)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(action_sides, [false, true], "{events:?}");
+    let (_, tick_sides) = hit_and_tick_sides(&events);
+    assert_eq!(
+        tick_sides,
+        [true, false],
+        "the slowed enemy now ticks after the player: {events:?}"
+    );
+    assert_eq!(rng.draws(), 8);
+}
+
+/// The end-turn comparison reads the move at each battler's selected position
+/// as the battlers stand then: a replacement without the lead's +1 priority
+/// move ties the enemy again and draws (`pokeemerald/src/battle_main.c:4697`-
+/// `:4714`, `:4743`-`:4746`).
+#[test]
+fn a_faint_replacement_is_compared_by_its_own_moves_at_the_end_turn() {
+    let dex = Dex::new();
+    let lead = max_iv_mon(&dex, RATTATA, 5, vec![assets::MoveId::QUICK_ATTACK]);
+    let reserve = max_iv_mon(&dex, RATTATA, 50, vec![TACKLE]);
+    let enemy = max_iv_mon(&dex, RATTATA, 50, vec![TACKLE]);
+
+    let mut rng = SequenceRng::new([
+        0, // Battle::new_with_player_reserves: turn number (5 vs 50, no tie)
+        0, 0, // turn number, enemy pick
+        0, 1, 0, 0, // the lead's Quick Attack (+1 priority: no action tie)
+        0, 1, 0, 0, // the enemy's Tackle fells the lead
+        0, // the end-turn tie between the reserve and the enemy
+    ]);
+    let mut battle =
+        Battle::new_with_player_reserves(dex, lead, vec![reserve], enemy, false, &mut rng).unwrap();
+    battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    assert_eq!(rng.draws(), 12, "the replacement's Tackle ties the enemy's");
+}
+
+/// Equal Speed with unequal chosen priorities needs no end-turn tie draw.
+#[test]
+fn an_unequal_priority_selection_consumes_no_end_turn_tie_draw() {
+    let dex = Dex::new();
+    let mut player = max_iv_mon(&dex, RATTATA, 5, vec![assets::MoveId::QUICK_ATTACK]);
+    player.set_status1(Status1::Poisoned);
+    let mut enemy = max_iv_mon(&dex, RATTATA, 5, vec![TACKLE]);
+    enemy.set_status1(Status1::Poisoned);
+
+    let mut rng = SequenceRng::new([
+        0, 0, // Battle::new: turn number, seeding tie
+        0, 0, // turn number, enemy pick
+        0, 1, 0, 0, // Quick Attack
+        0, 1, 0, 0, // Tackle
+    ]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    let (_, ticks) = hit_and_tick_sides(&events);
+    assert_eq!(ticks, [true, false], "{events:?}");
+    assert_eq!(rng.draws(), 12);
+}
+
+/// A forced Struggle replaces the move only for the action itself: executing
+/// it clears `noValidMoves` (`pokeemerald/src/battle_util.c:100`-`:104`), so
+/// the end-turn comparison reads the retained slot's own move
+/// (`pokeemerald/src/battle_main.c:4697`-`:4714`). A depleted Quick Attack
+/// still outranks the enemy's Tackle there, so no tie is drawn.
+#[test]
+fn a_forced_struggle_is_compared_by_its_retained_slot_at_the_end_turn() {
+    let dex = Dex::new();
+    let mut player = max_iv_mon(&dex, RATTATA, 5, vec![assets::MoveId::QUICK_ATTACK]);
+    for _ in 0..player.moves()[0].pp {
+        player.deduct_pp(0).unwrap();
+    }
+    player.set_status1(Status1::Poisoned);
+    let mut enemy = max_iv_mon(&dex, RATTATA, 5, vec![TACKLE]);
+    enemy.set_status1(Status1::Poisoned);
+
+    let mut rng = SequenceRng::new([
+        0, 0, // Battle::new: turn number, seeding tie
+        0, 0, // turn number, enemy pick
+        0, // action tie (Struggle 0 vs Tackle 0): player first
+        0, 1, 0, // Struggle
+        0, 1, 0, 0, // Tackle
+        1, // an end-turn tie draw, if one were wrongly taken: enemy first
+    ]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    let (hits, ticks) = hit_and_tick_sides(&events);
+    assert_eq!(hits, [true, false], "{events:?}");
+    assert_eq!(ticks, [true, false], "{events:?}");
+    assert_eq!(rng.draws(), 12, "no end-turn tie draw: {events:?}");
+}
+
+/// Upstream never assigns a position for a forced Struggle
+/// (`pokeemerald/src/battle_main.c:4183`-`:4190`); the end turn reads the
+/// retained `chosenMovePositions`, zero-initialized, not the submitted cursor.
+/// Slot 0 is Tackle, so the equal-Speed end-turn comparison ties and draws.
+#[test]
+fn adjudicator_player_forced_struggle_ignores_the_submitted_cursor() {
+    let dex = Dex::new();
+    let mut player = max_iv_mon(&dex, RATTATA, 5, vec![TACKLE, assets::MoveId::QUICK_ATTACK]);
+    for slot in 0..2 {
+        for _ in 0..player.moves()[slot].pp {
+            player.deduct_pp(slot).unwrap();
+        }
+    }
+    player.set_status1(Status1::Poisoned);
+    let mut enemy = max_iv_mon(&dex, RATTATA, 5, vec![TACKLE]);
+    enemy.set_status1(Status1::Poisoned);
+    let mut rng = SequenceRng::new([0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(1), &mut rng)
+        .unwrap();
+    assert_eq!(
+        rng.draws(),
+        13,
+        "one end-turn tie draw expected: {events:?}"
+    );
+}
+
+/// The enemy's forced Struggle likewise reads its retained position 0, a
+/// depleted Quick Attack, which outranks Tackle: no end-turn tie draw.
+#[test]
+fn adjudicator_enemy_forced_struggle_reads_its_retained_slot() {
+    let dex = Dex::new();
+    let mut player = max_iv_mon(&dex, RATTATA, 5, vec![TACKLE]);
+    player.set_status1(Status1::Poisoned);
+    let mut enemy = max_iv_mon(&dex, RATTATA, 5, vec![assets::MoveId::QUICK_ATTACK]);
+    for _ in 0..enemy.moves()[0].pp {
+        enemy.deduct_pp(0).unwrap();
+    }
+    enemy.set_status1(Status1::Poisoned);
+    let mut rng = SequenceRng::new([0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    let (_, ticks) = hit_and_tick_sides(&events);
+    assert_eq!(ticks, [false, true], "enemy ticks first: {events:?}");
 }

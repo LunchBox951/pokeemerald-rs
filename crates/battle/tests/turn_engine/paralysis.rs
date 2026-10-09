@@ -55,7 +55,7 @@ const MILOTIC: u16 = 329;
 fn full_paralysis_cancels_before_the_no_pp_abort_and_retains_pp() {
     let dex = Dex::new();
     let player = max_iv_mon(&dex, RATTATA, 5, vec![TACKLE]);
-    let mut enemy = max_iv_mon(&dex, GASTLY, 5, vec![TACKLE, MoveId::GROWL]); // Tackle, Growl
+    let mut enemy = max_iv_mon(&dex, GASTLY, 5, vec![TACKLE, MoveId::GROWL]);
     for _ in 0..enemy.moves()[0].pp {
         enemy.deduct_pp(0).unwrap();
     }
@@ -269,11 +269,8 @@ fn a_type_immune_thunder_wave_still_spends_pp_unlike_a_cancelled_move() {
 
 #[test]
 fn a_paralysed_forced_struggle_enemy_is_cancelled_before_the_struggle_error() {
-    // Struggle still shares `BattleScript_HitFromAtkCanceler` with every
-    // ordinary move (`data/battle_scripts_1.s:241`-`:247`), so a paralysed
-    // enemy forced into it draws the same full-paralysis check first --
-    // this crate's honest "cannot execute Struggle" stop only applies past
-    // that gate, not before it.
+    // Struggle shares `BattleScript_HitFromAtkCanceler` with ordinary moves
+    // (`data/battle_scripts_1.s:241`-`:247`): the full-paralysis check runs first.
     let dex = Dex::new();
     let player = max_iv_mon(&dex, RATTATA, 5, vec![TACKLE]);
     let mut enemy = max_iv_mon(&dex, BULBASAUR, 5, vec![TACKLE]);
@@ -700,11 +697,8 @@ const SEVIPER: u16 = 379;
 /// speed-tie draw.
 const ABRA: u16 = 63;
 
-/// Shed Skin's end-turn cure draw lives in `Battle::residual_effects`
-/// instead of the pre-turn admission screen, so a fresh paralysis on a Shed
-/// Skin holder is applied like any other, and that same end-turn pass then
-/// rolls its own cure chance for the newly statused holder
-/// (`src/battle_util.c:2620`-`:2621`).
+/// A fresh paralysis on a Shed Skin holder lands, and the same end turn rolls
+/// the cure for the newly statused holder (`src/battle_util.c:2620`-`:2621`).
 #[test]
 fn a_shed_skin_defender_is_newly_paralysed_not_refused() {
     let dex = Dex::new();
@@ -746,9 +740,8 @@ fn a_shed_skin_defender_is_newly_paralysed_not_refused() {
     );
 }
 
-/// Shed Skin admits a Synchronize reflection just like a direct hit: the
-/// end-turn cure draw that used to justify refusing both now runs from the
-/// residual pass instead.
+/// A Shed Skin attacker is paralysed by a Synchronize reflection just like by
+/// a direct hit, and its end-turn cure draw then runs in the residual pass.
 #[test]
 fn a_shed_skin_attacker_is_paralysed_by_a_synchronize_reflection_not_refused() {
     let dex = Dex::new();

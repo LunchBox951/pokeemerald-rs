@@ -47,7 +47,7 @@ fn real_pack_continue_from_the_main_menu_restores_the_saved_game() {
         "A on CONTINUE must first enter the black fade-wait state"
     );
     let (next, _wait_frames, _destination_frame) =
-        drive_through_fade_wait(waiting, &mut slot, crate::pack_source::PackSource::Runtime);
+        drive_through_fade_wait(waiting, &mut slot, &crate::pack_source::PackSource::Runtime);
 
     let AppScene::Overworld(resumed) = next else {
         panic!("A on CONTINUE must hand off to the overworld once the fade completes");
