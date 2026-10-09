@@ -55,3 +55,29 @@ fn a_deep_destination_under_descriptor_pressure_still_publishes() {
         b"pack bytes"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn one_new_level_with_three_free_descriptors_still_publishes() {
+    // The creation walk's descriptor is released once the destination is
+    // acquired; kept to function exit it would starve the temporary file.
+    if !in_descriptor_pressure_child() {
+        run_under_descriptor_pressure(
+            "import_rom::tests::one_new_level_with_three_free_descriptors_still_publishes",
+        );
+        return;
+    }
+    let dir = TempDir::new("three-slot-pressure");
+    let pack_path = dir.join("new").join("pokeemerald.pack");
+    let source = SourceRom::new("three-slot-pressure-src");
+    let fillers = fill_descriptor_table_leaving(3);
+    let outcome = import_to_with(source.path(), &pack_path, |_rom, _path| {
+        Ok(fake_pack(b"pack bytes"))
+    });
+    drop(fillers);
+    outcome.expect("the handoff pin must not starve the temporary file");
+    assert_eq!(
+        fs::read(&pack_path).expect("the pack was published"),
+        b"pack bytes"
+    );
+}

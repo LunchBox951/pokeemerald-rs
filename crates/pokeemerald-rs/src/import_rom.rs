@@ -89,7 +89,9 @@
 //! (`openat`/`renameat`, through `rustix`; `std` exposes them on no
 //! platform). When this run created the destination, the open is made
 //! from the descriptor the creation walk finished on rather than from the
-//! path, so the directory it made cannot be swapped out in between. Redirecting a component
+//! path, so the directory it made cannot be swapped out in between. That
+//! descriptor is released as soon as the destination is acquired, so it
+//! never costs the temporary file's open a slot. Redirecting a component
 //! after the open moves nothing, because nothing after the open looks at a
 //! component again. What is left trusted is the final name inside that one
 //! directory, and exclusive creation covers the write: a link planted
@@ -558,6 +560,9 @@ fn import_to_with_hooks(
     // It and the temporary file below are the two opens this import cannot
     // do without, so a pinned level gives its descriptor up to them first.
     let dest_result = acquire_dest(&mut created, &dir, creation.final_directory.as_ref());
+    // `Dest` holds its own handle now; the walk's descriptor is redundant
+    // and must not take a slot the temporary file's open needs.
+    drop(creation.final_directory);
     let dest = match dest_result {
         Ok(dest) => dest,
         Err(source) => {
