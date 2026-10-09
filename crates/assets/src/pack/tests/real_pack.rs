@@ -7,9 +7,9 @@ const SPACE_GLYPH_INDEX: u16 = 0;
 const EXPECTED_WINDOW_FRAME_COUNT: u8 = 20;
 const FIRST_EXTRA_PALETTE_NUMBER: u8 = 1;
 const LAST_EXTRA_PALETTE_NUMBER: u8 = 4;
-const EXPECTED_DIRECT_SOUND_SAMPLE_COUNT: usize = 33;
-const EXPECTED_PROGRAMMABLE_WAVE_COUNT: usize = 4;
-const EXPECTED_MUS_TITLE_SAMPLE_COUNT: usize = 37;
+const EXPECTED_DIRECT_SOUND_SAMPLE_COUNT: usize = 41;
+const EXPECTED_PROGRAMMABLE_WAVE_COUNT: usize = 5;
+const EXPECTED_MUS_TITLE_SAMPLE_COUNT: usize = 46;
 const INTERPOLATION_GUARD_SAMPLE_COUNT: usize = 1;
 const FLUTE_AGBP_BASE_FREQUENCY: u32 = 3_425_024;
 const FLUTE_SMPL_LOOP_START: u32 = 1312;
@@ -183,6 +183,9 @@ fn real_pack_loads_and_every_typed_accessor_works() {
 
 /// Keep expected sample ids independent of the extractor's manifest.
 const REAL_PACK_DIRECT_SOUND_SAMPLES: [&str; EXPECTED_DIRECT_SOUND_SAMPLE_COUNT] = [
+    "classical_choir_voice_ahhs",
+    "ethnic_flavours_hyoushigi",
+    "ethnic_flavours_ohtsuzumi",
     "sc88pro_flute",
     "sc88pro_french_horn_60",
     "sc88pro_french_horn_72",
@@ -211,14 +214,19 @@ const REAL_PACK_DIRECT_SOUND_SAMPLES: [&str; EXPECTED_DIRECT_SOUND_SAMPLE_COUNT]
     "sc88pro_tuba_51",
     "sc88pro_tubular_bell",
     "sc88pro_xylophone",
+    "sd90_classical_oboe",
     "trinity_cymbal_crash",
     "unknown_bell",
     "unknown_close_hihat",
     "unknown_open_hihat",
+    "unknown_snare",
+    "unused_guitar_separates_power_chord",
     "unused_sc55_tom",
+    "unused_sc88pro_unison_slap",
+    "unused_sd90_oboe",
 ];
 
-const REAL_PACK_PROGRAMMABLE_WAVES: [u32; EXPECTED_PROGRAMMABLE_WAVE_COUNT] = [1, 2, 5, 6];
+const REAL_PACK_PROGRAMMABLE_WAVES: [u32; EXPECTED_PROGRAMMABLE_WAVE_COUNT] = [1, 2, 3, 5, 6];
 
 // wav2agb `convert`/`convert_uncompressed_bin` (tools/wav2agb/converter.cpp): header
 // overrides do not shorten the emitted PCM, so the pack keeps the sample past the logical count.

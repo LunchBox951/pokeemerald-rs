@@ -1,6 +1,6 @@
 //! Resolves parsed voicegroup references (cycle-safe, and rejecting a
 //! second level of indirection -- see
-//! [`resolve_voice_groups_with_link_successors`]) into stable
+//! [`resolve_voice_groups_with_link_order`]) into stable
 //! [`pack_format`] ids and normalizes each emitted group to exactly
 //! [`super::VOICE_SLOT_COUNT`] slots (see [`pad_to_128`]).
 //!
@@ -14,17 +14,24 @@
 //! # Link adjacency
 //!
 //! The top-level group's undeclared trailing slots are filled in order from
-//! the linked successor groups supplied by `super::link_order_successors`.
+//! the linked successor groups in the link order from `super::index_link_order`.
 //! Borrowed entries use their source group's label for diagnostics and may
 //! resolve an indirection child. Indirection-target groups never borrow
-//! adjacent entries; any unfilled position remains [`VoiceSlot::Empty`].
+//! trailing entries; any unfilled trailing position remains
+//! [`VoiceSlot::Empty`].
+//!
+//! A nonzero `starting_note` aliases the group label that many `ToneData`
+//! records before its first declared one, so slots `0..starting_note` are the
+//! physically preceding linked records (see
+//! `Resolver::collect_alias_predecessors`). A missing or insufficient
+//! predecessor is an error, never silent empty slots.
 
 use std::collections::HashMap;
 
 use super::parser::{
     DirectSoundMode, Envelope, RawKeySplitTable, RawSlot, RawVoiceGroup, VoiceGroupError,
 };
-use super::VOICE_SLOT_COUNT;
+use super::{IndexedLinkOrderItem, VOICE_SLOT_COUNT};
 
 const DIRECT_SOUND_SAMPLE_PREFIX: &str = "DirectSoundWaveData_";
 const PROGRAMMABLE_WAVE_SAMPLE_PREFIX: &str = "ProgrammableWaveData_";
@@ -137,30 +144,12 @@ pub(super) fn voice_group_pack_id(label: &str) -> String {
     format!("audio/voicegroup/{label}")
 }
 
-fn pad_to_128(
-    group: &str,
-    starting_note: u8,
-    mut slots: Vec<VoiceSlot>,
-) -> Result<Vec<VoiceSlot>, VoiceGroupError> {
-    let leading_empty_slot_count = usize::from(starting_note);
-    let occupied_slot_count = leading_empty_slot_count
-        .checked_add(slots.len())
-        .filter(|&count| count <= VOICE_SLOT_COUNT);
-    if occupied_slot_count.is_none() {
-        return Err(VoiceGroupError::TooManySlots {
-            group: group.to_owned(),
-            starting_note,
-            slot_count: slots.len(),
-        });
-    }
-    let mut out = Vec::with_capacity(VOICE_SLOT_COUNT);
-    out.extend(std::iter::repeat_n(
-        VoiceSlot::Empty,
-        leading_empty_slot_count,
-    ));
-    out.append(&mut slots);
-    out.resize_with(VOICE_SLOT_COUNT, || VoiceSlot::Empty);
-    Ok(out)
+/// Appends the trailing [`VoiceSlot::Empty`] positions that complete a group
+/// to [`VOICE_SLOT_COUNT`] slots. The caller has already placed the aliased
+/// predecessor records and the declared slots.
+fn pad_to_128(mut slots: Vec<VoiceSlot>) -> Vec<VoiceSlot> {
+    slots.resize_with(VOICE_SLOT_COUNT, || VoiceSlot::Empty);
+    slots
 }
 
 #[cfg(test)]
@@ -172,13 +161,37 @@ pub(super) fn resolve_voice_groups(
     resolve_voice_groups_with_link_successors(top_label, raw_groups, keysplit_tables, &[])
 }
 
+/// Resolves with `top_label` followed by exactly `link_successors` as the
+/// linked data; no group precedes it.
+#[cfg(test)]
 pub(super) fn resolve_voice_groups_with_link_successors(
     top_label: &str,
     raw_groups: &HashMap<String, RawVoiceGroup>,
     keysplit_tables: &HashMap<String, RawKeySplitTable>,
     link_successors: &[String],
 ) -> Result<Vec<ResolvedVoiceGroup>, VoiceGroupError> {
-    Resolver::new(raw_groups, keysplit_tables, link_successors).resolve(top_label)
+    let link_order: Vec<IndexedLinkOrderItem> =
+        std::iter::once(IndexedLinkOrderItem::VoiceGroup(top_label.to_owned()))
+            .chain(
+                link_successors
+                    .iter()
+                    .cloned()
+                    .map(IndexedLinkOrderItem::VoiceGroup),
+            )
+            .collect();
+    resolve_voice_groups_with_link_order(top_label, raw_groups, keysplit_tables, &link_order)
+}
+
+/// Resolves `top_label` and its transitive groups, using `link_order` for the
+/// top group's trailing successor slots and every biased group's aliased
+/// predecessor slots.
+pub(super) fn resolve_voice_groups_with_link_order(
+    top_label: &str,
+    raw_groups: &HashMap<String, RawVoiceGroup>,
+    keysplit_tables: &HashMap<String, RawKeySplitTable>,
+    link_order: &[IndexedLinkOrderItem],
+) -> Result<Vec<ResolvedVoiceGroup>, VoiceGroupError> {
+    Resolver::new(raw_groups, keysplit_tables, link_order).resolve(top_label)
 }
 
 fn convert_leaf_slot(raw_slot: &RawSlot, group_label: &str) -> Result<VoiceSlot, VoiceGroupError> {
@@ -272,7 +285,7 @@ enum SlotOrigin {
 struct Resolver<'a> {
     raw_groups: &'a HashMap<String, RawVoiceGroup>,
     key_split_tables: &'a HashMap<String, RawKeySplitTable>,
-    top_level_link_successors: &'a [String],
+    link_order: &'a [IndexedLinkOrderItem],
     resolution_path: Vec<String>,
     emission_order: Vec<String>,
     resolved_groups: HashMap<String, ResolvedVoiceGroup>,
@@ -282,12 +295,12 @@ impl<'a> Resolver<'a> {
     fn new(
         raw_groups: &'a HashMap<String, RawVoiceGroup>,
         key_split_tables: &'a HashMap<String, RawKeySplitTable>,
-        top_level_link_successors: &'a [String],
+        link_order: &'a [IndexedLinkOrderItem],
     ) -> Self {
         Self {
             raw_groups,
             key_split_tables,
-            top_level_link_successors,
+            link_order,
             resolution_path: Vec::new(),
             emission_order: Vec::new(),
             resolved_groups: HashMap::new(),
@@ -333,14 +346,21 @@ impl<'a> Resolver<'a> {
             GroupRole::TopLevel => SlotOrigin::TopLevelGroup,
             GroupRole::IndirectionTarget => SlotOrigin::IndirectionTarget,
         };
-        let mut slots = Vec::with_capacity(raw_group.slots.len());
+        let declared_end = usize::from(raw_group.starting_note) + raw_group.slots.len();
+        if declared_end > VOICE_SLOT_COUNT {
+            return Err(VoiceGroupError::TooManySlots {
+                group: raw_group.label.clone(),
+                starting_note: raw_group.starting_note,
+                slot_count: raw_group.slots.len(),
+            });
+        }
+        let mut slots = self.collect_alias_predecessors(&raw_group, declared_slot_origin)?;
         for raw_slot in &raw_group.slots {
             slots.push(self.resolve_slot(&raw_group.label, declared_slot_origin, raw_slot)?);
         }
 
         if role == GroupRole::TopLevel {
-            let declared_slot_end = usize::from(raw_group.starting_note) + slots.len();
-            let missing_trailing_slot_count = VOICE_SLOT_COUNT.saturating_sub(declared_slot_end);
+            let missing_trailing_slot_count = VOICE_SLOT_COUNT - declared_end;
             slots.extend(
                 self.collect_link_adjacency_overflow(
                     &raw_group.label,
@@ -349,7 +369,7 @@ impl<'a> Resolver<'a> {
             );
         }
 
-        let normalized_slots = pad_to_128(&raw_group.label, raw_group.starting_note, slots)?;
+        let normalized_slots = pad_to_128(slots);
         self.resolution_path.pop();
         self.resolved_groups.insert(
             raw_group.label.clone(),
@@ -423,13 +443,90 @@ impl<'a> Resolver<'a> {
         })
     }
 
+    /// Upstream's `voice_group label, N` sets the label `N` `ToneData` records
+    /// before the group's first declared record (`asm/macros/m4a.inc`), so
+    /// slots `0..N` are the `N` physically preceding linked records, never
+    /// empty positions. Predecessor groups contribute their raw declared
+    /// records; borrowed ones keep their source group's label for diagnostics
+    /// and the borrower's origin for the nested-indirection rule.
+    fn collect_alias_predecessors(
+        &mut self,
+        group: &RawVoiceGroup,
+        slot_origin: SlotOrigin,
+    ) -> Result<Vec<VoiceSlot>, VoiceGroupError> {
+        let needed = usize::from(group.starting_note);
+        if needed == 0 {
+            return Ok(Vec::new());
+        }
+        let insufficient = |available: usize| VoiceGroupError::InsufficientAliasPredecessors {
+            group: group.label.clone(),
+            starting_note: group.starting_note,
+            available,
+        };
+        let raw_groups = self.raw_groups;
+        let position = self
+            .link_order
+            .iter()
+            .position(
+                |item| matches!(item, IndexedLinkOrderItem::VoiceGroup(label) if *label == group.label),
+            )
+            .ok_or_else(|| insufficient(0))?;
+
+        let mut records: Vec<(&str, &RawSlot)> = Vec::with_capacity(needed);
+        for item in self.link_order[..position].iter().rev() {
+            let IndexedLinkOrderItem::VoiceGroup(label) = item else {
+                break;
+            };
+            let predecessor = raw_groups.get(label).ok_or_else(|| {
+                VoiceGroupError::DanglingVoiceGroupReference {
+                    referrer: group.label.clone(),
+                    target: label.clone(),
+                }
+            })?;
+            records.extend(
+                predecessor
+                    .slots
+                    .iter()
+                    .rev()
+                    .map(|slot| (predecessor.label.as_str(), slot)),
+            );
+            if records.len() >= needed {
+                break;
+            }
+        }
+        if records.len() < needed {
+            return Err(insufficient(records.len()));
+        }
+        records.truncate(needed);
+        records.reverse();
+        records
+            .into_iter()
+            .map(|(label, slot)| self.resolve_slot(label, slot_origin, slot))
+            .collect()
+    }
+
+    fn top_level_link_successors(&self, top_label: &str) -> Vec<String> {
+        let Some(position) = self.link_order.iter().position(
+            |item| matches!(item, IndexedLinkOrderItem::VoiceGroup(label) if label == top_label),
+        ) else {
+            return Vec::new();
+        };
+        self.link_order[position + 1..]
+            .iter()
+            .map_while(|item| match item {
+                IndexedLinkOrderItem::VoiceGroup(label) => Some(label.clone()),
+                IndexedLinkOrderItem::ForeignInclude => None,
+            })
+            .collect()
+    }
+
     fn collect_link_adjacency_overflow(
         &mut self,
         borrower_label: &str,
         missing_slot_count: usize,
     ) -> Result<Vec<VoiceSlot>, VoiceGroupError> {
         let mut borrowed_slots = Vec::with_capacity(missing_slot_count);
-        for successor_label in self.top_level_link_successors.iter().cloned() {
+        for successor_label in self.top_level_link_successors(borrower_label) {
             if borrowed_slots.len() == missing_slot_count {
                 break;
             }

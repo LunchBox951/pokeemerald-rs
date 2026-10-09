@@ -83,7 +83,7 @@ fn overflow_slots_resolve_through_the_linked_successors_own_entries() {
 
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
-fn titles_rhythm_slot_resolves_through_rs_drumset_with_its_starting_note_bias() {
+fn titles_rhythm_slot_resolves_through_rs_drumset_aliasing_the_dummy_records_before_it() {
     // `drumsets/rs.inc`: `voice_group rs_drumset, 36`.
     const RS_DRUMSET_FIRST_DECLARED_SLOT: usize = 36;
 
@@ -97,12 +97,22 @@ fn titles_rhythm_slot_resolves_through_rs_drumset_with_its_starting_note_bias() 
     }
 
     let rs_drumset = decode(&pack, "rs_drumset");
+    // The bias aliases the 36 records linked before it: dummy.inc's last 36.
     for index in 0..RS_DRUMSET_FIRST_DECLARED_SLOT {
-        assert_eq!(
+        assert_ne!(
             rs_drumset.slot(index),
             Some(&VoiceEntry::Empty),
-            "slot {index} should be the starting_note bias's leading gap"
+            "slot {index} should be an aliased dummy.inc record"
         );
+    }
+    match rs_drumset.slot(RS_DRUMSET_FIRST_DECLARED_SLOT - 1) {
+        Some(VoiceEntry::DirectSound(voice)) => {
+            assert_eq!(
+                voice.sample.0,
+                "audio/sample/direct-sound/ethnic_flavours_hyoushigi"
+            );
+        }
+        other => panic!("expected dummy.inc's last record at slot 35, got {other:?}"),
     }
     assert_ne!(
         rs_drumset.slot(RS_DRUMSET_FIRST_DECLARED_SLOT),
