@@ -733,6 +733,29 @@ fn audio_rom(pcm: &[u8]) -> Vec<u8> {
 /// Run `body` against the [`audio_rom`]/[`audio_upstream`] fixture, with
 /// `songs` as the pack's `audio/song/` ids.
 fn with_audio_context<T>(name: &str, songs: &[&str], body: impl FnOnce(&Context<'_>) -> T) -> T {
+    with_audio_song_payload(name, songs, &title_song_payload(0), body)
+}
+
+/// The encoded pack song [`audio_rom`]'s header describes: one track, the
+/// given priority, no reverb, playing through `voicegroup_title`.
+fn title_song_payload(priority: u8) -> Vec<u8> {
+    assets::audio::Song::new(
+        assets::audio::VoiceGroupId("audio/voicegroup/title".to_owned()),
+        priority,
+        None,
+        vec![vec![assets::audio::SongEvent::Fine]],
+    )
+    .expect("a one-track song is valid")
+    .encode()
+}
+
+/// [`with_audio_context`] with every pack song carrying `song_payload`.
+fn with_audio_song_payload<T>(
+    name: &str,
+    songs: &[&str],
+    song_payload: &[u8],
+    body: impl FnOnce(&Context<'_>) -> T,
+) -> T {
     let pcm: Vec<u8> = (0..64u32)
         .map(|index| u8::try_from((index * 43 + 7) % 199).expect("modulo 199 fits in u8"))
         .collect();
@@ -746,7 +769,10 @@ fn with_audio_context<T>(name: &str, songs: &[&str], body: impl FnOnce(&Context<
         audio_direct_sound_payload(0x2000, &pcm),
     ));
     for song in songs {
-        writer.push(pack_format::raw_entry((*song).to_owned(), vec![1, 2, 3, 4]));
+        writer.push(pack_format::raw_entry(
+            (*song).to_owned(),
+            song_payload.to_vec(),
+        ));
     }
     let pack_path = dir.join("test.pack");
     std::fs::write(&pack_path, writer.finish().expect("pack")).expect("write pack");
@@ -779,6 +805,45 @@ fn the_audio_fixture_locates_its_one_song() {
         assert_eq!(plan.song_table, 0x0850_0000);
         assert_eq!(plan.voicegroups.len(), 1);
     });
+}
+
+#[test]
+fn a_song_payload_that_disagrees_with_the_rom_header_is_refused() {
+    // Same header, pointers, and sample as the passing fixture; only the
+    // pack song's priority differs from the ROM's, so a refusal can only
+    // come from validating the payload.
+    with_audio_song_payload(
+        "audio-song-mismatch",
+        &["audio/song/mus_title"],
+        &title_song_payload(5),
+        |ctx| {
+            let mut report = Vec::new();
+            let err = audio::locate(ctx, &mut report)
+                .expect_err("a song the ROM does not hold must be refused");
+            let GenRomProfileError::StructMismatch { id, reason } = &err else {
+                panic!("{err:?}");
+            };
+            assert_eq!(id, "audio/song/mus_title");
+            assert!(reason.contains("priority"), "{reason}");
+        },
+    );
+}
+
+#[test]
+fn a_malformed_song_payload_is_refused_as_an_entry_shape() {
+    with_audio_song_payload(
+        "audio-song-garbage",
+        &["audio/song/mus_title"],
+        &[1, 2, 3, 4],
+        |ctx| {
+            let mut report = Vec::new();
+            let err = audio::locate(ctx, &mut report).expect_err("garbage is not a song");
+            assert!(
+                matches!(&err, GenRomProfileError::EntryShape { id, .. } if id == "audio/song/mus_title"),
+                "{err:?}"
+            );
+        },
+    );
 }
 
 #[test]
