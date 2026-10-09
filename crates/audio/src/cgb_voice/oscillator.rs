@@ -5,6 +5,22 @@ use super::{
 use crate::cgb_pitch::{midi_key_to_cgb_freq_reg, midi_key_to_noise_control};
 use crate::psg::{NoiseChannel, SquareChannel, WaveChannel};
 
+/// Clocks `noise` one sample at `hardware_volume` and maps its held latch
+/// into the centred render path. The DAC level is output directly
+/// (`mgba/src/gb/audio.c:782`); like the other channels the render path
+/// removes the DC offset by centring, here on the volume the latch was last
+/// resolved against ([`NoiseChannel::centred_level`]). A clock at volume `v`
+/// reproduces the usual `+-v` swing, and nothing but a clock or envelope step
+/// moves the rendered level, so a trigger, volume write, or replacement leaves
+/// it as it was and a settled latch is silent.
+fn noise_contribution(noise: &mut NoiseChannel, hardware_volume: u8) -> i32 {
+    noise.clock_sample(hardware_volume);
+    (noise.centred_level() * NOISE_LEVEL_GAIN * BIPOLAR_SAMPLE_SCALE) >> SAMPLE_GAIN_BITS
+}
+
+/// [`LINEAR_ENVELOPE_SCALE`] as a signed gain.
+const NOISE_LEVEL_GAIN: i32 = LINEAR_ENVELOPE_SCALE.cast_signed();
+
 #[derive(Clone, Debug)]
 pub(super) enum Oscillator {
     Square(SquareChannel),
@@ -23,13 +39,34 @@ fn nr32_attenuated_sample(centered_nibble: i8, envelope_volume: u8) -> i32 {
 }
 
 impl Oscillator {
-    /// `envelope_volume` selects the Wave arm's NR32 attenuation; Square and
-    /// Noise ignore it (their gain is applied after this call).
-    pub(super) fn normalized_sample(&mut self, envelope_volume: u8) -> i32 {
+    /// One sample's pre-routing contribution. Square scales its waveform by
+    /// `frame_gain`; Wave attenuates each nibble through NR32 from
+    /// `envelope_volume` and its `frame_gain` is full scale; Noise ignores
+    /// both and renders its resolved output latch directly
+    /// ([`noise_contribution`]).
+    pub(super) fn frame_contribution(
+        &mut self,
+        frame_gain: i32,
+        hardware_volume: u8,
+        envelope_volume: u8,
+    ) -> i32 {
         match self {
-            Self::Square(square) => i32::from(square.sample()) * BIPOLAR_SAMPLE_SCALE,
-            Self::Wave(wave) => nr32_attenuated_sample(wave.sample(), envelope_volume),
-            Self::Noise(noise) => i32::from(noise.sample()) * BIPOLAR_SAMPLE_SCALE,
+            Self::Square(square) => {
+                (frame_gain * i32::from(square.sample()) * BIPOLAR_SAMPLE_SCALE) >> SAMPLE_GAIN_BITS
+            }
+            Self::Wave(wave) => {
+                (frame_gain * nr32_attenuated_sample(wave.sample(), envelope_volume))
+                    >> SAMPLE_GAIN_BITS
+            }
+            Self::Noise(noise) => noise_contribution(noise, hardware_volume),
+        }
+    }
+
+    /// The retained noise latch, for the idle-slot and completion paths.
+    pub(super) fn noise_mut(&mut self) -> Option<&mut NoiseChannel> {
+        match self {
+            Self::Noise(noise) => Some(noise),
+            _ => None,
         }
     }
 
@@ -74,12 +111,17 @@ impl Oscillator {
     }
 
     /// Applies the hardware off-write's frequency truncation
-    /// ([`SquareChannel::apply_hardware_off_write`]'s doc); a no-op for
-    /// Wave/Noise.
+    /// ([`SquareChannel::apply_hardware_off_write`]'s doc) and the noise
+    /// channel's zero-volume retrigger, which restarts its phase and LFSR but
+    /// leaves the latch for the next clock to settle; a no-op for Wave.
     pub(super) fn apply_hardware_off_write(&mut self) -> bool {
         match self {
             Self::Square(square) => square.apply_hardware_off_write(),
-            Self::Wave(_) | Self::Noise(_) => true,
+            Self::Noise(noise) => {
+                noise.off_write();
+                true
+            }
+            Self::Wave(_) => true,
         }
     }
 
@@ -90,11 +132,17 @@ impl Oscillator {
         }
     }
 
-    /// Carries a square oscillator's duty position forward onto its replacement
-    /// ([`SquareChannel::continue_duty_from`]'s doc); a no-op for Wave/Noise.
-    pub(super) fn carry_duty_phase_from(&mut self, other: &Self) {
-        if let (Self::Square(square), Self::Square(previous)) = (self, other) {
-            square.continue_duty_from(previous);
+    /// Carries a square oscillator's duty position or a noise oscillator's
+    /// output latch forward onto its replacement
+    /// ([`SquareChannel::continue_duty_from`]'s and
+    /// [`NoiseChannel::continue_output_from`]'s docs); a no-op for Wave.
+    pub(super) fn carry_hardware_state_from(&mut self, other: &Self) {
+        match (self, other) {
+            (Self::Square(square), Self::Square(previous)) => square.continue_duty_from(previous),
+            (Self::Noise(noise), Self::Noise(previous)) => {
+                noise.continue_output_from(previous);
+            }
+            _ => {}
         }
     }
 
@@ -130,7 +178,7 @@ mod nr32_attenuation_tests {
 
     fn render(nibble: u8, level: u8) -> i32 {
         let samples = WaveChannel::decode_wave_ram(&[nibble << 4 | nibble; 16]);
-        Oscillator::Wave(WaveChannel::new(samples, 0)).normalized_sample(level)
+        nr32_attenuated_sample(WaveChannel::new(samples, 0).sample(), level)
     }
 
     #[test]
