@@ -276,3 +276,57 @@ fn mus_title_resolves_and_plays_continuously_with_its_real_reverb_level() {
     }
     assert!(any_audible, "mus_title must actually produce sound");
 }
+
+/// `mus_title.mid` plays key 33 on program 48, the strings key split, with
+/// velocity 112 and a gate of 8 ticks (channel 2, tick 2160). Upstream reads
+/// the table 36 bytes back from its data, so key 33 lands on child 3: the
+/// next linked record after strings' three, trumpet's first
+/// (`asm/macros/m4a.inc:25-32`, `sound/keysplit_tables.inc:13-22`,
+/// `sound/voicegroups/keysplits/strings.inc:1-4`, `sound/voice_groups.inc:11-12`).
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn mus_titles_key_33_strings_note_resolves_to_the_trumpet_voice() {
+    const STRINGS_PROGRAM: u8 = 48;
+    const PLAYED_KEY: u8 = 33;
+    const PLAYED_VELOCITY: u8 = 112;
+    const PLAYED_GATE: u8 = 8;
+    const EXPECTED_CHILD: u8 = 3;
+
+    let pack = AssetPack::load_repo().expect("run `cargo xtask extract` first");
+    let song = load_song_from_pack(&pack, "mus_title").expect("mus_title must resolve cleanly");
+
+    let played_by_strings = song.tracks().iter().any(|track| {
+        let mut program = None;
+        track.iter().any(|event| match *event {
+            audio::Event::Voice(selected) => {
+                program = Some(selected);
+                false
+            }
+            audio::Event::Note {
+                key,
+                velocity,
+                gate,
+            } => {
+                program == Some(STRINGS_PROGRAM)
+                    && (key, velocity, gate) == (PLAYED_KEY, PLAYED_VELOCITY, PLAYED_GATE)
+            }
+            _ => false,
+        })
+    });
+    assert!(
+        played_by_strings,
+        "mus_title must still play the key-33 strings note"
+    );
+
+    let Some(Instrument::KeySplit(split)) = song.voice(usize::from(STRINGS_PROGRAM)) else {
+        panic!("program {STRINGS_PROGRAM} must convert to a key split");
+    };
+    assert_eq!(split.table[usize::from(PLAYED_KEY)], EXPECTED_CHILD);
+    assert!(
+        matches!(
+            split.children.get(usize::from(EXPECTED_CHILD)),
+            Some(Some(Instrument::DirectSound(_)))
+        ),
+        "key 33 must resolve to a playable voice, not silence"
+    );
+}

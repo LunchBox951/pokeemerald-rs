@@ -508,6 +508,7 @@ fn parse_key_split_range(operands: &[&str], table: &str) -> Result<KeySplitRange
 fn finish_keysplit_block(
     current: Option<KeySplitBuilder>,
     out: &mut std::collections::HashMap<String, RawKeySplitTable>,
+    block_order: &mut Vec<String>,
 ) -> Result<(), VoiceGroupError> {
     let Some(builder) = current else {
         return Ok(());
@@ -528,6 +529,7 @@ fn finish_keysplit_block(
             expanded_len: builder.table.len(),
         });
     }
+    block_order.push(builder.label.clone());
     let previous = out.insert(
         builder.label.clone(),
         RawKeySplitTable {
@@ -553,7 +555,66 @@ fn finish_keysplit_block(
 pub(crate) fn parse_keysplit_tables(
     text: &str,
 ) -> Result<std::collections::HashMap<String, RawKeySplitTable>, VoiceGroupError> {
+    parse_keysplit_blocks(text).map(|(tables, _)| tables)
+}
+
+/// [`parse_keysplit_tables`], widened to the bytes upstream really reads.
+///
+/// `keysplit label, N` places the label `N` bytes before the block's first
+/// data byte (`asm/macros/m4a.inc:25-32`), and the blocks are emitted
+/// back to back, so a note outside the declared subrange reads a neighbouring
+/// block's byte (`sound/keysplit_tables.inc:13-22`). Each table is widened to
+/// every note in `0..128` whose byte lies in the file's emitted bytes; bytes
+/// past either end of the file are never invented.
+///
+/// # Errors
+///
+/// See [`VoiceGroupError`]'s variants.
+pub(crate) fn parse_keysplit_tables_with_adjacency(
+    text: &str,
+) -> Result<std::collections::HashMap<String, RawKeySplitTable>, VoiceGroupError> {
+    let (declared, block_order) = parse_keysplit_blocks(text)?;
+    let emitted: Vec<u8> = block_order
+        .iter()
+        .flat_map(|label| declared[label].table.iter().copied())
+        .collect();
+    let mut block_start = 0usize;
+    let mut widened = std::collections::HashMap::new();
+    for label in &block_order {
+        let block = &declared[label];
+        let alias_base = block_start.cast_signed() - isize::from(block.starting_note);
+        block_start += block.table.len();
+        if block.table.is_empty() {
+            widened.insert(label.clone(), block.clone());
+            continue;
+        }
+        let first_note = usize::try_from(-alias_base).unwrap_or(0);
+        let end_note =
+            super::VOICE_SLOT_COUNT.min(emitted.len().saturating_add_signed(-alias_base));
+        let first_byte = first_note.saturating_add_signed(alias_base);
+        let table = emitted[first_byte..first_byte + (end_note - first_note)].to_vec();
+        widened.insert(
+            label.clone(),
+            RawKeySplitTable {
+                starting_note: u8::try_from(first_note).expect("a note is below 128"),
+                table,
+            },
+        );
+    }
+    Ok(widened)
+}
+
+fn parse_keysplit_blocks(
+    text: &str,
+) -> Result<
+    (
+        std::collections::HashMap<String, RawKeySplitTable>,
+        Vec<String>,
+    ),
+    VoiceGroupError,
+> {
     let mut out = std::collections::HashMap::new();
+    let mut block_order = Vec::new();
     let mut current: Option<KeySplitBuilder> = None;
 
     for raw_line in text.lines() {
@@ -566,7 +627,7 @@ pub(crate) fn parse_keysplit_tables(
         };
         match invocation.name {
             "keysplit" => {
-                finish_keysplit_block(current.take(), &mut out)?;
+                finish_keysplit_block(current.take(), &mut out, &mut block_order)?;
                 current = Some(KeySplitBuilder::parse_declaration(&invocation.operands)?);
             }
             "split" => {
@@ -583,8 +644,8 @@ pub(crate) fn parse_keysplit_tables(
             }
         }
     }
-    finish_keysplit_block(current, &mut out)?;
-    Ok(out)
+    finish_keysplit_block(current, &mut out, &mut block_order)?;
+    Ok((out, block_order))
 }
 
 fn parse_include_path(line: &str) -> Option<&str> {

@@ -662,6 +662,55 @@ fn parses_every_keysplit_block_with_the_documented_starting_note_bias() {
 }
 
 #[test]
+fn the_adjacency_parse_widens_each_table_to_the_bytes_its_label_alias_reaches() {
+    // Emitted bytes: a = [0, 0], b = [1]. Label `a` sits 4 bytes before its
+    // data, so notes 4 and 5 read its own bytes and note 6 reads b's.
+    // Label `b` sits 2 bytes before its data at byte 2, so notes 0..3 read
+    // a's two bytes and then its own.
+    let text = "keysplit a, 4\n\tsplit 0, 6\nkeysplit b, 2\n\tsplit 1, 3\n";
+    let tables = parse_keysplit_tables_with_adjacency(text).unwrap();
+    assert_eq!(tables["a"].starting_note, 4);
+    assert_eq!(tables["a"].table, vec![0, 0, 1]);
+    assert_eq!(tables["b"].starting_note, 0);
+    assert_eq!(tables["b"].table, vec![0, 0, 1]);
+    let declared = parse_keysplit_tables(text).unwrap();
+    assert_eq!(declared["a"].table, vec![0, 0]);
+    assert_eq!(declared["b"].starting_note, 2);
+}
+
+#[test]
+fn the_adjacency_parse_never_invents_bytes_before_the_first_or_after_the_last_block() {
+    let tables = parse_keysplit_tables_with_adjacency(KEYSPLIT_SAMPLE).unwrap();
+    let piano = &tables["piano"];
+    // No block precedes piano, so it stays at its declared first note, and
+    // its alias runs on through tuba's emitted bytes to note 127.
+    assert_eq!(piano.starting_note, 36);
+    assert_eq!(piano.table.len(), 128 - 36);
+    assert_eq!(
+        piano.table[..72],
+        parse_keysplit_tables(KEYSPLIT_SAMPLE).unwrap()["piano"].table
+    );
+    let tuba = &tables["tuba"];
+    // Tuba's label is 24 bytes before its data at byte 72: its first 24 notes
+    // read piano's final 24 bytes, and the file ends with its own last byte.
+    assert_eq!(tuba.starting_note, 0);
+    assert_eq!(tuba.table.len(), 24 + 84);
+    assert_eq!(tuba.table[..7], vec![2; 7]);
+    assert_eq!(tuba.table[7..24], vec![3; 17]);
+    assert_eq!(tuba.table[107], 1);
+}
+
+#[test]
+fn the_adjacency_parse_clips_a_widened_table_to_note_127() {
+    let text = "keysplit big, 0\n\tsplit 0, 120\nkeysplit tail, 0\n\tsplit 1, 10\n";
+    let big = &parse_keysplit_tables_with_adjacency(text).unwrap()["big"];
+    assert_eq!(big.starting_note, 0);
+    assert_eq!(big.table.len(), 128);
+    assert_eq!(big.table[119], 0);
+    assert_eq!(big.table[120], 1);
+}
+
+#[test]
 fn a_keysplit_block_with_no_starting_note_defaults_to_zero() {
     let text = "keysplit demo\n\tsplit 0, 5\n";
     let tables = parse_keysplit_tables(text).unwrap();

@@ -503,3 +503,121 @@ fn the_domain_writes_every_root() {
     write(&rom, &roots, &mut writer).expect("a well-formed table");
     assert_eq!(writer.len(), 5);
 }
+
+/// Two adjacent key-split tables: `a`'s data is `[0, 0]` at `ADJ_TABLES + 2`
+/// and `b`'s is `[1, 2]` right after it, `b`'s label one byte before its data.
+const ADJ_TABLES: u32 = 0x6000;
+const ADJ_B_LABEL: u32 = ADJ_TABLES + 3;
+/// A voicegroup with one key-split slot, naming `a`.
+const ADJ_TOP: u32 = 0x6100;
+/// The key-split child: one declared record.
+const ADJ_KID: u32 = 0x6200;
+/// Linked right after the child: a leaf, then a rhythm record.
+const ADJ_NEXT: u32 = ADJ_KID + 12;
+
+static ADJ_KEYSPLITS: [KeysplitRoot; 2] = [
+    KeysplitRoot {
+        label: "a",
+        addr: at(ADJ_TABLES),
+        starting_note: 2,
+        len: 2,
+    },
+    KeysplitRoot {
+        label: "b",
+        addr: at(ADJ_B_LABEL),
+        starting_note: 1,
+        len: 2,
+    },
+];
+static ADJ_GROUPS: [VoicegroupRoot; 3] = [
+    group("audio/voicegroup/top", ADJ_TOP, 0, 1),
+    group("audio/voicegroup/kid", ADJ_KID, 0, 1),
+    group("audio/voicegroup/next", ADJ_NEXT, 0, 2),
+];
+
+fn adjacency_rom() -> Rom {
+    let leaf = |sample: u32| slot(0x00, 60, 0, 0, at(sample).raw(), [255, 0, 255, 0]);
+    let bytes = RomFixture::new()
+        .emerald_header()
+        .write(
+            LOOPED as usize,
+            &wave_data(0, 0x4000, 3_425_024, 2, &LOOPED_PCM),
+        )
+        .write(
+            ONE_SHOT as usize,
+            &wave_data(0, 0, 13_700_096, 0, &ONE_SHOT_PCM),
+        )
+        .write(ADJ_TABLES as usize + 2, &[0, 0, 1, 2])
+        .write(
+            ADJ_TOP as usize,
+            &keysplit_slot(at(ADJ_KID), at(ADJ_TABLES)),
+        )
+        .write(ADJ_KID as usize, &leaf(LOOPED))
+        .write(ADJ_NEXT as usize, &leaf(ONE_SHOT))
+        .write(
+            ADJ_NEXT as usize + 12,
+            &slot(0x80, 0, 0, 0, at(ADJ_KID).raw(), [0; 4]),
+        )
+        .finish();
+    Rom::from_bytes(bytes).expect("the fixture header is valid")
+}
+
+fn adjacency_audio() -> AudioRoots {
+    AudioRoots {
+        song_table: GbaPtr::AT_BASE,
+        songs: &[],
+        voicegroups: &ADJ_GROUPS,
+        keysplits: &ADJ_KEYSPLITS,
+        direct_sound: &DIRECT_SOUND,
+        programmable_wave: &PROGRAMMABLE_WAVE,
+    }
+}
+
+fn adjacency_group(root: &VoicegroupRoot) -> VoiceGroup {
+    let entry = voicegroup(&adjacency_rom().reader(), &adjacency_audio(), root).unwrap();
+    VoiceGroup::decode(&entry.payload).unwrap()
+}
+
+#[test]
+fn a_key_split_table_reads_the_neighbouring_tables_bytes_its_label_reaches() {
+    let top = adjacency_group(&ADJ_GROUPS[0]);
+    let Some(VoiceEntry::KeySplit(split)) = top.slot(0) else {
+        panic!("slot 0 should be a key split");
+    };
+    assert_eq!(split.starting_note, 2);
+    assert_eq!(split.table(), [0, 0, 1, 2]);
+
+    // `b`'s label is `a`'s data offset by one, so note 0 reads `a`'s second byte.
+    let narrow = ADJ_KEYSPLITS[1];
+    let reader_rom = adjacency_rom();
+    let (first, entries) =
+        super::key_split_entries(&reader_rom.reader(), &adjacency_audio(), &narrow).unwrap();
+    assert_eq!((first, entries), (0, vec![0, 1, 2]));
+}
+
+#[test]
+fn a_selected_child_tail_index_reads_the_linked_leaf_and_silences_a_borrowed_indirection() {
+    let kid = adjacency_group(&ADJ_GROUPS[1]);
+    assert!(matches!(kid.slot(0), Some(VoiceEntry::DirectSound(_))));
+    // `a` now selects child index 2 as well: index 1 is the next group's leaf.
+    assert_eq!(
+        kid.slot(1),
+        Some(&VoiceEntry::DirectSound(DirectSoundVoice {
+            base_key: 60,
+            pan: None,
+            sample: SampleId("audio/sample/direct-sound/one_shot".into()),
+            envelope: env(255, 0, 255, 0),
+            mode: DirectSoundMode::Resampled,
+        }))
+    );
+    // Index 2 is a rhythm record: upstream takes one level of indirection.
+    assert_eq!(kid.slot(2), Some(&VoiceEntry::Empty));
+    // Nothing selects index 3, so the unknown byte past it is never read.
+    assert!(kid.slots()[3..].iter().all(|s| *s == VoiceEntry::Empty));
+}
+
+#[test]
+fn an_unreferenced_group_still_reads_only_its_declared_slots() {
+    let next = adjacency_group(&ADJ_GROUPS[2]);
+    assert!(next.slots()[2..].iter().all(|s| *s == VoiceEntry::Empty));
+}

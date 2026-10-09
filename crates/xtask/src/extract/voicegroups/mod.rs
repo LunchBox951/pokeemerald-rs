@@ -179,7 +179,7 @@ pub(super) fn extract_voicegroups(
 
     let keysplit_path = upstream.join("sound/keysplit_tables.inc");
     let keysplit_text = read_text(&keysplit_path)?;
-    let keysplit_tables = parser::parse_keysplit_tables(&keysplit_text)
+    let keysplit_tables = parser::parse_keysplit_tables_with_adjacency(&keysplit_text)
         .map_err(|e| ExtractError::VoiceGroupFile(keysplit_path, e))?;
 
     let resolved_groups = resolve::resolve_voice_groups_with_link_order(
@@ -270,6 +270,57 @@ mod tests {
 
     #[test]
     #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
+    fn title_strings_key_split_plays_mus_title_key_33_like_upstream() {
+        // mus_title.mid channel 2 plays key 33 at tick 2160 on program 48
+        // (title.inc:50, the strings key split). Upstream's strings label sits
+        // 36 bytes before its data (asm/macros/m4a.inc:25-32), so key 33 reads
+        // piano's final byte (keysplit_tables.inc:13-22): child 3. Strings
+        // declares three records (keysplits/strings.inc:1-4) and is linked
+        // right before trumpet (voice_groups.inc:11-12), so child 3 is
+        // trumpet's first record.
+        use super::resolve::VoiceSlot;
+        const STRINGS_PROGRAM: usize = 48;
+        const PLAYED_KEY: usize = 33;
+        assert!(super::super::upstream_present(), "run ./init.sh first");
+        let upstream = super::super::repo_root().join("pokeemerald");
+        let index = index_voicegroup_sources(&upstream).unwrap();
+        let link_order = index_link_order(&upstream, &index.labels_by_relative_path).unwrap();
+        let keysplit_text =
+            std::fs::read_to_string(upstream.join("sound/keysplit_tables.inc")).unwrap();
+        let tables = super::parser::parse_keysplit_tables_with_adjacency(&keysplit_text).unwrap();
+        let groups = super::resolve::resolve_voice_groups_with_link_order(
+            TITLE_VOICEGROUP_LABEL,
+            &index.groups_by_label,
+            &tables,
+            &link_order,
+        )
+        .unwrap();
+        let title = groups.iter().find(|g| g.label == "title").unwrap();
+        let VoiceSlot::KeySplit {
+            starting_note,
+            table,
+            ..
+        } = &title.slots[STRINGS_PROGRAM]
+        else {
+            panic!("title slot 48 should be the strings key split");
+        };
+        let child_index = PLAYED_KEY
+            .checked_sub(usize::from(*starting_note))
+            .and_then(|offset| table.get(offset))
+            .copied();
+        assert_eq!(child_index, Some(3), "key 33 must map like upstream");
+        let strings = groups
+            .iter()
+            .find(|g| g.label == "strings_keysplit")
+            .unwrap();
+        let VoiceSlot::DirectSound { sample_id, .. } = &strings.slots[3] else {
+            panic!("strings_keysplit record 3 must be trumpet_keysplit's first record");
+        };
+        assert_eq!(sample_id, "audio/sample/direct-sound/sc88pro_trumpet_60");
+    }
+
+    #[test]
+    #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
     fn mus_titles_full_dependency_tree_resolves_to_expected_groups() {
         assert!(super::super::upstream_present(), "run ./init.sh first");
         let upstream = super::super::repo_root().join("pokeemerald");
@@ -277,7 +328,8 @@ mod tests {
         let link_order = index_link_order(&upstream, &index.labels_by_relative_path).unwrap();
         let keysplit_text =
             std::fs::read_to_string(upstream.join("sound/keysplit_tables.inc")).unwrap();
-        let keysplit_tables = super::parser::parse_keysplit_tables(&keysplit_text).unwrap();
+        let keysplit_tables =
+            super::parser::parse_keysplit_tables_with_adjacency(&keysplit_text).unwrap();
 
         let groups = super::resolve::resolve_voice_groups_with_link_order(
             TITLE_VOICEGROUP_LABEL,

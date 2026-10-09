@@ -49,7 +49,12 @@
 //! header points at reads [`VoicegroupRoot::addressable_slots`] contiguous
 //! slots; any other reads `starting_note + declared_slots` contiguous slots
 //! from its alias address, so a biased group's leading slots are the `ToneData`
-//! the linker placed before it, and pads the rest.
+//! the linker placed before it, and pads the rest. The one
+//! addition is a key-split child: a table can select an index past the
+//! child's declared slots, and the child then also reads exactly those
+//! indices from the recorded `ToneData` linked after it (leaves only), as
+//! the checkout resolver does. A key-split table likewise reads every note
+//! whose byte is a recorded table's declared byte, not only its own subrange.
 
 use assets::{
     DirectSoundMode, DirectSoundSample, DirectSoundVoice, Envelope, KeySplitVoice, NoiseVoice,
@@ -62,7 +67,7 @@ use super::len_usize;
 use crate::error::ImportError;
 use crate::reader::{GbaPtr, RomReader};
 use crate::rom::Rom;
-use crate::roots::{AudioRoots, Roots, SampleRoot, VoicegroupRoot};
+use crate::roots::{AudioRoots, KeysplitRoot, Roots, SampleRoot, VoicegroupRoot};
 
 /// `sizeof(struct WaveData)` up to `data`.
 const WAVE_HEADER_BYTES: u32 = 16;
@@ -93,6 +98,8 @@ const TYPE_REVERSE: u8 = 0x10;
 const TYPE_KEY_SPLIT: u8 = 0x40;
 /// A rhythm slot.
 const TYPE_RHYTHM: u8 = 0x80;
+/// Notes a key-split table can map.
+const VOICE_NOTE_COUNT: usize = 128;
 /// `ToneData.pan_sweep`'s "pan is set" bit.
 const PAN_SET: u8 = 0x80;
 
@@ -217,7 +224,7 @@ pub(crate) fn voicegroup(
     let count = if song_selected {
         total
     } else {
-        usize::from(root.starting_note).saturating_add(usize::from(root.declared_slots))
+        declared_slot_count(root)
     };
     if count > total {
         return Err(ImportError::Length {
@@ -233,10 +240,99 @@ pub(crate) fn voicegroup(
         let base = root.addr.offset().saturating_add(index * SLOT_BYTES);
         slots.push(slot(reader, audio, id, index, base, bytes)?);
     }
+    if !song_selected {
+        let selected_end = selected_tail_end(reader, audio, root)?;
+        for index in count..selected_end {
+            let bytes = reader.table_entry(id, root.addr, index, total, SLOT_BYTES)?;
+            let base = root.addr.offset().saturating_add(index * SLOT_BYTES);
+            slots.push(tail_slot(reader, audio, id, index, base, bytes)?);
+        }
+    }
     slots.resize(total, VoiceEntry::Empty);
 
     let group = VoiceGroup::new(slots).map_err(|source| ImportError::Audio { id, source })?;
     Ok(raw_entry(id.to_owned(), group.encode()))
+}
+
+/// The slot count, from `root.addr`, that key-split slots elsewhere select
+/// through this voicegroup past its declared slots.
+///
+/// A key-split table can name a child index the child's `.inc` never
+/// declares, and the mixer then reads whatever `ToneData` the linker placed
+/// next (`pokeemerald/src/m4a_1.s:1589-1607`). Only indices some key-split
+/// table names are materialized, and only while every slot up to them lies
+/// inside a recorded voicegroup's declared bytes: an unrecorded neighbour is
+/// never guessed.
+fn selected_tail_end(
+    reader: &RomReader<'_>,
+    audio: &AudioRoots,
+    root: &VoicegroupRoot,
+) -> Result<usize, ImportError> {
+    let declared_end = declared_slot_count(root);
+    let mut selected_end = declared_end;
+    for referrer in audio.voicegroups {
+        for index in 0..declared_slot_count(referrer) {
+            let bytes = reader.table_entry(
+                referrer.id,
+                referrer.addr,
+                index,
+                usize::from(referrer.addressable_slots),
+                SLOT_BYTES,
+            )?;
+            if bytes[0] != TYPE_KEY_SPLIT {
+                continue;
+            }
+            let base = referrer.addr.offset().saturating_add(index * SLOT_BYTES);
+            if reader.ptr(base + 4)? != root.addr {
+                continue;
+            }
+            let table = key_split_root(audio, referrer.id, index, reader.ptr(base + 8)?)?;
+            let (_, entries) = key_split_entries(reader, audio, table)?;
+            if let Some(&highest) = entries.iter().max() {
+                selected_end = selected_end.max(usize::from(highest) + 1);
+            }
+        }
+    }
+    let mut known_end = declared_end;
+    while known_end < selected_end && slot_is_declared(audio, root, known_end) {
+        known_end += 1;
+    }
+    Ok(known_end.min(usize::from(root.addressable_slots)))
+}
+
+/// `starting_note + declared_slots`: the slots read from a root's alias address.
+fn declared_slot_count(root: &VoicegroupRoot) -> usize {
+    usize::from(root.starting_note).saturating_add(usize::from(root.declared_slots))
+}
+
+/// Whether slot `index` of `root` lies wholly inside some recorded
+/// voicegroup's declared bytes.
+fn slot_is_declared(audio: &AudioRoots, root: &VoicegroupRoot, index: usize) -> bool {
+    let start = root.addr.offset().saturating_add(index * SLOT_BYTES);
+    let end = start.saturating_add(SLOT_BYTES);
+    audio.voicegroups.iter().any(|candidate| {
+        let candidate_start = candidate.addr.offset();
+        let candidate_end = candidate_start
+            .saturating_add(declared_slot_count(candidate).saturating_mul(SLOT_BYTES));
+        candidate_start <= start && end <= candidate_end
+    })
+}
+
+/// A slot borrowed from the bytes after a voicegroup's declared tail.
+/// Upstream resolves one level of indirection only, so a borrowed key-split
+/// or rhythm record is silent, as it is in the checkout extraction.
+fn tail_slot(
+    reader: &RomReader<'_>,
+    audio: &AudioRoots,
+    root: &'static str,
+    index: usize,
+    base: usize,
+    bytes: &[u8],
+) -> Result<VoiceEntry, ImportError> {
+    if matches!(bytes[0], TYPE_KEY_SPLIT | TYPE_RHYTHM) {
+        return Ok(VoiceEntry::Empty);
+    }
+    slot(reader, audio, root, index, base, bytes)
 }
 
 /// Decode one `ToneData` slot.
@@ -293,8 +389,21 @@ fn key_split(
     base: usize,
     children: VoiceGroupId,
 ) -> Result<VoiceEntry, ImportError> {
-    let ptr = reader.ptr(base + 8)?;
-    let table = audio
+    let table = key_split_root(audio, root, index, reader.ptr(base + 8)?)?;
+    let (starting_note, entries) = key_split_entries(reader, audio, table)?;
+    let voice = KeySplitVoice::new(starting_note, entries, children)
+        .map_err(|source| ImportError::Audio { id: root, source })?;
+    Ok(VoiceEntry::KeySplit(voice))
+}
+
+/// The profile's key-split table whose label sits at `ptr`.
+fn key_split_root<'a>(
+    audio: &'a AudioRoots,
+    root: &'static str,
+    index: usize,
+    ptr: GbaPtr,
+) -> Result<&'a KeysplitRoot, ImportError> {
+    audio
         .keysplits
         .iter()
         .find(|table| table.addr == ptr)
@@ -303,16 +412,45 @@ fn key_split(
             slot: index,
             what: "a key-split table",
             ptr,
-        })?;
+        })
+}
+
+/// The first note and per-note child indices of `table`, widened to every
+/// note whose byte is a recorded key-split table's declared byte.
+///
+/// The label sits `starting_note` bytes before the declared data, so note `n`
+/// reads `addr[n]` whatever the table declares: a note below the declared
+/// range reads the preceding table's final bytes, which is how the title's
+/// key 33 on the strings split reaches child 3
+/// (`pokeemerald/asm/macros/m4a.inc:25-32`,
+/// `pokeemerald/sound/keysplit_tables.inc:13-22`).
+fn key_split_entries(
+    reader: &RomReader<'_>,
+    audio: &AudioRoots,
+    table: &KeysplitRoot,
+) -> Result<(u8, Vec<u8>), ImportError> {
+    let is_known = |note: usize| {
+        let offset = table.addr.offset().saturating_add(note);
+        audio.keysplits.iter().any(|candidate| {
+            let start = candidate.addr.offset() + usize::from(candidate.starting_note);
+            (start..start + usize::from(candidate.len)).contains(&offset)
+        })
+    };
+    let declared_first = usize::from(table.starting_note);
+    let declared_end = declared_first + usize::from(table.len);
+    let mut first = declared_first;
+    while first > 0 && is_known(first - 1) {
+        first -= 1;
+    }
+    let mut end = declared_end;
+    while end < VOICE_NOTE_COUNT && is_known(end) {
+        end += 1;
+    }
     let entries = reader
-        .slice_at(
-            table.addr.offset() + usize::from(table.starting_note),
-            usize::from(table.len),
-        )?
+        .slice_at(table.addr.offset() + first, end - first)?
         .to_vec();
-    let voice = KeySplitVoice::new(table.starting_note, entries, children)
-        .map_err(|source| ImportError::Audio { id: root, source })?;
-    Ok(VoiceEntry::KeySplit(voice))
+    let first = u8::try_from(first).expect("a key-split note is below 128");
+    Ok((first, entries))
 }
 
 /// A playable slot: `DirectSound` or one of the four CGB channels.
