@@ -688,6 +688,40 @@ fn empty_move_slots_are_dropped_rather_than_decoded_as_moves() {
     assert_eq!(restored.moves().len(), 1);
 }
 
+/// A checksum-valid record with a move after an empty slot must be refused:
+/// decoding the prefix would let the next save erase the later move and PP.
+#[test]
+fn an_interior_empty_move_slot_is_refused_rather_than_truncated() {
+    const SECOND_MOVE_SLOT: Range<usize> = 2..4;
+    const THIRD_MOVE_SLOT: Range<usize> = 4..6;
+
+    let dex = Dex::new();
+    let mon = BattlePokemon::new(
+        &dex,
+        TREECKO,
+        5,
+        Ivs::default(),
+        0,
+        vec![POUND, SCRATCH, TACKLE],
+    )
+    .unwrap();
+    let mut saved = to_save_pokemon(&dex, &mon);
+    let mut substructures = saved.box_data.substructures().unwrap();
+    substructures.attacks[SECOND_MOVE_SLOT].fill(0);
+    saved.box_data.set_substructures(&substructures);
+    assert_eq!(
+        saved.box_data.substructures().unwrap().attacks[THIRD_MOVE_SLOT],
+        TACKLE.0.to_le_bytes(),
+        "fixture sanity: the checksum is valid and the third move is still saved"
+    );
+
+    assert!(matches!(
+        from_save_pokemon(&dex, &saved),
+        Err(PartyError::InteriorEmptyMove)
+    ));
+    assert!(LoadedLead::load(&dex, std::slice::from_ref(&saved)).is_err());
+}
+
 #[test]
 fn a_corrupt_secure_region_is_reported_not_guessed_at() {
     const SECURE_REGION_BYTE: usize = 40;
