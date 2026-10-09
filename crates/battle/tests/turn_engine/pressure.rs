@@ -18,6 +18,20 @@ const DUSCLOPS: u16 = 362;
 /// double Swords Dance's cost; a one-sided fixture would miss that bug.
 const ABSOL: u16 = 376;
 
+/// `Battle::new`: the initial random-turn number
+/// (`battle_main.c:3140`). One draw.
+const INITIAL_TURN_SEED: [u16; 1] = [0];
+/// Start of each turn: the random-turn number (`battle_main.c:3923` for the
+/// first turn, `:4013` after) and the wild enemy's move-slot pick
+/// (`battle_controller_opponent.c:1599`, the one draw outside the two
+/// battle files). Two draws.
+const TURN_SETUP: [u16; 2] = [0, 0];
+/// Scratch into a Ghost: accuracy (`battle_script_commands.c:1176`),
+/// critical roll (`:1282`), damage variance (`:1641`, drawn even though the
+/// target is immune) and the secondary-effect chance (`:2923`). Four draws.
+/// Swords Dance, turn order and Pressure's PP spend draw nothing.
+const IMMUNE_SCRATCH: [u16; 4] = [0, 0, 0, 0];
+
 #[test]
 fn pressure_doubles_pp_cost_against_a_distinct_target_but_not_for_a_self_target() {
     let dex = Dex::new();
@@ -36,9 +50,15 @@ fn pressure_doubles_pp_cost_against_a_distinct_target_but_not_for_a_self_target(
     let scratch_pp = player.moves()[0].pp;
     let swords_dance_pp = enemy.moves()[0].pp;
 
-    // Over-provisioned: only the PP totals are asserted, not the draw count.
-    let mut rng = SequenceRng::new([0u16; 24]);
+    // Exactly the turn's draws; Pressure itself must consume none.
+    let mut rng = SequenceRng::new(
+        INITIAL_TURN_SEED
+            .into_iter()
+            .chain(TURN_SETUP)
+            .chain(IMMUNE_SCRATCH),
+    );
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    assert_eq!(rng.draws(), 1, "construction draws only the turn seed");
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
@@ -49,6 +69,11 @@ fn pressure_doubles_pp_cost_against_a_distinct_target_but_not_for_a_self_target(
             move_id: SCRATCH,
         }),
         "fixture sanity: Scratch's Normal typing cannot touch a Ghost: {events:?}"
+    );
+    assert_eq!(
+        rng.draws(),
+        7,
+        "turn seed + enemy slot pick + Scratch's four draws; Pressure draws none"
     );
     assert_eq!(
         battle.player().moves()[0].pp,
@@ -73,8 +98,17 @@ fn two_turns_against_a_pressure_holder_drain_a_three_pp_slot_to_zero_not_one() {
     assert_eq!(player.moves()[0].pp, 3, "fixture sanity: three PP left");
     let enemy = max_iv_mon(&dex, DUSCLOPS, 5, vec![SWORDS_DANCE]);
 
-    let mut rng = SequenceRng::new([0u16; 64]);
+    // Construction, then two identical turns (setup + immune Scratch each).
+    let mut rng = SequenceRng::new(
+        INITIAL_TURN_SEED
+            .into_iter()
+            .chain(TURN_SETUP)
+            .chain(IMMUNE_SCRATCH)
+            .chain(TURN_SETUP)
+            .chain(IMMUNE_SCRATCH),
+    );
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    assert_eq!(rng.draws(), 1, "construction draws only the turn seed");
 
     let first_turn = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
@@ -86,6 +120,7 @@ fn two_turns_against_a_pressure_holder_drain_a_three_pp_slot_to_zero_not_one() {
         }),
         "{first_turn:?}"
     );
+    assert_eq!(rng.draws(), 7, "first turn: seed + slot pick + Scratch x4");
     assert_eq!(
         battle.player().moves()[0].pp,
         1,
@@ -102,6 +137,7 @@ fn two_turns_against_a_pressure_holder_drain_a_three_pp_slot_to_zero_not_one() {
         }),
         "{second_turn:?}"
     );
+    assert_eq!(rng.draws(), 13, "second turn draws the same six values");
     assert_eq!(
         battle.player().moves()[0].pp,
         0,
