@@ -565,7 +565,9 @@ impl NoiseControl {
 pub struct NoiseChannel {
     lfsr: u16,
     width: LfsrWidth,
-    phase: u32,
+    /// Elapsed time encoded at `step_delta`; after a retune it can hold whole
+    /// periods owed to the next clock-enabled sample.
+    phase: u64,
     step_delta: u32,
     output: i8,
     level: u8,
@@ -596,8 +598,19 @@ impl NoiseChannel {
     ///
     /// M4A preserves the `NR43` width bit during pitch writes
     /// (`pokeemerald/src/m4a.c:1197-1201`).
+    ///
+    /// mGBA settles the old rate before an `NR43` write and keeps `lastEvent`,
+    /// so the new period is measured against the clock time already elapsed
+    /// (`mgba/src/gb/audio.c:354-358,602-607,630-644`). The phase is therefore
+    /// rescaled by the rate ratio, whole periods included; the next
+    /// clock-enabled sample clocks them at its own volume, so the retune
+    /// itself leaves the latch untouched.
     pub fn retune(&mut self, byte: u8) {
-        self.step_delta = NoiseControl::from_byte(byte).step_delta;
+        let step_delta = NoiseControl::from_byte(byte).step_delta;
+        self.phase = (self.phase * u64::from(step_delta))
+            .checked_div(u64::from(self.step_delta))
+            .unwrap_or(0);
+        self.step_delta = step_delta;
     }
 
     /// Resets the LFSR and clock phase, exactly as at note-on
@@ -703,9 +716,9 @@ impl NoiseChannel {
         if !self.clocking {
             return self.level;
         }
-        self.phase = self.phase.wrapping_add(self.step_delta);
-        while self.phase >= PHASE_ONE {
-            self.phase -= PHASE_ONE;
+        self.phase += u64::from(self.step_delta);
+        while self.phase >= u64::from(PHASE_ONE) {
+            self.phase -= u64::from(PHASE_ONE);
             self.shift_lfsr(volume);
         }
         self.level
@@ -1049,6 +1062,69 @@ mod tests {
             (next_step - retuned_period).abs() <= 1.0,
             "the retuned wave steps after {next_step} samples, expected about {retuned_period}",
         );
+    }
+
+    #[test]
+    fn noise_retunes_preserve_elapsed_time_and_the_next_clock() {
+        // `mgba/src/gb/audio.c:354-358,602-607,630-644`: `lastEvent` survives
+        // an `NR43` write, so elapsed time (not a period fraction) carries over.
+        for (old, new, samples, old_phase, scaled_phase, next_clock, final_phase) in [
+            (0x65, 0x75, 26, 38_776, 19_388, 24, 1_996),
+            (0x75, 0x65, 43, 20_722, 41_444, 7, 3_992),
+        ] {
+            let mut noise = NoiseChannel::from_control_byte(old);
+            for _ in 0..samples {
+                noise.clock_sample(11);
+            }
+            assert_eq!((noise.lfsr(), noise.phase), (0x4000, old_phase));
+            let held = (
+                noise.lfsr,
+                noise.width,
+                noise.output,
+                noise.level,
+                noise.centre,
+                noise.clocking,
+            );
+
+            noise.retune(new);
+            assert_eq!(noise.phase, scaled_phase);
+            assert_eq!(
+                (
+                    noise.lfsr,
+                    noise.width,
+                    noise.output,
+                    noise.level,
+                    noise.centre,
+                    noise.clocking
+                ),
+                held,
+            );
+            for _ in 1..next_clock {
+                assert_eq!(noise.clock_sample(7), 11);
+                assert_eq!(noise.lfsr(), 0x4000);
+            }
+            assert_eq!(noise.clock_sample(7), 7);
+            assert_eq!((noise.lfsr(), noise.phase), (0x6000, final_phase));
+        }
+    }
+
+    #[test]
+    fn noise_retune_keeps_whole_periods_owed_until_the_next_clock() {
+        let mut noise = NoiseChannel::from_control_byte(0x75);
+        for _ in 0..30 {
+            noise.clock_sample(11);
+        }
+        assert_eq!((noise.lfsr(), noise.phase), (0, 60_180));
+        noise.retune(0x5D);
+        assert_eq!(noise.phase, 240_750);
+        assert_eq!(noise.width, LfsrWidth::FifteenBit);
+
+        noise.clocking = false;
+        noise.clock_sample(0);
+        assert_eq!((noise.lfsr(), noise.phase), (0, 240_750));
+        noise.clocking = true;
+        assert_eq!(noise.clock_sample(7), 7);
+        assert_eq!((noise.lfsr(), noise.phase), (0x7000, 52_167));
     }
 
     #[test]

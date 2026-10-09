@@ -31,6 +31,51 @@ fn noise_retune_preserves_the_width_bit() {
 }
 
 #[test]
+fn a_live_noise_retune_carries_elapsed_time_across_full_frames() {
+    // mGBA keeps `lastEvent` across an `NR43` write
+    // (`mgba/src/gb/audio.c:354-358,602-607,630-644`).
+    assert_eq!(crate::SAMPLES_PER_FRAME, 224);
+    assert_eq!(midi_key_to_noise_control(47), 0x75);
+    assert_eq!(midi_key_to_noise_control(51), 0x65);
+    let mut voice = noise_voice(CgbAdsr::flat(), WIDE_NOISE, TestNote::at_key(47));
+    voice.begin_frame(false);
+    assert_eq!(voice.hardware_volume(), FULL_VOLUME);
+    let mut first = [(0i32, 0i32); crate::SAMPLES_PER_FRAME];
+    voice.render(&mut first, &[]);
+    assert_eq!(voice.noise_lfsr(), Some(0x7E00));
+    let held_latch = voice.noise_output_latch();
+
+    voice.set_track_pitch(4, 0);
+    assert_eq!(voice.noise_is_narrow(), Some(false));
+    assert_eq!(voice.noise_lfsr(), Some(0x7E00));
+    assert_eq!(voice.noise_output_latch(), held_latch);
+    voice.begin_frame(false);
+    let mut contiguous = voice.clone();
+    let mut second = [(0i32, 0i32); crate::SAMPLES_PER_FRAME];
+    voice.render(&mut second[..1], &[]);
+    assert_eq!(voice.noise_lfsr(), Some(0x7F00));
+    voice.render(&mut second[1..4], &[]);
+    assert_eq!(voice.noise_lfsr(), Some(0x7F00));
+    voice.render(&mut second[4..5], &[]);
+    assert_eq!(voice.noise_lfsr(), Some(0x7F80));
+    voice.render(&mut second[5..], &[]);
+    assert_eq!(voice.noise_lfsr(), Some(0x7EFF));
+
+    let mut whole = [(0i32, 0i32); crate::SAMPLES_PER_FRAME];
+    contiguous.render(&mut whole, &[]);
+    assert_eq!(whole, second);
+    for (index, &sample) in second.iter().enumerate() {
+        let level = if (119..135).contains(&index) {
+            0
+        } else {
+            FULL_VOLUME
+        };
+        let expected = expected_contribution(level, FULL_VOLUME);
+        assert_eq!(sample, (expected, expected), "sample {}", index + 1);
+    }
+}
+
+#[test]
 fn release_start_volume_write_retriggers_the_noise_lfsr() {
     // Release start is a volume write; upstream's channel-4 trigger
     // resets the LFSR (`m4a.c:1060-1069,1219-1226`; `mgba/src/gb/audio.c:374`).
