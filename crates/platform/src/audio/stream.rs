@@ -8,7 +8,8 @@ use cpal::traits::DeviceTrait;
 use crate::error::PlatformError;
 
 use super::config::max_buffer_frames;
-use super::{PlaybackClock, Source};
+use super::playback::PlaybackClock;
+use super::Source;
 
 /// Convert one `f32` sample in `[-1.0, 1.0]` to `i16`, clamping out-of-range
 /// input rather than wrapping.
