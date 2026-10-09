@@ -27214,6 +27214,12 @@
           "rust_target": "crates/audio/src/sequencer.rs",
           "spec": "S-3",
           "status": "rewritten"
+        },
+        "ply_xxx": {
+          "reason": "ply_xxx dispatches to the ply_fine jump-table entry (m4a.c:1531-1534); typed XCMD kinds 0 and 3 now terminate and release the track.",
+          "rust_target": "crates/audio/src/sequencer.rs",
+          "spec": "S-3",
+          "status": "rewritten"
         }
       },
       "category": "code.source",
@@ -27343,6 +27349,12 @@
           "rust_target": "crates/audio/src/pitch.rs",
           "spec": "S-3",
           "status": "ported"
+        },
+        "gXcmdTable_reserved_fine": {
+          "reason": "gXcmdTable kinds 0 and 3 map to ply_xxx -> ply_fine (m4a_tables.c:293,296); byte decoding emits Fine for them.",
+          "rust_target": "crates/audio/src/sequence/reader.rs",
+          "spec": "S-3",
+          "status": "rewritten"
         }
       },
       "category": "code.source",

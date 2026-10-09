@@ -214,7 +214,7 @@ fn wait_goto_and_voice_commands_update_track_control_state() {
 }
 
 #[test]
-fn decoded_only_port_and_xcmd_leave_track_state_unchanged() {
+fn decoded_only_port_leaves_track_state_unchanged() {
     let mut sequencer = Sequencer::new(test_song(vec![vec![Event::Fine]], 150));
     let original = sequencer.tracks[0].clone();
 
@@ -226,16 +226,26 @@ fn decoded_only_port_and_xcmd_leave_track_state_unchanged() {
             value: 127,
         },
     );
-    apply_test_event(
-        &mut sequencer,
-        0,
-        &Event::Xcmd {
-            kind: 0,
-            value: 127,
-        },
-    );
 
     assert_eq!(sequencer.tracks[0], original);
+}
+
+#[test]
+fn reserved_xcmd_kinds_end_the_track() {
+    // Upstream maps XCMD kinds 0 and 3 to `ply_xxx` (`m4a_tables.c:293`,
+    // `:296`), which calls `ply_fine` (`m4a.c:1531`..`:1534`): the track ends
+    // and its flags clear. They are not no-ops.
+    for kind in [0, 3] {
+        let mut sequencer = Sequencer::new(test_song(vec![vec![Event::Fine]], 150));
+        sequencer.tracks[0].vol_dirty = true;
+        sequencer.tracks[0].pitch_dirty = true;
+
+        apply_test_event(&mut sequencer, 0, &Event::Xcmd { kind, value: 127 });
+
+        assert!(sequencer.tracks[0].ended, "kind {kind}");
+        assert!(!sequencer.tracks[0].vol_dirty, "kind {kind}");
+        assert!(!sequencer.tracks[0].pitch_dirty, "kind {kind}");
+    }
 }
 
 #[test]
