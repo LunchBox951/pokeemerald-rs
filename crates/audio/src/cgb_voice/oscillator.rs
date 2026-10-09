@@ -1,9 +1,26 @@
 use super::{
     cgb3_wave_gain_256, DacCorrection, BIPOLAR_SAMPLE_SCALE, LINEAR_ENVELOPE_SCALE,
-    WAVE_SAMPLE_SCALE,
+    SAMPLE_GAIN_BITS, WAVE_SAMPLE_SCALE,
 };
 use crate::cgb_pitch::{midi_key_to_cgb_freq_reg, midi_key_to_noise_control};
 use crate::psg::{NoiseChannel, SquareChannel, WaveChannel};
+
+/// Clocks `noise` one sample at `hardware_volume` and maps its resolved latch
+/// (0..=15) into the centred render path. The DAC level is output directly
+/// (`mgba/src/gb/audio.c:782`); like the other channels the render path
+/// removes the DC offset by centring on the channel's current volume, so a
+/// latch equal to the volume or to zero reproduces the channel's usual
+/// `+-volume` swing, a held level different from the volume (an inherited
+/// latch, a zero-volume restart) keeps its own distance from that centre,
+/// and a settled latch with the volume at zero is silent.
+/// [`LINEAR_ENVELOPE_SCALE`] as a signed gain.
+const NOISE_LEVEL_GAIN: i32 = LINEAR_ENVELOPE_SCALE.cast_signed();
+
+fn noise_contribution(noise: &mut NoiseChannel, hardware_volume: u8) -> i32 {
+    let level = i32::from(noise.clock_sample(hardware_volume));
+    let centred = 2 * level - i32::from(hardware_volume);
+    (centred * NOISE_LEVEL_GAIN * BIPOLAR_SAMPLE_SCALE) >> SAMPLE_GAIN_BITS
+}
 
 #[derive(Clone, Debug)]
 pub(super) enum Oscillator {
@@ -13,11 +30,26 @@ pub(super) enum Oscillator {
 }
 
 impl Oscillator {
-    pub(super) fn normalized_sample(&mut self) -> i32 {
+    /// One sample's pre-routing contribution. Square/Wave scale their
+    /// waveform by `frame_gain`; Noise ignores it and renders its resolved
+    /// output latch directly ([`noise_contribution`]).
+    pub(super) fn frame_contribution(&mut self, frame_gain: i32, hardware_volume: u8) -> i32 {
         match self {
-            Self::Square(square) => i32::from(square.sample()) * BIPOLAR_SAMPLE_SCALE,
-            Self::Wave(wave) => i32::from(wave.sample()) * WAVE_SAMPLE_SCALE,
-            Self::Noise(noise) => i32::from(noise.sample()) * BIPOLAR_SAMPLE_SCALE,
+            Self::Square(square) => {
+                (frame_gain * i32::from(square.sample()) * BIPOLAR_SAMPLE_SCALE) >> SAMPLE_GAIN_BITS
+            }
+            Self::Wave(wave) => {
+                (frame_gain * i32::from(wave.sample()) * WAVE_SAMPLE_SCALE) >> SAMPLE_GAIN_BITS
+            }
+            Self::Noise(noise) => noise_contribution(noise, hardware_volume),
+        }
+    }
+
+    /// The retained noise latch, for the idle-slot and completion paths.
+    pub(super) fn noise_mut(&mut self) -> Option<&mut NoiseChannel> {
+        match self {
+            Self::Noise(noise) => Some(noise),
+            _ => None,
         }
     }
 
@@ -64,13 +96,14 @@ impl Oscillator {
 
     /// Applies the hardware off-write's frequency truncation
     /// ([`SquareChannel::apply_hardware_off_write`]'s doc) and the noise
-    /// channel's settling to its low latch
-    /// ([`NoiseChannel::settle_output_low`]'s doc); a no-op for Wave.
+    /// channel's zero-volume retrigger, which restarts its phase and LFSR but
+    /// leaves the latch for the next clock to settle; a no-op for Wave.
     pub(super) fn apply_hardware_off_write(&mut self) -> bool {
         match self {
             Self::Square(square) => square.apply_hardware_off_write(),
             Self::Noise(noise) => {
-                noise.settle_output_low();
+                noise.retrigger();
+                noise.set_clocking(true);
                 true
             }
             Self::Wave(_) => true,
@@ -88,13 +121,11 @@ impl Oscillator {
     /// output latch forward onto its replacement
     /// ([`SquareChannel::continue_duty_from`]'s and
     /// [`NoiseChannel::continue_output_from`]'s docs); a no-op for Wave.
-    /// `previous_volume_zero` is whether the predecessor's hardware volume
-    /// was zero, so its noise clocks latched low.
-    pub(super) fn carry_hardware_state_from(&mut self, other: &Self, previous_volume_zero: bool) {
+    pub(super) fn carry_hardware_state_from(&mut self, other: &Self) {
         match (self, other) {
             (Self::Square(square), Self::Square(previous)) => square.continue_duty_from(previous),
             (Self::Noise(noise), Self::Noise(previous)) => {
-                noise.continue_output_from(previous, previous_volume_zero);
+                noise.continue_output_from(previous);
             }
             _ => {}
         }

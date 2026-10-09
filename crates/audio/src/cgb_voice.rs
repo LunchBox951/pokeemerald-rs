@@ -467,9 +467,7 @@ impl CgbVoice {
     /// output latch) forward from the voice this one replaces on a shared
     /// hardware slot.
     pub(crate) fn carry_hardware_state_from(&mut self, other: &Self) {
-        let clocked_silent = other.hardware_envelope_volume.volume() == 0;
-        self.oscillator
-            .carry_hardware_state_from(&other.oscillator, clocked_silent);
+        self.oscillator.carry_hardware_state_from(&other.oscillator);
     }
 
     /// Applies the off-write a voice's slot receives the instant it idles
@@ -477,6 +475,28 @@ impl CgbVoice {
     /// revives or re-mutes the hardware channel like any other.
     pub(crate) fn apply_hardware_off_write(&mut self) {
         self.hardware_muted = !self.oscillator.apply_hardware_off_write();
+        if self.oscillator.noise_mut().is_some() {
+            // `NR42 = 8` leaves the channel at volume zero; the noise latch
+            // keeps its level until the restarted LFSR first clocks.
+            self.hardware_envelope_volume.write_off();
+        }
+    }
+
+    /// Accounts one idle frame of a vacated slot's retained hardware: a square
+    /// keeps its duty register running ([`Self::advance_idle_duty`]); a noise
+    /// channel keeps clocking at its retained rate and emits its resolved
+    /// latch, which a zero-volume clock settles to silence
+    /// (`mgba/src/gb/audio.c:606-641,782`). Wave is unchanged.
+    pub(crate) fn render_idle_hardware(&mut self, acc: &mut [StereoAcc], sweep_ticks: &[usize]) {
+        if self.oscillator.noise_mut().is_some() {
+            let volume = self.hardware_envelope_volume.volume();
+            for output in acc.iter_mut() {
+                let contribution = self.oscillator.frame_contribution(0, volume);
+                self.routing.accumulate(contribution, output);
+            }
+        } else {
+            self.advance_idle_duty(acc.len(), sweep_ticks);
+        }
     }
 
     /// Accounts an idle square slot's `samples` of silence, whose duty
@@ -592,12 +612,27 @@ impl CgbVoice {
             self.apply_retrigger();
         }
         let software_volume = self.envelope.volume();
-        self.hardware_envelope_volume.end_frame(
+        if hardware_write || initial_trigger {
+            // A noise trigger with initial volume zero and a decreasing
+            // envelope disables the channel (`mgba/src/gb/audio.c:856-860`).
+            let pacing = self.envelope.hardware_envelope_pacing();
+            let runs = software_volume != 0 || pacing.is_some_and(|pacing| pacing.increasing);
+            if let Some(noise) = self.oscillator.noise_mut() {
+                noise.set_clocking(runs);
+            }
+        }
+        let stepped = self.hardware_envelope_volume.end_frame(
             1 + u8::from(extra_envelope_iteration),
             hardware_write,
             software_volume,
             self.envelope.hardware_envelope_pacing(),
         );
+        if stepped {
+            let volume = self.hardware_envelope_volume.volume();
+            if let Some(noise) = self.oscillator.noise_mut() {
+                noise.apply_envelope_step(volume);
+            }
+        }
         let envelope_gain = self
             .oscillator
             .envelope_gain_256(software_volume, self.hardware_envelope_volume.volume());
@@ -643,8 +678,9 @@ impl CgbVoice {
                     break;
                 }
             }
-            let raw_sample = self.oscillator.normalized_sample();
-            let contribution = (self.frame_gain * raw_sample) >> SAMPLE_GAIN_BITS;
+            let contribution = self
+                .oscillator
+                .frame_contribution(self.frame_gain, self.hardware_envelope_volume.volume());
             self.routing.accumulate(contribution, output);
         }
     }
@@ -666,11 +702,15 @@ impl CgbVoice {
         }
     }
 
-    fn noise_output_latch(&self) -> Option<i8> {
+    fn noise_output_latch(&self) -> Option<u8> {
         match &self.oscillator {
-            Oscillator::Noise(n) => Some(n.output_latch()),
+            Oscillator::Noise(n) => Some(n.level()),
             _ => None,
         }
+    }
+
+    fn hardware_volume(&self) -> u8 {
+        self.hardware_envelope_volume.volume()
     }
 
     fn noise_lfsr(&self) -> Option<u16> {

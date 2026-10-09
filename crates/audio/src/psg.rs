@@ -556,6 +556,11 @@ impl NoiseControl {
 }
 
 /// CGB channel 4 noise generator.
+///
+/// Besides the LFSR it holds the channel's output latch, `ch4.sample`: the
+/// volume-resolved level (0..=15) the last LFSR clock or envelope step left
+/// (`mgba/src/gb/audio.c:641,730-732`). Triggers, retunes, and direct volume
+/// writes never rewrite it.
 #[derive(Clone, Debug)]
 pub struct NoiseChannel {
     lfsr: u16,
@@ -563,6 +568,8 @@ pub struct NoiseChannel {
     phase: u32,
     step_delta: u32,
     output: i8,
+    level: u8,
+    clocking: bool,
 }
 
 impl NoiseChannel {
@@ -576,6 +583,8 @@ impl NoiseChannel {
             phase: 0,
             step_delta: control.step_delta,
             output: -1,
+            level: 0,
+            clocking: true,
         }
     }
 
@@ -588,36 +597,46 @@ impl NoiseChannel {
     }
 
     /// Resets the LFSR and clock phase, exactly as at note-on
-    /// (`mgba/src/gb/audio.c:374,381-382`).
+    /// (`mgba/src/gb/audio.c:374,381-382`). The output latch is untouched.
     pub fn retrigger(&mut self) {
         self.phase = 0;
         self.lfsr = 0;
     }
 
     /// Keeps the previous note's output latch across a trigger: `ch4.sample`
-    /// is only rewritten when the LFSR clocks, so it persists into the next
-    /// note until the first shift (`mgba/src/gb/audio.c:371-383,602-644`).
-    /// Each clock stores `lsb * currentVolume` (`audio.c:641`), so a
-    /// predecessor running at hardware volume zero leaves the latch low
-    /// whatever its LFSR polarity reads.
-    pub fn continue_output_from(&mut self, previous: &Self, previous_volume_zero: bool) {
-        self.output = if previous_volume_zero {
-            -1
-        } else {
-            previous.output
-        };
+    /// is only rewritten when the LFSR clocks or the envelope steps, so the
+    /// predecessor's resolved level persists into the next note until then
+    /// (`mgba/src/gb/audio.c:371-383,602-644`). The level is carried as
+    /// resolved, whatever the predecessor's current hardware volume: a
+    /// volume write or zero-volume trigger does not recompute it.
+    pub fn continue_output_from(&mut self, previous: &Self) {
+        self.level = previous.level;
     }
 
-    /// Settles the latch low after the retirement off-write: `CgbOscOff`
-    /// writes `NR42 = 8; NR44 = 0x80` (`pokeemerald/src/m4a.c:873-874`), a
-    /// zero-volume retrigger that keeps the LFSR clocking, and every clock
-    /// rewrites `ch4.sample = lsb * currentVolume` (`mgba/src/gb/audio.c:641`),
-    /// so the idled channel's latch reads low before the next note.
-    pub fn settle_output_low(&mut self) {
-        self.output = -1;
+    /// Re-resolves the latch at an envelope step: the sample is rewritten as
+    /// `(sample > 0) * currentVolume` (`mgba/src/gb/audio.c:730-732`), so a
+    /// raised latch follows the stepped volume while a low one stays low.
+    pub fn apply_envelope_step(&mut self, volume: u8) {
+        if self.level > 0 {
+            self.level = volume & 0x0F;
+        }
     }
 
-    fn shift_lfsr(&mut self) {
+    /// Whether the last trigger left the channel running. A trigger with
+    /// initial volume zero and a decreasing envelope disables it
+    /// (`mgba/src/gb/audio.c:371-372,856-860`): the LFSR stops clocking
+    /// (`audio.c:585`) while the held latch is still output (`audio.c:782`).
+    pub fn set_clocking(&mut self, clocking: bool) {
+        self.clocking = clocking;
+    }
+
+    /// The resolved output latch, 0..=15.
+    #[must_use]
+    pub fn level(&self) -> u8 {
+        self.level
+    }
+
+    fn shift_lfsr(&mut self, volume: u8) {
         let feedback_is_high = (self.lfsr ^ (self.lfsr >> 1)) & 1 == 0;
         let feedback_bits = self.width.feedback_bits();
         self.lfsr = (self.lfsr >> 1) & !feedback_bits;
@@ -625,6 +644,8 @@ impl NoiseChannel {
             self.lfsr |= feedback_bits;
         }
         self.output = if feedback_is_high { 1 } else { -1 };
+        // `ch4.sample = lsb * currentVolume` (`mgba/src/gb/audio.c:641`).
+        self.level = if feedback_is_high { volume & 0x0F } else { 0 };
     }
 
     #[cfg(test)]
@@ -633,25 +654,32 @@ impl NoiseChannel {
     }
 
     #[cfg(test)]
-    pub(crate) fn output_latch(&self) -> i8 {
-        self.output
-    }
-
-    #[cfg(test)]
     pub(crate) fn lfsr(&self) -> u16 {
         self.lfsr
     }
 
-    /// Produces the next bipolar sample, clocking the LFSR when its phase advances.
-    pub fn sample(&mut self) -> i8 {
+    /// Advances one output sample at hardware `volume`, clocking the LFSR
+    /// whenever its phase wraps, and returns the resolved latch (0..=15).
+    pub fn clock_sample(&mut self, volume: u8) -> u8 {
+        if !self.clocking {
+            return self.level;
+        }
         self.phase = self.phase.wrapping_add(self.step_delta);
         while self.phase >= PHASE_ONE {
             self.phase -= PHASE_ONE;
-            self.shift_lfsr();
+            self.shift_lfsr(volume);
         }
+        self.level
+    }
+
+    /// Produces the next bipolar sample, clocking the LFSR when its phase advances.
+    pub fn sample(&mut self) -> i8 {
+        self.clock_sample(NOISE_UNIT_VOLUME);
         self.output
     }
 }
+
+const NOISE_UNIT_VOLUME: u8 = 1;
 
 #[cfg(test)]
 mod tests {
@@ -1004,6 +1032,68 @@ mod tests {
             assert_eq!(noise.sample(), 1);
             assert_eq!((noise.lfsr(), noise.phase), (first_lfsr, 0));
         }
+    }
+
+    #[test]
+    fn a_noise_clock_resolves_the_latch_to_the_current_volume() {
+        for byte in [0, NoiseControl::WIDTH_BIT] {
+            let mut noise = NoiseChannel::from_control_byte(byte);
+            assert_eq!(noise.level(), 0, "construction latches low");
+            while noise.level() == 0 {
+                noise.clock_sample(11);
+            }
+            assert_eq!(noise.level(), 11);
+        }
+    }
+
+    #[test]
+    fn a_disabled_channel_holds_its_latch_without_clocking() {
+        let mut noise = NoiseChannel::from_control_byte(0);
+        while noise.level() == 0 {
+            noise.clock_sample(9);
+        }
+        noise.retrigger();
+        noise.set_clocking(false);
+        for _ in 0..10_000 {
+            assert_eq!(noise.clock_sample(0), 9);
+        }
+        assert_eq!(noise.lfsr(), 0);
+        noise.set_clocking(true);
+        noise.retrigger();
+        while noise.clock_sample(0) != 0 {}
+    }
+
+    #[test]
+    fn a_trigger_and_a_volume_change_leave_the_resolved_latch_alone() {
+        let mut noise = NoiseChannel::from_control_byte(0);
+        while noise.level() == 0 {
+            noise.clock_sample(9);
+        }
+        noise.retrigger();
+        assert_eq!(noise.level(), 9);
+        let mut successor = NoiseChannel::from_control_byte(0x25);
+        successor.continue_output_from(&noise);
+        assert_eq!(successor.level(), 9);
+        // The first sample after the trigger (no clock yet) still reads it.
+        assert_eq!(successor.clock_sample(0), 9);
+    }
+
+    #[test]
+    fn a_zero_volume_clock_settles_the_latch_and_a_step_cannot_raise_it() {
+        let mut noise = NoiseChannel::from_control_byte(0);
+        while noise.level() == 0 {
+            noise.clock_sample(9);
+        }
+        noise.apply_envelope_step(7);
+        assert_eq!(noise.level(), 7, "a raised latch follows the step");
+        noise.retrigger();
+        let mut samples = 0;
+        while noise.clock_sample(0) != 0 || samples == 0 {
+            samples += 1;
+            assert!(samples < 1000, "the first zero-volume clock settles it");
+        }
+        noise.apply_envelope_step(12);
+        assert_eq!(noise.level(), 0, "a low latch stays low through a step");
     }
 
     #[test]

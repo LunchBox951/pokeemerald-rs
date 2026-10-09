@@ -425,12 +425,13 @@ impl Mixer {
             }
         }
         // A vacated square slot's hardware register keeps advancing while no
-        // voice occupies it (`CgbVoice::advance_idle_duty`'s doc); the
-        // Wave/Noise state held beside it is unchanged by that call.
+        // voice occupies it (`CgbVoice::advance_idle_duty`'s doc); a vacated
+        // noise slot keeps clocking and emitting its latch until the restarted
+        // LFSR settles it (`CgbVoice::render_idle_hardware`'s doc).
         for (index, idle) in self.idle_cgb_hardware.iter_mut().enumerate() {
             if self.cgb_slots[index].is_none() {
-                if let Some(duty) = idle {
-                    duty.advance_idle_duty(SAMPLES_PER_FRAME, &self.sweep_ticks);
+                if let Some(hardware) = idle {
+                    hardware.render_idle_hardware(&mut self.mix_buffer, &self.sweep_ticks);
                 }
             }
         }
