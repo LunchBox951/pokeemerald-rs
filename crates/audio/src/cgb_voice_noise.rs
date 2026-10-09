@@ -455,3 +455,77 @@ fn a_dac_disabled_replacement_holds_the_inherited_latch() {
     }
     assert_eq!(replacement.noise_output_latch(), Some(FULL_VOLUME));
 }
+
+/// Track volumes whose centred goal is 16 (`CgbModVol`, `m4a.c:908-911`),
+/// which `envelopeVolume << 4` wraps to a zero NR42 volume nibble
+/// (`m4a.c:1222`).
+const WRAPPING_GOAL_TRACK_VOLUME: u8 = 132;
+const WRAPPING_GOAL: u8 = 16;
+
+/// Renders `replacement`'s first frame on `predecessor`'s held latch for
+/// twice the slow key's first-clock delay and returns the latch it ends on.
+fn latch_after_slow_clock(adsr: CgbAdsr, note: TestNote) -> (CgbVoice, Option<u8>) {
+    let predecessor = noise_voice_latched(CgbAdsr::flat(), SLOW_NOISE_KEY, WIDE_NOISE);
+    let mut replacement = noise_voice(adsr, WIDE_NOISE, note);
+    replacement.carry_hardware_state_from(&predecessor);
+    replacement.begin_frame(false);
+    let mut acc = [(0i32, 0i32); 1];
+    for _ in 0..(2 * SLOW_KEY_FIRST_CLOCK_SAMPLE) {
+        replacement.render(&mut acc, &[]);
+    }
+    let latch = replacement.noise_output_latch();
+    (replacement, latch)
+}
+
+/// A decreasing store of `envelopeVolume` 16 writes NR42 `decay | 0x00`
+/// (`m4a.c:1158,1222`): a zero volume nibble and clear direction bit, so
+/// the DAC test fails (`gb/audio.c:346-352,856-860`) and the LFSR stops,
+/// holding the inherited latch however large the unmasked volume is.
+#[test]
+fn a_wrapped_zero_volume_decreasing_store_stops_clocking() {
+    let decaying = CgbAdsr {
+        attack: 0,
+        decay: 1,
+        ..CgbAdsr::flat()
+    };
+    let note = TestNote {
+        track_right: WRAPPING_GOAL_TRACK_VOLUME,
+        track_left: WRAPPING_GOAL_TRACK_VOLUME,
+        ..TestNote::at_key(SLOW_NOISE_KEY)
+    };
+    let (replacement, latch) = latch_after_slow_clock(decaying, note);
+    assert_eq!(
+        replacement.envelope_volume(),
+        WRAPPING_GOAL,
+        "sanity: unmasked volume 16"
+    );
+    assert_eq!(
+        replacement.hardware_volume(),
+        0,
+        "sanity: nibble wraps to 0"
+    );
+    assert_eq!(
+        latch,
+        Some(FULL_VOLUME),
+        "the disabled LFSR holds the latch"
+    );
+}
+
+/// Attack 16 stores NR42 `(16 + 8) & 0xF = 0x08` at volume 0
+/// (`m4a.c:1024,1034,1222`): no step time, but bit 3 keeps the DAC on
+/// (`gb/audio.c:856-860`), so the LFSR clocks at volume zero and settles
+/// the inherited latch low (`gb/audio.c:641`).
+#[test]
+fn a_zero_volume_store_with_the_direction_bit_keeps_clocking() {
+    let attacking = CgbAdsr {
+        attack: 16,
+        ..CgbAdsr::flat()
+    };
+    let (replacement, latch) = latch_after_slow_clock(attacking, TestNote::at_key(SLOW_NOISE_KEY));
+    assert_eq!(
+        replacement.hardware_volume(),
+        0,
+        "sanity: volume-zero trigger"
+    );
+    assert_eq!(latch, Some(0), "a zero-volume clock settles the latch low");
+}

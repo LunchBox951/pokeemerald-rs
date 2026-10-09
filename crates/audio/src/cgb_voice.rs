@@ -613,10 +613,10 @@ impl CgbVoice {
         }
         let software_volume = self.envelope.volume();
         if hardware_write || initial_trigger {
-            // A noise trigger with initial volume zero and a decreasing
-            // envelope disables the channel (`mgba/src/gb/audio.c:856-860`).
-            let pacing = self.envelope.hardware_envelope_pacing();
-            let runs = software_volume != 0 || pacing.is_some_and(|pacing| pacing.increasing);
+            // A noise trigger whose NR42 byte holds a zero volume nibble and
+            // a clear direction bit disables the channel
+            // (`mgba/src/gb/audio.c:856-860`).
+            let runs = self.envelope.hardware_dac_enabled();
             if let Some(noise) = self.oscillator.noise_mut() {
                 noise.set_clocking(runs);
             }
