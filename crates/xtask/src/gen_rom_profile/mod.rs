@@ -241,12 +241,22 @@ pub fn run(options: &Options) -> Result<GenReport, GenRomProfileError> {
         upstream: repo_root.join("pokeemerald"),
     };
 
+    generate(&ctx, &profile.sha1.to_string(), options, out_path)
+}
+
+/// Locate, cross-check, and write; nothing is written unless all of it succeeds.
+fn generate(
+    ctx: &Context<'_>,
+    sha1: &str,
+    options: &Options,
+    out_path: PathBuf,
+) -> Result<GenReport, GenRomProfileError> {
     let mut lines = Vec::new();
-    let plan = locate_profile(&ctx, &mut lines)?;
+    let plan = locate_profile(ctx, &mut lines)?;
 
     let map = cross_check(options.map.as_deref(), &mut lines)?;
 
-    let module = emit::module(&plan, &profile.sha1.to_string(), lines.len());
+    let module = emit::module(&plan, sha1, lines.len());
     write_module(&options.rom, &out_path, &module)?;
 
     Ok(GenReport {

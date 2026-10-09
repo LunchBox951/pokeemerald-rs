@@ -11,7 +11,8 @@
 //! order and padded, with no pointer from the struct, so each frame is
 //! matched on its own bytes.
 //!
-//! A pack missing any root of [`crate::extract::scope::TILESETS`] is refused.
+//! A pack missing any root of [`crate::extract::scope::TILESETS`], or any
+//! frame of their pinned animations, is refused.
 
 use std::collections::BTreeMap;
 

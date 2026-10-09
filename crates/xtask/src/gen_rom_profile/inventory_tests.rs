@@ -8,8 +8,8 @@ use super::error::GenRomProfileError;
 use super::tests::with_context;
 use super::{fonts, inventory, layouts, locate_profile, text_window, tilesets, title};
 use crate::extract::scope::{
-    layout_ids, text_window_ids, title_ids, FONTS, LAYOUTS, TEXT_WINDOW_IMAGE_STEMS,
-    TEXT_WINDOW_PALETTE_STEMS, TILESETS,
+    layout_ids, text_window_ids, tileset_animation_ids, title_ids, FONTS, LAYOUTS,
+    TEXT_WINDOW_IMAGE_STEMS, TEXT_WINDOW_PALETTE_STEMS, TILESETS,
 };
 
 /// A placeholder for every fixed root; presence is all the preflight reads.
@@ -17,6 +17,7 @@ fn complete_inventory() -> Vec<PackEntry> {
     TILESETS
         .iter()
         .map(|tileset| tileset.tiles_id())
+        .chain(tileset_animation_ids())
         .chain(title_ids())
         .chain(FONTS.iter().map(|font| font.pack_id.to_owned()))
         .chain(layout_ids())
@@ -187,4 +188,108 @@ fn a_complete_fixed_inventory_passes_preflight() {
     with_context("complete", &rom, complete_inventory(), |ctx| {
         inventory::preflight(ctx.pack).expect("a complete inventory passes");
     });
+}
+
+#[test]
+fn the_animation_inventory_matches_the_committed_profile() {
+    let mut expected: Vec<String> = rom_import::EMERALD_US_REV0
+        .roots
+        .tilesets
+        .iter()
+        .flat_map(|t| {
+            t.anims.iter().flat_map(move |a| {
+                (0..a.frames.len()).map(move |n| format!("tileset/{}/anim/{}/{n}", t.name, a.name))
+            })
+        })
+        .collect();
+    expected.sort();
+    expected.dedup();
+    let mut actual = tileset_animation_ids();
+    actual.sort();
+    assert_eq!(actual, expected);
+    assert_eq!(actual.len(), 28);
+}
+
+#[test]
+fn a_pack_missing_the_last_water_frame_is_refused() {
+    let id = "tileset/general/anim/water/7";
+    assert_refused("no-water-7", without(id), id, "tilesets");
+}
+
+#[test]
+fn a_pack_missing_any_one_animation_frame_is_refused() {
+    for id in tileset_animation_ids() {
+        let label = format!("no-{}", id.replace('/', "-"));
+        assert_refused(&label, without(&id), &id, "tilesets");
+    }
+}
+
+#[test]
+fn a_pack_missing_a_whole_animation_is_refused() {
+    for (set, anim) in [
+        ("general", "flower"),
+        ("general", "land_water_edge"),
+        ("general", "sand_water_edge"),
+        ("general", "water"),
+        ("general", "waterfall"),
+        ("building", "tv_turned_on"),
+    ] {
+        let prefix = format!("tileset/{set}/anim/{anim}/");
+        let mut entries = complete_inventory();
+        entries.retain(|e| !e.id.starts_with(&prefix));
+        assert_refused(
+            &format!("no-{set}-{anim}"),
+            entries,
+            &format!("{prefix}0"),
+            "tilesets",
+        );
+    }
+}
+
+#[test]
+fn a_pack_missing_the_whole_animation_domain_is_refused() {
+    let mut entries = complete_inventory();
+    entries.retain(|e| !e.id.contains("/anim/"));
+    assert_refused(
+        "no-animations",
+        entries,
+        "tileset/general/anim/flower/0",
+        "tilesets",
+    );
+}
+
+type Shape = fn(&str) -> bool;
+
+#[test]
+fn a_refused_generation_leaves_the_previous_module_untouched() {
+    let rom = RomFixture::new().emerald_header().finish();
+    let shapes: [(&str, Shape); 3] = [
+        ("one", |id| id == "tileset/general/anim/water/7"),
+        ("anim", |id| id.starts_with("tileset/general/anim/water/")),
+        ("all", |id| id.contains("/anim/")),
+    ];
+    for (label, drop) in shapes {
+        let mut entries = complete_inventory();
+        entries.retain(|e| !drop(&e.id));
+        with_context(&format!("keep-{label}"), &rom, entries, |ctx| {
+            let dir = std::env::temp_dir()
+                .join(format!("rom-profile-keep-{label}-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).expect("dir");
+            let out = dir.join("module.rs");
+            std::fs::write(&out, b"previous module").expect("seed");
+            let options = super::Options {
+                rom: dir.join("rom.gba"),
+                out: Some(out.clone()),
+                map: None,
+            };
+            let err = super::generate(ctx, "sha", &options, out.clone()).expect_err("refused");
+            assert!(
+                matches!(err, GenRomProfileError::MissingPackEntry(_)),
+                "{err:?}"
+            );
+            assert_eq!(std::fs::read(&out).expect("read"), b"previous module");
+            assert_eq!(std::fs::read_dir(&dir).expect("ls").count(), 1);
+            std::fs::remove_dir_all(&dir).expect("cleanup");
+        });
+    }
 }

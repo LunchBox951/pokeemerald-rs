@@ -678,6 +678,22 @@ fn collect_pngs_sorted(dir: &Path) -> Result<Vec<PathBuf>, ExtractError> {
     Ok(out)
 }
 
+/// Refuse a checkout missing any pinned animation frame PNG.
+fn require_animation_sources(anim_dir: &Path, source: TilesetSource) -> Result<(), ExtractError> {
+    for &(anim, frames) in source.animations {
+        for n in 0..frames {
+            let path = anim_dir.join(anim).join(format!("{n}.png"));
+            if !path.is_file() {
+                return Err(ExtractError::ReadFailed(
+                    path,
+                    "required tileset animation frame is missing".to_owned(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn extract_tileset(
     upstream: &Path,
     source: TilesetSource,
@@ -691,6 +707,7 @@ fn extract_tileset(
     push_png_entry(&base.join("tiles.png"), source.tiles_id(), writer)?;
 
     let anim_dir = base.join("anim");
+    require_animation_sources(&anim_dir, source)?;
     if anim_dir.is_dir() {
         for png_path in collect_pngs_sorted(&anim_dir)? {
             let rel = png_path
@@ -929,6 +946,30 @@ mod tests {
             "pokeemerald-rs-extract-test-{name}-{}.pack",
             std::process::id()
         ))
+    }
+
+    #[test]
+    fn a_checkout_missing_a_required_animation_frame_is_refused() {
+        use crate::extract::scope::TILESETS;
+        let general = TILESETS[0];
+        let root = std::env::temp_dir().join(format!("extract-anim-{}", std::process::id()));
+        let anim = root.join("anim");
+        for &(name, frames) in general.animations {
+            std::fs::create_dir_all(anim.join(name)).expect("dir");
+            for n in 0..frames {
+                std::fs::write(anim.join(name).join(format!("{n}.png")), b"x").expect("frame");
+            }
+        }
+        super::require_animation_sources(&anim, general).expect("complete");
+
+        std::fs::remove_file(anim.join("water/7.png")).expect("remove");
+        let err = super::require_animation_sources(&anim, general).expect_err("one frame");
+        assert!(matches!(&err, ExtractError::ReadFailed(p, _) if p.ends_with("water/7.png")));
+
+        std::fs::remove_dir_all(&anim).expect("remove all");
+        let err = super::require_animation_sources(&anim, general).expect_err("domain");
+        assert!(matches!(&err, ExtractError::ReadFailed(p, _) if p.ends_with("flower/0.png")));
+        std::fs::remove_dir_all(&root).expect("cleanup");
     }
 
     // Changes to `LAYOUTS` must also update `object_event_flags.rs`'s
