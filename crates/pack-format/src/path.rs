@@ -293,7 +293,7 @@ fn is_absolute_windows_path(path: &OsStr) -> bool {
                 // followed by a separator is absolute. `UNC` is the one root
                 // that is itself incomplete without a server and share.
                 Some(b"?" | b".") => match components.next() {
-                    Some(b"UNC") => matches!(
+                    Some(unc) if unc.eq_ignore_ascii_case(b"UNC") => matches!(
                         (components.next(), components.next()),
                         (Some(server), Some(share)) if !server.is_empty() && !share.is_empty()
                     ),
