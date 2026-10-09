@@ -24,8 +24,9 @@ const XCMD_IECL: u8 = 0x09;
 /// (`subs r0, 150`, `m4a_1.s:1169`).
 const TEMPO_UNIT: u16 = 150;
 
-/// Track volume before any `VOL` command: `MPlayStart` clears the track and
-/// restores no `vol` field (`m4a_1.s:1214`-`:1230`), so the resolved channel
+/// Track volume before any `VOL` command: `MPlayMain`'s `MPT_FLG_START`
+/// handling clears the track and restores no `vol` field
+/// (`m4a_1.s:1214`-`:1230`), so the resolved channel
 /// volume is zero until the sequence sets one (`m4a.c:772`).
 const DEFAULT_TRACK_VOLUME: u8 = 0;
 
