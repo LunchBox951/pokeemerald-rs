@@ -511,7 +511,11 @@ fn estimated_damage(
     };
     let damage = base_damage(&input);
     let damage = apply_stab(damage, has_stab(attacker.types(), move_id, move_type));
-    let damage = fold_ai_type_effectiveness(damage, move_type, defender.types());
+    let damage = if defender_levitate_blocked(move_type, defender.ability()) {
+        damage
+    } else {
+        fold_ai_type_effectiveness(damage, move_type, defender.types())
+    };
     Ok((damage * simulated_damage_percent / PERCENT_SCALE).max(MINIMUM_DAMAGE))
 }
 
@@ -883,6 +887,39 @@ mod tests {
                 .into_iter()
                 .chain(subsequent_draws),
         )
+    }
+
+    #[test]
+    fn exhausted_ground_slots_keep_prechart_damage_against_levitate() {
+        let dex = Dex::new();
+        let target = pokemon(GASTLY, vec![POUND]);
+        assert_eq!(target.ability(), assets::AbilityId::LEVITATE);
+        let cases = [
+            (vec![WING_ATTACK, GROWL], EnemyAction::Move(0)),
+            (
+                vec![WING_ATTACK, GROWL, MoveId::MUD_SLAP],
+                EnemyAction::Move(0),
+            ),
+            (vec![WING_ATTACK, GROWL, EARTHQUAKE], EnemyAction::Move(1)),
+        ];
+        for (moves, expected) in cases {
+            let mut enemy = pokemon(TRAPINCH, moves);
+            if enemy.moves().len() == 3 {
+                spend_move(&mut enemy, 2);
+            }
+            let mut rng = rng_with_maximum_simulated_damage([SELECT_FIRST_TIED_MOVE]);
+            let action = choose_trainer_action(
+                &dex,
+                &enemy,
+                &target,
+                AiFlags::TRY_TO_FAINT,
+                FIRST_TURN,
+                &mut rng,
+            )
+            .unwrap();
+            assert_eq!(action, expected);
+            assert_eq!(rng.draws(), MAX_MON_MOVES + 1);
+        }
     }
 
     #[test]
