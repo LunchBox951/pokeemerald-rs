@@ -14,18 +14,11 @@
 use assets::trainers::TrainerId;
 use assets::{AbilityId, MoveId, MoveTarget};
 
-use crate::confuse;
 use crate::damage::{BattleRng, STRUGGLE};
-use crate::defense_curl;
 use crate::dex::Dex;
-use crate::drain;
 use crate::error::BattleError;
 use crate::escape::{ensure_admissible, try_run_from_battle};
 use crate::exp::{trainer_faint_exp, wild_faint_exp};
-use crate::fixed_damage;
-use crate::flag_move;
-use crate::multi_hit;
-use crate::paralyze;
 use crate::pokemon::{BattlePokemon, MoveLearnDecision, PendingMoveLearn, MAX_LEVEL, MOVE_NONE};
 use crate::secondary;
 use crate::stat_change;
@@ -77,25 +70,7 @@ pub enum BattleOutcome {
 
 /// Validates that one complete move-effect pipeline can execute a move.
 pub(crate) fn ensure_executable(dex: &Dex, move_id: MoveId) -> Result<(), BattleError> {
-    match crate::hit::ensure_resolvable(dex, move_id) {
-        Ok(()) => Ok(()),
-        Err(hit_error) => {
-            let accepted_by_specialized_pipeline = stat_change::ensure_resolvable(dex, move_id)
-                .is_ok()
-                || drain::ensure_resolvable(dex, move_id).is_ok()
-                || fixed_damage::ensure_resolvable(dex, move_id).is_ok()
-                || multi_hit::ensure_resolvable(dex, move_id).is_ok()
-                || flag_move::ensure_resolvable(dex, move_id).is_ok()
-                || defense_curl::ensure_resolvable(dex, move_id).is_ok()
-                || paralyze::ensure_resolvable(dex, move_id).is_ok()
-                || confuse::ensure_resolvable(dex, move_id).is_ok();
-            if accepted_by_specialized_pipeline {
-                Ok(())
-            } else {
-                Err(hit_error)
-            }
-        }
-    }
+    execute::MovePipeline::for_move(dex, move_id).map(|_| ())
 }
 
 /// An owned single battle driven one turn at a time.
