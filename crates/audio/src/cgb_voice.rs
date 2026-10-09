@@ -610,7 +610,7 @@ impl CgbVoice {
                     break;
                 }
             }
-            let raw_sample = self.oscillator.normalized_sample();
+            let raw_sample = self.oscillator.normalized_sample(self.envelope.volume());
             let contribution = (self.frame_gain * raw_sample) >> SAMPLE_GAIN_BITS;
             self.routing.accumulate(contribution, output);
         }
