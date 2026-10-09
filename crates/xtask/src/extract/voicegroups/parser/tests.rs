@@ -928,3 +928,15 @@ fn a_split_selecting_the_last_voice_slot_is_accepted() {
         Ok(vec![127])
     );
 }
+
+#[test]
+fn the_adjacency_parse_widens_an_empty_declaration_whose_alias_reaches_emitted_bytes() {
+    // `a` declares no bytes, so its label aliases 4 bytes before b's data,
+    // exactly as b's does: note 4 reads the emitted byte 1 for both.
+    let text = "keysplit a, 4\nkeysplit b, 4\n\tsplit 1, 5\n";
+    let tables = parse_keysplit_tables_with_adjacency(text).unwrap();
+    assert_eq!(tables["b"].starting_note, 4);
+    assert_eq!(tables["b"].table, vec![1]);
+    assert_eq!(tables["a"].starting_note, 4);
+    assert_eq!(tables["a"].table, vec![1]);
+}

@@ -584,13 +584,14 @@ pub(crate) fn parse_keysplit_tables_with_adjacency(
         let block = &declared[label];
         let alias_base = block_start.cast_signed() - isize::from(block.starting_note);
         block_start += block.table.len();
-        if block.table.is_empty() {
-            widened.insert(label.clone(), block.clone());
-            continue;
-        }
         let first_note = usize::try_from(-alias_base).unwrap_or(0);
         let end_note =
             super::VOICE_SLOT_COUNT.min(emitted.len().saturating_add_signed(-alias_base));
+        if end_note <= first_note {
+            // An empty declaration whose alias reaches no emitted byte.
+            widened.insert(label.clone(), block.clone());
+            continue;
+        }
         let first_byte = first_note.saturating_add_signed(alias_base);
         let table = emitted[first_byte..first_byte + (end_note - first_note)].to_vec();
         widened.insert(

@@ -240,36 +240,35 @@ pub(crate) fn voicegroup(
         let base = root.addr.offset().saturating_add(index * SLOT_BYTES);
         slots.push(slot(reader, audio, id, index, base, bytes)?);
     }
+    slots.resize(total, VoiceEntry::Empty);
     if !song_selected {
-        let selected_end = selected_tail_end(reader, audio, root)?;
-        for index in count..selected_end {
+        for index in selected_tail_indices(reader, audio, root)? {
             let bytes = reader.table_entry(id, root.addr, index, total, SLOT_BYTES)?;
             let base = root.addr.offset().saturating_add(index * SLOT_BYTES);
-            slots.push(tail_slot(reader, audio, id, index, base, bytes)?);
+            slots[index] = tail_slot(reader, audio, id, index, base, bytes)?;
         }
     }
-    slots.resize(total, VoiceEntry::Empty);
 
     let group = VoiceGroup::new(slots).map_err(|source| ImportError::Audio { id, source })?;
     Ok(raw_entry(id.to_owned(), group.encode()))
 }
 
-/// The slot count, from `root.addr`, that key-split slots elsewhere select
-/// through this voicegroup past its declared slots.
+/// The slot indices past `root`'s declared slots that key-split slots
+/// elsewhere select through it, ascending.
 ///
 /// A key-split table can name a child index the child's `.inc` never
 /// declares, and the mixer then reads whatever `ToneData` the linker placed
-/// next (`pokeemerald/src/m4a_1.s:1589-1607`). Only indices some key-split
-/// table names are materialized, and only while every slot up to them lies
-/// inside a recorded voicegroup's declared bytes: an unrecorded neighbour is
-/// never guessed.
-fn selected_tail_end(
+/// next (`pokeemerald/src/m4a_1.s:1589-1607`). Only the selected indices are
+/// materialized, as the checkout extraction does, and only while every slot
+/// up to them lies inside a recorded voicegroup's declared bytes: an
+/// unrecorded neighbour is never guessed.
+fn selected_tail_indices(
     reader: &RomReader<'_>,
     audio: &AudioRoots,
     root: &VoicegroupRoot,
-) -> Result<usize, ImportError> {
+) -> Result<Vec<usize>, ImportError> {
     let declared_end = declared_slot_count(root);
-    let mut selected_end = declared_end;
+    let mut selected = std::collections::BTreeSet::new();
     for referrer in audio.voicegroups {
         for index in 0..declared_slot_count(referrer) {
             let bytes = reader.table_entry(
@@ -288,16 +287,24 @@ fn selected_tail_end(
             }
             let table = key_split_root(audio, referrer.id, index, reader.ptr(base + 8)?)?;
             let (_, entries) = key_split_entries(reader, audio, table)?;
-            if let Some(&highest) = entries.iter().max() {
-                selected_end = selected_end.max(usize::from(highest) + 1);
-            }
+            selected.extend(
+                entries
+                    .into_iter()
+                    .map(usize::from)
+                    .filter(|&entry| entry >= declared_end),
+            );
         }
     }
     let mut known_end = declared_end;
-    while known_end < selected_end && slot_is_declared(audio, root, known_end) {
+    let furthest = selected.last().map_or(declared_end, |&last| last + 1);
+    while known_end < furthest && slot_is_declared(audio, root, known_end) {
         known_end += 1;
     }
-    Ok(known_end.min(usize::from(root.addressable_slots)))
+    let addressable = usize::from(root.addressable_slots);
+    Ok(selected
+        .into_iter()
+        .filter(|&index| index < known_end.min(addressable))
+        .collect())
 }
 
 /// `starting_note + declared_slots`: the slots read from a root's alias address.

@@ -621,3 +621,62 @@ fn an_unreferenced_group_still_reads_only_its_declared_slots() {
     let next = adjacency_group(&ADJ_GROUPS[2]);
     assert!(next.slots()[2..].iter().all(|s| *s == VoiceEntry::Empty));
 }
+
+/// A key-split table selecting child indices 0 and 2 only: index 1 is never
+/// selected, so (as in extraction) it stays empty.
+const SPARSE_TABLE: u32 = 0x7000;
+const SPARSE_TOP: u32 = 0x7100;
+const SPARSE_KID: u32 = 0x7200;
+const SPARSE_NEXT: u32 = SPARSE_KID + 12;
+static SPARSE_KEYSPLITS: [KeysplitRoot; 1] = [KeysplitRoot {
+    label: "sparse",
+    addr: at(SPARSE_TABLE),
+    starting_note: 0,
+    len: 2,
+}];
+static SPARSE_GROUPS: [VoicegroupRoot; 3] = [
+    group("audio/voicegroup/stop", SPARSE_TOP, 0, 1),
+    group("audio/voicegroup/skid", SPARSE_KID, 0, 1),
+    group("audio/voicegroup/snext", SPARSE_NEXT, 0, 2),
+];
+
+#[test]
+fn a_sparse_selected_child_tail_leaves_unselected_indices_empty() {
+    let leaf = |sample: u32| slot(0x00, 60, 0, 0, at(sample).raw(), [255, 0, 255, 0]);
+    let bytes = RomFixture::new()
+        .emerald_header()
+        .write(
+            LOOPED as usize,
+            &wave_data(0, 0x4000, 3_425_024, 2, &LOOPED_PCM),
+        )
+        .write(
+            ONE_SHOT as usize,
+            &wave_data(0, 0, 13_700_096, 0, &ONE_SHOT_PCM),
+        )
+        .write(SPARSE_TABLE as usize, &[0, 2])
+        .write(
+            SPARSE_TOP as usize,
+            &keysplit_slot(at(SPARSE_KID), at(SPARSE_TABLE)),
+        )
+        .write(SPARSE_KID as usize, &leaf(LOOPED))
+        .write(SPARSE_NEXT as usize, &leaf(ONE_SHOT))
+        .write(SPARSE_NEXT as usize + 12, &leaf(LOOPED))
+        .finish();
+    let rom = Rom::from_bytes(bytes).unwrap();
+    let audio = AudioRoots {
+        song_table: GbaPtr::AT_BASE,
+        songs: &[],
+        voicegroups: &SPARSE_GROUPS,
+        keysplits: &SPARSE_KEYSPLITS,
+        direct_sound: &DIRECT_SOUND,
+        programmable_wave: &PROGRAMMABLE_WAVE,
+    };
+    let entry = voicegroup(&rom.reader(), &audio, &SPARSE_GROUPS[1]).unwrap();
+    let kid = VoiceGroup::decode(&entry.payload).unwrap();
+    assert!(matches!(kid.slot(2), Some(VoiceEntry::DirectSound(_))));
+    assert_eq!(
+        kid.slot(1),
+        Some(&VoiceEntry::Empty),
+        "unselected index 1 populated"
+    );
+}
