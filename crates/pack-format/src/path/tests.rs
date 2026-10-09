@@ -699,6 +699,8 @@ fn windows_accepts_drive_and_unc_roots_only() {
         r"\\?\UNC\server\share",
         r"\\?\C:\roaming",
         r"\\.\C:\roaming",
+        r"\\?\Volume{26a21bda-a627-11d7-9931-806e6f6e6963}\Users\May\AppData\Roaming",
+        r"\\?\Volume{26a21bda-a627-11d7-9931-806e6f6e6963}\",
     ] {
         assert_eq!(
             data_dir(&env_of(&[("APPDATA", root)]), DataDirRule::Windows),
@@ -784,6 +786,9 @@ fn incomplete_unc_roots_are_rejected_in_favour_of_the_userprofile() {
         r"\\?\UNC\server\",
         r"\\?\C:",
         r"\\?\roaming\share",
+        r"\\?\Volume{26a21bda-a627-11d7-9931-806e6f6e6963}",
+        r"\\?\Volume{}\",
+        r"\\?\Volume\roaming",
     ] {
         let pairs = [("APPDATA", root), ("USERPROFILE", "C:/Users/dev")];
         assert_eq!(
@@ -795,4 +800,20 @@ fn incomplete_unc_roots_are_rejected_in_favour_of_the_userprofile() {
             )
         );
     }
+}
+
+#[test]
+fn a_volume_guid_appdata_is_an_absolute_windows_root() {
+    let root = r"\\?\Volume{26a21bda-a627-11d7-9931-806e6f6e6963}\Users\May\AppData\Roaming";
+    assert_eq!(
+        data_dir(&env_of(&[("APPDATA", root)]), DataDirRule::Windows),
+        Some(PathBuf::from(root))
+    );
+    assert_eq!(
+        data_dir(
+            &env_of(&[("APPDATA", root), ("USERPROFILE", r"C:\Users\May")]),
+            DataDirRule::Windows
+        ),
+        Some(PathBuf::from(root))
+    );
 }
