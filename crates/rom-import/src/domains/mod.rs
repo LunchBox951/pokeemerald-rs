@@ -64,17 +64,19 @@ pub(crate) const DOMAINS: &[Domain] = &[
 ///
 /// # Errors
 ///
+/// [`ImportError::Length`] if the root's tile count implies more tile data
+/// than a 32-bit length can hold;
 /// [`ImportError::Truncated`] if the tile data is not inside the ROM;
 /// [`ImportError::Lz77`] if a compressed root will not decode to exactly
 /// the length its shape implies; [`ImportError::EntryShape`] if the tiles
 /// do not fit the raster the root declares.
 pub(crate) fn image(reader: &RomReader<'_>, root: &ImageRoot) -> Result<PackEntry, ImportError> {
-    let tiles = read_bytes(
-        reader,
-        root.addr,
-        root.encoding,
-        len_usize(root.tile_data_len()),
-    )?;
+    let tile_data_len = root.tile_data_len().ok_or(ImportError::Length {
+        what: "image tile count",
+        value: len_usize(root.tile_count),
+        max: len_usize(u32::MAX / root.bytes_per_tile()),
+    })?;
+    let tiles = read_bytes(reader, root.addr, root.encoding, len_usize(tile_data_len))?;
     let mut entry = pack_format::image_entry_from_tiles(
         root.id.to_owned(),
         &tiles,
