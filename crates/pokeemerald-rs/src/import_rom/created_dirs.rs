@@ -148,11 +148,52 @@ fn shed_outermost_pinned_level(created: &mut [CreatedDirectory], pin_from: &mut 
 /// made before it. On Unix only the first existing ancestor is resolved by
 /// path; every level below it is reached through its parent's descriptor
 /// (`dest` owns the per-platform open flags).
-#[cfg(unix)]
+#[cfg(test)]
 pub(super) fn create_directories(
     dir: &Path,
 ) -> Result<Vec<CreatedDirectory>, (Vec<CreatedDirectory>, io::Error)> {
-    create_directories_with_hooks(dir, pin_budget(), &mut || {}, &mut || None, &mut || None)
+    create_directories_pinned(dir).map(|creation| creation.created)
+}
+
+/// What [`create_directories_pinned`] made, and the directory it ended in.
+#[derive(Debug)]
+pub(super) struct DirectoryCreation {
+    /// The levels this run made, as [`create_directories`] reports them.
+    pub(super) created: Vec<CreatedDirectory>,
+    /// The descriptor the creation walk finished on: the destination
+    /// directory itself, as that walk reached it. Held apart from `created`
+    /// so shedding a level's cleanup pin never loses it. `None` when there
+    /// was nothing to walk (the destination already stood), which is the
+    /// only case a caller may resolve the path itself.
+    pub(super) final_directory: Option<Pin>,
+}
+
+/// The descriptor kept for the destination; off Unix there is none to keep.
+#[cfg(unix)]
+pub(super) type Pin = std::rc::Rc<std::os::fd::OwnedFd>;
+/// The descriptor kept for the destination; off Unix there is none to keep.
+#[cfg(not(unix))]
+pub(super) type Pin = std::convert::Infallible;
+
+/// [`create_directories`], keeping the final directory's descriptor so the
+/// destination can be acquired through it instead of by path again.
+#[cfg(unix)]
+pub(super) fn create_directories_pinned(
+    dir: &Path,
+) -> Result<DirectoryCreation, (Vec<CreatedDirectory>, io::Error)> {
+    create_directories_pinned_with_hooks(dir, pin_budget(), &mut || {}, &mut || None, &mut || None)
+}
+
+#[cfg(all(unix, test))]
+fn create_directories_with_hooks(
+    dir: &Path,
+    pin_limit: usize,
+    before_dotdot: &mut dyn FnMut(),
+    before_reopen: &mut dyn FnMut() -> Option<io::Error>,
+    before_open: &mut dyn FnMut() -> Option<io::Error>,
+) -> Result<Vec<CreatedDirectory>, (Vec<CreatedDirectory>, io::Error)> {
+    create_directories_pinned_with_hooks(dir, pin_limit, before_dotdot, before_reopen, before_open)
+        .map(|creation| creation.created)
 }
 
 /// What reopening a level [`create_directories_with_hooks`] just made turned
@@ -318,16 +359,19 @@ fn open_existing_level(
 /// failure, and `pin_budget` caps the pinned levels; production passes
 /// no-ops and [`pin_budget`].
 #[cfg(unix)]
-fn create_directories_with_hooks(
+fn create_directories_pinned_with_hooks(
     dir: &Path,
     pin_limit: usize,
     before_dotdot: &mut dyn FnMut(),
     before_reopen: &mut dyn FnMut() -> Option<io::Error>,
     before_open: &mut dyn FnMut() -> Option<io::Error>,
-) -> Result<Vec<CreatedDirectory>, (Vec<CreatedDirectory>, io::Error)> {
+) -> Result<DirectoryCreation, (Vec<CreatedDirectory>, io::Error)> {
     let levels = directories_to_create(dir);
     let Some(first) = levels.first() else {
-        return Ok(Vec::new());
+        return Ok(DirectoryCreation {
+            created: Vec::new(),
+            final_directory: None,
+        });
     };
     // A bare relative name has no parent, and `""` is not a directory any OS
     // accepts, so it is the current directory — the same rule
@@ -419,15 +463,18 @@ fn create_directories_with_hooks(
             }
         }
     }
-    Ok(created)
+    Ok(DirectoryCreation {
+        created,
+        final_directory: Some(parent_fd),
+    })
 }
 
 /// [`create_directories`]'s off-Unix arm: no descriptor to pin, so each
 /// level is [`std::fs::create_dir`] addressed by path.
 #[cfg(not(unix))]
-pub(super) fn create_directories(
+pub(super) fn create_directories_pinned(
     dir: &Path,
-) -> Result<Vec<CreatedDirectory>, (Vec<CreatedDirectory>, io::Error)> {
+) -> Result<DirectoryCreation, (Vec<CreatedDirectory>, io::Error)> {
     let mut created = Vec::new();
     for level in directories_to_create(dir) {
         match fs::create_dir(&level) {
@@ -439,7 +486,10 @@ pub(super) fn create_directories(
             Err(source) => return Err((created, source)),
         }
     }
-    Ok(created)
+    Ok(DirectoryCreation {
+        created,
+        final_directory: None,
+    })
 }
 
 /// Syncs the parent of each created level, outermost first, so a crash

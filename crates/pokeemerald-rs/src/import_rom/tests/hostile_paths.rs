@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 #[cfg(unix)]
 use super::super::dest::Dest;
-use super::super::{import_to_with, pack_name, ImportRomError};
+use super::super::{import_to_with, import_to_with_hooks, pack_name, ImportRomError};
 use super::support::{fake_pack, file_names, write_fixture_rom, SourceRom, TempDir};
 
 #[cfg(unix)]
@@ -42,6 +42,55 @@ fn a_redirected_directory_component_cannot_move_the_published_pack() {
     assert!(
         file_names(&elsewhere).is_empty(),
         "the redirected component must have received nothing"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_just_created_destination_swapped_before_acquisition_still_receives_the_pack() {
+    use std::os::unix::fs::MetadataExt as _;
+
+    // The window between creating the destination and acquiring it: the
+    // new directory is renamed away and a different one takes its name.
+    // Acquisition goes through the creation walk's descriptor, so the pack
+    // lands in the directory this run made.
+    let root = TempDir::new("swap-before-acquire");
+    let new = root.join("new");
+    let original = root.join("original");
+    let pack_path = new.join("pokeemerald.pack");
+    let source = SourceRom::new("swap-before-acquire-src");
+    let mut original_ino = None;
+
+    let outcome = import_to_with_hooks(
+        source.path(),
+        &pack_path,
+        |_rom, _path| Ok(fake_pack(b"pack bytes")),
+        |_dir| {
+            assert!(file_names(&new).is_empty(), "the new directory is empty");
+            original_ino = Some(fs::metadata(&new).expect("new exists").ino());
+            fs::rename(&new, &original).expect("the directory is moved");
+            fs::create_dir(&new).expect("a different directory takes the name");
+        },
+    )
+    .expect("the import succeeds");
+
+    assert_eq!(outcome.pack_path(), pack_path);
+    assert_eq!(
+        fs::metadata(&original).expect("original").ino(),
+        original_ino.unwrap()
+    );
+    assert_ne!(
+        fs::metadata(&new).expect("replacement").ino(),
+        original_ino.unwrap()
+    );
+    assert_eq!(
+        fs::read(original.join("pokeemerald.pack")).expect("the pack is in the original"),
+        b"pack bytes"
+    );
+    assert_eq!(file_names(&original), ["pokeemerald.pack"]);
+    assert!(
+        file_names(&new).is_empty(),
+        "the replacement received nothing"
     );
 }
 

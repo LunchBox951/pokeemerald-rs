@@ -285,7 +285,8 @@ pub(super) fn open_created_directory_at(
 }
 
 /// Reopen the directory `dir` (possibly an `O_PATH` handle) names, for real
-/// I/O -- in particular `fsync`, for `sync_created_directories`'s Unix arm.
+/// I/O -- in particular `fsync`, for `sync_created_directories`'s Unix arm,
+/// and for [`Dest::open_pinned`]'s destination acquisition.
 /// Needs read permission `open_traversal_directory` did not, so a parent
 /// this run cannot read is a sync silently skipped, best-effort like
 /// [`Dest::publish`]'s own.
@@ -327,6 +328,21 @@ pub(super) struct Dest {
 
 #[cfg(unix)]
 impl Dest {
+    /// Acquire the directory `pin` is, with no path involved: reopen `"."`
+    /// relative to the pinned descriptor for real I/O (a pin may be an
+    /// `O_PATH` or search-only handle, which `fsync` cannot use).
+    ///
+    /// # Errors
+    ///
+    /// Whatever `openat(2)` reports; `EMFILE` is the caller's cue to shed
+    /// another cleanup pin and retry.
+    pub(super) fn open_pinned(pin: &std::os::fd::OwnedFd) -> io::Result<Self> {
+        Ok(Self {
+            dir: reopen_for_sync(pin)?,
+            temp_sequence: AtomicU64::new(0),
+        })
+    }
+
     /// Open `dir` and keep it open.
     ///
     /// `O_DIRECTORY` is what makes the handle worth holding: a `dir` that

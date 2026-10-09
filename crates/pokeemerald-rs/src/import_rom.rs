@@ -87,7 +87,9 @@
 //! check, the temporary file's exclusive creation, the write, and the
 //! publishing rename each name their file by basename against it
 //! (`openat`/`renameat`, through `rustix`; `std` exposes them on no
-//! platform). Redirecting a component
+//! platform). When this run created the destination, the open is made
+//! from the descriptor the creation walk finished on rather than from the
+//! path, so the directory it made cannot be swapped out in between. Redirecting a component
 //! after the open moves nothing, because nothing after the open looks at a
 //! component again. What is left trusted is the final name inside that one
 //! directory, and exclusive creation covers the write: a link planted
@@ -121,7 +123,8 @@ use std::path::{Path, PathBuf};
 use rom_import::{ImportError, ImportedPack, OneLinePath};
 
 use created_dirs::{
-    create_directories, open_shedding_pins, sync_created_directories, undo_created_directories,
+    create_directories_pinned, open_shedding_pins, sync_created_directories,
+    undo_created_directories,
 };
 use dest::Dest;
 
@@ -450,6 +453,43 @@ fn import_to(rom_path: &Path, pack_path: &Path) -> Result<ImportOutcome, ImportR
     import_to_with(rom_path, pack_path, rom_import::import_pack_from_file)
 }
 
+/// Opens the source ROM once; see [`import_to_with_hooks`].
+fn open_rom(rom_path: &Path) -> Result<fs::File, ImportRomError> {
+    fs::File::open(rom_path).map_err(|source| ImportRomError::Import {
+        source: ImportError::ReadFailed {
+            path: rom_path.to_path_buf(),
+            source,
+        },
+        temp_path: None,
+        temp_removed: true,
+    })
+}
+
+/// Acquires the destination directory. On Unix, when this run walked to it,
+/// that is from the walk's verified descriptor (held outside `created`, so
+/// shedding a level's cleanup pin cannot lose it), never by re-resolving
+/// `dir`: a path can name a different directory by now. If that open cannot
+/// be made the import fails closed rather than falling back to the path.
+/// Only a destination that already stood (nothing walked) is opened by path.
+fn acquire_dest(
+    created: &mut [created_dirs::CreatedDirectory],
+    dir: &Path,
+    final_directory: Option<&created_dirs::Pin>,
+) -> io::Result<Dest> {
+    #[cfg(unix)]
+    {
+        match final_directory.map(|pin| &**pin) {
+            Some(pin) => open_shedding_pins(created, || Dest::open_pinned(pin)),
+            None => open_shedding_pins(created, || Dest::open(dir)),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = final_directory;
+        open_shedding_pins(created, || Dest::open(dir))
+    }
+}
+
 /// [`import_to`] with the importer injected, so the write path is testable
 /// on both outcomes without a real ROM (`pack_format::path`'s pure-core
 /// precedent).
@@ -463,19 +503,24 @@ fn import_to_with(
     pack_path: &Path,
     import: impl FnOnce(&fs::File, &Path) -> Result<ImportedPack, ImportError>,
 ) -> Result<ImportOutcome, ImportRomError> {
+    import_to_with_hooks(rom_path, pack_path, import, |_| {})
+}
+
+/// [`import_to_with`] with `before_dest` run once the destination's levels
+/// exist and before the destination is acquired: the window a test swaps
+/// the just-created directory in. Production passes a no-op.
+fn import_to_with_hooks(
+    rom_path: &Path,
+    pack_path: &Path,
+    import: impl FnOnce(&fs::File, &Path) -> Result<ImportedPack, ImportError>,
+    before_dest: impl FnOnce(&Path),
+) -> Result<ImportOutcome, ImportRomError> {
     // The ROM is opened once, before anything else looks at it, and every
     // question the import asks about it is asked of this handle: whether it
     // is the file the pack would be published over, and what its bytes are.
     // See the module docs — a path answers about whichever file it named
     // when it was asked, and the source path is not this run's to trust.
-    let rom = fs::File::open(rom_path).map_err(|source| ImportRomError::Import {
-        source: ImportError::ReadFailed {
-            path: rom_path.to_path_buf(),
-            source,
-        },
-        temp_path: None,
-        temp_removed: true,
-    })?;
+    let rom = open_rom(rom_path)?;
 
     let dir = pack_directory(pack_path);
     // Refused before anything is created: with no final component, or with
@@ -491,8 +536,8 @@ fn import_to_with(
     // runs rather than after it succeeds. The levels this run made answer
     // both of the questions that follow: which entries a successful run has
     // to leave durable, and which directories a failed one takes back.
-    let mut created = match create_directories(&dir) {
-        Ok(created) => created,
+    let creation = match create_directories_pinned(&dir) {
+        Ok(creation) => creation,
         Err((created, source)) => {
             // The creation can fail after making outer levels; take those
             // back too, not just the levels of a fully created destination.
@@ -503,6 +548,8 @@ fn import_to_with(
             });
         }
     };
+    before_dest(&dir);
+    let mut created = creation.created;
     sync_created_directories(&mut created);
 
     // Everything from here on names files inside this one handle. A
@@ -510,7 +557,8 @@ fn import_to_with(
     // nothing looks at again.
     // It and the temporary file below are the two opens this import cannot
     // do without, so a pinned level gives its descriptor up to them first.
-    let dest = match open_shedding_pins(&mut created, || Dest::open(&dir)) {
+    let dest_result = acquire_dest(&mut created, &dir, creation.final_directory.as_ref());
+    let dest = match dest_result {
         Ok(dest) => dest,
         Err(source) => {
             undo_created_directories(&created);
