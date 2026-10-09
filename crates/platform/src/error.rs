@@ -53,6 +53,15 @@ pub enum PlatformError {
         /// bridge to.
         device_rate: u32,
     },
+    /// The requested audio ring capacity, in frames, times the channel count
+    /// does not fit in `usize` samples. Refused up front rather than
+    /// wrapping into a smaller ring.
+    AudioRingCapacityOverflow {
+        /// The requested ring capacity in frames.
+        frames: usize,
+        /// The interleaved channel count.
+        channels: u16,
+    },
 }
 
 impl fmt::Display for PlatformError {
@@ -80,6 +89,11 @@ impl fmt::Display for PlatformError {
                 "the {source_rate:.3} Hz -> {device_rate} Hz resample ratio is too extreme for \
                  the resampler's bounded scratch to carry"
             ),
+            Self::AudioRingCapacityOverflow { frames, channels } => write!(
+                f,
+                "an audio ring of {frames} frames x {channels} channels overflows the \
+                 sample capacity"
+            ),
         }
     }
 }
@@ -93,7 +107,8 @@ impl std::error::Error for PlatformError {
             Self::NoAudioDevice
             | Self::UnsupportedAudioConfig
             | Self::ScriptedInputRequiresHeadless
-            | Self::UnsupportedResampleRatio { .. } => None,
+            | Self::UnsupportedResampleRatio { .. }
+            | Self::AudioRingCapacityOverflow { .. } => None,
             Self::Audio(err) => Some(err),
         }
     }
