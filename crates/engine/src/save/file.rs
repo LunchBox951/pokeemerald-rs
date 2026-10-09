@@ -225,12 +225,13 @@ impl std::error::Error for SaveFileError {
 /// Host convention used to resolve a per-user data directory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HostFamily {
-    /// `%APPDATA%`, else `%USERPROFILE%\AppData\Roaming`.
+    /// `%APPDATA%` if absolute, else `%USERPROFILE%\AppData\Roaming` if
+    /// `%USERPROFILE%` is absolute.
     Windows,
-    /// `$HOME/Library/Application Support`.
+    /// `$HOME/Library/Application Support` if `$HOME` is absolute.
     MacOs,
     /// The XDG Base Directory Specification: `$XDG_DATA_HOME` when
-    /// absolute, else `$HOME/.local/share`.
+    /// absolute, else `$HOME/.local/share` if `$HOME` is absolute.
     Xdg,
 }
 

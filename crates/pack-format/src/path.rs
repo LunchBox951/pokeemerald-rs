@@ -33,11 +33,12 @@ const PACK_FILE_NAME: &str = "pokeemerald.pack";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DataDirRule {
     /// Linux and other Unix: `$XDG_DATA_HOME` if absolute, else
-    /// `$HOME/.local/share`.
+    /// `$HOME/.local/share` if `$HOME` is absolute.
     Xdg,
-    /// macOS: `$HOME/Library/Application Support`.
+    /// macOS: `$HOME/Library/Application Support` if `$HOME` is absolute.
     MacOs,
-    /// Windows: `%APPDATA%`, else `%USERPROFILE%\AppData\Roaming`.
+    /// Windows: `%APPDATA%` if absolute, else
+    /// `%USERPROFILE%\AppData\Roaming` if `%USERPROFILE%` is absolute.
     Windows,
 }
 
@@ -50,13 +51,16 @@ const HOST_RULE: DataDirRule = if cfg!(windows) {
     DataDirRule::Xdg
 };
 
-/// The OS user-data directory, or `None` when the variables it is built
-/// from are unset (a daemon with a scrubbed environment, say).
+/// The OS user-data directory, or `None` when every root it could be built
+/// from is unset, empty, or not an absolute path (a daemon with a scrubbed
+/// environment, say, or a relative `$HOME` that would make the pack's
+/// location depend on the launch directory).
 ///
 /// - Linux and other Unix: `$XDG_DATA_HOME` if absolute, else
-///   `$HOME/.local/share`.
-/// - macOS: `$HOME/Library/Application Support`.
-/// - Windows: `%APPDATA%`, else `%USERPROFILE%\AppData\Roaming`.
+///   `$HOME/.local/share` if `$HOME` is absolute.
+/// - macOS: `$HOME/Library/Application Support` if `$HOME` is absolute.
+/// - Windows: `%APPDATA%` if absolute, else
+///   `%USERPROFILE%\AppData\Roaming` if `%USERPROFILE%` is absolute.
 ///
 /// Deliberately the same three rules `engine::save::file::data_dir_for`
 /// resolves the save file with, down to the fallbacks: a player's pack and
