@@ -196,8 +196,8 @@ pub(crate) struct OverworldPhase {
     /// an open start menu freezes movement (upstream's
     /// `UpdateTilesetAnimations` runs every `VBlank` regardless of
     /// message-box state), and reset to `0` on a full map load
-    /// ([`Self::load_default`]/[`Self::warp_to`]) or any wild, rival or
-    /// sight-trainer battle return ([`Self::reinit_field_tileset_animations`]),
+    /// ([`Self::load_default`]/[`Self::warp_to`]) or any battle
+    /// return ([`Self::reinit_field_tileset_animations`]),
     /// but *not* on a connection crossing: upstream's seamless
     /// camera transition re-inits only the secondary tileset counter,
     /// which this port does not model.
@@ -884,7 +884,7 @@ impl OverworldPhase {
     /// Every upstream `CB2_ReturnToField` reload runs `InitMapView` ->
     /// `InitTilesetAnimations` (`src/overworld.c:523-530`,
     /// `src/tileset_anims.c:600-616`), zeroing both animation counters
-    /// (issue #865, #1955). The wild, rival and sight-trainer drivers call this
+    /// (issue #865, #1955, #1976). The battle drivers call this
     /// when the battle slot empties; a loss's `white_out` warp has already zeroed `tick`.
     pub(super) fn reinit_field_tileset_animations(&mut self) {
         self.tick = 0;
