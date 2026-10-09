@@ -15,6 +15,7 @@ fn bend_changes_a_held_notes_frequency() {
     let voices = vec![Instrument::DirectSound(ToneData::new(wave, Adsr::flat()))];
     let track = vec![
         Event::Voice(0),
+        Event::Volume(127),
         Event::BendRange(2),
         tied_note(60),
         Event::Wait(4),
@@ -54,7 +55,8 @@ fn track_pitch_key_m_wraps_through_a_signed_byte() {
 
 #[test]
 fn track_volume_in_range_channels_pass_through() {
-    let track = TrackState::new();
+    let mut track = TrackState::new();
+    track.vol = 127;
     assert_eq!(track_volume(&track), (127, 126));
 }
 
@@ -71,6 +73,7 @@ fn track_volume_tremolo_peak_wraps_through_a_byte() {
 #[test]
 fn modulation_target_selects_pitch_amplitude_or_pan() {
     let mut track = TrackState::new();
+    track.vol = 127;
     track.modulation = 32;
 
     track.modulation_target = ModulationTarget::PITCH;
@@ -94,6 +97,7 @@ fn lfo_pitch_modulation_changes_a_held_notes_frequency_over_time() {
     let voices = vec![Instrument::DirectSound(ToneData::new(wave, Adsr::flat()))];
     let track = vec![
         Event::Voice(0),
+        Event::Volume(127),
         Event::Modulation(40),
         Event::LfoSpeed(30),
         tied_note(60),
@@ -125,7 +129,7 @@ fn lfo_measurably_changes_the_rendered_output_vs_no_lfo() {
         ))
     };
     let make_track = |with_lfo: bool| {
-        let mut track = vec![Event::Voice(0)];
+        let mut track = vec![Event::Voice(0), Event::Volume(127)];
         if with_lfo {
             track.push(Event::Modulation(60));
             track.push(Event::LfoSpeed(40));
@@ -161,6 +165,7 @@ fn lfo_delay_holds_off_modulation_until_it_elapses() {
     let voices = vec![Instrument::DirectSound(ToneData::new(wave, Adsr::flat()))];
     let track = vec![
         Event::Voice(0),
+        Event::Volume(127),
         Event::Modulation(60),
         Event::LfoSpeed(80),
         Event::LfoDelay(10),

@@ -24,10 +24,10 @@ const XCMD_IECL: u8 = 0x09;
 /// (`subs r0, 150`, `m4a_1.s:1169`).
 const TEMPO_UNIT: u16 = 150;
 
-/// Default track volume before any `VOL` command. Upstream leaves
-/// `track->vol` at `0`; this crate defaults to full so a minimal
-/// hand-authored sequence is audible.
-const DEFAULT_TRACK_VOLUME: u8 = 127;
+/// Track volume before any `VOL` command: `MPlayStart` clears the track and
+/// restores no `vol` field (`m4a_1.s:1214`-`:1230`), so the resolved channel
+/// volume is zero until the sequence sets one (`m4a.c:772`).
+const DEFAULT_TRACK_VOLUME: u8 = 0;
 
 /// Default pitch-bend range (`track->bendRange = 2`, `m4a_1.s:1223`).
 const DEFAULT_BEND_RANGE: u8 = 2;

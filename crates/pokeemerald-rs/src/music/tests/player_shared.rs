@@ -9,6 +9,7 @@ pub(super) fn short_song_without_its_own_reverb() -> Song {
     let voices = vec![Instrument::DirectSound(ToneData::new(wave, Adsr::flat()))];
     let events = vec![
         Event::Voice(0),
+        Event::Volume(127),
         Event::Note {
             key: 60,
             velocity: 127,
