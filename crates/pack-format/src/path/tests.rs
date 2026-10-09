@@ -696,6 +696,9 @@ fn windows_accepts_drive_and_unc_roots_only() {
         r"C:\roaming",
         r"\\server\share",
         "//server/share",
+        r"\\?\UNC\server\share",
+        r"\\?\C:\roaming",
+        r"\\.\C:\roaming",
     ] {
         assert_eq!(
             data_dir(&env_of(&[("APPDATA", root)]), DataDirRule::Windows),
@@ -775,6 +778,12 @@ fn incomplete_unc_roots_are_rejected_in_favour_of_the_userprofile() {
         r"\\server",
         r"\\server\",
         "///share",
+        r"\\?\",
+        r"\\?\UNC",
+        r"\\?\UNC\server",
+        r"\\?\UNC\server\",
+        r"\\?\C:",
+        r"\\?\roaming\share",
     ] {
         let pairs = [("APPDATA", root), ("USERPROFILE", "C:/Users/dev")];
         assert_eq!(
