@@ -701,6 +701,8 @@ fn windows_accepts_drive_and_unc_roots_only() {
         r"\\.\C:\roaming",
         r"\\?\Volume{26a21bda-a627-11d7-9931-806e6f6e6963}\Users\May\AppData\Roaming",
         r"\\?\Volume{26a21bda-a627-11d7-9931-806e6f6e6963}\",
+        r"\\?\GLOBALROOT\Device\HarddiskVolume1\Users\May",
+        r"\\.\BootPartition\Users\May",
     ] {
         assert_eq!(
             data_dir(&env_of(&[("APPDATA", root)]), DataDirRule::Windows),
@@ -785,10 +787,9 @@ fn incomplete_unc_roots_are_rejected_in_favour_of_the_userprofile() {
         r"\\?\UNC\server",
         r"\\?\UNC\server\",
         r"\\?\C:",
-        r"\\?\roaming\share",
         r"\\?\Volume{26a21bda-a627-11d7-9931-806e6f6e6963}",
-        r"\\?\Volume{}\",
-        r"\\?\Volume\roaming",
+        r"\\.\BootPartition",
+        r"\\?\\Users",
     ] {
         let pairs = [("APPDATA", root), ("USERPROFILE", "C:/Users/dev")];
         assert_eq!(

@@ -270,8 +270,8 @@ fn is_absolute_xdg_path(path: &OsStr) -> bool {
 
 /// Whether `path` is absolute under Windows path rules (a drive letter
 /// followed by a separator, a UNC root naming a server and share, either
-/// bare or behind a verbatim `\\?\` or device `\\.\` prefix, or a verbatim
-/// `Volume{GUID}` root), independently of the platform
+/// bare or behind a verbatim `\\?\` or device `\\.\` prefix, or any other
+/// named NT namespace root behind such a prefix), independently of the platform
 /// running this binary. Drive-relative (`C:foo`) and root-relative (`\foo`)
 /// forms depend on the current directory or drive, so they are rejected like
 /// any other relative path.
@@ -282,29 +282,22 @@ fn is_absolute_windows_path(path: &OsStr) -> bool {
         bytes,
         [letter, b':', separator, ..] if letter.is_ascii_alphabetic() && is_separator(*separator)
     );
-    let is_drive =
-        |component: &[u8]| matches!(component, [letter, b':'] if letter.is_ascii_alphabetic());
-    // `\\?\Volume{GUID}\` names a mounted volume without a drive letter.
-    let is_volume_guid = |component: &[u8]| {
-        component
-            .strip_prefix(b"Volume{")
-            .is_some_and(|rest| rest.len() > 1 && rest.ends_with(b"}"))
-    };
     let unc = match bytes {
         [first, second, rest @ ..] if is_separator(*first) && is_separator(*second) => {
             let mut components = rest.split(|byte| is_separator(*byte));
             match components.next() {
                 // A verbatim (`\\?\`) or device (`\\.\`) prefix is not a
-                // server: it is absolute only when it names a drive root or a
-                // complete `UNC\server\share`.
+                // server. What follows is an NT namespace root (`C:`,
+                // `Volume{GUID}`, `GLOBALROOT`, `BootPartition`, ...), which
+                // never depends on the current directory, so any named root
+                // followed by a separator is absolute. `UNC` is the one root
+                // that is itself incomplete without a server and share.
                 Some(b"?" | b".") => match components.next() {
                     Some(b"UNC") => matches!(
                         (components.next(), components.next()),
                         (Some(server), Some(share)) if !server.is_empty() && !share.is_empty()
                     ),
-                    Some(root) => {
-                        (is_drive(root) || is_volume_guid(root)) && components.next().is_some()
-                    }
+                    Some(root) => !root.is_empty() && components.next().is_some(),
                     None => false,
                 },
                 Some(server) => matches!(
