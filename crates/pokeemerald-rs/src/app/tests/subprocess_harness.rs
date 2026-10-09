@@ -35,7 +35,7 @@ fn start_title_music_failure_emits_its_subsystem_prefix_once_at_the_eprintln_bou
         let mut context = crate::music::MusicContext::new();
         // Never actually called: the song lookup fails first.
         let played = App::start_title_music(
-            crate::pack_source::PackSource::Runtime,
+            &crate::pack_source::PackSource::Runtime,
             &mut context,
             || {
                 Ok(platform::AudioOutput::null(

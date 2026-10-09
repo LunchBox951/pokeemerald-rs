@@ -22,6 +22,7 @@ use crate::oam_budget::OamAdmission;
 use crate::palette::{Palette, Rgb888};
 use crate::sprite_affine;
 use crate::tile::{BitDepth, Tileset};
+use crate::window::{WindowLayerEnable, WindowPass, WindowRegion};
 use std::cell::RefCell;
 
 /// One opaque sprite-layer result for cross-layer composition.
@@ -36,6 +37,10 @@ use std::cell::RefCell;
 /// against a second target) versus the one that actually supplied `color`
 /// (and thus whether that stored color is eligible for mGBA's draw-time
 /// brighten/darken variant, `software-obj.c:177-203`) `(behavioral-fidelity)`.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is an independent mGBA sprite-buffer bit: priority-owner and color-owner each carry their own semi-transparent and window-effects state, plus the OBJWIN-masked draw"
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SpritePixel {
     /// The topmost opaque sprite color.
@@ -51,19 +56,20 @@ pub struct SpritePixel {
     /// better-priority transparent texel can promote priority without
     /// replacing the stored color (see this struct's docs).
     pub color_semi_transparent: bool,
-    /// The column where the hardware-window span that wrote
-    /// [`priority`](Self::priority) begins. mGBA bakes an OBJ's
-    /// `FLAG_TARGET_1` and `FLAG_REBLEND` from the span whose pass writes the
-    /// pixel (`software-obj.c:159,176-192`), which is the queried column's
-    /// own span except for an affine mosaic trailing spill written by an
-    /// earlier one (`software-obj.c:227-242`); `0` without window spans.
-    pub span_start: usize,
-    /// The column where the span that wrote [`color`](Self::color) begins,
-    /// whose effects enable chose mGBA's brighten/darken variant palette at
+    /// Whether the control of the hardware-window pass that wrote
+    /// [`priority`](Self::priority) enables effects. mGBA bakes an OBJ's
+    /// `FLAG_TARGET_1` and `FLAG_REBLEND` from the pass whose write lands
+    /// (`software-obj.c:159,176-192`), which is the queried column's own pass
+    /// except for an affine mosaic trailing spill written by an earlier one,
+    /// possibly a zero-length one (`software-obj.c:227-242`); `true` without
+    /// window spans.
+    pub span_effects: bool,
+    /// Whether the control of the pass that wrote [`color`](Self::color)
+    /// enables effects, which chose mGBA's brighten/darken variant palette at
     /// draw time (`software-obj.c:176-208`). Separate from
-    /// [`span_start`](Self::span_start) for the same flag-only-overwrite
+    /// [`span_effects`](Self::span_effects) for the same flag-only-overwrite
     /// reason as [`color_semi_transparent`](Self::color_semi_transparent).
-    pub color_span_start: usize,
+    pub color_span_effects: bool,
     /// Whether an earlier-drawn `OBJWIN` entry had already set this pixel's
     /// row mask when [`color`](Self::color) was written, so mGBA drew it from
     /// `objwinPalette` (`software-obj.c:88-105`).
@@ -76,80 +82,76 @@ struct CachedScanlineAdmission {
     admission: OamAdmission,
 }
 
-/// One scanline's hardware-window spans, as sprite sampling reruns them.
+/// One scanline's hardware-window passes, as sprite sampling reruns them.
 ///
-/// mGBA reruns sprite preprocessing once per span (`software-obj.c:227-242`,
+/// mGBA reruns sprite preprocessing once per pass (`software-obj.c:227-242`,
 /// `video-software.c:1052-1062`); see
 /// [`SpriteLayer::sample_affine_local`](SpriteLayer::sample_affine_local) for
-/// why that matters past a span's own columns.
+/// why that matters past a pass's own columns.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct WindowSpans<'a> {
-    /// The ascending, `0`-led screen columns where each span begins
-    /// ([`crate::window::WindowConfig::scanline_span_starts`]).
-    starts: &'a [usize],
-    /// Positionally paired with `starts`: whether that span runs the OBJ pass
-    /// at all.
-    draws_obj: &'a [bool],
-    /// Positionally paired with `starts`: whether that span's own rank
-    /// outranks `OBJWIN`, dropping an `OBJWIN` entry's whole pass
-    /// (`software-obj.c:161`) `(behavioral-fidelity)`.
-    suppresses_objwin: &'a [bool],
+    /// The scanline's passes in draw order, the first starting at column zero
+    /// ([`crate::window::WindowConfig::scanline_passes`]). Zero-length passes
+    /// share a start with the pass that follows them.
+    passes: &'a [WindowPass],
+    /// Whether `DISPCNT` enables `OBJWIN`, which keeps a pass whose own
+    /// control disables OBJ running the sprite pass (`video-software.c:1056`).
+    objwin_enabled: bool,
 }
 
 impl<'a> WindowSpans<'a> {
-    /// The single OBJ-drawing, non-suppressing span a caller without window
+    /// The single OBJ-drawing, non-suppressing pass a caller without window
     /// state sees.
     pub(crate) const WHOLE_SCANLINE: Self = Self {
-        starts: &[0],
-        draws_obj: &[true],
-        suppresses_objwin: &[false],
+        passes: &[WindowPass {
+            start: 0,
+            control: WindowLayerEnable::ALL,
+            region: WindowRegion::WinOut,
+        }],
+        objwin_enabled: false,
     };
 
-    /// Pairs span starts with each span's OBJ participation and
-    /// OBJWIN-suppression rank, positionally.
-    pub(crate) fn new(
-        starts: &'a [usize],
-        draws_obj: &'a [bool],
-        suppresses_objwin: &'a [bool],
-    ) -> Self {
-        debug_assert_eq!(
-            starts.len(),
-            draws_obj.len(),
-            "each span start needs its own OBJ participation flag"
-        );
-        debug_assert_eq!(
-            starts.len(),
-            suppresses_objwin.len(),
-            "each span start needs its own OBJWIN-suppression rank"
-        );
+    pub(crate) const fn new(passes: &'a [WindowPass], objwin_enabled: bool) -> Self {
         Self {
-            starts,
-            draws_obj,
-            suppresses_objwin,
+            passes,
+            objwin_enabled,
         }
     }
 
-    /// Returns the index of the span containing `x`.
+    /// Returns the index of the last pass starting at or before `x`, which is
+    /// the nonempty pass containing it.
     fn index_at(self, x: usize) -> usize {
-        self.starts
-            .partition_point(|&start| start <= x)
+        self.passes
+            .partition_point(|pass| pass.start <= x)
             .saturating_sub(1)
     }
 
-    /// Returns where span `index` begins, or `0` for an absent span.
+    /// Returns where pass `index` begins, or `0` for an absent pass.
     fn span_start(self, index: usize) -> usize {
-        self.starts.get(index).copied().unwrap_or(0)
+        self.passes.get(index).map_or(0, |pass| pass.start)
     }
 
-    /// Returns whether span `index` runs the OBJ pass; an absent span draws.
+    /// Returns whether pass `index` runs the OBJ pass; an absent pass draws.
     fn span_draws_obj(self, index: usize) -> bool {
-        self.draws_obj.get(index).copied().unwrap_or(true)
+        self.passes
+            .get(index)
+            .is_none_or(|pass| pass.control.obj || self.objwin_enabled)
     }
 
-    /// Returns whether span `index`'s own rank drops a whole `OBJWIN` pass
+    /// Returns whether pass `index`'s own rank drops a whole `OBJWIN` pass
     /// `(behavioral-fidelity)`.
     fn span_suppresses_objwin(self, index: usize) -> bool {
-        self.suppresses_objwin.get(index).copied().unwrap_or(false)
+        self.passes
+            .get(index)
+            .is_some_and(|pass| pass.region.suppresses_objwin_hole())
+    }
+
+    /// Returns whether pass `index`'s own control enables effects; an absent
+    /// pass does.
+    fn span_effects(self, index: usize) -> bool {
+        self.passes
+            .get(index)
+            .is_none_or(|pass| pass.control.effects)
     }
 }
 
@@ -317,7 +319,7 @@ impl<'a> SpriteLayer<'a> {
                 let slot_contested = resolved.is_some();
                 let (texel, writer_span) =
                     self.sample_entry_mosaic(entry, x, y, mosaic, window_spans, slot_contested);
-                let span_start = window_spans.span_start(writer_span);
+                let span_effects = window_spans.span_effects(writer_span);
                 if matches!(texel, Texel::Outside) {
                     continue;
                 }
@@ -338,8 +340,8 @@ impl<'a> SpriteLayer<'a> {
                             priority: entry.priority(),
                             semi_transparent,
                             color_semi_transparent: semi_transparent,
-                            span_start,
-                            color_span_start: span_start,
+                            span_effects,
+                            color_span_effects: span_effects,
                             color_objwin_masked: objwin_written,
                         });
                     }
@@ -347,7 +349,7 @@ impl<'a> SpriteLayer<'a> {
                         if let Some(pixel) = resolved.as_mut() {
                             pixel.priority = entry.priority();
                             pixel.semi_transparent = mode == ObjMode::SemiTransparent;
-                            pixel.span_start = span_start;
+                            pixel.span_effects = span_effects;
                         }
                     }
                     (_, Texel::Outside) => unreachable!("outside texels were skipped"),
@@ -665,6 +667,7 @@ mod tests {
     use crate::oam::{AffineMode, OamEntry, ObjMode, ObjShape};
     use crate::palette::{Bgr555, Palette, Rgb888};
     use crate::tile::{BitDepth, Tileset};
+    use crate::window::{WindowLayerEnable, WindowPass, WindowRegion};
 
     const BPP4_TILE_BYTES: usize = BitDepth::Bpp4.tile_byte_len();
     const EIGHT_PIXEL_SQUARE_SIZE: u8 = 0;
@@ -1046,7 +1049,12 @@ mod tests {
         let entries = [opaque_priority_two, objwin_hole_priority_zero];
         let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
 
-        let suppressing_span = WindowSpans::new(&[0], &[true], &[true]);
+        let win0_pass = [WindowPass {
+            start: 0,
+            control: WindowLayerEnable::ALL,
+            region: WindowRegion::Win0,
+        }];
+        let suppressing_span = WindowSpans::new(&win0_pass, false);
         let suppressed = layer
             .resolve_pixel_with_mosaic_windowed(0, 0, MosaicSize::NONE, suppressing_span)
             .unwrap();

@@ -74,10 +74,21 @@ pub struct ImageRoot {
 }
 
 impl ImageRoot {
-    /// How many bytes of tile data the ROM holds, once decompressed.
+    /// How many bytes one tile occupies in the ROM.
     #[must_use]
-    pub const fn tile_data_len(&self) -> u32 {
-        self.tile_count * if self.rom_bit_depth == 4 { 32 } else { 64 }
+    pub const fn bytes_per_tile(&self) -> u32 {
+        if self.rom_bit_depth == 4 {
+            32
+        } else {
+            64
+        }
+    }
+
+    /// How many bytes of tile data the ROM holds, once decompressed, or
+    /// `None` if that does not fit a `u32`.
+    #[must_use]
+    pub const fn tile_data_len(&self) -> Option<u32> {
+        self.tile_count.checked_mul(self.bytes_per_tile())
     }
 
     /// The metatile shape, in tiles. `(1, 1)` is the plain row-major order.
@@ -273,7 +284,8 @@ pub struct VoicegroupRoot {
     pub label: &'static str,
     /// The address the ROM's own pointers carry. A group declared with a
     /// `starting_note` bias is addressed *before* its first slot, exactly
-    /// as the mixer indexes it.
+    /// as the mixer indexes it: slots `0..starting_note` are the `ToneData`
+    /// records preceding the declared ones.
     pub addr: GbaPtr,
     /// The `starting_note` bias, `0` for an unbiased group.
     pub starting_note: u8,
@@ -460,8 +472,8 @@ mod tests {
 
     #[test]
     fn tile_data_length_follows_the_rom_depth() {
-        assert_eq!(image("a", 4, 3).tile_data_len(), 96);
-        assert_eq!(image("a", 8, 3).tile_data_len(), 192);
+        assert_eq!(image("a", 4, 3).tile_data_len(), Some(96));
+        assert_eq!(image("a", 8, 3).tile_data_len(), Some(192));
     }
 
     #[test]

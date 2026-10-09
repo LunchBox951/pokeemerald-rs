@@ -54,6 +54,9 @@ pub(crate) use hardware::{HardwareEnvelopePacing, HardwareEnvelopeVolume};
 
 const CGB_ENVELOPE_LEVELS: u32 = 16;
 const CGB_ENVELOPE_LEVEL_MAX: u8 = 15;
+/// NRx2 bits 4-7 hold the volume; `envelopeVolume << 4` keeps its low
+/// nibble only (`m4a.c:1222`).
+const NRX2_VOLUME_NIBBLE_MASK: u8 = 0x0F;
 const PSEUDO_ECHO_SCALE: u32 = 256;
 const SUSTAIN_REFRESH_FRAMES: u8 = 7;
 const HARD_PAN_RATIO: u16 = 2;
@@ -182,27 +185,41 @@ impl CgbEnvelope {
     /// upstream's `envelopeCounter` does (`m4a.c:1031`, `:1063`, `:1152`).
     #[must_use]
     pub(crate) fn hardware_envelope_pacing(&self) -> Option<HardwareEnvelopePacing> {
-        let step_time_and_dir = match self.phase {
-            Phase::Attack => return self.attack_pacing(),
-            // `channels->decay | CGB_NRx2_ENV_DIR_DEC` (`m4a.c:1158`), whose
-            // direction constant is zero (`m4a_internal.h:84`).
-            Phase::Decay => self.adsr.decay,
-            // `channels->release | CGB_NRx2_ENV_DIR_DEC` (`m4a.c:1068`).
-            Phase::Release => self.adsr.release,
-            Phase::Starting | Phase::Sustain | Phase::PseudoEcho | Phase::Retired => return None,
-        };
-        HardwareEnvelopePacing::from_nrx2_step_time_and_dir(step_time_and_dir)
+        self.nrx2_step_time_and_dir()
+            .and_then(HardwareEnvelopePacing::from_nrx2_step_time_and_dir)
     }
 
-    /// `channels->attack + CGB_NRx2_ENV_DIR_INC` (`m4a.c:1024`), which
-    /// note-on stores too (`m4a.c:993`), decoded.
+    /// Whether this phase's NRx2 store leaves channel 4's DAC on, so its
+    /// LFSR keeps clocking: the stored byte's volume nibble or direction bit
+    /// is set, whatever its step time (`_writeEnvelope`/`_resetEnvelope`,
+    /// `mgba/src/gb/audio.c:346-352,856-860,890-913`). The byte is
+    /// `(field & 0xF) + (envelopeVolume << 4)` (`m4a.c:1222`), so a volume of
+    /// 16 wraps to a zero nibble.
     #[must_use]
-    fn attack_pacing(&self) -> Option<HardwareEnvelopePacing> {
-        // Only the low nibble reaches NRx2, so wrapping at a byte discards
-        // nothing the mask would keep.
-        HardwareEnvelopePacing::from_nrx2_step_time_and_dir(
-            self.adsr.attack.wrapping_add(NRX2_ENV_DIR_INC),
-        )
+    pub(crate) fn hardware_dac_enabled(&self) -> bool {
+        let direction_up = self
+            .nrx2_step_time_and_dir()
+            .is_some_and(|field| field & NRX2_ENV_DIR_INC != 0);
+        self.volume & NRX2_VOLUME_NIBBLE_MASK != 0 || direction_up
+    }
+
+    /// The step-time-and-direction field this phase last stored to NRx2,
+    /// unmasked: `channels->attack + CGB_NRx2_ENV_DIR_INC` (`m4a.c:1024`,
+    /// which note-on stores too, `:993`), `channels->decay |
+    /// CGB_NRx2_ENV_DIR_DEC` (`:1158`) and `channels->release |
+    /// CGB_NRx2_ENV_DIR_DEC` (`:1068`), whose direction constant is zero
+    /// (`m4a_internal.h:84`), or the bare `CGB_NRx2_ENV_DIR_INC` of
+    /// sustain-start (`:1136`) and pseudo-echo-start (`:1097`), which later
+    /// volume-only stores read back (`:985`). Only the low nibble reaches
+    /// NRx2, so wrapping at a byte discards nothing the mask would keep.
+    fn nrx2_step_time_and_dir(&self) -> Option<u8> {
+        match self.phase {
+            Phase::Attack => Some(self.adsr.attack.wrapping_add(NRX2_ENV_DIR_INC)),
+            Phase::Decay => Some(self.adsr.decay),
+            Phase::Release => Some(self.adsr.release),
+            Phase::Sustain | Phase::PseudoEcho => Some(NRX2_ENV_DIR_INC),
+            Phase::Starting | Phase::Retired => None,
+        }
     }
 
     /// Enter the release phase, reporting whether release itself is the

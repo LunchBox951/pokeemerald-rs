@@ -165,14 +165,31 @@ impl MainMenuScene {
         self.rendered_items[self.selected_index].item
     }
 
+    /// Whether an Up press can move the selection: upstream's
+    /// `JOY_NEW(DPAD_UP) && tCurrItem > 0` guard (`main_menu.c:903`).
+    #[must_use]
+    pub fn can_move_up(&self) -> bool {
+        self.selected_index > 0
+    }
+
+    /// Whether a Down press can move the selection: upstream's
+    /// `JOY_NEW(DPAD_DOWN) && tCurrItem < numItems` guard
+    /// (`main_menu.c:915`).
+    #[must_use]
+    pub fn can_move_down(&self) -> bool {
+        self.selected_index + 1 < self.rendered_items.len()
+    }
+
     /// Moves the selection up without wrapping.
     pub fn move_up(&mut self) {
-        self.selected_index = self.selected_index.saturating_sub(1);
+        if self.can_move_up() {
+            self.selected_index -= 1;
+        }
     }
 
     /// Moves the selection down without wrapping.
     pub fn move_down(&mut self) {
-        if self.selected_index + 1 < self.rendered_items.len() {
+        if self.can_move_down() {
             self.selected_index += 1;
         }
     }
@@ -300,14 +317,14 @@ pub fn load_default_with_window_frame(
     window_frame: u8,
 ) -> Result<MainMenuScene, MainMenuSceneError> {
     load_with_window_frame(
-        crate::pack_source::PackSource::Runtime,
+        &crate::pack_source::PackSource::Runtime,
         menu_type,
         window_frame,
     )
 }
 
 pub(crate) fn load_with_window_frame(
-    source: crate::pack_source::PackSource,
+    source: &crate::pack_source::PackSource,
     menu_type: MainMenuType,
     window_frame: u8,
 ) -> Result<MainMenuScene, MainMenuSceneError> {

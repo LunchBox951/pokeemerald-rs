@@ -16,7 +16,10 @@ use super::wav;
 use super::{read_file, ExtractError};
 use pack_format::{PackEntry, PackWriter};
 
-const DIRECT_SOUND_SAMPLES: [&str; 33] = [
+const DIRECT_SOUND_SAMPLES: [&str; 41] = [
+    "classical_choir_voice_ahhs",
+    "ethnic_flavours_hyoushigi",
+    "ethnic_flavours_ohtsuzumi",
     "sc88pro_flute",
     "sc88pro_french_horn_60",
     "sc88pro_french_horn_72",
@@ -45,14 +48,19 @@ const DIRECT_SOUND_SAMPLES: [&str; 33] = [
     "sc88pro_tuba_51",
     "sc88pro_tubular_bell",
     "sc88pro_xylophone",
+    "sd90_classical_oboe",
     "trinity_cymbal_crash",
     "unknown_bell",
     "unknown_close_hihat",
     "unknown_open_hihat",
+    "unknown_snare",
+    "unused_guitar_separates_power_chord",
     "unused_sc55_tom",
+    "unused_sc88pro_unison_slap",
+    "unused_sd90_oboe",
 ];
 
-const PROGRAMMABLE_WAVE_SAMPLES: [u32; 4] = [1, 2, 5, 6];
+const PROGRAMMABLE_WAVE_SAMPLES: [u32; 5] = [1, 2, 3, 5, 6];
 
 const PROGRAMMABLE_WAVE_SIZE: usize = 16;
 const SAMPLE_KIND_DIRECT_SOUND: u8 = 0;

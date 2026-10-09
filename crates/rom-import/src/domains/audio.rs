@@ -47,8 +47,9 @@
 //! the one group a song references directly (issue #201) and pads every
 //! other group with `Empty`. This reader does the same: a group some song's
 //! header points at reads [`VoicegroupRoot::addressable_slots`] contiguous
-//! slots; any other reads its `declared_slots` after `starting_note` empty
-//! ones and pads the rest.
+//! slots; any other reads `starting_note + declared_slots` contiguous slots
+//! from its alias address, so a biased group's leading slots are the `ToneData`
+//! the linker placed before it, and pads the rest.
 
 use assets::{
     DirectSoundMode, DirectSoundSample, DirectSoundVoice, Envelope, KeySplitVoice, NoiseVoice,
@@ -209,25 +210,25 @@ pub(crate) fn voicegroup(
     let id = root.id;
     let total = usize::from(root.addressable_slots);
     let song_selected = audio.songs.iter().any(|song| song.voicegroup == root.addr);
-    // The slots the ROM is read for, as `(first, count)`.
-    let (first, count) = if song_selected {
-        (0, total)
+    // The slots the ROM is read for, counted from `root.addr`. That address is
+    // the alias `starting_note` records before the declared slots, so a biased
+    // group's leading slots are the ToneData that precedes it in the ROM, not
+    // empty positions. A song-selected group is read to the end of its range.
+    let count = if song_selected {
+        total
     } else {
-        (
-            usize::from(root.starting_note),
-            usize::from(root.declared_slots),
-        )
+        usize::from(root.starting_note).saturating_add(usize::from(root.declared_slots))
     };
-    if first.saturating_add(count) > total {
+    if count > total {
         return Err(ImportError::Length {
             what: "voicegroup slot count",
-            value: first.saturating_add(count),
+            value: count,
             max: total,
         });
     }
 
-    let mut slots = vec![VoiceEntry::Empty; first];
-    for index in first..first + count {
+    let mut slots = Vec::with_capacity(total);
+    for index in 0..count {
         let bytes = reader.table_entry(id, root.addr, index, total, SLOT_BYTES)?;
         let base = root.addr.offset().saturating_add(index * SLOT_BYTES);
         slots.push(slot(reader, audio, id, index, base, bytes)?);

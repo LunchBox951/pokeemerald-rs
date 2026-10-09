@@ -399,7 +399,7 @@ impl OverworldPhase {
         );
         let arrival = new_game::bedroom_arrival(initial_save2.player_gender);
         let scene = overworld::load_room_from_source(
-            source,
+            &source,
             arrival.map_id,
             initial_save2.player_gender.into(),
             &initial_save1.event_data,
@@ -460,7 +460,7 @@ impl OverworldPhase {
         // previously set var (e.g. Route 103's rival sprite) must already
         // be here for the first composed frame to resolve it correctly.
         let scene = overworld::load_room_from_source(
-            source,
+            &source,
             map_id,
             block2.player_gender.into(),
             &block1.event_data,
@@ -513,7 +513,7 @@ impl OverworldPhase {
         let event_data =
             connections::map_entry_event_data(&block1.event_data, warp_map, block2.player_gender);
         let scene = overworld::load_room_from_source(
-            source,
+            &source,
             warp_map,
             block2.player_gender.into(),
             &event_data,

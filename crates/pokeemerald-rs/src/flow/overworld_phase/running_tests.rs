@@ -114,13 +114,18 @@ fn the_shoes_flag_keeps_a_held_b_run_going_across_a_map_connection() {
     let mut crossed = false;
     let mut ran_on_route = false;
     for _ in 0..80 {
+        let started_on_route = phase.map_id == route101;
         phase.step(held(Buttons::B | Buttons::UP));
         if phase.map_id == route101 {
             crossed = true;
             if phase.player.in_transit() && phase.player.step_progress() == 1 {
                 assert_eq!(phase.player.transit_duration(), RUN_FRAMES_PER_TILE);
-                ran_on_route = true;
-                break;
+                // The crossing frame's cadence came from Littleroot's header;
+                // only a step begun after the rebind exercises Route 101's.
+                if started_on_route {
+                    ran_on_route = true;
+                    break;
+                }
             }
         } else if phase.player.in_transit() && phase.player.step_progress() == 1 {
             assert_eq!(phase.player.transit_duration(), RUN_FRAMES_PER_TILE);

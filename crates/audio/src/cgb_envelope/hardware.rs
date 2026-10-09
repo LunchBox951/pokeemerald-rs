@@ -71,19 +71,31 @@ impl HardwareEnvelopeVolume {
     /// Settle one render frame, `iterations` software iterations long. A
     /// frame that stores NRx2 does so once, at the pass's end after those
     /// iterations (`m4a.c:1206`..`:1226`); any other lets the timer run.
+    /// Returns whether the timer actually stepped the nibble, as opposed to a
+    /// direct store: only a step re-resolves a noise latch
+    /// (`mgba/src/gb/audio.c:730-732`).
     pub(crate) fn end_frame(
         &mut self,
         iterations: u8,
         wrote: bool,
         level: u8,
         pacing: Option<HardwareEnvelopePacing>,
-    ) {
+    ) -> bool {
         let note_on = std::mem::take(&mut self.note_on_write_owed);
         if wrote || note_on {
             self.write(level, pacing);
+            false
         } else {
-            self.advance(iterations, pacing);
+            self.advance(iterations, pacing)
         }
+    }
+
+    /// The off-write's `NR42 = 8` store (`m4a.c:873`): volume zero with no
+    /// timer, and no note-on store left owing.
+    pub(crate) fn write_off(&mut self) {
+        self.volume = 0;
+        self.iterations_until_step = 0;
+        self.note_on_write_owed = false;
     }
 
     /// The nibble the volume register currently holds.
@@ -101,11 +113,12 @@ impl HardwareEnvelopeVolume {
         };
     }
 
-    fn advance(&mut self, iterations: u8, pacing: Option<HardwareEnvelopePacing>) {
-        let Some(pacing) = pacing else { return };
+    fn advance(&mut self, iterations: u8, pacing: Option<HardwareEnvelopePacing>) -> bool {
+        let Some(pacing) = pacing else { return false };
+        let mut stepped = false;
         for _ in 0..iterations {
             if self.iterations_until_step == 0 {
-                return;
+                return stepped;
             }
             self.iterations_until_step -= 1;
             if self.iterations_until_step != 0 {
@@ -116,11 +129,13 @@ impl HardwareEnvelopeVolume {
             } else {
                 self.volume -= 1;
             }
+            stepped = true;
             if self.is_saturated_toward(pacing) {
-                return;
+                return stepped;
             }
             self.iterations_until_step = pacing.step_time;
         }
+        stepped
     }
 
     fn is_saturated_toward(self, pacing: HardwareEnvelopePacing) -> bool {
@@ -150,11 +165,36 @@ mod tests {
         for iterations in [1, 2] {
             let mut hardware = HardwareEnvelopeVolume::at_note_on();
 
-            hardware.end_frame(iterations, false, 0, Some(UP_EVERY_ITERATION));
+            let stepped = hardware.end_frame(iterations, false, 0, Some(UP_EVERY_ITERATION));
+            assert!(
+                !stepped,
+                "{iterations} iterations: the note-on store is direct"
+            );
             assert_eq!(hardware.volume(), 0, "{iterations} iterations");
 
-            hardware.end_frame(1, false, 0, Some(UP_EVERY_ITERATION));
+            let stepped = hardware.end_frame(1, false, 0, Some(UP_EVERY_ITERATION));
+            assert!(stepped, "{iterations} iterations");
             assert_eq!(hardware.volume(), 1, "{iterations} iterations");
         }
+    }
+
+    #[test]
+    fn a_direct_store_to_zero_is_not_a_step() {
+        let mut hardware = HardwareEnvelopeVolume::at_note_on();
+        hardware.end_frame(1, true, 9, None);
+        assert_eq!(hardware.volume(), 9);
+        let stepped = hardware.end_frame(1, true, 0, None);
+        assert!(!stepped);
+        assert_eq!(hardware.volume(), 0);
+    }
+
+    #[test]
+    fn the_off_write_zeroes_the_volume_and_disarms_the_timer() {
+        let mut hardware = HardwareEnvelopeVolume::at_note_on();
+        hardware.end_frame(1, true, 9, Some(UP_EVERY_ITERATION));
+        hardware.write_off();
+        assert_eq!(hardware.volume(), 0);
+        assert!(!hardware.end_frame(4, false, 9, Some(UP_EVERY_ITERATION)));
+        assert_eq!(hardware.volume(), 0);
     }
 }

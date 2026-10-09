@@ -46,10 +46,10 @@ pub fn exactly_one(id: &str, hits: &[u32]) -> Result<u32, GenRomProfileError> {
 }
 
 /// Read a little-endian `u32` at a ROM offset, or `None` if fewer than four
-/// bytes remain. `offset + 4` must not overflow `usize`; the bus-address
-/// readers guarantee that through [`to_offset`].
+/// bytes remain at `offset`. Any out-of-range offset, including one near
+/// `usize::MAX`, returns `None`.
 pub fn u32_at(rom: &[u8], offset: usize) -> Option<u32> {
-    rom.get(offset..offset + 4)
+    rom.get(offset..offset.checked_add(4)?)
         .map(|bytes| u32::from_le_bytes(bytes.try_into().expect("four bytes")))
 }
 
@@ -63,7 +63,7 @@ pub fn u32_at_addr(rom: &[u8], addr: u32) -> Option<u32> {
 /// or the read falls outside `rom`.
 pub fn u16_at_addr(rom: &[u8], addr: u32) -> Option<u16> {
     let offset = to_offset(addr)?;
-    rom.get(offset..offset + 2)
+    rom.get(offset..offset.checked_add(2)?)
         .map(|bytes| u16::from_le_bytes(bytes.try_into().expect("two bytes")))
 }
 
@@ -169,7 +169,8 @@ pub fn only_one_matching<T>(
 #[cfg(test)]
 mod tests {
     use super::{
-        exactly_one, only_one_matching, to_addr, to_offset, u32_at_addr, ROM_BASE, ROM_WINDOW_END,
+        exactly_one, only_one_matching, to_addr, to_offset, u32_at, u32_at_addr, ROM_BASE,
+        ROM_WINDOW_END,
     };
     use crate::gen_rom_profile::error::GenRomProfileError;
 
@@ -217,6 +218,17 @@ mod tests {
         assert_eq!(u32_at_addr(&rom, 0x0800_0000), Some(0x0403_0201));
         assert_eq!(u32_at_addr(&rom, 0x0800_0002), None);
         assert_eq!(u32_at_addr(&rom, 0x0000_0000), None);
+    }
+
+    #[test]
+    fn offset_reads_reject_overflow_and_short_tails() {
+        assert_eq!(u32_at(&[], usize::MAX), None);
+        let rom = [1u8, 2, 3, 4, 5];
+        assert_eq!(u32_at(&rom, 1), Some(0x0504_0302));
+        for offset in 2..=rom.len() + 1 {
+            assert_eq!(u32_at(&rom, offset), None);
+        }
+        assert_eq!(u32_at(&rom, usize::MAX - 1), None);
     }
 
     #[test]
