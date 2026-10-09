@@ -112,11 +112,18 @@ impl Mixer {
             + self.cgb_slots.iter().filter(|slot| slot.is_some()).count()
     }
 
-    /// Whether any voice (DirectSound or CGB) is active.
+    /// Whether no voice (DirectSound or CGB) is active and no vacated noise
+    /// slot still holds an unsettled output latch that idle frames render
+    /// (`CgbVoice::render_idle_hardware`'s doc).
     #[must_use]
     pub fn is_idle(&self) -> bool {
         self.direct_sound_slots.iter().all(Option::is_none)
             && self.cgb_slots.iter().all(Option::is_none)
+            && !self
+                .idle_cgb_hardware
+                .iter()
+                .flatten()
+                .any(CgbVoice::has_unsettled_noise_output)
     }
 
     /// Whether the master-mix reverb still holds delayed samples that can

@@ -482,6 +482,15 @@ impl CgbVoice {
         }
     }
 
+    /// Whether this retained slot hardware is a noise channel whose held
+    /// latch a clock has yet to settle, so the idle slot still renders.
+    pub(crate) fn has_unsettled_noise_output(&self) -> bool {
+        match &self.oscillator {
+            Oscillator::Noise(noise) => noise.has_unsettled_output(),
+            _ => false,
+        }
+    }
+
     /// Accounts one idle frame of a vacated slot's retained hardware: a square
     /// keeps its duty register running ([`Self::advance_idle_duty`]); a noise
     /// channel keeps clocking at its retained rate and emits its resolved

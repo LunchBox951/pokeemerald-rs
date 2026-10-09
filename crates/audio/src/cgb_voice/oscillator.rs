@@ -5,22 +5,21 @@ use super::{
 use crate::cgb_pitch::{midi_key_to_cgb_freq_reg, midi_key_to_noise_control};
 use crate::psg::{NoiseChannel, SquareChannel, WaveChannel};
 
-/// Clocks `noise` one sample at `hardware_volume` and maps its resolved latch
-/// (0..=15) into the centred render path. The DAC level is output directly
+/// Clocks `noise` one sample at `hardware_volume` and maps its held latch
+/// into the centred render path. The DAC level is output directly
 /// (`mgba/src/gb/audio.c:782`); like the other channels the render path
-/// removes the DC offset by centring on the channel's current volume, so a
-/// latch equal to the volume or to zero reproduces the channel's usual
-/// `+-volume` swing, a held level different from the volume (an inherited
-/// latch, a zero-volume restart) keeps its own distance from that centre,
-/// and a settled latch with the volume at zero is silent.
+/// removes the DC offset by centring, here on the volume the latch was last
+/// resolved against ([`NoiseChannel::centred_level`]). A clock at volume `v`
+/// reproduces the usual `+-v` swing, and nothing but a clock or envelope step
+/// moves the rendered level, so a trigger, volume write, or replacement leaves
+/// it as it was and a settled latch is silent.
+fn noise_contribution(noise: &mut NoiseChannel, hardware_volume: u8) -> i32 {
+    noise.clock_sample(hardware_volume);
+    (noise.centred_level() * NOISE_LEVEL_GAIN * BIPOLAR_SAMPLE_SCALE) >> SAMPLE_GAIN_BITS
+}
+
 /// [`LINEAR_ENVELOPE_SCALE`] as a signed gain.
 const NOISE_LEVEL_GAIN: i32 = LINEAR_ENVELOPE_SCALE.cast_signed();
-
-fn noise_contribution(noise: &mut NoiseChannel, hardware_volume: u8) -> i32 {
-    let level = i32::from(noise.clock_sample(hardware_volume));
-    let centred = 2 * level - i32::from(hardware_volume);
-    (centred * NOISE_LEVEL_GAIN * BIPOLAR_SAMPLE_SCALE) >> SAMPLE_GAIN_BITS
-}
 
 #[derive(Clone, Debug)]
 pub(super) enum Oscillator {
@@ -102,8 +101,7 @@ impl Oscillator {
         match self {
             Self::Square(square) => square.apply_hardware_off_write(),
             Self::Noise(noise) => {
-                noise.retrigger();
-                noise.set_clocking(true);
+                noise.off_write();
                 true
             }
             Self::Wave(_) => true,

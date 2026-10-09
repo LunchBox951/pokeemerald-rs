@@ -569,6 +569,9 @@ pub struct NoiseChannel {
     step_delta: u32,
     output: i8,
     level: u8,
+    /// The volume the latch was last resolved against: the render path's
+    /// DC centre, rewritten only where the latch itself is.
+    centre: u8,
     clocking: bool,
 }
 
@@ -584,6 +587,7 @@ impl NoiseChannel {
             step_delta: control.step_delta,
             output: -1,
             level: 0,
+            centre: 0,
             clocking: true,
         }
     }
@@ -603,6 +607,20 @@ impl NoiseChannel {
         self.lfsr = 0;
     }
 
+    /// The retirement off-write (`NR42 = 8; NR44 = 0x80`, `m4a.c:873-874`):
+    /// restarts the LFSR and phase and leaves the channel clocking, keeping a
+    /// raised latch for the first clock to settle. A latch already at zero
+    /// renders the same zero level at every volume, so its DC centre drops
+    /// with the volume rather than inventing a settling edge at the next
+    /// clock (`mgba/src/gb/audio.c:371-383,641`).
+    pub fn off_write(&mut self) {
+        self.retrigger();
+        self.clocking = true;
+        if self.level == 0 {
+            self.centre = 0;
+        }
+    }
+
     /// Keeps the previous note's output latch across a trigger: `ch4.sample`
     /// is only rewritten when the LFSR clocks or the envelope steps, so the
     /// predecessor's resolved level persists into the next note until then
@@ -611,6 +629,7 @@ impl NoiseChannel {
     /// volume write or zero-volume trigger does not recompute it.
     pub fn continue_output_from(&mut self, previous: &Self) {
         self.level = previous.level;
+        self.centre = previous.centre;
     }
 
     /// Re-resolves the latch at an envelope step: the sample is rewritten as
@@ -619,6 +638,7 @@ impl NoiseChannel {
     pub fn apply_envelope_step(&mut self, volume: u8) {
         if self.level > 0 {
             self.level = volume & 0x0F;
+            self.centre = self.level;
         }
     }
 
@@ -628,6 +648,21 @@ impl NoiseChannel {
     /// (`audio.c:585`) while the held latch is still output (`audio.c:782`).
     pub fn set_clocking(&mut self, clocking: bool) {
         self.clocking = clocking;
+    }
+
+    /// The signed render level, `2 * level - centre`: the latch measured from
+    /// the volume it was resolved against, so it is unchanged by anything but
+    /// the writes that rewrite the latch itself.
+    #[must_use]
+    pub fn centred_level(&self) -> i32 {
+        2 * i32::from(self.level) - i32::from(self.centre)
+    }
+
+    /// Whether the held latch still renders a nonzero level that a clock
+    /// has yet to settle.
+    #[must_use]
+    pub fn has_unsettled_output(&self) -> bool {
+        self.level != 0 || self.centre != 0
     }
 
     /// The resolved output latch, 0..=15.
@@ -646,6 +681,7 @@ impl NoiseChannel {
         self.output = if feedback_is_high { 1 } else { -1 };
         // `ch4.sample = lsb * currentVolume` (`mgba/src/gb/audio.c:641`).
         self.level = if feedback_is_high { volume & 0x0F } else { 0 };
+        self.centre = volume & 0x0F;
     }
 
     #[cfg(test)]

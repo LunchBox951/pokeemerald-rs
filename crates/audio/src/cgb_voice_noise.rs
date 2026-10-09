@@ -84,13 +84,14 @@ const FULL_VOLUME: u8 = 14;
 /// the first 13 frames and one does in the 14th.
 const SLOW_KEY_FIRST_CLOCK_SAMPLE: usize = 2979;
 
-/// A pre-routing contribution for a noise latch `level` at hardware `volume`.
-fn expected_contribution(level: u8, volume: u8) -> i32 {
-    ((2 * i32::from(level) - i32::from(volume)) * 16 * 127) >> 8
+/// A pre-routing contribution for a noise latch `level` resolved against
+/// volume `centre` (the render path's DC centre).
+fn expected_contribution(level: u8, centre: u8) -> i32 {
+    ((2 * i32::from(level) - i32::from(centre)) * 16 * 127) >> 8
 }
 
-fn expected_mixed(level: u8, volume: u8) -> f32 {
-    let clipped = expected_contribution(level, volume).clamp(-128, 127);
+fn expected_mixed(level: u8, centre: u8) -> f32 {
+    let clipped = expected_contribution(level, centre).clamp(-128, 127);
     #[expect(clippy::cast_precision_loss, reason = "within [-128, 127]")]
     let value = clipped as f32;
     value / 128.0
@@ -187,11 +188,11 @@ fn a_replacement_outputs_the_predecessors_resolved_level_until_its_first_clock()
     // Quieter predecessor, full-volume replacement.
     assert_eq!(
         first_sample_after(&quiet_predecessor, slow_noise_replacement(WIDE_NOISE)),
-        expected_contribution(quiet_level, FULL_VOLUME),
+        expected_contribution(quiet_level, quiet_level),
         "the predecessor's level, not the replacement's volume"
     );
     assert_ne!(
-        expected_contribution(quiet_level, FULL_VOLUME),
+        expected_contribution(quiet_level, quiet_level),
         expected_contribution(FULL_VOLUME, FULL_VOLUME),
         "sanity: the two levels render differently"
     );
@@ -201,7 +202,7 @@ fn a_replacement_outputs_the_predecessors_resolved_level_until_its_first_clock()
             &loud_predecessor,
             noise_voice_at(quiet, SLOW_NOISE_KEY, WIDE_NOISE)
         ),
-        expected_contribution(FULL_VOLUME, quiet_level),
+        expected_contribution(FULL_VOLUME, FULL_VOLUME),
     );
 }
 
@@ -236,7 +237,7 @@ fn replacing_a_zero_volume_noise_voice_starts_low() {
     assert!(mixer.add_cgb_voice(slow_noise_replacement(WIDE_NOISE)));
     assert_mixed(
         first_mixed_sample(&mut mixer),
-        expected_mixed(0, FULL_VOLUME),
+        expected_mixed(0, 0),
         "a zero-volume predecessor's latch is zero",
     );
 }
@@ -338,7 +339,7 @@ fn an_idle_noise_slot_settles_its_latch_at_the_first_clock_after_the_off_write()
         assert!(mixer.add_cgb_voice(slow_noise_replacement(width)));
         assert_mixed(
             first_mixed_sample(&mut mixer),
-            expected_mixed(0, FULL_VOLUME),
+            expected_mixed(0, 0),
             "a settled slot starts the next note low (width {width})",
         );
     }
@@ -402,7 +403,7 @@ fn a_noise_note_after_fast_retirement_and_idle_frames_starts_low() {
         assert!(mixer.add_cgb_voice(slow_noise_replacement(width)));
         assert_mixed(
             first_mixed_sample(&mut mixer),
-            expected_mixed(0, FULL_VOLUME),
+            expected_mixed(0, 0),
             "the off-write's zero-volume clocking leaves the latch low (width {width})",
         );
     }
@@ -418,7 +419,7 @@ fn a_noise_note_after_fast_release_retirement_starts_low() {
         assert!(mixer.add_cgb_voice(slow_noise_replacement(width)));
         assert_mixed(
             first_mixed_sample(&mut mixer),
-            expected_mixed(0, FULL_VOLUME),
+            expected_mixed(0, 0),
             "a released note's off-write leaves the latch low (width {width})",
         );
     }
@@ -448,7 +449,7 @@ fn a_dac_disabled_replacement_holds_the_inherited_latch() {
         replacement.render(&mut acc, &[]);
         assert_eq!(
             acc[0].0,
-            expected_contribution(FULL_VOLUME, 0),
+            expected_contribution(FULL_VOLUME, FULL_VOLUME),
             "the disabled channel keeps emitting the held latch"
         );
         acc[0] = (0, 0);
@@ -528,4 +529,106 @@ fn a_zero_volume_store_with_the_direction_bit_keeps_clocking() {
         "sanity: volume-zero trigger"
     );
     assert_eq!(latch, Some(0), "a zero-volume clock settles the latch low");
+}
+
+/// The rendered sample is the held latch's own: a replacement at a lower or
+/// higher volume continues the predecessor's last sample until its first
+/// clock moves `ch4.sample` (`gb/audio.c:782`).
+#[test]
+fn a_replacement_continues_the_predecessors_last_rendered_sample() {
+    let mut predecessor = noise_voice_latched(sustained_adsr(10), SLOW_NOISE_KEY, WIDE_NOISE);
+    let mut acc = [(0i32, 0i32); 1];
+    predecessor.render(&mut acc, &[]);
+    let last = acc[0].0;
+    assert_ne!(last, 0, "sanity: a raised latch renders");
+    for replacement_sustain in [3, 10, 15] {
+        let replacement = noise_voice_at(
+            sustained_adsr(replacement_sustain),
+            SLOW_NOISE_KEY,
+            WIDE_NOISE,
+        );
+        assert_eq!(
+            first_sample_after(&predecessor, replacement),
+            last,
+            "replacement sustain {replacement_sustain}"
+        );
+    }
+}
+
+#[test]
+fn an_inherited_settled_zero_latch_renders_the_same_across_a_replacement() {
+    let mut predecessor = noise_voice_at(CgbAdsr::flat(), SLOW_NOISE_KEY, WIDE_NOISE);
+    predecessor.begin_frame(false);
+    let mut acc = [(0i32, 0i32); 1];
+    // The first slow clock of a fresh LFSR is high; settle it via the off-write.
+    for _ in 0..MAX_SAMPLES_TO_LATCH_HIGH {
+        if predecessor
+            .noise_output_latch()
+            .is_some_and(|level| level > 0)
+        {
+            break;
+        }
+        predecessor.render(&mut acc, &[]);
+    }
+    predecessor.apply_hardware_off_write();
+    for _ in 0..(2 * SLOW_KEY_FIRST_CLOCK_SAMPLE) {
+        predecessor.render(&mut acc, &[]);
+    }
+    assert_eq!(predecessor.noise_output_latch(), Some(0), "sanity: settled");
+    acc[0] = (0, 0);
+    predecessor.render(&mut acc, &[]);
+    let before = acc[0].0;
+    for sustain in [4, 15] {
+        let replacement = noise_voice_at(sustained_adsr(sustain), SLOW_NOISE_KEY, WIDE_NOISE);
+        assert_eq!(first_sample_after(&predecessor, replacement), before);
+    }
+}
+
+/// A slow off-write tail is still sounding: the mixer is not idle until the
+/// first zero-volume clock settles the latch, so a fade-end `stop_track`
+/// does not truncate it.
+#[test]
+fn a_vacated_slow_noise_slot_is_not_idle_until_its_latch_settles() {
+    let frames_before_clock = SLOW_KEY_FIRST_CLOCK_SAMPLE / crate::SAMPLES_PER_FRAME;
+    let mut mixer = crate::mixer::Mixer::default();
+    assert!(mixer.add_cgb_voice(noise_voice_latched(
+        CgbAdsr::flat(),
+        SLOW_NOISE_KEY,
+        WIDE_NOISE
+    )));
+    mixer.stop_track(0);
+    for frame in 0..=frames_before_clock {
+        assert!(!mixer.is_idle(), "frame {frame}: the latch is unsettled");
+        first_mixed_sample(&mut mixer);
+    }
+    assert!(mixer.is_idle(), "the first zero-volume clock settled it");
+}
+
+/// A latch a real clock left at zero (at a nonzero volume) is already what
+/// the off-write's first zero-volume clock would write, so retiring from it
+/// leaves no settling edge and no pending tail (`gb/audio.c:371-383,641`).
+#[test]
+fn retiring_from_a_low_clock_leaves_no_idle_tail() {
+    let mut voice = noise_voice_at(CgbAdsr::flat(), TEST_KEY, WIDE_NOISE);
+    voice.begin_frame(false);
+    let mut acc = [(0i32, 0i32); 1];
+    let mut raised = false;
+    for _ in 0..MAX_SAMPLES_TO_LATCH_HIGH {
+        match voice.noise_output_latch() {
+            Some(level) if level > 0 => raised = true,
+            Some(0) if raised => break,
+            _ => {}
+        }
+        voice.render(&mut acc, &[]);
+    }
+    assert_eq!(voice.noise_output_latch(), Some(0), "sanity: low clock");
+    let mut mixer = crate::mixer::Mixer::default();
+    assert!(mixer.add_cgb_voice(voice));
+    mixer.stop_track(0);
+    assert!(mixer.is_idle(), "a zero latch has no settling tail");
+    assert_mixed(
+        first_mixed_sample(&mut mixer),
+        expected_mixed(0, 0),
+        "no settling edge after retirement",
+    );
 }
