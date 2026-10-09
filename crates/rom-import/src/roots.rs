@@ -74,10 +74,21 @@ pub struct ImageRoot {
 }
 
 impl ImageRoot {
-    /// How many bytes of tile data the ROM holds, once decompressed.
+    /// How many bytes one tile occupies in the ROM.
     #[must_use]
-    pub const fn tile_data_len(&self) -> u32 {
-        self.tile_count * if self.rom_bit_depth == 4 { 32 } else { 64 }
+    pub const fn bytes_per_tile(&self) -> u32 {
+        if self.rom_bit_depth == 4 {
+            32
+        } else {
+            64
+        }
+    }
+
+    /// How many bytes of tile data the ROM holds, once decompressed, or
+    /// `None` if that does not fit a `u32`.
+    #[must_use]
+    pub const fn tile_data_len(&self) -> Option<u32> {
+        self.tile_count.checked_mul(self.bytes_per_tile())
     }
 
     /// The metatile shape, in tiles. `(1, 1)` is the plain row-major order.
@@ -461,8 +472,8 @@ mod tests {
 
     #[test]
     fn tile_data_length_follows_the_rom_depth() {
-        assert_eq!(image("a", 4, 3).tile_data_len(), 96);
-        assert_eq!(image("a", 8, 3).tile_data_len(), 192);
+        assert_eq!(image("a", 4, 3).tile_data_len(), Some(96));
+        assert_eq!(image("a", 8, 3).tile_data_len(), Some(192));
     }
 
     #[test]
