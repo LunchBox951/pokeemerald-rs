@@ -242,6 +242,12 @@ fn candidate_move_damage(
     if move_data.power == OHKO_POWER_SENTINEL {
         return Ok(None);
     }
+    // `TypeCalc` returns for Struggle before the STAB multiply, the Levitate
+    // branch and the chart loop, leaving the caller's base untouched
+    // (`battle_script_commands.c:1536`-`:1552`).
+    if move_id == MoveId::STRUGGLE {
+        return Ok(Some(base));
+    }
     let Some(move_type) = move_data.move_type.battle_type() else {
         return Ok(None);
     };
@@ -541,6 +547,58 @@ mod tests {
             Ok(Some(0)),
             "Earthquake takes no chart row against Levitate, so it cannot \
              overtake Tackle"
+        );
+    }
+
+    /// `TypeCalc` returns immediately for Struggle
+    /// (`battle_script_commands.c:1536`-`:1552`), so a depleted Struggle keeps
+    /// its untyped base against Ghost immunity and Rock/Steel resistance.
+    #[test]
+    fn struggle_keeps_its_untyped_base_against_every_defender() {
+        let dex = Dex::new();
+        let mon = |species, moves: Vec<MoveId>| {
+            BattlePokemon::new(&dex, species, 5, fixed_ivs(255), 0, moves).expect("dex-resident")
+        };
+        let fainted = mon(SpeciesId(400), vec![MoveId::MEGA_KICK]);
+        // Gastly, Onix (Rock/Ground), Magnemite (Electric/Steel), Aron (Steel/Rock).
+        for species in [92, 95, 81, 382] {
+            let defender = mon(SpeciesId(species), vec![MoveId::TACKLE]);
+            for base in [0, 100] {
+                assert_eq!(
+                    super::candidate_move_damage(&dex, MoveId::STRUGGLE, base, &fainted, &defender),
+                    Ok(Some(base)),
+                    "species {species} base {base}"
+                );
+            }
+        }
+    }
+
+    /// Against a Ghost with no scoring bench move, upstream's damage pass
+    /// picks the member whose depleted Struggle keeps its base while Tackle
+    /// is immune; the port used to zero both and fall to party order.
+    #[test]
+    fn a_depleted_struggle_wins_the_damage_pass_against_a_ghost() {
+        let dex = Dex::new();
+        let mon = |species, level, moves: Vec<MoveId>| {
+            BattlePokemon::new(&dex, species, level, fixed_ivs(255), 0, moves)
+                .expect("dex-resident")
+        };
+        let fainted = mon(SpeciesId(400), 70, vec![MoveId::MEGA_KICK]);
+        let player = mon(SpeciesId(92), 50, vec![MoveId::TACKLE]);
+        let mut treecko = mon(TREECKO, 5, vec![MoveId::TACKLE, MoveId::STRUGGLE]);
+        while treecko.moves()[1].pp > 0 {
+            treecko.deduct_pp(1).unwrap();
+        }
+        let bench = vec![mon(SpeciesId(172), 5, vec![MoveId::TACKLE]), treecko];
+        let context = TrainerContext::new(
+            MAY_ROUTE_103_MUDKIP,
+            trainer_data(MAY_ROUTE_103_MUDKIP).expect("a real trainer"),
+            bench,
+        );
+
+        assert_eq!(
+            context.most_suitable_by_damage(&dex, &fainted, MoveId::MEGA_KICK, &player),
+            Ok(Some(1))
         );
     }
 }

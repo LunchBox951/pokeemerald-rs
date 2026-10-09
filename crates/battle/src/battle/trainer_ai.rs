@@ -510,6 +510,13 @@ fn estimated_damage(
         ),
     };
     let damage = base_damage(&input);
+    // `TypeCalc` returns for Struggle before STAB and the chart
+    // (`battle_script_commands.c:1536`-`:1552`); the caller's simulated
+    // percentage and minimum-one floor still apply
+    // (`battle_ai_script_commands.c:1208`-`:1213`).
+    if move_id == MoveId::STRUGGLE {
+        return Ok((damage * simulated_damage_percent / PERCENT_SCALE).max(MINIMUM_DAMAGE));
+    }
     let damage = apply_stab(damage, has_stab(attacker.types(), move_id, move_type));
     let damage = if defender_levitate_blocked(move_type, defender.ability()) {
         damage
@@ -783,9 +790,10 @@ fn score_first_turn_setup(
 #[cfg(test)]
 mod tests {
     use super::{
-        choose_trainer_action, ensure_scoreable, ensure_supported_flags, estimated_damage,
-        hit_effect_ability_blocked, is_scoreable_effect, EFFECT_HIT, FIRST_TURN,
-        FIRST_TURN_SETUP_BONUS_THRESHOLD, PERCENT_SCALE, STAT_DROP_DISCOURAGEMENT_THRESHOLD,
+        choose_trainer_action, compare_move_power, ensure_scoreable, ensure_supported_flags,
+        estimated_damage, hit_effect_ability_blocked, is_scoreable_effect, MoveScores,
+        PowerComparison, EFFECT_HIT, FIRST_TURN, FIRST_TURN_SETUP_BONUS_THRESHOLD, PERCENT_SCALE,
+        STAT_DROP_DISCOURAGEMENT_THRESHOLD,
     };
     use crate::battle::opponent_ai::EnemyAction;
     use crate::dex::Dex;
@@ -1542,5 +1550,39 @@ mod tests {
             MAX_MON_MOVES + 1,
             "a direct trapping-ability read must not consume any of Pound's or Growl's guess draws"
         );
+    }
+
+    /// `TypeCalc` returns for Struggle before the chart, so a depleted
+    /// Struggle outranks an immune or resisted Take Down (power 90, resisted ~45 against 50) in the `TryToFaint`
+    /// power comparison instead of flooring to one alongside it.
+    #[test]
+    fn a_depleted_struggle_keeps_untyped_damage_in_the_power_comparison() {
+        let dex = Dex::new();
+        let attacker_with = |moves: Vec<MoveId>| {
+            let mut attacker = pokemon(TRAPINCH, moves);
+            spend_move(&mut attacker, 1);
+            attacker
+        };
+        let attacker = attacker_with(vec![MoveId::TAKE_DOWN, MoveId::STRUGGLE]);
+        // Gastly (Ghost), Onix (Rock/Ground), Magnemite (Electric/Steel), Aron.
+        for species in [GASTLY, SpeciesId(95), SpeciesId(81), SpeciesId(382)] {
+            let defender = pokemon(species, vec![POUND]);
+            let mut rng = rng_with_maximum_simulated_damage([]);
+            let scores = MoveScores::initialize(&attacker, &mut rng);
+            let struggle = estimated_damage(
+                &dex,
+                MoveId::STRUGGLE,
+                &attacker,
+                &defender,
+                scores.simulated_damage_percent[1],
+            )
+            .unwrap();
+            assert!(struggle > 1, "species {species:?}: {struggle}");
+            assert_eq!(
+                compare_move_power(&dex, &scores, 0, MoveId::TAKE_DOWN, &attacker, &defender),
+                Ok(PowerComparison::WeakerThanAnotherMove),
+                "species {species:?}"
+            );
+        }
     }
 }
