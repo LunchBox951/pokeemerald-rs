@@ -636,9 +636,12 @@ impl NoiseChannel {
     /// `(sample > 0) * currentVolume` (`mgba/src/gb/audio.c:730-732`), so a
     /// raised latch follows the stepped volume while a low one stays low.
     pub fn apply_envelope_step(&mut self, volume: u8) {
+        // The step rewrites `ch4.sample = (sample > 0) * currentVolume`
+        // (`mgba/src/gb/audio.c:730-732`), so the centre follows every step
+        // while a low latch stays at zero.
+        self.centre = volume & 0x0F;
         if self.level > 0 {
-            self.level = volume & 0x0F;
-            self.centre = self.level;
+            self.level = self.centre;
         }
     }
 
@@ -1130,6 +1133,21 @@ mod tests {
         }
         noise.apply_envelope_step(12);
         assert_eq!(noise.level(), 0, "a low latch stays low through a step");
+    }
+
+    #[test]
+    fn an_envelope_step_recentres_a_low_latch_at_the_stepped_volume() {
+        let mut noise = NoiseChannel::from_control_byte(0);
+        while noise.level() == 0 {
+            noise.clock_sample(9);
+        }
+        while noise.level() != 0 {
+            noise.clock_sample(9);
+        }
+        assert_eq!(noise.centred_level(), -9, "sanity: low at volume 9");
+        noise.apply_envelope_step(5);
+        assert_eq!(noise.level(), 0, "the level stays zero");
+        assert_eq!(noise.centred_level(), -5, "the centre follows the step");
     }
 
     #[test]
