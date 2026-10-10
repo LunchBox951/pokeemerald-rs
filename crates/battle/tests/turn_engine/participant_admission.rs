@@ -1,8 +1,8 @@
 //! Constructor-time admission of a battler's inherited status (issue #945).
 //!
 //! `AbilityBattleEffects(ABILITYEFFECT_IMMUNITY)` (`battle_util.c:2873-2951`)
-//! cures a Paralysed Limber or Poisoned Immunity holder at move end; that
-//! cure is unmodelled, so both constructors refuse such a participant, active
+//! cures a Paralysed Limber, Poisoned Immunity, or confused Own Tempo holder
+//! at move end; that cure is unmodelled, so both constructors refuse such a participant, active
 //! or benched, before any constructor RNG draw.
 
 use crate::common::{max_iv_mon, SequenceRng};
@@ -23,9 +23,9 @@ fn healthy(species: SpeciesId) -> BattlePokemon {
     mon(species, 0, Status1::Healthy)
 }
 
-/// The two refused pairs: a Paralysed Persian (Limber) and a Poisoned
-/// Snorlax (Immunity).
-fn refused() -> [(BattlePokemon, AbilityId); 2] {
+/// The refused cases: a Paralysed Persian (Limber), a Poisoned Snorlax
+/// (Immunity), and a confused Spinda (Own Tempo).
+fn refused() -> [(BattlePokemon, AbilityId); 3] {
     [
         (
             mon(SpeciesId::PERSIAN, 0, Status1::Paralysed),
@@ -35,6 +35,12 @@ fn refused() -> [(BattlePokemon, AbilityId); 2] {
             mon(SpeciesId::SNORLAX, 0, Status1::Poisoned),
             AbilityId::IMMUNITY,
         ),
+        {
+            let mut spinda = healthy(SpeciesId::SPINDA);
+            assert_eq!(spinda.ability(), AbilityId::OWN_TEMPO);
+            spinda.volatiles_mut().set_confusion(3);
+            (spinda, AbilityId::OWN_TEMPO)
+        },
     ]
 }
 
@@ -167,13 +173,40 @@ fn trainer_constructor_refuses_a_later_player_reserve_before_drawing() {
 
 #[test]
 fn a_fainted_reserve_is_admitted_because_it_can_never_enter() {
-    let (mut bad, _) = refused().into_iter().next().unwrap();
-    bad.apply_damage(u32::MAX);
-    assert!(bad.is_fainted());
+    for (mut bad, _) in refused() {
+        bad.apply_damage(u32::MAX);
+        assert!(bad.is_fainted());
+        let mut rng = SequenceRng::new([0, 0]);
+        wild(
+            healthy(SpeciesId::MUDKIP),
+            vec![bad],
+            healthy(SpeciesId::ZIGZAGOON),
+            false,
+            &mut rng,
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn confusion_is_refused_only_for_own_tempo() {
+    let mut zigzagoon = healthy(SpeciesId::ZIGZAGOON);
+    zigzagoon.volatiles_mut().set_confusion(3);
+    let mut rng = SequenceRng::new([0, 0]);
+    let battle = wild(
+        zigzagoon,
+        vec![],
+        healthy(SpeciesId::ZIGZAGOON),
+        false,
+        &mut rng,
+    )
+    .unwrap();
+    assert!(battle.player().volatiles().confused());
+
     let mut rng = SequenceRng::new([0, 0]);
     wild(
-        healthy(SpeciesId::MUDKIP),
-        vec![bad],
+        healthy(SpeciesId::SPINDA),
+        vec![],
         healthy(SpeciesId::ZIGZAGOON),
         false,
         &mut rng,
