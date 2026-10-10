@@ -3,12 +3,12 @@
 //! (`MPlayMain`, `m4a_1.s:1129`).
 //!
 //! `PORT` and every `XCMD` besides the pseudo-echo pair (`xIECV`/`xIECL`)
-//! decode but never execute.
+//! and the terminal reserved kinds 0 and 3 decode but never execute.
 
 use crate::cgb_voice::{CgbChannelNumber, CgbVoice};
 use crate::pitch::{self, SAMPLES_PER_FRAME};
 use crate::psg::WaveChannel;
-use crate::sequence::{clamp_tempo, Event, MAX_TEMPO_BPM};
+use crate::sequence::{clamp_tempo, xcmd_ends_track, Event, MAX_TEMPO_BPM};
 use crate::song::{Instrument, Song};
 use crate::voice::{channel_volume, pan_terms, Voice};
 use crate::{Mixer, DEFAULT_MASTER_VOLUME, DEFAULT_MAX_VOICES};
@@ -635,6 +635,11 @@ impl Sequencer {
                 }
             }
             Event::PatternEnd => track.return_from_pattern(),
+            // Kinds 0 and 3 are `ply_xxx` -> `ply_fine` (`m4a_tables.c:293`,
+            // `:296`; `m4a.c:1531`..`:1534`).
+            Event::Xcmd { kind, .. } if xcmd_ends_track(kind) => {
+                Self::finish_track(track, mixer, track_id);
+            }
             Event::Xcmd {
                 kind: XCMD_IECV,
                 value,
