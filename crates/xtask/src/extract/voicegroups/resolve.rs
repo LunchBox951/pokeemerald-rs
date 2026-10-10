@@ -432,6 +432,9 @@ impl<'a> Resolver<'a> {
             .transpose()?;
 
         self.resolve_group(child_label, GroupRole::IndirectionTarget)?;
+        if let Some(table) = &key_split_table {
+            self.materialize_selected_child_tail(child_label, &table.table)?;
+        }
         let children_id = checked_pack_id(voice_group_pack_id(child_label), parent_label)?;
         Ok(match key_split_table {
             Some(table) => VoiceSlot::KeySplit {
@@ -505,9 +508,60 @@ impl<'a> Resolver<'a> {
             .collect()
     }
 
-    fn top_level_link_successors(&self, top_label: &str) -> Vec<String> {
+    /// A key-split table can select a child index past the child's declared
+    /// records; upstream then reads the `ToneData` linked right after them
+    /// (`src/m4a_1.s:1589-1607`). Only the selected indices are filled, from
+    /// the raw linked records in order, and only with leaves: upstream
+    /// resolves a single level of indirection, so a borrowed key split or
+    /// rhythm record stays silent. Repeated references accumulate in the
+    /// shared child.
+    fn materialize_selected_child_tail(
+        &mut self,
+        child_label: &str,
+        selected_indices: &[u8],
+    ) -> Result<(), VoiceGroupError> {
+        let raw_groups = self.raw_groups;
+        let child = &raw_groups[child_label];
+        let declared_end = usize::from(child.starting_note) + child.slots.len();
+        let mut tail_indices: Vec<usize> = selected_indices
+            .iter()
+            .map(|&index| usize::from(index))
+            .filter(|&index| index >= declared_end && index < VOICE_SLOT_COUNT)
+            .collect();
+        tail_indices.sort_unstable();
+        tail_indices.dedup();
+        if tail_indices.is_empty() {
+            return Ok(());
+        }
+        let successors = self.link_successors(child_label);
+        let mut linked_records = successors
+            .iter()
+            .filter_map(|label| raw_groups.get(label))
+            .flat_map(|group| group.slots.iter().map(move |slot| (&group.label, slot)));
+        let mut cursor = declared_end;
+        for index in tail_indices {
+            let Some((group_label, raw_slot)) = linked_records.nth(index - cursor) else {
+                break;
+            };
+            cursor = index + 1;
+            if matches!(raw_slot, RawSlot::KeySplit { .. } | RawSlot::Rhythm { .. }) {
+                continue;
+            }
+            let leaf = convert_leaf_slot(raw_slot, group_label)?;
+            let resolved = self
+                .resolved_groups
+                .get_mut(child_label)
+                .expect("a resolved child stays resolved");
+            if resolved.slots[index] == VoiceSlot::Empty {
+                resolved.slots[index] = leaf;
+            }
+        }
+        Ok(())
+    }
+
+    fn link_successors(&self, root_label: &str) -> Vec<String> {
         let Some(position) = self.link_order.iter().position(
-            |item| matches!(item, IndexedLinkOrderItem::VoiceGroup(label) if label == top_label),
+            |item| matches!(item, IndexedLinkOrderItem::VoiceGroup(label) if label == root_label),
         ) else {
             return Vec::new();
         };
@@ -526,7 +580,7 @@ impl<'a> Resolver<'a> {
         missing_slot_count: usize,
     ) -> Result<Vec<VoiceSlot>, VoiceGroupError> {
         let mut borrowed_slots = Vec::with_capacity(missing_slot_count);
-        for successor_label in self.top_level_link_successors(borrower_label) {
+        for successor_label in self.link_successors(borrower_label) {
             if borrowed_slots.len() == missing_slot_count {
                 break;
             }
