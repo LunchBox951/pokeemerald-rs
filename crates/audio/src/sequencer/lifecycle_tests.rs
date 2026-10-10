@@ -210,8 +210,19 @@ fn slow_release_song_tracks(tracks: Vec<Vec<Event>>) -> Song {
 /// the voice is the only thing that can still sound.
 #[test]
 fn a_paused_sequencer_still_sounds_a_voice_an_ended_track_left_in_release() {
-    let ending = vec![Event::Voice(0), tied_note(60), Event::Wait(1), Event::Fine];
-    let surviving = vec![Event::Voice(0), tied_note(72), Event::Wait(200)];
+    let ending = vec![
+        Event::Voice(0),
+        Event::Volume(127),
+        tied_note(60),
+        Event::Wait(1),
+        Event::Fine,
+    ];
+    let surviving = vec![
+        Event::Voice(0),
+        Event::Volume(127),
+        tied_note(72),
+        Event::Wait(200),
+    ];
     let mut seq = Sequencer::new(slow_release_song_tracks(vec![ending, surviving]));
     let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
 
@@ -243,7 +254,13 @@ fn a_paused_sequencer_still_sounds_a_voice_an_ended_track_left_in_release() {
 /// as a fade step never receives that step.
 #[test]
 fn a_track_that_ends_via_fine_this_tick_never_receives_that_ticks_fade_step() {
-    let track = vec![Event::Voice(0), tied_note(60), Event::Wait(1), Event::Fine];
+    let track = vec![
+        Event::Voice(0),
+        Event::Volume(127),
+        tied_note(60),
+        Event::Wait(1),
+        Event::Fine,
+    ];
     let mut seq = Sequencer::new(slow_release_song(track));
     let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
 
@@ -273,6 +290,7 @@ fn a_track_that_ends_via_fine_this_tick_never_receives_that_ticks_fade_step() {
 fn an_intervening_pan_must_not_leak_this_ticks_fade_step_into_a_fine_ending_track() {
     let track = vec![
         Event::Voice(0),
+        Event::Volume(127),
         tied_note(60),
         Event::Wait(1),
         Event::Pan(0),
@@ -304,6 +322,7 @@ fn an_intervening_pan_must_not_leak_this_ticks_fade_step_into_a_fine_ending_trac
 fn a_pan_command_in_the_same_tick_as_fine_must_not_reach_the_released_voice() {
     let track = vec![
         Event::Voice(0),
+        Event::Volume(127),
         tied_note(60),
         Event::Wait(1),
         Event::Pan(-64),
@@ -332,6 +351,7 @@ fn a_pan_command_in_the_same_tick_as_fine_must_not_reach_the_released_voice() {
 fn a_bend_command_in_the_same_tick_as_fine_must_not_reach_the_released_voice() {
     let track = vec![
         Event::Voice(0),
+        Event::Volume(127),
         Event::BendRange(2),
         tied_note(60),
         Event::Wait(1),
@@ -364,6 +384,7 @@ fn a_bend_command_in_the_same_tick_as_fine_must_not_reach_the_released_voice() {
 fn a_control_from_an_earlier_tick_in_the_same_frame_as_fine_must_not_reach_the_released_voice() {
     let track = vec![
         Event::Voice(0),
+        Event::Volume(127),
         tied_note(60),
         Event::Wait(1),
         Event::Pan(-64),
@@ -402,6 +423,7 @@ fn a_note_started_the_same_tick_as_a_pending_control_consumes_it_before_older_vo
     let voices = vec![Instrument::DirectSound(ToneData::new(wave, Adsr::flat()))];
     let track = vec![
         Event::Voice(0),
+        Event::Volume(127),
         tied_note(60),
         Event::Wait(1),
         Event::Pan(-64),
@@ -457,6 +479,7 @@ fn a_note_started_the_same_tick_as_a_fade_step_consumes_it_before_older_voices_s
     let voices = vec![Instrument::DirectSound(ToneData::new(wave, Adsr::flat()))];
     let track = vec![
         Event::Voice(0),
+        Event::Volume(127),
         tied_note(60),
         Event::Wait(1),
         tied_note(72),
