@@ -510,10 +510,8 @@ fn estimated_damage(
         ),
     };
     let damage = base_damage(&input);
-    // `TypeCalc` returns for Struggle before STAB and the chart
-    // (`battle_script_commands.c:1536`-`:1552`); the caller's simulated
-    // percentage and minimum-one floor still apply
-    // (`battle_ai_script_commands.c:1208`-`:1213`).
+    // `TypeCalc` returns for Struggle before STAB and the chart (`battle_script_commands.c:1541`);
+    // the caller's percentage and floor still apply (`battle_ai_script_commands.c:1208`-`:1213`).
     if move_id == MoveId::STRUGGLE {
         return Ok((damage * simulated_damage_percent / PERCENT_SCALE).max(MINIMUM_DAMAGE));
     }

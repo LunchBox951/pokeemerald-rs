@@ -242,9 +242,8 @@ fn candidate_move_damage(
     if move_data.power == OHKO_POWER_SENTINEL {
         return Ok(None);
     }
-    // `TypeCalc` returns for Struggle before the STAB multiply, the Levitate
-    // branch and the chart loop, leaving the caller's base untouched
-    // (`battle_script_commands.c:1536`-`:1552`).
+    // `TypeCalc` returns for Struggle before STAB, Levitate and the chart
+    // (`battle_script_commands.c:1541`), so the caller's base stands.
     if move_id == MoveId::STRUGGLE {
         return Ok(Some(base));
     }
