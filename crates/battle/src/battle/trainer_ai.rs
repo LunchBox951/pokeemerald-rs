@@ -262,18 +262,18 @@ fn move_slot_can_be_scored(pokemon: &BattlePokemon, slot: usize) -> bool {
     selectable_slot(pokemon.move_at(slot)) && pokemon.moves()[slot].pp > 0
 }
 
-/// Emerald admits slot zero before checking occupancy and always draws for the
-/// final tie-break (`src/battle_ai_script_commands.c:423`-`:445`).
+/// Deliberately differs from `battle_ai_script_commands.c:423-429` (slot 0 admitted
+/// unconditionally, later slots only on `MOVE_NONE`): only PP-positive real moves tie (#1865).
 fn select_highest_scoring_move(
     enemy: &BattlePokemon,
     scores: [i8; MAX_MON_MOVES],
     rng: &mut impl BattleRng,
 ) -> usize {
-    let mut highest_score = scores[0];
-    let mut highest_scoring_slots = vec![0];
+    let mut highest_score = i8::MIN;
+    let mut highest_scoring_slots = Vec::new();
 
-    for (slot, score) in scores.iter().copied().enumerate().skip(1) {
-        if !selectable_slot(enemy.move_at(slot)) {
+    for (slot, score) in scores.iter().copied().enumerate() {
+        if !move_slot_can_be_scored(enemy, slot) {
             continue;
         }
         if score == highest_score {
@@ -789,9 +789,9 @@ fn score_first_turn_setup(
 mod tests {
     use super::{
         choose_trainer_action, compare_move_power, ensure_scoreable, ensure_supported_flags,
-        estimated_damage, hit_effect_ability_blocked, is_scoreable_effect, MoveScores,
-        PowerComparison, EFFECT_HIT, FIRST_TURN, FIRST_TURN_SETUP_BONUS_THRESHOLD, PERCENT_SCALE,
-        STAT_DROP_DISCOURAGEMENT_THRESHOLD,
+        estimated_damage, hit_effect_ability_blocked, is_scoreable_effect,
+        select_highest_scoring_move, MoveScores, PowerComparison, EFFECT_HIT, FIRST_TURN,
+        FIRST_TURN_SETUP_BONUS_THRESHOLD, PERCENT_SCALE, STAT_DROP_DISCOURAGEMENT_THRESHOLD,
     };
     use crate::battle::opponent_ai::EnemyAction;
     use crate::dex::Dex;
@@ -974,6 +974,7 @@ mod tests {
             EnemyAction::Struggle
         );
         assert_eq!(rng.draws(), 0);
+        rng.assert_exhausted();
     }
 
     #[test]
@@ -1124,6 +1125,37 @@ mod tests {
             EnemyAction::Move(1)
         );
         assert_eq!(rng.draws(), MAX_MON_MOVES + 2);
+        rng.assert_exhausted();
+    }
+
+    #[test]
+    fn zero_score_usable_move_excludes_spent_slot_zero() {
+        let mut enemy = pokemon(MUDKIP, vec![TACKLE, GROWL]);
+        spend_move(&mut enemy, 0);
+        let mut rng = SequenceRng::new([SELECT_FIRST_TIED_MOVE]);
+
+        assert_eq!(
+            select_highest_scoring_move(&enemy, [0; MAX_MON_MOVES], &mut rng),
+            1
+        );
+        assert_eq!(rng.draws(), 1);
+        rng.assert_exhausted();
+    }
+
+    #[test]
+    fn zero_score_tie_includes_only_pp_positive_real_moves() {
+        let mut enemy = pokemon(MUDKIP, vec![TACKLE, GROWL, SCRATCH]);
+        spend_move(&mut enemy, 2);
+
+        for (draw, expected_slot) in [(2_u16, 0_usize), (3, 1)] {
+            let mut rng = SequenceRng::new([draw]);
+            assert_eq!(
+                select_highest_scoring_move(&enemy, [0; MAX_MON_MOVES], &mut rng),
+                expected_slot
+            );
+            assert_eq!(rng.draws(), 1);
+            rng.assert_exhausted();
+        }
     }
 
     #[test]
