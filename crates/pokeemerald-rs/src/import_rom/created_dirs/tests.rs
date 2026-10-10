@@ -598,3 +598,32 @@ fn a_sync_out_of_descriptors_still_syncs_every_levels_parent() {
         "the level being synced keeps its pins"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn the_held_final_directory_does_not_cost_a_new_levels_parent_sync() {
+    // `import_to_with_hooks` keeps `creation.final_directory` alive across
+    // `sync_created_directories`; with the table full after creation, the
+    // sync's only recovery is shedding the innermost level's own pin.
+    if !in_descriptor_pressure_child() {
+        run_under_descriptor_pressure(
+            "import_rom::created_dirs::tests::the_held_final_directory_does_not_cost_a_new_levels_parent_sync",
+        );
+        return;
+    }
+    let dir = TempDir::new("held-final-sync");
+    let target = dir.join("new");
+    // Existing parent + new level consume both free slots.
+    let fillers = fill_descriptor_table_leaving(2);
+    let creation = super::create_directories_pinned(&target).expect("one level is created");
+    let mut created = creation.created;
+    let mut synced = false;
+    super::sync_created_directories_with(&mut created, &mut |parent| {
+        let real = super::super::dest::reopen_for_sync(parent)?;
+        synced = true;
+        Ok(real)
+    });
+    drop(creation.final_directory);
+    drop(fillers);
+    assert!(synced, "the new level's parent entry must be synced");
+}

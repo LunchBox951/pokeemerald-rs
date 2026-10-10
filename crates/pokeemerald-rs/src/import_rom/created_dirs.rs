@@ -160,11 +160,10 @@ pub(super) fn create_directories(
 pub(super) struct DirectoryCreation {
     /// The levels this run made, as [`create_directories`] reports them.
     pub(super) created: Vec<CreatedDirectory>,
-    /// The descriptor the creation walk finished on: the destination
-    /// directory itself, as that walk reached it. Held apart from `created`
-    /// so shedding a level's cleanup pin never loses it. `None` when there
-    /// was nothing to walk (the destination already stood), which is the
-    /// only case a caller may resolve the path itself.
+    /// The descriptor the walk finished on when no created level owns it
+    /// (an existing destination reached through its parents). `None` means
+    /// nothing was walked, or the last created level is the destination:
+    /// see [`created_destination`].
     pub(super) final_directory: Option<Pin>,
 }
 
@@ -463,10 +462,38 @@ fn create_directories_pinned_with_hooks(
             }
         }
     }
+    // The last level made already is this descriptor's owner; a second
+    // owner would stop the sync from freeing it under descriptor pressure.
+    let owned_by_created = created
+        .last()
+        .and_then(|level| level.own.as_ref())
+        .is_some_and(|own| std::rc::Rc::ptr_eq(own, &parent_fd));
     Ok(DirectoryCreation {
         created,
-        final_directory: Some(parent_fd),
+        final_directory: (!owned_by_created).then_some(parent_fd),
     })
+}
+
+/// The destination when the walk ended on a level this run created: that
+/// level's own pin, or, if the sync shed it, a reopen from its pinned parent
+/// checked against the identity captured at creation. `None` when no level
+/// was created.
+#[cfg(unix)]
+pub(super) fn created_destination(created: &mut [CreatedDirectory]) -> io::Result<Option<Pin>> {
+    let Some(level) = created.last() else {
+        return Ok(None);
+    };
+    if let Some(own) = &level.own {
+        return Ok(Some(std::rc::Rc::clone(own)));
+    }
+    let Some(parent) = level.parent.clone() else {
+        return Err(io::Error::other("created directory lost its parent"));
+    };
+    let (name, identity) = (level.name.clone(), level.identity);
+    match reopen_created_level(created, &mut 0, &parent, &name, &identity, &mut || None) {
+        ReopenedLevel::Pinned(fd) => Ok(Some(fd)),
+        ReopenedLevel::Unpinned(source) | ReopenedLevel::Unverified(source) => Err(source),
+    }
 }
 
 /// [`create_directories`]'s off-Unix arm: no descriptor to pin, so each

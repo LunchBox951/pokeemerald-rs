@@ -480,8 +480,12 @@ fn acquire_dest(
 ) -> io::Result<Dest> {
     #[cfg(unix)]
     {
-        match final_directory.map(|pin| &**pin) {
-            Some(pin) => open_shedding_pins(created, || Dest::open_pinned(pin)),
+        let pin = match final_directory {
+            Some(pin) => Some(std::rc::Rc::clone(pin)),
+            None => created_dirs::created_destination(created)?,
+        };
+        match pin {
+            Some(pin) => open_shedding_pins(created, || Dest::open_pinned(&pin)),
             None => open_shedding_pins(created, || Dest::open(dir)),
         }
     }
@@ -561,8 +565,7 @@ fn import_to_with_hooks(
     // do without, so a pinned level gives its descriptor up to them first.
     let dest_result = acquire_dest(&mut created, &dir, creation.final_directory.as_ref());
     // `Dest` holds its own handle now; the walk's descriptor is redundant
-    // and must not take a slot the temporary file's open needs. Off Unix
-    // the walk keeps no descriptor, so there is nothing to give back.
+    // and must not take a slot the temporary file's open needs.
     #[cfg(unix)]
     drop(creation.final_directory);
     let dest = match dest_result {
