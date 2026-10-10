@@ -344,6 +344,46 @@ fn an_unsupported_rom_depth_is_rejected() {
 }
 
 #[test]
+fn a_tile_count_whose_byte_length_overflows_is_a_length_error() {
+    // `u32::MAX / bytes_per_tile` tiles is the last count that fits; one
+    // more must fail closed rather than panic or wrap.
+    for (rom_bit_depth, max_tiles) in [(4, u32::MAX / 32), (8, u32::MAX / 64)] {
+        let root = ImageRoot {
+            addr: at(RAW_TILES_OFF),
+            encoding: Encoding::Raw,
+            rom_bit_depth,
+            tile_count: max_tiles + 1,
+            ..image_root()
+        };
+        let err = read(image, &root).unwrap_err();
+        assert!(
+            matches!(err, ImportError::Length { value, max, .. }
+                if value == len_usize(max_tiles + 1) && max == len_usize(max_tiles)),
+            "{rom_bit_depth}bpp: {err}"
+        );
+    }
+}
+
+#[test]
+fn the_largest_tile_count_that_fits_is_not_a_length_error() {
+    // It still fails, but on the read past the ROM end, not on the length.
+    for (rom_bit_depth, max_tiles) in [(4, u32::MAX / 32), (8, u32::MAX / 64)] {
+        let root = ImageRoot {
+            addr: at(RAW_TILES_OFF),
+            encoding: Encoding::Raw,
+            rom_bit_depth,
+            tile_count: max_tiles,
+            ..image_root()
+        };
+        let err = read(image, &root).unwrap_err();
+        assert!(
+            matches!(err, ImportError::Truncated { .. }),
+            "{rom_bit_depth}bpp: {err}"
+        );
+    }
+}
+
+#[test]
 fn lengths_narrow_without_panicking() {
     assert_eq!(len_usize(0), 0);
     assert_eq!(len_usize(u32::MAX), usize::try_from(u32::MAX).unwrap());

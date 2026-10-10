@@ -51,13 +51,14 @@ enum VoiceSlot {
 pub struct Mixer {
     direct_sound_slots: Vec<Option<Voice>>,
     cgb_slots: [Option<CgbVoice>; 4],
-    /// Square1/Square2's committed hardware state (duty position, frequency,
-    /// sweep) once a voice has really triggered it, retained across the slot
-    /// emptying or a pending replacement that has not yet written anything,
-    /// tracked apart from the `Option<CgbVoice>` occupant so a later note-on
-    /// can continue it (`CgbVoice::advance_idle_duty`'s doc). Indices match
+    /// Each channel's committed hardware state once a voice has really
+    /// triggered it (Square1/Square2's duty position, frequency, and sweep;
+    /// Noise's output latch), retained across the slot emptying or a pending
+    /// replacement that has not yet written anything, tracked apart from the
+    /// `Option<CgbVoice>` occupant so a later note-on can continue it
+    /// (`CgbVoice::advance_idle_duty`'s doc). Indices match
     /// `CgbChannelNumber::slot`.
-    idle_square_duty: [Option<CgbVoice>; 2],
+    idle_cgb_hardware: [Option<CgbVoice>; 4],
     master_volume: u8,
     next_note_on_ordinal: u64,
     mix_buffer: Vec<StereoAcc>,
@@ -80,7 +81,7 @@ impl Mixer {
         Self {
             direct_sound_slots: std::iter::repeat_with(|| None).take(max_voices).collect(),
             cgb_slots: [None, None, None, None],
-            idle_square_duty: [None, None],
+            idle_cgb_hardware: [None, None, None, None],
             master_volume,
             next_note_on_ordinal: 0,
             mix_buffer: vec![(0, 0); SAMPLES_PER_FRAME],
@@ -111,11 +112,18 @@ impl Mixer {
             + self.cgb_slots.iter().filter(|slot| slot.is_some()).count()
     }
 
-    /// Whether any voice (DirectSound or CGB) is active.
+    /// Whether no voice (DirectSound or CGB) is active and no vacated noise
+    /// slot still holds an unsettled output latch that idle frames render
+    /// (`CgbVoice::render_idle_hardware`'s doc).
     #[must_use]
     pub fn is_idle(&self) -> bool {
         self.direct_sound_slots.iter().all(Option::is_none)
             && self.cgb_slots.iter().all(Option::is_none)
+            && !self
+                .idle_cgb_hardware
+                .iter()
+                .flatten()
+                .any(CgbVoice::has_unsettled_noise_output)
     }
 
     /// Whether the master-mix reverb still holds delayed samples that can
@@ -206,16 +214,15 @@ impl Mixer {
                 return false;
             }
         }
-        if let Some(hardware) = self.idle_square_duty.get_mut(slot) {
-            if let Some(occupant) = self.cgb_slots[slot]
-                .as_ref()
-                .filter(|voice| voice.initial_trigger_committed())
-            {
-                *hardware = Some(occupant.clone());
-            }
-            if let Some(previous) = hardware.as_ref() {
-                voice.carry_duty_phase_from(previous);
-            }
+        let hardware = &mut self.idle_cgb_hardware[slot];
+        if let Some(occupant) = self.cgb_slots[slot]
+            .as_ref()
+            .filter(|voice| voice.initial_trigger_committed())
+        {
+            *hardware = Some(occupant.clone());
+        }
+        if let Some(previous) = hardware.as_ref() {
+            voice.carry_hardware_state_from(previous);
         }
         voice.set_seq(self.take_note_on_ordinal());
         self.cgb_slots[slot] = Some(voice);
@@ -319,20 +326,18 @@ impl Mixer {
         for (index, slot) in self.cgb_slots.iter_mut().enumerate() {
             if let Some(voice) = slot {
                 if voice.track() == track {
-                    if let Some(idle) = self.idle_square_duty.get_mut(index) {
-                        Self::off_write_square_hardware(voice, idle);
-                    }
+                    Self::off_write_cgb_hardware(voice, &mut self.idle_cgb_hardware[index]);
                     *slot = None;
                 }
             }
         }
     }
 
-    /// Apply the retirement off-write to the square hardware a slot really
-    /// holds. A voice that never reached its initial trigger (cancelled
+    /// Apply the retirement off-write to the hardware a slot really holds
+    /// (a no-op for Wave). A voice that never reached its initial trigger (cancelled
     /// while pending) wrote nothing, so the retained committed state, not
     /// the cancelled note's own frequency/sweep, takes the off-write.
-    fn off_write_square_hardware(voice: &CgbVoice, hardware: &mut Option<CgbVoice>) {
+    fn off_write_cgb_hardware(voice: &CgbVoice, hardware: &mut Option<CgbVoice>) {
         if voice.initial_trigger_committed() {
             *hardware = Some(voice.clone());
         }
@@ -411,9 +416,7 @@ impl Mixer {
             if let Some(voice) = slot {
                 voice.begin_frame(extra_envelope_iteration);
                 if voice.initial_trigger_committed() {
-                    if let Some(idle) = self.idle_square_duty.get_mut(index) {
-                        *idle = None;
-                    }
+                    self.idle_cgb_hardware[index] = None;
                 }
                 // A voice retiring this frame renders nothing: the idle-duty
                 // loop below accounts for the whole frame's silence, so a
@@ -423,19 +426,19 @@ impl Mixer {
                     voice.render(&mut self.mix_buffer, &self.sweep_ticks);
                 }
                 if !voice.is_active() {
-                    if let Some(idle) = self.idle_square_duty.get_mut(index) {
-                        Self::off_write_square_hardware(voice, idle);
-                    }
+                    Self::off_write_cgb_hardware(voice, &mut self.idle_cgb_hardware[index]);
                     *slot = None;
                 }
             }
         }
         // A vacated square slot's hardware register keeps advancing while no
-        // voice occupies it (`CgbVoice::advance_idle_duty`'s doc).
-        for (index, idle) in self.idle_square_duty.iter_mut().enumerate() {
+        // voice occupies it (`CgbVoice::advance_idle_duty`'s doc); a vacated
+        // noise slot keeps clocking and emitting its latch until the restarted
+        // LFSR settles it (`CgbVoice::render_idle_hardware`'s doc).
+        for (index, idle) in self.idle_cgb_hardware.iter_mut().enumerate() {
             if self.cgb_slots[index].is_none() {
-                if let Some(duty) = idle {
-                    duty.advance_idle_duty(SAMPLES_PER_FRAME, &self.sweep_ticks);
+                if let Some(hardware) = idle {
+                    hardware.render_idle_hardware(&mut self.mix_buffer, &self.sweep_ticks);
                 }
             }
         }

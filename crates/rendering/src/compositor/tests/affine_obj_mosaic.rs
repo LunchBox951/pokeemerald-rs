@@ -841,3 +841,143 @@ fn objwin_affine_mosaic_spill_written_in_winout_still_promotes_inside_win0() {
          priority-3 OBJ stays behind BG0"
     );
 }
+
+/// Renders row 0 of a red 8x8 affine mosaic OBJ at x=0 (mosaic width 16, zero
+/// matrix) under the given `WIN0`/`WIN1` controls, `(range, obj, effects)`
+/// each, with `WINOUT` showing nothing and a full OBJ brighten selected.
+fn zero_matrix_mosaic_obj_under_windows(
+    win0: (WindowRange, bool, bool),
+    win1: (WindowRange, bool, bool),
+) -> crate::Framebuffer {
+    use crate::oam::AffineMode;
+
+    let mut bytes = [0u8; 32];
+    for row in 0..8 {
+        bytes[row * 4..row * 4 + 4].copy_from_slice(&bpp4_row([1; 8]));
+    }
+    let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
+    let mut colors = [Bgr555::default(); Palette::LEN];
+    colors[1] = Bgr555::from_channels(0x1F, 0, 0);
+    let palette = Palette::new(colors);
+
+    let entries = [OamEntry::new(
+        1,
+        0,
+        0,
+        0,
+        BitDepth::Bpp4,
+        false,
+        false,
+        ObjShape::Square,
+        0,
+        0,
+        true,
+    )
+    .with_mosaic(true)
+    .with_affine(AffineMode::Affine { matrix_num: 0 })];
+    let matrices = [AffineMatrix::new(0, 0, 0, 0)];
+    let sprites =
+        SpriteLayer::new(&entries, &tileset, &tileset, &palette).with_affine_matrices(&matrices);
+
+    let window = |(x, obj, effects): (WindowRange, bool, bool)| {
+        (
+            WindowRect::new(x, WindowRange::new(0, 1)),
+            WindowLayerEnable {
+                obj,
+                effects,
+                ..WindowLayerEnable::NONE
+            },
+        )
+    };
+    let effects = FrameEffects {
+        windows: WindowConfig {
+            win0: Some(window(win0)),
+            win1: Some(window(win1)),
+            obj_window: None,
+            winout: WindowLayerEnable::NONE,
+        },
+        color: OBJ_FULL_BRIGHTEN,
+        mosaic: crate::mosaic::MosaicConfig {
+            bg: MosaicSize::NONE,
+            obj: MosaicSize::new(16, 1),
+        },
+        ..FrameEffects::default()
+    };
+    compose_frame_with_effects(&sprites, &[], &effects)
+}
+
+/// Asserts the spill block `[10, 16)` on row 0 is `expected` and nothing else
+/// of the sprite shows beyond it.
+fn assert_spill_block_is(fb: &crate::Framebuffer, expected: Rgb888) {
+    let black = Bgr555::default().to_rgb888();
+    for x in 10..16 {
+        assert_eq!(fb.pixel(x, 0), Some(expected), "x={x}");
+    }
+    assert_eq!(fb.pixel(16, 0), Some(black));
+    assert_eq!(fb.pixel(10, 1), Some(black));
+}
+
+#[test]
+fn affine_obj_mosaic_spill_from_a_zero_width_win0_pass_keeps_its_brighten() {
+    // mGBA inserts WIN0 [10,10) as a real pass ahead of WIN1 [10,240)
+    // (`video-software.c:476-495,908-911`); that pass's sprite preprocess
+    // rounds the condition 8 up to 16 and writes columns 10..15 with WIN0's
+    // effects-enabled variant palette (`software-obj.c:227-242`). WIN1's
+    // later pass cannot overwrite equal-priority pixels (`software-obj.c:80`).
+    let fb = zero_matrix_mosaic_obj_under_windows(
+        (WindowRange::new(10, 10), true, true),
+        (WindowRange::new(10, 240), true, false),
+    );
+    assert_spill_block_is(&fb, Bgr555::from_channels(0x1F, 0x1F, 0x1F).to_rgb888());
+}
+
+#[test]
+fn affine_obj_mosaic_spill_from_a_zero_width_win1_pass_keeps_its_brighten() {
+    // WIN1 [10,10) survives a WIN0 that merely begins at its column: the
+    // insertion search skips passes ending at the new window's start
+    // (`video-software.c:463,478-499`).
+    let fb = zero_matrix_mosaic_obj_under_windows(
+        (WindowRange::new(10, 240), true, false),
+        (WindowRange::new(10, 10), true, true),
+    );
+    assert_spill_block_is(&fb, Bgr555::from_channels(0x1F, 0x1F, 0x1F).to_rgb888());
+}
+
+#[test]
+fn affine_obj_mosaic_spill_skips_a_zero_width_pass_whose_obj_is_disabled() {
+    // A pass with OBJ disabled and OBJWIN off runs no sprite preprocess
+    // (`video-software.c:1056`), so only WIN1's effects-off pass writes.
+    let fb = zero_matrix_mosaic_obj_under_windows(
+        (WindowRange::new(10, 10), false, true),
+        (WindowRange::new(10, 240), true, false),
+    );
+    assert_spill_block_is(&fb, Bgr555::from_channels(0x1F, 0, 0).to_rgb888());
+}
+
+#[test]
+fn affine_obj_mosaic_spill_ignores_a_zero_width_win1_pass_overwritten_by_win0() {
+    // WIN0 [9,240) overwrites the interior of the empty WIN1 [10,10) pass and
+    // trims it away (`video-software.c:478-499`).
+    let fb = zero_matrix_mosaic_obj_under_windows(
+        (WindowRange::new(9, 240), true, false),
+        (WindowRange::new(10, 10), true, true),
+    );
+    let red = Bgr555::from_channels(0x1F, 0, 0).to_rgb888();
+    for x in 10..16 {
+        assert_eq!(fb.pixel(x, 0), Some(red), "x={x}");
+    }
+}
+
+#[test]
+fn affine_obj_mosaic_spill_ignores_a_zero_width_win1_pass_trimmed_by_a_win0_ending_there() {
+    // WIN0 [0,10) ends at the empty WIN1 [10,10) pass; the overwrite loop
+    // trims passes ending at or before WIN0's end (`video-software.c:478-486`).
+    let fb = zero_matrix_mosaic_obj_under_windows(
+        (WindowRange::new(0, 10), false, false),
+        (WindowRange::new(10, 10), true, true),
+    );
+    let black = Bgr555::default().to_rgb888();
+    for x in 10..16 {
+        assert_eq!(fb.pixel(x, 0), Some(black), "x={x}");
+    }
+}

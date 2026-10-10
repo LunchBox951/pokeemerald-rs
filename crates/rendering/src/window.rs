@@ -34,7 +34,7 @@ impl WindowRange {
     /// Returns the column an empty horizontal range sits at, if it is empty.
     ///
     /// Equal endpoints match no pixel, yet the edge still partitions the
-    /// scanline; see [`WindowConfig::scanline_span_starts`].
+    /// scanline; see [`WindowConfig::scanline_passes`].
     const fn empty_edge(self) -> Option<u8> {
         if self.start == self.end {
             Some(self.start)
@@ -183,60 +183,100 @@ impl WindowConfig {
         (self.winout, WindowRegion::WinOut)
     }
 
-    /// Returns the ascending columns at which per-scanline window state
-    /// restarts, always including column zero.
+    /// Returns the scanline's ordered window passes, the first starting at
+    /// column zero.
     ///
-    /// Spans are the maximal runs of one [`WindowRegion`], plus one
+    /// Passes are the maximal runs of one [`WindowRegion`], plus the
     /// upstream-owned exception no per-column classification can show: a
-    /// window whose horizontal endpoints are equal matches no column yet
-    /// still starts a span, unless an outranking window covers that column
-    /// (`mgba/src/gba/renderers/video-software.c:446-500`)
+    /// window whose horizontal endpoints are equal matches no column yet is
+    /// still a real zero-length pass carrying its own control, ahead of the
+    /// pass that resumes at that column, unless an outranking window
+    /// overwrote it (`mgba/src/gba/renderers/video-software.c:446-500`).
+    /// Start columns therefore ascend but may repeat
     /// `(behavioral-fidelity)`.
-    pub(crate) fn scanline_span_starts(&self, y: u8) -> Vec<usize> {
-        let mut starts = vec![0];
-        if !self.any_enabled() {
-            return starts;
-        }
-        let horizontal_range_on = |window: Option<(WindowRect, WindowLayerEnable)>| {
+    pub(crate) fn scanline_passes(&self, y: u8) -> Vec<WindowPass> {
+        let (win0, win1) = (self.win0, self.win1);
+        let on_scanline = |window: Option<(WindowRect, WindowLayerEnable)>| {
             window
                 .filter(|(rect, _)| rect.y.contains_vertical(y))
-                .map(|(rect, _)| rect.x)
+                .map(|(rect, enable)| (rect.x, enable))
         };
-        let win0 = horizontal_range_on(self.win0);
-        let win1 = horizontal_range_on(self.win1);
-        let region = |column: u8| {
-            if win0.is_some_and(|range| range.contains(column)) {
-                WindowRegion::Win0
-            } else if win1.is_some_and(|range| range.contains(column)) {
-                WindowRegion::Win1
-            } else {
-                WindowRegion::WinOut
-            }
-        };
+        let win0 = on_scanline(win0);
+        let win1 = on_scanline(win1);
+        let region_at = |column: u8| self.classify_with_region(column, y, false);
 
-        let mut previous = region(0);
+        // Every column a pass begins at: the single-region run starts.
+        let mut columns = vec![0];
+        let mut previous = region_at(0).1;
         for column in 1..HORIZONTAL_PIXELS {
-            let current = region(column);
+            let current = region_at(column).1;
             if current != previous {
-                starts.push(usize::from(column));
+                columns.push(column);
             }
             previous = current;
         }
 
-        for (range, outranking) in [(win1, win0), (win0, None)] {
-            let Some(column) = range.and_then(WindowRange::empty_edge) else {
+        // `WIN1` is broken before `WIN0`, so `WIN0` overwrites the interior
+        // of a `WIN1` pass, but a `WIN0` that merely begins at the column
+        // leaves `WIN1`'s empty pass standing, while one ending at it trims the pass
+        // away (`video-software.c:463,478-499`).
+        let mut empty_passes = Vec::new();
+        for (window, region, outranking) in [
+            (win1, WindowRegion::Win1, win0),
+            (win0, WindowRegion::Win0, None),
+        ] {
+            let Some((range, control)) = window else {
                 continue;
             };
-            if !(1..HORIZONTAL_PIXELS).contains(&column)
-                || outranking.is_some_and(|range| range.contains(column))
-            {
+            let Some(column) = range.empty_edge() else {
+                continue;
+            };
+            let covered =
+                |outranking: (WindowRange, WindowLayerEnable)| outranking.0.contains(column - 1);
+            if !(1..HORIZONTAL_PIXELS).contains(&column) || outranking.is_some_and(covered) {
                 continue;
             }
-            starts.push(usize::from(column));
+            columns.push(column);
+            empty_passes.push((
+                column,
+                WindowPass::new(usize::from(column), control, region),
+            ));
         }
-        starts.sort_unstable();
-        starts.dedup();
-        starts
+        columns.sort_unstable();
+        columns.dedup();
+
+        let mut passes = Vec::new();
+        for column in columns {
+            passes.extend(
+                empty_passes
+                    .iter()
+                    .filter(|(empty_column, _)| *empty_column == column)
+                    .map(|&(_, pass)| pass),
+            );
+            let (control, region) = region_at(column);
+            passes.push(WindowPass::new(usize::from(column), control, region));
+        }
+        passes
+    }
+}
+
+/// One hardware-window pass on a scanline: where it starts, the control that
+/// governs it, and the region that control came from. Its end is the next
+/// pass's start, or the scanline's end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct WindowPass {
+    pub(crate) start: usize,
+    pub(crate) control: WindowLayerEnable,
+    pub(crate) region: WindowRegion,
+}
+
+impl WindowPass {
+    const fn new(start: usize, control: WindowLayerEnable, region: WindowRegion) -> Self {
+        Self {
+            start,
+            control,
+            region,
+        }
     }
 }
 
@@ -266,6 +306,14 @@ impl WindowRegion {
 mod tests {
     use super::{WindowConfig, WindowLayerEnable, WindowRange, WindowRect, WindowRegion};
 
+    fn pass_starts(config: &WindowConfig) -> Vec<usize> {
+        config
+            .scanline_passes(0)
+            .iter()
+            .map(|pass| pass.start)
+            .collect()
+    }
+
     /// Builds a config whose `WIN0`/`WIN1` rects span scanline 0.
     fn windows_on_line_zero(win0: Option<WindowRange>, win1: Option<WindowRange>) -> WindowConfig {
         let on_line_zero = |x: WindowRange| {
@@ -284,7 +332,7 @@ mod tests {
 
     #[test]
     fn a_scanline_with_no_active_window_is_one_span() {
-        assert_eq!(WindowConfig::default().scanline_span_starts(0), vec![0]);
+        assert_eq!(pass_starts(&WindowConfig::default()), vec![0]);
         let vertically_inactive = WindowConfig {
             win0: Some((
                 WindowRect::new(WindowRange::new(10, 20), WindowRange::new(5, 9)),
@@ -292,22 +340,66 @@ mod tests {
             )),
             ..WindowConfig::default()
         };
-        assert_eq!(vertically_inactive.scanline_span_starts(0), vec![0]);
+        assert_eq!(pass_starts(&vertically_inactive), vec![0]);
     }
 
     #[test]
     fn a_window_splits_the_scanline_at_both_of_its_edges() {
         let config = windows_on_line_zero(Some(WindowRange::new(10, 20)), None);
-        assert_eq!(config.scanline_span_starts(0), vec![0, 10, 20]);
+        assert_eq!(pass_starts(&config), vec![0, 10, 20]);
     }
 
     #[test]
     fn a_zero_width_window_still_splits_the_span_it_falls_in() {
         // Equal endpoints match no pixel, yet `_breakWindowInner` inserts the
-        // empty span and re-inserts the remainder behind it, so the column is
-        // a span start with identical control on both sides.
+        // empty pass and re-inserts the remainder behind it, so the column
+        // starts two passes: the window's own, then the restored one.
         let config = windows_on_line_zero(Some(WindowRange::new(5, 5)), None);
-        assert_eq!(config.scanline_span_starts(0), vec![0, 5]);
+        assert_eq!(pass_starts(&config), vec![0, 5, 5]);
+        let regions: Vec<_> = config
+            .scanline_passes(0)
+            .iter()
+            .map(|pass| pass.region)
+            .collect();
+        assert_eq!(
+            regions,
+            vec![
+                WindowRegion::WinOut,
+                WindowRegion::Win0,
+                WindowRegion::WinOut
+            ]
+        );
+    }
+
+    #[test]
+    fn a_zero_width_win1_survives_an_outranking_window_that_begins_at_its_column() {
+        // `WIN0` only trims the `WIN1` pass it overwrites, and a pass ending
+        // at `WIN0`'s start is skipped (`video-software.c:463,478-499`).
+        let begins_there = windows_on_line_zero(
+            Some(WindowRange::new(10, 240)),
+            Some(WindowRange::new(10, 10)),
+        );
+        let regions: Vec<_> = begins_there
+            .scanline_passes(0)
+            .iter()
+            .map(|pass| pass.region)
+            .collect();
+        assert_eq!(
+            regions,
+            vec![WindowRegion::WinOut, WindowRegion::Win1, WindowRegion::Win0]
+        );
+
+        let overlapping = windows_on_line_zero(
+            Some(WindowRange::new(9, 240)),
+            Some(WindowRange::new(10, 10)),
+        );
+        assert_eq!(pass_starts(&overlapping), vec![0, 9]);
+
+        let ending_there = windows_on_line_zero(
+            Some(WindowRange::new(0, 10)),
+            Some(WindowRange::new(10, 10)),
+        );
+        assert_eq!(pass_starts(&ending_there), vec![0, 10]);
     }
 
     #[test]
@@ -318,27 +410,27 @@ mod tests {
             Some(WindowRange::new(0, 100)),
             Some(WindowRange::new(20, 30)),
         );
-        assert_eq!(config.scanline_span_starts(0), vec![0, 100]);
+        assert_eq!(pass_starts(&config), vec![0, 100]);
     }
 
     #[test]
     fn a_zero_width_edge_only_splits_where_no_outranking_window_covers_it() {
         let covered =
             windows_on_line_zero(Some(WindowRange::new(0, 100)), Some(WindowRange::new(5, 5)));
-        assert_eq!(covered.scanline_span_starts(0), vec![0, 100]);
+        assert_eq!(pass_starts(&covered), vec![0, 100]);
 
         // Nothing outranks `WIN0`, so its own zero-width edge always splits.
         let uncovered = windows_on_line_zero(
             Some(WindowRange::new(150, 150)),
             Some(WindowRange::new(100, 200)),
         );
-        assert_eq!(uncovered.scanline_span_starts(0), vec![0, 100, 150, 200]);
+        assert_eq!(pass_starts(&uncovered), vec![0, 100, 150, 150, 200]);
     }
 
     #[test]
     fn a_window_wrapping_past_the_right_edge_splits_at_both_of_its_halves() {
         let config = windows_on_line_zero(Some(WindowRange::new(200, 40)), None);
-        assert_eq!(config.scanline_span_starts(0), vec![0, 40, 200]);
+        assert_eq!(pass_starts(&config), vec![0, 40, 200]);
     }
 
     #[test]

@@ -510,6 +510,62 @@ mod tests {
         }
     }
 
+    /// Slots per kind [growth, attacks, EVs, misc], transcribed independently from
+    /// `pokeemerald/src/pokemon.c:3603-3635` and `:3584-3598`, not from `SUBSTRUCTURE_ORDERS`.
+    const UPSTREAM_SLOTS_BY_PERSONALITY: [[usize; 4]; 24] = [
+        [0, 1, 2, 3],
+        [0, 1, 3, 2],
+        [0, 2, 1, 3],
+        [0, 3, 1, 2],
+        [0, 2, 3, 1],
+        [0, 3, 2, 1],
+        [1, 0, 2, 3],
+        [1, 0, 3, 2],
+        [2, 0, 1, 3],
+        [3, 0, 1, 2],
+        [2, 0, 3, 1],
+        [3, 0, 2, 1],
+        [1, 2, 0, 3],
+        [1, 3, 0, 2],
+        [2, 1, 0, 3],
+        [3, 1, 0, 2],
+        [2, 3, 0, 1],
+        [3, 2, 0, 1],
+        [1, 2, 3, 0],
+        [1, 3, 2, 0],
+        [2, 1, 3, 0],
+        [3, 1, 2, 0],
+        [2, 3, 1, 0],
+        [3, 2, 1, 0],
+    ];
+
+    #[test]
+    fn personality_permutations_match_the_upstream_slot_table() {
+        let logical = distinct_substructures();
+        for (personality, slots) in UPSTREAM_SLOTS_BY_PERSONALITY.iter().enumerate() {
+            let personality = u32::try_from(personality).unwrap();
+            let mut boxed = BoxPokemon::new(personality, personality);
+            boxed.set_substructures(&logical);
+            let bytes = boxed.to_bytes();
+            let secure = &bytes[SECURE_OFFSET..SECURE_OFFSET + SECURE_REGION_LEN];
+
+            let kinds_in_upstream_order = [
+                (Growth, slots[0]),
+                (Attacks, slots[1]),
+                (EvsAndCondition, slots[2]),
+                (Misc, slots[3]),
+            ];
+            for (kind, slot) in kinds_in_upstream_order {
+                let start = slot * SUBSTRUCTURE_LEN;
+                assert_eq!(
+                    &secure[start..start + SUBSTRUCTURE_LEN],
+                    logical.get(kind),
+                    "personality permutation {personality}, {kind:?} expected in slot {slot}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn representative_xor_keys_decode_and_reencode_identically() {
         let logical = PokemonSubstructures {

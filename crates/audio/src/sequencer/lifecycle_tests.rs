@@ -504,3 +504,51 @@ fn a_terminal_fade_step_retires_a_sustained_cgb_voice() {
         "the terminal fade step must retire the CGB voice, not just silence its output"
     );
 }
+
+/// A fade-end `stop_track` leaves a slow noise note's off-write tail
+/// rendering until the restarted LFSR's first clock settles it, so the
+/// sequencer stays sounding for it (`Mixer::is_idle`'s doc).
+#[test]
+fn a_sequencer_keeps_sounding_for_a_slow_noise_off_write_tail() {
+    const SLOW_KEY: u8 = 21;
+    const MAX_FRAMES: usize = 40;
+    let song = test_song(vec![vec![Event::Wait(200)]], 150);
+    let mut seq = Sequencer::new(song);
+    let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
+    let voice = crate::cgb_voice::CgbVoice::noise(
+        CgbAdsr::flat(),
+        SLOW_KEY,
+        0,
+        u8::MAX,
+        u8::MAX,
+        127,
+        0,
+        SLOW_KEY,
+        0,
+        0,
+        0,
+        0,
+    );
+    assert!(seq.mixer.add_cgb_voice(voice));
+    let mut frames = 0;
+    // Run until the first clock raises the latch, then retire the voice.
+    while seq.is_sounding() && frames < MAX_FRAMES {
+        seq.render_frame(&mut out);
+        frames += 1;
+        if frames == 14 {
+            seq.mixer.stop_track(0);
+            break;
+        }
+    }
+    assert!(seq.is_sounding(), "the unsettled latch is a pending tail");
+    let mut tail_frames = 0;
+    while seq.is_sounding() && tail_frames < MAX_FRAMES {
+        seq.render_frame(&mut out);
+        tail_frames += 1;
+    }
+    assert!(
+        !seq.is_sounding(),
+        "the tail settles and the sequencer finishes"
+    );
+    assert!(tail_frames > 1, "the tail rendered for several frames");
+}

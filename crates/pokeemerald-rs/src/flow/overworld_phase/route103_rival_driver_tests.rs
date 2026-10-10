@@ -17,6 +17,32 @@ use super::OverworldPhase;
 
 // -- The headless driver and the win/loss decision (module docs) -----------
 
+/// Issue #1955: winning returns to the field through upstream's
+/// `CB2_ReturnToField` -> `InitTilesetAnimations`, so the animation tick
+/// restarts at its initial value on the first composed field frame.
+#[test]
+fn winning_the_rival_battle_reinitialises_the_tileset_animation_tick() {
+    let mut phase = route_103_phase_facing_the_rival();
+    phase.party_lead = Some(overwhelming_treecko_lead());
+    phase.tick = 40;
+    phase.step(pressed(Buttons::A));
+    assert!(phase.is_rival_battle_active(), "setup: the battle started");
+    assert!(phase.tick > 0, "setup: the tick is running");
+
+    let outcome = play_out_rival_battle(&mut phase, 32);
+    assert_eq!(outcome, Some(BattleOutcome::PlayerWon));
+    assert!(!phase.is_rival_battle_active());
+    assert_eq!(
+        phase.tick, 0,
+        "the battle's ticks must not survive the return"
+    );
+    let _ = phase.compose_frame();
+    assert_eq!(
+        phase.tick, 0,
+        "first composed field frame sees the initial tick"
+    );
+}
+
 /// Item (e) of the issue's own test list: a concluded [`BattleOutcome::PlayerWon`]
 /// battle retains its outcome, writes the lead back, sets
 /// [`FLAG_HIDE_ROUTE_103_RIVAL`] and the fought trainer's

@@ -225,12 +225,13 @@ impl std::error::Error for SaveFileError {
 /// Host convention used to resolve a per-user data directory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HostFamily {
-    /// `%APPDATA%`, else `%USERPROFILE%\AppData\Roaming`.
+    /// `%APPDATA%` if absolute, else `%USERPROFILE%\AppData\Roaming` if
+    /// `%USERPROFILE%` is absolute.
     Windows,
-    /// `$HOME/Library/Application Support`.
+    /// `$HOME/Library/Application Support` if `$HOME` is absolute.
     MacOs,
     /// The XDG Base Directory Specification: `$XDG_DATA_HOME` when
-    /// absolute, else `$HOME/.local/share`.
+    /// absolute, else `$HOME/.local/share` if `$HOME` is absolute.
     Xdg,
 }
 
@@ -248,24 +249,26 @@ impl HostFamily {
     }
 }
 
-/// Resolves `family`'s data directory through `env`, ignoring empty values.
+/// Resolves `family`'s data directory through `env`, ignoring unset, empty,
+/// and non-absolute roots.
 #[must_use]
 pub fn data_dir_for(family: HostFamily, env: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
-    let non_empty_path = |name: &str| {
+    let absolute_root = |name: &str, is_absolute: fn(&OsStr) -> bool| {
         env(name)
-            .filter(|value| !value.is_empty())
+            .filter(|value| is_absolute(value))
             .map(PathBuf::from)
     };
     match family {
-        HostFamily::Windows => non_empty_path("APPDATA").or_else(|| {
-            non_empty_path("USERPROFILE").map(|home| home.join("AppData").join("Roaming"))
+        HostFamily::Windows => absolute_root("APPDATA", is_absolute_windows_path).or_else(|| {
+            absolute_root("USERPROFILE", is_absolute_windows_path)
+                .map(|home| home.join("AppData").join("Roaming"))
         }),
-        HostFamily::MacOs => {
-            non_empty_path("HOME").map(|home| home.join("Library").join("Application Support"))
-        }
-        HostFamily::Xdg => non_empty_path("XDG_DATA_HOME")
-            .filter(|dir| is_absolute_xdg_path(dir.as_os_str()))
-            .or_else(|| non_empty_path("HOME").map(|home| home.join(".local").join("share"))),
+        HostFamily::MacOs => absolute_root("HOME", is_absolute_xdg_path)
+            .map(|home| home.join("Library").join("Application Support")),
+        HostFamily::Xdg => absolute_root("XDG_DATA_HOME", is_absolute_xdg_path).or_else(|| {
+            absolute_root("HOME", is_absolute_xdg_path)
+                .map(|home| home.join(".local").join("share"))
+        }),
     }
 }
 
@@ -273,6 +276,49 @@ pub fn data_dir_for(family: HostFamily, env: impl Fn(&str) -> Option<OsString>) 
 /// POSIX path rules, independently of the platform running this binary.
 fn is_absolute_xdg_path(path: &OsStr) -> bool {
     path.as_encoded_bytes().starts_with(b"/")
+}
+
+/// Whether `path` is absolute under Windows path rules (a drive letter
+/// followed by a separator, a UNC root naming a server and share, either
+/// bare or behind a verbatim `\\?\` or device `\\.\` prefix, or any other
+/// named NT namespace root behind such a prefix), independently of the platform
+/// running this binary. Drive-relative (`C:foo`) and root-relative (`\foo`)
+/// forms are rejected: they depend on the current directory or drive.
+fn is_absolute_windows_path(path: &OsStr) -> bool {
+    let bytes = path.as_encoded_bytes();
+    let is_separator = |byte: u8| byte == b'/' || byte == b'\\';
+    let drive_absolute = matches!(
+        bytes,
+        [letter, b':', separator, ..] if letter.is_ascii_alphabetic() && is_separator(*separator)
+    );
+    let unc = match bytes {
+        [first, second, rest @ ..] if is_separator(*first) && is_separator(*second) => {
+            let mut components = rest.split(|byte| is_separator(*byte));
+            match components.next() {
+                // A verbatim (`\\?\`) or device (`\\.\`) prefix is not a
+                // server. What follows is an NT namespace root (`C:`,
+                // `Volume{GUID}`, `GLOBALROOT`, `BootPartition`, ...), which
+                // never depends on the current directory, so any named root
+                // followed by a separator is absolute. `UNC` is the one root
+                // that is itself incomplete without a server and share.
+                Some(b"?" | b".") => match components.next() {
+                    Some(unc) if unc.eq_ignore_ascii_case(b"UNC") => matches!(
+                        (components.next(), components.next()),
+                        (Some(server), Some(share)) if !server.is_empty() && !share.is_empty()
+                    ),
+                    Some(root) => !root.is_empty() && components.next().is_some(),
+                    None => false,
+                },
+                Some(server) => matches!(
+                    components.next(),
+                    Some(share) if !server.is_empty() && !share.is_empty()
+                ),
+                None => false,
+            }
+        }
+        _ => false,
+    };
+    drive_absolute || unc
 }
 
 /// Resolves this host's save-file path.

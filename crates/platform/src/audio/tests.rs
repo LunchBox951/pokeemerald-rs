@@ -949,3 +949,39 @@ fn a_snapshot_never_takes_a_rewritten_slot_before_it_is_published() {
         );
     }
 }
+
+/// Frame capacities whose interleaved sample count overflows `usize` are
+/// refused instead of wrapping into a smaller ring, in release builds too.
+#[test]
+fn frame_ring_rejects_capacity_overflow() {
+    let frames = usize::MAX / 2 + 1;
+    assert!(matches!(
+        frame_ring(frames, AudioOutput::CHANNELS),
+        Err(PlatformError::AudioRingCapacityOverflow { frames: f, channels: 2 }) if f == frames
+    ));
+    assert!(matches!(
+        frame_ring(usize::MAX, 2),
+        Err(PlatformError::AudioRingCapacityOverflow { .. })
+    ));
+}
+
+/// An in-range frame capacity yields a ring of `frames * channels` samples.
+#[test]
+fn frame_ring_accepts_in_range_capacity() {
+    let (producer, _consumer) = frame_ring(4, 2).expect("small capacity fits");
+    assert_eq!(producer.push(&[0.0; 9]), 8);
+}
+
+#[test]
+#[should_panic(expected = "overflows the interleaved sample count")]
+fn null_panics_on_capacity_overflow() {
+    let _ = AudioOutput::null(usize::MAX);
+}
+
+#[test]
+fn null_resampled_rejects_capacity_overflow() {
+    assert!(matches!(
+        AudioOutput::null_resampled(usize::MAX, 32_000.0, 48_000, 512),
+        Err(PlatformError::AudioRingCapacityOverflow { .. })
+    ));
+}

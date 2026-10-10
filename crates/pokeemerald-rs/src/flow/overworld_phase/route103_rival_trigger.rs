@@ -451,6 +451,9 @@ impl OverworldPhase {
                 self.white_out();
             }
         }
+        if slot.is_none() {
+            self.reinit_field_tileset_animations();
+        }
         // A failed turn ends the battle with no outcome; the whole variant
         // goes with it either way.
         slot.map(|battle| ActiveBattle::Rival { battle, trainer_id })

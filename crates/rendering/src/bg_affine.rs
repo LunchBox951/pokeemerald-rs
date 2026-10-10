@@ -389,7 +389,7 @@ impl<'a> AffineBgLayer<'a> {
 /// (`mgba/src/gba/renderers/video-software.c:628-675`,
 /// `mgba/src/gba/renderers/software-private.h:173-192`). So the caller must
 /// [`Self::close`] both at every window span start
-/// ([`WindowConfig::scanline_span_starts`](crate::window::WindowConfig)) and
+/// ([`WindowConfig::scanline_passes`](crate::window::WindowConfig)) and
 /// on any column this slot's span does not draw at all — the latter judged
 /// by that span's control bits, not by whether the column composites:
 /// `OBJWIN` gates only the composite, after mosaic state has already

@@ -1,9 +1,25 @@
 use super::{
-    cgb3_wave_gain_256, DacCorrection, BIPOLAR_SAMPLE_SCALE, LINEAR_ENVELOPE_SCALE,
-    WAVE_SAMPLE_SCALE,
+    cgb3_wave_gain_256, DacCorrection, BIPOLAR_SAMPLE_SCALE, FULL_GAIN_256, LINEAR_ENVELOPE_SCALE,
+    SAMPLE_GAIN_BITS, WAVE_SAMPLE_SCALE,
 };
 use crate::cgb_pitch::{midi_key_to_cgb_freq_reg, midi_key_to_noise_control};
 use crate::psg::{NoiseChannel, SquareChannel, WaveChannel};
+
+/// Clocks `noise` one sample at `hardware_volume` and maps its held latch
+/// into the centred render path. The DAC level is output directly
+/// (`mgba/src/gb/audio.c:782`); like the other channels the render path
+/// removes the DC offset by centring, here on the volume the latch was last
+/// resolved against ([`NoiseChannel::centred_level`]). A clock at volume `v`
+/// reproduces the usual `+-v` swing, and nothing but a clock or envelope step
+/// moves the rendered level, so a trigger, volume write, or replacement leaves
+/// it as it was and a settled latch is silent.
+fn noise_contribution(noise: &mut NoiseChannel, hardware_volume: u8) -> i32 {
+    noise.clock_sample(hardware_volume);
+    (noise.centred_level() * NOISE_LEVEL_GAIN * BIPOLAR_SAMPLE_SCALE) >> SAMPLE_GAIN_BITS
+}
+
+/// [`LINEAR_ENVELOPE_SCALE`] as a signed gain.
+const NOISE_LEVEL_GAIN: i32 = LINEAR_ENVELOPE_SCALE.cast_signed();
 
 #[derive(Clone, Debug)]
 pub(super) enum Oscillator {
@@ -12,22 +28,54 @@ pub(super) enum Oscillator {
     Noise(NoiseChannel),
 }
 
+/// NR32 shifts the unsigned nibble, so neighbouring nibbles can collapse
+/// (`mgba/src/gb/audio.c:519-533,567-574`; `m4a.c:1205-1211`).
+fn nr32_attenuated_sample(centered_nibble: i8, envelope_volume: u8) -> i32 {
+    const NIBBLE_ZERO: i32 = 8;
+    let gain = i32::try_from(cgb3_wave_gain_256(envelope_volume)).unwrap_or(0);
+    let attenuate = |nibble: i32| (nibble * gain) >> SAMPLE_GAIN_BITS;
+    let nibble = i32::from(centered_nibble) + NIBBLE_ZERO;
+    (attenuate(nibble) - attenuate(NIBBLE_ZERO)) * WAVE_SAMPLE_SCALE
+}
+
 impl Oscillator {
-    pub(super) fn normalized_sample(&mut self) -> i32 {
+    /// One sample's pre-routing contribution. Square scales its waveform by
+    /// `frame_gain`; Wave attenuates each nibble through NR32 from
+    /// `envelope_volume` and its `frame_gain` is full scale; Noise ignores
+    /// both and renders its resolved output latch directly
+    /// ([`noise_contribution`]).
+    pub(super) fn frame_contribution(
+        &mut self,
+        frame_gain: i32,
+        hardware_volume: u8,
+        envelope_volume: u8,
+    ) -> i32 {
         match self {
-            Self::Square(square) => i32::from(square.sample()) * BIPOLAR_SAMPLE_SCALE,
-            Self::Wave(wave) => i32::from(wave.sample()) * WAVE_SAMPLE_SCALE,
-            Self::Noise(noise) => i32::from(noise.sample()) * BIPOLAR_SAMPLE_SCALE,
+            Self::Square(square) => {
+                (frame_gain * i32::from(square.sample()) * BIPOLAR_SAMPLE_SCALE) >> SAMPLE_GAIN_BITS
+            }
+            Self::Wave(wave) => {
+                (frame_gain * nr32_attenuated_sample(wave.sample(), envelope_volume))
+                    >> SAMPLE_GAIN_BITS
+            }
+            Self::Noise(noise) => noise_contribution(noise, hardware_volume),
+        }
+    }
+
+    /// The retained noise latch, for the idle-slot and completion paths.
+    pub(super) fn noise_mut(&mut self) -> Option<&mut NoiseChannel> {
+        match self {
+            Self::Noise(noise) => Some(noise),
+            _ => None,
         }
     }
 
     /// `hardware_volume` is [`HardwareEnvelopeVolume`](crate::cgb_envelope::HardwareEnvelopeVolume)'s resolved byte; the
-    /// Wave arm ignores it and reads `envelope_volume` (0..=31) through its
-    /// own `gCgb3Vol` lookup instead (`m4a.c:1211`), since NR32 has no such
-    /// register.
-    pub(super) fn envelope_gain_256(&self, envelope_volume: u8, hardware_volume: u8) -> u32 {
+    /// Wave arm ignores both: NR32 attenuation is an integer shift of the
+    /// unsigned nibble, applied per sample by [`nr32_attenuated_sample`].
+    pub(super) fn envelope_gain_256(&self, _envelope_volume: u8, hardware_volume: u8) -> u32 {
         match self {
-            Self::Wave(_) => cgb3_wave_gain_256(envelope_volume),
+            Self::Wave(_) => FULL_GAIN_256,
             Self::Square(_) | Self::Noise(_) => u32::from(hardware_volume) * LINEAR_ENVELOPE_SCALE,
         }
     }
@@ -63,12 +111,17 @@ impl Oscillator {
     }
 
     /// Applies the hardware off-write's frequency truncation
-    /// ([`SquareChannel::apply_hardware_off_write`]'s doc); a no-op for
-    /// Wave/Noise.
+    /// ([`SquareChannel::apply_hardware_off_write`]'s doc) and the noise
+    /// channel's zero-volume retrigger, which restarts its phase and LFSR but
+    /// leaves the latch for the next clock to settle; a no-op for Wave.
     pub(super) fn apply_hardware_off_write(&mut self) -> bool {
         match self {
             Self::Square(square) => square.apply_hardware_off_write(),
-            Self::Wave(_) | Self::Noise(_) => true,
+            Self::Noise(noise) => {
+                noise.off_write();
+                true
+            }
+            Self::Wave(_) => true,
         }
     }
 
@@ -79,11 +132,17 @@ impl Oscillator {
         }
     }
 
-    /// Carries a square oscillator's duty position forward onto its replacement
-    /// ([`SquareChannel::continue_duty_from`]'s doc); a no-op for Wave/Noise.
-    pub(super) fn carry_duty_phase_from(&mut self, other: &Self) {
-        if let (Self::Square(square), Self::Square(previous)) = (self, other) {
-            square.continue_duty_from(previous);
+    /// Carries a square oscillator's duty position or a noise oscillator's
+    /// output latch forward onto its replacement
+    /// ([`SquareChannel::continue_duty_from`]'s and
+    /// [`NoiseChannel::continue_output_from`]'s docs); a no-op for Wave.
+    pub(super) fn carry_hardware_state_from(&mut self, other: &Self) {
+        match (self, other) {
+            (Self::Square(square), Self::Square(previous)) => square.continue_duty_from(previous),
+            (Self::Noise(noise), Self::Noise(previous)) => {
+                noise.continue_output_from(previous);
+            }
+            _ => {}
         }
     }
 
@@ -98,5 +157,59 @@ impl Oscillator {
                 true
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod nr32_attenuation_tests {
+    use super::*;
+    use crate::psg::WaveChannel;
+
+    type NibbleLaw = fn(i32) -> i32;
+
+    // Levels selecting mute, quarter, half, three-quarter, full (`m4a_tables.c:168-174`).
+    const MODES: [(u8, NibbleLaw); 5] = [
+        (0, |_| 0),
+        (2, |n| n >> 2),
+        (6, |n| n >> 1),
+        (10, |n| (n + (n << 1)) >> 2),
+        (15, |n| n),
+    ];
+
+    fn render(nibble: u8, level: u8) -> i32 {
+        let samples = WaveChannel::decode_wave_ram(&[nibble << 4 | nibble; 16]);
+        nr32_attenuated_sample(WaveChannel::new(samples, 0).sample(), level)
+    }
+
+    #[test]
+    fn quarter_volume_wave_quantizes_adjacent_nibbles_together() {
+        assert_eq!(render(4, 2), render(5, 2));
+    }
+
+    #[test]
+    fn every_nibble_follows_its_nr32_integer_law() {
+        for (level, law) in MODES {
+            for nibble in 0..16 {
+                let expected = (law(i32::from(nibble)) - law(8)) * WAVE_SAMPLE_SCALE;
+                assert_eq!(
+                    render(nibble, level),
+                    expected,
+                    "level {level} nibble {nibble}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn three_quarter_volume_collapses_nibbles_hardware_collapses() {
+        // (n + 2n) >> 2: nibbles 0 and 1 both give 0; 5 and 6 give 3 and 4.
+        assert_eq!(render(0, 10), render(1, 10));
+        assert_ne!(render(5, 10), render(6, 10));
+    }
+
+    #[test]
+    fn full_volume_keeps_the_centered_nibble() {
+        assert_eq!(render(15, 15), 7 * WAVE_SAMPLE_SCALE);
+        assert_eq!(render(0, 31), -8 * WAVE_SAMPLE_SCALE);
     }
 }
