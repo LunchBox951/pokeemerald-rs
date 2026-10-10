@@ -196,14 +196,11 @@ fn the_animation_inventory_matches_the_committed_profile() {
         .roots
         .tilesets
         .iter()
-        .flat_map(|t| {
-            t.anims.iter().flat_map(move |a| {
-                (0..a.frames.len()).map(move |n| format!("tileset/{}/anim/{}/{n}", t.name, a.name))
-            })
-        })
+        .flat_map(|t| t.anims.iter())
+        .flat_map(|a| a.frames.iter().map(|frame| frame.id.to_owned()))
         .collect();
+    // No dedup: a duplicated profile id must surface as a mismatch.
     expected.sort();
-    expected.dedup();
     let mut actual = tileset_animation_ids();
     actual.sort();
     assert_eq!(actual, expected);

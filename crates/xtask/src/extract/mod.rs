@@ -951,25 +951,62 @@ mod tests {
     #[test]
     fn a_checkout_missing_a_required_animation_frame_is_refused() {
         use crate::extract::scope::TILESETS;
+        use crate::extract::{extract_tileset, PackWriter, TILESET_PALETTE_COUNT};
         let general = TILESETS[0];
-        let root = std::env::temp_dir().join(format!("extract-anim-{}", std::process::id()));
-        let anim = root.join("anim");
+        let upstream = std::env::temp_dir().join(format!(
+            "pokeemerald-rs-extract-missing-anim-frame-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&upstream);
+        let base = upstream
+            .join("data/tilesets")
+            .join(general.category)
+            .join(general.name);
+        let anim = base.join("anim");
+        // Every source `extract_tileset` reads, each decodable, so only the
+        // required-frame check can refuse the checkout.
+        let png = crate::extract::png::tests::tiny_indexed_png(8, 1, 1, &[0]);
+        std::fs::create_dir_all(base.join("palettes")).expect("dir");
+        std::fs::write(base.join("tiles.png"), &png).expect("tiles");
+        for slot in 0..TILESET_PALETTE_COUNT {
+            let pal = base.join("palettes").join(format!("{slot:02}.pal"));
+            std::fs::write(pal, "JASC-PAL\r\n0100\r\n1\r\n0 0 0\r\n").expect("pal");
+        }
+        std::fs::write(base.join("metatiles.bin"), [0u8; 16]).expect("metatiles");
+        std::fs::write(base.join("metatile_attributes.bin"), [0u8; 2]).expect("attrs");
         for &(name, frames) in general.animations {
             std::fs::create_dir_all(anim.join(name)).expect("dir");
             for n in 0..frames {
-                std::fs::write(anim.join(name).join(format!("{n}.png")), b"x").expect("frame");
+                std::fs::write(anim.join(name).join(format!("{n}.png")), &png).expect("frame");
             }
         }
-        super::require_animation_sources(&anim, general).expect("complete");
+        extract_tileset(&upstream, general, &mut PackWriter::new()).expect("complete");
 
         std::fs::remove_file(anim.join("water/7.png")).expect("remove");
-        let err = super::require_animation_sources(&anim, general).expect_err("one frame");
-        assert!(matches!(&err, ExtractError::ReadFailed(p, _) if p.ends_with("water/7.png")));
+        let one = extract_tileset(&upstream, general, &mut PackWriter::new());
+
+        std::fs::remove_dir_all(anim.join("water")).expect("remove animation");
+        let whole = extract_tileset(&upstream, general, &mut PackWriter::new());
 
         std::fs::remove_dir_all(&anim).expect("remove all");
-        let err = super::require_animation_sources(&anim, general).expect_err("domain");
-        assert!(matches!(&err, ExtractError::ReadFailed(p, _) if p.ends_with("flower/0.png")));
-        std::fs::remove_dir_all(&root).expect("cleanup");
+        let domain = extract_tileset(&upstream, general, &mut PackWriter::new());
+        std::fs::remove_dir_all(&upstream).expect("cleanup");
+
+        let one = one.expect_err("one frame");
+        assert!(
+            matches!(&one, ExtractError::ReadFailed(p, _) if p == &anim.join("water/7.png")),
+            "{one:?}"
+        );
+        let whole = whole.expect_err("one animation");
+        assert!(
+            matches!(&whole, ExtractError::ReadFailed(p, _) if p == &anim.join("water/0.png")),
+            "{whole:?}"
+        );
+        let domain = domain.expect_err("domain");
+        assert!(
+            matches!(&domain, ExtractError::ReadFailed(p, _) if p == &anim.join("flower/0.png")),
+            "{domain:?}"
+        );
     }
 
     // Changes to `LAYOUTS` must also update `object_event_flags.rs`'s
