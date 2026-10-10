@@ -196,8 +196,10 @@ pub const fn darken(color: Rgb888, evy: u8) -> Rgb888 {
 /// deliberately excluding `OBJWIN`, which can mask individual pixels within
 /// the span but never re-selects the backdrop's variant
 /// (`mgba/src/gba/renderers/video-software.c:933-955`). The same selected
-/// color is reused both where no layer draws over the backdrop and as the
-/// forced-alpha second target (`mgba/src/gba/renderers/video-software.c:963-981`)
+/// rule picks the variant for both phases, but initialization shares a cursor
+/// whose alignment prolog can spill into neighbouring spans, while the
+/// forced-alpha second target uses the actual span
+/// (`mgba/src/gba/renderers/video-software.c:963-981`)
 /// `(behavioral-fidelity)`.
 #[must_use]
 pub fn backdrop_variant(
