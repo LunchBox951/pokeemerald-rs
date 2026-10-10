@@ -175,7 +175,8 @@ impl Resampler {
     /// # Errors
     ///
     /// Returns [`PlatformError::UnsupportedResampleRatio`] if `source_rate`
-    /// is not finite and positive, or if `source_rate / device_rate` exceeds
+    /// is not finite and positive, if `device_rate` is zero, or if
+    /// `source_rate / device_rate` exceeds
     /// `MAX_SCRATCH_SOURCE_FRAMES`: one output frame would then need more
     /// source frames than the scratch cap holds, breaking the `frac`
     /// invariant (see the field doc).
@@ -187,7 +188,8 @@ impl Resampler {
         max_output_frames: usize,
     ) -> Result<Self, PlatformError> {
         let channels = usize::from(channels.max(1));
-        let step = source_rate / f64::from(device_rate.max(1));
+        let step = source_rate / f64::from(device_rate);
+        // A zero `device_rate` gives an infinite or NaN `step`, refused below.
 
         // One output frame's advance can need `ceil(step)` source frames, so
         // no chunk size can resolve a `step` past the scratch cap without
@@ -402,6 +404,16 @@ impl Resampler {
 mod tests {
     use super::*;
     use crate::ring::{ring_buffer, Producer};
+
+    #[test]
+    fn zero_device_rate_is_rejected() {
+        let (_producer, consumer) = ring_buffer(16);
+        let err = Resampler::new(consumer, 1, 100.0, 0, 16).err();
+        assert!(matches!(
+            err,
+            Some(PlatformError::UnsupportedResampleRatio { device_rate: 0, .. })
+        ));
+    }
 
     #[test]
     fn identity_ratio_passes_frames_through_unchanged() {
