@@ -26497,7 +26497,7 @@
           "status": "rewritten"
         },
         "GetInFrontOfPlayerPosition": {
-          "reason": "The facing-tile position (GetXYCoordsOneStepInFrontOfPlayer, player position + facing delta) plus the own-tile-elevation wildcard rule rewritten as engine::overworld::facing_object_event's query-elevation derivation: the player's own grid cell's elevation, unless it is itself ELEVATION_TRANSITION, in which case the query elevation is the wildcard too.",
+          "reason": "The facing-tile position (GetXYCoordsOneStepInFrontOfPlayer, player position + facing delta) plus the elevation rule rewritten as engine::overworld::facing_object_event's query-elevation derivation: the player's own grid cell only selects the wildcard (ELEVATION_TRANSITION cell or off-grid), otherwise the query is the retained previousElevation that PlayerGetElevation returns, not the collision elevation.",
           "rust_target": "crates/engine/src/overworld/object_event.rs",
           "spec": "I-3",
           "status": "rewritten"
