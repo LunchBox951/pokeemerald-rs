@@ -1,37 +1,14 @@
 //! Wait canonicalization: the one rewrite [`super::Song::new`] applies to
-//! every track it is handed.
+//! every track, so ROM and checkout rests land on one shape. Contract:
+//! `pokeemerald/sound/MPlayDef.s:1-49` (the `Wnn` wait opcodes).
 //!
-//! Both backends reach a track's rests by different roads. `tools/mid2agb`
-//! breaks every rest into the 49 `Wnn` opcodes the engine defines and
-//! chunks anything longer than a whole note (`W96 W04`); a ROM carries
-//! exactly that. The checkout compiler never sees those opcodes and emits
-//! one `Wait` per gap, but keeps a split wherever a silent controller sat
-//! between two rests. Neither chunking is derivable from the other, and
-//! neither is audible: `WAIT` deltas are purely additive. So the contract
-//! fixes one shape and every backend lands on it:
-//!
-//! - Adjacent [`SongEvent::Wait`]s merge into one rest.
-//! - A rest longer than `255` ticks splits into `255`-tick chunks with the
-//!   remainder last.
-//! - A zero-length rest emits nothing, unless a [`SongEvent::Goto`] or
-//!   [`SongEvent::MemAccBranch`] targets it: a targeted rest keeps one
-//!   `Wait(0)` as an addressable anchor so the jump still lands on a real
-//!   event.
-//! - A run never merges across a jump target: a [`SongEvent::Goto`] or
-//!   [`SongEvent::MemAccBranch`] that lands between two rests keeps them
-//!   apart, because merging would change how long the loop waits on
-//!   re-entry.
-//!
-//! Jump targets are event indices, so they are remapped as the track
-//! shrinks. `crates/xtask`'s MIDI compiler mirrors this rewrite on its own
-//! private event type, the same way it mirrors the wire encoders; the two
-//! are kept identical by hand.
+//! The xtask MIDI compiler mirrors this by hand in
+//! `crates/xtask/src/extract/midi/compile/canonical.rs`; change both together.
 
 use std::collections::BTreeSet;
 
 use super::SongEvent;
 
-/// Rewrite `track` into the canonical wait shape (module docs).
 pub(super) fn canonicalize_waits(track: &[SongEvent]) -> Vec<SongEvent> {
     let targets: BTreeSet<usize> = track
         .iter()
@@ -44,51 +21,45 @@ pub(super) fn canonicalize_waits(track: &[SongEvent]) -> Vec<SongEvent> {
         .collect();
 
     let mut out = Vec::with_capacity(track.len());
-    // `map[old] == new` for every old index, plus one entry for "the end".
-    let mut map = Vec::with_capacity(track.len() + 1);
+    let mut source_to_canonical = Vec::with_capacity(track.len() + 1);
     let mut index = 0;
     while index < track.len() {
         if !matches!(track[index], SongEvent::Wait(_)) {
-            map.push(out.len());
+            source_to_canonical.push(out.len());
             out.push(track[index].clone());
             index += 1;
             continue;
         }
-        let start = out.len();
-        // A target boundary (below) always starts a fresh run at the
-        // targeted index, so checking `index` alone tells us whether this
-        // run's anchor is addressed.
-        let run_is_targeted = targets.contains(&index);
-        // Find the run's extent first; the tick sum is a separate pass
-        // below, wide enough that it cannot overflow no matter how long
-        // the run gets.
-        let mut end = index + 1;
-        while let Some(SongEvent::Wait(_)) = track.get(end) {
-            if targets.contains(&end) {
+        let canonical_run_start = out.len();
+        let run_start_is_jump_target = targets.contains(&index);
+        let mut run_end = index + 1;
+        while let Some(SongEvent::Wait(_)) = track.get(run_end) {
+            if targets.contains(&run_end) {
                 break;
             }
-            end += 1;
+            run_end += 1;
         }
-        map.extend(std::iter::repeat_n(start, end - index));
-        out.extend(wait_run_chunks(track[index..end].iter().map(|event| {
+        source_to_canonical.extend(std::iter::repeat_n(canonical_run_start, run_end - index));
+        out.extend(wait_run_chunks(track[index..run_end].iter().map(|event| {
             let SongEvent::Wait(ticks) = event else {
                 unreachable!("the scan above only ever advances across Wait events")
             };
             *ticks
         })));
-        if run_is_targeted && out.len() == start {
-            // A zero-total run normally emits nothing, but a jump targets
-            // this index, so an anchor must survive for the target to land
-            // on.
+        if run_start_is_jump_target && out.len() == canonical_run_start {
             out.push(SongEvent::Wait(0));
         }
-        index = end;
+        index = run_end;
     }
-    map.push(out.len());
+    // The source-end index is also a valid jump target.
+    source_to_canonical.push(out.len());
 
     for event in &mut out {
         if let SongEvent::Goto(target) | SongEvent::MemAccBranch { target, .. } = event {
-            if let Some(&new) = usize::try_from(*target).ok().and_then(|old| map.get(old)) {
+            if let Some(&new) = usize::try_from(*target)
+                .ok()
+                .and_then(|old| source_to_canonical.get(old))
+            {
                 *target =
                     u32::try_from(new).expect("a canonical track is no longer than its source");
             }
@@ -97,19 +68,9 @@ pub(super) fn canonicalize_waits(track: &[SongEvent]) -> Vec<SongEvent> {
     out
 }
 
-/// Sum a run of adjacent `Wait` tick counts and lazily split the total into
-/// canonical chunks: `255`-tick steps with the remainder last, nothing for a
-/// zero total. [`canonicalize_waits`] adds back a `Wait(0)` anchor when a
-/// zero-total run's source index is a jump target (module docs).
-///
-/// The running total is `u64`, not `u32`: [`super::Song::new`] documents
-/// accepting a track of up to [`u32::MAX`] events, and a run that long, made
-/// entirely of `Wait(255)`, sums past `u32::MAX` well before the run ends --
-/// a `u32` accumulator would panic in a debug build and wrap in a release
-/// one. No current producer's output gets close (rom-import caps a track at
-/// `1 << 20` events and a tick at `96`), but the accumulator has to hold
-/// what the type promises, not just what today's producers send it.
+/// Chunk a run of adjacent waits as `255`-tick steps, remainder last.
 fn wait_run_chunks(ticks: impl Iterator<Item = u8>) -> impl Iterator<Item = SongEvent> {
+    // A run of up to `u32::MAX` events (`Song::new`) can sum past `u32::MAX`.
     let mut total: u64 = ticks.map(u64::from).sum();
     std::iter::from_fn(move || {
         if total > u64::from(u8::MAX) {
@@ -130,16 +91,6 @@ fn wait_run_chunks(ticks: impl Iterator<Item = u8>) -> impl Iterator<Item = Song
 mod tests {
     use super::{wait_run_chunks, SongEvent};
 
-    /// [`super::super::Song::new`] documents accepting up to `u32::MAX`
-    /// events per track; a track that is nothing but adjacent `Wait(255)`s
-    /// pushes the run's accumulated total past `u32::MAX` well before a
-    /// track could actually hold that many events -- `16_843_010` of them,
-    /// each worth `255` ticks, already sums to `4_294_967_550`. Drives
-    /// `wait_run_chunks` straight off a `u8` tick iterator rather than a
-    /// materialized `Vec<SongEvent>`, so this stays a millisecond-scale
-    /// check, not a multi-hundred-megabyte one. No current producer reaches
-    /// this (rom-import caps a track at `1 << 20` events and a tick at
-    /// `96`) -- this hardens the documented contract, not a live bug.
     #[test]
     fn a_run_past_u32_max_ticks_chunks_without_overflow() {
         let run_len: u64 = 16_843_010;
