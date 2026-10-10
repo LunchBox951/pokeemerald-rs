@@ -73,7 +73,7 @@ pub use pack_format::OUTPUT_RELATIVE_PATH;
 use pack_format::{EntryShapeError, PackEntry, PackWriter};
 
 use scope::{
-    TilesetSource, LAYOUTS, TILESETS, TITLE_SCREEN_EMBEDDED_PALETTE_SHEETS,
+    TilesetSource, LAYOUTS, PEOPLE_SHEETS, TILESETS, TITLE_SCREEN_EMBEDDED_PALETTE_SHEETS,
     TITLE_SCREEN_PALETTE_CUTS,
 };
 
@@ -847,8 +847,23 @@ fn extract_interface_palettes(
 const FIRST_GENERIC_NPC_PALETTE: u8 = 1;
 const LAST_GENERIC_NPC_PALETTE: u8 = 4;
 
+/// Refuse a checkout missing any pinned people sheet PNG.
+fn require_sprite_sources(people_dir: &Path) -> Result<(), ExtractError> {
+    for stem in PEOPLE_SHEETS {
+        let path = people_dir.join(format!("{stem}.png"));
+        if !path.is_file() {
+            return Err(ExtractError::ReadFailed(
+                path,
+                "required people sprite sheet is missing".to_owned(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn extract_sprites(upstream: &Path, writer: &mut PackWriter) -> Result<(), ExtractError> {
     let people_dir = upstream.join("graphics/object_events/pics/people");
+    require_sprite_sources(&people_dir)?;
     for png_path in collect_pngs_sorted(&people_dir)? {
         let rel = png_path
             .strip_prefix(&people_dir)
@@ -1005,6 +1020,49 @@ mod tests {
         let domain = domain.expect_err("domain");
         assert!(
             matches!(&domain, ExtractError::ReadFailed(p, _) if p == &anim.join("flower/0.png")),
+            "{domain:?}"
+        );
+    }
+
+    #[test]
+    fn a_checkout_missing_a_required_sprite_sheet_is_refused() {
+        use crate::extract::scope::PEOPLE_SHEETS;
+        use crate::extract::{extract_sprites, PackWriter};
+        let upstream = std::env::temp_dir().join(format!(
+            "pokeemerald-rs-extract-missing-sprite-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&upstream);
+        let people = upstream.join("graphics/object_events/pics/people");
+        let palettes = upstream.join("graphics/object_events/palettes");
+        let png = crate::extract::png::tests::tiny_indexed_png(8, 1, 1, &[0]);
+        std::fs::create_dir_all(&palettes).expect("dir");
+        for name in ["brendan", "may", "npc_1", "npc_2", "npc_3", "npc_4"] {
+            let pal = palettes.join(format!("{name}.pal"));
+            std::fs::write(pal, "JASC-PAL\r\n0100\r\n1\r\n0 0 0\r\n").expect("pal");
+        }
+        for stem in PEOPLE_SHEETS {
+            let path = people.join(format!("{stem}.png"));
+            std::fs::create_dir_all(path.parent().expect("parent")).expect("dir");
+            std::fs::write(path, &png).expect("sheet");
+        }
+        extract_sprites(&upstream, &mut PackWriter::new()).expect("complete");
+
+        std::fs::remove_file(people.join("brendan/walking.png")).expect("remove");
+        let walking = extract_sprites(&upstream, &mut PackWriter::new());
+        std::fs::remove_file(people.join("may/running.png")).expect("remove");
+        std::fs::remove_dir_all(&people).expect("remove all");
+        let domain = extract_sprites(&upstream, &mut PackWriter::new());
+        std::fs::remove_dir_all(&upstream).expect("cleanup");
+
+        let walking = walking.expect_err("walking");
+        assert!(
+            matches!(&walking, ExtractError::ReadFailed(p, _) if p == &people.join("brendan/walking.png")),
+            "{walking:?}"
+        );
+        let domain = domain.expect_err("domain");
+        assert!(
+            matches!(&domain, ExtractError::ReadFailed(p, _) if p == &people.join(format!("{}.png", PEOPLE_SHEETS[0]))),
             "{domain:?}"
         );
     }
