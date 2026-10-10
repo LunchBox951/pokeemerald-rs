@@ -84,6 +84,7 @@ mod sha1;
 
 use std::path::{Path, PathBuf};
 
+pub use domains::song::decode_song_payload;
 pub use error::{HeaderFault, ImportError, Lz77Fault, PartialFile, SongFault};
 pub use lz77::{decompress as lz77_decompress, decompress_at as lz77_decompress_at, LZ77_TYPE};
 pub use one_line::{OneLine, OneLinePath};

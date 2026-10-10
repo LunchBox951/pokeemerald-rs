@@ -43,7 +43,7 @@ use pack_format::{raw_entry, PackEntry, PackWriter};
 
 use super::check_pointer;
 use crate::error::{ImportError, SongFault};
-use crate::reader::RomReader;
+use crate::reader::{GbaPtr, RomReader};
 use crate::rom::Rom;
 use crate::roots::{AudioRoots, Roots, SongRoot};
 
@@ -146,9 +146,6 @@ pub(crate) fn song(
             field: "SongHeader.trackCount",
         });
     }
-    let priority = reader.u8(base + HEADER_PRIORITY)?;
-    let reverb_byte = reader.u8(base + HEADER_REVERB)?;
-    let reverb = (reverb_byte & REVERB_SET != 0).then_some(reverb_byte & !REVERB_SET);
     check_pointer(
         reader,
         base,
@@ -169,15 +166,46 @@ pub(crate) fn song(
             ptr: root.voicegroup,
         })?;
 
+    Ok(raw_entry(
+        id.to_owned(),
+        decode_song_bytes(reader, id, root.header, voicegroup)?,
+    ))
+}
+
+/// Decode the song whose `SongHeader` is at `header` into its canonical pack
+/// payload. Callers must corroborate `voicegroup` themselves.
+///
+/// # Errors
+///
+/// [`ImportError`] when the header or a track cannot be read or decoded.
+pub fn decode_song_payload(
+    reader: &RomReader<'_>,
+    id: &'static str,
+    header: GbaPtr,
+    voicegroup: &str,
+) -> Result<Vec<u8>, ImportError> {
+    decode_song_bytes(reader, id, header, VoiceGroupId(voicegroup.to_owned()))
+}
+
+fn decode_song_bytes(
+    reader: &RomReader<'_>,
+    id: &'static str,
+    header: GbaPtr,
+    voicegroup: VoiceGroupId,
+) -> Result<Vec<u8>, ImportError> {
+    let base = header.offset();
+    let track_count = reader.u8(base + HEADER_TRACK_COUNT)?;
+    let priority = reader.u8(base + HEADER_PRIORITY)?;
+    let reverb_byte = reader.u8(base + HEADER_REVERB)?;
+    let reverb = (reverb_byte & REVERB_SET != 0).then_some(reverb_byte & !REVERB_SET);
     let mut tracks = Vec::with_capacity(usize::from(track_count));
     for track in 0..usize::from(track_count) {
         let start = reader.ptr(base + HEADER_PARTS + track * 4)?;
         tracks.push(decode_track(reader, id, track, start)?);
     }
-
     let song = Song::new(voicegroup, priority, reverb, tracks)
         .map_err(|source| ImportError::Audio { id, source })?;
-    Ok(raw_entry(id.to_owned(), song.encode()))
+    Ok(song.encode())
 }
 
 /// The decoder's per-track state: what `MusicPlayerTrack` carries between
