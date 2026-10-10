@@ -7,35 +7,72 @@
 pub(crate) struct TilesetSource {
     pub(crate) category: &'static str,
     pub(crate) name: &'static str,
+    /// The animations this tileset must carry, as `(name, frame count)`.
+    pub(crate) animations: &'static [(&'static str, u32)],
 }
 
 impl TilesetSource {
+    /// Every required animation frame id, as `tileset/<name>/anim/<anim>/<n>`.
+    pub(crate) fn animation_ids(self) -> Vec<String> {
+        self.animations
+            .iter()
+            .flat_map(|&(anim, frames)| {
+                (0..frames).map(move |n| format!("tileset/{}/anim/{anim}/{n}", self.name))
+            })
+            .collect()
+    }
+
     /// The pack id of this tileset's tile sheet.
     pub(crate) fn tiles_id(self) -> String {
         format!("tileset/{}/tiles", self.name)
     }
 }
 
+// Unique frame files of `src/tileset_anims.c`'s `sTilesetAnims_General_*` and
+// `sTilesetAnims_Building_TVTurnedOn` declarations at the pinned upstream
+// commit. Playback repeats (flower, sand-water-edge) are not extra assets.
+const GENERAL_ANIMATIONS: [(&str, u32); 5] = [
+    ("flower", 3),
+    ("land_water_edge", 4),
+    ("sand_water_edge", 7),
+    ("water", 8),
+    ("waterfall", 4),
+];
+const BUILDING_ANIMATIONS: [(&str, u32); 1] = [("tv_turned_on", 2)];
+
+/// Every required tileset animation frame id, in manifest order.
+pub(crate) fn tileset_animation_ids() -> Vec<String> {
+    TILESETS
+        .into_iter()
+        .flat_map(TilesetSource::animation_ids)
+        .collect()
+}
+
 pub(crate) const TILESETS: [TilesetSource; 5] = [
     TilesetSource {
         category: "primary",
         name: "general",
+        animations: &GENERAL_ANIMATIONS,
     },
     TilesetSource {
         category: "primary",
         name: "building",
+        animations: &BUILDING_ANIMATIONS,
     },
     TilesetSource {
         category: "secondary",
         name: "petalburg",
+        animations: &[],
     },
     TilesetSource {
         category: "secondary",
         name: "brendans_mays_house",
+        animations: &[],
     },
     TilesetSource {
         category: "secondary",
         name: "lab",
+        animations: &[],
     },
 ];
 

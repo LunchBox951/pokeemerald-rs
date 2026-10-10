@@ -18,6 +18,7 @@ fn new_uses_emerald_init_defaults() {
 #[test]
 fn track_state_new_uses_the_documented_defaults() {
     let track = TrackState::new();
+    assert_eq!(track.vol, 0, "upstream clears vol and restores none");
     assert_eq!(track.vol, DEFAULT_TRACK_VOLUME);
     assert_eq!(track.bend_range, DEFAULT_BEND_RANGE);
     assert_eq!(track.lfo_speed, DEFAULT_LFO_SPEED);
@@ -37,9 +38,39 @@ fn silent_song_renders_zero() {
 }
 
 #[test]
+fn a_track_is_silent_until_its_first_vol_command() {
+    // Upstream clears the track and restores no `vol` (`m4a_1.s:1214`-`:1230`),
+    // so `vol * volX` resolves to zero until `VOL` runs (`m4a.c:772`).
+    let track = vec![
+        Event::Voice(0),
+        tied_note(60),
+        Event::Wait(2),
+        Event::Volume(127),
+        Event::Wait(2),
+        Event::Fine,
+    ];
+    let mut seq = Sequencer::new(test_song(vec![track], 150));
+    let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
+
+    seq.render_frame(&mut out);
+    assert_eq!(seq.voice_count(), 1, "the note still allocates a voice");
+    assert_eq!(track_volume(&seq.tracks[0]), (0, 0));
+    assert!(out.iter().all(|&s| s == 0.0), "no sound before the VOL");
+
+    let mut audible = false;
+    for _ in 0..4 {
+        seq.render_frame(&mut out);
+        audible |= out.iter().any(|&s| s.abs() > 0.0);
+    }
+    assert_eq!(seq.tracks[0].vol, 127);
+    assert!(audible, "the held note becomes audible once VOL runs");
+}
+
+#[test]
 fn a_note_produces_sound_then_the_track_ends() {
     let track = vec![
         Event::Voice(0),
+        Event::Volume(127),
         Event::Note {
             key: 60,
             velocity: 127,
@@ -69,6 +100,7 @@ fn a_note_produces_sound_then_the_track_ends() {
 fn finite_reverbed_song_finishes_only_after_tail_drains() {
     let track = vec![
         Event::Voice(0),
+        Event::Volume(127),
         Event::Note {
             key: 60,
             velocity: 127,
@@ -122,6 +154,7 @@ fn with_resolved_reverb_applies_its_explicit_level_over_the_songs_own_header() {
     // that never set one (`Song::reverb` collapses that case to `0`).
     let track = vec![
         Event::Voice(0),
+        Event::Volume(127),
         Event::Note {
             key: 60,
             velocity: 127,
@@ -320,6 +353,7 @@ const HARD_LEFT_PAN: i8 = -64;
 fn panned_note_is_louder_on_one_side() {
     let track = vec![
         Event::Voice(0),
+        Event::Volume(127),
         Event::Pan(HARD_LEFT_PAN),
         Event::Note {
             key: 60,
@@ -341,9 +375,9 @@ fn panned_note_is_louder_on_one_side() {
 
 #[test]
 fn decoded_bytes_drive_the_engine_end_to_end() {
-    // Decode a real byte program and play it: VOICE 0; N04 key60 vel127;
-    // W48; FINE.
-    let bytes = [0xBD, 0x00, 0xD3, 60, 127, 0xB0, 0xB1];
+    // Decode a real byte program and play it: VOICE 0; VOL 127; N04 key60
+    // vel127; W48; FINE.
+    let bytes = [0xBD, 0x00, 0xBE, 127, 0xD3, 60, 127, 0xB0, 0xB1];
     let events = decode_track(&bytes).unwrap();
     let song = test_song(vec![events], 150);
     let mut seq = Sequencer::new(song);
@@ -356,6 +390,7 @@ fn decoded_bytes_drive_the_engine_end_to_end() {
 fn mix_into_renders_multiple_frames() {
     let track = vec![
         Event::Voice(0),
+        Event::Volume(127),
         Event::Note {
             key: 60,
             velocity: 127,
@@ -403,6 +438,7 @@ fn an_out_of_range_resolved_reverb_level_clamps_to_the_canonical_maximum() {
     let track = || {
         vec![
             Event::Voice(0),
+            Event::Volume(127),
             Event::Note {
                 key: 60,
                 velocity: 127,

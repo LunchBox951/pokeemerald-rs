@@ -1,9 +1,4 @@
-//! Hidden-item `FLAG_HIDDEN_ITEM_*` name -> flag id table
-//! (`pokeemerald/include/constants/flags.h:545-657`).
-//!
-//! Background-event data carries the symbolic flag name, while `EventData` is
-//! keyed by id; upstream's `bg_hidden_item_event` stores the offset from
-//! `FLAG_HIDDEN_ITEMS_START` and `GetInteractedBackgroundEventScript` adds it back.
+//! Absolute flag IDs match `pokeemerald/include/constants/flags.h:545-657`.
 
 const HIDDEN_ITEM_FLAGS: &[(&str, u16)] = &[
     ("FLAG_HIDDEN_ITEM_LAVARIDGE_TOWN_ICE_HEAL", 0x1F4),
@@ -123,7 +118,7 @@ const HIDDEN_ITEM_FLAGS: &[(&str, u16)] = &[
     ("FLAG_HIDDEN_ITEM_ROUTE_105_BIG_PEARL", 0x263),
 ];
 
-/// Resolves a `FLAG_HIDDEN_ITEM_*` name to its absolute flag id.
+/// Absolute flag id for a symbolic hidden-item flag name, or `None` if unknown.
 #[must_use]
 pub fn resolve(flag: &str) -> Option<u16> {
     HIDDEN_ITEM_FLAGS
@@ -132,5 +127,5 @@ pub fn resolve(flag: &str) -> Option<u16> {
         .map(|(_, id)| *id)
 }
 
-/// The number of canonical hidden-item flags.
+/// Number of hidden-item flags in the table.
 pub const HIDDEN_ITEM_FLAG_COUNT: usize = HIDDEN_ITEM_FLAGS.len();
