@@ -1,6 +1,8 @@
-//! Battle construction refuses only the Limber (paralysis) and Immunity
-//! (poison) cures (`battle_util.c:2873-2951`); every other status-reading
-//! ability is admitted, whether modelled or deferred.
+//! This Status1-only matrix pins the Limber (paralysis) and Immunity (poison)
+//! admission refusals (`battle_util.c:2873-2951`). Confused Own Tempo is also
+//! refused, as its move-end cure is unmodelled; `participant_admission.rs`
+//! covers that volatile. Every other ability here is admitted, whether
+//! modelled or deferred.
 //!
 //! Upstream: Guts and Marvel Scale stat multipliers (`pokemon.c:3211-3214`),
 //! Shed Skin (`battle_util.c:2620-2640`), Synchronize (`battle_util.c:2971-2986`),
@@ -115,7 +117,7 @@ fn opponent() -> BattlePokemon {
 }
 
 #[test]
-fn the_constructor_refuses_exactly_the_limber_and_immunity_cures() {
+fn the_status1_matrix_refuses_exactly_the_limber_and_immunity_cures() {
     for (name, species, slot, ability, refused) in MATRIX {
         for status in STATUSES {
             let mon = holder(species, slot, status);
