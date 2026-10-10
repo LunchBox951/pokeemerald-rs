@@ -501,6 +501,18 @@ fn acquire_dest(
     }
 }
 
+/// Syncs the created levels' parent entries once the destination is open;
+/// the parents acquisition shed are reached through the destination itself.
+fn sync_after_acquire(created: &mut [created_dirs::CreatedDirectory], dest: Option<&Dest>) {
+    #[cfg(unix)]
+    if let Some(dest) = dest {
+        created_dirs::sync_shed_parents(created, dest);
+    }
+    #[cfg(not(unix))]
+    let _ = dest;
+    sync_created_directories(created);
+}
+
 /// [`import_to`] with the importer injected, so the write path is testable
 /// on both outcomes without a real ROM (`pack_format::path`'s pure-core
 /// precedent).
@@ -573,7 +585,7 @@ fn import_to_with_hooks(
     // and must not take a slot the sync's or the temporary file's open needs.
     #[cfg(unix)]
     drop(creation.final_directory);
-    sync_created_directories(&mut created);
+    sync_after_acquire(&mut created, dest_result.as_ref().ok());
     let dest = match dest_result {
         Ok(dest) => dest,
         Err(source) => {

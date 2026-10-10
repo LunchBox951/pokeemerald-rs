@@ -300,6 +300,18 @@ pub(super) fn reopen_for_sync(dir: &std::os::fd::OwnedFd) -> io::Result<std::os:
     )?)
 }
 
+/// Opens the parent of the pinned directory `dir`, readable so it can be
+/// `fsync`ed directly. Syncing a wrong directory only costs time.
+#[cfg(unix)]
+pub(super) fn open_parent_for_sync(dir: &std::os::fd::OwnedFd) -> io::Result<std::os::fd::OwnedFd> {
+    Ok(rustix::fs::openat(
+        dir,
+        "..",
+        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )?)
+}
+
 /// Get `path`'s own directory entries onto the storage device, or give up.
 ///
 /// `import_rom::sync_created_directories`'s off-Unix arm: no descriptor is
@@ -357,6 +369,11 @@ impl Dest {
             dir: open_directory(dir)?,
             temp_sequence: AtomicU64::new(0),
         })
+    }
+
+    /// [`open_parent_for_sync`] on this destination's own handle.
+    pub(super) fn open_parent_for_sync(&self) -> io::Result<std::os::fd::OwnedFd> {
+        open_parent_for_sync(&self.dir)
     }
 
     /// The name of the temporary file this import's pack is built in,

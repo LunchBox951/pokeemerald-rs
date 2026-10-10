@@ -505,6 +505,54 @@ pub(super) fn create_directories_pinned(
     })
 }
 
+/// Syncs the parents that acquiring the destination shed before the sync
+/// could reach them, by walking up from the acquired `dest` handle; with the
+/// table full it releases the levels' own pins for the slot, which `dest`
+/// makes redundant.
+#[cfg(unix)]
+pub(super) fn sync_shed_parents(created: &mut [CreatedDirectory], dest: &dest::Dest) {
+    sync_shed_parents_with(created, dest, &mut |fd| {
+        let _ = rustix::fs::fsync(fd);
+    });
+}
+
+/// [`sync_shed_parents`] with the `fsync` injected, so a test can count it.
+#[cfg(unix)]
+fn sync_shed_parents_with(
+    created: &mut [CreatedDirectory],
+    dest: &dest::Dest,
+    fsync: &mut dyn FnMut(&std::os::fd::OwnedFd),
+) {
+    let Some(lowest) = created.iter().position(|level| level.parent.is_none()) else {
+        return;
+    };
+    let mut above: Option<std::os::fd::OwnedFd> = None;
+    for index in (lowest..created.len()).rev() {
+        let parent = loop {
+            let opened = match &above {
+                None => dest.open_parent_for_sync(),
+                Some(fd) => dest::open_parent_for_sync(fd),
+            };
+            match opened {
+                Err(source)
+                    if is_out_of_descriptors_io(&source)
+                        && created
+                            .iter_mut()
+                            .rev()
+                            .any(|level| level.own.take().is_some()) => {}
+                result => break result,
+            }
+        };
+        let Ok(parent) = parent else {
+            return;
+        };
+        if created[index].parent.is_none() {
+            fsync(&parent);
+        }
+        above = Some(parent);
+    }
+}
+
 /// Syncs the parent of each created level, outermost first, so a crash
 /// leaves a prefix of the chain. A reopen refused for want of a descriptor
 /// sheds an already-synced level's pin, else the innermost level's own,

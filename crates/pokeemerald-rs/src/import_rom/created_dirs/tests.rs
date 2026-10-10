@@ -602,9 +602,8 @@ fn a_sync_out_of_descriptors_still_syncs_every_levels_parent() {
 #[cfg(unix)]
 #[test]
 fn the_held_final_directory_does_not_cost_a_new_levels_parent_sync() {
-    // `import_to_with_hooks` keeps `creation.final_directory` alive across
-    // `sync_created_directories`; with the table full after creation, the
-    // sync's only recovery is shedding the innermost level's own pin.
+    // With the table full after creation, the sync's only recovery is
+    // shedding the innermost level's own pin, so nothing else may share it.
     if !in_descriptor_pressure_child() {
         run_under_descriptor_pressure(
             "import_rom::created_dirs::tests::the_held_final_directory_does_not_cost_a_new_levels_parent_sync",
@@ -657,5 +656,44 @@ fn a_destination_acquired_before_the_sync_survives_the_sync_shedding_its_level()
     assert!(
         target.join("probe").exists(),
         "the file landed in the created level"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn acquiring_the_destination_under_three_free_descriptors_keeps_the_parent_sync() {
+    // Mirrors `import_to_with_hooks`: ROM open, one new level, acquire, then
+    // the parent sync; the table holds no fourth slot for a reopen.
+    if !in_descriptor_pressure_child() {
+        run_under_descriptor_pressure(
+            "import_rom::created_dirs::tests::acquiring_the_destination_under_three_free_descriptors_keeps_the_parent_sync",
+        );
+        return;
+    }
+    let dir = TempDir::new("acquire-sync-three");
+    let target = dir.join("new");
+    let rom_path = dir.join("rom.gba");
+    std::fs::write(&rom_path, b"rom").expect("rom written");
+    let fillers = fill_descriptor_table_leaving(3);
+    let rom = std::fs::File::open(&rom_path).expect("rom opens");
+    let creation = super::create_directories_pinned(&target).expect("one level is created");
+    let mut created = creation.created;
+    let dest = super::super::acquire_dest(&mut created, &target, creation.final_directory.as_ref())
+        .expect("the destination opens through the pin");
+    drop(creation.final_directory);
+    let mut synced = Vec::new();
+    super::sync_shed_parents_with(&mut created, &dest, &mut |parent| {
+        let stat = rustix::fs::fstat(parent).expect("parent stats");
+        synced.push((stat.st_dev, stat.st_ino));
+    });
+    super::sync_created_directories(&mut created);
+    drop(dest);
+    drop(rom);
+    drop(fillers);
+    let parent = rustix::fs::stat(&dir.path).expect("parent stats");
+    assert_eq!(
+        synced,
+        [(parent.st_dev, parent.st_ino)],
+        "the new level's parent entry must be synced"
     );
 }
