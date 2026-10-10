@@ -21,15 +21,11 @@ const ABSOL: u16 = 376;
 /// `Battle::new`: the initial random-turn number
 /// (`battle_main.c:3140`). One draw.
 const INITIAL_TURN_SEED: [u16; 1] = [0];
-/// Start of each turn: the random-turn number (`battle_main.c:3923` for the
-/// first turn, `:4013` after) and the wild enemy's move-slot pick
-/// (`battle_controller_opponent.c:1599`, the one draw outside the two
-/// battle files). Two draws.
+/// Per turn: the random-turn number (`battle_main.c:3923`, then `:4013`) and the
+/// wild move-slot pick (`battle_controller_opponent.c:1599`). Two draws.
 const TURN_SETUP: [u16; 2] = [0, 0];
-/// Scratch into a Ghost: accuracy (`battle_script_commands.c:1176`),
-/// critical roll (`:1282`), damage variance (`:1641`, drawn even though the
-/// target is immune) and the secondary-effect chance (`:2923`). Four draws.
-/// Swords Dance, turn order and Pressure's PP spend draw nothing.
+/// Scratch into a Ghost: accuracy (`battle_script_commands.c:1176`), crit (`:1282`),
+/// variance (`:1641`, drawn despite immunity) and secondary chance (`:2923`). Four draws.
 const IMMUNE_SCRATCH: [u16; 4] = [0, 0, 0, 0];
 
 #[test]
