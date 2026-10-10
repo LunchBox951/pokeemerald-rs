@@ -725,6 +725,8 @@ fn audio_rom(pcm: &[u8]) -> Vec<u8> {
         .write(0x10_0010, &with_audio_guard(pcm))
         .write(0x20_0000, &slot)
         .write(0x30_0000, &song_header)
+        // The one track: WAIT 1 tick (0x81), then FINE (0xB1).
+        .write(0x40_0000, &[0x81, 0xB1])
         // gSongTable at 0x0850_0000; MUS_TITLE is index 1.
         .write(0x50_0008, &0x0830_0000u32.to_le_bytes())
         .finish()
@@ -743,7 +745,10 @@ fn title_song_payload(priority: u8) -> Vec<u8> {
         assets::audio::VoiceGroupId("audio/voicegroup/title".to_owned()),
         priority,
         None,
-        vec![vec![assets::audio::SongEvent::Fine]],
+        vec![vec![
+            assets::audio::SongEvent::Wait(1),
+            assets::audio::SongEvent::Fine,
+        ]],
     )
     .expect("a one-track song is valid")
     .encode()
@@ -756,10 +761,22 @@ fn with_audio_song_payload<T>(
     song_payload: &[u8],
     body: impl FnOnce(&Context<'_>) -> T,
 ) -> T {
+    with_audio_song_rom(name, songs, song_payload, |_| {}, body)
+}
+
+/// [`with_audio_song_payload`] after `mutate` has edited the ROM image.
+fn with_audio_song_rom<T>(
+    name: &str,
+    songs: &[&str],
+    song_payload: &[u8],
+    mutate: impl FnOnce(&mut Vec<u8>),
+    body: impl FnOnce(&Context<'_>) -> T,
+) -> T {
     let pcm: Vec<u8> = (0..64u32)
         .map(|index| u8::try_from((index * 43 + 7) % 199).expect("modulo 199 fits in u8"))
         .collect();
-    let rom = audio_rom(&pcm);
+    let mut rom = audio_rom(&pcm);
+    mutate(&mut rom);
     let dir = scratch(name);
     let upstream = audio_upstream(&dir);
 
@@ -1059,4 +1076,37 @@ fn a_pack_missing_the_whole_interface_palette_domain_is_refused() {
             );
         },
     );
+}
+
+/// Run `locate` against the audio fixture with `mutate` applied to the ROM
+/// and assert it fails closed with `SongBytecodeMismatch` for the song.
+fn assert_bytecode_refused(name: &str, mutate: impl FnOnce(&mut Vec<u8>)) {
+    with_audio_song_rom(
+        name,
+        &["audio/song/mus_title"],
+        &title_song_payload(0),
+        mutate,
+        |ctx| {
+            let mut report = Vec::new();
+            let err = audio::locate(ctx, &mut report).expect_err("bytecode must be compared");
+            let GenRomProfileError::SongBytecodeMismatch { id, .. } = &err else {
+                panic!("{err:?}");
+            };
+            assert_eq!(id, "audio/song/mus_title");
+        },
+    );
+}
+
+#[test]
+fn a_changed_track_byte_is_refused() {
+    // Header metadata is untouched; only WAIT 1 becomes WAIT 2.
+    assert_bytecode_refused("audio-track-byte", |rom| rom[0x40_0000] = 0x82);
+}
+
+#[test]
+fn a_missing_track_is_refused() {
+    // Point the track at the ROM window's end, where no bytes exist.
+    assert_bytecode_refused("audio-track-missing", |rom| {
+        rom[0x30_0008..0x30_000C].copy_from_slice(&0x0900_0000u32.to_le_bytes());
+    });
 }
