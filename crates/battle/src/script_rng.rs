@@ -16,6 +16,14 @@ impl SequenceRng {
     pub(crate) fn draws(&self) -> usize {
         self.draw_count
     }
+
+    pub(crate) fn assert_exhausted(&self) {
+        assert_eq!(
+            self.draw_count,
+            self.scripted_values.len(),
+            "SequenceRng script length and draws consumed must match"
+        );
+    }
 }
 
 impl BattleRng for SequenceRng {
