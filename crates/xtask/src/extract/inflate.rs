@@ -282,6 +282,10 @@ fn read_dynamic_tables(
         return Err(InflateError::BadHuffmanTable);
     }
     let distance_code_count = usize::try_from(reader.read_bits(5)?).expect("5 bits fit usize") + 1;
+    // puff.c rejects more than 30 distance codes (`puff.c:91-94`, `:683-688`).
+    if distance_code_count > 30 {
+        return Err(InflateError::BadHuffmanTable);
+    }
     let code_length_code_count =
         usize::try_from(reader.read_bits(4)?).expect("4 bits fit usize") + 4;
 
@@ -1055,5 +1059,44 @@ palette pokeemerald the lazy palette fox lazy sprite the pokeemerald fox";
 
         let err = inflate(&writer.finish()).unwrap_err();
         assert_eq!(err, InflateError::BadHuffmanTable);
+    }
+
+    #[test]
+    fn oversized_hdist_is_rejected() {
+        // Final dynamic blocks declaring 31 and 32 distance codes, all with
+        // zero length, so the table is otherwise valid and would decode to
+        // empty output; puff.c rejects HDIST > 30 (`puff.c:683-688`).
+        for distance_code_count in [31u32, 32] {
+            let mut lengths = vec![0u8; 257 + distance_code_count as usize];
+            lengths[256] = 1; // end-of-block, the permitted singleton
+            let mut code_length_lengths = [0u8; 19];
+            code_length_lengths[0] = 1;
+            code_length_lengths[1] = 2;
+            code_length_lengths[18] = 2; // 1/2 + 1/4 + 1/4: complete
+            let codes = canonical_codes(&code_length_lengths);
+
+            let mut writer = BitWriter::new();
+            writer.write_bit(1); // BFINAL
+            writer.write_bits(2, 2); // BTYPE = dynamic
+            writer.write_bits(0, 5); // HLIT = 0 -> 257 literal/length codes
+            writer.write_bits(distance_code_count - 1, 5); // HDIST
+            writer.write_bits(15, 4); // HCLEN = 15 -> all 19 order slots
+            for &symbol in &CODE_LENGTH_ORDER {
+                writer.write_bits(u32::from(code_length_lengths[symbol]), 3);
+            }
+            for &raw_length in &lengths {
+                let (code, length) = codes[usize::from(raw_length)];
+                writer.write_code(code, length);
+            }
+            let lit_len_codes = canonical_codes(&lengths[..257]);
+            writer.write_code(lit_len_codes[256].0, lit_len_codes[256].1);
+
+            let err = inflate(&writer.finish()).unwrap_err();
+            assert_eq!(
+                err,
+                InflateError::BadHuffmanTable,
+                "HDIST codes={distance_code_count}"
+            );
+        }
     }
 }
