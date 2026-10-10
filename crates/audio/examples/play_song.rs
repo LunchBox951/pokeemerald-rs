@@ -535,6 +535,27 @@ fn reading_due(reading: UsableReading, target: u64, device_sample_rate: u32) -> 
         .checked_add(frames_duration(owed, device_sample_rate))
 }
 
+/// Whether `reading` proves `target` sounded by `deadline`. A reading past
+/// the target backdates the crossing by the overshoot at
+/// `device_sample_rate`: the position cannot outrun the device rate, so the
+/// target sounded at least that long before the callback. Otherwise the
+/// target sounds at [`reading_due`].
+fn reading_completes_by(
+    reading: UsableReading,
+    target: u64,
+    device_sample_rate: u32,
+    deadline: Instant,
+) -> bool {
+    if reading.sounded_frames > target {
+        let overshoot = frames_duration(reading.sounded_frames - target, device_sample_rate);
+        deadline
+            .checked_add(overshoot)
+            .is_none_or(|latest| reading.observed_at <= latest)
+    } else {
+        reading_due(reading, target, device_sample_rate).is_some_and(|due| due <= deadline)
+    }
+}
+
 /// How this wait has actually been polling: the shortest of the recent poll
 /// gaps, never under the requested `interval`. A scheduler that holds every
 /// sleep late raises it; one late poll among prompt ones does not.
@@ -579,7 +600,8 @@ fn usable_callback_in_span(from: u64, to: u64, usable_through: u64) -> bool {
 /// deadline is [`DrainError::MeasuredTailTimedOut`], not a finish. A stream
 /// error before the target is reached is not a finish either. A poll that
 /// first sees the target past the deadline finishes only when the latest
-/// usable callback's own stamp puts completion within the budget; the polls
+/// usable callback's own stamp, less any overshoot past the target at the
+/// device rate, puts completion within the budget; the polls
 /// folded into that gap keep no earlier crossing, so otherwise it is a
 /// timeout. The signal
 /// disappearing mid-wait is not itself a failure.
@@ -663,12 +685,12 @@ fn wait_for_measured_tail(
         let current = now();
         if sounded >= target {
             // A poll past the deadline accepts the target only when the
-            // callback's own stamp puts completion inside the budget.
+            // callback's own stamp, backdated by any overshoot, puts
+            // completion inside the budget.
             return if current <= deadline
-                || usable_reading
-                    .and_then(|reading| reading_due(reading, target, device_sample_rate))
-                    .is_some_and(|due| due <= deadline)
-            {
+                || usable_reading.is_some_and(|reading| {
+                    reading_completes_by(reading, target, device_sample_rate, deadline)
+                }) {
                 Ok(())
             } else {
                 Err(DrainError::MeasuredTailTimedOut { sounded, target })
