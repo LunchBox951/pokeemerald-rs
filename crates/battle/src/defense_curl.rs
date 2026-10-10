@@ -1,15 +1,4 @@
 //! Admission and resolution for Defense Curl.
-//!
-//! `BattleScript_EffectDefenseCurl` (`data/battle_scripts_1.s:2014`-`:2025`)
-//! inlines its own copy of the Defense+1 raise that
-//! `BattleScript_EffectDefenseUp` instead reaches through
-//! `goto BattleScript_EffectStatUp` (`:479`-`:481`), because
-//! `setdefensecurlbit` (`src/battle_script_commands.c:8858`-`:8862`) must run
-//! before the raise -- the only reason this effect gets its own pipeline
-//! instead of a [`crate::stat_change::STAT_CHANGE_EFFECTS`] row. The raise
-//! itself draws no RNG, matching every other raising effect
-//! ([`crate::stat_change`]'s module docs): no accuracy check, no
-//! critical-hit roll, no damage roll, no secondary-effect roll.
 
 use assets::{MoveEffect, MoveId};
 
@@ -45,13 +34,10 @@ pub fn ensure_resolvable(dex: &Dex, move_id: MoveId) -> Result<(), BattleError> 
     }
 }
 
-/// The Defense raise Defense Curl applies, after the volatile write the
-/// caller must perform first.
+/// Defense Curl's capped one-stage Defense raise.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DefenseCurlOutcome {
-    /// The Defense+1 raise, in [`crate::stat_change::StatChangeEffect`]'s own
-    /// shape so a caller can push the same event fields
-    /// `execute_stat_change_move` does.
+    /// The one-stage Defense raise.
     pub change: StatChangeEffect,
     /// The clamped Defense stage after applying the raise.
     pub new_stage: StatStage,
@@ -60,11 +46,11 @@ pub struct DefenseCurlOutcome {
 }
 
 /// Resolves Defense Curl's stat raise without mutating `attacker` or
-/// consuming RNG. The caller writes
-/// [`crate::volatile::Volatiles::set_defense_curl`] **before** applying this
-/// outcome, even when `capped` is `true` -- `setdefensecurlbit` precedes
-/// `statbuffchange` in the script regardless of its result
-/// (`data/battle_scripts_1.s:2017`-`:2019`).
+/// consuming RNG. The caller sets
+/// [`crate::volatile::Volatiles::set_defense_curl`] before applying the raise,
+/// even when `capped`
+/// (`pokeemerald/data/battle_scripts_1.s:2018`-`:2020`,
+/// `pokeemerald/src/battle_script_commands.c:8858`-`:8862`).
 ///
 /// # Errors
 ///
