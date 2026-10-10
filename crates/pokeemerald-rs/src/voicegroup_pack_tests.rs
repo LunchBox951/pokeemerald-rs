@@ -130,8 +130,23 @@ fn titles_key_split_slots_resolve_their_tables_and_children() {
             // `sound/keysplit_tables.inc`: piano's key-split table has this many entries.
             const PIANO_KEYSPLIT_TABLE_LEN: usize = 72;
 
+            // The notes 108..128 read the bytes after piano's: strings' first 20,
+            // all child 0 (`keysplit_tables.inc:13-22`).
+            const PIANO_ALIAS_TAIL_LEN: usize = 20;
+
             assert_eq!(key_split.starting_note, 36);
-            assert_eq!(key_split.table().len(), PIANO_KEYSPLIT_TABLE_LEN);
+            assert_eq!(
+                key_split.table().len(),
+                PIANO_KEYSPLIT_TABLE_LEN + PIANO_ALIAS_TAIL_LEN
+            );
+            let declared_table = [vec![0; 19], vec![1; 15], vec![2; 21], vec![3; 17]].concat();
+            assert_eq!(
+                key_split.table()[..PIANO_KEYSPLIT_TABLE_LEN],
+                declared_table
+            );
+            assert!(key_split.table()[PIANO_KEYSPLIT_TABLE_LEN..]
+                .iter()
+                .all(|&child| child == 0));
             assert_eq!(key_split.children.0, "audio/voicegroup/piano_keysplit");
         }
         other => panic!("expected title's slot 1 to be a KeySplit indirection, got {other:?}"),

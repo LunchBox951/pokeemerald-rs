@@ -16,9 +16,12 @@ fn an_enemy_move_is_admitted_against_a_synchronize_reserve_before_the_battle_sta
     let reserve = max_iv_mon(&dex, RALTS, 5, vec![TACKLE]);
     assert_eq!(reserve.ability(), AbilityId::SYNCHRONIZE);
     let enemy = max_iv_mon(&dex, EKANS, 50, vec![TACKLE, POISON_STING]);
-    let mut rng = SequenceRng::new([0; 32]);
+    // battle_main.c:3140 construction turn seed: the only draw.
+    let mut rng = SequenceRng::new([0]);
     Battle::new_with_player_reserves(dex, player, vec![reserve], enemy, false, &mut rng)
         .expect("Synchronize's poison reflection is modelled, so the reserve is admitted");
+    assert_eq!(rng.draws(), 1, "reserve admission draws only the turn seed");
+    rng.assert_exhausted();
 }
 
 /// A fainted reserve is never sent out
@@ -33,7 +36,10 @@ fn a_fainted_synchronize_reserve_does_not_refuse_an_enemy_poison_sting() {
     reserve.apply_damage(reserve.stats().max_hp);
     assert!(reserve.is_fainted());
     let enemy = max_iv_mon(&dex, EKANS, 50, vec![TACKLE, POISON_STING]);
-    let mut rng = SequenceRng::new([0; 32]);
+    // battle_main.c:3140 construction turn seed: the only draw.
+    let mut rng = SequenceRng::new([0]);
     Battle::new_with_player_reserves(dex, player, vec![reserve], enemy, false, &mut rng)
         .expect("a fainted reserve can never be sent out, so it is never validated as a defender");
+    assert_eq!(rng.draws(), 1, "reserve admission draws only the turn seed");
+    rng.assert_exhausted();
 }

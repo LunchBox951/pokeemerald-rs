@@ -3,12 +3,12 @@
 //! (`MPlayMain`, `m4a_1.s:1129`).
 //!
 //! `PORT` and every `XCMD` besides the pseudo-echo pair (`xIECV`/`xIECL`)
-//! decode but never execute.
+//! and the terminal reserved kinds 0 and 3 decode but never execute.
 
 use crate::cgb_voice::{CgbChannelNumber, CgbVoice};
 use crate::pitch::{self, SAMPLES_PER_FRAME};
 use crate::psg::WaveChannel;
-use crate::sequence::{clamp_tempo, Event, MAX_TEMPO_BPM};
+use crate::sequence::{clamp_tempo, xcmd_ends_track, Event, MAX_TEMPO_BPM};
 use crate::song::{Instrument, Song};
 use crate::voice::{channel_volume, pan_terms, Voice};
 use crate::{Mixer, DEFAULT_MASTER_VOLUME, DEFAULT_MAX_VOICES};
@@ -24,10 +24,11 @@ const XCMD_IECL: u8 = 0x09;
 /// (`subs r0, 150`, `m4a_1.s:1169`).
 const TEMPO_UNIT: u16 = 150;
 
-/// Default track volume before any `VOL` command. Upstream leaves
-/// `track->vol` at `0`; this crate defaults to full so a minimal
-/// hand-authored sequence is audible.
-const DEFAULT_TRACK_VOLUME: u8 = 127;
+/// Track volume before any `VOL` command: `MPlayMain`'s `MPT_FLG_START`
+/// handling clears the track and restores no `vol` field
+/// (`m4a_1.s:1214`-`:1230`), so the resolved channel
+/// volume is zero until the sequence sets one (`m4a.c:772`).
+const DEFAULT_TRACK_VOLUME: u8 = 0;
 
 /// Default pitch-bend range (`track->bendRange = 2`, `m4a_1.s:1223`).
 const DEFAULT_BEND_RANGE: u8 = 2;
@@ -634,6 +635,11 @@ impl Sequencer {
                 }
             }
             Event::PatternEnd => track.return_from_pattern(),
+            // Kinds 0 and 3 are `ply_xxx` -> `ply_fine` (`m4a_tables.c:293`,
+            // `:296`; `m4a.c:1531`..`:1534`).
+            Event::Xcmd { kind, .. } if xcmd_ends_track(kind) => {
+                Self::finish_track(track, mixer, track_id);
+            }
             Event::Xcmd {
                 kind: XCMD_IECV,
                 value,

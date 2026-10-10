@@ -153,8 +153,8 @@ pub use entry::{
 };
 pub use layout::{EntryKind, FORMAT_VERSION, MAGIC, OUTPUT_RELATIVE_PATH};
 pub use path::{
-    default_pack_path, repo_pack_path, user_data_dir, user_pack_path, APP_DATA_SUBDIRECTORY,
-    PACK_PATH_ENV, RELEASE_CHANNEL,
+    data_dir_for, default_pack_path, repo_pack_path, user_data_dir, user_pack_path, HostFamily,
+    APP_DATA_SUBDIRECTORY, PACK_PATH_ENV, RELEASE_CHANNEL,
 };
 pub use reader::{parse_directory, DirectoryEntry, PackReadError};
 pub use writer::{PackEntry, PackWriteError, PackWriter};

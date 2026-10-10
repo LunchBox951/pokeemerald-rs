@@ -1,8 +1,8 @@
 use super::{
-    as_signed, centered, xcmd_payload_width, DecodeError, Event, BEND, BENDR, CLOCK_TABLE, EOT,
-    FINE, GOTO, KEYSH, LFODL, LFOS, MEMACC, MEMACC_CONDITIONS, MOD, MODT, PAN, PATT, PEND, PORT,
-    PRIO, REPT, RUNNING_STATUS_MIN, STATUS_BYTE_MIN, TEMPO, TIE, TUNE, VOICE, VOL, WAIT_HI,
-    WAIT_LO, XCMD,
+    as_signed, centered, xcmd_ends_track, xcmd_payload_width, DecodeError, Event, BEND, BENDR,
+    CLOCK_TABLE, EOT, FINE, GOTO, KEYSH, LFODL, LFOS, MEMACC, MEMACC_CONDITIONS, MOD, MODT, PAN,
+    PATT, PEND, PORT, PRIO, REPT, RUNNING_STATUS_MIN, STATUS_BYTE_MIN, TEMPO, TIE, TUNE, VOICE,
+    VOL, WAIT_HI, WAIT_LO, XCMD,
 };
 
 pub(super) struct CommandReader<'a> {
@@ -86,6 +86,11 @@ impl<'a> CommandReader<'a> {
             TUNE => self.unary(|value| Event::Tune(centered(value))),
             XCMD => {
                 let kind = self.byte()?;
+                // `ply_xxx` is `ply_fine` (`m4a_tables.c:293`, `:296`); the
+                // track ends here, so no payload or suffix is read.
+                if xcmd_ends_track(kind) {
+                    return Ok(Event::Fine);
+                }
                 let mut value = 0;
                 for i in 0..xcmd_payload_width(kind) {
                     value |= u32::from(self.byte()?) << (8 * i);
