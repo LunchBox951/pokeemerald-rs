@@ -62,3 +62,32 @@ fn a_channel_with_no_notes_emits_no_track() {
 
     assert_eq!(compile(&midi, &cfg()).unwrap().tracks.len(), 1);
 }
+
+fn tempo_events_for(microseconds: u32) -> Vec<SongEvent> {
+    let mut body = Vec::new();
+    push_timed(&mut body, 0, tempo(microseconds));
+    push_timed(&mut body, 0, note_on(0, 60, 100));
+    push_timed(&mut body, 4, note_off(0, 60));
+    let midi = single_track_midi(24, body);
+
+    let compiled = compile(&midi, &cfg()).unwrap();
+    compiled.tracks[0]
+        .iter()
+        .filter(|e| matches!(e, SongEvent::Tempo(_)))
+        .cloned()
+        .collect()
+}
+
+#[test]
+fn odd_bpm_is_quantized_to_the_upstream_half_tempo_effective_rate() {
+    // 480000us rounds to 125 BPM; mid2agb emits 125*1/2 = 62 and the engine
+    // doubles it, so the effective rate is 124.
+    assert_eq!(tempo_events_for(480_000), [SongEvent::Tempo(124)]);
+}
+
+#[test]
+fn even_bpm_is_unchanged_by_half_tempo_quantization() {
+    assert_eq!(tempo_events_for(500_000), [SongEvent::Tempo(120)]);
+    // 478000us rounds to 126 BPM.
+    assert_eq!(tempo_events_for(478_000), [SongEvent::Tempo(126)]);
+}
