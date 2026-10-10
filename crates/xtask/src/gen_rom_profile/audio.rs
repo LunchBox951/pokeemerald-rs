@@ -29,7 +29,7 @@
 
 use std::path::Path;
 
-use assets::audio::{DirectSoundSample, ProgrammableWave, Sample};
+use assets::audio::{DirectSoundSample, ProgrammableWave, Sample, Song};
 
 use crate::extract::midi::SONG_PACK_ID as SUPPORTED_SONG_ID;
 use crate::extract::voicegroups::parser::{RawSlot, RawVoiceGroup};
@@ -140,7 +140,7 @@ pub fn locate(
     let (child_voicegroups, mut keysplits) = walk_children(ctx, root, group, &groups, report)?;
     voicegroups.extend(child_voicegroups);
 
-    let (song, song_table) = locate_song(ctx, SUPPORTED_SONG_ID, root, report)?;
+    let (song, song_table) = locate_song(ctx, SUPPORTED_SONG_ID, label, root, report)?;
 
     keysplits.sort_by(|a, b| a.label.cmp(&b.label));
     voicegroups.sort_by(|a, b| a.label.cmp(&b.label));
@@ -594,6 +594,7 @@ fn read_keysplit_tables(
 fn locate_song(
     ctx: &Context<'_>,
     song_id: &str,
+    voicegroup_label: &str,
     voicegroup: u32,
     report: &mut Vec<ReportLine>,
 ) -> Result<(SongPlan, u32), GenRomProfileError> {
@@ -607,6 +608,7 @@ fn locate_song(
         |&base| is_song_header(ctx, base),
     )?;
     let track_count = super::locate::u8_at_addr(ctx.rom, header).unwrap_or(0);
+    check_song_header(ctx, song_id, voicegroup_label, header)?;
 
     let entry = only_one_matching(
         song_id,
@@ -644,6 +646,67 @@ fn locate_song(
         },
         table,
     ))
+}
+
+/// Decode the pack's song through the canonical wire schema and check the
+/// located `SongHeader` against it: track count, priority, and reverb.
+///
+/// This corroborates the header only. Each track's byte-code is not decoded
+/// here; that decoder lives in `rom-import` and is not exported.
+///
+/// # Errors
+///
+/// [`GenRomProfileError::EntryShape`] naming `song_id` when the pack payload
+/// does not decode as a song, or whose voicegroup is not
+/// `audio/voicegroup/{voicegroup_label}`;
+/// [`GenRomProfileError::StructMismatch`] when the header disagrees.
+fn check_song_header(
+    ctx: &Context<'_>,
+    song_id: &str,
+    voicegroup_label: &str,
+    header: u32,
+) -> Result<(), GenRomProfileError> {
+    let shape = |reason: String| GenRomProfileError::EntryShape {
+        id: song_id.to_owned(),
+        reason,
+    };
+    let song =
+        Song::decode(&ctx.pack.get(song_id)?.payload).map_err(|err| shape(err.to_string()))?;
+    let expected_group = format!("audio/voicegroup/{voicegroup_label}");
+    if song.voicegroup().0 != expected_group {
+        return Err(shape(format!(
+            "plays through `{}`, not `{expected_group}`",
+            song.voicegroup().0
+        )));
+    }
+
+    let mismatch = |reason: String| GenRomProfileError::StructMismatch {
+        id: song_id.to_owned(),
+        reason,
+    };
+    let byte = |offset: u32| super::locate::u8_at_addr(ctx.rom, header + offset);
+    let track_count = byte(0);
+    if track_count.map(usize::from) != Some(song.tracks().len()) {
+        return Err(mismatch(format!(
+            "the header at {header:08X} holds {track_count:?} tracks, the pack song {}",
+            song.tracks().len()
+        )));
+    }
+    if byte(2) != Some(song.priority()) {
+        return Err(mismatch(format!(
+            "the header priority is {:?}, the pack song's is {}",
+            byte(2),
+            song.priority()
+        )));
+    }
+    let reverb = byte(3).and_then(|value| (value & 0x80 != 0).then_some(value & !0x80));
+    if reverb != song.reverb() {
+        return Err(mismatch(format!(
+            "the header reverb is {reverb:?}, the pack song's is {:?}",
+            song.reverb()
+        )));
+    }
+    Ok(())
 }
 
 /// Whether the bytes at `base` read as an MP2K song header.

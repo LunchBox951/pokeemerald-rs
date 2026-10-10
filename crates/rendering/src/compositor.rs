@@ -139,6 +139,13 @@ impl<'a> BgSlot<'a> {
     /// always passes both, rather than skipping the call when closed, so a
     /// `Some` `affine_mosaic_hold` is told about every column; only the
     /// returned color, not that bookkeeping, is gated on `bg_open`.
+    ///
+    /// `pass_start` is the first column of the window pass containing `x`;
+    /// a regular 8bpp mosaic BG restarts its prefetch there.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "mirrors the per-column window and hold state compose_pixel threads through"
+    )]
     fn sample(
         &self,
         x: usize,
@@ -147,6 +154,7 @@ impl<'a> BgSlot<'a> {
         bg_open: bool,
         hold_active: bool,
         affine_mosaic_hold: Option<&mut AffineMosaicHold>,
+        pass_start: usize,
     ) -> Option<Rgb888> {
         if let Some(hold) = affine_mosaic_hold {
             if !hold_active {
@@ -176,6 +184,31 @@ impl<'a> BgSlot<'a> {
         }
         if !bg_open {
             return None;
+        }
+        if self.mosaic {
+            if let BgKind::Regular {
+                layer,
+                scroll_x,
+                scroll_y,
+            } = self.kind
+            {
+                let h = usize::from(bg_mosaic.horizontal());
+                if h > 1 && layer.is_8bpp() {
+                    // mGBA's 8bpp macro restarts per draw call: a span that
+                    // begins inside a block holds a prefetched span-start
+                    // texel to that block's end, then reloads at each block
+                    // boundary (`software-mode0.c:320-408,419`).
+                    let (_, snapped_y) = bg_mosaic.snap(0, y);
+                    let block_origin = x - x % h;
+                    return if pass_start > block_origin {
+                        layer.sample_8bpp_mosaic_prefetch(
+                            pass_start, snapped_y, scroll_x, scroll_y, h,
+                        )
+                    } else {
+                        layer.sample_scrolled(block_origin, snapped_y, scroll_x, scroll_y)
+                    };
+                }
+            }
         }
         let (x, y) = if self.mosaic {
             if self.wrap_affine_bypasses_horizontal_mosaic(bg_mosaic) {
@@ -220,8 +253,9 @@ impl<'a> BgSlot<'a> {
 
     /// Whether this slot needs an [`AffineMosaicHold`]: only an *enabled*,
     /// mosaic-enabled, affine [`Overflow::Transparent`] slot does.
-    /// [`Overflow::Wrap`] and regular BGs snap to the block origin
-    /// statelessly; see
+    /// [`Overflow::Wrap`] and regular BGs hold no state across columns
+    /// (a regular 8bpp BG derives its span prefetch from the pass start in
+    /// [`Self::sample`]); see
     /// [`AffineBgLayer::sample_column_with_mosaic_hold`] for why.
     fn needs_affine_mosaic_hold(&self) -> bool {
         self.enabled
@@ -424,8 +458,10 @@ pub fn compose_frame_with_effects(
         )]
         let passes = effects.windows.scanline_passes(y as u8);
         let window_spans = WindowSpans::new(&passes, effects.windows.obj_window.is_some());
+        let mut pass_start = 0;
         for x in 0..width {
             if passes.iter().any(|pass| pass.start == x) {
+                pass_start = x;
                 for hold in affine_mosaic_holds.iter_mut().flatten() {
                     hold.close();
                 }
@@ -437,6 +473,7 @@ pub fn compose_frame_with_effects(
                 any_target2,
                 &mut affine_mosaic_holds,
                 window_spans,
+                pass_start,
                 x,
                 y,
             );
@@ -494,6 +531,7 @@ fn compose_pixel(
     any_target2: bool,
     affine_mosaic_holds: &mut [Option<AffineMosaicHold>; 4],
     window_spans: WindowSpans<'_>,
+    pass_start: usize,
     x: usize,
     y: usize,
 ) -> Rgb888 {
@@ -556,6 +594,7 @@ fn compose_pixel(
             bg_open,
             hold_active,
             affine_mosaic_hold.as_mut(),
+            pass_start,
         ) else {
             continue;
         };
