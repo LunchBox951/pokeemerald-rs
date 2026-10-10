@@ -103,6 +103,58 @@ impl<'a> BgLayer<'a> {
         self.sample_tile_pixel(src_x / DIM, src_y / DIM, src_x % DIM, src_y % DIM)
     }
 
+    /// Whether this layer's tiles are 8bpp, the depth whose mosaic path
+    /// prefetches a span's first texel (see
+    /// [`Self::sample_8bpp_mosaic_prefetch`]).
+    pub(crate) fn is_8bpp(&self) -> bool {
+        matches!(self.tileset.bit_depth(), BitDepth::Bpp8)
+    }
+
+    /// The texel mGBA's 8bpp mosaic macro prefetches and holds when a draw
+    /// call starts mid-block at screen column `start_x` (`h` is the decoded
+    /// horizontal mosaic size, `y` the already vertically snapped row)
+    /// `(behavioral-fidelity)`.
+    ///
+    /// The prefetched pixel column is the span-start column within its tile
+    /// (`scrolled start & 7`), not the block origin's; only the *tile* is
+    /// chosen from the block-origin offset, stepping back one tile by mGBA's
+    /// own `(16 + offset) >> 3` rule when that offset is negative
+    /// (`mgba/src/gba/renderers/software-mode0.c:320-366`). Horizontal flip
+    /// and the vertical flip of the chosen entry apply as usual.
+    pub(crate) fn sample_8bpp_mosaic_prefetch(
+        &self,
+        start_x: usize,
+        y: usize,
+        scroll_x: u16,
+        scroll_y: u16,
+        h: usize,
+    ) -> Option<Rgb888> {
+        const DIM: usize = BitDepth::TILE_DIM;
+        let width_tiles = self.tilemap.width_tiles();
+        let height_tiles = self.tilemap.height_tiles();
+        if width_tiles == 0 || height_tiles == 0 || h == 0 {
+            return None;
+        }
+        let scroll_x = usize::from(scroll_x & Self::SCROLL_REGISTER_MASK);
+        let scroll_y = usize::from(scroll_y & Self::SCROLL_REGISTER_MASK);
+        let scrolled = start_x + scroll_x;
+        let pixel_column = scrolled % DIM;
+        let wait_offset = start_x % h;
+        // Signed distance from the block origin's in-tile column.
+        let origin_offset = pixel_column.cast_signed() - wait_offset.cast_signed();
+        let tile_source = if origin_offset >= 0 {
+            scrolled.cast_signed()
+        } else {
+            let tiles_back = (16 + origin_offset) >> 3;
+            scrolled.cast_signed() - tiles_back * 8
+        };
+        let bg_width_px = width_tiles.checked_mul(DIM)?;
+        let tile_col =
+            usize::try_from(tile_source.rem_euclid(bg_width_px.cast_signed())).ok()? / DIM;
+        let src_y = (y + scroll_y) % height_tiles.checked_mul(DIM)?;
+        self.sample_tile_pixel(tile_col, src_y / DIM, pixel_column, src_y % DIM)
+    }
+
     fn sample_tile_pixel(
         &self,
         col: usize,

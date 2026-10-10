@@ -266,7 +266,8 @@ impl Battle {
     /// enemy's moveset against the active member or any non-fainted reserve.
     /// A fainted reserve is admitted: it models a player party that already
     /// lost a member before the battle. A non-fainted
-    /// participant with a Paralysed Limber or Poisoned Immunity status fails
+    /// participant that is Paralysed with Limber, Poisoned with Immunity, or
+    /// confused with Own Tempo fails
     /// with [`BattleError::UnportedAbilityInteraction`]. Errors leave the RNG
     /// untouched.
     pub fn new_with_player_reserves(
