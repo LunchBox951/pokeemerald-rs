@@ -340,7 +340,9 @@ fn semi_transparent_obj_reblend_brightens_with_a_deeper_enabled_target2_bg() {
     // (priority 2, a target2) enabled deeper in the frame. See
     // effects::resolve_pixel_color's contract for why a global target2
     // still brightens this surviving pixel. The control drops BG_b's
-    // target2 bit -> no target2 anywhere -> brightened either way.
+    // target2 bit -> no target2 anywhere. The OBJ is deliberately NOT a
+    // target1, so only the global-target2 reblend can whiten it: white with the
+    // deeper target2, black without.
     let (tiles_a, palette_a, map_a) = opaque_bg_fixture(5);
     let (tiles_b, palette_b, map_b) = opaque_bg_fixture(10);
     let layer_a = crate::bg::BgLayer::new(&tiles_a, &palette_a, &map_a);
@@ -374,7 +376,7 @@ fn semi_transparent_obj_reblend_brightens_with_a_deeper_enabled_target2_bg() {
         effect: ColorEffect::Brighten,
         target1: LayerTargets {
             bg: [false; 4],
-            obj: true,
+            obj: false,
             backdrop: false,
         },
         target2: LayerTargets {
@@ -407,8 +409,8 @@ fn semi_transparent_obj_reblend_brightens_with_a_deeper_enabled_target2_bg() {
     let control_fb = compose_frame_with_effects(&sprites, &slots, &control_effects);
     assert_eq!(
         control_fb.pixel(0, 0),
-        Some(Bgr555::from_channels(31, 31, 31).to_rgb888()),
-        "no target2 anywhere -> the semi-transparent OBJ is brightened to white"
+        Some(Bgr555::from_channels(0, 0, 0).to_rgb888()),
+        "no target2 anywhere and OBJ not target1 -> no reblend, the OBJ stays black"
     );
 }
 
