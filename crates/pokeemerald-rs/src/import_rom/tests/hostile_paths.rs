@@ -7,7 +7,9 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 #[cfg(unix)]
 use super::super::dest::Dest;
-use super::super::{import_to_with, import_to_with_hooks, pack_name, ImportRomError};
+#[cfg(unix)]
+use super::super::import_to_with_hooks;
+use super::super::{import_to_with, pack_name, ImportRomError};
 use super::support::{fake_pack, file_names, write_fixture_rom, SourceRom, TempDir};
 
 #[cfg(unix)]
