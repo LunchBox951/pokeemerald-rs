@@ -285,7 +285,8 @@ pub(super) fn open_created_directory_at(
 }
 
 /// Reopen the directory `dir` (possibly an `O_PATH` handle) names, for real
-/// I/O -- in particular `fsync`, for `sync_created_directories`'s Unix arm.
+/// I/O -- in particular `fsync`, for `sync_created_directories`'s Unix arm,
+/// and for [`Dest::open_pinned`]'s destination acquisition.
 /// Needs read permission `open_traversal_directory` did not, so a parent
 /// this run cannot read is a sync silently skipped, best-effort like
 /// [`Dest::publish`]'s own.
@@ -294,6 +295,18 @@ pub(super) fn reopen_for_sync(dir: &std::os::fd::OwnedFd) -> io::Result<std::os:
     Ok(rustix::fs::openat(
         dir,
         ".",
+        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )?)
+}
+
+/// Opens the parent of the pinned directory `dir`, readable so it can be
+/// `fsync`ed directly. Syncing a wrong directory only costs time.
+#[cfg(unix)]
+pub(super) fn open_parent_for_sync(dir: &std::os::fd::OwnedFd) -> io::Result<std::os::fd::OwnedFd> {
+    Ok(rustix::fs::openat(
+        dir,
+        "..",
         rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::CLOEXEC,
         rustix::fs::Mode::empty(),
     )?)
@@ -327,6 +340,21 @@ pub(super) struct Dest {
 
 #[cfg(unix)]
 impl Dest {
+    /// Acquire the directory `pin` is, with no path involved: reopen `"."`
+    /// relative to the pinned descriptor for real I/O (a pin may be an
+    /// `O_PATH` or search-only handle, which `fsync` cannot use).
+    ///
+    /// # Errors
+    ///
+    /// Whatever `openat(2)` reports; `EMFILE` is the caller's cue to shed
+    /// another cleanup pin and retry.
+    pub(super) fn open_pinned(pin: &std::os::fd::OwnedFd) -> io::Result<Self> {
+        Ok(Self {
+            dir: reopen_for_sync(pin)?,
+            temp_sequence: AtomicU64::new(0),
+        })
+    }
+
     /// Open `dir` and keep it open.
     ///
     /// `O_DIRECTORY` is what makes the handle worth holding: a `dir` that
@@ -341,6 +369,11 @@ impl Dest {
             dir: open_directory(dir)?,
             temp_sequence: AtomicU64::new(0),
         })
+    }
+
+    /// [`open_parent_for_sync`] on this destination's own handle.
+    pub(super) fn open_parent_for_sync(&self) -> io::Result<std::os::fd::OwnedFd> {
+        open_parent_for_sync(&self.dir)
     }
 
     /// The name of the temporary file this import's pack is built in,

@@ -68,6 +68,14 @@ pub(super) struct CreatedDirectory {
     path: PathBuf,
 }
 
+#[cfg(unix)]
+impl CreatedDirectory {
+    /// This level's own pin, if it still holds one.
+    pub(super) fn own_pin(&self) -> Option<Pin> {
+        self.own.clone()
+    }
+}
+
 /// Whether `a` and `b` name the same file: the same device and inode,
 /// `create_directories_with_hooks`'s and [`undo_created_directories`]'s
 /// shared test for "is this still the directory this run made".
@@ -148,11 +156,51 @@ fn shed_outermost_pinned_level(created: &mut [CreatedDirectory], pin_from: &mut 
 /// made before it. On Unix only the first existing ancestor is resolved by
 /// path; every level below it is reached through its parent's descriptor
 /// (`dest` owns the per-platform open flags).
-#[cfg(unix)]
+#[cfg(test)]
 pub(super) fn create_directories(
     dir: &Path,
 ) -> Result<Vec<CreatedDirectory>, (Vec<CreatedDirectory>, io::Error)> {
-    create_directories_with_hooks(dir, pin_budget(), &mut || {}, &mut || None, &mut || None)
+    create_directories_pinned(dir).map(|creation| creation.created)
+}
+
+/// What [`create_directories_pinned`] made, and the directory it ended in.
+#[derive(Debug)]
+pub(super) struct DirectoryCreation {
+    /// The levels this run made, as [`create_directories`] reports them.
+    pub(super) created: Vec<CreatedDirectory>,
+    /// The descriptor the walk finished on when no created level owns it
+    /// (an existing destination reached through its parents). `None` means
+    /// nothing was walked, or the last created level is the destination:
+    /// the destination is then `created.last()`'s own pin.
+    pub(super) final_directory: Option<Pin>,
+}
+
+/// The descriptor kept for the destination; off Unix there is none to keep.
+#[cfg(unix)]
+pub(super) type Pin = std::rc::Rc<std::os::fd::OwnedFd>;
+/// The descriptor kept for the destination; off Unix there is none to keep.
+#[cfg(not(unix))]
+pub(super) type Pin = std::convert::Infallible;
+
+/// [`create_directories`], keeping the final directory's descriptor so the
+/// destination can be acquired through it instead of by path again.
+#[cfg(unix)]
+pub(super) fn create_directories_pinned(
+    dir: &Path,
+) -> Result<DirectoryCreation, (Vec<CreatedDirectory>, io::Error)> {
+    create_directories_pinned_with_hooks(dir, pin_budget(), &mut || {}, &mut || None, &mut || None)
+}
+
+#[cfg(all(unix, test))]
+fn create_directories_with_hooks(
+    dir: &Path,
+    pin_limit: usize,
+    before_dotdot: &mut dyn FnMut(),
+    before_reopen: &mut dyn FnMut() -> Option<io::Error>,
+    before_open: &mut dyn FnMut() -> Option<io::Error>,
+) -> Result<Vec<CreatedDirectory>, (Vec<CreatedDirectory>, io::Error)> {
+    create_directories_pinned_with_hooks(dir, pin_limit, before_dotdot, before_reopen, before_open)
+        .map(|creation| creation.created)
 }
 
 /// What reopening a level [`create_directories_with_hooks`] just made turned
@@ -318,16 +366,19 @@ fn open_existing_level(
 /// failure, and `pin_budget` caps the pinned levels; production passes
 /// no-ops and [`pin_budget`].
 #[cfg(unix)]
-fn create_directories_with_hooks(
+fn create_directories_pinned_with_hooks(
     dir: &Path,
     pin_limit: usize,
     before_dotdot: &mut dyn FnMut(),
     before_reopen: &mut dyn FnMut() -> Option<io::Error>,
     before_open: &mut dyn FnMut() -> Option<io::Error>,
-) -> Result<Vec<CreatedDirectory>, (Vec<CreatedDirectory>, io::Error)> {
+) -> Result<DirectoryCreation, (Vec<CreatedDirectory>, io::Error)> {
     let levels = directories_to_create(dir);
     let Some(first) = levels.first() else {
-        return Ok(Vec::new());
+        return Ok(DirectoryCreation {
+            created: Vec::new(),
+            final_directory: None,
+        });
     };
     // A bare relative name has no parent, and `""` is not a directory any OS
     // accepts, so it is the current directory — the same rule
@@ -419,15 +470,24 @@ fn create_directories_with_hooks(
             }
         }
     }
-    Ok(created)
+    // The last level made already is this descriptor's owner; a second
+    // owner would stop the sync from freeing it under descriptor pressure.
+    let owned_by_created = created
+        .last()
+        .and_then(|level| level.own.as_ref())
+        .is_some_and(|own| std::rc::Rc::ptr_eq(own, &parent_fd));
+    Ok(DirectoryCreation {
+        created,
+        final_directory: (!owned_by_created).then_some(parent_fd),
+    })
 }
 
 /// [`create_directories`]'s off-Unix arm: no descriptor to pin, so each
 /// level is [`std::fs::create_dir`] addressed by path.
 #[cfg(not(unix))]
-pub(super) fn create_directories(
+pub(super) fn create_directories_pinned(
     dir: &Path,
-) -> Result<Vec<CreatedDirectory>, (Vec<CreatedDirectory>, io::Error)> {
+) -> Result<DirectoryCreation, (Vec<CreatedDirectory>, io::Error)> {
     let mut created = Vec::new();
     for level in directories_to_create(dir) {
         match fs::create_dir(&level) {
@@ -439,7 +499,58 @@ pub(super) fn create_directories(
             Err(source) => return Err((created, source)),
         }
     }
-    Ok(created)
+    Ok(DirectoryCreation {
+        created,
+        final_directory: None,
+    })
+}
+
+/// Syncs the parents that acquiring the destination shed before the sync
+/// could reach them, by walking up from the acquired `dest` handle; with the
+/// table full it releases the levels' own pins for the slot, which `dest`
+/// makes redundant.
+#[cfg(unix)]
+pub(super) fn sync_shed_parents(created: &mut [CreatedDirectory], dest: &dest::Dest) {
+    sync_shed_parents_with(created, dest, &mut |fd| {
+        let _ = rustix::fs::fsync(fd);
+    });
+}
+
+/// [`sync_shed_parents`] with the `fsync` injected, so a test can count it.
+#[cfg(unix)]
+fn sync_shed_parents_with(
+    created: &mut [CreatedDirectory],
+    dest: &dest::Dest,
+    fsync: &mut dyn FnMut(&std::os::fd::OwnedFd),
+) {
+    let Some(lowest) = created.iter().position(|level| level.parent.is_none()) else {
+        return;
+    };
+    let mut above: Option<std::os::fd::OwnedFd> = None;
+    for index in (lowest..created.len()).rev() {
+        let parent = loop {
+            let opened = match &above {
+                None => dest.open_parent_for_sync(),
+                Some(fd) => dest::open_parent_for_sync(fd),
+            };
+            match opened {
+                Err(source)
+                    if is_out_of_descriptors_io(&source)
+                        && created
+                            .iter_mut()
+                            .rev()
+                            .any(|level| level.own.take().is_some()) => {}
+                result => break result,
+            }
+        };
+        let Ok(parent) = parent else {
+            return;
+        };
+        if created[index].parent.is_none() {
+            fsync(&parent);
+        }
+        above = Some(parent);
+    }
 }
 
 /// Syncs the parent of each created level, outermost first, so a crash
