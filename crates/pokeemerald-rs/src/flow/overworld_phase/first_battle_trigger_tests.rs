@@ -347,6 +347,7 @@ fn the_scripted_first_battle_plays_to_a_terminal_outcome_and_hands_the_lead_back
         "setup: the trigger must fire"
     );
 
+    phase.tick = 40;
     let frozen_at = phase.player.position();
     let mut frames = 0;
     while phase.is_first_battle_active() {
@@ -373,6 +374,15 @@ fn the_scripted_first_battle_plays_to_a_terminal_outcome_and_hands_the_lead_back
         phase.first_battle_outcome,
         Some(BattleOutcome::PlayerWon),
         "an emptied battle slot must retain the real terminal outcome"
+    );
+    assert_eq!(
+        phase.tick, 0,
+        "a completed first battle must restart the tileset animation tick"
+    );
+    let _ = phase.compose_frame();
+    assert_eq!(
+        phase.tick, 0,
+        "the first composed field frame sees the initial tick"
     );
 }
 
@@ -718,6 +728,7 @@ fn an_aborted_first_battle_still_consumes_the_route_101_trigger() {
 
     // One driver frame: the turn fails pre-draw, so the battle ends with no
     // outcome at all.
+    phase.tick = 40;
     phase.step(held(Buttons::RIGHT));
     assert!(
         !phase.is_first_battle_active(),
@@ -735,6 +746,15 @@ fn an_aborted_first_battle_still_consumes_the_route_101_trigger() {
         phase.save1.event_data.var_get(VAR_ROUTE101_STATE),
         Ok(2),
         "an abort produces no outcome, and the trigger must be consumed anyway"
+    );
+    assert_eq!(
+        phase.tick, 0,
+        "an aborted first battle must restart the tileset animation tick"
+    );
+    let _ = phase.compose_frame();
+    assert_eq!(
+        phase.tick, 0,
+        "the first composed field frame sees the initial tick"
     );
 
     // Walk off the tile and back onto it -- the same fresh completed step
