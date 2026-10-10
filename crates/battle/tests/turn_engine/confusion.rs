@@ -1,11 +1,8 @@
-//! Confusion's volatile driven through real turns: the ordering against
-//! the paralysis draw and PP, and the self-hit's cancel and faint, which
-//! `battle::volatile`'s unit tests cannot show. Most fixtures below still set
-//! the volatile directly through [`battle::BattlePokemon::volatiles_mut`] to
-//! isolate that machinery from infliction; the tests in the final section
-//! instead drive a real [`battle::confuse::EFFECT_CONFUSE`] or
-//! [`battle::EFFECT_CONFUSE_HIT`] move end to end, into the same decrement
-//! and coin-draw machinery the rest of this file pins.
+//! Confusion infliction and its pre-action ordering, driven through complete
+//! turns. Most fixtures set the volatile directly via
+//! [`battle::BattlePokemon::volatiles_mut`]; the final section inflicts it
+//! with real [`battle::confuse::EFFECT_CONFUSE`] and
+//! [`battle::EFFECT_CONFUSE_HIT`] moves.
 
 use crate::common::{max_iv_mon, SequenceRng};
 use assets::MoveId;
@@ -13,15 +10,13 @@ use battle::{Battle, BattleEvent, BattleOutcome, Dex, PlayerAction, StatStage, S
 
 const TACKLE: MoveId = MoveId::TACKLE;
 
-/// `SPECIES_CHARMANDER`, level 50 against level-2 Rattata: one-shots it, the
-/// same overkill fixture `turn_engine/move_resolution.rs`'s own test uses.
+/// `SPECIES_CHARMANDER`.
 const CHARMANDER: u16 = 4;
-/// `SPECIES_RATTATA`: base Speed 72, the fast mover in every fixture below.
+/// `SPECIES_RATTATA`, the faster mover.
 const RATTATA: u16 = 19;
-/// `SPECIES_GASTLY`: Ghost/Poison, immune to the Normal-type Tackle used to
-/// keep a target alive without hand-computing damage.
+/// `SPECIES_GASTLY`: Ghost/Poison, immune to Tackle.
 const GASTLY: u16 = 92;
-/// `SPECIES_ZIGZAGOON`: pure Normal, an ordinary Tackle target and user.
+/// `SPECIES_ZIGZAGOON`.
 const ZIGZAGOON: u16 = 288;
 
 #[test]
@@ -31,9 +26,7 @@ fn a_duration_one_confusion_snaps_out_before_the_mover_s_own_hit() {
     player.volatiles_mut().set_confusion(1);
     let enemy = max_iv_mon(&dex, RATTATA, 2, vec![TACKLE]);
 
-    // battle-start turn number, the turn's own turn number, the enemy's
-    // selection, then the player's ordinary one-shot Tackle (4 draws): the
-    // confusion decrement itself consumes nothing.
+    // Setup draws, then the player's one-shot Tackle.
     let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
@@ -74,11 +67,8 @@ fn confusion_snaps_out_ahead_of_the_same_action_s_full_paralysis_draw() {
     let starting_pp = player.moves()[0].pp;
     let enemy = max_iv_mon(&dex, ZIGZAGOON, 5, vec![TACKLE]);
 
-    // battle-start turn number, the turn's own turn number, the enemy's
-    // (only) selection, the enemy's immune Tackle into the Ghost player (4
-    // draws), the player's full-paralysis draw (residue 0 -> cancelled) --
-    // the same shape as `turn_engine/paralysis.rs`'s own fixture, since the
-    // confusion decrement between them draws nothing.
+    // Setup draws, the enemy's immune Tackle, then the player's full-paralysis
+    // draw (residue 0 -> cancelled).
     let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0, 0]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
@@ -116,10 +106,7 @@ fn each_battler_s_confusion_decrements_only_on_its_own_action() {
     let mut enemy = max_iv_mon(&dex, ZIGZAGOON, 5, vec![TACKLE]);
     enemy.volatiles_mut().set_confusion(1);
 
-    // battle-start turn number, the turn's own turn number, the enemy's
-    // selection, the player's ordinary Tackle (4 draws: Rattata's higher
-    // Speed acts first), the enemy's ordinary Tackle (4 more draws) -- the
-    // enemy's own confusion decrement between them draws nothing.
+    // Setup draws, the player's Tackle, then the enemy's Tackle.
     let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
@@ -165,9 +152,7 @@ fn a_multi_turn_confusion_persists_without_an_expiry_event() {
     let enemy = max_iv_mon(&dex, RATTATA, 2, vec![TACKLE]);
     let starting_pp = player.moves()[0].pp;
 
-    // battle-start turn number, the turn's own turn number, the enemy's
-    // selection, the confusion coin (residue 1 -> odd, the chosen move
-    // continues), then the player's ordinary one-shot Tackle (4 draws).
+    // Setup draws, the confusion coin (residue 1 -> continue), then Tackle.
     let mut rng = SequenceRng::new([0, 0, 0, 1, 0, 1, 0, 0]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
@@ -223,13 +208,8 @@ fn an_even_coin_cancels_the_chosen_move_for_a_self_hit_that_ignores_its_own_type
     let starting_pp = player.moves()[0].pp;
     let enemy = max_iv_mon(&dex, ZIGZAGOON, 5, vec![TACKLE]);
 
-    // battle-start turn number, the turn's own turn number, the enemy's
-    // selection, the player's confusion coin (residue 0 -> even, self-hit),
-    // the self-hit's own damage-variance draw (residue 0 -> the full 100%),
-    // then the enemy's own immune Tackle into the still-standing Ghost
-    // player (4 draws): unparalysed, GASTLY's own Speed outruns Zigzagoon,
-    // unlike the paralysed fixture in
-    // `confusion_snaps_out_ahead_of_the_same_action_s_full_paralysis_draw`.
+    // Setup draws, the confusion coin (residue 0 -> self-hit), the self-hit
+    // damage roll (residue 0), then the enemy's Tackle.
     let mut rng = SequenceRng::new([0, 0, 0, 0, 0, 0, 1, 0, 0]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
@@ -289,9 +269,8 @@ fn a_self_hit_ignores_its_own_paralysis_and_draws_no_paralysis_bit() {
     player.set_status1(Status1::Paralysed);
     let enemy = max_iv_mon(&dex, ZIGZAGOON, 5, vec![TACKLE]);
 
-    // Identical shape to the sibling self-hit fixture: the self-hit branch
-    // returns before the paralysis draw, so a simultaneously paralysed
-    // confused battler still draws only the coin and the damage roll.
+    // The self-hit returns before the paralysis draw: only the coin and the
+    // damage roll are drawn.
     let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0, 0, 0]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
@@ -329,11 +308,8 @@ fn a_self_hit_can_faint_its_own_user_and_skip_the_opponent_s_queued_action() {
     player.apply_damage(player.stats().max_hp - 1);
     let enemy = max_iv_mon(&dex, RATTATA, 2, vec![TACKLE]);
 
-    // battle-start turn number, the turn's own turn number, the enemy's
-    // selection, the player's confusion coin (residue 0 -> even, self-hit),
-    // the self-hit's own damage-variance draw. The player acts first (same
-    // Speed matchup as `a_duration_one_confusion_snaps_out_before_the_mover_s_own_hit`),
-    // faints itself, and the enemy's queued Tackle never resolves.
+    // Setup draws, then the confusion coin (residue 0 -> self-hit) and the
+    // self-hit damage roll. The player faints and the enemy's Tackle never runs.
     let mut rng = SequenceRng::new([0, 0, 0, 0, 0]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
@@ -371,8 +347,7 @@ fn a_self_hit_rates_against_the_users_own_attack_and_defense_stages() {
     player.stages_mut().defense = StatStage::new(-2).unwrap();
     let enemy = max_iv_mon(&dex, ZIGZAGOON, 5, vec![TACKLE]);
 
-    // The same draws as the neutral-stage self-hit above, so the only
-    // difference in the roll is the two stages.
+    // Same draws as the neutral-stage self-hit; only the stages differ.
     let mut rng = SequenceRng::new([0, 0, 0, 0, 0, 0, 1, 0, 0]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
@@ -390,11 +365,8 @@ fn a_self_hit_rates_against_the_users_own_attack_and_defense_stages() {
     );
 }
 
-/// `MOVE_CONFUSE_RAY` (`EFFECT_CONFUSE`), Ghost, 100 accuracy.
 const CONFUSE_RAY: MoveId = MoveId::CONFUSE_RAY;
-/// `MOVE_SWEET_KISS` (`EFFECT_CONFUSE`), Normal, 75 accuracy.
 const SWEET_KISS: MoveId = MoveId::SWEET_KISS;
-/// `MOVE_PSYBEAM` (`EFFECT_CONFUSE_HIT`), Psychic, 100 accuracy, 10% chance.
 const PSYBEAM: MoveId = MoveId::PSYBEAM;
 /// `SPECIES_SPINDA`: Own Tempo in its only ability slot.
 const SPINDA: u16 = 308;
@@ -405,11 +377,8 @@ fn confuse_ray_inflicts_a_fresh_confusion_that_the_target_immediately_ticks_thro
     let player = max_iv_mon(&dex, RATTATA, 5, vec![CONFUSE_RAY]);
     let enemy = max_iv_mon(&dex, ZIGZAGOON, 5, vec![TACKLE]);
 
-    // battle-start turn number, the turn's own turn number, the enemy's
-    // selection, the player's Confuse Ray (one accuracy draw, then the
-    // duration draw: residue 0 -> 2 turns), the enemy's own confusion
-    // decrement (2 -> 1, no draw) and coin draw (residue 1 -> odd, the
-    // chosen move continues), then the enemy's ordinary Tackle (4 draws).
+    // Setup draws, Confuse Ray (accuracy, duration residue 0 -> 2), the
+    // enemy's decrement (2 -> 1) and coin (residue 1 -> continue), then Tackle.
     let mut rng = SequenceRng::new([0, 0, 0, 0, 0, 1, 0, 1, 0, 0]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
@@ -466,10 +435,8 @@ fn an_own_tempo_target_blocks_confuse_ray_before_any_draw() {
     let player = max_iv_mon(&dex, RATTATA, 5, vec![CONFUSE_RAY]);
     let enemy = max_iv_mon(&dex, SPINDA, 5, vec![TACKLE]);
 
-    // battle-start turn number, the turn's own turn number, the enemy's
-    // selection, then the enemy's own ordinary Tackle (4 draws): Own Tempo
-    // blocks the player's move before any draw, so the enemy is never
-    // confused and its own action never ticks or draws a coin.
+    // Setup draws, then the enemy's Tackle: Own Tempo blocks the move before
+    // any draw.
     let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
@@ -505,11 +472,8 @@ fn an_already_confused_target_refuses_confuse_ray_without_drawing() {
     let mut enemy = max_iv_mon(&dex, RATTATA, 2, vec![TACKLE]);
     enemy.volatiles_mut().set_confusion(1);
 
-    // battle-start turn number, the turn's own turn number, the enemy's
-    // selection, the player's Confuse Ray (already confused, no draw), the
-    // enemy's own terminal decrement (1 -> 0, no draw, no coin), then its
-    // ordinary Tackle (4 draws) -- identical in shape to this file's very
-    // first fixture, since a same-duration snap-out draws nothing either way.
+    // Setup draws, Confuse Ray into an already-confused target (no draw), the
+    // terminal decrement (no draw, no coin), then the enemy's Tackle.
     let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
@@ -538,9 +502,8 @@ fn a_missed_sweet_kiss_reports_missed_and_confuses_nothing() {
     let player = max_iv_mon(&dex, RATTATA, 5, vec![SWEET_KISS]);
     let enemy = max_iv_mon(&dex, ZIGZAGOON, 5, vec![TACKLE]);
 
-    // battle-start turn number, the turn's own turn number, the enemy's
-    // selection, Sweet Kiss's 75 accuracy missing on roll 96 (95 % 100 + 1),
-    // then the enemy's ordinary Tackle (4 draws).
+    // Setup draws, then Sweet Kiss missing (roll 95 -> 96 of 100), then the
+    // enemy's Tackle.
     let mut rng = SequenceRng::new([0, 0, 0, 95, 0, 1, 0, 0]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
@@ -570,12 +533,9 @@ fn psybeam_applies_confusion_after_its_own_hit_and_chance_draw() {
     let player = max_iv_mon(&dex, RATTATA, 5, vec![PSYBEAM]);
     let enemy = max_iv_mon(&dex, ZIGZAGOON, 5, vec![TACKLE]);
 
-    // battle-start turn number, the turn's own turn number, the enemy's
-    // selection, the player's Psybeam (accuracy, crit, damage, then the 10%
-    // chance draw clearing on residue 9), the duration draw (residue 0 -> 2
-    // turns) once the target is known to have survived, the enemy's own
-    // confusion decrement (2 -> 1, no draw) and coin draw (residue 1 -> odd,
-    // the chosen move continues), then the enemy's ordinary Tackle (4 draws).
+    // Setup draws, Psybeam accuracy/crit/damage, the chance draw (residue 9),
+    // the duration (residue 0 -> 2), the confusion coin (residue 1 -> continue),
+    // then the enemy's Tackle.
     let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 9, 0, 1, 0, 1, 0, 0]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
@@ -629,24 +589,19 @@ fn psybeam_applies_confusion_after_its_own_hit_and_chance_draw() {
     );
 }
 
-/// `SetMoveEffect`'s `hp == 0` guard (`battle_script_commands.c:2261-2264`)
-/// precedes the status2 `MOVE_EFFECT_CONFUSION` case's own duration draw
-/// (`:2528-2544`), so a successful chance roll against a target this same
-/// hit faints must draw nothing further and inflict nothing.
+/// A lethal hit suppresses confusion and its duration draw even after a
+/// successful chance roll (`pokeemerald/src/battle_script_commands.c:2261`-`:2264`,
+/// `:2533`-`:2544`).
 #[test]
 fn a_lethal_psybeam_never_draws_a_duration_or_inflicts_confusion() {
     let dex = Dex::new();
     let player = max_iv_mon(&dex, RATTATA, 50, vec![PSYBEAM]);
     let mut enemy = max_iv_mon(&dex, ZIGZAGOON, 5, vec![TACKLE]);
-    // A level-50 Psybeam overkills a level-5 Zigzagoon at any roll, so
-    // parking it one HP above zero is enough to force a lethal hit without
-    // hand-computing the exact damage figure.
+    // One HP left: any Psybeam hit is lethal.
     enemy.apply_damage(enemy.stats().max_hp - 1);
 
-    // battle-start turn number, the turn's own turn number, the enemy's
-    // selection, the player's Psybeam (accuracy, crit, damage, then a
-    // successful 10% chance draw on residue 9 that must draw no duration
-    // once the hit faints its target).
+    // Setup draws, Psybeam accuracy/crit/damage, then a successful chance draw
+    // (residue 9) that must draw no duration.
     let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 9]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
@@ -678,11 +633,8 @@ fn an_own_tempo_target_is_hit_by_psybeam_but_never_confused() {
     let player = max_iv_mon(&dex, RATTATA, 5, vec![PSYBEAM]);
     let enemy = max_iv_mon(&dex, SPINDA, 5, vec![TACKLE]);
 
-    // battle-start turn number, the turn's own turn number, the enemy's
-    // selection, the player's Psybeam (accuracy, crit, damage, then the
-    // chance draw clearing on residue 9 -- discarded once Own Tempo blocks
-    // the landing, drawing no duration), then the enemy's ordinary Tackle
-    // (4 draws, no tick or coin since it was never confused).
+    // Setup draws, Psybeam accuracy/crit/damage, a chance draw that clears
+    // (residue 9) but is discarded by Own Tempo, then the enemy's Tackle.
     let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 9, 0, 1, 0, 0]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
