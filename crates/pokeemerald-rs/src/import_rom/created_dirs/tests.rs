@@ -627,3 +627,35 @@ fn the_held_final_directory_does_not_cost_a_new_levels_parent_sync() {
     drop(fillers);
     assert!(synced, "the new level's parent entry must be synced");
 }
+
+#[cfg(unix)]
+#[test]
+fn a_destination_acquired_before_the_sync_survives_the_sync_shedding_its_level() {
+    if !in_descriptor_pressure_child() {
+        run_under_descriptor_pressure(
+            "import_rom::created_dirs::tests::a_destination_acquired_before_the_sync_survives_the_sync_shedding_its_level",
+        );
+        return;
+    }
+    let dir = TempDir::new("acquire-then-sync");
+    let target = dir.join("new");
+    let fillers = fill_descriptor_table_leaving(3);
+    let creation = super::create_directories_pinned(&target).expect("one level is created");
+    let mut created = creation.created;
+    let dest = super::super::acquire_dest(&mut created, &target, creation.final_directory.as_ref())
+        .expect("the destination opens through the pin");
+    drop(creation.final_directory);
+    super::sync_created_directories(&mut created);
+    for level in &mut created {
+        level.own = None;
+    }
+    drop(fillers);
+    drop(
+        dest.create_new(std::ffi::OsStr::new("probe"))
+            .expect("created through the handle"),
+    );
+    assert!(
+        target.join("probe").exists(),
+        "the file landed in the created level"
+    );
+}

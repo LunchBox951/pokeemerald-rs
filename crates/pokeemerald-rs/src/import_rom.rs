@@ -480,9 +480,14 @@ fn acquire_dest(
 ) -> io::Result<Dest> {
     #[cfg(unix)]
     {
-        let pin = match final_directory {
-            Some(pin) => Some(std::rc::Rc::clone(pin)),
-            None => created_dirs::created_destination(created)?,
+        let pin = match (final_directory, created.last()) {
+            (Some(pin), _) => Some(std::rc::Rc::clone(pin)),
+            (None, Some(level)) => Some(
+                level
+                    .own_pin()
+                    .ok_or_else(|| io::Error::other("created destination is no longer pinned"))?,
+            ),
+            (None, None) => None,
         };
         match pin {
             Some(pin) => open_shedding_pins(created, || Dest::open_pinned(&pin)),
@@ -556,18 +561,19 @@ fn import_to_with_hooks(
     };
     before_dest(&dir);
     let mut created = creation.created;
-    sync_created_directories(&mut created);
 
     // Everything from here on names files inside this one handle. A
     // directory component redirected after this open is a component
     // nothing looks at again.
-    // It and the temporary file below are the two opens this import cannot
-    // do without, so a pinned level gives its descriptor up to them first.
+    // The destination is opened through the walk's pin before the sync, so
+    // the sync may shed that pin for its own reopen without ever reopening
+    // the destination by identity.
     let dest_result = acquire_dest(&mut created, &dir, creation.final_directory.as_ref());
     // `Dest` holds its own handle now; the walk's descriptor is redundant
-    // and must not take a slot the temporary file's open needs.
+    // and must not take a slot the sync's or the temporary file's open needs.
     #[cfg(unix)]
     drop(creation.final_directory);
+    sync_created_directories(&mut created);
     let dest = match dest_result {
         Ok(dest) => dest,
         Err(source) => {

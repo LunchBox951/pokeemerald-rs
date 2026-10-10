@@ -68,6 +68,14 @@ pub(super) struct CreatedDirectory {
     path: PathBuf,
 }
 
+#[cfg(unix)]
+impl CreatedDirectory {
+    /// This level's own pin, if it still holds one.
+    pub(super) fn own_pin(&self) -> Option<Pin> {
+        self.own.clone()
+    }
+}
+
 /// Whether `a` and `b` name the same file: the same device and inode,
 /// `create_directories_with_hooks`'s and [`undo_created_directories`]'s
 /// shared test for "is this still the directory this run made".
@@ -163,7 +171,7 @@ pub(super) struct DirectoryCreation {
     /// The descriptor the walk finished on when no created level owns it
     /// (an existing destination reached through its parents). `None` means
     /// nothing was walked, or the last created level is the destination:
-    /// see [`created_destination`].
+    /// the destination is then `created.last()`'s own pin.
     pub(super) final_directory: Option<Pin>,
 }
 
@@ -472,28 +480,6 @@ fn create_directories_pinned_with_hooks(
         created,
         final_directory: (!owned_by_created).then_some(parent_fd),
     })
-}
-
-/// The destination when the walk ended on a level this run created: that
-/// level's own pin, or, if the sync shed it, a reopen from its pinned parent
-/// checked against the identity captured at creation. `None` when no level
-/// was created.
-#[cfg(unix)]
-pub(super) fn created_destination(created: &mut [CreatedDirectory]) -> io::Result<Option<Pin>> {
-    let Some(level) = created.last() else {
-        return Ok(None);
-    };
-    if let Some(own) = &level.own {
-        return Ok(Some(std::rc::Rc::clone(own)));
-    }
-    let Some(parent) = level.parent.clone() else {
-        return Err(io::Error::other("created directory lost its parent"));
-    };
-    let (name, identity) = (level.name.clone(), level.identity);
-    match reopen_created_level(created, &mut 0, &parent, &name, &identity, &mut || None) {
-        ReopenedLevel::Pinned(fd) => Ok(Some(fd)),
-        ReopenedLevel::Unpinned(source) | ReopenedLevel::Unverified(source) => Err(source),
-    }
 }
 
 /// [`create_directories`]'s off-Unix arm: no descriptor to pin, so each
