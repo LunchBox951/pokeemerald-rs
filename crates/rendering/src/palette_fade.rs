@@ -1,66 +1,27 @@
 //! Front-end normal CPU palette fades (S-2).
 //!
-//! Models `BeginNormalPaletteFade` and `UpdatePaletteFade`'s `NORMAL_FADE`
-//! scheduling, fixed to `PALETTES_ALL`, zero delay, coefficient 0 to 16, and
-//! a black or white target (`pokeemerald/src/palette.c:156-199` for
-//! `BeginNormalPaletteFade`, `:406-490` for `UpdateNormalPaletteFade`,
-//! `:807-828` for `IsSoftwarePaletteFadeFinishing`). The blend itself is
-//! `BlendPalette`'s per-channel signed delta, `base + (((target - base) *
-//! coeff) >> 4)`, computed over 5-bit `PlttData` channels
-//! (`pokeemerald/src/util.c:264-278`), upstream's native palette-RAM
-//! precision: a nonzero coefficient compresses a sampled colour's 8-bit
-//! channel to 5 bits, blends, and expands the result back
-//! (`crate::palette::compress_8_to_5`/`expand_5_to_8`). A palette colour is
-//! already 5-bit aligned, so that round-trip is lossless at coefficient 0;
-//! the identity there is kept exact on the 8-bit channel anyway so a value
-//! that is not palette-aligned passes through untouched. Coefficient 16
-//! lands exactly on the target.
+//! Models `NORMAL_FADE` as `BeginNormalPaletteFade` and `UpdatePaletteFade`
+//! run it for `PALETTES_ALL`: zero delay, coefficient 0 to 16, black or white
+//! target. The fade drives palette state, not pixels, so it applies to
+//! palette colours before composition and any hardware color effect.
+//! [`NormalPaletteFade`] owns the scheduling contract and
+//! [`PaletteFadeBlend`] the blend.
 //!
-//! This is a CPU blend, not a hardware register effect, and it is
-//! implemented independently of [`crate::effects::brighten`]/
-//! [`crate::effects::darken`], which model the GBA's `BLDY` packed-lane
-//! rounding for the color-special-effect hardware path at full 8-bit
-//! precision; both diverge from this blend's 5-bit round-trip once the
-//! coefficient is nonzero (see this module's tests).
-//!
-//! The fade drives palette state, not pixels. Upstream blends the BG and OBJ
-//! palette halves on alternating calls, so for one call at a time the two
-//! sit at different coefficients. [`NormalPaletteFade`] therefore holds one
-//! [`PaletteFadeBlend`] per half, exposed independently
-//! ([`NormalPaletteFade::bg_blend`], [`NormalPaletteFade::obj_blend`]) and as
-//! a compositor [`PaletteStage`] ([`NormalPaletteFade::palette_stage`]), so
-//! the blend applies to palette colours before composition and any hardware
-//! color effect.
-//!
-//! Out of scope for this primitive: palette masks other than all, nonzero
-//! delay, other start/target coefficients, `FAST_FADE`/`HARDWARE_FADE`,
-//! palette-buffer mutation, grayscale/inversion, every other `palette.c`
-//! caller, and all flow-level wiring (holding a scene through the fade,
-//! dispatching once it completes).
+//! Out of scope: other palette masks, delay, start/target coefficients,
+//! `FAST_FADE`/`HARDWARE_FADE`, palette-buffer transfers, and flow wiring.
 
 use crate::compositor::{PaletteColorTransform, PaletteStage};
 use crate::palette::{compress_8_to_5, expand_5_to_8, Rgb888};
 
-/// The blend coefficient upstream calls `deltaY`: the fixed per-pair step
-/// (`pokeemerald/src/palette.c:167`).
 const DELTA_Y: u8 = 2;
 
-/// The fixed target coefficient for this slice's contract (`targetY` in
-/// `BeginNormalPaletteFade(PALETTES_ALL, 0, 0, 16, ...)`).
 const TARGET_Y: u8 = 16;
 
-/// The number of `ACTIVE` finishing polls `IsSoftwarePaletteFadeFinishing`
-/// reports before the fifth call reports done
-/// (`pokeemerald/src/palette.c:807-828`).
 const FINISHING_POLLS: u8 = 4;
 
-/// The two blend targets the front-end contract uses: `RGB_WHITEALPHA` for
-/// the title-to-menu fade and `RGB_BLACK` for the menu-confirm fade
-/// (`pokeemerald/include/constants/rgb.h:15-23`). Both have identical red,
-/// green, and blue channels, so only that shared channel value is needed;
-/// `RGB_WHITEALPHA`'s alpha bit lies outside `BlendPalette`'s per-channel
-/// `PlttData` view and never reaches the blend
-/// (`pokeemerald/include/gba/types.h:47-53`).
+/// The blend target: `RGB_BLACK` or `RGB_WHITEALPHA`
+/// (`pokeemerald/include/constants/rgb.h:15-23`). The alpha bit lies outside
+/// the 5-bit channels the blend sees (`pokeemerald/include/gba/types.h:47-53`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PaletteFadeTarget {
     /// Fades toward `RGB_BLACK`.
@@ -70,8 +31,6 @@ pub enum PaletteFadeTarget {
 }
 
 impl PaletteFadeTarget {
-    /// The shared 5-bit red/green/blue channel value this target blends
-    /// toward, at `BlendPalette`'s native `PlttData` precision.
     const fn channel(self) -> u8 {
         match self {
             Self::Black => 0,
@@ -80,40 +39,32 @@ impl PaletteFadeTarget {
     }
 }
 
-/// The `PALETTE_FADE_STATUS_*` result of one [`NormalPaletteFade::update`]
-/// call, narrowed to the two values this slice's `NORMAL_FADE` contract can
-/// reach: `PALETTE_FADE_STATUS_ACTIVE` and `PALETTE_FADE_STATUS_DONE`
-/// (`pokeemerald/include/palette.h:11-14`). `PALETTE_FADE_STATUS_DELAY` and
-/// `PALETTE_FADE_STATUS_LOADING` never occur here because delay is always
-/// zero and there is no hardware palette-RAM transfer to await.
+/// The result of one [`NormalPaletteFade::update`]: the only
+/// `PALETTE_FADE_STATUS_*` values reachable with zero delay and no palette
+/// transfer (`pokeemerald/include/palette.h:11-14`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PaletteFadeStatus {
     /// The fade is still running; call `update` again.
     Active,
-    /// The fade has finished; its final frame is fully blended.
+    /// The fade has finished; both halves rest at the target.
     Done,
 }
 
-/// Which palette half upstream's scheduler processes on the next call:
-/// background palettes, then object palettes, mirroring
-/// `gPaletteFade.objPaletteToggle` (`pokeemerald/src/palette.c:430-454`).
-/// `PALETTES_ALL` selects every bank in both halves, so both halves blend
-/// with the same current coefficient; only the alternation cadence (and,
-/// once both halves of a pair have run, the coefficient step) is
-/// observable here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Half {
     Background,
     Object,
 }
 
-/// One palette half's current blend: the target and `BlendPalette`
-/// coefficient (`gPaletteFade.y` at that half's last call) it applies to the
-/// colours of that half.
+/// One palette half's target and coefficient (0 unfaded to 16 at the target).
 ///
-/// As a [`PaletteColorTransform`] it maps a palette colour through
-/// `BlendPalette`'s signed 5-bit per-channel delta
-/// (`pokeemerald/src/util.c:264-278`), before RGB888 composition.
+/// As a [`PaletteColorTransform`] it applies `BlendPalette`'s signed 5-bit
+/// per-channel blend (`pokeemerald/src/util.c:264-278`): a nonzero
+/// coefficient compresses each RGB888 channel to 5 bits, blends, and expands
+/// back; coefficient 0 returns the colour exactly; 16 lands on the target.
+/// This is independent of the hardware `BLDY` transforms
+/// ([`crate::effects::brighten`], [`crate::effects::darken`]), which round
+/// at 8-bit precision and so diverge once the coefficient is nonzero.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PaletteFadeBlend {
     target: PaletteFadeTarget,
@@ -149,39 +100,26 @@ impl PaletteColorTransform for PaletteFadeBlend {
 
 /// A normal CPU palette fade driving independent BG and OBJ palette blends.
 ///
-/// Construct with [`NormalPaletteFade::begin`], which performs the
-/// immediate first update `BeginNormalPaletteFade` runs before returning
-/// (`pokeemerald/src/palette.c:189`), then advance with
-/// [`NormalPaletteFade::update`] once per frame until it reports
-/// [`PaletteFadeStatus::Done`].
+/// Upstream blends BG then OBJ on alternating calls at each coefficient
+/// 0, 2, ..., 16, stepping only after both halves ran
+/// (`pokeemerald/src/palette.c:167,432-473`), so between calls the two blends
+/// can sit at different coefficients.
 #[derive(Debug, Clone)]
 pub struct NormalPaletteFade {
-    /// The BG half's blend, updated on background calls.
     bg: PaletteFadeBlend,
-    /// The OBJ half's blend, updated on object calls.
     obj: PaletteFadeBlend,
-    /// The scheduler's current coefficient, `gPaletteFade.y`.
     coefficient: u8,
-    /// The half the next processing call handles.
     next_half: Half,
-    /// Set once the coefficient reaches [`TARGET_Y`], mirroring
-    /// `gPaletteFade.softwareFadeFinishing`.
     finishing: bool,
-    /// Mirrors `gPaletteFade.softwareFadeFinishingCounter`.
     finishing_counter: u8,
-    /// Mirrors `gPaletteFade.active`.
     active: bool,
 }
 
 impl NormalPaletteFade {
-    /// Begin a normal palette fade toward `target`, equivalent to
+    /// Begin a fade toward `target`, as
     /// `BeginNormalPaletteFade(PALETTES_ALL, 0, 0, 16, blendColor)`
-    /// (`pokeemerald/src/palette.c:156-199`).
-    ///
-    /// Performs the immediate first update before returning, exactly as
-    /// upstream's `BeginNormalPaletteFade` calls `UpdatePaletteFade` once
-    /// before it returns (`pokeemerald/src/palette.c:189`): the BG half
-    /// blends at coefficient 0 while the OBJ half waits for the next call.
+    /// (`pokeemerald/src/palette.c:156-199`). Like upstream it updates once
+    /// before returning (`:189`): BG is blended at coefficient 0 and OBJ is next.
     #[must_use]
     pub fn begin(target: PaletteFadeTarget) -> Self {
         let blend = PaletteFadeBlend::new(target);
@@ -198,9 +136,9 @@ impl NormalPaletteFade {
         fade
     }
 
-    /// Advance the fade by one call, equivalent to one `UpdatePaletteFade`
-    /// call while `gPaletteFade.mode == NORMAL_FADE`
-    /// (`pokeemerald/src/palette.c:114-131, 406-490`).
+    /// Advance by one call per frame. After the target pair, four finishing
+    /// calls report `Active` and the fifth `Done`, which then stays `Done`
+    /// (`pokeemerald/src/palette.c:411-416,807-822`).
     pub fn update(&mut self) -> PaletteFadeStatus {
         self.advance()
     }
@@ -227,7 +165,7 @@ impl NormalPaletteFade {
         }
     }
 
-    /// Whether the fade has finished (`!gPaletteFade.active`).
+    /// Whether the fade has finished.
     #[must_use]
     pub const fn is_done(&self) -> bool {
         !self.active
@@ -244,10 +182,6 @@ impl NormalPaletteFade {
         PaletteFadeStatus::Active
     }
 
-    /// `UpdateNormalPaletteFade`'s per-call palette-half processing
-    /// (`pokeemerald/src/palette.c:420-486`): blend at the current
-    /// coefficient, then, only once both halves of the pair have run, arm
-    /// finishing at the target coefficient or step toward it.
     fn process_half(&mut self) {
         let half = match self.next_half {
             Half::Background => &mut self.bg,
@@ -267,9 +201,6 @@ impl NormalPaletteFade {
         };
     }
 
-    /// `IsSoftwarePaletteFadeFinishing` (`pokeemerald/src/palette.c:807-828`):
-    /// reports `ACTIVE` for [`FINISHING_POLLS`] calls, then clears `active`
-    /// and reports `DONE` on the next.
     fn poll_finishing(&mut self) -> PaletteFadeStatus {
         if self.finishing_counter == FINISHING_POLLS {
             self.active = false;
@@ -283,9 +214,6 @@ impl NormalPaletteFade {
     }
 }
 
-/// Blends one colour per `BlendPalette` (`pokeemerald/src/util.c:264-278`).
-/// Coefficient 0 returns `pixel` untouched rather than rounding it through
-/// the 5-bit compress/expand round-trip every nonzero coefficient uses.
 fn blend_pixel(pixel: Rgb888, target: PaletteFadeTarget, coeff: u8) -> Rgb888 {
     if coeff == 0 {
         return pixel;
@@ -310,10 +238,6 @@ fn blend_pixel(pixel: Rgb888, target: PaletteFadeTarget, coeff: u8) -> Rgb888 {
     }
 }
 
-/// `base + (((target - base) * coeff) >> 4)` (`pokeemerald/src/util.c:271-
-/// 277`), on 5-bit `PlttData` channels. `coeff` in `0..=16` and
-/// `base`/`target` in `0..=0x1F` keep the result in `0..=0x1F`, matching
-/// upstream's unclamped math.
 #[expect(
     clippy::cast_sign_loss,
     clippy::cast_possible_truncation,
@@ -340,28 +264,20 @@ mod tests {
         Bgr555::from_channels(r, g, b).to_rgb888()
     }
 
-    /// The BG and OBJ coefficients, in that order.
-    fn coefficients(fade: &NormalPaletteFade) -> (u8, u8) {
+    fn bg_obj_coefficients(fade: &NormalPaletteFade) -> (u8, u8) {
         (
             fade.bg_blend().coefficient(),
             fade.obj_blend().coefficient(),
         )
     }
 
-    // --- begin/update status trace: BG/OBJ cadence, coefficient steps, four
-    // finishing polls, done (pokeemerald/src/palette.c:156-199, 406-490,
-    // 807-828). ---
-
     #[test]
     fn begin_performs_the_immediate_first_background_update() {
         let fade = NormalPaletteFade::begin(PaletteFadeTarget::White);
-        // The immediate call inside `begin` processes the background half at
-        // coefficient 0, then hands off to the object half without moving
-        // the coefficient yet.
         assert_eq!(fade.next_half, Half::Object);
         assert_eq!(fade.coefficient, 0);
         assert!(!fade.is_done());
-        assert_eq!(coefficients(&fade), (0, 0));
+        assert_eq!(bg_obj_coefficients(&fade), (0, 0));
     }
 
     #[test]
@@ -370,7 +286,7 @@ mod tests {
             let fade = NormalPaletteFade::begin(target);
             assert_eq!(fade.bg_blend().target(), target);
             assert_eq!(fade.obj_blend().target(), target);
-            assert_eq!(coefficients(&fade), (0, 0));
+            assert_eq!(bg_obj_coefficients(&fade), (0, 0));
             for r in 0..32 {
                 let color = pixel5(r, 31 - r, r / 2);
                 assert_eq!(fade.bg_blend().transform(color), color);
@@ -389,11 +305,10 @@ mod tests {
     #[test]
     fn update_alternates_background_and_object_halves_before_stepping_the_coefficient() {
         let mut fade = NormalPaletteFade::begin(PaletteFadeTarget::White);
-        // begin() already ran the first (background) half.
-        let mut trace = vec![(fade.next_half, fade.coefficient, coefficients(&fade))];
+        let mut trace = vec![(fade.next_half, fade.coefficient, bg_obj_coefficients(&fade))];
         for _ in 0..17 {
             fade.update();
-            trace.push((fade.next_half, fade.coefficient, coefficients(&fade)));
+            trace.push((fade.next_half, fade.coefficient, bg_obj_coefficients(&fade)));
         }
         let expected: Vec<(Half, u8, (u8, u8))> = [
             (Half::Object, 0, (0, 0)),
@@ -422,7 +337,7 @@ mod tests {
     }
 
     #[test]
-    fn full_trace_from_begin_is_22_actives_then_done() {
+    fn updates_after_begin_are_21_active_calls_then_done() {
         let mut fade = NormalPaletteFade::begin(PaletteFadeTarget::Black);
         let mut statuses = Vec::new();
         loop {
@@ -433,9 +348,6 @@ mod tests {
                 break;
             }
         }
-        // `begin` already ran effective call 1 (the immediate background
-        // update); the 22 calls collected here are effective calls 2..=23:
-        // 21 active, then done on the 22nd.
         assert_eq!(statuses.len(), 22);
         assert!(statuses[..21]
             .iter()
@@ -445,20 +357,18 @@ mod tests {
     }
 
     #[test]
-    fn finishing_polls_keep_both_banks_at_the_target_coefficient() {
+    fn four_finishing_updates_are_active_then_done_with_both_halves_at_target() {
         let mut fade = NormalPaletteFade::begin(PaletteFadeTarget::White);
-        // Run until the object half completes the 16 coefficient and arms
-        // finishing.
         while !fade.finishing {
             fade.update();
         }
-        assert_eq!(coefficients(&fade), (16, 16));
+        assert_eq!(bg_obj_coefficients(&fade), (16, 16));
         for _ in 0..4 {
             assert_eq!(fade.update(), PaletteFadeStatus::Active);
-            assert_eq!(coefficients(&fade), (16, 16));
+            assert_eq!(bg_obj_coefficients(&fade), (16, 16));
         }
         assert_eq!(fade.update(), PaletteFadeStatus::Done);
-        assert_eq!(coefficients(&fade), (16, 16));
+        assert_eq!(bg_obj_coefficients(&fade), (16, 16));
     }
 
     #[test]
@@ -467,7 +377,7 @@ mod tests {
         while fade.update() != PaletteFadeStatus::Done {}
         assert_eq!(fade.update(), PaletteFadeStatus::Done);
         assert_eq!(fade.update(), PaletteFadeStatus::Done);
-        assert_eq!(coefficients(&fade), (16, 16));
+        assert_eq!(bg_obj_coefficients(&fade), (16, 16));
     }
 
     #[test]
@@ -494,12 +404,10 @@ mod tests {
 
     #[test]
     fn bank_transforms_are_stateless_and_do_not_compound() {
-        // Each transform blends from the original palette colour at its
-        // bank's own coefficient, never from its previous output.
         let mut fade = NormalPaletteFade::begin(PaletteFadeTarget::White);
-        fade.update(); // OBJ at 0, scheduler at 2
-        fade.update(); // BG at 2, scheduler stays 2
-        assert_eq!(coefficients(&fade), (2, 0));
+        fade.update();
+        fade.update();
+        assert_eq!(bg_obj_coefficients(&fade), (2, 0));
         let color = pixel5(16, 16, 16);
         let once = fade.bg_blend().transform(color);
         assert_eq!(once, pixel5(17, 17, 17));
@@ -513,7 +421,7 @@ mod tests {
         fade.update();
         fade.update();
         let color = pixel5(16, 16, 16);
-        let snapshot = fade.bg_blend();
+        let copied_bg_blend = fade.bg_blend();
         {
             let stage = fade.palette_stage();
             assert_eq!(
@@ -522,20 +430,15 @@ mod tests {
             );
             assert_eq!(stage.obj.map(|t| t.transform(color)), Some(color));
         }
-        fade.update(); // OBJ catches up to 2
-        assert_eq!(coefficients(&fade), (2, 2));
+        fade.update();
+        assert_eq!(bg_obj_coefficients(&fade), (2, 2));
         let stage = fade.palette_stage();
         assert_eq!(
             stage.obj.map(|t| t.transform(color)),
             Some(pixel5(17, 17, 17))
         );
-        // The earlier copy is a value snapshot, unaffected by the update.
-        assert_eq!(snapshot.coefficient(), 2);
+        assert_eq!(copied_bg_blend.coefficient(), 2);
     }
-
-    // --- BlendPalette oracle: white and black targets, representative and
-    // boundary 8-bit channels, proven apart from effects::{brighten, darken}
-    // (pokeemerald/src/util.c:264-278). ---
 
     #[test]
     fn blend_channel_matches_the_blend_palette_oracle_toward_white() {
@@ -627,19 +530,12 @@ mod tests {
 
     #[test]
     fn negative_deltas_round_toward_negative_infinity_like_the_c_arithmetic_shift() {
-        // base=20, target=0, coeff=1: delta=-20, -20>>4 == -2 (not -1, which
-        // truncation-toward-zero would give), so 20 + -2 == 18.
         assert_eq!(blend_channel(20, 0, 1), 18);
-        // base=1, target=0, coeff=2: delta=-2, -2>>4 == -1, so 1 + -1 == 0.
         assert_eq!(blend_channel(1, 0, 2), 0);
     }
 
     #[test]
-    fn palette_derived_pixel_fades_like_blend_palette_in_5_bit_domain() {
-        // Black toward white at coefficient 2: BlendPalette's native 5-bit
-        // math gives five-bit 3 (0 + ((0x1F - 0) * 2) >> 4 == 3), displayed
-        // through the crate's 5-to-8-bit expansion as 24, not the 31 an
-        // 8-bit-domain blend would give.
+    fn black_toward_white_at_coefficient_two_expands_to_rgb888_24() {
         let faded = blend_pixel(Rgb888::BLACK, PaletteFadeTarget::White, 2);
         assert_eq!(
             faded,
@@ -652,12 +548,7 @@ mod tests {
     }
 
     #[test]
-    fn expanded_rgb888_oracle_for_a_mixed_representative_pixel() {
-        // A mixed-channel pixel exactly representable in 5-bit palette RAM,
-        // through the full compress/blend/expand `blend_pixel` uses, with
-        // expected literals computed independently from the per-channel
-        // oracle above (base channels 15, 30, 1 at coeff 8: white blends to
-        // 5-bit 23/30/16, black to 7/15/0).
+    fn mixed_palette_pixel_blends_to_expected_rgb888_for_both_targets() {
         let pixel = pixel5(15, 30, 1);
 
         let white = blend_pixel(pixel, PaletteFadeTarget::White, 8);
@@ -681,17 +572,8 @@ mod tests {
         );
     }
 
-    // --- independent of effects::{brighten, darken}: this blend is computed
-    // by its own implementation, never by delegating to the hardware
-    // BLDY-effect path, and its 5-bit round-trip genuinely diverges from
-    // their full 8-bit precision (pokeemerald/src/util.c:264-278). ---
-
     #[test]
-    fn cpu_darken_toward_black_genuinely_differs_from_the_hardware_bldy_darken() {
-        // 5-bit boundary channel 31 (== 255 expanded) darkened at
-        // coefficient 2: the CPU blend keeps every channel uniform at 222,
-        // while the hardware BLDY path's shifted-lane rounding splits red
-        // from green/blue.
+    fn cpu_black_fade_differs_from_hardware_bldy_darken() {
         use crate::effects::darken;
         let white = Rgb888 {
             r: 255,
@@ -720,11 +602,7 @@ mod tests {
     }
 
     #[test]
-    fn cpu_brighten_toward_white_genuinely_differs_from_the_hardware_bldy_brighten() {
-        // 5-bit boundary channel 30 (== 247 expanded) brightened at
-        // coefficient 8: the CPU blend stays at 247 (30 blended toward 31 at
-        // coeff 8 rounds down to 30, the identity), while the hardware
-        // path's full 8-bit distance-to-white weighting moves it further.
+    fn cpu_white_fade_differs_from_hardware_bldy_brighten() {
         use crate::effects::brighten;
         let base = pixel5(30, 30, 30);
         let cpu = blend_pixel(base, PaletteFadeTarget::White, 8);
