@@ -883,9 +883,9 @@ impl OverworldPhase {
     ///
     /// Every upstream `CB2_ReturnToField` reload runs `InitMapView` ->
     /// `InitTilesetAnimations` (`src/overworld.c:523-530`,
-    /// `src/tileset_anims.c:600-616`), zeroing both animation counters
-    /// (issue #865, #1955, #1976). The battle drivers call this
-    /// when the battle slot empties; a loss's `white_out` warp has already zeroed `tick`.
+    /// `src/tileset_anims.c:600-616`), zeroing both animation counters.
+    /// The battle drivers call this when the battle slot empties; a loss's
+    /// `white_out` warp has already zeroed `tick`.
     pub(super) fn reinit_field_tileset_animations(&mut self) {
         self.tick = 0;
     }
