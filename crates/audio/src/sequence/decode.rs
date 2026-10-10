@@ -117,12 +117,14 @@ impl<'a> Compiler<'a> {
                     }
                 }
                 Event::Repeat { count, target } => {
-                    self.validate_target(offset, target)?;
+                    // m4a_1.s:884-910: only a taken repeat uses the target.
                     if count == 0 {
+                        self.validate_target(offset, target)?;
                         context.offset = target;
                     } else {
                         context.repeat = context.repeat.wrapping_add(1);
                         if context.repeat < count {
+                            self.validate_target(offset, target)?;
                             context.offset = target;
                         } else {
                             context.repeat = 0;
