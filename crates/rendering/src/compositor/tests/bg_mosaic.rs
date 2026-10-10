@@ -1,10 +1,7 @@
 //! Pins regular- and affine-BG mosaic snapping, holds, and their window/OBJWIN interplay.
 
 use super::super::{compose_frame_with_effects, BgSlot, FrameEffects};
-use super::shared::{
-    bpp4_tile_with_every_row, bpp4_tile_with_top_left_2x2, empty_sprite_layer,
-    opaque_affine_bg_fixture,
-};
+use super::shared::{bpp4_tile_with_every_row, bpp4_tile_with_top_left_2x2, empty_sprite_layer};
 use crate::affine::AffineMatrix;
 use crate::bg_affine::{AffineBgLayer, AffineTilemap, Overflow};
 use crate::mosaic::MosaicSize;
@@ -140,7 +137,7 @@ fn affine_mosaic_retries_the_next_pixel_when_the_block_origin_is_out_of_bounds()
     // unchanged, so the next column's retry seeds the hold instead
     // (`MODE_2_COORD_NO_OVERFLOW`/`MODE_2_MOSAIC`,
     // `mgba/src/gba/renderers/software-bg.c:24-42`) `(behavioral-fidelity)`.
-    let (tiles, palette, tilemap) = opaque_affine_bg_fixture(9);
+    let (tiles, palette, tilemap) = gradient_affine_bg_fixture();
     let layer = AffineBgLayer::new(&tiles, &palette, &tilemap);
     let one_texture_pixel = i32::from(AffineMatrix::ONE);
     let slot = BgSlot::new_affine(
@@ -167,7 +164,7 @@ fn affine_mosaic_retries_the_next_pixel_when_the_block_origin_is_out_of_bounds()
     };
     let fb = compose_frame_with_effects(&sprites, &[slot], &effects);
 
-    let held = Bgr555::from_channels(9, 0, 0).to_rgb888();
+    let held = Bgr555::from_channels(1, 0, 0).to_rgb888();
     assert_eq!(
         fb.pixel(0, 0),
         Some(crate::palette::Rgb888::BLACK),
@@ -186,8 +183,21 @@ fn affine_mosaic_retries_the_next_pixel_when_the_block_origin_is_out_of_bounds()
     assert_eq!(
         fb.pixel(3, 0),
         Some(held),
-        "x=3 holds the value the retry drew at x=1, completing the 4-wide block"
+        "x=3 still holds texture column 0, fetched at x=1"
     );
+    assert_eq!(
+        fb.pixel(4, 0),
+        Some(held),
+        "x=4 is the final held column; the reload is delayed until x=5"
+    );
+    let reloaded = Bgr555::from_channels(5, 0, 0).to_rgb888();
+    for x in 5..=7 {
+        assert_eq!(
+            fb.pixel(x, 0),
+            Some(reloaded),
+            "x={x} holds texture column 4, fetched at x=5"
+        );
+    }
 }
 
 #[test]
