@@ -17,6 +17,21 @@ impl SequenceRng {
     pub fn draws(&self) -> usize {
         self.draw_count
     }
+
+    /// Fails unless every scripted value was drawn, so a fixture written as an
+    /// exact script catches a removed draw as well as an extra one.
+    pub fn assert_exhausted(&self) {
+        assert_eq!(
+            self.draw_count,
+            self.scripted_values.len(),
+            "SequenceRng script length and draws consumed must match"
+        );
+    }
+}
+
+/// Concatenates labelled draw groups into one exact script.
+pub fn script(groups: &[&[u16]]) -> Vec<u16> {
+    groups.concat()
 }
 
 impl BattleRng for SequenceRng {

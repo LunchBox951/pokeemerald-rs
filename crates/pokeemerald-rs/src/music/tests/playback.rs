@@ -21,6 +21,7 @@ fn looping_song() -> Song {
     ))];
     let events = vec![
         Event::Voice(0),
+        Event::Volume(127),
         Event::Note {
             key: 60,
             velocity: 127,
@@ -39,6 +40,7 @@ fn short_one_shot_song() -> Song {
     ))];
     let events = vec![
         Event::Voice(0),
+        Event::Volume(127),
         Event::Note {
             key: 60,
             velocity: 127,
@@ -57,6 +59,7 @@ fn finite_reverbed_song() -> Song {
     ))];
     let events = vec![
         Event::Voice(0),
+        Event::Volume(127),
         Event::Note {
             key: 60,
             velocity: 127,

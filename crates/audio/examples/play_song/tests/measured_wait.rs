@@ -133,3 +133,88 @@ fn a_poll_landing_on_the_deadline_is_the_last() {
     );
     assert_eq!(sleeps.get(), 3, "no sleep past the deadline poll");
 }
+
+/// A 30 ms budget polled every 10 ms whose third sleep oversleeps to 40 ms,
+/// where a usable callback at `callback_ms` first reports the target sounded.
+fn overslept_measured_wait(callback_ms: u64) -> Result<(), DrainError> {
+    overslept_measured_reading(callback_ms, 4)
+}
+
+/// [`overslept_measured_wait`] whose callback at `callback_ms` reports
+/// `reading_frames` sounded against the 4-frame target.
+fn overslept_measured_reading(callback_ms: u64, reading_frames: u64) -> Result<(), DrainError> {
+    use std::time::Duration;
+
+    let policy = RetryPolicy {
+        interval: Duration::from_millis(10),
+        max_wait: Duration::from_millis(30),
+    };
+    let started = Instant::now();
+    let clock = Rc::new(RefCell::new(started));
+    let sleeps = Cell::new(0_u32);
+    let callback_at = started + Duration::from_millis(callback_ms);
+    let result = wait_for_measured_tail(
+        4,
+        Duration::from_millis(200),
+        48_000,
+        &policy,
+        || {
+            Some(if *clock.borrow() >= callback_at {
+                progress_reading(reading_frames, 1_000, 1_000, callback_at)
+            } else {
+                progress_reading(0, 1_000, 1_000, started)
+            })
+        },
+        || 0,
+        || *clock.borrow(),
+        |duration| {
+            sleeps.set(sleeps.get() + 1);
+            let extra = if sleeps.get() == 3 {
+                Duration::from_millis(10)
+            } else {
+                Duration::ZERO
+            };
+            *clock.borrow_mut() += duration + extra;
+        },
+    );
+    assert_eq!(sleeps.get(), 3);
+    assert_eq!(
+        clock.borrow().duration_since(started),
+        Duration::from_millis(40)
+    );
+    result
+}
+
+#[test]
+fn an_overslept_poll_rejects_completion_after_the_deadline() {
+    // Polls at 0/10/20 ms are short; completion at 35 ms is seen at 40 ms.
+    assert!(matches!(
+        overslept_measured_wait(35),
+        Err(DrainError::MeasuredTailTimedOut {
+            sounded: 4,
+            target: 4
+        })
+    ));
+}
+
+#[test]
+fn an_overslept_poll_accepts_completion_observed_in_budget() {
+    // Completion at 25 ms is first polled at 40 ms, but fits the 30 ms budget.
+    assert!(overslept_measured_wait(25).is_ok());
+}
+
+#[test]
+fn an_overslept_poll_backdates_completion_from_the_overshoot() {
+    // The 35 ms callback reports 480 frames (10 ms at 48 kHz) past the
+    // target, so the target sounded by 25 ms, inside the 30 ms budget.
+    assert!(overslept_measured_reading(35, 4 + 480).is_ok());
+}
+
+#[test]
+fn an_overslept_poll_rejects_an_overshoot_that_still_lands_late() {
+    // 96 frames past the target is 2 ms: the target sounded at 33 ms.
+    assert!(matches!(
+        overslept_measured_reading(35, 4 + 96),
+        Err(DrainError::MeasuredTailTimedOut { target: 4, .. })
+    ));
+}

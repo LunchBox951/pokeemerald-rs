@@ -76,6 +76,8 @@ pub fn visible_object_event_at<'a>(
 ///
 /// The player's own grid cell decides whether elevation is a wildcard. An off-grid player cell is
 /// also a wildcard, matching `GetInFrontOfPlayerPosition` (`field_control_avatar.c:200-210`).
+/// Otherwise the query uses the retained previous elevation, as `PlayerGetElevation` returns
+/// `previousElevation` (`field_player_avatar.c:1192-1195`), not the collision elevation.
 #[must_use]
 pub fn facing_object_event<'a>(
     player: &PlayerState,
@@ -87,7 +89,7 @@ pub fn facing_object_event<'a>(
     let (fx, fy) = (px + dx, py + dy);
 
     let query_elevation = match runtime.metatile_cell(px, py) {
-        Some(cell) if cell.elevation != ELEVATION_TRANSITION => player.elevation(),
+        Some(cell) if cell.elevation != ELEVATION_TRANSITION => player.previous_elevation(),
         _ => ELEVATION_TRANSITION,
     };
 
@@ -649,6 +651,47 @@ mod tests {
         let found = facing_object_event(&player, &runtime, &data)
             .expect("a transition tile queries with the wildcard, matching any elevation");
         assert_eq!(found.local_id, 1);
+    }
+
+    fn facing_id_with_saved_pair(current: u8, previous: u8, levels: &[u8]) -> Option<u8> {
+        let grid_bytes =
+            grid_bytes_at_elevation(5, 5, super::super::collision::ELEVATION_MULTI_LEVEL);
+        let object_events: &'static [ObjectEvent] = Box::leak(
+            levels
+                .iter()
+                .enumerate()
+                .map(|(i, &level)| object(u8::try_from(i + 1).unwrap(), 2, 1, level, "0"))
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        );
+        let events = events_with(object_events);
+        let runtime = runtime_with_object(&grid_bytes, &events);
+        let player =
+            PlayerState::with_saved_elevations((2, 2), current, previous, Direction::North);
+        assert_eq!(
+            (player.elevation(), player.previous_elevation()),
+            (current, previous)
+        );
+        facing_object_event(&player, &runtime, &EventData::new()).map(|o| o.local_id)
+    }
+
+    #[test]
+    fn facing_object_event_rejects_wrong_level_stacked_objects() {
+        // Upstream queries previousElevation 3 (field_control_avatar.c:204-209,
+        // field_player_avatar.c:1192-1195); the current-elevation 0 wildcard must not match.
+        assert_eq!(facing_id_with_saved_pair(0, 3, &[5, 7]), None);
+    }
+
+    #[test]
+    fn facing_object_event_selects_the_retained_level_after_a_wrong_level() {
+        assert_eq!(facing_id_with_saved_pair(0, 3, &[5, 3]), Some(2));
+    }
+
+    #[test]
+    fn facing_object_event_uses_previous_not_current_restored_elevation() {
+        assert_eq!(facing_id_with_saved_pair(3, 5, &[3, 5]), Some(2));
+        assert_eq!(facing_id_with_saved_pair(5, 3, &[3, 5]), Some(1));
+        assert_eq!(facing_id_with_saved_pair(3, 0, &[5, 3]), Some(1));
     }
 
     #[test]
