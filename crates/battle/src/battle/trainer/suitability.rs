@@ -228,8 +228,8 @@ fn stale_base_damage(
 /// Applies `move_id`'s STAB (against `fainted`'s types, matching upstream's
 /// use of the fainted battler for `TypeCalc`'s STAB check) and type
 /// effectiveness (against `defender`'s types) on top of the shared `base`
-/// from [`stale_base_damage`], or `None` for the [`OHKO_POWER_SENTINEL`] or
-/// a `???`-typed move. A move [`levitate_refuses`] keeps its STAB-multiplied
+/// from [`stale_base_damage`], or `None` for the [`OHKO_POWER_SENTINEL`]. A
+/// `???`-typed move keeps its `base` with no STAB or chart row. A move [`levitate_refuses`] keeps its STAB-multiplied
 /// `base` and takes no type-chart row at all.
 fn candidate_move_damage(
     dex: &Dex,
@@ -247,8 +247,9 @@ fn candidate_move_damage(
     if move_id == MoveId::STRUGGLE {
         return Ok(Some(base));
     }
+    // `???` (Curse) matches neither STAB nor a chart row in `TypeCalc`.
     let Some(move_type) = move_data.move_type.battle_type() else {
-        return Ok(None);
+        return Ok(Some(base));
     };
     let damage = apply_stab(base, has_stab(fainted.types(), move_id, move_type));
     if levitate_refuses(defender, move_type) {
@@ -585,6 +586,55 @@ mod tests {
         let fainted = mon(SpeciesId(400), 70, vec![MoveId::MEGA_KICK]);
         let player = mon(SpeciesId(92), 50, vec![MoveId::TACKLE]);
         let mut treecko = mon(TREECKO, 5, vec![MoveId::TACKLE, MoveId::STRUGGLE]);
+        while treecko.moves()[1].pp > 0 {
+            treecko.deduct_pp(1).unwrap();
+        }
+        let bench = vec![mon(SpeciesId(172), 5, vec![MoveId::TACKLE]), treecko];
+        let context = TrainerContext::new(
+            MAY_ROUTE_103_MUDKIP,
+            trainer_data(MAY_ROUTE_103_MUDKIP).expect("a real trainer"),
+            bench,
+        );
+
+        assert_eq!(
+            context.most_suitable_by_damage(&dex, &fainted, MoveId::MEGA_KICK, &player),
+            Ok(Some(1))
+        );
+    }
+
+    /// Curse is power 0 and `???`-typed; `TypeCalc` gives it neither STAB nor a
+    /// chart row, so its base stands against every defender.
+    #[test]
+    fn curse_keeps_its_untyped_base_against_every_defender() {
+        let dex = Dex::new();
+        let mon = |species, moves: Vec<MoveId>| {
+            BattlePokemon::new(&dex, species, 5, fixed_ivs(255), 0, moves).expect("dex-resident")
+        };
+        let fainted = mon(SpeciesId(400), vec![MoveId::MEGA_KICK]);
+        for species in [92, 95, 81, 382] {
+            let defender = mon(SpeciesId(species), vec![MoveId::TACKLE]);
+            for base in [0, 100] {
+                assert_eq!(
+                    super::candidate_move_damage(&dex, MoveId::CURSE, base, &fainted, &defender),
+                    Ok(Some(base)),
+                    "species {species} base {base}"
+                );
+            }
+        }
+    }
+
+    /// A depleted Curse still enters the most-damage pass, as upstream's
+    /// loop only skips `MOVE_NONE` and power 1.
+    #[test]
+    fn a_depleted_curse_wins_the_damage_pass_against_a_ghost() {
+        let dex = Dex::new();
+        let mon = |species, level, moves: Vec<MoveId>| {
+            BattlePokemon::new(&dex, species, level, fixed_ivs(255), 0, moves)
+                .expect("dex-resident")
+        };
+        let fainted = mon(SpeciesId(400), 70, vec![MoveId::MEGA_KICK]);
+        let player = mon(SpeciesId(92), 50, vec![MoveId::TACKLE]);
+        let mut treecko = mon(TREECKO, 5, vec![MoveId::TACKLE, MoveId::CURSE]);
         while treecko.moves()[1].pp > 0 {
             treecko.deduct_pp(1).unwrap();
         }
