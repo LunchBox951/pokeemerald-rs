@@ -92,12 +92,13 @@ mod tests {
     /// producer-to-null-consumer round-trip without opening an audio device.
     #[test]
     fn renders_a_decoded_song_through_the_platform_producer() {
-        let bytes = [0xBD, 0x00, 0xE7, 60, 127, 0xB0, 0xB1];
+        let bytes = [0xBD, 0x00, 0xBE, 127, 0xE7, 60, 127, 0xB0, 0xB1];
         let events = decode_track(&bytes).expect("valid track");
         assert_eq!(
             events,
             [
                 Event::Voice(0),
+                Event::Volume(127),
                 Event::Note {
                     key: 60,
                     velocity: 127,
