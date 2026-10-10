@@ -119,9 +119,31 @@ fn pack_4bpp_region_rejects_a_palette_index_a_4bpp_tile_cannot_hold() {
     );
 }
 
+/// Removes the temporary pack at `path` when dropped, including on unwind.
+struct TempPackGuard(std::path::PathBuf);
+
+impl Drop for TempPackGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 /// Runs `check` with a pack palette of `color_count` colours whose raw values
 /// are `0x8000 | (index + 1)` (bit 15 set, to prove it is cleared).
 fn with_palette(color_count: u16, check: impl FnOnce(assets::PaletteRef<'_>)) {
+    let path = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-palette-bank-test-{}-{:?}.pack",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    with_palette_at(&path, color_count, check);
+}
+
+fn with_palette_at(
+    path: &std::path::Path,
+    color_count: u16,
+    check: impl FnOnce(assets::PaletteRef<'_>),
+) {
     let payload: Vec<u8> = (0..color_count)
         .flat_map(|i| (0x8000 | (i + 1)).to_le_bytes())
         .collect();
@@ -131,14 +153,34 @@ fn with_palette(color_count: u16, check: impl FnOnce(assets::PaletteRef<'_>)) {
         meta: color_count.to_le_bytes().to_vec(),
         payload,
     }]);
-    let path = std::env::temp_dir().join(format!(
-        "pokeemerald-rs-palette-bank-test-{}-{:?}.pack",
-        std::process::id(),
-        std::thread::current().id()
-    ));
-    std::fs::write(&path, bytes).unwrap();
-    let pack = AssetPack::load(&path).unwrap();
+    let _guard = TempPackGuard(path.to_path_buf());
+    std::fs::write(path, bytes).unwrap();
+    let pack = AssetPack::load(path).unwrap();
     check(pack.palette("p").unwrap());
+}
+
+fn regression_pack_path(name: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!(
+        "pokeemerald-rs-palette-bank-{name}-{}.pack",
+        std::process::id()
+    ))
+}
+
+#[test]
+fn with_palette_removes_its_pack_after_normal_completion() {
+    let path = regression_pack_path("cleanup-normal");
+    with_palette_at(&path, 3, |_| assert!(path.exists()));
+    assert!(!path.exists());
+}
+
+#[test]
+fn with_palette_removes_its_pack_when_the_check_panics() {
+    let path = regression_pack_path("cleanup-unwind");
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        with_palette_at(&path, 3, |_| panic!("check failed"));
+    }));
+    assert!(result.is_err());
+    assert!(!path.exists());
 }
 
 fn sentinel_colors() -> [rendering::Bgr555; rendering::Palette::LEN] {
