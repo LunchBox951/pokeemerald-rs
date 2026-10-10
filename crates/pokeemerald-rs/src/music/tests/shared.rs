@@ -32,6 +32,7 @@ pub(super) fn sustained_song(tracks: usize) -> Song {
     let voices = vec![Instrument::DirectSound(ToneData::new(wave, Adsr::flat()))];
     let track = vec![
         Event::Voice(0),
+        Event::Volume(127),
         Event::Note {
             key: 60,
             velocity: 127,
@@ -241,6 +242,7 @@ pub(super) fn occupant_track() -> Vec<SongEvent> {
     vec![
         SongEvent::Priority(0),
         SongEvent::Voice(0),
+        SongEvent::Volume(127),
         SongEvent::Note {
             key: 60,
             velocity: 127,
@@ -257,6 +259,7 @@ pub(super) fn evictor_track(key: u8) -> Vec<SongEvent> {
     vec![
         SongEvent::Priority(90),
         SongEvent::Voice(1),
+        SongEvent::Volume(127),
         SongEvent::Note {
             key,
             velocity: 127,

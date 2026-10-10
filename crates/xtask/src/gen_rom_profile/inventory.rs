@@ -5,9 +5,12 @@
 
 use super::error::GenRomProfileError;
 use super::pack_source::PackSource;
-use crate::extract::scope::{layout_ids, text_window_ids, title_ids, FONTS, TILESETS};
+use crate::extract::scope::{
+    layout_ids, text_window_ids, tileset_animation_ids, title_ids, FONTS, TILESETS,
+};
 
-/// Require every fixed tileset root.
+/// Require every fixed tileset root: all tile sheets, then every pinned
+/// animation frame, independent of which frames the pack happens to hold.
 ///
 /// # Errors
 ///
@@ -15,7 +18,10 @@ use crate::extract::scope::{layout_ids, text_window_ids, title_ids, FONTS, TILES
 pub fn require_tilesets(pack: &PackSource) -> Result<(), GenRomProfileError> {
     TILESETS
         .into_iter()
-        .try_for_each(|tileset| pack.get(&tileset.tiles_id()).map(|_| ()))
+        .try_for_each(|tileset| pack.get(&tileset.tiles_id()).map(|_| ()))?;
+    tileset_animation_ids()
+        .iter()
+        .try_for_each(|id| pack.get(id).map(|_| ()))
 }
 
 /// Require every fixed title image, tilemap, and palette root.

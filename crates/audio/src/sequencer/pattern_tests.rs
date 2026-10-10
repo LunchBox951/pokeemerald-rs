@@ -43,10 +43,11 @@ fn render_track(track: Vec<Event>, frames: usize) -> Vec<f32> {
 
 #[test]
 fn pattern_call_renders_identically_to_the_unrolled_track() {
-    const PATTERN_BODY: usize = 4;
+    const PATTERN_BODY: usize = 5;
 
     let with_pattern = vec![
         Event::Voice(0),
+        Event::Volume(127),
         Event::Pattern(PATTERN_BODY),
         Event::Wait(48),
         Event::Fine,
@@ -59,6 +60,7 @@ fn pattern_call_renders_identically_to_the_unrolled_track() {
     ];
     let unrolled = vec![
         Event::Voice(0),
+        Event::Volume(127),
         Event::Note {
             key: 60,
             velocity: 127,
@@ -73,8 +75,8 @@ fn pattern_call_renders_identically_to_the_unrolled_track() {
 
 #[test]
 fn nested_pattern_calls_render_identically_to_the_unrolled_track() {
-    const OUTER_BODY: usize = 4;
-    const INNER_BODY: usize = 8;
+    const OUTER_BODY: usize = 5;
+    const INNER_BODY: usize = 9;
 
     let note = |key: u8| Event::Note {
         key,
@@ -83,6 +85,7 @@ fn nested_pattern_calls_render_identically_to_the_unrolled_track() {
     };
     let nested = vec![
         Event::Voice(0),
+        Event::Volume(127),
         Event::Pattern(OUTER_BODY),
         Event::Wait(12),
         Event::Fine,
@@ -96,6 +99,7 @@ fn nested_pattern_calls_render_identically_to_the_unrolled_track() {
     ];
     let unrolled = vec![
         Event::Voice(0),
+        Event::Volume(127),
         note(60),
         Event::Wait(12),
         note(64),
@@ -219,9 +223,9 @@ fn repeat_body() -> [Event; 2] {
 /// A finite `REPT` track, built so `target` points at the first event of
 /// [`repeat_body`].
 fn repeat_track(count: u8) -> Vec<Event> {
-    const REPEAT_TARGET: usize = 1;
+    const REPEAT_TARGET: usize = 2;
 
-    let mut track = vec![Event::Voice(0)];
+    let mut track = vec![Event::Voice(0), Event::Volume(127)];
     track.extend(repeat_body());
     track.push(Event::Repeat {
         count,
@@ -235,7 +239,7 @@ fn repeat_track(count: u8) -> Vec<Event> {
 fn repeat_renders_identically_to_the_unrolled_track() {
     const REPEAT_COUNT: u8 = 3;
 
-    let mut unrolled = vec![Event::Voice(0)];
+    let mut unrolled = vec![Event::Voice(0), Event::Volume(127)];
     for _ in 0..REPEAT_COUNT {
         unrolled.extend(repeat_body());
     }

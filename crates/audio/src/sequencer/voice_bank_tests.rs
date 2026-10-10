@@ -20,6 +20,7 @@ fn voice_slot_127_is_an_explicit_entry_not_an_adjacent_lookup() {
         let voices = build_voices(slot127_sample);
         let track = vec![
             Event::Voice(127),
+            Event::Volume(127),
             Event::Note {
                 key: 60,
                 velocity: 127,
