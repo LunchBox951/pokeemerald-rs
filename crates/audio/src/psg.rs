@@ -603,14 +603,31 @@ impl NoiseChannel {
     /// so the new period is measured against the clock time already elapsed
     /// (`mgba/src/gb/audio.c:354-358,602-607,630-644`). The phase is therefore
     /// rescaled by the rate ratio, whole periods included; the next
-    /// clock-enabled sample clocks them at its own volume, so the retune
-    /// itself leaves the latch untouched.
+    /// clock-enabled sample, or a trigger first ([`Self::settle_owed_clocks`]),
+    /// clocks them, so the retune itself leaves the latch untouched.
     pub fn retune(&mut self, byte: u8) {
         let step_delta = NoiseControl::from_byte(byte).step_delta;
         self.phase = (self.phase * u64::from(step_delta))
             .checked_div(u64::from(self.step_delta))
             .unwrap_or(0);
         self.step_delta = step_delta;
+    }
+
+    /// Clocks the whole periods a retune left owed, at hardware `volume`.
+    ///
+    /// mGBA runs channel 4 before each `NR42`/`NR44` write
+    /// (`mgba/src/gb/audio.c:347,362,602-644`), so a trigger following a
+    /// retune first clocks every whole new-rate period already elapsed, and
+    /// the latch they leave survives the trigger. A stopped channel owes
+    /// nothing (`audio.c:585`).
+    pub fn settle_owed_clocks(&mut self, volume: u8) {
+        if !self.clocking {
+            return;
+        }
+        while self.phase >= u64::from(PHASE_ONE) {
+            self.phase -= u64::from(PHASE_ONE);
+            self.shift_lfsr(volume);
+        }
     }
 
     /// Resets the LFSR and clock phase, exactly as at note-on

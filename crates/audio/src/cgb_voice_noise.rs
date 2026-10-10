@@ -76,6 +76,34 @@ fn a_live_noise_retune_carries_elapsed_time_across_full_frames() {
 }
 
 #[test]
+fn a_trigger_after_an_accelerating_retune_settles_the_owed_clocks_first() {
+    // mGBA runs channel 4 before every `NR42`/`NR44` write
+    // (`mgba/src/gb/audio.c:347,362,602-644`), so the whole new-rate periods
+    // an `NR43` retune already covers clock before the trigger resets the
+    // LFSR (`audio.c:374`), and their latch outlives it.
+    assert_eq!(midi_key_to_noise_control(47), 0x75);
+    assert_eq!(midi_key_to_noise_control(55), 0x55);
+    let mut voice = noise_voice(CgbAdsr::flat(), WIDE_NOISE, TestNote::at_key(47));
+    voice.begin_frame(false);
+    let mut first = [(0i32, 0i32); 30];
+    voice.render(&mut first, &[]);
+    assert_eq!(voice.noise_lfsr(), Some(0));
+    assert_eq!(voice.noise_output_latch(), Some(0));
+
+    // Four times the rate: 30 samples at 0x75 cover three whole 0x55 periods,
+    // each clocking a high bit (0 -> 0x4000 -> 0x6000 -> 0x7000).
+    voice.set_track_pitch(8, 0);
+    voice.set_track_volume(FULL_TRACK_VOLUME, FULL_TRACK_VOLUME);
+    voice.begin_frame(false);
+    assert_eq!(voice.noise_lfsr(), Some(0));
+    assert_eq!(voice.noise_output_latch(), Some(FULL_VOLUME));
+    let mut second = [(0i32, 0i32); 1];
+    voice.render(&mut second, &[]);
+    let expected = expected_contribution(FULL_VOLUME, FULL_VOLUME);
+    assert_eq!(second[0], (expected, expected));
+}
+
+#[test]
 fn release_start_volume_write_retriggers_the_noise_lfsr() {
     // Release start is a volume write; upstream's channel-4 trigger
     // resets the LFSR (`m4a.c:1060-1069,1219-1226`; `mgba/src/gb/audio.c:374`).

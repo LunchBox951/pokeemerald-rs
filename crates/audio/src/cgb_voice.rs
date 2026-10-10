@@ -444,6 +444,7 @@ impl CgbVoice {
     /// ([`SquareChannel::apply_hardware_off_write`]'s doc); its trigger
     /// revives or re-mutes the hardware channel like any other.
     pub(crate) fn apply_hardware_off_write(&mut self) {
+        self.settle_owed_noise_clocks();
         self.hardware_muted = !self.oscillator.apply_hardware_off_write();
         if self.oscillator.noise_mut().is_some() {
             // `NR42 = 8` leaves the channel at volume zero; the noise latch
@@ -525,7 +526,17 @@ impl CgbVoice {
     /// Applies [`Oscillator::retrigger`], muting the channel instead of
     /// retiring the voice when the trigger disables it (`m4a.c:1053-1056`).
     fn apply_retrigger(&mut self) {
+        self.settle_owed_noise_clocks();
         self.hardware_muted = !self.oscillator.retrigger();
+    }
+
+    /// Settles a retune's owed noise clocks at the volume the register holds
+    /// before this write ([`NoiseChannel::settle_owed_clocks`]'s doc).
+    fn settle_owed_noise_clocks(&mut self) {
+        let volume = self.hardware_envelope_volume.volume();
+        if let Some(noise) = self.oscillator.noise_mut() {
+            noise.settle_owed_clocks(volume);
+        }
     }
 
     /// Update the live base volume; itself a retrigger, matching upstream's
