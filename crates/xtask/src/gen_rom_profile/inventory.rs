@@ -6,7 +6,8 @@
 use super::error::GenRomProfileError;
 use super::pack_source::PackSource;
 use crate::extract::scope::{
-    layout_ids, text_window_ids, tileset_animation_ids, title_ids, FONTS, TILESETS,
+    layout_ids, sprite_sheet_ids, text_window_ids, tileset_animation_ids, title_ids, FONTS,
+    TILESETS,
 };
 
 /// Require every fixed tileset root: all tile sheets, then every pinned
@@ -20,6 +21,17 @@ pub fn require_tilesets(pack: &PackSource) -> Result<(), GenRomProfileError> {
         .into_iter()
         .try_for_each(|tileset| pack.get(&tileset.tiles_id()).map(|_| ()))?;
     tileset_animation_ids()
+        .iter()
+        .try_for_each(|id| pack.get(id).map(|_| ()))
+}
+
+/// Require every pinned people sprite sheet, independent of which the pack holds.
+///
+/// # Errors
+///
+/// [`GenRomProfileError::MissingPackEntry`] naming the first absent root.
+pub fn require_sprites(pack: &PackSource) -> Result<(), GenRomProfileError> {
+    sprite_sheet_ids()
         .iter()
         .try_for_each(|id| pack.get(id).map(|_| ()))
 }
@@ -78,5 +90,6 @@ pub fn preflight(pack: &PackSource) -> Result<(), GenRomProfileError> {
     require_title(pack)?;
     require_fonts(pack)?;
     require_layouts(pack)?;
-    require_text_window(pack)
+    require_text_window(pack)?;
+    require_sprites(pack)
 }
