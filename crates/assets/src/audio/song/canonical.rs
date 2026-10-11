@@ -1,6 +1,7 @@
 //! Wait canonicalization: the one rewrite [`super::Song::new`] applies to
-//! every track, so ROM and checkout rests land on one shape. Contract:
-//! `pokeemerald/sound/MPlayDef.s:1-49` (the `Wnn` wait opcodes).
+//! every track, so ROM and checkout rests land on one shape. The shape is
+//! this crate's own and its tests pin it; upstream only defines the `Wnn`
+//! wait vocabulary (`pokeemerald/sound/MPlayDef.s:1-49`).
 //!
 //! The xtask MIDI compiler mirrors this by hand in
 //! `crates/xtask/src/extract/midi/compile/canonical.rs`; change both together.
