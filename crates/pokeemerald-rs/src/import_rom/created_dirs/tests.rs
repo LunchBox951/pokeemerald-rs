@@ -824,3 +824,80 @@ fn a_full_table_after_acquisition_still_syncs_every_shed_parent() {
         "both shed levels' parents are synced, innermost first: {synced:?}"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn a_shed_parent_behind_a_symlinked_level_is_still_synced() {
+    // `base/a/x/c`: this run makes `a`, another creator makes `x` a symlink
+    // to `external` (outside `base`), and this run makes `c` in `external`.
+    // Acquisition sheds `a`'s pins; `a`'s entry is in `base`, which is not
+    // on the destination's `..` ancestry.
+    let dir = TempDir::new("shed-parent-symlink");
+    let base = dir.join("base");
+    let external = dir.join("external");
+    std::fs::create_dir(&base).expect("base made");
+    std::fs::create_dir(&external).expect("external made");
+    let a = base.join("a");
+    let x = a.join("x");
+    let target = x.join("c");
+    let mut raced = false;
+    let creation = super::create_directories_pinned_with_hooks(
+        &target,
+        super::pin_budget(),
+        &mut || {},
+        &mut || {
+            if !raced {
+                raced = true;
+                std::os::unix::fs::symlink(&external, &x).expect("the other creator links x");
+            }
+            None
+        },
+        &mut || None,
+    )
+    .expect("the destination is created");
+    let mut created = creation.created;
+    assert_eq!(created.len(), 2, "only a and c are this run's");
+    let mut synced = Vec::new();
+    let record = |parent: &std::os::fd::OwnedFd| {
+        let stat = rustix::fs::fstat(parent).expect("parent stats");
+        (stat.st_dev, stat.st_ino)
+    };
+    // Acquisition refused once for want of a descriptor: the real shedding
+    // path sheds `a`, the outermost pinned level.
+    let mut refused = false;
+    let pin = creation
+        .final_directory
+        .clone()
+        .or_else(|| created[1].own_pin())
+        .expect("pinned");
+    let dest = super::open_shedding_pins_with(
+        &mut created,
+        || {
+            if !refused {
+                refused = true;
+                return Err(std::io::Error::from(rustix::io::Errno::MFILE));
+            }
+            super::super::dest::Dest::open_pinned(&pin)
+        },
+        &mut |parent| {
+            synced.push(record(parent));
+            super::super::dest::reopen_for_sync(parent)
+        },
+    )
+    .expect("the destination opens through the pin");
+    drop(pin);
+    drop(creation.final_directory);
+    assert!(created[0].parent.is_none(), "a was shed");
+    super::sync_shed_parents_with(&mut created, &dest, &mut |parent| {
+        synced.push(record(parent));
+    });
+    super::sync_created_directories_with(&mut created, &mut |parent| {
+        synced.push(record(parent));
+        super::super::dest::reopen_for_sync(parent)
+    });
+    let base_stat = rustix::fs::stat(&base).expect("base stats");
+    assert!(
+        synced.contains(&(base_stat.st_dev, base_stat.st_ino)),
+        "a's entry is in base, so base must be synced: {synced:?}"
+    );
+}
