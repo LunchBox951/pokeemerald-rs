@@ -269,8 +269,8 @@ fn a_self_hit_ignores_its_own_paralysis_and_draws_no_paralysis_bit() {
     player.set_status1(Status1::Paralysed);
     let enemy = max_iv_mon(&dex, ZIGZAGOON, 5, vec![TACKLE]);
 
-    // The self-hit returns before the paralysis draw: only the coin and the
-    // damage roll are drawn.
+    // Setup draws, the confusion coin (self-hit), the self-hit damage roll,
+    // then the enemy's Tackle; the self-hit returns before any paralysis draw.
     let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0, 0, 0]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
