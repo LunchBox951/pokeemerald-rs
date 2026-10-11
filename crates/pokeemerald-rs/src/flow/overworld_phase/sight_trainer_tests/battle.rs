@@ -126,8 +126,35 @@ fn winning_sets_the_defeated_flag_and_the_fight_cannot_restart() {
     // `already_defeated` refuses before the geometry even matters (and, as
     // of this issue, before Rhett's own real construction gap would matter
     // either).
+    //
+    // Arm the constructible stand-in (`sight_trainer_tests` docs, "The
+    // stand-in party") so a scan that wrongly selected Rhett *would* start an
+    // approach instead of being masked by his real party's construction
+    // refusal; see the undefeated control below.
+    phase.synthetic_sight_trainer = Some(assets::trainers::TrainerId(STAND_IN_TRAINER));
     phase.step(ButtonState::new());
     assert!(!phase.is_sight_trainer_battle_active());
+    assert!(
+        phase.sight_approach.is_none(),
+        "a defeated trainer must not restart `sight_approach` from the frame-driven scan"
+    );
+}
+
+/// The undefeated control for
+/// [`winning_sets_the_defeated_flag_and_the_fight_cannot_restart`]: the same
+/// cone, stand-in party and lead, without the defeated flag, does start the
+/// approach -- so the absence asserted there is the saved flag's doing.
+#[test]
+fn an_undefeated_trainer_in_the_same_cone_does_start_an_approach() {
+    let (rx, ry) = RHETT_TILE;
+    let mut phase = route_103_phase(PlayerState::new((rx, ry + 1), 3, Direction::North));
+    phase.party_lead = Some(overwhelming_lead());
+    phase.synthetic_sight_trainer = Some(assets::trainers::TrainerId(STAND_IN_TRAINER));
+    phase.step(ButtonState::new());
+    assert!(
+        phase.sight_approach.is_some(),
+        "control: an undefeated Rhett's cone must start the approach"
+    );
 }
 
 /// `AddMoney` (`pokeemerald/src/money.c:90-108`) saturates at `MAX_MONEY`
