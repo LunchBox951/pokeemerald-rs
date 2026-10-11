@@ -1031,3 +1031,174 @@ fn every_leaf_slot_kind_carries_its_own_fields_through_resolution() {
         }
     );
 }
+
+fn key_split_top(child: &str, table: &str) -> RawVoiceGroup {
+    raw_group(
+        "top",
+        0,
+        vec![RawSlot::KeySplit {
+            child_label: child.to_owned(),
+            table_label: table.to_owned(),
+        }],
+    )
+}
+
+fn table_selecting(indices: Vec<u8>) -> HashMap<String, RawKeySplitTable> {
+    HashMap::from([(
+        "demo".to_owned(),
+        RawKeySplitTable {
+            starting_note: 0,
+            table: indices,
+        },
+    )])
+}
+
+fn sample_of(slot: &VoiceSlot) -> &str {
+    match slot {
+        VoiceSlot::DirectSound { sample_id, .. } => sample_id,
+        other => panic!("expected DirectSound, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_key_split_child_tail_index_selects_the_linked_successors_first_record() {
+    let raw = groups(vec![
+        key_split_top("kid", "demo"),
+        raw_group("kid", 0, vec![direct_sound("kid_0")]),
+        raw_group(
+            "successor",
+            0,
+            vec![direct_sound("linked_0"), direct_sound("linked_1")],
+        ),
+    ]);
+    let link_order = vec![
+        IndexedLinkOrderItem::VoiceGroup("top".to_owned()),
+        IndexedLinkOrderItem::ForeignInclude,
+        IndexedLinkOrderItem::VoiceGroup("kid".to_owned()),
+        IndexedLinkOrderItem::VoiceGroup("successor".to_owned()),
+    ];
+    let resolved = resolve_voice_groups_with_link_order(
+        "top",
+        &raw,
+        &table_selecting(vec![0, 1, 2]),
+        &link_order,
+    )
+    .unwrap();
+    let kid = resolved.iter().find(|g| g.label == "kid").unwrap();
+    assert_eq!(sample_of(&kid.slots[0]), "audio/sample/direct-sound/kid_0");
+    assert_eq!(
+        sample_of(&kid.slots[1]),
+        "audio/sample/direct-sound/linked_0"
+    );
+    assert_eq!(
+        sample_of(&kid.slots[2]),
+        "audio/sample/direct-sound/linked_1"
+    );
+    // Unselected tail indices stay silent.
+    assert_eq!(kid.slots[3], VoiceSlot::Empty);
+}
+
+#[test]
+fn key_split_child_tail_borrowing_stops_at_a_foreign_include_and_at_the_last_record() {
+    let raw = groups(vec![
+        key_split_top("kid", "demo"),
+        raw_group("kid", 0, vec![direct_sound("kid_0")]),
+        raw_group("beyond", 0, vec![direct_sound("beyond_0")]),
+    ]);
+    let link_order = vec![
+        IndexedLinkOrderItem::VoiceGroup("kid".to_owned()),
+        IndexedLinkOrderItem::ForeignInclude,
+        IndexedLinkOrderItem::VoiceGroup("beyond".to_owned()),
+        IndexedLinkOrderItem::VoiceGroup("top".to_owned()),
+    ];
+    let resolved =
+        resolve_voice_groups_with_link_order("top", &raw, &table_selecting(vec![1]), &link_order)
+            .unwrap();
+    let kid = resolved.iter().find(|g| g.label == "kid").unwrap();
+    assert_eq!(kid.slots[1], VoiceSlot::Empty);
+}
+
+#[test]
+fn a_borrowed_nested_indirection_record_stays_silent_in_a_key_split_child_tail() {
+    let raw = groups(vec![
+        key_split_top("kid", "demo"),
+        raw_group("kid", 0, vec![direct_sound("kid_0")]),
+        raw_group(
+            "successor",
+            0,
+            vec![
+                RawSlot::Rhythm {
+                    child_label: "kid".to_owned(),
+                },
+                direct_sound("linked_1"),
+            ],
+        ),
+    ]);
+    let link_order = vec![
+        IndexedLinkOrderItem::VoiceGroup("kid".to_owned()),
+        IndexedLinkOrderItem::VoiceGroup("successor".to_owned()),
+        IndexedLinkOrderItem::VoiceGroup("top".to_owned()),
+    ];
+    let resolved = resolve_voice_groups_with_link_order(
+        "top",
+        &raw,
+        &table_selecting(vec![1, 2]),
+        &link_order,
+    )
+    .unwrap();
+    let kid = resolved.iter().find(|g| g.label == "kid").unwrap();
+    assert_eq!(kid.slots[1], VoiceSlot::Empty);
+    assert_eq!(
+        sample_of(&kid.slots[2]),
+        "audio/sample/direct-sound/linked_1"
+    );
+}
+
+#[test]
+fn a_shared_key_split_child_accumulates_the_tail_indices_every_referrer_selects() {
+    let raw = groups(vec![
+        raw_group(
+            "top",
+            0,
+            vec![
+                RawSlot::KeySplit {
+                    child_label: "kid".to_owned(),
+                    table_label: "demo".to_owned(),
+                },
+                RawSlot::KeySplit {
+                    child_label: "kid".to_owned(),
+                    table_label: "other".to_owned(),
+                },
+            ],
+        ),
+        raw_group("kid", 0, vec![direct_sound("kid_0")]),
+        raw_group(
+            "successor",
+            0,
+            vec![direct_sound("linked_0"), direct_sound("linked_1")],
+        ),
+    ]);
+    let mut tables = table_selecting(vec![1]);
+    tables.insert(
+        "other".to_owned(),
+        RawKeySplitTable {
+            starting_note: 0,
+            table: vec![2],
+        },
+    );
+    let link_order = vec![
+        IndexedLinkOrderItem::VoiceGroup("kid".to_owned()),
+        IndexedLinkOrderItem::VoiceGroup("successor".to_owned()),
+        IndexedLinkOrderItem::VoiceGroup("top".to_owned()),
+    ];
+    let resolved = resolve_voice_groups_with_link_order("top", &raw, &tables, &link_order).unwrap();
+    let kid = resolved.iter().find(|g| g.label == "kid").unwrap();
+    assert_eq!(
+        sample_of(&kid.slots[1]),
+        "audio/sample/direct-sound/linked_0"
+    );
+    assert_eq!(
+        sample_of(&kid.slots[2]),
+        "audio/sample/direct-sound/linked_1"
+    );
+}

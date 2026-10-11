@@ -80,6 +80,34 @@ fn fine_releases_a_tied_voice_and_the_song_finishes() {
 }
 
 #[test]
+fn reserved_xcmd_kinds_release_a_tied_voice() {
+    // `ply_xxx` is `ply_fine` (`m4a_tables.c:293`, `:296`).
+    for kind in [0, 3] {
+        let track = vec![
+            Event::Voice(0),
+            Event::Volume(127),
+            Event::Note {
+                key: 60,
+                velocity: 127,
+                gate: 0,
+            },
+            Event::Wait(2),
+            Event::Xcmd { kind, value: 0 },
+            Event::Wait(100),
+        ];
+        let mut seq = Sequencer::new(held_note_song(track));
+        let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
+        seq.render_frame(&mut out);
+        assert_eq!(seq.voice_count(), 1, "kind {kind}");
+        for _ in 0..4 {
+            seq.render_frame(&mut out);
+        }
+        assert_eq!(seq.voice_count(), 0, "kind {kind}");
+        assert!(seq.is_finished(), "kind {kind}");
+    }
+}
+
+#[test]
 fn eof_without_fine_releases_a_tied_voice_and_the_song_finishes() {
     // VOICE 0; TIE key60 vel127 (gate 0); W02 -- no trailing FINE.
     let bytes = [0xBD, 0x00, 0xCF, 60, 127, 0x82];

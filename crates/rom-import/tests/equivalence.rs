@@ -41,7 +41,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use assets::Song;
+use assets::{Song, VoiceEntry, VoiceGroup};
 use pack_format::{parse_directory, DirectoryEntry, EntryKind, OUTPUT_RELATIVE_PATH};
 
 /// The environment variable naming the ROM to import.
@@ -95,6 +95,10 @@ fn the_rom_backend_matches_the_checkout_pack() {
     let imported = index(&rom_bytes, "the imported pack");
     let checkout = index(&checkout_bytes, "the checkout pack");
 
+    // Equal packs are not enough: both backends once dropped the same note.
+    assert_title_key_33_plays_the_trumpet(&rom_bytes, &imported, "the imported pack");
+    assert_title_key_33_plays_the_trumpet(&checkout_bytes, &checkout, "the checkout pack");
+
     let reviewed: BTreeMap<&str, &str> = REVIEWED_DIFFERENCES.iter().copied().collect();
     let mut differences = Vec::new();
 
@@ -134,6 +138,51 @@ fn the_rom_backend_matches_the_checkout_pack() {
         differences.is_empty(),
         "{} entry difference(s) between the ROM backend and the checkout pack",
         differences.len()
+    );
+}
+
+/// `mus_title.mid` plays key 33 on program 48 (channel 2, tick 2160). That is
+/// the strings key split, whose label sits 36 bytes before its data
+/// (`pokeemerald/asm/macros/m4a.inc:25-32`), so key 33 reads the final byte of
+/// piano's table, child 3 (`pokeemerald/sound/keysplit_tables.inc:13-22`). The
+/// strings group declares three records, and the next linked record is
+/// trumpet's first (`pokeemerald/sound/voice_groups.inc:11-12`).
+/// Asserted per pack, against upstream's own reads, so two packs that agree
+/// on the same omission still fail.
+fn assert_title_key_33_plays_the_trumpet(
+    pack_bytes: &[u8],
+    entries: &BTreeMap<String, DirectoryEntry>,
+    what: &str,
+) {
+    const STRINGS_PROGRAM: usize = 48;
+    const PLAYED_KEY: usize = 33;
+    const EXPECTED_CHILD: u8 = 3;
+    let voicegroup = |id: &str| {
+        let entry = entries
+            .get(id)
+            .unwrap_or_else(|| panic!("{what} has no {id}"));
+        VoiceGroup::decode(&pack_bytes[entry.offset..entry.offset + entry.length])
+            .unwrap_or_else(|err| panic!("{what}'s {id} does not decode: {err}"))
+    };
+    let title = voicegroup("audio/voicegroup/title");
+    let Some(VoiceEntry::KeySplit(split)) = title.slot(STRINGS_PROGRAM) else {
+        panic!("{what}: title program {STRINGS_PROGRAM} is not a key split");
+    };
+    let offset = PLAYED_KEY
+        .checked_sub(usize::from(split.starting_note))
+        .unwrap_or_else(|| panic!("{what}: the strings split does not reach key {PLAYED_KEY}"));
+    assert_eq!(
+        split.table().get(offset).copied(),
+        Some(EXPECTED_CHILD),
+        "{what}: key {PLAYED_KEY} must select child {EXPECTED_CHILD}"
+    );
+    let strings = voicegroup(&split.children.0);
+    let Some(VoiceEntry::DirectSound(trumpet)) = strings.slot(usize::from(EXPECTED_CHILD)) else {
+        panic!("{what}: strings child {EXPECTED_CHILD} is not a DirectSound voice");
+    };
+    assert_eq!(
+        trumpet.sample.0,
+        "audio/sample/direct-sound/sc88pro_trumpet_60"
     );
 }
 

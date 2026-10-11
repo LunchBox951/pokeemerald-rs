@@ -166,6 +166,30 @@ fn zero_repeat_count_closes_a_finite_event_loop() {
 }
 
 #[test]
+fn repeat_count_one_ignores_an_invalid_target() {
+    let bytes = [0xb5, 1, 0xff, 0xff, 0xff, 0xff, 0xbd, 3, 0xb1];
+    assert_eq!(
+        decode_track(&bytes).unwrap(),
+        [Event::Voice(3), Event::Fine]
+    );
+}
+
+#[test]
+fn taken_repeats_reject_an_invalid_target() {
+    for count in [0u8, 2] {
+        let bytes = [0xb5, count, 0xff, 0xff, 0xff, 0xff, 0xbd, 3, 0xb1];
+        assert_eq!(
+            decode_track(&bytes),
+            Err(super::DecodeError::UnresolvedJump {
+                offset: 0,
+                target: u32::MAX,
+            }),
+            "count {count}"
+        );
+    }
+}
+
+#[test]
 fn fourth_nested_pattern_ends_the_track() {
     let bytes = [0xb3, 0, 0, 0, 0, 0xd0, 60, 90, 0xb1];
     assert_eq!(decode_track(&bytes).unwrap(), [Event::Fine]);
@@ -261,4 +285,28 @@ fn a_taken_branch_to_an_eventless_tail_has_a_terminal_target() {
     };
     assert_eq!(events[1], Event::Fine);
     assert_eq!(events[target], Event::Fine);
+}
+
+#[test]
+fn reserved_xcmd_kinds_terminate_before_a_following_note() {
+    for kind in [0u8, 3] {
+        let bytes = [0xbd, 0, 0xbe, 127, 0xcd, kind, 0xd0, 60, 127, 0x81, 0xb1];
+        assert_eq!(
+            decode_track(&bytes).unwrap(),
+            [Event::Voice(0), Event::Volume(127), Event::Fine],
+            "kind {kind}"
+        );
+    }
+}
+
+#[test]
+fn reserved_xcmd_kinds_make_a_truncated_suffix_unreachable() {
+    for kind in [0u8, 3] {
+        let bytes = [0xbd, 0, 0xbe, 127, 0xcd, kind, 0xbd];
+        assert_eq!(
+            decode_track(&bytes).unwrap(),
+            [Event::Voice(0), Event::Volume(127), Event::Fine],
+            "kind {kind}"
+        );
+    }
 }

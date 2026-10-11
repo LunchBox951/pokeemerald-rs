@@ -33,8 +33,8 @@
 //!
 //! Cross-song SFX priority/interruption and compressed or reversed
 //! DirectSound waves are not implemented. Single-song voice allocation is
-//! implemented. `PORT` and `XCMD` commands other than `xIECV`/`xIECL` are
-//! decoded but not executed.
+//! implemented. `PORT` and `XCMD` commands other than `xIECV`/`xIECL` and
+//! the terminal reserved kinds 0 and 3 are decoded but not executed.
 
 // M4A documentation uses hardware names and upstream symbols in prose;
 // repetitive backticks obscure the explanation. Related volume and pitch

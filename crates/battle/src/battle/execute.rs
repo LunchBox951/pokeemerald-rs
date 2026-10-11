@@ -10,6 +10,7 @@ use crate::damage::{
     apply_damage_roll, base_damage, BattleRng, DamageInput, MoveCategory, Weather, STRUGGLE,
 };
 use crate::defense_curl::is_defense_curl_effect;
+use crate::dex::Dex;
 use crate::drain::is_drain_effect;
 use crate::error::BattleError;
 use crate::fixed_damage::is_fixed_damage_effect;
@@ -37,8 +38,11 @@ mod pipelines;
 /// `src/battle_util.c:2159`).
 const CONFUSION_SELF_HIT_POWER: u8 = 40;
 
+/// Validates a move for one pipeline, returning that pipeline's own error.
+type MoveValidator = fn(&Dex, MoveId) -> Result<(), BattleError>;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MovePipeline {
+pub(super) enum MovePipeline {
     StatChange,
     Drain,
     FixedDamage,
@@ -51,25 +55,47 @@ enum MovePipeline {
 }
 
 impl MovePipeline {
-    fn for_admitted_effect(effect: MoveEffect) -> Self {
+    /// Classifies `move_id` into the one pipeline that can execute it.
+    ///
+    /// Admission ([`super::ensure_executable`]) and dispatch
+    /// ([`Battle::execute_move`]) both use this, so a move is admitted exactly
+    /// when dispatch has a pipeline for it.
+    ///
+    /// # Errors
+    ///
+    /// Returns the ordinary-hit validation error when the selected pipeline
+    /// rejects the move, matching the error admission has always reported.
+    pub(super) fn for_move(dex: &Dex, move_id: MoveId) -> Result<Self, BattleError> {
+        let effect = dex.move_data(move_id)?.effect;
+        let (pipeline, validate) = Self::candidate_for_effect(effect);
+        validate(dex, move_id).map(|()| pipeline).map_err(|error| {
+            crate::hit::ensure_resolvable(dex, move_id)
+                .err()
+                .unwrap_or(error)
+        })
+    }
+
+    /// Pairs an effect with its candidate pipeline and that pipeline's
+    /// validator. The fallback is only a candidate; `for_move` validates it.
+    fn candidate_for_effect(effect: MoveEffect) -> (Self, MoveValidator) {
         if is_stat_change_effect(effect) {
-            Self::StatChange
+            (Self::StatChange, crate::stat_change::ensure_resolvable)
         } else if is_drain_effect(effect) {
-            Self::Drain
+            (Self::Drain, crate::drain::ensure_resolvable)
         } else if is_fixed_damage_effect(effect) {
-            Self::FixedDamage
+            (Self::FixedDamage, crate::fixed_damage::ensure_resolvable)
         } else if is_multi_hit_effect(effect) {
-            Self::MultiHit
+            (Self::MultiHit, crate::multi_hit::ensure_resolvable)
         } else if is_flag_move_effect(effect) {
-            Self::Flag
+            (Self::Flag, crate::flag_move::ensure_resolvable)
         } else if is_defense_curl_effect(effect) {
-            Self::DefenseCurl
+            (Self::DefenseCurl, crate::defense_curl::ensure_resolvable)
         } else if is_paralyze_effect(effect) {
-            Self::Paralyze
+            (Self::Paralyze, crate::paralyze::ensure_resolvable)
         } else if is_confuse_effect(effect) {
-            Self::Confuse
+            (Self::Confuse, crate::confuse::ensure_resolvable)
         } else {
-            Self::OrdinaryHit
+            (Self::OrdinaryHit, crate::hit::ensure_resolvable)
         }
     }
 }
@@ -83,8 +109,7 @@ impl Battle {
         rng: &mut impl BattleRng,
         events: &mut Vec<BattleEvent>,
     ) -> Result<(), BattleError> {
-        let effect = self.dex.move_data(move_id)?.effect;
-        match MovePipeline::for_admitted_effect(effect) {
+        match MovePipeline::for_move(&self.dex, move_id)? {
             MovePipeline::StatChange => {
                 self.execute_stat_change_move(attacker_is_player, move_id, rng, events)
             }
@@ -656,5 +681,140 @@ impl Battle {
         } else {
             (&self.enemy, &self.player)
         }
+    }
+}
+
+#[cfg(test)]
+mod pipeline_agreement_tests {
+    use assets::{MoveId, MOVES_COUNT};
+
+    use super::*;
+    use crate::damage::STRUGGLE;
+
+    /// Independent expectation: every supported effect and its pipeline.
+    /// Effects absent here are unsupported.
+    const EXPECTED: &[(&[u8], MovePipeline)] = &[
+        (
+            &[
+                10, 11, 13, 16, 18, 19, 20, 23, 24, 50, 51, 52, 53, 54, 58, 59, 60, 62,
+            ],
+            MovePipeline::StatChange,
+        ),
+        (&[3], MovePipeline::Drain),
+        (&[41, 87, 130], MovePipeline::FixedDamage),
+        (&[29], MovePipeline::MultiHit),
+        (&[47, 85, 174], MovePipeline::Flag),
+        (&[156], MovePipeline::DefenseCurl),
+        (&[67], MovePipeline::Paralyze),
+        (&[49], MovePipeline::Confuse),
+        (
+            &[
+                0, 2, 12, 14, 15, 17, 21, 22, 43, 55, 56, 61, 63, 64, 74, 76, 78, 96, 103, 110,
+                131, 141, 163,
+            ],
+            MovePipeline::OrdinaryHit,
+        ),
+    ];
+
+    fn expected_pipeline(effect: MoveEffect) -> Option<MovePipeline> {
+        let mut found = EXPECTED
+            .iter()
+            .filter(|(effects, _)| effects.contains(&effect.0))
+            .map(|(_, pipeline)| *pipeline);
+        let first = found.next();
+        assert!(found.next().is_none(), "effect {effect:?} listed twice");
+        first
+    }
+
+    /// Independent admission oracle: accepts a move when the ordinary-hit gate or any
+    /// specialized pipeline gate accepts it, and otherwise reports the ordinary-hit
+    /// error. It shares no code with the classifier, so a change to either side fails
+    /// the agreement test.
+    fn oracle_ensure_executable(dex: &Dex, move_id: MoveId) -> Result<(), BattleError> {
+        match crate::hit::ensure_resolvable(dex, move_id) {
+            Ok(()) => Ok(()),
+            Err(hit_error) => {
+                let accepted = crate::stat_change::ensure_resolvable(dex, move_id).is_ok()
+                    || crate::drain::ensure_resolvable(dex, move_id).is_ok()
+                    || crate::fixed_damage::ensure_resolvable(dex, move_id).is_ok()
+                    || crate::multi_hit::ensure_resolvable(dex, move_id).is_ok()
+                    || crate::flag_move::ensure_resolvable(dex, move_id).is_ok()
+                    || crate::defense_curl::ensure_resolvable(dex, move_id).is_ok()
+                    || crate::paralyze::ensure_resolvable(dex, move_id).is_ok()
+                    || crate::confuse::ensure_resolvable(dex, move_id).is_ok();
+                if accepted {
+                    Ok(())
+                } else {
+                    Err(hit_error)
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_effect_maps_to_the_expected_pipeline() {
+        for raw in u8::MIN..=u8::MAX {
+            let effect = MoveEffect(raw);
+            let candidate = MovePipeline::candidate_for_effect(effect).0;
+            // Unsupported effects fall back to the ordinary-hit candidate,
+            // which then rejects them in `for_move`.
+            assert_eq!(
+                candidate,
+                expected_pipeline(effect).unwrap_or(MovePipeline::OrdinaryHit),
+                "effect {effect:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn admission_and_dispatch_agree_for_every_move() {
+        let dex = Dex::new();
+        let mut admitted = 0_usize;
+        for raw in 0..MOVES_COUNT {
+            let move_id = MoveId(u16::try_from(raw).expect("move id fits u16"));
+            let effect = dex.move_data(move_id).expect("known move").effect;
+            let classified = MovePipeline::for_move(&dex, move_id);
+            assert_eq!(
+                crate::battle::ensure_executable(&dex, move_id),
+                oracle_ensure_executable(&dex, move_id),
+                "{move_id:?}"
+            );
+            assert_eq!(
+                classified.map(|_| ()),
+                oracle_ensure_executable(&dex, move_id),
+                "{move_id:?}"
+            );
+            if let Ok(pipeline) = classified {
+                admitted += 1;
+                let expected = if move_id == STRUGGLE {
+                    MovePipeline::OrdinaryHit
+                } else {
+                    expected_pipeline(effect).expect("admitted effect is listed")
+                };
+                assert_eq!(pipeline, expected, "{move_id:?}");
+            } else if move_id != STRUGGLE {
+                assert!(
+                    expected_pipeline(effect).is_none()
+                        || dex.move_data(move_id).expect("known move").power == 0
+                        || dex
+                            .move_data(move_id)
+                            .expect("known move")
+                            .move_type
+                            .battle_type()
+                            .is_none(),
+                    "{move_id:?} has a supported effect but is refused"
+                );
+            }
+        }
+        assert!(admitted > 0);
+    }
+
+    #[test]
+    fn unknown_move_is_refused() {
+        let dex = Dex::new();
+        assert!(matches!(
+            MovePipeline::for_move(&dex, MoveId(60_000)),
+            Err(BattleError::UnknownMove(_))
+        ));
     }
 }
