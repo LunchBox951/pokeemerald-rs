@@ -836,6 +836,22 @@ fn with_audio_pack<T>(
     mutate: impl FnOnce(&mut Vec<u8>),
     body: impl FnOnce(&Context<'_>) -> T,
 ) -> T {
+    let entry = voicegroup.map(|payload| {
+        pack_format::raw_entry("audio/voicegroup/title".to_owned(), payload.to_vec())
+    });
+    with_audio_pack_entry(name, songs, song_payload, entry, mutate, body)
+}
+
+/// [`with_audio_pack`] with the `audio/voicegroup/title` entry given whole,
+/// so a test can choose its kind.
+fn with_audio_pack_entry<T>(
+    name: &str,
+    songs: &[&str],
+    song_payload: &[u8],
+    voicegroup: Option<pack_format::PackEntry>,
+    mutate: impl FnOnce(&mut Vec<u8>),
+    body: impl FnOnce(&Context<'_>) -> T,
+) -> T {
     let pcm: Vec<u8> = (0..64u32)
         .map(|index| u8::try_from((index * 43 + 7) % 199).expect("modulo 199 fits in u8"))
         .collect();
@@ -855,11 +871,8 @@ fn with_audio_pack<T>(
             song_payload.to_vec(),
         ));
     }
-    if let Some(payload) = voicegroup {
-        writer.push(pack_format::raw_entry(
-            "audio/voicegroup/title".to_owned(),
-            payload.to_vec(),
-        ));
+    if let Some(entry) = voicegroup {
+        writer.push(entry);
     }
     let pack_path = dir.join("test.pack");
     std::fs::write(&pack_path, writer.finish().expect("pack")).expect("write pack");
@@ -966,6 +979,29 @@ fn a_voicegroup_entry_that_matches_the_rom_is_accepted() {
     let plan = locate_with_voicegroup("audio-voicegroup-match", Some(&title_voicegroup_payload()))
         .expect("the matching entry locates");
     assert_eq!(plan.voicegroups.len(), 1);
+}
+
+#[test]
+fn a_voicegroup_entry_of_the_wrong_kind_is_refused() {
+    // The matching payload, stored as an 8-bit image the runtime's raw()
+    // lookup rejects.
+    let payload = title_voicegroup_payload();
+    let width = u32::try_from(payload.len()).expect("payload fits in u32");
+    let entry = image_entry("audio/voicegroup/title".to_owned(), width, 1, 8, payload)
+        .expect("valid image entry");
+    let err = with_audio_pack_entry(
+        "audio-voicegroup-wrong-kind",
+        &["audio/song/mus_title"],
+        &title_song_payload(0),
+        Some(entry),
+        |_| {},
+        |ctx| audio::locate(ctx, &mut Vec::new()),
+    )
+    .expect_err("an image-kind voicegroup entry is refused");
+    assert!(
+        matches!(&err, GenRomProfileError::WrongPackEntryKind { id, .. } if id == "audio/voicegroup/title"),
+        "{err:?}"
+    );
 }
 
 #[test]

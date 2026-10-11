@@ -30,6 +30,7 @@
 use std::path::Path;
 
 use assets::audio::{DirectSoundSample, ProgrammableWave, Sample, Song, VoiceGroup};
+use pack_format::EntryKind;
 
 use crate::extract::midi::SONG_PACK_ID as SUPPORTED_SONG_ID;
 use crate::extract::voicegroups::parser::{RawSlot, RawVoiceGroup};
@@ -168,6 +169,7 @@ pub fn locate(
 /// # Errors
 ///
 /// [`GenRomProfileError::MissingPackEntry`] when a group has no pack entry;
+/// [`GenRomProfileError::WrongPackEntryKind`] when the entry is not raw;
 /// [`GenRomProfileError::EntryShape`] when the entry does not decode as a
 /// voicegroup; [`GenRomProfileError::StructMismatch`] when the ROM group
 /// cannot be read or differs from the pack's.
@@ -180,9 +182,15 @@ fn check_voicegroups(ctx: &Context<'_>, plan: &AudioPlan) -> Result<(), GenRomPr
             id: id.clone(),
             reason,
         };
-        let payload = &ctx.pack.get(id)?.payload;
+        let asset = ctx.pack.get(id)?;
+        if asset.kind != EntryKind::Raw {
+            return Err(GenRomProfileError::WrongPackEntryKind {
+                id: id.clone(),
+                expected: "raw",
+            });
+        }
         let expected =
-            VoiceGroup::decode(payload).map_err(|err| GenRomProfileError::EntryShape {
+            VoiceGroup::decode(&asset.payload).map_err(|err| GenRomProfileError::EntryShape {
                 id: id.clone(),
                 reason: err.to_string(),
             })?;
