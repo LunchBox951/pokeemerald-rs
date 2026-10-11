@@ -104,10 +104,7 @@ fn a_defense_already_at_the_maximum_stage_reports_capped_and_unchanged() {
 
 #[test]
 fn resolving_defense_curl_does_not_set_its_own_volatile() {
-    // `resolve_defense_curl_move` takes `attacker` by shared reference and
-    // never touches `Volatiles`: the caller writes
-    // `Volatiles::set_defense_curl` itself, before applying this outcome
-    // (this module's docs).
+    // The caller, not the resolver, sets the volatile.
     let dex = Dex::new();
     let attacker = mon(&dex, vec![DEFENSE_CURL]);
     let _ = resolve_defense_curl_move(&dex, DEFENSE_CURL, &attacker).unwrap();

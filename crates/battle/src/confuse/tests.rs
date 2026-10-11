@@ -31,19 +31,13 @@ fn mon(dex: &Dex, species: SpeciesId, level: u8, moves: Vec<MoveId>) -> BattlePo
     .unwrap()
 }
 
-/// `MOVE_SUPERSONIC`: Normal, 55 accuracy.
 const SUPERSONIC: MoveId = MoveId::SUPERSONIC;
-/// `MOVE_CONFUSE_RAY`: Ghost, 100 accuracy.
 const CONFUSE_RAY: MoveId = MoveId::CONFUSE_RAY;
-/// `MOVE_SWEET_KISS`: Normal, 75 accuracy.
 const SWEET_KISS: MoveId = MoveId::SWEET_KISS;
-/// `MOVE_TACKLE`, outside the family.
 const TACKLE: MoveId = MoveId::TACKLE;
 const UNKNOWN_MOVE: MoveId = MoveId(60_000);
 
-/// `SPECIES_ZIGZAGOON`, an ordinary non-immune target.
 const ZIGZAGOON: SpeciesId = SpeciesId(288);
-/// `SPECIES_WURMPLE`, an ordinary attacker.
 const WURMPLE: SpeciesId = SpeciesId(290);
 /// `SPECIES_SPINDA`: Own Tempo in its only ability slot.
 const SPINDA: SpeciesId = SpeciesId(308);
@@ -132,7 +126,7 @@ fn a_missed_accuracy_check_still_costs_its_one_draw() {
     let dex = Dex::new();
     let attacker = mon(&dex, WURMPLE, 10, vec![SWEET_KISS]);
     let defender = mon(&dex, ZIGZAGOON, 10, vec![TACKLE]);
-    // Sweet Kiss's 75 accuracy: roll 96 (95 % 100 + 1) exceeds the threshold.
+    // Roll 96 (95 % 100 + 1) exceeds Sweet Kiss's 75 accuracy.
     let mut rng = SequenceRng::new([95]);
     let outcome = resolve_confuse_move(&dex, SWEET_KISS, &attacker, &defender, &mut rng).unwrap();
     assert_eq!(outcome, ConfuseOutcome::Miss);
