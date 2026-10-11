@@ -517,6 +517,11 @@ pub(super) fn sync_shed_parents(created: &mut [CreatedDirectory], dest: &dest::D
 }
 
 /// [`sync_shed_parents`] with the `fsync` injected, so a test can count it.
+///
+/// The climb matches each level by its identity rather than counting one
+/// `..` per record: a level another creator made in between is no record,
+/// and counting would sync that level's child in place of the shed one's
+/// parent.
 #[cfg(unix)]
 fn sync_shed_parents_with(
     created: &mut [CreatedDirectory],
@@ -526,31 +531,60 @@ fn sync_shed_parents_with(
     let Some(lowest) = created.iter().position(|level| level.parent.is_none()) else {
         return;
     };
+    let Ok(mut here) = dest.identity() else {
+        return;
+    };
     let mut above: Option<std::os::fd::OwnedFd> = None;
     for index in (lowest..created.len()).rev() {
-        let parent = loop {
-            let opened = match &above {
-                None => dest.open_parent_for_sync(),
-                Some(fd) => dest::open_parent_for_sync(fd),
+        while !same_directory_identity(&here, &created[index].identity) {
+            let Ok((parent, identity)) = open_parent_shedding_pins(created, dest, above.as_ref())
+            else {
+                return;
             };
-            match opened {
-                Err(source)
-                    if is_out_of_descriptors_io(&source)
-                        && created
-                            .iter_mut()
-                            .rev()
-                            .any(|level| level.own.take().is_some()) => {}
-                result => break result,
+            // `..` of the root is the root: the level is off this chain.
+            if same_directory_identity(&identity, &here) {
+                return;
             }
-        };
-        let Ok(parent) = parent else {
+            here = identity;
+            above = Some(parent);
+        }
+        let Ok((parent, identity)) = open_parent_shedding_pins(created, dest, above.as_ref())
+        else {
             return;
         };
         if created[index].parent.is_none() {
             fsync(&parent);
         }
+        here = identity;
         above = Some(parent);
     }
+}
+
+/// Opens and stats the parent of `above`, or of `dest` when `above` is
+/// `None`, releasing the levels' own pins while descriptors run out.
+#[cfg(unix)]
+fn open_parent_shedding_pins(
+    created: &mut [CreatedDirectory],
+    dest: &dest::Dest,
+    above: Option<&std::os::fd::OwnedFd>,
+) -> io::Result<(std::os::fd::OwnedFd, rustix::fs::Stat)> {
+    let parent = loop {
+        let opened = match above {
+            None => dest.open_parent_for_sync(),
+            Some(fd) => dest::open_parent_for_sync(fd),
+        };
+        match opened {
+            Err(source)
+                if is_out_of_descriptors_io(&source)
+                    && created
+                        .iter_mut()
+                        .rev()
+                        .any(|level| level.own.take().is_some()) => {}
+            result => break result?,
+        }
+    };
+    let identity = rustix::fs::fstat(&parent)?;
+    Ok((parent, identity))
 }
 
 /// Syncs the parent of each created level, outermost first, so a crash

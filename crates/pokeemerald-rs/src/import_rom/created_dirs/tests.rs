@@ -697,3 +697,49 @@ fn acquiring_the_destination_under_three_free_descriptors_keeps_the_parent_sync(
         "the new level's parent entry must be synced"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn a_shed_parent_past_a_raced_level_is_synced_not_its_child() {
+    // `base/a/x/b`: this run makes `a` and `b`, another creator makes `x` in
+    // between, and acquisition then sheds `a`'s pins. `a`'s entry lives in
+    // `base`, so `base` is the directory to sync for it.
+    let dir = TempDir::new("shed-parent-gap");
+    let a = dir.join("a");
+    let x = a.join("x");
+    let target = x.join("b");
+    let mut raced = false;
+    let creation = super::create_directories_pinned_with_hooks(
+        &target,
+        super::pin_budget(),
+        &mut || {},
+        &mut || {
+            if !raced {
+                raced = true;
+                std::fs::create_dir(&x).expect("the other creator makes x");
+            }
+            None
+        },
+        &mut || None,
+    )
+    .expect("the destination is created");
+    let mut created = creation.created;
+    assert_eq!(created.len(), 2, "only a and b are this run's");
+    let dest = super::super::acquire_dest(&mut created, &target, creation.final_directory.as_ref())
+        .expect("the destination opens through the pin");
+    drop(creation.final_directory);
+    // What acquisition's `open_shedding_pins` does to the outermost level.
+    created[0].parent = None;
+    created[0].own = None;
+    let mut synced = Vec::new();
+    super::sync_shed_parents_with(&mut created, &dest, &mut |parent| {
+        let stat = rustix::fs::fstat(parent).expect("parent stats");
+        synced.push((stat.st_dev, stat.st_ino));
+    });
+    let base = rustix::fs::stat(&dir.path).expect("base stats");
+    assert_eq!(
+        synced,
+        [(base.st_dev, base.st_ino)],
+        "a's entry is in base, so base is what must be synced"
+    );
+}
