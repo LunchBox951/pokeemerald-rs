@@ -75,6 +75,14 @@ pub enum GenRomProfileError {
         /// What went wrong, in the layout's own terms.
         reason: String,
     },
+    /// The ROM's decoded song tracks differ from the pack's song payload,
+    /// or cannot be decoded at all.
+    SongBytecodeMismatch {
+        /// The pack song id.
+        id: String,
+        /// What differed.
+        reason: String,
+    },
     /// The upstream `pokeemerald/` checkout is missing. The audio locators
     /// need its `sound/` sources for facts a ROM cannot carry: how many
     /// slots a voicegroup declares, and where a key-split table's data
@@ -162,6 +170,9 @@ impl fmt::Display for GenRomProfileError {
             }
             Self::StructMismatch { id, reason } => {
                 write!(f, "`{id}` does not resolve: {reason}")
+            }
+            Self::SongBytecodeMismatch { id, reason } => {
+                write!(f, "`{id}` track bytecode mismatch: {reason}")
             }
             Self::MissingUpstreamCheckout(path) => write!(
                 f,

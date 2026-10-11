@@ -651,15 +651,16 @@ fn locate_song(
 /// Decode the pack's song through the canonical wire schema and check the
 /// located `SongHeader` against it: track count, priority, and reverb.
 ///
-/// This corroborates the header only. Each track's byte-code is not decoded
-/// here; that decoder lives in `rom-import` and is not exported.
+/// It then decodes the ROM's track byte-code with `rom-import` and requires
+/// the canonical bytes to equal the pack payload exactly.
 ///
 /// # Errors
 ///
 /// [`GenRomProfileError::EntryShape`] naming `song_id` when the pack payload
 /// does not decode as a song, or whose voicegroup is not
 /// `audio/voicegroup/{voicegroup_label}`;
-/// [`GenRomProfileError::StructMismatch`] when the header disagrees.
+/// [`GenRomProfileError::StructMismatch`] when the header disagrees;
+/// [`GenRomProfileError::SongBytecodeMismatch`] when the tracks disagree.
 fn check_song_header(
     ctx: &Context<'_>,
     song_id: &str,
@@ -705,6 +706,22 @@ fn check_song_header(
             "the header reverb is {reverb:?}, the pack song's is {:?}",
             song.reverb()
         )));
+    }
+
+    let bytecode = |reason: String| GenRomProfileError::SongBytecodeMismatch {
+        id: song_id.to_owned(),
+        reason,
+    };
+    let ptr = rom_import::GbaPtr::new(header)
+        .ok_or_else(|| bytecode(format!("the header {header:08X} is outside the ROM")))?;
+    let reader = rom_import::RomReader::new(ctx.rom);
+    let decoded =
+        rom_import::decode_song_payload(&reader, SUPPORTED_SONG_ID, ptr, &song.voicegroup().0)
+            .map_err(|err| bytecode(format!("the ROM tracks do not decode: {err}")))?;
+    if decoded != ctx.pack.get(song_id)?.payload {
+        return Err(bytecode(
+            "the ROM's decoded tracks differ from the pack payload".to_owned(),
+        ));
     }
     Ok(())
 }

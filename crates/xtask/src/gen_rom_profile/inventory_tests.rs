@@ -6,10 +6,10 @@ use rom_import::fixture::RomFixture;
 
 use super::error::GenRomProfileError;
 use super::tests::with_context;
-use super::{fonts, inventory, layouts, locate_profile, text_window, tilesets, title};
+use super::{fonts, inventory, layouts, locate_profile, sprites, text_window, tilesets, title};
 use crate::extract::scope::{
-    layout_ids, text_window_ids, tileset_animation_ids, title_ids, FONTS, LAYOUTS,
-    TEXT_WINDOW_IMAGE_STEMS, TEXT_WINDOW_PALETTE_STEMS, TILESETS,
+    layout_ids, sprite_sheet_ids, text_window_ids, tileset_animation_ids, title_ids, FONTS,
+    LAYOUTS, TEXT_WINDOW_IMAGE_STEMS, TEXT_WINDOW_PALETTE_STEMS, TILESETS,
 };
 
 /// A placeholder for every fixed root; presence is all the preflight reads.
@@ -22,6 +22,12 @@ fn complete_inventory() -> Vec<PackEntry> {
         .chain(FONTS.iter().map(|font| font.pack_id.to_owned()))
         .chain(layout_ids())
         .chain(text_window_ids())
+        .chain(sprite_sheet_ids())
+        // Palettes stay so a sheet deletion is the only thing missing.
+        .chain(
+            ["brendan", "may", "npc_1", "npc_2", "npc_3", "npc_4"]
+                .map(|name| format!("sprite/palette/{name}")),
+        )
         .map(|id| raw_entry(id, vec![0]))
         .collect()
 }
@@ -46,6 +52,8 @@ fn assert_refused(label: &str, entries: Vec<PackEntry>, missing: &str, domain: &
             fonts::locate(ctx, &mut report).map(|_| ())
         } else if domain == "layouts" {
             layouts::locate(ctx, &mut report).map(|_| ())
+        } else if domain == "sprites" {
+            sprites::locate(ctx, &mut report).map(|_| ())
         } else if domain == "text_window" {
             text_window::locate(ctx, &mut report).map(|_| ())
         } else {
@@ -255,12 +263,65 @@ fn a_pack_missing_the_whole_animation_domain_is_refused() {
     );
 }
 
+#[test]
+fn the_sprite_sheet_inventory_matches_the_committed_profile() {
+    let mut expected: Vec<String> = rom_import::EMERALD_US_REV0
+        .roots
+        .sprites
+        .sheets
+        .iter()
+        .map(|sheet| sheet.id.to_owned())
+        .collect();
+    // No dedup: a duplicated profile id must surface as a mismatch.
+    expected.sort();
+    let mut actual = sprite_sheet_ids();
+    actual.sort();
+    assert_eq!(actual, expected);
+    assert_eq!(actual.len(), 133);
+}
+
+#[test]
+fn a_pack_missing_any_one_sprite_sheet_is_refused() {
+    for id in sprite_sheet_ids() {
+        let label = format!("no-{}", id.replace('/', "-"));
+        assert_refused(&label, without(&id), &id, "sprites");
+    }
+}
+
+#[test]
+fn a_pack_missing_a_player_sheet_is_refused() {
+    for id in [
+        "sprite/brendan/walking",
+        "sprite/may/walking",
+        "sprite/brendan/running",
+        "sprite/may/running",
+    ] {
+        assert_refused(
+            &format!("no-{}", id.replace('/', "-")),
+            without(id),
+            id,
+            "sprites",
+        );
+    }
+}
+
+#[test]
+fn a_pack_missing_the_whole_sprite_sheet_domain_is_refused() {
+    let mut entries = complete_inventory();
+    entries.retain(|e| !e.id.starts_with("sprite/") || e.id.starts_with("sprite/palette/"));
+    assert_refused("no-sprites", entries, &sprite_sheet_ids()[0], "sprites");
+}
+
 type Shape = fn(&str) -> bool;
 
 #[test]
 fn a_refused_generation_leaves_the_previous_module_untouched() {
     let rom = RomFixture::new().emerald_header().finish();
-    let shapes: [(&str, Shape); 3] = [
+    let shapes: [(&str, Shape); 5] = [
+        ("walk", |id| id == "sprite/brendan/walking"),
+        ("sheets", |id| {
+            id.starts_with("sprite/") && !id.contains("palette")
+        }),
         ("one", |id| id == "tileset/general/anim/water/7"),
         ("anim", |id| id.starts_with("tileset/general/anim/water/")),
         ("all", |id| id.contains("/anim/")),
