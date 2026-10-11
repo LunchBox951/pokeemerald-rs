@@ -10,13 +10,11 @@ use battle::{Battle, BattleEvent, BattleOutcome, Dex, PlayerAction, StatStage, S
 
 const TACKLE: MoveId = MoveId::TACKLE;
 
-/// `SPECIES_CHARMANDER`.
 const CHARMANDER: u16 = 4;
 /// `SPECIES_RATTATA`, the faster mover.
 const RATTATA: u16 = 19;
 /// `SPECIES_GASTLY`: Ghost/Poison, immune to Tackle.
 const GASTLY: u16 = 92;
-/// `SPECIES_ZIGZAGOON`.
 const ZIGZAGOON: u16 = 288;
 
 #[test]

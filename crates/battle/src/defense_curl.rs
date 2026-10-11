@@ -46,10 +46,10 @@ pub struct DefenseCurlOutcome {
 }
 
 /// Resolves Defense Curl's stat raise without mutating `attacker` or
-/// consuming RNG. The caller sets
-/// [`crate::volatile::Volatiles::set_defense_curl`] before handling the
-/// outcome: it raises the stage only when `capped` is false and otherwise
-/// emits `StatWontGoHigher` with the stage unchanged
+/// consuming RNG. The caller must set
+/// [`crate::volatile::Volatiles::set_defense_curl`] first, then apply
+/// `new_stage` only when `capped` is false and otherwise emit
+/// `StatWontGoHigher` with the stage unchanged
 /// (`pokeemerald/data/battle_scripts_1.s:2018`-`:2020`,
 /// `pokeemerald/src/battle_script_commands.c:8858`-`:8862`).
 ///
