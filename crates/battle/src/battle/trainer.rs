@@ -323,7 +323,8 @@ pub struct TrainerPartyMon<'a> {
 /// [`BattleError::UnknownTrainer`] for an unknown trainer, or the first
 /// member, AI-flag, or move validation error, or
 /// [`BattleError::AmbiguousPlayerAbility`] when `player_lead` has two ability
-/// slots (the trainer AI would otherwise guess its ability with RNG).
+/// slots and the trainer scores with `CheckBadMove` (the only script that
+/// reads the target's ability).
 pub fn ensure_trainer_party_startable(
     dex: &Dex,
     player_lead: &BattlePokemon,
@@ -343,7 +344,10 @@ pub fn ensure_trainer_party_startable(
             ensure_move_playable(dex, *move_id)?;
         }
     }
-    super::trainer_ai::ensure_target_ability_unambiguous(player_lead)
+    if data.ai_flags.contains(AiFlags::CHECK_BAD_MOVE) {
+        super::trainer_ai::ensure_target_ability_unambiguous(player_lead)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -576,6 +580,35 @@ mod tests {
             ),
             Err(crate::error::BattleError::UnknownTrainer(UNKNOWN_TRAINER))
         );
+    }
+
+    #[test]
+    fn a_flagless_trainer_admits_a_two_ability_lead() {
+        let dex = Dex::new();
+        let moves = [POUND];
+        let party = [TrainerPartyMon {
+            species: TREECKO,
+            level: ROUTE_103_RIVAL_LEVEL,
+            moves: &moves,
+        }];
+        assert_eq!(
+            trainer_data(TrainerId::JANI).unwrap().ai_flags,
+            assets::trainers::AiFlags::NONE
+        );
+        let voltorb = lead(VOLTORB);
+        assert_eq!(
+            ensure_trainer_party_startable(&dex, &voltorb, TrainerId::JANI, &party),
+            Ok(())
+        );
+        let mut rng = SequenceRng::new([0; 16]);
+        assert!(crate::battle::Battle::new_trainer(
+            Dex::new(),
+            voltorb,
+            TrainerId::JANI,
+            vec![lead(TREECKO)],
+            &mut rng,
+        )
+        .is_ok());
     }
 
     #[test]

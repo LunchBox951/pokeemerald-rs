@@ -403,12 +403,17 @@ impl Battle {
                 ),
         )?;
 
-        for target in std::iter::once(&player).chain(
-            player_reserves
-                .iter()
-                .filter(|reserve| !reserve.is_fainted()),
-        ) {
-            trainer_ai::ensure_target_ability_unambiguous(target)?;
+        if data
+            .ai_flags
+            .contains(assets::trainers::AiFlags::CHECK_BAD_MOVE)
+        {
+            for target in std::iter::once(&player).chain(
+                player_reserves
+                    .iter()
+                    .filter(|reserve| !reserve.is_fainted()),
+            ) {
+                trainer_ai::ensure_target_ability_unambiguous(target)?;
+            }
         }
 
         let enemy = party.remove(0);
