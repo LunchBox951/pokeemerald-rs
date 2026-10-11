@@ -348,7 +348,9 @@ impl Battle {
     /// [`BattleError::UnknownTrainer`] for an unknown trainer,
     /// [`BattleError::FaintedBattler`] for a fainted active battler, or the
     /// first AI, move, or ability validation error against the active member
-    /// or any non-fainted reserve. Errors leave the RNG untouched.
+    /// or any non-fainted reserve, including
+    /// [`BattleError::AmbiguousPlayerAbility`] for a two-ability player
+    /// member. Errors leave the RNG untouched.
     pub fn new_trainer_with_player_reserves(
         dex: Dex,
         player: BattlePokemon,
@@ -400,6 +402,14 @@ impl Battle {
                         .filter(|reserve| !reserve.is_fainted()),
                 ),
         )?;
+
+        for target in std::iter::once(&player).chain(
+            player_reserves
+                .iter()
+                .filter(|reserve| !reserve.is_fainted()),
+        ) {
+            trainer_ai::ensure_target_ability_unambiguous(target)?;
+        }
 
         let enemy = party.remove(0);
         let random_turn_number = initialize_turn_rng_state(&player, &enemy, rng);

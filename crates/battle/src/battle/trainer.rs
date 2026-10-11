@@ -321,9 +321,12 @@ pub struct TrainerPartyMon<'a> {
 ///
 /// Returns [`BattleError::EmptyTrainerParty`] for an empty party,
 /// [`BattleError::UnknownTrainer`] for an unknown trainer, or the first
-/// member, AI-flag, or move validation error.
+/// member, AI-flag, or move validation error, or
+/// [`BattleError::AmbiguousPlayerAbility`] when `player_lead` has two ability
+/// slots (the trainer AI would otherwise guess its ability with RNG).
 pub fn ensure_trainer_party_startable(
     dex: &Dex,
+    player_lead: &BattlePokemon,
     trainer: TrainerId,
     party: &[TrainerPartyMon<'_>],
 ) -> Result<(), BattleError> {
@@ -340,7 +343,7 @@ pub fn ensure_trainer_party_startable(
             ensure_move_playable(dex, *move_id)?;
         }
     }
-    Ok(())
+    super::trainer_ai::ensure_target_ability_unambiguous(player_lead)
 }
 
 #[cfg(test)]
@@ -465,6 +468,20 @@ mod tests {
         assert_eq!(money_value_for_class(TrainerClass::CHAMPION), 50);
     }
 
+    const VOLTORB: assets::SpeciesId = assets::SpeciesId(100);
+
+    fn lead(species: assets::SpeciesId) -> crate::pokemon::BattlePokemon {
+        crate::pokemon::BattlePokemon::new(
+            &Dex::new(),
+            species,
+            ROUTE_103_RIVAL_LEVEL,
+            fixed_ivs(0),
+            0,
+            vec![POUND],
+        )
+        .expect("a valid lead")
+    }
+
     #[test]
     fn ensure_trainer_party_startable_accepts_a_real_constructible_party() {
         let dex = Dex::new();
@@ -472,6 +489,7 @@ mod tests {
         assert_eq!(
             ensure_trainer_party_startable(
                 &dex,
+                &lead(TREECKO),
                 MAY_ROUTE_103_MUDKIP,
                 &[TrainerPartyMon {
                     species: TREECKO,
@@ -489,6 +507,7 @@ mod tests {
         let moves = [HARDEN];
         let screened = ensure_trainer_party_startable(
             &dex,
+            &lead(TREECKO),
             MAY_ROUTE_103_MUDKIP,
             &[TrainerPartyMon {
                 species: TREECKO,
@@ -538,7 +557,7 @@ mod tests {
     fn the_pre_flight_rejects_an_empty_party_and_an_unknown_trainer() {
         let dex = Dex::new();
         assert_eq!(
-            ensure_trainer_party_startable(&dex, MAY_ROUTE_103_MUDKIP, &[]),
+            ensure_trainer_party_startable(&dex, &lead(TREECKO), MAY_ROUTE_103_MUDKIP, &[]),
             Err(crate::error::BattleError::EmptyTrainerParty(
                 MAY_ROUTE_103_MUDKIP
             ))
@@ -547,6 +566,7 @@ mod tests {
         assert_eq!(
             ensure_trainer_party_startable(
                 &dex,
+                &lead(TREECKO),
                 UNKNOWN_TRAINER,
                 &[TrainerPartyMon {
                     species: TREECKO,
@@ -556,6 +576,38 @@ mod tests {
             ),
             Err(crate::error::BattleError::UnknownTrainer(UNKNOWN_TRAINER))
         );
+    }
+
+    #[test]
+    fn the_pre_flight_refuses_a_two_ability_lead_before_any_draw() {
+        let dex = Dex::new();
+        let moves = [POUND];
+        let party = [TrainerPartyMon {
+            species: TREECKO,
+            level: ROUTE_103_RIVAL_LEVEL,
+            moves: &moves,
+        }];
+        for slot in [0, 1] {
+            let voltorb = lead(VOLTORB).with_ability_slot(slot);
+            let mut rng = SequenceRng::new([]);
+            assert_eq!(
+                ensure_trainer_party_startable(&dex, &voltorb, MAY_ROUTE_103_MUDKIP, &party),
+                Err(crate::error::BattleError::AmbiguousPlayerAbility(VOLTORB))
+            );
+            let refused = crate::battle::Battle::new_trainer(
+                Dex::new(),
+                voltorb,
+                MAY_ROUTE_103_MUDKIP,
+                vec![lead(TREECKO)],
+                &mut rng,
+            );
+            assert!(matches!(
+                refused,
+                Err(crate::error::BattleError::AmbiguousPlayerAbility(VOLTORB))
+            ));
+            assert_eq!(rng.draws(), 0);
+            rng.assert_exhausted();
+        }
     }
 
     #[test]
