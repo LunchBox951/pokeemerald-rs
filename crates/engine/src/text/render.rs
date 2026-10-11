@@ -137,6 +137,9 @@ impl TextSpeed {
 }
 
 /// A window-local pixel position.
+///
+/// Origins are unrestricted, so every cursor calculation saturates at the
+/// `i32` bounds instead of wrapping or panicking.
 pub type PixelPos = (i32, i32);
 
 /// A and B button state for one printer frame.
@@ -472,7 +475,7 @@ impl<S: GlyphSource> Printer<S> {
                 }
                 Token::Newline => {
                     self.cursor.0 = self.origin.0;
-                    self.cursor.1 += self.line_height;
+                    self.cursor.1 = self.cursor.1.saturating_add(self.line_height);
                     continue;
                 }
                 Token::PromptScroll => {
@@ -525,7 +528,7 @@ impl<S: GlyphSource> Printer<S> {
                 y: self.cursor.1,
                 glyph,
             };
-            self.cursor.0 += i32::from(glyph.advance_width);
+            self.cursor.0 = self.cursor.0.saturating_add(i32::from(glyph.advance_width));
             return TickEvent::Glyph(Box::new(placement));
         }
     }
@@ -555,12 +558,12 @@ impl<S: GlyphSource> Printer<S> {
             }
             ext_ctrl::SHIFT_RIGHT | ext_ctrl::SKIP => {
                 if let Some(&offset) = arguments.first() {
-                    self.cursor.0 = self.origin.0 + i32::from(offset);
+                    self.cursor.0 = self.origin.0.saturating_add(i32::from(offset));
                 }
             }
             ext_ctrl::SHIFT_DOWN => {
                 if let Some(&offset) = arguments.first() {
-                    self.cursor.1 = self.origin.1 + i32::from(offset);
+                    self.cursor.1 = self.origin.1.saturating_add(i32::from(offset));
                 }
             }
             // `text.c:1063-1072`: the argument is the width to erase from the
@@ -576,8 +579,8 @@ impl<S: GlyphSource> Printer<S> {
                 let Some(&column) = arguments.first() else {
                     return ControlOutcome::Repeat;
                 };
-                let target = self.origin.0 + i32::from(column);
-                return self.clear_span(target - self.cursor.0);
+                let target = self.origin.0.saturating_add(i32::from(column));
+                return self.clear_span(target.saturating_sub(self.cursor.0));
             }
             // `text.c:1052-1056`: fills the whole window and resets both
             // cursor axes to the printer origin, then repeats within the
@@ -606,7 +609,7 @@ impl<S: GlyphSource> Printer<S> {
             width,
             height: self.clear_height,
         });
-        self.cursor.0 += width;
+        self.cursor.0 = self.cursor.0.saturating_add(width);
         ControlOutcome::ClearedSpan
     }
 }
@@ -1104,6 +1107,105 @@ mod tests {
             None,
             "the span belongs to the tick that erased it"
         );
+    }
+
+    fn extreme_printer<'a>(
+        pixels: &'a [u8],
+        bytes: &[u8],
+        origin: PixelPos,
+    ) -> Printer<FontGlyphSheet<'a>> {
+        let sheet = synthetic_sheet(pixels, FontId::Normal);
+        Printer::new(decode_tokens(bytes), sheet, TextSpeed::Instant, origin)
+    }
+
+    #[test]
+    fn newline_saturates_y_at_the_i32_maximum() {
+        let pixels = blank_sheet_pixels();
+        let mut printer = extreme_printer(
+            &pixels,
+            &[super::super::CHAR_NEWLINE, ENCODED_A, super::super::EOS],
+            (0, i32::MAX - 1),
+        );
+        let TickEvent::Glyph(g) = printer.tick(PrinterInput::none()) else {
+            panic!("expected a glyph")
+        };
+        assert_eq!((g.x, g.y), (0, i32::MAX));
+    }
+
+    #[test]
+    fn glyph_advance_saturates_x_at_the_i32_maximum() {
+        let pixels = blank_sheet_pixels();
+        let mut printer = extreme_printer(
+            &pixels,
+            &[ENCODED_A, ENCODED_A, super::super::EOS],
+            (i32::MAX, 0),
+        );
+        assert!(matches!(
+            printer.tick(PrinterInput::none()),
+            TickEvent::Glyph(_)
+        ));
+        assert_eq!(printer.cursor(), (i32::MAX, 0));
+        let TickEvent::Glyph(g) = printer.tick(PrinterInput::none()) else {
+            panic!("expected a glyph")
+        };
+        assert_eq!(g.x, i32::MAX);
+    }
+
+    #[test]
+    fn shift_controls_saturate_at_the_i32_maximum() {
+        let pixels = blank_sheet_pixels();
+        let mut printer = extreme_printer(
+            &pixels,
+            &[
+                super::super::EXT_CTRL_CODE_BEGIN,
+                ext_ctrl::SHIFT_RIGHT,
+                255,
+                super::super::EXT_CTRL_CODE_BEGIN,
+                ext_ctrl::SHIFT_DOWN,
+                255,
+                ENCODED_A,
+                super::super::EOS,
+            ],
+            (i32::MAX - 10, i32::MAX - 10),
+        );
+        let TickEvent::Glyph(g) = printer.tick(PrinterInput::none()) else {
+            panic!("expected a glyph")
+        };
+        assert_eq!((g.x, g.y), (i32::MAX, i32::MAX));
+    }
+
+    #[test]
+    fn clear_saturates_the_cursor_at_the_i32_maximum() {
+        let pixels = blank_sheet_pixels();
+        let mut printer = extreme_printer(
+            &pixels,
+            &[
+                super::super::EXT_CTRL_CODE_BEGIN,
+                ext_ctrl::CLEAR,
+                255,
+                super::super::EOS,
+            ],
+            (i32::MAX - 10, 0),
+        );
+        assert_eq!(printer.tick(PrinterInput::none()), TickEvent::Idle);
+        assert_eq!(printer.cursor(), (i32::MAX, 0));
+    }
+
+    #[test]
+    fn clear_to_saturates_its_target_at_the_i32_maximum() {
+        let pixels = blank_sheet_pixels();
+        let mut printer = extreme_printer(
+            &pixels,
+            &[
+                super::super::EXT_CTRL_CODE_BEGIN,
+                ext_ctrl::CLEAR_TO,
+                255,
+                super::super::EOS,
+            ],
+            (i32::MAX - 10, 0),
+        );
+        assert_eq!(printer.tick(PrinterInput::none()), TickEvent::Idle);
+        assert_eq!(printer.cursor(), (i32::MAX, 0));
     }
 
     #[test]
