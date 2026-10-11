@@ -69,7 +69,6 @@ pub(super) fn canonicalize_waits(track: &[SongEvent]) -> Vec<SongEvent> {
     out
 }
 
-/// Chunk a run of adjacent waits as `255`-tick steps, remainder last.
 fn wait_run_chunks(ticks: impl Iterator<Item = u8>) -> impl Iterator<Item = SongEvent> {
     // A run of up to `u32::MAX` events (`Song::new`) can sum past `u32::MAX`.
     let mut total: u64 = ticks.map(u64::from).sum();
