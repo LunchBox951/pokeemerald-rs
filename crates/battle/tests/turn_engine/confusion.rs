@@ -531,9 +531,8 @@ fn psybeam_applies_confusion_after_its_own_hit_and_chance_draw() {
     let player = max_iv_mon(&dex, RATTATA, 5, vec![PSYBEAM]);
     let enemy = max_iv_mon(&dex, ZIGZAGOON, 5, vec![TACKLE]);
 
-    // Setup draws, Psybeam accuracy/crit/damage, the chance draw (residue 9),
-    // the duration (residue 0 -> 2), the confusion coin (residue 1 -> continue),
-    // then the enemy's Tackle.
+    // Setup draws, Psybeam's hit, the chance draw (residue 9), the duration
+    // (residue 0 -> 2), the coin (residue 1 -> continue), then Tackle.
     let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 9, 0, 1, 0, 1, 0, 0]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
