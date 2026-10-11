@@ -527,8 +527,8 @@ mod tests {
             "no staging file should exist after a failed create"
         );
         assert!(
-            !err.to_string().contains("abandoned staging file"),
-            "nothing was staged, so nothing was abandoned: {err}"
+            !err.to_string().contains("was left in place"),
+            "nothing was staged, so no staging file was left in place: {err}"
         );
 
         let _ = std::fs::remove_dir_all(dir);
