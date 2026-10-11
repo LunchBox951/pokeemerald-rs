@@ -58,10 +58,6 @@ const OPTIONS_TEXT_SPEED_MID: u8 = 1;
 
 /// This frame's pre-movement field-input decisions.
 pub(super) struct PreMovementFieldInput {
-    facing: Direction,
-    position: (i32, i32),
-    /// The pre-movement collision elevation, restored after a refused crossing.
-    elevation: u8,
     pub(super) arrow_trigger: Option<WarpTrigger>,
     /// The pre-movement animated-door check (issue #851): [`super::animated_door`]
     /// against the tile the player *faces*, not one they stand on -- see
@@ -496,8 +492,7 @@ impl OverworldPhase {
             // pre-movement facing: a one-frame Down tap on the doormat while
             // facing North only *turns* the player upstream, and reading the
             // post-turn facing here would warp on that same tap frame. The
-            // position is captured alongside for the same reason, and for
-            // restoring the stance a refused crossing has to undo. Every
+            // position is captured alongside for the same reason. Every
             // branch this resolves is a CB1 branch like the completed-step
             // work above it, in `ProcessPlayerFieldInput`'s own order.
             let pre = self.resolve_pre_movement_field_input(
@@ -522,6 +517,7 @@ impl OverworldPhase {
             // claimed fresh `START`, the pre-movement animated-door check
             // (issue #851), and every completed-step event above
             // (`landing_claimed`).
+            let pre_step_player = self.player;
             let outcome = advance_or_skip_for_preempt(
                 &mut self.player,
                 &mut self.pending_landing,
@@ -565,10 +561,7 @@ impl OverworldPhase {
             // Never coincides with `warp_fired`: a crossing leaves
             // `self.player.in_transit()` true, the same gate that already
             // makes the `warp_trigger` closure above return `None`.
-            self.finish_crossing(
-                outcome,
-                PlayerState::new(pre.position, pre.elevation, pre.facing),
-            );
+            self.finish_crossing(outcome, pre_step_player);
         } else {
             self.player.tick();
             if self.start_menu_may_open(buttons, false) {
@@ -619,7 +612,6 @@ impl OverworldPhase {
     ) -> PreMovementFieldInput {
         let facing = self.player.facing();
         let position = self.player.position();
-        let elevation = self.player.elevation();
         // `PlayerGetElevation()`'s retained `previousElevation`, not the
         // collision above -- every lookup below queries this (`field_player_avatar.c:1192-1195`).
         let previous_elevation = self.player.previous_elevation();
@@ -677,9 +669,6 @@ impl OverworldPhase {
             .flatten();
 
         PreMovementFieldInput {
-            facing,
-            position,
-            elevation,
             arrow_trigger,
             animated_door_trigger,
             interaction,
@@ -693,7 +682,7 @@ impl OverworldPhase {
     fn finish_crossing(
         &mut self,
         outcome: engine::overworld::StepOutcome,
-        pre_step_stance: PlayerState,
+        pre_step_player: PlayerState,
     ) {
         let Some((to_map, to_position)) =
             settle_outcome(&mut self.pending_turn, &self.player, outcome)
@@ -707,7 +696,7 @@ impl OverworldPhase {
             // map -- restore the pre-step stance instead, the same
             // "leaves the player exactly where they stood" contract
             // `warp_to` documents for its own failure cases.
-            self.player = pre_step_stance;
+            self.player = pre_step_player;
         }
     }
 

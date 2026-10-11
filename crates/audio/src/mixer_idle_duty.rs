@@ -184,9 +184,18 @@ fn a_note_on_a_slot_a_muted_voice_vacated_does_not_double_count_the_retirement_f
     const IDLE_FRAMES: usize = 3;
     const MAX_FRAMES_TO_RETIRE: usize = 32;
 
+    // Committing the trigger first matters: a pending trigger stopped
+    // before its first frame is cancelled and retires no hardware at all
+    // (`CgbVoice::begin_frame` marks it cancelled), which would leave the
+    // retirement frame unexercised.
+    let slot = CgbChannelNumber::Square1.slot();
+    let muted = committed_voice(cgb_muted_at_trigger_voice(TRACK, OVERFLOW_KEY));
+    assert!(muted.initial_trigger_committed());
+    assert!(muted.is_active());
+
     let mut occupied = Mixer::new(MAX_MASTER_VOLUME, 1);
     let mut retired = Mixer::new(MAX_MASTER_VOLUME, 1);
-    assert!(retired.add_cgb_voice(cgb_muted_at_trigger_voice(TRACK, OVERFLOW_KEY)));
+    assert!(retired.add_cgb_voice(muted.clone()));
     retired.note_off_track(TRACK, OVERFLOW_KEY);
 
     let mut occupied_out = vec![0.0; SAMPLES_PER_FRAME * 2];
@@ -201,8 +210,13 @@ fn a_note_on_a_slot_a_muted_voice_vacated_does_not_double_count_the_retirement_f
         if retired.cgb_voices()[CgbChannelNumber::Square1.slot()].is_none() {
             // The oracle idles through `stop_track`, which counts the frame
             // once, at the same vacated instant.
-            assert!(occupied.add_cgb_voice(cgb_muted_at_trigger_voice(TRACK, OVERFLOW_KEY)));
+            assert!(occupied.add_cgb_voice(muted.clone()));
             occupied.stop_track(TRACK);
+            assert!(occupied.cgb_voices()[slot].is_none());
+            for mixer in [&occupied, &retired] {
+                let hardware = mixer.idle_cgb_hardware[slot].as_ref().unwrap();
+                assert!(hardware.initial_trigger_committed());
+            }
         }
         occupied.mix_frame(&mut occupied_out);
         frames_to_retire += 1;
@@ -219,6 +233,8 @@ fn a_note_on_a_slot_a_muted_voice_vacated_does_not_double_count_the_retirement_f
             retired_out.iter().all(|&sample| sample == 0.0),
             "frame {frame}: a retired slot must render silence while idle"
         );
+        assert!(occupied.idle_cgb_hardware[slot].is_some());
+        assert!(retired.idle_cgb_hardware[slot].is_some());
     }
 
     assert!(occupied.add_cgb_voice(cgb_keyed_voice(TRACK, OVERFLOW_KEY)));
@@ -226,6 +242,7 @@ fn a_note_on_a_slot_a_muted_voice_vacated_does_not_double_count_the_retirement_f
 
     occupied.mix_frame(&mut occupied_out);
     retired.mix_frame(&mut retired_out);
+    assert!(occupied_out.iter().any(|&sample| sample != 0.0));
     assert_eq!(
         occupied_out, retired_out,
         "a note on a slot a muted voice vacated must not double-count the \

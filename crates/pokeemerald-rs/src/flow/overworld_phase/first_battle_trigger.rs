@@ -517,6 +517,12 @@ impl OverworldPhase {
             self.first_battle_outcome = Some(outcome);
             self.conclude_first_battle();
         }
+        if slot.is_none() {
+            // `CB2_EndFirstBattle` -> `CB2_ReturnToField` -> `InitMapView` ->
+            // `InitTilesetAnimations`: every emptied slot, abort included,
+            // restarts the tileset animation cadence.
+            self.reinit_field_tileset_animations();
+        }
         slot.map(ActiveBattle::First)
     }
 }

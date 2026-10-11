@@ -29,27 +29,8 @@ pub const APP_DATA_SUBDIRECTORY: &str = env!("POKEEMERALD_APP_DATA_SUBDIRECTORY"
 /// The pack's file name inside [`APP_DATA_SUBDIRECTORY`].
 const PACK_FILE_NAME: &str = "pokeemerald.pack";
 
-/// Which OS convention names the per-user data directory.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DataDirRule {
-    /// Linux and other Unix: `$XDG_DATA_HOME` if absolute, else
-    /// `$HOME/.local/share` if `$HOME` is absolute.
-    Xdg,
-    /// macOS: `$HOME/Library/Application Support` if `$HOME` is absolute.
-    MacOs,
-    /// Windows: `%APPDATA%` if absolute, else
-    /// `%USERPROFILE%\AppData\Roaming` if `%USERPROFILE%` is absolute.
-    Windows,
-}
-
-/// The rule for the host this binary was built for.
-const HOST_RULE: DataDirRule = if cfg!(windows) {
-    DataDirRule::Windows
-} else if cfg!(target_os = "macos") {
-    DataDirRule::MacOs
-} else {
-    DataDirRule::Xdg
-};
+/// The family for the host this binary was built for.
+const HOST_RULE: HostFamily = HostFamily::host();
 
 /// The OS user-data directory, or `None` when every root it could be built
 /// from is unset, empty, or not an absolute path (a daemon with a scrubbed
@@ -62,17 +43,14 @@ const HOST_RULE: DataDirRule = if cfg!(windows) {
 /// - Windows: `%APPDATA%` if absolute, else
 ///   `%USERPROFILE%\AppData\Roaming` if `%USERPROFILE%` is absolute.
 ///
-/// Deliberately the same three rules `engine::save::file::data_dir_for`
-/// resolves the save file with, down to the fallbacks: a player's pack and
-/// a player's save belong under one per-user directory, so the two
-/// resolvers disagreeing about where that is would split them across the
-/// disk in exactly the environments the fallbacks exist for.
+/// Resolved by [`data_dir_for`], the same function the save file uses: a
+/// player's pack and a player's save belong under one per-user directory.
 ///
 /// Hand-rolled from [`mod@std::env`] rather than taken from a crate
 /// `(minimal-deps)`: three rules is less code than a dependency review.
 #[must_use]
 pub fn user_data_dir() -> Option<PathBuf> {
-    data_dir(&std_env, HOST_RULE)
+    data_dir_for(HOST_RULE, std_env)
 }
 
 /// Where the ROM importer writes by default:
@@ -102,7 +80,7 @@ pub fn user_pack_path() -> Option<PathBuf> {
 /// candidate that cannot be examined at all — an unsearchable directory
 /// component, say — stops resolution and is returned, so the loader's error
 /// names the pack the player actually installed instead of silently
-/// reaching past it for another one. See [`Probe`].
+/// reaching past it for another one.
 ///
 /// Rung 4 always yields a path in a `dev` build, so a `dev` build's
 /// resolution never fails; the caller's own "no pack extracted yet"
@@ -116,7 +94,7 @@ pub fn user_pack_path() -> Option<PathBuf> {
 /// A non-`dev` build panics when no override is set, no user-data
 /// directory is known, and the running executable's own directory cannot
 /// be determined: the only candidate left would be relative to the
-/// process's current directory, the hazard [`is_absolute_xdg_path`]
+/// process's current directory, the hazard [`data_dir_for`]
 /// already refuses for a relative `$XDG_DATA_HOME`.
 #[must_use]
 pub fn default_pack_path() -> PathBuf {
@@ -200,14 +178,14 @@ fn resolve(
     env: &impl Fn(&str) -> Option<OsString>,
     exe_dir: Option<&Path>,
     probe: &impl Fn(&Path) -> Probe,
-    rule: DataDirRule,
+    rule: HostFamily,
 ) -> PathBuf {
     if let Some(value) = env(PACK_PATH_ENV) {
         if !value.is_empty() {
             return PathBuf::from(value);
         }
     }
-    if let Some(dir) = data_dir(env, rule) {
+    if let Some(dir) = data_dir_for(rule, env) {
         let candidate = dir.join(APP_DATA_SUBDIRECTORY).join(PACK_FILE_NAME);
         if RELEASE_CHANNEL != "dev" || probe(&candidate) != Probe::Missing {
             return candidate;
@@ -231,23 +209,66 @@ fn resolve(
     repo_pack_path()
 }
 
-/// [`user_data_dir`]'s pure core.
-fn data_dir(env: &impl Fn(&str) -> Option<OsString>, rule: DataDirRule) -> Option<PathBuf> {
-    let absolute_root = |key: &str, is_absolute: fn(&OsStr) -> bool| {
-        env(key)
+/// Host convention used to resolve a per-user data directory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostFamily {
+    /// `%APPDATA%` if absolute, else `%USERPROFILE%\AppData\Roaming` if
+    /// `%USERPROFILE%` is absolute.
+    Windows,
+    /// `$HOME/Library/Application Support` if `$HOME` is absolute.
+    MacOs,
+    /// The XDG Base Directory Specification: `$XDG_DATA_HOME` when
+    /// absolute, else `$HOME/.local/share` if `$HOME` is absolute.
+    Xdg,
+}
+
+impl HostFamily {
+    /// The family this binary was compiled for.
+    #[must_use]
+    pub const fn host() -> Self {
+        if cfg!(windows) {
+            Self::Windows
+        } else if cfg!(target_os = "macos") {
+            Self::MacOs
+        } else {
+            Self::Xdg
+        }
+    }
+}
+
+/// Resolves `family`'s per-user data directory through `env`.
+///
+/// This is the one resolver both the pack and the save file use, so a
+/// player's pack and save always land under one directory. The result is the
+/// OS data directory, not the application subdirectory.
+///
+/// - [`HostFamily::Xdg`]: `$XDG_DATA_HOME`, else `$HOME/.local/share`.
+/// - [`HostFamily::MacOs`]: `$HOME/Library/Application Support`.
+/// - [`HostFamily::Windows`]: `%APPDATA%`, else
+///   `%USERPROFILE%\AppData\Roaming`.
+///
+/// Only unset, empty, or non-absolute roots are ignored; `None` when no
+/// eligible root remains. Absoluteness follows `family` (POSIX or Windows
+/// path rules read from the bytes), independently of the platform running
+/// this binary. There are no filesystem probes, no canonicalisation, and no
+/// further rejection of absolute roots.
+#[must_use]
+pub fn data_dir_for(family: HostFamily, env: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+    let absolute_root = |name: &str, is_absolute: fn(&OsStr) -> bool| {
+        env(name)
             .filter(|value| is_absolute(value))
             .map(PathBuf::from)
     };
-    match rule {
-        DataDirRule::Xdg => absolute_root("XDG_DATA_HOME", is_absolute_xdg_path).or_else(|| {
-            absolute_root("HOME", is_absolute_xdg_path)
-                .map(|home| home.join(".local").join("share"))
-        }),
-        DataDirRule::MacOs => absolute_root("HOME", is_absolute_xdg_path)
-            .map(|home| home.join("Library").join("Application Support")),
-        DataDirRule::Windows => absolute_root("APPDATA", is_absolute_windows_path).or_else(|| {
+    match family {
+        HostFamily::Windows => absolute_root("APPDATA", is_absolute_windows_path).or_else(|| {
             absolute_root("USERPROFILE", is_absolute_windows_path)
                 .map(|home| home.join("AppData").join("Roaming"))
+        }),
+        HostFamily::MacOs => absolute_root("HOME", is_absolute_xdg_path)
+            .map(|home| home.join("Library").join("Application Support")),
+        HostFamily::Xdg => absolute_root("XDG_DATA_HOME", is_absolute_xdg_path).or_else(|| {
+            absolute_root("HOME", is_absolute_xdg_path)
+                .map(|home| home.join(".local").join("share"))
         }),
     }
 }
@@ -260,10 +281,9 @@ fn data_dir(env: &impl Fn(&str) -> Option<OsString>, rule: DataDirRule) -> Optio
 /// pick the pack, so `pokeemerald-rs` launched from an untrusted directory
 /// with `XDG_DATA_HOME=data` would load `data/pokeemerald-rs/pokeemerald.pack`
 /// from it instead of the player's own. Asks the bytes rather than
-/// [`Path::is_absolute`] for the same reason
-/// `engine::save::file::is_absolute_xdg_path` does: the rule is POSIX's, so
-/// it must not change shape when [`data_dir`] is driven with
-/// [`DataDirRule::Xdg`] on a Windows host in a test.
+/// [`Path::is_absolute`] because
+/// the rule is POSIX's, so it must not change shape when [`data_dir_for`] is
+/// driven with [`HostFamily::Xdg`] on a Windows host in a test.
 fn is_absolute_xdg_path(path: &OsStr) -> bool {
     path.as_encoded_bytes().starts_with(b"/")
 }
@@ -316,7 +336,7 @@ fn is_absolute_windows_path(path: &OsStr) -> bool {
 /// `cargo xtask extract` writes. This crate's manifest directory is always
 /// `<repo root>/crates/pack-format`, so two levels up is the repo root.
 ///
-/// Resolved at compile time, which is exactly why it is [`resolve`]'s last
+/// Resolved at compile time, which is exactly why it is [`default_pack_path`]'s last
 /// rung: it names the machine that built the binary, not the one running
 /// it.
 ///

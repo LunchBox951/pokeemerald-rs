@@ -20,6 +20,7 @@ fn key_split_boundary_selects_the_correct_child() {
     let render = |key: u8| {
         let track = vec![
             Event::Voice(0),
+            Event::Volume(127),
             Event::Note {
                 key,
                 velocity: 127,
@@ -162,6 +163,7 @@ fn rhythm_child_pan_override_is_applied_when_the_bit_is_set() {
     let rhythm = Instrument::Rhythm(Rhythm { children });
     let track = vec![
         Event::Voice(0),
+        Event::Volume(127),
         Event::Note {
             key: 36,
             velocity: 127,

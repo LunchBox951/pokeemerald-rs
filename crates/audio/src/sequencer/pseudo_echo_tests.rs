@@ -86,7 +86,7 @@ fn xcmd_iecv_and_iecl_only_affect_subsequently_started_voices() {
 #[test]
 fn xcmd_iecv_and_iecl_extend_a_directsound_voices_lifetime() {
     let make_track = |with_echo: bool| {
-        let mut track = vec![Event::Voice(0)];
+        let mut track = vec![Event::Voice(0), Event::Volume(127)];
         if with_echo {
             track.push(Event::Xcmd {
                 kind: XCMD_IECV,
@@ -131,7 +131,7 @@ fn xcmd_iecv_and_iecl_extend_a_directsound_voices_lifetime() {
 #[test]
 fn xcmd_iecv_and_iecl_extend_a_cgb_voices_lifetime() {
     let make_track = |with_echo: bool| {
-        let mut track = vec![Event::Voice(0)];
+        let mut track = vec![Event::Voice(0), Event::Volume(127)];
         if with_echo {
             track.push(Event::Xcmd {
                 kind: XCMD_IECV,

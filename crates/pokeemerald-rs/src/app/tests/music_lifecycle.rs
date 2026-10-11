@@ -118,6 +118,7 @@ fn sustained_reverbed_song_for_test(reverb_level: u8) -> audio::Song {
     let voices = vec![Instrument::DirectSound(ToneData::new(wave, Adsr::flat()))];
     let events = vec![
         Event::Voice(0),
+        Event::Volume(127),
         Event::Note {
             key: 60,
             velocity: 127,

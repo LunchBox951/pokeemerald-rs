@@ -1,5 +1,5 @@
 use super::super::{
-    data_dir_for, default_save_path_from, HostFamily, SAVE_DIR_NAME, SAVE_PATH_ENV,
+    data_dir_for, default_save_path_from, HostFamily, SAVE_DIR_NAME, SAVE_FILE_NAME, SAVE_PATH_ENV,
 };
 use super::*;
 use std::ffi::OsString;
@@ -221,4 +221,44 @@ fn a_volume_guid_appdata_is_an_absolute_windows_root() {
         ),
         Some(PathBuf::from(root))
     );
+}
+
+#[test]
+fn engine_save_paths_delegate_to_the_shared_pack_format_resolver() {
+    let cases: [(HostFamily, &[(&str, &str)]); 9] = [
+        (HostFamily::Xdg, &[("XDG_DATA_HOME", "/x"), ("HOME", "/h")]),
+        (HostFamily::Xdg, &[("XDG_DATA_HOME", "x"), ("HOME", "/h")]),
+        (HostFamily::Xdg, &[("XDG_DATA_HOME", "x"), ("HOME", "h")]),
+        (HostFamily::MacOs, &[("HOME", "/Users/may")]),
+        (HostFamily::MacOs, &[("HOME", "Users/may")]),
+        (HostFamily::MacOs, &[]),
+        (
+            HostFamily::Windows,
+            &[("APPDATA", "C:/A"), ("USERPROFILE", "C:/U")],
+        ),
+        (
+            HostFamily::Windows,
+            &[("APPDATA", "A"), ("USERPROFILE", "C:/U")],
+        ),
+        (
+            HostFamily::Windows,
+            &[("APPDATA", "A"), ("USERPROFILE", "U")],
+        ),
+    ];
+    for (family, pairs) in cases {
+        let shared = pack_format::data_dir_for(family, env_of(pairs));
+        assert_eq!(
+            data_dir_for(family, env_of(pairs)),
+            shared,
+            "{family:?} {pairs:?}"
+        );
+        let save = default_save_path_from(family, env_of(pairs));
+        match shared {
+            Some(dir) => assert_eq!(
+                save.expect("shared directory resolves"),
+                dir.join(SAVE_DIR_NAME).join(SAVE_FILE_NAME)
+            ),
+            None => assert!(matches!(save, Err(SaveFileError::NoDataDirectory))),
+        }
+    }
 }

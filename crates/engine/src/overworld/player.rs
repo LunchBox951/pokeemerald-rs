@@ -341,7 +341,7 @@ impl PlayerState {
 
     /// Returns whether the standing tile is in upstream's forced-movement
     /// dispatch set, `sForcedMovementTestFuncs`
-    /// (`field_player_avatar.c:412-427`). [`supported_forced_mover`]
+    /// (`field_player_avatar.c:412-427`). `supported_forced_mover`
     /// dispatches a `MB_WALK_*`/`MB_SLIDE_*` tile as real movement; every
     /// other armed tile still refuses manual steps. Armed only by a manual
     /// step attempt (including a blocked one), never by placement.
@@ -552,7 +552,7 @@ impl PlayerState {
     /// An armed tile dispatches before the keypad, even on a `None` poll,
     /// winning over whatever direction the caller polled
     /// (`field_player_avatar.c:332-349`). See
-    /// [`dispatch_forced_mover`](Self::dispatch_forced_mover) for a
+    /// `dispatch_forced_mover` for a
     /// supported tile's own dispatch and blocked-route fallback, and
     /// [`forced_movement_armed`](Self::forced_movement_armed) for the
     /// dispatched-vs-deferred split.

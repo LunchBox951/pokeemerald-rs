@@ -24,10 +24,31 @@
 //! runs `GetMostSuitableMonToSwitchInto`'s type/damage selector before
 //! falling back to party order; see `TrainerContext::send_out_next`'s docs.
 
-use crate::common::{max_iv_mon, SequenceRng};
+use crate::common::{max_iv_mon, script, SequenceRng};
 use assets::trainers::TrainerId;
 use assets::{MoveId, SpeciesId};
 use battle::status1::poison_residual_damage;
+
+// Exact draw groups, each scripted 0 and labelled with the upstream call site
+// that consumes it. A fixture's script is the concatenation of its groups, so
+// an extra or missing draw changes `rng.draws()` and fails the final
+// `assert_exhausted`.
+const CONSTRUCTION_SEED: &[u16] = &[0]; // battle_main.c:3140
+const TURN_SEED: &[u16] = &[0]; // battle_main.c:3923 / :4013
+const AI_SIMULATED_DAMAGE: &[u16] = &[0; 4]; // battle_ai_script_commands.c:341, one per slot
+const DAMAGING_MOVE_ABILITY_GUESSES: &[u16] = &[0; 2]; // battle_ai_scripts.s:59, :93
+const LEER_ABILITY_GUESSES: &[u16] = &[0; 2]; // battle_ai_scripts.s:93, :309
+const GROWL_ABILITY_GUESSES: &[u16] = &[0; 3]; // battle_ai_scripts.s:93, :279, :309
+const GROWL_VIABILITY_ROLL: &[u16] = &[0]; // battle_ai_scripts.s:1107
+const SETUP_FIRST_TURN_ROLL: &[u16] = &[0]; // battle_ai_scripts.s:2644
+const TRAINER_MOVE_PICK: &[u16] = &[0]; // battle_ai_script_commands.c:445
+const WILD_MOVE_SLOT_PICK: &[u16] = &[0]; // battle_controller_opponent.c:1599
+const ACCURACY_ONLY: &[u16] = &[0]; // battle_script_commands.c:1176
+                                    // battle_script_commands.c accuracy :1176, crit :1282, variance :1641,
+                                    // secondary chance :2923 (drawn even for moves with no secondary effect).
+const ACC_CRIT_VARIANCE_SECONDARY: &[u16] = &[0; 4];
+// Struggle skips the secondary-chance draw.
+const ACC_CRIT_VARIANCE: &[u16] = &[0; 3];
 use battle::{
     Battle, BattleError, BattleEvent, BattleOutcome, BattlePokemon, Dex, HitOutcome,
     MoveLearnDecision, PlayerAction, PpBonuses, Status1,
@@ -163,7 +184,15 @@ fn a_wild_battle_has_no_trainer_context() {
 fn beating_the_last_party_mon_pays_boosted_exp_then_money_then_ends_the_battle() {
     let dex = Dex::new();
     let player = max_iv_mon(&dex, RATTATA, 50, vec![SLASH]);
-    let mut rng = SequenceRng::new([0; 16]);
+    let mut rng = SequenceRng::new(script(&[
+        CONSTRUCTION_SEED,             // battle_main.c:3140 construction turn seed
+        TURN_SEED,                     // battle_main.c:3923/:4013 turn-start seed
+        AI_SIMULATED_DAMAGE,           // battle_ai_script_commands.c:341, slots 0..3
+        DAMAGING_MOVE_ABILITY_GUESSES, // battle_ai_scripts.s:59/:93 CheckBadMove guesses (battle_ai_script_commands.c:1383)
+        LEER_ABILITY_GUESSES, // battle_ai_scripts.s:93/:309 Soundproof, Clear Body/White Smoke guesses
+        TRAINER_MOVE_PICK,    // battle_ai_script_commands.c:445 highest-score pick
+        ACC_CRIT_VARIANCE_SECONDARY,
+    ]));
     let mut battle = Battle::new_trainer(
         dex,
         player,
@@ -201,6 +230,8 @@ fn beating_the_last_party_mon_pays_boosted_exp_then_money_then_ends_the_battle()
         ]
     );
     assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerWon));
+    assert_eq!(rng.draws(), 15, "exact scripted draw stream is consumed");
+    rng.assert_exhausted();
 }
 
 /// The same KO against a *wild* Treecko pays the unboosted award — the pin
@@ -212,7 +243,12 @@ fn the_same_knockout_in_a_wild_battle_pays_the_unboosted_award() {
     let player = max_iv_mon(&dex, RATTATA, 50, vec![SLASH]);
     let enemy = max_iv_mon(&dex, TREECKO, 5, vec![POUND, LEER]);
 
-    let mut rng = SequenceRng::new([0; 16]);
+    let mut rng = SequenceRng::new(script(&[
+        CONSTRUCTION_SEED,   // battle_main.c:3140 construction turn seed
+        TURN_SEED,           // battle_main.c:3923/:4013 turn-start seed
+        WILD_MOVE_SLOT_PICK, // battle_controller_opponent.c:1599 move-slot pick
+        ACC_CRIT_VARIANCE_SECONDARY,
+    ]));
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
@@ -227,6 +263,8 @@ fn the_same_knockout_in_a_wild_battle_pays_the_unboosted_award() {
             .any(|e| matches!(e, BattleEvent::MoneyGained(_))),
         "a wild battle pays no prize money"
     );
+    assert_eq!(rng.draws(), 7, "exact scripted draw stream is consumed");
+    rng.assert_exhausted();
 }
 
 /// Coincidence, not a party-order rule: nothing is ever super effective
@@ -244,7 +282,27 @@ fn a_fainted_trainer_mon_is_replaced_by_the_next_one_in_party_order() {
         max_iv_mon(&dex, MUDKIP, 5, vec![TACKLE, GROWL]),
     ];
 
-    let mut rng = SequenceRng::new([0; 64]);
+    let mut rng = SequenceRng::new(script(&[
+        CONSTRUCTION_SEED,             // battle_main.c:3140 construction turn seed
+        TURN_SEED,                     // battle_main.c:3923/:4013 turn-start seed
+        AI_SIMULATED_DAMAGE,           // battle_ai_script_commands.c:341, slots 0..3
+        DAMAGING_MOVE_ABILITY_GUESSES, // battle_ai_scripts.s:59/:93 CheckBadMove guesses (battle_ai_script_commands.c:1383)
+        LEER_ABILITY_GUESSES, // battle_ai_scripts.s:93/:309 Soundproof, Clear Body/White Smoke guesses
+        TRAINER_MOVE_PICK,    // battle_ai_script_commands.c:445 highest-score pick
+        ACC_CRIT_VARIANCE_SECONDARY,
+        TURN_SEED,                     // battle_main.c:3923/:4013 turn-start seed
+        AI_SIMULATED_DAMAGE,           // battle_ai_script_commands.c:341, slots 0..3
+        DAMAGING_MOVE_ABILITY_GUESSES, // battle_ai_scripts.s:59/:93 CheckBadMove guesses (battle_ai_script_commands.c:1383)
+        GROWL_ABILITY_GUESSES, // battle_ai_scripts.s:93/:279/:309 Soundproof, Hyper Cutter, Clear Body/White Smoke guesses
+        TRAINER_MOVE_PICK,     // battle_ai_script_commands.c:445 highest-score pick
+        ACC_CRIT_VARIANCE_SECONDARY,
+        TURN_SEED,                     // battle_main.c:3923/:4013 turn-start seed
+        AI_SIMULATED_DAMAGE,           // battle_ai_script_commands.c:341, slots 0..3
+        DAMAGING_MOVE_ABILITY_GUESSES, // battle_ai_scripts.s:59/:93 CheckBadMove guesses (battle_ai_script_commands.c:1383)
+        GROWL_ABILITY_GUESSES, // battle_ai_scripts.s:93/:279/:309 Soundproof, Hyper Cutter, Clear Body/White Smoke guesses
+        TRAINER_MOVE_PICK,     // battle_ai_script_commands.c:445 highest-score pick
+        ACC_CRIT_VARIANCE_SECONDARY,
+    ]));
     let mut battle =
         Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, party, &mut rng).unwrap();
     assert_eq!(battle.trainer().unwrap().bench_len(), 2);
@@ -298,6 +356,8 @@ fn a_fainted_trainer_mon_is_replaced_by_the_next_one_in_party_order() {
         "the bench-empty knockout pays out and ends the battle"
     );
     assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerWon));
+    assert_eq!(rng.draws(), 45, "exact scripted draw stream is consumed");
+    rng.assert_exhausted();
 }
 
 /// Fire-type player: the type/super-effective pass picks the Grass member
@@ -314,7 +374,14 @@ fn a_fainted_trainer_mon_is_replaced_by_the_most_suitable_bench_member() {
         max_iv_mon(&dex, MUDKIP, 5, vec![WATER_GUN, TACKLE]),
     ];
 
-    let mut rng = SequenceRng::new([0; 64]);
+    let mut rng = SequenceRng::new(script(&[
+        CONSTRUCTION_SEED,    // battle_main.c:3140 construction turn seed
+        TURN_SEED,            // battle_main.c:3923/:4013 turn-start seed
+        AI_SIMULATED_DAMAGE,  // battle_ai_script_commands.c:341, slots 0..3
+        GROWL_VIABILITY_ROLL, // battle_ai_scripts.s:1107 non-physical target discourage roll
+        TRAINER_MOVE_PICK,    // battle_ai_script_commands.c:445 highest-score pick
+        ACC_CRIT_VARIANCE_SECONDARY,
+    ]));
     let mut battle =
         Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, party, &mut rng).unwrap();
 
@@ -329,6 +396,8 @@ fn a_fainted_trainer_mon_is_replaced_by_the_most_suitable_bench_member() {
         "the super-effective Mudkip comes out, not the party-order Treecko: {events:?}"
     );
     assert_eq!(battle.enemy().species(), SpeciesId(MUDKIP));
+    assert_eq!(rng.draws(), 12, "exact scripted draw stream is consumed");
+    rng.assert_exhausted();
 }
 
 /// Proves the most-damage fallback independently of party order: a pure
@@ -350,7 +419,14 @@ fn a_fainted_trainer_mon_is_replaced_by_the_stab_boosted_bench_member_out_of_par
         max_iv_mon(&dex, PICHU, 5, vec![TACKLE]),
     ];
 
-    let mut rng = SequenceRng::new([0; 64]);
+    let mut rng = SequenceRng::new(script(&[
+        CONSTRUCTION_SEED,             // battle_main.c:3140 construction turn seed
+        TURN_SEED,                     // battle_main.c:3923/:4013 turn-start seed
+        AI_SIMULATED_DAMAGE,           // battle_ai_script_commands.c:341, slots 0..3
+        DAMAGING_MOVE_ABILITY_GUESSES, // battle_ai_scripts.s:59/:93 CheckBadMove guesses (battle_ai_script_commands.c:1383)
+        TRAINER_MOVE_PICK,             // battle_ai_script_commands.c:445 highest-score pick
+        ACC_CRIT_VARIANCE_SECONDARY,
+    ]));
     let mut battle =
         Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, party, &mut rng).unwrap();
 
@@ -365,6 +441,8 @@ fn a_fainted_trainer_mon_is_replaced_by_the_stab_boosted_bench_member_out_of_par
         "Tackle's STAB from the Normal-type Zigzagoon sends out Pichu, not the party-order Mudkip: {events:?}"
     );
     assert_eq!(battle.enemy().species(), SpeciesId(PICHU));
+    assert_eq!(rng.draws(), 13, "exact scripted draw stream is consumed");
+    rng.assert_exhausted();
 }
 
 /// Two Normal moves against the same defender score identically once base
@@ -383,7 +461,14 @@ fn tied_move_types_send_out_the_earlier_bench_member_regardless_of_base_power() 
         max_iv_mon(&dex, MUDKIP, 5, vec![MEGA_KICK]),
     ];
 
-    let mut rng = SequenceRng::new([0; 64]);
+    let mut rng = SequenceRng::new(script(&[
+        CONSTRUCTION_SEED,             // battle_main.c:3140 construction turn seed
+        TURN_SEED,                     // battle_main.c:3923/:4013 turn-start seed
+        AI_SIMULATED_DAMAGE,           // battle_ai_script_commands.c:341, slots 0..3
+        DAMAGING_MOVE_ABILITY_GUESSES, // battle_ai_scripts.s:59/:93 CheckBadMove guesses (battle_ai_script_commands.c:1383)
+        TRAINER_MOVE_PICK,             // battle_ai_script_commands.c:445 highest-score pick
+        ACC_CRIT_VARIANCE_SECONDARY,
+    ]));
     let mut battle =
         Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, party, &mut rng).unwrap();
 
@@ -398,6 +483,8 @@ fn tied_move_types_send_out_the_earlier_bench_member_regardless_of_base_power() 
         "Mega Kick's power cannot outscore Tackle when both are Normal: {events:?}"
     );
     assert_eq!(battle.enemy().species(), SpeciesId(PICHU));
+    assert_eq!(rng.draws(), 13, "exact scripted draw stream is consumed");
+    rng.assert_exhausted();
 }
 
 /// EXP is applied to the owned player before trainer continuation, so a
@@ -999,7 +1086,21 @@ fn each_knocked_out_party_member_pays_its_own_boosted_award() {
         max_iv_mon(&dex, TREECKO, 5, vec![POUND, LEER]),
         max_iv_mon(&dex, TORCHIC, 5, vec![SCRATCH, GROWL]),
     ];
-    let mut rng = SequenceRng::new([0; 64]);
+    let mut rng = SequenceRng::new(script(&[
+        CONSTRUCTION_SEED,             // battle_main.c:3140 construction turn seed
+        TURN_SEED,                     // battle_main.c:3923/:4013 turn-start seed
+        AI_SIMULATED_DAMAGE,           // battle_ai_script_commands.c:341, slots 0..3
+        DAMAGING_MOVE_ABILITY_GUESSES, // battle_ai_scripts.s:59/:93 CheckBadMove guesses (battle_ai_script_commands.c:1383)
+        LEER_ABILITY_GUESSES, // battle_ai_scripts.s:93/:309 Soundproof, Clear Body/White Smoke guesses
+        TRAINER_MOVE_PICK,    // battle_ai_script_commands.c:445 highest-score pick
+        ACC_CRIT_VARIANCE_SECONDARY,
+        TURN_SEED,                     // battle_main.c:3923/:4013 turn-start seed
+        AI_SIMULATED_DAMAGE,           // battle_ai_script_commands.c:341, slots 0..3
+        DAMAGING_MOVE_ABILITY_GUESSES, // battle_ai_scripts.s:59/:93 CheckBadMove guesses (battle_ai_script_commands.c:1383)
+        GROWL_ABILITY_GUESSES, // battle_ai_scripts.s:93/:279/:309 Soundproof, Hyper Cutter, Clear Body/White Smoke guesses
+        TRAINER_MOVE_PICK,     // battle_ai_script_commands.c:445 highest-score pick
+        ACC_CRIT_VARIANCE_SECONDARY,
+    ]));
     let mut battle =
         Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, party, &mut rng).unwrap();
 
@@ -1017,6 +1118,8 @@ fn each_knocked_out_party_member_pays_its_own_boosted_award() {
         second.contains(&BattleEvent::ExpGained(BOOSTED_AWARD_PER_LEVEL_5_STARTER)),
         "paid again rather than folded into the first knockout's award: {second:?}"
     );
+    assert_eq!(rng.draws(), 30, "exact scripted draw stream is consumed");
+    rng.assert_exhausted();
 }
 
 /// Upstream settles the send-out in `HandleFaintedMonActions`, after both
@@ -1029,7 +1132,15 @@ fn a_replacement_does_not_act_on_the_turn_it_is_sent_out() {
         max_iv_mon(&dex, TREECKO, 5, vec![POUND, LEER]),
         max_iv_mon(&dex, TORCHIC, 5, vec![SCRATCH, GROWL]),
     ];
-    let mut rng = SequenceRng::new([0; 64]);
+    let mut rng = SequenceRng::new(script(&[
+        CONSTRUCTION_SEED,             // battle_main.c:3140 construction turn seed
+        TURN_SEED,                     // battle_main.c:3923/:4013 turn-start seed
+        AI_SIMULATED_DAMAGE,           // battle_ai_script_commands.c:341, slots 0..3
+        DAMAGING_MOVE_ABILITY_GUESSES, // battle_ai_scripts.s:59/:93 CheckBadMove guesses (battle_ai_script_commands.c:1383)
+        LEER_ABILITY_GUESSES, // battle_ai_scripts.s:93/:309 Soundproof, Clear Body/White Smoke guesses
+        TRAINER_MOVE_PICK,    // battle_ai_script_commands.c:445 highest-score pick
+        ACC_CRIT_VARIANCE_SECONDARY,
+    ]));
     let mut battle =
         Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, party, &mut rng).unwrap();
     let player_hp_before = battle.player().current_hp();
@@ -1052,6 +1163,8 @@ fn a_replacement_does_not_act_on_the_turn_it_is_sent_out() {
         player_hp_before,
         "the player must take no damage on the send-out turn"
     );
+    assert_eq!(rng.draws(), 15, "exact scripted draw stream is consumed");
+    rng.assert_exhausted();
 }
 
 /// `AI_SetupFirstTurn` is the third flag `TRAINER_BRENDAN_ROUTE_103_TREECKO`
@@ -1059,17 +1172,50 @@ fn a_replacement_does_not_act_on_the_turn_it_is_sent_out() {
 /// reproduces the upstream table's inconsistency rather than normalising it.
 #[test]
 fn both_route_103_ai_flag_shapes_construct_and_play() {
-    for trainer in [MAY_ROUTE_103_MUDKIP, BRENDAN_ROUTE_103_TREECKO] {
+    for (trainer, script_groups) in [
+        (
+            MAY_ROUTE_103_MUDKIP,
+            script(&[
+                CONSTRUCTION_SEED,
+                TURN_SEED,
+                AI_SIMULATED_DAMAGE,
+                DAMAGING_MOVE_ABILITY_GUESSES,
+                GROWL_ABILITY_GUESSES,
+                TRAINER_MOVE_PICK,
+                ACC_CRIT_VARIANCE_SECONDARY,
+            ]),
+        ),
+        (
+            // Brendan's third flag is SetupFirstTurn: one extra roll before the pick.
+            BRENDAN_ROUTE_103_TREECKO,
+            script(&[
+                CONSTRUCTION_SEED,
+                TURN_SEED,
+                AI_SIMULATED_DAMAGE,
+                DAMAGING_MOVE_ABILITY_GUESSES,
+                GROWL_ABILITY_GUESSES,
+                SETUP_FIRST_TURN_ROLL,
+                TRAINER_MOVE_PICK,
+                ACC_CRIT_VARIANCE_SECONDARY,
+            ]),
+        ),
+    ] {
         let dex = Dex::new();
         let player = max_iv_mon(&dex, 19, 50, vec![SLASH]);
         let party = vec![max_iv_mon(&dex, TORCHIC, 5, vec![SCRATCH, GROWL])];
-        let mut rng = SequenceRng::new([0; 32]);
+        let mut rng = SequenceRng::new(script_groups.iter().copied());
         let mut battle = Battle::new_trainer(dex, player, trainer, party, &mut rng)
             .unwrap_or_else(|e| panic!("trainer {} must construct: {e}", trainer.0));
         let events = battle
             .take_turn(PlayerAction::UseMove(0), &mut rng)
             .unwrap();
         assert!(events.contains(&BattleEvent::Ended(BattleOutcome::PlayerWon)));
+        assert_eq!(
+            rng.draws(),
+            script_groups.len(),
+            "exact scripted draw stream is consumed"
+        );
+        rng.assert_exhausted();
     }
 }
 
@@ -1081,7 +1227,13 @@ fn losing_to_a_trainer_ends_in_the_ordinary_defeat_outcome_with_no_payout() {
     let player = max_iv_mon(&dex, MAGIKARP, 1, vec![TACKLE]);
     let party = vec![max_iv_mon(&dex, TREECKO, 100, vec![POUND, LEER])];
 
-    let mut rng = SequenceRng::new([0; 32]);
+    let mut rng = SequenceRng::new(script(&[
+        CONSTRUCTION_SEED,   // battle_main.c:3140 construction turn seed
+        TURN_SEED,           // battle_main.c:3923/:4013 turn-start seed
+        AI_SIMULATED_DAMAGE, // battle_ai_script_commands.c:341, slots 0..3
+        TRAINER_MOVE_PICK,   // battle_ai_script_commands.c:445 highest-score pick
+        ACC_CRIT_VARIANCE_SECONDARY,
+    ]));
     let mut battle =
         Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, party, &mut rng).unwrap();
     let mut events = Vec::new();
@@ -1107,6 +1259,8 @@ fn losing_to_a_trainer_ends_in_the_ordinary_defeat_outcome_with_no_payout() {
         events.last(),
         Some(&BattleEvent::Ended(BattleOutcome::PlayerLost))
     );
+    assert_eq!(rng.draws(), 11, "exact scripted draw stream is consumed");
+    rng.assert_exhausted();
 }
 
 /// `Cmd_checkteamslost`'s player-side HP total
@@ -1125,7 +1279,17 @@ fn a_healthy_player_reserve_survives_a_trainer_battle_lead_faint_and_is_itself_e
     // of speed order.
     let party = vec![max_iv_mon(&dex, TREECKO, 100, vec![POUND])];
 
-    let mut rng = SequenceRng::new([0; 64]);
+    let mut rng = SequenceRng::new(script(&[
+        CONSTRUCTION_SEED,   // battle_main.c:3140 construction turn seed
+        TURN_SEED,           // battle_main.c:3923/:4013 turn-start seed
+        AI_SIMULATED_DAMAGE, // battle_ai_script_commands.c:341, slots 0..3
+        TRAINER_MOVE_PICK,   // battle_ai_script_commands.c:445 highest-score pick
+        ACC_CRIT_VARIANCE_SECONDARY,
+        TURN_SEED,           // battle_main.c:3923/:4013 turn-start seed
+        AI_SIMULATED_DAMAGE, // battle_ai_script_commands.c:341, slots 0..3
+        TRAINER_MOVE_PICK,   // battle_ai_script_commands.c:445 highest-score pick
+        ACC_CRIT_VARIANCE_SECONDARY,
+    ]));
     let mut battle = Battle::new_trainer_with_player_reserves(
         dex,
         lead,
@@ -1180,6 +1344,8 @@ fn a_healthy_player_reserve_survives_a_trainer_battle_lead_faint_and_is_itself_e
     assert_eq!(members[1].species(), SpeciesId(TORCHIC));
     assert_eq!(members[1].current_hp(), 0);
     assert_eq!(members[1].moves()[0].pp, reserve_pp);
+    assert_eq!(rng.draws(), 21, "exact scripted draw stream is consumed");
+    rng.assert_exhausted();
 }
 
 /// `AI_CheckViability` routes `EFFECT_HIGH_CRITICAL` — an otherwise ordinary
@@ -1245,7 +1411,16 @@ fn an_exhausted_ignored_effect_move_does_not_skew_the_power_comparison() {
         enemy.deduct_pp(0).unwrap();
     }
     let player = max_iv_mon(&dex, RATTATA, 100, vec![GROWL]);
-    let mut rng = SequenceRng::new([0; 64]);
+    let mut rng = SequenceRng::new(script(&[
+        CONSTRUCTION_SEED,             // battle_main.c:3140 construction turn seed
+        TURN_SEED,                     // battle_main.c:3923/:4013 turn-start seed
+        AI_SIMULATED_DAMAGE,           // battle_ai_script_commands.c:341, slots 0..3
+        DAMAGING_MOVE_ABILITY_GUESSES, // battle_ai_scripts.s:59/:93 CheckBadMove guesses (battle_ai_script_commands.c:1383)
+        GROWL_ABILITY_GUESSES, // battle_ai_scripts.s:93/:279/:309 Soundproof, Hyper Cutter, Clear Body/White Smoke guesses
+        TRAINER_MOVE_PICK,     // battle_ai_script_commands.c:445 highest-score pick
+        ACCURACY_ONLY,         // battle_script_commands.c:1176 Growl accuracy
+        ACC_CRIT_VARIANCE_SECONDARY,
+    ]));
     let mut battle =
         Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, vec![enemy], &mut rng).unwrap();
     let events = battle
@@ -1259,6 +1434,8 @@ fn an_exhausted_ignored_effect_move_does_not_skew_the_power_comparison() {
             ..
         }
     )));
+    assert_eq!(rng.draws(), 17, "exact scripted draw stream is consumed");
+    rng.assert_exhausted();
 }
 
 /// `TRAINER_WINONA_1` (`include/constants/opponents.h:274`) carries
@@ -1390,7 +1567,13 @@ fn a_double_faint_sends_the_players_replacement_out_before_the_trainers() {
         max_iv_mon(&dex, TREECKO, 5, vec![POUND]),
         max_iv_mon(&dex, TORCHIC, 5, vec![SCRATCH]),
     ];
-    let mut rng = SequenceRng::new([0; 64]);
+    let mut rng = SequenceRng::new(script(&[
+        CONSTRUCTION_SEED,   // battle_main.c:3140 construction turn seed
+        TURN_SEED,           // battle_main.c:3923/:4013 turn-start seed
+        AI_SIMULATED_DAMAGE, // battle_ai_script_commands.c:341, slots 0..3
+        TRAINER_MOVE_PICK,   // battle_ai_script_commands.c:445 highest-score pick
+        ACC_CRIT_VARIANCE, // battle_script_commands.c :1176/:1282/:1641, Struggle skips the :2923 secondary draw
+    ]));
     let mut battle = Battle::new_trainer_with_player_reserves(
         dex,
         lead,
@@ -1424,4 +1607,6 @@ fn a_double_faint_sends_the_players_replacement_out_before_the_trainers() {
         player_sent < trainer_sent,
         "the player's replacement goes out first: {events:?}"
     );
+    assert_eq!(rng.draws(), 10, "exact scripted draw stream is consumed");
+    rng.assert_exhausted();
 }

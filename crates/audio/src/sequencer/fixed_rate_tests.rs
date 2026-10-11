@@ -27,6 +27,7 @@ fn fixed_rate_instrument_renders_identically_regardless_of_played_key() {
         let voices = vec![Instrument::DirectSound(tone)];
         let track = vec![
             Event::Voice(0),
+            Event::Volume(127),
             Event::Note {
                 key,
                 velocity: 127,
@@ -55,6 +56,7 @@ fn non_fixed_instrument_renders_differently_across_keys_for_contrast() {
         let voices = vec![Instrument::DirectSound(tone)];
         let track = vec![
             Event::Voice(0),
+            Event::Volume(127),
             Event::Note {
                 key,
                 velocity: 127,

@@ -1,6 +1,6 @@
 //! Unit tests for pack-path resolution.
 //!
-//! The resolution tests drive [`super::resolve`] / [`super::data_dir`] with a
+//! The resolution tests drive [`super::resolve`] / [`super::data_dir_for`] with a
 //! fake environment, a fake executable directory, and a fake existence
 //! predicate, so all four rungs and all three OS conventions are checked on
 //! whichever host runs the suite. The tests of [`super::probe`] itself use a
@@ -13,10 +13,16 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use super::{
-    data_dir, default_pack_path, repo_pack_path, resolve, user_data_dir, DataDirRule, Probe,
+    data_dir_for, default_pack_path, repo_pack_path, resolve, user_data_dir, HostFamily, Probe,
     PACK_PATH_ENV,
 };
 use crate::layout::OUTPUT_RELATIVE_PATH;
+
+/// The one seam the table-driven cases call the shared resolver through, so
+/// a change to [`data_dir_for`]'s signature touches this line alone.
+fn data_dir(env: &impl Fn(&str) -> Option<OsString>, family: HostFamily) -> Option<PathBuf> {
+    data_dir_for(family, env)
+}
 
 #[test]
 fn release_channel_missing_pack_does_not_load_shared_or_checkout_data() {
@@ -27,7 +33,7 @@ fn release_channel_missing_pack_does_not_load_shared_or_checkout_data() {
             "/home/player/.local/share/pokeemerald-rs/pokeemerald.pack",
             "/game/assets-pack/pokeemerald.pack",
         ]),
-        DataDirRule::Xdg,
+        HostFamily::Xdg,
     );
     let expected = match super::RELEASE_CHANNEL {
         "unstable" => "/home/player/.local/share/pokeemerald-rs/unstable/pokeemerald.pack",
@@ -52,7 +58,7 @@ fn release_channel_resolution_refuses_to_fall_back_through_the_launch_directory(
         return;
     }
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        resolve(&env_of(&[]), None, &exists_of(&[]), DataDirRule::Xdg)
+        resolve(&env_of(&[]), None, &exists_of(&[]), HostFamily::Xdg)
     }));
     if let Ok(path) = outcome {
         panic!(
@@ -119,7 +125,7 @@ fn the_env_override_wins_over_every_other_rung() {
             "/home/dev/.local/share/pokeemerald-rs/pokeemerald.pack",
             "/opt/game/assets-pack/pokeemerald.pack",
         ]),
-        DataDirRule::Xdg,
+        HostFamily::Xdg,
     );
     assert_eq!(path, PathBuf::from("/override/custom.pack"));
 }
@@ -132,7 +138,7 @@ fn the_env_override_is_honoured_even_when_the_file_is_absent() {
         &env_of(&[(PACK_PATH_ENV, "/typo.pack"), ("HOME", "/home/dev")]),
         None,
         &exists_of(&["/home/dev/.local/share/pokeemerald-rs/pokeemerald.pack"]),
-        DataDirRule::Xdg,
+        HostFamily::Xdg,
     );
     assert_eq!(path, PathBuf::from("/typo.pack"));
 }
@@ -144,7 +150,7 @@ fn an_empty_env_override_is_ignored() {
         &env_of(&[(PACK_PATH_ENV, ""), ("HOME", "/home/dev")]),
         None,
         &exists_of(&[&pack]),
-        DataDirRule::Xdg,
+        HostFamily::Xdg,
     );
     assert_eq!(path, PathBuf::from(&pack));
 }
@@ -156,7 +162,7 @@ fn the_user_data_pack_wins_over_the_executable_directory() {
         &env_of(&[("HOME", "/home/dev")]),
         Some(Path::new("/opt/game")),
         &exists_of(&[&pack, "/opt/game/assets-pack/pokeemerald.pack"]),
-        DataDirRule::Xdg,
+        HostFamily::Xdg,
     );
     assert_eq!(path, PathBuf::from(&pack));
 }
@@ -169,7 +175,7 @@ fn xdg_data_home_beats_the_home_fallback() {
         &env_of(&[("XDG_DATA_HOME", "/xdg"), ("HOME", "/home/dev")]),
         None,
         &exists_of(&[&xdg_pack, &home_pack]),
-        DataDirRule::Xdg,
+        HostFamily::Xdg,
     );
     assert_eq!(path, PathBuf::from(&xdg_pack));
 }
@@ -182,7 +188,7 @@ fn a_relative_xdg_data_home_is_ignored_in_favour_of_the_home_fallback() {
     assert_eq!(
         data_dir(
             &env_of(&[("XDG_DATA_HOME", "data"), ("HOME", "/home/dev")]),
-            DataDirRule::Xdg
+            HostFamily::Xdg
         ),
         Some(PathBuf::from("/home/dev/.local/share"))
     );
@@ -192,7 +198,7 @@ fn a_relative_xdg_data_home_is_ignored_in_favour_of_the_home_fallback() {
         &env_of(&[("XDG_DATA_HOME", "data"), ("HOME", "/home/dev")]),
         None,
         &exists_of(&[&data_pack, &home_pack]),
-        DataDirRule::Xdg,
+        HostFamily::Xdg,
     );
     assert_eq!(path, PathBuf::from(&home_pack));
 }
@@ -202,7 +208,7 @@ fn a_relative_xdg_data_home_with_no_home_yields_no_data_directory() {
     // Ignored means ignored: with nothing to fall back to there is no
     // user-data directory at all, rather than a cwd-relative one.
     assert_eq!(
-        data_dir(&env_of(&[("XDG_DATA_HOME", "data")]), DataDirRule::Xdg),
+        data_dir(&env_of(&[("XDG_DATA_HOME", "data")]), HostFamily::Xdg),
         None
     );
 }
@@ -214,7 +220,7 @@ fn macos_looks_under_library_application_support() {
         &env_of(&[("HOME", "/Users/dev"), ("XDG_DATA_HOME", "/xdg")]),
         None,
         &exists_of(&[&pack]),
-        DataDirRule::MacOs,
+        HostFamily::MacOs,
     );
     assert_eq!(path, PathBuf::from(&pack));
 }
@@ -226,7 +232,7 @@ fn windows_looks_under_appdata() {
         &env_of(&[("APPDATA", "C:/Users/dev/AppData/Roaming"), ("HOME", "/h")]),
         None,
         &exists_of(&[&pack]),
-        DataDirRule::Windows,
+        HostFamily::Windows,
     );
     assert_eq!(path, PathBuf::from(&pack));
 }
@@ -240,7 +246,7 @@ fn windows_falls_back_to_userprofile_when_appdata_is_unset() {
     assert_eq!(
         data_dir(
             &env_of(&[("USERPROFILE", r"C:\Users\dev")]),
-            DataDirRule::Windows
+            HostFamily::Windows
         ),
         Some(
             PathBuf::from(r"C:\Users\dev")
@@ -253,7 +259,7 @@ fn windows_falls_back_to_userprofile_when_appdata_is_unset() {
         &env_of(&[("USERPROFILE", "C:/Users/dev")]),
         None,
         &exists_of(&[&pack]),
-        DataDirRule::Windows,
+        HostFamily::Windows,
     );
     assert_eq!(path, PathBuf::from(&pack));
 }
@@ -263,7 +269,7 @@ fn windows_appdata_beats_the_userprofile_fallback() {
     assert_eq!(
         data_dir(
             &env_of(&[("APPDATA", "D:/roaming"), ("USERPROFILE", "C:/Users/dev"),]),
-            DataDirRule::Windows
+            HostFamily::Windows
         ),
         Some(PathBuf::from("D:/roaming"))
     );
@@ -277,7 +283,7 @@ fn the_executable_directory_is_used_when_no_user_data_pack_exists() {
         &env_of(&[("HOME", "/home/dev")]),
         Some(Path::new("/opt/game")),
         &exists_of(&["/opt/game/assets-pack/pokeemerald.pack"]),
-        DataDirRule::Xdg,
+        HostFamily::Xdg,
     );
     let expected = if super::RELEASE_CHANNEL == "dev" {
         PathBuf::from("/opt/game/assets-pack/pokeemerald.pack")
@@ -293,7 +299,7 @@ fn nothing_present_falls_back_to_the_compile_time_repo_path() {
         &env_of(&[("HOME", "/home/dev")]),
         Some(Path::new("/opt/game")),
         &exists_of(&[]),
-        DataDirRule::Xdg,
+        HostFamily::Xdg,
     );
     if super::RELEASE_CHANNEL == "dev" {
         assert_eq!(path, repo_pack_path());
@@ -317,15 +323,15 @@ fn a_scrubbed_environment_still_resolves_to_the_repo_path() {
     if super::RELEASE_CHANNEL != "dev" {
         return;
     }
-    let path = resolve(&env_of(&[]), None, &exists_of(&[]), DataDirRule::Xdg);
+    let path = resolve(&env_of(&[]), None, &exists_of(&[]), HostFamily::Xdg);
     assert_eq!(path, repo_pack_path());
 }
 
 #[test]
 fn data_dir_is_none_when_its_variables_are_unset() {
-    assert_eq!(data_dir(&env_of(&[]), DataDirRule::Xdg), None);
-    assert_eq!(data_dir(&env_of(&[]), DataDirRule::MacOs), None);
-    assert_eq!(data_dir(&env_of(&[]), DataDirRule::Windows), None);
+    assert_eq!(data_dir(&env_of(&[]), HostFamily::Xdg), None);
+    assert_eq!(data_dir(&env_of(&[]), HostFamily::MacOs), None);
+    assert_eq!(data_dir(&env_of(&[]), HostFamily::Windows), None);
 }
 
 #[test]
@@ -333,11 +339,11 @@ fn empty_data_dir_variables_are_treated_as_unset() {
     assert_eq!(
         data_dir(
             &env_of(&[("XDG_DATA_HOME", ""), ("HOME", "/home/dev")]),
-            DataDirRule::Xdg
+            HostFamily::Xdg
         ),
         Some(PathBuf::from("/home/dev/.local/share"))
     );
-    assert_eq!(data_dir(&env_of(&[("HOME", "")]), DataDirRule::Xdg), None);
+    assert_eq!(data_dir(&env_of(&[("HOME", "")]), HostFamily::Xdg), None);
 }
 
 #[test]
@@ -444,7 +450,7 @@ fn the_developer_checkout_guard_agrees_with_resolution_about_an_unreadable_user_
     // same real probe.
     let home_env = home.clone().into_os_string();
     let env = move |key: &str| (key == "HOME").then(|| home_env.clone());
-    let resolved = resolve(&env, Some(Path::new("/opt/game")), &probe, DataDirRule::Xdg);
+    let resolved = resolve(&env, Some(Path::new("/opt/game")), &probe, HostFamily::Xdg);
 
     let _ = std::fs::remove_file(&candidate);
     let _ = std::fs::remove_dir_all(&home);
@@ -472,7 +478,7 @@ fn an_unreadable_user_pack_stops_resolution_instead_of_falling_through() {
         &env_of(&[("HOME", "/home/dev")]),
         Some(Path::new("/opt/game")),
         &probe_of(&["/opt/game/assets-pack/pokeemerald.pack"], &[&pack]),
-        DataDirRule::Xdg,
+        HostFamily::Xdg,
     );
     assert_eq!(
         path,
@@ -489,7 +495,7 @@ fn an_unreadable_executable_directory_pack_also_stops_resolution() {
         &env_of(&[("HOME", "/home/dev")]),
         Some(Path::new("/opt/game")),
         &probe_of(&[], &["/opt/game/assets-pack/pokeemerald.pack"]),
-        DataDirRule::Xdg,
+        HostFamily::Xdg,
     );
     let expected = if super::RELEASE_CHANNEL == "dev" {
         PathBuf::from("/opt/game/assets-pack/pokeemerald.pack")
@@ -508,7 +514,7 @@ fn a_missing_candidate_still_advances_to_the_next_rung() {
         &env_of(&[("HOME", "/home/dev")]),
         Some(Path::new("/opt/game")),
         &probe_of(&["/opt/game/assets-pack/pokeemerald.pack"], &[]),
-        DataDirRule::Xdg,
+        HostFamily::Xdg,
     );
     let expected = if super::RELEASE_CHANNEL == "dev" {
         PathBuf::from("/opt/game/assets-pack/pokeemerald.pack")
@@ -628,9 +634,9 @@ fn a_regular_file_at_the_user_data_rung_advances_resolution_to_a_valid_later_run
 
     // The variable `data_dir` reads for this host's own rule.
     let key = match HOST_RULE {
-        DataDirRule::Xdg => "XDG_DATA_HOME",
-        DataDirRule::MacOs => "HOME",
-        DataDirRule::Windows => "APPDATA",
+        HostFamily::Xdg => "XDG_DATA_HOME",
+        HostFamily::MacOs => "HOME",
+        HostFamily::Windows => "APPDATA",
     };
     let data_home_value = data_home.clone().into_os_string();
     let env = move |k: &str| {
@@ -646,8 +652,8 @@ fn a_regular_file_at_the_user_data_rung_advances_resolution_to_a_valid_later_run
     // The same directory `data_dir` would build from `data_home` for this
     // host's rule: only `MacOs` adds a suffix before the app subdirectory.
     let user_data_root = match HOST_RULE {
-        DataDirRule::MacOs => data_home.join("Library").join("Application Support"),
-        DataDirRule::Xdg | DataDirRule::Windows => data_home.clone(),
+        HostFamily::MacOs => data_home.join("Library").join("Application Support"),
+        HostFamily::Xdg | HostFamily::Windows => data_home.clone(),
     };
 
     let _ = std::fs::remove_file(&data_home);
@@ -677,15 +683,15 @@ const RELATIVE_ROOTS: [&str; 5] = ["home", "./home", "C:home", r"\home", "/home"
 #[test]
 fn relative_user_roots_yield_no_data_directory() {
     for root in &RELATIVE_ROOTS[..4] {
-        assert_eq!(data_dir(&env_of(&[("HOME", root)]), DataDirRule::Xdg), None);
+        assert_eq!(data_dir(&env_of(&[("HOME", root)]), HostFamily::Xdg), None);
         assert_eq!(
-            data_dir(&env_of(&[("HOME", root)]), DataDirRule::MacOs),
+            data_dir(&env_of(&[("HOME", root)]), HostFamily::MacOs),
             None
         );
     }
     for root in &RELATIVE_ROOTS {
         let windows = [("APPDATA", *root), ("USERPROFILE", *root)];
-        assert_eq!(data_dir(&env_of(&windows), DataDirRule::Windows), None);
+        assert_eq!(data_dir(&env_of(&windows), HostFamily::Windows), None);
     }
 }
 
@@ -706,7 +712,7 @@ fn windows_accepts_drive_and_unc_roots_only() {
         r"\\.\BootPartition\Users\May",
     ] {
         assert_eq!(
-            data_dir(&env_of(&[("APPDATA", root)]), DataDirRule::Windows),
+            data_dir(&env_of(&[("APPDATA", root)]), HostFamily::Windows),
             Some(PathBuf::from(root))
         );
     }
@@ -717,7 +723,7 @@ fn an_invalid_windows_appdata_falls_back_to_a_valid_userprofile() {
     assert_eq!(
         data_dir(
             &env_of(&[("APPDATA", "roaming"), ("USERPROFILE", "C:/Users/dev")]),
-            DataDirRule::Windows
+            HostFamily::Windows
         ),
         Some(
             PathBuf::from("C:/Users/dev")
@@ -728,7 +734,7 @@ fn an_invalid_windows_appdata_falls_back_to_a_valid_userprofile() {
     assert_eq!(
         data_dir(
             &env_of(&[("APPDATA", "D:/roaming"), ("USERPROFILE", "profile")]),
-            DataDirRule::Windows
+            HostFamily::Windows
         ),
         Some(PathBuf::from("D:/roaming"))
     );
@@ -740,7 +746,7 @@ fn an_explicit_override_is_kept_even_when_relative_and_roots_are_invalid() {
         &env_of(&[(PACK_PATH_ENV, "mine.pack"), ("HOME", "home")]),
         None,
         &exists_of(&[]),
-        DataDirRule::Xdg,
+        HostFamily::Xdg,
     );
     assert_eq!(path, PathBuf::from("mine.pack"));
 }
@@ -755,14 +761,11 @@ fn release_channel_relative_roots_resolve_through_the_executable_directory() {
     let expected = exe
         .join(super::APP_DATA_SUBDIRECTORY)
         .join("pokeemerald.pack");
-    let cases: [(DataDirRule, &[(&str, &str)]); 3] = [
+    let cases: [(HostFamily, &[(&str, &str)]); 3] = [
+        (HostFamily::Xdg, &[("XDG_DATA_HOME", "x"), ("HOME", "home")]),
+        (HostFamily::MacOs, &[("HOME", "home")]),
         (
-            DataDirRule::Xdg,
-            &[("XDG_DATA_HOME", "x"), ("HOME", "home")],
-        ),
-        (DataDirRule::MacOs, &[("HOME", "home")]),
-        (
-            DataDirRule::Windows,
+            HostFamily::Windows,
             &[("APPDATA", r"\roaming"), ("USERPROFILE", "C:profile")],
         ),
     ];
@@ -796,7 +799,7 @@ fn incomplete_unc_roots_are_rejected_in_favour_of_the_userprofile() {
     ] {
         let pairs = [("APPDATA", root), ("USERPROFILE", "C:/Users/dev")];
         assert_eq!(
-            data_dir(&env_of(&pairs), DataDirRule::Windows),
+            data_dir(&env_of(&pairs), HostFamily::Windows),
             Some(
                 PathBuf::from("C:/Users/dev")
                     .join("AppData")
@@ -810,13 +813,13 @@ fn incomplete_unc_roots_are_rejected_in_favour_of_the_userprofile() {
 fn a_volume_guid_appdata_is_an_absolute_windows_root() {
     let root = r"\\?\Volume{26a21bda-a627-11d7-9931-806e6f6e6963}\Users\May\AppData\Roaming";
     assert_eq!(
-        data_dir(&env_of(&[("APPDATA", root)]), DataDirRule::Windows),
+        data_dir(&env_of(&[("APPDATA", root)]), HostFamily::Windows),
         Some(PathBuf::from(root))
     );
     assert_eq!(
         data_dir(
             &env_of(&[("APPDATA", root), ("USERPROFILE", r"C:\Users\May")]),
-            DataDirRule::Windows
+            HostFamily::Windows
         ),
         Some(PathBuf::from(root))
     );

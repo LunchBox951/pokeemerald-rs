@@ -577,3 +577,66 @@ fn crossing_a_map_connection_restarts_the_wild_encounter_immunity_window() {
         "the step past the window's end rolls for real"
     );
 }
+
+/// A refused connection rebind (the destination room fails to load after the
+/// landing cell already resolved) must hand back the *exact* pre-step player,
+/// not one rebuilt from position, collision elevation and facing: that
+/// constructor collapses the retained previous elevation onto the collision
+/// elevation and resets the movement history (issue #2028). Upstream's
+/// camera-transition load never respawns the player or touches either
+/// elevation (`overworld.c:784-825`; `ObjectEventUpdateElevation`,
+/// `event_object_movement.c:7759-7770`).
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn refused_connection_rebind_restores_the_complete_pre_step_player() {
+    let littleroot = assets::MapId("MAP_LITTLEROOT_TOWN");
+    let source = crate::pack_source::PackSource::Repo;
+    let scene = crate::overworld::load_room_from_source(
+        &source,
+        littleroot,
+        crate::overworld::PlayerCharacter::Brendan,
+        &engine::event_data::EventData::new(),
+    )
+    .expect("run `cargo xtask extract` first");
+    // Distinct collision/retained elevations from the outset.
+    let player = PlayerState::with_saved_elevations((10, 2), 0, 3, Direction::North);
+    let mut phase = OverworldPhase::for_test_with_source(scene, littleroot, player, None, source);
+
+    // Two completed steps north seed real movement history.
+    for _ in 0..2 {
+        phase.step(held(Buttons::UP));
+        for _ in 1..WALK_FRAMES_PER_TILE {
+            phase.step(ButtonState::new());
+        }
+    }
+    assert_eq!(phase.player.position(), (10, 0));
+    assert!(phase.player.second_foot_leads());
+
+    // Warm the connection cache so landing resolution succeeds, then break
+    // the source so the destination room reload is refused.
+    assert!(phase
+        .connection_pack
+        .set(assets::pack::AssetPack::load_repo().expect("run `cargo xtask extract` first"))
+        .is_ok());
+    phase.pack_source = crate::pack_source::PackSource::Explicit(
+        std::path::Path::new("/nonexistent/issue-2028-refused-connection.pack").into(),
+    );
+    assert!(phase.pack_source.load().is_err());
+
+    let before = phase.player;
+    let loads = crate::pack_source::pack_loads_on_this_thread();
+    phase.step(held(Buttons::UP));
+
+    assert!(
+        crate::pack_source::pack_loads_on_this_thread() > loads,
+        "the destination room reload must actually be attempted"
+    );
+    assert_eq!(phase.map_id, littleroot);
+    assert_eq!(phase.player.position(), (10, 0));
+    assert_eq!(
+        (phase.player.elevation(), phase.player.previous_elevation()),
+        (before.elevation(), before.previous_elevation())
+    );
+    assert_eq!(phase.player, before, "movement history must survive too");
+    assert!(!phase.player.in_transit());
+}

@@ -562,7 +562,7 @@ pub fn decode_palette(data: &[u8]) -> Result<Vec<Rgb888>, PngError> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::{decode, decode_palette, paeth_predictor, PngError};
     use crate::extract::jasc_pal::Rgb888;
 
@@ -654,7 +654,12 @@ mod tests {
         indexed_png(bit_depth, width, height, raw, Some(plte))
     }
 
-    fn tiny_indexed_png(bit_depth: u8, width: u32, height: u32, packed_rows: &[u8]) -> Vec<u8> {
+    pub(crate) fn tiny_indexed_png(
+        bit_depth: u8,
+        width: u32,
+        height: u32,
+        packed_rows: &[u8],
+    ) -> Vec<u8> {
         let packed_row_bytes = packed_rows.len() / usize::try_from(height).unwrap();
         let mut raw = Vec::new();
         for row in 0..height as usize {

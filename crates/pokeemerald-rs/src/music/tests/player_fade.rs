@@ -24,6 +24,7 @@ fn sustained_song() -> Song {
     let voices = vec![Instrument::DirectSound(ToneData::new(wave, adsr))];
     let events = vec![
         Event::Voice(0),
+        Event::Volume(127),
         Event::Note {
             key: 60,
             velocity: 127,

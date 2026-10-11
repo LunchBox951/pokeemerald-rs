@@ -143,9 +143,11 @@ const FIRST_MEMACC_CONDITION: u8 = 6;
 const LAST_MEMACC_CONDITION: u8 = 17;
 const MEMACC_CONDITIONS: std::ops::RangeInclusive<u8> =
     FIRST_MEMACC_CONDITION..=LAST_MEMACC_CONDITION;
-const XCMD_NO_OP: u8 = 0x00;
+/// Kinds 0 and 3 map to `ply_xxx` (`m4a_tables.c:293`, `:296`), which calls the
+/// `ply_fine` jump-table entry (`m4a.c:1531`..`:1534`).
+const XCMD_RESERVED_0: u8 = 0x00;
 const XCMD_WAVE: u8 = 0x01;
-const XCMD_RESERVED: u8 = 0x03;
+const XCMD_RESERVED_3: u8 = 0x03;
 const XCMD_WAIT: u8 = 0x0C;
 const XCMD_UNKNOWN_0D: u8 = 0x0D;
 
@@ -175,11 +177,16 @@ pub fn decode_track(bytes: &[u8]) -> Result<Vec<Event>, DecodeError> {
     decode::decode(bytes)
 }
 
+/// Whether an `XCMD` kind ends the track: `ply_xxx` runs `ply_fine`.
+pub(crate) fn xcmd_ends_track(kind: u8) -> bool {
+    matches!(kind, XCMD_RESERVED_0 | XCMD_RESERVED_3)
+}
+
 /// Returns the payload width read by each `gXcmdTable` handler (`m4a.c:1523`,
 /// `:1531`..`:1652`). Unknown kinds retain one argument byte.
 fn xcmd_payload_width(kind: u8) -> usize {
     match kind {
-        XCMD_NO_OP | XCMD_RESERVED => 0,
+        XCMD_RESERVED_0 | XCMD_RESERVED_3 => 0,
         XCMD_WAVE | XCMD_UNKNOWN_0D => size_of::<u32>(),
         XCMD_WAIT => size_of::<u16>(),
         _ => size_of::<u8>(),

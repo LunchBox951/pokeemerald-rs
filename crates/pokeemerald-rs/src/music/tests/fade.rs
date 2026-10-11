@@ -21,6 +21,7 @@ fn sustained_cgb_song() -> Song {
     })];
     let track = vec![
         Event::Voice(0),
+        Event::Volume(127),
         Event::Note {
             key: 60,
             velocity: 127,
