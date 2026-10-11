@@ -5,6 +5,7 @@ use crate::cgb_pitch::{midi_key_to_cgb_freq_reg, midi_key_to_noise_control};
 use crate::gate::Gate;
 use crate::psg::{NoiseChannel, SquareChannel, WaveChannel};
 use crate::voice::StereoAcc;
+use std::sync::Arc;
 
 mod oscillator;
 mod routing;
@@ -262,6 +263,7 @@ impl CgbVoice {
         reason = "a CGB voice starts from one decoded note and its instrument state"
     )]
     pub fn wave(
+        wave_id: Arc<str>,
         samples: [i8; 32],
         adsr: CgbAdsr,
         fixed_rate: bool,
@@ -279,7 +281,10 @@ impl CgbVoice {
     ) -> Self {
         let dac_correction = DacCorrection::from_fixed_rate(fixed_rate);
         let freq_reg = dac_correction.apply(midi_key_to_cgb_freq_reg(note_key, pit_m));
-        let oscillator = Oscillator::Wave(WaveChannel::new(samples, freq_reg));
+        let oscillator = Oscillator::Wave {
+            wave_id,
+            channel: WaveChannel::new(samples, freq_reg),
+        };
         Self::new(
             CgbChannelNumber::Wave,
             oscillator,
