@@ -119,7 +119,6 @@ fn pack_4bpp_region_rejects_a_palette_index_a_4bpp_tile_cannot_hold() {
     );
 }
 
-/// Removes the temporary pack at `path` when dropped, including on unwind.
 struct TempPackGuard(std::path::PathBuf);
 
 impl Drop for TempPackGuard {
