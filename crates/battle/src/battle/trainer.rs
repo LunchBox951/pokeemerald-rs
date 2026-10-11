@@ -65,7 +65,8 @@ pub fn roll_non_shiny_ot_id(personality: u32, rng: &mut impl BattleRng) -> u32 {
 ///
 /// # Errors
 ///
-/// Returns any error from [`BattlePokemon::validate`] before consuming RNG.
+/// Returns any error from [`BattlePokemon::new`] (species, level, moves, IVs)
+/// before consuming RNG.
 pub fn build_trainer_pokemon(
     dex: &Dex,
     species: SpeciesId,
@@ -75,12 +76,9 @@ pub fn build_trainer_pokemon(
     moves: Vec<MoveId>,
     rng: &mut impl BattleRng,
 ) -> Result<BattlePokemon, BattleError> {
-    BattlePokemon::validate(dex, species, level, &moves)?;
+    let pokemon = BattlePokemon::new(dex, species, level, fixed_iv, personality, moves)?;
     let ot_id = roll_non_shiny_ot_id(personality, rng);
-    Ok(
-        BattlePokemon::new(dex, species, level, fixed_iv, personality, moves)?
-            .with_original_trainer_id(ot_id),
-    )
+    Ok(pokemon.with_original_trainer_id(ot_id))
 }
 
 /// `gTrainerMoneyTable` in upstream order (`pokeemerald/src/battle_main.c:474-531`).
@@ -442,6 +440,29 @@ mod tests {
             crate::error::BattleError::InvalidLevel(INVALID_LEVEL)
         );
         assert_eq!(rng.draws(), 0, "validation runs ahead of the OT-id loop");
+    }
+
+    #[test]
+    fn an_invalid_iv_draws_nothing_at_all() {
+        let dex = Dex::new();
+        let mut rng = SequenceRng::new([]);
+        let mut ivs = fixed_ivs(0);
+        ivs.speed = crate::pokemon::MAX_IV + 1;
+        let error = build_trainer_pokemon(
+            &dex,
+            TREECKO,
+            ROUTE_103_RIVAL_LEVEL,
+            ivs,
+            0,
+            vec![POUND],
+            &mut rng,
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            crate::error::BattleError::InvalidIv(crate::pokemon::MAX_IV + 1)
+        );
+        assert_eq!(rng.draws(), 0, "IV validation runs ahead of the OT-id loop");
     }
 
     #[test]
