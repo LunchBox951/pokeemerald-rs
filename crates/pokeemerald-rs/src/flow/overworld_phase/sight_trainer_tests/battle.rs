@@ -177,7 +177,7 @@ fn the_defeated_flag_survives_a_save_continue_round_trip() {
 
     let block1 = phase.save1().clone();
     let block2 = phase.save2().clone();
-    let scene = crate::overworld::tests::synthetic_scene(80, 16);
+    let scene = crate::overworld::test_support::synthetic_scene(80, 16);
     let resumed = OverworldPhase::from_saved(scene, ROUTE_103, block1, block2);
 
     assert_eq!(

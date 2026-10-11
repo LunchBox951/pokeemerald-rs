@@ -20,7 +20,7 @@ fn continue_on_a_multi_level_tile_resumes_at_the_transition_elevation() {
     use engine::overworld::{ELEVATION_MULTI_LEVEL, ELEVATION_TRANSITION};
 
     let bridge_tile = (4_u16, 4_u16);
-    let scene = crate::overworld::tests::synthetic_scene_with_cell_elevation(
+    let scene = crate::overworld::test_support::synthetic_scene_with_cell_elevation(
         10,
         10,
         bridge_tile,
@@ -52,7 +52,7 @@ fn a_save_with_no_recorded_facing_falls_back_to_the_tile_derived_direction() {
         "a zeroed block holds DIR_NONE"
     );
     let resumed = OverworldPhase::from_saved(
-        crate::overworld::tests::synthetic_scene(10, 10),
+        crate::overworld::test_support::synthetic_scene(10, 10),
         new_game::SPAWN_MAP_ID,
         block1,
         SaveBlock2::default(),
@@ -76,7 +76,7 @@ fn a_save_with_a_legacy_zeroed_heal_location_adopts_the_gender_default() {
         "a zeroed block holds the legacy marker"
     );
     let resumed = OverworldPhase::from_saved(
-        crate::overworld::tests::synthetic_scene(10, 10),
+        crate::overworld::test_support::synthetic_scene(10, 10),
         new_game::SPAWN_MAP_ID,
         block1,
         SaveBlock2::default(),
@@ -100,7 +100,7 @@ fn a_save_with_a_legacy_zeroed_heal_location_adopts_the_gender_default() {
         ..SaveBlock1::default()
     };
     let resumed = OverworldPhase::from_saved(
-        crate::overworld::tests::synthetic_scene(10, 10),
+        crate::overworld::test_support::synthetic_scene(10, 10),
         new_game::SPAWN_MAP_ID,
         block1,
         SaveBlock2::default(),
@@ -145,7 +145,7 @@ fn a_save_with_a_fainted_lead_is_healed_on_continue() {
                 .expect("VAR_ROUTE101_STATE is an ordinary var");
         }
         OverworldPhase::from_saved(
-            crate::overworld::tests::synthetic_scene(10, 10),
+            crate::overworld::test_support::synthetic_scene(10, 10),
             seed.map_id,
             seed.save1,
             seed.save2,

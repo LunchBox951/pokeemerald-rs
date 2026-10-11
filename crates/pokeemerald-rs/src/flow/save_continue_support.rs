@@ -12,7 +12,7 @@
 //! substitutions that keep them runnable in CI, where there is no extracted
 //! asset pack:
 //!
-//! * the room is `crate::overworld::tests::synthetic_scene`'s flat, open
+//! * the room is `crate::overworld::test_support::synthetic_scene`'s flat, open
 //!   grid rather than a pack-decoded one (the same fixture
 //!   `crate::flow::overworld_phase::step_tests` already walks the player
 //!   around),
@@ -68,7 +68,7 @@ pub(super) const SAVE_FLOW_FRAME_BUDGET: usize = 4_000;
 /// one.
 pub(super) fn new_game_phase() -> OverworldPhase {
     OverworldPhase::for_test(
-        crate::overworld::tests::synthetic_scene(10, 10),
+        crate::overworld::test_support::synthetic_scene(10, 10),
         new_game::SPAWN_MAP_ID,
         PlayerState::new(
             new_game::SPAWN_POSITION,

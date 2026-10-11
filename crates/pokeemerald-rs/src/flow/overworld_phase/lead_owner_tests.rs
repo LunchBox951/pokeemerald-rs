@@ -31,7 +31,7 @@ fn continued(members: &[BattlePokemon], count: u8) -> OverworldPhase {
         seed.save1.player_party[slot] = record_of(member);
     }
     OverworldPhase::from_saved(
-        crate::overworld::tests::synthetic_scene(10, 10),
+        crate::overworld::test_support::synthetic_scene(10, 10),
         seed.map_id,
         seed.save1,
         seed.save2,

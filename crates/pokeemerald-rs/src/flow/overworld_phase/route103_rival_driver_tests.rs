@@ -415,7 +415,7 @@ fn a_lost_route_101_first_battle_still_lets_the_healed_lead_fight_the_rival() {
     const ROUTE_101_TRIGGER_ELEVATION: u8 = 3;
 
     let mut route_101 = OverworldPhase::for_test(
-        crate::overworld::tests::synthetic_scene(25, 25),
+        crate::overworld::test_support::synthetic_scene(25, 25),
         MapId("MAP_ROUTE101"),
         PlayerState::new(
             (ROUTE_101_TRIGGER_TILE.0 - 1, ROUTE_101_TRIGGER_TILE.1),
