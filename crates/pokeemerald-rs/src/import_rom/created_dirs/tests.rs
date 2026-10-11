@@ -743,3 +743,84 @@ fn a_shed_parent_past_a_raced_level_is_synced_not_its_child() {
         "a's entry is in base, so base is what must be synced"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn a_shed_level_off_the_destinations_ancestry_does_not_stop_the_parent_sync() {
+    // `base/a/b/../c`: the walk up from `c` never passes `b`, which must not
+    // stop it from reaching shed `a`, whose entry lives in `base`.
+    let dir = TempDir::new("shed-parent-sibling");
+    let target = dir.join("a").join("b").join("..").join("c");
+    let creation = super::create_directories_pinned(&target).expect("the destination is created");
+    let mut created = creation.created;
+    assert_eq!(created.len(), 3, "a, b and c are this run's");
+    let dest = super::super::acquire_dest(&mut created, &target, creation.final_directory.as_ref())
+        .expect("the destination opens through the pin");
+    drop(creation.final_directory);
+    // What acquisition's `open_shedding_pins` does to the outermost level.
+    created[0].parent = None;
+    created[0].own = None;
+    let mut synced = Vec::new();
+    super::sync_shed_parents_with(&mut created, &dest, &mut |parent| {
+        let stat = rustix::fs::fstat(parent).expect("parent stats");
+        synced.push((stat.st_dev, stat.st_ino));
+    });
+    let base = rustix::fs::stat(&dir.path).expect("base stats");
+    assert_eq!(
+        synced,
+        [(base.st_dev, base.st_ino)],
+        "a's entry is in base, so base is what must be synced"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_full_table_after_acquisition_still_syncs_every_shed_parent() {
+    // Every level's own pin but the last is shared with the next level's
+    // parent pin, so releasing own pins alone frees one descriptor at most.
+    if !in_descriptor_pressure_child() {
+        run_under_descriptor_pressure(
+            "import_rom::created_dirs::tests::a_full_table_after_acquisition_still_syncs_every_shed_parent",
+        );
+        return;
+    }
+    let dir = TempDir::new("shed-parent-full-table");
+    let paths: Vec<_> = ["l0", "l1", "l2", "l3"]
+        .iter()
+        .scan(dir.path.clone(), |path, name| {
+            *path = path.join(name);
+            Some(path.clone())
+        })
+        .collect();
+    let target = paths.last().expect("four levels").clone();
+    let creation = super::create_directories_pinned(&target).expect("the destination is created");
+    let mut created = creation.created;
+    assert_eq!(created.len(), 4);
+    let dest = super::super::acquire_dest(&mut created, &target, creation.final_directory.as_ref())
+        .expect("the destination opens through the pin");
+    drop(creation.final_directory);
+    // Acquisition shed the two outermost levels, then the table filled.
+    for level in &mut created[..2] {
+        level.parent = None;
+        level.own = None;
+    }
+    let fillers = fill_descriptor_table_leaving(0);
+    let mut synced = Vec::new();
+    super::sync_shed_parents_with(&mut created, &dest, &mut |parent| {
+        let stat = rustix::fs::fstat(parent).expect("parent stats");
+        synced.push((stat.st_dev, stat.st_ino));
+    });
+    drop(fillers);
+    let expected: Vec<_> = [&paths[0], &dir.path]
+        .iter()
+        .map(|path| {
+            let stat = rustix::fs::stat(*path).expect("the level exists");
+            (stat.st_dev, stat.st_ino)
+        })
+        .collect();
+    // Pinned levels' parents may be synced on the way, to free their pins.
+    assert!(
+        synced.ends_with(&expected),
+        "both shed levels' parents are synced, innermost first: {synced:?}"
+    );
+}

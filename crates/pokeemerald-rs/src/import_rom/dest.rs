@@ -371,6 +371,11 @@ impl Dest {
         })
     }
 
+    /// This destination's own handle, for an `fsync` of its entries.
+    pub(super) fn handle(&self) -> &std::os::fd::OwnedFd {
+        &self.dir
+    }
+
     /// This destination's device and inode, from its own handle.
     pub(super) fn identity(&self) -> io::Result<rustix::fs::Stat> {
         Ok(rustix::fs::fstat(&self.dir)?)

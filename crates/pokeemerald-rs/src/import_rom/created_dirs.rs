@@ -55,6 +55,9 @@ pub(super) struct CreatedDirectory {
     /// the platform-native [`rustix::fs::Stat`] since `st_dev` differs in
     /// width and signedness across Unixes.
     identity: rustix::fs::Stat,
+    /// The device and inode of the directory this level was created in, so
+    /// [`sync_shed_parents`] can find that directory once `parent` is shed.
+    parent_identity: rustix::fs::Stat,
     /// This level itself, held open so its inode cannot be reused before
     /// cleanup; `None` for an unpinned level, which cleanup leaves standing.
     own: Option<std::rc::Rc<std::os::fd::OwnedFd>>,
@@ -268,6 +271,8 @@ fn create_missing_level(
     name: std::ffi::OsString,
     before_reopen: &mut dyn FnMut() -> Option<io::Error>,
 ) -> Result<std::rc::Rc<std::os::fd::OwnedFd>, io::Error> {
+    // `fstat` takes no descriptor, so it cannot fail for want of one.
+    let parent_identity = rustix::fs::fstat(&*parent_fd)?;
     // The identity is captured before the reopen so a failed reopen cannot
     // un-record a level that was made; anything but a directory at the name
     // is a swap and is refused.
@@ -307,6 +312,7 @@ fn create_missing_level(
                 parent: Some(parent_fd),
                 name,
                 identity,
+                parent_identity,
                 own: Some(std::rc::Rc::clone(&descend)),
             });
             // This level just made the pinned window one longer than
@@ -327,6 +333,7 @@ fn create_missing_level(
                 parent: Some(parent_fd),
                 name,
                 identity,
+                parent_identity,
                 own: None,
             });
             Err(source)
@@ -518,73 +525,129 @@ pub(super) fn sync_shed_parents(created: &mut [CreatedDirectory], dest: &dest::D
 
 /// [`sync_shed_parents`] with the `fsync` injected, so a test can count it.
 ///
-/// The climb matches each level by its identity rather than counting one
-/// `..` per record: a level another creator made in between is no record,
-/// and counting would sync that level's child in place of the shed one's
-/// parent.
+/// The climb goes up the destination's own ancestry and syncs each
+/// directory a shed level's entry is in, matched by the identity captured
+/// at creation: neither a level another creator made in between nor a
+/// level off this ancestry (a `b` in `a/b/../c`) is assumed to sit one
+/// `..` above the next record. Under descriptor pressure it syncs the
+/// directory it stands in for the pinned levels whose entries are there,
+/// which frees their parent pins to release alongside the own pins.
 #[cfg(unix)]
 fn sync_shed_parents_with(
     created: &mut [CreatedDirectory],
     dest: &dest::Dest,
     fsync: &mut dyn FnMut(&std::os::fd::OwnedFd),
 ) {
-    let Some(lowest) = created.iter().position(|level| level.parent.is_none()) else {
+    let mut synced = vec![false; created.len()];
+    if !shed_parent_pending(created, &synced) {
         return;
-    };
+    }
     let Ok(mut here) = dest.identity() else {
         return;
     };
     let mut above: Option<std::os::fd::OwnedFd> = None;
-    for index in (lowest..created.len()).rev() {
-        while !same_directory_identity(&here, &created[index].identity) {
-            let Ok((parent, identity)) = open_parent_shedding_pins(created, dest, above.as_ref())
-            else {
-                return;
-            };
-            // `..` of the root is the root: the level is off this chain.
-            if same_directory_identity(&identity, &here) {
-                return;
-            }
-            here = identity;
-            above = Some(parent);
+    loop {
+        if mark_entries_in(created, &mut synced, &here, true) {
+            fsync(above.as_ref().unwrap_or_else(|| dest.handle()));
         }
-        let Ok((parent, identity)) = open_parent_shedding_pins(created, dest, above.as_ref())
-        else {
+        if !shed_parent_pending(created, &synced) {
+            return;
+        }
+        let parent = loop {
+            let opened = match &above {
+                None => dest.open_parent_for_sync(),
+                Some(fd) => dest::open_parent_for_sync(fd),
+            };
+            match opened {
+                Ok(fd) => break fd,
+                Err(source) if is_out_of_descriptors_io(&source) => {
+                    if mark_entries_in(created, &mut synced, &here, false) {
+                        fsync(above.as_ref().unwrap_or_else(|| dest.handle()));
+                    }
+                    if !release_a_descriptor(created, &synced) {
+                        return;
+                    }
+                }
+                Err(_) => return,
+            }
+        };
+        let Ok(identity) = rustix::fs::fstat(&parent) else {
             return;
         };
-        if created[index].parent.is_none() {
-            fsync(&parent);
+        // `..` of the root is the root: what is left is off this ancestry.
+        if same_directory_identity(&identity, &here) {
+            return;
         }
         here = identity;
         above = Some(parent);
     }
 }
 
-/// Opens and stats the parent of `above`, or of `dest` when `above` is
-/// `None`, releasing the levels' own pins while descriptors run out.
+/// Whether a shed level's parent entry still waits on [`sync_shed_parents`].
 #[cfg(unix)]
-fn open_parent_shedding_pins(
-    created: &mut [CreatedDirectory],
-    dest: &dest::Dest,
-    above: Option<&std::os::fd::OwnedFd>,
-) -> io::Result<(std::os::fd::OwnedFd, rustix::fs::Stat)> {
-    let parent = loop {
-        let opened = match above {
-            None => dest.open_parent_for_sync(),
-            Some(fd) => dest::open_parent_for_sync(fd),
-        };
-        match opened {
-            Err(source)
-                if is_out_of_descriptors_io(&source)
-                    && created
-                        .iter_mut()
-                        .rev()
-                        .any(|level| level.own.take().is_some()) => {}
-            result => break result?,
-        }
+fn shed_parent_pending(created: &[CreatedDirectory], synced: &[bool]) -> bool {
+    created
+        .iter()
+        .zip(synced)
+        .any(|(level, &synced)| level.parent.is_none() && !synced)
+}
+
+/// Marks the unsynced levels whose entries are in `here` as synced and
+/// answers whether `here` needs its `fsync` for them; with `shed_only`,
+/// only when one of them was shed, leaving pinned levels to the later pass.
+#[cfg(unix)]
+fn mark_entries_in(
+    created: &[CreatedDirectory],
+    synced: &mut [bool],
+    here: &rustix::fs::Stat,
+    shed_only: bool,
+) -> bool {
+    let held = |(level, synced): &(&CreatedDirectory, &mut bool)| {
+        !**synced && same_directory_identity(&level.parent_identity, here)
     };
-    let identity = rustix::fs::fstat(&parent)?;
-    Ok((parent, identity))
+    let mut entries = created.iter().zip(synced.iter_mut()).filter(held);
+    if shed_only && !entries.any(|(level, _)| level.parent.is_none()) {
+        return false;
+    }
+    let mut any = false;
+    for (_, synced) in created.iter().zip(synced.iter_mut()).filter(held) {
+        *synced = true;
+        any = true;
+    }
+    any
+}
+
+/// Closes one descriptor the levels hold, innermost first: a synced level's
+/// parent pin, else a level's own pin no other level shares. Answers
+/// whether one closed.
+#[cfg(unix)]
+fn release_a_descriptor(created: &mut [CreatedDirectory], synced: &[bool]) -> bool {
+    for (level, _) in created
+        .iter_mut()
+        .zip(synced)
+        .rev()
+        .filter(|(_, &synced)| synced)
+    {
+        if level
+            .parent
+            .take()
+            .and_then(std::rc::Rc::into_inner)
+            .is_some()
+        {
+            return true;
+        }
+    }
+    for level in created.iter_mut().rev() {
+        if level
+            .own
+            .as_ref()
+            .is_some_and(|own| std::rc::Rc::strong_count(own) == 1)
+        {
+            level.own = None;
+            return true;
+        }
+    }
+    false
 }
 
 /// Syncs the parent of each created level, outermost first, so a crash
