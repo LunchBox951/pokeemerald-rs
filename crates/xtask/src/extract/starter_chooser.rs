@@ -135,8 +135,18 @@ fn extract_tilemap(
     tilemap: TilemapSource,
     writer: &mut PackWriter,
 ) -> Result<(), ExtractError> {
+    extract_tilemap_with(upstream, tilemap, &mut read_file, writer)
+}
+
+/// `extract_tilemap` with its file read injected, so a test can count reads.
+fn extract_tilemap_with(
+    upstream: &Path,
+    tilemap: TilemapSource,
+    read: &mut dyn FnMut(&Path) -> Result<Vec<u8>, ExtractError>,
+    writer: &mut PackWriter,
+) -> Result<(), ExtractError> {
     let path = upstream.join(tilemap.path);
-    let payload = read_file(&path)?;
+    let payload = read(&path)?;
     push_tilemap(&path, tilemap, payload, writer)
 }
 
@@ -229,12 +239,14 @@ fn mismatch(path: &Path, detail: String) -> ExtractError {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
+    use std::path::Path;
 
     use assets::{AssetPack, StarterSpecies};
 
-    use super::super::{extract_to, read_file, repo_root, upstream_present};
+    use super::super::{extract_to, repo_root, upstream_present};
     use super::{
-        extract_sheet, extract_starter_chooser, extract_tilemap, push_tilemap, SHEETS, TILEMAPS,
+        extract_sheet, extract_starter_chooser, extract_tilemap, extract_tilemap_with,
+        push_tilemap, SHEETS, TILEMAPS,
     };
     use crate::extract::ExtractError;
     use pack_format::PackWriter;
@@ -344,17 +356,21 @@ mod tests {
     #[test]
     fn tilemap_pack_entry_holds_the_validated_bytes() {
         for tilemap in TILEMAPS {
-            let dir = scratch_dir("tilemap-payload");
-            let path = dir.join(tilemap.path);
-            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             let expected: Vec<u8> = (0..=u8::MAX).cycle().take(tilemap.byte_len).collect();
-            std::fs::write(&path, &expected).unwrap();
-            let payload = read_file(&path).unwrap();
-            // A later change to the source must not reach the pack.
-            std::fs::write(&path, vec![0xFFu8; tilemap.byte_len - 2]).unwrap();
+            let mut reads = 0;
+            let mut read = |_: &Path| {
+                reads += 1;
+                // Any read after the first sees a different, wrong-length file.
+                Ok(if reads == 1 {
+                    expected.clone()
+                } else {
+                    vec![0xFF; tilemap.byte_len - 2]
+                })
+            };
 
             let mut writer = PackWriter::new();
-            push_tilemap(&path, tilemap, payload, &mut writer).unwrap();
+            extract_tilemap_with(Path::new("upstream"), tilemap, &mut read, &mut writer).unwrap();
+            assert_eq!(reads, 1);
             let pack = writer.finish().unwrap();
             let entries = pack_format::parse_directory(&pack).unwrap();
             assert_eq!(entries.len(), 1);
@@ -364,17 +380,19 @@ mod tests {
                 &pack[entries[0].offset..entries[0].offset + entries[0].length],
                 expected.as_slice()
             );
-
-            let mut writer = PackWriter::new();
-            let err = push_tilemap(&path, tilemap, vec![0; 3], &mut writer).unwrap_err();
-            assert!(matches!(
-                err,
-                ExtractError::StarterChooserAssetMismatch { .. }
-            ));
-            assert_eq!(writer.len(), 0);
-
-            std::fs::remove_dir_all(dir).unwrap();
         }
+    }
+
+    #[test]
+    fn tilemap_bytes_of_the_wrong_length_are_not_queued() {
+        let mut writer = PackWriter::new();
+        let err =
+            push_tilemap(Path::new("t.bin"), TILEMAPS[0], vec![0; 3], &mut writer).unwrap_err();
+        assert!(matches!(
+            err,
+            ExtractError::StarterChooserAssetMismatch { .. }
+        ));
+        assert_eq!(writer.len(), 0);
     }
 
     #[test]
