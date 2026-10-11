@@ -68,3 +68,53 @@ fn forced_alpha_blends_against_the_span_backdrop_variant() {
         );
     }
 }
+
+#[test]
+fn unaligned_and_empty_window_passes_spill_the_backdrop() {
+    use super::shared::empty_sprite_layer;
+    use crate::framebuffer::Framebuffer;
+    use crate::window::{WindowConfig, WindowLayerEnable, WindowRange, WindowRect};
+
+    // mGBA video-software.c:933-954: the shared cursor aligns to four without
+    // checking the pass end, even for an empty pass.
+    let tiles = Tileset::decode(BitDepth::Bpp4, &[]).unwrap();
+    let sprites = empty_sprite_layer(&[], &tiles);
+    let white = Bgr555::from_channels(31, 31, 31).to_rgb888();
+    for end in [2, 1] {
+        let mut inside = WindowLayerEnable::NONE;
+        inside.effects = true;
+        let effects = FrameEffects {
+            windows: WindowConfig {
+                win0: Some((
+                    WindowRect::new(WindowRange::new(1, end), WindowRange::new(0, 1)),
+                    inside,
+                )),
+                win1: None,
+                obj_window: None,
+                winout: WindowLayerEnable::NONE,
+            },
+            color: EffectsConfig {
+                effect: ColorEffect::Brighten,
+                target1: LayerTargets {
+                    bg: [false; 4],
+                    obj: false,
+                    backdrop: true,
+                },
+                evy: 16,
+                ..EffectsConfig::default()
+            },
+            backdrop: Rgb888::BLACK,
+            ..FrameEffects::default()
+        };
+        let fb = compose_frame_with_effects(&sprites, &[], &effects);
+        for x in 0..Framebuffer::WIDTH {
+            let expected = if (1..4).contains(&x) {
+                white
+            } else {
+                Rgb888::BLACK
+            };
+            assert_eq!(fb.pixel(x, 0), Some(expected), "WIN0 end={end}, x={x}");
+            assert_eq!(fb.pixel(x, 1), Some(Rgb888::BLACK));
+        }
+    }
+}
