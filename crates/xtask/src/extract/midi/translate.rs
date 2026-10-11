@@ -77,10 +77,12 @@ pub(super) fn convert_ticks(raw: u32, division: u16) -> Result<u32, MidiError> {
     u32::try_from(scaled).map_err(|_| MidiError::TickOverflow(raw))
 }
 
-/// Converts microseconds per quarter note to `f32`-rounded beats per minute.
+/// Converts microseconds per quarter note to the effective beats per minute.
 ///
-/// The `f32` calculation preserves the source compiler's rounding
-/// (`tools/mid2agb/agb.cpp:505-507`). Values outside the song's `u16` tempo
+/// The `f32` calculation preserves the source compiler's rounding. The
+/// assembler then halves it (`BPM*tbs/2`, `tools/mid2agb/agb.cpp:505-507`,
+/// `tbs` is 1) and playback doubles it (`src/m4a_1.s:920-929`), so an odd
+/// BPM plays at the preceding even rate. Values outside the song's `u16` tempo
 /// representation fail instead of saturating.
 ///
 /// # Errors
@@ -102,7 +104,7 @@ pub(super) fn bpm_from_microseconds(microseconds: u32) -> Result<u16, MidiError>
         reason = "the positive BPM is bounded by u16::MAX above"
     )]
     let bpm = bpm as u16;
-    Ok(bpm)
+    Ok((bpm / 2) * 2)
 }
 
 fn translate_extended_command(selected_command: Option<u8>, value: u8) -> Option<SongEvent> {

@@ -39,6 +39,7 @@ pub fn locate(
     ctx: &Context<'_>,
     report: &mut Vec<ReportLine>,
 ) -> Result<SpritePlan, GenRomProfileError> {
+    super::inventory::require_sprites(ctx.pack)?;
     let queries: Vec<ImageQuery> = ctx
         .pack
         .ids_with_prefix("sprite/")
