@@ -280,7 +280,10 @@ fn reopen_created_level(
 /// identity, reopens it, and answers with the descriptor the next level
 /// descends through.
 #[cfg(unix)]
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the walk state, the pin window and the two test seams are all needed to reopen one level"
+)]
 fn create_missing_level(
     created: &mut Vec<CreatedDirectory>,
     pin_from: &mut usize,
