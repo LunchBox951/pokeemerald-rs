@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use super::{build_image_entry, jasc_pal, png, read_file, read_text, ExtractError};
-use super::{build_palette_entry, push_raw_entry};
+use super::{build_palette_entry, push_raw_bytes};
 use pack_format::PackWriter;
 
 const CHOOSER_DIRECTORY: &str = "graphics/starter_choose";
@@ -136,14 +136,27 @@ fn extract_tilemap(
     writer: &mut PackWriter,
 ) -> Result<(), ExtractError> {
     let path = upstream.join(tilemap.path);
-    let len = read_file(&path)?.len();
+    let payload = read_file(&path)?;
+    push_tilemap(&path, tilemap, payload, writer)
+}
+
+/// Validates `payload` and queues that same buffer, so the bytes checked are
+/// the bytes published.
+fn push_tilemap(
+    path: &Path,
+    tilemap: TilemapSource,
+    payload: Vec<u8>,
+    writer: &mut PackWriter,
+) -> Result<(), ExtractError> {
+    let len = payload.len();
     if len != tilemap.byte_len {
         return Err(mismatch(
-            &path,
+            path,
             format!("is {len} bytes: expected {}", tilemap.byte_len),
         ));
     }
-    push_raw_entry(&path, tilemap.id.to_owned(), writer)
+    push_raw_bytes(tilemap.id.to_owned(), payload, writer);
+    Ok(())
 }
 
 fn extract_sheet(
@@ -219,8 +232,10 @@ mod tests {
 
     use assets::{AssetPack, StarterSpecies};
 
-    use super::super::{extract_to, repo_root, upstream_present};
-    use super::{extract_sheet, extract_starter_chooser, extract_tilemap, SHEETS, TILEMAPS};
+    use super::super::{extract_to, read_file, repo_root, upstream_present};
+    use super::{
+        extract_sheet, extract_starter_chooser, extract_tilemap, push_tilemap, SHEETS, TILEMAPS,
+    };
     use crate::extract::ExtractError;
     use pack_format::PackWriter;
 
@@ -324,6 +339,42 @@ mod tests {
         assert_eq!(writer.len(), 1);
 
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn tilemap_pack_entry_holds_the_validated_bytes() {
+        for tilemap in TILEMAPS {
+            let dir = scratch_dir("tilemap-payload");
+            let path = dir.join(tilemap.path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let expected: Vec<u8> = (0..=u8::MAX).cycle().take(tilemap.byte_len).collect();
+            std::fs::write(&path, &expected).unwrap();
+            let payload = read_file(&path).unwrap();
+            // A later change to the source must not reach the pack.
+            std::fs::write(&path, vec![0xFFu8; tilemap.byte_len - 2]).unwrap();
+
+            let mut writer = PackWriter::new();
+            push_tilemap(&path, tilemap, payload, &mut writer).unwrap();
+            let pack = writer.finish().unwrap();
+            let entries = pack_format::parse_directory(&pack).unwrap();
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].id, tilemap.id);
+            assert_eq!(entries[0].length, tilemap.byte_len);
+            assert_eq!(
+                &pack[entries[0].offset..entries[0].offset + entries[0].length],
+                expected.as_slice()
+            );
+
+            let mut writer = PackWriter::new();
+            let err = push_tilemap(&path, tilemap, vec![0; 3], &mut writer).unwrap_err();
+            assert!(matches!(
+                err,
+                ExtractError::StarterChooserAssetMismatch { .. }
+            ));
+            assert_eq!(writer.len(), 0);
+
+            std::fs::remove_dir_all(dir).unwrap();
+        }
     }
 
     #[test]
