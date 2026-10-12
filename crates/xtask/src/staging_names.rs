@@ -1,4 +1,9 @@
-//! The one unpredictable staging-name policy every xtask publisher shares.
+//! The unpredictable staging-name policy the pack-extraction and
+//! snapshot-pointer publishers share (`extract::publish` and
+//! `record_snapshot`). `gen_rom_profile`'s profile publisher keeps
+//! its own clock-and-salt temporary beside the profile: it makes one
+//! exclusive create and treats a collision as an error, so it walks no
+//! candidates.
 
 use std::path::{Path, PathBuf};
 
