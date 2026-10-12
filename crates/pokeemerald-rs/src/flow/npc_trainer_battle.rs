@@ -234,7 +234,7 @@ pub fn start_npc_trainer_battle(
             moves,
         })
         .collect();
-    battle::ensure_trainer_party_startable(&dex, trainer, &specs)?;
+    battle::ensure_trainer_party_startable(&dex, &player_lead, trainer, &specs)?;
     battle::ensure_participant_admissible(&player_lead)?;
 
     let mut party = Vec::with_capacity(entries.len());
@@ -366,5 +366,49 @@ mod tests {
             before,
             "the statused-entrant refusal must precede every OT-ID draw"
         );
+    }
+
+    fn lead_of(species: SpeciesId) -> BattlePokemon {
+        BattlePokemon::new(
+            &Dex::new(),
+            species,
+            TEST_LEVEL,
+            battle::fixed_ivs(TEST_PARTY_IV),
+            TEST_PERSONALITY,
+            vec![MoveId::TACKLE],
+        )
+        .expect("a valid lead")
+    }
+
+    #[test]
+    fn two_ability_lead_is_refused_before_any_ot_id_draw() {
+        const VOLTORB: SpeciesId = SpeciesId(100);
+        for slot in [0, 1] {
+            let lead = lead_of(VOLTORB).with_ability_slot(slot);
+            let mut rng = Rng::new(1);
+            let before = rng.state();
+            for _ in 0..2 {
+                let result = start_npc_trainer_battle(
+                    lead.clone(),
+                    TrainerId::MAY_ROUTE_103_MUDKIP,
+                    &mut rng,
+                );
+                assert_eq!(
+                    result.err(),
+                    Some(NpcTrainerBattleError::Battle(
+                        BattleError::AmbiguousPlayerAbility(VOLTORB)
+                    )),
+                );
+                assert_eq!(rng.state(), before, "the refusal must precede every draw");
+            }
+        }
+    }
+
+    #[test]
+    fn single_ability_lead_starts_the_battle() {
+        let mut rng = Rng::new(1);
+        let result =
+            start_npc_trainer_battle(lead_of(TREECKO), TrainerId::MAY_ROUTE_103_MUDKIP, &mut rng);
+        assert!(result.is_ok(), "{:?}", result.err());
     }
 }
