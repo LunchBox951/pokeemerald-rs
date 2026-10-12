@@ -158,8 +158,12 @@ pub fn locate(
     Ok(plan)
 }
 
-/// Require every planned voicegroup's pack entry and check it against the
-/// group the ROM yields at the planned root.
+/// Require the pack's voicegroups to be exactly the planned ones, and check
+/// each entry against the group the ROM yields at the planned root.
+///
+/// A pack group the plan never reaches -- left by a stale or wider
+/// extraction -- is refused like a second song: the importer would never
+/// emit it, so the profile could not reproduce the pack.
 ///
 /// The ROM side runs `rom-import`'s own voicegroup reader over the finished
 /// plan, so borrowed slots, biased prefixes, and key-split tails normalize
@@ -168,12 +172,30 @@ pub fn locate(
 ///
 /// # Errors
 ///
+/// [`GenRomProfileError::StructMismatch`] naming `audio/voicegroup/*` when
+/// the pack holds a group the plan does not;
 /// [`GenRomProfileError::MissingPackEntry`] when a group has no pack entry;
 /// [`GenRomProfileError::WrongPackEntryKind`] when the entry is not raw;
 /// [`GenRomProfileError::EntryShape`] when the entry does not decode as a
 /// voicegroup; [`GenRomProfileError::StructMismatch`] when the ROM group
 /// cannot be read or differs from the pack's.
 fn check_voicegroups(ctx: &Context<'_>, plan: &AudioPlan) -> Result<(), GenRomProfileError> {
+    let unplanned: Vec<String> = ctx
+        .pack
+        .ids_with_prefix("audio/voicegroup/")
+        .into_iter()
+        .filter(|id| !plan.voicegroups.iter().any(|group| &group.id == id))
+        .collect();
+    if !unplanned.is_empty() {
+        let planned: Vec<&str> = plan.voicegroups.iter().map(|g| g.id.as_str()).collect();
+        return Err(GenRomProfileError::StructMismatch {
+            id: "audio/voicegroup/*".to_owned(),
+            reason: format!(
+                "the pack holds {unplanned:?}, which no planned root reaches; \
+                 the plan holds {planned:?}"
+            ),
+        });
+    }
     let roots = importer_roots(plan)?;
     let reader = rom_import::RomReader::new(ctx.rom);
     for (voicegroup, root) in plan.voicegroups.iter().zip(roots.voicegroups) {

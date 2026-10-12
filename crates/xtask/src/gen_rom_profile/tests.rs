@@ -836,19 +836,22 @@ fn with_audio_pack<T>(
     mutate: impl FnOnce(&mut Vec<u8>),
     body: impl FnOnce(&Context<'_>) -> T,
 ) -> T {
-    let entry = voicegroup.map(|payload| {
-        pack_format::raw_entry("audio/voicegroup/title".to_owned(), payload.to_vec())
-    });
-    with_audio_pack_entry(name, songs, song_payload, entry, mutate, body)
+    let entries = voicegroup
+        .map(|payload| {
+            pack_format::raw_entry("audio/voicegroup/title".to_owned(), payload.to_vec())
+        })
+        .into_iter()
+        .collect();
+    with_audio_pack_entry(name, songs, song_payload, entries, mutate, body)
 }
 
-/// [`with_audio_pack`] with the `audio/voicegroup/title` entry given whole,
-/// so a test can choose its kind.
+/// [`with_audio_pack`] with the `audio/voicegroup/` entries given whole, so a
+/// test can choose their kind and add groups the plan never reaches.
 fn with_audio_pack_entry<T>(
     name: &str,
     songs: &[&str],
     song_payload: &[u8],
-    voicegroup: Option<pack_format::PackEntry>,
+    voicegroups: Vec<pack_format::PackEntry>,
     mutate: impl FnOnce(&mut Vec<u8>),
     body: impl FnOnce(&Context<'_>) -> T,
 ) -> T {
@@ -871,7 +874,7 @@ fn with_audio_pack_entry<T>(
             song_payload.to_vec(),
         ));
     }
-    if let Some(entry) = voicegroup {
+    for entry in voicegroups {
         writer.push(entry);
     }
     let pack_path = dir.join("test.pack");
@@ -993,7 +996,7 @@ fn a_voicegroup_entry_of_the_wrong_kind_is_refused() {
         "audio-voicegroup-wrong-kind",
         &["audio/song/mus_title"],
         &title_song_payload(0),
-        Some(entry),
+        vec![entry],
         |_| {},
         |ctx| audio::locate(ctx, &mut Vec::new()),
     )
@@ -1002,6 +1005,31 @@ fn a_voicegroup_entry_of_the_wrong_kind_is_refused() {
         matches!(&err, GenRomProfileError::WrongPackEntryKind { id, .. } if id == "audio/voicegroup/title"),
         "{err:?}"
     );
+}
+
+#[test]
+fn a_voicegroup_entry_the_plan_never_reaches_is_refused() {
+    // The title entry matches the ROM; the extra group is what a stale or
+    // wider extraction would leave behind, and the importer never emits it.
+    let payload = title_voicegroup_payload();
+    let entries = vec![
+        pack_format::raw_entry("audio/voicegroup/title".to_owned(), payload.clone()),
+        pack_format::raw_entry("audio/voicegroup/stale".to_owned(), payload),
+    ];
+    let err = with_audio_pack_entry(
+        "audio-voicegroup-extra",
+        &["audio/song/mus_title"],
+        &title_song_payload(0),
+        entries,
+        |_| {},
+        |ctx| audio::locate(ctx, &mut Vec::new()),
+    )
+    .expect_err("a pack voicegroup outside the plan is refused");
+    let GenRomProfileError::StructMismatch { id, reason } = &err else {
+        panic!("{err:?}");
+    };
+    assert_eq!(id, "audio/voicegroup/*");
+    assert!(reason.contains("audio/voicegroup/stale"), "{reason}");
 }
 
 #[test]
