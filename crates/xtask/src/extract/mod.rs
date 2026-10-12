@@ -28,7 +28,9 @@
 //!   palettes, both Birch tilemaps, and the shared normal front image and
 //!   palette of Treecko, Torchic, and Mudkip; and
 //! - `mus_title`, its transitive voicegroup tree, and every sample that tree
-//!   references.
+//!   references; and
+//! - the battle-message token table (`gBattleStringsTable` plus the special
+//!   templates `BufferStringBattle` selects).
 //!
 //! # Asset id scheme
 //!
@@ -45,11 +47,13 @@
 //! - `pokemon/<species>/front` and `pokemon/<species>/palette/normal`
 //! - `audio/sample/{direct-sound,programmable-wave}/<name>`
 //! - `audio/voicegroup/<label>` and `audio/song/<name>`
+//! - `battle-message/table`
 //!
 //! Names preserve normalized upstream directory, file, or symbol names; they
 //! never use linker-style `gTileset_*` identifiers.
 
 mod audio_samples;
+mod battle_message;
 mod error;
 mod fonts;
 pub mod inflate;
@@ -138,6 +142,7 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     audio_samples::extract_audio_samples(&upstream, &mut writer)?;
     voicegroups::extract_voicegroups(&upstream, &mut writer)?;
     midi::extract_song(&upstream, &mut writer)?;
+    battle_message::extract_battle_message(&upstream, &mut writer)?;
 
     let entry_count = writer.len();
     let bytes = writer.finish()?;

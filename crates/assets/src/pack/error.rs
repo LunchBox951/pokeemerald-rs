@@ -5,6 +5,8 @@ use std::path::PathBuf;
 
 use crate::audio::AudioError;
 
+use super::battle_message::BattleMessageError;
+
 use super::format::FORMAT_VERSION;
 
 /// A failure while loading or querying an [`AssetPack`](crate::pack::AssetPack).
@@ -88,6 +90,13 @@ pub enum PackError {
         id: String,
         /// Underlying schema error.
         source: AudioError,
+    },
+    /// The battle-message table failed its schema's structural decode.
+    BattleMessageDecode {
+        /// Table asset id.
+        id: String,
+        /// Underlying schema error.
+        source: BattleMessageError,
     },
 }
 
@@ -179,6 +188,12 @@ impl fmt::Display for PackError {
                     "asset pack: audio entry `{id}` failed to decode: {source}"
                 )
             }
+            Self::BattleMessageDecode { id, source } => {
+                write!(
+                    f,
+                    "asset pack: battle-message entry `{id}` failed to decode: {source}"
+                )
+            }
         }
     }
 }
@@ -188,6 +203,7 @@ impl std::error::Error for PackError {
         // An exhaustive match forces new source-carrying variants to choose their error chain.
         match self {
             Self::AudioDecode { source, .. } => Some(source),
+            Self::BattleMessageDecode { source, .. } => Some(source),
             Self::NotFound(_)
             | Self::ReadFailed(..)
             | Self::BadMagic

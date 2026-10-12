@@ -24657,10 +24657,22 @@
     },
     "src/battle_message.c": {
       "artifacts": {
+        "BufferStringBattle-template-payloads": {
+          "reason": "Only raw payloads reached by INTROMSG, INTROSENDOUT, RETURNMON, SWITCHINMON, USEDMOVE, and BATTLEEND are extracted: 49 direct templates plus type-move and helper text fragments; selection, buffer mutation, and expansion are deferred.",
+          "rust_target": "crates/xtask/src/extract/battle_message.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
         "gAbsorbDrainStringIds": {
           "reason": "battle_message.c:1120-:1124, both entries: B_MSG_ABSORB (STRINGID_PKMNENERGYDRAINED) and B_MSG_ABSORB_OOZE (STRINGID_ITSUCKEDLIQUIDOOZE), carried as the two distinct BattleEvent variants Drained and LiquidOoze rather than as a string table -- this crate has no text renderer, so the event vocabulary is where a message identity lives. BattleScript_EffectAbsorb picks exactly one of the two (data/battle_scripts_1.s:346 vs :350) and never prints both, which crates/battle/tests/turn_engine/pipelines.rs pins.",
           "rust_target": "crates/battle/src/battle/events.rs",
           "spec": "S-6",
+          "status": "ported"
+        },
+        "gBattleStringsTable": {
+          "reason": "The full 369-slot table, including four external PC-transfer strings, is canonical raw token data only; request selection and placeholder expansion are deferred.",
+          "rust_target": "crates/xtask/src/extract/battle_message.rs",
+          "spec": "S-4",
           "status": "ported"
         }
       },
