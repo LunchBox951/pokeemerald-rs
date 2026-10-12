@@ -111,9 +111,6 @@ fn a_key_split_table_extending_past_the_last_note_is_rejected_by_the_constructor
     );
 }
 
-/// `starting_note` is a public field, so a split built in range can be moved
-/// past the last note afterwards; the group constructor is the last check
-/// before encoding.
 #[test]
 fn a_group_rejects_a_key_split_moved_past_the_last_note_after_construction() {
     let mut split =

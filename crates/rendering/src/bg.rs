@@ -103,6 +103,72 @@ impl<'a> BgLayer<'a> {
         self.sample_tile_pixel(src_x / DIM, src_y / DIM, src_x % DIM, src_y % DIM)
     }
 
+    /// Samples a scrolled coordinate the way mGBA's mode-0 draw does inside
+    /// the window pass `[pass_start, pass_end)` `(behavioral-fidelity)`.
+    ///
+    /// A pass that starts mid-tile draws that tile as a suffix clamped to the
+    /// pass end. Its flipped loops (4bpp and 8bpp) count back from the clamped
+    /// end, and its non-flipped 8bpp word loop skips the first word when the
+    /// suffix is four pixels or shorter and otherwise shifts the second one
+    /// (`mgba/src/gba/renderers/software-mode0.c:18-32,177-220,426-446`). The
+    /// source column therefore depends on `pass_end`. Everything outside that
+    /// suffix, and non-flipped 4bpp, selects the ordinary column.
+    pub(crate) fn sample_in_pass(
+        &self,
+        x: usize,
+        y: usize,
+        scroll_x: u16,
+        scroll_y: u16,
+        pass_start: usize,
+        pass_end: usize,
+    ) -> Option<Rgb888> {
+        const DIM: usize = BitDepth::TILE_DIM;
+        let width_tiles = self.tilemap.width_tiles();
+        let height_tiles = self.tilemap.height_tiles();
+        if width_tiles == 0 || height_tiles == 0 {
+            return None;
+        }
+        let bg_width_px = width_tiles.checked_mul(DIM)?;
+        let bg_height_px = height_tiles.checked_mul(DIM)?;
+        let masked_x = usize::from(scroll_x & Self::SCROLL_REGISTER_MASK);
+        let masked_y = usize::from(scroll_y & Self::SCROLL_REGISTER_MASK);
+        let start_in_tile = (pass_start + masked_x) % DIM;
+        let suffix_end = pass_end.min(pass_start + DIM - start_in_tile);
+        if start_in_tile == 0 || x < pass_start || x >= suffix_end {
+            return self.sample_scrolled(x, y, scroll_x, scroll_y);
+        }
+        let start_src_x = (pass_start + masked_x) % bg_width_px;
+        let src_y = (y + masked_y) % bg_height_px;
+        let tile_col = start_src_x / DIM;
+        let tile_row = src_y / DIM;
+        let h_flip = self.tilemap.entry(tile_col, tile_row)?.h_flip();
+        let len = suffix_end - pass_start;
+        let k = x - pass_start;
+        let source_column = if h_flip {
+            len - 1 - k
+        } else if self.is_8bpp() {
+            if len <= 4 {
+                DIM / 2 + start_in_tile % 4 + k
+            } else if k < len - 4 {
+                start_in_tile % 4 + k
+            } else {
+                DIM / 2 + k - (len - 4)
+            }
+        } else {
+            start_in_tile + k
+        };
+        if source_column >= DIM {
+            return None;
+        }
+        // `sample_tile_pixel` applies the entry's horizontal flip itself.
+        let tile_x = if h_flip {
+            DIM - 1 - source_column
+        } else {
+            source_column
+        };
+        self.sample_tile_pixel(tile_col, tile_row, tile_x, src_y % DIM)
+    }
+
     /// Whether this layer's tiles are 8bpp, the depth whose mosaic path
     /// prefetches a span's first texel (see
     /// [`Self::sample_8bpp_mosaic_prefetch`]).

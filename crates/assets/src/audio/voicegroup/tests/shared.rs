@@ -5,22 +5,20 @@ const KEY_SPLIT_START: u8 = 36;
 
 pub(super) fn sample_envelope() -> Envelope {
     Envelope {
-        attack: 255,
+        attack: u8::MAX,
         decay: 0,
-        sustain: 255,
+        sustain: u8::MAX,
         release: 0,
     }
 }
 
-/// A CGB envelope within upstream's macro-masked domain (`0..=7` for
-/// attack/decay/release, `0..=15` for sustain). CGB voice fixtures use this
-/// instead of [`sample_envelope`], whose out-of-domain values are valid only
-/// for `DirectSound`'s unmasked envelope.
+/// Unlike `DirectSound`'s, a CGB envelope must survive upstream's macro masks unchanged
+/// (`asm/macros/music_voice.inc`).
 pub(super) fn sample_cgb_envelope() -> Envelope {
     Envelope {
-        attack: 7,
+        attack: MAX_CGB_ENVELOPE_ATTACK_DECAY_RELEASE,
         decay: 5,
-        sustain: 15,
+        sustain: MAX_CGB_ENVELOPE_SUSTAIN,
         release: 3,
     }
 }
