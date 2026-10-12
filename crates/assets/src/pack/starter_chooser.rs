@@ -1,9 +1,7 @@
 //! Typed starter-chooser graphics (upstream `src/starter_choose.c`).
 //!
-//! The pack ids stay private to this module so scene code composes no strings
-//! and cannot substitute other art. Each lookup re-checks the shapes
-//! extraction enforces, because a corrupt or hand-built pack must not reach a
-//! renderer with an unmappable pixel or a short tilemap.
+//! Pack ids stay private so scene code composes no strings. Every lookup
+//! re-validates shapes, since a hand-built or corrupt pack can bypass extraction.
 
 use super::{AssetPack, ImageRef, PackError, PaletteRef};
 
@@ -23,10 +21,10 @@ const POKEBALL_HEIGHT: u32 = 128;
 const CIRCLE_SIDE: u32 = 64;
 const FRONT_SIDE: u32 = 64;
 const BANK_PALETTE_COLORS: u16 = 16;
-/// A 32x20 screenblock of 16-bit text-mode entries.
-const BAG_TILEMAP_BYTES: usize = 1280;
-/// A 32x32 screenblock of 16-bit text-mode entries.
-const GRASS_TILEMAP_BYTES: usize = 2048;
+const TILEMAP_ENTRY_BYTES: usize = 2;
+const PALETTE_ENTRY_BYTES: usize = 2;
+const BAG_TILEMAP_BYTES: usize = 32 * 20 * TILEMAP_ENTRY_BYTES;
+const GRASS_TILEMAP_BYTES: usize = 32 * 32 * TILEMAP_ENTRY_BYTES;
 
 /// The three starters offered by the chooser.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,19 +47,19 @@ impl StarterSpecies {
     }
 }
 
-/// An indexed sheet with the palette its indices map through.
+/// An indexed image paired with the palette its pixel indices select from.
 #[derive(Debug, Clone, Copy)]
 pub struct PalettedImage<'a> {
-    /// Palette-index bitmap.
+    /// One palette index per pixel.
     pub image: ImageRef<'a>,
-    /// Palette used by the bitmap.
+    /// Palette the pixel indices select from.
     pub palette: PaletteRef<'a>,
 }
 
 /// Every graphic the starter chooser draws, borrowing the pack for `'a`.
 ///
-/// [`AssetPack::starter_chooser`] requires each entry and validates its shape
-/// before returning this handle. The hand and the Poké Balls share one sheet.
+/// [`AssetPack::starter_chooser`] returns it with every entry validated.
+/// The hand and the Poké Balls share one sheet.
 #[derive(Debug, Clone, Copy)]
 pub struct StarterChooserHandle<'a> {
     /// Bag and grass background tile sheet with its 32-colour palette.
@@ -78,8 +76,7 @@ pub struct StarterChooserHandle<'a> {
 
 /// One starter's shared normal front image and 16-colour palette.
 ///
-/// [`AssetPack::starter_preview`] returns the generic species art that the
-/// chooser preview and battle rendering share.
+/// The generic species art the chooser preview shares with battle rendering.
 #[derive(Debug, Clone, Copy)]
 pub struct StarterPreviewHandle<'a> {
     /// Normal front image and palette.
@@ -91,10 +88,9 @@ impl AssetPack {
     ///
     /// # Errors
     ///
-    /// [`PackError::UnknownAsset`] or [`PackError::WrongKind`] when an entry is
-    /// missing or of the wrong kind; [`PackError::MalformedStarterAsset`] when
-    /// an entry's dimensions, palette size, pixel indices, or tilemap length
-    /// differ from the upstream graphic.
+    /// [`PackError::UnknownAsset`] or [`PackError::WrongKind`] for a missing or
+    /// wrong-kind entry; [`PackError::MalformedStarterAsset`] when dimensions,
+    /// palette size, pixel indices, or tilemap length differ from upstream.
     pub fn starter_chooser(&self) -> Result<StarterChooserHandle<'_>, PackError> {
         Ok(StarterChooserHandle {
             tiles: self.starter_image(
@@ -166,7 +162,7 @@ impl AssetPack {
         }
         let palette = self.palette(palette_id)?;
         if palette.color_count != palette_colors
-            || palette.raw.len() != usize::from(palette_colors) * 2
+            || palette.raw.len() != usize::from(palette_colors) * PALETTE_ENTRY_BYTES
         {
             return Err(PackError::MalformedStarterAsset {
                 id: palette_id.to_owned(),
