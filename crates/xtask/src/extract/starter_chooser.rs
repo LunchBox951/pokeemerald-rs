@@ -138,7 +138,6 @@ fn extract_tilemap(
     extract_tilemap_with(upstream, tilemap, &mut read_file, writer)
 }
 
-/// `extract_tilemap` with its file read injected, so a test can count reads.
 fn extract_tilemap_with(
     upstream: &Path,
     tilemap: TilemapSource,
@@ -150,8 +149,8 @@ fn extract_tilemap_with(
     push_tilemap(&path, tilemap, payload, writer)
 }
 
-/// Validates `payload` and queues that same buffer, so the bytes checked are
-/// the bytes published.
+/// The buffer validated is the buffer queued: a second read of the path
+/// could publish bytes that changed after the length check (#2105).
 fn push_tilemap(
     path: &Path,
     tilemap: TilemapSource,
