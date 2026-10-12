@@ -48,7 +48,7 @@ fn continued_phase_with_trailing_member(member: &BattlePokemon) -> OverworldPhas
     seed.save1.player_party[0] = crate::party::to_save_pokemon(&dex, &fainted_starter());
     seed.save1.player_party[1] = crate::party::to_save_pokemon(&dex, member);
     OverworldPhase::from_saved(
-        crate::overworld::tests::synthetic_scene(10, 10),
+        crate::overworld::test_support::synthetic_scene(10, 10),
         seed.map_id,
         seed.save1,
         seed.save2,
@@ -203,7 +203,7 @@ fn an_egg_over_a_fainted_party_still_refuses_a_wild_battle() {
     ));
     seed.save1.player_party[1] = crate::party::to_save_pokemon(&dex, &fainted_starter());
     let mut phase = OverworldPhase::from_saved(
-        crate::overworld::tests::synthetic_scene(10, 10),
+        crate::overworld::test_support::synthetic_scene(10, 10),
         seed.map_id,
         seed.save1,
         seed.save2,
@@ -232,7 +232,7 @@ fn continue_scans_a_trailing_slot_beyond_the_stored_party_count() {
     seed.save1.player_party[1] =
         crate::party::to_save_pokemon(&dex, &new_game::provisional_starter());
     let phase = OverworldPhase::from_saved(
-        crate::overworld::tests::synthetic_scene(10, 10),
+        crate::overworld::test_support::synthetic_scene(10, 10),
         seed.map_id,
         seed.save1,
         seed.save2,
@@ -269,7 +269,7 @@ fn a_zero_stored_count_still_resumes_with_no_lead() {
     seed.save1.player_party[1] =
         crate::party::to_save_pokemon(&dex, &new_game::provisional_starter());
     let phase = OverworldPhase::from_saved(
-        crate::overworld::tests::synthetic_scene(10, 10),
+        crate::overworld::test_support::synthetic_scene(10, 10),
         seed.map_id,
         seed.save1,
         seed.save2,
@@ -372,7 +372,7 @@ fn a_white_out_merges_a_full_scan_selected_trailing_lead_without_healing_it_or_t
     seed.save1.player_party[1] =
         crate::party::to_save_pokemon(&dex, &new_game::provisional_starter());
     let mut phase = OverworldPhase::from_saved(
-        crate::overworld::tests::synthetic_scene(10, 10),
+        crate::overworld::test_support::synthetic_scene(10, 10),
         seed.map_id,
         seed.save1,
         seed.save2,
@@ -481,7 +481,7 @@ fn a_white_out_heals_every_occupied_party_member() {
     );
 
     let continued = OverworldPhase::from_saved(
-        crate::overworld::tests::synthetic_scene(10, 10),
+        crate::overworld::test_support::synthetic_scene(10, 10),
         phase.map_id,
         phase.save1.clone(),
         phase.save2.clone(),

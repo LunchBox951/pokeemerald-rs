@@ -127,7 +127,7 @@ fn the_bedrooms_decoration_placeholders_do_not_block_a_fresh_save() {
     // A phase entering the bedroom -- the same path `load_default` takes,
     // minus the pack.
     let phase = OverworldPhase::for_test(
-        crate::overworld::tests::synthetic_scene(10, 10),
+        crate::overworld::test_support::synthetic_scene(10, 10),
         BEDROOM,
         PlayerState::new((1, 3), 3, Direction::North),
         None,
@@ -173,7 +173,7 @@ fn a_decoration_placeholder_would_block_if_its_flag_were_clear() {
     );
 
     let header = assets::MapHeaderTable::new().header(BEDROOM).unwrap();
-    let scene = crate::overworld::tests::synthetic_scene(10, 10);
+    let scene = crate::overworld::test_support::synthetic_scene(10, 10);
     let runtime = scene.runtime(BEDROOM, header, events);
     let mut player = PlayerState::new((1, 3), 3, Direction::North);
     let no_connections = |_: MapId| -> Option<(u16, u16)> { None };

@@ -7,8 +7,8 @@
 //! colours, so nothing in the bytes chooses; adjacency does. The pack id
 //! names the message box, so the generator records the copy that sits
 //! immediately before `gMessageBox_Gfx` -- which is unique -- and records
-//! `sTextWindowPalettes` separately, derived from the four `text_pal*`
-//! banks that follow its first entry.
+//! `sTextWindowPalettes` separately, derived from the first `text_pal*`
+//! bank and then required to hold all four in order.
 
 use super::error::GenRomProfileError;
 use super::images::{locate_images, ImageQuery};
@@ -22,8 +22,14 @@ use super::Context;
 const DUPLICATED_PALETTE: &str = "text-window/palette/message_box";
 /// The image whose tiles the duplicated palette sits beside.
 const ADJACENT_IMAGE: &str = "text-window/image/message_box";
-/// The first `text_pal*` bank, which follows `sTextWindowPalettes[0]`.
-const FIRST_WINDOW_PALETTE: &str = "text-window/palette/text_pal1";
+/// The pack ids of `sTextWindowPalettes[1..=4]`, in table order. The first
+/// follows `sTextWindowPalettes[0]`.
+const WINDOW_BANKS: [&str; 4] = [
+    "text-window/palette/text_pal1",
+    "text-window/palette/text_pal2",
+    "text-window/palette/text_pal3",
+    "text-window/palette/text_pal4",
+];
 
 /// Locate the whole text-window domain.
 ///
@@ -109,23 +115,44 @@ fn palette_symbol(id: &str) -> SymbolExpectation {
     SymbolExpectation::Contains(vec![format!("TextWindowFrame{stem}_Pal")])
 }
 
-/// Derive `sTextWindowPalettes` from the bank that follows its first entry.
+/// Derive `sTextWindowPalettes` from the bank that follows its first entry,
+/// then require every `text_pal*` bank at its indexed place in the table.
 fn locate_window_palettes(
     ctx: &Context<'_>,
     palettes: &[PalettePlan],
     bank_bytes: u32,
     message_box: &[u8],
 ) -> Result<u32, GenRomProfileError> {
-    let first = palettes
-        .iter()
-        .find(|plan| plan.id == FIRST_WINDOW_PALETTE)
-        .ok_or_else(|| GenRomProfileError::MissingPackEntry(FIRST_WINDOW_PALETTE.to_owned()))?
-        .addr;
-    first
+    let bank_addr = |id: &str| {
+        palettes
+            .iter()
+            .find(|plan| plan.id == id)
+            .map(|plan| plan.addr)
+            .ok_or_else(|| GenRomProfileError::MissingPackEntry(id.to_owned()))
+    };
+    let first = bank_addr(WINDOW_BANKS[0])?;
+    let table = first
         .checked_sub(bank_bytes)
         .filter(|&addr| slice_at_addr(ctx.rom, addr, message_box.len()) == Some(message_box))
         .ok_or_else(|| GenRomProfileError::StructMismatch {
             id: "sTextWindowPalettes".to_owned(),
             reason: format!("the bank before {first:08X} is not the message box's"),
-        })
+        })?;
+    for (index, id) in (1u32..).zip(WINDOW_BANKS) {
+        let expected = table.checked_add(index * bank_bytes);
+        let found = bank_addr(id)?;
+        if expected != Some(found) {
+            return Err(GenRomProfileError::StructMismatch {
+                id: id.to_owned(),
+                reason: format!(
+                    "sTextWindowPalettes[{index}] is not at {found:08X}; the table at {table:08X} \
+                     expects it at bank {index}"
+                ),
+            });
+        }
+    }
+    Ok(table)
 }
+
+#[cfg(test)]
+mod tests;

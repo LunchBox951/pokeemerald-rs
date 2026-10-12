@@ -24,6 +24,7 @@ fn poison_sting_against_a_synchronize_target_reflects_poison_at_move_end() {
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .expect("Synchronize is admitted: the reflection is modelled");
+    rng.assert_exhausted();
 
     assert!(
         matches!(
@@ -96,6 +97,7 @@ fn an_immunity_original_attacker_blocks_its_own_reflected_poison() {
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
+    rng.assert_exhausted();
 
     assert!(
         events.contains(&BattleEvent::SynchronizeImmunityProtected {
@@ -131,6 +133,7 @@ fn a_poison_typed_original_attacker_blocks_its_own_reflected_poison() {
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
+    rng.assert_exhausted();
 
     assert!(
         events.contains(&BattleEvent::SynchronizePoisonOrSteelTypeProtected {
@@ -162,6 +165,7 @@ fn an_already_statused_original_attacker_reflects_nothing_new() {
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
+    rng.assert_exhausted();
 
     assert!(
         !events

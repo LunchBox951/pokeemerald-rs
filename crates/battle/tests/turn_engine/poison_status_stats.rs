@@ -59,6 +59,7 @@ fn poison_sting_newly_poisons_a_guts_defender_who_then_hits_harder() {
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .expect("Guts is modelled, so the pick is admitted");
+    rng.assert_exhausted();
 
     let hit_index = events
         .iter()
@@ -150,6 +151,7 @@ fn poison_sting_newly_poisons_a_marvel_scale_defender_who_then_takes_less_damage
     let turn_two = battle
         .take_turn(PlayerAction::UseMove(1), &mut rng)
         .unwrap();
+    rng.assert_exhausted();
     assert!(
         turn_two.contains(&BattleEvent::Hit {
             by_player: true,

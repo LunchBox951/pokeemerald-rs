@@ -62,7 +62,7 @@ fn oldale_phase_with(player: PlayerState, event_data: &EventData) -> OverworldPh
         .expect("MAP_OLDALE_TOWN must resolve");
     let events: &'static assets::MapEvents = Box::leak(Box::new(events));
     OverworldPhase::for_test(
-        crate::overworld::tests::synthetic_scene_with_events(
+        crate::overworld::test_support::synthetic_scene_with_events(
             20,
             20,
             events,
@@ -473,7 +473,7 @@ fn a_successful_transition_replaces_the_live_object_events() {
         std::process::id(),
         std::thread::current().id()
     ));
-    crate::overworld::tests::write_oldale_layout_pack(
+    crate::overworld::test_support::write_oldale_layout_pack(
         &path,
         &["girl_3", "mart_employee", "maniac"],
     );
@@ -576,7 +576,7 @@ fn continue_restores_oldale_npcs_at_their_map_json_tiles() {
         std::process::id(),
         std::thread::current().id()
     ));
-    crate::overworld::tests::write_oldale_layout_pack(
+    crate::overworld::test_support::write_oldale_layout_pack(
         &path,
         &["girl_3", "mart_employee", "maniac"],
     );

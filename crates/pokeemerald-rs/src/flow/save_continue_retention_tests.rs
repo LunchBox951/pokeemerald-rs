@@ -68,7 +68,7 @@ fn a_slot_that_will_not_decode_survives_an_ordinary_save() {
     );
 
     let mut resumed = OverworldPhase::from_saved(
-        crate::overworld::tests::synthetic_scene(10, 10),
+        crate::overworld::test_support::synthetic_scene(10, 10),
         seed.map_id,
         seed.save1,
         seed.save2,
@@ -186,7 +186,7 @@ fn a_genuinely_empty_partys_residual_slot_survives_an_ordinary_save() {
     seed.save1.player_party_count = 0;
 
     let mut resumed = OverworldPhase::from_saved(
-        crate::overworld::tests::synthetic_scene(10, 10),
+        crate::overworld::test_support::synthetic_scene(10, 10),
         seed.map_id,
         seed.save1,
         seed.save2,

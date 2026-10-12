@@ -55,7 +55,7 @@ fn a_saved_game_reloads_into_an_overworld_phase_that_matches_it() {
         saved_map_id(saved.block1.location).expect("the saved location must resolve to a map");
     assert_eq!(map, new_game::SPAWN_MAP_ID);
     let resumed = OverworldPhase::from_saved(
-        crate::overworld::tests::synthetic_scene(10, 10),
+        crate::overworld::test_support::synthetic_scene(10, 10),
         map,
         saved.block1,
         saved.block2,
@@ -149,7 +149,7 @@ fn the_most_recent_of_two_saves_is_the_one_that_reloads() {
     let loaded = slot.load();
     let map = saved_map_id(loaded.block1.location).expect("the saved location must resolve");
     let mut phase = OverworldPhase::from_saved(
-        crate::overworld::tests::synthetic_scene(10, 10),
+        crate::overworld::test_support::synthetic_scene(10, 10),
         map,
         loaded.block1,
         loaded.block2,
