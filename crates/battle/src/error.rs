@@ -98,6 +98,14 @@ pub enum BattleError {
     /// the unsupported flag bits.
     UnsupportedAiFlags(AiFlags),
 
+    /// A trainer AI scoring target's species has two ability slots and its
+    /// selected ability is not Shadow Tag, Magnet Pull, or Arena Trap (which
+    /// upstream reads directly). The engine models no battle ability history,
+    /// so it cannot reproduce upstream's `get_ability AI_TARGET` read-or-guess
+    /// (`pokeemerald/src/battle_ai_script_commands.c:1350`-`:1396`) and
+    /// refuses the lead before consuming randomness.
+    AmbiguousPlayerAbility(SpeciesId),
+
     /// A turn was requested while a level-up move awaited a learn decision.
     /// The pending move ID is returned without changing battle state.
     MoveLearnPending(MoveId),
@@ -178,6 +186,11 @@ impl fmt::Display for BattleError {
                 f,
                 "trainer AI flags `{:#x}` include unsupported scripts",
                 flags.bits()
+            ),
+            Self::AmbiguousPlayerAbility(species) => write!(
+                f,
+                "species `{}` has two abilities the trainer AI cannot tell apart",
+                species.0
             ),
             Self::MoveLearnPending(id) => write!(
                 f,

@@ -8,7 +8,8 @@
 //! a tag. `sObjectEventSpritePalettes`, the `{data, tag}` table in
 //! `src/event_object_movement.c`, picks it. A unique bank's table entry
 //! locates the table, whose extent then selects the real copy of each
-//! ambiguous bank.
+//! ambiguous bank. A bank the table does not reference is refused, as the
+//! importer rejects roots outside the table.
 
 use super::error::GenRomProfileError;
 use super::images::{locate_images, ImageQuery};
@@ -34,7 +35,7 @@ const TAG_SPREAD: u16 = 0x100;
 ///
 /// Any [`GenRomProfileError`] a locator raises, plus
 /// [`GenRomProfileError::StructMismatch`] if `sObjectEventSpritePalettes`
-/// cannot be found or does not resolve a duplicated bank.
+/// cannot be found or does not reference exactly one copy of a bank.
 pub fn locate(
     ctx: &Context<'_>,
     report: &mut Vec<ReportLine>,
@@ -85,25 +86,25 @@ pub fn locate(
             .copied()
             .map(super::locate::to_addr)
             .collect();
-        let (addr, resolution, note) = match candidates.as_slice() {
-            [] => return Err(GenRomProfileError::NotFound { id: id.clone() }),
-            [only] => (*only, Resolution::UniqueSignature, None),
-            many => {
-                let chosen = only_one_matching(
-                    id,
-                    "a reference from sObjectEventSpritePalettes",
-                    many.iter().copied(),
-                    |&addr| table.references(ctx, addr),
-                )?;
-                (
-                    chosen,
-                    Resolution::StructDerived,
-                    Some(format!(
-                        "{} identical banks in the ROM; the palette table names this one",
-                        many.len()
-                    )),
-                )
-            }
+        if candidates.is_empty() {
+            return Err(GenRomProfileError::NotFound { id: id.clone() });
+        }
+        let addr = only_one_matching(
+            id,
+            "a reference from sObjectEventSpritePalettes",
+            candidates.iter().copied(),
+            |&addr| table.references(ctx, addr),
+        )?;
+        let (resolution, note) = if candidates.len() == 1 {
+            (Resolution::UniqueSignature, None)
+        } else {
+            (
+                Resolution::StructDerived,
+                Some(format!(
+                    "{} identical banks in the ROM; the palette table names this one",
+                    candidates.len()
+                )),
+            )
         };
         let mut line = ReportLine::unique(id, addr, len32(&asset.payload))
             .with(resolution)
@@ -192,7 +193,15 @@ fn is_neighbour(ctx: &Context<'_>, at: u32, seed_tag: u16) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{PaletteTable, RECORD_BYTES};
+    use pack_format::{image_entry_from_tiles, palette_entry, PackEntry};
+    use rom_import::fixture::RomFixture;
+
+    use super::{locate, PaletteTable, RECORD_BYTES};
+    use crate::gen_rom_profile::error::GenRomProfileError;
+    use crate::gen_rom_profile::tests::with_context;
+
+    const SEED: &str = "sprite/palette/a_seed";
+    const TARGET: &str = "sprite/palette/z_target";
 
     #[test]
     fn a_table_spans_whole_records() {
@@ -201,5 +210,95 @@ mod tests {
             end: 0x0850_BBC8 + RECORD_BYTES * 4,
         };
         assert_eq!(table.end - table.start, 32);
+    }
+
+    fn colors(base: u16) -> Vec<u16> {
+        (0..16u16).map(|index| base + index * 0x0421).collect()
+    }
+
+    fn bytes(colors: &[u16]) -> Vec<u8> {
+        colors.iter().flat_map(|c| c.to_le_bytes()).collect()
+    }
+
+    fn record(data: u32, tag: u16) -> Vec<u8> {
+        let mut out = data.to_le_bytes().to_vec();
+        out.extend_from_slice(&tag.to_le_bytes());
+        out.extend_from_slice(&[0, 0]);
+        out
+    }
+
+    /// A pack holding every required sheet plus the seed and target
+    /// palettes, and a ROM planting the table `records` and the palettes at
+    /// `target_copies`.
+    fn fixture(records: &[Vec<u8>], target_copies: &[usize]) -> (Vec<u8>, Vec<PackEntry>) {
+        let seed = colors(0x0100);
+        let target = colors(0x0200);
+        let mut entries: Vec<PackEntry> = crate::extract::scope::sprite_sheet_ids()
+            .into_iter()
+            .map(|id| image_entry_from_tiles(id, &[0x12; 32], 4, 8, 8, None).expect("sheet"))
+            .collect();
+        entries.push(palette_entry(SEED.into(), &seed).expect("seed"));
+        entries.push(palette_entry(TARGET.into(), &target).expect("target"));
+        let mut rom = RomFixture::new()
+            .emerald_header()
+            .write(0x1000, &[0x12; 32])
+            .write(0x2000, &bytes(&seed));
+        for &at in target_copies {
+            rom = rom.write(at, &bytes(&target));
+        }
+        let table: Vec<u8> = records.concat();
+        (rom.write(0x4000, &table).finish(), entries)
+    }
+
+    #[test]
+    fn a_unique_palette_the_table_omits_is_refused() {
+        let (rom, entries) = fixture(&[record(0x0800_2000, 0x1100)], &[0x3000]);
+        with_context("sprite-palette-omitted", &rom, entries, |ctx| {
+            let mut report = Vec::new();
+            let err = locate(ctx, &mut report).unwrap_err();
+            match err {
+                GenRomProfileError::StructMismatch { id, reason } => {
+                    assert_eq!(id, TARGET);
+                    assert!(reason.contains("sObjectEventSpritePalettes"), "{reason}");
+                }
+                other => panic!("expected StructMismatch, got {other}"),
+            }
+            assert!(report
+                .iter()
+                .all(|line| !format!("{line:?}").contains(TARGET)));
+        });
+    }
+
+    #[test]
+    fn a_unique_palette_the_table_references_is_emitted() {
+        let records = [record(0x0800_2000, 0x1100), record(0x0800_3000, 0x1101)];
+        let (rom, entries) = fixture(&records, &[0x3000]);
+        with_context("sprite-palette-listed", &rom, entries, |ctx| {
+            let plan = locate(ctx, &mut Vec::new()).expect("located");
+            assert_eq!(plan.palette_table, 0x0800_4000);
+            let target = plan
+                .palettes
+                .iter()
+                .find(|p| p.id == TARGET)
+                .expect("target");
+            assert_eq!(target.addr, 0x0800_3000);
+            assert_eq!(target.color_count, 16);
+        });
+    }
+
+    #[test]
+    fn a_duplicated_palette_resolves_to_the_copy_the_table_names() {
+        let records = [record(0x0800_2000, 0x1100), record(0x0800_5000, 0x1101)];
+        let (rom, entries) = fixture(&records, &[0x3000, 0x5000]);
+        with_context("sprite-palette-duplicate", &rom, entries, |ctx| {
+            let mut report = Vec::new();
+            let plan = locate(ctx, &mut report).expect("located");
+            let target = plan
+                .palettes
+                .iter()
+                .find(|p| p.id == TARGET)
+                .expect("target");
+            assert_eq!(target.addr, 0x0800_5000);
+        });
     }
 }

@@ -53,8 +53,9 @@
 //! [`crate::flow::first_battle::advance_first_battle`] ever reports
 //! (`PlayerWon`, `PlayerLost`, `WildFled`; `PlayerRan` is unreachable --
 //! the driver never chooses Run, `RunForbidden`) -- never on an *aborted*
-//! battle (`super::first_battle_trigger`'s own "When the var advances"
-//! section: an abort reports no outcome at all; it is a port-only
+//! battle (the trigger is already consumed before the fight,
+//! `pokeemerald/data/maps/Route101/scripts.inc:40`; an abort reports no
+//! outcome at all; it is a port-only
 //! construct -- upstream would Struggle and end normally -- so there is no
 //! upstream state for a conclusion to model, and the abort can only leave
 //! an alive (if damaged) lead, never a fainted one: any damage that faints
