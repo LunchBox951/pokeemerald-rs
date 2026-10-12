@@ -27301,13 +27301,13 @@
           "status": "stubbed"
         },
         "ply_patt": {
-          "reason": "ply_patt (m4a_1.s:851-869) pushes the return cursor onto track->patternStack and jumps to the target; at the engine's depth of 3 it branches to ply_fine without reading the target. Reimplemented three times: the runtime Track::call_pattern in crates/audio/src/sequencer.rs (three-entry pattern_return_stack, a fourth nested PATT ends the track), the sequence decoder's Event::Pattern/PatternEnd arms in crates/audio/src/sequence/decode.rs (with the reader in crates/audio/src/sequence/reader.rs; #2115 moved the depth check ahead of the operand read), and the extraction decoder in crates/rom-import/src/domains/song.rs, which expands PATT/PEND inline for the pack and terminates a fourth-level PATT as Fine without reading its pointer (PR #1437, issue #1388).",
+          "reason": "ply_patt (m4a_1.s:851-869) pushes the return cursor onto track->patternStack and jumps to the target; at the engine's depth of 3 it branches to ply_fine without reading the target. Reimplemented three times: the runtime Track::call_pattern in crates/audio/src/sequencer.rs (three-entry pattern_return_stack, a fourth nested PATT ends the track), the sequence decoder's Event::Pattern/PatternEnd arms in crates/audio/src/sequence/decode.rs (the depth check in crates/audio/src/sequence/reader.rs runs before the operand read), and the extraction decoder in crates/rom-import/src/domains/song.rs, which expands PATT/PEND inline for the pack and terminates a fourth-level PATT as Fine without reading its pointer.",
           "rust_target": "crates/audio/src/sequencer.rs",
           "spec": "S-3",
           "status": "rewritten"
         },
         "ply_rept": {
-          "reason": "ply_rept (m4a_1.s:880-910) counts repeats per track: a zero count jumps to the target without touching the counter; a positive count increments first, jumps while the counter is below the count, and resets to zero after the final pass, falling through without using the target. Reimplemented twice: the runtime Track::repeat in crates/audio/src/sequencer.rs (lines 216-228, citing m4a_1.s:880-910), and the sequence decoder's Event::Repeat arm in crates/audio/src/sequence/decode.rs (lines 116-131), which keeps the same counter and validates the target only when the repeat is taken (#2079).",
+          "reason": "ply_rept (m4a_1.s:880-910) counts repeats per track: a zero count jumps to the target without touching the counter; a positive count increments first, jumps while the counter is below the count, and resets to zero after the final pass, falling through without using the target. Reimplemented twice: the runtime Track::repeat in crates/audio/src/sequencer.rs (lines 216-228, citing m4a_1.s:880-910), and the sequence decoder's Event::Repeat arm in crates/audio/src/sequence/decode.rs (lines 116-131), which keeps the same counter and validates the target only when the repeat is taken.",
           "rust_target": "crates/audio/src/sequencer.rs",
           "spec": "S-3",
           "status": "rewritten"
