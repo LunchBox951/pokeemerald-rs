@@ -140,8 +140,9 @@ impl<'a> BgSlot<'a> {
     /// `Some` `affine_mosaic_hold` is told about every column; only the
     /// returned color, not that bookkeeping, is gated on `bg_open`.
     ///
-    /// `pass_start` is the first column of the window pass containing `x`;
-    /// a regular 8bpp mosaic BG restarts its prefetch there.
+    /// `pass_start..pass_end` is the window pass containing `x`; a regular 8bpp
+    /// mosaic BG restarts its prefetch at `pass_start`, and a regular BG's
+    /// mid-tile suffix is clamped to `pass_end` (`BgLayer::sample_in_pass`).
     #[expect(
         clippy::too_many_arguments,
         reason = "mirrors the per-column window and hold state compose_pixel threads through"
@@ -155,6 +156,7 @@ impl<'a> BgSlot<'a> {
         hold_active: bool,
         affine_mosaic_hold: Option<&mut AffineMosaicHold>,
         pass_start: usize,
+        pass_end: usize,
     ) -> Option<Rgb888> {
         if let Some(hold) = affine_mosaic_hold {
             if !hold_active {
@@ -224,7 +226,14 @@ impl<'a> BgSlot<'a> {
                 layer,
                 scroll_x,
                 scroll_y,
-            } => layer.sample_scrolled(x, y, scroll_x, scroll_y),
+            } if self.mosaic && bg_mosaic.horizontal() > 1 => {
+                layer.sample_scrolled(x, y, scroll_x, scroll_y)
+            }
+            BgKind::Regular {
+                layer,
+                scroll_x,
+                scroll_y,
+            } => layer.sample_in_pass(x, y, scroll_x, scroll_y, pass_start, pass_end),
             BgKind::Affine {
                 layer,
                 matrix,
@@ -460,9 +469,16 @@ pub fn compose_frame_with_effects(
         let window_spans = WindowSpans::new(&passes, effects.windows.obj_window.is_some());
         let backdrop_row = initialized_backdrop_row(&passes, effects);
         let mut pass_start = 0;
+        let mut pass_end = width;
         for (x, &uncovered_backdrop) in backdrop_row.iter().enumerate().take(width) {
             if passes.iter().any(|pass| pass.start == x) {
                 pass_start = x;
+                pass_end = passes
+                    .iter()
+                    .map(|pass| pass.start)
+                    .filter(|&start| start > x)
+                    .min()
+                    .unwrap_or(width);
                 for hold in affine_mosaic_holds.iter_mut().flatten() {
                     hold.close();
                 }
@@ -475,6 +491,7 @@ pub fn compose_frame_with_effects(
                 &mut affine_mosaic_holds,
                 window_spans,
                 pass_start,
+                pass_end,
                 uncovered_backdrop,
                 x,
                 y,
@@ -560,6 +577,7 @@ fn compose_pixel(
     affine_mosaic_holds: &mut [Option<AffineMosaicHold>; 4],
     window_spans: WindowSpans<'_>,
     pass_start: usize,
+    pass_end: usize,
     uncovered_backdrop: Rgb888,
     x: usize,
     y: usize,
@@ -624,6 +642,7 @@ fn compose_pixel(
             hold_active,
             affine_mosaic_hold.as_mut(),
             pass_start,
+            pass_end,
         ) else {
             continue;
         };

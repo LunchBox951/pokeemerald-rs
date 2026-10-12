@@ -935,6 +935,7 @@ impl Sequencer {
                 let samples = WaveChannel::decode_wave_ram(&w.table);
                 mixer.add_cgb_voice(
                     CgbVoice::wave(
+                        w.wave_id.clone(),
                         samples,
                         w.adsr,
                         w.fixed_rate,

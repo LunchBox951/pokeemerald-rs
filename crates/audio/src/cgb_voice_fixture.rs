@@ -1,5 +1,6 @@
 use super::{CgbAdsr, CgbChannelNumber, CgbVoice};
 use crate::psg::WaveChannel;
+use std::sync::Arc;
 
 pub(super) const TEST_KEY: u8 = 60;
 pub(super) const FULL_TRACK_VOLUME: u8 = u8::MAX;
@@ -114,6 +115,7 @@ pub(super) fn fixed_square_voice(
 
 pub(super) fn wave_voice(fixed_rate: bool, note: TestNote) -> CgbVoice {
     CgbVoice::wave(
+        Arc::from("full-swing"),
         full_swing_wave(),
         CgbAdsr::flat(),
         fixed_rate,
