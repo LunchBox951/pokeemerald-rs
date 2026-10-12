@@ -43,7 +43,7 @@ const UNEXECUTABLE_MOVE: MoveId = MoveId::PURSUIT;
 /// place the player next to [`ROUTE_101_TRIGGER_TILE`].
 fn route_101_trigger_phase(player: PlayerState) -> OverworldPhase {
     OverworldPhase::for_test(
-        crate::overworld::tests::synthetic_scene(25, 25),
+        crate::overworld::test_support::synthetic_scene(25, 25),
         MapId("MAP_ROUTE101"),
         player,
         None,
@@ -60,7 +60,7 @@ fn route_101_trigger_phase_with_special_tiles(
     specials: &[((u16, u16), u8)],
 ) -> OverworldPhase {
     OverworldPhase::for_test(
-        crate::overworld::tests::synthetic_scene_with_special_tiles(25, 25, specials),
+        crate::overworld::test_support::synthetic_scene_with_special_tiles(25, 25, specials),
         MapId("MAP_ROUTE101"),
         player,
         None,
@@ -105,7 +105,7 @@ fn entering_route_101_bumps_the_fresh_save_rescue_var_to_one() {
 #[test]
 fn entering_a_different_map_leaves_the_rescue_var_at_its_fresh_save_zero() {
     let phase = OverworldPhase::for_test(
-        crate::overworld::tests::synthetic_scene(10, 10),
+        crate::overworld::test_support::synthetic_scene(10, 10),
         MapId("MAP_LITTLEROOT_TOWN"),
         PlayerState::new((0, 0), 3, Direction::East),
         None,
@@ -130,7 +130,7 @@ fn continuing_on_route_101_only_advances_the_fresh_rescue_state() {
             .var_set(VAR_ROUTE101_STATE, saved_state)
             .unwrap();
         let resumed = OverworldPhase::from_saved(
-            crate::overworld::tests::synthetic_scene(25, 25),
+            crate::overworld::test_support::synthetic_scene(25, 25),
             MapId("MAP_ROUTE101"),
             block1,
             block2,
@@ -194,7 +194,7 @@ fn stepping_onto_the_route_101_trigger_tile_starts_the_scripted_first_battle() {
 fn the_rescue_trigger_fires_at_the_retained_elevation_not_the_transition_cell() {
     let (tx, ty) = ROUTE_101_TRIGGER_TILE;
     let mut phase = OverworldPhase::for_test(
-        crate::overworld::tests::synthetic_scene_with_cell_elevation(
+        crate::overworld::test_support::synthetic_scene_with_cell_elevation(
             25,
             25,
             trigger_tile_cell(),

@@ -212,7 +212,7 @@ fn the_faced_vigoroth_is_visible_with_a_real_script() {
 fn a_null_script_does_not_preempt_movement_unlike_an_unmodelled_script() {
     const CORRIDOR: assets::MapId = assets::MapId("MAP_FALLARBOR_TOWN_BATTLE_TENT_CORRIDOR");
     let mut phase = OverworldPhase::for_test(
-        crate::overworld::tests::synthetic_scene(10, 10),
+        crate::overworld::test_support::synthetic_scene(10, 10),
         CORRIDOR,
         PlayerState::new((3, 6), 3, Direction::West),
         None,

@@ -63,7 +63,7 @@ const FLAG_HIDE_ROUTE_101_BIRCH_STARTERS_BAG: u16 = 0x2BC;
 /// module cannot import a sibling test file's private items).
 fn route_101_trigger_phase(player: PlayerState) -> OverworldPhase {
     OverworldPhase::for_test(
-        crate::overworld::tests::synthetic_scene(25, 25),
+        crate::overworld::test_support::synthetic_scene(25, 25),
         assets::MapId("MAP_ROUTE101"),
         player,
         None,

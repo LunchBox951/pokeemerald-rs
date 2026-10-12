@@ -226,7 +226,7 @@ fn the_start_menu_does_not_open_over_an_open_dialog() {
     use engine::text::Token;
 
     let phase = OverworldPhase::for_test(
-        crate::overworld::tests::synthetic_scene(10, 10),
+        crate::overworld::test_support::synthetic_scene(10, 10),
         new_game::SPAWN_MAP_ID,
         PlayerState::new(
             new_game::SPAWN_POSITION,

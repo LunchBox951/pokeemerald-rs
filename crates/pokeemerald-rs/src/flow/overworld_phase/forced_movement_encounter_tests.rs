@@ -28,7 +28,7 @@ fn a_door_warp_is_looked_up_at_the_retained_previous_elevation() {
     );
 
     let mut phase = OverworldPhase::for_test(
-        crate::overworld::tests::synthetic_scene_with_special_tiles_at_elevations(
+        crate::overworld::test_support::synthetic_scene_with_special_tiles_at_elevations(
             10,
             10,
             &[(FLOOR, MB_CAVE, 3), (DOOR, MB_ANIMATED_DOOR, 0)],
@@ -103,7 +103,7 @@ fn a_landing_call_arrow_warp_is_looked_up_at_the_retained_previous_elevation() {
     );
 
     let mut phase = OverworldPhase::for_test(
-        crate::overworld::tests::synthetic_scene_with_special_tiles_at_elevations(
+        crate::overworld::test_support::synthetic_scene_with_special_tiles_at_elevations(
             10,
             10,
             &[(DOORMAT, MB_SOUTH_ARROW_WARP, 0)],
@@ -158,7 +158,7 @@ fn a_landing_call_arrow_warp_is_looked_up_at_the_retained_previous_elevation() {
 /// so `ProcessPlayerFieldInput` never reaches `ShowStartMenu` (`:180-186`).
 #[test]
 fn a_fresh_start_on_a_forced_movement_landing_tile_must_not_open_the_menu() {
-    let scene = crate::overworld::tests::synthetic_scene_with_special_tile(
+    let scene = crate::overworld::test_support::synthetic_scene_with_special_tile(
         10,
         10,
         (6, 4),
@@ -200,7 +200,7 @@ fn a_fresh_start_on_a_forced_movement_landing_tile_must_not_open_the_menu() {
 /// so a cracked floor suppresses START on its landing frame too.
 #[test]
 fn a_fresh_start_on_a_cracked_floor_landing_tile_must_not_open_the_menu() {
-    let scene = crate::overworld::tests::synthetic_scene_with_special_tile(
+    let scene = crate::overworld::test_support::synthetic_scene_with_special_tile(
         10,
         10,
         (6, 4),
@@ -303,7 +303,7 @@ fn a_fresh_start_on_a_forced_tile_whose_forced_step_is_blocked_must_open_the_men
     use engine::overworld::metatile_behavior::{MB_IMPASSABLE_SOUTH_AND_NORTH, MB_MUDDY_SLOPE};
 
     let blocked_slope_phase = || {
-        let scene = crate::overworld::tests::synthetic_scene_with_special_tiles(
+        let scene = crate::overworld::test_support::synthetic_scene_with_special_tiles(
             10,
             10,
             &[
@@ -371,8 +371,12 @@ fn a_forced_movement_landing_must_not_run_the_wild_encounter_check() {
     use engine::overworld::metatile_behavior::{MB_MUDDY_SLOPE, MB_NORMAL};
 
     let landing_onto = |behavior: u8| {
-        let scene =
-            crate::overworld::tests::synthetic_scene_with_special_tile(10, 10, (6, 4), behavior);
+        let scene = crate::overworld::test_support::synthetic_scene_with_special_tile(
+            10,
+            10,
+            (6, 4),
+            behavior,
+        );
         let mut phase = OverworldPhase::for_test(
             scene,
             ONE_F,
