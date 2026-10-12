@@ -5,6 +5,7 @@ use crate::cgb_pitch::{midi_key_to_cgb_freq_reg, midi_key_to_noise_control};
 use crate::gate::Gate;
 use crate::psg::{NoiseChannel, SquareChannel, WaveChannel};
 use crate::voice::StereoAcc;
+use std::sync::Arc;
 
 mod oscillator;
 mod routing;
@@ -256,12 +257,20 @@ impl CgbVoice {
 
     /// Start a programmable-wave voice from 32 decoded wave-RAM samples.
     /// `fixed_rate` applies the 8-bit DAC correction at note-on and retunes.
+    ///
+    /// `wave_id` names the immutable wave asset `samples` decodes. Equal IDs
+    /// must identify the same table: when this voice replaces or retires a
+    /// wave voice with an equal ID, it inherits that voice's retained wave-RAM
+    /// rotation instead of starting from `samples`, as the hardware keeps the
+    /// wave RAM it already holds (`m4a.c:1003-1012`). A different ID reloads
+    /// `samples` into wave RAM from its start.
     #[must_use]
     #[expect(
         clippy::too_many_arguments,
         reason = "a CGB voice starts from one decoded note and its instrument state"
     )]
     pub fn wave(
+        wave_id: Arc<str>,
         samples: [i8; 32],
         adsr: CgbAdsr,
         fixed_rate: bool,
@@ -279,7 +288,10 @@ impl CgbVoice {
     ) -> Self {
         let dac_correction = DacCorrection::from_fixed_rate(fixed_rate);
         let freq_reg = dac_correction.apply(midi_key_to_cgb_freq_reg(note_key, pit_m));
-        let oscillator = Oscillator::Wave(WaveChannel::new(samples, freq_reg));
+        let oscillator = Oscillator::Wave {
+            wave_id,
+            channel: WaveChannel::new(samples, freq_reg),
+        };
         Self::new(
             CgbChannelNumber::Wave,
             oscillator,

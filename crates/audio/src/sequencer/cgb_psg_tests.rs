@@ -3,6 +3,7 @@
 use super::*;
 use crate::cgb_envelope::CgbAdsr;
 use crate::song::{NoiseTone, SquareTone, WaveTone};
+use std::sync::Arc;
 
 // --- CGB PSG instruments, wired end-to-end through the sequencer -------
 
@@ -110,6 +111,7 @@ fn a_fixed_rate_cgb_wave_audibly_differs_from_a_plain_one() {
 
     let tone = |fixed_rate| {
         Instrument::CgbWave(WaveTone {
+            wave_id: Arc::from("full-swing"),
             table: FULL_SWING_WAVE_RAM,
             adsr: CgbAdsr::flat(),
             fixed_rate,
@@ -126,6 +128,7 @@ fn a_fixed_rate_cgb_wave_audibly_differs_from_a_plain_one() {
 #[test]
 fn a_cgb_wave_note_produces_sound_through_the_sequencer() {
     let voices = vec![Instrument::CgbWave(WaveTone {
+        wave_id: Arc::from("flat"),
         table: [0xFF; 16],
         adsr: CgbAdsr::flat(),
         fixed_rate: false,
