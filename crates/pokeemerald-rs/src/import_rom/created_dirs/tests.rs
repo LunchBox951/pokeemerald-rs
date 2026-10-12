@@ -721,6 +721,7 @@ fn a_shed_parent_past_a_raced_level_is_synced_not_its_child() {
             None
         },
         &mut || None,
+        &mut super::super::dest::reopen_for_sync,
     )
     .expect("the destination is created");
     let mut created = creation.created;
@@ -853,6 +854,7 @@ fn a_shed_parent_behind_a_symlinked_level_is_still_synced() {
             None
         },
         &mut || None,
+        &mut super::super::dest::reopen_for_sync,
     )
     .expect("the destination is created");
     let mut created = creation.created;
@@ -899,5 +901,58 @@ fn a_shed_parent_behind_a_symlinked_level_is_still_synced() {
     assert!(
         synced.contains(&(base_stat.st_dev, base_stat.st_ino)),
         "a's entry is in base, so base must be synced: {synced:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn creation_syncs_a_parent_before_shedding_its_pin_behind_a_symlinked_level() {
+    // `base/a/b/x/c`: this run makes `a` and `b`, another creator makes `x`
+    // a symlink to `external`, and opening `x` runs out of descriptors.
+    // Shedding `a` drops the only pin to `base`, which the destination's
+    // `..` ancestry cannot reach from `external`, so `a`'s entry must be
+    // synced in `base` before the pin goes.
+    let dir = TempDir::new("creation-shed-symlink");
+    let base = dir.join("base");
+    let external = dir.join("external");
+    std::fs::create_dir(&base).expect("base made");
+    std::fs::create_dir(&external).expect("external made");
+    let b = base.join("a").join("b");
+    let x = b.join("x");
+    let target = x.join("c");
+    let mut reopens = 0;
+    let mut refused = false;
+    let mut synced = Vec::new();
+    let creation = super::create_directories_pinned_with_hooks(
+        &target,
+        super::pin_budget(),
+        &mut || {},
+        &mut || {
+            reopens += 1;
+            if reopens == 2 {
+                std::os::unix::fs::symlink(&external, &x).expect("the other creator links x");
+            }
+            None
+        },
+        &mut || {
+            (!std::mem::replace(&mut refused, true))
+                .then(|| std::io::Error::from(rustix::io::Errno::MFILE))
+        },
+        &mut |parent| {
+            let reopened = super::super::dest::reopen_for_sync(parent)?;
+            let stat = rustix::fs::fstat(parent).expect("parent stats");
+            synced.push((stat.st_dev, stat.st_ino));
+            Ok(reopened)
+        },
+    )
+    .expect("the destination is created");
+    assert_eq!(creation.created.len(), 3, "a, b and c are this run's");
+    assert!(creation.created[0].parent.is_none(), "a was shed");
+    assert!(creation.created[0].entry_synced, "a's entry was synced");
+    let base_stat = rustix::fs::stat(&base).expect("base stats");
+    assert_eq!(
+        synced,
+        [(base_stat.st_dev, base_stat.st_ino)],
+        "base is synced before a's pin is shed"
     );
 }

@@ -255,6 +255,7 @@ fn convert_programmable_wave(
         });
     };
     Ok(Instrument::CgbWave(WaveTone {
+        wave_id: Arc::from(v.wave.0.as_str()),
         table: w.table,
         adsr: convert_cgb_envelope(v.envelope),
         fixed_rate: v.fixed_rate,

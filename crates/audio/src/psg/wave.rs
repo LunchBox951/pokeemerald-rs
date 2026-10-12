@@ -54,6 +54,14 @@ impl WaveChannel {
         self.phase &= !(PHASE_ONE - 1);
     }
 
+    /// Carries the retained wave-RAM rotation of `previous` onto this freshly
+    /// triggered channel: the whole-step phase is the RAM head, while the
+    /// fraction is trigger timing and restarts (`mgba/src/gb/audio.c:549-568`).
+    pub(crate) fn continue_rotation_from(&mut self, previous: &Self) {
+        self.samples = previous.samples;
+        self.phase = previous.phase & !(PHASE_ONE - 1);
+    }
+
     /// Produces the next unscaled decoded sample in `-8..=7`.
     pub fn sample(&mut self) -> i8 {
         let step = (self.phase / PHASE_ONE) as usize % self.samples.len();
