@@ -257,6 +257,13 @@ impl CgbVoice {
 
     /// Start a programmable-wave voice from 32 decoded wave-RAM samples.
     /// `fixed_rate` applies the 8-bit DAC correction at note-on and retunes.
+    ///
+    /// `wave_id` names the immutable wave asset `samples` decodes. Equal IDs
+    /// must identify the same table: when this voice replaces or retires a
+    /// wave voice with an equal ID, it inherits that voice's retained wave-RAM
+    /// rotation instead of starting from `samples`, as the hardware keeps the
+    /// wave RAM it already holds (`m4a.c:1003-1012`). A different ID reloads
+    /// `samples` into wave RAM from its start.
     #[must_use]
     #[expect(
         clippy::too_many_arguments,
