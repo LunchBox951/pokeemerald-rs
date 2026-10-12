@@ -2,8 +2,8 @@
 
 use super::super::{compose_frame_with_effects, BgSlot, FrameEffects};
 use super::shared::{
-    bpp4_tile_with_every_row, bpp4_tile_with_top_left_2x2, empty_sprite_layer,
-    opaque_affine_bg_fixture,
+    bg0_spans, bpp4_tile_with_every_row, bpp4_tile_with_top_left_2x2, empty_sprite_layer,
+    two_tile_gradient_8bpp_fixture,
 };
 use crate::affine::AffineMatrix;
 use crate::bg_affine::{AffineBgLayer, AffineTilemap, Overflow};
@@ -140,7 +140,7 @@ fn affine_mosaic_retries_the_next_pixel_when_the_block_origin_is_out_of_bounds()
     // unchanged, so the next column's retry seeds the hold instead
     // (`MODE_2_COORD_NO_OVERFLOW`/`MODE_2_MOSAIC`,
     // `mgba/src/gba/renderers/software-bg.c:24-42`) `(behavioral-fidelity)`.
-    let (tiles, palette, tilemap) = opaque_affine_bg_fixture(9);
+    let (tiles, palette, tilemap) = gradient_affine_bg_fixture();
     let layer = AffineBgLayer::new(&tiles, &palette, &tilemap);
     let one_texture_pixel = i32::from(AffineMatrix::ONE);
     let slot = BgSlot::new_affine(
@@ -167,7 +167,7 @@ fn affine_mosaic_retries_the_next_pixel_when_the_block_origin_is_out_of_bounds()
     };
     let fb = compose_frame_with_effects(&sprites, &[slot], &effects);
 
-    let held = Bgr555::from_channels(9, 0, 0).to_rgb888();
+    let held = Bgr555::from_channels(1, 0, 0).to_rgb888();
     assert_eq!(
         fb.pixel(0, 0),
         Some(crate::palette::Rgb888::BLACK),
@@ -186,8 +186,21 @@ fn affine_mosaic_retries_the_next_pixel_when_the_block_origin_is_out_of_bounds()
     assert_eq!(
         fb.pixel(3, 0),
         Some(held),
-        "x=3 holds the value the retry drew at x=1, completing the 4-wide block"
+        "x=3 still holds texture column 0, fetched at x=1"
     );
+    assert_eq!(
+        fb.pixel(4, 0),
+        Some(held),
+        "x=4 is the final held column; the reload is delayed until x=5"
+    );
+    let reloaded = Bgr555::from_channels(5, 0, 0).to_rgb888();
+    for x in 5..=7 {
+        assert_eq!(
+            fb.pixel(x, 0),
+            Some(reloaded),
+            "x={x} holds texture column 4, fetched at x=5"
+        );
+    }
 }
 
 #[test]
@@ -708,34 +721,6 @@ fn affine_mosaic_hold_advances_through_unmasked_columns_an_objwin_only_bg_cannot
     );
 }
 
-/// A 2x1 regular 8bpp BG whose first row gives every screen texel a distinct
-/// opaque color: tile `t`, column `c` is palette index (and red channel)
-/// `8 * t + c + 1`. `first_hflip` flips the first map entry.
-fn two_tile_gradient_8bpp_fixture(first_hflip: bool) -> (Tileset, Palette, Tilemap) {
-    const TILE_COUNT: usize = 2;
-    let tile_byte_len = BitDepth::Bpp8.tile_byte_len();
-    let mut bytes = vec![0u8; tile_byte_len * TILE_COUNT];
-    for (tile, chunk) in bytes.chunks_exact_mut(tile_byte_len).enumerate() {
-        for (column, byte) in chunk[..BitDepth::TILE_DIM].iter_mut().enumerate() {
-            *byte = u8::try_from(tile * BitDepth::TILE_DIM + column + 1).unwrap();
-        }
-    }
-    let tileset = Tileset::decode(BitDepth::Bpp8, &bytes).unwrap();
-    let mut colors = [Bgr555::default(); Palette::LEN];
-    for (index, color) in colors[1..=TILE_COUNT * BitDepth::TILE_DIM]
-        .iter_mut()
-        .enumerate()
-    {
-        *color = Bgr555::from_channels(u8::try_from(index + 1).unwrap(), 0, 0);
-    }
-    let entries = vec![
-        ScreenEntry::new(0, first_hflip, false, 0),
-        ScreenEntry::new(1, false, false, 0),
-    ];
-    let tilemap = Tilemap::new(2, 1, entries).unwrap();
-    (tileset, Palette::new(colors), tilemap)
-}
-
 /// Row 0 (x = 0..12) of a regular 8bpp mosaic BG (`h` x 1) under `windows`,
 /// as red channels; `0` is the black backdrop.
 fn regular_8bpp_mosaic_row(
@@ -767,19 +752,6 @@ fn regular_8bpp_mosaic_row(
                 .unwrap()
         })
         .collect()
-}
-
-/// WIN0/WIN1 spans on line 0 showing BG0 only inside them.
-fn bg0_spans(win0: (u8, u8), win1: Option<(u8, u8)>) -> WindowConfig {
-    let mut bg0_on = WindowLayerEnable::NONE;
-    bg0_on.bg[0] = true;
-    let rect = |(start, end)| WindowRect::new(WindowRange::new(start, end), WindowRange::new(0, 1));
-    WindowConfig {
-        win0: Some((rect(win0), bg0_on)),
-        win1: win1.map(|span| (rect(span), bg0_on)),
-        obj_window: None,
-        winout: WindowLayerEnable::NONE,
-    }
 }
 
 #[test]

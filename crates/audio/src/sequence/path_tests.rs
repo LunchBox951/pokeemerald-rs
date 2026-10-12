@@ -166,6 +166,30 @@ fn zero_repeat_count_closes_a_finite_event_loop() {
 }
 
 #[test]
+fn repeat_count_one_ignores_an_invalid_target() {
+    let bytes = [0xb5, 1, 0xff, 0xff, 0xff, 0xff, 0xbd, 3, 0xb1];
+    assert_eq!(
+        decode_track(&bytes).unwrap(),
+        [Event::Voice(3), Event::Fine]
+    );
+}
+
+#[test]
+fn taken_repeats_reject_an_invalid_target() {
+    for count in [0u8, 2] {
+        let bytes = [0xb5, count, 0xff, 0xff, 0xff, 0xff, 0xbd, 3, 0xb1];
+        assert_eq!(
+            decode_track(&bytes),
+            Err(super::DecodeError::UnresolvedJump {
+                offset: 0,
+                target: u32::MAX,
+            }),
+            "count {count}"
+        );
+    }
+}
+
+#[test]
 fn fourth_nested_pattern_ends_the_track() {
     let bytes = [0xb3, 0, 0, 0, 0, 0xd0, 60, 90, 0xb1];
     assert_eq!(decode_track(&bytes).unwrap(), [Event::Fine]);

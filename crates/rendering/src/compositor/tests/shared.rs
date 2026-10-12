@@ -6,6 +6,7 @@ use crate::palette::{Bgr555, Palette};
 use crate::sprite::SpriteLayer;
 use crate::tile::{BitDepth, Tileset};
 use crate::tilemap::{ScreenEntry, Tilemap};
+use crate::window::{WindowConfig, WindowLayerEnable, WindowRange, WindowRect};
 
 /// A fully opaque 1x1-tile (8x8px) BG layer using palette index 15 in
 /// bank 0, plus its owning tileset/palette/tilemap (kept alive by the
@@ -84,4 +85,45 @@ pub(super) fn bpp4_tile_with_every_row(
         row.copy_from_slice(&bpp4_row(palette_indices_by_column));
     }
     bytes
+}
+
+/// A 2x1 regular 8bpp BG whose first row gives every screen texel a distinct
+/// opaque color: tile `t`, column `c` is palette index (and red channel)
+/// `8 * t + c + 1`. `first_hflip` flips the first map entry.
+pub(super) fn two_tile_gradient_8bpp_fixture(first_hflip: bool) -> (Tileset, Palette, Tilemap) {
+    const TILE_COUNT: usize = 2;
+    let tile_byte_len = BitDepth::Bpp8.tile_byte_len();
+    let mut bytes = vec![0u8; tile_byte_len * TILE_COUNT];
+    for (tile, chunk) in bytes.chunks_exact_mut(tile_byte_len).enumerate() {
+        for (column, byte) in chunk[..BitDepth::TILE_DIM].iter_mut().enumerate() {
+            *byte = u8::try_from(tile * BitDepth::TILE_DIM + column + 1).unwrap();
+        }
+    }
+    let tileset = Tileset::decode(BitDepth::Bpp8, &bytes).unwrap();
+    let mut colors = [Bgr555::default(); Palette::LEN];
+    for (index, color) in colors[1..=TILE_COUNT * BitDepth::TILE_DIM]
+        .iter_mut()
+        .enumerate()
+    {
+        *color = Bgr555::from_channels(u8::try_from(index + 1).unwrap(), 0, 0);
+    }
+    let entries = vec![
+        ScreenEntry::new(0, first_hflip, false, 0),
+        ScreenEntry::new(1, false, false, 0),
+    ];
+    let tilemap = Tilemap::new(2, 1, entries).unwrap();
+    (tileset, Palette::new(colors), tilemap)
+}
+
+/// WIN0/WIN1 spans on line 0 showing BG0 only inside them.
+pub(super) fn bg0_spans(win0: (u8, u8), win1: Option<(u8, u8)>) -> WindowConfig {
+    let mut bg0_on = WindowLayerEnable::NONE;
+    bg0_on.bg[0] = true;
+    let rect = |(start, end)| WindowRect::new(WindowRange::new(start, end), WindowRange::new(0, 1));
+    WindowConfig {
+        win0: Some((rect(win0), bg0_on)),
+        win1: win1.map(|span| (rect(span), bg0_on)),
+        obj_window: None,
+        winout: WindowLayerEnable::NONE,
+    }
 }

@@ -140,8 +140,9 @@ impl<'a> BgSlot<'a> {
     /// `Some` `affine_mosaic_hold` is told about every column; only the
     /// returned color, not that bookkeeping, is gated on `bg_open`.
     ///
-    /// `pass_start` is the first column of the window pass containing `x`;
-    /// a regular 8bpp mosaic BG restarts its prefetch there.
+    /// `pass_start..pass_end` is the window pass containing `x`; a regular 8bpp
+    /// mosaic BG restarts its prefetch at `pass_start`, and a regular BG's
+    /// mid-tile suffix is clamped to `pass_end` (`BgLayer::sample_in_pass`).
     #[expect(
         clippy::too_many_arguments,
         reason = "mirrors the per-column window and hold state compose_pixel threads through"
@@ -155,6 +156,7 @@ impl<'a> BgSlot<'a> {
         hold_active: bool,
         affine_mosaic_hold: Option<&mut AffineMosaicHold>,
         pass_start: usize,
+        pass_end: usize,
     ) -> Option<Rgb888> {
         if let Some(hold) = affine_mosaic_hold {
             if !hold_active {
@@ -224,7 +226,14 @@ impl<'a> BgSlot<'a> {
                 layer,
                 scroll_x,
                 scroll_y,
-            } => layer.sample_scrolled(x, y, scroll_x, scroll_y),
+            } if self.mosaic && bg_mosaic.horizontal() > 1 => {
+                layer.sample_scrolled(x, y, scroll_x, scroll_y)
+            }
+            BgKind::Regular {
+                layer,
+                scroll_x,
+                scroll_y,
+            } => layer.sample_in_pass(x, y, scroll_x, scroll_y, pass_start, pass_end),
             BgKind::Affine {
                 layer,
                 matrix,
@@ -458,10 +467,18 @@ pub fn compose_frame_with_effects(
         )]
         let passes = effects.windows.scanline_passes(y as u8);
         let window_spans = WindowSpans::new(&passes, effects.windows.obj_window.is_some());
+        let backdrop_row = initialized_backdrop_row(&passes, effects);
         let mut pass_start = 0;
-        for x in 0..width {
+        let mut pass_end = width;
+        for (x, &uncovered_backdrop) in backdrop_row.iter().enumerate().take(width) {
             if passes.iter().any(|pass| pass.start == x) {
                 pass_start = x;
+                pass_end = passes
+                    .iter()
+                    .map(|pass| pass.start)
+                    .filter(|&start| start > x)
+                    .min()
+                    .unwrap_or(width);
                 for hold in affine_mosaic_holds.iter_mut().flatten() {
                     hold.close();
                 }
@@ -474,6 +491,8 @@ pub fn compose_frame_with_effects(
                 &mut affine_mosaic_holds,
                 window_spans,
                 pass_start,
+                pass_end,
+                uncovered_backdrop,
                 x,
                 y,
             );
@@ -481,6 +500,32 @@ pub fn compose_frame_with_effects(
         }
     }
     framebuffer
+}
+
+/// The backdrop row mGBA's preprocess writes with one cursor shared by every
+/// ordered pass, whose alignment prolog advances to a multiple of four without
+/// testing the pass end, so it spills past short or empty passes
+/// (`mgba/src/gba/renderers/video-software.c:933-954`) `(behavioral-fidelity)`.
+fn initialized_backdrop_row(
+    passes: &[crate::window::WindowPass],
+    effects: &FrameEffects<'_>,
+) -> [Rgb888; Framebuffer::WIDTH] {
+    let backdrop = effects.palette.apply_bg(effects.backdrop);
+    let mut row = [backdrop; Framebuffer::WIDTH];
+    let mut cursor: usize = 0;
+    for (index, pass) in passes.iter().enumerate() {
+        let end = passes
+            .get(index + 1)
+            .map_or(Framebuffer::WIDTH, |next| next.start);
+        let written_end = end.max(cursor.next_multiple_of(4)).min(Framebuffer::WIDTH);
+        row[cursor..written_end].fill(effects::backdrop_variant(
+            &effects.color,
+            pass.control.effects,
+            backdrop,
+        ));
+        cursor = written_end;
+    }
+    row
 }
 
 /// Whether `bg_index`'s affine mosaic hold should keep advancing given
@@ -532,6 +577,8 @@ fn compose_pixel(
     affine_mosaic_holds: &mut [Option<AffineMosaicHold>; 4],
     window_spans: WindowSpans<'_>,
     pass_start: usize,
+    pass_end: usize,
+    uncovered_backdrop: Rgb888,
     x: usize,
     y: usize,
 ) -> Rgb888 {
@@ -550,7 +597,7 @@ fn compose_pixel(
     // The backdrop's brighten/darken variant is chosen from that same
     // OBJWIN-independent span, not from `window.effects` below
     // (`crate::effects::backdrop_variant`) `(behavioral-fidelity)`.
-    let span_backdrop = effects::backdrop_variant(
+    let alpha_backdrop = effects::backdrop_variant(
         &effects.color,
         partition_control.effects,
         effects.palette.apply_bg(effects.backdrop),
@@ -595,6 +642,7 @@ fn compose_pixel(
             hold_active,
             affine_mosaic_hold.as_mut(),
             pass_start,
+            pass_end,
         ) else {
             continue;
         };
@@ -614,10 +662,9 @@ fn compose_pixel(
     let Some((_, front_color, front_kind, front_semi_transparent, front_color_semi_transparent)) =
         front
     else {
-        // Nothing drawn: the backdrop itself is shown, already resolved to
-        // its span variant (effects::resolve_pixel_color never alpha-blends
-        // the backdrop against itself).
-        return span_backdrop;
+        // Nothing drawn: the shared-cursor initialized backdrop shows,
+        // including its alignment spill across span boundaries.
+        return uncovered_backdrop;
     };
     // Inside an effects-enabled OBJWIN region a target-1 BG's neighbor color
     // is its brighten/darken variant, selected before the unmasked
@@ -644,7 +691,7 @@ fn compose_pixel(
             front_color_semi_transparent,
         ),
         next,
-        span_backdrop,
+        alpha_backdrop,
     )
 }
 
