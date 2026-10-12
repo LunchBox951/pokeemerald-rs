@@ -10,10 +10,8 @@ use engine::overworld::{
 use engine::rng::Rng;
 use platform::{ButtonState, Buttons};
 
-/// The straight case: an `offset: 0` south connection (Route 101's own
-/// south connection to Littleroot Town, per `data/maps/Route101/map.json`,
-/// is exactly this shape) carries the stepped-off x coordinate straight
-/// across unchanged, landing on the neighbour's opposite (north) edge.
+/// A zero-offset connection carries the stepped-off x across unchanged onto the
+/// neighbour's opposite edge.
 #[test]
 fn advance_player_one_frame_crosses_a_zero_offset_connection_unchanged() {
     let runtime = connected_runtime(5, 5, assets::Direction::South, 0, MapId("MAP_SOUTH"));
@@ -49,9 +47,7 @@ fn advance_player_one_frame_crosses_a_zero_offset_connection_unchanged() {
     assert!(player.in_transit(), "a crossing is a step like any other");
 }
 
-/// A crossing landing is a standing tile like any other, so a forced one
-/// must arm both guards through this lane too
-/// (`pokeemerald/src/field_player_avatar.c:332-349`) `(behavioral-fidelity)`.
+/// Crossing onto a forced-movement tile arms both guards (`field_player_avatar.c:332-349`).
 #[test]
 fn crossing_onto_a_forced_landing_tile_arms_the_guards_through_this_lane() {
     let runtime = connected_runtime(5, 5, assets::Direction::South, 0, MapId("MAP_SOUTH"));
@@ -87,25 +83,13 @@ fn crossing_onto_a_forced_landing_tile_arms_the_guards_through_this_lane() {
     );
 }
 
-/// The offset case: a nonzero `offset` on an east/west connection shifts
-/// the *cross axis* (`y`, for an east/west edge) coordinate by
-/// `-offset` when carrying it into the neighbour's own space -- upstream
-/// `IsPosInConnectingMap`/`SetPositionFromConnection`
-/// (`pokeemerald/src/fieldmap.c:578-598, 699-712`), already exercised at the
-/// engine layer (`engine::overworld::map_runtime::tests::
-/// resolve_connection_applies_perpendicular_offset`) -- pinned again here at
-/// the actual integration entry point [`OverworldPhase`] wires
-/// [`engine::overworld::PlayerState::step`] through
-/// ([`advance_player_one_frame`]), not just the engine function underneath
-/// it.
+/// A nonzero east/west offset shifts the cross-axis y by `-offset` (`fieldmap.c:578-598,699-712`).
 #[test]
 fn advance_player_one_frame_crosses_an_offset_connection_shifting_the_cross_axis() {
     let runtime = connected_runtime(6, 6, assets::Direction::East, -2, MapId("MAP_EAST"));
     let maps = SingleConnectedMap {
         id: MapId("MAP_EAST"),
         dimensions: (10, 10),
-        // Stepping east off x=5 (width) at y=5: target_y = y - offset =
-        // 5 - (-2) = 7, landing at the neighbour's west edge (x=0).
         landing_position: (0, 7),
         landing_cell: MetatileCell {
             metatile_id: 1,
@@ -134,20 +118,14 @@ fn advance_player_one_frame_crosses_an_offset_connection_shifting_the_cross_axis
     assert_eq!(player.position(), (0, 7));
 }
 
-/// The same offset rule on the *north/south* axis -- the axis the
-/// Littleroot -> Route 101 crossing the early playable slice actually uses
-/// (both its real
-/// connections happen to carry `offset: 0`, which is exactly why a sign
-/// regression in `target_x = x - offset` would survive every real-map
-/// test; this synthetic pin is the guard).
+/// The same offset rule on a north/south edge, shifting x. The real Littleroot/Route 101
+/// connections have offset 0, so only this case guards the sign (`fieldmap.c:578-598,699-712`).
 #[test]
 fn advance_player_one_frame_crosses_an_offset_north_connection_shifting_x() {
     let runtime = connected_runtime(6, 6, assets::Direction::North, -2, MapId("MAP_NORTH"));
     let maps = SingleConnectedMap {
         id: MapId("MAP_NORTH"),
         dimensions: (10, 10),
-        // Stepping north off y=0 at x=5: target_x = x - offset =
-        // 5 - (-2) = 7, landing at the neighbour's south edge (y = 9).
         landing_position: (7, 9),
         landing_cell: MetatileCell {
             metatile_id: 1,
@@ -176,11 +154,7 @@ fn advance_player_one_frame_crosses_an_offset_north_connection_shifting_x() {
     assert_eq!(player.position(), (7, 9));
 }
 
-/// Different lateral positions along the *same* edge each translate to
-/// their own distinct landing tile (not, say, a single hardcoded landing
-/// position regardless of where the player actually crossed) -- the
-/// property that makes walking along Littleroot's whole north edge land on
-/// the matching column of Route 101, not just one fixed spot.
+/// Each lateral position along one edge lands on its own matching column.
 #[test]
 fn advance_player_one_frame_crossing_at_different_lateral_positions_lands_at_the_matching_column() {
     let runtime = connected_runtime(8, 8, assets::Direction::North, 0, MapId("MAP_NORTH"));
@@ -217,15 +191,9 @@ fn advance_player_one_frame_crossing_at_different_lateral_positions_lands_at_the
     }
 }
 
-/// A candidate connection whose perpendicular bounds don't cover the
-/// stepped-off position at all is rejected outright -- the step is simply
-/// blocked, exactly as if there were no connection there (mirrors
-/// `engine::overworld::map_runtime::tests::
-/// resolve_connection_rejects_position_outside_target_bounds`, again pinned
-/// through this module's own integration entry point).
+/// A connection whose bounds do not cover the stepped-off position is rejected and blocks the step.
 #[test]
 fn advance_player_one_frame_rejects_a_crossing_outside_the_neighbours_bounds() {
-    // The neighbour is much narrower than this map: only x in 0..3 lands.
     let runtime = connected_runtime(10, 3, assets::Direction::South, 0, MapId("MAP_NARROW"));
     let maps = SingleConnectedMap {
         id: MapId("MAP_NARROW"),
@@ -263,33 +231,11 @@ fn advance_player_one_frame_rejects_a_crossing_outside_the_neighbours_bounds() {
     );
 }
 
-/// The real-pack acceptance test for issue #177: Littleroot Town's actual
-/// north connection to Route 101 (`offset: 0` in both directions --
-/// `data/maps/LittlerootTown/map.json:15-21`,
-/// `data/maps/Route101/map.json`'s own south connection back), crossed both
-/// ways through the whole [`OverworldPhase`].
+/// Littleroot Town's real north connection to Route 101 (`offset: 0`), crossed both ways.
 ///
-/// `x = 10` is real map data's own walkable path column: Littleroot's row
-/// `y = 0` and Route 101's row `y = 19` (both maps are `20x20`, so `19` is
-/// Route 101's own last row) are each open ground at `x` in `{10, 11}` --
-/// confirmed by hand against `data/layouts/LittlerootTown/map.bin` and
-/// `data/layouts/Route101/map.bin` -- flanked by collision-1 fence tiles
-/// everywhere else along both edges, and no object event sits anywhere near
-/// either row (both maps' own `map.json`).
-///
-/// **`(10, 19)` is also the Route 101 rescue coord-event trigger tile (issue
-/// #231).** That is deliberate and left alone: this phase is built with no
-/// `party_lead`, so the trigger fires on the call after the crossing's
-/// drain frame and
-/// `super::first_battle_trigger`'s own `begin_first_battle` takes its
-/// documented "no party mon yet" arm -- it consumes the trigger
-/// (`VAR_ROUTE101_STATE` goes to `2`, upstream's mid-cutscene ordering) and
-/// logs, but builds no battle, so nothing freezes the frame and the walk back
-/// south below proceeds exactly as it did before that slice existed. This
-/// test's subject is the *connection crossing*, and giving it a lead to keep
-/// the trigger quiet would only trade a logged no-op for a battle it would
-/// then have to play out. The trigger's own behaviour on this tile is pinned
-/// by `real_pack_crossing_into_route_101_lands_on_the_rescue_trigger_and_starts_the_battle`.
+/// `(10, 19)` is also the Route 101 rescue trigger tile. With no `party_lead` the trigger
+/// consumes itself without building a battle, so the walk is unaffected; see
+/// `real_pack_crossing_into_route_101_lands_on_the_rescue_trigger_and_starts_the_battle`.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 #[allow(clippy::too_many_lines)] // one continuous two-crossing walk; splitting would re-set-up the pack scene
@@ -303,14 +249,9 @@ fn walking_off_littlerootss_north_edge_crosses_into_route_101_and_back() {
     )
     .expect("run `cargo xtask extract` first");
 
-    // Two ordinary tiles south of the north edge, already facing the
-    // direction that will carry it there. No `party_lead` is assigned: see
-    // the doc comment on the rescue trigger this walk lands on.
     let player = PlayerState::new((10, 2), 3, Direction::North);
     let mut phase = OverworldPhase::for_test(scene, littleroot, player, None);
 
-    // Two ordinary steps north, each draining its own walk animation, land
-    // on the map's own last interior row (y = 0).
     for _ in 0..2 {
         phase.step(held(Buttons::UP));
         for _ in 1..WALK_FRAMES_PER_TILE {
@@ -320,7 +261,6 @@ fn walking_off_littlerootss_north_edge_crosses_into_route_101_and_back() {
     }
     assert_eq!(phase.player.position(), (10, 0));
 
-    // The third step walks off the grid's own top edge -- the crossing.
     phase.step(held(Buttons::UP));
     assert_eq!(
         phase.tick, 33,
@@ -407,8 +347,6 @@ fn walking_off_littlerootss_north_edge_crosses_into_route_101_and_back() {
         "save1.pos must mirror the post-crossing tile"
     );
 
-    // Cross right back south: (10, 19) is already Route 101's own last row,
-    // so a single south step walks straight off that edge too.
     phase.step(held(Buttons::DOWN));
     for _ in 1..WALK_FRAMES_PER_TILE {
         phase.step(ButtonState::new());
@@ -439,34 +377,13 @@ fn walking_off_littlerootss_north_edge_crosses_into_route_101_and_back() {
     assert_eq!(phase.save1().location.warp_id, -1);
 }
 
-/// The same claim at upstream's *other* map-transition call site,
-/// `LoadMapFromCameraTransition` (`src/overworld.c:800`) -- and this one is
-/// walked end to end, because a connection crossing really can land the
-/// player in grass.
+/// A crossing restarts the wild-encounter immunity window (`overworld.c:800`), including
+/// when it lands in grass. Deleting `self.wild.restart_immunity_steps()` from
+/// [`OverworldPhase::cross_connection`] fails here.
 ///
-/// Deleting `self.wild.restart_immunity_steps()` from
-/// [`OverworldPhase::cross_connection`] fails here: the counter is still
-/// exhausted on arrival and the very first grass step draws.
-///
-/// The player is repositioned onto [`ROUTE_101_GRASS_ROW`] after the real
-/// crossing rather than walked there: the crossing lands at `(10, 19)` on
-/// Route 101's south edge and the nearest tall grass is eleven tiles away,
-/// which would spend the whole window before reaching it. Everything the
-/// test actually asserts -- the counter at the crossing, and the four silent
-/// steps after it -- is untouched by where the player is standing.
-///
-/// **`VAR_ROUTE101_STATE` is pre-set to its spent value (issue #231).**
-/// `(10, 19)` is also the rescue coord-event trigger tile, and a *live*
-/// trigger there would legitimately keep this step from ever reaching
-/// `CheckStandardWildEncounter` at all -- upstream's `TryStartStepBasedScript`
-/// returns TRUE at `:155-161`, two lines above it, so the immunity counter
-/// (decremented inside that function, `:668-686`) would not move. That is the
-/// coord event's behaviour, pinned in `first_battle_trigger_tests`;
-/// asserting it here too would only turn this test's own subject -- the
-/// crossing's immunity restart -- into a hostage of an unrelated slice. The
-/// var starts at the post-rescue `2` instead, exactly the state upstream
-/// leaves behind once the Birch rescue has run, which makes `(10, 19)` the
-/// ordinary landing tile this test has always meant it to be.
+/// The player is moved onto [`ROUTE_101_GRASS_ROW`] after the crossing because the landing
+/// is eleven tiles from grass. `VAR_ROUTE101_STATE` starts at its spent value so the rescue
+/// trigger on the landing tile (pinned in `first_battle_trigger_tests`) cannot intercept.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn crossing_a_map_connection_restarts_the_wild_encounter_immunity_window() {
@@ -485,26 +402,20 @@ fn crossing_a_map_connection_restarts_the_wild_encounter_immunity_window() {
         None,
     );
     phase.rng = Rng::new(IMMUNITY_SEED);
-    // The rescue trigger on the landing tile is already spent (doc comment).
     phase
         .save1
         .event_data
         .var_set(VAR_ROUTE101_STATE, 2)
         .expect("VAR_ROUTE101_STATE is an ordinary var id");
 
-    // Four ordinary steps north up Littleroot's own walkable column. Its map
-    // has no wild table, so they draw nothing -- but upstream's
-    // sWildEncounterImmunitySteps counts steps, not encounters, so the
-    // window is spent all the same.
+    // Littleroot has no wild table, so these steps draw nothing but still spend the window.
     for _ in 0..WILD_ENCOUNTER_IMMUNITY_STEPS {
         phase.step(held(Buttons::UP));
         for _ in 1..WALK_FRAMES_PER_TILE {
             phase.step(ButtonState::new());
         }
     }
-    // The last of those four landings is still outstanding: its `tookStep`
-    // ordering belongs to the call after the animation drains (issue #1039),
-    // and no fifth held frame follows it here to supply one.
+    // Drain the last step's outstanding landing.
     phase.step(ButtonState::new());
     assert_eq!(phase.player.position(), (10, 0));
     assert_eq!(phase.wild.immunity_steps(), WILD_ENCOUNTER_IMMUNITY_STEPS);
@@ -514,8 +425,6 @@ fn crossing_a_map_connection_restarts_the_wild_encounter_immunity_window() {
         "a map with no wild table draws nothing, window or no window"
     );
 
-    // The fifth step walks off Littleroot's north edge into Route 101 -- the
-    // real crossing, through `PlayerState::step` and `cross_connection`.
     phase.step(held(Buttons::UP));
     assert_eq!(phase.map_id, route101, "the crossing must have landed");
     assert_eq!(
@@ -542,8 +451,6 @@ fn crossing_a_map_connection_restarts_the_wild_encounter_immunity_window() {
          crossing having happened inside it"
     );
 
-    // Stand in Route 101's own tall grass (doc comment) and walk it: three
-    // immune steps are left, and the fourth rolls.
     phase.player = PlayerState::new(
         ROUTE_101_GRASS_ROW[0],
         ROUTE_101_GRASS_ELEVATION,
@@ -578,14 +485,8 @@ fn crossing_a_map_connection_restarts_the_wild_encounter_immunity_window() {
     );
 }
 
-/// A refused connection rebind (the destination room fails to load after the
-/// landing cell already resolved) must hand back the *exact* pre-step player,
-/// not one rebuilt from position, collision elevation and facing: that
-/// constructor collapses the retained previous elevation onto the collision
-/// elevation and resets the movement history (issue #2028). Upstream's
-/// camera-transition load never respawns the player or touches either
-/// elevation (`overworld.c:784-825`; `ObjectEventUpdateElevation`,
-/// `event_object_movement.c:7759-7770`).
+/// A refused connection rebind restores the exact pre-step player, including the retained
+/// previous elevation and movement history (`overworld.c:784-815`).
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn refused_connection_rebind_restores_the_complete_pre_step_player() {
@@ -598,11 +499,9 @@ fn refused_connection_rebind_restores_the_complete_pre_step_player() {
         &engine::event_data::EventData::new(),
     )
     .expect("run `cargo xtask extract` first");
-    // Distinct collision/retained elevations from the outset.
     let player = PlayerState::with_saved_elevations((10, 2), 0, 3, Direction::North);
     let mut phase = OverworldPhase::for_test_with_source(scene, littleroot, player, None, source);
 
-    // Two completed steps north seed real movement history.
     for _ in 0..2 {
         phase.step(held(Buttons::UP));
         for _ in 1..WALK_FRAMES_PER_TILE {
@@ -612,8 +511,7 @@ fn refused_connection_rebind_restores_the_complete_pre_step_player() {
     assert_eq!(phase.player.position(), (10, 0));
     assert!(phase.player.second_foot_leads());
 
-    // Warm the connection cache so landing resolution succeeds, then break
-    // the source so the destination room reload is refused.
+    // Warm the connection cache so landing resolves, then break the source so the room reload is refused.
     assert!(phase
         .connection_pack
         .set(assets::pack::AssetPack::load_repo().expect("run `cargo xtask extract` first"))
