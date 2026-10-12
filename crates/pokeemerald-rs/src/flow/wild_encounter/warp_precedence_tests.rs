@@ -37,7 +37,7 @@ const CAVE_ENCOUNTER_TILE: (u16, u16) = (7, 5);
 /// The scene both halves of the precedence test are built on: a cave floor
 /// tile and, next to it, the door-shaped warp tile.
 fn granite_cave_scene() -> crate::overworld::OverworldScene {
-    crate::overworld::tests::synthetic_scene_with_special_tiles(
+    crate::overworld::test_support::synthetic_scene_with_special_tiles(
         10,
         10,
         &[

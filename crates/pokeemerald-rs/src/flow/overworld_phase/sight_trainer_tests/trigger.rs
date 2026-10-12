@@ -308,7 +308,7 @@ fn the_trigger_with_no_party_lead_logs_and_starts_nothing() {
 fn the_trigger_never_fires_off_route_103() {
     let (rx, ry) = RHETT_TILE;
     let mut phase = OverworldPhase::for_test(
-        crate::overworld::tests::synthetic_scene(80, 16),
+        crate::overworld::test_support::synthetic_scene(80, 16),
         MapId("MAP_LITTLEROOT_TOWN"),
         PlayerState::new((rx, ry + 1), 3, Direction::North),
         None,

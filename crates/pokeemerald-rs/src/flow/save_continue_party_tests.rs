@@ -27,7 +27,7 @@ fn a_continued_multi_member_party_preserves_trailing_slots_and_count() {
     let expected_trailing = seed.save1.player_party[1..].to_vec();
 
     let mut resumed = OverworldPhase::from_saved(
-        crate::overworld::tests::synthetic_scene(10, 10),
+        crate::overworld::test_support::synthetic_scene(10, 10),
         seed.map_id,
         seed.save1,
         seed.save2,
@@ -108,7 +108,7 @@ fn a_re_saved_continued_lead_keeps_the_bytes_no_battle_model_carries() {
     seed.save1.player_party[0] = stored;
 
     let mut resumed = OverworldPhase::from_saved(
-        crate::overworld::tests::synthetic_scene(10, 10),
+        crate::overworld::test_support::synthetic_scene(10, 10),
         seed.map_id,
         seed.save1,
         seed.save2,
@@ -186,7 +186,7 @@ fn a_continued_traded_lead_preserves_its_original_trainer_id() {
     seed.save1.player_party[0] = crate::party::to_save_pokemon(&battle::Dex::new(), &traded_lead);
 
     let mut resumed = OverworldPhase::from_saved(
-        crate::overworld::tests::synthetic_scene(10, 10),
+        crate::overworld::test_support::synthetic_scene(10, 10),
         seed.map_id,
         seed.save1,
         seed.save2,
@@ -206,7 +206,7 @@ fn a_continued_traded_lead_preserves_its_original_trainer_id() {
     assert_eq!(saved.block1.player_party[0].box_data.ot_id(), TRADED_OT_ID);
 
     let reloaded = OverworldPhase::from_saved(
-        crate::overworld::tests::synthetic_scene(10, 10),
+        crate::overworld::test_support::synthetic_scene(10, 10),
         seed.map_id,
         saved.block1,
         saved.block2,
@@ -226,7 +226,7 @@ fn a_continued_traded_lead_preserves_its_original_trainer_id() {
 #[test]
 fn a_save_with_an_empty_party_resumes_with_no_lead() {
     let resumed = OverworldPhase::from_saved(
-        crate::overworld::tests::synthetic_scene(10, 10),
+        crate::overworld::test_support::synthetic_scene(10, 10),
         new_game::SPAWN_MAP_ID,
         SaveBlock1::default(),
         SaveBlock2::default(),

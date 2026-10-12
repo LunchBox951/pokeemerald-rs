@@ -36,7 +36,7 @@ fn the_animated_door_poll_resolves_at_the_retained_previous_elevation() {
     );
 
     let mut phase = OverworldPhase::for_test(
-        crate::overworld::tests::synthetic_scene_with_special_tiles_at_elevations(
+        crate::overworld::test_support::synthetic_scene_with_special_tiles_at_elevations(
             10,
             10,
             &[

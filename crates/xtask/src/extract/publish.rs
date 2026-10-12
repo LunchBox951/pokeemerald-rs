@@ -14,7 +14,11 @@ use super::ExtractError;
 /// [`engine::save::file::staging`](../../../engine/src/save/file/staging.rs)'s
 /// fix for the identical risk in save files.
 pub(super) fn write_pack_atomically(output_path: &Path, bytes: &[u8]) -> Result<(), ExtractError> {
-    write_pack_atomically_with_names(output_path, bytes, staging_candidates(output_path))
+    write_pack_atomically_with_names(
+        output_path,
+        bytes,
+        crate::staging_names::candidates(output_path),
+    )
 }
 
 /// As [`write_pack_atomically`], staging at the first of `candidates` that
@@ -34,61 +38,6 @@ fn write_pack_atomically_with_names(
         Err(error) => return Err(write_failed(error)),
     };
     staged.publish(output_path).map_err(write_failed)
-}
-
-/// Width of the staging suffix's hex digits: wide enough that guessing a
-/// value ahead of a run is impractical, matching the unpredictable-name
-/// approach [`engine::save::file::staging`](../../../engine/src/save/file/staging.rs)
-/// takes for the identical problem.
-const STAGING_HEX_DIGITS: usize = 10;
-
-/// How many candidate names one publish tries before giving up.
-/// [`create_new_exclusive`] makes each attempt exclusive, so this only bounds
-/// retries against a genuine collision -- another run racing to stage at the
-/// same moment -- not against a planted symlink, which `create_new_exclusive`
-/// refuses outright regardless of how many names are offered.
-const STAGING_WALK_ATTEMPTS: usize = 256;
-
-/// The unpredictable sibling names one publish walks, in the order tried.
-fn staging_candidates(output_path: &Path) -> impl Iterator<Item = PathBuf> + '_ {
-    let mask = unique_value_mask(STAGING_HEX_DIGITS);
-    let mut value = unique_value();
-    std::iter::repeat_with(move || {
-        let candidate = staging_path_with_value(output_path, value);
-        value = value.wrapping_add(1) & mask;
-        candidate
-    })
-    .take(STAGING_WALK_ATTEMPTS)
-}
-
-/// Renders the sibling name for one candidate `value`, `.tmp.<hex>` wide
-/// suffixed onto `output_path`'s own name.
-fn staging_path_with_value(output_path: &Path, value: u64) -> PathBuf {
-    let mut name = output_path.as_os_str().to_os_string();
-    name.push(format!(".tmp.{value:0STAGING_HEX_DIGITS$x}"));
-    PathBuf::from(name)
-}
-
-/// `std`-only entropy folded into one value that fits [`STAGING_HEX_DIGITS`]:
-/// process id, clock nanoseconds, and a fresh `RandomState` key, which alone
-/// already differs between two calls at the same nanosecond.
-/// [`create_new_exclusive`] is what keeps two stagings from colliding; this
-/// value only makes the name unguessable ahead of time.
-fn unique_value() -> u64 {
-    use std::hash::{BuildHasher, Hasher};
-
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::SystemTime::UNIX_EPOCH)
-        .map_or(0, |since| since.as_nanos());
-    let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
-    hasher.write_u32(std::process::id());
-    hasher.write_u128(nanos);
-    hasher.finish() & unique_value_mask(STAGING_HEX_DIGITS)
-}
-
-/// Every value `width` hex digits can render, and no other.
-fn unique_value_mask(width: usize) -> u64 {
-    (1_u64 << (4 * width)) - 1
 }
 
 /// Opens `path` for writing and fails if anything already holds that name,
@@ -429,7 +378,8 @@ impl StagedPack {
 
 #[cfg(test)]
 mod tests {
-    use super::{staging_path_with_value, write_pack_atomically_with_names, ExtractError};
+    use super::{write_pack_atomically_with_names, ExtractError};
+    use crate::staging_names::path_with_value as staging_path_with_value;
 
     /// A fixed staging candidate value the deterministic tests hand to
     /// [`write_pack_atomically_with_names`] in place of the production
@@ -527,8 +477,8 @@ mod tests {
             "no staging file should exist after a failed create"
         );
         assert!(
-            !err.to_string().contains("abandoned staging file"),
-            "nothing was staged, so nothing was abandoned: {err}"
+            !err.to_string().contains("was left in place"),
+            "nothing was staged, so no staging file was left in place: {err}"
         );
 
         let _ = std::fs::remove_dir_all(dir);

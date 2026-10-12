@@ -4,6 +4,7 @@ use super::{
 };
 use crate::cgb_pitch::{midi_key_to_cgb_freq_reg, midi_key_to_noise_control};
 use crate::psg::{NoiseChannel, SquareChannel, WaveChannel};
+use std::sync::Arc;
 
 /// Clocks `noise` one sample at `hardware_volume` and maps its held latch
 /// into the centred render path. The DAC level is output directly
@@ -24,7 +25,11 @@ const NOISE_LEVEL_GAIN: i32 = LINEAR_ENVELOPE_SCALE.cast_signed();
 #[derive(Clone, Debug)]
 pub(super) enum Oscillator {
     Square(SquareChannel),
-    Wave(WaveChannel),
+    Wave {
+        /// Stable programmable-wave asset identity: wave RAM is reloaded only when it changes.
+        wave_id: Arc<str>,
+        channel: WaveChannel,
+    },
     Noise(NoiseChannel),
 }
 
@@ -54,7 +59,7 @@ impl Oscillator {
             Self::Square(square) => {
                 (frame_gain * i32::from(square.sample()) * BIPOLAR_SAMPLE_SCALE) >> SAMPLE_GAIN_BITS
             }
-            Self::Wave(wave) => {
+            Self::Wave { channel: wave, .. } => {
                 (frame_gain * nr32_attenuated_sample(wave.sample(), envelope_volume))
                     >> SAMPLE_GAIN_BITS
             }
@@ -75,7 +80,7 @@ impl Oscillator {
     /// unsigned nibble, applied per sample by [`nr32_attenuated_sample`].
     pub(super) fn envelope_gain_256(&self, _envelope_volume: u8, hardware_volume: u8) -> u32 {
         match self {
-            Self::Wave(_) => FULL_GAIN_256,
+            Self::Wave { .. } => FULL_GAIN_256,
             Self::Square(_) | Self::Noise(_) => u32::from(hardware_volume) * LINEAR_ENVELOPE_SCALE,
         }
     }
@@ -84,7 +89,7 @@ impl Oscillator {
         match self {
             Self::Square(square) => square
                 .set_frequency(correction.apply(midi_key_to_cgb_freq_reg(note_key, fine_pitch))),
-            Self::Wave(wave) => {
+            Self::Wave { channel: wave, .. } => {
                 wave.set_frequency(
                     correction.apply(midi_key_to_cgb_freq_reg(note_key, fine_pitch)),
                 );
@@ -121,27 +126,40 @@ impl Oscillator {
                 noise.off_write();
                 true
             }
-            Self::Wave(_) => true,
+            Self::Wave { .. } => true,
         }
     }
 
     pub(super) fn step_sweep_tick(&mut self) -> bool {
         match self {
             Self::Square(square) => square.step_sweep_tick(),
-            Self::Wave(_) | Self::Noise(_) => true,
+            Self::Wave { .. } | Self::Noise(_) => true,
         }
     }
 
     /// Carries a square oscillator's duty position or a noise oscillator's
     /// output latch forward onto its replacement
     /// ([`SquareChannel::continue_duty_from`]'s and
-    /// [`NoiseChannel::continue_output_from`]'s docs); a no-op for Wave.
+    /// [`NoiseChannel::continue_output_from`]'s docs). A wave oscillator
+    /// keeps its retained wave-RAM rotation only when the replacement names
+    /// the same wave asset; a different asset is a fresh upload
+    /// (`m4a.c:1003-1012`).
     pub(super) fn carry_hardware_state_from(&mut self, other: &Self) {
         match (self, other) {
             (Self::Square(square), Self::Square(previous)) => square.continue_duty_from(previous),
             (Self::Noise(noise), Self::Noise(previous)) => {
                 noise.continue_output_from(previous);
             }
+            (
+                Self::Wave {
+                    wave_id,
+                    channel: wave,
+                },
+                Self::Wave {
+                    wave_id: previous_id,
+                    channel: previous,
+                },
+            ) if wave_id == previous_id => wave.continue_rotation_from(previous),
             _ => {}
         }
     }
@@ -151,7 +169,7 @@ impl Oscillator {
     pub(super) fn retrigger(&mut self) -> bool {
         match self {
             Self::Square(square) => square.retrigger(),
-            Self::Wave(_) => true,
+            Self::Wave { .. } => true,
             Self::Noise(noise) => {
                 noise.retrigger();
                 true

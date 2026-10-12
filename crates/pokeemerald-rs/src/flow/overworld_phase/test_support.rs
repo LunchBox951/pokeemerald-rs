@@ -180,7 +180,7 @@ pub(super) fn synthetic_phase(
     dialog: Option<crate::overworld::NpcDialog>,
 ) -> OverworldPhase {
     OverworldPhase::for_test(
-        crate::overworld::tests::synthetic_scene(
+        crate::overworld::test_support::synthetic_scene(
             HOUSE_SCENE_DIMENSIONS.0,
             HOUSE_SCENE_DIMENSIONS.1,
         ),
@@ -255,7 +255,7 @@ pub(super) fn walkable_south_arrow_phase() -> OverworldPhase {
         "fixture precondition: 1F's doormat warp event position"
     );
 
-    let scene = crate::overworld::tests::synthetic_scene_with_special_tile(
+    let scene = crate::overworld::test_support::synthetic_scene_with_special_tile(
         HOUSE_SCENE_DIMENSIONS.0,
         HOUSE_SCENE_DIMENSIONS.1,
         ONE_F_DOORMAT_SCENE_TILE,
@@ -309,7 +309,7 @@ pub(super) fn littleroot_lab_door_scene() -> OverworldScene {
         "fixture precondition: Littleroot's lab door warp position"
     );
 
-    crate::overworld::tests::synthetic_scene_with_special_tile(
+    crate::overworld::test_support::synthetic_scene_with_special_tile(
         TOWN_SCENE_DIMENSIONS.0,
         TOWN_SCENE_DIMENSIONS.1,
         LITTLEROOT_LAB_SCENE_TILE,
@@ -387,7 +387,7 @@ pub(super) fn mom_standing_in_the_house_door_phase() -> OverworldPhase {
         "fixture precondition: Mom has a real script, so A interacts"
     );
 
-    let scene = crate::overworld::tests::synthetic_scene_with_special_tile(
+    let scene = crate::overworld::test_support::synthetic_scene_with_special_tile(
         TOWN_SCENE_DIMENSIONS.0,
         TOWN_SCENE_DIMENSIONS.1,
         LITTLEROOT_HOUSE_SCENE_TILE,
@@ -487,7 +487,7 @@ pub(super) fn grass_step_draws(
 /// the first `T_TILE_CENTER` CB1 off the forced tile, before any
 /// `PlayerStep` poll has run there.
 pub(super) fn phase_on_a_perpendicular_slides_landing_frame() -> OverworldPhase {
-    let scene = crate::overworld::tests::synthetic_scene_with_special_tile(
+    let scene = crate::overworld::test_support::synthetic_scene_with_special_tile(
         10,
         10,
         (6, 4),

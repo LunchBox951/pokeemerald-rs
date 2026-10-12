@@ -20,7 +20,12 @@ use platform::Buttons;
 fn walk_onto_cell_then_save_and_continue(name: &str, cell_elevation: u8) -> ((u8, u8), (u8, u8)) {
     let cell = (4_u16, 4_u16);
     let scene = || {
-        crate::overworld::tests::synthetic_scene_with_cell_elevation(10, 10, cell, cell_elevation)
+        crate::overworld::test_support::synthetic_scene_with_cell_elevation(
+            10,
+            10,
+            cell,
+            cell_elevation,
+        )
     };
     let temp = TempSave::new(name);
     let mut slot = temp.slot();
@@ -92,7 +97,7 @@ fn continue_on_a_multi_level_tile_restores_the_saved_elevation_history() {
 fn continue_restores_any_elevation_pair_on_a_multi_level_tile() {
     let tile = (4_u16, 4_u16);
     let scene = || {
-        crate::overworld::tests::synthetic_scene_with_cell_elevation(
+        crate::overworld::test_support::synthetic_scene_with_cell_elevation(
             10,
             10,
             tile,
@@ -133,7 +138,7 @@ fn continue_restores_any_elevation_pair_on_a_multi_level_tile() {
 fn legacy_active_image_with_stale_elevation_byte_does_not_restore_it() {
     let tile = (4_u16, 4_u16);
     let scene = || {
-        crate::overworld::tests::synthetic_scene_with_cell_elevation(
+        crate::overworld::test_support::synthetic_scene_with_cell_elevation(
             10,
             10,
             tile,
@@ -174,7 +179,8 @@ fn an_active_pair_the_ordinary_landing_cell_cannot_hold_is_not_restored() {
         .player_object_event
         .with_elevation_byte(0x00)
         .with_active(true);
-    let scene = crate::overworld::tests::synthetic_scene_with_cell_elevation(10, 10, (4, 4), 3);
+    let scene =
+        crate::overworld::test_support::synthetic_scene_with_cell_elevation(10, 10, (4, 4), 3);
     let resumed = OverworldPhase::from_saved(scene, new_game::SPAWN_MAP_ID, block1, block2);
     assert_eq!(
         (
@@ -194,7 +200,7 @@ fn an_active_pair_the_ordinary_landing_cell_cannot_hold_is_not_restored() {
 fn upstream_origin_image_with_a_holdable_stale_current_is_not_restored() {
     let tile = (4_u16, 4_u16);
     let scene = || {
-        crate::overworld::tests::synthetic_scene_with_cell_elevation(
+        crate::overworld::test_support::synthetic_scene_with_cell_elevation(
             10,
             10,
             tile,

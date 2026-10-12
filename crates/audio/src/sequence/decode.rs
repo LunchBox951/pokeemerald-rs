@@ -71,6 +71,7 @@ impl<'a> Compiler<'a> {
                 context.status,
                 context.key,
                 context.velocity,
+                context.returns.len() < MAX_PATTERN_DEPTH,
             );
             let event = reader.read()?;
             context.status = reader.status;
@@ -104,10 +105,6 @@ impl<'a> Compiler<'a> {
                 }
                 Event::Pattern(target) => {
                     self.validate_target(offset, target)?;
-                    if context.returns.len() == MAX_PATTERN_DEPTH {
-                        self.events.push(Event::Fine);
-                        return Ok(());
-                    }
                     context.returns.push(context.offset);
                     context.offset = target;
                 }
