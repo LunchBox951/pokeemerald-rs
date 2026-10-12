@@ -249,7 +249,7 @@
 //! residual family, and so on.
 //!
 //! Paralysis reaches past its own pipeline, so read those two owners before
-//! changing turn flow: [`battle::Battle::act`] cancels a paralysed mover
+//! changing turn flow: `battle::Battle::act` cancels a paralysed mover
 //! ahead of PP, and [`pokemon::BattlePokemon::speed_for_turn_order`]
 //! quarters its Speed.
 
