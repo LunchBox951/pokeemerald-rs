@@ -443,16 +443,8 @@ fn create_and_claim_staged_dir(
     }
 }
 
-/// Hex width of the pointer staging suffix, matching [`crate::extract`]'s
-/// unpredictable staging names for the identical risk (F-3).
-const POINTER_STAGING_HEX_DIGITS: usize = 10;
-
-/// How many unpredictable pointer staging names one publish tries before
-/// giving up on a genuine collision; a planted name is refused outright.
-const POINTER_STAGING_ATTEMPTS: usize = 256;
-
 /// Stages the pointer at an unguessable sibling of `pointer_path`, retrying
-/// through [`pointer_staging_candidates`] on a genuine name collision.
+/// through [`crate::staging_names::candidates`] on a genuine name collision.
 fn stage_pointer(
     output_claim: &OutputDirClaim,
     pointer_path: &Path,
@@ -460,7 +452,7 @@ fn stage_pointer(
 ) -> std::io::Result<staging::StagedFile> {
     stage_first_free(
         bytes,
-        pointer_staging_candidates(pointer_path),
+        crate::staging_names::candidates(pointer_path),
         |candidate, bytes| output_claim.stage_pointer(candidate, bytes),
     )
 }
@@ -497,47 +489,6 @@ fn stage_first_free(
             "exhausted pointer staging attempts",
         )
     }))
-}
-
-/// The unpredictable sibling names one pointer publish walks, in the order
-/// tried.
-fn pointer_staging_candidates(pointer_path: &Path) -> impl Iterator<Item = PathBuf> + '_ {
-    let mask = pointer_staging_value_mask();
-    let mut value = pointer_staging_unique_value();
-    std::iter::repeat_with(move || {
-        let candidate = pointer_staging_path_with_value(pointer_path, value);
-        value = value.wrapping_add(1) & mask;
-        candidate
-    })
-    .take(POINTER_STAGING_ATTEMPTS)
-}
-
-/// Renders the sibling name for one candidate `value`, `.tmp.<hex>` suffixed
-/// onto `pointer_path`'s own name.
-fn pointer_staging_path_with_value(pointer_path: &Path, value: u64) -> PathBuf {
-    let mut name = pointer_path.as_os_str().to_os_string();
-    name.push(format!(".tmp.{value:0POINTER_STAGING_HEX_DIGITS$x}"));
-    PathBuf::from(name)
-}
-
-/// `std`-only entropy folded into one value: process id, clock nanoseconds,
-/// and a fresh `RandomState` key.
-fn pointer_staging_unique_value() -> u64 {
-    use std::hash::{BuildHasher, Hasher};
-
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::SystemTime::UNIX_EPOCH)
-        .map_or(0, |since| since.as_nanos());
-    let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
-    hasher.write_u32(std::process::id());
-    hasher.write_u128(nanos);
-    hasher.finish() & pointer_staging_value_mask()
-}
-
-/// Every value [`POINTER_STAGING_HEX_DIGITS`] hex digits can render, and no
-/// other.
-fn pointer_staging_value_mask() -> u64 {
-    (1_u64 << (4 * POINTER_STAGING_HEX_DIGITS)) - 1
 }
 
 fn compose(

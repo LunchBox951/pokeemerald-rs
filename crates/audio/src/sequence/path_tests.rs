@@ -195,6 +195,45 @@ fn fourth_nested_pattern_ends_the_track() {
     assert_eq!(decode_track(&bytes).unwrap(), [Event::Fine]);
 }
 
+const THREE_CALLS: [u8; 15] = [0xb3, 5, 0, 0, 0, 0xb3, 10, 0, 0, 0, 0xb3, 15, 0, 0, 0];
+
+#[test]
+fn fourth_nested_pattern_needs_no_operand() {
+    let mut bytes = THREE_CALLS.to_vec();
+    bytes.push(0xb3);
+    assert_eq!(decode_track(&bytes).unwrap(), [Event::Fine]);
+}
+
+#[test]
+fn fourth_nested_pattern_ignores_an_invalid_pointer() {
+    let mut bytes = THREE_CALLS.to_vec();
+    bytes.extend([0xb3, 0xff, 0xff, 0xff, 0xff]);
+    assert_eq!(decode_track(&bytes).unwrap(), [Event::Fine]);
+}
+
+#[test]
+fn lower_depth_patterns_still_read_and_validate_their_pointer() {
+    for depth in 0..3usize {
+        let mut bytes = THREE_CALLS[..depth * 5].to_vec();
+        bytes.extend([0xb3, 0xff, 0xff, 0xff, 0xff]);
+        assert_eq!(
+            decode_track(&bytes),
+            Err(super::DecodeError::UnresolvedJump {
+                offset: depth * 5,
+                target: u32::MAX,
+            }),
+            "depth {depth}"
+        );
+        let mut bytes = THREE_CALLS[..depth * 5].to_vec();
+        bytes.push(0xb3);
+        assert_eq!(
+            decode_track(&bytes),
+            Err(super::DecodeError::UnexpectedEnd),
+            "depth {depth}"
+        );
+    }
+}
+
 #[test]
 fn an_empty_pattern_stack_falls_through() {
     assert_eq!(
