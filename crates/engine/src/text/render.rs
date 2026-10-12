@@ -599,7 +599,11 @@ impl<S: GlyphSource> Printer<S> {
     /// Upstream guards both clear controls with `width > 0`
     /// (`pokeemerald/src/text.c:1066`, `:1084`), so a non-positive width
     /// neither erases nor ends the frame.
+    ///
+    /// The width stops at `i32::MAX`, where the cursor saturates, so the span
+    /// never reaches a column the cursor cannot represent.
     fn clear_span(&mut self, width: i32) -> ControlOutcome {
+        let width = width.min(i32::MAX.saturating_sub(self.cursor.0));
         if width <= 0 {
             return ControlOutcome::Repeat;
         }
@@ -1189,6 +1193,10 @@ mod tests {
         );
         assert_eq!(printer.tick(PrinterInput::none()), TickEvent::Idle);
         assert_eq!(printer.cursor(), (i32::MAX, 0));
+        assert_eq!(
+            printer.cleared_span().map(|span| (span.x, span.width)),
+            Some((i32::MAX - 10, 10))
+        );
     }
 
     #[test]
