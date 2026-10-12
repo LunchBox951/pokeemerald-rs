@@ -336,6 +336,7 @@ pub(crate) fn init_save_blocks_with_identity(
         encryption_key: 0,
         options_text_speed: options.text_speed,
         options_window_frame_type: options.window_frame_type,
+        ..SaveBlock2::default()
     };
 
     let arrival = bedroom_arrival(block2.player_gender);

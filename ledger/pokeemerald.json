@@ -18193,6 +18193,12 @@
           "spec": "S-5",
           "status": "rewritten"
         },
+        "MenuOwnedPlayerStateLayout": {
+          "reason": "Typed lossless play time, button mode, five options fields with unmodeled option bits retained, and key-XOR gameStats words (#1760); persistence only, no counter producers or screens.",
+          "rust_target": "crates/engine/src/save/block.rs",
+          "spec": "I-6",
+          "status": "rewritten"
+        },
         "SaveBlockPartyMoneyWarpOffsets": {
           "reason": "Exact SaveBlock1 and SaveBlock2 sizes and modeled offsets for identity, encryption key, warps, party, money, bag, flags, vars, and the options bitfield's optionsTextSpeed and optionsWindowFrameType implemented in full-size zero-filled payloads",
           "rust_target": "crates/engine/src/save/block.rs",
