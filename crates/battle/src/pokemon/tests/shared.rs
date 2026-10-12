@@ -4,9 +4,8 @@ use super::super::{BattlePokemon, Ivs};
 use crate::dex::Dex;
 use assets::{MoveId, SpeciesId};
 
-/// Upstream `MAX_IV_MASK` (`include/constants/pokemon.h:201`) is 31, so 32 is
-/// the first unrepresentable IV. Literal, not [`MAX_IV`](super::super::MAX_IV),
-/// so a drifting production constant fails the tests.
+/// Upstream `MAX_IV_MASK` is 31 (`include/constants/pokemon.h:201`); pinned as
+/// literals rather than `MAX_IV` so a drifting production constant fails here.
 pub(super) const PINNED_MAX_IV: u8 = 31;
 pub(super) const FIRST_UNREPRESENTABLE_IV: u8 = 32;
 pub(super) const MAX_IVS: Ivs = Ivs {
