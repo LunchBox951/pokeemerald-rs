@@ -11,6 +11,7 @@ pub(super) struct CommandReader<'a> {
     pub(super) status: Option<u8>,
     pub(super) key: u8,
     pub(super) velocity: u8,
+    pattern_allowed: bool,
 }
 
 impl<'a> CommandReader<'a> {
@@ -20,6 +21,7 @@ impl<'a> CommandReader<'a> {
         status: Option<u8>,
         key: u8,
         velocity: u8,
+        pattern_allowed: bool,
     ) -> Self {
         Self {
             bytes,
@@ -27,6 +29,7 @@ impl<'a> CommandReader<'a> {
             status,
             key,
             velocity,
+            pattern_allowed,
         }
     }
 
@@ -49,6 +52,8 @@ impl<'a> CommandReader<'a> {
             // unpatched `ply_fine` entries, same as FINE (m4a_1.s:1256-1268; m4a_tables.c:6-44; m4a.c:287-305).
             FINE | 0xB6..=0xB8 | 0xC6..=0xC7 | 0xC9..=0xCB => Ok(Event::Fine),
             GOTO => Ok(Event::Goto(self.target()?)),
+            // m4a_1.s:851-866: a call past the depth limit ends the track before reading its pointer.
+            PATT if !self.pattern_allowed => Ok(Event::Fine),
             PATT => Ok(Event::Pattern(self.target()?)),
             PEND => Ok(Event::PatternEnd),
             REPT => Ok(Event::Repeat {
