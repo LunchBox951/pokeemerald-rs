@@ -830,19 +830,22 @@ mod tests {
         // move in that trainer's own level-up-derived moveset that some
         // screen refuses.
         //
-        // Absorb, Thunder Wave, Splash, Focus Energy, Charge, Defense Curl,
-        // and Poison Sting are all executable (`battle`'s drain, paralysis,
-        // flag-only, defense-curl, and poison-hit pipelines), so those seven
-        // parties get past `ensure_executable` and stop at
+        // Stun Spore, Thunder Wave, Supersonic, Focus Energy, Screech, Defense
+        // Curl, and Supersonic are all executable, so those parties get past
+        // `ensure_executable` and stop at
         // `battle::battle::trainer_ai::ensure_scoreable` instead -- the
-        // trainer AI cannot yet score any of those seven effects. Both
-        // screens run before the first draw, so the per-frame cone check
-        // stays draw-free.
+        // trainer AI cannot yet score any of those effects. Absorb, Splash,
+        // Charge, and Poison Sting are now scoreable (the audited
+        // `CheckBadMove` no-`if_effect` rows), so Daisy, Andrew, Marcos, and
+        // Pete stop at their next unscoreable move. Both screens run before
+        // the first draw, so the per-frame cone check stays draw-free.
         let expected = [
             (
                 "Daisy",
                 TrainerId(36),
-                Battle(BattleError::UnscoreableMoveEffect(assets::MoveId::ABSORB)),
+                Battle(BattleError::UnscoreableMoveEffect(
+                    assets::MoveId::STUN_SPORE,
+                )),
             ),
             (
                 "Amy & Liv",
@@ -854,7 +857,9 @@ mod tests {
             (
                 "Andrew",
                 TrainerId(336),
-                Battle(BattleError::UnscoreableMoveEffect(assets::MoveId::SPLASH)),
+                Battle(BattleError::UnscoreableMoveEffect(
+                    assets::MoveId::SUPERSONIC,
+                )),
             ),
             ("Miguel", TrainerId(293), HeldItemParty(TrainerId(293))),
             (
@@ -867,7 +872,7 @@ mod tests {
             (
                 "Marcos",
                 TrainerId(702),
-                Battle(BattleError::UnscoreableMoveEffect(assets::MoveId::CHARGE)),
+                Battle(BattleError::UnscoreableMoveEffect(assets::MoveId::SCREECH)),
             ),
             (
                 "Isabelle",
@@ -880,7 +885,7 @@ mod tests {
                 "Pete",
                 TrainerId(735),
                 Battle(BattleError::UnscoreableMoveEffect(
-                    assets::MoveId::POISON_STING,
+                    assets::MoveId::SUPERSONIC,
                 )),
             ),
         ];

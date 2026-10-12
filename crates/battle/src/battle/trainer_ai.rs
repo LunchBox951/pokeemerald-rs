@@ -1,8 +1,9 @@
 //! Trainer AI admission and move scoring.
 //!
-//! Route 103 trainers use four scoring scripts over three move effects. The
-//! admission functions reject other flags and effects before a battle starts
-//! because unmodelled scoring branches can consume different RNG draws.
+//! Route 103 trainers use four scoring scripts over a finite set of move
+//! effects. The admission functions reject other flags and effects (per
+//! enabled script, see [`ensure_scoreable`]) before a battle starts because
+//! unmodelled scoring branches can consume different RNG draws.
 //!
 //! `CheckBadMove`'s target-ability guards read `get_ability AI_TARGET`, which
 //! upstream answers from battle history, a trapping ability, or a fresh
@@ -40,6 +41,7 @@ const INITIAL_MOVE_SCORE: i8 = 100;
 const UNUSABLE_MOVE_SCORE: i8 = 0;
 const STRONGLY_DISCOURAGE: i8 = -10;
 const SLIGHTLY_DISCOURAGE: i8 = -1;
+const ABSORBED_MOVE_PENALTY: i8 = -12;
 const DISCOURAGE: i8 = -2;
 const ENCOURAGE: i8 = 2;
 const STRONGLY_ENCOURAGE: i8 = 4;
@@ -80,11 +82,38 @@ fn is_ignored_powerful_move_effect(effect: MoveEffect) -> bool {
     IGNORED_POWERFUL_MOVE_EFFECTS.contains(&effect.0)
 }
 
+/// Raw effect IDs of the audited rows `AI_CheckBadMove` leaves unchanged once
+/// its prologue passes: none appears in its `if_effect` chain
+/// (`data/battle_ai_scripts.s:105-214`). `EFFECT_HIT` has its own variant.
+/// `ABSORB` 3, `POISON_HIT` 2, `ALWAYS_HIT` 17, `MULTI_HIT` 29, `DRAGON_RAGE` 41,
+/// `HIGH_CRITICAL` 43, `SPEED_DOWN_HIT` 70, `EVASION_DOWN_HIT` 74, `VITAL_THROW` 78,
+/// `SPLASH` 85, `QUICK_ATTACK` 103, `CHARGE` 174
+/// (`include/constants/battle_move_effects.h`). Any other effect is never an
+/// implicit no-op.
+const UNCHANGED_AFTER_PROLOGUE_EFFECTS: [u8; 12] = [3, 2, 17, 29, 41, 43, 70, 74, 78, 85, 103, 174];
+
+/// Rows whose `AI_CheckViability` branch is not ported: `ABSORB`, `ALWAYS_HIT`,
+/// `HIGH_CRITICAL`, `SPEED_DOWN_HIT`, `VITAL_THROW`
+/// (`data/battle_ai_scripts.s:655,666,686,706,708`).
+const UNPORTED_VIABILITY_EFFECTS: [u8; 6] = [3, 17, 43, 70, 78, EFFECT_CHARGE_RAW];
+
+/// `Charge` doubles the next Electric move's damage, which upstream's
+/// `AI_CalcDmg` folds into every simulated-damage read
+/// (`src/battle_script_commands.c:1306-1316`); `estimated_damage` does not, so
+/// the damage-reading scripts (`CHECK_VIABILITY`, `TRY_TO_FAINT`) refuse it.
+const EFFECT_CHARGE_RAW: u8 = 174;
+
+/// `QUICK_ATTACK` earns an extra +2 from `AI_TryToFaint` when it can faint the
+/// target (`data/battle_ai_scripts.s:2629-2634`), which is not ported.
+const EFFECT_QUICK_ATTACK_RAW: u8 = 103;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ScoreableEffect {
     Hit,
     AttackDown,
     DefenseDown,
+    /// One of [`UNCHANGED_AFTER_PROLOGUE_EFFECTS`].
+    UnchangedAfterPrologue(MoveEffect),
 }
 
 impl ScoreableEffect {
@@ -96,6 +125,13 @@ impl ScoreableEffect {
         } else if effect.0 == EFFECT_DEFENSE_DOWN.0 {
             Some(Self::DefenseDown)
         } else {
+            let mut index = 0;
+            while index < UNCHANGED_AFTER_PROLOGUE_EFFECTS.len() {
+                if UNCHANGED_AFTER_PROLOGUE_EFFECTS[index] == effect.0 {
+                    return Some(Self::UnchangedAfterPrologue(effect));
+                }
+                index += 1;
+            }
             None
         }
     }
@@ -103,11 +139,20 @@ impl ScoreableEffect {
     const fn is_stat_drop(self) -> bool {
         matches!(self, Self::AttackDown | Self::DefenseDown)
     }
-}
 
-#[must_use]
-pub(crate) const fn is_scoreable_effect(effect: MoveEffect) -> bool {
-    ScoreableEffect::from_raw(effect).is_some()
+    /// Whether every enabled script has a ported branch for this effect.
+    fn supported_by(self, flags: AiFlags) -> bool {
+        let Self::UnchangedAfterPrologue(effect) = self else {
+            return true;
+        };
+        if flags.contains(AiFlags::CHECK_VIABILITY)
+            && UNPORTED_VIABILITY_EFFECTS.contains(&effect.0)
+        {
+            return false;
+        }
+        !(flags.contains(AiFlags::TRY_TO_FAINT)
+            && (effect.0 == EFFECT_QUICK_ATTACK_RAW || effect.0 == EFFECT_CHARGE_RAW))
+    }
 }
 
 fn scoreable_effect(dex: &Dex, move_id: MoveId) -> Result<ScoreableEffect, BattleError> {
@@ -115,14 +160,23 @@ fn scoreable_effect(dex: &Dex, move_id: MoveId) -> Result<ScoreableEffect, Battl
         .ok_or(BattleError::UnscoreableMoveEffect(move_id))
 }
 
-/// Rejects a move whose effect the trainer AI cannot score.
+/// Rejects a move whose effect the enabled trainer AI scripts cannot score.
+///
+/// The unchanged-after-prologue rows are admitted when `CHECK_BAD_MOVE` is the
+/// only script that would reach them, and refused when `CHECK_VIABILITY` or
+/// `TRY_TO_FAINT` would take an unported branch. `SETUP_FIRST_TURN` has no
+/// branch for any of them.
 ///
 /// # Errors
 ///
 /// Returns [`BattleError::UnknownMove`] or
 /// [`BattleError::UnscoreableMoveEffect`].
-pub(crate) fn ensure_scoreable(dex: &Dex, move_id: MoveId) -> Result<(), BattleError> {
-    if is_scoreable_effect(dex.move_data(move_id)?.effect) {
+pub(crate) fn ensure_scoreable(
+    dex: &Dex,
+    move_id: MoveId,
+    flags: AiFlags,
+) -> Result<(), BattleError> {
+    if scoreable_effect(dex, move_id)?.supported_by(flags) {
         Ok(())
     } else {
         Err(BattleError::UnscoreableMoveEffect(move_id))
@@ -222,6 +276,11 @@ pub(crate) fn choose_trainer_action(
 
     if all_known_moves_are_spent(enemy) {
         return Ok(EnemyAction::Struggle);
+    }
+    for slot in 0..MAX_MON_MOVES {
+        if move_slot_can_be_scored(enemy, slot) {
+            ensure_scoreable(dex, enemy.moves()[slot].move_id, ai_flags)?;
+        }
     }
     if ai_flags.contains(AiFlags::CHECK_BAD_MOVE) {
         ensure_target_ability_unambiguous(player)?;
@@ -471,20 +530,58 @@ fn ai_wonder_guard_blocks(
     ))
 }
 
-/// Wonder Guard, then Levitate on a Ground move, once chart immunity is ruled
-/// out (`data/battle_ai_scripts.s:59-65,82-88`).
-fn hit_effect_ability_blocked(
+/// `AI_CheckBadMove`'s prologue up to its `if_effect` chain
+/// (`data/battle_ai_scripts.s:51-103`). Returns whether the script terminated
+/// with a penalty. A move whose power the AI does not rank skips straight to
+/// Soundproof, except Fissure and Horn Drill, which always run the checks. No
+/// step draws: the target's ability is read without a guess.
+fn score_bad_move_prologue(
     dex: &Dex,
+    scores: &mut MoveScores,
+    slot: usize,
     move_id: MoveId,
     user: &BattlePokemon,
     target: &BattlePokemon,
-    target_ability: AbilityId,
 ) -> Result<bool, BattleError> {
-    if ai_wonder_guard_blocks(dex, move_id, user, target, target_ability)? {
+    let move_data = dex.move_data(move_id)?;
+    let runs_negation_checks = move_id == MoveId::FISSURE
+        || move_id == MoveId::HORN_DRILL
+        || move_is_power_comparable(move_data);
+
+    if runs_negation_checks {
+        if has_no_effect(dex, move_id, user, target)? {
+            scores.adjust(slot, STRONGLY_DISCOURAGE);
+            return Ok(true);
+        }
+        let ability = ai_get_ability(target)?;
+        let move_type = move_data.move_type.battle_type();
+        let penalty = if ability == AbilityId::VOLT_ABSORB && move_type == Some(Type::Electric)
+            || ability == AbilityId::WATER_ABSORB && move_type == Some(Type::Water)
+            || ability == AbilityId::FLASH_FIRE && move_type == Some(Type::Fire)
+        {
+            Some(ABSORBED_MOVE_PENALTY)
+        } else if ability == AbilityId::WONDER_GUARD
+            && ai_wonder_guard_blocks(dex, move_id, user, target, ability)?
+            || move_type.is_some_and(|move_type| defender_levitate_blocked(move_type, ability))
+        {
+            Some(STRONGLY_DISCOURAGE)
+        } else {
+            None
+        };
+        if let Some(penalty) = penalty {
+            scores.adjust(slot, penalty);
+            return Ok(true);
+        }
+    }
+
+    // Soundproof reads the ability at its own call site
+    // (`data/battle_ai_scripts.s:92-103`).
+    let soundproof_ability = ai_get_ability(target)?;
+    if ai_soundproof_discourages(dex, move_id, soundproof_ability)? {
+        scores.adjust(slot, STRONGLY_DISCOURAGE);
         return Ok(true);
     }
-    let move_type = dex.move_data(move_id)?.move_type.battle_type();
-    Ok(move_type.is_some_and(|move_type| defender_levitate_blocked(move_type, target_ability)))
+    Ok(false)
 }
 
 fn estimated_damage(
@@ -544,6 +641,14 @@ enum PowerComparison {
     Strongest,
 }
 
+/// Whether `get_how_powerful_move_is` ranks the considered move rather than
+/// answering `MOVE_POWER_OTHER`: power above one and not an ignored effect
+/// (`src/battle_ai_script_commands.c:1186-1189`).
+fn move_is_power_comparable(move_data: &assets::MoveData) -> bool {
+    move_data.power >= MINIMUM_DAMAGING_MOVE_POWER
+        && !is_ignored_powerful_move_effect(move_data.effect)
+}
+
 fn compare_move_power(
     dex: &Dex,
     scores: &MoveScores,
@@ -552,7 +657,7 @@ fn compare_move_power(
     attacker: &BattlePokemon,
     defender: &BattlePokemon,
 ) -> Result<PowerComparison, BattleError> {
-    if dex.move_data(move_id)?.power < MINIMUM_DAMAGING_MOVE_POWER {
+    if !move_is_power_comparable(dex.move_data(move_id)?) {
         return Ok(PowerComparison::NotComparable);
     }
 
@@ -596,26 +701,7 @@ fn score_bad_move(
 ) -> Result<(), BattleError> {
     let effect = scoreable_effect(dex, move_id)?;
 
-    // A powered hit checks chart immunity, then reads the target's ability
-    // for Wonder Guard/Levitate, before the Soundproof check every effect
-    // shares (`data/battle_ai_scripts.s:51-88`).
-    if effect == ScoreableEffect::Hit {
-        if has_no_effect(dex, move_id, user, target)? {
-            scores.adjust(slot, STRONGLY_DISCOURAGE);
-            return Ok(());
-        }
-        let ability = ai_get_ability(target)?;
-        if hit_effect_ability_blocked(dex, move_id, user, target, ability)? {
-            scores.adjust(slot, STRONGLY_DISCOURAGE);
-            return Ok(());
-        }
-    }
-
-    // Soundproof reads the ability at its own call site
-    // (`data/battle_ai_scripts.s:92-103`).
-    let soundproof_ability = ai_get_ability(target)?;
-    if ai_soundproof_discourages(dex, move_id, soundproof_ability)? {
-        scores.adjust(slot, STRONGLY_DISCOURAGE);
+    if score_bad_move_prologue(dex, scores, slot, move_id, user, target)? {
         return Ok(());
     }
 
@@ -624,7 +710,7 @@ fn score_bad_move(
     // Clear Body/White Smoke shared by both stats
     // (`data/battle_ai_scripts.s:277-285,308-311`).
     let is_ineffective = match effect {
-        ScoreableEffect::Hit => false,
+        ScoreableEffect::Hit | ScoreableEffect::UnchangedAfterPrologue(_) => false,
         ScoreableEffect::AttackDown => {
             if target.stages().attack == StatStage::MIN {
                 true
@@ -697,7 +783,7 @@ fn score_viability(
     rng: &mut impl BattleRng,
 ) -> Result<(), BattleError> {
     match scoreable_effect(dex, move_id)? {
-        ScoreableEffect::Hit => {}
+        ScoreableEffect::Hit | ScoreableEffect::UnchangedAfterPrologue(_) => {}
         ScoreableEffect::AttackDown => {
             score_attack_drop_viability(scores, slot, user, target, rng);
         }
@@ -801,8 +887,7 @@ fn score_first_turn_setup(
 mod tests {
     use super::{
         choose_trainer_action, compare_move_power, ensure_scoreable, ensure_supported_flags,
-        estimated_damage, hit_effect_ability_blocked, is_scoreable_effect,
-        select_highest_scoring_move, MoveScores, PowerComparison, EFFECT_HIT, FIRST_TURN,
+        estimated_damage, select_highest_scoring_move, MoveScores, PowerComparison, FIRST_TURN,
         FIRST_TURN_SETUP_BONUS_THRESHOLD, PERCENT_SCALE, STAT_DROP_DISCOURAGEMENT_THRESHOLD,
     };
     use crate::battle::opponent_ai::EnemyAction;
@@ -943,13 +1028,13 @@ mod tests {
     #[test]
     fn route_103_move_effects_are_scoreable_and_ember_is_not() {
         let dex = Dex::new();
+        let flags = route_103_flags();
 
-        assert!(is_scoreable_effect(EFFECT_HIT));
-        assert!(ensure_scoreable(&dex, POUND).is_ok());
-        assert!(ensure_scoreable(&dex, GROWL).is_ok());
-        assert!(ensure_scoreable(&dex, LEER).is_ok());
+        assert!(ensure_scoreable(&dex, POUND, flags).is_ok());
+        assert!(ensure_scoreable(&dex, GROWL, flags).is_ok());
+        assert!(ensure_scoreable(&dex, LEER, flags).is_ok());
         assert_eq!(
-            ensure_scoreable(&dex, EMBER),
+            ensure_scoreable(&dex, EMBER, flags),
             Err(BattleError::UnscoreableMoveEffect(EMBER))
         );
     }
@@ -1466,25 +1551,6 @@ mod tests {
         assert_eq!(rng.draws(), MAX_MON_MOVES + 1);
     }
 
-    /// No dex move pairs `MoveEffect::HIT` with `Type::Ground`, so
-    /// `choose_trainer_action` cannot reach `CheckIfLevitateCancelsGroundMove`
-    /// (`data/battle_ai_scripts.s:86-88`) through an admitted move; this pins
-    /// the wired predicate directly instead.
-    #[test]
-    fn levitate_blocks_a_ground_move_the_chooser_cannot_reach_through_an_admitted_move() {
-        let dex = Dex::new();
-        let user = pokemon(TREECKO, vec![POUND]);
-        let target = pokemon(GASTLY, vec![POUND]);
-        assert_eq!(target.ability(), assets::AbilityId::LEVITATE);
-
-        assert!(
-            hit_effect_ability_blocked(&dex, EARTHQUAKE, &user, &target, target.ability()).unwrap()
-        );
-        assert!(
-            !hit_effect_ability_blocked(&dex, POUND, &user, &target, target.ability()).unwrap()
-        );
-    }
-
     /// Upstream's `get_ability AI_TARGET` reads history, a trapping ability,
     /// or draws a fresh `Random() & 1` guess between two species slots
     /// (`src/battle_ai_script_commands.c:1350-1396`). The engine models no
@@ -1605,3 +1671,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod prologue_tests;

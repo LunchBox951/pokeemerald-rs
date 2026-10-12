@@ -1350,6 +1350,57 @@ fn an_unscoreable_party_moveset_is_rejected_before_any_draw() {
     assert_eq!(error, BattleError::UnscoreableMoveEffect(SLASH));
 }
 
+/// `TRAINER_GRUNT_AQUA_HIDEOUT_1` scores with `AI_SCRIPT_CHECK_BAD_MOVE` alone
+/// (`src/data/trainers.h`), so the `AI_CheckBadMove` no-`if_effect` row
+/// `EFFECT_HIGH_CRITICAL` is admitted for it, where the Route 103 rival's
+/// `AI_CheckViability` still refuses it. The prologue draws nothing: the draws
+/// are the four simulated-damage rolls and the final tie-break, whose nonzero
+/// value picks Slash over its tied Scratch.
+const GRUNT_AQUA_HIDEOUT_1: TrainerId = TrainerId(2);
+
+#[test]
+fn a_check_bad_move_only_trainer_scores_slash_with_four_damage_draws_and_a_tie_break() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, MEOWTH, 50, vec![GROWL]);
+    let enemy = max_iv_mon(&dex, TORCHIC, 34, vec![SCRATCH, SLASH]);
+    let mut rng = SequenceRng::new(script(&[
+        CONSTRUCTION_SEED,           // battle_main.c:3140
+        TURN_SEED,                   // battle_main.c:3923 / :4013
+        AI_SIMULATED_DAMAGE,         // battle_ai_script_commands.c:341, one per slot
+        &[1],                        // battle_ai_script_commands.c:445, Slash over tied Scratch
+        ACCURACY_ONLY,               // the faster player's Growl
+        ACC_CRIT_VARIANCE_SECONDARY, // the enemy's Slash
+    ]));
+    let mut battle =
+        Battle::new_trainer(dex, player, GRUNT_AQUA_HIDEOUT_1, vec![enemy], &mut rng).unwrap();
+
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    assert!(events.iter().any(|event| matches!(
+        event,
+        BattleEvent::Hit {
+            by_player: false,
+            move_id: SLASH,
+            ..
+        }
+    )));
+    assert_eq!(rng.draws(), 12, "exact scripted draw stream is consumed");
+    rng.assert_exhausted();
+}
+
+#[test]
+fn the_same_party_is_refused_for_a_check_viability_trainer_before_any_draw() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, MEOWTH, 50, vec![GROWL]);
+    let enemy = max_iv_mon(&dex, TORCHIC, 34, vec![SCRATCH, SLASH]);
+    let mut rng = SequenceRng::new([]);
+    let error =
+        Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, vec![enemy], &mut rng).unwrap_err();
+    assert_eq!(error, BattleError::UnscoreableMoveEffect(SLASH));
+}
+
 /// `BattleAI_DoAIProcessing` skips a zero-PP slot before its script runs, so
 /// an exhausted move the AI cannot score never reaches scoring; admission must
 /// not reject the party over it.
