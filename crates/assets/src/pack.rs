@@ -11,6 +11,7 @@
 //! [`PackError`] is a separate enum from [`crate::error::AssetError`] —
 //! see [`crate::error`] for why.
 
+mod bag;
 mod error;
 mod format;
 mod handles;
@@ -21,6 +22,7 @@ use std::path::{Path, PathBuf};
 use crate::audio::{Sample, SampleId, Song, VoiceGroup, VoiceGroupId};
 use crate::fonts::{FontId, FontImageRef};
 
+pub use bag::BagAssets;
 pub use error::PackError;
 pub use format::{DirectoryEntry, EntryKind, FORMAT_VERSION, MAGIC};
 pub use handles::{ImageRef, PaletteRef, TilesetHandle, WindowFrameHandle};

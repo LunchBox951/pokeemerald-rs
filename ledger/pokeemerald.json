@@ -12353,6 +12353,68 @@
       "status": "pending"
     },
     "graphics/bag": {
+      "artifacts": {
+        "bag.pal": {
+          "reason": "Ordinary-bag source transcoded to a validated typed pack entry; Pyramid and Berry Tag sources remain pending.",
+          "rust_target": "crates/xtask/src/extract/bag.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "bag_female.png": {
+          "reason": "Ordinary-bag source transcoded to a validated typed pack entry; Pyramid and Berry Tag sources remain pending.",
+          "rust_target": "crates/xtask/src/extract/bag.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "bag_male.png": {
+          "reason": "Ordinary-bag source transcoded to a validated typed pack entry; Pyramid and Berry Tag sources remain pending.",
+          "rust_target": "crates/xtask/src/extract/bag.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "hm.png": {
+          "reason": "Ordinary-bag source transcoded to a validated typed pack entry; Pyramid and Berry Tag sources remain pending.",
+          "rust_target": "crates/xtask/src/extract/bag.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "menu.bin": {
+          "reason": "Ordinary-bag source transcoded to a validated typed pack entry; Pyramid and Berry Tag sources remain pending.",
+          "rust_target": "crates/xtask/src/extract/bag.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "menu.png": {
+          "reason": "Ordinary-bag source transcoded to a validated typed pack entry; Pyramid and Berry Tag sources remain pending.",
+          "rust_target": "crates/xtask/src/extract/bag.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "menu_female.pal": {
+          "reason": "Ordinary-bag source transcoded to a validated typed pack entry; Pyramid and Berry Tag sources remain pending.",
+          "rust_target": "crates/xtask/src/extract/bag.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "menu_male.pal": {
+          "reason": "Ordinary-bag source transcoded to a validated typed pack entry; Pyramid and Berry Tag sources remain pending.",
+          "rust_target": "crates/xtask/src/extract/bag.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "rotating_ball.png": {
+          "reason": "Ordinary-bag source transcoded to a validated typed pack entry; Pyramid and Berry Tag sources remain pending.",
+          "rust_target": "crates/xtask/src/extract/bag.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "select_button.png": {
+          "reason": "Ordinary-bag source transcoded to a validated typed pack entry; Pyramid and Berry Tag sources remain pending.",
+          "rust_target": "crates/xtask/src/extract/bag.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.ui",
       "kind": "dir",
       "spec_owner": "S-4",
@@ -12533,1310 +12595,1746 @@
     "graphics/items/icons/acro_bike.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/aguav_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/amulet_coin.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/antidote.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/apicot_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/aspear_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/aurora_ticket.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/basement_key.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/battle_stat_item.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/bead_mail.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/belue_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/berry_juice.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/berry_pouch.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/bicycle.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/big_mushroom.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/big_pearl.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/bike_voucher.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/black_belt.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/black_glasses.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/bluk_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/bright_powder.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/card_key.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/charcoal.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/cheri_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/chesto_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/choice_band.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/claw_fossil.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/cleanse_tag.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/coin_case.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/contest_pass.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/cornn_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/deep_sea_scale.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/deep_sea_tooth.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/devon_goods.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/devon_scope.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/dive_ball.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/dome_fossil.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/dragon_fang.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/dragon_scale.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/dream_mail.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/durin_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/energy_root.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/enigma_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/eon_ticket.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/escape_rope.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/ether.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/everstone.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/exp_share.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/fab_mail.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/fame_checker.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/figy_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/fire_stone.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/fluffy_tail.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/flute.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/focus_band.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/fresh_water.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/full_heal.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/ganlon_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/gem.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/glitter_mail.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/go_goggles.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/gold_teeth.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/good_rod.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/great_ball.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/grepa_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/harbor_mail.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/hard_stone.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/heart_scale.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/helix_fossil.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/hm.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/hondew_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/hp_up.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/iapapa_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/in_battle_herb.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/itemfinder.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/kelpsy_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/kings_rock.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/lansat_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/large_potion.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/lava_cookie.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/lax_incense.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/leaf_stone.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/leftovers.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/lemonade.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/leppa_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/letter.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/liechi_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/lift_key.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/light_ball.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/lucky_egg.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/lucky_punch.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/lum_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/luxury_ball.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/mach_bike.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/macho_brace.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/magma_emblem.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/magnet.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/mago_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/magost_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/master_ball.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/max_revive.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/mech_mail.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/metal_coat.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/metal_powder.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/meteorite.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/miracle_seed.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/moomoo_milk.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/moon_stone.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/mystic_ticket.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/mystic_water.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/nanab_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/nest_ball.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/net_ball.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/never_melt_ice.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/nomel_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/nugget.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/oaks_parcel.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/old_amber.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/old_rod.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/old_sea_map.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/oran_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/orange_mail.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/orb.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/pamtre_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/pearl.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/pecha_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/persim_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/petaya_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/pinap_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/poison_barb.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/poke_ball.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/poke_doll.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/poke_flute.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/pokeblock_case.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/pomeg_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/potion.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/powder.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/powder_jar.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/pp_max.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/pp_up.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/premier_ball.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/qualot_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/question_mark.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/quick_claw.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/rabuta_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/rainbow_pass.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/rare_candy.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/rawst_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/razz_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/repeat_ball.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/repel.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/retro_mail.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/return_to_field_arrow.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/revival_herb.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/revive.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/room1_key.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/room2_key.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/room4_key.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/room6_key.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/root_fossil.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/sacred_ash.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/safari_ball.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/salac_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/scanner.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/scarf.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/scope_lens.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/sea_incense.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/secret_key.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/shadow_mail.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/shard.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/sharp_beak.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/shell_bell.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/shoal_shell.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/silk_scarf.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/silph_scope.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/silver_powder.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/sitrus_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/smoke_ball.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/soda_pop.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/soft_sand.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/soot_sack.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/soothe_bell.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/soul_dew.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/spell_tag.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/spelon_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/ss_ticket.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/star_piece.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/stardust.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/starf_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/status_heal.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/stick.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/storage_key.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/sun_stone.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/super_rod.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/tamato_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/tea.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/teachy_tv.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/thick_club.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/thunder_stone.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/timer_ball.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/tiny_mushroom.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/tm.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/tm_case.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/town_map.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/tri_pass.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/tropic_mail.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/twisted_spoon.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/ultra_ball.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/up_grade.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/vitamin.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/vs_seeker.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/wailmer_pail.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/water_stone.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/watmel_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/wave_mail.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/wepear_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/wiki_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/wood_mail.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/link": {
       "category": "graphics.ui",
@@ -25547,7 +26045,10 @@
     "src/data/graphics/items.h": {
       "category": "code.header",
       "kind": "file",
-      "status": "pending"
+      "reason": "The 218 icon PNG and 253 palette declarations are the complete selected closure, transcoded by the ordinary-bag manifest.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "src/data/graphics/mail.h": {
       "category": "code.header",
@@ -25582,10 +26083,19 @@
     "src/data/item_icon_table.h": {
       "category": "code.header",
       "kind": "file",
-      "status": "pending"
+      "reason": "All 378 icon rows, including reserved rows and the list-end arrow, are extracted and exposed by BagAssets::item_icon.",
+      "rust_target": "crates/assets/src/pack/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "src/data/items.h": {
       "artifacts": {
+        "gItems_display": {
+          "reason": "Canonical names and descriptions for all 377 identities, including upstream sentinel text for NONE and reserved rows; use-function pointers remain pending.",
+          "rust_target": "crates/assets/src/items.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
         "gItems_numeric": {
           "reason": "gItems numeric/enum fields (id, price, hold effect+param, pocket, type, battle usage, importance, registrability, secondaryId) for all 377 entries; name/description/use-func pointers remain pending",
           "rust_target": "crates/assets/src/items.rs",
@@ -26044,7 +26554,10 @@
     "src/data/text/item_descriptions.h": {
       "category": "code.header",
       "kind": "file",
-      "status": "pending"
+      "reason": "All 310 description definitions are represented in ItemDisplayTable with real newlines and the POKEBLOCK glyph token.",
+      "rust_target": "crates/assets/src/items.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "src/data/text/match_call_messages.h": {
       "category": "code.header",
@@ -26943,6 +27456,14 @@
       "status": "pending"
     },
     "src/graphics.c": {
+      "artifacts": {
+        "ordinary_bag_graphics": {
+          "reason": "Bag screen, tilemap, sex palettes, animation sheets, bag palette, and HM mark extracted; other graphics remain pending.",
+          "rust_target": "crates/xtask/src/extract/bag.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -27032,16 +27553,40 @@
       "status": "pending"
     },
     "src/item_icon.c": {
+      "artifacts": {
+        "GetItemIconPicOrPalette": {
+          "reason": "BagAssets::item_icon preserves identity indexing, the list-end arrow, and out-of-range NONE normalization; sprite allocation remains pending.",
+          "rust_target": "crates/assets/src/pack/bag.rs",
+          "spec": "S-4",
+          "status": "rewritten"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
     },
     "src/item_menu.c": {
+      "artifacts": {
+        "ordinary_bag_graphics": {
+          "reason": "Registered-select mark extracted; navigation and rendering remain pending.",
+          "rust_target": "crates/xtask/src/extract/bag.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
     },
     "src/item_menu_icons.c": {
+      "artifacts": {
+        "ordinary_bag_graphics": {
+          "reason": "Rotating ball image and embedded palette extracted; sprite behaviour and Berry Tag remain pending.",
+          "rust_target": "crates/xtask/src/extract/bag.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"

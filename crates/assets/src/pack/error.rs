@@ -82,6 +82,13 @@ pub enum PackError {
         /// What differs from the expected shape.
         detail: String,
     },
+    /// An ordinary-bag entry differs from the upstream graphic's shape.
+    MalformedBagAsset {
+        /// Asset id.
+        id: String,
+        /// What differs from the expected shape.
+        detail: String,
+    },
     /// A raw audio entry failed its schema's structural decode.
     AudioDecode {
         /// Audio asset id.
@@ -173,6 +180,9 @@ impl fmt::Display for PackError {
             Self::MalformedStarterAsset { id, detail } => {
                 write!(f, "asset pack: starter-chooser entry `{id}` {detail}")
             }
+            Self::MalformedBagAsset { id, detail } => {
+                write!(f, "asset pack: bag entry `{id}` {detail}")
+            }
             Self::AudioDecode { id, source } => {
                 write!(
                     f,
@@ -200,7 +210,8 @@ impl std::error::Error for PackError {
             | Self::TextWindowImageWrongDimensions { .. }
             | Self::MalformedTextWindowImage { .. }
             | Self::TextWindowPixelOutsidePalette { .. }
-            | Self::MalformedStarterAsset { .. } => None,
+            | Self::MalformedStarterAsset { .. }
+            | Self::MalformedBagAsset { .. } => None,
         }
     }
 }
