@@ -34,6 +34,7 @@ mod profile_launch;
 mod record_snapshot;
 #[cfg(any(feature = "scenario", all(test, feature = "scenes")))]
 mod scenario;
+mod staging_names;
 #[cfg(windows)]
 mod windows_file_identity;
 

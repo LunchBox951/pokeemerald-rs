@@ -1,6 +1,5 @@
-//! Pins [`BattlePokemon`] construction and validation, its derived
-//! nature/ability/stat accessors, turn-order speed, and its HP/status/PP
-//! lifecycle: damage, heal, faint, and battle-scratch reset.
+//! [`BattlePokemon`] construction, validation, derived accessors, turn-order
+//! speed, and the damage/heal/faint/reset lifecycle.
 
 use super::super::{
     compute_stats, BattlePokemon, Ivs, MoveSlot, StatStages, MAX_IV, MAX_LEVEL, MAX_MON_MOVES,
@@ -24,32 +23,20 @@ const SCRATCH: MoveId = MoveId::SCRATCH;
 const TENTACOOL: SpeciesId = SpeciesId(72);
 const ZIGZAGOON: SpeciesId = SpeciesId(288);
 const PICKUP: AbilityId = AbilityId(53);
-/// The old-Unown compatibility hole (`src/data/pokemon/species_info.h:5`) and
-/// the real species on either side of it. Pinned as literals rather than
-/// derived from [`SPECIES_OLD_UNOWN_B`] and [`SPECIES_OLD_UNOWN_Z`]: a reserved
-/// range that grew to swallow Celebi or Treecko would otherwise drag these
-/// fixtures along with it and leave the test green.
+/// Old-Unown reserved range and its real neighbours (`include/constants/species.h:255-283`).
 const PINNED_OLD_UNOWN_B: u16 = 252;
 const PINNED_OLD_UNOWN_Z: u16 = 276;
 const OLD_UNOWN_INTERIOR: SpeciesId = SpeciesId(260);
 const CELEBI: SpeciesId = SpeciesId(251);
 const TREECKO: SpeciesId = SpeciesId(277);
-/// `GetNatureFromPersonality` (`pokeemerald/src/pokemon.c:5498`) is
-/// `personality % 25`, and nature id 3 is Adamant. Pinned as literals rather
-/// than read back from [`Nature::id`], which would reduce the assertions below
-/// to a round-trip through the same table they mean to pin.
+/// Upstream derives nature as `personality % 25` (`src/pokemon.c:5498`); Adamant is id 3.
 const ADAMANT_NATURE_ID: u32 = 3;
 const HARDY_NATURE_ID: u32 = 0;
 const ADAMANT_PERSONALITY: u32 = ADAMANT_NATURE_ID;
 const PERSONALITY_NATURE_CYCLE: u32 = 25;
 const WRAPPED_ADAMANT_PERSONALITY: u32 = ADAMANT_PERSONALITY + PERSONALITY_NATURE_CYCLE;
-/// Upstream's level range (`pokeemerald/include/constants/pokemon.h:145`-`:146`)
-/// and move-slot count (`include/constants/global.h:82`), pinned as literals
-/// for the same reason as [`PINNED_MAX_IV`](super::shared::PINNED_MAX_IV):
-/// derived from production's [`MIN_LEVEL`]/[`MAX_LEVEL`]/[`MAX_MON_MOVES`], a
-/// drift would carry the rejected input and the accepted boundary along with
-/// it and leave the tests green. Each is cross-checked against its constant
-/// exactly once, at the test that uses it.
+/// Upstream level range (`include/constants/pokemon.h:145-146`) and move-slot
+/// count (`include/constants/global.h:82`).
 const PINNED_MIN_LEVEL: u8 = 1;
 const PINNED_MAX_LEVEL: u8 = 100;
 const PINNED_MAX_MON_MOVES: usize = 4;
@@ -85,10 +72,10 @@ fn new_rejects_empty_and_overfull_movesets() {
         BattlePokemon::new(&dex, BULBASAUR, 5, Ivs::default(), 0, vec![]),
         Err(BattleError::InvalidMoveCount(0))
     );
-    // The one deliberate cross-check: the literal slot count against
-    // production's constant, so a capacity that shrank fails here rather than
-    // shrinking the "overfull" fixture to match.
-    assert_eq!(MAX_MON_MOVES, PINNED_MAX_MON_MOVES);
+    assert_eq!(
+        MAX_MON_MOVES, PINNED_MAX_MON_MOVES,
+        "the overfull fixture must not shrink with production's capacity"
+    );
     let overfull_count = PINNED_MAX_MON_MOVES + 1;
     assert_eq!(
         BattlePokemon::new(
@@ -139,10 +126,11 @@ fn new_rejects_move_none_placeholder_slots() {
 fn new_rejects_levels_outside_the_upstream_range() {
     let dex = Dex::new();
     let build = |level| BattlePokemon::new(&dex, BULBASAUR, level, Ivs::default(), 0, vec![TACKLE]);
-    // The one deliberate cross-check: literal boundaries against production's
-    // constants, so a range that moved fails here rather than moving the
-    // rejected inputs and the accepted boundaries with it.
-    assert_eq!((MIN_LEVEL, MAX_LEVEL), (PINNED_MIN_LEVEL, PINNED_MAX_LEVEL));
+    assert_eq!(
+        (MIN_LEVEL, MAX_LEVEL),
+        (PINNED_MIN_LEVEL, PINNED_MAX_LEVEL),
+        "the rejected and accepted levels must not move with production's range"
+    );
     let below_minimum = 0;
     let above_maximum = 101;
     assert_eq!(
@@ -212,12 +200,10 @@ fn new_rejects_the_species_none_placeholder() {
 #[test]
 fn new_rejects_the_old_unown_reserved_range_but_not_its_neighbours() {
     let dex = Dex::new();
-    // The one deliberate cross-check: the literal fixtures against production's
-    // constants, so a reserved range that moved fails here rather than moving
-    // the neighbours below along with it.
     assert_eq!(
         (SPECIES_OLD_UNOWN_B.0, SPECIES_OLD_UNOWN_Z.0),
-        (PINNED_OLD_UNOWN_B, PINNED_OLD_UNOWN_Z)
+        (PINNED_OLD_UNOWN_B, PINNED_OLD_UNOWN_Z),
+        "the neighbour fixtures must not move with production's reserved range"
     );
     for species in [
         SpeciesId(PINNED_OLD_UNOWN_B),
@@ -483,14 +469,8 @@ fn speed_for_turn_order_quarters_the_stage_scaled_speed_only_when_paralysed() {
 
 #[test]
 fn speed_for_turn_order_scales_the_stage_before_quartering_not_after() {
-    // Bulbasaur (base Speed 45) at level 16 with a 0 Speed IV: (2*45+0)*16/100
-    // = 14 (truncated from 14.4), +5 = 19 raw Speed -- chosen so the two
-    // truncating divisions below give *different* answers depending on
-    // order, the way `apply_uses_multiply_then_divide_not_a_fused_fraction`
-    // (`crate::stat_stage`) pins multiply-before-divide.
-    //
-    // Quarter-then-stage would instead give 19/4 = 4 (from 4.75), then
-    // 4*10/15 = 2 (from 2.67) -- a different, wrong answer.
+    // With raw Speed 19 the two truncating divisions disagree by order:
+    // quarter-first gives 19/4 = 4, then 4*10/15 = 2.
     const WRONG_QUARTER_FIRST_ORDER: u32 = 2;
 
     let dex = Dex::new();
@@ -502,9 +482,7 @@ fn speed_for_turn_order_scales_the_stage_before_quartering_not_after() {
     mon.stages_mut().speed = StatStage::new(-1).unwrap();
     mon.set_status1(Status1::Paralysed);
 
-    // Stage-then-quarter (upstream order): 19*10/15 = 12 (from 12.67), then
-    // 12/4 = 3.
-    assert_eq!(mon.effective_speed(), 12);
+    assert_eq!(mon.effective_speed(), 12, "19 * 10 / 15 truncates to 12");
     assert_eq!(
         mon.speed_for_turn_order(),
         3,
@@ -598,9 +576,11 @@ fn clear_battle_scratch_resets_stages_and_volatiles_but_not_status1() {
 fn ivs_validate_zero_through_max_iv() {
     assert!(Ivs::default().is_valid());
     assert!(MAX_IVS.is_valid());
-    // The one deliberate cross-check: the literal fixture against production's
-    // constant, so `MAX_IV` moving off 31 fails here.
-    assert_eq!(MAX_IVS.as_array(), [MAX_IV; 6]);
+    assert_eq!(
+        MAX_IVS.as_array(),
+        [MAX_IV; 6],
+        "MAX_IV must stay the pinned five-bit maximum"
+    );
     assert!(!Ivs {
         attack: FIRST_UNREPRESENTABLE_IV,
         ..Ivs::default()

@@ -22,8 +22,7 @@ use platform::{ButtonState, Buttons};
 // ---------------------------------------------------------------------------
 
 /// One of the real Route 101 rescue coord-event trigger tiles
-/// (`pokeemerald/data/maps/Route101/map.json`'s `coord_events`, elevation 3)
-/// -- `first_battle_trigger`'s own module docs have the full citation.
+/// (`pokeemerald/data/maps/Route101/map.json`'s `coord_events`, elevation 3).
 const ROUTE_101_TRIGGER_TILE: (i32, i32) = (10, 19);
 
 /// `ROUTE_101_TRIGGER_TILE`'s own elevation.
@@ -86,7 +85,7 @@ fn walk_east(phase: &mut OverworldPhase, tiles: usize) {
     }
 }
 
-/// Step 1 of the upstream chain (`first_battle_trigger`'s module docs):
+/// Step 1 of the upstream chain (`scripts.inc:10-17`):
 /// `Route101_OnFrame`'s guard bumps a fresh save's `VAR_ROUTE101_STATE` from
 /// `0` to `1` the moment the player is on the map, or this slice's trigger
 /// (gated on that same value) could never gate open in real play.
@@ -260,10 +259,8 @@ fn stepping_west_onto_the_second_route_101_trigger_tile_starts_the_scripted_firs
 }
 
 /// The no-party-lead arm of `super::first_battle_trigger`'s
-/// `begin_first_battle`, which its own doc comment claims outright ("The
-/// trigger is still consumed in that case, exactly as it is upstream -- the
-/// coord event fires, the cutscene it stands in for runs, and the tile is
-/// spent whether or not this port could build a battle out of it") and which
+/// `begin_first_battle`, whose doc comment states that every path that
+/// builds no battle still consumes the trigger (`scripts.inc:40`), and which
 /// `connections_tests::walking_off_littlerootss_north_edge_crosses_into_route_101_and_back`'s
 /// own doc comment relies on to explain why that pack-only walk stays quiet.
 /// Nothing else pins it: every other trigger test assigns a lead, so moving
@@ -389,7 +386,7 @@ fn the_scripted_first_battle_plays_to_a_terminal_outcome_and_hands_the_lead_back
 /// (c) from the issue's test list: by the time the battle ends,
 /// `VAR_ROUTE101_STATE` has advanced past the trigger's own gate (upstream's
 /// own `setvar VAR_ROUTE101_STATE, 2`, written at trigger time --
-/// `first_battle_trigger`'s "When the var advances" section), so stepping
+/// `scripts.inc:40`), so stepping
 /// onto the same tile again starts nothing -- no second battle, and the roll
 /// doesn't silently fall through to an ordinary wild encounter either.
 ///
@@ -505,8 +502,7 @@ fn the_trigger_draws_off_the_phases_single_shared_stream() {
 }
 
 /// The `cross_connection` half of [`OverworldPhase`]'s map-entry bump
-/// (`super::first_battle_trigger::sync_route_101_state_on_entry`'s own
-/// "called at every one of `OverworldPhase`'s map-entry points" claim):
+/// (`super::first_battle_trigger::sync_route_101_state_on_entry`):
 /// walking into Route 101 over its map-edge connection primes
 /// `VAR_ROUTE101_STATE` from a fresh save's `0` to `1` **on arrival**, before
 /// the crossing step's own walk animation has drained and therefore before
@@ -672,8 +668,7 @@ fn real_pack_crossing_into_route_101_lands_on_the_rescue_trigger_and_starts_the_
 /// `VAR_ROUTE101_STATE` only on `Some(outcome)`, which left the var at `1` on
 /// exactly this path and the coord-event tile live, so the next step onto it
 /// started the whole thing over. The var now moves at trigger time,
-/// upstream's own ordering (`scripts.inc:40`, mid-cutscene) — see
-/// `super::first_battle_trigger`'s "When the var advances" section.
+/// upstream's own ordering (`scripts.inc:40`, mid-cutscene).
 ///
 /// Setup gives the lead [`UNEXECUTABLE_MOVE`] rather than draining PP: a
 /// spent slot 0 now falls back to the next usable slot, and an all-spent
@@ -999,7 +994,7 @@ fn route_101_has_no_warp_events_so_the_trigger_can_never_race_one() {
 fn the_prevent_exit_coord_events_never_start_a_battle() {
     let (tx, ty) = ROUTE_101_TRIGGER_TILE;
     // Starts directly on the rescue tile itself, not one step west of it:
-    // with the var already past `PRE_RESCUE_STATE` (below), the rescue
+    // with the var already past `RESCUE_TRIGGER_READY_STATE` (below), the rescue
     // trigger's own gate no longer matches there, so no walk onto it is
     // needed to reach the ordinary-ground state this test wants before
     // stepping north.
@@ -1097,8 +1092,7 @@ fn no_route_101_object_event_stands_beside_the_rescue_trigger_tiles() {
 /// would do with the pair -- in particular whether the newcomer's guard is
 /// one this port can evaluate at all, since a trigger on any var other than
 /// `VAR_ROUTE101_STATE` makes the scan fail closed
-/// (`super::first_battle_trigger::OverworldPhase::first_battle_trigger_at`'s
-/// "A guard this port cannot evaluate" section).
+/// (`super::first_battle_trigger::OverworldPhase::first_battle_trigger_at`).
 #[test]
 fn route_101_coord_events_all_sit_at_distinct_positions() {
     let events = assets::MapEventsTable::new()
@@ -1320,8 +1314,7 @@ fn a_foreign_trigger_whose_guard_passes_wins_the_tile_from_the_rescue_trigger() 
 /// rescue trigger **fails closed**: with no way to know whether upstream's
 /// `VarGet` would pass, the scan treats it as yielding and stops, rather
 /// than optimistically stepping over it into a battle upstream might never
-/// have started (`first_battle_trigger_at`'s "A guard this port cannot
-/// evaluate" section, which records the divergence).
+/// have started (`first_battle_trigger_at`'s doc records the divergence).
 #[test]
 fn a_trigger_on_an_unevaluable_var_stacked_ahead_fails_closed() {
     let phase = phase_on_the_trigger_tile();

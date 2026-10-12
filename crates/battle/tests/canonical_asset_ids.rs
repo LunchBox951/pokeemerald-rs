@@ -1,8 +1,4 @@
-//! Canonical move and item identities must be nameable from dependent crates.
-//!
-//! `assets` owns the upstream numbering, so a crate that needs a specific move
-//! or item has to reach the named constant rather than restate its index
-//! `(self-explanatory-code)`.
+//! Dependent crates must reach canonical move and item ids by named constant.
 
 use assets::{items::ItemId, MoveId};
 use battle::damage::STRUGGLE;

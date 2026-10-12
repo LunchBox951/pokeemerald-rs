@@ -194,7 +194,14 @@ pub(super) type Pin = std::convert::Infallible;
 pub(super) fn create_directories_pinned(
     dir: &Path,
 ) -> Result<DirectoryCreation, (Vec<CreatedDirectory>, io::Error)> {
-    create_directories_pinned_with_hooks(dir, pin_budget(), &mut || {}, &mut || None, &mut || None)
+    create_directories_pinned_with_hooks(
+        dir,
+        pin_budget(),
+        &mut || {},
+        &mut || None,
+        &mut || None,
+        &mut dest::reopen_for_sync,
+    )
 }
 
 #[cfg(all(unix, test))]
@@ -205,8 +212,15 @@ fn create_directories_with_hooks(
     before_reopen: &mut dyn FnMut() -> Option<io::Error>,
     before_open: &mut dyn FnMut() -> Option<io::Error>,
 ) -> Result<Vec<CreatedDirectory>, (Vec<CreatedDirectory>, io::Error)> {
-    create_directories_pinned_with_hooks(dir, pin_limit, before_dotdot, before_reopen, before_open)
-        .map(|creation| creation.created)
+    create_directories_pinned_with_hooks(
+        dir,
+        pin_limit,
+        before_dotdot,
+        before_reopen,
+        before_open,
+        &mut dest::reopen_for_sync,
+    )
+    .map(|creation| creation.created)
 }
 
 /// What reopening a level [`create_directories_with_hooks`] just made turned
@@ -233,6 +247,7 @@ fn reopen_created_level(
     name: &OsStr,
     identity: &rustix::fs::Stat,
     before_reopen: &mut dyn FnMut() -> Option<io::Error>,
+    sync_reopen: &mut dyn FnMut(&std::os::fd::OwnedFd) -> io::Result<std::os::fd::OwnedFd>,
 ) -> ReopenedLevel {
     let descend = loop {
         let attempt = match before_reopen() {
@@ -242,7 +257,7 @@ fn reopen_created_level(
         match attempt {
             Err(source)
                 if is_out_of_descriptors_io(&source)
-                    && shed_outermost_pinned_level(created, pin_from) => {}
+                    && sync_and_shed_outermost_pinned_level(created, pin_from, sync_reopen) => {}
             result => break result,
         }
     };
@@ -265,6 +280,10 @@ fn reopen_created_level(
 /// identity, reopens it, and answers with the descriptor the next level
 /// descends through.
 #[cfg(unix)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the walk state, the pin window and the two test seams are all needed to reopen one level"
+)]
 fn create_missing_level(
     created: &mut Vec<CreatedDirectory>,
     pin_from: &mut usize,
@@ -273,6 +292,7 @@ fn create_missing_level(
     path: PathBuf,
     name: std::ffi::OsString,
     before_reopen: &mut dyn FnMut() -> Option<io::Error>,
+    sync_reopen: &mut dyn FnMut(&std::os::fd::OwnedFd) -> io::Result<std::os::fd::OwnedFd>,
 ) -> Result<std::rc::Rc<std::os::fd::OwnedFd>, io::Error> {
     // `fstat` takes no descriptor, so it cannot fail for want of one.
     let parent_identity = rustix::fs::fstat(&*parent_fd)?;
@@ -282,8 +302,8 @@ fn create_missing_level(
     let found = loop {
         match rustix::fs::statat(&*parent_fd, &name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW) {
             Err(err)
-                if is_out_of_descriptors(err) && shed_outermost_pinned_level(created, pin_from) => {
-            }
+                if is_out_of_descriptors(err)
+                    && sync_and_shed_outermost_pinned_level(created, pin_from, sync_reopen) => {}
             result => break result,
         }
     };
@@ -308,6 +328,7 @@ fn create_missing_level(
         &name,
         &identity,
         before_reopen,
+        sync_reopen,
     ) {
         ReopenedLevel::Pinned(descend) => {
             created.push(CreatedDirectory {
@@ -324,7 +345,7 @@ fn create_missing_level(
             // always suffices, since nothing but this push could have grown
             // the window since the last time it was checked.
             if created.len() - *pin_from > pin_limit {
-                shed_outermost_pinned_level(created, pin_from);
+                sync_and_shed_outermost_pinned_level(created, pin_from, sync_reopen);
             }
             Ok(descend)
         }
@@ -357,6 +378,7 @@ fn open_existing_level(
     parent: &std::rc::Rc<std::os::fd::OwnedFd>,
     name: &OsStr,
     before_open: &mut dyn FnMut() -> Option<io::Error>,
+    sync_reopen: &mut dyn FnMut(&std::os::fd::OwnedFd) -> io::Result<std::os::fd::OwnedFd>,
 ) -> io::Result<std::os::fd::OwnedFd> {
     loop {
         let attempt = match before_open() {
@@ -366,7 +388,7 @@ fn open_existing_level(
         match attempt {
             Err(source)
                 if is_out_of_descriptors_io(&source)
-                    && shed_outermost_pinned_level(created, pin_from) => {}
+                    && sync_and_shed_outermost_pinned_level(created, pin_from, sync_reopen) => {}
             result => return result,
         }
     }
@@ -375,8 +397,9 @@ fn open_existing_level(
 /// [`create_directories`]'s body on Unix. `before_dotdot` runs before a
 /// `..` level is resolved, `before_reopen` and `before_open` may replace
 /// the reopen of a created level or the open of an existing one with a
-/// failure, and `pin_budget` caps the pinned levels; production passes
-/// no-ops and [`pin_budget`].
+/// failure, `pin_budget` caps the pinned levels, and `sync_reopen` reopens
+/// a parent to sync it before its pin is shed; production passes no-ops,
+/// [`pin_budget`] and [`dest::reopen_for_sync`].
 #[cfg(unix)]
 fn create_directories_pinned_with_hooks(
     dir: &Path,
@@ -384,6 +407,7 @@ fn create_directories_pinned_with_hooks(
     before_dotdot: &mut dyn FnMut(),
     before_reopen: &mut dyn FnMut() -> Option<io::Error>,
     before_open: &mut dyn FnMut() -> Option<io::Error>,
+    sync_reopen: &mut dyn FnMut(&std::os::fd::OwnedFd) -> io::Result<std::os::fd::OwnedFd>,
 ) -> Result<DirectoryCreation, (Vec<CreatedDirectory>, io::Error)> {
     let levels = directories_to_create(dir);
     let Some(first) = levels.first() else {
@@ -419,6 +443,7 @@ fn create_directories_pinned_with_hooks(
                 &parent_fd,
                 OsStr::new(".."),
                 before_open,
+                sync_reopen,
             ) {
                 Ok(fd) => std::rc::Rc::new(fd),
                 Err(source) => return Err((created, source)),
@@ -433,7 +458,11 @@ fn create_directories_pinned_with_hooks(
             ) {
                 Err(err)
                     if is_out_of_descriptors(err)
-                        && shed_outermost_pinned_level(&mut created, &mut pin_from) => {}
+                        && sync_and_shed_outermost_pinned_level(
+                            &mut created,
+                            &mut pin_from,
+                            sync_reopen,
+                        ) => {}
                 result => break result,
             }
         };
@@ -447,6 +476,7 @@ fn create_directories_pinned_with_hooks(
                     level,
                     name,
                     before_reopen,
+                    sync_reopen,
                 ) {
                     Ok(descend) => parent_fd = descend,
                     Err(source) => return Err((created, source)),
@@ -469,6 +499,7 @@ fn create_directories_pinned_with_hooks(
                         &parent_fd,
                         &name,
                         before_open,
+                        sync_reopen,
                     ) {
                         Ok(fd) => parent_fd = std::rc::Rc::new(fd),
                         // The open's own failure is the real diagnosis now;

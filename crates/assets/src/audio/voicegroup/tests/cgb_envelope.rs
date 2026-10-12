@@ -16,7 +16,7 @@ const CGB_ENVELOPE_MAX: Envelope = Envelope {
 
 fn square1_with_envelope(envelope: Envelope) -> VoiceEntry {
     VoiceEntry::Square1(Square1Voice {
-        base_key: 60,
+        base_key: MIDDLE_C,
         length: 0,
         sweep: 0,
         duty: 0,
@@ -27,7 +27,7 @@ fn square1_with_envelope(envelope: Envelope) -> VoiceEntry {
 
 fn square2_with_envelope(envelope: Envelope) -> VoiceEntry {
     VoiceEntry::Square2(Square2Voice {
-        base_key: 60,
+        base_key: MIDDLE_C,
         length: 0,
         duty: 0,
         envelope,
@@ -37,7 +37,7 @@ fn square2_with_envelope(envelope: Envelope) -> VoiceEntry {
 
 fn programmable_wave_with_envelope(envelope: Envelope) -> VoiceEntry {
     VoiceEntry::ProgrammableWave(ProgrammableWaveVoice {
-        base_key: 60,
+        base_key: MIDDLE_C,
         length: 0,
         wave: SampleId("audio/sample/programmable_wave_2".to_owned()),
         envelope,
@@ -57,8 +57,6 @@ fn noise_with_envelope(envelope: Envelope) -> VoiceEntry {
 
 type CgbVoiceBuilder = fn(Envelope) -> VoiceEntry;
 
-/// Every CGB voice kind paired with the fixture builder that carries its
-/// envelope, so envelope-domain coverage does not silently skip one kind.
 fn cgb_voice_kinds_with_envelope() -> [(&'static str, CgbVoiceBuilder); 4] {
     [
         ("square 1", square1_with_envelope as CgbVoiceBuilder),
@@ -78,10 +76,8 @@ fn cgb_envelope_boundaries_are_accepted_by_the_constructor_and_decode() {
     }
 }
 
-/// The constructor rejects each field independently, one past its mask's
-/// domain, for every CGB voice kind.
 #[test]
-fn cgb_envelope_out_of_range_is_rejected_at_construction() {
+fn every_cgb_voice_kind_rejects_each_envelope_field_one_past_maximum_at_construction() {
     for (voice_kind, build) in cgb_voice_kinds_with_envelope() {
         let attack_too_high = Envelope {
             attack: 8,
@@ -141,11 +137,9 @@ fn cgb_envelope_out_of_range_is_rejected_at_construction() {
     }
 }
 
-/// Every CGB voice slot's wire layout ends with its four envelope bytes
-/// (attack, decay, sustain, release) immediately followed by the trailing
-/// `fixed_rate` byte, so a single-slot group's last five bytes locate the
-/// envelope regardless of that voice kind's other variable-length fields
-/// (e.g. `ProgrammableWave`'s wave id).
+const CGB_ENVELOPE_BYTE_COUNT: usize = 4;
+const FIXED_RATE_BYTE_COUNT: usize = 1;
+
 #[test]
 fn decode_rejects_a_cgb_envelope_field_mutated_out_of_range() {
     let fields = [
@@ -158,7 +152,7 @@ fn decode_rejects_a_cgb_envelope_field_mutated_out_of_range() {
         for (field_offset, field, maximum, invalid_value) in fields {
             let group = VoiceGroup::new(vec![build(CGB_ENVELOPE_MIN)]).unwrap();
             let mut bytes = group.encode();
-            let envelope_start = bytes.len() - 5;
+            let envelope_start = bytes.len() - CGB_ENVELOPE_BYTE_COUNT - FIXED_RATE_BYTE_COUNT;
             bytes[envelope_start + field_offset] = invalid_value;
             assert_eq!(
                 VoiceGroup::decode(&bytes),

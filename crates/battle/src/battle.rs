@@ -348,7 +348,11 @@ impl Battle {
     /// [`BattleError::UnknownTrainer`] for an unknown trainer,
     /// [`BattleError::FaintedBattler`] for a fainted active battler, or the
     /// first AI, move, or ability validation error against the active member
-    /// or any non-fainted reserve. Errors leave the RNG untouched.
+    /// or any non-fainted reserve, including
+    /// [`BattleError::AmbiguousPlayerAbility`] for a two-ability player
+    /// member without a trapping ability when the trainer scores with
+    /// `CheckBadMove` and some non-fainted party member still has a
+    /// PP-positive move. Errors leave the RNG untouched.
     pub fn new_trainer_with_player_reserves(
         dex: Dex,
         player: BattlePokemon,
@@ -400,6 +404,27 @@ impl Battle {
                         .filter(|reserve| !reserve.is_fainted()),
                 ),
         )?;
+
+        // An all-spent battler is diverted to Struggle before the AI picks a
+        // move (`battle_main.c:4183`-`:4191`), and PP never refills in
+        // battle, so only a party that can still score reads the target's
+        // ability.
+        let party_can_score = party
+            .iter()
+            .any(|mon| !mon.is_fainted() && !all_known_moves_are_spent(mon));
+        if party_can_score
+            && data
+                .ai_flags
+                .contains(assets::trainers::AiFlags::CHECK_BAD_MOVE)
+        {
+            for target in std::iter::once(&player).chain(
+                player_reserves
+                    .iter()
+                    .filter(|reserve| !reserve.is_fainted()),
+            ) {
+                trainer_ai::ensure_target_ability_unambiguous(target)?;
+            }
+        }
 
         let enemy = party.remove(0);
         let random_turn_number = initialize_turn_rng_state(&player, &enemy, rng);
