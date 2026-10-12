@@ -419,10 +419,10 @@ impl OverworldPhase {
             // busy timer has drained (`field_player_avatar.c:901-915`). It
             // feeds only the encounter gate below -- never the coord-event,
             // door-warp, or step-script consumers of `stepped_onto`.
-            // The Route 101 scripted first-battle coord-event trigger (issue
-            // #231, `super::first_battle_trigger`'s own "Precedence" section:
-            // it outranks the door warp, the wild-encounter roll, and the
-            // arrow poll below, the same as a fired encounter already does).
+            // The Route 101 scripted first-battle coord-event trigger
+            // outranks the door warp, the wild-encounter roll, and the arrow
+            // poll below, the same as a fired encounter already does
+            // (`field_control_avatar.c:155-163,483-495`).
             //
             // Upstream reaches the coord-event check *inside*
             // `TryStartStepBasedScript` (`TryStartCoordEventScript`,
@@ -470,8 +470,8 @@ impl OverworldPhase {
             // so that arm is encoded and documented rather than
             // behaviourally pinned. Both of those data facts are themselves
             // asserted, so a change that makes it reachable fails a test
-            // first. See `super::first_battle_trigger`'s "Precedence"
-            // section.
+            // first (`first_battle_trigger_tests::route_101_has_no_warp_events_so_the_trigger_can_never_race_one`,
+            // `no_route_101_object_event_stands_beside_the_rescue_trigger_tiles`).
             let field_event_fired = encounter.is_some() || first_battle_triggered;
             // `ProcessPlayerFieldInput` returns TRUE the moment any of the
             // three completed-step branches above fires --
