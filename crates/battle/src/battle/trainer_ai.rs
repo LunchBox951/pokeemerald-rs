@@ -4,17 +4,16 @@
 //! admission functions reject other flags and effects before a battle starts
 //! because unmodelled scoring branches can consume different RNG draws.
 //!
-//! `CheckBadMove`'s target-ability guards do not read a target's true
-//! ability: Emerald's `get_ability AI_TARGET` guesses between both slots of
-//! an unrevealed two-ability species, drawing RNG fresh at each of its own
-//! call sites (`src/battle_ai_script_commands.c:1350-1391`). One case
-//! predates the guess: a true Shadow Tag, Magnet Pull, or Arena Trap is read
-//! directly, with no draw, because those trapping abilities are checked
-//! before the AI decides whether to guess
-//! (`src/battle_ai_script_commands.c:1368-1375`). Battle history that would
-//! reveal an ability first is not modelled, so every other target reads as
-//! unrevealed here; a single-ability species is unaffected and draws
-//! nothing.
+//! `CheckBadMove`'s target-ability guards read `get_ability AI_TARGET`, which
+//! upstream answers from battle history, a trapping ability, or a fresh
+//! `Random() & 1` guess between a species' two ability slots
+//! (`src/battle_ai_script_commands.c:1350-1396`). This engine models no
+//! ability history, so it never guesses: a target whose true ability is
+//! Shadow Tag, Magnet Pull, or Arena Trap reads it directly, as upstream does
+//! ahead of the guess (`src/battle_ai_script_commands.c:1368-1376`); any other
+//! scoring target whose species has two ability slots is refused with
+//! [`BattleError::AmbiguousPlayerAbility`] before any draw, and a
+//! single-ability target reads its sole ability without drawing.
 
 use assets::trainers::AiFlags;
 use assets::{AbilityId, MoveEffect, MoveId, Type, TypeChart};
@@ -201,15 +200,16 @@ const SCORING_SCRIPTS_IN_FLAG_ORDER: [(AiFlags, ScoringScript); 4] = [
 /// Chooses a trainer opponent's action after validating its AI flags.
 ///
 /// Scoring consumes four simulated-damage draws, runs enabled scripts in
-/// ascending flag order, and consumes one final tie-break draw. `CheckBadMove`
-/// additionally draws once per target-ability guess against a two-ability
-/// target (see the module docs); a single-ability target draws nothing extra.
-/// A trainer with no usable move returns Struggle without drawing.
+/// ascending flag order, and consumes one final tie-break draw. A two-ability
+/// `CheckBadMove` target is refused before any draw (see the module docs). A trainer
+/// with no usable move returns Struggle without drawing.
 ///
 /// # Errors
 ///
 /// Returns an unsupported flag, move, or move-effect error if the caller did
-/// not run the trainer admission checks first.
+/// not run the trainer admission checks first, or
+/// [`BattleError::AmbiguousPlayerAbility`] for a two-ability `player` scored by
+/// `CheckBadMove`.
 pub(crate) fn choose_trainer_action(
     dex: &Dex,
     enemy: &BattlePokemon,
@@ -222,6 +222,9 @@ pub(crate) fn choose_trainer_action(
 
     if all_known_moves_are_spent(enemy) {
         return Ok(EnemyAction::Struggle);
+    }
+    if ai_flags.contains(AiFlags::CHECK_BAD_MOVE) {
+        ensure_target_ability_unambiguous(player)?;
     }
 
     let mut scores = MoveScores::initialize(enemy, rng);
@@ -239,7 +242,7 @@ pub(crate) fn choose_trainer_action(
             let move_id = enemy.moves()[slot].move_id;
             match script {
                 ScoringScript::CheckBadMove => {
-                    score_bad_move(dex, &mut scores, slot, move_id, enemy, player, rng)?;
+                    score_bad_move(dex, &mut scores, slot, move_id, enemy, player)?;
                 }
                 ScoringScript::TryToFaint => {
                     score_try_to_faint(dex, &mut scores, slot, move_id, enemy, player, rng)?;
@@ -363,37 +366,47 @@ fn has_no_effect(
     Ok(ai_type_effectiveness(dex, move_id, attacker, defender)? == Some(0))
 }
 
-/// A trapping ability upstream reads off the target directly, ahead of the
-/// unrevealed-ability guess and with no draw
-/// (`src/battle_ai_script_commands.c:1368-1375`).
+/// The trapping abilities upstream reads off the target directly, ahead of
+/// the two-slot guess and with no draw
+/// (`src/battle_ai_script_commands.c:1368-1376`).
 const TRAPPING_ABILITIES: [AbilityId; 3] = [
     AbilityId::SHADOW_TAG,
     AbilityId::MAGNET_PULL,
     AbilityId::ARENA_TRAP,
 ];
 
-/// `Cmd_get_ability`'s target-ability read for the AI
-/// (`src/battle_ai_script_commands.c:1350-1391`). A true Shadow Tag, Magnet
-/// Pull, or Arena Trap is read directly, with no draw, ahead of the guess
-/// (`src/battle_ai_script_commands.c:1368-1375`). Otherwise a single-ability
-/// species reads directly, with no draw. An unrevealed two-ability species
-/// draws `Random() & 1` fresh at every call rather than caching one guess,
-/// because separate `get_ability AI_TARGET` instructions in `AI_CheckBadMove`
-/// do not share a result (`data/battle_ai_scripts.s:59,93,279,309`).
-fn ai_get_ability(target: &BattlePokemon, rng: &mut impl BattleRng) -> AbilityId {
-    let true_ability = target.ability();
-    if TRAPPING_ABILITIES.contains(&true_ability) {
-        return true_ability;
-    }
-    let [first, second] = target.ability_slots();
-    if second.0 == 0 {
-        return first;
-    }
-    if rng.next_u16() & 1 != 0 {
-        first
+/// Refuses a scoring target whose species has two ability slots and whose
+/// true ability is not a trapping one, because upstream's ability read for it
+/// depends on battle history or a random guess the engine does not model
+/// (`src/battle_ai_script_commands.c:1350-1396`). A true Shadow Tag, Magnet
+/// Pull, or Arena Trap is admitted: upstream returns it before the guess
+/// (`src/battle_ai_script_commands.c:1368-1376`).
+///
+/// # Errors
+///
+/// Returns [`BattleError::AmbiguousPlayerAbility`] for a two-ability species
+/// whose selected ability is not a trapping one.
+pub(crate) fn ensure_target_ability_unambiguous(target: &BattlePokemon) -> Result<(), BattleError> {
+    let [_, second] = target.ability_slots();
+    if second.0 == 0 || TRAPPING_ABILITIES.contains(&target.ability()) {
+        Ok(())
     } else {
-        second
+        Err(BattleError::AmbiguousPlayerAbility(target.species()))
     }
+}
+
+/// `Cmd_get_ability`'s target-ability read for the AI, restricted to the
+/// targets admission allows: a true trapping ability, read directly
+/// (`src/battle_ai_script_commands.c:1368-1376`), or a single-ability
+/// species' sole ability. No history lookup, no draw.
+///
+/// # Errors
+///
+/// Returns [`BattleError::AmbiguousPlayerAbility`] for a two-ability target
+/// whose selected ability is not a trapping one.
+fn ai_get_ability(target: &BattlePokemon) -> Result<AbilityId, BattleError> {
+    ensure_target_ability_unambiguous(target)?;
+    Ok(target.ability())
 }
 
 /// The nine moves `AI_CheckBadMove` compares against Soundproof
@@ -412,7 +425,7 @@ const AI_SOUND_MOVES: [MoveId; 9] = [
 ];
 
 /// Whether `AI_CheckBadMove` discourages `move_id` for Soundproof, given the
-/// already-guessed target ability (`data/battle_ai_scripts.s:92-103`).
+/// target ability read (`data/battle_ai_scripts.s:92-103`).
 ///
 /// # Errors
 ///
@@ -420,23 +433,23 @@ const AI_SOUND_MOVES: [MoveId; 9] = [
 fn ai_soundproof_discourages(
     dex: &Dex,
     move_id: MoveId,
-    guessed_ability: AbilityId,
+    target_ability: AbilityId,
 ) -> Result<bool, BattleError> {
     dex.move_data(move_id)?;
-    Ok(guessed_ability == SOUNDPROOF && AI_SOUND_MOVES.contains(&move_id))
+    Ok(target_ability == SOUNDPROOF && AI_SOUND_MOVES.contains(&move_id))
 }
 
 /// `AI_CBM_AttackDown`'s own `get_ability` call, before the shared Clear
 /// Body/White Smoke check (`data/battle_ai_scripts.s:279-280`).
-fn ai_hyper_cutter_guess_blocks(guessed_ability: AbilityId) -> bool {
-    guessed_ability == HYPER_CUTTER
+fn ai_hyper_cutter_blocks(target_ability: AbilityId) -> bool {
+    target_ability == HYPER_CUTTER
 }
 
 /// `CheckIfAbilityBlocksStatChange`'s `get_ability` call, shared by
 /// `AI_CBM_AttackDown` and `AI_CBM_DefenseDown`
 /// (`data/battle_ai_scripts.s:308-311`).
-fn ai_clear_body_or_white_smoke_guess_blocks(guessed_ability: AbilityId) -> bool {
-    guessed_ability == CLEAR_BODY || guessed_ability == WHITE_SMOKE
+fn ai_clear_body_or_white_smoke_blocks(target_ability: AbilityId) -> bool {
+    target_ability == CLEAR_BODY || target_ability == WHITE_SMOKE
 }
 
 /// Unlike [`crate::hit::defender_wonder_guard_blocked`], only an
@@ -447,9 +460,9 @@ fn ai_wonder_guard_blocks(
     move_id: MoveId,
     attacker: &BattlePokemon,
     defender: &BattlePokemon,
-    guessed_ability: AbilityId,
+    target_ability: AbilityId,
 ) -> Result<bool, BattleError> {
-    if guessed_ability != AbilityId::WONDER_GUARD {
+    if target_ability != AbilityId::WONDER_GUARD {
         return Ok(false);
     }
     Ok(!matches!(
@@ -465,13 +478,13 @@ fn hit_effect_ability_blocked(
     move_id: MoveId,
     user: &BattlePokemon,
     target: &BattlePokemon,
-    guessed_ability: AbilityId,
+    target_ability: AbilityId,
 ) -> Result<bool, BattleError> {
-    if ai_wonder_guard_blocks(dex, move_id, user, target, guessed_ability)? {
+    if ai_wonder_guard_blocks(dex, move_id, user, target, target_ability)? {
         return Ok(true);
     }
     let move_type = dex.move_data(move_id)?.move_type.battle_type();
-    Ok(move_type.is_some_and(|move_type| defender_levitate_blocked(move_type, guessed_ability)))
+    Ok(move_type.is_some_and(|move_type| defender_levitate_blocked(move_type, target_ability)))
 }
 
 fn estimated_damage(
@@ -580,11 +593,10 @@ fn score_bad_move(
     move_id: MoveId,
     user: &BattlePokemon,
     target: &BattlePokemon,
-    rng: &mut impl BattleRng,
 ) -> Result<(), BattleError> {
     let effect = scoreable_effect(dex, move_id)?;
 
-    // A powered hit checks chart immunity, then guesses the target's ability
+    // A powered hit checks chart immunity, then reads the target's ability
     // for Wonder Guard/Levitate, before the Soundproof check every effect
     // shares (`data/battle_ai_scripts.s:51-88`).
     if effect == ScoreableEffect::Hit {
@@ -592,22 +604,22 @@ fn score_bad_move(
             scores.adjust(slot, STRONGLY_DISCOURAGE);
             return Ok(());
         }
-        let guess = ai_get_ability(target, rng);
-        if hit_effect_ability_blocked(dex, move_id, user, target, guess)? {
+        let ability = ai_get_ability(target)?;
+        if hit_effect_ability_blocked(dex, move_id, user, target, ability)? {
             scores.adjust(slot, STRONGLY_DISCOURAGE);
             return Ok(());
         }
     }
 
-    // Soundproof re-guesses the ability at its own call site
+    // Soundproof reads the ability at its own call site
     // (`data/battle_ai_scripts.s:92-103`).
-    let soundproof_guess = ai_get_ability(target, rng);
-    if ai_soundproof_discourages(dex, move_id, soundproof_guess)? {
+    let soundproof_ability = ai_get_ability(target)?;
+    if ai_soundproof_discourages(dex, move_id, soundproof_ability)? {
         scores.adjust(slot, STRONGLY_DISCOURAGE);
         return Ok(());
     }
 
-    // A stat drop checks the target's stage floor, then re-guesses the
+    // A stat drop checks the target's stage floor, then reads the
     // ability at each of its own guards -- Hyper Cutter only for Attack, then
     // Clear Body/White Smoke shared by both stats
     // (`data/battle_ai_scripts.s:277-285,308-311`).
@@ -617,17 +629,17 @@ fn score_bad_move(
             if target.stages().attack == StatStage::MIN {
                 true
             } else {
-                let hyper_cutter_guess = ai_get_ability(target, rng);
-                if ai_hyper_cutter_guess_blocks(hyper_cutter_guess) {
+                let hyper_cutter_ability = ai_get_ability(target)?;
+                if ai_hyper_cutter_blocks(hyper_cutter_ability) {
                     true
                 } else {
-                    ai_clear_body_or_white_smoke_guess_blocks(ai_get_ability(target, rng))
+                    ai_clear_body_or_white_smoke_blocks(ai_get_ability(target)?)
                 }
             }
         }
         ScoreableEffect::DefenseDown => {
             target.stages().defense == StatStage::MIN
-                || ai_clear_body_or_white_smoke_guess_blocks(ai_get_ability(target, rng))
+                || ai_clear_body_or_white_smoke_blocks(ai_get_ability(target)?)
         }
     };
     if is_ineffective {
@@ -811,8 +823,6 @@ mod tests {
     const SELECT_FIRST_TIED_MOVE: u16 = 0;
     const SELECT_SECOND_TIED_MOVE: u16 = 1;
     const MAXIMUM_DAMAGE_ROLL: u16 = 0;
-    /// `Random() & 1` is odd, so `ai_get_ability` guesses ability slot 0.
-    const GUESS_FIRST_ABILITY_SLOT: u16 = 1;
 
     const TREECKO: SpeciesId = SpeciesId(277);
     const TORCHIC: SpeciesId = SpeciesId(280);
@@ -829,16 +839,18 @@ mod tests {
     const DELIBIRD: SpeciesId = SpeciesId(225);
     /// `SPECIES_SHEDINJA`: Wonder Guard in its only ability slot.
     const SHEDINJA: SpeciesId = SpeciesId(303);
-    /// `SPECIES_CORPHISH`: Hyper Cutter in slot 0 (Shell Armor is slot 1).
-    const CORPHISH: SpeciesId = SpeciesId(326);
-    /// `SPECIES_TENTACOOL`: Clear Body in slot 0 (Liquid Ooze is slot 1).
-    const TENTACOOL: SpeciesId = SpeciesId(72);
     /// `SPECIES_VOLTORB`: Soundproof in slot 0 (Static is slot 1).
     const VOLTORB: SpeciesId = SpeciesId(100);
+    /// `SPECIES_PINSIR`: Hyper Cutter is its only ability.
+    const PINSIR: SpeciesId = SpeciesId(127);
+    /// `SPECIES_REGIROCK`: Clear Body is its only ability.
+    const REGIROCK: SpeciesId = SpeciesId(401);
+    /// `SPECIES_MR_MIME`: Soundproof is its only ability.
+    const MR_MIME: SpeciesId = SpeciesId(122);
     /// `SPECIES_GASTLY`: Levitate in its only ability slot.
     const GASTLY: SpeciesId = SpeciesId(92);
     /// `SPECIES_TRAPINCH`: Hyper Cutter in slot 0, Arena Trap (a trapping
-    /// ability `ai_get_ability` reads directly) in slot 1.
+    /// ability) in slot 1.
     const TRAPINCH: SpeciesId = SpeciesId(332);
 
     const POUND: MoveId = MoveId::POUND;
@@ -1377,22 +1389,14 @@ mod tests {
     #[test]
     fn hyper_cutter_discourages_an_attack_drop_at_an_unlowered_stage() {
         let enemy = pokemon(TREECKO, vec![POUND, GROWL]);
-        // Corphish's slot-1 ability (Shell Armor) is irrelevant here: Emerald
-        // never reads it, only guesses between it and slot 0 for an
-        // unrevealed target (`src/battle_ai_script_commands.c:1350-1391`).
-        let player = pokemon(CORPHISH, vec![POUND]);
+        // Pinsir's only ability is Hyper Cutter, so the read is unambiguous.
+        let player = pokemon(PINSIR, vec![POUND]);
         assert_eq!(player.ability(), assets::AbilityId::HYPER_CUTTER);
         // Both moves tie at 100 without the guard, and the tie-break draw
         // below would already pick slot 0 -- select the SECOND tied slot so
         // this fails without the guard instead of passing by coincidence.
-        // Every guess draw is odd, so `ai_get_ability` always guesses Hyper
-        // Cutter (slot 0): Pound draws twice (hit dispatch, Soundproof) and
-        // Growl draws twice (Soundproof, Hyper Cutter) before ending there.
-        let mut rng = rng_with_maximum_simulated_damage(
-            [GUESS_FIRST_ABILITY_SLOT; 4]
-                .into_iter()
-                .chain([SELECT_SECOND_TIED_MOVE]),
-        );
+        // The ability reads draw nothing.
+        let mut rng = rng_with_maximum_simulated_damage([SELECT_SECOND_TIED_MOVE]);
 
         let action = choose_trainer_action(
             &Dex::new(),
@@ -1405,7 +1409,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(action, EnemyAction::Move(0));
-        assert_eq!(rng.draws(), MAX_MON_MOVES + 5);
+        assert_eq!(rng.draws(), MAX_MON_MOVES + 1);
     }
 
     /// `AI_CBM_DefenseDown` shares the Clear Body / White Smoke guard with
@@ -1413,20 +1417,12 @@ mod tests {
     #[test]
     fn clear_body_discourages_a_defense_drop_at_an_unlowered_stage() {
         let enemy = pokemon(TREECKO, vec![POUND, LEER]);
-        // Tentacool's slot-1 ability (Liquid Ooze) is irrelevant: see the
-        // Hyper Cutter test's note on guessing versus reading.
-        let player = pokemon(TENTACOOL, vec![POUND]);
+        // Regirock's only ability is Clear Body.
+        let player = pokemon(REGIROCK, vec![POUND]);
         assert_eq!(player.ability(), crate::stat_change::CLEAR_BODY);
         // See the SECOND-tied-slot note above: both moves tie at 100 without
-        // the guard. Every guess draw is odd, so `ai_get_ability` always
-        // guesses Clear Body (slot 0): Pound draws twice (hit dispatch,
-        // Soundproof) and Leer draws twice (Soundproof, the shared Clear
-        // Body/White Smoke guard) before ending there.
-        let mut rng = rng_with_maximum_simulated_damage(
-            [GUESS_FIRST_ABILITY_SLOT; 4]
-                .into_iter()
-                .chain([SELECT_SECOND_TIED_MOVE]),
-        );
+        // the guard, and the ability reads draw nothing.
+        let mut rng = rng_with_maximum_simulated_damage([SELECT_SECOND_TIED_MOVE]);
 
         let action = choose_trainer_action(
             &Dex::new(),
@@ -1439,7 +1435,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(action, EnemyAction::Move(0));
-        assert_eq!(rng.draws(), MAX_MON_MOVES + 5);
+        assert_eq!(rng.draws(), MAX_MON_MOVES + 1);
     }
 
     /// The Soundproof guard (`data/battle_ai_scripts.s:92-103`) omits Hyper
@@ -1448,21 +1444,13 @@ mod tests {
     #[test]
     fn soundproof_discourages_growl_but_not_hyper_voice() {
         let enemy = pokemon(TREECKO, vec![HYPER_VOICE, GROWL]);
-        // Voltorb's slot-1 ability (Static) is irrelevant: see the Hyper
-        // Cutter test's note on guessing versus reading.
-        let player = pokemon(VOLTORB, vec![POUND]);
+        // Mr. Mime's only ability is Soundproof.
+        let player = pokemon(MR_MIME, vec![POUND]);
         assert_eq!(player.ability(), assets::AbilityId::SOUNDPROOF);
         // Both moves tie at 100 without the guard; see the SECOND-tied-slot
-        // note above. Every guess draw is odd, so `ai_get_ability` always
-        // guesses Soundproof (slot 0): Hyper Voice draws twice (hit dispatch,
-        // Soundproof -- Hyper Voice is absent from the AI's own list, so it
-        // scores unaffected either way) and Growl draws once (Soundproof)
-        // before ending there.
-        let mut rng = rng_with_maximum_simulated_damage(
-            [GUESS_FIRST_ABILITY_SLOT; 3]
-                .into_iter()
-                .chain([SELECT_SECOND_TIED_MOVE]),
-        );
+        // note above. Hyper Voice is absent from the AI's own list, so it
+        // scores unaffected either way; the ability reads draw nothing.
+        let mut rng = rng_with_maximum_simulated_damage([SELECT_SECOND_TIED_MOVE]);
 
         let action = choose_trainer_action(
             &Dex::new(),
@@ -1475,7 +1463,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(action, EnemyAction::Move(0));
-        assert_eq!(rng.draws(), MAX_MON_MOVES + 4);
+        assert_eq!(rng.draws(), MAX_MON_MOVES + 1);
     }
 
     /// No dex move pairs `MoveEffect::HIT` with `Type::Ground`, so
@@ -1497,88 +1485,89 @@ mod tests {
         );
     }
 
-    /// `get_ability AI_TARGET` never reads an unrevealed target's true
-    /// ability: for a two-ability species it draws `Random()` and guesses one
-    /// of the two species slots (`src/battle_ai_script_commands.c:1367-1382`).
-    /// On one RNG stream the AI must therefore behave identically against a
-    /// Soundproof Voltorb and a Static one, and must consume that guess draw
-    /// (`data/battle_ai_scripts.s:93`).
+    /// Upstream's `get_ability AI_TARGET` reads history, a trapping ability,
+    /// or draws a fresh `Random() & 1` guess between two species slots
+    /// (`src/battle_ai_script_commands.c:1350-1396`). The engine models no
+    /// history, so a two-ability target without a trapping ability is refused
+    /// before any draw, whichever slot it holds: Voltorb in either slot and a
+    /// Hyper Cutter Trapinch.
     #[test]
-    fn an_unrevealed_dual_ability_target_is_guessed_rather_than_read() {
+    fn a_two_ability_target_is_refused_before_any_draw() {
         let dex = Dex::new();
         let enemy = pokemon(TREECKO, vec![HYPER_VOICE, GROWL]);
-        let soundproof_target = pokemon(VOLTORB, vec![POUND]).with_ability_slot(0);
-        let static_target = pokemon(VOLTORB, vec![POUND]).with_ability_slot(1);
-        assert_eq!(soundproof_target.ability(), assets::AbilityId::SOUNDPROOF);
-        assert_ne!(static_target.ability(), assets::AbilityId::SOUNDPROOF);
-        // `Random() & 1` is odd on every draw here, so upstream's guess lands
-        // on ability slot 0 (Soundproof) for both targets alike.
-        let guess_draws = [GUESS_FIRST_ABILITY_SLOT; 8];
+        for (species, slot) in [(VOLTORB, 0), (VOLTORB, 1), (TRAPINCH, 0)] {
+            let target = pokemon(species, vec![POUND]).with_ability_slot(slot);
+            let mut rng = rng_with_maximum_simulated_damage([]);
+            let draws_before = rng.draws();
 
-        let mut soundproof_rng = rng_with_maximum_simulated_damage(guess_draws);
-        let soundproof_action = choose_trainer_action(
-            &dex,
-            &enemy,
-            &soundproof_target,
-            AiFlags::CHECK_BAD_MOVE,
-            FIRST_TURN,
-            &mut soundproof_rng,
-        )
-        .unwrap();
-        let mut static_rng = rng_with_maximum_simulated_damage(guess_draws);
-        let static_action = choose_trainer_action(
-            &dex,
-            &enemy,
-            &static_target,
-            AiFlags::CHECK_BAD_MOVE,
-            FIRST_TURN,
-            &mut static_rng,
-        )
-        .unwrap();
+            let refused = choose_trainer_action(
+                &dex,
+                &enemy,
+                &target,
+                AiFlags::CHECK_BAD_MOVE,
+                FIRST_TURN,
+                &mut rng,
+            );
 
-        assert_eq!(
-            soundproof_action, static_action,
-            "an unrevealed dual-ability target's true slot must not steer the AI"
-        );
-        assert!(
-            soundproof_rng.draws() > MAX_MON_MOVES + 1,
-            "the ability guess must consume a draw beyond the four damage draws and the tie-break, got {}",
-            soundproof_rng.draws()
-        );
+            assert_eq!(refused, Err(BattleError::AmbiguousPlayerAbility(species)));
+            assert_eq!(rng.draws(), draws_before);
+        }
     }
 
-    /// `Cmd_get_ability` returns a true Shadow Tag, Magnet Pull, or Arena
-    /// Trap directly, ahead of the unrevealed-ability guess and with no draw
-    /// (`src/battle_ai_script_commands.c:1368-1375`). Trapinch's ability
-    /// slots (Hyper Cutter, Arena Trap) let a guess and the true ability
-    /// disagree: guessing slot 0 would read Hyper Cutter and discourage
-    /// Growl by -10 (as in `hyper_cutter_discourages_an_attack_drop_at_an_
-    /// unlowered_stage` above), but the true ability, Arena Trap, leaves
-    /// every guard unblocked and draws nothing at any of Pound's or Growl's
-    /// `get_ability AI_TARGET` call sites, so the two moves tie at 100 and
-    /// only the tie-break draw remains.
+    /// Upstream returns a true trapping ability before the two-slot guess,
+    /// with no draw (`src/battle_ai_script_commands.c:1368-1376`), so an Arena
+    /// Trap Trapinch is admitted and read directly while a Hyper Cutter
+    /// Trapinch stays refused.
     #[test]
-    fn arena_trap_is_read_without_a_draw_and_leaves_growl_scored() {
-        let enemy = pokemon(TREECKO, vec![POUND, GROWL]);
-        let player = pokemon(TRAPINCH, vec![POUND]).with_ability_slot(1);
-        assert_eq!(player.ability(), assets::AbilityId::ARENA_TRAP);
-        let mut rng = rng_with_maximum_simulated_damage([SELECT_SECOND_TIED_MOVE]);
+    fn an_arena_trap_target_is_admitted_and_read_without_a_draw() {
+        let dex = Dex::new();
+        let enemy = pokemon(TREECKO, vec![HYPER_VOICE, GROWL]);
+        let arena_trap = pokemon(TRAPINCH, vec![POUND]).with_ability_slot(1);
+        let hyper_cutter = pokemon(TRAPINCH, vec![POUND]).with_ability_slot(0);
 
-        let action = choose_trainer_action(
-            &Dex::new(),
+        assert_eq!(
+            super::ai_get_ability(&arena_trap),
+            Ok(assets::AbilityId::ARENA_TRAP)
+        );
+        assert_eq!(
+            super::ensure_target_ability_unambiguous(&arena_trap),
+            Ok(())
+        );
+        assert_eq!(
+            super::ensure_target_ability_unambiguous(&hyper_cutter),
+            Err(BattleError::AmbiguousPlayerAbility(TRAPINCH))
+        );
+
+        let mut admitted = rng_with_maximum_simulated_damage([SELECT_FIRST_TIED_MOVE]);
+        let mut single = rng_with_maximum_simulated_damage([SELECT_FIRST_TIED_MOVE]);
+        let trapping_choice = choose_trainer_action(
+            &dex,
             &enemy,
-            &player,
+            &arena_trap,
             AiFlags::CHECK_BAD_MOVE,
             FIRST_TURN,
-            &mut rng,
-        )
-        .unwrap();
+            &mut admitted,
+        );
+        let single_ability_choice = choose_trainer_action(
+            &dex,
+            &enemy,
+            &pokemon(TREECKO, vec![POUND]),
+            AiFlags::CHECK_BAD_MOVE,
+            FIRST_TURN,
+            &mut single,
+        );
+        assert!(trapping_choice.is_ok());
+        assert_eq!(trapping_choice, single_ability_choice);
+        assert_eq!(admitted.draws(), single.draws());
+    }
 
-        assert_eq!(action, EnemyAction::Move(1));
+    /// A single-ability target reads its sole ability and draws nothing.
+    #[test]
+    fn a_single_ability_target_is_read_without_a_draw() {
+        let target = pokemon(SHEDINJA, vec![POUND]);
         assert_eq!(
-            rng.draws(),
-            MAX_MON_MOVES + 1,
-            "a direct trapping-ability read must not consume any of Pound's or Growl's guess draws"
+            super::ai_get_ability(&target),
+            Ok(assets::AbilityId::WONDER_GUARD)
         );
     }
 
