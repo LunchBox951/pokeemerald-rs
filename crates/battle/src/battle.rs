@@ -350,9 +350,9 @@ impl Battle {
     /// first AI, move, or ability validation error against the active member
     /// or any non-fainted reserve, including
     /// [`BattleError::AmbiguousPlayerAbility`] for a two-ability player
-    /// member when the trainer scores with `CheckBadMove` and some
-    /// non-fainted party member still has a PP-positive move. Errors leave
-    /// the RNG untouched.
+    /// member without a trapping ability when the trainer scores with
+    /// `CheckBadMove` and some non-fainted party member still has a
+    /// PP-positive move. Errors leave the RNG untouched.
     pub fn new_trainer_with_player_reserves(
         dex: Dex,
         player: BattlePokemon,

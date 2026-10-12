@@ -98,9 +98,10 @@ pub enum BattleError {
     /// the unsupported flag bits.
     UnsupportedAiFlags(AiFlags),
 
-    /// A trainer AI scoring target's species has two ability slots. The
-    /// engine models no battle ability history, so it cannot reproduce
-    /// upstream's `get_ability AI_TARGET` read-or-guess
+    /// A trainer AI scoring target's species has two ability slots and its
+    /// selected ability is not Shadow Tag, Magnet Pull, or Arena Trap (which
+    /// upstream reads directly). The engine models no battle ability history,
+    /// so it cannot reproduce upstream's `get_ability AI_TARGET` read-or-guess
     /// (`pokeemerald/src/battle_ai_script_commands.c:1350`-`:1396`) and
     /// refuses the lead before consuming randomness.
     AmbiguousPlayerAbility(SpeciesId),

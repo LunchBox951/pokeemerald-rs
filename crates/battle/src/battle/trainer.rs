@@ -321,8 +321,8 @@ pub struct TrainerPartyMon<'a> {
 /// [`BattleError::UnknownTrainer`] for an unknown trainer, or the first
 /// member, AI-flag, or move validation error, or
 /// [`BattleError::AmbiguousPlayerAbility`] when `player_lead` has two ability
-/// slots and the trainer scores with `CheckBadMove` (the only script that
-/// reads the target's ability).
+/// slots, its selected ability is not a trapping one, and the trainer scores
+/// with `CheckBadMove` (the only script that reads the target's ability).
 pub fn ensure_trainer_party_startable(
     dex: &Dex,
     player_lead: &BattlePokemon,

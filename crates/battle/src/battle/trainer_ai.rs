@@ -8,8 +8,10 @@
 //! upstream answers from battle history, a trapping ability, or a fresh
 //! `Random() & 1` guess between a species' two ability slots
 //! (`src/battle_ai_script_commands.c:1350-1396`). This engine models no
-//! ability history, so it never guesses: a scoring target whose species has
-//! two ability slots is refused with
+//! ability history, so it never guesses: a target whose true ability is
+//! Shadow Tag, Magnet Pull, or Arena Trap reads it directly, as upstream does
+//! ahead of the guess (`src/battle_ai_script_commands.c:1368-1376`); any other
+//! scoring target whose species has two ability slots is refused with
 //! [`BattleError::AmbiguousPlayerAbility`] before any draw, and a
 //! single-ability target reads its sole ability without drawing.
 
@@ -364,17 +366,29 @@ fn has_no_effect(
     Ok(ai_type_effectiveness(dex, move_id, attacker, defender)? == Some(0))
 }
 
-/// Refuses a scoring target whose species has two ability slots, because
-/// upstream's ability read for it depends on battle history or a random guess
-/// the engine does not model (`src/battle_ai_script_commands.c:1350-1396`).
+/// The trapping abilities upstream reads off the target directly, ahead of
+/// the two-slot guess and with no draw
+/// (`src/battle_ai_script_commands.c:1368-1376`).
+const TRAPPING_ABILITIES: [AbilityId; 3] = [
+    AbilityId::SHADOW_TAG,
+    AbilityId::MAGNET_PULL,
+    AbilityId::ARENA_TRAP,
+];
+
+/// Refuses a scoring target whose species has two ability slots and whose
+/// true ability is not a trapping one, because upstream's ability read for it
+/// depends on battle history or a random guess the engine does not model
+/// (`src/battle_ai_script_commands.c:1350-1396`). A true Shadow Tag, Magnet
+/// Pull, or Arena Trap is admitted: upstream returns it before the guess
+/// (`src/battle_ai_script_commands.c:1368-1376`).
 ///
 /// # Errors
 ///
-/// Returns [`BattleError::AmbiguousPlayerAbility`] for a two-ability species,
-/// regardless of the target's selected slot or a trapping ability.
+/// Returns [`BattleError::AmbiguousPlayerAbility`] for a two-ability species
+/// whose selected ability is not a trapping one.
 pub(crate) fn ensure_target_ability_unambiguous(target: &BattlePokemon) -> Result<(), BattleError> {
     let [_, second] = target.ability_slots();
-    if second.0 == 0 {
+    if second.0 == 0 || TRAPPING_ABILITIES.contains(&target.ability()) {
         Ok(())
     } else {
         Err(BattleError::AmbiguousPlayerAbility(target.species()))
@@ -382,15 +396,17 @@ pub(crate) fn ensure_target_ability_unambiguous(target: &BattlePokemon) -> Resul
 }
 
 /// `Cmd_get_ability`'s target-ability read for the AI, restricted to the
-/// single-ability targets admission allows: no history lookup, no draw.
+/// targets admission allows: a true trapping ability, read directly
+/// (`src/battle_ai_script_commands.c:1368-1376`), or a single-ability
+/// species' sole ability. No history lookup, no draw.
 ///
 /// # Errors
 ///
-/// Returns [`BattleError::AmbiguousPlayerAbility`] for a two-ability target.
+/// Returns [`BattleError::AmbiguousPlayerAbility`] for a two-ability target
+/// whose selected ability is not a trapping one.
 fn ai_get_ability(target: &BattlePokemon) -> Result<AbilityId, BattleError> {
     ensure_target_ability_unambiguous(target)?;
-    let [only, _] = target.ability_slots();
-    Ok(only)
+    Ok(target.ability())
 }
 
 /// The nine moves `AI_CheckBadMove` compares against Soundproof
@@ -1472,13 +1488,14 @@ mod tests {
     /// Upstream's `get_ability AI_TARGET` reads history, a trapping ability,
     /// or draws a fresh `Random() & 1` guess between two species slots
     /// (`src/battle_ai_script_commands.c:1350-1396`). The engine models no
-    /// history, so a two-ability target is refused before any draw, whichever
-    /// slot it holds, and trapping abilities do not bypass the refusal.
+    /// history, so a two-ability target without a trapping ability is refused
+    /// before any draw, whichever slot it holds: Voltorb in either slot and a
+    /// Hyper Cutter Trapinch.
     #[test]
     fn a_two_ability_target_is_refused_before_any_draw() {
         let dex = Dex::new();
         let enemy = pokemon(TREECKO, vec![HYPER_VOICE, GROWL]);
-        for (species, slot) in [(VOLTORB, 0), (VOLTORB, 1), (TRAPINCH, 0), (TRAPINCH, 1)] {
+        for (species, slot) in [(VOLTORB, 0), (VOLTORB, 1), (TRAPINCH, 0)] {
             let target = pokemon(species, vec![POUND]).with_ability_slot(slot);
             let mut rng = rng_with_maximum_simulated_damage([]);
             let draws_before = rng.draws();
@@ -1495,6 +1512,53 @@ mod tests {
             assert_eq!(refused, Err(BattleError::AmbiguousPlayerAbility(species)));
             assert_eq!(rng.draws(), draws_before);
         }
+    }
+
+    /// Upstream returns a true trapping ability before the two-slot guess,
+    /// with no draw (`src/battle_ai_script_commands.c:1368-1376`), so an Arena
+    /// Trap Trapinch is admitted and read directly while a Hyper Cutter
+    /// Trapinch stays refused.
+    #[test]
+    fn an_arena_trap_target_is_admitted_and_read_without_a_draw() {
+        let dex = Dex::new();
+        let enemy = pokemon(TREECKO, vec![HYPER_VOICE, GROWL]);
+        let arena_trap = pokemon(TRAPINCH, vec![POUND]).with_ability_slot(1);
+        let hyper_cutter = pokemon(TRAPINCH, vec![POUND]).with_ability_slot(0);
+
+        assert_eq!(
+            super::ai_get_ability(&arena_trap),
+            Ok(assets::AbilityId::ARENA_TRAP)
+        );
+        assert_eq!(
+            super::ensure_target_ability_unambiguous(&arena_trap),
+            Ok(())
+        );
+        assert_eq!(
+            super::ensure_target_ability_unambiguous(&hyper_cutter),
+            Err(BattleError::AmbiguousPlayerAbility(TRAPINCH))
+        );
+
+        let mut admitted = rng_with_maximum_simulated_damage([SELECT_FIRST_TIED_MOVE]);
+        let mut single = rng_with_maximum_simulated_damage([SELECT_FIRST_TIED_MOVE]);
+        let trapping_choice = choose_trainer_action(
+            &dex,
+            &enemy,
+            &arena_trap,
+            AiFlags::CHECK_BAD_MOVE,
+            FIRST_TURN,
+            &mut admitted,
+        );
+        let single_ability_choice = choose_trainer_action(
+            &dex,
+            &enemy,
+            &pokemon(TREECKO, vec![POUND]),
+            AiFlags::CHECK_BAD_MOVE,
+            FIRST_TURN,
+            &mut single,
+        );
+        assert!(trapping_choice.is_ok());
+        assert_eq!(trapping_choice, single_ability_choice);
+        assert_eq!(admitted.draws(), single.draws());
     }
 
     /// A single-ability target reads its sole ability and draws nothing.
