@@ -66,6 +66,9 @@ pub struct SquareTone {
 /// A CGB programmable-wave instrument (hardware channel 3).
 #[derive(Clone, Debug)]
 pub struct WaveTone {
+    /// Stable programmable-wave asset identity; equal IDs name the same
+    /// immutable wave, so wave RAM reloads only when it changes.
+    pub wave_id: Arc<str>,
     /// Packed wave RAM: two 4-bit samples per byte.
     pub table: [u8; 16],
     /// The instrument's volume envelope.

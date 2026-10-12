@@ -208,6 +208,21 @@ pub(crate) fn programmable_wave(
     ))
 }
 
+/// Decode `root` into its canonical pack payload, for callers that must
+/// corroborate a voicegroup against bytes they hold themselves.
+///
+/// # Errors
+///
+/// [`ImportError`] when a slot cannot be read or does not form a valid
+/// voicegroup.
+pub fn decode_voicegroup_payload(
+    reader: &RomReader<'_>,
+    audio: &AudioRoots,
+    root: &VoicegroupRoot,
+) -> Result<Vec<u8>, ImportError> {
+    voicegroup(reader, audio, root).map(|entry| entry.payload)
+}
+
 /// Read one voicegroup, slot by slot.
 pub(crate) fn voicegroup(
     reader: &RomReader<'_>,

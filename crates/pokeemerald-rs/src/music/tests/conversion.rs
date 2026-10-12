@@ -35,6 +35,10 @@ fn cgb_fixed_rate_tags_survive_loading() {
     match song.voice(2) {
         Some(Instrument::CgbWave(tone)) => {
             assert!(
+                !tone.wave_id.is_empty(),
+                "the wave asset ID must reach WaveTone"
+            );
+            assert!(
                 tone.fixed_rate,
                 "the programmable wave's FIX tag must survive loading"
             );

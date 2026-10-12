@@ -247,11 +247,9 @@ const VAR_STARTER_MON: u16 = 0x4023;
 /// `Self::warp_to`, `Self::cross_connection`), gated on `map` being
 /// [`ROUTE_103`] so entering any other map is a costless no-op -- the same
 /// "called everywhere, gated by map" shape
-/// [`super::first_battle_trigger::sync_route_101_state_on_entry`]'s own docs
-/// explain (including which of the three calls are actually reachable over
-/// bundled data; `Self::new`'s only production caller spawns the player's
-/// bedroom, never Route 103, so it is called there purely for the same
-/// completeness this trigger's sibling already keeps).
+/// [`super::first_battle_trigger::sync_route_101_state_on_entry`] keeps.
+/// `Self::new`'s only production caller spawns the player's bedroom, never
+/// Route 103, so it is called there purely for completeness.
 ///
 /// # Panics
 ///
@@ -316,9 +314,8 @@ impl OverworldPhase {
     /// there by the time Route 103 is reachable at all (the rescue chain
     /// runs first).
     ///
-    /// Clears [`OverworldPhase::rival_battle_outcome`] first, the same
-    /// "a new attempt owns its result channel from trigger time onward"
-    /// contract `begin_first_battle` documents, so a stale outcome from an
+    /// Clears [`OverworldPhase::rival_battle_outcome`] first, as
+    /// `begin_first_battle` clears its own outcome, so a stale outcome from an
     /// earlier fight can never survive into this one -- including every
     /// early-return path below, which leaves no battle at all.
     ///
