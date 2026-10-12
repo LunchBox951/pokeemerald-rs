@@ -643,6 +643,46 @@ mod tests {
         }
     }
 
+    /// `HandleTurnActionSelectionState` diverts a battler whose moves are all
+    /// unusable to Struggle before the AI chooses a move
+    /// (`battle_main.c:4183`-`:4191`), so `Cmd_get_ability` never runs for an
+    /// all-spent trainer and a two-ability lead stays playable. A spent lead
+    /// with a PP-positive bench member still reaches scoring after the switch.
+    #[test]
+    fn an_all_spent_trainer_admits_a_two_ability_lead_but_a_scoring_bench_does_not() {
+        fn spent(species: assets::SpeciesId) -> crate::pokemon::BattlePokemon {
+            let mut mon = lead(species);
+            while mon.moves()[0].pp > 0 {
+                mon.deduct_pp(0).unwrap();
+            }
+            mon
+        }
+
+        let mut rng = SequenceRng::new([0; 16]);
+        let admitted = crate::battle::Battle::new_trainer(
+            Dex::new(),
+            lead(VOLTORB),
+            MAY_ROUTE_103_MUDKIP,
+            vec![spent(TREECKO), spent(TREECKO)],
+            &mut rng,
+        );
+        assert!(admitted.is_ok(), "{:?}", admitted.err());
+
+        let mut rng = SequenceRng::new([]);
+        let refused = crate::battle::Battle::new_trainer(
+            Dex::new(),
+            lead(VOLTORB),
+            MAY_ROUTE_103_MUDKIP,
+            vec![spent(TREECKO), lead(TREECKO)],
+            &mut rng,
+        );
+        assert!(matches!(
+            refused,
+            Err(crate::error::BattleError::AmbiguousPlayerAbility(VOLTORB))
+        ));
+        assert_eq!(rng.draws(), 0);
+    }
+
     #[test]
     fn an_out_of_range_trainer_id_is_rejected_rather_than_panicking() {
         assert_eq!(
