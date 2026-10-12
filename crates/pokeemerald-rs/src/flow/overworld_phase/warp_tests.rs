@@ -1,5 +1,9 @@
-//! Tests for warp execution, arrow-warp triggers, and door transitions
+//! Warp arrival, map-load state, arrow-warp triggers, and door transitions
 //! ([`super::OverworldPhase::warp_to`]).
+//!
+//! Arrival facing follows the destination tile's behavior (`overworld.c:929-951`);
+//! a warp map load clears temporary event data and restarts encounter immunity
+//! (`overworld.c:846-850`).
 
 use super::test_support::*;
 use super::OverworldPhase;
@@ -14,42 +18,14 @@ use engine::overworld::{
 use engine::rng::Rng;
 use platform::{ButtonState, Buttons};
 
-/// Flow-level test (the issue #163 acceptance test): stepping onto the bedroom's stair
-/// warp tile at `(7, 1)` from below transitions the phase to
-/// `MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F`, landing the player exactly at
-/// that map's own warp-event #2 arrival position -- `crate::new_game`'s
-/// module docs trace this exact warp chain (`(7, 1)` on 2F ->
-/// `dest_warp_id: 2` on 1F -> `(8, 2)`, `warp.rs`'s
-/// `warp_destination_position`) -- facing whatever that destination
-/// tile's own behavior dictates (`engine::overworld::warp_in_facing`),
-/// with `save1.location`/`save1.pos` kept coherent with the new map
-/// ([`OverworldPhase::warp_to`]'s own doc comment).
-///
-/// The transition is also asserted to happen on the frame *after* the
-/// step's animation finishes, not the frame it starts: upstream gates
-/// `TryStartWarpEventScript` on `input->tookStep`, set only at
-/// `T_TILE_CENTER` while `runningState == MOVING`
-/// (`pokeemerald/src/field_control_avatar.c:117-119, 155-161`), and
-/// `T_TILE_CENTER` needs `PlayerCheckIfAnimFinishedOrInactive`
-/// (`field_player_avatar.c:901-915`) to see a `heldMovementFinished` that
-/// only the *previous* frame's CB2 `AnimateSprites` could have set
-/// (`main.c:188-195`, `overworld.c:1438-1469`). So the animation's last
-/// frame is call [`WALK_FRAMES_PER_TILE`] (16), and the warp fires on
-/// call 17 ([`OverworldPhase::step`]'s "Frame shape" and "Warp timing"
-/// sections, issue #1039).
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn stepping_onto_the_bedroom_stair_warp_transitions_to_the_1f_map() {
     let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
     let bedroom = phase.map_id;
 
-    // `new_game::SPAWN_POSITION` is the warp tile itself (module docs),
-    // so start one tile south of it instead and step north onto it --
-    // "stepping onto (7, 1) from below" (DoD).
     phase.player = PlayerState::new((7, 2), new_game::SPAWN_ELEVATION, Direction::North);
 
-    // Frame 1: the step onto (7, 1) begins. `PlayerState` commits the
-    // tile immediately, but the warp must not fire yet.
     phase.step(held(Buttons::UP));
     assert_eq!(
         phase.player.position(),
@@ -61,10 +37,6 @@ fn stepping_onto_the_bedroom_stair_warp_transitions_to_the_1f_map() {
         "the warp must not fire on the frame the step begins"
     );
 
-    // Frames 2..=16: drain the walk animation with no input held. The
-    // map must stay put for every one of them, including frame 16, which
-    // is upstream's *last* animation frame rather than its `tookStep`
-    // frame (issue #1039).
     for frame in 2..=u32::from(WALK_FRAMES_PER_TILE) {
         phase.step(ButtonState::new());
         assert_eq!(
@@ -82,36 +54,28 @@ fn stepping_onto_the_bedroom_stair_warp_transitions_to_the_1f_map() {
         "frame {WALK_FRAMES_PER_TILE} drains the walk animation"
     );
 
-    // Frame 17: the first call whose start-of-frame field input observes
-    // the completed step -- upstream's `tookStep` frame, and the one the
-    // warp fires on.
     phase.step(ButtonState::new());
 
     let destination = assets::MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F");
     assert_eq!(
         phase.map_id, destination,
-        "the completed step onto the stair warp must rebind to the 1F map \
-         on the 17th frame"
+        "the frame after the walk animation drains must rebind to the 1F map"
     );
     assert_eq!(
         phase.player.position(),
         (8, 2),
-        "the player must arrive at 1F's own warp #2 position"
+        "the player must arrive at 1F's warp #2 position"
     );
-    // The facing is derived from the *destination* tile's own behavior,
-    // so pin that behavior down too -- otherwise `South` here would also
-    // be satisfied by `GetAdjustedInitialDirection`'s catch-all `else`.
     let (dest_pos, dest_behavior) = warp_tile_behavior(destination, 2);
     assert_eq!(dest_pos, (8, 2));
     assert_eq!(
         dest_behavior, MB_NON_ANIMATED_DOOR,
-        "1F's warp #2 is the staircase's own non-animated-door tile"
+        "1F's warp #2 is the staircase's non-animated-door tile"
     );
     assert_eq!(
         phase.player.facing(),
         Direction::South,
-        "GetAdjustedInitialDirection's IsNonAnimDoor||IsDoor branch \
-         (overworld.c:935-936) applies to that tile"
+        "the non-animated-door destination tile determines South-facing arrival"
     );
 
     let dest_header = assets::MapHeaderTable::new()
@@ -119,21 +83,23 @@ fn stepping_onto_the_bedroom_stair_warp_transitions_to_the_1f_map() {
         .expect("1F must resolve in the generated map-header table");
     assert_eq!(
         phase.save1().location.map_group,
-        i8::try_from(dest_header.group).unwrap()
+        i8::try_from(dest_header.group).unwrap(),
+        "SaveBlock1 location map group must be 1F's"
     );
     assert_eq!(
         phase.save1().location.map_num,
-        i8::try_from(dest_header.num).unwrap()
+        i8::try_from(dest_header.num).unwrap(),
+        "SaveBlock1 location map number must be 1F's"
     );
     assert_eq!(
         phase.save1().location.warp_id,
         2,
-        "arrived via 1F's own warp-event index 2 (new_game module docs)"
+        "SaveBlock1 location must record arrival through 1F's warp-event index 2"
     );
     assert_eq!(
         (phase.save1().location.x, phase.save1().location.y),
         (-1, -1),
-        "SetWarpDestinationToMapWarp always passes -1, -1 for x/y (overworld.c:638-641)"
+        "event-index arrivals store (-1, -1) as the location coordinates"
     );
     assert_eq!(
         (
@@ -145,28 +111,19 @@ fn stepping_onto_the_bedroom_stair_warp_transitions_to_the_1f_map() {
     );
 }
 
-/// Regression (the issue #163 acceptance test): a completed landing on an *ordinary*
-/// (non-warp) tile must not transition the map, even though every
-/// completed landing is now checked for a warp trigger.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn stepping_onto_an_ordinary_tile_does_not_warp() {
     let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
     let starting_map = phase.map_id;
 
-    // The spawn tile IS the warp tile; step south, away from it, onto
-    // ordinary bedroom floor (already exercised, collision-wise, by
-    // `overworld_movement_input_turns_the_player`). Drive the whole
-    // 16-frame walk animation *and* the 17th call that observes the
-    // completed step, since the trigger check runs at the start of that
-    // call (`OverworldPhase::step`'s "Warp timing" section, issue #1039).
     phase.step(held(Buttons::DOWN));
     for _ in 1..WALK_FRAMES_PER_TILE {
         phase.step(ButtonState::new());
     }
     assert!(
         !phase.player.in_transit(),
-        "16 frames must fully drain the step this test relies on completing"
+        "{WALK_FRAMES_PER_TILE} frames must fully drain the step"
     );
     phase.step(ButtonState::new());
 
@@ -181,14 +138,10 @@ fn stepping_onto_an_ordinary_tile_does_not_warp() {
     );
     assert!(
         !phase.mid_step(),
-        "the 17th call must have consumed the completed landing"
+        "the call after the animation drains must consume the completed landing"
     );
 }
 
-/// [`warp_data_index`] narrows the *generated* tables' real indices
-/// (no pack needed -- `MapHeaderTable` is compiled in), cross-checked
-/// against [`new_game`]'s own hand-maintained constants the same way
-/// `new_game`'s `spawn_location_matches_the_generated_map_header` does.
 #[test]
 fn warp_data_index_narrows_the_generated_map_indices() {
     let header = assets::MapHeaderTable::new()
@@ -196,69 +149,64 @@ fn warp_data_index_narrows_the_generated_map_indices() {
         .expect("SPAWN_MAP_ID must resolve in the generated map-header table");
     assert_eq!(
         warp_data_index(header.group, "MAP_GROUP"),
-        new_game::SPAWN_MAP_GROUP
+        new_game::SPAWN_MAP_GROUP,
+        "generated map group must narrow to the spawn map group constant"
     );
     assert_eq!(
         warp_data_index(header.num, "MAP_NUM"),
-        new_game::SPAWN_MAP_NUM
+        new_game::SPAWN_MAP_NUM,
+        "generated map number must narrow to the spawn map number constant"
     );
-    assert_eq!(warp_data_index(0, "warp id"), 0);
-    assert_eq!(warp_data_index(127, "warp id"), 127);
+    assert_eq!(
+        warp_data_index(0, "warp id"),
+        0,
+        "0 is the lowest valid i8 index"
+    );
+    assert_eq!(
+        warp_data_index(127, "warp id"),
+        127,
+        "127 is the highest valid i8 index"
+    );
 }
 
-/// The out-of-range case panics rather than fabricating a plausible
-/// index: saturating to `127` would have silently written a *different,
-/// real* map's group/num into the save (that function's own doc).
 #[test]
-#[should_panic(expected = "does not fit the i8")]
-fn warp_data_index_refuses_to_fabricate_an_out_of_range_index() {
-    let _ = warp_data_index(128, "MAP_GROUP");
+fn warp_data_index_rejects_128_instead_of_clamping_to_127() {
+    let result = std::panic::catch_unwind(|| warp_data_index(128, "MAP_GROUP"));
+    let payload = result.expect_err("128 must be rejected, not clamped to 127");
+    let message = payload
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| payload.downcast_ref::<&str>().copied())
+        .unwrap_or_default();
+    assert!(
+        message.contains("does not fit the i8"),
+        "rejection must name the i8 overflow, got: {message:?}"
+    );
 }
 
-/// Real-pack guard for the *destination*-tile rule
-/// [`OverworldPhase::warp_to`] derives its arrival facing from
-/// (`engine::overworld::warp_in_facing` <- upstream
-/// `GetAdjustedInitialDirection`, `pokeemerald/src/overworld.c:929-951`).
-///
-/// The I-3 path's own counterexample to a source-tile rule: Brendan's
-/// house front door is `MAP_LITTLEROOT_TOWN`'s warp #1, sitting on an
-/// `MB_ANIMATED_DOOR` tile -- whose *own* branch would say `DIR_SOUTH` --
-/// but it lands on `..._BRENDANS_HOUSE_1F`'s warp #1, whose tile is
-/// `MB_SOUTH_ARROW_WARP`, so upstream faces the arrival `DIR_NORTH`
-/// (back into the house). Asserted against the extracted pack's real
-/// metatile attributes, not a hand-built fixture.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn the_front_door_warp_faces_north_from_the_destination_tiles_behavior() {
     let (source_pos, source_behavior) = warp_tile_behavior(assets::MapId("MAP_LITTLEROOT_TOWN"), 1);
-    assert_eq!(source_pos, (5, 8), "Littleroot's warp #1: the house door");
+    assert_eq!(source_pos, (5, 8), "Littleroot's warp #1 is the house door");
     assert_eq!(source_behavior, MB_ANIMATED_DOOR);
     assert_eq!(
         warp_in_facing(source_behavior),
         Direction::South,
-        "what a (wrong) source-tile rule would have produced"
+        "the source door tile alone would face South"
     );
 
     let (dest_pos, dest_behavior) =
         warp_tile_behavior(assets::MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F"), 1);
-    assert_eq!(dest_pos, (8, 8), "1F's warp #1: the doormat inside");
+    assert_eq!(dest_pos, (8, 8), "1F's warp #1 is the doormat inside");
     assert_eq!(dest_behavior, MB_SOUTH_ARROW_WARP);
     assert_eq!(
         warp_in_facing(dest_behavior),
         Direction::North,
-        "GetAdjustedInitialDirection's IsSouthArrowWarp branch (overworld.c:937-938)"
+        "the destination doormat's south-arrow behavior faces North"
     );
 }
 
-/// Mutation guard for [`OverworldPhase::warp_to`] itself: the front-door
-/// arrival from the test above, driven through `warp_to` rather than the
-/// pure `warp_in_facing`. Landing on 1F's warp #1 (`(8, 8)`,
-/// `MB_SOUTH_ARROW_WARP`) must face North — a facing distinguishable from
-/// both `GetAdjustedInitialDirection`'s catch-all `else` and `warp_to`'s
-/// own `MB_NORMAL` fallback (which would each say South, and which the
-/// bedroom-stair test cannot tell apart) — and `scene` must rebind in
-/// lockstep with `map_id` (`warp_to`'s documented invariant), observed by
-/// composing the phase's frame against a freshly loaded 1F scene.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn warping_to_the_front_doormat_faces_north_and_rebinds_the_scene() {
@@ -271,15 +219,14 @@ fn warping_to_the_front_doormat_faces_north_and_rebinds_the_scene() {
     assert_eq!(
         phase.player.position(),
         (8, 8),
-        "1F's warp #1: the doormat inside the front door"
+        "1F's warp #1 is the doormat inside the front door"
     );
     assert_eq!(
         phase.player.facing(),
         Direction::North,
-        "the doormat's own MB_SOUTH_ARROW_WARP behavior must drive the \
-         facing (overworld.c:937-938) -- South would mean the destination \
-         behavior was never read"
+        "arrival must face North from the destination doormat behavior"
     );
+    assert_eq!(phase.tick, 0, "warp_to must reset the frame tick");
     let fresh = crate::overworld::load_room(
         one_f,
         crate::overworld::PlayerCharacter::Brendan,
@@ -289,29 +236,15 @@ fn warping_to_the_front_doormat_faces_north_and_rebinds_the_scene() {
     assert!(
         phase.compose_frame()[..]
             == fresh.compose_frame(&phase.player, &phase.save1.event_data, 0)[..],
-        "warp_to must rebind `scene` to the destination map, not just `map_id` -- `tick` is 0 \
-         on both sides since `warp_to` resets `phase.tick` and `fresh` has never `step`ped"
+        "arrival scene must render the destination map"
     );
 }
 
-/// `ClearTempFieldEventData` (`overworld.c:848`, in `LoadMapFromWarp`,
-/// ahead of `RunOnTransitionMapScript` at `:860`): a warp clears the
-/// per-map-load temp flag/var ranges -- load-bearing since Route 103's
-/// cuttable-tree object events ride `FLAG_TEMP_12`/`_13`
-/// (`assets::object_event_flags`, issue #248) -- while ordinary persistent
-/// state survives untouched. The connection-crossing sibling
-/// (`LoadMapFromCameraTransition`, `:798`) is pinned by
-/// `route103_rival_tests::walking_north_from_route_101_crosses_oldale_town_into_route_103`.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn warping_clears_temp_field_event_data_but_not_persistent_flags() {
-    // `FLAG_TEMP_12` (`TEMP_FLAGS_START + 0x12`) and `VAR_TEMP_3`
-    // (`TEMP_VARS_START + 0x3`) -- independently transcribed, the same
-    // "each module cites its own constant" convention as everywhere else.
     const FLAG_TEMP_12: u16 = 0x12;
     const VAR_TEMP_3: u16 = 0x4003;
-    // An ordinary persistent flag far outside the temp range
-    // (`FLAG_HIDE_ROUTE_103_RIVAL`, `include/constants/flags.h:772`).
     const FLAG_HIDE_ROUTE_103_RIVAL: u16 = 0x2D3;
 
     let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
@@ -328,17 +261,17 @@ fn warping_clears_temp_field_event_data_but_not_persistent_flags() {
     assert_eq!(
         phase.save1.event_data.flag_get(FLAG_TEMP_12),
         Ok(false),
-        "a warp is a map load -- the temp flag range must clear"
+        "the temporary flag must clear on warp"
     );
     assert_eq!(
         phase.save1.event_data.var_get(VAR_TEMP_3),
         Ok(0),
-        "and the temp var range with it"
+        "the temporary variable must reset to zero on warp"
     );
     assert_eq!(
         phase.save1.event_data.flag_get(FLAG_HIDE_ROUTE_103_RIVAL),
         Ok(true),
-        "while ordinary persistent flags survive the load untouched"
+        "the persistent flag must survive the warp"
     );
 }
 
@@ -1087,26 +1020,9 @@ fn releasing_up_after_the_walked_approach_drains_leaves_the_lab_door_shut() {
     );
 }
 
-/// `RestartWildEncounterImmunitySteps` at upstream's `LoadMapFromWarp` call
-/// site (`src/overworld.c:850`), pinned through the whole phase: a warp must
-/// buy four fresh encounter-free steps, however many the player had already
-/// spent before taking it.
-///
-/// Deleting `self.wild.restart_immunity_steps()` from
-/// [`OverworldPhase::warp_to`] fails here -- the counter stays at
-/// [`WILD_ENCOUNTER_IMMUNITY_STEPS`] and the very first grass step after the
-/// warp draws.
-///
-/// The four-silent-steps tail is driven against Route 101's table through
-/// the phase's own [`OverworldPhase::wild`] rather than walked, because no
-/// warp this port can resolve lands anywhere with a wild table at all: the
-/// destination is Brendan's house, whose `gWildMonHeaders` entry does not
-/// exist, so walking it would assert nothing.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn warping_restarts_the_wild_encounter_immunity_window() {
-    // A real `map_id` with a real wild table over a synthetic open room, so
-    // the pre-warp steps are ordinary walking on ordinary ground.
     let mut phase = OverworldPhase::for_test(
         crate::overworld::test_support::synthetic_scene(10, 10),
         MapId("MAP_ROUTE101"),
@@ -1115,7 +1031,6 @@ fn warping_restarts_the_wild_encounter_immunity_window() {
     );
     phase.rng = Rng::new(IMMUNITY_SEED);
 
-    // Spend the window the phase started with.
     for _ in 0..WILD_ENCOUNTER_IMMUNITY_STEPS {
         walk_one_tile_east(&mut phase);
     }
@@ -1129,27 +1044,22 @@ fn warping_restarts_the_wild_encounter_immunity_window() {
     assert_eq!(
         phase.wild.immunity_steps(),
         0,
-        "a warp is a full map load -- LoadMapFromWarp calls \
-         RestartWildEncounterImmunitySteps (overworld.c:850)"
+        "a warp must restart the immunity counter"
     );
 
-    // And the window it just granted really is four RNG-silent steps.
-    let mut rng = Rng::new(IMMUNITY_SEED);
+    let mut post_warp_grass_rng = Rng::new(IMMUNITY_SEED);
     for step in 1..=WILD_ENCOUNTER_IMMUNITY_STEPS {
         assert!(
-            !grass_step_draws(&mut phase.wild, &mut rng),
-            "grass step {step} after a warp must be immune, and immune means RNG-silent"
+            !grass_step_draws(&mut phase.wild, &mut post_warp_grass_rng),
+            "Route 101 grass step {step} after a warp must be immune and RNG-silent"
         );
     }
     assert!(
-        grass_step_draws(&mut phase.wild, &mut rng),
-        "the fifth step is out of the window and rolls for real"
+        grass_step_draws(&mut phase.wild, &mut post_warp_grass_rng),
+        "the fifth Route 101 grass step is outside the window and must roll"
     );
 }
 
-/// A successful warp replaces the live object events with the destination
-/// map's: the bedroom's collection gives way to the 1F's, seeded from the
-/// same resolved events.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn a_successful_warp_replaces_the_live_object_events_with_the_destinations() {
@@ -1169,6 +1079,9 @@ fn a_successful_warp_replaces_the_live_object_events_with_the_destinations() {
             .object_events
             .get(template.local_id)
             .expect("every destination template is seeded");
-        assert!(std::ptr::eq(entry.template(), template));
+        assert!(
+            std::ptr::eq(entry.template(), template),
+            "live object event must use the destination scene's resolved template"
+        );
     }
 }
