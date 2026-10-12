@@ -600,20 +600,23 @@ impl<S: GlyphSource> Printer<S> {
     /// (`pokeemerald/src/text.c:1066`, `:1084`), so a non-positive width
     /// neither erases nor ends the frame.
     ///
-    /// The width stops at `i32::MAX`, where the cursor saturates, so the span
-    /// never reaches a column the cursor cannot represent.
+    /// The recorded span stops at `i32::MAX`, where the cursor saturates, so
+    /// it never reaches a column the cursor cannot represent; a positive width
+    /// still ends the frame even when no column remains.
     fn clear_span(&mut self, width: i32) -> ControlOutcome {
-        let width = width.min(i32::MAX.saturating_sub(self.cursor.0));
         if width <= 0 {
             return ControlOutcome::Repeat;
         }
-        self.cleared_span = Some(ClearedSpan {
-            x: self.cursor.0,
-            y: self.cursor.1,
-            width,
-            height: self.clear_height,
-        });
-        self.cursor.0 = self.cursor.0.saturating_add(width);
+        let representable = width.min(i32::MAX.saturating_sub(self.cursor.0));
+        if representable > 0 {
+            self.cleared_span = Some(ClearedSpan {
+                x: self.cursor.0,
+                y: self.cursor.1,
+                width: representable,
+                height: self.clear_height,
+            });
+            self.cursor.0 = self.cursor.0.saturating_add(representable);
+        }
         ControlOutcome::ClearedSpan
     }
 }
@@ -1197,6 +1200,29 @@ mod tests {
             printer.cleared_span().map(|span| (span.x, span.width)),
             Some((i32::MAX - 10, 10))
         );
+    }
+
+    #[test]
+    fn clear_at_the_saturated_cursor_still_ends_the_frame() {
+        let pixels = blank_sheet_pixels();
+        let mut printer = extreme_printer(
+            &pixels,
+            &[
+                super::super::EXT_CTRL_CODE_BEGIN,
+                ext_ctrl::CLEAR,
+                1,
+                ENCODED_A,
+                super::super::EOS,
+            ],
+            (i32::MAX, 0),
+        );
+        assert_eq!(printer.tick(PrinterInput::none()), TickEvent::Idle);
+        assert_eq!(printer.cleared_span(), None);
+        assert_eq!(printer.cursor(), (i32::MAX, 0));
+        assert!(matches!(
+            printer.tick(PrinterInput::none()),
+            TickEvent::Glyph(_)
+        ));
     }
 
     #[test]
