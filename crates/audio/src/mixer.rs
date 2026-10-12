@@ -53,7 +53,7 @@ pub struct Mixer {
     cgb_slots: [Option<CgbVoice>; 4],
     /// Each channel's committed hardware state once a voice has really
     /// triggered it (Square1/Square2's duty position, frequency, and sweep;
-    /// Noise's output latch), retained across the slot emptying or a pending
+    /// Wave's RAM rotation and asset identity; Noise's output latch), retained across the slot emptying or a pending
     /// replacement that has not yet written anything, tracked apart from the
     /// `Option<CgbVoice>` occupant so a later note-on can continue it
     /// (`CgbVoice::advance_idle_duty`'s doc). Indices match
@@ -500,3 +500,7 @@ mod reverb_tests;
 #[cfg(test)]
 #[path = "mixer_idle_duty.rs"]
 mod idle_duty_tests;
+
+#[cfg(test)]
+#[path = "mixer_wave_rotation.rs"]
+mod wave_rotation_tests;
