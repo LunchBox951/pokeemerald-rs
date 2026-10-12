@@ -589,7 +589,7 @@ fn real_pack_scene_round_trips_the_capture_and_matches_a_second_run() {
 }
 
 /// The staging suffix value used to deterministically pin one pointer
-/// candidate, matching `extract::mod`'s `TEST_STAGING_VALUE` convention.
+/// candidate, matching `extract::publish`'s `TEST_STAGING_VALUE` convention.
 const TEST_POINTER_STAGING_VALUE: u64 = 0x00AB_CDEF_0123;
 
 /// A symlink planted at the first pointer-staging candidate is refused, not
@@ -605,10 +605,8 @@ fn a_planted_pointer_symlink_is_never_written_through() {
     std::fs::create_dir_all(&bystander_dir).unwrap();
 
     let pointer_path = output_dir.join(format!("{}.generation", Scene::MainMenuNewGame.name()));
-    let occupied =
-        super::pointer_staging_path_with_value(&pointer_path, TEST_POINTER_STAGING_VALUE);
-    let free =
-        super::pointer_staging_path_with_value(&pointer_path, TEST_POINTER_STAGING_VALUE + 1);
+    let occupied = crate::staging_names::path_with_value(&pointer_path, TEST_POINTER_STAGING_VALUE);
+    let free = crate::staging_names::path_with_value(&pointer_path, TEST_POINTER_STAGING_VALUE + 1);
     let bystander = bystander_dir.join("bystander");
     std::os::unix::fs::symlink(&bystander, &occupied).unwrap();
 
@@ -655,10 +653,8 @@ fn a_colliding_first_pointer_candidate_is_left_untouched_in_favor_of_the_next_fr
     std::fs::create_dir_all(&output_dir).unwrap();
 
     let pointer_path = output_dir.join(format!("{}.generation", Scene::MainMenuNewGame.name()));
-    let occupied =
-        super::pointer_staging_path_with_value(&pointer_path, TEST_POINTER_STAGING_VALUE);
-    let free =
-        super::pointer_staging_path_with_value(&pointer_path, TEST_POINTER_STAGING_VALUE + 1);
+    let occupied = crate::staging_names::path_with_value(&pointer_path, TEST_POINTER_STAGING_VALUE);
+    let free = crate::staging_names::path_with_value(&pointer_path, TEST_POINTER_STAGING_VALUE + 1);
     std::fs::write(&occupied, b"someone else's staging file").unwrap();
 
     let staged =
