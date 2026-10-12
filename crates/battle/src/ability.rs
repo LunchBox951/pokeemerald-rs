@@ -105,6 +105,16 @@ pub fn huge_power_attack(
     }
 }
 
+/// Raises a raw stat 150%, truncated, saturating at `u32::MAX`.
+///
+/// The product is widened to `u64` before dividing, so every representable
+/// result is exactly `raw * 150 / 100` (upstream's stats are `u16`, so its
+/// `pokemon.c:3205-3214` arithmetic never overflows); only a result above
+/// `u32::MAX` saturates, as the other damage scaling helpers do.
+fn one_and_a_half(raw: u32) -> u32 {
+    u32::try_from(u64::from(raw) * 150 / 100).unwrap_or(u32::MAX)
+}
+
 /// Applies Hustle to a raw physical Attack stat.
 ///
 /// This must run before stat-stage scaling, matching Huge Power's ordering.
@@ -114,7 +124,7 @@ pub fn huge_power_attack(
 #[must_use]
 pub fn hustle_attack(attacker_ability: AbilityId, raw_attack: u32) -> u32 {
     if attacker_ability == HUSTLE {
-        150 * raw_attack / 100
+        one_and_a_half(raw_attack)
     } else {
         raw_attack
     }
@@ -128,7 +138,7 @@ pub fn hustle_attack(attacker_ability: AbilityId, raw_attack: u32) -> u32 {
 #[must_use]
 pub fn guts_attack(attacker_ability: AbilityId, attacker_status1: Status1, raw_attack: u32) -> u32 {
     if attacker_ability == GUTS && !attacker_status1.is_healthy() {
-        150 * raw_attack / 100
+        one_and_a_half(raw_attack)
     } else {
         raw_attack
     }
@@ -146,7 +156,7 @@ pub fn marvel_scale_defense(
     raw_defense: u32,
 ) -> u32 {
     if defender_ability == MARVEL_SCALE && !defender_status1.is_healthy() {
-        150 * raw_defense / 100
+        one_and_a_half(raw_defense)
     } else {
         raw_defense
     }
@@ -366,5 +376,45 @@ mod tests {
         assert_eq!(stage_scaled_doubled_attack, 15);
         assert_eq!(doubled_stage_scaled_attack, 14);
         assert_ne!(stage_scaled_doubled_attack, doubled_stage_scaled_attack);
+    }
+
+    #[test]
+    fn one_and_a_half_boosts_survive_u32_overflowing_intermediates() {
+        use crate::status1::Status1;
+        let cases: [(u32, u32); 10] = [
+            (0, 0),
+            (1, 1),
+            (15, 22),
+            (30_000_000, 45_000_000),
+            (30_000_001, 45_000_001),
+            (2_863_311_529, 4_294_967_293),
+            (2_863_311_530, u32::MAX),
+            (2_863_311_531, u32::MAX),
+            (u32::MAX - 1, u32::MAX),
+            (u32::MAX, u32::MAX),
+        ];
+        for (raw, boosted) in cases {
+            assert_eq!(hustle_attack(HUSTLE, raw), boosted, "hustle {raw}");
+            assert_eq!(
+                guts_attack(GUTS, Status1::Paralysed, raw),
+                boosted,
+                "guts {raw}"
+            );
+            assert_eq!(
+                marvel_scale_defense(MARVEL_SCALE, Status1::Paralysed, raw),
+                boosted,
+                "marvel scale {raw}"
+            );
+        }
+    }
+
+    #[test]
+    fn inactive_one_and_a_half_boosts_leave_huge_stats_unchanged() {
+        use crate::status1::Status1;
+        assert_eq!(guts_attack(GUTS, Status1::default(), u32::MAX), u32::MAX);
+        assert_eq!(
+            marvel_scale_defense(MARVEL_SCALE, Status1::default(), u32::MAX),
+            u32::MAX
+        );
     }
 }
