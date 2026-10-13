@@ -21,6 +21,7 @@ mod starter_chooser;
 use std::path::{Path, PathBuf};
 
 use crate::audio::{Sample, SampleId, Song, VoiceGroup, VoiceGroupId};
+use crate::battle_anim::{AnimationSelector, BattleAnimationCatalog, BattleAnimationProgram};
 use crate::fonts::{FontId, FontImageRef};
 use crate::pokedex::PokedexData;
 
@@ -43,6 +44,7 @@ use format::kind_label;
 
 /// A border frame's 3x3 grid of 8x8 tiles (upstream `sWindowFrames`,
 /// `graphics/text_window/1.png`..`20.png`).
+const BATTLE_ANIMATION_CATALOG_ID: &str = "battle-anim/catalog";
 const FRAME_WIDTH: u32 = 24;
 const FRAME_HEIGHT: u32 = 24;
 
@@ -300,6 +302,35 @@ impl AssetPack {
             id: ID.to_owned(),
             source,
         })
+    }
+
+    /// Look up the `battle-anim/catalog` entry and decode it through
+    /// [`BattleAnimationCatalog::decode`].
+    ///
+    /// # Errors
+    ///
+    /// [`PackError::UnknownAsset`] if the pack has no animation catalog;
+    /// [`PackError::WrongKind`] if the entry isn't [`EntryKind::Raw`];
+    /// [`PackError::BattleAnimationDecode`] if the bytes fail the schema.
+    pub fn battle_animation_catalog(&self) -> Result<BattleAnimationCatalog, PackError> {
+        let bytes = self.raw(BATTLE_ANIMATION_CATALOG_ID)?;
+        BattleAnimationCatalog::decode(bytes).map_err(|source| PackError::BattleAnimationDecode {
+            id: BATTLE_ANIMATION_CATALOG_ID.to_owned(),
+            source,
+        })
+    }
+
+    /// The validated program `selector` launches. The catalog is total, so a
+    /// well-formed pack never lacks one and no fallback program exists.
+    ///
+    /// # Errors
+    ///
+    /// Every error of [`AssetPack::battle_animation_catalog`].
+    pub fn battle_animation_program(
+        &self,
+        selector: AnimationSelector,
+    ) -> Result<BattleAnimationProgram, PackError> {
+        Ok(self.battle_animation_catalog()?.program(selector).clone())
     }
 
     /// Bundle one tileset's tile bitmap, 16 palettes, and raw metatile
