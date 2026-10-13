@@ -40,6 +40,7 @@ pub mod audio;
 pub mod battle_moves;
 pub mod egg_moves;
 pub mod error;
+pub mod event_scripts;
 pub mod evolution;
 pub mod experience;
 pub mod fonts;
