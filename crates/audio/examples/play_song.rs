@@ -400,28 +400,18 @@ fn wait_for_drain(
     }
 }
 
-/// The measured wait's target: `submitted_frames` plus `settle_margin_frames`
-/// (`platform::AudioOutput::playback_settle_margin_frames`, read at the same
-/// poll), so a target latched from `AudioOutput::playback_progress` does not
-/// stop waiting before a resampled device's buffered interpolation state
-/// finishes sounding real audio -- see `platform::Resampler`'s deferred
-/// lookahead pull. Zero margin (no resampling, or an exact-rate device)
-/// leaves the raw submitted-frame count unchanged. Saturates rather than
-/// overflowing -- `submitted_frames` is a real device's frame counter,
-/// nowhere near `u64::MAX`.
+/// `submitted_frames` plus the device's resampler settle margin, so the wait
+/// outlasts interpolation state still to sound (`platform::Resampler`'s
+/// deferred lookahead pull). Saturates instead of overflowing.
 fn measured_drain_target(submitted_frames: u64, settle_margin_frames: u64) -> u64 {
     submitted_frames.saturating_add(settle_margin_frames)
 }
 
-/// Fallback for a device with no measured playback position (see
-/// `platform::AudioOutput::playback_progress` and
-/// [`wait_for_device_tail_or_measured`]): how long the device may still be
-/// playing after the ring reads empty, derived rather than measured --
-/// [`HOST_QUEUED_PERIODS`] of its largest advertised callback buffer at its
-/// own rate, plus [`DEVICE_TAIL_MARGIN`], clamped between [`DEVICE_TAIL_FALLBACK`] and
-/// [`DEVICE_TAIL_MAX`]; the floor alone when it advertises none. An empty
-/// ring only means the callback took the samples, and dropping
-/// `AudioOutput` closes the stream rather than draining it.
+/// Derived tail for a device with no measured playback position:
+/// [`HOST_QUEUED_PERIODS`] of its largest advertised callback buffer plus
+/// [`DEVICE_TAIL_MARGIN`], clamped to [`DEVICE_TAIL_FALLBACK`]..=
+/// [`DEVICE_TAIL_MAX`]. With no advertised buffer, or a zero device rate,
+/// the floor alone.
 fn device_tail_wait(max_callback_frames: Option<usize>, device_sample_rate: u32) -> Duration {
     match max_callback_frames {
         Some(frames) if device_sample_rate > 0 => {
@@ -434,8 +424,8 @@ fn device_tail_wait(max_callback_frames: Option<usize>, device_sample_rate: u32)
     }
 }
 
-/// Hold the stream open for `tail`, then re-read `stream_errors`: a device
-/// error during the tail still means the last buffer never played.
+/// Sleeps `tail`, then fails if `stream_errors` is nonzero: a device error
+/// during the tail means the last buffer never played.
 fn wait_for_device_tail(
     tail: Duration,
     mut stream_errors: impl FnMut() -> u64,
