@@ -1032,7 +1032,7 @@ mod pinned_source_tests {
     fn for_test_with_source_retains_the_supplied_pack_source() {
         let build = |source| {
             OverworldPhase::for_test_with_source(
-                crate::overworld::tests::synthetic_scene(10, 10),
+                crate::overworld::test_support::synthetic_scene(10, 10),
                 assets::MapId("MAP_LITTLEROOT_TOWN"),
                 PlayerState::new((1, 1), 3, Direction::North),
                 None,
@@ -1043,7 +1043,7 @@ mod pinned_source_tests {
         assert_eq!(build(PackSource::Runtime).pack_source, PackSource::Runtime);
 
         let default = OverworldPhase::for_test(
-            crate::overworld::tests::synthetic_scene(10, 10),
+            crate::overworld::test_support::synthetic_scene(10, 10),
             assets::MapId("MAP_LITTLEROOT_TOWN"),
             PlayerState::new((1, 1), 3, Direction::North),
             None,

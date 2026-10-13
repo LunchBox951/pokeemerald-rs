@@ -84,10 +84,6 @@ fn main() -> ExitCode {
     };
     let mut buffer = vec![0.0_f32; Sequencer::FRAME_SAMPLES];
 
-    // Queue samples the device can consume the instant it starts, before the
-    // stream exists to consume anything. The ordering lives inside
-    // `prefill_then_start`, which is the only startup step `main` performs,
-    // so the test that drives it pins the sequence this call site uses.
     match prefill_then_start(
         &mut seq,
         &producer,
@@ -97,7 +93,7 @@ fn main() -> ExitCode {
         AudioOutput::start,
     ) {
         StartOutcome::Playing => {}
-        StartOutcome::PlaybackSetupFailure => return ExitCode::FAILURE,
+        StartOutcome::ReportedSetupFailure => return ExitCode::FAILURE,
     }
     println!("playing a short scale at {MIXER_RATE} Hz — Ctrl-C to stop");
 
@@ -169,24 +165,14 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// How to react to an [`AudioOutput::open`] failure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum OpenOutcome {
-    /// No output device could be reached: the expected CI/headless case.
     ExpectedHeadless,
-    /// A device was reached, but querying, configuring, or building its
-    /// stream failed.
     PlaybackSetupFailure,
 }
 
-/// Classify an [`AudioOutput::open`] error so only the headless case exits
-/// cleanly.
-///
-/// [`PlatformError::NoAudioDevice`] alone is the headless case, because
-/// `platform` decides at the stage that knows: an unreachable device fails
-/// `open`'s query and is reported as `NoAudioDevice` there, cpal's phantom
-/// ALSA `default` included. Everything left, `Audio(cpal::Error)` from a
-/// stream build included, means a device answered and then refused.
+/// Let [`AudioOutput::open`] own headless detection; do not reclassify
+/// backend errors here.
 fn classify_open_error(error: &PlatformError) -> OpenOutcome {
     match error {
         PlatformError::NoAudioDevice => OpenOutcome::ExpectedHeadless,
@@ -194,20 +180,12 @@ fn classify_open_error(error: &PlatformError) -> OpenOutcome {
     }
 }
 
-/// What `main` does after the stream-start step.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum StartOutcome {
-    /// The device accepted `play`: the render loop can run.
     Playing,
-    /// The device answered [`AudioOutput::open`] and then refused `play`.
-    /// The failure has already been reported; `main` only returns
-    /// `ExitCode::FAILURE`.
-    PlaybackSetupFailure,
+    ReportedSetupFailure,
 }
 
-/// Start playback, reporting a refusal in the wording [`classify_open_error`]
-/// uses for a playback-setup failure. `start` is injected as in
-/// [`push_frame`].
 fn start_playback(
     output: &mut AudioOutput,
     start: impl FnOnce(&mut AudioOutput) -> Result<(), PlatformError>,
@@ -216,25 +194,15 @@ fn start_playback(
         Ok(()) => StartOutcome::Playing,
         Err(err) => {
             eprintln!("audio playback setup failed: {err}");
-            StartOutcome::PlaybackSetupFailure
+            StartOutcome::ReportedSetupFailure
         }
     }
 }
 
-/// Fraction of the ring's available space [`prefill`] queues before playback
-/// starts, matching the product player's own startup rule
-/// (`pokeemerald_rs::music::player`): half absorbs a full frame's worth of
-/// startup jitter while leaving the other half free for producer/consumer
-/// drift once the device is running.
+/// Leave half the ring free for producer/consumer drift after startup.
 const PREFILL_DIVISOR: usize = 2;
 
-/// Render and queue whole frames up to half the ring's currently available
-/// space, so the device has samples queued the instant it starts instead of
-/// consuming an empty ring on its first callback.
-///
-/// Returns the number of rendered samples `push` refused; a real, unstarted
-/// device should never refuse a fill this far under capacity. `push` is
-/// injected as in [`push_frame`] so tests need no audio device.
+/// Returns the number of rendered samples refused by `push`.
 fn prefill(
     seq: &mut Sequencer,
     producer: &Producer,
@@ -253,20 +221,8 @@ fn prefill(
     dropped
 }
 
-/// Fill the ring, then start the stream — `main`'s whole startup step, in
-/// one place.
-///
-/// The device's first callback can fire the instant `start` returns, so every
-/// sample [`prefill`] queues has to be in the ring before that call; a stream
-/// started on an empty ring zero-fills and counts an underrun before the
-/// first frame exists. Keeping both steps here, rather than as two statements
-/// in `main`, gives that ordering a single call site the tests below drive
-/// through the injected `start`, the same seam
-/// `pokeemerald_rs::music::player`'s `start_with_context_and_starter` uses.
-///
-/// A prefill the ring refuses is a setup failure reported in the wording
-/// [`classify_open_error`] uses, and the stream is never started. `push` and
-/// `start` are injected as in [`push_frame`].
+/// The first device callback may run immediately; starting with an empty
+/// ring risks an underrun.
 fn prefill_then_start(
     seq: &mut Sequencer,
     producer: &Producer,
@@ -278,7 +234,7 @@ fn prefill_then_start(
     let dropped = prefill(seq, producer, buffer, push);
     if dropped > 0 {
         eprintln!("audio playback setup failed: prefill dropped {dropped} sample(s)");
-        return StartOutcome::PlaybackSetupFailure;
+        return StartOutcome::ReportedSetupFailure;
     }
     start_playback(output, start)
 }
@@ -853,12 +809,19 @@ fn wait_for_device_tail_or_measured(
 
 /// A short ascending scale played on a looping square-wave instrument.
 fn build_song() -> Song {
-    // A 64-sample square wave; `freq` chosen so key 60 renders near unity.
-    let mut data = vec![90_i8; 64];
-    for sample in data.iter_mut().skip(32) {
+    const VOICE: u8 = 0xBD;
+    const VOL: u8 = 0xBE;
+    const NOTE_24: u8 = 0xE7;
+    const WAIT_24: u8 = 0x98;
+    const FINE: u8 = 0xB1;
+    const VELOCITY: u8 = 0x7F;
+
+    // The wave frequency makes key 60 render near unity.
+    let mut square_wave_samples = vec![90_i8; 64];
+    for sample in square_wave_samples.iter_mut().skip(32) {
         *sample = -90;
     }
-    let wave = Arc::new(WaveData::looping(13_697_024, 0, data));
+    let wave = Arc::new(WaveData::looping(13_697_024, 0, square_wave_samples));
     let instrument = ToneData::new(
         wave,
         Adsr {
@@ -869,18 +832,14 @@ fn build_song() -> Song {
         },
     );
 
-    // VOICE 0; VOL 110; then C-D-E-F-G-A-B-C quarter notes (key 60..72) each
-    // followed by a quarter-note wait; FINE.
-    let mut bytes = vec![0xBD, 0x00, 0xBE, 110];
-    for key in [60_u8, 62, 64, 65, 67, 69, 71, 72] {
-        bytes.push(0xE7); // N24 (quarter note)
-        bytes.push(key);
-        bytes.push(0x7F); // velocity
-        bytes.push(0x98); // W24
+    let ascending_scale_keys = [60_u8, 62, 64, 65, 67, 69, 71, 72];
+    let mut scale_program = vec![VOICE, 0x00, VOL, 110];
+    for key in ascending_scale_keys {
+        scale_program.extend([NOTE_24, key, VELOCITY, WAIT_24]);
     }
-    bytes.push(0xB1); // FINE
+    scale_program.push(FINE);
 
-    let events = decode_track(&bytes).expect("valid demo track");
+    let events = decode_track(&scale_program).expect("valid demo track");
     Song::new(vec![Instrument::DirectSound(instrument)], vec![events], 120)
 }
 

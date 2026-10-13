@@ -76,7 +76,9 @@ pub(super) fn route_101_phase_with_grass(
 ) -> OverworldPhase {
     let specials: Vec<((u16, u16), u8)> = grass.iter().map(|&pos| (pos, MB_TALL_GRASS)).collect();
     OverworldPhase::for_test(
-        crate::overworld::tests::synthetic_scene_with_special_tiles(width, height, &specials),
+        crate::overworld::test_support::synthetic_scene_with_special_tiles(
+            width, height, &specials,
+        ),
         ROUTE_101,
         player,
         None,

@@ -690,7 +690,7 @@ mod tests {
     #[test]
     fn find_sight_trainer_matches_rhett_and_is_gated_by_the_defeated_flag() {
         let map_id = assets::MapId("MAP_ROUTE103");
-        let scene = crate::overworld::tests::synthetic_scene(80, 16);
+        let scene = crate::overworld::test_support::synthetic_scene(80, 16);
         let header = assets::MapHeaderTable::new()
             .header(map_id)
             .expect("MAP_ROUTE103 is bundled map data");
@@ -732,7 +732,7 @@ mod tests {
     #[test]
     fn a_double_battle_cone_is_reported_as_reached_but_never_selected() {
         let map_id = assets::MapId("MAP_ROUTE103");
-        let scene = crate::overworld::tests::synthetic_scene(80, 16);
+        let scene = crate::overworld::test_support::synthetic_scene(80, 16);
         let header = assets::MapHeaderTable::new()
             .header(map_id)
             .expect("MAP_ROUTE103 is bundled map data");

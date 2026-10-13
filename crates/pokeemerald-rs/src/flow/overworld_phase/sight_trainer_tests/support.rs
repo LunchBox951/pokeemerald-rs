@@ -60,7 +60,7 @@ pub(super) const AMY_TILE: (i32, i32) = (64, 12);
 /// with the real `MAP_ROUTE103` object events (`sight_trainer_tests` docs).
 pub(super) fn route_103_phase(player: PlayerState) -> OverworldPhase {
     OverworldPhase::for_test(
-        crate::overworld::tests::synthetic_scene(80, 16),
+        crate::overworld::test_support::synthetic_scene(80, 16),
         ROUTE_103,
         player,
         None,

@@ -49,7 +49,7 @@ fn frames_to_print_the_save_confirm(label: &str, text_speed: u8) -> usize {
     );
     let map = saved_map_id(saved.block1.location).expect("the saved location must resolve");
     let mut phase = OverworldPhase::from_saved(
-        crate::overworld::tests::synthetic_scene(10, 10),
+        crate::overworld::test_support::synthetic_scene(10, 10),
         map,
         saved.block1,
         saved.block2,
@@ -123,7 +123,7 @@ fn save_normalizes_an_out_of_range_text_speed_option() {
     );
     let map = saved_map_id(saved.block1.location).expect("the saved location must resolve");
     let mut phase = OverworldPhase::from_saved(
-        crate::overworld::tests::synthetic_scene(10, 10),
+        crate::overworld::test_support::synthetic_scene(10, 10),
         map,
         saved.block1,
         saved.block2,

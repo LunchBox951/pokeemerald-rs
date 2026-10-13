@@ -773,7 +773,7 @@ fn walking_onto_the_doormat_facing_east_does_not_exit() {
 /// warp #1, `(8, 8)` -> `MAP_LITTLEROOT_TOWN` warp #1; needs no pack, see
 /// [`warp_tile_behavior`]'s own doc comment on why `MapEventsTable` is
 /// always available) but drops it onto a **synthetic** scene
-/// ([`crate::overworld::tests::synthetic_scene_with_special_tile`]) where
+/// ([`crate::overworld::test_support::synthetic_scene_with_special_tile`]) where
 /// `(8, 9)` -- unlike the real off-map tile -- is ordinary, walkable ground.
 ///
 /// The player starts already standing on the doormat, facing and holding
@@ -1108,7 +1108,7 @@ fn warping_restarts_the_wild_encounter_immunity_window() {
     // A real `map_id` with a real wild table over a synthetic open room, so
     // the pre-warp steps are ordinary walking on ordinary ground.
     let mut phase = OverworldPhase::for_test(
-        crate::overworld::tests::synthetic_scene(10, 10),
+        crate::overworld::test_support::synthetic_scene(10, 10),
         MapId("MAP_ROUTE101"),
         PlayerState::new((2, 5), 3, Direction::East),
         None,
