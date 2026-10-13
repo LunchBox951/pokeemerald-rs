@@ -31,7 +31,9 @@
 //!   and palette, rotating ball, select and HM marks, and the image and
 //!   palette of every item icon `gItemIconTable` selects; and
 //! - `mus_title`, its transitive voicegroup tree, and every sample that tree
-//!   references.
+//!   references; and
+//! - the battle-message token table (`gBattleStringsTable` plus the special
+//!   templates `BufferStringBattle` selects).
 //!
 //! # Asset id scheme
 //!
@@ -49,12 +51,14 @@
 //! - `pokemon/<species>/front` and `pokemon/<species>/palette/normal`
 //! - `audio/sample/{direct-sound,programmable-wave}/<name>`
 //! - `audio/voicegroup/<label>` and `audio/song/<name>`
+//! - `battle-message/table`
 //!
 //! Names preserve normalized upstream directory, file, or symbol names; they
 //! never use linker-style `gTileset_*` identifiers.
 
 mod audio_samples;
 mod bag;
+mod battle_message;
 mod error;
 mod fonts;
 pub mod inflate;
@@ -144,6 +148,7 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     audio_samples::extract_audio_samples(&upstream, &mut writer)?;
     voicegroups::extract_voicegroups(&upstream, &mut writer)?;
     midi::extract_song(&upstream, &mut writer)?;
+    battle_message::extract_battle_message(&upstream, &mut writer)?;
 
     let entry_count = writer.len();
     let bytes = writer.finish()?;
