@@ -1,10 +1,5 @@
-//! The push retry loop, frame-deadline waits, and ring drain.
-
 use super::*;
 
-/// Pacing must subtract render/push work already spent from each wait
-/// rather than sleeping a full period on top of it, and a late iteration
-/// must not let that deficit compound into the next one.
 #[test]
 fn frame_deadline_waits_subtract_work_without_accumulating_drift() {
     let period = std::time::Duration::from_millis(10);
@@ -13,8 +8,6 @@ fn frame_deadline_waits_subtract_work_without_accumulating_drift() {
     let sleeps = Rc::new(RefCell::new(Vec::new()));
     let mut next_deadline = start + period;
 
-    // Five iterations whose simulated work comfortably fits under the
-    // period, the steady-state case.
     for _ in 0..5 {
         *clock.borrow_mut() += std::time::Duration::from_millis(3);
         let clock_now = Rc::clone(&clock);
@@ -43,7 +36,6 @@ fn frame_deadline_waits_subtract_work_without_accumulating_drift() {
     );
     assert_eq!(next_deadline, start + 6 * period);
 
-    // A sixth iteration whose work overruns the period entirely.
     sleeps.borrow_mut().clear();
     *clock.borrow_mut() += std::time::Duration::from_millis(15);
     let clock_now = Rc::clone(&clock);
@@ -85,8 +77,6 @@ fn a_stream_error_aborts_the_retry_without_waiting_out_the_deadline() {
             push_calls.set(push_calls.get() + 1);
             0
         },
-        // Healthy on the pre-push check, unhealthy immediately after —
-        // the "error lands mid-push" case the double check exists for.
         || u64::from(push_calls.get() > 0),
         || start,
         |_| panic!("a stream error must abort before any retry sleep"),
@@ -107,9 +97,7 @@ fn a_stream_error_aborts_the_retry_without_waiting_out_the_deadline() {
 
 #[test]
 fn a_stalled_ring_with_no_stream_error_gives_up_at_the_deadline() {
-    // A real (but headless) ring buffer, filled completely and never
-    // drained — `Producer::push` genuinely returns 0 forever, the same
-    // as a stopped device callback that never reports a stream error.
+    // Models a callback that stops consuming without reporting a stream error.
     let output = AudioOutput::null(1);
     let producer = output.producer();
     assert_eq!(producer.push(&[0.0; 2]), 2, "fill the null ring solid");
@@ -175,7 +163,7 @@ fn wait_for_drain_succeeds_immediately_once_the_ring_is_already_empty() {
     let result = wait_for_drain(
         4,
         &policy,
-        || 4, // fully free: nothing queued
+        || 4,
         || 0,
         std::time::Instant::now,
         |_| panic!("an already-empty ring must not need to retry"),
@@ -186,9 +174,6 @@ fn wait_for_drain_succeeds_immediately_once_the_ring_is_already_empty() {
 
 #[test]
 fn an_empty_ring_with_a_stream_error_is_not_a_successful_finish() {
-    // A callback that dequeues the last samples and then reports an
-    // asynchronous device failure must not read as a successful drain
-    // just because the ring happens to be empty.
     let policy = RetryPolicy {
         interval: std::time::Duration::from_millis(1),
         max_wait: std::time::Duration::from_mins(1),
@@ -198,8 +183,8 @@ fn an_empty_ring_with_a_stream_error_is_not_a_successful_finish() {
     let result = wait_for_drain(
         4,
         &policy,
-        || 4, // fully free: the ring drained
-        || 1, // but the stream is already unhealthy
+        || 4,
+        || 1,
         || start,
         |_| panic!("a stream error must abort before any retry sleep"),
     );
@@ -218,12 +203,7 @@ fn an_empty_ring_with_a_stream_error_is_not_a_successful_finish() {
 
 #[test]
 fn an_error_that_lands_exactly_as_the_ring_reports_empty_is_still_caught() {
-    // The real race this guards: the callback drains the last sample and
-    // raises a stream error in the same instant. Here `available_space`
-    // itself is what makes the error visible, so a `stream_errors` read
-    // taken *before* `available_space` would still observe the old,
-    // healthy count and wrongly report success once it sees the ring
-    // empty.
+    // Models a failure becoming visible concurrently with the last dequeue.
     let errors = Rc::new(Cell::new(0_u64));
     let errors_probe = Rc::clone(&errors);
     let policy = RetryPolicy {
@@ -237,7 +217,7 @@ fn an_error_that_lands_exactly_as_the_ring_reports_empty_is_still_caught() {
         &policy,
         move || {
             errors_probe.set(1);
-            4 // fully free: the ring drained in the same instant
+            4
         },
         move || errors.get(),
         || start,
@@ -267,8 +247,8 @@ fn wait_for_drain_reports_a_stream_error_instead_of_waiting_out_the_deadline() {
     let result = wait_for_drain(
         4,
         &policy,
-        || 0, // the ring never drains
-        || 1, // already unhealthy
+        || 0,
+        || 1,
         || start,
         |_| panic!("a stream error must abort before any retry sleep"),
     );
@@ -287,12 +267,7 @@ fn wait_for_drain_reports_a_stream_error_instead_of_waiting_out_the_deadline() {
 
 #[test]
 fn wait_for_drain_times_out_when_the_ring_never_empties_and_reports_no_stream_error() {
-    // A real (but headless) ring buffer, filled completely and never
-    // drained: `available_space` genuinely stays at 0 forever, the same
-    // as a device callback that stopped consuming without ever
-    // reporting a stream error. Checking only `stream_errors() == 0`
-    // here would declare success regardless — this is exactly the case
-    // that let a stopped callback pass as a successful finish.
+    // Models a callback that stops consuming without reporting a stream error.
     let output = AudioOutput::null(1);
     let producer = output.producer();
     assert_eq!(producer.push(&[0.0; 2]), 2, "fill the null ring solid");

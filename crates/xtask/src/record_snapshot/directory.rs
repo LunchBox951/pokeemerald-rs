@@ -154,7 +154,7 @@ fn unpinned_directory(path: &Path) -> std::io::Error {
 #[cfg(target_vendor = "apple")]
 const APPLE_SEARCH: rustix::fs::OFlags = rustix::fs::OFlags::from_bits_retain(0x4000_0000);
 
-#[cfg(unix)]
+#[cfg(all(unix, test))]
 fn open_held_dir(path: &Path, access: rustix::fs::OFlags) -> std::io::Result<std::fs::File> {
     rustix::fs::open(
         path,
@@ -165,27 +165,35 @@ fn open_held_dir(path: &Path, access: rustix::fs::OFlags) -> std::io::Result<std
     .map_err(Into::into)
 }
 
+/// Opens a staging directory with the strongest access the platform allows and
+/// pins it. `open` resolves the directory (by pathname or through a handle).
 #[cfg(unix)]
-pub(super) fn claim_staged_dir(path: &Path) -> std::io::Result<StagedDirClaim> {
+fn claim_staged_dir_with(
+    open: impl Fn(rustix::fs::OFlags) -> std::io::Result<std::fs::File>,
+) -> std::io::Result<StagedDirClaim> {
     #[cfg(any(target_os = "linux", target_os = "android"))]
     let access = rustix::fs::OFlags::PATH;
     #[cfg(not(any(target_os = "linux", target_os = "android")))]
     let access = rustix::fs::OFlags::RDONLY;
-    let held = open_held_dir(path, access);
+    let held = open(access);
     // A `0444` umask leaves the capture's own staging directory at mode `0333`:
     // writable and searchable, but unreadable, so `O_RDONLY` is refused. Search
     // access is all the hold is used for -- `openat` for payload creation and
     // `fstat` for identity.
     #[cfg(target_vendor = "apple")]
     let held = match held {
-        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
-            open_held_dir(path, APPLE_SEARCH)
-        }
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => open(APPLE_SEARCH),
         held => held,
     };
     // A claim without a hold can never write a payload, so a directory that
     // cannot be held fails the claim instead of reporting a dead success.
-    let claim = StagedDirClaim { hold: Some(held?) };
+    Ok(StagedDirClaim { hold: Some(held?) })
+}
+
+/// Pathname-based claim; production claims through [`OutputDirClaim::claim_staged_dir`].
+#[cfg(all(unix, test))]
+pub(super) fn claim_staged_dir(path: &Path) -> std::io::Result<StagedDirClaim> {
+    let claim = claim_staged_dir_with(|access| open_held_dir(path, access))?;
     claim.require_path(path)?;
     Ok(claim)
 }
@@ -271,6 +279,56 @@ impl OutputDirClaim {
         #[cfg(not(any(unix, windows)))]
         let _ = path;
         Ok(())
+    }
+
+    /// Creates the staging directory named by `path`'s final component inside
+    /// the held directory, so a replaced output pathname cannot receive it.
+    #[cfg(unix)]
+    pub(super) fn create_staged_dir(&self, path: &Path) -> std::io::Result<()> {
+        rustix::fs::mkdirat(
+            &self.hold,
+            entry_name(path)?,
+            // `create_dir`'s own 0o777; the process umask narrows it.
+            rustix::fs::Mode::RWXU | rustix::fs::Mode::RWXG | rustix::fs::Mode::RWXO,
+        )
+        .map_err(Into::into)
+    }
+
+    #[cfg(not(unix))]
+    #[expect(
+        clippy::unused_self,
+        reason = "one signature for every platform; only the unix arm creates through the hold"
+    )]
+    pub(super) fn create_staged_dir(&self, path: &Path) -> std::io::Result<()> {
+        std::fs::create_dir(path)
+    }
+
+    /// Pins the staging directory named by `path`'s final component inside the
+    /// held directory, then verifies it through that directory's handle.
+    #[cfg(unix)]
+    pub(super) fn claim_staged_dir(&self, path: &Path) -> std::io::Result<StagedDirClaim> {
+        let name = entry_name(path)?;
+        let claim = claim_staged_dir_with(|access| {
+            rustix::fs::openat(
+                &self.hold,
+                name,
+                access | rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::NOFOLLOW,
+                rustix::fs::Mode::empty(),
+            )
+            .map(std::fs::File::from)
+            .map_err(Into::into)
+        })?;
+        claim.require_entry_in(self, path)?;
+        Ok(claim)
+    }
+
+    #[cfg(not(unix))]
+    #[expect(
+        clippy::unused_self,
+        reason = "one signature for every platform; only the unix arm claims through the hold"
+    )]
+    pub(super) fn claim_staged_dir(&self, path: &Path) -> std::io::Result<StagedDirClaim> {
+        claim_staged_dir(path)
     }
 
     /// Renames `staged` to `generation`, both named by their final component

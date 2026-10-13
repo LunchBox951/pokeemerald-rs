@@ -227,22 +227,37 @@ mod tests {
         out
     }
 
+    /// Distinct 4bpp art for sheet `index`.
+    fn sheet_art(index: usize) -> [u8; 32] {
+        let mut art = [0x12; 32];
+        art[0] = u8::try_from(index).expect("sheet index fits a byte");
+        art
+    }
+
     /// A pack holding every required sheet plus the seed and target
     /// palettes, and a ROM planting the table `records` and the palettes at
     /// `target_copies`.
     fn fixture(records: &[Vec<u8>], target_copies: &[usize]) -> (Vec<u8>, Vec<PackEntry>) {
         let seed = colors(0x0100);
         let target = colors(0x0200);
-        let mut entries: Vec<PackEntry> = crate::extract::scope::sprite_sheet_ids()
-            .into_iter()
-            .map(|id| image_entry_from_tiles(id, &[0x12; 32], 4, 8, 8, None).expect("sheet"))
+        let sheet_ids = crate::extract::scope::sprite_sheet_ids();
+        let mut entries: Vec<PackEntry> = sheet_ids
+            .iter()
+            .enumerate()
+            .map(|(index, id)| {
+                image_entry_from_tiles(id.clone(), &sheet_art(index), 4, 8, 8, None).expect("sheet")
+            })
             .collect();
         entries.push(palette_entry(SEED.into(), &seed).expect("seed"));
         entries.push(palette_entry(TARGET.into(), &target).expect("target"));
         let mut rom = RomFixture::new()
             .emerald_header()
-            .write(0x1000, &[0x12; 32])
             .write(0x2000, &bytes(&seed));
+        // Each sheet gets distinct art and one copy, clear of the palettes
+        // and the table: ids sharing art would need a copy apiece.
+        for index in 0..sheet_ids.len() {
+            rom = rom.write(0x1_0000 + index * 0x40, &sheet_art(index));
+        }
         for &at in target_copies {
             rom = rom.write(at, &bytes(&target));
         }

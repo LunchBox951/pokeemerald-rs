@@ -1,6 +1,7 @@
 //! Fallback between slots when a sector fails its checksum.
 
 use super::*;
+use crate::save::game_stats::GameStats;
 
 #[test]
 fn corrupted_sector_in_the_current_slot_falls_back_to_the_other_slot() {
@@ -159,7 +160,10 @@ fn corrupt_recovery_with_intact_block2_decodes_encrypted_fields_to_plaintext_def
 #[test]
 fn corrupt_recovery_without_a_recovered_key_decodes_encrypted_fields_to_plaintext_defaults() {
     let mut store = SaveStore::new();
-    let block1 = sample_block1();
+    let mut block1 = sample_block1();
+    block1
+        .game_stats
+        .set(crate::save::game_stats::GameStat::SavedGame, 5);
     let block2 = sample_block2();
     assert_ne!(block2.encryption_key, 0, "test needs a nonzero key");
     assert_ne!(block1.money, 0, "test needs nonzero encrypted state");
@@ -176,6 +180,7 @@ fn corrupt_recovery_without_a_recovered_key_decodes_encrypted_fields_to_plaintex
     assert_eq!(outcome.status, SaveStatus::Corrupt);
     assert_eq!(outcome.block2.encryption_key, 0);
     assert_eq!(outcome.block1.money, 0);
+    assert_eq!(outcome.block1.game_stats, GameStats::default());
     let bag = &outcome.block1.bag;
     for slot in bag
         .items
@@ -252,6 +257,7 @@ fn equal_and_opposite_checksum_byte_mutations_keep_newer_slot_selected() {
         encryption_key: 0xA1B2_C3D4,
         options_text_speed: 1,
         options_window_frame_type: 5,
+        ..SaveBlock2::default()
     };
 
     store.save(&older_block1, &older_block2);
