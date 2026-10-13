@@ -105,12 +105,8 @@ pub fn huge_power_attack(
     }
 }
 
-/// Raises a raw stat 150%, truncated, saturating at `u32::MAX`.
-///
-/// The product is widened to `u64` before dividing, so every representable
-/// result is exactly `raw * 150 / 100` (upstream's stats are `u16`, so its
-/// `pokemon.c:3205-3214` arithmetic never overflows); only a result above
-/// `u32::MAX` saturates, as the other damage scaling helpers do.
+/// Raises a raw stat 150%, truncated; a result above `u32::MAX` saturates like the
+/// other scaling helpers (upstream's `u16` stats at `pokemon.c:3205-3214` never overflow).
 fn one_and_a_half(raw: u32) -> u32 {
     u32::try_from(u64::from(raw) * 150 / 100).unwrap_or(u32::MAX)
 }
