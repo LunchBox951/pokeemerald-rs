@@ -83,7 +83,6 @@ fn entering_a_different_map_leaves_the_rescue_var_at_its_fresh_save_zero() {
     assert_eq!(phase.save1.event_data.var_get(VAR_ROUTE101_STATE), Ok(0));
 }
 
-/// `OverworldPhase::from_saved` runs the entry sync: only a fresh 0 advances to 1; saved 1, 2 and 3 resume unchanged.
 #[test]
 fn continuing_on_route_101_only_advances_the_fresh_rescue_state() {
     for (saved_state, expected_state) in [(0, 1), (1, 1), (2, 2), (3, 3)] {
