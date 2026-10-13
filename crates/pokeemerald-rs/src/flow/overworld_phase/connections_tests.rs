@@ -377,9 +377,9 @@ fn walking_off_littlerootss_north_edge_crosses_into_route_101_and_back() {
     assert_eq!(phase.save1().location.warp_id, -1);
 }
 
-/// A crossing restarts the wild-encounter immunity window (`overworld.c:800`), including
-/// when it lands in grass. Deleting `self.wild.restart_immunity_steps()` from
-/// [`OverworldPhase::cross_connection`] fails here.
+/// A crossing restarts the wild-encounter immunity window (`overworld.c:800`), so the
+/// grass steps taken after it are protected. Deleting `self.wild.restart_immunity_steps()`
+/// from [`OverworldPhase::cross_connection`] fails here.
 ///
 /// The player is moved onto [`ROUTE_101_GRASS_ROW`] after the crossing because the landing
 /// is eleven tiles from grass. `VAR_ROUTE101_STATE` starts at its spent value so the rescue
