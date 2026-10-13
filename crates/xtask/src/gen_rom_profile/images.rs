@@ -297,7 +297,7 @@ fn assign(
         if addrs.is_empty() {
             continue;
         }
-        if addrs.len() == 1 {
+        if addrs.len() == 1 && members.len() == 1 {
             for index in members {
                 chosen[index] = Some(addrs[0]);
             }
