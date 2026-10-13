@@ -23,7 +23,9 @@ mod staging;
 
 #[cfg(windows)]
 use directory::claim_promoted_dir;
-use directory::{claim_output_dir, claim_staged_dir, OutputDirClaim, StagedDirClaim};
+#[cfg(test)]
+use directory::claim_staged_dir;
+use directory::{claim_output_dir, OutputDirClaim, StagedDirClaim};
 
 const SCREEN_WIDTH: usize = 240;
 const SCREEN_HEIGHT: usize = 160;
@@ -273,7 +275,9 @@ where
         if generation_dir.exists() {
             continue;
         }
-        if let Some(claim) = create_and_claim_staged_dir(&staged_dir, claim_staged_dir)? {
+        if let Some(claim) = create_and_claim_staged_dir(&output_claim, &staged_dir, |path| {
+            output_claim.claim_staged_dir(path)
+        })? {
             break (generation, staged_dir, generation_dir, claim);
         }
     };
@@ -422,10 +426,11 @@ fn report_retained_directory(path: &Path, source: &RecordSnapshotError) -> Recor
 /// Creates a staging directory and pins it for writes. A failed claim leaves
 /// the entry intact because creation and opening cannot establish identity atomically.
 fn create_and_claim_staged_dir(
+    output: &OutputDirClaim,
     staged_dir: &Path,
     claim: impl FnOnce(&Path) -> std::io::Result<StagedDirClaim>,
 ) -> Result<Option<StagedDirClaim>, RecordSnapshotError> {
-    match std::fs::create_dir(staged_dir) {
+    match output.create_staged_dir(staged_dir) {
         Ok(()) => claim(staged_dir).map(Some).map_err(|error| {
             RecordSnapshotError::Write(
                 staged_dir.to_path_buf(),

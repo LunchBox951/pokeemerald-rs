@@ -47,7 +47,7 @@
     "data/battle_ai_scripts.s": {
       "artifacts": {
         "AI_CheckBadMove": {
-          "reason": "data/battle_ai_scripts.s:51-104,277-312 (#1311, #1861). Modelled for the three admitted move effects: EFFECT_HIT screens chart immunity (:58), then Wonder Guard (:59,:63; AI STAB normalization at src/battle_ai_script_commands.c:1528-1556, so a merely-2x hit is exempt but a 4x hit is not) and Levitate on a Ground move (:64); every admitted effect then checks the nine-move Soundproof list (:93,:95-103), which omits Hyper Voice unlike executions ten-move sSoundMovesTable; EFFECT_ATTACK_DOWN screens the target stage floor (:278), Hyper Cutter (:279-280), then the Clear Body/White Smoke check shared with EFFECT_DEFENSE_DOWN (:308-311); EFFECT_DEFENSE_DOWN screens its own floor (:284) first. Every get_ability AI_TARGET read is restricted to a single-ability player target or one whose true ability is Shadow Tag, Magnet Pull, or Arena Trap (read directly ahead of the guess, src/battle_ai_script_commands.c:1368-1376) and draws no RNG. Any other two-ability player target is refused before construction or scoring (BattleError::AmbiguousPlayerAbility), whichever slot it holds, because battle-history revelation and the Random() & 1 guess (src/battle_ai_script_commands.c:1350-1396) are not modelled. That refusal applies only when the trainer carries AI_FLAG_CHECK_BAD_MOVE and some non-fainted party member still has a PP-positive move: a flagless trainer never runs this script, and an all-spent battler is diverted to Struggle before the AI reads any ability (src/battle_main.c:4183-4191), with PP never refilling in battle. Regression tests in trainer_ai.rs pin Wonder Guard, Hyper Cutter (Pinsir), Clear Body (Regirock), and Soundproof-but-not-Hyper-Voice (Mr. Mime) targets through choose_trainer_action with draw counts free of ability reads, the two-ability refusal, the Arena Trap admission, the flagless admission, and the all-spent admission. STILL not modelled: Volt Absorb/Water Absorb/Flash Fire (:60-62) and Keen Eye (only reachable via EFFECT_ACCURACY_DOWN); execution models no absorb ability either, so the AI and execution stay consistent. Also still deferred: the ~90 other if_effect handlers in the :104-216 chain. The Levitate branch has no admitted Ground-type EFFECT_HIT move in the current dex, so it is pinned by a direct unit test of the wired predicate.",
+          "reason": "data/battle_ai_scripts.s:51-104,277-312 (#1311, #1861, #1862). The prologue is modelled in script order (score_bad_move_prologue): get_how_powerful_move_is gates the chart/ability block (power 0/1 or an sIgnoredPowerfulMoveEffects effect jumps straight to Soundproof; Fissure/Horn Drill bypass the gate, src/battle_ai_script_commands.c:1174-1239), then chart immunity (-10, terminates), then Volt Absorb/Electric, Water Absorb/Water, Flash Fire/Fire (-12, terminates), Wonder Guard (-10 unless the AI-normalized effectiveness is exactly 2x; a 4x hit is not exempt, :1528-1556) and Levitate on a Ground move (-10), then the nine-move Soundproof list (-10, terminates before any if_effect; omits Hyper Voice unlike executions sSoundMovesTable). Dual-type folding keeps Cmd_if_type_effectiveness ordering and its zero-resurrection quirk (:1515-1556). Exactly thirteen audited rows are classified unchanged after the prologue because none appears in the :105-214 if_effect chain: EFFECT_HIT, ABSORB, POISON_HIT, ALWAYS_HIT, MULTI_HIT, DRAGON_RAGE, HIGH_CRITICAL, SPEED_DOWN_HIT, EVASION_DOWN_HIT, VITAL_THROW, SPLASH, QUICK_ATTACK, CHARGE; any unlisted effect stays refused. ensure_scoreable is flag-aware: those rows are admitted for a CHECK_BAD_MOVE-only trainer and refused when CHECK_VIABILITY would take an unported branch (ABSORB, ALWAYS_HIT, HIGH_CRITICAL, SPEED_DOWN_HIT, VITAL_THROW; :655,666,686,706,708) or TRY_TO_FAINT would (QUICK_ATTACK +2, :2629-2634); EFFECT_CHARGE is also refused under TRY_TO_FAINT, the one script that reads simulated damage (if_can_faint, :2618), because estimated_damage omits the AI_CalcDmg Charge doubling (src/battle_script_commands.c:1306-1316); AI_CheckViability neither dispatches EFFECT_CHARGE nor reads damage (:619-743), so a CHECK_VIABILITY trainer admits it. Execution still lacks Volt Absorb/Water Absorb/Flash Fire absorption, so those cancellations are scored but a sole absorbed move still executes (executor stays the authority); admission is validated before the four simulated-damage draws. The stat guards remain: EFFECT_ATTACK_DOWN screens the stage floor (:278), Hyper Cutter (:279-280), then Clear Body/White Smoke (:308-311) shared with EFFECT_DEFENSE_DOWN (:284). Every get_ability AI_TARGET read is restricted to a single-ability target or a true Shadow Tag/Magnet Pull/Arena Trap (read directly ahead of the guess, :1368-1376) and draws no RNG; any other two-ability target is refused (BattleError::AmbiguousPlayerAbility) because battle history and the Random() & 1 guess (:1350-1396) are not modelled, including the boundary that upstream BATTLE_HISTORY->abilities[0] can hold a field-effect ability the port models no events for. Execution still gates what runs: no EVASION_DOWN_HIT move exists in the dex, and SPEED_DOWN_HIT, HIGH_CRITICAL etc. stay subject to ensure_executable. STILL deferred: the ~90 other if_effect handler bodies in the :104-216 chain (status, stat-stage, and the rest), Keen Eye, and the CHECK_VIABILITY/TRY_TO_FAINT branches of the refused rows. The parent artifact stays pending.",
           "rust_target": "crates/battle/src/battle/trainer_ai.rs",
           "spec": "S-6",
           "status": "stubbed"
@@ -11843,6 +11843,32 @@
       "status": "pending"
     },
     "data/text/pc_transfer.inc": {
+      "artifacts": {
+        "gText_PkmnTransferredLanettesPC": {
+          "reason": "Assembly-authored gBattleStringsTable target: its .string bytes are lexed from data/text/pc_transfer.inc by the battle-message extractor (EXTERNAL_LABELS) and emitted into the battle-message/table pack entry as raw token data, matching the four slots src/battle_message.c#gBattleStringsTable records as external. The parent file stays pending: the rest of its strings are not extracted.",
+          "rust_target": "crates/xtask/src/extract/battle_message.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "gText_PkmnTransferredLanettesPCBoxFull": {
+          "reason": "Assembly-authored gBattleStringsTable target: its .string bytes are lexed from data/text/pc_transfer.inc by the battle-message extractor (EXTERNAL_LABELS) and emitted into the battle-message/table pack entry as raw token data, matching the four slots src/battle_message.c#gBattleStringsTable records as external. The parent file stays pending: the rest of its strings are not extracted.",
+          "rust_target": "crates/xtask/src/extract/battle_message.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "gText_PkmnTransferredSomeonesPC": {
+          "reason": "Assembly-authored gBattleStringsTable target: its .string bytes are lexed from data/text/pc_transfer.inc by the battle-message extractor (EXTERNAL_LABELS) and emitted into the battle-message/table pack entry as raw token data, matching the four slots src/battle_message.c#gBattleStringsTable records as external. The parent file stays pending: the rest of its strings are not extracted.",
+          "rust_target": "crates/xtask/src/extract/battle_message.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "gText_PkmnTransferredSomeonesPCBoxFull": {
+          "reason": "Assembly-authored gBattleStringsTable target: its .string bytes are lexed from data/text/pc_transfer.inc by the battle-message extractor (EXTERNAL_LABELS) and emitted into the battle-message/table pack entry as raw token data, matching the four slots src/battle_message.c#gBattleStringsTable records as external. The parent file stays pending: the rest of its strings are not extracted.",
+          "rust_target": "crates/xtask/src/extract/battle_message.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "data.text",
       "kind": "file",
       "spec_owner": "S-5",
@@ -18540,6 +18566,14 @@
       "status": "pending"
     },
     "include/pokedex.h": {
+      "artifacts": {
+        "PokedexEntry": {
+          "reason": "struct PokedexEntry (include/pokedex.h:21-32) is the shape of crate::pokedex::PokedexEntry: categoryName, description, height, weight, pokemonScale, pokemonOffset, trainerScale and trainerOffset carried as owned strings and u16/i16 fields; the offsets read signed because upstream writes negative literals into the u16 fields and reads them signed at src/pokedex.c:3777, and the unused u16 padding field is omitted. Codec in pokedex/codec.rs, pinned by pokedex/tests.rs. The parent header stays pending: its prototypes and the other declarations are not ported, and the extracted data lands with the xtask extractor child (issue #2017).",
+          "rust_target": "crates/assets/src/pokedex.rs",
+          "spec": "S-4",
+          "status": "rewritten"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
@@ -24657,10 +24691,22 @@
     },
     "src/battle_message.c": {
       "artifacts": {
+        "BufferStringBattle-template-payloads": {
+          "reason": "Only raw payloads reached by INTROMSG, INTROSENDOUT, RETURNMON, SWITCHINMON, USEDMOVE, and BATTLEEND are extracted: 49 direct templates plus type-move and helper text fragments; selection, buffer mutation, and expansion are deferred.",
+          "rust_target": "crates/xtask/src/extract/battle_message.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
         "gAbsorbDrainStringIds": {
           "reason": "battle_message.c:1120-:1124, both entries: B_MSG_ABSORB (STRINGID_PKMNENERGYDRAINED) and B_MSG_ABSORB_OOZE (STRINGID_ITSUCKEDLIQUIDOOZE), carried as the two distinct BattleEvent variants Drained and LiquidOoze rather than as a string table -- this crate has no text renderer, so the event vocabulary is where a message identity lives. BattleScript_EffectAbsorb picks exactly one of the two (data/battle_scripts_1.s:346 vs :350) and never prints both, which crates/battle/tests/turn_engine/pipelines.rs pins.",
           "rust_target": "crates/battle/src/battle/events.rs",
           "spec": "S-6",
+          "status": "ported"
+        },
+        "gBattleStringsTable": {
+          "reason": "The full 369-slot table, including four external PC-transfer strings, is canonical raw token data only; request selection and placeholder expansion are deferred.",
+          "rust_target": "crates/xtask/src/extract/battle_message.rs",
+          "spec": "S-4",
           "status": "ported"
         }
       },
@@ -27301,7 +27347,13 @@
           "status": "stubbed"
         },
         "ply_patt": {
-          "reason": "ply_patt (m4a_1.s:851-869) pushes the return cursor onto track->patternStack and jumps to the target; at the engine's depth of 3 it branches to ply_fine without reading the target. Reimplemented twice: the runtime Track::call_pattern in crates/audio/src/sequencer.rs (three-entry pattern_return_stack, a fourth nested PATT ends the track), and the extraction decoder in crates/rom-import/src/domains/song.rs, which expands PATT/PEND inline for the pack and terminates a fourth-level PATT as Fine without reading its pointer (PR #1437, issue #1388).",
+          "reason": "ply_patt (m4a_1.s:851-869) pushes the return cursor onto track->patternStack and jumps to the target; at the engine's depth of 3 it branches to ply_fine without reading the target. Reimplemented three times: the runtime Track::call_pattern in crates/audio/src/sequencer.rs (three-entry pattern_return_stack, a fourth nested PATT ends the track), the sequence decoder's Event::Pattern/PatternEnd arms in crates/audio/src/sequence/decode.rs (the depth check in crates/audio/src/sequence/reader.rs runs before the operand read), and the extraction decoder in crates/rom-import/src/domains/song.rs, which expands PATT/PEND inline for the pack and terminates a fourth-level PATT as Fine without reading its pointer.",
+          "rust_target": "crates/audio/src/sequencer.rs",
+          "spec": "S-3",
+          "status": "rewritten"
+        },
+        "ply_rept": {
+          "reason": "ply_rept (m4a_1.s:880-910) counts repeats per track: a zero count jumps to the target without touching the counter; a positive count increments first, jumps while the counter is below the count, and resets to zero after the final pass, falling through without using the target. Reimplemented twice: the runtime Track::repeat in crates/audio/src/sequencer.rs (lines 216-228, citing m4a_1.s:880-910), and the sequence decoder's Event::Repeat arm in crates/audio/src/sequence/decode.rs (lines 116-131), which keeps the same counter and validates the target only when the repeat is taken.",
           "rust_target": "crates/audio/src/sequencer.rs",
           "spec": "S-3",
           "status": "rewritten"
