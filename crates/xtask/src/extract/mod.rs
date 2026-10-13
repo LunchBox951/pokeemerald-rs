@@ -26,7 +26,10 @@
 //!   main-menu background palette; and
 //! - the starter chooser's tile, Poké Ball, and circle sheets with their
 //!   palettes, both Birch tilemaps, and the shared normal front image and
-//!   palette of Treecko, Torchic, and Mudkip; and
+//!   palette of Treecko, Torchic, and Mudkip;
+//! - the ordinary bag's screen, tilemap, sex palettes, male and female sheets
+//!   and palette, rotating ball, select and HM marks, and the image and
+//!   palette of every item icon `gItemIconTable` selects; and
 //! - `mus_title`, its transitive voicegroup tree, and every sample that tree
 //!   references; and
 //! - the battle-message token table (`gBattleStringsTable` plus the special
@@ -44,6 +47,7 @@
 //! - `text-window/{image,palette}/<stem>`
 //! - `interface/palette/main_menu_bg`
 //! - `starter-chooser/{image,palette,raw}/<stem>`
+//! - `bag/{image,palette,raw}/<name>` and `bag/item-icon/{image,palette}/<stem>`
 //! - `pokemon/<species>/front` and `pokemon/<species>/palette/normal`
 //! - `audio/sample/{direct-sound,programmable-wave}/<name>`
 //! - `audio/voicegroup/<label>` and `audio/song/<name>`
@@ -53,6 +57,7 @@
 //! never use linker-style `gTileset_*` identifiers.
 
 mod audio_samples;
+mod bag;
 mod battle_message;
 mod error;
 mod fonts;
@@ -139,6 +144,7 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     text_window::extract_text_window(&upstream, &mut writer)?;
     extract_interface_palettes(&upstream, &mut writer)?;
     starter_chooser::extract_starter_chooser(&upstream, &mut writer)?;
+    bag::extract_bag(&upstream, &mut writer)?;
     audio_samples::extract_audio_samples(&upstream, &mut writer)?;
     voicegroups::extract_voicegroups(&upstream, &mut writer)?;
     midi::extract_song(&upstream, &mut writer)?;

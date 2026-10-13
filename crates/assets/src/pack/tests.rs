@@ -1,6 +1,7 @@
 mod shared;
 
 mod audio;
+mod bag;
 mod battle_message;
 mod container;
 mod layout;

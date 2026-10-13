@@ -85,6 +85,13 @@ pub enum PackError {
         /// What differs from the expected shape.
         detail: String,
     },
+    /// An ordinary-bag entry differs from the upstream graphic's shape.
+    MalformedBagAsset {
+        /// Asset id.
+        id: String,
+        /// What differs from the expected shape.
+        detail: String,
+    },
     /// A raw audio entry failed its schema's structural decode.
     AudioDecode {
         /// Audio asset id.
@@ -109,6 +116,10 @@ pub enum PackError {
 }
 
 impl fmt::Display for PackError {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one exhaustive match keeps every pack diagnostic together"
+    )]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NotFound(path) => write!(
@@ -190,6 +201,9 @@ impl fmt::Display for PackError {
             Self::MalformedStarterAsset { id, detail } => {
                 write!(f, "asset pack: starter-chooser entry `{id}` {detail}")
             }
+            Self::MalformedBagAsset { id, detail } => {
+                write!(f, "asset pack: bag entry `{id}` {detail}")
+            }
             Self::AudioDecode { id, source } => {
                 write!(
                     f,
@@ -231,7 +245,8 @@ impl std::error::Error for PackError {
             | Self::TextWindowImageWrongDimensions { .. }
             | Self::MalformedTextWindowImage { .. }
             | Self::TextWindowPixelOutsidePalette { .. }
-            | Self::MalformedStarterAsset { .. } => None,
+            | Self::MalformedStarterAsset { .. }
+            | Self::MalformedBagAsset { .. } => None,
         }
     }
 }
