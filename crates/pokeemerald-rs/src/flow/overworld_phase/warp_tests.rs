@@ -1,9 +1,8 @@
 //! Warp arrival, map-load state, arrow-warp triggers, and door transitions
 //! ([`super::OverworldPhase::warp_to`]).
 //!
-//! Arrival facing follows the destination tile's behavior (`overworld.c:929-951`);
-//! a warp map load clears temporary event data and restarts encounter immunity
-//! (`overworld.c:846-850`).
+//! Arrival facing follows the destination tile (`overworld.c:929-951`); a warp map
+//! load clears temporary event data and restarts encounter immunity (`:846-850`).
 
 use super::test_support::*;
 use super::OverworldPhase;
