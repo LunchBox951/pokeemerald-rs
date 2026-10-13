@@ -118,6 +118,34 @@ fn art_that_is_nowhere_in_the_rom_is_not_found() {
 }
 
 #[test]
+fn two_ids_sharing_one_copy_of_art_are_ambiguous() {
+    // One copy, two ids: there is no copy each, so the locator must not
+    // alias both ids onto the same address.
+    let tiles = distinctive_tiles(4);
+    let rom = RomFixture::new()
+        .emerald_header()
+        .write(0x20_0000, &tiles)
+        .finish();
+    let entries = vec![
+        image_entry_from_tiles("sprite/a".into(), &tiles, 4, 16, 16, None).expect("entry"),
+        image_entry_from_tiles("sprite/b".into(), &tiles, 4, 16, 16, None).expect("entry"),
+    ];
+
+    with_context("shared-art-one-copy", &rom, entries, |ctx| {
+        let mut report = Vec::new();
+        let result = locate_images(
+            ctx,
+            &[ImageQuery::raw("sprite/a"), ImageQuery::raw("sprite/b")],
+            &mut report,
+        );
+        assert!(
+            matches!(&result, Err(GenRomProfileError::Ambiguous { .. })),
+            "{result:?}"
+        );
+    });
+}
+
+#[test]
 fn two_ids_sharing_art_take_one_copy_each() {
     // Upstream really does this: two object-event symbols hold identical
     // sheets. Both copies are valid, so the ids are paired off in address
