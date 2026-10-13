@@ -131,6 +131,12 @@ enum ApproachStage {
     /// it already wrote both directions synchronously -- so this stage
     /// exists only to spend that frame boundary.
     PlayerFaceWait,
+    /// `Task_EndTrainerApproach` (`trainer_see.c:655-664`): the followup task
+    /// first dispatches a frame after `SwitchTaskToFollowupFunc`
+    /// (`task.c:148-153`, `task.c:110-122`) and enables the script after that
+    /// frame's script pass (`overworld.c:1465-1470`), so the speech opens one
+    /// frame after this stage.
+    EndTrainerApproach,
     /// `EventScript_ShowTrainerIntroMsg`: `special ShowTrainerIntroSpeech`,
     /// `waitmessage`, `waitbuttonpress`
     /// (`data/scripts/trainer_battle.inc:101-107`).
@@ -286,6 +292,7 @@ impl SightApproach {
             ApproachStage::LockHandoff { .. }
             | ApproachStage::PlayerFacesTrainer
             | ApproachStage::PlayerFaceWait
+            | ApproachStage::EndTrainerApproach
             | ApproachStage::IntroMessage { .. } => {}
         }
     }
@@ -532,6 +539,14 @@ impl OverworldPhase {
             }
             ApproachStage::PlayerFaceWait => {
                 // `ApproachStage::PlayerFaceWait`'s own docs.
+                if let Some(approach) = &mut self.sight_approach {
+                    approach.stage = ApproachStage::EndTrainerApproach;
+                }
+                Some(SightTrainerOutcome::ApproachAdvanced)
+            }
+            ApproachStage::EndTrainerApproach => {
+                // `ApproachStage::EndTrainerApproach`'s own docs: the script
+                // is only enabled after this frame, so no speech yet.
                 if let Some(approach) = &mut self.sight_approach {
                     approach.stage = ApproachStage::IntroMessage { opened: false };
                 }

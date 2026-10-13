@@ -321,6 +321,10 @@ fn create_missing_level(
         }
         Err(source) => return Err(source.into()),
     };
+    // The new entry is synced while its parent is still held: shedding may
+    // later find no slot to reopen the parent for a sync, and a parent off
+    // the destination's ancestry is out of [`sync_shed_parents`]'s reach.
+    let entry_synced = sync_new_entry(created, pin_from, &parent_fd, sync_reopen);
     match reopen_created_level(
         created,
         pin_from,
@@ -337,7 +341,7 @@ fn create_missing_level(
                 name,
                 identity,
                 parent_identity,
-                entry_synced: false,
+                entry_synced,
                 own: Some(std::rc::Rc::clone(&descend)),
             });
             // This level just made the pinned window one longer than
@@ -359,12 +363,34 @@ fn create_missing_level(
                 name,
                 identity,
                 parent_identity,
-                entry_synced: false,
+                entry_synced,
                 own: None,
             });
             Err(source)
         }
         ReopenedLevel::Unverified(source) => Err(source),
+    }
+}
+
+/// Reopens and fsyncs `parent` right after an entry was made in it,
+/// dropping the temporary descriptor at once; with the table full, sheds
+/// pins to find a slot. Answers whether the entry was synced -- best
+/// effort, an unsynced entry is left to the shedding and recovery syncs.
+#[cfg(unix)]
+fn sync_new_entry(
+    created: &mut [CreatedDirectory],
+    pin_from: &mut usize,
+    parent: &std::rc::Rc<std::os::fd::OwnedFd>,
+    sync_reopen: &mut dyn FnMut(&std::os::fd::OwnedFd) -> io::Result<std::os::fd::OwnedFd>,
+) -> bool {
+    loop {
+        match sync_reopen(parent) {
+            Ok(real) => return rustix::fs::fsync(&real).is_ok(),
+            Err(source)
+                if is_out_of_descriptors_io(&source)
+                    && sync_and_shed_outermost_pinned_level(created, pin_from, sync_reopen) => {}
+            Err(_) => return false,
+        }
     }
 }
 
