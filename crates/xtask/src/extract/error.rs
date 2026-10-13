@@ -170,6 +170,22 @@ pub enum ExtractError {
         /// What differs from the expected shape.
         detail: String,
     },
+    /// An ordinary-bag source differs from its upstream graphic's shape.
+    BagAssetMismatch {
+        /// Source path.
+        path: PathBuf,
+        /// What differs from the expected shape.
+        detail: String,
+    },
+    /// A battle-message source does not parse as the pinned upstream shape.
+    BattleMessageSource {
+        /// Source path.
+        path: PathBuf,
+        /// One-based line, or zero when the fault is not tied to one line.
+        line: usize,
+        /// What differs from the expected shape.
+        detail: String,
+    },
     /// A direct-sound sample violates the supported WAV contract.
     Wav(
         /// Source path.
@@ -334,6 +350,12 @@ impl fmt::Display for ExtractError {
             ),
             Self::StarterChooserAssetMismatch { path, detail } => {
                 write!(f, "starter-chooser asset `{}` {detail}", path.display())
+            }
+            Self::BagAssetMismatch { path, detail } => {
+                write!(f, "bag asset `{}` {detail}", path.display())
+            }
+            Self::BattleMessageSource { path, line, detail } => {
+                write!(f, "battle-message source `{}` line {line}: {detail}", path.display())
             }
             Self::Wav(path, error) => {
                 write!(f, "decoding `{}` failed: {error}", path.display())

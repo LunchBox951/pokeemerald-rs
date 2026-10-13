@@ -294,9 +294,13 @@ pub fn trainer_data(trainer: TrainerId) -> Result<&'static TrainerData, BattleEr
         .ok_or(BattleError::UnknownTrainer(trainer))
 }
 
-pub(crate) fn ensure_move_playable(dex: &Dex, move_id: MoveId) -> Result<(), BattleError> {
+pub(crate) fn ensure_move_playable(
+    dex: &Dex,
+    move_id: MoveId,
+    ai_flags: AiFlags,
+) -> Result<(), BattleError> {
     crate::battle::ensure_executable(dex, move_id)?;
-    super::trainer_ai::ensure_scoreable(dex, move_id)
+    super::trainer_ai::ensure_scoreable(dex, move_id, ai_flags)
 }
 
 /// Inputs needed to validate a prospective trainer party member.
@@ -339,7 +343,7 @@ pub fn ensure_trainer_party_startable(
     super::trainer_ai::ensure_supported_flags(data.ai_flags)?;
     for mon in party {
         for move_id in mon.moves {
-            ensure_move_playable(dex, *move_id)?;
+            ensure_move_playable(dex, *move_id, data.ai_flags)?;
         }
     }
     if data.ai_flags.contains(AiFlags::CHECK_BAD_MOVE) {

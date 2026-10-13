@@ -845,6 +845,1566 @@ impl Default for ItemTable {
     }
 }
 
+/// Canonical display text for one item identity.
+///
+/// Text is stored as the game's charmap notation: `\n` is a real line break
+/// and `{POKEBLOCK}` is the stylised five-glyph word, left for the text
+/// encoder to expand. Reserved identities carry their own upstream sentinel
+/// text, never a synthesized label.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ItemDisplayData {
+    /// Bag name (`.name` in `src/data/items.h`).
+    pub name: &'static str,
+    /// Bag description (`src/data/text/item_descriptions.h`).
+    pub description: &'static str,
+}
+
+impl ItemDisplayData {
+    const fn new(name: &'static str, description: &'static str) -> Self {
+        Self { name, description }
+    }
+}
+
+/// Display text for every [`ItemId`], indexed beside the numeric [`ItemTable`].
+#[derive(Debug, Clone, Copy)]
+pub struct ItemDisplayTable {
+    items: &'static [ItemDisplayData; ITEMS_COUNT],
+}
+
+impl ItemDisplayTable {
+    /// Creates a display-table handle.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            items: &ITEM_DISPLAY,
+        }
+    }
+
+    /// Returns the number of item entries.
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        ITEMS_COUNT
+    }
+
+    /// Returns `false`; the canonical display table is never empty.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        false
+    }
+
+    /// Returns the display text stored at `id`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AssetError::UnknownItem`] when `id` is outside the table.
+    pub fn get(&self, id: ItemId) -> Result<&ItemDisplayData, AssetError> {
+        self.items
+            .get(id.index() as usize)
+            .ok_or(AssetError::UnknownItem(id.index()))
+    }
+
+    /// Iterates in ascending [`ItemId`] order.
+    pub fn iter(&self) -> impl Iterator<Item = &ItemDisplayData> {
+        self.items.iter()
+    }
+}
+
+impl Default for ItemDisplayTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Indexed by upstream item number; comments name the `gItems` designator.
+const ITEM_DISPLAY: [ItemDisplayData; ITEMS_COUNT] = [
+    // 0 ITEM_NONE
+    ItemDisplayData::new("????????", "?????"),
+    // 1 ITEM_MASTER_BALL
+    ItemDisplayData::new(
+        "MASTER BALL",
+        "The best BALL that\ncatches a POKéMON\nwithout fail.",
+    ),
+    // 2 ITEM_ULTRA_BALL
+    ItemDisplayData::new(
+        "ULTRA BALL",
+        "A better BALL with\na higher catch rate\nthan a GREAT BALL.",
+    ),
+    // 3 ITEM_GREAT_BALL
+    ItemDisplayData::new(
+        "GREAT BALL",
+        "A good BALL with a\nhigher catch rate\nthan a POKé BALL.",
+    ),
+    // 4 ITEM_POKE_BALL
+    ItemDisplayData::new("POKé BALL", "A tool used for\ncatching wild\nPOKéMON."),
+    // 5 ITEM_SAFARI_BALL
+    ItemDisplayData::new(
+        "SAFARI BALL",
+        "A special BALL that\nis used only in the\nSAFARI ZONE.",
+    ),
+    // 6 ITEM_NET_BALL
+    ItemDisplayData::new(
+        "NET BALL",
+        "A BALL that works\nwell on WATER- and\nBUG-type POKéMON.",
+    ),
+    // 7 ITEM_DIVE_BALL
+    ItemDisplayData::new(
+        "DIVE BALL",
+        "A BALL that works\nbetter on POKéMON\non the ocean floor.",
+    ),
+    // 8 ITEM_NEST_BALL
+    ItemDisplayData::new("NEST BALL", "A BALL that works\nbetter on weaker\nPOKéMON."),
+    // 9 ITEM_REPEAT_BALL
+    ItemDisplayData::new(
+        "REPEAT BALL",
+        "A BALL that works\nbetter on POKéMON\ncaught before.",
+    ),
+    // 10 ITEM_TIMER_BALL
+    ItemDisplayData::new(
+        "TIMER BALL",
+        "A BALL that gains\npower in battles\ntaking many turns.",
+    ),
+    // 11 ITEM_LUXURY_BALL
+    ItemDisplayData::new(
+        "LUXURY BALL",
+        "A cozy BALL that\nmakes POKéMON\nmore friendly.",
+    ),
+    // 12 ITEM_PREMIER_BALL
+    ItemDisplayData::new(
+        "PREMIER BALL",
+        "A rare BALL made\nin commemoration\nof some event.",
+    ),
+    // 13 ITEM_POTION
+    ItemDisplayData::new("POTION", "Restores the HP of\na POKéMON by\n20 points."),
+    // 14 ITEM_ANTIDOTE
+    ItemDisplayData::new("ANTIDOTE", "Heals a poisoned\nPOKéMON."),
+    // 15 ITEM_BURN_HEAL
+    ItemDisplayData::new("BURN HEAL", "Heals POKéMON\nof a burn."),
+    // 16 ITEM_ICE_HEAL
+    ItemDisplayData::new("ICE HEAL", "Defrosts a frozen\nPOKéMON."),
+    // 17 ITEM_AWAKENING
+    ItemDisplayData::new("AWAKENING", "Awakens a sleeping\nPOKéMON."),
+    // 18 ITEM_PARALYZE_HEAL
+    ItemDisplayData::new("PARLYZ HEAL", "Heals a paralyzed\nPOKéMON."),
+    // 19 ITEM_FULL_RESTORE
+    ItemDisplayData::new(
+        "FULL RESTORE",
+        "Fully restores the\nHP and status of a\nPOKéMON.",
+    ),
+    // 20 ITEM_MAX_POTION
+    ItemDisplayData::new("MAX POTION", "Fully restores the\nHP of a POKéMON."),
+    // 21 ITEM_HYPER_POTION
+    ItemDisplayData::new(
+        "HYPER POTION",
+        "Restores the HP of\na POKéMON by\n200 points.",
+    ),
+    // 22 ITEM_SUPER_POTION
+    ItemDisplayData::new(
+        "SUPER POTION",
+        "Restores the HP of\na POKéMON by\n50 points.",
+    ),
+    // 23 ITEM_FULL_HEAL
+    ItemDisplayData::new(
+        "FULL HEAL",
+        "Heals all the\nstatus problems of\none POKéMON.",
+    ),
+    // 24 ITEM_REVIVE
+    ItemDisplayData::new("REVIVE", "Revives a fainted\nPOKéMON with half\nits HP."),
+    // 25 ITEM_MAX_REVIVE
+    ItemDisplayData::new("MAX REVIVE", "Revives a fainted\nPOKéMON with all\nits HP."),
+    // 26 ITEM_FRESH_WATER
+    ItemDisplayData::new(
+        "FRESH WATER",
+        "A mineral water\nthat restores HP\nby 50 points.",
+    ),
+    // 27 ITEM_SODA_POP
+    ItemDisplayData::new(
+        "SODA POP",
+        "A fizzy soda drink\nthat restores HP\nby 60 points.",
+    ),
+    // 28 ITEM_LEMONADE
+    ItemDisplayData::new(
+        "LEMONADE",
+        "A very sweet drink\nthat restores HP\nby 80 points.",
+    ),
+    // 29 ITEM_MOOMOO_MILK
+    ItemDisplayData::new(
+        "MOOMOO MILK",
+        "A nutritious milk\nthat restores HP\nby 100 points.",
+    ),
+    // 30 ITEM_ENERGY_POWDER
+    ItemDisplayData::new(
+        "ENERGYPOWDER",
+        "A bitter powder\nthat restores HP\nby 50 points.",
+    ),
+    // 31 ITEM_ENERGY_ROOT
+    ItemDisplayData::new(
+        "ENERGY ROOT",
+        "A bitter root\nthat restores HP\nby 200 points.",
+    ),
+    // 32 ITEM_HEAL_POWDER
+    ItemDisplayData::new(
+        "HEAL POWDER",
+        "A bitter powder\nthat heals all\nstatus problems.",
+    ),
+    // 33 ITEM_REVIVAL_HERB
+    ItemDisplayData::new(
+        "REVIVAL HERB",
+        "A very bitter herb\nthat revives a\nfainted POKéMON.",
+    ),
+    // 34 ITEM_ETHER
+    ItemDisplayData::new("ETHER", "Restores the PP\nof a selected move\nby 10."),
+    // 35 ITEM_MAX_ETHER
+    ItemDisplayData::new("MAX ETHER", "Fully restores the\nPP of a selected\nmove."),
+    // 36 ITEM_ELIXIR
+    ItemDisplayData::new("ELIXIR", "Restores the PP\nof all moves by 10."),
+    // 37 ITEM_MAX_ELIXIR
+    ItemDisplayData::new(
+        "MAX ELIXIR",
+        "Fully restores the\nPP of a POKéMON's\nmoves.",
+    ),
+    // 38 ITEM_LAVA_COOKIE
+    ItemDisplayData::new(
+        "LAVA COOKIE",
+        "A local specialty\nthat heals all\nstatus problems.",
+    ),
+    // 39 ITEM_BLUE_FLUTE
+    ItemDisplayData::new(
+        "BLUE FLUTE",
+        "A glass flute that\nawakens sleeping\nPOKéMON.",
+    ),
+    // 40 ITEM_YELLOW_FLUTE
+    ItemDisplayData::new(
+        "YELLOW FLUTE",
+        "A glass flute that\nsnaps POKéMON\nout of confusion.",
+    ),
+    // 41 ITEM_RED_FLUTE
+    ItemDisplayData::new(
+        "RED FLUTE",
+        "A glass flute that\nsnaps POKéMON\nout of attraction.",
+    ),
+    // 42 ITEM_BLACK_FLUTE
+    ItemDisplayData::new(
+        "BLACK FLUTE",
+        "A glass flute that\nkeeps away wild\nPOKéMON.",
+    ),
+    // 43 ITEM_WHITE_FLUTE
+    ItemDisplayData::new("WHITE FLUTE", "A glass flute that\nlures wild POKéMON."),
+    // 44 ITEM_BERRY_JUICE
+    ItemDisplayData::new(
+        "BERRY JUICE",
+        "A 100% pure juice\nthat restores HP\nby 20 points.",
+    ),
+    // 45 ITEM_SACRED_ASH
+    ItemDisplayData::new(
+        "SACRED ASH",
+        "Fully revives and\nrestores all\nfainted POKéMON.",
+    ),
+    // 46 ITEM_SHOAL_SALT
+    ItemDisplayData::new(
+        "SHOAL SALT",
+        "Salt obtained from\ndeep inside the\nSHOAL CAVE.",
+    ),
+    // 47 ITEM_SHOAL_SHELL
+    ItemDisplayData::new(
+        "SHOAL SHELL",
+        "A seashell found\ndeep inside the\nSHOAL CAVE.",
+    ),
+    // 48 ITEM_RED_SHARD
+    ItemDisplayData::new(
+        "RED SHARD",
+        "A shard from an\nancient item. Can\nbe sold cheaply.",
+    ),
+    // 49 ITEM_BLUE_SHARD
+    ItemDisplayData::new(
+        "BLUE SHARD",
+        "A shard from an\nancient item. Can\nbe sold cheaply.",
+    ),
+    // 50 ITEM_YELLOW_SHARD
+    ItemDisplayData::new(
+        "YELLOW SHARD",
+        "A shard from an\nancient item. Can\nbe sold cheaply.",
+    ),
+    // 51 ITEM_GREEN_SHARD
+    ItemDisplayData::new(
+        "GREEN SHARD",
+        "A shard from an\nancient item. Can\nbe sold cheaply.",
+    ),
+    // 52 ITEM_034
+    ItemDisplayData::new("????????", "?????"),
+    // 53 ITEM_035
+    ItemDisplayData::new("????????", "?????"),
+    // 54 ITEM_036
+    ItemDisplayData::new("????????", "?????"),
+    // 55 ITEM_037
+    ItemDisplayData::new("????????", "?????"),
+    // 56 ITEM_038
+    ItemDisplayData::new("????????", "?????"),
+    // 57 ITEM_039
+    ItemDisplayData::new("????????", "?????"),
+    // 58 ITEM_03A
+    ItemDisplayData::new("????????", "?????"),
+    // 59 ITEM_03B
+    ItemDisplayData::new("????????", "?????"),
+    // 60 ITEM_03C
+    ItemDisplayData::new("????????", "?????"),
+    // 61 ITEM_03D
+    ItemDisplayData::new("????????", "?????"),
+    // 62 ITEM_03E
+    ItemDisplayData::new("????????", "?????"),
+    // 63 ITEM_HP_UP
+    ItemDisplayData::new("HP UP", "Raises the base HP\nof one POKéMON."),
+    // 64 ITEM_PROTEIN
+    ItemDisplayData::new("PROTEIN", "Raises the base\nATTACK stat of one\nPOKéMON."),
+    // 65 ITEM_IRON
+    ItemDisplayData::new("IRON", "Raises the base\nDEFENSE stat of\none POKéMON."),
+    // 66 ITEM_CARBOS
+    ItemDisplayData::new("CARBOS", "Raises the base\nSPEED stat of one\nPOKéMON."),
+    // 67 ITEM_CALCIUM
+    ItemDisplayData::new("CALCIUM", "Raises the base\nSP. ATK stat of one\nPOKéMON."),
+    // 68 ITEM_RARE_CANDY
+    ItemDisplayData::new("RARE CANDY", "Raises the level\nof a POKéMON by\none."),
+    // 69 ITEM_PP_UP
+    ItemDisplayData::new("PP UP", "Raises the maximum\nPP of a selected\nmove."),
+    // 70 ITEM_ZINC
+    ItemDisplayData::new("ZINC", "Raises the base\nSP. DEF stat of one\nPOKéMON."),
+    // 71 ITEM_PP_MAX
+    ItemDisplayData::new("PP MAX", "Raises the PP of a\nmove to its maximum\npoints."),
+    // 72 ITEM_048
+    ItemDisplayData::new("????????", "?????"),
+    // 73 ITEM_GUARD_SPEC
+    ItemDisplayData::new(
+        "GUARD SPEC.",
+        "Prevents stat\nreduction when\nused in battle.",
+    ),
+    // 74 ITEM_DIRE_HIT
+    ItemDisplayData::new(
+        "DIRE HIT",
+        "Raises the\ncritical-hit ratio\nduring one battle.",
+    ),
+    // 75 ITEM_X_ATTACK
+    ItemDisplayData::new("X ATTACK", "Raises the stat\nATTACK during one\nbattle."),
+    // 76 ITEM_X_DEFEND
+    ItemDisplayData::new("X DEFEND", "Raises the stat\nDEFENSE during one\nbattle."),
+    // 77 ITEM_X_SPEED
+    ItemDisplayData::new("X SPEED", "Raises the stat\nSPEED during one\nbattle."),
+    // 78 ITEM_X_ACCURACY
+    ItemDisplayData::new(
+        "X ACCURACY",
+        "Raises accuracy\nof attack moves\nduring one battle.",
+    ),
+    // 79 ITEM_X_SPECIAL
+    ItemDisplayData::new("X SPECIAL", "Raises the stat\nSP. ATK during one\nbattle."),
+    // 80 ITEM_POKE_DOLL
+    ItemDisplayData::new(
+        "POKé DOLL",
+        "Use to flee from\nany battle with\na wild POKéMON.",
+    ),
+    // 81 ITEM_FLUFFY_TAIL
+    ItemDisplayData::new(
+        "FLUFFY TAIL",
+        "Use to flee from\nany battle with\na wild POKéMON.",
+    ),
+    // 82 ITEM_052
+    ItemDisplayData::new("????????", "?????"),
+    // 83 ITEM_SUPER_REPEL
+    ItemDisplayData::new("SUPER REPEL", "Repels weak wild\nPOKéMON for 200\nsteps."),
+    // 84 ITEM_MAX_REPEL
+    ItemDisplayData::new("MAX REPEL", "Repels weak wild\nPOKéMON for 250\nsteps."),
+    // 85 ITEM_ESCAPE_ROPE
+    ItemDisplayData::new(
+        "ESCAPE ROPE",
+        "Use to escape\ninstantly from a\ncave or a dungeon.",
+    ),
+    // 86 ITEM_REPEL
+    ItemDisplayData::new("REPEL", "Repels weak wild\nPOKéMON for 100\nsteps."),
+    // 87 ITEM_057
+    ItemDisplayData::new("????????", "?????"),
+    // 88 ITEM_058
+    ItemDisplayData::new("????????", "?????"),
+    // 89 ITEM_059
+    ItemDisplayData::new("????????", "?????"),
+    // 90 ITEM_05A
+    ItemDisplayData::new("????????", "?????"),
+    // 91 ITEM_05B
+    ItemDisplayData::new("????????", "?????"),
+    // 92 ITEM_05C
+    ItemDisplayData::new("????????", "?????"),
+    // 93 ITEM_SUN_STONE
+    ItemDisplayData::new("SUN STONE", "Makes certain\nspecies of POKéMON\nevolve."),
+    // 94 ITEM_MOON_STONE
+    ItemDisplayData::new("MOON STONE", "Makes certain\nspecies of POKéMON\nevolve."),
+    // 95 ITEM_FIRE_STONE
+    ItemDisplayData::new("FIRE STONE", "Makes certain\nspecies of POKéMON\nevolve."),
+    // 96 ITEM_THUNDER_STONE
+    ItemDisplayData::new("THUNDERSTONE", "Makes certain\nspecies of POKéMON\nevolve."),
+    // 97 ITEM_WATER_STONE
+    ItemDisplayData::new("WATER STONE", "Makes certain\nspecies of POKéMON\nevolve."),
+    // 98 ITEM_LEAF_STONE
+    ItemDisplayData::new("LEAF STONE", "Makes certain\nspecies of POKéMON\nevolve."),
+    // 99 ITEM_063
+    ItemDisplayData::new("????????", "?????"),
+    // 100 ITEM_064
+    ItemDisplayData::new("????????", "?????"),
+    // 101 ITEM_065
+    ItemDisplayData::new("????????", "?????"),
+    // 102 ITEM_066
+    ItemDisplayData::new("????????", "?????"),
+    // 103 ITEM_TINY_MUSHROOM
+    ItemDisplayData::new(
+        "TINYMUSHROOM",
+        "A plain mushroom\nthat would sell\nat a cheap price.",
+    ),
+    // 104 ITEM_BIG_MUSHROOM
+    ItemDisplayData::new(
+        "BIG MUSHROOM",
+        "A rare mushroom\nthat would sell at a\nhigh price.",
+    ),
+    // 105 ITEM_069
+    ItemDisplayData::new("????????", "?????"),
+    // 106 ITEM_PEARL
+    ItemDisplayData::new(
+        "PEARL",
+        "A pretty pearl\nthat would sell at a\ncheap price.",
+    ),
+    // 107 ITEM_BIG_PEARL
+    ItemDisplayData::new(
+        "BIG PEARL",
+        "A lovely large pearl\nthat would sell at a\nhigh price.",
+    ),
+    // 108 ITEM_STARDUST
+    ItemDisplayData::new(
+        "STARDUST",
+        "Beautiful red sand.\nCan be sold at a\nhigh price.",
+    ),
+    // 109 ITEM_STAR_PIECE
+    ItemDisplayData::new(
+        "STAR PIECE",
+        "A red gem shard.\nIt would sell for a\nvery high price.",
+    ),
+    // 110 ITEM_NUGGET
+    ItemDisplayData::new(
+        "NUGGET",
+        "A nugget of pure\ngold. Can be sold at\na high price.",
+    ),
+    // 111 ITEM_HEART_SCALE
+    ItemDisplayData::new(
+        "HEART SCALE",
+        "A lovely scale.\nIt is coveted by\ncollectors.",
+    ),
+    // 112 ITEM_070
+    ItemDisplayData::new("????????", "?????"),
+    // 113 ITEM_071
+    ItemDisplayData::new("????????", "?????"),
+    // 114 ITEM_072
+    ItemDisplayData::new("????????", "?????"),
+    // 115 ITEM_073
+    ItemDisplayData::new("????????", "?????"),
+    // 116 ITEM_074
+    ItemDisplayData::new("????????", "?????"),
+    // 117 ITEM_075
+    ItemDisplayData::new("????????", "?????"),
+    // 118 ITEM_076
+    ItemDisplayData::new("????????", "?????"),
+    // 119 ITEM_077
+    ItemDisplayData::new("????????", "?????"),
+    // 120 ITEM_078
+    ItemDisplayData::new("????????", "?????"),
+    // 121 ITEM_ORANGE_MAIL
+    ItemDisplayData::new(
+        "ORANGE MAIL",
+        "A ZIGZAGOON-print\nMAIL to be held by\na POKéMON.",
+    ),
+    // 122 ITEM_HARBOR_MAIL
+    ItemDisplayData::new(
+        "HARBOR MAIL",
+        "A WINGULL-print\nMAIL to be held by\na POKéMON.",
+    ),
+    // 123 ITEM_GLITTER_MAIL
+    ItemDisplayData::new(
+        "GLITTER MAIL",
+        "A PIKACHU-print\nMAIL to be held by\na POKéMON.",
+    ),
+    // 124 ITEM_MECH_MAIL
+    ItemDisplayData::new(
+        "MECH MAIL",
+        "A MAGNEMITE-print\nMAIL to be held by\na POKéMON.",
+    ),
+    // 125 ITEM_WOOD_MAIL
+    ItemDisplayData::new(
+        "WOOD MAIL",
+        "A SLAKOTH-print\nMAIL to be held by\na POKéMON.",
+    ),
+    // 126 ITEM_WAVE_MAIL
+    ItemDisplayData::new(
+        "WAVE MAIL",
+        "A WAILMER-print\nMAIL to be held by\na POKéMON.",
+    ),
+    // 127 ITEM_BEAD_MAIL
+    ItemDisplayData::new(
+        "BEAD MAIL",
+        "MAIL featuring a\nsketch of the\nholding POKéMON.",
+    ),
+    // 128 ITEM_SHADOW_MAIL
+    ItemDisplayData::new(
+        "SHADOW MAIL",
+        "A DUSKULL-print\nMAIL to be held by\na POKéMON.",
+    ),
+    // 129 ITEM_TROPIC_MAIL
+    ItemDisplayData::new(
+        "TROPIC MAIL",
+        "A BELLOSSOM-print\nMAIL to be held by\na POKéMON.",
+    ),
+    // 130 ITEM_DREAM_MAIL
+    ItemDisplayData::new(
+        "DREAM MAIL",
+        "MAIL featuring a\nsketch of the\nholding POKéMON.",
+    ),
+    // 131 ITEM_FAB_MAIL
+    ItemDisplayData::new(
+        "FAB MAIL",
+        "A gorgeous-print\nMAIL to be held\nby a POKéMON.",
+    ),
+    // 132 ITEM_RETRO_MAIL
+    ItemDisplayData::new(
+        "RETRO MAIL",
+        "MAIL featuring the\ndrawings of three\nPOKéMON.",
+    ),
+    // 133 ITEM_CHERI_BERRY
+    ItemDisplayData::new(
+        "CHERI BERRY",
+        "A hold item that\nheals paralysis\nin battle.",
+    ),
+    // 134 ITEM_CHESTO_BERRY
+    ItemDisplayData::new(
+        "CHESTO BERRY",
+        "A hold item that\nawakens POKéMON\nin battle.",
+    ),
+    // 135 ITEM_PECHA_BERRY
+    ItemDisplayData::new(
+        "PECHA BERRY",
+        "A hold item that\nheals poisoning\nin battle.",
+    ),
+    // 136 ITEM_RAWST_BERRY
+    ItemDisplayData::new("RAWST BERRY", "A hold item that\nheals a burn in\nbattle."),
+    // 137 ITEM_ASPEAR_BERRY
+    ItemDisplayData::new(
+        "ASPEAR BERRY",
+        "A hold item that\ndefrosts POKéMON\nin battle.",
+    ),
+    // 138 ITEM_LEPPA_BERRY
+    ItemDisplayData::new(
+        "LEPPA BERRY",
+        "A hold item that\nrestores 10 PP in\nbattle.",
+    ),
+    // 139 ITEM_ORAN_BERRY
+    ItemDisplayData::new("ORAN BERRY", "A hold item that\nrestores 10 HP in\nbattle."),
+    // 140 ITEM_PERSIM_BERRY
+    ItemDisplayData::new(
+        "PERSIM BERRY",
+        "A hold item that\nheals confusion\nin battle.",
+    ),
+    // 141 ITEM_LUM_BERRY
+    ItemDisplayData::new(
+        "LUM BERRY",
+        "A hold item that\nheals any status\nproblem in battle.",
+    ),
+    // 142 ITEM_SITRUS_BERRY
+    ItemDisplayData::new(
+        "SITRUS BERRY",
+        "A hold item that\nrestores 30 HP in\nbattle.",
+    ),
+    // 143 ITEM_FIGY_BERRY
+    ItemDisplayData::new(
+        "FIGY BERRY",
+        "A hold item that\nrestores HP but\nmay confuse.",
+    ),
+    // 144 ITEM_WIKI_BERRY
+    ItemDisplayData::new(
+        "WIKI BERRY",
+        "A hold item that\nrestores HP but\nmay confuse.",
+    ),
+    // 145 ITEM_MAGO_BERRY
+    ItemDisplayData::new(
+        "MAGO BERRY",
+        "A hold item that\nrestores HP but\nmay confuse.",
+    ),
+    // 146 ITEM_AGUAV_BERRY
+    ItemDisplayData::new(
+        "AGUAV BERRY",
+        "A hold item that\nrestores HP but\nmay confuse.",
+    ),
+    // 147 ITEM_IAPAPA_BERRY
+    ItemDisplayData::new(
+        "IAPAPA BERRY",
+        "A hold item that\nrestores HP but\nmay confuse.",
+    ),
+    // 148 ITEM_RAZZ_BERRY
+    ItemDisplayData::new(
+        "RAZZ BERRY",
+        "{POKEBLOCK} ingredient.\nPlant in loamy soil\nto grow RAZZ.",
+    ),
+    // 149 ITEM_BLUK_BERRY
+    ItemDisplayData::new(
+        "BLUK BERRY",
+        "{POKEBLOCK} ingredient.\nPlant in loamy soil\nto grow BLUK.",
+    ),
+    // 150 ITEM_NANAB_BERRY
+    ItemDisplayData::new(
+        "NANAB BERRY",
+        "{POKEBLOCK} ingredient.\nPlant in loamy soil\nto grow NANAB.",
+    ),
+    // 151 ITEM_WEPEAR_BERRY
+    ItemDisplayData::new(
+        "WEPEAR BERRY",
+        "{POKEBLOCK} ingredient.\nPlant in loamy soil\nto grow WEPEAR.",
+    ),
+    // 152 ITEM_PINAP_BERRY
+    ItemDisplayData::new(
+        "PINAP BERRY",
+        "{POKEBLOCK} ingredient.\nPlant in loamy soil\nto grow PINAP.",
+    ),
+    // 153 ITEM_POMEG_BERRY
+    ItemDisplayData::new(
+        "POMEG BERRY",
+        "Makes a POKéMON\nfriendly but lowers\nbase HP.",
+    ),
+    // 154 ITEM_KELPSY_BERRY
+    ItemDisplayData::new(
+        "KELPSY BERRY",
+        "Makes a POKéMON\nfriendly but lowers\nbase ATTACK.",
+    ),
+    // 155 ITEM_QUALOT_BERRY
+    ItemDisplayData::new(
+        "QUALOT BERRY",
+        "Makes a POKéMON\nfriendly but lowers\nbase DEFENSE.",
+    ),
+    // 156 ITEM_HONDEW_BERRY
+    ItemDisplayData::new(
+        "HONDEW BERRY",
+        "Makes a POKéMON\nfriendly but lowers\nbase SP. ATK.",
+    ),
+    // 157 ITEM_GREPA_BERRY
+    ItemDisplayData::new(
+        "GREPA BERRY",
+        "Makes a POKéMON\nfriendly but lowers\nbase SP. DEF.",
+    ),
+    // 158 ITEM_TAMATO_BERRY
+    ItemDisplayData::new(
+        "TAMATO BERRY",
+        "Makes a POKéMON\nfriendly but lowers\nbase SPEED.",
+    ),
+    // 159 ITEM_CORNN_BERRY
+    ItemDisplayData::new(
+        "CORNN BERRY",
+        "{POKEBLOCK} ingredient.\nPlant in loamy soil\nto grow CORNN.",
+    ),
+    // 160 ITEM_MAGOST_BERRY
+    ItemDisplayData::new(
+        "MAGOST BERRY",
+        "{POKEBLOCK} ingredient.\nPlant in loamy soil\nto grow MAGOST.",
+    ),
+    // 161 ITEM_RABUTA_BERRY
+    ItemDisplayData::new(
+        "RABUTA BERRY",
+        "{POKEBLOCK} ingredient.\nPlant in loamy soil\nto grow RABUTA.",
+    ),
+    // 162 ITEM_NOMEL_BERRY
+    ItemDisplayData::new(
+        "NOMEL BERRY",
+        "{POKEBLOCK} ingredient.\nPlant in loamy soil\nto grow NOMEL.",
+    ),
+    // 163 ITEM_SPELON_BERRY
+    ItemDisplayData::new(
+        "SPELON BERRY",
+        "{POKEBLOCK} ingredient.\nPlant in loamy soil\nto grow SPELON.",
+    ),
+    // 164 ITEM_PAMTRE_BERRY
+    ItemDisplayData::new(
+        "PAMTRE BERRY",
+        "{POKEBLOCK} ingredient.\nPlant in loamy soil\nto grow PAMTRE.",
+    ),
+    // 165 ITEM_WATMEL_BERRY
+    ItemDisplayData::new(
+        "WATMEL BERRY",
+        "{POKEBLOCK} ingredient.\nPlant in loamy soil\nto grow WATMEL.",
+    ),
+    // 166 ITEM_DURIN_BERRY
+    ItemDisplayData::new(
+        "DURIN BERRY",
+        "{POKEBLOCK} ingredient.\nPlant in loamy soil\nto grow DURIN.",
+    ),
+    // 167 ITEM_BELUE_BERRY
+    ItemDisplayData::new(
+        "BELUE BERRY",
+        "{POKEBLOCK} ingredient.\nPlant in loamy soil\nto grow BELUE.",
+    ),
+    // 168 ITEM_LIECHI_BERRY
+    ItemDisplayData::new(
+        "LIECHI BERRY",
+        "A hold item that\nraises ATTACK in\na pinch.",
+    ),
+    // 169 ITEM_GANLON_BERRY
+    ItemDisplayData::new(
+        "GANLON BERRY",
+        "A hold item that\nraises DEFENSE in\na pinch.",
+    ),
+    // 170 ITEM_SALAC_BERRY
+    ItemDisplayData::new("SALAC BERRY", "A hold item that\nraises SPEED in\na pinch."),
+    // 171 ITEM_PETAYA_BERRY
+    ItemDisplayData::new(
+        "PETAYA BERRY",
+        "A hold item that\nraises SP. ATK in\na pinch.",
+    ),
+    // 172 ITEM_APICOT_BERRY
+    ItemDisplayData::new(
+        "APICOT BERRY",
+        "A hold item that\nraises SP. DEF in\na pinch.",
+    ),
+    // 173 ITEM_LANSAT_BERRY
+    ItemDisplayData::new(
+        "LANSAT BERRY",
+        "A hold item that\nups the critical-\nhit rate in a pinch.",
+    ),
+    // 174 ITEM_STARF_BERRY
+    ItemDisplayData::new(
+        "STARF BERRY",
+        "A hold item that\nsharply boosts a\nstat in a pinch.",
+    ),
+    // 175 ITEM_ENIGMA_BERRY
+    ItemDisplayData::new(
+        "ENIGMA BERRY",
+        "{POKEBLOCK} ingredient.\nPlant in loamy soil\nto grow a mystery.",
+    ),
+    // 176 ITEM_UNUSED_BERRY_1
+    ItemDisplayData::new("????????", "?????"),
+    // 177 ITEM_UNUSED_BERRY_2
+    ItemDisplayData::new("????????", "?????"),
+    // 178 ITEM_UNUSED_BERRY_3
+    ItemDisplayData::new("????????", "?????"),
+    // 179 ITEM_BRIGHT_POWDER
+    ItemDisplayData::new(
+        "BRIGHTPOWDER",
+        "A hold item that\ncasts a glare to\nreduce accuracy.",
+    ),
+    // 180 ITEM_WHITE_HERB
+    ItemDisplayData::new(
+        "WHITE HERB",
+        "A hold item that\nrestores any\nlowered stat.",
+    ),
+    // 181 ITEM_MACHO_BRACE
+    ItemDisplayData::new(
+        "MACHO BRACE",
+        "A hold item that\npromotes growth,\nbut reduces SPEED.",
+    ),
+    // 182 ITEM_EXP_SHARE
+    ItemDisplayData::new(
+        "EXP. SHARE",
+        "A hold item that\ngets EXP. points\nfrom battles.",
+    ),
+    // 183 ITEM_QUICK_CLAW
+    ItemDisplayData::new(
+        "QUICK CLAW",
+        "A hold item that\noccasionally allows\nthe first strike.",
+    ),
+    // 184 ITEM_SOOTHE_BELL
+    ItemDisplayData::new(
+        "SOOTHE BELL",
+        "A hold item that\ncalms spirits and\nfosters friendship.",
+    ),
+    // 185 ITEM_MENTAL_HERB
+    ItemDisplayData::new(
+        "MENTAL HERB",
+        "A hold item that\nsnaps POKéMON out\nof infatuation.",
+    ),
+    // 186 ITEM_CHOICE_BAND
+    ItemDisplayData::new(
+        "CHOICE BAND",
+        "Raises a move's\npower, but permits\nonly that move.",
+    ),
+    // 187 ITEM_KINGS_ROCK
+    ItemDisplayData::new(
+        "KING'S ROCK",
+        "A hold item that\nmay cause flinching\nwhen the foe is hit.",
+    ),
+    // 188 ITEM_SILVER_POWDER
+    ItemDisplayData::new(
+        "SILVERPOWDER",
+        "A hold item that\nraises the power of\nBUG-type moves.",
+    ),
+    // 189 ITEM_AMULET_COIN
+    ItemDisplayData::new(
+        "AMULET COIN",
+        "Doubles money in\nbattle if the\nholder takes part.",
+    ),
+    // 190 ITEM_CLEANSE_TAG
+    ItemDisplayData::new(
+        "CLEANSE TAG",
+        "A hold item that\nhelps repel wild\nPOKéMON.",
+    ),
+    // 191 ITEM_SOUL_DEW
+    ItemDisplayData::new(
+        "SOUL DEW",
+        "Hold item: raises\nSP. ATK & SP. DEF of\nLATIOS & LATIAS.",
+    ),
+    // 192 ITEM_DEEP_SEA_TOOTH
+    ItemDisplayData::new(
+        "DEEPSEATOOTH",
+        "A hold item that\nraises the SP. ATK\nof CLAMPERL.",
+    ),
+    // 193 ITEM_DEEP_SEA_SCALE
+    ItemDisplayData::new(
+        "DEEPSEASCALE",
+        "A hold item that\nraises the SP. DEF\nof CLAMPERL.",
+    ),
+    // 194 ITEM_SMOKE_BALL
+    ItemDisplayData::new(
+        "SMOKE BALL",
+        "A hold item that\nassures fleeing\nfrom wild POKéMON.",
+    ),
+    // 195 ITEM_EVERSTONE
+    ItemDisplayData::new(
+        "EVERSTONE",
+        "A wondrous hold\nitem that prevents\nevolution.",
+    ),
+    // 196 ITEM_FOCUS_BAND
+    ItemDisplayData::new(
+        "FOCUS BAND",
+        "A hold item that\noccasionally\nprevents fainting.",
+    ),
+    // 197 ITEM_LUCKY_EGG
+    ItemDisplayData::new(
+        "LUCKY EGG",
+        "A hold item that\nboosts EXP. points\nearned in battle.",
+    ),
+    // 198 ITEM_SCOPE_LENS
+    ItemDisplayData::new(
+        "SCOPE LENS",
+        "A hold item that\nimproves the\ncritical-hit rate.",
+    ),
+    // 199 ITEM_METAL_COAT
+    ItemDisplayData::new(
+        "METAL COAT",
+        "A hold item that\nraises the power of\nSTEEL-type moves.",
+    ),
+    // 200 ITEM_LEFTOVERS
+    ItemDisplayData::new(
+        "LEFTOVERS",
+        "A hold item that\ngradually restores\nHP in battle.",
+    ),
+    // 201 ITEM_DRAGON_SCALE
+    ItemDisplayData::new(
+        "DRAGON SCALE",
+        "A strange scale\nheld by DRAGON-\ntype POKéMON.",
+    ),
+    // 202 ITEM_LIGHT_BALL
+    ItemDisplayData::new(
+        "LIGHT BALL",
+        "A hold item that\nraises the SP. ATK\nof PIKACHU.",
+    ),
+    // 203 ITEM_SOFT_SAND
+    ItemDisplayData::new(
+        "SOFT SAND",
+        "A hold item that\nraises the power of\nGROUND-type moves.",
+    ),
+    // 204 ITEM_HARD_STONE
+    ItemDisplayData::new(
+        "HARD STONE",
+        "A hold item that\nraises the power of\nROCK-type moves.",
+    ),
+    // 205 ITEM_MIRACLE_SEED
+    ItemDisplayData::new(
+        "MIRACLE SEED",
+        "A hold item that\nraises the power of\nGRASS-type moves.",
+    ),
+    // 206 ITEM_BLACK_GLASSES
+    ItemDisplayData::new(
+        "BLACKGLASSES",
+        "A hold item that\nraises the power of\nDARK-type moves.",
+    ),
+    // 207 ITEM_BLACK_BELT
+    ItemDisplayData::new(
+        "BLACK BELT",
+        "A hold item that\nboosts FIGHTING-\ntype moves.",
+    ),
+    // 208 ITEM_MAGNET
+    ItemDisplayData::new("MAGNET", "A hold item that\nboosts ELECTRIC-\ntype moves."),
+    // 209 ITEM_MYSTIC_WATER
+    ItemDisplayData::new(
+        "MYSTIC WATER",
+        "A hold item that\nraises the power of\nWATER-type moves.",
+    ),
+    // 210 ITEM_SHARP_BEAK
+    ItemDisplayData::new(
+        "SHARP BEAK",
+        "A hold item that\nraises the power of\nFLYING-type moves.",
+    ),
+    // 211 ITEM_POISON_BARB
+    ItemDisplayData::new(
+        "POISON BARB",
+        "A hold item that\nraises the power of\nPOISON-type moves.",
+    ),
+    // 212 ITEM_NEVER_MELT_ICE
+    ItemDisplayData::new(
+        "NEVERMELTICE",
+        "A hold item that\nraises the power of\nICE-type moves.",
+    ),
+    // 213 ITEM_SPELL_TAG
+    ItemDisplayData::new(
+        "SPELL TAG",
+        "A hold item that\nraises the power of\nGHOST-type moves.",
+    ),
+    // 214 ITEM_TWISTED_SPOON
+    ItemDisplayData::new(
+        "TWISTEDSPOON",
+        "A hold item that\nboosts PSYCHIC-\ntype moves.",
+    ),
+    // 215 ITEM_CHARCOAL
+    ItemDisplayData::new(
+        "CHARCOAL",
+        "A hold item that\nraises the power of\nFIRE-type moves.",
+    ),
+    // 216 ITEM_DRAGON_FANG
+    ItemDisplayData::new(
+        "DRAGON FANG",
+        "A hold item that\nraises the power of\nDRAGON-type moves.",
+    ),
+    // 217 ITEM_SILK_SCARF
+    ItemDisplayData::new(
+        "SILK SCARF",
+        "A hold item that\nraises the power of\nNORMAL-type moves.",
+    ),
+    // 218 ITEM_UP_GRADE
+    ItemDisplayData::new("UP-GRADE", "A peculiar box made\nby SILPH CO."),
+    // 219 ITEM_SHELL_BELL
+    ItemDisplayData::new(
+        "SHELL BELL",
+        "A hold item that\nrestores HP upon\nstriking the foe.",
+    ),
+    // 220 ITEM_SEA_INCENSE
+    ItemDisplayData::new(
+        "SEA INCENSE",
+        "A hold item that\nslightly boosts\nWATER-type moves.",
+    ),
+    // 221 ITEM_LAX_INCENSE
+    ItemDisplayData::new(
+        "LAX INCENSE",
+        "A hold item that\nslightly lowers the\nfoe's accuracy.",
+    ),
+    // 222 ITEM_LUCKY_PUNCH
+    ItemDisplayData::new(
+        "LUCKY PUNCH",
+        "A hold item that\nraises CHANSEY's\ncritical-hit rate.",
+    ),
+    // 223 ITEM_METAL_POWDER
+    ItemDisplayData::new("METAL POWDER", "A hold item that\nraises DITTO's\nDEFENSE."),
+    // 224 ITEM_THICK_CLUB
+    ItemDisplayData::new(
+        "THICK CLUB",
+        "A hold item that \nraises CUBONE or\nMAROWAK's ATTACK.",
+    ),
+    // 225 ITEM_STICK
+    ItemDisplayData::new(
+        "STICK",
+        "A hold item that\nraises FARFETCH'D's\ncritical-hit ratio.",
+    ),
+    // 226 ITEM_0E2
+    ItemDisplayData::new("????????", "?????"),
+    // 227 ITEM_0E3
+    ItemDisplayData::new("????????", "?????"),
+    // 228 ITEM_0E4
+    ItemDisplayData::new("????????", "?????"),
+    // 229 ITEM_0E5
+    ItemDisplayData::new("????????", "?????"),
+    // 230 ITEM_0E6
+    ItemDisplayData::new("????????", "?????"),
+    // 231 ITEM_0E7
+    ItemDisplayData::new("????????", "?????"),
+    // 232 ITEM_0E8
+    ItemDisplayData::new("????????", "?????"),
+    // 233 ITEM_0E9
+    ItemDisplayData::new("????????", "?????"),
+    // 234 ITEM_0EA
+    ItemDisplayData::new("????????", "?????"),
+    // 235 ITEM_0EB
+    ItemDisplayData::new("????????", "?????"),
+    // 236 ITEM_0EC
+    ItemDisplayData::new("????????", "?????"),
+    // 237 ITEM_0ED
+    ItemDisplayData::new("????????", "?????"),
+    // 238 ITEM_0EE
+    ItemDisplayData::new("????????", "?????"),
+    // 239 ITEM_0EF
+    ItemDisplayData::new("????????", "?????"),
+    // 240 ITEM_0F0
+    ItemDisplayData::new("????????", "?????"),
+    // 241 ITEM_0F1
+    ItemDisplayData::new("????????", "?????"),
+    // 242 ITEM_0F2
+    ItemDisplayData::new("????????", "?????"),
+    // 243 ITEM_0F3
+    ItemDisplayData::new("????????", "?????"),
+    // 244 ITEM_0F4
+    ItemDisplayData::new("????????", "?????"),
+    // 245 ITEM_0F5
+    ItemDisplayData::new("????????", "?????"),
+    // 246 ITEM_0F6
+    ItemDisplayData::new("????????", "?????"),
+    // 247 ITEM_0F7
+    ItemDisplayData::new("????????", "?????"),
+    // 248 ITEM_0F8
+    ItemDisplayData::new("????????", "?????"),
+    // 249 ITEM_0F9
+    ItemDisplayData::new("????????", "?????"),
+    // 250 ITEM_0FA
+    ItemDisplayData::new("????????", "?????"),
+    // 251 ITEM_0FB
+    ItemDisplayData::new("????????", "?????"),
+    // 252 ITEM_0FC
+    ItemDisplayData::new("????????", "?????"),
+    // 253 ITEM_0FD
+    ItemDisplayData::new("????????", "?????"),
+    // 254 ITEM_RED_SCARF
+    ItemDisplayData::new("RED SCARF", "A hold item that\nraises COOL in\nCONTESTS."),
+    // 255 ITEM_BLUE_SCARF
+    ItemDisplayData::new(
+        "BLUE SCARF",
+        "A hold item that\nraises BEAUTY in\nCONTESTS.",
+    ),
+    // 256 ITEM_PINK_SCARF
+    ItemDisplayData::new("PINK SCARF", "A hold item that\nraises CUTE in\nCONTESTS."),
+    // 257 ITEM_GREEN_SCARF
+    ItemDisplayData::new(
+        "GREEN SCARF",
+        "A hold item that\nraises SMART in\nCONTESTS.",
+    ),
+    // 258 ITEM_YELLOW_SCARF
+    ItemDisplayData::new(
+        "YELLOW SCARF",
+        "A hold item that\nraises TOUGH in\nCONTESTS.",
+    ),
+    // 259 ITEM_MACH_BIKE
+    ItemDisplayData::new(
+        "MACH BIKE",
+        "A folding bicycle\nthat doubles your\nspeed or better.",
+    ),
+    // 260 ITEM_COIN_CASE
+    ItemDisplayData::new("COIN CASE", "A case that holds\nup to 9,999 COINS."),
+    // 261 ITEM_ITEMFINDER
+    ItemDisplayData::new(
+        "ITEMFINDER",
+        "A device that\nsignals an invisible\nitem by sound.",
+    ),
+    // 262 ITEM_OLD_ROD
+    ItemDisplayData::new(
+        "OLD ROD",
+        "Use by any body of\nwater to fish for\nwild POKéMON.",
+    ),
+    // 263 ITEM_GOOD_ROD
+    ItemDisplayData::new(
+        "GOOD ROD",
+        "A decent fishing\nrod for catching\nwild POKéMON.",
+    ),
+    // 264 ITEM_SUPER_ROD
+    ItemDisplayData::new(
+        "SUPER ROD",
+        "The best fishing\nrod for catching\nwild POKéMON.",
+    ),
+    // 265 ITEM_SS_TICKET
+    ItemDisplayData::new(
+        "S.S. TICKET",
+        "The ticket required\nfor sailing on a\nferry.",
+    ),
+    // 266 ITEM_CONTEST_PASS
+    ItemDisplayData::new(
+        "CONTEST PASS",
+        "The pass required\nfor entering\nPOKéMON CONTESTS.",
+    ),
+    // 267 ITEM_10B
+    ItemDisplayData::new("????????", "?????"),
+    // 268 ITEM_WAILMER_PAIL
+    ItemDisplayData::new(
+        "WAILMER PAIL",
+        "A tool used for\nwatering BERRIES\nand plants.",
+    ),
+    // 269 ITEM_DEVON_GOODS
+    ItemDisplayData::new(
+        "DEVON GOODS",
+        "A package that\ncontains DEVON's\nmachine parts.",
+    ),
+    // 270 ITEM_SOOT_SACK
+    ItemDisplayData::new(
+        "SOOT SACK",
+        "A sack used to\ngather and hold\nvolcanic ash.",
+    ),
+    // 271 ITEM_BASEMENT_KEY
+    ItemDisplayData::new(
+        "BASEMENT KEY",
+        "The key for NEW\nMAUVILLE beneath\nMAUVILLE CITY.",
+    ),
+    // 272 ITEM_ACRO_BIKE
+    ItemDisplayData::new(
+        "ACRO BIKE",
+        "A folding bicycle\ncapable of jumps\nand wheelies.",
+    ),
+    // 273 ITEM_POKEBLOCK_CASE
+    ItemDisplayData::new(
+        "{POKEBLOCK} CASE",
+        "A case for holding\n{POKEBLOCK}S made with\na BERRY BLENDER.",
+    ),
+    // 274 ITEM_LETTER
+    ItemDisplayData::new(
+        "LETTER",
+        "A letter to STEVEN\nfrom the PRESIDENT\nof the DEVON CORP.",
+    ),
+    // 275 ITEM_EON_TICKET
+    ItemDisplayData::new(
+        "EON TICKET",
+        "The ticket for a\nferry to a distant\nsouthern island.",
+    ),
+    // 276 ITEM_RED_ORB
+    ItemDisplayData::new(
+        "RED ORB",
+        "A red, glowing orb\nsaid to contain an\nancient power.",
+    ),
+    // 277 ITEM_BLUE_ORB
+    ItemDisplayData::new(
+        "BLUE ORB",
+        "A blue, glowing orb\nsaid to contain an\nancient power.",
+    ),
+    // 278 ITEM_SCANNER
+    ItemDisplayData::new("SCANNER", "A device found\ninside the\nABANDONED SHIP."),
+    // 279 ITEM_GO_GOGGLES
+    ItemDisplayData::new(
+        "GO-GOGGLES",
+        "Nifty goggles that\nprotect eyes from\ndesert sandstorms.",
+    ),
+    // 280 ITEM_METEORITE
+    ItemDisplayData::new("METEORITE", "A meteorite found\nat METEOR FALLS."),
+    // 281 ITEM_ROOM_1_KEY
+    ItemDisplayData::new(
+        "RM. 1 KEY",
+        "A key that opens a\ndoor inside the\nABANDONED SHIP.",
+    ),
+    // 282 ITEM_ROOM_2_KEY
+    ItemDisplayData::new(
+        "RM. 2 KEY",
+        "A key that opens a\ndoor inside the\nABANDONED SHIP.",
+    ),
+    // 283 ITEM_ROOM_4_KEY
+    ItemDisplayData::new(
+        "RM. 4 KEY",
+        "A key that opens a\ndoor inside the\nABANDONED SHIP.",
+    ),
+    // 284 ITEM_ROOM_6_KEY
+    ItemDisplayData::new(
+        "RM. 6 KEY",
+        "A key that opens a\ndoor inside the\nABANDONED SHIP.",
+    ),
+    // 285 ITEM_STORAGE_KEY
+    ItemDisplayData::new(
+        "STORAGE KEY",
+        "The key to the\nstorage inside the\nABANDONED SHIP.",
+    ),
+    // 286 ITEM_ROOT_FOSSIL
+    ItemDisplayData::new(
+        "ROOT FOSSIL",
+        "A fossil of an\nancient, seafloor-\ndwelling POKéMON.",
+    ),
+    // 287 ITEM_CLAW_FOSSIL
+    ItemDisplayData::new(
+        "CLAW FOSSIL",
+        "A fossil of an\nancient, seafloor-\ndwelling POKéMON.",
+    ),
+    // 288 ITEM_DEVON_SCOPE
+    ItemDisplayData::new(
+        "DEVON SCOPE",
+        "A device by DEVON\nthat signals any\nunseeable POKéMON.",
+    ),
+    // 289 ITEM_TM_FOCUS_PUNCH
+    ItemDisplayData::new(
+        "TM01",
+        "Powerful, but makes\nthe user flinch if\nhit by the foe.",
+    ),
+    // 290 ITEM_TM_DRAGON_CLAW
+    ItemDisplayData::new(
+        "TM02",
+        "Hooks and slashes\nthe foe with long,\nsharp claws.",
+    ),
+    // 291 ITEM_TM_WATER_PULSE
+    ItemDisplayData::new("TM03", "Generates an\nultrasonic wave\nthat may confuse."),
+    // 292 ITEM_TM_CALM_MIND
+    ItemDisplayData::new("TM04", "Raises SP. ATK and\nSP. DEF by focusing\nthe mind."),
+    // 293 ITEM_TM_ROAR
+    ItemDisplayData::new(
+        "TM05",
+        "A savage roar that\nmakes the foe flee \nto end the battle.",
+    ),
+    // 294 ITEM_TM_TOXIC
+    ItemDisplayData::new(
+        "TM06",
+        "Poisons the foe\nwith a toxin that\ngradually worsens.",
+    ),
+    // 295 ITEM_TM_HAIL
+    ItemDisplayData::new(
+        "TM07",
+        "Creates a hailstorm\nthat damages all\ntypes except ICE.",
+    ),
+    // 296 ITEM_TM_BULK_UP
+    ItemDisplayData::new(
+        "TM08",
+        "Bulks up the body\nto boost both\nATTACK & DEFENSE.",
+    ),
+    // 297 ITEM_TM_BULLET_SEED
+    ItemDisplayData::new("TM09", "Shoots 2 to 5 seeds\nin a row to strike\nthe foe."),
+    // 298 ITEM_TM_HIDDEN_POWER
+    ItemDisplayData::new("TM10", "The attack power\nvaries among\ndifferent POKéMON."),
+    // 299 ITEM_TM_SUNNY_DAY
+    ItemDisplayData::new("TM11", "Raises the power of\nFIRE-type moves\nfor 5 turns."),
+    // 300 ITEM_TM_TAUNT
+    ItemDisplayData::new("TM12", "Enrages the foe so\nit can only use\nattack moves."),
+    // 301 ITEM_TM_ICE_BEAM
+    ItemDisplayData::new("TM13", "Fires an icy cold\nbeam that may\nfreeze the foe."),
+    // 302 ITEM_TM_BLIZZARD
+    ItemDisplayData::new(
+        "TM14",
+        "A brutal snow-and-\nwind attack that\nmay freeze the foe.",
+    ),
+    // 303 ITEM_TM_HYPER_BEAM
+    ItemDisplayData::new("TM15", "Powerful, but needs\nrecharging the\nnext turn."),
+    // 304 ITEM_TM_LIGHT_SCREEN
+    ItemDisplayData::new(
+        "TM16",
+        "Creates a wall of\nlight that lowers\nSP. ATK damage.",
+    ),
+    // 305 ITEM_TM_PROTECT
+    ItemDisplayData::new(
+        "TM17",
+        "Negates all damage,\nbut may fail if used\nin succession.",
+    ),
+    // 306 ITEM_TM_RAIN_DANCE
+    ItemDisplayData::new(
+        "TM18",
+        "Raises the power of\nWATER-type moves\nfor 5 turns.",
+    ),
+    // 307 ITEM_TM_GIGA_DRAIN
+    ItemDisplayData::new(
+        "TM19",
+        "Recovers half the\nHP of the damage \nthis move inflicts.",
+    ),
+    // 308 ITEM_TM_SAFEGUARD
+    ItemDisplayData::new(
+        "TM20",
+        "Prevents status\nabnormality with a\nmystical power.",
+    ),
+    // 309 ITEM_TM_FRUSTRATION
+    ItemDisplayData::new(
+        "TM21",
+        "The less the user\nlikes you, the more\npowerful this move.",
+    ),
+    // 310 ITEM_TM_SOLAR_BEAM
+    ItemDisplayData::new(
+        "TM22",
+        "Absorbs sunlight in\nthe 1st turn, then\nattacks next turn.",
+    ),
+    // 311 ITEM_TM_IRON_TAIL
+    ItemDisplayData::new(
+        "TM23",
+        "Slams the foe with\na hard tail. It may\nlower DEFENSE.",
+    ),
+    // 312 ITEM_TM_THUNDERBOLT
+    ItemDisplayData::new(
+        "TM24",
+        "A powerful electric\nattack that may\ncause paralysis.",
+    ),
+    // 313 ITEM_TM_THUNDER
+    ItemDisplayData::new(
+        "TM25",
+        "Strikes the foe\nwith a thunderbolt.\nIt may paralyze.",
+    ),
+    // 314 ITEM_TM_EARTHQUAKE
+    ItemDisplayData::new(
+        "TM26",
+        "Causes a quake\nthat has no effect\non flying foes.",
+    ),
+    // 315 ITEM_TM_RETURN
+    ItemDisplayData::new(
+        "TM27",
+        "The more the user\nlikes you, the more\npowerful this move.",
+    ),
+    // 316 ITEM_TM_DIG
+    ItemDisplayData::new(
+        "TM28",
+        "Digs underground\nthe 1st turn, then\nstrikes next turn.",
+    ),
+    // 317 ITEM_TM_PSYCHIC
+    ItemDisplayData::new(
+        "TM29",
+        "A powerful psychic\nattack that may\nlower SP. DEF.",
+    ),
+    // 318 ITEM_TM_SHADOW_BALL
+    ItemDisplayData::new(
+        "TM30",
+        "Hurls a dark lump\nat the foe. It may\nlower SP. DEF.",
+    ),
+    // 319 ITEM_TM_BRICK_BREAK
+    ItemDisplayData::new(
+        "TM31",
+        "Destroys barriers\nlike LIGHT SCREEN\nand causes damage.",
+    ),
+    // 320 ITEM_TM_DOUBLE_TEAM
+    ItemDisplayData::new("TM32", "Creates illusory\ncopies to enhance\nelusiveness."),
+    // 321 ITEM_TM_REFLECT
+    ItemDisplayData::new(
+        "TM33",
+        "Creates a wall of\nlight that weakens\nphysical attacks.",
+    ),
+    // 322 ITEM_TM_SHOCK_WAVE
+    ItemDisplayData::new(
+        "TM34",
+        "Zaps the foe with a\njolt of electricity\nthat never misses.",
+    ),
+    // 323 ITEM_TM_FLAMETHROWER
+    ItemDisplayData::new("TM35", "Looses a stream of\nfire that may burn\nthe foe."),
+    // 324 ITEM_TM_SLUDGE_BOMB
+    ItemDisplayData::new("TM36", "Hurls sludge at the\nfoe. It may poison\nthe foe."),
+    // 325 ITEM_TM_SANDSTORM
+    ItemDisplayData::new(
+        "TM37",
+        "Causes a sandstorm\nthat hits the foe\nover several turns.",
+    ),
+    // 326 ITEM_TM_FIRE_BLAST
+    ItemDisplayData::new("TM38", "A powerful fire\nattack that may\nburn the foe."),
+    // 327 ITEM_TM_ROCK_TOMB
+    ItemDisplayData::new(
+        "TM39",
+        "Stops the foe from\nmoving with rocks.\nMay lower SPEED.",
+    ),
+    // 328 ITEM_TM_AERIAL_ACE
+    ItemDisplayData::new("TM40", "An extremely fast\nattack that can't\nbe avoided."),
+    // 329 ITEM_TM_TORMENT
+    ItemDisplayData::new(
+        "TM41",
+        "Prevents the foe\nfrom using the same\nmove in a row.",
+    ),
+    // 330 ITEM_TM_FACADE
+    ItemDisplayData::new(
+        "TM42",
+        "Raises ATTACK when\npoisoned, burned,\nor paralyzed.",
+    ),
+    // 331 ITEM_TM_SECRET_POWER
+    ItemDisplayData::new(
+        "TM43",
+        "Adds an effect to\nattack depending\non the location.",
+    ),
+    // 332 ITEM_TM_REST
+    ItemDisplayData::new(
+        "TM44",
+        "The user sleeps for\n2 turns to restore\nhealth and status.",
+    ),
+    // 333 ITEM_TM_ATTRACT
+    ItemDisplayData::new(
+        "TM45",
+        "Makes it tough to\nattack a foe of the\nopposite gender.",
+    ),
+    // 334 ITEM_TM_THIEF
+    ItemDisplayData::new(
+        "TM46",
+        "While attacking,\nit may steal the\nfoe's held item.",
+    ),
+    // 335 ITEM_TM_STEEL_WING
+    ItemDisplayData::new(
+        "TM47",
+        "Spreads hard-\nedged wings and\nslams into the foe.",
+    ),
+    // 336 ITEM_TM_SKILL_SWAP
+    ItemDisplayData::new(
+        "TM48",
+        "Switches abilities\nwith the foe on the\nturn this is used.",
+    ),
+    // 337 ITEM_TM_SNATCH
+    ItemDisplayData::new(
+        "TM49",
+        "Steals the effects\nof the move the foe\nis trying to use.",
+    ),
+    // 338 ITEM_TM_OVERHEAT
+    ItemDisplayData::new(
+        "TM50",
+        "Enables full-power\nattack, but sharply\nlowers SP. ATK.",
+    ),
+    // 339 ITEM_HM_CUT
+    ItemDisplayData::new("HM01", "Attacks the foe\nwith sharp blades\nor claws."),
+    // 340 ITEM_HM_FLY
+    ItemDisplayData::new(
+        "HM02",
+        "Flies up on the\nfirst turn, then\nattacks next turn.",
+    ),
+    // 341 ITEM_HM_SURF
+    ItemDisplayData::new(
+        "HM03",
+        "Creates a huge\nwave, then crashes\nit down on the foe.",
+    ),
+    // 342 ITEM_HM_STRENGTH
+    ItemDisplayData::new("HM04", "Builds enormous\npower, then slams\nthe foe."),
+    // 343 ITEM_HM_FLASH
+    ItemDisplayData::new(
+        "HM05",
+        "Looses a powerful\nblast of light that\nreduces accuracy.",
+    ),
+    // 344 ITEM_HM_ROCK_SMASH
+    ItemDisplayData::new(
+        "HM06",
+        "A rock-crushingly\ntough attack that\nmay lower DEFENSE.",
+    ),
+    // 345 ITEM_HM_WATERFALL
+    ItemDisplayData::new(
+        "HM07",
+        "Attacks the foe\nwith enough power\nto climb waterfalls.",
+    ),
+    // 346 ITEM_HM_DIVE
+    ItemDisplayData::new(
+        "HM08",
+        "Dives underwater\nthe 1st turn, then\nattacks next turn.",
+    ),
+    // 347 ITEM_15B
+    ItemDisplayData::new("????????", "?????"),
+    // 348 ITEM_15C
+    ItemDisplayData::new("????????", "?????"),
+    // 349 ITEM_OAKS_PARCEL
+    ItemDisplayData::new(
+        "OAK'S PARCEL",
+        "A parcel for PROF.\nOAK from a POKéMON\nMART's clerk.",
+    ),
+    // 350 ITEM_POKE_FLUTE
+    ItemDisplayData::new(
+        "POKé FLUTE",
+        "A sweet-sounding\nflute that awakens\nPOKéMON.",
+    ),
+    // 351 ITEM_SECRET_KEY
+    ItemDisplayData::new(
+        "SECRET KEY",
+        "The key to the\nCINNABAR ISLAND\nGYM's entrance.",
+    ),
+    // 352 ITEM_BIKE_VOUCHER
+    ItemDisplayData::new(
+        "BIKE VOUCHER",
+        "A voucher for\nobtaining a bicycle\nfrom the BIKE SHOP.",
+    ),
+    // 353 ITEM_GOLD_TEETH
+    ItemDisplayData::new(
+        "GOLD TEETH",
+        "Gold dentures lost\nby the SAFARI\nZONE's WARDEN.",
+    ),
+    // 354 ITEM_OLD_AMBER
+    ItemDisplayData::new(
+        "OLD AMBER",
+        "A stone containing\nthe genes of an\nancient POKéMON.",
+    ),
+    // 355 ITEM_CARD_KEY
+    ItemDisplayData::new(
+        "CARD KEY",
+        "A card-type door\nkey used in SILPH\nCO's office.",
+    ),
+    // 356 ITEM_LIFT_KEY
+    ItemDisplayData::new(
+        "LIFT KEY",
+        "An elevator key\nused in TEAM\nROCKET's HIDEOUT.",
+    ),
+    // 357 ITEM_HELIX_FOSSIL
+    ItemDisplayData::new(
+        "HELIX FOSSIL",
+        "A piece of an\nancient marine\nPOKéMON's seashell.",
+    ),
+    // 358 ITEM_DOME_FOSSIL
+    ItemDisplayData::new(
+        "DOME FOSSIL",
+        "A piece of an\nancient marine\nPOKéMON's shell.",
+    ),
+    // 359 ITEM_SILPH_SCOPE
+    ItemDisplayData::new(
+        "SILPH SCOPE",
+        "SILPH CO's scope\nmakes unseeable\nPOKéMON visible.",
+    ),
+    // 360 ITEM_BICYCLE
+    ItemDisplayData::new(
+        "BICYCLE",
+        "A folding bicycle\nthat is faster than\nthe RUNNING SHOES.",
+    ),
+    // 361 ITEM_TOWN_MAP
+    ItemDisplayData::new(
+        "TOWN MAP",
+        "Can be viewed\nanytime. Shows your\npresent location.",
+    ),
+    // 362 ITEM_VS_SEEKER
+    ItemDisplayData::new(
+        "VS SEEKER",
+        "A rechargeable unit\nthat flags battle-\nready TRAINERS.",
+    ),
+    // 363 ITEM_FAME_CHECKER
+    ItemDisplayData::new(
+        "FAME CHECKER",
+        "Stores information\non famous people\nfor instant recall.",
+    ),
+    // 364 ITEM_TM_CASE
+    ItemDisplayData::new("TM CASE", "A convenient case \nthat holds TMs and\nHMs."),
+    // 365 ITEM_BERRY_POUCH
+    ItemDisplayData::new(
+        "BERRY POUCH",
+        "A convenient\ncontainer that\nholds BERRIES.",
+    ),
+    // 366 ITEM_TEACHY_TV
+    ItemDisplayData::new(
+        "TEACHY TV",
+        "A TV set tuned to\nan advice program\nfor TRAINERS.",
+    ),
+    // 367 ITEM_TRI_PASS
+    ItemDisplayData::new(
+        "TRI-PASS",
+        "A pass for ferries\nbetween ONE, TWO,\nand THREE ISLAND.",
+    ),
+    // 368 ITEM_RAINBOW_PASS
+    ItemDisplayData::new(
+        "RAINBOW PASS",
+        "For ferries serving\nVERMILION and the\nSEVII ISLANDS.",
+    ),
+    // 369 ITEM_TEA
+    ItemDisplayData::new("TEA", "A thirst-quenching\ntea prepared by an\nold lady."),
+    // 370 ITEM_MYSTIC_TICKET
+    ItemDisplayData::new(
+        "MYSTICTICKET",
+        "A ticket required\nto board the ship\nto NAVEL ROCK.",
+    ),
+    // 371 ITEM_AURORA_TICKET
+    ItemDisplayData::new(
+        "AURORATICKET",
+        "A ticket required\nto board the ship\nto BIRTH ISLAND.",
+    ),
+    // 372 ITEM_POWDER_JAR
+    ItemDisplayData::new(
+        "POWDER JAR",
+        "Stores BERRY\nPOWDER made using\na BERRY CRUSHER.",
+    ),
+    // 373 ITEM_RUBY
+    ItemDisplayData::new(
+        "RUBY",
+        "An exquisite, red-\nglowing gem that\nsymbolizes passion.",
+    ),
+    // 374 ITEM_SAPPHIRE
+    ItemDisplayData::new(
+        "SAPPHIRE",
+        "A brilliant blue gem\nthat symbolizes\nhonesty.",
+    ),
+    // 375 ITEM_MAGMA_EMBLEM
+    ItemDisplayData::new(
+        "MAGMA EMBLEM",
+        "A medal-like item in\nthe same shape as\nTEAM MAGMA's mark.",
+    ),
+    // 376 ITEM_OLD_SEA_MAP
+    ItemDisplayData::new(
+        "OLD SEA MAP",
+        "A faded sea chart\nthat shows the way\nto a certain island.",
+    ),
+];
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1114,6 +2674,88 @@ mod tests {
             format!("{:016x}", fnv1a64(&render_table_bytes())),
             "61fa401adfd526b4",
             "item table diverges from the canonical upstream rows",
+        );
+    }
+}
+
+#[cfg(test)]
+mod display_tests {
+    use super::{ItemDisplayTable, ItemId, ITEMS_COUNT};
+    use crate::error::AssetError;
+
+    const END: u16 = 377;
+
+    fn text(id: u16) -> (&'static str, &'static str) {
+        let item = *ItemDisplayTable::new().get(ItemId(id)).unwrap();
+        (item.name, item.description)
+    }
+
+    #[test]
+    fn every_identity_resolves_and_the_next_is_unknown() {
+        let table = ItemDisplayTable::new();
+        assert_eq!(table.len(), ITEMS_COUNT);
+        assert_eq!(usize::from(END), ITEMS_COUNT);
+        assert!(!table.is_empty());
+        assert_eq!(table.iter().count(), ITEMS_COUNT);
+        for id in 0..END {
+            let item = table.get(ItemId(id)).unwrap();
+            assert!(
+                !item.name.is_empty() && !item.description.is_empty(),
+                "{id}"
+            );
+        }
+        assert_eq!(
+            table.get(ItemId(END)).unwrap_err(),
+            AssetError::UnknownItem(END)
+        );
+    }
+
+    #[test]
+    fn none_and_reserved_identities_keep_upstream_sentinel_text() {
+        for id in [0u16, 52, 53, 62] {
+            assert_eq!(text(id), ("????????", "?????"), "{id}");
+        }
+        let sentinels = ItemDisplayTable::new()
+            .iter()
+            .filter(|item| item.name == "????????")
+            .count();
+        assert_eq!(sentinels, 68);
+    }
+
+    #[test]
+    fn identity_maps_to_its_upstream_name_and_description() {
+        assert_eq!(
+            text(1),
+            (
+                "MASTER BALL",
+                "The best BALL that\ncatches a POKéMON\nwithout fail."
+            )
+        );
+        assert_eq!(text(289).0, "TM01");
+        assert_eq!(text(339).0, "HM01");
+        assert_eq!(text(346).0, "HM08");
+        assert_eq!(
+            text(376),
+            (
+                "OLD SEA MAP",
+                "A faded sea chart\nthat shows the way\nto a certain island."
+            )
+        );
+    }
+
+    #[test]
+    fn game_text_keeps_newlines_accents_and_composite_glyph_tokens() {
+        let berry = text(148).1;
+        assert!(berry.starts_with("{POKEBLOCK} ingredient.\n"), "{berry}");
+        let table = ItemDisplayTable::new();
+        assert!(table.iter().all(|item| !item.description.contains('\\')));
+        assert!(table.iter().any(|item| item.description.contains('é')));
+        assert_eq!(
+            table
+                .iter()
+                .filter(|item| item.description.contains("{POKEBLOCK}"))
+                .count(),
+            16
         );
     }
 }

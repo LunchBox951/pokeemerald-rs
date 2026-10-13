@@ -47,7 +47,7 @@
     "data/battle_ai_scripts.s": {
       "artifacts": {
         "AI_CheckBadMove": {
-          "reason": "data/battle_ai_scripts.s:51-104,277-312 (#1311, #1861). Modelled for the three admitted move effects: EFFECT_HIT screens chart immunity (:58), then Wonder Guard (:59,:63; AI STAB normalization at src/battle_ai_script_commands.c:1528-1556, so a merely-2x hit is exempt but a 4x hit is not) and Levitate on a Ground move (:64); every admitted effect then checks the nine-move Soundproof list (:93,:95-103), which omits Hyper Voice unlike executions ten-move sSoundMovesTable; EFFECT_ATTACK_DOWN screens the target stage floor (:278), Hyper Cutter (:279-280), then the Clear Body/White Smoke check shared with EFFECT_DEFENSE_DOWN (:308-311); EFFECT_DEFENSE_DOWN screens its own floor (:284) first. Every get_ability AI_TARGET read is restricted to a single-ability player target or one whose true ability is Shadow Tag, Magnet Pull, or Arena Trap (read directly ahead of the guess, src/battle_ai_script_commands.c:1368-1376) and draws no RNG. Any other two-ability player target is refused before construction or scoring (BattleError::AmbiguousPlayerAbility), whichever slot it holds, because battle-history revelation and the Random() & 1 guess (src/battle_ai_script_commands.c:1350-1396) are not modelled. That refusal applies only when the trainer carries AI_FLAG_CHECK_BAD_MOVE and some non-fainted party member still has a PP-positive move: a flagless trainer never runs this script, and an all-spent battler is diverted to Struggle before the AI reads any ability (src/battle_main.c:4183-4191), with PP never refilling in battle. Regression tests in trainer_ai.rs pin Wonder Guard, Hyper Cutter (Pinsir), Clear Body (Regirock), and Soundproof-but-not-Hyper-Voice (Mr. Mime) targets through choose_trainer_action with draw counts free of ability reads, the two-ability refusal, the Arena Trap admission, the flagless admission, and the all-spent admission. STILL not modelled: Volt Absorb/Water Absorb/Flash Fire (:60-62) and Keen Eye (only reachable via EFFECT_ACCURACY_DOWN); execution models no absorb ability either, so the AI and execution stay consistent. Also still deferred: the ~90 other if_effect handlers in the :104-216 chain. The Levitate branch has no admitted Ground-type EFFECT_HIT move in the current dex, so it is pinned by a direct unit test of the wired predicate.",
+          "reason": "data/battle_ai_scripts.s:51-104,277-312 (#1311, #1861, #1862). The prologue is modelled in script order (score_bad_move_prologue): get_how_powerful_move_is gates the chart/ability block (power 0/1 or an sIgnoredPowerfulMoveEffects effect jumps straight to Soundproof; Fissure/Horn Drill bypass the gate, src/battle_ai_script_commands.c:1174-1239), then chart immunity (-10, terminates), then Volt Absorb/Electric, Water Absorb/Water, Flash Fire/Fire (-12, terminates), Wonder Guard (-10 unless the AI-normalized effectiveness is exactly 2x; a 4x hit is not exempt, :1528-1556) and Levitate on a Ground move (-10), then the nine-move Soundproof list (-10, terminates before any if_effect; omits Hyper Voice unlike executions sSoundMovesTable). Dual-type folding keeps Cmd_if_type_effectiveness ordering and its zero-resurrection quirk (:1515-1556). Exactly thirteen audited rows are classified unchanged after the prologue because none appears in the :105-214 if_effect chain: EFFECT_HIT, ABSORB, POISON_HIT, ALWAYS_HIT, MULTI_HIT, DRAGON_RAGE, HIGH_CRITICAL, SPEED_DOWN_HIT, EVASION_DOWN_HIT, VITAL_THROW, SPLASH, QUICK_ATTACK, CHARGE; any unlisted effect stays refused. ensure_scoreable is flag-aware: those rows are admitted for a CHECK_BAD_MOVE-only trainer and refused when CHECK_VIABILITY would take an unported branch (ABSORB, ALWAYS_HIT, HIGH_CRITICAL, SPEED_DOWN_HIT, VITAL_THROW; :655,666,686,706,708) or TRY_TO_FAINT would (QUICK_ATTACK +2, :2629-2634); EFFECT_CHARGE is also refused under TRY_TO_FAINT, the one script that reads simulated damage (if_can_faint, :2618), because estimated_damage omits the AI_CalcDmg Charge doubling (src/battle_script_commands.c:1306-1316); AI_CheckViability neither dispatches EFFECT_CHARGE nor reads damage (:619-743), so a CHECK_VIABILITY trainer admits it. Execution still lacks Volt Absorb/Water Absorb/Flash Fire absorption, so those cancellations are scored but a sole absorbed move still executes (executor stays the authority); admission is validated before the four simulated-damage draws. The stat guards remain: EFFECT_ATTACK_DOWN screens the stage floor (:278), Hyper Cutter (:279-280), then Clear Body/White Smoke (:308-311) shared with EFFECT_DEFENSE_DOWN (:284). Every get_ability AI_TARGET read is restricted to a single-ability target or a true Shadow Tag/Magnet Pull/Arena Trap (read directly ahead of the guess, :1368-1376) and draws no RNG; any other two-ability target is refused (BattleError::AmbiguousPlayerAbility) because battle history and the Random() & 1 guess (:1350-1396) are not modelled, including the boundary that upstream BATTLE_HISTORY->abilities[0] can hold a field-effect ability the port models no events for. Execution still gates what runs: no EVASION_DOWN_HIT move exists in the dex, and SPEED_DOWN_HIT, HIGH_CRITICAL etc. stay subject to ensure_executable. STILL deferred: the ~90 other if_effect handler bodies in the :104-216 chain (status, stat-stage, and the rest), Keen Eye, and the CHECK_VIABILITY/TRY_TO_FAINT branches of the refused rows. The parent artifact stays pending.",
           "rust_target": "crates/battle/src/battle/trainer_ai.rs",
           "spec": "S-6",
           "status": "stubbed"
@@ -11843,6 +11843,32 @@
       "status": "pending"
     },
     "data/text/pc_transfer.inc": {
+      "artifacts": {
+        "gText_PkmnTransferredLanettesPC": {
+          "reason": "Assembly-authored gBattleStringsTable target: its .string bytes are lexed from data/text/pc_transfer.inc by the battle-message extractor (EXTERNAL_LABELS) and emitted into the battle-message/table pack entry as raw token data, matching the four slots src/battle_message.c#gBattleStringsTable records as external. The parent file stays pending: the rest of its strings are not extracted.",
+          "rust_target": "crates/xtask/src/extract/battle_message.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "gText_PkmnTransferredLanettesPCBoxFull": {
+          "reason": "Assembly-authored gBattleStringsTable target: its .string bytes are lexed from data/text/pc_transfer.inc by the battle-message extractor (EXTERNAL_LABELS) and emitted into the battle-message/table pack entry as raw token data, matching the four slots src/battle_message.c#gBattleStringsTable records as external. The parent file stays pending: the rest of its strings are not extracted.",
+          "rust_target": "crates/xtask/src/extract/battle_message.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "gText_PkmnTransferredSomeonesPC": {
+          "reason": "Assembly-authored gBattleStringsTable target: its .string bytes are lexed from data/text/pc_transfer.inc by the battle-message extractor (EXTERNAL_LABELS) and emitted into the battle-message/table pack entry as raw token data, matching the four slots src/battle_message.c#gBattleStringsTable records as external. The parent file stays pending: the rest of its strings are not extracted.",
+          "rust_target": "crates/xtask/src/extract/battle_message.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "gText_PkmnTransferredSomeonesPCBoxFull": {
+          "reason": "Assembly-authored gBattleStringsTable target: its .string bytes are lexed from data/text/pc_transfer.inc by the battle-message extractor (EXTERNAL_LABELS) and emitted into the battle-message/table pack entry as raw token data, matching the four slots src/battle_message.c#gBattleStringsTable records as external. The parent file stays pending: the rest of its strings are not extracted.",
+          "rust_target": "crates/xtask/src/extract/battle_message.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "data.text",
       "kind": "file",
       "spec_owner": "S-5",
@@ -12353,6 +12379,68 @@
       "status": "pending"
     },
     "graphics/bag": {
+      "artifacts": {
+        "bag.pal": {
+          "reason": "Ordinary-bag source transcoded to a validated typed pack entry; Pyramid and Berry Tag sources remain pending.",
+          "rust_target": "crates/xtask/src/extract/bag.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "bag_female.png": {
+          "reason": "Ordinary-bag source transcoded to a validated typed pack entry; Pyramid and Berry Tag sources remain pending.",
+          "rust_target": "crates/xtask/src/extract/bag.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "bag_male.png": {
+          "reason": "Ordinary-bag source transcoded to a validated typed pack entry; Pyramid and Berry Tag sources remain pending.",
+          "rust_target": "crates/xtask/src/extract/bag.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "hm.png": {
+          "reason": "Ordinary-bag source transcoded to a validated typed pack entry; Pyramid and Berry Tag sources remain pending.",
+          "rust_target": "crates/xtask/src/extract/bag.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "menu.bin": {
+          "reason": "Ordinary-bag source transcoded to a validated typed pack entry; Pyramid and Berry Tag sources remain pending.",
+          "rust_target": "crates/xtask/src/extract/bag.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "menu.png": {
+          "reason": "Ordinary-bag source transcoded to a validated typed pack entry; Pyramid and Berry Tag sources remain pending.",
+          "rust_target": "crates/xtask/src/extract/bag.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "menu_female.pal": {
+          "reason": "Ordinary-bag source transcoded to a validated typed pack entry; Pyramid and Berry Tag sources remain pending.",
+          "rust_target": "crates/xtask/src/extract/bag.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "menu_male.pal": {
+          "reason": "Ordinary-bag source transcoded to a validated typed pack entry; Pyramid and Berry Tag sources remain pending.",
+          "rust_target": "crates/xtask/src/extract/bag.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "rotating_ball.png": {
+          "reason": "Ordinary-bag source transcoded to a validated typed pack entry; Pyramid and Berry Tag sources remain pending.",
+          "rust_target": "crates/xtask/src/extract/bag.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "select_button.png": {
+          "reason": "Ordinary-bag source transcoded to a validated typed pack entry; Pyramid and Berry Tag sources remain pending.",
+          "rust_target": "crates/xtask/src/extract/bag.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.ui",
       "kind": "dir",
       "spec_owner": "S-4",
@@ -12530,1313 +12618,3773 @@
       "spec_owner": "S-4",
       "status": "pending"
     },
+    "graphics/items/icon_palettes/acro_bike.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/aguav_berry.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/amulet_coin.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/antidote.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/apicot_berry.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/aspear_berry.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/aurora_ticket.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/awakening.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/bead_mail.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/belue_berry.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/berry_juice.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/berry_pouch.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/bicycle.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/bike_voucher.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/black_flute.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/black_type_enhancing_item.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/blue_flute.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/blue_orb.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/blue_scarf.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/blue_shard.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/bluk_berry.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/bright_powder.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/burn_heal.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/calcium.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/carbos.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/card_key.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/charcoal.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/cheri_berry.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/chesto_berry.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/choice_band.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/cleanse_tag.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/coin_case.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/contest_pass.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/cornn_berry.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/dark_tm_hm.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/deep_sea_scale.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/deep_sea_tooth.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/devon_goods.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/devon_scope.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/dire_hit.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/dive_ball.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/dragon_fang.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/dragon_scale.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/dragon_tm_hm.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/dream_mail.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/durin_berry.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/electric_tm_hm.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/elixir.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/energy_powder.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/energy_root.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/enigma_berry.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/eon_ticket.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/escape_rope.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/ether.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/everstone.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/exp_share.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/fab_mail.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/fame_checker.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/fighting_tm_hm.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/figy_berry.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/fire_stone.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/fire_tm_hm.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/fluffy_tail.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/flying_tm_hm.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/focus_band.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/fresh_water.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/full_heal.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/full_restore.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/ganlon_berry.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/ghost_tm_hm.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/glitter_mail.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/go_goggles.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/gold_teeth.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/good_rod.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/grass_tm_hm.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/great_ball.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/green_scarf.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/green_shard.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/grepa_berry.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/ground_tm_hm.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/guard_spec.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/harbor_mail.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/hard_stone.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/heal_powder.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/heart_scale.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/hoenn_fossil.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/hondew_berry.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/hp_up.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/hyper_potion.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/iapapa_berry.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/ice_heal.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/ice_tm_hm.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/iron.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/itemfinder.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/kanto_fossil.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/kelpsy_berry.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/key.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/kings_rock.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/lansat_berry.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/lava_cookie_and_letter.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/lax_incense.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/leaf_stone.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/leftovers.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/lemonade.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/leppa_berry.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/liechi_berry.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/light_ball.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/lucky_egg.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/lucky_punch.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/lum_berry.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/luxury_ball.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/mach_bike.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/macho_brace.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/magma_emblem.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/magnet.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/mago_berry.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/magost_berry.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/master_ball.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/max_elixir.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/max_ether.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/max_potion.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/max_repel.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/mech_mail.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/mental_herb.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/metal_coat.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/metal_powder.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/meteorite.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/miracle_seed.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/moomoo_milk.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/moon_stone.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/mushroom.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/mystic_ticket.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/mystic_water.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/nanab_berry.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/nest_ball.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/net_ball.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/never_melt_ice.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/nomel_berry.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/normal_tm_hm.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/nugget.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/oaks_parcel.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/old_amber.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/old_key.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/old_rod.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/old_sea_map.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/oran_berry.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/orange_mail.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/pamtre_berry.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/paralyze_heal.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/pearl.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/pecha_berry.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/persim_berry.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/petaya_berry.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/pinap_berry.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/pink_scarf.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/poison_barb.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/poison_tm_hm.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/poke_ball.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/poke_doll.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/poke_flute.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/pokeblock_case.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/pomeg_berry.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/potion.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/powder_jar.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/pp_max.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/pp_up.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/protein.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/psychic_tm_hm.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/qualot_berry.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/question_mark.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/quick_claw.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/rabuta_berry.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/rainbow_pass.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/rare_candy.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/rawst_berry.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/razz_berry.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/red_flute.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/red_orb.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/red_scarf.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/red_shard.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/repeat_ball.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/repel.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/retro_mail.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/return_to_field_arrow.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/revival_herb.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/revive.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/rock_tm_hm.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/ruby.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/sacred_ash.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/safari_ball.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/salac_berry.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/sapphire.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/scanner.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/scope_lens.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/sea_incense.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/secret_key.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/shadow_mail.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/sharp_beak.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/shell.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/shoal_salt.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/silk_scarf.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/silph_scope.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/silver_powder.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/sitrus_berry.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/smoke_ball.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/soda_pop.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/soft_sand.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/soot_sack.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/soothe_bell.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/soul_dew.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/spell_tag.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/spelon_berry.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/ss_ticket.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/star.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/starf_berry.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/steel_tm_hm.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/stick.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/sun_stone.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/super_potion.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/super_repel.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/super_rod.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/tamato_berry.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/tea.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/teachy_tv.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/thick_club.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/thunder_stone.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/tm_case.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/town_map.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/tri_pass.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/tropic_mail.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/twisted_spoon.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/ultra_ball.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/up_grade.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/vs_seeker.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/wailmer_pail.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/water_stone.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/water_tm_hm.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/watmel_berry.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/wave_mail.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/wepear_berry.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/white_flute.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/white_herb.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/wiki_berry.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/wood_mail.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/x_accuracy.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/x_attack.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/x_defend.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/x_special.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/x_speed.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/yellow_flute.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/yellow_scarf.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/yellow_shard.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/items/icon_palettes/zinc.pal": {
+      "category": "graphics.item",
+      "kind": "file",
+      "reason": "Selected by gItemIconTable; JASC palette transcoded to bag/item-icon/palette with 16 colours validated.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
     "graphics/items/icons/acro_bike.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/aguav_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/amulet_coin.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/antidote.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/apicot_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/aspear_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/aurora_ticket.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/basement_key.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/battle_stat_item.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/bead_mail.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/belue_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/berry_juice.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/berry_pouch.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/bicycle.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/big_mushroom.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/big_pearl.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/bike_voucher.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/black_belt.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/black_glasses.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/bluk_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/bright_powder.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/card_key.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/charcoal.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/cheri_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/chesto_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/choice_band.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/claw_fossil.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/cleanse_tag.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/coin_case.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/contest_pass.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/cornn_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/deep_sea_scale.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/deep_sea_tooth.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/devon_goods.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/devon_scope.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/dive_ball.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/dome_fossil.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/dragon_fang.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/dragon_scale.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/dream_mail.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/durin_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/energy_root.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/enigma_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/eon_ticket.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/escape_rope.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/ether.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/everstone.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/exp_share.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/fab_mail.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/fame_checker.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/figy_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/fire_stone.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/fluffy_tail.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/flute.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/focus_band.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/fresh_water.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/full_heal.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/ganlon_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/gem.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/glitter_mail.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/go_goggles.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/gold_teeth.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/good_rod.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/great_ball.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/grepa_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/harbor_mail.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/hard_stone.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/heart_scale.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/helix_fossil.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/hm.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/hondew_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/hp_up.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/iapapa_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/in_battle_herb.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/itemfinder.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/kelpsy_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/kings_rock.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/lansat_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/large_potion.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/lava_cookie.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/lax_incense.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/leaf_stone.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/leftovers.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/lemonade.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/leppa_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/letter.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/liechi_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/lift_key.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/light_ball.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/lucky_egg.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/lucky_punch.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/lum_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/luxury_ball.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/mach_bike.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/macho_brace.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/magma_emblem.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/magnet.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/mago_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/magost_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/master_ball.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/max_revive.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/mech_mail.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/metal_coat.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/metal_powder.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/meteorite.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/miracle_seed.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/moomoo_milk.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/moon_stone.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/mystic_ticket.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/mystic_water.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/nanab_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/nest_ball.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/net_ball.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/never_melt_ice.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/nomel_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/nugget.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/oaks_parcel.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/old_amber.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/old_rod.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/old_sea_map.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/oran_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/orange_mail.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/orb.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/pamtre_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/pearl.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/pecha_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/persim_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/petaya_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/pinap_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/poison_barb.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/poke_ball.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/poke_doll.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/poke_flute.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/pokeblock_case.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/pomeg_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/potion.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/powder.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/powder_jar.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/pp_max.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/pp_up.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/premier_ball.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/qualot_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/question_mark.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/quick_claw.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/rabuta_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/rainbow_pass.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/rare_candy.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/rawst_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/razz_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/repeat_ball.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/repel.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/retro_mail.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/return_to_field_arrow.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/revival_herb.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/revive.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/room1_key.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/room2_key.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/room4_key.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/room6_key.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/root_fossil.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/sacred_ash.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/safari_ball.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/salac_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/scanner.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/scarf.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/scope_lens.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/sea_incense.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/secret_key.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/shadow_mail.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/shard.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/sharp_beak.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/shell_bell.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/shoal_shell.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/silk_scarf.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/silph_scope.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/silver_powder.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/sitrus_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/smoke_ball.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/soda_pop.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/soft_sand.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/soot_sack.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/soothe_bell.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/soul_dew.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/spell_tag.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/spelon_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/ss_ticket.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/star_piece.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/stardust.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/starf_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/status_heal.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/stick.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/storage_key.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/sun_stone.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/super_rod.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/tamato_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/tea.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/teachy_tv.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/thick_club.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/thunder_stone.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/timer_ball.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/tiny_mushroom.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/tm.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/tm_case.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/town_map.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/tri_pass.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/tropic_mail.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/twisted_spoon.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/ultra_ball.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/up_grade.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/vitamin.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/vs_seeker.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/wailmer_pail.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/water_stone.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/watmel_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/wave_mail.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/wepear_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/wiki_berry.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/items/icons/wood_mail.png": {
       "category": "graphics.item",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Selected by gItemIconTable; indexed PNG transcoded to bag/item-icon/image with its independently selected palette.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/link": {
       "category": "graphics.ui",
@@ -18546,6 +21094,14 @@
       "status": "pending"
     },
     "include/pokedex.h": {
+      "artifacts": {
+        "PokedexEntry": {
+          "reason": "struct PokedexEntry (include/pokedex.h:21-32) is the shape of crate::pokedex::PokedexEntry: categoryName, description, height, weight, pokemonScale, pokemonOffset, trainerScale and trainerOffset carried as owned strings and u16/i16 fields; the offsets read signed because upstream writes negative literals into the u16 fields and reads them signed at src/pokedex.c:3777, and the unused u16 padding field is omitted. Codec in pokedex/codec.rs, pinned by pokedex/tests.rs. The parent header stays pending: its prototypes and the other declarations are not ported, and the extracted data lands with the xtask extractor child (issue #2017).",
+          "rust_target": "crates/assets/src/pokedex.rs",
+          "spec": "S-4",
+          "status": "rewritten"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
@@ -24663,10 +27219,22 @@
     },
     "src/battle_message.c": {
       "artifacts": {
+        "BufferStringBattle-template-payloads": {
+          "reason": "Only raw payloads reached by INTROMSG, INTROSENDOUT, RETURNMON, SWITCHINMON, USEDMOVE, and BATTLEEND are extracted: 49 direct templates plus type-move and helper text fragments; selection, buffer mutation, and expansion are deferred.",
+          "rust_target": "crates/xtask/src/extract/battle_message.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
         "gAbsorbDrainStringIds": {
           "reason": "battle_message.c:1120-:1124, both entries: B_MSG_ABSORB (STRINGID_PKMNENERGYDRAINED) and B_MSG_ABSORB_OOZE (STRINGID_ITSUCKEDLIQUIDOOZE), carried as the two distinct BattleEvent variants Drained and LiquidOoze rather than as a string table -- this crate has no text renderer, so the event vocabulary is where a message identity lives. BattleScript_EffectAbsorb picks exactly one of the two (data/battle_scripts_1.s:346 vs :350) and never prints both, which crates/battle/tests/turn_engine/pipelines.rs pins.",
           "rust_target": "crates/battle/src/battle/events.rs",
           "spec": "S-6",
+          "status": "ported"
+        },
+        "gBattleStringsTable": {
+          "reason": "The full 369-slot table, including four external PC-transfer strings, is canonical raw token data only; request selection and placeholder expansion are deferred.",
+          "rust_target": "crates/xtask/src/extract/battle_message.rs",
+          "spec": "S-4",
           "status": "ported"
         }
       },
@@ -25553,7 +28121,10 @@
     "src/data/graphics/items.h": {
       "category": "code.header",
       "kind": "file",
-      "status": "pending"
+      "reason": "Declarations for the 218 icon PNGs and 253 icon palettes, all selected by gItemIconTable; each file is registered and ported individually.",
+      "rust_target": "crates/xtask/src/extract/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "src/data/graphics/mail.h": {
       "category": "code.header",
@@ -25588,10 +28159,19 @@
     "src/data/item_icon_table.h": {
       "category": "code.header",
       "kind": "file",
-      "status": "pending"
+      "reason": "All 378 icon rows, including reserved rows and the list-end arrow, are extracted and exposed by BagAssets::item_icon.",
+      "rust_target": "crates/assets/src/pack/bag.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "src/data/items.h": {
       "artifacts": {
+        "gItems_display": {
+          "reason": "Canonical names and descriptions for all 377 identities, including upstream sentinel text for NONE and reserved rows; use-function pointers remain pending.",
+          "rust_target": "crates/assets/src/items.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
         "gItems_numeric": {
           "reason": "gItems numeric/enum fields (id, price, hold effect+param, pocket, type, battle usage, importance, registrability, secondaryId) for all 377 entries; name/description/use-func pointers remain pending",
           "rust_target": "crates/assets/src/items.rs",
@@ -26050,7 +28630,10 @@
     "src/data/text/item_descriptions.h": {
       "category": "code.header",
       "kind": "file",
-      "status": "pending"
+      "reason": "All 310 description definitions are represented in ItemDisplayTable with real newlines and the POKEBLOCK glyph token.",
+      "rust_target": "crates/assets/src/items.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "src/data/text/match_call_messages.h": {
       "category": "code.header",
@@ -26949,6 +29532,14 @@
       "status": "pending"
     },
     "src/graphics.c": {
+      "artifacts": {
+        "ordinary_bag_graphics": {
+          "reason": "Bag screen, tilemap, sex palettes, animation sheets, bag palette, and HM mark extracted; other graphics remain pending.",
+          "rust_target": "crates/xtask/src/extract/bag.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -27038,16 +29629,40 @@
       "status": "pending"
     },
     "src/item_icon.c": {
+      "artifacts": {
+        "GetItemIconPicOrPalette": {
+          "reason": "BagAssets::item_icon preserves identity indexing, the list-end arrow, and out-of-range NONE normalization; sprite allocation remains pending.",
+          "rust_target": "crates/assets/src/pack/bag.rs",
+          "spec": "S-4",
+          "status": "rewritten"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
     },
     "src/item_menu.c": {
+      "artifacts": {
+        "ordinary_bag_graphics": {
+          "reason": "Registered-select mark extracted; navigation and rendering remain pending.",
+          "rust_target": "crates/xtask/src/extract/bag.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
     },
     "src/item_menu_icons.c": {
+      "artifacts": {
+        "ordinary_bag_graphics": {
+          "reason": "Rotating ball image and embedded palette extracted; sprite behaviour and Berry Tag remain pending.",
+          "rust_target": "crates/xtask/src/extract/bag.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -27307,7 +29922,13 @@
           "status": "stubbed"
         },
         "ply_patt": {
-          "reason": "ply_patt (m4a_1.s:851-869) pushes the return cursor onto track->patternStack and jumps to the target; at the engine's depth of 3 it branches to ply_fine without reading the target. Reimplemented twice: the runtime Track::call_pattern in crates/audio/src/sequencer.rs (three-entry pattern_return_stack, a fourth nested PATT ends the track), and the extraction decoder in crates/rom-import/src/domains/song.rs, which expands PATT/PEND inline for the pack and terminates a fourth-level PATT as Fine without reading its pointer (PR #1437, issue #1388).",
+          "reason": "ply_patt (m4a_1.s:851-869) pushes the return cursor onto track->patternStack and jumps to the target; at the engine's depth of 3 it branches to ply_fine without reading the target. Reimplemented three times: the runtime Track::call_pattern in crates/audio/src/sequencer.rs (three-entry pattern_return_stack, a fourth nested PATT ends the track), the sequence decoder's Event::Pattern/PatternEnd arms in crates/audio/src/sequence/decode.rs (the depth check in crates/audio/src/sequence/reader.rs runs before the operand read), and the extraction decoder in crates/rom-import/src/domains/song.rs, which expands PATT/PEND inline for the pack and terminates a fourth-level PATT as Fine without reading its pointer.",
+          "rust_target": "crates/audio/src/sequencer.rs",
+          "spec": "S-3",
+          "status": "rewritten"
+        },
+        "ply_rept": {
+          "reason": "ply_rept (m4a_1.s:880-910) counts repeats per track: a zero count jumps to the target without touching the counter; a positive count increments first, jumps while the counter is below the count, and resets to zero after the final pass, falling through without using the target. Reimplemented twice: the runtime Track::repeat in crates/audio/src/sequencer.rs (lines 216-228, citing m4a_1.s:880-910), and the sequence decoder's Event::Repeat arm in crates/audio/src/sequence/decode.rs (lines 116-131), which keeps the same counter and validates the target only when the repeat is taken.",
           "rust_target": "crates/audio/src/sequencer.rs",
           "spec": "S-3",
           "status": "rewritten"
