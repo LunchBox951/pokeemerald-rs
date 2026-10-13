@@ -241,8 +241,12 @@ fn build_palette_entry(
 
 fn push_raw_entry(path: &Path, id: String, writer: &mut PackWriter) -> Result<(), ExtractError> {
     let payload = read_file(path)?;
-    writer.push(pack_format::raw_entry(id, payload));
+    push_raw_bytes(id, payload, writer);
     Ok(())
+}
+
+fn push_raw_bytes(id: String, payload: Vec<u8>, writer: &mut PackWriter) {
+    writer.push(pack_format::raw_entry(id, payload));
 }
 
 fn collect_pngs_sorted(dir: &Path) -> Result<Vec<PathBuf>, ExtractError> {
