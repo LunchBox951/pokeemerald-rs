@@ -632,6 +632,7 @@ fn from_pack_with_options_repairs_an_out_of_range_text_speed() {
         NewGameOptions {
             text_speed: RAW_OUT_OF_RANGE,
             window_frame_type: WINDOW_FRAME,
+            ..NewGameOptions::DEFAULT
         },
     )
     .expect("the synthetic pack has both required entries");
@@ -641,6 +642,7 @@ fn from_pack_with_options_repairs_an_out_of_range_text_speed() {
         NewGameOptions {
             text_speed: 1,
             window_frame_type: WINDOW_FRAME,
+            ..NewGameOptions::DEFAULT
         },
         "an out-of-range optionsTextSpeed must be repaired to MID before a \
          NEW GAME carries it onward, exactly like GetPlayerTextSpeedDelay's \

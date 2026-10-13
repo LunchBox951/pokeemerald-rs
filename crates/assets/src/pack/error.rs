@@ -4,6 +4,9 @@ use std::fmt;
 use std::path::PathBuf;
 
 use crate::audio::AudioError;
+use crate::pokedex::PokedexError;
+
+use super::battle_message::BattleMessageError;
 
 use super::format::FORMAT_VERSION;
 
@@ -82,6 +85,13 @@ pub enum PackError {
         /// What differs from the expected shape.
         detail: String,
     },
+    /// An ordinary-bag entry differs from the upstream graphic's shape.
+    MalformedBagAsset {
+        /// Asset id.
+        id: String,
+        /// What differs from the expected shape.
+        detail: String,
+    },
     /// A raw audio entry failed its schema's structural decode.
     AudioDecode {
         /// Audio asset id.
@@ -89,9 +99,27 @@ pub enum PackError {
         /// Underlying schema error.
         source: AudioError,
     },
+    /// The battle-message table failed its schema's structural decode.
+    BattleMessageDecode {
+        /// Table asset id.
+        id: String,
+        /// Underlying schema error.
+        source: BattleMessageError,
+    },
+    /// The `pokedex/data` entry failed its schema's decode.
+    PokedexDecode {
+        /// Pokédex asset id.
+        id: String,
+        /// Underlying schema error.
+        source: PokedexError,
+    },
 }
 
 impl fmt::Display for PackError {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one exhaustive match keeps every pack diagnostic together"
+    )]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NotFound(path) => write!(
@@ -173,10 +201,25 @@ impl fmt::Display for PackError {
             Self::MalformedStarterAsset { id, detail } => {
                 write!(f, "asset pack: starter-chooser entry `{id}` {detail}")
             }
+            Self::MalformedBagAsset { id, detail } => {
+                write!(f, "asset pack: bag entry `{id}` {detail}")
+            }
             Self::AudioDecode { id, source } => {
                 write!(
                     f,
                     "asset pack: audio entry `{id}` failed to decode: {source}"
+                )
+            }
+            Self::BattleMessageDecode { id, source } => {
+                write!(
+                    f,
+                    "asset pack: battle-message entry `{id}` failed to decode: {source}"
+                )
+            }
+            Self::PokedexDecode { id, source } => {
+                write!(
+                    f,
+                    "asset pack: Pokédex entry `{id}` failed to decode: {source}"
                 )
             }
         }
@@ -188,6 +231,8 @@ impl std::error::Error for PackError {
         // An exhaustive match forces new source-carrying variants to choose their error chain.
         match self {
             Self::AudioDecode { source, .. } => Some(source),
+            Self::BattleMessageDecode { source, .. } => Some(source),
+            Self::PokedexDecode { source, .. } => Some(source),
             Self::NotFound(_)
             | Self::ReadFailed(..)
             | Self::BadMagic
@@ -200,7 +245,8 @@ impl std::error::Error for PackError {
             | Self::TextWindowImageWrongDimensions { .. }
             | Self::MalformedTextWindowImage { .. }
             | Self::TextWindowPixelOutsidePalette { .. }
-            | Self::MalformedStarterAsset { .. } => None,
+            | Self::MalformedStarterAsset { .. }
+            | Self::MalformedBagAsset { .. } => None,
         }
     }
 }

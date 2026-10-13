@@ -184,6 +184,7 @@ fn fill_invalid_chunks_with_encrypted_defaults(
 
 fn clear_key_encrypted_fields(block1: &mut SaveBlock1) {
     block1.money = 0;
+    block1.game_stats.clear();
     for slot in block1
         .bag
         .items
