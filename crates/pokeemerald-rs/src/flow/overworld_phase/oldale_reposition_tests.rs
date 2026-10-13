@@ -1,16 +1,5 @@
-//! Tests for `oldale_town_npc_reposition`:
-//! `OldaleTown_OnTransition`'s `setobjectxyperm`/`setobjectmovementtype`
-//! pair, gated by `FLAG_ADVENTURE_STARTED`/`FLAG_RECEIVED_POTION_OLDALE`,
-//! resolved once when [`crate::overworld::load_room`] loads Oldale Town and
-//! held by the scene for the rest of the visit. This file's phases load
-//! from a fresh save, so both flags start unset and both NPCs start at
-//! their moved tiles.
-//!
-//! Mirrors `route103_rival_tests`' own "real events over a synthetic grid"
-//! split (that module's doc comment): a fabricated flat, open room loaded
-//! with the *real* resolved `MAP_OLDALE_TOWN` object events, so the tests
-//! need no local pack -- plus one `#[ignore]`d real-pack walk that proves
-//! the same claims against the bundled map's own real layout.
+//! `OldaleTown_OnTransition` flag-gates the footprints-man and mart-employee
+//! `setobjectxyperm`/`setobjectmovementtype` pair on entry (`data/maps/OldaleTown/scripts.inc:2,8-25`).
 
 use assets::{MapId, MovementType};
 use engine::event_data::EventData;
@@ -22,22 +11,18 @@ use crate::overworld::oldale_town_npc_reposition;
 
 use super::OverworldPhase;
 
-/// `MAP_OLDALE_TOWN`, used throughout this file.
 const OLDALE_TOWN: MapId = MapId("MAP_OLDALE_TOWN");
 
-/// The footprints man's own post-`OldaleTown_OnTransition` tile --
-/// `setobjectxyperm LOCALID_FOOTPRINTS_MAN, 1, 11`
-/// (`oldale_town_npc_reposition`'s own module docs).
+/// `setobjectxyperm LOCALID_FOOTPRINTS_MAN, 1, 11` (`scripts.inc:18-21`).
 const FOOTPRINTS_MAN_NEW_TILE: (i32, i32) = (1, 11);
 
-/// The footprints man's bare map.json tile, now vacated.
+/// Authored footprints-man tile (`data/maps/OldaleTown/map.json:61-66`).
 const FOOTPRINTS_MAN_OLD_TILE: (i32, i32) = (8, 9);
 
-/// The mart employee's own post-`OldaleTown_OnTransition` tile --
-/// `setobjectxyperm LOCALID_OLDALE_MART_EMPLOYEE, 13, 14`.
+/// `setobjectxyperm LOCALID_OLDALE_MART_EMPLOYEE, 13, 14` (`scripts.inc:23-26`).
 const MART_EMPLOYEE_NEW_TILE: (i32, i32) = (13, 14);
 
-/// The mart employee's bare map.json tile, now vacated.
+/// Authored mart-employee tile (`data/maps/OldaleTown/map.json:47-52`).
 const MART_EMPLOYEE_OLD_TILE: (i32, i32) = (13, 7);
 
 /// `FLAG_ADVENTURE_STARTED` (`include/constants/flags.h:136`).
@@ -46,18 +31,16 @@ const FLAG_ADVENTURE_STARTED: u16 = 0x74;
 /// `FLAG_RECEIVED_POTION_OLDALE` (`include/constants/flags.h:154`).
 const FLAG_RECEIVED_POTION_OLDALE: u16 = 0x84;
 
-/// An [`OverworldPhase`] over a **synthetic** flat, open 20x20 room loaded
-/// with the *real* `MAP_OLDALE_TOWN` object events a fresh save resolves
-/// (module docs) -- large enough to hold every tile this file exercises,
-/// with no interior collision of its own, so any blocked step below is
-/// caused by an object event, never the grid.
-fn oldale_phase(player: PlayerState) -> OverworldPhase {
-    oldale_phase_with(player, &EventData::new())
+const PLAYER_PALETTE_BANK: u8 = 0;
+
+fn fresh_save_oldale_on_open_grid(player: PlayerState) -> OverworldPhase {
+    oldale_on_open_grid_with_entry_flags(player, &EventData::new())
 }
 
-/// [`oldale_phase`], with its object events resolved against `event_data`
-/// instead of a fresh store.
-fn oldale_phase_with(player: PlayerState, event_data: &EventData) -> OverworldPhase {
+fn oldale_on_open_grid_with_entry_flags(
+    player: PlayerState,
+    event_data: &EventData,
+) -> OverworldPhase {
     let events = oldale_town_npc_reposition::resolve_map_events(OLDALE_TOWN, event_data)
         .expect("MAP_OLDALE_TOWN must resolve");
     let events: &'static assets::MapEvents = Box::leak(Box::new(events));
@@ -74,14 +57,8 @@ fn oldale_phase_with(player: PlayerState, event_data: &EventData) -> OverworldPh
     )
 }
 
-// -- The reposition, pinned directly at the data source --------------------
-
-/// The object events [`crate::overworld::load_room`] resolves on a fresh
-/// save carry the footprints man's and mart employee's post-script
-/// positions and facings -- the scene holds them for the visit, and both
-/// the collision tests below and NPC rendering draw from them.
 #[test]
-fn the_footprints_man_and_mart_employee_resolve_at_their_post_transition_tiles() {
+fn fresh_save_resolves_both_oldale_npc_tiles_and_facings() {
     let map_events = oldale_town_npc_reposition::resolve_map_events(OLDALE_TOWN, &EventData::new())
         .expect("MAP_OLDALE_TOWN must resolve");
 
@@ -92,9 +69,14 @@ fn the_footprints_man_and_mart_employee_resolve_at_their_post_transition_tiles()
         .expect("Oldale Town's object events include the footprints man");
     assert_eq!(
         (i32::from(footprints_man.x), i32::from(footprints_man.y)),
-        FOOTPRINTS_MAN_NEW_TILE
+        FOOTPRINTS_MAN_NEW_TILE,
+        "the footprints man's resolved tile"
     );
-    assert_eq!(footprints_man.movement_type, MovementType::FaceLeft);
+    assert_eq!(
+        footprints_man.movement_type,
+        MovementType::FaceLeft,
+        "the footprints man's resolved facing"
+    );
 
     let mart_employee = map_events
         .object_events
@@ -103,20 +85,21 @@ fn the_footprints_man_and_mart_employee_resolve_at_their_post_transition_tiles()
         .expect("Oldale Town's object events include the mart employee");
     assert_eq!(
         (i32::from(mart_employee.x), i32::from(mart_employee.y)),
-        MART_EMPLOYEE_NEW_TILE
+        MART_EMPLOYEE_NEW_TILE,
+        "the mart employee's resolved tile"
     );
-    assert_eq!(mart_employee.movement_type, MovementType::FaceDown);
+    assert_eq!(
+        mart_employee.movement_type,
+        MovementType::FaceDown,
+        "the mart employee's resolved facing"
+    );
 }
 
-// -- Collision, over a synthetic grid ---------------------------------------
-
-/// The footprints man's new tile, `(1, 11)`, blocks the player -- approached
-/// from the west, facing east, the only direction that keeps the whole walk
-/// inside the 20x20 fixture.
 #[test]
 fn the_footprints_mans_new_tile_blocks_the_player() {
     let (fx, fy) = FOOTPRINTS_MAN_NEW_TILE;
-    let mut phase = oldale_phase(PlayerState::new((fx - 1, fy), 3, Direction::East));
+    let mut phase =
+        fresh_save_oldale_on_open_grid(PlayerState::new((fx - 1, fy), 3, Direction::East));
 
     phase.step(held(Buttons::RIGHT));
 
@@ -131,12 +114,11 @@ fn the_footprints_mans_new_tile_blocks_the_player() {
     );
 }
 
-/// The complement: the footprints man's *old*, bare map.json tile,
-/// `(8, 9)`, is vacated and therefore walkable.
 #[test]
 fn the_footprints_mans_old_tile_is_walkable() {
     let (fx, fy) = FOOTPRINTS_MAN_OLD_TILE;
-    let mut phase = oldale_phase(PlayerState::new((fx - 1, fy), 3, Direction::East));
+    let mut phase =
+        fresh_save_oldale_on_open_grid(PlayerState::new((fx - 1, fy), 3, Direction::East));
 
     phase.step(held(Buttons::RIGHT));
 
@@ -151,12 +133,11 @@ fn the_footprints_mans_old_tile_is_walkable() {
     );
 }
 
-/// The mart employee's new tile, `(13, 14)`, blocks the player -- approached
-/// from the north, facing south.
 #[test]
 fn the_mart_employees_new_tile_blocks_the_player() {
     let (ex, ey) = MART_EMPLOYEE_NEW_TILE;
-    let mut phase = oldale_phase(PlayerState::new((ex, ey - 1), 3, Direction::South));
+    let mut phase =
+        fresh_save_oldale_on_open_grid(PlayerState::new((ex, ey - 1), 3, Direction::South));
 
     phase.step(held(Buttons::DOWN));
 
@@ -165,15 +146,17 @@ fn the_mart_employees_new_tile_blocks_the_player() {
         (ex, ey - 1),
         "the mart employee's new tile must block the step"
     );
-    assert!(!phase.player.in_transit());
+    assert!(
+        !phase.player.in_transit(),
+        "a blocked step must not start a walk animation"
+    );
 }
 
-/// The complement: the mart employee's *old*, bare map.json tile,
-/// `(13, 7)`, is vacated and therefore walkable.
 #[test]
 fn the_mart_employees_old_tile_is_walkable() {
     let (ex, ey) = MART_EMPLOYEE_OLD_TILE;
-    let mut phase = oldale_phase(PlayerState::new((ex, ey - 1), 3, Direction::South));
+    let mut phase =
+        fresh_save_oldale_on_open_grid(PlayerState::new((ex, ey - 1), 3, Direction::South));
 
     phase.step(held(Buttons::DOWN));
 
@@ -182,19 +165,17 @@ fn the_mart_employees_old_tile_is_walkable() {
         (ex, ey),
         "nothing stands on the mart employee's vacated map.json tile"
     );
-    assert!(phase.player.in_transit());
+    assert!(
+        phase.player.in_transit(),
+        "a walkable step starts a walk animation"
+    );
 }
 
-// -- The entry-time placement holds for the visit --------------------------
-
-/// `OldaleTown_OnTransition` runs on map entry only
-/// (`data/maps/OldaleTown/scripts.inc:4-9`), so setting either flag while
-/// Oldale Town stays loaded must leave collision, interaction, and rendering
-/// on the placement resolved at entry until the next transition.
 #[test]
-fn a_flag_set_mid_visit_leaves_the_entry_time_placement_in_force() {
+fn mid_visit_flags_preserve_entry_collision_interaction_and_rendering() {
     let (ex, ey) = MART_EMPLOYEE_NEW_TILE;
-    let mut phase = oldale_phase(PlayerState::new((ex, ey - 1), 3, Direction::South));
+    let mut phase =
+        fresh_save_oldale_on_open_grid(PlayerState::new((ex, ey - 1), 3, Direction::South));
     let entry_oam = phase
         .scene
         .oam_entries_and_bg_scroll(&phase.player, &phase.save1.event_data)
@@ -232,13 +213,12 @@ fn a_flag_set_mid_visit_leaves_the_entry_time_placement_in_force() {
         let (oam, _) = phase
             .scene
             .oam_entries_and_bg_scroll(&phase.player, &phase.save1.event_data);
-        // Depth ordering moves the player's slot; its palette bank is 0.
         let player = *oam
             .iter()
-            .find(|entry| entry.palette_bank() == 0)
-            .expect("the player is drawn");
+            .find(|entry| entry.palette_bank() == PLAYER_PALETTE_BANK)
+            .expect("the player is found by palette bank, independent of depth-ordered OAM slot");
         oam.into_iter().find(|entry| {
-            entry.palette_bank() != 0
+            entry.palette_bank() != PLAYER_PALETTE_BANK
                 && entry.x() == player.x()
                 && i32::from(entry.y()) == i32::from(player.y()) + 16
         })
@@ -264,7 +244,8 @@ fn a_flag_set_mid_visit_leaves_the_entry_time_placement_in_force() {
     );
 
     let (fx, fy) = FOOTPRINTS_MAN_OLD_TILE;
-    let mut phase = oldale_phase(PlayerState::new((fx - 1, fy), 3, Direction::East));
+    let mut phase =
+        fresh_save_oldale_on_open_grid(PlayerState::new((fx - 1, fy), 3, Direction::East));
     phase
         .save1
         .event_data
@@ -278,17 +259,10 @@ fn a_flag_set_mid_visit_leaves_the_entry_time_placement_in_force() {
     );
 }
 
-// -- The same four claims, against the real bundled map -------------------
-
-/// The real-pack counterpart of the four synthetic-grid tests above,
-/// walked over Oldale Town's own real layout (`cargo xtask extract`
-/// required) rather than a fabricated flat grid -- proves the two new
-/// blockers and the two vacated tiles are genuine, not an artifact of the
-/// synthetic fixture's own unconditional walkability.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_the_repositioned_npcs_block_and_vacate_their_real_map_tiles() {
-    let scene = crate::overworld::load_room(
+    let _ = crate::overworld::load_room(
         OLDALE_TOWN,
         crate::overworld::PlayerCharacter::Brendan,
         &engine::event_data::EventData::new(),
@@ -308,11 +282,6 @@ fn real_pack_the_repositioned_npcs_block_and_vacate_their_real_map_tiles() {
             None,
         )
     };
-    // `scene` above is unused once `approach` builds its own per-call scene
-    // (`OverworldPhase::for_test` takes ownership) -- kept only so a
-    // pack-load failure surfaces with the same message before any of the
-    // four sub-cases run.
-    drop(scene);
 
     let (fx, fy) = FOOTPRINTS_MAN_NEW_TILE;
     let mut phase = approach((fx - 1, fy), Direction::East);
@@ -351,14 +320,9 @@ fn real_pack_the_repositioned_npcs_block_and_vacate_their_real_map_tiles() {
     );
 }
 
-// -- The phase's live object events ------------------------------------------
-
-/// The phase seeds one live entry per resolved Oldale template, in
-/// declaration order, from the scene's own transitioned placements
-/// (`OldaleTown_OnTransition`) rather than the authored map.json tiles.
 #[test]
 fn the_phase_seeds_live_object_events_from_the_transitioned_placements() {
-    let phase = oldale_phase(PlayerState::new((5, 5), 3, Direction::South));
+    let phase = fresh_save_oldale_on_open_grid(PlayerState::new((5, 5), 3, Direction::South));
     let resolved = phase
         .scene
         .map_events(OLDALE_TOWN)
@@ -372,16 +336,22 @@ fn the_phase_seeds_live_object_events_from_the_transitioned_placements() {
                 .object_events
                 .get(template.local_id)
                 .expect("every template seeds a live entry");
-            assert!(std::ptr::eq(entry.template(), template));
+            assert!(
+                std::ptr::eq(entry.template(), template),
+                "each live entry must point at the scene's resolved template"
+            );
             entry.state().position()
         })
         .collect();
-    let authored: Vec<_> = resolved
+    let resolved_positions: Vec<_> = resolved
         .object_events
         .iter()
         .map(|template| (i32::from(template.x), i32::from(template.y)))
         .collect();
-    assert_eq!(seeded, authored, "seeded in declaration order");
+    assert_eq!(
+        seeded, resolved_positions,
+        "live entries must start at the transitioned template positions, in declaration order"
+    );
 
     let footprints_man = phase
         .object_events
@@ -403,11 +373,9 @@ fn the_phase_seeds_live_object_events_from_the_transitioned_placements() {
     assert_eq!((mart_employee, mart_vacated), (1, 0));
 }
 
-/// A flag set mid-visit does not reseed the collection: it is fixed at
-/// entry, like the scene's own events.
 #[test]
 fn a_flag_set_mid_visit_does_not_reseed_the_live_object_events() {
-    let mut phase = oldale_phase(PlayerState::new((5, 5), 3, Direction::South));
+    let mut phase = fresh_save_oldale_on_open_grid(PlayerState::new((5, 5), 3, Direction::South));
     phase
         .save1
         .event_data
@@ -423,15 +391,14 @@ fn a_flag_set_mid_visit_does_not_reseed_the_live_object_events() {
             .object_events
             .object_events_at(FOOTPRINTS_MAN_NEW_TILE.0, FOOTPRINTS_MAN_NEW_TILE.1, 3)
             .count(),
-        1
+        1,
+        "mid-visit flags must preserve the footprints man's entry placement"
     );
 }
 
-/// A failed transition leaves the current collection, live edits
-/// included, exactly as it was.
 #[test]
-fn a_failed_warp_leaves_the_live_object_events_intact() {
-    let mut phase = oldale_phase(PlayerState::new((5, 5), 3, Direction::South));
+fn failed_warp_preserves_live_object_event_edits() {
+    let mut phase = fresh_save_oldale_on_open_grid(PlayerState::new((5, 5), 3, Direction::South));
     let local_id = phase
         .object_events
         .object_events_at(FOOTPRINTS_MAN_NEW_TILE.0, FOOTPRINTS_MAN_NEW_TILE.1, 3)
@@ -456,16 +423,13 @@ fn a_failed_warp_leaves_the_live_object_events_intact() {
             .expect("still seeded")
             .state()
             .position(),
-        (FOOTPRINTS_MAN_NEW_TILE.0, FOOTPRINTS_MAN_NEW_TILE.1 - 1)
+        (FOOTPRINTS_MAN_NEW_TILE.0, FOOTPRINTS_MAN_NEW_TILE.1 - 1),
+        "a failed warp must keep the live edit, not reseed"
     );
 }
 
-/// A successful warp and a successful connection crossing each replace the
-/// live collection with the destination's freshly seeded one: a live edit
-/// made before the transition does not survive it, and every entry points
-/// at the new scene's own resolved template.
 #[test]
-fn a_successful_transition_replaces_the_live_object_events() {
+fn successful_warp_and_connection_replace_live_object_events() {
     use crate::pack_source::PackSource;
 
     let path = std::env::temp_dir().join(format!(
@@ -516,13 +480,13 @@ fn a_successful_transition_replaces_the_live_object_events() {
         }
     };
 
-    let mut phase = oldale_phase(PlayerState::new((5, 5), 3, Direction::South));
+    let mut phase = fresh_save_oldale_on_open_grid(PlayerState::new((5, 5), 3, Direction::South));
     phase.pack_source = PackSource::Test(leaked_path);
     let local_id = walk_footprints_man(&mut phase);
     phase.warp_to(OLDALE_TOWN, 0);
     assert_replaced(&phase, local_id, "the warp");
 
-    let mut phase = oldale_phase(PlayerState::new((5, 5), 3, Direction::South));
+    let mut phase = fresh_save_oldale_on_open_grid(PlayerState::new((5, 5), 3, Direction::South));
     phase.pack_source = PackSource::Test(leaked_path);
     let local_id = walk_footprints_man(&mut phase);
     assert!(phase.cross_connection(OLDALE_TOWN, (5, 5)));
@@ -531,29 +495,23 @@ fn a_successful_transition_replaces_the_live_object_events() {
     let _ = std::fs::remove_file(&path);
 }
 
-/// A session saved in Oldale Town with both gating flags set, then resumed
-/// through the production `continue_saved_game`, rebuilds the scene from the
-/// saved [`EventData`]: both NPCs stand on their bare map.json tiles. Every
-/// other phase here is built from a fresh `EventData`, so none of them would
-/// notice the continue path dropping the saved flags. Loads through the
-/// synthetic Oldale layout pack, so it runs without a local pack.
 #[test]
-fn continue_restores_oldale_npcs_at_their_map_json_tiles() {
+fn continue_uses_saved_flags_to_restore_scene_and_live_npc_placements() {
     use crate::flow::save_continue_support::save_from_the_start_menu;
     use crate::flow::tests::TempSave;
     use crate::pack_source::PackSource;
 
     let temp = TempSave::new("oldale-continue-flags");
     let mut slot = temp.slot();
-    // The session being saved already stands in the flagged visit: its NPCs
-    // are on their map.json tiles before the save, so continue must keep
-    // them there rather than relocate anything.
-    let mut event_data = EventData::new();
+    let mut entry_flags = EventData::new();
     for flag in [FLAG_ADVENTURE_STARTED, FLAG_RECEIVED_POTION_OLDALE] {
-        event_data.flag_set(flag).unwrap();
+        entry_flags.flag_set(flag).unwrap();
     }
-    let mut phase = oldale_phase_with(PlayerState::new((5, 5), 3, Direction::South), &event_data);
-    phase.save1.event_data = event_data;
+    let mut phase = oldale_on_open_grid_with_entry_flags(
+        PlayerState::new((5, 5), 3, Direction::South),
+        &entry_flags,
+    );
+    phase.save1.event_data = entry_flags;
     let header = assets::MapHeaderTable::new()
         .header(OLDALE_TOWN)
         .expect("MAP_OLDALE_TOWN must have a header");

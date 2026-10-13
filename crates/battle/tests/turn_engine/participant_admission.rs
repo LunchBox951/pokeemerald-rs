@@ -1,9 +1,5 @@
-//! Constructor-time admission of a battler's inherited status (issue #945).
-//!
-//! `AbilityBattleEffects(ABILITYEFFECT_IMMUNITY)` (`battle_util.c:2873-2951`)
-//! cures a Paralysed Limber, Poisoned Immunity, or confused Own Tempo holder
-//! at move end; that cure is unmodelled, so both constructors refuse such a participant, active
-//! or benched, before any constructor RNG draw.
+//! Both constructors refuse status and ability combinations that upstream
+//! cures at move end (`battle_util.c:2873-2951`), before any RNG draw.
 
 use crate::common::{max_iv_mon, SequenceRng};
 use assets::trainers::TrainerId;
@@ -23,8 +19,6 @@ fn healthy(species: SpeciesId) -> BattlePokemon {
     mon(species, 0, Status1::Healthy)
 }
 
-/// The refused cases: a Paralysed Persian (Limber), a Poisoned Snorlax
-/// (Immunity), and a confused Spinda (Own Tempo).
 fn refused() -> [(BattlePokemon, AbilityId); 3] {
     [
         (
@@ -216,7 +210,6 @@ fn confusion_is_refused_only_for_own_tempo() {
 
 #[test]
 fn the_selected_ability_slot_decides_not_the_species_pool() {
-    // Snorlax slot 1 is Thick Fat, so a poisoned slot-1 Snorlax is admitted.
     let snorlax = mon(SpeciesId::SNORLAX, 1, Status1::Poisoned);
     assert_eq!(snorlax.ability(), AbilityId::THICK_FAT);
     let mut rng = SequenceRng::new([0, 0]);
