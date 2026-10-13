@@ -44,8 +44,8 @@ pub enum AudioError {
     /// A song track has more events than its `u32` wire count can encode. The value is
     /// the event count.
     TooManyEvents(usize),
-    /// A `DirectSound` sample has more values than its `u32` wire length can encode. The
-    /// value is the sample count.
+    /// A `DirectSound` sample's logical `u32` count, plus its guard value, does not fit this
+    /// target's `usize` buffer length. The value is the sample count.
     SampleTooLong(usize),
     /// A `DirectSound` sample's buffer does not hold exactly one more value
     /// than its logical sample count.
@@ -171,8 +171,8 @@ impl fmt::Display for AudioError {
             ),
             Self::SampleTooLong(len) => write!(
                 f,
-                "audio-pack sample: {len} samples exceeds the maximum of {}",
-                u32::MAX
+                "audio-pack sample: {len} samples plus the guard value exceeds \
+                 this target's addressable buffer length"
             ),
             Self::DirectSoundBufferLength {
                 sample_count,
