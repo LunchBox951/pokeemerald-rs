@@ -5,23 +5,27 @@ use crate::error::BattleError;
 use crate::status1::Status1;
 use assets::AbilityId;
 
-/// Refuses a Paralysed Limber, Poisoned Immunity, or confused Own Tempo
-/// participant: `AbilityBattleEffects(ABILITYEFFECT_IMMUNITY)` cures it at
-/// move end (`battle_util.c:2873-2951`), a path this crate does not model.
+/// Refuses a participant whose status upstream's ability immunity cure
+/// (`AbilityBattleEffects(ABILITYEFFECT_IMMUNITY)`, `battle_util.c:2873-2951`)
+/// would clear at move end, a path this crate does not model.
 ///
 /// # Errors
 ///
 /// Returns [`BattleError::UnportedAbilityInteraction`] for any refused combination.
 pub fn ensure_participant_admissible(participant: &BattlePokemon) -> Result<(), BattleError> {
     let ability = participant.ability();
-    if ability == AbilityId::OWN_TEMPO && participant.volatiles().confused() {
-        return Err(BattleError::UnportedAbilityInteraction(ability));
-    }
-    match (participant.status1(), ability) {
-        (Status1::Paralysed, AbilityId::LIMBER) | (Status1::Poisoned, AbilityId::IMMUNITY) => {
-            Err(BattleError::UnportedAbilityInteraction(ability))
-        }
-        _ => Ok(()),
+    let status = participant.status1();
+    let confused = participant.volatiles().confused();
+    let cured_at_move_end = match ability {
+        AbilityId::LIMBER => status == Status1::Paralysed,
+        AbilityId::IMMUNITY => status == Status1::Poisoned,
+        AbilityId::OWN_TEMPO => confused,
+        _ => false,
+    };
+    if cured_at_move_end {
+        Err(BattleError::UnportedAbilityInteraction(ability))
+    } else {
+        Ok(())
     }
 }
 

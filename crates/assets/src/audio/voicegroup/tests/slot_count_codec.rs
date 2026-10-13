@@ -1,8 +1,14 @@
 use super::super::*;
-use super::shared::{all_voice_kinds, sample_cgb_envelope, sample_envelope};
+use super::shared::{all_voice_kinds, sample_cgb_envelope, sample_envelope, MIDDLE_C};
 
 const VOICE_GROUP_SLOT_COUNT_BYTE: usize = 0;
 const FIRST_SLOT_KIND_BYTE: usize = 1;
+const UNKNOWN_VOICE_KIND_BYTE: u8 = u8::MAX;
+const INVALID_UTF8_BYTE: u8 = u8::MAX;
+const SQUARE_DUTY_COUNT: usize = 4;
+const CENTER_PAN: u8 = 64;
+const EMPTY_SLOT_INDEX: usize = 1;
+const SLOT_AFTER_EMPTY_INDEX: usize = 2;
 
 #[test]
 fn all_voice_entry_kinds_round_trip() {
@@ -15,7 +21,7 @@ fn all_voice_entry_kinds_round_trip() {
 fn cgb_sound_length_round_trips_the_entire_byte_range() {
     for length in u8::MIN..=u8::MAX {
         let group = VoiceGroup::new(vec![VoiceEntry::Square1(Square1Voice {
-            base_key: 60,
+            base_key: MIDDLE_C,
             length,
             sweep: 0,
             duty: 0,
@@ -36,7 +42,7 @@ fn an_oversize_pack_id_is_rejected_by_the_constructor() {
     let expected = Err(AudioError::IdTooLong(usize::from(u16::MAX) + 1));
 
     let direct_sound = VoiceEntry::DirectSound(DirectSoundVoice {
-        base_key: 60,
+        base_key: MIDDLE_C,
         pan: None,
         sample: SampleId(too_long.clone()),
         envelope: sample_envelope(),
@@ -45,7 +51,7 @@ fn an_oversize_pack_id_is_rejected_by_the_constructor() {
     assert_eq!(VoiceGroup::new(vec![direct_sound]), expected);
 
     let wave = VoiceEntry::ProgrammableWave(ProgrammableWaveVoice {
-        base_key: 60,
+        base_key: MIDDLE_C,
         length: 0,
         wave: SampleId(too_long.clone()),
         envelope: sample_cgb_envelope(),
@@ -75,7 +81,8 @@ fn maximum_voicegroup_size_round_trips() {
                 base_key: u8::try_from(i).expect("a slot index below VOICE_SLOT_COUNT fits a u8"),
                 length: 0,
                 sweep: 0,
-                duty: u8::try_from(i % 4).expect("i % 4 < 4"),
+                duty: u8::try_from(i % SQUARE_DUTY_COUNT)
+                    .expect("a duty below the count fits a u8"),
                 envelope: sample_cgb_envelope(),
                 fixed_rate: false,
             })
@@ -147,10 +154,10 @@ fn truncated_input_is_rejected() {
 #[test]
 fn an_unknown_slot_kind_byte_is_rejected() {
     let mut bytes = VoiceGroup::new(all_voice_kinds()).unwrap().encode();
-    bytes[FIRST_SLOT_KIND_BYTE] = u8::MAX;
+    bytes[FIRST_SLOT_KIND_BYTE] = UNKNOWN_VOICE_KIND_BYTE;
     assert_eq!(
         VoiceGroup::decode(&bytes),
-        Err(AudioError::UnknownVoiceKind(u8::MAX))
+        Err(AudioError::UnknownVoiceKind(UNKNOWN_VOICE_KIND_BYTE))
     );
 }
 
@@ -168,7 +175,7 @@ fn a_kind_byte_just_past_the_last_defined_one_is_rejected() {
 #[test]
 fn an_unknown_direct_sound_mode_byte_is_rejected() {
     let group = VoiceGroup::new(vec![VoiceEntry::DirectSound(DirectSoundVoice {
-        base_key: 60,
+        base_key: MIDDLE_C,
         pan: None,
         sample: SampleId("s".to_owned()),
         envelope: sample_envelope(),
@@ -191,7 +198,7 @@ fn a_non_utf8_pack_id_is_rejected() {
     })])
     .unwrap();
     let mut bytes = group.encode();
-    *bytes.last_mut().unwrap() = u8::MAX;
+    *bytes.last_mut().unwrap() = INVALID_UTF8_BYTE;
     assert_eq!(VoiceGroup::decode(&bytes), Err(AudioError::InvalidString));
 }
 
@@ -199,7 +206,7 @@ fn a_non_utf8_pack_id_is_rejected() {
 fn an_empty_mid_table_slot_keeps_its_position() {
     let drum = |sample: &str| {
         VoiceEntry::DirectSound(DirectSoundVoice {
-            base_key: 60,
+            base_key: MIDDLE_C,
             pan: None,
             sample: SampleId(sample.to_owned()),
             envelope: sample_envelope(),
@@ -215,11 +222,11 @@ fn an_empty_mid_table_slot_keeps_its_position() {
     let decoded = VoiceGroup::decode(&group.encode()).unwrap();
     assert_eq!(decoded, group);
     assert_eq!(
-        decoded.slots()[1],
+        decoded.slots()[EMPTY_SLOT_INDEX],
         VoiceEntry::Empty,
-        "the unused slot must stay at index 1 -- its index is the played key"
+        "the unused slot must stay at index {EMPTY_SLOT_INDEX} -- its index is the played key"
     );
-    match &decoded.slots()[2] {
+    match &decoded.slots()[SLOT_AFTER_EMPTY_INDEX] {
         VoiceEntry::DirectSound(v) => assert_eq!(v.sample.0, "audio/sample/snare"),
         other => panic!("the slot after the empty one shifted: {other:?}"),
     }
@@ -228,8 +235,8 @@ fn an_empty_mid_table_slot_keeps_its_position() {
 #[test]
 fn decode_rejects_trailing_bytes() {
     let group = VoiceGroup::new(vec![VoiceEntry::DirectSound(DirectSoundVoice {
-        base_key: 60,
-        pan: Some(64),
+        base_key: MIDDLE_C,
+        pan: Some(CENTER_PAN),
         sample: SampleId("audio/sample/x".to_owned()),
         envelope: sample_envelope(),
         mode: DirectSoundMode::Resampled,
