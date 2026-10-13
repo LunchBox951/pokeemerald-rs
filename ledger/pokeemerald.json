@@ -11843,6 +11843,32 @@
       "status": "pending"
     },
     "data/text/pc_transfer.inc": {
+      "artifacts": {
+        "gText_PkmnTransferredLanettesPC": {
+          "reason": "Assembly-authored gBattleStringsTable target: its .string bytes are lexed from data/text/pc_transfer.inc by the battle-message extractor (EXTERNAL_LABELS) and emitted into the battle-message/table pack entry as raw token data, matching the four slots src/battle_message.c#gBattleStringsTable records as external. The parent file stays pending: the rest of its strings are not extracted.",
+          "rust_target": "crates/xtask/src/extract/battle_message.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "gText_PkmnTransferredLanettesPCBoxFull": {
+          "reason": "Assembly-authored gBattleStringsTable target: its .string bytes are lexed from data/text/pc_transfer.inc by the battle-message extractor (EXTERNAL_LABELS) and emitted into the battle-message/table pack entry as raw token data, matching the four slots src/battle_message.c#gBattleStringsTable records as external. The parent file stays pending: the rest of its strings are not extracted.",
+          "rust_target": "crates/xtask/src/extract/battle_message.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "gText_PkmnTransferredSomeonesPC": {
+          "reason": "Assembly-authored gBattleStringsTable target: its .string bytes are lexed from data/text/pc_transfer.inc by the battle-message extractor (EXTERNAL_LABELS) and emitted into the battle-message/table pack entry as raw token data, matching the four slots src/battle_message.c#gBattleStringsTable records as external. The parent file stays pending: the rest of its strings are not extracted.",
+          "rust_target": "crates/xtask/src/extract/battle_message.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "gText_PkmnTransferredSomeonesPCBoxFull": {
+          "reason": "Assembly-authored gBattleStringsTable target: its .string bytes are lexed from data/text/pc_transfer.inc by the battle-message extractor (EXTERNAL_LABELS) and emitted into the battle-message/table pack entry as raw token data, matching the four slots src/battle_message.c#gBattleStringsTable records as external. The parent file stays pending: the rest of its strings are not extracted.",
+          "rust_target": "crates/xtask/src/extract/battle_message.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "data.text",
       "kind": "file",
       "spec_owner": "S-5",
@@ -18540,6 +18566,14 @@
       "status": "pending"
     },
     "include/pokedex.h": {
+      "artifacts": {
+        "PokedexEntry": {
+          "reason": "struct PokedexEntry (include/pokedex.h:21-32) is the shape of crate::pokedex::PokedexEntry: categoryName, description, height, weight, pokemonScale, pokemonOffset, trainerScale and trainerOffset carried as owned strings and u16/i16 fields; the offsets read signed because upstream writes negative literals into the u16 fields and reads them signed at src/pokedex.c:3777, and the unused u16 padding field is omitted. Codec in pokedex/codec.rs, pinned by pokedex/tests.rs. The parent header stays pending: its prototypes and the other declarations are not ported, and the extracted data lands with the xtask extractor child (issue #2017).",
+          "rust_target": "crates/assets/src/pokedex.rs",
+          "spec": "S-4",
+          "status": "rewritten"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
@@ -24657,10 +24691,22 @@
     },
     "src/battle_message.c": {
       "artifacts": {
+        "BufferStringBattle-template-payloads": {
+          "reason": "Only raw payloads reached by INTROMSG, INTROSENDOUT, RETURNMON, SWITCHINMON, USEDMOVE, and BATTLEEND are extracted: 49 direct templates plus type-move and helper text fragments; selection, buffer mutation, and expansion are deferred.",
+          "rust_target": "crates/xtask/src/extract/battle_message.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
         "gAbsorbDrainStringIds": {
           "reason": "battle_message.c:1120-:1124, both entries: B_MSG_ABSORB (STRINGID_PKMNENERGYDRAINED) and B_MSG_ABSORB_OOZE (STRINGID_ITSUCKEDLIQUIDOOZE), carried as the two distinct BattleEvent variants Drained and LiquidOoze rather than as a string table -- this crate has no text renderer, so the event vocabulary is where a message identity lives. BattleScript_EffectAbsorb picks exactly one of the two (data/battle_scripts_1.s:346 vs :350) and never prints both, which crates/battle/tests/turn_engine/pipelines.rs pins.",
           "rust_target": "crates/battle/src/battle/events.rs",
           "spec": "S-6",
+          "status": "ported"
+        },
+        "gBattleStringsTable": {
+          "reason": "The full 369-slot table, including four external PC-transfer strings, is canonical raw token data only; request selection and placeholder expansion are deferred.",
+          "rust_target": "crates/xtask/src/extract/battle_message.rs",
+          "spec": "S-4",
           "status": "ported"
         }
       },
@@ -27301,7 +27347,13 @@
           "status": "stubbed"
         },
         "ply_patt": {
-          "reason": "ply_patt (m4a_1.s:851-869) pushes the return cursor onto track->patternStack and jumps to the target; at the engine's depth of 3 it branches to ply_fine without reading the target. Reimplemented twice: the runtime Track::call_pattern in crates/audio/src/sequencer.rs (three-entry pattern_return_stack, a fourth nested PATT ends the track), and the extraction decoder in crates/rom-import/src/domains/song.rs, which expands PATT/PEND inline for the pack and terminates a fourth-level PATT as Fine without reading its pointer (PR #1437, issue #1388).",
+          "reason": "ply_patt (m4a_1.s:851-869) pushes the return cursor onto track->patternStack and jumps to the target; at the engine's depth of 3 it branches to ply_fine without reading the target. Reimplemented three times: the runtime Track::call_pattern in crates/audio/src/sequencer.rs (three-entry pattern_return_stack, a fourth nested PATT ends the track), the sequence decoder's Event::Pattern/PatternEnd arms in crates/audio/src/sequence/decode.rs (the depth check in crates/audio/src/sequence/reader.rs runs before the operand read), and the extraction decoder in crates/rom-import/src/domains/song.rs, which expands PATT/PEND inline for the pack and terminates a fourth-level PATT as Fine without reading its pointer.",
+          "rust_target": "crates/audio/src/sequencer.rs",
+          "spec": "S-3",
+          "status": "rewritten"
+        },
+        "ply_rept": {
+          "reason": "ply_rept (m4a_1.s:880-910) counts repeats per track: a zero count jumps to the target without touching the counter; a positive count increments first, jumps while the counter is below the count, and resets to zero after the final pass, falling through without using the target. Reimplemented twice: the runtime Track::repeat in crates/audio/src/sequencer.rs (lines 216-228, citing m4a_1.s:880-910), and the sequence decoder's Event::Repeat arm in crates/audio/src/sequence/decode.rs (lines 116-131), which keeps the same counter and validates the target only when the repeat is taken.",
           "rust_target": "crates/audio/src/sequencer.rs",
           "spec": "S-3",
           "status": "rewritten"
