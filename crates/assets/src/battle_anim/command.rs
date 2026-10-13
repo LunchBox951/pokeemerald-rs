@@ -182,7 +182,9 @@ pub enum AnimCommand {
     Return,
     /// 0x10 `setarg`: write `gBattleAnimArgs[arg]`.
     SetArg {
-        /// The argument index, below [`ANIM_ARGS_COUNT`].
+        /// The raw argument index. Upstream does not bounds-check it; any `u8`
+        /// is kept, and the runtime owns modelling an index past
+        /// [`ANIM_ARGS_COUNT`].
         arg: u8,
         /// The value written.
         value: i16,
@@ -258,7 +260,10 @@ pub enum AnimCommand {
     WaitSound,
     /// 0x21 `jumpargeq`: jump when `gBattleAnimArgs[arg] == value`.
     JumpArgEq {
-        /// The argument index, below [`ANIM_ARGS_COUNT`].
+        /// The raw argument index. Stock `Move_MAGNITUDE` jumps on index 15
+        /// (`data/battle_anim_scripts.s:3324-3326`), past the 8 entries of
+        /// `gBattleAnimArgs`; the catalog keeps it and the runtime owns the
+        /// out-of-bounds read.
         arg: u8,
         /// The compared value.
         value: i16,
@@ -325,7 +330,9 @@ impl AnimCommand {
         first.into_iter().chain(second)
     }
 
-    /// Rejects an operand the upstream interpreter would use out of range.
+    /// Rejects an operand the catalog cannot hold: a `createsprite` subpriority
+    /// with the target bit set, or an argument list longer than the 8 entries
+    /// of `gBattleAnimArgs`. Argument indexes stay raw (see [`Self::SetArg`]).
     pub(super) fn check_operands(&self) -> Result<(), BattleAnimationError> {
         match self {
             Self::CreateSprite {
@@ -338,12 +345,6 @@ impl AnimCommand {
             }
             Self::CreateVisualTask { args, .. } | Self::CreateSoundTask { args, .. } => {
                 check_args(args)
-            }
-            Self::SetArg { arg, .. } | Self::JumpArgEq { arg, .. } => {
-                if usize::from(*arg) >= ANIM_ARGS_COUNT {
-                    return Err(BattleAnimationError::ArgIndexOutOfRange(*arg));
-                }
-                Ok(())
             }
             _ => Ok(()),
         }

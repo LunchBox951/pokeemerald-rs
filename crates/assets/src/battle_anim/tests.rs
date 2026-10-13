@@ -368,24 +368,6 @@ fn malformed_programs_are_rejected() {
         build(vec![sprite(0, vec![0; 9]), AnimCommand::End]),
         Err(BattleAnimationError::ArgCountTooLarge(9))
     );
-    assert_eq!(
-        build(vec![
-            AnimCommand::SetArg { arg: 8, value: 0 },
-            AnimCommand::End
-        ]),
-        Err(BattleAnimationError::ArgIndexOutOfRange(8))
-    );
-    assert_eq!(
-        build(vec![
-            AnimCommand::JumpArgEq {
-                arg: 9,
-                value: 0,
-                target: ProgramId::new(0)
-            },
-            AnimCommand::End
-        ]),
-        Err(BattleAnimationError::ArgIndexOutOfRange(9))
-    );
     for terminator in [
         AnimCommand::End,
         AnimCommand::Return,
@@ -468,4 +450,28 @@ fn errors_display_their_cause() {
     let rendered =
         BattleAnimationError::MissingSelector(selector(AnimationTable::Special, 3)).to_string();
     assert_eq!(rendered, "special animation 3 has no program");
+}
+
+#[test]
+fn argument_indexes_stay_raw_like_stock_move_magnitude() {
+    // Stock `Move_MAGNITUDE` jumps on argument 15 (`data/battle_anim_scripts.s:3324-3326`).
+    let commands = vec![
+        AnimCommand::SetArg { arg: 200, value: 1 },
+        AnimCommand::JumpArgEq {
+            arg: 15,
+            value: 0,
+            target: ProgramId::new(0),
+        },
+        AnimCommand::End,
+    ];
+    let magnitude = program("Move_MAGNITUDE", commands.clone());
+    let catalog = BattleAnimationCatalog::new(
+        vec![magnitude],
+        all_selectors(&[])
+            .into_iter()
+            .map(|(slot, _)| (slot, ProgramId::new(0))),
+    )
+    .unwrap();
+    let decoded = BattleAnimationCatalog::decode(&catalog.encode()).unwrap();
+    assert_eq!(decoded.programs()[0].commands(), commands);
 }

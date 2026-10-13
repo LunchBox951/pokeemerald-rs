@@ -149,8 +149,7 @@ impl BattleAnimationProgram {
     ///
     /// [`BattleAnimationError::EmptyProgram`], [`BattleAnimationError::TooManyCommands`],
     /// or [`BattleAnimationError::MissingTerminator`] for the program's shape;
-    /// [`BattleAnimationError::ArgCountTooLarge`],
-    /// [`BattleAnimationError::ArgIndexOutOfRange`], or
+    /// [`BattleAnimationError::ArgCountTooLarge`] or
     /// [`BattleAnimationError::SubpriorityOutOfRange`] for an operand that
     /// the interpreter would use out of range.
     pub fn new(

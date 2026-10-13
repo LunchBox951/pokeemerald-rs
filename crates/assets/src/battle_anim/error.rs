@@ -36,8 +36,6 @@ pub enum BattleAnimationError {
     MissingTerminator,
     /// A command carries more arguments than `gBattleAnimArgs` holds. The value is the count.
     ArgCountTooLarge(usize),
-    /// A command indexes `gBattleAnimArgs` out of range. The value is the index.
-    ArgIndexOutOfRange(u8),
     /// A `createsprite` subpriority byte sets the `ANIMSPRITE_IS_TARGET` bit. The value is the byte.
     SubpriorityOutOfRange(u8),
     /// The catalog holds more programs than a `u16` id can name. The value is the count.
@@ -94,12 +92,6 @@ impl fmt::Display for BattleAnimationError {
                 write!(
                     f,
                     "command carries {count} arguments, above the 8 upstream holds"
-                )
-            }
-            Self::ArgIndexOutOfRange(index) => {
-                write!(
-                    f,
-                    "command indexes argument {index}, above the 8 upstream holds"
                 )
             }
             Self::SubpriorityOutOfRange(byte) => {
