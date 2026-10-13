@@ -21155,6 +21155,14 @@
       "status": "pending"
     },
     "include/pokemon_storage_system.h": {
+      "artifacts": {
+        "PokemonStorage": {
+          "reason": "include/pokemon_storage_system.h:4-25. struct PokemonStorage and its count constants are PokemonStorage: currentBox, 14x30 BoxPokemon boxes from 0x0004 (BoxPokemon alignment, not the header's stale 0x0001 comment), nine-byte boxNames at 0x8344, boxWallpapers at 0x83C2, 0x83D0 total. Decode is lossless and patching preserves the padding bytes (#1787). The parent header stays pending: the rest of the header declares PC-scene entry points.",
+          "rust_target": "crates/engine/src/save/storage.rs",
+          "spec": "C-5",
+          "status": "rewritten"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
@@ -30898,6 +30906,44 @@
       "status": "pending"
     },
     "src/pokemon_storage_system.c": {
+      "artifacts": {
+        "CheckFreePokemonStorageSpace": {
+          "reason": "src/pokemon_storage_system.c:9572-9585 is PokemonStorage::has_free_space, reading the hasSpecies sanity bit (#1787).",
+          "rust_target": "crates/engine/src/save/storage.rs",
+          "spec": "C-5",
+          "status": "rewritten"
+        },
+        "CompactPartySlots": {
+          "reason": "src/pokemon_storage_system.c:6734-6757 is the compaction inside deposit_party_mon and withdraw_to_party, with ZeroMonData tails (pokemon.c:2163-2178) and the party count recomputed (#1787).",
+          "rust_target": "crates/engine/src/save/storage.rs",
+          "spec": "C-5",
+          "status": "rewritten"
+        },
+        "CountMonsInBox": {
+          "reason": "src/pokemon_storage_system.c:1398-1409 is PokemonStorage::count_in_box (#1787).",
+          "rust_target": "crates/engine/src/save/storage.rs",
+          "spec": "C-5",
+          "status": "rewritten"
+        },
+        "GetFirstFreeBoxSpot": {
+          "reason": "src/pokemon_storage_system.c:1411-1423 is PokemonStorage::first_free_slot, with occupancy read as GetBoxMonData SPECIES does (pokemon.c:3830-3832) (#1787).",
+          "rust_target": "crates/engine/src/save/storage.rs",
+          "spec": "C-5",
+          "status": "rewritten"
+        },
+        "ResetPokemonStorageSystem": {
+          "reason": "src/pokemon_storage_system.c:1729-1749. PokemonStorage::new_game reproduces box 0, zeroed boxes, names BOX1..BOX14 and wallpapers i%4, and SaveStore::clear_base writes it for a new game (#1787). ResetWaldaWallpaper (:1748, :9661-9668) edits SaveBlock1 and stays deferred.",
+          "rust_target": "crates/engine/src/save/storage.rs",
+          "spec": "C-5",
+          "status": "stubbed"
+        },
+        "TryStorePartyMonInBox": {
+          "reason": "src/pokemon_storage_system.c:6400-6417. PokemonStorage::deposit_party_mon stores the party member in the first free slot, zeroes and compacts the party and rejects a full box, a lone or last able member and held mail (:1592, :6775-6781, :2351-2354) (#1787). BoxMonRestorePP and the cursor, icon and sprite work stay deferred.",
+          "rust_target": "crates/engine/src/save/storage.rs",
+          "spec": "C-5",
+          "status": "stubbed"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
