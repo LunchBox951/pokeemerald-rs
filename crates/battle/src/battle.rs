@@ -383,7 +383,7 @@ impl Battle {
                 }
                 dex.move_data(slot.move_id)?;
                 if slot.pp > 0 {
-                    trainer::ensure_move_playable(&dex, slot.move_id)?;
+                    trainer::ensure_move_playable(&dex, slot.move_id, data.ai_flags)?;
                     for defender in std::iter::once(&player).chain(
                         player_reserves
                             .iter()
