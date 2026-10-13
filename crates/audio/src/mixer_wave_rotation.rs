@@ -75,12 +75,32 @@ fn sounding_mixer() -> Mixer {
     mixer
 }
 
+/// A replacement continues the rotation: the head matches a fresh channel
+/// started at the rotated table, but the output latch is the nibble the
+/// previous clock removed (`mgba/src/gb/audio.c:557-568`), so the frame holds
+/// that older nibble until the first clock, then equals the fresh render.
+fn assert_continues_rotation(actual: &[f32]) {
+    let oracle = fresh_frame(rotated_ramp());
+    let first_clock = actual
+        .iter()
+        .position(|s| s.to_bits() != actual[0].to_bits())
+        .expect("the first wave clock lands within one frame");
+    assert!(first_clock > 0);
+    assert_ne!(
+        actual[0].to_bits(),
+        oracle[0].to_bits(),
+        "the retained latch is the removed nibble"
+    );
+    let bits = |samples: &[f32]| samples.iter().map(|s| s.to_bits()).collect::<Vec<_>>();
+    assert_eq!(bits(&actual[first_clock..]), bits(&oracle[first_clock..]));
+}
+
 #[test]
 fn an_immediate_same_wave_replacement_keeps_the_rotation() {
     let mut mixer = sounding_mixer();
     assert!(mixer.add_cgb_voice(wave_voice("ramp-a", ramp())));
     let actual = frame(&mut mixer);
-    assert_eq!(actual, fresh_frame(rotated_ramp()));
+    assert_continues_rotation(&actual);
     assert_ne!(actual, fresh_frame(ramp()));
 }
 
@@ -94,7 +114,7 @@ fn a_retired_wave_slot_keeps_the_rotation_through_idle_frames() {
     }
     assert!(mixer.add_cgb_voice(wave_voice("ramp-a", ramp())));
     let actual = frame(&mut mixer);
-    assert_eq!(actual, fresh_frame(rotated_ramp()));
+    assert_continues_rotation(&actual);
     assert_ne!(actual, fresh_frame(ramp()));
 }
 
@@ -106,7 +126,7 @@ fn a_stopped_wave_slot_keeps_the_rotation_through_idle_frames() {
         assert!(frame(&mut mixer).iter().all(|&s| s == 0.0));
     }
     assert!(mixer.add_cgb_voice(wave_voice("ramp-a", ramp())));
-    assert_eq!(frame(&mut mixer), fresh_frame(rotated_ramp()));
+    assert_continues_rotation(&frame(&mut mixer));
 }
 
 #[test]

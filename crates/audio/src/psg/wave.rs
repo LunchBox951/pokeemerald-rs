@@ -15,6 +15,8 @@ pub struct WaveChannel {
     samples: [i8; WAVE_SAMPLES],
     phase: u32,
     step_delta: u32,
+    /// The held output nibble, distinct from the RAM head `phase` indexes.
+    latch: i8,
 }
 
 impl WaveChannel {
@@ -40,7 +42,9 @@ impl WaveChannel {
             samples,
             phase: 0,
             step_delta: 0,
+            latch: 0,
         };
+        chan.latch_head();
         chan.set_frequency(freq_reg);
         chan
     }
@@ -60,13 +64,34 @@ impl WaveChannel {
     pub(crate) fn continue_rotation_from(&mut self, previous: &Self) {
         self.samples = previous.samples;
         self.phase = previous.phase & !(PHASE_ONE - 1);
+        self.latch = previous.latch;
     }
 
-    /// Produces the next unscaled decoded sample in `-8..=7`.
+    fn head(&self) -> usize {
+        (self.phase / PHASE_ONE) as usize % self.samples.len()
+    }
+
+    /// Loads the output latch from the current RAM head without moving it
+    /// (`mgba/src/gb/audio.c:260-268`). Only channel creation uses it: the
+    /// GBA volume-write path leaves the held sample alone
+    /// (`mgba/src/gba/io.c:633-637`, `mgba/src/gba/audio.c:158-162`).
+    fn latch_head(&mut self) {
+        self.latch = self.samples[self.head()];
+    }
+
+    /// Produces the held unscaled output nibble in `-8..=7`, then advances
+    /// time. Each wave clock latches the nibble it removes from the head, so
+    /// the latch trails the head (`mgba/src/gb/audio.c:557-568,768-774`);
+    /// a GBA-style trigger leaves it untouched (`:326-335`).
     pub fn sample(&mut self) -> i8 {
-        let step = (self.phase / PHASE_ONE) as usize % self.samples.len();
+        let output = self.latch;
+        let old_clock = self.phase / PHASE_ONE;
         self.phase = self.phase.wrapping_add(self.step_delta);
-        self.samples[step]
+        if self.phase / PHASE_ONE != old_clock {
+            let outgoing = (self.head() + self.samples.len() - 1) % self.samples.len();
+            self.latch = self.samples[outgoing];
+        }
+        output
     }
 }
 
@@ -143,5 +168,65 @@ mod tests {
             (next_step - retuned_period).abs() <= 1.0,
             "the retuned wave steps after {next_step} samples, expected about {retuned_period}",
         );
+    }
+
+    #[test]
+    fn wave_holds_the_nibble_removed_by_the_last_clock() {
+        let wave_ram = WaveChannel::decode_wave_ram(&[0xF0; WAVE_RAM_BYTES]);
+        let mut wave = WaveChannel::new(wave_ram, 0);
+        wave.step_delta = PHASE_ONE;
+        // Initialization latches the head (7); the first clock removes that
+        // same nibble, and only the second clock reaches the low nibble (-8).
+        assert_eq!(wave.sample(), 7);
+        assert_eq!(wave.sample(), 7);
+        assert_eq!(wave.sample(), -8);
+        assert_eq!(wave.sample(), 7);
+    }
+
+    #[test]
+    fn after_a_wave_clock_the_output_is_the_nibble_removed_from_the_old_head() {
+        let wave_ram = WaveChannel::decode_wave_ram(&[0xF0; WAVE_RAM_BYTES]);
+        let mut wave = WaveChannel::new(wave_ram, 0x400);
+        while wave.phase / PHASE_ONE == 0 {
+            wave.sample();
+        }
+        assert_eq!(wave.phase / PHASE_ONE, 1, "exactly one wave clock elapsed");
+        assert_eq!(
+            wave.sample(),
+            wave_ram[0],
+            "latched nibble is the removed head (7)"
+        );
+    }
+
+    #[test]
+    fn a_retune_keeps_the_head_and_the_held_latch() {
+        let wave_ram = WaveChannel::decode_wave_ram(&[0xF0; WAVE_RAM_BYTES]);
+        let mut wave = WaveChannel::new(wave_ram, 0x400);
+        while wave.phase / PHASE_ONE == 0 {
+            wave.sample();
+        }
+        wave.set_frequency(0x200);
+        assert_eq!(wave.head(), 1);
+        assert_eq!(wave.latch, wave_ram[0]);
+        assert_eq!(wave.sample(), wave_ram[0], "the old latch holds mid-period");
+        assert_eq!(
+            wave.sample(),
+            wave_ram[0],
+            "still held until the next clock"
+        );
+    }
+
+    #[test]
+    fn continuing_the_rotation_carries_the_latch_but_not_the_fraction() {
+        let wave_ram = WaveChannel::decode_wave_ram(&[0xF0; WAVE_RAM_BYTES]);
+        let mut previous = WaveChannel::new(wave_ram, 0x400);
+        while previous.phase / PHASE_ONE == 0 {
+            previous.sample();
+        }
+        let mut next = WaveChannel::new(wave_ram, 0x400);
+        next.continue_rotation_from(&previous);
+        assert_eq!(next.head(), 1);
+        assert_eq!(next.latch, wave_ram[0]);
+        assert_eq!(next.phase % PHASE_ONE, 0);
     }
 }
