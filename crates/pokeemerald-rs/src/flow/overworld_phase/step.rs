@@ -152,7 +152,7 @@ impl OverworldPhase {
     ///   releasing it on call 17 does not warp either, exactly as upstream
     ///   never sets `heldDirection` on its last animation frame and sees
     ///   the direction released on the frame after
-    ///   (`releasing_the_direction_on_the_landing_call_does_not_exit_through_the_doormat`).
+    ///   (`releasing_south_on_the_landing_call_does_not_exit_through_the_doormat`).
     /// - Standing on the doormat a warp-in landed you on and then holding
     ///   its direction **does** — the only way out of Brendan's house, since
     ///   the tile south of that doormat is off-map and the step itself is
@@ -223,7 +223,7 @@ impl OverworldPhase {
     /// walk-animation timer always advances" contract stays unconditional.
     ///
     /// Exercised by this module's
-    /// `a_legal_step_in_the_arrow_direction_warps_instead_of_stepping` (the
+    /// `a_legal_step_in_the_arrow_direction_is_preempted_without_starting_a_walk` (the
     /// pack-free ratchet: the step never happens) and its pack-gated
     /// sibling `a_legal_step_in_the_arrow_direction_lands_the_warp` (the
     /// warp really lands), both over a synthetic scene — no bundled real
