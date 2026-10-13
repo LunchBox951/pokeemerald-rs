@@ -203,7 +203,12 @@ fn a_decoration_placeholder_would_block_if_its_flag_were_clear() {
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn load_default_hides_the_spawn_bedrooms_decoration_placeholders() {
-    let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+    let mut phase = OverworldPhase::load(
+        crate::pack_source::PackSource::Repo,
+        crate::new_game::NewGameOptions::DEFAULT,
+        crate::new_game::NewGameIdentity::DEFAULT,
+    )
+    .expect("run `cargo xtask extract` first");
     assert_eq!(
         phase.map_id,
         new_game::SPAWN_MAP_ID,
@@ -276,7 +281,12 @@ fn load_default_hides_the_spawn_bedrooms_decoration_placeholders() {
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn warping_into_a_bedroom_hides_its_decoration_placeholders() {
-    let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+    let mut phase = OverworldPhase::load(
+        crate::pack_source::PackSource::Repo,
+        crate::new_game::NewGameOptions::DEFAULT,
+        crate::new_game::NewGameIdentity::DEFAULT,
+    )
+    .expect("run `cargo xtask extract` first");
 
     // Clear what `load_default` set, so only `warp_to` can restore it.
     for &id in assets::object_event_flags::DECORATION_FLAGS {
@@ -332,7 +342,12 @@ fn warping_into_a_bedroom_hides_its_decoration_placeholders() {
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn the_spawn_bedroom_has_no_invisible_poke_ball_collider() {
-    let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+    let mut phase = OverworldPhase::load(
+        crate::pack_source::PackSource::Repo,
+        crate::new_game::NewGameOptions::DEFAULT,
+        crate::new_game::NewGameIdentity::DEFAULT,
+    )
+    .expect("run `cargo xtask extract` first");
 
     let ball = assets::MapEventsTable::new()
         .resolve(new_game::SPAWN_MAP_ID)
@@ -376,7 +391,12 @@ fn the_spawn_bedroom_has_no_invisible_poke_ball_collider() {
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn taking_the_stairs_does_not_land_in_a_house_full_of_the_rivals_family() {
-    let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+    let mut phase = OverworldPhase::load(
+        crate::pack_source::PackSource::Repo,
+        crate::new_game::NewGameOptions::DEFAULT,
+        crate::new_game::NewGameIdentity::DEFAULT,
+    )
+    .expect("run `cargo xtask extract` first");
 
     // Step off the spawn tile (which *is* the stair warp) and back onto it,
     // to generate a fresh landing -- the same shape as the real-pack tests

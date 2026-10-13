@@ -17,7 +17,12 @@ use platform::{ButtonState, Buttons};
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn load_default_hands_back_a_fightable_provisional_starter() {
-    let phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+    let phase = OverworldPhase::load(
+        crate::pack_source::PackSource::Repo,
+        crate::new_game::NewGameOptions::DEFAULT,
+        crate::new_game::NewGameIdentity::DEFAULT,
+    )
+    .expect("run `cargo xtask extract` first");
     let lead = phase
         .party_lead
         .as_ref()
