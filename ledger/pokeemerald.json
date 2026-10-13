@@ -18540,6 +18540,14 @@
       "status": "pending"
     },
     "include/pokedex.h": {
+      "artifacts": {
+        "PokedexEntry": {
+          "reason": "struct PokedexEntry (include/pokedex.h:21-32) is the shape of crate::pokedex::PokedexEntry: categoryName, description, height, weight, pokemonScale, pokemonOffset, trainerScale and trainerOffset carried as owned strings and u16/i16 fields; the offsets read signed because upstream writes negative literals into the u16 fields and reads them signed at src/pokedex.c:3777, and the unused u16 padding field is omitted. Codec in pokedex/codec.rs, pinned by pokedex/tests.rs. The parent header stays pending: its prototypes and the other declarations are not ported, and the extracted data lands with the xtask extractor child (issue #2017).",
+          "rust_target": "crates/assets/src/pokedex.rs",
+          "spec": "S-4",
+          "status": "rewritten"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
@@ -27313,7 +27321,13 @@
           "status": "stubbed"
         },
         "ply_patt": {
-          "reason": "ply_patt (m4a_1.s:851-869) pushes the return cursor onto track->patternStack and jumps to the target; at the engine's depth of 3 it branches to ply_fine without reading the target. Reimplemented twice: the runtime Track::call_pattern in crates/audio/src/sequencer.rs (three-entry pattern_return_stack, a fourth nested PATT ends the track), and the extraction decoder in crates/rom-import/src/domains/song.rs, which expands PATT/PEND inline for the pack and terminates a fourth-level PATT as Fine without reading its pointer (PR #1437, issue #1388).",
+          "reason": "ply_patt (m4a_1.s:851-869) pushes the return cursor onto track->patternStack and jumps to the target; at the engine's depth of 3 it branches to ply_fine without reading the target. Reimplemented three times: the runtime Track::call_pattern in crates/audio/src/sequencer.rs (three-entry pattern_return_stack, a fourth nested PATT ends the track), the sequence decoder's Event::Pattern/PatternEnd arms in crates/audio/src/sequence/decode.rs (the depth check in crates/audio/src/sequence/reader.rs runs before the operand read), and the extraction decoder in crates/rom-import/src/domains/song.rs, which expands PATT/PEND inline for the pack and terminates a fourth-level PATT as Fine without reading its pointer.",
+          "rust_target": "crates/audio/src/sequencer.rs",
+          "spec": "S-3",
+          "status": "rewritten"
+        },
+        "ply_rept": {
+          "reason": "ply_rept (m4a_1.s:880-910) counts repeats per track: a zero count jumps to the target without touching the counter; a positive count increments first, jumps while the counter is below the count, and resets to zero after the final pass, falling through without using the target. Reimplemented twice: the runtime Track::repeat in crates/audio/src/sequencer.rs (lines 216-228, citing m4a_1.s:880-910), and the sequence decoder's Event::Repeat arm in crates/audio/src/sequence/decode.rs (lines 116-131), which keeps the same counter and validates the target only when the repeat is taken.",
           "rust_target": "crates/audio/src/sequencer.rs",
           "spec": "S-3",
           "status": "rewritten"

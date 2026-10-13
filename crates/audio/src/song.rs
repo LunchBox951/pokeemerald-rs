@@ -136,7 +136,7 @@ pub struct RhythmChild {
 /// Decodes the rhythm pan override stored in a voice's `pan_sweep` byte.
 ///
 /// The high bit enables `(pan_sweep - 0xC0) * 2`; an unset bit inherits track
-/// pan (`m4a_1.s:1587`..`:1593`).
+/// pan (`m4a_1.s:1612`..`:1618`).
 #[must_use]
 pub fn rhythm_pan_from_pan_sweep(pan_sweep: u8) -> Option<i8> {
     if pan_sweep & RHYTHM_PAN_OVERRIDE_BIT == 0 {

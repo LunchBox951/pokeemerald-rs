@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 
 use crate::audio::{Sample, SampleId, Song, VoiceGroup, VoiceGroupId};
 use crate::fonts::{FontId, FontImageRef};
+use crate::pokedex::PokedexData;
 
 pub use battle_message::{
     BattleMessageError, BattleMessageSection, BattleMessageTable, SpecialBattleMessage,
@@ -278,6 +279,23 @@ impl AssetPack {
         let bytes = self.raw(&id.0)?;
         Sample::decode(bytes).map_err(|source| PackError::AudioDecode {
             id: id.0.clone(),
+            source,
+        })
+    }
+
+    /// Look up the `pokedex/data` entry and decode it through
+    /// [`PokedexData::decode`].
+    ///
+    /// # Errors
+    ///
+    /// [`PackError::UnknownAsset`] if the pack has no Pokédex payload;
+    /// [`PackError::WrongKind`] if the entry isn't [`EntryKind::Raw`];
+    /// [`PackError::PokedexDecode`] if the bytes fail the schema.
+    pub fn pokedex_data(&self) -> Result<PokedexData, PackError> {
+        const ID: &str = "pokedex/data";
+        let bytes = self.raw(ID)?;
+        PokedexData::decode(bytes).map_err(|source| PackError::PokedexDecode {
+            id: ID.to_owned(),
             source,
         })
     }
