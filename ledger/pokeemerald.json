@@ -18540,6 +18540,14 @@
       "status": "pending"
     },
     "include/pokedex.h": {
+      "artifacts": {
+        "PokedexEntry": {
+          "reason": "struct PokedexEntry (include/pokedex.h:21-32) is the shape of crate::pokedex::PokedexEntry: categoryName, description, height, weight, pokemonScale, pokemonOffset, trainerScale and trainerOffset carried as owned strings and u16/i16 fields; the offsets read signed because upstream writes negative literals into the u16 fields and reads them signed at src/pokedex.c:3777, and the unused u16 padding field is omitted. Codec in pokedex/codec.rs, pinned by pokedex/tests.rs. The parent header stays pending: its prototypes and the other declarations are not ported, and the extracted data lands with the xtask extractor child (issue #2017).",
+          "rust_target": "crates/assets/src/pokedex.rs",
+          "spec": "S-4",
+          "status": "rewritten"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
