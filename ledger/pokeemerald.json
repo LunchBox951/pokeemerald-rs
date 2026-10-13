@@ -20741,6 +20741,12 @@
           "spec": "S-5",
           "status": "rewritten"
         },
+        "MenuOwnedPlayerStateLayout": {
+          "reason": "Typed lossless play time, button mode, five options fields with unmodeled option bits retained, and key-XOR gameStats words (#1760); persistence only, no counter producers or screens.",
+          "rust_target": "crates/engine/src/save/block.rs",
+          "spec": "I-6",
+          "status": "rewritten"
+        },
         "SaveBlockPartyMoneyWarpOffsets": {
           "reason": "Exact SaveBlock1 and SaveBlock2 sizes and modeled offsets for identity, encryption key, warps, party, money, bag, flags, vars, and the options bitfield's optionsTextSpeed and optionsWindowFrameType implemented in full-size zero-filled payloads",
           "rust_target": "crates/engine/src/save/block.rs",
@@ -30588,7 +30594,7 @@
           "status": "stubbed"
         },
         "SetDefaultOptions": {
-          "reason": "SetDefaultOptions (new_game.c:91-99) reimplemented for the two option fields engine::save::block::SaveBlock2 models: optionsTextSpeed = OPTIONS_TEXT_SPEED_MID (:93) and optionsWindowFrameType = 0 (:94), as NewGameOptions::DEFAULT (MID's raw value 1 is not the zero representation, unlike the frame type). Issue #1125: SetDefaultOptions upstream only ever runs from Sav2_ClearSetDefault at boot for SAVE_STATUS_EMPTY/_CORRUPT (intro.c:1154-1156), never from NewGameInitData itself, so init_save_blocks no longer applies this default unconditionally at NEW GAME time -- flow::new_game_options_for owns which boot verdict reaches NewGameOptions::DEFAULT versus a carried-forward recovery (see that function's own doc comment for the contract), mirroring window_frame_for's identical split. optionsSound, optionsBattleStyle, optionsBattleSceneOff, and regionMapZoom (:95-98) have no typed home in SaveBlock2 yet and are not modelled, matching NewGameInitData's own pending status for every other option this port has not built a settings screen for.",
+          "reason": "SetDefaultOptions (new_game.c:91-99) reimplemented for the two option fields engine::save::block::SaveBlock2 models: optionsTextSpeed = OPTIONS_TEXT_SPEED_MID (:93) and optionsWindowFrameType = 0 (:94), as NewGameOptions::DEFAULT (MID's raw value 1 is not the zero representation, unlike the frame type). Issue #1125: SetDefaultOptions upstream only ever runs from Sav2_ClearSetDefault at boot for SAVE_STATUS_EMPTY/_CORRUPT (intro.c:1154-1156), never from NewGameInitData itself, so init_save_blocks no longer applies this default unconditionally at NEW GAME time -- flow::new_game_options_for owns which boot verdict reaches NewGameOptions::DEFAULT versus a carried-forward recovery (see that function's own doc comment for the contract), mirroring window_frame_for's identical split. optionsSound, optionsBattleStyle, and optionsBattleSceneOff (:95-97) have typed homes since #1760 (SaveBlock2::options_sound, options_battle_style, options_battle_scene_off) and init_save_blocks_with_identity fills them from SaveBlock2::default (SoundMode::Mono, BattleStyle::Shift, animations on), which equals this function's OPTIONS_SOUND_MONO, OPTIONS_BATTLE_STYLE_SHIFT, and FALSE; flow::new_game_options_for carries them (and optionsButtonMode, which ClearSav2 zeroes) forward from an intact save exactly as it does the text-speed and frame-type bytes, since NewGameInitData touches none of them; no settings screen writes them yet. regionMapZoom (:98) still has no typed home and is not modelled.",
           "rust_target": "crates/pokeemerald-rs/src/new_game.rs",
           "spec": "I-3",
           "status": "rewritten"

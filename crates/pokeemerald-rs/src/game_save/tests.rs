@@ -9,7 +9,7 @@ use super::{SaveFileStatus, SaveLineage, SaveSlot};
 
 const SAVEBLOCK2_SECTOR_ID: u16 = 0;
 const FIRST_SAVEBLOCK1_SECTOR_ID: u16 = 1;
-const DEFERRED_PLAY_TIME_BYTE_OFFSET: usize = 0x10;
+const DEFERRED_BYTE_OFFSET: usize = 0x16;
 const FIRST_SAVE_COUNTER: u32 = 1;
 const SECOND_SAVE_COUNTER: u32 = 2;
 const OLDER_DEFERRED_BYTE: u8 = 0x11;
@@ -355,7 +355,7 @@ fn a_new_game_over_a_corrupt_save_carries_no_deferred_bytes() {
             && existing_sector.counter() == SECOND_SAVE_COUNTER
         {
             let mut payload = block2.to_bytes();
-            payload[DEFERRED_PLAY_TIME_BYTE_OFFSET] = CURRENT_DEFERRED_BYTE;
+            payload[DEFERRED_BYTE_OFFSET] = CURRENT_DEFERRED_BYTE;
             let replacement =
                 Sector::write(SAVEBLOCK2_SECTOR_ID, &payload, existing_sector.counter());
             write_sector(&mut image, index, &replacement);
@@ -397,7 +397,7 @@ fn a_new_game_over_a_corrupt_save_carries_no_deferred_bytes() {
             && sector.counter() == FIRST_SAVE_COUNTER
         {
             assert_eq!(
-                sector.data()[DEFERRED_PLAY_TIME_BYTE_OFFSET],
+                sector.data()[DEFERRED_BYTE_OFFSET],
                 0,
                 "a new game's deferred bytes start from zero"
             );
@@ -433,7 +433,7 @@ fn a_new_game_session_clears_the_base_on_an_ordinary_store_too() {
         let sector = read_sector(&image, index);
         if sector.signature() == SECTOR_SIGNATURE && sector.id() == SAVEBLOCK2_SECTOR_ID {
             let mut payload = previous_trainer.to_bytes();
-            payload[DEFERRED_PLAY_TIME_BYTE_OFFSET] = CURRENT_DEFERRED_BYTE;
+            payload[DEFERRED_BYTE_OFFSET] = CURRENT_DEFERRED_BYTE;
             let replacement = Sector::write(SAVEBLOCK2_SECTOR_ID, &payload, sector.counter());
             write_sector(&mut image, index, &replacement);
             planted = true;
@@ -462,7 +462,7 @@ fn a_new_game_session_clears_the_base_on_an_ordinary_store_too() {
             && sector.counter() == SECOND_SAVE_COUNTER
         {
             assert_eq!(
-                sector.data()[DEFERRED_PLAY_TIME_BYTE_OFFSET],
+                sector.data()[DEFERRED_BYTE_OFFSET],
                 0,
                 "a new game's write must not carry the replaced trainer's \
                  deferred bytes, whichever TrySavingData arm reached it"
@@ -693,7 +693,7 @@ fn healing_a_damaged_newest_slot_keeps_the_sessions_deferred_lineage() {
         let sector = read_sector(&image, index);
         if sector.signature() == SECTOR_SIGNATURE && sector.id() == SAVEBLOCK2_SECTOR_ID {
             let mut payload = block2.to_bytes();
-            payload[DEFERRED_PLAY_TIME_BYTE_OFFSET] = if sector.counter() == SECOND_SAVE_COUNTER {
+            payload[DEFERRED_BYTE_OFFSET] = if sector.counter() == SECOND_SAVE_COUNTER {
                 CURRENT_DEFERRED_BYTE
             } else {
                 OLDER_DEFERRED_BYTE
@@ -746,7 +746,7 @@ fn healing_a_damaged_newest_slot_keeps_the_sessions_deferred_lineage() {
             && sector.counter() == SECOND_SAVE_COUNTER
         {
             assert_eq!(
-                sector.data()[DEFERRED_PLAY_TIME_BYTE_OFFSET],
+                sector.data()[DEFERRED_BYTE_OFFSET],
                 CURRENT_DEFERRED_BYTE,
                 "the heal must carry the session's deferred lineage, \
                  not roll back to the older slot's"
