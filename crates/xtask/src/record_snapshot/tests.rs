@@ -1213,6 +1213,7 @@ fn a_staging_directory_whose_claim_failed_is_reported_rather_than_removed() {
     let output_dir = scratch_path("unclaimable-staging-out");
     let out_guard = ScratchGuard(output_dir.clone());
     std::fs::create_dir_all(&output_dir).unwrap();
+    let output_claim = super::claim_output_dir(&output_dir).unwrap();
 
     let staged_dir = output_dir.join(".main-menu-new-game.generation-0-0.staged");
     let take_the_staging_name = |path: &std::path::Path| {
@@ -1222,7 +1223,9 @@ fn a_staging_directory_whose_claim_failed_is_reported_rather_than_removed() {
         Err(std::io::Error::from(std::io::ErrorKind::NotFound))
     };
 
-    let Err(error) = super::create_and_claim_staged_dir(&staged_dir, take_the_staging_name) else {
+    let Err(error) =
+        super::create_and_claim_staged_dir(&output_claim, &staged_dir, take_the_staging_name)
+    else {
         panic!("a claim that fails must fail the capture");
     };
 
@@ -1254,6 +1257,7 @@ fn a_staging_name_replaced_by_a_symlink_is_not_claimed() {
     let output_dir = scratch_path("symlinked-staging-out");
     let out_guard = ScratchGuard(output_dir.clone());
     std::fs::create_dir_all(&output_dir).unwrap();
+    let output_claim = super::claim_output_dir(&output_dir).unwrap();
     let elsewhere = output_dir.join("elsewhere");
     std::fs::create_dir(&elsewhere).unwrap();
 
@@ -1261,10 +1265,12 @@ fn a_staging_name_replaced_by_a_symlink_is_not_claimed() {
     let plant_a_symlink = |path: &std::path::Path| {
         std::fs::remove_dir(path).unwrap();
         std::os::unix::fs::symlink(&elsewhere, path).unwrap();
-        super::claim_staged_dir(path)
+        output_claim.claim_staged_dir(path)
     };
 
-    let Err(error) = super::create_and_claim_staged_dir(&staged_dir, plant_a_symlink) else {
+    let Err(error) =
+        super::create_and_claim_staged_dir(&output_claim, &staged_dir, plant_a_symlink)
+    else {
         panic!("a symlink at the staging name must fail the claim, and the capture with it");
     };
 
@@ -1317,6 +1323,7 @@ fn a_staging_name_replaced_by_a_junction_is_not_claimed() {
     let output_dir = scratch_path("junctioned-staging-out");
     let out_guard = ScratchGuard(output_dir.clone());
     std::fs::create_dir_all(&output_dir).unwrap();
+    let output_claim = super::claim_output_dir(&output_dir).unwrap();
     let elsewhere = output_dir.join("elsewhere");
     std::fs::create_dir(&elsewhere).unwrap();
 
@@ -1324,10 +1331,12 @@ fn a_staging_name_replaced_by_a_junction_is_not_claimed() {
     let plant_a_junction = |path: &std::path::Path| {
         std::fs::remove_dir(path).unwrap();
         junction(path, &elsewhere);
-        super::claim_staged_dir(path)
+        output_claim.claim_staged_dir(path)
     };
 
-    let Err(error) = super::create_and_claim_staged_dir(&staged_dir, plant_a_junction) else {
+    let Err(error) =
+        super::create_and_claim_staged_dir(&output_claim, &staged_dir, plant_a_junction)
+    else {
         panic!("a junction at the staging name must fail the claim, and the capture with it");
     };
 
@@ -1450,6 +1459,72 @@ fn failed_capture_preserves_every_kind_of_staging_replacement() {
             3,
             "cleanup must not create restore placeholders"
         );
+    }
+}
+
+/// The output directory pathname is replaced after the claim and before the
+/// staging directory exists: staging and payloads must land in the claimed
+/// directory, never in whatever the pathname names by then.
+#[cfg(unix)]
+#[test]
+fn staging_lands_in_the_claimed_output_dir_not_a_replacement() {
+    for (symlink, swap_after_creation) in [(false, false), (true, false), (false, true)] {
+        let root = scratch_path(&format!(
+            "staging-parent-swap-{symlink}-{swap_after_creation}"
+        ));
+        let _guard = ScratchGuard(root.clone());
+        let output = root.join("out");
+        let carried = root.join("carried");
+        let replacement = root.join("replacement");
+        std::fs::create_dir_all(&output).unwrap();
+        std::fs::create_dir(&replacement).unwrap();
+
+        let output_claim = super::claim_output_dir(&output).unwrap();
+        let swap = || {
+            std::fs::rename(&output, &carried).unwrap();
+            if symlink {
+                std::os::unix::fs::symlink(&replacement, &output).unwrap();
+            } else {
+                std::fs::rename(&replacement, &output).unwrap();
+            }
+        };
+        if !swap_after_creation {
+            swap();
+        }
+
+        let name = ".main-menu-new-game.generation-0-0.staged";
+        let staged = output.join(name);
+        let claim = super::create_and_claim_staged_dir(&output_claim, &staged, |path| {
+            if swap_after_creation {
+                swap();
+            }
+            output_claim.claim_staged_dir(path)
+        })
+        .unwrap()
+        .expect("the held directory has no staging-name collision");
+        claim
+            .write_payload(&staged, "main-menu-new-game.rgb", b"rgb")
+            .unwrap();
+        claim
+            .write_payload(&staged, "main-menu-new-game.meta", b"meta")
+            .unwrap();
+
+        assert_eq!(
+            std::fs::read_dir(&output).unwrap().count(),
+            0,
+            "the bystander received staging entries or payloads"
+        );
+        let held = carried.join(name);
+        assert_eq!(
+            std::fs::read(held.join("main-menu-new-game.rgb")).unwrap(),
+            b"rgb"
+        );
+        assert_eq!(
+            std::fs::read(held.join("main-menu-new-game.meta")).unwrap(),
+            b"meta"
+        );
+        claim.require_entry_in(&output_claim, &staged).unwrap();
+        assert!(output_claim.require_path(&output).is_err());
     }
 }
 
