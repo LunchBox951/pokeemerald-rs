@@ -15,6 +15,23 @@ fn created_paths(created: &[CreatedDirectory]) -> Vec<PathBuf> {
     created.iter().map(|dir| dir.path.clone()).collect()
 }
 
+/// [`super::create_directories_pinned`] with every proactive entry sync
+/// refused, so the levels come back unsynced and the later shedding and
+/// recovery syncs are what the test exercises.
+#[cfg(unix)]
+fn create_pinned_unsynced(
+    target: &std::path::Path,
+) -> Result<super::DirectoryCreation, (Vec<CreatedDirectory>, std::io::Error)> {
+    super::create_directories_pinned_with_hooks(
+        target,
+        super::pin_budget(),
+        &mut || {},
+        &mut || None,
+        &mut || None,
+        &mut |_| Err(std::io::Error::other("sync reopen refused")),
+    )
+}
+
 #[test]
 fn every_level_the_import_must_create_is_listed_outermost_first() {
     // Each level is a name in the one before it, and it is the *parent*
@@ -676,7 +693,7 @@ fn acquiring_the_destination_under_three_free_descriptors_keeps_the_parent_sync(
     std::fs::write(&rom_path, b"rom").expect("rom written");
     let fillers = fill_descriptor_table_leaving(3);
     let rom = std::fs::File::open(&rom_path).expect("rom opens");
-    let creation = super::create_directories_pinned(&target).expect("one level is created");
+    let creation = create_pinned_unsynced(&target).expect("one level is created");
     let mut created = creation.created;
     let dest = super::super::acquire_dest(&mut created, &target, creation.final_directory.as_ref())
         .expect("the destination opens through the pin");
@@ -721,7 +738,7 @@ fn a_shed_parent_past_a_raced_level_is_synced_not_its_child() {
             None
         },
         &mut || None,
-        &mut super::super::dest::reopen_for_sync,
+        &mut |_| Err(std::io::Error::other("sync reopen refused")),
     )
     .expect("the destination is created");
     let mut created = creation.created;
@@ -752,7 +769,7 @@ fn a_shed_level_off_the_destinations_ancestry_does_not_stop_the_parent_sync() {
     // stop it from reaching shed `a`, whose entry lives in `base`.
     let dir = TempDir::new("shed-parent-sibling");
     let target = dir.join("a").join("b").join("..").join("c");
-    let creation = super::create_directories_pinned(&target).expect("the destination is created");
+    let creation = create_pinned_unsynced(&target).expect("the destination is created");
     let mut created = creation.created;
     assert_eq!(created.len(), 3, "a, b and c are this run's");
     let dest = super::super::acquire_dest(&mut created, &target, creation.final_directory.as_ref())
@@ -794,7 +811,7 @@ fn a_full_table_after_acquisition_still_syncs_every_shed_parent() {
         })
         .collect();
     let target = paths.last().expect("four levels").clone();
-    let creation = super::create_directories_pinned(&target).expect("the destination is created");
+    let creation = create_pinned_unsynced(&target).expect("the destination is created");
     let mut created = creation.created;
     assert_eq!(created.len(), 4);
     let dest = super::super::acquire_dest(&mut created, &target, creation.final_directory.as_ref())
@@ -854,7 +871,7 @@ fn a_shed_parent_behind_a_symlinked_level_is_still_synced() {
             None
         },
         &mut || None,
-        &mut super::super::dest::reopen_for_sync,
+        &mut |_| Err(std::io::Error::other("sync reopen refused")),
     )
     .expect("the destination is created");
     let mut created = creation.created;
@@ -950,9 +967,73 @@ fn creation_syncs_a_parent_before_shedding_its_pin_behind_a_symlinked_level() {
     assert!(creation.created[0].parent.is_none(), "a was shed");
     assert!(creation.created[0].entry_synced, "a's entry was synced");
     let base_stat = rustix::fs::stat(&base).expect("base stats");
+    // Creation syncs each new entry's parent as it goes, so `a`'s entry was
+    // already durable when the shed came and no second reopen was needed.
     assert_eq!(
-        synced,
-        [(base_stat.st_dev, base_stat.st_ino)],
-        "base is synced before a's pin is shed"
+        synced
+            .iter()
+            .filter(|&&entry| entry == (base_stat.st_dev, base_stat.st_ino))
+            .count(),
+        1,
+        "base is synced once, before a's pin is shed: {synced:?}"
+    );
+    assert_eq!(
+        synced.first(),
+        Some(&(base_stat.st_dev, base_stat.st_ino)),
+        "a's entry is the first one synced"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_shed_levels_entry_is_synced_when_no_slot_is_left_to_sync_it_at_shedding() {
+    // `base/a/b/x/c` as above, but from the moment opening `x` runs out of
+    // descriptors every sync reopen fails too, and every own pin is shared
+    // so none can be released for a slot. `a`'s entry in `base`, which the
+    // destination's `..` ancestry cannot reach from `external`, must
+    // already have been synced while descriptors were to spare.
+    let dir = TempDir::new("creation-shed-symlink-full");
+    let base = dir.join("base");
+    let external = dir.join("external");
+    std::fs::create_dir(&base).expect("base made");
+    std::fs::create_dir(&external).expect("external made");
+    let x = base.join("a").join("b").join("x");
+    let target = x.join("c");
+    let reopens = std::cell::Cell::new(0);
+    let pressure = std::cell::Cell::new(false);
+    let mut synced = Vec::new();
+    let creation = super::create_directories_pinned_with_hooks(
+        &target,
+        super::pin_budget(),
+        &mut || {},
+        &mut || {
+            reopens.set(reopens.get() + 1);
+            if reopens.get() == 2 {
+                std::os::unix::fs::symlink(&external, &x).expect("the other creator links x");
+            }
+            None
+        },
+        &mut || (!pressure.replace(true)).then(|| std::io::Error::from(rustix::io::Errno::MFILE)),
+        &mut |parent| {
+            if pressure.get() {
+                return Err(std::io::Error::from(rustix::io::Errno::MFILE));
+            }
+            let reopened = super::super::dest::reopen_for_sync(parent)?;
+            let stat = rustix::fs::fstat(parent).expect("parent stats");
+            synced.push((stat.st_dev, stat.st_ino));
+            Ok(reopened)
+        },
+    )
+    .expect("the import still succeeds under pressure");
+    assert_eq!(creation.created.len(), 3, "a, b and c are this run's");
+    assert!(creation.created[0].parent.is_none(), "a was shed");
+    assert!(
+        creation.created[0].entry_synced,
+        "a's entry was synced before its parent was shed"
+    );
+    let base_stat = rustix::fs::stat(&base).expect("base stats");
+    assert!(
+        synced.contains(&(base_stat.st_dev, base_stat.st_ino)),
+        "base was synced while descriptors were to spare: {synced:?}"
     );
 }

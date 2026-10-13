@@ -55,6 +55,7 @@ pub mod move_names;
 pub mod new_game_flags;
 pub mod object_event_flags;
 pub mod pack;
+pub mod pokedex;
 pub mod species;
 pub mod species_names;
 pub mod tmhm_learnsets;
@@ -116,6 +117,10 @@ pub use move_names::MoveNames;
 pub use pack::{
     AssetPack, EntryKind, ImageRef, PackError, PaletteRef, PalettedImage, StarterChooserHandle,
     StarterPreviewHandle, StarterSpecies, TilesetHandle,
+};
+pub use pokedex::{
+    NationalDexNo, PokedexData, PokedexEntry, PokedexError, PokedexOrderKind, PokedexOrders,
+    NATIONAL_DEX_COUNT, NATIONAL_DEX_LAST, NATIONAL_DEX_OLD_UNOWN_COUNT,
 };
 pub use species::{
     AbilityId, BaseStats, BodyColor, EggGroup, EvYield, GenderRatio, GrowthRate, ItemId, SpeciesId,

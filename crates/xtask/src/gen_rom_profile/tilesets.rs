@@ -46,6 +46,8 @@ const FIELD_CALLBACK: u32 = 0x14;
 /// Size of `struct Tileset`.
 const TILESET_STRUCT_BYTES: u32 = 0x18;
 
+/// Colours in one palette bank; the importer requires exactly this many.
+const BANK_COLORS: u16 = 16;
 /// Palette banks per tileset.
 const PALETTE_BANKS: u32 = 16;
 /// Bytes in one 16-colour BGR555 bank.
@@ -286,6 +288,19 @@ fn locate_palettes(
         let id = format!("tileset/{name}/palette/{bank:02}");
         let asset = ctx.pack.get(&id)?;
         let color_count = asset.palette_colors(&id)?;
+        // The importer requires exactly one full 16-colour bank per root, and
+        // the ROM comparison below is only as long as the pack payload, so a
+        // shorter matching prefix would otherwise be emitted as-is.
+        if color_count != BANK_COLORS || asset.payload.len() != BANK_BYTES as usize {
+            return Err(GenRomProfileError::StructMismatch {
+                id,
+                reason: format!(
+                    "bank {bank} must hold exactly {BANK_COLORS} colours ({BANK_BYTES} bytes), \
+                     found {color_count} colours ({} bytes)",
+                    asset.payload.len()
+                ),
+            });
+        }
         let addr = base + bank * BANK_BYTES;
         let rom_bank = slice_at_addr(ctx.rom, addr, asset.payload.len());
         if rom_bank != Some(asset.payload.as_slice()) {
@@ -387,7 +402,61 @@ pub fn len32(payload: &[u8]) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use super::frame_number;
+    use super::{frame_number, locate_palettes};
+    use crate::gen_rom_profile::error::GenRomProfileError;
+    use crate::gen_rom_profile::tests::with_context;
+    use pack_format::palette_entry;
+    use rom_import::fixture::RomFixture;
+
+    /// Sixteen contiguous 16-colour banks in a ROM; bank `short` (if any) is
+    /// packed as a matching `short_len`-colour prefix.
+    fn locate(name: &str, short: Option<(usize, usize)>) -> Result<Vec<u16>, GenRomProfileError> {
+        let colors: Vec<u16> = (0..256u16)
+            .map(|i| i.wrapping_mul(0x0123) & 0x7FFF)
+            .collect();
+        let bytes: Vec<u8> = colors.iter().flat_map(|c| c.to_le_bytes()).collect();
+        let rom = RomFixture::new()
+            .emerald_header()
+            .write(0x50_0000, &bytes)
+            .finish();
+        let entries = (0..16usize)
+            .map(|bank| {
+                let full = &colors[bank * 16..bank * 16 + 16];
+                let used = match short {
+                    Some((b, len)) if b == bank => &full[..len],
+                    _ => full,
+                };
+                palette_entry(format!("tileset/general/palette/{bank:02}"), used).expect("entry")
+            })
+            .collect();
+        with_context(name, &rom, entries, |ctx| {
+            let mut report = Vec::new();
+            locate_palettes(ctx, "general", 0x0850_0000, &mut report)
+                .map(|plans| plans.iter().map(|p| p.color_count).collect())
+        })
+    }
+
+    #[test]
+    fn complete_sixteen_colour_banks_are_accepted() {
+        assert_eq!(
+            locate("tileset-bank-full", None).expect("full"),
+            vec![16; 16]
+        );
+    }
+
+    #[test]
+    fn a_tileset_bank_narrower_than_sixteen_colours_is_refused() {
+        for (i, len) in [(1usize, 8usize), (0, 15)] {
+            let err = locate(&format!("tileset-bank-short-{i}"), Some((i, len)))
+                .expect_err("a short bank must be refused");
+            match err {
+                GenRomProfileError::StructMismatch { id, .. } => {
+                    assert_eq!(id, format!("tileset/general/palette/{i:02}"));
+                }
+                other => panic!("unexpected error {other:?}"),
+            }
+        }
+    }
 
     #[test]
     fn frames_order_numerically_not_lexically() {
