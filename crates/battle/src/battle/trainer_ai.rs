@@ -95,12 +95,14 @@ const UNCHANGED_AFTER_PROLOGUE_EFFECTS: [u8; 12] = [3, 2, 17, 29, 41, 43, 70, 74
 /// Rows whose `AI_CheckViability` branch is not ported: `ABSORB`, `ALWAYS_HIT`,
 /// `HIGH_CRITICAL`, `SPEED_DOWN_HIT`, `VITAL_THROW`
 /// (`data/battle_ai_scripts.s:655,666,686,706,708`).
-const UNPORTED_VIABILITY_EFFECTS: [u8; 6] = [3, 17, 43, 70, 78, EFFECT_CHARGE_RAW];
+const UNPORTED_VIABILITY_EFFECTS: [u8; 5] = [3, 17, 43, 70, 78];
 
 /// `Charge` doubles the next Electric move's damage, which upstream's
 /// `AI_CalcDmg` folds into every simulated-damage read
 /// (`src/battle_script_commands.c:1306-1316`); `estimated_damage` does not, so
-/// the damage-reading scripts (`CHECK_VIABILITY`, `TRY_TO_FAINT`) refuse it.
+/// the one damage-reading script, `TRY_TO_FAINT` (`if_can_faint`,
+/// `data/battle_ai_scripts.s:2618`), refuses it. `AI_CheckViability` neither
+/// dispatches `EFFECT_CHARGE` nor reads damage (`:619-743`).
 const EFFECT_CHARGE_RAW: u8 = 174;
 
 /// `QUICK_ATTACK` earns an extra +2 from `AI_TryToFaint` when it can faint the

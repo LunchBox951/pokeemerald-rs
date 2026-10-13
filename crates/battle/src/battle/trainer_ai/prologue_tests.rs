@@ -240,14 +240,15 @@ fn admission_is_flag_aware() {
             "{move_id:?}"
         );
     }
-    // Charge's doubled damage is not in the simulated-damage estimate.
-    for flags in [AiFlags::TRY_TO_FAINT, AiFlags::CHECK_VIABILITY] {
-        assert_eq!(
-            ensure_scoreable(&dex, MoveId::CHARGE, only_cbm.union(flags)),
-            Err(BattleError::UnscoreableMoveEffect(MoveId::CHARGE))
-        );
+    // Charge's doubled damage is not in the simulated-damage estimate, which
+    // only TRY_TO_FAINT reads; CHECK_VIABILITY has no Charge branch.
+    assert_eq!(
+        ensure_scoreable(&dex, MoveId::CHARGE, only_cbm.union(AiFlags::TRY_TO_FAINT)),
+        Err(BattleError::UnscoreableMoveEffect(MoveId::CHARGE))
+    );
+    for flags in [only_cbm, only_cbm.union(AiFlags::CHECK_VIABILITY)] {
+        assert_eq!(ensure_scoreable(&dex, MoveId::CHARGE, flags), Ok(()));
     }
-    assert_eq!(ensure_scoreable(&dex, MoveId::CHARGE, only_cbm), Ok(()));
     assert_eq!(
         ensure_scoreable(&dex, MoveId::EMBER, only_cbm),
         Err(BattleError::UnscoreableMoveEffect(MoveId::EMBER))
