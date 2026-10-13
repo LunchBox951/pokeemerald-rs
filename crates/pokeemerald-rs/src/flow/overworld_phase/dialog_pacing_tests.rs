@@ -160,7 +160,7 @@ fn a_sight_trainer_intro_message_paces_at_the_saved_text_speed() {
     const FONT_BIT_DEPTH: u8 = 2;
     const PALETTE_COLOUR_COUNT: u16 = 16;
     /// Generous: the approach's own icon (sixty frames) and one walked tile
-    /// (`WALK_FRAMES_PER_TILE`) plus the face and face-wait frames must all
+    /// (`WALK_FRAMES_PER_TILE`) plus the face, face-wait and follow-up frames must all
     /// elapse before the box opens at all.
     const OPEN_FRAME_BUDGET: usize = 200;
     const PRINT_FRAME_BUDGET: usize = 64;

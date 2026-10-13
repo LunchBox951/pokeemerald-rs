@@ -179,11 +179,21 @@ fn the_speech_does_not_open_on_the_frame_the_player_is_turned() {
          that (trainer_see.c:531-539)"
     );
 
-    // The intro stage itself, the frame after that.
+    // F+2: `Task_EndTrainerApproach` runs (the followup func only took
+    // effect after F+1's dispatch, `task.c:110-122,148-153`) and enables the
+    // script after that frame's script pass (`trainer_see.c:655-664`,
+    // `overworld.c:1465-1470`).
+    phase.step(ButtonState::new());
+    assert!(
+        phase.dialog.is_none() && !phase.is_sight_trainer_battle_active(),
+        "F+2 enables the script; speech cannot open until F+3"
+    );
+
+    // F+3: the resumed script runs `ShowTrainerIntroSpeech`.
     phase.step(ButtonState::new());
     assert!(
         phase.dialog.is_some() || phase.is_sight_trainer_battle_active(),
-        "the speech (or its no-pack battle fallback) must open on the frame after the wait"
+        "the speech (or its no-pack battle fallback) must open on F+3"
     );
 }
 
