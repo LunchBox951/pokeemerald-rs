@@ -981,3 +981,119 @@ fn affine_obj_mosaic_spill_ignores_a_zero_width_win1_pass_trimmed_by_a_win0_endi
         assert_eq!(fb.pixel(x, 0), Some(black), "x={x}");
     }
 }
+
+/// Composes row 0 of an opaque affine mosaic OBJWIN at x=1 whose WINOUT
+/// pass spills past its end into a BG0-disabling WIN0/WIN1 that starts at
+/// `window_start`, with OBJWIN enabling BG0.
+fn objwin_spill_over_geometric_window(
+    win1: bool,
+    depth: BitDepth,
+    window_start: u8,
+) -> crate::framebuffer::Framebuffer {
+    use crate::oam::AffineMode;
+
+    let (bg_tiles, bg_palette, bg_map) = opaque_bg_fixture(9);
+    let bg = crate::bg::BgLayer::new(&bg_tiles, &bg_palette, &bg_map);
+    let slots = [BgSlot::new(bg, 0, 1, 0, 0, true)];
+
+    let sprite_tiles = match depth {
+        BitDepth::Bpp4 => Tileset::decode(BitDepth::Bpp4, &[0xFFu8; 32]),
+        BitDepth::Bpp8 => Tileset::decode(BitDepth::Bpp8, &[15u8; 64]),
+    }
+    .unwrap();
+    let mut sprite_colors = [Bgr555::default(); Palette::LEN];
+    sprite_colors[15] = Bgr555::from_channels(0, 31, 31);
+    let sprite_palette = Palette::new(sprite_colors);
+
+    let entries = [OamEntry::new(
+        1,
+        0,
+        0,
+        0,
+        depth,
+        false,
+        false,
+        ObjShape::Square,
+        0,
+        0,
+        true,
+    )
+    .with_mode(ObjMode::Window)
+    .with_mosaic(true)
+    .with_affine(AffineMode::Affine { matrix_num: 0 })];
+    let matrices = [AffineMatrix::new(
+        AffineMatrix::ONE / 4,
+        0,
+        0,
+        AffineMatrix::ONE,
+    )];
+    let sprites = SpriteLayer::new(&entries, &sprite_tiles, &sprite_tiles, &sprite_palette)
+        .with_affine_matrices(&matrices);
+
+    let mut bg0 = WindowLayerEnable::NONE;
+    bg0.bg[0] = true;
+    let rect = WindowRect::new(WindowRange::new(window_start, 240), WindowRange::new(0, 1));
+    let (win0, win1) = if win1 {
+        (None, Some((rect, WindowLayerEnable::NONE)))
+    } else {
+        (Some((rect, WindowLayerEnable::NONE)), None)
+    };
+    let effects = FrameEffects {
+        windows: WindowConfig {
+            win0,
+            win1,
+            obj_window: Some(bg0),
+            winout: WindowLayerEnable::NONE,
+        },
+        mosaic: crate::mosaic::MosaicConfig {
+            bg: MosaicSize::NONE,
+            obj: MosaicSize::new(4, 1),
+        },
+        ..FrameEffects::default()
+    };
+    compose_frame_with_effects(&sprites, &slots, &effects)
+}
+
+fn assert_objwin_spill_enables_bg0(win1: bool, depth: BitDepth) {
+    // mGBA's WINOUT pass writes the affine OBJWIN trailing spill past its
+    // end (`software-obj.c:227-242`); WIN0/WIN1 passes skip OBJWIN drawing
+    // (`software-obj.c:161-163`) but never clear those row bits, so BG0 still
+    // draws there through OBJWIN's enable (`video-software.c:510-523`,
+    // `software-private.h:87-99,210-215`) `(behavioral-fidelity)`.
+    let fb = objwin_spill_over_geometric_window(win1, depth, 10);
+    let red = Bgr555::from_channels(9, 0, 0).to_rgb888();
+    for x in 9..12 {
+        assert_eq!(fb.pixel(x, 0), Some(red), "x={x}");
+    }
+    assert_eq!(fb.pixel(12, 0), Some(Rgb888::BLACK), "x=12");
+}
+
+#[test]
+fn objwin_affine_mosaic_spill_written_in_winout_enables_bg0_inside_win0() {
+    assert_objwin_spill_enables_bg0(false, BitDepth::Bpp4);
+}
+
+#[test]
+fn objwin_affine_mosaic_spill_written_in_winout_enables_bg0_inside_win1() {
+    assert_objwin_spill_enables_bg0(true, BitDepth::Bpp4);
+}
+
+#[test]
+fn objwin_affine_8bpp_mosaic_spill_written_in_winout_enables_bg0_inside_win0() {
+    assert_objwin_spill_enables_bg0(false, BitDepth::Bpp8);
+}
+
+#[test]
+fn objwin_affine_mosaic_without_trailing_spill_stays_suppressed_inside_win0_and_win1() {
+    // A WINOUT pass clipped at 5 ends before the sprite's rounded edge, so
+    // there is no spill and WIN0/WIN1 keep their BG0 suppression
+    // (`software-obj.c:227-242`).
+    for win1 in [false, true] {
+        let fb = objwin_spill_over_geometric_window(win1, BitDepth::Bpp4, 5);
+        let red = Bgr555::from_channels(9, 0, 0).to_rgb888();
+        assert_eq!(fb.pixel(4, 0), Some(red), "win1={win1} x=4");
+        for x in 5..12 {
+            assert_eq!(fb.pixel(x, 0), Some(Rgb888::BLACK), "win1={win1} x={x}");
+        }
+    }
+}

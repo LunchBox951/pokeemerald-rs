@@ -365,17 +365,37 @@ impl<'a> SpriteLayer<'a> {
     /// display color. Returns `false` outside the framebuffer.
     #[must_use]
     pub fn objwin_mask(&self, x: usize, y: usize) -> bool {
-        self.objwin_mask_inner(x, y, MosaicSize::NONE)
+        self.objwin_mask_inner(x, y, MosaicSize::NONE, WindowSpans::WHOLE_SCANLINE)
     }
 
     /// Resolves the OBJ-window mask after applying `mosaic` to enabled entries.
     /// [`MosaicSize::NONE`] is equivalent to [`objwin_mask`](Self::objwin_mask).
     #[must_use]
     pub fn objwin_mask_with_mosaic(&self, x: usize, y: usize, mosaic: MosaicSize) -> bool {
-        self.objwin_mask_inner(x, y, mosaic)
+        self.objwin_mask_inner(x, y, mosaic, WindowSpans::WHOLE_SCANLINE)
     }
 
-    fn objwin_mask_inner(&self, x: usize, y: usize, mosaic: MosaicSize) -> bool {
+    /// Resolves the OBJ-window mask as the OR of the opaque writes the
+    /// permitted preprocessing passes of `window_spans` make, so an affine
+    /// mosaic trailing spill written by an earlier pass survives into a later
+    /// span that would not have written it (`mgba/src/gba/renderers/software-obj.c:160-163,227-242`).
+    pub(crate) fn objwin_mask_with_mosaic_windowed(
+        &self,
+        x: usize,
+        y: usize,
+        mosaic: MosaicSize,
+        window_spans: WindowSpans<'_>,
+    ) -> bool {
+        self.objwin_mask_inner(x, y, mosaic, window_spans)
+    }
+
+    fn objwin_mask_inner(
+        &self,
+        x: usize,
+        y: usize,
+        mosaic: MosaicSize,
+        window_spans: WindowSpans<'_>,
+    ) -> bool {
         if x >= Framebuffer::WIDTH || y >= Framebuffer::HEIGHT {
             return false;
         }
@@ -388,14 +408,7 @@ impl<'a> SpriteLayer<'a> {
                 // it never restarts an affine mosaic hold
                 // (`behavioral-fidelity`).
                 matches!(
-                    self.sample_entry_mosaic(
-                        entry,
-                        x,
-                        y,
-                        mosaic,
-                        WindowSpans::WHOLE_SCANLINE,
-                        false
-                    ),
+                    self.sample_entry_mosaic(entry, x, y, mosaic, window_spans, false),
                     (Texel::Opaque(_), _)
                 )
             })
