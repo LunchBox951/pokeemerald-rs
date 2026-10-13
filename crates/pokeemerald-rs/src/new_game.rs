@@ -11,7 +11,9 @@
 
 use engine::overworld::{Direction, TilePos};
 use engine::rng::Rng;
-use engine::save::{Coords16, PlayerGender, SaveBlock1, SaveBlock2, WarpData};
+use engine::save::{
+    BattleStyle, ButtonMode, Coords16, PlayerGender, SaveBlock1, SaveBlock2, SoundMode, WarpData,
+};
 use engine::text;
 
 use crate::overworld::PlayerCharacter;
@@ -117,14 +119,26 @@ pub(crate) struct NewGameOptions {
     /// -- an out-of-range value just falls back to frame 0 at draw time,
     /// nothing is written back to the live block).
     pub(crate) window_frame_type: u8,
+    /// `optionsButtonMode`, carried through unvalidated like the frame type.
+    pub(crate) button_mode: ButtonMode,
+    /// `optionsSound`.
+    pub(crate) sound: SoundMode,
+    /// `optionsBattleStyle`.
+    pub(crate) battle_style: BattleStyle,
+    /// `optionsBattleSceneOff`.
+    pub(crate) battle_scene_off: bool,
 }
 
 impl NewGameOptions {
-    /// `SetDefaultOptions`' own two constants: `OPTIONS_TEXT_SPEED_MID`
-    /// (`new_game.c:93`) and `WINDOW_FRAME_TYPE_0` (`:94`).
+    /// `SetDefaultOptions`' own constants (`new_game.c:93-97`) over the
+    /// zeroed block `ClearSav2` leaves (`OPTIONS_BUTTON_MODE_NORMAL`).
     pub(crate) const DEFAULT: Self = Self {
         text_speed: 1,
         window_frame_type: 0,
+        button_mode: ButtonMode::Normal,
+        sound: SoundMode::Mono,
+        battle_style: BattleStyle::Shift,
+        battle_scene_off: false,
     };
 }
 
@@ -306,10 +320,10 @@ pub(crate) fn init_save_blocks_with_options(
     init_save_blocks_with_identity(rng, options, NewGameIdentity::DEFAULT)
 }
 
-/// Builds fresh save blocks for every modeled new-game field, seeding
-/// `options_text_speed`/`options_window_frame_type` from `options` rather
-/// than always defaulting them (issue #1125) -- see [`NewGameOptions`]'s own
-/// doc comment for which boot verdicts reach which value.
+/// Builds fresh save blocks for every modeled new-game field, seeding the
+/// `options_*` preferences from `options` rather than always defaulting
+/// them (issue #1125) -- see [`NewGameOptions`]'s own doc comment for which
+/// boot verdicts reach which value.
 ///
 /// The RNG's pre-draw state supplies the trainer ID's low half and one draw
 /// supplies its high half, preserving `SeedRngAndSetTrainerId` followed by
@@ -336,6 +350,10 @@ pub(crate) fn init_save_blocks_with_identity(
         encryption_key: 0,
         options_text_speed: options.text_speed,
         options_window_frame_type: options.window_frame_type,
+        options_button_mode: options.button_mode,
+        options_sound: options.sound,
+        options_battle_style: options.battle_style,
+        options_battle_scene_off: options.battle_scene_off,
         ..SaveBlock2::default()
     };
 
@@ -496,6 +514,10 @@ mod tests {
         let options = NewGameOptions {
             text_speed: 2,
             window_frame_type: 5,
+            button_mode: ButtonMode::Lr,
+            sound: SoundMode::Stereo,
+            battle_style: BattleStyle::Set,
+            battle_scene_off: true,
         };
         let (block1, block2) = init_save_blocks_with_options(&mut Rng::new(0), options);
         let (default_block1, default_block2) = init_save_blocks(&mut Rng::new(0));
@@ -504,12 +526,16 @@ mod tests {
         assert_eq!(block2.options_window_frame_type, 5);
         // Every other modeled field must come out identical to the
         // default-options case (same seed, same everything else) -- only
-        // the two option fields this test set differ.
+        // the option fields this test set differ.
         assert_eq!(
             block2,
             SaveBlock2 {
                 options_text_speed: 2,
                 options_window_frame_type: 5,
+                options_button_mode: ButtonMode::Lr,
+                options_sound: SoundMode::Stereo,
+                options_battle_style: BattleStyle::Set,
+                options_battle_scene_off: true,
                 ..default_block2
             }
         );

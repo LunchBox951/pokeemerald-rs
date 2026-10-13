@@ -273,13 +273,13 @@ const fn window_frame_for(saved: &SavedGame) -> u8 {
 /// the one place that owns the status/option contract; every other site
 /// that needs it links here instead of restating it.
 ///
-/// `NewGameInitData` never resets `optionsTextSpeed`/`optionsWindowFrameType`
-/// itself (`pokeemerald/src/new_game.c:149-207`), so only a boot verdict that
+/// `NewGameInitData` never resets any `options*` field itself
+/// (`pokeemerald/src/new_game.c:149-207`), so only a boot verdict that
 /// already re-defaulted `SaveBlock2` via `SetDefaultOptions` -- exactly
 /// [`crate::game_save::SaveFileStatus::boot_clears_save_block2`]'s `Empty`/
 /// `Corrupt` cases (`pokeemerald/src/intro.c:1154-1156`) -- reaches
 /// [`NewGameOptions::DEFAULT`]. Every other status, `Ok`/`Error` alike, and
-/// this port's own `NoFlash`, carries `saved.block2`'s own two bytes forward
+/// this port's own `NoFlash`, carries `saved.block2`'s own preferences forward
 /// instead -- mirroring [`window_frame_for`]'s identical boot-verdict split.
 ///
 /// `NoFlash` is not a rescued block: [`crate::game_save::SaveSlot::load`]
@@ -296,6 +296,10 @@ const fn new_game_options_for(saved: &SavedGame) -> NewGameOptions {
         NewGameOptions {
             text_speed: saved.block2.options_text_speed,
             window_frame_type: saved.block2.options_window_frame_type,
+            button_mode: saved.block2.options_button_mode,
+            sound: saved.block2.options_sound,
+            battle_style: saved.block2.options_battle_style,
+            battle_scene_off: saved.block2.options_battle_scene_off,
         }
     }
 }
