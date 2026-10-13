@@ -34,9 +34,9 @@ fn cgb_fixed_rate_tags_survive_loading() {
     }
     match song.voice(2) {
         Some(Instrument::CgbWave(tone)) => {
-            assert!(
-                !tone.wave_id.is_empty(),
-                "the wave asset ID must reach WaveTone"
+            assert_eq!(
+                &*tone.wave_id, "audio/sample/fixtest_wave",
+                "the source wave asset ID must reach WaveTone unchanged"
             );
             assert!(
                 tone.fixed_rate,
