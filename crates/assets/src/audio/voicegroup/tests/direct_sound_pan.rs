@@ -1,5 +1,5 @@
 use super::super::*;
-use super::shared::sample_envelope;
+use super::shared::{sample_envelope, MIDDLE_C};
 
 const FIRST_DIRECT_SOUND_PAN_BYTE: usize = 3;
 
@@ -7,7 +7,7 @@ const FIRST_DIRECT_SOUND_PAN_BYTE: usize = 3;
 fn direct_sound_round_trips_with_and_without_pan_override() {
     let group = VoiceGroup::new(vec![
         VoiceEntry::DirectSound(DirectSoundVoice {
-            base_key: 60,
+            base_key: MIDDLE_C,
             pan: None,
             sample: SampleId("audio/sample/sc88pro_flute".to_owned()),
             envelope: sample_envelope(),
@@ -34,7 +34,7 @@ fn direct_sound_round_trips_with_and_without_pan_override() {
 #[test]
 fn direct_sound_reverse_mode_round_trips() {
     let group = VoiceGroup::new(vec![VoiceEntry::DirectSound(DirectSoundVoice {
-        base_key: 60,
+        base_key: MIDDLE_C,
         pan: None,
         sample: SampleId("audio/sample/bicycle_bell".to_owned()),
         envelope: sample_envelope(),
@@ -48,7 +48,7 @@ fn direct_sound_reverse_mode_round_trips() {
 #[test]
 fn no_pan_override_round_trips_without_becoming_zero() {
     let group = VoiceGroup::new(vec![VoiceEntry::DirectSound(DirectSoundVoice {
-        base_key: 60,
+        base_key: MIDDLE_C,
         pan: None,
         sample: SampleId("audio/sample/x".to_owned()),
         envelope: sample_envelope(),
@@ -65,7 +65,7 @@ fn no_pan_override_round_trips_without_becoming_zero() {
 #[test]
 fn pan_zero_is_rejected_at_construction() {
     let err = VoiceGroup::new(vec![VoiceEntry::DirectSound(DirectSoundVoice {
-        base_key: 60,
+        base_key: MIDDLE_C,
         pan: Some(0),
         sample: SampleId("audio/sample/x".to_owned()),
         envelope: sample_envelope(),
@@ -81,7 +81,7 @@ fn pan_zero_is_rejected_at_construction() {
 
 fn direct_sound_with_pan(pan: Option<u8>) -> VoiceEntry {
     VoiceEntry::DirectSound(DirectSoundVoice {
-        base_key: 60,
+        base_key: MIDDLE_C,
         pan,
         sample: SampleId("audio/sample/x".to_owned()),
         envelope: sample_envelope(),
@@ -110,8 +110,8 @@ fn pan_out_of_range_is_rejected_at_construction() {
     }
 }
 
-/// A pan byte above `127` aliases an in-domain value once `0x80 | pan` reaches
-/// `audio::rhythm_pan_from_pan_sweep` (`Some(200)` pans as `Some(72)`), so decode rejects it.
+/// Upstream ORs pan with the high bit (`asm/macros/music_voice.inc`), so a pan above 127 would
+/// alias an in-domain value (200 and 72 are indistinguishable); decode rejects it.
 #[test]
 fn decode_rejects_out_of_range_pan() {
     let group = VoiceGroup::new(vec![direct_sound_with_pan(Some(64))]).unwrap();

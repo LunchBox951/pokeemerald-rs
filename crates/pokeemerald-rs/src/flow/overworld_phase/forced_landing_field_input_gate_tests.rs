@@ -26,7 +26,7 @@ fn clear_landing_frame_without_forced_dispatch(phase: &mut OverworldPhase) {
 /// `(8, 2)` -- same substitution as
 /// [`super::test_support::littleroot_lab_door_scene`]'s.
 fn slope_below_the_upstairs_door_phase() -> OverworldPhase {
-    let scene = crate::overworld::tests::synthetic_scene_with_special_tiles(
+    let scene = crate::overworld::test_support::synthetic_scene_with_special_tiles(
         10,
         10,
         &[((8, 3), MB_MUDDY_SLOPE), ((8, 2), MB_ANIMATED_DOOR)],
@@ -116,8 +116,12 @@ fn a_forced_landing_suppresses_the_animated_door_poll_until_the_next_call() {
 /// a fresh save) -- so a forced landing sits immediately beside a real,
 /// pack-free interaction target.
 fn slope_beside_mom_phase() -> OverworldPhase {
-    let scene =
-        crate::overworld::tests::synthetic_scene_with_special_tile(10, 10, (3, 6), MB_MUDDY_SLOPE);
+    let scene = crate::overworld::test_support::synthetic_scene_with_special_tile(
+        10,
+        10,
+        (3, 6),
+        MB_MUDDY_SLOPE,
+    );
     OverworldPhase::for_test(
         scene,
         ONE_F,
@@ -195,8 +199,12 @@ fn a_forced_landing_suppresses_the_same_frame_interaction_until_the_next_call() 
 /// coordinate, `(9, 8)`, paired with [`arrow_probe_runtime`]'s
 /// arrow-tile probe scene at the same position.
 fn slope_onto_the_southward_warp_phase() -> OverworldPhase {
-    let scene =
-        crate::overworld::tests::synthetic_scene_with_special_tile(10, 10, (9, 8), MB_MUDDY_SLOPE);
+    let scene = crate::overworld::test_support::synthetic_scene_with_special_tile(
+        10,
+        10,
+        (9, 8),
+        MB_MUDDY_SLOPE,
+    );
     OverworldPhase::for_test(
         scene,
         ONE_F,
@@ -248,7 +256,7 @@ fn a_forced_landing_suppresses_the_arrow_poll_until_the_next_call() {
         "fixture precondition: a forced-movement tile's own landing call is suppressed"
     );
 
-    let probe_scene = crate::overworld::tests::synthetic_scene_with_special_tile(
+    let probe_scene = crate::overworld::test_support::synthetic_scene_with_special_tile(
         10,
         10,
         (9, 8),

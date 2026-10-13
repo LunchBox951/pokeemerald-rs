@@ -33,6 +33,18 @@ fn a_landed_poison_sting_reports_poisoned_immediately_after_hit() {
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
+    rng.assert_exhausted();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            BattleEvent::Hit {
+                by_player: false,
+                move_id: TACKLE,
+                ..
+            }
+        )),
+        "the enemy's Tackle must land so its four draws are consumed: {events:?}"
+    );
 
     let hit_index = events
         .iter()
@@ -70,6 +82,18 @@ fn a_poison_type_target_is_never_poisoned_even_on_a_successful_roll() {
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
+    rng.assert_exhausted();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            BattleEvent::Hit {
+                by_player: false,
+                move_id: TACKLE,
+                ..
+            }
+        )),
+        "the enemy's Tackle must land so its four draws are consumed: {events:?}"
+    );
 
     assert!(
         !events
@@ -93,6 +117,7 @@ fn end_of_turn_poison_damage_matches_the_pinned_formula_and_settles_no_faint() {
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
+    rng.assert_exhausted();
 
     let expected_damage = poison_residual_damage(player_max_hp);
     assert_eq!(
@@ -134,6 +159,7 @@ fn both_battlers_poisoned_take_residual_damage_in_the_rebuilt_end_turn_order() {
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
+    rng.assert_exhausted();
 
     let player_tick = events
         .iter()
@@ -194,6 +220,7 @@ fn a_lethal_residual_tick_faints_and_ends_the_battle_like_a_lethal_hit() {
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
+    rng.assert_exhausted();
 
     assert!(
         events.contains(&BattleEvent::Hit {
@@ -252,6 +279,7 @@ fn the_first_battlers_lethal_residual_tick_stops_the_second_battlers_from_runnin
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
+    rng.assert_exhausted();
 
     assert!(
         events.contains(&BattleEvent::HurtByPoison {
@@ -289,6 +317,7 @@ fn a_failed_run_still_ticks_the_poison_residual() {
     let mut rng = SequenceRng::new(FAILED_RUN_THEN_ENEMY_ATTACK);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
+    rng.assert_exhausted();
 
     let expected_damage = poison_residual_damage(enemy_max_hp);
     assert!(
@@ -317,6 +346,7 @@ fn a_direct_hit_wild_ko_ends_the_battle_before_any_residual_can_tick() {
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
+    rng.assert_exhausted();
 
     assert!(
         events.contains(&BattleEvent::Fainted { by_player: false }),
@@ -424,6 +454,7 @@ fn a_speed_drop_during_the_action_phase_flips_the_same_turns_poison_order() {
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
+    rng.assert_exhausted();
     let action_sides: Vec<bool> = events
         .iter()
         .filter_map(|event| match event {
@@ -466,6 +497,7 @@ fn a_faint_replacement_is_compared_by_its_own_moves_at_the_end_turn() {
     battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
+    rng.assert_exhausted();
     assert_eq!(rng.draws(), 12, "the replacement's Tackle ties the enemy's");
 }
 
@@ -488,6 +520,7 @@ fn an_unequal_priority_selection_consumes_no_end_turn_tie_draw() {
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
+    rng.assert_exhausted();
     let (_, ticks) = hit_and_tick_sides(&events);
     assert_eq!(ticks, [true, false], "{events:?}");
     assert_eq!(rng.draws(), 12);

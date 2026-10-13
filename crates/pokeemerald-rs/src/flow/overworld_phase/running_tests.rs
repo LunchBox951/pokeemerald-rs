@@ -14,7 +14,7 @@ const SAVE_KEY: u32 = 0xA5A5_1234;
 
 fn littleroot_phase(position: (i32, i32), facing: Direction) -> OverworldPhase {
     OverworldPhase::for_test(
-        crate::overworld::tests::synthetic_scene(20, 20),
+        crate::overworld::test_support::synthetic_scene(20, 20),
         LITTLEROOT,
         PlayerState::new(position, 3, facing),
         None,
@@ -31,7 +31,7 @@ fn continued(phase: &OverworldPhase, position: (i32, i32)) -> OverworldPhase {
     let bytes = block1.to_bytes(SAVE_KEY);
     let restored = engine::save::SaveBlock1::from_bytes(&bytes, SAVE_KEY).unwrap();
     OverworldPhase::from_saved(
-        crate::overworld::tests::synthetic_scene(20, 20),
+        crate::overworld::test_support::synthetic_scene(20, 20),
         LITTLEROOT,
         restored,
         phase.save2.clone(),

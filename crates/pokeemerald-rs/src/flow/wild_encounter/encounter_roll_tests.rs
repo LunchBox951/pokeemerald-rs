@@ -318,7 +318,7 @@ fn an_unfightable_map_table_disables_the_roll_without_drawing() {
         .map(|&pos| (pos, MB_TALL_GRASS))
         .collect();
     let mut phase = OverworldPhase::for_test(
-        crate::overworld::tests::synthetic_scene_with_special_tiles(10, 10, &specials),
+        crate::overworld::test_support::synthetic_scene_with_special_tiles(10, 10, &specials),
         assets::MapId("MAP_ROUTE102"),
         PlayerState::new((2, 5), 3, Direction::East),
         None,

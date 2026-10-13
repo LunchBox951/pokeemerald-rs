@@ -180,8 +180,12 @@ pub(crate) fn blit_glyphs_colored_tracked(
                 else {
                     continue;
                 };
-                let content_x = revealed.x + pixel_x;
-                let content_y = revealed.y + pixel_y;
+                let (Some(content_x), Some(content_y)) = (
+                    revealed.x.checked_add(pixel_x),
+                    revealed.y.checked_add(pixel_y),
+                ) else {
+                    continue;
+                };
                 if content_x < 0
                     || content_y < 0
                     || content_x >= content_width
@@ -216,8 +220,8 @@ impl WindowOp {
     /// Shifts this op vertically by a window scroll.
     pub(crate) fn shift_y(&mut self, dy: i32) {
         match self {
-            Self::Glyph(glyph) => glyph.y += dy,
-            Self::ClearSpan(span) => span.y += dy,
+            Self::Glyph(glyph) => glyph.y = glyph.y.saturating_add(dy),
+            Self::ClearSpan(span) => span.y = span.y.saturating_add(dy),
         }
     }
 }
@@ -258,7 +262,8 @@ pub(crate) fn compose_window_ops(
 
 /// Copies `span`'s window-local rectangle from `background` onto `fb`,
 /// clipped to the content bounds the same way [`blit_glyphs_colored_tracked`]
-/// clips a glyph.
+/// clips a glyph. A pixel whose coordinate leaves the `i32` range lies outside
+/// the content and is skipped.
 fn restore_cleared_span(
     fb: &mut Framebuffer,
     background: &Framebuffer,
@@ -269,8 +274,11 @@ fn restore_cleared_span(
     let (content_width, content_height) = content_size;
     for dy in 0..span.height {
         for dx in 0..span.width {
-            let content_x = span.x + dx;
-            let content_y = span.y + dy;
+            let (Some(content_x), Some(content_y)) =
+                (span.x.checked_add(dx), span.y.checked_add(dy))
+            else {
+                continue;
+            };
             if content_x < 0
                 || content_y < 0
                 || content_x >= content_width
@@ -523,6 +531,32 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn blit_glyphs_skips_a_glyph_at_the_i32_maximum_without_overflowing() {
+        let mut fb = Framebuffer::new();
+        let glyph = opaque_glyph_at(i32::MAX, i32::MAX);
+
+        blit_glyphs_colored(&mut fb, &[glyph], (0, 0), (200, 32), &TEST_GLYPH_COLORS);
+
+        assert!(fb.pixels().iter().all(|&p| p == Rgb888::BLACK));
+    }
+
+    #[test]
+    fn restore_cleared_span_skips_a_span_reaching_past_the_i32_maximum() {
+        let mut fb = Framebuffer::new();
+        let background = fb.clone();
+        let span = ClearedSpan {
+            x: i32::MAX - 10,
+            y: i32::MAX,
+            width: 255,
+            height: 14,
+        };
+
+        restore_cleared_span(&mut fb, &background, span, (0, 0), (200, 32));
+
+        assert!(fb.pixels().iter().all(|&p| p == Rgb888::BLACK));
     }
 
     #[test]

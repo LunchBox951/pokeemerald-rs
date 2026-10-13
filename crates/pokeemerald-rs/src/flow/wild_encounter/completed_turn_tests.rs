@@ -133,7 +133,7 @@ fn a_completed_turn_has_no_positional_side_effects() {
 #[test]
 fn a_completed_turn_on_a_forced_tile_never_observes() {
     let mut phase = OverworldPhase::for_test(
-        crate::overworld::tests::synthetic_scene_with_special_tiles(
+        crate::overworld::test_support::synthetic_scene_with_special_tiles(
             10,
             10,
             &[(TILE_CELL, MB_CRACKED_FLOOR)],

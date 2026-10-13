@@ -44,7 +44,7 @@ pub(super) const RIVAL_TILE: (i32, i32) = (10, 3);
 /// [`RIVAL_TILE`] with room to stand beside it.
 pub(super) fn route_103_phase(player: PlayerState) -> OverworldPhase {
     OverworldPhase::for_test(
-        crate::overworld::tests::synthetic_scene(15, 8),
+        crate::overworld::test_support::synthetic_scene(15, 8),
         ROUTE_103,
         player,
         None,

@@ -283,7 +283,7 @@ fn the_trigger_with_no_party_lead_logs_and_starts_nothing() {
 #[test]
 fn the_trigger_never_fires_off_route_103() {
     let mut phase = OverworldPhase::for_test(
-        crate::overworld::tests::synthetic_scene(10, 10),
+        crate::overworld::test_support::synthetic_scene(10, 10),
         MapId("MAP_LITTLEROOT_TOWN"),
         PlayerState::new((4, 4), 3, Direction::South),
         None,

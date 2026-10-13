@@ -35,7 +35,7 @@ fn a_turning_frame_resolves_the_arrow_warp_at_the_retained_previous_elevation() 
     );
 
     let mut phase = OverworldPhase::for_test(
-        crate::overworld::tests::synthetic_scene_with_special_tiles_at_elevations(
+        crate::overworld::test_support::synthetic_scene_with_special_tiles_at_elevations(
             10,
             10,
             &[(ARROW, MB_NORTH_ARROW_WARP, 0)],

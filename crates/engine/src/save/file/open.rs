@@ -2,16 +2,16 @@
 //! module may open, and opens it so a swap after that decision cannot
 //! change the answer.
 //!
-//! [`SaveFile::read`](super::SaveFile::read) and the lock slot share this
-//! one policy: a pre-open check for a fast, typed refusal, open flags that
-//! neither follow a symlink nor block on a FIFO, and a check of the opened
-//! handle itself. On Windows, [`SaveFile::read`] departs from that shared
-//! policy in one way: [`open_verified_for_read`] lets a non-symlink reparse
-//! point (a cloud-files placeholder, an app-execution alias, a deduplicated
-//! file) through to its filter instead of refusing it, verified by
-//! [`WindowsFileIdentity`] rather than by [`refuse_an_unusable_kind`]'s
-//! blanket rule. The lock slot keeps that blanket rule; see
-//! [`open_verified_for_read`]'s own docs for why the save path does not.
+//! `SaveFile::read` and the lock slot share this one policy: a pre-open
+//! check for a fast, typed refusal, open flags that neither follow a symlink
+//! nor block on a FIFO, and a check of the opened handle itself. On Windows,
+//! `SaveFile::read` departs from that shared policy in one way:
+//! `open_verified_for_read` lets a non-symlink reparse point (a cloud-files
+//! placeholder, an app-execution alias, a deduplicated file) through to its
+//! filter instead of refusing it, verified by `WindowsFileIdentity` rather
+//! than by `refuse_an_unusable_kind`'s blanket rule. The lock slot keeps
+//! that blanket rule; see `open_verified_for_read`'s own docs for why the
+//! save path does not.
 
 use std::path::Path;
 
@@ -54,7 +54,7 @@ pub(super) fn refuse_an_unusable_entry(path: &Path) -> Result<(), UnusableEntry>
 
 /// The one classification both [`refuse_an_unusable_entry`] and
 /// [`refuse_an_unusable_open`] apply to what they inspected -- every
-/// caller's policy except [`open_verified_for_read`]'s (Windows only; see
+/// caller's policy except `open_verified_for_read`'s (Windows only; see
 /// that function).
 ///
 /// On Windows `std` calls only a name-surrogate reparse point (a symlink or
