@@ -86,11 +86,23 @@ impl ScriptTargets {
 }
 
 pub(super) fn validate(parts: EventScriptParts) -> Result<AddressedEventScripts, EventScriptError> {
+    validate_decoded(parts, STANDARD_SCRIPT_COUNT)
+}
+
+/// Runs every phase in wire order; `standard_count` is the wire's slot count
+/// and is checked as the first step of the standard-table phase.
+pub(super) fn validate_decoded(
+    parts: EventScriptParts,
+    standard_count: u16,
+) -> Result<AddressedEventScripts, EventScriptError> {
     validate_spans(&parts.spans)?;
     validate_symbols(&parts)?;
     let targets = validate_roots(&parts)?;
     let tables = parse_tables(&parts)?;
     check_table_references(&tables, &targets)?;
+    if standard_count != STANDARD_SCRIPT_COUNT {
+        return Err(EventScriptError::BadStandardCount(standard_count));
+    }
     let standard = read_standard_table(&parts, &targets)?;
     Ok(AddressedEventScripts {
         parts,

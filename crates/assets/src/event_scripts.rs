@@ -37,7 +37,7 @@ mod validate;
 
 use codec::{put_string, Cursor};
 pub use errors::EventScriptError;
-use validate::{bytes_in, find_symbol, span_len, validate};
+use validate::{bytes_in, find_symbol, span_len, validate, validate_decoded};
 
 /// Pack entry id of the singleton addressed-script payload.
 pub const ENTRY_ID: &str = "script/events";
@@ -509,9 +509,6 @@ impl AddressedEventScripts {
         if r.pos != bytes.len() {
             return Err(EventScriptError::TrailingBytes);
         }
-        if count != STANDARD_SCRIPT_COUNT {
-            return Err(EventScriptError::BadStandardCount(count));
-        }
-        validate(parts)
+        validate_decoded(parts, count)
     }
 }

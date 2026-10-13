@@ -260,9 +260,6 @@ fn framing_errors() {
     let mut f = fx();
     f.roots[0].0 = "";
     assert_eq!(f.err(), E::InvalidString { section: "roots" });
-    let mut f = fx();
-    f.std.1 = 10;
-    assert_eq!(f.err(), E::BadStandardCount(10));
 }
 
 #[test]
@@ -467,16 +464,23 @@ fn standard_script_errors() {
     let mut f = fx();
     f.std.0 = "nope";
     assert_eq!(f.err(), E::MissingSymbol("nope".into()));
+    let mut f = fx();
+    f.std.1 = 10;
+    assert_eq!(f.err(), E::BadStandardCount(10));
+    f.std.0 = "nope";
+    assert_eq!(f.err(), E::BadStandardCount(10));
 }
 
 #[test]
 fn error_precedence_is_phase_ordered() {
-    // Span, symbol, root and table faults at once: the span fault is reported.
+    // Span, symbol, root, table and standard-count faults at once: the span
+    // fault is reported.
     let mut f = fx();
     f.spans[1].0 = S0;
     f.symbols[7].0 = "s0_alias";
     f.roots[0].1 = "absent";
     f.tables[2].2 = 35;
+    f.std.1 = 10;
     assert_eq!(f.err(), E::OverlappingSpans);
     f.spans[1].0 = STD;
     assert_eq!(f.err(), E::DuplicateSymbol("s0_alias".into()));
@@ -489,4 +493,6 @@ fn error_precedence_is_phase_ordered() {
             table: "Main".into()
         }
     );
+    f.tables[2].2 = 36;
+    assert_eq!(f.err(), E::BadStandardCount(10));
 }
