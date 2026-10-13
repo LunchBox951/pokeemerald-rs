@@ -702,6 +702,7 @@ fn acquiring_the_destination_under_three_free_descriptors_keeps_the_parent_sync(
     super::sync_shed_parents_with(&mut created, &dest, &mut |parent| {
         let stat = rustix::fs::fstat(parent).expect("parent stats");
         synced.push((stat.st_dev, stat.st_ino));
+        true
     });
     super::sync_created_directories(&mut created);
     drop(dest);
@@ -753,6 +754,7 @@ fn a_shed_parent_past_a_raced_level_is_synced_not_its_child() {
     super::sync_shed_parents_with(&mut created, &dest, &mut |parent| {
         let stat = rustix::fs::fstat(parent).expect("parent stats");
         synced.push((stat.st_dev, stat.st_ino));
+        true
     });
     let base = rustix::fs::stat(&dir.path).expect("base stats");
     assert_eq!(
@@ -782,6 +784,7 @@ fn a_shed_level_off_the_destinations_ancestry_does_not_stop_the_parent_sync() {
     super::sync_shed_parents_with(&mut created, &dest, &mut |parent| {
         let stat = rustix::fs::fstat(parent).expect("parent stats");
         synced.push((stat.st_dev, stat.st_ino));
+        true
     });
     let base = rustix::fs::stat(&dir.path).expect("base stats");
     assert_eq!(
@@ -827,6 +830,7 @@ fn a_full_table_after_acquisition_still_syncs_every_shed_parent() {
     super::sync_shed_parents_with(&mut created, &dest, &mut |parent| {
         let stat = rustix::fs::fstat(parent).expect("parent stats");
         synced.push((stat.st_dev, stat.st_ino));
+        true
     });
     drop(fillers);
     let expected: Vec<_> = [&paths[0], &dir.path]
@@ -909,6 +913,7 @@ fn a_shed_parent_behind_a_symlinked_level_is_still_synced() {
     assert!(created[0].parent.is_none(), "a was shed");
     super::sync_shed_parents_with(&mut created, &dest, &mut |parent| {
         synced.push(record(parent));
+        true
     });
     super::sync_created_directories_with(&mut created, &mut |parent| {
         synced.push(record(parent));
@@ -1036,4 +1041,49 @@ fn a_shed_levels_entry_is_synced_when_no_slot_is_left_to_sync_it_at_shedding() {
         synced.contains(&(base_stat.st_dev, base_stat.st_ino)),
         "base was synced while descriptors were to spare: {synced:?}"
     );
+}
+
+#[cfg(unix)]
+fn reopen_to_an_unsyncable_descriptor(
+    _parent: &std::os::fd::OwnedFd,
+) -> std::io::Result<std::os::fd::OwnedFd> {
+    // `fsync` of a pipe fails with `EINVAL`.
+    let (read, _write) = rustix::pipe::pipe()?;
+    Ok(read)
+}
+
+#[cfg(unix)]
+#[test]
+fn a_failed_shed_time_sync_leaves_the_entry_for_the_final_pass() {
+    let dir = TempDir::new("shed-sync-fails");
+    let target = dir.join("new");
+    let creation = create_pinned_unsynced(&target).expect("one level is created");
+    let mut created = creation.created;
+    let mut refused = false;
+    let opened = super::open_shedding_pins_with(
+        &mut created,
+        || {
+            if std::mem::replace(&mut refused, true) {
+                return Ok(());
+            }
+            Err(std::io::Error::from(rustix::io::Errno::MFILE))
+        },
+        &mut reopen_to_an_unsyncable_descriptor,
+    );
+    assert!(opened.is_ok(), "the import goes on after the failed sync");
+    assert!(created[0].parent.is_none(), "the level was shed");
+    assert!(!created[0].entry_synced, "a failed sync is not a sync");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_failed_recovery_sync_leaves_the_entry_unsynced_and_the_final_pass_retries() {
+    let dir = TempDir::new("final-sync-fails");
+    let target = dir.join("new");
+    let creation = create_pinned_unsynced(&target).expect("one level is created");
+    let mut created = creation.created;
+    super::sync_created_directories_with(&mut created, &mut reopen_to_an_unsyncable_descriptor);
+    assert!(!created[0].entry_synced, "a failed sync is not a sync");
+    super::sync_created_directories(&mut created);
+    assert!(created[0].entry_synced, "the retry syncs the entry");
 }
