@@ -18,19 +18,15 @@ use super::TrainerContext;
 /// The neutral type-effectiveness baseline (`TYPE_MUL_NORMAL`).
 const NEUTRAL_TYPE_SCORE: u32 = 10;
 
-/// `gBattleMoves[move].power`'s OHKO sentinel (`GUILLOTINE`, `HORN_DRILL`,
-/// `FISSURE`, `SHEER_COLD`), the one power value upstream's most-damage pass
-/// excludes (`pokeemerald/src/battle_ai_switch_items.c:776`).
+/// Power value of the OHKO moves, the only one the most-damage pass skips
+/// (`pokeemerald/src/battle_ai_switch_items.c:776`).
 const OHKO_POWER_SENTINEL: u8 = 1;
 
 impl TrainerContext {
-    /// The healthy bench member whose typing takes the most damage from
-    /// `player` and knows a super-effective move back, retrying the
-    /// next-worst typing otherwise. The typing score itself runs
-    /// `ModulateByTypeEffectiveness`, which reads no ability
-    /// (`pokeemerald/src/battle_ai_switch_items.c:709`-`:710`); only the
-    /// super-effective check runs `TypeCalc` and so honours `player`'s
-    /// Levitate (`:733`, see [`levitate_refuses`]).
+    /// The healthy bench member with the best typing score against `player`
+    /// that also knows a super-effective move, else the next-best typing.
+    /// Only the super-effective check honours `player`'s Levitate: the typing
+    /// score reads no ability (`pokeemerald/src/battle_ai_switch_items.c:709`-`:733`).
     pub(super) fn most_suitable_by_type(
         &self,
         dex: &Dex,
@@ -60,12 +56,10 @@ impl TrainerContext {
         }
     }
 
-    /// The healthy bench member whose own move scores highest against
-    /// `player` once layered onto `resolving_move`'s stale shared base
-    /// damage from `fainted`. See the ledger's `GetMostSuitableMonToSwitchInto`
-    /// entry (`src/battle_ai_switch_items.c`) for the full upstream mapping,
-    /// the `u8 bestDmg` wraparound this reproduces, and the Levitate/OHKO
-    /// edge cases [`levitate_refuses`] and [`OHKO_POWER_SENTINEL`] cover.
+    /// The healthy bench member whose move scores highest against `player`,
+    /// layered onto `resolving_move`'s stale base damage from `fainted`.
+    /// The running best is a `u8`, reproducing upstream's `bestDmg` wraparound
+    /// (ledger entry `GetMostSuitableMonToSwitchInto`).
     pub(super) fn most_suitable_by_damage(
         &self,
         dex: &Dex,
@@ -97,13 +91,10 @@ impl TrainerContext {
     }
 }
 
-/// Scores `candidate`'s typing against `player`'s, applying `player`'s two
-/// type slots even when they repeat (`ModulateByTypeEffectiveness`'s two
-/// unguarded calls in `pokeemerald/src/battle_ai_switch_items.c:709`-`:710`
-/// square the effect for a single-typed `player`). Plain truncating
-/// multiplication with no floor, unlike [`apply_dual_type_effectiveness`]:
-/// upstream's suitability score (unlike real damage) has no minimum-one rule
-/// (`pokeemerald/src/battle_ai_switch_items.c:605`-`:623`).
+/// Scores `candidate`'s typing against `player`'s. Both of `player`'s type
+/// slots apply even when equal, squaring the effect for a single-typed
+/// `player` (`pokeemerald/src/battle_ai_switch_items.c:709`-`:710`). Unlike
+/// [`apply_dual_type_effectiveness`], no minimum-one floor applies (`:605`-`:623`).
 fn typing_suitability_score(player: &BattlePokemon, candidate: &BattlePokemon) -> u32 {
     let candidate_types = candidate.types();
     let player_types = player.types();
@@ -111,9 +102,9 @@ fn typing_suitability_score(player: &BattlePokemon, candidate: &BattlePokemon) -
     apply_raw_type_multiplier(score, player_types[1], candidate_types)
 }
 
-/// Applies every [`TypeChart`] row matching `attacking_type` against each of
-/// `defending_types`' distinct slots, truncating after each row with no
-/// floor (`ModulateByTypeEffectiveness`, `pokeemerald/src/battle_ai_switch_items.c:605`-`:627`).
+/// Multiplies `score` by every [`TypeChart`] row of `attacking_type` hitting
+/// a distinct defending slot, truncating each step
+/// (`pokeemerald/src/battle_ai_switch_items.c:605`-`:627`).
 fn apply_raw_type_multiplier(score: u32, attacking_type: Type, defending_types: [Type; 2]) -> u32 {
     let mut score = score;
     let distinct = defending_types[1] != defending_types[0];
@@ -135,27 +126,18 @@ fn raw_multiply(score: u32, effectiveness: Effectiveness) -> u32 {
     score * u32::from(effectiveness.multiplier_x10()) / 10
 }
 
-/// Whether `defender`'s Levitate refuses `move_type`, `TypeCalc`'s one
-/// ability short-circuit: a Ground move against a Levitate holder skips the
-/// whole type-chart loop and sets only `MOVE_RESULT_MISSED |
-/// MOVE_RESULT_DOESNT_AFFECT_FOE`
-/// (`pokeemerald/src/battle_script_commands.c:1554`-`:1556`). The branch
-/// sits after the STAB multiply (`:1547`-`:1551`) and touches
-/// `gBattleMoveDamage` not at all, so the most-damage pass keeps the
-/// STAB-multiplied base rather than zeroing it; only the super-effective
-/// pass's flags are decided, and `MOVE_RESULT_SUPER_EFFECTIVE` is never
-/// among them.
+/// Whether `defender`'s Levitate refuses `move_type`. Upstream's `TypeCalc`
+/// skips the type chart after STAB and leaves the damage untouched, so the
+/// most-damage pass keeps the STAB-multiplied base and the super-effective
+/// flag is never set (`pokeemerald/src/battle_script_commands.c:1547`-`:1556`).
 fn levitate_refuses(defender: &BattlePokemon, move_type: Type) -> bool {
     move_type == Type::Ground && defender.ability() == AbilityId::LEVITATE
 }
 
 /// Whether `candidate` knows a damaging move super effective against
-/// `player`. An immunity row is terminal for this flag, unlike for
-/// [`most_suitable_type_effectiveness`]'s running damage: it leaves
-/// `MOVE_RESULT_DOESNT_AFFECT_FOE` set, so a later super-effective row fails
-/// its `MOVE_RESULT_NO_EFFECT` guard and never sets the bit the selector
-/// tests (`pokeemerald/src/battle_script_commands.c:1525`;
-/// `pokeemerald/include/constants/battle.h:228`).
+/// `player`. An immunity row is terminal here, unlike in
+/// [`most_suitable_type_effectiveness`]: a later super-effective row cannot
+/// set the flag (`pokeemerald/src/battle_script_commands.c:1525`).
 fn has_super_effective_move(
     dex: &Dex,
     candidate: &BattlePokemon,
@@ -181,13 +163,10 @@ fn has_super_effective_move(
     Ok(false)
 }
 
-/// Computes the most-damage pass's one shared base-damage figure from
-/// `resolving_move`, with `fainted` as attacker and `player` as defender, or
-/// `None` for a `???`-typed `resolving_move` this crate cannot run type math
-/// on. Unlike a real hit, `resolving_move`'s own power is never excluded
-/// here (only each candidate's own move can be the
-/// [`OHKO_POWER_SENTINEL`]) -- matching upstream, whose `AI_CalcDmg` runs
-/// unconditionally before the candidate move's own guard is even checked.
+/// The most-damage pass's shared base damage from `resolving_move`, with
+/// `fainted` attacking `player`, or `None` for a `???`-typed move.
+/// `resolving_move`'s own power is never excluded, matching upstream's
+/// unconditional `AI_CalcDmg`.
 fn stale_base_damage(
     dex: &Dex,
     resolving_move: MoveId,
@@ -225,12 +204,10 @@ fn stale_base_damage(
     Ok(Some(base_damage(&input)))
 }
 
-/// Applies `move_id`'s STAB (against `fainted`'s types, matching upstream's
-/// use of the fainted battler for `TypeCalc`'s STAB check) and type
-/// effectiveness (against `defender`'s types) on top of the shared `base`
-/// from [`stale_base_damage`], or `None` for the [`OHKO_POWER_SENTINEL`]. A
-/// `???`-typed move keeps its `base` with no STAB or chart row. A move [`levitate_refuses`] keeps its STAB-multiplied
-/// `base` and takes no type-chart row at all.
+/// Layers `move_id`'s STAB (from `fainted`'s types, as upstream's `TypeCalc`
+/// does) and type effectiveness against `defender` onto the shared `base`
+/// from [`stale_base_damage`]; `None` for an OHKO move.
+/// Struggle, `???`-typed moves and Levitate-refused moves skip the chart.
 fn candidate_move_damage(
     dex: &Dex,
     move_id: MoveId,
@@ -242,12 +219,10 @@ fn candidate_move_damage(
     if move_data.power == OHKO_POWER_SENTINEL {
         return Ok(None);
     }
-    // `TypeCalc` returns for Struggle before STAB, Levitate and the chart
-    // (`battle_script_commands.c:1541`), so the caller's base stands.
+    // `battle_script_commands.c:1541`: Struggle returns before STAB.
     if move_id == MoveId::STRUGGLE {
         return Ok(Some(base));
     }
-    // `???` (Curse) matches neither STAB nor a chart row in `TypeCalc`.
     let Some(move_type) = move_data.move_type.battle_type() else {
         return Ok(Some(base));
     };
@@ -262,10 +237,9 @@ fn candidate_move_damage(
     )))
 }
 
-/// `TypeCalc`'s per-row modulation for the most-damage pass's candidate
-/// contribution has no cross-row terminal-immunity override, unlike
-/// [`apply_dual_type_effectiveness`]: a later effective row still floors a
-/// running damage already zeroed by an earlier immune row back up to one
+/// Applies each matching chart row to the running `damage`. Unlike
+/// [`apply_dual_type_effectiveness`], an immune row is not terminal: a later
+/// effective row floors the zeroed damage back to one
 /// (`battle_script_commands.c:1504`-`:1506`, `:1570`-`:1580`).
 fn most_suitable_type_effectiveness(
     damage: u32,
@@ -300,10 +274,8 @@ mod tests {
     const MAY_ROUTE_103_MUDKIP: TrainerId = TrainerId(529);
     const TREECKO: SpeciesId = SpeciesId(277);
 
-    /// Pins the stock (non-`BUGFIX`) `u8 bestDmg` wraparound: see the
-    /// ledger's `GetMostSuitableMonToSwitchInto` entry
-    /// (`src/battle_ai_switch_items.c:781`-`:784`) for why Water Gun's
-    /// over-255 true score loses to Tackle's untouched one.
+    /// Stock (non-`BUGFIX`) `u8 bestDmg` wraparound
+    /// (`battle_ai_switch_items.c:781`-`:784`): Water Gun's over-255 score loses to Tackle's.
     #[test]
     fn the_most_damage_pass_narrows_its_running_winner_to_a_byte() {
         const METAGROSS: SpeciesId = SpeciesId(400);
@@ -335,18 +307,10 @@ mod tests {
         );
     }
 
-    /// `TypeCalc`'s per-row modulation for the most-damage pass's candidate
-    /// contribution has no cross-row terminal-immunity override
-    /// (`battle_script_commands.c:1504`-`:1506`, `:1570`-`:1580`), unlike
-    /// [`crate::damage::apply_dual_type_effectiveness`]: a later
-    /// nonzero-effectiveness row still floors a running damage already
-    /// zeroed by an earlier immune row back up to one. A level-70 Metagross's
-    /// stale Mega Kick against a level-50 Gligar (Ground/Flying) gives
-    /// Pichu's Thunder Shock a score of one, not zero, once Flying's super
-    /// effectiveness floors the zero Ground's immunity left behind -- reopening
-    /// the most-damage pass instead of falling through to party order.
-    /// Pinsir's Guillotine is the [`super::OHKO_POWER_SENTINEL`] and never
-    /// scores.
+    /// Against Gligar (Ground/Flying), Flying's row floors the zero Ground's
+    /// immunity left to one (`battle_script_commands.c:1504`-`:1506`,
+    /// `:1570`-`:1580`), so Pichu's Thunder Shock scores and the pass does not
+    /// fall to party order. Pinsir's Guillotine is the OHKO sentinel and never scores.
     #[test]
     fn the_most_damage_pass_floors_an_immunity_a_later_row_reopens() {
         const METAGROSS: SpeciesId = SpeciesId(400);
@@ -381,16 +345,10 @@ mod tests {
         );
     }
 
-    /// The super-effective pass runs `TypeCalc`, whose Levitate branch
-    /// short-circuits the whole type chart for a Ground move
-    /// (`pokeemerald/src/battle_script_commands.c:1554`-`:1556`), so such a
-    /// move never carries `MOVE_RESULT_SUPER_EFFECTIVE` back to the check at
-    /// `battle_ai_switch_items.c:733`. Against a Levitate Koffing the Grass
-    /// candidate still wins the ability-blind typing score
-    /// (`ModulateByTypeEffectiveness`, `:709`-`:710`, doubles Poison against
-    /// Grass twice), but its Earthquake cannot qualify it, so the pass
-    /// invalidates it and takes the Pichu whose Confusion is genuinely super
-    /// effective against Poison.
+    /// Against a Levitate Koffing the Grass candidate wins the ability-blind
+    /// typing score, but its Earthquake is refused
+    /// (`battle_script_commands.c:1554`-`:1556`), so the pass takes the Pichu
+    /// whose Confusion is super effective against Poison.
     #[test]
     fn the_typing_pass_rejects_a_ground_move_the_players_levitate_refuses() {
         const KOFFING: SpeciesId = SpeciesId(109);
@@ -428,9 +386,7 @@ mod tests {
     /// trainer-AI estimate read, so all three agree.
     #[test]
     fn stale_base_damage_carries_a_hustle_fainted_attackers_boost() {
-        // `SPECIES_DELIBIRD`: Vital Spirit in slot 0, Hustle in slot 1 --
-        // unlike a single-ability species, a same-species non-Hustle control
-        // is reachable through `with_ability_slot`.
+        // Delibird: Vital Spirit in slot 0, Hustle in slot 1.
         const DELIBIRD: SpeciesId = SpeciesId(225);
         const SQUIRTLE: SpeciesId = SpeciesId(7);
         const TACKLE: MoveId = MoveId::TACKLE;
@@ -463,17 +419,10 @@ mod tests {
         );
     }
 
-    /// The super-effective check reads `TypeCalc`'s flags, where an immunity
-    /// row is terminal: against Gligar (Ground/Flying) the table's
-    /// Electric->Ground no-effect row (`pokeemerald/src/battle_main.c:356`)
-    /// sets `MOVE_RESULT_DOESNT_AFFECT_FOE`, so the Electric->Flying
-    /// super-effective row that follows (`:357`) refloors the damage to one
-    /// but fails its `MOVE_RESULT_NO_EFFECT` guard
-    /// (`battle_script_commands.c:1525`;
-    /// `pokeemerald/include/constants/battle.h:228`) and leaves
-    /// `MOVE_RESULT_SUPER_EFFECTIVE` clear. Thunder Shock therefore cannot
-    /// qualify the Torchic that wins the typing score, and the pass
-    /// invalidates it for the Mudkip whose Water Gun doubles against Ground.
+    /// Against Gligar (Ground/Flying) the Electric->Ground immunity row
+    /// (`battle_main.c:356`) blocks the following super-effective Flying row
+    /// (`battle_script_commands.c:1525`), so Thunder Shock cannot qualify the
+    /// Torchic and the pass takes the Mudkip.
     #[test]
     fn the_typing_pass_rejects_a_super_effective_row_behind_an_immunity_row() {
         const GLIGAR: SpeciesId = SpeciesId(207);
@@ -507,15 +456,9 @@ mod tests {
         );
     }
 
-    /// `TypeCalc`'s Levitate branch sits after the STAB multiply and leaves
-    /// `gBattleMoveDamage` untouched (`:1547`-`:1556`), so a Ground move
-    /// against a Levitate holder scores the shared base as-is rather than
-    /// taking Poison's doubling row. Neither move gets STAB off the fainted
-    /// Metagross's Steel/Psychic typing, so Earthquake would otherwise
-    /// double the base and overtake the earlier Tackle under the pass's
-    /// strict `bestDmg < gBattleMoveDamage` comparison
-    /// (`battle_ai_switch_items.c:781`); honouring Levitate leaves the two
-    /// tied on the plain base, and the tie keeps the earlier member.
+    /// Levitate leaves Earthquake on the plain base (`:1547`-`:1556`), tied
+    /// with Tackle under the strict `bestDmg < gBattleMoveDamage` comparison
+    /// (`battle_ai_switch_items.c:781`), so the earlier member wins.
     #[test]
     fn the_most_damage_pass_scores_a_levitate_refused_ground_move_without_the_chart() {
         const METAGROSS: SpeciesId = SpeciesId(400);
@@ -550,9 +493,7 @@ mod tests {
         );
     }
 
-    /// `TypeCalc` returns immediately for Struggle
-    /// (`battle_script_commands.c:1536`-`:1552`), so a depleted Struggle keeps
-    /// its untyped base against Ghost immunity and Rock/Steel resistance.
+    /// Struggle returns before any chart row (`battle_script_commands.c:1536`-`:1552`).
     #[test]
     fn struggle_keeps_its_untyped_base_against_every_defender() {
         let dex = Dex::new();
@@ -602,8 +543,7 @@ mod tests {
         );
     }
 
-    /// Curse is power 0 and `???`-typed; `TypeCalc` gives it neither STAB nor a
-    /// chart row, so its base stands against every defender.
+    /// Curse is `???`-typed and takes neither STAB nor a chart row.
     #[test]
     fn curse_keeps_its_untyped_base_against_every_defender() {
         let dex = Dex::new();
@@ -623,8 +563,7 @@ mod tests {
         }
     }
 
-    /// A depleted Curse still enters the most-damage pass, as upstream's
-    /// loop only skips `MOVE_NONE` and power 1.
+    /// Upstream's loop skips only `MOVE_NONE` and power 1, so a depleted Curse still scores.
     #[test]
     fn a_depleted_curse_wins_the_damage_pass_against_a_ghost() {
         let dex = Dex::new();
