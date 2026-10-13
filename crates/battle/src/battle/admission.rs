@@ -5,9 +5,12 @@ use crate::error::BattleError;
 use crate::status1::Status1;
 use assets::AbilityId;
 
-/// Refuses a participant whose status upstream's ability immunity cure
+/// Refuses a participant whose ability interaction this crate does not model:
+/// a status upstream's ability immunity cure
 /// (`AbilityBattleEffects(ABILITYEFFECT_IMMUNITY)`, `battle_util.c:2873-2951`)
-/// would clear at move end, a path this crate does not model.
+/// would clear at move end, or Truant, whose `CANCELER_TRUANT` loafing
+/// (`battle_util.c:2086-2097`) and end-turn counter toggle (`:2653-2655`) are
+/// absent from the turn engine.
 ///
 /// # Errors
 ///
@@ -16,13 +19,14 @@ pub fn ensure_participant_admissible(participant: &BattlePokemon) -> Result<(), 
     let ability = participant.ability();
     let status = participant.status1();
     let confused = participant.volatiles().confused();
-    let cured_at_move_end = match ability {
+    let unported_interaction = match ability {
         AbilityId::LIMBER => status == Status1::Paralysed,
         AbilityId::IMMUNITY => status == Status1::Poisoned,
         AbilityId::OWN_TEMPO => confused,
+        AbilityId::TRUANT => true,
         _ => false,
     };
-    if cured_at_move_end {
+    if unported_interaction {
         Err(BattleError::UnportedAbilityInteraction(ability))
     } else {
         Ok(())
