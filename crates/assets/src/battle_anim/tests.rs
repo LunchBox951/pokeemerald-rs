@@ -354,6 +354,22 @@ fn malformed_programs_are_rejected() {
         build(vec![AnimCommand::Nop]),
         Err(BattleAnimationError::MissingTerminator)
     );
+    // `Move_BIDE` follows its `choosetwoturnanim` with an `end` nothing reaches
+    // (`data/battle_anim_scripts.s:7394-7395`); the program stops before it.
+    assert_eq!(
+        build(vec![AnimCommand::End, AnimCommand::Nop, AnimCommand::End]),
+        Err(BattleAnimationError::CommandAfterTerminator(1))
+    );
+    assert_eq!(
+        build(vec![
+            AnimCommand::ChooseTwoTurnAnim {
+                even: ProgramId::new(0),
+                odd: ProgramId::new(0),
+            },
+            AnimCommand::End,
+        ]),
+        Err(BattleAnimationError::CommandAfterTerminator(1))
+    );
     let sprite = |subpriority, args| AnimCommand::CreateSprite {
         template: symbol("T"),
         relative_to_target: false,

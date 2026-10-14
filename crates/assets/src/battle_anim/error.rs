@@ -34,6 +34,9 @@ pub enum BattleAnimationError {
     TooManyCommands(usize),
     /// A program's last command can fall off the end of the script.
     MissingTerminator,
+    /// A command follows one that never falls through, so nothing reaches it.
+    /// The value is its position in the program.
+    CommandAfterTerminator(usize),
     /// A command carries more arguments than `gBattleAnimArgs` holds. The value is the count.
     ArgCountTooLarge(usize),
     /// A `createsprite` subpriority byte sets the `ANIMSPRITE_IS_TARGET` bit. The value is the byte.
@@ -87,6 +90,9 @@ impl fmt::Display for BattleAnimationError {
             }
             Self::MissingTerminator => {
                 write!(f, "battle animation program does not end in a terminator")
+            }
+            Self::CommandAfterTerminator(index) => {
+                write!(f, "battle animation command {index} follows a terminator")
             }
             Self::ArgCountTooLarge(count) => {
                 write!(

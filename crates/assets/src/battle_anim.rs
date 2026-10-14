@@ -134,8 +134,9 @@ impl AnimationSelector {
 /// One upstream animation script: the commands from a label to the command that
 /// leaves it.
 ///
-/// The last command must be one that never falls through (`end`, `return`,
-/// `goto`, or `choosetwoturnanim`), so a program cannot run off its own end.
+/// The last command, and only the last, must be one that never falls through
+/// (`end`, `return`, `goto`, or `choosetwoturnanim`), so a program cannot run
+/// off its own end or carry commands nothing reaches.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BattleAnimationProgram {
     symbol: AnimSymbol,
@@ -148,7 +149,8 @@ impl BattleAnimationProgram {
     /// # Errors
     ///
     /// [`BattleAnimationError::EmptyProgram`], [`BattleAnimationError::TooManyCommands`],
-    /// or [`BattleAnimationError::MissingTerminator`] for the program's shape;
+    /// [`BattleAnimationError::CommandAfterTerminator`], or
+    /// [`BattleAnimationError::MissingTerminator`] for the program's shape;
     /// [`BattleAnimationError::ArgCountTooLarge`] or
     /// [`BattleAnimationError::SubpriorityOutOfRange`] for an operand that
     /// the interpreter would use out of range.
@@ -156,11 +158,14 @@ impl BattleAnimationProgram {
         symbol: AnimSymbol,
         commands: Vec<AnimCommand>,
     ) -> Result<Self, BattleAnimationError> {
-        let Some(last) = commands.last() else {
+        let Some((last, body)) = commands.split_last() else {
             return Err(BattleAnimationError::EmptyProgram);
         };
         if u16::try_from(commands.len()).is_err() {
             return Err(BattleAnimationError::TooManyCommands(commands.len()));
+        }
+        if let Some(terminator) = body.iter().position(AnimCommand::is_terminator) {
+            return Err(BattleAnimationError::CommandAfterTerminator(terminator + 1));
         }
         if !last.is_terminator() {
             return Err(BattleAnimationError::MissingTerminator);
