@@ -9,7 +9,9 @@
 
 use assets::{AbilityId, Effectiveness, MoveEffect, MoveId, Type};
 
-use crate::ability::{huge_power_attack, pinch_boosts_power, suppresses_critical_hits};
+use crate::ability::{
+    huge_power_attack, pinch_boosts_power, suppresses_critical_hits, thick_fat_special_attack,
+};
 use crate::accuracy::accuracy_check;
 use crate::critical::{crit_adjusted_stages, crit_roll, crit_stage};
 use crate::damage::{
@@ -290,7 +292,11 @@ fn damage_input(
 ) -> DamageInput {
     let move_category = MoveCategory::for_type(move_type);
     let (raw_attack, attack_stage) = attacker.attacking_stat(move_category);
-    let ability_adjusted_attack = huge_power_attack(attacker.ability(), move_category, raw_attack);
+    let ability_adjusted_attack = thick_fat_special_attack(
+        defender.ability(),
+        move_type,
+        huge_power_attack(attacker.ability(), move_category, raw_attack),
+    );
     let (defense, defense_stage) = defender.defending_stat(move_category);
     let (attack_stage, defense_stage) =
         crit_adjusted_stages(attack_stage, defense_stage, is_critical);
