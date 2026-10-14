@@ -1054,7 +1054,7 @@ fn reopen_to_an_unsyncable_descriptor(
 
 #[cfg(unix)]
 #[test]
-fn a_failed_shed_time_sync_leaves_the_entry_for_the_final_pass() {
+fn a_failed_shed_time_sync_leaves_the_entry_unsynced() {
     let dir = TempDir::new("shed-sync-fails");
     let target = dir.join("new");
     let creation = create_pinned_unsynced(&target).expect("one level is created");
