@@ -8,6 +8,7 @@ use engine::overworld::PlayerState;
 /// First Route 101 rescue coord event (`Route101/map.json`, elevation 3).
 pub(super) const ROUTE_101_TRIGGER_TILE: (i32, i32) = (10, 19);
 
+/// Elevation the rescue coord event requires, matching the synthetic grid.
 pub(super) const ROUTE_101_TRIGGER_ELEVATION: u8 = 3;
 
 /// Treecko's `MOVE_PURSUIT`: `EFFECT_PURSUIT` has no resolver, so `validate_player_move`
@@ -24,6 +25,7 @@ pub(super) fn route_101_trigger_phase(player: PlayerState) -> OverworldPhase {
     )
 }
 
+/// The same Route 101 grid with `specials` overriding tile behaviours at the given cells.
 pub(super) fn route_101_trigger_phase_with_special_tiles(
     player: PlayerState,
     specials: &[((u16, u16), u8)],
@@ -36,6 +38,7 @@ pub(super) fn route_101_trigger_phase_with_special_tiles(
     )
 }
 
+/// [`ROUTE_101_TRIGGER_TILE`] as the unsigned cell the synthetic-scene builders take.
 pub(super) fn trigger_tile_cell() -> (u16, u16) {
     let (x, y) = ROUTE_101_TRIGGER_TILE;
     (
@@ -44,6 +47,7 @@ pub(super) fn trigger_tile_cell() -> (u16, u16) {
     )
 }
 
+/// Walks the player `tiles` cells east, one completed step per tile.
 pub(super) fn walk_east(phase: &mut OverworldPhase, tiles: usize) {
     for _ in 0..tiles {
         walk_one_tile_east(phase);
