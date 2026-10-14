@@ -50,11 +50,9 @@ fn pack_with(tag: &str, kind_tag: u8, meta: Vec<u8>, payload: Vec<u8>) -> AssetP
 fn catalog_accessor_decodes_the_raw_payload() {
     let expected = catalog();
     let pack = pack_with("anim-ok", RAW_KIND_TAG, vec![], expected.encode());
-    assert_eq!(pack.battle_animation_catalog(), Ok(expected.clone()));
-    assert_eq!(
-        pack.battle_animation_program(pound()),
-        Ok(expected.program(pound()).clone())
-    );
+    let catalog = pack.battle_animation_catalog().unwrap();
+    assert_eq!(catalog, expected);
+    assert_eq!(catalog.program(pound()), expected.program(pound()));
 }
 
 #[test]
@@ -63,8 +61,7 @@ fn catalog_accessor_reports_a_missing_entry() {
     let pack = AssetPack::load(&path).unwrap();
     let _ = std::fs::remove_file(path);
     let missing = PackError::UnknownAsset(ID.to_owned());
-    assert_eq!(pack.battle_animation_catalog(), Err(missing.clone()));
-    assert_eq!(pack.battle_animation_program(pound()), Err(missing));
+    assert_eq!(pack.battle_animation_catalog(), Err(missing));
 }
 
 #[test]
@@ -82,10 +79,6 @@ fn catalog_accessor_reports_the_wrong_kind() {
             actual: "image",
             ..
         })
-    ));
-    assert!(matches!(
-        pack.battle_animation_program(pound()),
-        Err(PackError::WrongKind { .. })
     ));
 }
 

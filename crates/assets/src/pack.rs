@@ -21,7 +21,7 @@ mod starter_chooser;
 use std::path::{Path, PathBuf};
 
 use crate::audio::{Sample, SampleId, Song, VoiceGroup, VoiceGroupId};
-use crate::battle_anim::{AnimationSelector, BattleAnimationCatalog, BattleAnimationProgram};
+use crate::battle_anim::BattleAnimationCatalog;
 use crate::fonts::{FontId, FontImageRef};
 use crate::pokedex::PokedexData;
 
@@ -318,19 +318,6 @@ impl AssetPack {
             id: BATTLE_ANIMATION_CATALOG_ID.to_owned(),
             source,
         })
-    }
-
-    /// The validated program `selector` launches. The catalog is total, so a
-    /// well-formed pack never lacks one and no fallback program exists.
-    ///
-    /// # Errors
-    ///
-    /// Every error of [`AssetPack::battle_animation_catalog`].
-    pub fn battle_animation_program(
-        &self,
-        selector: AnimationSelector,
-    ) -> Result<BattleAnimationProgram, PackError> {
-        Ok(self.battle_animation_catalog()?.program(selector).clone())
     }
 
     /// Bundle one tileset's tile bitmap, 16 palettes, and raw metatile
