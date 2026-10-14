@@ -1179,20 +1179,23 @@ fn normal_obj_under_objwin_spill(objwin_first: bool) -> crate::framebuffer::Fram
 }
 
 #[test]
-fn objwin_spill_from_an_earlier_pass_selects_objwin_palette_for_an_earlier_oam_sprite() {
-    // The WINOUT pass sets the spill's row mask (`software-obj.c:101-105,
-    // 227-242`) before the WIN0 pass draws the normal OBJ, which then reads
-    // that mask and picks the non-variant `objwinPalette` because OBJWIN
-    // disables effects (`software-obj.c:88-98,199-208`), whatever their OAM
-    // order `(behavioral-fidelity)`.
+fn objwin_spill_masks_a_sprite_color_only_from_an_earlier_oam_entry() {
+    // mGBA preprocesses OAM-major, running every window pass of one entry
+    // before the next (`video-software.c:1019-1066`). An earlier-OAM OBJWIN's
+    // WINOUT spill (`software-obj.c:101-105,227-242`) is already in the row
+    // when the WIN0 pass draws the normal OBJ, which then picks the
+    // non-variant `objwinPalette` because OBJWIN disables effects
+    // (`software-obj.c:88-98,199-208`); a later-OAM OBJWIN writes the mask
+    // only after the color keeps its WIN0 Brighten variant
+    // `(behavioral-fidelity)`.
     let white = Bgr555::from_channels(31, 31, 31).to_rgb888();
     let gray = Bgr555::from_channels(16, 16, 16).to_rgb888();
-    for objwin_first in [false, true] {
+    for (objwin_first, expected) in [(false, white), (true, gray)] {
         let fb = normal_obj_under_objwin_spill(objwin_first);
         for x in 10..12 {
             assert_eq!(
                 fb.pixel(x, 0),
-                Some(gray),
+                Some(expected),
                 "objwin_first={objwin_first} x={x}"
             );
         }
