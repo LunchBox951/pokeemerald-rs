@@ -210,11 +210,10 @@ pub const MB_CRACKED_FLOOR: u8 = 0xD2;
 
 /// Returns whether a behavior is dispatched as forced movement, per upstream's
 /// `sForcedMovementTestFuncs` (`field_player_avatar.c:144-164`).
-/// `PlayerState::step` dispatches `MB_WALK_*` and `MB_SLIDE_*` as real
-/// movement in the tile's own fixed direction; every other behavior here --
-/// ice, currents, the Trick House puzzle floor, the waterfall, the muddy
-/// slope, and the Secret Base mats -- has unported physics, so manual steps
-/// still fail closed on those.
+/// `PlayerState::step` dispatches `MB_WALK_*`, `MB_SLIDE_*`, ice, the Trick
+/// House puzzle floor, and the four currents as real movement; the waterfall,
+/// the muddy slope, and the Secret Base mats still have unported physics, so
+/// manual steps fail closed on those.
 #[must_use]
 pub const fn is_forced_movement(behavior: u8) -> bool {
     matches!(
