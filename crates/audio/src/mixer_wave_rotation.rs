@@ -129,16 +129,36 @@ fn a_stopped_wave_slot_keeps_the_rotation_through_idle_frames() {
     assert_continues_rotation(&frame(&mut mixer));
 }
 
+/// A changed asset reloads the unrotated table but keeps the held output
+/// nibble (`mgba/src/gb/audio.c:300-337`): the frame holds the previous
+/// slot's latch until the first clock, then equals the fresh render.
+fn assert_reloads_after_first_clock(actual: &[f32], oracle: &[f32]) {
+    let first_clock = actual
+        .iter()
+        .position(|s| s.to_bits() != actual[0].to_bits())
+        .expect("the first wave clock lands within one frame");
+    assert!(first_clock > 0);
+    assert_ne!(
+        actual[0].to_bits(),
+        oracle[0].to_bits(),
+        "the retained latch is the previous slot's nibble"
+    );
+    let bits = |samples: &[f32]| samples.iter().map(|s| s.to_bits()).collect::<Vec<_>>();
+    assert_eq!(bits(&actual[first_clock..]), bits(&oracle[first_clock..]));
+}
+
 #[test]
 fn a_changed_wave_reloads_the_unrotated_table() {
     let mut mixer = sounding_mixer();
     assert!(mixer.add_cgb_voice(wave_voice("ramp-b", other_ramp())));
-    assert_eq!(frame(&mut mixer), fresh_frame(other_ramp()));
+    assert_reloads_after_first_clock(&frame(&mut mixer), &fresh_frame(other_ramp()));
 }
 
 #[test]
 fn a_changed_wave_id_reloads_even_with_identical_bytes() {
     let mut mixer = sounding_mixer();
     assert!(mixer.add_cgb_voice(wave_voice("ramp-copy", ramp())));
-    assert_eq!(frame(&mut mixer), fresh_frame(ramp()));
+    let actual = frame(&mut mixer);
+    assert_reloads_after_first_clock(&actual, &fresh_frame(ramp()));
+    assert_ne!(actual, fresh_frame(rotated_ramp()));
 }

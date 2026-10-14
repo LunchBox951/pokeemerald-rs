@@ -67,6 +67,13 @@ impl WaveChannel {
         self.latch = previous.latch;
     }
 
+    /// Carries only the held output nibble of `previous` onto this freshly
+    /// uploaded channel: a new wave asset replaces the RAM, and the next
+    /// wave clock is the first to latch from it (`mgba/src/gb/audio.c:300-337`).
+    pub(crate) fn continue_latch_from(&mut self, previous: &Self) {
+        self.latch = previous.latch;
+    }
+
     fn head(&self) -> usize {
         (self.phase / PHASE_ONE) as usize % self.samples.len()
     }
