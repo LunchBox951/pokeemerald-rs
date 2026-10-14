@@ -250,6 +250,10 @@ mod tests {
             .collect();
         entries.push(palette_entry(SEED.into(), &seed).expect("seed"));
         entries.push(palette_entry(TARGET.into(), &target).expect("target"));
+        // Fixed banks alias the planted seed; these tests vary only TARGET.
+        for id in crate::extract::scope::sprite_palette_ids() {
+            entries.push(palette_entry(id, &seed).expect("fixed sprite palette"));
+        }
         let mut rom = RomFixture::new()
             .emerald_header()
             .write(0x2000, &bytes(&seed));
