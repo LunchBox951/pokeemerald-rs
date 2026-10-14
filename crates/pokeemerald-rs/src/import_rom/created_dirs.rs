@@ -580,12 +580,11 @@ pub(super) fn create_directories_pinned(
 /// makes redundant.
 #[cfg(unix)]
 pub(super) fn sync_shed_parents(created: &mut [CreatedDirectory], dest: &dest::Dest) {
-    sync_shed_parents_with(created, dest, &mut |fd| {
-        let _ = rustix::fs::fsync(fd);
-    });
+    sync_shed_parents_with(created, dest, &mut |fd| rustix::fs::fsync(fd).is_ok());
 }
 
-/// [`sync_shed_parents`] with the `fsync` injected, so a test can count it.
+/// [`sync_shed_parents`] with the `fsync` injected, so a test can count it
+/// or fail it; a failed one leaves its entries unsynced.
 ///
 /// The climb goes up the destination's own ancestry and syncs each
 /// directory a shed level's entry is in, matched by the identity captured
@@ -598,7 +597,7 @@ pub(super) fn sync_shed_parents(created: &mut [CreatedDirectory], dest: &dest::D
 fn sync_shed_parents_with(
     created: &mut [CreatedDirectory],
     dest: &dest::Dest,
-    fsync: &mut dyn FnMut(&std::os::fd::OwnedFd),
+    fsync: &mut dyn FnMut(&std::os::fd::OwnedFd) -> bool,
 ) {
     let mut synced: Vec<bool> = created.iter().map(|level| level.entry_synced).collect();
     if !shed_parent_pending(created, &synced) {
@@ -609,9 +608,14 @@ fn sync_shed_parents_with(
     };
     let mut above: Option<std::os::fd::OwnedFd> = None;
     loop {
-        if mark_entries_in(created, &mut synced, &here, true) {
-            fsync(above.as_ref().unwrap_or_else(|| dest.handle()));
-        }
+        sync_entries_in(
+            created,
+            &mut synced,
+            &here,
+            true,
+            above.as_ref().unwrap_or_else(|| dest.handle()),
+            fsync,
+        );
         if !shed_parent_pending(created, &synced) {
             return;
         }
@@ -623,9 +627,14 @@ fn sync_shed_parents_with(
             match opened {
                 Ok(fd) => break fd,
                 Err(source) if is_out_of_descriptors_io(&source) => {
-                    if mark_entries_in(created, &mut synced, &here, false) {
-                        fsync(above.as_ref().unwrap_or_else(|| dest.handle()));
-                    }
+                    sync_entries_in(
+                        created,
+                        &mut synced,
+                        &here,
+                        false,
+                        above.as_ref().unwrap_or_else(|| dest.handle()),
+                        fsync,
+                    );
                     if !release_a_descriptor(created, &synced) {
                         return;
                     }
@@ -652,6 +661,23 @@ fn shed_parent_pending(created: &[CreatedDirectory], synced: &[bool]) -> bool {
         .iter()
         .zip(synced)
         .any(|(level, &synced)| level.parent.is_none() && !synced)
+}
+
+/// [`mark_entries_in`], then `fsync`s `directory` when any were marked; a
+/// failed `fsync` takes the marks back, so the entries stay unsynced.
+#[cfg(unix)]
+fn sync_entries_in(
+    created: &[CreatedDirectory],
+    synced: &mut [bool],
+    here: &rustix::fs::Stat,
+    shed_only: bool,
+    directory: &std::os::fd::OwnedFd,
+    fsync: &mut dyn FnMut(&std::os::fd::OwnedFd) -> bool,
+) {
+    let before = synced.to_vec();
+    if mark_entries_in(created, synced, here, shed_only) && !fsync(directory) {
+        synced.copy_from_slice(&before);
+    }
 }
 
 /// Marks the unsynced levels whose entries are in `here` as synced and
@@ -727,8 +753,9 @@ fn sync_created_directories_with(
         loop {
             match reopen(&parent) {
                 Ok(real) => {
-                    let _ = rustix::fs::fsync(&real);
-                    created[index].entry_synced = true;
+                    // An entry an earlier sync made durable stays durable;
+                    // a failed redundant sync must not take that back.
+                    created[index].entry_synced |= rustix::fs::fsync(&real).is_ok();
                     break;
                 }
                 Err(source) if is_out_of_descriptors_io(&source) => {
@@ -807,8 +834,7 @@ fn sync_and_shed_outermost_pinned_level(
             loop {
                 match reopen(&parent) {
                     Ok(real) => {
-                        let _ = rustix::fs::fsync(&real);
-                        created[index].entry_synced = true;
+                        created[index].entry_synced = rustix::fs::fsync(&real).is_ok();
                         break;
                     }
                     Err(source)

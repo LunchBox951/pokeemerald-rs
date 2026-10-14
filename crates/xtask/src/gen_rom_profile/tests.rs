@@ -883,6 +883,35 @@ fn with_audio_pack_entry<T>(
     mutate: impl FnOnce(&mut Vec<u8>),
     body: impl FnOnce(&Context<'_>) -> T,
 ) -> T {
+    with_audio_pack_extra(
+        name,
+        songs,
+        song_payload,
+        voicegroups,
+        Vec::new(),
+        &[],
+        mutate,
+        body,
+    )
+}
+
+/// [`with_audio_pack_entry`] with `extra` entries appended whole, and any
+/// `songs` or sample id listed in `skip` left out of the Raw defaults so
+/// `extra` can supply it under another kind.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a flat fixture signature keeps each audio test one call"
+)]
+fn with_audio_pack_extra<T>(
+    name: &str,
+    songs: &[&str],
+    song_payload: &[u8],
+    voicegroups: Vec<pack_format::PackEntry>,
+    extra: Vec<pack_format::PackEntry>,
+    skip: &[&str],
+    mutate: impl FnOnce(&mut Vec<u8>),
+    body: impl FnOnce(&Context<'_>) -> T,
+) -> T {
     let pcm: Vec<u8> = (0..64u32)
         .map(|index| u8::try_from((index * 43 + 7) % 199).expect("modulo 199 fits in u8"))
         .collect();
@@ -892,17 +921,19 @@ fn with_audio_pack_entry<T>(
     let upstream = audio_upstream(&dir);
 
     let mut writer = PackWriter::new();
-    writer.push(pack_format::raw_entry(
-        "audio/sample/direct-sound/demo".to_owned(),
-        audio_direct_sound_payload(0x2000, &pcm),
-    ));
-    for song in songs {
+    if !skip.contains(&"audio/sample/direct-sound/demo") {
+        writer.push(pack_format::raw_entry(
+            "audio/sample/direct-sound/demo".to_owned(),
+            audio_direct_sound_payload(0x2000, &pcm),
+        ));
+    }
+    for song in songs.iter().filter(|song| !skip.contains(song)) {
         writer.push(pack_format::raw_entry(
             (*song).to_owned(),
             song_payload.to_vec(),
         ));
     }
-    for entry in voicegroups {
+    for entry in voicegroups.into_iter().chain(extra) {
         writer.push(entry);
     }
     let pack_path = dir.join("test.pack");
@@ -1033,6 +1064,82 @@ fn a_voicegroup_entry_of_the_wrong_kind_is_refused() {
         matches!(&err, GenRomProfileError::WrongPackEntryKind { id, .. } if id == "audio/voicegroup/title"),
         "{err:?}"
     );
+}
+
+/// The same bytes as an 8-bit image entry, the kind the importers never emit.
+fn image_twin(id: &str, payload: &[u8]) -> pack_format::PackEntry {
+    let width = u32::try_from(payload.len()).expect("payload fits in u32");
+    image_entry(id.to_owned(), width, 1, 8, payload.to_vec()).expect("valid image entry")
+}
+
+fn wrong_kind_id(err: &GenRomProfileError) -> Option<&str> {
+    match err {
+        GenRomProfileError::WrongPackEntryKind { id, .. } => Some(id),
+        _ => None,
+    }
+}
+
+#[test]
+fn a_direct_sound_entry_of_the_wrong_kind_is_refused() {
+    let pcm: Vec<u8> = (0..64u32)
+        .map(|index| u8::try_from((index * 43 + 7) % 199).expect("modulo 199 fits in u8"))
+        .collect();
+    let id = "audio/sample/direct-sound/demo";
+    let err = with_audio_pack_extra(
+        "audio-direct-sound-wrong-kind",
+        &["audio/song/mus_title"],
+        &title_song_payload(0),
+        vec![pack_format::raw_entry(
+            "audio/voicegroup/title".to_owned(),
+            title_voicegroup_payload(),
+        )],
+        vec![image_twin(id, &audio_direct_sound_payload(0x2000, &pcm))],
+        &[id],
+        |_| {},
+        |ctx| audio::locate(ctx, &mut Vec::new()),
+    )
+    .expect_err("an image-kind sample entry is refused");
+    assert_eq!(wrong_kind_id(&err), Some(id), "{err:?}");
+}
+
+#[test]
+fn a_programmable_wave_entry_of_the_wrong_kind_is_refused() {
+    let id = "audio/sample/programmable-wave/00";
+    let err = with_audio_pack_extra(
+        "audio-programmable-wave-wrong-kind",
+        &["audio/song/mus_title"],
+        &title_song_payload(0),
+        vec![pack_format::raw_entry(
+            "audio/voicegroup/title".to_owned(),
+            title_voicegroup_payload(),
+        )],
+        vec![image_twin(id, &[0u8; 16])],
+        &[],
+        |_| {},
+        |ctx| audio::locate(ctx, &mut Vec::new()),
+    )
+    .expect_err("an image-kind programmable-wave entry is refused");
+    assert_eq!(wrong_kind_id(&err), Some(id), "{err:?}");
+}
+
+#[test]
+fn a_song_entry_of_the_wrong_kind_is_refused() {
+    let id = "audio/song/mus_title";
+    let err = with_audio_pack_extra(
+        "audio-song-wrong-kind",
+        &[id],
+        &title_song_payload(0),
+        vec![pack_format::raw_entry(
+            "audio/voicegroup/title".to_owned(),
+            title_voicegroup_payload(),
+        )],
+        vec![image_twin(id, &title_song_payload(0))],
+        &[id],
+        |_| {},
+        |ctx| audio::locate(ctx, &mut Vec::new()),
+    )
+    .expect_err("an image-kind song entry is refused");
+    assert_eq!(wrong_kind_id(&err), Some(id), "{err:?}");
 }
 
 #[test]

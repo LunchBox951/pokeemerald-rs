@@ -476,7 +476,12 @@ fn overworld_movement_input_turns_the_player() {
     // `OverworldPhase::load_default` itself (not a hand-built struct
     // literal) so this also exercises the save-state wiring (finding
     // 1) the same way production reaches this state.
-    let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+    let mut phase = OverworldPhase::load(
+        crate::pack_source::PackSource::Repo,
+        crate::new_game::NewGameOptions::DEFAULT,
+        crate::new_game::NewGameIdentity::DEFAULT,
+    )
+    .expect("run `cargo xtask extract` first");
     assert_eq!(
         phase.player.facing(),
         Direction::South,

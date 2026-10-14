@@ -262,7 +262,8 @@ fn mid_visit_flags_preserve_entry_collision_interaction_and_rendering() {
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_the_repositioned_npcs_block_and_vacate_their_real_map_tiles() {
-    let _ = crate::overworld::load_room(
+    let _ = crate::overworld::load_room_from_source(
+        &crate::pack_source::PackSource::Repo,
         OLDALE_TOWN,
         crate::overworld::PlayerCharacter::Brendan,
         &engine::event_data::EventData::new(),
@@ -270,8 +271,9 @@ fn real_pack_the_repositioned_npcs_block_and_vacate_their_real_map_tiles() {
     .expect("run `cargo xtask extract` first");
 
     let approach = |pos: (i32, i32), facing: Direction| {
-        OverworldPhase::for_test(
-            crate::overworld::load_room(
+        OverworldPhase::for_test_with_source(
+            crate::overworld::load_room_from_source(
+                &crate::pack_source::PackSource::Repo,
                 OLDALE_TOWN,
                 crate::overworld::PlayerCharacter::Brendan,
                 &engine::event_data::EventData::new(),
@@ -280,6 +282,7 @@ fn real_pack_the_repositioned_npcs_block_and_vacate_their_real_map_tiles() {
             OLDALE_TOWN,
             PlayerState::new(pos, 3, facing),
             None,
+            crate::pack_source::PackSource::Repo,
         )
     };
 

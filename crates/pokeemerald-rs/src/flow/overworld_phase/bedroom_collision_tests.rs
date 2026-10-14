@@ -39,7 +39,12 @@ use platform::{ButtonState, Buttons};
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn bedroom_bed_side_column_is_walkable_and_retains_the_raised_previous_elevation() {
-    let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+    let mut phase = OverworldPhase::load(
+        crate::pack_source::PackSource::Repo,
+        crate::new_game::NewGameOptions::DEFAULT,
+        crate::new_game::NewGameIdentity::DEFAULT,
+    )
+    .expect("run `cargo xtask extract` first");
     assert_eq!(
         phase.map_id,
         new_game::SPAWN_MAP_ID,
@@ -135,7 +140,12 @@ fn bedroom_bed_side_column_is_walkable_and_retains_the_raised_previous_elevation
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn bedroom_bed_center_pillow_cannot_be_crossed_lengthwise() {
-    let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+    let mut phase = OverworldPhase::load(
+        crate::pack_source::PackSource::Repo,
+        crate::new_game::NewGameOptions::DEFAULT,
+        crate::new_game::NewGameIdentity::DEFAULT,
+    )
+    .expect("run `cargo xtask extract` first");
     assert_eq!(
         phase.map_id,
         new_game::SPAWN_MAP_ID,

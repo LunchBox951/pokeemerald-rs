@@ -584,16 +584,22 @@ fn compose_pixel(
 ) -> Rgb888 {
     let (wx, wy) = (x as u8, y as u8);
 
-    let objwin_mask = effects.windows.obj_window.is_some()
-        && sprites.objwin_mask_with_mosaic(x, y, effects.mosaic.obj);
-    let (window, window_region) = effects.windows.classify_with_region(wx, wy, objwin_mask);
-
     // An `OBJWIN` mask never partitions the scanline, so the enable bits
     // that decide whether a span runs a layer's draw routine at all come
     // from a classification with the mask forced off
     // (`mgba/src/gba/renderers/video-software.c:903-912`)
     // `(behavioral-fidelity)`.
     let (partition_control, _) = effects.windows.classify_with_region(wx, wy, false);
+    // The mask is what the permitted preprocessing passes actually wrote, so
+    // an affine trailing spill from WINOUT outranks a WIN0/WIN1 span that
+    // could not have written it (`software-obj.c:160-163,227-242`;
+    // `software-private.h:210-215`) `(behavioral-fidelity)`.
+    let objwin_mask = effects.windows.obj_window.is_some()
+        && sprites.objwin_mask_with_mosaic_windowed(x, y, effects.mosaic.obj, window_spans);
+    let (window, window_region) = match effects.windows.obj_window {
+        Some(enable) if objwin_mask => (enable, WindowRegion::ObjWindow),
+        _ => effects.windows.classify_with_region(wx, wy, false),
+    };
     // The backdrop's brighten/darken variant is chosen from that same
     // OBJWIN-independent span, not from `window.effects` below
     // (`crate::effects::backdrop_variant`) `(behavioral-fidelity)`.
@@ -669,8 +675,8 @@ fn compose_pixel(
     // Inside an effects-enabled OBJWIN region a target-1 BG's neighbor color
     // is its brighten/darken variant, selected before the unmasked
     // forced-alpha exception (`mgba/src/gba/renderers/software-private.h:156-171`)
-    // `(behavioral-fidelity)`. WIN0/WIN1 outrank OBJWIN, so only the OBJWIN
-    // region qualifies.
+    // `(behavioral-fidelity)`. The actual mask bit selects the OBJWIN control,
+    // so only the OBJWIN region qualifies.
     let next = next.map(|(_, color, kind, _, _)| {
         let color = match kind {
             LayerKind::Bg(index) if window_region == WindowRegion::ObjWindow && window.effects => {
