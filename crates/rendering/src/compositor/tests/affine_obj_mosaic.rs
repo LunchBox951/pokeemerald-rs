@@ -1097,3 +1097,109 @@ fn objwin_affine_mosaic_without_trailing_spill_stays_suppressed_inside_win0_and_
         }
     }
 }
+
+/// Composes row 0 of a normal OBJ at x=8 drawn under an affine mosaic OBJWIN
+/// at x=1 whose WINOUT pass spills into an effects-enabled WIN0 starting at
+/// 10, with OBJWIN enabling OBJ but not effects. `objwin_first` puts the
+/// OBJWIN entry ahead of the normal one in OAM.
+fn normal_obj_under_objwin_spill(objwin_first: bool) -> crate::framebuffer::Framebuffer {
+    use crate::oam::AffineMode;
+
+    let sprite_tiles = Tileset::decode(BitDepth::Bpp4, &[0xFFu8; 32]).unwrap();
+    let mut sprite_colors = [Bgr555::default(); Palette::LEN];
+    sprite_colors[15] = Bgr555::from_channels(16, 16, 16);
+    let sprite_palette = Palette::new(sprite_colors);
+
+    let normal = OamEntry::new(
+        8,
+        0,
+        0,
+        0,
+        BitDepth::Bpp4,
+        false,
+        false,
+        ObjShape::Square,
+        0,
+        0,
+        true,
+    );
+    let objwin = OamEntry::new(
+        1,
+        0,
+        0,
+        0,
+        BitDepth::Bpp4,
+        false,
+        false,
+        ObjShape::Square,
+        0,
+        0,
+        true,
+    )
+    .with_mode(ObjMode::Window)
+    .with_mosaic(true)
+    .with_affine(AffineMode::Affine { matrix_num: 0 });
+    let entries = if objwin_first {
+        [objwin, normal]
+    } else {
+        [normal, objwin]
+    };
+    let matrices = [AffineMatrix::new(
+        AffineMatrix::ONE / 4,
+        0,
+        0,
+        AffineMatrix::ONE,
+    )];
+    let sprites = SpriteLayer::new(&entries, &sprite_tiles, &sprite_tiles, &sprite_palette)
+        .with_affine_matrices(&matrices);
+
+    let mut obj = WindowLayerEnable::NONE;
+    obj.obj = true;
+    let mut obj_effects = obj;
+    obj_effects.effects = true;
+    let effects = FrameEffects {
+        windows: WindowConfig {
+            win0: Some((
+                WindowRect::new(WindowRange::new(10, 240), WindowRange::new(0, 1)),
+                obj_effects,
+            )),
+            win1: None,
+            obj_window: Some(obj),
+            winout: WindowLayerEnable::NONE,
+        },
+        color: OBJ_FULL_BRIGHTEN,
+        mosaic: crate::mosaic::MosaicConfig {
+            bg: MosaicSize::NONE,
+            obj: MosaicSize::new(4, 1),
+        },
+        backdrop: Rgb888::BLACK,
+        ..FrameEffects::default()
+    };
+    compose_frame_with_effects(&sprites, &[], &effects)
+}
+
+#[test]
+fn objwin_spill_from_an_earlier_pass_selects_objwin_palette_for_an_earlier_oam_sprite() {
+    // The WINOUT pass sets the spill's row mask (`software-obj.c:101-105,
+    // 227-242`) before the WIN0 pass draws the normal OBJ, which then reads
+    // that mask and picks the non-variant `objwinPalette` because OBJWIN
+    // disables effects (`software-obj.c:88-98,199-208`), whatever their OAM
+    // order `(behavioral-fidelity)`.
+    let white = Bgr555::from_channels(31, 31, 31).to_rgb888();
+    let gray = Bgr555::from_channels(16, 16, 16).to_rgb888();
+    for objwin_first in [false, true] {
+        let fb = normal_obj_under_objwin_spill(objwin_first);
+        for x in 10..12 {
+            assert_eq!(
+                fb.pixel(x, 0),
+                Some(gray),
+                "objwin_first={objwin_first} x={x}"
+            );
+        }
+        assert_eq!(
+            fb.pixel(12, 0),
+            Some(white),
+            "objwin_first={objwin_first} x=12"
+        );
+    }
+}

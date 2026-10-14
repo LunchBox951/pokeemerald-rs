@@ -306,8 +306,30 @@ impl<'a> SpriteLayer<'a> {
         }
 
         let mut resolved: Option<SpritePixel> = None;
-        let mut objwin_written = false;
         self.with_admission(y, |admission| {
+            // mGBA runs every OAM entry once per pass, so an opaque `OBJWIN`
+            // write in an earlier pass sets the row mask before any later
+            // pass writes a color, whatever their OAM order; within one pass
+            // only earlier OAM entries have written it
+            // (`software-obj.c:88-105`, `video-software.c:1052-1062`)
+            // `(behavioral-fidelity)`. Each `OBJWIN` entry's mask write is
+            // its first opaque pass, sampled free of the display slot.
+            let objwin_pass = |index: usize, entry: &OamEntry| {
+                if entry.mode() != ObjMode::Window || !admission.is_admitted(index) {
+                    return None;
+                }
+                match self.sample_entry_mosaic(entry, x, y, mosaic, window_spans, false) {
+                    (Texel::Opaque(_), span) => Some(span),
+                    _ => None,
+                }
+            };
+            let first_objwin_pass = self
+                .entries
+                .iter()
+                .enumerate()
+                .filter_map(|(index, entry)| objwin_pass(index, entry))
+                .min();
+            let mut earlier_oam_objwin_pass: Option<usize> = None;
             for (index, entry) in self.entries.iter().enumerate() {
                 if !admission.is_admitted(index) {
                     continue;
@@ -325,8 +347,10 @@ impl<'a> SpriteLayer<'a> {
                 }
                 // An opaque `OBJWIN` write sets the row mask whatever its
                 // priority (`software-obj.c:94-105`).
-                objwin_written |=
-                    entry.mode() == ObjMode::Window && matches!(texel, Texel::Opaque(_));
+                if let Some(pass) = objwin_pass(index, entry) {
+                    earlier_oam_objwin_pass =
+                        Some(earlier_oam_objwin_pass.map_or(pass, |earlier| earlier.min(pass)));
+                }
                 if resolved.is_some_and(|pixel| entry.priority() >= pixel.priority) {
                     continue;
                 }
@@ -335,6 +359,9 @@ impl<'a> SpriteLayer<'a> {
                     (ObjMode::Window, Texel::Opaque(_)) => {}
                     (mode, Texel::Opaque(color)) => {
                         let semi_transparent = mode == ObjMode::SemiTransparent;
+                        let color_objwin_masked = first_objwin_pass
+                            .is_some_and(|pass| pass < writer_span)
+                            || earlier_oam_objwin_pass.is_some_and(|pass| pass <= writer_span);
                         resolved = Some(SpritePixel {
                             color,
                             priority: entry.priority(),
@@ -342,7 +369,7 @@ impl<'a> SpriteLayer<'a> {
                             color_semi_transparent: semi_transparent,
                             span_effects,
                             color_span_effects: span_effects,
-                            color_objwin_masked: objwin_written,
+                            color_objwin_masked,
                         });
                     }
                     (mode, Texel::Transparent) => {
