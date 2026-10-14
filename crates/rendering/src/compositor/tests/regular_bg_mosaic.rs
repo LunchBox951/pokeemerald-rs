@@ -1,13 +1,90 @@
-//! Pins regular 8bpp BG mosaic prefetch/hold behavior under window spans.
+//! Pins regular-BG mosaic snapping and the 8bpp per-span prefetch/hold under window spans.
 
 use super::super::{compose_frame_with_effects, BgSlot, FrameEffects};
-use super::shared::{bg0_spans, empty_sprite_layer, two_tile_gradient_8bpp_fixture};
+use super::shared::{
+    bg0_spans, bpp4_tile_with_top_left_2x2, empty_sprite_layer, two_tile_gradient_8bpp_fixture,
+};
 use crate::mosaic::MosaicSize;
 use crate::oam::OamEntry;
 use crate::palette::{Bgr555, Palette};
 use crate::tile::{BitDepth, Tileset};
 use crate::tilemap::{ScreenEntry, Tilemap};
 use crate::window::WindowConfig;
+
+fn quadrant_bg_fixture() -> (Tileset, Palette, Tilemap) {
+    let bytes = bpp4_tile_with_top_left_2x2([[1, 2], [3, 4]]);
+    let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
+    let mut colors = [Bgr555::default(); Palette::LEN];
+    colors[1] = Bgr555::from_channels(1, 0, 0);
+    colors[2] = Bgr555::from_channels(2, 0, 0);
+    colors[3] = Bgr555::from_channels(3, 0, 0);
+    colors[4] = Bgr555::from_channels(4, 0, 0);
+    let palette = Palette::new(colors);
+    let entries = vec![ScreenEntry::new(0, false, false, 0)];
+    let tilemap = Tilemap::new(1, 1, entries).unwrap();
+    (tileset, palette, tilemap)
+}
+
+#[test]
+fn mosaic_snaps_bg_sampling_to_its_block_origin() {
+    let (tileset, palette, tilemap) = quadrant_bg_fixture();
+    let layer = crate::bg::BgLayer::new(&tileset, &palette, &tilemap);
+    let slot = BgSlot::new(layer, 0, 0, 0, 0, true).with_mosaic(true);
+    let entries: [OamEntry; 0] = [];
+    let no_sprite_tiles = Tileset::decode(BitDepth::Bpp4, &[]).unwrap();
+    let sprites = empty_sprite_layer(&entries, &no_sprite_tiles);
+
+    let effects = FrameEffects {
+        mosaic: crate::mosaic::MosaicConfig {
+            bg: MosaicSize::new(2, 2),
+            obj: MosaicSize::NONE,
+        },
+        ..FrameEffects::default()
+    };
+    let fb = compose_frame_with_effects(&sprites, &[slot], &effects);
+
+    let origin_color = Bgr555::from_channels(1, 0, 0).to_rgb888();
+    assert_eq!(fb.pixel(0, 0), Some(origin_color));
+    assert_eq!(
+        fb.pixel(1, 0),
+        Some(origin_color),
+        "snapped from (1,0) to (0,0)"
+    );
+    assert_eq!(
+        fb.pixel(0, 1),
+        Some(origin_color),
+        "snapped from (0,1) to (0,0)"
+    );
+    assert_eq!(
+        fb.pixel(1, 1),
+        Some(origin_color),
+        "snapped from (1,1) to (0,0)"
+    );
+}
+
+#[test]
+fn mosaic_only_applies_to_bg_slots_with_their_own_mosaic_bit_set() {
+    let (tileset, palette, tilemap) = quadrant_bg_fixture();
+    let layer = crate::bg::BgLayer::new(&tileset, &palette, &tilemap);
+    let slot = BgSlot::new(layer, 0, 0, 0, 0, true);
+    let entries: [OamEntry; 0] = [];
+    let no_sprite_tiles = Tileset::decode(BitDepth::Bpp4, &[]).unwrap();
+    let sprites = empty_sprite_layer(&entries, &no_sprite_tiles);
+
+    let effects = FrameEffects {
+        mosaic: crate::mosaic::MosaicConfig {
+            bg: MosaicSize::new(2, 2),
+            obj: MosaicSize::NONE,
+        },
+        ..FrameEffects::default()
+    };
+    let fb = compose_frame_with_effects(&sprites, &[slot], &effects);
+
+    assert_eq!(
+        fb.pixel(1, 1),
+        Some(Bgr555::from_channels(4, 0, 0).to_rgb888())
+    );
+}
 
 /// Row 0 (x = 0..12) of a regular 8bpp mosaic BG (`h` x 1) under `windows`,
 /// as red channels; `0` is the black backdrop.
