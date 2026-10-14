@@ -1000,21 +1000,31 @@ mod tests {
         )
     }
 
-    /// `SPECIES_WALREIN`: Thick Fat is its only ability.
-    const WALREIN: SpeciesId = SpeciesId(343);
+    /// `SPECIES_JYNX`: an Ice type whose Special Attack far exceeds its
+    /// Attack, so a weak Ice move can rival a resisted physical one.
+    const JYNX: SpeciesId = SpeciesId(124);
 
     /// Upstream's `AI_CalcDmg` runs `CalculateBaseDamage` for every nonempty
     /// slot, depleted or not (`battle_ai_script_commands.c:1204-1213`), and it
     /// halves raw Special Attack for Fire/Ice against Thick Fat
-    /// (`pokemon.c:3202-3204`).
+    /// (`pokemon.c:3202-3204`). Icicle Spear is the one Fire/Ice move that
+    /// trainer admission accepts, so the depleted slot is reachable.
     #[test]
-    fn depleted_fire_move_respects_thick_fat_in_power_comparison() {
+    fn depleted_ice_move_respects_thick_fat_in_power_comparison() {
         let dex = Dex::new();
+        let moves = vec![MoveId::ROCK_THROW, GROWL, MoveId::ICICLE_SPEAR];
+        for move_id in &moves {
+            assert_eq!(
+                crate::battle::trainer::ensure_move_playable(&dex, *move_id, AiFlags::TRY_TO_FAINT),
+                Ok(()),
+                "{move_id:?}"
+            );
+        }
         let build = |species, moves| {
             BattlePokemon::new(
                 &dex,
                 species,
-                10,
+                20,
                 Ivs {
                     hp: 31,
                     attack: 31,
@@ -1028,27 +1038,24 @@ mod tests {
             )
             .unwrap()
         };
-        let mut enemy = build(
-            SQUIRTLE,
-            vec![MoveId::HYDRO_PUMP, GROWL, MoveId::FIRE_BLAST],
-        );
+        let mut enemy = build(JYNX, moves);
         spend_move(&mut enemy, 2);
-        let player = build(WALREIN, vec![TACKLE]);
+        let player = build(MAKUHITA, vec![TACKLE]);
         assert_eq!(player.ability(), crate::ability::THICK_FAT);
 
         assert_eq!(
-            estimated_damage(&dex, MoveId::HYDRO_PUMP, &enemy, &player, PERCENT_SCALE).unwrap(),
-            8
+            estimated_damage(&dex, MoveId::ROCK_THROW, &enemy, &player, PERCENT_SCALE).unwrap(),
+            7
         );
         assert_eq!(
-            estimated_damage(&dex, MoveId::FIRE_BLAST, &enemy, &player, PERCENT_SCALE).unwrap(),
+            estimated_damage(&dex, MoveId::ICICLE_SPEAR, &enemy, &player, PERCENT_SCALE).unwrap(),
             6
         );
 
         let mut rng = rng_with_maximum_simulated_damage([]);
         let mut scores = MoveScores::initialize(&enemy, &mut rng);
         assert_eq!(
-            compare_move_power(&dex, &scores, 0, MoveId::HYDRO_PUMP, &enemy, &player),
+            compare_move_power(&dex, &scores, 0, MoveId::ROCK_THROW, &enemy, &player),
             Ok(PowerComparison::Strongest)
         );
         for slot in 0..2 {
