@@ -26,9 +26,14 @@
 //!   main-menu background palette; and
 //! - the starter chooser's tile, Poké Ball, and circle sheets with their
 //!   palettes, both Birch tilemaps, and the shared normal front image and
-//!   palette of Treecko, Torchic, and Mudkip; and
+//!   palette of Treecko, Torchic, and Mudkip;
+//! - the ordinary bag's screen, tilemap, sex palettes, male and female sheets
+//!   and palette, rotating ball, select and HM marks, and the image and
+//!   palette of every item icon `gItemIconTable` selects; and
 //! - `mus_title`, its transitive voicegroup tree, and every sample that tree
-//!   references.
+//!   references; and
+//! - the battle-message token table (`gBattleStringsTable` plus the special
+//!   templates `BufferStringBattle` selects).
 //!
 //! # Asset id scheme
 //!
@@ -42,14 +47,18 @@
 //! - `text-window/{image,palette}/<stem>`
 //! - `interface/palette/main_menu_bg`
 //! - `starter-chooser/{image,palette,raw}/<stem>`
+//! - `bag/{image,palette,raw}/<name>` and `bag/item-icon/{image,palette}/<stem>`
 //! - `pokemon/<species>/front` and `pokemon/<species>/palette/normal`
 //! - `audio/sample/{direct-sound,programmable-wave}/<name>`
 //! - `audio/voicegroup/<label>` and `audio/song/<name>`
+//! - `battle-message/table`
 //!
 //! Names preserve normalized upstream directory, file, or symbol names; they
 //! never use linker-style `gTileset_*` identifiers.
 
 mod audio_samples;
+mod bag;
+mod battle_message;
 mod error;
 mod fonts;
 pub mod inflate;
@@ -135,9 +144,11 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     text_window::extract_text_window(&upstream, &mut writer)?;
     extract_interface_palettes(&upstream, &mut writer)?;
     starter_chooser::extract_starter_chooser(&upstream, &mut writer)?;
+    bag::extract_bag(&upstream, &mut writer)?;
     audio_samples::extract_audio_samples(&upstream, &mut writer)?;
     voicegroups::extract_voicegroups(&upstream, &mut writer)?;
     midi::extract_song(&upstream, &mut writer)?;
+    battle_message::extract_battle_message(&upstream, &mut writer)?;
 
     let entry_count = writer.len();
     let bytes = writer.finish()?;
@@ -230,8 +241,12 @@ fn build_palette_entry(
 
 fn push_raw_entry(path: &Path, id: String, writer: &mut PackWriter) -> Result<(), ExtractError> {
     let payload = read_file(path)?;
-    writer.push(pack_format::raw_entry(id, payload));
+    push_raw_bytes(id, payload, writer);
     Ok(())
+}
+
+fn push_raw_bytes(id: String, payload: Vec<u8>, writer: &mut PackWriter) {
+    writer.push(pack_format::raw_entry(id, payload));
 }
 
 fn collect_pngs_sorted(dir: &Path) -> Result<Vec<PathBuf>, ExtractError> {

@@ -239,19 +239,18 @@ fn prefill_then_start(
     start_playback(output, start)
 }
 
-/// Bounds on how long [`push_frame`] and [`wait_for_drain`] keep retrying.
+/// Retry budgets for [`push_frame`] and [`wait_for_drain`]: deadlines on elapsed
+/// time, checked between attempts, not attempt counts.
 struct RetryPolicy {
     interval: Duration,
     max_wait: Duration,
 }
 
-/// Why [`push_frame`] gave up before queuing every sample.
+/// Why [`push_frame`] gave up before queuing every sample. `dropped` counts only
+/// the unqueued suffix, never samples accepted by earlier partial pushes.
 #[derive(Clone, Copy)]
 enum PushError {
-    /// `AudioOutput::stream_errors` went nonzero: the device callback has
-    /// stopped draining the ring, so retrying cannot help.
     StreamStopped { errors: u64, dropped: usize },
-    /// `RetryPolicy::max_wait` elapsed with no stream error reported.
     DeadlineExceeded { dropped: usize },
 }
 
@@ -271,13 +270,9 @@ impl PushError {
     }
 }
 
-/// Push all of `samples` via `push`, retrying a momentarily full ring within
-/// `policy`.
+/// Push all of `samples`, retrying a full ring within `policy`.
 ///
-/// On either error the unqueued tail is dropped rather than blocked on — the
-/// accounting rule [`platform::Producer::push`] documents. `push`,
-/// `stream_errors`, `now`, and `sleep` are injected so the tests below need
-/// no audio device or wall clock.
+/// The retry budget covers the whole frame; partial progress does not renew it.
 fn push_frame(
     samples: &[f32],
     policy: &RetryPolicy,
@@ -300,9 +295,7 @@ fn push_frame(
         if queued >= samples.len() {
             return Ok(());
         }
-        // Re-check: an async error can land between the check above and this
-        // push completing, and naming it beats falling through to the
-        // deadline.
+        // An asynchronous stream failure is more informative than retry expiry.
         let errors = stream_errors();
         if errors > 0 {
             return Err(PushError::StreamStopped {
@@ -321,12 +314,8 @@ fn push_frame(
 
 /// Sleep until `*next_deadline`, then advance it by one `frame_period`.
 ///
-/// The deadline is tracked absolutely rather than derived from `now()` after
-/// each call, so render and push time already spent is subtracted from the
-/// wait instead of stacking on top of it: a call that lands late sleeps zero
-/// and the following deadline still advances from the missed one, rather
-/// than resetting from the late `now()` and letting drift compound. `now`
-/// and `sleep` are injected as in [`push_frame`].
+/// Absolute game-frame deadlines keep render/push work and late frames from
+/// shifting the cadence.
 fn wait_for_frame_deadline(
     next_deadline: &mut Instant,
     frame_period: Duration,
@@ -338,6 +327,7 @@ fn wait_for_frame_deadline(
 }
 
 /// Why [`wait_for_drain`] gave up before confirming the ring emptied.
+/// `remaining` may be zero even on a stream failure.
 #[derive(Clone, Copy)]
 enum DrainError {
     /// `AudioOutput::stream_errors` went nonzero while samples were still
@@ -382,9 +372,7 @@ impl DrainError {
 /// Wait, within `policy`, for `available_space` to report the ring fully
 /// drained.
 ///
-/// A stopped callback must never read as a successful finish, so a nonzero
-/// `stream_errors` outranks an empty ring — hence the read order below.
-/// Callbacks are injected as in [`push_frame`].
+/// A reported stream failure takes precedence over ring emptiness.
 fn wait_for_drain(
     capacity: usize,
     policy: &RetryPolicy,
@@ -395,9 +383,8 @@ fn wait_for_drain(
 ) -> Result<(), DrainError> {
     let deadline = now() + policy.max_wait;
     loop {
-        // Read `available_space` before `stream_errors`: reading errors
-        // first could pair a stale, pre-drain count with the freshly-emptied
-        // ring and report success for a stream that had gone unhealthy.
+        // An empty-ring observation must not be paired with an older
+        // healthy-stream observation.
         let remaining = capacity.saturating_sub(available_space());
         let errors = stream_errors();
         if errors > 0 {
