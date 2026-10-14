@@ -547,7 +547,12 @@ mod tests {
     #[test]
     #[ignore = "needs a local pack: run `cargo xtask extract` first"]
     fn real_pack_explicit_coordinate_warp_rejects_out_of_bounds_position_atomically() {
-        let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+        let mut phase = OverworldPhase::load(
+            crate::pack_source::PackSource::Repo,
+            crate::new_game::NewGameOptions::DEFAULT,
+            crate::new_game::NewGameIdentity::DEFAULT,
+        )
+        .expect("run `cargo xtask extract` first");
         let destination = MapId("MAP_ROUTE101");
         let header = assets::MapHeaderTable::new()
             .header(destination)
@@ -592,7 +597,12 @@ mod tests {
     #[test]
     #[ignore = "needs a local pack: run `cargo xtask extract` first"]
     fn real_pack_immediate_post_white_out_save_persists_home_map_and_position() {
-        let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+        let mut phase = OverworldPhase::load(
+            crate::pack_source::PackSource::Repo,
+            crate::new_game::NewGameOptions::DEFAULT,
+            crate::new_game::NewGameIdentity::DEFAULT,
+        )
+        .expect("run `cargo xtask extract` first");
         let heal_location = phase.save1.last_heal_location;
 
         phase.white_out();
@@ -639,7 +649,12 @@ mod tests {
     #[test]
     #[ignore = "needs a local pack: run `cargo xtask extract` first"]
     fn real_pack_white_out_relocation_adopts_the_heal_locations_elevation_before_any_movement() {
-        let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+        let mut phase = OverworldPhase::load(
+            crate::pack_source::PackSource::Repo,
+            crate::new_game::NewGameOptions::DEFAULT,
+            crate::new_game::NewGameIdentity::DEFAULT,
+        )
+        .expect("run `cargo xtask extract` first");
         let heal_location = phase.save1.last_heal_location;
         assert_eq!(
             (heal_location.x, heal_location.y),
@@ -672,7 +687,12 @@ mod tests {
     #[test]
     #[ignore = "needs a local pack: run `cargo xtask extract` first"]
     fn real_pack_white_out_prefers_a_valid_saved_warp_id_over_its_own_stored_coordinates() {
-        let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+        let mut phase = OverworldPhase::load(
+            crate::pack_source::PackSource::Repo,
+            crate::new_game::NewGameOptions::DEFAULT,
+            crate::new_game::NewGameIdentity::DEFAULT,
+        )
+        .expect("run `cargo xtask extract` first");
         let home = MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F");
         let header = assets::MapHeaderTable::new()
             .header(home)
