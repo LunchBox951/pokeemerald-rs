@@ -88,6 +88,12 @@ struct TransitCadence {
     /// Whether the crossing plays `sAnim_Run*` on the running sheet rather
     /// than `sAnim_Go*` on the walking sheet (`event_object_movement.c:5120-5124`).
     running: bool,
+    /// Frames, counted from the crossing's first, the walk animation's
+    /// forward-foot cell lasts before the standing cell takes over: half of
+    /// a 16-frame walk, but a current's six-frame crossing still plays
+    /// `sAnim_GoFast*` at four frames per cell
+    /// (`movement_action_func_tables.h:605-608`, `object_event_anims.h:238-245`).
+    forward_foot_frames: u8,
 }
 
 impl TransitCadence {
@@ -96,6 +102,7 @@ impl TransitCadence {
         duration: WALK_FRAMES_PER_TILE,
         animation_disabled: false,
         running: false,
+        forward_foot_frames: WALK_FRAMES_PER_TILE / 2,
     };
 
     /// A dispatched slide or slip tile's pace (`PlayerWalkFast`, eight
@@ -104,6 +111,7 @@ impl TransitCadence {
         duration: SLIDE_FRAMES_PER_TILE,
         animation_disabled: true,
         running: false,
+        forward_foot_frames: SLIDE_FRAMES_PER_TILE / 2,
     };
 
     /// A dispatched current tile's pace: six frames with the walk animation
@@ -113,6 +121,7 @@ impl TransitCadence {
         duration: CURRENT_FRAMES_PER_TILE,
         animation_disabled: false,
         running: false,
+        forward_foot_frames: 4,
     };
 
     /// A held-B run's pace: fast, with the walk animation left running.
@@ -120,6 +129,7 @@ impl TransitCadence {
         duration: RUN_FRAMES_PER_TILE,
         animation_disabled: false,
         running: true,
+        forward_foot_frames: RUN_FRAMES_PER_TILE / 2,
     };
 }
 
@@ -403,6 +413,15 @@ impl PlayerState {
     #[must_use]
     pub const fn transit_animation_disabled(&self) -> bool {
         self.transit_cadence.animation_disabled
+    }
+
+    /// Returns how many frames of the active crossing show the walk
+    /// animation's forward-foot cell before the standing cell, independent of
+    /// [`transit_duration`](Self::transit_duration) (a current crossing lasts
+    /// six frames but holds the cell for four). Stale at rest.
+    #[must_use]
+    pub const fn transit_forward_foot_frames(&self) -> u8 {
+        self.transit_cadence.forward_foot_frames
     }
 
     /// Returns whether a finished slide still holds its paused forward-foot

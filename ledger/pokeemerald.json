@@ -29017,10 +29017,7 @@
           "status": "rewritten"
         },
         "sStepTimes": {
-          "reason": "Only the NORMAL (16), FAST_1 (8) and FAST_2 (6) rows are claimed, as WALK_FRAMES_PER_TILE, SLIDE_FRAMES_PER_TILE and CURRENT_FRAMES_PER_TILE; the four- and two-frame bike-speed rows stay unported (event_object_movement.c:8233-8270, 8292-8298).",
-          "rust_target": "crates/engine/src/overworld/player.rs",
-          "spec": "S-5",
-          "status": "rewritten"
+          "status": "pending"
         }
       },
       "category": "code.source",
