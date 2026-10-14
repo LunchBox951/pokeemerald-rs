@@ -65,8 +65,11 @@ pub fn try_run_from_battle(
         return true;
     }
 
-    let untruncated_escape_threshold = (player_raw_speed * SPEED_RATIO_SCALE) / enemy_raw_speed
-        + u32::from(previous_attempts) * PREVIOUS_ATTEMPT_BONUS;
+    // Widen so the ratio multiply cannot overflow before the deliberate
+    // low-byte truncation below.
+    let untruncated_escape_threshold = (u64::from(player_raw_speed) * u64::from(SPEED_RATIO_SCALE))
+        / u64::from(enemy_raw_speed)
+        + u64::from(previous_attempts) * u64::from(PREVIOUS_ATTEMPT_BONUS);
     let escape_threshold = untruncated_escape_threshold.to_le_bytes()[0];
     let escape_roll = rng.next_u16().to_le_bytes()[0];
     escape_threshold > escape_roll
@@ -254,5 +257,28 @@ mod tests {
         assert!(try_run_from_battle(100, 101, 9, &mut rng));
         let mut rng = FixedRng(WRAPPED_THRESHOLD);
         assert!(!try_run_from_battle(100, 101, 9, &mut rng));
+    }
+
+    #[test]
+    fn huge_speeds_do_not_overflow_the_ratio_multiplication() {
+        // 0x2000_0000 * 128 overflows u32 (wraps to 0); widened it is
+        // 2^36 / (2^32 - 1) = 16.
+        const HUGE_SLOWER_SPEED: u32 = 0x2000_0000;
+        const THRESHOLD: u16 = 16;
+
+        let mut rng = FixedRng(THRESHOLD - 1);
+        assert!(try_run_from_battle(
+            HUGE_SLOWER_SPEED,
+            u32::MAX,
+            0,
+            &mut rng
+        ));
+        let mut rng = FixedRng(THRESHOLD);
+        assert!(!try_run_from_battle(
+            HUGE_SLOWER_SPEED,
+            u32::MAX,
+            0,
+            &mut rng
+        ));
     }
 }
