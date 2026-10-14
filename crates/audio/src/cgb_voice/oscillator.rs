@@ -141,9 +141,10 @@ impl Oscillator {
     /// output latch forward onto its replacement
     /// ([`SquareChannel::continue_duty_from`]'s and
     /// [`NoiseChannel::continue_output_from`]'s docs). A wave oscillator
-    /// keeps its retained wave-RAM rotation only when the replacement names
-    /// the same wave asset; a different asset is a fresh upload
-    /// (`m4a.c:1003-1012`).
+    /// always keeps the held output nibble, and keeps its retained wave-RAM
+    /// rotation only when the replacement names the same wave asset; a
+    /// different asset is a fresh upload (`m4a.c:1003-1012`) that the next
+    /// wave clock latches from.
     pub(super) fn carry_hardware_state_from(&mut self, other: &Self) {
         match (self, other) {
             (Self::Square(square), Self::Square(previous)) => square.continue_duty_from(previous),
@@ -159,7 +160,13 @@ impl Oscillator {
                     wave_id: previous_id,
                     channel: previous,
                 },
-            ) if wave_id == previous_id => wave.continue_rotation_from(previous),
+            ) => {
+                if wave_id == previous_id {
+                    wave.continue_rotation_from(previous);
+                } else {
+                    wave.continue_latch_from(previous);
+                }
+            }
             _ => {}
         }
     }
@@ -229,5 +236,35 @@ mod nr32_attenuation_tests {
     fn full_volume_keeps_the_centered_nibble() {
         assert_eq!(render(15, 15), 7 * WAVE_SAMPLE_SCALE);
         assert_eq!(render(0, 31), -8 * WAVE_SAMPLE_SCALE);
+    }
+}
+
+#[cfg(test)]
+mod changed_wave_asset_latch_tests {
+    use super::*;
+    use crate::psg::WaveChannel;
+
+    /// A changed wave asset uploads new RAM but leaves the held channel-3
+    /// output sample alone; only the next wave clock latches from the new
+    /// RAM (`mgba/src/gb/audio.c:300-337`).
+    #[test]
+    fn a_changed_wave_asset_keeps_the_previous_latch_until_the_first_clock() {
+        let high = WaveChannel::decode_wave_ram(&[0xFF; 16]);
+        let low = WaveChannel::decode_wave_ram(&[0x00; 16]);
+        let previous = Oscillator::Wave {
+            wave_id: Arc::from("old"),
+            channel: WaveChannel::new(high, 0x7FF),
+        };
+        let mut replacement = Oscillator::Wave {
+            wave_id: Arc::from("new"),
+            channel: WaveChannel::new(low, 0x7FF),
+        };
+        replacement.carry_hardware_state_from(&previous);
+        let Oscillator::Wave { channel, .. } = &mut replacement else {
+            unreachable!()
+        };
+        assert_eq!(channel.sample(), 7, "old latch before first clock");
+        // 0x7FF clocks the wave every sample, so the new RAM follows.
+        assert_eq!(channel.sample(), -8, "new waveform after the first clock");
     }
 }
