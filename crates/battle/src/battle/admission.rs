@@ -5,12 +5,8 @@ use crate::error::BattleError;
 use crate::status1::Status1;
 use assets::AbilityId;
 
-/// Refuses a participant whose ability interaction this crate does not model:
-/// a status upstream's ability immunity cure
-/// (`AbilityBattleEffects(ABILITYEFFECT_IMMUNITY)`, `battle_util.c:2873-2951`)
-/// would clear at move end, or Truant, whose `CANCELER_TRUANT` loafing
-/// (`battle_util.c:2086-2097`) and end-turn counter toggle (`:2653-2655`) are
-/// absent from the turn engine.
+/// Refuses a participant whose ability interaction the turn engine does not model:
+/// the move-end immunity cure (`battle_util.c:2873-2951`) or Truant (`:2086-2097`, `:2653-2655`).
 ///
 /// # Errors
 ///

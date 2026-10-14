@@ -1,6 +1,5 @@
-//! Both constructors refuse status and ability combinations that upstream
-//! cures at move end (`battle_util.c:2873-2951`) and Truant holders
-//! (`battle_util.c:2086-2097`, `:2653-2655`), before any RNG draw.
+//! Both constructors refuse move-end-cured status/ability pairs
+//! (`battle_util.c:2873-2951`) and Truant holders, before any RNG draw.
 
 use crate::common::{max_iv_mon, SequenceRng};
 use assets::trainers::TrainerId;
