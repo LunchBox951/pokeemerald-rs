@@ -202,6 +202,14 @@ pub(crate) enum AppScene {
     /// selection, A confirms it (module docs on [`advance_scene`]'s
     /// `MainMenu` arm for what each item does).
     MainMenu(Box<MainMenuState>),
+    /// The highlight-only frame after a successful Up/Down (I-3, issue
+    /// #2223): upstream's navigation task only schedules a callback that
+    /// redraws the new highlight and reinstalls input without polling
+    /// (`pokeemerald/src/main_menu.c:878-881`, `:930-933`;
+    /// `pokeemerald/src/task.c:118-120`), so this step presents the new
+    /// highlight and ignores every button before [`AppScene::MainMenu`]
+    /// resumes.
+    MainMenuHighlight(Box<MainMenuState>),
     /// Waiting for the main menu's black front-end palette fade before the
     /// [`MainMenuAction`] a fresh A confirmed on `NEW GAME`/`CONTINUE`
     /// dispatches (I-3, issue #1329: module docs' "Waiting for the
@@ -519,6 +527,10 @@ pub(crate) fn advance_scene(
         AppScene::Title(title) => advance_title(title, buttons),
         AppScene::TitleFadeWait(wait) => advance_title_fade_wait(wait, save_slot, &pack_source),
         AppScene::MainMenu(state) => advance_main_menu(state, buttons),
+        AppScene::MainMenuHighlight(state) => {
+            let frame = state.scene.compose_frame();
+            (AppScene::MainMenu(state), frame)
+        }
         AppScene::MainMenuFadeWait(wait) => advance_main_menu_fade_wait(wait, pack_source),
         // Issue #393: B is an ordinary dialogue-advance button here, not a
         // whole-intro skip -- `intro_printer_input`'s own doc comment.
