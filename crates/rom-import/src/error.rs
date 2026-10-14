@@ -344,6 +344,15 @@ pub enum ImportError {
         /// What the schema objected to.
         source: assets::AudioError,
     },
+    /// The battle-message schema refused what the ROM holds: a stream with
+    /// no well-formed terminator, or a table the inventory cannot be filled
+    /// from.
+    BattleMessage {
+        /// The pack id being built.
+        id: &'static str,
+        /// What the schema objected to.
+        source: assets::pack::BattleMessageError,
+    },
     /// The asset pack could not be assembled.
     PackWrite(pack_format::PackWriteError),
     /// The pack's destination is the source ROM itself.
@@ -479,6 +488,7 @@ impl fmt::Display for ImportError {
                 fault,
             } => write!(f, "`{id}` track {track} at ROM offset {at:#08x}: {fault}"),
             Self::Audio { id, source } => write!(f, "`{id}`: {source}"),
+            Self::BattleMessage { id, source } => write!(f, "`{id}`: {source}"),
             Self::PackWrite(source) => write!(f, "could not assemble the asset pack: {source}"),
             Self::SameFile { path } => write!(
                 f,
@@ -523,6 +533,7 @@ impl std::error::Error for ImportError {
             Self::PackWrite(source) => Some(source),
             Self::EntryShape { source, .. } => Some(source),
             Self::Audio { source, .. } => Some(source),
+            Self::BattleMessage { source, .. } => Some(source),
             _ => None,
         }
     }
@@ -730,6 +741,10 @@ mod tests {
             ImportError::Audio {
                 id: "audio/voicegroup/title",
                 source: assets::AudioError::Truncated,
+            },
+            ImportError::BattleMessage {
+                id: "battle-message/table",
+                source: assets::pack::BattleMessageError::Truncated,
             },
             ImportError::Song {
                 id: "audio/song/mus_title",

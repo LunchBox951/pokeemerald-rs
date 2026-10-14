@@ -345,6 +345,32 @@ pub struct AudioRoots {
     pub programmable_wave: &'static [SampleRoot],
 }
 
+/// One special battle-message template and the upstream symbol it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SpecialMessageRoot {
+    /// The upstream symbol, which must be the matching entry of
+    /// `assets::pack::SPECIAL_TEMPLATES`. Recorded so a profile whose roots
+    /// drifted out of inventory order is refused rather than mislabelled.
+    pub symbol: &'static str,
+    /// Where the template's `EOS`-terminated token stream starts.
+    pub addr: GbaPtr,
+}
+
+/// The battle-message token streams (`src/battle_message.c`).
+///
+/// Streams are `EOS`-terminated in the ROM, so no length is recorded: the
+/// reader finds each one's end. The 369 table slots are reached through
+/// `gBattleStringsTable`'s own pointers; the special templates have no table
+/// and carry one address each, in `SPECIAL_TEMPLATES` order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BattleMessageRoots {
+    /// `gBattleStringsTable`: one pointer per battle-string ID from
+    /// `BATTLESTRINGS_TABLE_START`.
+    pub table: GbaPtr,
+    /// Every special template, in `SPECIAL_TEMPLATES` order.
+    pub specials: &'static [SpecialMessageRoot],
+}
+
 /// The authoritative ROM addresses a profile carries, grouped by domain.
 ///
 /// `#[non_exhaustive]` so adding a domain stays a non-breaking change for
@@ -368,6 +394,8 @@ pub struct Roots {
     pub interface: InterfaceRoots,
     /// `MUS_TITLE` and everything it plays through.
     pub audio: AudioRoots,
+    /// The battle-message token table.
+    pub battle_messages: BattleMessageRoots,
 }
 
 impl Roots {
@@ -405,6 +433,7 @@ impl Roots {
             direct_sound: &[],
             programmable_wave: &[],
         },
+        battle_messages: BattleMessageRoots::NONE,
     };
 
     /// Every image root in the table, across every domain.
@@ -434,6 +463,14 @@ impl Roots {
             .chain(self.text_window.palettes.iter())
             .chain(self.interface.palettes.iter())
     }
+}
+
+impl BattleMessageRoots {
+    /// No battle-message roots recorded: the domain writes nothing.
+    pub const NONE: Self = Self {
+        table: GbaPtr::AT_BASE,
+        specials: &[],
+    };
 }
 
 impl Default for Roots {
@@ -468,6 +505,7 @@ mod tests {
         assert_eq!(roots.images().count(), 0);
         assert_eq!(roots.palettes().count(), 0);
         assert_eq!(Roots::default(), Roots::NONE);
+        assert!(roots.battle_messages.specials.is_empty());
     }
 
     #[test]
