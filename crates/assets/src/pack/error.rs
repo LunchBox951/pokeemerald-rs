@@ -7,6 +7,7 @@ use crate::audio::AudioError;
 use crate::pokedex::PokedexError;
 
 use super::battle_message::BattleMessageError;
+use crate::battle_anim::BattleAnimationError;
 
 use super::format::FORMAT_VERSION;
 
@@ -105,6 +106,13 @@ pub enum PackError {
         id: String,
         /// Underlying schema error.
         source: BattleMessageError,
+    },
+    /// The `battle-anim/catalog` entry failed its schema's decode.
+    BattleAnimationDecode {
+        /// Catalog asset id.
+        id: String,
+        /// Underlying schema error.
+        source: BattleAnimationError,
     },
     /// The `pokedex/data` entry failed its schema's decode.
     PokedexDecode {
@@ -216,6 +224,12 @@ impl fmt::Display for PackError {
                     "asset pack: battle-message entry `{id}` failed to decode: {source}"
                 )
             }
+            Self::BattleAnimationDecode { id, source } => {
+                write!(
+                    f,
+                    "asset pack: battle-animation entry `{id}` failed to decode: {source}"
+                )
+            }
             Self::PokedexDecode { id, source } => {
                 write!(
                     f,
@@ -233,6 +247,7 @@ impl std::error::Error for PackError {
             Self::AudioDecode { source, .. } => Some(source),
             Self::BattleMessageDecode { source, .. } => Some(source),
             Self::PokedexDecode { source, .. } => Some(source),
+            Self::BattleAnimationDecode { source, .. } => Some(source),
             Self::NotFound(_)
             | Self::ReadFailed(..)
             | Self::BadMagic
