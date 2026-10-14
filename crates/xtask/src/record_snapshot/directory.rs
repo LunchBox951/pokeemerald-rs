@@ -3,8 +3,8 @@ use std::path::Path;
 #[cfg(windows)]
 use crate::windows_file_identity::WindowsFileIdentity;
 
-/// Pins the directory used for payload writes. Creating and opening a directory
-/// are separate operations; the claim starts at the successful open.
+/// Pins the directory used for payload writes. The claim starts at the
+/// successful open, not at the directory's creation.
 pub(super) struct StagedDirClaim {
     hold: Option<std::fs::File>,
 }
@@ -145,12 +145,11 @@ fn unpinned_directory(path: &Path) -> std::io::Error {
     ))
 }
 
-/// `O_SEARCH` on Apple targets, which have no `O_PATH`: authorization to
-/// search a directory, without the read access `O_RDONLY` demands. The
-/// platform spells it `O_EXEC | O_DIRECTORY` (`libc`'s Apple `O_EXEC`,
-/// `0x4000_0000`); `rustix` 1.1 exposes no flag for it, so the value travels
-/// through `OFlags`' externally defined bits. [`claim_staged_dir`] always adds
-/// `DIRECTORY`.
+/// `O_SEARCH` on Apple targets, which have no `O_PATH`: search access to a
+/// directory without the read access `O_RDONLY` demands. Apple spells it
+/// `O_EXEC | O_DIRECTORY` (`libc`'s `O_EXEC`, `0x4000_0000`); `rustix` 1.1 has
+/// no flag for it, so the value travels as externally defined `OFlags` bits.
+/// Callers always add `DIRECTORY`.
 #[cfg(target_vendor = "apple")]
 const APPLE_SEARCH: rustix::fs::OFlags = rustix::fs::OFlags::from_bits_retain(0x4000_0000);
 
@@ -165,8 +164,8 @@ fn open_held_dir(path: &Path, access: rustix::fs::OFlags) -> std::io::Result<std
     .map_err(Into::into)
 }
 
-/// Opens a staging directory with the strongest access the platform allows and
-/// pins it. `open` resolves the directory (by pathname or through a handle).
+/// Pins a staging directory with the strongest access the platform allows.
+/// `open` resolves the directory, by pathname or through a handle.
 #[cfg(unix)]
 fn claim_staged_dir_with(
     open: impl Fn(rustix::fs::OFlags) -> std::io::Result<std::fs::File>,
@@ -176,17 +175,14 @@ fn claim_staged_dir_with(
     #[cfg(not(any(target_os = "linux", target_os = "android")))]
     let access = rustix::fs::OFlags::RDONLY;
     let held = open(access);
-    // A `0444` umask leaves the capture's own staging directory at mode `0333`:
-    // writable and searchable, but unreadable, so `O_RDONLY` is refused. Search
-    // access is all the hold is used for -- `openat` for payload creation and
-    // `fstat` for identity.
+    // A `0444` umask leaves the staging directory at mode `0333`, so `O_RDONLY`
+    // is refused. The hold only needs search access (`openat`, `fstat`).
     #[cfg(target_vendor = "apple")]
     let held = match held {
         Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => open(APPLE_SEARCH),
         held => held,
     };
-    // A claim without a hold can never write a payload, so a directory that
-    // cannot be held fails the claim instead of reporting a dead success.
+    // A claim without a hold could never write a payload, so fail instead.
     Ok(StagedDirClaim { hold: Some(held?) })
 }
 
@@ -242,15 +238,16 @@ pub(super) fn claim_promoted_dir(path: &Path) -> std::io::Result<StagedDirClaim>
 /// Pins the output directory for a whole publication.
 ///
 /// On Unix the generation is promoted ([`Self::promote_without_replacement`])
-/// and verified (`StagedDirClaim::require_entry_in`) relative to this held
-/// directory, and the pointer is staged and promoted relative to it as well
-/// ([`Self::stage_pointer`], `staging::StagedFile`), so the pointer can only
-/// land in the directory the claim verified, beside the generation it names,
-/// whatever the pathname names by then. Windows has no fd-relative rename
-/// through the approved surface, so there the pathname stays in the loop: the
-/// hold keeps the directory from being renamed away, [`Self::require_path`]
-/// compares a fresh open of the path with the held handle, and a swap in the
-/// gap between a check and a rename remains possible (check-then-act).
+/// and verified (`StagedDirClaim::require_entry_in`), and the pointer is staged
+/// and promoted ([`Self::stage_pointer`], `staging::StagedFile`), all relative
+/// to this held directory. The pointer therefore lands beside the generation it
+/// names, whatever the output pathname names by then.
+///
+/// Windows has no handle-relative rename through the approved surface, so the
+/// pathname stays in the loop: the hold keeps the directory from being renamed
+/// away and [`Self::require_path`] compares a fresh open of the path with the
+/// held handle, but a swap between a check and a rename remains possible
+/// (check-then-act).
 pub(super) struct OutputDirClaim {
     hold: std::fs::File,
 }
@@ -281,8 +278,8 @@ impl OutputDirClaim {
         Ok(())
     }
 
-    /// Creates the staging directory named by `path`'s final component inside
-    /// the held directory, so a replaced output pathname cannot receive it.
+    /// Creates `path`'s final component as a directory inside the held
+    /// directory, so a replaced output pathname cannot receive it.
     #[cfg(unix)]
     pub(super) fn create_staged_dir(&self, path: &Path) -> std::io::Result<()> {
         rustix::fs::mkdirat(
@@ -303,8 +300,8 @@ impl OutputDirClaim {
         std::fs::create_dir(path)
     }
 
-    /// Pins the staging directory named by `path`'s final component inside the
-    /// held directory, then verifies it through that directory's handle.
+    /// Pins `path`'s final component inside the held directory, then verifies
+    /// it through the held directory's handle.
     #[cfg(unix)]
     pub(super) fn claim_staged_dir(&self, path: &Path) -> std::io::Result<StagedDirClaim> {
         let name = entry_name(path)?;
@@ -331,10 +328,9 @@ impl OutputDirClaim {
         claim_staged_dir(path)
     }
 
-    /// Renames `staged` to `generation`, both named by their final component
-    /// inside the held directory, refusing to replace anything at
-    /// `generation`. A staging directory moved out of the held directory is
-    /// not found, rather than promoted wherever the pathname now leads.
+    /// Renames `staged` to `generation` (final components, inside the held
+    /// directory) with `RENAME_NOREPLACE` semantics: anything at `generation`
+    /// is refused. A `staged` moved out of the held directory is not found.
     #[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
     pub(super) fn promote_without_replacement(
         &self,
@@ -366,8 +362,7 @@ impl OutputDirClaim {
         rename_without_replacement(staged, generation)
     }
 
-    /// Creates a staged pointer named after `path`'s final component inside
-    /// the held directory.
+    /// Stages a pointer at `path`'s final component inside the held directory.
     #[cfg(unix)]
     pub(super) fn stage_pointer(
         &self,
@@ -402,8 +397,8 @@ fn no_longer_the_held_directory(path: &Path) -> std::io::Error {
 /// callers may pass.
 #[cfg(unix)]
 pub(super) fn claim_output_dir(path: &Path) -> std::io::Result<OutputDirClaim> {
-    // `O_PATH` directory descriptors serve `openat`, `fstatat`, and
-    // `renameat` as their directory argument, so no read access is needed.
+    // `O_PATH` descriptors work as the directory argument of `openat`,
+    // `fstatat`, and `renameat`, so no read access is needed.
     #[cfg(any(target_os = "linux", target_os = "android"))]
     let access = rustix::fs::OFlags::PATH;
     #[cfg(not(any(target_os = "linux", target_os = "android")))]
@@ -419,7 +414,7 @@ pub(super) fn claim_output_dir(path: &Path) -> std::io::Result<OutputDirClaim> {
     };
     let hold = open(access);
     // A search-only output directory (mode `0333`) refuses `O_RDONLY`; see
-    // [`claim_staged_dir`].
+    // `claim_staged_dir_with`.
     #[cfg(target_vendor = "apple")]
     let hold = match hold {
         Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => open(APPLE_SEARCH),
@@ -456,8 +451,8 @@ pub(super) fn claim_output_dir(_path: &Path) -> std::io::Result<OutputDirClaim> 
 
 #[cfg(windows)]
 fn rename_without_replacement(source: &Path, destination: &Path) -> std::io::Result<()> {
-    // Modern Windows rename can replace empty directories too. This refusal is
-    // not atomic with rename; closing that window belongs to #1345.
+    // Windows rename can replace empty directories, so refuse explicitly. The
+    // check is not atomic with the rename (#1345).
     match std::fs::symlink_metadata(destination) {
         Ok(_) => return Err(std::io::ErrorKind::AlreadyExists.into()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
