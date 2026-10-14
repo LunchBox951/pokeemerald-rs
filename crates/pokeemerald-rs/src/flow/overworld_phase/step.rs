@@ -470,8 +470,8 @@ impl OverworldPhase {
             // so that arm is encoded and documented rather than
             // behaviourally pinned. Both of those data facts are themselves
             // asserted, so a change that makes it reachable fails a test
-            // first (`first_battle_trigger_tests::route_101_has_no_warp_events_so_the_trigger_can_never_race_one`,
-            // `no_route_101_object_event_stands_beside_the_rescue_trigger_tiles`).
+            // first (`first_battle_trigger_tests::precedence::route_101_has_no_warp_events_so_the_trigger_can_never_race_one`,
+            // `first_battle_trigger_tests::precedence::no_route_101_object_event_stands_beside_the_rescue_trigger_tiles`).
             let field_event_fired = encounter.is_some() || first_battle_triggered;
             // `ProcessPlayerFieldInput` returns TRUE the moment any of the
             // three completed-step branches above fires --

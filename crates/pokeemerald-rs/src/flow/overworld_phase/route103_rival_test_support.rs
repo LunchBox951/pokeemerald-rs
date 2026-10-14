@@ -59,6 +59,20 @@ pub(super) fn route_103_phase_facing_the_rival() -> OverworldPhase {
     route_103_phase(PlayerState::new((rx - 1, ry), 3, Direction::East))
 }
 
+/// [`route_103_phase_facing_the_rival`] over the same synthetic room, but
+/// retaining [`PackSource::Repo`](crate::pack_source::PackSource::Repo) so a
+/// later real-pack warp (the white-out) reads the checkout pack.
+pub(super) fn route_103_phase_facing_the_rival_repo() -> OverworldPhase {
+    let (rx, ry) = RIVAL_TILE;
+    OverworldPhase::for_test_with_source(
+        crate::overworld::test_support::synthetic_scene(15, 8),
+        ROUTE_103,
+        PlayerState::new((rx - 1, ry), 3, Direction::East),
+        None,
+        crate::pack_source::PackSource::Repo,
+    )
+}
+
 /// A battle-ready lead of `species`/`level` with a single `move_id`, built
 /// directly (not through [`new_game::provisional_starter`]) so the tests
 /// below can control level -- needed to force a fast, deterministic win.
