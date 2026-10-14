@@ -30937,11 +30937,23 @@
           "spec": "C-5",
           "status": "stubbed"
         },
+        "SetBoxMonAt": {
+          "reason": "src/pokemon_storage_system.c:9475-9479 is the slot write in PokemonStorage::store_in_first_free_slot, move_box_mon and withdraw/deposit, copying one BoxPokemon record into boxes[box * IN_BOX_COUNT + slot] (#1787).",
+          "rust_target": "crates/engine/src/save/storage.rs",
+          "spec": "C-5",
+          "status": "rewritten"
+        },
         "TryStorePartyMonInBox": {
           "reason": "src/pokemon_storage_system.c:6400-6417. PokemonStorage::deposit_party_mon stores the party member in the first free slot, zeroes and compacts the party and rejects a full box, a lone or last able member and held mail (:1592, :6775-6781, :2351-2354) (#1787). BoxMonRestorePP and the cursor, icon and sprite work stay deferred.",
           "rust_target": "crates/engine/src/save/storage.rs",
           "spec": "C-5",
           "status": "stubbed"
+        },
+        "ZeroBoxMonAt": {
+          "reason": "src/pokemon_storage_system.c:9500-9503 is the source zeroing in PokemonStorage::move_box_mon and withdraw_to_party, writing an all-zero BoxPokemon record into the vacated slot (#1787).",
+          "rust_target": "crates/engine/src/save/storage.rs",
+          "spec": "C-5",
+          "status": "rewritten"
         }
       },
       "category": "code.source",
