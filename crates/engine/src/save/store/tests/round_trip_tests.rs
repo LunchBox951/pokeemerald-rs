@@ -131,7 +131,7 @@ fn save_then_load_round_trips_identical_state() {
 
 #[test]
 fn a_rotation_preserves_deferred_bytes_the_model_does_not_own() {
-    const UNMODELLED_BLOCK2_OFFSET: usize = 0x10;
+    const UNMODELLED_BLOCK2_OFFSET: usize = 0x16;
     const UNMODELLED_BLOCK1_CHUNK0_OFFSET: usize = 0x100;
     const UNMODELLED_BLOCK1_CHUNK2_OFFSET: usize = 0x2000;
 
@@ -177,7 +177,7 @@ fn a_rotation_preserves_deferred_bytes_the_model_does_not_own() {
 
 #[test]
 fn clear_base_drops_the_loaded_deferred_bytes_from_the_next_save() {
-    const UNMODELLED_BLOCK2_OFFSET: usize = 0x10;
+    const UNMODELLED_BLOCK2_OFFSET: usize = 0x16;
 
     let block2 = sample_block2();
     let mut store = SaveStore::new();
@@ -440,4 +440,64 @@ fn a_freshly_originated_save_writes_valid_placeholder_storage_sectors_immediatel
         SaveStatus::Ok,
         "the first save alone must be a complete, loadable 14-sector generation"
     );
+}
+
+#[test]
+fn menu_owned_state_survives_save_and_continue_without_disturbing_other_bytes() {
+    use crate::save::block::{BattleStyle, ButtonMode, PlayTime, SoundMode};
+    use crate::save::game_stats::GameStat;
+
+    // Hand-checked regions: party, money, bag, event flags/vars, Pokédex.
+    const PRESERVED_BLOCK1: [std::ops::Range<usize>; 4] =
+        [0x234..0x848, 0x1270..0x159C, 0x0000..0x0234, 0x169C..0x3D88];
+    const PRESERVED_BLOCK2: [std::ops::Range<usize>; 3] =
+        [0x00..0x0E, 0x16..0x18, 0x18..SaveBlock2::PAYLOAD_LEN];
+
+    let block1 = sample_block1();
+    let block2 = sample_block2();
+    let mut store = SaveStore::new();
+    store.save(&block1, &block2);
+
+    let before1 = store.base_block1.clone();
+    let before2 = store.base_block2.clone();
+
+    let mut menu1 = block1.clone();
+    let mut menu2 = block2.clone();
+    menu2.play_time = PlayTime {
+        hours: 12,
+        minutes: 34,
+        seconds: 56,
+        vblanks: 7,
+    };
+    menu2.options_button_mode = ButtonMode::Lr;
+    menu2.options_sound = SoundMode::Stereo;
+    menu2.options_battle_style = BattleStyle::Set;
+    menu2.options_battle_scene_off = true;
+    menu1.game_stats.set(GameStat::SavedGame, 3);
+    menu1.game_stats.set(GameStat::CheckedPokedex, 9);
+    store.save(&menu1, &menu2);
+
+    let mut reopened = SaveStore::from_flash_image(store.flash_image()).expect("valid image");
+    let outcome = reopened.load();
+    assert_eq!(outcome.status, SaveStatus::Ok);
+    assert_eq!(outcome.block2, menu2);
+    assert_eq!(outcome.block1.game_stats, menu1.game_stats);
+    assert_eq!(outcome.block1.money, block1.money);
+    assert_eq!(outcome.block1.bag, block1.bag);
+    assert_eq!(outcome.block1.player_party, block1.player_party);
+
+    for range in PRESERVED_BLOCK1 {
+        assert_eq!(
+            reopened.base_block1[range.clone()],
+            before1[range.clone()],
+            "block 1 bytes {range:?} must not move"
+        );
+    }
+    for range in PRESERVED_BLOCK2 {
+        assert_eq!(
+            reopened.base_block2[range.clone()],
+            before2[range.clone()],
+            "block 2 bytes {range:?} must not move"
+        );
+    }
 }

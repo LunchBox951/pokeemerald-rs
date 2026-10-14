@@ -714,7 +714,7 @@ fn window_frame_for_reads_the_saved_blocks_own_option() {
 #[test]
 fn new_game_options_for_keeps_every_non_defaulted_saves_own_options() {
     use crate::game_save::SaveFileStatus;
-    use engine::save::{SaveBlock1, SaveBlock2};
+    use engine::save::{BattleStyle, ButtonMode, SaveBlock1, SaveBlock2, SoundMode};
 
     let recovered = |status: SaveFileStatus| SavedGame {
         status,
@@ -722,6 +722,10 @@ fn new_game_options_for_keeps_every_non_defaulted_saves_own_options() {
         block2: SaveBlock2 {
             options_text_speed: 2,
             options_window_frame_type: 12,
+            options_button_mode: ButtonMode::LEqualsA,
+            options_sound: SoundMode::Stereo,
+            options_battle_style: BattleStyle::Set,
+            options_battle_scene_off: true,
             ..SaveBlock2::default()
         },
     };
@@ -737,6 +741,10 @@ fn new_game_options_for_keeps_every_non_defaulted_saves_own_options() {
             NewGameOptions {
                 text_speed: 2,
                 window_frame_type: 12,
+                button_mode: ButtonMode::LEqualsA,
+                sound: SoundMode::Stereo,
+                battle_style: BattleStyle::Set,
+                battle_scene_off: true,
             },
             "a {status:?} save's recovered options must survive into NEW GAME"
         );
@@ -1116,5 +1124,35 @@ fn main_menu_simultaneous_up_down_falls_through_at_boundaries() {
             expected,
             "{menu_type:?} after {start_downs} downs"
         );
+    }
+}
+
+/// `NewGameInitData` never touches `optionsButtonMode`, `optionsSound`,
+/// `optionsBattleStyle`, or `optionsBattleSceneOff` (`pokeemerald/src/new_game.c:149-207`);
+/// only `SetDefaultOptions` via `Sav2_ClearSetDefault` for Empty/Corrupt does.
+#[test]
+fn new_game_over_an_intact_save_keeps_its_menu_owned_options() {
+    use crate::game_save::SaveFileStatus;
+    use engine::save::{BattleStyle, ButtonMode, SaveBlock1, SaveBlock2, SoundMode};
+
+    for status in [SaveFileStatus::Ok, SaveFileStatus::Error] {
+        let saved = SavedGame {
+            status,
+            block1: SaveBlock1::default(),
+            block2: SaveBlock2 {
+                options_button_mode: ButtonMode::Lr,
+                options_sound: SoundMode::Stereo,
+                options_battle_style: BattleStyle::Set,
+                options_battle_scene_off: true,
+                ..SaveBlock2::default()
+            },
+        };
+        let mut rng = engine::rng::Rng::new(0);
+        let (_, block2) =
+            new_game::init_save_blocks_with_options(&mut rng, new_game_options_for(&saved));
+        assert_eq!(block2.options_button_mode, ButtonMode::Lr, "{status:?}");
+        assert_eq!(block2.options_sound, SoundMode::Stereo, "{status:?}");
+        assert_eq!(block2.options_battle_style, BattleStyle::Set, "{status:?}");
+        assert!(block2.options_battle_scene_off, "{status:?}");
     }
 }

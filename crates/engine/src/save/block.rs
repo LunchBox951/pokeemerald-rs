@@ -5,6 +5,7 @@
 //! modeled fields over a zero-filled payload.
 
 use super::bag::{Bag, BAG_LEN};
+use super::game_stats::GameStats;
 use super::pokemon::{Pokemon, POKEMON_LEN};
 use crate::event_data::{self, EventData};
 
@@ -14,17 +15,33 @@ const PLAYER_TRAINER_ID_OFFSET: usize = 0x0A;
 // `struct SaveBlock2`'s `specialSaveWarpFlags` byte
 // (`pokeemerald/include/global.h:511`).
 const SPECIAL_SAVE_WARP_FLAGS_OFFSET: usize = 0x09;
+// `struct SaveBlock2`'s `playTimeHours` (`u16`), then `playTimeMinutes`,
+// `playTimeSeconds`, `playTimeVBlanks` and `optionsButtonMode` bytes
+// (`pokeemerald/include/global.h:514-518`).
+const PLAY_TIME_HOURS_OFFSET: usize = 0x0E;
+const PLAY_TIME_MINUTES_OFFSET: usize = 0x10;
+const PLAY_TIME_SECONDS_OFFSET: usize = 0x11;
+const PLAY_TIME_VBLANKS_OFFSET: usize = 0x12;
+const BUTTON_MODE_OFFSET: usize = 0x13;
 // `struct SaveBlock2`'s packed `u16` options bitfield
-// (`pokeemerald/include/global.h:518-524`): `optionsTextSpeed:3` (bits 0-2)
-// then `optionsWindowFrameType:5` (bits 3-7) then four more unmodeled 1-bit
-// options and padding filling bits 8-15. Only the low byte -- both the
-// speed and the frame-type bits -- is modeled; the high byte is preserved
-// from `base`, never zeroed, by [`SaveBlock2::patch_bytes`].
+// (`pokeemerald/include/global.h:519-525`): `optionsTextSpeed:3` (bits 0-2),
+// `optionsWindowFrameType:5` (bits 3-7), then the 1-bit `optionsSound`,
+// `optionsBattleStyle` and `optionsBattleSceneOff` (bits 8-10). Bit 11
+// (`regionMapZoom`) and the padding above it are unmodeled and preserved from
+// `base` by [`SaveBlock2::patch_bytes`].
 const OPTIONS_OFFSET: usize = 0x14;
 const OPTIONS_TEXT_SPEED_SHIFT: u32 = 0;
 const OPTIONS_TEXT_SPEED_MASK: u16 = 0x07 << OPTIONS_TEXT_SPEED_SHIFT;
 const OPTIONS_WINDOW_FRAME_TYPE_SHIFT: u32 = 3;
 const OPTIONS_WINDOW_FRAME_TYPE_MASK: u16 = 0x1F << OPTIONS_WINDOW_FRAME_TYPE_SHIFT;
+const OPTIONS_SOUND_BIT: u16 = 1 << 8;
+const OPTIONS_BATTLE_STYLE_BIT: u16 = 1 << 9;
+const OPTIONS_BATTLE_SCENE_OFF_BIT: u16 = 1 << 10;
+const MODELED_OPTIONS_MASK: u16 = OPTIONS_TEXT_SPEED_MASK
+    | OPTIONS_WINDOW_FRAME_TYPE_MASK
+    | OPTIONS_SOUND_BIT
+    | OPTIONS_BATTLE_STYLE_BIT
+    | OPTIONS_BATTLE_SCENE_OFF_BIT;
 const GCN_LINK_FLAGS_OFFSET: usize = 0xA8;
 const ENCRYPTION_KEY_OFFSET: usize = 0xAC;
 
@@ -39,6 +56,8 @@ const BAG_ITEMS_OFFSET: usize = 0x560;
 const POKEBLOCKS_OFFSET: usize = 0x848;
 const FLAGS_OFFSET: usize = 0x1270;
 const VARS_OFFSET: usize = 0x139C;
+// `SaveBlock1::gameStats` (`pokeemerald/include/global.h:1022`).
+const GAME_STATS_OFFSET: usize = 0x159C;
 const OBJECT_EVENTS_OFFSET: usize = 0xA30;
 const OBJECT_EVENT_LEN: usize = 0x24;
 const OBJECT_EVENT_DIRECTIONS_OFFSET: usize = 0x18;
@@ -255,6 +274,80 @@ impl PlayerGender {
     }
 }
 
+/// `optionsButtonMode` (`pokeemerald/include/constants/global.h:131-133`).
+/// Values outside the three modes stay lossless, as [`PlayerGender`] does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ButtonMode {
+    /// `OPTIONS_BUTTON_MODE_NORMAL`.
+    #[default]
+    Normal,
+    /// `OPTIONS_BUTTON_MODE_LR`.
+    Lr,
+    /// `OPTIONS_BUTTON_MODE_L_EQUALS_A`.
+    LEqualsA,
+    /// An unrecognized raw value.
+    Other(u8),
+}
+
+impl ButtonMode {
+    const NORMAL_VALUE: u8 = 0;
+    const LR_VALUE: u8 = 1;
+    const L_EQUALS_A_VALUE: u8 = 2;
+
+    fn to_byte(self) -> u8 {
+        match self {
+            Self::Normal => Self::NORMAL_VALUE,
+            Self::Lr => Self::LR_VALUE,
+            Self::LEqualsA => Self::L_EQUALS_A_VALUE,
+            Self::Other(byte) => byte,
+        }
+    }
+
+    fn from_byte(byte: u8) -> Self {
+        match byte {
+            Self::NORMAL_VALUE => Self::Normal,
+            Self::LR_VALUE => Self::Lr,
+            Self::L_EQUALS_A_VALUE => Self::LEqualsA,
+            other => Self::Other(other),
+        }
+    }
+}
+
+/// `optionsSound` (`pokeemerald/include/constants/global.h:123-125`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SoundMode {
+    /// `OPTIONS_SOUND_MONO`.
+    #[default]
+    Mono,
+    /// `OPTIONS_SOUND_STEREO`.
+    Stereo,
+}
+
+/// `optionsBattleStyle` (`pokeemerald/include/constants/global.h:134-135`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BattleStyle {
+    /// `OPTIONS_BATTLE_STYLE_SHIFT`.
+    #[default]
+    Shift,
+    /// `OPTIONS_BATTLE_STYLE_SET`.
+    Set,
+}
+
+/// `playTimeHours`/`Minutes`/`Seconds`/`VBlanks`
+/// (`pokeemerald/include/global.h:514-517`), stored as loaded: ticking and
+/// clamping belong to the play-time producer (`pokeemerald/src/play_time.c`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PlayTime {
+    /// `playTimeHours`.
+    pub hours: u16,
+    /// `playTimeMinutes`.
+    pub minutes: u8,
+    /// `playTimeSeconds`.
+    pub seconds: u8,
+    /// `playTimeVBlanks`.
+    pub vblanks: u8,
+}
+
 /// Modeled fields from the fixed-size secondary save block.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SaveBlock2 {
@@ -293,6 +386,17 @@ pub struct SaveBlock2 {
     /// [`assets::pack::AssetPack::text_window_frame`] mirrors, so this
     /// stays a plain `u8` rather than a bounded enum.
     pub options_window_frame_type: u8,
+    /// `playTimeHours` through `playTimeVBlanks`.
+    pub play_time: PlayTime,
+    /// `optionsButtonMode` (`pokeemerald/include/global.h:518`).
+    pub options_button_mode: ButtonMode,
+    /// `optionsSound` (`pokeemerald/include/global.h:521`).
+    pub options_sound: SoundMode,
+    /// `optionsBattleStyle` (`pokeemerald/include/global.h:522`).
+    pub options_battle_style: BattleStyle,
+    /// `optionsBattleSceneOff` (`pokeemerald/include/global.h:523`): `true`
+    /// plays no battle animations.
+    pub options_battle_scene_off: bool,
 }
 
 impl SaveBlock2 {
@@ -335,14 +439,8 @@ impl SaveBlock2 {
     }
 
     /// Writes modeled fields at their fixed offsets, preserving every other
-    /// byte -- including the truly unmodeled options bits (the shared
-    /// `u16`'s high byte: `optionsSound`/`optionsBattleStyle`/
-    /// `optionsBattleSceneOff`/`regionMapZoom` and padding,
-    /// `pokeemerald/include/global.h:521-524`)
-    /// [`options_text_speed`](Self::options_text_speed) and
-    /// [`options_window_frame_type`](Self::options_window_frame_type)
-    /// together cover the low byte, so patching them never depends on
-    /// `base`'s own low byte.
+    /// byte -- including the unmodeled options bits (`regionMapZoom` and the
+    /// padding above it, `pokeemerald/include/global.h:524-525`).
     pub fn patch_bytes(&self, base: &mut [u8; Self::PAYLOAD_LEN]) {
         base[PLAYER_NAME_OFFSET..PLAYER_NAME_OFFSET + PLAYER_NAME_BUF_LEN]
             .copy_from_slice(&self.player_name);
@@ -350,12 +448,32 @@ impl SaveBlock2 {
         base[SPECIAL_SAVE_WARP_FLAGS_OFFSET] = self.special_save_warp_flags;
         base[PLAYER_TRAINER_ID_OFFSET..PLAYER_TRAINER_ID_OFFSET + TRAINER_ID_LENGTH]
             .copy_from_slice(&self.player_trainer_id);
-        let modeled_options_mask = OPTIONS_TEXT_SPEED_MASK | OPTIONS_WINDOW_FRAME_TYPE_MASK;
-        let options = read_u16(base, OPTIONS_OFFSET) & !modeled_options_mask
+        base[PLAY_TIME_HOURS_OFFSET..PLAY_TIME_HOURS_OFFSET + SERIALIZED_U16_LEN]
+            .copy_from_slice(&self.play_time.hours.to_le_bytes());
+        base[PLAY_TIME_MINUTES_OFFSET] = self.play_time.minutes;
+        base[PLAY_TIME_SECONDS_OFFSET] = self.play_time.seconds;
+        base[PLAY_TIME_VBLANKS_OFFSET] = self.play_time.vblanks;
+        base[BUTTON_MODE_OFFSET] = self.options_button_mode.to_byte();
+        let options = read_u16(base, OPTIONS_OFFSET) & !MODELED_OPTIONS_MASK
             | (u16::from(self.options_text_speed) << OPTIONS_TEXT_SPEED_SHIFT)
                 & OPTIONS_TEXT_SPEED_MASK
             | (u16::from(self.options_window_frame_type) << OPTIONS_WINDOW_FRAME_TYPE_SHIFT)
-                & OPTIONS_WINDOW_FRAME_TYPE_MASK;
+                & OPTIONS_WINDOW_FRAME_TYPE_MASK
+            | if self.options_sound == SoundMode::Stereo {
+                OPTIONS_SOUND_BIT
+            } else {
+                0
+            }
+            | if self.options_battle_style == BattleStyle::Set {
+                OPTIONS_BATTLE_STYLE_BIT
+            } else {
+                0
+            }
+            | if self.options_battle_scene_off {
+                OPTIONS_BATTLE_SCENE_OFF_BIT
+            } else {
+                0
+            };
         base[OPTIONS_OFFSET..OPTIONS_OFFSET + SERIALIZED_U16_LEN]
             .copy_from_slice(&options.to_le_bytes());
         base[GCN_LINK_FLAGS_OFFSET..GCN_LINK_FLAGS_OFFSET + SERIALIZED_U32_LEN]
@@ -385,9 +503,28 @@ impl SaveBlock2 {
         let options_window_frame_type = ((read_u16(bytes, OPTIONS_OFFSET)
             & OPTIONS_WINDOW_FRAME_TYPE_MASK)
             >> OPTIONS_WINDOW_FRAME_TYPE_SHIFT) as u8;
+        let options = read_u16(bytes, OPTIONS_OFFSET);
         Ok(Self {
             player_name,
             player_gender,
+            play_time: PlayTime {
+                hours: read_u16(bytes, PLAY_TIME_HOURS_OFFSET),
+                minutes: bytes[PLAY_TIME_MINUTES_OFFSET],
+                seconds: bytes[PLAY_TIME_SECONDS_OFFSET],
+                vblanks: bytes[PLAY_TIME_VBLANKS_OFFSET],
+            },
+            options_button_mode: ButtonMode::from_byte(bytes[BUTTON_MODE_OFFSET]),
+            options_sound: if options & OPTIONS_SOUND_BIT != 0 {
+                SoundMode::Stereo
+            } else {
+                SoundMode::Mono
+            },
+            options_battle_style: if options & OPTIONS_BATTLE_STYLE_BIT != 0 {
+                BattleStyle::Set
+            } else {
+                BattleStyle::Shift
+            },
+            options_battle_scene_off: options & OPTIONS_BATTLE_SCENE_OFF_BIT != 0,
             player_trainer_id,
             special_save_warp_flags: bytes[SPECIAL_SAVE_WARP_FLAGS_OFFSET],
             gcn_link_flags: read_u32(bytes, GCN_LINK_FLAGS_OFFSET),
@@ -487,6 +624,8 @@ pub struct SaveBlock1 {
     pub event_data: EventData,
     /// Saved directions from the player object entry.
     pub player_object_event: SavedObjectEvent,
+    /// Plaintext `gameStats` counters.
+    pub game_stats: GameStats,
 }
 
 impl Default for SaveBlock1 {
@@ -502,6 +641,7 @@ impl Default for SaveBlock1 {
             bag: Bag::default(),
             event_data: EventData::default(),
             player_object_event: SavedObjectEvent::default(),
+            game_stats: GameStats::default(),
         }
     }
 }
@@ -562,6 +702,8 @@ impl SaveBlock1 {
             let offset = VARS_OFFSET + index * SERIALIZED_U16_LEN;
             base[offset..offset + SERIALIZED_U16_LEN].copy_from_slice(&value.to_le_bytes());
         }
+        base[GAME_STATS_OFFSET..GAME_STATS_OFFSET + GameStats::LEN]
+            .copy_from_slice(&self.game_stats.to_bytes(encryption_key));
         base[PLAYER_OBJECT_EVENT_DIRECTIONS_OFFSET] = self.player_object_event.to_direction_byte();
         base[PLAYER_OBJECT_EVENT_ELEVATIONS_OFFSET] = self.player_object_event.to_elevation_byte();
         // Only bit 0 is modeled; the byte's other bitfields stay as loaded.
@@ -619,6 +761,10 @@ impl SaveBlock1 {
             money: read_u32(bytes, MONEY_OFFSET) ^ encryption_key,
             bag: Bag::from_bytes(bag_bytes, encryption_key),
             event_data: EventData::from_saved_state(flags, vars),
+            game_stats: GameStats::from_bytes(
+                &bytes[GAME_STATS_OFFSET..GAME_STATS_OFFSET + GameStats::LEN],
+                encryption_key,
+            )?,
             player_object_event: SavedObjectEvent::from_direction_byte(
                 bytes[PLAYER_OBJECT_EVENT_DIRECTIONS_OFFSET],
             )
@@ -696,6 +842,7 @@ const _: () = assert!(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::save::game_stats::GameStat;
     use crate::save::{ItemSlot, PokemonSubstructures};
 
     const UNMODELED_POKEDEX_OFFSET: usize = 0x20;
@@ -800,6 +947,7 @@ mod tests {
             encryption_key: 0x89AB_CDEF,
             options_text_speed: 2,
             options_window_frame_type: 19,
+            ..SaveBlock2::default()
         };
         let bytes = block.to_bytes();
         assert_eq!(bytes.len(), 0xF2C);
@@ -820,45 +968,216 @@ mod tests {
         assert_eq!(SaveBlock2::from_bytes(&bytes).unwrap(), block);
     }
 
-    /// `optionsTextSpeed` (bits 0-2) and `optionsWindowFrameType` (bits
-    /// 3-7) together cover the low byte of the shared `u16`
-    /// (`pokeemerald/include/global.h:518-524`); four more 1-bit options
-    /// occupy its high byte, genuinely unmodeled. [`SaveBlock2::patch_bytes`]
-    /// must patch each of the two low-byte fields independently of the
-    /// other -- never letting one clobber its sibling -- while leaving the
-    /// high byte exactly as `base` had it.
+    /// Speed, frame type, sound, battle style and scene-off cover bits 0-10 of
+    /// the shared options `u16` (`pokeemerald/include/global.h:519-525`).
+    /// [`SaveBlock2::patch_bytes`] patches each independently while bits 11-15
+    /// (`regionMapZoom` and padding) stay exactly as `base` had them.
     #[test]
-    fn save_block2_patch_bytes_preserves_the_truly_unmodeled_high_byte() {
+    fn save_block2_patch_bytes_preserves_the_unmodeled_option_bits() {
         let mut base = [0u8; SaveBlock2::PAYLOAD_LEN];
-        // Deliberately nonzero and distinct from the modeled values below,
-        // so a leak in either direction shows up.
-        base[0x14] = 0b1111_1111;
-        base[0x15] = 0b0000_1111; // optionsSound/BattleStyle/BattleSceneOff/regionMapZoom
+        base[0x14..0x16].copy_from_slice(&0xFFFF_u16.to_le_bytes());
+        base[0x16..0x18].copy_from_slice(&[0xC3, 0x3C]);
 
         let block = SaveBlock2 {
             options_text_speed: 5, // out of the valid 0..=2 range, still stored losslessly
             options_window_frame_type: 19,
+            options_sound: SoundMode::Mono,
+            options_battle_style: BattleStyle::Set,
+            options_battle_scene_off: false,
             ..SaveBlock2::default()
         };
         block.patch_bytes(&mut base);
 
+        // 5 | 19 << 3 | battle style set (bit 9); sound and scene off clear;
+        // bits 11-15 stay set.
+        assert_eq!(&base[0x14..0x16], &0xFA9D_u16.to_le_bytes());
+        assert_eq!(&base[0x16..0x18], &[0xC3, 0x3C]);
+        assert_eq!(SaveBlock2::from_bytes(&base).unwrap(), block);
+    }
+
+    #[test]
+    fn save_block2_options_toggle_independently_and_mask_oversized_input() {
+        for bit in 0..5 {
+            let block = SaveBlock2 {
+                options_sound: if bit == 0 {
+                    SoundMode::Stereo
+                } else {
+                    SoundMode::Mono
+                },
+                options_battle_style: if bit == 1 {
+                    BattleStyle::Set
+                } else {
+                    BattleStyle::Shift
+                },
+                options_battle_scene_off: bit == 2,
+                options_text_speed: if bit == 3 { 7 } else { 0 },
+                options_window_frame_type: if bit == 4 { 31 } else { 0 },
+                ..SaveBlock2::default()
+            };
+            let expected: u16 = [0x0100, 0x0200, 0x0400, 0x0007, 0x00F8][bit];
+            assert_eq!(&block.to_bytes()[0x14..0x16], &expected.to_le_bytes());
+            assert_eq!(SaveBlock2::from_bytes(&block.to_bytes()).unwrap(), block);
+        }
+        let oversized = SaveBlock2 {
+            options_text_speed: 0xFF,
+            options_window_frame_type: 0xFF,
+            ..SaveBlock2::default()
+        };
+        assert_eq!(&oversized.to_bytes()[0x14..0x16], &0x00FF_u16.to_le_bytes());
+    }
+
+    #[test]
+    fn save_block2_encodes_play_time_and_button_mode_at_their_fixed_offsets() {
+        for (mode, byte) in [
+            (ButtonMode::Normal, 0),
+            (ButtonMode::Lr, 1),
+            (ButtonMode::LEqualsA, 2),
+            (ButtonMode::Other(0xFE), 0xFE),
+        ] {
+            let block = SaveBlock2 {
+                play_time: PlayTime {
+                    hours: 0x1234,
+                    minutes: 0x56,
+                    seconds: 0x78,
+                    vblanks: 0x9A,
+                },
+                options_button_mode: mode,
+                ..SaveBlock2::default()
+            };
+            let bytes = block.to_bytes();
+            assert_eq!(&bytes[0x0E..0x13], &[0x34, 0x12, 0x56, 0x78, 0x9A]);
+            assert_eq!(bytes[0x13], byte);
+            assert_eq!(SaveBlock2::from_bytes(&bytes).unwrap(), block);
+        }
+    }
+
+    #[test]
+    fn save_block2_patches_a_loaded_image_changing_only_menu_owned_bytes() {
+        let mut image = [0x5Au8; SaveBlock2::PAYLOAD_LEN];
+        let before = image;
+        let mut block = SaveBlock2::from_bytes(&image).unwrap();
+        block.play_time = PlayTime {
+            hours: 999,
+            minutes: 59,
+            seconds: 58,
+            vblanks: 57,
+        };
+        block.options_button_mode = ButtonMode::LEqualsA;
+        block.options_sound = SoundMode::Stereo;
+        block.patch_bytes(&mut image);
+
+        let changed: Vec<usize> = (0..image.len())
+            .filter(|&i| image[i] != before[i])
+            .collect();
+        assert_eq!(changed, [0x0E, 0x0F, 0x10, 0x11, 0x12, 0x13, 0x15]);
+        assert_eq!(&image[0x0E..0x13], &[0xE7, 0x03, 59, 58, 57]);
+        assert_eq!(image[0x13], 2);
+        assert_eq!(image[0x14], 0x5A);
         assert_eq!(
-            base[0x14] & 0x07,
-            5,
-            "optionsTextSpeed's own 3 bits must be the patched value"
+            image[0x15], 0x5B,
+            "only the sound bit changed in the high byte"
         );
+    }
+
+    /// An image written before these fields were modeled decodes to the same
+    /// values everywhere else, and re-patching it without touching the new
+    /// fields returns it byte for byte.
+    #[test]
+    fn a_pre_change_image_decodes_identically_outside_the_new_fields() {
+        let key = 0xA1B2_C3D4;
+        let mut block2_image = SaveBlock2 {
+            player_name: *b"RUSTY\xFF\0\0",
+            player_gender: PlayerGender::Female,
+            player_trainer_id: [1, 2, 3, 4],
+            special_save_warp_flags: 0x81,
+            gcn_link_flags: 0x1234_5678,
+            encryption_key: key,
+            options_text_speed: 2,
+            options_window_frame_type: 7,
+            ..SaveBlock2::default()
+        }
+        .to_bytes();
+        // Bytes a pre-change build wrote there: unmodeled and nonzero.
+        block2_image[0x0E..0x14].copy_from_slice(&[9, 8, 7, 6, 5, 4]);
+        block2_image[0x15] = 0xF9;
+        let decoded = SaveBlock2::from_bytes(&block2_image).unwrap();
+        assert_eq!(decoded.player_name, *b"RUSTY\xFF\0\0");
+        assert_eq!(decoded.player_gender, PlayerGender::Female);
+        assert_eq!(decoded.player_trainer_id, [1, 2, 3, 4]);
+        assert_eq!(decoded.special_save_warp_flags, 0x81);
+        assert_eq!(decoded.gcn_link_flags, 0x1234_5678);
+        assert_eq!(decoded.encryption_key, key);
+        assert_eq!(decoded.options_text_speed, 2);
+        assert_eq!(decoded.options_window_frame_type, 7);
+        let mut repatched = block2_image;
+        decoded.patch_bytes(&mut repatched);
+        assert_eq!(repatched[..], block2_image[..]);
+
+        let mut block1 = SaveBlock1 {
+            money: 4242,
+            player_party_count: 2,
+            ..SaveBlock1::default()
+        };
+        block1.bag.items[0] = ItemSlot {
+            item_id: 13,
+            quantity: 5,
+        };
+        block1.event_data.flag_set(0x20).unwrap();
+        let mut block1_image = block1.to_bytes(key);
+        // The stats region of an old image: zero bytes, never encrypted.
+        block1_image[0x159C..0x169C].fill(0);
+        let decoded = SaveBlock1::from_bytes(&block1_image, key).unwrap();
+        assert_eq!(decoded.money, 4242);
+        assert_eq!(decoded.player_party_count, 2);
+        assert_eq!(decoded.bag, block1.bag);
+        assert_eq!(decoded.event_data.flag_get(0x20), Ok(true));
+        let mut repatched = block1_image;
+        decoded.patch_bytes(&mut repatched, key);
+        assert_eq!(repatched[..], block1_image[..]);
+    }
+
+    #[test]
+    fn game_stats_encode_xor_the_key_at_fixed_slots() {
+        let key = 0x1234_5678;
+        let mut block = SaveBlock1::default();
+        block.game_stats.set(GameStat::SavedGame, 0x1122_3344);
+        block.game_stats.set(GameStat::CheckedPokedex, 0x5566_7788);
+        let bytes = block.to_bytes(key);
+        assert_eq!(&bytes[0x159C..0x15A0], &[0x3C, 0x65, 0x16, 0x03]);
+        assert_eq!(&bytes[0x1640..0x1644], &[0xF0, 0x21, 0x52, 0x47]);
+        assert_eq!(&bytes[0x15A0..0x15A4], &key.to_le_bytes());
+        let decoded = SaveBlock1::from_bytes(&bytes, key).unwrap();
+        assert_eq!(decoded.game_stats.get(GameStat::SavedGame), 0x1122_3344);
         assert_eq!(
-            (base[0x14] & 0xF8) >> 3,
-            19,
-            "optionsWindowFrameType's own 5 bits must be the patched value"
+            decoded.game_stats.get(GameStat::CheckedPokedex),
+            0x5566_7788
         );
-        assert_eq!(
-            base[0x15], 0b0000_1111,
-            "the high byte's genuinely unmodeled option bits must survive untouched"
-        );
-        let decoded = SaveBlock2::from_bytes(&base).unwrap();
-        assert_eq!(decoded.options_text_speed, 5);
-        assert_eq!(decoded.options_window_frame_type, 19);
+        assert_eq!(decoded.game_stats, block.game_stats);
+
+        let mut keyless = SaveBlock1::default();
+        keyless.game_stats.set(GameStat::CheckedPokedex, u32::MAX);
+        assert_eq!(&keyless.to_bytes(0)[0x1640..0x1644], &[0xFF; 4]);
+    }
+
+    #[test]
+    fn game_stats_patch_a_loaded_image_changing_only_the_selected_word() {
+        let key = 0xDEAD_BEEF;
+        let mut image = SaveBlock1::default().to_bytes(key);
+        image[0x15A0..0x169C].fill(0x77);
+        let before = image;
+        let mut block = SaveBlock1::from_bytes(&image, key).unwrap();
+        let loaded_money = block.money;
+        block.game_stats.set(GameStat::SavedGame, 7);
+        block.patch_bytes(&mut image, key);
+
+        assert_eq!(&image[0x159C..0x15A0], &(7 ^ key).to_le_bytes());
+        assert_eq!(block.money, loaded_money);
+        let changed: Vec<usize> = (0..image.len())
+            .filter(|&i| image[i] != before[i])
+            .collect();
+        assert!(changed.iter().all(|i| (0x159C..0x15A0).contains(i)));
+        assert_eq!(&image[0x15A0..0x169C], &before[0x15A0..0x169C]);
+        assert_eq!(image[0x169C], before[0x169C]);
     }
 
     /// `CONTINUE_GAME_WARP` is bit 0 of the byte at 0x09
@@ -921,6 +1240,7 @@ mod tests {
             encryption_key: 0x89AB_CDEF,
             options_text_speed: 2,
             options_window_frame_type: 19,
+            ..SaveBlock2::default()
         };
         // `OPTIONS_OFFSET` (the low byte, 0x14) is no longer partial:
         // `options_text_speed` and `options_window_frame_type` together
@@ -930,7 +1250,9 @@ mod tests {
         let patched = assert_only_modeled_bytes_are_patched(
             block.to_bytes(),
             |base| block.patch_bytes(base),
-            &[],
+            // Bit 11 and up of the options `u16` (`regionMapZoom`, padding)
+            // are unmodeled and preserved.
+            &[OPTIONS_OFFSET + 1],
         );
         assert_eq!(SaveBlock2::from_bytes(&patched).unwrap(), block);
     }

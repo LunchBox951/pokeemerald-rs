@@ -23,6 +23,7 @@ fn sample_block2() -> SaveBlock2 {
         encryption_key: 0xA1B2_C3D4,
         options_text_speed: 1,
         options_window_frame_type: 5,
+        ..SaveBlock2::default()
     }
 }
 

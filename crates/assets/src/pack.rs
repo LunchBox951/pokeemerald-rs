@@ -11,6 +11,8 @@
 //! [`PackError`] is a separate enum from [`crate::error::AssetError`] —
 //! see [`crate::error`] for why.
 
+mod bag;
+mod battle_message;
 mod error;
 mod format;
 mod handles;
@@ -20,7 +22,16 @@ use std::path::{Path, PathBuf};
 
 use crate::audio::{Sample, SampleId, Song, VoiceGroup, VoiceGroupId};
 use crate::fonts::{FontId, FontImageRef};
+use crate::pokedex::PokedexData;
 
+pub use bag::BagAssets;
+pub use battle_message::{
+    BattleMessageError, BattleMessageSection, BattleMessageTable, SpecialBattleMessage,
+    SpecialTemplate, SLOT_COUNT as BATTLE_MESSAGE_SLOT_COUNT,
+    SPECIAL_COUNT as BATTLE_MESSAGE_SPECIAL_COUNT,
+    SPECIAL_TEMPLATES as BATTLE_MESSAGE_SPECIAL_TEMPLATES, TABLE_END as BATTLE_MESSAGE_TABLE_END,
+    TABLE_START as BATTLE_MESSAGE_TABLE_START,
+};
 pub use error::PackError;
 pub use format::{DirectoryEntry, EntryKind, FORMAT_VERSION, MAGIC};
 pub use handles::{ImageRef, PaletteRef, TilesetHandle, WindowFrameHandle};
@@ -270,6 +281,23 @@ impl AssetPack {
         let bytes = self.raw(&id.0)?;
         Sample::decode(bytes).map_err(|source| PackError::AudioDecode {
             id: id.0.clone(),
+            source,
+        })
+    }
+
+    /// Look up the `pokedex/data` entry and decode it through
+    /// [`PokedexData::decode`].
+    ///
+    /// # Errors
+    ///
+    /// [`PackError::UnknownAsset`] if the pack has no Pokédex payload;
+    /// [`PackError::WrongKind`] if the entry isn't [`EntryKind::Raw`];
+    /// [`PackError::PokedexDecode`] if the bytes fail the schema.
+    pub fn pokedex_data(&self) -> Result<PokedexData, PackError> {
+        const ID: &str = "pokedex/data";
+        let bytes = self.raw(ID)?;
+        PokedexData::decode(bytes).map_err(|source| PackError::PokedexDecode {
+            id: ID.to_owned(),
             source,
         })
     }
