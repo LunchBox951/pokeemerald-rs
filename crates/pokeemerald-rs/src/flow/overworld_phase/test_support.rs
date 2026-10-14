@@ -246,7 +246,7 @@ const ONE_F_DOORMAT_EXIT_TILE: (i32, i32) = (8, 9);
 /// the map, so a walkable exit is needed to prove the arrow warp preempts a
 /// legal step. Asserts its own preconditions so a drifted fixture fails
 /// instead of passing vacuously.
-pub(super) fn walkable_south_arrow_phase() -> OverworldPhase {
+pub(super) fn south_facing_doormat_phase_with_walkable_exit() -> OverworldPhase {
     // The map-events table is generated at build time, so no pack is needed.
     let events = assets::MapEventsTable::new()
         .resolve(ONE_F)
