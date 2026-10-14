@@ -10,6 +10,7 @@ mod corruption_tests;
 mod legacy_migration_tests;
 mod round_trip_tests;
 mod storage_donor_tests;
+mod storage_model_tests;
 mod torn_write_tests;
 mod unusable_tail_tests;
 
