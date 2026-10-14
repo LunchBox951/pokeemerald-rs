@@ -7,5 +7,6 @@ mod battle_message;
 mod container;
 mod layout;
 mod pokedex;
+mod pokedex_graphics;
 mod real_pack;
 mod starter_chooser;

@@ -16,6 +16,7 @@ mod battle_message;
 mod error;
 mod format;
 mod handles;
+mod pokedex_graphics;
 mod starter_chooser;
 
 use std::path::{Path, PathBuf};
@@ -36,6 +37,7 @@ pub use battle_message::{
 pub use error::PackError;
 pub use format::{DirectoryEntry, EntryKind, FORMAT_VERSION, MAGIC};
 pub use handles::{ImageRef, PaletteRef, TilesetHandle, WindowFrameHandle};
+pub use pokedex_graphics::PokedexGraphicsHandle;
 pub use starter_chooser::{
     PalettedImage, StarterChooserHandle, StarterPreviewHandle, StarterSpecies,
 };
