@@ -93,9 +93,8 @@ fn the_decoration_flag_map_list_covers_every_bundled_map_with_placeholders() {
     );
 }
 
-/// Upstream hides the twelve `OBJ_EVENT_GFX_VAR_*` slots from the map's own
-/// `MAP_SCRIPT_ON_TRANSITION` (`data/maps/LittlerootTown_BrendansHouse_2F/scripts.inc:6-10`;
-/// slots at `map.json:32-185`).
+/// Upstream's `MAP_SCRIPT_ON_TRANSITION` hides the twelve `OBJ_EVENT_GFX_VAR_*` slots
+/// (`data/maps/LittlerootTown_BrendansHouse_2F/scripts.inc:6-10`; slots at `map.json:32-185`).
 #[test]
 fn the_bedrooms_decoration_placeholders_do_not_block_a_fresh_save() {
     let events = assets::MapEventsTable::new().resolve(BEDROOM).unwrap();
