@@ -1048,8 +1048,8 @@ fn reopen_to_an_unsyncable_descriptor(
     _parent: &std::os::fd::OwnedFd,
 ) -> std::io::Result<std::os::fd::OwnedFd> {
     // `fsync` of a pipe fails with `EINVAL`.
-    let (read, _write) = rustix::pipe::pipe()?;
-    Ok(read)
+    let (read, _write) = std::io::pipe()?;
+    Ok(read.into())
 }
 
 #[cfg(unix)]
@@ -1086,4 +1086,41 @@ fn a_failed_recovery_sync_leaves_the_entry_unsynced_and_the_final_pass_retries()
     assert!(!created[0].entry_synced, "a failed sync is not a sync");
     super::sync_created_directories(&mut created);
     assert!(created[0].entry_synced, "the retry syncs the entry");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_failed_final_sync_does_not_unsync_an_entry_synced_at_creation() {
+    // `a/b`, both entries synced at creation. A redundant final-pass sync
+    // that fails must not mark them unsynced: a later open out of
+    // descriptors would then try to sync `a` again and release `b`'s own
+    // pin for the slot, and a failed import could no longer take `b` back.
+    let dir = TempDir::new("final-sync-fails-after-creation");
+    let target = dir.join("a").join("b");
+    let creation = super::create_directories_pinned(&target).expect("both levels are created");
+    let mut created = creation.created;
+    drop(creation.final_directory);
+    assert!(
+        created.iter().all(|level| level.entry_synced),
+        "creation synced both entries"
+    );
+    super::sync_created_directories_with(&mut created, &mut reopen_to_an_unsyncable_descriptor);
+    assert!(
+        created.iter().all(|level| level.entry_synced),
+        "a failed redundant sync keeps an earlier sync"
+    );
+    let mut pressure = true;
+    let opened: std::io::Result<()> = super::open_shedding_pins_with(
+        &mut created,
+        || {
+            if std::mem::replace(&mut pressure, false) {
+                return Err(std::io::Error::from(rustix::io::Errno::MFILE));
+            }
+            Err(std::io::Error::other("the temporary file is refused"))
+        },
+        &mut |_| Err(std::io::Error::from(rustix::io::Errno::MFILE)),
+    );
+    assert!(opened.is_err(), "the import fails");
+    super::undo_created_directories(&created);
+    assert!(!target.exists(), "b is taken back");
 }

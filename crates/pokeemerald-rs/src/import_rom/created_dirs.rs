@@ -753,7 +753,9 @@ fn sync_created_directories_with(
         loop {
             match reopen(&parent) {
                 Ok(real) => {
-                    created[index].entry_synced = rustix::fs::fsync(&real).is_ok();
+                    // An entry an earlier sync made durable stays durable;
+                    // a failed redundant sync must not take that back.
+                    created[index].entry_synced |= rustix::fs::fsync(&real).is_ok();
                     break;
                 }
                 Err(source) if is_out_of_descriptors_io(&source) => {
