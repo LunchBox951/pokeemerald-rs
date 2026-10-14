@@ -61,8 +61,15 @@ pub struct DirectSoundSample {
     data: Vec<i8>,
 }
 
-fn checked_sample_count(len: usize) -> Result<u32, AudioError> {
-    u32::try_from(len).map_err(|_| AudioError::SampleTooLong(len))
+/// Guard-inclusive buffer length for a logical `sample_count`: one more value
+/// than the count (the interpolation guard). Computed in `usize` so the wire
+/// format's maximum `u32` count stays representable; `None` only when the
+/// target's `usize` cannot hold it (for example 32-bit targets at `u32::MAX`).
+///
+/// The wire count is upstream `WaveData.size`, a `u32` (`pokeemerald/include/gba/m4a_internal.h`,
+/// `struct WaveData`; consumed by `pokeemerald/src/m4a_1.s`).
+fn expected_buffer_len(sample_count: u32) -> Option<usize> {
+    usize::try_from(sample_count).ok()?.checked_add(1)
 }
 
 impl DirectSoundSample {
@@ -70,8 +77,9 @@ impl DirectSoundSample {
     ///
     /// # Errors
     ///
-    /// Returns [`AudioError::SampleTooLong`] when the buffer length does not
-    /// fit the encoded `u32` sample count.
+    /// Returns [`AudioError::SampleTooLong`] when `sample_count` plus the
+    /// guard value cannot be represented as a buffer length on this target.
+    /// Every `u32` count, including `u32::MAX`, is valid on 64-bit targets.
     ///
     /// Returns [`AudioError::DirectSoundBufferLength`] when `data` does not
     /// hold exactly one more value than `sample_count` (the retained
@@ -87,11 +95,10 @@ impl DirectSoundSample {
         sample_count: u32,
         data: Vec<i8>,
     ) -> Result<Self, AudioError> {
-        let buffer_len = checked_sample_count(data.len())?;
-        let expected_len = sample_count
-            .checked_add(1)
-            .ok_or(AudioError::SampleTooLong(data.len()))?;
-        if buffer_len != expected_len {
+        let expected_len = expected_buffer_len(sample_count).ok_or_else(|| {
+            AudioError::SampleTooLong(usize::try_from(sample_count).unwrap_or(usize::MAX))
+        })?;
+        if data.len() != expected_len {
             return Err(AudioError::DirectSoundBufferLength {
                 sample_count,
                 buffer_len: data.len(),
@@ -183,10 +190,7 @@ impl Sample {
                 let sample_count = reader.u32()?;
                 // The wire format always retains one interpolation-guard
                 // value past `sample_count` (see `DirectSoundSample`'s docs).
-                let buffer_len = usize::try_from(sample_count)
-                    .ok()
-                    .and_then(|count| count.checked_add(1))
-                    .ok_or(AudioError::Truncated)?;
+                let buffer_len = expected_buffer_len(sample_count).ok_or(AudioError::Truncated)?;
                 let mut data =
                     Vec::with_capacity(buffer_len.min(MAX_PREALLOCATED_DIRECT_SOUND_SAMPLES));
                 for _ in 0..buffer_len {
@@ -357,19 +361,31 @@ mod tests {
     }
 
     #[test]
-    fn a_payload_too_long_for_the_u32_sample_count_is_rejected() {
-        // Constructing the rejected sample would require an impractically large allocation.
-        let too_long = u64::from(u32::MAX) + 1;
-        if let Ok(len) = usize::try_from(too_long) {
+    fn the_expected_buffer_length_admits_the_maximum_wire_count() {
+        // Computing the length allocates nothing; a real 4 GiB buffer is never built.
+        assert_eq!(expected_buffer_len(0), Some(1));
+        assert_eq!(expected_buffer_len(2), Some(3));
+        match usize::try_from(u32::MAX) {
+            Ok(max) if max < usize::MAX => {
+                assert_eq!(expected_buffer_len(u32::MAX), Some(max + 1));
+            }
+            _ => assert_eq!(expected_buffer_len(u32::MAX), None),
+        }
+    }
+
+    #[test]
+    fn a_count_whose_guard_inclusive_length_is_unrepresentable_is_too_long() {
+        if usize::BITS > 32 {
+            // The maximum count is valid; only a mismatched buffer is rejected.
+            assert!(matches!(
+                DirectSoundSample::new(1, None, u32::MAX, vec![0]),
+                Err(AudioError::DirectSoundBufferLength { .. })
+            ));
+        } else {
             assert_eq!(
-                checked_sample_count(len),
-                Err(AudioError::SampleTooLong(len))
+                DirectSoundSample::new(1, None, u32::MAX, vec![0]),
+                Err(AudioError::SampleTooLong(usize::MAX))
             );
         }
-        assert_eq!(checked_sample_count(0), Ok(0));
-        assert_eq!(
-            checked_sample_count(usize::try_from(u32::MAX).expect("u32 fits usize")),
-            Ok(u32::MAX)
-        );
     }
 }
