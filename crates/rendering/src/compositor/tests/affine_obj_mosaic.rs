@@ -981,3 +981,228 @@ fn affine_obj_mosaic_spill_ignores_a_zero_width_win1_pass_trimmed_by_a_win0_endi
         assert_eq!(fb.pixel(x, 0), Some(black), "x={x}");
     }
 }
+
+/// Composes row 0 of an opaque affine mosaic OBJWIN at x=1 whose WINOUT
+/// pass spills past its end into a BG0-disabling WIN0/WIN1 that starts at
+/// `window_start`, with OBJWIN enabling BG0.
+fn objwin_spill_over_geometric_window(
+    win1: bool,
+    depth: BitDepth,
+    window_start: u8,
+) -> crate::framebuffer::Framebuffer {
+    use crate::oam::AffineMode;
+
+    let (bg_tiles, bg_palette, bg_map) = opaque_bg_fixture(9);
+    let bg = crate::bg::BgLayer::new(&bg_tiles, &bg_palette, &bg_map);
+    let slots = [BgSlot::new(bg, 0, 1, 0, 0, true)];
+
+    let sprite_tiles = match depth {
+        BitDepth::Bpp4 => Tileset::decode(BitDepth::Bpp4, &[0xFFu8; 32]),
+        BitDepth::Bpp8 => Tileset::decode(BitDepth::Bpp8, &[15u8; 64]),
+    }
+    .unwrap();
+    let mut sprite_colors = [Bgr555::default(); Palette::LEN];
+    sprite_colors[15] = Bgr555::from_channels(0, 31, 31);
+    let sprite_palette = Palette::new(sprite_colors);
+
+    let entries = [OamEntry::new(
+        1,
+        0,
+        0,
+        0,
+        depth,
+        false,
+        false,
+        ObjShape::Square,
+        0,
+        0,
+        true,
+    )
+    .with_mode(ObjMode::Window)
+    .with_mosaic(true)
+    .with_affine(AffineMode::Affine { matrix_num: 0 })];
+    let matrices = [AffineMatrix::new(
+        AffineMatrix::ONE / 4,
+        0,
+        0,
+        AffineMatrix::ONE,
+    )];
+    let sprites = SpriteLayer::new(&entries, &sprite_tiles, &sprite_tiles, &sprite_palette)
+        .with_affine_matrices(&matrices);
+
+    let mut bg0 = WindowLayerEnable::NONE;
+    bg0.bg[0] = true;
+    let rect = WindowRect::new(WindowRange::new(window_start, 240), WindowRange::new(0, 1));
+    let (win0, win1) = if win1 {
+        (None, Some((rect, WindowLayerEnable::NONE)))
+    } else {
+        (Some((rect, WindowLayerEnable::NONE)), None)
+    };
+    let effects = FrameEffects {
+        windows: WindowConfig {
+            win0,
+            win1,
+            obj_window: Some(bg0),
+            winout: WindowLayerEnable::NONE,
+        },
+        mosaic: crate::mosaic::MosaicConfig {
+            bg: MosaicSize::NONE,
+            obj: MosaicSize::new(4, 1),
+        },
+        ..FrameEffects::default()
+    };
+    compose_frame_with_effects(&sprites, &slots, &effects)
+}
+
+fn assert_objwin_spill_enables_bg0(win1: bool, depth: BitDepth) {
+    // mGBA's WINOUT pass writes the affine OBJWIN trailing spill past its
+    // end (`software-obj.c:227-242`); WIN0/WIN1 passes skip OBJWIN drawing
+    // (`software-obj.c:161-163`) but never clear those row bits, so BG0 still
+    // draws there through OBJWIN's enable (`video-software.c:510-523`,
+    // `software-private.h:87-99,210-215`) `(behavioral-fidelity)`.
+    let fb = objwin_spill_over_geometric_window(win1, depth, 10);
+    let red = Bgr555::from_channels(9, 0, 0).to_rgb888();
+    for x in 9..12 {
+        assert_eq!(fb.pixel(x, 0), Some(red), "x={x}");
+    }
+    assert_eq!(fb.pixel(12, 0), Some(Rgb888::BLACK), "x=12");
+}
+
+#[test]
+fn objwin_affine_mosaic_spill_written_in_winout_enables_bg0_inside_win0() {
+    assert_objwin_spill_enables_bg0(false, BitDepth::Bpp4);
+}
+
+#[test]
+fn objwin_affine_mosaic_spill_written_in_winout_enables_bg0_inside_win1() {
+    assert_objwin_spill_enables_bg0(true, BitDepth::Bpp4);
+}
+
+#[test]
+fn objwin_affine_8bpp_mosaic_spill_written_in_winout_enables_bg0_inside_win0() {
+    assert_objwin_spill_enables_bg0(false, BitDepth::Bpp8);
+}
+
+#[test]
+fn objwin_affine_mosaic_without_trailing_spill_stays_suppressed_inside_win0_and_win1() {
+    // A WINOUT pass clipped at 5 ends before the sprite's rounded edge, so
+    // there is no spill and WIN0/WIN1 keep their BG0 suppression
+    // (`software-obj.c:227-242`).
+    for win1 in [false, true] {
+        let fb = objwin_spill_over_geometric_window(win1, BitDepth::Bpp4, 5);
+        let red = Bgr555::from_channels(9, 0, 0).to_rgb888();
+        assert_eq!(fb.pixel(4, 0), Some(red), "win1={win1} x=4");
+        for x in 5..12 {
+            assert_eq!(fb.pixel(x, 0), Some(Rgb888::BLACK), "win1={win1} x={x}");
+        }
+    }
+}
+
+/// Composes row 0 of a normal OBJ at x=8 drawn under an affine mosaic OBJWIN
+/// at x=1 whose WINOUT pass spills into an effects-enabled WIN0 starting at
+/// 10, with OBJWIN enabling OBJ but not effects. `objwin_first` puts the
+/// OBJWIN entry ahead of the normal one in OAM.
+fn normal_obj_under_objwin_spill(objwin_first: bool) -> crate::framebuffer::Framebuffer {
+    use crate::oam::AffineMode;
+
+    let sprite_tiles = Tileset::decode(BitDepth::Bpp4, &[0xFFu8; 32]).unwrap();
+    let mut sprite_colors = [Bgr555::default(); Palette::LEN];
+    sprite_colors[15] = Bgr555::from_channels(16, 16, 16);
+    let sprite_palette = Palette::new(sprite_colors);
+
+    let normal = OamEntry::new(
+        8,
+        0,
+        0,
+        0,
+        BitDepth::Bpp4,
+        false,
+        false,
+        ObjShape::Square,
+        0,
+        0,
+        true,
+    );
+    let objwin = OamEntry::new(
+        1,
+        0,
+        0,
+        0,
+        BitDepth::Bpp4,
+        false,
+        false,
+        ObjShape::Square,
+        0,
+        0,
+        true,
+    )
+    .with_mode(ObjMode::Window)
+    .with_mosaic(true)
+    .with_affine(AffineMode::Affine { matrix_num: 0 });
+    let entries = if objwin_first {
+        [objwin, normal]
+    } else {
+        [normal, objwin]
+    };
+    let matrices = [AffineMatrix::new(
+        AffineMatrix::ONE / 4,
+        0,
+        0,
+        AffineMatrix::ONE,
+    )];
+    let sprites = SpriteLayer::new(&entries, &sprite_tiles, &sprite_tiles, &sprite_palette)
+        .with_affine_matrices(&matrices);
+
+    let mut obj = WindowLayerEnable::NONE;
+    obj.obj = true;
+    let mut obj_effects = obj;
+    obj_effects.effects = true;
+    let effects = FrameEffects {
+        windows: WindowConfig {
+            win0: Some((
+                WindowRect::new(WindowRange::new(10, 240), WindowRange::new(0, 1)),
+                obj_effects,
+            )),
+            win1: None,
+            obj_window: Some(obj),
+            winout: WindowLayerEnable::NONE,
+        },
+        color: OBJ_FULL_BRIGHTEN,
+        mosaic: crate::mosaic::MosaicConfig {
+            bg: MosaicSize::NONE,
+            obj: MosaicSize::new(4, 1),
+        },
+        backdrop: Rgb888::BLACK,
+        ..FrameEffects::default()
+    };
+    compose_frame_with_effects(&sprites, &[], &effects)
+}
+
+#[test]
+fn objwin_spill_masks_a_sprite_color_only_from_an_earlier_oam_entry() {
+    // mGBA preprocesses OAM-major, running every window pass of one entry
+    // before the next (`video-software.c:1019-1066`). An earlier-OAM OBJWIN's
+    // WINOUT spill (`software-obj.c:101-105,227-242`) is already in the row
+    // when the WIN0 pass draws the normal OBJ, which then picks the
+    // non-variant `objwinPalette` because OBJWIN disables effects
+    // (`software-obj.c:88-98,199-208`); a later-OAM OBJWIN writes the mask
+    // only after the color keeps its WIN0 Brighten variant
+    // `(behavioral-fidelity)`.
+    let white = Bgr555::from_channels(31, 31, 31).to_rgb888();
+    let gray = Bgr555::from_channels(16, 16, 16).to_rgb888();
+    for (objwin_first, expected) in [(false, white), (true, gray)] {
+        let fb = normal_obj_under_objwin_spill(objwin_first);
+        for x in 10..12 {
+            assert_eq!(
+                fb.pixel(x, 0),
+                Some(expected),
+                "objwin_first={objwin_first} x={x}"
+            );
+        }
+        assert_eq!(
+            fb.pixel(12, 0),
+            Some(white),
+            "objwin_first={objwin_first} x=12"
+        );
+    }
+}

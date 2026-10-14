@@ -1,31 +1,26 @@
-//! On Unix the file is staged through a held directory (`stage_in`): it is
-//! looked up and renamed relative to that directory, so publication cannot
-//! land elsewhere. Other platforms stage by path (`stage`).
+//! Atomic publication of a pointer file. Unix stages through a held directory
+//! (`stage_in`), so lookups and the promoting rename are relative to it; other
+//! platforms stage by path (`stage`).
 //!
-//! Staging fills a `create_new`-held file and [`StagedFile::publish`]
-//! re-verifies that handle's identity before the promoting rename, so a
-//! symlink planted at the name is refused rather than followed or published.
-//! On Unix the same handle survives the rename, so publication also
-//! re-verifies the promoted entry's identity before reporting success: a
-//! replacement that wins the gap between the check and the rename is
-//! promoted onto the pointer path but never accepted as the published
-//! pointer. Once staging has created a pointer file, a failure retains it
-//! (or, past a successful rename, retains the unverified promoted entry) and
-//! reports its last known path instead of removing it: a held file's
-//! identity check cannot make a later, separate pathname deletion
-//! conditional on that identity, so no failure path names and deletes an
-//! entry a second time.
+//! The staged file is created exclusively and kept open. [`StagedFile::publish`]
+//! checks that the staging name still resolves to that open file before
+//! renaming, so a symlink or replacement planted at the name is refused. On
+//! Unix the handle survives the rename, so the promoted entry is checked too:
+//! a replacement that wins the gap between check and rename lands on the
+//! pointer path but is never reported as published.
+//!
+//! Failures never delete. A held file's identity check cannot make a separate
+//! pathname deletion conditional on that identity, so the staged or unverified
+//! promoted entry is retained and its last known path reported.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
-/// Opens `path` for writing and fails if anything already holds that name,
-/// refusing an existing file, directory, or symlink instead of following or
-/// truncating it.
+/// Opens `path` for writing, failing if anything (file, directory, or symlink)
+/// already holds that name.
 ///
-/// On Windows the returned handle shares nothing, so until it is dropped no
-/// other opener -- in this process or any other -- can open, delete, or
-/// rename that entry.
+/// On Windows the handle shares nothing, so until it is dropped no other opener
+/// can open, delete, or rename the entry.
 #[cfg(any(not(unix), test))]
 fn create_new_exclusive(path: &Path) -> std::io::Result<std::fs::File> {
     let mut options = std::fs::OpenOptions::new();
@@ -39,19 +34,16 @@ fn create_new_exclusive(path: &Path) -> std::io::Result<std::fs::File> {
     options.open(path)
 }
 
-/// Creates `path` exclusively and writes `bytes` into it, syncing before
-/// returning the held staging file. Fails with `AlreadyExists` if `path`
-/// already names anything, including a planted symlink; a failure past the
-/// exclusive create retains the file and reports its path, so this call
-/// never deletes an entry a different owner put there.
+/// Creates `path` exclusively, writes and syncs `bytes`, and returns the held
+/// staging file. Fails with `AlreadyExists` if `path` already names anything,
+/// including a planted symlink. A failure after the create retains the file.
 #[cfg(any(not(unix), test))]
 pub(super) fn stage(path: &Path, bytes: &[u8]) -> std::io::Result<StagedFile> {
     stage_file(create_new_exclusive(path)?, path, bytes)
 }
 
-/// [`stage_in`] creates the file relative to the held directory `dir` under
-/// `path`'s final component, so the entry can only appear in that directory.
-/// The staged file then publishes relative to `dir` as well.
+/// Stages `path`'s final component inside the held directory `dir`, so the
+/// entry can only appear there. The staged file publishes relative to `dir` too.
 #[cfg(unix)]
 pub(super) fn stage_in(
     dir: &std::fs::File,
@@ -127,33 +119,28 @@ fn stage_file(file: std::fs::File, path: &Path, bytes: &[u8]) -> std::io::Result
     }
 }
 
-/// The handle that wrote the staged pointer, kept open until it is published
-/// or abandoned: while it lives the file cannot be freed, so nothing that
-/// takes its name can inherit its identity and pass for it. A rename is
-/// indifferent to it, so nothing has to give it up early.
+/// The handle that wrote the staged pointer. While it lives the file cannot be
+/// freed, so nothing that takes its name can inherit its identity. A rename is
+/// indifferent to it, so it stays open until publication or abandonment.
 #[cfg(not(windows))]
 type Hold = std::fs::File;
 
-/// As [`Hold`] above, but `None` once [`StagedFile::release_hold`] gives it
-/// up: Windows bars the promoting rename against a name any handle still
-/// shares nothing over, so the handle has to be released first.
+/// As [`Hold`] above, but `None` once [`StagedFile::release_hold`] gives it up:
+/// Windows refuses to rename a file whose handle shares nothing.
 #[cfg(windows)]
 type Hold = Option<std::fs::File>;
 
-/// Ends `hold` where the platform needs it ended: nothing, since the hold
-/// stays for the life of the [`StagedFile`] (see [`Hold`]).
+/// Keeps `hold` for the life of the [`StagedFile`] (see [`Hold`]).
 #[cfg(not(windows))]
 fn release(_hold: &mut Hold) {}
 
-/// Ends `hold` where the platform needs it ended: drops the handle so the
-/// staging name can be renamed again (see [`Hold`]).
+/// Drops `hold` so the staging name can be renamed (see [`Hold`]).
 #[cfg(windows)]
 fn release(hold: &mut Hold) {
     drop(hold.take());
 }
 
-/// Whether `found` describes the very file `hold` holds open: same device
-/// and inode.
+/// Whether `found` is the file `hold` holds open: same device and inode.
 #[cfg(unix)]
 fn is_the_held_file(hold: &Hold, found: &std::fs::Metadata) -> std::io::Result<bool> {
     use std::os::unix::fs::MetadataExt as _;
@@ -162,11 +149,10 @@ fn is_the_held_file(hold: &Hold, found: &std::fs::Metadata) -> std::io::Result<b
     Ok((staged.dev(), staged.ino()) == (found.dev(), found.ino()))
 }
 
-/// Whether `found` describes the very file `hold` holds open. Windows reads
-/// back no identity, so the answer rests on what the hold forbids (see
-/// [`create_new_exclusive`]): while it lives it forbids everything, so the
-/// name cannot have come to mean another file. Once released, no answer is
-/// available, and that is reported rather than guessed.
+/// Whether `found` is the file `hold` holds open. Windows reads back no
+/// identity, so while the hold lives (see [`create_new_exclusive`]) the name
+/// cannot mean another file. Once released the identity is unknowable, and
+/// that is reported rather than guessed.
 #[cfg(windows)]
 fn is_the_held_file(hold: &Hold, _found: &std::fs::Metadata) -> std::io::Result<bool> {
     if hold.is_some() {
@@ -178,9 +164,8 @@ fn is_the_held_file(hold: &Hold, _found: &std::fs::Metadata) -> std::io::Result<
     }
 }
 
-/// Whether `found` describes the very file `hold` holds open. With neither
-/// an inode nor a sharing hold to go on, a plain regular-file test is all
-/// there is.
+/// Whether `found` is the file `hold` holds open. Without inodes or a sharing
+/// hold, the caller's regular-file test is all there is.
 #[cfg(not(any(unix, windows)))]
 #[expect(
     clippy::unnecessary_wraps,
@@ -202,11 +187,9 @@ pub(super) struct StagedFile {
 }
 
 impl StagedFile {
-    /// Whether `path` names this staged file, rather than a symlink,
-    /// directory, or other entry that took its name.
-    ///
-    /// A reading that failed is neither answer, and surfaces rather than
-    /// passing for "replaced".
+    /// Whether `path` names this staged file rather than a symlink, directory,
+    /// or other entry that took its name. A failed lookup is an error, not
+    /// "replaced".
     fn matches(&self, path: &Path) -> std::io::Result<bool> {
         #[cfg(unix)]
         if let Some(dir) = &self.dir {
@@ -229,17 +212,14 @@ impl StagedFile {
         self.matches(&self.path)
     }
 
-    /// Gives up the hold, so that the rename which promotes the staged
-    /// pointer can take its name.
+    /// Gives up the hold so the promoting rename can take the staging name.
     fn release_hold(&mut self) {
         release(&mut self.hold);
     }
 
-    /// Folds a stage or publish failure into `source` and reports this
-    /// staged file's last known path. No failure path unlinks it: a held
-    /// file's identity check and a pathname deletion are separate lookups,
-    /// so nothing can make one conditional on the other; the file is left
-    /// for an operator to inspect and remove.
+    /// Folds a stage or publish failure into `source` and reports the staged
+    /// file's last known path. The file is left for an operator to inspect and
+    /// remove (see the module docs).
     fn report_retained(&self, source: &std::io::Error) -> std::io::Error {
         std::io::Error::new(
             source.kind(),
@@ -250,18 +230,15 @@ impl StagedFile {
         )
     }
 
-    /// Gives up publishing this staged file because of a failure found by
-    /// the caller between staging and [`Self::publish`], retaining and
-    /// reporting it exactly as a failed publish would.
+    /// Abandons publication after a caller-found failure, retaining and
+    /// reporting the file as a failed publish would.
     pub(super) fn retain(self, source: &std::io::Error) -> std::io::Error {
         self.report_retained(source)
     }
 
     /// Folds a post-rename identity failure into `source` and reports the
-    /// promoted pointer's path. Nothing unlinks it: an unverifiable identity
-    /// cannot make a pathname deletion of `dest` conditional on the very
-    /// identity it failed to prove, so the promoted entry is left for an
-    /// operator to inspect and remove.
+    /// promoted pointer's path. The entry is left for an operator to inspect
+    /// and remove (see the module docs).
     #[cfg(unix)]
     fn report_unverified(dest: &Path, source: &std::io::Error) -> std::io::Error {
         std::io::Error::new(
@@ -273,8 +250,8 @@ impl StagedFile {
         )
     }
 
-    /// Renames the staged file onto `dest`: relative to the held directory
-    /// when there is one, so the rename cannot leave it.
+    /// Renames the staged file onto `dest`, relative to the held directory when
+    /// there is one.
     fn rename_to(&self, dest: &Path) -> std::io::Result<()> {
         #[cfg(unix)]
         if let Some(dir) = &self.dir {
@@ -284,19 +261,16 @@ impl StagedFile {
         std::fs::rename(&self.path, dest)
     }
 
-    /// Verifies ownership, then publishes this staging path to `dest` by
-    /// rename; refuses to publish a replaced or unverifiable staging path.
+    /// Renames the staged file to `dest` after confirming the staging name
+    /// still is this file; a replaced or unverifiable name is refused.
     pub(super) fn publish(self, dest: &Path) -> std::io::Result<()> {
         self.publish_with(dest, || {}, || {})
     }
 
-    /// [`Self::publish`], plus `before_rename` run immediately before the
-    /// promoting rename and `on_rename_failure` run right after a failed one
-    /// and before that failure is retained and reported. Production always
-    /// passes no-ops; tests use `before_rename` to land a replacement at the
-    /// staging pathname ahead of the rename that promotes it, and
-    /// `on_rename_failure` to land one at the staging pathname a failed
-    /// rename leaves behind.
+    /// [`Self::publish`] with test seams: `before_rename` runs just before the
+    /// promoting rename, and `on_rename_failure` right after a failed one.
+    /// Production passes no-ops; tests use them to plant a replacement at the
+    /// staging name.
     pub(super) fn publish_with(
         mut self,
         dest: &Path,

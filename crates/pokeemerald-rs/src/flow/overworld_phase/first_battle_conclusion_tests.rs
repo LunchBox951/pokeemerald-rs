@@ -13,7 +13,7 @@ use engine::rng::Rng;
 use platform::Buttons;
 
 /// One of the real Route 101 rescue coord-event trigger tiles -- see
-/// `super::first_battle_trigger_tests`'s own identical constant for the
+/// `super::first_battle_trigger_tests::support`'s own identical constant for the
 /// full citation; independently transcribed here too, the same "each test
 /// file names its own fixture" convention this crate's test suite already
 /// keeps throughout.
@@ -58,7 +58,7 @@ const FLAG_HIDE_LITTLEROOT_TOWN_BIRCHS_LAB_BIRCH: u16 = 0x2D1;
 /// (`include/constants/flags.h:749`).
 const FLAG_HIDE_ROUTE_101_BIRCH_STARTERS_BAG: u16 = 0x2BC;
 
-/// A synthetic, fully open room named `MAP_ROUTE101` -- [`super::first_battle_trigger_tests`]'s
+/// A synthetic, fully open room named `MAP_ROUTE101` -- [`super::first_battle_trigger_tests::support`]'s
 /// own `route_101_trigger_phase` fixture, reconstructed locally (this
 /// module cannot import a sibling test file's private items).
 fn route_101_trigger_phase(player: PlayerState) -> OverworldPhase {
@@ -354,7 +354,7 @@ fn unplayable_treecko_lead() -> BattlePokemon {
 /// An **aborted** first battle (module docs, "The upstream chain": no real
 /// outcome, no upstream counterpart) must not run the conclusion at all --
 /// no heal, no var writes, no warp. Mirrors
-/// `first_battle_trigger_tests::an_aborted_first_battle_still_consumes_the_route_101_trigger`'s
+/// `first_battle_trigger_tests::trigger::an_aborted_first_battle_still_consumes_the_route_101_trigger`'s
 /// own fixture, since an unexecutable moveset is the one remaining way
 /// `crate::flow::first_battle::advance_first_battle` reports `None` instead
 /// of a real outcome.

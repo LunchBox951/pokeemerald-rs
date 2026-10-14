@@ -8,8 +8,8 @@ use super::error::GenRomProfileError;
 use super::tests::with_context;
 use super::{fonts, inventory, layouts, locate_profile, sprites, text_window, tilesets, title};
 use crate::extract::scope::{
-    layout_ids, sprite_sheet_ids, text_window_ids, tileset_animation_ids, title_ids, FONTS,
-    LAYOUTS, TEXT_WINDOW_IMAGE_STEMS, TEXT_WINDOW_PALETTE_STEMS, TILESETS,
+    layout_ids, sprite_palette_ids, sprite_sheet_ids, text_window_ids, tileset_animation_ids,
+    title_ids, FONTS, LAYOUTS, TEXT_WINDOW_IMAGE_STEMS, TEXT_WINDOW_PALETTE_STEMS, TILESETS,
 };
 
 /// A placeholder for every fixed root; presence is all the preflight reads.
@@ -24,10 +24,7 @@ fn complete_inventory() -> Vec<PackEntry> {
         .chain(text_window_ids())
         .chain(sprite_sheet_ids())
         // Palettes stay so a sheet deletion is the only thing missing.
-        .chain(
-            ["brendan", "may", "npc_1", "npc_2", "npc_3", "npc_4"]
-                .map(|name| format!("sprite/palette/{name}")),
-        )
+        .chain(sprite_palette_ids())
         .map(|id| raw_entry(id, vec![0]))
         .collect()
 }
@@ -286,6 +283,24 @@ fn a_pack_missing_any_one_sprite_sheet_is_refused() {
         let label = format!("no-{}", id.replace('/', "-"));
         assert_refused(&label, without(&id), &id, "sprites");
     }
+}
+
+#[test]
+fn a_pack_missing_any_one_sprite_palette_is_refused() {
+    for id in sprite_palette_ids() {
+        let label = format!("no-{}", id.replace('/', "-"));
+        assert_refused(&label, without(&id), &id, "sprites");
+    }
+}
+
+#[test]
+fn the_sprite_palette_inventory_holds_all_six_fixed_banks() {
+    assert_eq!(
+        sprite_palette_ids(),
+        ["brendan", "may", "npc_1", "npc_2", "npc_3", "npc_4"]
+            .map(|name| format!("sprite/palette/{name}"))
+            .to_vec()
+    );
 }
 
 #[test]

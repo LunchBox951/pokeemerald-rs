@@ -600,6 +600,11 @@ fn estimated_damage(
     let category = MoveCategory::for_type(move_type);
     let (attack_stat, attack_stage) = attacker.attacking_stat(category);
     let attack_stat = crate::ability::huge_power_attack(attacker.ability(), category, attack_stat);
+    // Upstream's `CalculateBaseDamage` halves raw Special Attack for Fire/Ice
+    // against Thick Fat before stage scaling (`pokemon.c:3202-3204`); the AI
+    // estimates every populated slot, depleted or not.
+    let attack_stat =
+        crate::ability::thick_fat_special_attack(defender.ability(), move_type, attack_stat);
     let (defense_stat, defense_stage) = defender.defending_stat(category);
     let input = DamageInput {
         attacker_level: attacker.level(),
@@ -889,8 +894,9 @@ fn score_first_turn_setup(
 mod tests {
     use super::{
         choose_trainer_action, compare_move_power, ensure_scoreable, ensure_supported_flags,
-        estimated_damage, select_highest_scoring_move, MoveScores, PowerComparison, FIRST_TURN,
-        FIRST_TURN_SETUP_BONUS_THRESHOLD, PERCENT_SCALE, STAT_DROP_DISCOURAGEMENT_THRESHOLD,
+        estimated_damage, score_try_to_faint, select_highest_scoring_move, MoveScores,
+        PowerComparison, FIRST_TURN, FIRST_TURN_SETUP_BONUS_THRESHOLD, PERCENT_SCALE,
+        STAT_DROP_DISCOURAGEMENT_THRESHOLD,
     };
     use crate::battle::opponent_ai::EnemyAction;
     use crate::dex::Dex;
@@ -992,6 +998,88 @@ mod tests {
                 .into_iter()
                 .chain(subsequent_draws),
         )
+    }
+
+    /// `SPECIES_JYNX`: an Ice type whose Special Attack far exceeds its
+    /// Attack, so a weak Ice move can rival a resisted physical one.
+    const JYNX: SpeciesId = SpeciesId(124);
+
+    /// Upstream's `AI_CalcDmg` runs `CalculateBaseDamage` for every nonempty
+    /// slot, depleted or not (`battle_ai_script_commands.c:1204-1213`), and it
+    /// halves raw Special Attack for Fire/Ice against Thick Fat
+    /// (`pokemon.c:3202-3204`). Icicle Spear is the one Fire/Ice move that
+    /// trainer admission accepts, so the depleted slot is reachable.
+    #[test]
+    fn depleted_ice_move_respects_thick_fat_in_power_comparison() {
+        let dex = Dex::new();
+        let moves = vec![MoveId::ROCK_THROW, GROWL, MoveId::ICICLE_SPEAR];
+        for move_id in &moves {
+            assert_eq!(
+                crate::battle::trainer::ensure_move_playable(&dex, *move_id, AiFlags::TRY_TO_FAINT),
+                Ok(()),
+                "{move_id:?}"
+            );
+        }
+        let build = |species, moves| {
+            BattlePokemon::new(
+                &dex,
+                species,
+                20,
+                Ivs {
+                    hp: 31,
+                    attack: 31,
+                    defense: 31,
+                    speed: 31,
+                    sp_attack: 31,
+                    sp_defense: 31,
+                },
+                DEFAULT_PERSONALITY,
+                moves,
+            )
+            .unwrap()
+        };
+        let mut enemy = build(JYNX, moves);
+        spend_move(&mut enemy, 2);
+        let player = build(MAKUHITA, vec![TACKLE]);
+        assert_eq!(player.ability(), crate::ability::THICK_FAT);
+
+        assert_eq!(
+            estimated_damage(&dex, MoveId::ROCK_THROW, &enemy, &player, PERCENT_SCALE).unwrap(),
+            7
+        );
+        assert_eq!(
+            estimated_damage(&dex, MoveId::ICICLE_SPEAR, &enemy, &player, PERCENT_SCALE).unwrap(),
+            6
+        );
+
+        let mut rng = rng_with_maximum_simulated_damage([]);
+        let mut scores = MoveScores::initialize(&enemy, &mut rng);
+        assert_eq!(
+            compare_move_power(&dex, &scores, 0, MoveId::ROCK_THROW, &enemy, &player),
+            Ok(PowerComparison::Strongest)
+        );
+        for slot in 0..2 {
+            let move_id = enemy.moves()[slot].move_id;
+            score_try_to_faint(&dex, &mut scores, slot, move_id, &enemy, &player, &mut rng)
+                .unwrap();
+        }
+        assert_eq!(scores.values, [100, 100, 0, 0]);
+
+        let mut rng = rng_with_maximum_simulated_damage([SELECT_FIRST_TIED_MOVE]);
+        assert_eq!(
+            choose_trainer_action(
+                &dex,
+                &enemy,
+                &player,
+                AiFlags::TRY_TO_FAINT,
+                FIRST_TURN,
+                &mut rng,
+            )
+            .unwrap(),
+            EnemyAction::Move(0)
+        );
+        assert_eq!(rng.draws(), MAX_MON_MOVES + 1);
+        rng.assert_exhausted();
     }
 
     #[test]
