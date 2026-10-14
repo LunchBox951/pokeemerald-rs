@@ -37,6 +37,7 @@
 
 pub mod abilities;
 pub mod audio;
+pub mod battle_anim;
 pub mod battle_moves;
 pub mod egg_moves;
 pub mod error;
@@ -112,6 +113,10 @@ pub use new_game_flags::{
 // re-exported at the crate root to avoid clashing with `species::ItemId` (the
 // lightweight held-item reference used by the species table). Reach it via the
 // `items` module path.
+pub use battle_anim::{
+    AnimCommand, AnimSymbol, AnimationSelector, AnimationTable, BattleAnimationCatalog,
+    BattleAnimationError, BattleAnimationProgram, EffectSpriteId, PanSweep, ProgramId,
+};
 pub use items::{
     BattleUsage, HoldEffect, ItemData, ItemDisplayData, ItemDisplayTable, ItemTable, ItemType,
     Pocket, ITEMS_COUNT,

@@ -121,7 +121,12 @@ fn wrapping_the_tick_through_the_start_menu_frame_also_lands_on_the_upstream_per
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn loading_a_room_and_warping_both_restart_the_tileset_animation_tick() {
-    let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+    let mut phase = OverworldPhase::load(
+        crate::pack_source::PackSource::Repo,
+        crate::new_game::NewGameOptions::DEFAULT,
+        crate::new_game::NewGameIdentity::DEFAULT,
+    )
+    .expect("run `cargo xtask extract` first");
     assert_eq!(
         phase.tick, 0,
         "a freshly loaded room starts its animation counter at 0"
