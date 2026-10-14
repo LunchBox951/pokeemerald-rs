@@ -81,8 +81,8 @@ use pack_format::{EntryShapeError, PackEntry, PackWriter};
 use publish::write_pack_atomically;
 
 use scope::{
-    TilesetSource, LAYOUTS, PEOPLE_SHEETS, TILESETS, TITLE_SCREEN_EMBEDDED_PALETTE_SHEETS,
-    TITLE_SCREEN_PALETTE_CUTS,
+    sprite_palette_ids, TilesetSource, LAYOUTS, PEOPLE_SHEETS, TILESETS,
+    TITLE_SCREEN_EMBEDDED_PALETTE_SHEETS, TITLE_SCREEN_PALETTE_CUTS,
 };
 
 /// Serializes tests that read or replace the checkout-local pack.
@@ -468,20 +468,12 @@ fn extract_sprites(upstream: &Path, writer: &mut PackWriter) -> Result<(), Extra
     }
 
     let palettes_dir = upstream.join("graphics/object_events/palettes");
-    for who in ["brendan", "may"] {
-        push_palette_entry(
-            &palettes_dir.join(format!("{who}.pal")),
-            format!("sprite/palette/{who}"),
-            writer,
-        )?;
-    }
-    for n in FIRST_GENERIC_NPC_PALETTE..=LAST_GENERIC_NPC_PALETTE {
-        let name = format!("npc_{n}");
-        push_palette_entry(
-            &palettes_dir.join(format!("{name}.pal")),
-            format!("sprite/palette/{name}"),
-            writer,
-        )?;
+    for id in sprite_palette_ids() {
+        let name = id
+            .strip_prefix("sprite/palette/")
+            .expect("sprite palette inventory uses the palette prefix");
+        let path = palettes_dir.join(format!("{name}.pal"));
+        push_palette_entry(&path, id, writer)?;
     }
     Ok(())
 }

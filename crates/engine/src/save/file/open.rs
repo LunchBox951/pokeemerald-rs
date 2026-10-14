@@ -208,13 +208,88 @@ mod open_flags {
     ))]
     const _: () = assert!(O_NOFOLLOW == 0x0000_8000 && O_NONBLOCK == 0x0000_0800 && ELOOP == 40);
 
-    // macOS's and the BSDs' shared `<sys/fcntl.h>` and `<sys/errno.h>`.
-    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    // macOS's and the BSDs' shared `<sys/fcntl.h>` and `<sys/errno.h>`
+    // (libc `src/unix/bsd/mod.rs` and its `apple`, `freebsdlike` and
+    // `netbsdlike` modules).
+    #[cfg(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "tvos",
+        target_os = "watchos",
+        target_os = "visionos",
+        target_os = "freebsd",
+        target_os = "dragonfly",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    ))]
     pub(super) const O_NOFOLLOW: i32 = 0x0000_0100;
-    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    #[cfg(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "tvos",
+        target_os = "watchos",
+        target_os = "visionos",
+        target_os = "freebsd",
+        target_os = "dragonfly",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    ))]
     pub(super) const O_NONBLOCK: i32 = 0x0000_0004;
-    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    #[cfg(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "tvos",
+        target_os = "watchos",
+        target_os = "visionos",
+        target_os = "freebsd",
+        target_os = "dragonfly",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    ))]
     pub(super) const ELOOP: i32 = 62;
+    #[cfg(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "tvos",
+        target_os = "watchos",
+        target_os = "visionos",
+        target_os = "freebsd",
+        target_os = "dragonfly",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    ))]
+    const _: () = assert!(O_NOFOLLOW == 0x0000_0100 && O_NONBLOCK == 0x0000_0004 && ELOOP == 62);
+
+    // illumos's and Solaris's `<sys/fcntl.h>` and `<sys/errno.h>` (libc
+    // `src/unix/solarish/mod.rs`). `0x100` is `O_CREAT` there, so the BSD
+    // values must not be used.
+    #[cfg(any(target_os = "illumos", target_os = "solaris"))]
+    pub(super) const O_NOFOLLOW: i32 = 0x0002_0000;
+    #[cfg(any(target_os = "illumos", target_os = "solaris"))]
+    pub(super) const O_NONBLOCK: i32 = 0x0000_0080;
+    #[cfg(any(target_os = "illumos", target_os = "solaris"))]
+    pub(super) const ELOOP: i32 = 90;
+    #[cfg(any(target_os = "illumos", target_os = "solaris"))]
+    const _: () = assert!(O_NOFOLLOW == 0x0002_0000 && O_NONBLOCK == 0x0000_0080 && ELOOP == 90);
+
+    // Any other Unix target has unaudited values; refuse to build rather than
+    // open with another OS's flags.
+    #[cfg(not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "illumos",
+        target_os = "solaris",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "tvos",
+        target_os = "watchos",
+        target_os = "visionos",
+        target_os = "freebsd",
+        target_os = "dragonfly",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    )))]
+    compile_error!("save-file no-follow open flags are not audited for this Unix target");
 }
 
 /// Windows's `<winbase.h>` and `<winnt.h>`.

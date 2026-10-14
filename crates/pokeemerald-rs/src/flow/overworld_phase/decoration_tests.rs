@@ -9,12 +9,19 @@ use engine::event_data::EventData;
 use engine::overworld::{Direction, PlayerState};
 use platform::Buttons;
 
-// -- ON_TRANSITION decoration flags -----------------------------------------
+const BEDROOM: MapId = MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F");
 
-/// Every [`assets::object_event_flags::DECORATION_FLAGS`] id must be one
-/// [`EventData::flag_set`] accepts -- what makes
-/// [`super::connections::run_on_transition_map_script`]'s `expect` unreachable rather
-/// than a latent panic.
+const PLACEHOLDER_APPROACH: (i32, i32) = (1, 3);
+const PLACEHOLDER_TILE: (i32, i32) = (1, 2);
+
+fn bedroom_placeholder(events: &assets::MapEvents) -> &assets::ObjectEvent {
+    events
+        .object_events
+        .iter()
+        .find(|o| (i32::from(o.x), i32::from(o.y)) == PLACEHOLDER_TILE)
+        .expect("the bedroom declares a decoration placeholder at (1, 2)")
+}
+
 #[test]
 fn every_decoration_flag_id_is_settable() {
     let mut data = EventData::new();
@@ -31,17 +38,10 @@ fn every_decoration_flag_id_is_settable() {
     );
 }
 
-/// The transcribed [`super::connections::MAPS_THAT_SET_DECORATION_FLAGS`] list must be
-/// exactly the set of bundled maps that actually carry decoration
-/// placeholders -- the tripwire against the list going stale if the
-/// extraction pipeline ever bundles another bedroom or secret base.
 #[test]
 fn the_decoration_flag_map_list_covers_every_bundled_map_with_placeholders() {
-    /// The layouts `crates/xtask/src/extract/mod.rs`'s `LAYOUTS` bundles --
-    /// mirrored here as `assets::object_event_flags`'s own
-    /// `BUNDLED_LAYOUTS` mirrors it (this crate cannot depend on `xtask`;
-    /// that module's `the_bundled_layout_set_is_pinned_for_the_tables_derived_from_it`
-    /// is the tripwire for the list itself growing).
+    // Mirrors `crates/xtask/src/extract/mod.rs` `LAYOUTS` (no `xtask` dependency here);
+    // `the_bundled_layout_set_is_pinned_for_the_tables_derived_from_it` pins that list.
     const BUNDLED_LAYOUTS: [&str; 10] = [
         "LAYOUT_LITTLEROOT_TOWN",
         "LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F",
@@ -55,10 +55,6 @@ fn the_decoration_flag_map_list_covers_every_bundled_map_with_placeholders() {
         "LAYOUT_ROUTE103",
     ];
 
-    // Every map naming one of those layouts, derived rather than restated --
-    // the same derivation `assets::object_event_flags`'s own
-    // `BUNDLED_LAYOUTS`-driven test uses, so bundling a layout widens this
-    // sweep automatically instead of needing a second hand-maintained list.
     let mut bundled_maps: Vec<MapId> = assets::MapHeaderTable::new()
         .iter()
         .filter(|header| BUNDLED_LAYOUTS.contains(&header.layout.name()))
@@ -97,39 +93,22 @@ fn the_decoration_flag_map_list_covers_every_bundled_map_with_placeholders() {
     );
 }
 
-/// The finding-5 regression: on a fresh save the player's bedroom must be
-/// walkable, not fenced in by its own decoration placeholders.
-///
-/// `MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F` declares twelve
-/// `OBJ_EVENT_GFX_VAR_*` placeholders down the room's left column
-/// (`map.json:32-175`), `(1, 2)` among them. Nothing sets
-/// `FLAG_DECORATION_*` at new-game time, so once object events became solid
-/// these turned into invisible walls. Upstream hides them from the map's own
-/// `MAP_SCRIPT_ON_TRANSITION` (see
-/// [`super::connections::run_on_transition_map_script`]), which
-/// [`OverworldPhase::load_default`] now mirrors.
+/// Upstream's `MAP_SCRIPT_ON_TRANSITION` hides the twelve `OBJ_EVENT_GFX_VAR_*` slots
+/// (`data/maps/LittlerootTown_BrendansHouse_2F/scripts.inc:6-10`; slots at `map.json:32-185`).
 #[test]
 fn the_bedrooms_decoration_placeholders_do_not_block_a_fresh_save() {
-    const BEDROOM: MapId = MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F");
     let events = assets::MapEventsTable::new().resolve(BEDROOM).unwrap();
-
-    let placeholder = events
-        .object_events
-        .iter()
-        .find(|o| (o.x, o.y) == (1, 2))
-        .expect("the bedroom declares a decoration placeholder at (1, 2)");
+    let placeholder = bedroom_placeholder(events);
     assert_eq!(
         (placeholder.graphics_id, placeholder.flag),
         ("OBJ_EVENT_GFX_VAR_8", "FLAG_DECORATION_9"),
         "fixture precondition: its real map.json graphics id and flag"
     );
 
-    // A phase entering the bedroom -- the same path `load_default` takes,
-    // minus the pack.
     let phase = OverworldPhase::for_test(
         crate::overworld::test_support::synthetic_scene(10, 10),
         BEDROOM,
-        PlayerState::new((1, 3), 3, Direction::North),
+        PlayerState::new(PLACEHOLDER_APPROACH, 3, Direction::North),
         None,
     );
     assert!(
@@ -138,35 +117,23 @@ fn the_bedrooms_decoration_placeholders_do_not_block_a_fresh_save() {
          must have set it"
     );
 
-    // And the tile is genuinely walkable: step north onto it.
     let mut phase = phase;
     phase.step(held(Buttons::UP));
     assert_eq!(
         phase.player.position(),
-        (1, 2),
+        PLACEHOLDER_TILE,
         "the placeholder's tile must be walkable on a fresh save"
     );
 }
 
-/// The same map entered *without* the on-transition script would block --
-/// pinning that the test above measures the fix rather than some unrelated
-/// property of the fixture (e.g. the placeholder being unreachable anyway).
 #[test]
 fn a_decoration_placeholder_would_block_if_its_flag_were_clear() {
-    const BEDROOM: MapId = MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F");
     let events = assets::MapEventsTable::new().resolve(BEDROOM).unwrap();
-    let placeholder = events
-        .object_events
-        .iter()
-        .find(|o| (o.x, o.y) == (1, 2))
-        .expect("the bedroom declares a decoration placeholder at (1, 2)");
+    let placeholder = bedroom_placeholder(events);
 
-    // A store with the decoration flags deliberately left clear -- i.e. the
-    // pre-fix state, and also the state upstream reaches for a slot that
-    // really does hold a decoration.
-    let data = EventData::new();
+    let decoration_flags_clear = EventData::new();
     assert!(
-        engine::overworld::object_event_is_visible(placeholder, &data),
+        engine::overworld::object_event_is_visible(placeholder, &decoration_flags_clear),
         "with its flag clear the placeholder is spawned -- upstream would \
          resolve OBJ_EVENT_GFX_VAR_8 through VAR_OBJ_GFX_ID_8 and draw a real \
          decoration there"
@@ -175,11 +142,15 @@ fn a_decoration_placeholder_would_block_if_its_flag_were_clear() {
     let header = assets::MapHeaderTable::new().header(BEDROOM).unwrap();
     let scene = crate::overworld::test_support::synthetic_scene(10, 10);
     let runtime = scene.runtime(BEDROOM, header, events);
-    let mut player = PlayerState::new((1, 3), 3, Direction::North);
-    let no_connections = |_: MapId| -> Option<(u16, u16)> { None };
+    let mut player = PlayerState::new(PLACEHOLDER_APPROACH, 3, Direction::North);
     assert!(
         matches!(
-            player.step(Some(Direction::North), &runtime, &no_connections, &data),
+            player.step(
+                Some(Direction::North),
+                &runtime,
+                &no_connections,
+                &decoration_flags_clear
+            ),
             engine::overworld::StepOutcome::Blocked { .. }
         ),
         "a spawned decoration is a solid object event -- upstream never \
@@ -188,18 +159,6 @@ fn a_decoration_placeholder_would_block_if_its_flag_were_clear() {
     );
 }
 
-/// The **production** pin for the decoration-flag fix, on the acceptance
-/// path itself: [`OverworldPhase::load_default`] spawns the player into
-/// `MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F` -- the very room carrying the
-/// twelve `OBJ_EVENT_GFX_VAR_*` placeholders -- so that constructor's own
-/// `run_on_transition_map_script` call is what makes the room walkable in
-/// the real game, not just in the `for_test` fixtures above.
-///
-/// Deleting that call from `load_default` must fail *here*: the headless
-/// tests all build their phase through `for_test`, which has its own call,
-/// so none of them can catch it.
-///
-/// Real-pack, because `load_default` is the pack-loading constructor.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn load_default_hides_the_spawn_bedrooms_decoration_placeholders() {
@@ -210,7 +169,6 @@ fn load_default_hides_the_spawn_bedrooms_decoration_placeholders() {
         "fixture precondition: the spawn map is the bedroom with the placeholders"
     );
 
-    // Every flag the map's own ON_TRANSITION script sets.
     for &id in assets::object_event_flags::DECORATION_FLAGS {
         assert_eq!(
             phase.save1().event_data.flag_get(id),
@@ -219,8 +177,6 @@ fn load_default_hides_the_spawn_bedrooms_decoration_placeholders() {
         );
     }
 
-    // ...and therefore every placeholder is absent, by the engine's own
-    // visibility query rather than by restating the flag check.
     let events = assets::MapEventsTable::new()
         .resolve(new_game::SPAWN_MAP_ID)
         .unwrap();
@@ -244,41 +200,21 @@ fn load_default_hides_the_spawn_bedrooms_decoration_placeholders() {
         );
     }
 
-    // And the observable consequence: the tile a placeholder stages on is
-    // walkable. `(1, 2)` is `OBJ_EVENT_GFX_VAR_8`/`FLAG_DECORATION_9` at
-    // elevation 3, on open floor in the real layout -- so nothing but the
-    // object event could block it.
-    //
-    // Placed directly rather than walked from the spawn tile (which is the
-    // stair warp at `SPAWN_POSITION`, so stepping off it and back would
-    // leave the room): the same direct-placement shape, for the same
-    // reason, as
-    // `frame_tests::walking_downstairs_and_talking_to_mom_opens_and_closes_her_dialog`.
-    phase.player = PlayerState::new((1, 3), 3, Direction::North);
+    // Direct placement: the spawn tile is the stair warp, so walking off and back leaves the room.
+    phase.player = PlayerState::new(PLACEHOLDER_APPROACH, 3, Direction::North);
     phase.step(held(Buttons::UP));
     assert_eq!(
         phase.player.position(),
-        (1, 2),
-        "an empty decoration slot's tile must be walkable in the real room"
+        PLACEHOLDER_TILE,
+        "load_default must leave an empty decoration slot's tile walkable in the real room"
     );
 }
 
-/// The same pin for the *other* production call site,
-/// [`OverworldPhase::warp_to`] -- every subsequent entry into a bedroom,
-/// not just the first.
-///
-/// Calls `warp_to` directly rather than walking the 1F stairs: it is the
-/// production method (the one `step` invokes on a resolved warp), and
-/// driving it straight makes the assertion about the transition itself
-/// rather than about the route taken to reach it. The flags are cleared
-/// first so the assertion cannot pass on the state `load_default` already
-/// left behind.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn warping_into_a_bedroom_hides_its_decoration_placeholders() {
     let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
 
-    // Clear what `load_default` set, so only `warp_to` can restore it.
     for &id in assets::object_event_flags::DECORATION_FLAGS {
         phase.save1.event_data.flag_clear(id).unwrap();
     }
@@ -291,7 +227,6 @@ fn warping_into_a_bedroom_hides_its_decoration_placeholders() {
         "fixture precondition: the flags start clear for this transition"
     );
 
-    // Warp into the bedroom (its only warp event, id 0, is the stair tile).
     phase.warp_to(new_game::SPAWN_MAP_ID, 0);
     assert_eq!(
         phase.map_id,
@@ -307,28 +242,17 @@ fn warping_into_a_bedroom_hides_its_decoration_placeholders() {
         );
     }
 
-    // Same walkability consequence as the spawn case.
-    phase.player = PlayerState::new((1, 3), 3, Direction::North);
+    phase.player = PlayerState::new(PLACEHOLDER_APPROACH, 3, Direction::North);
     phase.step(held(Buttons::UP));
-    assert_eq!(phase.player.position(), (1, 2));
+    assert_eq!(
+        phase.player.position(),
+        PLACEHOLDER_TILE,
+        "warp_to must restore hidden decoration slots after the flags were cleared"
+    );
 }
 
-/// The reported regression on the **production** path: a fresh run spawned
-/// straight into the bedroom must not have the rival's Poké Ball staged
-/// there as an invisible collider.
-///
-/// `(3, 4)` is `OBJ_EVENT_GFX_ITEM_BALL` at elevation `0` -- the transition
-/// wildcard, so it collides with a player at *any* elevation -- on open
-/// floor in the real layout, and nothing in this port draws an item ball.
-/// Its `FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F_POKE_BALL` is set only
-/// by the male branch of the skipped truck sequence
-/// (`data/maps/InsideOfTruck/scripts.inc:31`), which
-/// [`crate::new_game::init_save_blocks`] now applies.
-///
-/// Real-pack and driven through [`OverworldPhase::load_default`] for the
-/// same reason as this module's other two production pins: the headless
-/// fixtures build their save through the same constructor, so only a test
-/// that walks the real spawn path proves the acceptance route is clear.
+/// The male truck branch hides the bedroom's Poké Ball
+/// (`data/maps/InsideOfTruck/scripts.inc:31`); `init_save_blocks` applies it.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn the_spawn_bedroom_has_no_invisible_poke_ball_collider() {
@@ -352,9 +276,6 @@ fn the_spawn_bedroom_has_no_invisible_poke_ball_collider() {
         "a fresh male save must not have the rival's Poké Ball spawned"
     );
 
-    // The observable consequence: the tile is walkable. (3, 5) and (3, 4)
-    // are both open floor in the real layout, so only the object event
-    // could have blocked it.
     phase.player = PlayerState::new((3, 5), 3, Direction::North);
     phase.step(held(Buttons::UP));
     assert_eq!(
@@ -364,23 +285,13 @@ fn the_spawn_bedroom_has_no_invisible_poke_ball_collider() {
     );
 }
 
-/// The 1F half of the same regression, on the production path: after taking
-/// the stairs, the player's own house must not contain the *rival's* family
-/// -- no duplicated mother beside the real one, and no undrawn ninja-boy
-/// blocker.
-///
-/// Both flags come from the male truck branch
-/// (`data/maps/InsideOfTruck/scripts.inc:29-30`). Walks the real 2F -> 1F
-/// stair warp rather than assigning `map_id`, so the arrival goes through
-/// [`OverworldPhase::warp_to`] exactly as play would.
+/// The male truck branch hides the rival's mother and sibling
+/// (`data/maps/InsideOfTruck/scripts.inc:29-30`).
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn taking_the_stairs_does_not_land_in_a_house_full_of_the_rivals_family() {
     let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
 
-    // Step off the spawn tile (which *is* the stair warp) and back onto it,
-    // to generate a fresh landing -- the same shape as the real-pack tests
-    // in `warp_tests`.
     walk_one_tile(&mut phase, Buttons::DOWN);
     turn_and_walk_one_tile(&mut phase, Buttons::UP);
     assert_eq!(phase.map_id, ONE_F, "the stairs must have landed on 1F");
@@ -395,20 +306,16 @@ fn taking_the_stairs_does_not_land_in_a_house_full_of_the_rivals_family() {
     };
     let data = &phase.save1().event_data;
 
-    // The player's own mother is home, exactly once.
     let mom = find("OBJ_EVENT_GFX_MOM");
     assert!(
         engine::overworld::object_event_is_visible(mom, data),
         "the player's own mother must be home"
     );
-    // The rival's mother is not -- this is the duplicated-mother bug.
     let rival_mom = find("OBJ_EVENT_GFX_WOMAN_4");
     assert!(
         !engine::overworld::object_event_is_visible(rival_mom, data),
         "the rival's mother must not be duplicated into the player's house"
     );
-    // Nor the rival's sibling, whose sprite this port cannot draw at all --
-    // so a spawned one is a pure invisible blocker.
     let sibling = find("OBJ_EVENT_GFX_NINJA_BOY");
     assert!(
         !engine::overworld::object_event_is_visible(sibling, data),
@@ -417,8 +324,6 @@ fn taking_the_stairs_does_not_land_in_a_house_full_of_the_rivals_family() {
         sibling.y
     );
 
-    // Their tiles are walkable, which is what an invisible blocker would
-    // have broken. Both sit on open floor in the real 1F layout.
     for tile in [(rival_mom.x, rival_mom.y), (sibling.x, sibling.y)] {
         let (x, y) = (i32::from(tile.0), i32::from(tile.1));
         phase.player = PlayerState::new((x, y + 1), 3, Direction::North);
