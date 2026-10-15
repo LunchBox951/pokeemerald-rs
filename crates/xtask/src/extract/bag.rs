@@ -13,7 +13,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use super::{build_image_entry, build_palette_entry, jasc_pal, png, push_raw_entry};
+use super::{build_image_entry, build_palette_entry, jasc_pal, png, push_raw_bytes};
 use super::{read_file, read_text, ExtractError};
 use pack_format::PackWriter;
 
@@ -105,15 +105,7 @@ pub(super) fn extract_bag(upstream: &Path, writer: &mut PackWriter) -> Result<()
     for source in PALETTES {
         extract_palette(&directory.join(source.pal), source, writer)?;
     }
-    let tilemap = directory.join(TILEMAP_PATH);
-    let len = read_file(&tilemap)?.len();
-    if len != TILEMAP_BYTES {
-        return Err(mismatch(
-            &tilemap,
-            format!("is {len} bytes: expected {TILEMAP_BYTES}"),
-        ));
-    }
-    push_raw_entry(&tilemap, TILEMAP_ID.to_owned(), writer)?;
+    extract_tilemap_with(&directory.join(TILEMAP_PATH), &mut read_file, writer)?;
 
     let rows = icon_rows(upstream)?;
     let images: BTreeSet<&str> = rows.iter().map(|(image, _)| image.as_str()).collect();
@@ -337,6 +329,25 @@ fn define_numbers(header: &str) -> BTreeMap<&str, usize> {
     numbers
 }
 
+/// Reads the tilemap once, so the buffer validated is the buffer queued: a
+/// second read could publish bytes that changed after the length check.
+fn extract_tilemap_with(
+    path: &Path,
+    read: &mut dyn FnMut(&Path) -> Result<Vec<u8>, ExtractError>,
+    writer: &mut PackWriter,
+) -> Result<(), ExtractError> {
+    let payload = read(path)?;
+    let len = payload.len();
+    if len != TILEMAP_BYTES {
+        return Err(mismatch(
+            path,
+            format!("is {len} bytes: expected {TILEMAP_BYTES}"),
+        ));
+    }
+    push_raw_bytes(TILEMAP_ID.to_owned(), payload, writer);
+    Ok(())
+}
+
 fn mismatch(path: &Path, detail: String) -> ExtractError {
     ExtractError::BagAssetMismatch {
         path: path.to_path_buf(),
@@ -354,8 +365,8 @@ mod tests {
 
     use super::super::{extract_to, repo_root, upstream_present};
     use super::{
-        define_numbers, extract_bag, extract_image, extract_palette, icon_rows, parse_icon_rows,
-        stem, IMAGES, PALETTES, TILEMAP_ID,
+        define_numbers, extract_bag, extract_image, extract_palette, extract_tilemap_with,
+        icon_rows, parse_icon_rows, stem, IMAGES, PALETTES, TILEMAP_ID,
     };
     use crate::extract::ExtractError;
     use pack_format::PackWriter;
@@ -395,6 +406,33 @@ const u32 gItemIconPalette_Blue[] = INCGFX_U32(\"graphics/items/icon_palettes/bl
             .chain(PALETTES.iter().map(|source| source.id))
             .chain([TILEMAP_ID])
             .collect()
+    }
+
+    #[test]
+    fn tilemap_pack_entry_holds_the_validated_bytes() {
+        let expected: Vec<u8> = (0..=u8::MAX).cycle().take(super::TILEMAP_BYTES).collect();
+        let mut reads = 0;
+        let mut read = |_: &Path| {
+            reads += 1;
+            // Any read after the first sees a different, wrong-length file.
+            Ok(if reads == 1 {
+                expected.clone()
+            } else {
+                vec![0xFF; super::TILEMAP_BYTES - 2]
+            })
+        };
+
+        let mut writer = PackWriter::new();
+        extract_tilemap_with(Path::new("menu.bin"), &mut read, &mut writer).unwrap();
+        assert_eq!(reads, 1);
+        let pack = writer.finish().unwrap();
+        let entries = pack_format::parse_directory(&pack).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].id, TILEMAP_ID);
+        assert_eq!(
+            &pack[entries[0].offset..entries[0].offset + entries[0].length],
+            expected.as_slice()
+        );
     }
 
     #[test]

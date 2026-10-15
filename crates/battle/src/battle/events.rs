@@ -331,6 +331,33 @@ pub enum BattleEvent {
         /// The move whose poison was reflected.
         move_id: MoveId,
     },
+    /// The target's [`AbilityId::STATIC`] paralysed the attacker after a
+    /// damaging contact hit (`MOVEEND_ON_DAMAGE_ABILITIES`,
+    /// `battle_script_commands.c:4280`; `ABILITY_STATIC`,
+    /// `battle_util.c:2821`-`:2835`).
+    ///
+    /// The roll is one `Random() % 3` draw taken after the target's faint
+    /// settlement, whether or not the holder survived the hit; only a zero
+    /// roll on a healthy attacker emits this event.
+    ParalyzedByStatic {
+        /// Whether the player used the contact move and so was paralysed.
+        by_player: bool,
+        /// The contact move that triggered Static.
+        move_id: MoveId,
+    },
+    /// A [`BattleEvent::ParalyzedByStatic`] attacker's own Synchronize
+    /// reflected the paralysis onto the surviving Static holder
+    /// (`MOVEEND_SYNCHRONIZE_ATTACKER`, `battle_script_commands.c:4291`-
+    /// `:4294`; `ABILITYEFFECT_ATK_SYNCHRONIZE`, `battle_util.c:2987`-`:3001`).
+    ///
+    /// This follows [`BattleEvent::ParalyzedByStatic`] and consumes no RNG.
+    ParalyzedByAttackerSynchronize {
+        /// Whether the player used the contact move; the opposing Static
+        /// holder is the battler paralysed.
+        by_player: bool,
+        /// The contact move that triggered Static.
+        move_id: MoveId,
+    },
     /// A poison reflection's original attacker was protected by its own
     /// [`AbilityId::IMMUNITY`] (`BattleScript_PSNPrevention`,
     /// `battle_script_commands.c:2300`-`:2319`).

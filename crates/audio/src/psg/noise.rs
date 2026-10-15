@@ -1,6 +1,8 @@
-use super::common::{phase_delta, PHASE_ONE};
+use crate::pitch::MIXER_RATE;
 
-const NOISE_CLOCK_HZ: f64 = 524_288.0;
+/// The 524_288 Hz noise base clock, counted in whole ticks per output sample so
+/// every completed LFSR period survives slow rates (`mgba/src/gb/audio.c:602-644`).
+const TICKS_PER_SAMPLE: u64 = 524_288;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LfsrWidth {
@@ -23,7 +25,7 @@ impl LfsrWidth {
 
 #[derive(Clone, Copy, Debug)]
 struct NoiseControl {
-    step_delta: u32,
+    period: u64,
     width: LfsrWidth,
 }
 
@@ -35,19 +37,19 @@ impl NoiseControl {
     fn from_byte(byte: u8) -> Self {
         let clock_shift = byte >> Self::CLOCK_SHIFT;
         let divisor_code = byte & Self::DIVISOR_MASK;
-        let divisor = if divisor_code == 0 {
-            0.5
+        // Divisor 0 is 0.5, so `2 * divisor` is 1 there and 2n otherwise.
+        let divisor_ticks = u64::from(if divisor_code == 0 {
+            1
         } else {
-            f64::from(divisor_code)
-        };
-        let hz = NOISE_CLOCK_HZ / divisor / f64::from(1u32 << (clock_shift + 1));
+            2 * u32::from(divisor_code)
+        }) << clock_shift;
         let width = if byte & Self::WIDTH_BIT == 0 {
             LfsrWidth::FifteenBit
         } else {
             LfsrWidth::SevenBit
         };
         Self {
-            step_delta: phase_delta(hz, 1.0),
+            period: divisor_ticks * u64::from(MIXER_RATE),
             width,
         }
     }
@@ -63,10 +65,10 @@ impl NoiseControl {
 pub struct NoiseChannel {
     lfsr: u16,
     width: LfsrWidth,
-    /// Elapsed time encoded at `step_delta`; after a retune it can hold whole
-    /// periods owed to the next clock-enabled sample.
-    phase: u64,
-    step_delta: u32,
+    /// Elapsed base ticks (scaled by `MIXER_RATE`); after a retune it can
+    /// hold whole periods owed to the next clock-enabled sample.
+    elapsed: u64,
+    period: u64,
     output: i8,
     level: u8,
     /// The volume the latch was last resolved against: the render path's
@@ -83,8 +85,8 @@ impl NoiseChannel {
         Self {
             lfsr: 0,
             width: control.width,
-            phase: 0,
-            step_delta: control.step_delta,
+            elapsed: 0,
+            period: control.period,
             output: -1,
             level: 0,
             centre: 0,
@@ -104,11 +106,9 @@ impl NoiseChannel {
     /// clock-enabled sample, or a trigger first ([`Self::settle_owed_clocks`]),
     /// clocks them, so the retune itself leaves the latch untouched.
     pub fn retune(&mut self, byte: u8) {
-        let step_delta = NoiseControl::from_byte(byte).step_delta;
-        self.phase = (self.phase * u64::from(step_delta))
-            .checked_div(u64::from(self.step_delta))
-            .unwrap_or(0);
-        self.step_delta = step_delta;
+        // Elapsed time is kept exactly; only the period changes, which is the
+        // old-to-new rate-ratio rescaling of the normalised phase.
+        self.period = NoiseControl::from_byte(byte).period;
     }
 
     /// Clocks the whole periods a retune left owed, at hardware `volume`.
@@ -122,8 +122,8 @@ impl NoiseChannel {
         if !self.clocking {
             return;
         }
-        while self.phase >= u64::from(PHASE_ONE) {
-            self.phase -= u64::from(PHASE_ONE);
+        while self.elapsed >= self.period {
+            self.elapsed -= self.period;
             self.shift_lfsr(volume);
         }
     }
@@ -131,7 +131,7 @@ impl NoiseChannel {
     /// Resets the LFSR and clock phase, exactly as at note-on
     /// (`mgba/src/gb/audio.c:374,381-382`). The output latch is untouched.
     pub fn retrigger(&mut self) {
-        self.phase = 0;
+        self.elapsed = 0;
         self.lfsr = 0;
     }
 
@@ -231,9 +231,9 @@ impl NoiseChannel {
         if !self.clocking {
             return self.level;
         }
-        self.phase += u64::from(self.step_delta);
-        while self.phase >= u64::from(PHASE_ONE) {
-            self.phase -= u64::from(PHASE_ONE);
+        self.elapsed += TICKS_PER_SAMPLE;
+        while self.elapsed >= self.period {
+            self.elapsed -= self.period;
             self.shift_lfsr(volume);
         }
         self.level
@@ -255,7 +255,7 @@ mod tests {
     const SEVEN_BIT_LFSR_PERIOD: usize = 127;
 
     fn lfsr_repeats_within(mut noise: NoiseChannel, steps: usize) -> bool {
-        noise.step_delta = PHASE_ONE;
+        noise.period = TICKS_PER_SAMPLE;
         noise.sample();
         let initial_state = noise.lfsr;
         (0..steps).any(|_| {
@@ -269,14 +269,14 @@ mod tests {
         // `mgba/src/gb/audio.c:354-358,602-607,630-644`: `lastEvent` survives
         // an `NR43` write, so elapsed time (not a period fraction) carries over.
         for (old, new, samples, old_phase, scaled_phase, next_clock, final_phase) in [
-            (0x65, 0x75, 26, 38_776, 19_388, 24, 1_996),
-            (0x75, 0x65, 43, 20_722, 41_444, 7, 3_992),
+            (0x65, 0x75, 26, 5_068_928, 5_068_928, 23, 2_432),
+            (0x75, 0x65, 43, 5_419_264, 5_419_264, 6, 2_432),
         ] {
             let mut noise = NoiseChannel::from_control_byte(old);
             for _ in 0..samples {
                 noise.clock_sample(11);
             }
-            assert_eq!((noise.lfsr(), noise.phase), (0x4000, old_phase));
+            assert_eq!((noise.lfsr(), noise.elapsed), (0x4000, old_phase));
             let held = (
                 noise.lfsr,
                 noise.width,
@@ -287,7 +287,7 @@ mod tests {
             );
 
             noise.retune(new);
-            assert_eq!(noise.phase, scaled_phase);
+            assert_eq!(noise.elapsed, scaled_phase);
             assert_eq!(
                 (
                     noise.lfsr,
@@ -304,7 +304,7 @@ mod tests {
                 assert_eq!(noise.lfsr(), 0x4000);
             }
             assert_eq!(noise.clock_sample(7), 7);
-            assert_eq!((noise.lfsr(), noise.phase), (0x6000, final_phase));
+            assert_eq!((noise.lfsr(), noise.elapsed), (0x6000, final_phase));
         }
     }
 
@@ -314,17 +314,58 @@ mod tests {
         for _ in 0..30 {
             noise.clock_sample(11);
         }
-        assert_eq!((noise.lfsr(), noise.phase), (0, 60_180));
+        assert_eq!((noise.lfsr(), noise.elapsed), (0, 15_728_640));
         noise.retune(0x5D);
-        assert_eq!(noise.phase, 240_750);
+        assert_eq!(noise.elapsed, 15_728_640);
         assert_eq!(noise.width, LfsrWidth::FifteenBit);
 
         noise.clocking = false;
         noise.clock_sample(0);
-        assert_eq!((noise.lfsr(), noise.phase), (0, 240_750));
+        assert_eq!((noise.lfsr(), noise.elapsed), (0, 15_728_640));
         noise.clocking = true;
         assert_eq!(noise.clock_sample(7), 7);
-        assert_eq!((noise.lfsr(), noise.phase), (0x7000, 52_167));
+        assert_eq!((noise.lfsr(), noise.elapsed), (0x7000, 3_409_088));
+    }
+
+    #[test]
+    fn noise_settle_clocks_owed_periods_before_a_trigger() {
+        let mut noise = NoiseChannel::from_control_byte(0x75);
+        for _ in 0..30 {
+            noise.clock_sample(11);
+        }
+        noise.retune(0x5D);
+        noise.settle_owed_clocks(11);
+        assert_eq!((noise.lfsr(), noise.elapsed), (0x7000, 2_884_800));
+        assert_eq!(noise.level(), 11);
+        noise.retrigger();
+        assert_eq!((noise.lfsr(), noise.elapsed, noise.level()), (0, 0, 11));
+    }
+
+    #[test]
+    fn slow_noise_first_clock_matches_the_hardware_period() {
+        // NR43 0xD7 (`pokeemerald/src/m4a_tables.c:149-152`) clocks every
+        // 93_653 / 32 samples; the first clock lands on sample 2927.
+        let mut noise = NoiseChannel::from_control_byte(0xD7);
+        for _ in 0..2_926 {
+            noise.clock_sample(11);
+            assert_eq!(noise.lfsr(), 0);
+        }
+        assert_eq!(noise.clock_sample(11), 11);
+        assert_eq!(noise.lfsr(), 0x4000);
+    }
+
+    #[test]
+    fn slow_noise_keeps_fractional_clock_time() {
+        for seconds in [7, 8] {
+            let mut noise = NoiseChannel::from_control_byte(0xD7);
+            let mut clocks = 0;
+            for _ in 0..crate::pitch::MIXER_RATE * seconds {
+                let before = noise.lfsr();
+                noise.clock_sample(11);
+                clocks += u32::from(noise.lfsr() != before);
+            }
+            assert_eq!(clocks, 32 * seconds / 7);
+        }
     }
 
     #[test]
@@ -340,12 +381,12 @@ mod tests {
     fn noise_construction_does_not_clock_before_a_full_period() {
         for (byte, first_lfsr) in [(0, 0x4000), (NoiseControl::WIDTH_BIT, 0x4040)] {
             let mut noise = NoiseChannel::from_control_byte(byte);
-            assert_eq!((noise.lfsr(), noise.phase, noise.output), (0, 0, -1));
-            noise.step_delta = PHASE_ONE / 2;
+            assert_eq!((noise.lfsr(), noise.elapsed, noise.output), (0, 0, -1));
+            noise.period = TICKS_PER_SAMPLE * 2;
             assert_eq!(noise.sample(), -1);
             assert_eq!(noise.lfsr(), 0);
             assert_eq!(noise.sample(), 1);
-            assert_eq!((noise.lfsr(), noise.phase), (first_lfsr, 0));
+            assert_eq!((noise.lfsr(), noise.elapsed), (first_lfsr, 0));
         }
     }
 
@@ -431,16 +472,16 @@ mod tests {
         for byte in [0, NoiseControl::WIDTH_BIT] {
             for latch in [-1i8, 1] {
                 let mut noise = NoiseChannel::from_control_byte(byte);
-                noise.step_delta = PHASE_ONE * 3 / 4;
-                while noise.lfsr() == 0 || noise.output != latch || noise.phase == 0 {
+                noise.period = TICKS_PER_SAMPLE * 4 / 3;
+                while noise.lfsr() == 0 || noise.output != latch || noise.elapsed == 0 {
                     noise.sample();
                 }
-                let (width, delta) = (noise.width, noise.step_delta);
+                let (width, period) = (noise.width, noise.period);
                 noise.retrigger();
-                assert_eq!((noise.lfsr(), noise.phase), (0, 0));
+                assert_eq!((noise.lfsr(), noise.elapsed), (0, 0));
                 assert_eq!(
-                    (noise.width, noise.step_delta, noise.output),
-                    (width, delta, latch)
+                    (noise.width, noise.period, noise.output),
+                    (width, period, latch)
                 );
                 assert_eq!(noise.sample(), latch);
                 assert_eq!(noise.lfsr(), 0);
@@ -454,8 +495,8 @@ mod tests {
     fn noise_channel_is_deterministic() {
         let mut a = NoiseChannel::from_control_byte(0x25);
         let mut b = NoiseChannel::from_control_byte(0x25);
-        a.step_delta = PHASE_ONE;
-        b.step_delta = PHASE_ONE;
+        a.period = TICKS_PER_SAMPLE;
+        b.period = TICKS_PER_SAMPLE;
         let seq_a: Vec<i8> = (0..32).map(|_| a.sample()).collect();
         let seq_b: Vec<i8> = (0..32).map(|_| b.sample()).collect();
         assert_eq!(seq_a, seq_b);
