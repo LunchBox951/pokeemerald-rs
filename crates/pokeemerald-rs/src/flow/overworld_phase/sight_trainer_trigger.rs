@@ -435,7 +435,7 @@ impl OverworldPhase {
     ///   guard this module wrote: the geometry, the defeated-flag gating,
     ///   the eligibility table and now the approach are all real and
     ///   exercised against genuine Route 103 data; only the last step fails,
-    ///   for all nine, and this module's own
+    ///   for all but Andrew, and this module's own
     ///   `every_sight_trainers_real_party_fails_to_construct_for_exactly_these_reasons`
     ///   pins each trainer's exact refusal -- offending move id included --
     ///   so a future move-coverage slice is forced to update it rather than
@@ -830,43 +830,34 @@ mod tests {
         // move in that trainer's own level-up-derived moveset that some
         // screen refuses.
         //
-        // Stun Spore, Thunder Wave, Supersonic, Focus Energy, Screech, Defense
-        // Curl, and Supersonic are all executable, so those parties get past
+        // Screech and Defense Curl are executable, so those parties get past
         // `ensure_executable` and stop at
         // `battle::battle::trainer_ai::ensure_scoreable` instead -- the
-        // trainer AI cannot yet score any of those effects. Absorb, Splash,
-        // Charge, and Poison Sting are now scoreable (the audited
-        // `CheckBadMove` no-`if_effect` rows), so Daisy, Andrew, Marcos, and
-        // Pete stop at their next unscoreable move. Both screens run before
-        // the first draw, so the per-frame cone check stays draw-free.
+        // trainer AI cannot yet score those effects. Stun Spore, Thunder
+        // Wave, Supersonic, and Focus Energy are now scoreable (the
+        // `CheckBadMove` Paralyze, Confuse, and Focus Energy handlers), as
+        // are Absorb, Splash, Charge, and Poison Sting, so those parties stop
+        // at their next refused move. Andrew's whole party now constructs
+        // (`andrews_real_party_constructs_and_plays_to_a_win`). Both screens
+        // run before the first draw, so the per-frame cone check stays
+        // draw-free.
         let expected = [
             (
                 "Daisy",
                 TrainerId(36),
-                Battle(BattleError::UnscoreableMoveEffect(
-                    assets::MoveId::STUN_SPORE,
-                )),
+                Battle(BattleError::NonDamagingMove(assets::MoveId::LEECH_SEED)),
             ),
             (
                 "Amy & Liv",
                 TrainerId(481),
-                Battle(BattleError::UnscoreableMoveEffect(
-                    assets::MoveId::THUNDER_WAVE,
-                )),
-            ),
-            (
-                "Andrew",
-                TrainerId(336),
-                Battle(BattleError::UnscoreableMoveEffect(
-                    assets::MoveId::SUPERSONIC,
-                )),
+                Battle(BattleError::NonDamagingMove(assets::MoveId::HELPING_HAND)),
             ),
             ("Miguel", TrainerId(293), HeldItemParty(TrainerId(293))),
             (
                 "Rhett",
                 TrainerId(703),
                 Battle(BattleError::UnscoreableMoveEffect(
-                    assets::MoveId::FOCUS_ENERGY,
+                    assets::MoveId::SAND_ATTACK,
                 )),
             ),
             (
@@ -884,16 +875,19 @@ mod tests {
             (
                 "Pete",
                 TrainerId(735),
-                Battle(BattleError::UnscoreableMoveEffect(
-                    assets::MoveId::SUPERSONIC,
+                Battle(BattleError::UnsupportedMoveEffect(
+                    assets::MoveId::CONSTRICT,
                 )),
             ),
         ];
 
         let distinct: std::collections::HashSet<u16> =
             SIGHT_TRAINERS.iter().map(|entry| entry.id.0).collect();
-        let covered: std::collections::HashSet<u16> =
-            expected.iter().map(|(_, id, _)| id.0).collect();
+        let covered: std::collections::HashSet<u16> = expected
+            .iter()
+            .map(|(_, id, _)| id.0)
+            .chain([ANDREW.0])
+            .collect();
         assert_eq!(
             distinct, covered,
             "this table must cover exactly SIGHT_TRAINERS' distinct ids"
@@ -925,5 +919,42 @@ mod tests {
                 "{name} -> {id:?}: a refused construction must draw nothing at all"
             );
         }
+    }
+
+    const ANDREW: TrainerId = TrainerId(336);
+
+    /// Andrew (`CheckBadMove` only) has Supersonic on his Tentacool, which
+    /// the Confuse handler now scores, so his party constructs and plays out.
+    #[test]
+    fn andrews_real_party_constructs_and_plays_to_a_win() {
+        let lead = battle::BattlePokemon::new(
+            &battle::Dex::new(),
+            assets::SpeciesId(277), // SPECIES_TREECKO
+            50,
+            battle::fixed_ivs(31),
+            0,
+            vec![assets::MoveId::SLASH],
+        )
+        .expect("Treecko/Slash is a valid pairing");
+        let mut rng = engine::rng::Rng::new(1);
+        let mut slot = Some(
+            npc_trainer_battle::start_npc_trainer_battle(lead, ANDREW, &mut rng)
+                .expect("Andrew's party must construct"),
+        );
+        let mut written_back = None;
+        let mut money = 0;
+        let mut outcome = None;
+        for _turn in 0..64 {
+            outcome = npc_trainer_battle::advance_npc_trainer_battle(
+                &mut slot,
+                &mut written_back,
+                &mut money,
+                &mut rng,
+            );
+            if outcome.is_some() {
+                break;
+            }
+        }
+        assert_eq!(outcome, Some(battle::BattleOutcome::PlayerWon));
     }
 }

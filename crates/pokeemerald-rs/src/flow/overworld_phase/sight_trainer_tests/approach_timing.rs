@@ -471,8 +471,8 @@ fn a_run_caught_by_a_cone_stands_once_the_lock_sees_it_settle() {
 /// `AnimateSprites` afterwards (`:1469`, `main.c:188-195`), so skipping that
 /// frame's tick stalls the walk animation by exactly one frame (PR #407
 /// review). That call site itself cannot be driven from a test today -- no
-/// real Route 103 sight trainer's party constructs, so `step` never reaches
-/// its `ApproachStarted` arm at all
+/// fixture here drives a refused sight trainer's party to construction, so
+/// `step` never reaches its `ApproachStarted` arm for them
 /// (`sight_trainer_trigger::tests::every_sight_trainers_real_party_fails_to_construct_for_exactly_these_reasons`)
 /// -- so the method both frames now share is what gets pinned.
 #[test]
