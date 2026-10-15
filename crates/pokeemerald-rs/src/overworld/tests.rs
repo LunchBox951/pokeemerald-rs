@@ -153,7 +153,7 @@ fn with_palette_at(
         .flat_map(|i| (0x8000 | (i + 1)).to_le_bytes())
         .collect();
     let bytes = write_synthetic_pack(vec![Entry {
-        id: "p",
+        id: "p".into(),
         kind_tag: PALETTE_KIND_TAG,
         meta: color_count.to_le_bytes().to_vec(),
         payload,
@@ -477,13 +477,13 @@ fn hblank_budget_regression_fixture() -> (
     // target sheet is opaque (index 3) so its admission is the only thing
     // that can color its screen position.
     pack_entries.push(Entry {
-        id: "sprite/mom",
+        id: "sprite/mom".into(),
         kind_tag: 0,
         meta: image_meta(144, 32, 8),
         payload: vec![0u8; 144 * 32],
     });
     pack_entries.push(Entry {
-        id: "sprite/twin",
+        id: "sprite/twin".into(),
         kind_tag: 0,
         meta: image_meta(144, 32, 8),
         payload: vec![3u8; 144 * 32],
@@ -779,7 +779,7 @@ fn connected_overworld_pack_entries(width: u16, height: u16) -> Vec<Entry> {
         .flatten()
         .collect();
     entries.push(Entry {
-        id: "layout/littleroot_town_mays_house_1f/map",
+        id: "layout/littleroot_town_mays_house_1f/map".into(),
         kind_tag: 2,
         meta: vec![],
         payload: target_grid,
@@ -2133,7 +2133,7 @@ fn equal_priority_overlap_orders_the_player_and_npc_by_screen_depth() {
     {
         let mut pack_entries = synthetic_overworld_pack_entries_for("general", 4, 4);
         pack_entries.push(Entry {
-            id: "sprite/twin",
+            id: "sprite/twin".into(),
             kind_tag: 0,
             meta: image_meta(144, 32, 8),
             payload: vec![3u8; 144 * 32],
