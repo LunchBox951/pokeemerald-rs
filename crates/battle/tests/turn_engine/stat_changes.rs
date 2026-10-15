@@ -346,3 +346,70 @@ fn a_fainting_battler_drops_its_accumulated_stages() {
     assert_eq!(battle.enemy().volatiles(), Volatiles::default());
     assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerWon));
 }
+
+/// Deoxys (410) reads Emerald's Speed Forme base stats outside link battles
+/// (`GetDeoxysStat`, `pokemon.c:3660-3684`).
+#[test]
+fn deoxys_speed_forme_attack_and_defense_drive_both_directions_of_damage() {
+    let dex = Dex::new();
+    let deoxys = max_iv_mon(&dex, 410, 50, vec![MoveId::TACKLE]);
+    let jolteon = max_iv_mon(&dex, 135, 60, vec![MoveId::TACKLE]);
+    let mut rng = SequenceRng::new([
+        0, // battle start
+        0, 0, // turn number, enemy pick
+        0, 1, 0, 0, // Deoxys's Tackle (no crit)
+        0, 1, 0, 0, // Jolteon's Tackle (no crit)
+    ]);
+    let mut battle = Battle::new(dex, deoxys, jolteon, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    let damage_by = |by_player: bool| {
+        events
+            .iter()
+            .find_map(|event| match event {
+                BattleEvent::Hit {
+                    by_player: who,
+                    damage,
+                    ..
+                } if *who == by_player => Some(*damage),
+                _ => None,
+            })
+            .expect("both Tackles land")
+    };
+    // Speed Forme Attack 115 against Jolteon's Defense 95 deals 20 (Normal
+    // Forme Attack 170 would deal 29); Jolteon's Attack 101 against Speed
+    // Forme Defense 110 deals 18 (Normal Forme Defense 70 would deal 28).
+    assert_eq!(battle.player().stats().attack, 115);
+    assert_eq!(battle.player().stats().defense, 110);
+    assert_eq!(damage_by(true), 20);
+    assert_eq!(damage_by(false), 18);
+}
+
+#[test]
+fn deoxys_speed_forme_speed_outruns_a_target_the_normal_forme_would_lose_to() {
+    let dex = Dex::new();
+    // Level-50 Deoxys: Speed Forme 200, Normal Forme 170. Level-60 Jolteon
+    // sits between at 179, so only the corrected Speed moves Deoxys first.
+    let deoxys = max_iv_mon(&dex, 410, 50, vec![MoveId::TACKLE]);
+    let jolteon = max_iv_mon(&dex, 135, 60, vec![MoveId::TACKLE]);
+    assert_eq!(deoxys.stats().speed, 200);
+    assert_eq!(jolteon.stats().speed, 179);
+    let mut rng = SequenceRng::new(vec![0; 64]);
+    let mut battle = Battle::new(dex, deoxys, jolteon, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    assert!(
+        matches!(
+            events.first(),
+            Some(BattleEvent::Hit {
+                by_player: true,
+                ..
+            })
+        ),
+        "Deoxys moves first: {events:?}"
+    );
+}

@@ -587,3 +587,51 @@ fn ivs_validate_zero_through_max_iv() {
     }
     .is_valid());
 }
+
+const SPECIES_DEOXYS: SpeciesId = SpeciesId(410);
+
+#[test]
+fn deoxys_is_built_from_emeralds_speed_forme_base_stats_with_the_dex_row_left_raw() {
+    let dex = Dex::new();
+    let mon = BattlePokemon::new(&dex, SPECIES_DEOXYS, 50, MAX_IVS, 0, vec![SCRATCH])
+        .expect("Deoxys at level 50 with Scratch is representable");
+    let stats = mon.stats();
+    // Level 50, IV 31, zero EVs, neutral nature, against Speed Forme base
+    // 50/95/90/180/95/90 (upstream `GetDeoxysStat`, `pokemon.c:3660-3684`).
+    assert_eq!(stats.max_hp, 125);
+    assert_eq!(stats.attack, 115);
+    assert_eq!(stats.defense, 110);
+    assert_eq!(stats.speed, 200);
+    assert_eq!(stats.sp_attack, 115);
+    assert_eq!(stats.sp_defense, 110);
+    let row = dex.species(SPECIES_DEOXYS).unwrap();
+    assert_eq!(
+        (
+            row.attack,
+            row.defense,
+            row.speed,
+            row.sp_attack,
+            row.sp_defense
+        ),
+        (150, 50, 150, 150, 50),
+        "the dex row keeps the raw Normal Forme data"
+    );
+}
+
+#[test]
+fn deoxys_keeps_speed_forme_stats_across_a_level_up() {
+    let dex = Dex::new();
+    let mut mon = BattlePokemon::new(&dex, SPECIES_DEOXYS, 50, MAX_IVS, 0, vec![SCRATCH])
+        .expect("Deoxys at level 50 with Scratch is representable");
+    let growth_rate = dex.species(SPECIES_DEOXYS).unwrap().growth_rate;
+    mon.reconcile_saved_experience(assets::experience_for_level(growth_rate, 55).unwrap());
+
+    assert_eq!(mon.level(), 55, "fixture sanity: the level moved");
+    let stats = mon.stats();
+    assert_eq!(stats.max_hp, 137);
+    assert_eq!(stats.attack, 126);
+    assert_eq!(stats.defense, 121);
+    assert_eq!(stats.speed, 220);
+    assert_eq!(stats.sp_attack, 126);
+    assert_eq!(stats.sp_defense, 121);
+}

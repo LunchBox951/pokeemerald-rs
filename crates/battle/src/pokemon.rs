@@ -213,6 +213,32 @@ fn calc_max_hp(
     scaled_stat + u32::from(level) + HP_STAT_OFFSET
 }
 
+/// Emerald's Speed Forme base stats, applied to Deoxys outside link battles.
+const DEOXYS_SPEED_FORME_ATTACK: u8 = 95;
+const DEOXYS_SPEED_FORME_DEFENSE: u8 = 90;
+const DEOXYS_SPEED_FORME_SPEED: u8 = 180;
+const DEOXYS_SPEED_FORME_SP_ATTACK: u8 = 95;
+const DEOXYS_SPEED_FORME_SP_DEFENSE: u8 = 90;
+
+/// Base stats a single-player battle reads for `species`.
+///
+/// Upstream `GetDeoxysStat` replaces Deoxys's five non-HP base stats with the
+/// Speed Forme values outside link battles (`pokemon.c:2698-2712`); the dex row
+/// and the save-time `CalculateMonStats` cache stay on the raw Normal Forme data.
+fn effective_battle_base_stats(species: SpeciesId, base: &BaseStats) -> BaseStats {
+    if species != SpeciesId::DEOXYS {
+        return *base;
+    }
+    BaseStats {
+        attack: DEOXYS_SPEED_FORME_ATTACK,
+        defense: DEOXYS_SPEED_FORME_DEFENSE,
+        speed: DEOXYS_SPEED_FORME_SPEED,
+        sp_attack: DEOXYS_SPEED_FORME_SP_ATTACK,
+        sp_defense: DEOXYS_SPEED_FORME_SP_DEFENSE,
+        ..*base
+    }
+}
+
 /// Computes battle stats with zero EVs.
 #[must_use]
 pub fn compute_stats(
@@ -449,7 +475,13 @@ impl BattlePokemon {
         let base = dex.species(species)?;
         let experience = experience_for_level(base.growth_rate, level)
             .map_err(|_| BattleError::InvalidLevel(level))?;
-        let stats = compute_stats(species, base, level, nature, ivs);
+        let stats = compute_stats(
+            species,
+            &effective_battle_base_stats(species, base),
+            level,
+            nature,
+            ivs,
+        );
         let mut slots = Vec::with_capacity(moves.len());
         for move_id in moves {
             let pp = dex.move_data(move_id)?.pp;
@@ -806,7 +838,7 @@ impl BattlePokemon {
         self.level = new_level;
         self.stats = compute_stats(
             self.species,
-            &self.base_stats,
+            &effective_battle_base_stats(self.species, &self.base_stats),
             self.level,
             self.nature,
             self.ivs,
