@@ -153,6 +153,7 @@ fn every_no_row_effect_is_unchanged_after_a_passing_prologue() {
         MoveId::DRAGON_RAGE,
         MoveId::SLASH,
         MoveId::MUD_SHOT,
+        MoveId::CONFUSION,
         MoveId::VITAL_THROW,
         MoveId::SPLASH,
         MoveId::QUICK_ATTACK,
@@ -168,8 +169,9 @@ fn every_no_row_effect_is_unchanged_after_a_passing_prologue() {
 #[test]
 fn the_audited_row_set_is_exact() {
     // ABSORB, POISON_HIT, ALWAYS_HIT, MULTI_HIT, DRAGON_RAGE, HIGH_CRITICAL,
-    // SPEED_DOWN_HIT, EVASION_DOWN_HIT, VITAL_THROW, SPLASH, QUICK_ATTACK, CHARGE.
-    let effects = [3, 2, 17, 29, 41, 43, 70, 74, 78, 85, 103, 174].map(MoveEffect);
+    // SPEED_DOWN_HIT, EVASION_DOWN_HIT, CONFUSE_HIT, VITAL_THROW, SPLASH,
+    // QUICK_ATTACK, CHARGE.
+    let effects = [3, 2, 17, 29, 41, 43, 70, 74, 76, 78, 85, 103, 174].map(MoveEffect);
     let raw: Vec<u8> = effects.iter().map(|effect| effect.0).collect();
     let mut expected = UNCHANGED_AFTER_PROLOGUE_EFFECTS.to_vec();
     expected.sort_unstable();
@@ -273,6 +275,35 @@ fn chooser_refuses_an_unported_branch_before_any_draw() {
         Err(BattleError::UnscoreableMoveEffect(MoveId::SLASH))
     );
     assert_eq!(rng.draws(), 0);
+}
+
+#[test]
+fn confuse_hit_keeps_the_bad_move_score_and_draw_budget() {
+    let dex = Dex::new();
+    let target = mon(MUDKIP, &[MoveId::POUND]);
+    let all_scripts = AiFlags::CHECK_BAD_MOVE
+        .union(AiFlags::TRY_TO_FAINT)
+        .union(AiFlags::CHECK_VIABILITY)
+        .union(AiFlags::SETUP_FIRST_TURN);
+    for move_id in [
+        MoveId::CONFUSION,
+        MoveId::PSYBEAM,
+        MoveId::DIZZY_PUNCH,
+        MoveId::DYNAMIC_PUNCH,
+        MoveId::SIGNAL_BEAM,
+        MoveId::WATER_PULSE,
+    ] {
+        assert_eq!(dex.move_data(move_id).unwrap().effect, MoveEffect(76));
+        assert_eq!(bad_move_score(move_id, &target), FULL, "{move_id:?}");
+        let enemy = mon(TREECKO, &[move_id]);
+        for flags in [AiFlags::CHECK_BAD_MOVE, all_scripts] {
+            assert_eq!(ensure_scoreable(&dex, move_id, flags), Ok(()));
+            let mut rng = SequenceRng::new([MAX_DAMAGE_DRAW, 0, 0, 0, 1]);
+            let action = choose_trainer_action(&dex, &enemy, &target, flags, 0, &mut rng).unwrap();
+            assert_eq!(action, EnemyAction::Move(0));
+            assert_eq!(rng.draws(), MAX_MON_MOVES + 1);
+        }
+    }
 }
 
 #[test]
