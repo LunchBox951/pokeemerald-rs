@@ -160,6 +160,147 @@ fn crossing_onto_a_forced_landing_tile_arms_the_guards_through_this_lane() {
     }
 }
 
+const ROUTE_101: MapId = MapId("MAP_ROUTE101");
+const OLDALE_TOWN: MapId = MapId("MAP_OLDALE_TOWN");
+/// Oldale's south-edge column the crossing lands on, clear of its coord events
+/// (x 8-10) and its hidden rival object (x 11).
+const LANDING_X: i32 = 13;
+/// Oldale's own object-event sheets, so the destination room loads.
+const OLDALE_SPRITES: [&str; 3] = ["girl_3", "mart_employee", "maniac"];
+/// Route 101's own object-event sheets, so a crossing back can load it.
+const ROUTE_101_SPRITES: [&str; 5] = [
+    "youngster",
+    "prof_birch",
+    "birchs_bag",
+    "zigzagoon_1",
+    "boy_2",
+];
+
+/// A phase standing at rest on Route 101's north edge, facing Oldale Town,
+/// whose pack carries `behavior` on Oldale's landing tile. Returns the pack's
+/// path for removal.
+fn route101_phase_facing_a_forced_oldale_landing(
+    behavior: u8,
+) -> (OverworldPhase, std::path::PathBuf) {
+    use crate::pack_source::PackSource;
+
+    let path = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-forced-landing-{behavior}-{}-{:?}.pack",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let sprites: Vec<&str> = OLDALE_SPRITES
+        .iter()
+        .chain(&ROUTE_101_SPRITES)
+        .copied()
+        .collect();
+    crate::overworld::test_support::write_route101_oldale_layout_pack(
+        &path,
+        &[((13, 19), behavior)],
+        &sprites,
+    );
+    let leaked: &'static std::path::Path = Box::leak(path.clone().into_boxed_path());
+    let mut phase = OverworldPhase::for_test(
+        crate::overworld::test_support::synthetic_scene(20, 20),
+        ROUTE_101,
+        PlayerState::new((LANDING_X, 0), 3, Direction::North),
+        None,
+    );
+    phase.pack_source = PackSource::Test(leaked);
+    (phase, path)
+}
+
+/// Crosses north into Oldale through [`OverworldPhase::step`], so the
+/// production [`OverworldPhase::cross_connection`] rebinds the scene, then
+/// drains the crossing walk.
+fn cross_into_oldale_and_drain(phase: &mut OverworldPhase) {
+    phase.step(held(Buttons::UP));
+    assert_eq!(phase.map_id, OLDALE_TOWN, "the crossing must rebind");
+    assert_eq!(phase.player.position(), (LANDING_X, 19));
+    assert!(
+        phase.player.forced_movement_armed(),
+        "the movement guard must arm from the entered map's landing behavior"
+    );
+    assert!(phase.player.field_input_suppressed());
+    for _ in 1..WALK_FRAMES_PER_TILE {
+        phase.step(ButtonState::new());
+    }
+    assert!(
+        !phase.player.in_transit(),
+        "setup: the crossing step drained"
+    );
+}
+
+/// The same landing as
+/// `crossing_onto_a_forced_landing_tile_arms_the_guards_through_this_lane`, but
+/// crossed and stepped through [`OverworldPhase::step`] over a pack-loaded
+/// destination: once [`OverworldPhase::cross_connection`] binds Oldale, its
+/// own landing tile forces the next step whatever the keypad holds, a
+/// northward current in six frames and ice in eight
+/// (`field_player_avatar.c:473-524`, `event_object_movement.c:8233-8298`).
+#[test]
+fn a_rebound_connection_landing_forces_the_next_phase_step_at_its_cadence() {
+    use engine::overworld::metatile_behavior::{MB_ICE, MB_NORTHWARD_CURRENT};
+    for (behavior, frames) in [(MB_NORTHWARD_CURRENT, 6), (MB_ICE, 8)] {
+        for buttons in [ButtonState::new(), held(Buttons::DOWN)] {
+            let (mut phase, path) = route101_phase_facing_a_forced_oldale_landing(behavior);
+            cross_into_oldale_and_drain(&mut phase);
+
+            phase.step(buttons);
+            assert_eq!(phase.map_id, OLDALE_TOWN);
+            assert_eq!(
+                phase.player.position(),
+                (LANDING_X, 18),
+                "behavior {behavior} must push north off the rebound landing"
+            );
+            assert_eq!(phase.player.step_progress(), 1, "behavior {behavior}");
+            for expected in 2..frames {
+                phase.step(buttons);
+                assert_eq!(
+                    phase.player.step_progress(),
+                    expected,
+                    "behavior {behavior}"
+                );
+            }
+            phase.step(buttons);
+            assert!(
+                !phase.player.in_transit(),
+                "behavior {behavior} settles on frame {frames}"
+            );
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+}
+
+/// A southward current on the rebound landing pushes the player straight back
+/// over the edge it was entered by: the automatic no-input step returns
+/// `Crossed` through the existing connection route, and the phase rebinds
+/// Route 101 the ordinary way (`field_player_avatar.c:506-509`, `overworld.c:784-825`).
+#[test]
+fn a_forced_current_on_a_rebound_landing_crosses_back_on_its_automatic_step() {
+    use engine::overworld::metatile_behavior::MB_SOUTHWARD_CURRENT;
+    let (mut phase, path) = route101_phase_facing_a_forced_oldale_landing(MB_SOUTHWARD_CURRENT);
+    cross_into_oldale_and_drain(&mut phase);
+
+    phase.step(ButtonState::new());
+    assert_eq!(phase.map_id, ROUTE_101, "the forced step must cross back");
+    assert_eq!(phase.player.position(), (LANDING_X, 0));
+    assert_eq!(phase.player.step_progress(), 1);
+    assert_eq!(
+        phase.wild.immunity_steps(),
+        0,
+        "an ordinary crossing's rebind"
+    );
+    assert_eq!(phase.save1().location.warp_id, -1);
+    for expected in 2..6 {
+        phase.step(ButtonState::new());
+        assert_eq!(phase.player.step_progress(), expected);
+    }
+    phase.step(ButtonState::new());
+    assert!(!phase.player.in_transit(), "a current settles on frame 6");
+    let _ = std::fs::remove_file(&path);
+}
+
 /// A nonzero east/west offset shifts the cross-axis y by `-offset` (`fieldmap.c:578-598,699-712`).
 #[test]
 fn advance_player_one_frame_crosses_an_offset_connection_shifting_the_cross_axis() {
