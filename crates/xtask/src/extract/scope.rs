@@ -3,7 +3,7 @@
 //! One list per domain, read by both the extractor and the profile generator
 //! so a pack missing a root is refused rather than half-described.
 
-use super::{FIRST_GENERIC_NPC_PALETTE, LAST_GENERIC_NPC_PALETTE};
+use super::sprites::{FIRST_GENERIC_NPC_PALETTE, LAST_GENERIC_NPC_PALETTE};
 
 #[derive(Clone, Copy)]
 pub(crate) struct TilesetSource {
