@@ -593,3 +593,65 @@ fn a_run_onto_an_encounter_returns_from_battle_standing() {
         "returning from the battle must not keep the running sheet's neutral pose"
     );
 }
+
+/// A Truant lead (`battle_util.c:2086-2097`) disables the roll like an unfightable
+/// table, so no encounter or `CreateWildMon` draw is spent on a refused battle.
+#[test]
+fn an_inadmissible_lead_disables_the_roll_without_drawing() {
+    let mut phase = route_101_phase(PlayerState::new((2, 5), 3, Direction::East), (7, 5));
+    phase.rng = Rng::new(ENCOUNTER_SEED);
+    let slakoth = player_mon(SpeciesId::SLAKOTH.0, 50, vec![MoveId::SCRATCH]);
+    assert_eq!(
+        battle::ensure_participant_admissible(&slakoth),
+        Err(BattleError::UnportedAbilityInteraction(
+            assets::AbilityId::TRUANT
+        )),
+    );
+    phase.party_lead = Some(slakoth);
+    let immunity_before = phase.wild.immunity_steps();
+    let behavior_before = phase.wild.prev_metatile_behavior();
+
+    walk_east_and_land(&mut phase, 5);
+    assert_eq!(phase.player.position(), (7, 5));
+    assert!(!phase.is_wild_battle_active(), "no battle may start");
+    assert_eq!(
+        phase.rng.state(),
+        Rng::new(ENCOUNTER_SEED).state(),
+        "an inadmissible lead must not draw at all"
+    );
+    assert_eq!(phase.wild.immunity_steps(), immunity_before);
+    assert_eq!(phase.wild.prev_metatile_behavior(), behavior_before);
+    assert!(phase.party_lead.is_some(), "the lead stays home");
+    assert_eq!(
+        phase.wild_lead_refusal,
+        Some(BattleError::UnportedAbilityInteraction(
+            assets::AbilityId::TRUANT
+        )),
+        "the refusal is reported, and remembered so it reports once"
+    );
+
+    phase.party_lead = Some(player_mon(SpeciesId::ZIGZAGOON.0, 50, vec![MoveId::TACKLE]));
+    assert!(phase.wild_lead_admissible());
+    assert_eq!(
+        phase.wild_lead_refusal, None,
+        "an admissible lead clears the report so a later refusal prints again"
+    );
+}
+
+#[test]
+fn start_wild_battle_refuses_an_inadmissible_lead_before_any_draw() {
+    let mut rng = Rng::new(ENCOUNTER_SEED);
+    let slakoth = player_mon(SpeciesId::SLAKOTH.0, 50, vec![MoveId::SCRATCH]);
+    let encounter = WildEncounter {
+        slot: 0,
+        species: WURMPLE,
+        level: 2,
+    };
+    assert_eq!(
+        start_wild_battle(slakoth, encounter, TEST_PLAYER_TRAINER_ID, &mut rng).err(),
+        Some(BattleError::UnportedAbilityInteraction(
+            assets::AbilityId::TRUANT
+        )),
+    );
+    assert_eq!(rng.state(), Rng::new(ENCOUNTER_SEED).state());
+}

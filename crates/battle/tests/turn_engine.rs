@@ -40,6 +40,8 @@ mod pressure;
 mod shed_skin;
 #[path = "turn_engine/stat_changes.rs"]
 mod stat_changes;
+#[path = "turn_engine/static_contact.rs"]
+mod static_contact;
 #[path = "turn_engine/status_ability_matrix.rs"]
 mod status_ability_matrix;
 #[path = "turn_engine/trainer_battle.rs"]

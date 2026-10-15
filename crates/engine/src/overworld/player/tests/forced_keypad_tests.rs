@@ -207,14 +207,14 @@ fn a_scripted_face_carries_ices_forced_direction_with_it() {
 
     assert_eq!(
         player.step(Some(Direction::West), &runtime, &no_connections, &NO_FLAGS),
-        StepOutcome::Blocked {
-            direction: Direction::West,
-            collision: Collision::Impassable,
+        StepOutcome::Advanced {
+            from: (2, 2),
+            to: (2, 1),
         },
         "the scripted look carried movement_direction north with it, and \
-         north is clear, so the forced direction is no longer blocked and \
-         the guard must refuse this poll -- not fall through to the keypad \
-         on the pre-face east"
+         north is clear, so ice slips north (`ForcedMovement_Slip`, \
+         `field_player_avatar.c:473-484`) -- not west on the keypad, and \
+         not east on the pre-face movement direction"
     );
     assert_eq!(
         player.facing(),
@@ -308,7 +308,7 @@ fn the_secret_base_jump_mat_never_yields_to_the_keypad_even_when_every_direction
 }
 
 #[test]
-fn crossing_a_connection_onto_a_current_tile_still_refuses_the_keypad() {
+fn crossing_a_connection_onto_a_current_tile_pushes_instead_of_obeying_the_keypad() {
     let runtime = south_connected_runtime();
     let maps = SingleConnectedMap {
         id: MapId("MAP_SOUTH"),
@@ -342,11 +342,13 @@ fn crossing_a_connection_onto_a_current_tile_still_refuses_the_keypad() {
 
     assert_eq!(
         player.step(Some(Direction::East), &landed, &no_connections, &NO_FLAGS),
-        StepOutcome::Blocked {
-            direction: Direction::East,
-            collision: Collision::Impassable,
+        StepOutcome::Advanced {
+            from: (2, 0),
+            to: (2, 1),
         },
-        "the keypad must not steer off a current tile reached by a crossing"
+        "the keypad must not steer off a current tile reached by a crossing; \
+         the current pushes south (`field_player_avatar.c:506-509`)"
     );
-    assert_eq!(player.position(), (2, 0));
+    assert_eq!(player.position(), (2, 1));
+    assert_eq!(player.transit_duration(), 6);
 }

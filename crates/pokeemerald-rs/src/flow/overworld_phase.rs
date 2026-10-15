@@ -238,6 +238,9 @@ pub(crate) struct OverworldPhase {
     /// invalidation rather than a call site having to remember to
     /// re-screen.
     pub(super) wild_table_screen: Option<(assets::MapId, bool)>,
+    /// The refusal [`Self::wild_lead_admissible`] last reported, so the
+    /// diagnostic prints once per refusal rather than once per step.
+    pub(super) wild_lead_refusal: Option<battle::BattleError>,
     /// The player's lead party mon, in battle-ready form -- what a fired
     /// encounter is fought with.
     ///
@@ -613,6 +616,7 @@ impl OverworldPhase {
             rng: engine::rng::Rng::new(new_game::NEW_GAME_RNG_SEED),
             wild: WildEncounterState::new(),
             wild_table_screen: None,
+            wild_lead_refusal: None,
             party_lead: None,
             party_lead_slot: 0,
             lead_hp_hidden_by_load: 0,
@@ -756,6 +760,7 @@ impl OverworldPhase {
             rng,
             wild: WildEncounterState::new(),
             wild_table_screen: None,
+            wild_lead_refusal: None,
             party_lead: None,
             party_lead_slot: 0,
             lead_hp_hidden_by_load: 0,

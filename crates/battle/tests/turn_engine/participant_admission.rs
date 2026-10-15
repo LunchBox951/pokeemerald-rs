@@ -1,5 +1,5 @@
-//! Both constructors refuse status and ability combinations that upstream
-//! cures at move end (`battle_util.c:2873-2951`), before any RNG draw.
+//! Both constructors refuse move-end-cured status/ability pairs
+//! (`battle_util.c:2873-2951`) and Truant holders, before any RNG draw.
 
 use crate::common::{max_iv_mon, SequenceRng};
 use assets::trainers::TrainerId;
@@ -19,8 +19,10 @@ fn healthy(species: SpeciesId) -> BattlePokemon {
     mon(species, 0, Status1::Healthy)
 }
 
-fn refused() -> [(BattlePokemon, AbilityId); 3] {
+fn refused() -> [(BattlePokemon, AbilityId); 5] {
     [
+        (healthy(SpeciesId::SLAKOTH), AbilityId::TRUANT),
+        (healthy(SpeciesId::SLAKING), AbilityId::TRUANT),
         (
             mon(SpeciesId::PERSIAN, 0, Status1::Paralysed),
             AbilityId::LIMBER,
