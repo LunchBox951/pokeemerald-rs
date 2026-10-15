@@ -83,6 +83,38 @@
       "status": "pending"
     },
     "data/battle_anim_scripts.s": {
+      "artifacts": {
+        "gBattleAnims_General": {
+          "reason": "gBattleAnims_General: normalized selector and program data extracted from the checkout into the battle-anim/catalog pack entry; excludes the unreachable Move_COUNT entry and dead tails after the first terminator, with UBFIX undefined. Execution behaviour (S-6), rendering and effect resources stay pending, so the parent file stays pending.",
+          "rust_target": "crates/xtask/src/extract/battle_anim.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "gBattleAnims_Moves": {
+          "reason": "gBattleAnims_Moves: normalized selector and program data extracted from the checkout into the battle-anim/catalog pack entry; excludes the unreachable Move_COUNT entry and dead tails after the first terminator, with UBFIX undefined. Execution behaviour (S-6), rendering and effect resources stay pending, so the parent file stays pending.",
+          "rust_target": "crates/xtask/src/extract/battle_anim.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "gBattleAnims_Special": {
+          "reason": "gBattleAnims_Special: normalized selector and program data extracted from the checkout into the battle-anim/catalog pack entry; excludes the unreachable Move_COUNT entry and dead tails after the first terminator, with UBFIX undefined. Execution behaviour (S-6), rendering and effect resources stay pending, so the parent file stays pending.",
+          "rust_target": "crates/xtask/src/extract/battle_anim.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "gBattleAnims_StatusConditions": {
+          "reason": "gBattleAnims_StatusConditions: normalized selector and program data extracted from the checkout into the battle-anim/catalog pack entry; excludes the unreachable Move_COUNT entry and dead tails after the first terminator, with UBFIX undefined. Execution behaviour (S-6), rendering and effect resources stay pending, so the parent file stays pending.",
+          "rust_target": "crates/xtask/src/extract/battle_anim.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "reachable-normalized-programs": {
+          "reason": "reachable-normalized-programs: normalized selector and program data extracted from the checkout into the battle-anim/catalog pack entry; excludes the unreachable Move_COUNT entry and dead tails after the first terminator, with UBFIX undefined. Execution behaviour (S-6), rendering and effect resources stay pending, so the parent file stays pending.",
+          "rust_target": "crates/xtask/src/extract/battle_anim.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "data.script",
       "kind": "file",
       "spec_owner": "S-6",
