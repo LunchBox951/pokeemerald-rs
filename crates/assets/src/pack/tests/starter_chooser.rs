@@ -164,6 +164,15 @@ fn malformed_chooser_entries_are_rejected_on_read() {
             ),
         ),
         (
+            "starter-chooser/image/starter_circle",
+            image(
+                "starter-chooser/image/starter_circle",
+                (64, 64),
+                INDEXED_8_BIT,
+                1,
+            ),
+        ),
+        (
             "starter-chooser/image/tiles",
             image(
                 "starter-chooser/image/tiles",
