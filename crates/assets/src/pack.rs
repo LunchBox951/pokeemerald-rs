@@ -12,6 +12,7 @@
 //! see [`crate::error`] for why.
 
 mod bag;
+mod battle_interface;
 mod battle_message;
 mod error;
 mod format;
@@ -27,6 +28,7 @@ use crate::fonts::{FontId, FontImageRef};
 use crate::pokedex::PokedexData;
 
 pub use bag::BagAssets;
+pub use battle_interface::{BattleInterfaceHandle, BattleTextboxHandle};
 pub use battle_message::{
     BattleMessageError, BattleMessageSection, BattleMessageTable, SpecialBattleMessage,
     SpecialTemplate, SLOT_COUNT as BATTLE_MESSAGE_SLOT_COUNT,
