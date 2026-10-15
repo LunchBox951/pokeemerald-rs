@@ -5,9 +5,10 @@
 //! used because this command owns the checkout-local build product.
 //!
 //! The facade owns pipeline order, checkout and output paths, common pack-entry
-//! builders, and manifests for tilesets, layouts, title graphics, sprites, and
-//! interface palettes. Specialized child modules own source decoding and the
-//! remaining asset manifests; `error` defines the public failure contracts.
+//! builders, and manifests for layouts, title graphics, and interface palettes.
+//! Specialized child modules own source decoding, tileset and sprite extraction,
+//! and the remaining asset manifests; `error` defines the public failure
+//! contracts.
 //!
 //! # Extraction scope
 //!
@@ -68,8 +69,10 @@ pub(crate) mod midi;
 pub mod png;
 mod publish;
 pub(crate) mod scope;
+mod sprites;
 mod starter_chooser;
 mod text_window;
+mod tilesets;
 pub(crate) mod voicegroups;
 mod wav;
 
@@ -80,10 +83,7 @@ pub use pack_format::OUTPUT_RELATIVE_PATH;
 use pack_format::{EntryShapeError, PackEntry, PackWriter};
 use publish::write_pack_atomically;
 
-use scope::{
-    sprite_palette_ids, TilesetSource, LAYOUTS, PEOPLE_SHEETS, TILESETS,
-    TITLE_SCREEN_EMBEDDED_PALETTE_SHEETS, TITLE_SCREEN_PALETTE_CUTS,
-};
+use scope::{LAYOUTS, TILESETS, TITLE_SCREEN_EMBEDDED_PALETTE_SHEETS, TITLE_SCREEN_PALETTE_CUTS};
 
 /// Serializes tests that read or replace the checkout-local pack.
 #[cfg(test)]
@@ -135,10 +135,10 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     let mut writer = PackWriter::new();
 
     for tileset in TILESETS {
-        extract_tileset(&upstream, tileset, &mut writer)?;
+        tilesets::extract_tileset(&upstream, tileset, &mut writer)?;
     }
     extract_title_screen(&upstream, &mut writer)?;
-    extract_sprites(&upstream, &mut writer)?;
+    sprites::extract_sprites(&upstream, &mut writer)?;
     extract_layouts(&upstream, &mut writer)?;
     fonts::extract_fonts(&upstream, &mut writer)?;
     text_window::extract_text_window(&upstream, &mut writer)?;
@@ -166,8 +166,6 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
         output_path: output_path.to_path_buf(),
     })
 }
-
-const TILESET_PALETTE_COUNT: u8 = 16;
 
 fn read_file(path: &Path) -> Result<Vec<u8>, ExtractError> {
     std::fs::read(path).map_err(|e| ExtractError::ReadFailed(path.to_path_buf(), e.to_string()))
@@ -272,74 +270,6 @@ fn collect_pngs_sorted(dir: &Path) -> Result<Vec<PathBuf>, ExtractError> {
     Ok(out)
 }
 
-/// Refuse a checkout missing any pinned animation frame PNG.
-fn require_animation_sources(anim_dir: &Path, source: TilesetSource) -> Result<(), ExtractError> {
-    for &(anim, frames) in source.animations {
-        for n in 0..frames {
-            let path = anim_dir.join(anim).join(format!("{n}.png"));
-            if !path.is_file() {
-                return Err(ExtractError::ReadFailed(
-                    path,
-                    "required tileset animation frame is missing".to_owned(),
-                ));
-            }
-        }
-    }
-    Ok(())
-}
-
-fn extract_tileset(
-    upstream: &Path,
-    source: TilesetSource,
-    writer: &mut PackWriter,
-) -> Result<(), ExtractError> {
-    let base = upstream
-        .join("data/tilesets")
-        .join(source.category)
-        .join(source.name);
-
-    push_png_entry(&base.join("tiles.png"), source.tiles_id(), writer)?;
-
-    let anim_dir = base.join("anim");
-    require_animation_sources(&anim_dir, source)?;
-    if anim_dir.is_dir() {
-        for png_path in collect_pngs_sorted(&anim_dir)? {
-            let rel = png_path
-                .strip_prefix(&anim_dir)
-                .expect("collect_pngs_sorted only returns paths under anim_dir")
-                .with_extension("");
-            let rel_id = rel.to_string_lossy().replace('\\', "/");
-            push_png_entry(
-                &png_path,
-                format!("tileset/{}/anim/{rel_id}", source.name),
-                writer,
-            )?;
-        }
-    }
-
-    for slot in 0..TILESET_PALETTE_COUNT {
-        let pal_path = base.join("palettes").join(format!("{slot:02}.pal"));
-        push_palette_entry(
-            &pal_path,
-            format!("tileset/{}/palette/{slot:02}", source.name),
-            writer,
-        )?;
-    }
-
-    push_raw_entry(
-        &base.join("metatiles.bin"),
-        format!("tileset/{}/metatiles", source.name),
-        writer,
-    )?;
-    push_raw_entry(
-        &base.join("metatile_attributes.bin"),
-        format!("tileset/{}/metatile-attributes", source.name),
-        writer,
-    )?;
-
-    Ok(())
-}
-
 /// Refuse a title directory missing a source the generator requires.
 fn require_title_sources(dir: &Path, entries: &[PathBuf]) -> Result<(), ExtractError> {
     let required = scope::TITLE_SCREEN_IMAGES
@@ -438,46 +368,6 @@ fn extract_interface_palettes(
     )
 }
 
-const FIRST_GENERIC_NPC_PALETTE: u8 = 1;
-const LAST_GENERIC_NPC_PALETTE: u8 = 4;
-
-/// Refuse a checkout missing any pinned people sheet PNG.
-fn require_sprite_sources(people_dir: &Path) -> Result<(), ExtractError> {
-    for stem in PEOPLE_SHEETS {
-        let path = people_dir.join(format!("{stem}.png"));
-        if !path.is_file() {
-            return Err(ExtractError::ReadFailed(
-                path,
-                "required people sprite sheet is missing".to_owned(),
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn extract_sprites(upstream: &Path, writer: &mut PackWriter) -> Result<(), ExtractError> {
-    let people_dir = upstream.join("graphics/object_events/pics/people");
-    require_sprite_sources(&people_dir)?;
-    for png_path in collect_pngs_sorted(&people_dir)? {
-        let rel = png_path
-            .strip_prefix(&people_dir)
-            .expect("collect_pngs_sorted only returns paths under people_dir")
-            .with_extension("");
-        let rel_id = rel.to_string_lossy().replace('\\', "/");
-        push_png_entry(&png_path, format!("sprite/{rel_id}"), writer)?;
-    }
-
-    let palettes_dir = upstream.join("graphics/object_events/palettes");
-    for id in sprite_palette_ids() {
-        let name = id
-            .strip_prefix("sprite/palette/")
-            .expect("sprite palette inventory uses the palette prefix");
-        let path = palettes_dir.join(format!("{name}.pal"));
-        push_palette_entry(&path, id, writer)?;
-    }
-    Ok(())
-}
-
 const BORDER_SIDE_CELLS: usize = 2;
 const BORDER_BLOCK_BYTES: usize =
     BORDER_SIDE_CELLS * BORDER_SIDE_CELLS * std::mem::size_of::<u16>();
@@ -541,110 +431,6 @@ mod tests {
             "pokeemerald-rs-extract-test-{name}-{}.pack",
             std::process::id()
         ))
-    }
-
-    #[test]
-    fn a_checkout_missing_a_required_animation_frame_is_refused() {
-        use crate::extract::scope::TILESETS;
-        use crate::extract::{extract_tileset, PackWriter, TILESET_PALETTE_COUNT};
-        let general = TILESETS[0];
-        let upstream = std::env::temp_dir().join(format!(
-            "pokeemerald-rs-extract-missing-anim-frame-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&upstream);
-        let base = upstream
-            .join("data/tilesets")
-            .join(general.category)
-            .join(general.name);
-        let anim = base.join("anim");
-        // Every source `extract_tileset` reads, each decodable, so only the
-        // required-frame check can refuse the checkout.
-        let png = crate::extract::png::tests::tiny_indexed_png(8, 1, 1, &[0]);
-        std::fs::create_dir_all(base.join("palettes")).expect("dir");
-        std::fs::write(base.join("tiles.png"), &png).expect("tiles");
-        for slot in 0..TILESET_PALETTE_COUNT {
-            let pal = base.join("palettes").join(format!("{slot:02}.pal"));
-            std::fs::write(pal, "JASC-PAL\r\n0100\r\n1\r\n0 0 0\r\n").expect("pal");
-        }
-        std::fs::write(base.join("metatiles.bin"), [0u8; 16]).expect("metatiles");
-        std::fs::write(base.join("metatile_attributes.bin"), [0u8; 2]).expect("attrs");
-        for &(name, frames) in general.animations {
-            std::fs::create_dir_all(anim.join(name)).expect("dir");
-            for n in 0..frames {
-                std::fs::write(anim.join(name).join(format!("{n}.png")), &png).expect("frame");
-            }
-        }
-        extract_tileset(&upstream, general, &mut PackWriter::new()).expect("complete");
-
-        std::fs::remove_file(anim.join("water/7.png")).expect("remove");
-        let one = extract_tileset(&upstream, general, &mut PackWriter::new());
-
-        std::fs::remove_dir_all(anim.join("water")).expect("remove animation");
-        let whole = extract_tileset(&upstream, general, &mut PackWriter::new());
-
-        std::fs::remove_dir_all(&anim).expect("remove all");
-        let domain = extract_tileset(&upstream, general, &mut PackWriter::new());
-        std::fs::remove_dir_all(&upstream).expect("cleanup");
-
-        let one = one.expect_err("one frame");
-        assert!(
-            matches!(&one, ExtractError::ReadFailed(p, _) if p == &anim.join("water/7.png")),
-            "{one:?}"
-        );
-        let whole = whole.expect_err("one animation");
-        assert!(
-            matches!(&whole, ExtractError::ReadFailed(p, _) if p == &anim.join("water/0.png")),
-            "{whole:?}"
-        );
-        let domain = domain.expect_err("domain");
-        assert!(
-            matches!(&domain, ExtractError::ReadFailed(p, _) if p == &anim.join("flower/0.png")),
-            "{domain:?}"
-        );
-    }
-
-    #[test]
-    fn a_checkout_missing_a_required_sprite_sheet_is_refused() {
-        use crate::extract::scope::PEOPLE_SHEETS;
-        use crate::extract::{extract_sprites, PackWriter};
-        let upstream = std::env::temp_dir().join(format!(
-            "pokeemerald-rs-extract-missing-sprite-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&upstream);
-        let people = upstream.join("graphics/object_events/pics/people");
-        let palettes = upstream.join("graphics/object_events/palettes");
-        let png = crate::extract::png::tests::tiny_indexed_png(8, 1, 1, &[0]);
-        std::fs::create_dir_all(&palettes).expect("dir");
-        for name in ["brendan", "may", "npc_1", "npc_2", "npc_3", "npc_4"] {
-            let pal = palettes.join(format!("{name}.pal"));
-            std::fs::write(pal, "JASC-PAL\r\n0100\r\n1\r\n0 0 0\r\n").expect("pal");
-        }
-        for stem in PEOPLE_SHEETS {
-            let path = people.join(format!("{stem}.png"));
-            std::fs::create_dir_all(path.parent().expect("parent")).expect("dir");
-            std::fs::write(path, &png).expect("sheet");
-        }
-        extract_sprites(&upstream, &mut PackWriter::new()).expect("complete");
-
-        std::fs::remove_file(people.join("brendan/walking.png")).expect("remove");
-        let walking = extract_sprites(&upstream, &mut PackWriter::new());
-        std::fs::remove_file(people.join("may/running.png")).expect("remove");
-        std::fs::remove_dir_all(&people).expect("remove all");
-        let domain = extract_sprites(&upstream, &mut PackWriter::new());
-        std::fs::remove_dir_all(&upstream).expect("cleanup");
-
-        let walking = walking.expect_err("walking");
-        assert!(
-            matches!(&walking, ExtractError::ReadFailed(p, _) if p == &people.join("brendan/walking.png")),
-            "{walking:?}"
-        );
-        let domain = domain.expect_err("domain");
-        assert!(
-            matches!(&domain, ExtractError::ReadFailed(p, _) if p == &people.join(format!("{}.png", PEOPLE_SHEETS[0]))),
-            "{domain:?}"
-        );
     }
 
     // Changes to `LAYOUTS` must also update `object_event_flags.rs`'s
