@@ -7,6 +7,7 @@ use crate::audio::AudioError;
 use crate::pokedex::PokedexError;
 
 use super::battle_message::BattleMessageError;
+use crate::battle_anim::BattleAnimationError;
 
 use super::format::FORMAT_VERSION;
 
@@ -85,6 +86,13 @@ pub enum PackError {
         /// What differs from the expected shape.
         detail: String,
     },
+    /// A Pokédex graphics entry differs from the upstream graphic's shape.
+    MalformedPokedexGraphic {
+        /// Asset id.
+        id: String,
+        /// What differs from the expected shape.
+        detail: String,
+    },
     /// An ordinary-bag entry differs from the upstream graphic's shape.
     MalformedBagAsset {
         /// Asset id.
@@ -105,6 +113,13 @@ pub enum PackError {
         id: String,
         /// Underlying schema error.
         source: BattleMessageError,
+    },
+    /// The `battle-anim/catalog` entry failed its schema's decode.
+    BattleAnimationDecode {
+        /// Catalog asset id.
+        id: String,
+        /// Underlying schema error.
+        source: BattleAnimationError,
     },
     /// The `pokedex/data` entry failed its schema's decode.
     PokedexDecode {
@@ -201,6 +216,9 @@ impl fmt::Display for PackError {
             Self::MalformedStarterAsset { id, detail } => {
                 write!(f, "asset pack: starter-chooser entry `{id}` {detail}")
             }
+            Self::MalformedPokedexGraphic { id, detail } => {
+                write!(f, "asset pack: Pokédex graphics entry `{id}` {detail}")
+            }
             Self::MalformedBagAsset { id, detail } => {
                 write!(f, "asset pack: bag entry `{id}` {detail}")
             }
@@ -214,6 +232,12 @@ impl fmt::Display for PackError {
                 write!(
                     f,
                     "asset pack: battle-message entry `{id}` failed to decode: {source}"
+                )
+            }
+            Self::BattleAnimationDecode { id, source } => {
+                write!(
+                    f,
+                    "asset pack: battle-animation entry `{id}` failed to decode: {source}"
                 )
             }
             Self::PokedexDecode { id, source } => {
@@ -233,6 +257,7 @@ impl std::error::Error for PackError {
             Self::AudioDecode { source, .. } => Some(source),
             Self::BattleMessageDecode { source, .. } => Some(source),
             Self::PokedexDecode { source, .. } => Some(source),
+            Self::BattleAnimationDecode { source, .. } => Some(source),
             Self::NotFound(_)
             | Self::ReadFailed(..)
             | Self::BadMagic
@@ -246,6 +271,7 @@ impl std::error::Error for PackError {
             | Self::MalformedTextWindowImage { .. }
             | Self::TextWindowPixelOutsidePalette { .. }
             | Self::MalformedStarterAsset { .. }
+            | Self::MalformedPokedexGraphic { .. }
             | Self::MalformedBagAsset { .. } => None,
         }
     }

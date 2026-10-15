@@ -345,6 +345,27 @@ fn plan_for(label: &str, addr: u32, group: &RawVoiceGroup) -> VoicegroupPlan {
     }
 }
 
+/// The payload of pack entry `id`, which the ROM importers always emit as a
+/// `Raw` entry.
+///
+/// # Errors
+///
+/// [`GenRomProfileError::MissingPackEntry`] when `id` is absent;
+/// [`GenRomProfileError::WrongPackEntryKind`] naming `id` for any other kind.
+pub(super) fn raw_payload<'a>(
+    ctx: &'a Context<'_>,
+    id: &str,
+) -> Result<&'a [u8], GenRomProfileError> {
+    let asset = ctx.pack.get(id)?;
+    if asset.kind != EntryKind::Raw {
+        return Err(GenRomProfileError::WrongPackEntryKind {
+            id: id.to_owned(),
+            expected: "raw",
+        });
+    }
+    Ok(&asset.payload)
+}
+
 /// Locate every `DirectSound` sample by its PCM, then check its header.
 fn locate_direct_sound(
     ctx: &Context<'_>,
@@ -409,7 +430,7 @@ fn locate_direct_sound(
 /// [`GenRomProfileError::EntryShape`] naming `id` when the payload does not
 /// decode as a valid `DirectSound` sample.
 fn direct_sound_of(ctx: &Context<'_>, id: &str) -> Result<DirectSoundSample, GenRomProfileError> {
-    let payload = &ctx.pack.get(id)?.payload;
+    let payload = raw_payload(ctx, id)?;
     match Sample::decode(payload) {
         Ok(Sample::DirectSound(sample)) => Ok(sample),
         Ok(Sample::ProgrammableWave(_)) => Err(GenRomProfileError::EntryShape {
@@ -488,7 +509,7 @@ fn programmable_wave_of(
     ctx: &Context<'_>,
     id: &str,
 ) -> Result<ProgrammableWave, GenRomProfileError> {
-    let payload = &ctx.pack.get(id)?.payload;
+    let payload = raw_payload(ctx, id)?;
     match Sample::decode(payload) {
         Ok(Sample::ProgrammableWave(wave)) => Ok(wave),
         Ok(Sample::DirectSound(_)) => Err(GenRomProfileError::EntryShape {
@@ -824,8 +845,7 @@ fn check_song_header(
         id: song_id.to_owned(),
         reason,
     };
-    let song =
-        Song::decode(&ctx.pack.get(song_id)?.payload).map_err(|err| shape(err.to_string()))?;
+    let song = Song::decode(raw_payload(ctx, song_id)?).map_err(|err| shape(err.to_string()))?;
     let expected_group = format!("audio/voicegroup/{voicegroup_label}");
     if song.voicegroup().0 != expected_group {
         return Err(shape(format!(

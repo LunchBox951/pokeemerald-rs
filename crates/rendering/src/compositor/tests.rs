@@ -12,4 +12,5 @@ mod obj_mosaic;
 mod objwin;
 mod palette;
 mod priority;
+mod regular_bg_mosaic;
 mod window;

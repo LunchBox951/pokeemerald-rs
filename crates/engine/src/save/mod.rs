@@ -7,6 +7,7 @@ pub mod file;
 pub mod game_stats;
 pub mod pokemon;
 pub mod sector;
+pub mod storage;
 pub mod store;
 
 pub use bag::{Bag, ItemSlot};
@@ -23,4 +24,5 @@ pub use pokemon::{
     SUBSTRUCTURE_LEN,
 };
 pub use sector::{Sector, SECTOR_DATA_SIZE, SECTOR_SIGNATURE, SECTOR_SIZE};
+pub use storage::{BoxSlot, PokemonStorage, StorageError};
 pub use store::{BaseSnapshot, LoadOutcome, SaveStatus, SaveStore, StorageSource, FLASH_IMAGE_LEN};

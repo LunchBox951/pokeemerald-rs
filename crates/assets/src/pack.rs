@@ -16,11 +16,13 @@ mod battle_message;
 mod error;
 mod format;
 mod handles;
+mod pokedex_graphics;
 mod starter_chooser;
 
 use std::path::{Path, PathBuf};
 
 use crate::audio::{Sample, SampleId, Song, VoiceGroup, VoiceGroupId};
+use crate::battle_anim::BattleAnimationCatalog;
 use crate::fonts::{FontId, FontImageRef};
 use crate::pokedex::PokedexData;
 
@@ -35,6 +37,7 @@ pub use battle_message::{
 pub use error::PackError;
 pub use format::{DirectoryEntry, EntryKind, FORMAT_VERSION, MAGIC};
 pub use handles::{ImageRef, PaletteRef, TilesetHandle, WindowFrameHandle};
+pub use pokedex_graphics::PokedexGraphicsHandle;
 pub use starter_chooser::{
     PalettedImage, StarterChooserHandle, StarterPreviewHandle, StarterSpecies,
 };
@@ -43,6 +46,7 @@ use format::kind_label;
 
 /// A border frame's 3x3 grid of 8x8 tiles (upstream `sWindowFrames`,
 /// `graphics/text_window/1.png`..`20.png`).
+const BATTLE_ANIMATION_CATALOG_ID: &str = "battle-anim/catalog";
 const FRAME_WIDTH: u32 = 24;
 const FRAME_HEIGHT: u32 = 24;
 
@@ -298,6 +302,22 @@ impl AssetPack {
         let bytes = self.raw(ID)?;
         PokedexData::decode(bytes).map_err(|source| PackError::PokedexDecode {
             id: ID.to_owned(),
+            source,
+        })
+    }
+
+    /// Look up the `battle-anim/catalog` entry and decode it through
+    /// [`BattleAnimationCatalog::decode`].
+    ///
+    /// # Errors
+    ///
+    /// [`PackError::UnknownAsset`] if the pack has no animation catalog;
+    /// [`PackError::WrongKind`] if the entry isn't [`EntryKind::Raw`];
+    /// [`PackError::BattleAnimationDecode`] if the bytes fail the schema.
+    pub fn battle_animation_catalog(&self) -> Result<BattleAnimationCatalog, PackError> {
+        let bytes = self.raw(BATTLE_ANIMATION_CATALOG_ID)?;
+        BattleAnimationCatalog::decode(bytes).map_err(|source| PackError::BattleAnimationDecode {
+            id: BATTLE_ANIMATION_CATALOG_ID.to_owned(),
             source,
         })
     }

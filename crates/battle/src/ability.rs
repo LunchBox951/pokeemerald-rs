@@ -39,6 +39,9 @@ pub const GUTS: AbilityId = AbilityId(62);
 /// Marvel Scale's ability ID.
 pub const MARVEL_SCALE: AbilityId = AbilityId(63);
 
+/// Thick Fat's ability ID.
+pub const THICK_FAT: AbilityId = AbilityId(47);
+
 /// Hustle's ability ID.
 pub const HUSTLE: AbilityId = AbilityId(55);
 
@@ -89,7 +92,8 @@ pub fn suppresses_critical_hits(defender_ability: AbilityId) -> bool {
 ///
 /// This must run before stat-stage scaling. Upstream doubles raw Attack first,
 /// and integer truncation makes `stage(2 * attack)` differ from
-/// `2 * stage(attack)` (`pokeemerald/src/pokemon.c:3158`, `:3238`).
+/// `2 * stage(attack)` (`pokeemerald/src/pokemon.c:3158`, `:3238`). A doubled
+/// value above `u32::MAX` saturates like the other scaling helpers.
 #[must_use]
 pub fn huge_power_attack(
     attacker_ability: AbilityId,
@@ -99,9 +103,27 @@ pub fn huge_power_attack(
     let uses_physical_attack = move_category == MoveCategory::Physical;
     let doubles_attack = attacker_ability == HUGE_POWER || attacker_ability == PURE_POWER;
     if uses_physical_attack && doubles_attack {
-        raw_attack * 2
+        raw_attack.saturating_mul(2)
     } else {
         raw_attack
+    }
+}
+
+/// Applies the defender's Thick Fat to a raw Special Attack stat.
+///
+/// Upstream halves raw Special Attack, truncated, for a Fire or Ice move
+/// against Thick Fat before stat-stage scaling, so this must run before it
+/// (`pokeemerald/src/pokemon.c:3202-3204`, `:3298`).
+#[must_use]
+pub fn thick_fat_special_attack(
+    defender_ability: AbilityId,
+    move_type: Type,
+    raw_special_attack: u32,
+) -> u32 {
+    if defender_ability == THICK_FAT && matches!(move_type, Type::Fire | Type::Ice) {
+        raw_special_attack / 2
+    } else {
+        raw_special_attack
     }
 }
 
@@ -166,6 +188,7 @@ mod tests {
         HUSTLE, LIQUID_OOZE, MARVEL_SCALE, OVERGROW, PINCH_BOOSTS, PURE_POWER, SHELL_ARMOR, SWARM,
         TORRENT,
     };
+    use super::{thick_fat_special_attack, THICK_FAT};
     use crate::damage::MoveCategory;
     use crate::dex::Dex;
     use crate::status1::Status1;
@@ -338,6 +361,41 @@ mod tests {
     }
 
     #[test]
+    fn huge_power_and_pure_power_saturate_at_the_u32_boundary() {
+        for ability in [HUGE_POWER, PURE_POWER] {
+            for (raw, expected) in [
+                (u32::MAX / 2, u32::MAX - 1),
+                (u32::MAX / 2 + 1, u32::MAX),
+                (u32::MAX, u32::MAX),
+            ] {
+                assert_eq!(
+                    huge_power_attack(ability, MoveCategory::Physical, raw),
+                    expected,
+                    "{ability:?} {raw}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn huge_power_and_pure_power_pass_through_extreme_non_doubled_attack() {
+        for ability in [HUGE_POWER, PURE_POWER] {
+            assert_eq!(
+                huge_power_attack(ability, MoveCategory::Special, u32::MAX),
+                u32::MAX,
+                "{ability:?}"
+            );
+        }
+        for ability in [BATTLE_ARMOR, OVERGROW, NO_ABILITY] {
+            assert_eq!(
+                huge_power_attack(ability, MoveCategory::Physical, u32::MAX),
+                u32::MAX,
+                "{ability:?}"
+            );
+        }
+    }
+
+    #[test]
     fn huge_power_and_pure_power_leave_special_attack_unchanged() {
         for ability in [HUGE_POWER, PURE_POWER] {
             assert_eq!(
@@ -412,5 +470,16 @@ mod tests {
             marvel_scale_defense(MARVEL_SCALE, Status1::default(), u32::MAX),
             u32::MAX
         );
+    }
+
+    #[test]
+    fn thick_fat_halves_only_fire_and_ice_raw_special_attack() {
+        for move_type in [Type::Fire, Type::Ice] {
+            assert_eq!(thick_fat_special_attack(THICK_FAT, move_type, 15), 7);
+            assert_eq!(thick_fat_special_attack(NO_ABILITY, move_type, 15), 15);
+        }
+        for move_type in [Type::Water, Type::Normal, Type::Electric] {
+            assert_eq!(thick_fat_special_attack(THICK_FAT, move_type, 15), 15);
+        }
     }
 }

@@ -65,7 +65,7 @@ fn a_live_noise_retune_carries_elapsed_time_across_full_frames() {
     contiguous.render(&mut whole, &[]);
     assert_eq!(whole, second);
     for (index, &sample) in second.iter().enumerate() {
-        let level = if (119..135).contains(&index) {
+        let level = if (118..135).contains(&index) {
             0
         } else {
             FULL_VOLUME

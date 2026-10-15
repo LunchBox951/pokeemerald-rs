@@ -3,6 +3,8 @@
 //! One list per domain, read by both the extractor and the profile generator
 //! so a pack missing a root is refused rather than half-described.
 
+use super::sprites::{FIRST_GENERIC_NPC_PALETTE, LAST_GENERIC_NPC_PALETTE};
+
 #[derive(Clone, Copy)]
 pub(crate) struct TilesetSource {
     pub(crate) category: &'static str,
@@ -217,6 +219,18 @@ pub(crate) const PEOPLE_SHEETS: [&str; 133] = [
 /// Every required people sprite sheet id, in manifest order.
 pub(crate) fn sprite_sheet_ids() -> Vec<String> {
     PEOPLE_SHEETS.map(|stem| format!("sprite/{stem}")).to_vec()
+}
+
+/// Every required sprite palette id, in extraction order.
+pub(crate) fn sprite_palette_ids() -> Vec<String> {
+    ["brendan", "may"]
+        .into_iter()
+        .map(|name| format!("sprite/palette/{name}"))
+        .chain(
+            (FIRST_GENERIC_NPC_PALETTE..=LAST_GENERIC_NPC_PALETTE)
+                .map(|n| format!("sprite/palette/npc_{n}")),
+        )
+        .collect()
 }
 
 /// Title sheets built from a PNG, as `title/image/<stem>`.

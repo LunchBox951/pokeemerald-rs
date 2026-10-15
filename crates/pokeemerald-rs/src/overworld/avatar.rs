@@ -192,7 +192,7 @@ fn frame_for(player: &PlayerState) -> (u16, bool) {
         || (player.in_transit()
             && !player.transit_running()
             && (player.transit_animation_disabled()
-                || player.step_progress() <= player.transit_duration() / 2));
+                || player.step_progress() <= player.transit_forward_foot_frames()));
     let turning_foot_forward = player.turn_frames_remaining() >= TURN_FRAME_HALF
         || (player.bump_active() && player.bump_foot_forward());
     let frame = if walking_foot_forward || turning_foot_forward {
@@ -430,10 +430,15 @@ mod tests {
         }
     }
 
-    /// A 5x5 map whose `(2, 2)` tile is `MB_SLIDE_EAST`, otherwise plain
-    /// ground, for proving [`frame_for`] reads the active crossing's own
-    /// duration rather than assuming [`WALK_FRAMES_PER_TILE`].
+    /// A 5x5 map whose `(2, 2)` tile is `MB_SLIDE_EAST`.
     fn slide_runtime() -> engine::overworld::MapRuntime<'static> {
+        behavior_runtime(engine::overworld::metatile_behavior::MB_SLIDE_EAST)
+    }
+
+    /// A 5x5 map whose `(2, 2)` tile carries `behavior`, otherwise plain
+    /// ground, for proving [`frame_for`] reads the active crossing's own
+    /// pace rather than assuming [`WALK_FRAMES_PER_TILE`].
+    fn behavior_runtime(behavior: u8) -> engine::overworld::MapRuntime<'static> {
         let mut bytes = Vec::new();
         for y in 0..5u16 {
             for x in 0..5u16 {
@@ -450,7 +455,7 @@ mod tests {
         }
         let attrs = [
             u16::from(engine::overworld::metatile_behavior::MB_NORMAL).to_le_bytes(),
-            u16::from(engine::overworld::metatile_behavior::MB_SLIDE_EAST).to_le_bytes(),
+            u16::from(behavior).to_le_bytes(),
         ]
         .concat();
         let (_, header, events) = flat_test_map();
@@ -548,6 +553,28 @@ mod tests {
                 usize::from(engine::overworld::SLIDE_FRAMES_PER_TILE)
             ]
         );
+    }
+
+    /// A current crossing lasts six frames but plays `sAnim_GoFast*` at four
+    /// frames per cell, so the forward foot shows for four of them
+    /// (`event_object_movement.c:5828-5831`, `object_event_anims.h:238-245`).
+    #[test]
+    fn frame_for_holds_the_current_push_foot_for_the_four_frame_go_fast_cell() {
+        let runtime = behavior_runtime(engine::overworld::metatile_behavior::MB_EASTWARD_CURRENT);
+        let no_connections = |_: assets::MapId| -> Option<(u16, u16)> { None };
+
+        let mut player = player_at((1, 2), Direction::East);
+        player.step(Some(Direction::East), &runtime, &no_connections, &NO_FLAGS);
+        for _ in 0..WALK_FRAMES_PER_TILE {
+            player.tick();
+        }
+        let mut forward = Vec::new();
+        for _ in 0..6 {
+            player.step(None, &runtime, &no_connections, &NO_FLAGS);
+            player.tick();
+            forward.push(frame_for(&player) == (FRAME_WEST_STEP + 1, true));
+        }
+        assert_eq!(forward, [true, true, true, true, false, false]);
     }
 
     /// A turn runs `sAnim_GoFast*` from a forward-foot cell for eight frames,
