@@ -1067,7 +1067,7 @@ fn a_voicegroup_entry_of_the_wrong_kind_is_refused() {
 }
 
 /// The same bytes as an 8-bit image entry, the kind the importers never emit.
-fn image_twin(id: &str, payload: &[u8]) -> pack_format::PackEntry {
+pub(super) fn image_twin(id: &str, payload: &[u8]) -> pack_format::PackEntry {
     let width = u32::try_from(payload.len()).expect("payload fits in u32");
     image_entry(id.to_owned(), width, 1, 8, payload.to_vec()).expect("valid image entry")
 }
