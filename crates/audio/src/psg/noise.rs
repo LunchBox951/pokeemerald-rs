@@ -1,12 +1,7 @@
 use crate::pitch::MIXER_RATE;
 
-/// Noise base ticks per second (`NOISE_CLOCK_HZ`, 524_288 Hz).
-///
-/// Timing is exact integer arithmetic: each output sample adds this many
-/// ticks to the elapsed count, and the LFSR clocks once per `period`
-/// (`divisor_ticks * MIXER_RATE`). No fractional increment is truncated, so
-/// slow rates such as `NR43 = 0xD7` keep every completed period
-/// (`mgba/src/gb/audio.c:602-644`).
+/// The 524_288 Hz noise base clock, counted in whole ticks per output sample so
+/// every completed LFSR period survives slow rates (`mgba/src/gb/audio.c:602-644`).
 const TICKS_PER_SAMPLE: u64 = 524_288;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
