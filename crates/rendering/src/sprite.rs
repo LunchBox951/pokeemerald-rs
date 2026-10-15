@@ -306,8 +306,13 @@ impl<'a> SpriteLayer<'a> {
         }
 
         let mut resolved: Option<SpritePixel> = None;
-        let mut objwin_written = false;
         self.with_admission(y, |admission| {
+            // mGBA preprocesses OAM-major, running every window pass of one
+            // entry before the next entry draws anything, so only an earlier
+            // OAM entry's `OBJWIN` write, in any pass, masks a color
+            // (`video-software.c:1019-1066`, `software-obj.c:88-105`)
+            // `(behavioral-fidelity)`.
+            let mut objwin_written = false;
             for (index, entry) in self.entries.iter().enumerate() {
                 if !admission.is_admitted(index) {
                     continue;
@@ -324,9 +329,14 @@ impl<'a> SpriteLayer<'a> {
                     continue;
                 }
                 // An opaque `OBJWIN` write sets the row mask whatever its
-                // priority (`software-obj.c:94-105`).
-                objwin_written |=
-                    entry.mode() == ObjMode::Window && matches!(texel, Texel::Opaque(_));
+                // priority or the sprite slot's contents
+                // (`software-obj.c:101-105`), so it is sampled free of the
+                // display slot.
+                if entry.mode() == ObjMode::Window {
+                    let (mask_texel, _) =
+                        self.sample_entry_mosaic(entry, x, y, mosaic, window_spans, false);
+                    objwin_written |= matches!(mask_texel, Texel::Opaque(_));
+                }
                 if resolved.is_some_and(|pixel| entry.priority() >= pixel.priority) {
                     continue;
                 }
@@ -365,17 +375,37 @@ impl<'a> SpriteLayer<'a> {
     /// display color. Returns `false` outside the framebuffer.
     #[must_use]
     pub fn objwin_mask(&self, x: usize, y: usize) -> bool {
-        self.objwin_mask_inner(x, y, MosaicSize::NONE)
+        self.objwin_mask_inner(x, y, MosaicSize::NONE, WindowSpans::WHOLE_SCANLINE)
     }
 
     /// Resolves the OBJ-window mask after applying `mosaic` to enabled entries.
     /// [`MosaicSize::NONE`] is equivalent to [`objwin_mask`](Self::objwin_mask).
     #[must_use]
     pub fn objwin_mask_with_mosaic(&self, x: usize, y: usize, mosaic: MosaicSize) -> bool {
-        self.objwin_mask_inner(x, y, mosaic)
+        self.objwin_mask_inner(x, y, mosaic, WindowSpans::WHOLE_SCANLINE)
     }
 
-    fn objwin_mask_inner(&self, x: usize, y: usize, mosaic: MosaicSize) -> bool {
+    /// Resolves the OBJ-window mask as the OR of the opaque writes the
+    /// permitted preprocessing passes of `window_spans` make, so an affine
+    /// mosaic trailing spill written by an earlier pass survives into a later
+    /// span that would not have written it (`mgba/src/gba/renderers/software-obj.c:160-163,227-242`).
+    pub(crate) fn objwin_mask_with_mosaic_windowed(
+        &self,
+        x: usize,
+        y: usize,
+        mosaic: MosaicSize,
+        window_spans: WindowSpans<'_>,
+    ) -> bool {
+        self.objwin_mask_inner(x, y, mosaic, window_spans)
+    }
+
+    fn objwin_mask_inner(
+        &self,
+        x: usize,
+        y: usize,
+        mosaic: MosaicSize,
+        window_spans: WindowSpans<'_>,
+    ) -> bool {
         if x >= Framebuffer::WIDTH || y >= Framebuffer::HEIGHT {
             return false;
         }
@@ -388,14 +418,7 @@ impl<'a> SpriteLayer<'a> {
                 // it never restarts an affine mosaic hold
                 // (`behavioral-fidelity`).
                 matches!(
-                    self.sample_entry_mosaic(
-                        entry,
-                        x,
-                        y,
-                        mosaic,
-                        WindowSpans::WHOLE_SCANLINE,
-                        false
-                    ),
+                    self.sample_entry_mosaic(entry, x, y, mosaic, window_spans, false),
                     (Texel::Opaque(_), _)
                 )
             })

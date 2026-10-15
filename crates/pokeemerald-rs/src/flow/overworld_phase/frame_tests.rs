@@ -19,7 +19,12 @@ use platform::{ButtonState, Buttons};
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn walking_downstairs_and_talking_to_mom_opens_and_closes_her_dialog() {
-    let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+    let mut phase = OverworldPhase::load(
+        crate::pack_source::PackSource::Repo,
+        crate::new_game::NewGameOptions::DEFAULT,
+        crate::new_game::NewGameIdentity::DEFAULT,
+    )
+    .expect("run `cargo xtask extract` first");
     assert!(phase.dialog.is_none(), "no dialog is open at spawn");
 
     // Trigger the already-pinned 2F -> 1F stair warp: the player spawns
@@ -205,7 +210,12 @@ fn walking_past_mom_keeps_her_oam_glued_to_the_scrolling_background() {
         (i32::from(entries[1].y()), i32::from(scroll_y))
     }
 
-    let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+    let mut phase = OverworldPhase::load(
+        crate::pack_source::PackSource::Repo,
+        crate::new_game::NewGameOptions::DEFAULT,
+        crate::new_game::NewGameIdentity::DEFAULT,
+    )
+    .expect("run `cargo xtask extract` first");
 
     // Down to 1F through the real stair warp -- same step-off/step-back
     // sequence the dialog test above uses.
@@ -427,8 +437,9 @@ fn b_does_not_move_the_player_or_open_a_dialog() {
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn idle_frames_animate_the_composed_tileset_pixels() {
     let town = assets::MapId("MAP_LITTLEROOT_TOWN");
-    let mut phase = OverworldPhase::for_test(
-        crate::overworld::load_room(
+    let mut phase = OverworldPhase::for_test_with_source(
+        crate::overworld::load_room_from_source(
+            &crate::pack_source::PackSource::Repo,
             town,
             crate::overworld::PlayerCharacter::Brendan,
             &engine::event_data::EventData::new(),
@@ -437,6 +448,7 @@ fn idle_frames_animate_the_composed_tileset_pixels() {
         town,
         PlayerState::new((10, 17), 3, Direction::South),
         None,
+        crate::pack_source::PackSource::Repo,
     );
 
     let base = phase.compose_frame();

@@ -10,8 +10,8 @@ use crate::flow::tests::{held, pressed};
 
 use super::route103_rival_test_support::{
     lead, overmatched_treecko_lead, overwhelming_treecko_lead, play_out_rival_battle,
-    route_103_phase_facing_the_rival, FLAG_HIDE_ROUTE_103_RIVAL, TRAINER_FLAGS_START,
-    VAR_STARTER_MON,
+    route_103_phase_facing_the_rival, route_103_phase_facing_the_rival_repo,
+    FLAG_HIDE_ROUTE_103_RIVAL, TRAINER_FLAGS_START, VAR_STARTER_MON,
 };
 use super::OverworldPhase;
 
@@ -315,7 +315,7 @@ fn beginning_a_rival_battle_clears_a_stale_outcome_from_an_earlier_attempt() {
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_losing_the_rival_battle_warps_home_to_the_default_heal_location() {
-    let mut phase = route_103_phase_facing_the_rival();
+    let mut phase = route_103_phase_facing_the_rival_repo();
     phase.party_lead = Some(overmatched_treecko_lead());
     phase.rng = engine::rng::Rng::new(2024);
     phase.step(pressed(Buttons::A));

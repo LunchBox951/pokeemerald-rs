@@ -101,14 +101,21 @@ fn releasing_b_walks_the_next_tile() {
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn the_shoes_flag_keeps_a_held_b_run_going_across_a_map_connection() {
     let route101 = MapId("MAP_ROUTE101");
-    let scene = crate::overworld::load_room(
+    let scene = crate::overworld::load_room_from_source(
+        &crate::pack_source::PackSource::Repo,
         LITTLEROOT,
         crate::overworld::PlayerCharacter::Brendan,
         &engine::event_data::EventData::new(),
     )
     .expect("run `cargo xtask extract` first");
     let player = PlayerState::new((10, 2), 3, Direction::North);
-    let mut phase = OverworldPhase::for_test(scene, LITTLEROOT, player, None);
+    let mut phase = OverworldPhase::for_test_with_source(
+        scene,
+        LITTLEROOT,
+        player,
+        None,
+        crate::pack_source::PackSource::Repo,
+    );
     phase.save1.event_data.flag_set(FLAG_SYS_B_DASH).unwrap();
 
     let mut crossed = false;

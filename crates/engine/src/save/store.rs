@@ -3,6 +3,7 @@
 
 use super::block::{SaveBlock1, SaveBlock2};
 use super::sector::{Sector, SECTOR_DATA_SIZE, SECTOR_SIZE};
+use super::storage::PokemonStorage;
 #[cfg(test)]
 use survey::{older_generation_precedes, second_counter_is_newer, SlotIntegrity};
 use survey::{resolve, SlotScan, SlotSurvey};
@@ -16,10 +17,10 @@ pub const SECTOR_ID_SAVEBLOCK2: u16 = 0;
 pub const SECTOR_ID_SAVEBLOCK1_START: u16 = 1;
 /// Number of logical sectors containing [`SaveBlock1`] chunks.
 pub const SAVE_BLOCK1_CHUNKS: usize = 4;
-/// First logical sector containing an opaque `PokemonStorage` chunk
+/// First logical sector containing an `PokemonStorage` chunk
 /// (`pokeemerald/include/save.h` `SECTOR_ID_PKMN_STORAGE_START`).
 pub const SECTOR_ID_PKMN_STORAGE_START: u16 = 5;
-/// Number of logical sectors containing opaque `PokemonStorage` chunks.
+/// Number of logical sectors containing `PokemonStorage` chunks.
 pub const PKMN_STORAGE_CHUNKS: usize = 9;
 
 /// Number of physical sectors reserved for each save slot; every logical id
@@ -91,6 +92,8 @@ pub struct LoadOutcome {
     pub block2: SaveBlock2,
     /// Where the retained `PokemonStorage` payload came from.
     pub storage_source: StorageSource,
+    /// Typed view of the retained `PokemonStorage` payload.
+    pub storage: PokemonStorage,
 }
 
 /// The provenance of a load's `PokemonStorage`, for callers that must tell a
@@ -126,7 +129,7 @@ const fn chunk_len(total_len: usize, chunk_num: usize) -> usize {
 
 /// Zero-filled `PokemonStorage` payload, heap-allocated directly: at 32.9 KiB
 /// it exceeds the stack-array size clippy allows for a boxed literal.
-fn boxed_zeroed_pokemon_storage() -> Box<[u8; PKMN_STORAGE_PAYLOAD_LEN]> {
+pub(super) fn boxed_zeroed_pokemon_storage() -> Box<[u8; PKMN_STORAGE_PAYLOAD_LEN]> {
     vec![0u8; PKMN_STORAGE_PAYLOAD_LEN]
         .into_boxed_slice()
         .try_into()
@@ -308,11 +311,19 @@ impl SaveStore {
         self.base_pokemon_storage = snapshot.pokemon_storage;
     }
 
-    /// Clears unmodelled payload bytes before saving a new game lineage.
+    /// Clears unmodelled payload bytes before saving a new game lineage;
+    /// storage restarts as upstream's new-game defaults
+    /// ([`PokemonStorage::new_game`]).
     pub fn clear_base(&mut self) {
         self.base_block1.fill(0);
         self.base_block2.fill(0);
-        self.base_pokemon_storage.fill(0);
+        self.base_pokemon_storage = PokemonStorage::new_game().to_payload();
+    }
+
+    /// Typed view of the retained `PokemonStorage` payload.
+    #[must_use]
+    pub fn storage(&self) -> PokemonStorage {
+        PokemonStorage::from_payload(&self.base_pokemon_storage)
     }
 
     /// Returns the current wrapping save counter.
@@ -354,11 +365,24 @@ impl SaveStore {
     /// Writes all 14 sectors into the next rotated slot as upstream's
     /// `WriteSaveSectorOrSlot` (`pokeemerald/src/save.c:138-173`).
     pub fn save(&mut self, block1: &SaveBlock1, block2: &SaveBlock2) {
+        let storage = self.storage();
+        self.save_with_storage(block1, block2, &storage);
+    }
+
+    /// As [`SaveStore::save`], patching `storage` over the retained
+    /// `PokemonStorage` bytes so unmodelled bytes survive.
+    pub fn save_with_storage(
+        &mut self,
+        block1: &SaveBlock1,
+        block2: &SaveBlock2,
+        storage: &PokemonStorage,
+    ) {
         let mut block2_bytes = self.base_block2.clone();
         let mut block1_bytes = self.base_block1.clone();
         block2.patch_bytes(&mut block2_bytes);
         block1.patch_bytes(&mut block1_bytes, block2.encryption_key);
-        let storage_bytes = self.base_pokemon_storage.clone();
+        let mut storage_bytes = self.base_pokemon_storage.clone();
+        storage.patch_bytes(&mut storage_bytes);
 
         let new_last_written_sector = (self.last_written_sector + 1) % NUM_SECTORS_PER_SLOT_U16;
         let new_save_counter = self.save_counter.wrapping_add(1);
@@ -502,12 +526,14 @@ impl SaveStore {
         self.base_block1 = copied.block1;
         self.base_block2 = copied.block2;
         self.base_pokemon_storage = copied.pokemon_storage;
+        let storage = self.storage();
 
         LoadOutcome {
             status,
             block1,
             block2,
             storage_source,
+            storage,
         }
     }
 }

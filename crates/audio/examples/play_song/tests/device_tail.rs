@@ -10,9 +10,6 @@ fn a_stream_error_during_the_device_tail_is_not_a_successful_finish() {
     let result = wait_for_device_tail(
         std::time::Duration::from_millis(200),
         || {
-            // The disconnect lands while the device plays its last buffer:
-            // the counter is clean when the drain ended and nonzero after
-            // the tail wait.
             errors_seen += 1;
             errors_seen
         },
@@ -35,9 +32,6 @@ fn a_clean_device_tail_finishes_successfully() {
 
 #[test]
 fn the_device_tail_is_derived_from_the_advertised_callback_bound() {
-    // 12 000 frames at 48 kHz is a quarter second per period, so the
-    // host's two queued periods hold half a second: longer than the
-    // fixed fallback, which would have clipped it.
     let tail = device_tail_wait(Some(12_000), 48_000);
     assert_eq!(
         tail,
@@ -48,8 +42,6 @@ fn the_device_tail_is_derived_from_the_advertised_callback_bound() {
 
 #[test]
 fn the_device_tail_covers_every_queued_host_period() {
-    // A 160 ms period exceeds the fallback on its own only once the
-    // second queued period is counted.
     let tail = device_tail_wait(Some(7_680), 48_000);
     assert_eq!(
         tail,
@@ -65,20 +57,11 @@ fn an_unknown_callback_bound_falls_back_to_the_fixed_tail() {
 
 #[test]
 fn the_derived_tail_never_undercuts_the_conservative_floor() {
-    // The advertised callback size bounds one callback slice, not the
-    // host pipeline's presentation latency: cpal opens the stream with
-    // `BufferSize::Default` and its ALSA path then keeps DEFAULT_PERIODS
-    // (2) periods queued behind the callback, while JACK advertises
-    // min == max == its period. A device advertising 512 frames at 48 kHz
-    // must therefore still wait out at least the fixed fallback.
     assert!(device_tail_wait(Some(512), 48_000) >= DEVICE_TAIL_FALLBACK);
 }
 
 #[test]
 fn an_oversized_advertised_buffer_is_capped_rather_than_slept_out() {
-    // ALSA-style backends advertise maxima of seconds; the *selected*
-    // callback buffer is far smaller, so waiting the maximum would look
-    // like a hang.
     assert_eq!(device_tail_wait(Some(480_000), 48_000), DEVICE_TAIL_MAX);
 }
 

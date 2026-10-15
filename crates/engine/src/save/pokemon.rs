@@ -273,17 +273,26 @@ impl BoxPokemon {
     /// Returns [`PokemonError::ChecksumMismatch`] when the decrypted bytes
     /// do not match the checksum stored in the boxed header.
     pub fn substructures(&self) -> Result<PokemonSubstructures, PokemonError> {
-        let physical = self.decrypted_physical_substructures();
-        let mut substructures = PokemonSubstructures::default();
-        for (source, kind) in physical.into_iter().zip(self.physical_substructure_order()) {
-            *substructures.get_mut(*kind) = source;
-        }
+        let substructures = self.substructures_unchecked();
         let calculated = substructures.checksum();
         let stored = self.checksum();
         if calculated != stored {
             return Err(PokemonError::ChecksumMismatch { stored, calculated });
         }
         Ok(substructures)
+    }
+
+    /// Decrypts the substructures in logical order without comparing the
+    /// stored checksum, as upstream's accessors keep reading the decrypted
+    /// fields after they flag a mismatch (`pokeemerald/src/pokemon.c:3742-3747`).
+    #[must_use]
+    pub fn substructures_unchecked(&self) -> PokemonSubstructures {
+        let physical = self.decrypted_physical_substructures();
+        let mut substructures = PokemonSubstructures::default();
+        for (source, kind) in physical.into_iter().zip(self.physical_substructure_order()) {
+            *substructures.get_mut(*kind) = source;
+        }
+        substructures
     }
 
     /// Replaces, reorders, encrypts, and checksums the logical substructures.

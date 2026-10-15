@@ -65,7 +65,8 @@ pub(super) fn pressed(button: Buttons) -> ButtonState {
 /// The `((x, y), metatile behavior)` of `map`'s `warp_index`-th warp event
 /// tile, read from the extracted pack. Requires the pack.
 pub(super) fn warp_tile_behavior(map: assets::MapId, warp_index: usize) -> ((i16, i16), u8) {
-    let scene = crate::overworld::load_room(
+    let scene = crate::overworld::load_room_from_source(
+        &crate::pack_source::PackSource::Repo,
         map,
         crate::overworld::PlayerCharacter::Brendan,
         &engine::event_data::EventData::new(),
@@ -219,8 +220,9 @@ pub(super) fn connected_runtime(
 /// A phase on the pack-loaded [`ONE_F`] scene with the player at `position`
 /// facing `facing`, at rest. Requires the pack.
 pub(super) fn one_f_phase(position: (i32, i32), facing: Direction) -> OverworldPhase {
-    OverworldPhase::for_test(
-        crate::overworld::load_room(
+    OverworldPhase::for_test_with_source(
+        crate::overworld::load_room_from_source(
+            &crate::pack_source::PackSource::Repo,
             ONE_F,
             crate::overworld::PlayerCharacter::Brendan,
             &engine::event_data::EventData::new(),
@@ -229,6 +231,7 @@ pub(super) fn one_f_phase(position: (i32, i32), facing: Direction) -> OverworldP
         ONE_F,
         PlayerState::new(position, FIXTURE_FLOOR_ELEVATION, facing),
         None,
+        crate::pack_source::PackSource::Repo,
     )
 }
 
@@ -243,7 +246,7 @@ const ONE_F_DOORMAT_EXIT_TILE: (i32, i32) = (8, 9);
 /// the map, so a walkable exit is needed to prove the arrow warp preempts a
 /// legal step. Asserts its own preconditions so a drifted fixture fails
 /// instead of passing vacuously.
-pub(super) fn walkable_south_arrow_phase() -> OverworldPhase {
+pub(super) fn south_facing_doormat_phase_with_walkable_exit() -> OverworldPhase {
     // The map-events table is generated at build time, so no pack is needed.
     let events = assets::MapEventsTable::new()
         .resolve(ONE_F)

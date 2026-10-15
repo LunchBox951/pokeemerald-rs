@@ -36,8 +36,8 @@ fn measured_wait_reports_a_stream_error_before_the_target_is_reached() {
         std::time::Duration::from_millis(200),
         48_000,
         &policy,
-        || Some(progress(0, 0)), // stationary, well short of the target
-        || 1,                    // already unhealthy
+        || Some(progress(0, 0)),
+        || 1,
         || start,
         |_| panic!("a stream error must abort before any retry sleep"),
     );
@@ -50,9 +50,6 @@ fn measured_wait_reports_a_stream_error_before_the_target_is_reached() {
 
 #[test]
 fn measured_wait_reports_a_stalled_target_at_the_deadline() {
-    // A position still short of the target when the bound elapses is a
-    // stalled device, not a finish: the tool must not exit successfully
-    // with the final audio unconfirmed.
     let policy = RetryPolicy {
         interval: std::time::Duration::from_millis(10),
         max_wait: std::time::Duration::from_millis(30),
@@ -65,7 +62,7 @@ fn measured_wait_reports_a_stalled_target_at_the_deadline() {
         std::time::Duration::from_millis(200),
         48_000,
         &policy,
-        || Some(progress(0, 0)), // never reaches the target
+        || Some(progress(0, 0)),
         || 0,
         || *clock.borrow(),
         |duration| {
@@ -92,9 +89,6 @@ fn measured_wait_reports_a_stalled_target_at_the_deadline() {
 
 #[test]
 fn a_poll_landing_on_the_deadline_is_the_last() {
-    // A poll exactly at `max_wait` with the target still short and no
-    // fallback due is the last one: a target that sounds only during a
-    // further interval was confirmed past the budget and must not count.
     let policy = RetryPolicy {
         interval: std::time::Duration::from_millis(10),
         max_wait: std::time::Duration::from_millis(30),
@@ -109,7 +103,6 @@ fn a_poll_landing_on_the_deadline_is_the_last() {
         48_000,
         &policy,
         || {
-            // Sounds only after the deadline poll at 30 ms.
             let late = *clock.borrow() > started + policy.max_wait;
             Some(progress(if late { 4 } else { 0 }, 0))
         },

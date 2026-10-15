@@ -982,7 +982,8 @@ fn damage_donor_storage(temp: &TempSave) {
 }
 
 /// Asserts generation `counter`'s storage sectors equal `storage` when
-/// `survives`, or are all zero otherwise.
+/// `survives`, or are a new game's default storage (never the donor's)
+/// otherwise.
 fn assert_newest_storage(temp: &TempSave, counter: u32, storage: &[u8], survives: bool) {
     let image = std::fs::read(&temp.path).unwrap();
     let mut checked = 0;
@@ -997,7 +998,9 @@ fn assert_newest_storage(temp: &TempSave, counter: u32, storage: &[u8], survives
             if survives {
                 assert_eq!(got, want, "storage sector {} must survive", sector.id());
             } else {
-                assert!(got.iter().all(|&b| b == 0), "storage must be cleared");
+                assert_ne!(got, want, "donor storage must not survive a new game");
+                let defaults = engine::save::PokemonStorage::new_game().to_payload();
+                assert_eq!(got, storage_chunk(&defaults[..], sector.id()));
             }
             checked += 1;
         }
