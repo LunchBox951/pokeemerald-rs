@@ -292,6 +292,21 @@ fn a_full_moveset_drops_the_oldest_move_first() {
 }
 
 #[test]
+fn ensure_wild_startable_refuses_truant_species_before_move_screening() {
+    let dex = Dex::new();
+    assert_eq!(
+        ensure_wild_startable(&dex, SpeciesId::SLAKOTH, 5),
+        Err(BattleError::UnportedAbilityInteraction(
+            assets::AbilityId::TRUANT
+        )),
+    );
+    assert_eq!(
+        ensure_wild_startable(&dex, SpeciesId::SLAKOTH, 0),
+        Err(BattleError::InvalidLevel(0)),
+    );
+}
+
+#[test]
 fn ensure_wild_startable_accepts_route_101_mons_and_rejects_a_bide_seedot() {
     let dex = Dex::new();
     for species in [WURMPLE, POOCHYENA, ZIGZAGOON] {

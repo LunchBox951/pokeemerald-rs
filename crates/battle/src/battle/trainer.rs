@@ -314,22 +314,6 @@ pub struct TrainerPartyMon<'a> {
     pub moves: &'a [MoveId],
 }
 
-/// Refuses a species the admission screen rejects in every ability slot, before
-/// [`build_trainer_pokemon`] spends its OT-ID draw.
-fn ensure_species_admissible(dex: &Dex, species: SpeciesId) -> Result<(), BattleError> {
-    let abilities = dex.species(species)?.abilities;
-    let primary = abilities[0];
-    let secondary = if abilities[1] == assets::AbilityId::NONE {
-        primary
-    } else {
-        abilities[1]
-    };
-    if primary == assets::AbilityId::TRUANT && secondary == assets::AbilityId::TRUANT {
-        return Err(BattleError::UnportedAbilityInteraction(primary));
-    }
-    Ok(())
-}
-
 /// Validates that a trainer party can be built and played without consuming RNG.
 ///
 /// Empty-party validation runs before trainer lookup. Non-empty parties then
@@ -356,7 +340,7 @@ pub fn ensure_trainer_party_startable(
     let data = trainer_data(trainer)?;
     for mon in party {
         BattlePokemon::validate(dex, mon.species, mon.level, mon.moves)?;
-        ensure_species_admissible(dex, mon.species)?;
+        super::admission::ensure_species_admissible(dex, mon.species)?;
     }
     super::trainer_ai::ensure_supported_flags(data.ai_flags)?;
     for mon in party {

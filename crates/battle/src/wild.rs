@@ -38,10 +38,11 @@ pub fn initial_moveset(species: SpeciesId, level: u8) -> Vec<MoveId> {
 ///
 /// # Errors
 ///
-/// Returns the first Pokémon validation or move-execution error.
+/// Returns the first Pokémon validation, species-admission, or move-execution error.
 pub fn ensure_wild_startable(dex: &Dex, species: SpeciesId, level: u8) -> Result<(), BattleError> {
     let moves = initial_moveset(species, level);
     BattlePokemon::validate(dex, species, level, &moves)?;
+    crate::battle::admission::ensure_species_admissible(dex, species)?;
     for move_id in &moves {
         crate::battle::ensure_executable(dex, *move_id)?;
     }
