@@ -47,40 +47,117 @@ fn advance_player_one_frame_crosses_a_zero_offset_connection_unchanged() {
     assert!(player.in_transit(), "a crossing is a step like any other");
 }
 
-/// Crossing onto a forced-movement tile arms both guards (`field_player_avatar.c:332-349`).
+/// Crossing onto a forced-movement tile arms both guards (`field_player_avatar.c:332-349`),
+/// and once the entered map is bound the landing tile forces the next driver
+/// step at its own cadence whatever the keypad holds: a current pushes south
+/// in six frames, ice slips on in the movement direction in eight
+/// (`field_player_avatar.c:473-524`, `event_object_movement.c:8233-8298`).
 #[test]
 fn crossing_onto_a_forced_landing_tile_arms_the_guards_through_this_lane() {
-    let runtime = connected_runtime(5, 5, assets::Direction::South, 0, MapId("MAP_SOUTH"));
-    let maps = SingleConnectedMap {
-        id: MapId("MAP_SOUTH"),
-        dimensions: (5, 5),
-        landing_position: (3, 0),
-        landing_cell: MetatileCell {
-            metatile_id: 1,
-            collision: 0,
-            elevation: 3,
-        },
-        landing_behavior: engine::overworld::metatile_behavior::MB_SOUTHWARD_CURRENT,
-    };
-    let mut player = PlayerState::new((3, 4), 3, Direction::South);
+    use engine::overworld::metatile_behavior::{MB_ICE, MB_SOUTHWARD_CURRENT};
+    for (behavior, frames) in [(MB_SOUTHWARD_CURRENT, 6), (MB_ICE, 8)] {
+        for held in [None, Some(Direction::North)] {
+            let runtime = connected_runtime(5, 5, assets::Direction::South, 0, MapId("MAP_SOUTH"));
+            let maps = SingleConnectedMap {
+                id: MapId("MAP_SOUTH"),
+                dimensions: (5, 5),
+                landing_position: (3, 0),
+                landing_cell: MetatileCell {
+                    metatile_id: 1,
+                    collision: 0,
+                    elevation: 3,
+                },
+                landing_behavior: behavior,
+            };
+            let mut player = PlayerState::new((3, 4), 3, Direction::South);
 
-    advance_player_one_frame(
-        &mut player,
-        Some(Direction::South),
-        false,
-        &runtime,
-        &maps,
-        &NO_FLAGS,
-    );
+            advance_player_one_frame(
+                &mut player,
+                Some(Direction::South),
+                false,
+                &runtime,
+                &maps,
+                &NO_FLAGS,
+            );
 
-    assert!(
-        player.forced_movement_armed(),
-        "the movement guard must arm from the neighbour's landing behavior"
-    );
-    assert!(
-        player.field_input_suppressed(),
-        "and so must the field-input gate the landing call reads"
-    );
+            assert!(
+                player.forced_movement_armed(),
+                "the movement guard must arm from the neighbour's landing behavior"
+            );
+            assert!(
+                player.field_input_suppressed(),
+                "and so must the field-input gate the landing call reads"
+            );
+
+            // The phase rebinds onto the entered map after the crossing
+            // frame; from here on the driver reads that map's own tiles.
+            let landed = OverworldPhase::for_test(
+                crate::overworld::test_support::synthetic_scene_with_special_tile(
+                    5,
+                    5,
+                    (3, 0),
+                    behavior,
+                ),
+                ONE_F,
+                PlayerState::new((0, 0), 3, Direction::South),
+                None,
+            );
+            let landed = runtime_for(&landed);
+            for _ in 1..WALK_FRAMES_PER_TILE {
+                advance_player_one_frame(
+                    &mut player,
+                    None,
+                    false,
+                    &landed,
+                    &no_connections,
+                    &NO_FLAGS,
+                );
+            }
+            assert!(!player.in_transit(), "setup: the crossing step drained");
+
+            let outcome = advance_player_one_frame(
+                &mut player,
+                held,
+                false,
+                &landed,
+                &no_connections,
+                &NO_FLAGS,
+            );
+            assert_eq!(
+                outcome,
+                StepOutcome::Advanced {
+                    from: (3, 0),
+                    to: (3, 1),
+                },
+                "behavior {behavior} held {held:?}"
+            );
+            assert_eq!(player.step_progress(), 1);
+            for expected in 2..frames {
+                advance_player_one_frame(
+                    &mut player,
+                    held,
+                    false,
+                    &landed,
+                    &no_connections,
+                    &NO_FLAGS,
+                );
+                assert_eq!(player.step_progress(), expected, "behavior {behavior}");
+                assert!(player.in_transit());
+            }
+            advance_player_one_frame(
+                &mut player,
+                held,
+                false,
+                &landed,
+                &no_connections,
+                &NO_FLAGS,
+            );
+            assert!(
+                !player.in_transit(),
+                "behavior {behavior} held {held:?} settles on frame {frames}"
+            );
+        }
+    }
 }
 
 /// A nonzero east/west offset shifts the cross-axis y by `-offset` (`fieldmap.c:578-598,699-712`).
