@@ -9,8 +9,8 @@ use super::plan::{
 
 /// The header paragraph saying how roots were settled, as `//!` lines.
 ///
-/// A root is "unique" only if exactly one place in the ROM held its bytes. Roots whose art repeats byte-for-byte are resolved by
-/// address order, and the header names them rather than claiming uniqueness.
+/// A root is "unique" only if exactly one place in the ROM held its bytes.
+/// Roots whose art repeats byte-for-byte are resolved by address order, and the header names them rather than claiming uniqueness.
 fn provenance_paragraph(lines: &[ReportLine]) -> String {
     let identical: Vec<&str> = lines
         .iter()
@@ -32,8 +32,8 @@ fn provenance_paragraph(lines: &[ReportLine]) -> String {
         };
     }
     let mut text = format!(
-        "//! {} roots were not unique: each one's bytes repeat at several ROM\n\
-         //! addresses holding identical data, so the generator pairs the copies off\n\
+        "//! {} roots were chosen among identical copies: each one's bytes repeat at\n\
+         //! several ROM addresses holding identical data, so the generator pairs the copies off\n\
          //! in address order against the ids that share the art and records the\n\
          //! one at that position (the lowest address first). The importer reads\n\
          //! bytes, so any copy yields the same pack entry. Every other root was\n\
@@ -42,7 +42,7 @@ fn provenance_paragraph(lines: &[ReportLine]) -> String {
         identical.len()
     );
     for id in identical {
-        let _ = writeln!(text, "//! - `{id}`");
+        let _ = writeln!(text, "//! - `{}`", id.escape_default());
     }
     text
 }
@@ -503,6 +503,30 @@ mod tests {
     }
 
     #[test]
+    fn a_duplicate_copy_id_with_a_newline_stays_commented() {
+        let lines = [ReportLine::unique("sprite/zz\nnot Rust", 0x0830_0000, 32)
+            .with(Resolution::ArbitraryAmongIdentical)];
+        let text = provenance_paragraph(&lines);
+        assert!(text.lines().all(|line| line.starts_with("//!")), "{text}");
+    }
+
+    #[test]
+    fn only_identical_copy_selections_are_counted_not_every_repeat() {
+        let lines = [
+            ReportLine::unique("a", 0x0820_0000, 4).with(Resolution::StructDerived),
+            ReportLine::unique("b", 0x0830_0000, 4).with(Resolution::ArbitraryAmongIdentical),
+            ReportLine::unique("c", 0x0840_0000, 4),
+        ];
+        let text = provenance_paragraph(&lines);
+        assert!(!text.contains("1 roots were not unique"), "{text}");
+        assert!(
+            text.contains("1 roots were chosen among identical copies"),
+            "{text}"
+        );
+        assert!(!text.contains("- `a`"), "{text}");
+    }
+
+    #[test]
     fn a_duplicate_copy_root_is_named_and_the_rule_stated() {
         let lines = [
             ReportLine::unique("sprite/a", 0x0820_0000, 32),
@@ -510,7 +534,10 @@ mod tests {
                 .with(Resolution::ArbitraryAmongIdentical),
         ];
         let text = provenance_paragraph(&lines);
-        assert!(text.contains("1 roots were not unique"), "{text}");
+        assert!(
+            text.contains("1 roots were chosen among identical copies"),
+            "{text}"
+        );
         assert!(text.contains("address order"), "{text}");
         assert!(text.contains("- `sprite/b`"), "{text}");
         assert!(!text.contains("- `sprite/a`"), "{text}");
