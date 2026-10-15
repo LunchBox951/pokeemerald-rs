@@ -7,7 +7,7 @@ use assets::{
     AssetPack, DirectSoundMode, DirectSoundSample, DirectSoundVoice, KeySplitVoice, Sample,
     SampleId, VoiceEntry, VoiceGroup, VoiceGroupId,
 };
-use audio::{Instrument, Sequencer, DEFAULT_MASTER_VOLUME};
+use audio::{Adsr, Instrument, Sequencer, ToneData, WaveData, DEFAULT_MASTER_VOLUME};
 
 use super::super::load_song_from_pack;
 use super::shared::{
@@ -326,11 +326,116 @@ fn mus_titles_key_33_strings_note_resolves_to_the_trumpet_voice() {
         panic!("program {STRINGS_PROGRAM} must convert to a key split");
     };
     assert_eq!(split.table[usize::from(PLAYED_KEY)], EXPECTED_CHILD);
+    let child = split
+        .children
+        .get(usize::from(EXPECTED_CHILD))
+        .and_then(Option::as_ref);
+    let trumpet = pack
+        .sample(&SampleId(TRUMPET_SAMPLE.to_owned()))
+        .expect("the trumpet sample must be in the pack");
+    if let Err(why) = check_trumpet_child(child, &trumpet) {
+        panic!("key 33 must resolve to the trumpet voice: {why}");
+    }
+}
+
+const TRUMPET_SAMPLE: &str = "audio/sample/direct-sound/sc88pro_trumpet_60";
+const TRUMPET_ENVELOPE: Adsr = Adsr {
+    attack: 255,
+    decay: 0,
+    sustain: 193,
+    release: 127,
+};
+
+/// Checks `child` is `sc88pro_trumpet_60` with trumpet's 255/0/193/127
+/// envelope (`sound/voicegroups/keysplits/trumpet.inc:1-4`), not merely some
+/// `DirectSound` voice.
+fn check_trumpet_child(child: Option<&Instrument>, trumpet: &Sample) -> Result<(), String> {
+    let Some(Instrument::DirectSound(tone)) = child else {
+        return Err(format!("expected a DirectSound voice, got {child:?}"));
+    };
+    let Sample::DirectSound(ds) = trumpet else {
+        return Err("the trumpet sample must be DirectSound".to_owned());
+    };
+    if tone.adsr != TRUMPET_ENVELOPE {
+        return Err(format!("envelope {:?} is not the trumpet's", tone.adsr));
+    }
+    if tone.wave.samples() != ds.data() {
+        return Err("sample data is not sc88pro_trumpet_60's".to_owned());
+    }
+    if tone.is_fixed_rate() {
+        return Err("a resampled trumpet voice must not be fixed-rate".to_owned());
+    }
+    if tone.wave.is_looping() != ds.loop_start().is_some() {
+        return Err("loop mode differs from the source sample".to_owned());
+    }
+    if ds
+        .loop_start()
+        .is_some_and(|start| usize::try_from(start).ok() != Some(tone.wave.loop_start()))
+    {
+        return Err(format!("loop start {} differs", tone.wave.loop_start()));
+    }
+    if tone.wave.freq() != ds.base_frequency {
+        return Err(format!("base frequency {} differs", tone.wave.freq()));
+    }
+    if tone.wave.logical_len() != usize::try_from(ds.sample_count()).expect("small") {
+        return Err(format!(
+            "logical length {} differs",
+            tone.wave.logical_len()
+        ));
+    }
+    Ok(())
+}
+
+fn trumpet_sample_and_voice(data: Vec<i8>, adsr: Adsr) -> (Sample, Instrument) {
+    let ds = DirectSoundSample::new(
+        22_050,
+        None,
+        u32::try_from(data.len() - 1).expect("small"),
+        data.clone(),
+    )
+    .expect("the synthetic trumpet sample is valid");
+    let wave = std::sync::Arc::new(
+        WaveData::one_shot(22_050, data)
+            .with_logical_len(usize::try_from(ds.sample_count()).expect("small")),
+    );
+    (
+        Sample::DirectSound(ds),
+        Instrument::DirectSound(ToneData::new(wave, adsr)),
+    )
+}
+
+#[test]
+fn trumpet_child_check_accepts_the_matching_voice() {
+    let (sample, voice) = trumpet_sample_and_voice(vec![1, 2, 3, 4], TRUMPET_ENVELOPE);
+    assert_eq!(check_trumpet_child(Some(&voice), &sample), Ok(()));
+}
+
+#[test]
+fn trumpet_child_check_rejects_a_different_directsound_voice() {
+    let (sample, _) = trumpet_sample_and_voice(vec![1, 2, 3, 4], TRUMPET_ENVELOPE);
+    let (_, other_sample) = trumpet_sample_and_voice(vec![9, 9, 9, 9], TRUMPET_ENVELOPE);
+    assert!(check_trumpet_child(Some(&other_sample), &sample).is_err());
+
+    let wrong_envelope = Adsr {
+        sustain: 192,
+        ..TRUMPET_ENVELOPE
+    };
+    let (_, wrong_adsr) = trumpet_sample_and_voice(vec![1, 2, 3, 4], wrong_envelope);
+    assert!(check_trumpet_child(Some(&wrong_adsr), &sample).is_err());
+    assert!(check_trumpet_child(None, &sample).is_err());
+
+    let fixed = match trumpet_sample_and_voice(vec![1, 2, 3, 4], TRUMPET_ENVELOPE).1 {
+        Instrument::DirectSound(tone) => Instrument::DirectSound(tone.fixed()),
+        other => other,
+    };
+    assert!(check_trumpet_child(Some(&fixed), &sample).is_err());
+
+    let looped = DirectSoundSample::new(22_050, Some(1), 3, vec![1, 2, 3, 4])
+        .map(Sample::DirectSound)
+        .expect("the looping sample is valid");
+    let (_, one_shot) = trumpet_sample_and_voice(vec![1, 2, 3, 4], TRUMPET_ENVELOPE);
     assert!(
-        matches!(
-            split.children.get(usize::from(EXPECTED_CHILD)),
-            Some(Some(Instrument::DirectSound(_)))
-        ),
-        "key 33 must resolve to a playable voice, not silence"
+        check_trumpet_child(Some(&one_shot), &looped).is_err(),
+        "a one-shot voice must not pass for a looping source"
     );
 }
