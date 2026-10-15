@@ -371,6 +371,22 @@ pub struct BattleMessageRoots {
     pub specials: &'static [SpecialMessageRoot],
 }
 
+/// The ordinary-bag assets (`graphics/bag` and the item icons).
+///
+/// Holds the pack ids the checkout extractor emits under `bag/`: the fixed
+/// bag entries plus the deduplicated item-icon images and palettes. The
+/// `gItemIconTable` row-to-icon mapping is not repeated here; it is the
+/// checkout's typed `BagAssets` data, not a ROM root.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BagRoots {
+    /// Every `bag/image/*` and `bag/item-icon/image/*` entry.
+    pub images: &'static [ImageRoot],
+    /// Every `bag/palette/*` and `bag/item-icon/palette/*` entry.
+    pub palettes: &'static [PaletteRoot],
+    /// Every `bag/raw/*` entry.
+    pub raws: &'static [BlobRoot],
+}
+
 /// The authoritative ROM addresses a profile carries, grouped by domain.
 ///
 /// `#[non_exhaustive]` so adding a domain stays a non-breaking change for
@@ -396,6 +412,8 @@ pub struct Roots {
     pub audio: AudioRoots,
     /// The battle-message token table.
     pub battle_messages: BattleMessageRoots,
+    /// The ordinary-bag images, palettes, and tilemap.
+    pub bag: BagRoots,
 }
 
 impl Roots {
@@ -434,6 +452,7 @@ impl Roots {
             programmable_wave: &[],
         },
         battle_messages: BattleMessageRoots::NONE,
+        bag: BagRoots::NONE,
     };
 
     /// Every image root in the table, across every domain.
@@ -451,6 +470,7 @@ impl Roots {
             .chain(self.title_screen.images.iter())
             .chain(self.sprites.sheets.iter())
             .chain(self.text_window.images.iter())
+            .chain(self.bag.images.iter())
     }
 
     /// Every palette root in the table, across every domain.
@@ -462,6 +482,7 @@ impl Roots {
             .chain(self.sprites.palettes.iter())
             .chain(self.text_window.palettes.iter())
             .chain(self.interface.palettes.iter())
+            .chain(self.bag.palettes.iter())
     }
 }
 
@@ -470,6 +491,15 @@ impl BattleMessageRoots {
     pub const NONE: Self = Self {
         table: GbaPtr::AT_BASE,
         specials: &[],
+    };
+}
+
+impl BagRoots {
+    /// No bag roots recorded: the domain writes nothing.
+    pub const NONE: Self = Self {
+        images: &[],
+        palettes: &[],
+        raws: &[],
     };
 }
 

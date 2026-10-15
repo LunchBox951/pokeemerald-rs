@@ -9,9 +9,10 @@
 
 use crate::reader::GbaPtr;
 use crate::roots::{
-    AudioRoots, BattleMessageRoots, BlobRoot, Encoding, FontRoot, ImageRoot, InterfaceRoots,
-    KeysplitRoot, MapLayoutRoot, PaletteRoot, Roots, SampleRoot, SongRoot, SpecialMessageRoot,
-    SpriteRoots, TextWindowRoots, TileAnimRoot, TilesetRoot, TitleScreenRoots, VoicegroupRoot,
+    AudioRoots, BagRoots, BattleMessageRoots, BlobRoot, Encoding, FontRoot, ImageRoot,
+    InterfaceRoots, KeysplitRoot, MapLayoutRoot, PaletteRoot, Roots, SampleRoot, SongRoot,
+    SpecialMessageRoot, SpriteRoots, TextWindowRoots, TileAnimRoot, TilesetRoot, TitleScreenRoots,
+    VoicegroupRoot,
 };
 
 /// Pokemon Emerald (US) rev 0's root table.
@@ -646,4 +647,5 @@ pub const EMERALD_US_REV0_ROOTS: Roots = Roots {
             SpecialMessageRoot { symbol: "sATypeMove_Table[TYPE_DARK]", addr: GbaPtr::at(0x085C_CCDD) },
         ],
     },
+    bag: BagRoots::NONE,
 };
