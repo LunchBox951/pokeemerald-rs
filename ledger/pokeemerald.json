@@ -12476,37 +12476,37 @@
           "reason": "Battle textbox and menu text source transcoded to a validated typed pack entry read by AssetPack::battle_interface; the other battle_interface sources remain pending.",
           "rust_target": "crates/xtask/src/extract/battle_interface.rs",
           "spec": "S-4",
-          "status": "rewritten"
+          "status": "ported"
         },
         "text_pp.pal": {
           "reason": "Battle textbox and menu text source transcoded to a validated typed pack entry read by AssetPack::battle_interface; the other battle_interface sources remain pending.",
           "rust_target": "crates/xtask/src/extract/battle_interface.rs",
           "spec": "S-4",
-          "status": "rewritten"
+          "status": "ported"
         },
         "textbox.png": {
           "reason": "Battle textbox and menu text source transcoded to a validated typed pack entry read by AssetPack::battle_interface; the other battle_interface sources remain pending.",
           "rust_target": "crates/xtask/src/extract/battle_interface.rs",
           "spec": "S-4",
-          "status": "rewritten"
+          "status": "ported"
         },
         "textbox_0.pal": {
           "reason": "Battle textbox and menu text source transcoded to a validated typed pack entry read by AssetPack::battle_interface; the other battle_interface sources remain pending.",
           "rust_target": "crates/xtask/src/extract/battle_interface.rs",
           "spec": "S-4",
-          "status": "rewritten"
+          "status": "ported"
         },
         "textbox_1.pal": {
           "reason": "Battle textbox and menu text source transcoded to a validated typed pack entry read by AssetPack::battle_interface; the other battle_interface sources remain pending.",
           "rust_target": "crates/xtask/src/extract/battle_interface.rs",
           "spec": "S-4",
-          "status": "rewritten"
+          "status": "ported"
         },
         "textbox_map.bin": {
           "reason": "Battle textbox and menu text source transcoded to a validated typed pack entry read by AssetPack::battle_interface; the other battle_interface sources remain pending.",
           "rust_target": "crates/xtask/src/extract/battle_interface.rs",
           "spec": "S-4",
-          "status": "rewritten"
+          "status": "ported"
         }
       },
       "category": "graphics.battle",
