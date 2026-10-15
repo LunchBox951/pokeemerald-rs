@@ -427,19 +427,19 @@ const ICON_STEMS: [(&str, &str); ITEMS_COUNT + 1] = [
 /// [`AssetPack::bag_assets`]; icons by [`item_icon`](Self::item_icon).
 #[derive(Debug, Clone, Copy)]
 pub struct BagAssets<'a> {
-    /// Bag screen tile sheet (`menu.png`).
+    /// Bag screen tile sheet (`menu.png`), 4bpp bank-local indices.
     pub screen: ImageRef<'a>,
-    /// Bag screen tilemap (`menu.bin`).
+    /// Bag screen tilemap (`menu.bin`): 32x32 two-byte little-endian entries.
     pub screen_tilemap: &'a [u8],
-    /// Bag screen palette for the male player.
+    /// Bag screen palette for the male player: two 16-colour banks.
     pub screen_male_palette: PaletteRef<'a>,
-    /// Bag screen palette for the female player.
+    /// Bag screen palette for the female player: two 16-colour banks.
     pub screen_female_palette: PaletteRef<'a>,
-    /// Male bag animation sheet.
+    /// Male bag animation sheet with the shared bag palette.
     pub male: PalettedImage<'a>,
-    /// Female bag animation sheet.
+    /// Female bag animation sheet with the shared bag palette.
     pub female: PalettedImage<'a>,
-    /// Rotating Poké Ball.
+    /// Rotating Poké Ball with its own palette.
     pub rotating_ball: PalettedImage<'a>,
     /// Registered-select mark; uses the item-list window's palette.
     pub registered_select: ImageRef<'a>,
