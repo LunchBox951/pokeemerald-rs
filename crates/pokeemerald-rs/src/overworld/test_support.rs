@@ -613,3 +613,53 @@ pub(crate) fn write_oldale_layout_pack(path: &std::path::Path, sprite_paths: &[&
     }
     std::fs::write(path, write_synthetic_pack(entries)).unwrap();
 }
+
+/// Writes a synthetic pack at `path` that loads the *real* bundled
+/// `MAP_ROUTE101` and `MAP_OLDALE_TOWN` headers and layouts (both
+/// `general`/`petalburg`, 20x20, joined by an offset-0 north/south
+/// connection) through [`super::load_room_from_source`], with each of
+/// `oldale_specials` a distinct metatile carrying its own behavior on
+/// Oldale's grid, and an opaque people sheet for each of `sprite_paths`.
+///
+/// Both layouts share the one `general` attribute table, so a phase test can
+/// cross the real connection, through `OverworldPhase::cross_connection`,
+/// onto a behaviour-bearing landing tile.
+pub(crate) fn write_route101_oldale_layout_pack(
+    path: &std::path::Path,
+    oldale_specials: &[((u16, u16), u8)],
+    sprite_paths: &[&str],
+) {
+    let rename = |mut e: Entry, layout: &str| {
+        if e.id == "layout/map_test/map" {
+            e.id = format!("layout/{layout}/map");
+        } else if e.id == "layout/map_test/border" {
+            e.id = format!("layout/{layout}/border");
+        }
+        e
+    };
+    let mut entries: Vec<Entry> =
+        synthetic_overworld_pack_entries_with_special_tiles(20, 20, oldale_specials)
+            .into_iter()
+            .map(|e| rename(e, "oldale_town"))
+            .collect();
+    entries.extend(
+        synthetic_overworld_pack_entries_for("general", 20, 20)
+            .into_iter()
+            .filter(|e| e.id.starts_with("layout/map_test/"))
+            .map(|e| rename(e, "route101")),
+    );
+    entries.extend(
+        synthetic_overworld_pack_entries_for("petalburg", 20, 20)
+            .into_iter()
+            .filter(|e| e.id.starts_with("tileset/petalburg/")),
+    );
+    for sprite in sprite_paths {
+        entries.push(Entry {
+            id: format!("sprite/{sprite}"),
+            kind_tag: IMAGE_KIND_TAG,
+            meta: image_meta(144, 32, 8),
+            payload: vec![3u8; 144 * 32],
+        });
+    }
+    std::fs::write(path, write_synthetic_pack(entries)).unwrap();
+}

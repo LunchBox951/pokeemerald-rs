@@ -35,6 +35,10 @@ pub const SLIDE_FRAMES_PER_TILE: u8 = 8;
 /// 8233-8298`).
 pub const RUN_FRAMES_PER_TILE: u8 = 8;
 
+/// Frames a dispatched current tile's crossing lasts (`MOVE_SPEED_FAST_2`,
+/// `event_object_movement.c:8263-8270`).
+pub const CURRENT_FRAMES_PER_TILE: u8 = 6;
+
 /// `FLAG_SYS_B_DASH` (`SYSTEM_FLAGS + 0x60`): the running shoes were received
 /// (`include/constants/flags.h:1462`).
 const FLAG_SYS_B_DASH: u16 = 0x8C0;
@@ -84,6 +88,12 @@ struct TransitCadence {
     /// Whether the crossing plays `sAnim_Run*` on the running sheet rather
     /// than `sAnim_Go*` on the walking sheet (`event_object_movement.c:5120-5124`).
     running: bool,
+    /// Frames, counted from the crossing's first, the walk animation's
+    /// forward-foot cell lasts before the standing cell takes over: half of
+    /// a 16-frame walk, but a current's six-frame crossing still plays
+    /// `sAnim_GoFast*` at four frames per cell
+    /// (`movement_action_func_tables.h:605-608`, `object_event_anims.h:238-245`).
+    forward_foot_frames: u8,
 }
 
 impl TransitCadence {
@@ -92,13 +102,26 @@ impl TransitCadence {
         duration: WALK_FRAMES_PER_TILE,
         animation_disabled: false,
         running: false,
+        forward_foot_frames: WALK_FRAMES_PER_TILE / 2,
     };
 
-    /// A dispatched slide tile's pace.
+    /// A dispatched slide or slip tile's pace (`PlayerWalkFast`, eight
+    /// frames, animation paused).
     const SLIDE: Self = Self {
         duration: SLIDE_FRAMES_PER_TILE,
         animation_disabled: true,
         running: false,
+        forward_foot_frames: SLIDE_FRAMES_PER_TILE / 2,
+    };
+
+    /// A dispatched current tile's pace: six frames with the walk animation
+    /// left running (`PlayerRideWaterCurrent`, `field_player_avatar.c:985-988`;
+    /// `event_object_movement.c:8263-8270`).
+    const CURRENT: Self = Self {
+        duration: CURRENT_FRAMES_PER_TILE,
+        animation_disabled: false,
+        running: false,
+        forward_foot_frames: 4,
     };
 
     /// A held-B run's pace: fast, with the walk animation left running.
@@ -106,6 +129,7 @@ impl TransitCadence {
         duration: RUN_FRAMES_PER_TILE,
         animation_disabled: false,
         running: true,
+        forward_foot_frames: RUN_FRAMES_PER_TILE / 2,
     };
 }
 
@@ -344,8 +368,9 @@ impl PlayerState {
     /// Returns whether the standing tile is in upstream's forced-movement
     /// dispatch set, `sForcedMovementTestFuncs`
     /// (`field_player_avatar.c:412-427`). `supported_forced_mover`
-    /// dispatches a `MB_WALK_*`/`MB_SLIDE_*` tile as real movement; every
-    /// other armed tile still refuses manual steps. Armed only by a manual
+    /// dispatches `MB_WALK_*`, `MB_SLIDE_*`, ice, the Trick House floor and
+    /// the four currents as real movement; every other armed tile (waterfall,
+    /// muddy slope, Secret Base mats) still refuses manual steps. Armed only by a manual
     /// step attempt (including a blocked one), never by placement.
     #[must_use]
     pub const fn forced_movement_armed(&self) -> bool {
@@ -371,7 +396,8 @@ impl PlayerState {
 
     /// Returns the active tile crossing's total frame count --
     /// [`WALK_FRAMES_PER_TILE`] for an ordinary step or a dispatched walk
-    /// tile, [`SLIDE_FRAMES_PER_TILE`] for a dispatched slide tile. Only
+    /// tile, [`SLIDE_FRAMES_PER_TILE`] for a dispatched slide or slip tile,
+    /// [`CURRENT_FRAMES_PER_TILE`] for a dispatched current tile. Only
     /// meaningful alongside [`step_progress`](Self::step_progress) while
     /// [`step_direction`](Self::step_direction) is `Some`; stale (the
     /// last crossing's duration) at rest.
@@ -387,6 +413,15 @@ impl PlayerState {
     #[must_use]
     pub const fn transit_animation_disabled(&self) -> bool {
         self.transit_cadence.animation_disabled
+    }
+
+    /// Returns how many frames of the active crossing show the walk
+    /// animation's forward-foot cell before the standing cell, independent of
+    /// [`transit_duration`](Self::transit_duration) (a current crossing lasts
+    /// six frames but holds the cell for four). Stale at rest.
+    #[must_use]
+    pub const fn transit_forward_foot_frames(&self) -> u8 {
+        self.transit_cadence.forward_foot_frames
     }
 
     /// Returns whether a finished slide still holds its paused forward-foot
@@ -495,8 +530,8 @@ impl PlayerState {
     /// Advances an active tile crossing by one frame; a stationary player remains stationary.
     ///
     /// A crossing drains at the per-tile pace fixed when it started, so a
-    /// dispatched slide tile ([`SLIDE_FRAMES_PER_TILE`]) drains twice as
-    /// fast as an ordinary step or a dispatched walk tile
+    /// dispatched slide or slip tile ([`SLIDE_FRAMES_PER_TILE`]) drains twice
+    /// as fast as an ordinary step or a dispatched walk tile
     /// ([`WALK_FRAMES_PER_TILE`]).
     ///
     /// Also drains [`TURN_IN_PLACE_FRAMES`], independently of tile transit.
@@ -617,7 +652,7 @@ impl PlayerState {
         let standing_behavior = runtime
             .metatile_behavior(self.position.0, self.position.1)
             .unwrap_or(MB_NORMAL);
-        let supported_mover = supported_forced_mover(standing_behavior);
+        let supported_mover = supported_forced_mover(standing_behavior, self.movement_direction);
 
         // `TryInterruptObjectEventSpecialAnim` runs ahead of forced movement
         // and the keypad.
@@ -674,17 +709,15 @@ impl PlayerState {
         // `supported_mover.is_none()` excludes a tile already handled above.
         if self.forced_movement_armed && supported_mover.is_none() {
             let forced_step_blocked =
-                forced_movement_direction(standing_behavior, self.movement_direction).is_some_and(
-                    |forced_direction| {
-                        self.forced_direction_blocked(
-                            forced_direction,
-                            runtime,
-                            maps,
-                            event_data,
-                            standing_behavior,
-                        )
-                    },
-                );
+                forced_movement_direction(standing_behavior).is_some_and(|forced_direction| {
+                    self.forced_direction_blocked(
+                        forced_direction,
+                        runtime,
+                        maps,
+                        event_data,
+                        standing_behavior,
+                    )
+                });
             if !forced_step_blocked {
                 self.movement_streak_active = true;
                 return StepOutcome::Blocked {
@@ -707,7 +740,8 @@ impl PlayerState {
         self.movement_direction = direction;
         // Upstream enters MOVING before collision resolves, so a blocked attempt
         // still arms the standing tile (`field_player_avatar.c:401-405`, `:583-595`).
-        self.forced_movement_armed |= supported_forced_mover(standing_behavior).is_some();
+        self.forced_movement_armed |=
+            supported_forced_mover(standing_behavior, self.movement_direction).is_some();
 
         self.attempt_manual_step(
             direction,
@@ -1022,16 +1056,19 @@ struct ForcedMover {
     locks_facing: bool,
 }
 
-/// Returns the walk or slide mover a standing behavior dispatches
-/// (`field_player_avatar.c:486-552, 975-982`), or `None` for every other
-/// behavior [`is_forced_movement`] arms -- ice, currents, the Trick House
-/// puzzle floor, the waterfall, the muddy slope, and the Secret Base mats,
-/// which stay deferred.
+/// Returns the walk, slide, slip, or current mover a standing behavior
+/// dispatches (`field_player_avatar.c:473-552, 975-988`), or `None` for every
+/// other behavior [`is_forced_movement`] arms -- the waterfall, the muddy
+/// slope, and the Secret Base mats, which stay deferred. `movement_direction`
+/// is the slip tiles' direction (`:473-484`).
 #[must_use]
-fn supported_forced_mover(standing_behavior: u8) -> Option<ForcedMover> {
-    // `locks_facing` and `cadence.animation_disabled` coincide for every
-    // mover this slice supports: both are set together, only by
-    // `ForcedMovement_Slide` (`field_player_avatar.c:526-532`).
+fn supported_forced_mover(
+    standing_behavior: u8,
+    movement_direction: Direction,
+) -> Option<ForcedMover> {
+    // `cadence.animation_disabled` and `locks_facing` differ for slip: it
+    // pauses the animation but never locks facing (`:473-484`); only
+    // `ForcedMovement_Slide` sets both (`:526-532`).
     let (direction, cadence, locks_facing) = match standing_behavior {
         MB_WALK_EAST => (Direction::East, TransitCadence::WALK, false),
         MB_WALK_WEST => (Direction::West, TransitCadence::WALK, false),
@@ -1041,6 +1078,13 @@ fn supported_forced_mover(standing_behavior: u8) -> Option<ForcedMover> {
         MB_SLIDE_WEST => (Direction::West, TransitCadence::SLIDE, true),
         MB_SLIDE_NORTH => (Direction::North, TransitCadence::SLIDE, true),
         MB_SLIDE_SOUTH => (Direction::South, TransitCadence::SLIDE, true),
+        MB_ICE | MB_TRICK_HOUSE_PUZZLE_8_FLOOR => {
+            (movement_direction, TransitCadence::SLIDE, false)
+        }
+        MB_SOUTHWARD_CURRENT => (Direction::South, TransitCadence::CURRENT, false),
+        MB_NORTHWARD_CURRENT => (Direction::North, TransitCadence::CURRENT, false),
+        MB_WESTWARD_CURRENT => (Direction::West, TransitCadence::CURRENT, false),
+        MB_EASTWARD_CURRENT => (Direction::East, TransitCadence::CURRENT, false),
         _ => return None,
     };
     Some(ForcedMover {
@@ -1051,22 +1095,13 @@ fn supported_forced_mover(standing_behavior: u8) -> Option<ForcedMover> {
 }
 
 /// Returns the direction a standing *deferred* behavior's `ForcedMovement_*`
-/// handler collision-tests (`field_player_avatar.c:486-580`),
-/// `movement_direction` for the two `ForcedMovement_Slip` tiles
-/// (`:473-484`) and `None` for the Secret Base mats, which never
-/// collision-check (`:555-565`). `MB_WALK_*` and `MB_SLIDE_*` are dispatched
-/// by [`supported_forced_mover`] before `step` ever reaches this deferred
-/// path.
-fn forced_movement_direction(
-    standing_behavior: u8,
-    movement_direction: Direction,
-) -> Option<Direction> {
+/// handler collision-tests (`field_player_avatar.c:486-580`), or `None` for
+/// the Secret Base mats, which never collision-check (`:555-565`). Walk,
+/// slide, slip and current tiles are dispatched by
+/// [`supported_forced_mover`] before `step` ever reaches this deferred path.
+fn forced_movement_direction(standing_behavior: u8) -> Option<Direction> {
     match standing_behavior {
-        MB_EASTWARD_CURRENT => Some(Direction::East),
-        MB_WESTWARD_CURRENT => Some(Direction::West),
-        MB_NORTHWARD_CURRENT => Some(Direction::North),
-        MB_SOUTHWARD_CURRENT | MB_WATERFALL | MB_MUDDY_SLOPE => Some(Direction::South),
-        MB_ICE | MB_TRICK_HOUSE_PUZZLE_8_FLOOR => Some(movement_direction),
+        MB_WATERFALL | MB_MUDDY_SLOPE => Some(Direction::South),
         _ => None,
     }
 }
