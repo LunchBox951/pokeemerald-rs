@@ -85,6 +85,9 @@ mod sha1;
 use std::path::{Path, PathBuf};
 
 pub use domains::audio::decode_voicegroup_payload;
+pub use domains::battle_messages::{
+    decode_battle_message_payload, PACK_ID as BATTLE_MESSAGE_PACK_ID,
+};
 pub use domains::song::decode_song_payload;
 pub use error::{HeaderFault, ImportError, Lz77Fault, PartialFile, SongFault};
 pub use lz77::{decompress as lz77_decompress, decompress_at as lz77_decompress_at, LZ77_TYPE};
@@ -96,9 +99,9 @@ pub use profile::{
 pub use reader::{GbaPtr, RomReader, ROM_BASE, ROM_WINDOW_END};
 pub use rom::{GbaHeader, Rom, ROM_SIZE};
 pub use roots::{
-    AudioRoots, BlobRoot, Encoding, FontRoot, ImageRoot, InterfaceRoots, KeysplitRoot,
-    MapLayoutRoot, PaletteRoot, Roots, SampleRoot, SongRoot, SpriteRoots, TextWindowRoots,
-    TileAnimRoot, TilesetRoot, TitleScreenRoots, VoicegroupRoot,
+    AudioRoots, BattleMessageRoots, BlobRoot, Encoding, FontRoot, ImageRoot, InterfaceRoots,
+    KeysplitRoot, MapLayoutRoot, PaletteRoot, Roots, SampleRoot, SongRoot, SpecialMessageRoot,
+    SpriteRoots, TextWindowRoots, TileAnimRoot, TilesetRoot, TitleScreenRoots, VoicegroupRoot,
 };
 pub use sha1::{sha1, Digest, DigestParseError, Sha1};
 

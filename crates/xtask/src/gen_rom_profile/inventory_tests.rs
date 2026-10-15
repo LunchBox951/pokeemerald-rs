@@ -6,7 +6,10 @@ use rom_import::fixture::RomFixture;
 
 use super::error::GenRomProfileError;
 use super::tests::with_context;
-use super::{fonts, inventory, layouts, locate_profile, sprites, text_window, tilesets, title};
+use super::{
+    battle_messages, fonts, inventory, layouts, locate_profile, sprites, text_window, tilesets,
+    title,
+};
 use crate::extract::scope::{
     layout_ids, sprite_palette_ids, sprite_sheet_ids, text_window_ids, tileset_animation_ids,
     title_ids, FONTS, LAYOUTS, TEXT_WINDOW_IMAGE_STEMS, TEXT_WINDOW_PALETTE_STEMS, TILESETS,
@@ -25,6 +28,7 @@ fn complete_inventory() -> Vec<PackEntry> {
         .chain(sprite_sheet_ids())
         // Palettes stay so a sheet deletion is the only thing missing.
         .chain(sprite_palette_ids())
+        .chain([rom_import::BATTLE_MESSAGE_PACK_ID.to_owned()])
         .map(|id| raw_entry(id, vec![0]))
         .collect()
 }
@@ -53,6 +57,8 @@ fn assert_refused(label: &str, entries: Vec<PackEntry>, missing: &str, domain: &
             sprites::locate(ctx, &mut report).map(|_| ())
         } else if domain == "text_window" {
             text_window::locate(ctx, &mut report).map(|_| ())
+        } else if domain == "battle_messages" {
+            battle_messages::locate(ctx, &mut report).map(|_| ())
         } else {
             title::locate(ctx, &mut report).map(|_| ())
         }
@@ -184,6 +190,17 @@ fn a_pack_missing_a_whole_window_frame_is_refused_by_id() {
         entries,
         "text-window/image/20",
         "text_window",
+    );
+}
+
+#[test]
+fn a_pack_missing_the_battle_message_table_is_refused() {
+    let id = rom_import::BATTLE_MESSAGE_PACK_ID;
+    assert_refused(
+        "no-battle-message-table",
+        without(id),
+        id,
+        "battle_messages",
     );
 }
 
