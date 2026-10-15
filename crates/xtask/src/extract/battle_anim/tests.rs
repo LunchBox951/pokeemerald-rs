@@ -462,6 +462,14 @@ fn deeply_nested_expressions_are_rejected_not_overflowed() {
 }
 
 #[test]
+fn a_selector_on_a_label_stacked_over_data_is_rejected() {
+    let source = script("Probe", "Probe:\nAlias:\n\t.2byte 0\nTail:\n\tend\n");
+    assert!(rejection(&source).contains("names data"));
+    let source = script("Probe", "Probe:\n\tdelay 1\n\t.2byte 0\n\tend\n");
+    assert!(rejection(&source).contains("runs into data"));
+}
+
+#[test]
 fn a_command_before_any_label_is_rejected() {
     assert!(rejection("\tdelay 1\n").contains("before any label"));
 }

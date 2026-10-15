@@ -45,6 +45,8 @@ pub(super) struct Script {
     stream: Vec<Item>,
     labels: Vec<Label>,
     by_name: HashMap<String, usize>,
+    /// Stream positions where data directives sit between commands.
+    data_boundaries: Vec<usize>,
     tables: [Vec<(String, usize)>; 4],
 }
 
@@ -65,6 +67,7 @@ impl Script {
             stream: Vec::new(),
             labels: Vec::new(),
             by_name: HashMap::new(),
+            data_boundaries: Vec::new(),
             tables: Default::default(),
         };
         let mut open_table: Option<usize> = None;
@@ -173,8 +176,12 @@ impl Script {
         Ok(())
     }
 
+    /// Records a data directive: every label stacked immediately before it
+    /// names data, and no program may run across it.
     fn mark_data(&mut self) {
-        if let Some(label) = self.labels.last_mut() {
+        let position = self.stream.len();
+        self.data_boundaries.push(position);
+        for label in self.labels.iter_mut().filter(|l| l.position == position) {
             label.data = true;
         }
     }
@@ -259,6 +266,16 @@ impl Script {
                     format!("program `{}` never terminates", label.name),
                 )
             })?;
+        if self
+            .data_boundaries
+            .iter()
+            .any(|b| *b > label.position && *b <= label.position + end)
+        {
+            return Err((
+                label.line,
+                format!("program `{}` runs into data", label.name),
+            ));
+        }
         Ok(&tail[..=end])
     }
 }
