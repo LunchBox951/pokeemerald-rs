@@ -324,7 +324,13 @@ fn ensure_species_admissible(dex: &Dex, species: SpeciesId) -> Result<(), Battle
     } else {
         abilities[1]
     };
-    if primary == assets::AbilityId::TRUANT && secondary == assets::AbilityId::TRUANT {
+    let refused = |ability| {
+        matches!(
+            ability,
+            assets::AbilityId::TRUANT | assets::AbilityId::INTIMIDATE
+        )
+    };
+    if refused(primary) && refused(secondary) {
         return Err(BattleError::UnportedAbilityInteraction(primary));
     }
     Ok(())
@@ -343,7 +349,7 @@ fn ensure_species_admissible(dex: &Dex, species: SpeciesId) -> Result<(), Battle
 /// [`BattleError::AmbiguousPlayerAbility`] when `player_lead` has two ability
 /// slots, its selected ability is not a trapping one, and the trainer scores
 /// with `CheckBadMove` (the only script that reads the target's ability), or
-/// [`BattleError::UnportedAbilityInteraction`] for a Truant-only party species.
+/// [`BattleError::UnportedAbilityInteraction`] for a party species whose every ability is Truant or Intimidate.
 pub fn ensure_trainer_party_startable(
     dex: &Dex,
     player_lead: &BattlePokemon,
@@ -530,24 +536,64 @@ mod tests {
     }
 
     #[test]
-    fn the_pre_flight_refuses_a_truant_party_member() {
+    fn the_pre_flight_refuses_a_truant_or_intimidate_only_party_member() {
         let dex = Dex::new();
         let moves = [MoveId::TACKLE];
-        assert_eq!(
-            ensure_trainer_party_startable(
+        for (species, ability) in [
+            (SpeciesId::SLAKOTH, assets::AbilityId::TRUANT),
+            (SpeciesId::SLAKING, assets::AbilityId::TRUANT),
+            (SpeciesId::TAUROS, assets::AbilityId::INTIMIDATE),
+            (SpeciesId::GYARADOS, assets::AbilityId::INTIMIDATE),
+            (SpeciesId::GRANBULL, assets::AbilityId::INTIMIDATE),
+            (SpeciesId::STANTLER, assets::AbilityId::INTIMIDATE),
+            (SpeciesId::HITMONTOP, assets::AbilityId::INTIMIDATE),
+            (SpeciesId::MIGHTYENA, assets::AbilityId::INTIMIDATE),
+            (SpeciesId::MASQUERAIN, assets::AbilityId::INTIMIDATE),
+            (SpeciesId::SALAMENCE, assets::AbilityId::INTIMIDATE),
+        ] {
+            let refused = TrainerPartyMon {
+                species,
+                level: 20,
+                moves: &moves,
+            };
+            let ok = TrainerPartyMon {
+                species: SpeciesId::MUDKIP,
+                level: 20,
+                moves: &moves,
+            };
+            for party in [[refused, ok], [ok, refused]] {
+                assert_eq!(
+                    ensure_trainer_party_startable(
+                        &dex,
+                        &lead(SpeciesId::MUDKIP),
+                        MAY_ROUTE_103_MUDKIP,
+                        &party,
+                    ),
+                    Err(crate::error::BattleError::UnportedAbilityInteraction(
+                        ability
+                    ))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_pre_flight_admits_a_mixed_pool_species_with_one_intimidate_slot() {
+        let dex = Dex::new();
+        let moves = [MoveId::TACKLE];
+        for species in [SpeciesId::EKANS, SpeciesId::MAWILE] {
+            assert!(ensure_trainer_party_startable(
                 &dex,
                 &lead(SpeciesId::MUDKIP),
                 MAY_ROUTE_103_MUDKIP,
                 &[TrainerPartyMon {
-                    species: SpeciesId::SLAKOTH,
+                    species,
                     level: 20,
                     moves: &moves,
                 }],
-            ),
-            Err(crate::error::BattleError::UnportedAbilityInteraction(
-                assets::AbilityId::TRUANT
-            ))
-        );
+            )
+            .is_ok());
+        }
     }
 
     #[test]

@@ -6,7 +6,8 @@ use crate::status1::Status1;
 use assets::AbilityId;
 
 /// Refuses a participant whose ability interaction the turn engine does not model:
-/// the move-end immunity cure (`battle_util.c:2873-2951`) or Truant (`:2086-2097`, `:2653-2655`).
+/// the move-end immunity cure (`battle_util.c:2873-2951`), Truant (`:2086-2097`, `:2653-2655`),
+/// or Intimidate's entry and switch-in Attack drop (`:2559-2564`, `:3003-3016`, `:3074-3088`).
 ///
 /// # Errors
 ///
@@ -19,7 +20,7 @@ pub fn ensure_participant_admissible(participant: &BattlePokemon) -> Result<(), 
         AbilityId::LIMBER => status == Status1::Paralysed,
         AbilityId::IMMUNITY => status == Status1::Poisoned,
         AbilityId::OWN_TEMPO => confused,
-        AbilityId::TRUANT => true,
+        AbilityId::TRUANT | AbilityId::INTIMIDATE => true,
         _ => false,
     };
     if unported_interaction {
