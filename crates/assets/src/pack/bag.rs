@@ -1,8 +1,8 @@
 //! Typed ordinary-bag graphics (upstream `src/item_menu.c`,
 //! `src/item_menu_icons.c`, and `src/item_icon.c`).
 //!
-//! Pack ids stay private so screen code composes no strings. Every lookup
-//! re-validates shapes, since a hand-built or corrupt pack can bypass extraction.
+//! Every lookup re-validates shapes, since a hand-built or corrupt pack can
+//! bypass extraction.
 
 use crate::items::{ItemId, ITEMS_COUNT};
 
@@ -40,9 +40,8 @@ const PALETTE_ENTRY_BYTES: usize = 2;
 /// Upstream `ITEM_LIST_END`, which selects the "return to field" arrow icon.
 const LIST_END: ItemId = ItemId(u16::MAX);
 
-/// Icon image and palette stems per upstream `gItemIconTable` row: one row
-/// per [`ItemId`], then the list-end arrow. Image and palette stems are
-/// independent, since upstream shares sheets and palettes across items.
+/// Upstream `gItemIconTable` as (image stem, palette stem) per [`ItemId`],
+/// then the list-end arrow; upstream shares sheets and palettes independently.
 const ICON_STEMS: [(&str, &str); ITEMS_COUNT + 1] = [
     ("question_mark", "question_mark"),
     ("master_ball", "master_ball"),
@@ -424,29 +423,27 @@ const ICON_STEMS: [(&str, &str); ITEMS_COUNT + 1] = [
     ("return_to_field_arrow", "return_to_field_arrow"),
 ];
 
-/// Every ordinary-bag graphic, borrowing the pack for `'a`.
-///
-/// [`AssetPack::bag_assets`] returns it with every fixed entry validated.
-/// Item icons are validated per lookup by [`item_icon`](Self::item_icon).
+/// Every ordinary-bag graphic. Fixed entries are validated by
+/// [`AssetPack::bag_assets`]; icons by [`item_icon`](Self::item_icon).
 #[derive(Debug, Clone, Copy)]
 pub struct BagAssets<'a> {
-    /// Bag screen tile sheet (`menu.png`, 4bpp local indices).
+    /// Bag screen tile sheet (`menu.png`).
     pub screen: ImageRef<'a>,
-    /// Bag screen tilemap (`menu.bin`), 32x32 little-endian entries.
+    /// Bag screen tilemap (`menu.bin`).
     pub screen_tilemap: &'a [u8],
-    /// Bag screen palette for the male player: two 16-colour banks.
+    /// Bag screen palette for the male player.
     pub screen_male_palette: PaletteRef<'a>,
-    /// Bag screen palette for the female player: two 16-colour banks.
+    /// Bag screen palette for the female player.
     pub screen_female_palette: PaletteRef<'a>,
-    /// Male bag animation sheet with the shared bag palette.
+    /// Male bag animation sheet.
     pub male: PalettedImage<'a>,
-    /// Female bag animation sheet with the shared bag palette.
+    /// Female bag animation sheet.
     pub female: PalettedImage<'a>,
-    /// Rotating Poké Ball image with its own palette.
+    /// Rotating Poké Ball.
     pub rotating_ball: PalettedImage<'a>,
-    /// Registered-select mark; drawn with the item-list window's palette.
+    /// Registered-select mark; uses the item-list window's palette.
     pub registered_select: ImageRef<'a>,
-    /// HM mark; drawn with the item-list window's palette.
+    /// HM mark; uses the item-list window's palette.
     pub hm: ImageRef<'a>,
     pack: &'a AssetPack,
 }
@@ -497,7 +494,6 @@ impl AssetPack {
         Ok(bytes)
     }
 
-    /// An image whose indices are local to a 16-colour bank.
     fn bag_sheet(&self, id: &str, (width, height): (u32, u32)) -> Result<ImageRef<'_>, PackError> {
         let image = self.image(id)?;
         if image.width != width || image.height != height {
@@ -584,11 +580,9 @@ impl AssetPack {
 }
 
 impl<'a> BagAssets<'a> {
-    /// The icon image and palette a bag row shows for `item`.
-    ///
-    /// Mirrors upstream `GetItemIconPicOrPalette`: the list-end identity
-    /// (`u16::MAX`) selects the "return to field" arrow and any other
-    /// identity outside the item table selects the [`ItemId::NONE`] icon.
+    /// The icon a bag row shows for `item`, per upstream
+    /// `GetItemIconPicOrPalette`: the list-end id selects the "return to field"
+    /// arrow and any other id outside the item table selects [`ItemId::NONE`].
     ///
     /// # Errors
     ///
@@ -629,7 +623,6 @@ fn malformed(id: &str, detail: String) -> PackError {
     }
 }
 
-/// The upstream icon table, for tests and the extractor's cross-check.
 #[cfg(test)]
 pub(super) fn icon_stems() -> &'static [(&'static str, &'static str)] {
     &ICON_STEMS
