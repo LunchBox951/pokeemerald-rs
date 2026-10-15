@@ -124,7 +124,8 @@ pub use items::{
 pub use move_names::MoveNames;
 pub use pack::{
     AssetPack, BagAssets, EntryKind, ImageRef, PackError, PaletteRef, PalettedImage,
-    StarterChooserHandle, StarterPreviewHandle, StarterSpecies, TilesetHandle,
+    PokedexGraphicsHandle, StarterChooserHandle, StarterPreviewHandle, StarterSpecies,
+    TilesetHandle,
 };
 pub use pokedex::{
     NationalDexNo, PokedexData, PokedexEntry, PokedexError, PokedexOrderKind, PokedexOrders,

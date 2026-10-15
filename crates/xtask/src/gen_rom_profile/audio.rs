@@ -352,7 +352,10 @@ fn plan_for(label: &str, addr: u32, group: &RawVoiceGroup) -> VoicegroupPlan {
 ///
 /// [`GenRomProfileError::MissingPackEntry`] when `id` is absent;
 /// [`GenRomProfileError::WrongPackEntryKind`] naming `id` for any other kind.
-fn raw_payload<'a>(ctx: &'a Context<'_>, id: &str) -> Result<&'a [u8], GenRomProfileError> {
+pub(super) fn raw_payload<'a>(
+    ctx: &'a Context<'_>,
+    id: &str,
+) -> Result<&'a [u8], GenRomProfileError> {
     let asset = ctx.pack.get(id)?;
     if asset.kind != EntryKind::Raw {
         return Err(GenRomProfileError::WrongPackEntryKind {

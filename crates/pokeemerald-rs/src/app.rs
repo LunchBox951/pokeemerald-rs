@@ -225,8 +225,9 @@ pub enum AppState {
     /// this milestone does not distinguish a title still animating from one
     /// fading toward the main menu.
     Title,
-    /// The main menu and its current selection, including its front-end
-    /// fade-wait state (I-3, issue #1329:
+    /// The main menu and its current selection, including its highlight-only
+    /// step (I-3, issue #2223: [`crate::flow::AppScene::MainMenuHighlight`])
+    /// and front-end fade-wait state (I-3, issue #1329:
     /// [`crate::flow::AppScene::MainMenuFadeWait`]) -- this milestone does
     /// not distinguish a menu awaiting input from one already fading toward
     /// its confirmed selection.
@@ -793,7 +794,9 @@ impl App {
         match self.scene.as_ref() {
             None => AppState::SyntheticBoot,
             Some(AppScene::Title(_) | AppScene::TitleFadeWait(_)) => AppState::Title,
-            Some(AppScene::MainMenu(menu)) => AppState::MainMenu(menu.scene.selected()),
+            Some(AppScene::MainMenu(menu) | AppScene::MainMenuHighlight(menu)) => {
+                AppState::MainMenu(menu.scene.selected())
+            }
             Some(AppScene::MainMenuFadeWait(wait)) => {
                 AppState::MainMenu(wait.state.scene.selected())
             }

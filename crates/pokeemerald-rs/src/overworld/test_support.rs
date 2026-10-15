@@ -10,7 +10,7 @@ use assets::{AssetPack, LayoutId, MapLayout};
 /// `assets::pack::tests`' own entry shape, which that module does not
 /// export.
 pub(super) struct Entry {
-    pub(super) id: &'static str,
+    pub(super) id: String,
     pub(super) kind_tag: u8,
     pub(super) meta: Vec<u8>,
     pub(super) payload: Vec<u8>,
@@ -41,7 +41,7 @@ const SPRITE_PALETTE_COLOR_COUNT: u16 = 16;
 /// Serializes `entries`, sorted by id as the pack format requires, into a
 /// pack file's bytes.
 pub(super) fn write_synthetic_pack(mut entries: Vec<Entry>) -> Vec<u8> {
-    entries.sort_by(|a, b| a.id.cmp(b.id));
+    entries.sort_by(|a, b| a.id.cmp(&b.id));
 
     let header_size = assets::pack::MAGIC.len() + size_of::<u32>() + size_of::<u32>();
     let mut directory_size = 0usize;
@@ -146,37 +146,37 @@ pub(super) fn synthetic_overworld_pack_entries_for(
 
     let mut entries = vec![
         Entry {
-            id: leaked(format!("tileset/{tileset}/tiles")),
+            id: format!("tileset/{tileset}/tiles"),
             kind_tag: IMAGE_KIND_TAG,
             meta: image_meta(8, 8, 4),
             payload: tile_pixels,
         },
         Entry {
-            id: leaked(format!("tileset/{tileset}/metatiles")),
+            id: format!("tileset/{tileset}/metatiles"),
             kind_tag: RAW_KIND_TAG,
             meta: vec![],
             payload: metatiles,
         },
         Entry {
-            id: leaked(format!("tileset/{tileset}/metatile-attributes")),
+            id: format!("tileset/{tileset}/metatile-attributes"),
             kind_tag: RAW_KIND_TAG,
             meta: vec![],
             payload: metatile_attrs,
         },
         Entry {
-            id: "layout/map_test/map",
+            id: "layout/map_test/map".into(),
             kind_tag: RAW_KIND_TAG,
             meta: vec![],
             payload: grid,
         },
         Entry {
-            id: "layout/map_test/border",
+            id: "layout/map_test/border".into(),
             kind_tag: RAW_KIND_TAG,
             meta: vec![],
             payload: border,
         },
         Entry {
-            id: "sprite/brendan/walking",
+            id: "sprite/brendan/walking".into(),
             kind_tag: IMAGE_KIND_TAG,
             meta: image_meta(144, 32, 8),
             // Opaque and distinct from GROUND_PALETTE_INDEX, so a composed
@@ -184,7 +184,7 @@ pub(super) fn synthetic_overworld_pack_entries_for(
             payload: vec![SPRITE_PIXEL_PALETTE_INDEX; 144 * 32],
         },
         Entry {
-            id: "sprite/brendan/running",
+            id: "sprite/brendan/running".into(),
             kind_tag: IMAGE_KIND_TAG,
             meta: image_meta(144, 32, 8),
             // A different opaque index from walking, so a composed frame can
@@ -192,7 +192,7 @@ pub(super) fn synthetic_overworld_pack_entries_for(
             payload: vec![RUN_SPRITE_PIXEL_PALETTE_INDEX; 144 * 32],
         },
         Entry {
-            id: "sprite/palette/brendan",
+            id: "sprite/palette/brendan".into(),
             kind_tag: PALETTE_KIND_TAG,
             meta: SPRITE_PALETTE_COLOR_COUNT.to_le_bytes().to_vec(),
             payload: {
@@ -204,7 +204,7 @@ pub(super) fn synthetic_overworld_pack_entries_for(
         },
     ];
     for slot in 0..TILESET_PALETTE_BANK_COUNT {
-        let id: &'static str = leaked(format!("tileset/{tileset}/palette/{slot:02}"));
+        let id = format!("tileset/{tileset}/palette/{slot:02}");
         entries.push(Entry {
             id,
             kind_tag: PALETTE_KIND_TAG,
@@ -293,19 +293,13 @@ fn push_general_anim_frames(entries: &mut Vec<Entry>) {
     ] {
         for n in 0..frame_count {
             entries.push(Entry {
-                id: leaked(format!("tileset/general/anim/{anim}/{n}")),
+                id: format!("tileset/general/anim/{anim}/{n}"),
                 kind_tag: IMAGE_KIND_TAG,
                 meta: image_meta(8, 8 * tiles, 4),
                 payload: vec![GROUND_PALETTE_INDEX; 8 * 8 * tiles as usize],
             });
         }
     }
-}
-
-/// Test-only: leaks `id` to satisfy [`Entry`]'s `&'static str` id field. The
-/// leak is bounded by the fixture's own lifetime.
-fn leaked(id: String) -> &'static str {
-    Box::leak(id.into_boxed_str())
 }
 
 /// The sprite palettes `OverworldScene::from_pack` loads unconditionally --
@@ -315,7 +309,7 @@ fn leaked(id: String) -> &'static str {
 /// reference them. This fixture's player is Brendan, so the "other
 /// protagonist" bank is May's.
 fn push_unconditional_sprite_palettes(entries: &mut Vec<Entry>) {
-    let mut placeholder = |id: &'static str| {
+    let mut placeholder = |id: String| {
         entries.push(Entry {
             id,
             kind_tag: PALETTE_KIND_TAG,
@@ -324,11 +318,9 @@ fn push_unconditional_sprite_palettes(entries: &mut Vec<Entry>) {
         });
     };
     for n in 1..=4u8 {
-        placeholder(&*Box::leak(
-            format!("sprite/palette/npc_{n}").into_boxed_str(),
-        ));
+        placeholder(format!("sprite/palette/npc_{n}"));
     }
-    placeholder("sprite/palette/may");
+    placeholder("sprite/palette/may".into());
 }
 
 static NO_OBJECT_EVENTS: assets::MapEvents = assets::MapEvents {
@@ -368,7 +360,7 @@ pub(crate) fn synthetic_scene_with_events(
     let mut entries = synthetic_overworld_pack_entries_for("general", width, height);
     for path in sprite_paths {
         entries.push(Entry {
-            id: leaked(format!("sprite/{path}")),
+            id: format!("sprite/{path}"),
             kind_tag: IMAGE_KIND_TAG,
             meta: image_meta(144, 32, 8),
             payload: vec![3u8; 144 * 32],
@@ -599,9 +591,9 @@ pub(crate) fn write_oldale_layout_pack(path: &std::path::Path, sprite_paths: &[&
         .into_iter()
         .map(|mut e| {
             if e.id == "layout/map_test/map" {
-                e.id = "layout/oldale_town/map";
+                e.id = "layout/oldale_town/map".into();
             } else if e.id == "layout/map_test/border" {
-                e.id = "layout/oldale_town/border";
+                e.id = "layout/oldale_town/border".into();
             }
             e
         })
@@ -613,7 +605,7 @@ pub(crate) fn write_oldale_layout_pack(path: &std::path::Path, sprite_paths: &[&
     );
     for sprite in sprite_paths {
         entries.push(Entry {
-            id: leaked(format!("sprite/{sprite}")),
+            id: format!("sprite/{sprite}"),
             kind_tag: IMAGE_KIND_TAG,
             meta: image_meta(144, 32, 8),
             payload: vec![3u8; 144 * 32],
@@ -637,11 +629,11 @@ pub(crate) fn write_route101_oldale_layout_pack(
     oldale_specials: &[((u16, u16), u8)],
     sprite_paths: &[&str],
 ) {
-    let rename = |mut e: Entry, layout: &'static str| {
+    let rename = |mut e: Entry, layout: &str| {
         if e.id == "layout/map_test/map" {
-            e.id = leaked(format!("layout/{layout}/map"));
+            e.id = format!("layout/{layout}/map");
         } else if e.id == "layout/map_test/border" {
-            e.id = leaked(format!("layout/{layout}/border"));
+            e.id = format!("layout/{layout}/border");
         }
         e
     };
@@ -663,7 +655,7 @@ pub(crate) fn write_route101_oldale_layout_pack(
     );
     for sprite in sprite_paths {
         entries.push(Entry {
-            id: leaked(format!("sprite/{sprite}")),
+            id: format!("sprite/{sprite}"),
             kind_tag: IMAGE_KIND_TAG,
             meta: image_meta(144, 32, 8),
             payload: vec![3u8; 144 * 32],

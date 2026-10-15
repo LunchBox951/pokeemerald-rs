@@ -15,6 +15,7 @@ use super::{
 };
 use crate::frame::to_platform_frame;
 use crate::game_save::SaveSlot;
+use crate::main_menu::MainMenuScene;
 
 /// [`AppScene::TitleFadeWait`]'s state: the title retained for its
 /// unfaded-recovery frame ([`advance_title_fade_wait`]'s own doc comment)
@@ -116,10 +117,10 @@ pub(super) fn advance_title_fade_wait(
 /// The [`AppScene::MainMenu`] arm of [`super::advance_scene`]: a fresh A
 /// over `NEW GAME`/`CONTINUE` begins the black fade and hands off to
 /// [`AppScene::MainMenuFadeWait`] instead of dispatching [`MainMenuAction`]
-/// directly; `OPTION`'s swallowed press and Up/Down selection are
-/// unaffected.
+/// directly; `OPTION`'s swallowed press is unaffected, and a successful
+/// Up/Down hands off to [`AppScene::MainMenuHighlight`].
 pub(super) fn advance_main_menu(
-    mut state: Box<MainMenuState>,
+    state: Box<MainMenuState>,
     buttons: ButtonState,
 ) -> (AppScene, Box<Frame>) {
     if buttons.is_newly_pressed(Buttons::A) {
@@ -144,12 +145,25 @@ pub(super) fn advance_main_menu(
     } else if buttons.is_newly_pressed(Buttons::UP) && state.scene.can_move_up() {
         // Upstream guards each arm (`main_menu.c:903`, `:915`), so a blocked
         // Up falls through to Down when both are newly pressed together.
-        state.scene.move_up();
+        return navigate(state, MainMenuScene::move_up);
     } else if buttons.is_newly_pressed(Buttons::DOWN) && state.scene.can_move_down() {
-        state.scene.move_down();
+        return navigate(state, MainMenuScene::move_down);
     }
     let frame = state.scene.compose_frame();
     (AppScene::MainMenu(state), frame)
+}
+
+/// Moves the selection but presents the prior highlight, then hands off to
+/// [`AppScene::MainMenuHighlight`]: upstream's input task only schedules the
+/// redraw callback (`main_menu.c:930-933`), so the new highlight appears a
+/// frame later with input ignored.
+fn navigate(
+    mut state: Box<MainMenuState>,
+    movement: fn(&mut MainMenuScene),
+) -> (AppScene, Box<Frame>) {
+    let frame = state.scene.compose_frame();
+    movement(&mut state.scene);
+    (AppScene::MainMenuHighlight(state), frame)
 }
 
 /// The [`AppScene::MainMenuFadeWait`] arm of [`super::advance_scene`]. The
