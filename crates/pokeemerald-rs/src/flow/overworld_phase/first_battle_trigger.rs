@@ -93,10 +93,8 @@ impl OverworldPhase {
         self.first_battle_trigger_at(runtime, x, y, retained_elevation)
     }
 
-    /// Upstream marks the rescue consumed before the fight, so every path that
-    /// builds no battle still consumes the trigger
-    /// (`pokeemerald/data/maps/Route101/scripts.inc:40`). A lead the turn engine
-    /// refuses is the exception: the rescue stays armed and nothing is drawn.
+    /// Upstream consumes the rescue before the fight (`Route101/scripts.inc:40`);
+    /// only a lead the turn engine refuses leaves it armed, with nothing drawn.
     pub(super) fn begin_first_battle(&mut self) {
         if let Some(Err(error)) = self
             .party_lead

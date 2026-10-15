@@ -456,9 +456,8 @@ fn an_aborted_first_battle_still_consumes_the_route_101_trigger() {
     );
 }
 
-/// A lead the turn engine refuses (here a Truant Slakoth, `battle_util.c:2086-2097`) builds no
-/// Zigzagoon and leaves the rescue armed: refusing after `CreateMon` would spend its draws on a
-/// battle `Battle::new` then rejects.
+/// A Truant lead (`battle_util.c:2086-2097`) builds no Zigzagoon and leaves the
+/// rescue armed, so `CreateMon`'s draws are not spent on a refused battle.
 #[test]
 fn an_inadmissible_lead_leaves_the_rescue_armed_without_drawing() {
     let (tx, ty) = ROUTE_101_TRIGGER_TILE;

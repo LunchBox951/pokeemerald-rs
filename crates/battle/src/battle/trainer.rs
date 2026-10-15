@@ -314,9 +314,8 @@ pub struct TrainerPartyMon<'a> {
     pub moves: &'a [MoveId],
 }
 
-/// Refuses a species whose every ability slot the admission screen would refuse
-/// regardless of the personality draw, so the preflight fails before
-/// [`build_trainer_pokemon`] spends its OT-ID RNG.
+/// Refuses a species the admission screen rejects in every ability slot, before
+/// [`build_trainer_pokemon`] spends its OT-ID draw.
 fn ensure_species_admissible(dex: &Dex, species: SpeciesId) -> Result<(), BattleError> {
     let abilities = dex.species(species)?.abilities;
     let primary = abilities[0];
@@ -344,8 +343,7 @@ fn ensure_species_admissible(dex: &Dex, species: SpeciesId) -> Result<(), Battle
 /// [`BattleError::AmbiguousPlayerAbility`] when `player_lead` has two ability
 /// slots, its selected ability is not a trapping one, and the trainer scores
 /// with `CheckBadMove` (the only script that reads the target's ability), or
-/// [`BattleError::UnportedAbilityInteraction`] for a party species whose only
-/// ability is Truant.
+/// [`BattleError::UnportedAbilityInteraction`] for a Truant-only party species.
 pub fn ensure_trainer_party_startable(
     dex: &Dex,
     player_lead: &BattlePokemon,

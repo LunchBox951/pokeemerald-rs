@@ -594,9 +594,8 @@ fn a_run_onto_an_encounter_returns_from_battle_standing() {
     );
 }
 
-/// A lead the turn engine refuses (here a Truant Slakoth, `battle_util.c:2086-2097`)
-/// disables the roll the way an unfightable table does: rolling would spend the
-/// encounter and `CreateWildMon` draws on a battle `Battle::new` then refuses.
+/// A Truant lead (`battle_util.c:2086-2097`) disables the roll like an unfightable
+/// table, so no encounter or `CreateWildMon` draw is spent on a refused battle.
 #[test]
 fn an_inadmissible_lead_disables_the_roll_without_drawing() {
     let mut phase = route_101_phase(PlayerState::new((2, 5), 3, Direction::East), (7, 5));

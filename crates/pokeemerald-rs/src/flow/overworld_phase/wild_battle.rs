@@ -35,9 +35,8 @@ impl OverworldPhase {
         }
     }
 
-    /// Whether the lead can enter a wild battle: `Battle::new` refuses an
-    /// inadmissible one only after `CreateWildMon`'s draws, so the roll must not start.
-    /// No lead passes; [`OverworldPhase::begin_wild_battle`] already handles it.
+    /// Gates the encounter roll, since `Battle::new` refuses an inadmissible lead
+    /// only after `CreateWildMon`'s draws; a missing lead passes to `begin_wild_battle`.
     pub(in crate::flow) fn wild_lead_admissible(&self) -> bool {
         self.party_lead
             .as_ref()
