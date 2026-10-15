@@ -593,3 +593,34 @@ fn a_run_onto_an_encounter_returns_from_battle_standing() {
         "returning from the battle must not keep the running sheet's neutral pose"
     );
 }
+
+/// A lead the turn engine refuses (here a Truant Slakoth, `battle_util.c:2086-2097`)
+/// disables the roll the way an unfightable table does: rolling would spend the
+/// encounter and `CreateWildMon` draws on a battle `Battle::new` then refuses.
+#[test]
+fn an_inadmissible_lead_disables_the_roll_without_drawing() {
+    let mut phase = route_101_phase(PlayerState::new((2, 5), 3, Direction::East), (7, 5));
+    phase.rng = Rng::new(ENCOUNTER_SEED);
+    let slakoth = player_mon(SpeciesId::SLAKOTH.0, 50, vec![MoveId::SCRATCH]);
+    assert_eq!(
+        battle::ensure_participant_admissible(&slakoth),
+        Err(BattleError::UnportedAbilityInteraction(
+            assets::AbilityId::TRUANT
+        )),
+    );
+    phase.party_lead = Some(slakoth);
+    let immunity_before = phase.wild.immunity_steps();
+    let behavior_before = phase.wild.prev_metatile_behavior();
+
+    walk_east_and_land(&mut phase, 5);
+    assert_eq!(phase.player.position(), (7, 5));
+    assert!(!phase.is_wild_battle_active(), "no battle may start");
+    assert_eq!(
+        phase.rng.state(),
+        Rng::new(ENCOUNTER_SEED).state(),
+        "an inadmissible lead must not draw at all"
+    );
+    assert_eq!(phase.wild.immunity_steps(), immunity_before);
+    assert_eq!(phase.wild.prev_metatile_behavior(), behavior_before);
+    assert!(phase.party_lead.is_some(), "the lead stays home");
+}
