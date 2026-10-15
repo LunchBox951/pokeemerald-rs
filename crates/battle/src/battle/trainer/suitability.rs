@@ -4,7 +4,7 @@
 
 use assets::{AbilityId, Effectiveness, MoveId, Type, TypeChart};
 
-use crate::ability::{huge_power_attack, pinch_boosts_power};
+use crate::ability::{huge_power_attack, pinch_boosts_power, thick_fat_special_attack};
 use crate::damage::{
     apply_dual_type_effectiveness, apply_stab, apply_type_effectiveness, base_damage, has_stab,
     DamageInput, MoveCategory, Weather,
@@ -180,6 +180,9 @@ fn stale_base_damage(
     let category = MoveCategory::for_type(move_type);
     let (attack_stat, attack_stage) = fainted.attacking_stat(category);
     let attack_stat = huge_power_attack(fainted.ability(), category, attack_stat);
+    // Thick Fat halves raw Special Attack before stage scaling
+    // (`pokemon.c:3202-3204`), after Huge/Pure Power as in the trainer AI.
+    let attack_stat = thick_fat_special_attack(player.ability(), move_type, attack_stat);
     let (defense_stat, defense_stage) = player.defending_stat(category);
     let input = DamageInput {
         attacker_level: fainted.level(),
@@ -416,6 +419,51 @@ mod tests {
             hustle_base > control_base,
             "a Hustle fainted attacker's stale base damage must carry the boost: \
              {hustle_base} vs {control_base}"
+        );
+    }
+
+    /// Upstream's `CalculateBaseDamage` halves raw Special Attack for a Fire or
+    /// Ice move against Thick Fat (`pokemon.c:3202-3204`), so the stale base
+    /// damage must carry it; a non-Fire/Ice move must not.
+    #[test]
+    fn stale_base_damage_carries_the_defenders_thick_fat() {
+        // Makuhita: Thick Fat in slot 0, Guts in slot 1.
+        const JYNX: SpeciesId = SpeciesId(124);
+        const MAKUHITA: SpeciesId = SpeciesId(335);
+
+        let dex = Dex::new();
+        let fainted = BattlePokemon::new(
+            &dex,
+            JYNX,
+            20,
+            fixed_ivs(255),
+            0,
+            vec![MoveId::ICICLE_SPEAR],
+        )
+        .expect("dex-resident");
+        let player = |slot| {
+            BattlePokemon::new(&dex, MAKUHITA, 20, fixed_ivs(255), 0, vec![MoveId::TACKLE])
+                .expect("dex-resident")
+                .with_ability_slot(slot)
+        };
+        let thick = player(0);
+        let control = player(1);
+        assert_eq!(thick.ability(), AbilityId::THICK_FAT);
+        assert_eq!(control.ability(), AbilityId::GUTS);
+
+        let base = |mv, p: &BattlePokemon| {
+            super::stale_base_damage(&dex, mv, &fainted, p)
+                .unwrap()
+                .unwrap()
+        };
+        assert!(
+            base(MoveId::ICICLE_SPEAR, &thick) < base(MoveId::ICICLE_SPEAR, &control),
+            "Thick Fat must lower an Ice move's stale base damage"
+        );
+        assert_eq!(
+            base(MoveId::PSYCHIC, &thick),
+            base(MoveId::PSYCHIC, &control),
+            "Thick Fat must not touch a Psychic move"
         );
     }
 
