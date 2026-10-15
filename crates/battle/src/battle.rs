@@ -240,11 +240,10 @@ impl Battle {
     /// participant, or the first move or ability validation error from the
     /// enemy's moveset against the active member or any non-fainted reserve.
     /// A fainted reserve is admitted: it models a player party that already
-    /// lost a member before the battle. A non-fainted
-    /// participant that is Paralysed with Limber, Poisoned with Immunity, or
-    /// confused with Own Tempo fails
-    /// with [`BattleError::UnportedAbilityInteraction`]. Errors leave the RNG
-    /// untouched.
+    /// lost a member before the battle. A non-fainted participant that is
+    /// Paralysed with Limber, Poisoned with Immunity, confused with Own Tempo,
+    /// or holds Truant fails with [`BattleError::UnportedAbilityInteraction`].
+    /// Errors leave the RNG untouched.
     pub fn new_with_player_reserves(
         dex: Dex,
         player: BattlePokemon,
