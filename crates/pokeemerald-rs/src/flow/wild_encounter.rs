@@ -146,13 +146,14 @@ fn consume_unmodelled_wild_held_item_draw(rng: &mut Rng) {
 /// `player_trainer_id` is the save owner's id, not the party lead's --
 /// upstream's `CreateWildMon` -> `CreateMonWithNature` ->
 /// `CreateMon(..., OT_ID_PLAYER_ID, 0)` (`pokemon.c:2305`) stores
-/// `gSaveBlock2Ptr->playerTrainerId`.
+/// `gSaveBlock2Ptr->playerTrainerId`. An inadmissible lead is refused before any draw.
 pub(super) fn start_wild_battle(
     player_lead: BattlePokemon,
     encounter: WildEncounter,
     player_trainer_id: u32,
     rng: &mut Rng,
 ) -> Result<Battle, BattleError> {
+    battle::ensure_participant_admissible(&player_lead)?;
     let dex = Dex::new();
     let wild_moves = battle::initial_moveset(encounter.species, encounter.level);
     let wild_opponent = battle::build_wild_pokemon(

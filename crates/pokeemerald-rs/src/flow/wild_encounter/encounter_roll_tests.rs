@@ -624,3 +624,21 @@ fn an_inadmissible_lead_disables_the_roll_without_drawing() {
     assert_eq!(phase.wild.prev_metatile_behavior(), behavior_before);
     assert!(phase.party_lead.is_some(), "the lead stays home");
 }
+
+#[test]
+fn start_wild_battle_refuses_an_inadmissible_lead_before_any_draw() {
+    let mut rng = Rng::new(ENCOUNTER_SEED);
+    let slakoth = player_mon(SpeciesId::SLAKOTH.0, 50, vec![MoveId::SCRATCH]);
+    let encounter = WildEncounter {
+        slot: 0,
+        species: WURMPLE,
+        level: 2,
+    };
+    assert_eq!(
+        start_wild_battle(slakoth, encounter, TEST_PLAYER_TRAINER_ID, &mut rng).err(),
+        Some(BattleError::UnportedAbilityInteraction(
+            assets::AbilityId::TRUANT
+        )),
+    );
+    assert_eq!(rng.state(), Rng::new(ENCOUNTER_SEED).state());
+}

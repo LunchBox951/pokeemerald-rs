@@ -95,8 +95,17 @@ impl OverworldPhase {
 
     /// Upstream marks the rescue consumed before the fight, so every path that
     /// builds no battle still consumes the trigger
-    /// (`pokeemerald/data/maps/Route101/scripts.inc:40`).
+    /// (`pokeemerald/data/maps/Route101/scripts.inc:40`). A lead the turn engine
+    /// refuses is the exception: the rescue stays armed and nothing is drawn.
     pub(super) fn begin_first_battle(&mut self) {
+        if let Some(Err(error)) = self
+            .party_lead
+            .as_ref()
+            .map(battle::ensure_participant_admissible)
+        {
+            eprintln!("first battle: can't start ({error:?}) -- the rescue stays armed");
+            return;
+        }
         self.first_battle_outcome = None;
         eprintln!(
             "first battle: Route 101 rescue trigger reached -- starting the scripted Zigzagoon \
