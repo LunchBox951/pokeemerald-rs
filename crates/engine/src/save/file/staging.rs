@@ -602,34 +602,20 @@ impl StagedSave {
 
 #[cfg(not(windows))]
 impl StagedSave {
-    /// Removes this staged file after `source`, folding a cleanup failure into
-    /// the returned error rather than swallowing it -- otherwise a caller who
-    /// only sees `source` would never learn a staging file was left behind.
-    /// An entry that replaced it belongs to whoever put it there and is left
-    /// where it is; ownership that could not be read at all leaves the same
-    /// file behind, and is reported the same way.
-    ///
-    /// The check-then-act bound documented at the rename in
-    /// [`SaveFile::write_with`](super::SaveFile::write_with) applies to this
-    /// unlink too: the check above is by pathname, and the unlink below
-    /// re-resolves `self.path` a second time. This arm serves every host but
-    /// Windows, whose counterpart below deletes through a verified handle.
+    /// Retains the staged file and reports its last known path. Stable `std`
+    /// has no unlink bound to the checked identity, so any delete would
+    /// re-resolve the name and could remove an entry that replaced it.
     pub(super) fn remove_after(&mut self, source: std::io::Error) -> std::io::Error {
-        let left_behind = match self.still_ours() {
+        let reason = match self.still_ours() {
             Ok(false) => return source,
-            Ok(true) => {
-                self.release_hold();
-                std::fs::remove_file(&self.path).err()
-            }
-            Err(unreadable) => Some(unreadable),
+            Ok(true) => String::new(),
+            Err(unreadable) => format!(" (ownership could not be read: {unreadable})"),
         };
-        let Some(cleanup_source) = left_behind else {
-            return source;
-        };
+        self.release_hold();
         std::io::Error::new(
             source.kind(),
             format!(
-                "{source}; additionally failed to remove the abandoned staging file {}: {cleanup_source}",
+                "{source}; the abandoned staging file was not removed{reason}; last known path: {}",
                 self.path.display()
             ),
         )

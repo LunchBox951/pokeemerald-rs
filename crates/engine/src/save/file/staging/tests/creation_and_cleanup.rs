@@ -73,7 +73,7 @@ const STAGING_WRITE_FAILURE_CHILD: &str = "POKEEMERALD_RS_STAGING_WRITE_FAILURE_
 
 #[cfg(target_os = "linux")]
 #[test]
-fn a_staged_write_that_fails_after_creating_its_file_removes_it() {
+fn a_staged_write_that_fails_after_creating_its_file_retains_and_reports_it() {
     // The flash image exceeds the child's one-block file limit; SIGXFSZ is
     // ignored so the failure is EFBIG (`FileTooLarge`), not process death.
     const STAGING_FILE_LIMIT_BLOCKS: &str = "1";
@@ -84,8 +84,12 @@ fn a_staged_write_that_fails_after_creating_its_file_removes_it() {
             .expect_err("a staged write over the file-size limit cannot succeed");
         assert_eq!(err.kind(), std::io::ErrorKind::FileTooLarge, "{err:?}");
         assert!(
-            !staged.exists(),
-            "a staged file whose write failed must be cleaned up, not left beside the save"
+            staged.exists(),
+            "off Windows a failed staged write is retained, never unlinked by name (#2254)"
+        );
+        assert!(
+            err.to_string().contains("was not removed"),
+            "the retained file must be reported: {err}"
         );
         return;
     }
@@ -97,7 +101,7 @@ fn a_staged_write_that_fails_after_creating_its_file_removes_it() {
             r#"trap "" XFSZ; ulimit -f {STAGING_FILE_LIMIT_BLOCKS}; exec "$0" "$1" --exact --nocapture"#
         ))
         .arg(&exe)
-        .arg("save::file::staging::tests::creation_and_cleanup::a_staged_write_that_fails_after_creating_its_file_removes_it")
+        .arg("save::file::staging::tests::creation_and_cleanup::a_staged_write_that_fails_after_creating_its_file_retains_and_reports_it")
         .env(STAGING_WRITE_FAILURE_CHILD, "1")
         .output()
         .expect("the child test process must be spawnable");
@@ -227,8 +231,7 @@ fn cleaning_up_a_failed_staged_write_leaves_the_entry_that_replaced_it_alone() {
     );
 }
 
-// Ownership is checked before the unlink, so a swapped-in directory survives.
-// A check-to-unlink race remains; no seam forces that interleaving here.
+// A swapped-in directory survives: non-Windows cleanup never unlinks.
 #[cfg(unix)]
 #[test]
 fn a_directory_that_replaces_the_staging_entry_survives_cleanup() {
@@ -259,6 +262,28 @@ fn a_directory_that_replaces_the_staging_entry_survives_cleanup() {
             .is_dir(),
         "cleanup must never remove a directory that replaced this call's staging file -- \
          std::fs::remove_file cannot unlink one"
+    );
+}
+
+// Off Windows cleanup never unlinks by name, so a replacement landing after
+// any identity check cannot be removed.
+#[cfg(unix)]
+#[test]
+fn cleanup_retains_and_reports_an_intact_staged_file_instead_of_unlinking_it() {
+    let dir = TempDir::new("staging-cleanup-retains");
+    let intact = dir.join("intact.tmp");
+    let mut staged = stage_at_first_free_name(
+        std::iter::once(intact.clone()),
+        create_new_exclusive,
+        &vec![0u8; FLASH_IMAGE_LEN],
+    )
+    .unwrap();
+    let err = staged.remove_after(std::io::Error::other("the rename failed"));
+    assert!(intact.exists(), "cleanup must not unlink by name");
+    assert!(
+        err.to_string().contains("was not removed")
+            && err.to_string().contains(&intact.display().to_string()),
+        "{err}"
     );
 }
 
