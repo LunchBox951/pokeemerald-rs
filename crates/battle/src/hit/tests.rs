@@ -1,10 +1,12 @@
 use super::{
-    classify_accuracy_failure, damage_core, ensure_resolvable, is_ordinary_hit_effect, resolve_hit,
-    HitOutcome,
+    classify_accuracy_failure, damage_before_roll, damage_core, ensure_resolvable,
+    is_ordinary_hit_effect, resolve_hit, HitOutcome,
 };
 use crate::ability::{suppresses_critical_hits, GUTS, HUGE_POWER, MARVEL_SCALE, PURE_POWER};
 use crate::accuracy::always_hits;
-use crate::damage::{base_damage, DamageInput, MoveCategory, Weather, STRUGGLE};
+use crate::damage::{
+    apply_dual_type_effectiveness, base_damage, DamageInput, MoveCategory, Weather, STRUGGLE,
+};
 use crate::dex::Dex;
 use crate::error::BattleError;
 use crate::pokemon::{BattlePokemon, Ivs};
@@ -45,6 +47,9 @@ const TACKLE: MoveId = MoveId::TACKLE;
 /// [`damage_core`] is exercised directly instead of through [`resolve_hit`],
 /// which would reject Bone Rush's effect at [`ensure_resolvable`].
 const BONE_RUSH: MoveId = MoveId::BONE_RUSH;
+/// `MOVE_ICICLE_SPEAR` -- `EFFECT_MULTI_HIT`, Ice; its loop reaches Thick Fat
+/// through [`damage_before_roll`] alone.
+const ICICLE_SPEAR: MoveId = MoveId::ICICLE_SPEAR;
 const GROWL: MoveId = MoveId::GROWL;
 const SONIC_BOOM: MoveId = MoveId::SONIC_BOOM;
 const WATER_GUN: MoveId = MoveId::WATER_GUN;
@@ -1350,4 +1355,49 @@ fn classifying_a_failed_roll_rejects_an_unknown_move_and_draws_nothing() {
         classify_accuracy_failure(&dex, UNKNOWN_MOVE, &defender),
         Err(BattleError::UnknownMove(UNKNOWN_MOVE))
     );
+}
+
+/// Upstream halves the raw (odd-truncated) Special Attack for Thick Fat before
+/// stage scaling (`pokemon.c:3202-3204`), so a +1 stage scales the halved stat.
+#[test]
+fn thick_fat_halves_raw_special_attack_before_stage_scaling_in_the_raw_damage_input() {
+    let dex = Dex::new();
+    let mut attacker = mon(&dex, ABRA, 15, vec![ICICLE_SPEAR]);
+    attacker.stages_mut().sp_attack = StatStage::new(1).unwrap();
+    let raw_special_attack = attacker.stats().sp_attack;
+    assert_eq!(
+        raw_special_attack % 2,
+        1,
+        "the stat must be odd to pin truncation"
+    );
+    let thick_fat = BattlePokemon::new(&dex, MARILL, 5, MAX_IVS, 0, vec![TACKLE])
+        .unwrap()
+        .with_ability_slot(0);
+    assert_eq!(thick_fat.ability(), THICK_FAT);
+    let (defense, defense_stage) = thick_fat.defending_stat(MoveCategory::Special);
+    let expected_base = base_damage(&DamageInput {
+        attacker_level: attacker.level(),
+        power: 10,
+        move_type: Type::Ice,
+        attack_stat: raw_special_attack / 2,
+        attack_stage: StatStage::new(1).unwrap(),
+        defense_stat: defense,
+        defense_stage,
+        attacker_burned: false,
+        reflect: false,
+        light_screen: false,
+        weather: Weather::None,
+        is_solar_beam: false,
+        attacker_pinch_boost: false,
+    });
+    let mut rng = SequenceRng::new([ORDINARY_NO_CRIT_DRAW]);
+
+    let raw =
+        damage_before_roll(&dex, ICICLE_SPEAR, &attacker, &thick_fat, false, &mut rng).unwrap();
+
+    assert_eq!(
+        raw.damage,
+        apply_dual_type_effectiveness(expected_base, Type::Ice, thick_fat.types())
+    );
+    assert_eq!(rng.draws(), 1, "Thick Fat spends no extra draw");
 }

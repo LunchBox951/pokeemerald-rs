@@ -81,6 +81,15 @@ pub fn require_text_window(pack: &PackSource) -> Result<(), GenRomProfileError> 
         .try_for_each(|id| pack.get(id).map(|_| ()))
 }
 
+/// Require the battle-message token table root.
+///
+/// # Errors
+///
+/// [`GenRomProfileError::MissingPackEntry`] when the pack lacks it.
+pub fn require_battle_messages(pack: &PackSource) -> Result<(), GenRomProfileError> {
+    pack.get(rom_import::BATTLE_MESSAGE_PACK_ID).map(|_| ())
+}
+
 /// Require every fixed root, before any domain writes a report line.
 ///
 /// # Errors
@@ -92,5 +101,6 @@ pub fn preflight(pack: &PackSource) -> Result<(), GenRomProfileError> {
     require_fonts(pack)?;
     require_layouts(pack)?;
     require_text_window(pack)?;
-    require_sprites(pack)
+    require_sprites(pack)?;
+    require_battle_messages(pack)
 }

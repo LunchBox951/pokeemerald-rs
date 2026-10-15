@@ -86,11 +86,12 @@ fn is_ignored_powerful_move_effect(effect: MoveEffect) -> bool {
 /// its prologue passes: none appears in its `if_effect` chain
 /// (`data/battle_ai_scripts.s:105-214`). `EFFECT_HIT` has its own variant.
 /// `ABSORB` 3, `POISON_HIT` 2, `ALWAYS_HIT` 17, `MULTI_HIT` 29, `DRAGON_RAGE` 41,
-/// `HIGH_CRITICAL` 43, `SPEED_DOWN_HIT` 70, `EVASION_DOWN_HIT` 74, `VITAL_THROW` 78,
-/// `SPLASH` 85, `QUICK_ATTACK` 103, `CHARGE` 174
+/// `HIGH_CRITICAL` 43, `SPEED_DOWN_HIT` 70, `EVASION_DOWN_HIT` 74, `CONFUSE_HIT` 76,
+/// `VITAL_THROW` 78, `SPLASH` 85, `QUICK_ATTACK` 103, `CHARGE` 174
 /// (`include/constants/battle_move_effects.h`). Any other effect is never an
 /// implicit no-op.
-const UNCHANGED_AFTER_PROLOGUE_EFFECTS: [u8; 12] = [3, 2, 17, 29, 41, 43, 70, 74, 78, 85, 103, 174];
+const UNCHANGED_AFTER_PROLOGUE_EFFECTS: [u8; 13] =
+    [3, 2, 17, 29, 41, 43, 70, 74, 76, 78, 85, 103, 174];
 
 /// Rows whose `AI_CheckViability` branch is not ported: `ABSORB`, `ALWAYS_HIT`,
 /// `HIGH_CRITICAL`, `SPEED_DOWN_HIT`, `VITAL_THROW`

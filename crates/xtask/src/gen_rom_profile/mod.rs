@@ -52,6 +52,7 @@
 //! rather than plans built from whichever ids happen to remain.
 
 mod audio;
+mod battle_messages;
 mod emit;
 mod error;
 mod fonts;
@@ -173,6 +174,7 @@ fn locate_profile(
         text_window: text_window::locate(ctx, lines)?,
         interface: locate_interface_palettes(ctx, lines)?,
         audio: audio::locate(ctx, lines)?,
+        battle_messages: battle_messages::locate(ctx, lines)?,
     })
 }
 
@@ -516,6 +518,8 @@ fn temp_sibling(path: &Path) -> PathBuf {
     ))
 }
 
+#[cfg(test)]
+mod battle_message_tests;
 #[cfg(test)]
 mod inventory_tests;
 #[cfg(test)]
