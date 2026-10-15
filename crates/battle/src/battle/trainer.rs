@@ -314,6 +314,22 @@ pub struct TrainerPartyMon<'a> {
     pub moves: &'a [MoveId],
 }
 
+/// Refuses a species the admission screen rejects in every ability slot, before
+/// [`build_trainer_pokemon`] spends its OT-ID draw.
+fn ensure_species_admissible(dex: &Dex, species: SpeciesId) -> Result<(), BattleError> {
+    let abilities = dex.species(species)?.abilities;
+    let primary = abilities[0];
+    let secondary = if abilities[1] == assets::AbilityId::NONE {
+        primary
+    } else {
+        abilities[1]
+    };
+    if primary == assets::AbilityId::TRUANT && secondary == assets::AbilityId::TRUANT {
+        return Err(BattleError::UnportedAbilityInteraction(primary));
+    }
+    Ok(())
+}
+
 /// Validates that a trainer party can be built and played without consuming RNG.
 ///
 /// Empty-party validation runs before trainer lookup. Non-empty parties then
@@ -326,7 +342,8 @@ pub struct TrainerPartyMon<'a> {
 /// member, AI-flag, or move validation error, or
 /// [`BattleError::AmbiguousPlayerAbility`] when `player_lead` has two ability
 /// slots, its selected ability is not a trapping one, and the trainer scores
-/// with `CheckBadMove` (the only script that reads the target's ability).
+/// with `CheckBadMove` (the only script that reads the target's ability), or
+/// [`BattleError::UnportedAbilityInteraction`] for a Truant-only party species.
 pub fn ensure_trainer_party_startable(
     dex: &Dex,
     player_lead: &BattlePokemon,
@@ -339,6 +356,7 @@ pub fn ensure_trainer_party_startable(
     let data = trainer_data(trainer)?;
     for mon in party {
         BattlePokemon::validate(dex, mon.species, mon.level, mon.moves)?;
+        ensure_species_admissible(dex, mon.species)?;
     }
     super::trainer_ai::ensure_supported_flags(data.ai_flags)?;
     for mon in party {
@@ -509,6 +527,27 @@ mod tests {
             vec![POUND],
         )
         .expect("a valid lead")
+    }
+
+    #[test]
+    fn the_pre_flight_refuses_a_truant_party_member() {
+        let dex = Dex::new();
+        let moves = [MoveId::TACKLE];
+        assert_eq!(
+            ensure_trainer_party_startable(
+                &dex,
+                &lead(SpeciesId::MUDKIP),
+                MAY_ROUTE_103_MUDKIP,
+                &[TrainerPartyMon {
+                    species: SpeciesId::SLAKOTH,
+                    level: 20,
+                    moves: &moves,
+                }],
+            ),
+            Err(crate::error::BattleError::UnportedAbilityInteraction(
+                assets::AbilityId::TRUANT
+            ))
+        );
     }
 
     #[test]

@@ -3,6 +3,7 @@
 
 use super::input::run_held;
 use super::test_support::*;
+use super::OverworldPhase;
 use engine::overworld::{Direction, PlayerState, StepOutcome};
 use platform::{ButtonState, Buttons};
 
@@ -206,4 +207,112 @@ fn held_b_with_the_shoes_flag_crosses_a_tile_in_eight_rendered_frames() {
     }
     advance_player_one_frame(&mut player, None, true, &runtime, &no_connections, &shoes);
     assert!(!player.in_transit(), "the eighth frame drains the run");
+}
+
+/// Every forced mover reaches the player through the production driver on a
+/// `None` poll and on a held-opposite poll, with the cadence its own upstream
+/// mover uses: walk 16, slide and slip 8, current 6 frames
+/// (`field_player_avatar.c:473-552`, `event_object_movement.c:8233-8298`).
+/// The triggering call shows progress 1 and the crossing settles on call N.
+#[test]
+fn advance_player_one_frame_drives_every_forced_mover_at_its_own_cadence() {
+    use engine::overworld::metatile_behavior::*;
+    let movers: [(u8, Direction, u8); 11] = [
+        (MB_WALK_EAST, Direction::East, 16),
+        (MB_SLIDE_SOUTH, Direction::South, 8),
+        (MB_ICE, Direction::East, 8),
+        (MB_ICE, Direction::North, 8),
+        (MB_TRICK_HOUSE_PUZZLE_8_FLOOR, Direction::West, 8),
+        (MB_TRICK_HOUSE_PUZZLE_8_FLOOR, Direction::South, 8),
+        (MB_SOUTHWARD_CURRENT, Direction::South, 6),
+        (MB_NORTHWARD_CURRENT, Direction::North, 6),
+        (MB_WESTWARD_CURRENT, Direction::West, 6),
+        (MB_EASTWARD_CURRENT, Direction::East, 6),
+        (MB_SLIDE_WEST, Direction::West, 8),
+    ];
+    for (behavior, direction, frames) in movers {
+        for held_opposite in [false, true] {
+            let scene = crate::overworld::test_support::synthetic_scene_with_special_tile(
+                10,
+                10,
+                (4, 3),
+                behavior,
+            );
+            let phase = OverworldPhase::for_test(
+                scene,
+                ONE_F,
+                PlayerState::new((0, 0), 3, direction),
+                None,
+            );
+            let runtime = runtime_for(&phase);
+            let (dx, dy) = direction.delta();
+            let mut player = PlayerState::new((4 - dx, 3 - dy), 3, direction);
+            advance_player_one_frame(
+                &mut player,
+                Some(direction),
+                false,
+                &runtime,
+                &no_connections,
+                &NO_FLAGS,
+            );
+            for _ in 1..engine::overworld::WALK_FRAMES_PER_TILE {
+                advance_player_one_frame(
+                    &mut player,
+                    None,
+                    false,
+                    &runtime,
+                    &no_connections,
+                    &NO_FLAGS,
+                );
+            }
+            assert_eq!(player.position(), (4, 3), "setup: {behavior} entered");
+            assert!(!player.in_transit(), "setup: entry drained");
+
+            let input = held_opposite.then_some(match direction {
+                Direction::East => Direction::West,
+                Direction::West => Direction::East,
+                Direction::North => Direction::South,
+                Direction::South => Direction::North,
+            });
+            let outcome = advance_player_one_frame(
+                &mut player,
+                input,
+                false,
+                &runtime,
+                &no_connections,
+                &NO_FLAGS,
+            );
+            assert!(
+                matches!(outcome, StepOutcome::Advanced { from: (4, 3), .. }),
+                "behavior {behavior} {direction:?} opp {held_opposite}: {outcome:?} {:?}",
+                player.position()
+            );
+            assert_eq!(player.position(), (4 + dx, 3 + dy));
+            assert_eq!(player.step_progress(), 1);
+            for expected in 2..frames {
+                advance_player_one_frame(
+                    &mut player,
+                    input,
+                    false,
+                    &runtime,
+                    &no_connections,
+                    &NO_FLAGS,
+                );
+                assert_eq!(player.step_progress(), expected, "behavior {behavior}");
+                assert!(player.in_transit());
+            }
+            advance_player_one_frame(
+                &mut player,
+                input,
+                false,
+                &runtime,
+                &no_connections,
+                &NO_FLAGS,
+            );
+            assert!(
+                !player.in_transit(),
+                "behavior {behavior} {direction:?} settles on frame {frames}"
+            );
+        }
+    }
 }

@@ -35,6 +35,24 @@ impl OverworldPhase {
         }
     }
 
+    /// Gates the encounter roll, since `Battle::new` refuses an inadmissible lead
+    /// only after `CreateWildMon`'s draws; a missing lead passes to `begin_wild_battle`.
+    pub(in crate::flow) fn wild_lead_admissible(&mut self) -> bool {
+        let refusal = self
+            .party_lead
+            .as_ref()
+            .and_then(|lead| battle::ensure_participant_admissible(lead).err());
+        if let Some(error) = refusal {
+            if self.wild_lead_refusal != Some(error) {
+                eprintln!(
+                    "wild encounters: disabled while the lead can't enter a battle ({error:?})"
+                );
+            }
+        }
+        self.wild_lead_refusal = refusal;
+        refusal.is_none()
+    }
+
     /// Plays one frame of a wild battle taken out of
     /// [`OverworldPhase::active_battle`]: `Some` while it continues, `None`
     /// once it has ended or aborted. The turn and the party write-back are

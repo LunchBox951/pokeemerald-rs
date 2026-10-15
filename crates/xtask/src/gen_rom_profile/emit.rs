@@ -3,7 +3,8 @@ use std::fmt::Write as _;
 use rom_import::Encoding;
 
 use super::plan::{
-    BlobPlan, ImagePlan, MapLayoutPlan, PalettePlan, ProfilePlan, TileAnimPlan, TilesetPlan,
+    BattleMessagePlan, BlobPlan, ImagePlan, MapLayoutPlan, PalettePlan, ProfilePlan, TileAnimPlan,
+    TilesetPlan,
 };
 
 /// Returns the `bpee_rev0` Rust module with one root-table constant.
@@ -23,9 +24,9 @@ pub fn module(plan: &ProfilePlan, sha1: &str, root_count: usize) -> String {
 
 use crate::reader::GbaPtr;
 use crate::roots::{{
-    AudioRoots, BlobRoot, Encoding, FontRoot, ImageRoot, InterfaceRoots, KeysplitRoot,
-    MapLayoutRoot, PaletteRoot, Roots, SampleRoot, SongRoot, SpriteRoots, TextWindowRoots,
-    TileAnimRoot, TilesetRoot, TitleScreenRoots, VoicegroupRoot,
+    AudioRoots, BattleMessageRoots, BlobRoot, Encoding, FontRoot, ImageRoot, InterfaceRoots,
+    KeysplitRoot, MapLayoutRoot, PaletteRoot, Roots, SampleRoot, SongRoot, SpecialMessageRoot,
+    SpriteRoots, TextWindowRoots, TileAnimRoot, TilesetRoot, TitleScreenRoots, VoicegroupRoot,
 }};
 
 /// Pokemon Emerald (US) rev 0's root table.
@@ -70,6 +71,7 @@ pub const EMERALD_US_REV0_ROOTS: Roots = Roots {{"
     let _ = writeln!(out, "    }},");
 
     audio_roots(&mut out, plan);
+    battle_message_roots(&mut out, &plan.battle_messages);
 
     let _ = writeln!(out, "}};");
     out
@@ -198,6 +200,26 @@ fn audio_roots(out: &mut String, plan: &ProfilePlan) {
         }
         let _ = writeln!(out, "        ],");
     }
+    let _ = writeln!(out, "    }},");
+}
+
+fn battle_message_roots(out: &mut String, messages: &BattleMessagePlan) {
+    let _ = writeln!(out, "    battle_messages: BattleMessageRoots {{");
+    let _ = writeln!(
+        out,
+        "        table: {},",
+        gba_ptr_expression(messages.table)
+    );
+    let _ = writeln!(out, "        specials: &[");
+    for special in &messages.specials {
+        let _ = writeln!(
+            out,
+            "            SpecialMessageRoot {{ symbol: {:?}, addr: {} }},",
+            special.symbol,
+            gba_ptr_expression(special.addr)
+        );
+    }
+    let _ = writeln!(out, "        ],");
     let _ = writeln!(out, "    }},");
 }
 
@@ -333,6 +355,31 @@ mod tests {
         assert_eq!(gba_ptr_expression(0x083D_F704), "GbaPtr::at(0x083D_F704)");
         assert_eq!(gba_ptr_expression(0), "GbaPtr::at(0x0000_0000)");
         assert_eq!(separated_u32_hex_literal(0xDEAD_BEEF), "0xDEAD_BEEF");
+    }
+
+    #[test]
+    fn battle_message_roots_render_one_address_per_line() {
+        use super::battle_message_roots;
+        use crate::gen_rom_profile::plan::{BattleMessagePlan, SpecialMessagePlan};
+
+        let mut out = String::new();
+        battle_message_roots(
+            &mut out,
+            &BattleMessagePlan {
+                table: 0x085C_C270,
+                specials: vec![SpecialMessagePlan {
+                    symbol: "sText_GoPkmn",
+                    addr: 0x085C_BC00,
+                }],
+            },
+        );
+        assert!(out.contains("table: GbaPtr::at(0x085C_C270),"), "{out}");
+        assert!(
+            out.contains(
+                "SpecialMessageRoot { symbol: \"sText_GoPkmn\", addr: GbaPtr::at(0x085C_BC00) },"
+            ),
+            "{out}"
+        );
     }
 
     #[test]

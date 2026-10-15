@@ -393,6 +393,7 @@ impl OverworldPhase {
         // Ahead of `runtime`'s scene borrow: the memoised screen needs
         // `&mut self`; a memo hit is a map-id comparison.
         let wild_table_fightable = self.wild_table_fightable();
+        let wild_lead_admissible = self.wild_lead_admissible();
         // The scene's own load-time events, not a fresh resolution: Oldale
         // Town's flag-chosen placement holds for the visit and matches the
         // object events the scene draws.
@@ -441,8 +442,9 @@ impl OverworldPhase {
                 trigger_door_warp(&runtime, x, y, self.player.previous_elevation())
             });
             // The roll happens only on a completed step the door-shaped warp
-            // has not already claimed (`roll_eligible_landing`) and only on a
-            // fightable map (`wild_table_fightable`). A fainted-lead filter
+            // has not already claimed (`roll_eligible_landing`), only on a
+            // fightable map (`wild_table_fightable`), and only with a lead the
+            // turn engine admits (`wild_lead_admissible`). A fainted-lead filter
             // used to sit here too, for the one loss path issue #261's
             // white-out could not yet cover (a lost Route 101 first battle --
             // `CB2_EndFirstBattle` has no `IsPlayerDefeated` branch); issue
@@ -462,7 +464,7 @@ impl OverworldPhase {
                 self.map_id,
                 &runtime,
                 wild_encounter::roll_eligible_landing(tile_center, door_warp)
-                    .filter(|_| wild_table_fightable),
+                    .filter(|_| wild_table_fightable && wild_lead_admissible),
             );
             // Neither consumer of `field_event_fired` can be driven to the
             // coord-event arm over bundled data -- Route 101 declares no warp

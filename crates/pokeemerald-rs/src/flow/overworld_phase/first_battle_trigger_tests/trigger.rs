@@ -455,3 +455,55 @@ fn an_aborted_first_battle_still_consumes_the_route_101_trigger() {
         "a spent trigger draws nothing -- not even start_first_battle's construction draws"
     );
 }
+
+/// A Truant lead (`battle_util.c:2086-2097`) builds no Zigzagoon and leaves the
+/// rescue armed, so `CreateMon`'s draws are not spent on a refused battle.
+#[test]
+fn an_inadmissible_lead_leaves_the_rescue_armed_without_drawing() {
+    let (tx, ty) = ROUTE_101_TRIGGER_TILE;
+    let mut phase = route_101_trigger_phase(PlayerState::new(
+        (tx - 1, ty),
+        ROUTE_101_TRIGGER_ELEVATION,
+        Direction::East,
+    ));
+    phase.rng = Rng::new(4242);
+    let slakoth = BattlePokemon::new(
+        &Dex::new(),
+        assets::SpeciesId::SLAKOTH,
+        5,
+        Ivs {
+            hp: MAX_IV,
+            attack: MAX_IV,
+            defense: MAX_IV,
+            speed: MAX_IV,
+            sp_attack: MAX_IV,
+            sp_defense: MAX_IV,
+        },
+        0,
+        vec![assets::MoveId::SCRATCH],
+    )
+    .expect("Slakoth/Scratch must be in the dex");
+    assert_eq!(
+        battle::ensure_participant_admissible(&slakoth),
+        Err(battle::BattleError::UnportedAbilityInteraction(
+            assets::AbilityId::TRUANT
+        )),
+    );
+    phase.party_lead = Some(slakoth);
+
+    walk_one_tile_east(&mut phase);
+
+    assert_eq!(phase.player.position(), (tx, ty));
+    assert!(!phase.is_first_battle_active(), "no battle may start");
+    assert_eq!(
+        phase.rng.state(),
+        Rng::new(4242).state(),
+        "an inadmissible lead must not draw at all"
+    );
+    assert_eq!(
+        phase.save1.event_data.var_get(VAR_ROUTE101_STATE),
+        Ok(1),
+        "the rescue stays armed for a lead the engine can fight with"
+    );
+    assert!(phase.party_lead.is_some(), "the lead stays home");
+}
