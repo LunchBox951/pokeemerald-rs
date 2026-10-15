@@ -622,6 +622,20 @@ fn an_inadmissible_lead_disables_the_roll_without_drawing() {
     assert_eq!(phase.wild.immunity_steps(), immunity_before);
     assert_eq!(phase.wild.prev_metatile_behavior(), behavior_before);
     assert!(phase.party_lead.is_some(), "the lead stays home");
+    assert_eq!(
+        phase.wild_lead_refusal,
+        Some(BattleError::UnportedAbilityInteraction(
+            assets::AbilityId::TRUANT
+        )),
+        "the refusal is reported, and remembered so it reports once"
+    );
+
+    phase.party_lead = Some(player_mon(SpeciesId::ZIGZAGOON.0, 50, vec![MoveId::TACKLE]));
+    assert!(phase.wild_lead_admissible());
+    assert_eq!(
+        phase.wild_lead_refusal, None,
+        "an admissible lead clears the report so a later refusal prints again"
+    );
 }
 
 #[test]
