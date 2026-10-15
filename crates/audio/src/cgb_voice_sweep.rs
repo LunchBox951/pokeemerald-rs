@@ -550,8 +550,8 @@ fn a_dead_square_preserves_its_inherited_remainder_across_silent_sweep_ticks() {
     }
     silent.oscillator = Oscillator::Square(inherited.clone());
 
-    let mut expected = SquareChannel::new(HALF_DUTY, FINAL_FREQUENCY, None);
-    expected.continue_duty_from(&inherited);
+    let mut expected = inherited;
+    expected.retune_atomically(FINAL_FREQUENCY);
     expected.advance_silently(FRAME_SAMPLES);
 
     let mut acc = vec![(0i32, 0i32); FRAME_SAMPLES];
