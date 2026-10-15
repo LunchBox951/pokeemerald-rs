@@ -30859,6 +30859,12 @@
           "spec": "S-6",
           "status": "stubbed"
         },
+        "GetDeoxysStat": {
+          "reason": "pokemon.c:3660-3684 (GetDeoxysStat; called from CalculateMonStats at pokemon.c:2698-2712). The single-player Speed Forme substitution (base 95/90/180/95/90 for Deoxys's five non-HP stats) is rewritten as effective_battle_base_stats, applied at BattlePokemon construction and level-up recompute. The link-battle branch (BATTLE_TYPE_LINK_IN_BATTLE returns 0 and keeps the raw row) is not modelled. The persisted stat cache stays raw per upstream CalculateMonStats (pokemon.c:2814-2820); the assets species row stays raw Normal Forme data.",
+          "rust_target": "crates/battle/src/pokemon.rs",
+          "spec": "S-6",
+          "status": "rewritten"
+        },
         "GiveBoxMonInitialMoveset": {
           "reason": "pokemon.c:2991-3012. Fully modelled as battle::wild::initial_moveset: walks gLevelUpLearnsets[species] (extracted as assets::LevelUpLearnsets) in table order, breaks at the first entry above the mon's level (upstream's packed moveLevel > (level << 9) is the same comparison on the decoded level), and reproduces both GiveMoveToBoxMon outcomes (:2939-2955) -- MON_ALREADY_KNOWS_MOVE skips without costing a slot, MON_HAS_MAX_MOVES triggers DeleteFirstMoveAndGiveMoveToBoxMon's oldest-first drop (:3010). Draws nothing. PP initialisation is not carried here because crates/battle's MoveSlot derives PP from the move's own data rather than storing a written-through copy; an unknown species yields an empty moveset and fails closed at BattlePokemon::new instead of fabricating one.",
           "rust_target": "crates/battle/src/wild.rs",
