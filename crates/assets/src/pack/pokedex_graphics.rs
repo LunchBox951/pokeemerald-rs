@@ -14,6 +14,8 @@ const TILEMAP_ENTRY_BYTES: usize = 2;
 const PALETTE_ENTRY_BYTES: usize = 2;
 const BANK_COLORS: u16 = 16;
 const FULL_PALETTE_COLORS: u16 = 256;
+/// Byte length of the extensionless `cry_screen_bg` file.
+const CRY_SCREEN_BG_BYTES: usize = 32;
 
 /// Every Pokédex tilemap is a screen of 2-byte entries, `width` x `height` tiles.
 const fn tilemap_bytes(width: usize, height: usize) -> usize {
@@ -69,8 +71,6 @@ pub struct PokedexGraphicsHandle<'a> {
     pub region_map_palette: PaletteRef<'a>,
     /// Size screen silhouette palette (`size_silhouette.pal`), 16 colours.
     pub size_silhouette_palette: PaletteRef<'a>,
-    /// Tracked `cry_screen_bg` binary palette, 16 colours; unreferenced upstream.
-    pub cry_screen_bg_palette: PaletteRef<'a>,
     /// Start menu main tilemap (`start_menu_main.bin`).
     pub start_menu_main_tilemap: &'a [u8],
     /// Start menu search results tilemap (`start_menu_search_results.bin`).
@@ -99,6 +99,8 @@ pub struct PokedexGraphicsHandle<'a> {
     pub cry_screen_tilemap: &'a [u8],
     /// Unused cry meter tilemap (`cry_meter_map.bin`).
     pub cry_meter_tilemap: &'a [u8],
+    /// Extensionless `cry_screen_bg`, 32 bytes; tracked but unreferenced upstream.
+    pub cry_screen_bg_raw: &'a [u8],
 }
 
 impl AssetPack {
@@ -135,7 +137,6 @@ impl AssetPack {
             search_menu_palette: self.pokedex_palette("search_menu", 64)?,
             region_map_palette: self.pokedex_palette("region_map", 48)?,
             size_silhouette_palette: self.pokedex_palette("size_silhouette", 16)?,
-            cry_screen_bg_palette: self.pokedex_palette("cry_screen_bg", 16)?,
             start_menu_main_tilemap: self.pokedex_raw("start_menu_main", tilemap_bytes(32, 12))?,
             start_menu_search_results_tilemap: self
                 .pokedex_raw("start_menu_search_results", tilemap_bytes(32, 12))?,
@@ -155,6 +156,7 @@ impl AssetPack {
             region_map_affine_tilemap: self.pokedex_raw("region_map_affine", 64 * 64)?,
             cry_screen_tilemap: self.pokedex_raw("cry_screen", tilemap_bytes(32, 20))?,
             cry_meter_tilemap: self.pokedex_raw("cry_meter_map", tilemap_bytes(10, 8))?,
+            cry_screen_bg_raw: self.pokedex_raw("cry_screen_bg", CRY_SCREEN_BG_BYTES)?,
         })
     }
 

@@ -22,17 +22,16 @@ const SHEETS: [(&str, u32, u32, u16); 14] = [
     ("cry_screen_bg", 8, 8, 16),
 ];
 
-const PALETTES: [(&str, u16); 7] = [
+const PALETTES: [(&str, u16); 6] = [
     ("bg_hoenn", 96),
     ("bg_national", 96),
     ("search_results_bg", 96),
     ("search_menu", 64),
     ("region_map", 48),
     ("size_silhouette", 16),
-    ("cry_screen_bg", 16),
 ];
 
-const RAWS: [(&str, usize); 14] = [
+const RAWS: [(&str, usize); 15] = [
     ("start_menu_main", 768),
     ("start_menu_search_results", 768),
     ("list", 1280),
@@ -47,6 +46,7 @@ const RAWS: [(&str, usize); 14] = [
     ("region_map_affine", 4096),
     ("cry_screen", 1280),
     ("cry_meter_map", 160),
+    ("cry_screen_bg", 32),
 ];
 
 fn leak(id: String) -> &'static str {
@@ -178,7 +178,6 @@ fn pokedex_graphics_bundles_every_handle_group() {
         g.search_menu_palette,
         g.region_map_palette,
         g.size_silhouette_palette,
-        g.cry_screen_bg_palette,
     ];
     for (n, (palette, (_, colors))) in (1u16..).zip(palettes.into_iter().zip(PALETTES)) {
         assert_eq!(palette.color_count, colors);
@@ -199,6 +198,7 @@ fn pokedex_graphics_bundles_every_handle_group() {
         g.region_map_affine_tilemap,
         g.cry_screen_tilemap,
         g.cry_meter_tilemap,
+        g.cry_screen_bg_raw,
     ];
     for (n, (bytes, (_, len))) in (1u8..).zip(tilemaps.into_iter().zip(RAWS)) {
         assert_eq!(bytes, vec![n; len].as_slice());
@@ -268,6 +268,8 @@ fn malformed_entries_are_rejected_on_read() {
             raw_id("region_map_affine"),
             raw(raw_id("region_map_affine"), 4098, 0),
         ),
+        // Extensionless `cry_screen_bg` is a 32-byte raw member, not a palette.
+        (raw_id("cry_screen_bg"), raw(raw_id("cry_screen_bg"), 31, 0)),
     ];
     for (n, (id, entry)) in cases.into_iter().enumerate() {
         let (pack, path) = load(
