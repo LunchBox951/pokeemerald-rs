@@ -4,8 +4,8 @@
 //! whose whole-file SHA-1 is `f3ae088181bf583e55daf962a92bb46f4f1d07b7`. 500 roots, each matched
 //! against the pack `cargo xtask extract` produces.
 //!
-//! 3 roots were not unique: each one's bytes repeat at several ROM
-//! addresses holding identical data, so the generator pairs the copies off
+//! 3 roots were chosen among identical copies: each one's bytes repeat at
+//! several ROM addresses holding identical data, so the generator pairs the copies off
 //! in address order against the ids that share the art and records the
 //! one at that position (the lowest address first). The importer reads
 //! bytes, so any copy yields the same pack entry. Every other root was
