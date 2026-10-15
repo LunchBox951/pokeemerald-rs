@@ -568,10 +568,6 @@ fn usable_callback_in_span(from: u64, to: u64, usable_through: u64) -> bool {
     clippy::too_many_arguments,
     reason = "the injected clock, sleep, and stream hooks are the seam the tests drive"
 )]
-#[expect(
-    clippy::too_many_lines,
-    reason = "one poll loop whose evidence, cadence, and tail state interlock per poll"
-)]
 fn wait_for_measured_tail(
     target: u64,
     derived_tail: Duration,
@@ -582,168 +578,350 @@ fn wait_for_measured_tail(
     mut now: impl FnMut() -> Instant,
     mut sleep: impl FnMut(Duration),
 ) -> Result<(), DrainError> {
-    let started = now();
-    let deadline = started + policy.max_wait;
-    let mut tail_started = started;
-    let mut measured_due = started;
-    let mut last_submitted = None;
-    let mut last_reading = None;
-    let mut last_poll = started;
-    let mut last_advance = None;
-    // Each cadence sample beside the polling resolution it was seen at.
-    let mut recent_cadence = [(Duration::ZERO, Duration::ZERO); CADENCE_WINDOW];
-    let mut advances = 0_usize;
-    let mut last_played = Duration::ZERO;
-    let mut first_stale = None;
-    let mut last_stale = None;
-    let mut max_stale_advance = Duration::ZERO;
-    let mut after_stall = false;
-    let mut poll_gaps = [policy.interval; CADENCE_WINDOW];
-    let mut polls = 0_usize;
+    let mut wait = MeasuredTail::new(
+        now(),
+        target,
+        derived_tail,
+        device_sample_rate,
+        policy.interval,
+        policy.max_wait,
+    );
     loop {
         let snapshot = progress();
         let errors = stream_errors();
         if errors > 0 {
             return Err(DrainError::StreamStoppedDuringTail { errors });
         }
-        let Some(PlaybackProgress {
+        let Some(snapshot) = snapshot else {
+            return Ok(());
+        };
+        if let Some(outcome) = wait.poll(snapshot, now()) {
+            return outcome;
+        }
+        sleep(policy.interval);
+    }
+}
+
+/// The stale-callback evidence [`MeasuredTail`] gathers: when frames from
+/// callbacks past the last usable one advanced, and by how much at most.
+#[derive(Default)]
+struct StaleEvidence {
+    first: Option<Instant>,
+    last: Option<Instant>,
+    max_advance: Duration,
+    /// A stall restarted the evidence: one big advance is no longer proof.
+    after_stall: bool,
+}
+
+impl StaleEvidence {
+    /// Discards the pending evidence.
+    fn clear(&mut self) {
+        *self = Self::default();
+    }
+
+    /// Records an advance of `stale` playback credited at `at`.
+    fn record(&mut self, at: Instant, stale: Duration) {
+        self.first.get_or_insert(at);
+        self.last = Some(at);
+        self.max_advance = self.max_advance.max(stale);
+    }
+
+    /// Whether the evidence spans at least `derived_tail / 4`: a span of
+    /// advances, or one advance covering that much playback.
+    fn is_sufficient(&self, derived_tail: Duration) -> bool {
+        self.first
+            .zip(self.last)
+            .is_some_and(|(first, last)| last.duration_since(first) >= derived_tail / 4)
+            || (!self.after_stall && self.max_advance >= derived_tail / 4)
+    }
+}
+
+/// How this wait has been polling: the recent gaps between polls.
+struct PollClock {
+    last_poll: Instant,
+    gaps: [Duration; CADENCE_WINDOW],
+    polls: usize,
+}
+
+impl PollClock {
+    fn new(started: Instant, interval: Duration) -> Self {
+        Self {
+            last_poll: started,
+            gaps: [interval; CADENCE_WINDOW],
+            polls: 0,
+        }
+    }
+
+    /// See [`usual_poll_gap`].
+    fn usual_gap(&self, interval: Duration) -> Duration {
+        usual_poll_gap(&self.gaps, interval)
+    }
+
+    /// Notes a poll at `current`.
+    fn record(&mut self, current: Instant) {
+        self.gaps[self.polls % CADENCE_WINDOW] = current.duration_since(self.last_poll);
+        self.polls = self.polls.wrapping_add(1);
+        self.last_poll = current;
+    }
+}
+
+/// The callback cadence seen across submitted-frame advances.
+struct Cadence {
+    /// Each cadence sample beside the polling resolution it was seen at.
+    recent: [(Duration, Duration); CADENCE_WINDOW],
+    advances: usize,
+    last_played: Duration,
+    last_advance: Option<Instant>,
+}
+
+impl Cadence {
+    fn new() -> Self {
+        Self {
+            recent: [(Duration::ZERO, Duration::ZERO); CADENCE_WINDOW],
+            advances: 0,
+            last_played: Duration::ZERO,
+            last_advance: None,
+        }
+    }
+
+    /// Forgets the cadence seen so far.
+    fn restart(&mut self) {
+        self.recent = [(Duration::ZERO, Duration::ZERO); CADENCE_WINDOW];
+    }
+
+    /// The longest retained cadence at polling resolution `usual_poll`,
+    /// counting `pause_sample` when a polling pause produced one.
+    fn longest(&self, usual_poll: Duration, pause_sample: Option<Duration>) -> Duration {
+        longest(retained_cadence(&self.recent, usual_poll).chain(pause_sample))
+    }
+}
+
+/// The state of one measured-tail wait across polls: the wait's fixed
+/// parameters, the evidence it has gathered, and the tail it is running.
+/// [`wait_for_measured_tail`] owns the injected I/O; this owns every
+/// decision made from a snapshot.
+struct MeasuredTail {
+    target: u64,
+    derived_tail: Duration,
+    device_sample_rate: u32,
+    interval: Duration,
+    started: Instant,
+    deadline: Instant,
+    tail_started: Instant,
+    measured_due: Instant,
+    last_submitted: Option<u64>,
+    last_reading: Option<UsableReading>,
+    polls: PollClock,
+    cadence: Cadence,
+    stale: StaleEvidence,
+}
+
+impl MeasuredTail {
+    fn new(
+        started: Instant,
+        target: u64,
+        derived_tail: Duration,
+        device_sample_rate: u32,
+        interval: Duration,
+        max_wait: Duration,
+    ) -> Self {
+        Self {
+            target,
+            derived_tail,
+            device_sample_rate,
+            interval,
+            started,
+            deadline: started + max_wait,
+            tail_started: started,
+            measured_due: started,
+            last_submitted: None,
+            last_reading: None,
+            polls: PollClock::new(started, interval),
+            cadence: Cadence::new(),
+            stale: StaleEvidence::default(),
+        }
+    }
+
+    /// Takes the `snapshot` read at `current`; `Some` ends the wait.
+    fn poll(
+        &mut self,
+        snapshot: PlaybackProgress,
+        current: Instant,
+    ) -> Option<Result<(), DrainError>> {
+        let PlaybackProgress {
             sounded_frames: sounded,
             submitted_frames: submitted,
             usable_through_frames: usable_through,
             usable_reading,
-        }) = snapshot
-        else {
-            return Ok(());
-        };
-        let current = now();
-        if sounded >= target {
-            // A poll past the deadline accepts the target only when the
-            // callback's own stamp, backdated by any overshoot, puts
-            // completion inside the budget.
-            return if current <= deadline
-                || usable_reading.is_some_and(|reading| {
-                    reading_completes_by(reading, target, device_sample_rate, deadline)
-                }) {
-                Ok(())
-            } else {
-                Err(DrainError::MeasuredTailTimedOut { sounded, target })
-            };
+        } = snapshot;
+        if sounded >= self.target {
+            return Some(self.target_reached(sounded, usable_reading, current));
         }
-        // A usable reading short of the target says how much playback it
-        // still owed: stale callbacks after it must not finish the wait
-        // before that has run at the device rate from the callback that took
-        // it, however many stale callbacks or late polls came since. Never
-        // lowered by a later reading.
-        if let Some(reading) = usable_reading.filter(|&reading| Some(reading) != last_reading) {
-            last_reading = Some(reading);
-            measured_due = measured_due
-                .max(reading_due(reading, target, device_sample_rate).unwrap_or(measured_due));
-        }
+        self.note_reading(usable_reading);
         // A mark past the submitted total is a callback in flight, proving
         // nothing about the frames submitted; once they land it discards the
         // pending stale evidence.
         let in_flight = usable_through > submitted;
-        if last_submitted
+        if self
+            .last_submitted
             .is_some_and(|prev| usable_callback_in_span(prev, submitted, usable_through))
         {
-            (first_stale, last_stale, max_stale_advance) = (None, None, Duration::ZERO);
-            after_stall = false;
+            self.stale.clear();
         }
-        let mut pause_sample = None;
-        if let Some(previous) = last_submitted.filter(|&last| submitted > last) {
-            let played = frames_duration(submitted - previous, device_sample_rate);
-            // The advance happened somewhere since the previous poll. A late
-            // poll can fold many callbacks into it, so credit it no later
-            // than the playback it covers past that poll rather than
-            // stamping it with the (possibly much later) observation time.
-            let at = current.min(last_poll + played);
-            // The first advance's gap runs from the start of the wait, so
-            // callbacks idle from the start are a stall like any other.
-            let gap = at.saturating_duration_since(last_advance.unwrap_or(started));
-            // A healthy gap is about one period: what the window has seen, or
-            // the playback the last advance covered. One that outruns both by
-            // a tenth of the tail is a stall: what came before says nothing
-            // about the resumed callbacks, and the gap itself is not their
-            // cadence.
-            let usual_poll = usual_poll_gap(&poll_gaps, policy.interval);
-            let seen = longest(retained_cadence(&recent_cadence, usual_poll));
-            // With one advance seen there is no cadence yet, only the gap.
-            let floor = derived_tail / if advances >= 2 { 4 } else { 2 };
-            // Before any advance, the only period to hold the gap to is this buffer.
-            if advances == 0 {
-                last_played = played;
-            }
-            let stalled = gap > floor && gap > seen.max(last_played) + derived_tail / 10;
-            let cadence_sample = if stalled {
-                (first_stale, last_stale, max_stale_advance) = (None, None, Duration::ZERO);
-                recent_cadence = [(Duration::ZERO, Duration::ZERO); CADENCE_WINDOW];
-                after_stall = true;
-                // Audio the resumed callbacks submit sounds a tail later.
-                tail_started = current;
-                played
-            } else {
-                gap.max(played)
-            };
-            // A polling pause can fold many short callbacks into one advance,
-            // and its backdated `at` can hide the idle span before them. It
-            // widens freshness only on this poll and finishes only at the
-            // deadline, where no later poll can confirm it. A pause is late
-            // against how this thread has actually been polling (see
-            // [`usual_poll_gap`]), so a poller the scheduler holds
-            // systematically late still settles.
-            let settled = current.duration_since(last_poll) <= usual_poll * 2;
-            recent_cadence[advances % CADENCE_WINDOW] = if settled {
-                (cadence_sample, usual_poll)
-            } else {
-                pause_sample = Some(cadence_sample);
-                (Duration::ZERO, Duration::ZERO)
-            };
-            advances = advances.wrapping_add(1);
-            last_advance = Some(at);
-            last_played = played;
-            // Frames past both the previous poll and the usable mark came
-            // from callbacks after the last usable one: stale evidence, even
-            // when one late poll folds a usable callback in ahead of them.
-            let stale_frames = submitted.saturating_sub(previous.max(usable_through));
-            if stale_frames > 0 && !in_flight {
-                first_stale.get_or_insert(at);
-                last_stale = Some(at);
-                let stale = frames_duration(stale_frames, device_sample_rate);
-                max_stale_advance = max_stale_advance.max(stale);
-            }
+        let pause_sample = self.note_advance(submitted, usable_through, in_flight, current);
+        self.polls.record(current);
+        self.last_submitted = Some(submitted);
+        self.decide(sounded, in_flight, pause_sample, current)
+    }
+
+    /// The outcome of a poll that sees the target sounded. A poll past the
+    /// deadline accepts it only when the callback's own stamp, backdated by
+    /// any overshoot, puts completion inside the budget.
+    fn target_reached(
+        &self,
+        sounded: u64,
+        usable_reading: Option<UsableReading>,
+        current: Instant,
+    ) -> Result<(), DrainError> {
+        if current <= self.deadline
+            || usable_reading.is_some_and(|reading| {
+                reading_completes_by(reading, self.target, self.device_sample_rate, self.deadline)
+            })
+        {
+            Ok(())
+        } else {
+            Err(DrainError::MeasuredTailTimedOut {
+                sounded,
+                target: self.target,
+            })
         }
-        poll_gaps[polls % CADENCE_WINDOW] = current.duration_since(last_poll);
-        polls = polls.wrapping_add(1);
-        last_poll = current;
-        last_submitted = Some(submitted);
-        let usual_poll = usual_poll_gap(&poll_gaps, policy.interval);
-        let cadence = longest(retained_cadence(&recent_cadence, usual_poll).chain(pause_sample));
-        let evidence = first_stale
-            .zip(last_stale)
-            .is_some_and(|(first, last)| last.duration_since(first) >= derived_tail / 4)
-            || (!after_stall && max_stale_advance >= derived_tail / 4);
-        let callbacks_alive = evidence
-            && last_advance
-                .is_some_and(|last| current.duration_since(last) <= cadence + policy.interval * 2);
+    }
+
+    /// A usable reading short of the target says how much playback it still
+    /// owed: stale callbacks after it must not finish the wait before that
+    /// has run at the device rate from the callback that took it, however
+    /// many stale callbacks or late polls came since. Never lowered by a
+    /// later reading.
+    fn note_reading(&mut self, usable_reading: Option<UsableReading>) {
+        if let Some(reading) = usable_reading.filter(|&reading| Some(reading) != self.last_reading)
+        {
+            self.last_reading = Some(reading);
+            self.measured_due = self.measured_due.max(
+                reading_due(reading, self.target, self.device_sample_rate)
+                    .unwrap_or(self.measured_due),
+            );
+        }
+    }
+
+    /// Folds a submitted-frame advance since the previous poll into the
+    /// cadence and the stale evidence. Returns the cadence sample of a
+    /// polling pause, which counts only on this poll.
+    fn note_advance(
+        &mut self,
+        submitted: u64,
+        usable_through: u64,
+        in_flight: bool,
+        current: Instant,
+    ) -> Option<Duration> {
+        let previous = self.last_submitted.filter(|&last| submitted > last)?;
+        let rate = self.device_sample_rate;
+        let played = frames_duration(submitted - previous, rate);
+        // The advance happened somewhere since the previous poll. A late
+        // poll can fold many callbacks into it, so credit it no later
+        // than the playback it covers past that poll rather than
+        // stamping it with the (possibly much later) observation time.
+        let at = current.min(self.polls.last_poll + played);
+        // The first advance's gap runs from the start of the wait, so
+        // callbacks idle from the start are a stall like any other.
+        let gap = at.saturating_duration_since(self.cadence.last_advance.unwrap_or(self.started));
+        // A healthy gap is about one period: what the window has seen, or
+        // the playback the last advance covered. One that outruns both by
+        // a tenth of the tail is a stall: what came before says nothing
+        // about the resumed callbacks, and the gap itself is not their
+        // cadence.
+        let usual_poll = self.polls.usual_gap(self.interval);
+        let seen = longest(retained_cadence(&self.cadence.recent, usual_poll));
+        // With one advance seen there is no cadence yet, only the gap.
+        let floor = self.derived_tail / if self.cadence.advances >= 2 { 4 } else { 2 };
+        // Before any advance, the only period to hold the gap to is this buffer.
+        if self.cadence.advances == 0 {
+            self.cadence.last_played = played;
+        }
+        let stalled =
+            gap > floor && gap > seen.max(self.cadence.last_played) + self.derived_tail / 10;
+        let cadence_sample = if stalled {
+            self.stale.clear();
+            self.cadence.restart();
+            self.stale.after_stall = true;
+            // Audio the resumed callbacks submit sounds a tail later.
+            self.tail_started = current;
+            played
+        } else {
+            gap.max(played)
+        };
+        // A polling pause can fold many short callbacks into one advance,
+        // and its backdated `at` can hide the idle span before them. It
+        // widens freshness only on this poll and finishes only at the
+        // deadline, where no later poll can confirm it. A pause is late
+        // against how this thread has actually been polling (see
+        // [`usual_poll_gap`]), so a poller the scheduler holds
+        // systematically late still settles.
+        let settled = current.duration_since(self.polls.last_poll) <= usual_poll * 2;
+        let slot = self.cadence.advances % CADENCE_WINDOW;
+        let pause_sample = if settled {
+            self.cadence.recent[slot] = (cadence_sample, usual_poll);
+            None
+        } else {
+            self.cadence.recent[slot] = (Duration::ZERO, Duration::ZERO);
+            Some(cadence_sample)
+        };
+        self.cadence.advances = self.cadence.advances.wrapping_add(1);
+        self.cadence.last_advance = Some(at);
+        self.cadence.last_played = played;
+        // Frames past both the previous poll and the usable mark came
+        // from callbacks after the last usable one: stale evidence, even
+        // when one late poll folds a usable callback in ahead of them.
+        let stale_frames = submitted.saturating_sub(previous.max(usable_through));
+        if stale_frames > 0 && !in_flight {
+            self.stale.record(at, frames_duration(stale_frames, rate));
+        }
+        pause_sample
+    }
+
+    /// Whether the wait ends at this poll, once the snapshot is folded in.
+    fn decide(
+        &self,
+        sounded: u64,
+        in_flight: bool,
+        pause_sample: Option<Duration>,
+        current: Instant,
+    ) -> Option<Result<(), DrainError>> {
+        let usual_poll = self.polls.usual_gap(self.interval);
+        let cadence = self.cadence.longest(usual_poll, pause_sample);
+        let callbacks_alive = self.stale.is_sufficient(self.derived_tail)
+            && self
+                .cadence
+                .last_advance
+                .is_some_and(|last| current.duration_since(last) <= cadence + self.interval * 2);
         // The tail runs from `started` or from the resumption after a stall;
         // a usable reading does not restart it, so a valid-then-stale device
         // keeps its budget, but the finish waits for the playback the latest
         // usable reading still owed. A callback in flight vetoes the finish.
-        let tail_due = (tail_started + derived_tail).max(measured_due);
+        let tail_due = (self.tail_started + self.derived_tail).max(self.measured_due);
         let stale_tail_elapsed = !in_flight && callbacks_alive && current >= tail_due;
-        if current >= deadline {
+        if current >= self.deadline {
             // The first poll at or past the deadline is the last: the tail may
             // finish it only if it could have elapsed within the budget.
-            return if stale_tail_elapsed && tail_due <= deadline {
+            return Some(if stale_tail_elapsed && tail_due <= self.deadline {
                 Ok(())
             } else {
-                Err(DrainError::MeasuredTailTimedOut { sounded, target })
-            };
+                Err(DrainError::MeasuredTailTimedOut {
+                    sounded,
+                    target: self.target,
+                })
+            });
         }
-        if stale_tail_elapsed && pause_sample.is_none() {
-            return Ok(());
-        }
-        sleep(policy.interval);
+        (stale_tail_elapsed && pause_sample.is_none()).then_some(Ok(()))
     }
 }
 

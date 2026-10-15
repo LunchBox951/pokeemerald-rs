@@ -92,7 +92,8 @@ pub fn suppresses_critical_hits(defender_ability: AbilityId) -> bool {
 ///
 /// This must run before stat-stage scaling. Upstream doubles raw Attack first,
 /// and integer truncation makes `stage(2 * attack)` differ from
-/// `2 * stage(attack)` (`pokeemerald/src/pokemon.c:3158`, `:3238`).
+/// `2 * stage(attack)` (`pokeemerald/src/pokemon.c:3158`, `:3238`). A doubled
+/// value above `u32::MAX` saturates like the other scaling helpers.
 #[must_use]
 pub fn huge_power_attack(
     attacker_ability: AbilityId,
@@ -102,7 +103,7 @@ pub fn huge_power_attack(
     let uses_physical_attack = move_category == MoveCategory::Physical;
     let doubles_attack = attacker_ability == HUGE_POWER || attacker_ability == PURE_POWER;
     if uses_physical_attack && doubles_attack {
-        raw_attack * 2
+        raw_attack.saturating_mul(2)
     } else {
         raw_attack
     }
@@ -354,6 +355,41 @@ mod tests {
             assert_eq!(
                 huge_power_attack(ability, MoveCategory::Physical, 50),
                 100,
+                "{ability:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn huge_power_and_pure_power_saturate_at_the_u32_boundary() {
+        for ability in [HUGE_POWER, PURE_POWER] {
+            for (raw, expected) in [
+                (u32::MAX / 2, u32::MAX - 1),
+                (u32::MAX / 2 + 1, u32::MAX),
+                (u32::MAX, u32::MAX),
+            ] {
+                assert_eq!(
+                    huge_power_attack(ability, MoveCategory::Physical, raw),
+                    expected,
+                    "{ability:?} {raw}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn huge_power_and_pure_power_pass_through_extreme_non_doubled_attack() {
+        for ability in [HUGE_POWER, PURE_POWER] {
+            assert_eq!(
+                huge_power_attack(ability, MoveCategory::Special, u32::MAX),
+                u32::MAX,
+                "{ability:?}"
+            );
+        }
+        for ability in [BATTLE_ARMOR, OVERGROW, NO_ABILITY] {
+            assert_eq!(
+                huge_power_attack(ability, MoveCategory::Physical, u32::MAX),
+                u32::MAX,
                 "{ability:?}"
             );
         }
