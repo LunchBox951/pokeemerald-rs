@@ -16473,6 +16473,218 @@
       "status": "pending"
     },
     "graphics/pokedex": {
+      "artifacts": {
+        "area_glow.png": {
+          "reason": "Decoded with its embedded palette into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "area_marker.png": {
+          "reason": "Decoded with its embedded palette into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "area_unknown.png": {
+          "reason": "Decoded with its embedded palette into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "arrows.png": {
+          "reason": "Decoded with its embedded palette into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "bg_hoenn.pal": {
+          "reason": "JASC palette with its fixed colour count parsed into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "bg_national.pal": {
+          "reason": "JASC palette with its fixed colour count parsed into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "caught_ball.png": {
+          "reason": "Decoded with its embedded palette into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "cry_meter.png": {
+          "reason": "Decoded with its embedded palette into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "cry_meter_map.bin": {
+          "reason": "Raw file copied at its fixed length into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "cry_meter_needle.png": {
+          "reason": "Decoded with its embedded palette into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "cry_screen.bin": {
+          "reason": "Raw file copied at its fixed length into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "cry_screen_bg": {
+          "reason": "Raw file copied at its fixed length into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "cry_screen_bg.png": {
+          "reason": "Decoded with its embedded palette into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "info_screen.bin": {
+          "reason": "Raw file copied at its fixed length into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "interface.png": {
+          "reason": "Decoded with its embedded palette into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "list.bin": {
+          "reason": "Raw file copied at its fixed length into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "list_underlay.bin": {
+          "reason": "Raw file copied at its fixed length into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "menu.png": {
+          "reason": "Decoded with its embedded palette into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "noball_unused.png": {
+          "reason": "Decoded with its embedded palette into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "region_map.bin": {
+          "reason": "Raw file copied at its fixed length into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "region_map.pal": {
+          "reason": "JASC palette with its fixed colour count parsed into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "region_map.png": {
+          "reason": "Decoded with its embedded palette into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "region_map_affine.bin": {
+          "reason": "Raw file copied at its fixed length into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "region_map_affine.png": {
+          "reason": "Decoded with its embedded palette into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "screen_select_bar_main.bin": {
+          "reason": "Raw file copied at its fixed length into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "screen_select_bar_submenu.bin": {
+          "reason": "Raw file copied at its fixed length into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "search_menu.pal": {
+          "reason": "JASC palette with its fixed colour count parsed into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "search_menu.png": {
+          "reason": "Decoded with its embedded palette into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "search_menu_hoenn.bin": {
+          "reason": "Raw file copied at its fixed length into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "search_menu_national.bin": {
+          "reason": "Raw file copied at its fixed length into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "search_results_bg.pal": {
+          "reason": "JASC palette with its fixed colour count parsed into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "size_screen.bin": {
+          "reason": "Raw file copied at its fixed length into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "size_silhouette.pal": {
+          "reason": "JASC palette with its fixed colour count parsed into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "start_menu_main.bin": {
+          "reason": "Raw file copied at its fixed length into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "start_menu_search_results.bin": {
+          "reason": "Raw file copied at its fixed length into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.ui",
       "kind": "dir",
       "spec_owner": "S-4",
@@ -29585,6 +29797,12 @@
           "rust_target": "crates/xtask/src/extract/bag.rs",
           "spec": "S-4",
           "status": "ported"
+        },
+        "pokedex_graphics": {
+          "reason": "Graphics, palettes, and tilemaps this file loads are extracted into the fixed Pokédex graphics manifest; the screen logic and other graphics remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
         }
       },
       "category": "code.source",
@@ -30796,21 +31014,53 @@
       "status": "pending"
     },
     "src/pokedex.c": {
+      "artifacts": {
+        "pokedex_screen_graphics": {
+          "reason": "Graphics, palettes, and tilemaps this file loads are extracted into the fixed Pokédex graphics manifest; the screen logic and other graphics remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
     },
     "src/pokedex_area_region_map.c": {
+      "artifacts": {
+        "pokedex_area_region_map_graphics": {
+          "reason": "Graphics, palettes, and tilemaps this file loads are extracted into the fixed Pokédex graphics manifest; the screen logic and other graphics remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
     },
     "src/pokedex_area_screen.c": {
+      "artifacts": {
+        "pokedex_area_screen_graphics": {
+          "reason": "Graphics, palettes, and tilemaps this file loads are extracted into the fixed Pokédex graphics manifest; the screen logic and other graphics remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
     },
     "src/pokedex_cry_screen.c": {
+      "artifacts": {
+        "pokedex_cry_screen_graphics": {
+          "reason": "Graphics, palettes, and tilemaps this file loads are extracted into the fixed Pokédex graphics manifest; the screen logic and other graphics remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
