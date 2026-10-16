@@ -29984,6 +29984,12 @@
     },
     "src/item_menu.c": {
       "artifacts": {
+        "bag_menu_state": {
+          "reason": "BagMenu models pocket browse order, retained cursor and scroll with upstream list-window rules, field/battle/fixed-pocket selection, and context-action requests; swap, quantity prompts, Wally, shop, PC, and renderer remain pending.",
+          "rust_target": "crates/engine/src/bag_menu.rs",
+          "spec": "C-5",
+          "status": "rewritten"
+        },
         "ordinary_bag_graphics": {
           "reason": "Registered-select mark extracted; navigation and rendering remain pending.",
           "rust_target": "crates/xtask/src/extract/bag.rs",
