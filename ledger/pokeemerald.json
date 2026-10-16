@@ -28917,17 +28917,6 @@
       "status": "pending"
     },
     "src/data/pokemon_graphics/front_pic_table.h": {
-      "artifacts": {
-        "MUDKIP": {
-          "status": "pending"
-        },
-        "TORCHIC": {
-          "status": "pending"
-        },
-        "TREECKO": {
-          "status": "pending"
-        }
-      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
@@ -28985,19 +28974,19 @@
     "src/data/pokemon_graphics/still_front_pic_table.h": {
       "artifacts": {
         "MUDKIP": {
-          "reason": "The MUDKIP row is the typed starter battler lookup's static front key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "reason": "The MUDKIP row is the typed starter battler lookup's species key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
           "rust_target": "crates/assets/src/pack/battler.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "TORCHIC": {
-          "reason": "The TORCHIC row is the typed starter battler lookup's static front key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "reason": "The TORCHIC row is the typed starter battler lookup's species key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
           "rust_target": "crates/assets/src/pack/battler.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "TREECKO": {
-          "reason": "The TREECKO row is the typed starter battler lookup's static front key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "reason": "The TREECKO row is the typed starter battler lookup's species key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
           "rust_target": "crates/assets/src/pack/battler.rs",
           "spec": "S-4",
           "status": "ported"
