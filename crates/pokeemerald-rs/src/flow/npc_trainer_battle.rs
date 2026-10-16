@@ -228,10 +228,12 @@ pub fn start_npc_trainer_battle(
     let specs: Vec<battle::TrainerPartyMon<'_>> = entries
         .iter()
         .zip(&movesets)
-        .map(|(entry, moves)| battle::TrainerPartyMon {
+        .zip(&personalities)
+        .map(|((entry, moves), &personality)| battle::TrainerPartyMon {
             species: entry.species,
             level: entry.level,
             moves,
+            personality,
         })
         .collect();
     battle::ensure_trainer_party_startable(&dex, &player_lead, trainer, &specs)?;
