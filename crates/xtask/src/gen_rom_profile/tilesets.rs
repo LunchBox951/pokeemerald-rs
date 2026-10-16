@@ -97,8 +97,8 @@ fn locate_one(
 
     let anim_ids = anim_frame_ids(ctx, name);
     let mut needles = vec![
-        ctx.pack.get(&metatiles_id)?.payload.clone(),
-        ctx.pack.get(&attributes_id)?.payload.clone(),
+        ctx.pack.raw_payload(&metatiles_id)?.to_vec(),
+        ctx.pack.raw_payload(&attributes_id)?.to_vec(),
     ];
     let mut anim_shapes = Vec::new();
     for (_, frames) in &anim_ids {
@@ -141,7 +141,7 @@ fn locate_one(
         ReportLine::unique(
             &metatiles_id,
             metatiles_addr,
-            len32(&ctx.pack.get(&metatiles_id)?.payload),
+            len32(ctx.pack.raw_payload(&metatiles_id)?),
         )
         .symbol(format!("gMetatiles_{upstream}")),
     );
@@ -149,7 +149,7 @@ fn locate_one(
         ReportLine::unique(
             &attributes_id,
             attributes_addr,
-            len32(&ctx.pack.get(&attributes_id)?.payload),
+            len32(ctx.pack.raw_payload(&attributes_id)?),
         )
         .symbol(format!("gMetatileAttributes_{upstream}")),
     );
@@ -176,13 +176,13 @@ fn locate_one(
             id: metatiles_id.clone(),
             addr: metatiles_addr,
             encoding: Encoding::Raw,
-            len: len32(&ctx.pack.get(&metatiles_id)?.payload),
+            len: len32(ctx.pack.raw_payload(&metatiles_id)?),
         },
         metatile_attributes: BlobPlan {
             id: attributes_id.clone(),
             addr: attributes_addr,
             encoding: Encoding::Raw,
-            len: len32(&ctx.pack.get(&attributes_id)?.payload),
+            len: len32(ctx.pack.raw_payload(&attributes_id)?),
         },
         callback,
         anims,
@@ -402,10 +402,11 @@ pub fn len32(payload: &[u8]) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{frame_number, locate_palettes};
+    use super::{frame_number, locate_one, locate_palettes};
     use crate::gen_rom_profile::error::GenRomProfileError;
+    use crate::gen_rom_profile::tests::image_twin;
     use crate::gen_rom_profile::tests::with_context;
-    use pack_format::palette_entry;
+    use pack_format::{palette_entry, raw_entry};
     use rom_import::fixture::RomFixture;
 
     /// Sixteen contiguous 16-colour banks in a ROM; bank `short` (if any) is
@@ -465,5 +466,26 @@ mod tests {
         assert!(frame_number("tileset/general/anim/water/2") < frame_number("a/10"));
         // A frame that is not a number sorts last rather than panicking.
         assert_eq!(frame_number("a/b"), u32::MAX);
+    }
+
+    #[test]
+    fn tileset_metatiles_and_attributes_of_the_wrong_kind_are_refused() {
+        let bytes = [1u8, 2, 3, 4, 5, 6, 7, 8];
+        let metatiles = "tileset/demo/metatiles";
+        let attributes = "tileset/demo/metatile-attributes";
+        for (wrong, right) in [(metatiles, attributes), (attributes, metatiles)] {
+            let entries = vec![
+                image_twin(wrong, &bytes),
+                raw_entry(right.to_owned(), bytes.to_vec()),
+            ];
+            let err = with_context("tileset-wrong-kind", &bytes, entries, |ctx| {
+                locate_one(ctx, "demo", &mut Vec::new())
+            })
+            .expect_err("a non-raw metatile entry is refused");
+            assert!(
+                matches!(&err, GenRomProfileError::WrongPackEntryKind { id, .. } if id == wrong),
+                "{err:?}"
+            );
+        }
     }
 }

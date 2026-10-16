@@ -170,6 +170,20 @@ pub enum ExtractError {
         /// What differs from the expected shape.
         detail: String,
     },
+    /// A Pokédex-graphics source differs from its upstream graphic's shape.
+    PokedexGraphicsAssetMismatch {
+        /// Source path.
+        path: PathBuf,
+        /// What differs from the expected shape.
+        detail: String,
+    },
+    /// A battle interface source differs from its upstream graphic's shape.
+    BattleInterfaceAssetMismatch {
+        /// Source path.
+        path: PathBuf,
+        /// What differs from the expected shape.
+        detail: String,
+    },
     /// An ordinary-bag source differs from its upstream graphic's shape.
     BagAssetMismatch {
         /// Source path.
@@ -350,6 +364,12 @@ impl fmt::Display for ExtractError {
             ),
             Self::StarterChooserAssetMismatch { path, detail } => {
                 write!(f, "starter-chooser asset `{}` {detail}", path.display())
+            }
+            Self::PokedexGraphicsAssetMismatch { path, detail } => {
+                write!(f, "pokedex-graphics asset `{}` {detail}", path.display())
+            }
+            Self::BattleInterfaceAssetMismatch { path, detail } => {
+                write!(f, "battle interface asset `{}` {detail}", path.display())
             }
             Self::BagAssetMismatch { path, detail } => {
                 write!(f, "bag asset `{}` {detail}", path.display())

@@ -1,5 +1,5 @@
 //! Both constructors refuse move-end-cured status/ability pairs
-//! (`battle_util.c:2873-2951`) and Truant holders, before any RNG draw.
+//! (`battle_util.c:2873-2951`), Truant holders, and Intimidate holders, before any RNG draw.
 
 use crate::common::{max_iv_mon, SequenceRng};
 use assets::trainers::TrainerId;
@@ -19,8 +19,14 @@ fn healthy(species: SpeciesId) -> BattlePokemon {
     mon(species, 0, Status1::Healthy)
 }
 
-fn refused() -> [(BattlePokemon, AbilityId); 5] {
+fn refused() -> [(BattlePokemon, AbilityId); 8] {
     [
+        (healthy(SpeciesId::MIGHTYENA), AbilityId::INTIMIDATE),
+        (healthy(SpeciesId::EKANS), AbilityId::INTIMIDATE),
+        (
+            mon(SpeciesId::MAWILE, 1, Status1::Healthy),
+            AbilityId::INTIMIDATE,
+        ),
         (healthy(SpeciesId::SLAKOTH), AbilityId::TRUANT),
         (healthy(SpeciesId::SLAKING), AbilityId::TRUANT),
         (
@@ -211,7 +217,48 @@ fn confusion_is_refused_only_for_own_tempo() {
 }
 
 #[test]
+fn intimidate_is_refused_whatever_the_status() {
+    for status in [Status1::Healthy, Status1::Paralysed, Status1::Poisoned] {
+        let mut rng = SequenceRng::new([]);
+        let result = wild(
+            mon(SpeciesId::MIGHTYENA, 0, status),
+            vec![],
+            healthy(SpeciesId::ZIGZAGOON),
+            false,
+            &mut rng,
+        );
+        assert_refused_without_draws(&result, AbilityId::INTIMIDATE, &rng);
+        let mut rng = SequenceRng::new([]);
+        let result = trainer(
+            mon(SpeciesId::MIGHTYENA, 0, status),
+            vec![],
+            vec![healthy(SpeciesId::ZIGZAGOON)],
+            &mut rng,
+        );
+        assert_refused_without_draws(&result, AbilityId::INTIMIDATE, &rng);
+    }
+}
+
+#[test]
 fn the_selected_ability_slot_decides_not_the_species_pool() {
+    for (species, slot, ability) in [
+        (SpeciesId::EKANS, 1, AbilityId::SHED_SKIN),
+        (SpeciesId::MAWILE, 0, AbilityId::HYPER_CUTTER),
+    ] {
+        let holder = mon(species, slot, Status1::Healthy);
+        assert_eq!(holder.ability(), ability);
+        let mut rng = SequenceRng::new([0, 0]);
+        wild(
+            holder,
+            vec![],
+            healthy(SpeciesId::ZIGZAGOON),
+            false,
+            &mut rng,
+        )
+        .unwrap();
+        assert!(rng.draws() >= 1);
+    }
+
     let snorlax = mon(SpeciesId::SNORLAX, 1, Status1::Poisoned);
     assert_eq!(snorlax.ability(), AbilityId::THICK_FAT);
     let mut rng = SequenceRng::new([0, 0]);

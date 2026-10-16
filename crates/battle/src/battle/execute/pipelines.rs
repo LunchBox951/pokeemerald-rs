@@ -383,7 +383,11 @@ impl Battle {
     }
 }
 
-fn hit_failure_event(outcome: HitOutcome, by_player: bool, move_id: MoveId) -> BattleEvent {
+pub(super) fn hit_failure_event(
+    outcome: HitOutcome,
+    by_player: bool,
+    move_id: MoveId,
+) -> BattleEvent {
     match outcome {
         HitOutcome::Miss => BattleEvent::Missed { by_player, move_id },
         HitOutcome::NoEffect => BattleEvent::NoEffect { by_player, move_id },
@@ -391,6 +395,12 @@ fn hit_failure_event(outcome: HitOutcome, by_player: bool, move_id: MoveId) -> B
         HitOutcome::WonderGuardBlocked => BattleEvent::WonderGuardBlocked { by_player, move_id },
         HitOutcome::Hit { .. } => {
             unreachable!("a landed hit cannot produce a failure event")
+        }
+        HitOutcome::Absorbed { .. } | HitOutcome::FlashFireBlocked { .. } => {
+            unreachable!(
+                "no admitted multi-hit or drain move is Electric, Water, or Fire, so these \
+                 pipelines never meet an absorbing ability"
+            )
         }
     }
 }
