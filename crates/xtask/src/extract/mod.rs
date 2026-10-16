@@ -65,6 +65,7 @@
 
 mod audio_samples;
 mod bag;
+mod battle_anim;
 mod battle_interface;
 mod battle_message;
 mod error;
@@ -159,6 +160,7 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     voicegroups::extract_voicegroups(&upstream, &mut writer)?;
     midi::extract_song(&upstream, &mut writer)?;
     battle_message::extract_battle_message(&upstream, &mut writer)?;
+    battle_anim::extract_battle_anim(&upstream, &mut writer)?;
 
     let entry_count = writer.len();
     let bytes = writer.finish()?;
