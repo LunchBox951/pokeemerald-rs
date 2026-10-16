@@ -75,7 +75,7 @@ fn a_landed_poison_sting_reports_poisoned_immediately_after_hit() {
 fn a_poison_type_target_is_never_poisoned_even_on_a_successful_roll() {
     let dex = Dex::new();
     let player = max_iv_mon(&dex, RATTATA, 10, vec![POISON_STING]);
-    let enemy = max_iv_mon(&dex, EKANS, 10, vec![TACKLE]);
+    let enemy = max_iv_mon(&dex, EKANS, 10, vec![TACKLE]).with_ability_slot(1);
 
     let mut rng = SequenceRng::new(POISON_STING_LANDS);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
