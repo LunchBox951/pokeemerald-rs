@@ -637,4 +637,45 @@ mod tests {
             Ok(Some(1))
         );
     }
+
+    /// Thick Fat halves the stale Ice base (247 -> 123), so Wing Attack's
+    /// doubled score stays under a byte (246) and beats Tackle; without the
+    /// halving it wraps (494 -> 238) and loses to Tackle's 247.
+    #[test]
+    fn the_most_damage_pass_verdict_follows_the_players_thick_fat() {
+        const JYNX: SpeciesId = SpeciesId(124);
+        const MAKUHITA: SpeciesId = SpeciesId(335);
+        const PICHU: SpeciesId = SpeciesId(172);
+
+        let dex = Dex::new();
+        let mon = |species, level, moves: Vec<MoveId>| {
+            BattlePokemon::new(&dex, species, level, fixed_ivs(255), 0, moves)
+                .expect("dex-resident")
+        };
+        let fainted = mon(JYNX, 30, vec![MoveId::ICE_BEAM]);
+        let bench = vec![
+            mon(PICHU, 5, vec![MoveId::WING_ATTACK]),
+            mon(PICHU, 5, vec![MoveId::TACKLE]),
+        ];
+        let context = TrainerContext::new(
+            MAY_ROUTE_103_MUDKIP,
+            trainer_data(MAY_ROUTE_103_MUDKIP).expect("a real trainer"),
+            bench,
+        );
+        let thick = mon(MAKUHITA, 5, vec![MoveId::TACKLE]).with_ability_slot(0);
+        let guts = mon(MAKUHITA, 5, vec![MoveId::TACKLE]).with_ability_slot(1);
+        assert_eq!(thick.ability(), AbilityId::THICK_FAT);
+        assert_eq!(guts.ability(), AbilityId::GUTS);
+
+        assert_eq!(
+            context.most_suitable_by_damage(&dex, &fainted, MoveId::ICE_BEAM, &thick),
+            Ok(Some(0)),
+            "Thick Fat keeps Wing Attack's score under a byte"
+        );
+        assert_eq!(
+            context.most_suitable_by_damage(&dex, &fainted, MoveId::ICE_BEAM, &guts),
+            Ok(Some(1)),
+            "without Thick Fat Wing Attack's score wraps below Tackle's"
+        );
+    }
 }

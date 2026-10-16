@@ -21,6 +21,8 @@ const POKEBALL_HEIGHT: u32 = 128;
 const CIRCLE_SIDE: u32 = 64;
 const FRONT_SIDE: u32 = 64;
 const BANK_PALETTE_COLORS: u16 = 16;
+const TILES_BIT_DEPTH: u8 = 8;
+const BANK_BIT_DEPTH: u8 = 4;
 const TILEMAP_ENTRY_BYTES: usize = 2;
 const PALETTE_ENTRY_BYTES: usize = 2;
 const BAG_TILEMAP_BYTES: usize = 32 * 20 * TILEMAP_ENTRY_BYTES;
@@ -90,25 +92,28 @@ impl AssetPack {
     ///
     /// [`PackError::UnknownAsset`] or [`PackError::WrongKind`] for a missing or
     /// wrong-kind entry; [`PackError::MalformedStarterAsset`] when dimensions,
-    /// palette size, pixel indices, or tilemap length differ from upstream.
+    /// source bit depth, palette size, pixel indices, or tilemap length differ from upstream.
     pub fn starter_chooser(&self) -> Result<StarterChooserHandle<'_>, PackError> {
         Ok(StarterChooserHandle {
             tiles: self.starter_image(
                 TILES_IMAGE_ID,
                 TILES_PALETTE_ID,
                 (TILES_SIDE, TILES_SIDE),
+                TILES_BIT_DEPTH,
                 TILES_PALETTE_COLORS,
             )?,
             pokeball_selection: self.starter_image(
                 POKEBALL_IMAGE_ID,
                 POKEBALL_PALETTE_ID,
                 (POKEBALL_WIDTH, POKEBALL_HEIGHT),
+                BANK_BIT_DEPTH,
                 BANK_PALETTE_COLORS,
             )?,
             starter_circle: self.starter_image(
                 CIRCLE_IMAGE_ID,
                 CIRCLE_PALETTE_ID,
                 (CIRCLE_SIDE, CIRCLE_SIDE),
+                BANK_BIT_DEPTH,
                 BANK_PALETTE_COLORS,
             )?,
             bag_tilemap: self.starter_tilemap(BAG_TILEMAP_ID, BAG_TILEMAP_BYTES)?,
@@ -131,6 +136,7 @@ impl AssetPack {
                 image_id,
                 palette_id,
                 (FRONT_SIDE, FRONT_SIDE),
+                BANK_BIT_DEPTH,
                 BANK_PALETTE_COLORS,
             )?,
         })
@@ -141,6 +147,7 @@ impl AssetPack {
         image_id: &str,
         palette_id: &str,
         (width, height): (u32, u32),
+        bit_depth: u8,
         palette_colors: u16,
     ) -> Result<PalettedImage<'_>, PackError> {
         let image = self.image(image_id)?;
@@ -152,6 +159,12 @@ impl AssetPack {
             return Err(fault(format!(
                 "is {}x{}: expected {width}x{height}",
                 image.width, image.height
+            )));
+        }
+        if image.bit_depth != bit_depth {
+            return Err(fault(format!(
+                "is {}-bit: expected {bit_depth}-bit",
+                image.bit_depth
             )));
         }
         if u64::try_from(image.pixels.len()).ok() != Some(u64::from(width) * u64::from(height)) {
