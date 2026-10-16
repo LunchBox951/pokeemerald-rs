@@ -232,6 +232,8 @@ pub enum AppState {
     /// not distinguish a menu awaiting input from one already fading toward
     /// its confirmed selection.
     MainMenu(MainMenuItem),
+    /// The Options screen (I-6, issue #1763), including its fades.
+    Options,
     /// Birch's new-game introduction.
     Intro,
     /// The introduction finished, but loading the overworld failed.
@@ -800,6 +802,8 @@ impl App {
             Some(AppScene::MainMenuFadeWait(wait)) => {
                 AppState::MainMenu(wait.state.scene.selected())
             }
+            Some(AppScene::MainMenuFadeIn(fade)) => AppState::MainMenu(fade.selected()),
+            Some(AppScene::Options(_)) => AppState::Options,
             Some(AppScene::Intro(_)) => AppState::Intro,
             Some(AppScene::OverworldLoadFailed(_)) => AppState::OverworldLoadFailed,
             Some(AppScene::Overworld(phase)) if phase.is_first_battle_active() => {

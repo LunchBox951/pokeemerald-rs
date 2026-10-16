@@ -133,6 +133,7 @@ pub mod intro;
 pub mod main_menu;
 pub mod music;
 pub mod new_game;
+mod options;
 pub mod overworld;
 mod pack_source;
 mod party;
