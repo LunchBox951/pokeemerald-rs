@@ -110,6 +110,9 @@ pub struct PaletteRoot {
     pub addr: GbaPtr,
     /// How many colours to read. Each is one little-endian `u16`.
     pub color_count: u16,
+    /// How the colours are stored. A compressed root decodes to exactly
+    /// `color_count * 2` bytes.
+    pub encoding: Encoding,
 }
 
 /// Bytes a reader copies through without interpreting.

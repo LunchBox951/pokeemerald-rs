@@ -5,10 +5,10 @@ use pack_format::{raw_entry, PackEntry};
 use rom_import::fixture::RomFixture;
 
 use super::error::GenRomProfileError;
-use super::tests::with_context;
+use super::tests::{synthetic_bag_ids, with_context};
 use super::{
-    battle_messages, fonts, inventory, layouts, locate_profile, sprites, text_window, tilesets,
-    title,
+    bag, battle_messages, fonts, inventory, layouts, locate_profile, sprites, text_window,
+    tilesets, title,
 };
 use crate::extract::scope::{
     layout_ids, sprite_palette_ids, sprite_sheet_ids, text_window_ids, tileset_animation_ids,
@@ -29,6 +29,7 @@ fn complete_inventory() -> Vec<PackEntry> {
         // Palettes stay so a sheet deletion is the only thing missing.
         .chain(sprite_palette_ids())
         .chain([rom_import::BATTLE_MESSAGE_PACK_ID.to_owned()])
+        .chain(synthetic_bag_ids())
         .map(|id| raw_entry(id, vec![0]))
         .collect()
 }
@@ -57,6 +58,8 @@ fn assert_refused(label: &str, entries: Vec<PackEntry>, missing: &str, domain: &
             sprites::locate(ctx, &mut report).map(|_| ())
         } else if domain == "text_window" {
             text_window::locate(ctx, &mut report).map(|_| ())
+        } else if domain == "bag" {
+            bag::locate(ctx, &mut report).map(|_| ())
         } else if domain == "battle_messages" {
             battle_messages::locate(ctx, &mut report).map(|_| ())
         } else {
@@ -205,10 +208,41 @@ fn a_pack_missing_the_battle_message_table_is_refused() {
 }
 
 #[test]
+fn a_pack_missing_any_expected_bag_entry_is_refused() {
+    for id in synthetic_bag_ids() {
+        assert_refused(
+            &format!("no-{}", id.replace('/', "-")),
+            without(&id),
+            &id,
+            "bag",
+        );
+    }
+}
+
+#[test]
+fn a_pack_missing_the_whole_bag_family_is_refused_by_id() {
+    let mut entries = complete_inventory();
+    entries.retain(|entry| !entry.id.starts_with("bag/"));
+    assert_refused("no-bag", entries, &synthetic_bag_ids()[0], "bag");
+}
+
+#[test]
+fn an_empty_bag_expectation_is_refused() {
+    let rom = RomFixture::new().emerald_header().finish();
+    with_context("empty-bag", &rom, complete_inventory(), |ctx| {
+        let err = inventory::require_bag(ctx.pack, &[]).unwrap_err();
+        assert!(
+            matches!(&err, GenRomProfileError::MissingPackEntry(id) if id == "bag/*"),
+            "{err:?}"
+        );
+    });
+}
+
+#[test]
 fn a_complete_fixed_inventory_passes_preflight() {
     let rom = RomFixture::new().emerald_header().finish();
     with_context("complete", &rom, complete_inventory(), |ctx| {
-        inventory::preflight(ctx.pack).expect("a complete inventory passes");
+        inventory::preflight(ctx.pack, &ctx.bag_ids).expect("a complete inventory passes");
     });
 }
 

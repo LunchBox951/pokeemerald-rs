@@ -62,6 +62,7 @@ const COMPLETE_PREFIXES: &[&str] = &[
     "text-window/",
     "audio/",
     "battle-message/",
+    "bag/",
 ];
 
 /// Ids the two backends are known and accepted to disagree on, each with

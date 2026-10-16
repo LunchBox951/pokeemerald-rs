@@ -90,17 +90,32 @@ pub fn require_battle_messages(pack: &PackSource) -> Result<(), GenRomProfileErr
     pack.get(rom_import::BATTLE_MESSAGE_PACK_ID).map(|_| ())
 }
 
+/// Require every bag entry the checkout's inventory expects.
+///
+/// # Errors
+///
+/// [`GenRomProfileError::MissingPackEntry`] naming the first absent entry,
+/// or `bag/*` when the expectation is empty, so a whole missing family
+/// cannot pass as a complete one.
+pub fn require_bag(pack: &PackSource, expected: &[String]) -> Result<(), GenRomProfileError> {
+    if expected.is_empty() {
+        return Err(GenRomProfileError::MissingPackEntry("bag/*".to_owned()));
+    }
+    expected.iter().try_for_each(|id| pack.get(id).map(|_| ()))
+}
+
 /// Require every fixed root, before any domain writes a report line.
 ///
 /// # Errors
 ///
 /// [`GenRomProfileError::MissingPackEntry`] naming the first absent root.
-pub fn preflight(pack: &PackSource) -> Result<(), GenRomProfileError> {
+pub fn preflight(pack: &PackSource, bag_ids: &[String]) -> Result<(), GenRomProfileError> {
     require_tilesets(pack)?;
     require_title(pack)?;
     require_fonts(pack)?;
     require_layouts(pack)?;
     require_text_window(pack)?;
     require_sprites(pack)?;
-    require_battle_messages(pack)
+    require_battle_messages(pack)?;
+    require_bag(pack, bag_ids)
 }
