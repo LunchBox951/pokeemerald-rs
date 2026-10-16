@@ -31,6 +31,8 @@
 //! - the ordinary bag's screen, tilemap, sex palettes, male and female sheets
 //!   and palette, rotating ball, select and HM marks, and the image and
 //!   palette of every item icon `gItemIconTable` selects; and
+//! - the Pokédex screen's 14 sheets with their embedded palettes, six
+//!   palette files, and 15 raw tilemap and data files;
 //! - `mus_title`, its transitive voicegroup tree, and every sample that tree
 //!   references; and
 //! - the battle-message token table (`gBattleStringsTable` plus the special
@@ -50,6 +52,7 @@
 //! - `starter-chooser/{image,palette,raw}/<stem>`
 //! - `bag/{image,palette,raw}/<name>` and `bag/item-icon/{image,palette}/<stem>`
 //! - `pokemon/<species>/front` and `pokemon/<species>/palette/normal`
+//! - `pokedex-graphics/{image,image-palette,palette,raw}/<name>`
 //! - `audio/sample/{direct-sound,programmable-wave}/<name>`
 //! - `audio/voicegroup/<label>` and `audio/song/<name>`
 //! - `battle-message/table`
@@ -67,6 +70,7 @@ pub mod jasc_pal;
 mod layouts_json;
 pub(crate) mod midi;
 pub mod png;
+mod pokedex_graphics;
 mod publish;
 pub(crate) mod scope;
 mod sprites;
@@ -145,6 +149,7 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     extract_interface_palettes(&upstream, &mut writer)?;
     starter_chooser::extract_starter_chooser(&upstream, &mut writer)?;
     bag::extract_bag(&upstream, &mut writer)?;
+    pokedex_graphics::extract_pokedex_graphics(&upstream, &mut writer)?;
     audio_samples::extract_audio_samples(&upstream, &mut writer)?;
     voicegroups::extract_voicegroups(&upstream, &mut writer)?;
     midi::extract_song(&upstream, &mut writer)?;

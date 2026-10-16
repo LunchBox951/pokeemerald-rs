@@ -30,7 +30,6 @@
 use std::path::Path;
 
 use assets::audio::{DirectSoundSample, ProgrammableWave, Sample, Song, VoiceGroup};
-use pack_format::EntryKind;
 
 use crate::extract::midi::SONG_PACK_ID as SUPPORTED_SONG_ID;
 use crate::extract::voicegroups::parser::{RawSlot, RawVoiceGroup};
@@ -204,15 +203,9 @@ fn check_voicegroups(ctx: &Context<'_>, plan: &AudioPlan) -> Result<(), GenRomPr
             id: id.clone(),
             reason,
         };
-        let asset = ctx.pack.get(id)?;
-        if asset.kind != EntryKind::Raw {
-            return Err(GenRomProfileError::WrongPackEntryKind {
-                id: id.clone(),
-                expected: "raw",
-            });
-        }
+        let payload = ctx.pack.raw_payload(id)?;
         let expected =
-            VoiceGroup::decode(&asset.payload).map_err(|err| GenRomProfileError::EntryShape {
+            VoiceGroup::decode(payload).map_err(|err| GenRomProfileError::EntryShape {
                 id: id.clone(),
                 reason: err.to_string(),
             })?;
@@ -356,14 +349,7 @@ pub(super) fn raw_payload<'a>(
     ctx: &'a Context<'_>,
     id: &str,
 ) -> Result<&'a [u8], GenRomProfileError> {
-    let asset = ctx.pack.get(id)?;
-    if asset.kind != EntryKind::Raw {
-        return Err(GenRomProfileError::WrongPackEntryKind {
-            id: id.to_owned(),
-            expected: "raw",
-        });
-    }
-    Ok(&asset.payload)
+    ctx.pack.raw_payload(id)
 }
 
 /// Locate every `DirectSound` sample by its PCM, then check its header.

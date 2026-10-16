@@ -60,7 +60,11 @@ pub fn locate(
     let names = layout_names(ctx);
     let mut needles = Vec::with_capacity(names.len());
     for name in &names {
-        needles.push(ctx.pack.get(&format!("layout/{name}/map"))?.payload.clone());
+        needles.push(
+            ctx.pack
+                .raw_payload(&format!("layout/{name}/map"))?
+                .to_vec(),
+        );
     }
     let hits = ctx.raw.find_all(&needles);
 
@@ -89,8 +93,8 @@ fn locate_one(
 ) -> Result<MapLayoutPlan, GenRomProfileError> {
     let map_id = format!("layout/{name}/map");
     let border_id = format!("layout/{name}/border");
-    let map_bytes = &ctx.pack.get(&map_id)?.payload;
-    let border_bytes = &ctx.pack.get(&border_id)?.payload;
+    let map_bytes = ctx.pack.raw_payload(&map_id)?;
+    let border_bytes = ctx.pack.raw_payload(&border_id)?;
 
     let map_addr = exactly_one(&map_id, map_hits)?;
     let struct_addr = only_one_matching(
@@ -169,4 +173,42 @@ fn is_map_layout(ctx: &Context<'_>, base: u32, map_len: usize, border: &[u8]) ->
         .all(|field| {
             u32_at_addr(ctx.rom, base + field).is_some_and(|value| to_offset(value).is_some())
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gen_rom_profile::tests::{image_twin, with_context};
+    use pack_format::raw_entry;
+
+    fn wrong_kind(err: &GenRomProfileError) -> Option<&str> {
+        match err {
+            GenRomProfileError::WrongPackEntryKind { id, .. } => Some(id),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn a_layout_map_or_border_of_the_wrong_kind_is_refused() {
+        let bytes = [1u8, 2, 3, 4, 5, 6, 7, 8];
+        for (map_raw, wrong) in [(false, "layout/demo/map"), (true, "layout/demo/border")] {
+            let (map, border) = (
+                if map_raw {
+                    raw_entry("layout/demo/map".to_owned(), bytes.to_vec())
+                } else {
+                    image_twin("layout/demo/map", &bytes)
+                },
+                if map_raw {
+                    image_twin("layout/demo/border", &bytes)
+                } else {
+                    raw_entry("layout/demo/border".to_owned(), bytes.to_vec())
+                },
+            );
+            let err = with_context("layout-wrong-kind", &bytes, vec![map, border], |ctx| {
+                locate_one(ctx, "demo", &[0x0800_0000], &mut Vec::new())
+            })
+            .expect_err("a non-raw layout entry is refused");
+            assert_eq!(wrong_kind(&err), Some(wrong), "{err:?}");
+        }
+    }
 }
