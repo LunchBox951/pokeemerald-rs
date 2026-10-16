@@ -24,6 +24,7 @@
 //! `(behavioral-fidelity)`.
 
 pub(crate) mod audio;
+pub(crate) mod bag;
 pub(crate) mod battle_messages;
 pub(crate) mod fonts;
 pub(crate) mod interface;
@@ -60,6 +61,7 @@ pub(crate) const DOMAINS: &[Domain] = &[
     audio::write,
     song::write,
     battle_messages::write,
+    bag::write,
 ];
 
 /// Read one image root's tiles and unpack them into a pack entry.
