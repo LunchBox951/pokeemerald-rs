@@ -473,7 +473,7 @@ fn a_run_caught_by_a_cone_stands_once_the_lock_sees_it_settle() {
 /// review). That call site itself cannot be driven from a test today -- no
 /// fixture here drives a refused sight trainer's party to construction, so
 /// `step` never reaches its `ApproachStarted` arm for them
-/// (`sight_trainer_trigger::tests::every_sight_trainers_real_party_fails_to_construct_for_exactly_these_reasons`)
+/// (`sight_trainer_trigger::tests::refused_sight_trainers_real_parties_fail_to_construct_for_exactly_these_reasons`)
 /// -- so the method both frames now share is what gets pinned.
 #[test]
 fn a_locked_frame_advances_the_players_walk_and_drops_its_latched_landing() {
