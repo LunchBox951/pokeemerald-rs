@@ -364,6 +364,24 @@ pub struct AudioPlan {
     pub programmable_wave: Vec<SamplePlan>,
 }
 
+/// One special battle-message template's root, owned.
+#[derive(Debug, Clone)]
+pub struct SpecialMessagePlan {
+    /// The upstream symbol, as `SPECIAL_TEMPLATES` spells it.
+    pub symbol: &'static str,
+    /// The GBA bus address of the template's token stream.
+    pub addr: u32,
+}
+
+/// The battle-message roots, owned.
+#[derive(Debug, Clone)]
+pub struct BattleMessagePlan {
+    /// `gBattleStringsTable`.
+    pub table: u32,
+    /// Every special template, in `SPECIAL_TEMPLATES` order.
+    pub specials: Vec<SpecialMessagePlan>,
+}
+
 /// Everything one generator run derived.
 #[derive(Debug, Clone)]
 pub struct ProfilePlan {
@@ -383,6 +401,8 @@ pub struct ProfilePlan {
     pub interface: Vec<PalettePlan>,
     /// `MUS_TITLE` and everything it plays through.
     pub audio: AudioPlan,
+    /// The battle-message token table.
+    pub battle_messages: BattleMessagePlan,
 }
 
 #[cfg(test)]

@@ -585,7 +585,7 @@ fn a_held_slide_pose_keeps_its_foot_across_the_next_dispatched_crossing() {
     assert_eq!(player.second_foot_leads(), held_foot);
 }
 
-/// Forced behaviours `step` does not dispatch, plus plain ground and a cracked
+/// Placement fixtures: forced behaviours (dispatched or not), plus plain ground and a cracked
 /// floor: a placement on any of them must stay disarmed.
 const UNDISPATCHED: [u8; 12] = [
     MB_ICE,
@@ -694,10 +694,15 @@ fn blocked_bump_keeps_an_already_armed_deferred_guard() {
     for _ in 0..TURN_IN_PLACE_FRAMES {
         player.tick();
     }
-    assert!(!matches!(
+    assert_eq!(
         player.step(Some(Direction::North), &runtime, &no_connections, &NO_FLAGS),
-        StepOutcome::Advanced { .. }
-    ));
+        StepOutcome::Advanced {
+            from: (2, 2),
+            to: (2, 1),
+        },
+        "the turned-north movement direction now slips north on ice"
+    );
+    assert!(player.in_transit());
 }
 
 /// Placement onto a dispatched forced tile stays controllable: a `None` poll
@@ -1032,4 +1037,97 @@ fn a_collision_blocked_forced_direction_still_honours_manual_input() {
          the player off the slide tile"
     );
     assert_eq!(player.position(), (1, 2));
+}
+
+/// Slip tiles (ice and the Trick House floor) paired with the frame count of
+/// `PlayerWalkFast` (`field_player_avatar.c:473-484`,
+/// `event_object_movement.c:8252-8261`).
+const SLIP_TILES: [u8; 2] = [MB_ICE, MB_TRICK_HOUSE_PUZZLE_8_FLOOR];
+
+/// The four currents with their fixed direction and the six-frame cadence of
+/// `PlayerRideWaterCurrent` (`field_player_avatar.c:506-524, 985-988`,
+/// `event_object_movement.c:8263-8270`).
+const CURRENTS: [(u8, Direction); 4] = [
+    (MB_SOUTHWARD_CURRENT, Direction::South),
+    (MB_NORTHWARD_CURRENT, Direction::North),
+    (MB_WESTWARD_CURRENT, Direction::West),
+    (MB_EASTWARD_CURRENT, Direction::East),
+];
+
+fn advance_to(player: &PlayerState, direction: Direction) -> StepOutcome {
+    let from = player.position();
+    let (dx, dy) = direction.delta();
+    StepOutcome::Advanced {
+        from,
+        to: (from.0 + dx, from.1 + dy),
+    }
+}
+
+/// A slip tile dispatches along the entry's movement direction on a `None`
+/// poll and against held-opposite input, in eight paused-animation frames,
+/// without locking facing (`field_player_avatar.c:473-484`) `(behavioral-fidelity)`.
+#[test]
+fn slip_tiles_dispatch_along_movement_direction_in_eight_frames() {
+    for behavior in SLIP_TILES {
+        for direction in [
+            Direction::East,
+            Direction::West,
+            Direction::North,
+            Direction::South,
+        ] {
+            for held_opposite in [false, true] {
+                let runtime = forced_mover_runtime(behavior, direction, false);
+                let mut player = enter_forced_tile(&runtime, direction);
+                let input = held_opposite.then(|| opposite(direction));
+                let expected = advance_to(&player, direction);
+                assert_eq!(
+                    player.step(input, &runtime, &no_connections, &NO_FLAGS),
+                    expected,
+                    "behavior {behavior} {direction:?} held_opposite {held_opposite}"
+                );
+                assert_eq!(player.transit_duration(), 8);
+                assert_eq!(player.facing(), direction);
+                assert_eq!(player.movement_direction(), direction);
+            }
+        }
+    }
+}
+
+/// Slip reads `movementDirection`, not facing: a slide that locked facing
+/// South while moving East hands ice an eastward slip that also turns facing
+/// East (`field_player_avatar.c:473-484`) `(behavioral-fidelity)`.
+#[test]
+fn slip_uses_movement_direction_not_a_locked_facing() {
+    let runtime = forced_mover_runtime(MB_ICE, Direction::East, false);
+    let mut player = enter_forced_tile(&runtime, Direction::East);
+    player.facing = Direction::South;
+    player.movement_direction = Direction::East;
+    let expected = advance_to(&player, Direction::East);
+    assert_eq!(
+        player.step(None, &runtime, &no_connections, &NO_FLAGS),
+        expected
+    );
+    assert_eq!(player.facing(), Direction::East);
+}
+
+/// Each current pushes in its fixed direction in six frames with the walk
+/// animation left running (`field_player_avatar.c:506-524`) `(behavioral-fidelity)`.
+#[test]
+fn currents_dispatch_in_their_fixed_direction_in_six_frames() {
+    for (behavior, direction) in CURRENTS {
+        for held_opposite in [false, true] {
+            let runtime = forced_mover_runtime(behavior, direction, false);
+            let mut player = enter_forced_tile(&runtime, direction);
+            let input = held_opposite.then(|| opposite(direction));
+            let expected = advance_to(&player, direction);
+            assert_eq!(
+                player.step(input, &runtime, &no_connections, &NO_FLAGS),
+                expected,
+                "behavior {behavior} held_opposite {held_opposite}"
+            );
+            assert_eq!(player.transit_duration(), 6);
+            assert_eq!(player.facing(), direction);
+            assert!(!player.slide_pose_held());
+        }
+    }
 }

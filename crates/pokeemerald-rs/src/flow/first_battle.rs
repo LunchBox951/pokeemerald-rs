@@ -42,12 +42,14 @@ fn consume_unmodelled_held_item_draw(rng: &mut Rng) {
 ///
 /// # Errors
 ///
-/// Returns opponent-construction or battle-initialization errors.
+/// Returns the lead's admission error before any draw, or
+/// opponent-construction or battle-initialization errors.
 pub fn start_first_battle(
     player_lead: BattlePokemon,
     player_trainer_id: u32,
     rng: &mut Rng,
 ) -> Result<Battle, BattleError> {
+    battle::ensure_participant_admissible(&player_lead)?;
     let dex = Dex::new();
     let opponent_moves =
         battle::initial_moveset(FIRST_BATTLE_OPPONENT_SPECIES, FIRST_BATTLE_OPPONENT_LEVEL);

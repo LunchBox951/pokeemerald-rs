@@ -101,7 +101,8 @@ impl MovePipeline {
 }
 
 impl Battle {
-    /// Executes one admitted move and records its battle events.
+    /// Executes one admitted move, then its move-end contact abilities, and
+    /// records its battle events.
     pub(super) fn execute_move(
         &mut self,
         attacker_is_player: bool,
@@ -109,7 +110,83 @@ impl Battle {
         rng: &mut impl BattleRng,
         events: &mut Vec<BattleEvent>,
     ) -> Result<(), BattleError> {
-        match MovePipeline::for_move(&self.dex, move_id)? {
+        let pipeline = MovePipeline::for_move(&self.dex, move_id)?;
+        let target_hp_before = self.battlers(attacker_is_player).1.current_hp();
+        self.execute_move_pipeline(pipeline, attacker_is_player, move_id, rng, events)?;
+        // Multi-hit moves roll Static after each hit instead
+        // (`data/battle_scripts_1.s:637`), inside their own loop.
+        let target_was_damaged =
+            self.battlers(attacker_is_player).1.current_hp() < target_hp_before;
+        if pipeline != MovePipeline::MultiHit && target_was_damaged {
+            self.apply_static_contact(attacker_is_player, move_id, rng, events)?;
+        }
+        Ok(())
+    }
+
+    /// `MOVEEND_ON_DAMAGE_ABILITIES` for `ABILITY_STATIC`
+    /// (`battle_script_commands.c:4280`-`:4284`, `battle_util.c:2821`-`:2835`).
+    ///
+    /// The `Random() % 3` roll needs only a living attacker and a damaging
+    /// contact hit, so a target that fainted to the hit still rolls. A zero
+    /// roll re-enters `SetMoveEffect` on the attacker, where Limber and an
+    /// existing primary status both leave it unchanged
+    /// (`battle_script_commands.c:2395`-`:2424`). A paralysis that lands arms
+    /// the attacker's Synchronize, which reflects it onto a surviving holder
+    /// at `MOVEEND_SYNCHRONIZE_ATTACKER` (`battle_util.c:2987`-`:3001`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BattleError::UnknownMove`] for a move outside the table.
+    pub(super) fn apply_static_contact(
+        &mut self,
+        attacker_is_player: bool,
+        move_id: MoveId,
+        rng: &mut impl BattleRng,
+        events: &mut Vec<BattleEvent>,
+    ) -> Result<(), BattleError> {
+        let makes_contact = self.dex.move_data(move_id)?.flags.makes_contact();
+        let (attacker, defender) = self.battlers(attacker_is_player);
+        if defender.ability() != AbilityId::STATIC || attacker.is_fainted() || !makes_contact {
+            return Ok(());
+        }
+        if !rng.next_u16().is_multiple_of(3)
+            || resolve_synchronize_reflection(attacker) != SynchronizeReflectionOutcome::Applied
+        {
+            return Ok(());
+        }
+        let attacker_synchronizes = attacker.ability() == AbilityId::SYNCHRONIZE;
+        let (attacker, holder) = if attacker_is_player {
+            (&mut self.player, &mut self.enemy)
+        } else {
+            (&mut self.enemy, &mut self.player)
+        };
+        attacker.set_status1(Status1::Paralysed);
+        events.push(BattleEvent::ParalyzedByStatic {
+            by_player: attacker_is_player,
+            move_id,
+        });
+        if attacker_synchronizes
+            && !holder.is_fainted()
+            && resolve_synchronize_reflection(holder) == SynchronizeReflectionOutcome::Applied
+        {
+            holder.set_status1(Status1::Paralysed);
+            events.push(BattleEvent::ParalyzedByAttackerSynchronize {
+                by_player: attacker_is_player,
+                move_id,
+            });
+        }
+        Ok(())
+    }
+
+    fn execute_move_pipeline(
+        &mut self,
+        pipeline: MovePipeline,
+        attacker_is_player: bool,
+        move_id: MoveId,
+        rng: &mut impl BattleRng,
+        events: &mut Vec<BattleEvent>,
+    ) -> Result<(), BattleError> {
+        match pipeline {
             MovePipeline::StatChange => {
                 self.execute_stat_change_move(attacker_is_player, move_id, rng, events)
             }
