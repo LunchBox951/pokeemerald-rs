@@ -4,7 +4,7 @@ Contributions are welcome. This is a pre-alpha clean-room reimplementation of Po
 
 ## Setup
 
-On Debian or Ubuntu, install the Rust toolchain, `libasound2-dev`, `libpipewire-0.3-dev`, and `libclang-dev`. Then build the local references and asset pack before running the application:
+On Debian or Ubuntu, install the Rust toolchain and `libasound2-dev`. Then build the local references and asset pack before running the application:
 
 ```bash
 ./init.sh
