@@ -15,7 +15,7 @@ fn an_enemy_move_is_admitted_against_a_synchronize_reserve_before_the_battle_sta
     let player = max_iv_mon(&dex, RATTATA, 5, vec![TACKLE]);
     let reserve = max_iv_mon(&dex, RALTS, 5, vec![TACKLE]);
     assert_eq!(reserve.ability(), AbilityId::SYNCHRONIZE);
-    let enemy = max_iv_mon(&dex, EKANS, 50, vec![TACKLE, POISON_STING]);
+    let enemy = max_iv_mon(&dex, EKANS, 50, vec![TACKLE, POISON_STING]).with_ability_slot(1);
     // battle_main.c:3140 construction turn seed: the only draw.
     let mut rng = SequenceRng::new([0]);
     Battle::new_with_player_reserves(dex, player, vec![reserve], enemy, false, &mut rng)
@@ -35,7 +35,7 @@ fn a_fainted_synchronize_reserve_does_not_refuse_an_enemy_poison_sting() {
     assert_eq!(reserve.ability(), AbilityId::SYNCHRONIZE);
     reserve.apply_damage(reserve.stats().max_hp);
     assert!(reserve.is_fainted());
-    let enemy = max_iv_mon(&dex, EKANS, 50, vec![TACKLE, POISON_STING]);
+    let enemy = max_iv_mon(&dex, EKANS, 50, vec![TACKLE, POISON_STING]).with_ability_slot(1);
     // battle_main.c:3140 construction turn seed: the only draw.
     let mut rng = SequenceRng::new([0]);
     Battle::new_with_player_reserves(dex, player, vec![reserve], enemy, false, &mut rng)

@@ -30,6 +30,7 @@ use crate::stat_change::{
     CLEAR_BODY, EFFECT_ATTACK_DOWN, EFFECT_DEFENSE_DOWN, HYPER_CUTTER, SOUNDPROOF, WHITE_SMOKE,
 };
 use crate::stat_stage::StatStage;
+use crate::status1::Status1;
 
 const PERCENT_SCALE: u32 = 100;
 const AI_RANDOM_ROLL_MODULUS: u16 = 256;
@@ -40,6 +41,7 @@ const MINIMUM_DAMAGING_MOVE_POWER: u8 = 2;
 const INITIAL_MOVE_SCORE: i8 = 100;
 const UNUSABLE_MOVE_SCORE: i8 = 0;
 const STRONGLY_DISCOURAGE: i8 = -10;
+const REDUNDANT_CONFUSION_PENALTY: i8 = -5;
 const SLIGHTLY_DISCOURAGE: i8 = -1;
 const ABSORBED_MOVE_PENALTY: i8 = -12;
 const DISCOURAGE: i8 = -2;
@@ -110,11 +112,24 @@ const EFFECT_CHARGE_RAW: u8 = 174;
 /// target (`data/battle_ai_scripts.s:2629-2634`), which is not ported.
 const EFFECT_QUICK_ATTACK_RAW: u8 = 103;
 
+/// `EFFECT_FOCUS_ENERGY`, `EFFECT_CONFUSE` and `EFFECT_PARALYZE`
+/// (`include/constants/battle_move_effects.h`). `EFFECT_SWAGGER` and
+/// `EFFECT_FLATTER` also reach `AI_CBM_Confuse` but stay unadmitted.
+const EFFECT_FOCUS_ENERGY_RAW: u8 = 47;
+const EFFECT_CONFUSE_RAW: u8 = 49;
+const EFFECT_PARALYZE_RAW: u8 = 67;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ScoreableEffect {
     Hit,
     AttackDown,
     DefenseDown,
+    /// `AI_CBM_Paralyze` (`data/battle_ai_scripts.s:397-403`).
+    Paralyze,
+    /// `AI_CBM_Confuse` (`data/battle_ai_scripts.s:386-395`).
+    Confuse,
+    /// `AI_CBM_FocusEnergy` (`data/battle_ai_scripts.s:382-384`).
+    FocusEnergy,
     /// One of [`UNCHANGED_AFTER_PROLOGUE_EFFECTS`].
     UnchangedAfterPrologue(MoveEffect),
 }
@@ -127,6 +142,12 @@ impl ScoreableEffect {
             Some(Self::AttackDown)
         } else if effect.0 == EFFECT_DEFENSE_DOWN.0 {
             Some(Self::DefenseDown)
+        } else if effect.0 == EFFECT_PARALYZE_RAW {
+            Some(Self::Paralyze)
+        } else if effect.0 == EFFECT_CONFUSE_RAW {
+            Some(Self::Confuse)
+        } else if effect.0 == EFFECT_FOCUS_ENERGY_RAW {
+            Some(Self::FocusEnergy)
         } else {
             let mut index = 0;
             while index < UNCHANGED_AFTER_PROLOGUE_EFFECTS.len() {
@@ -139,14 +160,28 @@ impl ScoreableEffect {
         }
     }
 
+    /// `AI_CheckViability` branches on Paralyze and Confuse
+    /// (`data/battle_ai_scripts.s:687,704`), and `AI_SetupFirstTurn` rolls for
+    /// all three (`:2667,2668,2685`); neither is ported. Focus Energy has no
+    /// viability branch.
+    const fn supported_with_status_handler(self, flags: AiFlags) -> bool {
+        let viability_branch = !matches!(self, Self::FocusEnergy);
+        !(flags.contains(AiFlags::SETUP_FIRST_TURN)
+            || viability_branch && flags.contains(AiFlags::CHECK_VIABILITY))
+    }
+
     const fn is_stat_drop(self) -> bool {
         matches!(self, Self::AttackDown | Self::DefenseDown)
     }
 
     /// Whether every enabled script has a ported branch for this effect.
     fn supported_by(self, flags: AiFlags) -> bool {
-        let Self::UnchangedAfterPrologue(effect) = self else {
-            return true;
+        let effect = match self {
+            Self::Paralyze | Self::Confuse | Self::FocusEnergy => {
+                return self.supported_with_status_handler(flags);
+            }
+            Self::UnchangedAfterPrologue(effect) => effect,
+            Self::Hit | Self::AttackDown | Self::DefenseDown => return true,
         };
         if flags.contains(AiFlags::CHECK_VIABILITY)
             && UNPORTED_VIABILITY_EFFECTS.contains(&effect.0)
@@ -717,29 +752,67 @@ fn score_bad_move(
     // ability at each of its own guards -- Hyper Cutter only for Attack, then
     // Clear Body/White Smoke shared by both stats
     // (`data/battle_ai_scripts.s:277-285,308-311`).
-    let is_ineffective = match effect {
-        ScoreableEffect::Hit | ScoreableEffect::UnchangedAfterPrologue(_) => false,
+    let penalty = match effect {
+        ScoreableEffect::Hit | ScoreableEffect::UnchangedAfterPrologue(_) => None,
         ScoreableEffect::AttackDown => {
             if target.stages().attack == StatStage::MIN {
-                true
+                Some(STRONGLY_DISCOURAGE)
             } else {
                 let hyper_cutter_ability = ai_get_ability(target)?;
                 if ai_hyper_cutter_blocks(hyper_cutter_ability) {
-                    true
+                    Some(STRONGLY_DISCOURAGE)
                 } else {
                     ai_clear_body_or_white_smoke_blocks(ai_get_ability(target)?)
+                        .then_some(STRONGLY_DISCOURAGE)
                 }
             }
         }
-        ScoreableEffect::DefenseDown => {
-            target.stages().defense == StatStage::MIN
-                || ai_clear_body_or_white_smoke_blocks(ai_get_ability(target)?)
+        ScoreableEffect::DefenseDown => (target.stages().defense == StatStage::MIN
+            || ai_clear_body_or_white_smoke_blocks(ai_get_ability(target)?))
+        .then_some(STRONGLY_DISCOURAGE),
+        ScoreableEffect::Paralyze => paralyze_penalty(dex, move_id, user, target)?,
+        ScoreableEffect::Confuse => confuse_penalty(target)?,
+        ScoreableEffect::FocusEnergy => {
+            user.volatiles().focus_energy.then_some(STRONGLY_DISCOURAGE)
         }
     };
-    if is_ineffective {
-        scores.adjust(slot, STRONGLY_DISCOURAGE);
+    if let Some(penalty) = penalty {
+        scores.adjust(slot, penalty);
     }
     Ok(())
+}
+
+/// `AI_CBM_Paralyze`: each guard ends the script with its own single penalty,
+/// so a type-immune target never also takes the Limber or status `-10`
+/// (`data/battle_ai_scripts.s:397-403`). Safeguard is not modelled, and no
+/// admitted move can set it.
+fn paralyze_penalty(
+    dex: &Dex,
+    move_id: MoveId,
+    user: &BattlePokemon,
+    target: &BattlePokemon,
+) -> Result<Option<i8>, BattleError> {
+    if has_no_effect(dex, move_id, user, target)?
+        || ai_get_ability(target)? == AbilityId::LIMBER
+        || target.status1() != Status1::Healthy
+    {
+        Ok(Some(STRONGLY_DISCOURAGE))
+    } else {
+        Ok(None)
+    }
+}
+
+/// `AI_CBM_Confuse`: active confusion ends at `-5` before any ability read;
+/// Own Tempo is `-10` (`data/battle_ai_scripts.s:386-395`). Safeguard is not
+/// modelled.
+fn confuse_penalty(target: &BattlePokemon) -> Result<Option<i8>, BattleError> {
+    if target.volatiles().confused() {
+        Ok(Some(REDUNDANT_CONFUSION_PENALTY))
+    } else if ai_get_ability(target)? == AbilityId::OWN_TEMPO {
+        Ok(Some(STRONGLY_DISCOURAGE))
+    } else {
+        Ok(None)
+    }
 }
 
 fn score_try_to_faint(
@@ -791,7 +864,12 @@ fn score_viability(
     rng: &mut impl BattleRng,
 ) -> Result<(), BattleError> {
     match scoreable_effect(dex, move_id)? {
-        ScoreableEffect::Hit | ScoreableEffect::UnchangedAfterPrologue(_) => {}
+        ScoreableEffect::Hit
+        | ScoreableEffect::UnchangedAfterPrologue(_)
+        | ScoreableEffect::FocusEnergy => {}
+        ScoreableEffect::Paralyze | ScoreableEffect::Confuse => {
+            return Err(BattleError::UnscoreableMoveEffect(move_id));
+        }
         ScoreableEffect::AttackDown => {
             score_attack_drop_viability(scores, slot, user, target, rng);
         }

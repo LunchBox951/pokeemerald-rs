@@ -18,7 +18,7 @@ pub enum EventScriptError {
     },
     /// The magic bytes are wrong.
     BadMagic,
-    /// The schema version is not [`VERSION`].
+    /// The schema version is not [`super::VERSION`].
     UnsupportedVersion(u16),
     /// A name is empty, too long, or not UTF-8.
     InvalidString {
@@ -69,7 +69,7 @@ pub enum EventScriptError {
         /// Table id.
         table: String,
     },
-    /// The standard table does not have [`STANDARD_SCRIPT_COUNT`] slots.
+    /// The standard table does not have [`super::STANDARD_SCRIPT_COUNT`] slots.
     BadStandardCount(u16),
     /// A standard slot does not name a declared script root.
     InvalidStandardScriptReference {
