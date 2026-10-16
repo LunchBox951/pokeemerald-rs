@@ -285,6 +285,16 @@ fn initial_ability_slot(base_stats: &BaseStats, personality: u32) -> u8 {
     u8::from(has_secondary_ability && personality & u32::from(ABILITY_SLOT_MASK) != 0)
 }
 
+/// The ability [`BattlePokemon::new`] selects for `personality`, without building the Pokémon.
+pub(crate) fn initial_ability(base_stats: &BaseStats, personality: u32) -> AbilityId {
+    let [first, second] = base_stats.abilities;
+    if initial_ability_slot(base_stats, personality) == 0 {
+        first
+    } else {
+        second
+    }
+}
+
 /// A single battler's owned state.
 ///
 /// Construction guarantees a valid species, level, IV set, and non-empty

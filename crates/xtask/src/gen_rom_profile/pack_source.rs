@@ -15,6 +15,18 @@ pub struct PackAsset {
 }
 
 impl PackAsset {
+    /// Returns the payload of a `Raw` entry.
+    /// Returns [`GenRomProfileError::WrongPackEntryKind`] for any other kind, naming `id`.
+    pub fn raw_payload(&self, id: &str) -> Result<&[u8], GenRomProfileError> {
+        match self.kind {
+            EntryKind::Raw => Ok(&self.payload),
+            _ => Err(GenRomProfileError::WrongPackEntryKind {
+                id: id.to_owned(),
+                expected: "raw",
+            }),
+        }
+    }
+
     /// Returns `(width, height, bit_depth)` without checking the payload.
     /// Returns [`GenRomProfileError::WrongPackEntryKind`] for non-images, naming `id`.
     pub fn image_shape(&self, id: &str) -> Result<(u32, u32, u8), GenRomProfileError> {
@@ -134,6 +146,16 @@ impl PackSource {
         self.assets
             .get(id)
             .ok_or_else(|| GenRomProfileError::MissingPackEntry(id.to_owned()))
+    }
+
+    /// The payload of the `Raw` entry `id`.
+    ///
+    /// # Errors
+    ///
+    /// [`GenRomProfileError::MissingPackEntry`] if the pack has no such id;
+    /// [`GenRomProfileError::WrongPackEntryKind`] naming `id` for any other kind.
+    pub fn raw_payload(&self, id: &str) -> Result<&[u8], GenRomProfileError> {
+        self.get(id)?.raw_payload(id)
     }
 
     /// Every id starting with `prefix`, in ascending id order.
