@@ -60,9 +60,9 @@ jobs:
       POKEEMERALD_RELEASE_CHANNEL: ${{ github.ref_name }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Install ALSA dev headers (Linux; crates/platform's cpal dependency links libasound at compile time)
+      - name: Install audio dev headers (Linux; crates/platform's cpal dependency links libasound and libpipewire, and generates PipeWire bindings with libclang)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libpipewire-0.3-dev libclang-dev
       - name: cargo build --release --workspace
         run: cargo build --release --workspace --locked
       - name: Verify compiled channel data paths
