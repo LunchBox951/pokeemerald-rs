@@ -30384,6 +30384,12 @@
           "spec": "I-3",
           "status": "rewritten"
         },
+        "option_action_and_reinit": {
+          "reason": "ACTION_OPTION opens the Options screen and CB2_ReinitMainMenu returns to the menu on OPTION with the committed frame, fading in from black.",
+          "rust_target": "crates/pokeemerald-rs/src/flow/options.rs",
+          "spec": "I-6",
+          "status": "rewritten"
+        },
         "save_menu": {
           "reason": "HAS_SAVED_GAME branch: Task_MainMenuCheckSaveFile's gSaveFileStatus -> tMenuType table, sWindowTemplates_MainMenu[2..4]'s CONTINUE/NEW GAME/OPTION geometry, Task_DisplayMainMenu's HAS_SAVED_GAME arm, HandleMainMenuInput's ACTION_CONTINUE dispatch, HighlightSelectedMainMenuItem's MENU_WIN_VCOORDS(2..4), and MainMenu_FormatSavegameText's own border selection (GetWindowFrameTilesPal(gSaveBlock2Ptr->optionsWindowFrameType), now decoded and forwarded from the loaded save instead of hardcoded). NOT modelled: MainMenu_FormatSavegameText's PLAYER/TIME/POKeDEX/BADGES info lines (no playtime, Pokedex or badge-flag save state yet), the gText_SaveFileErased/gText_SaveFileCorrupted error windows, and the HAS_MYSTERY_GIFT/HAS_MYSTERY_EVENTS menu types.",
           "rust_target": "crates/pokeemerald-rs/src/main_menu.rs",
@@ -30946,6 +30952,14 @@
       "status": "pending"
     },
     "src/option_menu.c": {
+      "artifacts": {
+        "options_screen": {
+          "reason": "Seven-row Options screen: JOY_NEW editing with wraparound, header/list windows, live frame preview, commit on A-at-CANCEL or B, fade in and out. Excludes the SetPokemonCryStereo audio side effect (#1700); option_menu_text.pal is held as constants, not extracted.",
+          "rust_target": "crates/pokeemerald-rs/src/options.rs",
+          "spec": "I-6",
+          "status": "rewritten"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -31044,7 +31058,7 @@
           "status": "rewritten"
         },
         "normal_palette_fade": {
-          "reason": "palette_fade::NormalPaletteFade reimplements the front-end NORMAL_FADE subset of BeginNormalPaletteFade (palette.c:156-199) and UpdatePaletteFade's normal-mode dispatch (palette.c:114-131) plus UpdateNormalPaletteFade's BG/OBJ scheduler (palette.c:406-490) and IsSoftwarePaletteFadeFinishing's four-then-done finishing polls (palette.c:807-828), fixed to PALETTES_ALL, zero delay, coefficient 0->16 at deltaY=2, and a black or white target. begin() runs the immediate first (background) update the way BeginNormalPaletteFade calls UpdatePaletteFade before returning; update() alternates background/object halves, stepping the coefficient only once both halves of a pair have processed, and reports Active for exactly four finishing polls before Done, pinned by a begin/update status-trace test (issue #1328). Palette masks other than all, nonzero delay, other start/target coefficients, FAST_FADE/HARDWARE_FADE, palette-buffer/PLTT transfer machinery, PaletteStruct behavior, TintPalette_GrayScale/_SepiaTone/_CustomTone, InvertPlttBuffer, and the rest of palette.c remain pending; flow-level wiring that holds a scene through the fade is issue #1329's, not this artifact's.",
+          "reason": "palette_fade::NormalPaletteFade reimplements the front-end NORMAL_FADE subset of BeginNormalPaletteFade (palette.c:156-199) and UpdatePaletteFade normal-mode dispatch (palette.c:114-131) plus UpdateNormalPaletteFade BG/OBJ scheduler (palette.c:406-490) and the four-then-done finishing polls (palette.c:807-828), fixed to PALETTES_ALL, zero delay, deltaY=2, and a black or white target. begin() fades 0->16 and begin_in() fades 16->0 (yDec, palette.c:177-184,454-475; used by option_menu.c:250), both running the immediate first update the way BeginNormalPaletteFade calls UpdatePaletteFade before returning; update() alternates background/object halves, stepping the coefficient only once both halves of a pair have processed, and reports Active for exactly four finishing polls before Done, pinned by status-trace tests (issues #1328, #1763). Palette masks other than all, nonzero delay, start/target coefficients other than 0->16 and 16->0, FAST_FADE/HARDWARE_FADE, palette-buffer/PLTT transfer machinery, PaletteStruct behavior, TintPalette_GrayScale/_SepiaTone/_CustomTone, InvertPlttBuffer, and the rest of palette.c remain pending; flow-level wiring that holds a scene through the fade is issue #1329 and the Options screen owner, not this artifact.",
           "rust_target": "crates/rendering/src/palette_fade.rs",
           "spec": "S-2",
           "status": "rewritten"

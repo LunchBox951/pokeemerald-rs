@@ -129,6 +129,32 @@ pub(crate) struct NewGameOptions {
     pub(crate) battle_scene_off: bool,
 }
 
+impl From<engine::settings::GameSettings> for NewGameOptions {
+    fn from(settings: engine::settings::GameSettings) -> Self {
+        Self {
+            text_speed: settings.text_speed,
+            window_frame_type: settings.window_frame_type,
+            button_mode: settings.button_mode,
+            sound: settings.sound,
+            battle_style: settings.battle_style,
+            battle_scene_off: settings.battle_scene_off,
+        }
+    }
+}
+
+impl From<NewGameOptions> for engine::settings::GameSettings {
+    fn from(options: NewGameOptions) -> Self {
+        Self {
+            text_speed: options.text_speed,
+            window_frame_type: options.window_frame_type,
+            button_mode: options.button_mode,
+            sound: options.sound,
+            battle_style: options.battle_style,
+            battle_scene_off: options.battle_scene_off,
+        }
+    }
+}
+
 impl NewGameOptions {
     /// `SetDefaultOptions`' own constants (`new_game.c:93-97`) over the
     /// zeroed block `ClearSav2` leaves (`OPTIONS_BUTTON_MODE_NORMAL`).

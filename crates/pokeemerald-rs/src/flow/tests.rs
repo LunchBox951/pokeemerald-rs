@@ -508,14 +508,13 @@ fn main_menu_confirm_on_new_game_transitions_to_intro() {
     );
 }
 
-/// Issue #216 regression: A on `OPTION` must stay on the main menu, not
-/// incorrectly launch the intro -- its own destination screen is a
-/// separate, not-yet-built slice (`crate::flow::advance_scene`'s
-/// `MainMenuItem::Option` arm). No local pack needed: this never
-/// reaches a pack-loading call at all (`crate::main_menu::synthetic_scene`'s
-/// own doc comment).
+/// Issue #1763: A on `OPTION` is `ACTION_OPTION` (`main_menu.c:1070-1073`),
+/// so it fades out like the other items, never launches the intro, and --
+/// when the Options screen cannot load -- falls back to the retained menu on
+/// `OPTION` once the fade finishes. The entryless scratch pack makes the load
+/// fail without a local pack.
 #[test]
-fn main_menu_confirm_on_option_stays_on_the_main_menu() {
+fn main_menu_confirm_on_option_fades_then_falls_back_when_the_screen_cannot_load() {
     let (_temp, mut save_slot) = empty_slot("confirm-option");
     let mut menu = crate::main_menu::synthetic_scene(MainMenuType::NoSavedGame);
     menu.move_down();
@@ -524,16 +523,25 @@ fn main_menu_confirm_on_option_stays_on_the_main_menu() {
         scene: menu,
         saved: save_slot.load(),
     }));
+    let pack_path = write_empty_scratch_pack("confirm-option");
+    let leaked_path: &'static std::path::Path = Box::leak(pack_path.clone().into_boxed_path());
+    let pack_source = crate::pack_source::PackSource::Test(leaked_path);
 
-    let (next, _frame) = advance_scene(
+    let (scene, _frame) = advance_scene(
         scene,
         pressed(Buttons::A),
         &mut save_slot,
-        crate::pack_source::PackSource::Runtime,
+        pack_source.clone(),
+    );
+    assert!(
+        matches!(scene, AppScene::MainMenuFadeWait(_)),
+        "A on OPTION must begin the black fade like the other items"
     );
 
+    let (next, _, _) = drive_through_fade_wait(scene, &mut save_slot, &pack_source);
+    drop(std::fs::remove_file(&pack_path));
     let AppScene::MainMenu(state) = next else {
-        panic!("A on OPTION must not leave the main menu");
+        panic!("a failed Options load must fall back to the main menu");
     };
     assert_eq!(state.scene.selected(), MainMenuItem::Option);
 }
@@ -646,7 +654,7 @@ fn main_menu_confirm_on_new_game_waits_for_the_fade_before_dispatching() {
 
 /// Issue #216 regression, the half the scene-level test above cannot
 /// see: with no pack, a failed `intro::load_default`, a failed
-/// `OverworldPhase::continue_saved_game`, and a swallowed OPTION press
+/// `OverworldPhase::continue_saved_game`, and an Options screen that fails to load
 /// all land back on the main menu, so the item -> action mapping itself
 /// is pinned here on the pure decision function instead (`menu_action`'s
 /// own doc comment).
@@ -664,9 +672,8 @@ fn menu_action_maps_each_item_to_its_upstream_action() {
     );
     assert_eq!(
         menu_action(MainMenuItem::Option),
-        MainMenuAction::None,
-        "A on OPTION must not launch anything -- ACTION_OPTION's screen \
-         is not built yet (issue #216 scope notes)"
+        MainMenuAction::Options,
+        "A on OPTION is upstream's ACTION_OPTION (main_menu.c:1070-1073)"
     );
 }
 
@@ -751,7 +758,8 @@ fn new_game_options_for_keeps_every_non_defaulted_saves_own_options() {
     }
 
     for status in [SaveFileStatus::Empty, SaveFileStatus::Corrupt] {
-        let saved = recovered(status);
+        let mut saved = recovered(status);
+        super::apply_boot_defaults(&mut saved);
         assert_eq!(
             new_game_options_for(&saved),
             NewGameOptions::DEFAULT,
@@ -763,9 +771,8 @@ fn new_game_options_for_keeps_every_non_defaulted_saves_own_options() {
 /// Upstream `Task_HandleMainMenuInput` reads A before the D-pad
 /// (`main_menu.c:888` before `903`/`915` -- an if/else-if chain), so a
 /// same-frame A + direction press acts on A and never moves the
-/// selection. Pinned on OPTION (whose A press is pack-independently
-/// inert) with UP alongside: the swallowed A must still win, leaving
-/// the selection exactly where it was.
+/// selection. Pinned on OPTION with UP alongside: the A must still win,
+/// beginning the fade with the selection exactly where it was.
 #[test]
 fn main_menu_a_wins_over_a_same_frame_direction_press() {
     let (_temp, mut save_slot) = empty_slot("a-wins");
@@ -784,11 +791,11 @@ fn main_menu_a_wins_over_a_same_frame_direction_press() {
         crate::pack_source::PackSource::Runtime,
     );
 
-    let AppScene::MainMenu(state) = next else {
-        panic!("a swallowed A press must stay on the main menu");
+    let AppScene::MainMenuFadeWait(wait) = next else {
+        panic!("A on OPTION must begin its fade, not move the selection");
     };
     assert_eq!(
-        state.scene.selected(),
+        wait.state.scene.selected(),
         MainMenuItem::Option,
         "A must win over a same-frame UP press (upstream's else-if chain)"
     );
@@ -1072,11 +1079,12 @@ fn a_corrupt_boot_falls_back_to_the_default_window_frame() {
         ..SaveBlock2::default()
     };
 
-    let corrupt = SavedGame {
+    let mut corrupt = SavedGame {
         status: SaveFileStatus::Corrupt,
         block1: SaveBlock1::default(),
         block2: recovered.clone(),
     };
+    super::apply_boot_defaults(&mut corrupt);
     assert_eq!(
         window_frame_for(&corrupt),
         0,

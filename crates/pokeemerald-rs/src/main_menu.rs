@@ -214,6 +214,16 @@ impl MainMenuScene {
         fb
     }
 
+    /// Composes only the backdrop: the screen with no window drawn, as a
+    /// reinitialised main menu shows while it fades in
+    /// (`pokeemerald/src/main_menu.c:572-586`).
+    #[must_use]
+    pub fn compose_backdrop(&self) -> Framebuffer {
+        let mut fb = Framebuffer::new();
+        fb.fill(self.background);
+        fb
+    }
+
     /// Composes the current menu in the platform pixel format.
     #[must_use]
     pub fn compose_frame(&self) -> Box<platform::Frame> {
