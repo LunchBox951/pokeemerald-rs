@@ -25,9 +25,10 @@ fn provenance_paragraph(lines: &[ReportLine]) -> String {
             "//! Every root was asserted unique: exactly one place in the ROM held its bytes.\n"
                 .to_owned()
         } else {
-            "//! No root's bytes repeat at identical copies. Roots were settled by a unique\n\
-             //! byte signature, or, where bytes repeat, by a struct field, an adjacent\n\
-             //! root, or a pointer inside an already-located struct.\n"
+            "//! No root was chosen arbitrarily among identical copies. Roots were settled by a\n\
+             //! unique byte signature, or, where bytes repeat, by a struct field or an\n\
+             //! adjacent root that picked the copy, or by a pointer inside an\n\
+             //! already-located struct.\n"
                 .to_owned()
         };
     }
@@ -500,6 +501,15 @@ mod tests {
         let text = provenance_paragraph(&lines);
         assert!(!text.contains("Every root was asserted unique"), "{text}");
         assert!(text.contains("adjacent"), "{text}");
+    }
+
+    #[test]
+    fn a_struct_derived_root_is_not_said_to_have_no_repeating_bytes() {
+        let lines = [ReportLine::unique("a", 0x0820_0000, 4).with(Resolution::StructDerived)];
+        let text = provenance_paragraph(&lines);
+        assert!(!text.contains("bytes repeat at identical"), "{text}");
+        assert!(!text.contains("No root's bytes repeat"), "{text}");
+        assert!(text.contains("where bytes repeat"), "{text}");
     }
 
     #[test]
