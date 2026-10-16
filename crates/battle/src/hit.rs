@@ -16,7 +16,7 @@ use crate::accuracy::accuracy_check;
 use crate::critical::{crit_adjusted_stages, crit_roll, crit_stage};
 use crate::damage::{
     aggregate_type_effectiveness, apply_damage_roll, apply_dual_type_effectiveness, apply_stab,
-    base_damage, has_stab, BattleRng, DamageInput, MoveCategory, Weather, STRUGGLE,
+    base_damage_with_flash_fire, has_stab, BattleRng, DamageInput, MoveCategory, Weather, STRUGGLE,
 };
 use crate::dex::Dex;
 use crate::error::BattleError;
@@ -88,6 +88,22 @@ pub enum HitOutcome {
     /// effective was blocked by the target's Wonder Guard
     /// (`battle_script_commands.c:1409-1418`; Struggle bypasses `typecalc`).
     WonderGuardBlocked,
+    /// The target's Volt Absorb or Water Absorb took the move
+    /// (`ABILITYEFFECT_ABSORBING`, `battle_util.c:2681-2701`, `:2730-2744`).
+    Absorbed {
+        /// HP the target heals: a quarter of max HP floored to one, before the
+        /// HP cap. Zero when the target is already at full HP, where upstream
+        /// reports the move useless instead (`BattleScript_MonMadeMoveUseless`).
+        healing: u32,
+    },
+    /// The target's Flash Fire took a Fire move (`battle_util.c:2703-2726`).
+    ///
+    /// Upstream also lets a frozen holder be hit. `Status1` cannot represent
+    /// freeze yet, so that exemption has nothing to test.
+    FlashFireBlocked {
+        /// Whether this activation latches the boost for the first time.
+        first_activation: bool,
+    },
     /// The move connected and dealt damage.
     Hit {
         /// HP of damage dealt.
@@ -358,7 +374,7 @@ pub fn damage_before_roll(
     );
     let input = damage_input(move_data.power, move_type, attacker, defender, is_critical);
 
-    let base_damage = base_damage(&input);
+    let base_damage = base_damage_with_flash_fire(&input, attacker.volatiles().flash_fire);
     let damage_after_critical = if is_critical {
         base_damage * CRITICAL_DAMAGE_MULTIPLIER
     } else {
@@ -393,9 +409,49 @@ pub fn damage_before_roll(
     })
 }
 
+/// `ABILITYEFFECT_ABSORBING` for the defender's Volt Absorb, Water Absorb, or
+/// Flash Fire (`battle_util.c:2676-2744`).
+///
+/// It runs after accuracy and before the critical-hit draw, so an absorbed
+/// move consumes no further draws. The caller applies the heal or latch.
+fn absorbing_outcome(
+    dex: &Dex,
+    move_id: MoveId,
+    defender: &BattlePokemon,
+) -> Result<Option<HitOutcome>, BattleError> {
+    let move_data = dex.move_data(move_id)?;
+    let move_type = move_data
+        .move_type
+        .battle_type()
+        .ok_or(BattleError::UnsupportedMoveType(move_id))?;
+    let absorbs_hp = match defender.ability() {
+        AbilityId::VOLT_ABSORB => move_type == Type::Electric,
+        AbilityId::WATER_ABSORB => move_type == Type::Water,
+        AbilityId::FLASH_FIRE => {
+            return Ok(
+                (move_type == Type::Fire).then_some(HitOutcome::FlashFireBlocked {
+                    first_activation: !defender.volatiles().flash_fire,
+                }),
+            );
+        }
+        _ => return Ok(None),
+    };
+    if !absorbs_hp || move_data.power == 0 {
+        return Ok(None);
+    }
+    let max_hp = defender.stats().max_hp;
+    let healing = if defender.current_hp() == max_hp {
+        0
+    } else {
+        (max_hp / 4).max(1)
+    };
+    Ok(Some(HitOutcome::Absorbed { healing }))
+}
+
 /// Calculates a landed move's outcome through damage variance.
 ///
-/// This always consumes a damage-variance draw, including for an immune
+/// An absorbing ability ends the move first, before any draw.
+/// Otherwise this always consumes a damage-variance draw, including for an immune
 /// target. It consumes a preceding critical-hit draw unless critical hits are
 /// suppressed.
 ///
@@ -411,6 +467,9 @@ pub fn damage_core(
     critical_hits_suppressed: bool,
     rng: &mut impl BattleRng,
 ) -> Result<HitOutcome, BattleError> {
+    if let Some(absorbed) = absorbing_outcome(dex, move_id, defender)? {
+        return Ok(absorbed);
+    }
     let raw_damage = damage_before_roll(
         dex,
         move_id,
@@ -486,7 +545,11 @@ pub fn resolve_hit(
         rng,
     )?;
 
-    let secondary_effect = if move_id == STRUGGLE {
+    let secondary_effect = if move_id == STRUGGLE
+        || matches!(
+            outcome,
+            HitOutcome::Absorbed { .. } | HitOutcome::FlashFireBlocked { .. }
+        ) {
         SecondaryApplication::None
     } else {
         // Wonder Guard's block carries `MOVE_RESULT_MISSED`, part of

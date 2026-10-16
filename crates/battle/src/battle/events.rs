@@ -82,7 +82,9 @@ pub enum BattleEvent {
         /// The move that was never attempted.
         move_id: MoveId,
     },
-    /// A move connected, but the target's typing made it ineffective.
+    /// A move connected, but the target's typing made it ineffective, or the
+    /// target's Volt Absorb or Water Absorb was already at full HP
+    /// (`BattleScript_MonMadeMoveUseless`).
     NoEffect {
         /// Whether the player used the move.
         by_player: bool,
@@ -103,6 +105,26 @@ pub enum BattleEvent {
         by_player: bool,
         /// The move Wonder Guard blocked.
         move_id: MoveId,
+    },
+    /// Volt Absorb or Water Absorb healed the target instead of the move
+    /// hitting (`BattleScript_MoveHPDrain`).
+    AbilityHealed {
+        /// Whether the player used the move.
+        by_player: bool,
+        /// The move the ability absorbed.
+        move_id: MoveId,
+        /// HP the target actually regained.
+        healed: u32,
+    },
+    /// Flash Fire absorbed a Fire move (`BattleScript_FlashFireBoost`).
+    FlashFireAbsorbed {
+        /// Whether the player used the move.
+        by_player: bool,
+        /// The Fire move Flash Fire absorbed.
+        move_id: MoveId,
+        /// Whether this activation latched the boost; later ones cancel the
+        /// move without boosting (`B_MSG_FLASH_FIRE_NO_BOOST`).
+        boosted: bool,
     },
     /// A move dealt damage.
     Hit {
