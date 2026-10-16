@@ -292,6 +292,28 @@ fn a_full_moveset_drops_the_oldest_move_first() {
 }
 
 #[test]
+fn ensure_wild_startable_refuses_a_species_with_any_truant_or_intimidate_slot() {
+    let dex = Dex::new();
+    for (species, ability) in [
+        (SpeciesId::TAUROS, assets::AbilityId::INTIMIDATE),
+        (SpeciesId::SNUBBULL, assets::AbilityId::INTIMIDATE),
+        (SpeciesId::MAWILE, assets::AbilityId::INTIMIDATE),
+        (SpeciesId::EKANS, assets::AbilityId::INTIMIDATE),
+        (SpeciesId::SLAKOTH, assets::AbilityId::TRUANT),
+    ] {
+        assert_eq!(
+            ensure_wild_startable(&dex, species, 1),
+            Err(BattleError::UnportedAbilityInteraction(ability)),
+            "{species:?}",
+        );
+    }
+    assert_eq!(
+        ensure_wild_startable(&dex, SpeciesId::TAUROS, 0),
+        Err(BattleError::InvalidLevel(0)),
+    );
+}
+
+#[test]
 fn ensure_wild_startable_accepts_route_101_mons_and_rejects_a_bide_seedot() {
     let dex = Dex::new();
     for species in [WURMPLE, POOCHYENA, ZIGZAGOON] {

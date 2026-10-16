@@ -600,38 +600,68 @@ impl StagedSave {
     }
 }
 
+/// A failure past staging that left the staged file where it was.
+///
+/// Rides inside the [`std::io::Error`] that
+/// [`StagedSave::remove_after`] returns, under the original failure's
+/// `ErrorKind`, so the original error -- its `raw_os_error()` included --
+/// stays reachable through [`std::error::Error::source`] or
+/// [`std::io::Error::get_ref`] rather than being flattened into text.
+#[cfg(not(windows))]
+#[derive(Debug)]
+pub(super) struct RetainedStagingFile {
+    /// The failure that abandoned the staged file.
+    pub(super) source: std::io::Error,
+    /// The staged file's last known path.
+    pub(super) path: PathBuf,
+    /// Why ownership of `path` could not be confirmed, when it could not.
+    pub(super) unreadable: Option<std::io::Error>,
+}
+
+#[cfg(not(windows))]
+impl std::fmt::Display for RetainedStagingFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}; the abandoned staging file was not removed",
+            self.source
+        )?;
+        if let Some(unreadable) = &self.unreadable {
+            write!(f, " (ownership could not be read: {unreadable})")?;
+        }
+        write!(f, "; last known path: {}", self.path.display())
+    }
+}
+
+#[cfg(not(windows))]
+impl std::error::Error for RetainedStagingFile {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
 #[cfg(not(windows))]
 impl StagedSave {
-    /// Removes this staged file after `source`, folding a cleanup failure into
-    /// the returned error rather than swallowing it -- otherwise a caller who
-    /// only sees `source` would never learn a staging file was left behind.
-    /// An entry that replaced it belongs to whoever put it there and is left
-    /// where it is; ownership that could not be read at all leaves the same
-    /// file behind, and is reported the same way.
+    /// Retains the staged file and reports its last known path. Stable `std`
+    /// has no unlink bound to the checked identity, so any delete would
+    /// re-resolve the name and could remove an entry that replaced it.
     ///
-    /// The check-then-act bound documented at the rename in
-    /// [`SaveFile::write_with`](super::SaveFile::write_with) applies to this
-    /// unlink too: the check above is by pathname, and the unlink below
-    /// re-resolves `self.path` a second time. This arm serves every host but
-    /// Windows, whose counterpart below deletes through a verified handle.
+    /// The returned error keeps `source`'s `ErrorKind` and carries `source`
+    /// itself inside a [`RetainedStagingFile`].
     pub(super) fn remove_after(&mut self, source: std::io::Error) -> std::io::Error {
-        let left_behind = match self.still_ours() {
+        let unreadable = match self.still_ours() {
             Ok(false) => return source,
-            Ok(true) => {
-                self.release_hold();
-                std::fs::remove_file(&self.path).err()
-            }
+            Ok(true) => None,
             Err(unreadable) => Some(unreadable),
         };
-        let Some(cleanup_source) = left_behind else {
-            return source;
-        };
+        self.release_hold();
         std::io::Error::new(
             source.kind(),
-            format!(
-                "{source}; additionally failed to remove the abandoned staging file {}: {cleanup_source}",
-                self.path.display()
-            ),
+            RetainedStagingFile {
+                source,
+                path: self.path.clone(),
+                unreadable,
+            },
         )
     }
 }

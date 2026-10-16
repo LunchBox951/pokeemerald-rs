@@ -123,7 +123,7 @@ fn an_immunity_original_attacker_blocks_its_own_reflected_poison() {
 #[test]
 fn a_poison_typed_original_attacker_blocks_its_own_reflected_poison() {
     let dex = Dex::new();
-    let player = max_iv_mon(&dex, EKANS, 5, vec![POISON_STING]);
+    let player = max_iv_mon(&dex, EKANS, 5, vec![POISON_STING]).with_ability_slot(1);
     let enemy = max_iv_mon(&dex, RALTS, 5, vec![TACKLE]);
 
     // Unlike the initial hit's silent guard against a Poison-type target,

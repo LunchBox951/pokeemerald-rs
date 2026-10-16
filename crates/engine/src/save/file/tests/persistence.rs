@@ -124,7 +124,7 @@ fn a_write_that_cannot_be_staged_leaves_the_previous_save_byte_identical() {
 }
 
 #[test]
-fn a_staged_write_that_cannot_be_renamed_removes_its_staged_file() {
+fn a_staged_write_that_cannot_be_renamed_is_cleaned_up_per_platform() {
     let dir = TempDir::new("staging-rename-failure");
     let path = dir.join(SAVE_FILE_NAME);
     // A directory at the save path stages fine but can never be renamed onto,
@@ -153,9 +153,12 @@ fn a_staged_write_that_cannot_be_renamed_removes_its_staged_file() {
         matches!(err, SaveFileError::Write { .. }),
         "a failed rename must surface as a write failure: {err:?}"
     );
-    assert!(
-        !staged.exists(),
-        "a staged file whose rename failed must be cleaned up, not left beside the save"
+    // Windows deletes through a verified handle; elsewhere cleanup retains
+    // the file rather than unlink a name a replacement may now hold (#2254).
+    assert_eq!(
+        staged.exists(),
+        cfg!(not(windows)),
+        "a staged file whose rename failed is removed on Windows and retained elsewhere"
     );
 }
 

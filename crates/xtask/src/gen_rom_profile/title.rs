@@ -67,14 +67,14 @@ fn locate_tilemaps(
     let ids = ctx.pack.ids_with_prefix("title/raw/");
     let mut needles = Vec::with_capacity(ids.len());
     for id in &ids {
-        needles.push(ctx.pack.get(id)?.payload.clone());
+        needles.push(ctx.pack.raw_payload(id)?.to_vec());
     }
     let hits = ctx.lz77.find_all(&needles);
 
     let mut plans = Vec::with_capacity(ids.len());
     for (index, id) in ids.iter().enumerate() {
         let addr = exactly_one(id, &hits[index])?;
-        let len = len32(&ctx.pack.get(id)?.payload);
+        let len = len32(ctx.pack.raw_payload(id)?);
         let name = camel_case(id.trim_start_matches("title/raw/"));
         report.push(ReportLine::unique(id, addr, len).symbol_contains([
             "TitleScreen".to_owned(),
@@ -175,4 +175,30 @@ fn locate_trimmed_palette(
         id: TRIMMED_PALETTE.to_owned(),
         reason: format!("no prefix of it sits immediately before {adjacent:08X}"),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gen_rom_profile::tests::{image_twin, with_context};
+
+    #[test]
+    fn a_title_tilemap_of_the_wrong_kind_is_refused() {
+        let payload = [9u8, 8, 7, 6, 5, 4, 3, 2];
+        let id = "title/raw/demo";
+        let mut rom = vec![0x10, 8, 0, 0];
+        rom.push(0);
+        rom.extend_from_slice(&payload);
+        let err = with_context(
+            "title-tilemap-wrong-kind",
+            &rom,
+            vec![image_twin(id, &payload)],
+            |ctx| locate_tilemaps(ctx, &mut Vec::new()),
+        )
+        .expect_err("an image-kind tilemap is refused");
+        assert!(
+            matches!(&err, GenRomProfileError::WrongPackEntryKind { id: got, .. } if got == id),
+            "{err:?}"
+        );
+    }
 }
