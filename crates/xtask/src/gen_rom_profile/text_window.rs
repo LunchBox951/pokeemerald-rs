@@ -82,6 +82,7 @@ pub fn locate(
     palettes.push(PalettePlan {
         id: DUPLICATED_PALETTE.to_owned(),
         addr,
+        encoding: rom_import::Encoding::Raw,
         color_count: asset.palette_colors(DUPLICATED_PALETTE)?,
     });
     palettes.sort_by(|a, b| a.id.cmp(&b.id));

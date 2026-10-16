@@ -3,8 +3,8 @@ use std::fmt::Write as _;
 use rom_import::Encoding;
 
 use super::plan::{
-    BattleMessagePlan, BlobPlan, ImagePlan, MapLayoutPlan, PalettePlan, ProfilePlan, TileAnimPlan,
-    TilesetPlan,
+    BattleMessagePlan, BattlerPlan, BlobPlan, ImagePlan, MapLayoutPlan, PalettePlan, ProfilePlan,
+    TileAnimPlan, TilesetPlan,
 };
 
 /// Returns the `bpee_rev0` Rust module with one root-table constant.
@@ -24,10 +24,10 @@ pub fn module(plan: &ProfilePlan, sha1: &str, root_count: usize) -> String {
 
 use crate::reader::GbaPtr;
 use crate::roots::{{
-    AudioRoots, BagRoots, BattleMessageRoots, BlobRoot, Encoding, FontRoot, ImageRoot,
-    InterfaceRoots, KeysplitRoot, MapLayoutRoot, PaletteRoot, Roots, SampleRoot, SongRoot,
-    SpecialMessageRoot, SpriteRoots, TextWindowRoots, TileAnimRoot, TilesetRoot, TitleScreenRoots,
-    VoicegroupRoot,
+    AudioRoots, BagRoots, BattleMessageRoots, BattlerRoot, BattlerRoots, BlobRoot, Encoding,
+    FontRoot, ImageRoot, InterfaceRoots, KeysplitRoot, MapLayoutRoot, PaletteRoot, Roots,
+    SampleRoot, SongRoot, SpecialMessageRoot, SpriteRoots, TextWindowRoots, TileAnimRoot,
+    TilesetRoot, TitleScreenRoots, VoicegroupRoot,
 }};
 
 /// Pokemon Emerald (US) rev 0's root table.
@@ -76,6 +76,8 @@ pub const EMERALD_US_REV0_ROOTS: Roots = Roots {{"
 
     // The bag family stays empty until the generator locates its roots.
     let _ = writeln!(out, "    bag: BagRoots::NONE,");
+
+    battler_roots(&mut out, &plan.battlers);
 
     let _ = writeln!(out, "}};");
     out
@@ -227,6 +229,42 @@ fn battle_message_roots(out: &mut String, messages: &BattleMessagePlan) {
     let _ = writeln!(out, "    }},");
 }
 
+fn battler_roots(out: &mut String, battlers: &BattlerPlan) {
+    let _ = writeln!(out, "    battlers: BattlerRoots {{");
+    for (field, addr) in [
+        ("front_table", battlers.front_table),
+        ("back_table", battlers.back_table),
+        ("palette_table", battlers.palette_table),
+        ("shiny_palette_table", battlers.shiny_palette_table),
+    ] {
+        let _ = writeln!(out, "        {field}: {},", gba_ptr_expression(addr));
+    }
+    let _ = writeln!(out, "        species: &[");
+    for battler in &battlers.species {
+        let _ = writeln!(out, "            BattlerRoot {{");
+        let _ = writeln!(out, "                species: {},", battler.species);
+        let _ = writeln!(
+            out,
+            "                front: {},",
+            image_root(&battler.front)
+        );
+        let _ = writeln!(out, "                back: {},", image_root(&battler.back));
+        let _ = writeln!(
+            out,
+            "                normal: {},",
+            palette_root(&battler.normal)
+        );
+        let _ = writeln!(
+            out,
+            "                shiny: {},",
+            palette_root(&battler.shiny)
+        );
+        let _ = writeln!(out, "            }},");
+    }
+    let _ = writeln!(out, "        ],");
+    let _ = writeln!(out, "    }},");
+}
+
 fn tileset_root(out: &mut String, tileset: &TilesetPlan) {
     let _ = writeln!(out, "        TilesetRoot {{");
     let _ = writeln!(out, "            name: {:?},", tileset.name);
@@ -313,9 +351,10 @@ fn image_root(image: &ImagePlan) -> String {
 
 fn palette_root(palette: &PalettePlan) -> String {
     format!(
-        "PaletteRoot {{ id: {:?}, addr: {}, color_count: {} }}",
+        "PaletteRoot {{ id: {:?}, addr: {}, encoding: {}, color_count: {} }}",
         palette.id,
         gba_ptr_expression(palette.addr),
+        encoding_variant_path(palette.encoding),
         palette.color_count
     )
 }
@@ -413,6 +452,7 @@ mod tests {
         let palette = palette_root(&PalettePlan {
             id: "title/palette/pokemon_logo".to_owned(),
             addr: 0x08DD_E258,
+            encoding: rom_import::Encoding::Raw,
             color_count: 224,
         });
         assert!(!palette.contains('\n'), "{palette}");
@@ -433,7 +473,8 @@ mod tests {
 mod bag_field_tests {
     use super::module;
     use crate::gen_rom_profile::plan::{
-        AudioPlan, BattleMessagePlan, ProfilePlan, SpritePlan, TextWindowPlan, TitleScreenPlan,
+        AudioPlan, BattleMessagePlan, BattlerPlan, ProfilePlan, SpritePlan, TextWindowPlan,
+        TitleScreenPlan,
     };
 
     #[test]
@@ -471,6 +512,13 @@ mod bag_field_tests {
             battle_messages: BattleMessagePlan {
                 table: base,
                 specials: vec![],
+            },
+            battlers: BattlerPlan {
+                front_table: base,
+                back_table: base,
+                palette_table: base,
+                shiny_palette_table: base,
+                species: vec![],
             },
         };
         let module = module(&plan, "0", 0);

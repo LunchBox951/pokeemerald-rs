@@ -18034,15 +18034,27 @@
     },
     "graphics/pokemon/mudkip": {
       "artifacts": {
+        "back.png": {
+          "reason": "Static 64x64 mudkip image extracted as the typed battler lookup's back image and recorded as a ROM-profile battler root; animation sheets and other graphics remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
         "front.png": {
-          "reason": "Shared normal front image extracted for typed starter previews; other species graphics remain pending.",
-          "rust_target": "crates/xtask/src/extract/starter_chooser.rs",
+          "reason": "Static 64x64 mudkip image extracted as the typed battler lookup's front image and recorded as a ROM-profile battler root; animation sheets and other graphics remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "normal.pal": {
-          "reason": "Sixteen-colour JASC normal palette extracted for the shared front image; shiny and other graphics remain pending.",
-          "rust_target": "crates/xtask/src/extract/starter_chooser.rs",
+          "reason": "Sixteen-colour JASC mudkip palette (normal) extracted for the typed battler lookup and recorded as a ROM-profile battler root; other species graphics remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "shiny.pal": {
+          "reason": "Sixteen-colour JASC mudkip palette (shiny) extracted for the typed battler lookup and recorded as a ROM-profile battler root; other species graphics remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
           "spec": "S-4",
           "status": "ported"
         }
@@ -18846,15 +18858,27 @@
     },
     "graphics/pokemon/torchic": {
       "artifacts": {
+        "back.png": {
+          "reason": "Static 64x64 torchic image extracted as the typed battler lookup's back image and recorded as a ROM-profile battler root; animation sheets and other graphics remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
         "front.png": {
-          "reason": "Shared normal front image extracted for typed starter previews; other species graphics remain pending.",
-          "rust_target": "crates/xtask/src/extract/starter_chooser.rs",
+          "reason": "Static 64x64 torchic image extracted as the typed battler lookup's front image and recorded as a ROM-profile battler root; animation sheets and other graphics remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "normal.pal": {
-          "reason": "Sixteen-colour JASC normal palette extracted for the shared front image; shiny and other graphics remain pending.",
-          "rust_target": "crates/xtask/src/extract/starter_chooser.rs",
+          "reason": "Sixteen-colour JASC torchic palette (normal) extracted for the typed battler lookup and recorded as a ROM-profile battler root; other species graphics remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "shiny.pal": {
+          "reason": "Sixteen-colour JASC torchic palette (shiny) extracted for the typed battler lookup and recorded as a ROM-profile battler root; other species graphics remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
           "spec": "S-4",
           "status": "ported"
         }
@@ -18884,15 +18908,27 @@
     },
     "graphics/pokemon/treecko": {
       "artifacts": {
+        "back.png": {
+          "reason": "Static 64x64 treecko image extracted as the typed battler lookup's back image and recorded as a ROM-profile battler root; animation sheets and other graphics remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
         "front.png": {
-          "reason": "Shared normal front image extracted for typed starter previews; other species graphics remain pending.",
-          "rust_target": "crates/xtask/src/extract/starter_chooser.rs",
+          "reason": "Static 64x64 treecko image extracted as the typed battler lookup's front image and recorded as a ROM-profile battler root; animation sheets and other graphics remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "normal.pal": {
-          "reason": "Sixteen-colour JASC normal palette extracted for the shared front image; shiny and other graphics remain pending.",
-          "rust_target": "crates/xtask/src/extract/starter_chooser.rs",
+          "reason": "Sixteen-colour JASC treecko palette (normal) extracted for the typed battler lookup and recorded as a ROM-profile battler root; other species graphics remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "shiny.pal": {
+          "reason": "Sixteen-colour JASC treecko palette (shiny) extracted for the typed battler lookup and recorded as a ROM-profile battler root; other species graphics remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
           "spec": "S-4",
           "status": "ported"
         }
@@ -28836,6 +28872,26 @@
       "status": "pending"
     },
     "src/data/pokemon_graphics/back_pic_table.h": {
+      "artifacts": {
+        "MUDKIP": {
+          "reason": "The MUDKIP row is the typed starter battler lookup's species key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "TORCHIC": {
+          "reason": "The TORCHIC row is the typed starter battler lookup's species key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "TREECKO": {
+          "reason": "The TREECKO row is the typed starter battler lookup's species key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
@@ -28861,21 +28917,92 @@
       "status": "pending"
     },
     "src/data/pokemon_graphics/front_pic_table.h": {
+      "artifacts": {
+        "MUDKIP": {
+          "status": "pending"
+        },
+        "TORCHIC": {
+          "status": "pending"
+        },
+        "TREECKO": {
+          "status": "pending"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
     },
     "src/data/pokemon_graphics/palette_table.h": {
+      "artifacts": {
+        "MUDKIP": {
+          "reason": "The MUDKIP row is the typed starter battler lookup's species key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "TORCHIC": {
+          "reason": "The TORCHIC row is the typed starter battler lookup's species key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "TREECKO": {
+          "reason": "The TREECKO row is the typed starter battler lookup's species key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
     },
     "src/data/pokemon_graphics/shiny_palette_table.h": {
+      "artifacts": {
+        "MUDKIP": {
+          "reason": "The MUDKIP row is the typed starter battler lookup's species key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "TORCHIC": {
+          "reason": "The TORCHIC row is the typed starter battler lookup's species key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "TREECKO": {
+          "reason": "The TREECKO row is the typed starter battler lookup's species key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
     },
     "src/data/pokemon_graphics/still_front_pic_table.h": {
+      "artifacts": {
+        "MUDKIP": {
+          "reason": "The MUDKIP row is the typed starter battler lookup's static front key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "TORCHIC": {
+          "reason": "The TORCHIC row is the typed starter battler lookup's static front key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "TREECKO": {
+          "reason": "The TREECKO row is the typed starter battler lookup's static front key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"

@@ -166,6 +166,8 @@ pub struct PalettePlan {
     pub id: String,
     /// The GBA bus address.
     pub addr: u32,
+    /// How the colours are stored.
+    pub encoding: Encoding,
     /// How many colours to read.
     pub color_count: u16,
 }
@@ -382,6 +384,36 @@ pub struct BattleMessagePlan {
     pub specials: Vec<SpecialMessagePlan>,
 }
 
+/// One species' battler roots, owned.
+#[derive(Debug, Clone)]
+pub struct BattlerSpeciesPlan {
+    /// The species' `SPECIES_*` value.
+    pub species: u16,
+    /// The front image.
+    pub front: ImagePlan,
+    /// The back image.
+    pub back: ImagePlan,
+    /// The normal palette.
+    pub normal: PalettePlan,
+    /// The shiny palette.
+    pub shiny: PalettePlan,
+}
+
+/// The static battler art, owned.
+#[derive(Debug, Clone)]
+pub struct BattlerPlan {
+    /// `gMonStillFrontPicTable`.
+    pub front_table: u32,
+    /// `gMonBackPicTable`.
+    pub back_table: u32,
+    /// `gMonPaletteTable`.
+    pub palette_table: u32,
+    /// `gMonShinyPaletteTable`.
+    pub shiny_palette_table: u32,
+    /// Every species with pack entries.
+    pub species: Vec<BattlerSpeciesPlan>,
+}
+
 /// Everything one generator run derived.
 #[derive(Debug, Clone)]
 pub struct ProfilePlan {
@@ -403,6 +435,8 @@ pub struct ProfilePlan {
     pub audio: AudioPlan,
     /// The battle-message token table.
     pub battle_messages: BattleMessagePlan,
+    /// The starters' static battler art.
+    pub battlers: BattlerPlan,
 }
 
 #[cfg(test)]

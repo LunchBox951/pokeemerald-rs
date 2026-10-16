@@ -7,7 +7,7 @@ use super::error::GenRomProfileError;
 use super::pack_source::PackSource;
 use crate::extract::scope::{
     layout_ids, sprite_palette_ids, sprite_sheet_ids, text_window_ids, tileset_animation_ids,
-    title_ids, FONTS, TILESETS,
+    title_ids, BATTLERS, FONTS, TILESETS,
 };
 
 /// Require every fixed tileset root: all tile sheets, then every pinned
@@ -90,6 +90,18 @@ pub fn require_battle_messages(pack: &PackSource) -> Result<(), GenRomProfileErr
     pack.get(rom_import::BATTLE_MESSAGE_PACK_ID).map(|_| ())
 }
 
+/// Require every starter battler image and palette.
+///
+/// # Errors
+///
+/// [`GenRomProfileError::MissingPackEntry`] naming the first absent root.
+pub fn require_battlers(pack: &PackSource) -> Result<(), GenRomProfileError> {
+    BATTLERS
+        .iter()
+        .flat_map(|battler| battler.ids())
+        .try_for_each(|id| pack.get(&id).map(|_| ()))
+}
+
 /// Require every fixed root, before any domain writes a report line.
 ///
 /// # Errors
@@ -102,5 +114,6 @@ pub fn preflight(pack: &PackSource) -> Result<(), GenRomProfileError> {
     require_layouts(pack)?;
     require_text_window(pack)?;
     require_sprites(pack)?;
+    require_battlers(pack)?;
     require_battle_messages(pack)
 }

@@ -116,6 +116,7 @@ pub fn locate(
         palettes.push(PalettePlan {
             id: id.clone(),
             addr,
+            encoding: rom_import::Encoding::Raw,
             color_count: asset.palette_colors(id)?,
         });
     }

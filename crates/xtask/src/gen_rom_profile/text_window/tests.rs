@@ -39,6 +39,7 @@ fn plans(banks: [u32; 4]) -> Vec<PalettePlan> {
         .map(|(id, bank)| PalettePlan {
             id: (*id).to_owned(),
             addr: TABLE_ADDR + bank * BANK_BYTES,
+            encoding: rom_import::Encoding::Raw,
             color_count: 16,
         })
         .collect()

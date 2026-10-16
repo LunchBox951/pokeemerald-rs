@@ -322,6 +322,7 @@ fn locate_palettes(
         plans.push(PalettePlan {
             id,
             addr,
+            encoding: rom_import::Encoding::Raw,
             color_count,
         });
     }

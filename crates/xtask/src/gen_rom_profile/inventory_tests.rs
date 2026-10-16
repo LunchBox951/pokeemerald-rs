@@ -7,12 +7,13 @@ use rom_import::fixture::RomFixture;
 use super::error::GenRomProfileError;
 use super::tests::with_context;
 use super::{
-    battle_messages, fonts, inventory, layouts, locate_profile, sprites, text_window, tilesets,
-    title,
+    battle_messages, battlers, fonts, inventory, layouts, locate_profile, sprites, text_window,
+    tilesets, title,
 };
 use crate::extract::scope::{
     layout_ids, sprite_palette_ids, sprite_sheet_ids, text_window_ids, tileset_animation_ids,
-    title_ids, FONTS, LAYOUTS, TEXT_WINDOW_IMAGE_STEMS, TEXT_WINDOW_PALETTE_STEMS, TILESETS,
+    title_ids, BATTLERS, FONTS, LAYOUTS, TEXT_WINDOW_IMAGE_STEMS, TEXT_WINDOW_PALETTE_STEMS,
+    TILESETS,
 };
 
 /// A placeholder for every fixed root; presence is all the preflight reads.
@@ -28,6 +29,7 @@ fn complete_inventory() -> Vec<PackEntry> {
         .chain(sprite_sheet_ids())
         // Palettes stay so a sheet deletion is the only thing missing.
         .chain(sprite_palette_ids())
+        .chain(BATTLERS.iter().flat_map(|battler| battler.ids()))
         .chain([rom_import::BATTLE_MESSAGE_PACK_ID.to_owned()])
         .map(|id| raw_entry(id, vec![0]))
         .collect()
@@ -57,6 +59,8 @@ fn assert_refused(label: &str, entries: Vec<PackEntry>, missing: &str, domain: &
             sprites::locate(ctx, &mut report).map(|_| ())
         } else if domain == "text_window" {
             text_window::locate(ctx, &mut report).map(|_| ())
+        } else if domain == "battlers" {
+            battlers::locate(ctx, &mut report).map(|_| ())
         } else if domain == "battle_messages" {
             battle_messages::locate(ctx, &mut report).map(|_| ())
         } else {
@@ -191,6 +195,14 @@ fn a_pack_missing_a_whole_window_frame_is_refused_by_id() {
         "text-window/image/20",
         "text_window",
     );
+}
+
+#[test]
+fn a_pack_missing_a_starter_battler_root_is_refused() {
+    for id in BATTLERS.iter().flat_map(|battler| battler.ids()) {
+        let label = format!("no-{}", id.replace('/', "-"));
+        assert_refused(&label, without(&id), &id, "battlers");
+    }
 }
 
 #[test]

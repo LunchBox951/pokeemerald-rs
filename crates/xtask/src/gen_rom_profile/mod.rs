@@ -53,6 +53,7 @@
 
 mod audio;
 mod battle_messages;
+mod battlers;
 mod emit;
 mod error;
 mod fonts;
@@ -175,6 +176,7 @@ fn locate_profile(
         interface: locate_interface_palettes(ctx, lines)?,
         audio: audio::locate(ctx, lines)?,
         battle_messages: battle_messages::locate(ctx, lines)?,
+        battlers: battlers::locate(ctx, lines)?,
     })
 }
 
