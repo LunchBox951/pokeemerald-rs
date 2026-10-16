@@ -67,7 +67,7 @@ pub(super) fn check_name(name: &str, section: &'static str) -> Result<(), EventS
     Ok(())
 }
 
-/// Addresses of script symbols and of declared roots, for target checks.
+/// Script-symbol and root addresses a map-table target must appear in.
 pub(super) struct ScriptTargets {
     scripts: BTreeSet<u32>,
     roots: BTreeSet<u32>,
@@ -89,8 +89,7 @@ pub(super) fn validate(parts: EventScriptParts) -> Result<AddressedEventScripts,
     validate_decoded(parts, STANDARD_SCRIPT_COUNT)
 }
 
-/// Runs every phase in wire order; `standard_count` is the wire's slot count
-/// and is checked as the first step of the standard-table phase.
+/// `standard_count` is the slot count the payload declares, checked first in the standard-table phase.
 pub(super) fn validate_decoded(
     parts: EventScriptParts,
     standard_count: u16,
@@ -292,13 +291,12 @@ pub(super) fn parse_table(
     let mut pos = 0usize;
     loop {
         let rest = &bytes[pos..];
-        // Terminator is a zero tag byte (tagged) or zero var halfword (conditional).
-        let ended = if conditional {
+        let at_terminator = if conditional {
             rest.len() >= 2 && rest[0] == 0 && rest[1] == 0
         } else {
             rest.first() == Some(&0)
         };
-        if ended {
+        if at_terminator {
             if rest.len() != terminator as usize {
                 return Err(EventScriptError::BadTerminator { table });
             }
@@ -308,7 +306,7 @@ pub(super) fn parse_table(
             return Err(EventScriptError::BadTerminator { table });
         }
         if rest.len() < record as usize {
-            // A conditional table cut inside its would-be terminator is a bad terminator.
+            // One byte left in a conditional table is a cut two-byte terminator, so it is reported as a bad terminator.
             return Err(if conditional && rest.len() == 1 {
                 EventScriptError::BadTerminator { table }
             } else {

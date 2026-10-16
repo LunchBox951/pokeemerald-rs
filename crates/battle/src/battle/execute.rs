@@ -33,6 +33,7 @@ use crate::status1::Status1;
 use super::{Battle, BattleEvent};
 
 mod pipelines;
+use pipelines::hit_failure_event;
 
 /// Confusion's fixed self-hit power (`MOVE_POUND`'s override at
 /// `src/battle_util.c:2159`).
@@ -215,6 +216,43 @@ impl Battle {
         }
     }
 
+    /// Applies the defender-side result of `ABILITYEFFECT_ABSORBING`
+    /// (`battle_util.c:2676`-`:2744`): Volt Absorb and Water Absorb heal,
+    /// Flash Fire latches. Neither deals damage or applies a secondary effect.
+    fn apply_absorbing_ability(
+        &mut self,
+        attacker_is_player: bool,
+        move_id: MoveId,
+        outcome: HitOutcome,
+        events: &mut Vec<BattleEvent>,
+    ) {
+        let defender = if attacker_is_player {
+            &mut self.enemy
+        } else {
+            &mut self.player
+        };
+        match outcome {
+            HitOutcome::Absorbed { healing } => {
+                let before = defender.current_hp();
+                defender.heal_hp(healing);
+                events.push(BattleEvent::AbilityHealed {
+                    by_player: attacker_is_player,
+                    move_id,
+                    healed: defender.current_hp() - before,
+                });
+            }
+            HitOutcome::FlashFireBlocked { first_activation } => {
+                defender.volatiles_mut().activate_flash_fire();
+                events.push(BattleEvent::FlashFireAbsorbed {
+                    by_player: attacker_is_player,
+                    move_id,
+                    boosted: first_activation,
+                });
+            }
+            _ => unreachable!("only absorbing outcomes are applied here"),
+        }
+    }
+
     fn execute_hit_move(
         &mut self,
         attacker_is_player: bool,
@@ -235,29 +273,29 @@ impl Battle {
         };
 
         match resolution.outcome {
-            HitOutcome::Miss => {
-                events.push(BattleEvent::Missed {
-                    by_player: attacker_is_player,
+            HitOutcome::Miss
+            | HitOutcome::NoEffect
+            | HitOutcome::LevitateBlocked
+            | HitOutcome::WonderGuardBlocked => {
+                events.push(hit_failure_event(
+                    resolution.outcome,
+                    attacker_is_player,
                     move_id,
-                });
+                ));
             }
-            HitOutcome::NoEffect => {
+            HitOutcome::Absorbed { healing: 0 } => {
                 events.push(BattleEvent::NoEffect {
                     by_player: attacker_is_player,
                     move_id,
                 });
             }
-            HitOutcome::LevitateBlocked => {
-                events.push(BattleEvent::LevitateBlocked {
-                    by_player: attacker_is_player,
+            HitOutcome::Absorbed { .. } | HitOutcome::FlashFireBlocked { .. } => {
+                self.apply_absorbing_ability(
+                    attacker_is_player,
                     move_id,
-                });
-            }
-            HitOutcome::WonderGuardBlocked => {
-                events.push(BattleEvent::WonderGuardBlocked {
-                    by_player: attacker_is_player,
-                    move_id,
-                });
+                    resolution.outcome,
+                    events,
+                );
             }
             HitOutcome::Hit {
                 damage,
@@ -893,5 +931,64 @@ mod pipeline_agreement_tests {
             MovePipeline::for_move(&dex, MoveId(60_000)),
             Err(BattleError::UnknownMove(_))
         ));
+    }
+}
+
+#[cfg(test)]
+mod absorbing_ability_tests {
+    use assets::{MoveId, SpeciesId};
+
+    use super::*;
+    use crate::pokemon::{BattlePokemon, Ivs};
+    use crate::script_rng::SequenceRng;
+
+    const MAX_IVS: Ivs = Ivs {
+        hp: 31,
+        attack: 31,
+        defense: 31,
+        speed: 31,
+        sp_attack: 31,
+        sp_defense: 31,
+    };
+
+    /// No executable Fire move exists, so the executor's Flash Fire arm is
+    /// driven directly with the outcome `damage_core` reports for Ember.
+    #[test]
+    fn a_flash_fire_outcome_latches_the_defender_and_reports_the_boost_once() {
+        let dex = Dex::new();
+        let mon = |species: u16| {
+            BattlePokemon::new(
+                &dex,
+                SpeciesId(species),
+                5,
+                MAX_IVS,
+                0,
+                vec![MoveId::SCRATCH],
+            )
+            .unwrap()
+        };
+        let mut rng = SequenceRng::new([0, 0, 0]);
+        let mut battle = Battle::new(Dex::new(), mon(19), mon(136), false, &mut rng).unwrap();
+        let mut events = Vec::new();
+
+        for first_activation in [true, false] {
+            battle.apply_absorbing_ability(
+                true,
+                MoveId::EMBER,
+                HitOutcome::FlashFireBlocked { first_activation },
+                &mut events,
+            );
+        }
+
+        assert!(battle.enemy.volatiles().flash_fire);
+        assert!(!battle.player.volatiles().flash_fire);
+        let boosted: Vec<bool> = events
+            .iter()
+            .map(|event| match event {
+                BattleEvent::FlashFireAbsorbed { boosted, .. } => *boosted,
+                other => panic!("unexpected event {other:?}"),
+            })
+            .collect();
+        assert_eq!(boosted, [true, false]);
     }
 }

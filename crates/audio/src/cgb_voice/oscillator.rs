@@ -33,20 +33,10 @@ pub(super) enum Oscillator {
     Noise(NoiseChannel),
 }
 
-/// NR32 shifts the unsigned nibble, so neighbouring nibbles can collapse
-/// (`mgba/src/gb/audio.c:519-533,567-574`; `m4a.c:1205-1211`).
-fn nr32_attenuated_sample(centered_nibble: i8, envelope_volume: u8) -> i32 {
-    const NIBBLE_ZERO: i32 = 8;
-    let gain = i32::try_from(cgb3_wave_gain_256(envelope_volume)).unwrap_or(0);
-    let attenuate = |nibble: i32| (nibble * gain) >> SAMPLE_GAIN_BITS;
-    let nibble = i32::from(centered_nibble) + NIBBLE_ZERO;
-    (attenuate(nibble) - attenuate(NIBBLE_ZERO)) * WAVE_SAMPLE_SCALE
-}
-
 impl Oscillator {
     /// One sample's pre-routing contribution. Square scales its waveform by
-    /// `frame_gain`; Wave attenuates each nibble through NR32 from
-    /// `envelope_volume` and its `frame_gain` is full scale; Noise ignores
+    /// `frame_gain`; Wave latches each nibble through NR32 at
+    /// `envelope_volume` on its wave clocks and its `frame_gain` is full scale; Noise ignores
     /// both and renders its resolved output latch directly
     /// ([`noise_contribution`]).
     pub(super) fn frame_contribution(
@@ -60,8 +50,8 @@ impl Oscillator {
                 (frame_gain * i32::from(square.sample()) * BIPOLAR_SAMPLE_SCALE) >> SAMPLE_GAIN_BITS
             }
             Self::Wave { channel: wave, .. } => {
-                (frame_gain * nr32_attenuated_sample(wave.sample(), envelope_volume))
-                    >> SAMPLE_GAIN_BITS
+                let gain = cgb3_wave_gain_256(envelope_volume);
+                (frame_gain * wave.sample(gain) * WAVE_SAMPLE_SCALE) >> SAMPLE_GAIN_BITS
             }
             Self::Noise(noise) => noise_contribution(noise, hardware_volume),
         }
@@ -77,7 +67,7 @@ impl Oscillator {
 
     /// `hardware_volume` is [`HardwareEnvelopeVolume`](crate::cgb_envelope::HardwareEnvelopeVolume)'s resolved byte; the
     /// Wave arm ignores both: NR32 attenuation is an integer shift of the
-    /// unsigned nibble, applied per sample by [`nr32_attenuated_sample`].
+    /// unsigned nibble, applied when [`WaveChannel::sample`] latches.
     pub(super) fn envelope_gain_256(&self, _envelope_volume: u8, hardware_volume: u8) -> u32 {
         match self {
             Self::Wave { .. } => FULL_GAIN_256,
@@ -203,7 +193,7 @@ mod nr32_attenuation_tests {
 
     fn render(nibble: u8, level: u8) -> i32 {
         let samples = WaveChannel::decode_wave_ram(&[nibble << 4 | nibble; 16]);
-        nr32_attenuated_sample(WaveChannel::new(samples, 0).sample(), level)
+        WaveChannel::new(samples, 0).sample(cgb3_wave_gain_256(level)) * WAVE_SAMPLE_SCALE
     }
 
     #[test]
@@ -251,10 +241,14 @@ mod changed_wave_asset_latch_tests {
     fn a_changed_wave_asset_keeps_the_previous_latch_until_the_first_clock() {
         let high = WaveChannel::decode_wave_ram(&[0xFF; 16]);
         let low = WaveChannel::decode_wave_ram(&[0x00; 16]);
-        let previous = Oscillator::Wave {
+        let mut previous = Oscillator::Wave {
             wave_id: Arc::from("old"),
             channel: WaveChannel::new(high, 0x7FF),
         };
+        assert_eq!(
+            previous.frame_contribution(256, 0, 15),
+            7 * WAVE_SAMPLE_SCALE
+        );
         let mut replacement = Oscillator::Wave {
             wave_id: Arc::from("new"),
             channel: WaveChannel::new(low, 0x7FF),
@@ -263,8 +257,40 @@ mod changed_wave_asset_latch_tests {
         let Oscillator::Wave { channel, .. } = &mut replacement else {
             unreachable!()
         };
-        assert_eq!(channel.sample(), 7, "old latch before first clock");
+        assert_eq!(
+            channel.sample(FULL_GAIN_256),
+            7,
+            "old latch before first clock"
+        );
         // 0x7FF clocks the wave every sample, so the new RAM follows.
-        assert_eq!(channel.sample(), -8, "new waveform after the first clock");
+        assert_eq!(
+            channel.sample(FULL_GAIN_256),
+            -8,
+            "new waveform after the first clock"
+        );
+    }
+
+    /// A replacement at a different volume still holds the old, already
+    /// shifted output until its first clock, then latches at the new volume.
+    #[test]
+    fn a_replacement_at_a_new_volume_holds_the_old_output_until_the_first_clock() {
+        let ram = WaveChannel::decode_wave_ram(&[0xFF; 16]);
+        let wave = |id: &str| Oscillator::Wave {
+            wave_id: Arc::from(id),
+            channel: WaveChannel::new(ram, 0x7FF),
+        };
+        let mut previous = wave("a");
+        assert_eq!(
+            previous.frame_contribution(256, 0, 15),
+            7 * WAVE_SAMPLE_SCALE
+        );
+        let mut replacement = wave("a");
+        replacement.carry_hardware_state_from(&previous);
+        assert_eq!(
+            replacement.frame_contribution(256, 0, 2),
+            7 * WAVE_SAMPLE_SCALE,
+            "held output survives the volume change"
+        );
+        assert_eq!(replacement.frame_contribution(256, 0, 2), WAVE_SAMPLE_SCALE);
     }
 }

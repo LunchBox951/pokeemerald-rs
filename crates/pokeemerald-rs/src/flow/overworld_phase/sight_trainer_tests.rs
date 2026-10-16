@@ -21,11 +21,11 @@
 //! `begin_sight_trainer_approach_if_seen`'s own docs ("Refusals cost
 //! nothing, forever") record an emergent gap
 //! discovered while writing these tests: every real Route 103 sight trainer's
-//! own default, level-up-derived moveset currently includes at least one
-//! move this battle engine does not yet implement, so
+//! own default, level-up-derived moveset except Andrew's currently includes
+//! at least one move this battle engine does not yet implement or score, so
 //! [`crate::flow::npc_trainer_battle::start_npc_trainer_battle`] fails for
-//! all nine today (pinned generically by
-//! `sight_trainer_trigger::tests::every_sight_trainers_real_party_fails_to_construct_for_exactly_these_reasons`).
+//! all but Andrew today (pinned generically by
+//! `sight_trainer_trigger::tests::refused_sight_trainers_real_parties_fail_to_construct_for_exactly_these_reasons`).
 //! That is a genuine, current fact about this port, not a testing
 //! inconvenience to work around invisibly -- so the `trigger` tests that only
 //! need the trigger/geometry/refusal half
