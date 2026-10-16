@@ -164,6 +164,33 @@ fn malformed_chooser_entries_are_rejected_on_read() {
             ),
         ),
         (
+            "starter-chooser/image/starter_circle",
+            image(
+                "starter-chooser/image/starter_circle",
+                (64, 64),
+                INDEXED_8_BIT,
+                1,
+            ),
+        ),
+        (
+            "starter-chooser/image/tiles",
+            image(
+                "starter-chooser/image/tiles",
+                (128, 128),
+                TEXT_WINDOW_BIT_DEPTH,
+                31,
+            ),
+        ),
+        (
+            "starter-chooser/image/pokeball_selection",
+            image(
+                "starter-chooser/image/pokeball_selection",
+                (32, 128),
+                INDEXED_8_BIT,
+                15,
+            ),
+        ),
+        (
             "starter-chooser/palette/tiles",
             palette("starter-chooser/palette/tiles", 16, 0),
         ),
@@ -203,6 +230,19 @@ fn malformed_chooser_entries_are_rejected_on_read() {
     assert!(matches!(
         pack.starter_preview(StarterSpecies::Mudkip).unwrap_err(),
         PackError::MalformedStarterAsset { id, .. } if id == "pokemon/mudkip/palette/normal"
+    ));
+    let _ = std::fs::remove_file(path);
+
+    let (pack, path) = load(
+        "starter-malformed-front-depth",
+        replaced(
+            "pokemon/mudkip/front",
+            image("pokemon/mudkip/front", (64, 64), INDEXED_8_BIT, 4),
+        ),
+    );
+    assert!(matches!(
+        pack.starter_preview(StarterSpecies::Mudkip).unwrap_err(),
+        PackError::MalformedStarterAsset { id, .. } if id == "pokemon/mudkip/front"
     ));
     let _ = std::fs::remove_file(path);
 }
