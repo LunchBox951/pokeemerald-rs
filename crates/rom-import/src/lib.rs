@@ -61,8 +61,12 @@
 //! xtask extract` writes from a decomp checkout, for every id both produce.
 //! `tests/equivalence.rs` is that gate: it is `#[ignore]`d, needs
 //! `$POKEEMERALD_ROM` and a checkout pack, and compares the two packs entry
-//! by entry. Every id the checkout pack holds is covered and there is no
-//! reviewed difference.
+//! by entry. It makes two checks. Every id this crate imports must exist in
+//! the checkout pack with the same kind, metadata, and payload bytes. A
+//! checkout id this crate did not write is a failure only when it falls
+//! under one of the gate's `COMPLETE_PREFIXES`, the prefixes of domains that
+//! have landed; elsewhere it is counted, not compared. A domain adds its
+//! prefix when it lands. The reviewed-difference list is empty.
 //!
 //! `pokeemerald-rs --import-rom` (that crate's `cli` and `import_rom`
 //! modules) drives [`import`] and surfaces this crate's errors as they

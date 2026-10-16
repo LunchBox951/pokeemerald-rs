@@ -73,7 +73,8 @@ import, and a pack from an older build tells you to import again. Re-importing
 replaces the pack atomically, so an interrupted import never leaves a broken
 one behind. Developers with a `pret/pokeemerald` checkout can build the same
 pack from source with `cargo xtask extract` instead (see
-[Building](#building)); the two are byte-identical.
+[Building](#building)); the ROM import's output is held to that pack by the
+equivalence harness.
 
 ## Building
 
@@ -94,7 +95,7 @@ cargo build --release --workspace
 cargo test --workspace
 ```
 
-A development checkout can also build the pack with `--import-rom` from a ROM, as a player would (see [Playing](#playing)). The equivalence harness `POKEEMERALD_ROM=/path/to/pokeemerald.gba cargo test -p rom-import -- --ignored` proves the two packs byte-identical; it stays `#[ignore]`d because CI has no ROM.
+A development checkout can also build the pack with `--import-rom` from a ROM, as a player would (see [Playing](#playing)). The equivalence harness `POKEEMERALD_ROM=/path/to/pokeemerald.gba cargo test -p rom-import -- --ignored` compares the two packs; its exact coverage is stated in the [`rom-import` crate docs](crates/rom-import/src/lib.rs). It stays `#[ignore]`d because CI has no ROM.
 
 ## Release channels
 
