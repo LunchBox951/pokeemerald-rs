@@ -597,7 +597,8 @@ fn deoxys_is_built_from_emeralds_speed_forme_base_stats_with_the_dex_row_left_ra
         .expect("Deoxys at level 50 with Scratch is representable");
     let stats = mon.stats();
     // Level 50, IV 31, zero EVs, neutral nature, against Speed Forme base
-    // 50/95/90/180/95/90 (upstream `GetDeoxysStat`, `pokemon.c:3660-3684`).
+    // 50/95/90/180/95/90 (upstream `GetDeoxysStat`, `pokemon.c:2698-2712`, read via
+    // `GetMonData`, `pokemon.c:3660-3684`).
     assert_eq!(stats.max_hp, 125);
     assert_eq!(stats.attack, 115);
     assert_eq!(stats.defense, 110);

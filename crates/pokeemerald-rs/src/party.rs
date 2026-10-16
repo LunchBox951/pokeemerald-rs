@@ -319,8 +319,13 @@ pub(crate) fn to_save_pokemon(dex: &Dex, mon: &BattlePokemon) -> Pokemon {
     // Recomputed only when `mon` has levelled up since `BattlePokemon::new`
     // built it; see `compute_levelled_up_stats`'s own doc for which EVs
     // that recompute uses, and why.
+    //
+    // The unchanged-level branch recomputes from the raw dex row at zero EVs
+    // rather than filing `mon.stats()`: for Deoxys the live cache carries the
+    // single-player Speed Forme substitution, which upstream's
+    // `CalculateMonStats` never writes into the stored block.
     let stats = if mon.level() == mon.created_at_level() {
-        mon.stats()
+        compute_levelled_up_stats(dex, mon, battle::Evs::default())
     } else {
         compute_levelled_up_stats(dex, mon, mon.evs_at_last_level_up())
     };

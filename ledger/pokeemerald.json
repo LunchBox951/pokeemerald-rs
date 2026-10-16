@@ -30860,7 +30860,7 @@
           "status": "stubbed"
         },
         "GetDeoxysStat": {
-          "reason": "pokemon.c:3660-3684 (GetDeoxysStat; called from CalculateMonStats at pokemon.c:2698-2712). The single-player Speed Forme substitution (base 95/90/180/95/90 for Deoxys's five non-HP stats) is rewritten as effective_battle_base_stats, applied at BattlePokemon construction and level-up recompute. The link-battle branch (BATTLE_TYPE_LINK_IN_BATTLE returns 0 and keeps the raw row) is not modelled. The persisted stat cache stays raw per upstream CalculateMonStats (pokemon.c:2814-2820); the assets species row stays raw Normal Forme data.",
+          "reason": "pokemon.c:2698-2712 (GetDeoxysStat; called from GetMonData at pokemon.c:3660-3684 for the ATK/DEF/SPEED/SPATK/SPDEF reads). The single-player Speed Forme substitution (base 95/90/180/95/90 for Deoxys's five non-HP stats) is rewritten as effective_battle_base_stats, applied at BattlePokemon construction and level-up recompute. The link-battle branch (BATTLE_TYPE_LINK_IN_BATTLE returns 0 and keeps the raw row) is not modelled. The persisted stat cache stays raw per upstream CalculateMonStats (pokemon.c:2823-2866, CALC_STAT reads gSpeciesInfo directly), including on the unchanged-level save path, which recomputes from the raw row; the assets species row stays raw Normal Forme data.",
           "rust_target": "crates/battle/src/pokemon.rs",
           "spec": "S-6",
           "status": "rewritten"

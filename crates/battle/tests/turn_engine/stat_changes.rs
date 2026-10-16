@@ -348,7 +348,8 @@ fn a_fainting_battler_drops_its_accumulated_stages() {
 }
 
 /// Deoxys (410) reads Emerald's Speed Forme base stats outside link battles
-/// (`GetDeoxysStat`, `pokemon.c:3660-3684`).
+/// (`GetDeoxysStat`, `pokemon.c:2698-2712`, read via `GetMonData`,
+/// `pokemon.c:3660-3684`).
 #[test]
 fn deoxys_speed_forme_attack_and_defense_drive_both_directions_of_damage() {
     let dex = Dex::new();
