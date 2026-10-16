@@ -32,9 +32,10 @@ pub(crate) use chrome::OptionsChromeError as OptionsError;
 /// `WINDOW_FRAMES_COUNT` (`pokeemerald/src/text_window.c`): the number of
 /// selectable text-window borders.
 pub(crate) const WINDOW_FRAMES_COUNT: u8 = 20;
-/// `CB2_InitOptionMenu` states 0 through 10 run before state 11 begins the
-/// fade (`option_menu.c:152-254`).
-const SETUP_FRAMES: u8 = 11;
+/// `CB2_InitOptionMenu` states 0 through 10 take ten frames -- states 8 and 9
+/// share one, with no `break` between them (`option_menu.c:218-225`) --
+/// before state 11 begins the fade.
+const SETUP_FRAMES: u8 = 10;
 const MAX_TEXT_SPEED_CHOICE: u8 = 2;
 const MAX_BUTTON_MODE_CHOICE: u8 = 2;
 

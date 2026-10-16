@@ -193,12 +193,17 @@ pub(super) fn advance_main_menu_fade_wait(
     (AppScene::MainMenuFadeWait(wait), frame)
 }
 
-/// [`AppScene::MainMenuFadeIn`]'s state: the rebuilt menu and the fade from
-/// black that reveals it.
+/// [`AppScene::MainMenuFadeIn`]'s state: the rebuilt menu, held back while the
+/// fade from black reveals the bare backdrop.
+///
+/// `InitMainMenu(TRUE)` clears VRAM and fades in with no window drawn; the
+/// menu is drawn by a task that waits for the fade to finish
+/// (`pokeemerald/src/main_menu.c:556-650,740-745`).
 pub(crate) struct MainMenuFadeIn {
     state: Box<MainMenuState>,
     source: Framebuffer,
-    fade: NormalPaletteFade,
+    /// `None` on the handoff frame: the fade begins on the next one.
+    fade: Option<NormalPaletteFade>,
 }
 
 impl MainMenuFadeIn {
@@ -207,34 +212,38 @@ impl MainMenuFadeIn {
         self.state.scene.selected()
     }
 
-    /// Starts the fade in over `state`'s current frame, as
-    /// `BeginNormalPaletteFade(PALETTES_ALL, 0, 16, 0, RGB_BLACK)` does for a
-    /// menu reinitialised after the Options screen
-    /// (`pokeemerald/src/main_menu.c:583-586`).
+    /// Hands off from the Options screen: a black frame, with the fade to
+    /// follow (`pokeemerald/src/main_menu.c:583-586`).
     pub(super) fn begin(state: Box<MainMenuState>) -> (Self, Box<Frame>) {
-        let source = state.scene.compose();
-        let fade = NormalPaletteFade::begin_in(PaletteFadeTarget::Black);
-        let frame = faded_frame(&source, &fade);
+        let source = state.scene.compose_backdrop();
+        let mut black = Framebuffer::new();
+        black.fill(rendering::Rgb888::BLACK);
         (
             Self {
                 state,
                 source,
-                fade,
+                fade: None,
             },
-            frame,
+            to_platform_frame(&black),
         )
     }
 }
 
 /// The [`AppScene::MainMenuFadeIn`] arm of [`super::advance_scene`]: input
-/// is ignored until the fade finishes.
+/// is ignored until the fade finishes, then the menu is drawn.
 pub(super) fn advance_main_menu_fade_in(mut wait: Box<MainMenuFadeIn>) -> (AppScene, Box<Frame>) {
-    if wait.fade.is_done() {
+    let Some(fade) = wait.fade.as_mut() else {
+        let fade = NormalPaletteFade::begin_in(PaletteFadeTarget::Black);
+        let frame = faded_frame(&wait.source, &fade);
+        wait.fade = Some(fade);
+        return (AppScene::MainMenuFadeIn(wait), frame);
+    };
+    if fade.is_done() {
         let frame = wait.state.scene.compose_frame();
         return (AppScene::MainMenu(wait.state), frame);
     }
-    wait.fade.update();
-    let frame = faded_frame(&wait.source, &wait.fade);
+    fade.update();
+    let frame = faded_frame(&wait.source, fade);
     (AppScene::MainMenuFadeIn(wait), frame)
 }
 

@@ -304,3 +304,40 @@ fn a_pack_failure_opening_the_screen_returns_to_the_main_menu() {
         MainMenuItem::Option
     );
 }
+
+#[test]
+fn returning_fades_in_over_empty_windows_and_draws_the_menu_after() {
+    // `InitMainMenu(TRUE)` clears VRAM and fades in with no windows drawn;
+    // `Task_MainMenuCheckSaveFile` waits for `!gPaletteFade.active` before
+    // the menu is drawn (`main_menu.c:556-650`). So every fade-in frame is a
+    // single backdrop colour.
+    let mut f = Fixture::new("options-return-fade");
+    let mut buttons = ButtonState::new();
+    let saved = f.slot.load();
+    let scene = f.main_menu_on_option(saved);
+    let scene = f.open_options(scene, &mut buttons);
+    buttons.update(Buttons::B);
+    let (mut scene, _) = advance_scene(scene, buttons, &mut f.slot, f.pack_source.clone());
+    let mut fade_in_frames = 0;
+    for _ in 0..MAX_FRAMES {
+        buttons.update(Buttons::NONE);
+        let (next, frame) = advance_scene(scene, buttons, &mut f.slot, f.pack_source.clone());
+        if matches!(next, AppScene::MainMenuFadeIn(_)) {
+            let first = frame[0];
+            assert!(
+                frame.iter().all(|&p| p == first),
+                "the menu is visible during the return fade-in"
+            );
+            fade_in_frames += 1;
+        }
+        if matches!(next, AppScene::MainMenu(_)) {
+            assert!(
+                fade_in_frames > 1,
+                "the fade begins a frame after the handoff"
+            );
+            return;
+        }
+        scene = next;
+    }
+    panic!("never returned to the main menu");
+}

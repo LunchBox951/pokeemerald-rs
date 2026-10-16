@@ -61,12 +61,13 @@ fn input_is_ignored_until_the_fade_in_finishes() {
         assert!(frames < 40);
     }
     assert_eq!(menu.selected(), OptionsRow::TextSpeed);
-    // States 0-10 of `CB2_InitOptionMenu` (11 frames), state 11's
+    // States 0-10 of `CB2_InitOptionMenu` (10 frames; 8 and 9 share one,
+    // `option_menu.c:218-225`), state 11's
     // `BeginNormalPaletteFade` (`option_menu.c:152-254`), then `begin_in`'s
     // own update plus 21 more through the fade and its four finishing polls
     // (`palette.c:411-416,807-822`; the count `palette_fade`'s tests pin) --
     // 22 in all -- and the frame whose task polls the finished fade.
-    assert_eq!(frames, 11 + 1 + 23);
+    assert_eq!(frames, 10 + 1 + 23);
 }
 
 #[test]
@@ -339,4 +340,17 @@ fn unnameable_raw_values_survive_open_and_close_untouched() {
         frame(&mut menu, &mut buttons, Buttons::NONE),
         OptionsEvent::Committed(raw)
     );
+}
+
+#[test]
+fn setup_states_0_through_10_take_ten_frames() {
+    // States 8 and 9 run in one frame (no `break`, `option_menu.c:218-225`),
+    // so the fade begins on the eleventh tick.
+    let mut menu = menu_with(GameSettings::default());
+    for _ in 0..10 {
+        menu.tick(ButtonState::new());
+        assert_eq!(menu.phase(), OptionsPhase::Setup);
+    }
+    menu.tick(ButtonState::new());
+    assert_eq!(menu.phase(), OptionsPhase::FadeIn);
 }
