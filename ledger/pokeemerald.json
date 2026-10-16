@@ -47,7 +47,7 @@
     "data/battle_ai_scripts.s": {
       "artifacts": {
         "AI_CheckBadMove": {
-          "reason": "data/battle_ai_scripts.s:51-104,277-312 (#1311, #1861, #1862). The prologue is modelled in script order (score_bad_move_prologue): get_how_powerful_move_is gates the chart/ability block (power 0/1 or an sIgnoredPowerfulMoveEffects effect jumps straight to Soundproof; Fissure/Horn Drill bypass the gate, src/battle_ai_script_commands.c:1174-1239), then chart immunity (-10, terminates), then Volt Absorb/Electric, Water Absorb/Water, Flash Fire/Fire (-12, terminates), Wonder Guard (-10 unless the AI-normalized effectiveness is exactly 2x; a 4x hit is not exempt, :1528-1556) and Levitate on a Ground move (-10), then the nine-move Soundproof list (-10, terminates before any if_effect; omits Hyper Voice unlike executions sSoundMovesTable). Dual-type folding keeps Cmd_if_type_effectiveness ordering and its zero-resurrection quirk (:1515-1556). Exactly fourteen audited rows are classified unchanged after the prologue because none appears in the :105-214 if_effect chain: EFFECT_HIT, ABSORB, POISON_HIT, ALWAYS_HIT, MULTI_HIT, DRAGON_RAGE, HIGH_CRITICAL, SPEED_DOWN_HIT, EVASION_DOWN_HIT, CONFUSE_HIT, VITAL_THROW, SPLASH, QUICK_ATTACK, CHARGE; any unlisted effect stays refused. ensure_scoreable is flag-aware: those rows are admitted for a CHECK_BAD_MOVE-only trainer and refused when CHECK_VIABILITY would take an unported branch (ABSORB, ALWAYS_HIT, HIGH_CRITICAL, SPEED_DOWN_HIT, VITAL_THROW; :655,666,686,706,708) or TRY_TO_FAINT would (QUICK_ATTACK +2, :2629-2634); EFFECT_CHARGE is also refused under TRY_TO_FAINT, the one script that reads simulated damage (if_can_faint, :2618), because estimated_damage omits the AI_CalcDmg Charge doubling (src/battle_script_commands.c:1306-1316); AI_CheckViability neither dispatches EFFECT_CHARGE nor reads damage (:619-743), so a CHECK_VIABILITY trainer admits it. Execution still lacks Volt Absorb/Water Absorb/Flash Fire absorption, so those cancellations are scored but a sole absorbed move still executes (executor stays the authority); admission is validated before the four simulated-damage draws. The stat guards remain: EFFECT_ATTACK_DOWN screens the stage floor (:278), Hyper Cutter (:279-280), then Clear Body/White Smoke (:308-311) shared with EFFECT_DEFENSE_DOWN (:284). Every get_ability AI_TARGET read is restricted to a single-ability target or a true Shadow Tag/Magnet Pull/Arena Trap (read directly ahead of the guess, :1368-1376) and draws no RNG; any other two-ability target is refused (BattleError::AmbiguousPlayerAbility) because battle history and the Random() & 1 guess (:1350-1396) are not modelled, including the boundary that upstream BATTLE_HISTORY->abilities[0] can hold a field-effect ability the port models no events for. Execution still gates what runs: no EVASION_DOWN_HIT move exists in the dex, and SPEED_DOWN_HIT, HIGH_CRITICAL etc. stay subject to ensure_executable. STILL deferred: the ~90 other if_effect handler bodies in the :104-216 chain (status, stat-stage, and the rest), Keen Eye, and the CHECK_VIABILITY/TRY_TO_FAINT branches of the refused rows. The parent artifact stays pending. EFFECT_CONFUSE_HIT (raw 76; include/constants/battle_move_effects.h:80) has no AI_CheckBadMove dispatch (:104-214), no AI_CheckViability dispatch (:652-776), no special AI_TryToFaint branch (:2616-2636) and no AI_SetupFirstTurn list entry (:2638-2705), so it is admitted under all four modelled flags; TRY_TO_FAINT still applies its generic damage scoring.",
+          "reason": "data/battle_ai_scripts.s:51-104,277-312 (#1311, #1861, #1862, #1863). The prologue is modelled in script order (score_bad_move_prologue): get_how_powerful_move_is gates the chart/ability block (power 0/1 or an sIgnoredPowerfulMoveEffects effect jumps straight to Soundproof; Fissure/Horn Drill bypass the gate, src/battle_ai_script_commands.c:1174-1239), then chart immunity (-10, terminates), then Volt Absorb/Electric, Water Absorb/Water, Flash Fire/Fire (-12, terminates), Wonder Guard (-10 unless the AI-normalized effectiveness is exactly 2x; a 4x hit is not exempt, :1528-1556) and Levitate on a Ground move (-10), then the nine-move Soundproof list (-10, terminates before any if_effect; omits Hyper Voice unlike executions sSoundMovesTable). Dual-type folding keeps Cmd_if_type_effectiveness ordering and its zero-resurrection quirk (:1515-1556). Exactly fourteen audited rows are classified unchanged after the prologue because none appears in the :105-214 if_effect chain: EFFECT_HIT, ABSORB, POISON_HIT, ALWAYS_HIT, MULTI_HIT, DRAGON_RAGE, HIGH_CRITICAL, SPEED_DOWN_HIT, EVASION_DOWN_HIT, CONFUSE_HIT, VITAL_THROW, SPLASH, QUICK_ATTACK, CHARGE; any unlisted effect stays refused. ensure_scoreable is flag-aware: those rows are admitted for a CHECK_BAD_MOVE-only trainer and refused when CHECK_VIABILITY would take an unported branch (ABSORB, ALWAYS_HIT, HIGH_CRITICAL, SPEED_DOWN_HIT, VITAL_THROW; :655,666,686,706,708) or TRY_TO_FAINT would (QUICK_ATTACK +2, :2629-2634); EFFECT_CHARGE is also refused under TRY_TO_FAINT, the one script that reads simulated damage (if_can_faint, :2618), because estimated_damage omits the AI_CalcDmg Charge doubling (src/battle_script_commands.c:1306-1316); AI_CheckViability neither dispatches EFFECT_CHARGE nor reads damage (:619-743), so a CHECK_VIABILITY trainer admits it. Execution still lacks Volt Absorb/Water Absorb/Flash Fire absorption, so those cancellations are scored but a sole absorbed move still executes (executor stays the authority); admission is validated before the four simulated-damage draws. The stat guards remain: EFFECT_ATTACK_DOWN screens the stage floor (:278), Hyper Cutter (:279-280), then Clear Body/White Smoke (:308-311) shared with EFFECT_DEFENSE_DOWN (:284). Every get_ability AI_TARGET read is restricted to a single-ability target or a true Shadow Tag/Magnet Pull/Arena Trap (read directly ahead of the guess, :1368-1376) and draws no RNG; any other two-ability target is refused (BattleError::AmbiguousPlayerAbility) because battle history and the Random() & 1 guess (:1350-1396) are not modelled, including the boundary that upstream BATTLE_HISTORY->abilities[0] can hold a field-effect ability the port models no events for. Execution still gates what runs: no EVASION_DOWN_HIT move exists in the dex, and SPEED_DOWN_HIT, HIGH_CRITICAL etc. stay subject to ensure_executable. STILL deferred: the other if_effect handler bodies in the :104-216 chain (Toxic/EFFECT_POISON, sleep, burn, freeze, Substitute, Swagger/Flatter, Safeguard, the remaining stat-stage and the rest), Keen Eye, and the CHECK_VIABILITY/TRY_TO_FAINT branches of the refused rows. The parent artifact stays pending. EFFECT_CONFUSE_HIT (raw 76; include/constants/battle_move_effects.h:80) has no AI_CheckBadMove dispatch (:104-214), no AI_CheckViability dispatch (:652-776), no special AI_TryToFaint branch (:2616-2636) and no AI_SetupFirstTurn list entry (:2638-2705), so it is admitted under all four modelled flags; TRY_TO_FAINT still applies its generic damage scoring. Three handlers are scored (#1863): AI_CBM_Paralyze (:397-403) stops at its first Score_Minus10 in command order -- AI type effectiveness x0, then Limber via get_ability AI_TARGET, then any non-Healthy Status1 -- so an immune or already-statused target takes one -10, never a stacked -20; AI_CBM_Confuse (:386-395) scores active target confusion -5 (Score_Minus5, distinct from -10) before any ability read, then Own Tempo -10; AI_CBM_FocusEnergy (:382-384) scores the USER's active Focus Energy volatile -10. Their moves are Stun Spore, Thunder Wave, Glare, Supersonic, Confuse Ray, Sweet Kiss and Focus Energy; each target ability read goes through ai_get_ability under the lead-admission invariant (no guess, no draw). Safeguard (:391,401) stays unrepresentable: no admitted move or state can establish it, and Swagger/Flatter, which also route to AI_CBM_Confuse (:169,193), stay refused. Because AI_CheckViability branches on Paralyze and Confuse (:687,704) and AI_SetupFirstTurn rolls for all three (:2667,2668,2685), ensure_scoreable refuses Paralyze/Confuse under CHECK_VIABILITY and all three under SETUP_FIRST_TURN; Focus Energy has no viability branch, and TRY_TO_FAINT keeps its generic x4 roll.",
           "rust_target": "crates/battle/src/battle/trainer_ai.rs",
           "spec": "S-6",
           "status": "stubbed"
@@ -16473,6 +16473,218 @@
       "status": "pending"
     },
     "graphics/pokedex": {
+      "artifacts": {
+        "area_glow.png": {
+          "reason": "Decoded with its embedded palette into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "area_marker.png": {
+          "reason": "Decoded with its embedded palette into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "area_unknown.png": {
+          "reason": "Decoded with its embedded palette into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "arrows.png": {
+          "reason": "Decoded with its embedded palette into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "bg_hoenn.pal": {
+          "reason": "JASC palette with its fixed colour count parsed into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "bg_national.pal": {
+          "reason": "JASC palette with its fixed colour count parsed into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "caught_ball.png": {
+          "reason": "Decoded with its embedded palette into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "cry_meter.png": {
+          "reason": "Decoded with its embedded palette into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "cry_meter_map.bin": {
+          "reason": "Raw file copied at its fixed length into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "cry_meter_needle.png": {
+          "reason": "Decoded with its embedded palette into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "cry_screen.bin": {
+          "reason": "Raw file copied at its fixed length into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "cry_screen_bg": {
+          "reason": "Raw file copied at its fixed length into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "cry_screen_bg.png": {
+          "reason": "Decoded with its embedded palette into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "info_screen.bin": {
+          "reason": "Raw file copied at its fixed length into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "interface.png": {
+          "reason": "Decoded with its embedded palette into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "list.bin": {
+          "reason": "Raw file copied at its fixed length into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "list_underlay.bin": {
+          "reason": "Raw file copied at its fixed length into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "menu.png": {
+          "reason": "Decoded with its embedded palette into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "noball_unused.png": {
+          "reason": "Decoded with its embedded palette into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "region_map.bin": {
+          "reason": "Raw file copied at its fixed length into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "region_map.pal": {
+          "reason": "JASC palette with its fixed colour count parsed into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "region_map.png": {
+          "reason": "Decoded with its embedded palette into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "region_map_affine.bin": {
+          "reason": "Raw file copied at its fixed length into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "region_map_affine.png": {
+          "reason": "Decoded with its embedded palette into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "screen_select_bar_main.bin": {
+          "reason": "Raw file copied at its fixed length into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "screen_select_bar_submenu.bin": {
+          "reason": "Raw file copied at its fixed length into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "search_menu.pal": {
+          "reason": "JASC palette with its fixed colour count parsed into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "search_menu.png": {
+          "reason": "Decoded with its embedded palette into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "search_menu_hoenn.bin": {
+          "reason": "Raw file copied at its fixed length into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "search_menu_national.bin": {
+          "reason": "Raw file copied at its fixed length into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "search_results_bg.pal": {
+          "reason": "JASC palette with its fixed colour count parsed into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "size_screen.bin": {
+          "reason": "Raw file copied at its fixed length into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "size_silhouette.pal": {
+          "reason": "JASC palette with its fixed colour count parsed into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "start_menu_main.bin": {
+          "reason": "Raw file copied at its fixed length into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "start_menu_search_results.bin": {
+          "reason": "Raw file copied at its fixed length into the fixed Pokédex graphics manifest; the ROM path and equivalence proof remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.ui",
       "kind": "dir",
       "spec_owner": "S-4",
@@ -27527,8 +27739,14 @@
     "src/battle_util.c": {
       "artifacts": {
         "AbilityBattleEffects": {
-          "reason": "ABILITYEFFECT_SYNCHRONIZE (battle_util.c:2971-2984): once BattleScript_EffectParalyze paralyses a Synchronize holder, crate::battle::execute::Battle::reflect_synchronize_paralysis re-enters the paralysis case for MOVE_EFFECT_AFFECTS_USER against the original attacker (mirroring BattleScript_SynchronizeActivates' seteffectprimary re-entry, battle_script_commands.c:2240-2245, 2395-2425), guarded by crate::battle::paralyze::resolve_synchronize_reflection (Limber, then any existing primary status; no typecalc, no accuracycheck, matching the reference). Guts, Marvel Scale (accessor-boundary reads, issue #942), and now Shed Skin (issue #944, its end-turn cure draw moved into ABILITYEFFECT_ENDTURN below) are all modelled, so secondary::ensure_admissible -- the only ensure_admissible screen left since #944 dropped paralyze::ensure_admissible -- refuses none of the three against a fresh status or its reflection on either battler. ABILITYEFFECT_SYNCHRONIZE's poison case (battle_util.c:2971-2986, battle_script_commands.c:2299-2340, 2491-2512, 4275-4279, issue #1186) is modelled the same way: once an EFFECT_POISON_HIT move newly poisons a Synchronize holder, crate::battle::execute::Battle::reflect_synchronize_poison re-enters SetMoveEffect's STATUS1_POISON case for MOVE_EFFECT_AFFECTS_USER against the original attacker after that target's own tryfaintmon (moveendall runs after seteffectwithchance's tryfaintmon, data/battle_scripts_1.s:265-267, unlike the non-damaging paralysis script), guarded by crate::battle::secondary::resolve_synchronize_poison_reflection: primary == TRUE always takes STATUS1_POISON's guarded prevention branches ahead of the existing-status no-op, so an Immunity holder or a Poison-/Steel-typed original attacker earns its own BattleScript_PSNPrevention observable here where the initial hit's own silent poison_can_land guard would have refused it; only a normally typed, already-statused attacker still falls through silently. secondary::ensure_admissible no longer refuses a Synchronize defender at all, healthy attacker or not -- the reflection is the modelled path -- leaving only its Serene Grace screen. ABILITYEFFECT_MOVES_BLOCK's Soundproof case is also modelled, in crate::battle::Battle::act ahead of the no-PP abort, via crate::battle::stat_change::soundproof_block against every sSoundMovesTable entry (battle_util.c:686-692, 2659-2675) on membership alone, whatever the move's effect: the block emits SoundproofProtected and returns before any accuracy, critical-hit, damage or effect draw, while still spending the move's Pressure-aware PP. Growl, Screech, Metal Sound and Hyper Voice are the listed moves this engine currently executes; the other six are refused pre-turn for unrelated missing pipelines. ABILITYEFFECT_ENDTURN's ABILITY_SHED_SKIN case (battle_util.c:2620-2640, issue #944) is modelled too, from crate::battle::Battle::residual_effects (see src/battle_util.c#DoBattlerEndTurnEffects for the ENDTURN_ABILITIES call site) via crate::battle::Battle::apply_shed_skin_residual: gated on the same hp != 0 check the case's own switch sits behind (:2601-2602), a battler whose ability is Shed Skin draws crate::status1::draws_shed_skin_cure (Random() % 3 == 0, :2621) whenever status1 is nonzero; a hit clears status1 to Status1::Healthy and emits BattleEvent::ShedSkinCured, mirroring BattleScript_ShedSkinActivates' STRINGID_PKMNSXCUREDYPROBLEM (data/battle_scripts_1.s:3993-3997) and the status2 Nightmare clear (:2634) this crate does not model Nightmare for. ABILITYEFFECT_ON_DAMAGE's ABILITY_STATIC case (battle_util.c:2821-2835, issue #2221) is modelled at MOVEEND_ON_DAMAGE_ABILITIES (battle_script_commands.c:4280-4284) by crate::battle::Battle::apply_static_contact, called from execute_move after each single-hit pipeline settles faints, and after every landed hit inside the multi-hit loop (data/battle_scripts_1.s:637): when the target lost HP, the move has FLAG_MAKES_CONTACT and the attacker is alive, one Random() % 3 draw is taken whether or not the holder survived, and a zero roll on an attacker that is neither Limber nor already statused sets Status1::Paralysed and emits BattleEvent::ParalyzedByStatic (SetMoveEffect's AFFECTS_USER paralysis case, :2395-2424, reusing paralyze::resolve_synchronize_reflection); an attacker with Synchronize then reflects the paralysis onto a surviving, unstatused holder (MOVEEND_SYNCHRONIZE_ATTACKER, battle_script_commands.c:4291-4294, battle_util.c:2987-3001; BattleEvent::ParalyzedByAttackerSynchronize), though ABILITYEFFECT_ATK_SYNCHRONIZE for other statuses stays unmodelled. Pinned by tests/turn_engine/static_contact.rs. NOT modelled: the per-status text-buffer selection (:2623-2632, BattleEvent::ShedSkinCured already carries the cured Status1 instead), ABILITYEFFECT_ATK_SYNCHRONIZE, ABILITYEFFECT_MOVES_BLOCK for every non-Soundproof ability, the HITMARKER_NO_PPDEDUCT escape a blocked sound move grants a STATUS2_MULTIPLETURNS attacker (battle_util.c:2666-2669), every other ABILITYEFFECT_ENDTURN case (Rain Dish, Speed Boost, Truant), every other ABILITYEFFECT_* case (the other ABILITYEFFECT_ON_DAMAGE contact abilities, Forecast, Trace, Cloud Nine/Air Lock, weather abilities, and the rest), and the dispatcher's general call sites outside the paralysis, poison, Soundproof, and end-of-turn paths. Status1 reader disposition (issue #945): both Battle constructors screen every non-fainted participant, active and bench or reserve, through crate::battle::admission::ensure_participant_admissible before any constructor draw, and a Paralysed Limber, Poisoned Immunity, or confused Own Tempo holder (issue #1990; STATUS2_CONFUSION cleared at battle_util.c:2885-2891,2937-2939) is refused with BattleError::UnportedAbilityInteraction because ABILITYEFFECT_IMMUNITY's move-end cure (battle_util.c:2873-2951) is not modelled. Guts, Marvel Scale, Shed Skin and Synchronize on paralysis and poison are modelled; Limber and Immunity are refused only for their triggering status, and Own Tempo only while confused. Early Bird (:2030-2037), Insomnia, Vital Spirit, Water Veil, Magma Armor, Flash Fire (:2703-2705) and Natural Cure (battle_script_commands.c:9590-9607) are deferred while their status or switch behaviour is absent; admitting them is not whole-ability coverage. Pinned by tests/turn_engine/status_ability_matrix.rs and participant_admission.rs. Truant admission disposition (issue #2184): both Battle constructors refuse every non-fainted Truant participant, active and bench or reserve, through crate::battle::admission::ensure_participant_admissible with BattleError::UnportedAbilityInteraction before constructor RNG. CANCELER_TRUANT (battle_util.c:2086-2097) and ABILITYEFFECT_ENDTURN truantCounter toggle (:2653-2655) remain unmodelled; this is fail-closed admission, not Truant behavior coverage. Pinned by tests/turn_engine/participant_admission.rs, including fainted-reserve admission.",
+          "reason": "ABILITYEFFECT_SYNCHRONIZE (battle_util.c:2971-2984): once BattleScript_EffectParalyze paralyses a Synchronize holder, crate::battle::execute::Battle::reflect_synchronize_paralysis re-enters the paralysis case for MOVE_EFFECT_AFFECTS_USER against the original attacker (mirroring BattleScript_SynchronizeActivates' seteffectprimary re-entry, battle_script_commands.c:2240-2245, 2395-2425), guarded by crate::battle::paralyze::resolve_synchronize_reflection (Limber, then any existing primary status; no typecalc, no accuracycheck, matching the reference). Guts, Marvel Scale (accessor-boundary reads, issue #942), and now Shed Skin (issue #944, its end-turn cure draw moved into ABILITYEFFECT_ENDTURN below) are all modelled, so secondary::ensure_admissible -- the only ensure_admissible screen left since #944 dropped paralyze::ensure_admissible -- refuses none of the three against a fresh status or its reflection on either battler. ABILITYEFFECT_SYNCHRONIZE's poison case (battle_util.c:2971-2986, battle_script_commands.c:2299-2340, 2491-2512, 4275-4279, issue #1186) is modelled the same way: once an EFFECT_POISON_HIT move newly poisons a Synchronize holder, crate::battle::execute::Battle::reflect_synchronize_poison re-enters SetMoveEffect's STATUS1_POISON case for MOVE_EFFECT_AFFECTS_USER against the original attacker after that target's own tryfaintmon (moveendall runs after seteffectwithchance's tryfaintmon, data/battle_scripts_1.s:265-267, unlike the non-damaging paralysis script), guarded by crate::battle::secondary::resolve_synchronize_poison_reflection: primary == TRUE always takes STATUS1_POISON's guarded prevention branches ahead of the existing-status no-op, so an Immunity holder or a Poison-/Steel-typed original attacker earns its own BattleScript_PSNPrevention observable here where the initial hit's own silent poison_can_land guard would have refused it; only a normally typed, already-statused attacker still falls through silently. secondary::ensure_admissible no longer refuses a Synchronize defender at all, healthy attacker or not -- the reflection is the modelled path -- leaving only its Serene Grace screen. ABILITYEFFECT_MOVES_BLOCK's Soundproof case is also modelled, in crate::battle::Battle::act ahead of the no-PP abort, via crate::battle::stat_change::soundproof_block against every sSoundMovesTable entry (battle_util.c:686-692, 2659-2675) on membership alone, whatever the move's effect: the block emits SoundproofProtected and returns before any accuracy, critical-hit, damage or effect draw, while still spending the move's Pressure-aware PP. Growl, Screech, Metal Sound and Hyper Voice are the listed moves this engine currently executes; the other six are refused pre-turn for unrelated missing pipelines. ABILITYEFFECT_ENDTURN's ABILITY_SHED_SKIN case (battle_util.c:2620-2640, issue #944) is modelled too, from crate::battle::Battle::residual_effects (see src/battle_util.c#DoBattlerEndTurnEffects for the ENDTURN_ABILITIES call site) via crate::battle::Battle::apply_shed_skin_residual: gated on the same hp != 0 check the case's own switch sits behind (:2601-2602), a battler whose ability is Shed Skin draws crate::status1::draws_shed_skin_cure (Random() % 3 == 0, :2621) whenever status1 is nonzero; a hit clears status1 to Status1::Healthy and emits BattleEvent::ShedSkinCured, mirroring BattleScript_ShedSkinActivates' STRINGID_PKMNSXCUREDYPROBLEM (data/battle_scripts_1.s:3993-3997) and the status2 Nightmare clear (:2634) this crate does not model Nightmare for. ABILITYEFFECT_ON_DAMAGE's ABILITY_STATIC case (battle_util.c:2821-2835, issue #2221) is modelled at MOVEEND_ON_DAMAGE_ABILITIES (battle_script_commands.c:4280-4284) by crate::battle::Battle::apply_static_contact, called from execute_move after each single-hit pipeline settles faints, and after every landed hit inside the multi-hit loop (data/battle_scripts_1.s:637): when the target lost HP, the move has FLAG_MAKES_CONTACT and the attacker is alive, one Random() % 3 draw is taken whether or not the holder survived, and a zero roll on an attacker that is neither Limber nor already statused sets Status1::Paralysed and emits BattleEvent::ParalyzedByStatic (SetMoveEffect's AFFECTS_USER paralysis case, :2395-2424, reusing paralyze::resolve_synchronize_reflection); an attacker with Synchronize then reflects the paralysis onto a surviving, unstatused holder (MOVEEND_SYNCHRONIZE_ATTACKER, battle_script_commands.c:4291-4294, battle_util.c:2987-3001; BattleEvent::ParalyzedByAttackerSynchronize), though ABILITYEFFECT_ATK_SYNCHRONIZE for other statuses stays unmodelled. Pinned by tests/turn_engine/static_contact.rs. NOT modelled: the per-status text-buffer selection (:2623-2632, BattleEvent::ShedSkinCured already carries the cured Status1 instead), ABILITYEFFECT_ATK_SYNCHRONIZE, ABILITYEFFECT_MOVES_BLOCK for every non-Soundproof ability, the HITMARKER_NO_PPDEDUCT escape a blocked sound move grants a STATUS2_MULTIPLETURNS attacker (battle_util.c:2666-2669), every other ABILITYEFFECT_ENDTURN case (Rain Dish, Speed Boost, Truant), every other ABILITYEFFECT_* case (the other ABILITYEFFECT_ON_DAMAGE contact abilities, Forecast, Trace, Cloud Nine/Air Lock, weather abilities, and the rest), and the dispatcher's general call sites outside the paralysis, poison, Soundproof, and end-of-turn paths. Status1 reader disposition (issue #945): both Battle constructors screen every non-fainted participant, active and bench or reserve, through crate::battle::admission::ensure_participant_admissible before any constructor draw, and a Paralysed Limber, Poisoned Immunity, or confused Own Tempo holder (issue #1990; STATUS2_CONFUSION cleared at battle_util.c:2885-2891,2937-2939) is refused with BattleError::UnportedAbilityInteraction because ABILITYEFFECT_IMMUNITY's move-end cure (battle_util.c:2873-2951) is not modelled. Guts, Marvel Scale, Shed Skin and Synchronize on paralysis and poison are modelled; Limber and Immunity are refused only for their triggering status, and Own Tempo only while confused. Early Bird (:2030-2037), Insomnia, Vital Spirit, Water Veil, Magma Armor and Natural Cure (battle_script_commands.c:9590-9607) are deferred while their status or switch behaviour is absent; admitting them is not whole-ability coverage. Pinned by tests/turn_engine/status_ability_matrix.rs and participant_admission.rs. Truant admission disposition (issue #2184): both Battle constructors refuse every non-fainted Truant participant, active and bench or reserve, through crate::battle::admission::ensure_participant_admissible with BattleError::UnportedAbilityInteraction before constructor RNG. CANCELER_TRUANT (battle_util.c:2086-2097) and ABILITYEFFECT_ENDTURN truantCounter toggle (:2653-2655) remain unmodelled; this is fail-closed admission, not Truant behavior coverage. Pinned by tests/turn_engine/participant_admission.rs, including fainted-reserve admission. Intimidate admission disposition (issue #2251): both Battle constructors refuse every non-fainted Intimidate participant, active and bench or reserve, through crate::battle::admission::ensure_participant_admissible with BattleError::UnportedAbilityInteraction before constructor RNG, trainer preflight refuses a member whose fixed personality selects Truant or Intimidate before trainer-party OT-ID RNG, and the wild pre-roll screen refuses a species with any Truant or Intimidate ability slot before nature, personality, IV and held-item RNG. The switch-in queue (battle_util.c:2559-2564), ABILITYEFFECT_INTIMIDATE1 (:3003-3016), ABILITYEFFECT_INTIMIDATE2 (:3074-3088) and BattleScript_IntimidateActivates (data/battle_scripts_1.s:4024-4048) remain unmodelled; this is fail-closed admission, not Intimidate behavior coverage. Pinned by tests/turn_engine/participant_admission.rs and the trainer preflight tests, including fainted-reserve admission and selected-ability-slot boundaries. ABILITYEFFECT_ABSORBING (battle_util.c:2676-2744, issue #2170) is recorded under src/battle_util.c#AbilityBattleEffects-absorbing: Volt Absorb, Water Absorb and Flash Fire are executed; the frozen-holder exemption of Flash Fire (:2703) is the documented boundary because Status1 cannot represent freeze.",
           "rust_target": "crates/battle/src/battle/execute.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
+        "AbilityBattleEffects-absorbing": {
+          "reason": "ABILITYEFFECT_ABSORBING (battle_util.c:2676-2744, issue #2170). crate::hit::damage_core runs absorbing_outcome after the accuracy stage and before the critical-hit draw: Volt Absorb against a powered Electric move and Water Absorb against a powered Water move report HitOutcome::Absorbed with max(1, maxHP / 4) healing (zero at full HP, surfaced as BattleEvent::NoEffect like BattleScript_MonMadeMoveUseless), and Flash Fire against a Fire move reports HitOutcome::FlashFireBlocked, which crate::battle::execute::Battle::execute_hit_move turns into the Volatiles::flash_fire latch. A repeated activation still cancels the move without boosting (B_MSG_FLASH_FIRE_NO_BOOST), writes no no-effect flag, and has no power gate. The latched attacker's Fire damage is multiplied 15/10 before the final +2 (crate::damage::base_damage_with_flash_fire, pokemon.c:3366-3371). An absorbed Water Gun consumes one accuracy draw and an always-hit Shock Wave none; PP is spent once before execution. NOT modelled: the frozen-holder exemption (Status1 cannot represent freeze), absorption inside the multi-hit, drain and fixed-damage pipelines (no admitted move there is Electric, Water or Fire), message/animation text, and Burn-based Fire moves, which admission still refuses. Pinned by tests/turn_engine/absorbing_abilities.rs and hit/tests.rs.",
+          "rust_target": "crates/battle/src/hit.rs",
           "spec": "S-6",
           "status": "stubbed"
         },
@@ -29585,6 +29803,12 @@
           "rust_target": "crates/xtask/src/extract/bag.rs",
           "spec": "S-4",
           "status": "ported"
+        },
+        "pokedex_graphics": {
+          "reason": "Graphics, palettes, and tilemaps this file loads are extracted into the fixed Pokédex graphics manifest; the screen logic and other graphics remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
         }
       },
       "category": "code.source",
@@ -30796,21 +31020,53 @@
       "status": "pending"
     },
     "src/pokedex.c": {
+      "artifacts": {
+        "pokedex_screen_graphics": {
+          "reason": "Graphics, palettes, and tilemaps this file loads are extracted into the fixed Pokédex graphics manifest; the screen logic and other graphics remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
     },
     "src/pokedex_area_region_map.c": {
+      "artifacts": {
+        "pokedex_area_region_map_graphics": {
+          "reason": "Graphics, palettes, and tilemaps this file loads are extracted into the fixed Pokédex graphics manifest; the screen logic and other graphics remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
     },
     "src/pokedex_area_screen.c": {
+      "artifacts": {
+        "pokedex_area_screen_graphics": {
+          "reason": "Graphics, palettes, and tilemaps this file loads are extracted into the fixed Pokédex graphics manifest; the screen logic and other graphics remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
     },
     "src/pokedex_cry_screen.c": {
+      "artifacts": {
+        "pokedex_cry_screen_graphics": {
+          "reason": "Graphics, palettes, and tilemaps this file loads are extracted into the fixed Pokédex graphics manifest; the screen logic and other graphics remain pending.",
+          "rust_target": "crates/xtask/src/extract/pokedex_graphics.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"

@@ -1,5 +1,6 @@
-//! Score-and-draw fixtures for the `AI_CheckBadMove` prologue and the audited
-//! no-`if_effect` rows (`data/battle_ai_scripts.s:51-104`).
+//! Score-and-draw fixtures for the `AI_CheckBadMove` prologue, the audited
+//! no-`if_effect` rows (`data/battle_ai_scripts.s:51-104`), and the
+//! Paralyze, Confuse and Focus Energy handlers (`:382-403`).
 
 use super::{
     choose_trainer_action, ensure_scoreable, fold_ai_type_effectiveness, score_bad_move,
@@ -12,6 +13,7 @@ use crate::error::BattleError;
 use crate::pokemon::{BattlePokemon, Ivs, MAX_MON_MOVES};
 use crate::script_rng::SequenceRng;
 use crate::stat_stage::StatStage;
+use crate::status1::Status1;
 use assets::trainers::AiFlags;
 use assets::{AbilityId, MoveEffect, MoveId, SpeciesId, Type};
 
@@ -30,6 +32,14 @@ const SHEDINJA: SpeciesId = SpeciesId(303);
 const GASTLY: SpeciesId = SpeciesId(92);
 const MR_MIME: SpeciesId = SpeciesId(122);
 const VOLTORB: SpeciesId = SpeciesId(100);
+/// Ground, Sand Veil only: Electric is chart-immune.
+const SANDSHREW: SpeciesId = SpeciesId(27);
+/// Normal, Limber only.
+const DITTO: SpeciesId = SpeciesId(132);
+/// Normal, Own Tempo only.
+const SPINDA: SpeciesId = SpeciesId(308);
+/// Water/Flying, Intimidate only: Electric is quadruple-effective.
+const GYARADOS: SpeciesId = SpeciesId(130);
 
 fn mon(species: SpeciesId, moves: &[MoveId]) -> BattlePokemon {
     BattlePokemon::new(
@@ -370,4 +380,235 @@ fn dual_type_folding_follows_chart_order_not_defender_slot_order() {
         ),
         0
     );
+}
+
+const MINUS_5: i8 = 95;
+
+fn with_status(species: SpeciesId, status: Status1) -> BattlePokemon {
+    let mut target = mon(species, &[MoveId::POUND]);
+    target.set_status1(status);
+    target
+}
+
+fn confused(species: SpeciesId) -> BattlePokemon {
+    let mut target = mon(species, &[MoveId::POUND]);
+    target.volatiles_mut().set_confusion(3);
+    target
+}
+
+#[test]
+fn paralysis_type_immunity_ends_at_one_minus_ten() {
+    let sandshrew = mon(SANDSHREW, &[MoveId::POUND]);
+    assert_eq!(bad_move_score(MoveId::THUNDER_WAVE, &sandshrew), MINUS_10);
+    // `Score_Minus10` ends the script, so an already-paralysed immune target
+    // is not charged again (`data/battle_ai_scripts.s:397-398`).
+    let paralysed = with_status(SANDSHREW, Status1::Paralysed);
+    assert_eq!(bad_move_score(MoveId::THUNDER_WAVE, &paralysed), MINUS_10);
+    let gastly = mon(GASTLY, &[MoveId::POUND]);
+    assert_eq!(bad_move_score(MoveId::GLARE, &gastly), MINUS_10);
+}
+
+#[test]
+fn paralysis_is_discouraged_for_any_existing_primary_status() {
+    let moves = [MoveId::THUNDER_WAVE, MoveId::STUN_SPORE, MoveId::GLARE];
+    for move_id in moves {
+        let healthy = mon(MUDKIP, &[MoveId::POUND]);
+        assert_eq!(bad_move_score(move_id, &healthy), FULL, "{move_id:?}");
+        for status in [Status1::Paralysed, Status1::Poisoned] {
+            let target = with_status(MUDKIP, status);
+            assert_eq!(bad_move_score(move_id, &target), MINUS_10, "{move_id:?}");
+        }
+    }
+}
+
+#[test]
+fn limber_discourages_paralysis_once() {
+    let ditto = mon(DITTO, &[MoveId::POUND]);
+    assert_eq!(ditto.ability(), AbilityId::LIMBER);
+    assert_eq!(bad_move_score(MoveId::THUNDER_WAVE, &ditto), MINUS_10);
+    let paralysed = with_status(DITTO, Status1::Paralysed);
+    assert_eq!(bad_move_score(MoveId::THUNDER_WAVE, &paralysed), MINUS_10);
+}
+
+#[test]
+fn confusion_scores_minus_five_distinct_from_own_tempo_minus_ten() {
+    for move_id in [MoveId::CONFUSE_RAY, MoveId::SWEET_KISS] {
+        assert_eq!(
+            bad_move_score(move_id, &mon(MUDKIP, &[MoveId::POUND])),
+            FULL
+        );
+        assert_eq!(bad_move_score(move_id, &confused(MUDKIP)), MINUS_5);
+        // Confusion is tested before the ability read, and Confuse has no
+        // type check, so a Ghost move still scores against a Normal target.
+        assert_eq!(bad_move_score(move_id, &mon(DITTO, &[MoveId::POUND])), FULL);
+    }
+}
+
+#[test]
+fn own_tempo_discourages_confusion_unless_already_confused() {
+    let spinda = mon(SPINDA, &[MoveId::POUND]);
+    assert_eq!(spinda.ability(), AbilityId::OWN_TEMPO);
+    assert_eq!(bad_move_score(MoveId::CONFUSE_RAY, &spinda), MINUS_10);
+    assert_eq!(
+        bad_move_score(MoveId::CONFUSE_RAY, &confused(SPINDA)),
+        MINUS_5
+    );
+}
+
+#[test]
+fn soundproof_ends_supersonic_before_the_confuse_handler() {
+    assert_eq!(
+        bad_move_score(MoveId::SUPERSONIC, &confused(MR_MIME)),
+        MINUS_10
+    );
+    assert_eq!(
+        bad_move_score(MoveId::CONFUSE_RAY, &confused(MR_MIME)),
+        MINUS_5
+    );
+}
+
+#[test]
+fn active_focus_energy_on_the_user_scores_minus_ten() {
+    let target = mon(MUDKIP, &[MoveId::POUND]);
+    let score = |user: &BattlePokemon| {
+        let mut rng = draws();
+        let mut scores = MoveScores::initialize(user, &mut rng);
+        score_bad_move(
+            &Dex::new(),
+            &mut scores,
+            0,
+            MoveId::FOCUS_ENERGY,
+            user,
+            &target,
+        )
+        .unwrap();
+        assert_eq!(rng.draws(), MAX_MON_MOVES);
+        scores.values[0]
+    };
+    let mut user = mon(TREECKO, &[MoveId::FOCUS_ENERGY]);
+    assert_eq!(score(&user), FULL);
+    user.volatiles_mut().set_focus_energy();
+    assert_eq!(score(&user), MINUS_10);
+    // The target's own latch does not matter.
+    let mut latched_target = mon(MUDKIP, &[MoveId::POUND]);
+    latched_target.volatiles_mut().set_focus_energy();
+    assert_eq!(bad_move_score(MoveId::FOCUS_ENERGY, &latched_target), FULL);
+}
+
+#[test]
+fn status_handlers_pick_the_action_and_draw_budget() {
+    let dex = Dex::new();
+    let flags = AiFlags::CHECK_BAD_MOVE;
+    // Thunder Wave is -10 against Sandshrew, so Pound wins; the draws are the
+    // four simulated-damage rolls plus the tie-break.
+    let enemy = mon(TREECKO, &[MoveId::THUNDER_WAVE, MoveId::POUND]);
+    let mut rng = SequenceRng::new([MAX_DAMAGE_DRAW, 0, 0, 0, 0]);
+    let sandshrew = mon(SANDSHREW, &[MoveId::POUND]);
+    let action = choose_trainer_action(&dex, &enemy, &sandshrew, flags, 0, &mut rng).unwrap();
+    assert_eq!(action, EnemyAction::Move(1));
+    assert_eq!(rng.draws(), MAX_MON_MOVES + 1);
+
+    // Equal -5 and -5 versus the untouched move: Confuse Ray loses to Pound.
+    let enemy = mon(TREECKO, &[MoveId::CONFUSE_RAY, MoveId::POUND]);
+    let mut rng = SequenceRng::new([MAX_DAMAGE_DRAW, 0, 0, 0, 0]);
+    let action =
+        choose_trainer_action(&dex, &enemy, &confused(MUDKIP), flags, 0, &mut rng).unwrap();
+    assert_eq!(action, EnemyAction::Move(1));
+    assert_eq!(rng.draws(), MAX_MON_MOVES + 1);
+}
+
+#[test]
+fn try_to_faint_still_rolls_for_a_quadruple_effective_status_move() {
+    let dex = Dex::new();
+    let flags = AiFlags::CHECK_BAD_MOVE.union(AiFlags::TRY_TO_FAINT);
+    let enemy = mon(TREECKO, &[MoveId::THUNDER_WAVE]);
+    let gyarados = mon(GYARADOS, &[MoveId::POUND]);
+    for (roll, score_delta) in [(79, 0), (80, 2)] {
+        let mut rng = SequenceRng::new([MAX_DAMAGE_DRAW, 0, 0, 0, roll, 0]);
+        let mut scores = MoveScores::initialize(&enemy, &mut rng);
+        score_bad_move(
+            &dex,
+            &mut scores,
+            0,
+            MoveId::THUNDER_WAVE,
+            &enemy,
+            &gyarados,
+        )
+        .unwrap();
+        super::score_try_to_faint(
+            &dex,
+            &mut scores,
+            0,
+            MoveId::THUNDER_WAVE,
+            &enemy,
+            &gyarados,
+            &mut rng,
+        )
+        .unwrap();
+        assert_eq!(scores.values[0], FULL + score_delta);
+        assert_eq!(rng.draws(), MAX_MON_MOVES + 1);
+        let mut chooser_rng = SequenceRng::new([MAX_DAMAGE_DRAW, 0, 0, 0, roll, 0]);
+        let action =
+            choose_trainer_action(&dex, &enemy, &gyarados, flags, 0, &mut chooser_rng).unwrap();
+        assert_eq!(action, EnemyAction::Move(0));
+        assert_eq!(chooser_rng.draws(), MAX_MON_MOVES + 2);
+    }
+}
+
+#[test]
+fn status_handler_admission_is_flag_aware_and_exact() {
+    let dex = Dex::new();
+    let cbm = AiFlags::CHECK_BAD_MOVE;
+    for move_id in [
+        MoveId::THUNDER_WAVE,
+        MoveId::STUN_SPORE,
+        MoveId::GLARE,
+        MoveId::SUPERSONIC,
+        MoveId::CONFUSE_RAY,
+        MoveId::SWEET_KISS,
+        MoveId::FOCUS_ENERGY,
+    ] {
+        assert_eq!(ensure_scoreable(&dex, move_id, cbm), Ok(()), "{move_id:?}");
+        assert_eq!(
+            ensure_scoreable(&dex, move_id, cbm.union(AiFlags::TRY_TO_FAINT)),
+            Ok(()),
+            "{move_id:?}"
+        );
+        assert_eq!(
+            ensure_scoreable(&dex, move_id, cbm.union(AiFlags::SETUP_FIRST_TURN)),
+            Err(BattleError::UnscoreableMoveEffect(move_id)),
+            "{move_id:?}"
+        );
+    }
+    // Only Focus Energy has no `AI_CheckViability` branch.
+    let viability = cbm.union(AiFlags::CHECK_VIABILITY);
+    assert_eq!(
+        ensure_scoreable(&dex, MoveId::FOCUS_ENERGY, viability),
+        Ok(())
+    );
+    for move_id in [MoveId::THUNDER_WAVE, MoveId::CONFUSE_RAY] {
+        assert_eq!(
+            ensure_scoreable(&dex, move_id, viability),
+            Err(BattleError::UnscoreableMoveEffect(move_id))
+        );
+    }
+    // Other handlers, including the Safeguard setter and the other routes into
+    // `AI_CBM_Confuse`, stay unscoreable.
+    for move_id in [
+        MoveId::SAFEGUARD,
+        MoveId::TOXIC,
+        MoveId::POISON_POWDER,
+        MoveId::SWAGGER,
+        MoveId::FLATTER,
+        MoveId::TEETER_DANCE,
+        MoveId::HYPNOSIS,
+        MoveId::WILL_O_WISP,
+        MoveId::SUBSTITUTE,
+    ] {
+        assert_eq!(
+            ensure_scoreable(&dex, move_id, cbm),
+            Err(BattleError::UnscoreableMoveEffect(move_id)),
+            "{move_id:?}"
+        );
+    }
 }

@@ -4,6 +4,8 @@
 
 mod common;
 
+#[path = "turn_engine/absorbing_abilities.rs"]
+mod absorbing_abilities;
 #[path = "turn_engine/confusion.rs"]
 mod confusion;
 #[path = "turn_engine/escape.rs"]

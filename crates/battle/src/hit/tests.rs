@@ -1401,3 +1401,129 @@ fn thick_fat_halves_raw_special_attack_before_stage_scaling_in_the_raw_damage_in
     );
     assert_eq!(rng.draws(), 1, "Thick Fat spends no extra draw");
 }
+
+/// `SPECIES_VULPIX`: Flash Fire in its primary (and only) ability slot.
+const VULPIX: SpeciesId = SpeciesId(37);
+/// `MOVE_EMBER` -- `EFFECT_BURN_HIT`, so `resolve_hit` would refuse it at
+/// admission; the damage entry accepts its move data directly.
+const EMBER: MoveId = MoveId::EMBER;
+
+#[test]
+fn flash_fire_absorbs_a_fire_move_without_drawing_and_latches_once() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, BULBASAUR, 20, vec![EMBER]);
+    let mut vulpix = mon(&dex, VULPIX, 20, vec![TACKLE]);
+    assert_eq!(vulpix.ability(), AbilityId::FLASH_FIRE);
+    let mut rng = SequenceRng::new([]);
+
+    let first = damage_core(&dex, EMBER, &attacker, &vulpix, false, &mut rng).unwrap();
+    assert_eq!(
+        first,
+        HitOutcome::FlashFireBlocked {
+            first_activation: true
+        }
+    );
+    assert!(vulpix.volatiles_mut().activate_flash_fire());
+
+    // Later activations still cancel the move but report no boost, and the
+    // latch is not a counter.
+    let second = damage_core(&dex, EMBER, &attacker, &vulpix, false, &mut rng).unwrap();
+    assert_eq!(
+        second,
+        HitOutcome::FlashFireBlocked {
+            first_activation: false
+        }
+    );
+    assert!(!vulpix.volatiles_mut().activate_flash_fire());
+    assert_eq!(rng.draws(), 0, "absorption precedes every draw");
+
+    // Unlike Volt Absorb and Water Absorb, there is no power gate and no
+    // `MOVE_RESULT_NO_EFFECT` write; non-Fire moves are unaffected.
+    let mut rng = SequenceRng::new([ORDINARY_NO_CRIT_DRAW, BEST_DAMAGE_DRAW]);
+    let tackle = damage_core(&dex, TACKLE, &attacker, &vulpix, false, &mut rng).unwrap();
+    assert!(matches!(tackle, HitOutcome::Hit { .. }));
+}
+
+#[test]
+fn a_latched_flash_fire_boosts_ember_before_the_final_plus_two() {
+    let dex = Dex::new();
+    let control = mon(&dex, VULPIX, 20, vec![EMBER]);
+    let mut latched = mon(&dex, VULPIX, 20, vec![EMBER]);
+    latched.volatiles_mut().activate_flash_fire();
+    let defender = mon(&dex, BULBASAUR, 20, vec![TACKLE]);
+    let draws = [ORDINARY_NO_CRIT_DRAW, BEST_DAMAGE_DRAW];
+
+    let unboosted = damage_before_roll(
+        &dex,
+        EMBER,
+        &control,
+        &defender,
+        false,
+        &mut SequenceRng::new(draws),
+    )
+    .unwrap()
+    .damage;
+    let boosted = damage_before_roll(
+        &dex,
+        EMBER,
+        &latched,
+        &defender,
+        false,
+        &mut SequenceRng::new(draws),
+    )
+    .unwrap()
+    .damage;
+
+    // Reproduce the pre-STAB base so the expectation fixes the order: the
+    // 15/10 multiplier truncates before the constant 2 is added.
+    let input = |boost: bool| {
+        let move_data = dex.move_data(EMBER).unwrap();
+        let category = MoveCategory::Special;
+        let (attack, attack_stage) = control.attacking_stat(category);
+        let (defense, defense_stage) = defender.defending_stat(category);
+        let input = DamageInput {
+            attacker_level: 20,
+            power: u32::from(move_data.power),
+            move_type: Type::Fire,
+            attack_stat: attack,
+            attack_stage,
+            defense_stat: defense,
+            defense_stage,
+            attacker_burned: false,
+            reflect: false,
+            light_screen: false,
+            weather: Weather::None,
+            is_solar_beam: false,
+            attacker_pinch_boost: false,
+        };
+        crate::damage::base_damage_with_flash_fire(&input, boost)
+    };
+    let plain = input(false);
+    let with_boost = input(true);
+    assert_eq!(with_boost, (plain - 2) * 15 / 10 + 2);
+    assert!(with_boost > plain);
+    assert!(boosted > unboosted, "{boosted} vs {unboosted}");
+
+    // Only Fire moves are boosted.
+    let tackle_control = damage_before_roll(
+        &dex,
+        TACKLE,
+        &control,
+        &defender,
+        false,
+        &mut SequenceRng::new(draws),
+    )
+    .unwrap()
+    .damage;
+    let tackle_latched = damage_before_roll(
+        &dex,
+        TACKLE,
+        &latched,
+        &defender,
+        false,
+        &mut SequenceRng::new(draws),
+    )
+    .unwrap()
+    .damage;
+    assert_eq!(tackle_latched, tackle_control);
+}
