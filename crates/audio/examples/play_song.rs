@@ -42,11 +42,9 @@ const DEVICE_TAIL_FALLBACK: Duration = Duration::from_millis(200);
 /// this keeps a manual smoke run from looking hung after the last note.
 const DEVICE_TAIL_MAX: Duration = Duration::from_secs(1);
 
-/// How many of the most recent submitted-frame advances size the callback
-/// cadence in [`wait_for_measured_tail`]: enough to ride out a jittery
-/// period, few enough to adapt when callbacks change their real pace. Advances
-/// observed after a polling pause are judged at that poll, but are not
-/// retained as cadence: they may aggregate many shorter callbacks.
+/// How many recent submitted-frame advances size the callback cadence in
+/// [`wait_for_measured_tail`]: enough to ride out a jittery period, few enough
+/// to adapt when callbacks change their real pace.
 const CADENCE_WINDOW: usize = 4;
 
 fn main() -> ExitCode {
@@ -527,43 +525,32 @@ fn usable_callback_in_span(from: u64, to: u64, usable_through: u64) -> bool {
 /// `platform::AudioOutput::playback_progress`) to reach `target` submitted
 /// device frames, polling `progress` at `policy.interval`.
 ///
-/// `policy.max_wait` bounds how long a stream is held open, but unlike the
-/// derived [`wait_for_device_tail`]'s fixed sleep the measured wait knows
-/// whether the target was reached: a position still short of it at the
-/// deadline is [`DrainError::MeasuredTailTimedOut`], not a finish. A stream
-/// error before the target is reached is not a finish either. A poll that
-/// first sees the target past the deadline finishes only when the latest
-/// usable callback's own stamp, less any overshoot past the target at the
-/// device rate, puts completion within the budget; the polls
-/// folded into that gap keep no earlier crossing, so otherwise it is a
-/// timeout. The signal
-/// disappearing mid-wait is not itself a failure.
+/// - Measured finish: the target sounding ends the wait. A position still
+///   short at the deadline is [`DrainError::MeasuredTailTimedOut`], and so is
+///   a first sight of the target past the deadline unless the latest usable
+///   callback's own stamp, backdated by any overshoot, completes within it.
+/// - Stream errors: any error is [`DrainError::StreamStoppedDuringTail`], and
+///   outranks every other outcome. The progress signal disappearing is not a
+///   failure.
+/// - Stale timestamps: when callbacks stop carrying usable stamps, the wait
+///   falls back to the derived tail, as [`wait_for_device_tail`] would sleep
+///   it, but only while callbacks stay live. Staleness is read from
+///   `PlaybackProgress::usable_through_frames`, never from the sounded
+///   estimate's shape: frames submitted past both the previous poll and that
+///   mark are stale evidence, and a usable callback discards it.
+/// - Live callbacks: at least `derived_tail / 4` of stale evidence, with the
+///   latest advance within one recent inter-advance gap (see
+///   [`CADENCE_WINDOW`]) plus two polls. A gap far past that cadence is a
+///   stall: evidence restarts and the tail runs from the resumed callbacks.
+/// - Tail finish: needs the tail elapsed, the playback the latest usable
+///   reading still owed run out (see [`reading_due`]), and no callback in
+///   flight (a mark past the submitted total). It must also end within
+///   `policy.max_wait`; a poll at or past the deadline takes it only on those
+///   terms and otherwise times out. Sleep overshoot can hold the stream past
+///   `max_wait` by up to one poll.
 ///
-/// Stale timestamps are read from `usable_through_frames`, never from the
-/// sounded estimate's shape: a mark inside a submitted advance `(from, to]`
-/// discards the pending evidence (a usable callback keeps the measured wait
-/// in force), and the frames past both `from` and the mark are stale evidence
-/// at once. A mark past `to` is a callback in flight: it keeps the evidence
-/// but vetoes the finish, and discards it only once its frames land. Evidence of at least
-/// `derived_tail / 4` (a span of advances, or one covering that much
-/// playback) with the latest advance within one recent inter-advance gap
-/// (over the last [`CADENCE_WINDOW`], an aggregate a polling pause folded
-/// together counting only on the poll that saw it, which may finish the wait
-/// only at the deadline) plus two polls means live callbacks,
-/// and once `derived_tail` has run from the start of the wait, or from the
-/// callbacks that resumed after a stall, and once the playback the latest
-/// usable reading inside the wait or in its first snapshot still owed the
-/// target (see [`reading_due`]) has run at the device rate, the wait finishes as [`wait_for_device_tail`] would. A gap that outruns both the
-/// recent cadence and the playback the previous advance covered by a tenth of
-/// `derived_tail` (and over a quarter of it, or half before a cadence is seen)
-/// is a stall: evidence and cadence restart from the playback the resumed
-/// callback covers, and that callback alone is no evidence.
-///
-/// The tail finish needs the restarted tail to end within `policy.max_wait`
-/// of the start; a poll at or past the deadline takes it only with live callbacks
-/// and otherwise times out.
 /// `progress`, `stream_errors`, `now`, and `sleep` are injected as in
-/// [`push_frame`].
+/// [`push_frame`]; [`MeasuredTail`] owns the per-snapshot decisions.
 #[expect(
     clippy::too_many_arguments,
     reason = "the injected clock, sleep, and stream hooks are the seam the tests drive"
@@ -696,10 +683,8 @@ impl Cadence {
     }
 }
 
-/// The state of one measured-tail wait across polls: the wait's fixed
-/// parameters, the evidence it has gathered, and the tail it is running.
-/// [`wait_for_measured_tail`] owns the injected I/O; this owns every
-/// decision made from a snapshot.
+/// One measured-tail wait across polls: every decision made from a snapshot.
+/// [`wait_for_measured_tail`] owns the injected I/O.
 struct MeasuredTail {
     target: u64,
     derived_tail: Duration,
@@ -925,13 +910,11 @@ impl MeasuredTail {
     }
 }
 
-/// `main`'s whole "hold the stream open until the last samples sound" step:
-/// prefer the measured wait when `submitted_target` is `Some` (i.e.
-/// `AudioOutput::playback_progress` returned a value when `main` checked),
-/// otherwise fall back to sleeping `derived_tail` (`main`'s
-/// [`device_tail_wait`] result) via [`wait_for_device_tail`] -- see the
-/// module docs. `progress`, `stream_errors`, `now`, and `sleep` are
-/// injected as in [`push_frame`].
+/// `main`'s "hold the stream open until the last samples sound" step.
+/// With a `submitted_target`, it runs [`wait_for_measured_tail`], whose
+/// contract covers stale timestamps, live callbacks, and the deadline. Without
+/// one it sleeps `derived_tail` via [`wait_for_device_tail`], ignoring
+/// `policy`; stream errors fail both. Hooks are injected as in [`push_frame`].
 #[expect(
     clippy::too_many_arguments,
     reason = "the injected clock, sleep, and stream hooks are the seam the tests drive"

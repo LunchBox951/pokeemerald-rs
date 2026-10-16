@@ -2,6 +2,8 @@
 
 use super::*;
 
+/// Runs the fallback against a frozen playback estimate: submissions advance
+/// each poll only when `submitted_advances`, and `errors` reports after 50 ms.
 fn stale_timestamp_wait(
     submitted_advances: bool,
     errors: u64,
@@ -38,6 +40,7 @@ fn stale_timestamp_wait(
     (result, elapsed)
 }
 
+/// Live callbacks hold the stream for the derived tail, then succeed.
 #[test]
 fn stale_timestamps_with_live_callbacks_fall_back_to_the_derived_tail() {
     let (result, elapsed) = stale_timestamp_wait(true, 0);
@@ -49,6 +52,7 @@ fn stale_timestamps_with_live_callbacks_fall_back_to_the_derived_tail() {
     );
 }
 
+/// Callbacks that never advance time out at the deadline.
 #[test]
 fn stale_timestamps_with_stalled_callbacks_still_time_out() {
     let (result, _) = stale_timestamp_wait(false, 0);
@@ -62,6 +66,7 @@ fn stale_timestamps_with_stalled_callbacks_still_time_out() {
     ));
 }
 
+/// Callbacks that stop partway through the tail time out.
 #[test]
 fn callbacks_that_stall_partway_through_the_derived_tail_still_time_out() {
     let policy = RetryPolicy {
@@ -97,9 +102,8 @@ fn callbacks_that_stall_partway_through_the_derived_tail_still_time_out() {
     ));
 }
 
-/// `policy.max_wait` is documented as bounding how long the stream is
-/// held open: a callback that advances and then stalls must not keep it
-/// open past that bound.
+/// Submissions that advance only briefly time out at `max_wait` rather than
+/// holding the stream open past it (by at most one poll).
 #[test]
 fn a_stalling_callback_does_not_hold_the_stream_past_max_wait() {
     let policy = RetryPolicy {
@@ -170,8 +174,8 @@ fn a_single_late_callback_does_not_prove_callbacks_alive() {
     ));
 }
 
-/// A poll that oversleeps past `max_wait` reports the timeout even when
-/// the callbacks look alive.
+/// A poll that oversleeps past `max_wait` times out when the tail could not
+/// have completed within it, even if callbacks look alive.
 #[test]
 fn a_delayed_poll_past_max_wait_does_not_take_the_stale_tail_exit() {
     let policy = RetryPolicy {
@@ -245,6 +249,7 @@ fn slow_healthy_callbacks_still_take_the_derived_tail_fallback() {
     assert!(result.is_ok(), "a healthy 160 ms cadence must not fail");
 }
 
+/// A tail exactly as long as `max_wait` still succeeds.
 #[test]
 fn a_derived_tail_equal_to_max_wait_still_takes_the_fallback() {
     let policy = RetryPolicy {
@@ -271,6 +276,7 @@ fn a_derived_tail_equal_to_max_wait_still_takes_the_fallback() {
     assert!(result.is_ok(), "the capped production tail must not fail");
 }
 
+/// Sleep overshoot within the allowed bound still succeeds at a capped tail.
 #[test]
 fn sleep_overshoot_at_the_capped_tail_still_takes_the_fallback() {
     let policy = RetryPolicy {
@@ -299,6 +305,7 @@ fn sleep_overshoot_at_the_capped_tail_still_takes_the_fallback() {
     assert!(result.is_ok(), "a few ms of overshoot must not fail");
 }
 
+/// Healthy 600 ms callbacks under a capped tail succeed.
 #[test]
 fn a_capped_tail_with_a_600_ms_callback_period_takes_the_fallback() {
     let policy = RetryPolicy {
@@ -329,6 +336,7 @@ fn a_capped_tail_with_a_600_ms_callback_period_takes_the_fallback() {
     assert!(result.is_ok(), "a healthy slow callback must not fail");
 }
 
+/// A stream error during the fallback fails with `StreamStoppedDuringTail`.
 #[test]
 fn a_stream_error_during_the_derived_tail_fallback_fails_the_drain() {
     let (result, _) = stale_timestamp_wait(true, 1);
