@@ -287,6 +287,50 @@ fn cleanup_retains_and_reports_an_intact_staged_file_instead_of_unlinking_it() {
     );
 }
 
+// The retention report wraps the original failure rather than flattening it
+// into text, so `raw_os_error()` (ENOSPC vs EDQUOT, say) survives.
+#[cfg(unix)]
+#[test]
+fn a_retained_staging_file_report_keeps_the_original_os_error_reachable() {
+    use super::super::RetainedStagingFile;
+    use std::error::Error as _;
+
+    const ENOSPC: i32 = 28;
+    let dir = TempDir::new("staging-cleanup-keeps-os-error");
+    let intact = dir.join("intact.tmp");
+    let mut staged = stage_at_first_free_name(
+        std::iter::once(intact.clone()),
+        create_new_exclusive,
+        &vec![0u8; FLASH_IMAGE_LEN],
+    )
+    .unwrap();
+    let original = std::io::Error::from_raw_os_error(ENOSPC);
+    let original_kind = original.kind();
+
+    let err = staged.remove_after(original);
+
+    assert!(intact.exists(), "cleanup must not unlink by name");
+    assert_eq!(err.kind(), original_kind, "{err:?}");
+    let payload = err
+        .get_ref()
+        .and_then(|inner| inner.downcast_ref::<RetainedStagingFile>())
+        .expect("the retention report must ride inside the returned error");
+    assert_eq!(payload.source.raw_os_error(), Some(ENOSPC), "{err:?}");
+    assert_eq!(payload.path, intact);
+    // `io::Error::source` on a custom error delegates to the payload's own
+    // `source`, so the original failure is one hop away.
+    let chained = err
+        .source()
+        .and_then(|inner| inner.downcast_ref::<std::io::Error>())
+        .expect("the original failure must be reachable through the source chain");
+    assert_eq!(chained.raw_os_error(), Some(ENOSPC), "{err:?}");
+    assert!(
+        err.to_string().contains("was not removed")
+            && err.to_string().contains(&intact.display().to_string()),
+        "{err}"
+    );
+}
+
 // Junctions need no symlink privilege, unlike directory symlinks.
 #[cfg(windows)]
 fn junction(link: &Path, target: &Path) {

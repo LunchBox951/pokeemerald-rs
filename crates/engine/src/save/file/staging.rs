@@ -600,24 +600,68 @@ impl StagedSave {
     }
 }
 
+/// A failure past staging that left the staged file where it was.
+///
+/// Rides inside the [`std::io::Error`] that
+/// [`StagedSave::remove_after`] returns, under the original failure's
+/// `ErrorKind`, so the original error -- its `raw_os_error()` included --
+/// stays reachable through [`std::error::Error::source`] or
+/// [`std::io::Error::get_ref`] rather than being flattened into text.
+#[cfg(not(windows))]
+#[derive(Debug)]
+pub(super) struct RetainedStagingFile {
+    /// The failure that abandoned the staged file.
+    pub(super) source: std::io::Error,
+    /// The staged file's last known path.
+    pub(super) path: PathBuf,
+    /// Why ownership of `path` could not be confirmed, when it could not.
+    pub(super) unreadable: Option<std::io::Error>,
+}
+
+#[cfg(not(windows))]
+impl std::fmt::Display for RetainedStagingFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}; the abandoned staging file was not removed",
+            self.source
+        )?;
+        if let Some(unreadable) = &self.unreadable {
+            write!(f, " (ownership could not be read: {unreadable})")?;
+        }
+        write!(f, "; last known path: {}", self.path.display())
+    }
+}
+
+#[cfg(not(windows))]
+impl std::error::Error for RetainedStagingFile {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
 #[cfg(not(windows))]
 impl StagedSave {
     /// Retains the staged file and reports its last known path. Stable `std`
     /// has no unlink bound to the checked identity, so any delete would
     /// re-resolve the name and could remove an entry that replaced it.
+    ///
+    /// The returned error keeps `source`'s `ErrorKind` and carries `source`
+    /// itself inside a [`RetainedStagingFile`].
     pub(super) fn remove_after(&mut self, source: std::io::Error) -> std::io::Error {
-        let reason = match self.still_ours() {
+        let unreadable = match self.still_ours() {
             Ok(false) => return source,
-            Ok(true) => String::new(),
-            Err(unreadable) => format!(" (ownership could not be read: {unreadable})"),
+            Ok(true) => None,
+            Err(unreadable) => Some(unreadable),
         };
         self.release_hold();
         std::io::Error::new(
             source.kind(),
-            format!(
-                "{source}; the abandoned staging file was not removed{reason}; last known path: {}",
-                self.path.display()
-            ),
+            RetainedStagingFile {
+                source,
+                path: self.path.clone(),
+                unreadable,
+            },
         )
     }
 }
