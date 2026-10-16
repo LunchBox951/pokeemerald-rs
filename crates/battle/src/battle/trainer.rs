@@ -312,28 +312,9 @@ pub struct TrainerPartyMon<'a> {
     pub level: u8,
     /// The moves the member will use in battle.
     pub moves: &'a [MoveId],
-}
-
-/// Refuses a species the admission screen rejects in every ability slot, before
-/// [`build_trainer_pokemon`] spends its OT-ID draw.
-fn ensure_species_admissible(dex: &Dex, species: SpeciesId) -> Result<(), BattleError> {
-    let abilities = dex.species(species)?.abilities;
-    let primary = abilities[0];
-    let secondary = if abilities[1] == assets::AbilityId::NONE {
-        primary
-    } else {
-        abilities[1]
-    };
-    let refused = |ability| {
-        matches!(
-            ability,
-            assets::AbilityId::TRUANT | assets::AbilityId::INTIMIDATE
-        )
-    };
-    if refused(primary) && refused(secondary) {
-        return Err(BattleError::UnportedAbilityInteraction(primary));
-    }
-    Ok(())
+    /// The fixed personality [`build_trainer_pokemon`] will receive; it selects the
+    /// ability slot the admission screen checks.
+    pub personality: u32,
 }
 
 /// Validates that a trainer party can be built and played without consuming RNG.
@@ -349,7 +330,8 @@ fn ensure_species_admissible(dex: &Dex, species: SpeciesId) -> Result<(), Battle
 /// [`BattleError::AmbiguousPlayerAbility`] when `player_lead` has two ability
 /// slots, its selected ability is not a trapping one, and the trainer scores
 /// with `CheckBadMove` (the only script that reads the target's ability), or
-/// [`BattleError::UnportedAbilityInteraction`] for a party species whose every ability is Truant or Intimidate.
+/// [`BattleError::UnportedAbilityInteraction`] when a member's personality selects Truant
+/// or Intimidate.
 pub fn ensure_trainer_party_startable(
     dex: &Dex,
     player_lead: &BattlePokemon,
@@ -362,7 +344,7 @@ pub fn ensure_trainer_party_startable(
     let data = trainer_data(trainer)?;
     for mon in party {
         BattlePokemon::validate(dex, mon.species, mon.level, mon.moves)?;
-        ensure_species_admissible(dex, mon.species)?;
+        super::admission::ensure_selected_ability_admissible(dex, mon.species, mon.personality)?;
     }
     super::trainer_ai::ensure_supported_flags(data.ai_flags)?;
     for mon in party {
@@ -535,31 +517,41 @@ mod tests {
         .expect("a valid lead")
     }
 
+    /// An even personality selects slot 0, as every NPC trainer personality does; an odd one
+    /// selects slot 1 when the species has one.
+    const SLOT_0: u32 = 0x88;
+    const SLOT_1: u32 = 0x89;
+
     #[test]
-    fn the_pre_flight_refuses_a_truant_or_intimidate_only_party_member() {
+    fn the_pre_flight_refuses_the_truant_or_intimidate_slot_construction_selects() {
         let dex = Dex::new();
         let moves = [MoveId::TACKLE];
-        for (species, ability) in [
-            (SpeciesId::SLAKOTH, assets::AbilityId::TRUANT),
-            (SpeciesId::SLAKING, assets::AbilityId::TRUANT),
-            (SpeciesId::TAUROS, assets::AbilityId::INTIMIDATE),
-            (SpeciesId::GYARADOS, assets::AbilityId::INTIMIDATE),
-            (SpeciesId::GRANBULL, assets::AbilityId::INTIMIDATE),
-            (SpeciesId::STANTLER, assets::AbilityId::INTIMIDATE),
-            (SpeciesId::HITMONTOP, assets::AbilityId::INTIMIDATE),
-            (SpeciesId::MIGHTYENA, assets::AbilityId::INTIMIDATE),
-            (SpeciesId::MASQUERAIN, assets::AbilityId::INTIMIDATE),
-            (SpeciesId::SALAMENCE, assets::AbilityId::INTIMIDATE),
+        for (species, personality, ability) in [
+            (SpeciesId::SLAKOTH, SLOT_0, assets::AbilityId::TRUANT),
+            (SpeciesId::SLAKING, SLOT_1, assets::AbilityId::TRUANT),
+            (SpeciesId::TAUROS, SLOT_1, assets::AbilityId::INTIMIDATE),
+            (SpeciesId::GYARADOS, SLOT_0, assets::AbilityId::INTIMIDATE),
+            (SpeciesId::GRANBULL, SLOT_0, assets::AbilityId::INTIMIDATE),
+            (SpeciesId::STANTLER, SLOT_0, assets::AbilityId::INTIMIDATE),
+            (SpeciesId::HITMONTOP, SLOT_0, assets::AbilityId::INTIMIDATE),
+            (SpeciesId::MIGHTYENA, SLOT_0, assets::AbilityId::INTIMIDATE),
+            (SpeciesId::MASQUERAIN, SLOT_0, assets::AbilityId::INTIMIDATE),
+            (SpeciesId::SALAMENCE, SLOT_0, assets::AbilityId::INTIMIDATE),
+            (SpeciesId::EKANS, SLOT_0, assets::AbilityId::INTIMIDATE),
+            (SpeciesId::SNUBBULL, SLOT_0, assets::AbilityId::INTIMIDATE),
+            (SpeciesId::MAWILE, SLOT_1, assets::AbilityId::INTIMIDATE),
         ] {
             let refused = TrainerPartyMon {
                 species,
                 level: 20,
                 moves: &moves,
+                personality,
             };
             let ok = TrainerPartyMon {
                 species: SpeciesId::MUDKIP,
                 level: 20,
                 moves: &moves,
+                personality: SLOT_0,
             };
             for party in [[refused, ok], [ok, refused]] {
                 assert_eq!(
@@ -571,17 +563,18 @@ mod tests {
                     ),
                     Err(crate::error::BattleError::UnportedAbilityInteraction(
                         ability
-                    ))
+                    )),
+                    "{species:?} with personality {personality:#x}",
                 );
             }
         }
     }
 
     #[test]
-    fn the_pre_flight_admits_a_mixed_pool_species_with_one_intimidate_slot() {
+    fn the_pre_flight_admits_a_mixed_pool_species_whose_selected_slot_is_supported() {
         let dex = Dex::new();
         let moves = [MoveId::TACKLE];
-        for species in [SpeciesId::EKANS, SpeciesId::MAWILE] {
+        for (species, personality) in [(SpeciesId::EKANS, SLOT_1), (SpeciesId::MAWILE, SLOT_0)] {
             assert!(ensure_trainer_party_startable(
                 &dex,
                 &lead(SpeciesId::MUDKIP),
@@ -590,9 +583,32 @@ mod tests {
                     species,
                     level: 20,
                     moves: &moves,
+                    personality,
                 }],
             )
             .is_ok());
+        }
+    }
+
+    #[test]
+    fn an_admitted_party_member_builds_with_the_ability_the_pre_flight_screened() {
+        let dex = Dex::new();
+        for (species, personality, ability) in [
+            (SpeciesId::EKANS, SLOT_1, assets::AbilityId::SHED_SKIN),
+            (SpeciesId::MAWILE, SLOT_0, assets::AbilityId::HYPER_CUTTER),
+        ] {
+            let mut rng = SequenceRng::new(random32_draws(NON_SHINY_OT_ID));
+            let built = build_trainer_pokemon(
+                &dex,
+                species,
+                20,
+                fixed_ivs(0),
+                personality,
+                vec![MoveId::TACKLE],
+                &mut rng,
+            )
+            .unwrap();
+            assert_eq!(built.ability(), ability);
         }
     }
 
@@ -609,6 +625,7 @@ mod tests {
                     species: TREECKO,
                     level: ROUTE_103_RIVAL_LEVEL,
                     moves: &moves,
+                    personality: 0,
                 }],
             ),
             Ok(())
@@ -627,6 +644,7 @@ mod tests {
                 species: TREECKO,
                 level: ROUTE_103_RIVAL_LEVEL,
                 moves: &moves,
+                personality: 0,
             }],
         )
         .expect_err("Harden is not executable by this turn engine");
@@ -686,6 +704,7 @@ mod tests {
                     species: TREECKO,
                     level: ROUTE_103_RIVAL_LEVEL,
                     moves: &moves,
+                    personality: 0,
                 }],
             ),
             Err(crate::error::BattleError::UnknownTrainer(UNKNOWN_TRAINER))
@@ -700,6 +719,7 @@ mod tests {
             species: TREECKO,
             level: ROUTE_103_RIVAL_LEVEL,
             moves: &moves,
+            personality: 0,
         }];
         assert_eq!(
             trainer_data(TrainerId::JANI).unwrap().ai_flags,
@@ -729,6 +749,7 @@ mod tests {
             species: TREECKO,
             level: ROUTE_103_RIVAL_LEVEL,
             moves: &moves,
+            personality: 0,
         }];
         for slot in [0, 1] {
             let voltorb = lead(VOLTORB).with_ability_slot(slot);
