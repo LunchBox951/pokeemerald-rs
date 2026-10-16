@@ -2,7 +2,8 @@
 //! next grass step rolling again.
 
 use super::test_support::{
-    held, player_mon, route_101_phase_with_grass, walk_east_and_land, ENCOUNTER_SEED, ROUTE_101,
+    held, player_mon, route_101_phase_with_grass, route_101_phase_with_grass_from_source,
+    walk_east_and_land, ENCOUNTER_SEED, ROUTE_101,
 };
 use assets::MoveId;
 use battle::Dex;
@@ -212,7 +213,8 @@ fn after_a_white_out_a_later_grass_step_rolls_again() {
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_a_lost_wild_battle_warps_home_to_the_default_heal_location() {
-    let mut phase = route_101_phase_with_grass(
+    let mut phase = route_101_phase_with_grass_from_source(
+        crate::pack_source::PackSource::Repo,
         20,
         10,
         PlayerState::new((2, 5), 3, Direction::East),
