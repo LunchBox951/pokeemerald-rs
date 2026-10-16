@@ -456,6 +456,35 @@ fn malformed_source_is_rejected() {
 }
 
 #[test]
+fn integer_literals_follow_c_and_gas_radix_prefixes() {
+    let constants = Constants::default();
+    for (text, expected) in [
+        ("10", 10),
+        ("0", 0),
+        ("010", 8),
+        ("0x10", 16),
+        ("0X1f", 31),
+        ("017u", 15),
+    ] {
+        for style in [expr::Style::C, expr::Style::Gas] {
+            assert_eq!(
+                constants.eval(text, style),
+                Ok(expected),
+                "{text} as {style:?}"
+            );
+        }
+    }
+    for text in ["09", "08L"] {
+        for style in [expr::Style::C, expr::Style::Gas] {
+            assert!(
+                constants.eval(text, style).is_err(),
+                "{text} as {style:?} is not an octal literal"
+            );
+        }
+    }
+}
+
+#[test]
 fn deeply_nested_expressions_are_rejected_not_overflowed() {
     let nested = format!("Probe:\n\tdelay {}1\n\tend\n", "-".repeat(20_000));
     assert!(rejection(&script("Probe", &nested)).contains("too deeply"));

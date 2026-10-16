@@ -334,14 +334,20 @@ fn tokenize(text: &str) -> Result<Vec<Token>, String> {
     Ok(tokens)
 }
 
+/// Reads one integer literal the way both the C preprocessor and GNU `as` do:
+/// `0x` prefixes hexadecimal, a leading `0` prefixes octal, anything else is
+/// decimal. `09` is therefore rejected rather than read as nine.
 fn parse_number(word: &str) -> Result<i64, String> {
     let digits = word.trim_end_matches(['u', 'U', 'l', 'L']);
-    let parsed = match digits
+    let parsed = if let Some(hex) = digits
         .strip_prefix("0x")
         .or_else(|| digits.strip_prefix("0X"))
     {
-        Some(hex) => i64::from_str_radix(hex, 16),
-        None => digits.parse(),
+        i64::from_str_radix(hex, 16)
+    } else if let Some(octal) = digits.strip_prefix('0').filter(|rest| !rest.is_empty()) {
+        i64::from_str_radix(octal, 8)
+    } else {
+        digits.parse()
     };
     parsed.map_err(|_| format!("`{word}` is not an integer"))
 }
