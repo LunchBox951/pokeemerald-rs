@@ -68,8 +68,10 @@
 //! listed in that file; elsewhere it is counted, not compared. A domain
 //! adds its prefix when it lands. Agreement alone is not trusted for the
 //! title voicegroup: before comparing, the gate checks each pack on its own
-//! that `MUS_TITLE`'s key 33 plays the trumpet sample, so two packs that
-//! drop the same note still fail. The reviewed-difference list is empty.
+//! that the title voicegroup's program 48 routes key 33 to the trumpet
+//! sample, so two packs that share the same wrong mapping still fail. It
+//! does not read the `MUS_TITLE` song events. The reviewed-difference list
+//! is empty.
 //!
 //! `pokeemerald-rs --import-rom` (that crate's `cli` and `import_rom`
 //! modules) drives [`import`] and surfaces this crate's errors as they
