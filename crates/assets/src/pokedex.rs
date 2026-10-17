@@ -1,17 +1,15 @@
-//! Backend-neutral Pokédex record payload (S-4, issue #2016): the per-species
-//! entries of upstream `gPokedexEntries` (`src/data/pokemon/pokedex_entries.h`)
-//! and the three list orders of `src/data/pokemon/pokedex_orders.h`, in the one
-//! raw pack entry both extraction backends fill.
+//! Backend-neutral Pokédex payload: the per-species entries of upstream
+//! `gPokedexEntries` (`src/data/pokemon/pokedex_entries.h`) and the three list
+//! orders of `src/data/pokemon/pokedex_orders.h`, held in one raw pack entry.
 //!
 //! [`PokedexData::encode`] and [`PokedexData::decode`] are inverses over the
-//! wire format owned by [`codec`]; construction and decoding enforce the same
-//! rules, so a value that exists always encodes.
+//! wire format documented in the private `codec` module; construction and
+//! decoding enforce the same rules, so a value that exists always encodes.
 //!
-//! The orders are independent lists: upstream's alphabetical order carries 411
-//! members (the 386 species plus the 25 `NATIONAL_DEX_OLD_UNOWN_*`
-//! identities) while weight and height carry 386 each. The schema therefore
-//! imposes no equal-length rule and no rule that every order member has an
-//! entry; it only forbids a repeated or empty member within one order.
+//! Upstream's alphabetical order carries 411 members (386 species plus the 25
+//! `NATIONAL_DEX_OLD_UNOWN_*` identities) while weight and height carry 386, so
+//! the orders are independent: no equal-length rule, no rule that a member has
+//! an entry. Only a repeated or empty member within one order is forbidden.
 
 mod codec;
 mod error;
@@ -40,7 +38,7 @@ impl NationalDexNo {
     /// `NATIONAL_DEX_NONE`, the placeholder entry's identity.
     pub const NONE: Self = Self(0);
 
-    /// Wraps `number`.
+    /// The identity for `number`.
     ///
     /// # Errors
     ///
