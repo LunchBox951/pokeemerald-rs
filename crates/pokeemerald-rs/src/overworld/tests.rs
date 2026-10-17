@@ -1005,7 +1005,8 @@ fn real_pack_composes_non_blank_deterministic_overworld_frames() {
     // `fresh_save_event_data` below: a fixture that claims to *be*
     // production state has to come from production state.
     let event_data = fresh_save_event_data();
-    let scene = super::load_default_room(&event_data).expect("run `cargo xtask extract` first");
+    let scene =
+        super::load_repo_default_room(&event_data).expect("run `cargo xtask extract` first");
 
     // A couple of on-foot player states across the bedroom's 9x8 interior
     // (`LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F`), including one mid-step,
@@ -1083,8 +1084,13 @@ fn fresh_save_event_data() -> engine::event_data::EventData {
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_hiding_mom_changes_the_composed_1f_frame() {
     let mut data = fresh_save_event_data();
-    let scene = super::load_room(ONE_F, super::PlayerCharacter::Brendan, &data)
-        .expect("run `cargo xtask extract` first");
+    let scene = super::load_room_from_source(
+        &crate::pack_source::PackSource::Repo,
+        ONE_F,
+        super::PlayerCharacter::Brendan,
+        &data,
+    )
+    .expect("run `cargo xtask extract` first");
     let player = PlayerState::new((2, 7), 3, Direction::North);
 
     let mom = assets::MapEventsTable::new()
@@ -1129,8 +1135,13 @@ fn real_pack_hiding_mom_changes_the_composed_1f_frame() {
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_1f_oam_entries_cover_every_drawn_fresh_save_npc() {
     let data = fresh_save_event_data();
-    let scene = super::load_room(ONE_F, super::PlayerCharacter::Brendan, &data)
-        .expect("run `cargo xtask extract` first");
+    let scene = super::load_room_from_source(
+        &crate::pack_source::PackSource::Repo,
+        ONE_F,
+        super::PlayerCharacter::Brendan,
+        &data,
+    )
+    .expect("run `cargo xtask extract` first");
     let player = PlayerState::new((2, 7), 3, Direction::North);
 
     let entries = scene.sprites.entries(&player, &data);
@@ -1319,8 +1330,13 @@ fn real_pack_route_103_rival_binds_to_the_opposite_protagonists_sheet() {
         .var_set(VAR_OBJ_GFX_ID_0, RIVAL_MAY_NORMAL_GFX_ID)
         .unwrap();
 
-    let scene = super::load_room(ROUTE_103, super::PlayerCharacter::Brendan, &event_data)
-        .expect("run `cargo xtask extract` first");
+    let scene = super::load_room_from_source(
+        &crate::pack_source::PackSource::Repo,
+        ROUTE_103,
+        super::PlayerCharacter::Brendan,
+        &event_data,
+    )
+    .expect("run `cargo xtask extract` first");
     let events = assets::MapEventsTable::new().resolve(ROUTE_103).unwrap();
     let rival = events
         .object_events
@@ -1494,8 +1510,13 @@ fn assert_background_npc_draws_an_oam_entry(
 fn real_pack_oldale_town_binds_its_background_npcs() {
     const OLDALE_TOWN: assets::MapId = assets::MapId("MAP_OLDALE_TOWN");
     let data = fresh_save_event_data();
-    let scene = super::load_room(OLDALE_TOWN, super::PlayerCharacter::Brendan, &data)
-        .expect("run `cargo xtask extract` first");
+    let scene = super::load_room_from_source(
+        &crate::pack_source::PackSource::Repo,
+        OLDALE_TOWN,
+        super::PlayerCharacter::Brendan,
+        &data,
+    )
+    .expect("run `cargo xtask extract` first");
     let bindings = scene.sprites.bindings();
 
     for (graphics_id, palette_bank) in [
@@ -1518,8 +1539,13 @@ fn real_pack_oldale_town_binds_its_background_npcs() {
 fn real_pack_route_103_binds_its_background_npcs() {
     const ROUTE_103: assets::MapId = assets::MapId("MAP_ROUTE103");
     let data = fresh_save_event_data();
-    let scene = super::load_room(ROUTE_103, super::PlayerCharacter::Brendan, &data)
-        .expect("run `cargo xtask extract` first");
+    let scene = super::load_room_from_source(
+        &crate::pack_source::PackSource::Repo,
+        ROUTE_103,
+        super::PlayerCharacter::Brendan,
+        &data,
+    )
+    .expect("run `cargo xtask extract` first");
     let bindings = scene.sprites.bindings();
 
     for (graphics_id, palette_bank) in [
@@ -1554,12 +1580,16 @@ fn female_route_103_room_load_uses_may_for_player_and_brendan_for_rival() {
         .var_set(VAR_OBJ_GFX_ID_0, RIVAL_BRENDAN_NORMAL_GFX_ID)
         .unwrap();
 
-    let scene = super::load_room(ROUTE_103, super::PlayerCharacter::May, &event_data)
-        .expect("run `cargo xtask extract` first");
-    // Stays on `load_default` (issue #412): the reference sheets below must
-    // come from the same pack `load_room` itself just read, and `load_room`
-    // has no pack seam to pin yet.
-    let pack = assets::pack::AssetPack::load_default().unwrap();
+    let scene = super::load_room_from_source(
+        &crate::pack_source::PackSource::Repo,
+        ROUTE_103,
+        super::PlayerCharacter::May,
+        &event_data,
+    )
+    .expect("run `cargo xtask extract` first");
+    // The reference sheets below must come from the same pack the scene
+    // just read.
+    let pack = assets::pack::AssetPack::load_repo().unwrap();
 
     let may_pixels = pack.sprite("may/walking").unwrap();
     let may_bytes = super::avatar::pack_people_sheet_frames("may/walking", may_pixels).unwrap();
@@ -1630,8 +1660,13 @@ fn female_route_103_room_load_uses_may_for_player_and_brendan_for_rival() {
 fn real_pack_the_bed_side_edge_draws_the_player_obj_at_the_raised_priority() {
     const BEDROOM: assets::MapId = assets::MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F");
     let data = fresh_save_event_data();
-    let scene = super::load_room(BEDROOM, super::PlayerCharacter::Brendan, &data)
-        .expect("run `cargo xtask extract` first");
+    let scene = super::load_room_from_source(
+        &crate::pack_source::PackSource::Repo,
+        BEDROOM,
+        super::PlayerCharacter::Brendan,
+        &data,
+    )
+    .expect("run `cargo xtask extract` first");
 
     // (0, 7): ordinary floor south of the bed, elevation 3.
     let on_the_floor = PlayerState::new((0, 7), 3, Direction::North);
@@ -1846,7 +1881,8 @@ fn animated_tile_screen_rects(
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_tick_changes_only_the_animated_tile_screen_regions() {
     let event_data = engine::event_data::EventData::new();
-    let scene = super::load_room(
+    let scene = super::load_room_from_source(
+        &crate::pack_source::PackSource::Repo,
         assets::MapId("MAP_LITTLEROOT_TOWN"),
         super::PlayerCharacter::Brendan,
         &event_data,
@@ -1919,7 +1955,8 @@ fn real_pack_tileset_animation_repeats_after_a_full_cadence_period() {
     const FULL_CADENCE_PERIOD: u32 = 128;
 
     let event_data = engine::event_data::EventData::new();
-    let scene = super::load_room(
+    let scene = super::load_room_from_source(
+        &crate::pack_source::PackSource::Repo,
         assets::MapId("MAP_LITTLEROOT_TOWN"),
         super::PlayerCharacter::Brendan,
         &event_data,
@@ -1969,7 +2006,8 @@ fn real_pack_littleroot_and_route_101_render_continuously_across_their_shared_ed
     const LITTLEROOT: assets::MapId = assets::MapId("MAP_LITTLEROOT_TOWN");
     const ROUTE_101: assets::MapId = assets::MapId("MAP_ROUTE101");
 
-    let scene = super::load_room(
+    let scene = super::load_room_from_source(
+        &crate::pack_source::PackSource::Repo,
         LITTLEROOT,
         super::PlayerCharacter::Brendan,
         &engine::event_data::EventData::new(),
@@ -1980,14 +2018,16 @@ fn real_pack_littleroot_and_route_101_render_continuously_across_their_shared_ed
     // border block used to render -- `overworld::tests` is a descendant
     // module of `overworld`, so it can reach this private field directly
     // (the same access `animated_tile_screen_rects` above already uses).
-    let mut scene_border_only = super::load_room(
+    let mut scene_border_only = super::load_room_from_source(
+        &crate::pack_source::PackSource::Repo,
         LITTLEROOT,
         super::PlayerCharacter::Brendan,
         &engine::event_data::EventData::new(),
     )
     .expect("run `cargo xtask extract` first");
     scene_border_only.connections.clear();
-    let route_101 = super::load_room(
+    let route_101 = super::load_room_from_source(
+        &crate::pack_source::PackSource::Repo,
         ROUTE_101,
         super::PlayerCharacter::Brendan,
         &engine::event_data::EventData::new(),
@@ -2068,20 +2108,23 @@ fn real_pack_route_101_and_oldale_town_render_continuously_across_their_shared_e
     const ROUTE_101: assets::MapId = assets::MapId("MAP_ROUTE101");
     const OLDALE: assets::MapId = assets::MapId("MAP_OLDALE_TOWN");
 
-    let scene = super::load_room(
+    let scene = super::load_room_from_source(
+        &crate::pack_source::PackSource::Repo,
         ROUTE_101,
         super::PlayerCharacter::Brendan,
         &engine::event_data::EventData::new(),
     )
     .expect("run `cargo xtask extract` first");
-    let mut scene_border_only = super::load_room(
+    let mut scene_border_only = super::load_room_from_source(
+        &crate::pack_source::PackSource::Repo,
         ROUTE_101,
         super::PlayerCharacter::Brendan,
         &engine::event_data::EventData::new(),
     )
     .expect("run `cargo xtask extract` first");
     scene_border_only.connections.clear();
-    let oldale = super::load_room(
+    let oldale = super::load_room_from_source(
+        &crate::pack_source::PackSource::Repo,
         OLDALE,
         super::PlayerCharacter::Brendan,
         &engine::event_data::EventData::new(),

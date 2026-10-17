@@ -1,15 +1,13 @@
 //! Typed battle-message token table (upstream `src/battle_message.c`).
 //!
-//! The payload carries raw GBA charmap token streams, each ending in its `EOS`
-//! (`0xFF`), exactly as upstream's `_()` strings assemble: the 369-slot
-//! `gBattleStringsTable` keyed by battle-string ID, plus the fixed inventory of
-//! special templates `BufferStringBattle` selects from. Request selection and
-//! placeholder expansion are out of scope; this module only validates and hands
-//! back bytes.
+//! The payload holds raw charmap token streams, each ending in `EOS` (`0xFF`),
+//! as upstream's `_()` strings assemble: the 369-slot `gBattleStringsTable` plus
+//! the special templates `BufferStringBattle` selects from. The module validates
+//! and returns bytes; it neither selects a template nor expands placeholders.
 //!
-//! The pack id stays private so callers compose no strings. A hand-built or
-//! corrupt pack can bypass extraction, so every lookup re-validates the whole
-//! table and nothing falls back to [`AssetPack::raw`].
+//! The pack id is private so callers cannot request other assets through this
+//! type. A hand-built or corrupt pack bypasses extraction, so
+//! [`AssetPack::battle_messages`] validates the whole payload on each call.
 //!
 //! # Canonical encoding
 //!
@@ -32,11 +30,11 @@ const HEADER_BYTES: usize = 14;
 /// First battle-string ID in `gBattleStringsTable`
 /// (`BATTLESTRINGS_TABLE_START`, `include/constants/battle_string_ids.h:387`).
 pub const TABLE_START: u16 = 12;
-/// One past the last battle-string ID (`BATTLESTRINGS_COUNT`, `:382`).
+/// Exclusive end of the table (`BATTLESTRINGS_COUNT`, same file, `:382`).
 pub const TABLE_END: u16 = 381;
-/// Number of table slots.
+/// Slots in `gBattleStringsTable`.
 pub const SLOT_COUNT: usize = (TABLE_END - TABLE_START) as usize;
-/// Number of special-template payloads.
+/// Payloads in [`SPECIAL_TEMPLATES`].
 pub const SPECIAL_COUNT: usize = SPECIAL_TEMPLATES.len();
 
 const EOS: u8 = 0xFF;
@@ -74,8 +72,8 @@ const fn entry(message: SpecialBattleMessage, symbol: &'static str) -> SpecialTe
 
 use SpecialBattleMessage::{BattleEnd, IntroMsg, IntroSendOut, ReturnMon, SwitchInMon, UsedMove};
 
-/// Every special payload in stable ID order: the 49 direct templates, then the
-/// 25 payloads `STRINGID_USEDMOVE` reaches through `sATypeMove_Table`,
+/// Special payloads in ID order: 49 direct templates, then the 25 that
+/// `STRINGID_USEDMOVE` reaches through `sATypeMove_Table`,
 /// `ChooseTypeOfMoveUsedString`, and `ChooseMoveUsedParticle`.
 pub const SPECIAL_TEMPLATES: [SpecialTemplate; 74] = [
     entry(IntroMsg, "sText_TwoTrainersWantToBattle"),
@@ -154,7 +152,7 @@ pub const SPECIAL_TEMPLATES: [SpecialTemplate; 74] = [
     entry(UsedMove, "sATypeMove_Table[TYPE_DARK]"),
 ];
 
-/// Which half of the table a record or lookup belongs to.
+/// The part of the table a record or lookup belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BattleMessageSection {
     /// `gBattleStringsTable`, keyed by battle-string ID.
@@ -271,7 +269,7 @@ impl<'a> BattleMessageTable<'a> {
     /// Build a table from records in any order.
     ///
     /// Table items are `(battle-string ID, stream)`; special items are
-    /// `(index into SPECIAL_TEMPLATES, stream)`.
+    /// `(index into `[`SPECIAL_TEMPLATES`]`, stream)`.
     ///
     /// # Errors
     ///
@@ -356,7 +354,7 @@ impl<'a> BattleMessageTable<'a> {
     ///
     /// # Errors
     ///
-    /// [`BattleMessageError::IdOutOfRange`] outside `12..381`.
+    /// [`BattleMessageError::IdOutOfRange`] outside [`TABLE_START`]..[`TABLE_END`].
     pub fn string(&self, id: u16) -> Result<&'a [u8], BattleMessageError> {
         id.checked_sub(TABLE_START)
             .and_then(|offset| self.slots.get(usize::from(offset)))
@@ -468,9 +466,9 @@ const fn ext_ctrl_args(sub: u8) -> Option<usize> {
     }
 }
 
-/// Walk token boundaries: an `0xFF` inside a control argument is not `EOS`.
+/// Walks token boundaries so an `0xFF` control argument is not mistaken for `EOS`.
 fn validate_string(stream: &[u8]) -> Result<(), &'static str> {
-    // The wire format stores each length as a u32.
+    // `encode` writes each length as a u32, so a longer stream could not round-trip.
     if u32::try_from(stream.len()).is_err() {
         return Err("stream is longer than the wire format can store");
     }

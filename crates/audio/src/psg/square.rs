@@ -663,6 +663,32 @@ mod tests {
         assert_eq!(replacement.phase, retuned.phase);
     }
 
+    #[test]
+    fn a_replacement_matches_an_independent_low_byte_oracle() {
+        const OLD_FREQUENCY: u16 = 0x600;
+        const NEW_FREQUENCY: u16 = 0x1FF;
+
+        let mut outgoing = SquareChannel::new(HALF_DUTY_REGISTER, OLD_FREQUENCY, None);
+        while outgoing.phase / PHASE_ONE == 0 {
+            outgoing.sample();
+        }
+        for _ in 0..12 {
+            outgoing.sample();
+        }
+        let mut replacement = SquareChannel::new(HALF_DUTY_REGISTER, NEW_FREQUENCY, None);
+        replacement.continue_duty_from(&outgoing);
+
+        let mut direct = outgoing.clone();
+        direct.play_frequency(NEW_FREQUENCY);
+        let mut two_step = outgoing;
+        two_step.play_frequency(
+            OLD_FREQUENCY & FREQUENCY_HIGH_BITS | (NEW_FREQUENCY & FREQUENCY_LOW_BYTE),
+        );
+        two_step.play_frequency(NEW_FREQUENCY);
+        assert_eq!(replacement.phase, two_step.phase);
+        assert_ne!(replacement.phase / PHASE_ONE, direct.phase / PHASE_ONE);
+    }
+
     /// The off-write rates the channel as if only its low frequency byte
     /// survived, without itself moving the duty index
     /// (`SquareChannel::apply_hardware_off_write`'s doc).
