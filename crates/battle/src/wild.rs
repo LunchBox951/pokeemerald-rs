@@ -39,8 +39,8 @@ pub fn initial_moveset(species: SpeciesId, level: u8) -> Vec<MoveId> {
 /// # Errors
 ///
 /// Returns the first Pokémon validation, ability-admission, or move-execution error. The
-/// rolled personality can select either ability slot, so a species with any Truant or
-/// Intimidate slot is refused.
+/// rolled personality can select either ability slot, so a species with any
+/// always-refused ability slot is refused.
 pub fn ensure_wild_startable(dex: &Dex, species: SpeciesId, level: u8) -> Result<(), BattleError> {
     let moves = initial_moveset(species, level);
     BattlePokemon::validate(dex, species, level, &moves)?;
