@@ -33,48 +33,90 @@ fn rms(xs: &[f32]) -> f64 {
     mean.sqrt()
 }
 
-fn rms_error(reference: &[f32], candidate: &[f32], offset: usize) -> f64 {
+/// RMS over interleaved stereo, comparing `frames` audio frames of `candidate`
+/// against `reference` starting `offset_frames` frames in.
+fn rms_error(reference: &[f32], candidate: &[f32], offset_frames: usize, frames: usize) -> f64 {
+    let (start, len) = (offset_frames * 2, frames * 2);
     assert!(
-        reference.len() >= offset + COMPARE_WINDOW && candidate.len() >= COMPARE_WINDOW,
-        "rms_error called without a full {COMPARE_WINDOW}-sample window at offset {offset}"
+        reference.len() >= start + len && candidate.len() >= len,
+        "rms_error called without a full {frames}-frame stereo window at frame offset \
+         {offset_frames}"
     );
-    let sum_sq: f64 = (0..COMPARE_WINDOW)
-        .map(|i| {
-            let diff = f64::from(reference[offset + i]) - f64::from(candidate[i]);
+    let sum_sq: f64 = reference[start..start + len]
+        .iter()
+        .zip(&candidate[..len])
+        .map(|(&r, &c)| {
+            let diff = f64::from(r) - f64::from(c);
             diff * diff
         })
         .sum();
     #[expect(
         clippy::cast_precision_loss,
-        reason = "the fixed comparison window is exactly representable in f64"
+        reason = "the comparison windows are exactly representable in f64"
     )]
-    let mean = sum_sq / COMPARE_WINDOW as f64;
+    let mean = sum_sq / len as f64;
     mean.sqrt()
 }
 
-fn best_alignment(reference: &[f32], candidate: &[f32]) -> usize {
+/// Frame offset of the lowest-error window. Offsets move whole stereo frames,
+/// so the left and right channels can never be aligned independently.
+fn best_alignment(
+    reference: &[f32],
+    candidate: &[f32],
+    search_frames: usize,
+    compare_frames: usize,
+) -> usize {
     assert!(
-        reference.len() >= ALIGNMENT_SEARCH_WINDOW + COMPARE_WINDOW,
-        "reference capture is too short: {} samples per channel, but aligning over \
-         {ALIGNMENT_SEARCH_WINDOW} and comparing {COMPARE_WINDOW} needs at least {}. Capture \
-         more audio (see this test's doc comment) rather than comparing a shrinking window.",
-        reference.len(),
-        ALIGNMENT_SEARCH_WINDOW + COMPARE_WINDOW
+        reference.len() >= 2 * (search_frames + compare_frames),
+        "reference capture is too short: {} stereo frames, but aligning over {search_frames} \
+         and comparing {compare_frames} needs at least {}. Capture more audio (see this test's \
+         doc comment) rather than comparing a shrinking window.",
+        reference.len() / 2,
+        search_frames + compare_frames
     );
     assert!(
-        candidate.len() >= COMPARE_WINDOW,
-        "native render is too short: {} samples per channel, need {COMPARE_WINDOW}",
-        candidate.len()
+        candidate.len() >= 2 * compare_frames,
+        "native render is too short: {} stereo frames, need {compare_frames}",
+        candidate.len() / 2
     );
-    (0..ALIGNMENT_SEARCH_WINDOW)
-        .map(|offset| (offset, rms_error(reference, candidate, offset)))
+    (0..search_frames)
+        .map(|offset| {
+            (
+                offset,
+                rms_error(reference, candidate, offset, compare_frames),
+            )
+        })
         .min_by(|(_, a), (_, b)| a.partial_cmp(b).expect("RMS error is always finite"))
         .map(|(offset, _)| offset)
-        .expect("ALIGNMENT_SEARCH_WINDOW is nonzero")
+        .expect("the alignment search window is nonzero")
 }
 
-fn left_channel(interleaved_stereo: &[f32]) -> Vec<f32> {
-    interleaved_stereo.iter().copied().step_by(2).collect()
+/// Aligns both interleaved-stereo buffers on whole frames, then rejects a
+/// silent reference or an error above the tolerance over both channels.
+fn check_against_reference(
+    reference: &[f32],
+    native: &[f32],
+    search_frames: usize,
+    compare_frames: usize,
+) -> Result<(), String> {
+    let offset = best_alignment(reference, native, search_frames, compare_frames);
+    let error = rms_error(reference, native, offset, compare_frames);
+    let reference_rms = rms(&reference[2 * offset..2 * (offset + compare_frames)]);
+    if reference_rms <= MIN_REFERENCE_RMS {
+        return Err(format!(
+            "the reference capture's aligned window is silent (RMS {reference_rms:.3e} at \
+             offset {offset}): it captured no audio, so there is nothing to compare against"
+        ));
+    }
+    let tolerance = MAX_RMS_ERROR_FRACTION * reference_rms;
+    if error >= tolerance {
+        return Err(format!(
+            "native render diverges from the mGBA reference: RMS error {error:.4} at aligned \
+             offset {offset} exceeds {MAX_RMS_ERROR_FRACTION} of the reference's own RMS \
+             {reference_rms:.4} (tolerance {tolerance:.4})"
+        ));
+    }
+    Ok(())
 }
 
 /// Capture the title music with the configured mGBA build, then convert it
@@ -84,7 +126,7 @@ fn left_channel(interleaved_stereo: &[f32]) -> Vec<f32> {
 /// `cargo test -p pokeemerald-rs mgba_reference -- --ignored --nocapture`.
 ///
 /// The comparison searches the first two seconds of the reference for the
-/// five-second left-channel window with the lowest RMS error. It rejects
+/// five-second stereo window with the lowest RMS error across both channels. It rejects
 /// silent references and treats error above 25% of the reference RMS as
 /// gross behavioural divergence, not sample-exact inequality.
 #[test]
@@ -107,24 +149,42 @@ fn native_render_matches_local_mgba_reference_within_tolerance() {
         (ALIGNMENT_SEARCH_WINDOW + COMPARE_WINDOW).div_ceil(audio::SAMPLES_PER_FRAME);
     let mut native = vec![0.0_f32; native_frames * Sequencer::FRAME_SAMPLES];
     seq.mix_into(&mut native);
-    let native_left = left_channel(&native);
-
     let reference = read_pcm_f32(&path);
-    let reference_left = left_channel(&reference);
+    if let Err(message) =
+        check_against_reference(&reference, &native, ALIGNMENT_SEARCH_WINDOW, COMPARE_WINDOW)
+    {
+        panic!("{message}");
+    }
+}
 
-    let offset = best_alignment(&reference_left, &native_left);
-    let error = rms_error(&reference_left, &native_left, offset);
-    let reference_rms = rms(&reference_left[offset..offset + COMPARE_WINDOW]);
-    assert!(
-        reference_rms > MIN_REFERENCE_RMS,
-        "the reference capture's aligned window is silent (RMS {reference_rms:.3e} at offset \
-         {offset}): it captured no audio, so there is nothing to compare against"
-    );
-    let tolerance = MAX_RMS_ERROR_FRACTION * reference_rms;
-    assert!(
-        error < tolerance,
-        "native render diverges from the mGBA reference: RMS error {error:.4} at aligned \
-         offset {offset} exceeds {MAX_RMS_ERROR_FRACTION} of the reference's own RMS \
-         {reference_rms:.4} (tolerance {tolerance:.4})"
-    );
+#[test]
+fn oracle_rejects_right_channel_divergence() {
+    let reference: Vec<f32> = [0.5, 0.5].repeat(8);
+    let native: Vec<f32> = [0.5, -0.5].repeat(8);
+    let message = check_against_reference(&reference, &native, 2, 4)
+        .expect_err("a diverging right channel must fail the oracle");
+    assert!(message.contains("diverges"), "{message}");
+}
+
+#[test]
+fn oracle_accepts_matching_stereo() {
+    let reference: Vec<f32> = [0.5, -0.25].repeat(8);
+    check_against_reference(&reference, &reference, 2, 4).expect("identical stereo must pass");
+}
+
+#[test]
+fn oracle_aligns_on_the_right_channel() {
+    // Left is constant, so only the right channel identifies the offset.
+    let reference: Vec<f32> = [0.0, 0.0, 0.5, 0.1, 0.5, 0.2, 0.5, 0.3, 0.5, 0.4, 0.5, 0.5].to_vec();
+    let native = &reference[4..];
+    assert_eq!(best_alignment(&reference, native, 3, 3), 2);
+}
+
+#[test]
+fn oracle_accepts_right_only_reference_and_rejects_silence() {
+    let right_only: Vec<f32> = [0.0, 0.5].repeat(8);
+    check_against_reference(&right_only, &right_only, 2, 4).expect("right-only audio is audible");
+    let silent = vec![0.0_f32; 16];
+    let message = check_against_reference(&silent, &silent, 2, 4).expect_err("silence rejected");
+    assert!(message.contains("silent"), "{message}");
 }
