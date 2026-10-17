@@ -100,6 +100,21 @@ fn symbol_fragments(id: &str) -> Vec<String> {
     if id.starts_with("sprite/") {
         return vec!["gObjectEventPic_".to_owned()];
     }
+    if let Some(species) = id.strip_prefix("pokemon/") {
+        if let Some((name, direction)) = species.split_once('/') {
+            // `front.png` is upstream's still front (`gMonStillFrontPic_*`);
+            // `gMonFrontPic_*` is the animation sheet.
+            let table = if direction == "back" {
+                "Back"
+            } else {
+                "StillFront"
+            };
+            return vec![format!(
+                "gMon{table}Pic_{}",
+                super::locate::camel_case(name)
+            )];
+        }
+    }
     if let Some(stem) = id.strip_prefix("text-window/image/") {
         if stem == "message_box" {
             return vec!["gMessageBox_Gfx".to_owned()];
@@ -368,6 +383,18 @@ mod tests {
         assert_eq!(rom_depths(4), &[4]);
         assert_eq!(rom_depths(2), &[4]);
         assert_eq!(rom_depths(8), &[8, 4]);
+    }
+
+    #[test]
+    fn battler_images_expect_the_still_front_and_back_symbols() {
+        assert_eq!(
+            symbol_fragments("pokemon/treecko/front"),
+            ["gMonStillFrontPic_Treecko"]
+        );
+        assert_eq!(
+            symbol_fragments("pokemon/mudkip/back"),
+            ["gMonBackPic_Mudkip"]
+        );
     }
 
     #[test]

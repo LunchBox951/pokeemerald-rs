@@ -1,6 +1,7 @@
 //! The text-window palette table is accepted only in the importer's order.
 
 use rom_import::fixture::RomFixture;
+use rom_import::Encoding;
 
 use super::{locate_window_palettes, WINDOW_BANKS};
 use crate::gen_rom_profile::error::GenRomProfileError;
@@ -40,6 +41,7 @@ fn plans(banks: [u32; 4]) -> Vec<PalettePlan> {
             id: (*id).to_owned(),
             addr: TABLE_ADDR + bank * BANK_BYTES,
             color_count: 16,
+            encoding: Encoding::Raw,
         })
         .collect()
 }

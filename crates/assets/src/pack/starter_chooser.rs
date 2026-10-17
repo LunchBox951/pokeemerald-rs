@@ -3,7 +3,9 @@
 //! Pack ids stay private so scene code composes no strings. Every lookup
 //! re-validates shapes, since a hand-built or corrupt pack can bypass extraction.
 
+use super::battler::{self, BattlerDirection, PaletteVariant};
 use super::{AssetPack, ImageRef, PackError, PaletteRef};
+use crate::SpeciesId;
 
 const TILES_IMAGE_ID: &str = "starter-chooser/image/tiles";
 const TILES_PALETTE_ID: &str = "starter-chooser/palette/tiles";
@@ -19,7 +21,6 @@ const TILES_PALETTE_COLORS: u16 = 32;
 const POKEBALL_WIDTH: u32 = 32;
 const POKEBALL_HEIGHT: u32 = 128;
 const CIRCLE_SIDE: u32 = 64;
-const FRONT_SIDE: u32 = 64;
 const BANK_PALETTE_COLORS: u16 = 16;
 const TILES_BIT_DEPTH: u8 = 8;
 const BANK_BIT_DEPTH: u8 = 4;
@@ -40,11 +41,13 @@ pub enum StarterSpecies {
 }
 
 impl StarterSpecies {
-    const fn front_ids(self) -> (&'static str, &'static str) {
+    /// The species identity the battler lookup keys this starter by.
+    #[must_use]
+    pub const fn species_id(self) -> SpeciesId {
         match self {
-            Self::Treecko => ("pokemon/treecko/front", "pokemon/treecko/palette/normal"),
-            Self::Torchic => ("pokemon/torchic/front", "pokemon/torchic/palette/normal"),
-            Self::Mudkip => ("pokemon/mudkip/front", "pokemon/mudkip/palette/normal"),
+            Self::Treecko => SpeciesId::TREECKO,
+            Self::Torchic => SpeciesId::TORCHIC,
+            Self::Mudkip => SpeciesId::MUDKIP,
         }
     }
 }
@@ -130,12 +133,15 @@ impl AssetPack {
         &self,
         starter: StarterSpecies,
     ) -> Result<StarterPreviewHandle<'_>, PackError> {
-        let (image_id, palette_id) = starter.front_ids();
+        let species = starter.species_id();
+        let (image_id, palette_id) =
+            battler::ids(species, BattlerDirection::Front, PaletteVariant::Normal)
+                .ok_or(PackError::UnsupportedBattlerSpecies(species))?;
         Ok(StarterPreviewHandle {
             front: self.starter_image(
                 image_id,
                 palette_id,
-                (FRONT_SIDE, FRONT_SIDE),
+                (battler::BATTLER_SIDE, battler::BATTLER_SIDE),
                 BANK_BIT_DEPTH,
                 BANK_PALETTE_COLORS,
             )?,
@@ -146,15 +152,33 @@ impl AssetPack {
         &self,
         image_id: &str,
         palette_id: &str,
-        (width, height): (u32, u32),
+        shape: (u32, u32),
         bit_depth: u8,
         palette_colors: u16,
     ) -> Result<PalettedImage<'_>, PackError> {
+        self.paired_image(
+            image_id,
+            palette_id,
+            shape,
+            bit_depth,
+            palette_colors,
+            |id, detail| PackError::MalformedStarterAsset { id, detail },
+        )
+    }
+
+    /// An image and the palette its indices select from, checked against the
+    /// shape upstream gives them; `malformed` names the failure for the caller's family.
+    pub(super) fn paired_image(
+        &self,
+        image_id: &str,
+        palette_id: &str,
+        (width, height): (u32, u32),
+        bit_depth: u8,
+        palette_colors: u16,
+        malformed: fn(String, String) -> PackError,
+    ) -> Result<PalettedImage<'_>, PackError> {
         let image = self.image(image_id)?;
-        let fault = |detail: String| PackError::MalformedStarterAsset {
-            id: image_id.to_owned(),
-            detail,
-        };
+        let fault = |detail: String| malformed(image_id.to_owned(), detail);
         if image.width != width || image.height != height {
             return Err(fault(format!(
                 "is {}x{}: expected {width}x{height}",
@@ -177,14 +201,14 @@ impl AssetPack {
         if palette.color_count != palette_colors
             || palette.raw.len() != usize::from(palette_colors) * PALETTE_ENTRY_BYTES
         {
-            return Err(PackError::MalformedStarterAsset {
-                id: palette_id.to_owned(),
-                detail: format!(
+            return Err(malformed(
+                palette_id.to_owned(),
+                format!(
                     "declares {} colours in {} bytes: expected {palette_colors} colours",
                     palette.color_count,
                     palette.raw.len()
                 ),
-            });
+            ));
         }
         if let Some(&pixel) = image
             .pixels

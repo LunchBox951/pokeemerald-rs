@@ -33,17 +33,11 @@ pub enum PokedexError {
     /// The value is the declared count.
     TooManyEntries(usize),
     /// An order is longer than the 411 identities it can hold.
-    OrderTooLong {
-        /// The offending order.
-        order: PokedexOrderKind,
-        /// Its declared member count.
-        len: usize,
-    },
+    OrderTooLong { order: PokedexOrderKind, len: usize },
     /// An order lists `NATIONAL_DEX_NONE`, which is no Pokémon.
     NoneInOrder(PokedexOrderKind),
     /// An order lists one National Dex number twice.
     DuplicateOrderMember {
-        /// The offending order.
         order: PokedexOrderKind,
         /// The repeated number.
         dex_no: u16,
