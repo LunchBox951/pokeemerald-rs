@@ -10,8 +10,24 @@ use crate::extract::scope::{
     title_ids, BATTLERS, FONTS, TILESETS,
 };
 
-/// Require every fixed tileset root: all tile sheets, then every pinned
-/// animation frame, independent of which frames the pack happens to hold.
+/// Every fixed payload root of a tileset: tiles, metatiles, metatile
+/// attributes, and each palette bank, as `tilesets::locate_one` asks for them.
+pub fn tileset_payload_ids(name: &str) -> Vec<String> {
+    [
+        format!("tileset/{name}/tiles"),
+        format!("tileset/{name}/metatiles"),
+        format!("tileset/{name}/metatile-attributes"),
+    ]
+    .into_iter()
+    .chain(
+        (0..super::tilesets::PALETTE_BANKS).map(|bank| format!("tileset/{name}/palette/{bank:02}")),
+    )
+    .collect()
+}
+
+/// Require every fixed tileset root: each tileset's tile sheet, metatiles,
+/// attributes, and palette banks, then every pinned animation frame,
+/// independent of which frames the pack happens to hold.
 ///
 /// # Errors
 ///
@@ -19,7 +35,8 @@ use crate::extract::scope::{
 pub fn require_tilesets(pack: &PackSource) -> Result<(), GenRomProfileError> {
     TILESETS
         .into_iter()
-        .try_for_each(|tileset| pack.get(&tileset.tiles_id()).map(|_| ()))?;
+        .flat_map(|tileset| tileset_payload_ids(tileset.name))
+        .try_for_each(|id| pack.get(&id).map(|_| ()))?;
     tileset_animation_ids()
         .iter()
         .try_for_each(|id| pack.get(id).map(|_| ()))
