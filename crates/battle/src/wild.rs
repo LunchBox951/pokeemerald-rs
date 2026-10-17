@@ -38,10 +38,13 @@ pub fn initial_moveset(species: SpeciesId, level: u8) -> Vec<MoveId> {
 ///
 /// # Errors
 ///
-/// Returns the first Pokémon validation or move-execution error.
+/// Returns the first Pokémon validation, ability-admission, or move-execution error. The
+/// rolled personality can select either ability slot, so a species with any
+/// always-refused ability slot is refused.
 pub fn ensure_wild_startable(dex: &Dex, species: SpeciesId, level: u8) -> Result<(), BattleError> {
     let moves = initial_moveset(species, level);
     BattlePokemon::validate(dex, species, level, &moves)?;
+    crate::battle::admission::ensure_every_ability_slot_admissible(dex, species)?;
     for move_id in &moves {
         crate::battle::ensure_executable(dex, *move_id)?;
     }

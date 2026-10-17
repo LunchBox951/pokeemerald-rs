@@ -74,14 +74,33 @@ pub(super) fn route_101_phase_with_grass(
     player: PlayerState,
     grass: &[(u16, u16)],
 ) -> OverworldPhase {
+    route_101_phase_with_grass_from_source(
+        crate::pack_source::PackSource::Runtime,
+        width,
+        height,
+        player,
+        grass,
+    )
+}
+
+/// [`route_101_phase_with_grass`] retaining `source`, so a later lazy load
+/// (a white-out warp, a dialog) reads the pack that source names.
+pub(super) fn route_101_phase_with_grass_from_source(
+    source: crate::pack_source::PackSource,
+    width: u16,
+    height: u16,
+    player: PlayerState,
+    grass: &[(u16, u16)],
+) -> OverworldPhase {
     let specials: Vec<((u16, u16), u8)> = grass.iter().map(|&pos| (pos, MB_TALL_GRASS)).collect();
-    OverworldPhase::for_test(
+    OverworldPhase::for_test_with_source(
         crate::overworld::test_support::synthetic_scene_with_special_tiles(
             width, height, &specials,
         ),
         ROUTE_101,
         player,
         None,
+        source,
     )
 }
 

@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use crate::audio::AudioError;
 use crate::pokedex::PokedexError;
+use crate::SpeciesId;
 
 use super::battle_message::BattleMessageError;
 use crate::battle_anim::BattleAnimationError;
@@ -86,8 +87,24 @@ pub enum PackError {
         /// What differs from the expected shape.
         detail: String,
     },
+    /// A battler entry differs from the upstream graphic's shape.
+    MalformedBattlerAsset {
+        /// Asset id.
+        id: String,
+        /// What differs from the expected shape.
+        detail: String,
+    },
+    /// The pack carries no battler art for this species.
+    UnsupportedBattlerSpecies(SpeciesId),
     /// A Pokédex graphics entry differs from the upstream graphic's shape.
     MalformedPokedexGraphic {
+        /// Asset id.
+        id: String,
+        /// What differs from the expected shape.
+        detail: String,
+    },
+    /// A battle interface entry differs from the upstream graphic's shape.
+    MalformedBattleInterfaceAsset {
         /// Asset id.
         id: String,
         /// What differs from the expected shape.
@@ -216,8 +233,19 @@ impl fmt::Display for PackError {
             Self::MalformedStarterAsset { id, detail } => {
                 write!(f, "asset pack: starter-chooser entry `{id}` {detail}")
             }
+            Self::MalformedBattlerAsset { id, detail } => {
+                write!(f, "asset pack: battler entry `{id}` {detail}")
+            }
+            Self::UnsupportedBattlerSpecies(species) => write!(
+                f,
+                "asset pack: no battler art for species {}",
+                species.index()
+            ),
             Self::MalformedPokedexGraphic { id, detail } => {
                 write!(f, "asset pack: Pokédex graphics entry `{id}` {detail}")
+            }
+            Self::MalformedBattleInterfaceAsset { id, detail } => {
+                write!(f, "asset pack: battle interface entry `{id}` {detail}")
             }
             Self::MalformedBagAsset { id, detail } => {
                 write!(f, "asset pack: bag entry `{id}` {detail}")
@@ -271,7 +299,10 @@ impl std::error::Error for PackError {
             | Self::MalformedTextWindowImage { .. }
             | Self::TextWindowPixelOutsidePalette { .. }
             | Self::MalformedStarterAsset { .. }
+            | Self::MalformedBattlerAsset { .. }
+            | Self::UnsupportedBattlerSpecies(_)
             | Self::MalformedPokedexGraphic { .. }
+            | Self::MalformedBattleInterfaceAsset { .. }
             | Self::MalformedBagAsset { .. } => None,
         }
     }

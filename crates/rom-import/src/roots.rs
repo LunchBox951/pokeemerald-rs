@@ -110,6 +110,9 @@ pub struct PaletteRoot {
     pub addr: GbaPtr,
     /// How many colours to read. Each is one little-endian `u16`.
     pub color_count: u16,
+    /// How the colours are stored. A compressed root decodes to exactly
+    /// `color_count * 2` bytes.
+    pub encoding: Encoding,
 }
 
 /// Bytes a reader copies through without interpreting.
@@ -371,6 +374,57 @@ pub struct BattleMessageRoots {
     pub specials: &'static [SpecialMessageRoot],
 }
 
+/// The ordinary-bag assets (`graphics/bag` and the item icons).
+///
+/// Holds the pack ids the checkout extractor emits under `bag/`: the fixed
+/// bag entries plus the deduplicated item-icon images and palettes. The
+/// `gItemIconTable` row-to-icon mapping is not repeated here; it is the
+/// checkout's typed `BagAssets` data, not a ROM root.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BagRoots {
+    /// Every `bag/image/*` and `bag/item-icon/image/*` entry.
+    pub images: &'static [ImageRoot],
+    /// Every `bag/palette/*` and `bag/item-icon/palette/*` entry.
+    pub palettes: &'static [PaletteRoot],
+    /// Every `bag/raw/*` entry.
+    pub raws: &'static [BlobRoot],
+}
+
+/// One species' static battler art: the rows its `SPECIES_*` index selects in
+/// `gMonStillFrontPicTable`, `gMonBackPicTable`, `gMonPaletteTable`, and
+/// `gMonShinyPaletteTable`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BattlerRoot {
+    /// The species' `SPECIES_*` value, the row index in all four tables.
+    pub species: u16,
+    /// The front image `gMonStillFrontPicTable[species]` points at.
+    pub front: ImageRoot,
+    /// The back image `gMonBackPicTable[species]` points at.
+    pub back: ImageRoot,
+    /// The palette `gMonPaletteTable[species]` points at.
+    pub normal: PaletteRoot,
+    /// The palette `gMonShinyPaletteTable[species]` points at.
+    pub shiny: PaletteRoot,
+}
+
+/// Static battler art (`src/data/pokemon_graphics/*_table.h`).
+///
+/// The four tables are recorded so a reader can corroborate each species'
+/// row by pointer and tag rather than trust the addresses alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BattlerRoots {
+    /// `gMonStillFrontPicTable`: 8-byte `{data, size, tag}` rows.
+    pub front_table: GbaPtr,
+    /// `gMonBackPicTable`: 8-byte `{data, size, tag}` rows.
+    pub back_table: GbaPtr,
+    /// `gMonPaletteTable`: 8-byte `{data, tag}` rows.
+    pub palette_table: GbaPtr,
+    /// `gMonShinyPaletteTable`: 8-byte `{data, tag}` rows.
+    pub shiny_palette_table: GbaPtr,
+    /// Every species with pack entries.
+    pub species: &'static [BattlerRoot],
+}
+
 /// The authoritative ROM addresses a profile carries, grouped by domain.
 ///
 /// `#[non_exhaustive]` so adding a domain stays a non-breaking change for
@@ -396,6 +450,10 @@ pub struct Roots {
     pub audio: AudioRoots,
     /// The battle-message token table.
     pub battle_messages: BattleMessageRoots,
+    /// The ordinary-bag images, palettes, and tilemap.
+    pub bag: BagRoots,
+    /// The starters' static battler images and palettes.
+    pub battlers: BattlerRoots,
 }
 
 impl Roots {
@@ -434,6 +492,8 @@ impl Roots {
             programmable_wave: &[],
         },
         battle_messages: BattleMessageRoots::NONE,
+        bag: BagRoots::NONE,
+        battlers: BattlerRoots::NONE,
     };
 
     /// Every image root in the table, across every domain.
@@ -451,6 +511,13 @@ impl Roots {
             .chain(self.title_screen.images.iter())
             .chain(self.sprites.sheets.iter())
             .chain(self.text_window.images.iter())
+            .chain(self.bag.images.iter())
+            .chain(
+                self.battlers
+                    .species
+                    .iter()
+                    .flat_map(|battler| [&battler.front, &battler.back]),
+            )
     }
 
     /// Every palette root in the table, across every domain.
@@ -462,6 +529,13 @@ impl Roots {
             .chain(self.sprites.palettes.iter())
             .chain(self.text_window.palettes.iter())
             .chain(self.interface.palettes.iter())
+            .chain(self.bag.palettes.iter())
+            .chain(
+                self.battlers
+                    .species
+                    .iter()
+                    .flat_map(|battler| [&battler.normal, &battler.shiny]),
+            )
     }
 }
 
@@ -470,6 +544,26 @@ impl BattleMessageRoots {
     pub const NONE: Self = Self {
         table: GbaPtr::AT_BASE,
         specials: &[],
+    };
+}
+
+impl BagRoots {
+    /// No bag roots recorded: the domain writes nothing.
+    pub const NONE: Self = Self {
+        images: &[],
+        palettes: &[],
+        raws: &[],
+    };
+}
+
+impl BattlerRoots {
+    /// No battler roots recorded: the domain writes nothing.
+    pub const NONE: Self = Self {
+        front_table: GbaPtr::AT_BASE,
+        back_table: GbaPtr::AT_BASE,
+        palette_table: GbaPtr::AT_BASE,
+        shiny_palette_table: GbaPtr::AT_BASE,
+        species: &[],
     };
 }
 

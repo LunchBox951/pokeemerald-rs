@@ -9,6 +9,6 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
-cpal = "0.18"
+cpal = { version = "0.18", features = ["pulseaudio"] }
 softbuffer = "0.4"
 winit = "0.30"

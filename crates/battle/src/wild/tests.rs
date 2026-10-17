@@ -292,6 +292,40 @@ fn a_full_moveset_drops_the_oldest_move_first() {
 }
 
 #[test]
+fn ensure_wild_startable_refuses_a_species_with_any_always_refused_slot() {
+    let dex = Dex::new();
+    for (species, ability) in [
+        (SpeciesId::TAUROS, assets::AbilityId::INTIMIDATE),
+        (SpeciesId::SNUBBULL, assets::AbilityId::INTIMIDATE),
+        (SpeciesId::MAWILE, assets::AbilityId::INTIMIDATE),
+        (SpeciesId::EKANS, assets::AbilityId::INTIMIDATE),
+        (SpeciesId::SLAKOTH, assets::AbilityId::TRUANT),
+        (SpeciesId::NINJASK, assets::AbilityId::SPEED_BOOST),
+        (SpeciesId::YANMA, assets::AbilityId::SPEED_BOOST),
+        (SpeciesId::KECLEON, assets::AbilityId::COLOR_CHANGE),
+        (SpeciesId::PORYGON, assets::AbilityId::TRACE),
+        (SpeciesId::PORYGON2, assets::AbilityId::TRACE),
+        (SpeciesId::RALTS, assets::AbilityId::TRACE),
+        (SpeciesId::KIRLIA, assets::AbilityId::TRACE),
+        (SpeciesId::GARDEVOIR, assets::AbilityId::TRACE),
+        (SpeciesId::PARAS, assets::AbilityId::EFFECT_SPORE),
+        (SpeciesId::PARASECT, assets::AbilityId::EFFECT_SPORE),
+        (SpeciesId::SHROOMISH, assets::AbilityId::EFFECT_SPORE),
+        (SpeciesId::BRELOOM, assets::AbilityId::EFFECT_SPORE),
+    ] {
+        assert_eq!(
+            ensure_wild_startable(&dex, species, 1),
+            Err(BattleError::UnportedAbilityInteraction(ability)),
+            "{species:?}",
+        );
+    }
+    assert_eq!(
+        ensure_wild_startable(&dex, SpeciesId::TAUROS, 0),
+        Err(BattleError::InvalidLevel(0)),
+    );
+}
+
+#[test]
 fn ensure_wild_startable_accepts_route_101_mons_and_rejects_a_bide_seedot() {
     let dex = Dex::new();
     for species in [WURMPLE, POOCHYENA, ZIGZAGOON] {

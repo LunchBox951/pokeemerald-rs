@@ -79,6 +79,7 @@ const fn contiguous_banks() -> [PaletteRoot; 16] {
     let mut banks = [PaletteRoot {
         id: "",
         addr: PALETTES_AT,
+        encoding: Encoding::Raw,
         color_count: 16,
     }; 16];
     let mut index: u32 = 0;
@@ -86,6 +87,7 @@ const fn contiguous_banks() -> [PaletteRoot; 16] {
         banks[index as usize] = PaletteRoot {
             id: BANK_IDS[index as usize],
             addr: GbaPtr::at(ROM_BASE + 0x2000 + 32 * index),
+            encoding: Encoding::Raw,
             color_count: 16,
         };
         index += 1;

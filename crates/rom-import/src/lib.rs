@@ -61,8 +61,18 @@
 //! xtask extract` writes from a decomp checkout, for every id both produce.
 //! `tests/equivalence.rs` is that gate: it is `#[ignore]`d, needs
 //! `$POKEEMERALD_ROM` and a checkout pack, and compares the two packs entry
-//! by entry. Every id the checkout pack holds is covered and there is no
-//! reviewed difference.
+//! by entry. Every id this crate imports must exist in the checkout pack
+//! with the same kind, metadata, and payload bytes. A checkout id this
+//! crate did not write is a failure only when it falls under one of the
+//! gate's `COMPLETE_PREFIXES`, the prefixes of domains that have landed,
+//! listed in that file; elsewhere it is counted, not compared. A domain
+//! adds its prefix when it lands. Agreement alone is not trusted for the
+//! title voicegroup: before comparing, the gate checks each pack on its own
+//! that the title voicegroup's program 48 routes key 33 to the trumpet
+//! sample, so two packs that share the same wrong mapping still fail. That
+//! check decodes the voicegroups only; the `MUS_TITLE` song gets the same
+//! byte comparison as every other entry. The reviewed-difference list is
+//! empty.
 //!
 //! `pokeemerald-rs --import-rom` (that crate's `cli` and `import_rom`
 //! modules) drives [`import`] and surfaces this crate's errors as they
@@ -99,9 +109,10 @@ pub use profile::{
 pub use reader::{GbaPtr, RomReader, ROM_BASE, ROM_WINDOW_END};
 pub use rom::{GbaHeader, Rom, ROM_SIZE};
 pub use roots::{
-    AudioRoots, BattleMessageRoots, BlobRoot, Encoding, FontRoot, ImageRoot, InterfaceRoots,
-    KeysplitRoot, MapLayoutRoot, PaletteRoot, Roots, SampleRoot, SongRoot, SpecialMessageRoot,
-    SpriteRoots, TextWindowRoots, TileAnimRoot, TilesetRoot, TitleScreenRoots, VoicegroupRoot,
+    AudioRoots, BagRoots, BattleMessageRoots, BattlerRoot, BattlerRoots, BlobRoot, Encoding,
+    FontRoot, ImageRoot, InterfaceRoots, KeysplitRoot, MapLayoutRoot, PaletteRoot, Roots,
+    SampleRoot, SongRoot, SpecialMessageRoot, SpriteRoots, TextWindowRoots, TileAnimRoot,
+    TilesetRoot, TitleScreenRoots, VoicegroupRoot,
 };
 pub use sha1::{sha1, Digest, DigestParseError, Sha1};
 

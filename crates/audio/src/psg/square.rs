@@ -59,6 +59,20 @@ fn retime_step_remainder(phase: u32, from_delta: u32, to_delta: u32) -> u32 {
     phase
 }
 
+/// The register between a pitch write's `NR13` and `NR14` stores: the new low
+/// byte under the old high bits, whose period the `NR14` catch-up measures
+/// (`pokeemerald/src/m4a.c:1197-1203`, `mgba/src/gb/audio.c:162-171,493-501`).
+fn intermediate_frequency(old: u16, new: u16) -> u16 {
+    (old & FREQUENCY_HIGH_BITS) | (new & FREQUENCY_LOW_BYTE)
+}
+
+fn frequency_step_delta(freq_reg: u16) -> u32 {
+    phase_delta(
+        register_frequency_hz(freq_reg, SQUARE_CLOCK_HZ),
+        SQUARE_STEPS_PER_CYCLE,
+    )
+}
+
 /// CGB channel 1 or 2 square-wave generator.
 #[derive(Clone, Debug)]
 pub struct SquareChannel {
@@ -148,11 +162,14 @@ impl SquareChannel {
     /// on the same hardware slot: a restart keeps the duty index and the time
     /// since the last step (`mgba/src/gb/audio.c:168-194`, `:493-510`).
     pub(crate) fn continue_duty_from(&mut self, previous: &Self) {
-        self.phase = retime_step_remainder(
+        let intermediate = intermediate_frequency(previous.frequency, self.frequency);
+        let intermediate_delta = frequency_step_delta(intermediate);
+        let phase = retime_step_remainder(
             previous.settled_phase(),
             previous.step_delta,
-            self.step_delta,
+            intermediate_delta,
         );
+        self.phase = retime_step_remainder(phase, intermediate_delta, self.step_delta);
         self.idle_samples = 0;
         self.idle_step_delta = None;
     }
@@ -198,7 +215,15 @@ impl SquareChannel {
     pub fn set_frequency(&mut self, freq_reg: u16) {
         self.settle_idle_samples();
         let freq_reg = freq_reg.min(MAX_FREQUENCY_REGISTER);
+        let intermediate = intermediate_frequency(self.frequency, freq_reg);
+        self.play_frequency(intermediate);
         self.note_high_bits = freq_reg & FREQUENCY_HIGH_BITS;
+        self.play_frequency(freq_reg);
+    }
+
+    /// A sweep write-back retune, with no `NR13`/`NR14` intermediate step.
+    #[cfg(test)]
+    pub(crate) fn retune_atomically(&mut self, freq_reg: u16) {
         self.play_frequency(freq_reg);
     }
 
@@ -581,6 +606,87 @@ mod tests {
             "the replacement steps after {first_step} samples, expected about {}",
             replacement_period - elapsed,
         );
+    }
+
+    /// A pitch write measures the time since the last duty step at
+    /// `intermediate_frequency` first.
+    #[test]
+    fn a_retune_settles_duty_through_the_low_byte_step() {
+        const OLD_FREQUENCY: u16 = 0x600;
+        const NEW_FREQUENCY: u16 = 0x1FF;
+        const SAMPLES_BEFORE_RETUNE: u32 = 12;
+
+        let mut channel = SquareChannel::new(HALF_DUTY_REGISTER, OLD_FREQUENCY, None);
+        while channel.phase / PHASE_ONE == 0 {
+            channel.sample();
+        }
+        for _ in 0..SAMPLES_BEFORE_RETUNE {
+            channel.sample();
+        }
+        let before = channel.clone();
+
+        let mut direct = before.clone();
+        direct.play_frequency(NEW_FREQUENCY);
+        direct.note_high_bits = NEW_FREQUENCY & FREQUENCY_HIGH_BITS;
+
+        channel.set_frequency(NEW_FREQUENCY);
+
+        let mut two_step = before;
+        two_step.play_frequency(
+            OLD_FREQUENCY & FREQUENCY_HIGH_BITS | (NEW_FREQUENCY & FREQUENCY_LOW_BYTE),
+        );
+        two_step.play_frequency(NEW_FREQUENCY);
+        assert_eq!(channel.phase, two_step.phase);
+        assert_ne!(
+            channel.phase / PHASE_ONE,
+            direct.phase / PHASE_ONE,
+            "the intermediate period must advance duty past the direct retune",
+        );
+    }
+
+    #[test]
+    fn a_replacement_settles_duty_through_the_low_byte_step() {
+        const OLD_FREQUENCY: u16 = 0x600;
+        const NEW_FREQUENCY: u16 = 0x1FF;
+
+        let mut outgoing = SquareChannel::new(HALF_DUTY_REGISTER, OLD_FREQUENCY, None);
+        while outgoing.phase / PHASE_ONE == 0 {
+            outgoing.sample();
+        }
+        for _ in 0..12 {
+            outgoing.sample();
+        }
+        let mut replacement = SquareChannel::new(HALF_DUTY_REGISTER, NEW_FREQUENCY, None);
+        replacement.continue_duty_from(&outgoing);
+        let mut retuned = outgoing;
+        retuned.set_frequency(NEW_FREQUENCY);
+        assert_eq!(replacement.phase, retuned.phase);
+    }
+
+    #[test]
+    fn a_replacement_matches_an_independent_low_byte_oracle() {
+        const OLD_FREQUENCY: u16 = 0x600;
+        const NEW_FREQUENCY: u16 = 0x1FF;
+
+        let mut outgoing = SquareChannel::new(HALF_DUTY_REGISTER, OLD_FREQUENCY, None);
+        while outgoing.phase / PHASE_ONE == 0 {
+            outgoing.sample();
+        }
+        for _ in 0..12 {
+            outgoing.sample();
+        }
+        let mut replacement = SquareChannel::new(HALF_DUTY_REGISTER, NEW_FREQUENCY, None);
+        replacement.continue_duty_from(&outgoing);
+
+        let mut direct = outgoing.clone();
+        direct.play_frequency(NEW_FREQUENCY);
+        let mut two_step = outgoing;
+        two_step.play_frequency(
+            OLD_FREQUENCY & FREQUENCY_HIGH_BITS | (NEW_FREQUENCY & FREQUENCY_LOW_BYTE),
+        );
+        two_step.play_frequency(NEW_FREQUENCY);
+        assert_eq!(replacement.phase, two_step.phase);
+        assert_ne!(replacement.phase / PHASE_ONE, direct.phase / PHASE_ONE);
     }
 
     /// The off-write rates the channel as if only its low frequency byte

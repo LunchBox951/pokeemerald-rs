@@ -3,8 +3,8 @@ use std::fmt::Write as _;
 use rom_import::Encoding;
 
 use super::plan::{
-    BattleMessagePlan, BlobPlan, ImagePlan, MapLayoutPlan, PalettePlan, ProfilePlan, ReportLine,
-    Resolution, TileAnimPlan, TilesetPlan,
+    BagPlan, BattleMessagePlan, BattlerPlan, BlobPlan, ImagePlan, MapLayoutPlan, PalettePlan,
+    ProfilePlan, ReportLine, Resolution, TileAnimPlan, TilesetPlan,
 };
 
 /// The header paragraph saying how roots were settled, as `//!` lines.
@@ -67,9 +67,10 @@ fn header(sha1: &str, lines: &[ReportLine]) -> String {
 
 use crate::reader::GbaPtr;
 use crate::roots::{{
-    AudioRoots, BattleMessageRoots, BlobRoot, Encoding, FontRoot, ImageRoot, InterfaceRoots,
-    KeysplitRoot, MapLayoutRoot, PaletteRoot, Roots, SampleRoot, SongRoot, SpecialMessageRoot,
-    SpriteRoots, TextWindowRoots, TileAnimRoot, TilesetRoot, TitleScreenRoots, VoicegroupRoot,
+    AudioRoots, BagRoots, BattleMessageRoots, BattlerRoot, BattlerRoots, BlobRoot, Encoding,
+    FontRoot, ImageRoot, InterfaceRoots, KeysplitRoot, MapLayoutRoot, PaletteRoot, Roots,
+    SampleRoot, SongRoot, SpecialMessageRoot, SpriteRoots, TextWindowRoots, TileAnimRoot,
+    TilesetRoot, TitleScreenRoots, VoicegroupRoot,
 }};
 
 /// Pokemon Emerald (US) rev 0's root table.
@@ -123,8 +124,24 @@ pub fn module(plan: &ProfilePlan, sha1: &str, lines: &[ReportLine]) -> String {
     audio_roots(&mut out, plan);
     battle_message_roots(&mut out, &plan.battle_messages);
 
+    bag_roots(&mut out, &plan.bag);
+
+    battler_roots(&mut out, &plan.battlers);
+
     let _ = writeln!(out, "}};");
     out
+}
+
+fn bag_roots(out: &mut String, bag: &BagPlan) {
+    let _ = writeln!(out, "    bag: BagRoots {{");
+    image_slice(out, "        ", "images", &bag.images);
+    palette_slice(out, "        ", &bag.palettes);
+    let _ = writeln!(out, "        raws: &[");
+    for blob in &bag.raws {
+        let _ = writeln!(out, "            {},", blob_root(blob));
+    }
+    let _ = writeln!(out, "        ],");
+    let _ = writeln!(out, "    }},");
 }
 
 fn palette_slice(out: &mut String, indent: &str, palettes: &[PalettePlan]) {
@@ -273,6 +290,42 @@ fn battle_message_roots(out: &mut String, messages: &BattleMessagePlan) {
     let _ = writeln!(out, "    }},");
 }
 
+fn battler_roots(out: &mut String, battlers: &BattlerPlan) {
+    let _ = writeln!(out, "    battlers: BattlerRoots {{");
+    for (field, addr) in [
+        ("front_table", battlers.front_table),
+        ("back_table", battlers.back_table),
+        ("palette_table", battlers.palette_table),
+        ("shiny_palette_table", battlers.shiny_palette_table),
+    ] {
+        let _ = writeln!(out, "        {field}: {},", gba_ptr_expression(addr));
+    }
+    let _ = writeln!(out, "        species: &[");
+    for battler in &battlers.species {
+        let _ = writeln!(out, "            BattlerRoot {{");
+        let _ = writeln!(out, "                species: {},", battler.species);
+        let _ = writeln!(
+            out,
+            "                front: {},",
+            image_root(&battler.front)
+        );
+        let _ = writeln!(out, "                back: {},", image_root(&battler.back));
+        let _ = writeln!(
+            out,
+            "                normal: {},",
+            palette_root(&battler.normal)
+        );
+        let _ = writeln!(
+            out,
+            "                shiny: {},",
+            palette_root(&battler.shiny)
+        );
+        let _ = writeln!(out, "            }},");
+    }
+    let _ = writeln!(out, "        ],");
+    let _ = writeln!(out, "    }},");
+}
+
 fn tileset_root(out: &mut String, tileset: &TilesetPlan) {
     let _ = writeln!(out, "        TilesetRoot {{");
     let _ = writeln!(out, "            name: {:?},", tileset.name);
@@ -359,10 +412,11 @@ fn image_root(image: &ImagePlan) -> String {
 
 fn palette_root(palette: &PalettePlan) -> String {
     format!(
-        "PaletteRoot {{ id: {:?}, addr: {}, color_count: {} }}",
+        "PaletteRoot {{ id: {:?}, addr: {}, color_count: {}, encoding: {} }}",
         palette.id,
         gba_ptr_expression(palette.addr),
-        palette.color_count
+        palette.color_count,
+        encoding_variant_path(palette.encoding)
     )
 }
 
@@ -460,9 +514,11 @@ mod tests {
             id: "title/palette/pokemon_logo".to_owned(),
             addr: 0x08DD_E258,
             color_count: 224,
+            encoding: Encoding::Lz77,
         });
         assert!(!palette.contains('\n'), "{palette}");
         assert!(palette.contains("color_count: 224"), "{palette}");
+        assert!(palette.contains("encoding: Encoding::Lz77"), "{palette}");
 
         let blob = blob_root(&BlobPlan {
             id: "layout/route103/map".to_owned(),
@@ -553,5 +609,104 @@ mod tests {
         assert!(!text.contains("- `sprite/a`"), "{text}");
         assert!(!text.contains("Every root was asserted unique"), "{text}");
         assert!(text.lines().all(|line| line.starts_with("//!")), "{text}");
+    }
+}
+
+#[cfg(test)]
+mod bag_field_tests {
+    use super::module;
+    use crate::gen_rom_profile::plan::{
+        AudioPlan, BagPlan, BattleMessagePlan, BattlerPlan, BlobPlan, ImagePlan, PalettePlan,
+        ProfilePlan, SpritePlan, TextWindowPlan, TitleScreenPlan,
+    };
+    use rom_import::Encoding;
+
+    #[test]
+    fn the_emitted_roots_literal_populates_the_bag_family() {
+        let base = 0x0800_0000;
+        let plan = ProfilePlan {
+            tilesets: vec![],
+            title_screen: TitleScreenPlan {
+                images: vec![],
+                tilemaps: vec![],
+                palettes: vec![],
+                bg_palettes: base,
+            },
+            sprites: SpritePlan {
+                palette_table: base,
+                sheets: vec![],
+                palettes: vec![],
+            },
+            layouts: vec![],
+            fonts: vec![],
+            text_window: TextWindowPlan {
+                images: vec![],
+                palettes: vec![],
+                window_palettes: base,
+            },
+            interface: vec![],
+            audio: AudioPlan {
+                song_table: base,
+                songs: vec![],
+                voicegroups: vec![],
+                keysplits: vec![],
+                direct_sound: vec![],
+                programmable_wave: vec![],
+            },
+            battle_messages: BattleMessagePlan {
+                table: base,
+                specials: vec![],
+            },
+            battlers: BattlerPlan {
+                front_table: base,
+                back_table: base,
+                palette_table: base,
+                shiny_palette_table: base,
+                species: vec![],
+            },
+            bag: BagPlan {
+                images: vec![ImagePlan {
+                    id: "bag/image/hm".to_owned(),
+                    addr: 0x0812_0000,
+                    encoding: Encoding::Raw,
+                    rom_bit_depth: 4,
+                    pack_bit_depth: 4,
+                    width: 16,
+                    height: 16,
+                    metatile_width: 1,
+                    metatile_height: 1,
+                    tile_count: 4,
+                }],
+                palettes: vec![PalettePlan {
+                    id: "bag/item-icon/palette/potion".to_owned(),
+                    addr: 0x0813_0000,
+                    color_count: 16,
+                    encoding: Encoding::Lz77,
+                }],
+                raws: vec![BlobPlan {
+                    id: "bag/raw/menu".to_owned(),
+                    addr: 0x0814_0000,
+                    encoding: Encoding::Lz77,
+                    len: 2048,
+                }],
+            },
+        };
+        let module = module(&plan, "0", &[]);
+        assert!(module.contains("    bag: BagRoots {"), "{module}");
+        assert!(
+            module.contains("ImageRoot { id: \"bag/image/hm\""),
+            "{module}"
+        );
+        assert!(
+            module.contains(
+                "PaletteRoot { id: \"bag/item-icon/palette/potion\", addr: GbaPtr::at(0x0813_0000), color_count: 16, encoding: Encoding::Lz77 }"
+            ),
+            "{module}"
+        );
+        assert!(
+            module.contains("BlobRoot { id: \"bag/raw/menu\", addr: GbaPtr::at(0x0814_0000), encoding: Encoding::Lz77, len: 2048 }"),
+            "{module}"
+        );
+        assert!(!module.contains("BagRoots::NONE"), "{module}");
     }
 }

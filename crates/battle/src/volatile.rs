@@ -32,6 +32,10 @@ pub struct Volatiles {
     /// The remaining action-gated ticks before confusion expires. Zero means
     /// inactive.
     pub confusion_turns: u8,
+    /// Whether Flash Fire has absorbed a Fire move, boosting this battler's
+    /// own Fire moves (`RESOURCE_FLAG_FLASH_FIRE`, `src/battle_util.c:2703-2726`).
+    /// Cleared with the rest of the battle scratch on switch or faint.
+    pub flash_fire: bool,
 }
 
 impl Volatiles {
@@ -54,6 +58,14 @@ impl Volatiles {
     /// `STATUS2_DEFENSE_CURL`, with no already-set guard and no `Random()`.
     pub const fn set_defense_curl(&mut self) {
         self.defense_curl = true;
+    }
+
+    /// Latches Flash Fire's boost, reporting whether this activation was the
+    /// first. Later activations still cancel the move but add no boost.
+    pub const fn activate_flash_fire(&mut self) -> bool {
+        let first = !self.flash_fire;
+        self.flash_fire = true;
+        first
     }
 
     /// Activates or refreshes Charge.

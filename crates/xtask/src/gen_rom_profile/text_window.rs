@@ -10,6 +10,8 @@
 //! `sTextWindowPalettes` separately, derived from the first `text_pal*`
 //! bank and then required to hold all four in order.
 
+use rom_import::Encoding;
+
 use super::error::GenRomProfileError;
 use super::images::{locate_images, ImageQuery};
 use super::locate::slice_at_addr;
@@ -83,6 +85,7 @@ pub fn locate(
         id: DUPLICATED_PALETTE.to_owned(),
         addr,
         color_count: asset.palette_colors(DUPLICATED_PALETTE)?,
+        encoding: Encoding::Raw,
     });
     palettes.sort_by(|a, b| a.id.cmp(&b.id));
 
