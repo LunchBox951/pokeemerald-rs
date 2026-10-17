@@ -826,17 +826,24 @@ mod tests {
     }
 
     #[test]
-    fn multiple_crossings_across_callbacks_consume_exactly_the_frames_used() {
-        // step = 2.5 over a ramp: outputs at source positions 0, 2.5, 5, 7.5.
-        let (producer, consumer) = ring_buffer(32);
-        let ramp: Vec<f32> = (0..9u8).map(f32::from).collect();
-        assert_eq!(producer.push(&ramp), 9);
-        let mut resampler = Resampler::new(consumer, 1, 2.5, 1, 8).unwrap();
-        let mut out = [0.0; 4];
-        resampler.fill(&mut out[..1]);
-        resampler.fill(&mut out[1..3]);
-        resampler.fill(&mut out[3..]);
-        assert_eq!(out, [0.0, 2.5, 5.0, 7.5]);
+    fn multiple_crossings_ending_on_an_integer_position_defer_the_lookahead_pull() {
+        // step = 2.5: outputs 0..=2 sit at source positions 0.0, 2.5, 5.0, so
+        // only frames 0..=5 are used; frame 6 (the lookahead past the exact
+        // boundary at 5.0) must wait for the next callback.
+        let (producer, consumer) = ring_buffer(16);
+        let ramp: Vec<f32> = (0..6u8).map(f32::from).collect();
+        assert_eq!(producer.push(&ramp), 6);
+        let mut resampler = Resampler::new(consumer, 1, 5.0, 2, 8).unwrap();
+
+        let mut cb1 = [0.0; 3];
+        resampler.fill(&mut cb1);
+        assert_eq!(cb1, [0.0, 2.5, 5.0]);
+        assert_eq!(resampler.underruns(), 0);
+
+        assert_eq!(producer.push(&[6.0, 7.0, 8.0]), 3);
+        let mut cb2 = [0.0; 1];
+        resampler.fill(&mut cb2);
+        assert_eq!(cb2, [7.5]);
         assert_eq!(resampler.underruns(), 0);
     }
 
