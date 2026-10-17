@@ -69,9 +69,10 @@
 //! adds its prefix when it lands. Agreement alone is not trusted for the
 //! title voicegroup: before comparing, the gate checks each pack on its own
 //! that the title voicegroup's program 48 routes key 33 to the trumpet
-//! sample, so two packs that share the same wrong mapping still fail. It
-//! does not read the `MUS_TITLE` song events. The reviewed-difference list
-//! is empty.
+//! sample, so two packs that share the same wrong mapping still fail. That
+//! check decodes the voicegroups only; the `MUS_TITLE` song gets the same
+//! byte comparison as every other entry. The reviewed-difference list is
+//! empty.
 //!
 //! `pokeemerald-rs --import-rom` (that crate's `cli` and `import_rom`
 //! modules) drives [`import`] and surfaces this crate's errors as they
