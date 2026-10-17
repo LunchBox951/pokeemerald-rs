@@ -1,7 +1,8 @@
 //! Static battler art for the three starters: the checkout side of the
 //! `gMonStillFrontPicTable`, `gMonBackPicTable`, `gMonPaletteTable`, and
 //! `gMonShinyPaletteTable` rows for `TREECKO`, `TORCHIC`, and `MUDKIP`
-//! (`src/data/pokemon_graphics/*_table.h:280,283,286`).
+//! (`src/data/pokemon_graphics/still_front_pic_table.h:283,286,289`; the
+//! other three tables at `:280,283,286`).
 
 use std::path::Path;
 
