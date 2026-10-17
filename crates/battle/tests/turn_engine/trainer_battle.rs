@@ -70,11 +70,11 @@ const PICHU: u16 = 172;
 const MEOWTH: u16 = 52;
 /// `SPECIES_CHANSEY`: pure Normal, and slower than [`KANGASKHAN`].
 const CHANSEY: u16 = 113;
-/// `SPECIES_CLEFFA`: pure Normal with Cute Charm as its only ability, and
+/// `SPECIES_WHISMUR`: pure Normal with Soundproof as its only ability, and
 /// slower than [`KANGASKHAN`].
-const CLEFFA: u16 = 173;
+const WHISMUR: u16 = 293;
 /// `SPECIES_KANGASKHAN`: pure Normal, fast enough to act ahead of
-/// [`CLEFFA`].
+/// [`WHISMUR`].
 const KANGASKHAN: u16 = 115;
 
 const POUND: MoveId = MoveId::POUND;
@@ -1527,9 +1527,9 @@ fn a_residual_poison_knockout_scores_replacements_with_no_move_resolving() {
     const BENCH_REMAINING_AFTER_SEND_OUT: usize = 1;
 
     let dex = Dex::new();
-    // No bench move is super effective on Cleffa, so the damage pass decides;
-    // Cleffa acts last, so a missing reset leaves Mega Kick as the stale move.
-    let player = max_iv_mon(&dex, CLEFFA, NO_LEVEL_UP_LEVEL, vec![MEGA_KICK]);
+    // No bench move is super effective on Whismur, so the damage pass decides;
+    // Whismur acts last, so a missing reset leaves Mega Kick as the stale move.
+    let player = max_iv_mon(&dex, WHISMUR, NO_LEVEL_UP_LEVEL, vec![MEGA_KICK]);
     let mut lead = max_iv_mon(&dex, KANGASKHAN, NO_LEVEL_UP_LEVEL, vec![GROWL]);
     lead.set_status1(Status1::Poisoned);
     let residual = poison_residual_damage(lead.stats().max_hp);

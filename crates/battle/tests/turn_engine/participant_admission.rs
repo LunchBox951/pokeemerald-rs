@@ -1,6 +1,6 @@
 //! Both constructors refuse move-end-cured status/ability pairs
 //! (`battle_util.c:2873-2951`) and always-refused abilities (Truant, Intimidate, Speed Boost,
-//! Color Change, Trace, Effect Spore), before any RNG draw.
+//! Color Change, Trace, Effect Spore, Flame Body, Cute Charm), before any RNG draw.
 
 use crate::common::{max_iv_mon, SequenceRng};
 use assets::trainers::TrainerId;
@@ -20,7 +20,7 @@ fn healthy(species: SpeciesId) -> BattlePokemon {
     mon(species, 0, Status1::Healthy)
 }
 
-fn refused() -> [(BattlePokemon, AbilityId); 20] {
+fn refused() -> [(BattlePokemon, AbilityId); 24] {
     [
         (healthy(SpeciesId::MIGHTYENA), AbilityId::INTIMIDATE),
         (healthy(SpeciesId::EKANS), AbilityId::INTIMIDATE),
@@ -48,6 +48,13 @@ fn refused() -> [(BattlePokemon, AbilityId); 20] {
         (healthy(SpeciesId::PARASECT), AbilityId::EFFECT_SPORE),
         (healthy(SpeciesId::SHROOMISH), AbilityId::EFFECT_SPORE),
         (healthy(SpeciesId::BRELOOM), AbilityId::EFFECT_SPORE),
+        (healthy(SpeciesId::MAGMAR), AbilityId::FLAME_BODY),
+        (
+            mon(SpeciesId::SLUGMA, 1, Status1::Healthy),
+            AbilityId::FLAME_BODY,
+        ),
+        (healthy(SpeciesId::CLEFAIRY), AbilityId::CUTE_CHARM),
+        (healthy(SpeciesId::SKITTY), AbilityId::CUTE_CHARM),
         (
             mon(SpeciesId::PERSIAN, 0, Status1::Paralysed),
             AbilityId::LIMBER,
@@ -253,6 +260,8 @@ fn an_always_refused_ability_is_refused_whatever_the_status() {
         (SpeciesId::KECLEON, AbilityId::COLOR_CHANGE),
         (SpeciesId::PORYGON, AbilityId::TRACE),
         (SpeciesId::SHROOMISH, AbilityId::EFFECT_SPORE),
+        (SpeciesId::MAGMAR, AbilityId::FLAME_BODY),
+        (SpeciesId::CLEFAIRY, AbilityId::CUTE_CHARM),
     ] {
         for status in [Status1::Healthy, Status1::Paralysed, Status1::Poisoned] {
             always_refused_whatever(species, ability, status);
