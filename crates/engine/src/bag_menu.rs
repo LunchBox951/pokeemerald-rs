@@ -195,7 +195,9 @@ pub enum BagAction {
 pub enum BagMenuOutcome {
     /// An item was chosen and the menu is closed.
     Selected(BagSelection),
-    /// A context action was chosen; the menu is back to browsing.
+    /// A context action was chosen; the menu is back to browsing. After
+    /// applying an effect that stays in the bag (TOSS, REGISTER, DESELECT),
+    /// pass the result to [`BagMenu::refresh`] before more input.
     Action {
         /// The requested action.
         action: BagAction,
@@ -213,11 +215,25 @@ pub enum BagMenuRow {
     Item {
         /// The stack.
         stack: BagStack,
-        /// The bag name, when the display table knows the item.
+        /// The item's display-table name, when the table knows the item. The
+        /// TM/HM and berry list labels built from it (`item_menu.c:896-922`)
+        /// are presentation's to compose.
         name: Option<&'static str>,
     },
     /// The close row (`gText_CloseBag`).
     Close,
+}
+
+/// The open context menu as laid out on screen (`PrintContextMenuItemGrid`,
+/// `item_menu.c:1656-1677`), blanks kept in place.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BagContextGrid {
+    /// The cells in row-major order; `None` is a blank cell.
+    pub slots: Vec<Option<BagAction>>,
+    /// Columns per row: 1 for the one- and two-entry lists, otherwise 2.
+    pub columns: usize,
+    /// Index of the highlighted cell in `slots`.
+    pub cursor: usize,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -263,13 +279,7 @@ impl BagMenu {
         }
         browse_index(positions.pocket).ok_or(BagMenuError::NoPocket)?;
 
-        let stacks = [
-            list_stacks(&bag.items, false),
-            list_stacks(&bag.poke_balls, false),
-            list_stacks(&bag.tms_hms, true),
-            list_stacks(&bag.berries, true),
-            list_stacks(&bag.key_items, false),
-        ];
+        let stacks = pocket_stacks(bag);
         for (index, list) in stacks.iter().enumerate() {
             let window = Window::of(list.len());
             window.clamp_cursor(&mut positions.scroll[index], &mut positions.cursor[index]);
@@ -286,6 +296,29 @@ impl BagMenu {
             link: request.link,
             stage: Stage::Browsing,
         })
+    }
+
+    /// Re-reads the bag and field state after the caller applied an action's
+    /// effect, then clamps every pocket's position into its new list
+    /// (`Task_RemoveItemFromBag` and `ItemMenu_Register`,
+    /// `item_menu.c:1884-1917`). An open context menu returns to browsing, since
+    /// its selection may no longer exist; a closed menu stays closed.
+    pub fn refresh(&mut self, bag: &Bag, registered_item: Option<ItemId>, bike_avatar: bool) {
+        self.stacks = pocket_stacks(bag);
+        for (index, list) in self.stacks.iter().enumerate() {
+            let window = Window::of(list.len());
+            let (scroll, cursor) = (
+                &mut self.positions.scroll[index],
+                &mut self.positions.cursor[index],
+            );
+            window.clamp_cursor(scroll, cursor);
+            window.confine(scroll, cursor);
+        }
+        self.registered_item = registered_item;
+        self.bike_avatar = bike_avatar;
+        if matches!(self.stage, Stage::Context(_)) {
+            self.stage = Stage::Browsing;
+        }
     }
 
     /// The pocket shown.
@@ -358,6 +391,24 @@ impl BagMenu {
         let actions: Vec<BagAction> = menu.slots[..menu.len].iter().flatten().copied().collect();
         let highlighted = menu.slots[..menu.cursor].iter().flatten().count();
         Some((actions, highlighted))
+    }
+
+    /// The open context menu with its blank cells and grid width, for laying
+    /// it out as navigation sees it.
+    #[must_use]
+    pub fn context_grid(&self) -> Option<BagContextGrid> {
+        let Stage::Context(menu) = &self.stage else {
+            return None;
+        };
+        Some(BagContextGrid {
+            slots: menu.slots[..menu.len].to_vec(),
+            columns: if menu.len <= CONTEXT_COLUMNS {
+                1
+            } else {
+                CONTEXT_COLUMNS
+            },
+            cursor: menu.cursor,
+        })
     }
 
     /// Applies one input (`Task_BagMenu_HandleInput`, `item_menu.c:1209-1259`,
@@ -563,6 +614,17 @@ impl BagMenu {
             }
         }
     }
+}
+
+/// Every pocket's display list, in [`BROWSE_ORDER`].
+fn pocket_stacks(bag: &Bag) -> [Vec<BagStack>; POCKET_COUNT] {
+    [
+        list_stacks(&bag.items, false),
+        list_stacks(&bag.poke_balls, false),
+        list_stacks(&bag.tms_hms, true),
+        list_stacks(&bag.berries, true),
+        list_stacks(&bag.key_items, false),
+    ]
 }
 
 fn browse_index(pocket: Pocket) -> Option<usize> {
@@ -1023,6 +1085,85 @@ mod tests {
         assert_eq!(menu.context_actions().unwrap().1, 0);
         menu.handle_input(BagMenuInput::Up);
         assert_eq!(menu.context_actions().unwrap().1, 0);
+    }
+
+    #[test]
+    fn context_grid_keeps_blank_cells_and_the_raw_cursor() {
+        let mut menu = open(&sample_bag(), BagMenuMode::Field);
+        menu.handle_input(BagMenuInput::Right);
+        menu.handle_input(BagMenuInput::Confirm);
+        menu.handle_input(BagMenuInput::Down);
+        assert_eq!(
+            menu.context_grid(),
+            Some(BagContextGrid {
+                slots: vec![Some(Give), None, Some(Toss), Some(Cancel)],
+                columns: 2,
+                cursor: 2,
+            })
+        );
+        menu.handle_input(BagMenuInput::Cancel);
+        assert_eq!(menu.context_grid(), None);
+
+        let mut bag = Bag::default();
+        bag.items[0] = slot(ItemId::SUPER_REPEL, 1);
+        let mut menu = open(&bag, BagMenuMode::Battle);
+        menu.handle_input(BagMenuInput::Confirm);
+        let grid = menu.context_grid().unwrap();
+        assert_eq!((grid.slots, grid.columns), (vec![Some(Cancel)], 1));
+    }
+
+    #[test]
+    fn refresh_applies_toss_and_register_before_more_input() {
+        let mut bag = sample_bag();
+        let mut menu = open(&bag, BagMenuMode::Field);
+        // Toss the second (and last) Items stack.
+        let outcome = press(
+            &mut menu,
+            &[
+                BagMenuInput::Down,
+                BagMenuInput::Confirm,
+                BagMenuInput::Down,
+                BagMenuInput::Confirm,
+            ],
+        );
+        assert!(matches!(
+            outcome,
+            Some(BagMenuOutcome::Action {
+                action: BagAction::Toss,
+                ..
+            })
+        ));
+        bag.items[1] = ItemSlot::default();
+        menu.refresh(&bag, None, false);
+        assert_eq!(menu.stacks().len(), 1);
+        assert_eq!((menu.scroll(), menu.cursor()), (0, 1));
+        assert_eq!(menu.visible_rows()[1], BagMenuRow::Close);
+
+        // Register the bike, then reselect it: DESELECT replaces REGISTER.
+        menu.handle_input(BagMenuInput::Left);
+        let outcome = press(
+            &mut menu,
+            &[
+                BagMenuInput::Confirm,
+                BagMenuInput::Right,
+                BagMenuInput::Confirm,
+            ],
+        );
+        assert!(matches!(
+            outcome,
+            Some(BagMenuOutcome::Action {
+                action: BagAction::Register,
+                ..
+            })
+        ));
+        menu.refresh(&bag, Some(ItemId::MACH_BIKE), false);
+        menu.handle_input(BagMenuInput::Confirm);
+        assert_eq!(
+            menu.context_actions().unwrap().0,
+            [Use, BagAction::Deselect, Cancel]
+        );
+        menu.refresh(&bag, Some(ItemId::MACH_BIKE), false);
+        assert!(menu.is_open() && menu.context_grid().is_none());
     }
 
     #[test]
