@@ -897,25 +897,26 @@ pub(super) fn sync_created_directories(created: &mut [CreatedDirectory]) {
 /// first refusal ends the walk; an unpinned level is skipped.
 #[cfg(unix)]
 pub(super) fn undo_created_directories(created: &[CreatedDirectory]) {
+    undo_created_directories_with_hooks(created, &mut || {});
+}
+
+/// [`undo_created_directories`] with `before_take` run once per level, after
+/// the name has been validated and before the level is taken back, where a
+/// test swaps the name.
+#[cfg(unix)]
+fn undo_created_directories_with_hooks(
+    created: &[CreatedDirectory],
+    before_take: &mut dyn FnMut(),
+) {
     for dir in created.iter().rev() {
         let Some(parent) = dir.parent.as_deref() else {
             continue;
         };
         match rustix::fs::statat(parent, &dir.name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW) {
-            Ok(stat)
-                if same_directory_identity(&stat, &dir.identity)
-                    && dir.own.as_ref().is_some_and(|own| {
-                        rustix::fs::fstat(&**own)
-                            .is_ok_and(|held| same_directory_identity(&stat, &held))
-                    }) =>
-            {
-                match rustix::fs::unlinkat(parent, &dir.name, rustix::fs::AtFlags::REMOVEDIR) {
-                    Ok(()) => {}
-                    // Already gone is already taken care of.
-                    Err(err) if err == rustix::io::Errno::NOENT => {}
-                    // Refused for real (it holds something): the levels
-                    // above hold it too and are not this run's to take back.
-                    Err(_) => break,
+            Ok(stat) if is_this_level(dir, &stat) => {
+                before_take();
+                if !take_back_level(parent, dir) {
+                    break;
                 }
             }
             // Gone already -- nothing to remove here, and the level above is
@@ -927,6 +928,121 @@ pub(super) fn undo_created_directories(created: &[CreatedDirectory]) {
             _ => break,
         }
     }
+}
+
+/// Whether `stat` is the directory `dir` created and still holds open.
+#[cfg(unix)]
+fn is_this_level(dir: &CreatedDirectory, stat: &rustix::fs::Stat) -> bool {
+    same_directory_identity(stat, &dir.identity)
+        && dir.own.as_ref().is_some_and(|own| {
+            rustix::fs::fstat(&**own).is_ok_and(|held| same_directory_identity(stat, &held))
+        })
+}
+
+/// The entry name a captured level sits under inside its quarantine.
+#[cfg(unix)]
+const QUARANTINE_ENTRY: &str = "level";
+
+/// `renameat` that refuses to replace an existing destination where the
+/// platform can say so (Linux, Android, Apple); elsewhere it checks the
+/// destination is free first, which leaves a narrow window.
+#[cfg(unix)]
+fn rename_without_replacing(
+    from_dir: &std::os::fd::OwnedFd,
+    from: impl rustix::path::Arg + Copy,
+    to_dir: &std::os::fd::OwnedFd,
+    to: impl rustix::path::Arg + Copy,
+) -> rustix::io::Result<()> {
+    #[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
+    {
+        rustix::fs::renameat_with(
+            from_dir,
+            from,
+            to_dir,
+            to,
+            rustix::fs::RenameFlags::NOREPLACE,
+        )
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "android", target_vendor = "apple")))]
+    {
+        // Checked first, so only a destination taken in the instant between
+        // the check and the rename is replaced.
+        match rustix::fs::statat(to_dir, to, rustix::fs::AtFlags::SYMLINK_NOFOLLOW) {
+            Err(err) if err == rustix::io::Errno::NOENT => {
+                rustix::fs::renameat(from_dir, from, to_dir, to)
+            }
+            Ok(_) => Err(rustix::io::Errno::EXIST),
+            Err(err) => Err(err),
+        }
+    }
+}
+
+/// Removes `dir` from `parent` only if the directory removed is the one
+/// created. `dir.name` is mutable, so a check followed by `unlinkat` of that
+/// name could delete a replacement swapped in between. Instead the level is
+/// renamed into a fresh private (`0700`) directory, whose name no other
+/// account is told, and re-checked there by identity before it is unlinked;
+/// a level that fails the check or refuses removal (it holds something) is
+/// renamed back. Returns whether the walk may go on to the level above.
+/// Anything that cannot be done safely leaves the level standing. The
+/// quarantine is created and opened, and later removed, by a name only
+/// this rollback made, which unix offers no way to bind to a descriptor: a
+/// writer in `parent` who finds that name and swaps it inside one of those
+/// windows can still cost an empty directory. That is the narrowest the
+/// available calls allow; the level's own name is never trusted again.
+#[cfg(unix)]
+fn take_back_level(parent: &std::os::fd::OwnedFd, dir: &CreatedDirectory) -> bool {
+    use rustix::fs::{AtFlags, Mode, OFlags};
+    // The inode is unique among the entries of this filesystem, so one
+    // rollback's quarantine never meets another's.
+    let quarantine_name = format!(".undo-{}-{}", std::process::id(), dir.identity.st_ino);
+    if rustix::fs::mkdirat(parent, &quarantine_name, Mode::RWXU).is_err() {
+        return false;
+    }
+    let quarantine = rustix::fs::openat(
+        parent,
+        &quarantine_name,
+        OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    );
+    let Ok(quarantine) = quarantine else {
+        // Could not be held (descriptor pressure): drop the empty directory
+        // just made rather than leave it as litter, and leave the level.
+        let _ = rustix::fs::unlinkat(parent, &quarantine_name, AtFlags::REMOVEDIR);
+        return false;
+    };
+
+    let mut goes_on = false;
+    if rename_without_replacing(parent, &dir.name, &quarantine, QUARANTINE_ENTRY).is_ok() {
+        let captured = rustix::fs::statat(&quarantine, QUARANTINE_ENTRY, AtFlags::SYMLINK_NOFOLLOW);
+        let ours = captured.is_ok_and(|stat| is_this_level(dir, &stat));
+        let removed =
+            ours && rustix::fs::unlinkat(&quarantine, QUARANTINE_ENTRY, AtFlags::REMOVEDIR).is_ok();
+        if removed {
+            goes_on = true;
+        } else {
+            // A replacement that was captured, or this level holding
+            // something: put it back under its name. If even that fails the
+            // capture stays in the quarantine, which is left standing.
+            let _ = rename_without_replacing(&quarantine, QUARANTINE_ENTRY, parent, &dir.name);
+        }
+    } else {
+        // Already gone is already taken care of.
+        goes_on = matches!(
+            rustix::fs::statat(parent, &dir.name, AtFlags::SYMLINK_NOFOLLOW),
+            Err(err) if err == rustix::io::Errno::NOENT
+        );
+    }
+
+    // The quarantine is ours and empty unless a capture is stranded in it;
+    // it is removed only while its name still resolves to the held one.
+    let held = rustix::fs::fstat(&quarantine);
+    let by_name = rustix::fs::statat(parent, &quarantine_name, AtFlags::SYMLINK_NOFOLLOW);
+    if matches!((held, by_name), (Ok(held), Ok(by_name)) if same_directory_identity(&held, &by_name))
+    {
+        let _ = rustix::fs::unlinkat(parent, &quarantine_name, AtFlags::REMOVEDIR);
+    }
+    goes_on
 }
 
 /// [`undo_created_directories`]'s off-Unix arm: no identity to check, so

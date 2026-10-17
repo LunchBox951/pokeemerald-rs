@@ -1124,3 +1124,55 @@ fn a_failed_final_sync_does_not_unsync_an_entry_synced_at_creation() {
     super::undo_created_directories(&created);
     assert!(!target.exists(), "b is taken back");
 }
+
+#[cfg(unix)]
+fn entry_names(dir: &std::path::Path) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+#[cfg(unix)]
+#[test]
+fn undo_preserves_a_replacement_swapped_after_validation() {
+    // The hook runs after the name validated and before the level is taken
+    // back -- the window a name-based `unlinkat` would delete through. The
+    // replacement is empty: a sentinel inside it would make a plain removal
+    // refuse and hide the bug.
+    let dir = TempDir::new("undo-after-validation");
+    let level = dir.join("new");
+    let moved = dir.join("original");
+    let created = super::create_directories(&level).unwrap();
+    let mut ran = 0;
+    super::undo_created_directories_with_hooks(&created, &mut || {
+        ran += 1;
+        fs::rename(&level, &moved).unwrap();
+        fs::create_dir(&level).unwrap();
+    });
+
+    assert_eq!(ran, 1, "the hook ran once");
+    assert!(level.is_dir(), "the replacement was deleted");
+    assert!(moved.is_dir(), "the original is left standing");
+    assert_eq!(
+        entry_names(&dir.path),
+        ["new", "original"],
+        "no quarantine is left behind"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn undo_puts_back_a_level_that_gained_contents_after_validation() {
+    let dir = TempDir::new("undo-gained-contents");
+    let level = dir.join("new");
+    let created = super::create_directories(&level).unwrap();
+    super::undo_created_directories_with_hooks(&created, &mut || {
+        fs::write(level.join("keep"), b"x").unwrap();
+    });
+
+    assert!(level.join("keep").is_file());
+    assert_eq!(entry_names(&dir.path), ["new"]);
+}
