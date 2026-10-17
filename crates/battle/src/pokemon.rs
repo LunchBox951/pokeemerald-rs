@@ -823,10 +823,11 @@ impl BattlePokemon {
     /// crossed learnset moves) and the save decoder
     /// ([`BattlePokemon::reconcile_saved_experience`], which must not).
     ///
-    /// The stat recompute stays [`compute_stats`], never
-    /// [`compute_stats_with_evs`] -- see the [`evs`] module docs for why
-    /// [`BattlePokemon::stats`] must stay `0`-EV even here, Deoxys's Speed
-    /// Forme stats excepted. A crossed level
+    /// The stat recompute is [`compute_stats`] at `0` EVs for max HP and
+    /// every non-Deoxys stat; Deoxys's five Speed Forme stats then take the
+    /// current EVs through [`BattlePokemon::apply_speed_forme_evs`]. See the
+    /// [`evs`] module docs for why the rest of [`BattlePokemon::stats`] must
+    /// stay `0`-EV even here. A crossed level
     /// also snapshots [`BattlePokemon::evs_at_last_level_up`] -- see that
     /// field's own doc for what reads it and why.
     fn raise_level_to_experience(&mut self) -> Option<(u8, u8)> {

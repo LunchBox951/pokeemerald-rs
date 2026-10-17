@@ -570,8 +570,10 @@ impl core::fmt::Display for NotTheBattlersRecord {
 /// Stats are recomputed from species/level/nature/IVs, at `0` EVs, by
 /// [`battle::BattlePokemon::new`]; the record's own EVs
 /// ([`evs_from_substruct2`]) are adopted right after, through
-/// [`battle::BattlePokemon::with_evs`], which does not disturb that `0`-EV
-/// stat block (see [`battle::pokemon::evs`] for why). Accumulated experience
+/// [`battle::BattlePokemon::with_evs`], which leaves that `0`-EV stat block
+/// alone except for Deoxys, whose five Speed Forme stats take the adopted
+/// EVs as `GetDeoxysStat` does (see [`battle::pokemon::evs`] for why the
+/// rest stay `0`-EV). Accumulated experience
 /// is wound back to the saved value through
 /// [`battle::BattlePokemon::reconcile_saved_experience`];
 /// current HP and each move slot's PP are then wound back to the saved
@@ -615,10 +617,10 @@ pub(crate) fn from_save_pokemon(dex: &Dex, saved: &Pokemon) -> Result<BattlePoke
 
     // `PokemonSubstruct2`'s first six bytes -- this record's own EVs,
     // adopted through `with_evs` below so the battler carries them
-    // for the merge's own save-time recompute to read back later; adopting
-    // them does not disturb the `0`-EV stat block `BattlePokemon::new` just
-    // built, so the order relative to `reconcile_saved_experience` below
-    // does not matter.
+    // for the merge's own save-time recompute to read back later. Adopting
+    // them touches only Deoxys's Speed Forme stats, which the level-up
+    // recompute in `reconcile_saved_experience` below re-derives from the
+    // same EVs, so the order of the two calls does not matter.
     let evs = evs_from_substruct2(&substructures.evs_and_condition);
 
     let mut mon = BattlePokemon::new(
