@@ -644,7 +644,7 @@ pub(crate) mod tests {
         indexed_png(bit_depth, width, height, raw, None)
     }
 
-    fn indexed_png_from_raw_with_plte(
+    pub(crate) fn indexed_png_from_raw_with_plte(
         bit_depth: u8,
         width: u32,
         height: u32,

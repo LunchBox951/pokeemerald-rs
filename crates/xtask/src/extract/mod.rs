@@ -31,6 +31,10 @@
 //! - the ordinary bag's screen, tilemap, sex palettes, male and female sheets
 //!   and palette, rotating ball, select and HM marks, and the image and
 //!   palette of every item icon `gItemIconTable` selects; and
+//! - the Pokédex screen's 14 sheets with their embedded palettes, six
+//!   palette files, and 15 raw tilemap and data files;
+//! - the battle textbox sheet, its 32-colour palette and tilemap, and the battle-window
+//!   and PP text palettes;
 //! - `mus_title`, its transitive voicegroup tree, and every sample that tree
 //!   references; and
 //! - the battle-message token table (`gBattleStringsTable` plus the special
@@ -49,7 +53,9 @@
 //! - `interface/palette/main_menu_bg`
 //! - `starter-chooser/{image,palette,raw}/<stem>`
 //! - `bag/{image,palette,raw}/<name>` and `bag/item-icon/{image,palette}/<stem>`
+//! - `battle-interface/{image,palette,raw}/<name>`
 //! - `pokemon/<species>/front` and `pokemon/<species>/palette/normal`
+//! - `pokedex-graphics/{image,image-palette,palette,raw}/<name>`
 //! - `audio/sample/{direct-sound,programmable-wave}/<name>`
 //! - `audio/voicegroup/<label>` and `audio/song/<name>`
 //! - `battle-message/table`
@@ -59,6 +65,8 @@
 
 mod audio_samples;
 mod bag;
+mod battle_anim;
+mod battle_interface;
 mod battle_message;
 mod error;
 mod fonts;
@@ -67,6 +75,7 @@ pub mod jasc_pal;
 mod layouts_json;
 pub(crate) mod midi;
 pub mod png;
+mod pokedex_graphics;
 mod publish;
 pub(crate) mod scope;
 mod sprites;
@@ -145,10 +154,13 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     extract_interface_palettes(&upstream, &mut writer)?;
     starter_chooser::extract_starter_chooser(&upstream, &mut writer)?;
     bag::extract_bag(&upstream, &mut writer)?;
+    pokedex_graphics::extract_pokedex_graphics(&upstream, &mut writer)?;
+    battle_interface::extract_battle_interface(&upstream, &mut writer)?;
     audio_samples::extract_audio_samples(&upstream, &mut writer)?;
     voicegroups::extract_voicegroups(&upstream, &mut writer)?;
     midi::extract_song(&upstream, &mut writer)?;
     battle_message::extract_battle_message(&upstream, &mut writer)?;
+    battle_anim::extract_battle_anim(&upstream, &mut writer)?;
 
     let entry_count = writer.len();
     let bytes = writer.finish()?;

@@ -170,6 +170,20 @@ pub enum ExtractError {
         /// What differs from the expected shape.
         detail: String,
     },
+    /// A Pokédex-graphics source differs from its upstream graphic's shape.
+    PokedexGraphicsAssetMismatch {
+        /// Source path.
+        path: PathBuf,
+        /// What differs from the expected shape.
+        detail: String,
+    },
+    /// A battle interface source differs from its upstream graphic's shape.
+    BattleInterfaceAssetMismatch {
+        /// Source path.
+        path: PathBuf,
+        /// What differs from the expected shape.
+        detail: String,
+    },
     /// An ordinary-bag source differs from its upstream graphic's shape.
     BagAssetMismatch {
         /// Source path.
@@ -179,6 +193,15 @@ pub enum ExtractError {
     },
     /// A battle-message source does not parse as the pinned upstream shape.
     BattleMessageSource {
+        /// Source path.
+        path: PathBuf,
+        /// One-based line, or zero when the fault is not tied to one line.
+        line: usize,
+        /// What differs from the expected shape.
+        detail: String,
+    },
+    /// A battle-animation source does not parse as the pinned upstream shape.
+    BattleAnimationSource {
         /// Source path.
         path: PathBuf,
         /// One-based line, or zero when the fault is not tied to one line.
@@ -351,11 +374,20 @@ impl fmt::Display for ExtractError {
             Self::StarterChooserAssetMismatch { path, detail } => {
                 write!(f, "starter-chooser asset `{}` {detail}", path.display())
             }
+            Self::PokedexGraphicsAssetMismatch { path, detail } => {
+                write!(f, "pokedex-graphics asset `{}` {detail}", path.display())
+            }
+            Self::BattleInterfaceAssetMismatch { path, detail } => {
+                write!(f, "battle interface asset `{}` {detail}", path.display())
+            }
             Self::BagAssetMismatch { path, detail } => {
                 write!(f, "bag asset `{}` {detail}", path.display())
             }
             Self::BattleMessageSource { path, line, detail } => {
                 write!(f, "battle-message source `{}` line {line}: {detail}", path.display())
+            }
+            Self::BattleAnimationSource { path, line, detail } => {
+                write!(f, "battle-animation source `{}` line {line}: {detail}", path.display())
             }
             Self::Wav(path, error) => {
                 write!(f, "decoding `{}` failed: {error}", path.display())

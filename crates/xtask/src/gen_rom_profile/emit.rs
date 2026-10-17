@@ -24,9 +24,10 @@ pub fn module(plan: &ProfilePlan, sha1: &str, root_count: usize) -> String {
 
 use crate::reader::GbaPtr;
 use crate::roots::{{
-    AudioRoots, BattleMessageRoots, BlobRoot, Encoding, FontRoot, ImageRoot, InterfaceRoots,
-    KeysplitRoot, MapLayoutRoot, PaletteRoot, Roots, SampleRoot, SongRoot, SpecialMessageRoot,
-    SpriteRoots, TextWindowRoots, TileAnimRoot, TilesetRoot, TitleScreenRoots, VoicegroupRoot,
+    AudioRoots, BagRoots, BattleMessageRoots, BlobRoot, Encoding, FontRoot, ImageRoot,
+    InterfaceRoots, KeysplitRoot, MapLayoutRoot, PaletteRoot, Roots, SampleRoot, SongRoot,
+    SpecialMessageRoot, SpriteRoots, TextWindowRoots, TileAnimRoot, TilesetRoot, TitleScreenRoots,
+    VoicegroupRoot,
 }};
 
 /// Pokemon Emerald (US) rev 0's root table.
@@ -72,6 +73,9 @@ pub const EMERALD_US_REV0_ROOTS: Roots = Roots {{"
 
     audio_roots(&mut out, plan);
     battle_message_roots(&mut out, &plan.battle_messages);
+
+    // The bag family stays empty until the generator locates its roots.
+    let _ = writeln!(out, "    bag: BagRoots::NONE,");
 
     let _ = writeln!(out, "}};");
     out
@@ -422,5 +426,58 @@ mod tests {
         });
         assert!(!blob.contains('\n'), "{blob}");
         assert!(blob.contains("len: 3520"), "{blob}");
+    }
+}
+
+#[cfg(test)]
+mod bag_field_tests {
+    use super::module;
+    use crate::gen_rom_profile::plan::{
+        AudioPlan, BattleMessagePlan, ProfilePlan, SpritePlan, TextWindowPlan, TitleScreenPlan,
+    };
+
+    #[test]
+    fn the_emitted_roots_literal_initializes_the_bag_field() {
+        let base = 0x0800_0000;
+        let plan = ProfilePlan {
+            tilesets: vec![],
+            title_screen: TitleScreenPlan {
+                images: vec![],
+                tilemaps: vec![],
+                palettes: vec![],
+                bg_palettes: base,
+            },
+            sprites: SpritePlan {
+                palette_table: base,
+                sheets: vec![],
+                palettes: vec![],
+            },
+            layouts: vec![],
+            fonts: vec![],
+            text_window: TextWindowPlan {
+                images: vec![],
+                palettes: vec![],
+                window_palettes: base,
+            },
+            interface: vec![],
+            audio: AudioPlan {
+                song_table: base,
+                songs: vec![],
+                voicegroups: vec![],
+                keysplits: vec![],
+                direct_sound: vec![],
+                programmable_wave: vec![],
+            },
+            battle_messages: BattleMessagePlan {
+                table: base,
+                specials: vec![],
+            },
+        };
+        let module = module(&plan, "0", 0);
+        assert!(
+            module.contains("    bag: BagRoots::NONE,"),
+            "Roots literal lacks `bag`:\n{module}"
+        );
+        assert!(module.contains(" BagRoots,"), "BagRoots not imported");
     }
 }
