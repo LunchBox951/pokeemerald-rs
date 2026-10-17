@@ -849,7 +849,9 @@ mod tests {
             (
                 "Daisy",
                 TrainerId(36),
-                Battle(BattleError::NonDamagingMove(assets::MoveId::LEECH_SEED)),
+                Battle(BattleError::UnportedAbilityInteraction(
+                    assets::AbilityId::EFFECT_SPORE,
+                )),
             ),
             (
                 "Amy & Liv",

@@ -8,7 +8,7 @@ use super::save_continue_support::{
 };
 use super::tests::{drive_through_fade_wait, pressed, TempSave};
 use super::{menu_type_for, AppScene, MainMenuState};
-use crate::main_menu::{MainMenuItem, MainMenuType};
+use crate::main_menu::{MainMenuItem, MainMenuScene, MainMenuType};
 use crate::new_game;
 use engine::save::WarpData;
 use platform::Buttons;
@@ -22,7 +22,12 @@ fn real_pack_continue_from_the_main_menu_restores_the_saved_game() {
     let temp = TempSave::new("real-pack-continue");
     let mut slot = temp.slot();
 
-    let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+    let mut phase = OverworldPhase::load(
+        crate::pack_source::PackSource::Repo,
+        new_game::NewGameOptions::DEFAULT,
+        new_game::NewGameIdentity::DEFAULT,
+    )
+    .expect("run `cargo xtask extract` first");
     play_a_bit(&mut phase);
     let before = snapshot(&phase);
     save_from_the_start_menu(&mut phase, &mut slot);
@@ -30,7 +35,11 @@ fn real_pack_continue_from_the_main_menu_restores_the_saved_game() {
     let saved = slot.load();
     let menu_type = menu_type_for(&saved);
     assert_eq!(menu_type, MainMenuType::SavedGame);
-    let menu = crate::main_menu::load_default(menu_type).expect("run `cargo xtask extract` first");
+    let menu = MainMenuScene::from_pack(
+        &assets::pack::AssetPack::load_repo().expect("run `cargo xtask extract` first"),
+        menu_type,
+    )
+    .expect("the checkout pack builds the main menu");
     assert_eq!(menu.selected(), MainMenuItem::Continue);
 
     let scene = AppScene::MainMenu(Box::new(MainMenuState { scene: menu, saved }));
@@ -40,14 +49,14 @@ fn real_pack_continue_from_the_main_menu_restores_the_saved_game() {
         scene,
         pressed(Buttons::A),
         &mut slot,
-        crate::pack_source::PackSource::Runtime,
+        crate::pack_source::PackSource::Repo,
     );
     assert!(
         matches!(waiting, AppScene::MainMenuFadeWait(_)),
         "A on CONTINUE must first enter the black fade-wait state"
     );
     let (next, _wait_frames, _destination_frame) =
-        drive_through_fade_wait(waiting, &mut slot, &crate::pack_source::PackSource::Runtime);
+        drive_through_fade_wait(waiting, &mut slot, &crate::pack_source::PackSource::Repo);
 
     let AppScene::Overworld(resumed) = next else {
         panic!("A on CONTINUE must hand off to the overworld once the fade completes");
@@ -114,11 +123,12 @@ fn real_pack_new_game_over_a_saved_game_keeps_its_options() {
         "the boot half must already recover the saved window frame"
     );
 
-    let mut menu = crate::main_menu::load_default_with_window_frame(
+    let mut menu = MainMenuScene::from_pack_with_window_frame(
+        &assets::pack::AssetPack::load_repo().expect("run `cargo xtask extract` first"),
         MainMenuType::SavedGame,
         NEW_GAME_OPTIONS_SAVED_WINDOW_FRAME,
     )
-    .expect("run `cargo xtask extract` first");
+    .expect("the checkout pack builds the main menu");
     menu.move_down();
     assert_eq!(
         menu.selected(),
@@ -133,7 +143,7 @@ fn real_pack_new_game_over_a_saved_game_keeps_its_options() {
             scene,
             pressed(Buttons::A),
             &mut slot,
-            crate::pack_source::PackSource::Runtime,
+            crate::pack_source::PackSource::Repo,
         );
         assert!(
             !matches!(next, AppScene::OverworldLoadFailed(_)),
@@ -174,13 +184,18 @@ fn real_pack_start_opens_the_menu_and_saves() {
     let temp = TempSave::new("real-pack-start-menu");
     let mut slot = temp.slot();
 
-    let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+    let mut phase = OverworldPhase::load(
+        crate::pack_source::PackSource::Repo,
+        new_game::NewGameOptions::DEFAULT,
+        new_game::NewGameIdentity::DEFAULT,
+    )
+    .expect("run `cargo xtask extract` first");
     settle(&mut phase);
     let (next, _frame) = super::advance_scene(
         AppScene::Overworld(Box::new(phase)),
         pressed(Buttons::START),
         &mut slot,
-        crate::pack_source::PackSource::Runtime,
+        crate::pack_source::PackSource::Repo,
     );
     let AppScene::Overworld(mut phase) = next else {
         panic!("a START press must leave the overworld in place");
@@ -229,7 +244,7 @@ fn real_pack_flagged_continue_lands_at_the_continue_game_warp() {
 
     let loads_before = crate::pack_source::pack_loads_on_this_thread();
     let phase = OverworldPhase::continue_saved_game(
-        crate::pack_source::PackSource::Runtime,
+        crate::pack_source::PackSource::Repo,
         block1.clone(),
         block2,
     )
@@ -274,7 +289,7 @@ fn each_selected_gender_loads_saves_and_continues_into_its_own_room() {
         let identity = new_game::NewGameIdentity::new(name, gender).unwrap();
         let arrival = new_game::bedroom_arrival(gender);
         let mut phase = OverworldPhase::load(
-            crate::pack_source::PackSource::Runtime,
+            crate::pack_source::PackSource::Repo,
             new_game::NewGameOptions::DEFAULT,
             identity,
         )
@@ -298,7 +313,7 @@ fn each_selected_gender_loads_saves_and_continues_into_its_own_room() {
             name
         );
         let resumed = OverworldPhase::continue_saved_game(
-            crate::pack_source::PackSource::Runtime,
+            crate::pack_source::PackSource::Repo,
             saved.block1,
             saved.block2,
         )

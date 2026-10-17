@@ -33,8 +33,9 @@ const _: () = assert!(TILE_SIZE == 8 && GLYPH_SIZE == 16);
 const TRANSPARENT_PALETTE_INDEX: usize = 0;
 const FRAME_TILE_BIT_DEPTH: u8 = 4;
 
-/// Window-local text origin for the standard field message box.
-pub(crate) const STANDARD_PRINTER_ORIGIN: (i32, i32) = (2, 2);
+/// Window-local text origin `AddTextPrinterParameterized2` gives every message
+/// printer: `x = currentX = 0`, `y = currentY = 1` (`pokeemerald/src/menu.c:169-180`).
+pub(crate) const STANDARD_PRINTER_ORIGIN: (i32, i32) = (0, 1);
 
 /// Screen origin of the standard field message box's content.
 pub(crate) const STANDARD_BOX_SCREEN_ORIGIN: (i32, i32) = (
