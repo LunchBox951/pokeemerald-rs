@@ -492,11 +492,10 @@ fn a_zero_wait_loop_that_never_yields_still_ends_the_track() {
     assert!(seq.tracks[0].ended, "a non-progressing loop must not hang");
 }
 
-#[test]
-fn a_zero_wait_memacc_counter_loop_with_a_huge_period_still_ends_the_track() {
-    // Three carry-chained counter cells: the state does not repeat for ~2^24
-    // commands, so only the work budget can stop it in bounded time.
-    let mut track = vec![Event::Voice(0)];
+/// Three carry-chained `MEMACC` counter cells (`ADD 1`, then `NE 0` back to
+/// event 2). The state does not repeat for about 2^24 commands.
+fn counter_burst_prelude() -> Vec<Event> {
+    let mut track = vec![Event::Voice(0), Event::Volume(127)];
     for addr in 0..3 {
         track.push(Event::MemAcc {
             op: 1,
@@ -508,11 +507,40 @@ fn a_zero_wait_memacc_counter_loop_with_a_huge_period_still_ends_the_track() {
             op: 7,
             addr,
             value: 0,
-            target: Some(1),
+            target: Some(2),
         });
     }
-    track.push(Event::Goto(1));
+    track
+}
+
+#[test]
+fn a_finite_memacc_counter_burst_past_one_tick_budget_still_reaches_its_note() {
+    let mut track = counter_burst_prelude();
+    track.extend([tied_note(60), Event::Wait(48), Event::Fine]);
     let mut seq = Sequencer::new(test_song(vec![track], 150));
-    render_frames(&mut seq, 1);
-    assert!(seq.tracks[0].ended, "a non-yielding counter loop must end");
+    let mut frames = 0;
+    while seq.voice_count() == 0 {
+        assert!(
+            !seq.tracks[0].ended,
+            "a finite counter burst must not end the track"
+        );
+        assert!(frames < 100_000, "the burst must finish in bounded frames");
+        render_frames(&mut seq, 1);
+        frames += 1;
+    }
+    assert!(frames > 1, "the burst spans more than one frame budget");
+    assert!(!seq.tracks[0].ended);
+}
+
+#[test]
+fn a_non_repeating_zero_wait_loop_keeps_render_frame_bounded_and_the_track_alive() {
+    let mut track = counter_burst_prelude();
+    track.push(Event::Goto(2));
+    let mut seq = Sequencer::new(test_song(vec![track], 150));
+    // Each frame returns after a bounded command budget instead of hanging.
+    render_frames(&mut seq, 3);
+    assert!(
+        !seq.tracks[0].ended,
+        "the loop is not yet known to be stuck"
+    );
 }
