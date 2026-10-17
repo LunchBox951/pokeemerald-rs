@@ -323,6 +323,7 @@ fn locate_palettes(
             id,
             addr,
             color_count,
+            encoding: Encoding::Raw,
         });
     }
     Ok(plans)

@@ -168,6 +168,8 @@ pub struct PalettePlan {
     pub addr: u32,
     /// How many colours to read.
     pub color_count: u16,
+    /// How the ROM stores the colours.
+    pub encoding: Encoding,
 }
 
 /// A blob root, owned.
@@ -382,6 +384,17 @@ pub struct BattleMessagePlan {
     pub specials: Vec<SpecialMessagePlan>,
 }
 
+/// The ordinary-bag roots, owned.
+#[derive(Debug, Clone)]
+pub struct BagPlan {
+    /// Every `bag/image/*` and `bag/item-icon/image/*` root.
+    pub images: Vec<ImagePlan>,
+    /// Every `bag/palette/*` and `bag/item-icon/palette/*` root.
+    pub palettes: Vec<PalettePlan>,
+    /// Every `bag/raw/*` root.
+    pub raws: Vec<BlobPlan>,
+}
+
 /// Everything one generator run derived.
 #[derive(Debug, Clone)]
 pub struct ProfilePlan {
@@ -403,6 +416,8 @@ pub struct ProfilePlan {
     pub audio: AudioPlan,
     /// The battle-message token table.
     pub battle_messages: BattleMessagePlan,
+    /// The ordinary bag's images, palettes, and tilemap.
+    pub bag: BagPlan,
 }
 
 #[cfg(test)]

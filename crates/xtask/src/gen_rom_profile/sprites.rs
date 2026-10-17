@@ -11,6 +11,8 @@
 //! ambiguous bank. A bank the table does not reference is refused, as the
 //! importer rejects roots outside the table.
 
+use rom_import::Encoding;
+
 use super::error::GenRomProfileError;
 use super::images::{locate_images, ImageQuery};
 use super::locate::{only_one_matching, to_offset, u16_at_addr, u32_at_addr};
@@ -117,6 +119,7 @@ pub fn locate(
             id: id.clone(),
             addr,
             color_count: asset.palette_colors(id)?,
+            encoding: Encoding::Raw,
         });
     }
 

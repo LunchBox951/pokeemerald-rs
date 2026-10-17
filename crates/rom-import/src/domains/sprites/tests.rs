@@ -64,6 +64,7 @@ static PALETTES: [PaletteRoot; 1] = [PaletteRoot {
     id: "sprite/palette/test",
     addr: NAMED_AT,
     color_count: 16,
+    encoding: Encoding::Raw,
 }];
 
 /// The same bank, recorded at the copy the table does not name.
