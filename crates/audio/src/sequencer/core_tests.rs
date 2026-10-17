@@ -469,3 +469,50 @@ fn an_out_of_range_resolved_reverb_level_clamps_to_the_canonical_maximum() {
         assert_eq!(a, b, "255 must render exactly as the clamped 127");
     }
 }
+
+#[test]
+fn a_finite_zero_wait_burst_longer_than_the_old_cap_still_reaches_its_note() {
+    // The former 4,096-command per-tick cap ended valid tracks; upstream's
+    // command loop has no cap, so a long finite burst must play through.
+    const BURST: usize = 10_000;
+    let mut track = vec![Event::Voice(0)];
+    track.extend(std::iter::repeat_n(Event::Volume(127), BURST));
+    track.extend([tied_note(60), Event::Wait(48), Event::Fine]);
+    let mut seq = Sequencer::new(test_song(vec![track], 150));
+    render_frames(&mut seq, 1);
+    assert!(!seq.tracks[0].ended, "finite burst must not end the track");
+    assert_eq!(seq.voice_count(), 1, "the note after the burst plays");
+}
+
+#[test]
+fn a_zero_wait_loop_that_never_yields_still_ends_the_track() {
+    let track = vec![Event::Voice(0), Event::Volume(100), Event::Goto(0)];
+    let mut seq = Sequencer::new(test_song(vec![track], 150));
+    render_frames(&mut seq, 1);
+    assert!(seq.tracks[0].ended, "a non-progressing loop must not hang");
+}
+
+#[test]
+fn a_zero_wait_memacc_counter_loop_with_a_huge_period_still_ends_the_track() {
+    // Three carry-chained counter cells: the state does not repeat for ~2^24
+    // commands, so only the work budget can stop it in bounded time.
+    let mut track = vec![Event::Voice(0)];
+    for addr in 0..3 {
+        track.push(Event::MemAcc {
+            op: 1,
+            addr,
+            value: 1,
+            target: None,
+        });
+        track.push(Event::MemAcc {
+            op: 7,
+            addr,
+            value: 0,
+            target: Some(1),
+        });
+    }
+    track.push(Event::Goto(1));
+    let mut seq = Sequencer::new(test_song(vec![track], 150));
+    render_frames(&mut seq, 1);
+    assert!(seq.tracks[0].ended, "a non-yielding counter loop must end");
+}

@@ -48,9 +48,11 @@ const TRACK_VOLUME_SCALE: u8 = 0x40;
 /// resolved reverb level into (`m4a_internal.h:12`, `m4a.c:445`).
 const MAX_REVERB_LEVEL: u8 = 127;
 
-/// Safety bound on commands processed for one track in one tick, so a
-/// malformed loop with no `Wait` cannot hang the mixer.
-const MAX_COMMANDS_PER_TICK: u32 = 4096;
+/// Commands a track may run in one tick beyond its own length before it is
+/// rejected as non-progressing. A straight-line burst never exceeds the track
+/// length, so this only bounds loops whose state keeps changing (a `MEMACC`
+/// counter) and which cycle detection alone cannot stop in bounded time.
+const NON_YIELDING_COMMAND_SLACK: usize = 1 << 20;
 
 /// Size of the `MEMACC` accumulator area (`gMPlayMemAccArea[0x10]`,
 /// `m4a.c:20`).
@@ -489,12 +491,37 @@ impl Sequencer {
         let events = &song.tracks()[track_id];
 
         if track.wait == 0 {
-            let mut guard = 0;
+            // Upstream's command loop has no per-tick cap; a finite burst of
+            // any length runs through to its next `Wait` or `Fine`
+            // (`m4a_1.s` `MPlayMain` track loop). Only a program that
+            // revisits an identical track and accumulator state without
+            // yielding can never progress, so only that is ended, found by
+            // Brent's cycle detection (one snapshot, re-taken at powers of
+            // two) so a burst costs no per-command clone. A loop whose
+            // state never repeats soon (a `MEMACC` counter) is bounded by
+            // `NON_YIELDING_COMMAND_SLACK`.
+            let mut snapshot: Option<(TrackState, MemAccArea)> = None;
+            let mut steps: u32 = 0;
+            let command_budget = events.len().saturating_add(NON_YIELDING_COMMAND_SLACK);
+            let mut next_snapshot = Some(1_u32);
             loop {
-                guard += 1;
-                if guard > MAX_COMMANDS_PER_TICK {
+                if let Some((seen_track, seen_acc)) = &snapshot {
+                    if seen_track == track && seen_acc == mem_acc {
+                        Self::finish_track(track, mixer, track_id);
+                        break;
+                    }
+                }
+                steps = steps.saturating_add(1);
+                if usize::try_from(steps).is_ok_and(|n| n > command_budget) {
                     Self::finish_track(track, mixer, track_id);
                     break;
+                }
+                // Once the doubling schedule is exhausted the last snapshot
+                // stays fixed, so the comparison never degrades to
+                // consecutive states only.
+                if next_snapshot == Some(steps) {
+                    snapshot = Some((track.clone(), mem_acc.clone()));
+                    next_snapshot = steps.checked_mul(2);
                 }
                 if track.cursor >= events.len() {
                     // `decode_track` allows a stream with no trailing `FINE`.

@@ -30331,7 +30331,7 @@
           "status": "rewritten"
         },
         "MPlayMain": {
-          "reason": "MPlayMain's tempo-tick loop and its single once-per-frame post-loop MPT_FLG_VOLCHG/MPT_FLG_PITCHG propagation pass reimplemented as Sequencer::advance_frame/do_tick/propagate_dirty_tracks, gated on TrackState::vol_dirty/pitch_dirty (set by VOL/PAN/pitch/ModType/LFO, consumed by Fine and by a successful Note, matching ply_note's own flag mask); FadeOutBody's pre-tick volX write is staged the same way via Sequencer::stage_fade_volume.",
+          "reason": "MPlayMain's tempo-tick loop and its single once-per-frame post-loop MPT_FLG_VOLCHG/MPT_FLG_PITCHG propagation pass reimplemented as Sequencer::advance_frame/do_tick/propagate_dirty_tracks, gated on TrackState::vol_dirty/pitch_dirty (set by VOL/PAN/pitch/ModType/LFO, consumed by Fine and by a successful Note, matching ply_note's own flag mask); FadeOutBody's pre-tick volX write is staged the same way via Sequencer::stage_fade_volume. Its per-track command loop is uncapped like upstream's (m4a_1.s:1232-1284): a zero-wait burst of any length runs to its next Wait or Fine, and Sequencer::process_track ends a track only when it revisits an identical track and MEMACC state without yielding, or exceeds its length plus a fixed work slack.",
           "rust_target": "crates/audio/src/sequencer.rs",
           "spec": "S-3",
           "status": "rewritten"
