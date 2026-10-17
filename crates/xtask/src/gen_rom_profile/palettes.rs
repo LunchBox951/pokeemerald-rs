@@ -5,6 +5,8 @@
 //! with a structural tie-break (a `{data, tag}` table, adjacency to a unique
 //! root) resolve it themselves.
 
+use rom_import::Encoding;
+
 use super::error::GenRomProfileError;
 use super::locate::exactly_one;
 use super::plan::{PalettePlan, ReportLine, SymbolExpectation};
@@ -28,23 +30,45 @@ pub fn locate_unique(
     expect: &dyn Fn(&str) -> SymbolExpectation,
     report: &mut Vec<ReportLine>,
 ) -> Result<Vec<PalettePlan>, GenRomProfileError> {
+    locate_unique_as(ctx, ids, Encoding::Raw, expect, report)
+}
+
+/// [`locate_unique`] for banks the ROM stores under `encoding`.
+///
+/// A compressed bank is matched by its decompressed colours, so the pack
+/// payload is the needle either way.
+///
+/// # Errors
+///
+/// Same as [`locate_unique`].
+pub fn locate_unique_as(
+    ctx: &Context<'_>,
+    ids: &[String],
+    encoding: Encoding,
+    expect: &dyn Fn(&str) -> SymbolExpectation,
+    report: &mut Vec<ReportLine>,
+) -> Result<Vec<PalettePlan>, GenRomProfileError> {
     let mut needles = Vec::with_capacity(ids.len());
     for id in ids {
-        needles.push(ctx.pack.get(id)?.payload.clone());
+        needles.push(ctx.pack.get(id)?.palette_payload(id)?.0.to_vec());
     }
-    let hits = ctx.raw.find_all(&needles);
+    let hits = match encoding {
+        Encoding::Raw => ctx.raw.find_all(&needles),
+        Encoding::Lz77 => ctx.lz77.find_all(&needles),
+    };
 
     let mut plans = Vec::with_capacity(ids.len());
     for (index, id) in ids.iter().enumerate() {
-        let asset = ctx.pack.get(id)?;
+        let (payload, color_count) = ctx.pack.get(id)?.palette_payload(id)?;
         let addr = exactly_one(id, &hits[index])?;
-        let mut line = ReportLine::unique(id, addr, len32(&asset.payload));
+        let mut line = ReportLine::unique(id, addr, len32(payload));
         line.symbol = expect(id);
         report.push(line);
         plans.push(PalettePlan {
             id: id.clone(),
             addr,
-            color_count: asset.palette_colors(id)?,
+            color_count,
+            encoding,
         });
     }
     Ok(plans)

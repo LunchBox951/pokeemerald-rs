@@ -46,9 +46,6 @@ fn leaked(prefix: &str, stem: &str) -> &'static str {
     Box::leak(format!("{prefix}{stem}").into_boxed_str())
 }
 
-/// Icon stems as the C table pairs them, read back from the public lookup's
-/// source of truth: the first rows and the shared-sheet and shared-palette
-/// cases the tests pin by name.
 fn icon_entries() -> Vec<Entry> {
     let stems = super::super::bag::icon_stems();
     let images: BTreeSet<&str> = stems.iter().map(|&(image, _)| image).collect();
@@ -160,12 +157,18 @@ fn every_identity_resolves_its_own_icon_pair() {
 #[test]
 fn shared_images_and_palettes_pair_independently() {
     let stems = super::super::bag::icon_stems();
-    // ITEM_TIMER_BALL reuses the Repeat Ball palette with its own sheet.
-    assert_ne!(stems[10].0, stems[9].0);
-    assert_eq!(stems[10].1, stems[9].1);
-    // Status heals share a sheet under different palettes.
-    assert_eq!(stems[15].0, stems[16].0);
-    assert_ne!(stems[15].1, stems[16].1);
+    let (timer_ball, repeat_ball) = (stems[10], stems[9]);
+    assert_ne!(timer_ball.0, repeat_ball.0, "timer ball has its own sheet");
+    assert_eq!(
+        timer_ball.1, repeat_ball.1,
+        "timer ball reuses the repeat ball palette"
+    );
+    let (burn_heal, ice_heal) = (stems[15], stems[16]);
+    assert_eq!(burn_heal.0, ice_heal.0, "status heals share a sheet");
+    assert_ne!(
+        burn_heal.1, ice_heal.1,
+        "status heals have distinct palettes"
+    );
 }
 
 #[test]

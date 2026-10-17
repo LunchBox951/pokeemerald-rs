@@ -1,4 +1,4 @@
-//! Addressed event-script pack schema (S-4, issue #2096, parent #1671).
+//! Addressed event-script pack schema.
 //!
 //! `pokeemerald` event scripts reference each other by absolute cartridge
 //! pointers (`ScriptJump`, `ScriptCall` and `ScriptReadWord`, `src/script.c`),
@@ -272,7 +272,7 @@ pub struct MapTableRecord {
     pub symbol: String,
     /// Source address of the first record.
     pub address: CartridgeAddress,
-    /// Bytes through the terminator.
+    /// Length through the terminator.
     pub byte_len: u32,
     /// Decoded records.
     pub table: MapTable,

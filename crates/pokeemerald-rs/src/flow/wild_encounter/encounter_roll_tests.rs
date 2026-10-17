@@ -389,7 +389,8 @@ const REAL_GRASS: [(i32, i32); 2] = [(2, 4), (3, 4)];
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn walking_route_101s_real_grass_produces_an_encounter_from_its_own_table() {
-    let scene = crate::overworld::load_room(
+    let scene = crate::overworld::load_room_from_source(
+        &crate::pack_source::PackSource::Repo,
         ROUTE_101,
         crate::overworld::PlayerCharacter::Brendan,
         &engine::event_data::EventData::new(),
@@ -421,11 +422,12 @@ fn walking_route_101s_real_grass_produces_an_encounter_from_its_own_table() {
             .elevation
     };
 
-    let mut phase = OverworldPhase::for_test(
+    let mut phase = OverworldPhase::for_test_with_source(
         scene,
         ROUTE_101,
         PlayerState::new(REAL_GRASS[0], elevation, Direction::East),
         None,
+        crate::pack_source::PackSource::Repo,
     );
     phase.rng = Rng::new(ENCOUNTER_SEED);
     phase.party_lead = Some(player_mon(277, 50, vec![MoveId::POUND]));

@@ -137,6 +137,17 @@ fn apply_weather(damage: u128, move_type: Type, weather: Weather, is_solar_beam:
 /// saturating to `u32::MAX` if the true result would not fit.
 #[must_use]
 pub fn base_damage(input: &DamageInput) -> u32 {
+    base_damage_with_flash_fire(input, false)
+}
+
+/// [`base_damage`] with the attacker's Flash Fire latch.
+///
+/// A latched Fire move multiplies the post-weather damage by 15/10 before the
+/// final `+2` (`CalculateBaseDamage`, `src/pokemon.c:3366-3371`). The
+/// multiplier belongs inside this function rather than after it so the
+/// truncation happens before the constant is added.
+#[must_use]
+pub(crate) fn base_damage_with_flash_fire(input: &DamageInput, flash_fire_latched: bool) -> u32 {
     let category = MoveCategory::for_type(input.move_type);
     let attack = nonzero_stage_adjusted_stat(input.attack_stat, input.attack_stage);
     let defense = nonzero_stage_adjusted_stat(input.defense_stat, input.defense_stage);
@@ -169,6 +180,10 @@ pub fn base_damage(input: &DamageInput) -> u32 {
             }
             damage = apply_weather(damage, input.move_type, input.weather, input.is_solar_beam);
         }
+    }
+
+    if flash_fire_latched && input.move_type == Type::Fire {
+        damage = 15 * damage / 10;
     }
 
     u32::try_from(damage + 2).unwrap_or(u32::MAX)

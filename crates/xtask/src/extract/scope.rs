@@ -3,7 +3,11 @@
 //! One list per domain, read by both the extractor and the profile generator
 //! so a pack missing a root is refused rather than half-described.
 
+use std::path::Path;
+
+use super::bag::{fixed_ids, icon_ids};
 use super::sprites::{FIRST_GENERIC_NPC_PALETTE, LAST_GENERIC_NPC_PALETTE};
+use super::ExtractError;
 
 #[derive(Clone, Copy)]
 pub(crate) struct TilesetSource {
@@ -401,4 +405,72 @@ pub(crate) fn text_window_ids() -> Vec<String> {
         .chain(image_palettes)
         .chain(banks)
         .collect()
+}
+
+/// One starter whose static battler art the pack carries.
+#[derive(Clone, Copy)]
+pub(crate) struct BattlerSource {
+    /// The directory under `graphics/pokemon/` and the pack id's species stem.
+    pub(crate) name: &'static str,
+    /// The species' row in `gMonStillFrontPicTable` and the three tables beside it.
+    pub(crate) species: assets::SpeciesId,
+}
+
+impl BattlerSource {
+    /// The front image id.
+    pub(crate) fn front_id(self) -> String {
+        format!("pokemon/{}/front", self.name)
+    }
+
+    /// The back image id.
+    pub(crate) fn back_id(self) -> String {
+        format!("pokemon/{}/back", self.name)
+    }
+
+    /// The normal palette id.
+    pub(crate) fn normal_id(self) -> String {
+        format!("pokemon/{}/palette/normal", self.name)
+    }
+
+    /// The shiny palette id.
+    pub(crate) fn shiny_id(self) -> String {
+        format!("pokemon/{}/palette/shiny", self.name)
+    }
+
+    /// Every id the species owns: front, back, normal, shiny.
+    pub(crate) fn ids(self) -> [String; 4] {
+        [
+            self.front_id(),
+            self.back_id(),
+            self.normal_id(),
+            self.shiny_id(),
+        ]
+    }
+}
+
+/// Treecko, Torchic, and Mudkip (`still_front_pic_table.h:283,286,289`,
+/// `back_pic_table.h:280,283,286`).
+pub(crate) const BATTLERS: [BattlerSource; 3] = [
+    BattlerSource {
+        name: "treecko",
+        species: assets::SpeciesId::TREECKO,
+    },
+    BattlerSource {
+        name: "torchic",
+        species: assets::SpeciesId::TORCHIC,
+    },
+    BattlerSource {
+        name: "mudkip",
+        species: assets::SpeciesId::MUDKIP,
+    },
+];
+
+/// Every `bag/` pack id extraction emits: the fixed manifest, then the
+/// item icons `gItemIconTable` selects.
+///
+/// # Errors
+///
+/// [`ExtractError`] if the checkout's icon table cannot be read.
+pub(crate) fn bag_ids(upstream: &Path) -> Result<Vec<String>, ExtractError> {
+    Ok([fixed_ids(), icon_ids(upstream)?].concat())
 }

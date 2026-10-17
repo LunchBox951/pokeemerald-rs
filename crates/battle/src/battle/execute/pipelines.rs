@@ -299,7 +299,7 @@ impl Battle {
                 is_critical: raw_damage.is_critical,
             });
             hits_landed += 1;
-            self.apply_static_contact(attacker_is_player, move_id, rng, events)?;
+            self.apply_contact_abilities(attacker_is_player, move_id, rng, events)?;
         }
         Ok(MultiHitResult {
             hits_landed,
@@ -383,7 +383,11 @@ impl Battle {
     }
 }
 
-fn hit_failure_event(outcome: HitOutcome, by_player: bool, move_id: MoveId) -> BattleEvent {
+pub(super) fn hit_failure_event(
+    outcome: HitOutcome,
+    by_player: bool,
+    move_id: MoveId,
+) -> BattleEvent {
     match outcome {
         HitOutcome::Miss => BattleEvent::Missed { by_player, move_id },
         HitOutcome::NoEffect => BattleEvent::NoEffect { by_player, move_id },
@@ -391,6 +395,12 @@ fn hit_failure_event(outcome: HitOutcome, by_player: bool, move_id: MoveId) -> B
         HitOutcome::WonderGuardBlocked => BattleEvent::WonderGuardBlocked { by_player, move_id },
         HitOutcome::Hit { .. } => {
             unreachable!("a landed hit cannot produce a failure event")
+        }
+        HitOutcome::Absorbed { .. } | HitOutcome::FlashFireBlocked { .. } => {
+            unreachable!(
+                "no admitted multi-hit or drain move is Electric, Water, or Fire, so these \
+                 pipelines never meet an absorbing ability"
+            )
         }
     }
 }

@@ -4,6 +4,8 @@
 
 mod common;
 
+#[path = "turn_engine/absorbing_abilities.rs"]
+mod absorbing_abilities;
 #[path = "turn_engine/confusion.rs"]
 mod confusion;
 #[path = "turn_engine/escape.rs"]
@@ -36,6 +38,8 @@ mod poison_synchronize;
 mod poison_trainer_aftermath;
 #[path = "turn_engine/pressure.rs"]
 mod pressure;
+#[path = "turn_engine/rough_skin_contact.rs"]
+mod rough_skin_contact;
 #[path = "turn_engine/shed_skin.rs"]
 mod shed_skin;
 #[path = "turn_engine/stat_changes.rs"]

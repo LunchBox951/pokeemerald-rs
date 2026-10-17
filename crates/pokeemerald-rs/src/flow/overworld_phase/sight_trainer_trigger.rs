@@ -415,8 +415,9 @@ impl OverworldPhase {
     /// [`npc_trainer_battle::start_npc_trainer_battle`] itself, ahead of its
     /// first draw -- a fainted-lead check, then
     /// [`battle::ensure_trainer_party_startable`]'s pre-flight for
-    /// everything else -- so standing in *any* Route 103 cone leaves the
-    /// stream byte-identical for as long as the player cares to stand there.
+    /// everything else -- so standing in any Route 103 cone whose battle is
+    /// refused leaves the stream byte-identical for as long as the player
+    /// cares to stand there.
     ///
     /// Two of those refusals are worth naming, because they are what the
     /// player actually meets on this route today:
@@ -425,18 +426,19 @@ impl OverworldPhase {
     ///   `TrainerParty::ItemDefaultMoves`, which
     ///   [`crate::flow::npc_trainer_battle`] refuses rather than silently
     ///   drop the held item (that module's own docs).
-    /// - **Every real Route 103 sight trainer's default moveset**, Miguel
-    ///   included. Unlike the six Route 103 *rivals*, whose hand-authored
+    /// - **The other Route 103 sight trainers' default movesets**, Andrew
+    ///   excepted. Unlike the six Route 103 *rivals*, whose hand-authored
     ///   `NoItemCustomMoves` movesets were kept inside this crate's early
-    ///   supported-move set, these nine all carry `NoItemDefaultMoves` -- a
-    ///   real level-up moveset ([`battle::initial_moveset`]) that reliably
-    ///   includes at least one move this engine cannot execute *or* whose
-    ///   effect the trainer AI cannot score. That is an emergent wall, not a
+    ///   supported-move set, these trainers carry `NoItemDefaultMoves` -- a
+    ///   real level-up moveset ([`battle::initial_moveset`]) that, for every
+    ///   one of them but Andrew, still includes at least one move this
+    ///   engine cannot execute *or* whose effect the trainer AI cannot
+    ///   score. That is an emergent wall, not a
     ///   guard this module wrote: the geometry, the defeated-flag gating,
     ///   the eligibility table and now the approach are all real and
     ///   exercised against genuine Route 103 data; only the last step fails,
-    ///   for all nine, and this module's own
-    ///   `every_sight_trainers_real_party_fails_to_construct_for_exactly_these_reasons`
+    ///   for all but Andrew, and this module's own
+    ///   `refused_sight_trainers_real_parties_fail_to_construct_for_exactly_these_reasons`
     ///   pins each trainer's exact refusal -- offending move id included --
     ///   so a future move-coverage slice is forced to update it rather than
     ///   let it go stale. Widening move coverage is `battle`'s own, much
@@ -801,27 +803,29 @@ mod tests {
     }
 
     /// The emergent construction wall, pinned rather than left as prose:
-    /// every one of [`SIGHT_TRAINERS`]' distinct trainer ids currently fails
+    /// every one of [`SIGHT_TRAINERS`]' distinct trainer ids except Andrew's
+    /// (whose party now constructs,
+    /// `andrews_real_party_constructs_and_plays_to_a_win`) currently fails
     /// to construct through
     /// [`npc_trainer_battle::start_npc_trainer_battle`] -- Miguel for his
-    /// held item, every other one for a specific move this battle engine
-    /// does not yet implement or score
+    /// held item, every other refused one for a specific move this battle
+    /// engine does not yet implement or score
     /// ([`OverworldPhase::begin_sight_trainer_approach_if_seen`]'s "Refusals
     /// cost nothing, forever").
     ///
     /// The **exact** refusal is pinned per trainer, not merely "it fails"
     /// (issue #264 review): the reason a trainer is unreachable is the
     /// interesting fact, and naming the offending move id is what forces a
-    /// future move-coverage slice to come back here -- widening support for
-    /// Rhett's pinned `MOVE_FOCUS_ENERGY` alone could leave a Rhett who now
-    /// fails on some other move, and a bare `is_err()` would have hidden
+    /// future move-coverage slice to come back here -- scoring Rhett's
+    /// former `MOVE_FOCUS_ENERGY` left a Rhett who now fails on
+    /// `MOVE_SAND_ATTACK`, and a bare `is_err()` would have hidden
     /// that.
     ///
     /// Each refusal must also cost **nothing**: the whole party is screened
     /// before the first draw (`npc_trainer_battle`'s module docs), which is
     /// what makes the per-frame sight check above safe to run forever.
     #[test]
-    fn every_sight_trainers_real_party_fails_to_construct_for_exactly_these_reasons() {
+    fn refused_sight_trainers_real_parties_fail_to_construct_for_exactly_these_reasons() {
         use battle::BattleError;
         use npc_trainer_battle::NpcTrainerBattleError::{Battle, HeldItemParty};
 
@@ -830,43 +834,36 @@ mod tests {
         // move in that trainer's own level-up-derived moveset that some
         // screen refuses.
         //
-        // Stun Spore, Thunder Wave, Supersonic, Focus Energy, Screech, Defense
-        // Curl, and Supersonic are all executable, so those parties get past
+        // Screech and Defense Curl are executable, so those parties get past
         // `ensure_executable` and stop at
         // `battle::battle::trainer_ai::ensure_scoreable` instead -- the
-        // trainer AI cannot yet score any of those effects. Absorb, Splash,
-        // Charge, and Poison Sting are now scoreable (the audited
-        // `CheckBadMove` no-`if_effect` rows), so Daisy, Andrew, Marcos, and
-        // Pete stop at their next unscoreable move. Both screens run before
-        // the first draw, so the per-frame cone check stays draw-free.
+        // trainer AI cannot yet score those effects. Stun Spore, Thunder
+        // Wave, Supersonic, and Focus Energy are now scoreable (the
+        // `CheckBadMove` Paralyze, Confuse, and Focus Energy handlers), as
+        // are Absorb, Splash, Charge, and Poison Sting, so those parties stop
+        // at their next refused move. Andrew's whole party now constructs
+        // (`andrews_real_party_constructs_and_plays_to_a_win`). Both screens
+        // run before the first draw, so the per-frame cone check stays
+        // draw-free.
         let expected = [
             (
                 "Daisy",
                 TrainerId(36),
-                Battle(BattleError::UnscoreableMoveEffect(
-                    assets::MoveId::STUN_SPORE,
+                Battle(BattleError::UnportedAbilityInteraction(
+                    assets::AbilityId::EFFECT_SPORE,
                 )),
             ),
             (
                 "Amy & Liv",
                 TrainerId(481),
-                Battle(BattleError::UnscoreableMoveEffect(
-                    assets::MoveId::THUNDER_WAVE,
-                )),
-            ),
-            (
-                "Andrew",
-                TrainerId(336),
-                Battle(BattleError::UnscoreableMoveEffect(
-                    assets::MoveId::SUPERSONIC,
-                )),
+                Battle(BattleError::NonDamagingMove(assets::MoveId::HELPING_HAND)),
             ),
             ("Miguel", TrainerId(293), HeldItemParty(TrainerId(293))),
             (
                 "Rhett",
                 TrainerId(703),
                 Battle(BattleError::UnscoreableMoveEffect(
-                    assets::MoveId::FOCUS_ENERGY,
+                    assets::MoveId::SAND_ATTACK,
                 )),
             ),
             (
@@ -884,16 +881,19 @@ mod tests {
             (
                 "Pete",
                 TrainerId(735),
-                Battle(BattleError::UnscoreableMoveEffect(
-                    assets::MoveId::SUPERSONIC,
+                Battle(BattleError::UnsupportedMoveEffect(
+                    assets::MoveId::CONSTRICT,
                 )),
             ),
         ];
 
         let distinct: std::collections::HashSet<u16> =
             SIGHT_TRAINERS.iter().map(|entry| entry.id.0).collect();
-        let covered: std::collections::HashSet<u16> =
-            expected.iter().map(|(_, id, _)| id.0).collect();
+        let covered: std::collections::HashSet<u16> = expected
+            .iter()
+            .map(|(_, id, _)| id.0)
+            .chain([ANDREW.0])
+            .collect();
         assert_eq!(
             distinct, covered,
             "this table must cover exactly SIGHT_TRAINERS' distinct ids"
@@ -925,5 +925,42 @@ mod tests {
                 "{name} -> {id:?}: a refused construction must draw nothing at all"
             );
         }
+    }
+
+    const ANDREW: TrainerId = TrainerId(336);
+
+    /// Andrew (`CheckBadMove` only) has Supersonic on his Tentacool, which
+    /// the Confuse handler now scores, so his party constructs and plays out.
+    #[test]
+    fn andrews_real_party_constructs_and_plays_to_a_win() {
+        let lead = battle::BattlePokemon::new(
+            &battle::Dex::new(),
+            assets::SpeciesId(277), // SPECIES_TREECKO
+            50,
+            battle::fixed_ivs(31),
+            0,
+            vec![assets::MoveId::SLASH],
+        )
+        .expect("Treecko/Slash is a valid pairing");
+        let mut rng = engine::rng::Rng::new(1);
+        let mut slot = Some(
+            npc_trainer_battle::start_npc_trainer_battle(lead, ANDREW, &mut rng)
+                .expect("Andrew's party must construct"),
+        );
+        let mut written_back = None;
+        let mut money = 0;
+        let mut outcome = None;
+        for _turn in 0..64 {
+            outcome = npc_trainer_battle::advance_npc_trainer_battle(
+                &mut slot,
+                &mut written_back,
+                &mut money,
+                &mut rng,
+            );
+            if outcome.is_some() {
+                break;
+            }
+        }
+        assert_eq!(outcome, Some(battle::BattleOutcome::PlayerWon));
     }
 }
