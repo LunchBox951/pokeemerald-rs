@@ -815,7 +815,8 @@ impl BattlePokemon {
     ///
     /// The stat recompute stays [`compute_stats`], never
     /// [`compute_stats_with_evs`] -- see the [`evs`] module docs for why
-    /// [`BattlePokemon::stats`] must stay `0`-EV even here. A crossed level
+    /// [`BattlePokemon::stats`] must stay `0`-EV even here, Deoxys's Speed
+    /// Forme stats excepted. A crossed level
     /// also snapshots [`BattlePokemon::evs_at_last_level_up`] -- see that
     /// field's own doc for what reads it and why.
     fn raise_level_to_experience(&mut self) -> Option<(u8, u8)> {
@@ -843,11 +844,37 @@ impl BattlePokemon {
             self.nature,
             self.ivs,
         );
+        self.apply_speed_forme_evs();
         self.current_hp = self
             .current_hp
             .saturating_add(self.stats.max_hp.saturating_sub(old_max_hp));
         self.evs_at_last_level_up = self.evs;
         Some((old_level, new_level))
+    }
+
+    /// Feeds Deoxys's current EVs into its five Speed Forme stats.
+    ///
+    /// Upstream `GetDeoxysStat` reads each stat's EV byte alongside its IV
+    /// (`pokemon.c:2707-2711`), so the substitution is EV-aware even though
+    /// every other species' live block stays `0`-EV. Max HP is untouched:
+    /// `GetDeoxysStat` never reads it, and the save-side HP bookkeeping in
+    /// [`evs`] relies on that `0`-EV floor.
+    fn apply_speed_forme_evs(&mut self) {
+        if self.species != SpeciesId::DEOXYS {
+            return;
+        }
+        let ev_aware = compute_stats_with_evs(
+            self.species,
+            &effective_battle_base_stats(self.species, &self.base_stats),
+            self.level,
+            self.nature,
+            self.ivs,
+            self.evs,
+        );
+        self.stats = Stats {
+            max_hp: self.stats.max_hp,
+            ..ev_aware
+        };
     }
 
     /// Attacking stat and stage for the move category.

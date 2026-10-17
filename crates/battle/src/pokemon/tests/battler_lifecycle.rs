@@ -2,7 +2,7 @@
 //! speed, and the damage/heal/faint/reset lifecycle.
 
 use super::super::{
-    compute_stats, BattlePokemon, Ivs, MoveSlot, StatStages, MAX_IV, MAX_LEVEL, MAX_MON_MOVES,
+    compute_stats, BattlePokemon, Evs, Ivs, MoveSlot, StatStages, MAX_IV, MAX_LEVEL, MAX_MON_MOVES,
     MIN_LEVEL, MOVE_NONE, SPECIES_NONE, SPECIES_OLD_UNOWN_B, SPECIES_OLD_UNOWN_Z, SPECIES_SHEDINJA,
 };
 use super::shared::{
@@ -635,4 +635,53 @@ fn deoxys_keeps_speed_forme_stats_across_a_level_up() {
     assert_eq!(stats.speed, 220);
     assert_eq!(stats.sp_attack, 126);
     assert_eq!(stats.sp_defense, 121);
+}
+
+const DEOXYS_ATTACK_TRAINED: Evs = Evs {
+    hp: 252,
+    attack: 252,
+    defense: 0,
+    speed: 0,
+    sp_attack: 0,
+    sp_defense: 0,
+};
+
+#[test]
+fn deoxys_speed_forme_stats_read_its_adopted_evs() {
+    let dex = Dex::new();
+    let mon = BattlePokemon::new(&dex, SPECIES_DEOXYS, 50, MAX_IVS, 0, vec![SCRATCH])
+        .expect("Deoxys at level 50 with Scratch is representable")
+        .with_evs(DEOXYS_ATTACK_TRAINED);
+    let stats = mon.stats();
+    // `GetDeoxysStat` (`pokemon.c:2707-2711`): ((95*2 + 31 + 252/4) * 50) / 100 + 5.
+    assert_eq!(stats.attack, 147);
+    assert_eq!(stats.defense, 110);
+    assert_eq!(stats.speed, 200);
+    // Max HP is never a `GetDeoxysStat` read, so it keeps the zero-EV floor.
+    assert_eq!(stats.max_hp, 125);
+}
+
+#[test]
+fn deoxys_speed_forme_stats_keep_their_evs_across_a_level_up() {
+    let dex = Dex::new();
+    let mut mon = BattlePokemon::new(&dex, SPECIES_DEOXYS, 50, MAX_IVS, 0, vec![SCRATCH])
+        .expect("Deoxys at level 50 with Scratch is representable")
+        .with_evs(DEOXYS_ATTACK_TRAINED);
+    let growth_rate = dex.species(SPECIES_DEOXYS).unwrap().growth_rate;
+    mon.reconcile_saved_experience(assets::experience_for_level(growth_rate, 55).unwrap());
+
+    assert_eq!(mon.level(), 55, "fixture sanity: the level moved");
+    let stats = mon.stats();
+    // ((95*2 + 31 + 63) * 55) / 100 + 5.
+    assert_eq!(stats.attack, 161);
+    assert_eq!(stats.defense, 121);
+    assert_eq!(stats.max_hp, 137);
+}
+
+#[test]
+fn other_species_live_stats_stay_zero_ev_after_adopting_evs() {
+    let dex = Dex::new();
+    let untrained = sample_mon(&dex);
+    let trained = sample_mon(&dex).with_evs(DEOXYS_ATTACK_TRAINED);
+    assert_eq!(trained.stats(), untrained.stats());
 }
