@@ -414,3 +414,31 @@ fn deoxys_speed_forme_speed_outruns_a_target_the_normal_forme_would_lose_to() {
         "Deoxys moves first: {events:?}"
     );
 }
+
+/// EVs earned in one battle reach Deoxys's Speed Forme stats at the next
+/// battle's start, the way upstream's battle-start copy re-reads the party
+/// member through `GetMonData` (`battle_controller_player.c:1641`) and so
+/// re-runs `GetDeoxysStat` (`pokemon.c:2707-2711`).
+#[test]
+fn deoxys_speed_forme_stats_pick_up_earned_evs_at_the_next_battle() {
+    let dex = Dex::new();
+    let mut deoxys = max_iv_mon(&dex, 410, 50, vec![MoveId::TACKLE]);
+    assert_eq!(deoxys.stats().attack, 115);
+    // Four Attack EVs cross one `EV / 4` step without a level-up; the
+    // earning battle's stats stay as they were.
+    deoxys.gain_evs(assets::EvYield {
+        hp: 0,
+        attack: 4,
+        defense: 0,
+        speed: 0,
+        sp_attack: 0,
+        sp_defense: 0,
+    });
+    assert_eq!(deoxys.stats().attack, 115);
+
+    let jolteon = max_iv_mon(&dex, 135, 60, vec![MoveId::TACKLE]);
+    let mut rng = SequenceRng::new(vec![0; 64]);
+    let battle = Battle::new(dex, deoxys, jolteon, false, &mut rng).unwrap();
+    // ((95*2 + 31 + 4/4) * 50) / 100 + 5.
+    assert_eq!(battle.player().stats().attack, 116);
+}

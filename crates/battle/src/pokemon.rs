@@ -869,7 +869,13 @@ impl BattlePokemon {
     /// every other species' live block stays `0`-EV. Max HP is untouched:
     /// `GetDeoxysStat` never reads it, and the save-side HP bookkeeping in
     /// [`evs`] relies on that `0`-EV floor.
-    fn apply_speed_forme_evs(&mut self) {
+    ///
+    /// [`BattlePokemon::gain_evs`] does not call this, so EVs earned in a
+    /// battle leave that battle's stats alone; each battle constructor calls
+    /// it on the player's side instead, where upstream's battle-start copy
+    /// re-reads the party member through `GetMonData`
+    /// (`CopyPlayerMonData`, `battle_controller_player.c:1641`-`:1645`).
+    pub(crate) fn apply_speed_forme_evs(&mut self) {
         if self.species != SpeciesId::DEOXYS {
             return;
         }

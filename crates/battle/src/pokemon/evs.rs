@@ -98,7 +98,8 @@ impl BattlePokemon {
     /// Each stat's gain is limited by the remaining total capacity and then by
     /// that stat's capacity. Stats are processed in [`Evs::as_array`] order,
     /// and processing stops when the total reaches [`MAX_TOTAL_EVS`]. This does
-    /// not recompute live stats.
+    /// not recompute live stats; Deoxys's Speed Forme stats pick the new EVs up
+    /// when the next battle is constructed.
     ///
     /// Battle reward settlement calls this before
     /// [`BattlePokemon::apply_experience`].
