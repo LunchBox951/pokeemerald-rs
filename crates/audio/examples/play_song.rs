@@ -537,12 +537,16 @@ fn usable_callback_in_span(from: u64, to: u64, usable_through: u64) -> bool {
 ///   it, but only while callbacks stay live. Staleness is read from
 ///   `PlaybackProgress::usable_through_frames`, never from the sounded
 ///   estimate's shape: frames submitted past both the previous poll and that
-///   mark are stale evidence, and a usable callback discards it.
+///   mark are stale evidence. A usable callback landing inside an advance
+///   discards the evidence gathered before it; the frames after its mark
+///   still count.
 /// - Live callbacks: at least `derived_tail / 4` of stale evidence, with the
-///   latest advance within one recent inter-advance gap (see
-///   [`CADENCE_WINDOW`]) plus two polls. A gap far past that cadence is a
-///   stall: evidence restarts and the tail runs from the resumed callbacks.
-/// - Tail finish: needs the tail elapsed, the playback the latest usable
+///   latest advance within the longest recent cadence sample (see
+///   [`CADENCE_WINDOW`]) plus two polls. Each sample is the longer of the
+///   inter-advance gap and the playback that advance covered. A gap far past
+///   that cadence is a stall: evidence restarts and the tail runs from the
+///   resumed callbacks.
+/// - Tail finish: needs the tail elapsed, the latest playback any usable
 ///   reading still owed run out (see [`reading_due`]), and no callback in
 ///   flight (a mark past the submitted total). It must also end within
 ///   `policy.max_wait`; a poll at or past the deadline takes it only on those
@@ -890,7 +894,7 @@ impl MeasuredTail {
                 .is_some_and(|last| current.duration_since(last) <= cadence + self.interval * 2);
         // The tail runs from `started` or from the resumption after a stall;
         // a usable reading does not restart it, so a valid-then-stale device
-        // keeps its budget, but the finish waits for the playback the latest
+        // keeps its budget, but the finish waits for the latest playback any
         // usable reading still owed. A callback in flight vetoes the finish.
         let tail_due = (self.tail_started + self.derived_tail).max(self.measured_due);
         let stale_tail_elapsed = !in_flight && callbacks_alive && current >= tail_due;
