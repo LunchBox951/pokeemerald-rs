@@ -26,6 +26,7 @@
 pub(crate) mod audio;
 pub(crate) mod bag;
 pub(crate) mod battle_messages;
+pub(crate) mod battlers;
 pub(crate) mod fonts;
 pub(crate) mod interface;
 pub(crate) mod layouts;
@@ -62,6 +63,7 @@ pub(crate) const DOMAINS: &[Domain] = &[
     song::write,
     battle_messages::write,
     bag::write,
+    battlers::write,
 ];
 
 /// Read one image root's tiles and unpack them into a pack entry.

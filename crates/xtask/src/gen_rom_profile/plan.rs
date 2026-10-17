@@ -395,6 +395,36 @@ pub struct BagPlan {
     pub raws: Vec<BlobPlan>,
 }
 
+/// One species' battler roots, owned.
+#[derive(Debug, Clone)]
+pub struct BattlerSpeciesPlan {
+    /// The species' `SPECIES_*` value.
+    pub species: u16,
+    /// The front image.
+    pub front: ImagePlan,
+    /// The back image.
+    pub back: ImagePlan,
+    /// The normal palette.
+    pub normal: PalettePlan,
+    /// The shiny palette.
+    pub shiny: PalettePlan,
+}
+
+/// The static battler art, owned.
+#[derive(Debug, Clone)]
+pub struct BattlerPlan {
+    /// `gMonStillFrontPicTable`.
+    pub front_table: u32,
+    /// `gMonBackPicTable`.
+    pub back_table: u32,
+    /// `gMonPaletteTable`.
+    pub palette_table: u32,
+    /// `gMonShinyPaletteTable`.
+    pub shiny_palette_table: u32,
+    /// Every species with pack entries.
+    pub species: Vec<BattlerSpeciesPlan>,
+}
+
 /// Everything one generator run derived.
 #[derive(Debug, Clone)]
 pub struct ProfilePlan {
@@ -418,6 +448,8 @@ pub struct ProfilePlan {
     pub battle_messages: BattleMessagePlan,
     /// The ordinary bag's images, palettes, and tilemap.
     pub bag: BagPlan,
+    /// The starters' static battler art.
+    pub battlers: BattlerPlan,
 }
 
 #[cfg(test)]

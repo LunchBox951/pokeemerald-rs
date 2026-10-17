@@ -61,8 +61,8 @@ const fn pal(id: &'static str, addr: GbaPtr) -> PaletteRoot {
     PaletteRoot {
         id,
         addr,
-        color_count: 16,
         encoding: Encoding::Raw,
+        color_count: 16,
     }
 }
 

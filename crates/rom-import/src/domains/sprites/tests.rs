@@ -63,8 +63,8 @@ static SHEETS: [ImageRoot; 1] = [ImageRoot {
 static PALETTES: [PaletteRoot; 1] = [PaletteRoot {
     id: "sprite/palette/test",
     addr: NAMED_AT,
-    color_count: 16,
     encoding: Encoding::Raw,
+    color_count: 16,
 }];
 
 /// The same bank, recorded at the copy the table does not name.

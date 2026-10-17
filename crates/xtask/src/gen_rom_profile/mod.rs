@@ -54,6 +54,7 @@
 mod audio;
 mod bag;
 mod battle_messages;
+mod battlers;
 mod emit;
 mod error;
 mod fonts;
@@ -179,6 +180,7 @@ fn locate_profile(
         audio: audio::locate(ctx, lines)?,
         battle_messages: battle_messages::locate(ctx, lines)?,
         bag: bag::locate(ctx, lines)?,
+        battlers: battlers::locate(ctx, lines)?,
     })
 }
 

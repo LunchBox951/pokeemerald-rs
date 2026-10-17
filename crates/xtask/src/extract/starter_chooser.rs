@@ -1,27 +1,18 @@
 use std::path::Path;
 
-use super::{build_image_entry, jasc_pal, png, read_file, read_text, ExtractError};
+use super::{build_image_entry, png, read_file, ExtractError};
 use super::{build_palette_entry, push_raw_bytes};
 use pack_format::PackWriter;
 
 const CHOOSER_DIRECTORY: &str = "graphics/starter_choose";
 
-/// Where an indexed sheet's palette comes from.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PaletteSource {
-    /// The `PLTE` chunk of the sheet's own PNG.
-    EmbeddedPng,
-    /// A JASC `.pal` file beside the sheet.
-    Jasc(&'static str),
-}
-
 #[derive(Clone, Copy, Debug)]
+/// An indexed sheet whose palette is its own PNG's `PLTE` chunk.
 struct SheetSource {
     directory: &'static str,
     png: &'static str,
     image_id: &'static str,
     palette_id: &'static str,
-    palette: PaletteSource,
     width: u32,
     height: u32,
     colors: usize,
@@ -34,33 +25,15 @@ struct TilemapSource {
     byte_len: usize,
 }
 
-const fn front(
-    species: &'static str,
-    image_id: &'static str,
-    palette_id: &'static str,
-) -> SheetSource {
-    SheetSource {
-        directory: species,
-        png: "front.png",
-        image_id,
-        palette_id,
-        palette: PaletteSource::Jasc("normal.pal"),
-        width: 64,
-        height: 64,
-        colors: 16,
-    }
-}
-
 /// Image and palette pairs, relative to the checkout's `graphics/`: the
-/// chooser sheets (`starter_choose.c:54-61`, `400-422`) and the shared normal
-/// fronts (`629-635`).
-const SHEETS: [SheetSource; 6] = [
+/// chooser sheets (`starter_choose.c:54-61`, `400-422`). The starters' shared
+/// battler art (`629-635`) is the battler manifest's.
+const SHEETS: [SheetSource; 3] = [
     SheetSource {
         directory: CHOOSER_DIRECTORY,
         png: "tiles.png",
         image_id: "starter-chooser/image/tiles",
         palette_id: "starter-chooser/palette/tiles",
-        palette: PaletteSource::EmbeddedPng,
         width: 128,
         height: 128,
         colors: 32,
@@ -70,7 +43,6 @@ const SHEETS: [SheetSource; 6] = [
         png: "pokeball_selection.png",
         image_id: "starter-chooser/image/pokeball_selection",
         palette_id: "starter-chooser/palette/pokeball_selection",
-        palette: PaletteSource::EmbeddedPng,
         width: 32,
         height: 128,
         colors: 16,
@@ -80,26 +52,10 @@ const SHEETS: [SheetSource; 6] = [
         png: "starter_circle.png",
         image_id: "starter-chooser/image/starter_circle",
         palette_id: "starter-chooser/palette/starter_circle",
-        palette: PaletteSource::EmbeddedPng,
         width: 64,
         height: 64,
         colors: 16,
     },
-    front(
-        "graphics/pokemon/treecko",
-        "pokemon/treecko/front",
-        "pokemon/treecko/palette/normal",
-    ),
-    front(
-        "graphics/pokemon/torchic",
-        "pokemon/torchic/front",
-        "pokemon/torchic/palette/normal",
-    ),
-    front(
-        "graphics/pokemon/mudkip",
-        "pokemon/mudkip/front",
-        "pokemon/mudkip/palette/normal",
-    ),
 ];
 
 const TILEMAPS: [TilemapSource; 2] = [
@@ -115,7 +71,7 @@ const TILEMAPS: [TilemapSource; 2] = [
     },
 ];
 
-/// Extracts the starter chooser's fixed manifest: six image and palette pairs
+/// Extracts the starter chooser's fixed manifest: three image and palette pairs
 /// and two raw tilemaps.
 pub(super) fn extract_starter_chooser(
     upstream: &Path,
@@ -186,19 +142,8 @@ fn extract_sheet(
         ));
     }
 
-    let (palette_path, colors) = match sheet.palette {
-        PaletteSource::EmbeddedPng => (
-            path.clone(),
-            png::decode_palette(&bytes).map_err(|e| ExtractError::Png(path.clone(), e))?,
-        ),
-        PaletteSource::Jasc(name) => {
-            let palette_path = upstream.join(sheet.directory).join(name);
-            let text = read_text(&palette_path)?;
-            let colors =
-                jasc_pal::parse(&text).map_err(|e| ExtractError::Pal(palette_path.clone(), e))?;
-            (palette_path, colors)
-        }
-    };
+    let palette_path = path.clone();
+    let colors = png::decode_palette(&bytes).map_err(|e| ExtractError::Png(path.clone(), e))?;
     if colors.len() != sheet.colors {
         return Err(mismatch(
             &palette_path,
@@ -250,7 +195,7 @@ mod tests {
     use crate::extract::ExtractError;
     use pack_format::PackWriter;
 
-    const MANIFEST_ENTRY_COUNT: usize = 14;
+    const MANIFEST_ENTRY_COUNT: usize = 8;
 
     fn manifest_ids() -> Vec<&'static str> {
         SHEETS
@@ -271,7 +216,7 @@ mod tests {
     }
 
     #[test]
-    fn manifest_names_six_pairs_and_two_tilemaps_with_unique_ids() {
+    fn manifest_names_three_pairs_and_two_tilemaps_with_unique_ids() {
         let ids = manifest_ids();
         assert_eq!(ids.len(), MANIFEST_ENTRY_COUNT);
         assert_eq!(ids.iter().collect::<BTreeSet<_>>().len(), ids.len());
@@ -285,12 +230,6 @@ mod tests {
             "starter-chooser/palette/starter_circle",
             "starter-chooser/raw/birch_bag",
             "starter-chooser/raw/birch_grass",
-            "pokemon/treecko/front",
-            "pokemon/treecko/palette/normal",
-            "pokemon/torchic/front",
-            "pokemon/torchic/palette/normal",
-            "pokemon/mudkip/front",
-            "pokemon/mudkip/palette/normal",
         ]
         .into_iter()
         .collect();
@@ -309,9 +248,6 @@ mod tests {
                 ("tiles.png", 128, 128, 32),
                 ("pokeball_selection.png", 32, 128, 16),
                 ("starter_circle.png", 64, 64, 16),
-                ("front.png", 64, 64, 16),
-                ("front.png", 64, 64, 16),
-                ("front.png", 64, 64, 16),
             ]
         );
         let lengths: Vec<_> = TILEMAPS.iter().map(|tilemap| tilemap.byte_len).collect();

@@ -114,8 +114,8 @@ fn palette_root() -> PaletteRoot {
     PaletteRoot {
         id: "title/palette/test",
         addr: at(PALETTE_OFF),
-        color_count: 2,
         encoding: Encoding::Raw,
+        color_count: 2,
     }
 }
 
@@ -508,14 +508,14 @@ fn the_domain_list_writes_every_root_it_is_given() {
     static TITLE_PALETTES: &[PaletteRoot] = &[PaletteRoot {
         id: "title/palette/test",
         addr: at(PALETTE_OFF),
-        color_count: 2,
         encoding: Encoding::Raw,
+        color_count: 2,
     }];
     static INTERFACE_PALETTES: &[PaletteRoot] = &[PaletteRoot {
         id: "interface/palette/test",
         addr: at(PALETTE_OFF),
-        color_count: 2,
         encoding: Encoding::Raw,
+        color_count: 2,
     }];
 
     let roots = Roots {

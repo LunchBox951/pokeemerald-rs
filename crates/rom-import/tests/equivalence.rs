@@ -65,6 +65,23 @@ const COMPLETE_PREFIXES: &[&str] = &[
     "bag/",
 ];
 
+/// The starters' static battler entries: 12 ids the ROM backend must write
+/// although `pokemon/` is not yet in [`COMPLETE_PREFIXES`].
+const STARTER_BATTLER_IDS: [&str; 12] = [
+    "pokemon/treecko/front",
+    "pokemon/treecko/back",
+    "pokemon/treecko/palette/normal",
+    "pokemon/treecko/palette/shiny",
+    "pokemon/torchic/front",
+    "pokemon/torchic/back",
+    "pokemon/torchic/palette/normal",
+    "pokemon/torchic/palette/shiny",
+    "pokemon/mudkip/front",
+    "pokemon/mudkip/back",
+    "pokemon/mudkip/palette/normal",
+    "pokemon/mudkip/palette/shiny",
+];
+
 /// Ids the two backends are known and accepted to disagree on, each with
 /// the reason it was signed off.
 ///
@@ -123,6 +140,14 @@ fn the_rom_backend_matches_the_checkout_pack() {
             .iter()
             .any(|prefix| id.starts_with(prefix));
         if claimed && !imported.contains_key(id) && !reviewed.contains_key(id.as_str()) {
+            differences.push(format!("{id}: the ROM backend wrote no such entry"));
+        }
+    }
+
+    // `pokemon/` is not a complete prefix while only the starters exist, so
+    // their entries are pinned by id: a dropped root fails here.
+    for id in STARTER_BATTLER_IDS {
+        if !imported.contains_key(id) {
             differences.push(format!("{id}: the ROM backend wrote no such entry"));
         }
     }

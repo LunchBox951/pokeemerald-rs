@@ -407,6 +407,64 @@ pub(crate) fn text_window_ids() -> Vec<String> {
         .collect()
 }
 
+/// One starter whose static battler art the pack carries.
+#[derive(Clone, Copy)]
+pub(crate) struct BattlerSource {
+    /// The directory under `graphics/pokemon/` and the pack id's species stem.
+    pub(crate) name: &'static str,
+    /// The species' row in `gMonStillFrontPicTable` and the three tables beside it.
+    pub(crate) species: assets::SpeciesId,
+}
+
+impl BattlerSource {
+    /// The front image id.
+    pub(crate) fn front_id(self) -> String {
+        format!("pokemon/{}/front", self.name)
+    }
+
+    /// The back image id.
+    pub(crate) fn back_id(self) -> String {
+        format!("pokemon/{}/back", self.name)
+    }
+
+    /// The normal palette id.
+    pub(crate) fn normal_id(self) -> String {
+        format!("pokemon/{}/palette/normal", self.name)
+    }
+
+    /// The shiny palette id.
+    pub(crate) fn shiny_id(self) -> String {
+        format!("pokemon/{}/palette/shiny", self.name)
+    }
+
+    /// Every id the species owns: front, back, normal, shiny.
+    pub(crate) fn ids(self) -> [String; 4] {
+        [
+            self.front_id(),
+            self.back_id(),
+            self.normal_id(),
+            self.shiny_id(),
+        ]
+    }
+}
+
+/// Treecko, Torchic, and Mudkip (`still_front_pic_table.h:283,286,289`,
+/// `back_pic_table.h:280,283,286`).
+pub(crate) const BATTLERS: [BattlerSource; 3] = [
+    BattlerSource {
+        name: "treecko",
+        species: assets::SpeciesId::TREECKO,
+    },
+    BattlerSource {
+        name: "torchic",
+        species: assets::SpeciesId::TORCHIC,
+    },
+    BattlerSource {
+        name: "mudkip",
+        species: assets::SpeciesId::MUDKIP,
+    },
+];
+
 /// Every `bag/` pack id extraction emits: the fixed manifest, then the
 /// item icons `gItemIconTable` selects.
 ///
