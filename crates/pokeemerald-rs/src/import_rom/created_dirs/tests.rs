@@ -1176,3 +1176,99 @@ fn undo_puts_back_a_level_that_gained_contents_after_validation() {
     assert!(level.join("keep").is_file());
     assert_eq!(entry_names(&dir.path), ["new"]);
 }
+
+#[cfg(unix)]
+#[test]
+fn undo_does_not_strand_contents_when_the_name_is_retaken_before_restoration() {
+    // `new` gains `keep`, so removal from the quarantine refuses and the
+    // level must be put back; a racer re-creates `new` once the name frees,
+    // so the put-back hits EEXIST. `keep` must not end up only under
+    // `.undo-*/level` with nothing reported.
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    for attempt in 0..500 {
+        let dir = TempDir::new(&format!("undo-retaken-{attempt}"));
+        let level = dir.join("new");
+        let created = super::create_directories(&level).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let mut racer = None;
+        super::undo_created_directories_with_hooks(&created, &mut || {
+            fs::write(level.join("keep"), b"x").unwrap();
+            let (level, stop) = (level.clone(), Arc::clone(&stop));
+            racer = Some(std::thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    if fs::create_dir(&level).is_ok() {
+                        return;
+                    }
+                }
+            }));
+            std::thread::yield_now();
+        });
+        stop.store(true, Ordering::Relaxed);
+        racer.unwrap().join().unwrap();
+        let stranded: Vec<String> = entry_names(&dir.path)
+            .into_iter()
+            .filter(|name| name.starts_with(".undo-"))
+            .filter(|name| dir.path.join(name).join("level").join("keep").is_file())
+            .collect();
+        assert!(
+            stranded.is_empty(),
+            "attempt {attempt}: keep stranded in {stranded:?}, not at {}: {:?}",
+            level.display(),
+            entry_names(&dir.path)
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn undo_preserves_a_replacement_swapped_between_quarantine_mkdir_and_open() {
+    use std::os::unix::fs::MetadataExt;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    // A writer in the parent races rollback: the moment the predictable
+    // quarantine name appears, it moves that directory away and installs its
+    // own empty one. Rollback must never delete that replacement.
+    for round in 0..3000 {
+        let dir = TempDir::new(&format!("undo-quarantine-race-{round}"));
+        let level = dir.join("new");
+        let created = super::create_directories(&level).unwrap();
+        let ino = fs::metadata(&level).unwrap().ino();
+        let quarantine = dir.join(&format!(".undo-{}-{}", std::process::id(), ino));
+        let stolen = dir.join("stolen");
+        let stop = Arc::new(AtomicBool::new(false));
+        let swapped = Arc::new(AtomicBool::new(false));
+        let racer = {
+            let (stop, swapped, quarantine, stolen) = (
+                stop.clone(),
+                swapped.clone(),
+                quarantine.clone(),
+                stolen.clone(),
+            );
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    if fs::rename(&quarantine, &stolen).is_ok() {
+                        fs::create_dir(&quarantine).unwrap();
+                        swapped.store(true, Ordering::SeqCst);
+                        return;
+                    }
+                }
+            })
+        };
+        std::thread::sleep(std::time::Duration::from_micros(200));
+        super::undo_created_directories(&created);
+        stop.store(true, Ordering::Relaxed);
+        racer.join().unwrap();
+        if swapped.load(Ordering::SeqCst)
+            && stolen.is_dir()
+            && fs::read_dir(&stolen).unwrap().next().is_none()
+        {
+            // The swap landed before openat (the stolen original is empty,
+            // so the level was moved into the replacement instead).
+            assert!(
+                quarantine.is_dir(),
+                "round {round}: rollback deleted the replacement installed at the quarantine name"
+            );
+        }
+    }
+}
