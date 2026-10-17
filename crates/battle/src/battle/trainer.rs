@@ -330,8 +330,8 @@ pub struct TrainerPartyMon<'a> {
 /// [`BattleError::AmbiguousPlayerAbility`] when `player_lead` has two ability
 /// slots, its selected ability is not a trapping one, and the trainer scores
 /// with `CheckBadMove` (the only script that reads the target's ability), or
-/// [`BattleError::UnportedAbilityInteraction`] when a member's personality selects Truant
-/// or Intimidate.
+/// [`BattleError::UnportedAbilityInteraction`] when a member's personality selects an
+/// always-refused ability.
 pub fn ensure_trainer_party_startable(
     dex: &Dex,
     player_lead: &BattlePokemon,
@@ -523,7 +523,7 @@ mod tests {
     const SLOT_1: u32 = 0x89;
 
     #[test]
-    fn the_pre_flight_refuses_the_truant_or_intimidate_slot_construction_selects() {
+    fn the_pre_flight_refuses_the_always_refused_slot_construction_selects() {
         let dex = Dex::new();
         let moves = [MoveId::TACKLE];
         for (species, personality, ability) in [
@@ -540,6 +540,23 @@ mod tests {
             (SpeciesId::EKANS, SLOT_0, assets::AbilityId::INTIMIDATE),
             (SpeciesId::SNUBBULL, SLOT_0, assets::AbilityId::INTIMIDATE),
             (SpeciesId::MAWILE, SLOT_1, assets::AbilityId::INTIMIDATE),
+            (SpeciesId::NINJASK, SLOT_0, assets::AbilityId::SPEED_BOOST),
+            (SpeciesId::YANMA, SLOT_0, assets::AbilityId::SPEED_BOOST),
+            (SpeciesId::KECLEON, SLOT_0, assets::AbilityId::COLOR_CHANGE),
+            (SpeciesId::KECLEON, SLOT_1, assets::AbilityId::COLOR_CHANGE),
+            (SpeciesId::PORYGON, SLOT_0, assets::AbilityId::TRACE),
+            (SpeciesId::PORYGON2, SLOT_1, assets::AbilityId::TRACE),
+            (SpeciesId::RALTS, SLOT_1, assets::AbilityId::TRACE),
+            (SpeciesId::KIRLIA, SLOT_1, assets::AbilityId::TRACE),
+            (SpeciesId::GARDEVOIR, SLOT_1, assets::AbilityId::TRACE),
+            (SpeciesId::PARAS, SLOT_0, assets::AbilityId::EFFECT_SPORE),
+            (SpeciesId::PARASECT, SLOT_1, assets::AbilityId::EFFECT_SPORE),
+            (
+                SpeciesId::SHROOMISH,
+                SLOT_0,
+                assets::AbilityId::EFFECT_SPORE,
+            ),
+            (SpeciesId::BRELOOM, SLOT_1, assets::AbilityId::EFFECT_SPORE),
         ] {
             let refused = TrainerPartyMon {
                 species,
@@ -574,7 +591,14 @@ mod tests {
     fn the_pre_flight_admits_a_mixed_pool_species_whose_selected_slot_is_supported() {
         let dex = Dex::new();
         let moves = [MoveId::TACKLE];
-        for (species, personality) in [(SpeciesId::EKANS, SLOT_1), (SpeciesId::MAWILE, SLOT_0)] {
+        for (species, personality) in [
+            (SpeciesId::EKANS, SLOT_1),
+            (SpeciesId::MAWILE, SLOT_0),
+            (SpeciesId::YANMA, SLOT_1),
+            (SpeciesId::RALTS, SLOT_0),
+            (SpeciesId::KIRLIA, SLOT_0),
+            (SpeciesId::GARDEVOIR, SLOT_0),
+        ] {
             assert!(ensure_trainer_party_startable(
                 &dex,
                 &lead(SpeciesId::MUDKIP),
