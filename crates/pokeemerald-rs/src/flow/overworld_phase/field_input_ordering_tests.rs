@@ -24,8 +24,7 @@ fn an_open_dialog_freezes_movement_until_it_closes() {
     // Facing south already, so an un-frozen held Down would step
     // immediately -- no turn-in-place frame to absorb it. (7, 5), the tile
     // below, is clear of visible object events, so this test measures the
-    // dialog freeze and nothing else -- unlike (4, 5), which a Vigoroth now
-    // occupies solidly; see [`ONE_F`]'s docs.
+    // dialog freeze and nothing else.
     let mut phase = synthetic_phase(PlayerState::new((7, 4), 3, Direction::South), Some(dialog));
 
     for _ in 0..WALK_FRAMES_PER_TILE {

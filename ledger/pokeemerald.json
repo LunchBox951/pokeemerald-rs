@@ -11576,6 +11576,12 @@
           "rust_target": "crates/pokeemerald-rs/src/overworld/npc_scripts.rs",
           "spec": "I-3",
           "status": "stubbed"
+        },
+        "PlayersHouse_2F_EventScript_WallClock": {
+          "reason": "Flag effect only: the two unconditional Vigoroth hide setflags (players_house.inc:62-63) are applied on the fresh-save path (new_game::apply_wall_clock_vigoroth_flags, assets::WALL_CLOCK_VIGOROTH_HIDE_FLAGS) because the port starts in the bedroom past this script. The rest stays deferred to #1758: the stopped-clock message, SetWallClock, delay, VAR_LITTLEROOT_INTRO_STATE=6, FLAG_SET_WALL_CLOCK, and Mom coming upstairs.",
+          "rust_target": "crates/assets/src/new_game_flags.rs",
+          "spec": "S-5",
+          "status": "stubbed"
         }
       },
       "category": "data.script",

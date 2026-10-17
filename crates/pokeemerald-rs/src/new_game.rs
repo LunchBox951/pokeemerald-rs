@@ -384,8 +384,21 @@ pub(crate) fn init_save_blocks_with_identity(
     }
 
     apply_truck_intro_flags(&mut block1, block2.player_gender);
+    apply_wall_clock_vigoroth_flags(&mut block1);
 
     (block1, block2)
+}
+
+/// The flag effect of the skipped `PlayersHouse_2F_EventScript_WallClock`
+/// (`pokeemerald/data/scripts/players_house.inc:62-63`): hide both house
+/// Vigoroths, which would otherwise stay solid on the player's 1F.
+fn apply_wall_clock_vigoroth_flags(block1: &mut SaveBlock1) {
+    for &flag in assets::WALL_CLOCK_VIGOROTH_HIDE_FLAGS {
+        block1
+            .event_data
+            .flag_set(flag)
+            .expect("wall-clock Vigoroth ids are all ordinary flag ids");
+    }
 }
 
 fn apply_truck_intro_flags(block1: &mut SaveBlock1, gender: PlayerGender) {
@@ -453,6 +466,7 @@ mod tests {
     const UNRECOGNIZED_GENDER_BYTE: u8 = 0xFF;
     const RESET_MAP_FLAG_COUNT: usize = 159;
     const TRUCK_EXIT_BRANCH_FLAG_COUNT: usize = 5;
+    const WALL_CLOCK_VIGOROTH_FLAG_COUNT: usize = 2;
 
     #[test]
     fn default_player_name_is_stu_and_fits_the_save_buffer() {
@@ -729,13 +743,15 @@ mod tests {
             .sum();
         assert_eq!(
             set_bits,
-            assets::RESET_MAP_FLAGS.len() + assets::TRUCK_INTRO_FLAGS_MALE.len(),
+            assets::RESET_MAP_FLAGS.len()
+                + assets::TRUCK_INTRO_FLAGS_MALE.len()
+                + assets::WALL_CLOCK_VIGOROTH_HIDE_FLAGS.len(),
             "a fresh save sets exactly the reset script's flags plus the \
-             male truck-intro branch's"
+             male truck-intro branch's and the wall clock's Vigoroth hides"
         );
         assert_eq!(
             set_bits,
-            RESET_MAP_FLAG_COUNT + TRUCK_EXIT_BRANCH_FLAG_COUNT
+            RESET_MAP_FLAG_COUNT + TRUCK_EXIT_BRANCH_FLAG_COUNT + WALL_CLOCK_VIGOROTH_FLAG_COUNT
         );
         assert!(assets::RESET_MAP_FLAGS
             .iter()
@@ -762,6 +778,44 @@ mod tests {
                     data.var_set(var, value).is_ok(),
                     "{var:#X} must be settable"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn fresh_save_hides_every_house_vigoroth_for_either_identity() {
+        let events_table = assets::MapEventsTable::new();
+        for (gender, own_1f, rival_1f) in [
+            (
+                PlayerGender::Male,
+                "MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F",
+                "MAP_LITTLEROOT_TOWN_MAYS_HOUSE_1F",
+            ),
+            (
+                PlayerGender::Female,
+                "MAP_LITTLEROOT_TOWN_MAYS_HOUSE_1F",
+                "MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F",
+            ),
+        ] {
+            let identity = NewGameIdentity::new("ABC", gender).unwrap();
+            let (block1, _) =
+                init_save_blocks_with_identity(&mut Rng::new(0), NewGameOptions::DEFAULT, identity);
+            for map in [own_1f, rival_1f] {
+                let events = events_table.resolve(assets::MapId(map)).unwrap();
+                let vigoroths: Vec<_> = events
+                    .object_events
+                    .iter()
+                    .filter(|o| o.graphics_id.contains("VIGOROTH"))
+                    .collect();
+                assert_eq!(vigoroths.len(), 2, "{map} has two Vigoroth movers");
+                for o in vigoroths {
+                    assert!(
+                        !engine::overworld::object_event_is_visible(o, &block1.event_data),
+                        "{gender:?} fresh save: {map} Vigoroth at ({}, {}) must be hidden",
+                        o.x,
+                        o.y
+                    );
+                }
             }
         }
     }
