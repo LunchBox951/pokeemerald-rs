@@ -34,33 +34,63 @@ impl PackSelection {
         Self::Prepared(assets::AssetPack::repo_pack_path())
     }
 
-    fn prepare(&self, destination: &Path) -> Result<(), String> {
+    /// Writes the pack as `name` inside `scratch`'s held directory.
+    fn prepare(&self, scratch: &Scratch, name: &str) -> Result<(), String> {
         match self {
-            Self::Prepared(source) => std::fs::copy(source, destination)
-                .map(drop)
-                .map_err(|error| format!("source pack {}: {error}", source.display())),
-            Self::ImportedRom(rom) => rom_import::import(rom, destination)
-                .map(drop)
-                .map_err(|error| format!("ROM import of {}: {error}", rom.display())),
+            Self::Prepared(source) => {
+                let mut source_file = std::fs::File::open(source)
+                    .map_err(|error| format!("source pack {}: {error}", source.display()))?;
+                scratch
+                    .write_new(name, |file| std::io::copy(&mut source_file, file).map(drop))
+                    .map_err(|error| format!("source pack {}: {error}", source.display()))
+            }
+            Self::ImportedRom(rom) => {
+                let bytes = rom_import::import_to_bytes(rom)
+                    .map_err(|error| format!("ROM import of {}: {error}", rom.display()))?;
+                scratch
+                    .write_new(name, |file| std::io::Write::write_all(file, &bytes))
+                    .map_err(|error| format!("ROM import of {}: {error}", rom.display()))
+            }
         }
     }
 }
 
 /// A directory created exclusively for one session and removed with it.
+///
+/// The created directory stays open for the session's life. Every write and
+/// the cleanup go through that hold, or first prove the pathname still names
+/// the held directory; a path that was renamed away or replaced fails closed
+/// and is never written into or deleted.
+///
+/// Unix writes and removes relative to the held descriptor. Windows compares a
+/// fresh open of the pathname with the held handle's file identity (sharing
+/// without `FILE_SHARE_DELETE` also keeps the directory from being renamed
+/// away), but Windows has no handle-relative create here, so a swap between
+/// that check and the following pathname operation remains possible there.
+///
+/// Residuals on every platform: the engine reopens the pack and save by
+/// pathname after [`Session::start`]'s check, so a swap after that check is not
+/// prevented; ownership starts at the open that follows `create_dir`; and
+/// Unix removes the (emptied) root with a pathname `rmdir` after the check, so
+/// a replacement that wins that instant loses only if it is empty, never its
+/// contents.
 #[derive(Debug)]
-struct Scratch(PathBuf);
+struct Scratch {
+    path: PathBuf,
+    /// `None` only once Windows cleanup has released the hold to delete.
+    hold: Option<std::fs::File>,
+}
 
 impl Scratch {
-    fn create() -> std::io::Result<Self> {
+    fn create_in(base: &Path) -> std::io::Result<Self> {
         // The exclusive `create_dir` is the only arbiter of uniqueness: the
         // first caller to claim a name owns it, so a counter needs no state
         // beyond this loop.
         let mut n: u64 = 0;
         loop {
-            let path = std::env::temp_dir()
-                .join(format!("pokeemerald-scenario-{}-{n}", std::process::id()));
-            match std::fs::create_dir(&path) {
-                Ok(()) => return Ok(Self(path)),
+            let path = base.join(format!("pokeemerald-scenario-{}-{n}", std::process::id()));
+            match create_private_dir(&path) {
+                Ok(()) => return Self::claim(path),
                 // Taken by another session in this process, or left by an
                 // earlier process with a recycled id.
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => n += 1,
@@ -68,12 +98,212 @@ impl Scratch {
             }
         }
     }
+
+    /// Pins the just-created directory. Ownership starts at this open, so a
+    /// replacement that lands first is caught by the identity comparison only
+    /// when it is not itself a plain directory; the window is the instant
+    /// between `create_dir` and `open`.
+    fn claim(path: PathBuf) -> std::io::Result<Self> {
+        let hold = open_hold(&path)?;
+        let scratch = Self {
+            path,
+            hold: Some(hold),
+        };
+        scratch.require_path(&scratch.path)?;
+        Ok(scratch)
+    }
+
+    fn hold(&self) -> std::io::Result<&std::fs::File> {
+        self.hold.as_ref().ok_or_else(|| {
+            std::io::Error::other("the scratch directory's hold was already released")
+        })
+    }
+
+    /// Fails unless `path` still names the held directory.
+    fn require_path(&self, path: &Path) -> std::io::Result<()> {
+        let hold = self.hold()?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+            let pinned = hold.metadata()?;
+            let found = std::fs::symlink_metadata(path)?;
+            if !found.is_dir() || (pinned.dev(), pinned.ino()) != (found.dev(), found.ino()) {
+                return Err(not_the_held_directory(path));
+            }
+        }
+        #[cfg(windows)]
+        {
+            use crate::windows_file_identity::WindowsFileIdentity;
+            let fresh = open_hold(path)?;
+            if WindowsFileIdentity::of(&fresh)? != WindowsFileIdentity::of(hold)? {
+                return Err(not_the_held_directory(path));
+            }
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = (path, hold);
+            return Err(std::io::ErrorKind::Unsupported.into());
+        }
+        #[cfg(any(unix, windows))]
+        Ok(())
+    }
+
+    /// Creates `name` exclusively inside the held directory and fills it.
+    fn write_new(
+        &self,
+        name: &str,
+        populate: impl FnOnce(&mut std::fs::File) -> std::io::Result<()>,
+    ) -> std::io::Result<()> {
+        self.require_path(&self.path)?;
+        let mut file = self.create_new(name)?;
+        populate(&mut file)
+    }
+
+    #[cfg(unix)]
+    fn create_new(&self, name: &str) -> std::io::Result<std::fs::File> {
+        rustix::fs::openat(
+            self.hold()?,
+            name,
+            rustix::fs::OFlags::WRONLY
+                | rustix::fs::OFlags::CREATE
+                | rustix::fs::OFlags::EXCL
+                | rustix::fs::OFlags::NOFOLLOW,
+            rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+        )
+        .map(std::fs::File::from)
+        .map_err(Into::into)
+    }
+
+    #[cfg(not(unix))]
+    fn create_new(&self, name: &str) -> std::io::Result<std::fs::File> {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(self.path.join(name))
+    }
+
+    /// Removes the scratch tree at `path` only if it is the held directory.
+    /// Returns an error, leaving whatever `path` names untouched, otherwise.
+    fn remove_all_at(&mut self, path: &Path) -> std::io::Result<()> {
+        self.require_path(path)?;
+        #[cfg(unix)]
+        {
+            remove_contents(self.hold()?)?;
+            // `rmdir` only removes an empty directory, so a replacement that
+            // wins the instant after the check can lose at most itself if it
+            // is empty; it never loses content.
+            std::fs::remove_dir(path)
+        }
+        #[cfg(not(unix))]
+        {
+            // The hold denies deletion, so Windows releases it for the delete;
+            // the identity was verified just above (check-then-act residual).
+            self.hold = None;
+            std::fs::remove_dir_all(path)
+        }
+    }
 }
 
 impl Drop for Scratch {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        let path = self.path.clone();
+        let _ = self.remove_all_at(&path);
     }
+}
+
+fn not_the_held_directory(path: &Path) -> std::io::Error {
+    std::io::Error::other(format!(
+        "the directory at {} no longer matches the session's held scratch directory",
+        path.display()
+    ))
+}
+
+fn create_private_dir(path: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt as _;
+        std::fs::DirBuilder::new().mode(0o700).create(path)
+    }
+    #[cfg(not(unix))]
+    std::fs::create_dir(path)
+}
+
+#[cfg(unix)]
+fn open_hold(path: &Path) -> std::io::Result<std::fs::File> {
+    rustix::fs::open(
+        path,
+        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::NOFOLLOW,
+        rustix::fs::Mode::empty(),
+    )
+    .map(std::fs::File::from)
+    .map_err(Into::into)
+}
+
+#[cfg(windows)]
+fn open_hold(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+    // Read and write sharing only: nothing may rename or delete the directory
+    // while it is held, yet the engine can still open files inside it.
+    const SHARE_READ_WRITE: u32 = 0x1 | 0x2;
+    let hold = std::fs::OpenOptions::new()
+        .access_mode(0)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .share_mode(SHARE_READ_WRITE)
+        .open(path)?;
+    let found = hold.metadata()?;
+    if !found.is_dir() || found.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err(std::io::Error::other("the scratch directory was replaced"));
+    }
+    Ok(hold)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn open_hold(_path: &Path) -> std::io::Result<std::fs::File> {
+    Err(std::io::ErrorKind::Unsupported.into())
+}
+
+/// Empties `dir` through its descriptor: every entry is unlinked relative to
+/// its held parent and subdirectories are opened `NOFOLLOW`, so no pathname
+/// is ever re-resolved and a symlink is unlinked, not followed.
+#[cfg(unix)]
+fn remove_contents(dir: &std::fs::File) -> std::io::Result<()> {
+    let mut names = Vec::new();
+    for entry in rustix::fs::Dir::read_from(dir)? {
+        let entry = entry?;
+        let name = entry.file_name().to_owned();
+        if name.to_bytes() != b"." && name.to_bytes() != b".." {
+            names.push((name, entry.file_type()));
+        }
+    }
+    for (name, kind) in names {
+        // `DT_UNKNOWN` filesystems report no type; ask without following links.
+        let kind = if kind == rustix::fs::FileType::Unknown {
+            rustix::fs::FileType::from_raw_mode(
+                rustix::fs::statat(dir, name.as_c_str(), rustix::fs::AtFlags::SYMLINK_NOFOLLOW)?
+                    .st_mode,
+            )
+        } else {
+            kind
+        };
+        if kind == rustix::fs::FileType::Directory {
+            let child = rustix::fs::openat(
+                dir,
+                name.as_c_str(),
+                rustix::fs::OFlags::RDONLY
+                    | rustix::fs::OFlags::DIRECTORY
+                    | rustix::fs::OFlags::NOFOLLOW,
+                rustix::fs::Mode::empty(),
+            )?;
+            remove_contents(&std::fs::File::from(child))?;
+            rustix::fs::unlinkat(dir, name.as_c_str(), rustix::fs::AtFlags::REMOVEDIR)?;
+        } else {
+            rustix::fs::unlinkat(dir, name.as_c_str(), rustix::fs::AtFlags::empty())?;
+        }
+    }
+    Ok(())
 }
 
 /// One scenario's owned pack and save media.
@@ -81,7 +311,7 @@ impl Drop for Scratch {
 pub(super) struct Session {
     pack: PathBuf,
     save: PathBuf,
-    _scratch: Scratch,
+    scratch: Scratch,
 }
 
 impl Session {
@@ -92,15 +322,21 @@ impl Session {
     /// [`ScenarioError::Setup`] if the scratch directory cannot be created
     /// or the pack cannot be prepared.
     pub(super) fn new(selection: &PackSelection) -> Result<Self, ScenarioError> {
-        let scratch = Scratch::create()
+        Self::new_in(selection, &std::env::temp_dir())
+    }
+
+    fn new_in(selection: &PackSelection, base: &Path) -> Result<Self, ScenarioError> {
+        let scratch = Scratch::create_in(base)
             .map_err(|error| ScenarioError::Setup(format!("scratch directory: {error}")))?;
-        let pack = scratch.0.join(PACK_FILE_NAME);
-        selection.prepare(&pack).map_err(ScenarioError::Setup)?;
-        let save = scratch.0.join("save").join(SAVE_FILE_NAME);
+        selection
+            .prepare(&scratch, PACK_FILE_NAME)
+            .map_err(ScenarioError::Setup)?;
+        let pack = scratch.path.join(PACK_FILE_NAME);
+        let save = scratch.path.join("save").join(SAVE_FILE_NAME);
         Ok(Self {
             pack,
             save,
-            _scratch: scratch,
+            scratch,
         })
     }
 
@@ -112,6 +348,11 @@ impl Session {
     /// [`ScenarioError::Start`] if the pack does not load or the save
     /// medium cannot be opened.
     pub(super) fn start(&self) -> Result<App, ScenarioError> {
+        // The engine reopens the pack and save by pathname, so refuse to start
+        // on a path that no longer names the directory this session created.
+        self.scratch
+            .require_path(&self.scratch.path)
+            .map_err(|error| ScenarioError::Start(format!("scratch directory: {error}")))?;
         App::new_headless_real_at(&self.pack, &self.save)
             .map_err(|error| ScenarioError::Start(error.to_string()))
     }
@@ -159,6 +400,157 @@ mod tests {
             !scratch.exists(),
             "the scratch directory dies with its session"
         );
+    }
+
+    fn foreign_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "pokeemerald-scenario-foreign-{}-{tag}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(dir.join("keep.txt"), b"keep me").unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_write_into_a_directory_that_is_not_the_held_one_is_refused() {
+        let scratch = Scratch::create_in(&std::env::temp_dir()).unwrap();
+        let foreign = foreign_dir("write");
+        assert!(scratch.require_path(&foreign).is_err());
+        assert!(scratch.require_path(&scratch.path).is_ok());
+        let _ = std::fs::remove_dir_all(&foreign);
+    }
+
+    #[test]
+    fn cleanup_aimed_at_a_directory_that_is_not_the_held_one_removes_nothing() {
+        let mut scratch = Scratch::create_in(&std::env::temp_dir()).unwrap();
+        let foreign = foreign_dir("cleanup");
+        assert!(scratch.remove_all_at(&foreign).is_err());
+        assert_eq!(std::fs::read(foreign.join("keep.txt")).unwrap(), b"keep me");
+        let _ = std::fs::remove_dir_all(&foreign);
+    }
+
+    /// A base directory private to one test, so a name vacated by a swap can
+    /// never be claimed by another test's scratch directory.
+    #[cfg(unix)]
+    fn private_base(tag: &str) -> PathBuf {
+        let base = std::env::temp_dir().join(format!(
+            "pokeemerald-scenario-base-{}-{tag}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir(&base).unwrap();
+        base
+    }
+
+    #[cfg(unix)]
+    fn swap_in(scratch: &Scratch, replacement: impl FnOnce(&Path)) -> PathBuf {
+        let aside = scratch.path.with_extension("aside");
+        std::fs::rename(&scratch.path, &aside).unwrap();
+        replacement(&scratch.path);
+        aside
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_replaced_scratch_directory_receives_no_pack_write() {
+        for symlink in [false, true] {
+            let base = private_base("write");
+            let scratch = Scratch::create_in(&base).unwrap();
+            let target = foreign_dir("write-target");
+            let aside = swap_in(&scratch, |path| {
+                if symlink {
+                    std::os::unix::fs::symlink(&target, path).unwrap();
+                } else {
+                    std::fs::create_dir(path).unwrap();
+                }
+            });
+            let error = scratch
+                .write_new(PACK_FILE_NAME, |_| Ok(()))
+                .expect_err("a replaced scratch directory must refuse the write");
+            assert!(error.to_string().contains("no longer matches"), "{error}");
+            assert!(!scratch.path.join(PACK_FILE_NAME).exists());
+            assert!(!target.join(PACK_FILE_NAME).exists());
+            assert!(!aside.join(PACK_FILE_NAME).exists());
+            let _ = std::fs::remove_dir_all(&target);
+            let _ = std::fs::remove_dir_all(&aside);
+            let _ = std::fs::remove_file(&scratch.path);
+            let _ = std::fs::remove_dir(&scratch.path);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dropping_a_session_never_removes_a_tree_that_replaced_its_scratch() {
+        for symlink in [false, true] {
+            let target = foreign_dir("drop-target");
+            let source = std::env::temp_dir().join(format!(
+                "pokeemerald-scenario-replaced-{}-{symlink}.pack",
+                std::process::id()
+            ));
+            std::fs::write(&source, b"not a real pack").unwrap();
+            let base = private_base("drop");
+            let session = Session::new_in(&PackSelection::Prepared(source.clone()), &base).unwrap();
+            std::fs::remove_file(&source).unwrap();
+            let scratch_path = session.scratch.path.clone();
+            let aside = swap_in(&session.scratch, |path| {
+                if symlink {
+                    std::os::unix::fs::symlink(&target, path).unwrap();
+                } else {
+                    std::fs::create_dir(path).unwrap();
+                    std::fs::write(path.join("keep.txt"), b"keep me").unwrap();
+                }
+            });
+            drop(session);
+            let survived = if symlink {
+                target.join("keep.txt").exists()
+            } else {
+                scratch_path.join("keep.txt").exists()
+            };
+            // The aside tree is the real scratch: it keeps the pack.
+            let kept_pack = aside.join(PACK_FILE_NAME).exists();
+            let _ = std::fs::remove_dir_all(&target);
+            let _ = std::fs::remove_dir_all(&aside);
+            let _ = std::fs::remove_file(&scratch_path);
+            let _ = std::fs::remove_dir_all(&scratch_path);
+            assert!(survived, "cleanup removed content it did not create");
+            assert!(kept_pack, "cleanup resolved the pathname, not the hold");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_session_whose_scratch_was_replaced_refuses_to_start() {
+        let source = std::env::temp_dir().join(format!(
+            "pokeemerald-scenario-nostart-{}.pack",
+            std::process::id()
+        ));
+        std::fs::write(&source, b"not a real pack").unwrap();
+        let base = private_base("nostart");
+        let session = Session::new_in(&PackSelection::Prepared(source.clone()), &base).unwrap();
+        std::fs::remove_file(&source).unwrap();
+        let aside = swap_in(&session.scratch, |path| std::fs::create_dir(path).unwrap());
+        let Err(error) = session.start() else {
+            panic!("a replaced scratch directory must not start");
+        };
+        assert!(matches!(error, ScenarioError::Start(_)), "got {error:?}");
+        let path = session.scratch.path.clone();
+        drop(session);
+        let _ = std::fs::remove_dir_all(&aside);
+        let _ = std::fs::remove_dir_all(&path);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_held_scratch_directory_cannot_be_renamed_away() {
+        let scratch = Scratch::create_in(&std::env::temp_dir()).unwrap();
+        let aside = scratch.path.with_extension("aside");
+        assert!(
+            std::fs::rename(&scratch.path, &aside).is_err(),
+            "the hold must deny renaming the directory"
+        );
+        assert!(scratch.require_path(&scratch.path).is_ok());
     }
 
     #[test]
