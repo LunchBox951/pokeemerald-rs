@@ -532,26 +532,20 @@ fn usable_callback_in_span(from: u64, to: u64, usable_through: u64) -> bool {
 /// - Stream errors: any error is [`DrainError::StreamStoppedDuringTail`], and
 ///   outranks every other outcome. The progress signal disappearing is not a
 ///   failure.
-/// - Stale timestamps: when callbacks stop carrying usable stamps, the wait
-///   falls back to the derived tail, as [`wait_for_device_tail`] would sleep
-///   it, but only while callbacks stay live. Staleness is read from
-///   `PlaybackProgress::usable_through_frames`, never from the sounded
-///   estimate's shape: frames submitted past both the previous poll and that
-///   mark are stale evidence. A usable callback landing inside an advance
-///   discards the evidence gathered before it; the frames after its mark
-///   still count.
-/// - Live callbacks: at least `derived_tail / 4` of stale evidence, with the
-///   latest advance within the longest recent cadence sample (see
-///   [`CADENCE_WINDOW`]) plus two polls. Each sample is the longer of the
-///   inter-advance gap and the playback that advance covered. A gap far past
-///   that cadence is a stall: evidence restarts and the tail runs from the
-///   resumed callbacks.
-/// - Tail finish: needs the tail elapsed, the latest playback any usable
-///   reading still owed run out (see [`reading_due`]), and no callback in
-///   flight (a mark past the submitted total). It must also end within
-///   `policy.max_wait`; a poll at or past the deadline takes it only on those
-///   terms and otherwise times out. Sleep overshoot can hold the stream past
-///   `max_wait` by up to one poll.
+/// - Stale evidence: frames submitted past both the previous poll and
+///   `PlaybackProgress::usable_through_frames`. A usable callback inside an
+///   advance discards the evidence before it; the frames after its mark count.
+/// - Live callbacks: stale evidence spanning `derived_tail / 4` (or, before any
+///   stall, one advance covering that much), and the latest advance within the
+///   longest recent cadence sample (see [`CADENCE_WINDOW`]) plus two polls. A sample is `gap.max(played)`, except a stall, which
+///   samples only `played`, restarts the evidence, and restarts the tail.
+/// - Tail finish: only while callbacks are live, once the tail has elapsed, the
+///   latest due across usable readings (see [`reading_due`]) has passed, and no
+///   callback is in flight. Past `policy.max_wait` it finishes only if it was
+///   due by the deadline, else times out.
+/// - Overshoot: the deadline is checked after each `sleep` returns, so the hold
+///   can exceed `max_wait` by one sleep's actual duration, which
+///   `std::thread::sleep` only bounds from below.
 ///
 /// `progress`, `stream_errors`, `now`, and `sleep` are injected as in
 /// [`push_frame`]; [`MeasuredTail`] owns the per-snapshot decisions.
