@@ -69,10 +69,10 @@ pub use abilities::{Abilities, AbilityData, ABILITIES_COUNT};
 // three schema types they identify; `audio`'s own internal cross-references
 // between them stay reachable through the `audio` module path too.
 pub use audio::{
-    AudioError, DirectSoundMode, DirectSoundSample, DirectSoundVoice, Envelope, KeySplitVoice,
-    NoiseVoice, ProgrammableWave, ProgrammableWaveVoice, RhythmVoice, Sample, SampleId, Song,
-    SongEvent, Square1Voice, Square2Voice, VoiceEntry, VoiceGroup, VoiceGroupId, MAX_TRACKS,
-    VOICE_SLOT_COUNT,
+    cry_id, AudioError, CryId, CryMode, CrySettings, CryTable, DirectSoundMode, DirectSoundSample,
+    DirectSoundVoice, Envelope, KeySplitVoice, NoiseVoice, ProgrammableWave, ProgrammableWaveVoice,
+    RhythmVoice, Sample, SampleId, Song, SongEvent, Square1Voice, Square2Voice, VoiceEntry,
+    VoiceGroup, VoiceGroupId, MAX_TRACKS, VOICE_SLOT_COUNT,
 };
 pub use battle_moves::{
     MoveData, MoveEffect, MoveFlags, MoveId, MoveTable, MoveTarget, MoveType, MOVES_COUNT,
