@@ -70,8 +70,11 @@ impl PackSelection {
 ///
 /// Residuals on every platform: the engine reopens the pack and save by
 /// pathname after [`Session::start`]'s check, so a swap after that check is not
-/// prevented; ownership starts at the open that follows `create_dir`; and
-/// Unix removes the (emptied) root with a pathname `rmdir` after the check, so
+/// prevented; ownership starts at the open that follows `create_dir`, which
+/// adopts only an empty (Unix: mode 0700) directory under an unguessable name,
+/// so only an empty private replacement staged in that instant could be taken
+/// (the owner is not compared: that needs `geteuid`, which the approved
+/// `rustix` features do not include); and Unix removes the (emptied) root with a pathname `rmdir` after the check, so
 /// a replacement that wins that instant loses only if it is empty, never its
 /// contents.
 #[derive(Debug)]
@@ -84,33 +87,69 @@ struct Scratch {
 impl Scratch {
     fn create_in(base: &Path) -> std::io::Result<Self> {
         // The exclusive `create_dir` is the only arbiter of uniqueness: the
-        // first caller to claim a name owns it, so a counter needs no state
-        // beyond this loop.
-        let mut n: u64 = 0;
+        // first caller to claim a name owns it. The random component keeps the
+        // name unguessable, so a swap cannot be staged ahead of creation.
         loop {
-            let path = base.join(format!("pokeemerald-scenario-{}-{n}", std::process::id()));
+            let path = base.join(format!(
+                "pokeemerald-scenario-{}-{:016x}",
+                std::process::id(),
+                unpredictable()
+            ));
             match create_private_dir(&path) {
                 Ok(()) => return Self::claim(path),
-                // Taken by another session in this process, or left by an
-                // earlier process with a recycled id.
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => n += 1,
+                // Taken by another session, or left by an earlier process.
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
                 Err(error) => return Err(error),
             }
         }
     }
 
-    /// Pins the just-created directory. Ownership starts at this open, so a
-    /// replacement that lands first is caught by the identity comparison only
-    /// when it is not itself a plain directory; the window is the instant
-    /// between `create_dir` and `open`.
+    /// Pins the just-created directory and refuses anything it cannot show it
+    /// created: the opened directory must be empty and, on Unix, mode 0700. A
+    /// replacement that lands between `create_dir` and this open is therefore
+    /// adopted only if it is itself an empty private directory.
     fn claim(path: PathBuf) -> std::io::Result<Self> {
         let hold = open_hold(&path)?;
-        let scratch = Self {
+        let mut scratch = Self {
             path,
             hold: Some(hold),
         };
-        scratch.require_path(&scratch.path)?;
+        let proven = scratch
+            .require_path(&scratch.path)
+            .and_then(|()| scratch.require_fresh());
+        if let Err(error) = proven {
+            // Never let `Drop` clean up a directory that was not proven ours.
+            scratch.hold = None;
+            return Err(error);
+        }
         Ok(scratch)
+    }
+
+    /// Fails unless the held directory is empty and (Unix) mode 0700.
+    fn require_fresh(&self) -> std::io::Result<()> {
+        let hold = self.hold()?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mode = hold.metadata()?.permissions().mode() & 0o7777;
+            if mode != 0o700 {
+                return Err(not_fresh(&self.path));
+            }
+            for entry in rustix::fs::Dir::read_from(hold)? {
+                let entry = entry?;
+                if entry.file_name().to_bytes() != b"." && entry.file_name().to_bytes() != b".." {
+                    return Err(not_fresh(&self.path));
+                }
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = hold;
+            if std::fs::read_dir(&self.path)?.next().is_some() {
+                return Err(not_fresh(&self.path));
+            }
+        }
+        Ok(())
     }
 
     fn hold(&self) -> std::io::Result<&std::fs::File> {
@@ -211,6 +250,38 @@ impl Drop for Scratch {
     }
 }
 
+fn not_fresh(path: &Path) -> std::io::Error {
+    std::io::Error::other(format!(
+        "the directory at {} is not the empty private directory this session created",
+        path.display()
+    ))
+}
+
+/// Eight bytes the sandbox of a swapper cannot predict: `/dev/urandom` on
+/// Unix, else (and if it cannot be read) the clock and a process-wide counter.
+fn unpredictable() -> u64 {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    #[cfg(unix)]
+    {
+        use std::io::Read as _;
+        let mut bytes = [0u8; 8];
+        if std::fs::File::open("/dev/urandom")
+            .and_then(|mut file| file.read_exact(&mut bytes))
+            .is_ok()
+        {
+            return u64::from_le_bytes(bytes);
+        }
+    }
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_nanos());
+    #[expect(clippy::cast_possible_truncation, reason = "a hash input, not a count")]
+    let low = nanos as u64;
+    low ^ COUNTER
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        .rotate_left(48)
+}
+
 fn not_the_held_directory(path: &Path) -> std::io::Error {
     std::io::Error::other(format!(
         "the directory at {} no longer matches the session's held scratch directory",
@@ -248,8 +319,11 @@ fn open_hold(path: &Path) -> std::io::Result<std::fs::File> {
     // Read and write sharing only: nothing may rename or delete the directory
     // while it is held, yet the engine can still open files inside it.
     const SHARE_READ_WRITE: u32 = 0x1 | 0x2;
+    // Real access, not zero: Windows checks sharing only against handles that
+    // hold access, so a zero-access hold would not deny rename or delete.
+    const FILE_LIST_DIRECTORY: u32 = 0x1;
     let hold = std::fs::OpenOptions::new()
-        .access_mode(0)
+        .access_mode(FILE_LIST_DIRECTORY)
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
         .share_mode(SHARE_READ_WRITE)
         .open(path)?;
@@ -551,6 +625,34 @@ mod tests {
             "the hold must deny renaming the directory"
         );
         assert!(scratch.require_path(&scratch.path).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_directory_swapped_in_before_the_claim_is_never_adopted_or_emptied() {
+        let path =
+            std::env::temp_dir().join(format!("pokeemerald-scenario-swap-{}", std::process::id()));
+        let aside = path.with_extension("aside");
+        let _ = std::fs::remove_dir_all(&path);
+        let _ = std::fs::remove_dir_all(&aside);
+        create_private_dir(&path).unwrap();
+        std::fs::rename(&path, &aside).unwrap();
+        let foreign = foreign_dir("swap");
+        std::fs::rename(&foreign, &path).unwrap();
+        let claimed = Scratch::claim(path.clone());
+        let adopted = claimed.is_ok();
+        drop(claimed);
+        let survived = path.join("keep.txt").exists();
+        let _ = std::fs::remove_dir_all(&path);
+        let _ = std::fs::remove_dir_all(&aside);
+        assert!(
+            !adopted,
+            "claim adopted a directory this session did not create"
+        );
+        assert!(
+            survived,
+            "dropping the adopted scratch deleted foreign content"
+        );
     }
 
     #[test]
