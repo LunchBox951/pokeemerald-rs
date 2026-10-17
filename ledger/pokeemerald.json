@@ -30928,6 +30928,26 @@
       "status": "pending"
     },
     "src/naming_screen.c": {
+      "artifacts": {
+        "HandleDpadMovement": {
+          "reason": "HandleDpadMovement (naming_screen.c:1602-1698) rewritten in NamingScreenModel::read_dpad: sequential Up/Down/Left/Right test with the last match winning, horizontal wrap through the button column, the key-row/button-row mapping with the remembered tButtonId row (including its BUTTON_BACK/BUTTON_OK overwrite quirk), and vertical wrap per column kind. The screen-local 16-frame initial repeat set in NamingScreen_Init (:465-484) and the 5-frame continued repeat of ReadKeys (main.c:250-290) are modelled by a per-screen key-repeat counter that advances on every frame, including locked ones (issue #1854).",
+          "rust_target": "crates/pokeemerald-rs/src/naming.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        },
+        "HandleKeyboardEvent": {
+          "reason": "HandleKeyboardEvent and its KeyboardKeyHandler_Character/Page/Backspace/OK handlers (naming_screen.c:1451-1527), the Input_Enabled fresh-press precedence A, B, SELECT, START (:1530-1598), and the text routines GetTextEntryPosition, GetPreviousTextCaretPosition, DeleteTextCharacter, AddTextCharacter (:1784-1863), plus the keyboard page tables and column counts (:278-310), rewritten as the rendering-independent naming::NamingScreenModel (issue #1854). Page-swap and full-name cursor-squish animations are caller-completed PendingTransitions. Not modelled: presentation, sprites, button flashes, sound, and the L=A button-mode remap of ReadKeys. The file stays pending for the presentation child (#1855) and the intro caller (#1612).",
+          "rust_target": "crates/pokeemerald-rs/src/naming.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        },
+        "SaveInputText": {
+          "reason": "SaveInputText (naming_screen.c:1850-1863) rewritten in NamingScreenModel::confirm: the entry replaces the caller's seeded destination unless every entered character is blank (space or EOS); the confirmed value is returned and no intro or save state is touched (issue #1854). MainState_PressedOKButton's party-full PC message belongs to the CAUGHT_MON template, which this model does not serve.",
+          "rust_target": "crates/pokeemerald-rs/src/naming.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
