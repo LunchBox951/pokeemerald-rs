@@ -299,7 +299,7 @@ impl Battle {
                 is_critical: raw_damage.is_critical,
             });
             hits_landed += 1;
-            self.apply_static_contact(attacker_is_player, move_id, rng, events)?;
+            self.apply_contact_abilities(attacker_is_player, move_id, rng, events)?;
         }
         Ok(MultiHitResult {
             hits_landed,
