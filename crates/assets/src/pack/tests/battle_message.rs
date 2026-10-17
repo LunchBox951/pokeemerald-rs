@@ -5,7 +5,7 @@ use super::super::{
 };
 use super::shared::{pack_bytes, write_pack, Entry, PALETTE_KIND_TAG, RAW_KIND_TAG};
 
-const ID: &str = "battle-message/table";
+const TABLE_PACK_ID: &str = "battle-message/table";
 
 fn slot_stream(id: u16) -> Vec<u8> {
     vec![0x10 + u8::try_from(id % 0x40).unwrap(), 0xFF]
@@ -23,7 +23,7 @@ fn specials() -> Vec<(u16, Vec<u8>)> {
     (0..74).map(|i| (i, special_stream(i))).collect()
 }
 
-/// Independent of `encode`: header then records, written by hand.
+/// Hand-written so the tests do not rely on `encode` to check `encode`.
 fn canonical(slots: &[(u16, Vec<u8>)], specials: &[(u16, Vec<u8>)]) -> Vec<u8> {
     let mut out = b"BMSG".to_vec();
     for v in [1u16, 12, 381, 369, 74] {
@@ -37,7 +37,7 @@ fn canonical(slots: &[(u16, Vec<u8>)], specials: &[(u16, Vec<u8>)]) -> Vec<u8> {
     out
 }
 
-fn good() -> Vec<u8> {
+fn canonical_payload() -> Vec<u8> {
     canonical(&slots(), &specials())
 }
 
@@ -47,7 +47,7 @@ fn borrowed(v: &[(u16, Vec<u8>)]) -> Vec<(u16, &[u8])> {
 
 #[test]
 fn canonical_bytes_decode_and_reencode_identically() {
-    let bytes = good();
+    let bytes = canonical_payload();
     let table = BattleMessageTable::decode(&bytes).unwrap();
     assert_eq!(table.encode(), bytes);
     assert_eq!(table.strings().count(), BATTLE_MESSAGE_SLOT_COUNT);
@@ -63,12 +63,12 @@ fn from_entries_in_any_order_encodes_canonically() {
     sb.reverse();
     pb.reverse();
     let table = BattleMessageTable::from_entries(sb, pb).unwrap();
-    assert_eq!(table.encode(), good());
+    assert_eq!(table.encode(), canonical_payload());
 }
 
 #[test]
 fn lookup_bounds() {
-    let bytes = good();
+    let bytes = canonical_payload();
     let table = BattleMessageTable::decode(&bytes).unwrap();
     for id in [0, 11, 381, u16::MAX] {
         assert_eq!(
@@ -85,7 +85,7 @@ fn lookup_bounds() {
 
 #[test]
 fn every_truncation_is_refused() {
-    let bytes = good();
+    let bytes = canonical_payload();
     for len in 0..bytes.len() {
         assert!(BattleMessageTable::decode(&bytes[..len]).is_err(), "{len}");
     }
@@ -93,7 +93,7 @@ fn every_truncation_is_refused() {
 
 #[test]
 fn header_mutations_are_refused() {
-    let mut bytes = good();
+    let mut bytes = canonical_payload();
     bytes[0] = b'X';
     assert_eq!(
         BattleMessageTable::decode(&bytes),
@@ -105,7 +105,7 @@ fn header_mutations_are_refused() {
         (10, "slot_count"),
         (12, "special_count"),
     ] {
-        let mut bytes = good();
+        let mut bytes = canonical_payload();
         bytes[offset] ^= 1;
         assert!(
             matches!(
@@ -115,7 +115,7 @@ fn header_mutations_are_refused() {
             "{field}"
         );
     }
-    let mut bytes = good();
+    let mut bytes = canonical_payload();
     bytes[4] = 2;
     assert_eq!(
         BattleMessageTable::decode(&bytes),
@@ -125,13 +125,13 @@ fn header_mutations_are_refused() {
 
 #[test]
 fn trailing_bytes_and_oversized_length_are_refused() {
-    let mut bytes = good();
+    let mut bytes = canonical_payload();
     bytes.push(0);
     assert_eq!(
         BattleMessageTable::decode(&bytes),
         Err(BattleMessageError::TrailingBytes)
     );
-    let mut bytes = good();
+    let mut bytes = canonical_payload();
     bytes[16..20].copy_from_slice(&u32::MAX.to_le_bytes());
     assert_eq!(
         BattleMessageTable::decode(&bytes),
@@ -212,7 +212,7 @@ fn constructor_refuses_missing_duplicate_and_out_of_range() {
     ));
 }
 
-fn with_slot(stream: &[u8]) -> Result<(), BattleMessageError> {
+fn decode_with_first_slot(stream: &[u8]) -> Result<(), BattleMessageError> {
     let mut s = slots();
     s[0].1 = stream.to_vec();
     BattleMessageTable::decode(&canonical(&s, &specials())).map(|_| ())
@@ -220,8 +220,7 @@ fn with_slot(stream: &[u8]) -> Result<(), BattleMessageError> {
 
 #[test]
 fn token_streams_representative_placeholders_and_controls() {
-    // {PLAYER} {B_BUFF1} {B_BUFF2} \n \l \p {PAUSE 32} {PLAY_SE SE_FLEE} {PLAY_BGM MUS_CAUGHT}
-    // {WAIT_SE} then terminator; FD 01 is PLAYER and B_BUFF2 alike, FD 00 is B_BUFF1.
+    // Placeholder, line-break, pause, sound, and wait tokens, each ending in `EOS`.
     let ok: &[&[u8]] = &[
         &[0xFF],
         &[0xFD, 0x01, 0xFD, 0x00, 0xFE, 0xFA, 0xFB, 0xFF],
@@ -229,10 +228,10 @@ fn token_streams_representative_placeholders_and_controls() {
         &[0xFC, 0x10, 0x11, 0x00, 0xFF],
         &[0xFC, 0x0B, 0x60, 0x01, 0xFC, 0x0A, 0xFF],
         &[0xFC, 0x0C, 0xFB, 0xFF],
-        &[0xFD, 0xFF, 0xFF], // FF as a placeholder argument is not EOS
+        &[0xFD, 0xFF, 0xFF], // `0xFF` as a placeholder argument is not `EOS`
     ];
     for stream in ok {
-        assert_eq!(with_slot(stream), Ok(()), "{stream:02X?}");
+        assert_eq!(decode_with_first_slot(stream), Ok(()), "{stream:02X?}");
     }
 }
 
@@ -254,7 +253,7 @@ fn malformed_token_streams_are_refused() {
     for stream in bad {
         assert!(
             matches!(
-                with_slot(stream),
+                decode_with_first_slot(stream),
                 Err(BattleMessageError::MalformedString { .. })
             ),
             "{stream:02X?}"
@@ -264,7 +263,7 @@ fn malformed_token_streams_are_refused() {
 
 #[test]
 fn special_inventory_groups() {
-    let bytes = good();
+    let bytes = canonical_payload();
     let table = BattleMessageTable::decode(&bytes).unwrap();
     assert_eq!(BATTLE_MESSAGE_SPECIAL_TEMPLATES.len(), 74);
     for (message, count) in [
@@ -296,7 +295,7 @@ fn special_inventory_groups() {
 
 fn pack_with(kind_tag: u8, payload: Vec<u8>) -> Vec<u8> {
     pack_bytes(vec![Entry {
-        id: ID,
+        id: TABLE_PACK_ID,
         kind_tag,
         meta: if kind_tag == PALETTE_KIND_TAG {
             2u16.to_le_bytes().to_vec()
@@ -316,8 +315,11 @@ fn load(name: &str, bytes: &[u8]) -> AssetPack {
 
 #[test]
 fn accessor_valid_missing_wrong_kind_and_malformed() {
-    let pack = load("bmsg-ok", &pack_with(RAW_KIND_TAG, good()));
-    assert_eq!(pack.battle_messages().unwrap().encode(), good());
+    let pack = load("bmsg-ok", &pack_with(RAW_KIND_TAG, canonical_payload()));
+    assert_eq!(
+        pack.battle_messages().unwrap().encode(),
+        canonical_payload()
+    );
 
     let pack = load("bmsg-missing", &pack_bytes(vec![]));
     assert!(matches!(
@@ -331,7 +333,7 @@ fn accessor_valid_missing_wrong_kind_and_malformed() {
         Err(PackError::WrongKind { .. })
     ));
 
-    let mut bad = good();
+    let mut bad = canonical_payload();
     bad.truncate(bad.len() - 1);
     let pack = load("bmsg-bad", &pack_with(RAW_KIND_TAG, bad));
     assert!(matches!(
