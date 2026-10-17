@@ -90,25 +90,43 @@ pub fn require_battle_messages(pack: &PackSource) -> Result<(), GenRomProfileErr
     pack.get(rom_import::BATTLE_MESSAGE_PACK_ID).map(|_| ())
 }
 
-/// Require every bag entry the checkout's inventory expects.
+/// Require exactly the bag entries the checkout's inventory expects.
+///
+/// The bag locator derives its roots from the expectation, not the pack, so
+/// a pack entry outside it would otherwise be dropped from the profile.
 ///
 /// # Errors
 ///
 /// [`GenRomProfileError::MissingPackEntry`] naming the first absent entry,
 /// or `bag/*` when the expectation is empty, so a whole missing family
-/// cannot pass as a complete one.
+/// cannot pass as a complete one. [`GenRomProfileError::StructMismatch`]
+/// naming the first pack `bag/` entry the expectation does not hold.
 pub fn require_bag(pack: &PackSource, expected: &[String]) -> Result<(), GenRomProfileError> {
     if expected.is_empty() {
         return Err(GenRomProfileError::MissingPackEntry("bag/*".to_owned()));
     }
-    expected.iter().try_for_each(|id| pack.get(id).map(|_| ()))
+    expected
+        .iter()
+        .try_for_each(|id| pack.get(id).map(|_| ()))?;
+    if let Some(surplus) = pack
+        .ids_with_prefix("bag/")
+        .into_iter()
+        .find(|id| !expected.contains(id))
+    {
+        return Err(GenRomProfileError::StructMismatch {
+            id: surplus,
+            reason: "is not in the checkout's bag inventory".to_owned(),
+        });
+    }
+    Ok(())
 }
 
 /// Require every fixed root, before any domain writes a report line.
 ///
 /// # Errors
 ///
-/// [`GenRomProfileError::MissingPackEntry`] naming the first absent root.
+/// [`GenRomProfileError::MissingPackEntry`] naming the first absent root,
+/// or [`GenRomProfileError::StructMismatch`] for a surplus `bag/` entry.
 pub fn preflight(pack: &PackSource, bag_ids: &[String]) -> Result<(), GenRomProfileError> {
     require_tilesets(pack)?;
     require_title(pack)?;

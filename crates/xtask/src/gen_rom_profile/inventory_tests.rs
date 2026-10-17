@@ -227,6 +227,28 @@ fn a_pack_missing_the_whole_bag_family_is_refused_by_id() {
 }
 
 #[test]
+fn a_surplus_bag_entry_is_refused_by_id() {
+    let surplus = "bag/item-icon/image/not_in_the_inventory";
+    let mut entries = complete_inventory();
+    entries.push(raw_entry(surplus.to_owned(), vec![0]));
+    let rom = RomFixture::new().emerald_header().finish();
+    with_context("surplus-bag", &rom, entries, |ctx| {
+        let err = inventory::preflight(ctx.pack, &ctx.bag_ids).unwrap_err();
+        assert!(
+            matches!(&err, GenRomProfileError::StructMismatch { id, .. } if id == surplus),
+            "{err:?}"
+        );
+        let mut report = Vec::new();
+        let err = bag::locate(ctx, &mut report).map(|_| ()).unwrap_err();
+        assert!(
+            matches!(&err, GenRomProfileError::StructMismatch { id, .. } if id == surplus),
+            "{err:?}"
+        );
+        assert!(report.is_empty(), "{report:?}");
+    });
+}
+
+#[test]
 fn an_empty_bag_expectation_is_refused() {
     let rom = RomFixture::new().emerald_header().finish();
     with_context("empty-bag", &rom, complete_inventory(), |ctx| {
