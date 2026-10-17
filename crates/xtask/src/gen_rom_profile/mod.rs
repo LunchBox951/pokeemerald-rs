@@ -272,7 +272,7 @@ fn generate(
 
     let map = cross_check(options.map.as_deref(), &mut lines)?;
 
-    let module = emit::module(&plan, sha1, lines.len());
+    let module = emit::module(&plan, sha1, &lines);
     write_module(&options.rom, &out_path, &module)?;
 
     Ok(GenReport {
