@@ -114,15 +114,18 @@ pub(crate) fn image(reader: &RomReader<'_>, root: &ImageRoot) -> Result<PackEntr
 ///
 /// [`ImportError::Truncated`] if the colours are not inside the ROM;
 /// [`ImportError::Lz77`] if a compressed root will not decode to exactly
-/// the length its colour count implies;
-/// [`ImportError::EntryShape`] if the count is unrepresentable, which a
+/// `color_count * 2` bytes; [`ImportError::EntryShape`] if the count is unrepresentable, which a
 /// `u16` count cannot be.
 pub(crate) fn palette(
     reader: &RomReader<'_>,
     root: &PaletteRoot,
 ) -> Result<PackEntry, ImportError> {
-    let byte_len = usize::from(root.color_count) * 2;
-    let bytes = read_bytes(reader, root.addr, root.encoding, byte_len)?;
+    let bytes = read_bytes(
+        reader,
+        root.addr,
+        root.encoding,
+        usize::from(root.color_count) * 2,
+    )?;
     let colors: Vec<u16> = bytes
         .chunks_exact(2)
         .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))

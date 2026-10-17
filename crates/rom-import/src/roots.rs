@@ -108,10 +108,11 @@ pub struct PaletteRoot {
     pub id: &'static str,
     /// Where the colours start.
     pub addr: GbaPtr,
-    /// How the colours are stored. A species palette is an LZ77 stream.
-    pub encoding: Encoding,
     /// How many colours to read. Each is one little-endian `u16`.
     pub color_count: u16,
+    /// How the colours are stored. A compressed root decodes to exactly
+    /// `color_count * 2` bytes.
+    pub encoding: Encoding,
 }
 
 /// Bytes a reader copies through without interpreting.

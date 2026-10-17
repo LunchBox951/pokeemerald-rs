@@ -3,8 +3,8 @@ use std::fmt::Write as _;
 use rom_import::Encoding;
 
 use super::plan::{
-    BattleMessagePlan, BattlerPlan, BlobPlan, ImagePlan, MapLayoutPlan, PalettePlan, ProfilePlan,
-    TileAnimPlan, TilesetPlan,
+    BagPlan, BattleMessagePlan, BattlerPlan, BlobPlan, ImagePlan, MapLayoutPlan, PalettePlan,
+    ProfilePlan, TileAnimPlan, TilesetPlan,
 };
 
 /// Returns the `bpee_rev0` Rust module with one root-table constant.
@@ -74,13 +74,24 @@ pub const EMERALD_US_REV0_ROOTS: Roots = Roots {{"
     audio_roots(&mut out, plan);
     battle_message_roots(&mut out, &plan.battle_messages);
 
-    // The bag family stays empty until the generator locates its roots.
-    let _ = writeln!(out, "    bag: BagRoots::NONE,");
+    bag_roots(&mut out, &plan.bag);
 
     battler_roots(&mut out, &plan.battlers);
 
     let _ = writeln!(out, "}};");
     out
+}
+
+fn bag_roots(out: &mut String, bag: &BagPlan) {
+    let _ = writeln!(out, "    bag: BagRoots {{");
+    image_slice(out, "        ", "images", &bag.images);
+    palette_slice(out, "        ", &bag.palettes);
+    let _ = writeln!(out, "        raws: &[");
+    for blob in &bag.raws {
+        let _ = writeln!(out, "            {},", blob_root(blob));
+    }
+    let _ = writeln!(out, "        ],");
+    let _ = writeln!(out, "    }},");
 }
 
 fn palette_slice(out: &mut String, indent: &str, palettes: &[PalettePlan]) {
@@ -351,11 +362,11 @@ fn image_root(image: &ImagePlan) -> String {
 
 fn palette_root(palette: &PalettePlan) -> String {
     format!(
-        "PaletteRoot {{ id: {:?}, addr: {}, encoding: {}, color_count: {} }}",
+        "PaletteRoot {{ id: {:?}, addr: {}, color_count: {}, encoding: {} }}",
         palette.id,
         gba_ptr_expression(palette.addr),
-        encoding_variant_path(palette.encoding),
-        palette.color_count
+        palette.color_count,
+        encoding_variant_path(palette.encoding)
     )
 }
 
@@ -452,11 +463,12 @@ mod tests {
         let palette = palette_root(&PalettePlan {
             id: "title/palette/pokemon_logo".to_owned(),
             addr: 0x08DD_E258,
-            encoding: rom_import::Encoding::Raw,
             color_count: 224,
+            encoding: Encoding::Lz77,
         });
         assert!(!palette.contains('\n'), "{palette}");
         assert!(palette.contains("color_count: 224"), "{palette}");
+        assert!(palette.contains("encoding: Encoding::Lz77"), "{palette}");
 
         let blob = blob_root(&BlobPlan {
             id: "layout/route103/map".to_owned(),
@@ -473,12 +485,13 @@ mod tests {
 mod bag_field_tests {
     use super::module;
     use crate::gen_rom_profile::plan::{
-        AudioPlan, BattleMessagePlan, BattlerPlan, ProfilePlan, SpritePlan, TextWindowPlan,
-        TitleScreenPlan,
+        AudioPlan, BagPlan, BattleMessagePlan, BattlerPlan, BlobPlan, ImagePlan, PalettePlan,
+        ProfilePlan, SpritePlan, TextWindowPlan, TitleScreenPlan,
     };
+    use rom_import::Encoding;
 
     #[test]
-    fn the_emitted_roots_literal_initializes_the_bag_field() {
+    fn the_emitted_roots_literal_populates_the_bag_family() {
         let base = 0x0800_0000;
         let plan = ProfilePlan {
             tilesets: vec![],
@@ -520,12 +533,49 @@ mod bag_field_tests {
                 shiny_palette_table: base,
                 species: vec![],
             },
+            bag: BagPlan {
+                images: vec![ImagePlan {
+                    id: "bag/image/hm".to_owned(),
+                    addr: 0x0812_0000,
+                    encoding: Encoding::Raw,
+                    rom_bit_depth: 4,
+                    pack_bit_depth: 4,
+                    width: 16,
+                    height: 16,
+                    metatile_width: 1,
+                    metatile_height: 1,
+                    tile_count: 4,
+                }],
+                palettes: vec![PalettePlan {
+                    id: "bag/item-icon/palette/potion".to_owned(),
+                    addr: 0x0813_0000,
+                    color_count: 16,
+                    encoding: Encoding::Lz77,
+                }],
+                raws: vec![BlobPlan {
+                    id: "bag/raw/menu".to_owned(),
+                    addr: 0x0814_0000,
+                    encoding: Encoding::Lz77,
+                    len: 2048,
+                }],
+            },
         };
         let module = module(&plan, "0", 0);
+        assert!(module.contains("    bag: BagRoots {"), "{module}");
         assert!(
-            module.contains("    bag: BagRoots::NONE,"),
-            "Roots literal lacks `bag`:\n{module}"
+            module.contains("ImageRoot { id: \"bag/image/hm\""),
+            "{module}"
         );
-        assert!(module.contains(" BagRoots,"), "BagRoots not imported");
+        assert!(
+            module.contains(
+                "PaletteRoot { id: \"bag/item-icon/palette/potion\", addr: GbaPtr::at(0x0813_0000), color_count: 16, encoding: Encoding::Lz77 }"
+            ),
+            "{module}"
+        );
+        assert!(
+            module.contains("BlobRoot { id: \"bag/raw/menu\", addr: GbaPtr::at(0x0814_0000), encoding: Encoding::Lz77, len: 2048 }"),
+            "{module}"
+        );
+        assert!(!module.contains("BagRoots::NONE"), "{module}");
     }
 }

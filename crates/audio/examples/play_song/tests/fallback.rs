@@ -2,6 +2,9 @@
 
 use super::*;
 
+/// Stale-timestamp fixture: the sounded estimate never moves, so only
+/// `submitted_advances` decides whether callbacks look live; `errors` is
+/// reported after 50 ms.
 fn stale_timestamp_wait(
     submitted_advances: bool,
     errors: u64,
@@ -97,9 +100,8 @@ fn callbacks_that_stall_partway_through_the_derived_tail_still_time_out() {
     ));
 }
 
-/// `policy.max_wait` is documented as bounding how long the stream is
-/// held open: a callback that advances and then stalls must not keep it
-/// open past that bound.
+/// Submissions that advance only briefly time out at `max_wait` rather than
+/// holding the stream open past it (by at most one poll).
 #[test]
 fn a_stalling_callback_does_not_hold_the_stream_past_max_wait() {
     let policy = RetryPolicy {
@@ -170,8 +172,8 @@ fn a_single_late_callback_does_not_prove_callbacks_alive() {
     ));
 }
 
-/// A poll that oversleeps past `max_wait` reports the timeout even when
-/// the callbacks look alive.
+/// A poll that oversleeps past `max_wait` times out when the tail could not
+/// have completed within it, even if callbacks look alive.
 #[test]
 fn a_delayed_poll_past_max_wait_does_not_take_the_stale_tail_exit() {
     let policy = RetryPolicy {

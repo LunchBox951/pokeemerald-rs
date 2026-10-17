@@ -32,6 +32,7 @@ const TILES_OFF: u32 = 0x1000;
 const PALETTE_OFF: u32 = 0x2000;
 const TILEMAP_OFF: u32 = 0x3000;
 const RAW_TILES_OFF: u32 = 0x4000;
+const PACKED_PALETTE_OFF: u32 = 0x5000;
 /// A stream whose declared size runs off the end of the image.
 const TRUNCATED_OFF: u32 = ROM_SIZE_U32 - 6;
 
@@ -84,6 +85,10 @@ fn fixture_rom() -> Rom {
         .write(off(PALETTE_OFF), &[0x1F, 0x00, 0xE0, 0x03])
         .write(off(TILEMAP_OFF), &lz77_literals(b"tilemap!"))
         .write(off(RAW_TILES_OFF), &one_tile())
+        .write(
+            off(PACKED_PALETTE_OFF),
+            &lz77_literals(&[0x1F, 0x00, 0xE0, 0x03]),
+        )
         // Declares 64 bytes, then the image ends after one literal.
         .write(off(TRUNCATED_OFF), &[0x10, 0x40, 0x00, 0x00, 0x00, b'A'])
         .finish();
@@ -272,6 +277,74 @@ fn a_stream_that_is_not_lz77_is_rejected() {
         ),
         "{err}"
     );
+}
+
+#[test]
+fn a_compressed_palette_reads_the_same_colours_as_a_raw_one() {
+    let packed = PaletteRoot {
+        addr: at(PACKED_PALETTE_OFF),
+        encoding: Encoding::Lz77,
+        ..palette_root()
+    };
+    let from_packed = read(palette, &packed).expect("a well-formed compressed palette");
+    let from_raw = read(palette, &palette_root()).expect("a well-formed raw palette");
+    assert_eq!(from_packed.kind, EntryKind::Palette { color_count: 2 });
+    assert_eq!(from_packed.payload, from_raw.payload);
+}
+
+#[test]
+fn a_compressed_palette_must_decode_to_its_colour_count() {
+    let packed = PaletteRoot {
+        addr: at(PACKED_PALETTE_OFF),
+        encoding: Encoding::Lz77,
+        color_count: 3,
+        ..palette_root()
+    };
+    let err = read(palette, &packed).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            ImportError::Lz77 {
+                fault: Lz77Fault::SizeMismatch {
+                    expected: 6,
+                    actual: 4
+                },
+                ..
+            }
+        ),
+        "{err}"
+    );
+}
+
+#[test]
+fn a_compressed_palette_root_over_raw_bytes_is_rejected() {
+    let root = PaletteRoot {
+        encoding: Encoding::Lz77,
+        ..palette_root()
+    };
+    let err = read(palette, &root).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            ImportError::Lz77 {
+                fault: Lz77Fault::WrongType,
+                ..
+            }
+        ),
+        "{err}"
+    );
+}
+
+#[test]
+fn a_truncated_compressed_palette_is_rejected() {
+    let root = PaletteRoot {
+        addr: at(TRUNCATED_OFF),
+        encoding: Encoding::Lz77,
+        color_count: 32,
+        ..palette_root()
+    };
+    let err = read(palette, &root).unwrap_err();
+    assert!(matches!(err, ImportError::Lz77 { .. }), "{err}");
 }
 
 #[test]

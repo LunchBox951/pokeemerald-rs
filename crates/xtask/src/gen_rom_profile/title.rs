@@ -123,8 +123,8 @@ fn locate_palettes(
     plans.push(PalettePlan {
         id: TRIMMED_PALETTE.to_owned(),
         addr,
-        encoding: rom_import::Encoding::Raw,
         color_count,
+        encoding: Encoding::Raw,
     });
     plans.sort_by(|a, b| a.id.cmp(&b.id));
     Ok((plans, addr))

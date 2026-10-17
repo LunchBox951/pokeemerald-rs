@@ -200,6 +200,10 @@ fn scoreable_effect(dex: &Dex, move_id: MoveId) -> Result<ScoreableEffect, Battl
 
 /// Rejects a move whose effect the enabled trainer AI scripts cannot score.
 ///
+/// A flagless trainer runs no scoring script (`ChooseMoveOrAction_Singles`
+/// skips its flag loop, `src/battle_ai_script_commands.c:405-415`), so only the
+/// move's dex residency is checked.
+///
 /// The unchanged-after-prologue rows are admitted when `CHECK_BAD_MOVE` is the
 /// only script that would reach them, and refused when `CHECK_VIABILITY` or
 /// `TRY_TO_FAINT` would take an unported branch. `SETUP_FIRST_TURN` has no
@@ -214,6 +218,9 @@ pub(crate) fn ensure_scoreable(
     move_id: MoveId,
     flags: AiFlags,
 ) -> Result<(), BattleError> {
+    if flags == AiFlags::NONE {
+        return dex.move_data(move_id).map(|_| ());
+    }
     if scoreable_effect(dex, move_id)?.supported_by(flags) {
         Ok(())
     } else {
@@ -1038,6 +1045,52 @@ mod tests {
     /// (`data/battle_ai_scripts.s:95-103`) despite belonging to execution's
     /// `SOUND_MOVES` (`crates/battle/src/stat_change.rs:83-94`).
     const HYPER_VOICE: MoveId = MoveId::HYPER_VOICE;
+
+    const SEISMIC_TOSS: MoveId = MoveId::SEISMIC_TOSS;
+    const SONIC_BOOM: MoveId = MoveId::SONIC_BOOM;
+    /// Upstream draws one setup value per move slot, then one tie-break value
+    /// (`src/battle_ai_script_commands.c:322-342,445`).
+    const FLAGLESS_DRAWS: usize = MAX_MON_MOVES + 1;
+
+    #[test]
+    fn a_flagless_trainer_chooses_among_executable_fixed_damage_moves() {
+        let dex = Dex::new();
+        let mut enemy = pokemon(TREECKO, vec![SEISMIC_TOSS, SONIC_BOOM, POUND]);
+        spend_move(&mut enemy, 2);
+        let player = pokemon(VOLTORB, vec![POUND]);
+        for (tie, slot) in [(0, 0), (1, 1), (2, 0)] {
+            let mut rng = SequenceRng::new([0, 1, 2, 3, tie]);
+            assert_eq!(
+                choose_trainer_action(&dex, &enemy, &player, AiFlags::NONE, FIRST_TURN, &mut rng),
+                Ok(EnemyAction::Move(slot))
+            );
+            assert_eq!(rng.draws(), FLAGLESS_DRAWS);
+            rng.assert_exhausted();
+        }
+    }
+
+    #[test]
+    fn flagless_admission_still_requires_a_dex_resident_move() {
+        let dex = Dex::new();
+        assert_eq!(ensure_scoreable(&dex, SEISMIC_TOSS, AiFlags::NONE), Ok(()));
+        assert!(ensure_scoreable(&dex, MoveId(u16::MAX), AiFlags::NONE).is_err());
+    }
+
+    #[test]
+    fn scoring_flags_still_refuse_fixed_damage_moves() {
+        let dex = Dex::new();
+        for flags in [
+            AiFlags::CHECK_BAD_MOVE,
+            AiFlags::TRY_TO_FAINT,
+            AiFlags::CHECK_VIABILITY,
+            AiFlags::SETUP_FIRST_TURN,
+        ] {
+            assert_eq!(
+                ensure_scoreable(&dex, SEISMIC_TOSS, flags),
+                Err(BattleError::UnscoreableMoveEffect(SEISMIC_TOSS))
+            );
+        }
+    }
 
     fn route_103_flags() -> AiFlags {
         AiFlags::CHECK_BAD_MOVE

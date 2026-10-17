@@ -3,7 +3,11 @@
 //! One list per domain, read by both the extractor and the profile generator
 //! so a pack missing a root is refused rather than half-described.
 
+use std::path::Path;
+
+use super::bag::{fixed_ids, icon_ids};
 use super::sprites::{FIRST_GENERIC_NPC_PALETTE, LAST_GENERIC_NPC_PALETTE};
+use super::ExtractError;
 
 #[derive(Clone, Copy)]
 pub(crate) struct TilesetSource {
@@ -460,3 +464,13 @@ pub(crate) const BATTLERS: [BattlerSource; 3] = [
         species: assets::SpeciesId::MUDKIP,
     },
 ];
+
+/// Every `bag/` pack id extraction emits: the fixed manifest, then the
+/// item icons `gItemIconTable` selects.
+///
+/// # Errors
+///
+/// [`ExtractError`] if the checkout's icon table cannot be read.
+pub(crate) fn bag_ids(upstream: &Path) -> Result<Vec<String>, ExtractError> {
+    Ok([fixed_ids(), icon_ids(upstream)?].concat())
+}
