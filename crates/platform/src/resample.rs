@@ -307,8 +307,8 @@ impl Resampler {
         // below (a trailing partial frame still advances the cursor).
         let steps = out.len().div_ceil(self.channels);
 
-        // Source frames this call consumes: 2 to prime the `prev`/`next`
-        // lookahead on the very first call, plus one per source-frame boundary
+        // Source frames this call consumes: 1 to prime `prev` on the very
+        // first call (`next` stays pending), plus one per source-frame boundary
         // the interpolation cursor crosses. The advance runs *before* each
         // frame (skipped only for the very first frame ever), so the trailing
         // lookahead pull is deferred to the next callback — see the module
@@ -449,9 +449,9 @@ mod tests {
 
     #[test]
     fn identity_ratio_passes_frames_through_unchanged() {
-        // With the deferred lookahead pull, priming plus 4 output frames pulls
-        // only 5 source frames within this call (the 6th is deferred to a next
-        // callback that never comes here); push a comfortable margin so the
+        // With the deferred lookahead pull, priming plus 4 identity outputs
+        // pulls exactly 4 source frames within this call (the lookahead stays
+        // pending for a next callback that never comes here); push a margin so the
         // pass-through values are exercised without a tail-end underrun
         // (production code never hits this identity case: `AudioOutput::open`
         // only builds a `Resampler` when the rates actually differ).
