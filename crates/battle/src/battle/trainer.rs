@@ -742,6 +742,40 @@ mod tests {
     }
 
     #[test]
+    fn a_flagless_trainer_admits_executable_fixed_damage_moves() {
+        let dex = Dex::new();
+        let moves = [MoveId::SEISMIC_TOSS, MoveId::SONIC_BOOM];
+        let party = [TrainerPartyMon {
+            species: TREECKO,
+            level: ROUTE_103_RIVAL_LEVEL,
+            moves: &moves,
+            personality: 0,
+        }];
+        assert_eq!(
+            ensure_trainer_party_startable(&dex, &lead(VOLTORB), TrainerId::JANI, &party),
+            Ok(())
+        );
+        let enemy = crate::pokemon::BattlePokemon::new(
+            &dex,
+            TREECKO,
+            ROUTE_103_RIVAL_LEVEL,
+            crate::Ivs::default(),
+            0,
+            moves.to_vec(),
+        )
+        .expect("a valid fixed-damage party member");
+        let mut rng = SequenceRng::new([0; 16]);
+        assert!(crate::battle::Battle::new_trainer(
+            Dex::new(),
+            lead(VOLTORB),
+            TrainerId::JANI,
+            vec![enemy],
+            &mut rng,
+        )
+        .is_ok());
+    }
+
+    #[test]
     fn the_pre_flight_refuses_a_two_ability_lead_before_any_draw() {
         let dex = Dex::new();
         let moves = [POUND];
