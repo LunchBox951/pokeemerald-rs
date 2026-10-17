@@ -1,9 +1,10 @@
 use std::sync::OnceLock;
 
 use pokeemerald_rs::main_menu::MainMenuItem;
+use pokeemerald_rs::overworld::WALK_FRAMES_PER_TILE;
 use pokeemerald_rs::{AppButtons, AppState};
 
-use super::{expand_segments, ScenarioFrame, Segment, FADE_WAIT_FRAMES, WALK_FRAMES_PER_TILE};
+use super::{expand_segments, ScenarioFrame, Segment, FADE_WAIT_FRAMES};
 
 const INTRO_HANDOFF_FRAMES: usize = 1;
 const BUTTON_EDGE_FRAMES: usize = 1;
@@ -59,7 +60,7 @@ const fn held(buttons: AppButtons, count: usize, expected: AppState) -> Scenario
 }
 
 const fn walk(direction: AppButtons, tiles: usize, expected: AppState) -> ScenarioBlock {
-    held(direction, WALK_FRAMES_PER_TILE * tiles, expected)
+    held(direction, WALK_FRAMES_PER_TILE as usize * tiles, expected)
 }
 
 const SEGMENTS: &[ScenarioBlock] = &[
@@ -207,9 +208,10 @@ pub(super) fn frames() -> &'static [ScenarioFrame] {
 
 #[cfg(test)]
 mod tests {
-    use crate::scenario::{spec, WALK_FRAMES_PER_TILE};
+    use crate::scenario::spec;
     use crate::ScenarioName;
     use pokeemerald_rs::main_menu::MainMenuItem;
+    use pokeemerald_rs::overworld::WALK_FRAMES_PER_TILE;
     use pokeemerald_rs::{AppButtons, AppState};
 
     /// One press-frame, [`super::FADE_WAIT_FRAMES`] waiting frames, and one
@@ -229,12 +231,22 @@ mod tests {
     const EXPECTED_FIRST_BATTLE_STATE_FRAMES: usize = 3;
 
     #[test]
+    fn walk_blocks_last_the_engine_frames_per_tile() {
+        let super::ScenarioBlock::Segment(segment) =
+            super::walk(AppButtons::default(), 1, AppState::Title)
+        else {
+            panic!("walk builds a segment");
+        };
+        assert_eq!(segment.count, usize::from(WALK_FRAMES_PER_TILE));
+    }
+
+    #[test]
     fn script_has_the_expected_route_and_state_shape() {
         let frames = spec(ScenarioName::BootToFirstFight).frames;
 
         let expected_total = EXPECTED_TITLE_AND_MENU_FRAMES
             + pokeemerald_rs::intro::TRAVERSAL_FRAMES
-            + WALK_FRAMES_PER_TILE * EXPECTED_ROUTE_WALK_TILES
+            + WALK_FRAMES_PER_TILE as usize * EXPECTED_ROUTE_WALK_TILES
             + EXPECTED_STEP_LANDING_FRAMES
             + EXPECTED_FRAMES_AFTER_TRIGGER_LANDING
             + EXPECTED_BATTLE_CONCLUSION_FRAMES
