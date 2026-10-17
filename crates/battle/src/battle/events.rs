@@ -367,6 +367,24 @@ pub enum BattleEvent {
         /// The contact move that triggered Static.
         move_id: MoveId,
     },
+    /// The target's [`AbilityId::ROUGH_SKIN`] hurt the attacker after a
+    /// damaging contact hit (`MOVEEND_ON_DAMAGE_ABILITIES`,
+    /// `battle_script_commands.c:4280`; `ABILITY_ROUGH_SKIN`,
+    /// `battle_util.c:2767`-`:2780`; `BattleScript_RoughSkinActivates`,
+    /// `data/battle_scripts_1.s:4184`).
+    ///
+    /// The damage is a sixteenth of the attacker's maximum HP, at least one and
+    /// at most its remaining HP, whether or not the holder survived the hit.
+    /// No RNG is consumed. A [`BattleEvent::Fainted`] for the attacker follows
+    /// when the damage knocks it out.
+    RoughSkinDamage {
+        /// Whether the player used the contact move and so lost the HP.
+        by_player: bool,
+        /// The contact move that triggered Rough Skin.
+        move_id: MoveId,
+        /// HP the attacker actually lost.
+        damage: u32,
+    },
     /// A [`BattleEvent::ParalyzedByStatic`] attacker's own Synchronize
     /// reflected the paralysis onto the surviving Static holder
     /// (`MOVEEND_SYNCHRONIZE_ATTACKER`, `battle_script_commands.c:4291`-
