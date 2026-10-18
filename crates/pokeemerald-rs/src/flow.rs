@@ -211,8 +211,8 @@ pub(crate) enum AppScene {
     /// front-end palette fade" section). `OPTION` enters it too, dispatching to
     /// the Options screen.
     MainMenuFadeWait(Box<MainMenuFadeWait>),
-    /// The Options screen, opened from the main menu's `OPTION` item (I-6,
-    /// issue #1763): it retains the menu it returns to.
+    /// The Options screen, opened from the main menu's `OPTION` item (I-6):
+    /// it retains the menu it returns to.
     Options(Box<OptionsState>),
     /// The main menu fading in from black after the Options screen returns
     /// (`pokeemerald/src/main_menu.c:583-586`).

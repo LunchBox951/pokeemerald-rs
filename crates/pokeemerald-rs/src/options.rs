@@ -1,4 +1,4 @@
-//! The Options screen (I-6, issue #1763): the seven-row settings editor
+//! The Options screen (I-6): the seven-row settings editor
 //! `CB2_InitOptionMenu` builds and its task chain drives
 //! (`pokeemerald/src/option_menu.c:152-372`).
 //!

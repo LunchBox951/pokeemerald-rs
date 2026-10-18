@@ -1,4 +1,4 @@
-//! The Options scene (I-6, issue #1763): opens [`OptionsMenu`] from the main
+//! The Options scene (I-6): opens [`OptionsMenu`] from the main
 //! menu's `OPTION` item and returns to a rebuilt main menu, as
 //! `ACTION_OPTION` and `CB2_ReinitMainMenu` do
 //! (`pokeemerald/src/main_menu.c:1070-1073`).

@@ -511,7 +511,7 @@ fn main_menu_confirm_on_new_game_transitions_to_intro() {
     );
 }
 
-/// Issue #1763: A on `OPTION` is `ACTION_OPTION` (`main_menu.c:1070-1073`),
+/// A on `OPTION` is `ACTION_OPTION` (`main_menu.c:1070-1073`),
 /// so it fades out like the other items, never launches the intro, and --
 /// when the Options screen cannot load -- falls back to the retained menu on
 /// `OPTION` once the fade finishes. The entryless scratch pack makes the load

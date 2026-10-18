@@ -1,5 +1,5 @@
-//! Issue #1763: the Options screen as the production scene machine drives
-//! it -- opened from the main menu's `OPTION`, committing into the retained
+//! The Options screen as the production scene machine drives it (I-6):
+//! opened from the main menu's `OPTION`, committing into the retained
 //! save, and returning to the menu. Synthetic packs come from the shared
 //! [`crate::pack_test_support`].
 
@@ -232,7 +232,7 @@ fn an_empty_boot_edits_options_and_new_game_carries_them_forward() {
 
 #[test]
 fn options_survive_save_exit_and_continue() {
-    // Issue #1763: "options survive save, exit, and continue". The Options
+    // The I-6 outcome "options survive save, exit, and continue": the Options
     // commit goes into the continued session, and the real START -> SAVE
     // writes it; a fresh boot load then recovers it.
     let mut f = Fixture::new("options-persist");

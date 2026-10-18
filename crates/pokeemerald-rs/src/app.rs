@@ -232,7 +232,7 @@ pub enum AppState {
     /// not distinguish a menu awaiting input from one already fading toward
     /// its confirmed selection.
     MainMenu(MainMenuItem),
-    /// The Options screen (I-6, issue #1763), including its fades.
+    /// The Options screen (I-6), including its fades.
     Options,
     /// Birch's new-game introduction.
     Intro,
