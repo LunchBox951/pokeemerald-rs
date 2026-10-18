@@ -31275,6 +31275,12 @@
           "spec": "I-4",
           "status": "stubbed"
         },
+        "SpeciesToCryId": {
+          "reason": "pokemon.c:5701-5710 (#1851). The species-to-cry-position remap is assets::audio::cry_id: species up to Celebi map to their own position, the placeholder species between Celebi and Treecko to Unown's, and Hoenn species through the gSpeciesIdToCryId transcription. Species zero and species past Chimecho return None where upstream indexes outside its table. The parent file stays pending.",
+          "rust_target": "crates/assets/src/audio/cry.rs",
+          "spec": "S-3",
+          "status": "rewritten"
+        },
         "gNatureStatTable": {
           "reason": "Nature stat modifier table ported as Rust data (Nature enum + Stat enum + MODIFIERS table), pinned to upstream via id/landmark/neutral-nature tests (issue #125).",
           "rust_target": "crates/battle/src/nature.rs",
@@ -31944,6 +31950,14 @@
       "status": "pending"
     },
     "src/sound.c": {
+      "artifacts": {
+        "PlayCryInternal": {
+          "reason": "sound.c:369-455 (#1851). Only the mode switch is modelled, as CryMode::settings resolving pan, volume, pitch, length, release, direct-sound mode and reverse per mode. The audio side effects are NOT modelled: the SetPokemonCry* calls, playback through SetPokemonCryTone and gMPlay_PokemonCry, and the cry-done tracking belong to the cry producers and player that #1852 and #1853 own. The parent file stays pending.",
+          "rust_target": "crates/assets/src/audio/cry.rs",
+          "spec": "S-3",
+          "status": "rewritten"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
