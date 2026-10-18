@@ -23,7 +23,7 @@ use super::error::GenRomProfileError;
 use super::images::{locate_images, ImageQuery};
 use super::pack_source::PackSource;
 use super::palettes::locate_unique;
-use super::plan::{AudioPlan, Resolution, SymbolExpectation};
+use super::plan::{AudioPlan, ReportLine, Resolution, SymbolExpectation};
 use super::search::{Lz77Search, PointerIndex, RawSearch};
 use super::Context;
 
@@ -35,6 +35,28 @@ fn scratch(name: &str) -> PathBuf {
     ));
     std::fs::create_dir_all(&dir).expect("scratch directory");
     dir
+}
+
+/// Run `lines` through [`super::cross_check`] against a map shaped like
+/// GNU ld `-Map` output, which lists linker-global symbols only: the global
+/// `gGlobalTable` sits 0x10 bytes past `table`, and nothing is listed at
+/// `table` itself because the table is a translation-unit-local `static`.
+pub(super) fn assert_survives_ld_map(name: &str, table: u32, lines: &mut [ReportLine]) {
+    let dir = scratch(name);
+    let map_path = dir.join("pokeemerald.map");
+    let map = format!(
+        ".rodata         0x{table:016x}       0x20\n \
+         *(.rodata .rodata.* .gnu.linkonce.r.*)\n \
+         .rodata        0x{table:016x}       0x20 t.o\n \
+         {pad}0x{global:016x}                gGlobalTable\n",
+        pad = " ".repeat(15),
+        global = table + 0x10,
+    );
+    std::fs::write(&map_path, map).expect("write map");
+    let result = super::cross_check(Some(&map_path), lines);
+    let _ = std::fs::remove_file(&map_path);
+    let _ = std::fs::remove_dir(&dir);
+    result.expect("a correctly located static table must survive a real GNU ld map");
 }
 
 /// Tile bytes that are distinctive enough to anchor a search.

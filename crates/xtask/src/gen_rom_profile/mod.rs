@@ -113,7 +113,8 @@ pub struct GenReport {
     /// How many roots the cross-check confirmed as some symbol's own
     /// address, without asserting a name.
     pub map_confirmed: usize,
-    /// How many roots the cross-check skipped as interior addresses.
+    /// How many roots the cross-check skipped as interior addresses or
+    /// translation-unit-local symbols.
     pub map_skipped: usize,
     /// Whether a map was given at all.
     pub map_used: bool,
@@ -320,7 +321,8 @@ struct MapCheck {
     named: usize,
     /// Roots the map placed a symbol at, without a name to assert.
     confirmed: usize,
-    /// Roots skipped because their address is interior to another symbol.
+    /// Roots skipped because their address is interior to another symbol or
+    /// their symbol is local to a translation unit.
     skipped: usize,
     /// Whether a map was given at all.
     used: bool,
@@ -329,7 +331,8 @@ struct MapCheck {
 /// Cross-check every root against a linker map, if one was given.
 ///
 /// Three outcomes per root, driven by what the locator recorded:
-/// an interior address is skipped, an unnamed root only has to have *some*
+/// an interior address or a translation-unit-local `static` is skipped
+/// (an ordinary linker map lists only global symbols), an unnamed root only has to have *some*
 /// symbol starting at it, and a named root's symbol has to match. A
 /// disagreement is a failure, not an annotation: the whole point of the
 /// map is to be a second, independent witness, and a witness that only
@@ -347,13 +350,18 @@ fn cross_check(
         ..MapCheck::default()
     };
     for line in lines.iter_mut() {
-        if line.symbol == SymbolExpectation::Interior {
+        if matches!(
+            line.symbol,
+            SymbolExpectation::Interior | SymbolExpectation::Local(_)
+        ) {
             check.skipped += 1;
             continue;
         }
         let symbols = map.symbols_at(line.addr);
         let accepted = match &line.symbol {
-            SymbolExpectation::Interior => unreachable!("skipped above"),
+            SymbolExpectation::Interior | SymbolExpectation::Local(_) => {
+                unreachable!("skipped above")
+            }
             SymbolExpectation::Unnamed => !symbols.is_empty(),
             SymbolExpectation::Exact(name) => symbols.iter().any(|found| found == name),
             SymbolExpectation::Contains(fragments) => symbols
@@ -386,6 +394,7 @@ fn cross_check(
 fn describe(expectation: &SymbolExpectation) -> String {
     match expectation {
         SymbolExpectation::Interior => "an interior address".to_owned(),
+        SymbolExpectation::Local(name) => format!("the translation-unit-local `{name}`"),
         SymbolExpectation::Unnamed => "any symbol".to_owned(),
         SymbolExpectation::Exact(name) => format!("the symbol `{name}`"),
         SymbolExpectation::Contains(fragments) => {
