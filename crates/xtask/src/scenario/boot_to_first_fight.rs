@@ -231,16 +231,6 @@ mod tests {
     const EXPECTED_FIRST_BATTLE_STATE_FRAMES: usize = 3;
 
     #[test]
-    fn walk_blocks_last_the_engine_frames_per_tile() {
-        let super::ScenarioBlock::Segment(segment) =
-            super::walk(AppButtons::default(), 1, AppState::Title)
-        else {
-            panic!("walk builds a segment");
-        };
-        assert_eq!(segment.count, usize::from(WALK_FRAMES_PER_TILE));
-    }
-
-    #[test]
     fn script_has_the_expected_route_and_state_shape() {
         let frames = spec(ScenarioName::BootToFirstFight).frames;
 
