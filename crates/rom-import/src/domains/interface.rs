@@ -1,7 +1,7 @@
 //! Interface palettes: `interface/palette/*`.
 //!
 //! One entry so far, `interface/palette/main_menu_bg`, the single per-pixel
-//! colour source the no-save main menu needs (issue #216, I-3; the rest of
+//! colour source the no-save main menu needs (I-3; the rest of
 //! that scene's colours are upstream's own runtime `LoadPalette` literals,
 //! not file-sourced). It is its own domain rather than a title-screen
 //! afterthought because the interface grows its own roots as more menus

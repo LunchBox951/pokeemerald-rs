@@ -42,7 +42,7 @@ def run_gh(arguments: Sequence[str]) -> str:
 
 @dataclass(frozen=True)
 class GitHubClient:
-    """Minimal GitHub interface used by the local Birch readiness recorder."""
+    """Minimal GitHub interface used by the local readiness recorder."""
 
     repository: str
 
@@ -103,7 +103,7 @@ class GitHubClient:
                 "-f",
                 "context=release-readiness",
                 "-f",
-                "description=Birch official-ROM command passed",
+                "description=Local official-ROM verification passed",
                 "-f",
                 f"target_url=https://github.com/{self.repository}/commit/{sha}",
             )
@@ -125,7 +125,7 @@ def record_readiness(client: GitHubClient, candidate_sha: str) -> None:
     live_dev = client.live_dev_sha()
     if candidate_sha != live_dev:
         raise ReadinessError(
-            f"Birch tested {candidate_sha}, but live dev is {live_dev}; "
+            f"local verification tested {candidate_sha}, but live dev is {live_dev}; "
             "test the current candidate"
         )
 
@@ -142,7 +142,7 @@ def record_readiness(client: GitHubClient, candidate_sha: str) -> None:
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     """Parse the tested commit and optional explicit repository."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("candidate_sha", help="full dev SHA tested by Birch")
+    parser.add_argument("candidate_sha", help="full dev SHA that local official-ROM verification tested")
     parser.add_argument(
         "--repository",
         help="owner/name repository (defaults to the current gh repository)",

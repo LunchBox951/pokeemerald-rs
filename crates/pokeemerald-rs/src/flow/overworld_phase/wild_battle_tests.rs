@@ -1,6 +1,6 @@
 //! A non-losing wild battle must re-init the tileset animation counter, the
-//! way upstream's `CB2_EndWildBattle` non-defeat branch does (issue #865;
-//! full citation on [`super::OverworldPhase::advance_wild_battle_frame`]).
+//! way upstream's `CB2_EndWildBattle` non-defeat branch does (full
+//! citation on [`super::OverworldPhase::advance_wild_battle_frame`]).
 
 use engine::overworld::wild_encounter::WildEncounter;
 use platform::ButtonState;

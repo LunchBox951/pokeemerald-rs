@@ -1,6 +1,5 @@
 //! The per-frame input -> movement -> warp/interaction/encounter pipeline
-//! (module split of [`crate::flow::overworld_phase`], issue #210,
-//! `oop-boundaries`): [`OverworldPhase::step`] is the single per-frame entry
+//! (a submodule of [`crate::flow::overworld_phase`], `oop-boundaries`): [`OverworldPhase::step`] is the single per-frame entry
 //! point [`crate::flow`] drives. NPC-interaction lookup
 //! ([`OverworldPhase::interaction_tokens_this_frame`]) lives in the sibling
 //! [`super::interaction`]. Held-direction resolution and the single-frame movement mechanics
@@ -10,9 +9,9 @@
 //! lives in [`super::connections`]; the wild-battle and dialog
 //! frame-ownership checks [`OverworldPhase::step`] defers to live in
 //! [`super::wild_battle`] and [`super::frame`] respectively. The Route 103
-//! sight-trainer check (issue #264) [`OverworldPhase::step`] runs ahead of
+//! sight-trainer check [`OverworldPhase::step`] runs ahead of
 //! everything else lives in [`super::sight_trainer_trigger`], and the
-//! approach cutscene it starts (S-5, issue #300) in
+//! approach cutscene it starts (S-5) in
 //! [`super::sight_trainer_approach`] -- both report what they did to this
 //! module as a named [`SightTrainerOutcome`] rather than as a bare "was the
 //! frame taken" flag.

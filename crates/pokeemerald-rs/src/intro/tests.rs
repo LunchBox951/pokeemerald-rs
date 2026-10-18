@@ -876,3 +876,14 @@ fn a_selected_identity_replaces_the_default_for_the_handoff() {
         crate::new_game::NewGameIdentity::new("LEAF", engine::save::PlayerGender::Female).unwrap();
     assert_eq!(scene.with_identity(selected).new_game_identity(), selected);
 }
+
+#[test]
+fn the_composed_first_glyph_top_left_pixel_is_at_16_121() {
+    let pixels = dark_grey_glyph_sheet_pixels();
+    let mut scene = synthetic_scene(&pixels, TextSpeed::Instant);
+    scene.tick(NO_INPUT);
+    let fb = scene.compose();
+    assert_eq!(fb.pixel(16, 121), Some(DARK_GREY_GLYPH_COLOR));
+    assert_ne!(fb.pixel(15, 121), Some(DARK_GREY_GLYPH_COLOR));
+    assert_ne!(fb.pixel(16, 120), Some(DARK_GREY_GLYPH_COLOR));
+}

@@ -1,5 +1,5 @@
-//! Authored messages for the object-event scripts supported by the current
-//! overworld slice.
+//! Authored messages for the object-event scripts the overworld
+//! currently supports.
 //!
 //! The subset contains Mom's fresh-save branch. Unsupported script names
 //! return `None` so the interaction flow can handle them separately.
