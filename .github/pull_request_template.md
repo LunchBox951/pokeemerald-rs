@@ -20,7 +20,7 @@ e.g. F-7, or `none` with a rationale.
 ## Test evidence
 
 <!--
-How this was verified — commands run and their outcome (test-ratchet).
+How this was verified at the current head — commands run and their outcome (test-ratchet). Update it after each fix push.
 -->
 
 ## Ledger impact
