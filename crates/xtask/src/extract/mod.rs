@@ -4,11 +4,10 @@
 //! [`OUTPUT_RELATIVE_PATH`]. The runtime pack resolver is intentionally not
 //! used because this command owns the checkout-local build product.
 //!
-//! The facade owns pipeline order, checkout and output paths, common pack-entry
-//! builders, and the layout manifest. Specialized child modules own source
-//! decoding, tileset, sprite, title, and interface palette extraction,
-//! and the remaining asset manifests; `error` defines the public failure
-//! contracts.
+//! The facade owns pipeline order, checkout and output paths, and the
+//! pack-entry helpers shared by several extractors. Each child module owns one
+//! asset family's decoding and entries, `scope` owns the manifests naming them,
+//! and `error` defines the public failure contracts.
 //!
 //! # Extraction scope
 //!
@@ -75,6 +74,7 @@ mod fonts;
 pub mod inflate;
 mod interface;
 pub mod jasc_pal;
+mod layouts;
 mod layouts_json;
 pub(crate) mod midi;
 pub mod png;
@@ -96,7 +96,7 @@ pub use pack_format::OUTPUT_RELATIVE_PATH;
 use pack_format::{EntryShapeError, PackEntry, PackWriter};
 use publish::write_pack_atomically;
 
-use scope::{LAYOUTS, TILESETS};
+use scope::TILESETS;
 
 /// Serializes tests that read or replace the checkout-local pack.
 #[cfg(test)]
@@ -152,7 +152,7 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     }
     title::extract_title_screen(&upstream, &mut writer)?;
     sprites::extract_sprites(&upstream, &mut writer)?;
-    extract_layouts(&upstream, &mut writer)?;
+    layouts::extract_layouts(&upstream, &mut writer)?;
     fonts::extract_fonts(&upstream, &mut writer)?;
     text_window::extract_text_window(&upstream, &mut writer)?;
     interface::extract_interface_palettes(&upstream, &mut writer)?;
@@ -287,103 +287,15 @@ fn collect_pngs_sorted(dir: &Path) -> Result<Vec<PathBuf>, ExtractError> {
     Ok(out)
 }
 
-const BORDER_SIDE_CELLS: usize = 2;
-const BORDER_BLOCK_BYTES: usize =
-    BORDER_SIDE_CELLS * BORDER_SIDE_CELLS * std::mem::size_of::<u16>();
-
-fn extract_layouts(upstream: &Path, writer: &mut PackWriter) -> Result<(), ExtractError> {
-    let json_path = upstream.join("data/layouts/layouts.json");
-    let text = read_text(&json_path)?;
-    let entries =
-        layouts_json::parse(&text).map_err(|e| ExtractError::LayoutsJson(json_path.clone(), e))?;
-
-    for layout in LAYOUTS {
-        let entry = entries
-            .iter()
-            .find(|entry| entry.id == layout.upstream_id)
-            .ok_or(ExtractError::UnknownLayoutInJson(
-                json_path.clone(),
-                layout.upstream_id,
-            ))?;
-
-        let map_bytes = read_file(&upstream.join(&entry.blockdata_filepath))?;
-        let width = usize::try_from(entry.width).unwrap_or(usize::MAX);
-        let height = usize::try_from(entry.height).unwrap_or(usize::MAX);
-        let expected_min = width
-            .saturating_mul(height)
-            .saturating_mul(std::mem::size_of::<u16>());
-        if map_bytes.len() < expected_min {
-            return Err(ExtractError::LayoutGridTooShort {
-                layout_id: layout.upstream_id,
-                expected: expected_min,
-                actual: map_bytes.len(),
-            });
-        }
-        writer.push(pack_format::raw_entry(
-            format!("layout/{}/map", layout.pack_name),
-            map_bytes,
-        ));
-
-        let border_bytes = read_file(&upstream.join(&entry.border_filepath))?;
-        if border_bytes.len() != BORDER_BLOCK_BYTES {
-            return Err(ExtractError::LayoutBorderWrongSize {
-                layout_id: layout.upstream_id,
-                actual: border_bytes.len(),
-            });
-        }
-        writer.push(pack_format::raw_entry(
-            format!("layout/{}/border", layout.pack_name),
-            border_bytes,
-        ));
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{
-        collect_pngs_sorted, extract_to, jasc_pal, upstream_present, ExtractError, LAYOUTS,
-    };
+    use super::{collect_pngs_sorted, extract_to, jasc_pal, upstream_present, ExtractError};
 
     fn scratch_path(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!(
             "pokeemerald-rs-extract-test-{name}-{}.pack",
             std::process::id()
         ))
-    }
-
-    // Changes to `LAYOUTS` must also update `object_event_flags.rs`'s
-    // `BUNDLED_LAYOUTS`, `overworld/npc.rs`'s `EXTRACTED_MAPS`,
-    // `overworld/mod.rs`'s `resolve_tileset_pack_name`, and
-    // `overworld_phase/decoration_tests.rs`'s `BUNDLED_LAYOUTS`.
-    #[test]
-    fn the_bundled_layout_set_is_pinned_for_the_tables_derived_from_it() {
-        let ids: Vec<&str> = LAYOUTS.iter().map(|layout| layout.upstream_id).collect();
-        assert_eq!(
-            ids,
-            [
-                "LAYOUT_LITTLEROOT_TOWN",
-                "LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F",
-                "LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F",
-                "LAYOUT_LITTLEROOT_TOWN_MAYS_HOUSE_1F",
-                "LAYOUT_LITTLEROOT_TOWN_MAYS_HOUSE_2F",
-                "LAYOUT_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB",
-                "LAYOUT_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB_WITH_TABLE",
-                "LAYOUT_ROUTE101",
-                "LAYOUT_OLDALE_TOWN",
-                "LAYOUT_ROUTE103",
-            ],
-            "update the cross-crate LAYOUTS mirrors with this manifest"
-        );
-    }
-
-    fn assert_pack_contains_entry_id(bytes: &[u8], id: &str) {
-        assert!(
-            bytes
-                .windows(id.len())
-                .any(|window| window == id.as_bytes()),
-            "missing pack entry id `{id}`"
-        );
     }
 
     #[test]
@@ -451,50 +363,5 @@ mod tests {
     fn collect_pngs_sorted_rejects_missing_dir() {
         let err = collect_pngs_sorted(std::path::Path::new("/does/not/exist")).unwrap_err();
         assert!(matches!(err, super::ExtractError::ReadFailed(..)));
-    }
-
-    #[test]
-    fn layouts_list_has_no_duplicate_ids_or_names() {
-        let ids: Vec<_> = LAYOUTS.iter().map(|layout| layout.upstream_id).collect();
-        let names: Vec<_> = LAYOUTS.iter().map(|layout| layout.pack_name).collect();
-        let unique_ids: std::collections::HashSet<_> = ids.iter().collect();
-        let unique_names: std::collections::HashSet<_> = names.iter().collect();
-        assert_eq!(ids.len(), unique_ids.len(), "duplicate LAYOUT_* id");
-        assert_eq!(names.len(), unique_names.len(), "duplicate pack name");
-        for id in &ids {
-            assert!(
-                id.starts_with("LAYOUT_LITTLEROOT_TOWN")
-                    || *id == "LAYOUT_ROUTE101"
-                    || *id == "LAYOUT_OLDALE_TOWN"
-                    || *id == "LAYOUT_ROUTE103"
-            );
-        }
-        for name in &names {
-            assert!(
-                name.starts_with("littleroot_town")
-                    || *name == "route101"
-                    || *name == "oldale_town"
-                    || *name == "route103"
-            );
-            assert!(name
-                .chars()
-                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'));
-        }
-    }
-
-    #[test]
-    #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
-    fn layout_grids_are_extracted() {
-        assert!(upstream_present(), "run ./init.sh first");
-        let path = scratch_path("layouts");
-        let report = extract_to(&path).expect("extraction should succeed against a real checkout");
-        let bytes = std::fs::read(&report.output_path).unwrap();
-        for layout in LAYOUTS {
-            for suffix in ["map", "border"] {
-                let id = format!("layout/{}/{suffix}", layout.pack_name);
-                assert_pack_contains_entry_id(&bytes, &id);
-            }
-        }
-        let _ = std::fs::remove_file(report.output_path);
     }
 }

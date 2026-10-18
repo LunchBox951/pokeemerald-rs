@@ -1204,56 +1204,56 @@
     "data/layouts/LittlerootTown": {
       "category": "data.layout",
       "kind": "dir",
-      "reason": "map.bin/border.bin extracted as opaque raw blobs into the local gitignored asset pack (issue #81, Discussion #71 policy A), ids layout/littleroot_town/map and layout/littleroot_town/border (crates/xtask/src/extract/mod.rs::extract_layouts, resolved via data/layouts/layouts.json). Read back with AssetPack::layout_map/layout_border (crates/assets/src/pack.rs) and decoded into typed grids via crates/assets/src/map_layouts.rs's existing MapLayout::grid/LayoutGrid/BorderGrid (MAPGRID_* masks). Since the #122 ROM-import series the same normalized pack entries are also produced directly from the player's own ROM by crates/rom-import/src/domains/layouts.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
-      "rust_target": "crates/xtask/src/extract/mod.rs",
+      "reason": "map.bin/border.bin extracted as opaque raw blobs into the local gitignored asset pack (issue #81, Discussion #71 policy A), ids layout/littleroot_town/map and layout/littleroot_town/border (crates/xtask/src/extract/layouts.rs::extract_layouts, resolved via data/layouts/layouts.json). Read back with AssetPack::layout_map/layout_border (crates/assets/src/pack.rs) and decoded into typed grids via crates/assets/src/map_layouts.rs's existing MapLayout::grid/LayoutGrid/BorderGrid (MAPGRID_* masks). Since the #122 ROM-import series the same normalized pack entries are also produced directly from the player's own ROM by crates/rom-import/src/domains/layouts.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+      "rust_target": "crates/xtask/src/extract/layouts.rs",
       "spec": "S-4",
       "status": "ported"
     },
     "data/layouts/LittlerootTown_BrendansHouse_1F": {
       "category": "data.layout",
       "kind": "dir",
-      "reason": "map.bin/border.bin extracted as opaque raw blobs into the local gitignored asset pack (issue #81, Discussion #71 policy A), ids layout/littleroot_town_brendans_house_1f/map and layout/littleroot_town_brendans_house_1f/border (crates/xtask/src/extract/mod.rs::extract_layouts, resolved via data/layouts/layouts.json). Read back with AssetPack::layout_map/layout_border (crates/assets/src/pack.rs) and decoded into typed grids via crates/assets/src/map_layouts.rs's existing MapLayout::grid/LayoutGrid/BorderGrid (MAPGRID_* masks). Since the #122 ROM-import series the same normalized pack entries are also produced directly from the player's own ROM by crates/rom-import/src/domains/layouts.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
-      "rust_target": "crates/xtask/src/extract/mod.rs",
+      "reason": "map.bin/border.bin extracted as opaque raw blobs into the local gitignored asset pack (issue #81, Discussion #71 policy A), ids layout/littleroot_town_brendans_house_1f/map and layout/littleroot_town_brendans_house_1f/border (crates/xtask/src/extract/layouts.rs::extract_layouts, resolved via data/layouts/layouts.json). Read back with AssetPack::layout_map/layout_border (crates/assets/src/pack.rs) and decoded into typed grids via crates/assets/src/map_layouts.rs's existing MapLayout::grid/LayoutGrid/BorderGrid (MAPGRID_* masks). Since the #122 ROM-import series the same normalized pack entries are also produced directly from the player's own ROM by crates/rom-import/src/domains/layouts.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+      "rust_target": "crates/xtask/src/extract/layouts.rs",
       "spec": "S-4",
       "status": "ported"
     },
     "data/layouts/LittlerootTown_BrendansHouse_2F": {
       "category": "data.layout",
       "kind": "dir",
-      "reason": "map.bin/border.bin extracted as opaque raw blobs into the local gitignored asset pack (issue #81, Discussion #71 policy A), ids layout/littleroot_town_brendans_house_2f/map and layout/littleroot_town_brendans_house_2f/border (crates/xtask/src/extract/mod.rs::extract_layouts, resolved via data/layouts/layouts.json). Read back with AssetPack::layout_map/layout_border (crates/assets/src/pack.rs) and decoded into typed grids via crates/assets/src/map_layouts.rs's existing MapLayout::grid/LayoutGrid/BorderGrid (MAPGRID_* masks). Since the #122 ROM-import series the same normalized pack entries are also produced directly from the player's own ROM by crates/rom-import/src/domains/layouts.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
-      "rust_target": "crates/xtask/src/extract/mod.rs",
+      "reason": "map.bin/border.bin extracted as opaque raw blobs into the local gitignored asset pack (issue #81, Discussion #71 policy A), ids layout/littleroot_town_brendans_house_2f/map and layout/littleroot_town_brendans_house_2f/border (crates/xtask/src/extract/layouts.rs::extract_layouts, resolved via data/layouts/layouts.json). Read back with AssetPack::layout_map/layout_border (crates/assets/src/pack.rs) and decoded into typed grids via crates/assets/src/map_layouts.rs's existing MapLayout::grid/LayoutGrid/BorderGrid (MAPGRID_* masks). Since the #122 ROM-import series the same normalized pack entries are also produced directly from the player's own ROM by crates/rom-import/src/domains/layouts.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+      "rust_target": "crates/xtask/src/extract/layouts.rs",
       "spec": "S-4",
       "status": "ported"
     },
     "data/layouts/LittlerootTown_MaysHouse_1F": {
       "category": "data.layout",
       "kind": "dir",
-      "reason": "map.bin/border.bin extracted as opaque raw blobs into the local gitignored asset pack (issue #81, Discussion #71 policy A), ids layout/littleroot_town_mays_house_1f/map and layout/littleroot_town_mays_house_1f/border (crates/xtask/src/extract/mod.rs::extract_layouts, resolved via data/layouts/layouts.json). Read back with AssetPack::layout_map/layout_border (crates/assets/src/pack.rs) and decoded into typed grids via crates/assets/src/map_layouts.rs's existing MapLayout::grid/LayoutGrid/BorderGrid (MAPGRID_* masks). Since the #122 ROM-import series the same normalized pack entries are also produced directly from the player's own ROM by crates/rom-import/src/domains/layouts.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
-      "rust_target": "crates/xtask/src/extract/mod.rs",
+      "reason": "map.bin/border.bin extracted as opaque raw blobs into the local gitignored asset pack (issue #81, Discussion #71 policy A), ids layout/littleroot_town_mays_house_1f/map and layout/littleroot_town_mays_house_1f/border (crates/xtask/src/extract/layouts.rs::extract_layouts, resolved via data/layouts/layouts.json). Read back with AssetPack::layout_map/layout_border (crates/assets/src/pack.rs) and decoded into typed grids via crates/assets/src/map_layouts.rs's existing MapLayout::grid/LayoutGrid/BorderGrid (MAPGRID_* masks). Since the #122 ROM-import series the same normalized pack entries are also produced directly from the player's own ROM by crates/rom-import/src/domains/layouts.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+      "rust_target": "crates/xtask/src/extract/layouts.rs",
       "spec": "S-4",
       "status": "ported"
     },
     "data/layouts/LittlerootTown_MaysHouse_2F": {
       "category": "data.layout",
       "kind": "dir",
-      "reason": "map.bin/border.bin extracted as opaque raw blobs into the local gitignored asset pack (issue #81, Discussion #71 policy A), ids layout/littleroot_town_mays_house_2f/map and layout/littleroot_town_mays_house_2f/border (crates/xtask/src/extract/mod.rs::extract_layouts, resolved via data/layouts/layouts.json). Read back with AssetPack::layout_map/layout_border (crates/assets/src/pack.rs) and decoded into typed grids via crates/assets/src/map_layouts.rs's existing MapLayout::grid/LayoutGrid/BorderGrid (MAPGRID_* masks). Since the #122 ROM-import series the same normalized pack entries are also produced directly from the player's own ROM by crates/rom-import/src/domains/layouts.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
-      "rust_target": "crates/xtask/src/extract/mod.rs",
+      "reason": "map.bin/border.bin extracted as opaque raw blobs into the local gitignored asset pack (issue #81, Discussion #71 policy A), ids layout/littleroot_town_mays_house_2f/map and layout/littleroot_town_mays_house_2f/border (crates/xtask/src/extract/layouts.rs::extract_layouts, resolved via data/layouts/layouts.json). Read back with AssetPack::layout_map/layout_border (crates/assets/src/pack.rs) and decoded into typed grids via crates/assets/src/map_layouts.rs's existing MapLayout::grid/LayoutGrid/BorderGrid (MAPGRID_* masks). Since the #122 ROM-import series the same normalized pack entries are also produced directly from the player's own ROM by crates/rom-import/src/domains/layouts.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+      "rust_target": "crates/xtask/src/extract/layouts.rs",
       "spec": "S-4",
       "status": "ported"
     },
     "data/layouts/LittlerootTown_ProfessorBirchsLab": {
       "category": "data.layout",
       "kind": "dir",
-      "reason": "map.bin/border.bin extracted as opaque raw blobs into the local gitignored asset pack (issue #81, Discussion #71 policy A), ids layout/littleroot_town_professor_birchs_lab/map and layout/littleroot_town_professor_birchs_lab/border (crates/xtask/src/extract/mod.rs::extract_layouts, resolved via data/layouts/layouts.json). Read back with AssetPack::layout_map/layout_border (crates/assets/src/pack.rs) and decoded into typed grids via crates/assets/src/map_layouts.rs's existing MapLayout::grid/LayoutGrid/BorderGrid (MAPGRID_* masks). Since the #122 ROM-import series the same normalized pack entries are also produced directly from the player's own ROM by crates/rom-import/src/domains/layouts.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
-      "rust_target": "crates/xtask/src/extract/mod.rs",
+      "reason": "map.bin/border.bin extracted as opaque raw blobs into the local gitignored asset pack (issue #81, Discussion #71 policy A), ids layout/littleroot_town_professor_birchs_lab/map and layout/littleroot_town_professor_birchs_lab/border (crates/xtask/src/extract/layouts.rs::extract_layouts, resolved via data/layouts/layouts.json). Read back with AssetPack::layout_map/layout_border (crates/assets/src/pack.rs) and decoded into typed grids via crates/assets/src/map_layouts.rs's existing MapLayout::grid/LayoutGrid/BorderGrid (MAPGRID_* masks). Since the #122 ROM-import series the same normalized pack entries are also produced directly from the player's own ROM by crates/rom-import/src/domains/layouts.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+      "rust_target": "crates/xtask/src/extract/layouts.rs",
       "spec": "S-4",
       "status": "ported"
     },
     "data/layouts/LittlerootTown_ProfessorBirchsLabWithTable": {
       "category": "data.layout",
       "kind": "dir",
-      "reason": "map.bin/border.bin extracted as opaque raw blobs into the local gitignored asset pack (issue #81, Discussion #71 policy A), ids layout/littleroot_town_professor_birchs_lab_with_table/map and layout/littleroot_town_professor_birchs_lab_with_table/border (crates/xtask/src/extract/mod.rs::extract_layouts, resolved via data/layouts/layouts.json). Read back with AssetPack::layout_map/layout_border (crates/assets/src/pack.rs) and decoded into typed grids via crates/assets/src/map_layouts.rs's existing MapLayout::grid/LayoutGrid/BorderGrid (MAPGRID_* masks). Since the #122 ROM-import series the same normalized pack entries are also produced directly from the player's own ROM by crates/rom-import/src/domains/layouts.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
-      "rust_target": "crates/xtask/src/extract/mod.rs",
+      "reason": "map.bin/border.bin extracted as opaque raw blobs into the local gitignored asset pack (issue #81, Discussion #71 policy A), ids layout/littleroot_town_professor_birchs_lab_with_table/map and layout/littleroot_town_professor_birchs_lab_with_table/border (crates/xtask/src/extract/layouts.rs::extract_layouts, resolved via data/layouts/layouts.json). Read back with AssetPack::layout_map/layout_border (crates/assets/src/pack.rs) and decoded into typed grids via crates/assets/src/map_layouts.rs's existing MapLayout::grid/LayoutGrid/BorderGrid (MAPGRID_* masks). Since the #122 ROM-import series the same normalized pack entries are also produced directly from the player's own ROM by crates/rom-import/src/domains/layouts.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+      "rust_target": "crates/xtask/src/extract/layouts.rs",
       "spec": "S-4",
       "status": "ported"
     },
@@ -1560,8 +1560,8 @@
     "data/layouts/OldaleTown": {
       "category": "data.layout",
       "kind": "dir",
-      "reason": "map.bin/border.bin extracted as opaque raw blobs into the local gitignored asset pack (issue #248), id layout/oldale_town/map and layout/oldale_town/border (crates/xtask/src/extract/mod.rs::extract_layouts's LAYOUTS table, resolved via data/layouts/layouts.json) -- Route 101's own north map connection targets it, and Oldale's own north connection targets Route 103 in turn, so it is the second link of the Littleroot<->Route101<->Oldale<->Route103 chain I-5's Route 103 rival battle needs to be reachable on foot. Read back with AssetPack::layout_map/layout_border and decoded into typed grids via crates/assets/src/map_layouts.rs's existing MapLayout::grid/LayoutGrid/BorderGrid, same as the Littleroot Town family and Route 101. Since the #122 ROM-import series the same normalized pack entries are also produced directly from the player's own ROM by crates/rom-import/src/domains/layouts.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
-      "rust_target": "crates/xtask/src/extract/mod.rs",
+      "reason": "map.bin/border.bin extracted as opaque raw blobs into the local gitignored asset pack (issue #248), id layout/oldale_town/map and layout/oldale_town/border (crates/xtask/src/extract/layouts.rs::extract_layouts's LAYOUTS table, resolved via data/layouts/layouts.json) -- Route 101's own north map connection targets it, and Oldale's own north connection targets Route 103 in turn, so it is the second link of the Littleroot<->Route101<->Oldale<->Route103 chain I-5's Route 103 rival battle needs to be reachable on foot. Read back with AssetPack::layout_map/layout_border and decoded into typed grids via crates/assets/src/map_layouts.rs's existing MapLayout::grid/LayoutGrid/BorderGrid, same as the Littleroot Town family and Route 101. Since the #122 ROM-import series the same normalized pack entries are also produced directly from the player's own ROM by crates/rom-import/src/domains/layouts.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+      "rust_target": "crates/xtask/src/extract/layouts.rs",
       "spec": "I-5",
       "status": "ported"
     },
@@ -1622,8 +1622,8 @@
     "data/layouts/Route101": {
       "category": "data.layout",
       "kind": "dir",
-      "reason": "map.bin/border.bin extracted as opaque raw blobs into the local gitignored asset pack (issue #177), id layout/route101/map and layout/route101/border (crates/xtask/src/extract/mod.rs::extract_layouts's LAYOUTS table, resolved via data/layouts/layouts.json) -- Littleroot Town's own north map connection targets it, and it is I-4's traversal prerequisite. Read back with AssetPack::layout_map/layout_border and decoded into typed grids via crates/assets/src/map_layouts.rs's existing MapLayout::grid/LayoutGrid/BorderGrid, same as the Littleroot Town family. Since the #122 ROM-import series the same normalized pack entries are also produced directly from the player's own ROM by crates/rom-import/src/domains/layouts.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
-      "rust_target": "crates/xtask/src/extract/mod.rs",
+      "reason": "map.bin/border.bin extracted as opaque raw blobs into the local gitignored asset pack (issue #177), id layout/route101/map and layout/route101/border (crates/xtask/src/extract/layouts.rs::extract_layouts's LAYOUTS table, resolved via data/layouts/layouts.json) -- Littleroot Town's own north map connection targets it, and it is I-4's traversal prerequisite. Read back with AssetPack::layout_map/layout_border and decoded into typed grids via crates/assets/src/map_layouts.rs's existing MapLayout::grid/LayoutGrid/BorderGrid, same as the Littleroot Town family. Since the #122 ROM-import series the same normalized pack entries are also produced directly from the player's own ROM by crates/rom-import/src/domains/layouts.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+      "rust_target": "crates/xtask/src/extract/layouts.rs",
       "spec": "I-4",
       "status": "ported"
     },
@@ -1636,8 +1636,8 @@
     "data/layouts/Route103": {
       "category": "data.layout",
       "kind": "dir",
-      "reason": "map.bin/border.bin extracted as opaque raw blobs into the local gitignored asset pack (issue #248), id layout/route103/map and layout/route103/border (crates/xtask/src/extract/mod.rs::extract_layouts's LAYOUTS table, resolved via data/layouts/layouts.json) -- the third link of the Littleroot<->Route101<->Oldale<->Route103 chain, and I-5's own traversal target: the Route 103 rival battle. Read back with AssetPack::layout_map/layout_border and decoded into typed grids via crates/assets/src/map_layouts.rs's existing MapLayout::grid/LayoutGrid/BorderGrid, same as the Littleroot Town family and Route 101. Since the #122 ROM-import series the same normalized pack entries are also produced directly from the player's own ROM by crates/rom-import/src/domains/layouts.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
-      "rust_target": "crates/xtask/src/extract/mod.rs",
+      "reason": "map.bin/border.bin extracted as opaque raw blobs into the local gitignored asset pack (issue #248), id layout/route103/map and layout/route103/border (crates/xtask/src/extract/layouts.rs::extract_layouts's LAYOUTS table, resolved via data/layouts/layouts.json) -- the third link of the Littleroot<->Route101<->Oldale<->Route103 chain, and I-5's own traversal target: the Route 103 rival battle. Read back with AssetPack::layout_map/layout_border and decoded into typed grids via crates/assets/src/map_layouts.rs's existing MapLayout::grid/LayoutGrid/BorderGrid, same as the Littleroot Town family and Route 101. Since the #122 ROM-import series the same normalized pack entries are also produced directly from the player's own ROM by crates/rom-import/src/domains/layouts.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+      "rust_target": "crates/xtask/src/extract/layouts.rs",
       "spec": "I-5",
       "status": "ported"
     },
@@ -11996,7 +11996,7 @@
       "category": "data.tileset",
       "kind": "dir",
       "reason": "Full directory extracted into the local gitignored asset pack (issue #81, Discussion #71 policy A, F-3's real cargo xtask extract): tiles.png + every anim/**/*.png frame decoded via the std-only PNG/inflate decoder, all 16 palettes/NN.pal decoded via the JASC-PAL parser, and metatiles.bin/metatile_attributes.bin copied as opaque raw blobs. Read back with typed access via AssetPack::tileset in crates/assets/src/pack.rs. Metatile-to-tile decoding itself remains a future rendering-layer slice. Since the #122 ROM-import series the same normalized pack entries are also produced directly from the player's own ROM by crates/rom-import/src/domains/tilesets.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
-      "rust_target": "crates/xtask/src/extract/mod.rs",
+      "rust_target": "crates/xtask/src/extract/tilesets.rs",
       "spec": "S-4",
       "status": "ported"
     },
@@ -12004,7 +12004,7 @@
       "category": "data.tileset",
       "kind": "dir",
       "reason": "Full directory extracted into the local gitignored asset pack (issue #81, Discussion #71 policy A, F-3's real cargo xtask extract): tiles.png + every anim/**/*.png frame decoded via the std-only PNG/inflate decoder (crates/xtask/src/extract/png.rs, inflate.rs), all 16 palettes/NN.pal decoded via the JASC-PAL parser (jasc_pal.rs), and metatiles.bin/metatile_attributes.bin copied as opaque raw blobs. Read back with typed access via AssetPack::tileset in crates/assets/src/pack.rs. Metatile-to-tile decoding itself remains a future rendering-layer slice. Since the #122 ROM-import series the same normalized pack entries are also produced directly from the player's own ROM by crates/rom-import/src/domains/tilesets.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
-      "rust_target": "crates/xtask/src/extract/mod.rs",
+      "rust_target": "crates/xtask/src/extract/tilesets.rs",
       "spec": "S-4",
       "status": "ported"
     },
@@ -12090,7 +12090,7 @@
       "category": "data.tileset",
       "kind": "dir",
       "reason": "Full directory extracted into the local gitignored asset pack (issue #81, Discussion #71 policy A, F-3's real cargo xtask extract): tiles.png decoded via the std-only PNG/inflate decoder, all 16 palettes/NN.pal decoded via the JASC-PAL parser, and metatiles.bin/metatile_attributes.bin copied as opaque raw blobs. This is the protagonist's-room tileset (I-3). Read back with typed access via AssetPack::tileset in crates/assets/src/pack.rs. Since the #122 ROM-import series the same normalized pack entries are also produced directly from the player's own ROM by crates/rom-import/src/domains/tilesets.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
-      "rust_target": "crates/xtask/src/extract/mod.rs",
+      "rust_target": "crates/xtask/src/extract/tilesets.rs",
       "spec": "S-4",
       "status": "ported"
     },
@@ -12188,7 +12188,7 @@
       "category": "data.tileset",
       "kind": "dir",
       "reason": "Full directory extracted into the local gitignored asset pack (issue #81, Discussion #71 policy A, F-3's real cargo xtask extract): tiles.png decoded via the std-only PNG/inflate decoder, all 16 palettes/NN.pal decoded via the JASC-PAL parser, and metatiles.bin/metatile_attributes.bin copied as opaque raw blobs. Read back with typed access via AssetPack::tileset in crates/assets/src/pack.rs. Since the #122 ROM-import series the same normalized pack entries are also produced directly from the player's own ROM by crates/rom-import/src/domains/tilesets.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
-      "rust_target": "crates/xtask/src/extract/mod.rs",
+      "rust_target": "crates/xtask/src/extract/tilesets.rs",
       "spec": "S-4",
       "status": "ported"
     },
@@ -12292,7 +12292,7 @@
       "category": "data.tileset",
       "kind": "dir",
       "reason": "Full directory extracted into the local gitignored asset pack (issue #81, Discussion #71 policy A, F-3's real cargo xtask extract): tiles.png decoded via the std-only PNG/inflate decoder, all 16 palettes/NN.pal decoded via the JASC-PAL parser, and metatiles.bin/metatile_attributes.bin copied as opaque raw blobs (no anim/ subdirectory in this tileset). Read back with typed access via AssetPack::tileset in crates/assets/src/pack.rs. Since the #122 ROM-import series the same normalized pack entries are also produced directly from the player's own ROM by crates/rom-import/src/domains/tilesets.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
-      "rust_target": "crates/xtask/src/extract/mod.rs",
+      "rust_target": "crates/xtask/src/extract/tilesets.rs",
       "spec": "S-4",
       "status": "ported"
     },
@@ -16526,7 +16526,7 @@
       "category": "graphics.object_event",
       "kind": "dir",
       "reason": "Every PNG in the directory (133 files) decoded via the std-only PNG/inflate decoder into the local gitignored asset pack (issue #81, Discussion #71 policy A, F-3's real cargo xtask extract). Brendan's and May's real in-game palettes (object_events/palettes/{brendan,may}.pal) are extracted alongside as the two unambiguous player-character palette matches. Issue #161's NPC object-event rendering slice additionally extracts the four generic NPC palette banks (object_events/palettes/npc_{1,2,3,4}.pal, OBJ_EVENT_PAL_TAG_NPC_1..4) that every 'standard' 16x32 NPC graphics id it resolves (Mom, the twin, Professor Birch, ...) draws from -- crates/pokeemerald-rs/src/overworld/npc.rs's own bounded graphics-id table. The broader NPC roster's remaining per-character palettes (truck.pal, vigoroth.pal, every *_reflection.pal) and the full object_event_graphics_info indirection table are still not modelled, remaining a future slice. Read back via AssetPack::sprite/sprite_palette in crates/assets/src/pack.rs. Since the #122 ROM-import series the same normalized pack entries are also produced directly from the player's own ROM by crates/rom-import/src/domains/sprites.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
-      "rust_target": "crates/xtask/src/extract/mod.rs",
+      "rust_target": "crates/xtask/src/extract/sprites.rs",
       "spec": "I-3",
       "status": "ported"
     },
