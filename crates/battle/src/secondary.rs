@@ -191,6 +191,25 @@ fn poison_can_land(move_type: Type, defender: &BattlePokemon) -> bool {
         && defender.ability() != AbilityId::SHIELD_DUST
 }
 
+/// Whether Poison Point's `MOVE_EFFECT_AFFECTS_USER | MOVE_EFFECT_POISON` can
+/// poison `attacker`.
+///
+/// The ability re-enters `SetMoveEffect` through `seteffectsecondary` with
+/// `primary == FALSE` and no certain flag, so the Immunity and Poison-/Steel-type
+/// prevention branches stay silent and fall through to the plain guards: a
+/// Poison or Steel type, an existing primary status, or Immunity leave the
+/// attacker unchanged (`battle_util.c:2806`-`:2818`,
+/// `battle_script_commands.c:2299`-`:2340`). Shield Dust is skipped because the
+/// ability marker `HITMARKER_STATUS_ABILITY_EFFECT` is set (`:2253`-`:2255`).
+#[must_use]
+pub(crate) fn poison_point_can_land(attacker: &BattlePokemon) -> bool {
+    let types = attacker.types();
+    attacker.status1().is_healthy()
+        && !types.contains(&Type::Poison)
+        && !types.contains(&Type::Steel)
+        && attacker.ability() != AbilityId::IMMUNITY
+}
+
 /// `SetMoveEffect`'s `MOVE_EFFECT_CONFUSION` guards for the trampoline path:
 /// Own Tempo and an already-active confusion volatile both leave the byte
 /// silently discarded (`battle_script_commands.c:2531-2538`), and Shield
