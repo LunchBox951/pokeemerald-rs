@@ -6,7 +6,8 @@ body:
     attributes:
       value: |
         Roadmap work lives in GitHub, not in committed plan docs (constitution-vs-roadmap).
-        Each task must ladder up to a stable acceptance ID in docs/acceptance/v1.md.
+        Each task names the stable acceptance ID in docs/acceptance/v1.md it advances,
+        or `none` with a concrete rationale. CONTRIBUTING.md "Issues and labels" owns this shape.
   - type: textarea
     id: task
     attributes:
@@ -17,8 +18,8 @@ body:
   - type: input
     id: acceptance
     attributes:
-      label: Acceptance criteria / laddered ID
-      description: The stable ID(s) in docs/acceptance/v1.md this task satisfies, e.g. F-7.
+      label: Laddered acceptance ID
+      description: The stable ID(s) in docs/acceptance/v1.md this task satisfies, e.g. F-7, or `none` with a concrete rationale.
       placeholder: "F-7"
     validations:
       required: true
@@ -29,3 +30,12 @@ body:
       description: Objective, checkable outcomes. CI green plus review is the floor (gated-by-default).
     validations:
       required: true
+  - type: textarea
+    id: revisit-when
+    attributes:
+      label: Revisit when
+      description: >-
+        Deferred (M8) work only: the observable conditions that return this
+        issue to active work. See CONTRIBUTING.md "Where work goes".
+    validations:
+      required: false

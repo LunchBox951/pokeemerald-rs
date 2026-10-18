@@ -19,10 +19,16 @@ The application cannot start without the extracted pack. It reports the missing-
 - Target `dev` for normal work. `unstable`, `stable`, and `main` accept only direct next-rung promotion pull requests `(gated-by-default)`.
 - Link work to the relevant stable ID in [`docs/acceptance/v1.md`](docs/acceptance/v1.md). Use `none` with a concrete rationale for maintenance that advances no v1 criterion.
 - Give each roadmap issue exactly one milestone. Read the live [milestone descriptions](../../milestones?state=all) for current acceptance-ID ownership and scope.
-- Put consciously deferred work in M8 with a recorded reason. Deferral does not remove single-player work from v1; only a recorded exclusion does.
+- Put consciously deferred work in M8. Its issue body records why it was deferred and includes a `Revisit when` section listing the observable conditions that return it to active work, such as an issue closing, a dependency release, or an owner decision. Check those conditions instead of researching the issue again. Deferral does not remove single-player work from v1; only a recorded exclusion does.
 - Close a milestone only when each acceptance ID it owns is ☑ or a recorded ⊘. The issue progress bar is not the completion gate.
 
 Milestone descriptions own their current scope, upstream references, acceptance IDs, and completion checks `(constitution-vs-roadmap)`.
+
+## Issues and labels
+
+Give every filed work item the body shape of [`.github/ISSUE_TEMPLATE/roadmap_task.yml`](.github/ISSUE_TEMPLATE/roadmap_task.yml): sections headed `Task`, `Laddered acceptance ID`, and `Definition of done`, in that order. This applies to issues filed with `gh issue create` or the API as well as the web form. Bug and playtest reports use their own templates.
+
+[`.github/labels.yml`](.github/labels.yml) lists the baseline labels; each description says when the label applies. Live GitHub may carry further topical labels. Apply `roadmap` to an issue that advances an acceptance ID and `routine` to maintenance that names `none`. Every template applies `needs-review` to a new issue; remove it once the issue's labels and, for roadmap work, its milestone are set.
 
 ## Clean-room rules
 
@@ -77,7 +83,7 @@ Release impact is not a template field: the `VERSION` bump and CI's gates are it
 
 Every ordinary pull request into `dev` advances `VERSION`. Run `python3 scripts/sync_cargo_version.py` after the chosen `PATCH`, `MINOR`, or `MAJOR` bump. `FINAL` is owner-only. Do not combine feature changes with channel promotion.
 
-Repository automation may review and merge ready work. A pull request is not merged in the same maintenance pass that opened or last changed it. The `needs-operator` label marks a decision or review that automation cannot supply.
+Repository automation may review and merge ready work. The `needs-operator` label marks a decision or review that automation cannot supply.
 
 ## Questions
 
