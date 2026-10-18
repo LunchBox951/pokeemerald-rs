@@ -223,12 +223,10 @@ fn missing_and_unreadable_packs_are_distinguishable() {
         &PackProblem::Missing
     );
     assert!(!path.exists());
-    assert!(matches!(
-        AssetPack::load_ready(&std::env::temp_dir(), &[])
-            .unwrap_err()
-            .problem(),
-        PackProblem::Unreadable(_)
-    ));
+    let unreadable = AssetPack::load_ready(&std::env::temp_dir(), &[]).unwrap_err();
+    assert!(matches!(unreadable.problem(), PackProblem::Unreadable(_)));
+    assert!(unreadable.to_string().contains("--import-rom <rom>"));
+    assert!(unreadable.to_string().contains("Check file permissions"));
 }
 
 #[test]

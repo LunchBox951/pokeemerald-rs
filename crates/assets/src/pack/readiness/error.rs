@@ -80,9 +80,8 @@ impl fmt::Display for PackReadinessError {
         write!(f, "{message} at {:?}. ", self.path)?;
         if matches!(self.problem, PackProblem::Unreadable(_)) {
             write!(f, "Check file permissions and try again. ")?;
-        } else {
-            write!(f, "Extract the game data again from your Pokemon Emerald (US) ROM with `pokeemerald-rs --import-rom <rom>` (developers: `./init.sh`, then `cargo xtask extract`). ")?;
         }
+        write!(f, "Extract the game data again from your Pokemon Emerald (US) ROM with `pokeemerald-rs --import-rom <rom>` (developers: `./init.sh`, then `cargo xtask extract`). ")?;
         write!(f, "Details: {:?}", self.problem)
     }
 }

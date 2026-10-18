@@ -134,9 +134,9 @@ fn malformed_metatile_attributes_block_boot_before_a_save_is_opened() {
         .offset;
     bytes[offset..offset + 2].copy_from_slice(&0xf000u16.to_le_bytes());
     let media = Media::new(&bytes);
-    let error = load_ready_pack(&media.pack())
-        .err()
-        .expect("malformed attributes must fail readiness");
+    let Err(error) = load_ready_pack(&media.pack()) else {
+        panic!("malformed attributes must fail readiness");
+    };
     assert!(
         matches!(error.problem(), PackProblem::InvalidAsset { id: bad_id, .. } if bad_id == id)
     );
