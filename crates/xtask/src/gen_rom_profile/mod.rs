@@ -1,5 +1,5 @@
-//! `cargo xtask gen-rom-profile` (S-4, F-3, Discussion #71 policy C, issue
-//! #122): derive `rom-import`'s address table from a real ROM, once, and
+//! `cargo xtask gen-rom-profile` (S-4, F-3, Discussion #71 policy C):
+//! derive `rom-import`'s address table from a real ROM, once, and
 //! commit the result.
 //!
 //! The shipped importer never scans a ROM. It reads
@@ -52,7 +52,9 @@
 //! rather than plans built from whichever ids happen to remain.
 
 mod audio;
+mod bag;
 mod battle_messages;
+mod battlers;
 mod emit;
 mod error;
 mod fonts;
@@ -157,6 +159,8 @@ pub struct Context<'a> {
     pub pointers: PointerIndex,
     /// The `pokeemerald/` reference checkout.
     pub upstream: PathBuf,
+    /// Every `bag/` pack id the checkout's inventory expects.
+    pub bag_ids: Vec<String>,
 }
 
 /// Locate every domain, after checking the pack holds every fixed root.
@@ -164,7 +168,7 @@ fn locate_profile(
     ctx: &Context<'_>,
     lines: &mut Vec<ReportLine>,
 ) -> Result<ProfilePlan, GenRomProfileError> {
-    inventory::preflight(ctx.pack)?;
+    inventory::preflight(ctx.pack, &ctx.bag_ids)?;
     Ok(ProfilePlan {
         tilesets: tilesets::locate(ctx, lines)?,
         title_screen: title::locate(ctx, lines)?,
@@ -175,6 +179,8 @@ fn locate_profile(
         interface: locate_interface_palettes(ctx, lines)?,
         audio: audio::locate(ctx, lines)?,
         battle_messages: battle_messages::locate(ctx, lines)?,
+        bag: bag::locate(ctx, lines)?,
+        battlers: battlers::locate(ctx, lines)?,
     })
 }
 
@@ -234,13 +240,21 @@ pub fn run(options: &Options) -> Result<GenReport, GenRomProfileError> {
     })?;
 
     let pack = PackSource::load(&repo_root.join(pack_format::OUTPUT_RELATIVE_PATH))?;
+    let upstream = repo_root.join("pokeemerald");
+    let bag_ids = crate::extract::scope::bag_ids(&upstream).map_err(|err| {
+        GenRomProfileError::UpstreamSource {
+            path: upstream.clone(),
+            reason: err.to_string(),
+        }
+    })?;
     let ctx = Context {
         rom: rom.bytes(),
         pack: &pack,
         raw: RawSearch::new(rom.bytes()),
         lz77: Lz77Search::new(rom.bytes()),
         pointers: PointerIndex::build(rom.bytes()),
-        upstream: repo_root.join("pokeemerald"),
+        upstream,
+        bag_ids,
     };
 
     generate(&ctx, &profile.sha1.to_string(), options, out_path)
@@ -258,7 +272,7 @@ fn generate(
 
     let map = cross_check(options.map.as_deref(), &mut lines)?;
 
-    let module = emit::module(&plan, sha1, lines.len());
+    let module = emit::module(&plan, sha1, &lines);
     write_module(&options.rom, &out_path, &module)?;
 
     Ok(GenReport {

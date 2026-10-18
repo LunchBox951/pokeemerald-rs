@@ -63,6 +63,7 @@ static SHEETS: [ImageRoot; 1] = [ImageRoot {
 static PALETTES: [PaletteRoot; 1] = [PaletteRoot {
     id: "sprite/palette/test",
     addr: NAMED_AT,
+    encoding: Encoding::Raw,
     color_count: 16,
 }];
 

@@ -5,8 +5,10 @@
 //! [`BattlePokemon::apply_experience`], so a level-up snapshot includes the
 //! latest gain. This battle model has no Pokérus or held-item EV multipliers.
 //!
-//! Live [`BattlePokemon::stats`] remain zero-EV calculations. Save-time stat
-//! recomputation instead reads [`BattlePokemon::evs_at_last_level_up`].
+//! Live [`BattlePokemon::stats`] remain zero-EV calculations, except Deoxys's
+//! five Speed Forme stats, which upstream `GetDeoxysStat` computes from the
+//! current EVs. Save-time stat recomputation instead reads
+//! [`BattlePokemon::evs_at_last_level_up`].
 
 use assets::EvYield;
 
@@ -80,10 +82,14 @@ impl BattlePokemon {
         self.evs_at_last_level_up
     }
 
-    /// Adopts raw loaded EVs without validating caps or recomputing live stats.
+    /// Adopts raw loaded EVs without validating caps.
+    ///
+    /// Live stats stay zero-EV except Deoxys's Speed Forme stats, which are
+    /// recomputed from `evs`.
     #[must_use]
-    pub const fn with_evs(mut self, evs: Evs) -> Self {
+    pub fn with_evs(mut self, evs: Evs) -> Self {
         self.evs = evs;
+        self.apply_speed_forme_evs();
         self
     }
 
@@ -92,7 +98,8 @@ impl BattlePokemon {
     /// Each stat's gain is limited by the remaining total capacity and then by
     /// that stat's capacity. Stats are processed in [`Evs::as_array`] order,
     /// and processing stops when the total reaches [`MAX_TOTAL_EVS`]. This does
-    /// not recompute live stats.
+    /// not recompute live stats; Deoxys's Speed Forme stats pick the new EVs up
+    /// when the next battle is constructed.
     ///
     /// Battle reward settlement calls this before
     /// [`BattlePokemon::apply_experience`].

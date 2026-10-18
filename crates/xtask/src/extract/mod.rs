@@ -26,8 +26,9 @@
 //! - the five Latin font sheets, every text-window image and palette, and the
 //!   main-menu background palette; and
 //! - the starter chooser's tile, Poké Ball, and circle sheets with their
-//!   palettes, both Birch tilemaps, and the shared normal front image and
-//!   palette of Treecko, Torchic, and Mudkip;
+//!   palettes and both Birch tilemaps;
+//! - the static battler art of Treecko, Torchic, and Mudkip: front and back
+//!   images with normal and shiny palettes;
 //! - the ordinary bag's screen, tilemap, sex palettes, male and female sheets
 //!   and palette, rotating ball, select and HM marks, and the image and
 //!   palette of every item icon `gItemIconTable` selects; and
@@ -54,7 +55,7 @@
 //! - `starter-chooser/{image,palette,raw}/<stem>`
 //! - `bag/{image,palette,raw}/<name>` and `bag/item-icon/{image,palette}/<stem>`
 //! - `battle-interface/{image,palette,raw}/<name>`
-//! - `pokemon/<species>/front` and `pokemon/<species>/palette/normal`
+//! - `pokemon/<species>/{front,back}` and `pokemon/<species>/palette/{normal,shiny}`
 //! - `pokedex-graphics/{image,image-palette,palette,raw}/<name>`
 //! - `audio/sample/{direct-sound,programmable-wave}/<name>`
 //! - `audio/voicegroup/<label>` and `audio/song/<name>`
@@ -68,6 +69,7 @@ mod bag;
 mod battle_anim;
 mod battle_interface;
 mod battle_message;
+mod battler;
 mod error;
 mod fonts;
 pub mod inflate;
@@ -153,6 +155,7 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     text_window::extract_text_window(&upstream, &mut writer)?;
     extract_interface_palettes(&upstream, &mut writer)?;
     starter_chooser::extract_starter_chooser(&upstream, &mut writer)?;
+    battler::extract_battlers(&upstream, &mut writer)?;
     bag::extract_bag(&upstream, &mut writer)?;
     pokedex_graphics::extract_pokedex_graphics(&upstream, &mut writer)?;
     battle_interface::extract_battle_interface(&upstream, &mut writer)?;

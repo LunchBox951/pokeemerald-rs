@@ -96,6 +96,40 @@ const TILEMAP_ID: &str = "bag/raw/menu";
 /// relative to the checkout root.
 type IconRow = (String, String);
 
+/// Every pack id [`extract_bag`] emits for the fixed manifest.
+pub(crate) fn fixed_ids() -> Vec<String> {
+    let embedded = IMAGES
+        .iter()
+        .filter_map(|source| source.embedded_palette_id);
+    IMAGES
+        .iter()
+        .map(|source| source.id)
+        .chain(embedded)
+        .chain(PALETTES.iter().map(|source| source.id))
+        .chain([TILEMAP_ID])
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Every pack id [`extract_bag`] emits for the item icons, images before
+/// palettes, each in id order.
+///
+/// # Errors
+///
+/// [`ExtractError`] if the checkout's icon table cannot be read.
+pub(crate) fn icon_ids(upstream: &Path) -> Result<Vec<String>, ExtractError> {
+    let rows = icon_rows(upstream)?;
+    let images: BTreeSet<&str> = rows.iter().map(|(image, _)| image.as_str()).collect();
+    let palettes: BTreeSet<&str> = rows.iter().map(|(_, palette)| palette.as_str()).collect();
+    let ids = |kind: &str, paths: BTreeSet<&str>| -> Vec<String> {
+        paths
+            .into_iter()
+            .map(|path| format!("bag/item-icon/{kind}/{}", stem(path)))
+            .collect()
+    };
+    Ok([ids("image", images), ids("palette", palettes)].concat())
+}
+
 /// Extracts the fixed bag manifest and every icon `gItemIconTable` selects.
 pub(super) fn extract_bag(upstream: &Path, writer: &mut PackWriter) -> Result<(), ExtractError> {
     let directory = upstream.join(BAG_DIRECTORY);

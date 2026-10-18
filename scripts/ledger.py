@@ -707,8 +707,42 @@ def cmd_gaps(args):
     print(f"{n} pending entr{'y' if n == 1 else 'ies'}", file=sys.stderr)
 
 
+def _covers(target, path):
+    """True when `target` is `path` itself or a file under directory `path`."""
+    root = path.rstrip("/")
+    return target == root or target.startswith(root + "/")
+
+
+def cmd_targets(args):
+    ledger = load_ledger(args.project)
+    rows = []
+    for path, e in ledger["files"].items():
+        tgt = e.get("rust_target")
+        if tgt and _covers(tgt, args.path):
+            rows.append((path, e["status"], tgt))
+        for name, sub in e.get("artifacts", {}).items():
+            tgt = sub.get("rust_target")
+            if tgt and _covers(tgt, args.path):
+                rows.append((f"{path}#{name}", sub["status"], tgt))
+    rows.sort()
+    for row_path, status, tgt in rows:
+        print(f"{row_path}  [{status}]  {tgt}")
+    n = len(rows)
+    print(f"{n} entr{'y' if n == 1 else 'ies'} with rust_target under "
+          f"{args.path}", file=sys.stderr)
+
+
+def _resolve_reason(stored, reason, append_reason):
+    """Return the reason to store: a full replacement, or `stored` extended."""
+    if append_reason is None:
+        return reason
+    if not stored:
+        sys.exit("--append-reason needs an existing reason; use --reason")
+    return f"{stored} {append_reason}"
+
+
 def _set_entry(project, path, status, *, rust_target=None, fold_target=None,
-               spec=None, reason=None):
+               spec=None, reason=None, append_reason=None):
     if spec is not None:
         err = invalid_spec_id(spec)
         if err:
@@ -719,6 +753,9 @@ def _set_entry(project, path, status, *, rust_target=None, fold_target=None,
         sys.exit(f"unknown entry: {project}:{file_path}\n"
                  f"Run `ledger.py scan` first, or check the path.")
     cur = ledger["files"][file_path]
+    stored = (cur.get("artifacts", {}).get(name, {}) if name is not None
+              else cur).get("reason")
+    reason = _resolve_reason(stored, reason, append_reason)
 
     if name is not None:
         # Set a sub-artifact, leaving the parent file's own status untouched.
@@ -756,27 +793,32 @@ def _set_entry(project, path, status, *, rust_target=None, fold_target=None,
 
 def cmd_mark(args):
     _set_entry(args.project, args.path, "rewritten",
-               rust_target=args.target, spec=args.spec, reason=args.reason)
+               rust_target=args.target, spec=args.spec, reason=args.reason,
+               append_reason=args.append_reason)
 
 
 def cmd_port(args):
     _set_entry(args.project, args.path, "ported",
-               rust_target=args.target, spec=args.spec, reason=args.reason)
+               rust_target=args.target, spec=args.spec, reason=args.reason,
+               append_reason=args.append_reason)
 
 
 def cmd_stub(args):
     _set_entry(args.project, args.path, "stubbed",
-               rust_target=args.target, spec=args.spec, reason=args.reason)
+               rust_target=args.target, spec=args.spec, reason=args.reason,
+               append_reason=args.append_reason)
 
 
 def cmd_fold(args):
     _set_entry(args.project, args.path, "folded",
-               fold_target=args.into, spec=args.spec, reason=args.reason)
+               fold_target=args.into, spec=args.spec, reason=args.reason,
+               append_reason=args.append_reason)
 
 
 def cmd_drop(args):
     _set_entry(args.project, args.path, "dropped",
-               spec=args.spec, reason=args.reason)
+               spec=args.spec, reason=args.reason,
+               append_reason=args.append_reason)
 
 
 def cmd_unmark(args):
@@ -1055,13 +1097,27 @@ def _add_project(p, multi=False):
                        choices=list(PROJECTS))
 
 
+def _add_reason(p):
+    group = p.add_mutually_exclusive_group(required=True)
+    group.add_argument(
+        "--reason",
+        help="Replace the stored reason in full. Use it when the update "
+             "changes what is or is not modelled, and carry forward the "
+             "upstream citations and modelling facts that are still true.")
+    group.add_argument(
+        "--append-reason", metavar="TEXT",
+        help="Keep the stored reason and append TEXT after it. It only adds "
+             "facts, so never use it when the stored reason would become "
+             "false. Fails when the entry has no reason yet.")
+
+
 def build_parser():
     ap = argparse.ArgumentParser(
         prog="ledger.py",
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub = ap.add_subparsers(dest="cmd", required=True, metavar="COMMAND")
 
     p = sub.add_parser(
         "scan",
@@ -1119,6 +1175,20 @@ def build_parser():
                    "sub-file table")
 
     p = sub.add_parser(
+        "targets",
+        help="List entries by rust_target",
+        description=(
+            "List every file entry and sub-artifact whose rust_target is PATH "
+            "or a file under directory PATH. Read-only. Use it before moving "
+            "or splitting Rust code to find the rows that point at it; "
+            "fold_target values are not searched."
+        ),
+    )
+    _add_project(p)
+    p.add_argument("path", help="Rust file or directory, repo-relative "
+                   "(e.g. crates/battle/src/battle.rs)")
+
+    p = sub.add_parser(
         "gaps",
         help="List pending entries",
         description=(
@@ -1138,7 +1208,11 @@ def build_parser():
             ("port", "ported",
              "its data is extracted or transcoded from upstream"),
             ("stub", "stubbed",
-             "a typed shell exists and its behavior stays deferred")):
+             "a typed Rust shell exists and some or all of its behavior "
+             "stays deferred. Use it for a sub-artifact that is only partly "
+             "modelled, and name in the reason what is modelled and what "
+             "is not. A stubbed entry is terminal: it counts as accounted "
+             "for")):
         p = sub.add_parser(
             name,
             help=f"Mark entry as {status}",
@@ -1157,7 +1231,7 @@ def build_parser():
         p.add_argument("--spec", required=True,
                        help="v1 acceptance ID from docs/acceptance/v1.md "
                             "(e.g. S-5)")
-        p.add_argument("--reason", required=True)
+        _add_reason(p)
 
     p = sub.add_parser(
         "fold",
@@ -1176,14 +1250,17 @@ def build_parser():
     p.add_argument("--spec", required=True,
                    help="v1 acceptance ID from docs/acceptance/v1.md "
                         "(e.g. S-5)")
-    p.add_argument("--reason", required=True)
+    _add_reason(p)
 
     p = sub.add_parser(
         "drop",
         help="Mark intentionally excluded",
         description=(
             "Set a file or path#artifact to dropped. Dropped entries require a "
-            "spec ID and exclusion reason, and carry no target."
+            "spec ID and an exclusion reason, and carry no target. The reason "
+            "must name one of the two grounds C-6 in docs/acceptance/v1.md "
+            "permits: multiplayer/link-only, or unreachable on an English "
+            "retail cartridge."
         ),
     )
     _add_project(p)
@@ -1192,7 +1269,7 @@ def build_parser():
     p.add_argument("--spec", required=True,
                    help="v1 acceptance ID from docs/acceptance/v1.md "
                         "(e.g. S-5)")
-    p.add_argument("--reason", required=True)
+    _add_reason(p)
 
     p = sub.add_parser(
         "unmark",
@@ -1228,7 +1305,8 @@ def build_parser():
     _add_project(p)
     p.add_argument("spec_id", help="v1 acceptance ID from "
                    "docs/acceptance/v1.md (e.g. S-5)")
-    p.add_argument("--base", default="main", help="git base ref (default: main)")
+    p.add_argument("--base", default="origin/dev",
+                   help="git base ref (default: origin/dev)")
     p.add_argument("--rev", default="HEAD", help="git target ref (default: HEAD)")
 
     sub.add_parser(
@@ -1258,7 +1336,7 @@ def main():
     handlers = {
         "scan": cmd_scan, "status": cmd_status,
         "categories": cmd_categories, "report": cmd_report,
-        "inspect": cmd_inspect, "gaps": cmd_gaps,
+        "inspect": cmd_inspect, "targets": cmd_targets, "gaps": cmd_gaps,
         "mark": cmd_mark, "port": cmd_port, "stub": cmd_stub,
         "fold": cmd_fold, "drop": cmd_drop, "unmark": cmd_unmark,
         "verify": cmd_verify, "audit": cmd_audit,

@@ -1,6 +1,5 @@
-//! Driving an in-progress wild battle (module split of
-//! [`crate::flow::overworld_phase`], issue #210, `oop-boundaries`, issue
-//! #169): the per-map fightability screen
+//! Driving an in-progress wild battle (a submodule of
+//! [`crate::flow::overworld_phase`], `oop-boundaries`): the per-map fightability screen
 //! ([`OverworldPhase::wild_table_fightable`]), the `Wild` arm
 //! [`OverworldPhase::advance_active_battle_frame`] dispatches to
 //! ([`OverworldPhase::advance_wild_battle_frame`]), and turning a fired

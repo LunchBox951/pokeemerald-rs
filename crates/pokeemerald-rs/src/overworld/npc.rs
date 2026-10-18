@@ -5,7 +5,7 @@
 //! used for interaction. A visible unsupported event remains interaction-ready
 //! but produces no [`OamEntry`]. `OBJ_EVENT_GFX_VAR_0` binds only when its
 //! event variable contains one of the two Route 103 rival ids; decoration slots
-//! remain unsupported. A decoration slice that clears a `FLAG_DECORATION_n`
+//! remain unsupported. Code that clears a `FLAG_DECORATION_n`
 //! hide flag must first write that slot's `VAR_OBJ_GFX_ID_0 + n`, or the
 //! persistent rival id resolves the decoration to a rival sprite.
 //!

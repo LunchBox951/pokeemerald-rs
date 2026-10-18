@@ -1,5 +1,4 @@
-//! The white-out transition upstream runs on a battle loss (issue #261,
-//! I-4/I-5): heal the whole party, halve the player's money, and warp home
+//! The white-out transition upstream runs on a battle loss (I-4/I-5): heal the whole party, halve the player's money, and warp home
 //! to the last heal location -- `CB2_WhiteOut`'s `DoWhiteOut`
 //! (`pokeemerald/src/overworld.c:358-366`).
 //!
@@ -37,7 +36,7 @@
 //!      `FLAG_SYS_CRUISE_MODE`, `FLAG_SYS_SAFARI_MODE`,
 //!      `FLAG_SYS_USE_STRENGTH`, `FLAG_SYS_USE_FLASH`, and, when
 //!      `VAR_SHOULD_END_ABNORMAL_WEATHER == 1`, zeroes it and
-//!      `VAR_ABNORMAL_WEATHER_LOCATION` (issue #847) -- run before
+//!      `VAR_ABNORMAL_WEATHER_LOCATION` -- run before
 //!      resolving the destination below, since upstream runs it
 //!      unconditionally regardless of whether the warp that follows
 //!      succeeds. **Not modelled**: the leading `ResetInitialPlayerAvatarState`
@@ -53,7 +52,7 @@
 //!      valid saved `warpId` names a real warp event's own position first,
 //!      otherwise the destination's raw `x`/`y`, otherwise the map's own
 //!      center). [`OverworldPhase::warp_to_saved_location`] is this port's
-//!      counterpart (issue #951) -- see that method's own doc comment for
+//!      counterpart -- see that method's own doc comment for
 //!      the elevation and `save1.location` shape this produces.
 //! 2. `ResetInitialPlayerAvatarState`, `ScriptContext_Init`,
 //!    `UnlockPlayerFieldControls`, `FieldCB_WarpExitFadeFromBlack`,
@@ -74,36 +73,27 @@
 //! is that one shared method rather than a duplicated one per driver
 //! `(oop-boundaries)`. Its heal step is itself
 //! [`OverworldPhase::heal_whole_party_and_reselect_lead`], a second,
-//! narrower level of the same sharing: issue #251's
+//! narrower level of the same sharing: the first battle's
 //! `special HealPlayerParty` dispatch
 //! (`super::first_battle_conclusion::OverworldPhase::conclude_first_battle`,
 //! a scripted-battle heal, not a loss) calls that one routine directly
 //! rather than duplicating the every-slot heal and re-scan here.
 //!
-//! # What this retires
+//! # No frame with a fainted party
 //!
-//! Before this issue, this port modelled *none* of the above and instead
-//! failed closed at the one place the gap was RNG-observable: a fainted lead
-//! could never re-roll a wild encounter (`crate::flow::wild_encounter::lead_can_fight`,
-//! since removed) and could never re-enter the Route 103 rival fight
-//! (`battle::BattleError::FaintedBattler`, an emergent consequence of
-//! [`battle::Battle::new`]/`new_trainer` refusing a fainted battler, not a
-//! bespoke guard -- `route103_rival_trigger`'s own former module docs
-//! recorded the resulting dead end). Neither is reachable through a wild or
-//! trainer loss any more: this method runs the instant such a loss is
-//! reported, before the driver ever returns control to
-//! [`super::OverworldPhase::step`], so no frame exists in which the party is
-//! fainted and the player can act. One loss path used to be exempt -- the
-//! Route 101 scripted first battle, whose `CB2_EndFirstBattle` has no
-//! `IsPlayerDefeated` branch and so never whites out -- which is why
-//! `lead_can_fight` survived past this issue, narrowed to that residual
-//! state. Issue #251's `first_battle_conclusion` closes it too (its own
-//! heal calls [`OverworldPhase::heal_whole_party_and_reselect_lead`]
-//! directly rather than routing through *this* method -- see that module's
-//! docs for why: no money halving, no heal-location warp, just
+//! This method runs the instant a wild or trainer loss is reported, before
+//! the driver returns control to [`super::OverworldPhase::step`], so no
+//! frame exists in which the party is fainted and the player can act. A
+//! fainted lead therefore never re-rolls a wild encounter or re-enters the
+//! Route 103 rival fight, and neither driver screens for one. The Route 101
+//! scripted first battle (`CB2_EndFirstBattle` has no `IsPlayerDefeated`
+//! branch, so it never whites out) gets the same guarantee from
+//! `super::first_battle_conclusion`, whose heal calls
+//! [`OverworldPhase::heal_whole_party_and_reselect_lead`] directly rather
+//! than routing through *this* method -- see that module's docs for why: no
+//! money halving, no heal-location warp, just
 //! `Route101_EventScript_BirchsBag`'s own narrower `HealPlayerParty` +
-//! warp-to-lab), which is why both fail-closed guards this section used to
-//! name are gone rather than merely narrowed further.
+//! warp-to-lab.
 //!
 //! # RNG stream
 //!

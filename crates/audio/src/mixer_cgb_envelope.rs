@@ -1,5 +1,5 @@
-//! `Mixer`-level tests for [`crate::cgb_envelope::CgbEnvelopeCadence`]
-//! (issue #453): that it is one shared clock across CGB channels and
+//! `Mixer`-level tests for [`crate::cgb_envelope::CgbEnvelopeCadence`]:
+//! that it is one shared clock across CGB channels and
 //! survives slot replacement. Per-transition doubling/bypass mechanics have
 //! their own sibling, `crate::cgb_envelope`'s `step_frame` tests. Split out
 //! for the same reason as [`super::priority_tests`].

@@ -1,8 +1,8 @@
 //! The field start menu's own behaviour, driven through a real
-//! [`OverworldPhase`] (I-6, issue #232) -- the `START` gate, frame
+//! [`OverworldPhase`] (I-6) -- the `START` gate, frame
 //! ownership, and the close paths that must never write.
 //!
-//! Split from the sibling [`super::save_continue_round_trip_tests`] (`one module = one
+//! Kept apart from the sibling [`super::save_continue_round_trip_tests`] (`one module = one
 //! concept` `(oop-boundaries)`, the same split
 //! `crate::main_menu::saved_game_tests` already makes): that file owns the
 //! save/reload/continue round trip, this one owns "when may a menu open,

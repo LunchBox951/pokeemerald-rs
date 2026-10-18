@@ -32,10 +32,8 @@ fn progress(sounded_frames: u64, submitted_frames: u64) -> PlaybackProgress {
     }
 }
 
-/// When each usable mark first reached a poll in one test: a prompt poller
-/// sees a callback within a poll of it, so tests whose polls are prompt stamp
-/// a reading at that first sight; tests that need a callback's exact time use
-/// [`progress_reading`].
+/// When each usable mark first reached a poll: stamps prompt-poll readings at
+/// first sight; use [`progress_reading`] for a callback's exact time.
 #[derive(Default)]
 struct FirstSeen(RefCell<Vec<(u64, Instant)>>);
 

@@ -1,5 +1,5 @@
 //! Overwrite confirmation, corruption fallback, and the foreign-save
-//! consent gate (issue #232).
+//! consent gate.
 
 use super::menu_type_for;
 use super::save_continue_support::{
