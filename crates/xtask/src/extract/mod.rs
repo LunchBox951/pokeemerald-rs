@@ -5,8 +5,8 @@
 //! used because this command owns the checkout-local build product.
 //!
 //! The facade owns pipeline order, checkout and output paths, common pack-entry
-//! builders, and manifests for layouts, title graphics, and interface palettes.
-//! Specialized child modules own source decoding, tileset and sprite extraction,
+//! builders, and the layout manifest. Specialized child modules own source
+//! decoding, tileset, sprite, title, and interface palette extraction,
 //! and the remaining asset manifests; `error` defines the public failure
 //! contracts.
 //!
@@ -73,6 +73,7 @@ mod battler;
 mod error;
 mod fonts;
 pub mod inflate;
+mod interface;
 pub mod jasc_pal;
 mod layouts_json;
 pub(crate) mod midi;
@@ -84,6 +85,7 @@ mod sprites;
 mod starter_chooser;
 mod text_window;
 mod tilesets;
+mod title;
 pub(crate) mod voicegroups;
 mod wav;
 
@@ -94,7 +96,7 @@ pub use pack_format::OUTPUT_RELATIVE_PATH;
 use pack_format::{EntryShapeError, PackEntry, PackWriter};
 use publish::write_pack_atomically;
 
-use scope::{LAYOUTS, TILESETS, TITLE_SCREEN_EMBEDDED_PALETTE_SHEETS, TITLE_SCREEN_PALETTE_CUTS};
+use scope::{LAYOUTS, TILESETS};
 
 /// Serializes tests that read or replace the checkout-local pack.
 #[cfg(test)]
@@ -148,12 +150,12 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     for tileset in TILESETS {
         tilesets::extract_tileset(&upstream, tileset, &mut writer)?;
     }
-    extract_title_screen(&upstream, &mut writer)?;
+    title::extract_title_screen(&upstream, &mut writer)?;
     sprites::extract_sprites(&upstream, &mut writer)?;
     extract_layouts(&upstream, &mut writer)?;
     fonts::extract_fonts(&upstream, &mut writer)?;
     text_window::extract_text_window(&upstream, &mut writer)?;
-    extract_interface_palettes(&upstream, &mut writer)?;
+    interface::extract_interface_palettes(&upstream, &mut writer)?;
     starter_chooser::extract_starter_chooser(&upstream, &mut writer)?;
     battler::extract_battlers(&upstream, &mut writer)?;
     bag::extract_bag(&upstream, &mut writer)?;
@@ -285,104 +287,6 @@ fn collect_pngs_sorted(dir: &Path) -> Result<Vec<PathBuf>, ExtractError> {
     Ok(out)
 }
 
-/// Refuse a title directory missing a source the generator requires.
-fn require_title_sources(dir: &Path, entries: &[PathBuf]) -> Result<(), ExtractError> {
-    let required = scope::TITLE_SCREEN_IMAGES
-        .iter()
-        .chain(&scope::TITLE_SCREEN_EMBEDDED_PALETTE_SHEETS)
-        .map(|stem| format!("{stem}.png"))
-        .chain(
-            scope::TITLE_SCREEN_TILEMAPS
-                .iter()
-                .map(|stem| format!("{stem}.bin")),
-        )
-        .chain(
-            scope::TITLE_SCREEN_FILE_PALETTES
-                .iter()
-                .map(|stem| format!("{stem}.pal")),
-        );
-    for name in required {
-        if !entries
-            .iter()
-            .any(|p| p.file_name().is_some_and(|f| *f == *name))
-        {
-            return Err(ExtractError::ReadFailed(
-                dir.join(&name),
-                "required title screen source is missing".to_owned(),
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn extract_title_screen(upstream: &Path, writer: &mut PackWriter) -> Result<(), ExtractError> {
-    let dir = upstream.join("graphics/title_screen");
-
-    let mut entries: Vec<PathBuf> = std::fs::read_dir(&dir)
-        .and_then(|it| {
-            it.map(|entry| entry.map(|e| e.path()))
-                .collect::<std::io::Result<_>>()
-        })
-        .map_err(|e| ExtractError::ReadFailed(dir.clone(), e.to_string()))?;
-    entries.sort();
-    require_title_sources(&dir, &entries)?;
-
-    for path in entries {
-        let Some(stem) = path.file_stem().map(|s| s.to_string_lossy().into_owned()) else {
-            continue;
-        };
-        match path.extension().and_then(|e| e.to_str()) {
-            Some("png") => {
-                let bytes = read_file(&path)?;
-                let image = png::decode(&bytes).map_err(|e| ExtractError::Png(path.clone(), e))?;
-                if TITLE_SCREEN_EMBEDDED_PALETTE_SHEETS.contains(&stem.as_str()) {
-                    if image.palette.is_empty() {
-                        return Err(ExtractError::MissingEmbeddedPalette(path.clone()));
-                    }
-                    let colors: Vec<jasc_pal::Rgb888> = image
-                        .palette
-                        .iter()
-                        .map(|&[r, g, b]| jasc_pal::Rgb888 { r, g, b })
-                        .collect();
-                    let entry =
-                        build_palette_entry(&path, &colors, format!("title/palette/{stem}"))?;
-                    writer.push(entry);
-                }
-                writer.push(build_image_entry(
-                    &path,
-                    format!("title/image/{stem}"),
-                    image,
-                )?);
-            }
-            Some("pal") => {
-                let color_limit = TITLE_SCREEN_PALETTE_CUTS
-                    .iter()
-                    .find_map(|&(sheet, limit)| (sheet == stem).then_some(limit));
-                push_palette_entry_with_limit(
-                    &path,
-                    format!("title/palette/{stem}"),
-                    color_limit,
-                    writer,
-                )?;
-            }
-            Some("bin") => push_raw_entry(&path, format!("title/raw/{stem}"), writer)?,
-            _ => {}
-        }
-    }
-    Ok(())
-}
-
-fn extract_interface_palettes(
-    upstream: &Path,
-    writer: &mut PackWriter,
-) -> Result<(), ExtractError> {
-    push_palette_entry(
-        &upstream.join("graphics/interface/main_menu_bg.pal"),
-        "interface/palette/main_menu_bg".to_owned(),
-        writer,
-    )
-}
-
 const BORDER_SIDE_CELLS: usize = 2;
 const BORDER_BLOCK_BYTES: usize =
     BORDER_SIDE_CELLS * BORDER_SIDE_CELLS * std::mem::size_of::<u16>();
@@ -506,32 +410,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
-    fn embedded_palette_sheets_get_a_title_palette_entry() {
-        assert!(upstream_present(), "run ./init.sh first");
-        let path = scratch_path("embedded-palettes");
-        let report = extract_to(&path).expect("extraction should succeed against a real checkout");
-        let bytes = std::fs::read(&report.output_path).unwrap();
-        for name in super::scope::TITLE_SCREEN_EMBEDDED_PALETTE_SHEETS {
-            let id = format!("title/palette/{name}");
-            assert_pack_contains_entry_id(&bytes, &id);
-        }
-        let _ = std::fs::remove_file(report.output_path);
-    }
-
-    #[test]
-    #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
-    fn main_menu_bg_palette_gets_an_interface_palette_entry() {
-        assert!(upstream_present(), "run ./init.sh first");
-        let path = scratch_path("interface-palette");
-        let report = extract_to(&path).expect("extraction should succeed against a real checkout");
-        let bytes = std::fs::read(&report.output_path).unwrap();
-        let id = "interface/palette/main_menu_bg";
-        assert_pack_contains_entry_id(&bytes, id);
-        let _ = std::fs::remove_file(report.output_path);
-    }
-
-    #[test]
     fn missing_upstream_checkout_message_points_to_init_sh() {
         let err = ExtractError::MissingUpstreamCheckout(std::path::PathBuf::from("/nowhere"));
         let rendered = err.to_string();
@@ -618,39 +496,5 @@ mod tests {
             }
         }
         let _ = std::fs::remove_file(report.output_path);
-    }
-}
-
-#[cfg(test)]
-mod title_source_tests {
-    use super::{extract_title_screen, ExtractError, PackWriter};
-
-    #[test]
-    fn a_title_directory_missing_a_required_source_is_refused() {
-        let upstream = std::env::temp_dir().join(format!(
-            "pokeemerald-rs-extract-missing-title-source-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&upstream);
-        let dir = upstream.join("graphics/title_screen");
-        std::fs::create_dir_all(&dir).unwrap();
-        // Every required source except `rayquaza.bin`; contents are never
-        // read because the presence check runs first.
-        for stem in super::scope::TITLE_SCREEN_IMAGES {
-            std::fs::write(dir.join(format!("{stem}.png")), b"").unwrap();
-        }
-        for stem in ["clouds", "pokemon_logo"] {
-            std::fs::write(dir.join(format!("{stem}.bin")), b"").unwrap();
-        }
-        for stem in super::scope::TITLE_SCREEN_FILE_PALETTES {
-            std::fs::write(dir.join(format!("{stem}.pal")), b"").unwrap();
-        }
-
-        let err = extract_title_screen(&upstream, &mut PackWriter::new()).unwrap_err();
-        let _ = std::fs::remove_dir_all(&upstream);
-        assert!(
-            matches!(&err, ExtractError::ReadFailed(path, _) if path == &dir.join("rayquaza.bin")),
-            "{err:?}"
-        );
     }
 }

@@ -12683,7 +12683,7 @@
     "graphics/interface": {
       "artifacts": {
         "main_menu_bg_palette": {
-          "reason": "graphics/interface/main_menu_bg.pal extracted as interface/palette/main_menu_bg (xtask::extract::extract_interface_palettes, issue #216); MainMenuScene::from_pack reads its index 0 for the BG0 backdrop colour. Every other file under graphics/interface (icons, badges, pokedex chrome, etc.) and the sibling main_menu_text.pal stay unextracted -- see xtask::extract's module docs for why main_menu_text.pal specifically is deferred. Since the #122 ROM-import series the same normalized pack entries are also produced directly from the player's own ROM by crates/rom-import/src/domains/interface.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "reason": "graphics/interface/main_menu_bg.pal extracted as interface/palette/main_menu_bg (xtask::extract::interface::extract_interface_palettes, issue #216); MainMenuScene::from_pack reads its index 0 for the BG0 backdrop colour. Every other file under graphics/interface (icons, badges, pokedex chrome, etc.) and the sibling main_menu_text.pal stay unextracted -- see xtask::extract's module docs for why main_menu_text.pal specifically is deferred. Since the #122 ROM-import series the same normalized pack entries are also produced directly from the player's own ROM by crates/rom-import/src/domains/interface.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
           "rust_target": "crates/pokeemerald-rs/src/main_menu.rs",
           "spec": "I-3",
           "status": "ported"
@@ -19270,7 +19270,7 @@
       "category": "graphics.scene",
       "kind": "dir",
       "reason": "Full directory extracted into the local gitignored asset pack (issue #81, Discussion #71 policy A, F-3's real cargo xtask extract): all 6 PNGs decoded via the std-only PNG/inflate decoder, all 3 .pal files decoded via the JASC-PAL parser, and the 3 .bin tile-arrangement files copied as opaque raw blobs (their internal layout is not decoded). emerald_version.png and press_start.png additionally get a title/palette/<name> entry decoded straight from their own embedded PLTE chunk (issue #116) -- upstream's build derives their in-game palette that way (INCGFX_U16(...png\", \".gbapal\") in graphics.c), not from a sibling .pal file. Gates I-2 (title screen). Read back via AssetPack::image/palette/raw in crates/assets/src/pack.rs. Since the #122 ROM-import series the same normalized pack entries are also produced directly from the player's own ROM by crates/rom-import/src/domains/title.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
-      "rust_target": "crates/xtask/src/extract/mod.rs",
+      "rust_target": "crates/xtask/src/extract/title.rs",
       "spec": "S-4",
       "status": "ported"
     },
