@@ -1,9 +1,8 @@
 //! Battle subsystem: typed core data, the Gen-3 damage formula, and the
 //! turn engine built on top of it.
 //!
-//! Issue #125 (S-6 slice 1) laid the typed data foundation and deterministic
-//! damage pipeline — data-first, no state machine, no AI, no UI. Issue #159
-//! (S-6 slice 2) adds the turn engine on top: [`battle::Battle`], an owned
+//! The crate serves S-6. Its base is typed data and a deterministic damage
+//! pipeline; the turn engine on top of it is [`battle::Battle`], an owned
 //! state machine that plays a full headless single wild battle (action
 //! selection → turn resolution → faint/exp → victory/defeat/run) using
 //! [`hit::resolve_hit`] to assemble [`accuracy`], [`critical`], and
@@ -12,21 +11,21 @@
 //! formula), [`exp`] (faint exp gain), [`pokemon::BattlePokemon`] (computed
 //! battle stats), and [`wild`] (wild-encounter construction from species +
 //! level via the upstream personality/nature/IV RNG draws, plus
-//! [`wild::initial_moveset`] — `GiveBoxMonInitialMoveset`, added by issue
-//! #169 so an overworld encounter can derive the *real* wild moveset for a
-//! rolled species/level instead of being handed one).
+//! [`wild::initial_moveset`] — `GiveBoxMonInitialMoveset`, so an overworld
+//! encounter derives the *real* wild moveset for a rolled species/level
+//! instead of being handed one).
 //!
 //! Species base stats, move data, and the type-effectiveness chart are
 //! already extracted upstream data living in [`assets`] `(no-verbatim)`;
 //! [`dex::Dex`] bundles typed access to them for battle-formula callers.
-//! This crate adds the upstream tables `assets` didn't yet carry —
+//! This crate adds the upstream tables `assets` does not carry —
 //! nature stat modifiers ([`nature`], upstream `gNatureStatTable`) and
 //! stat-stage multipliers ([`stat_stage`], upstream `gStatStageRatios`) —
 //! plus [`damage`]'s re-implementation of `CalculateBaseDamage`
 //! (`pokeemerald/src/pokemon.c`) and the STAB/type-effectiveness/random-roll
 //! battle-script steps around it.
 //!
-//! Move-effect breadth is the sharp edge of this slice, so it is enforced
+//! Move-effect breadth is the sharp edge of this crate, so it is enforced
 //! rather than assumed: a move is only executable if its `EFFECT_*` runs
 //! one of the battle scripts this crate reproduces — the nine pipelines
 //! `battle::ensure_executable` composes:
@@ -63,27 +62,27 @@
 //! enemy's): that turn ends before the enemy acts, so it skips the re-screen
 //! (`pokeemerald/src/battle_util.c:427`-`:447`).
 //!
-//! Issue #187 adds `BATTLE_TYPE_FIRST_BATTLE` — the Route 101 intro
-//! Zigzagoon fight's rules — as [`battle::Battle::new`]'s `first_battle`
+//! `BATTLE_TYPE_FIRST_BATTLE` — the Route 101 intro
+//! Zigzagoon fight's rules — is [`battle::Battle::new`]'s `first_battle`
 //! flag: crit suppression ([`hit::resolve_hit`]'s `suppress_crit`, see
 //! [`critical`]'s module docs), running forbidden
 //! ([`BattleError::RunForbidden`], see `escape`'s module docs), and the
 //! wild opponent's narrow AI-branch move choice (`battle`'s private
 //! `opponent_ai` submodule, not upstream's general trainer AI, which stays
-//! `I-5`). Issue #221 adds the scripted intro's own construction —
+//! `I-5`). The scripted intro's own construction —
 //! `SetUpBattleVarsAndBirchZigzagoon`'s Zigzagoon, built by
 //! [`wild::build_pokemon_with_random_personality`] rather than
 //! [`wild::build_wild_pokemon`] (see that function's docs for the exact
-//! upstream draw-order difference) — and its own headless driver, both in
-//! `crates/pokeemerald-rs/src/flow/first_battle.rs`. The "don't leave Prof.
+//! upstream draw-order difference) — and its own headless driver both live
+//! in `crates/pokeemerald-rs/src/flow/first_battle.rs`. The "don't leave Prof.
 //! Birch!" narrative trigger that upstream reaches it through has no script
 //! engine to run it and stays unmodelled (that module's own docs, and the
 //! `src/battle_setup.c` ledger entry); every ordinary Route 101 grass
 //! encounter still constructs with `first_battle = false`
 //! (`crates/pokeemerald-rs/src/flow/wild_encounter.rs`).
 //!
-//! Issue #237 adds `BATTLE_TYPE_TRAINER` — the scripted Route 103 rival
-//! battle's rules — as a second constructor, [`battle::Battle::new_trainer`],
+//! `BATTLE_TYPE_TRAINER` — the scripted Route 103 rival battle's rules — is
+//! a second constructor, [`battle::Battle::new_trainer`],
 //! rather than a second flag: a trainer battle needs *state* a wild one does
 //! not (a party bench, a prize purse, `gTrainers[].aiFlags`), so that state
 //! lives in [`battle::trainer::TrainerContext`] and `Battle` gates every
@@ -91,7 +90,7 @@
 //! running refused outright ([`BattleError::NoRunningFromTrainer`], a
 //! *different* upstream gate from `first_battle`'s), a party opponent, a
 //! forced post-faint send-out chosen by `GetMostSuitableMonToSwitchInto`'s
-//! suitability passes (issue #1040), `x1.5` experience
+//! suitability passes, `x1.5` experience
 //! ([`exp::trainer_faint_exp`]), and prize money on a win
 //! ([`battle::BattleEvent::MoneyGained`]) — each carry their upstream
 //! citation beside the code that owns them. The opponent's
@@ -102,12 +101,10 @@
 //! so nothing outside that narrowing can silently mis-draw. The battle's own
 //! construction — `CreateNPCTrainerParty`'s seeded personalities and fixed
 //! IVs — and its headless driver are
-//! `crates/pokeemerald-rs/src/flow/npc_trainer_battle.rs`, the same split issue
-//! #221 used for the first battle; Route 103's overworld reachability
-//! (the rival's sight cone and approach script) is a later slice.
+//! `crates/pokeemerald-rs/src/flow/npc_trainer_battle.rs`, the same split
+//! the first battle uses.
 //!
-//! Issue #264 wires Route 103's *sight* trainers to that same construction,
-//! and adds the screen it needed to do so honestly:
+//! Route 103's *sight* trainers use that same construction, screened by
 //! [`battle::trainer::ensure_trainer_party_startable`], the trainer-side
 //! counterpart of [`wild::ensure_wild_startable`]. Both compose the screens
 //! a battle would apply anyway into a pre-flight an integration layer can
@@ -116,10 +113,9 @@
 //! *after* `CreateNPCTrainerParty`'s per-mon OT-id draws would spend the
 //! shared stream on every frame the player stands in a cone.
 //!
-//! Issue #321 (parent decomposition #311, position 2) widens move-effect
-//! breadth by four pipelines at once, each its own module because each
-//! reproduces a *different* battle script with a different `Random()` spend
-//! (the tables in each module's docs are the contract): [`drain`]
+//! Four of the pipelines are their own modules because each reproduces a
+//! *different* battle script with a different `Random()` spend (the tables
+//! in each module's docs are the contract): [`drain`]
 //! (`BattleScript_EffectAbsorb`, 3 draws for a landed move where an
 //! ordinary one costs 4, because the script never reaches
 //! `seteffectwithchance`), [`fixed_damage`] (Sonic Boom / Dragon Rage /
@@ -131,26 +127,24 @@
 //! on every path, which [`flag_move::resolve_flag_move`]'s signature
 //! enforces by taking no RNG at all).
 //!
-//! Two supporting concepts arrived with them. [`secondary`] is the shared
-//! post-damage hook — `Cmd_seteffectwithchance`, previously inline in
-//! [`hit`] — now its own module because the five damaging scripts disagree
+//! Two supporting concepts serve them. [`secondary`] is the shared
+//! post-damage hook — `Cmd_seteffectwithchance` — its own module because
+//! the five damaging scripts disagree
 //! about whether and when they reach it; it spends the draw exactly where
 //! upstream does and **fails closed**
 //! ([`BattleError::UnportedSecondaryEffect`]) if a roll ever lands on a
-//! `MOVE_EFFECT_*` byte whose infliction is not ported, which is issue
-//! #323's slice. [`volatile`] carries the two `status2`/`gStatuses3` bits
+//! `MOVE_EFFECT_*` byte whose infliction is not ported. [`volatile`] carries the two `status2`/`gStatuses3` bits
 //! the flag-only moves set, read by [`critical::crit_stage`] (Focus
 //! Energy's `+2` crit stages) and [`hit::damage_core`] (Charge's Electric
 //! doubling), and ticked down at end of turn.
 //!
-//! Six abilities land here too, bundled with the move family that exposes
-//! them (#311's decomposition rule) rather than with a speculative ability
-//! layer: [`ability::pinch_boosts_power`] — Overgrow's `x1.5` power boost
+//! Abilities are modelled with the move family that exposes them rather
+//! than as a speculative ability layer: [`ability::pinch_boosts_power`] — Overgrow's `x1.5` power boost
 //! at or below a third of maximum HP, applied inside the damage formula —
 //! and [`ability::inverts_drain`] — Liquid Ooze turning a drain heal into
 //! damage on the attacker, in the drain script's own message and faint
-//! order. Issue #391 added the two damage-path pairs the same rule pulls
-//! in: [`ability::suppresses_critical_hits`] — Battle Armor and Shell
+//! order. Two damage-path pairs follow the same rule:
+//! [`ability::suppresses_critical_hits`] — Battle Armor and Shell
 //! Armor, which short-circuit `Cmd_critcalc` off the *defender* so the crit
 //! and its `Random()` draw are both skipped — and
 //! [`ability::huge_power_attack`] — Huge Power and Pure Power, doubling the
@@ -161,9 +155,9 @@
 //! [`pokemon::BattlePokemon::attacking_stat`] and
 //! [`pokemon::BattlePokemon::defending_stat`] so both damage paths inherit
 //! them. The paralysis pipeline still reads Limber and the accuracy
-//! abilities ([`paralyze`], `accuracy_check`) but no longer refuses a Shed
-//! Skin holder at admission: Shed Skin's own end-turn cure draw lives in
-//! `Battle::residual_effects` instead (issue #944).
+//! abilities ([`paralyze`], `accuracy_check`) and admits a Shed Skin
+//! holder: Shed Skin's own end-turn cure draw lives in
+//! `Battle::residual_effects`.
 //! [`ability::hustle_attack`] raises a Hustle holder's raw physical Attack
 //! 150% the same way, before the same stage multiply
 //! (`pokeemerald/src/pokemon.c:3205-3206`), so the real damage path, the
@@ -175,13 +169,12 @@
 //! personality exactly as `CreateBoxMon`/`GetAbilityBySpecies` do, so a
 //! seeded party's abilities are deterministic.
 //!
-//! Issue #304 closes the two move-slot gaps that were left open above.
-//! [`pokemon::PpBonuses`] is upstream's packed `ppBonuses` byte —
+//! Two move-slot rules complete the picture. [`pokemon::PpBonuses`] is upstream's packed `ppBonuses` byte —
 //! [`pokemon::BattlePokemon`] carries it, [`pokemon::calculate_pp_with_bonus`]
 //! is `CalculatePPWithBonus`, and a slot's capacity (what a heal restores to,
-//! what PP counts down from) is now the PP-Up-adjusted maximum rather than the
-//! move's base PP. And the four-known-moves case is no longer a silent
-//! decline: [`pokemon::BattlePokemon::apply_experience`] parks a
+//! what PP counts down from) is the PP-Up-adjusted maximum rather than the
+//! move's base PP. And the four-known-moves case is not a silent decline:
+//! [`pokemon::BattlePokemon::apply_experience`] parks a
 //! [`pokemon::PendingMoveLearn`] on the mon itself, which must be answered
 //! with a [`pokemon::MoveLearnDecision`] — the mon owns the open question,
 //! so a stale copy cannot be replayed and one mon's prompt cannot be
@@ -202,12 +195,11 @@
 //! does not own is the *asking* — there is no message layer or summary
 //! screen here, and there is deliberately no default answer baked in.
 //!
-//! Out of scope for this slice (see each module's own docs for exactly what
-//! is/isn't modelled): the *general* trainer AI beyond the four scripts
-//! above and mid-battle switching AI (`I-5`) — which is now the *first*
-//! screen Route 103's sight-trainer parties hit, since #321 got four of
-//! them past `ensure_executable` and into
-//! `battle::trainer_ai::ensure_scoreable` (issue #325) — battle
+//! Out of scope (see each module's own docs for exactly what is/isn't
+//! modelled): the *general* trainer AI beyond the four scripts above and
+//! mid-battle switching AI (`I-5`) — the *first* screen some Route 103
+//! sight-trainer parties hit, at `battle::trainer_ai::ensure_scoreable`
+//! (issue #325 tracks widening it) — battle
 //! UI/animations, overworld transition, every ability but Overgrow, Liquid
 //! Ooze, Battle Armor, Shell Armor, Huge Power, Pure Power, Guts, Marvel
 //! Scale, Compound Eyes, Hustle, and Shed Skin (all eleven above), Run
@@ -235,7 +227,7 @@
 //! attacker ability that still reaches an unported chance-doubling for a
 //! landed secondary effect — Serene Grace (see
 //! [`secondary::ensure_admissible`], which screens the *defender*'s primary
-//! status for a poison landing and, since this slice, the *defender*'s Own
+//! status for a poison landing and the *defender*'s Own
 //! Tempo and Shield Dust — never a primary status — for a confusion
 //! landing) —
 //! and the move effects the nine

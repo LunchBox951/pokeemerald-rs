@@ -1,4 +1,4 @@
-//! The sight-trainer approach sequence (S-5, issue #300): the multi-frame
+//! The sight-trainer approach sequence (S-5): the multi-frame
 //! cutscene between [`super::sight_trainer_trigger`]'s cone check and the
 //! battle it hands off to -- exclamation mark, walk-up, both parties turning
 //! to face each other, the template write-back, and the trainer's intro
