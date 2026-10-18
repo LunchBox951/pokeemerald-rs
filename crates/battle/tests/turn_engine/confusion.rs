@@ -5,17 +5,17 @@
 //! [`battle::EFFECT_CONFUSE_HIT`] moves.
 
 use crate::common::{max_iv_mon, SequenceRng};
-use assets::MoveId;
+use assets::{MoveId, SpeciesId};
 use battle::{Battle, BattleEvent, BattleOutcome, Dex, PlayerAction, StatStage, Status1};
 
 const TACKLE: MoveId = MoveId::TACKLE;
 
-const CHARMANDER: u16 = 4;
+const CHARMANDER: SpeciesId = SpeciesId::CHARMANDER;
 /// `SPECIES_RATTATA`, the faster mover.
-const RATTATA: u16 = 19;
+const RATTATA: SpeciesId = SpeciesId::RATTATA;
 /// `SPECIES_GASTLY`: Ghost/Poison, immune to Tackle.
-const GASTLY: u16 = 92;
-const ZIGZAGOON: u16 = 288;
+const GASTLY: SpeciesId = SpeciesId::GASTLY;
+const ZIGZAGOON: SpeciesId = SpeciesId::ZIGZAGOON;
 
 #[test]
 fn a_duration_one_confusion_snaps_out_before_the_mover_s_own_hit() {
@@ -367,7 +367,7 @@ const CONFUSE_RAY: MoveId = MoveId::CONFUSE_RAY;
 const SWEET_KISS: MoveId = MoveId::SWEET_KISS;
 const PSYBEAM: MoveId = MoveId::PSYBEAM;
 /// `SPECIES_SPINDA`: Own Tempo in its only ability slot.
-const SPINDA: u16 = 308;
+const SPINDA: SpeciesId = SpeciesId::SPINDA;
 
 #[test]
 fn confuse_ray_inflicts_a_fresh_confusion_that_the_target_immediately_ticks_through() {

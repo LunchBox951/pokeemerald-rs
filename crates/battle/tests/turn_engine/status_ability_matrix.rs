@@ -102,18 +102,13 @@ const MATRIX: [(&str, SpeciesId, u8, AbilityId, Option<Status1>); 13] = [
 
 fn holder(species: SpeciesId, slot: u8, status: Status1) -> BattlePokemon {
     let mut mon =
-        max_iv_mon(&Dex::new(), species.0, 20, vec![MoveId::TACKLE]).with_ability_slot(slot);
+        max_iv_mon(&Dex::new(), species, 20, vec![MoveId::TACKLE]).with_ability_slot(slot);
     mon.set_status1(status);
     mon
 }
 
 fn opponent() -> BattlePokemon {
-    max_iv_mon(
-        &Dex::new(),
-        SpeciesId::ZIGZAGOON.0,
-        20,
-        vec![MoveId::TACKLE],
-    )
+    max_iv_mon(&Dex::new(), SpeciesId::ZIGZAGOON, 20, vec![MoveId::TACKLE])
 }
 
 #[test]

@@ -16,9 +16,9 @@ const MAX_ROLL: u16 = 0;
 /// A roll every modeled critical-hit stage treats as non-critical.
 const NO_CRIT_ROLL: u16 = 1;
 
-const CHARMANDER: u16 = 4;
-const RATTATA: u16 = 19;
-const BULBASAUR: u16 = 1;
+const CHARMANDER: SpeciesId = SpeciesId::CHARMANDER;
+const RATTATA: SpeciesId = SpeciesId::RATTATA;
+const BULBASAUR: SpeciesId = SpeciesId::BULBASAUR;
 const TACKLE: MoveId = MoveId::TACKLE;
 
 #[test]
@@ -235,7 +235,7 @@ fn a_fainted_battler_is_rejected_before_the_battle_start_draw() {
 fn a_wild_knockouts_prompt_defers_the_battles_end_until_it_is_answered() {
     use battle::MoveLearnDecision;
 
-    const TORCHIC: u16 = 280;
+    const TORCHIC: SpeciesId = SpeciesId::TORCHIC;
     const SCRATCH: MoveId = MoveId::SCRATCH;
     const GROWL: MoveId = MoveId::GROWL;
     const LEER: MoveId = MoveId::LEER;
@@ -304,10 +304,10 @@ fn an_active_faint_with_a_healthy_reserve_sends_it_out_instead_of_ending_the_bat
     // the active before it can act, exactly like
     // `losing_the_battle_reports_defeat_and_awards_no_exp` -- but this
     // time a healthy L5 Squirtle reserve is waiting behind it.
-    let player = max_iv_mon(&dex, 19, 5, vec![MoveId::TACKLE]);
-    let reserve = max_iv_mon(&dex, 7, 5, vec![MoveId::TACKLE]);
+    let player = max_iv_mon(&dex, SpeciesId::RATTATA, 5, vec![MoveId::TACKLE]);
+    let reserve = max_iv_mon(&dex, SpeciesId::SQUIRTLE, 5, vec![MoveId::TACKLE]);
     let reserve_max_hp = reserve.stats().max_hp;
-    let enemy = max_iv_mon(&dex, 4, 50, vec![MoveId::TACKLE]);
+    let enemy = max_iv_mon(&dex, SpeciesId::CHARMANDER, 50, vec![MoveId::TACKLE]);
     let player_max_hp = player.stats().max_hp;
 
     // battle start, turn number, enemy pick, enemy hit (accuracy / no
@@ -332,7 +332,7 @@ fn an_active_faint_with_a_healthy_reserve_sends_it_out_instead_of_ending_the_bat
             },
             BattleEvent::Fainted { by_player: true },
             BattleEvent::PlayerSentOut {
-                species: SpeciesId(7),
+                species: SpeciesId::SQUIRTLE,
                 reserves_remaining: 0,
             },
         ],
@@ -344,7 +344,7 @@ fn an_active_faint_with_a_healthy_reserve_sends_it_out_instead_of_ending_the_bat
         None,
         "the player's party still has a standing member"
     );
-    assert_eq!(battle.player().species(), SpeciesId(7));
+    assert_eq!(battle.player().species(), SpeciesId::SQUIRTLE);
     assert_eq!(
         battle.player().current_hp(),
         reserve_max_hp,
@@ -365,12 +365,12 @@ fn identical_identity_members_report_in_their_original_party_order_after_a_repla
     // Same species, personality, and OT id: only the slot tells these two
     // Rattata apart. The first is overkilled by the L50 Charmander before
     // it can act; the second enters untouched.
-    let player = max_iv_mon_with_personality(&dex, 19, 5, vec![MoveId::TACKLE], 7)
+    let player = max_iv_mon_with_personality(&dex, SpeciesId::RATTATA, 5, vec![MoveId::TACKLE], 7)
         .with_original_trainer_id(12_345);
-    let reserve = max_iv_mon_with_personality(&dex, 19, 5, vec![MoveId::TACKLE], 7)
+    let reserve = max_iv_mon_with_personality(&dex, SpeciesId::RATTATA, 5, vec![MoveId::TACKLE], 7)
         .with_original_trainer_id(12_345);
     let reserve_max_hp = reserve.stats().max_hp;
-    let enemy = max_iv_mon(&dex, 4, 50, vec![MoveId::TACKLE]);
+    let enemy = max_iv_mon(&dex, SpeciesId::CHARMANDER, 50, vec![MoveId::TACKLE]);
 
     let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0]);
     let mut battle =
@@ -381,7 +381,7 @@ fn identical_identity_members_report_in_their_original_party_order_after_a_repla
         .unwrap();
     assert!(
         events.contains(&BattleEvent::PlayerSentOut {
-            species: SpeciesId(19),
+            species: SpeciesId::RATTATA,
             reserves_remaining: 0,
         }),
         "fixture sanity: the second Rattata replaced the first: {events:?}"
@@ -411,11 +411,11 @@ fn successive_replacements_keep_every_member_in_its_original_party_order() {
     let dex = Dex::new();
     // Three L5 Rattata told apart only by personality, each overkilled in
     // turn by the fast L50 Charmander.
-    let player = max_iv_mon_with_personality(&dex, 19, 5, vec![MoveId::TACKLE], 1);
-    let second = max_iv_mon_with_personality(&dex, 19, 5, vec![MoveId::TACKLE], 2);
-    let third = max_iv_mon_with_personality(&dex, 19, 5, vec![MoveId::TACKLE], 3);
+    let player = max_iv_mon_with_personality(&dex, SpeciesId::RATTATA, 5, vec![MoveId::TACKLE], 1);
+    let second = max_iv_mon_with_personality(&dex, SpeciesId::RATTATA, 5, vec![MoveId::TACKLE], 2);
+    let third = max_iv_mon_with_personality(&dex, SpeciesId::RATTATA, 5, vec![MoveId::TACKLE], 3);
     let third_max_hp = third.stats().max_hp;
-    let enemy = max_iv_mon(&dex, 4, 50, vec![MoveId::TACKLE]);
+    let enemy = max_iv_mon(&dex, SpeciesId::CHARMANDER, 50, vec![MoveId::TACKLE]);
 
     // Turn 1: battle start, turn number, enemy pick, enemy hit. Turn 2:
     // turn number, enemy pick, enemy hit.
@@ -452,14 +452,15 @@ fn successive_replacements_keep_every_member_in_its_original_party_order() {
 #[test]
 fn a_fainted_player_with_no_usable_reserve_still_loses_and_reports_both_members() {
     let dex = Dex::new();
-    let player = max_iv_mon(&dex, 19, 5, vec![MoveId::TACKLE]);
-    let mut reserve = max_iv_mon_with_personality(&dex, 7, 5, vec![MoveId::TACKLE], 5);
+    let player = max_iv_mon(&dex, SpeciesId::RATTATA, 5, vec![MoveId::TACKLE]);
+    let mut reserve =
+        max_iv_mon_with_personality(&dex, SpeciesId::SQUIRTLE, 5, vec![MoveId::TACKLE], 5);
     reserve.apply_damage(reserve.stats().max_hp);
     assert!(
         reserve.is_fainted(),
         "fixture sanity: the reserve is dead on arrival"
     );
-    let enemy = max_iv_mon(&dex, 4, 50, vec![MoveId::TACKLE]);
+    let enemy = max_iv_mon(&dex, SpeciesId::CHARMANDER, 50, vec![MoveId::TACKLE]);
     let player_max_hp = player.stats().max_hp;
 
     let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0]);
@@ -488,13 +489,13 @@ fn a_fainted_player_with_no_usable_reserve_still_loses_and_reports_both_members(
 
     let members: Vec<_> = battle.player_members().collect();
     assert_eq!(members.len(), 2, "both party members are reported");
-    assert_eq!(members[0].species(), SpeciesId(19));
+    assert_eq!(members[0].species(), SpeciesId::RATTATA);
     assert_eq!(
         members[0].current_hp(),
         0,
         "the active's faint is final state"
     );
-    assert_eq!(members[1].species(), SpeciesId(7));
+    assert_eq!(members[1].species(), SpeciesId::SQUIRTLE);
     assert_eq!(members[1].personality(), 5);
     assert_eq!(
         members[1].current_hp(),
@@ -516,15 +517,15 @@ fn a_struggle_recoil_faint_takes_the_same_reserve_or_exhaustion_decision() {
     // Struggle at selection (`AreAllMovesUnusable`); starting at 1 HP
     // guarantees the certain quarter-damage recoil (floored to a minimum
     // of 1) faints it, regardless of the exact damage Struggle deals.
-    let mut player = max_iv_mon(&dex, 19, 5, vec![MoveId::TACKLE]);
+    let mut player = max_iv_mon(&dex, SpeciesId::RATTATA, 5, vec![MoveId::TACKLE]);
     for _ in 0..player.moves()[0].pp {
         player.deduct_pp(0).unwrap();
     }
     assert_eq!(player.moves()[0].pp, 0, "fixture sanity: Tackle is spent");
     player.apply_damage(player.stats().max_hp - 1);
-    let reserve = max_iv_mon(&dex, 7, 5, vec![MoveId::TACKLE]);
+    let reserve = max_iv_mon(&dex, SpeciesId::SQUIRTLE, 5, vec![MoveId::TACKLE]);
     let reserve_max_hp = reserve.stats().max_hp;
-    let enemy = max_iv_mon(&dex, 1, 5, vec![MoveId::TACKLE]);
+    let enemy = max_iv_mon(&dex, SpeciesId::BULBASAUR, 5, vec![MoveId::TACKLE]);
 
     // battle start, turn number, enemy's Tackle pick (not forced, so it
     // draws a slot), then the player's forced Struggle: accuracy, crit,
@@ -567,7 +568,7 @@ fn a_struggle_recoil_faint_takes_the_same_reserve_or_exhaustion_decision() {
     );
     assert!(
         events.contains(&BattleEvent::PlayerSentOut {
-            species: SpeciesId(7),
+            species: SpeciesId::SQUIRTLE,
             reserves_remaining: 0,
         }),
         "the reserve replaces the recoil-fainted active: {events:?}"
@@ -577,7 +578,7 @@ fn a_struggle_recoil_faint_takes_the_same_reserve_or_exhaustion_decision() {
         "a standing reserve keeps the battle open: {events:?}"
     );
     assert_eq!(battle.outcome(), None);
-    assert_eq!(battle.player().species(), SpeciesId(7));
+    assert_eq!(battle.player().species(), SpeciesId::SQUIRTLE);
     assert_eq!(battle.player().current_hp(), reserve_max_hp);
 }
 
@@ -592,8 +593,8 @@ fn a_struggle_recoil_faint_takes_the_same_reserve_or_exhaustion_decision() {
 #[test]
 fn a_simultaneous_double_faint_with_a_healthy_reserve_still_wins() {
     const ABSORB: MoveId = MoveId::ABSORB;
-    const BULBASAUR: u16 = 1;
-    const TENTACOOL: u16 = 72;
+    const BULBASAUR: SpeciesId = SpeciesId::BULBASAUR;
+    const TENTACOOL: SpeciesId = SpeciesId::TENTACOOL;
 
     let dex = Dex::new();
     let mut player = max_iv_mon(&dex, BULBASAUR, 50, vec![ABSORB]);
@@ -602,7 +603,7 @@ fn a_simultaneous_double_faint_with_a_healthy_reserve_still_wins() {
     // Absorb's own drain-turned-damage faints it in the same exchange that
     // its hit faints the level-5 Tentacool target.
     player.apply_damage(player_max_hp - 6);
-    let reserve = max_iv_mon(&dex, 7, 5, vec![MoveId::TACKLE]);
+    let reserve = max_iv_mon(&dex, SpeciesId::SQUIRTLE, 5, vec![MoveId::TACKLE]);
     let reserve_max_hp = reserve.stats().max_hp;
     // Personality 1 lands Tentacool on ability slot 1, Liquid Ooze.
     let enemy = max_iv_mon_with_personality(&dex, TENTACOOL, 5, vec![MoveId::TACKLE], 1);
@@ -641,13 +642,13 @@ fn a_simultaneous_double_faint_with_a_healthy_reserve_still_wins() {
     assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerWon));
     assert_eq!(
         battle.player().species(),
-        SpeciesId(BULBASAUR),
+        BULBASAUR,
         "no replacement occurred: the battle ended before reaching the \
          player's own send-out branch"
     );
     assert_eq!(battle.player().current_hp(), 0);
     let members: Vec<_> = battle.player_members().collect();
-    assert_eq!(members[1].species(), SpeciesId(7));
+    assert_eq!(members[1].species(), SpeciesId::SQUIRTLE);
     assert_eq!(
         members[1].current_hp(),
         reserve_max_hp,
@@ -664,15 +665,15 @@ fn a_simultaneous_double_faint_with_a_healthy_reserve_still_wins() {
 #[test]
 fn a_fainted_player_gains_no_exp_or_evs_from_a_simultaneous_double_faint() {
     const ABSORB: MoveId = MoveId::ABSORB;
-    const BULBASAUR: u16 = 1;
-    const TENTACOOL: u16 = 72;
+    const BULBASAUR: SpeciesId = SpeciesId::BULBASAUR;
+    const TENTACOOL: SpeciesId = SpeciesId::TENTACOOL;
     let dex = Dex::new();
     let mut player = max_iv_mon(&dex, BULBASAUR, 50, vec![ABSORB]);
     let player_max_hp = player.stats().max_hp;
     player.apply_damage(player_max_hp - 6);
     let experience_before = player.experience();
     let evs_before = player.evs();
-    let reserve = max_iv_mon(&dex, 7, 5, vec![MoveId::TACKLE]);
+    let reserve = max_iv_mon(&dex, SpeciesId::SQUIRTLE, 5, vec![MoveId::TACKLE]);
     let enemy = max_iv_mon_with_personality(&dex, TENTACOOL, 5, vec![MoveId::TACKLE], 1);
     let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0]);
     let mut battle =

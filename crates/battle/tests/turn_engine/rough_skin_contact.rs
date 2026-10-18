@@ -3,11 +3,11 @@
 //! script.
 
 use crate::poison_support::*;
-use assets::{AbilityId, MoveId};
+use assets::{AbilityId, MoveId, SpeciesId};
 use battle::{Battle, BattleEvent, BattlePokemon, Dex, PlayerAction};
 
 /// `SPECIES_CARVANHA`: Rough Skin, and slower than [`RATTATA`] at equal level.
-const CARVANHA: u16 = 330;
+const CARVANHA: SpeciesId = SpeciesId::CARVANHA;
 const WATER_GUN: MoveId = MoveId::WATER_GUN;
 const DOUBLE_SLAP: MoveId = MoveId::DOUBLE_SLAP;
 

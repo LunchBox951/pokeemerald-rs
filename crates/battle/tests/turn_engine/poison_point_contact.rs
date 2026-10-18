@@ -5,7 +5,7 @@ use assets::{AbilityId, MoveId, SpeciesId};
 use battle::{Battle, BattleEvent, BattlePokemon, Dex, PlayerAction, Status1};
 
 /// `SPECIES_NIDORAN_F`: Poison Point, and slower than [`RATTATA`] at equal level.
-const NIDORAN_F: u16 = 29;
+const NIDORAN_F: SpeciesId = SpeciesId::NIDORAN_F;
 const WATER_GUN: MoveId = MoveId::WATER_GUN;
 
 /// Construction's turn-number draw, the turn-start draw, the enemy's move
@@ -144,7 +144,7 @@ fn a_fainted_poison_point_holder_still_rolls_and_poisons_the_attacker() {
 #[test]
 fn a_poison_typed_attacker_is_not_poisoned_but_still_spends_the_roll() {
     let dex = Dex::new();
-    let player = max_iv_mon(&dex, SpeciesId::ZUBAT.0, 5, vec![TACKLE]);
+    let player = max_iv_mon(&dex, SpeciesId::ZUBAT, 5, vec![TACKLE]);
     let enemy = nidoran(&dex, 5);
 
     let mut rng = script(&FASTER_HITS, POISON_POINT_TRIGGERS, &SLOWER_HITS);
@@ -161,7 +161,7 @@ fn a_poison_typed_attacker_is_not_poisoned_but_still_spends_the_roll() {
 #[test]
 fn an_immunity_attacker_is_not_poisoned_but_still_spends_the_roll() {
     let dex = Dex::new();
-    let player = max_iv_mon(&dex, SpeciesId::ZANGOOSE.0, 5, vec![TACKLE]);
+    let player = max_iv_mon(&dex, SpeciesId::ZANGOOSE, 5, vec![TACKLE]);
     assert_eq!(player.ability(), AbilityId::IMMUNITY);
     let enemy = nidoran(&dex, 5);
 
@@ -247,7 +247,7 @@ fn a_synchronize_attacker_reflects_poison_point_poison_onto_a_non_poison_holder(
     let player = max_iv_mon(&dex, RALTS, 14, vec![TACKLE]);
     assert_eq!(player.ability(), AbilityId::SYNCHRONIZE);
     // `SPECIES_SEADRA`: the Poison Point species that is not Poison-typed.
-    let enemy = max_iv_mon(&dex, SpeciesId::SEADRA.0, 5, vec![TACKLE]);
+    let enemy = max_iv_mon(&dex, SpeciesId::SEADRA, 5, vec![TACKLE]);
     assert_eq!(enemy.ability(), AbilityId::POISON_POINT);
 
     let mut rng = script(&FASTER_HITS, POISON_POINT_TRIGGERS, &SLOWER_HITS);

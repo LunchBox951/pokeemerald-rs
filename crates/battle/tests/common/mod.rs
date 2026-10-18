@@ -57,7 +57,7 @@ pub const MAX_IVS: Ivs = Ivs {
 
 pub fn max_iv_mon(
     dex: &Dex,
-    species_id: u16,
+    species_id: SpeciesId,
     level: u8,
     known_moves: Vec<MoveId>,
 ) -> BattlePokemon {
@@ -75,20 +75,12 @@ pub fn max_iv_mon(
 /// with.
 pub fn max_iv_mon_with_personality(
     dex: &Dex,
-    species_id: u16,
+    species_id: SpeciesId,
     level: u8,
     known_moves: Vec<MoveId>,
     personality: u32,
 ) -> BattlePokemon {
-    BattlePokemon::new(
-        dex,
-        SpeciesId(species_id),
-        level,
-        MAX_IVS,
-        personality,
-        known_moves,
-    )
-    .unwrap()
+    BattlePokemon::new(dex, species_id, level, MAX_IVS, personality, known_moves).unwrap()
 }
 
 /// Personality 25 is odd (secondary ability slot) yet still lands on the
@@ -104,7 +96,7 @@ pub const SECONDARY_ABILITY_PERSONALITY: u32 = 25;
 pub fn slow_runner_rattata(dex: &Dex) -> BattlePokemon {
     let runner = max_iv_mon_with_personality(
         dex,
-        19,
+        SpeciesId::RATTATA,
         5,
         vec![MoveId::TACKLE],
         SECONDARY_ABILITY_PERSONALITY,

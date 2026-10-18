@@ -9,12 +9,13 @@ use crate::pokemon::{Ivs, MAX_MON_MOVES, MOVE_NONE};
 use crate::script_rng::SequenceRng;
 use assets::{MoveId, SpeciesId};
 
-const BULBASAUR: SpeciesId = SpeciesId(1);
-const TREECKO: SpeciesId = SpeciesId(277);
-const POOCHYENA: SpeciesId = SpeciesId(286);
-const ZIGZAGOON: SpeciesId = SpeciesId(288);
-const WURMPLE: SpeciesId = SpeciesId(290);
-const SEEDOT: SpeciesId = SpeciesId(298);
+const BULBASAUR: SpeciesId = SpeciesId::BULBASAUR;
+const TREECKO: SpeciesId = SpeciesId::TREECKO;
+const POOCHYENA: SpeciesId = SpeciesId::POOCHYENA;
+const ZIGZAGOON: SpeciesId = SpeciesId::ZIGZAGOON;
+const WURMPLE: SpeciesId = SpeciesId::WURMPLE;
+const SEEDOT: SpeciesId = SpeciesId::SEEDOT;
+// Raw on purpose: the id must name no species, so no canonical constant exists.
 const UNKNOWN_SPECIES: SpeciesId = SpeciesId(60_000);
 
 const HEADBUTT: MoveId = MoveId::HEADBUTT;
