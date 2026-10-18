@@ -203,6 +203,7 @@ pub(super) fn seed_approach(phase: &mut OverworldPhase, walk_tiles: u8) {
     .expect("the stand-in Route 103 rival must always construct");
     phase.party_lead = Some(overwhelming_lead());
     phase.sight_approach = Some(SightApproach::new(
+        rhetts_object_event().local_id,
         ObjectEventState::from_template(rhetts_object_event()),
         walk_tiles,
         "Whoa!\nHow'd you get into a space this small?",

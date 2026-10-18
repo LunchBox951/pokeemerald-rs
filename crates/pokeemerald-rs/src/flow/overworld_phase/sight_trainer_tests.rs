@@ -65,5 +65,6 @@
 mod approach_handoff;
 mod approach_timing;
 mod battle;
+mod live_selection;
 mod support;
 mod trigger;
