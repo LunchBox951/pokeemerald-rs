@@ -123,6 +123,36 @@ fn missing_gameplay_assets_block_boot_before_a_save_is_opened() {
 }
 
 #[test]
+fn malformed_metatile_attributes_block_boot_before_a_save_is_opened() {
+    let id = "tileset/general/metatile-attributes";
+    let mut bytes = synthetic_pack(None);
+    let directory = pack_format::parse_directory(&bytes).unwrap();
+    let offset = directory
+        .iter()
+        .find(|entry| entry.id == id)
+        .unwrap()
+        .offset;
+    bytes[offset..offset + 2].copy_from_slice(&0xf000u16.to_le_bytes());
+    let media = Media::new(&bytes);
+    let error = load_ready_pack(&media.pack())
+        .err()
+        .expect("malformed attributes must fail readiness");
+    assert!(
+        matches!(error.problem(), PackProblem::InvalidAsset { id: bad_id, .. } if bad_id == id)
+    );
+    let save = media.directory.join("save.sav");
+    let error = crate::App::new_headless_real_at(&media.pack(), &save)
+        .err()
+        .expect("malformed pack must not boot");
+    assert!(matches!(
+        error,
+        crate::app::AppError::Title(crate::title::TitleSceneError::Readiness(_))
+    ));
+    assert!(!save.exists());
+    assert_eq!(std::fs::read(media.pack()).unwrap(), bytes);
+}
+
+#[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn checkout_extracted_pack_passes_the_player_readiness_boundary() {
     let path = assets::AssetPack::repo_pack_path();

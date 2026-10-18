@@ -20,6 +20,17 @@ impl AssetPack {
                     return Err(invalid(id, "pixel index exceeds the image bit depth"));
                 }
             }
+            if id.starts_with("tileset/") && id.ends_with("/metatile-attributes") {
+                let bytes = self.raw(id).map_err(|err| invalid(id, err))?;
+                if !bytes.len().is_multiple_of(2) {
+                    return Err(invalid(id, "partial metatile attribute"));
+                }
+                for attribute in
+                    crate::metatile_attributes::MetatileAttributeTable::new(bytes).attributes()
+                {
+                    attribute.map_err(|err| invalid(id, err))?;
+                }
+            }
             if id.starts_with("audio/song/")
                 || id.starts_with("audio/voicegroup/")
                 || id.starts_with("audio/sample/")
