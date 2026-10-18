@@ -210,6 +210,11 @@ pub(crate) fn poison_point_can_land(attacker: &BattlePokemon) -> bool {
         && attacker.ability() != AbilityId::IMMUNITY
 }
 
+/// A `secondaryEffectChance` at which `Cmd_seteffectwithchance` already takes
+/// its certain-effect branch, so Serene Grace's doubling is unobservable
+/// (`battle_script_commands.c:2912-2930`).
+const GUARANTEED_EFFECT_CHANCE: u8 = 100;
+
 /// `SetMoveEffect`'s `MOVE_EFFECT_CONFUSION` guards for the trampoline path:
 /// Own Tempo and an already-active confusion volatile both leave the byte
 /// silently discarded (`battle_script_commands.c:2531-2538`), and Shield
@@ -260,6 +265,10 @@ fn confuse_hit_could_ever_land(defender: &BattlePokemon) -> bool {
 /// `confuse_hit_could_ever_land` rather than `poison_can_land`'s full
 /// landing check -- see that function's docs for why the defender's current
 /// confusion volatile is deliberately not read here.
+/// A move whose `secondaryEffectChance` is already 100 is exempt: Serene
+/// Grace only doubles it to 200 (`battle_script_commands.c:2912-2915`), and
+/// both values pass the same chance roll and take the same certain-effect
+/// branch (`:2923-2930`), so the doubling changes neither outcome nor RNG use.
 ///
 /// # Errors
 ///
@@ -288,6 +297,7 @@ pub fn ensure_admissible(
         return Ok(());
     }
     if is_confuse_hit_effect(mv.effect)
+        && mv.secondary_effect_chance < GUARANTEED_EFFECT_CHANCE
         && attacker.ability() == AbilityId::SERENE_GRACE
         && confuse_hit_could_ever_land(defender)
     {
