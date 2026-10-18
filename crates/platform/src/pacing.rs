@@ -77,6 +77,16 @@ impl FramePacer {
     /// wait for every missed frame in between — mirroring hardware, which
     /// only ever waits for the *next* vblank IRQ and never queues up
     /// "catch-up" frames for time that has already passed.
+    ///
+    /// # Unrepresentable periods
+    ///
+    /// [`FramePacer::with_period`] accepts any [`Duration`], but whether
+    /// `Instant + period` is representable depends on the platform's
+    /// [`Instant`], so it cannot be rejected up front (the constructor stays
+    /// infallible and `const`). Instead every `Instant` addition here is
+    /// checked and fails open: if a deadline cannot be represented it
+    /// collapses to `now`, so the caller gets a zero wait (never a huge sleep,
+    /// never a panic) and the schedule rebases on the next call.
     pub fn tick(&mut self, now: Instant) -> Duration {
         let mut deadline = self.next_deadline.unwrap_or(now);
         if deadline < now {
@@ -93,11 +103,14 @@ impl FramePacer {
             deadline = if remainder.is_zero() {
                 now
             } else {
-                now + self.period.saturating_sub(remainder)
+                now.checked_add(self.period.saturating_sub(remainder))
+                    .unwrap_or(now)
             };
         }
         let wait = deadline - now;
-        self.next_deadline = Some(deadline + self.period);
+        // An unrepresentable follow-on deadline rebases onto `now` (unpaced)
+        // instead of panicking.
+        self.next_deadline = Some(deadline.checked_add(self.period).unwrap_or(now));
         wait
     }
 }
@@ -227,5 +240,34 @@ mod tests {
         let wait = pacer.tick(very_late);
         assert_eq!(wait, Duration::from_nanos(1));
         assert_eq!(pacer.tick(very_late + wait), period);
+    }
+
+    #[test]
+    fn unrepresentable_period_fails_open_without_panicking() {
+        let t0 = Instant::now();
+        let mut pacer = FramePacer::with_period(Duration::MAX);
+        assert_eq!(pacer.tick(t0), Duration::ZERO);
+        assert!(pacer.has_ticked());
+        // Later and identical instants stay zero-wait, no panic.
+        assert_eq!(pacer.tick(t0), Duration::ZERO);
+        assert_eq!(pacer.tick(t0 + Duration::from_secs(1)), Duration::ZERO);
+    }
+
+    #[test]
+    fn unrepresentable_period_in_catch_up_branch_does_not_panic() {
+        let t0 = Instant::now();
+        let mut pacer = FramePacer::with_period(Duration::MAX);
+        pacer.next_deadline = Some(t0);
+        // Overdue with a nonzero remainder: catch-up adds `period - remainder`.
+        assert_eq!(pacer.tick(t0 + Duration::from_secs(1)), Duration::ZERO);
+    }
+
+    #[test]
+    fn representable_wait_survives_unrepresentable_follow_on_deadline() {
+        let t0 = Instant::now();
+        let mut pacer = FramePacer::with_period(Duration::MAX);
+        pacer.next_deadline = Some(t0 + Duration::from_secs(5));
+        assert_eq!(pacer.tick(t0), Duration::from_secs(5));
+        assert_eq!(pacer.tick(t0), Duration::ZERO);
     }
 }

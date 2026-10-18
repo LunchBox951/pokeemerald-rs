@@ -8,12 +8,22 @@ use assets::{AbilityId, SpeciesId};
 
 /// Whether admission refuses `ability` whatever its holder's status or volatiles.
 const fn always_refused(ability: AbilityId) -> bool {
-    matches!(ability, AbilityId::TRUANT | AbilityId::INTIMIDATE)
+    matches!(
+        ability,
+        AbilityId::TRUANT
+            | AbilityId::INTIMIDATE
+            | AbilityId::SPEED_BOOST
+            | AbilityId::COLOR_CHANGE
+            | AbilityId::TRACE
+            | AbilityId::EFFECT_SPORE
+    )
 }
 
 /// Refuses a participant whose ability interaction the turn engine does not model:
 /// the move-end immunity cure (`battle_util.c:2873-2951`), Truant (`:2086-2097`, `:2653-2655`),
-/// or Intimidate's entry and switch-in Attack drop (`:2559-2564`, `:3003-3016`, `:3074-3088`).
+/// Intimidate's entry and switch-in Attack drop (`:2559-2564`, `:3003-3016`, `:3074-3088`),
+/// Speed Boost's end-turn Speed stage (`:2601-2652`), Color Change (`:2749-2766`),
+/// Trace's ability copy (`:2575-2580`, `:3017-3073`), or Effect Spore (`:2782-2805`).
 ///
 /// # Errors
 ///
@@ -50,7 +60,7 @@ pub(super) fn ensure_participants_admissible<'a>(
 /// # Errors
 ///
 /// Returns a dex lookup error for an unknown species, or
-/// [`BattleError::UnportedAbilityInteraction`] for a Truant or Intimidate selection.
+/// [`BattleError::UnportedAbilityInteraction`] for a selected always-refused ability.
 pub(crate) fn ensure_selected_ability_admissible(
     dex: &Dex,
     species: SpeciesId,
@@ -69,7 +79,7 @@ pub(crate) fn ensure_selected_ability_admissible(
 /// # Errors
 ///
 /// Returns a dex lookup error for an unknown species, or
-/// [`BattleError::UnportedAbilityInteraction`] for the first Truant or Intimidate slot.
+/// [`BattleError::UnportedAbilityInteraction`] for the first always-refused ability slot.
 pub(crate) fn ensure_every_ability_slot_admissible(
     dex: &Dex,
     species: SpeciesId,

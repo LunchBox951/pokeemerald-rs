@@ -337,3 +337,48 @@ fn to_save_pokemon_keeps_the_stale_cache_when_no_level_up_happened_yet() {
         "no gap opened over the live floor, so nothing to carry forward"
     );
 }
+
+/// `GetDeoxysStat` (`pokemon.c:2698-2712`) is reached only through
+/// `GetMonData` (`pokemon.c:3660-3684`); the stored `CalculateMonStats` block
+/// stays on the raw Normal Forme row.
+#[test]
+fn to_save_pokemon_files_raw_deoxys_stats_for_an_unchanged_level() {
+    let dex = Dex::new();
+    let ivs = Ivs {
+        hp: 31,
+        attack: 31,
+        defense: 31,
+        speed: 31,
+        sp_attack: 31,
+        sp_defense: 31,
+    };
+    let mon = BattlePokemon::new(
+        &dex,
+        assets::SpeciesId(410),
+        50,
+        ivs,
+        0, // personality 0 is the neutral Hardy nature
+        vec![assets::MoveId::SCRATCH],
+    )
+    .expect("Deoxys at level 50 with Scratch is representable");
+    assert_eq!(
+        mon.stats().speed,
+        200,
+        "fixture sanity: battle reads Speed Forme"
+    );
+    assert_eq!(mon.level(), mon.created_at_level());
+
+    let saved = to_save_pokemon(&dex, &mon);
+    // Normal Forme base 50/150/50/150/150/50, level 50, IV 31, zero EVs.
+    assert_eq!(
+        (
+            saved.max_hp,
+            saved.attack,
+            saved.defense,
+            saved.speed,
+            saved.special_attack,
+            saved.special_defense
+        ),
+        (125, 170, 70, 170, 170, 70)
+    );
+}

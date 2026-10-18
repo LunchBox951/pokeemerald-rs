@@ -132,6 +132,7 @@ pub mod import_rom;
 pub mod intro;
 pub mod main_menu;
 pub mod music;
+pub mod naming;
 pub mod new_game;
 pub mod overworld;
 mod pack_source;
