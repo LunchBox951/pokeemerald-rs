@@ -899,7 +899,8 @@ impl BattlePokemon {
     /// A Hustle holder's, then a statused Guts holder's, raw physical Attack
     /// is each raised 150% before the stage is applied, matching upstream's
     /// `CalculateBaseDamage` (`pokeemerald/src/pokemon.c:3205-3206, :3211-3212`);
-    /// special Attack never changes.
+    /// special Attack is returned raw: Thick Fat and Plus/Minus depend on the
+    /// other battler, so callers apply them before the stage.
     #[must_use]
     pub fn attacking_stat(&self, category: crate::damage::MoveCategory) -> (u32, StatStage) {
         match category {
