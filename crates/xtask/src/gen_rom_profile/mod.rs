@@ -81,7 +81,7 @@ use std::time::SystemTime;
 use rom_import::{select_profile, Rom};
 
 pub use error::GenRomProfileError;
-use map_file::SymbolMap;
+pub(crate) use map_file::SymbolMap;
 use pack_source::PackSource;
 use plan::{ProfilePlan, ReportLine, SymbolExpectation};
 use search::{Lz77Search, PointerIndex, RawSearch};
