@@ -12,6 +12,8 @@ Read this file for workspace-wide Rust conventions and responsibility routing. C
 - Use concrete per-crate error enums. Do not add `anyhow` to library crates.
 - Document public surfaces with a `///` line stating the contract. Keep unit tests beside code and integration tests under `<crate>/tests/`.
 - Search every caller before changing a shared API. Keep caller-specific behaviour explicit at its owning boundary instead of hiding it in a generic default.
+- Ignore a test only when it needs a local input the repository cannot ship: the extracted asset pack or the `./init.sh` reference checkouts (CI's Linux `native` leg runs these with `--ignored`), a supported ROM (the real-ROM check in [`AGENTS.md` §Verify](../AGENTS.md#verify) runs these), or a local reference capture its doc comment says how to produce. The `#[ignore = "..."]` reason names that input.
+- State current contracts in `//!` and `///` docs. Cite an issue or Discussion only when it owns a still-binding decision, such as Discussion #71's pack policies, or tracks open remaining work; which issue added or changed a module is implementation history and belongs in GitHub `(self-explanatory-code)`.
 - Make every regression test fail against the unfixed behaviour and exercise the actual failure boundary, not merely a nearby input.
 - Prove upstream ordering and other implicit semantics with an explicitly sequenced call site or test. Do not treat language-unspecified expression evaluation as behavioural evidence.
 

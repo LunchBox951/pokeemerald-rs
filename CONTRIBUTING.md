@@ -37,15 +37,7 @@ If a clean-room boundary or dependency decision remains ambiguous, open a GitHub
 
 ## Rust and verification
 
-[`crates/README.md`](crates/README.md) owns workspace-wide Rust conventions and source ownership. Run focused tests while iterating, then the applicable workspace gates:
-
-```bash
-cargo build --release --workspace
-cargo test --workspace
-cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-cargo fmt --check
-```
+[`crates/README.md`](crates/README.md) owns workspace-wide Rust conventions and source ownership. Run focused tests while iterating, then the gates in [`AGENTS.md` §Verify](AGENTS.md#verify), which names the CI jobs that define them and the real-ROM check CI cannot run.
 
 Never weaken, skip, or delete a test to make a gate pass `(test-ratchet)`.
 
@@ -62,7 +54,7 @@ python3 scripts/ledger.py mark include/random.h \
 python3 scripts/ledger.py verify
 ```
 
-Run `python3 scripts/ledger.py -h` and focused subcommand help for current statuses, arguments, and completion rules. Never hand-edit `ledger/pokeemerald.json`.
+Run `python3 scripts/ledger.py -h` and focused subcommand help for current statuses, arguments, and completion rules. Never hand-edit `ledger/pokeemerald.json`. A `--reason` states why the destination covers the artifact. Cite an issue only to name where a stubbed or partial entry's remaining work is tracked; which issue did the work belongs to git history, not the reason.
 
 ## Pull requests
 
@@ -73,9 +65,11 @@ Keep each pull request focused and complete its template honestly:
 - State ledger impact as `none`, `verify-only`, or the touched entries.
 - State dependency impact as `none` or link the exact owner approval.
 
+Write each commit subject as `<subsystem>: <imperative description> (<acceptance ID or none>, #<issue>)`, for example `battle: refresh Deoxys's Speed Forme stats at each battle start (S-6, #2253)`. The subsystem is the crate or area the commit changes, such as `battle`, `ledger`, or `docs`. Work that advances no acceptance ID writes `none`, the word this file and the pull request template use, never a synonym such as `routine`. A commit that serves no issue omits `, #<issue>`, as in `docs: fix a broken link (none)`.
+
 Release impact is not a template field: the `VERSION` bump and CI's gates are its sole authority (see [`RELEASE.md`](RELEASE.md)).
 
-Every ordinary pull request into `dev` advances `VERSION`. Run `python3 scripts/sync_cargo_version.py` after the chosen `PATCH`, `MINOR`, or `MAJOR` bump. `FINAL` is owner-only. Do not combine feature changes with channel promotion.
+Every ordinary pull request into `dev` advances `VERSION` past the `VERSION` on current `dev`, not past the version your branch started from. After merging `dev` into your branch, redo the bump from the merged `VERSION`. Run `python3 scripts/sync_cargo_version.py` after the chosen `PATCH`, `MINOR`, or `MAJOR` bump, and check it with `python3 scripts/version_check.py --base origin/dev --require-bump` after fetching `dev`. `FINAL` is owner-only. Do not combine feature changes with channel promotion.
 
 Repository automation may review and merge ready work. A pull request is not merged in the same maintenance pass that opened or last changed it. The `needs-operator` label marks a decision or review that automation cannot supply.
 
