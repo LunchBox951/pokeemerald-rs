@@ -28,8 +28,9 @@ pub use object_event::{
     visible_object_events, ObjectEventState,
 };
 pub use player::{
-    PlayerState, StepOutcome, TilePos, BUMP_IN_PLACE_FRAMES, RUN_FRAMES_PER_TILE,
-    SLIDE_FRAMES_PER_TILE, TURN_IN_PLACE_FRAMES, WALK_FRAMES_PER_TILE,
+    ForcedMat, PlayerState, StepOutcome, TilePos, BUMP_IN_PLACE_FRAMES, MAT_JUMP_FRAMES,
+    RUN_FRAMES_PER_TILE, SLIDE_FRAMES_PER_TILE, TURN_IN_PLACE_FRAMES, WALK_FRAMES_PER_TILE,
+    WALK_SLOW_FRAMES_PER_TILE,
 };
 pub use trainer_sight::trainer_can_see_player;
 pub use warp::{
