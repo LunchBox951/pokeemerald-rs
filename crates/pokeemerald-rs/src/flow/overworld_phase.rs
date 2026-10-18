@@ -884,6 +884,17 @@ impl OverworldPhase {
         self.pending_landing.is_some() || self.player.in_transit()
     }
 
+    /// Whether the player's standing field state closes `FieldGetPlayerInput`'s
+    /// button block: a forced landing's tile-centre frame
+    /// ([`engine::overworld::PlayerState::field_input_suppressed`]), or a Secret
+    /// Base mat sequence, whose spin holds `LockPlayerFieldControls` and whose
+    /// jump is never tile-centre or at rest (`field_player_avatar.c:1587-1594,
+    /// 1640`, `field_control_avatar.c:95-113`, `overworld.c:1445-1447`).
+    #[must_use]
+    pub(super) fn field_input_closed(&self) -> bool {
+        self.player.field_input_suppressed() || self.player.forced_mat().is_some()
+    }
+
     /// Restart the tileset animation cadence on return to the field.
     ///
     /// Every upstream `CB2_ReturnToField` reload runs `InitMapView` ->
@@ -997,6 +1008,8 @@ mod landing_call_arrow_elevation_tests;
 /// from this module; its own unit tests live with that module instead.
 #[cfg(test)]
 mod lead_owner_tests;
+#[cfg(test)]
+mod mat_field_input_gate_tests;
 #[cfg(test)]
 mod oldale_reposition_tests;
 /// Wild and scripted first-battle opponents carry the save owner's OT id.

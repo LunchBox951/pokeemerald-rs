@@ -106,7 +106,7 @@ impl OverworldPhase {
             // `ConfigureAndSetUpOneTrainerBattle` (`src/battle_setup.c`); the
             // port has no lock, and the approach is neither a battle nor a step.
             && self.sight_approach.is_none()
-            && !self.player.field_input_suppressed()
+            && !self.field_input_closed()
     }
 
     /// Builds the menu a fresh `START` press would open, without committing it,
