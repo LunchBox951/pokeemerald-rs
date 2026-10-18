@@ -821,6 +821,8 @@ fn audio_rom(pcm: &[u8]) -> Vec<u8> {
         .write(0x40_0000, &[0x81, 0xB1])
         // gSongTable at 0x0850_0000; MUS_TITLE is index 1.
         .write(0x50_0008, &0x0830_0000u32.to_le_bytes())
+        // `Song.ms` is BGM (0); `Song.me` is a distinct value, so only `ms` matches the pack.
+        .write(0x50_000C, &[0, 0, 7, 0])
         .finish()
 }
 
@@ -835,6 +837,7 @@ fn with_audio_context<T>(name: &str, songs: &[&str], body: impl FnOnce(&Context<
 fn title_song_payload(priority: u8) -> Vec<u8> {
     assets::audio::Song::new(
         assets::audio::VoiceGroupId("audio/voicegroup/title".to_owned()),
+        assets::audio::MusicPlayerId(0),
         priority,
         None,
         vec![vec![
@@ -1451,6 +1454,24 @@ fn assert_bytecode_refused(name: &str, mutate: impl FnOnce(&mut Vec<u8>)) {
                 panic!("{err:?}");
             };
             assert_eq!(id, "audio/song/mus_title");
+        },
+    );
+}
+
+#[test]
+fn a_song_table_player_that_disagrees_with_the_pack_is_refused() {
+    with_audio_song_rom(
+        "audio-song-player",
+        &["audio/song/mus_title"],
+        &title_song_payload(0),
+        |rom| rom[0x50_000C..0x50_000E].copy_from_slice(&1u16.to_le_bytes()),
+        |ctx| {
+            let err = audio::locate(ctx, &mut Vec::new()).expect_err("`ms` must be compared");
+            assert!(
+                matches!(&err, GenRomProfileError::StructMismatch { id, reason }
+                    if id == "audio/song/mus_title" && reason.contains("`ms`")),
+                "{err:?}"
+            );
         },
     );
 }

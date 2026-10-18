@@ -22772,6 +22772,14 @@
       "status": "pending"
     },
     "sound/song_table.inc": {
+      "artifacts": {
+        "gSongTable": {
+          "reason": "sound/song_table.inc:1-8,422. Modelled: the Song.ms field as assets::audio::MusicPlayerId, the index m4aSongNumStart uses to select gMPlayTable[song->ms] (m4a.c:107-114), carried by assets::audio::Song and AssetPack::song beside the voicegroup, priority, reverb, and tracks, and kept as the raw table index. Producers cover only mus_title's row (xtask extraction) and the profile's supported song entry (ROM import). Not modelled: the table as a whole, the other rows, the header pointer, Song.me, and the mapping of ms to BGM, SE, or cry runtime state. The parent file stays pending.",
+          "rust_target": "crates/assets/src/audio/song.rs",
+          "spec": "S-3",
+          "status": "stubbed"
+        }
+      },
       "category": "audio.misc",
       "kind": "file",
       "spec_owner": "S-3",

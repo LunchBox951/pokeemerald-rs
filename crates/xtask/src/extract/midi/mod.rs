@@ -49,6 +49,7 @@ mod error;
 mod event;
 mod parse;
 mod reader;
+mod song_table;
 mod translate;
 mod velocity;
 
@@ -60,6 +61,8 @@ use super::{read_file, read_text, ExtractError};
 use pack_format::PackWriter;
 
 const SONG_MIDI_FILENAME: &str = "mus_title.mid";
+/// `SONG_MIDI_FILENAME`'s row symbol in `sound/song_table.inc`.
+const SONG_TABLE_SYMBOL: &str = "mus_title";
 /// The one song id this compiler ever writes. Crate-visible: `gen_rom_profile::audio`
 /// reuses this exact id as the one `audio/song/` entry it locates a ROM
 /// address for, the same reuse [`super::voicegroups`]'s `groups_by_label`
@@ -88,8 +91,11 @@ pub(super) fn extract_song(upstream: &Path, writer: &mut PackWriter) -> Result<(
     let midi_bytes = read_file(&midi_path)?;
     let song = compile::compile(&midi_bytes, &entry)
         .map_err(|e| ExtractError::Midi(midi_path.clone(), e))?;
+    let table_path = upstream.join("sound/song_table.inc");
+    let player = song_table::player_for(&read_text(&table_path)?, SONG_TABLE_SYMBOL)
+        .map_err(|e| ExtractError::Midi(table_path.clone(), e))?;
     let payload =
-        encode::encode_song(&song).map_err(|e| ExtractError::Midi(midi_path.clone(), e))?;
+        encode::encode_song(&song, player).map_err(|e| ExtractError::Midi(midi_path.clone(), e))?;
 
     writer.push(pack_format::raw_entry(SONG_PACK_ID.to_owned(), payload));
     Ok(())
