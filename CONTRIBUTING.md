@@ -26,9 +26,9 @@ Milestone descriptions own their current scope, upstream references, acceptance 
 
 ## Issues and labels
 
-Give every filed work item the body shape of [`.github/ISSUE_TEMPLATE/roadmap_task.yml`](.github/ISSUE_TEMPLATE/roadmap_task.yml): sections headed `Task`, `Laddered acceptance ID`, and `Definition of done`, in that order. This applies to issues filed with `gh issue create` or the API as well as the web form. Bug and playtest reports use their own templates.
+Give every filed work item the body shape of [`.github/ISSUE_TEMPLATE/roadmap_task.yml`](.github/ISSUE_TEMPLATE/roadmap_task.yml): sections headed `Task`, `Laddered acceptance ID`, and `Definition of done`, in that order. This applies to issues filed with `gh issue create` or the API as well as the web form. Bug, feature-request, and playtest reports use their own templates; work accepted from one is filed in this shape.
 
-[`.github/labels.yml`](.github/labels.yml) lists the baseline labels; each description says when the label applies. Live GitHub may carry further topical labels. Apply `roadmap` to an issue that advances an acceptance ID and `routine` to maintenance that names `none`. Every template applies `needs-review` to a new issue; remove it once the issue's labels and, for roadmap work, its milestone are set.
+[`.github/labels.yml`](.github/labels.yml) lists the baseline labels; each description says when the label applies. Live GitHub may carry further topical labels. Apply `roadmap` to an issue that advances an acceptance ID and `routine` to `none` maintenance found while reviewing `dev`. Every template applies `needs-review` to a new issue; remove it once the issue's labels and, for roadmap work, its milestone are set.
 
 ## Clean-room rules
 
