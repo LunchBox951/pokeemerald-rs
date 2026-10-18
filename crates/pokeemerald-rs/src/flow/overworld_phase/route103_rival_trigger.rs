@@ -111,7 +111,9 @@
 //! branch that would set either is never reached), and the player is not
 //! left standing next to the rival: `white_out` warps them back to the last
 //! heal location before the frame ends, the same displacement upstream's
-//! own white-out produces.
+//! own white-out produces. If that location names no known map, `white_out`
+//! still heals but leaves the player where the battle ended, its own
+//! documented fallback.
 //!
 //! # No fainted lead reaches the fight
 //!

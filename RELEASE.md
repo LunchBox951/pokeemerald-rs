@@ -19,14 +19,14 @@ The scheduled promotion App opens or reconciles one exact next-rung pull request
 
 The nightly uses the existing CI and CodeQL gates. At 02:17 America/Toronto each night, the promotion App attempts the current `dev` candidate. Pending or failed gates leave the previous nightly in place; no earlier commit is substituted. GitHub may delay scheduled runs.
 
-Players download the Linux or Windows archive and run its binary to import their own supported Emerald ROM, then launch the game. The ROM, its path, and its contents never enter the repository, Actions, artifacts, logs, or releases. Only the repository owner's GitHub account, including automation running under it, may record local evidence as a `release-readiness` status; the recorder refuses any other identity. The status is not a promotion gate. The official-ROM verification is a clean release-build import of that ROM into a fresh pack at the live `dev` SHA:
+Players download the Linux or Windows archive and run its binary to import their own supported Emerald ROM, then launch the game. The ROM, its path, and its contents never enter the repository, Actions, artifacts, logs, or releases. Only the repository owner's GitHub account, including automation running under it, may record local evidence as a `release-readiness` status; the recorder refuses any other identity. The status is not a promotion gate. The official-ROM verification is a clean release-build import of that ROM into a fresh pack, built from a clean checkout of the live `dev` SHA (`git status --porcelain` empty, `git rev-parse HEAD` equal to `<dev-sha>`):
 
 ```bash
 cargo build --release -p pokeemerald-rs
 POKEEMERALD_PACK=<fresh temp dir>/pokeemerald.pack ./target/release/pokeemerald-rs --import-rom /path/to/pokeemerald.gba
 ```
 
-On exit 0, record the result from the owner's account with `python3 scripts/record_nightly_readiness.py --repository LunchBox951/pokeemerald-rs <dev-sha>`. The real-ROM equivalence check in [`AGENTS.md` §Verify](AGENTS.md#verify) is a deeper optional check, not part of readiness.
+On exit 0, record the result from the owner's account with `python3 scripts/record_nightly_readiness.py --repository LunchBox951/pokeemerald-rs <dev-sha>`. The real-ROM equivalence check in [`AGENTS.md` §Verify](AGENTS.md#verify) is separate from readiness; that section says when a change requires it.
 
 Nightlies may contain unknown gameplay and save issues. Playtesting and explicit owner approval remain required before promotion to `stable` and again to `main`.
 

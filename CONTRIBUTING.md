@@ -54,7 +54,7 @@ python3 scripts/ledger.py mark include/random.h \
 python3 scripts/ledger.py verify
 ```
 
-Run `python3 scripts/ledger.py -h` and focused subcommand help for current statuses, arguments, and completion rules. Never hand-edit `ledger/pokeemerald.json`. A `--reason` states why the destination covers the artifact. Cite an issue only to name where a stubbed or partial entry's remaining work is tracked; which issue did the work belongs to git history, not the reason.
+Run `python3 scripts/ledger.py -h` and focused subcommand help for current statuses, arguments, and completion rules. Never hand-edit `ledger/pokeemerald.json`. A `--reason` states why the destination covers the artifact. Cite an issue only to name where a stubbed or partial entry's remaining work is tracked; the issue that did the work belongs in git history, not in the reason.
 
 ## Pull requests
 
