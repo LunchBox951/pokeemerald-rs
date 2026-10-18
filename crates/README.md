@@ -6,7 +6,7 @@ Read this file for workspace-wide Rust conventions and responsibility routing. C
 
 - Use the stable Rust toolchain. Nightly requires owner approval.
 - Model subsystems as owned types with methods, traits for polymorphism, and explicit module boundaries. Do not introduce global mutable state `(oop-boundaries)`.
-- Keep one concept per hand-authored module. Treat roughly 600 lines as a prompt to re-check the boundary, not as a generated-data limit.
+- Keep one concept per hand-authored module. A hand-authored file over roughly 600 lines is a design smell `(oop-boundaries)`; [`docs/principles.md`](../docs/principles.md) owns the rule, including its exception for generated and data-shaped files.
 - Require a `// SAFETY:` block that states the invariant for every `unsafe` use.
 - Prefer narrow `#[expect(..., reason = "...")]` for unconditional lint exceptions. Use `#[allow(..., reason = "...")]` only when configuration can make the lint unavailable.
 - Use concrete per-crate error enums. Do not add `anyhow` to library crates.
