@@ -1,5 +1,5 @@
-//! Issue #353's undecodable-slot retention (a party slot whose secure region
-//! fails its own checksum) and issue #1371's matching retention for a
+//! Undecodable-slot retention (a party slot whose secure region fails its
+//! own checksum) and the matching retention for a
 //! genuinely empty slot (`player_party_count == 0`): neither case is this
 //! port's to rebuild or zero on the next ordinary save.
 

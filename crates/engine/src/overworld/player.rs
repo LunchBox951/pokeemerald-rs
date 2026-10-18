@@ -877,7 +877,15 @@ impl PlayerState {
         maps: &impl ConnectedMapData,
     ) -> Result<Landing, Collision> {
         let (dx, dy) = direction.delta();
-        let target = (self.position.0 + dx, self.position.1 + dy);
+        // `PlayerState::new` accepts any `i32` pair, so a coordinate at the
+        // numeric edge has no representable neighbour: that is no tile at all.
+        let (Some(x), Some(y)) = (
+            self.position.0.checked_add(dx),
+            self.position.1.checked_add(dy),
+        ) else {
+            return Err(Collision::Impassable);
+        };
+        let target = (x, y);
 
         if let Some(cell) = runtime.metatile_cell(target.0, target.1) {
             let target_behavior = runtime

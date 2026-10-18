@@ -1,6 +1,6 @@
-//! Turn-engine integration tests (S-6 housekeeping, issue #209), split by
-//! behavior family while exercising only the public `battle` API. Shared
-//! scripted-RNG and deterministic-mon fixtures remain in `common/mod.rs`.
+//! Turn-engine integration tests (S-6), split by behavior family while
+//! exercising only the public `battle` API. Shared scripted-RNG and
+//! deterministic-mon fixtures live in `common/mod.rs`.
 
 mod common;
 

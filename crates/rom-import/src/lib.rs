@@ -1,4 +1,4 @@
-//! ROM import (S-4, F-3, Discussion #71 policy C, issue #122): turn a
+//! ROM import (S-4, F-3, Discussion #71 policy C): turn a
 //! user-supplied Pokemon Emerald cartridge image into an asset pack.
 //!
 //! Policy A extracts assets from a `pokeemerald` decomp checkout, which
