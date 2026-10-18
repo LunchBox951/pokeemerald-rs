@@ -76,6 +76,8 @@ pack from source with `cargo xtask extract` instead (see
 [Building](#building)); the ROM import's output is held to that pack by the
 equivalence harness.
 
+Compatible packs keep working across application updates. Extract again when the game reports incompatible, incomplete, or damaged game data; extraction does not change your saved game.
+
 ## Building
 
 On Debian or Ubuntu, install the Rust toolchain and the ALSA development package (`libasound2-dev`). Equivalent platform audio and window development libraries may be required elsewhere.

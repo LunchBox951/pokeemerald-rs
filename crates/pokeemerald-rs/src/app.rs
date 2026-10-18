@@ -528,7 +528,7 @@ impl App {
         let source = crate::pack_source::PackSource::Explicit(pack.clone());
         Self::boot(
             || {
-                let pack = assets::AssetPack::load(pack).map_err(TitleSceneError::Pack)?;
+                let pack = crate::load_ready_pack(pack).map_err(TitleSceneError::Readiness)?;
                 title::TitleScene::from_pack(&pack)
             },
             || Ok(Platform::new_headless()),
