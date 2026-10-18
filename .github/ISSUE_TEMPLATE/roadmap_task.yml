@@ -1,5 +1,5 @@
 name: Roadmap task
-description: A unit of roadmap work that ladders up to a v1 acceptance criterion.
+description: A unit of work that ladders up to a v1 acceptance criterion, or maintenance filed with `none`.
 labels: ["needs-review"]
 body:
   - type: markdown
