@@ -61,7 +61,7 @@ Run `python3 scripts/ledger.py -h` and focused subcommand help for current statu
 Keep each pull request focused and complete its template honestly:
 
 - Link its issue and acceptance ID, or explain `none`.
-- Record test evidence and outcomes.
+- Record test evidence and outcomes for the current head. After pushing a fix, update the evidence to match the new head.
 - State ledger impact as `none`, `verify-only`, or the touched entries.
 - State dependency impact as `none` or link the exact owner approval.
 
