@@ -49,6 +49,7 @@
 //!   whenever a menu is open. There is deliberately **no** save on exit:
 //!   upstream writes nothing when the lid closes.
 
+use engine::settings::GameSettings;
 use engine::text::render::PrinterInput;
 use platform::{ButtonState, Buttons, Frame};
 
@@ -58,9 +59,10 @@ use crate::main_menu::{self, MainMenuItem, MainMenuScene, MainMenuSceneError, Ma
 use crate::new_game::NewGameOptions;
 use crate::title::TitleScene;
 use fade_wait::{
-    advance_main_menu, advance_main_menu_fade_wait, advance_title, advance_title_fade_wait,
-    MainMenuFadeWait, TitleFadeWait,
+    advance_main_menu, advance_main_menu_fade_in, advance_main_menu_fade_wait, advance_title,
+    advance_title_fade_wait, MainMenuFadeIn, MainMenuFadeWait, TitleFadeWait,
 };
+use options::{advance_options, OptionsState};
 
 /// The battle-turn finalization (issue #405) shared by all three headless
 /// battle drivers -- see that module's docs for the shared decision and
@@ -85,6 +87,9 @@ mod move_learn;
 /// Miguel, Rhett, Marcos, Isabelle, Pete) build their battles through this
 /// module.
 pub(crate) mod npc_trainer_battle;
+mod options;
+#[cfg(test)]
+mod options_tests;
 pub(crate) mod overworld_phase;
 /// The scripted Route 103 rival battle's own choice of trainer:
 /// [`overworld_phase`]'s `route103_rival_trigger` (beside its
@@ -203,9 +208,15 @@ pub(crate) enum AppScene {
     /// Waiting for the main menu's black front-end palette fade before the
     /// [`MainMenuAction`] a fresh A confirmed on `NEW GAME`/`CONTINUE`
     /// dispatches (I-3, issue #1329: module docs' "Waiting for the
-    /// front-end palette fade" section). `OPTION`'s swallowed press never
-    /// reaches this state -- module docs' boundary note.
+    /// front-end palette fade" section). `OPTION` enters it too, dispatching to
+    /// the Options screen.
     MainMenuFadeWait(Box<MainMenuFadeWait>),
+    /// The Options screen, opened from the main menu's `OPTION` item (I-6):
+    /// it retains the menu it returns to.
+    Options(Box<OptionsState>),
+    /// The main menu fading in from black after the Options screen returns
+    /// (`pokeemerald/src/main_menu.c:583-586`).
+    MainMenuFadeIn(Box<MainMenuFadeIn>),
     /// Birch's speech, paging through [`crate::intro::speech`]'s text.
     Intro(Box<IntroScene>),
     /// The intro finished, but [`OverworldPhase::load_default`] failed once
@@ -251,55 +262,41 @@ const fn menu_type_for(saved: &SavedGame) -> MainMenuType {
     }
 }
 
-/// `gSaveBlock2Ptr->optionsWindowFrameType` (`main_menu.c:2191-2193`), as a
-/// pure decision the `Title` -> `MainMenu` transition acts on -- so which
-/// border a given boot verdict produces is pinned by a pack-less test too,
-/// the same [`menu_type_for`] already is.
-const fn window_frame_for(saved: &SavedGame) -> u8 {
+/// `SetDefaultOptions` (`new_game.c:91-98`) for the boot verdicts that clear
+/// `SaveBlock2` -- exactly [`crate::game_save::SaveFileStatus::boot_clears_save_block2`]'s
+/// `Empty`/`Corrupt` cases (`pokeemerald/src/intro.c:1154-1156`), even when a
+/// checksum-valid block was recovered. Run once, as the boot load lands in
+/// [`title_to_main_menu`], so the block the Options screen edits is the live
+/// one: upstream defaults only at boot, never again on each read.
+fn apply_boot_defaults(saved: &mut SavedGame) {
     if saved.status.boot_clears_save_block2() {
-        // `SetDefaultOptions` (`new_game.c:94`) puts the cleared block's
-        // frame back to 0 even when a checksum-valid block was recovered.
-        0
-    } else {
-        saved.block2.options_window_frame_type
+        GameSettings::from(NewGameOptions::DEFAULT).write_to_save(&mut saved.block2);
     }
+}
+
+/// `gSaveBlock2Ptr->optionsWindowFrameType` (`main_menu.c:2191-2193`): the
+/// live block's frame, which [`apply_boot_defaults`] has already defaulted
+/// for a boot that cleared it and the Options screen may since have changed.
+const fn window_frame_for(saved: &SavedGame) -> u8 {
+    saved.block2.options_window_frame_type
 }
 
 /// The [`NewGameOptions`] a NEW GAME confirm on `saved` hands onward to
 /// [`intro::load`] and, once the intro finishes,
-/// [`crate::new_game::init_save_blocks_with_options`] (issue #1125). This is
-/// the one place that owns the status/option contract; every other site
-/// that needs it links here instead of restating it.
+/// [`crate::new_game::init_save_blocks_with_options`] (issue #1125): the live
+/// block's six options.
 ///
 /// `NewGameInitData` never resets any `options*` field itself
-/// (`pokeemerald/src/new_game.c:149-207`), so only a boot verdict that
-/// already re-defaulted `SaveBlock2` via `SetDefaultOptions` -- exactly
-/// [`crate::game_save::SaveFileStatus::boot_clears_save_block2`]'s `Empty`/
-/// `Corrupt` cases (`pokeemerald/src/intro.c:1154-1156`) -- reaches
-/// [`NewGameOptions::DEFAULT`]. Every other status, `Ok`/`Error` alike, and
-/// this port's own `NoFlash`, carries `saved.block2`'s own preferences forward
-/// instead -- mirroring [`window_frame_for`]'s identical boot-verdict split.
-///
-/// `NoFlash` is not a rescued block: [`crate::game_save::SaveSlot::load`]
-/// synthesizes a zero-filled `SaveBlock2` for it rather than recovering one
-/// (no readable image exists to recover from). Carrying its zero bytes
-/// forward still mirrors upstream, though, rather than diverging from it: a
-/// genuine `SAVE_STATUS_NO_FLASH` boot leaves `gSaveBlock2Ptr` equally
-/// untouched, since `LoadGameSave` returns before ever reading it
-/// (`pokeemerald/src/save.c:871-889`).
-const fn new_game_options_for(saved: &SavedGame) -> NewGameOptions {
-    if saved.status.boot_clears_save_block2() {
-        NewGameOptions::DEFAULT
-    } else {
-        NewGameOptions {
-            text_speed: saved.block2.options_text_speed,
-            window_frame_type: saved.block2.options_window_frame_type,
-            button_mode: saved.block2.options_button_mode,
-            sound: saved.block2.options_sound,
-            battle_style: saved.block2.options_battle_style,
-            battle_scene_off: saved.block2.options_battle_scene_off,
-        }
-    }
+/// (`pokeemerald/src/new_game.c:149-207`), so whatever `saved.block2` holds
+/// -- the recovered save's own preferences, [`apply_boot_defaults`]' defaults
+/// for an `Empty`/`Corrupt` boot, or an edit the Options screen committed
+/// since -- carries forward. `NoFlash` is not a rescued block:
+/// [`crate::game_save::SaveSlot::load`] synthesizes a zero-filled
+/// `SaveBlock2` for it, and carrying those zero bytes forward still mirrors
+/// a genuine `SAVE_STATUS_NO_FLASH` boot, which leaves `gSaveBlock2Ptr`
+/// untouched (`pokeemerald/src/save.c:871-889`).
+fn new_game_options_for(saved: &SavedGame) -> NewGameOptions {
+    GameSettings::from_save(&saved.block2).into()
 }
 
 /// Which of upstream's `ACTION_*` values confirming `item` maps to
@@ -311,11 +308,9 @@ enum MainMenuAction {
     Continue,
     /// `ACTION_NEW_GAME` (`:1055-1063`): start the Birch-speech intro.
     NewGame,
-    /// No action this port performs -- `ACTION_OPTION` (`:1070`), whose
-    /// settings screen is not built (see [`crate::main_menu`]'s scope
-    /// notes). The press is swallowed rather than incorrectly launching
-    /// something else.
-    None,
+    /// `ACTION_OPTION` (`:1070-1073`): open the Options screen, which
+    /// returns to this menu.
+    Options,
 }
 
 /// What confirming (A) `item` on the main menu does, as a pure decision
@@ -329,7 +324,7 @@ const fn menu_action(item: MainMenuItem) -> MainMenuAction {
     match item {
         MainMenuItem::Continue => MainMenuAction::Continue,
         MainMenuItem::NewGame => MainMenuAction::NewGame,
-        MainMenuItem::Option => MainMenuAction::None,
+        MainMenuItem::Option => MainMenuAction::Options,
     }
 }
 
@@ -452,7 +447,8 @@ fn title_to_main_menu(
     pack_source: &crate::pack_source::PackSource,
     save_slot: &mut SaveSlot,
 ) -> Option<(AppScene, Box<Frame>)> {
-    let saved = save_slot.load();
+    let mut saved = save_slot.load();
+    apply_boot_defaults(&mut saved);
     match main_menu::load_with_window_frame(
         pack_source,
         menu_type_for(&saved),
@@ -522,6 +518,8 @@ pub(crate) fn advance_scene(
             (AppScene::MainMenu(state), frame)
         }
         AppScene::MainMenuFadeWait(wait) => advance_main_menu_fade_wait(wait, pack_source),
+        AppScene::Options(state) => advance_options(state, buttons, &pack_source),
+        AppScene::MainMenuFadeIn(fade) => advance_main_menu_fade_in(fade),
         // Issue #393: B is an ordinary dialogue-advance button here, not a
         // whole-intro skip -- `intro_printer_input`'s own doc comment.
         AppScene::Intro(mut intro_scene) => {
