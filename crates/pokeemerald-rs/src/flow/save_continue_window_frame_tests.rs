@@ -1,4 +1,4 @@
-//! Issue #795: the main-menu window-frame chrome a continuable save renders
+//! The main-menu window-frame chrome a continuable save renders
 //! with. Synthetic packs come from the shared [`crate::pack_test_support`].
 
 use super::save_continue_support::{new_game_phase, save_from_the_start_menu};

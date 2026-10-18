@@ -1,6 +1,6 @@
 //! The handle identity query shared by `record-snapshot` and the extract
 //! publish path (F-3: `xtask extract` publishes its pack only after the staged
-//! file's identity is verified; #1886).
+//! file's identity is verified).
 
 /// The volume and file ID of the object a handle refers to, read the way
 /// `rom-import`'s `WindowsFileIdentity` does: the 128-bit `FileIdInfo`, or the
