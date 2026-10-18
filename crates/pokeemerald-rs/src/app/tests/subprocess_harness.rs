@@ -9,21 +9,98 @@ use super::super::App;
 const START_TITLE_MUSIC_BOUNDARY_CHILD: &str =
     "POKEEMERALD_RS_923_START_TITLE_MUSIC_BOUNDARY_CHILD";
 
-/// A scratch, valid but entryless asset pack: an empty
-/// [`pack_format::PackWriter`] already serializes exactly this, at the live
-/// [`pack_format::FORMAT_VERSION`]. Path is unique per test/thread, mirroring
-/// `flow::tests::TempSave::new`.
-fn write_empty_scratch_pack(label: &str) -> std::path::PathBuf {
-    let path = std::env::temp_dir().join(format!(
-        "pokeemerald-rs-923-{label}-{}-{:?}.pack",
+/// The `attempt`th candidate scratch path: unique per test/thread, mirroring
+/// `flow::tests::TempSave::new`, with a counter after the first to step past an occupied name.
+fn scratch_pack_candidate(label: &str, attempt: u32) -> std::path::PathBuf {
+    let suffix = if attempt == 0 {
+        String::new()
+    } else {
+        format!("-{attempt}")
+    };
+    std::env::temp_dir().join(format!(
+        "pokeemerald-rs-923-{label}-{}-{:?}{suffix}.pack",
         std::process::id(),
         std::thread::current().id()
-    ));
+    ))
+}
+
+/// A scratch, valid but entryless asset pack: an empty
+/// [`pack_format::PackWriter`] already serializes exactly this, at the live
+/// [`pack_format::FORMAT_VERSION`]. The file is created exclusively
+/// (`O_EXCL`), so a name already occupied -- including by a symlink -- is
+/// skipped rather than followed and truncated, and the bytes go through the
+/// handle that creation returned.
+fn write_empty_scratch_pack(label: &str) -> std::path::PathBuf {
+    use std::io::Write as _;
+
     let bytes = pack_format::PackWriter::new()
         .finish()
         .expect("an entryless pack always serializes");
-    std::fs::write(&path, bytes).expect("the scratch pack path must be writable");
-    path
+    for attempt in 0..64 {
+        let path = scratch_pack_candidate(label, attempt);
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(mut file) => {
+                file.write_all(&bytes)
+                    .expect("the scratch pack path must be writable");
+                return path;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => panic!("the scratch pack path must be creatable: {error}"),
+        }
+    }
+    panic!("every candidate scratch pack name was already occupied");
+}
+
+/// A symlink planted at the first candidate name must be left alone: its
+/// target keeps its contents and the pack lands at a different name.
+#[cfg(unix)]
+#[test]
+fn scratch_pack_creation_does_not_write_through_a_planted_symlink() {
+    let label = "symlink-regression";
+    let target = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-923-{label}-target-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    {
+        use std::io::Write as _;
+
+        let mut target_file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&target)
+            .expect("the symlink target must be creatable");
+        target_file
+            .write_all(b"precious")
+            .expect("the symlink target must be writable");
+    }
+    let planted = (0..64)
+        .map(|attempt| scratch_pack_candidate(label, attempt))
+        .find(|path| match std::os::unix::fs::symlink(&target, path) {
+            Ok(()) => true,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => false,
+            Err(error) => panic!("the symlink must be plantable: {error}"),
+        })
+        .expect("a candidate name must be free for the symlink");
+
+    let written = write_empty_scratch_pack(label);
+
+    let target_contents = std::fs::read_to_string(&target);
+    let pack_exists = written.is_file();
+    drop(std::fs::remove_file(&written));
+    drop(std::fs::remove_file(&planted));
+    drop(std::fs::remove_file(&target));
+    assert_eq!(
+        target_contents.as_deref().ok(),
+        Some("precious"),
+        "the symlink target must stay unchanged"
+    );
+    assert_ne!(written, planted, "the occupied name must be skipped");
+    assert!(pack_exists, "the pack must be written at the fresh name");
 }
 
 /// Re-executes this test binary as a child against a scratch entryless pack
