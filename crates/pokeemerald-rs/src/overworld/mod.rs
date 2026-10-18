@@ -504,6 +504,21 @@ impl OverworldScene {
         self.compose_with_sprite_entries(player, tick, &player_first_oam_entries)
     }
 
+    /// [`Self::compose`] with object-event sprites drawn from `objects`' live
+    /// tile, facing, and elevation instead of the scene's authored templates.
+    /// `objects` must be seeded from this scene's map events.
+    #[must_use]
+    pub fn compose_live(
+        &self,
+        player: &PlayerState,
+        event_data: &EventData,
+        tick: u32,
+        objects: &engine::overworld::object_event::ObjectEventCollection,
+    ) -> Framebuffer {
+        let player_first_oam_entries = self.sprites.live_entries(objects, player, event_data);
+        self.compose_with_sprite_entries(player, tick, &player_first_oam_entries)
+    }
+
     /// [`Self::compose`] with every sprite layer empty: only the three
     /// background layers, no player avatar or object-event sprite.
     #[must_use]

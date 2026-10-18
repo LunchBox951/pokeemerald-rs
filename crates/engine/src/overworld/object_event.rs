@@ -3,9 +3,9 @@
 //! The visibility/spatial queries below still read static object-event templates.
 //! [`ObjectEventState`] is the movable position/elevation/facing/movement representation a caller
 //! holds, either as a standalone script-local copy or, via [`ObjectEventCollection`], as one entry
-//! in a map-scoped collection keyed by `local_id`. Neither form is yet wired into rendering,
-//! collision, interaction, or sight -- those still consult the static templates this module also
-//! exposes.
+//! in a map-scoped collection keyed by `local_id`. Overworld rendering reads the
+//! collection's live state; collision, interaction, and sight still consult the static templates
+//! this module also exposes.
 
 use assets::{MovementType, ObjectEvent};
 
@@ -50,8 +50,14 @@ const SPAWN_MAX_Y_OFFSET: i32 = 9;
 /// spawn window; admitted 32-pixel sprites reach the 256-pixel OAM wrap with no headroom.
 #[must_use]
 pub fn object_event_is_in_view(event: &ObjectEvent, player_position: (i32, i32)) -> bool {
-    let x_offset = i32::from(event.x) - player_position.0;
-    let y_offset = i32::from(event.y) - player_position.1;
+    tile_is_in_view((i32::from(event.x), i32::from(event.y)), player_position)
+}
+
+/// [`object_event_is_in_view`] for an object's current tile rather than its authored one.
+#[must_use]
+pub fn tile_is_in_view(tile: (i32, i32), player_position: (i32, i32)) -> bool {
+    let x_offset = tile.0 - player_position.0;
+    let y_offset = tile.1 - player_position.1;
     (SPAWN_MIN_X_OFFSET..=SPAWN_MAX_X_OFFSET).contains(&x_offset)
         && (SPAWN_MIN_Y_OFFSET..=SPAWN_MAX_Y_OFFSET).contains(&y_offset)
 }
@@ -203,8 +209,8 @@ pub const fn trainer_facing_movement_type(facing: Direction) -> MovementType {
 /// object-event template.
 ///
 /// Template overrides remain inside this value; map queries and later spawns do not observe them
-/// unless a caller holds this value inside an [`ObjectEventCollection`], which does not itself
-/// feed those queries yet. Walking commits the destination immediately, while the owning script
+/// unless a caller holds this value inside an [`ObjectEventCollection`], which feeds rendering
+/// but not those queries. Walking commits the destination immediately, while the owning script
 /// or collection entry tracks animation time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ObjectEventState {

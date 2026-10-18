@@ -62,6 +62,11 @@ impl ObjectEventCollection {
         }
     }
 
+    /// Iterates entries in declaration order.
+    pub fn iter(&self) -> impl Iterator<Item = &LiveObjectEvent> {
+        self.entries.iter()
+    }
+
     /// Returns the entry whose template declares `local_id`, or the first
     /// such entry in declaration order if `local_id` repeats, matching
     /// upstream's linear scan (`GetObjectEventIdByLocalId`,
