@@ -7,7 +7,7 @@ body:
       value: |
         Roadmap work lives in GitHub, not in committed plan docs (constitution-vs-roadmap).
         Each task names the stable acceptance ID in docs/acceptance/v1.md it advances,
-        or `none` with a concrete rationale. CONTRIBUTING.md "Issues and labels" owns this shape.
+        or `none` with a concrete rationale.
   - type: textarea
     id: task
     attributes:
