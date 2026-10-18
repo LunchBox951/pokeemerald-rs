@@ -318,6 +318,10 @@ impl OverworldPhase {
     /// results claim the frame first, and only a menu that really builds
     /// skips this frame's movement, as upstream skips `PlayerStep` on a
     /// claimed frame.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one frame pipeline whose gate order the doc comment above fixes"
+    )]
     pub(in crate::flow) fn step(&mut self, buttons: ButtonState) {
         // Tileset tile animation keeps advancing even while a dialog box
         // freezes movement (struct docs on `tick`), so this runs
@@ -401,7 +405,10 @@ impl OverworldPhase {
             MapHeaderTable::new().header(self.map_id),
             map_events.as_ref(),
         ) {
-            let runtime = self.scene.runtime(self.map_id, header, events);
+            let runtime = self
+                .scene
+                .runtime(self.map_id, header, events)
+                .with_object_events(&self.object_events);
 
             // `in_transit` read before this call's own movement, which is
             // what defers a completed step to the call after the one that

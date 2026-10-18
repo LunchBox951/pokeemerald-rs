@@ -1,11 +1,12 @@
 //! Object-event visibility, spatial queries, initial facing, and live state.
 //!
-//! The visibility/spatial queries below still read static object-event templates.
+//! The visibility/spatial queries read the runtime's bound live collection
+//! ([`MapRuntime::with_object_events`]) by live position and elevation, and
+//! authored templates when none is bound.
 //! [`ObjectEventState`] is the movable position/elevation/facing/movement representation a caller
 //! holds, either as a standalone script-local copy or, via [`ObjectEventCollection`], as one entry
-//! in a map-scoped collection keyed by `local_id`. Neither form is yet wired into rendering,
-//! collision, interaction, or sight -- those still consult the static templates this module also
-//! exposes.
+//! in a map-scoped collection keyed by `local_id`. Collision and interaction read the collection;
+//! rendering and sight still consult the static templates this module also exposes.
 
 use assets::{MovementType, ObjectEvent};
 
@@ -546,6 +547,129 @@ mod tests {
         let data = EventData::new();
 
         let player = PlayerState::new((2, 2), 3, Direction::North);
+        assert!(facing_object_event(&player, &runtime, &data).is_none());
+    }
+
+    fn live_collection(
+        templates: &'static [ObjectEvent],
+        moves: &[(u8, Direction)],
+    ) -> &'static ObjectEventCollection {
+        let mut collection = ObjectEventCollection::from_templates(templates);
+        for &(id, direction) in moves {
+            collection.get_mut(id).unwrap().state_mut().walk(direction);
+        }
+        Box::leak(Box::new(collection))
+    }
+
+    fn ids_at(runtime: &MapRuntime<'_>, x: i32, y: i32, elevation: u8) -> Vec<u8> {
+        runtime
+            .object_events_at(x, y, elevation)
+            .map(|o| o.local_id)
+            .collect()
+    }
+
+    #[test]
+    fn a_moved_object_vacates_its_authored_tile_and_occupies_its_live_tile() {
+        let grid_bytes = flat_grid_bytes(5, 5);
+        let templates: &'static [ObjectEvent] = Box::leak(Box::new([object(9, 2, 2, 3, "0")]));
+        let events = events_with(templates);
+        let live = live_collection(templates, &[(9, Direction::East)]);
+        let runtime = runtime_with_object(&grid_bytes, &events).with_object_events(live);
+
+        assert_eq!(ids_at(&runtime, 2, 2, 3), Vec::<u8>::new());
+        assert_eq!(ids_at(&runtime, 3, 2, 3), vec![9]);
+        let found = runtime.object_events_at(3, 2, 3).next().unwrap();
+        assert!(
+            std::ptr::eq(found, &raw const templates[0]),
+            "template metadata is kept"
+        );
+        assert_eq!((found.x, found.y), (2, 2));
+
+        let unbound = runtime_with_object(&grid_bytes, &events);
+        assert_eq!(ids_at(&unbound, 2, 2, 3), vec![9]);
+        assert_eq!(ids_at(&unbound, 3, 2, 3), Vec::<u8>::new());
+    }
+
+    #[test]
+    fn an_empty_bound_collection_does_not_fall_back_to_templates() {
+        let grid_bytes = flat_grid_bytes(5, 5);
+        let templates: &'static [ObjectEvent] = Box::leak(Box::new([object(9, 2, 2, 3, "0")]));
+        let events = events_with(templates);
+        let empty: &'static ObjectEventCollection =
+            Box::leak(Box::new(ObjectEventCollection::from_templates(&[])));
+        let runtime = runtime_with_object(&grid_bytes, &events).with_object_events(empty);
+        assert_eq!(ids_at(&runtime, 2, 2, 3), Vec::<u8>::new());
+    }
+
+    #[test]
+    fn live_stacks_keep_declaration_order_and_hide_flags_filter_inside_the_search() {
+        let grid_bytes = flat_grid_bytes(5, 5);
+        let templates: &'static [ObjectEvent] = Box::leak(Box::new([
+            object(
+                9,
+                1,
+                2,
+                3,
+                "FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_RIVAL_BEDROOM",
+            ),
+            object(2, 4, 2, 3, "0"),
+        ]));
+        let events = events_with(templates);
+        let live = live_collection(
+            templates,
+            &[
+                (9, Direction::East),
+                (9, Direction::East),
+                (2, Direction::West),
+            ],
+        );
+        let runtime = runtime_with_object(&grid_bytes, &events).with_object_events(live);
+        let hide = assets::object_event_flags::resolve(
+            "FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_RIVAL_BEDROOM",
+        )
+        .unwrap();
+        let mut data = EventData::new();
+        let visible =
+            |data: &EventData| visible_object_event_at(&runtime, 3, 2, 3, data).map(|o| o.local_id);
+
+        assert_eq!(ids_at(&runtime, 3, 2, 3), vec![9, 2]);
+        assert_eq!(visible(&data), Some(9));
+        data.flag_set(hide).unwrap();
+        assert_eq!(visible(&data), Some(2));
+    }
+
+    #[test]
+    fn live_elevation_is_compared_with_the_wildcard_rule() {
+        let grid_bytes = flat_grid_bytes(5, 5);
+        let templates: &'static [ObjectEvent] = Box::leak(Box::new([object(9, 2, 2, 3, "0")]));
+        let events = events_with(templates);
+        let mut collection = ObjectEventCollection::from_templates(templates);
+        let state = collection.get_mut(9).unwrap().state_mut();
+        state.walk(Direction::East);
+        state.elevation = 5;
+        let live: &'static ObjectEventCollection = Box::leak(Box::new(collection));
+        let runtime = runtime_with_object(&grid_bytes, &events).with_object_events(live);
+
+        assert_eq!(ids_at(&runtime, 3, 2, 3), Vec::<u8>::new());
+        assert_eq!(ids_at(&runtime, 3, 2, 5), vec![9]);
+        assert_eq!(ids_at(&runtime, 3, 2, 0), vec![9]);
+    }
+
+    #[test]
+    fn facing_object_event_finds_the_object_at_its_live_tile() {
+        let grid_bytes = flat_grid_bytes(5, 5);
+        let templates: &'static [ObjectEvent] = Box::leak(Box::new([object(9, 2, 0, 3, "0")]));
+        let events = events_with(templates);
+        let live = live_collection(templates, &[(9, Direction::South)]);
+        let runtime = runtime_with_object(&grid_bytes, &events).with_object_events(live);
+        let data = EventData::new();
+
+        let player = PlayerState::new((2, 2), 3, Direction::North);
+        assert_eq!(
+            facing_object_event(&player, &runtime, &data).map(|o| o.local_id),
+            Some(9)
+        );
+        let player = PlayerState::new((2, 1), 3, Direction::North);
         assert!(facing_object_event(&player, &runtime, &data).is_none());
     }
 
