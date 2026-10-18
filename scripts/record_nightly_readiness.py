@@ -142,7 +142,7 @@ def record_readiness(client: GitHubClient, candidate_sha: str) -> None:
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     """Parse the tested commit and optional explicit repository."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("candidate_sha", help="full dev SHA the local ROM verification tested")
+    parser.add_argument("candidate_sha", help="full dev SHA the official-ROM verification tested")
     parser.add_argument(
         "--repository",
         help="owner/name repository (defaults to the current gh repository)",
