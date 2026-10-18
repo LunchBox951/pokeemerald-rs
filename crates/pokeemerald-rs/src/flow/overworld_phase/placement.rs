@@ -1,4 +1,4 @@
-//! Where a continued save puts the player (module split of
+//! Where a continued save puts the player (a submodule of
 //! [`crate::flow::overworld_phase`], `oop-boundaries`): the elevation and
 //! facing [`super::OverworldPhase::from_saved`] places
 //! [`engine::overworld::PlayerState`] with.
@@ -11,7 +11,7 @@
 //! [`engine::overworld::warp_destination_position`] for a resolved warp and
 //! [`super::OverworldPhase::warp_to_position`] for an explicit-coordinate
 //! warp, so the three placement paths cannot drift apart on the same
-//! upstream rule (issue #379)), while the facing comes from the *save*
+//! upstream rule), while the facing comes from the *save*
 //! (`LoadObjectEvents`, `src/load_save.c:188-194`) and only falls back to
 //! the tile when the save holds none. See
 //! [`super::OverworldPhase::from_saved`]'s "What a continue restores" for the

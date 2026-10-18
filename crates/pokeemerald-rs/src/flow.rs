@@ -1,9 +1,8 @@
-//! The real (windowed) game-flow state machine (I-3, issue #149): title ->
+//! The real (windowed) game-flow state machine (I-3): title ->
 //! main menu -> intro -> overworld.
 //!
-//! Split out of [`crate::app`] to keep that module focused on the
-//! platform/window shell (`one module = one concept` `(oop-boundaries)`):
-//! [`AppScene`] is the state, [`advance_scene`] is the one-frame transition
+//! [`crate::app`] stays focused on the platform/window shell (`one module =
+//! one concept` `(oop-boundaries)`): [`AppScene`] is the state, [`advance_scene`] is the one-frame transition
 //! function [`crate::app::App::step`] delegates to. See [`crate::app`]'s
 //! module docs for the transition diagram (`Title` -> `MainMenu` -> `Intro`
 //! -> `Overworld`) and the "log-or-ignore is fine" failure policy for a
@@ -15,7 +14,7 @@
 //! single frame -- see that variant's own doc comment and
 //! [`should_retry_overworld_load`].
 //!
-//! # Waiting for the front-end palette fade (I-3, issue #1329)
+//! # Waiting for the front-end palette fade (I-3)
 //!
 //! `Title` -> `MainMenu` and a `MainMenu` confirm on `NEW GAME`/`CONTINUE`
 //! hold the outgoing frame through a [`rendering::NormalPaletteFade`]
@@ -25,13 +24,11 @@
 //! `main_menu.c:884-894,936-943`) -- see [`AppScene::TitleFadeWait`] and
 //! [`AppScene::MainMenuFadeWait`] for the waiting states themselves.
 //!
-//! [`AnimatedTitle`] is the pre-I-3 per-frame title-animation state,
-//! unchanged in shape and behaviour from before this issue (see
-//! [`advance_scene`]'s `Title` arm and `crate::app`'s "Animating the real
-//! title screen" docs) -- only its ownership moved here, into one variant of
-//! [`AppScene`] instead of its own dedicated `App` field.
+//! [`AnimatedTitle`] is the per-frame title-animation state, owned by one
+//! variant of [`AppScene`] (see [`advance_scene`]'s `Title` arm and
+//! `crate::app`'s "Animating the real title screen" docs).
 //!
-//! # Where the save file enters the machine (I-6, issue #214)
+//! # Where the save file enters the machine (I-6)
 //!
 //! Two points, both taking the session's [`SaveSlot`] as an argument rather
 //! than reaching for a global `(oop-boundaries)`:
@@ -43,15 +40,14 @@
 //!   The loaded blocks ride along in [`MainMenuState`] until
 //!   [`MainMenuAction::Continue`] hands them to
 //!   [`OverworldPhase::continue_saved_game`].
-//! * **Write**, from the field start menu (I-6, issue #232): `START` in
+//! * **Write**, from the field start menu: `START` in
 //!   the overworld opens [`crate::start_menu`], and its `SAVE` action runs
 //!   upstream's own confirm/overwrite chain before calling
 //!   [`SaveSlot::store`] and friends.
 //!   [`advance_scene`]'s `Overworld` arm drives that through
 //!   [`OverworldPhase::advance_start_menu_frame`], which owns the frame
 //!   whenever a menu is open. There is deliberately **no** save on exit:
-//!   upstream writes nothing when the lid closes, and issue #214's
-//!   `save_on_exit` stand-in existed only until this flow landed.
+//!   upstream writes nothing when the lid closes.
 
 use engine::text::render::PrinterInput;
 use platform::{ButtonState, Buttons, Frame};

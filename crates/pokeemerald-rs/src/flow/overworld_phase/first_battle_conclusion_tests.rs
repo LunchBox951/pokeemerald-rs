@@ -1,4 +1,4 @@
-//! Tests for [`super::first_battle_conclusion`] (issue #251):
+//! Tests for [`super::first_battle_conclusion`]:
 //! `Route101_EventScript_BirchsBag`'s post-battle heal, its three var
 //! writes, and the warp to Birch's lab -- pinned per-area, the same split
 //! `first_battle_trigger_tests`/`route103_rival_tests` already use.

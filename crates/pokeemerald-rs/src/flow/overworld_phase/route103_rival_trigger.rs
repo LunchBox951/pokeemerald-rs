@@ -1,8 +1,8 @@
-//! The Route 103 rival battle's overworld trigger (issue #248, I-5): rival
-//! sprite setup on map entry, the A-press interaction that starts the fight,
-//! and the headless per-frame driver -- the reachability half [`crate::flow::route103_rival`]'s
-//! own module docs record as explicitly out of PR #247's (issue #237)
-//! scope. Mirrors [`super::first_battle_trigger`]'s shape (module split,
+//! The Route 103 rival battle's overworld trigger (I-5): rival sprite setup
+//! on map entry, the A-press interaction that starts the fight, and the
+//! headless per-frame driver -- the reachability half of
+//! [`crate::flow::route103_rival`]'s battle construction. Mirrors
+//! [`super::first_battle_trigger`]'s shape (module split,
 //! doc style, trigger-then-driver pair) with one structural difference: the
 //! Route 101 rescue is a *coord-event* trigger (stepping onto a tile), while
 //! this one is an *interaction* trigger (facing the rival and pressing A) --
@@ -88,7 +88,7 @@
 //! non-defeat branch calls `SetBattledTrainersFlags`
 //! (`src/battle_setup.c:1245-1250`, `:1340-1348`) before `RivalEnd` runs.
 //!
-//! # The loss decision (issue #261: now the real one)
+//! # The loss decision
 //!
 //! Upstream's `trainerbattle_no_intro` never returns control to
 //! `Route103_EventScript_RivalMay`/`Brendan`'s own `goto
@@ -99,63 +99,44 @@
 //! `removeobject`, is simply never reached, and neither is
 //! `SetBattledTrainersFlags`, which sits in the non-defeat branch
 //! `CB2_EndTrainerBattle` never takes on a loss.
-//! [`advance_route103_rival_battle_frame`] now reproduces exactly that
+//! [`advance_route103_rival_battle_frame`] reproduces exactly that
 //! ordering: set both [`FLAG_HIDE_ROUTE_103_RIVAL`] and
 //! [`TRAINER_FLAGS_START`]` + `[`ActiveBattle::Rival`]'s own `trainer_id` on
 //! [`battle::BattleOutcome::PlayerWon`] ("The generic trainer-defeated flag"
-//! section above, and `RivalEnd`'s own real effect, unaffected by this
-//! issue), or call [`super::white_out::OverworldPhase::white_out`] on
+//! section above, and `RivalEnd`'s own real effect), or call
+//! [`super::white_out::OverworldPhase::white_out`] on
 //! [`battle::BattleOutcome::PlayerLost`] -- **not both**, mirroring upstream's
 //! own exclusive branches (`CB2_EndTrainerBattle`'s `if`/`else if`, module
 //! docs). Both flags stay clear on a loss exactly as they do upstream (the
-//! branch that would set either is never reached), but the player is no
-//! longer standing next to the rival to find out: `white_out` warps them
-//! back to the last heal location before the frame ends, the same
-//! displacement upstream's own white-out produces.
+//! branch that would set either is never reached), and the player is not
+//! left standing next to the rival: `white_out` warps them back to the last
+//! heal location before the frame ends, the same displacement upstream's
+//! own white-out produces.
 //!
-//! **Formerly a fail-closed dead end, now fully retired.** Before issue
-//! #261, a loss left the fainted lead in place and a fresh attempt failed
-//! closed inside this module's own construction call
-//! (`battle::BattleError::FaintedBattler`, raised by
-//! [`battle::Battle::new_trainer`] since it always did, moved along with
-//! the rest of the construction into
-//! [`crate::flow::npc_trainer_battle::start_npc_trainer_battle`] by issue
-//! #264) -- an *emergent* wall from `Battle::new_trainer` refusing a
-//! fainted battler, not a bespoke guard this module wrote, but a dead end
-//! this module's own docs recorded all the same as "the honest fidelity
-//! delta this slice ships with." That wall was unreachable through a
-//! *rival* (or wild) loss as of #261:
-//! `white_out` heals the lead in the same call that reports the loss, so
-//! those paths can never leave a fainted lead behind, and the player is off
-//! Route 103 entirely besides. One path still could — a lost Route 101
-//! first battle (`CB2_EndFirstBattle` has no `IsPlayerDefeated` branch), and
-//! Route 103 is walkable from there — so between #261 and #251,
-//! [`OverworldPhase::begin_route103_rival_battle`] screened the fainted
-//! lead *before* the party build, the same fail-closed no-draw shape
-//! `crate::flow::wild_encounter::lead_can_fight` applied to the encounter
-//! roll.
+//! # No fainted lead reaches the fight
 //!
-//! Issue #251 closes that last path too:
+//! [`OverworldPhase::begin_route103_rival_battle`] does not screen for a
+//! fainted lead, because no modelled path brings one to Route 103.
+//! `white_out` heals the lead in the same call that reports a rival or wild
+//! loss, and moves the player off Route 103. A lost Route 101 first battle
+//! (`CB2_EndFirstBattle` has no `IsPlayerDefeated` branch) is healed by
 //! `super::first_battle_conclusion::OverworldPhase::conclude_first_battle`
-//! now heals the Route 101 first-battle lead the instant *that* battle
-//! reports any outcome (win, loss, or flee), the same frame it happens --
+//! the instant *that* battle reports any outcome (win, loss, or flee) --
 //! `Route101_EventScript_BirchsBag`'s own `HealPlayerParty` call, which
 //! upstream's `CB2_EndFirstBattle` reaches regardless of how the fight
-//! ended (that module's own docs cite the chain). No modelled path brings
-//! a fainted lead to Route 103 today (an unmigrated multi-member save's
-//! roaming slot-0 and a failed best-effort heal are the documented residual
-//! shapes, both refused downstream), so the screen here is retired outright
-//! rather than left in place as now-unreachable dead code
-//! -- see
+//! ended (that module's own docs cite the chain). An unmigrated
+//! multi-member save's roaming slot-0 and a failed best-effort heal are the
+//! documented residual shapes, both refused downstream: a fainted battler
+//! still fails closed in [`battle::Battle::new_trainer`]
+//! (`battle::BattleError::FaintedBattler`), reached through
+//! [`crate::flow::npc_trainer_battle::start_npc_trainer_battle`].
+//!
 //! `route103_rival_driver_tests::a_lost_route_101_first_battle_still_lets_the_healed_lead_fight_the_rival`
-//! for the replacement, strictly *stronger* pin (`(test-ratchet)`: it
-//! proves the fainted precondition itself can no longer arise, which the
-//! deleted screen's own unit test could never show by construction) and its
-//! own doc comment for exactly what it retires. See also
+//! pins that the fainted precondition itself cannot arise `(test-ratchet)`.
 //! `route103_rival_driver_tests::losing_the_rival_battle_now_heals_halves_money_and_leaves_the_hide_flag_clear`
 //! (plus its pack-gated companion
 //! `route103_rival_driver_tests::real_pack_losing_the_rival_battle_warps_home_to_the_default_heal_location`)
-//! for the ordinary rival/wild-loss pins issue #261 already established.
+//! pins the ordinary rival-loss white-out.
 //!
 //! # RNG stream
 //!

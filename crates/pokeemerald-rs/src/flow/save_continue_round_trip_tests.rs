@@ -1,4 +1,4 @@
-//! I-6 (issues #214/#232) save, exit, reload round trips: the reloaded phase
+//! I-6 save, exit, reload round trips: the reloaded phase
 //! matches the saved one, and the most recent of two saves wins.
 
 use super::menu_type_for;

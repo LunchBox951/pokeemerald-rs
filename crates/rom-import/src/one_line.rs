@@ -1,5 +1,5 @@
 //! The escaping rule every one-terminal-row diagnostic in the importer
-//! chain renders untrusted text through (S-4, issues #1037 and #1076).
+//! chain renders untrusted text through (S-4).
 //!
 //! [`ImportError`](crate::ImportError), `pokeemerald-rs`'s own
 //! `ImportRomError` and success summary, and that binary's CLI diagnosis all

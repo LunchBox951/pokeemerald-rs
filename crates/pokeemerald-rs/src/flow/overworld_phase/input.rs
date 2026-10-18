@@ -1,6 +1,6 @@
 //! The held-direction and single-frame movement mechanics
-//! [`super::OverworldPhase::step`] drives (module split of
-//! [`crate::flow::overworld_phase::step`], issue #210, `oop-boundaries`):
+//! [`super::OverworldPhase::step`] drives (kept beside
+//! [`crate::flow::overworld_phase::step`], `oop-boundaries`):
 //! resolving this frame's held D-pad direction ([`held_direction`]),
 //! feeding one input poll to [`PlayerState`] and unconditionally advancing
 //! its walk-animation timer ([`advance_player_one_frame`]), the
