@@ -22,7 +22,10 @@ use crate::exp::{trainer_faint_exp, wild_faint_exp};
 use crate::pokemon::{BattlePokemon, MoveLearnDecision, PendingMoveLearn, MAX_LEVEL, MOVE_NONE};
 use crate::secondary;
 use crate::stat_change;
-use crate::status1::{draws_full_paralysis, draws_shed_skin_cure, poison_residual_damage, Status1};
+use crate::status1::{
+    draws_full_paralysis, draws_shed_skin_cure, poison_residual_damage, tick_sleep, SleepTick,
+    Status1,
+};
 use crate::turn_order::{resolve_order, Order};
 use crate::volatile::draws_confusion_self_hit;
 
@@ -1211,6 +1214,31 @@ impl Battle {
         // `pokeemerald/src/battle_util.c:78`-`:137`), so it holds the move
         // even when full paralysis or empty PP stop this one from landing.
         self.last_move_used = move_id;
+        // `CANCELER_ASLEEP` decrements sleep ahead of every other modelled
+        // canceller (`src/battle_util.c:2015`-`:2057`): a duration that
+        // survives cancels the move, expiry lets it proceed.
+        let attacker = if player_is_attacker {
+            &mut self.player
+        } else {
+            &mut self.enemy
+        };
+        match tick_sleep(attacker.status1(), attacker.ability()) {
+            SleepTick::NotAsleep => {}
+            SleepTick::StillAsleep(status) => {
+                attacker.set_status1(status);
+                events.push(BattleEvent::FastAsleep {
+                    by_player: player_is_attacker,
+                    move_id,
+                });
+                return Ok(());
+            }
+            SleepTick::WokeUp => {
+                attacker.set_status1(Status1::Healthy);
+                events.push(BattleEvent::WokeUp {
+                    by_player: player_is_attacker,
+                });
+            }
+        }
         // `CANCELER_CONFUSED` decrements the attacker's confusion duration
         // ahead of `CANCELER_PARALYZED` (`src/battle_util.c:2157`-`:2199`).
         // A duration that survives the decrement draws once more before the

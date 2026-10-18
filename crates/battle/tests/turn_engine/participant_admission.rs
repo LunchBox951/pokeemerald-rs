@@ -20,7 +20,7 @@ fn healthy(species: SpeciesId) -> BattlePokemon {
     mon(species, 0, Status1::Healthy)
 }
 
-fn refused() -> [(BattlePokemon, AbilityId); 24] {
+fn refused() -> [(BattlePokemon, AbilityId); 26] {
     [
         (healthy(SpeciesId::MIGHTYENA), AbilityId::INTIMIDATE),
         (healthy(SpeciesId::EKANS), AbilityId::INTIMIDATE),
@@ -62,6 +62,14 @@ fn refused() -> [(BattlePokemon, AbilityId); 24] {
         (
             mon(SpeciesId::SNORLAX, 0, Status1::Poisoned),
             AbilityId::IMMUNITY,
+        ),
+        (
+            mon(SpeciesId::HOOTHOOT, 0, Status1::Asleep { turns: 3 }),
+            AbilityId::INSOMNIA,
+        ),
+        (
+            mon(SpeciesId::MANKEY, 0, Status1::Asleep { turns: 3 }),
+            AbilityId::VITAL_SPIRIT,
         ),
         {
             let mut spinda = healthy(SpeciesId::SPINDA);

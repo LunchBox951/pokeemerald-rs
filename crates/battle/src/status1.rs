@@ -8,8 +8,13 @@
 //! Upstream's `status1` is a bitfield with one flag per status
 //! (`pokeemerald/include/constants/battle.h:112`-`:125`), but every
 //! infliction path this crate models refuses a nonzero field
-//! (`pokeemerald/src/battle_script_commands.c:2334`-`:2335`), so a
-//! single-valued enum loses nothing.
+//! (`pokeemerald/src/battle_script_commands.c:2334`-`:2335`), so an enum with
+//! one variant per status loses nothing. Sleep keeps its remaining turn count
+//! in the low three bits of that field (`STATUS1_SLEEP`,
+//! `pokeemerald/include/constants/battle.h:112`), which [`Status1::Asleep`]
+//! carries as `turns`.
+
+use assets::AbilityId;
 
 use crate::damage::BattleRng;
 
@@ -27,6 +32,14 @@ pub enum Status1 {
     /// Poisoned: [`poison_residual_damage`] fires every end of turn
     /// (`ENDTURN_POISON`, `pokeemerald/src/battle_util.c:1525`-`:1535`).
     Poisoned,
+    /// Asleep with `turns` actions left before waking: the canceller
+    /// ([`tick_sleep`]) decrements it ahead of every chosen move
+    /// (`CANCELER_ASLEEP`, `pokeemerald/src/battle_util.c:2015`-`:2057`).
+    /// Every value [`draw_sleep_duration`] returns is in `2..=5`.
+    Asleep {
+        /// Remaining sleep turns, never zero for a battler still asleep.
+        turns: u8,
+    },
 }
 
 impl Status1 {
@@ -42,12 +55,94 @@ impl Status1 {
         matches!(self, Self::Poisoned)
     }
 
+    /// Whether this status is [`Status1::Asleep`], whatever its remaining turns.
+    #[must_use]
+    pub const fn is_asleep(self) -> bool {
+        matches!(self, Self::Asleep { .. })
+    }
+
     /// Whether no primary status is set, the guard every infliction path this
     /// crate models shares (`pokeemerald/src/battle_script_commands.c:2334`-`:2335`).
     #[must_use]
     pub const fn is_healthy(self) -> bool {
         matches!(self, Self::Healthy)
     }
+}
+
+/// What [`tick_sleep`] decided for one action of the sleeping battler.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SleepTick {
+    /// The battler was not asleep; nothing changed.
+    NotAsleep,
+    /// The battler stays asleep with the carried status and its chosen move
+    /// is cancelled (`BattleScript_MoveUsedIsAsleep`).
+    StillAsleep(Status1),
+    /// The duration ran out: the battler is [`Status1::Healthy`] and its
+    /// chosen move proceeds (`BattleScript_MoveUsedWokeUp`).
+    WokeUp,
+}
+
+/// `CANCELER_ASLEEP`'s decrement: one turn, or two for an Early Bird holder
+/// (`pokeemerald/src/battle_util.c:2029`-`:2043`). A remaining count below the
+/// decrement clears the sleep bits outright rather than underflowing.
+///
+/// Draws nothing. Uproar's wake-up (`:2017`-`:2025`) and the Snore and Sleep
+/// Talk exemption (`:2038`) are not modelled.
+#[must_use]
+pub const fn tick_sleep(status1: Status1, ability: AbilityId) -> SleepTick {
+    let Status1::Asleep { turns } = status1 else {
+        return SleepTick::NotAsleep;
+    };
+    let decrement = if ability.0 == AbilityId::EARLY_BIRD.0 {
+        2
+    } else {
+        1
+    };
+    if turns <= decrement {
+        SleepTick::WokeUp
+    } else {
+        SleepTick::StillAsleep(Status1::Asleep {
+            turns: turns - decrement,
+        })
+    }
+}
+
+/// Smallest sleep duration `SetMoveEffect` writes: `(Random() & 3) + 2`
+/// (`pokeemerald/src/battle_script_commands.c:2487`).
+pub const SLEEP_TURNS_MIN: u8 = 2;
+/// Largest sleep duration: `(3) + 2`.
+pub const SLEEP_TURNS_MAX: u8 = 5;
+
+/// Draws a sleep duration of two to five turns with one `Random()` call
+/// (`pokeemerald/src/battle_script_commands.c:2487`).
+#[must_use]
+pub fn draw_sleep_duration(rng: &mut impl BattleRng) -> u8 {
+    // `& 3` leaves at most three, so the narrowing cannot truncate.
+    (rng.next_u16() & 3) as u8 + SLEEP_TURNS_MIN
+}
+
+/// Applies `STATUS1_SLEEP` to a target in `SetMoveEffect`
+/// (`pokeemerald/src/battle_script_commands.c:2273`-`:2298`, `:2480`-`:2487`),
+/// returning the target's new status, or `None` when upstream's guards
+/// refuse it: any existing primary status, Vital Spirit, or Insomnia.
+///
+/// The duration draw happens only once every guard has passed. The active
+/// Uproar scan (`:2275`-`:2289`) is not modelled.
+#[must_use]
+pub fn try_inflict_sleep(
+    current: Status1,
+    target_ability: AbilityId,
+    rng: &mut impl BattleRng,
+) -> Option<Status1> {
+    if !current.is_healthy()
+        || target_ability == AbilityId::VITAL_SPIRIT
+        || target_ability == AbilityId::INSOMNIA
+    {
+        return None;
+    }
+    Some(Status1::Asleep {
+        turns: draw_sleep_duration(rng),
+    })
 }
 
 /// Full paralysis is `Random() % 4 == 0` (`pokeemerald/src/battle_util.c:2189`).
@@ -103,8 +198,12 @@ pub fn draws_shed_skin_cure(status1: Status1, rng: &mut impl BattleRng) -> bool 
 
 #[cfg(test)]
 mod tests {
-    use super::{draws_full_paralysis, draws_shed_skin_cure, poison_residual_damage, Status1};
+    use super::{
+        draw_sleep_duration, draws_full_paralysis, draws_shed_skin_cure, poison_residual_damage,
+        tick_sleep, try_inflict_sleep, SleepTick, Status1,
+    };
     use crate::damage::BattleRng;
+    use assets::AbilityId;
 
     struct FixedRng(u16);
     impl BattleRng for FixedRng {
@@ -160,10 +259,104 @@ mod tests {
             (Status1::Healthy, true, false, false),
             (Status1::Paralysed, false, true, false),
             (Status1::Poisoned, false, false, true),
+            (Status1::Asleep { turns: 3 }, false, false, false),
         ] {
             assert_eq!(status.is_healthy(), healthy, "{status:?}");
             assert_eq!(status.is_paralysed(), paralysed, "{status:?}");
             assert_eq!(status.is_poisoned(), poisoned, "{status:?}");
+            assert_eq!(
+                status.is_asleep(),
+                matches!(status, Status1::Asleep { .. }),
+                "{status:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn sleep_duration_is_the_low_two_bits_plus_two() {
+        for (raw, expected) in [(0, 2), (1, 3), (2, 4), (3, 5), (4, 2), (0xFFFF, 5)] {
+            assert_eq!(draw_sleep_duration(&mut FixedRng(raw)), expected, "{raw}");
+        }
+    }
+
+    #[test]
+    fn a_sleep_duration_draws_exactly_once() {
+        let mut rng = CountingRng { value: 2, draws: 0 };
+        let _ = draw_sleep_duration(&mut rng);
+        assert_eq!(rng.draws, 1);
+    }
+
+    #[test]
+    fn a_normal_sleeper_loses_one_turn_and_wakes_when_none_remain() {
+        let ability = AbilityId::NONE;
+        assert_eq!(
+            tick_sleep(Status1::Asleep { turns: 3 }, ability),
+            SleepTick::StillAsleep(Status1::Asleep { turns: 2 })
+        );
+        assert_eq!(
+            tick_sleep(Status1::Asleep { turns: 2 }, ability),
+            SleepTick::StillAsleep(Status1::Asleep { turns: 1 })
+        );
+        assert_eq!(
+            tick_sleep(Status1::Asleep { turns: 1 }, ability),
+            SleepTick::WokeUp
+        );
+    }
+
+    #[test]
+    fn early_bird_loses_two_turns_and_clears_rather_than_underflowing() {
+        let ability = AbilityId::EARLY_BIRD;
+        assert_eq!(
+            tick_sleep(Status1::Asleep { turns: 5 }, ability),
+            SleepTick::StillAsleep(Status1::Asleep { turns: 3 })
+        );
+        assert_eq!(
+            tick_sleep(Status1::Asleep { turns: 3 }, ability),
+            SleepTick::StillAsleep(Status1::Asleep { turns: 1 })
+        );
+        assert_eq!(
+            tick_sleep(Status1::Asleep { turns: 2 }, ability),
+            SleepTick::WokeUp
+        );
+        assert_eq!(
+            tick_sleep(Status1::Asleep { turns: 1 }, ability),
+            SleepTick::WokeUp,
+            "one turn left is below the two-turn decrement"
+        );
+    }
+
+    #[test]
+    fn a_battler_that_is_not_asleep_does_not_tick() {
+        for status in [Status1::Healthy, Status1::Paralysed, Status1::Poisoned] {
+            assert_eq!(
+                tick_sleep(status, AbilityId::EARLY_BIRD),
+                SleepTick::NotAsleep
+            );
+        }
+    }
+
+    #[test]
+    fn sleep_lands_on_a_healthy_target_with_one_duration_draw() {
+        let mut rng = CountingRng { value: 1, draws: 0 };
+        assert_eq!(
+            try_inflict_sleep(Status1::Healthy, AbilityId::NONE, &mut rng),
+            Some(Status1::Asleep { turns: 3 })
+        );
+        assert_eq!(rng.draws, 1);
+    }
+
+    #[test]
+    fn sleep_is_refused_without_a_draw_by_status_or_sleep_preventing_ability() {
+        for (status, ability) in [
+            (Status1::Paralysed, AbilityId::NONE),
+            (Status1::Poisoned, AbilityId::NONE),
+            (Status1::Asleep { turns: 2 }, AbilityId::NONE),
+            (Status1::Healthy, AbilityId::VITAL_SPIRIT),
+            (Status1::Healthy, AbilityId::INSOMNIA),
+        ] {
+            let mut rng = CountingRng { value: 0, draws: 0 };
+            assert_eq!(try_inflict_sleep(status, ability, &mut rng), None);
+            assert_eq!(rng.draws, 0, "{status:?} {ability:?}");
         }
     }
 

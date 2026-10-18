@@ -180,12 +180,23 @@ pub fn is_confuse_hit_effect(effect: MoveEffect) -> bool {
 /// (`battle_script_commands.c:1409-1418`).
 #[must_use]
 fn poison_can_land(move_type: Type, defender: &BattlePokemon) -> bool {
+    defender.status1().is_healthy() && poison_can_land_ignoring_status(move_type, defender)
+}
+
+/// [`poison_can_land`] without the primary-status guard, for the screen in
+/// [`ensure_admissible`]: that screen runs at construction and at each
+/// turn's start, before move order is decided, and a sleeping defender can
+/// wake on its own earlier action the same turn
+/// ([`crate::status1::tick_sleep`], including Early Bird's two-turn
+/// decrement) before this attacker's move executes. Only a sleeper's status
+/// is skipped here, because no other primary status can clear mid-turn.
+#[must_use]
+fn poison_can_land_ignoring_status(move_type: Type, defender: &BattlePokemon) -> bool {
     let types = defender.types();
     let is_poison_or_steel_type = types.contains(&Type::Poison) || types.contains(&Type::Steel);
     let wonder_guard_blocks = defender.ability() == AbilityId::WONDER_GUARD
         && aggregate_type_effectiveness(move_type, types) != Effectiveness::SuperEffective;
-    defender.status1().is_healthy()
-        && !is_poison_or_steel_type
+    !is_poison_or_steel_type
         && !wonder_guard_blocks
         && defender.ability() != AbilityId::IMMUNITY
         && defender.ability() != AbilityId::SHIELD_DUST
@@ -280,7 +291,13 @@ pub fn ensure_admissible(
             .move_type
             .battle_type()
             .ok_or(BattleError::UnsupportedMoveType(move_id))?;
-        if attacker.ability() == AbilityId::SERENE_GRACE && poison_can_land(move_type, defender) {
+        let status_can_clear = defender.status1().is_asleep();
+        let could_land = if status_can_clear {
+            poison_can_land_ignoring_status(move_type, defender)
+        } else {
+            poison_can_land(move_type, defender)
+        };
+        if attacker.ability() == AbilityId::SERENE_GRACE && could_land {
             return Err(BattleError::UnportedAbilityInteraction(
                 AbilityId::SERENE_GRACE,
             ));
