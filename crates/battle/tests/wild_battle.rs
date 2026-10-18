@@ -157,18 +157,26 @@ fn a_wild_opponent_resolves_its_own_tackle_through_accuracy_crit_and_damage() {
     assert_eq!(
         events,
         vec![
+            BattleEvent::UsedMove {
+                by_player: true,
+                move_id: MoveId::TACKLE
+            },
             BattleEvent::Hit {
                 by_player: true,
                 move_id: MoveId::TACKLE,
                 damage: 4,
                 is_critical: false,
             },
+            BattleEvent::UsedMove {
+                by_player: false,
+                move_id: MoveId::TACKLE
+            },
             BattleEvent::Hit {
                 by_player: false,
                 move_id: MoveId::TACKLE,
                 damage: 12,
                 is_critical: true,
-            },
+            }
         ],
         "both Tackles must resolve in the same turn: {events:?}"
     );
@@ -280,6 +288,10 @@ fn an_exhausted_player_party_loses_only_after_every_reserve_has_had_its_turn() {
     assert_eq!(
         turn1,
         vec![
+            BattleEvent::UsedMove {
+                by_player: false,
+                move_id: MoveId::TACKLE
+            },
             BattleEvent::Hit {
                 by_player: false,
                 move_id: MoveId::TACKLE,
@@ -290,7 +302,7 @@ fn an_exhausted_player_party_loses_only_after_every_reserve_has_had_its_turn() {
             BattleEvent::PlayerSentOut {
                 species: SpeciesId(7),
                 reserves_remaining: 0,
-            },
+            }
         ],
         "the healthy reserve takes over instead of ending the battle: {turn1:?}"
     );
@@ -303,6 +315,10 @@ fn an_exhausted_player_party_loses_only_after_every_reserve_has_had_its_turn() {
     assert_eq!(
         turn2,
         vec![
+            BattleEvent::UsedMove {
+                by_player: false,
+                move_id: MoveId::TACKLE
+            },
             BattleEvent::Hit {
                 by_player: false,
                 move_id: MoveId::TACKLE,
@@ -310,7 +326,7 @@ fn an_exhausted_player_party_loses_only_after_every_reserve_has_had_its_turn() {
                 is_critical: false,
             },
             BattleEvent::Fainted { by_player: true },
-            BattleEvent::Ended(BattleOutcome::PlayerLost),
+            BattleEvent::Ended(BattleOutcome::PlayerLost)
         ],
         "the second faint has no reserve left, so the battle ends: {turn2:?}"
     );

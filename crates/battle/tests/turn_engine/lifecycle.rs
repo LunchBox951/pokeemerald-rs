@@ -135,6 +135,10 @@ fn losing_the_battle_reports_defeat_and_awards_no_exp() {
     assert_eq!(
         events,
         vec![
+            BattleEvent::UsedMove {
+                by_player: false,
+                move_id: TACKLE
+            },
             BattleEvent::Hit {
                 by_player: false,
                 move_id: TACKLE,
@@ -142,7 +146,7 @@ fn losing_the_battle_reports_defeat_and_awards_no_exp() {
                 is_critical: false,
             },
             BattleEvent::Fainted { by_player: true },
-            BattleEvent::Ended(BattleOutcome::PlayerLost),
+            BattleEvent::Ended(BattleOutcome::PlayerLost)
         ],
         "defeat reports the faint and the loss -- and no ExpGained: \
          exp is the winner's, and the player lost"
@@ -324,6 +328,10 @@ fn an_active_faint_with_a_healthy_reserve_sends_it_out_instead_of_ending_the_bat
     assert_eq!(
         events,
         vec![
+            BattleEvent::UsedMove {
+                by_player: false,
+                move_id: MoveId::TACKLE
+            },
             BattleEvent::Hit {
                 by_player: false,
                 move_id: MoveId::TACKLE,
@@ -334,7 +342,7 @@ fn an_active_faint_with_a_healthy_reserve_sends_it_out_instead_of_ending_the_bat
             BattleEvent::PlayerSentOut {
                 species: SpeciesId(7),
                 reserves_remaining: 0,
-            },
+            }
         ],
         "a healthy reserve replaces the fainted active instead of an \
          Ended event: {events:?}"
@@ -473,6 +481,10 @@ fn a_fainted_player_with_no_usable_reserve_still_loses_and_reports_both_members(
     assert_eq!(
         events,
         vec![
+            BattleEvent::UsedMove {
+                by_player: false,
+                move_id: MoveId::TACKLE
+            },
             BattleEvent::Hit {
                 by_player: false,
                 move_id: MoveId::TACKLE,
@@ -480,7 +492,7 @@ fn a_fainted_player_with_no_usable_reserve_still_loses_and_reports_both_members(
                 is_critical: false,
             },
             BattleEvent::Fainted { by_player: true },
-            BattleEvent::Ended(BattleOutcome::PlayerLost),
+            BattleEvent::Ended(BattleOutcome::PlayerLost)
         ],
         "no usable reserve still ends the battle: {events:?}"
     );

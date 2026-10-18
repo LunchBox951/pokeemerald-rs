@@ -576,6 +576,19 @@ pub enum BattleEvent {
     ///
     /// This is the final event returned for the battle.
     Ended(BattleOutcome),
+    /// A selected move reached `attackstring`, the announcement that precedes
+    /// its result (`STRINGID_USEDMOVE`, `src/battle_message.c:2155`-`:2166`;
+    /// `data/battle_scripts_1.s:3556`-`:3559`, `:4158`-`:4163`).
+    ///
+    /// It follows the action's confusion and full-paralysis draws, so an action
+    /// cancelled by either never announces its move. It precedes the move's
+    /// no-PP, Soundproof, miss, and hit results.
+    UsedMove {
+        /// Whether the player used the move.
+        by_player: bool,
+        /// The move that was announced.
+        move_id: MoveId,
+    },
 }
 
 /// A turn failure together with the observable events committed before it.

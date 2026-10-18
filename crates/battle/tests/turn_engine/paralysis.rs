@@ -75,6 +75,10 @@ fn full_paralysis_cancels_before_the_no_pp_abort_and_retains_pp() {
     assert_eq!(
         events,
         vec![
+            BattleEvent::UsedMove {
+                by_player: true,
+                move_id: TACKLE
+            },
             BattleEvent::NoEffect {
                 by_player: true,
                 move_id: TACKLE,
@@ -82,7 +86,7 @@ fn full_paralysis_cancels_before_the_no_pp_abort_and_retains_pp() {
             BattleEvent::FullyParalyzed {
                 by_player: false,
                 move_id: TACKLE,
-            },
+            }
         ],
         "the drained slot must report FullyParalyzed, never FailedNoPp -- \
          the canceller draw precedes the no-PP abort: {events:?}"
@@ -115,6 +119,10 @@ fn a_fully_paralysed_mover_emits_no_move_event_and_keeps_its_pp() {
     assert_eq!(
         events,
         vec![
+            BattleEvent::UsedMove {
+                by_player: false,
+                move_id: TACKLE
+            },
             BattleEvent::NoEffect {
                 by_player: false,
                 move_id: TACKLE,
@@ -122,7 +130,7 @@ fn a_fully_paralysed_mover_emits_no_move_event_and_keeps_its_pp() {
             BattleEvent::FullyParalyzed {
                 by_player: true,
                 move_id: TACKLE,
-            },
+            }
         ]
     );
     assert_eq!(
@@ -156,7 +164,7 @@ fn paralysis_quarters_speed_and_removes_a_would_be_tie() {
 
     assert!(
         matches!(
-            events[0],
+            events[1],
             BattleEvent::Hit {
                 by_player: false,
                 move_id: TACKLE,
@@ -167,7 +175,7 @@ fn paralysis_quarters_speed_and_removes_a_would_be_tie() {
     );
     assert!(
         matches!(
-            events[1],
+            events[3],
             BattleEvent::Hit {
                 by_player: true,
                 move_id: TACKLE,
@@ -205,6 +213,10 @@ fn thunder_wave_inflicts_paralysis_which_then_gates_the_same_turns_later_mover()
     assert_eq!(
         events,
         vec![
+            BattleEvent::UsedMove {
+                by_player: true,
+                move_id: THUNDER_WAVE
+            },
             BattleEvent::Paralyzed {
                 by_player: true,
                 move_id: THUNDER_WAVE,
@@ -212,7 +224,7 @@ fn thunder_wave_inflicts_paralysis_which_then_gates_the_same_turns_later_mover()
             BattleEvent::FullyParalyzed {
                 by_player: false,
                 move_id: TACKLE,
-            },
+            }
         ],
         "the paralysis this turn's earlier move wrote gates the later mover \
          in the very same turn: {events:?}"
@@ -243,14 +255,14 @@ fn a_type_immune_thunder_wave_still_spends_pp_unlike_a_cancelled_move() {
         .unwrap();
 
     assert_eq!(
-        events[0],
+        events[1],
         BattleEvent::NoEffect {
             by_player: true,
             move_id: THUNDER_WAVE,
         }
     );
     assert!(matches!(
-        events[1],
+        events[3],
         BattleEvent::Hit {
             by_player: false,
             move_id: TACKLE,
@@ -293,7 +305,7 @@ fn a_paralysed_forced_struggle_enemy_is_cancelled_before_the_struggle_error() {
 
     assert!(
         matches!(
-            events[0],
+            events[1],
             BattleEvent::Hit {
                 by_player: true,
                 move_id: TACKLE,
@@ -303,7 +315,7 @@ fn a_paralysed_forced_struggle_enemy_is_cancelled_before_the_struggle_error() {
         "the player's earlier hit still committed: {events:?}"
     );
     assert_eq!(
-        events[1],
+        events[2],
         BattleEvent::FullyParalyzed {
             by_player: false,
             move_id: STRUGGLE,
@@ -344,7 +356,7 @@ fn a_type_immune_thunder_wave_reports_no_effect_not_a_plain_failure() {
         .unwrap();
 
     assert_eq!(
-        events[0],
+        events[1],
         BattleEvent::NoEffect {
             by_player: true,
             move_id: THUNDER_WAVE,
@@ -488,6 +500,10 @@ fn thunder_wave_against_a_synchronize_target_reflects_paralysis_at_move_end() {
     assert_eq!(
         events,
         vec![
+            BattleEvent::UsedMove {
+                by_player: true,
+                move_id: THUNDER_WAVE
+            },
             BattleEvent::Paralyzed {
                 by_player: true,
                 move_id: THUNDER_WAVE,
@@ -499,7 +515,7 @@ fn thunder_wave_against_a_synchronize_target_reflects_paralysis_at_move_end() {
             BattleEvent::FullyParalyzed {
                 by_player: false,
                 move_id: TACKLE,
-            },
+            }
         ],
         "the initial status and its message precede MOVEEND_SYNCHRONIZE_TARGET's \
          reflection, which precedes the rest of move-end processing: {events:?}"
@@ -536,6 +552,10 @@ fn a_limber_original_attacker_blocks_its_own_reflected_paralysis() {
     assert_eq!(
         events,
         vec![
+            BattleEvent::UsedMove {
+                by_player: true,
+                move_id: THUNDER_WAVE
+            },
             BattleEvent::Paralyzed {
                 by_player: true,
                 move_id: THUNDER_WAVE,
@@ -547,7 +567,7 @@ fn a_limber_original_attacker_blocks_its_own_reflected_paralysis() {
             BattleEvent::FullyParalyzed {
                 by_player: false,
                 move_id: TACKLE,
-            },
+            }
         ],
         "{events:?}"
     );
@@ -582,6 +602,10 @@ fn synchronize_reflects_paralysis_onto_a_type_immune_original_attacker() {
     assert_eq!(
         events,
         vec![
+            BattleEvent::UsedMove {
+                by_player: true,
+                move_id: THUNDER_WAVE
+            },
             BattleEvent::Paralyzed {
                 by_player: true,
                 move_id: THUNDER_WAVE,
@@ -593,7 +617,7 @@ fn synchronize_reflects_paralysis_onto_a_type_immune_original_attacker() {
             BattleEvent::FullyParalyzed {
                 by_player: false,
                 move_id: TACKLE,
-            },
+            }
         ],
         "type effectiveness never gates the reflection: {events:?}"
     );
@@ -622,7 +646,7 @@ fn an_already_paralysed_synchronize_defender_spends_pp_and_reports_the_status() 
         .expect("the pick is admitted: this interaction is fully modelled");
 
     assert_eq!(
-        events[0],
+        events[1],
         BattleEvent::AlreadyParalyzed {
             by_player: true,
             move_id: THUNDER_WAVE,
@@ -662,17 +686,23 @@ fn a_paralysed_attacker_reaches_the_canceller_against_a_synchronize_defender() {
             .expect("a paralysed attacker leaves Synchronize no target, so the pick is admitted");
 
         let expected = if cancelled {
-            BattleEvent::FullyParalyzed {
+            vec![BattleEvent::FullyParalyzed {
                 by_player: true,
                 move_id: THUNDER_WAVE,
-            }
+            }]
         } else {
-            BattleEvent::Paralyzed {
-                by_player: true,
-                move_id: THUNDER_WAVE,
-            }
+            vec![
+                BattleEvent::UsedMove {
+                    by_player: true,
+                    move_id: THUNDER_WAVE,
+                },
+                BattleEvent::Paralyzed {
+                    by_player: true,
+                    move_id: THUNDER_WAVE,
+                },
+            ]
         };
-        assert_eq!(events[0], expected, "{events:?}");
+        assert_eq!(events[..expected.len()], expected[..], "{events:?}");
         assert_eq!(
             battle.enemy().status1(),
             if cancelled {
@@ -719,7 +749,7 @@ fn a_shed_skin_defender_is_newly_paralysed_not_refused() {
         .expect("Shed Skin's cure draw lives in the residual pass, so the pick is admitted");
 
     assert_eq!(
-        events[0],
+        events[1],
         BattleEvent::Paralyzed {
             by_player: true,
             move_id: THUNDER_WAVE,
@@ -766,6 +796,10 @@ fn a_shed_skin_attacker_is_paralysed_by_a_synchronize_reflection_not_refused() {
     assert_eq!(
         events,
         vec![
+            BattleEvent::UsedMove {
+                by_player: true,
+                move_id: THUNDER_WAVE
+            },
             BattleEvent::Paralyzed {
                 by_player: true,
                 move_id: THUNDER_WAVE,
@@ -777,7 +811,7 @@ fn a_shed_skin_attacker_is_paralysed_by_a_synchronize_reflection_not_refused() {
             BattleEvent::FullyParalyzed {
                 by_player: false,
                 move_id: TACKLE,
-            },
+            }
         ],
         "{events:?}"
     );
@@ -852,7 +886,7 @@ fn thunder_wave_newly_paralyses_a_healthy_guts_defender() {
         .expect("Guts is modelled, so the pick is admitted");
 
     assert_eq!(
-        events[0],
+        events[1],
         BattleEvent::Paralyzed {
             by_player: true,
             move_id: THUNDER_WAVE,
@@ -888,7 +922,7 @@ fn thunder_wave_newly_paralyses_a_healthy_marvel_scale_defender() {
 
     assert!(
         matches!(
-            events[0],
+            events[1],
             BattleEvent::Hit {
                 by_player: false,
                 move_id: TACKLE,
@@ -898,7 +932,7 @@ fn thunder_wave_newly_paralyses_a_healthy_marvel_scale_defender() {
         "the faster Milotic acts first: {events:?}"
     );
     assert_eq!(
-        events[1],
+        events[3],
         BattleEvent::Paralyzed {
             by_player: true,
             move_id: THUNDER_WAVE,

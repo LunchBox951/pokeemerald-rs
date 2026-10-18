@@ -70,7 +70,7 @@ fn an_overkill_absorb_drains_half_the_hp_actually_removed() {
         .unwrap();
 
     assert_eq!(
-        events[0],
+        events[1],
         BattleEvent::Hit {
             by_player: true,
             move_id: ABSORB,
@@ -80,7 +80,7 @@ fn an_overkill_absorb_drains_half_the_hp_actually_removed() {
         "the hit reports the 5 HP the target had, not the raw formula: {events:?}"
     );
     assert_eq!(
-        events[1],
+        events[2],
         BattleEvent::Drained {
             by_player: true,
             move_id: ABSORB,
@@ -150,7 +150,7 @@ fn liquid_ooze_turns_the_drain_into_damage_on_the_attacker() {
         .unwrap();
 
     assert_eq!(
-        events[0],
+        events[1],
         BattleEvent::Hit {
             by_player: true,
             move_id: ABSORB,
@@ -159,7 +159,7 @@ fn liquid_ooze_turns_the_drain_into_damage_on_the_attacker() {
         }
     );
     assert_eq!(
-        events[1],
+        events[2],
         BattleEvent::LiquidOoze {
             by_player: true,
             move_id: ABSORB,
@@ -209,6 +209,10 @@ fn a_liquid_ooze_kill_faints_the_attacker_before_the_target() {
     assert_eq!(
         events,
         [
+            BattleEvent::UsedMove {
+                by_player: true,
+                move_id: ABSORB
+            },
             BattleEvent::Hit {
                 by_player: true,
                 move_id: ABSORB,
@@ -222,7 +226,7 @@ fn a_liquid_ooze_kill_faints_the_attacker_before_the_target() {
             },
             BattleEvent::Fainted { by_player: true },
             BattleEvent::Fainted { by_player: false },
-            BattleEvent::Ended(BattleOutcome::PlayerLost),
+            BattleEvent::Ended(BattleOutcome::PlayerLost)
         ],
         "both tryfaintmons run and report -- the attacker's faint is \
          settled first in the event stream, but the target's still shows \
@@ -269,6 +273,10 @@ fn a_liquid_ooze_kill_by_the_enemy_still_resolves_as_a_loss() {
     assert_eq!(
         events,
         [
+            BattleEvent::UsedMove {
+                by_player: false,
+                move_id: ABSORB
+            },
             BattleEvent::Hit {
                 by_player: false,
                 move_id: ABSORB,
@@ -282,7 +290,7 @@ fn a_liquid_ooze_kill_by_the_enemy_still_resolves_as_a_loss() {
             },
             BattleEvent::Fainted { by_player: false },
             BattleEvent::Fainted { by_player: true },
-            BattleEvent::Ended(BattleOutcome::PlayerLost),
+            BattleEvent::Ended(BattleOutcome::PlayerLost)
         ],
         "the enemy (the attacker here) faints first in the event stream, \
          but the outcome is still PlayerLost, not PlayerWon -- a \
@@ -326,8 +334,12 @@ fn overgrow_boosts_the_players_absorb_once_its_hp_is_low() {
     // One HP above the gate: the ordinary figures.
     let (events, hp) = run(OVERGROW_HP_GATE + 1);
     assert_eq!(
-        &events[..2],
+        &events[..3],
         [
+            BattleEvent::UsedMove {
+                by_player: true,
+                move_id: ABSORB
+            },
             BattleEvent::Hit {
                 by_player: true,
                 move_id: ABSORB,
@@ -338,7 +350,7 @@ fn overgrow_boosts_the_players_absorb_once_its_hp_is_low() {
                 by_player: true,
                 move_id: ABSORB,
                 healed: 4,
-            },
+            }
         ]
     );
     assert_eq!(
@@ -350,8 +362,12 @@ fn overgrow_boosts_the_players_absorb_once_its_hp_is_low() {
     // Exactly at the gate: Overgrow fires.
     let (events, hp) = run(OVERGROW_HP_GATE);
     assert_eq!(
-        &events[..2],
+        &events[..3],
         [
+            BattleEvent::UsedMove {
+                by_player: true,
+                move_id: ABSORB
+            },
             BattleEvent::Hit {
                 by_player: true,
                 move_id: ABSORB,
@@ -387,7 +403,7 @@ fn sonic_boom_deals_a_flat_twenty_for_two_draws() {
         .unwrap();
 
     assert_eq!(
-        events[0],
+        events[1],
         BattleEvent::Hit {
             by_player: true,
             move_id: SONIC_BOOM,
@@ -424,8 +440,12 @@ fn double_slap_reports_each_hit_then_the_hit_count() {
         is_critical: false,
     };
     assert_eq!(
-        &events[..3],
+        &events[..4],
         [
+            BattleEvent::UsedMove {
+                by_player: true,
+                move_id: DOUBLE_SLAP,
+            },
             hit,
             hit,
             BattleEvent::MultiHit {
@@ -465,6 +485,10 @@ fn a_multi_hit_move_abandons_its_remaining_hits_without_spending_their_draws() {
     assert_eq!(
         events,
         [
+            BattleEvent::UsedMove {
+                by_player: true,
+                move_id: DOUBLE_SLAP
+            },
             BattleEvent::Hit {
                 by_player: true,
                 move_id: DOUBLE_SLAP,
@@ -486,7 +510,7 @@ fn a_multi_hit_move_abandons_its_remaining_hits_without_spending_their_draws() {
             },
             BattleEvent::Fainted { by_player: false },
             BattleEvent::ExpGained(47),
-            BattleEvent::Ended(BattleOutcome::PlayerWon),
+            BattleEvent::Ended(BattleOutcome::PlayerWon)
         ],
         "{events:?}"
     );
@@ -512,7 +536,7 @@ fn splash_reports_that_nothing_happened_and_draws_nothing() {
         .unwrap();
 
     assert_eq!(
-        events[0],
+        events[1],
         BattleEvent::NothingHappened {
             by_player: true,
             move_id: SPLASH,
@@ -557,7 +581,7 @@ fn focus_energy_raises_the_next_moves_crit_chance() {
 
     let (first, second) = run(FOCUS_ENERGY);
     assert_eq!(
-        first[0],
+        first[1],
         BattleEvent::GettingPumped {
             by_player: true,
             move_id: FOCUS_ENERGY,
@@ -565,7 +589,7 @@ fn focus_energy_raises_the_next_moves_crit_chance() {
     );
     assert!(
         matches!(
-            second[0],
+            second[1],
             BattleEvent::Hit {
                 by_player: true,
                 move_id: TACKLE,
@@ -579,7 +603,7 @@ fn focus_energy_raises_the_next_moves_crit_chance() {
     let (_, control) = run(SPLASH);
     assert!(
         matches!(
-            control[0],
+            control[1],
             BattleEvent::Hit {
                 by_player: true,
                 move_id: TACKLE,
@@ -611,14 +635,14 @@ fn a_second_focus_energy_reports_that_it_failed() {
         .unwrap();
 
     assert_eq!(
-        first[0],
+        first[1],
         BattleEvent::GettingPumped {
             by_player: true,
             move_id: FOCUS_ENERGY,
         }
     );
     assert_eq!(
-        second[0],
+        second[1],
         BattleEvent::ButItFailed {
             by_player: true,
             move_id: FOCUS_ENERGY,
@@ -652,7 +676,7 @@ fn charge_doubles_the_next_turns_electric_move_and_then_expires() {
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
     assert_eq!(
-        first[0],
+        first[1],
         BattleEvent::ChargingPower {
             by_player: true,
             move_id: CHARGE,
@@ -666,7 +690,7 @@ fn charge_doubles_the_next_turns_electric_move_and_then_expires() {
         .take_turn(PlayerAction::UseMove(1), &mut rng)
         .unwrap();
 
-    let damage_of = |events: &[BattleEvent]| match events[0] {
+    let damage_of = |events: &[BattleEvent]| match events[1] {
         BattleEvent::Hit {
             by_player: true,
             damage,
@@ -717,7 +741,7 @@ fn a_failed_run_still_ticks_the_charge_timer_down() {
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
     assert_eq!(
-        turn1[1],
+        turn1[3],
         BattleEvent::ChargingPower {
             by_player: true,
             move_id: CHARGE,
@@ -738,7 +762,7 @@ fn a_failed_run_still_ticks_the_charge_timer_down() {
     let turn3 = battle
         .take_turn(PlayerAction::UseMove(1), &mut rng)
         .unwrap();
-    let shock_wave_damage = match turn3[1] {
+    let shock_wave_damage = match turn3[3] {
         BattleEvent::Hit {
             by_player: true,
             damage,
@@ -772,7 +796,7 @@ fn defense_curl_sets_its_volatile_and_raises_defense_and_draws_nothing() {
         .unwrap();
 
     assert_eq!(
-        events[0],
+        events[1],
         BattleEvent::StatRose {
             by_player: true,
             move_id: DEFENSE_CURL,
@@ -810,7 +834,7 @@ fn defense_curl_still_sets_its_volatile_when_defense_is_already_capped() {
         .unwrap();
 
     assert_eq!(
-        events[0],
+        events[1],
         BattleEvent::StatWontGoHigher {
             by_player: true,
             move_id: DEFENSE_CURL,

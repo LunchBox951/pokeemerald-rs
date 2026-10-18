@@ -127,7 +127,7 @@ fn every_move_event_names_the_move_that_was_used() {
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
     assert_eq!(
-        events[0],
+        events[1],
         BattleEvent::Missed {
             by_player: true,
             move_id: TACKLE,
@@ -159,11 +159,19 @@ fn a_forced_struggle_follows_the_first_movers_hit_in_the_same_turn() {
     assert_eq!(
         events,
         vec![
+            BattleEvent::UsedMove {
+                by_player: true,
+                move_id: TACKLE
+            },
             BattleEvent::Hit {
                 by_player: true,
                 move_id: TACKLE,
                 damage: 7,
                 is_critical: false,
+            },
+            BattleEvent::UsedMove {
+                by_player: false,
+                move_id: STRUGGLE
             },
             BattleEvent::Hit {
                 by_player: false,
@@ -175,7 +183,7 @@ fn a_forced_struggle_follows_the_first_movers_hit_in_the_same_turn() {
                 by_player: false,
                 move_id: STRUGGLE,
                 damage: 1,
-            },
+            }
         ],
         "the first mover's ordinary hit and the forced Struggle that \
          follows it must both commit"
@@ -210,16 +218,24 @@ fn an_immune_first_hit_reports_no_effect_and_the_turn_continues() {
     assert_eq!(
         events,
         vec![
+            BattleEvent::UsedMove {
+                by_player: true,
+                move_id: TACKLE
+            },
             BattleEvent::NoEffect {
                 by_player: true,
                 move_id: TACKLE,
+            },
+            BattleEvent::UsedMove {
+                by_player: false,
+                move_id: TACKLE
             },
             BattleEvent::Hit {
                 by_player: false,
                 move_id: TACKLE,
                 damage: enemy_tackle_damage,
                 is_critical: false,
-            },
+            }
         ]
     );
     assert_eq!(
@@ -297,7 +313,7 @@ fn a_ground_multi_hit_move_does_not_affect_a_levitate_holder() {
          event may report from the player's side: {events:?}"
     );
     assert_eq!(
-        events[0],
+        events[1],
         BattleEvent::LevitateBlocked {
             by_player: true,
             move_id: BONE_RUSH,
@@ -383,7 +399,7 @@ fn wonder_guard_blocks_a_neutral_ordinary_hit() {
         "no player hit may be reported against a Wonder Guard holder: {events:?}"
     );
     assert_eq!(
-        events[0],
+        events[1],
         BattleEvent::WonderGuardBlocked {
             by_player: true,
             move_id: WATER_GUN,
@@ -424,7 +440,7 @@ fn wonder_guard_blocks_a_neutral_fixed_damage_move() {
         "no player hit may be reported against a Wonder Guard holder: {events:?}"
     );
     assert_eq!(
-        events[0],
+        events[1],
         BattleEvent::WonderGuardBlocked {
             by_player: true,
             move_id: DRAGON_RAGE,
@@ -501,7 +517,7 @@ fn wonder_guard_stops_a_multi_hit_move_on_its_first_attempt() {
          event may report from the player's side: {events:?}"
     );
     assert_eq!(
-        events[0],
+        events[1],
         BattleEvent::WonderGuardBlocked {
             by_player: true,
             move_id: PIN_MISSILE,
@@ -534,7 +550,7 @@ fn wonder_guard_admits_a_serene_grace_poison_hit_move() {
         .unwrap();
 
     assert_eq!(
-        events[0],
+        events[1],
         BattleEvent::WonderGuardBlocked {
             by_player: true,
             move_id: POISON_STING,
@@ -571,7 +587,7 @@ fn a_missed_ground_multi_hit_move_reports_levitate_rather_than_a_generic_miss() 
         .unwrap();
 
     assert_eq!(
-        events[0],
+        events[1],
         BattleEvent::LevitateBlocked {
             by_player: true,
             move_id: BONE_RUSH,

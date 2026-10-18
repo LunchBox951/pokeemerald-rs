@@ -122,6 +122,7 @@
 
 pub mod app;
 mod authored_message;
+pub mod battle_narration;
 mod flow;
 pub mod frame;
 mod game_save;

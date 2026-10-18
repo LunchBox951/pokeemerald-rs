@@ -1245,6 +1245,10 @@ impl Battle {
             });
             return Ok(());
         }
+        events.push(BattleEvent::UsedMove {
+            by_player: player_is_attacker,
+            move_id,
+        });
         let pp_cost = self.move_pp_cost(player_is_attacker, move_id)?;
         // `attackcanceler` runs the Soundproof move-block ahead of its no-PP
         // test (`battle_script_commands.c:932-939`); the blocked script's
