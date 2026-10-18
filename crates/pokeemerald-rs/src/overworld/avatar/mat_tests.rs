@@ -148,3 +148,27 @@ fn ordinary_walking_and_turning_ignore_the_mat_poses() {
     assert_eq!(mat::lift(&player), 0);
     assert_eq!(player_entry(&player, 0).y(), PLAYER_OBJ_Y);
 }
+
+/// The slow exit step covers `ceil(k / 2)` pixels after `k` updates, so the
+/// camera never trails the sprite by an extra pixel on odd frames
+/// (`event_object_movement.c:8328-8341`).
+#[test]
+fn the_spin_mat_exit_step_scrolls_a_pixel_on_every_other_update() {
+    use crate::overworld::viewport::camera_lag_px;
+
+    let runtime = behavior_runtime(MB_SECRET_BASE_SPIN_MAT);
+    let mut player = on_mat(&runtime, (2, 1), Direction::South);
+    for _ in 0..65 {
+        render(&mut player, &runtime, None);
+    }
+    let mut lag = Vec::new();
+    for _ in 0..engine::overworld::WALK_SLOW_FRAMES_PER_TILE {
+        render(&mut player, &runtime, None);
+        lag.push(camera_lag_px(&player).1.abs());
+    }
+    let expected: Vec<i32> = (1..engine::overworld::WALK_SLOW_FRAMES_PER_TILE)
+        .map(|k| 16 - (i32::from(k) + 1) / 2)
+        .chain([0])
+        .collect();
+    assert_eq!(lag, expected);
+}

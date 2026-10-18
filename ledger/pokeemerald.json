@@ -29425,7 +29425,7 @@
           "status": "stubbed"
         },
         "UpdateWalkSlowAnim": {
-          "reason": "WALK_SLOW_FRAMES_PER_TILE and TransitCadence::WALK_SLOW: the slow walk moves a pixel every other update until 16 pixels are taken, so one tile takes 31 updates (event_object_movement.c:8318-8342); its walk animation runs the four 8-frame sAnim_Go* cells, rendered by crates/pokeemerald-rs/src/overworld/avatar/mat.rs. Used by the spin mat's exit step (MovementAction_WalkSlow*, :5140-5155, 5226-5290); the NPC walk-slow movement actions are not ported.",
+          "reason": "WALK_SLOW_FRAMES_PER_TILE and TransitCadence::WALK_SLOW: the slow walk moves a pixel every other update until 16 pixels are taken, so one tile takes 31 updates (event_object_movement.c:8318-8342); its walk animation runs the four 8-frame sAnim_Go* cells, rendered by crates/pokeemerald-rs/src/overworld/avatar/mat.rs. Used by the spin mat's exit step (MovementAction_WalkSlow*, :5140-5155, 5226-5290); the NPC walk-slow movement actions are not ported. The camera follows the same displacement: crates/pokeemerald-rs/src/overworld/viewport.rs's camera_lag_px covers ceil(k / 2) pixels after k updates for this step.",
           "rust_target": "crates/engine/src/overworld/player/mat.rs",
           "spec": "S-5",
           "status": "stubbed"
