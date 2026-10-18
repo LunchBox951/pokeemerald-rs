@@ -79,28 +79,22 @@ mod first_usable_move;
 /// the stand-in answer it gives and exactly where the seam ends.
 mod move_learn;
 /// The shared `CreateNPCTrainerParty` construction and headless one-turn
-/// driver every NPC trainer battle in this crate goes through (issue #237,
-/// generalized off [`route103_rival`] by issue #264): both
+/// driver every NPC trainer battle in this crate goes through: both
 /// [`route103_rival`]'s own scripted rival and
 /// [`overworld_phase`]'s `sight_trainer_trigger` (Route 103's Daisy, Andrew,
 /// Miguel, Rhett, Marcos, Isabelle, Pete) build their battles through this
 /// module.
 pub(crate) mod npc_trainer_battle;
 pub(crate) mod overworld_phase;
-/// The scripted Route 103 rival battle's own choice of trainer, reachable
-/// from real play since issue #248: [`overworld_phase`]'s own
-/// `route103_rival_trigger` (beside its existing `first_battle_trigger` and,
-/// since issue #264, `sight_trainer_trigger`) reads this module's
+/// The scripted Route 103 rival battle's own choice of trainer:
+/// [`overworld_phase`]'s `route103_rival_trigger` (beside its
+/// `first_battle_trigger` and `sight_trainer_trigger`) reads this module's
 /// [`route103_rival::route103_rival_for`] table, then calls
 /// [`npc_trainer_battle::start_npc_trainer_battle`]/
-/// [`npc_trainer_battle::advance_npc_trainer_battle`] directly -- the same
-/// reachability slice that retired [`first_battle`]'s own former
-/// `#[allow(dead_code)]` between issues #221 and #231. This module carried
-/// thin pass-throughs over those two functions (plus a `RivalBattleError`
-/// alias) from issue #264 until issue #347 retired them: neither wrapper
-/// held any Route-103-specific behaviour, so [`npc_trainer_battle`] is the
-/// one place both this module's own trigger and
-/// [`overworld_phase`]'s `sight_trainer_trigger` build their battles now.
+/// [`npc_trainer_battle::advance_npc_trainer_battle`] directly. This module
+/// holds no battle driver of its own: [`npc_trainer_battle`] is the one
+/// place both this module's own trigger and [`overworld_phase`]'s
+/// `sight_trainer_trigger` build their battles.
 pub(crate) mod route103_rival;
 mod wild_encounter;
 pub(crate) use overworld_phase::OverworldPhase;

@@ -25,7 +25,7 @@ Then read [`docs/README.md`](docs/README.md). It routes each task to the smalles
 
 ## Verify
 
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml) is the gate authority. A pull request into `dev` passes when its `policy` job and every `native` leg pass; run the `policy` steps and the Linux `native` steps locally before marking work ready. Read the steps from the workflow, not from a copy, so a new check reaches you without a doc change. The Linux steps from `Fetch pinned upstream references` onward need the upstream references and asset pack: run `./init.sh`, then `cargo run -p xtask -- extract`.
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) is the gate authority for the checks you run yourself: its check passes when the `policy` job and every `native` leg pass, and [`RELEASE.md`](RELEASE.md) §Per-rung gates lists every check a merge into `dev` requires beside it. Run the `policy` steps and the Linux `native` steps locally before marking work ready. Read the steps from the workflow, not from a copy, so a new check reaches you without a doc change. The Linux steps from `Fetch pinned upstream references` onward need the upstream references and asset pack: run `./init.sh`, then `cargo run -p xtask -- extract`.
 
 While iterating, run the focused command for what you changed, such as `cargo test -p <crate>` or `python3 scripts/ledger.py verify`, and run the full step set once at the end.
 

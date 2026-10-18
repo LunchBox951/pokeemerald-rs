@@ -244,9 +244,8 @@ pub enum AppState {
     /// Route 101's scripted first battle is running inside the overworld
     /// phase (edge-frame timing: enum docs above).
     FirstBattle,
-    /// A trainer battle -- the Route 103 rival (issue #248) or, since issue
-    /// #264, one of Route 103's own sight trainers -- is running inside the
-    /// overworld phase (edge-frame timing: enum docs above). The two share
+    /// A trainer battle -- the Route 103 rival or one of Route 103's own
+    /// sight trainers -- is running inside the overworld phase (edge-frame timing: enum docs above). The two share
     /// one variant: both are `BATTLE_TYPE_TRAINER` fights indistinguishable
     /// from outside the overworld phase, and [`App::rival_battle_outcome`]/
     /// [`App::sight_trainer_battle_outcome`] are what tell a caller which one
