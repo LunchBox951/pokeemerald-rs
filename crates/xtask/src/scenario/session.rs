@@ -131,7 +131,9 @@ impl Scratch {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
-            let mode = hold.metadata()?.permissions().mode() & 0o7777;
+            // mkdir inherits a setgid parent's setgid bit, so a directory this
+            // session just created may be 0o2700; setuid and sticky never are.
+            let mode = hold.metadata()?.permissions().mode() & 0o5777;
             if mode != 0o700 {
                 return Err(not_fresh(&self.path));
             }
@@ -322,8 +324,9 @@ fn open_hold(path: &Path) -> std::io::Result<std::fs::File> {
     // Real access, not zero: Windows checks sharing only against handles that
     // hold access, so a zero-access hold would not deny rename or delete.
     const FILE_LIST_DIRECTORY: u32 = 0x1;
+    const FILE_READ_ATTRIBUTES: u32 = 0x0080;
     let hold = std::fs::OpenOptions::new()
-        .access_mode(FILE_LIST_DIRECTORY)
+        .access_mode(FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES)
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
         .share_mode(SHARE_READ_WRITE)
         .open(path)?;
@@ -524,6 +527,24 @@ mod tests {
         std::fs::rename(&scratch.path, &aside).unwrap();
         replacement(&scratch.path);
         aside
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_scratch_directory_under_a_setgid_base_is_claimed() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let base = std::env::temp_dir().join(format!(
+            "pokeemerald-setgid-base-{}-{:016x}",
+            std::process::id(),
+            unpredictable()
+        ));
+        std::fs::create_dir(&base).unwrap();
+        std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o2700)).unwrap();
+        let claimed = Scratch::create_in(&base);
+        let result = claimed.as_ref().map(|_| ()).map_err(ToString::to_string);
+        drop(claimed);
+        let _ = std::fs::remove_dir_all(&base);
+        result.unwrap();
     }
 
     #[cfg(unix)]
