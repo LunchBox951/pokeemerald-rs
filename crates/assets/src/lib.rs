@@ -106,7 +106,7 @@ pub use metatile_attributes::{MetatileAttribute, MetatileAttributeTable, Metatil
 pub use new_game_flags::{
     FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_RIVAL_BEDROOM, RESET_MAP_FLAGS,
     TRUCK_INTRO_FLAGS_FEMALE, TRUCK_INTRO_FLAGS_MALE, TRUCK_INTRO_VARS_FEMALE,
-    TRUCK_INTRO_VARS_MALE,
+    TRUCK_INTRO_VARS_MALE, WALL_CLOCK_VIGOROTH_HIDE_FLAGS,
 };
 
 // `items::ItemId` is the full item-table identifier; it is intentionally *not*

@@ -209,6 +209,24 @@ pub const TRUCK_INTRO_FLAGS_FEMALE: &[u16] = &[
     FLAG_HIDE_LITTLEROOT_TOWN_MAYS_HOUSE_2F_POKE_BALL,
 ];
 
+const FLAG_HIDE_LITTLEROOT_TOWN_PLAYERS_HOUSE_VIGOROTH_1: u16 = 0x2F2;
+const FLAG_HIDE_LITTLEROOT_TOWN_PLAYERS_HOUSE_VIGOROTH_2: u16 = 0x2F3;
+
+/// The two unconditional hide flags of
+/// `PlayersHouse_2F_EventScript_WallClock`
+/// (`pokeemerald/data/scripts/players_house.inc:62-63`), in script order.
+///
+/// Upstream sets them while the player sets the bedroom wall clock, which
+/// every playthrough runs before regaining control. A start in the bedroom
+/// skips that script, leaving both house Vigoroths visible and solid on
+/// each 1F. Gender-independent: both identities' homes use the same pair.
+/// `FLAG_SET_WALL_CLOCK` and the intro-state variable stay with the full
+/// wall-clock sequence.
+pub const WALL_CLOCK_VIGOROTH_HIDE_FLAGS: &[u16] = &[
+    FLAG_HIDE_LITTLEROOT_TOWN_PLAYERS_HOUSE_VIGOROTH_1,
+    FLAG_HIDE_LITTLEROOT_TOWN_PLAYERS_HOUSE_VIGOROTH_2,
+];
+
 const VAR_LITTLEROOT_INTRO_STATE: u16 = 0x4092;
 const VAR_LITTLEROOT_HOUSES_STATE_BRENDAN: u16 = 0x408C;
 const VAR_LITTLEROOT_HOUSES_STATE_MAY: u16 = 0x4082;

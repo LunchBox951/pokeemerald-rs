@@ -173,6 +173,24 @@ fn a_pressed_with_a_direction_while_facing_nothing_turns_normally() {
     );
 }
 
+/// Un-hides the Vigoroth at `(4, 5)`, the only `ONE_F` object event with a
+/// real script this port does not model.
+///
+/// A fresh save hides it: the skipped wall-clock script would
+/// (`players_house.inc:62`), so `new_game` sets the flag. These fixtures
+/// need a visible unmodelled-script object, so they clear that one flag
+/// rather than assume the pre-fix visible Vigoroth (I-3, #2343).
+fn unhide_vigoroth_1(phase: &mut OverworldPhase) {
+    let flag =
+        assets::object_event_flags::resolve("FLAG_HIDE_LITTLEROOT_TOWN_PLAYERS_HOUSE_VIGOROTH_1")
+            .expect("the typed object-event flag table carries Vigoroth 1's hide flag");
+    phase
+        .save1
+        .event_data
+        .flag_clear(flag)
+        .expect("an ordinary flag id");
+}
+
 /// An object event with a real, non-`"0x0"` script this port does not model
 /// yet still consumes the frame: `TryStartInteractionScript`
 /// (`field_control_avatar.c:172`) returns TRUE for any non-NULL script, so
@@ -180,6 +198,7 @@ fn a_pressed_with_a_direction_while_facing_nothing_turns_normally() {
 #[test]
 fn a_pressed_with_a_perpendicular_direction_facing_an_unmodelled_script_does_not_turn() {
     let mut phase = synthetic_phase(PlayerState::new((4, 6), 3, Direction::North), None);
+    unhide_vigoroth_1(&mut phase);
 
     phase.step(pressed(Buttons::A | Buttons::LEFT));
 
@@ -193,13 +212,15 @@ fn a_pressed_with_a_perpendicular_direction_facing_an_unmodelled_script_does_not
 }
 
 /// The faced object really is a visible object event carrying a real script.
+/// (A fresh save hides it; see [`unhide_vigoroth_1`].)
 #[test]
 fn the_faced_vigoroth_is_visible_with_a_real_script() {
-    let phase = synthetic_phase(PlayerState::new((4, 6), 3, Direction::North), None);
+    let mut phase = synthetic_phase(PlayerState::new((4, 6), 3, Direction::North), None);
+    unhide_vigoroth_1(&mut phase);
     let runtime = runtime_for(&phase);
     let object =
         engine::overworld::facing_object_event(&phase.player, &runtime, &phase.save1.event_data)
-            .expect("the Vigoroth at (4, 5) must be visible on a fresh save");
+            .expect("the Vigoroth at (4, 5) must be visible once its hide flag is cleared");
     assert_eq!(object.script, "PlayersHouse_1F_EventScript_Vigoroth1");
     assert!(crate::overworld::npc_scripts::script_text(object.script).is_none());
 }
@@ -517,4 +538,39 @@ fn overworld_movement_input_turns_the_player() {
         new_game::SPAWN_POSITION,
         "walking south from the spawn must actually move the player"
     );
+}
+
+/// The four tiles the house Vigoroths used to block with nothing drawn there
+/// (I-3, #2343): TV and sink in each identity's 1F. The skipped wall-clock
+/// script hides both (`players_house.inc:62-63`), so on a fresh save each is
+/// enterable. Real object events over an open synthetic room, as
+/// [`synthetic_phase`] does for Brendan's 1F.
+#[test]
+fn the_tv_and_sink_tiles_of_both_houses_are_enterable_on_a_fresh_save() {
+    use assets::MapId;
+    const HOUSES: [(MapId, [(i32, i32); 2]); 2] = [
+        (
+            MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F"),
+            [(4, 5), (1, 3)],
+        ),
+        (MapId("MAP_LITTLEROOT_TOWN_MAYS_HOUSE_1F"), [(6, 5), (9, 3)]),
+    ];
+    for (map, tiles) in HOUSES {
+        for (x, y) in tiles {
+            let mut phase = OverworldPhase::for_test(
+                crate::overworld::test_support::synthetic_scene(10, 10),
+                map,
+                PlayerState::new((x, y + 1), 3, Direction::North),
+                None,
+            );
+
+            phase.step(held(Buttons::UP));
+
+            assert_eq!(
+                phase.player.position(),
+                (x, y),
+                "{map:?}: ({x}, {y}) must be enterable on a fresh save"
+            );
+        }
+    }
 }
