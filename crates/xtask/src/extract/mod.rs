@@ -57,7 +57,9 @@
 //! - `battle-interface/{image,palette,raw}/<name>`
 //! - `pokemon/<species>/{front,back}` and `pokemon/<species>/palette/{normal,shiny}`
 //! - `pokedex-graphics/{image,image-palette,palette,raw}/<name>`
-//! - `audio/sample/{direct-sound,programmable-wave}/<name>`
+//! - `audio/sample/{direct-sound,programmable-wave}/<name>` and
+//!   `audio/sample/direct-sound/cry/<stem>`
+//! - `audio/cry/table`
 //! - `audio/voicegroup/<label>` and `audio/song/<name>`
 //! - `battle-message/table`
 //!
@@ -70,6 +72,7 @@ mod battle_anim;
 mod battle_interface;
 mod battle_message;
 mod battler;
+mod cry;
 mod error;
 mod fonts;
 pub mod inflate;
@@ -160,6 +163,7 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     pokedex_graphics::extract_pokedex_graphics(&upstream, &mut writer)?;
     battle_interface::extract_battle_interface(&upstream, &mut writer)?;
     audio_samples::extract_audio_samples(&upstream, &mut writer)?;
+    cry::extract_cries(&upstream, &mut writer)?;
     voicegroups::extract_voicegroups(&upstream, &mut writer)?;
     midi::extract_song(&upstream, &mut writer)?;
     battle_message::extract_battle_message(&upstream, &mut writer)?;

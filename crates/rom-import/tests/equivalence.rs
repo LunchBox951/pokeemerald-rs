@@ -32,6 +32,12 @@
 //!   here instead of shipping a pack with a hole in it. A domain slice adds
 //!   its prefix when it lands.
 //!
+//! [`PENDING_DOMAIN_PREFIXES`] names the one domain under a complete prefix
+//! whose ROM producer has not landed: the species-cry table and its samples.
+//! Its checkout ids are counted but not required of the ROM backend, and the
+//! producer's slice removes the constant when it lands. Every other `audio/`
+//! id stays compared.
+//!
 //! [`REVIEWED_DIFFERENCES`] is the escape hatch for an id the two backends
 //! genuinely cannot agree on. It is empty, and the intent is that it stays
 //! empty: `title/palette/pokemon_logo` was the one candidate, and it was
@@ -64,6 +70,21 @@ const COMPLETE_PREFIXES: &[&str] = &[
     "battle-message/",
     "bag/",
 ];
+
+/// Checkout ids under a [`COMPLETE_PREFIXES`] entry whose ROM producer has not
+/// landed: the `audio/cry/table` payload and the cry samples it names.
+///
+/// This is staging, not a reviewed difference: the ROM cry producer removes
+/// it when it lands, so the cry ids are then required like every other
+/// `audio/` id.
+const PENDING_DOMAIN_PREFIXES: &[&str] = &["audio/cry/", "audio/sample/direct-sound/cry/"];
+
+/// Whether `id` belongs to a domain the ROM backend does not produce yet.
+fn is_pending_domain(id: &str) -> bool {
+    PENDING_DOMAIN_PREFIXES
+        .iter()
+        .any(|prefix| id.starts_with(prefix))
+}
 
 /// The starters' static battler entries: 12 ids the ROM backend must write
 /// although `pokemon/` is not yet in [`COMPLETE_PREFIXES`].
@@ -139,7 +160,11 @@ fn the_rom_backend_matches_the_checkout_pack() {
         let claimed = COMPLETE_PREFIXES
             .iter()
             .any(|prefix| id.starts_with(prefix));
-        if claimed && !imported.contains_key(id) && !reviewed.contains_key(id.as_str()) {
+        if claimed
+            && !is_pending_domain(id)
+            && !imported.contains_key(id)
+            && !reviewed.contains_key(id.as_str())
+        {
             differences.push(format!("{id}: the ROM backend wrote no such entry"));
         }
     }
@@ -166,6 +191,23 @@ fn the_rom_backend_matches_the_checkout_pack() {
         "{} entry difference(s) between the ROM backend and the checkout pack",
         differences.len()
     );
+}
+
+#[test]
+fn only_the_cry_domain_is_pending() {
+    for id in ["audio/cry/table", "audio/sample/direct-sound/cry/groudon"] {
+        assert!(is_pending_domain(id), "{id}");
+    }
+    for id in [
+        "audio/sample/direct-sound/sc88pro_flute",
+        "audio/sample/direct-sound/cryptic",
+        "audio/sample/programmable-wave/01",
+        "audio/voicegroup/title",
+        "audio/song/mus_title",
+        "title/image/pokemon_logo",
+    ] {
+        assert!(!is_pending_domain(id), "{id}");
+    }
 }
 
 /// `mus_title.mid` plays key 33 on program 48 (channel 2, tick 2160). That is
