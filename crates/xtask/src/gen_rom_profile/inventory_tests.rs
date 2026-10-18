@@ -20,7 +20,7 @@ use crate::extract::scope::{
 fn complete_inventory() -> Vec<PackEntry> {
     TILESETS
         .iter()
-        .map(|tileset| tileset.tiles_id())
+        .flat_map(|tileset| inventory::tileset_payload_ids(tileset.name))
         .chain(tileset_animation_ids())
         .chain(title_ids())
         .chain(FONTS.iter().map(|font| font.pack_id.to_owned()))
@@ -124,6 +124,35 @@ fn a_pack_missing_a_tileset_is_refused() {
             &id,
             "tilesets",
         );
+    }
+}
+
+#[test]
+fn a_pack_missing_any_tileset_payload_root_is_refused() {
+    for tileset in TILESETS {
+        for id in inventory::tileset_payload_ids(tileset.name) {
+            assert_refused(
+                &format!("no-payload-{}", id.replace('/', "-")),
+                without(&id),
+                &id,
+                "tilesets",
+            );
+        }
+    }
+}
+
+#[test]
+fn the_tileset_payload_roots_are_the_tiles_metatiles_attributes_and_sixteen_palettes() {
+    let ids = inventory::tileset_payload_ids("general");
+    assert_eq!(ids.len(), 3 + 16);
+    for want in [
+        "tileset/general/tiles",
+        "tileset/general/metatiles",
+        "tileset/general/metatile-attributes",
+        "tileset/general/palette/00",
+        "tileset/general/palette/15",
+    ] {
+        assert!(ids.iter().any(|id| id == want), "{want} in {ids:?}");
     }
 }
 

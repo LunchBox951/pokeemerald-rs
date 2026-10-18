@@ -1,4 +1,4 @@
-//! I-6 (issues #214/#232) shared fixtures and drivers for the `save_continue_*_tests`
+//! I-6 shared fixtures and drivers for the `save_continue_*_tests`
 //! modules.
 //!
 //! These drive the *production* path end to end — the same

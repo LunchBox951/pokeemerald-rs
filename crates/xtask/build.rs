@@ -1,5 +1,5 @@
 //! Records the Cargo profile this binary was built with, so `e2e --release`
-//! can tell a release build from a debug one (F-3, V-1; issue #1878). Debug assertions
+//! can tell a release build from a debug one (F-3, V-1). Debug assertions
 //! and target-directory names cannot: both are configurable per profile.
 
 fn main() {

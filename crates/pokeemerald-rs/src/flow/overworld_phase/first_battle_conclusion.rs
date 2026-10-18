@@ -1,5 +1,5 @@
-//! `Route101_EventScript_BirchsBag`'s post-battle tail (issue #251, ladders
-//! to I-4): the heal, the three var writes, and the warp to Birch's lab
+//! `Route101_EventScript_BirchsBag`'s post-battle tail (I-4): the heal, the
+//! three var writes, and the warp to Birch's lab
 //! upstream runs the instant the Route 101 scripted first battle ends -- on
 //! **either** outcome.
 //!
@@ -35,8 +35,8 @@
 //! `VAR_STARTER_MON`, hands over the chosen starter (`ScriptGiveMon`), and
 //! sets `SetMainCallback2(CB2_StartFirstBattle)` -- the actual
 //! `BATTLE_TYPE_FIRST_BATTLE` Zigzagoon fight this port's own trigger
-//! already starts directly (issue #231, since there is no `ChooseStarter`
-//! UI to hang it off of). Once the fight ends, `CB2_EndFirstBattle`
+//! already starts directly (there is no `ChooseStarter` UI to hang it off
+//! of). Once the fight ends, `CB2_EndFirstBattle`
 //! (`battle_setup.c:950-954`) is unconditional --
 //! `SetMainCallback2(CB2_ReturnToFieldContinueScriptPlayMapMusic)`, no
 //! `IsPlayerDefeated` branch anywhere in the chain
@@ -84,8 +84,7 @@
 //!   whose persistent effect upstream *is* that flag write
 //!   (`RemoveObjectEventByLocalIdAndMap` -> `FlagSet`,
 //!   `src/event_object_movement.c:1389-1397`; no script ever clears it).
-//!   These are observable *today*, not deferred script dressing (PR #291
-//!   review): the generated [`assets::MapEventsTable`] templates carry
+//!   These are observable, not deferred script dressing: the generated [`assets::MapEventsTable`] templates carry
 //!   exactly these flag names -- the rescue-battle Birch (local id 2), the
 //!   rescue Zigzagoon (local id 4, its *own* flag, not the Birch's), the
 //!   starters bag, and the lab Birch; `engine::overworld::object_event`
@@ -109,7 +108,7 @@
 //!   [`crate::new_game::PROVISIONAL_STARTER_SPECIES`] is fixed for both the
 //!   pre-fight and post-fight timing, so no player-visible difference
 //!   exists yet, and nothing reads `VAR_STARTER_MON` before this method
-//!   runs. A future starter-choice slice must move this write back to real
+//!   runs. A starter choice, once ported, must move this write back to real
 //!   choose-time.
 //! - **`setvar VAR_ROUTE101_STATE, 3`** -- [`ROUTE101_STATE_CONCLUDED`],
 //!   the chain's own terminal value: `super::first_battle_trigger`'s
@@ -150,29 +149,20 @@
 //! bedroom scene exists, but nothing routes a fresh save through it a
 //! second time post-rescue for this to matter yet).
 //!
-//! # What this retires
+//! # No fainted lead survives the first battle
 //!
-//! Before this issue, a lost Route 101 first battle was the one loss path
-//! issue #261's white-out could not cover (`CB2_EndFirstBattle` has no
-//! `IsPlayerDefeated` branch, so it never routes to `CB2_WhiteOut`) --
-//! `crate::flow::wild_encounter::lead_can_fight` and
-//! `super::route103_rival_trigger::OverworldPhase::begin_route103_rival_battle`'s
-//! own fainted-lead screen existed solely to fail closed on the fainted
-//! lead that residual state left standing in the overworld (issue #261
-//! review; both modules' own former docs named this exact exemption). This
-//! module's heal runs on *every* outcome, in the same frame the battle
-//! ends -- so that state can no longer exist past the frame
-//! [`OverworldPhase::conclude_first_battle`] runs, and both guards were
-//! left with no reachable input to refuse. Removed rather than left inert
-//! (`crate::flow::wild_encounter`'s and `super::route103_rival_trigger`'s
-//! own updated module docs), with their behavioural pins replaced by
-//! strictly *stronger* ones proving the state itself is unreachable, not
-//! merely guarded (`(test-ratchet)`; see
+//! `CB2_EndFirstBattle` has no `IsPlayerDefeated` branch, so a lost Route
+//! 101 first battle never routes to `CB2_WhiteOut`. This module's heal runs
+//! on *every* outcome, in the same frame the battle ends, so no fainted
+//! lead reaches the overworld past the frame
+//! [`OverworldPhase::conclude_first_battle`] runs. Neither
+//! `crate::flow::wild_encounter` nor
+//! `super::route103_rival_trigger::OverworldPhase::begin_route103_rival_battle`
+//! screens for a fainted lead; the tests pin that the state itself is
+//! unreachable `(test-ratchet)`: see
 //! `crate::flow::wild_encounter::first_battle_recovery_tests::a_lost_route_101_first_battle_heals_the_lead_instead_of_leaving_it_fainted`
 //! and
-//! `super::route103_rival_driver_tests::a_lost_route_101_first_battle_still_lets_the_healed_lead_fight_the_rival`
-//! for the replacement tests and their own doc comments for exactly what
-//! they retire).
+//! `super::route103_rival_driver_tests::a_lost_route_101_first_battle_still_lets_the_healed_lead_fight_the_rival`.
 //!
 //! # RNG stream
 //!
