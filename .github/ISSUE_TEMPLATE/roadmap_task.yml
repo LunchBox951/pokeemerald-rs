@@ -19,7 +19,7 @@ body:
     id: acceptance
     attributes:
       label: Laddered acceptance ID
-      description: The stable ID(s) in docs/acceptance/v1.md this task satisfies, e.g. F-7, or `none` with a concrete rationale.
+      description: The one stable acceptance ID in docs/acceptance/v1.md this task satisfies, e.g. F-7, or `none` with a concrete rationale.
       placeholder: "F-7"
     validations:
       required: true

@@ -10,8 +10,8 @@ headings. Keep it lean (lean-docs).
 ## Linked issue
 
 <!--
-Closes #ISSUE and/or names the acceptance ID(s) it advances.
-Cite the v1 acceptance ID this ladders up to (docs/acceptance/v1.md), e.g. F-7.
+Closes #ISSUE. Name the one v1 acceptance ID it advances (docs/acceptance/v1.md),
+e.g. F-7, or `none` with a rationale.
 -->
 
 - Issue:
