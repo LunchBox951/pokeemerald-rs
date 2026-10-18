@@ -28,6 +28,11 @@ impl AssetPack {
     /// unsupported, malformed, or incomplete game data.
     pub fn load_ready(path: &Path, required: &[RequiredAsset]) -> Result<Self, PackReadinessError> {
         let fail = |problem| PackReadinessError::new(path, problem);
+        if path.is_dir() {
+            return Err(fail(PackProblem::Unreadable(
+                std::io::ErrorKind::IsADirectory,
+            )));
+        }
         let bytes = std::fs::read(path).map_err(|err| {
             fail(if err.kind() == std::io::ErrorKind::NotFound {
                 PackProblem::Missing
