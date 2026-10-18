@@ -45,7 +45,7 @@
 //!   discovers the OS default output, builds the stream, and rebuilds it
 //!   after a stream failure or a default-output change, with bounded
 //!   retries. Producers keep the same ring and handle throughout; samples
-//!   queued while nothing was draining are discarded when a stream attaches
+//!   queued while nothing was draining are discarded when a stream re-attaches
 //!   after playback was started. Distinct [`TransportState`] transitions are
 //!   available from [`AudioOutput::poll_transport_state`]; neither the device
 //!   callbacks nor the game loop connect, wait, or log.

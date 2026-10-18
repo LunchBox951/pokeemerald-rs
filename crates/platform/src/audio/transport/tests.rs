@@ -16,6 +16,8 @@ struct Callbacks {
     error: Box<dyn FnMut(cpal::Error) + Send>,
 }
 
+// A fake host world: independent failure switches, not a state machine.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Default)]
 struct World {
     default: Option<String>,
@@ -23,6 +25,7 @@ struct World {
     format: Option<cpal::SampleFormat>,
     fail_build: bool,
     fail_play: bool,
+    no_hw_pause: bool,
     /// Every call that reaches the audio stack, host or device or stream.
     ops: usize,
     discoveries: usize,
@@ -130,6 +133,9 @@ impl OutputStream for FakeStream {
     fn pause(&self) -> Result<(), cpal::Error> {
         let mut w = with(&self.0);
         w.ops += 1;
+        if w.no_hw_pause {
+            return Err(cpal::Error::new(cpal::ErrorKind::UnsupportedOperation));
+        }
         w.pauses += 1;
         Ok(())
     }
@@ -397,30 +403,24 @@ fn a_stream_that_keeps_failing_cannot_reset_the_retry_budget() {
 }
 
 #[test]
-fn queued_history_is_discarded_when_a_stream_attaches_after_start() {
+fn queued_history_is_discarded_when_a_stream_reattaches() {
     let w = world(|w| w.default = Some("a".into()));
     let mut rig = rig(&w, 4);
     rig.shared.ever_started.store(true, Ordering::Release);
     rig.shared.running.store(true, Ordering::Release);
-
-    // Output absent at first: the producer fills the ring with history.
-    with(&w).default = None;
     rig.transport.step(Duration::ZERO);
-    assert_eq!(rig.producer.push(&[0.25; 6]), 6);
-    with(&w).default = Some("a".into());
-    rig.transport.step(MS(100));
+    assert_eq!(rig.events().last(), Some(&TransportState::Ready));
+
+    // The stream is lost; the producer keeps filling the ring meanwhile.
+    assert_eq!(rig.producer.push(&[0.5; 4]), 4);
+    raise_error(&w, 0, cpal::ErrorKind::DeviceNotAvailable);
+    rig.transport.step(MS(20));
+    assert_eq!(rig.producer.push(&[0.5; 4]), 4);
+    rig.transport.step(MS(120));
 
     assert_eq!(rig.events().last(), Some(&TransportState::Ready));
     assert_eq!(rig.producer.available_space(), rig.producer.capacity());
     assert_eq!(rig.producer.underruns(), 0, "disposal is not an underrun");
-
-    // A later disconnect discards what was queued during the outage.
-    assert_eq!(rig.producer.push(&[0.5; 4]), 4);
-    raise_error(&w, 0, cpal::ErrorKind::DeviceNotAvailable);
-    rig.transport.step(MS(120));
-    assert_eq!(rig.producer.push(&[0.5; 4]), 4);
-    rig.transport.step(MS(320));
-    assert_eq!(rig.producer.available_space(), rig.producer.capacity());
 }
 
 #[test]
@@ -484,7 +484,7 @@ fn playback_intent_is_applied_by_the_worker_and_failures_are_reported() {
 
     rig.shared.running.store(false, Ordering::Release);
     rig.transport.step(MS(60));
-    assert_eq!(with(&w).pauses, 2);
+    assert_eq!(with(&w).pauses, 1);
 
     rig.events();
     with(&w).fail_play = true;
@@ -580,4 +580,27 @@ fn a_busy_device_error_rebuilds_because_the_stream_may_have_ended() {
         rig.events(),
         [TransportState::Unavailable(TransportFailure::StreamLost)]
     );
+}
+
+#[test]
+fn attaching_before_start_reaches_ready_without_hardware_pause() {
+    let w = world(|w| {
+        w.default = Some("a".into());
+        w.no_hw_pause = true;
+    });
+    let mut rig = rig(&w, 4);
+    rig.transport.step(Duration::ZERO);
+    assert_eq!(rig.events(), [TransportState::Ready]);
+}
+
+#[test]
+fn startup_prefill_survives_start_before_the_first_attach() {
+    let w = world(|w| w.default = Some("a".into()));
+    let mut rig = rig(&w, 4);
+    assert_eq!(rig.producer.push(&[0.25; 6]), 6);
+    rig.shared.ever_started.store(true, Ordering::Release);
+    rig.shared.running.store(true, Ordering::Release);
+    rig.transport.step(Duration::ZERO);
+    assert_eq!(rig.events().last(), Some(&TransportState::Ready));
+    assert_eq!(rig.producer.available_space(), 2);
 }

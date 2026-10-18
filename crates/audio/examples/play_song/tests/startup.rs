@@ -106,3 +106,43 @@ fn a_refused_prefill_is_a_setup_failure_and_never_starts_the_device() {
         "the accepted head of the prefill is still queued; only the tail was refused"
     );
 }
+
+#[test]
+fn a_transport_with_no_output_is_the_expected_headless_case() {
+    use platform::audio::{TransportFailure, TransportState};
+    assert_eq!(
+        classify_transport(TransportState::Unavailable(TransportFailure::NoOutput)),
+        Some(TransportOutcome::ExpectedHeadless)
+    );
+}
+
+#[test]
+fn other_transport_failures_are_setup_failures_and_connecting_keeps_waiting() {
+    use platform::audio::{TransportFailure, TransportState};
+    for failure in [
+        TransportFailure::Unsupported,
+        TransportFailure::ConnectFailed,
+        TransportFailure::StreamLost,
+        TransportFailure::DefaultChanged,
+    ] {
+        let state = TransportState::Unavailable(failure);
+        assert_eq!(
+            classify_transport(state),
+            Some(TransportOutcome::SetupFailure(state))
+        );
+    }
+    assert_eq!(classify_transport(TransportState::Connecting), None);
+    assert_eq!(
+        classify_transport(TransportState::Ready),
+        Some(TransportOutcome::Ready)
+    );
+}
+
+#[test]
+fn the_null_backend_needs_no_transport_wait() {
+    let mut output = AudioOutput::null(4);
+    assert_eq!(
+        await_transport(&mut output, std::time::Duration::ZERO),
+        TransportOutcome::Ready
+    );
+}

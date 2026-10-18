@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use audio::{decode_track, Adsr, Instrument, Sequencer, Song, ToneData, WaveData, MIXER_RATE};
-use platform::audio::{PlaybackProgress, UsableReading};
+use platform::audio::{PlaybackProgress, TransportFailure, TransportState, UsableReading};
 use platform::{AudioOutput, PlatformError, Producer, GBA_FRAME_PERIOD};
 
 const RING_CAPACITY_FRAMES: usize = 4096;
@@ -68,6 +68,9 @@ fn main() -> ExitCode {
             };
         }
     };
+    if let Some(code) = settle_transport(&mut output) {
+        return code;
+    }
     let producer = output.producer();
     let ring_capacity_samples = RING_CAPACITY_FRAMES * usize::from(output.channels());
     // Pace at the real game-frame period, the same cadence the output's
@@ -175,6 +178,66 @@ fn classify_open_error(error: &PlatformError) -> OpenOutcome {
     match error {
         PlatformError::NoAudioDevice => OpenOutcome::ExpectedHeadless,
         _ => OpenOutcome::PlaybackSetupFailure,
+    }
+}
+
+/// How long to wait for the output transport to settle after `open`, which
+/// returns before any device is discovered.
+const TRANSPORT_WAIT: Duration = Duration::from_secs(3);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TransportOutcome {
+    Ready,
+    ExpectedHeadless,
+    /// A transport failure, or the state still reached when the wait ran out.
+    SetupFailure(TransportState),
+}
+
+/// The outcome a transport state settles, or `None` while it is still
+/// connecting. No output at all is the expected headless case; any other
+/// unavailability is a real setup failure.
+fn classify_transport(state: TransportState) -> Option<TransportOutcome> {
+    match state {
+        TransportState::Ready | TransportState::Null => Some(TransportOutcome::Ready),
+        TransportState::Unavailable(TransportFailure::NoOutput) => {
+            Some(TransportOutcome::ExpectedHeadless)
+        }
+        TransportState::Unavailable(_) => Some(TransportOutcome::SetupFailure(state)),
+        TransportState::Connecting => None,
+    }
+}
+
+/// Wait for the transport and report an exit code when playback cannot go on:
+/// success for the expected headless case, failure otherwise.
+fn settle_transport(output: &mut AudioOutput) -> Option<ExitCode> {
+    match await_transport(output, TRANSPORT_WAIT) {
+        TransportOutcome::Ready => None,
+        TransportOutcome::ExpectedHeadless => {
+            println!("no audio device; nothing to play — this is expected in CI/headless");
+            Some(ExitCode::SUCCESS)
+        }
+        TransportOutcome::SetupFailure(state) => {
+            eprintln!("audio playback setup failed: transport {state:?}");
+            Some(ExitCode::FAILURE)
+        }
+    }
+}
+
+/// Follow the output's transport transitions until one settles the outcome or
+/// `timeout` passes.
+fn await_transport(output: &mut AudioOutput, timeout: Duration) -> TransportOutcome {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let settled = std::iter::from_fn(|| output.poll_transport_state())
+            .find_map(classify_transport)
+            .or_else(|| classify_transport(output.transport_state()));
+        if let Some(outcome) = settled {
+            return outcome;
+        }
+        if Instant::now() >= deadline {
+            return TransportOutcome::SetupFailure(output.transport_state());
+        }
+        std::thread::sleep(Duration::from_millis(10));
     }
 }
 

@@ -23,10 +23,11 @@
 //!   missing or flapping output is polled at a bounded rate and never given
 //!   up on. A newly observed default identity starts a fresh burst; a stream
 //!   that fails again before surviving [`STABLE_AFTER`] continues the old one.
-//! - When a stream attaches after playback was ever started, samples queued
-//!   while no stream was draining are discarded, so playback resumes at the
-//!   producer's current position instead of replaying history. A transport
-//!   that was never started keeps its queue: that is prefill, not history.
+//! - When a stream re-attaches after an earlier one and playback was ever
+//!   started, samples queued while no stream was draining are discarded, so
+//!   playback resumes at the producer's current position instead of replaying
+//!   history. The first attach keeps the queue: that is the producer's startup
+//!   prefill, whether or not it has already called `start`.
 //! - Each distinct [`TransportState`] is published once, in order, for the
 //!   application to report.
 
@@ -166,6 +167,9 @@ pub(super) struct Transport<H: OutputHost> {
     live: Option<Live<<H::Device as OutputDevice>::Stream>>,
     state: TransportState,
     failures: u32,
+    /// Whether any stream has attached yet; the first attach keeps the
+    /// producer's startup prefill.
+    attached_before: bool,
     next_attempt: Duration,
     next_discovery: Duration,
 }
@@ -187,6 +191,7 @@ impl<H: OutputHost> Transport<H> {
             live: None,
             state: TransportState::Connecting,
             failures: 0,
+            attached_before: false,
             next_attempt: Duration::ZERO,
             next_discovery: Duration::ZERO,
         }
@@ -278,7 +283,7 @@ impl<H: OutputHost> Transport<H> {
             .producer
             .reclaim_consumer()
             .ok_or(TransportFailure::ConnectFailed)?;
-        if self.shared.ever_started.load(Ordering::Acquire) {
+        if self.attached_before && self.shared.ever_started.load(Ordering::Acquire) {
             consumer.discard_queued();
         }
         let source = source_for_device(
@@ -300,15 +305,11 @@ impl<H: OutputHost> Transport<H> {
         )
         .map_err(|err| failure_of(&err))?;
 
+        // A built stream is paused, so only a started transport plays it.
         let playing = self.shared.running.load(Ordering::Acquire);
-        // Some hosts start a stream as soon as it is built, so state the
-        // intent in both directions.
-        let applied = if playing {
-            stream.play()
-        } else {
-            stream.pause()
-        };
-        applied.map_err(|_| TransportFailure::ConnectFailed)?;
+        if playing {
+            stream.play().map_err(|_| TransportFailure::ConnectFailed)?;
+        }
         self.shared
             .device_sample_rate
             .store(config.sample_rate(), Ordering::Release);
@@ -325,6 +326,7 @@ impl<H: OutputHost> Transport<H> {
             playing,
             since: now,
         });
+        self.attached_before = true;
         self.next_discovery = now + DISCOVERY_INTERVAL;
         self.publish(TransportState::Ready);
         Ok(())
