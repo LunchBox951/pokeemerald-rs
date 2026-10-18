@@ -276,7 +276,7 @@ pub(crate) struct OverworldPhase {
     /// checksum, because none of them is evidence that the stored bytes
     /// are anything but real player data; they are evidence that this
     /// port cannot yet run them. Set by
-    /// [`Self::copy_party_and_objects_from_save`]'s error arm and cleared
+    /// [`Self::load_lead_from_save`]'s error arm and cleared
     /// by its other two (empty count, clean decode); diagnostic only, and
     /// never a save-time decision input.
     pub(super) undecodable_lead_retained: bool,
@@ -422,9 +422,9 @@ impl OverworldPhase {
         // nothing from `phase.rng` -- see `new_game::provisional_starter`'s
         // docs.
         let trainer_id = u32::from_le_bytes(phase.save2.player_trainer_id);
-        phase.party_lead =
-            Some(new_game::provisional_starter().with_original_trainer_id(trainer_id));
-        phase.undecodable_lead_retained = false;
+        phase.install_fresh_lead(
+            new_game::provisional_starter().with_original_trainer_id(trainer_id),
+        );
         Ok(phase)
     }
 
@@ -637,7 +637,7 @@ impl OverworldPhase {
             sight_approach: None,
             sight_trainer_log: sight_trainer_trigger::SightTrainerLog::default(),
         };
-        phase.copy_party_and_objects_from_save();
+        phase.load_lead_from_save();
         // A fainted lead with a single-member party still at the
         // trigger-consumed Route 101 state is otherwise unreachable:
         // current code always heals or advances that state once a first
