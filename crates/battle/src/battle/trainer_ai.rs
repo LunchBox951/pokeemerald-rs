@@ -648,6 +648,14 @@ fn estimated_damage(
     // estimates every populated slot, depleted or not.
     let attack_stat =
         crate::ability::thick_fat_special_attack(defender.ability(), move_type, attack_stat);
+    // Plus/Minus raise raw Special Attack 150% before stages when the other
+    // active mon has the complement (`pokemon.c:3207-3210`).
+    let attack_stat = crate::ability::plus_minus_special_attack(
+        attacker.ability(),
+        defender.ability(),
+        category,
+        attack_stat,
+    );
     let (defense_stat, defense_stage) = defender.defending_stat(category);
     let input = DamageInput {
         attacker_level: attacker.level(),
@@ -1891,6 +1899,41 @@ mod tests {
                 "species {species:?}"
             );
         }
+    }
+
+    #[test]
+    fn plus_minus_estimated_damage_matches_the_real_damage_step() {
+        let dex = Dex::new();
+        let plusle = pokemon(SpeciesId(353), vec![MoveId::WATER_GUN]);
+        let minun = pokemon(SpeciesId(354), vec![MoveId::WATER_GUN]);
+        let squirtle = pokemon(SQUIRTLE, vec![MoveId::WATER_GUN]);
+        assert_eq!(plusle.ability(), assets::AbilityId::PLUS);
+        assert_eq!(minun.ability(), assets::AbilityId::MINUS);
+
+        for (attacker, defender) in [(&plusle, &minun), (&minun, &plusle), (&plusle, &squirtle)] {
+            let mut no_draws = SequenceRng::new([]);
+            let before_roll = crate::hit::damage_before_roll(
+                &dex,
+                MoveId::WATER_GUN,
+                attacker,
+                defender,
+                true,
+                &mut no_draws,
+            )
+            .unwrap();
+            let mut best_roll = SequenceRng::new([MAXIMUM_DAMAGE_ROLL]);
+            let real = crate::damage::apply_damage_roll(before_roll.damage, &mut best_roll);
+            let estimate =
+                estimated_damage(&dex, MoveId::WATER_GUN, attacker, defender, PERCENT_SCALE)
+                    .unwrap();
+            assert_eq!(estimate, real);
+        }
+        // The boost itself must show: the complement out-damages a same-ability bystander.
+        let boosted =
+            estimated_damage(&dex, MoveId::WATER_GUN, &plusle, &minun, PERCENT_SCALE).unwrap();
+        let control =
+            estimated_damage(&dex, MoveId::WATER_GUN, &plusle, &plusle, PERCENT_SCALE).unwrap();
+        assert!(boosted > control, "{boosted} vs {control}");
     }
 }
 

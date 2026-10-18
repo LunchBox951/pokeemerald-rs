@@ -1,4 +1,4 @@
-//! Route 103 rival late frame-order regressions: the turn lock must not survive the battle (issue #976).
+//! Route 103 rival late frame-order regressions: the turn lock must not survive the battle.
 
 use battle::BattleOutcome;
 use engine::overworld::{Direction, PlayerState};

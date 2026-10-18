@@ -1,5 +1,4 @@
-//! The shipped binary's command line (S-4, Discussion #71 policy C, issue
-//! #122).
+//! The shipped binary's command line (S-4, Discussion #71 policy C).
 //!
 //! Hand-rolled; the parse itself needs nothing but `std`. `xtask`'s
 //! `Command` enum (`crates/xtask/src/main.rs`) is the precedent: one

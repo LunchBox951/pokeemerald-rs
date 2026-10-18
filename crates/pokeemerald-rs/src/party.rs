@@ -16,7 +16,7 @@
 //! language, mail, the egg bit, and contest condition (`PokemonSubstruct2`'s
 //! trailing six bytes). [`to_save_pokemon`], which has no record to retain
 //! them from, writes upstream's own `CreateMon` default for whichever of
-//! those it can derive from its own two arguments (issue #869): nickname
+//! those it can derive from its own two arguments: nickname
 //! (the species' display name), language (`GAME_LANGUAGE`), met level
 //! ([`battle::BattlePokemon::created_at_level`], not the live level -- a
 //! mon that levels up before its first save still files the level it was

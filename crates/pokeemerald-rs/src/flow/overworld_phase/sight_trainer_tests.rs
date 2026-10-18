@@ -1,9 +1,9 @@
-//! `sight_trainer_trigger` (issue #264, I-5 follow-up) and
-//! `sight_trainer_approach` (S-5, issue #300): the per-frame
+//! `sight_trainer_trigger` (I-5) and
+//! `sight_trainer_approach` (S-5): the per-frame
 //! `TRAINER_TYPE_NORMAL` sight-cone check, the approach cutscene it starts,
 //! the battle handoff at the end of that, and the defeated-flag/win/loss
-//! posture. New sibling test module, the same per-area split
-//! `route103_rival_tests` already uses (module docs there).
+//! posture. A sibling test module, the same per-area split
+//! `route103_rival_tests` uses (module docs there).
 //!
 //! Mirrors `route103_rival_tests`' own "real events over a synthetic grid"
 //! split: a fabricated flat open room paired with the *real* `MAP_ROUTE103`
@@ -19,8 +19,7 @@
 //! # The stand-in party (`seed_battle`)
 //!
 //! `begin_sight_trainer_approach_if_seen`'s own docs ("Refusals cost
-//! nothing, forever") record an emergent gap
-//! discovered while writing these tests: every real Route 103 sight trainer's
+//! nothing, forever") record an emergent gap: every real Route 103 sight trainer's
 //! own default, level-up-derived moveset except Andrew's currently includes
 //! at least one move this battle engine does not yet implement or score, so
 //! [`crate::flow::npc_trainer_battle::start_npc_trainer_battle`] fails for
@@ -49,8 +48,7 @@
 //! carries Rhett's own real `TrainerId` -- so the *defeated-flag* half is
 //! pinned honestly (the
 //! real id the flag ends up keyed to) even though the *party* is borrowed.
-//! Once a future move-coverage slice lets a real sight trainer construct,
-//! the two halves should be merged back into one real end-to-end test.
+//! Once move coverage lets a real sight trainer construct, the two halves should be merged back into one real end-to-end test.
 //!
 //! [advance]: super::OverworldPhase::advance_sight_trainer_battle_frame
 //! [active]: super::OverworldPhase::active_battle
