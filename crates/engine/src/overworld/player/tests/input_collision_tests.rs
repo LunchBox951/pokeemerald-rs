@@ -275,3 +275,39 @@ fn elevation_mismatch_blocks_the_step() {
     );
     assert_eq!(player.position(), (2, 2));
 }
+
+#[test]
+fn stepping_east_from_i32_max_is_impassable_not_an_overflow() {
+    let runtime = flat_map_runtime(5, 5, |_, _| 0);
+    let mut player = PlayerState::new((i32::MAX, 0), 0, Direction::East);
+    let outcome = player.step(Some(Direction::East), &runtime, &no_connections, &NO_FLAGS);
+    assert_eq!(
+        outcome,
+        StepOutcome::Blocked {
+            direction: Direction::East,
+            collision: Collision::Impassable,
+        }
+    );
+    assert_eq!(player.position(), (i32::MAX, 0));
+}
+
+#[test]
+fn stepping_off_every_i32_edge_is_impassable_not_an_overflow() {
+    let runtime = flat_map_runtime(5, 5, |_, _| 0);
+    for (start, direction) in [
+        ((i32::MIN, 0), Direction::West),
+        ((0, i32::MIN), Direction::North),
+        ((0, i32::MAX), Direction::South),
+    ] {
+        let mut player = PlayerState::new(start, 0, direction);
+        let outcome = player.step(Some(direction), &runtime, &no_connections, &NO_FLAGS);
+        assert_eq!(
+            outcome,
+            StepOutcome::Blocked {
+                direction,
+                collision: Collision::Impassable,
+            }
+        );
+        assert_eq!(player.position(), start);
+    }
+}

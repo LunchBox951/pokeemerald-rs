@@ -29,7 +29,7 @@ the intervening changes entered ``dev``.
 What transition mode checks:
 
 1. Read ``VERSION`` at HEAD (the current working tree).
-2. Read ``VERSION`` at the base ref (default ``origin/main``). If the ref or
+2. Read ``VERSION`` at the base ref (default ``origin/dev``). If the ref or
    the file is absent on the base -- e.g. a brand-new repository with no
    remote yet -- the base is treated as ``0.0.0.0`` so the first commit is
    never rejected as a "regression".
@@ -86,7 +86,7 @@ Self-test notes -- example version transitions.
 
 You can exercise these by writing a VERSION file and running, e.g.::
 
-    python3 scripts/version_check.py --base origin/main --head HEAD
+    python3 scripts/version_check.py --base origin/dev --head HEAD
 ----------------------------------------------------------------------------
 """
 
@@ -330,7 +330,7 @@ def git_show_file(ref: str, rel_path: str, root: str) -> Optional[str]:
     directory (matching the head-side reads); otherwise an invocation from
     outside the worktree would silently read the base as absent and fail
     the gate OPEN. Returns ``None`` if the ref is unknown or the file is
-    absent on that ref (e.g. a fresh repo with no ``origin/main`` yet, or a
+    absent on that ref (e.g. a fresh repo with no ``origin/dev`` yet, or a
     marker that simply doesn't exist there) -- callers decide whether
     absence is fatal.
     """
@@ -603,9 +603,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--base",
-        default="origin/main",
+        default="origin/dev",
         help=(
-            "Base git ref to compare against (default: origin/main). In "
+            "Base git ref to compare against (default: origin/dev). In "
             "transition mode an absent base is treated as 0.0.0.0; cumulative "
             "mode requires the ref and its VERSION file."
         ),

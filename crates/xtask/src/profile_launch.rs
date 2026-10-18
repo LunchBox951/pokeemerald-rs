@@ -1,4 +1,4 @@
-//! Re-launches `xtask` under Cargo's release profile (F-3, V-1; issue #1878).
+//! Re-launches `xtask` under Cargo's release profile (F-3, V-1).
 //!
 //! The `cargo xtask` alias forwards everything after `--` to this binary, so
 //! an application-level `--release` cannot choose the profile the binary was

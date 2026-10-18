@@ -1,7 +1,7 @@
-//! I-3 (issue #1329) front-end palette fade-wait states -- split out of
-//! `flow.rs` itself to keep that module within its own line-budget
-//! convention (`crates/README.md`), the same reason [`super::overworld_phase`]
-//! and this file's siblings are their own modules `(oop-boundaries)`. See
+//! I-3 front-end palette fade-wait states, kept apart from `flow.rs` to hold
+//! that module within its line-budget convention (`crates/README.md`), the
+//! same reason [`super::overworld_phase`] and this file's siblings are their
+//! own modules `(oop-boundaries)`. See
 //! `flow.rs`'s module docs, "Waiting for the front-end palette fade"
 //! section, for the upstream citations and contract both states share.
 

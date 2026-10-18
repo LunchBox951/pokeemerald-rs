@@ -398,6 +398,46 @@ pub enum BattleEvent {
         /// The contact move that triggered Static.
         move_id: MoveId,
     },
+    /// The target's [`AbilityId::POISON_POINT`] poisoned the attacker after a
+    /// damaging contact hit (`MOVEEND_ON_DAMAGE_ABILITIES`,
+    /// `battle_script_commands.c:4280`; `ABILITY_POISON_POINT`,
+    /// `battle_util.c:2806`-`:2818`).
+    ///
+    /// The roll is one `Random() % 3` draw taken after the target's faint
+    /// settlement, whether or not the holder survived the hit; only a zero
+    /// roll on an attacker that the poison guards allow emits this event.
+    PoisonedByPoisonPoint {
+        /// Whether the player used the contact move and so was poisoned.
+        by_player: bool,
+        /// The contact move that triggered Poison Point.
+        move_id: MoveId,
+    },
+    /// A [`BattleEvent::PoisonedByPoisonPoint`] attacker's own Synchronize
+    /// reflected the poison onto the surviving Poison Point holder
+    /// (`MOVEEND_SYNCHRONIZE_ATTACKER`, `battle_script_commands.c:4291`-
+    /// `:4294`; `ABILITYEFFECT_ATK_SYNCHRONIZE`, `battle_util.c:2987`-`:3001`).
+    ///
+    /// This follows [`BattleEvent::PoisonedByPoisonPoint`] and consumes no RNG.
+    PoisonedByAttackerSynchronize {
+        /// Whether the player used the contact move; the opposing Poison Point
+        /// holder is the battler poisoned.
+        by_player: bool,
+        /// The contact move that triggered Poison Point.
+        move_id: MoveId,
+    },
+    /// An attacker's Synchronize reflected a [`BattleEvent::PoisonedByPoisonPoint`]
+    /// poison, and the Poison Point holder's own Poison or Steel typing
+    /// protected it (`BattleScript_PSNPrevention`,
+    /// `battle_script_commands.c:2320`-`:2329`).
+    ///
+    /// This follows the [`BattleEvent::PoisonedByPoisonPoint`] event it reflects.
+    AttackerSynchronizePoisonOrSteelTypeProtected {
+        /// Whether the player used the contact move; the opposing holder was
+        /// the protected battler.
+        by_player: bool,
+        /// The contact move that triggered Poison Point.
+        move_id: MoveId,
+    },
     /// A poison reflection's original attacker was protected by its own
     /// [`AbilityId::IMMUNITY`] (`BattleScript_PSNPrevention`,
     /// `battle_script_commands.c:2300`-`:2319`).
