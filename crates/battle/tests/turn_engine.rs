@@ -1,6 +1,6 @@
-//! Turn-engine integration tests (S-6 housekeeping, issue #209), split by
-//! behavior family while exercising only the public `battle` API. Shared
-//! scripted-RNG and deterministic-mon fixtures remain in `common/mod.rs`.
+//! Turn-engine integration tests (S-6), split by behavior family while
+//! exercising only the public `battle` API. Shared scripted-RNG and
+//! deterministic-mon fixtures live in `common/mod.rs`.
 
 mod common;
 
@@ -26,6 +26,8 @@ mod participant_admission;
 mod pipelines;
 #[path = "turn_engine/poison_player_reserve_admission.rs"]
 mod poison_player_reserve_admission;
+#[path = "turn_engine/poison_point_contact.rs"]
+mod poison_point_contact;
 #[path = "turn_engine/poison_residual_ordering.rs"]
 mod poison_residual_ordering;
 #[path = "turn_engine/poison_status_stats.rs"]

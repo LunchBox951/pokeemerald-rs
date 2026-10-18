@@ -340,10 +340,15 @@ mod tests {
 
             if run.confirm_after {
                 let buttons = frames[frame_index].buttons;
-                assert!(
-                    buttons == AppButtons::A || buttons == AppButtons::B,
-                    "run {run_index} ends on a wait: script index {frame_index} must press A or B, \
-                     not {buttons:?}"
+                let expected = if [0, 8].contains(&run_index) {
+                    AppButtons::B
+                } else {
+                    AppButtons::A
+                };
+                assert_eq!(
+                    buttons, expected,
+                    "run {run_index} ends on a wait: script index {frame_index} must press \
+                     {expected:?}"
                 );
                 frame_index += 1;
             } else {

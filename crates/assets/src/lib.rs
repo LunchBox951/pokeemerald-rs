@@ -18,14 +18,14 @@
 //! data follows as the crate fills out.
 //!
 //! The backend-neutral song/voicegroup/sample pack schemas both
-//! audio-extraction backends emit into (S-4, issue #180) live in [`audio`].
+//! audio-extraction backends emit into (S-4) live in [`audio`].
 //!
 //! Binary graphics (tileset tile graphics, palettes, player/NPC sprite
 //! sheets, font glyph sheets, text-window border frames) and map layout
 //! grid/border bytes are not compiled into this crate as Rust source,
 //! unlike the tables above — per Discussion #71 policy A they live in a
-//! local, gitignored asset pack that `cargo xtask extract` produces (issue
-//! #81); [`pack`] is this crate's typed loader over that pack.
+//! local, gitignored asset pack that `cargo xtask extract` produces;
+//! [`pack`] is this crate's typed loader over that pack.
 //! [`map_layouts`], [`metatile_attributes`], and [`fonts`] provide the
 //! decode layer those bytes feed once read out of the pack:
 //! [`map_layouts::LayoutGrid`]/[`map_layouts::BorderGrid`] for a layout's
@@ -106,7 +106,7 @@ pub use metatile_attributes::{MetatileAttribute, MetatileAttributeTable, Metatil
 pub use new_game_flags::{
     FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_RIVAL_BEDROOM, RESET_MAP_FLAGS,
     TRUCK_INTRO_FLAGS_FEMALE, TRUCK_INTRO_FLAGS_MALE, TRUCK_INTRO_VARS_FEMALE,
-    TRUCK_INTRO_VARS_MALE,
+    TRUCK_INTRO_VARS_MALE, WALL_CLOCK_VIGOROTH_HIDE_FLAGS,
 };
 
 // `items::ItemId` is the full item-table identifier; it is intentionally *not*
