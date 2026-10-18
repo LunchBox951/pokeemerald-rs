@@ -544,3 +544,74 @@ fn a_non_repeating_zero_wait_loop_keeps_render_frame_bounded_and_the_track_alive
         "the loop is not yet known to be stuck"
     );
 }
+
+#[test]
+fn a_yielded_burst_is_not_ended_by_a_shared_memacc_change_from_another_track() {
+    let mut a = vec![Event::Voice(0), Event::Volume(127), Event::Wait(1)];
+    a.extend(std::iter::repeat_n(Event::Wait(0), 65_535));
+    let add = a.len();
+    a.push(Event::MemAcc {
+        op: 1,
+        addr: 0,
+        value: 1,
+        target: None,
+    });
+    a.push(Event::MemAcc {
+        op: 6,
+        addr: 0,
+        value: 255,
+        target: Some(add + 3),
+    });
+    a.push(Event::Goto(add));
+    a.extend([tied_note(60), Event::Wait(48), Event::Fine]);
+    let b = vec![
+        Event::Wait(1),
+        Event::MemAcc {
+            op: 0,
+            addr: 0,
+            value: 0,
+            target: None,
+        },
+        Event::Fine,
+    ];
+    let mut seq = Sequencer::new(test_song(vec![a, b], 150));
+    render_frames(&mut seq, 5);
+    assert!(
+        !seq.tracks[0].ended,
+        "a progressing counter loop must not end"
+    );
+    assert_eq!(seq.voice_count(), 1, "the note after the loop plays");
+}
+
+#[test]
+fn a_stuck_loop_entered_after_the_snapshot_schedule_saturates_still_ends_the_track() {
+    let track = vec![Event::Voice(0), Event::Volume(100), Event::Goto(2)];
+    let mut seq = Sequencer::new(test_song(vec![track], 150));
+    seq.bursts[0].steps = (1 << 31) - 1;
+    seq.bursts[0].next_snapshot = Some(1 << 31);
+    let budget_frames = 3 * (1u64 << 31) / u64::from(TRACK_COMMANDS_PER_TICK);
+    let mut frames = 0u64;
+    while !seq.tracks[0].ended && frames < budget_frames {
+        render_frames(&mut seq, 1);
+        frames += 1;
+    }
+    assert!(
+        seq.tracks[0].ended,
+        "a stuck loop must end even after {frames} frames past schedule saturation"
+    );
+}
+
+#[test]
+fn a_yielded_burst_finishes_when_tempo_is_zero_at_the_yield() {
+    let mut t = vec![Event::Voice(0), Event::Volume(127), Event::Tempo(0)];
+    t.extend(std::iter::repeat_n(Event::Volume(127), 65_536));
+    t.extend([
+        Event::Tempo(150),
+        tied_note(60),
+        Event::Wait(48),
+        Event::Fine,
+    ]);
+    let mut seq = Sequencer::new(test_song(vec![t], 150));
+    render_frames(&mut seq, 5);
+    assert_eq!(seq.voice_count(), 1, "the note after the burst plays");
+}

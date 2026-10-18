@@ -65,8 +65,8 @@ const TRACK_COMMANDS_PER_TICK: u32 = 1 << 16;
 struct BurstProbe {
     snapshot: Option<(TrackState, MemAccArea)>,
     steps: u32,
-    /// `None` once the doubling schedule overflows; the snapshot then stays
-    /// fixed rather than degrading to consecutive-state comparison.
+    /// When the doubling schedule would overflow, `steps` restarts at zero
+    /// and the schedule begins again, so the snapshot keeps refreshing.
     next_snapshot: Option<u32>,
 }
 
@@ -457,9 +457,14 @@ impl Sequencer {
         debug_assert!(self.tempo_c < TEMPO_UNIT);
         debug_assert!(self.tempo_i <= MAX_TEMPO_BPM);
         self.tempo_c += self.tempo_i;
+        let mut ticked = false;
         while self.tempo_c >= TEMPO_UNIT {
             self.tempo_c -= TEMPO_UNIT;
             self.do_tick();
+            ticked = true;
+        }
+        if !ticked {
+            self.resume_yielded_bursts();
         }
         // Once per frame after every tick, matching `MPlayMain`'s single
         // pass after its tempo loop (`m4a_1.s:1169`-`:1175`, `:1341`-`:1360`).
@@ -467,6 +472,26 @@ impl Sequencer {
     }
 
     fn do_tick(&mut self) {
+        for track_id in 0..self.tracks.len() {
+            self.step_track(track_id, true);
+        }
+    }
+
+    /// Finish yielded zero-wait bursts on a frame where no tick fired (a
+    /// tempo of zero reached mid-burst), since upstream's command loop would
+    /// have run them to their `Wait`/`Fine` within the same tick.
+    fn resume_yielded_bursts(&mut self) {
+        for track_id in 0..self.tracks.len() {
+            if !self.tracks[track_id].ended
+                && self.tracks[track_id].wait == 0
+                && self.bursts[track_id].steps > 0
+            {
+                self.step_track(track_id, false);
+            }
+        }
+    }
+
+    fn step_track(&mut self, track_id: usize, tick_gates: bool) {
         let Self {
             song,
             tracks,
@@ -476,13 +501,30 @@ impl Sequencer {
             mem_acc,
             ..
         } = self;
-        for (track_id, (track, burst)) in tracks.iter_mut().zip(bursts).enumerate() {
-            // Per-track gate expiry precedes that track's commands, as in
-            // `MPlayMain`'s per-track chain walk (`m4a_1.s:1191`-`:1212`).
-            if !track.ended {
-                mixer.tick_gates(track_id);
+        // Per-track gate expiry precedes that track's commands, as in
+        // `MPlayMain`'s per-track chain walk (`m4a_1.s:1191`-`:1212`).
+        if tick_gates && !tracks[track_id].ended {
+            mixer.tick_gates(track_id);
+        }
+        let before = mem_acc.clone();
+        Self::process_track(
+            song,
+            &mut tracks[track_id],
+            &mut bursts[track_id],
+            mixer,
+            track_id,
+            tempo_i,
+            mem_acc,
+        );
+        // The accumulator is shared: a write here invalidates every other
+        // track's yielded snapshot, which compared against older contents.
+        if *mem_acc != before {
+            for (other, probe) in bursts.iter_mut().enumerate() {
+                if other != track_id && probe.snapshot.is_some() {
+                    probe.snapshot = None;
+                    probe.next_snapshot = Some(probe.steps.saturating_add(1));
+                }
             }
-            Self::process_track(song, track, burst, mixer, track_id, tempo_i, mem_acc);
         }
     }
 
@@ -544,6 +586,10 @@ impl Sequencer {
                 if burst.next_snapshot == Some(burst.steps) {
                     burst.snapshot = Some((track.clone(), mem_acc.clone()));
                     burst.next_snapshot = burst.steps.checked_mul(2);
+                    if burst.next_snapshot.is_none() {
+                        burst.steps = 0;
+                        burst.next_snapshot = Some(1);
+                    }
                 }
                 if track.cursor >= events.len() {
                     // `decode_track` allows a stream with no trailing `FINE`.
