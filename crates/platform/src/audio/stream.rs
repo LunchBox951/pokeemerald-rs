@@ -1,9 +1,9 @@
 //! Converts and chunks PCM while building the device output stream.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
-use cpal::traits::DeviceTrait;
+use cpal::traits::{DeviceTrait, StreamTrait};
 
 use crate::error::PlatformError;
 
@@ -77,6 +77,10 @@ pub(super) fn fill_i16_output(source: &mut Source, scratch: &mut [f32], data: &m
 /// hands back a `Vec` rather than `cpal`'s associated iterator type: it
 /// costs nothing and spares every implementor an associated type.
 pub(super) trait OutputDevice {
+    /// The handle a built stream is driven through; owned and dropped by the
+    /// transport worker.
+    type Stream: OutputStream;
+
     fn supported_output_configs(
         &self,
     ) -> Result<Vec<cpal::SupportedStreamConfigRange>, cpal::Error>;
@@ -87,14 +91,45 @@ pub(super) trait OutputDevice {
         data_callback: D,
         error_callback: E,
         timeout: Option<std::time::Duration>,
-    ) -> Result<cpal::Stream, cpal::Error>
+    ) -> Result<Self::Stream, cpal::Error>
     where
-        T: cpal::SizedSample,
+        T: cpal::SizedSample + 'static,
         D: FnMut(&mut [T], &cpal::OutputCallbackInfo) + Send + 'static,
         E: FnMut(cpal::Error) + Send + 'static;
 }
 
+/// The play/pause controls of a built stream, behind a seam so a fake host
+/// can return a stream that opens no device.
+pub(super) trait OutputStream {
+    fn play(&self) -> Result<(), cpal::Error>;
+    fn pause(&self) -> Result<(), cpal::Error>;
+}
+
+impl OutputStream for cpal::Stream {
+    fn play(&self) -> Result<(), cpal::Error> {
+        StreamTrait::play(self)
+    }
+
+    fn pause(&self) -> Result<(), cpal::Error> {
+        StreamTrait::pause(self)
+    }
+}
+
+/// Whether an asynchronous stream error means the stream must be rebuilt.
+///
+/// Buffer under/overruns, a refused real-time promotion and an automatic
+/// reroute all leave the stream usable; everything else is
+/// treated as a lost stream.
+pub(super) fn error_requires_rebuild(kind: cpal::ErrorKind) -> bool {
+    !matches!(
+        kind,
+        cpal::ErrorKind::Xrun | cpal::ErrorKind::RealtimeDenied | cpal::ErrorKind::DeviceChanged
+    )
+}
+
 impl OutputDevice for cpal::Device {
+    type Stream = cpal::Stream;
+
     fn supported_output_configs(
         &self,
     ) -> Result<Vec<cpal::SupportedStreamConfigRange>, cpal::Error> {
@@ -109,7 +144,7 @@ impl OutputDevice for cpal::Device {
         timeout: Option<std::time::Duration>,
     ) -> Result<cpal::Stream, cpal::Error>
     where
-        T: cpal::SizedSample,
+        T: cpal::SizedSample + 'static,
         D: FnMut(&mut [T], &cpal::OutputCallbackInfo) + Send + 'static,
         E: FnMut(cpal::Error) + Send + 'static,
     {
@@ -119,7 +154,9 @@ impl OutputDevice for cpal::Device {
 
 /// Build (but do not start) the output stream for `config`, driven by
 /// `source`. Asynchronous stream errors are recorded into `stream_errors`,
-/// the counter [`AudioOutput::stream_errors`](super::AudioOutput::stream_errors) reads. Every callback also
+/// the counter [`AudioOutput::stream_errors`](super::AudioOutput::stream_errors) reads;
+/// an error that leaves the stream unusable also raises `lost`, which the
+/// transport worker polls to rebuild it. Every callback also
 /// records its device-frame count and the host's callback timestamp into
 /// `playback_clock` (see [`PlaybackClock::record_callback`]) *before*
 /// `source` consumes them, the signal [`AudioOutput::playback_progress`](super::AudioOutput::playback_progress)
@@ -129,17 +166,22 @@ pub(super) fn build_stream<D: OutputDevice>(
     config: &cpal::SupportedStreamConfig,
     mut source: Source,
     stream_errors: Arc<AtomicU64>,
+    lost: Arc<AtomicBool>,
     playback_clock: Arc<PlaybackClock>,
-) -> Result<cpal::Stream, PlatformError> {
+) -> Result<D::Stream, PlatformError> {
     let stream_config = config.config();
     // A `cpal` stream reports async failures (device disconnect, driver
-    // error) on the callback thread, where nothing here can recover them.
+    // error) on the callback thread, which must neither log nor reconnect.
     // Record each into a shared atomic so `AudioOutput::stream_errors` can
     // surface an otherwise-invisible unhealthy stream (`is_running` stays
     // `true`, `underruns` stays flat, because the drain callback simply stops
     // firing).
-    let err_fn = move |_err: cpal::Error| {
+    // The callback only touches atomics; the worker does the recovery.
+    let err_fn = move |err: cpal::Error| {
         stream_errors.fetch_add(1, Ordering::Relaxed);
+        if error_requires_rebuild(err.kind()) {
+            lost.store(true, Ordering::Release);
+        }
     };
 
     // Shared by both format arms below: `PlaybackClock::record_callback`

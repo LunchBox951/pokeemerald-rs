@@ -35,7 +35,7 @@
 //! counter: a capacity that does not divide `usize::MAX + 1` would alias
 //! two sequence positions onto one slot the instant such a counter wrapped.
 
-use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 /// Shared state behind a [`Producer`]/[`Consumer`] pair.
@@ -52,6 +52,9 @@ struct Shared {
     /// and consumer sides share. Always in `[0, capacity]`.
     occupied: AtomicUsize,
     underruns: AtomicU64,
+    /// Whether a [`Consumer`] currently exists. Lets a replacement consumer be
+    /// claimed after the previous one is dropped with its device stream.
+    consumer_alive: AtomicBool,
 }
 
 /// Lock `head`, recovering from poisoning rather than propagating a panic.
@@ -79,6 +82,7 @@ pub fn ring_buffer(capacity: usize) -> (Producer, Consumer) {
         head: Mutex::new(0),
         occupied: AtomicUsize::new(0),
         underruns: AtomicU64::new(0),
+        consumer_alive: AtomicBool::new(true),
     });
     (
         Producer {
@@ -155,6 +159,35 @@ impl Producer {
     #[must_use]
     pub fn underruns(&self) -> u64 {
         self.shared.underruns.load(Ordering::Relaxed)
+    }
+
+    /// Claim a replacement [`Consumer`] once the previous one has been
+    /// dropped, keeping the queued samples and the underrun counter.
+    ///
+    /// Returns `None` while a consumer still exists: the one-consumer
+    /// invariant is never relaxed. The replacement's read index is rebuilt
+    /// from the write index and the queued count, so it resumes exactly
+    /// where the dropped consumer stopped. Used by the audio transport to
+    /// re-attach a rebuilt device stream to the same queue.
+    pub(crate) fn reclaim_consumer(&self) -> Option<Consumer> {
+        // Holding `head` excludes pushes, so the write index and queued
+        // count describe one consistent state while the tail is derived.
+        let head = lock_head(&self.shared.head);
+        self.shared
+            .consumer_alive
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .ok()?;
+        let capacity = self.shared.capacity;
+        let occupied = self.shared.occupied.load(Ordering::Acquire);
+        let tail = if capacity == 0 {
+            0
+        } else {
+            (*head + capacity - occupied) % capacity
+        };
+        Some(Consumer {
+            shared: Arc::clone(&self.shared),
+            tail,
+        })
     }
 }
 
@@ -244,6 +277,17 @@ impl Consumer {
         }
     }
 
+    /// Drop every queued sample without reading it or counting an underrun,
+    /// so playback resumes from whatever is pushed next.
+    ///
+    /// Takes the producer lock, so it belongs on the thread that attaches a
+    /// consumer to a device stream, never in the device callback itself.
+    pub(crate) fn discard_queued(&mut self) {
+        let head = lock_head(&self.shared.head);
+        self.tail = *head;
+        self.shared.occupied.store(0, Ordering::Release);
+    }
+
     /// Samples currently queued and ready to read.
     #[must_use]
     pub fn available(&self) -> usize {
@@ -258,6 +302,12 @@ impl Consumer {
     }
 }
 
+impl Drop for Consumer {
+    fn drop(&mut self) {
+        self.shared.consumer_alive.store(false, Ordering::Release);
+    }
+}
+
 #[cfg(test)]
 // Tests compare PCM sample arrays for exact equality on purpose: every
 // value here is the deliberate, exactly-representable output of a ring
@@ -265,6 +315,54 @@ impl Consumer {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_consumer_is_reclaimed_only_after_the_previous_one_is_dropped() {
+        let (producer, consumer) = ring_buffer(4);
+        assert!(producer.reclaim_consumer().is_none());
+        drop(consumer);
+        let second = producer.reclaim_consumer().expect("vacant slot");
+        assert!(producer.reclaim_consumer().is_none());
+        drop(second);
+    }
+
+    #[test]
+    fn a_reclaimed_consumer_resumes_where_the_dropped_one_stopped() {
+        let (producer, mut consumer) = ring_buffer(4);
+        assert_eq!(producer.push(&[1.0, 2.0, 3.0]), 3);
+        let mut out = [0.0; 2];
+        consumer.fill(&mut out);
+        assert_eq!(producer.push(&[4.0, 5.0]), 2); // wraps the write index
+        drop(consumer);
+
+        let mut reclaimed = producer.reclaim_consumer().unwrap();
+        let mut out = [0.0; 3];
+        reclaimed.fill(&mut out);
+        assert_eq!(out, [3.0, 4.0, 5.0]);
+    }
+
+    #[test]
+    fn reclaiming_a_zero_capacity_ring_does_not_panic() {
+        let (producer, consumer) = ring_buffer(0);
+        drop(consumer);
+        assert!(producer.reclaim_consumer().is_some());
+    }
+
+    #[test]
+    fn discard_queued_drops_samples_without_counting_underruns() {
+        let (producer, mut consumer) = ring_buffer(4);
+        assert_eq!(producer.push(&[1.0, 2.0, 3.0]), 3);
+        consumer.discard_queued();
+        assert_eq!(consumer.available(), 0);
+        assert_eq!(producer.underruns(), 0);
+        assert_eq!(producer.available_space(), 4);
+
+        // Samples pushed afterwards, across the wrap, play in order.
+        assert_eq!(producer.push(&[7.0, 8.0, 9.0]), 3);
+        let mut out = [0.0; 3];
+        consumer.fill(&mut out);
+        assert_eq!(out, [7.0, 8.0, 9.0]);
+    }
 
     #[test]
     fn fill_drains_queued_samples_in_order() {

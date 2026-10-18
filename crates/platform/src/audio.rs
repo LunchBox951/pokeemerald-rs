@@ -40,6 +40,15 @@
 //!   driver error) on its own callback thread. Those are counted separately
 //!   via [`AudioOutput::stream_errors`]; a nonzero count means the stream is
 //!   unhealthy even when [`AudioOutput::underruns`] stays flat.
+//! - **Transport**: [`AudioOutput::open`] never waits for or fails on a
+//!   missing device. A worker thread (see the private `transport` module)
+//!   discovers the OS default output, builds the stream, and rebuilds it
+//!   after a stream failure or a default-output change, with bounded
+//!   retries. Producers keep the same ring and handle throughout; samples
+//!   queued while nothing was draining are discarded when a stream attaches
+//!   after playback was started. Distinct [`TransportState`] transitions are
+//!   available from [`AudioOutput::poll_transport_state`]; neither the device
+//!   callbacks nor the game loop connect, wait, or log.
 //! - **Playback position**: a real device's callback captures
 //!   `cpal::OutputCallbackInfo::timestamp()` on every invocation and derives
 //!   a monotonic, best-effort "device frames actually sounded" estimate from
@@ -59,17 +68,15 @@
 //! actually matters for correctness — are pure and fully unit tested
 //! against [`AudioOutput::null`] and the `ring`/`resample` modules directly.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
-
-use cpal::traits::{HostTrait, StreamTrait};
 
 use crate::error::PlatformError;
 use crate::resample::Resampler;
 use crate::ring::{ring_buffer, Consumer, Producer};
 
-use self::playback::PlaybackClock;
 pub use self::playback::{PlaybackProgress, UsableReading};
+pub use self::transport::{TransportFailure, TransportState};
 
 mod config;
 mod playback;
@@ -80,9 +87,9 @@ mod stream;
 // buffer push/fill, not the result of accumulated floating-point math.
 #[allow(clippy::float_cmp)]
 mod tests;
+mod transport;
 
-use config::{max_buffer_frames, negotiate};
-use stream::build_stream;
+use transport::{CpalHost, OutputHost, Shared, Worker};
 
 /// Either play ring-buffer samples straight through, or bridge a sample-rate
 /// mismatch via [`Resampler`] — see the module docs.
@@ -149,7 +156,7 @@ fn source_for_device(
 /// headless environments.
 enum Backend {
     Null(Source),
-    Device(cpal::Stream),
+    Device(Worker),
 }
 
 /// An owned audio-output subsystem: opens (at most) one output stream and
@@ -164,24 +171,12 @@ pub struct AudioOutput {
     producer: Producer,
     /// The rate the `audio` crate should always render at; see the module
     /// docs. Not necessarily the device's physical rate — see
-    /// `device_sample_rate`.
+    /// [`Self::device_sample_rate`].
     sample_rate: u32,
-    device_sample_rate: u32,
     channels: u16,
-    running: bool,
-    /// Count of asynchronous `cpal` stream errors reported to the callback's
-    /// error function (device disconnect, driver failure, …). Shared with the
-    /// stream's error closure; a nonzero value means the stream is unhealthy.
-    /// Always zero for the null backend, which owns no `cpal` stream.
-    stream_errors: Arc<AtomicU64>,
-    /// `max_buffer_frames` of the negotiated config; `0` for the null backend
-    /// and for a device advertising no concrete range.
-    max_callback_frames: usize,
-    /// Measured playback-position signal — see [`Self::playback_progress`].
-    playback_clock: Arc<PlaybackClock>,
-    /// See [`Self::playback_settle_margin_frames`]. Fixed at construction
-    /// (a function of the source's resample step, which never changes).
-    settle_margin_frames: u64,
+    /// Playback intent, negotiated device facts, error counter and
+    /// playback clock, shared with the transport worker.
+    shared: Arc<Shared>,
 }
 
 /// Build a ring holding `frames` interleaved frames of `channels` samples.
@@ -240,73 +235,54 @@ impl AudioOutput {
         f64::from(Self::M4A_SAMPLES_PER_GAME_FRAME) / crate::pacing::GBA_FRAME_PERIOD.as_secs_f64()
     }
 
-    /// Open the default output device and negotiate [`Self::M4A_MIXER_RATE`]
-    /// or the nearest supported rate (falling back to on-the-fly resampling
-    /// if the exact rate is unavailable — the common case, see the module
-    /// docs). The stream is created but not started; call
-    /// [`AudioOutput::start`].
+    /// Open the default output transport. Returns without waiting for a
+    /// device: a worker thread discovers the OS default output, negotiates
+    /// [`Self::M4A_MIXER_RATE`] or the nearest supported rate (resampling if
+    /// the exact rate is unavailable — the common case, see the module
+    /// docs), and keeps the stream attached across output loss. Playback
+    /// begins once the stream exists and [`AudioOutput::start`] has been
+    /// called; follow [`Self::poll_transport_state`] to see when.
     ///
     /// `ring_capacity_frames` sizes the ring buffer in stereo frames (e.g.
-    /// `4096` is ~306ms of headroom at the nominal 13379 Hz rate).
+    /// `4096` is ~306ms of headroom at the nominal 13379 Hz rate). Until a
+    /// stream attaches, pushes fill the ring and then drop, as with any full
+    /// ring. Device facts ([`Self::device_sample_rate`] and friends) are
+    /// provisional until the transport reports [`TransportState::Ready`]
+    /// and describe the current stream afterwards.
     ///
     /// # Errors
     ///
-    /// - [`PlatformError::NoAudioDevice`] if there is no default output
-    ///   device, or the one the host named cannot be reached at all
-    ///   (headless CI, no audio hardware, no driver running) — see
-    ///   `classify_query_error`.
-    /// - [`PlatformError::UnsupportedAudioConfig`] if the device has no
-    ///   usable stereo output configuration.
-    /// - [`PlatformError::Audio`] if `cpal` fails to query a reachable
-    ///   device, or fails to build the stream. A device lost *after* the
-    ///   query stays here rather than collapsing into `NoAudioDevice`: the
-    ///   device was real, so losing it is a failure, not a headless run.
     /// - [`PlatformError::AudioRingCapacityOverflow`] if
-    ///   `ring_capacity_frames` times the device channel count overflows
-    ///   `usize`.
-    /// - [`PlatformError::UnsupportedResampleRatio`] if the negotiated
-    ///   device rate pairs with `Self::source_cadence_hz` into a ratio the
-    ///   resampler's bounded scratch cannot carry (see
-    ///   [`crate::resample::Resampler::new`]).
+    ///   `ring_capacity_frames` times [`Self::CHANNELS`] overflows `usize`.
+    /// - [`PlatformError::Audio`] if the worker thread cannot be spawned.
+    ///
+    /// A missing device, an unusable configuration, or an unsupported rate
+    /// ratio is not an error here: it is a [`TransportState::Unavailable`]
+    /// the worker keeps retrying.
     pub fn open(ring_capacity_frames: usize) -> Result<Self, PlatformError> {
-        let host = cpal::default_host();
-        let device = host
-            .default_output_device()
-            .ok_or(PlatformError::NoAudioDevice)?;
-        let config = negotiate(&device)?;
+        Self::open_with_host(CpalHost, ring_capacity_frames)
+    }
 
-        let device_sample_rate = config.sample_rate();
-        let channels = config.channels();
-        let (producer, consumer) = frame_ring(ring_capacity_frames, channels)?;
-        let source = source_for_device(
-            consumer,
-            channels,
-            device_sample_rate,
-            max_buffer_frames(&config),
-        )?;
-        let settle_margin_frames = source.settle_margin_frames();
-
-        let stream_errors = Arc::new(AtomicU64::new(0));
-        let playback_clock = Arc::new(PlaybackClock::new());
-        let stream = build_stream(
-            &device,
-            &config,
-            source,
-            Arc::clone(&stream_errors),
-            Arc::clone(&playback_clock),
-        )?;
-
+    /// [`Self::open`] against any host, so tests can supply a fake.
+    fn open_with_host<H: OutputHost>(
+        host: H,
+        ring_capacity_frames: usize,
+    ) -> Result<Self, PlatformError> {
+        let (producer, consumer) = frame_ring(ring_capacity_frames, Self::CHANNELS)?;
+        // The transport claims the consumer back for every stream it builds.
+        drop(consumer);
+        let shared = Arc::new(Shared::new(
+            TransportState::Connecting,
+            Self::M4A_MIXER_RATE,
+            0,
+        ));
+        let worker = Worker::spawn(host, producer.clone(), Arc::clone(&shared))?;
         Ok(Self {
-            backend: Backend::Device(stream),
+            backend: Backend::Device(worker),
             producer,
             sample_rate: Self::M4A_MIXER_RATE,
-            device_sample_rate,
-            channels,
-            running: false,
-            stream_errors,
-            max_callback_frames: max_buffer_frames(&config),
-            playback_clock,
-            settle_margin_frames,
+            channels: Self::CHANNELS,
+            shared,
         })
     }
 
@@ -332,13 +308,8 @@ impl AudioOutput {
             backend: Backend::Null(Source::Direct(consumer)),
             producer,
             sample_rate: Self::M4A_MIXER_RATE,
-            device_sample_rate: Self::M4A_MIXER_RATE,
             channels: Self::CHANNELS,
-            running: false,
-            stream_errors: Arc::new(AtomicU64::new(0)),
-            max_callback_frames: 0,
-            playback_clock: Arc::new(PlaybackClock::new()),
-            settle_margin_frames: 0,
+            shared: Arc::new(Shared::new(TransportState::Null, Self::M4A_MIXER_RATE, 0)),
         }
     }
 
@@ -380,51 +351,74 @@ impl AudioOutput {
             backend: Backend::Null(source),
             producer,
             sample_rate: Self::M4A_MIXER_RATE,
-            device_sample_rate: device_rate,
             channels,
-            running: false,
-            stream_errors: Arc::new(AtomicU64::new(0)),
-            max_callback_frames: 0,
-            playback_clock: Arc::new(PlaybackClock::new()),
-            settle_margin_frames,
+            shared: Arc::new(Shared::new(
+                TransportState::Null,
+                device_rate,
+                settle_margin_frames,
+            )),
         })
     }
 
     /// Start (or resume) playback.
     ///
+    /// Records the intent and returns at once: the transport worker plays the
+    /// stream when one exists, now or after it next attaches. Idempotent.
+    ///
     /// # Errors
     ///
-    /// Returns [`PlatformError::Audio`] if `cpal` refuses to play the
-    /// stream (e.g. the device was disconnected). Always succeeds for the
-    /// null backend.
+    /// Never fails today; the `Result` is kept for callers written against
+    /// the earlier synchronous contract. A stream that refuses to play is
+    /// reported as a [`TransportState::Unavailable`] transition instead.
     pub fn start(&mut self) -> Result<(), PlatformError> {
-        if let Backend::Device(stream) = &self.backend {
-            stream.play()?;
-        }
-        self.running = true;
+        self.shared.ever_started.store(true, Ordering::Release);
+        self.set_running(true);
         Ok(())
     }
 
-    /// Pause playback; the device/stream stays open and can be
-    /// [`AudioOutput::start`]ed again.
+    /// Pause playback; the transport stays up and can be
+    /// [`AudioOutput::start`]ed again. Idempotent.
     ///
     /// # Errors
     ///
-    /// Returns [`PlatformError::Audio`] if `cpal` refuses to pause the
-    /// stream. Always succeeds for the null backend.
+    /// Never fails; see [`Self::start`].
     pub fn stop(&mut self) -> Result<(), PlatformError> {
-        if let Backend::Device(stream) = &self.backend {
-            stream.pause()?;
-        }
-        self.running = false;
+        self.set_running(false);
         Ok(())
+    }
+
+    fn set_running(&self, running: bool) {
+        self.shared.running.store(running, Ordering::Release);
+        if let Backend::Device(worker) = &self.backend {
+            worker.wake();
+        }
     }
 
     /// Whether [`AudioOutput::start`] has been called more recently than
     /// [`AudioOutput::stop`].
     #[must_use]
     pub fn is_running(&self) -> bool {
-        self.running
+        self.shared.running.load(Ordering::Acquire)
+    }
+
+    /// The transport's current state: [`TransportState::Null`] for the
+    /// headless backend, otherwise whether a stream is attached.
+    #[must_use]
+    pub fn transport_state(&self) -> TransportState {
+        self.shared.state()
+    }
+
+    /// The next not-yet-reported transport transition, oldest first, or
+    /// `None` when there is nothing new. Each distinct state is reported
+    /// once however often the worker retries, and polling does no device
+    /// work, so it is safe in the game loop. Always `None` for the null
+    /// backend.
+    #[must_use]
+    pub fn poll_transport_state(&mut self) -> Option<TransportState> {
+        match &self.backend {
+            Backend::Device(worker) => worker.poll(),
+            Backend::Null(_) => None,
+        }
     }
 
     /// The nominal PCM sample rate the `audio` crate should always render
@@ -440,7 +434,7 @@ impl AudioOutput {
     /// mismatch (see the module docs); always equal for the null backend.
     #[must_use]
     pub fn device_sample_rate(&self) -> u32 {
-        self.device_sample_rate
+        self.shared.device_sample_rate.load(Ordering::Acquire)
     }
 
     /// Interleaved channel count of the ring buffer / device stream.
@@ -457,7 +451,7 @@ impl AudioOutput {
     /// Always `None` for the null backend.
     #[must_use]
     pub fn max_callback_frames(&self) -> Option<usize> {
-        match self.max_callback_frames {
+        match self.shared.max_callback_frames.load(Ordering::Acquire) {
             0 => None,
             frames => Some(frames),
         }
@@ -488,14 +482,14 @@ impl AudioOutput {
     /// null backend, which owns no `cpal` stream.
     #[must_use]
     pub fn stream_errors(&self) -> u64 {
-        self.stream_errors.load(Ordering::Relaxed)
+        self.shared.stream_errors.load(Ordering::Relaxed)
     }
 
     /// Records one asynchronous stream error as the `cpal` error closure in
     /// `build_stream` does, so a null-backend test can stand in for a device.
     #[doc(hidden)]
     pub fn record_stream_error_for_test(&self) {
-        self.stream_errors.fetch_add(1, Ordering::Relaxed);
+        self.shared.stream_errors.fetch_add(1, Ordering::Relaxed);
     }
 
     /// A measured playback-position signal derived from the host's own
@@ -508,7 +502,7 @@ impl AudioOutput {
     /// `play_song` example's `device_tail_wait`.
     #[must_use]
     pub fn playback_progress(&self) -> Option<PlaybackProgress> {
-        self.playback_clock.progress()
+        self.shared.playback_clock.progress()
     }
 
     /// Extra device frames, beyond a [`Self::playback_progress`] snapshot's
@@ -526,7 +520,7 @@ impl AudioOutput {
     /// tail actually finishes sounding.
     #[must_use]
     pub fn playback_settle_margin_frames(&self) -> u64 {
-        self.settle_margin_frames
+        self.shared.settle_margin_frames.load(Ordering::Acquire)
     }
 
     /// Marks this instance's playback-position signal available, as a real
@@ -535,7 +529,9 @@ impl AudioOutput {
     /// `cpal` device. See [`Self::advance_sounded_frames_for_test`].
     #[doc(hidden)]
     pub fn enable_playback_progress_for_test(&self) {
-        self.playback_clock.enable_playback_progress_for_test();
+        self.shared
+            .playback_clock
+            .enable_playback_progress_for_test();
     }
 
     /// Advances this instance's fake sounded-frame position for a
@@ -548,7 +544,9 @@ impl AudioOutput {
     /// [`Self::enable_playback_progress_for_test`] has been called.
     #[doc(hidden)]
     pub fn advance_sounded_frames_for_test(&self, frames: u64) {
-        self.playback_clock.advance_sounded_frames_for_test(frames);
+        self.shared
+            .playback_clock
+            .advance_sounded_frames_for_test(frames);
     }
 
     /// Drive the null backend by hand, filling `out` through the exact same
@@ -566,7 +564,7 @@ impl AudioOutput {
         if let Backend::Null(source) = &mut self.backend {
             let channels = usize::from(self.channels).max(1);
             let frames = u64::try_from(out.len() / channels).unwrap_or(u64::MAX);
-            self.playback_clock.record_submitted(frames);
+            self.shared.playback_clock.record_submitted(frames);
             source.fill(out);
         }
     }
