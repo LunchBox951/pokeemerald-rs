@@ -21860,6 +21860,14 @@
       "status": "pending"
     },
     "sound/cry_tables.inc": {
+      "artifacts": {
+        "cry-table-payload": {
+          "reason": "sound/cry_tables.inc:1-781. Schema and codec only: the 388-position gCryTable is modelled as one audio/cry/table payload of SampleId references (assets::audio::CryTable, AssetPack::cry_table), and PlayCryInternal's mode resolution (sound.c:369-455) as CryMode::settings; gCryTable_Reverse names the same samples at every position (verified), so reverse is derived from the mode (sound.c:410-417,449-453). No producer emits the payload yet: xtask extraction (#1852) and ROM import (#1853) are pending, so the parent file stays pending.",
+          "rust_target": "crates/assets/src/audio/cry.rs",
+          "spec": "S-3",
+          "status": "rewritten"
+        }
+      },
       "category": "audio.misc",
       "kind": "file",
       "spec_owner": "S-3",
@@ -28788,6 +28796,14 @@
       "status": "pending"
     },
     "src/data/pokemon/cry_ids.h": {
+      "artifacts": {
+        "gSpeciesIdToCryId": {
+          "reason": "src/data/pokemon/cry_ids.h:1-137. The 135 Treecko-through-Chimecho remap values are transcribed into assets::audio::cry_id with SpeciesToCryId's ordinary, placeholder-to-Unown and Hoenn branches (pokemon.c:5701-5710). Species zero and species past Chimecho return None where upstream indexes outside its table. The parent header stays pending.",
+          "rust_target": "crates/assets/src/audio/cry.rs",
+          "spec": "S-3",
+          "status": "ported"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
@@ -31407,6 +31423,12 @@
           "spec": "I-4",
           "status": "stubbed"
         },
+        "SpeciesToCryId": {
+          "reason": "pokemon.c:5701-5710. The species-to-cry-position remap is assets::audio::cry_id: species up to Celebi map to their own position, the placeholder species between Celebi and Treecko to Unown's, and Hoenn species through the gSpeciesIdToCryId transcription. Species zero and species past Chimecho return None where upstream indexes outside its table. The parent file stays pending.",
+          "rust_target": "crates/assets/src/audio/cry.rs",
+          "spec": "S-3",
+          "status": "rewritten"
+        },
         "gNatureStatTable": {
           "reason": "Nature stat modifier table ported as Rust data (Nature enum + Stat enum + MODIFIERS table), pinned to upstream via id/landmark/neutral-nature tests (issue #125).",
           "rust_target": "crates/battle/src/nature.rs",
@@ -32076,6 +32098,14 @@
       "status": "pending"
     },
     "src/sound.c": {
+      "artifacts": {
+        "PlayCryInternal": {
+          "reason": "sound.c:369-455. Only the mode switch is modelled, as CryMode::settings resolving pan, volume, pitch, length, release, direct-sound mode and reverse per mode. The audio side effects are NOT modelled: the SetPokemonCry* calls, playback through SetPokemonCryTone and gMPlay_PokemonCry, and the cry-done tracking belong to the cry producers and player that #1852 and #1853 own. The parent file stays pending.",
+          "rust_target": "crates/assets/src/audio/cry.rs",
+          "spec": "S-3",
+          "status": "rewritten"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
