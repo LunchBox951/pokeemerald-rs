@@ -166,7 +166,7 @@ class VersionValidationModeTest(unittest.TestCase):
 
 
 class PromotionWorkflowContractTest(unittest.TestCase):
-    def test_schedule_is_timezone_aware_and_avoids_birch_hours(self):
+    def test_schedule_is_timezone_aware_and_runs_every_scheduled_operation(self):
         self.assertEqual(PROMOTE_WORKFLOW.count("timezone: America/Toronto"), 4)
         for schedule in channel_ladder.SCHEDULED_OPERATION:
             self.assertIn(f'cron: "{schedule}"', PROMOTE_WORKFLOW)

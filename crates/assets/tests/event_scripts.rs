@@ -1,4 +1,4 @@
-//! Byte-fixture tests for the addressed event-script payload (S-4, #2096).
+//! Byte-fixture tests for the addressed event-script payload (S-4).
 //!
 //! The fixture below is authored byte by byte, independent of
 //! `AddressedEventScripts::encode`, so the decoder is checked against the

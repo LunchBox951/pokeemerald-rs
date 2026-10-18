@@ -1,4 +1,4 @@
-//! `route103_rival_trigger` (issue #248, I-5): rival-sprite setup, the
+//! `route103_rival_trigger` (I-5): rival-sprite setup, the
 //! A-press interaction trigger, and real-pack reachability. The battle
 //! driver and outcome tests live in `route103_rival_driver_tests`, the late
 //! frame-order regressions in `route103_rival_frame_order_tests`, and the
