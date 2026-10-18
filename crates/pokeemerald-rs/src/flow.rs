@@ -1,9 +1,8 @@
-//! The real (windowed) game-flow state machine (I-3, issue #149): title ->
+//! The real (windowed) game-flow state machine (I-3): title ->
 //! main menu -> intro -> overworld.
 //!
-//! Split out of [`crate::app`] to keep that module focused on the
-//! platform/window shell (`one module = one concept` `(oop-boundaries)`):
-//! [`AppScene`] is the state, [`advance_scene`] is the one-frame transition
+//! [`crate::app`] stays focused on the platform/window shell (`one module =
+//! one concept` `(oop-boundaries)`): [`AppScene`] is the state, [`advance_scene`] is the one-frame transition
 //! function [`crate::app::App::step`] delegates to. See [`crate::app`]'s
 //! module docs for the transition diagram (`Title` -> `MainMenu` -> `Intro`
 //! -> `Overworld`) and the "log-or-ignore is fine" failure policy for a
@@ -15,7 +14,7 @@
 //! single frame -- see that variant's own doc comment and
 //! [`should_retry_overworld_load`].
 //!
-//! # Waiting for the front-end palette fade (I-3, issue #1329)
+//! # Waiting for the front-end palette fade (I-3)
 //!
 //! `Title` -> `MainMenu` and a `MainMenu` confirm on `NEW GAME`/`CONTINUE`
 //! hold the outgoing frame through a [`rendering::NormalPaletteFade`]
@@ -25,13 +24,11 @@
 //! `main_menu.c:884-894,936-943`) -- see [`AppScene::TitleFadeWait`] and
 //! [`AppScene::MainMenuFadeWait`] for the waiting states themselves.
 //!
-//! [`AnimatedTitle`] is the pre-I-3 per-frame title-animation state,
-//! unchanged in shape and behaviour from before this issue (see
-//! [`advance_scene`]'s `Title` arm and `crate::app`'s "Animating the real
-//! title screen" docs) -- only its ownership moved here, into one variant of
-//! [`AppScene`] instead of its own dedicated `App` field.
+//! [`AnimatedTitle`] is the per-frame title-animation state, owned by one
+//! variant of [`AppScene`] (see [`advance_scene`]'s `Title` arm and
+//! `crate::app`'s "Animating the real title screen" docs).
 //!
-//! # Where the save file enters the machine (I-6, issue #214)
+//! # Where the save file enters the machine (I-6)
 //!
 //! Two points, both taking the session's [`SaveSlot`] as an argument rather
 //! than reaching for a global `(oop-boundaries)`:
@@ -43,15 +40,14 @@
 //!   The loaded blocks ride along in [`MainMenuState`] until
 //!   [`MainMenuAction::Continue`] hands them to
 //!   [`OverworldPhase::continue_saved_game`].
-//! * **Write**, from the field start menu (I-6, issue #232): `START` in
+//! * **Write**, from the field start menu: `START` in
 //!   the overworld opens [`crate::start_menu`], and its `SAVE` action runs
 //!   upstream's own confirm/overwrite chain before calling
 //!   [`SaveSlot::store`] and friends.
 //!   [`advance_scene`]'s `Overworld` arm drives that through
 //!   [`OverworldPhase::advance_start_menu_frame`], which owns the frame
 //!   whenever a menu is open. There is deliberately **no** save on exit:
-//!   upstream writes nothing when the lid closes, and issue #214's
-//!   `save_on_exit` stand-in existed only until this flow landed.
+//!   upstream writes nothing when the lid closes.
 
 use engine::text::render::PrinterInput;
 use platform::{ButtonState, Buttons, Frame};
@@ -83,28 +79,22 @@ mod first_usable_move;
 /// the stand-in answer it gives and exactly where the seam ends.
 mod move_learn;
 /// The shared `CreateNPCTrainerParty` construction and headless one-turn
-/// driver every NPC trainer battle in this crate goes through (issue #237,
-/// generalized off [`route103_rival`] by issue #264): both
+/// driver every NPC trainer battle in this crate goes through: both
 /// [`route103_rival`]'s own scripted rival and
 /// [`overworld_phase`]'s `sight_trainer_trigger` (Route 103's Daisy, Andrew,
 /// Miguel, Rhett, Marcos, Isabelle, Pete) build their battles through this
 /// module.
 pub(crate) mod npc_trainer_battle;
 pub(crate) mod overworld_phase;
-/// The scripted Route 103 rival battle's own choice of trainer, reachable
-/// from real play since issue #248: [`overworld_phase`]'s own
-/// `route103_rival_trigger` (beside its existing `first_battle_trigger` and,
-/// since issue #264, `sight_trainer_trigger`) reads this module's
+/// The scripted Route 103 rival battle's own choice of trainer:
+/// [`overworld_phase`]'s `route103_rival_trigger` (beside its
+/// `first_battle_trigger` and `sight_trainer_trigger`) reads this module's
 /// [`route103_rival::route103_rival_for`] table, then calls
 /// [`npc_trainer_battle::start_npc_trainer_battle`]/
-/// [`npc_trainer_battle::advance_npc_trainer_battle`] directly -- the same
-/// reachability slice that retired [`first_battle`]'s own former
-/// `#[allow(dead_code)]` between issues #221 and #231. This module carried
-/// thin pass-throughs over those two functions (plus a `RivalBattleError`
-/// alias) from issue #264 until issue #347 retired them: neither wrapper
-/// held any Route-103-specific behaviour, so [`npc_trainer_battle`] is the
-/// one place both this module's own trigger and
-/// [`overworld_phase`]'s `sight_trainer_trigger` build their battles now.
+/// [`npc_trainer_battle::advance_npc_trainer_battle`] directly. This module
+/// holds no battle driver of its own: [`npc_trainer_battle`] is the one
+/// place both this module's own trigger and [`overworld_phase`]'s
+/// `sight_trainer_trigger` build their battles.
 pub(crate) mod route103_rival;
 mod wild_encounter;
 pub(crate) use overworld_phase::OverworldPhase;

@@ -1,4 +1,4 @@
-//! Backend-neutral battle-animation program catalog (S-4, issue #1856): the
+//! Backend-neutral battle-animation program catalog (S-4): the
 //! script tables upstream launches through `LaunchBattleAnimation`
 //! (`src/battle_anim.c:208-262`), in the one raw pack entry both extraction
 //! backends fill.

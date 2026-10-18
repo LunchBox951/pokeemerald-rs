@@ -49,7 +49,7 @@ const TILESET_STRUCT_BYTES: u32 = 0x18;
 /// Colours in one palette bank; the importer requires exactly this many.
 const BANK_COLORS: u16 = 16;
 /// Palette banks per tileset.
-const PALETTE_BANKS: u32 = 16;
+pub(super) const PALETTE_BANKS: u32 = 16;
 /// Bytes in one 16-colour BGR555 bank.
 const BANK_BYTES: u32 = 32;
 /// Bytes in one 4bpp tile.
