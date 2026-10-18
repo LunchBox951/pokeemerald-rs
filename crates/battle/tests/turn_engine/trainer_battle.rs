@@ -70,11 +70,8 @@ const PICHU: u16 = 172;
 const MEOWTH: u16 = 52;
 /// `SPECIES_CHANSEY`: pure Normal, and slower than [`KANGASKHAN`].
 const CHANSEY: u16 = 113;
-/// `SPECIES_CLEFFA`: pure Normal with Cute Charm as its only ability, and
-/// slower than [`KANGASKHAN`].
-const CLEFFA: u16 = 173;
 /// `SPECIES_KANGASKHAN`: pure Normal, fast enough to act ahead of
-/// [`CLEFFA`].
+/// [`ZIGZAGOON`].
 const KANGASKHAN: u16 = 115;
 
 const POUND: MoveId = MoveId::POUND;
@@ -1515,6 +1512,11 @@ fn an_empty_party_or_unknown_trainer_is_rejected_before_any_draw() {
     );
 }
 
+#[test]
+fn zigzagoon_fixture_is_species_zigzagoon() {
+    assert_eq!(SpeciesId(ZIGZAGOON), SpeciesId::ZIGZAGOON);
+}
+
 /// `HandleAction_ActionFinished` clears `gCurrentMove` (`pokeemerald/src/battle_util.c:658-670`)
 /// before `BattleTurnPassed` scores replacements (`pokeemerald/src/battle_main.c:3956-3969`).
 #[test]
@@ -1527,13 +1529,15 @@ fn a_residual_poison_knockout_scores_replacements_with_no_move_resolving() {
     const BENCH_REMAINING_AFTER_SEND_OUT: usize = 1;
 
     let dex = Dex::new();
-    // No bench move is super effective on Cleffa, so the damage pass decides;
-    // Cleffa acts last, so a missing reset leaves Mega Kick as the stale move.
-    let player = max_iv_mon(&dex, CLEFFA, NO_LEVEL_UP_LEVEL, vec![MEGA_KICK]);
+    // No bench move is super effective on Zigzagoon, so the damage pass decides;
+    // Zigzagoon acts last, so a missing reset leaves Mega Kick as the stale move.
+    let player = max_iv_mon(&dex, ZIGZAGOON, NO_LEVEL_UP_LEVEL, vec![MEGA_KICK]);
     let mut lead = max_iv_mon(&dex, KANGASKHAN, NO_LEVEL_UP_LEVEL, vec![GROWL]);
     lead.set_status1(Status1::Poisoned);
     let residual = poison_residual_damage(lead.stats().max_hp);
-    lead.apply_damage(lead.stats().max_hp - residual);
+    // Leave room for the player's Mega Kick: the hit must not faint the lead,
+    // so the poison tick does.
+    lead.apply_damage(lead.stats().max_hp - residual - residual / 2);
     let party = vec![
         lead,
         max_iv_mon(&dex, PICHU, BENCH_LEVEL, vec![TACKLE]),

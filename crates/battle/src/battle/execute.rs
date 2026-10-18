@@ -22,7 +22,8 @@ use crate::paralyze::{
     SynchronizeReflectionOutcome,
 };
 use crate::secondary::{
-    resolve_synchronize_poison_reflection, SecondaryApplication, SynchronizePoisonReflectionOutcome,
+    poison_point_can_land, resolve_synchronize_poison_reflection, SecondaryApplication,
+    SynchronizePoisonReflectionOutcome,
 };
 use crate::stat_change::{
     is_stat_change_effect, resolve_stat_change_move, set_stage, StatChangeDirection,
@@ -114,13 +115,66 @@ impl Battle {
         let pipeline = MovePipeline::for_move(&self.dex, move_id)?;
         let target_hp_before = self.battlers(attacker_is_player).1.current_hp();
         self.execute_move_pipeline(pipeline, attacker_is_player, move_id, rng, events)?;
-        // Multi-hit moves roll Static after each hit instead
+        // Multi-hit moves run their contact abilities after each hit instead
         // (`data/battle_scripts_1.s:637`), inside their own loop.
         let target_was_damaged =
             self.battlers(attacker_is_player).1.current_hp() < target_hp_before;
         if pipeline != MovePipeline::MultiHit && target_was_damaged {
-            self.apply_static_contact(attacker_is_player, move_id, rng, events)?;
+            self.apply_contact_abilities(attacker_is_player, move_id, rng, events)?;
         }
+        Ok(())
+    }
+
+    /// `MOVEEND_ON_DAMAGE_ABILITIES` for the contact abilities the engine
+    /// models (`battle_script_commands.c:4280`-`:4284`); a holder carries
+    /// at most one, so at most one of them acts.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BattleError::UnknownMove`] for a move outside the table.
+    pub(super) fn apply_contact_abilities(
+        &mut self,
+        attacker_is_player: bool,
+        move_id: MoveId,
+        rng: &mut impl BattleRng,
+        events: &mut Vec<BattleEvent>,
+    ) -> Result<(), BattleError> {
+        self.apply_static_contact(attacker_is_player, move_id, rng, events)?;
+        self.apply_poison_point_contact(attacker_is_player, move_id, rng, events)?;
+        self.apply_rough_skin_contact(attacker_is_player, move_id, events)
+    }
+
+    /// `MOVEEND_ON_DAMAGE_ABILITIES` for `ABILITY_ROUGH_SKIN`
+    /// (`battle_util.c:2767`-`:2780`; `data/battle_scripts_1.s:4184`-`:4191`).
+    ///
+    /// A living attacker's damaging contact hit costs it a sixteenth of its
+    /// maximum HP, floored to one (`battle_util.c:2775`-`:2777`) and capped at
+    /// its current HP, with no `Random()` call. A holder that fainted to the
+    /// hit still retaliates; the attacker's own faint settles right after
+    /// the damage (`tryfaintmon BS_ATTACKER`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BattleError::UnknownMove`] for a move outside the table.
+    fn apply_rough_skin_contact(
+        &mut self,
+        attacker_is_player: bool,
+        move_id: MoveId,
+        events: &mut Vec<BattleEvent>,
+    ) -> Result<(), BattleError> {
+        let makes_contact = self.dex.move_data(move_id)?.flags.makes_contact();
+        let (attacker, defender) = self.battlers(attacker_is_player);
+        if defender.ability() != AbilityId::ROUGH_SKIN || attacker.is_fainted() || !makes_contact {
+            return Ok(());
+        }
+        let recoil = (attacker.stats().max_hp / 16).max(1);
+        let damage = self.apply_damage_to_target(!attacker_is_player, recoil);
+        events.push(BattleEvent::RoughSkinDamage {
+            by_player: attacker_is_player,
+            move_id,
+            damage,
+        });
+        self.settle_faint(attacker_is_player, events);
         Ok(())
     }
 
@@ -175,6 +229,74 @@ impl Battle {
                 by_player: attacker_is_player,
                 move_id,
             });
+        }
+        Ok(())
+    }
+
+    /// `MOVEEND_ON_DAMAGE_ABILITIES` for `ABILITY_POISON_POINT`
+    /// (`battle_util.c:2806`-`:2818`).
+    ///
+    /// The `Random() % 3` roll needs only a living attacker and a damaging
+    /// contact hit, so a target that fainted to the hit still rolls. A zero
+    /// roll re-enters `SetMoveEffect` on the attacker, where a Poison or Steel
+    /// type, an existing primary status and Immunity all leave it unchanged
+    /// (see [`poison_point_can_land`]). A poison that lands arms the
+    /// attacker's Synchronize, which reflects it onto a surviving holder at
+    /// `MOVEEND_SYNCHRONIZE_ATTACKER` (`battle_util.c:2987`-`:3001`); that
+    /// reflection is `primary`, so a Poison- or Steel-typed holder earns its
+    /// own prevention event (`battle_script_commands.c:2320`-`:2329`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BattleError::UnknownMove`] for a move outside the table.
+    fn apply_poison_point_contact(
+        &mut self,
+        attacker_is_player: bool,
+        move_id: MoveId,
+        rng: &mut impl BattleRng,
+        events: &mut Vec<BattleEvent>,
+    ) -> Result<(), BattleError> {
+        let makes_contact = self.dex.move_data(move_id)?.flags.makes_contact();
+        let (attacker, defender) = self.battlers(attacker_is_player);
+        if defender.ability() != AbilityId::POISON_POINT || attacker.is_fainted() || !makes_contact
+        {
+            return Ok(());
+        }
+        if !rng.next_u16().is_multiple_of(3) || !poison_point_can_land(attacker) {
+            return Ok(());
+        }
+        let attacker_synchronizes = attacker.ability() == AbilityId::SYNCHRONIZE;
+        let (attacker, holder) = if attacker_is_player {
+            (&mut self.player, &mut self.enemy)
+        } else {
+            (&mut self.enemy, &mut self.player)
+        };
+        attacker.set_status1(Status1::Poisoned);
+        events.push(BattleEvent::PoisonedByPoisonPoint {
+            by_player: attacker_is_player,
+            move_id,
+        });
+        if !attacker_synchronizes || holder.is_fainted() {
+            return Ok(());
+        }
+        match resolve_synchronize_poison_reflection(holder) {
+            SynchronizePoisonReflectionOutcome::Applied => {
+                holder.set_status1(Status1::Poisoned);
+                events.push(BattleEvent::PoisonedByAttackerSynchronize {
+                    by_player: attacker_is_player,
+                    move_id,
+                });
+            }
+            SynchronizePoisonReflectionOutcome::TypeProtected => {
+                events.push(BattleEvent::AttackerSynchronizePoisonOrSteelTypeProtected {
+                    by_player: attacker_is_player,
+                    move_id,
+                });
+            }
+            SynchronizePoisonReflectionOutcome::AlreadyStatused => {}
+            SynchronizePoisonReflectionOutcome::ImmunityProtected => {
+                unreachable!("a Poison Point holder does not carry Immunity")
+            }
         }
         Ok(())
     }

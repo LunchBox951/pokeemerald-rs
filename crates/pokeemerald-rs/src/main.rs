@@ -1,5 +1,5 @@
-//! `pokeemerald-rs` binary entry point (I-1 slice 1: boot shell; I-2, issue
-//! #109: real title screen; S-4, issue #122: `--import-rom`).
+//! `pokeemerald-rs` binary entry point (I-1 boot shell; I-2 real title
+//! screen; S-4 `--import-rom`).
 //!
 //! Loads the real title screen from the installed asset pack, opens the
 //! game window, and drives the frame loop at the GBA's

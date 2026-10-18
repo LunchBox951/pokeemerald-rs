@@ -38,7 +38,7 @@ fn scratch(name: &str) -> PathBuf {
 }
 
 /// Tile bytes that are distinctive enough to anchor a search.
-fn distinctive_tiles(tile_count: usize) -> Vec<u8> {
+pub(super) fn distinctive_tiles(tile_count: usize) -> Vec<u8> {
     (0..tile_count * 32)
         .map(|index| {
             let value = u32::try_from(index).expect("small") * 37 + 11;
@@ -48,6 +48,19 @@ fn distinctive_tiles(tile_count: usize) -> Vec<u8> {
 }
 
 /// Run a body against a fixture ROM and a pack built from `entries`.
+/// The bag expectation synthetic contexts carry: one root of every family.
+pub(super) fn synthetic_bag_ids() -> Vec<String> {
+    [
+        "bag/image/menu",
+        "bag/item-icon/image/potion",
+        "bag/palette/bag",
+        "bag/item-icon/palette/potion",
+        "bag/raw/menu",
+    ]
+    .map(str::to_owned)
+    .to_vec()
+}
+
 pub(super) fn with_context<T>(
     name: &str,
     rom: &[u8],
@@ -69,6 +82,7 @@ pub(super) fn with_context<T>(
         lz77: Lz77Search::new(rom),
         pointers: PointerIndex::build(rom),
         upstream: dir.join("no-checkout"),
+        bag_ids: synthetic_bag_ids(),
     };
     let out = body(&ctx);
     let _ = std::fs::remove_file(&pack_path);
@@ -277,7 +291,7 @@ fn a_planted_palette_is_found_and_a_duplicated_one_is_refused() {
 
 /// Compress `data` as a literals-only LZ77 stream, which is what the
 /// decompressor reads back.
-fn lz77_literals(data: &[u8]) -> Vec<u8> {
+pub(super) fn lz77_literals(data: &[u8]) -> Vec<u8> {
     let len = u32::try_from(data.len()).expect("small");
     let size = len.to_le_bytes();
     let mut out = vec![0x10, size[0], size[1], size[2]];
@@ -947,6 +961,7 @@ fn with_audio_pack_extra<T>(
         lz77: Lz77Search::new(&rom),
         pointers: PointerIndex::build(&rom),
         upstream,
+        bag_ids: synthetic_bag_ids(),
     };
     let out = body(&ctx);
     let _ = std::fs::remove_dir_all(&dir);

@@ -1,5 +1,6 @@
 //! Both constructors refuse move-end-cured status/ability pairs
-//! (`battle_util.c:2873-2951`), Truant holders, and Intimidate holders, before any RNG draw.
+//! (`battle_util.c:2873-2951`) and always-refused abilities (Truant, Intimidate, Speed Boost,
+//! Color Change, Trace, Effect Spore, Flame Body, Cute Charm), before any RNG draw.
 
 use crate::common::{max_iv_mon, SequenceRng};
 use assets::trainers::TrainerId;
@@ -19,7 +20,7 @@ fn healthy(species: SpeciesId) -> BattlePokemon {
     mon(species, 0, Status1::Healthy)
 }
 
-fn refused() -> [(BattlePokemon, AbilityId); 8] {
+fn refused() -> [(BattlePokemon, AbilityId); 24] {
     [
         (healthy(SpeciesId::MIGHTYENA), AbilityId::INTIMIDATE),
         (healthy(SpeciesId::EKANS), AbilityId::INTIMIDATE),
@@ -29,6 +30,31 @@ fn refused() -> [(BattlePokemon, AbilityId); 8] {
         ),
         (healthy(SpeciesId::SLAKOTH), AbilityId::TRUANT),
         (healthy(SpeciesId::SLAKING), AbilityId::TRUANT),
+        (healthy(SpeciesId::NINJASK), AbilityId::SPEED_BOOST),
+        (healthy(SpeciesId::YANMA), AbilityId::SPEED_BOOST),
+        (healthy(SpeciesId::KECLEON), AbilityId::COLOR_CHANGE),
+        (healthy(SpeciesId::PORYGON), AbilityId::TRACE),
+        (healthy(SpeciesId::PORYGON2), AbilityId::TRACE),
+        (mon(SpeciesId::RALTS, 1, Status1::Healthy), AbilityId::TRACE),
+        (
+            mon(SpeciesId::KIRLIA, 1, Status1::Healthy),
+            AbilityId::TRACE,
+        ),
+        (
+            mon(SpeciesId::GARDEVOIR, 1, Status1::Healthy),
+            AbilityId::TRACE,
+        ),
+        (healthy(SpeciesId::PARAS), AbilityId::EFFECT_SPORE),
+        (healthy(SpeciesId::PARASECT), AbilityId::EFFECT_SPORE),
+        (healthy(SpeciesId::SHROOMISH), AbilityId::EFFECT_SPORE),
+        (healthy(SpeciesId::BRELOOM), AbilityId::EFFECT_SPORE),
+        (healthy(SpeciesId::MAGMAR), AbilityId::FLAME_BODY),
+        (
+            mon(SpeciesId::SLUGMA, 1, Status1::Healthy),
+            AbilityId::FLAME_BODY,
+        ),
+        (healthy(SpeciesId::CLEFAIRY), AbilityId::CUTE_CHARM),
+        (healthy(SpeciesId::SKITTY), AbilityId::CUTE_CHARM),
         (
             mon(SpeciesId::PERSIAN, 0, Status1::Paralysed),
             AbilityId::LIMBER,
@@ -175,7 +201,7 @@ fn trainer_constructor_refuses_a_later_player_reserve_before_drawing() {
 
 #[test]
 fn a_fainted_reserve_is_admitted_because_it_can_never_enter() {
-    for (mut bad, _) in refused() {
+    for (index, (mut bad, _)) in refused().into_iter().enumerate() {
         bad.apply_damage(u32::MAX);
         assert!(bad.is_fainted());
         let mut rng = SequenceRng::new([0, 0]);
@@ -184,6 +210,16 @@ fn a_fainted_reserve_is_admitted_because_it_can_never_enter() {
             vec![bad],
             healthy(SpeciesId::ZIGZAGOON),
             false,
+            &mut rng,
+        )
+        .unwrap();
+        let (mut bad, _) = refused().into_iter().nth(index).unwrap();
+        bad.apply_damage(u32::MAX);
+        let mut rng = SequenceRng::new([0, 0]);
+        trainer(
+            healthy(SpeciesId::MUDKIP),
+            vec![],
+            vec![healthy(SpeciesId::ZIGZAGOON), bad],
             &mut rng,
         )
         .unwrap();
@@ -217,26 +253,40 @@ fn confusion_is_refused_only_for_own_tempo() {
 }
 
 #[test]
-fn intimidate_is_refused_whatever_the_status() {
-    for status in [Status1::Healthy, Status1::Paralysed, Status1::Poisoned] {
-        let mut rng = SequenceRng::new([]);
-        let result = wild(
-            mon(SpeciesId::MIGHTYENA, 0, status),
-            vec![],
-            healthy(SpeciesId::ZIGZAGOON),
-            false,
-            &mut rng,
-        );
-        assert_refused_without_draws(&result, AbilityId::INTIMIDATE, &rng);
-        let mut rng = SequenceRng::new([]);
-        let result = trainer(
-            mon(SpeciesId::MIGHTYENA, 0, status),
-            vec![],
-            vec![healthy(SpeciesId::ZIGZAGOON)],
-            &mut rng,
-        );
-        assert_refused_without_draws(&result, AbilityId::INTIMIDATE, &rng);
+fn an_always_refused_ability_is_refused_whatever_the_status() {
+    for (species, ability) in [
+        (SpeciesId::MIGHTYENA, AbilityId::INTIMIDATE),
+        (SpeciesId::NINJASK, AbilityId::SPEED_BOOST),
+        (SpeciesId::KECLEON, AbilityId::COLOR_CHANGE),
+        (SpeciesId::PORYGON, AbilityId::TRACE),
+        (SpeciesId::SHROOMISH, AbilityId::EFFECT_SPORE),
+        (SpeciesId::MAGMAR, AbilityId::FLAME_BODY),
+        (SpeciesId::CLEFAIRY, AbilityId::CUTE_CHARM),
+    ] {
+        for status in [Status1::Healthy, Status1::Paralysed, Status1::Poisoned] {
+            always_refused_whatever(species, ability, status);
+        }
     }
+}
+
+fn always_refused_whatever(species: SpeciesId, ability: AbilityId, status: Status1) {
+    let mut rng = SequenceRng::new([]);
+    let result = wild(
+        mon(species, 0, status),
+        vec![],
+        healthy(SpeciesId::ZIGZAGOON),
+        false,
+        &mut rng,
+    );
+    assert_refused_without_draws(&result, ability, &rng);
+    let mut rng = SequenceRng::new([]);
+    let result = trainer(
+        mon(species, 0, status),
+        vec![],
+        vec![healthy(SpeciesId::ZIGZAGOON)],
+        &mut rng,
+    );
+    assert_refused_without_draws(&result, ability, &rng);
 }
 
 #[test]
@@ -244,6 +294,10 @@ fn the_selected_ability_slot_decides_not_the_species_pool() {
     for (species, slot, ability) in [
         (SpeciesId::EKANS, 1, AbilityId::SHED_SKIN),
         (SpeciesId::MAWILE, 0, AbilityId::HYPER_CUTTER),
+        (SpeciesId::YANMA, 1, AbilityId::COMPOUND_EYES),
+        (SpeciesId::RALTS, 0, AbilityId::SYNCHRONIZE),
+        (SpeciesId::KIRLIA, 0, AbilityId::SYNCHRONIZE),
+        (SpeciesId::GARDEVOIR, 0, AbilityId::SYNCHRONIZE),
     ] {
         let holder = mon(species, slot, Status1::Healthy);
         assert_eq!(holder.ability(), ability);

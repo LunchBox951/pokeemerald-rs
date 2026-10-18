@@ -314,6 +314,30 @@ fn fill_window_drops_stale_glyphs_but_keeps_the_glyph_printed_after_it() {
     );
 }
 
+/// Upstream's message printer starts at window-local (0, 1)
+/// (`pokeemerald/src/menu.c:169-180`) in a window at tilemap (2, 15)
+/// (`pokeemerald/src/main_menu.c` `sNewGameBirchSpeechTextWindows`), so the
+/// first glyph's top-left lands at screen pixel (16, 121). The numbers are
+/// literals so this fails if the shared origin constants drift together.
+#[test]
+fn the_first_speech_glyph_starts_at_the_upstream_screen_position() {
+    let pixels = dark_grey_glyph_sheet_pixels();
+    let mut scene = synthetic_scene(&pixels, TextSpeed::Instant);
+    scene.tick(NO_INPUT);
+
+    let WindowOp::Glyph(glyph) = &scene.ops[0] else {
+        panic!("expected the first op to be a glyph")
+    };
+    assert_eq!((glyph.x, glyph.y), (0, 1));
+    assert_eq!(
+        (
+            STANDARD_BOX_SCREEN_ORIGIN.0 + glyph.x,
+            STANDARD_BOX_SCREEN_ORIGIN.1 + glyph.y
+        ),
+        (16, 121)
+    );
+}
+
 #[test]
 fn compose_returns_native_dimensions_and_paints_the_first_revealed_glyph() {
     let pixels = dark_grey_glyph_sheet_pixels();
@@ -851,4 +875,15 @@ fn a_selected_identity_replaces_the_default_for_the_handoff() {
     let selected =
         crate::new_game::NewGameIdentity::new("LEAF", engine::save::PlayerGender::Female).unwrap();
     assert_eq!(scene.with_identity(selected).new_game_identity(), selected);
+}
+
+#[test]
+fn the_composed_first_glyph_top_left_pixel_is_at_16_121() {
+    let pixels = dark_grey_glyph_sheet_pixels();
+    let mut scene = synthetic_scene(&pixels, TextSpeed::Instant);
+    scene.tick(NO_INPUT);
+    let fb = scene.compose();
+    assert_eq!(fb.pixel(16, 121), Some(DARK_GREY_GLYPH_COLOR));
+    assert_ne!(fb.pixel(15, 121), Some(DARK_GREY_GLYPH_COLOR));
+    assert_ne!(fb.pixel(16, 120), Some(DARK_GREY_GLYPH_COLOR));
 }

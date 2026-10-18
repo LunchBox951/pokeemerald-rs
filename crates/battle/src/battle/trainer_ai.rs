@@ -200,6 +200,10 @@ fn scoreable_effect(dex: &Dex, move_id: MoveId) -> Result<ScoreableEffect, Battl
 
 /// Rejects a move whose effect the enabled trainer AI scripts cannot score.
 ///
+/// A flagless trainer runs no scoring script (`ChooseMoveOrAction_Singles`
+/// skips its flag loop, `src/battle_ai_script_commands.c:405-415`), so only the
+/// move's dex residency is checked.
+///
 /// The unchanged-after-prologue rows are admitted when `CHECK_BAD_MOVE` is the
 /// only script that would reach them, and refused when `CHECK_VIABILITY` or
 /// `TRY_TO_FAINT` would take an unported branch. `SETUP_FIRST_TURN` has no
@@ -214,6 +218,9 @@ pub(crate) fn ensure_scoreable(
     move_id: MoveId,
     flags: AiFlags,
 ) -> Result<(), BattleError> {
+    if flags == AiFlags::NONE {
+        return dex.move_data(move_id).map(|_| ());
+    }
     if scoreable_effect(dex, move_id)?.supported_by(flags) {
         Ok(())
     } else {
@@ -641,6 +648,14 @@ fn estimated_damage(
     // estimates every populated slot, depleted or not.
     let attack_stat =
         crate::ability::thick_fat_special_attack(defender.ability(), move_type, attack_stat);
+    // Plus/Minus raise raw Special Attack 150% before stages when the other
+    // active mon has the complement (`pokemon.c:3207-3210`).
+    let attack_stat = crate::ability::plus_minus_special_attack(
+        attacker.ability(),
+        defender.ability(),
+        category,
+        attack_stat,
+    );
     let (defense_stat, defense_stage) = defender.defending_stat(category);
     let input = DamageInput {
         attacker_level: attacker.level(),
@@ -1038,6 +1053,52 @@ mod tests {
     /// (`data/battle_ai_scripts.s:95-103`) despite belonging to execution's
     /// `SOUND_MOVES` (`crates/battle/src/stat_change.rs:83-94`).
     const HYPER_VOICE: MoveId = MoveId::HYPER_VOICE;
+
+    const SEISMIC_TOSS: MoveId = MoveId::SEISMIC_TOSS;
+    const SONIC_BOOM: MoveId = MoveId::SONIC_BOOM;
+    /// Upstream draws one setup value per move slot, then one tie-break value
+    /// (`src/battle_ai_script_commands.c:322-342,445`).
+    const FLAGLESS_DRAWS: usize = MAX_MON_MOVES + 1;
+
+    #[test]
+    fn a_flagless_trainer_chooses_among_executable_fixed_damage_moves() {
+        let dex = Dex::new();
+        let mut enemy = pokemon(TREECKO, vec![SEISMIC_TOSS, SONIC_BOOM, POUND]);
+        spend_move(&mut enemy, 2);
+        let player = pokemon(VOLTORB, vec![POUND]);
+        for (tie, slot) in [(0, 0), (1, 1), (2, 0)] {
+            let mut rng = SequenceRng::new([0, 1, 2, 3, tie]);
+            assert_eq!(
+                choose_trainer_action(&dex, &enemy, &player, AiFlags::NONE, FIRST_TURN, &mut rng),
+                Ok(EnemyAction::Move(slot))
+            );
+            assert_eq!(rng.draws(), FLAGLESS_DRAWS);
+            rng.assert_exhausted();
+        }
+    }
+
+    #[test]
+    fn flagless_admission_still_requires_a_dex_resident_move() {
+        let dex = Dex::new();
+        assert_eq!(ensure_scoreable(&dex, SEISMIC_TOSS, AiFlags::NONE), Ok(()));
+        assert!(ensure_scoreable(&dex, MoveId(u16::MAX), AiFlags::NONE).is_err());
+    }
+
+    #[test]
+    fn scoring_flags_still_refuse_fixed_damage_moves() {
+        let dex = Dex::new();
+        for flags in [
+            AiFlags::CHECK_BAD_MOVE,
+            AiFlags::TRY_TO_FAINT,
+            AiFlags::CHECK_VIABILITY,
+            AiFlags::SETUP_FIRST_TURN,
+        ] {
+            assert_eq!(
+                ensure_scoreable(&dex, SEISMIC_TOSS, flags),
+                Err(BattleError::UnscoreableMoveEffect(SEISMIC_TOSS))
+            );
+        }
+    }
 
     fn route_103_flags() -> AiFlags {
         AiFlags::CHECK_BAD_MOVE
@@ -1838,6 +1899,41 @@ mod tests {
                 "species {species:?}"
             );
         }
+    }
+
+    #[test]
+    fn plus_minus_estimated_damage_matches_the_real_damage_step() {
+        let dex = Dex::new();
+        let plusle = pokemon(SpeciesId(353), vec![MoveId::WATER_GUN]);
+        let minun = pokemon(SpeciesId(354), vec![MoveId::WATER_GUN]);
+        let squirtle = pokemon(SQUIRTLE, vec![MoveId::WATER_GUN]);
+        assert_eq!(plusle.ability(), assets::AbilityId::PLUS);
+        assert_eq!(minun.ability(), assets::AbilityId::MINUS);
+
+        for (attacker, defender) in [(&plusle, &minun), (&minun, &plusle), (&plusle, &squirtle)] {
+            let mut no_draws = SequenceRng::new([]);
+            let before_roll = crate::hit::damage_before_roll(
+                &dex,
+                MoveId::WATER_GUN,
+                attacker,
+                defender,
+                true,
+                &mut no_draws,
+            )
+            .unwrap();
+            let mut best_roll = SequenceRng::new([MAXIMUM_DAMAGE_ROLL]);
+            let real = crate::damage::apply_damage_roll(before_roll.damage, &mut best_roll);
+            let estimate =
+                estimated_damage(&dex, MoveId::WATER_GUN, attacker, defender, PERCENT_SCALE)
+                    .unwrap();
+            assert_eq!(estimate, real);
+        }
+        // The boost itself must show: the complement out-damages a same-ability bystander.
+        let boosted =
+            estimated_damage(&dex, MoveId::WATER_GUN, &plusle, &minun, PERCENT_SCALE).unwrap();
+        let control =
+            estimated_damage(&dex, MoveId::WATER_GUN, &plusle, &plusle, PERCENT_SCALE).unwrap();
+        assert!(boosted > control, "{boosted} vs {control}");
     }
 }
 

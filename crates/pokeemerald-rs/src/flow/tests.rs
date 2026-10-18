@@ -229,7 +229,7 @@ fn title_advances_on_a_freshly_pressed_a_or_start_only() {
 fn title_a_or_start_button_transitions_to_main_menu() {
     let (_temp, mut save_slot) = empty_slot("title-to-main-menu");
     for button in [Buttons::START, Buttons::A] {
-        let title_scene = crate::title::load_default().expect("run `cargo xtask extract` first");
+        let title_scene = crate::title::load_repo().expect("run `cargo xtask extract` first");
         let scene = AppScene::Title(Box::new(AnimatedTitle {
             scene: title_scene,
             tick: 0,
@@ -242,7 +242,7 @@ fn title_a_or_start_button_transitions_to_main_menu() {
             scene,
             pressed(button),
             &mut save_slot,
-            crate::pack_source::PackSource::Runtime,
+            crate::pack_source::PackSource::Repo,
         );
         assert!(
             matches!(waiting, AppScene::TitleFadeWait(_)),
@@ -252,7 +252,7 @@ fn title_a_or_start_button_transitions_to_main_menu() {
         let (next, wait_frames, _destination_frame) = drive_through_fade_wait(
             waiting,
             &mut save_slot,
-            &crate::pack_source::PackSource::Runtime,
+            &crate::pack_source::PackSource::Repo,
         );
         assert!(
             wait_frames.iter().any(|frame| **frame != *press_frame),
@@ -393,7 +393,7 @@ fn real_pack_title_transition_borders_the_main_menu_with_the_saves_window_frame(
     phase.save2.options_window_frame_type = SAVED_WINDOW_FRAME;
     save_from_the_start_menu(&mut phase, &mut save_slot);
 
-    let title_scene = crate::title::load_default().expect("run `cargo xtask extract` first");
+    let title_scene = crate::title::load_repo().expect("run `cargo xtask extract` first");
     let scene = AppScene::Title(Box::new(AnimatedTitle {
         scene: title_scene,
         tick: 0,
@@ -404,7 +404,7 @@ fn real_pack_title_transition_borders_the_main_menu_with_the_saves_window_frame(
         scene,
         pressed(Buttons::A),
         &mut save_slot,
-        crate::pack_source::PackSource::Runtime,
+        crate::pack_source::PackSource::Repo,
     );
     assert!(
         matches!(waiting, AppScene::TitleFadeWait(_)),
@@ -413,7 +413,7 @@ fn real_pack_title_transition_borders_the_main_menu_with_the_saves_window_frame(
     let (next, _wait_frames, frame) = drive_through_fade_wait(
         waiting,
         &mut save_slot,
-        &crate::pack_source::PackSource::Runtime,
+        &crate::pack_source::PackSource::Repo,
     );
     let AppScene::MainMenu(state) = next else {
         panic!("A on the title screen must transition to the main menu once the fade completes");
@@ -446,7 +446,7 @@ fn real_pack_title_transition_borders_the_main_menu_with_the_saves_window_frame(
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn title_without_start_stays_on_title_and_keeps_animating() {
-    let title_scene = crate::title::load_default().expect("run `cargo xtask extract` first");
+    let title_scene = crate::title::load_repo().expect("run `cargo xtask extract` first");
     let scene = AppScene::Title(Box::new(AnimatedTitle {
         scene: title_scene,
         tick: 0,
@@ -458,7 +458,7 @@ fn title_without_start_stays_on_title_and_keeps_animating() {
         scene,
         ButtonState::new(),
         &mut save_slot,
-        crate::pack_source::PackSource::Runtime,
+        crate::pack_source::PackSource::Repo,
     );
 
     let AppScene::Title(title) = next else {
@@ -474,8 +474,11 @@ fn title_without_start_stays_on_title_and_keeps_animating() {
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn main_menu_confirm_on_new_game_transitions_to_intro() {
     let (_temp, mut save_slot) = empty_slot("confirm-new-game");
-    let menu = crate::main_menu::load_default(MainMenuType::NoSavedGame)
-        .expect("run `cargo xtask extract` first");
+    let menu = MainMenuScene::from_pack(
+        &assets::pack::AssetPack::load_repo().expect("run `cargo xtask extract` first"),
+        MainMenuType::NoSavedGame,
+    )
+    .expect("the checkout pack builds the main menu");
     let scene = AppScene::MainMenu(Box::new(MainMenuState {
         scene: menu,
         saved: save_slot.load(),
@@ -485,7 +488,7 @@ fn main_menu_confirm_on_new_game_transitions_to_intro() {
         scene,
         pressed(Buttons::A),
         &mut save_slot,
-        crate::pack_source::PackSource::Runtime,
+        crate::pack_source::PackSource::Repo,
     );
     assert!(
         matches!(waiting, AppScene::MainMenuFadeWait(_)),
@@ -495,7 +498,7 @@ fn main_menu_confirm_on_new_game_transitions_to_intro() {
     let (next, wait_frames, _destination_frame) = drive_through_fade_wait(
         waiting,
         &mut save_slot,
-        &crate::pack_source::PackSource::Runtime,
+        &crate::pack_source::PackSource::Repo,
     );
     assert!(
         wait_frames.iter().any(|frame| **frame != *press_frame),
@@ -961,7 +964,11 @@ fn no_scene_outside_the_overworld_writes_the_save() {
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn intro_finishing_every_page_transitions_to_overworld_with_the_player_at_the_spawn_tile() {
-    let mut intro_scene = crate::intro::load_default().expect("run `cargo xtask extract` first");
+    let mut intro_scene = crate::intro::load(
+        &crate::pack_source::PackSource::Repo,
+        new_game::NewGameOptions::DEFAULT,
+    )
+    .expect("run `cargo xtask extract` first");
     let confirm_a = engine::text::render::PrinterInput {
         a_pressed: true,
         b_pressed: false,
@@ -983,7 +990,7 @@ fn intro_finishing_every_page_transitions_to_overworld_with_the_player_at_the_sp
         scene,
         ButtonState::new(),
         &mut save_slot,
-        crate::pack_source::PackSource::Runtime,
+        crate::pack_source::PackSource::Repo,
     );
 
     let AppScene::Overworld(phase) = next else {
@@ -1018,9 +1025,12 @@ fn intro_finishing_every_page_transitions_to_overworld_with_the_player_at_the_sp
 fn a_selected_female_identity_hands_off_into_mays_room() {
     let selected =
         new_game::NewGameIdentity::new("LEAF", engine::save::PlayerGender::Female).unwrap();
-    let mut intro_scene = crate::intro::load_default()
-        .expect("run `cargo xtask extract` first")
-        .with_identity(selected);
+    let mut intro_scene = crate::intro::load(
+        &crate::pack_source::PackSource::Repo,
+        new_game::NewGameOptions::DEFAULT,
+    )
+    .expect("run `cargo xtask extract` first")
+    .with_identity(selected);
     let confirm_a = engine::text::render::PrinterInput {
         a_pressed: true,
         b_pressed: false,
@@ -1042,7 +1052,7 @@ fn a_selected_female_identity_hands_off_into_mays_room() {
         scene,
         ButtonState::new(),
         &mut save_slot,
-        crate::pack_source::PackSource::Runtime,
+        crate::pack_source::PackSource::Repo,
     );
 
     let AppScene::Overworld(phase) = next else {

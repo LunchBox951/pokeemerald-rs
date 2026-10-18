@@ -182,6 +182,20 @@ fn initialize_turn_rng_state(
     random_turn_number
 }
 
+/// Re-reads Deoxys's Speed Forme stats from the EVs the player's side carries
+/// in. [`BattlePokemon::gain_evs`] leaves the earning battle's stats alone, as
+/// `MonGainEVs` writes only the party copy (`pokemon.c:5988`); upstream's
+/// battle-start copy then reads them back through `GetMonData` and
+/// `GetDeoxysStat` (`battle_controller_player.c:1641`-`:1645`).
+fn refresh_carried_speed_forme_stats(
+    player: &mut BattlePokemon,
+    player_reserves: &mut [BattlePokemon],
+) {
+    for mon in std::iter::once(player).chain(player_reserves.iter_mut()) {
+        mon.apply_speed_forme_evs();
+    }
+}
+
 impl Battle {
     /// Starts an ordinary wild battle or the scripted first battle.
     ///
@@ -242,16 +256,19 @@ impl Battle {
     /// A fainted reserve is admitted: it models a player party that already
     /// lost a member before the battle. A non-fainted participant that is
     /// Paralysed with Limber, Poisoned with Immunity, confused with Own Tempo,
-    /// or holds Truant or Intimidate fails with [`BattleError::UnportedAbilityInteraction`].
+    /// or holds Truant, Intimidate, Speed Boost, Color Change, Trace, Effect
+    /// Spore, Flame Body or Cute Charm fails with
+    /// [`BattleError::UnportedAbilityInteraction`].
     /// Errors leave the RNG untouched.
     pub fn new_with_player_reserves(
         dex: Dex,
-        player: BattlePokemon,
-        player_reserves: Vec<BattlePokemon>,
+        mut player: BattlePokemon,
+        mut player_reserves: Vec<BattlePokemon>,
         enemy: BattlePokemon,
         first_battle: bool,
         rng: &mut impl BattleRng,
     ) -> Result<Self, BattleError> {
+        refresh_carried_speed_forme_stats(&mut player, &mut player_reserves);
         if player.is_fainted() {
             return Err(BattleError::FaintedBattler(true));
         }
@@ -354,12 +371,13 @@ impl Battle {
     /// PP-positive move. Errors leave the RNG untouched.
     pub fn new_trainer_with_player_reserves(
         dex: Dex,
-        player: BattlePokemon,
-        player_reserves: Vec<BattlePokemon>,
+        mut player: BattlePokemon,
+        mut player_reserves: Vec<BattlePokemon>,
         trainer: TrainerId,
         mut party: Vec<BattlePokemon>,
         rng: &mut impl BattleRng,
     ) -> Result<Self, BattleError> {
+        refresh_carried_speed_forme_stats(&mut player, &mut player_reserves);
         if party.is_empty() {
             return Err(BattleError::EmptyTrainerParty(trainer));
         }

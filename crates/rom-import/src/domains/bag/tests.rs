@@ -50,6 +50,7 @@ const IMAGE: ImageRoot = ImageRoot {
 const PALETTE_ROOT: PaletteRoot = PaletteRoot {
     id: "bag/item-icon/palette/test",
     addr: at(PALETTE),
+    encoding: Encoding::Raw,
     color_count: 2,
 };
 const RAW: BlobRoot = BlobRoot {

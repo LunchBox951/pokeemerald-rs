@@ -47,7 +47,7 @@
     "data/battle_ai_scripts.s": {
       "artifacts": {
         "AI_CheckBadMove": {
-          "reason": "data/battle_ai_scripts.s:51-104,277-312 (#1311, #1861, #1862, #1863). The prologue is modelled in script order (score_bad_move_prologue): get_how_powerful_move_is gates the chart/ability block (power 0/1 or an sIgnoredPowerfulMoveEffects effect jumps straight to Soundproof; Fissure/Horn Drill bypass the gate, src/battle_ai_script_commands.c:1174-1239), then chart immunity (-10, terminates), then Volt Absorb/Electric, Water Absorb/Water, Flash Fire/Fire (-12, terminates), Wonder Guard (-10 unless the AI-normalized effectiveness is exactly 2x; a 4x hit is not exempt, :1528-1556) and Levitate on a Ground move (-10), then the nine-move Soundproof list (-10, terminates before any if_effect; omits Hyper Voice unlike executions sSoundMovesTable). Dual-type folding keeps Cmd_if_type_effectiveness ordering and its zero-resurrection quirk (:1515-1556). Exactly fourteen audited rows are classified unchanged after the prologue because none appears in the :105-214 if_effect chain: EFFECT_HIT, ABSORB, POISON_HIT, ALWAYS_HIT, MULTI_HIT, DRAGON_RAGE, HIGH_CRITICAL, SPEED_DOWN_HIT, EVASION_DOWN_HIT, CONFUSE_HIT, VITAL_THROW, SPLASH, QUICK_ATTACK, CHARGE; any unlisted effect stays refused. ensure_scoreable is flag-aware: those rows are admitted for a CHECK_BAD_MOVE-only trainer and refused when CHECK_VIABILITY would take an unported branch (ABSORB, ALWAYS_HIT, HIGH_CRITICAL, SPEED_DOWN_HIT, VITAL_THROW; :655,666,686,706,708) or TRY_TO_FAINT would (QUICK_ATTACK +2, :2629-2634); EFFECT_CHARGE is also refused under TRY_TO_FAINT, the one script that reads simulated damage (if_can_faint, :2618), because estimated_damage omits the AI_CalcDmg Charge doubling (src/battle_script_commands.c:1306-1316); AI_CheckViability neither dispatches EFFECT_CHARGE nor reads damage (:619-743), so a CHECK_VIABILITY trainer admits it. Execution still lacks Volt Absorb/Water Absorb/Flash Fire absorption, so those cancellations are scored but a sole absorbed move still executes (executor stays the authority); admission is validated before the four simulated-damage draws. The stat guards remain: EFFECT_ATTACK_DOWN screens the stage floor (:278), Hyper Cutter (:279-280), then Clear Body/White Smoke (:308-311) shared with EFFECT_DEFENSE_DOWN (:284). Every get_ability AI_TARGET read is restricted to a single-ability target or a true Shadow Tag/Magnet Pull/Arena Trap (read directly ahead of the guess, :1368-1376) and draws no RNG; any other two-ability target is refused (BattleError::AmbiguousPlayerAbility) because battle history and the Random() & 1 guess (:1350-1396) are not modelled, including the boundary that upstream BATTLE_HISTORY->abilities[0] can hold a field-effect ability the port models no events for. Execution still gates what runs: no EVASION_DOWN_HIT move exists in the dex, and SPEED_DOWN_HIT, HIGH_CRITICAL etc. stay subject to ensure_executable. STILL deferred: the other if_effect handler bodies in the :104-216 chain (Toxic/EFFECT_POISON, sleep, burn, freeze, Substitute, Swagger/Flatter, Safeguard, the remaining stat-stage and the rest), Keen Eye, and the CHECK_VIABILITY/TRY_TO_FAINT branches of the refused rows. The parent artifact stays pending. EFFECT_CONFUSE_HIT (raw 76; include/constants/battle_move_effects.h:80) has no AI_CheckBadMove dispatch (:104-214), no AI_CheckViability dispatch (:652-776), no special AI_TryToFaint branch (:2616-2636) and no AI_SetupFirstTurn list entry (:2638-2705), so it is admitted under all four modelled flags; TRY_TO_FAINT still applies its generic damage scoring. Three handlers are scored (#1863): AI_CBM_Paralyze (:397-403) stops at its first Score_Minus10 in command order -- AI type effectiveness x0, then Limber via get_ability AI_TARGET, then any non-Healthy Status1 -- so an immune or already-statused target takes one -10, never a stacked -20; AI_CBM_Confuse (:386-395) scores active target confusion -5 (Score_Minus5, distinct from -10) before any ability read, then Own Tempo -10; AI_CBM_FocusEnergy (:382-384) scores the USER's active Focus Energy volatile -10. Their moves are Stun Spore, Thunder Wave, Glare, Supersonic, Confuse Ray, Sweet Kiss and Focus Energy; each target ability read goes through ai_get_ability under the lead-admission invariant (no guess, no draw). Safeguard (:391,401) stays unrepresentable: no admitted move or state can establish it, and Swagger/Flatter, which also route to AI_CBM_Confuse (:169,193), stay refused. Because AI_CheckViability branches on Paralyze and Confuse (:687,704) and AI_SetupFirstTurn rolls for all three (:2667,2668,2685), ensure_scoreable refuses Paralyze/Confuse under CHECK_VIABILITY and all three under SETUP_FIRST_TURN; Focus Energy has no viability branch, and TRY_TO_FAINT keeps its generic x4 roll.",
+          "reason": "data/battle_ai_scripts.s:51-104,277-312 (#1311, #1861, #1862, #1863). The prologue is modelled in script order (score_bad_move_prologue): get_how_powerful_move_is gates the chart/ability block (power 0/1 or an sIgnoredPowerfulMoveEffects effect jumps straight to Soundproof; Fissure/Horn Drill bypass the gate, src/battle_ai_script_commands.c:1174-1239), then chart immunity (-10, terminates), then Volt Absorb/Electric, Water Absorb/Water, Flash Fire/Fire (-12, terminates), Wonder Guard (-10 unless the AI-normalized effectiveness is exactly 2x; a 4x hit is not exempt, :1528-1556) and Levitate on a Ground move (-10), then the nine-move Soundproof list (-10, terminates before any if_effect; omits Hyper Voice unlike executions sSoundMovesTable). Dual-type folding keeps Cmd_if_type_effectiveness ordering and its zero-resurrection quirk (:1515-1556). Exactly fourteen audited rows are classified unchanged after the prologue because none appears in the :105-214 if_effect chain: EFFECT_HIT, ABSORB, POISON_HIT, ALWAYS_HIT, MULTI_HIT, DRAGON_RAGE, HIGH_CRITICAL, SPEED_DOWN_HIT, EVASION_DOWN_HIT, CONFUSE_HIT, VITAL_THROW, SPLASH, QUICK_ATTACK, CHARGE; any unlisted effect stays refused whenever a scoring flag is enabled; a flagless trainer (AiFlags::NONE, e.g. JANI) runs no script (src/battle_ai_script_commands.c:405-415), so only ensure_executable and dex residency gate its moves (#2300). ensure_scoreable is flag-aware: those rows are admitted for a CHECK_BAD_MOVE-only trainer and refused when CHECK_VIABILITY would take an unported branch (ABSORB, ALWAYS_HIT, HIGH_CRITICAL, SPEED_DOWN_HIT, VITAL_THROW; :655,666,686,706,708) or TRY_TO_FAINT would (QUICK_ATTACK +2, :2629-2634); EFFECT_CHARGE is also refused under TRY_TO_FAINT, the one script that reads simulated damage (if_can_faint, :2618), because estimated_damage omits the AI_CalcDmg Charge doubling (src/battle_script_commands.c:1306-1316); AI_CheckViability neither dispatches EFFECT_CHARGE nor reads damage (:619-743), so a CHECK_VIABILITY trainer admits it. Execution still lacks Volt Absorb/Water Absorb/Flash Fire absorption, so those cancellations are scored but a sole absorbed move still executes (executor stays the authority); admission is validated before the four simulated-damage draws. The stat guards remain: EFFECT_ATTACK_DOWN screens the stage floor (:278), Hyper Cutter (:279-280), then Clear Body/White Smoke (:308-311) shared with EFFECT_DEFENSE_DOWN (:284). Every get_ability AI_TARGET read is restricted to a single-ability target or a true Shadow Tag/Magnet Pull/Arena Trap (read directly ahead of the guess, :1368-1376) and draws no RNG; any other two-ability target is refused (BattleError::AmbiguousPlayerAbility) because battle history and the Random() & 1 guess (:1350-1396) are not modelled, including the boundary that upstream BATTLE_HISTORY->abilities[0] can hold a field-effect ability the port models no events for. Execution still gates what runs: no EVASION_DOWN_HIT move exists in the dex, and SPEED_DOWN_HIT, HIGH_CRITICAL etc. stay subject to ensure_executable. STILL deferred: the other if_effect handler bodies in the :104-216 chain (Toxic/EFFECT_POISON, sleep, burn, freeze, Substitute, Swagger/Flatter, Safeguard, the remaining stat-stage and the rest), Keen Eye, and the CHECK_VIABILITY/TRY_TO_FAINT branches of the refused rows. The parent artifact stays pending. EFFECT_CONFUSE_HIT (raw 76; include/constants/battle_move_effects.h:80) has no AI_CheckBadMove dispatch (:104-214), no AI_CheckViability dispatch (:652-776), no special AI_TryToFaint branch (:2616-2636) and no AI_SetupFirstTurn list entry (:2638-2705), so it is admitted under all four modelled flags; TRY_TO_FAINT still applies its generic damage scoring. Three handlers are scored (#1863): AI_CBM_Paralyze (:397-403) stops at its first Score_Minus10 in command order -- AI type effectiveness x0, then Limber via get_ability AI_TARGET, then any non-Healthy Status1 -- so an immune or already-statused target takes one -10, never a stacked -20; AI_CBM_Confuse (:386-395) scores active target confusion -5 (Score_Minus5, distinct from -10) before any ability read, then Own Tempo -10; AI_CBM_FocusEnergy (:382-384) scores the USER's active Focus Energy volatile -10. Their moves are Stun Spore, Thunder Wave, Glare, Supersonic, Confuse Ray, Sweet Kiss and Focus Energy; each target ability read goes through ai_get_ability under the lead-admission invariant (no guess, no draw). Safeguard (:391,401) stays unrepresentable: no admitted move or state can establish it, and Swagger/Flatter, which also route to AI_CBM_Confuse (:169,193), stay refused. Because AI_CheckViability branches on Paralyze and Confuse (:687,704) and AI_SetupFirstTurn rolls for all three (:2667,2668,2685), ensure_scoreable refuses Paralyze/Confuse under CHECK_VIABILITY and all three under SETUP_FIRST_TURN; Focus Energy has no viability branch, and TRY_TO_FAINT keeps its generic x4 roll.",
           "rust_target": "crates/battle/src/battle/trainer_ai.rs",
           "spec": "S-6",
           "status": "stubbed"
@@ -203,6 +203,12 @@
         "BattleScript_PrintCantRunFromTrainer": {
           "reason": "data/battle_scripts_1.s:3071-:3073. The rule is modelled -- Battle::take_turn refuses PlayerAction::Run in a BATTLE_TYPE_TRAINER battle with BattleError::NoRunningFromTrainer, before any draw, and the battle stays usable so another action can be chosen (upstream re-prompts the same menu). The script's one instruction beyond that is presentation: printstring STRINGID_NORUNNINGFROMTRAINERS ('No! There's no running / from a TRAINER battle!', src/battle_message.c:330) has no message layer to reach in this port, so the string itself is not modelled.",
           "rust_target": "crates/battle/src/battle.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
+        "BattleScript_RoughSkinActivates": {
+          "reason": "data/battle_scripts_1.s:4184-4191, reached from ABILITYEFFECT_ON_DAMAGE's ABILITY_ROUGH_SKIN case (src/battle_util.c:2767-2780) at MOVEEND_ON_DAMAGE_ABILITIES. Modelled by crate::battle::execute::Battle::apply_rough_skin_contact, called through apply_contact_abilities after each single-hit pipeline and after every landed multi-hit strike: datahpupdate BS_ATTACKER removes the attacker's max(1, maxHP / 16) recoil (computed at battle_util.c:2775-2777, capped at current HP, no Random() draw) and emits BattleEvent::RoughSkinDamage, then tryfaintmon BS_ATTACKER settles the attacker's faint at once. HITMARKER_IGNORE_SUBSTITUTE has no observable effect because Substitute is not modelled. NOT modelled: presentation -- healthbarupdate, printstring STRINGID_PKMNHURTSWITH and waitmessage. Pinned by tests/turn_engine/rough_skin_contact.rs.",
+          "rust_target": "crates/battle/src/battle/execute.rs",
           "spec": "S-6",
           "status": "stubbed"
         },
@@ -11570,6 +11576,12 @@
           "rust_target": "crates/pokeemerald-rs/src/overworld/npc_scripts.rs",
           "spec": "I-3",
           "status": "stubbed"
+        },
+        "PlayersHouse_2F_EventScript_WallClock": {
+          "reason": "Flag effect only: the two unconditional Vigoroth hide setflags (players_house.inc:62-63) are applied on the fresh-save path (new_game::apply_wall_clock_vigoroth_flags, assets::WALL_CLOCK_VIGOROTH_HIDE_FLAGS) because the port starts in the bedroom past this script. The rest stays deferred to #1758: the stopped-clock message, SetWallClock, delay, VAR_LITTLEROOT_INTRO_STATE=6, FLAG_SET_WALL_CLOCK, and Mom coming upstairs.",
+          "rust_target": "crates/assets/src/new_game_flags.rs",
+          "spec": "I-3",
+          "status": "stubbed"
         }
       },
       "category": "data.script",
@@ -18034,15 +18046,27 @@
     },
     "graphics/pokemon/mudkip": {
       "artifacts": {
+        "back.png": {
+          "reason": "Static 64x64 mudkip image extracted as the typed battler lookup's back image and recorded as a ROM-profile battler root; animation sheets and other graphics remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
         "front.png": {
-          "reason": "Shared normal front image extracted for typed starter previews; other species graphics remain pending.",
-          "rust_target": "crates/xtask/src/extract/starter_chooser.rs",
+          "reason": "Static 64x64 mudkip image extracted as the typed battler lookup's front image and recorded as a ROM-profile battler root; animation sheets and other graphics remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "normal.pal": {
-          "reason": "Sixteen-colour JASC normal palette extracted for the shared front image; shiny and other graphics remain pending.",
-          "rust_target": "crates/xtask/src/extract/starter_chooser.rs",
+          "reason": "Sixteen-colour JASC mudkip palette (normal) extracted for the typed battler lookup and recorded as a ROM-profile battler root; other species graphics remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "shiny.pal": {
+          "reason": "Sixteen-colour JASC mudkip palette (shiny) extracted for the typed battler lookup and recorded as a ROM-profile battler root; other species graphics remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
           "spec": "S-4",
           "status": "ported"
         }
@@ -18846,15 +18870,27 @@
     },
     "graphics/pokemon/torchic": {
       "artifacts": {
+        "back.png": {
+          "reason": "Static 64x64 torchic image extracted as the typed battler lookup's back image and recorded as a ROM-profile battler root; animation sheets and other graphics remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
         "front.png": {
-          "reason": "Shared normal front image extracted for typed starter previews; other species graphics remain pending.",
-          "rust_target": "crates/xtask/src/extract/starter_chooser.rs",
+          "reason": "Static 64x64 torchic image extracted as the typed battler lookup's front image and recorded as a ROM-profile battler root; animation sheets and other graphics remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "normal.pal": {
-          "reason": "Sixteen-colour JASC normal palette extracted for the shared front image; shiny and other graphics remain pending.",
-          "rust_target": "crates/xtask/src/extract/starter_chooser.rs",
+          "reason": "Sixteen-colour JASC torchic palette (normal) extracted for the typed battler lookup and recorded as a ROM-profile battler root; other species graphics remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "shiny.pal": {
+          "reason": "Sixteen-colour JASC torchic palette (shiny) extracted for the typed battler lookup and recorded as a ROM-profile battler root; other species graphics remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
           "spec": "S-4",
           "status": "ported"
         }
@@ -18884,15 +18920,27 @@
     },
     "graphics/pokemon/treecko": {
       "artifacts": {
+        "back.png": {
+          "reason": "Static 64x64 treecko image extracted as the typed battler lookup's back image and recorded as a ROM-profile battler root; animation sheets and other graphics remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
         "front.png": {
-          "reason": "Shared normal front image extracted for typed starter previews; other species graphics remain pending.",
-          "rust_target": "crates/xtask/src/extract/starter_chooser.rs",
+          "reason": "Static 64x64 treecko image extracted as the typed battler lookup's front image and recorded as a ROM-profile battler root; animation sheets and other graphics remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "normal.pal": {
-          "reason": "Sixteen-colour JASC normal palette extracted for the shared front image; shiny and other graphics remain pending.",
-          "rust_target": "crates/xtask/src/extract/starter_chooser.rs",
+          "reason": "Sixteen-colour JASC treecko palette (normal) extracted for the typed battler lookup and recorded as a ROM-profile battler root; other species graphics remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "shiny.pal": {
+          "reason": "Sixteen-colour JASC treecko palette (shiny) extracted for the typed battler lookup and recorded as a ROM-profile battler root; other species graphics remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
           "spec": "S-4",
           "status": "ported"
         }
@@ -27809,7 +27857,7 @@
     "src/battle_util.c": {
       "artifacts": {
         "AbilityBattleEffects": {
-          "reason": "ABILITYEFFECT_SYNCHRONIZE (battle_util.c:2971-2984): once BattleScript_EffectParalyze paralyses a Synchronize holder, crate::battle::execute::Battle::reflect_synchronize_paralysis re-enters the paralysis case for MOVE_EFFECT_AFFECTS_USER against the original attacker (mirroring BattleScript_SynchronizeActivates' seteffectprimary re-entry, battle_script_commands.c:2240-2245, 2395-2425), guarded by crate::battle::paralyze::resolve_synchronize_reflection (Limber, then any existing primary status; no typecalc, no accuracycheck, matching the reference). Guts, Marvel Scale (accessor-boundary reads, issue #942), and now Shed Skin (issue #944, its end-turn cure draw moved into ABILITYEFFECT_ENDTURN below) are all modelled, so secondary::ensure_admissible -- the only ensure_admissible screen left since #944 dropped paralyze::ensure_admissible -- refuses none of the three against a fresh status or its reflection on either battler. ABILITYEFFECT_SYNCHRONIZE's poison case (battle_util.c:2971-2986, battle_script_commands.c:2299-2340, 2491-2512, 4275-4279, issue #1186) is modelled the same way: once an EFFECT_POISON_HIT move newly poisons a Synchronize holder, crate::battle::execute::Battle::reflect_synchronize_poison re-enters SetMoveEffect's STATUS1_POISON case for MOVE_EFFECT_AFFECTS_USER against the original attacker after that target's own tryfaintmon (moveendall runs after seteffectwithchance's tryfaintmon, data/battle_scripts_1.s:265-267, unlike the non-damaging paralysis script), guarded by crate::battle::secondary::resolve_synchronize_poison_reflection: primary == TRUE always takes STATUS1_POISON's guarded prevention branches ahead of the existing-status no-op, so an Immunity holder or a Poison-/Steel-typed original attacker earns its own BattleScript_PSNPrevention observable here where the initial hit's own silent poison_can_land guard would have refused it; only a normally typed, already-statused attacker still falls through silently. secondary::ensure_admissible no longer refuses a Synchronize defender at all, healthy attacker or not -- the reflection is the modelled path -- leaving only its Serene Grace screen. ABILITYEFFECT_MOVES_BLOCK's Soundproof case is also modelled, in crate::battle::Battle::act ahead of the no-PP abort, via crate::battle::stat_change::soundproof_block against every sSoundMovesTable entry (battle_util.c:686-692, 2659-2675) on membership alone, whatever the move's effect: the block emits SoundproofProtected and returns before any accuracy, critical-hit, damage or effect draw, while still spending the move's Pressure-aware PP. Growl, Screech, Metal Sound and Hyper Voice are the listed moves this engine currently executes; the other six are refused pre-turn for unrelated missing pipelines. ABILITYEFFECT_ENDTURN's ABILITY_SHED_SKIN case (battle_util.c:2620-2640, issue #944) is modelled too, from crate::battle::Battle::residual_effects (see src/battle_util.c#DoBattlerEndTurnEffects for the ENDTURN_ABILITIES call site) via crate::battle::Battle::apply_shed_skin_residual: gated on the same hp != 0 check the case's own switch sits behind (:2601-2602), a battler whose ability is Shed Skin draws crate::status1::draws_shed_skin_cure (Random() % 3 == 0, :2621) whenever status1 is nonzero; a hit clears status1 to Status1::Healthy and emits BattleEvent::ShedSkinCured, mirroring BattleScript_ShedSkinActivates' STRINGID_PKMNSXCUREDYPROBLEM (data/battle_scripts_1.s:3993-3997) and the status2 Nightmare clear (:2634) this crate does not model Nightmare for. ABILITYEFFECT_ON_DAMAGE's ABILITY_STATIC case (battle_util.c:2821-2835, issue #2221) is modelled at MOVEEND_ON_DAMAGE_ABILITIES (battle_script_commands.c:4280-4284) by crate::battle::Battle::apply_static_contact, called from execute_move after each single-hit pipeline settles faints, and after every landed hit inside the multi-hit loop (data/battle_scripts_1.s:637): when the target lost HP, the move has FLAG_MAKES_CONTACT and the attacker is alive, one Random() % 3 draw is taken whether or not the holder survived, and a zero roll on an attacker that is neither Limber nor already statused sets Status1::Paralysed and emits BattleEvent::ParalyzedByStatic (SetMoveEffect's AFFECTS_USER paralysis case, :2395-2424, reusing paralyze::resolve_synchronize_reflection); an attacker with Synchronize then reflects the paralysis onto a surviving, unstatused holder (MOVEEND_SYNCHRONIZE_ATTACKER, battle_script_commands.c:4291-4294, battle_util.c:2987-3001; BattleEvent::ParalyzedByAttackerSynchronize), though ABILITYEFFECT_ATK_SYNCHRONIZE for other statuses stays unmodelled. Pinned by tests/turn_engine/static_contact.rs. NOT modelled: the per-status text-buffer selection (:2623-2632, BattleEvent::ShedSkinCured already carries the cured Status1 instead), ABILITYEFFECT_ATK_SYNCHRONIZE, ABILITYEFFECT_MOVES_BLOCK for every non-Soundproof ability, the HITMARKER_NO_PPDEDUCT escape a blocked sound move grants a STATUS2_MULTIPLETURNS attacker (battle_util.c:2666-2669), every other ABILITYEFFECT_ENDTURN case (Rain Dish, Speed Boost, Truant), every other ABILITYEFFECT_* case (the other ABILITYEFFECT_ON_DAMAGE contact abilities, Forecast, Trace, Cloud Nine/Air Lock, weather abilities, and the rest), and the dispatcher's general call sites outside the paralysis, poison, Soundproof, and end-of-turn paths. Status1 reader disposition (issue #945): both Battle constructors screen every non-fainted participant, active and bench or reserve, through crate::battle::admission::ensure_participant_admissible before any constructor draw, and a Paralysed Limber, Poisoned Immunity, or confused Own Tempo holder (issue #1990; STATUS2_CONFUSION cleared at battle_util.c:2885-2891,2937-2939) is refused with BattleError::UnportedAbilityInteraction because ABILITYEFFECT_IMMUNITY's move-end cure (battle_util.c:2873-2951) is not modelled. Guts, Marvel Scale, Shed Skin and Synchronize on paralysis and poison are modelled; Limber and Immunity are refused only for their triggering status, and Own Tempo only while confused. Early Bird (:2030-2037), Insomnia, Vital Spirit, Water Veil, Magma Armor and Natural Cure (battle_script_commands.c:9590-9607) are deferred while their status or switch behaviour is absent; admitting them is not whole-ability coverage. Pinned by tests/turn_engine/status_ability_matrix.rs and participant_admission.rs. Truant admission disposition (issue #2184): both Battle constructors refuse every non-fainted Truant participant, active and bench or reserve, through crate::battle::admission::ensure_participant_admissible with BattleError::UnportedAbilityInteraction before constructor RNG. CANCELER_TRUANT (battle_util.c:2086-2097) and ABILITYEFFECT_ENDTURN truantCounter toggle (:2653-2655) remain unmodelled; this is fail-closed admission, not Truant behavior coverage. Pinned by tests/turn_engine/participant_admission.rs, including fainted-reserve admission. Intimidate admission disposition (issue #2251): both Battle constructors refuse every non-fainted Intimidate participant, active and bench or reserve, through crate::battle::admission::ensure_participant_admissible with BattleError::UnportedAbilityInteraction before constructor RNG, trainer preflight refuses a member whose fixed personality selects Truant or Intimidate before trainer-party OT-ID RNG, and the wild pre-roll screen refuses a species with any Truant or Intimidate ability slot before nature, personality, IV and held-item RNG. The switch-in queue (battle_util.c:2559-2564), ABILITYEFFECT_INTIMIDATE1 (:3003-3016), ABILITYEFFECT_INTIMIDATE2 (:3074-3088) and BattleScript_IntimidateActivates (data/battle_scripts_1.s:4024-4048) remain unmodelled; this is fail-closed admission, not Intimidate behavior coverage. Pinned by tests/turn_engine/participant_admission.rs and the trainer preflight tests, including fainted-reserve admission and selected-ability-slot boundaries. ABILITYEFFECT_ABSORBING (battle_util.c:2676-2744, issue #2170) is recorded under src/battle_util.c#AbilityBattleEffects-absorbing: Volt Absorb, Water Absorb and Flash Fire are executed; the frozen-holder exemption of Flash Fire (:2703) is the documented boundary because Status1 cannot represent freeze.",
+          "reason": "ABILITYEFFECT_SYNCHRONIZE (battle_util.c:2971-2984): once BattleScript_EffectParalyze paralyses a Synchronize holder, crate::battle::execute::Battle::reflect_synchronize_paralysis re-enters the paralysis case for MOVE_EFFECT_AFFECTS_USER against the original attacker (mirroring BattleScript_SynchronizeActivates' seteffectprimary re-entry, battle_script_commands.c:2240-2245, 2395-2425), guarded by crate::battle::paralyze::resolve_synchronize_reflection (Limber, then any existing primary status; no typecalc, no accuracycheck, matching the reference). Guts, Marvel Scale (accessor-boundary reads, issue #942), and now Shed Skin (issue #944, its end-turn cure draw moved into ABILITYEFFECT_ENDTURN below) are all modelled, so secondary::ensure_admissible -- the only ensure_admissible screen left since #944 dropped paralyze::ensure_admissible -- refuses none of the three against a fresh status or its reflection on either battler. ABILITYEFFECT_SYNCHRONIZE's poison case (battle_util.c:2971-2986, battle_script_commands.c:2299-2340, 2491-2512, 4275-4279, issue #1186) is modelled the same way: once an EFFECT_POISON_HIT move newly poisons a Synchronize holder, crate::battle::execute::Battle::reflect_synchronize_poison re-enters SetMoveEffect's STATUS1_POISON case for MOVE_EFFECT_AFFECTS_USER against the original attacker after that target's own tryfaintmon (moveendall runs after seteffectwithchance's tryfaintmon, data/battle_scripts_1.s:265-267, unlike the non-damaging paralysis script), guarded by crate::battle::secondary::resolve_synchronize_poison_reflection: primary == TRUE always takes STATUS1_POISON's guarded prevention branches ahead of the existing-status no-op, so an Immunity holder or a Poison-/Steel-typed original attacker earns its own BattleScript_PSNPrevention observable here where the initial hit's own silent poison_can_land guard would have refused it; only a normally typed, already-statused attacker still falls through silently. secondary::ensure_admissible no longer refuses a Synchronize defender at all, healthy attacker or not -- the reflection is the modelled path -- leaving only its Serene Grace screen. ABILITYEFFECT_MOVES_BLOCK's Soundproof case is also modelled, in crate::battle::Battle::act ahead of the no-PP abort, via crate::battle::stat_change::soundproof_block against every sSoundMovesTable entry (battle_util.c:686-692, 2659-2675) on membership alone, whatever the move's effect: the block emits SoundproofProtected and returns before any accuracy, critical-hit, damage or effect draw, while still spending the move's Pressure-aware PP. Growl, Screech, Metal Sound and Hyper Voice are the listed moves this engine currently executes; the other six are refused pre-turn for unrelated missing pipelines. ABILITYEFFECT_ENDTURN's ABILITY_SHED_SKIN case (battle_util.c:2620-2640, issue #944) is modelled too, from crate::battle::Battle::residual_effects (see src/battle_util.c#DoBattlerEndTurnEffects for the ENDTURN_ABILITIES call site) via crate::battle::Battle::apply_shed_skin_residual: gated on the same hp != 0 check the case's own switch sits behind (:2601-2602), a battler whose ability is Shed Skin draws crate::status1::draws_shed_skin_cure (Random() % 3 == 0, :2621) whenever status1 is nonzero; a hit clears status1 to Status1::Healthy and emits BattleEvent::ShedSkinCured, mirroring BattleScript_ShedSkinActivates' STRINGID_PKMNSXCUREDYPROBLEM (data/battle_scripts_1.s:3993-3997) and the status2 Nightmare clear (:2634) this crate does not model Nightmare for. ABILITYEFFECT_ON_DAMAGE's ABILITY_STATIC case (battle_util.c:2821-2835, issue #2221) is modelled at MOVEEND_ON_DAMAGE_ABILITIES (battle_script_commands.c:4280-4284) by crate::battle::Battle::apply_static_contact, called from execute_move after each single-hit pipeline settles faints, and after every landed hit inside the multi-hit loop (data/battle_scripts_1.s:637): when the target lost HP, the move has FLAG_MAKES_CONTACT and the attacker is alive, one Random() % 3 draw is taken whether or not the holder survived, and a zero roll on an attacker that is neither Limber nor already statused sets Status1::Paralysed and emits BattleEvent::ParalyzedByStatic (SetMoveEffect's AFFECTS_USER paralysis case, :2395-2424, reusing paralyze::resolve_synchronize_reflection); an attacker with Synchronize then reflects the paralysis onto a surviving, unstatused holder (MOVEEND_SYNCHRONIZE_ATTACKER, battle_script_commands.c:4291-4294, battle_util.c:2987-3001; BattleEvent::ParalyzedByAttackerSynchronize), though ABILITYEFFECT_ATK_SYNCHRONIZE for other statuses stays unmodelled. Pinned by tests/turn_engine/static_contact.rs. ABILITY_ROUGH_SKIN (battle_util.c:2767-2780; data/battle_scripts_1.s:4184-4191) runs at the same single-hit and per-strike multi-hit seams through crate::battle::execute::Battle::apply_contact_abilities: when the target lost HP, the move has FLAG_MAKES_CONTACT and the attacker is alive, the attacker loses max(1, maxHP / 16) capped at its current HP with no Random() draw, whether or not the holder survived, BattleEvent::RoughSkinDamage is emitted and the attacker's faint settles at once (so a multi-hit sequence ends on its next strike check, and a double knockout settles the attacker first in a multi-hit but the holder first in a single hit). Pinned by tests/turn_engine/rough_skin_contact.rs. ABILITY_POISON_POINT (battle_util.c:2806-2818) runs at the same seams through crate::battle::execute::Battle::apply_poison_point_contact: when the target lost HP, the move has FLAG_MAKES_CONTACT and the attacker is alive, one Random() % 3 draw is taken whether or not the holder survived, and a zero roll poisons the attacker unless secondary::poison_point_can_land refuses it (SetMoveEffect re-entered with primary FALSE through BattleScript_ApplySecondaryEffect, so the Immunity and Poison/Steel prevention branches stay silent, battle_script_commands.c:2299-2340; Shield Dust is skipped by HITMARKER_STATUS_ABILITY_EFFECT, :2253-2255), emitting BattleEvent::PoisonedByPoisonPoint; an attacker with Synchronize then reflects the poison onto a surviving, unstatused holder (MOVEEND_SYNCHRONIZE_ATTACKER, battle_util.c:2987-3001; BattleEvent::PoisonedByAttackerSynchronize, or BattleEvent::AttackerSynchronizePoisonOrSteelTypeProtected for a Poison-typed holder such as the Nidoran line, via :2320-2329). Pinned by tests/turn_engine/poison_point_contact.rs. NOT modelled: the per-status text-buffer selection (:2623-2632, BattleEvent::ShedSkinCured already carries the cured Status1 instead), ABILITYEFFECT_ATK_SYNCHRONIZE, ABILITYEFFECT_MOVES_BLOCK for every non-Soundproof ability, the HITMARKER_NO_PPDEDUCT escape a blocked sound move grants a STATUS2_MULTIPLETURNS attacker (battle_util.c:2666-2669), every other ABILITYEFFECT_ENDTURN case (Rain Dish, Speed Boost, Truant), every other ABILITYEFFECT_* case (Effect Spore and any other ABILITYEFFECT_ON_DAMAGE contact ability besides Static, Poison Point and Rough Skin, Forecast, Trace, Cloud Nine/Air Lock, weather abilities, and the rest), and the dispatcher's general call sites outside the paralysis, poison, Soundproof, and end-of-turn paths. Status1 reader disposition (issue #945): both Battle constructors screen every non-fainted participant, active and bench or reserve, through crate::battle::admission::ensure_participant_admissible before any constructor draw, and a Paralysed Limber, Poisoned Immunity, or confused Own Tempo holder (issue #1990; STATUS2_CONFUSION cleared at battle_util.c:2885-2891,2937-2939) is refused with BattleError::UnportedAbilityInteraction because ABILITYEFFECT_IMMUNITY's move-end cure (battle_util.c:2873-2951) is not modelled. Guts, Marvel Scale, Shed Skin and Synchronize on paralysis and poison are modelled; Limber and Immunity are refused only for their triggering status, and Own Tempo only while confused. Early Bird (:2030-2037), Insomnia, Vital Spirit, Water Veil, Magma Armor and Natural Cure (battle_script_commands.c:9590-9607) are deferred while their status or switch behaviour is absent; admitting them is not whole-ability coverage. Pinned by tests/turn_engine/status_ability_matrix.rs and participant_admission.rs. Truant admission disposition (issue #2184): both Battle constructors refuse every non-fainted Truant participant, active and bench or reserve, through crate::battle::admission::ensure_participant_admissible with BattleError::UnportedAbilityInteraction before constructor RNG. CANCELER_TRUANT (battle_util.c:2086-2097) and ABILITYEFFECT_ENDTURN truantCounter toggle (:2653-2655) remain unmodelled; this is fail-closed admission, not Truant behavior coverage. Pinned by tests/turn_engine/participant_admission.rs, including fainted-reserve admission. Intimidate admission disposition (issue #2251): both Battle constructors refuse every non-fainted Intimidate participant, active and bench or reserve, through crate::battle::admission::ensure_participant_admissible with BattleError::UnportedAbilityInteraction before constructor RNG, trainer preflight refuses a member whose fixed personality selects an always-refused ability before trainer-party OT-ID RNG, and the wild pre-roll screen refuses a species with any always-refused ability slot before nature, personality, IV and held-item RNG. The switch-in queue (battle_util.c:2559-2564), ABILITYEFFECT_INTIMIDATE1 (:3003-3016), ABILITYEFFECT_INTIMIDATE2 (:3074-3088) and BattleScript_IntimidateActivates (data/battle_scripts_1.s:4024-4048) remain unmodelled; this is fail-closed admission, not Intimidate behavior coverage. Pinned by tests/turn_engine/participant_admission.rs and the trainer preflight tests, including fainted-reserve admission and selected-ability-slot boundaries. ABILITYEFFECT_ABSORBING (battle_util.c:2676-2744, issue #2170) is recorded under src/battle_util.c#AbilityBattleEffects-absorbing: Volt Absorb, Water Absorb and Flash Fire are executed; the frozen-holder exemption of Flash Fire (:2703) is the documented boundary because Status1 cannot represent freeze. Additional admission disposition (issues #2224, #2301, #2303, #2296): Speed Boost (battle_util.c:2601-2652), Color Change (:2749-2766), Trace (:2575-2580, :3017-3073), and Effect Spore (:2782-2805), and Flame Body (:2836-2850, burn is unrepresentable in Status1) and Cute Charm (:2851-2870, infatuation is unmodelled) are always refused by crate::battle::admission before Battle-constructor RNG for every non-fainted participant, active and bench or reserve, joining Truant and Intimidate. Fail-closed admission boundaries, not implementation of the abilities.",
           "rust_target": "crates/battle/src/battle/execute.rs",
           "spec": "S-6",
           "status": "stubbed"
@@ -28836,6 +28884,26 @@
       "status": "pending"
     },
     "src/data/pokemon_graphics/back_pic_table.h": {
+      "artifacts": {
+        "MUDKIP": {
+          "reason": "The MUDKIP row is the typed starter battler lookup's species key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "TORCHIC": {
+          "reason": "The TORCHIC row is the typed starter battler lookup's species key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "TREECKO": {
+          "reason": "The TREECKO row is the typed starter battler lookup's species key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
@@ -28866,16 +28934,76 @@
       "status": "pending"
     },
     "src/data/pokemon_graphics/palette_table.h": {
+      "artifacts": {
+        "MUDKIP": {
+          "reason": "The MUDKIP row is the typed starter battler lookup's species key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "TORCHIC": {
+          "reason": "The TORCHIC row is the typed starter battler lookup's species key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "TREECKO": {
+          "reason": "The TREECKO row is the typed starter battler lookup's species key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
     },
     "src/data/pokemon_graphics/shiny_palette_table.h": {
+      "artifacts": {
+        "MUDKIP": {
+          "reason": "The MUDKIP row is the typed starter battler lookup's species key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "TORCHIC": {
+          "reason": "The TORCHIC row is the typed starter battler lookup's species key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "TREECKO": {
+          "reason": "The TREECKO row is the typed starter battler lookup's species key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
     },
     "src/data/pokemon_graphics/still_front_pic_table.h": {
+      "artifacts": {
+        "MUDKIP": {
+          "reason": "The MUDKIP row is the typed starter battler lookup's species key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "TORCHIC": {
+          "reason": "The TORCHIC row is the typed starter battler lookup's species key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "TREECKO": {
+          "reason": "The TREECKO row is the typed starter battler lookup's species key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
@@ -29984,6 +30112,12 @@
     },
     "src/item_menu.c": {
       "artifacts": {
+        "bag_menu_state": {
+          "reason": "BagMenu models pocket browse order, retained cursor and scroll with upstream list-window rules, field/battle/fixed-pocket selection, and context-action requests; swap, quantity prompts, Wally, shop, PC, and renderer remain pending.",
+          "rust_target": "crates/engine/src/bag_menu.rs",
+          "spec": "C-5",
+          "status": "rewritten"
+        },
         "ordinary_bag_graphics": {
           "reason": "Registered-select mark extracted; navigation and rendering remain pending.",
           "rust_target": "crates/xtask/src/extract/bag.rs",
@@ -30928,6 +31062,26 @@
       "status": "pending"
     },
     "src/naming_screen.c": {
+      "artifacts": {
+        "HandleDpadMovement": {
+          "reason": "HandleDpadMovement (naming_screen.c:1602-1698) rewritten in NamingScreenModel::read_dpad: sequential Up/Down/Left/Right test with the last match winning, horizontal wrap through the button column, the key-row/button-row mapping with the remembered tButtonId row (including its BUTTON_BACK/BUTTON_OK overwrite quirk), and vertical wrap per column kind. The screen-local 16-frame initial repeat set in NamingScreen_Init (:465-484) and the 5-frame continued repeat of ReadKeys (main.c:250-290) are modelled by a per-screen key-repeat counter that advances on every frame, including locked ones (issue #1854).",
+          "rust_target": "crates/pokeemerald-rs/src/naming.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        },
+        "HandleKeyboardEvent": {
+          "reason": "HandleKeyboardEvent and its KeyboardKeyHandler_Character/Page/Backspace/OK handlers (naming_screen.c:1451-1527), the Input_Enabled fresh-press precedence A, B, SELECT, START (:1530-1598), and the text routines GetTextEntryPosition, GetPreviousTextCaretPosition, DeleteTextCharacter, AddTextCharacter (:1784-1863), plus the keyboard page tables and column counts (:278-310), rewritten as the rendering-independent naming::NamingScreenModel (issue #1854). Page-swap and full-name cursor-squish animations are caller-completed PendingTransitions. Not modelled: presentation, sprites, button flashes, sound, and the L=A button-mode remap of ReadKeys. The file stays pending for the presentation child (#1855) and the intro caller (#1612).",
+          "rust_target": "crates/pokeemerald-rs/src/naming.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        },
+        "SaveInputText": {
+          "reason": "SaveInputText (naming_screen.c:1850-1863) rewritten in NamingScreenModel::confirm: the entry replaces the caller's seeded destination unless every entered character is blank (space or EOS); the confirmed value is returned and no intro or save state is touched (issue #1854). MainState_PressedOKButton's party-full PC message belongs to the CAUGHT_MON template, which this model does not serve.",
+          "rust_target": "crates/pokeemerald-rs/src/naming.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -31158,7 +31312,7 @@
     "src/pokemon.c": {
       "artifacts": {
         "CalculateBaseDamage": {
-          "reason": "Partial: the level/power/atk-def core plus the in-function burn, Reflect/Light-Screen, and weather hooks are rewritten as base_damage. Since issue #321, the pinch-ability power boost at :3219-:3226 is modelled too -- gBattleMovePower = (150 * gBattleMovePower) / 100 when the move's type matches the attacker's Overgrow/Blaze/Torrent/Swarm and hp <= maxHP / 3 -- applied to the POWER before the formula reads it (DamageInput::attacker_pinch_boost, crate::ability::pinch_boosts_power), so the truncation lands where upstream puts it. Only Overgrow is reachable in a battle this crate can construct; the other three rows are carried because they are the same four consecutive upstream lines. Since issue #391 the Huge Power / Pure Power attack doubling at :3158-:3159 is modelled too -- attack *= 2 whenever a physical move's attacker carries either ability, applied to the RAW stat before APPLY_STAT_MOD's stat-stage scaling at :3238-:3244 (crate::ability::huge_power_attack, read by both hit::damage_before_roll and the trainer AI's AI_CalcDmg estimate so the two agree). Since issue #942, Guts and Marvel Scale's own status1 reads at :3211-:3214 are modelled too -- attack = (150 * attack) / 100 for a statused Guts holder's physical Attack and defense = (150 * defense) / 100 for a statused Marvel Scale holder's physical Defense, each truncated and applied to the RAW stat before the same APPLY_STAT_MOD stage scaling (crate::ability::guts_attack, crate::ability::marvel_scale_defense, read directly by BattlePokemon::attacking_stat/defending_stat so hit::damage_before_roll and the trainer AI's estimate agree here too); paralyze::ensure_admissible no longer refuses a paralyze move against either holder. Since issue #1187, Hustle's own attack boost at :3205-:3206 is modelled too -- attack = (150 * attack) / 100 for a Hustle holder's physical Attack, truncated and applied to the RAW stat before the same APPLY_STAT_MOD stage scaling (crate::ability::hustle_attack, read directly by BattlePokemon::attacking_stat so hit::damage_before_roll, the trainer AI's estimate, and the forced-replacement suitability selector's stale base damage all agree). Since issue #1358, the confusion self-hit's own call -- CalculateBaseDamage(&gBattleMons[gBattlerAttacker], &gBattleMons[gBattlerAttacker], MOVE_POUND, 0, 40, 0, ...) at battle_util.c:2159 -- is modelled too: crate::battle::execute::Battle::apply_confusion_self_hit reads BattlePokemon::attacking_stat/defending_stat on the same battler for both the attack and defense side, with power 40 and Type::Normal (MOVE_POUND's type) and no critical override, so the shared Hustle/Guts/Marvel Scale/Huge Power hooks above apply symmetrically to the self-hit exactly as they do to an ordinary hit; the pinch-ability boost is hardcoded false since Normal typing never matches its Fire/Water/Grass/Bug gate, and sideStatus is hardcoded 0 upstream so Reflect never applies here either, matching this crate's own reflect: false. Since issue #2183, Thick Fat's raw Special Attack halving at :3202-:3204 (Fire/Ice against a Thick Fat defender, truncated and applied before stage scaling) is modelled in the trainer AI's AI_CalcDmg estimate (crate::ability::thick_fat_special_attack, read by trainer_ai::estimated_damage). Since issue #2226, hit::damage_before_roll's damage_input applies it too, after the Huge Power / Pure Power doubling and before stage scaling, so the admitted Icicle Spear multi-hit loop halves the raw Special Attack against Thick Fat. Since issue #2200, the switch-suitability selector's stale base damage applies it as well (suitability::stale_base_damage), so the AI estimate, the hit pipeline, and the selector agree. Still pending from the same function: hold-item boosts, the other ability modifiers (Plus/Minus, Flash Fire), badge boosts, Explosion defense-halving, Mud/Water Sport field sports, and double-battle spread/screen variants. Critical-hit stat-stage handling is covered separately by src/pokemon.c#CalculateBaseDamage_CriticalStageOverride. The surrounding STAB/type/roll battle-script steps are tracked under src/battle_script_commands.c. Status1 reader disposition (issue #945): Guts and Marvel Scale's :3211-3214 reads stay modelled for both Paralysed and Poisoned and are admitted by the constructors; Flash Fire's boost stays pending and its holder is admitted unmodelled, since only Paralysed Limber, Poisoned Immunity, and confused Own Tempo participants are refused (crate::battle::admission).",
+          "reason": "Partial: the level/power/atk-def core plus the in-function burn, Reflect/Light-Screen, and weather hooks are rewritten as base_damage. Since issue #321, the pinch-ability power boost at :3219-:3226 is modelled too -- gBattleMovePower = (150 * gBattleMovePower) / 100 when the move's type matches the attacker's Overgrow/Blaze/Torrent/Swarm and hp <= maxHP / 3 -- applied to the POWER before the formula reads it (DamageInput::attacker_pinch_boost, crate::ability::pinch_boosts_power), so the truncation lands where upstream puts it. Only Overgrow is reachable in a battle this crate can construct; the other three rows are carried because they are the same four consecutive upstream lines. Since issue #391 the Huge Power / Pure Power attack doubling at :3158-:3159 is modelled too -- attack *= 2 whenever a physical move's attacker carries either ability, applied to the RAW stat before APPLY_STAT_MOD's stat-stage scaling at :3238-:3244 (crate::ability::huge_power_attack, read by both hit::damage_before_roll and the trainer AI's AI_CalcDmg estimate so the two agree). Since issue #942, Guts and Marvel Scale's own status1 reads at :3211-:3214 are modelled too -- attack = (150 * attack) / 100 for a statused Guts holder's physical Attack and defense = (150 * defense) / 100 for a statused Marvel Scale holder's physical Defense, each truncated and applied to the RAW stat before the same APPLY_STAT_MOD stage scaling (crate::ability::guts_attack, crate::ability::marvel_scale_defense, read directly by BattlePokemon::attacking_stat/defending_stat so hit::damage_before_roll and the trainer AI's estimate agree here too); paralyze::ensure_admissible no longer refuses a paralyze move against either holder. Since issue #1187, Hustle's own attack boost at :3205-:3206 is modelled too -- attack = (150 * attack) / 100 for a Hustle holder's physical Attack, truncated and applied to the RAW stat before the same APPLY_STAT_MOD stage scaling (crate::ability::hustle_attack, read directly by BattlePokemon::attacking_stat so hit::damage_before_roll, the trainer AI's estimate, and the forced-replacement suitability selector's stale base damage all agree). Since issue #1358, the confusion self-hit's own call -- CalculateBaseDamage(&gBattleMons[gBattlerAttacker], &gBattleMons[gBattlerAttacker], MOVE_POUND, 0, 40, 0, ...) at battle_util.c:2159 -- is modelled too: crate::battle::execute::Battle::apply_confusion_self_hit reads BattlePokemon::attacking_stat/defending_stat on the same battler for both the attack and defense side, with power 40 and Type::Normal (MOVE_POUND's type) and no critical override, so the shared Hustle/Guts/Marvel Scale/Huge Power hooks above apply symmetrically to the self-hit exactly as they do to an ordinary hit; the pinch-ability boost is hardcoded false since Normal typing never matches its Fire/Water/Grass/Bug gate, and sideStatus is hardcoded 0 upstream so Reflect never applies here either, matching this crate's own reflect: false. Since issue #2183, Thick Fat's raw Special Attack halving at :3202-:3204 (Fire/Ice against a Thick Fat defender, truncated and applied before stage scaling) is modelled in the trainer AI's AI_CalcDmg estimate (crate::ability::thick_fat_special_attack, read by trainer_ai::estimated_damage). Since issue #2226, hit::damage_before_roll's damage_input applies it too, after the Huge Power / Pure Power doubling and before stage scaling, so the admitted Icicle Spear multi-hit loop halves the raw Special Attack against Thick Fat. Since issue #2200, the switch-suitability selector's stale base damage applies it as well (suitability::stale_base_damage), so the AI estimate, the hit pipeline, and the selector agree. Still pending from the same function: hold-item boosts, the other ability modifiers (Flash Fire), badge boosts, Explosion defense-halving, Mud/Water Sport field sports, and double-battle spread/screen variants. Critical-hit stat-stage handling is covered separately by src/pokemon.c#CalculateBaseDamage_CriticalStageOverride. The surrounding STAB/type/roll battle-script steps are tracked under src/battle_script_commands.c. Plus and Minus at :3207-:3210 are modelled too -- a Plus holder with Minus on the field, or a Minus holder with Plus, has raw Special Attack raised by (150 * spAttack) / 100, truncated and applied before stage scaling; upstream's field scan at battle_util.c:3128-3137 has no side or HP filter, so the single-battle opposing active mon counts (crate::ability::plus_minus_special_attack, read by hit::damage_input, trainer_ai::estimated_damage, and suitability::stale_base_damage). Status1 reader disposition (issue #945): Guts and Marvel Scale's :3211-3214 reads stay modelled for both Paralysed and Poisoned and are admitted by the constructors; Flash Fire's boost stays pending and its holder is admitted unmodelled, since only Paralysed Limber, Poisoned Immunity, and confused Own Tempo participants are refused (crate::battle::admission).",
           "rust_target": "crates/battle/src/damage.rs",
           "spec": "S-6",
           "status": "stubbed"
@@ -31198,6 +31352,12 @@
           "rust_target": "crates/battle/src/pokemon.rs",
           "spec": "S-6",
           "status": "stubbed"
+        },
+        "GetDeoxysStat": {
+          "reason": "pokemon.c:2698-2712 (GetDeoxysStat; called from GetMonData at pokemon.c:3660-3684 for the ATK/DEF/SPEED/SPATK/SPDEF reads). The single-player Speed Forme substitution (base 95/90/180/95/90 for Deoxys's five non-HP stats) is rewritten as effective_battle_base_stats, applied at BattlePokemon construction and level-up recompute; like upstream's evVal/4 term (pokemon.c:2708-2709) the five substituted stats read the battler's current EVs, re-applied when BattlePokemon::with_evs adopts a loaded record's EVs and at each level-up, while max HP keeps the port's zero-EV live floor. The link-battle branch (BATTLE_TYPE_LINK_IN_BATTLE returns 0 and keeps the raw row) is not modelled. The persisted stat cache stays raw per upstream CalculateMonStats (pokemon.c:2823-2866, CALC_STAT reads gSpeciesInfo directly), including on the unchanged-level save path, which recomputes from the raw row; the assets species row stays raw Normal Forme data.",
+          "rust_target": "crates/battle/src/pokemon.rs",
+          "spec": "S-6",
+          "status": "rewritten"
         },
         "GiveBoxMonInitialMoveset": {
           "reason": "pokemon.c:2991-3012. Fully modelled as battle::wild::initial_moveset: walks gLevelUpLearnsets[species] (extracted as assets::LevelUpLearnsets) in table order, breaks at the first entry above the mon's level (upstream's packed moveLevel > (level << 9) is the same comparison on the decoded level), and reproduces both GiveMoveToBoxMon outcomes (:2939-2955) -- MON_ALREADY_KNOWS_MOVE skips without costing a slot, MON_HAS_MAX_MOVES triggers DeleteFirstMoveAndGiveMoveToBoxMon's oldest-first drop (:3010). Draws nothing. PP initialisation is not carried here because crates/battle's MoveSlot derives PP from the move's own data rather than storing a written-through copy; an unknown species yields an empty moveset and fails closed at BattlePokemon::new instead of fabricating one.",

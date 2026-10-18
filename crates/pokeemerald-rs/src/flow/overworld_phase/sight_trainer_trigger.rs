@@ -1,9 +1,9 @@
-//! Route 103's sight trainers (issue #264): the per-frame
+//! Route 103's sight trainers: the per-frame
 //! `TRAINER_TYPE_NORMAL` cone check
 //! (`pokeemerald/src/trainer_see.c#CheckForTrainersWantingBattle`) and the
 //! battle lifecycle at the far end of it. The multi-frame walk-up between
 //! the two -- exclamation mark, approach, intro speech -- is the sibling
-//! [`super::sight_trainer_approach`] (S-5, issue #300).
+//! [`super::sight_trainer_approach`] (S-5).
 //!
 //! # Who owns what
 //!
@@ -849,7 +849,9 @@ mod tests {
             (
                 "Daisy",
                 TrainerId(36),
-                Battle(BattleError::NonDamagingMove(assets::MoveId::LEECH_SEED)),
+                Battle(BattleError::UnportedAbilityInteraction(
+                    assets::AbilityId::EFFECT_SPORE,
+                )),
             ),
             (
                 "Amy & Liv",
