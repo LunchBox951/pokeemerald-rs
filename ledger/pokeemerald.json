@@ -20262,7 +20262,10 @@
     "include/constants/battle_move_effects.h": {
       "category": "code.constants",
       "kind": "file",
-      "status": "pending"
+      "reason": "include/constants/battle_move_effects.h:4-217: all 214 EFFECT_* ids (0 through 213), including the UNUSED_* slots, are public MoveEffect constants in crates/assets/src/battle_moves.rs; crates/assets/tests/move_effect_ids.rs checks each against its upstream number.",
+      "rust_target": "crates/assets/src/battle_moves.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "include/constants/battle_palace.h": {
       "category": "code.constants",
