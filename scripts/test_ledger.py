@@ -611,6 +611,10 @@ class TestHelp(unittest.TestCase):
             "cartridge",
         )
         self.assert_help_contains("mark", "Replace the stored reason in full")
+        self.assert_help_contains(
+            "stub",
+            "never use it when the stored reason would become false",
+        )
 
     def test_audit_base_defaults_to_dev(self):
         args = ledger.build_parser().parse_args(["audit", "S-5"])

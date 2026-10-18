@@ -1101,13 +1101,14 @@ def _add_reason(p):
     group = p.add_mutually_exclusive_group(required=True)
     group.add_argument(
         "--reason",
-        help="Replace the stored reason in full. Updating an entry this way "
-             "discards its earlier reason; carry any provenance forward in "
-             "the new text, or use --append-reason.")
+        help="Replace the stored reason in full. Use it when the update "
+             "changes what is or is not modelled, and carry forward the "
+             "upstream citations and modelling facts that are still true.")
     group.add_argument(
         "--append-reason", metavar="TEXT",
-        help="Keep the stored reason and append TEXT after it. Fails when "
-             "the entry has no reason yet.")
+        help="Keep the stored reason and append TEXT after it. It only adds "
+             "facts, so never use it when the stored reason would become "
+             "false. Fails when the entry has no reason yet.")
 
 
 def build_parser():
