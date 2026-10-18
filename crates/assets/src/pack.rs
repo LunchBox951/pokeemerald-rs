@@ -19,6 +19,7 @@ mod error;
 mod format;
 mod handles;
 mod pokedex_graphics;
+mod readiness;
 mod starter_chooser;
 
 use std::path::{Path, PathBuf};
@@ -42,6 +43,7 @@ pub use error::PackError;
 pub use format::{DirectoryEntry, EntryKind, FORMAT_VERSION, MAGIC};
 pub use handles::{ImageRef, PaletteRef, TilesetHandle, WindowFrameHandle};
 pub use pokedex_graphics::PokedexGraphicsHandle;
+pub use readiness::{PackProblem, PackReadinessError, RequiredAsset};
 pub use starter_chooser::{
     PalettedImage, StarterChooserHandle, StarterPreviewHandle, StarterSpecies,
 };
