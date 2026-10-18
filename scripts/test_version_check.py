@@ -765,5 +765,11 @@ class TestMarkerStrictness(unittest.TestCase):
         )
 
 
+class TestDefaultBase(unittest.TestCase):
+    def test_base_defaults_to_dev_because_every_change_targets_dev(self):
+        self.assertEqual(version_check.build_parser().parse_args([]).base,
+                         "origin/dev")
+
+
 if __name__ == "__main__":
     unittest.main()
