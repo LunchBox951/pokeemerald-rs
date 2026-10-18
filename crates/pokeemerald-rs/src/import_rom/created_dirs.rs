@@ -7,6 +7,29 @@
 //! to the identity captured at creation; any level the check cannot vouch
 //! for, including one past [`pin_budget`] or whose pin was shed to free a
 //! descriptor, is left standing. Off Unix each level is addressed by path.
+//!
+//! # Accepted residuals (rollback on Unix)
+//!
+//! The approved `rustix` fs scope has no call that unlinks a directory by
+//! descriptor, so two steps of rollback rest on a name. Both are bounded by
+//! the same argument: the quarantine is a directory this rollback just made
+//! with mode `0700`, owned by the current user, under a random 64-bit name
+//! from `/dev/urandom`. Only a writer running as that user, who has learned
+//! the random name, can act inside it, and such a writer can already delete
+//! or rewrite everything the import itself owns. The final removals are
+//! `unlinkat(.., REMOVEDIR)`, which removes only an empty directory and
+//! refuses (`ENOTEMPTY`) anything holding data, so the worst outcome of
+//! either residual is the loss of one empty directory.
+//!
+//! - After the identity check of the captured entry, that same writer can
+//!   rename the checked entry away and install a replacement before the
+//!   `unlinkat`. An empty replacement is removed; a non-empty one survives.
+//! - The freshness check on the quarantine (an empty `0700` directory owned
+//!   by this user) proves the shape of what `openat` opened, not who made
+//!   it: the same writer could substitute an empty `0700` directory at the
+//!   random name between `mkdirat` and `openat`. Rollback would then use
+//!   that directory as its quarantine, and a level it holds is still checked
+//!   by identity before it is removed or put back.
 
 #[cfg(unix)]
 use std::ffi::OsStr;
@@ -944,8 +967,8 @@ fn is_this_level(dir: &CreatedDirectory, stat: &rustix::fs::Stat) -> bool {
 const QUARANTINE_ENTRY: &str = "level";
 
 /// `renameat` that refuses to replace an existing destination where the
-/// platform can say so (Linux, Android, Apple); elsewhere it checks the
-/// destination is free first, which leaves a narrow window.
+/// platform can say so (Linux, Android, Apple); elsewhere it refuses with
+/// `ENOSYS` rather than emulate that with a racy check.
 #[cfg(unix)]
 fn rename_without_replacing(
     from_dir: &std::os::fd::OwnedFd,
@@ -965,15 +988,11 @@ fn rename_without_replacing(
     }
     #[cfg(not(any(target_os = "linux", target_os = "android", target_vendor = "apple")))]
     {
-        // Checked first, so only a destination taken in the instant between
-        // the check and the rename is replaced.
-        match rustix::fs::statat(to_dir, to, rustix::fs::AtFlags::SYMLINK_NOFOLLOW) {
-            Err(err) if err == rustix::io::Errno::NOENT => {
-                rustix::fs::renameat(from_dir, from, to_dir, to)
-            }
-            Ok(_) => Err(rustix::io::Errno::EXIST),
-            Err(err) => Err(err),
-        }
+        // No atomic no-replace rename here, and a check-then-rename could
+        // overwrite a file a racer creates in the gap: fail closed, so the
+        // level is left standing.
+        let _ = (from_dir, from, to_dir, to);
+        Err(rustix::io::Errno::NOSYS)
     }
 }
 
@@ -1044,23 +1063,38 @@ fn restore_capture(
 /// may go on to the level above; anything unsafe leaves the level standing.
 #[cfg(unix)]
 fn take_back_level(parent: &std::os::fd::OwnedFd, dir: &CreatedDirectory) -> bool {
+    match unguessable_quarantine_name() {
+        Some(quarantine_name) => take_back_level_via(parent, dir, &quarantine_name, &mut || {}),
+        None => false,
+    }
+}
+
+/// [`take_back_level`] with the quarantine's basename supplied, so a test
+/// can stage something at the name before rollback tries to claim it, and
+/// `after_mkdir` run between making the quarantine and opening it, where a
+/// test swaps the name.
+#[cfg(unix)]
+fn take_back_level_via(
+    parent: &std::os::fd::OwnedFd,
+    dir: &CreatedDirectory,
+    quarantine_name: &str,
+    after_mkdir: &mut dyn FnMut(),
+) -> bool {
     use rustix::fs::{AtFlags, Mode, OFlags};
-    let Some(quarantine_name) = unguessable_quarantine_name() else {
-        return false;
-    };
-    if rustix::fs::mkdirat(parent, &quarantine_name, Mode::RWXU).is_err() {
+    if rustix::fs::mkdirat(parent, quarantine_name, Mode::RWXU).is_err() {
         return false;
     }
+    after_mkdir();
     let quarantine = rustix::fs::openat(
         parent,
-        &quarantine_name,
+        quarantine_name,
         OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
         Mode::empty(),
     );
     let Ok(quarantine) = quarantine else {
         // Could not be held (descriptor pressure): drop the empty directory
         // just made rather than leave it as litter, and leave the level.
-        let _ = rustix::fs::unlinkat(parent, &quarantine_name, AtFlags::REMOVEDIR);
+        let _ = rustix::fs::unlinkat(parent, quarantine_name, AtFlags::REMOVEDIR);
         return false;
     };
     // The name was swapped for someone else's directory before the open:
@@ -1095,10 +1129,10 @@ fn take_back_level(parent: &std::os::fd::OwnedFd, dir: &CreatedDirectory) -> boo
     // The quarantine is ours and empty unless a capture is stranded in it;
     // it is removed only while its name still resolves to the held one.
     let held = rustix::fs::fstat(&quarantine);
-    let by_name = rustix::fs::statat(parent, &quarantine_name, AtFlags::SYMLINK_NOFOLLOW);
+    let by_name = rustix::fs::statat(parent, quarantine_name, AtFlags::SYMLINK_NOFOLLOW);
     if matches!((held, by_name), (Ok(held), Ok(by_name)) if same_directory_identity(&held, &by_name))
     {
-        let _ = rustix::fs::unlinkat(parent, &quarantine_name, AtFlags::REMOVEDIR);
+        let _ = rustix::fs::unlinkat(parent, quarantine_name, AtFlags::REMOVEDIR);
     }
     goes_on
 }

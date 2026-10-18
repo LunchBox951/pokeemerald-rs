@@ -1222,53 +1222,122 @@ fn undo_does_not_strand_contents_when_the_name_is_retaken_before_restoration() {
 
 #[cfg(unix)]
 #[test]
-fn undo_preserves_a_replacement_swapped_between_quarantine_mkdir_and_open() {
-    use std::os::unix::fs::MetadataExt;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Arc;
-    // A writer in the parent races rollback: the moment the predictable
-    // quarantine name appears, it moves that directory away and installs its
-    // own empty one. Rollback must never delete that replacement.
-    for round in 0..3000 {
-        let dir = TempDir::new(&format!("undo-quarantine-race-{round}"));
+fn rollback_refuses_a_quarantine_name_already_taken() {
+    // The quarantine name is injected so a directory (or symlink) is already
+    // there when rollback tries to claim it. `mkdirat` must refuse it: the
+    // staged entry is never filled, emptied, or removed, and the level stays.
+    for staged_kind in ["empty-0700-dir", "dir-with-data", "symlink"] {
+        let dir = TempDir::new(&format!("quarantine-taken-{staged_kind}"));
         let level = dir.join("new");
+        let staged = dir.join(".undo-staged");
         let created = super::create_directories(&level).unwrap();
-        let ino = fs::metadata(&level).unwrap().ino();
-        let quarantine = dir.join(&format!(".undo-{}-{}", std::process::id(), ino));
-        let stolen = dir.join("stolen");
-        let stop = Arc::new(AtomicBool::new(false));
-        let swapped = Arc::new(AtomicBool::new(false));
-        let racer = {
-            let (stop, swapped, quarantine, stolen) = (
-                stop.clone(),
-                swapped.clone(),
-                quarantine.clone(),
-                stolen.clone(),
-            );
-            std::thread::spawn(move || {
-                while !stop.load(Ordering::Relaxed) {
-                    if fs::rename(&quarantine, &stolen).is_ok() {
-                        fs::create_dir(&quarantine).unwrap();
-                        swapped.store(true, Ordering::SeqCst);
-                        return;
-                    }
-                }
-            })
-        };
-        std::thread::sleep(std::time::Duration::from_micros(200));
-        super::undo_created_directories(&created);
-        stop.store(true, Ordering::Relaxed);
-        racer.join().unwrap();
-        if swapped.load(Ordering::SeqCst)
-            && stolen.is_dir()
-            && fs::read_dir(&stolen).unwrap().next().is_none()
-        {
-            // The swap landed before openat (the stolen original is empty,
-            // so the level was moved into the replacement instead).
-            assert!(
-                quarantine.is_dir(),
-                "round {round}: rollback deleted the replacement installed at the quarantine name"
-            );
+        match staged_kind {
+            "empty-0700-dir" => fs::create_dir(&staged).unwrap(),
+            "dir-with-data" => {
+                fs::create_dir(&staged).unwrap();
+                fs::write(staged.join("mine"), b"x").unwrap();
+            }
+            _ => std::os::unix::fs::symlink(&level, &staged).unwrap(),
         }
+        let parent = created[0].parent.as_deref().unwrap();
+        assert!(
+            !super::take_back_level_via(parent, &created[0], ".undo-staged", &mut || {}),
+            "{staged_kind}: rollback must not proceed"
+        );
+        assert!(level.is_dir(), "{staged_kind}: the level is left standing");
+        assert!(
+            fs::symlink_metadata(&staged).is_ok(),
+            "{staged_kind}: the staged entry is left in place"
+        );
+        if staged_kind == "dir-with-data" {
+            assert!(staged.join("mine").is_file(), "its contents are untouched");
+        }
+        assert_eq!(entry_names(&dir.path), [".undo-staged", "new"]);
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn rollback_refuses_a_quarantine_swapped_between_mkdir_and_open() {
+    use std::os::unix::fs::PermissionsExt;
+    // Between rollback's `mkdirat` and `openat` the name is swapped for a
+    // directory that is not a fresh private quarantine. It must be neither
+    // filled nor removed, and the level must stay.
+    for kind in ["non-empty-0700", "empty-0755"] {
+        let dir = TempDir::new(&format!("quarantine-swap-{kind}"));
+        let level = dir.join("new");
+        let (name, away) = (dir.join(".undo-swap"), dir.join("away"));
+        let created = super::create_directories(&level).unwrap();
+        let parent = created[0].parent.as_deref().unwrap();
+        let mut swapped = 0;
+        let proceeded = super::take_back_level_via(parent, &created[0], ".undo-swap", &mut || {
+            swapped += 1;
+            fs::rename(&name, &away).unwrap();
+            fs::create_dir(&name).unwrap();
+            if kind == "non-empty-0700" {
+                fs::write(name.join("mine"), b"x").unwrap();
+            } else {
+                fs::set_permissions(&name, fs::Permissions::from_mode(0o755)).unwrap();
+            }
+        });
+        assert_eq!(swapped, 1, "{kind}: the hook ran once");
+        assert!(!proceeded, "{kind}: rollback must not proceed");
+        assert!(level.is_dir(), "{kind}: the level is left standing");
+        assert!(name.is_dir(), "{kind}: the replacement was removed");
+        assert_eq!(
+            fs::read_dir(&name).unwrap().count(),
+            usize::from(kind == "non-empty-0700"),
+            "{kind}: the replacement was filled or emptied"
+        );
+        assert!(
+            away.is_dir(),
+            "{kind}: the original quarantine is untouched"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn quarantine_names_are_random_and_hidden() {
+    let a = super::unguessable_quarantine_name().unwrap();
+    let b = super::unguessable_quarantine_name().unwrap();
+    assert_ne!(a, b);
+    assert!(a.starts_with(".undo-") && a.len() == ".undo-".len() + 16);
+}
+
+#[cfg(unix)]
+#[test]
+fn restore_capture_puts_contents_beside_a_retaken_name() {
+    // Deterministic form of the retake race: the level sits in a quarantine
+    // holding `keep`, and its name was re-created meanwhile. The capture must
+    // come back beside it, not stay only under the hidden quarantine.
+    let dir = TempDir::new("restore-retaken");
+    let created = super::create_directories(&dir.join("new")).unwrap();
+    let parent = created[0].parent.as_deref().unwrap();
+    let quarantine_path = dir.join(".undo-held");
+    fs::create_dir(&quarantine_path).unwrap();
+    let quarantine = rustix::fs::openat(
+        parent,
+        ".undo-held",
+        rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )
+    .unwrap();
+    fs::rename(
+        dir.join("new"),
+        quarantine_path.join(super::QUARANTINE_ENTRY),
+    )
+    .unwrap();
+    fs::write(
+        quarantine_path.join(super::QUARANTINE_ENTRY).join("keep"),
+        b"x",
+    )
+    .unwrap();
+    fs::create_dir(dir.join("new")).unwrap();
+
+    super::restore_capture(&quarantine, parent, std::ffi::OsStr::new("new"));
+
+    assert!(dir.join("new.restored-0").join("keep").is_file());
+    assert!(!quarantine_path.join(super::QUARANTINE_ENTRY).exists());
+    assert_eq!(fs::read_dir(dir.join("new")).unwrap().count(), 0);
 }
