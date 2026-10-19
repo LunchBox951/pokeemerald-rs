@@ -126,7 +126,7 @@ impl Letterbox {
 /// `dest_width * dest_height` buffer, nearest-neighbour upscaled and
 /// letterboxed per `letterbox`. Pixels outside the scaled image (the
 /// letterbox bars, or anything clipped by a too-small window) are filled
-/// with black.
+/// with black. The unused XRGB byte is set to opaque on every output pixel.
 ///
 /// # Panics
 ///
@@ -146,7 +146,8 @@ pub fn blit(
     for y in 0..dest_height {
         for x in 0..dest_width {
             let idx = y as usize * dest_width as usize + x as usize;
-            dest[idx] = sample(src, letterbox, x, y);
+            // Some Wayland compositors blend XRGB's unused byte as alpha.
+            dest[idx] = sample(src, letterbox, x, y) | 0xFF00_0000;
         }
     }
 }
@@ -260,7 +261,7 @@ mod tests {
         let lb = Letterbox::compute(480, 320);
         let mut dest = vec![0u32; 480 * 320];
         blit(&src, &lb, 480, 320, &mut dest);
-        assert!(dest.iter().all(|&p| p == 0x00FF_0000));
+        assert!(dest.iter().all(|&p| p == 0xFFFF_0000));
     }
 
     #[test]
@@ -271,10 +272,24 @@ mod tests {
         blit(&src, &lb, 500, 350, &mut dest);
 
         // Top-left corner is in the letterbox bar: black.
-        assert_eq!(dest[0], 0);
+        assert_eq!(dest[0], 0xFF00_0000);
         // Center of the image: the source color.
         let center_idx = 175 * 500 + 250;
-        assert_eq!(dest[center_idx], 0x00FF_0000);
+        assert_eq!(dest[center_idx], 0xFFFF_0000);
+    }
+
+    #[test]
+    fn blit_sets_opaque_high_byte_for_every_pixel() {
+        let mut src = solid_frame(0);
+        src[0] = 0x0012_3456;
+        let lb = Letterbox::compute(500, 350);
+        let mut dest = vec![0u32; 500 * 350];
+        blit(&src, &lb, 500, 350, &mut dest);
+
+        assert!(dest.iter().all(|&pixel| pixel & 0xFF00_0000 == 0xFF00_0000));
+        assert_eq!(dest[0], 0xFF00_0000); // letterbox bar
+        assert_eq!(dest[15 * 500 + 10], 0xFF12_3456); // source color
+        assert_eq!(dest[15 * 500 + 12], 0xFF00_0000); // black source pixel
     }
 
     /// Encodes source coordinates `(x, y)` into a single pixel value.
@@ -307,17 +322,17 @@ mod tests {
         blit(&src, &lb, 100, 80, &mut dest);
 
         // Top-left destination pixel: the centered crop starts at (70, 40).
-        assert_eq!(dest[0], encode(70, 40));
+        assert_eq!(dest[0], encode(70, 40) | 0xFF00_0000);
         // Bottom-right destination pixel (99, 79): source (169, 119).
         let bottom_right_idx = 79 * 100 + 99;
-        assert_eq!(dest[bottom_right_idx], encode(169, 119));
+        assert_eq!(dest[bottom_right_idx], encode(169, 119) | 0xFF00_0000);
         // Every pixel, not just the corners: destination (x, y) must be
         // exactly source (70 + x, 40 + y).
         for y in 0..80u32 {
             for x in 0..100u32 {
                 assert_eq!(
                     dest[y as usize * 100 + x as usize],
-                    encode(70 + x, 40 + y),
+                    encode(70 + x, 40 + y) | 0xFF00_0000,
                     "cropped sample mismatch at destination ({x}, {y})"
                 );
             }
