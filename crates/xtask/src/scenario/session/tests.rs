@@ -491,3 +491,23 @@ fn cleanup_refuses_to_unlink_a_file_swapped_in_after_the_listing() {
     );
     assert_eq!(kept.unwrap(), b"keep me");
 }
+
+#[cfg(windows)]
+#[test]
+fn windows_cleanup_empties_the_held_scratch_and_leaves_a_sibling_untouched() {
+    let mut scratch = Scratch::create_in(&std::env::temp_dir()).unwrap();
+    let sibling = foreign_dir("windows-sibling");
+    let deep = scratch.path.join("save").join("deep");
+    std::fs::create_dir_all(&deep).unwrap();
+    std::fs::write(deep.join("x.sav"), b"x").unwrap();
+    std::fs::write(scratch.path.join(PACK_FILE_NAME), b"pack").unwrap();
+    let path = scratch.path.clone();
+    let result = scratch
+        .remove_all_at(&path)
+        .map_err(|error| error.to_string());
+    let kept = std::fs::read(sibling.join("keep.txt"));
+    let _ = std::fs::remove_dir_all(&sibling);
+    result.unwrap();
+    assert!(!path.exists(), "the emptied scratch root is removed");
+    assert_eq!(kept.unwrap(), b"keep me");
+}

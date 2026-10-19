@@ -83,8 +83,10 @@ impl PackSelection {
 /// `rustix` features do not include), and under a umask that withholds owner
 /// bits Linux restores the mode in that same instant through an `O_PATH` pin,
 /// while other Unixes refuse the directory (#2475); and
-/// Unix removes the (emptied) root with a pathname `rmdir` after the check, so
-/// a replacement that wins that instant loses only if it is empty, never its
+/// both remove the (emptied) root with a pathname `rmdir` after the check
+/// (Windows empties it by pathname under the hold, so a subdirectory swapped
+/// in under the root is not refused there as it is on Unix), so a root
+/// replacement that wins that instant loses only if it is empty, never its
 /// contents.
 #[derive(Debug)]
 struct Scratch {
@@ -244,13 +246,31 @@ impl Scratch {
             // is empty; it never loses content.
             std::fs::remove_dir(path)
         }
-        #[cfg(not(unix))]
+        #[cfg(windows)]
         {
-            // The hold denies deletion, so Windows releases it for the delete;
-            // the identity was verified just above (check-then-act residual).
+            use std::os::windows::fs::FileTypeExt as _;
+            // The hold shares no delete access, so while the contents go the
+            // root can be neither renamed away nor replaced; a link is removed,
+            // never followed.
+            for entry in std::fs::read_dir(path)? {
+                let entry = entry?;
+                let kind = entry.file_type()?;
+                if kind.is_symlink_dir() {
+                    std::fs::remove_dir(entry.path())?;
+                } else if kind.is_dir() {
+                    std::fs::remove_dir_all(entry.path())?;
+                } else {
+                    std::fs::remove_file(entry.path())?;
+                }
+            }
+            // The hold denies deleting the root itself, so it is released for
+            // an empty-only `remove_dir`: a replacement that wins that instant
+            // loses at most itself if it is empty, never its contents.
             self.hold = None;
-            std::fs::remove_dir_all(path)
+            std::fs::remove_dir(path)
         }
+        #[cfg(not(any(unix, windows)))]
+        Err(std::io::ErrorKind::Unsupported.into())
     }
 }
 
