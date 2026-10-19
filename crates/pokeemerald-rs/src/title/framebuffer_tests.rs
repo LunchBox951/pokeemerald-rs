@@ -142,6 +142,11 @@ fn compose_with_palette_blends_palettes_before_the_title_alpha_blend() {
     colors[1] = Bgr555::from_channels(24, 8, 0);
     colors[2] = Bgr555::from_channels(31, 0, 8);
 
+    // The left version banner's 8bpp OBJ covers (66, 50), above every BG.
+    let banner5 = (12u32, 4u32, 20u32);
+    let mut sprite_colors = [Bgr555::default(); Palette::LEN];
+    sprite_colors[1] = Bgr555::from_channels(12, 4, 20);
+
     let map = || Tilemap::new(32, 32, vec![ScreenEntry::from_raw(0); 1024]).unwrap();
     let scene = super::TitleScene {
         rayquaza_tiles: Tileset::decode(BitDepth::Bpp4, &[0x11; 32]).unwrap(),
@@ -152,8 +157,8 @@ fn compose_with_palette_blends_palettes_before_the_title_alpha_blend() {
         clouds_map: map(),
         logo_map: rendering::AffineTilemap::new(32, 32, vec![0u8; 1024]).unwrap(),
         sprite_tiles_4bpp: Tileset::decode(BitDepth::Bpp4, &[0u8; 32]).unwrap(),
-        sprite_tiles_8bpp: Tileset::decode(BitDepth::Bpp8, &[0u8; 64]).unwrap(),
-        sprite_palette: Palette::new([Bgr555::default(); Palette::LEN]),
+        sprite_tiles_8bpp: Tileset::decode(BitDepth::Bpp8, &[1u8; 64]).unwrap(),
+        sprite_palette: Palette::new(sprite_colors),
     };
 
     let unfaded = scene.compose_with_palette(0, PaletteStage::default());
@@ -179,6 +184,19 @@ fn compose_with_palette_blends_palettes_before_the_title_alpha_blend() {
     );
     assert_eq!(expected, rgb(255, 192, 173));
     assert_eq!(mid.pixel(0, 0), Some(expected));
+
+    // The OBJ bank runs one call behind the BG bank, so the banner is blended
+    // independently at the OBJ half's own coefficient.
+    let obj_y = u32::from(fade.obj_blend().coefficient());
+    assert_eq!(obj_y, 6);
+    let faded_obj = |c: u32| u8::try_from(white_faded_channel(c, obj_y)).unwrap();
+    let obj_expected = rgb(
+        faded_obj(banner5.0),
+        faded_obj(banner5.1),
+        faded_obj(banner5.2),
+    );
+    assert_ne!(unfaded.pixel(66, 50), Some(obj_expected));
+    assert_eq!(mid.pixel(66, 50), Some(obj_expected));
 
     // Fading the already blended pixel compresses it to 5 bits first and
     // lands elsewhere.
