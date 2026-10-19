@@ -1490,3 +1490,123 @@ fn a_quarantine_name_swapped_before_its_removal_is_left_standing() {
     assert!(name.is_dir(), "the replacement was unlinked by name");
     assert!(away.is_dir(), "the moved quarantine is left standing");
 }
+
+#[cfg(unix)]
+const UMASK_CHILD: &str = "POKEEMERALD_IMPORT_ROLLBACK_UMASK_CHILD";
+
+#[cfg(unix)]
+#[test]
+fn rollback_takes_back_a_level_under_a_umask_that_masks_owner_bits() {
+    // Under umask 0177 the quarantine's `mkdirat(0700)` yields 0600: still
+    // private, but without the search bit the capture's rename needs. The
+    // umask is process-wide, so the body runs alone in a child.
+    const TEST: &str = "import_rom::created_dirs::tests::rollback_takes_back_a_level_under_a_umask_that_masks_owner_bits";
+    if std::env::var_os(UMASK_CHILD).is_none() {
+        let exe = std::env::current_exe().unwrap();
+        let output = std::process::Command::new(exe)
+            .args([TEST, "--exact", "--nocapture"])
+            .env(UMASK_CHILD, "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("1 passed"),
+            "child status {:?}\nstdout:\n{stdout}\nstderr:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let dir = TempDir::new("umask-0177");
+    let level = dir.join("new");
+    let created = super::create_directories(&level).unwrap();
+    let previous = rustix::process::umask(rustix::fs::Mode::from_raw_mode(0o177));
+    super::undo_created_directories(&created);
+    rustix::process::umask(previous);
+    assert!(!level.exists(), "the level is taken back");
+    assert!(entry_names(&dir.path).is_empty(), "no quarantine is left");
+}
+
+/// Stages a capture in `<parent>/.undo-held/level` holding `keep`, with the
+/// level's name and all sixteen `.restored-<n>` names taken, so
+/// `restore_capture` must leave it there and report it.
+#[cfg(unix)]
+fn stage_unrestorable_capture(
+    parent_path: &std::path::Path,
+    parent: &std::os::fd::OwnedFd,
+) -> std::os::fd::OwnedFd {
+    let quarantine_path = parent_path.join(".undo-held");
+    fs::create_dir(&quarantine_path).unwrap();
+    let quarantine = rustix::fs::openat(
+        parent,
+        ".undo-held",
+        rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )
+    .unwrap();
+    let capture = quarantine_path.join(super::QUARANTINE_ENTRY);
+    fs::create_dir(&capture).unwrap();
+    fs::write(capture.join("keep"), b"x").unwrap();
+    for n in 0..16 {
+        fs::create_dir(parent_path.join(format!("new.restored-{n}"))).unwrap();
+    }
+    quarantine
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[test]
+fn a_stranded_capture_is_reported_under_its_parents_current_name() {
+    // The level's parent `a` is renamed to `b` after creation; rollback acts
+    // through the held parent, so the warning must name `b`, not `a`.
+    let dir = TempDir::new("restore-renamed-parent");
+    let created = super::create_directories(&dir.join("a").join("new")).unwrap();
+    let level = created.last().unwrap();
+    let parent = level.parent.as_deref().unwrap();
+    fs::rename(dir.join("a"), dir.join("b")).unwrap();
+    let moved = fs::canonicalize(dir.join("b")).unwrap();
+    let quarantine = stage_unrestorable_capture(&moved, parent);
+
+    let warning = super::restore_capture(
+        std::os::fd::AsFd::as_fd(&quarantine),
+        ".undo-held",
+        parent,
+        level,
+    );
+
+    assert_eq!(
+        warning.as_deref(),
+        Some(
+            format!(
+                "warning: could not put {} back; its contents remain in {}",
+                moved.join("new").display(),
+                moved
+                    .join(".undo-held")
+                    .join(super::QUARANTINE_ENTRY)
+                    .display()
+            )
+            .as_str()
+        )
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_cleanup_warning_keeps_a_control_character_in_a_path_on_one_line() {
+    let dir = TempDir::new("restore-newline");
+    let parent_path = dir.join("line\nbreak");
+    fs::create_dir(&parent_path).unwrap();
+    let created = super::create_directories(&parent_path.join("new")).unwrap();
+    let parent = created[0].parent.as_deref().unwrap();
+    let quarantine = stage_unrestorable_capture(&parent_path, parent);
+
+    let warning = super::restore_capture(
+        std::os::fd::AsFd::as_fd(&quarantine),
+        ".undo-held",
+        parent,
+        &created[0],
+    )
+    .expect("the capture is reported");
+
+    assert!(!warning.contains('\n'), "{warning:?}");
+    assert!(warning.contains("line\\nbreak"), "{warning:?}");
+}

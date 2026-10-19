@@ -40,6 +40,10 @@
 //! cannot be opened after `mkdirat` is never unlinked, since nothing proves
 //! the name still denotes it: it is left standing, with a warning naming it.
 //!
+//! Taking a level back costs one new directory (the quarantine), so on a
+//! filesystem out of space, quota or inodes the quarantine's `mkdirat`
+//! fails and the created levels are left standing.
+//!
 //! Rollback is also not crash-safe: a process killed after a level was
 //! renamed into its quarantine and before it was removed or put back leaves
 //! it at `.undo-<hex>/level` beside its name, with no warning, and no later
@@ -1019,11 +1023,14 @@ fn unguessable_quarantine_name() -> Option<String> {
     Some(format!(".undo-{:016x}", u64::from_ne_bytes(bytes)))
 }
 
-/// Whether `quarantine` is an empty `0700` directory owned by this user, as
-/// a quarantine this rollback just made is. It is read through its own
-/// descriptor, never a second one opened for the listing, so a quarantine
-/// that took the last free descriptor can still be vouched for; an entry
-/// that cannot be read counts as not empty.
+/// Whether `quarantine` is an empty directory owned by this user with no
+/// group or other permission bits, as a quarantine this rollback just made
+/// with `0700` is under any umask; one that qualifies is then set to
+/// exactly `0700` through its own descriptor, since a umask such as `0177`
+/// masks the owner's search bit the capture's rename needs. It is read
+/// through its own descriptor, never a second one opened for the listing,
+/// so a quarantine that took the last free descriptor can still be vouched
+/// for; an entry that cannot be read counts as not empty.
 #[cfg(unix)]
 fn is_fresh_quarantine(quarantine: &mut rustix::fs::Dir) -> bool {
     use rustix::fs::{FileType, Mode};
@@ -1034,9 +1041,33 @@ fn is_fresh_quarantine(quarantine: &mut rustix::fs::Dir) -> bool {
         .all(|entry| entry.is_ok_and(|entry| matches!(entry.file_name().to_bytes(), b"." | b"..")));
     FileType::from_raw_mode(stat.st_mode) == FileType::Directory
         && stat.st_uid == rustix::process::geteuid().as_raw()
-        && Mode::from_raw_mode(stat.st_mode) & Mode::RWXU.union(Mode::RWXG).union(Mode::RWXO)
-            == Mode::RWXU
+        && (Mode::from_raw_mode(stat.st_mode) & Mode::RWXG.union(Mode::RWXO)).is_empty()
         && empty
+        && quarantine
+            .fd()
+            .is_ok_and(|fd| rustix::fs::fchmod(fd, Mode::RWXU).is_ok())
+}
+
+/// Where `entry` beside `dir` is, for a warning. On Linux and Android it is
+/// read from the held `parent` through `/proc/self/fd`, since a pinned
+/// ancestor may have been renamed after creation and rollback acts through
+/// `parent`, not the path; elsewhere, or without `/proc`, it is the
+/// recorded path's sibling, which a rename since creation would make stale.
+#[cfg(unix)]
+fn located_beside(parent: &std::os::fd::OwnedFd, dir: &CreatedDirectory, entry: &OsStr) -> PathBuf {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    {
+        use std::os::fd::AsRawFd as _;
+        let link = format!("/proc/self/fd/{}", parent.as_raw_fd());
+        if let Ok(held) = std::fs::read_link(link) {
+            if held.is_absolute() {
+                return held.join(entry);
+            }
+        }
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    let _ = parent;
+    dir.path.with_file_name(entry)
 }
 
 /// Moves the capture in `quarantine` (named `quarantine_name` beside the
@@ -1051,7 +1082,8 @@ fn restore_capture(
     parent: &std::os::fd::OwnedFd,
     dir: &CreatedDirectory,
 ) -> Option<String> {
-    let beside = |entry: &OsStr| dir.path.with_file_name(entry);
+    use rom_import::OneLinePath;
+    let beside = |entry: &OsStr| located_beside(parent, dir, entry);
     if rename_without_replacing(quarantine, QUARANTINE_ENTRY, parent, &dir.name).is_ok() {
         return None;
     }
@@ -1061,17 +1093,15 @@ fn restore_capture(
         if rename_without_replacing(quarantine, QUARANTINE_ENTRY, parent, &aside).is_ok() {
             return Some(format!(
                 "warning: {} was recreated during cleanup; its contents are in {}",
-                dir.path.display(),
-                beside(&aside).display()
+                OneLinePath(&beside(&dir.name)),
+                OneLinePath(&beside(&aside))
             ));
         }
     }
     Some(format!(
         "warning: could not put {} back; its contents remain in {}",
-        dir.path.display(),
-        beside(OsStr::new(quarantine_name))
-            .join(QUARANTINE_ENTRY)
-            .display()
+        OneLinePath(&beside(&dir.name)),
+        OneLinePath(&beside(OsStr::new(quarantine_name)).join(QUARANTINE_ENTRY))
     ))
 }
 
@@ -1114,7 +1144,7 @@ fn take_back_level_with_hooks(
     before_removal: &mut dyn FnMut(),
 ) -> bool {
     use rustix::fs::{AtFlags, Mode, OFlags};
-    let quarantine_path = dir.path.with_file_name(quarantine_name);
+    let quarantine_path = located_beside(parent, dir, OsStr::new(quarantine_name));
     if rustix::fs::mkdirat(parent, quarantine_name, Mode::RWXU).is_err() {
         return false;
     }
@@ -1134,7 +1164,7 @@ fn take_back_level_with_hooks(
         // level.
         eprintln!(
             "warning: could not open cleanup directory {}; it is left in place",
-            quarantine_path.display()
+            rom_import::OneLinePath(&quarantine_path)
         );
         return false;
     };
@@ -1186,7 +1216,7 @@ fn take_back_level_with_hooks(
     } else {
         eprintln!(
             "warning: cleanup directory {} no longer resolves to the one rollback made; it is left in place",
-            quarantine_path.display()
+            rom_import::OneLinePath(&quarantine_path)
         );
     }
     goes_on
