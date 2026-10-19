@@ -1591,19 +1591,18 @@ fn female_route_103_room_load_uses_may_for_player_and_brendan_for_rival() {
     }
 }
 
-// -- Real-pack elevation-driven OBJ priority (S-5, issue #218) ---------------
+// -- Real-pack elevation-driven OBJ priority --------------------------------
 
-/// The visual counterpart to
-/// `flow::overworld_phase::step_tests::bedroom_bed_side_column_is_walkable_and_retains_the_raised_previous_elevation`
-/// (this crate's collision-side pin for the same issue): standing on the
-/// protagonist bedroom bed's raised elevation-4 edge tile must draw the
-/// player OBJ at the raised OAM priority
-/// ([`super::avatar::priority_for_elevation`]), not the flat default every
-/// position drew before this fix. Real-pack, because the point is that this
-/// flows all the way through the production [`super::sprites::SceneSprites::entries`]
-/// list built from the real bedroom's own layout, not just
-/// [`super::avatar::player_entry`] in isolation (already unit-tested
-/// directly in `avatar`'s own module against synthetic elevations).
+/// The player OBJ's priority follows elevation on the real bedroom map.
+/// Standing on the bed's raised elevation-4 edge tile draws the player at the
+/// raised OAM priority ([`super::avatar::priority_for_elevation`]), not the
+/// default priority of ordinary floor. Real-pack so the priority is read from
+/// the production [`super::sprites::SceneSprites::entries`] list built from the
+/// bedroom's own layout, not just [`super::avatar::player_entry`] on synthetic
+/// elevations.
+///
+/// The collision-side counterpart for the same tiles is
+/// `flow::overworld_phase::bedroom_collision_tests::bedroom_bed_side_column_is_walkable_and_retains_the_raised_previous_elevation`.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_the_bed_side_edge_draws_the_player_obj_at_the_raised_priority() {
@@ -1623,39 +1622,29 @@ fn real_pack_the_bed_side_edge_draws_the_player_obj_at_the_raised_priority() {
     assert_eq!(
         floor_entries[0].priority(),
         super::avatar::PLAYER_OBJ_PRIORITY,
-        "entry 0 is always the player (this module's other real-pack OAM \
-         tests); ordinary floor elevation (3) draws at the default priority"
+        "entry 0 is the player; ordinary floor (elevation 3) draws at the default priority"
     );
 
-    // (0, 5): the bed's own raised west-edge tile, elevation 4 -- real
-    // authored data, not a synthetic fixture (cross-checked against
-    // `pokeemerald/data/layouts/LittlerootTown_BrendansHouse_2F/map.bin` by
-    // this crate's `bedroom_bed_side_column_is_walkable_and_retains_the_raised_previous_elevation`).
+    // (0, 5): the bed's raised west-edge tile, elevation 4. This is authored
+    // data from `pokeemerald/data/layouts/LittlerootTown_BrendansHouse_2F/map.bin`,
+    // the same tile the collision-side test above checks.
     let on_the_bed_edge = PlayerState::new((0, 5), 4, Direction::North);
     let bed_entries = scene.sprites.entries(&on_the_bed_edge, &data);
     assert_eq!(
         bed_entries[0].priority(),
         1,
-        "the bed's raised elevation-4 edge must draw the player OBJ at the \
-         raised priority (sElevationToPriority[4] == 1) -- the same-priority-\
-         favors-the-sprite tie rule (`rendering::compositor`) then draws it \
-         in front of the top BG layer instead of behind, matching a raised \
-         surface visually standing above whatever would otherwise occlude \
-         a player on ordinary floor"
+        "the bed's raised elevation-4 edge must draw the player OBJ at priority 1 \
+         (sElevationToPriority[4]); the compositor's same-priority tie rule \
+         (`rendering::compositor`) then puts the sprite in front of the top BG layer"
     );
 
-    // (0, 6): the bed's south-edge ELEVATION_TRANSITION tile, *stepped
-    // onto* from the raised edge. `PlayerState::new` seeds both elevation
-    // fields identically, so the drifted stance this issue is about --
-    // standing on the elevation-0 wildcard while `previous_elevation()`
-    // still reads the raised 4 -- is only reachable through the real
-    // movement path, exactly as
-    // `bedroom_bed_side_column_is_walkable_and_retains_the_raised_previous_elevation`
-    // walks it on the collision side. (The south edge rather than the
-    // north one: with no on-transition script run here, the fresh event
-    // data leaves the bedroom's decoration placeholder object standing on
-    // the north-edge tile, and that same walk test proves the south edge
-    // object-free.)
+    // (0, 6): the bed's south-edge ELEVATION_TRANSITION tile, stepped onto
+    // from the raised edge. `PlayerState::new` seeds both elevation fields
+    // identically, so the drifted stance (elevation 0 on the wildcard tile
+    // while `previous_elevation()` still reads 4) is reachable only through
+    // `PlayerState::step`, as in the collision-side walk test. The south edge
+    // is used because the fresh event data leaves a decoration placeholder
+    // object on the north-edge tile.
     let no_connections = |_: assets::MapId| -> Option<(u16, u16)> { None };
     let header = assets::MapHeaderTable::new().header(BEDROOM).unwrap();
     let events = assets::MapEventsTable::new().resolve(BEDROOM).unwrap();
@@ -1669,28 +1658,25 @@ fn real_pack_the_bed_side_edge_draws_the_player_obj_at_the_raised_priority() {
     assert_eq!(
         (walker.elevation(), walker.previous_elevation()),
         (0, 4),
-        "fixture precondition: the wildcard tile drifts the two fields apart"
+        "precondition: the wildcard tile drifts the two elevation fields apart"
     );
     let drifted_entries = scene.sprites.entries(&walker, &data);
     assert_eq!(
         drifted_entries[0].priority(),
         1,
-        "the player OBJ's priority must follow previous_elevation (the \
-         raised 4), not the wildcard tile's own 0 -- \
-         ObjectEventUpdateElevation leaves currentElevation's *rendering* \
-         consequence on the last concrete elevation, so the sprite keeps \
-         the raised priority instead of flickering to the default for the \
-         frames it stands on the transition tile"
+        "the player OBJ priority must follow previous_elevation (4), not the \
+         wildcard tile's own 0 (ObjectEventUpdateElevation keeps the last \
+         concrete elevation), so the sprite stays at the raised priority while \
+         it stands on the transition tile"
     );
 }
 
-// -- Real-pack tileset tile animation (issue #160) ---------------------------
+// -- Real-pack tileset tile animation ---------------------------------------
 
-/// Upstream `tileset_anims.c`'s General primary-tileset animated tile
-/// ranges -- the same literals `crate::overworld::tileset_anims`'s own
-/// module docs table pins, transcribed independently here rather than
-/// imported, so this test doesn't just check that module agrees with
-/// itself.
+/// The General primary tileset's animated tile ranges from upstream
+/// `tileset_anims.c`. They match `GENERAL_REGIONS` in
+/// `crate::overworld::tileset_anims` but are transcribed here instead of
+/// imported, so the tests do not compare that module with itself.
 const GENERAL_ANIMATED_TILE_RANGES: [std::ops::Range<u16>; 5] = [
     508..512, // flower (4 tiles)
     432..462, // water (30 tiles)
@@ -1699,53 +1685,45 @@ const GENERAL_ANIMATED_TILE_RANGES: [std::ops::Range<u16>; 5] = [
     480..490, // land/water edge (10 tiles)
 ];
 
-/// A player position inside `MAP_LITTLEROOT_TOWN` -- the only bundled map on
-/// the animated "general" primary tileset (`tileset_anims`'s own scope
-/// docs: every bundled interior uses "building", whose one animated
-/// metatile, the TV, no bundled interior's own `map.bin` actually places) --
-/// whose standing (not-in-transit, so zero-scroll/unpadded -- module docs'
-/// camera model) viewport draws animated tiles on screen.
+/// A standing (not in transit) player position in `MAP_LITTLEROOT_TOWN` whose
+/// viewport draws animated tiles. Littleroot is on the animated "general"
+/// primary tileset; the bundled interiors use "building", whose one animated
+/// metatile (the TV) no interior `map.bin` places.
 ///
-/// **Flower is the only animated region any bundled map ever puts on
-/// screen.** Measured against the real pack, at this position 24 on-screen
-/// BG tile cells reference the flower range and *zero* reference
-/// `water`/`sand_water_edge`/`waterfall`/`land_water_edge`; sweeping every
-/// cell of `MAP_LITTLEROOT_TOWN` at every standing position, flower peaks at
-/// 36 cells (at `(0, 14)`) and the other four regions stay at 0 everywhere
-/// -- Littleroot has no water in its own layout, and no other bundled map
-/// uses the "general" tileset at all. So [`GENERAL_ANIMATED_TILE_RANGES`]'s
-/// other four ranges are pinned by `tileset_anims`' own unit tests, not by
-/// any rendered pixel here. Found empirically against the real pack
-/// (`overworld::tests` has no typed access to `map.json`'s authored content
-/// otherwise).
+/// Flower is the only animated region Littleroot puts on screen. Measured on
+/// the real pack, 24 on-screen BG cells at this position reference the flower
+/// range and none reference water, sand/water edge, waterfall, or land/water
+/// edge. Over every standing position in Littleroot, flower peaks at 36 cells
+/// (at `(0, 14)`) and the other four regions stay at 0. So the other four
+/// ranges of [`GENERAL_ANIMATED_TILE_RANGES`] are pinned by
+/// `tileset_anims`' unit tests, not by a rendered pixel here. This position is a
+/// Littleroot view where the flower region is on screen.
 const LITTLEROOT_TOWN_FLOWER_VIEW: (i32, i32) = (10, 17);
 
-/// The screen-pixel rectangles [`GENERAL_ANIMATED_TILE_RANGES`] paints for
-/// `scene`/`player`'s current viewport: every 8x8 BG tile cell whose
-/// bottom, middle, or top sub-layer entry names a tile index in one of
-/// those ranges, as its `(x0, y0, x1, y1)` on-screen rect. Reaches into
-/// [`super::OverworldScene`]'s private fields directly (this module is one
-/// of its descendants) to rebuild the same tilemaps [`super::OverworldScene::compose`]
-/// would, the same way [`super::viewport`]'s own tests do.
+/// The screen-pixel rectangles that [`GENERAL_ANIMATED_TILE_RANGES`] paints for
+/// `scene` and `player`'s viewport: the `(x0, y0, x1, y1)` rect of every 8x8 BG
+/// tile cell whose bottom, middle, or top entry names a tile index in one of
+/// those ranges. It rebuilds the tilemaps [`super::OverworldScene::compose`]
+/// uses from [`super::OverworldScene`]'s private fields (this module is a
+/// descendant), as [`super::viewport`]'s own tests do.
 ///
-/// A resting viewport still carries `RESTING_SCROLL_Y`'s 8px baseline
-/// vertical scroll (issue #977), so a tile's raw pixel row is shifted by
-/// `viewport.scroll_y` (never `scroll_x`: horizontal scroll is zero at
-/// rest) to reach its actual screen row; a row that shift pushes fully
-/// off-screen is dropped, since no test here samples outside `0..160`.
+/// A resting viewport carries `RESTING_SCROLL_Y`'s 8px vertical scroll, so a
+/// tile's raw pixel row is shifted by `viewport.scroll_y` (horizontal scroll is
+/// zero at rest). Rects pushed fully off-screen are dropped, since no test
+/// samples outside `0..160`.
 ///
 /// # Panics
 ///
-/// If `player` [`PlayerState::in_transit`] -- the padded/scrolled viewport
-/// that produces doesn't map tile `(col, row)` to screen pixel `(col * 8,
-/// row * 8 - scroll_y)` in general, and no test here needs it.
+/// If `player` [`PlayerState::in_transit`]: the padded, scrolled viewport that
+/// produces does not map tile `(col, row)` to pixel `(col * 8, row * 8 -
+/// scroll_y)` in general.
 fn animated_tile_screen_rects(
     scene: &super::OverworldScene,
     player: &PlayerState,
 ) -> Vec<(usize, usize, usize, usize)> {
     assert!(
         !player.in_transit(),
-        "helper assumes an unpadded, resting-baseline-only scroll (doc comment)"
+        "helper assumes an unpadded viewport with only the resting scroll"
     );
     let grid = scene
         .layout
@@ -1755,10 +1733,9 @@ fn animated_tile_screen_rects(
         assets::BorderGrid::new(&scene.border_bytes).expect("border_bytes validated in from_pack");
     let primary_attrs = assets::MetatileAttributeTable::new(&scene.primary_attrs_bytes);
     let secondary_attrs = assets::MetatileAttributeTable::new(&scene.secondary_attrs_bytes);
-    // Issue #253: rebuild the same per-connection grids `Self::frame_viewport`
-    // would, so this helper stays a faithful stand-in for it even though
-    // Littleroot Town's own North connection never actually resolves at
-    // this helper's own on-screen-flower fixture positions.
+    // Rebuild the per-connection grids `OverworldScene::frame_viewport` builds,
+    // so this helper matches it even though Littleroot's North connection
+    // never resolves at the flower fixture position.
     let connections: Vec<super::viewport::ConnectionView<'_>> = scene
         .connections
         .iter()
@@ -1815,17 +1792,14 @@ fn animated_tile_screen_rects(
     rects
 }
 
-/// The issue #160 acceptance test's "differs" half: composing
-/// `MAP_LITTLEROOT_TOWN` at two different ticks changes pixels only inside
-/// the on-screen rects [`animated_tile_screen_rects`] identifies -- proving
-/// [`super::OverworldScene::compose`]'s `tick` parameter actually reaches
-/// rendered pixels, and only the pixels its own animated tile ranges own,
-/// for a real map/pack. `tick` 60 is arbitrary but deliberate: General
-/// flower -- the one region this map puts on screen at all
-/// ([`LITTLEROOT_TOWN_FLOWER_VIEW`]'s docs) -- fires at ticks 16, 32, 48,
-/// and 64, so at tick 60 it has latched sequence position 3 (`Frame2`), a
-/// frame distinct from the base art tick 0 shows
-/// (`tileset_anims::latched_frame`'s doc comment and its own unit tests).
+/// Composing `MAP_LITTLEROOT_TOWN` at two ticks changes pixels only inside the
+/// on-screen rects [`animated_tile_screen_rects`] returns. So
+/// [`super::OverworldScene::compose`]'s `tick` reaches rendered pixels, and
+/// only the pixels the animated tile ranges own. Tick 60 is chosen because
+/// General flower, the one region this map puts on screen
+/// ([`LITTLEROOT_TOWN_FLOWER_VIEW`]), fires at ticks 16, 32, 48, and 64, so at
+/// tick 60 it has latched sequence position 3 (`Frame2`), a frame distinct from
+/// the base art at tick 0 (see `tileset_anims::latched_frame`).
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_tick_changes_only_the_animated_tile_screen_regions() {
@@ -1843,8 +1817,7 @@ fn real_pack_tick_changes_only_the_animated_tile_screen_regions() {
     let rects = animated_tile_screen_rects(&scene, &player);
     assert!(
         !rects.is_empty(),
-        "this fixture position's own premise: at least one on-screen tile must \
-         reference one of GENERAL_ANIMATED_TILE_RANGES"
+        "at least one on-screen tile must reference one of GENERAL_ANIMATED_TILE_RANGES"
     );
     let in_any_rect = |px: usize, py: usize| {
         rects
@@ -1875,29 +1848,25 @@ fn real_pack_tick_changes_only_the_animated_tile_screen_regions() {
     );
 }
 
-/// The issue #160 acceptance test's "repeats" half: two ticks a full
-/// cadence period apart compose pixel-identically. 128 is the LCM of every
-/// region [`crate::overworld::tileset_anims`] ports (General
-/// water/sand-water-edge at 128, every other region's own cycle a divisor of
-/// it -- that module's own doc comment).
+/// Two ticks a full cadence period apart compose pixel-identically. 128 is the
+/// least common multiple of the cycles of every region
+/// [`crate::overworld::tileset_anims`] ports: General water and sand/water edge
+/// run at 128, and every other region's cycle divides it.
 ///
-/// **The invariant is "for every tick >= 16", not "for any tick".** Below a
-/// region's own first fire it shows the *base* art rather than any frame of
-/// its sequence, and the base art is not in general equal to the frame the
-/// same region shows 128 ticks later: on a map with water on screen,
-/// `compose(0)` and `compose(128)` would genuinely differ (water latches
-/// sequence position 0 at tick 128, and `water/0` is not the base tile art).
-/// 16 is the largest `first_fire` over every region this slice ports (the
-/// `phase == 0` regions' `interval`), so from tick 16 on every region has
-/// latched and the period is exact everywhere.
+/// The invariant holds for every tick >= 16, not for any tick. Before a
+/// region's first fire it shows the base art, which in general differs from the
+/// frame it shows 128 ticks later: on a map with water on screen, `compose(0)`
+/// and `compose(128)` would differ, because water latches sequence position 0
+/// at tick 128 and `water/0` is not the base tile art. 16 is the largest first
+/// fire of any ported region (the `phase == 0` regions' `interval`), so from
+/// tick 16 every region has latched and the period is exact.
 ///
-/// Ticks 0, 1, and 8 are still exercised below, but only because *this*
-/// map/position happens to make them true: General flower is the sole
-/// animated region on screen here ([`LITTLEROOT_TOWN_FLOWER_VIEW`]'s docs)
-/// and its `sequence[0]` frame is pixel-identical to the base art it
-/// overwrites, so "pre-first-fire" and "latched frame 0" render the same.
-/// They are not evidence for the general invariant -- the ticks from 16 up
-/// are.
+/// Ticks 0, 1, and 8 are exercised only because this map and position make
+/// them hold: General flower is the sole animated region on screen
+/// ([`LITTLEROOT_TOWN_FLOWER_VIEW`]) and its `sequence[0]` frame is
+/// pixel-identical to the base art, so before-first-fire and latched frame 0
+/// render the same. Only the ticks from 16 up are evidence for the general
+/// invariant.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_tileset_animation_repeats_after_a_full_cadence_period() {
@@ -1914,8 +1883,9 @@ fn real_pack_tileset_animation_repeats_after_a_full_cadence_period() {
     let (x, y) = LITTLEROOT_TOWN_FLOWER_VIEW;
     let player = PlayerState::new((x, y), 3, Direction::South);
 
-    // 0/1/8: this map/position only (doc comment). 16/60/127: the real,
-    // map-independent invariant -- every region has fired by tick 16.
+    // 0/1/8 hold for this map and position only (see the doc comment).
+    // 16/60/127 cover the map-independent invariant: every region has fired
+    // by tick 16.
     for tick in [0, 1, 8, 16, 60, 127] {
         let a = scene.compose(&player, &event_data, tick);
         let b = scene.compose(&player, &event_data, tick + FULL_CADENCE_PERIOD);
@@ -1929,26 +1899,22 @@ fn real_pack_tileset_animation_repeats_after_a_full_cadence_period() {
     }
 }
 
-// -- Real-pack connected-map rendering (issue #253, I-4/V-4) ----------------
+// -- Real-pack connected-map rendering --------------------------------------
 
-/// Littleroot Town ↔ Route 101's own real cross-boundary continuity: a
-/// camera near Littleroot's north edge (`MAP_LITTLEROOT_TOWN`'s only
-/// declared connection, `Direction::North`, `offset: 0`, into
-/// `MAP_ROUTE101` -- `crates/assets/src/map_headers.rs`) must show Route
-/// 101's own tiles, not a hard cut to the border block, and must show
-/// *exactly* the tiles Route 101's own layout renders at the corresponding
-/// world position -- no seam.
+/// A camera near Littleroot's north edge renders Route 101's tiles with no
+/// seam. `MAP_LITTLEROOT_TOWN`'s only declared connection is `Direction::North`
+/// with `offset: 0` into `MAP_ROUTE101` (`crates/assets/src/map_headers.rs`).
+/// The strip north of the edge must show the tiles Route 101's own layout
+/// renders at the corresponding world position, not a hard cut to the border
+/// block.
 ///
-/// A deterministic pixel comparison, not a golden image: rather than
-/// pinning specific upstream colors (which would break the moment either
-/// map's art changes), this composes the same physical world strip two
-/// ways -- once via Littleroot's own north-edge connection fallback, once
-/// by loading Route 101 directly and centering the camera on the
-/// corresponding position on *its* side (offset 0 means the x axes line up
-/// 1:1; the constants below derive the y alignment from that same
-/// [`super::PlayerCharacter`]/camera-centering math [`super::viewport`]'s
-/// own module docs describe) -- and asserts the two agree, pixel for
-/// pixel, everywhere in the shared strip.
+/// It is a pixel comparison, not a golden image, so it survives art changes.
+/// The same world strip is composed two ways: through Littleroot's north-edge
+/// connection, and by loading Route 101 directly with the camera on the
+/// corresponding position of its side (offset 0 lines the x axes up 1:1; the
+/// constants below derive the y alignment from the camera-centering math in
+/// [`super::viewport`]'s module docs). The two compositions must agree pixel
+/// for pixel everywhere in the shared strip.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_littleroot_and_route_101_render_continuously_across_their_shared_edge() {
@@ -1962,11 +1928,9 @@ fn real_pack_littleroot_and_route_101_render_continuously_across_their_shared_ed
         &engine::event_data::EventData::new(),
     )
     .expect("run `cargo xtask extract` first");
-    // The pre-#253 shape: the same room, its own declared connections
-    // stripped, so composing it reproduces exactly what a hard cut to the
-    // border block used to render -- `overworld::tests` is a descendant
-    // module of `overworld`, so it can reach this private field directly
-    // (the same access `animated_tile_screen_rects` above already uses).
+    // The same room with its declared connections stripped, so composing it
+    // renders a hard cut to the border block. The private `connections` field
+    // is reachable because this module is a descendant of `overworld`.
     let mut scene_border_only = super::load_room_from_source(
         &crate::pack_source::PackSource::Repo,
         LITTLEROOT,
@@ -1984,40 +1948,33 @@ fn real_pack_littleroot_and_route_101_render_continuously_across_their_shared_ed
     .expect("run `cargo xtask extract` first");
 
     let data = fresh_save_event_data();
-    // Standing just inside Littleroot's own north edge (row 1 of its own
-    // 20x20 grid -- `crates/assets/src/map_layouts.rs`), facing north: at
-    // rest, the resting viewport's own anchor (`anchor_y == y -
-    // PLAYER_VIEW_ROW == 1 - 5 == -4`, `super::viewport`'s module docs)
-    // samples world rows `-4..=5` -- the top four rows (screen rows 0..=3,
-    // world rows `-4..=-1`) already fall north of Littleroot's own y == 0
-    // edge, squarely in this connection's own territory. All four are
-    // inside `viewport::within_backup_map_band`'s own `y >= -7` cover, so
-    // the band bound never trims this strip. `RESTING_SCROLL_Y`'s 8px
-    // resting scroll (issue #977) shifts those rows to screen pixel rows
-    // `0..56`, not `0..64`: `(56 + 8) / 16 == 4` is the first screen row
-    // that samples world row `-4 + 4 == 0`, Littleroot's own in-bounds
-    // interior rather than the connection strip.
+    // Standing at row 1 of Littleroot's 20x20 grid
+    // (`crates/assets/src/map_layouts.rs`), facing north. The resting viewport
+    // anchor is `anchor_y == y - PLAYER_VIEW_ROW == 1 - 5 == -4`
+    // (`super::viewport`'s module docs), so it samples world rows `-4..=6` (the last is the resting-scroll row).
+    // Screen rows 0..=3 (world rows `-4..=-1`) lie north of Littleroot's
+    // y == 0 edge, in the connection's territory, and all are inside
+    // `viewport::within_backup_map_band`'s `y >= -7` cover. `RESTING_SCROLL_Y`'s
+    // 8px scroll shifts them to screen pixel rows `0..56`, not `0..64`:
+    // `(56 + 8) / 16 == 4` is the first screen row that samples world row 0,
+    // Littleroot's own interior.
     let player = PlayerState::new((10, 1), 3, Direction::North);
     let frame = scene.compose(&player, &data, 0);
     let frame_border_only = scene_border_only.compose(&player, &data, 0);
 
-    // Route 101's own camera, centered so the *same* screen pixel samples
-    // the *same* world position `connected_cell_at`'s North-connection
-    // formula names (`target_y == connected_height + y`, offset 0 leaves x
-    // untouched): matching x (10) and a y whose own `anchor_y` lines up
-    // Route 101's local row 19 (its own south edge) with Littleroot's local
-    // row -1 (screen row 3 in both compositions) -- `21 - 5 == 16`, and
-    // `16 + 3 == 19`, against Littleroot's own `-4 + 3 == -1`.
+    // Route 101's camera is placed so the same screen pixel samples the same
+    // world position as `connected_cell_at`'s North-connection formula
+    // (`target_y == connected_height + y`; offset 0 leaves x untouched): same
+    // x (10), and a y whose `anchor_y` puts Route 101's row 19 (its south edge)
+    // on Littleroot's row -1, screen row 3 in both compositions. That is
+    // `21 - 5 == 16` and `16 + 3 == 19`, against Littleroot's `-4 + 3 == -1`.
     let route_101_player = PlayerState::new((10, 21), 3, Direction::North);
     let frame_route_101 = route_101.compose(&route_101_player, &data, 0);
 
-    // The shared strip: screen pixel rows `0..56` -- 4 metatile rows, the
-    // full width -- entirely north of Littleroot's own grid at this player
-    // position, per the anchor math above. The last of them (screen rows
-    // 40..56, world row -1 on Littleroot's side, Route 101's own row 19) is
-    // the row immediately adjacent to the seam, the one the comparison most
-    // needs to cover (review of #253: the strip used to stop at `0..48`,
-    // three rows, excluding exactly that row).
+    // The shared strip is screen pixel rows `0..56`: 4 metatile rows at full
+    // width, all north of Littleroot's grid per the anchor math above. Its last
+    // row (pixel rows 40..56, Littleroot world row -1, Route 101 row 19) is
+    // adjacent to the seam, so a seam error shows there first.
     let mut any_pixel_changed_by_the_connection = false;
     for py in 0..56usize {
         for px in 0..240usize {
@@ -2036,21 +1993,18 @@ fn real_pack_littleroot_and_route_101_render_continuously_across_their_shared_ed
     }
     assert!(
         any_pixel_changed_by_the_connection,
-        "the connection must actually change at least one pixel versus the pre-#253 \
-         border-only fallback, or the two comparisons above would be trivially \
-         satisfied by an all-border strip"
+        "the connection must change at least one pixel versus the border-only \
+         fallback, or the comparisons above would be satisfied by an all-border strip"
     );
 }
 
-/// The same seam proof for the cluster's *other* live outdoor edge:
-/// Route 101's only North connection (`MAP_OLDALE_TOWN`, `offset: 0` --
-/// `crates/assets/src/map_headers.rs`), newly resolvable now that
-/// `cargo xtask extract`'s `LAYOUTS` table bundles Oldale Town's grid
-/// bytes (issue #248). Identical geometry to
+/// The same seam check for Route 101's only North connection, `MAP_OLDALE_TOWN`
+/// with `offset: 0` (`crates/assets/src/map_headers.rs`), which resolves
+/// because the `LAYOUTS` table bundles Oldale Town's grid bytes. The geometry
+/// is identical to
 /// [`real_pack_littleroot_and_route_101_render_continuously_across_their_shared_edge`]
-/// -- both layouts are 20x20 and the offset is 0 -- so the same anchor
-/// math covers the same four-row strip; see that test's comments for the
-/// derivation.
+/// (both layouts are 20x20, offset 0), so the same anchor math covers the same
+/// four-row strip; see that test's comments for the derivation.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_route_101_and_oldale_town_render_continuously_across_their_shared_edge() {
@@ -2106,9 +2060,8 @@ fn real_pack_route_101_and_oldale_town_render_continuously_across_their_shared_e
     }
     assert!(
         any_pixel_changed_by_the_connection,
-        "the connection must actually change at least one pixel versus the border-only \
-         fallback, or the comparisons above would be trivially satisfied by an \
-         all-border strip"
+        "the connection must change at least one pixel versus the border-only \
+         fallback, or the comparisons above would be satisfied by an all-border strip"
     );
 }
 
