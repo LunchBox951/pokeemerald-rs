@@ -458,3 +458,28 @@ fn cleanup_refuses_to_descend_into_a_directory_swapped_in_after_the_listing() {
         }
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn cleanup_refuses_to_unlink_a_file_swapped_in_after_the_listing() {
+    let base = private_base("cleanup-file-swap");
+    let root = base.join("root");
+    std::fs::create_dir(&root).unwrap();
+    std::fs::write(root.join("listed.sav"), b"ours").unwrap();
+    let elsewhere = base.join("elsewhere.sav");
+    std::fs::write(&elsewhere, b"keep me").unwrap();
+    let result = remove_contents(&std::fs::File::open(&root).unwrap(), &mut |name| {
+        if name.to_bytes() == b"listed.sav" {
+            std::fs::rename(root.join("listed.sav"), base.join("aside.sav")).unwrap();
+            std::fs::rename(&elsewhere, root.join("listed.sav")).unwrap();
+        }
+    });
+    let kept = std::fs::read(root.join("listed.sav"));
+    let _ = std::fs::remove_dir_all(&base);
+    let error = result.expect_err("a swapped-in file must not be unlinked");
+    assert!(
+        error.to_string().contains("replaced during cleanup"),
+        "{error}"
+    );
+    assert_eq!(kept.unwrap(), b"keep me");
+}
