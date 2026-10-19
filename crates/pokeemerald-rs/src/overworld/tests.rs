@@ -992,9 +992,9 @@ fn a_connection_target_with_a_truncated_grid_is_an_error_not_a_silent_omission()
 }
 
 /// `OverworldScene` loaded from the checkout pack for the protagonist's
-/// bedroom (Brendan's house 2F) composes deterministic, non-blank frames
-/// that change with the player's position and facing. Needs a local pack:
-/// run `cargo xtask extract` first, then
+/// bedroom (Brendan's house 2F) composes deterministic, non-blank frames,
+/// and a different frame when the player's position and facing change
+/// together. Needs a local pack: run `cargo xtask extract` first, then
 /// `cargo test -p pokeemerald-rs -- --ignored`.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
@@ -1283,8 +1283,7 @@ fn real_pack_the_opposite_gender_rival_binds_for_either_player() {
 
 /// With `VAR_OBJ_GFX_ID_0` naming a rival graphics id, `SceneSprites` binds
 /// Route 103's `OBJ_EVENT_GFX_VAR_0` rival object event to the opposite
-/// protagonist's sheet. Bedroom decoration placeholders share that
-/// `graphics_id` and stay unbound, so this exercises scene decode (not just
+/// protagonist's sheet. This exercises scene decode (not just
 /// [`super::npc::resolve_sprite_source`]) against the real
 /// [`assets::MapEventsTable`] entry and pack.
 #[test]
@@ -1321,10 +1320,7 @@ fn real_pack_route_103_rival_binds_to_the_opposite_protagonists_sheet() {
         .bindings()
         .get("OBJ_EVENT_GFX_VAR_0")
         .copied()
-        .expect(
-            "VAR_OBJ_GFX_ID_0 naming a rival id must bind a sprite, not stay unbound \
-             like a bedroom decoration",
-        );
+        .expect("VAR_OBJ_GFX_ID_0 naming a rival id must bind a sprite for OBJ_EVENT_GFX_VAR_0");
     assert_ne!(
         binding.palette_bank(),
         0,
