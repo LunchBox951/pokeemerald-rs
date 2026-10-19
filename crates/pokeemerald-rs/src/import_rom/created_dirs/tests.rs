@@ -1,8 +1,6 @@
 use std::fs;
 use std::path::PathBuf;
 
-#[cfg(unix)]
-use super::super::tests::names_besides_left_quarantine;
 use super::super::tests::TempDir;
 #[cfg(unix)]
 use super::super::tests::{
@@ -1165,9 +1163,9 @@ fn undo_preserves_a_replacement_swapped_after_validation() {
     assert!(level.is_dir(), "the replacement was deleted");
     assert!(moved.is_dir(), "the original is left standing");
     assert_eq!(
-        names_besides_left_quarantine(&dir.path),
+        entry_names(&dir.path),
         ["new", "original"],
-        "only the empty quarantine is left beside them"
+        "no quarantine is left behind"
     );
 }
 
@@ -1182,7 +1180,7 @@ fn undo_puts_back_a_level_that_gained_contents_after_validation() {
     });
 
     assert!(level.join("keep").is_file());
-    assert_eq!(names_besides_left_quarantine(&dir.path), ["new"]);
+    assert_eq!(entry_names(&dir.path), ["new"]);
 }
 
 #[cfg(unix)]
@@ -1405,10 +1403,7 @@ fn rollback_takes_back_a_level_when_the_quarantine_open_takes_the_last_descripto
     drop(fillers);
     assert!(proceeded, "the level is taken back");
     assert!(!level.exists(), "the level is removed");
-    assert!(
-        names_besides_left_quarantine(&dir.path).is_empty(),
-        "only the empty quarantine is left"
-    );
+    assert!(entry_names(&dir.path).is_empty(), "no quarantine is left");
 }
 
 #[cfg(unix)]
@@ -1494,44 +1489,6 @@ fn a_swapped_quarantine_is_not_removed_when_its_open_fails() {
 }
 
 #[cfg(unix)]
-#[test]
-fn a_directory_swapped_in_at_the_quarantine_name_is_never_touched() {
-    // After the level is taken back, the quarantine is moved away and a
-    // directory of someone else's, holding data, takes its name. Rollback
-    // removes nothing by that name, so both survive as they are.
-    let dir = TempDir::new("swap-at-quarantine-name");
-    let level = dir.join("new");
-    let (name, away) = (dir.join(".undo-r"), dir.join("away"));
-    let created = super::create_directories(&level).unwrap();
-    let parent = created[0].parent.as_deref().unwrap();
-    let mut swapped = 0;
-    let proceeded = super::take_back::take_back_level_with_hooks(
-        parent,
-        &created[0],
-        ".undo-r",
-        &mut || {},
-        &mut || {
-            swapped += 1;
-            fs::rename(&name, &away).unwrap();
-            fs::create_dir(&name).unwrap();
-            fs::write(name.join("theirs"), b"x").unwrap();
-        },
-    );
-    assert_eq!(swapped, 1, "the hook ran once");
-    assert!(proceeded, "the level itself was taken back");
-    assert!(!level.exists(), "the level is removed");
-    assert!(
-        name.join("theirs").is_file(),
-        "the replacement or its data was removed"
-    );
-    assert_eq!(
-        entry_names(&away),
-        Vec::<String>::new(),
-        "the moved quarantine stays, empty"
-    );
-}
-
-#[cfg(unix)]
 const UMASK_CHILD: &str = "POKEEMERALD_IMPORT_ROLLBACK_UMASK_CHILD";
 
 #[cfg(unix)]
@@ -1564,10 +1521,7 @@ fn rollback_takes_back_a_level_under_a_umask_that_masks_owner_bits() {
     super::undo_created_directories(&created);
     rustix::process::umask(previous);
     assert!(!level.exists(), "the level is taken back");
-    assert!(
-        names_besides_left_quarantine(&dir.path).is_empty(),
-        "only the empty quarantine is left"
-    );
+    assert!(entry_names(&dir.path).is_empty(), "no quarantine is left");
 }
 
 /// Stages a capture in `<parent>/.undo-held/level` holding `keep`, with the
@@ -1684,55 +1638,6 @@ fn rerun_alone_for_stderr(test_path: &str) -> String {
 
 #[cfg(unix)]
 #[test]
-fn a_taken_back_level_leaves_its_empty_private_quarantine_standing_and_named() {
-    use std::os::unix::fs::PermissionsExt;
-    // Rollback never unlinks the quarantine by its name: it stays, empty and
-    // 0700, and the one warning names its exact path as safe to delete.
-    if !in_rollback_stderr_child() {
-        let stderr = rerun_alone_for_stderr(
-            "import_rom::created_dirs::tests::a_taken_back_level_leaves_its_empty_private_quarantine_standing_and_named",
-        );
-        let path = stderr
-            .lines()
-            .find_map(|line| line.strip_prefix("quarantine at: "))
-            .expect("the child names its quarantine");
-        let expected = format!(
-            "warning: cleanup directory {path} is left in place; it is empty and safe to delete"
-        );
-        let warnings: Vec<&str> = stderr
-            .lines()
-            .filter(|line| line.starts_with("warning:"))
-            .collect();
-        assert_eq!(warnings, [expected.as_str()], "stderr:\n{stderr}");
-        return;
-    }
-    let dir = TempDir::new("quarantine-left-standing");
-    let level = dir.join("new");
-    let name = dir.join(".undo-q");
-    let created = super::create_directories(&level).unwrap();
-    let parent = created[0].parent.as_deref().unwrap();
-    let proceeded =
-        super::take_back::take_back_level_via(parent, &created[0], ".undo-q", &mut || {});
-    assert!(proceeded, "the level is taken back");
-    assert!(!level.exists(), "the level is removed");
-    assert_eq!(entry_names(&dir.path), [".undo-q"]);
-    assert_eq!(
-        entry_names(&name),
-        Vec::<String>::new(),
-        "the quarantine is empty"
-    );
-    assert_eq!(
-        fs::metadata(&name).unwrap().permissions().mode() & 0o777,
-        0o700
-    );
-    eprintln!(
-        "quarantine at: {}",
-        fs::canonicalize(&name).unwrap().display()
-    );
-}
-
-#[cfg(unix)]
-#[test]
 fn a_quarantine_that_cannot_be_made_reports_the_level_left_standing() {
     // A file already sits at the quarantine name, so `mkdirat` fails with
     // EEXIST; the warning names the level rollback leaves and the cause.
@@ -1762,17 +1667,213 @@ fn a_quarantine_that_cannot_be_made_reports_the_level_left_standing() {
     assert_eq!(fs::read(dir.join(".undo-f")).unwrap(), b"theirs");
 }
 
+/// The path a `<lead><path><tail>` line in `stderr` names.
+#[cfg(unix)]
+fn warned_path<'a>(stderr: &'a str, lead: &str, tail: &str) -> &'a str {
+    stderr
+        .lines()
+        .find_map(|line| {
+            let rest = line.strip_prefix(lead)?;
+            rest.find(tail).map(|end| &rest[..end])
+        })
+        .unwrap_or_else(|| panic!("no {lead:?}...{tail:?} line; stderr:\n{stderr}"))
+}
+
+/// Asserts `warned` is the path the child printed on its `marker` line,
+/// as recorded or made canonical: Linux reports it through `/proc`, which
+/// resolves symlinks, elsewhere it is the recorded path, which may run
+/// through one (macOS's `/var`).
+#[cfg(unix)]
+fn assert_names_marked_path(stderr: &str, warned: &str, marker: &str) {
+    let line = stderr
+        .lines()
+        .find_map(|line| line.strip_prefix(marker))
+        .unwrap_or_else(|| panic!("no {marker:?} line; stderr:\n{stderr}"));
+    let (recorded, canonical) = line.split_once(" | ").expect("recorded | canonical");
+    assert!(
+        warned == recorded || warned == canonical,
+        "warned {warned:?}, expected {recorded:?} or {canonical:?}"
+    );
+}
+
+/// Prints `path` after `marker` as recorded and canonical, for
+/// [`assert_names_marked_path`] in the parent.
+#[cfg(unix)]
+fn mark_path(marker: &str, path: &std::path::Path) {
+    eprintln!(
+        "{marker}{} | {}",
+        path.display(),
+        fs::canonicalize(path).unwrap().display()
+    );
+}
+
 #[cfg(unix)]
 #[test]
-fn a_deep_rollback_takes_back_every_level_through_one_quarantine() {
+fn a_taken_back_level_removes_its_quarantine_without_a_warning() {
+    // The happy path leaves no trace: the level and its quarantine are both
+    // gone, and nothing is printed.
+    if !in_rollback_stderr_child() {
+        let stderr = rerun_alone_for_stderr(
+            "import_rom::created_dirs::tests::a_taken_back_level_removes_its_quarantine_without_a_warning",
+        );
+        assert!(!stderr.contains("warning:"), "stderr:\n{stderr}");
+        return;
+    }
+    let dir = TempDir::new("quarantine-removed");
+    let level = dir.join("new");
+    let created = super::create_directories(&level).unwrap();
+    let parent = created[0].parent.as_deref().unwrap();
+    assert!(super::take_back::take_back_level_via(
+        parent,
+        &created[0],
+        ".undo-q",
+        &mut || {}
+    ));
+    assert!(entry_names(&dir.path).is_empty(), "no trace is left");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_quarantine_whose_removal_fails_is_reported_at_its_path() {
+    // Something lands in the quarantine before its removal, so
+    // `unlinkat(REMOVEDIR)` refuses it; it stays, reported at its path.
+    if !in_rollback_stderr_child() {
+        let stderr = rerun_alone_for_stderr(
+            "import_rom::created_dirs::tests::a_quarantine_whose_removal_fails_is_reported_at_its_path",
+        );
+        let warned = warned_path(
+            &stderr,
+            "warning: could not remove cleanup directory ",
+            ": ",
+        );
+        assert_names_marked_path(&stderr, warned, "quarantine at: ");
+        assert!(
+            stderr.contains("; it is left in place"),
+            "stderr:\n{stderr}"
+        );
+        return;
+    }
+    let dir = TempDir::new("quarantine-unlink-fails");
+    let level = dir.join("new");
+    let name = dir.join(".undo-r");
+    let created = super::create_directories(&level).unwrap();
+    let parent = created[0].parent.as_deref().unwrap();
+    let proceeded = super::take_back::take_back_level_with_hooks(
+        parent,
+        &created[0],
+        ".undo-r",
+        &mut || {},
+        &mut || fs::write(name.join("held"), b"x").unwrap(),
+    );
+    assert!(proceeded, "the level itself was taken back");
+    assert!(
+        name.join("held").is_file(),
+        "the quarantine is left, with what it holds"
+    );
+    mark_path("quarantine at: ", &name);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_directory_swapped_in_at_the_quarantine_name_is_left_standing_and_reported() {
+    // Before the quarantine's re-check, it is moved away and a directory of
+    // someone else's, holding data, takes its name. The name no longer
+    // resolves to the held quarantine, so neither is removed, and the
+    // warning names the quarantine's path.
+    if !in_rollback_stderr_child() {
+        let stderr = rerun_alone_for_stderr(
+            "import_rom::created_dirs::tests::a_directory_swapped_in_at_the_quarantine_name_is_left_standing_and_reported",
+        );
+        let warned = warned_path(
+            &stderr,
+            "warning: cleanup directory ",
+            " no longer resolves to the one rollback made; it is left in place",
+        );
+        assert_names_marked_path(&stderr, warned, "name at: ");
+        return;
+    }
+    let dir = TempDir::new("swap-at-quarantine-name");
+    let level = dir.join("new");
+    let (name, away) = (dir.join(".undo-r"), dir.join("away"));
+    let created = super::create_directories(&level).unwrap();
+    let parent = created[0].parent.as_deref().unwrap();
+    let mut swapped = 0;
+    let proceeded = super::take_back::take_back_level_with_hooks(
+        parent,
+        &created[0],
+        ".undo-r",
+        &mut || {},
+        &mut || {
+            swapped += 1;
+            fs::rename(&name, &away).unwrap();
+            fs::create_dir(&name).unwrap();
+            fs::write(name.join("theirs"), b"x").unwrap();
+        },
+    );
+    assert_eq!(swapped, 1, "the hook ran once");
+    assert!(proceeded, "the level itself was taken back");
+    assert!(!level.exists(), "the level is removed");
+    assert!(
+        name.join("theirs").is_file(),
+        "the replacement or its data was removed"
+    );
+    assert!(
+        entry_names(&away).is_empty(),
+        "the moved quarantine stays, empty"
+    );
+    mark_path("name at: ", &name);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_deep_rollback_takes_back_every_level_and_its_quarantine() {
     // Three levels are taken back through one quarantine made beside the
-    // outermost, so no level is left holding a quarantine of its own.
+    // outermost, which is then removed: no trace is left.
     let dir = TempDir::new("deep-one-quarantine");
     let created = super::create_directories(&dir.join("a").join("b").join("c")).unwrap();
     assert_eq!(created.len(), 3);
     super::undo_created_directories(&created);
-    let names = entry_names(&dir.path);
-    assert_eq!(names.len(), 1, "{names:?}");
-    assert!(names[0].starts_with(".undo-"), "{names:?}");
-    assert_eq!(entry_names(&dir.path.join(&names[0])), Vec::<String>::new());
+    assert!(
+        entry_names(&dir.path).is_empty(),
+        "{:?}",
+        entry_names(&dir.path)
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_level_on_another_filesystem_is_taken_back_through_a_quarantine_beside_it() {
+    // `new/../m/more`: `new` is made in the base directory, then `m`, a
+    // symlink to a directory on /dev/shm, is descended through and `more`
+    // is made there. A rename of `more` into the quarantine beside `new`
+    // fails with EXDEV; `more` must be taken back through a quarantine on
+    // its own filesystem, and `new` still through the shared one.
+    use std::os::unix::fs::MetadataExt as _;
+    let shm = std::path::Path::new("/dev/shm");
+    let dir = TempDir::new("cross-device");
+    let Ok(shm_meta) = fs::metadata(shm) else {
+        panic!("this test needs /dev/shm");
+    };
+    assert_ne!(
+        shm_meta.dev(),
+        fs::metadata(&dir.path).unwrap().dev(),
+        "this test needs /dev/shm on another filesystem than the temp dir"
+    );
+    let other = shm.join(format!(
+        "pokeemerald-rs-cross-device-{}",
+        std::process::id()
+    ));
+    fs::create_dir(&other).unwrap();
+    std::os::unix::fs::symlink(&other, dir.join("m")).unwrap();
+    let target = dir.join("new").join("..").join("m").join("more");
+    let created = super::create_directories(&target).unwrap();
+    assert!(other.join("more").is_dir(), "more was made on /dev/shm");
+
+    super::undo_created_directories(&created);
+
+    let on_shm = entry_names(&other);
+    let in_base = entry_names(&dir.path);
+    fs::remove_dir_all(&other).unwrap();
+    assert!(on_shm.is_empty(), "left on /dev/shm: {on_shm:?}");
+    assert_eq!(in_base, ["m"], "left in the base: {in_base:?}");
 }

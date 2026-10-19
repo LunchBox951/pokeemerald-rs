@@ -57,35 +57,6 @@ pub(super) fn file_names(dir: &Path) -> Vec<String> {
     names
 }
 
-/// `dir`'s sorted entry names without the empty private `.undo-<hex>`
-/// quarantine a Unix rollback that took a level back leaves standing, since
-/// it never unlinks that by name. Fails if there is more than one, or one
-/// that is not an empty `0700` directory.
-pub(crate) fn names_besides_left_quarantine(dir: &Path) -> Vec<String> {
-    let (quarantines, others): (Vec<String>, Vec<String>) = file_names(dir)
-        .into_iter()
-        .partition(|name| name.starts_with(".undo-"));
-    assert!(
-        quarantines.len() <= 1,
-        "more than one quarantine: {quarantines:?}"
-    );
-    for name in &quarantines {
-        let path = dir.join(name);
-        assert!(path.is_dir(), "{name} is not a directory");
-        assert!(file_names(&path).is_empty(), "{name} is not empty");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            let mode = fs::metadata(&path)
-                .expect("the quarantine stats")
-                .permissions()
-                .mode();
-            assert_eq!(mode & 0o777, 0o700, "{name} is not private");
-        }
-    }
-    others
-}
-
 /// The path of the one entry inside `dir` that [`Dest::temp_name`]'s
 /// prefix names -- the temporary file the import is currently building,
 /// found by content rather than threaded through as a parameter, since the

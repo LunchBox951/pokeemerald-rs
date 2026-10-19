@@ -10,9 +10,7 @@ use rom_import::ImportError;
 #[cfg(unix)]
 use super::super::dest::Dest;
 use super::super::{import_to_with, ImportRomError};
-use super::support::{
-    file_names, find_temp_path, names_besides_left_quarantine, SourceRom, TempDir,
-};
+use super::support::{file_names, find_temp_path, SourceRom, TempDir};
 
 #[test]
 fn a_failed_import_leaves_neither_a_pack_nor_a_partial_file() {
@@ -99,7 +97,7 @@ fn a_failed_import_removes_the_directory_it_created() {
     // A failed import leaves no trace: not even an empty data directory
     // that would look like a half-installed game.
     assert!(!created.exists());
-    assert!(names_besides_left_quarantine(&dir.path).is_empty());
+    assert!(file_names(&dir.path).is_empty());
 }
 
 #[cfg(unix)]
@@ -157,7 +155,7 @@ fn a_failed_import_removes_every_level_it_created() {
         !outer.exists(),
         "every created level goes, not just the leaf"
     );
-    assert!(names_besides_left_quarantine(&dir.path).is_empty());
+    assert!(file_names(&dir.path).is_empty());
 }
 
 #[test]
@@ -200,7 +198,7 @@ fn a_failed_directory_creation_removes_the_levels_it_created() {
 
     assert!(matches!(err, ImportRomError::CreateDirFailed { .. }));
     assert!(!outer.exists(), "the level the failed creation made goes");
-    assert!(names_besides_left_quarantine(&dir.path).is_empty());
+    assert!(file_names(&dir.path).is_empty());
 }
 
 #[test]

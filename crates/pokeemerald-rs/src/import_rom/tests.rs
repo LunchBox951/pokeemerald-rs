@@ -18,8 +18,6 @@ use std::fs;
 #[cfg(unix)]
 use super::import_to_with;
 use super::TEMP_PREFIX;
-#[cfg(unix)]
-pub(super) use support::names_besides_left_quarantine;
 pub(super) use support::TempDir;
 #[cfg(unix)]
 use support::{fake_pack, SourceRom};
