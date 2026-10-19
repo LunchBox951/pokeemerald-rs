@@ -36,13 +36,20 @@ struct Fixture {
 }
 
 impl Fixture {
-    /// A one-commit reference repo and a fake `make` running `script`.
+    /// A one-commit reference repo whose `rom.sha1` names [`GOOD`]'s image,
+    /// and a fake `make` running `script`.
     fn new(name: &str, script: &str) -> Self {
+        Self::with_checksums(name, script, GOOD_SHA1)
+    }
+
+    /// As [`Fixture::new`], with `listing` as the reference's `rom.sha1`.
+    fn with_checksums(name: &str, script: &str, listing: &str) -> Self {
         let root = temp_dir(name);
         let reference = root.join("reference");
         fs::create_dir(&reference).unwrap();
         git(&reference, &["init", "-q"]);
         fs::write(reference.join("Makefile"), "all:\n").unwrap();
+        fs::write(reference.join(CHECKSUM_FILE), listing).unwrap();
         git(&reference, &["add", "."]);
         git(&reference, &["commit", "-q", "-m", "pin"]);
         let pin = git(&reference, &["rev-parse", "HEAD"]);
@@ -80,6 +87,8 @@ impl Drop for Fixture {
 
 const GOOD: &str =
     "printf 'ROMBYTES' > pokeemerald.gba\nprintf '  0x08000000  gStart\\n' > pokeemerald.map";
+/// `rom.sha1` for [`GOOD`]'s image, in `sha1sum` format.
+const GOOD_SHA1: &str = "0da67421f828e56a9e6e698f79acc5dad60ad3ee  pokeemerald.gba\n";
 
 #[test]
 #[cfg(unix)]
@@ -214,7 +223,7 @@ fn a_build_that_emits_nothing_is_a_missing_output() {
 #[test]
 #[cfg(unix)]
 fn a_build_without_a_map_is_a_missing_output() {
-    let fx = Fixture::new("nomap", "printf 'ROM' > pokeemerald.gba");
+    let fx = Fixture::new("nomap", "printf 'ROMBYTES' > pokeemerald.gba");
     assert!(matches!(
         build(&fx.config).unwrap_err(),
         RomBuildError::MissingOutput(f) if f == MAP_FILE
@@ -234,7 +243,7 @@ fn an_empty_image_or_symbolless_map_is_invalid() {
     ));
     let fx = Fixture::new(
         "nosyms",
-        "printf 'ROM' > pokeemerald.gba\nprintf 'nothing\\n' > pokeemerald.map",
+        "printf 'ROMBYTES' > pokeemerald.gba\nprintf 'nothing\\n' > pokeemerald.map",
     );
     assert!(matches!(
         build(&fx.config).unwrap_err(),
@@ -345,4 +354,66 @@ fn a_hidden_tracked_edit_in_the_reference_is_rejected() {
         );
         assert_eq!(fx.scratch_entries(), 0);
     }
+}
+
+#[test]
+#[cfg(unix)]
+fn an_image_that_differs_from_the_pinned_checksum_is_rejected() {
+    let fx = Fixture::new(
+        "checksum",
+        "printf 'OTHERROM' > pokeemerald.gba\nprintf '  0x08000000  gStart\\n' > pokeemerald.map",
+    );
+    let err = build(&fx.config).unwrap_err();
+    assert!(
+        matches!(&err, RomBuildError::ChecksumMismatch { expected, .. }
+            if expected == "0da67421f828e56a9e6e698f79acc5dad60ad3ee"),
+        "{err}"
+    );
+    assert_eq!(fx.scratch_entries(), 0);
+}
+
+#[test]
+#[cfg(unix)]
+fn a_checksum_listing_without_the_image_fails_closed() {
+    let fx = Fixture::with_checksums(
+        "checksum-unlisted",
+        GOOD,
+        "0da67421f828e56a9e6e698f79acc5dad60ad3ee  other.gba\n",
+    );
+    let err = build(&fx.config).unwrap_err();
+    assert!(matches!(err, RomBuildError::Materialize(_)), "{err}");
+}
+
+#[test]
+#[cfg(unix)]
+fn an_oversized_image_is_rejected_by_its_size() {
+    let fx = Fixture::new(
+        "oversized",
+        &format!(
+            "truncate -s {} pokeemerald.gba\nprintf '  0x08000000  gStart\\n' > pokeemerald.map",
+            MAX_ROM_BYTES + 1
+        ),
+    );
+    let err = build(&fx.config).unwrap_err();
+    assert!(
+        matches!(&err, RomBuildError::InvalidOutput { file, reason }
+            if *file == ROM_FILE && reason.starts_with(&format!("{} bytes", MAX_ROM_BYTES + 1))),
+        "{err}"
+    );
+}
+
+#[test]
+fn an_unbounded_image_stream_is_read_only_past_the_cartridge_size() {
+    let bytes = read_bounded(std::io::repeat(0xFF)).unwrap();
+    assert_eq!(bytes.len(), MAX_ROM_BYTES + 1);
+}
+
+#[test]
+fn the_build_inherits_the_windows_os_marker() {
+    let lookup = |name: &str| (name == "OS").then(|| OsString::from("Windows_NT"));
+    assert_eq!(
+        inherited_env(lookup),
+        [("OS", OsString::from("Windows_NT"))]
+    );
+    assert!(inherited_env(|name| (name == "SECRET").then(OsString::new)).is_empty());
 }

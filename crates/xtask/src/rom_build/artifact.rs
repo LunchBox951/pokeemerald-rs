@@ -48,8 +48,10 @@ impl CompiledArtifact {
     }
 
     /// The linker map's symbols, indexed by exact start address.
+    // Only tests read it so far, and only the Unix synthetic tests and the
+    // real-checkout test (behind `rom-build-real`) do.
     #[cfg_attr(
-        not(test),
+        not(all(test, any(unix, feature = "rom-build-real"))),
         expect(
             dead_code,
             reason = "read by the downstream extractor, not by the command"

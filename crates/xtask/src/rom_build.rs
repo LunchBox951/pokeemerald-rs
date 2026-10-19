@@ -4,8 +4,9 @@
 //! Developer-only. The upstream `Makefile` links the ELF with `-Map`, then its
 //! `rom` rule runs `objcopy -O binary` to emit the cartridge image. This module
 //! drives that build in a scratch clone so the reference tree is never written,
-//! and fails closed on an unverifiable pin, a missing tool, a failed build, or
-//! missing or empty outputs. The image is returned in memory as a
+//! and fails closed on an unverifiable pin, a missing tool, a failed build,
+//! missing or empty outputs, or an image other than the one the pinned
+//! `rom.sha1` names (the check upstream's `compare` goal runs). The image is returned in memory as a
 //! [`CompiledArtifact`]; it is never written into the repository.
 
 mod artifact;
@@ -15,7 +16,7 @@ mod tests;
 
 use std::ffi::OsString;
 use std::fmt;
-use std::io::ErrorKind;
+use std::io::{ErrorKind, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -27,6 +28,9 @@ use crate::gen_rom_profile::SymbolMap;
 const ROM_FILE: &str = "pokeemerald.gba";
 /// The linker map the upstream ELF rule writes at the tree root.
 const MAP_FILE: &str = "pokeemerald.map";
+/// The pinned tree's checksum of the original cartridge image, which the
+/// upstream `compare` goal checks the built image against (`Makefile:221-227`).
+const CHECKSUM_FILE: &str = "rom.sha1";
 /// A GBA cartridge address space is 32 MiB.
 const MAX_ROM_BYTES: usize = 32 * 1024 * 1024;
 /// Tools the upstream build resolves from `PATH`.
@@ -38,8 +42,10 @@ const REQUIRED_TOOLS: [&str; 6] = [
     "arm-none-eabi-ld",
     "arm-none-eabi-objcopy",
 ];
-/// Environment the build inherits; everything else is dropped.
-const INHERITED_ENV: [&str; 4] = ["PATH", "HOME", "DEVKITARM", "DEVKITPRO"];
+/// Environment the build inherits; everything else is dropped. `OS` is how
+/// the upstream `Makefile` and its tool makefiles detect Windows to append
+/// `.exe` to tool paths (`Makefile:48-51`).
+const INHERITED_ENV: [&str; 5] = ["PATH", "HOME", "DEVKITARM", "DEVKITPRO", "OS"];
 /// Names the directory holding an installed `agbcc`.
 const AGBCC_ENV: &str = "POKEEMERALD_AGBCC";
 /// Where the upstream `Makefile` looks for `agbcc`, relative to the tree.
@@ -126,6 +132,8 @@ pub enum RomBuildError {
     MissingOutput(String),
     /// An emitted output is unusable.
     InvalidOutput { file: &'static str, reason: String },
+    /// The built image is not the one the pinned tree's `rom.sha1` names.
+    ChecksumMismatch { expected: String, actual: String },
 }
 
 impl fmt::Display for RomBuildError {
@@ -186,6 +194,11 @@ impl fmt::Display for RomBuildError {
             Self::InvalidOutput { file, reason } => {
                 write!(f, "the build's `{file}` is unusable: {reason}")
             }
+            Self::ChecksumMismatch { expected, actual } => write!(
+                f,
+                "the built `{ROM_FILE}` has SHA-1 {actual}, but the pinned `{CHECKSUM_FILE}` \
+                 names {expected}; the toolchain does not reproduce the pinned image"
+            ),
         }
     }
 }
@@ -204,9 +217,9 @@ impl Scratch {
             "pokeemerald-rs-rom-build-{}-{nanos}",
             std::process::id()
         ));
-        let mut builder = std::fs::DirBuilder::new();
+        let builder = &mut std::fs::DirBuilder::new();
         #[cfg(unix)]
-        std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+        std::os::unix::fs::DirBuilderExt::mode(builder, 0o700);
         builder
             .create(&path)
             .map_err(|err| RomBuildError::Scratch(format!("{}: {err}", path.display())))?;
@@ -261,6 +274,7 @@ pub fn build(config: &BuildConfig) -> Result<CompiledArtifact, RomBuildError> {
         .map_err(|err| RomBuildError::Materialize(format!("cannot provision agbcc: {err}")))?;
     let build_command = run_make(config, &tree)?;
     let rom = read_rom(&tree)?;
+    verify_checksum(&tree, &rom)?;
     let map_path = tree.join(MAP_FILE);
     if !map_path.is_file() {
         return Err(RomBuildError::MissingOutput(MAP_FILE.to_owned()));
@@ -346,6 +360,14 @@ fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// The [`INHERITED_ENV`] variables `lookup` has a value for.
+fn inherited_env(lookup: impl Fn(&str) -> Option<OsString>) -> Vec<(&'static str, OsString)> {
+    INHERITED_ENV
+        .iter()
+        .filter_map(|&name| lookup(name).map(|value| (name, value)))
+        .collect()
+}
+
 /// Runs the upstream build in `tree` with a scrubbed environment and returns
 /// the command line it ran.
 fn run_make(config: &BuildConfig, tree: &Path) -> Result<String, RomBuildError> {
@@ -356,11 +378,7 @@ fn run_make(config: &BuildConfig, tree: &Path) -> Result<String, RomBuildError> 
         .current_dir(tree)
         .env_clear()
         .stdin(Stdio::null());
-    for name in INHERITED_ENV {
-        if let Some(value) = std::env::var_os(name) {
-            command.env(name, value);
-        }
-    }
+    command.envs(inherited_env(|name| std::env::var_os(name)));
     let rendered = format!("{} {jobs}", config.make.to_string_lossy());
     let output = command.output().map_err(|err| {
         if err.kind() == ErrorKind::NotFound {
@@ -389,24 +407,70 @@ fn run_make(config: &BuildConfig, tree: &Path) -> Result<String, RomBuildError> 
     })
 }
 
+/// Reads the built image, refusing one larger than a cartridge without
+/// reading past that bound.
 fn read_rom(tree: &Path) -> Result<Vec<u8>, RomBuildError> {
-    let rom = match std::fs::read(tree.join(ROM_FILE)) {
-        Ok(rom) => rom,
+    let invalid = |reason: String| RomBuildError::InvalidOutput {
+        file: ROM_FILE,
+        reason,
+    };
+    let file = match std::fs::File::open(tree.join(ROM_FILE)) {
+        Ok(file) => file,
         Err(err) if err.kind() == ErrorKind::NotFound => {
             return Err(RomBuildError::MissingOutput(ROM_FILE.to_owned()));
         }
-        Err(err) => {
-            return Err(RomBuildError::InvalidOutput {
-                file: ROM_FILE,
-                reason: err.to_string(),
-            });
-        }
+        Err(err) => return Err(invalid(err.to_string())),
     };
+    let len = file
+        .metadata()
+        .map_err(|err| invalid(err.to_string()))?
+        .len();
+    if len > MAX_ROM_BYTES as u64 {
+        return Err(invalid(implausible(len)));
+    }
+    let rom = read_bounded(file).map_err(|err| invalid(err.to_string()))?;
     if rom.is_empty() || rom.len() > MAX_ROM_BYTES {
-        return Err(RomBuildError::InvalidOutput {
-            file: ROM_FILE,
-            reason: format!("{} bytes is not a plausible cartridge image", rom.len()),
-        });
+        return Err(invalid(implausible(rom.len() as u64)));
     }
     Ok(rom)
+}
+
+/// At most one byte more than [`MAX_ROM_BYTES`] from `reader`, so an
+/// oversized or still-growing image is detected without being read whole.
+fn read_bounded(reader: impl Read) -> std::io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    reader
+        .take(MAX_ROM_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
+fn implausible(len: u64) -> String {
+    format!("{len} bytes is not a plausible cartridge image")
+}
+
+/// Checks `rom` against the pinned tree's `rom.sha1`, as the upstream
+/// `compare` goal does, so only the pinned image is reported.
+fn verify_checksum(tree: &Path, rom: &[u8]) -> Result<(), RomBuildError> {
+    let listing = std::fs::read_to_string(tree.join(CHECKSUM_FILE)).map_err(|err| {
+        RomBuildError::Materialize(format!("cannot read `{CHECKSUM_FILE}`: {err}"))
+    })?;
+    let expected = listing
+        .lines()
+        .find_map(|line| {
+            let (digest, name) = line.split_once(char::is_whitespace)?;
+            (name.trim_start().trim_start_matches('*') == ROM_FILE).then_some(digest)
+        })
+        .ok_or_else(|| {
+            RomBuildError::Materialize(format!("`{CHECKSUM_FILE}` names no `{ROM_FILE}`"))
+        })?;
+    let actual = rom_import::sha1(rom).to_string();
+    if actual.eq_ignore_ascii_case(expected) {
+        Ok(())
+    } else {
+        Err(RomBuildError::ChecksumMismatch {
+            expected: expected.to_ascii_lowercase(),
+            actual,
+        })
+    }
 }
