@@ -622,12 +622,8 @@ fn dispatch(cmd: &Command) -> Result<(), XtaskError> {
                 report.arbitrary_count(),
                 report.out_path.display()
             );
-            if report.map_used {
-                println!(
-                    "map cross-check: {} symbol name(s) matched, {} address(es) confirmed \
-                     unnamed, {} interior address(es) skipped",
-                    report.map_named, report.map_confirmed, report.map_skipped
-                );
+            if let Some(summary) = report.map_summary() {
+                println!("{summary}");
             }
             Ok(())
         }
