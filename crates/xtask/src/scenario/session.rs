@@ -74,7 +74,9 @@ impl PackSelection {
 /// adopts only an empty (Unix: mode 0700) directory under an unguessable name,
 /// so only an empty private replacement staged in that instant could be taken
 /// (the owner is not compared: that needs `geteuid`, which the approved
-/// `rustix` features do not include); and Unix removes the (emptied) root with a pathname `rmdir` after the check, so
+/// `rustix` features do not include), and under a umask that withholds owner
+/// bits the mode is restored by a pathname `chmod` in that same instant; and
+/// Unix removes the (emptied) root with a pathname `rmdir` after the check, so
 /// a replacement that wins that instant loses only if it is empty, never its
 /// contents.
 #[derive(Debug)]
@@ -202,7 +204,7 @@ impl Scratch {
 
     #[cfg(unix)]
     fn create_new(&self, name: &str) -> std::io::Result<std::fs::File> {
-        rustix::fs::openat(
+        let file = rustix::fs::openat(
             self.hold()?,
             name,
             rustix::fs::OFlags::WRONLY
@@ -210,9 +212,11 @@ impl Scratch {
                 | rustix::fs::OFlags::EXCL
                 | rustix::fs::OFlags::NOFOLLOW,
             rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
-        )
-        .map(std::fs::File::from)
-        .map_err(Into::into)
+        )?;
+        // The umask may have withheld owner read, which the engine needs to
+        // reopen the pack; set the mode through the new descriptor.
+        rustix::fs::fchmod(&file, rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR)?;
+        Ok(std::fs::File::from(file))
     }
 
     #[cfg(not(unix))]
@@ -294,8 +298,17 @@ fn not_the_held_directory(path: &Path) -> std::io::Error {
 fn create_private_dir(path: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
     {
-        use std::os::unix::fs::DirBuilderExt as _;
-        std::fs::DirBuilder::new().mode(0o700).create(path)
+        use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
+        std::fs::DirBuilder::new().mode(0o700).create(path)?;
+        // A umask that strips owner bits (0o444 leaves 0o300) would make the
+        // directory unopenable for the hold and fail the 0o700 claim, so set
+        // the mode the umask withheld. Only then, and only on a directory: the
+        // claim that follows still verifies the opened directory.
+        let found = std::fs::symlink_metadata(path)?;
+        if found.is_dir() && found.permissions().mode() & 0o777 != 0o700 {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
+        }
+        Ok(())
     }
     #[cfg(not(unix))]
     std::fs::create_dir(path)
@@ -545,6 +558,65 @@ mod tests {
         drop(claimed);
         let _ = std::fs::remove_dir_all(&base);
         result.unwrap();
+    }
+
+    /// Set in the child [`a_session_under_an_owner_stripping_umask_is_private_and_readable`]
+    /// re-runs itself as, so only that child changes its own umask.
+    #[cfg(unix)]
+    const UMASK_CHILD: &str = "POKEEMERALD_SCENARIO_UMASK_CHILD";
+
+    #[cfg(unix)]
+    #[test]
+    fn a_session_under_an_owner_stripping_umask_is_private_and_readable() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let name = "scenario::session::tests::\
+                    a_session_under_an_owner_stripping_umask_is_private_and_readable";
+        if std::env::var_os(UMASK_CHILD).is_none() {
+            // The umask is process-wide, so the 0o444 one is set only in a
+            // re-run of this test binary that runs this test alone.
+            let output = std::process::Command::new("/bin/sh")
+                .args(["-c", "umask 0444 && exec \"$0\" \"$@\""])
+                .arg(std::env::current_exe().unwrap())
+                .args(["--exact", name, "--test-threads=1"])
+                .env(UMASK_CHILD, "1")
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(
+                output.status.success() && stdout.contains("1 passed"),
+                "umask 0444 child failed:\n{stdout}\n{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        let base = private_base("umask");
+        let source = base.join("source.pack");
+        std::fs::write(&source, b"not a real pack").unwrap();
+        std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let session = Session::new_in(&PackSelection::Prepared(source), &base);
+        let observed = session
+            .as_ref()
+            .map_err(ToString::to_string)
+            .map(|session| {
+                let mode = |path: &Path| {
+                    std::fs::symlink_metadata(path)
+                        .unwrap()
+                        .permissions()
+                        .mode()
+                        & 0o7777
+                };
+                (
+                    mode(&session.scratch.path),
+                    mode(&session.pack),
+                    std::fs::read(&session.pack).unwrap(),
+                )
+            });
+        drop(session);
+        let _ = std::fs::remove_dir_all(&base);
+        assert_eq!(
+            observed.unwrap(),
+            (0o700, 0o600, b"not a real pack".to_vec())
+        );
     }
 
     #[cfg(unix)]
