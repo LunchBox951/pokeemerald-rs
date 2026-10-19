@@ -403,6 +403,24 @@ fn an_oversized_image_is_rejected_by_its_size() {
 }
 
 #[test]
+#[cfg(unix)]
+fn an_oversized_linker_map_is_rejected_before_it_is_read() {
+    let fx = Fixture::new(
+        "oversized-map",
+        &format!(
+            "printf 'ROMBYTES' > pokeemerald.gba\ntruncate -s {} pokeemerald.map",
+            MAX_MAP_BYTES + 1
+        ),
+    );
+    let err = build(&fx.config).unwrap_err();
+    assert!(
+        matches!(&err, RomBuildError::InvalidOutput { file, reason }
+            if *file == MAP_FILE && reason.starts_with(&format!("{} bytes", MAX_MAP_BYTES + 1))),
+        "{err}"
+    );
+}
+
+#[test]
 fn an_unbounded_image_stream_is_read_only_past_the_cartridge_size() {
     let bytes = read_bounded(std::io::repeat(0xFF)).unwrap();
     assert_eq!(bytes.len(), MAX_ROM_BYTES + 1);

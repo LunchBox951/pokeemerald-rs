@@ -34,6 +34,9 @@ const MAP_FILE: &str = "pokeemerald.map";
 const CHECKSUM_FILE: &str = "rom.sha1";
 /// A GBA cartridge address space is 32 MiB.
 const MAX_ROM_BYTES: usize = 32 * 1024 * 1024;
+/// A linker map for the full upstream build is a few megabytes; one past
+/// this bound is a runaway build, not a map worth parsing.
+const MAX_MAP_BYTES: u64 = 64 * 1024 * 1024;
 /// Tools the upstream build resolves from `PATH`.
 const REQUIRED_TOOLS: [&str; 6] = [
     "make",
@@ -288,6 +291,22 @@ pub fn build(config: &BuildConfig) -> Result<CompiledArtifact, RomBuildError> {
     let map_path = tree.join(MAP_FILE);
     if !map_path.is_file() {
         return Err(RomBuildError::MissingOutput(MAP_FILE.to_owned()));
+    }
+    // Bound the map before `SymbolMap::load` reads it whole, so a runaway
+    // build cannot exhaust memory through its map any more than its image.
+    let map_len = std::fs::metadata(&map_path)
+        .map_err(|err| RomBuildError::InvalidOutput {
+            file: MAP_FILE,
+            reason: err.to_string(),
+        })?
+        .len();
+    if map_len > MAX_MAP_BYTES {
+        return Err(RomBuildError::InvalidOutput {
+            file: MAP_FILE,
+            reason: format!(
+                "{map_len} bytes is past the {MAX_MAP_BYTES}-byte bound for a linker map"
+            ),
+        });
     }
     let symbols = SymbolMap::load(&map_path).map_err(|err| RomBuildError::InvalidOutput {
         file: MAP_FILE,
