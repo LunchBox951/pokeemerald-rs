@@ -1478,12 +1478,18 @@ fn a_quarantine_name_swapped_before_its_removal_is_left_standing() {
     let created = super::create_directories(&level).unwrap();
     let parent = created[0].parent.as_deref().unwrap();
     let mut swapped = 0;
-    let proceeded =
-        super::take_back_level_with_hooks(parent, &created[0], ".undo-r", &mut || {}, &mut || {
+    let proceeded = super::take_back_level_with_hooks(
+        parent,
+        &created[0],
+        ".undo-r",
+        &mut || {},
+        &mut || {
             swapped += 1;
             fs::rename(&name, &away).unwrap();
             fs::create_dir(&name).unwrap();
-        });
+        },
+        &mut || {},
+    );
     assert_eq!(swapped, 1, "the hook ran once");
     assert!(proceeded, "the level itself was taken back");
     assert!(!level.exists(), "the level is removed");
@@ -1609,4 +1615,143 @@ fn a_cleanup_warning_keeps_a_control_character_in_a_path_on_one_line() {
 
     assert!(!warning.contains('\n'), "{warning:?}");
     assert!(warning.contains("line\\nbreak"), "{warning:?}");
+}
+
+#[cfg(unix)]
+const ROLLBACK_STDERR_CHILD: &str = "POKEEMERALD_IMPORT_ROLLBACK_STDERR_CHILD";
+
+/// Whether this process is the child [`rerun_alone_for_stderr`] spawned.
+#[cfg(unix)]
+fn in_rollback_stderr_child() -> bool {
+    std::env::var_os(ROLLBACK_STDERR_CHILD).is_some()
+}
+
+/// Reruns the test at `test_path` alone in a child, fails unless it passes
+/// there, and returns the child's stderr, where rollback warns.
+#[cfg(unix)]
+fn rerun_alone_for_stderr(test_path: &str) -> String {
+    let exe = std::env::current_exe().unwrap();
+    let output = std::process::Command::new(exe)
+        .args([test_path, "--exact", "--nocapture"])
+        .env(ROLLBACK_STDERR_CHILD, "1")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert!(
+        stdout.contains("1 passed"),
+        "child failed\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    stderr
+}
+
+#[cfg(unix)]
+#[test]
+fn a_quarantine_whose_removal_fails_is_reported_at_its_path() {
+    if !in_rollback_stderr_child() {
+        let stderr = rerun_alone_for_stderr(
+            "import_rom::created_dirs::tests::a_quarantine_whose_removal_fails_is_reported_at_its_path",
+        );
+        assert!(
+            stderr.contains("warning: could not remove cleanup directory")
+                && stderr.contains(".undo-r"),
+            "residual quarantine not reported; stderr:\n{stderr}"
+        );
+        return;
+    }
+    let dir = TempDir::new("quarantine-unlink-fails");
+    let level = dir.join("new");
+    let name = dir.join(".undo-r");
+    let created = super::create_directories(&level).unwrap();
+    let parent = created[0].parent.as_deref().unwrap();
+    let proceeded = super::take_back_level_with_hooks(
+        parent,
+        &created[0],
+        ".undo-r",
+        &mut || {},
+        &mut || fs::write(name.join("held"), b"x").unwrap(),
+        &mut || {},
+    );
+    assert!(proceeded, "the level itself was taken back");
+    assert!(name.is_dir(), "the quarantine is left behind");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_non_empty_directory_swapped_in_after_the_recheck_survives_and_is_reported() {
+    // The quarantine's name has just passed its re-check; a writer moves the
+    // quarantine away and puts a directory holding data at the name before
+    // the unlink. `unlinkat(REMOVEDIR)` refuses it, and the refusal is
+    // reported.
+    if !in_rollback_stderr_child() {
+        let stderr = rerun_alone_for_stderr(
+            "import_rom::created_dirs::tests::a_non_empty_directory_swapped_in_after_the_recheck_survives_and_is_reported",
+        );
+        assert!(
+            stderr.contains("warning: could not remove cleanup directory")
+                && stderr.contains(".undo-n")
+                && stderr.contains(&std::io::Error::from(rustix::io::Errno::NOTEMPTY).to_string()),
+            "ENOTEMPTY not reported; stderr:\n{stderr}"
+        );
+        return;
+    }
+    let dir = TempDir::new("swap-after-recheck-non-empty");
+    let level = dir.join("new");
+    let (name, away) = (dir.join(".undo-n"), dir.join("away"));
+    let created = super::create_directories(&level).unwrap();
+    let parent = created[0].parent.as_deref().unwrap();
+    let mut swapped = 0;
+    let proceeded = super::take_back_level_with_hooks(
+        parent,
+        &created[0],
+        ".undo-n",
+        &mut || {},
+        &mut || {},
+        &mut || {
+            swapped += 1;
+            fs::rename(&name, &away).unwrap();
+            fs::create_dir(&name).unwrap();
+            fs::write(name.join("theirs"), b"x").unwrap();
+        },
+    );
+    assert_eq!(swapped, 1, "the hook ran once");
+    assert!(proceeded, "the level itself was taken back");
+    assert!(!level.exists(), "the level is removed");
+    assert!(
+        name.join("theirs").is_file(),
+        "the replacement's data survives"
+    );
+    assert!(away.is_dir(), "the moved quarantine is left standing");
+}
+
+#[cfg(unix)]
+#[test]
+fn an_empty_directory_swapped_in_after_the_recheck_is_the_only_loss() {
+    // The accepted residual, pinned: in the instant between the re-check and
+    // the unlink, an empty directory placed at the random name is removed.
+    // Nothing else is: the moved quarantine stays, and a swap before the
+    // re-check is refused (`a_quarantine_name_swapped_before_its_removal_is_left_standing`).
+    let dir = TempDir::new("swap-after-recheck-empty");
+    let level = dir.join("new");
+    let (name, away) = (dir.join(".undo-e"), dir.join("away"));
+    let created = super::create_directories(&level).unwrap();
+    let parent = created[0].parent.as_deref().unwrap();
+    let proceeded = super::take_back_level_with_hooks(
+        parent,
+        &created[0],
+        ".undo-e",
+        &mut || {},
+        &mut || {},
+        &mut || {
+            fs::rename(&name, &away).unwrap();
+            fs::create_dir(&name).unwrap();
+        },
+    );
+    assert!(proceeded, "the level itself was taken back");
+    assert!(
+        !name.exists(),
+        "the empty replacement is the residual's loss"
+    );
+    assert!(away.is_dir(), "the moved quarantine is left standing");
+    assert_eq!(entry_names(&dir.path), ["away"]);
 }

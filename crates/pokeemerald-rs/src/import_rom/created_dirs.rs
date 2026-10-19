@@ -32,11 +32,15 @@
 //!   by identity before it is removed or put back.
 //!
 //! The third is the quarantine's own removal. Its name is re-checked against
-//! the held quarantine immediately before `unlinkat(.., REMOVEDIR)`, and a
-//! mismatch leaves it standing with a warning, but in the instant between
-//! that check and the unlink any writer to the parent, not only this user,
-//! can move the quarantine away and put a directory of its own at the name.
-//! An empty one is removed; a non-empty one survives. A quarantine that
+//! the held quarantine by the `statat` that directly precedes
+//! `unlinkat(.., REMOVEDIR)`, and a mismatch leaves it standing with a
+//! warning. In the instant between those two calls any writer to the
+//! parent, not only this user, can move the quarantine away and put a
+//! directory of its own at its random sixteen-hex name. If that directory
+//! is empty it is removed: an empty directory placed at that name in that
+//! instant is the only thing this step can lose. A non-empty one makes the
+//! unlink fail (`ENOTEMPTY`) and survives with its contents, and any failed
+//! unlink is reported on stderr with the quarantine's path. A quarantine that
 //! cannot be opened after `mkdirat` is never unlinked, since nothing proves
 //! the name still denotes it: it is left standing, with a warning naming it.
 //!
@@ -1129,12 +1133,20 @@ fn take_back_level_via(
     quarantine_name: &str,
     after_mkdir: &mut dyn FnMut(),
 ) -> bool {
-    take_back_level_with_hooks(parent, dir, quarantine_name, after_mkdir, &mut || {})
+    take_back_level_with_hooks(
+        parent,
+        dir,
+        quarantine_name,
+        after_mkdir,
+        &mut || {},
+        &mut || {},
+    )
 }
 
 /// [`take_back_level_via`] with `before_removal` run just before the
-/// quarantine's name is re-checked for its own removal, where a test swaps
-/// that name.
+/// quarantine's name is re-checked for its own removal, and `after_recheck`
+/// run once that check has passed and before the unlink, where a test
+/// swaps that name.
 #[cfg(unix)]
 fn take_back_level_with_hooks(
     parent: &std::os::fd::OwnedFd,
@@ -1142,6 +1154,7 @@ fn take_back_level_with_hooks(
     quarantine_name: &str,
     after_mkdir: &mut dyn FnMut(),
     before_removal: &mut dyn FnMut(),
+    after_recheck: &mut dyn FnMut(),
 ) -> bool {
     use rustix::fs::{AtFlags, Mode, OFlags};
     let quarantine_path = located_beside(parent, dir, OsStr::new(quarantine_name));
@@ -1207,12 +1220,21 @@ fn take_back_level_with_hooks(
     // it is removed only while its name still resolves to the held one,
     // checked immediately before the unlink (see the module doc for the
     // instant that remains).
-    before_removal();
+    // `held` is read first so the name's `statat` directly precedes the
+    // unlink.
     let held = rustix::fs::fstat(quarantine);
+    before_removal();
     let by_name = rustix::fs::statat(parent, quarantine_name, AtFlags::SYMLINK_NOFOLLOW);
     if matches!((held, by_name), (Ok(held), Ok(by_name)) if same_directory_identity(&held, &by_name))
     {
-        let _ = rustix::fs::unlinkat(parent, quarantine_name, AtFlags::REMOVEDIR);
+        after_recheck();
+        if let Err(err) = rustix::fs::unlinkat(parent, quarantine_name, AtFlags::REMOVEDIR) {
+            eprintln!(
+                "warning: could not remove cleanup directory {}: {}; it is left in place",
+                rom_import::OneLinePath(&quarantine_path),
+                std::io::Error::from(err)
+            );
+        }
     } else {
         eprintln!(
             "warning: cleanup directory {} no longer resolves to the one rollback made; it is left in place",
