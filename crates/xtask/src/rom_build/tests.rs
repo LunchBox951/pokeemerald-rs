@@ -455,3 +455,39 @@ fn a_build_that_rewrites_rom_sha1_is_still_checked_against_the_pin() {
         "{err}"
     );
 }
+
+#[test]
+#[cfg(unix)]
+fn a_flooding_failed_build_reports_only_its_stderr_tail() {
+    let fx = Fixture::new(
+        "flood",
+        "i=0\n\
+         while [ $i -lt 20000 ]; do\n\
+           echo \"stdout-noise-$i\"\n\
+           echo \"stderr-line-$i\" >&2\n\
+           i=$((i + 1))\n\
+         done\n\
+         echo 'final: boom' >&2\n\
+         exit 4",
+    );
+    let err = build(&fx.config).unwrap_err();
+    let RomBuildError::BuildFailed { reason } = &err else {
+        panic!("{err}");
+    };
+    let (_, tail) = reason.split_once("exit status: 4: ").expect("exit status");
+    assert!(tail.ends_with("final: boom\n"), "{tail:?}");
+    assert!(tail.contains("stderr-line-19999"), "{tail:?}");
+    assert!(!tail.contains("stderr-line-0\n"), "{tail:?}");
+    assert!(!tail.contains("stdout-noise"), "{tail:?}");
+    assert_eq!(tail.chars().count(), STDERR_TAIL_BYTES + 1);
+    assert_eq!(fx.scratch_entries(), 0);
+}
+
+#[test]
+fn the_stderr_tail_is_bounded_and_keeps_the_last_bytes() {
+    let flood = std::io::repeat(b'x').take(10_000_000).chain(&b"END"[..]);
+    let tail = stderr_tail(flood).unwrap();
+    assert_eq!(tail.len(), 4 * (STDERR_TAIL_BYTES + 2));
+    assert!(tail.ends_with(b"xEND"));
+    assert_eq!(stderr_tail(&b"short"[..]).unwrap(), b"short");
+}

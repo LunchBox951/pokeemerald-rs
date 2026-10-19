@@ -14,6 +14,7 @@ mod checkout;
 #[cfg(test)]
 mod tests;
 
+use std::collections::VecDeque;
 use std::ffi::OsString;
 use std::fmt;
 use std::io::{ErrorKind, Read};
@@ -398,13 +399,15 @@ fn run_make(config: &BuildConfig, tree: &Path) -> Result<String, RomBuildError> 
         .arg(&jobs)
         .current_dir(tree)
         .env_clear()
-        .stdin(Stdio::null());
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
     command.envs(inherited_env(
         |name| std::env::var_os(name),
         std::env::vars_os(),
     ));
     let rendered = format!("{} {jobs}", config.make.to_string_lossy());
-    let output = command.output().map_err(|err| {
+    let mut child = command.spawn().map_err(|err| {
         if err.kind() == ErrorKind::NotFound {
             RomBuildError::MissingTool(config.make.to_string_lossy().into_owned())
         } else {
@@ -413,10 +416,20 @@ fn run_make(config: &BuildConfig, tree: &Path) -> Result<String, RomBuildError> 
             }
         }
     })?;
-    if output.status.success() {
+    let drained = child
+        .stderr
+        .take()
+        .map_or_else(|| Ok(Vec::new()), stderr_tail);
+    let status = child.wait().map_err(|err| RomBuildError::BuildFailed {
+        reason: format!("could not wait for `{rendered}`: {err}"),
+    })?;
+    let stderr_bytes = drained.map_err(|err| RomBuildError::BuildFailed {
+        reason: format!("could not read the stderr of `{rendered}`: {err}"),
+    })?;
+    if status.success() {
         return Ok(rendered);
     }
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stderr = String::from_utf8_lossy(&stderr_bytes);
     let tail_start = stderr
         .char_indices()
         .rev()
@@ -425,10 +438,32 @@ fn run_make(config: &BuildConfig, tree: &Path) -> Result<String, RomBuildError> 
     Err(RomBuildError::BuildFailed {
         reason: format!(
             "`{rendered}` exited with {}: {}",
-            output.status,
+            status,
             &stderr[tail_start..]
         ),
     })
+}
+
+/// Reads `stream` to its end, keeping only its last bytes: enough for the
+/// last [`STDERR_TAIL_BYTES`] + 1 characters even when every one is four
+/// UTF-8 bytes and the first kept one is cut, so a build that floods stderr
+/// cannot exhaust memory.
+fn stderr_tail(mut stream: impl Read) -> std::io::Result<Vec<u8>> {
+    let keep = 4 * (STDERR_TAIL_BYTES + 2);
+    let mut tail = VecDeque::with_capacity(keep);
+    let mut chunk = [0_u8; 8192];
+    loop {
+        let read = match stream.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(read) => read,
+            Err(err) if err.kind() == ErrorKind::Interrupted => continue,
+            Err(err) => return Err(err),
+        };
+        tail.extend(&chunk[..read]);
+        let excess = tail.len().saturating_sub(keep);
+        tail.drain(..excess);
+    }
+    Ok(tail.into())
 }
 
 /// Reads the built image, refusing one larger than a cartridge without
