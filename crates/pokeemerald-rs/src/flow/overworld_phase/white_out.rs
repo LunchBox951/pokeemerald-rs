@@ -557,7 +557,8 @@ mod tests {
     /// `pokeemerald/src/overworld.c:665-668`). `SetPlayerCoordsFromWarp`
     /// (`overworld.c:603-616`) then prefers the named warp event's position
     /// over the stored `(x, y)` whenever the id is valid for the destination
-    /// map; the stored pair is only the fallback for `WARP_ID_NONE`.
+    /// map. An id that names no warp event falls back to the stored pair when
+    /// both are non-negative, otherwise to the map's centre.
     #[test]
     #[ignore = "needs a local pack: run `cargo xtask extract` first"]
     fn real_pack_white_out_prefers_a_valid_saved_warp_id_over_its_own_stored_coordinates() {
