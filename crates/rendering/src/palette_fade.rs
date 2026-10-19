@@ -109,6 +109,7 @@ pub struct NormalPaletteFade {
     bg: PaletteFadeBlend,
     obj: PaletteFadeBlend,
     coefficient: u8,
+    target_coefficient: u8,
     next_half: Half,
     finishing: bool,
     finishing_counter: u8,
@@ -122,11 +123,28 @@ impl NormalPaletteFade {
     /// before returning (`:189`): BG is blended at coefficient 0 and OBJ is next.
     #[must_use]
     pub fn begin(target: PaletteFadeTarget) -> Self {
-        let blend = PaletteFadeBlend::new(target);
+        Self::begin_between(target, 0, TARGET_Y)
+    }
+
+    /// Begin a fade in from `target`, as
+    /// `BeginNormalPaletteFade(PALETTES_ALL, 0, 16, 0, blendColor)`
+    /// (`pokeemerald/src/palette.c:156-199`, used by
+    /// `pokeemerald/src/option_menu.c:250`): the coefficient starts at 16 and
+    /// `yDec` steps it down by 2 to 0 (`:454-475`). Like [`Self::begin`], it
+    /// updates once before returning.
+    #[must_use]
+    pub fn begin_in(target: PaletteFadeTarget) -> Self {
+        Self::begin_between(target, TARGET_Y, 0)
+    }
+
+    fn begin_between(target: PaletteFadeTarget, start: u8, end: u8) -> Self {
+        let mut blend = PaletteFadeBlend::new(target);
+        blend.coefficient = start;
         let mut fade = Self {
             bg: blend,
             obj: blend,
-            coefficient: 0,
+            coefficient: start,
+            target_coefficient: end,
             next_half: Half::Background,
             finishing: false,
             finishing_counter: 0,
@@ -191,14 +209,28 @@ impl NormalPaletteFade {
         self.next_half = match self.next_half {
             Half::Background => Half::Object,
             Half::Object => {
-                if self.coefficient == TARGET_Y {
-                    self.finishing = true;
-                } else {
-                    self.coefficient = self.coefficient.saturating_add(DELTA_Y).min(TARGET_Y);
-                }
+                self.step_coefficient();
                 Half::Background
             }
         };
+    }
+
+    fn step_coefficient(&mut self) {
+        match self.coefficient.cmp(&self.target_coefficient) {
+            std::cmp::Ordering::Equal => self.finishing = true,
+            std::cmp::Ordering::Less => {
+                self.coefficient = self
+                    .coefficient
+                    .saturating_add(DELTA_Y)
+                    .min(self.target_coefficient);
+            }
+            std::cmp::Ordering::Greater => {
+                self.coefficient = self
+                    .coefficient
+                    .saturating_sub(DELTA_Y)
+                    .max(self.target_coefficient);
+            }
+        }
     }
 
     fn poll_finishing(&mut self) -> PaletteFadeStatus {
@@ -624,5 +656,29 @@ mod tests {
             }
         );
         assert_ne!(cpu, hardware);
+    }
+
+    #[test]
+    fn begin_in_steps_the_coefficient_down_from_sixteen_to_zero() {
+        // `BeginNormalPaletteFade(..., 16, 0, ...)` sets `yDec`, so `y` falls by
+        // `deltaY` per pair until it equals `targetY`
+        // (`pokeemerald/src/palette.c:177-184,454-475`).
+        let mut fade = NormalPaletteFade::begin_in(PaletteFadeTarget::Black);
+        assert_eq!(bg_obj_coefficients(&fade), (16, 16));
+        let mut seen = vec![fade.coefficient];
+        while !fade.finishing {
+            fade.update();
+            if seen.last() != Some(&fade.coefficient) {
+                seen.push(fade.coefficient);
+            }
+        }
+        assert_eq!(seen, [16, 14, 12, 10, 8, 6, 4, 2, 0]);
+        assert_eq!(bg_obj_coefficients(&fade), (0, 0));
+        let mut polls = 0;
+        while !fade.is_done() {
+            fade.update();
+            polls += 1;
+        }
+        assert_eq!(polls, 5);
     }
 }

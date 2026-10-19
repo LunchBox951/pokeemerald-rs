@@ -96,6 +96,11 @@ pub enum AudioError {
         target: u32,
         event_count: u32,
     },
+    /// A cry table does not hold exactly [`super::cry::CRY_TABLE_LEN`] sample ids. The value is
+    /// the id count.
+    CryTableLength(usize),
+    /// A cry table position references an id outside the `DirectSound` sample family.
+    CrySampleNotDirectSound { position: usize },
     /// A decoded value did not consume the complete payload. The value is the number
     /// of trailing bytes.
     TrailingBytes(usize),
@@ -233,6 +238,16 @@ impl fmt::Display for AudioError {
                 "audio-pack song: track {track_index} event {event_index} has jump \
                  target {target}, which is not less than the track's event count \
                  {event_count}"
+            ),
+            Self::CryTableLength(len) => write!(
+                f,
+                "audio-pack cry table: {len} sample ids, expected exactly {}",
+                super::cry::CRY_TABLE_LEN
+            ),
+            Self::CrySampleNotDirectSound { position } => write!(
+                f,
+                "audio-pack cry table: position {position} does not reference a \
+                 DirectSound sample id"
             ),
             Self::TrailingBytes(count) => write!(
                 f,

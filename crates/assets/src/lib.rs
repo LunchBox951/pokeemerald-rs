@@ -69,10 +69,10 @@ pub use abilities::{Abilities, AbilityData, ABILITIES_COUNT};
 // three schema types they identify; `audio`'s own internal cross-references
 // between them stay reachable through the `audio` module path too.
 pub use audio::{
-    AudioError, DirectSoundMode, DirectSoundSample, DirectSoundVoice, Envelope, KeySplitVoice,
-    NoiseVoice, ProgrammableWave, ProgrammableWaveVoice, RhythmVoice, Sample, SampleId, Song,
-    SongEvent, Square1Voice, Square2Voice, VoiceEntry, VoiceGroup, VoiceGroupId, MAX_TRACKS,
-    VOICE_SLOT_COUNT,
+    cry_id, AudioError, CryId, CryMode, CrySettings, CryTable, DirectSoundMode, DirectSoundSample,
+    DirectSoundVoice, Envelope, KeySplitVoice, NoiseVoice, ProgrammableWave, ProgrammableWaveVoice,
+    RhythmVoice, Sample, SampleId, Song, SongEvent, Square1Voice, Square2Voice, VoiceEntry,
+    VoiceGroup, VoiceGroupId, MAX_TRACKS, VOICE_SLOT_COUNT,
 };
 pub use battle_moves::{
     MoveData, MoveEffect, MoveFlags, MoveId, MoveTable, MoveTarget, MoveType, MOVES_COUNT,
@@ -106,7 +106,7 @@ pub use metatile_attributes::{MetatileAttribute, MetatileAttributeTable, Metatil
 pub use new_game_flags::{
     FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_RIVAL_BEDROOM, RESET_MAP_FLAGS,
     TRUCK_INTRO_FLAGS_FEMALE, TRUCK_INTRO_FLAGS_MALE, TRUCK_INTRO_VARS_FEMALE,
-    TRUCK_INTRO_VARS_MALE,
+    TRUCK_INTRO_VARS_MALE, WALL_CLOCK_VIGOROTH_HIDE_FLAGS,
 };
 
 // `items::ItemId` is the full item-table identifier; it is intentionally *not*

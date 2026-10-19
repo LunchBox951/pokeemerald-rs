@@ -26,6 +26,8 @@ mod participant_admission;
 mod pipelines;
 #[path = "turn_engine/poison_player_reserve_admission.rs"]
 mod poison_player_reserve_admission;
+#[path = "turn_engine/poison_point_contact.rs"]
+mod poison_point_contact;
 #[path = "turn_engine/poison_residual_ordering.rs"]
 mod poison_residual_ordering;
 #[path = "turn_engine/poison_status_stats.rs"]
