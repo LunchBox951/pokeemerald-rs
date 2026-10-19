@@ -20,6 +20,7 @@ use std::fmt;
 use std::io::{ErrorKind, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{mpsc, Arc, Mutex};
 
 pub use artifact::{CompiledArtifact, Provenance};
 
@@ -288,30 +289,7 @@ pub fn build(config: &BuildConfig) -> Result<CompiledArtifact, RomBuildError> {
     let build_command = run_make(config, &tree)?;
     let rom = read_rom(&tree)?;
     verify_checksum(&expected, &rom)?;
-    let map_path = tree.join(MAP_FILE);
-    if !map_path.is_file() {
-        return Err(RomBuildError::MissingOutput(MAP_FILE.to_owned()));
-    }
-    // Bound the map before `SymbolMap::load` reads it whole, so a runaway
-    // build cannot exhaust memory through its map any more than its image.
-    let map_len = std::fs::metadata(&map_path)
-        .map_err(|err| RomBuildError::InvalidOutput {
-            file: MAP_FILE,
-            reason: err.to_string(),
-        })?
-        .len();
-    if map_len > MAX_MAP_BYTES {
-        return Err(RomBuildError::InvalidOutput {
-            file: MAP_FILE,
-            reason: format!(
-                "{map_len} bytes is past the {MAX_MAP_BYTES}-byte bound for a linker map"
-            ),
-        });
-    }
-    let symbols = SymbolMap::load(&map_path).map_err(|err| RomBuildError::InvalidOutput {
-        file: MAP_FILE,
-        reason: err.to_string(),
-    })?;
+    let symbols = read_map(&tree)?;
     Ok(CompiledArtifact::new(
         Provenance {
             pinned_revision: config.pinned_revision.clone(),
@@ -435,16 +413,28 @@ fn run_make(config: &BuildConfig, tree: &Path) -> Result<String, RomBuildError> 
             }
         }
     })?;
-    let drained = child
-        .stderr
-        .take()
-        .map_or_else(|| Ok(Vec::new()), stderr_tail);
+    let tail = Arc::new(Mutex::new(VecDeque::new()));
+    let (done_tx, done_rx) = mpsc::channel();
+    if let Some(stream) = child.stderr.take() {
+        let tail = Arc::clone(&tail);
+        std::thread::spawn(move || {
+            let _ = done_tx.send(drain_tail(stream, &tail));
+        });
+    } else {
+        drop(done_tx);
+    }
     let status = child.wait().map_err(|err| RomBuildError::BuildFailed {
         reason: format!("could not wait for `{rendered}`: {err}"),
     })?;
-    let stderr_bytes = drained.map_err(|err| RomBuildError::BuildFailed {
-        reason: format!("could not read the stderr of `{rendered}`: {err}"),
-    })?;
+    // A process make started can inherit stderr and hold the pipe open after
+    // make exits, so the drain is given STDERR_GRACE to reach end of stream
+    // and is then left behind with whatever tail it has read.
+    if let Ok(Err(err)) = done_rx.recv_timeout(STDERR_GRACE) {
+        return Err(RomBuildError::BuildFailed {
+            reason: format!("could not read the stderr of `{rendered}`: {err}"),
+        });
+    }
+    let stderr_bytes: Vec<u8> = lock_tail(&tail).iter().copied().collect();
     if status.success() {
         return Ok(rendered);
     }
@@ -463,26 +453,36 @@ fn run_make(config: &BuildConfig, tree: &Path) -> Result<String, RomBuildError> 
     })
 }
 
-/// Reads `stream` to its end, keeping only its last bytes: enough for the
-/// last [`STDERR_TAIL_BYTES`] + 1 characters even when every one is four
-/// UTF-8 bytes and the first kept one is cut, so a build that floods stderr
-/// cannot exhaust memory.
-fn stderr_tail(mut stream: impl Read) -> std::io::Result<Vec<u8>> {
-    let keep = 4 * (STDERR_TAIL_BYTES + 2);
-    let mut tail = VecDeque::with_capacity(keep);
+/// How many bytes of stderr are kept: enough for the last
+/// [`STDERR_TAIL_BYTES`] + 1 characters even when every one is four UTF-8
+/// bytes and the first kept one is cut, so a build that floods stderr cannot
+/// exhaust memory.
+const STDERR_KEEP_BYTES: usize = 4 * (STDERR_TAIL_BYTES + 2);
+/// How long a failed or finished build's stderr may stay open after make
+/// exits before the tail read so far is reported.
+const STDERR_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
+
+fn lock_tail(tail: &Mutex<VecDeque<u8>>) -> std::sync::MutexGuard<'_, VecDeque<u8>> {
+    tail.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Reads `stream` to its end into `tail`, keeping only its last
+/// [`STDERR_KEEP_BYTES`].
+fn drain_tail(mut stream: impl Read, tail: &Mutex<VecDeque<u8>>) -> std::io::Result<()> {
     let mut chunk = [0_u8; 8192];
     loop {
         let read = match stream.read(&mut chunk) {
-            Ok(0) => break,
+            Ok(0) => return Ok(()),
             Ok(read) => read,
             Err(err) if err.kind() == ErrorKind::Interrupted => continue,
             Err(err) => return Err(err),
         };
+        let mut tail = lock_tail(tail);
         tail.extend(&chunk[..read]);
-        let excess = tail.len().saturating_sub(keep);
+        let excess = tail.len().saturating_sub(STDERR_KEEP_BYTES);
         tail.drain(..excess);
     }
-    Ok(tail.into())
 }
 
 /// Reads the built image, refusing one larger than a cartridge without
@@ -506,21 +506,67 @@ fn read_rom(tree: &Path) -> Result<Vec<u8>, RomBuildError> {
     if len > MAX_ROM_BYTES as u64 {
         return Err(invalid(implausible(len)));
     }
-    let rom = read_bounded(file).map_err(|err| invalid(err.to_string()))?;
+    let rom = read_bounded(file, MAX_ROM_BYTES as u64).map_err(|err| invalid(err.to_string()))?;
     if rom.is_empty() || rom.len() > MAX_ROM_BYTES {
         return Err(invalid(implausible(rom.len() as u64)));
     }
     Ok(rom)
 }
 
-/// At most one byte more than [`MAX_ROM_BYTES`] from `reader`, so an
-/// oversized or still-growing image is detected without being read whole.
-fn read_bounded(reader: impl Read) -> std::io::Result<Vec<u8>> {
+/// At most one byte more than `limit` from `reader`, so an oversized or
+/// still-growing output is detected without being read whole.
+fn read_bounded(reader: impl Read, limit: u64) -> std::io::Result<Vec<u8>> {
     let mut bytes = Vec::new();
-    reader
-        .take(MAX_ROM_BYTES as u64 + 1)
-        .read_to_end(&mut bytes)?;
+    reader.take(limit + 1).read_to_end(&mut bytes)?;
     Ok(bytes)
+}
+
+/// Reads and parses the linker map through one handle, refusing one past
+/// [`MAX_MAP_BYTES`] by its size and by a read that stops one byte past the
+/// bound, so a process still writing the map cannot grow it past the check.
+fn read_map(tree: &Path) -> Result<SymbolMap, RomBuildError> {
+    let invalid = |reason: String| RomBuildError::InvalidOutput {
+        file: MAP_FILE,
+        reason,
+    };
+    let file = match std::fs::File::open(tree.join(MAP_FILE)) {
+        Ok(file) => file,
+        Err(err) if err.kind() == ErrorKind::NotFound => {
+            return Err(RomBuildError::MissingOutput(MAP_FILE.to_owned()));
+        }
+        Err(err) => return Err(invalid(err.to_string())),
+    };
+    let metadata = file.metadata().map_err(|err| invalid(err.to_string()))?;
+    if !metadata.is_file() {
+        return Err(RomBuildError::MissingOutput(MAP_FILE.to_owned()));
+    }
+    let past_bound = |len: u64| {
+        invalid(format!(
+            "{len} bytes is past the {MAX_MAP_BYTES}-byte bound for a linker map"
+        ))
+    };
+    if metadata.len() > MAX_MAP_BYTES {
+        return Err(past_bound(metadata.len()));
+    }
+    let bytes = read_bounded(file, MAX_MAP_BYTES).map_err(|err| invalid(err.to_string()))?;
+    if bytes.len() as u64 > MAX_MAP_BYTES {
+        return Err(past_bound(bytes.len() as u64));
+    }
+    parse_map(bytes)
+}
+
+/// Parses map text as [`SymbolMap::load`] does, requiring one symbol.
+fn parse_map(bytes: Vec<u8>) -> Result<SymbolMap, RomBuildError> {
+    let invalid = |reason: String| RomBuildError::InvalidOutput {
+        file: MAP_FILE,
+        reason,
+    };
+    let text = String::from_utf8(bytes).map_err(|err| invalid(err.to_string()))?;
+    let symbols = SymbolMap::parse(&text);
+    if symbols.is_empty() {
+        return Err(invalid("no `0x<address> <symbol>` lines found".to_owned()));
+    }
+    Ok(symbols)
 }
 
 fn implausible(len: u64) -> String {

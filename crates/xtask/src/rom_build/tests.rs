@@ -422,8 +422,26 @@ fn an_oversized_linker_map_is_rejected_before_it_is_read() {
 
 #[test]
 fn an_unbounded_image_stream_is_read_only_past_the_cartridge_size() {
-    let bytes = read_bounded(std::io::repeat(0xFF)).unwrap();
+    let bytes = read_bounded(std::io::repeat(0xFF), MAX_ROM_BYTES as u64).unwrap();
     assert_eq!(bytes.len(), MAX_ROM_BYTES + 1);
+}
+
+#[test]
+fn an_unbounded_map_stream_is_read_only_past_the_map_bound() {
+    let bytes = read_bounded(std::io::repeat(b'x'), MAX_MAP_BYTES).unwrap();
+    assert_eq!(bytes.len() as u64, MAX_MAP_BYTES + 1);
+}
+
+#[test]
+fn map_text_parses_through_the_symbol_map_and_needs_a_symbol() {
+    let symbols = parse_map(b"  0x08000000  gStart\n".to_vec()).unwrap();
+    assert_eq!(symbols.symbols_at(0x0800_0000), ["gStart"]);
+    for bad in [&b"nothing\n"[..], &[0xFF, 0xFE][..]] {
+        assert!(matches!(
+            parse_map(bad.to_vec()).unwrap_err(),
+            RomBuildError::InvalidOutput { file, .. } if file == MAP_FILE
+        ));
+    }
 }
 
 fn env_pairs(pairs: &[(&str, &str)]) -> Vec<(OsString, OsString)> {
@@ -504,8 +522,27 @@ fn a_flooding_failed_build_reports_only_its_stderr_tail() {
 #[test]
 fn the_stderr_tail_is_bounded_and_keeps_the_last_bytes() {
     let flood = std::io::repeat(b'x').take(10_000_000).chain(&b"END"[..]);
-    let tail = stderr_tail(flood).unwrap();
-    assert_eq!(tail.len(), 4 * (STDERR_TAIL_BYTES + 2));
+    let tail = Mutex::new(VecDeque::new());
+    drain_tail(flood, &tail).unwrap();
+    let tail: Vec<u8> = tail.into_inner().unwrap().into();
+    assert_eq!(tail.len(), STDERR_KEEP_BYTES);
+    assert_eq!(STDERR_KEEP_BYTES, 4 * (STDERR_TAIL_BYTES + 2));
     assert!(tail.ends_with(b"xEND"));
-    assert_eq!(stderr_tail(&b"short"[..]).unwrap(), b"short");
+    let short = Mutex::new(VecDeque::new());
+    drain_tail(&b"short"[..], &short).unwrap();
+    assert_eq!(Vec::from(short.into_inner().unwrap()), b"short");
+}
+
+#[test]
+#[cfg(unix)]
+fn a_descendant_holding_stderr_open_does_not_stall_the_failed_build() {
+    let fx = Fixture::new("held-stderr", "sleep 30 >&2 &\necho boom >&2\nexit 1");
+    let started = std::time::Instant::now();
+    let err = build(&fx.config).unwrap_err();
+    let elapsed = started.elapsed();
+    assert!(
+        matches!(&err, RomBuildError::BuildFailed { reason } if reason.contains("boom")),
+        "{err}"
+    );
+    assert!(elapsed < std::time::Duration::from_secs(10), "{elapsed:?}");
 }
