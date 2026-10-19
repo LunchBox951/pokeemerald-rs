@@ -11,8 +11,8 @@
 //! # Accepted residuals (rollback on Unix)
 //!
 //! The approved `rustix` fs scope has no call that unlinks a directory by
-//! descriptor, so two steps of rollback rest on a name. Both are bounded by
-//! the same argument: the quarantine is a directory this rollback just made
+//! descriptor, so three steps of rollback rest on a name. The first two are
+//! bounded by the same argument: the quarantine is a directory this rollback just made
 //! with mode `0700`, owned by the current user, under a random 64-bit name
 //! from `/dev/urandom`. Only a writer running as that user, who has learned
 //! the random name, can act inside it, and such a writer can already delete
@@ -30,6 +30,15 @@
 //!   random name between `mkdirat` and `openat`. Rollback would then use
 //!   that directory as its quarantine, and a level it holds is still checked
 //!   by identity before it is removed or put back.
+//!
+//! The third is the quarantine's own removal. Its name is re-checked against
+//! the held quarantine immediately before `unlinkat(.., REMOVEDIR)`, and a
+//! mismatch leaves it standing with a warning, but in the instant between
+//! that check and the unlink any writer to the parent, not only this user,
+//! can move the quarantine away and put a directory of its own at the name.
+//! An empty one is removed; a non-empty one survives. A quarantine that
+//! cannot be opened after `mkdirat` is never unlinked, since nothing proves
+//! the name still denotes it: it is left standing, with a warning naming it.
 //!
 //! Rollback is also not crash-safe: a process killed after a level was
 //! renamed into its quarantine and before it was removed or put back leaves
@@ -1090,7 +1099,22 @@ fn take_back_level_via(
     quarantine_name: &str,
     after_mkdir: &mut dyn FnMut(),
 ) -> bool {
+    take_back_level_with_hooks(parent, dir, quarantine_name, after_mkdir, &mut || {})
+}
+
+/// [`take_back_level_via`] with `before_removal` run just before the
+/// quarantine's name is re-checked for its own removal, where a test swaps
+/// that name.
+#[cfg(unix)]
+fn take_back_level_with_hooks(
+    parent: &std::os::fd::OwnedFd,
+    dir: &CreatedDirectory,
+    quarantine_name: &str,
+    after_mkdir: &mut dyn FnMut(),
+    before_removal: &mut dyn FnMut(),
+) -> bool {
     use rustix::fs::{AtFlags, Mode, OFlags};
+    let quarantine_path = dir.path.with_file_name(quarantine_name);
     if rustix::fs::mkdirat(parent, quarantine_name, Mode::RWXU).is_err() {
         return false;
     }
@@ -1104,9 +1128,14 @@ fn take_back_level_via(
     // `Dir::new` lists through this same descriptor, so checking the
     // quarantine costs no second one.
     let Ok(mut quarantine) = quarantine.and_then(rustix::fs::Dir::new) else {
-        // Could not be held (descriptor pressure): drop the empty directory
-        // just made rather than leave it as litter, and leave the level.
-        let _ = rustix::fs::unlinkat(parent, quarantine_name, AtFlags::REMOVEDIR);
+        // Could not be held (descriptor pressure): without a descriptor
+        // nothing proves the name still denotes the directory just made, so
+        // it is left standing rather than unlinked by name, and so is the
+        // level.
+        eprintln!(
+            "warning: could not open cleanup directory {}; it is left in place",
+            quarantine_path.display()
+        );
         return false;
     };
     // The name was swapped for someone else's directory before the open:
@@ -1145,12 +1174,20 @@ fn take_back_level_via(
     }
 
     // The quarantine is ours and empty unless a capture is stranded in it;
-    // it is removed only while its name still resolves to the held one.
+    // it is removed only while its name still resolves to the held one,
+    // checked immediately before the unlink (see the module doc for the
+    // instant that remains).
+    before_removal();
     let held = rustix::fs::fstat(quarantine);
     let by_name = rustix::fs::statat(parent, quarantine_name, AtFlags::SYMLINK_NOFOLLOW);
     if matches!((held, by_name), (Ok(held), Ok(by_name)) if same_directory_identity(&held, &by_name))
     {
         let _ = rustix::fs::unlinkat(parent, quarantine_name, AtFlags::REMOVEDIR);
+    } else {
+        eprintln!(
+            "warning: cleanup directory {} no longer resolves to the one rollback made; it is left in place",
+            quarantine_path.display()
+        );
     }
     goes_on
 }

@@ -1431,3 +1431,62 @@ fn a_capture_no_name_takes_back_is_reported_at_its_exact_quarantine_path() {
         )
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn a_swapped_quarantine_is_not_removed_when_its_open_fails() {
+    // Between `mkdirat` and `openat` the quarantine name is swapped for
+    // someone else's empty directory, and the descriptor table is full, so
+    // the open fails. Nothing then proves what the name denotes: it must not
+    // be unlinked by name.
+    if !in_descriptor_pressure_child() {
+        run_under_descriptor_pressure(
+            "import_rom::created_dirs::tests::a_swapped_quarantine_is_not_removed_when_its_open_fails",
+        );
+        return;
+    }
+    let dir = TempDir::new("swap-open-fails");
+    let level = dir.join("new");
+    let (name, away) = (dir.join(".undo-v"), dir.join("away"));
+    let created = super::create_directories(&level).unwrap();
+    let parent = created[0].parent.as_deref().unwrap();
+    let mut fillers = None;
+    let proceeded = super::take_back_level_via(parent, &created[0], ".undo-v", &mut || {
+        fs::rename(&name, &away).unwrap();
+        fs::create_dir(&name).unwrap(); // someone else's empty directory
+        fillers = Some(fill_descriptor_table_leaving(0));
+    });
+    drop(fillers);
+    assert!(!proceeded);
+    assert!(level.is_dir());
+    assert!(
+        name.is_dir(),
+        "the replacement directory was unlinked by its mutable name"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_quarantine_name_swapped_before_its_removal_is_left_standing() {
+    // After the level is taken back, the quarantine is moved away and an
+    // empty directory of someone else's takes its name just before the
+    // final removal. The name no longer resolves to the held quarantine, so
+    // neither directory is removed.
+    let dir = TempDir::new("swap-before-quarantine-removal");
+    let level = dir.join("new");
+    let (name, away) = (dir.join(".undo-r"), dir.join("away"));
+    let created = super::create_directories(&level).unwrap();
+    let parent = created[0].parent.as_deref().unwrap();
+    let mut swapped = 0;
+    let proceeded =
+        super::take_back_level_with_hooks(parent, &created[0], ".undo-r", &mut || {}, &mut || {
+            swapped += 1;
+            fs::rename(&name, &away).unwrap();
+            fs::create_dir(&name).unwrap();
+        });
+    assert_eq!(swapped, 1, "the hook ran once");
+    assert!(proceeded, "the level itself was taken back");
+    assert!(!level.exists(), "the level is removed");
+    assert!(name.is_dir(), "the replacement was unlinked by name");
+    assert!(away.is_dir(), "the moved quarantine is left standing");
+}
