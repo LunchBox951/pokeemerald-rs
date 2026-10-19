@@ -110,10 +110,12 @@ fn a_scratch_directory_under_a_setgid_base_is_claimed() {
 
 /// Set in the child [`a_session_under_an_owner_stripping_umask_is_private_and_readable`]
 /// re-runs itself as, so only that child changes its own umask.
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 const UMASK_CHILD: &str = "POKEEMERALD_SCENARIO_UMASK_CHILD";
 
-#[cfg(unix)]
+/// Linux only: other Unixes refuse, rather than restore, a scratch directory
+/// the umask left without owner read (see `restore_private_mode`).
+#[cfg(any(target_os = "linux", target_os = "android"))]
 #[test]
 fn a_session_under_an_owner_stripping_umask_is_private_and_readable() {
     use std::os::unix::fs::PermissionsExt as _;
@@ -193,7 +195,7 @@ fn restoring_the_private_mode_never_follows_a_swapped_in_symlink() {
 
 #[cfg(unix)]
 #[test]
-fn restoring_the_private_mode_fixes_a_search_only_directory() {
+fn restoring_the_private_mode_fixes_or_refuses_a_search_only_directory() {
     use std::os::unix::fs::PermissionsExt as _;
     let base = private_base("chmod-dir");
     let entry = base.join("entry");
@@ -206,8 +208,14 @@ fn restoring_the_private_mode_fixes_a_search_only_directory() {
         .mode()
         & 0o7777;
     let _ = std::fs::remove_dir_all(&base);
-    result.unwrap();
-    assert_eq!(mode, 0o700);
+    if cfg!(any(target_os = "linux", target_os = "android")) {
+        result.unwrap();
+        assert_eq!(mode, 0o700);
+    } else {
+        // No safe restore beyond Linux: refused, and the mode is unchanged.
+        assert!(result.unwrap_err().contains("#2475"));
+        assert_eq!(mode, 0o300);
+    }
 }
 
 #[cfg(unix)]

@@ -81,8 +81,8 @@ impl PackSelection {
 /// so only an empty private replacement staged in that instant could be taken
 /// (the owner is not compared: that needs `geteuid`, which the approved
 /// `rustix` features do not include), and under a umask that withholds owner
-/// bits the mode is restored in that same instant without following a link
-/// (Linux: through an `O_PATH` pin; other Unixes: `AT_SYMLINK_NOFOLLOW`); and
+/// bits Linux restores the mode in that same instant through an `O_PATH` pin,
+/// while other Unixes refuse the directory (#2475); and
 /// Unix removes the (emptied) root with a pathname `rmdir` after the check, so
 /// a replacement that wins that instant loses only if it is empty, never its
 /// contents.
@@ -268,29 +268,11 @@ fn not_fresh(path: &Path) -> std::io::Error {
     ))
 }
 
-/// Eight bytes the sandbox of a swapper cannot predict: `/dev/urandom` on
-/// Unix, else (and if it cannot be read) the clock and a process-wide counter.
+/// Eight bytes a swapper cannot predict: a `SipHash` with keys std seeds from
+/// the operating system's random source, on every platform.
 fn unpredictable() -> u64 {
-    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    #[cfg(unix)]
-    {
-        use std::io::Read as _;
-        let mut bytes = [0u8; 8];
-        if std::fs::File::open("/dev/urandom")
-            .and_then(|mut file| file.read_exact(&mut bytes))
-            .is_ok()
-        {
-            return u64::from_le_bytes(bytes);
-        }
-    }
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |elapsed| elapsed.as_nanos());
-    #[expect(clippy::cast_possible_truncation, reason = "a hash input, not a count")]
-    let low = nanos as u64;
-    low ^ COUNTER
-        .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-        .rotate_left(48)
+    use std::hash::{BuildHasher as _, Hasher as _};
+    std::hash::RandomState::new().build_hasher().finish()
 }
 
 fn not_the_held_directory(path: &Path) -> std::io::Error {

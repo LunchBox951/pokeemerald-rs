@@ -8,7 +8,7 @@ use std::path::Path;
 /// following a symlink, and only on a directory this session could have
 /// created: Linux pins the entry with `O_PATH | O_NOFOLLOW | O_DIRECTORY`
 /// (which needs no permission bits) and changes the mode of that pinned
-/// inode; other Unixes use `fchmodat(AT_SYMLINK_NOFOLLOW)`.
+/// inode. Other Unixes never change the mode (see their variant below).
 ///
 /// `mkdir(0o700)` can only yield a subset of 0o700 (plus an inherited
 /// setgid bit), so an entry with any other bit is left untouched and refused.
@@ -61,39 +61,24 @@ pub(super) fn restore_private_mode(path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Residual beyond Linux: the check and the no-follow `chmod` resolve the
-/// pathname separately, so a directory swapped in between them can have its
-/// mode set before the identity check below refuses it.
+/// Beyond Linux there is no permission-free directory pin through the
+/// approved `rustix` surface, so nothing here changes a mode: a directory that
+/// already has owner rwx (and no bits beyond 0o700 and setgid) proceeds to the
+/// claim, and one the umask left without owner read or search is refused
+/// rather than restored by pathname (#2475).
 #[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
 pub(super) fn restore_private_mode(path: &Path) -> std::io::Result<()> {
-    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+    use std::os::unix::fs::PermissionsExt as _;
     let found = std::fs::symlink_metadata(path)?;
     let mode = found.permissions().mode() & 0o7777;
-    if !found.is_dir() {
+    if !found.is_dir() || mode & 0o5077 != 0 {
         return Err(not_created_here());
     }
-    if mode & 0o777 == 0o700 {
-        return Ok(());
-    }
-    if mode & 0o5077 != 0 {
-        return Err(not_created_here());
-    }
-    // Never follows a link: a symlink swapped in after the check has its own
-    // mode changed, and the `NOFOLLOW` open below refuses it.
-    rustix::fs::chmodat(
-        rustix::fs::CWD,
-        path,
-        rustix::fs::Mode::RWXU,
-        rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
-    )?;
-    let opened = open_hold(path)?;
-    let pinned = opened.metadata()?;
-    if (pinned.dev(), pinned.ino()) != (found.dev(), found.ino()) {
-        return Err(not_created_here());
-    }
-    if !is_empty(&opened)? {
-        rustix::fs::fchmod(&opened, rustix::fs::Mode::from_raw_mode(mode))?;
-        return Err(not_created_here());
+    if mode & 0o777 != 0o700 {
+        return Err(std::io::Error::other(format!(
+            "the scratch directory was created mode {mode:o}: the process umask withheld owner \
+             read or search, and this platform cannot restore the mode safely (#2475)"
+        )));
     }
     Ok(())
 }
