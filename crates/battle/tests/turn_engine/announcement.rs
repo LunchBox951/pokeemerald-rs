@@ -3,7 +3,7 @@
 //! (`attackstring`, `data/battle_scripts_1.s:3556`-`:3559`, `:4158`-`:4163`).
 
 use crate::common::{max_iv_mon, slow_runner_rattata, SequenceRng};
-use assets::MoveId;
+use assets::{Effectiveness, MoveId};
 use battle::{Battle, BattleEvent, Dex, PlayerAction, Status1};
 
 const TACKLE: MoveId = MoveId::TACKLE;
@@ -152,4 +152,54 @@ fn a_soundproof_block_is_announced_before_the_block() {
         ],
         "{events:?}"
     );
+}
+
+#[test]
+fn a_not_very_effective_hit_is_followed_by_its_effectiveness_event() {
+    const MUDKIP: u16 = 283;
+    const SQUIRTLE: u16 = 7;
+
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, MUDKIP, 5, vec![MoveId::WATER_GUN]);
+    let enemy = max_iv_mon(&dex, SQUIRTLE, 5, vec![TACKLE]);
+
+    let mut rng = SequenceRng::new([0; 16]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    let hit = events
+        .iter()
+        .position(|e| {
+            matches!(
+                e,
+                BattleEvent::Hit {
+                    by_player: true,
+                    ..
+                }
+            )
+        })
+        .expect("the player's Water Gun hit");
+    assert_eq!(
+        events[hit + 1],
+        BattleEvent::TypeEffectiveness {
+            by_player: true,
+            effectiveness: Effectiveness::NotVeryEffective,
+        },
+        "{events:?}"
+    );
+    let neutral_tackles = events
+        .iter()
+        .filter(|e| {
+            matches!(
+                e,
+                BattleEvent::TypeEffectiveness {
+                    by_player: false,
+                    ..
+                }
+            )
+        })
+        .count();
+    assert_eq!(neutral_tackles, 0, "{events:?}");
 }

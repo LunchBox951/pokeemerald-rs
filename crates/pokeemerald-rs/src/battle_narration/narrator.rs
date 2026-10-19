@@ -33,6 +33,21 @@ pub struct Narrator {
     pub(super) staged: [Option<Battler>; 2],
 }
 
+/// `gBattleStruct->hpScale` for an opponent at `current_hp` of `max_hp`.
+fn hp_scale(current_hp: u32, max_hp: u32) -> u8 {
+    if max_hp == 0 || current_hp == 0 {
+        return 0;
+    }
+    // Widen so the percentage cannot overflow; a nonzero HP reads as 1%.
+    let percent = (u64::from(current_hp) * 100 / u64::from(max_hp)).max(1);
+    match percent {
+        70.. => 0,
+        40..=69 => 1,
+        10..=39 => 2,
+        _ => 3,
+    }
+}
+
 pub(super) const fn side_index(side: Side) -> usize {
     match side {
         Side::Player => 0,
@@ -57,6 +72,19 @@ impl Narrator {
     /// The staged battler is used by the next send-out event for `side`.
     pub fn stage_replacement(&mut self, side: Side, battler: Battler) {
         self.staged[side_index(side)] = Some(battler);
+    }
+
+    /// Records the opponent's health for the player's next send-out wording.
+    ///
+    /// Upstream runs `hpthresholds BS_FAINTED` right before
+    /// `STRINGID_SWITCHINMON` (`data/battle_scripts_1.s:2887`-`:2888`), so the
+    /// wording follows the opponent's health when the replacement is sent out,
+    /// not when the narrator was built. Call this before narrating the
+    /// [`BattleEvent::PlayerSentOut`] event. `Cmd_hpthresholds`
+    /// (`src/battle_script_commands.c:6258`-`:6285`) reads the percentage
+    /// from the live HP; a fainted opponent keeps scale 0.
+    pub fn observe_opponent_health(&mut self, current_hp: u32, max_hp: u32) {
+        self.scene.hp_scale = hp_scale(current_hp, max_hp);
     }
 
     /// The current scene.

@@ -8,7 +8,7 @@
 //! (`SetMoveEffect`'s synchronize and contact cases) names its holder as the
 //! scripting battler and the afflicted battler as the effect battler.
 
-use assets::AbilityId;
+use assets::{AbilityId, Effectiveness};
 use battle::{BattleEvent, ChangedStat, Status1};
 
 use super::context::{BattleBuffer, BufferOp, NarrationContext, Side, StatusName};
@@ -161,6 +161,16 @@ fn announcements(narrator: &Narrator, event: &BattleEvent) -> Option<Vec<Narrati
             is_critical: true, ..
         } => table(id::CRITICALHIT, base),
         BattleEvent::Hit { .. } => return Some(Vec::new()),
+        BattleEvent::TypeEffectiveness { effectiveness, .. } => match effectiveness {
+            Effectiveness::SuperEffective => table(id::SUPEREFFECTIVE, base),
+            Effectiveness::NotVeryEffective => table(id::NOTVERYEFFECTIVE, base),
+            Effectiveness::NoEffect | Effectiveness::Normal => return Some(Vec::new()),
+        },
+        BattleEvent::AbsorbMadeMoveUseless { by_player, move_id } => table(
+            id::PKMNSXMADEYUSELESS,
+            base.user_vs_target(Side::user(by_player))
+                .with_move(move_id),
+        ),
         BattleEvent::MultiHit { hits, .. } => table(
             id::HITXTIMES,
             base.with_buffer(

@@ -1,6 +1,6 @@
 //! Every battle event the turn engine can report has a narration mapping.
 
-use assets::{AbilityId, MoveId};
+use assets::{AbilityId, Effectiveness, MoveId};
 use battle::{BattleEvent, BattleOutcome, ChangedStat, StatStage, Status1};
 
 use super::fixtures::{narrator, RATTATA};
@@ -171,6 +171,11 @@ fn party_events() -> Vec<BattleEvent> {
         BattleEvent::MoneyGained(10),
         BattleEvent::Ended(BattleOutcome::PlayerLost),
         BattleEvent::UsedMove { by_player, move_id },
+        BattleEvent::TypeEffectiveness {
+            by_player,
+            effectiveness: Effectiveness::SuperEffective,
+        },
+        BattleEvent::AbsorbMadeMoveUseless { by_player, move_id },
     ]
 }
 

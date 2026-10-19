@@ -1,6 +1,7 @@
 //! Messages for a battle's run attempts, send-outs, experience, move
 //! learning, and outcome.
 
+use assets::AbilityId;
 use battle::{BattleEvent, BattleOutcome};
 
 use super::context::{BattleBuffer, Battler, BufferOp, Side};
@@ -71,13 +72,25 @@ pub(super) fn requests(
 /// Run attempts, a fleeing wild Pokémon, and how the battle ends.
 fn battle_flow(narrator: &Narrator, event: &BattleEvent) -> Option<Vec<NarrationRequest>> {
     let requests = match *event {
-        BattleEvent::RunAttempt { success, .. } => {
-            let template = if success {
-                id::GOTAWAYSAFELY
+        BattleEvent::RunAttempt {
+            by_player, success, ..
+        } => {
+            let runner = Side::user(by_player);
+            let runs_away = narrator
+                .context()
+                .battler(runner)
+                .is_some_and(|battler| battler.ability == Some(AbilityId::RUN_AWAY));
+            let (template, context) = if success && runs_away {
+                // `BattleScript_RanAwayUsingMonAbility` names the fleeing
+                // battler and its ability.
+                let context = narrator.context().user_vs_target(runner);
+                (id::PKMNFLEDUSING, context)
+            } else if success {
+                (id::GOTAWAYSAFELY, narrator.context())
             } else {
-                id::CANTESCAPE
+                (id::CANTESCAPE, narrator.context())
             };
-            vec![table(template, narrator.context())]
+            vec![table(template, context)]
         }
         BattleEvent::WildFled => {
             let name = narrator.scene().opponent.name.clone();

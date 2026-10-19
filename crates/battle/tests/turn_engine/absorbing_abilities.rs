@@ -131,7 +131,7 @@ fn absorbed_healing_is_capped_at_max_hp_and_reports_the_actual_gain() {
 }
 
 #[test]
-fn an_absorbing_target_at_full_hp_reports_no_effect_and_still_spends_pp() {
+fn an_absorbing_target_at_full_hp_reports_the_ability_made_the_move_useless_and_still_spends_pp() {
     let dex = Dex::new();
     let vaporeon = max_iv_mon(&dex, VAPOREON, 5, vec![SWORDS_DANCE]);
     let max_hp = vaporeon.stats().max_hp;
@@ -139,7 +139,7 @@ fn an_absorbing_target_at_full_hp_reports_no_effect_and_still_spends_pp() {
 
     let (battle, events, rng) = run_wild_turn(MUDKIP, WATER_GUN, vaporeon, &[ACCURACY_HIT]);
 
-    assert!(events.contains(&BattleEvent::NoEffect {
+    assert!(events.contains(&BattleEvent::AbsorbMadeMoveUseless {
         by_player: true,
         move_id: WATER_GUN,
     }));

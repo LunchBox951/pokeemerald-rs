@@ -406,7 +406,7 @@ impl Battle {
                 ));
             }
             HitOutcome::Absorbed { healing: 0 } => {
-                events.push(BattleEvent::NoEffect {
+                events.push(BattleEvent::AbsorbMadeMoveUseless {
                     by_player: attacker_is_player,
                     move_id,
                 });
@@ -430,6 +430,7 @@ impl Battle {
                     damage: hp_lost,
                     is_critical,
                 });
+                self.push_type_effectiveness(attacker_is_player, move_id, events);
                 // `seteffectwithchance` precedes `tryfaintmon`
                 // (`data/battle_scripts_1.s:265`-`:266`), but `SetMoveEffect`
                 // leads with an `hp == 0` guard

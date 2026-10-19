@@ -10,7 +10,7 @@
 //! catches an under-drawing pipeline too.
 
 use crate::common::{max_iv_mon, max_iv_mon_with_personality, SequenceRng};
-use assets::MoveId;
+use assets::{Effectiveness, MoveId};
 use battle::{
     Battle, BattleEvent, BattleOutcome, ChangedStat, Dex, PlayerAction, StatStage, StatStages,
     Volatiles,
@@ -334,7 +334,7 @@ fn overgrow_boosts_the_players_absorb_once_its_hp_is_low() {
     // One HP above the gate: the ordinary figures.
     let (events, hp) = run(OVERGROW_HP_GATE + 1);
     assert_eq!(
-        &events[..3],
+        &events[..4],
         [
             BattleEvent::UsedMove {
                 by_player: true,
@@ -345,6 +345,10 @@ fn overgrow_boosts_the_players_absorb_once_its_hp_is_low() {
                 move_id: ABSORB,
                 damage: 8,
                 is_critical: false,
+            },
+            BattleEvent::TypeEffectiveness {
+                by_player: true,
+                effectiveness: Effectiveness::SuperEffective,
             },
             BattleEvent::Drained {
                 by_player: true,
@@ -362,7 +366,7 @@ fn overgrow_boosts_the_players_absorb_once_its_hp_is_low() {
     // Exactly at the gate: Overgrow fires.
     let (events, hp) = run(OVERGROW_HP_GATE);
     assert_eq!(
-        &events[..3],
+        &events[..4],
         [
             BattleEvent::UsedMove {
                 by_player: true,
@@ -373,6 +377,10 @@ fn overgrow_boosts_the_players_absorb_once_its_hp_is_low() {
                 move_id: ABSORB,
                 damage: 12,
                 is_critical: false,
+            },
+            BattleEvent::TypeEffectiveness {
+                by_player: true,
+                effectiveness: Effectiveness::SuperEffective,
             },
             BattleEvent::Drained {
                 by_player: true,
@@ -413,7 +421,51 @@ fn sonic_boom_deals_a_flat_twenty_for_two_draws() {
         "a level-50 attacker against a level-50 defender still deals 20"
     );
     assert_eq!(battle.enemy().current_hp(), enemy_max_hp - 20);
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, BattleEvent::TypeEffectiveness { .. })),
+        "fixed damage clears the matchup flags: {events:?}"
+    );
     assert_eq!(rng.draws(), script.len());
+}
+
+/// Seismic Toss is Fighting-type, but upstream clears the matchup flags after
+/// `typecalc` for level damage, so a Normal target draws no effectiveness line.
+#[test]
+fn level_damage_reports_no_effectiveness_against_a_weak_type() {
+    const RATTATA: u16 = 19;
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, BULBASAUR, 50, vec![MoveId::SEISMIC_TOSS]);
+    let enemy = max_iv_mon(&dex, RATTATA, 50, vec![TACKLE]);
+
+    let mut rng = SequenceRng::new([0; 16]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            BattleEvent::Hit {
+                by_player: true,
+                damage: 50,
+                ..
+            }
+        )),
+        "{events:?}"
+    );
+    assert!(
+        !events.iter().any(|e| matches!(
+            e,
+            BattleEvent::TypeEffectiveness {
+                by_player: true,
+                ..
+            }
+        )),
+        "{events:?}"
+    );
 }
 
 /// A multi-hit move reports every landed hit and then the hit-count string,

@@ -1,7 +1,7 @@
 //! One test per message family, driving [`Narrator`] with events and expanding
 //! the requests against upstream template text.
 
-use assets::{AbilityId, MoveId};
+use assets::{AbilityId, Effectiveness, MoveId};
 use battle::{BattleEvent, BattleOutcome, ChangedStat, StatStage, Status1};
 
 use super::fixtures::{battler, narrator, render, request, scene, Fixture, RATTATA, ZIGZAGOON};
@@ -32,12 +32,16 @@ const SLOTS: &[(u16, &str)] = &[
     (212, "fell!"),
     (216, "{B_DEF_NAME_WITH_PREFIX}'s {B_BUFF1}\n{B_BUFF2}"),
     (217, "A critical hit!"),
+    (221, "It's not very effective…"),
+    (222, "It's super effective!"),
     (219, "1, 2, and... Poof!\\p"),
     (220, "And...\\p"),
     (223, "Got away safely!\\p"),
     (224, "Wild {B_BUFF1} fled!"),
     (226, "Can't escape!\\p"),
     (304, ""),
+    (327, "{B_DEF_NAME_WITH_PREFIX}'s {B_DEF_ABILITY}\nmade {B_CURRENT_MOVE} useless!"),
+    (339, "{B_ATK_NAME_WITH_PREFIX} fled\nusing {B_ATK_ABILITY}!\\p"),
     (306, "{B_DEF_NAME_WITH_PREFIX}'s {B_DEF_ABILITY}\nblocks {B_CURRENT_MOVE}!"),
     (321, "Player defeated\n{B_TRAINER1_CLASS} {B_TRAINER1_NAME}!\\p"),
     (355, "{B_ATK_NAME_WITH_PREFIX}'s {B_ATK_ABILITY}\nprevents {B_DEF_NAME_WITH_PREFIX}'s {B_DEF_ABILITY} from working!"),
@@ -449,4 +453,105 @@ fn a_staged_replacement_supplies_its_nickname_and_ability_to_later_requests() {
         printed,
         ["Go! ACE!", "ACE restored HP\nusing its WATER ABSORB!"]
     );
+}
+
+#[test]
+fn a_hit_prints_its_critical_line_before_its_effectiveness_line() {
+    let mut narrator = narrator(BattleKind::Wild);
+    let events = [
+        BattleEvent::Hit {
+            by_player: true,
+            move_id: MoveId::TACKLE,
+            damage: 9,
+            is_critical: true,
+        },
+        BattleEvent::TypeEffectiveness {
+            by_player: true,
+            effectiveness: Effectiveness::SuperEffective,
+        },
+        BattleEvent::TypeEffectiveness {
+            by_player: true,
+            effectiveness: Effectiveness::NotVeryEffective,
+        },
+    ];
+
+    assert_eq!(
+        lines(&narrate(&mut narrator, &events)),
+        [
+            "A critical hit!",
+            "It's super effective!",
+            "It's not very effective…"
+        ]
+    );
+}
+
+#[test]
+fn a_run_away_escape_names_the_fleeing_battler_and_its_ability() {
+    let mut scene = scene(BattleKind::Wild);
+    scene.player = battler("TORCHIC", Some(AbilityId::RUN_AWAY));
+    let mut narrator = Narrator::new(scene);
+    let escape = BattleEvent::RunAttempt {
+        by_player: true,
+        success: true,
+    };
+
+    assert_eq!(
+        lines(&narrate(&mut narrator, &[escape])),
+        ["TORCHIC fled\nusing RUN AWAY!{SCROLL}"]
+    );
+}
+
+#[test]
+fn a_full_hp_water_absorb_activation_says_the_move_was_made_useless() {
+    let mut scene = scene(BattleKind::Wild);
+    scene.opponent = battler("VAPOREON", Some(AbilityId::WATER_ABSORB));
+    let mut narrator = Narrator::new(scene);
+    let useless = BattleEvent::AbsorbMadeMoveUseless {
+        by_player: true,
+        move_id: MoveId::WATER_GUN,
+    };
+
+    assert_eq!(
+        lines(&narrate(&mut narrator, &[useless])),
+        ["Wild VAPOREON's WATER ABSORB\nmade WATER GUN useless!"]
+    );
+}
+
+#[test]
+fn replacement_wording_reflects_opponent_health_at_send_out() {
+    let mut narrator = narrator(BattleKind::Wild);
+    let sent_out = BattleEvent::PlayerSentOut {
+        species: RATTATA,
+        reserves_remaining: 1,
+    };
+
+    narrator.observe_opponent_health(30, 30);
+    assert_eq!(
+        lines(&narrate(&mut narrator, &[sent_out])),
+        ["Go! RATTATA!"]
+    );
+    narrator.observe_opponent_health(2, 30);
+    assert_eq!(
+        lines(&narrate(&mut narrator, &[sent_out])),
+        ["Your foe's weak!\nGet 'em, RATTATA!"]
+    );
+}
+
+#[test]
+fn opponent_health_maps_to_upstreams_hp_thresholds() {
+    let scale = |current, max| {
+        let mut narrator = narrator(BattleKind::Wild);
+        narrator.observe_opponent_health(current, max);
+        narrator.scene().hp_scale
+    };
+
+    assert_eq!(scale(100, 100), 0);
+    assert_eq!(scale(70, 100), 0);
+    assert_eq!(scale(69, 100), 1);
+    assert_eq!(scale(40, 100), 1);
+    assert_eq!(scale(39, 100), 2);
+    assert_eq!(scale(10, 100), 2);
+    assert_eq!(scale(9, 100), 3);
+    assert_eq!(scale(1, 1000), 3);
+    assert_eq!(scale(0, 100), 0);
 }
