@@ -42,10 +42,12 @@ impl Resolution {
 /// What the `--map` cross-check asserts about the linker-map symbol at a
 /// root's address.
 ///
-/// Exact where the symbol name follows from the pack id; only "some symbol
+/// Exact where the symbol name follows from the pack id and upstream
+/// declares it global; only "some symbol
 /// starts here" where it does not (a map layout's symbol is generated at
 /// build time and is absent from the checkout); nothing where the address is
-/// deliberately inside another symbol.
+/// deliberately inside another symbol or the symbol is `static` and so
+/// absent from the map.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SymbolExpectation {
     /// The address is inside another symbol; nothing to assert.
@@ -54,6 +56,10 @@ pub enum SymbolExpectation {
     Unnamed,
     /// A symbol with exactly this name must start here.
     Exact(String),
+    /// Upstream declares the root `static`, so the symbol is local to its
+    /// translation unit and an ordinary linker map does not list it. The
+    /// name documents the root; nothing in a map can confirm it.
+    Local(String),
     /// A symbol whose name contains every one of these fragments must start
     /// here. For assets whose `static` and global spellings differ only in
     /// prefix.
@@ -112,6 +118,13 @@ impl ReportLine {
     #[must_use]
     pub fn symbol(mut self, name: impl Into<String>) -> Self {
         self.symbol = SymbolExpectation::Exact(name.into());
+        self
+    }
+
+    /// Record the upstream name of a `static` root a linker map cannot list.
+    #[must_use]
+    pub fn local_symbol(mut self, name: impl Into<String>) -> Self {
+        self.symbol = SymbolExpectation::Local(name.into());
         self
     }
 
