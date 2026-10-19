@@ -76,7 +76,7 @@ pub fn locate(
             table.end - table.start,
         )
         .with(Resolution::StructDerived)
-        .symbol("sObjectEventSpritePalettes")
+        .local_symbol("sObjectEventSpritePalettes")
         .note(format!("seeded from `{}`", seed.0)),
     );
 
@@ -321,6 +321,23 @@ mod tests {
                 .find(|p| p.id == TARGET)
                 .expect("target");
             assert_eq!(target.addr, 0x0800_5000);
+        });
+    }
+
+    #[test]
+    fn a_gnu_ld_map_that_omits_the_static_table_does_not_reject_it() {
+        let records = [record(0x0800_2000, 0x1100), record(0x0800_3000, 0x1101)];
+        let (rom, entries) = fixture(&records, &[0x3000]);
+        with_context("sprite-palette-static-map", &rom, entries, |ctx| {
+            let mut report = Vec::new();
+            let plan = locate(ctx, &mut report).expect("located");
+            report.retain(|line| line.id == "sObjectEventSpritePalettes");
+            assert_eq!(report.len(), 1);
+            crate::gen_rom_profile::tests::assert_survives_ld_map(
+                "sprite-palette-static-map",
+                plan.palette_table,
+                &mut report,
+            );
         });
     }
 }

@@ -1,21 +1,20 @@
-//! Tests for dialog interaction, frame composition, and OAM positioning
-//! ([`super::OverworldPhase::compose_frame`], NPC dialog routing).
+//! Tests for dialog interaction and frame composition: A/B dialog input,
+//! frame ticking, and NPC placement against the scrolling background.
 
 use super::test_support::*;
 use super::OverworldPhase;
 use engine::overworld::{Direction, PlayerState};
 use platform::{ButtonState, Buttons};
 
-/// The issue #161 acceptance test: spawn (post-#158 intro handoff) ->
-/// walk down the stairs to Brendan's House 1F (the real #163 warp path,
-/// already pinned by [`stepping_onto_the_bedroom_stair_warp_transitions_to_the_1f_map`])
-/// -> face Mom (the real, pack-loaded `OBJ_EVENT_GFX_MOM` object event at
-/// `(2, 6)`, script `PlayersHouse_1F_EventScript_Mom`) -> A opens her
-/// dialog with the real upstream text (`crate::overworld::npc_scripts::script_text`'s
-/// own transcription of `PlayersHouse_1F_Text_IsntItNiceInHere`) -> A
-/// confirms her script-level `waitbuttonpress` (issue #410) -> the dialog
-/// closes, with its text still up until that exact tick, and control
-/// returns cleanly to ordinary overworld movement.
+/// Background scroll at rest: the viewport's baseline offset, in pixels.
+const RESTING_SCROLL_Y_PX: i32 = 8;
+/// Pixels the scene moves over one tile step.
+const TILE_STEP_PX: i32 = 16;
+
+/// Walks from spawn down the stair warp to Brendan's House 1F, faces Mom,
+/// and checks that A opens her real dialog, the text stays fully shown until
+/// the confirm press, the confirm closes the dialog on that tick, and
+/// movement input then works again.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn walking_downstairs_and_talking_to_mom_opens_and_closes_her_dialog() {
@@ -27,11 +26,8 @@ fn walking_downstairs_and_talking_to_mom_opens_and_closes_her_dialog() {
     .expect("run `cargo xtask extract` first");
     assert!(phase.dialog.is_none(), "no dialog is open at spawn");
 
-    // Trigger the already-pinned 2F -> 1F stair warp: the player spawns
-    // standing exactly on the warp tile (`new_game::SPAWN_POSITION`), so
-    // step away from it and back onto it to generate a fresh
-    // `StepOutcome::Advanced` landing (mirrors this module's own
-    // `stepping_onto_the_bedroom_stair_warp_transitions_to_the_1f_map`).
+    // The player spawns on the stair warp tile, so stepping off and back on
+    // produces a fresh warp landing.
     let bedroom = phase.map_id;
     walk_one_tile(&mut phase, Buttons::DOWN);
     assert_eq!(phase.map_id, bedroom, "still upstairs after stepping south");
@@ -42,18 +38,12 @@ fn walking_downstairs_and_talking_to_mom_opens_and_closes_her_dialog() {
         "stepping back onto the stair warp must land on 1F"
     );
 
-    // Walk over to Mom and face her: she stands at (2, 6)
-    // (`OBJ_EVENT_GFX_MOM`'s real map.json position); this test directly
-    // places the player on the adjacent tile facing her rather than
-    // simulating every intervening step across the room's own furniture
-    // layout -- ordinary walking/collision is already covered by
-    // `engine::overworld::player`'s own tests, and the front-door/stair
-    // warp path is covered above and by this module's other real-pack
-    // tests. What this test alone proves is the interaction + dialog
-    // wiring against the *real* extracted Mom object.
+    // Mom stands at (2, 6). The test places the player on the tile south of
+    // her, facing north, instead of walking there; this test covers only the
+    // interaction and dialog wiring against the real Mom object.
     phase.player = PlayerState::new((2, 7), 3, Direction::North);
 
-    // Press A: must find Mom, recognize her script, and open a dialog.
+    // A facing Mom opens her dialog.
     phase.step(pressed(Buttons::A));
     assert!(
         phase.dialog.is_some(),
@@ -64,9 +54,7 @@ fn walking_downstairs_and_talking_to_mom_opens_and_closes_her_dialog() {
         "opening a dialog must not itself change the room"
     );
 
-    // While the dialog is open, movement input is frozen (module docs'
-    // "NPC dialog routing" section): a held direction must not move the
-    // player.
+    // A held direction must not move the player while the dialog is open.
     let position_before_printing = phase.player.position();
     phase.step(held(Buttons::DOWN));
     assert_eq!(
@@ -75,13 +63,10 @@ fn walking_downstairs_and_talking_to_mom_opens_and_closes_her_dialog() {
         "movement must be frozen while a dialog is open"
     );
 
-    // Drive the dialog to completion: print every glyph of the real
-    // upstream text (`Mid` speed -- confirm not held, since only the
-    // script-level waitbuttonpress wait needs one), then confirm it, then
-    // let it close. Generous frame budgets throughout: the exact per-glyph
-    // cadence is `engine::text::render::Printer`'s own, already pinned by
-    // that module's tests -- this test only cares that the *dialog* (not
-    // the printer internals) reaches each milestone.
+    // Print every glyph of the real text without any confirm held, since
+    // only the script-level `waitbuttonpress` wait needs one. The frame
+    // budgets are generous because per-glyph timing belongs to
+    // `engine::text::render::Printer`'s tests.
     let expected_tokens =
         crate::overworld::npc_scripts::script_text("PlayersHouse_1F_EventScript_Mom")
             .expect("Mom's script must be recognized against the real map data");
@@ -110,10 +95,9 @@ fn walking_downstairs_and_talking_to_mom_opens_and_closes_her_dialog() {
         "every glyph of the real upstream text must print within the frame budget"
     );
 
-    // Still idling past the full print: the box must keep every glyph on
-    // screen, waiting on the script-level `waitbuttonpress`
-    // (`NpcDialog::with_waitbuttonpress`, issue #410) rather than auto-
-    // closing or clearing on its own.
+    // After the full print, the box keeps every glyph on screen and waits for
+    // the `waitbuttonpress` confirm (`NpcDialog::with_waitbuttonpress`)
+    // instead of closing on its own.
     for _ in 0..8 {
         phase.step(ButtonState::new());
         let dialog = phase
@@ -127,16 +111,10 @@ fn walking_downstairs_and_talking_to_mom_opens_and_closes_her_dialog() {
         );
     }
 
-    // Confirm: issue #410 means this closes on the very next tick the
-    // press lands on, with the text still fully shown right up to that
-    // tick -- no intervening `Cleared`/blank-box frames the old synthetic
-    // trailing `{P}` used to force. Pressing A fresh every frame (rather
-    // than once) is deliberate and still exactly matches a single real
-    // button press's effect: the exact frame a press first lands on is
-    // otherwise timing-sensitive to get right in this test, so this holds
-    // the "button" down across a small window instead; the loop stops the
-    // instant the dialog closes, so no press after that could re-open a
-    // new one against Mom, still facing.
+    // Press A every frame across a short window, because the frame on which
+    // the prompt first accepts a press is timing-dependent. The loop stops
+    // when the dialog closes, so no later press can reopen it with Mom still
+    // in front of the player.
     let mut closed = false;
     for _ in 0..5 {
         phase.step(pressed(Buttons::A));
@@ -147,9 +125,8 @@ fn walking_downstairs_and_talking_to_mom_opens_and_closes_her_dialog() {
     }
     assert!(closed, "confirming waitbuttonpress must close the dialog");
 
-    // Control returns cleanly: ordinary movement input works again.
-    // Facing North from Mom, the first held Down only turns; its busy
-    // window swallows Down through frame 8 and the step commits on the 9th.
+    // Facing north from Mom, the first held Down only turns. The turn keeps
+    // the player busy through frame 8, and the step commits on frame 9.
     assert_eq!(phase.player.facing(), Direction::North);
     phase.step(held(Buttons::DOWN));
     assert_eq!(phase.player.facing(), Direction::South, "must turn first");
@@ -170,38 +147,26 @@ fn walking_downstairs_and_talking_to_mom_opens_and_closes_her_dialog() {
     );
 }
 
-/// The issue #217 acceptance test's real-pack half: the *bundled* Mom
-/// object event (`OBJ_EVENT_GFX_MOM` at `(2, 6)` on the real
-/// `MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F`, the same NPC
-/// [`walking_downstairs_and_talking_to_mom_opens_and_closes_her_dialog`]
-/// walks up to) must stay glued to the scrolling background through every
-/// frame of a real player step driven through the real
-/// [`OverworldPhase::step`] loop -- pack-loaded art, real map data, real
-/// button input, no synthetic fixture anywhere.
+/// Mom's OAM must stay locked to the scrolling background on every frame of
+/// a real player step through [`OverworldPhase::step`], using the real pack,
+/// map data and button input.
 ///
-/// The bug this pins (`npc`'s module docs): `PlayerState::step` commits the
-/// destination tile on frame one, so before the shared
-/// `viewport::camera_lag_px` term existed, Mom's OAM position jumped a full
-/// metatile the instant the player pressed a direction and then sat still
-/// for 16 frames while the background slid smoothly under her. The
-/// signature is therefore *per-frame*: a 16 px first-frame jump instead of
-/// 1 px, and an OAM delta that stops matching the BG scroll's.
-///
-/// Checked at the boundary frames (at rest, the first transit frame, the
-/// last transit frame, and the first resting frame) and at an intermediate
-/// one (`step_progress() == 8`), against **both** halves of the composed
-/// frame at once: Mom's OAM `y` and the BG `scroll_y` every layer shares.
-/// The unit-level counterparts -- progress 0 in all four directions, and
-/// the BG scroll's own intermediate value -- live in
-/// `crate::overworld::npc::placement_tests` and `crate::overworld::viewport::tests`.
+/// `PlayerState::step` commits the destination tile on the first frame, so
+/// without the shared camera-lag term Mom's OAM would jump a full metatile
+/// on that frame and then sit still while the background scrolled. The test
+/// therefore checks per-frame deltas: Mom's OAM `y` against the BG
+/// `scroll_y` shared by every layer, at rest, on the first and last transit
+/// frames, at the midpoint (`step_progress() == 8`), and on the first resting
+/// frame. Progress 0 in all four directions is covered by
+/// `crate::overworld::npc::placement_tests`, and the BG scroll's intermediate
+/// value by `crate::overworld::viewport::tests`.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn walking_past_mom_keeps_her_oam_glued_to_the_scrolling_background() {
-    /// Mom's OAM `y` and this frame's shared BG `scroll_y`, read off the
-    /// same half-composed frame [`OverworldPhase::compose_frame`] would
-    /// rasterize. Entry 0 is always the player; entry 1 is Mom (pinned by
-    /// `crate::overworld::tests::real_pack_1f_oam_entries_cover_every_drawn_fresh_save_npc`,
-    /// which also proves nobody else on 1F draws on a fresh save).
+    /// Mom's OAM `y` and the shared BG `scroll_y` of the scene's current
+    /// frame. OAM entry 0 is the player and entry 1 is Mom; nobody else draws
+    /// on 1F on a fresh save
+    /// (`crate::overworld::tests::real_pack_1f_oam_entries_cover_every_drawn_fresh_save_npc`).
     fn mom_and_scroll(phase: &OverworldPhase) -> (i32, i32) {
         let (entries, (_, scroll_y)) = phase
             .scene
@@ -217,24 +182,22 @@ fn walking_past_mom_keeps_her_oam_glued_to_the_scrolling_background() {
     )
     .expect("run `cargo xtask extract` first");
 
-    // Down to 1F through the real stair warp -- same step-off/step-back
-    // sequence the dialog test above uses.
+    // Reach 1F through the stair warp, as in the dialog test above.
     walk_one_tile(&mut phase, Buttons::DOWN);
     turn_and_walk_one_tile(&mut phase, Buttons::UP);
     let one_f = assets::MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F");
     assert_eq!(phase.map_id, one_f, "the stair warp must land on 1F");
 
-    // One tile south of Mom, *already facing south* so the first held Down
-    // commits a step rather than spending a frame turning.
+    // One tile south of Mom and already facing south, so the first held Down
+    // commits a step instead of turning.
     phase.player = PlayerState::new((2, 7), 3, Direction::South);
     let (rest_y, rest_scroll) = mom_and_scroll(&phase);
     assert_eq!(
-        rest_scroll, 8,
-        "at rest the BG scroll carries RESTING_SCROLL_Y's baseline (issue #977)"
+        rest_scroll, RESTING_SCROLL_Y_PX,
+        "at rest the BG scroll equals the resting baseline"
     );
 
-    // Frame 1 of a real south step. The regression: this must be a *one
-    // pixel* move, not the one-metatile snap the old code produced.
+    // Frame 1 of a south step moves Mom one pixel, not one metatile.
     phase.step(held(Buttons::DOWN));
     assert_eq!(phase.player.position(), (2, 8), "the tile commits at once");
     assert_eq!(phase.player.step_progress(), 1);
@@ -242,11 +205,10 @@ fn walking_past_mom_keeps_her_oam_glued_to_the_scrolling_background() {
     assert_eq!(
         frame1_y - rest_y,
         -1,
-        "walking south slides Mom one pixel *up* the screen on the first \
-         frame -- a jump of -16 here is exactly the bug issue #217 fixed"
+        "walking south slides Mom one pixel up the screen on the first frame"
     );
 
-    // Seven more frames to the midpoint, then to the last transit frame.
+    // Advance to the midpoint, then to the last transit frame.
     for _ in 0..7 {
         phase.step(ButtonState::new());
     }
@@ -264,12 +226,11 @@ fn walking_past_mom_keeps_her_oam_glued_to_the_scrolling_background() {
     assert!(!phase.player.in_transit(), "frame 16 settles the step");
     let (settled_y, settled_scroll) = mom_and_scroll(&phase);
 
-    // Lockstep, between transit frames: Mom's OAM moves up by exactly as
-    // many pixels as the background scrolls down. (The at-rest frames are
-    // compared on OAM alone -- `build_tilemaps` adds a metatile of
-    // direction-dependent tilemap padding for the duration of a transit,
-    // which shifts `scroll_y`'s origin by a constant that cancels only
-    // between two frames on the same side of that boundary.)
+    // Between transit frames, Mom's OAM moves up by as many pixels as the
+    // background scrolls down. Frames at rest are compared on OAM alone:
+    // `build_tilemaps` adds direction-dependent tilemap padding during a
+    // transit, which shifts `scroll_y`'s origin by a constant that cancels
+    // only between two frames on the same side of that boundary.
     assert_eq!(
         (mid_y - frame1_y, mid_scroll - frame1_scroll),
         (-7, 7),
@@ -282,30 +243,28 @@ fn walking_past_mom_keeps_her_oam_glued_to_the_scrolling_background() {
     );
     assert_eq!(
         (mid_scroll, last_scroll),
-        (16, 23),
-        "and in absolute terms the scroll is just the elapsed frame count \
-         past RESTING_SCROLL_Y's 8px baseline"
+        (RESTING_SCROLL_Y_PX + 8, RESTING_SCROLL_Y_PX + 15),
+        "the scroll is the resting baseline plus the elapsed frame count"
     );
 
-    // The boundary frames, and the total.
+    // Boundary frames and the whole-step total.
     assert_eq!(
         last_y - settled_y,
         1,
         "frame 15 owes exactly one last pixel"
     );
     assert_eq!(
-        settled_scroll, 8,
-        "back at rest, the BG scroll returns to RESTING_SCROLL_Y's baseline"
+        settled_scroll, RESTING_SCROLL_Y_PX,
+        "back at rest, the BG scroll returns to the resting baseline"
     );
     assert_eq!(
         rest_y - settled_y,
-        16,
+        TILE_STEP_PX,
         "one whole metatile of travel across the step, and no more"
     );
 
-    // The settled frame is the plain resting placement, not an
-    // approximation of it: a fresh player standing on the destination
-    // composes identically.
+    // The settled frame equals the resting placement of a fresh player
+    // standing on the destination tile.
     let fresh = PlayerState::new((2, 8), 3, Direction::South);
     let (fresh_entries, fresh_scroll) = phase
         .scene
@@ -317,16 +276,13 @@ fn walking_past_mom_keeps_her_oam_glued_to_the_scrolling_background() {
     );
 }
 
-// -- Message-box confirm input: A *or* B ------------------------------------
+// -- Message-box confirm input: A or B ------------------------------------
 
-/// Upstream's down-arrow wait prompt takes `JOY_NEW(A_BUTTON | B_BUTTON)`
-/// (`TextPrinterWaitWithDownArrow`, `pokeemerald/src/text.c:865-882`), not A
-/// alone -- as do the mid-page wait (`TextPrinterWait`, `:884-900`) and the
-/// hold-to-speed-up path (`RunTextPrinter`, `:944`/`:950`). Before this,
-/// only a fresh A edge reached [`crate::overworld::NpcDialog::tick`], so a
-/// player pressing B at the prompt was stuck with the box open forever.
-///
-/// Headless, on a synthetic dialog: B alone must drive it to close.
+/// A fresh B press advances and closes a dialog, as A does: upstream's
+/// down-arrow wait, mid-page wait and hold-to-speed-up path all accept
+/// `A_BUTTON | B_BUTTON` (`TextPrinterWaitWithDownArrow` at
+/// `pokeemerald/src/text.c:865-882`, `TextPrinterWait` at `:884-900`,
+/// `RunTextPrinter` at `:944` and `:950`).
 #[test]
 fn b_alone_advances_and_closes_a_dialog() {
     use engine::text::Token;
@@ -338,10 +294,8 @@ fn b_alone_advances_and_closes_a_dialog() {
     ]);
     let mut phase = synthetic_phase(PlayerState::new((7, 4), 3, Direction::South), Some(dialog));
 
-    // Never press A: only B. Same held-across-the-window shape as this
-    // module's other dialog tests (the exact frame the prompt becomes
-    // receptive is printer-timing-dependent); the loop stops the instant
-    // the box closes.
+    // Press only B on every frame of a bounded window, because the frame on
+    // which the prompt first accepts a press is timing-dependent.
     let mut closed = false;
     for _ in 0..40 {
         phase.step(pressed(Buttons::B));
@@ -356,14 +310,12 @@ fn b_alone_advances_and_closes_a_dialog() {
     );
 }
 
-/// The complement: neither confirm button is special-cased away, and B does
-/// not leak into anything else on the frame it closes a box.
+/// B closes an open dialog without also moving the player, and with no
+/// dialog open B does not start an interaction.
 ///
-/// The dialog branch of [`OverworldPhase::step`] returns before movement and
-/// interaction are reached, so a B press that closes the box cannot also
-/// move the player; and with no box open, B is not read at all (interaction
-/// is A-only, matching `FieldInput::pressedAButton` --
-/// `field_control_avatar.c:172`).
+/// [`OverworldPhase::step`] returns after the dialog branch, before movement
+/// and interaction, and interaction reads only A
+/// (`FieldInput::pressedAButton`, `field_control_avatar.c:172`).
 #[test]
 fn b_does_not_move_the_player_or_open_a_dialog() {
     use engine::text::Token;
@@ -373,10 +325,9 @@ fn b_does_not_move_the_player_or_open_a_dialog() {
         Token::PromptClear,
         Token::End,
     ]);
-    // Facing south with a clear tile below, so an un-frozen step would show.
+    // The tile to the south is clear, so a step that was not frozen would move the player.
     let mut phase = synthetic_phase(PlayerState::new((7, 4), 3, Direction::South), Some(dialog));
-    // Bounded, like this module's other dialog loops: a regression that
-    // stops B closing the box must *fail* here, not spin forever.
+    // The bounded loop fails, rather than hangs, if B stops closing the box.
     let mut closed = false;
     for _ in 0..40 {
         phase.step(pressed(Buttons::B));
@@ -392,21 +343,15 @@ fn b_does_not_move_the_player_or_open_a_dialog() {
         "the B press that closed the box must not also have moved the player"
     );
 
-    // With no dialog open, B facing Mom must not open one -- only A
-    // interacts. (2, 6) is Mom's tile; stand east of her facing west.
+    // Mom stands at (2, 6); the player stands east of her facing west.
     let mut phase = synthetic_phase(PlayerState::new((3, 6), 3, Direction::West), None);
     phase.step(pressed(Buttons::B));
-    assert!(
-        phase.dialog.is_none(),
-        "B is not an interaction button -- upstream gates \
-         TryStartInteractionScript on pressedAButton alone"
-    );
-    // ...and the identical press with A does find an interaction to
-    // resolve, so the check above is about the button rather than the
-    // position. Read at `interaction_tokens_this_frame` itself -- the
-    // frame's whole A-press decision -- rather than driving it through
-    // `step`, whose own dialog-open commit (`NpcDialog::open_at_speed`) loads
-    // an asset pack this synthetic fixture has none of.
+    assert!(phase.dialog.is_none(), "B is not an interaction button");
+    // The same press with A resolves an interaction, so the check above
+    // depends on the button and not the position. The test calls
+    // `interaction_tokens_this_frame` directly because `step` would open the
+    // dialog through `NpcDialog::open_at_speed`, which loads an asset pack
+    // this synthetic fixture lacks.
     let runtime = runtime_for(&phase);
     assert!(
         phase
@@ -422,17 +367,14 @@ fn b_does_not_move_the_player_or_open_a_dialog() {
     );
 }
 
-/// Review regression (#192): the last link of the tick wiring -- the
-/// phase's own counter must actually reach
-/// [`crate::overworld::OverworldScene::compose`]. The three other links
-/// (increment per step, reset on load/warp, `compose(tick)` reaching
-/// pixels) each have their own mutation guard above and in
-/// `crate::overworld::tests`, but hard-coding tick 0 in
-/// [`OverworldPhase::compose_frame`] left the whole suite green: nothing
-/// joined the counter to the composition. This does -- Littleroot Town's
-/// flower view (`crate::overworld::tests`' own real-pack fixture position)
-/// composes different pixels at tick 60 than at tick 0, so 60 idle frames
-/// must change the phase's composed output.
+/// The phase's tick counter must reach
+/// [`crate::overworld::OverworldScene::compose`] through
+/// [`OverworldPhase::compose_frame`]. Other tests cover the counter's
+/// increment, its reset on load and warp, and `compose(tick)` changing
+/// pixels, but not the join between the counter and composition. Littleroot
+/// Town's flower view (the real-pack fixture position in
+/// `crate::overworld::tests`) composes different pixels at tick 60 than at
+/// tick 0.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn idle_frames_animate_the_composed_tileset_pixels() {
@@ -455,11 +397,10 @@ fn idle_frames_animate_the_composed_tileset_pixels() {
     for _ in 0..60 {
         phase.step(ButtonState::new());
     }
-    assert_eq!(phase.tick, 60, "60 idle frames, 60 ticks");
+    assert_eq!(phase.tick, 60, "each idle frame advances the tick by one");
     let animated = phase.compose_frame();
     assert_ne!(
         &*base, &*animated,
-        "60 idle frames must animate the flower tiles through the phase's own \
-         tick -- if this fails, `compose_frame` is not passing `self.tick`"
+        "60 idle frames must animate the flower tiles through the phase's tick"
     );
 }
