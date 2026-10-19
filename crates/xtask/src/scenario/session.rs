@@ -75,7 +75,8 @@ impl PackSelection {
 /// so only an empty private replacement staged in that instant could be taken
 /// (the owner is not compared: that needs `geteuid`, which the approved
 /// `rustix` features do not include), and under a umask that withholds owner
-/// bits the mode is restored by a pathname `chmod` in that same instant; and
+/// bits the mode is restored in that same instant without following a link
+/// (Linux: through an `O_PATH` pin; other Unixes: `AT_SYMLINK_NOFOLLOW`); and
 /// Unix removes the (emptied) root with a pathname `rmdir` after the check, so
 /// a replacement that wins that instant loses only if it is empty, never its
 /// contents.
@@ -298,20 +299,75 @@ fn not_the_held_directory(path: &Path) -> std::io::Error {
 fn create_private_dir(path: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
     {
-        use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
+        use std::os::unix::fs::DirBuilderExt as _;
         std::fs::DirBuilder::new().mode(0o700).create(path)?;
         // A umask that strips owner bits (0o444 leaves 0o300) would make the
         // directory unopenable for the hold and fail the 0o700 claim, so set
-        // the mode the umask withheld. Only then, and only on a directory: the
-        // claim that follows still verifies the opened directory.
-        let found = std::fs::symlink_metadata(path)?;
-        if found.is_dir() && found.permissions().mode() & 0o777 != 0o700 {
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
-        }
-        Ok(())
+        // the mode the umask withheld. The claim that follows still verifies
+        // the opened directory.
+        restore_private_mode(path)
     }
     #[cfg(not(unix))]
     std::fs::create_dir(path)
+}
+
+/// Sets the directory at `path` to 0o700 if its mode differs, without ever
+/// following a symlink: Linux pins the entry with `O_PATH | O_NOFOLLOW |
+/// O_DIRECTORY` (which needs no permission bits) and changes the mode of that
+/// pinned inode; other Unixes use `fchmodat(AT_SYMLINK_NOFOLLOW)`. Anything at
+/// `path` other than a directory is an error and nothing is changed.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn restore_private_mode(path: &Path) -> std::io::Result<()> {
+    use std::os::fd::AsRawFd as _;
+    let pinned = rustix::fs::open(
+        path,
+        rustix::fs::OFlags::PATH
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::DIRECTORY
+            | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )?;
+    let stat = rustix::fs::fstat(&pinned)?;
+    if rustix::fs::FileType::from_raw_mode(stat.st_mode) != rustix::fs::FileType::Directory {
+        return Err(std::io::Error::other(
+            "the scratch entry is not a directory",
+        ));
+    }
+    if stat.st_mode & 0o777 == 0o700 {
+        return Ok(());
+    }
+    // `fchmod` refuses an `O_PATH` descriptor, but its `/proc` entry names
+    // the pinned inode itself, so the change cannot reach a replacement.
+    rustix::fs::chmodat(
+        rustix::fs::CWD,
+        format!("/proc/self/fd/{}", pinned.as_raw_fd()),
+        rustix::fs::Mode::RWXU,
+        rustix::fs::AtFlags::empty(),
+    )
+    .map_err(Into::into)
+}
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
+fn restore_private_mode(path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+    let found = std::fs::symlink_metadata(path)?;
+    if !found.is_dir() {
+        return Err(std::io::Error::other(
+            "the scratch entry is not a directory",
+        ));
+    }
+    if found.permissions().mode() & 0o777 == 0o700 {
+        return Ok(());
+    }
+    // Never follows a link: a symlink swapped in after the check has its own
+    // mode changed, and the claim's `NOFOLLOW` open then refuses it.
+    rustix::fs::chmodat(
+        rustix::fs::CWD,
+        path,
+        rustix::fs::Mode::RWXU,
+        rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+    )
+    .map_err(Into::into)
 }
 
 #[cfg(unix)]
@@ -617,6 +673,49 @@ mod tests {
             observed.unwrap(),
             (0o700, 0o600, b"not a real pack".to_vec())
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn restoring_the_private_mode_never_follows_a_swapped_in_symlink() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let base = private_base("chmod-link");
+        let target = base.join("target");
+        std::fs::create_dir(&target).unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // The scratch entry, created and then replaced by a link before its
+        // mode is restored.
+        let entry = base.join("entry");
+        std::fs::create_dir(&entry).unwrap();
+        std::fs::remove_dir(&entry).unwrap();
+        std::os::unix::fs::symlink(&target, &entry).unwrap();
+        let result = restore_private_mode(&entry);
+        let mode = std::fs::metadata(&target).unwrap().permissions().mode() & 0o7777;
+        let _ = std::fs::remove_dir_all(&base);
+        assert!(
+            result.is_err(),
+            "a symlink must not be treated as the scratch"
+        );
+        assert_eq!(mode, 0o755, "the link's target must keep its mode");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn restoring_the_private_mode_fixes_a_search_only_directory() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let base = private_base("chmod-dir");
+        let entry = base.join("entry");
+        std::fs::create_dir(&entry).unwrap();
+        std::fs::set_permissions(&entry, std::fs::Permissions::from_mode(0o300)).unwrap();
+        let result = restore_private_mode(&entry).map_err(|error| error.to_string());
+        let mode = std::fs::symlink_metadata(&entry)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o7777;
+        let _ = std::fs::remove_dir_all(&base);
+        result.unwrap();
+        assert_eq!(mode, 0o700);
     }
 
     #[cfg(unix)]
