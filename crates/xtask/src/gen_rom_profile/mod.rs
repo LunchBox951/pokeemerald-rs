@@ -113,9 +113,11 @@ pub struct GenReport {
     /// How many roots the cross-check confirmed as some symbol's own
     /// address, without asserting a name.
     pub map_confirmed: usize,
-    /// How many roots the cross-check skipped as interior addresses or
-    /// translation-unit-local symbols.
+    /// How many roots the cross-check skipped as interior addresses.
     pub map_skipped: usize,
+    /// How many roots the cross-check skipped as translation-unit-local
+    /// symbols, which an ordinary linker map does not list.
+    pub map_local: usize,
     /// Whether a map was given at all.
     pub map_used: bool,
 }
@@ -143,6 +145,19 @@ impl GenReport {
             .iter()
             .filter(|line| line.resolution == plan::Resolution::ArbitraryAmongIdentical)
             .count()
+    }
+
+    /// The one-line `--map` cross-check summary, or `None` without a map.
+    #[must_use]
+    pub fn map_summary(&self) -> Option<String> {
+        self.map_used.then(|| {
+            format!(
+                "map cross-check: {} symbol name(s) matched, {} address(es) confirmed \
+                 unnamed, {} interior address(es) skipped, {} translation-unit-local \
+                 symbol(s) skipped",
+                self.map_named, self.map_confirmed, self.map_skipped, self.map_local
+            )
+        })
     }
 }
 
@@ -282,6 +297,7 @@ fn generate(
         map_named: map.named,
         map_confirmed: map.confirmed,
         map_skipped: map.skipped,
+        map_local: map.local,
         map_used: map.used,
     })
 }
@@ -321,9 +337,10 @@ struct MapCheck {
     named: usize,
     /// Roots the map placed a symbol at, without a name to assert.
     confirmed: usize,
-    /// Roots skipped because their address is interior to another symbol or
-    /// their symbol is local to a translation unit.
+    /// Roots skipped because their address is interior to another symbol.
     skipped: usize,
+    /// Roots skipped because their symbol is local to a translation unit.
+    local: usize,
     /// Whether a map was given at all.
     used: bool,
 }
@@ -350,12 +367,16 @@ fn cross_check(
         ..MapCheck::default()
     };
     for line in lines.iter_mut() {
-        if matches!(
-            line.symbol,
-            SymbolExpectation::Interior | SymbolExpectation::Local(_)
-        ) {
-            check.skipped += 1;
-            continue;
+        match line.symbol {
+            SymbolExpectation::Interior => {
+                check.skipped += 1;
+                continue;
+            }
+            SymbolExpectation::Local(_) => {
+                check.local += 1;
+                continue;
+            }
+            _ => {}
         }
         let symbols = map.symbols_at(line.addr);
         let accepted = match &line.symbol {
