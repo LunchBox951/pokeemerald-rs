@@ -249,7 +249,10 @@ fn the_step_after_a_spin_mat_exit_repeats_the_exits_starting_foot() {
     }
     assert!(!player.in_transit());
     let outcome = frame(&mut player, &runtime, Some(Direction::North));
-    assert!(matches!(outcome, StepOutcome::Advanced { .. }), "{outcome:?}");
+    assert!(
+        matches!(outcome, StepOutcome::Advanced { .. }),
+        "{outcome:?}"
+    );
     assert_eq!(player.second_foot_leads(), exit_foot);
 }
 
