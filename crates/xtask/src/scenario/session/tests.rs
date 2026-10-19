@@ -357,3 +357,91 @@ fn a_session_that_cannot_load_its_pack_reports_start_failure_not_success() {
         "a failed boot must not leave a save behind"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn the_held_directory_and_the_pack_are_not_inherited_by_child_processes() {
+    let base = private_base("cloexec");
+    let scratch = Scratch::create_in(&base).unwrap();
+    let pack = scratch.create_new("pack").unwrap();
+    let hold_flags = rustix::io::fcntl_getfd(scratch.hold().unwrap()).unwrap();
+    let pack_flags = rustix::io::fcntl_getfd(&pack).unwrap();
+    drop((pack, scratch));
+    let _ = std::fs::remove_dir_all(&base);
+    assert!(hold_flags.contains(rustix::io::FdFlags::CLOEXEC));
+    assert!(pack_flags.contains(rustix::io::FdFlags::CLOEXEC));
+}
+
+#[cfg(unix)]
+#[test]
+fn restoring_the_private_mode_leaves_a_swapped_in_shared_directory_untouched() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let base = private_base("chmod-shared");
+    let entry = base.join("entry");
+    std::fs::create_dir(&entry).unwrap();
+    std::fs::write(entry.join("keep.txt"), b"keep me").unwrap();
+    std::fs::set_permissions(&entry, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let result = restore_private_mode(&entry);
+    let mode = std::fs::symlink_metadata(&entry)
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o7777;
+    let _ = std::fs::remove_dir_all(&base);
+    assert!(
+        result.is_err(),
+        "a directory with group or other access is not ours"
+    );
+    assert_eq!(mode, 0o755);
+}
+
+#[cfg(unix)]
+#[test]
+fn restoring_the_private_mode_leaves_a_swapped_in_nonempty_private_directory_as_it_was() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let base = private_base("chmod-nonempty");
+    let entry = base.join("entry");
+    std::fs::create_dir(&entry).unwrap();
+    std::fs::write(entry.join("keep.txt"), b"keep me").unwrap();
+    std::fs::set_permissions(&entry, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let result = restore_private_mode(&entry);
+    let mode = std::fs::symlink_metadata(&entry)
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o7777;
+    std::fs::set_permissions(&entry, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let kept = std::fs::read(entry.join("keep.txt")).unwrap();
+    let _ = std::fs::remove_dir_all(&base);
+    assert!(
+        result.is_err(),
+        "a non-empty directory is not the one just created"
+    );
+    assert_eq!(mode, 0o500);
+    assert_eq!(kept, b"keep me");
+}
+
+#[cfg(unix)]
+#[test]
+fn cleanup_refuses_to_descend_into_a_directory_that_is_not_the_listed_entry() {
+    use std::os::unix::fs::MetadataExt as _;
+    let base = private_base("entry-identity");
+    let listed = base.join("listed");
+    let swapped = base.join("swapped");
+    std::fs::create_dir(&listed).unwrap();
+    std::fs::create_dir(&swapped).unwrap();
+    let expected = std::fs::symlink_metadata(&listed).unwrap();
+    let opened = std::fs::File::open(&swapped).unwrap();
+    let mismatch = require_entry(&opened, expected.dev(), expected.ino());
+    let matched = require_entry(
+        &std::fs::File::open(&listed).unwrap(),
+        expected.dev(),
+        expected.ino(),
+    );
+    let _ = std::fs::remove_dir_all(&base);
+    assert!(
+        mismatch.is_err(),
+        "a swapped-in directory must not be descended into"
+    );
+    matched.unwrap();
+}

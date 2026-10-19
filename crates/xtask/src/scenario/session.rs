@@ -140,11 +140,8 @@ impl Scratch {
             if mode != 0o700 {
                 return Err(not_fresh(&self.path));
             }
-            for entry in rustix::fs::Dir::read_from(hold)? {
-                let entry = entry?;
-                if entry.file_name().to_bytes() != b"." && entry.file_name().to_bytes() != b".." {
-                    return Err(not_fresh(&self.path));
-                }
+            if !is_empty(hold)? {
+                return Err(not_fresh(&self.path));
             }
         }
         #[cfg(not(unix))]
@@ -211,7 +208,8 @@ impl Scratch {
             rustix::fs::OFlags::WRONLY
                 | rustix::fs::OFlags::CREATE
                 | rustix::fs::OFlags::EXCL
-                | rustix::fs::OFlags::NOFOLLOW,
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::CLOEXEC,
             rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
         )?;
         // The umask may have withheld owner read, which the engine needs to
@@ -312,10 +310,16 @@ fn create_private_dir(path: &Path) -> std::io::Result<()> {
 }
 
 /// Sets the directory at `path` to 0o700 if its mode differs, without ever
-/// following a symlink: Linux pins the entry with `O_PATH | O_NOFOLLOW |
-/// O_DIRECTORY` (which needs no permission bits) and changes the mode of that
-/// pinned inode; other Unixes use `fchmodat(AT_SYMLINK_NOFOLLOW)`. Anything at
-/// `path` other than a directory is an error and nothing is changed.
+/// following a symlink, and only on a directory this session could have
+/// created: Linux pins the entry with `O_PATH | O_NOFOLLOW | O_DIRECTORY`
+/// (which needs no permission bits) and changes the mode of that pinned
+/// inode; other Unixes use `fchmodat(AT_SYMLINK_NOFOLLOW)`.
+///
+/// `mkdir(0o700)` can only yield a subset of 0o700 (plus an inherited
+/// setgid bit), so an entry with any other bit is left untouched and refused.
+/// Emptiness can be read only once owner read is back, so a non-empty entry
+/// has its original mode put back and is refused. The owner is not compared
+/// (no `geteuid` among the approved `rustix` features).
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn restore_private_mode(path: &Path) -> std::io::Result<()> {
     use std::os::fd::AsRawFd as _;
@@ -329,52 +333,89 @@ fn restore_private_mode(path: &Path) -> std::io::Result<()> {
     )?;
     let stat = rustix::fs::fstat(&pinned)?;
     if rustix::fs::FileType::from_raw_mode(stat.st_mode) != rustix::fs::FileType::Directory {
-        return Err(std::io::Error::other(
-            "the scratch entry is not a directory",
-        ));
+        return Err(not_created_here());
     }
-    if stat.st_mode & 0o777 == 0o700 {
+    let mode = stat.st_mode & 0o7777;
+    if mode & 0o777 == 0o700 {
         return Ok(());
+    }
+    if mode & 0o5077 != 0 {
+        return Err(not_created_here());
     }
     // `fchmod` refuses an `O_PATH` descriptor, but its `/proc` entry names
-    // the pinned inode itself, so the change cannot reach a replacement.
-    rustix::fs::chmodat(
-        rustix::fs::CWD,
-        format!("/proc/self/fd/{}", pinned.as_raw_fd()),
-        rustix::fs::Mode::RWXU,
-        rustix::fs::AtFlags::empty(),
-    )
-    .map_err(Into::into)
+    // the pinned inode itself, so neither change can reach a replacement.
+    let pinned_path = format!("/proc/self/fd/{}", pinned.as_raw_fd());
+    let chmod = |mode| {
+        rustix::fs::chmodat(
+            rustix::fs::CWD,
+            pinned_path.as_str(),
+            mode,
+            rustix::fs::AtFlags::empty(),
+        )
+    };
+    chmod(rustix::fs::Mode::RWXU)?;
+    let readable = rustix::fs::open(
+        pinned_path.as_str(),
+        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )?;
+    if !is_empty(&readable)? {
+        chmod(rustix::fs::Mode::from_raw_mode(mode))?;
+        return Err(not_created_here());
+    }
+    Ok(())
 }
 
+/// Residual beyond Linux: the check and the no-follow `chmod` resolve the
+/// pathname separately, so a directory swapped in between them can have its
+/// mode set before the identity check below refuses it.
 #[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
 fn restore_private_mode(path: &Path) -> std::io::Result<()> {
-    use std::os::unix::fs::PermissionsExt as _;
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
     let found = std::fs::symlink_metadata(path)?;
+    let mode = found.permissions().mode() & 0o7777;
     if !found.is_dir() {
-        return Err(std::io::Error::other(
-            "the scratch entry is not a directory",
-        ));
+        return Err(not_created_here());
     }
-    if found.permissions().mode() & 0o777 == 0o700 {
+    if mode & 0o777 == 0o700 {
         return Ok(());
     }
+    if mode & 0o5077 != 0 {
+        return Err(not_created_here());
+    }
     // Never follows a link: a symlink swapped in after the check has its own
-    // mode changed, and the claim's `NOFOLLOW` open then refuses it.
+    // mode changed, and the `NOFOLLOW` open below refuses it.
     rustix::fs::chmodat(
         rustix::fs::CWD,
         path,
         rustix::fs::Mode::RWXU,
         rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
-    )
-    .map_err(Into::into)
+    )?;
+    let opened = open_hold(path)?;
+    let pinned = opened.metadata()?;
+    if (pinned.dev(), pinned.ino()) != (found.dev(), found.ino()) {
+        return Err(not_created_here());
+    }
+    if !is_empty(&opened)? {
+        rustix::fs::fchmod(&opened, rustix::fs::Mode::from_raw_mode(mode))?;
+        return Err(not_created_here());
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn not_created_here() -> std::io::Error {
+    std::io::Error::other("the scratch entry is not a directory this session created")
 }
 
 #[cfg(unix)]
 fn open_hold(path: &Path) -> std::io::Result<std::fs::File> {
     rustix::fs::open(
         path,
-        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::NOFOLLOW,
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::DIRECTORY
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::CLOEXEC,
         rustix::fs::Mode::empty(),
     )
     .map(std::fs::File::from)
@@ -416,15 +457,17 @@ fn open_hold(_path: &Path) -> std::io::Result<std::fs::File> {
 /// is ever re-resolved and a symlink is unlinked, not followed.
 #[cfg(unix)]
 fn remove_contents(dir: &std::fs::File) -> std::io::Result<()> {
+    use std::os::unix::fs::MetadataExt as _;
+    let dev = dir.metadata()?.dev();
     let mut names = Vec::new();
     for entry in rustix::fs::Dir::read_from(dir)? {
         let entry = entry?;
         let name = entry.file_name().to_owned();
         if name.to_bytes() != b"." && name.to_bytes() != b".." {
-            names.push((name, entry.file_type()));
+            names.push((name, entry.file_type(), entry.ino()));
         }
     }
-    for (name, kind) in names {
+    for (name, kind, ino) in names {
         // `DT_UNKNOWN` filesystems report no type; ask without following links.
         let kind = if kind == rustix::fs::FileType::Unknown {
             rustix::fs::FileType::from_raw_mode(
@@ -440,16 +483,45 @@ fn remove_contents(dir: &std::fs::File) -> std::io::Result<()> {
                 name.as_c_str(),
                 rustix::fs::OFlags::RDONLY
                     | rustix::fs::OFlags::DIRECTORY
-                    | rustix::fs::OFlags::NOFOLLOW,
+                    | rustix::fs::OFlags::NOFOLLOW
+                    | rustix::fs::OFlags::CLOEXEC,
                 rustix::fs::Mode::empty(),
             )?;
-            remove_contents(&std::fs::File::from(child))?;
+            let child = std::fs::File::from(child);
+            require_entry(&child, dev, ino)?;
+            remove_contents(&child)?;
             rustix::fs::unlinkat(dir, name.as_c_str(), rustix::fs::AtFlags::REMOVEDIR)?;
         } else {
             rustix::fs::unlinkat(dir, name.as_c_str(), rustix::fs::AtFlags::empty())?;
         }
     }
     Ok(())
+}
+
+/// Fails unless `child` is the inode its parent's listing named, so a
+/// directory swapped in after the listing is never descended into.
+#[cfg(unix)]
+fn require_entry(child: &std::fs::File, dev: u64, ino: u64) -> std::io::Result<()> {
+    use std::os::unix::fs::MetadataExt as _;
+    let found = child.metadata()?;
+    if (found.dev(), found.ino()) != (dev, ino) {
+        return Err(std::io::Error::other(
+            "a scratch subdirectory was replaced during cleanup",
+        ));
+    }
+    Ok(())
+}
+
+/// Whether the directory `dir` has no entries but `.` and `..`.
+#[cfg(unix)]
+fn is_empty(dir: impl std::os::fd::AsFd) -> std::io::Result<bool> {
+    for entry in rustix::fs::Dir::read_from(dir)? {
+        let entry = entry?;
+        if entry.file_name().to_bytes() != b"." && entry.file_name().to_bytes() != b".." {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 /// One scenario's owned pack and save media.
