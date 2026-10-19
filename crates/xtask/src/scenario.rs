@@ -64,9 +64,6 @@ fn boot_to_main_menu_frames() -> &'static [ScenarioFrame] {
     })
 }
 
-// Mirrors `engine::overworld::WALK_FRAMES_PER_TILE` without adding a direct dependency.
-const WALK_FRAMES_PER_TILE: usize = 16;
-
 #[derive(Debug, Clone, Copy)]
 struct Segment {
     buttons: AppButtons,

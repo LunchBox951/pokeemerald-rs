@@ -5,6 +5,9 @@
 # start. Apply with `gh label create`/`gh label edit` (or an additive
 # label-sync step) against this file; never destructively sync labels that
 # only exist live.
+#
+# Each description owns its label's meaning: when to apply it and, for state
+# labels, when to remove it. GitHub caps label descriptions at 100 characters.
 
 # --- Subsystem / area ---
 - name: roadmap
@@ -40,10 +43,10 @@
 # --- Review / gating ---
 - name: needs-review
   color: "d4c5f9"
-  description: Awaiting maintainer or routine review before it can advance.
+  description: Not yet triaged (issue) or awaiting a reviewer's verdict (PR). Remove once triaged or reviewed.
 - name: needs-split
   color: "c5def5"
-  description: Valid work too large for one agent session; a later pass splits it into sub-issues.
+  description: Valid work too large for one focused change; split it into sub-issues before implementing.
 - name: needs-operator
   color: "e99695"
   description: Blocked on a genuine human decision, incl. player-channel promotion signoff.
@@ -79,19 +82,19 @@
   color: "d93f0b"
   description: Regression observed on the unstable (nightly) branch.
 
-# --- Routine / pipeline state ---
+# --- Maintenance / pipeline state ---
 - name: routine
   color: "5319e7"
-  description: Tracking item owned by the automated maintenance routine.
+  description: Routine maintenance found while reviewing dev; advances no v1 acceptance ID.
 - name: soaking
   color: "fbca04"
-  description: Change is soaking across passes before merge/promotion.
+  description: Held open to soak before merge or promotion; not yet eligible to merge.
 - name: ready-to-merge
   color: "0e8a16"
-  description: Reviewed and green; eligible to merge on a later pass.
+  description: Reviewed and green; eligible to merge.
 - name: blocked
   color: "000000"
-  description: Cannot proceed until a dependency or decision clears.
+  description: Cannot proceed until a dependency or decision clears; the issue names which one.
 
 # --- Contributor onboarding ---
 - name: good-first-issue

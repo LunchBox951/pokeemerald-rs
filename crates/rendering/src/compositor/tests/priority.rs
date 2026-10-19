@@ -13,12 +13,34 @@ use crate::tile::{BitDepth, Tileset};
 fn bg_vs_bg_lower_priority_number_wins() {
     let (tiles_x, palette_x, map_x) = opaque_bg_fixture(1);
     let (tiles_y, palette_y, map_y) = opaque_bg_fixture(2);
-    let layer_a = crate::bg::BgLayer::new(&tiles_x, &palette_x, &map_x);
-    let layer_b = crate::bg::BgLayer::new(&tiles_y, &palette_y, &map_y);
+    let losing_bg0_priority_3 = crate::bg::BgLayer::new(&tiles_x, &palette_x, &map_x);
+    let winning_bg1_priority_0 = crate::bg::BgLayer::new(&tiles_y, &palette_y, &map_y);
 
     let slots = [
-        BgSlot::new(layer_a, 1, 3, 0, 0, true),
-        BgSlot::new(layer_b, 0, 0, 0, 0, true),
+        BgSlot::new(losing_bg0_priority_3, 0, 3, 0, 0, true),
+        BgSlot::new(winning_bg1_priority_0, 1, 0, 0, 0, true),
+    ];
+    let entries: [OamEntry; 0] = [];
+    let no_sprite_tiles = Tileset::decode(BitDepth::Bpp4, &[]).unwrap();
+    let sprites = empty_sprite_layer(&entries, &no_sprite_tiles);
+
+    let fb = compose_frame(&sprites, &slots);
+    assert_eq!(
+        fb.pixel(0, 0),
+        Some(Bgr555::from_channels(2, 0, 0).to_rgb888())
+    );
+}
+
+#[test]
+fn bg_vs_bg_priority_result_is_independent_of_slot_order() {
+    let (tiles_x, palette_x, map_x) = opaque_bg_fixture(1);
+    let (tiles_y, palette_y, map_y) = opaque_bg_fixture(2);
+    let losing_bg0_priority_3 = crate::bg::BgLayer::new(&tiles_x, &palette_x, &map_x);
+    let winning_bg1_priority_0 = crate::bg::BgLayer::new(&tiles_y, &palette_y, &map_y);
+
+    let slots = [
+        BgSlot::new(winning_bg1_priority_0, 1, 0, 0, 0, true),
+        BgSlot::new(losing_bg0_priority_3, 0, 3, 0, 0, true),
     ];
     let entries: [OamEntry; 0] = [];
     let no_sprite_tiles = Tileset::decode(BitDepth::Bpp4, &[]).unwrap();
@@ -236,22 +258,24 @@ fn pixel_with_no_opaque_layer_stays_at_the_backdrop() {
 fn affine_bg_slot_participates_in_priority_ordering_like_a_regular_bg() {
     // Affine slots share compose_frame's ordering, not a separate path.
     let (affine_tiles, affine_palette, affine_tilemap) = opaque_affine_bg_fixture(9);
-    let affine_layer = AffineBgLayer::new(&affine_tiles, &affine_palette, &affine_tilemap);
+    let winning_affine_bg1_priority_0 =
+        AffineBgLayer::new(&affine_tiles, &affine_palette, &affine_tilemap);
     let (regular_tiles, regular_palette, regular_map) = opaque_bg_fixture(1);
-    let regular_layer = crate::bg::BgLayer::new(&regular_tiles, &regular_palette, &regular_map);
+    let losing_regular_bg0_priority_1 =
+        crate::bg::BgLayer::new(&regular_tiles, &regular_palette, &regular_map);
 
     let slots = [
         BgSlot::new_affine(
-            affine_layer,
+            winning_affine_bg1_priority_0,
+            1,
             0,
-            0, // best priority
             AffineMatrix::IDENTITY,
             0,
             0,
             Overflow::Transparent,
             true,
         ),
-        BgSlot::new(regular_layer, 1, 1, 0, 0, true), // worse priority
+        BgSlot::new(losing_regular_bg0_priority_1, 0, 1, 0, 0, true),
     ];
     let entries: [OamEntry; 0] = [];
     let no_sprite_tiles = Tileset::decode(BitDepth::Bpp4, &[]).unwrap();

@@ -1,4 +1,4 @@
-//! The animated-door warp decision (issue #851, S-5): upstream `TryDoorWarp`
+//! The animated-door warp decision (S-5): upstream `TryDoorWarp`
 //! (`pokeemerald/src/field_control_avatar.c:170-178`, `DIR_NORTH` branch at
 //! `:833-841`). [`super::step`] sequences the outcome; this module owns
 //! whether there is one.
