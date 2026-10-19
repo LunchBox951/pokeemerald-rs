@@ -210,9 +210,12 @@ pub(crate) fn poison_point_can_land(attacker: &BattlePokemon) -> bool {
         && attacker.ability() != AbilityId::IMMUNITY
 }
 
-/// A `secondaryEffectChance` at which `Cmd_seteffectwithchance` already takes
-/// its certain-effect branch, so Serene Grace's doubling is unobservable
-/// (`battle_script_commands.c:2912-2930`).
+/// A `secondaryEffectChance` that every roll of `Cmd_seteffectwithchance`'s
+/// chance branch passes. That branch still spends its `Random() % 100` draw,
+/// and both this value and Serene Grace's doubled 200 clear the same
+/// comparison, so the doubling is unobservable
+/// (`battle_script_commands.c:2912-2930`). The draw-free branch at `:2917`
+/// is chosen by a prepared `MOVE_EFFECT_CERTAIN` flag, never by this chance.
 const GUARANTEED_EFFECT_CHANCE: u8 = 100;
 
 /// `SetMoveEffect`'s `MOVE_EFFECT_CONFUSION` guards for the trampoline path:
@@ -267,8 +270,9 @@ fn confuse_hit_could_ever_land(defender: &BattlePokemon) -> bool {
 /// confusion volatile is deliberately not read here.
 /// A move whose `secondaryEffectChance` is already 100 is exempt: Serene
 /// Grace only doubles it to 200 (`battle_script_commands.c:2912-2915`), and
-/// both values pass the same chance roll and take the same certain-effect
-/// branch (`:2923-2930`), so the doubling changes neither outcome nor RNG use.
+/// both values stay in the same chance branch, spend its `Random() % 100`
+/// draw, and clear the same comparison (`:2923-2930`), so the doubling
+/// changes neither outcome nor RNG use.
 ///
 /// # Errors
 ///
