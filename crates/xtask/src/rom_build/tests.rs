@@ -408,12 +408,50 @@ fn an_unbounded_image_stream_is_read_only_past_the_cartridge_size() {
     assert_eq!(bytes.len(), MAX_ROM_BYTES + 1);
 }
 
+fn env_pairs(pairs: &[(&str, &str)]) -> Vec<(OsString, OsString)> {
+    pairs
+        .iter()
+        .map(|(name, value)| (OsString::from(name), OsString::from(value)))
+        .collect()
+}
+
 #[test]
 fn the_build_inherits_the_windows_os_marker() {
     let lookup = |name: &str| (name == "OS").then(|| OsString::from("Windows_NT"));
     assert_eq!(
-        inherited_env(lookup),
-        [("OS", OsString::from("Windows_NT"))]
+        inherited_env(lookup, []),
+        env_pairs(&[("OS", "Windows_NT")])
     );
-    assert!(inherited_env(|name| (name == "SECRET").then(OsString::new)).is_empty());
+    assert!(inherited_env(|name| (name == "SECRET").then(OsString::new), []).is_empty());
+}
+
+#[test]
+fn the_build_inherits_the_nix_shell_build_inputs() {
+    let vars = env_pairs(&[
+        ("NIX_CFLAGS_COMPILE", "-isystem /nix/store/x-libpng/include"),
+        ("NIX_LDFLAGS", "-L/nix/store/x-libpng/lib"),
+        ("NIX_CC_WRAPPER_TARGET_HOST_x86_64_unknown_linux_gnu", "1"),
+        ("PKG_CONFIG_PATH", "/nix/store/x-libpng/lib/pkgconfig"),
+        ("SECRET_TOKEN", "x"),
+        ("CFLAGS", "-O0"),
+    ]);
+    let inherited = inherited_env(|_| None, vars.clone());
+    assert_eq!(inherited, vars[..4]);
+}
+
+#[test]
+#[cfg(unix)]
+fn a_build_that_rewrites_rom_sha1_is_still_checked_against_the_pin() {
+    let fx = Fixture::new(
+        "checksum-rewrite",
+        "printf 'OTHERROM' > pokeemerald.gba\n\
+         printf '968036cea1fec0a66b60dd756c99a3bec1d6aab1  pokeemerald.gba\\n' > rom.sha1\n\
+         printf '  0x08000000  gStart\\n' > pokeemerald.map",
+    );
+    let err = build(&fx.config).unwrap_err();
+    assert!(
+        matches!(&err, RomBuildError::ChecksumMismatch { expected, .. }
+            if expected == "0da67421f828e56a9e6e698f79acc5dad60ad3ee"),
+        "{err}"
+    );
 }

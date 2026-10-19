@@ -46,6 +46,12 @@ const REQUIRED_TOOLS: [&str; 6] = [
 /// the upstream `Makefile` and its tool makefiles detect Windows to append
 /// `.exe` to tool paths (`Makefile:48-51`).
 const INHERITED_ENV: [&str; 5] = ["PATH", "HOME", "DEVKITARM", "DEVKITPRO", "OS"];
+/// Name prefixes the build also inherits. Upstream's NixOS shell
+/// (`INSTALL.md:353-358`) passes include, library, and `pkg-config` search
+/// paths to its compiler and `pkg-config` wrappers only through `NIX_*` and
+/// `PKG_CONFIG_*` variables, and the host tools need them to find libpng
+/// (`tools/gbagfx/Makefile:4,7`).
+const INHERITED_ENV_PREFIXES: [&str; 2] = ["NIX_", "PKG_CONFIG_"];
 /// Names the directory holding an installed `agbcc`.
 const AGBCC_ENV: &str = "POKEEMERALD_AGBCC";
 /// Where the upstream `Makefile` looks for `agbcc`, relative to the tree.
@@ -270,11 +276,14 @@ pub fn build(config: &BuildConfig) -> Result<CompiledArtifact, RomBuildError> {
     let scratch = Scratch::create(&config.scratch_root)?;
     let tree = scratch.0.join("pokeemerald");
     checkout::materialize(&config.reference, &config.pinned_revision, &tree)?;
+    // Read before anything else runs in the tree, so the build cannot rewrite
+    // the checksum it is checked against.
+    let expected = pinned_checksum(&tree)?;
     copy_dir(&config.agbcc_source, &tree.join(AGBCC_DEST))
         .map_err(|err| RomBuildError::Materialize(format!("cannot provision agbcc: {err}")))?;
     let build_command = run_make(config, &tree)?;
     let rom = read_rom(&tree)?;
-    verify_checksum(&tree, &rom)?;
+    verify_checksum(&expected, &rom)?;
     let map_path = tree.join(MAP_FILE);
     if !map_path.is_file() {
         return Err(RomBuildError::MissingOutput(MAP_FILE.to_owned()));
@@ -360,12 +369,24 @@ fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// The [`INHERITED_ENV`] variables `lookup` has a value for.
-fn inherited_env(lookup: impl Fn(&str) -> Option<OsString>) -> Vec<(&'static str, OsString)> {
-    INHERITED_ENV
+/// The environment the build inherits: each [`INHERITED_ENV`] variable
+/// `lookup` has a value for, then each of `vars` whose name starts with one of
+/// [`INHERITED_ENV_PREFIXES`].
+fn inherited_env(
+    lookup: impl Fn(&str) -> Option<OsString>,
+    vars: impl IntoIterator<Item = (OsString, OsString)>,
+) -> Vec<(OsString, OsString)> {
+    let named = INHERITED_ENV
         .iter()
-        .filter_map(|&name| lookup(name).map(|value| (name, value)))
-        .collect()
+        .filter_map(|&name| lookup(name).map(|value| (OsString::from(name), value)));
+    let prefixed = vars.into_iter().filter(|(name, _)| {
+        name.to_str().is_some_and(|name| {
+            INHERITED_ENV_PREFIXES
+                .iter()
+                .any(|prefix| name.starts_with(prefix))
+        })
+    });
+    named.chain(prefixed).collect()
 }
 
 /// Runs the upstream build in `tree` with a scrubbed environment and returns
@@ -378,7 +399,10 @@ fn run_make(config: &BuildConfig, tree: &Path) -> Result<String, RomBuildError> 
         .current_dir(tree)
         .env_clear()
         .stdin(Stdio::null());
-    command.envs(inherited_env(|name| std::env::var_os(name)));
+    command.envs(inherited_env(
+        |name| std::env::var_os(name),
+        std::env::vars_os(),
+    ));
     let rendered = format!("{} {jobs}", config.make.to_string_lossy());
     let output = command.output().map_err(|err| {
         if err.kind() == ErrorKind::NotFound {
@@ -449,27 +473,33 @@ fn implausible(len: u64) -> String {
     format!("{len} bytes is not a plausible cartridge image")
 }
 
-/// Checks `rom` against the pinned tree's `rom.sha1`, as the upstream
-/// `compare` goal does, so only the pinned image is reported.
-fn verify_checksum(tree: &Path, rom: &[u8]) -> Result<(), RomBuildError> {
+/// The digest the materialised pinned tree's `rom.sha1` names for the image,
+/// the value upstream's `compare` goal checks against (`Makefile:221-227`).
+fn pinned_checksum(tree: &Path) -> Result<String, RomBuildError> {
     let listing = std::fs::read_to_string(tree.join(CHECKSUM_FILE)).map_err(|err| {
         RomBuildError::Materialize(format!("cannot read `{CHECKSUM_FILE}`: {err}"))
     })?;
-    let expected = listing
+    listing
         .lines()
         .find_map(|line| {
             let (digest, name) = line.split_once(char::is_whitespace)?;
-            (name.trim_start().trim_start_matches('*') == ROM_FILE).then_some(digest)
+            (name.trim_start().trim_start_matches('*') == ROM_FILE)
+                .then(|| digest.to_ascii_lowercase())
         })
         .ok_or_else(|| {
             RomBuildError::Materialize(format!("`{CHECKSUM_FILE}` names no `{ROM_FILE}`"))
-        })?;
+        })
+}
+
+/// Checks `rom` against the `expected` digest, so only the pinned image is
+/// reported.
+fn verify_checksum(expected: &str, rom: &[u8]) -> Result<(), RomBuildError> {
     let actual = rom_import::sha1(rom).to_string();
-    if actual.eq_ignore_ascii_case(expected) {
+    if actual == expected {
         Ok(())
     } else {
         Err(RomBuildError::ChecksumMismatch {
-            expected: expected.to_ascii_lowercase(),
+            expected: expected.to_owned(),
             actual,
         })
     }
