@@ -246,6 +246,7 @@ fn a_replaced_scratch_directory_receives_no_pack_write() {
         let _ = std::fs::remove_dir_all(&aside);
         let _ = std::fs::remove_file(&scratch.path);
         let _ = std::fs::remove_dir(&scratch.path);
+        std::fs::remove_dir_all(&base).unwrap();
     }
 }
 
@@ -283,6 +284,7 @@ fn dropping_a_session_never_removes_a_tree_that_replaced_its_scratch() {
         let _ = std::fs::remove_dir_all(&aside);
         let _ = std::fs::remove_file(&scratch_path);
         let _ = std::fs::remove_dir_all(&scratch_path);
+        std::fs::remove_dir_all(&base).unwrap();
         assert!(survived, "cleanup removed content it did not create");
         assert!(kept_pack, "cleanup resolved the pathname, not the hold");
     }
@@ -308,6 +310,7 @@ fn a_session_whose_scratch_was_replaced_refuses_to_start() {
     drop(session);
     let _ = std::fs::remove_dir_all(&aside);
     let _ = std::fs::remove_dir_all(&path);
+    std::fs::remove_dir_all(&base).unwrap();
 }
 
 #[cfg(windows)]
