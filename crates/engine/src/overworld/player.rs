@@ -582,6 +582,12 @@ impl PlayerState {
                 // (`DoGroundEffects_OnFinishStep`, `:8085-8104`), so a
                 // multi-level origin's deferred adoption lands here.
                 self.adopt_elevation(self.landing_elevation, self.landing_elevation);
+                if self.transit_cadence.duration == WALK_SLOW_FRAMES_PER_TILE {
+                    // The slow animation plays both feet and finishes on
+                    // the opposite standing command (`:4582-4598`), so the
+                    // stored cycle phase flips once more on completion.
+                    self.advance_step_parity(false);
+                }
                 if self.transit_cadence.animation_disabled {
                     self.rest_pose = RestPose::SlidePaused;
                 } else if self.transit_cadence.running {

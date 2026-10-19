@@ -234,6 +234,26 @@ fn the_spin_mat_consumes_input_then_takes_one_slow_opposite_step() {
 }
 
 #[test]
+fn the_step_after_a_spin_mat_exit_repeats_the_exits_starting_foot() {
+    let (mut player, runtime) = on_mat(MB_SECRET_BASE_SPIN_MAT, Direction::South);
+    let mut exit_foot = None;
+    for _ in 0..200 {
+        if let StepOutcome::Advanced { .. } = frame(&mut player, &runtime, None) {
+            exit_foot = Some(player.second_foot_leads());
+            break;
+        }
+    }
+    let exit_foot = exit_foot.expect("the spin mat takes its exit step");
+    for _ in 1..WALK_SLOW_FRAMES_PER_TILE {
+        frame(&mut player, &runtime, None);
+    }
+    assert!(!player.in_transit());
+    let outcome = frame(&mut player, &runtime, Some(Direction::North));
+    assert!(matches!(outcome, StepOutcome::Advanced { .. }), "{outcome:?}");
+    assert_eq!(player.second_foot_leads(), exit_foot);
+}
+
+#[test]
 fn re_entering_the_jump_mat_jumps_again() {
     let (mut player, runtime) = on_mat(MB_SECRET_BASE_JUMP_MAT, Direction::East);
     for _ in 0..2 * MAT_JUMP_FRAMES {
