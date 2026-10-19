@@ -55,7 +55,7 @@ fn write_empty_scratch_pack(label: &str) -> std::path::PathBuf {
     panic!("every candidate scratch pack name was already occupied");
 }
 
-/// A symlink planted at the first candidate name must be left alone: its
+/// A symlink planted at candidate 0 (the name the helper tries first) must be left alone: its
 /// target keeps its contents and the pack lands at a different name.
 #[cfg(unix)]
 #[test]
@@ -78,14 +78,12 @@ fn scratch_pack_creation_does_not_write_through_a_planted_symlink() {
             .write_all(b"precious")
             .expect("the symlink target must be writable");
     }
-    let planted = (0..64)
-        .map(|attempt| scratch_pack_candidate(label, attempt))
-        .find(|path| match std::os::unix::fs::symlink(&target, path) {
-            Ok(()) => true,
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => false,
-            Err(error) => panic!("the symlink must be plantable: {error}"),
-        })
-        .expect("a candidate name must be free for the symlink");
+    // Candidate 0 is the helper's first choice; an occupied name fails the test.
+    let planted = scratch_pack_candidate(label, 0);
+    if let Err(error) = std::os::unix::fs::symlink(&target, &planted) {
+        drop(std::fs::remove_file(&target));
+        panic!("candidate 0 must be free to plant the symlink: {error}");
+    }
 
     let written = write_empty_scratch_pack(label);
 
@@ -100,6 +98,11 @@ fn scratch_pack_creation_does_not_write_through_a_planted_symlink() {
         "the symlink target must stay unchanged"
     );
     assert_ne!(written, planted, "the occupied name must be skipped");
+    assert_eq!(
+        written,
+        scratch_pack_candidate(label, 1),
+        "the pack must land at the next candidate"
+    );
     assert!(pack_exists, "the pack must be written at the fresh name");
 }
 
