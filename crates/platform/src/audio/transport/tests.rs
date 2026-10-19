@@ -1,13 +1,14 @@
 //! Drives the transport state machine against a fake host in fake time.
 
 use std::any::Any;
-use std::sync::mpsc::{channel, Receiver};
 use std::sync::Mutex;
 use std::thread::ThreadId;
 
 use super::*;
 use crate::audio::AudioOutput;
 use crate::ring::ring_buffer;
+
+mod setup_and_backlog;
 
 type DataFn<T> = Box<dyn FnMut(&mut [T], &cpal::OutputCallbackInfo) + Send>;
 
@@ -24,6 +25,8 @@ struct World {
     unsupported: bool,
     format: Option<cpal::SampleFormat>,
     fail_build: bool,
+    /// The kind `build` fails with while `fail_build` is set.
+    build_kind: Option<cpal::ErrorKind>,
     fail_play: bool,
     no_hw_pause: bool,
     /// Every call that reaches the audio stack, host or device or stream.
@@ -105,7 +108,9 @@ impl OutputDevice for FakeDevice {
         let mut w = with(&self.0);
         w.ops += 1;
         if w.fail_build {
-            return Err(cpal::Error::new(cpal::ErrorKind::BackendError));
+            return Err(cpal::Error::new(
+                w.build_kind.unwrap_or(cpal::ErrorKind::BackendError),
+            ));
         }
         w.builds += 1;
         w.log.push("build");
@@ -181,31 +186,27 @@ struct Rig {
     transport: Transport<FakeHost>,
     producer: Producer,
     shared: Arc<Shared>,
-    events: Receiver<TransportState>,
 }
 
 fn rig(world: &SharedWorld, frames: usize) -> Rig {
     let (producer, consumer) = ring_buffer(frames * 2);
     drop(consumer);
     let shared = Arc::new(Shared::new(TransportState::Connecting, 13_379, 0));
-    let (sender, events) = channel();
     let transport = Transport::new(
         FakeHost(Arc::clone(world)),
         producer.clone(),
         Arc::clone(&shared),
-        sender,
     );
     Rig {
         transport,
         producer,
         shared,
-        events,
     }
 }
 
 impl Rig {
     fn events(&self) -> Vec<TransportState> {
-        self.events.try_iter().collect()
+        std::iter::from_fn(|| self.shared.pop_event()).collect()
     }
 }
 

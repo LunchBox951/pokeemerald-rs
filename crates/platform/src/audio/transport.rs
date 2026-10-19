@@ -29,10 +29,12 @@
 //!   history. The first attach keeps the queue: that is the producer's startup
 //!   prefill, whether or not it has already called `start`.
 //! - Each distinct [`TransportState`] is published once, in order, for the
-//!   application to report.
+//!   application to report. At most [`MAX_PENDING_EVENTS`] unpolled
+//!   transitions are kept; a caller that never polls loses the oldest, and
+//!   [`Shared::state`] always holds the latest.
 
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
-use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -50,6 +52,8 @@ pub(super) use worker::{CpalHost, Worker};
 #[cfg(test)]
 mod tests;
 
+/// Most transitions kept for a caller that does not poll; older ones drop.
+pub(super) const MAX_PENDING_EVENTS: usize = 8;
 /// How often a healthy stream's failure flag and play intent are checked.
 pub(super) const HEALTH_POLL: Duration = Duration::from_millis(20);
 /// How often the OS default output is re-discovered while a stream is up.
@@ -110,6 +114,8 @@ pub(super) struct Shared {
     pub(super) max_callback_frames: AtomicUsize,
     pub(super) settle_margin_frames: AtomicU64,
     state: Mutex<TransportState>,
+    /// Transitions not yet polled; bounded by [`MAX_PENDING_EVENTS`].
+    events: Mutex<VecDeque<TransportState>>,
 }
 
 impl Shared {
@@ -128,7 +134,25 @@ impl Shared {
             max_callback_frames: AtomicUsize::new(0),
             settle_margin_frames: AtomicU64::new(settle_margin_frames),
             state: Mutex::new(state),
+            events: Mutex::new(VecDeque::new()),
         }
+    }
+
+    /// Queue a transition for the application, discarding the oldest pending
+    /// one when an unpolled queue is full. The latest state always survives.
+    fn push_event(&self, state: TransportState) {
+        let mut events = self.events.lock().unwrap_or_else(PoisonError::into_inner);
+        if events.len() >= MAX_PENDING_EVENTS {
+            events.pop_front();
+        }
+        events.push_back(state);
+    }
+
+    pub(super) fn pop_event(&self) -> Option<TransportState> {
+        self.events
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .pop_front()
     }
 
     pub(super) fn state(&self) -> TransportState {
@@ -163,7 +187,6 @@ pub(super) struct Transport<H: OutputHost> {
     host: H,
     producer: Producer,
     shared: Arc<Shared>,
-    events: Sender<TransportState>,
     live: Option<Live<<H::Device as OutputDevice>::Stream>>,
     state: TransportState,
     failures: u32,
@@ -177,17 +200,11 @@ pub(super) struct Transport<H: OutputHost> {
 impl<H: OutputHost> Transport<H> {
     /// A transport whose first attempt is due at time zero. `producer`'s
     /// consumer must already be dropped so the transport can claim it.
-    pub(super) fn new(
-        host: H,
-        producer: Producer,
-        shared: Arc<Shared>,
-        events: Sender<TransportState>,
-    ) -> Self {
+    pub(super) fn new(host: H, producer: Producer, shared: Arc<Shared>) -> Self {
         Self {
             host,
             producer,
             shared,
-            events,
             live: None,
             state: TransportState::Connecting,
             failures: 0,
@@ -303,7 +320,12 @@ impl<H: OutputHost> Transport<H> {
             Arc::clone(&lost),
             Arc::clone(&self.shared.playback_clock),
         )
-        .map_err(|err| failure_of(&err))?;
+        .map_err(|err| match err {
+            // The device was found and negotiated, so a build that reports it
+            // missing is a failed connection, not an absent output.
+            PlatformError::Audio(_) => TransportFailure::ConnectFailed,
+            other => failure_of(&other),
+        })?;
 
         // A built stream is paused, so only a started transport plays it.
         let playing = self.shared.running.load(Ordering::Acquire);
@@ -361,8 +383,7 @@ impl<H: OutputHost> Transport<H> {
             .state
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = state;
-        // A dropped receiver means the facade is shutting down.
-        let _ = self.events.send(state);
+        self.shared.push_event(state);
     }
 }
 

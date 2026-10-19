@@ -2,7 +2,6 @@
 //! that steps the transport against the wall clock.
 
 use std::sync::atomic::Ordering;
-use std::sync::mpsc::{channel, Receiver};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Instant;
@@ -45,7 +44,6 @@ impl OutputHost for CpalHost {
 pub(in crate::audio) struct Worker {
     thread: Option<JoinHandle<()>>,
     shared: Arc<Shared>,
-    events: Receiver<TransportState>,
 }
 
 impl Worker {
@@ -55,14 +53,12 @@ impl Worker {
         producer: Producer,
         shared: Arc<Shared>,
     ) -> Result<Self, PlatformError> {
-        let (sender, events) = channel();
         let driver_shared = Arc::clone(&shared);
         let thread = thread::Builder::new()
             .name("audio-transport".into())
             .spawn(move || {
                 // Built here because a stream is not `Send` on every host.
-                let mut transport =
-                    Transport::new(host, producer, Arc::clone(&driver_shared), sender);
+                let mut transport = Transport::new(host, producer, Arc::clone(&driver_shared));
                 let origin = Instant::now();
                 while !driver_shared.shutdown.load(Ordering::Acquire) {
                     let next = transport.step(origin.elapsed());
@@ -78,7 +74,6 @@ impl Worker {
         Ok(Self {
             thread: Some(thread),
             shared,
-            events,
         })
     }
 
@@ -90,7 +85,7 @@ impl Worker {
     }
 
     pub(in crate::audio) fn poll(&self) -> Option<TransportState> {
-        self.events.try_recv().ok()
+        self.shared.pop_event()
     }
 }
 
