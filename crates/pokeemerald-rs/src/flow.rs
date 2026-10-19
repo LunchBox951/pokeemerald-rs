@@ -1,9 +1,8 @@
-//! The real (windowed) game-flow state machine (I-3, issue #149): title ->
+//! The real (windowed) game-flow state machine (I-3): title ->
 //! main menu -> intro -> overworld.
 //!
-//! Split out of [`crate::app`] to keep that module focused on the
-//! platform/window shell (`one module = one concept` `(oop-boundaries)`):
-//! [`AppScene`] is the state, [`advance_scene`] is the one-frame transition
+//! [`crate::app`] stays focused on the platform/window shell (`one module =
+//! one concept` `(oop-boundaries)`): [`AppScene`] is the state, [`advance_scene`] is the one-frame transition
 //! function [`crate::app::App::step`] delegates to. See [`crate::app`]'s
 //! module docs for the transition diagram (`Title` -> `MainMenu` -> `Intro`
 //! -> `Overworld`) and the "log-or-ignore is fine" failure policy for a
@@ -15,7 +14,7 @@
 //! single frame -- see that variant's own doc comment and
 //! [`should_retry_overworld_load`].
 //!
-//! # Waiting for the front-end palette fade (I-3, issue #1329)
+//! # Waiting for the front-end palette fade (I-3)
 //!
 //! `Title` -> `MainMenu` and a `MainMenu` confirm on `NEW GAME`/`CONTINUE`
 //! hold the outgoing frame through a [`rendering::NormalPaletteFade`]
@@ -25,13 +24,11 @@
 //! `main_menu.c:884-894,936-943`) -- see [`AppScene::TitleFadeWait`] and
 //! [`AppScene::MainMenuFadeWait`] for the waiting states themselves.
 //!
-//! [`AnimatedTitle`] is the pre-I-3 per-frame title-animation state,
-//! unchanged in shape and behaviour from before this issue (see
-//! [`advance_scene`]'s `Title` arm and `crate::app`'s "Animating the real
-//! title screen" docs) -- only its ownership moved here, into one variant of
-//! [`AppScene`] instead of its own dedicated `App` field.
+//! [`AnimatedTitle`] is the per-frame title-animation state, owned by one
+//! variant of [`AppScene`] (see [`advance_scene`]'s `Title` arm and
+//! `crate::app`'s "Animating the real title screen" docs).
 //!
-//! # Where the save file enters the machine (I-6, issue #214)
+//! # Where the save file enters the machine (I-6)
 //!
 //! Two points, both taking the session's [`SaveSlot`] as an argument rather
 //! than reaching for a global `(oop-boundaries)`:
@@ -43,16 +40,16 @@
 //!   The loaded blocks ride along in [`MainMenuState`] until
 //!   [`MainMenuAction::Continue`] hands them to
 //!   [`OverworldPhase::continue_saved_game`].
-//! * **Write**, from the field start menu (I-6, issue #232): `START` in
+//! * **Write**, from the field start menu: `START` in
 //!   the overworld opens [`crate::start_menu`], and its `SAVE` action runs
 //!   upstream's own confirm/overwrite chain before calling
 //!   [`SaveSlot::store`] and friends.
 //!   [`advance_scene`]'s `Overworld` arm drives that through
 //!   [`OverworldPhase::advance_start_menu_frame`], which owns the frame
 //!   whenever a menu is open. There is deliberately **no** save on exit:
-//!   upstream writes nothing when the lid closes, and issue #214's
-//!   `save_on_exit` stand-in existed only until this flow landed.
+//!   upstream writes nothing when the lid closes.
 
+use engine::settings::GameSettings;
 use engine::text::render::PrinterInput;
 use platform::{ButtonState, Buttons, Frame};
 
@@ -62,9 +59,10 @@ use crate::main_menu::{self, MainMenuItem, MainMenuScene, MainMenuSceneError, Ma
 use crate::new_game::NewGameOptions;
 use crate::title::TitleScene;
 use fade_wait::{
-    advance_main_menu, advance_main_menu_fade_wait, advance_title, advance_title_fade_wait,
-    MainMenuFadeWait, TitleFadeWait,
+    advance_main_menu, advance_main_menu_fade_in, advance_main_menu_fade_wait, advance_title,
+    advance_title_fade_wait, MainMenuFadeIn, MainMenuFadeWait, TitleFadeWait,
 };
+use options::{advance_options, OptionsState};
 
 /// The battle-turn finalization (issue #405) shared by all three headless
 /// battle drivers -- see that module's docs for the shared decision and
@@ -83,28 +81,25 @@ mod first_usable_move;
 /// the stand-in answer it gives and exactly where the seam ends.
 mod move_learn;
 /// The shared `CreateNPCTrainerParty` construction and headless one-turn
-/// driver every NPC trainer battle in this crate goes through (issue #237,
-/// generalized off [`route103_rival`] by issue #264): both
+/// driver every NPC trainer battle in this crate goes through: both
 /// [`route103_rival`]'s own scripted rival and
 /// [`overworld_phase`]'s `sight_trainer_trigger` (Route 103's Daisy, Andrew,
 /// Miguel, Rhett, Marcos, Isabelle, Pete) build their battles through this
 /// module.
 pub(crate) mod npc_trainer_battle;
+mod options;
+#[cfg(test)]
+mod options_tests;
 pub(crate) mod overworld_phase;
-/// The scripted Route 103 rival battle's own choice of trainer, reachable
-/// from real play since issue #248: [`overworld_phase`]'s own
-/// `route103_rival_trigger` (beside its existing `first_battle_trigger` and,
-/// since issue #264, `sight_trainer_trigger`) reads this module's
+/// The scripted Route 103 rival battle's own choice of trainer:
+/// [`overworld_phase`]'s `route103_rival_trigger` (beside its
+/// `first_battle_trigger` and `sight_trainer_trigger`) reads this module's
 /// [`route103_rival::route103_rival_for`] table, then calls
 /// [`npc_trainer_battle::start_npc_trainer_battle`]/
-/// [`npc_trainer_battle::advance_npc_trainer_battle`] directly -- the same
-/// reachability slice that retired [`first_battle`]'s own former
-/// `#[allow(dead_code)]` between issues #221 and #231. This module carried
-/// thin pass-throughs over those two functions (plus a `RivalBattleError`
-/// alias) from issue #264 until issue #347 retired them: neither wrapper
-/// held any Route-103-specific behaviour, so [`npc_trainer_battle`] is the
-/// one place both this module's own trigger and
-/// [`overworld_phase`]'s `sight_trainer_trigger` build their battles now.
+/// [`npc_trainer_battle::advance_npc_trainer_battle`] directly. This module
+/// holds no battle driver of its own: [`npc_trainer_battle`] is the one
+/// place both this module's own trigger and [`overworld_phase`]'s
+/// `sight_trainer_trigger` build their battles.
 pub(crate) mod route103_rival;
 mod wild_encounter;
 pub(crate) use overworld_phase::OverworldPhase;
@@ -213,9 +208,15 @@ pub(crate) enum AppScene {
     /// Waiting for the main menu's black front-end palette fade before the
     /// [`MainMenuAction`] a fresh A confirmed on `NEW GAME`/`CONTINUE`
     /// dispatches (I-3, issue #1329: module docs' "Waiting for the
-    /// front-end palette fade" section). `OPTION`'s swallowed press never
-    /// reaches this state -- module docs' boundary note.
+    /// front-end palette fade" section). `OPTION` enters it too, dispatching to
+    /// the Options screen.
     MainMenuFadeWait(Box<MainMenuFadeWait>),
+    /// The Options screen, opened from the main menu's `OPTION` item (I-6):
+    /// it retains the menu it returns to.
+    Options(Box<OptionsState>),
+    /// The main menu fading in from black after the Options screen returns
+    /// (`pokeemerald/src/main_menu.c:583-586`).
+    MainMenuFadeIn(Box<MainMenuFadeIn>),
     /// Birch's speech, paging through [`crate::intro::speech`]'s text.
     Intro(Box<IntroScene>),
     /// The intro finished, but [`OverworldPhase::load_default`] failed once
@@ -261,55 +262,41 @@ const fn menu_type_for(saved: &SavedGame) -> MainMenuType {
     }
 }
 
-/// `gSaveBlock2Ptr->optionsWindowFrameType` (`main_menu.c:2191-2193`), as a
-/// pure decision the `Title` -> `MainMenu` transition acts on -- so which
-/// border a given boot verdict produces is pinned by a pack-less test too,
-/// the same [`menu_type_for`] already is.
-const fn window_frame_for(saved: &SavedGame) -> u8 {
+/// `SetDefaultOptions` (`new_game.c:91-98`) for the boot verdicts that clear
+/// `SaveBlock2` -- exactly [`crate::game_save::SaveFileStatus::boot_clears_save_block2`]'s
+/// `Empty`/`Corrupt` cases (`pokeemerald/src/intro.c:1154-1156`), even when a
+/// checksum-valid block was recovered. Run once, as the boot load lands in
+/// [`title_to_main_menu`], so the block the Options screen edits is the live
+/// one: upstream defaults only at boot, never again on each read.
+fn apply_boot_defaults(saved: &mut SavedGame) {
     if saved.status.boot_clears_save_block2() {
-        // `SetDefaultOptions` (`new_game.c:94`) puts the cleared block's
-        // frame back to 0 even when a checksum-valid block was recovered.
-        0
-    } else {
-        saved.block2.options_window_frame_type
+        GameSettings::from(NewGameOptions::DEFAULT).write_to_save(&mut saved.block2);
     }
+}
+
+/// `gSaveBlock2Ptr->optionsWindowFrameType` (`main_menu.c:2191-2193`): the
+/// live block's frame, which [`apply_boot_defaults`] has already defaulted
+/// for a boot that cleared it and the Options screen may since have changed.
+const fn window_frame_for(saved: &SavedGame) -> u8 {
+    saved.block2.options_window_frame_type
 }
 
 /// The [`NewGameOptions`] a NEW GAME confirm on `saved` hands onward to
 /// [`intro::load`] and, once the intro finishes,
-/// [`crate::new_game::init_save_blocks_with_options`] (issue #1125). This is
-/// the one place that owns the status/option contract; every other site
-/// that needs it links here instead of restating it.
+/// [`crate::new_game::init_save_blocks_with_options`] (issue #1125): the live
+/// block's six options.
 ///
 /// `NewGameInitData` never resets any `options*` field itself
-/// (`pokeemerald/src/new_game.c:149-207`), so only a boot verdict that
-/// already re-defaulted `SaveBlock2` via `SetDefaultOptions` -- exactly
-/// [`crate::game_save::SaveFileStatus::boot_clears_save_block2`]'s `Empty`/
-/// `Corrupt` cases (`pokeemerald/src/intro.c:1154-1156`) -- reaches
-/// [`NewGameOptions::DEFAULT`]. Every other status, `Ok`/`Error` alike, and
-/// this port's own `NoFlash`, carries `saved.block2`'s own preferences forward
-/// instead -- mirroring [`window_frame_for`]'s identical boot-verdict split.
-///
-/// `NoFlash` is not a rescued block: [`crate::game_save::SaveSlot::load`]
-/// synthesizes a zero-filled `SaveBlock2` for it rather than recovering one
-/// (no readable image exists to recover from). Carrying its zero bytes
-/// forward still mirrors upstream, though, rather than diverging from it: a
-/// genuine `SAVE_STATUS_NO_FLASH` boot leaves `gSaveBlock2Ptr` equally
-/// untouched, since `LoadGameSave` returns before ever reading it
-/// (`pokeemerald/src/save.c:871-889`).
-const fn new_game_options_for(saved: &SavedGame) -> NewGameOptions {
-    if saved.status.boot_clears_save_block2() {
-        NewGameOptions::DEFAULT
-    } else {
-        NewGameOptions {
-            text_speed: saved.block2.options_text_speed,
-            window_frame_type: saved.block2.options_window_frame_type,
-            button_mode: saved.block2.options_button_mode,
-            sound: saved.block2.options_sound,
-            battle_style: saved.block2.options_battle_style,
-            battle_scene_off: saved.block2.options_battle_scene_off,
-        }
-    }
+/// (`pokeemerald/src/new_game.c:149-207`), so whatever `saved.block2` holds
+/// -- the recovered save's own preferences, [`apply_boot_defaults`]' defaults
+/// for an `Empty`/`Corrupt` boot, or an edit the Options screen committed
+/// since -- carries forward. `NoFlash` is not a rescued block:
+/// [`crate::game_save::SaveSlot::load`] synthesizes a zero-filled
+/// `SaveBlock2` for it, and carrying those zero bytes forward still mirrors
+/// a genuine `SAVE_STATUS_NO_FLASH` boot, which leaves `gSaveBlock2Ptr`
+/// untouched (`pokeemerald/src/save.c:871-889`).
+fn new_game_options_for(saved: &SavedGame) -> NewGameOptions {
+    GameSettings::from_save(&saved.block2).into()
 }
 
 /// Which of upstream's `ACTION_*` values confirming `item` maps to
@@ -321,11 +308,9 @@ enum MainMenuAction {
     Continue,
     /// `ACTION_NEW_GAME` (`:1055-1063`): start the Birch-speech intro.
     NewGame,
-    /// No action this port performs -- `ACTION_OPTION` (`:1070`), whose
-    /// settings screen is not built (see [`crate::main_menu`]'s scope
-    /// notes). The press is swallowed rather than incorrectly launching
-    /// something else.
-    None,
+    /// `ACTION_OPTION` (`:1070-1073`): open the Options screen, which
+    /// returns to this menu.
+    Options,
 }
 
 /// What confirming (A) `item` on the main menu does, as a pure decision
@@ -339,7 +324,7 @@ const fn menu_action(item: MainMenuItem) -> MainMenuAction {
     match item {
         MainMenuItem::Continue => MainMenuAction::Continue,
         MainMenuItem::NewGame => MainMenuAction::NewGame,
-        MainMenuItem::Option => MainMenuAction::None,
+        MainMenuItem::Option => MainMenuAction::Options,
     }
 }
 
@@ -462,7 +447,8 @@ fn title_to_main_menu(
     pack_source: &crate::pack_source::PackSource,
     save_slot: &mut SaveSlot,
 ) -> Option<(AppScene, Box<Frame>)> {
-    let saved = save_slot.load();
+    let mut saved = save_slot.load();
+    apply_boot_defaults(&mut saved);
     match main_menu::load_with_window_frame(
         pack_source,
         menu_type_for(&saved),
@@ -532,6 +518,8 @@ pub(crate) fn advance_scene(
             (AppScene::MainMenu(state), frame)
         }
         AppScene::MainMenuFadeWait(wait) => advance_main_menu_fade_wait(wait, pack_source),
+        AppScene::Options(state) => advance_options(state, buttons, &pack_source),
+        AppScene::MainMenuFadeIn(fade) => advance_main_menu_fade_in(fade),
         // Issue #393: B is an ordinary dialogue-advance button here, not a
         // whole-intro skip -- `intro_printer_input`'s own doc comment.
         AppScene::Intro(mut intro_scene) => {

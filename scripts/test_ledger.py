@@ -33,6 +33,11 @@ def ns(**kw):
     return argparse.Namespace(**kw)
 
 
+def mark_ns(append_reason=None, **kw):
+    """Arguments for a marking command, which always carries both reason flags."""
+    return ns(append_reason=append_reason, **kw)
+
+
 class LedgerTestBase(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -259,7 +264,7 @@ class TestRegister(LedgerTestBase):
                                         "status": "pending"}})
 
     def test_port_creates_artifact(self):
-        self.capture(ledger.cmd_port, ns(
+        self.capture(ledger.cmd_port, mark_ns(
             project=PROJECT, path="Makefile#tbl", target="crates/a/src/tbl.rs",
             spec="S-4", reason="carved out"))
         e = self.read_ledger()["files"]["Makefile"]
@@ -268,10 +273,10 @@ class TestRegister(LedgerTestBase):
         self.assertEqual(e["artifacts"]["tbl"]["rust_target"], "crates/a/src/tbl.rs")
 
     def test_marking_parent_preserves_artifact(self):
-        self.capture(ledger.cmd_port, ns(
+        self.capture(ledger.cmd_port, mark_ns(
             project=PROJECT, path="Makefile#tbl", target="crates/a/src/tbl.rs",
             spec="S-4", reason="carved out"))
-        self.capture(ledger.cmd_mark, ns(
+        self.capture(ledger.cmd_mark, mark_ns(
             project=PROJECT, path="Makefile", target="crates/a/src/rest.rs",
             spec="S-4", reason="the rest"))
         e = self.read_ledger()["files"]["Makefile"]
@@ -279,7 +284,7 @@ class TestRegister(LedgerTestBase):
         self.assertIn("tbl", e["artifacts"])
 
     def test_unmark_artifact_resets_to_pending(self):
-        self.capture(ledger.cmd_port, ns(
+        self.capture(ledger.cmd_port, mark_ns(
             project=PROJECT, path="Makefile#tbl", target="crates/a/src/tbl.rs",
             spec="S-4", reason="carved out"))
         self.capture(ledger.cmd_unmark, ns(project=PROJECT, path="Makefile#tbl"))
@@ -539,7 +544,7 @@ class TestGapsInspect(LedgerTestBase):
 
 class TestHelp(unittest.TestCase):
     COMMANDS = (
-        "scan", "status", "categories", "report", "inspect", "gaps",
+        "scan", "status", "categories", "report", "inspect", "targets", "gaps",
         "mark", "port", "stub", "fold", "drop", "unmark", "verify",
         "audit", "migrate", "init",
     )
@@ -598,6 +603,22 @@ class TestHelp(unittest.TestCase):
             "audit",
             "Suggestions do not modify the ledger",
         )
+        self.assert_help_contains("stub", "only partly modelled")
+        self.assert_help_contains("stub", "counts as accounted for")
+        self.assert_help_contains(
+            "drop",
+            "multiplayer/link-only, or unreachable on an English retail "
+            "cartridge",
+        )
+        self.assert_help_contains("mark", "Replace the stored reason in full")
+        self.assert_help_contains(
+            "stub",
+            "never use it when the stored reason would become false",
+        )
+
+    def test_audit_base_defaults_to_dev(self):
+        args = ledger.build_parser().parse_args(["audit", "S-5"])
+        self.assertEqual(args.base, "origin/dev")
 
 
 # ── 9. migrate ───────────────────────────────────────────────────────────────
@@ -677,7 +698,7 @@ class TestMarkingCommandsSpecValidation(LedgerTestBase):
 
     def test_mark_rejects_nonexistent_spec(self):
         with self.assertRaises(SystemExit) as cm:
-            ledger.cmd_mark(ns(project=PROJECT, path="Makefile",
+            ledger.cmd_mark(mark_ns(project=PROJECT, path="Makefile",
                                target="crates/a/src/x.rs", spec="C-99",
                                reason="r"))
         self.assertIn("C-99", str(cm.exception))
@@ -687,38 +708,113 @@ class TestMarkingCommandsSpecValidation(LedgerTestBase):
 
     def test_port_rejects_legacy_spec(self):
         with self.assertRaises(SystemExit) as cm:
-            ledger.cmd_port(ns(project=PROJECT, path="Makefile",
+            ledger.cmd_port(mark_ns(project=PROJECT, path="Makefile",
                                target="crates/a/src/x.rs", spec="05-assets",
                                reason="r"))
         self.assertIn("05-assets", str(cm.exception))
 
     def test_stub_rejects_invalid_spec(self):
         with self.assertRaises(SystemExit) as cm:
-            ledger.cmd_stub(ns(project=PROJECT, path="Makefile",
+            ledger.cmd_stub(mark_ns(project=PROJECT, path="Makefile",
                                target="crates/a/src/x.rs", spec="bogus",
                                reason="r"))
         self.assertIn("bogus", str(cm.exception))
 
     def test_fold_rejects_invalid_spec(self):
         with self.assertRaises(SystemExit) as cm:
-            ledger.cmd_fold(ns(project=PROJECT, path="Makefile",
+            ledger.cmd_fold(mark_ns(project=PROJECT, path="Makefile",
                                into="crates/a::mod", spec="bogus",
                                reason="r"))
         self.assertIn("bogus", str(cm.exception))
 
     def test_drop_rejects_invalid_spec(self):
         with self.assertRaises(SystemExit) as cm:
-            ledger.cmd_drop(ns(project=PROJECT, path="Makefile",
+            ledger.cmd_drop(mark_ns(project=PROJECT, path="Makefile",
                                spec="bogus", reason="r"))
         self.assertIn("bogus", str(cm.exception))
 
     def test_mark_accepts_valid_spec(self):
-        self.capture(ledger.cmd_mark, ns(
+        self.capture(ledger.cmd_mark, mark_ns(
             project=PROJECT, path="Makefile", target="crates/a/src/x.rs",
             spec="S-1", reason="r"))
         e = self.read_ledger()["files"]["Makefile"]
         self.assertEqual(e["status"], "rewritten")
         self.assertEqual(e["spec"], "S-1")
+
+
+class TestReasonUpdate(LedgerTestBase):
+    def setUp(self):
+        super().setUp()
+        self.write_ledger({"Makefile": {
+            "category": "meta.build", "kind": "file", "status": "stubbed",
+            "spec": "S-6", "reason": "provenance", "rust_target": "crates/a/src/x.rs",
+            "artifacts": {"fn": {"status": "stubbed", "spec": "S-6",
+                                 "reason": "sub provenance",
+                                 "rust_target": "crates/a/src/x.rs"}}}})
+
+    def parse(self, *argv):
+        return ledger.build_parser().parse_args(list(argv))
+
+    def stub(self, path, *reason_flags):
+        self.capture(ledger.cmd_stub, self.parse(
+            "stub", path, "--target", "crates/a/src/x.rs", "--spec", "S-6",
+            *reason_flags))
+
+    def test_reason_replaces_stored_reason(self):
+        self.stub("Makefile", "--reason", "new")
+        self.assertEqual(self.read_ledger()["files"]["Makefile"]["reason"], "new")
+
+    def test_append_reason_keeps_stored_file_reason(self):
+        self.stub("Makefile", "--append-reason", "more")
+        self.assertEqual(self.read_ledger()["files"]["Makefile"]["reason"],
+                         "provenance more")
+
+    def test_append_reason_keeps_stored_artifact_reason(self):
+        self.stub("Makefile#fn", "--append-reason", "more")
+        sub = self.read_ledger()["files"]["Makefile"]["artifacts"]["fn"]
+        self.assertEqual(sub["reason"], "sub provenance more")
+
+    def test_append_reason_without_stored_reason_fails(self):
+        with self.assertRaises(SystemExit) as cm:
+            self.stub("Makefile#new", "--append-reason", "more")
+        self.assertIn("--reason", str(cm.exception))
+        self.assertNotIn("new", self.read_ledger()["files"]["Makefile"]["artifacts"])
+
+    def test_reason_flags_are_exclusive_and_one_is_required(self):
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                self.parse("stub", "Makefile", "--target", "t", "--spec", "S-6")
+            with self.assertRaises(SystemExit):
+                self.parse("stub", "Makefile", "--target", "t", "--spec", "S-6",
+                           "--reason", "a", "--append-reason", "b")
+
+
+class TestTargets(LedgerTestBase):
+    def setUp(self):
+        super().setUp()
+        self.write_ledger({"src/battle_main.c": {
+            "category": "code.source", "kind": "file", "status": "rewritten",
+            "spec": "S-6", "reason": "r", "rust_target": "crates/b/src/battle.rs",
+            "artifacts": {
+                "gMoved": {"status": "stubbed", "spec": "S-6", "reason": "r",
+                           "rust_target": "crates/b/src/battle.rs"},
+                "gOther": {"status": "ported", "spec": "S-6", "reason": "r",
+                           "rust_target": "crates/b/src/battle_ai.rs"},
+                "gTodo": {"status": "pending"}}}})
+
+    def targets(self, path):
+        return self.capture(ledger.cmd_targets, ns(project=PROJECT, path=path))
+
+    def test_lists_file_and_artifact_rows_for_exact_target(self):
+        out = self.targets("crates/b/src/battle.rs")
+        self.assertIn("src/battle_main.c  [rewritten]  crates/b/src/battle.rs", out)
+        self.assertIn("src/battle_main.c#gMoved  [stubbed]", out)
+        self.assertNotIn("gOther", out)
+        self.assertIn("2 entries", out)
+
+    def test_directory_matches_files_under_it_only(self):
+        self.assertIn("3 entries", self.targets("crates/b/src/"))
+        self.assertIn("0 entries", self.targets("crates/b/sr"))
 
 
 # ── 12. acceptance-ID vocabulary (issue #424) ────────────────────────────────

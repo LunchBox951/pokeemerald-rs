@@ -1,7 +1,7 @@
-//! I-3 (issue #1329) front-end palette fade-wait states -- split out of
-//! `flow.rs` itself to keep that module within its own line-budget
-//! convention (`crates/README.md`), the same reason [`super::overworld_phase`]
-//! and this file's siblings are their own modules `(oop-boundaries)`. See
+//! I-3 front-end palette fade-wait states, kept apart from `flow.rs` to hold
+//! that module within its line-budget convention (`crates/README.md`), the
+//! same reason [`super::overworld_phase`] and this file's siblings are their
+//! own modules `(oop-boundaries)`. See
 //! `flow.rs`'s module docs, "Waiting for the front-end palette fade"
 //! section, for the upstream citations and contract both states share.
 
@@ -15,25 +15,23 @@ use super::{
 };
 use crate::frame::to_platform_frame;
 use crate::game_save::SaveSlot;
-use crate::main_menu::MainMenuScene;
+use crate::main_menu::{MainMenuItem, MainMenuScene};
 
 /// [`AppScene::TitleFadeWait`]'s state: the title retained for its
 /// unfaded-recovery frame ([`advance_title_fade_wait`]'s own doc comment)
-/// alongside the fade blending its last composed tick toward white.
+/// alongside the fade whose palettes recompose its last tick toward white.
 pub(crate) struct TitleFadeWait {
     title: Box<AnimatedTitle>,
-    source: Framebuffer,
     fade: NormalPaletteFade,
 }
 
 /// [`AppScene::MainMenuFadeWait`]'s state: the menu retained for its
 /// unfaded-recovery frame ([`advance_main_menu_fade_wait`]'s own doc
 /// comment), the [`MainMenuAction`] the press that started the fade
-/// confirmed, and the fade blending the confirmed selection toward black.
+/// confirmed, and the fade whose palettes recompose the menu toward black.
 pub(crate) struct MainMenuFadeWait {
     pub(crate) state: Box<MainMenuState>,
     action: MainMenuAction,
-    source: Framebuffer,
     fade: NormalPaletteFade,
 }
 
@@ -47,9 +45,9 @@ fn begin_on_press_frame(target: PaletteFadeTarget) -> NormalPaletteFade {
     fade
 }
 
-/// The composed `source` frame with the fade's BG blend applied uniformly to
-/// every pixel; OBJ pixels take the BG coefficient here rather than their own
-/// bank's.
+/// The composed backdrop-only `source` frame with the fade's BG blend applied
+/// uniformly to every pixel; the frame is a single colour, so this equals
+/// fading its palette entry.
 fn faded_frame(source: &Framebuffer, fade: &NormalPaletteFade) -> Box<Frame> {
     let blend = fade.bg_blend();
     let mut faded = source.clone();
@@ -61,6 +59,20 @@ fn faded_frame(source: &Framebuffer, fade: &NormalPaletteFade) -> Box<Frame> {
         }
     }
     to_platform_frame(&faded)
+}
+
+/// The retained title at its frozen tick, recomposed from `fade`'s palettes.
+fn faded_title_frame(title: &AnimatedTitle, fade: &NormalPaletteFade) -> Box<Frame> {
+    to_platform_frame(
+        &title
+            .scene
+            .compose_with_palette(title.tick, fade.palette_stage()),
+    )
+}
+
+/// The retained menu recomposed from `fade`'s palettes.
+fn faded_menu_frame(state: &MainMenuState, fade: &NormalPaletteFade) -> Box<Frame> {
+    to_platform_frame(&state.scene.compose_with_palette(fade.palette_stage()))
 }
 
 /// The [`AppScene::Title`] arm of [`super::advance_scene`]: on a fresh
@@ -77,15 +89,10 @@ pub(super) fn advance_title(
     title.presented = true;
 
     if title_advance_pressed(buttons) {
-        let framebuffer = title.scene.compose(title.tick);
         let fade = begin_on_press_frame(PaletteFadeTarget::White);
-        let frame = faded_frame(&framebuffer, &fade);
+        let frame = faded_title_frame(&title, &fade);
         return (
-            AppScene::TitleFadeWait(Box::new(TitleFadeWait {
-                title,
-                source: framebuffer,
-                fade,
-            })),
+            AppScene::TitleFadeWait(Box::new(TitleFadeWait { title, fade })),
             frame,
         );
     }
@@ -110,14 +117,14 @@ pub(super) fn advance_title_fade_wait(
         return (AppScene::Title(wait.title), frame);
     }
     wait.fade.update();
-    let frame = faded_frame(&wait.source, &wait.fade);
+    let frame = faded_title_frame(&wait.title, &wait.fade);
     (AppScene::TitleFadeWait(wait), frame)
 }
 
 /// The [`AppScene::MainMenu`] arm of [`super::advance_scene`]: a fresh A
 /// over `NEW GAME`/`CONTINUE` begins the black fade and hands off to
 /// [`AppScene::MainMenuFadeWait`] instead of dispatching [`MainMenuAction`]
-/// directly; `OPTION`'s swallowed press is unaffected, and a successful
+/// directly -- `OPTION` included, whose action opens the Options screen -- and a successful
 /// Up/Down hands off to [`AppScene::MainMenuHighlight`].
 pub(super) fn advance_main_menu(
     state: Box<MainMenuState>,
@@ -128,20 +135,16 @@ pub(super) fn advance_main_menu(
         // mapping is pinned by a pack-less test -- see `menu_action`'s own
         // doc comment.
         let action = menu_action(state.scene.selected());
-        if !matches!(action, MainMenuAction::None) {
-            let framebuffer = state.scene.compose();
-            let fade = begin_on_press_frame(PaletteFadeTarget::Black);
-            let frame = faded_frame(&framebuffer, &fade);
-            return (
-                AppScene::MainMenuFadeWait(Box::new(MainMenuFadeWait {
-                    state,
-                    action,
-                    source: framebuffer,
-                    fade,
-                })),
-                frame,
-            );
-        }
+        let fade = begin_on_press_frame(PaletteFadeTarget::Black);
+        let frame = faded_menu_frame(&state, &fade);
+        return (
+            AppScene::MainMenuFadeWait(Box::new(MainMenuFadeWait {
+                state,
+                action,
+                fade,
+            })),
+            frame,
+        );
     } else if buttons.is_newly_pressed(Buttons::UP) && state.scene.can_move_up() {
         // Upstream guards each arm (`main_menu.c:903`, `:915`), so a blocked
         // Up falls through to Down when both are newly pressed together.
@@ -175,6 +178,15 @@ pub(super) fn advance_main_menu_fade_wait(
     pack_source: crate::pack_source::PackSource,
 ) -> (AppScene, Box<Frame>) {
     if wait.fade.is_done() {
+        if matches!(wait.action, MainMenuAction::Options) {
+            return match super::options::open(&pack_source, wait.state) {
+                Ok(result) => result,
+                Err(state) => {
+                    let frame = state.scene.compose_frame();
+                    (AppScene::MainMenu(state), frame)
+                }
+            };
+        }
         if let Some(result) = dispatch_main_menu_action(wait.action, pack_source, &wait.state) {
             return result;
         }
@@ -182,8 +194,62 @@ pub(super) fn advance_main_menu_fade_wait(
         return (AppScene::MainMenu(wait.state), frame);
     }
     wait.fade.update();
-    let frame = faded_frame(&wait.source, &wait.fade);
+    let frame = faded_menu_frame(&wait.state, &wait.fade);
     (AppScene::MainMenuFadeWait(wait), frame)
+}
+
+/// [`AppScene::MainMenuFadeIn`]'s state: the rebuilt menu, held back while the
+/// fade from black reveals the bare backdrop.
+///
+/// `InitMainMenu(TRUE)` clears VRAM and fades in with no window drawn; the
+/// menu is drawn by a task that waits for the fade to finish
+/// (`pokeemerald/src/main_menu.c:556-650,740-745`).
+pub(crate) struct MainMenuFadeIn {
+    state: Box<MainMenuState>,
+    source: Framebuffer,
+    /// `None` on the handoff frame: the fade begins on the next one.
+    fade: Option<NormalPaletteFade>,
+}
+
+impl MainMenuFadeIn {
+    /// The item the retained menu has selected.
+    pub(crate) fn selected(&self) -> MainMenuItem {
+        self.state.scene.selected()
+    }
+
+    /// Hands off from the Options screen: a black frame, with the fade to
+    /// follow (`pokeemerald/src/main_menu.c:583-586`).
+    pub(super) fn begin(state: Box<MainMenuState>) -> (Self, Box<Frame>) {
+        let source = state.scene.compose_backdrop();
+        let mut black = Framebuffer::new();
+        black.fill(rendering::Rgb888::BLACK);
+        (
+            Self {
+                state,
+                source,
+                fade: None,
+            },
+            to_platform_frame(&black),
+        )
+    }
+}
+
+/// The [`AppScene::MainMenuFadeIn`] arm of [`super::advance_scene`]: input
+/// is ignored until the fade finishes, then the menu is drawn.
+pub(super) fn advance_main_menu_fade_in(mut wait: Box<MainMenuFadeIn>) -> (AppScene, Box<Frame>) {
+    let Some(fade) = wait.fade.as_mut() else {
+        let fade = NormalPaletteFade::begin_in(PaletteFadeTarget::Black);
+        let frame = faded_frame(&wait.source, &fade);
+        wait.fade = Some(fade);
+        return (AppScene::MainMenuFadeIn(wait), frame);
+    };
+    if fade.is_done() {
+        let frame = wait.state.scene.compose_frame();
+        return (AppScene::MainMenu(wait.state), frame);
+    }
+    fade.update();
+    let frame = faded_frame(&wait.source, fade);
+    (AppScene::MainMenuFadeIn(wait), frame)
 }
 
 /// Dispatches the [`MainMenuAction`] a press confirmed before the fade
@@ -232,6 +298,6 @@ fn dispatch_main_menu_action(
                 }
             }
         }
-        MainMenuAction::None => None,
+        MainMenuAction::Options => None,
     }
 }

@@ -1,29 +1,17 @@
-//! Driving an in-progress wild battle (module split of
-//! [`crate::flow::overworld_phase`], issue #210, `oop-boundaries`, issue
-//! #169): the per-map fightability screen
-//! ([`OverworldPhase::wild_table_fightable`]), the `Wild` arm
-//! [`OverworldPhase::advance_active_battle_frame`] dispatches to
-//! ([`OverworldPhase::advance_wild_battle_frame`]), and turning a fired
-//! [`engine::overworld::WildEncounter`] into an in-progress
-//! [`battle::Battle`] ([`OverworldPhase::begin_wild_battle`]). The turn
-//! engine itself, and the RNG-stream adapter it shares with the overworld,
-//! live in [`crate::flow::wild_encounter`]; this module is only the
-//! [`OverworldPhase`]-owned glue around it.
+//! Wild-battle handling for [`OverworldPhase`]: screening a map's encounter
+//! table, starting a battle from a fired encounter, and advancing it one frame
+//! at a time. The turn engine and the RNG adapter it shares with the overworld
+//! live in [`crate::flow::wild_encounter`].
 
 use crate::flow::wild_encounter;
 
 use super::{ActiveBattle, OverworldPhase};
 
 impl OverworldPhase {
-    /// Whether the current map's land table only rolls wild mons the battle
-    /// engine can fight ([`wild_encounter::map_wild_table_fightable`], issue
-    /// #207 review). Memoised on [`OverworldPhase::map_id`] itself
-    /// ([`OverworldPhase::wild_table_screen`]) because the screen walks the
-    /// whole table; a map change invalidates the memo by construction, with
-    /// no per-transition update to forget. `false` disables the encounter
-    /// roll outright (no draws, no bookkeeping) --
-    /// [`wild_encounter::map_wild_table_fightable`]'s own doc comment has
-    /// the full reasoning.
+    /// Whether the current map's land table only rolls species the battle
+    /// engine can fight ([`wild_encounter::map_wild_table_fightable`]). `false`
+    /// disables the encounter roll before any RNG draw. The answer is memoised
+    /// against [`OverworldPhase::map_id`], so a map change recomputes it.
     pub(in crate::flow) fn wild_table_fightable(&mut self) -> bool {
         match self.wild_table_screen {
             Some((map, fightable)) if map == self.map_id => fightable,
@@ -53,10 +41,15 @@ impl OverworldPhase {
         refusal.is_none()
     }
 
-    /// Plays one frame of a wild battle taken out of
-    /// [`OverworldPhase::active_battle`]: `Some` while it continues, `None`
-    /// once it has ended or aborted. The turn and the party write-back are
-    /// [`wild_encounter::advance_wild_battle`]'s.
+    /// Advances a wild battle taken out of [`OverworldPhase::active_battle`] by
+    /// one frame. Returns the battle while it continues, `None` once it has
+    /// ended or aborted. The turn and the write-back of the battle's mon into
+    /// the party lead are [`wild_encounter::advance_wild_battle`]'s.
+    ///
+    /// A [`battle::BattleOutcome::PlayerLost`] outcome runs
+    /// [`OverworldPhase::white_out`] in the same frame, so no frame observes a
+    /// fainted party. Every ending, a loss included, then re-initialises the
+    /// field tileset animations, as returning to the field does.
     pub(super) fn advance_wild_battle_frame(
         &mut self,
         battle: battle::Battle,
@@ -66,12 +59,6 @@ impl OverworldPhase {
             wild_encounter::advance_wild_battle(&mut slot, &mut self.party_lead, &mut self.rng)
         {
             eprintln!("wild battle: ended -- {outcome:?}");
-            // `CB2_EndWildBattle`'s `IsPlayerDefeated` branch
-            // (`src/battle_setup.c:602-616`) -> `CB2_WhiteOut` (issue #261):
-            // heal, halve money, warp home. `Self::white_out` (module docs'
-            // former "unmodelled gate" section, now retired) is the one
-            // shared implementation both this driver and the Route 103
-            // rival one call.
             if outcome == battle::BattleOutcome::PlayerLost {
                 self.white_out();
             }
@@ -82,36 +69,20 @@ impl OverworldPhase {
         slot.map(ActiveBattle::Wild)
     }
 
-    /// Turn a fired [`engine::overworld::WildEncounter`] into an in-progress
-    /// [`battle::Battle`] (issue #169) -- upstream's `CreateWildMon` +
-    /// `BattleSetup_StartWildBattle` pair, minus the battle transition.
+    /// Starts a wild battle from a fired encounter, taking the party lead into
+    /// it. Nothing starts, and the lead stays in place, when the encounter is
+    /// `None`, when no lead exists (a bare [`OverworldPhase::new`] phase), or
+    /// when [`wild_encounter::start_wild_battle`] rejects the battle; the
+    /// last two log and drop the encounter. The roll's own RNG draws are
+    /// already consumed; the no-lead path draws nothing more, while a
+    /// rejected start may have drawn while building the opponent.
     ///
-    /// Nothing starts without a party mon to fight with. Production play
-    /// always has one -- [`OverworldPhase::load_default`] assigns
-    /// [`crate::new_game::provisional_starter`], the stand-in for the
-    /// un-ported Birch-bag handout -- so the `None` arm is the defensive
-    /// fallback for a bare [`OverworldPhase::new`] phase
-    /// (`crate::flow::wild_encounter`'s module docs). The encounter is
-    /// logged and dropped in that case -- the roll itself already happened
-    /// and already consumed its draws, so the RNG stream stays where the
-    /// roll left it either way.
-    ///
-    /// A rejected battle (an unknown species, or a wild moveset the turn
-    /// engine can't execute) is logged and dropped too, leaving the player
-    /// standing in the grass rather than stuck in a half-built battle. The
-    /// lead mon is only handed over once the battle is really built, so a
-    /// rejection cannot swallow it. Since the per-map table screen
-    /// ([`OverworldPhase::wild_table_fightable`]) refuses the roll before
-    /// any draw on a map that could produce such a moveset, this arm is
-    /// defensive: no table-rolled encounter reaches it today.
-    ///
-    /// The lead mon reaching here is fainted only when the whole saved
-    /// party is unusable: continue already selects the first non-fainted,
-    /// non-egg member ([`crate::party::select_active_battler`],
-    /// `SetBattlePartyIds`, `pokeemerald/src/battle_controllers.c:585-606`).
-    /// That state is not re-checked here -- it is left to
-    /// [`battle::Battle::new`]'s own `FaintedBattler` refusal, the same
-    /// fail-closed outcome it has always produced.
+    /// A lead that is fainted because the whole saved party is unusable is
+    /// not screened here; [`battle::Battle::new`] refuses it with
+    /// `FaintedBattler`, which this method logs and drops like any other
+    /// rejection. A party with a usable member never reaches this state,
+    /// because [`crate::party::select_active_battler`] picks that member as
+    /// lead (`SetBattlePartyIds`, `pokeemerald/src/battle_controllers.c:585-606`).
     pub(super) fn begin_wild_battle(
         &mut self,
         encounter: Option<engine::overworld::WildEncounter>,
@@ -137,11 +108,8 @@ impl OverworldPhase {
         }
     }
 
-    /// [`OverworldPhase::step`]'s single call into whichever of
-    /// [`OverworldPhase::begin_first_battle`]/[`OverworldPhase::begin_wild_battle`]
-    /// this frame's landing earned (issue #231) -- `encounter` is always
-    /// `None` when `first_battle_triggered` (that method's own filter
-    /// chain), so exactly one of the two ever actually starts a battle.
+    /// A first-battle landing never carries a wild encounter, so at most one
+    /// battle starts.
     pub(super) fn begin_step_battle(
         &mut self,
         first_battle_triggered: bool,

@@ -1,4 +1,4 @@
-//! The boot shell's top-level owned type (I-1 slice 1; I-2, issue #109):
+//! The boot shell's top-level owned type (I-1; I-2):
 //! wires `platform`'s window/input/pacing loop to a composed `rendering`
 //! scene, converting and presenting each frame.
 //!
@@ -24,7 +24,7 @@
 //! asserts stable high-level [`AppState`] milestones without gaining access
 //! to the owned flow scenes.
 //!
-//! # Animating the real title screen (I-2, issue #116)
+//! # Animating the real title screen (I-2)
 //!
 //! [`crate::title::TitleScene::compose`] takes a `frame` counter (the same
 //! deterministic, wall-clock-free counter [`crate::title`]'s module docs
@@ -36,7 +36,7 @@
 //! tests and `xtask`'s smoke suite exercise headlessly, just one call per
 //! real frame instead of at two fixed indices.
 //!
-//! # Game flow: title -> main menu -> intro -> overworld (I-3, issue #149)
+//! # Game flow: title -> main menu -> intro -> overworld (I-3)
 //!
 //! [`App::new`]'s real (windowed) path is a small state machine owned by
 //! [`crate::flow`]: every [`App::step`] hands the current
@@ -47,7 +47,7 @@
 //! its "log-or-ignore is fine" failure policy for a transition's own pack
 //! load.
 //!
-//! [`App`] also owns the session's save medium (I-6, issues #214/#232): the
+//! [`App`] also owns the session's save medium (I-6): the
 //! [`SaveSlot`] it hands to every [`crate::flow::advance_scene`] call. This
 //! shell never touches save state itself -- the boot read happens on the
 //! `Title` -> `MainMenu` transition and the write behind the field start
@@ -55,7 +55,7 @@
 //! for both ends). Closing the window writes nothing, exactly as closing a
 //! GBA's lid does.
 //!
-//! # The headless real-boot check (I-2, issues #168 and #175)
+//! # The headless real-boot check (I-2)
 //!
 //! The single home for this rationale: the items below cross-reference it
 //! rather than restating it `(lean-docs)`.
@@ -108,8 +108,8 @@
 //! animation is coarse -- the clouds move once every four ticks, "Press
 //! Start" blinks every sixteen -- so most adjacent ticks compose
 //! bit-identical frames; tick 14 is where both change together (the clouds'
-//! and the banner's frame-zero origins share the same upstream tick, issue
-//! #873), which is exactly why comparing only tick 14 against a single
+//! and the banner's frame-zero origins share the same upstream tick), which
+//! is exactly why comparing only tick 14 against a single
 //! neighbour cannot pin the counter both ways. Tick 13 differs from tick 14
 //! (asserted below), so checking the fourteenth step against tick 13 and the
 //! fifteenth against tick 14 pins the counter in both directions: an `App`
@@ -232,6 +232,8 @@ pub enum AppState {
     /// not distinguish a menu awaiting input from one already fading toward
     /// its confirmed selection.
     MainMenu(MainMenuItem),
+    /// The Options screen (I-6), including its fades.
+    Options,
     /// Birch's new-game introduction.
     Intro,
     /// The introduction finished, but loading the overworld failed.
@@ -244,9 +246,8 @@ pub enum AppState {
     /// Route 101's scripted first battle is running inside the overworld
     /// phase (edge-frame timing: enum docs above).
     FirstBattle,
-    /// A trainer battle -- the Route 103 rival (issue #248) or, since issue
-    /// #264, one of Route 103's own sight trainers -- is running inside the
-    /// overworld phase (edge-frame timing: enum docs above). The two share
+    /// A trainer battle -- the Route 103 rival or one of Route 103's own
+    /// sight trainers -- is running inside the overworld phase (edge-frame timing: enum docs above). The two share
     /// one variant: both are `BATTLE_TYPE_TRAINER` fights indistinguishable
     /// from outside the overworld phase, and [`App::rival_battle_outcome`]/
     /// [`App::sight_trainer_battle_outcome`] are what tell a caller which one
@@ -800,6 +801,8 @@ impl App {
             Some(AppScene::MainMenuFadeWait(wait)) => {
                 AppState::MainMenu(wait.state.scene.selected())
             }
+            Some(AppScene::MainMenuFadeIn(fade)) => AppState::MainMenu(fade.selected()),
+            Some(AppScene::Options(_)) => AppState::Options,
             Some(AppScene::Intro(_)) => AppState::Intro,
             Some(AppScene::OverworldLoadFailed(_)) => AppState::OverworldLoadFailed,
             Some(AppScene::Overworld(phase)) if phase.is_first_battle_active() => {

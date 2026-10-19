@@ -1,5 +1,5 @@
-//! Dialog ticking and frame composition (module split of
-//! [`crate::flow::overworld_phase`], issue #210, `oop-boundaries`): an open
+//! Dialog ticking and frame composition (a submodule of
+//! [`crate::flow::overworld_phase`], `oop-boundaries`): an open
 //! [`crate::overworld::NpcDialog`] getting its own input edge
 //! ([`OverworldPhase::advance_dialog_frame`], called from
 //! [`OverworldPhase::step`]), and the one place a finished frame is

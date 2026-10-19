@@ -294,7 +294,9 @@ impl ButtonMode {
     const LR_VALUE: u8 = 1;
     const L_EQUALS_A_VALUE: u8 = 2;
 
-    fn to_byte(self) -> u8 {
+    /// The stored `optionsButtonMode` byte, unrecognized values included.
+    #[must_use]
+    pub const fn to_byte(self) -> u8 {
         match self {
             Self::Normal => Self::NORMAL_VALUE,
             Self::Lr => Self::LR_VALUE,
@@ -303,7 +305,9 @@ impl ButtonMode {
         }
     }
 
-    fn from_byte(byte: u8) -> Self {
+    /// Reads a stored `optionsButtonMode` byte without discarding unknown values.
+    #[must_use]
+    pub const fn from_byte(byte: u8) -> Self {
         match byte {
             Self::NORMAL_VALUE => Self::Normal,
             Self::LR_VALUE => Self::Lr,

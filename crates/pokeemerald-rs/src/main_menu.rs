@@ -5,7 +5,7 @@ use assets::pack::{AssetPack, PackError};
 use engine::text::render::{Printer, PrinterInput, RevealedGlyph, TextSpeed, TickEvent};
 use engine::text::window as msgwin;
 use engine::text::Token;
-use rendering::{Bgr555, Framebuffer, Rgb888};
+use rendering::{Bgr555, Framebuffer, PaletteStage, Rgb888};
 
 use crate::textbox::{self, FrameAssets};
 
@@ -197,12 +197,36 @@ impl MainMenuScene {
     /// Composes the current menu frame.
     #[must_use]
     pub fn compose(&self) -> Framebuffer {
+        self.compose_with_palette(PaletteStage::default())
+    }
+
+    /// Composes the current menu with `palette`'s BG transform applied to
+    /// every BG-palette-derived colour (backdrop, window fill, frame and
+    /// text) before the highlight darkening. The menu draws no sprites, so
+    /// the OBJ transform has no effect.
+    #[must_use]
+    pub(crate) fn compose_with_palette(&self, palette: PaletteStage<'_>) -> Framebuffer {
+        let map = |color: Rgb888| palette.bg.map_or(color, |blend| blend.transform(color));
+        let frame_palette: Vec<Rgb888> = self.frame.palette.iter().map(|&c| map(c)).collect();
+        let glyph_colors = HEADER_GLYPH_COLORS.map(|color| color.map(map));
+        let header_background = map(HEADER_TEXT_BG);
+
         let mut fb = Framebuffer::new();
-        fb.fill(self.background);
+        fb.fill(map(self.background));
 
         let mut painted_bg0 = textbox::Coverage::recording();
         for item in &self.rendered_items {
-            draw_item(&mut fb, &mut painted_bg0, &self.frame, item);
+            draw_item(
+                &mut fb,
+                &mut painted_bg0,
+                &self.frame,
+                item,
+                &MenuColors {
+                    frame_palette: &frame_palette,
+                    header_background,
+                    glyphs: &glyph_colors,
+                },
+            );
         }
 
         darken_outside(
@@ -214,6 +238,16 @@ impl MainMenuScene {
         fb
     }
 
+    /// Composes only the backdrop: the screen with no window drawn, as a
+    /// reinitialised main menu shows while it fades in
+    /// (`pokeemerald/src/main_menu.c:572-586`).
+    #[must_use]
+    pub fn compose_backdrop(&self) -> Framebuffer {
+        let mut fb = Framebuffer::new();
+        fb.fill(self.background);
+        fb
+    }
+
     /// Composes the current menu in the platform pixel format.
     #[must_use]
     pub fn compose_frame(&self) -> Box<platform::Frame> {
@@ -221,11 +255,19 @@ impl MainMenuScene {
     }
 }
 
+/// The palette-derived source colours one menu composition draws with.
+struct MenuColors<'a> {
+    frame_palette: &'a [Rgb888],
+    header_background: Rgb888,
+    glyphs: &'a [Option<Rgb888>; 4],
+}
+
 fn draw_item(
     fb: &mut Framebuffer,
     painted_bg0: &mut textbox::Coverage,
     frame: &FrameAssets,
     item: &RenderedMenuItem,
+    colors: &MenuColors<'_>,
 ) {
     let ItemWindow { top, height } = item.window;
     let content_origin = (MENU_LEFT * TILE_SIZE_PX, top * TILE_SIZE_PX);
@@ -237,11 +279,11 @@ fn draw_item(
         content_origin,
         content_size.0,
         content_size.1,
-        HEADER_TEXT_BG,
+        colors.header_background,
     );
 
     let tiles = msgwin::border_tiles(MENU_LEFT, top, MENU_WIDTH, height);
-    textbox::blit_frame_tiles_tracked(fb, painted_bg0, &tiles, frame.image(), &frame.palette);
+    textbox::blit_frame_tiles_tracked(fb, painted_bg0, &tiles, frame.image(), colors.frame_palette);
 
     let label_origin = (content_origin.0, content_origin.1 + LABEL_TOP_OFFSET_PX);
     let label_bounds = (content_size.0, content_size.1 - LABEL_TOP_OFFSET_PX);
@@ -251,7 +293,7 @@ fn draw_item(
         &item.glyphs,
         label_origin,
         label_bounds,
-        &HEADER_GLYPH_COLORS,
+        colors.glyphs,
     );
 }
 
