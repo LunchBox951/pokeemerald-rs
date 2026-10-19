@@ -1335,9 +1335,99 @@ fn restore_capture_puts_contents_beside_a_retaken_name() {
     .unwrap();
     fs::create_dir(dir.join("new")).unwrap();
 
-    super::restore_capture(&quarantine, parent, std::ffi::OsStr::new("new"));
+    let warning = super::restore_capture(
+        std::os::fd::AsFd::as_fd(&quarantine),
+        ".undo-held",
+        parent,
+        &created[0],
+    );
 
+    assert_eq!(
+        warning.as_deref(),
+        Some(
+            format!(
+                "warning: {} was recreated during cleanup; its contents are in {}",
+                dir.join("new").display(),
+                dir.join("new.restored-0").display()
+            )
+            .as_str()
+        )
+    );
     assert!(dir.join("new.restored-0").join("keep").is_file());
     assert!(!quarantine_path.join(super::QUARANTINE_ENTRY).exists());
     assert_eq!(fs::read_dir(dir.join("new")).unwrap().count(), 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn rollback_takes_back_a_level_when_the_quarantine_open_takes_the_last_descriptor() {
+    // The quarantine's `openat` takes the table's last free slot. Checking
+    // that quarantine must not cost a second descriptor, or rollback strands
+    // both the level and an empty `.undo-*` beside it.
+    if !in_descriptor_pressure_child() {
+        run_under_descriptor_pressure(
+            "import_rom::created_dirs::tests::rollback_takes_back_a_level_when_the_quarantine_open_takes_the_last_descriptor",
+        );
+        return;
+    }
+    let dir = TempDir::new("quarantine-last-descriptor");
+    let level = dir.join("new");
+    let created = super::create_directories(&level).unwrap();
+    let parent = created[0].parent.as_deref().unwrap();
+    let mut fillers = None;
+    let proceeded = super::take_back_level_via(parent, &created[0], ".undo-last", &mut || {
+        fillers = Some(fill_descriptor_table_leaving(1));
+    });
+    drop(fillers);
+    assert!(proceeded, "the level is taken back");
+    assert!(!level.exists(), "the level is removed");
+    assert!(entry_names(&dir.path).is_empty(), "no quarantine is left");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_capture_no_name_takes_back_is_reported_at_its_exact_quarantine_path() {
+    // The level's name and all sixteen `.restored-<n>` names are taken, so
+    // the capture stays in the quarantine; the warning must name that exact
+    // directory, not a `.undo-*` pattern among other quarantines.
+    let dir = TempDir::new("restore-all-taken");
+    let created = super::create_directories(&dir.join("new")).unwrap();
+    let parent = created[0].parent.as_deref().unwrap();
+    let quarantine_path = dir.join(".undo-held");
+    fs::create_dir(&quarantine_path).unwrap();
+    let quarantine = rustix::fs::openat(
+        parent,
+        ".undo-held",
+        rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )
+    .unwrap();
+    let capture = quarantine_path.join(super::QUARANTINE_ENTRY);
+    fs::rename(dir.join("new"), &capture).unwrap();
+    fs::write(capture.join("keep"), b"x").unwrap();
+    fs::create_dir(dir.join("new")).unwrap();
+    for n in 0..16 {
+        fs::create_dir(dir.join(&format!("new.restored-{n}"))).unwrap();
+    }
+    fs::create_dir(dir.join(".undo-other")).unwrap();
+
+    let warning = super::restore_capture(
+        std::os::fd::AsFd::as_fd(&quarantine),
+        ".undo-held",
+        parent,
+        &created[0],
+    );
+
+    assert!(capture.join("keep").is_file(), "the capture stays put");
+    assert_eq!(
+        warning.as_deref(),
+        Some(
+            format!(
+                "warning: could not put {} back; its contents remain in {}",
+                dir.join("new").display(),
+                capture.display()
+            )
+            .as_str()
+        )
+    );
 }

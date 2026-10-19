@@ -30,6 +30,12 @@
 //!   random name between `mkdirat` and `openat`. Rollback would then use
 //!   that directory as its quarantine, and a level it holds is still checked
 //!   by identity before it is removed or put back.
+//!
+//! Rollback is also not crash-safe: a process killed after a level was
+//! renamed into its quarantine and before it was removed or put back leaves
+//! it at `.undo-<hex>/level` beside its name, with no warning, and no later
+//! run looks for it. That level holds data only if another writer filled
+//! it, or swapped in its own directory, during the import.
 
 #[cfg(unix)]
 use std::ffi::OsStr;
@@ -63,11 +69,8 @@ pub(super) fn directories_to_create(dir: &Path) -> Vec<PathBuf> {
 #[derive(Debug)]
 #[cfg(unix)]
 pub(super) struct CreatedDirectory {
-    /// Where this level was created; production never re-resolves it.
-    #[allow(
-        dead_code,
-        reason = "read only by tests::created_paths, not by production Unix code"
-    )]
+    /// Where this level was created; production never re-resolves it, and
+    /// reads it only to name a capture rollback could not put back.
     path: PathBuf,
     /// The directory this level was created in, shared with the level
     /// above's [`CreatedDirectory::own`]; `None` for an unpinned level.
@@ -971,9 +974,9 @@ const QUARANTINE_ENTRY: &str = "level";
 /// `ENOSYS` rather than emulate that with a racy check.
 #[cfg(unix)]
 fn rename_without_replacing(
-    from_dir: &std::os::fd::OwnedFd,
+    from_dir: impl std::os::fd::AsFd,
     from: impl rustix::path::Arg + Copy,
-    to_dir: &std::os::fd::OwnedFd,
+    to_dir: impl std::os::fd::AsFd,
     to: impl rustix::path::Arg + Copy,
 ) -> rustix::io::Result<()> {
     #[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
@@ -1007,18 +1010,19 @@ fn unguessable_quarantine_name() -> Option<String> {
     Some(format!(".undo-{:016x}", u64::from_ne_bytes(bytes)))
 }
 
-/// Whether `fd` is an empty `0700` directory owned by this user, as a
-/// quarantine this rollback just made is.
+/// Whether `quarantine` is an empty `0700` directory owned by this user, as
+/// a quarantine this rollback just made is. It is read through its own
+/// descriptor, never a second one opened for the listing, so a quarantine
+/// that took the last free descriptor can still be vouched for; an entry
+/// that cannot be read counts as not empty.
 #[cfg(unix)]
-fn is_fresh_quarantine(fd: &std::os::fd::OwnedFd) -> bool {
-    use rustix::fs::{Dir, FileType, Mode};
-    let Ok(stat) = rustix::fs::fstat(fd) else {
+fn is_fresh_quarantine(quarantine: &mut rustix::fs::Dir) -> bool {
+    use rustix::fs::{FileType, Mode};
+    let Ok(stat) = quarantine.stat() else {
         return false;
     };
-    let empty = Dir::read_from(fd).is_ok_and(|dir| {
-        dir.flatten()
-            .all(|entry| matches!(entry.file_name().to_bytes(), b"." | b".."))
-    });
+    let empty = quarantine
+        .all(|entry| entry.is_ok_and(|entry| matches!(entry.file_name().to_bytes(), b"." | b"..")));
     FileType::from_raw_mode(stat.st_mode) == FileType::Directory
         && stat.st_uid == rustix::process::geteuid().as_raw()
         && Mode::from_raw_mode(stat.st_mode) & Mode::RWXU.union(Mode::RWXG).union(Mode::RWXO)
@@ -1026,34 +1030,40 @@ fn is_fresh_quarantine(fd: &std::os::fd::OwnedFd) -> bool {
         && empty
 }
 
-/// Moves the capture in `quarantine` back under `name`, or under the first
-/// free `<name>.restored-<n>` beside it; if none takes it, it stays in the
-/// quarantine and its location is reported on stderr.
+/// Moves the capture in `quarantine` (named `quarantine_name` beside the
+/// level) back under `dir`'s name, or under the first free
+/// `<name>.restored-<n>` beside it. Returns the warning to print when the
+/// capture did not come back under its own name, naming exactly where it
+/// is: the `.restored-<n>` path, or the quarantine path if none took it.
 #[cfg(unix)]
 fn restore_capture(
-    quarantine: &std::os::fd::OwnedFd,
+    quarantine: std::os::fd::BorrowedFd<'_>,
+    quarantine_name: &str,
     parent: &std::os::fd::OwnedFd,
-    name: &std::ffi::OsStr,
-) {
-    if rename_without_replacing(quarantine, QUARANTINE_ENTRY, parent, name).is_ok() {
-        return;
+    dir: &CreatedDirectory,
+) -> Option<String> {
+    let beside = |entry: &OsStr| dir.path.with_file_name(entry);
+    if rename_without_replacing(quarantine, QUARANTINE_ENTRY, parent, &dir.name).is_ok() {
+        return None;
     }
     for n in 0..16 {
-        let mut aside = name.to_os_string();
+        let mut aside = dir.name.clone();
         aside.push(format!(".restored-{n}"));
         if rename_without_replacing(quarantine, QUARANTINE_ENTRY, parent, &aside).is_ok() {
-            eprintln!(
+            return Some(format!(
                 "warning: {} was recreated during cleanup; its contents are in {}",
-                Path::new(name).display(),
-                Path::new(&aside).display()
-            );
-            return;
+                dir.path.display(),
+                beside(&aside).display()
+            ));
         }
     }
-    eprintln!(
-        "warning: could not put {} back; its contents remain in a hidden .undo-* directory beside it",
-        Path::new(name).display()
-    );
+    Some(format!(
+        "warning: could not put {} back; its contents remain in {}",
+        dir.path.display(),
+        beside(OsStr::new(quarantine_name))
+            .join(QUARANTINE_ENTRY)
+            .display()
+    ))
 }
 
 /// Removes `dir` from `parent` only if the directory removed is the one
@@ -1091,7 +1101,9 @@ fn take_back_level_via(
         OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
         Mode::empty(),
     );
-    let Ok(quarantine) = quarantine else {
+    // `Dir::new` lists through this same descriptor, so checking the
+    // quarantine costs no second one.
+    let Ok(mut quarantine) = quarantine.and_then(rustix::fs::Dir::new) else {
         // Could not be held (descriptor pressure): drop the empty directory
         // just made rather than leave it as litter, and leave the level.
         let _ = rustix::fs::unlinkat(parent, quarantine_name, AtFlags::REMOVEDIR);
@@ -1099,16 +1111,20 @@ fn take_back_level_via(
     };
     // The name was swapped for someone else's directory before the open:
     // it is not ours to fill or remove.
-    if !is_fresh_quarantine(&quarantine) {
+    if !is_fresh_quarantine(&mut quarantine) {
         return false;
     }
+    // Only position-independent calls use the descriptor from here on.
+    let Ok(quarantine) = quarantine.fd() else {
+        return false;
+    };
 
     let mut goes_on = false;
-    if rename_without_replacing(parent, &dir.name, &quarantine, QUARANTINE_ENTRY).is_ok() {
-        let captured = rustix::fs::statat(&quarantine, QUARANTINE_ENTRY, AtFlags::SYMLINK_NOFOLLOW);
+    if rename_without_replacing(parent, &dir.name, quarantine, QUARANTINE_ENTRY).is_ok() {
+        let captured = rustix::fs::statat(quarantine, QUARANTINE_ENTRY, AtFlags::SYMLINK_NOFOLLOW);
         let ours = captured.is_ok_and(|stat| is_this_level(dir, &stat));
         let removed =
-            ours && rustix::fs::unlinkat(&quarantine, QUARANTINE_ENTRY, AtFlags::REMOVEDIR).is_ok();
+            ours && rustix::fs::unlinkat(quarantine, QUARANTINE_ENTRY, AtFlags::REMOVEDIR).is_ok();
         if removed {
             goes_on = true;
         } else {
@@ -1116,7 +1132,9 @@ fn take_back_level_via(
             // something: put it back under its name, or beside it if the
             // name was retaken meanwhile, so it never survives only under
             // the hidden quarantine.
-            restore_capture(&quarantine, parent, &dir.name);
+            if let Some(warning) = restore_capture(quarantine, quarantine_name, parent, dir) {
+                eprintln!("{warning}");
+            }
         }
     } else {
         // Already gone is already taken care of.
@@ -1128,7 +1146,7 @@ fn take_back_level_via(
 
     // The quarantine is ours and empty unless a capture is stranded in it;
     // it is removed only while its name still resolves to the held one.
-    let held = rustix::fs::fstat(&quarantine);
+    let held = rustix::fs::fstat(quarantine);
     let by_name = rustix::fs::statat(parent, quarantine_name, AtFlags::SYMLINK_NOFOLLOW);
     if matches!((held, by_name), (Ok(held), Ok(by_name)) if same_directory_identity(&held, &by_name))
     {
