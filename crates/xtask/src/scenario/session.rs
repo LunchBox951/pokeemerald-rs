@@ -232,7 +232,7 @@ impl Scratch {
         self.require_path(path)?;
         #[cfg(unix)]
         {
-            remove_contents(self.hold()?)?;
+            remove_contents(self.hold()?, &mut |_| {})?;
             // `rmdir` only removes an empty directory, so a replacement that
             // wins the instant after the check can lose at most itself if it
             // is empty; it never loses content.
@@ -456,7 +456,10 @@ fn open_hold(_path: &Path) -> std::io::Result<std::fs::File> {
 /// its held parent and subdirectories are opened `NOFOLLOW`, so no pathname
 /// is ever re-resolved and a symlink is unlinked, not followed.
 #[cfg(unix)]
-fn remove_contents(dir: &std::fs::File) -> std::io::Result<()> {
+fn remove_contents(
+    dir: &std::fs::File,
+    before_open: &mut dyn FnMut(&std::ffi::CStr),
+) -> std::io::Result<()> {
     use std::os::unix::fs::MetadataExt as _;
     let dev = dir.metadata()?.dev();
     let mut names = Vec::new();
@@ -478,6 +481,8 @@ fn remove_contents(dir: &std::fs::File) -> std::io::Result<()> {
             kind
         };
         if kind == rustix::fs::FileType::Directory {
+            // A test seam: the instant between the listing and the open.
+            before_open(name.as_c_str());
             let child = rustix::fs::openat(
                 dir,
                 name.as_c_str(),
@@ -489,7 +494,7 @@ fn remove_contents(dir: &std::fs::File) -> std::io::Result<()> {
             )?;
             let child = std::fs::File::from(child);
             require_entry(&child, dev, ino)?;
-            remove_contents(&child)?;
+            remove_contents(&child, before_open)?;
             rustix::fs::unlinkat(dir, name.as_c_str(), rustix::fs::AtFlags::REMOVEDIR)?;
         } else {
             rustix::fs::unlinkat(dir, name.as_c_str(), rustix::fs::AtFlags::empty())?;

@@ -423,25 +423,38 @@ fn restoring_the_private_mode_leaves_a_swapped_in_nonempty_private_directory_as_
 
 #[cfg(unix)]
 #[test]
-fn cleanup_refuses_to_descend_into_a_directory_that_is_not_the_listed_entry() {
-    use std::os::unix::fs::MetadataExt as _;
-    let base = private_base("entry-identity");
-    let listed = base.join("listed");
-    let swapped = base.join("swapped");
-    std::fs::create_dir(&listed).unwrap();
-    std::fs::create_dir(&swapped).unwrap();
-    let expected = std::fs::symlink_metadata(&listed).unwrap();
-    let opened = std::fs::File::open(&swapped).unwrap();
-    let mismatch = require_entry(&opened, expected.dev(), expected.ino());
-    let matched = require_entry(
-        &std::fs::File::open(&listed).unwrap(),
-        expected.dev(),
-        expected.ino(),
-    );
-    let _ = std::fs::remove_dir_all(&base);
-    assert!(
-        mismatch.is_err(),
-        "a swapped-in directory must not be descended into"
-    );
-    matched.unwrap();
+fn cleanup_refuses_to_descend_into_a_directory_swapped_in_after_the_listing() {
+    for swap in [false, true] {
+        let base = private_base(if swap {
+            "cleanup-swap"
+        } else {
+            "cleanup-plain"
+        });
+        let root = base.join("root");
+        std::fs::create_dir_all(root.join("listed")).unwrap();
+        std::fs::write(root.join("listed").join("owned.txt"), b"ours").unwrap();
+        let elsewhere = base.join("elsewhere");
+        std::fs::create_dir(&elsewhere).unwrap();
+        std::fs::write(elsewhere.join("keep.txt"), b"keep me").unwrap();
+        let result = remove_contents(&std::fs::File::open(&root).unwrap(), &mut |name| {
+            if swap && name.to_bytes() == b"listed" {
+                std::fs::rename(root.join("listed"), base.join("aside")).unwrap();
+                std::fs::rename(&elsewhere, root.join("listed")).unwrap();
+            }
+        });
+        let kept = std::fs::read(root.join("listed").join("keep.txt"));
+        let left = std::fs::read_dir(&root).unwrap().count();
+        let _ = std::fs::remove_dir_all(&base);
+        if swap {
+            let error = result.expect_err("a swapped-in directory must not be emptied");
+            assert!(
+                error.to_string().contains("replaced during cleanup"),
+                "{error}"
+            );
+            assert_eq!(kept.unwrap(), b"keep me");
+        } else {
+            result.unwrap();
+            assert_eq!(left, 0, "without a swap the contents are removed");
+        }
+    }
 }
