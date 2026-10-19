@@ -1726,9 +1726,9 @@ fn real_pack_the_bed_side_edge_draws_the_player_obj_at_the_raised_priority() {
 // -- Real-pack tileset tile animation ---------------------------------------
 
 /// The General primary tileset's animated tile ranges from upstream
-/// `tileset_anims.c`. They match the table in `crate::overworld::tileset_anims`'s
-/// module docs but are transcribed here instead of imported, so the tests do
-/// not compare that module with itself.
+/// `tileset_anims.c`. They match `GENERAL_REGIONS` in
+/// `crate::overworld::tileset_anims` but are transcribed here instead of
+/// imported, so the tests do not compare that module with itself.
 const GENERAL_ANIMATED_TILE_RANGES: [std::ops::Range<u16>; 5] = [
     508..512, // flower (4 tiles)
     432..462, // water (30 tiles)
