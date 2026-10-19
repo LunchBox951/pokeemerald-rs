@@ -4,7 +4,7 @@
 //! of it at the pinned commit, so the build's writes land in scratch storage.
 
 use std::ffi::OsStr;
-use std::io::ErrorKind;
+use std::io::{BufRead, BufReader, ErrorKind, Read};
 use std::path::Path;
 use std::process::{Command, Stdio};
 
@@ -47,27 +47,118 @@ fn is_full_sha(text: &str) -> bool {
     text.len() == 40 && text.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
-/// Runs git in `cwd` and returns trimmed stdout.
-fn git(cwd: &Path, args: &[&OsStr]) -> Result<String, RomBuildError> {
-    let output = Command::new("git")
+/// How many `git status` entries a dirty-tree report lists.
+const DIRTY_ENTRIES: usize = 20;
+/// The longest `git status` line kept; longer lines are cut.
+const MAX_STATUS_LINE: u64 = 8192;
+/// How much of a git failure's stderr is kept.
+const MAX_GIT_STDERR: u64 = 64 * 1024;
+
+/// A hardened git invocation in `cwd`, with an empty environment beside
+/// `PATH` and no host or system configuration.
+fn git_command(cwd: &Path) -> Command {
+    let mut command = Command::new("git");
+    command
         .args(HARDENED)
         .arg("core.checkStat=default")
         .arg("-C")
         .arg(cwd)
-        .args(args)
         .env_clear()
         .env("PATH", std::env::var_os("PATH").unwrap_or_default())
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|err| {
-            if err.kind() == ErrorKind::NotFound {
-                RomBuildError::MissingTool("git".to_owned())
-            } else {
-                RomBuildError::Git(err.to_string())
+        .stdin(Stdio::null());
+    command
+}
+
+fn spawn_failure(err: &std::io::Error) -> RomBuildError {
+    if err.kind() == ErrorKind::NotFound {
+        RomBuildError::MissingTool("git".to_owned())
+    } else {
+        RomBuildError::Git(err.to_string())
+    }
+}
+
+/// Runs git in `cwd` and returns at most the first `limit` lines of its
+/// stdout, and whether more followed. It stops reading once past `limit`
+/// and kills git, so a huge listing is never held in memory.
+fn git_head(cwd: &Path, args: &[&str], limit: usize) -> Result<(Vec<String>, bool), RomBuildError> {
+    let mut child = git_command(cwd)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|err| spawn_failure(&err))?;
+    // Drain stderr beside stdout so a chatty git cannot fill its pipe and
+    // stall; keep a bounded prefix for the error.
+    let stderr = child.stderr.take().map(|stream| {
+        std::thread::spawn(move || {
+            let mut kept = Vec::new();
+            let mut stream = stream;
+            let _ = (&mut stream).take(MAX_GIT_STDERR).read_to_end(&mut kept);
+            let _ = std::io::copy(&mut stream, &mut std::io::sink());
+            kept
+        })
+    });
+    let mut lines = Vec::new();
+    let mut more = false;
+    let mut read_error = None;
+    if let Some(stdout) = child.stdout.take() {
+        let mut stdout = BufReader::new(stdout);
+        loop {
+            let mut line = Vec::new();
+            match (&mut stdout)
+                .take(MAX_STATUS_LINE)
+                .read_until(b'\n', &mut line)
+            {
+                Ok(0) => break,
+                Ok(_) => {}
+                Err(err) => {
+                    read_error = Some(err);
+                    break;
+                }
             }
-        })?;
+            if !line.ends_with(b"\n") && line.len() as u64 == MAX_STATUS_LINE {
+                // Skip the rest of an over-long line.
+                let mut rest = Vec::new();
+                let _ = stdout.read_until(b'\n', &mut rest);
+            }
+            if lines.len() == limit {
+                more = true;
+                break;
+            }
+            lines.push(String::from_utf8_lossy(&line).trim_end().to_owned());
+        }
+    }
+    if more {
+        let _ = child.kill();
+    }
+    let status = child
+        .wait()
+        .map_err(|err| RomBuildError::Git(err.to_string()))?;
+    let stderr = stderr
+        .and_then(|handle| handle.join().ok())
+        .unwrap_or_default();
+    if more {
+        return Ok((lines, true));
+    }
+    if let Some(err) = read_error {
+        return Err(RomBuildError::Git(err.to_string()));
+    }
+    if !status.success() {
+        return Err(RomBuildError::Git(
+            String::from_utf8_lossy(&stderr).trim().to_owned(),
+        ));
+    }
+    Ok((lines, false))
+}
+
+/// Runs git in `cwd` and returns trimmed stdout.
+fn git(cwd: &Path, args: &[&OsStr]) -> Result<String, RomBuildError> {
+    let output = git_command(cwd)
+        .args(args)
+        .output()
+        .map_err(|err| spawn_failure(&err))?;
     if !output.status.success() {
         return Err(RomBuildError::Git(
             String::from_utf8_lossy(&output.stderr).trim().to_owned(),
@@ -151,7 +242,7 @@ fn ensure_visible_index(dir: &Path) -> Result<(), RomBuildError> {
 }
 
 fn ensure_clean(dir: &Path) -> Result<(), RomBuildError> {
-    let status = git_str(
+    let (entries, more) = git_head(
         dir,
         &[
             "status",
@@ -159,14 +250,19 @@ fn ensure_clean(dir: &Path) -> Result<(), RomBuildError> {
             "--ignored",
             "--untracked-files=all",
         ],
+        DIRTY_ENTRIES,
     )
     .map_err(unverifiable(dir))?;
-    if status.is_empty() {
+    if entries.iter().all(String::is_empty) && !more {
         return Ok(());
+    }
+    let mut status = entries.join("\n");
+    if more {
+        status.push_str("\n... and more");
     }
     Err(RomBuildError::DirtyTree {
         path: dir.to_path_buf(),
-        status: status.lines().take(20).collect::<Vec<_>>().join("\n"),
+        status,
     })
 }
 

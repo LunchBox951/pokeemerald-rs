@@ -485,6 +485,80 @@ fn drain_tail(mut stream: impl Read, tail: &Mutex<VecDeque<u8>>) -> std::io::Res
     }
 }
 
+/// `O_NONBLOCK` where its value is fixed for the target (Linux on the listed
+/// architectures, and the BSD family), so opening a FIFO swapped in after
+/// [`open_output`]'s check cannot block. It has no effect on reads from a
+/// regular file. Elsewhere the open is plain.
+#[cfg(unix)]
+const O_NONBLOCK: Option<i32> = if cfg!(all(
+    any(target_os = "linux", target_os = "android"),
+    any(
+        target_arch = "x86",
+        target_arch = "x86_64",
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "riscv64",
+        target_arch = "powerpc64",
+        target_arch = "s390x"
+    )
+)) {
+    Some(0o4000)
+} else if cfg!(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "freebsd",
+    target_os = "openbsd",
+    target_os = "netbsd",
+    target_os = "dragonfly"
+)) {
+    Some(0x0004)
+} else {
+    None
+};
+
+/// Opens the build output `name` only if it is a regular file, checked before
+/// opening (a FIFO with no writer would block the open, a device would never
+/// end) and again on the opened handle, so a path swapped in between is
+/// refused rather than read.
+fn open_output(tree: &Path, name: &'static str) -> Result<std::fs::File, RomBuildError> {
+    let invalid = |reason: String| RomBuildError::InvalidOutput { file: name, reason };
+    let path = tree.join(name);
+    let before = match std::fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == ErrorKind::NotFound => {
+            return Err(RomBuildError::MissingOutput(name.to_owned()));
+        }
+        Err(err) => return Err(invalid(err.to_string())),
+    };
+    if !before.file_type().is_file() {
+        return Err(invalid(format!(
+            "not a regular file ({:?})",
+            before.file_type()
+        )));
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    if let Some(flag) = O_NONBLOCK {
+        std::os::unix::fs::OpenOptionsExt::custom_flags(&mut options, flag);
+    }
+    let file = options
+        .open(&path)
+        .map_err(|err| invalid(err.to_string()))?;
+    let after = file.metadata().map_err(|err| invalid(err.to_string()))?;
+    #[cfg(unix)]
+    let same = {
+        use std::os::unix::fs::MetadataExt;
+        after.dev() == before.dev() && after.ino() == before.ino()
+    };
+    #[cfg(not(unix))]
+    let same = true;
+    if !after.is_file() || !same {
+        return Err(invalid("replaced while it was being opened".to_owned()));
+    }
+    Ok(file)
+}
+
 /// Reads the built image, refusing one larger than a cartridge without
 /// reading past that bound.
 fn read_rom(tree: &Path) -> Result<Vec<u8>, RomBuildError> {
@@ -492,13 +566,7 @@ fn read_rom(tree: &Path) -> Result<Vec<u8>, RomBuildError> {
         file: ROM_FILE,
         reason,
     };
-    let file = match std::fs::File::open(tree.join(ROM_FILE)) {
-        Ok(file) => file,
-        Err(err) if err.kind() == ErrorKind::NotFound => {
-            return Err(RomBuildError::MissingOutput(ROM_FILE.to_owned()));
-        }
-        Err(err) => return Err(invalid(err.to_string())),
-    };
+    let file = open_output(tree, ROM_FILE)?;
     let len = file
         .metadata()
         .map_err(|err| invalid(err.to_string()))?
@@ -529,17 +597,8 @@ fn read_map(tree: &Path) -> Result<SymbolMap, RomBuildError> {
         file: MAP_FILE,
         reason,
     };
-    let file = match std::fs::File::open(tree.join(MAP_FILE)) {
-        Ok(file) => file,
-        Err(err) if err.kind() == ErrorKind::NotFound => {
-            return Err(RomBuildError::MissingOutput(MAP_FILE.to_owned()));
-        }
-        Err(err) => return Err(invalid(err.to_string())),
-    };
+    let file = open_output(tree, MAP_FILE)?;
     let metadata = file.metadata().map_err(|err| invalid(err.to_string()))?;
-    if !metadata.is_file() {
-        return Err(RomBuildError::MissingOutput(MAP_FILE.to_owned()));
-    }
     let past_bound = |len: u64| {
         invalid(format!(
             "{len} bytes is past the {MAX_MAP_BYTES}-byte bound for a linker map"

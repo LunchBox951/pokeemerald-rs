@@ -546,3 +546,83 @@ fn a_descendant_holding_stderr_open_does_not_stall_the_failed_build() {
     );
     assert!(elapsed < std::time::Duration::from_secs(10), "{elapsed:?}");
 }
+
+#[test]
+#[cfg(unix)]
+fn a_huge_untracked_listing_is_reported_truncated() {
+    let fx = Fixture::new("many-untracked", GOOD);
+    let stray = fx.config.reference.join("stray");
+    fs::create_dir(&stray).unwrap();
+    for i in 0..5000 {
+        fs::write(stray.join(format!("f{i}")), "x").unwrap();
+    }
+    let err = build(&fx.config).unwrap_err();
+    let RomBuildError::DirtyTree { status, .. } = &err else {
+        panic!("{err}");
+    };
+    let lines: Vec<&str> = status.lines().collect();
+    assert_eq!(lines.len(), 21, "{status}");
+    assert!(lines[..20]
+        .iter()
+        .all(|line| line.starts_with("?? stray/f")));
+    assert_eq!(lines[20], "... and more");
+    assert_eq!(fx.scratch_entries(), 0);
+}
+
+#[test]
+#[cfg(unix)]
+fn a_few_untracked_files_are_listed_in_full() {
+    let fx = Fixture::new("few-untracked", GOOD);
+    for name in ["a.txt", "b.txt"] {
+        fs::write(fx.config.reference.join(name), "x").unwrap();
+    }
+    let err = build(&fx.config).unwrap_err();
+    assert!(
+        matches!(&err, RomBuildError::DirtyTree { status, .. }
+            if status == "?? a.txt\n?? b.txt"),
+        "{err}"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn a_fifo_output_is_refused_without_blocking() {
+    let cases = [
+        (
+            "fifo-rom",
+            "mkfifo pokeemerald.gba\nprintf '  0x08000000  gStart\\n' > pokeemerald.map",
+            ROM_FILE,
+        ),
+        (
+            "fifo-map",
+            "printf 'ROMBYTES' > pokeemerald.gba\nmkfifo pokeemerald.map",
+            MAP_FILE,
+        ),
+    ];
+    for (name, script, output) in cases {
+        let fx = Fixture::new(name, script);
+        let started = std::time::Instant::now();
+        let err = build(&fx.config).unwrap_err();
+        assert!(
+            matches!(&err, RomBuildError::InvalidOutput { file, reason }
+                if *file == output && reason.starts_with("not a regular file")),
+            "{name}: {err}"
+        );
+        assert!(started.elapsed() < std::time::Duration::from_secs(10));
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn a_symlinked_output_is_refused() {
+    let fx = Fixture::new(
+        "symlink-rom",
+        "printf 'ROMBYTES' > real.gba\nln -s real.gba pokeemerald.gba\n\
+         printf '  0x08000000  gStart\\n' > pokeemerald.map",
+    );
+    let err = build(&fx.config).unwrap_err();
+    assert!(
+        matches!(&err, RomBuildError::InvalidOutput { file, .. } if *file == ROM_FILE),
+        "{err}"
+    );
+}
