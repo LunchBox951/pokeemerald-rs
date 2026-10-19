@@ -1,4 +1,4 @@
-//! Which asset pack this session's scene loads read from (issue #412): an
+//! Which asset pack this session's scene loads read from: an
 //! owned, explicit choice threaded from [`crate::App`] construction through
 //! [`crate::flow::advance_scene`] into every scene load it performs, instead
 //! of a process-wide `$POKEEMERALD_PACK` mutation.

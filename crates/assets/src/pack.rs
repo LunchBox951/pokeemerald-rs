@@ -23,7 +23,7 @@ mod starter_chooser;
 
 use std::path::{Path, PathBuf};
 
-use crate::audio::{Sample, SampleId, Song, VoiceGroup, VoiceGroupId};
+use crate::audio::{CryTable, Sample, SampleId, Song, VoiceGroup, VoiceGroupId, CRY_TABLE_PACK_ID};
 use crate::battle_anim::BattleAnimationCatalog;
 use crate::fonts::{FontId, FontImageRef};
 use crate::pokedex::PokedexData;
@@ -289,6 +289,22 @@ impl AssetPack {
         let bytes = self.raw(&id.0)?;
         Sample::decode(bytes).map_err(|source| PackError::AudioDecode {
             id: id.0.clone(),
+            source,
+        })
+    }
+
+    /// Look up the `audio/cry/table` entry and decode it through [`CryTable::decode`].
+    ///
+    /// # Errors
+    ///
+    /// [`PackError::UnknownAsset`] if the pack has no cry table;
+    /// [`PackError::WrongKind`] if the entry isn't [`EntryKind::Raw`];
+    /// [`PackError::AudioDecode`] if the bytes fail the schema. Referenced samples are not
+    /// resolved here; call [`sample`](Self::sample) for each one a caller plays.
+    pub fn cry_table(&self) -> Result<CryTable, PackError> {
+        let bytes = self.raw(CRY_TABLE_PACK_ID)?;
+        CryTable::decode(bytes).map_err(|source| PackError::AudioDecode {
+            id: CRY_TABLE_PACK_ID.to_owned(),
             source,
         })
     }

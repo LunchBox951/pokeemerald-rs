@@ -44,7 +44,7 @@
 //! only what the `.inc` declared, and the mixer's `voicegroup + voice * 12`
 //! fetch is unchecked, so a song can select a slot past that tail and get
 //! whatever the linker placed next. The checkout backend models that for
-//! the one group a song references directly (issue #201) and pads every
+//! the one group a song references directly and pads every
 //! other group with `Empty`. This reader does the same: a group some song's
 //! header points at reads [`VoicegroupRoot::addressable_slots`] contiguous
 //! slots; any other reads `starting_note + declared_slots` contiguous slots

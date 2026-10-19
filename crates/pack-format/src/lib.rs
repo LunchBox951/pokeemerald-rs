@@ -1,8 +1,8 @@
-//! The asset-pack container format (S-4, F-3, issue #81 / Discussion #71
-//! policies A and C): the one owner of the layout `cargo xtask extract` and
+//! The asset-pack container format (S-4, F-3, Discussion #71 policies A
+//! and C): the one owner of the layout `cargo xtask extract` and
 //! `pokeemerald-rs --import-rom` write and `crates/assets` reads.
 //!
-//! # Format (version 9)
+//! # Format (version 10)
 //!
 //! All multi-byte integers are little-endian. Layout, in order:
 //!

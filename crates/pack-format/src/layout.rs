@@ -18,7 +18,9 @@ pub const MAGIC: [u8; 8] = *b"PKMRPACK";
 /// a version-7 pack is refused here instead of failing mid-decode.
 /// Version 9 added the `pokedex/data` raw payload, so an older pack is refused
 /// here instead of failing at the missing entry.
-pub const FORMAT_VERSION: u32 = 9;
+/// Version 10 added the `audio/cry/table` raw payload, so an older pack is
+/// refused here instead of failing at the missing entry.
+pub const FORMAT_VERSION: u32 = 10;
 
 /// The pack's location, relative to the repository root: a top-level,
 /// gitignored directory (mirroring how `pokeemerald/`/`mgba/` are also
@@ -101,7 +103,7 @@ mod tests {
     #[test]
     fn magic_and_version_are_the_published_values() {
         assert_eq!(&MAGIC, b"PKMRPACK");
-        assert_eq!(FORMAT_VERSION, 9);
+        assert_eq!(FORMAT_VERSION, 10);
     }
 
     #[test]

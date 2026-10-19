@@ -1,5 +1,5 @@
-//! `cargo xtask gen-rom-profile` (S-4, F-3, Discussion #71 policy C, issue
-//! #122): derive `rom-import`'s address table from a real ROM, once, and
+//! `cargo xtask gen-rom-profile` (S-4, F-3, Discussion #71 policy C):
+//! derive `rom-import`'s address table from a real ROM, once, and
 //! commit the result.
 //!
 //! The shipped importer never scans a ROM. It reads

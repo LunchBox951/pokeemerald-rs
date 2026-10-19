@@ -1148,8 +1148,9 @@ fn real_pack_1f_oam_entries_cover_every_drawn_fresh_save_npc() {
     assert_eq!(
         entries.len(),
         2,
-        "the player and Mom, and nobody else. 1F's remaining fresh-save \
-         visible object events (both Vigoroths) resolve to no sprite; its \
+        "the player and Mom, and nobody else. 1F's Vigoroths are hidden \
+         by the skipped wall-clock script's flags \
+         (`crate::new_game::apply_wall_clock_vigoroth_flags`); its \
          dad and the rival are hidden by RESET_MAP_FLAGS; and the rival's \
          *mom* and *sibling* are hidden by the male branch of the skipped \
          truck sequence (`crate::new_game::apply_truck_intro_flags`). This \
