@@ -162,7 +162,10 @@ fn a_session_under_an_owner_stripping_umask_is_private_and_readable() {
             )
         });
     drop(session);
-    let _ = std::fs::remove_dir_all(&base);
+    // The child's umask made `base` 0o333, which `remove_dir_all` cannot
+    // list; give the owner access back so the run leaves nothing behind.
+    std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::fs::remove_dir_all(&base).unwrap();
     assert_eq!(
         observed.unwrap(),
         (0o700, 0o600, b"not a real pack".to_vec())
