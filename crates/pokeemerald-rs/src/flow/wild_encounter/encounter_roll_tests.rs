@@ -680,12 +680,12 @@ fn matching_personality(probe: &mut Rng, nature: u32) -> u32 {
 fn a_synchronize_lead_passes_its_nature_on_a_winning_coin_flip() {
     // Upstream `PickWildMonNature` (`wild_encounter.c:367-372`): a Synchronize lead whose
     // `Random() % 2 == 0` hands the wild mon its own nature, with no further nature draw.
-    let seed = (0u32..)
+    let seed = (0u32..10_000)
         .find(|&s| {
             let mut probe = Rng::new(s);
             let coin = probe.next_u16();
             let random_nature = probe.next_u16();
-            coin % 2 == 0 && random_nature % 25 != 0
+            coin.is_multiple_of(2) && !random_nature.is_multiple_of(25)
         })
         .unwrap();
     let mut rng = Rng::new(seed);
@@ -711,12 +711,12 @@ fn a_synchronize_lead_passes_its_nature_on_a_winning_coin_flip() {
 #[test]
 fn a_synchronize_lead_spends_a_second_draw_on_a_losing_coin_flip() {
     // A losing flip falls through to the plain `Random() % NUM_NATURES`, one draw later.
-    let seed = (0u32..)
+    let seed = (0u32..10_000)
         .find(|&s| {
             let mut probe = Rng::new(s);
             let coin = probe.next_u16();
             let random_nature = probe.next_u16();
-            coin % 2 == 1 && random_nature % 25 != 0
+            !coin.is_multiple_of(2) && !random_nature.is_multiple_of(25)
         })
         .unwrap();
     let mut rng = Rng::new(seed);

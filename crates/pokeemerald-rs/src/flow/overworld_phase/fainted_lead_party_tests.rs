@@ -589,7 +589,7 @@ fn a_fainted_synchronize_slot_zero_still_synchronizes_for_the_wild_mon() {
         let mut trial = probe.clone();
         let coin = trial.next_u16();
         let random_nature = trial.next_u16();
-        if coin % 2 == 0 && coin % 25 != 0 && random_nature % 25 != 0 {
+        if coin.is_multiple_of(2) && !coin.is_multiple_of(25) && !random_nature.is_multiple_of(25) {
             found = Some(probe.clone());
             break;
         }
