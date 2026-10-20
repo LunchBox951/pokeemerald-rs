@@ -320,6 +320,22 @@ fn an_agbcc_install_inside_the_reference_is_rejected_before_verification() {
 
 #[test]
 #[cfg(unix)]
+fn an_agbcc_symlink_inside_the_reference_is_rejected_before_verification() {
+    let mut fx = Fixture::new("agbcc-symlink-inside", GOOD);
+    let link = fx.config.reference.join("agbcc-link");
+    std::os::unix::fs::symlink(&fx.config.agbcc_source, &link).unwrap();
+    fx.config.agbcc_source = link;
+    let err = build(&fx.config).unwrap_err();
+    assert!(
+        matches!(&err, RomBuildError::MissingTool(t)
+            if t.starts_with("agbcc") && t.contains("inside the reference")),
+        "{err}"
+    );
+    assert_eq!(fx.scratch_entries(), 0);
+}
+
+#[test]
+#[cfg(unix)]
 fn a_missing_agbcc_install_is_a_missing_tool() {
     let mut fx = Fixture::new("noagbcc", GOOD);
     fx.config.agbcc_source = fx.root.join("absent");

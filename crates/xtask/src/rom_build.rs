@@ -255,11 +255,19 @@ pub fn run() -> Result<CompiledArtifact, RomBuildError> {
 }
 
 /// Whether the `agbcc` install lies within the reference checkout, where its
-/// untracked files would fail the clean-tree verification. Paths are compared
-/// canonically so symlinks and `..` cannot hide containment.
+/// untracked files (or a symlink to it) would fail the clean-tree
+/// verification. Both the resolved path and the path's own location (its
+/// parent resolved, its final component left unfollowed) are compared
+/// canonically, so symlinks and `..` cannot hide containment.
 fn agbcc_inside_reference(config: &BuildConfig) -> bool {
     let canon = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
-    canon(&config.agbcc_source).starts_with(canon(&config.reference))
+    let reference = canon(&config.reference);
+    let source = &config.agbcc_source;
+    let located = match (source.parent(), source.file_name()) {
+        (Some(parent), Some(name)) if !parent.as_os_str().is_empty() => canon(parent).join(name),
+        _ => source.clone(),
+    };
+    canon(source).starts_with(&reference) || located.starts_with(&reference)
 }
 
 /// Verifies the reference, builds the pinned tree in scratch storage, and
