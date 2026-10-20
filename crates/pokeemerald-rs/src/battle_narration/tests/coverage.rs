@@ -37,6 +37,7 @@ fn move_events() -> Vec<BattleEvent> {
             by_player,
             move_id,
             healed: 4,
+            ability: AbilityId::VOLT_ABSORB,
         },
         BattleEvent::FlashFireAbsorbed {
             by_player,
@@ -175,7 +176,11 @@ fn party_events() -> Vec<BattleEvent> {
             by_player,
             effectiveness: Effectiveness::SuperEffective,
         },
-        BattleEvent::AbsorbMadeMoveUseless { by_player, move_id },
+        BattleEvent::AbsorbMadeMoveUseless {
+            by_player,
+            move_id,
+            ability: AbilityId::WATER_ABSORB,
+        },
     ]
 }
 

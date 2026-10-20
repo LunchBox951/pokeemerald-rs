@@ -115,6 +115,8 @@ pub enum BattleEvent {
         move_id: MoveId,
         /// HP the target actually regained.
         healed: u32,
+        /// The target's absorbing ability (`gLastUsedAbility`).
+        ability: AbilityId,
     },
     /// Flash Fire absorbed a Fire move (`BattleScript_FlashFireBoost`).
     FlashFireAbsorbed {
@@ -609,6 +611,8 @@ pub enum BattleEvent {
         by_player: bool,
         /// The move the ability made useless.
         move_id: MoveId,
+        /// The target's absorbing ability (`gLastUsedAbility`).
+        ability: AbilityId,
     },
 }
 

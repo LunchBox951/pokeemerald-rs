@@ -25,6 +25,7 @@ const SLOTS: &[(u16, &str)] = &[
     (30, "{B_PLAYER_NAME} got ¥{B_BUFF1}\nfor winning!\\p"),
     (31, "{B_PLAYER_NAME} is out of\nusable POKéMON!\\p"),
     (32, "{B_PLAYER_NAME} whited out!"),
+    (197, "{B_DEF_NAME_WITH_PREFIX} restored HP\nusing its {B_DEF_ABILITY}!"),
     (56, "{B_SCR_ACTIVE_NAME_WITH_PREFIX}'s {B_SCR_ACTIVE_ABILITY}\nparalyzed {B_EFF_NAME_WITH_PREFIX}!"),
     (209, "sharply "),
     (210, "rose!"),
@@ -432,6 +433,7 @@ fn a_staged_replacement_supplies_its_nickname_and_ability_to_later_requests() {
             by_player: false,
             move_id: MoveId::TACKLE,
             healed: 3,
+            ability: AbilityId::WATER_ABSORB,
         },
     ];
     let mut requests = narrate(&mut narrator, &events);
@@ -509,11 +511,44 @@ fn a_full_hp_water_absorb_activation_says_the_move_was_made_useless() {
     let useless = BattleEvent::AbsorbMadeMoveUseless {
         by_player: true,
         move_id: MoveId::WATER_GUN,
+        ability: AbilityId::WATER_ABSORB,
     };
 
     assert_eq!(
         lines(&narrate(&mut narrator, &[useless])),
         ["Wild VAPOREON's WATER ABSORB\nmade WATER GUN useless!"]
+    );
+}
+
+#[test]
+fn an_unstaged_send_out_still_names_the_absorbing_ability() {
+    let mut narrator = narrator(BattleKind::Trainer);
+    let sent_out = BattleEvent::TrainerSentOut {
+        species: ZIGZAGOON,
+        bench_remaining: 0,
+    };
+    let absorbed = [
+        BattleEvent::AbsorbMadeMoveUseless {
+            by_player: true,
+            move_id: MoveId::WATER_GUN,
+            ability: AbilityId::WATER_ABSORB,
+        },
+        BattleEvent::AbilityHealed {
+            by_player: true,
+            move_id: MoveId::THUNDER_SHOCK,
+            healed: 3,
+            ability: AbilityId::VOLT_ABSORB,
+        },
+    ];
+
+    narrate(&mut narrator, &[sent_out]);
+    assert_eq!(narrator.scene().opponent.ability, None);
+    assert_eq!(
+        lines(&narrate(&mut narrator, &absorbed)),
+        [
+            "Foe ZIGZAGOON's WATER ABSORB\nmade WATER GUN useless!",
+            "Foe ZIGZAGOON restored HP\nusing its VOLT ABSORB!",
+        ]
     );
 }
 

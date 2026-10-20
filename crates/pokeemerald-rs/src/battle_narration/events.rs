@@ -166,10 +166,15 @@ fn announcements(narrator: &Narrator, event: &BattleEvent) -> Option<Vec<Narrati
             Effectiveness::NotVeryEffective => table(id::NOTVERYEFFECTIVE, base),
             Effectiveness::NoEffect | Effectiveness::Normal => return Some(Vec::new()),
         },
-        BattleEvent::AbsorbMadeMoveUseless { by_player, move_id } => table(
+        BattleEvent::AbsorbMadeMoveUseless {
+            by_player,
+            move_id,
+            ability,
+        } => table(
             id::PKMNSXMADEYUSELESS,
             base.user_vs_target(Side::user(by_player))
-                .with_move(move_id),
+                .with_move(move_id)
+                .with_ability(Side::user(by_player).other(), ability),
         ),
         BattleEvent::MultiHit { hits, .. } => table(
             id::HITXTIMES,
@@ -206,11 +211,15 @@ fn ability_results(
                 .with_ability(Side::user(by_player).other(), AbilityId::WONDER_GUARD),
         ),
         BattleEvent::AbilityHealed {
-            by_player, move_id, ..
+            by_player,
+            move_id,
+            ability,
+            ..
         } => table(
             id::PKMNRESTOREDHPUSING,
             base.user_vs_target(Side::user(by_player))
-                .with_move(move_id),
+                .with_move(move_id)
+                .with_ability(Side::user(by_player).other(), ability),
         ),
         BattleEvent::FlashFireAbsorbed {
             by_player,

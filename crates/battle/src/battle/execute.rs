@@ -361,6 +361,7 @@ impl Battle {
                     by_player: attacker_is_player,
                     move_id,
                     healed: defender.current_hp() - before,
+                    ability: defender.ability(),
                 });
             }
             HitOutcome::FlashFireBlocked { first_activation } => {
@@ -409,6 +410,7 @@ impl Battle {
                 events.push(BattleEvent::AbsorbMadeMoveUseless {
                     by_player: attacker_is_player,
                     move_id,
+                    ability: self.battlers(attacker_is_player).1.ability(),
                 });
             }
             HitOutcome::Absorbed { .. } | HitOutcome::FlashFireBlocked { .. } => {
