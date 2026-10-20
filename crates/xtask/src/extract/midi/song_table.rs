@@ -12,21 +12,25 @@ use super::error::MidiError;
 /// # Errors
 ///
 /// [`MidiError::SongTableEntryMissing`] when no row names `symbol`;
-/// [`MidiError::SongTablePlayerMalformed`] when the row's player is neither a defined
-/// `MUSIC_PLAYER_*` name nor a `u16` literal.
+/// [`MidiError::SongTablePlayerMalformed`] when the row has no player field, or
+/// its player is neither a defined `MUSIC_PLAYER_*` name nor a `u16` literal.
 pub(super) fn player_for(text: &str, symbol: &str) -> Result<u16, MidiError> {
+    // `Some(None)` is a row that names `symbol` but carries no player field:
+    // malformed table data, which must not read as an absent row.
     let mut row_player = None;
     for line in text.lines() {
         let line = line.split('@').next().unwrap_or("").trim();
         if let Some(rest) = line.strip_prefix("song ") {
             let mut fields = rest.split(',').map(str::trim);
             if fields.next() == Some(symbol) {
-                row_player = fields.next();
+                row_player = Some(fields.next().filter(|field| !field.is_empty()));
                 break;
             }
         }
     }
-    let player = row_player.ok_or_else(|| MidiError::SongTableEntryMissing(symbol.to_owned()))?;
+    let player = row_player
+        .ok_or_else(|| MidiError::SongTableEntryMissing(symbol.to_owned()))?
+        .ok_or_else(|| MidiError::SongTablePlayerMalformed(String::new()))?;
     if let Ok(value) = player.parse::<u16>() {
         return Ok(value);
     }
@@ -71,6 +75,18 @@ mod tests {
         assert_eq!(
             player_for(TABLE, "mus_title"),
             Err(MidiError::SongTableEntryMissing("mus_title".to_owned()))
+        );
+    }
+
+    #[test]
+    fn a_row_without_a_player_field_is_malformed() {
+        assert_eq!(
+            player_for("\tsong mus_title\n", "mus_title"),
+            Err(MidiError::SongTablePlayerMalformed(String::new()))
+        );
+        assert_eq!(
+            player_for("\tsong mus_title,\n", "mus_title"),
+            Err(MidiError::SongTablePlayerMalformed(String::new()))
         );
     }
 
