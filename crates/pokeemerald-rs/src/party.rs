@@ -675,8 +675,25 @@ pub(crate) fn slot_zero_synchronize_nature(dex: &Dex, party: &[Pokemon]) -> Opti
     if record_is_egg_or_bad_egg(slot_zero) {
         return None;
     }
-    let mon = from_save_pokemon(dex, slot_zero).ok()?;
-    (mon.ability() == assets::AbilityId::SYNCHRONIZE).then(|| mon.nature())
+    // Only egg status, ability and personality matter upstream, so read just those
+    // fields: a full battler decode would also reject a malformed moveset, silently
+    // dropping a Synchronize lead whose moves `from_save_pokemon` refuses.
+    let substructures = slot_zero.box_data.substructures().ok()?;
+    let species = assets::SpeciesId(read_u16(&substructures.growth, GROWTH_SPECIES));
+    let iv_word = read_u32(&substructures.misc, MISC_IV_WORD);
+    let ability_slot = u8::from(iv_word >> ABILITY_SLOT_SHIFT != 0);
+    // The probe's level, IVs and move do not affect its ability or nature.
+    let probe = BattlePokemon::new(
+        dex,
+        species,
+        1,
+        Ivs::default(),
+        slot_zero.box_data.personality(),
+        vec![assets::MoveId::POUND],
+    )
+    .ok()?
+    .with_ability_slot(ability_slot);
+    (probe.ability() == assets::AbilityId::SYNCHRONIZE).then(|| probe.nature())
 }
 
 /// Selects which saved slot is the active battler on continue: the first

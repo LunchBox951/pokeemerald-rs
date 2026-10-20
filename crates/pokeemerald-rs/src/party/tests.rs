@@ -46,3 +46,32 @@ fn slot_zero_synchronize_nature_reads_slot_zero_even_when_fainted() {
     );
     assert_eq!(super::slot_zero_synchronize_nature(&dex, &[]), None);
 }
+
+#[test]
+fn slot_zero_synchronize_nature_ignores_an_interior_empty_move() {
+    let dex = battle::Dex::new();
+    let mew = battle::BattlePokemon::new(
+        &dex,
+        assets::SpeciesId(151),
+        50,
+        battle::Ivs::default(),
+        0,
+        vec![
+            assets::MoveId::POUND,
+            assets::MoveId::POUND,
+            assets::MoveId::TACKLE,
+        ],
+    )
+    .unwrap();
+    let mut sync = super::to_save_pokemon(&dex, &mew);
+    let mut subs = sync.box_data.substructures().unwrap();
+    subs.attacks[2..4].fill(0);
+    sync.box_data.set_substructures(&subs);
+    let plain = super::to_save_pokemon(&dex, &crate::new_game::provisional_starter());
+    let party = [sync, plain];
+    assert_eq!(super::select_active_battler(&dex, &party).unwrap().0, 1);
+    assert_eq!(
+        super::slot_zero_synchronize_nature(&dex, &party),
+        Some(battle::Nature::Hardy)
+    );
+}
