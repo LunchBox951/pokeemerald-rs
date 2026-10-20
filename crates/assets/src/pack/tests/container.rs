@@ -1,7 +1,7 @@
 use super::super::{AssetPack, EntryKind, PackError, FORMAT_VERSION};
 use super::shared::{
-    image_meta, pack_bytes, pack_fixture_path, synthetic_pack, write_pack, write_synthetic_pack,
-    Entry, EXPECTED_FRAME_HEIGHT, EXPECTED_FRAME_WIDTH, IMAGE_KIND_TAG, PALETTE_KIND_TAG,
+    image_meta, pack_bytes, synthetic_pack, write_pack, write_synthetic_pack, Entry,
+    EXPECTED_FRAME_HEIGHT, EXPECTED_FRAME_WIDTH, IMAGE_KIND_TAG, PALETTE_KIND_TAG,
     TEXT_WINDOW_BIT_DEPTH, TEXT_WINDOW_PALETTE_COLOR_COUNT,
 };
 
@@ -257,7 +257,7 @@ fn repo_pack_path_is_the_workspace_roots_own_extract_output() {
 fn write_pack_does_not_follow_a_preplanted_symlink() {
     const SENTINEL: &[u8] = b"precious";
     let hint = "symlink-regression";
-    let link = pack_fixture_path(hint, 0);
+    let link = super::shared::pack_fixture_path(hint, 0);
     let _ = std::fs::remove_file(&link);
     // Exclusively created, so the sentinel itself never follows a planted link.
     let target = write_pack("symlink-regression-target", SENTINEL);
