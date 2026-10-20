@@ -557,6 +557,9 @@ mod tests {
                 assets::AbilityId::EFFECT_SPORE,
             ),
             (SpeciesId::BRELOOM, SLOT_1, assets::AbilityId::EFFECT_SPORE),
+            (SpeciesId::KYOGRE, SLOT_0, assets::AbilityId::DRIZZLE),
+            (SpeciesId::GROUDON, SLOT_0, assets::AbilityId::DROUGHT),
+            (SpeciesId::TYRANITAR, SLOT_0, assets::AbilityId::SAND_STREAM),
         ] {
             let refused = TrainerPartyMon {
                 species,

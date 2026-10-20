@@ -18,6 +18,9 @@ const fn always_refused(ability: AbilityId) -> bool {
             | AbilityId::EFFECT_SPORE
             | AbilityId::FLAME_BODY
             | AbilityId::CUTE_CHARM
+            | AbilityId::DRIZZLE
+            | AbilityId::DROUGHT
+            | AbilityId::SAND_STREAM
     )
 }
 
@@ -26,7 +29,8 @@ const fn always_refused(ability: AbilityId) -> bool {
 /// Intimidate's entry and switch-in Attack drop (`:2559-2564`, `:3003-3016`, `:3074-3088`),
 /// Speed Boost's end-turn Speed stage (`:2601-2652`), Color Change (`:2749-2766`),
 /// Trace's ability copy (`:2575-2580`, `:3017-3073`), Effect Spore (`:2782-2805`), Flame Body (`:2836-2850`; burn is not representable in
-/// [`Status1`]), or Cute Charm (`:2851-2870`; infatuation is unmodelled).
+/// [`Status1`]), Cute Charm (`:2851-2870`; infatuation is unmodelled), or the switch-in weather setters
+/// Drizzle, Sand Stream, and Drought (`:2532-2558`), whose weather lifecycle is unmodelled.
 ///
 /// # Errors
 ///
