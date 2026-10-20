@@ -336,6 +336,21 @@ fn an_agbcc_symlink_inside_the_reference_is_rejected_before_verification() {
 
 #[test]
 #[cfg(unix)]
+fn a_bare_relative_agbcc_symlink_inside_the_reference_is_contained() {
+    let fx = Fixture::new("agbcc-relative-link", GOOD);
+    let link = fx.config.reference.join("agbcc-link");
+    std::os::unix::fs::symlink(&fx.config.agbcc_source, &link).unwrap();
+    let mut config = fx.config.clone();
+    config.agbcc_source = PathBuf::from("agbcc-link");
+    assert!(super::agbcc_inside_reference_from(
+        &config,
+        &fx.config.reference
+    ));
+    assert!(!super::agbcc_inside_reference_from(&config, &fx.root));
+}
+
+#[test]
+#[cfg(unix)]
 fn a_missing_agbcc_install_is_a_missing_tool() {
     let mut fx = Fixture::new("noagbcc", GOOD);
     fx.config.agbcc_source = fx.root.join("absent");

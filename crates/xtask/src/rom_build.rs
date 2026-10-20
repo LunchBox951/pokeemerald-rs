@@ -260,14 +260,22 @@ pub fn run() -> Result<CompiledArtifact, RomBuildError> {
 /// parent resolved, its final component left unfollowed) are compared
 /// canonically, so symlinks and `..` cannot hide containment.
 fn agbcc_inside_reference(config: &BuildConfig) -> bool {
+    let base = std::env::current_dir().unwrap_or_default();
+    agbcc_inside_reference_from(config, &base)
+}
+
+/// [`agbcc_inside_reference`] with the directory that relative paths are
+/// taken from made explicit, so a bare relative name (empty parent) resolves
+/// against `base` rather than staying relative to an absolute reference.
+fn agbcc_inside_reference_from(config: &BuildConfig, base: &Path) -> bool {
     let canon = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
-    let reference = canon(&config.reference);
-    let source = &config.agbcc_source;
+    let reference = canon(&base.join(&config.reference));
+    let source = base.join(&config.agbcc_source);
     let located = match (source.parent(), source.file_name()) {
-        (Some(parent), Some(name)) if !parent.as_os_str().is_empty() => canon(parent).join(name),
+        (Some(parent), Some(name)) => canon(parent).join(name),
         _ => source.clone(),
     };
-    canon(source).starts_with(&reference) || located.starts_with(&reference)
+    canon(&source).starts_with(&reference) || located.starts_with(&reference)
 }
 
 /// Verifies the reference, builds the pinned tree in scratch storage, and
