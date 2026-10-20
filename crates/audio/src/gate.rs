@@ -2,10 +2,8 @@
 
 /// Countdown to a note's automatic release.
 ///
-/// A gate time of zero is a tied note that never expires on its own. A
-/// non-zero gate time counts down one sequencer tick at a time; [`Gate::tick`]
-/// returns `true` exactly once, on the tick that reaches zero, and the caller
-/// then starts its voice's release. Later ticks return `false`.
+/// A gate time of zero is tied and never expires. [`Gate::tick`] returns
+/// `true` exactly once, on the sequencer tick that reaches zero.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Gate {
     Tied,
