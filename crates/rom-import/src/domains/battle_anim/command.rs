@@ -53,12 +53,15 @@ pub struct DecodedProgram {
 /// Decode the program that starts at `start`, through its first terminator.
 ///
 /// `limit` bounds the program's bytes, so a stream with no terminator ends
-/// here instead of at the end of the image.
+/// here instead of at the end of the image. Every read is held to the bound
+/// before it happens: a command at or straddling the limit belongs to the
+/// next label, so none of its bytes are read and none of its operands are
+/// resolved.
 ///
 /// # Errors
 ///
-/// [`ImportError::Truncated`] if the image ends mid-command;
 /// [`ImportError::StructMismatch`] if the program outgrows `limit`;
+/// [`ImportError::Truncated`] if the image ends mid-command within it;
 /// [`ImportError::AnimationOpcode`] for a byte that is no command;
 /// [`ImportError::PointerOutOfRange`] for an operand outside the cartridge
 /// window; whatever `pointers` refuses.
@@ -71,17 +74,12 @@ pub fn decode_program(
     let mut cursor = Cursor {
         reader,
         at: start.offset(),
+        end: start.offset().saturating_add(limit),
     };
     let mut commands = Vec::new();
     loop {
         let command = cursor.command(pointers)?;
         let used = cursor.at.saturating_sub(start.offset());
-        if used > limit {
-            return Err(ImportError::StructMismatch {
-                root: PACK_ID,
-                field: "program length",
-            });
-        }
         let last = terminates(&command);
         commands.push(command);
         if last {
@@ -107,10 +105,24 @@ fn terminates(command: &AnimCommand) -> bool {
 struct Cursor<'r, 'a> {
     reader: &'r RomReader<'a>,
     at: usize,
+    /// The offset one past the program's last byte.
+    end: usize,
 }
 
 impl Cursor<'_, '_> {
+    /// Refuse a read of `len` bytes that would pass the program's end.
+    fn within(&self, len: usize) -> Result<(), ImportError> {
+        if self.end.saturating_sub(self.at) < len {
+            return Err(ImportError::StructMismatch {
+                root: PACK_ID,
+                field: "program length",
+            });
+        }
+        Ok(())
+    }
+
     fn bytes<const N: usize>(&mut self) -> Result<[u8; N], ImportError> {
+        self.within(N)?;
         let found = self.reader.slice_at(self.at, N)?;
         self.at += N;
         Ok(found.try_into().expect("slice_at returns N bytes"))
@@ -134,6 +146,7 @@ impl Cursor<'_, '_> {
 
     /// A pointer operand, with the offset it was read at.
     fn ptr(&mut self) -> Result<(usize, GbaPtr), ImportError> {
+        self.within(4)?;
         let at = self.at;
         let ptr = self.reader.ptr(at)?;
         self.at += 4;

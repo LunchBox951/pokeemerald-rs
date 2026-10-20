@@ -59,8 +59,9 @@ pub(crate) fn write(rom: &Rom, roots: &Roots, writer: &mut PackWriter) -> Result
 ///
 /// [`ImportError::StructMismatch`] if the roots are not a consistent family
 /// (a selector count that is not the tables', a selector or symbol that
-/// names nothing, a repeated address), a table slot does not point at its
-/// program, or a program's terminator is not where its root says;
+/// names nothing, a repeated address, a template or task name bound twice),
+/// a table slot does not point at its program, or a program's terminator is
+/// not where its root says;
 /// [`ImportError::PointerOutOfRange`], [`ImportError::Truncated`],
 /// [`ImportError::AnimationOpcode`], or [`ImportError::AnimationPointer`] if
 /// a stream cannot be followed; [`ImportError::BattleAnimation`] if the
@@ -183,6 +184,13 @@ fn symbols(
             ))
         })
         .collect::<Result<_, ImportError>>()?;
+    // One address names one symbol, and one symbol has one address: a name
+    // bound twice would resolve both addresses to it and hide the error.
+    let mut names: Vec<&str> = roots.iter().map(|root| root.symbol).collect();
+    names.sort_unstable();
+    if names.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err(mismatch(field));
+    }
     found.sort_unstable_by_key(|(addr, _)| *addr);
     if found.windows(2).any(|pair| pair[0].0 == pair[1].0) {
         return Err(mismatch(field));

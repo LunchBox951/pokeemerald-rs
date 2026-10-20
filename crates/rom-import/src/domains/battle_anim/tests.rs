@@ -580,6 +580,136 @@ fn a_stream_with_no_terminator_is_bounded_by_its_root() {
     );
 }
 
+/// Counts every operand resolution, so a test can show none happened.
+#[derive(Default)]
+struct Counting {
+    calls: usize,
+}
+
+impl AnimPointers for Counting {
+    fn template(&mut self, _at: usize, _ptr: GbaPtr) -> Result<AnimSymbol, ImportError> {
+        self.calls += 1;
+        Ok(symbol("T"))
+    }
+
+    fn task(&mut self, _at: usize, _ptr: GbaPtr) -> Result<AnimSymbol, ImportError> {
+        self.calls += 1;
+        Ok(symbol("K"))
+    }
+
+    fn program(&mut self, _at: usize, _ptr: GbaPtr) -> Result<ProgramId, ImportError> {
+        self.calls += 1;
+        Ok(ProgramId::new(1))
+    }
+}
+
+#[test]
+fn the_limit_is_checked_before_each_command_is_read() {
+    // `nop`, then bytes of the next label: a command byte that is none, then
+    // a `createsprite` whose pointer runs past the limit. Neither is this
+    // program's, so neither is read or resolved.
+    let mut image = fixture().finish();
+    let next_label = [0x06, 0x30];
+    image[MAIN..MAIN + next_label.len()].copy_from_slice(&next_label);
+    let mut pointers = Counting::default();
+    let err = decode_program(&RomReader::new(&image), at(MAIN), 1, &mut pointers).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            ImportError::StructMismatch {
+                field: "program length",
+                ..
+            }
+        ),
+        "{err}"
+    );
+
+    let mut straddling = vec![0x06, 0x02];
+    straddling.extend(ptr_bytes(TEMPLATE));
+    straddling.extend([0x00, 0x00, 0x08]);
+    image[MAIN..MAIN + straddling.len()].copy_from_slice(&straddling);
+    let err = decode_program(&RomReader::new(&image), at(MAIN), 3, &mut pointers).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            ImportError::StructMismatch {
+                field: "program length",
+                ..
+            }
+        ),
+        "{err}"
+    );
+    assert_eq!(pointers.calls, 0, "no operand past the limit is resolved");
+}
+
+#[test]
+fn a_limit_past_the_image_still_reports_truncation() {
+    // A command the image cuts short inside the limit is the image's fault.
+    let image = fixture().finish();
+    let last = image.len() - 1;
+    let mut image = image;
+    image[last] = 0x09;
+    let err = decode_program(&RomReader::new(&image), at(last), 8, &mut Fixed).unwrap_err();
+    assert!(matches!(err, ImportError::Truncated { .. }), "{err}");
+}
+
+#[test]
+fn a_template_bound_to_two_addresses_is_refused() {
+    let roots = BattleAnimationRoots {
+        templates: leak(vec![
+            AnimSymbolRoot {
+                symbol: "gTemplate",
+                addr: at(TEMPLATE),
+            },
+            AnimSymbolRoot {
+                symbol: "gTemplate",
+                addr: at(TEMPLATE + 0x18),
+            },
+        ]),
+        ..family()
+    };
+    let err = payload(&rom_of(fixture()), &roots).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            ImportError::StructMismatch {
+                field: "template roots",
+                ..
+            }
+        ),
+        "{err}"
+    );
+}
+
+#[test]
+fn a_task_bound_to_two_addresses_is_refused() {
+    let task = GbaPtr::at(ROM_BASE + small(TASK) + 1);
+    let roots = BattleAnimationRoots {
+        tasks: leak(vec![
+            AnimSymbolRoot {
+                symbol: "AnimTask_Fixture",
+                addr: task,
+            },
+            AnimSymbolRoot {
+                symbol: "AnimTask_Fixture",
+                addr: GbaPtr::at(task.raw() + 0x20),
+            },
+        ]),
+        ..family()
+    };
+    let err = payload(&rom_of(fixture()), &roots).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            ImportError::StructMismatch {
+                field: "task roots",
+                ..
+            }
+        ),
+        "{err}"
+    );
+}
+
 #[test]
 fn two_templates_at_one_address_are_refused() {
     let roots = BattleAnimationRoots {
