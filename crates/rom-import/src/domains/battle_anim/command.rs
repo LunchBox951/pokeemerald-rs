@@ -54,9 +54,9 @@ pub struct DecodedProgram {
 ///
 /// `limit` bounds the program's bytes, so a stream with no terminator ends
 /// here instead of at the end of the image. Every read is held to the bound
-/// before it happens: a command at or straddling the limit belongs to the
-/// next label, so none of its bytes are read and none of its operands are
-/// resolved.
+/// before it happens, and a command's operands are all read before any of
+/// its pointers resolve: a command at or straddling the limit belongs to the
+/// next label, so none of its operands are resolved.
 ///
 /// # Errors
 ///
@@ -196,22 +196,23 @@ impl Cursor<'_, '_> {
             0x01 => C::UnloadSpriteGfx(self.sprite()?),
             0x02 => {
                 let (at, ptr) = self.ptr()?;
-                let template = pointers.template(at, ptr)?;
                 let flags = self.u8()?;
+                let args = self.args()?;
                 C::CreateSprite {
-                    template,
+                    template: pointers.template(at, ptr)?,
                     relative_to_target: flags & IS_TARGET != 0,
                     subpriority: flags & !IS_TARGET,
-                    args: self.args()?,
+                    args,
                 }
             }
             0x03 => {
                 let (at, ptr) = self.ptr()?;
-                let task = pointers.task(at, ptr)?;
+                let priority = self.u8()?;
+                let args = self.args()?;
                 C::CreateVisualTask {
-                    task,
-                    priority: self.u8()?,
-                    args: self.args()?,
+                    task: pointers.task(at, ptr)?,
+                    priority,
+                    args,
                 }
             }
             0x04 => C::Delay(self.u8()?),
@@ -233,10 +234,14 @@ impl Cursor<'_, '_> {
                 arg: self.u8()?,
                 value: self.i16()?,
             },
-            0x11 => C::ChooseTwoTurnAnim {
-                even: self.program(pointers)?,
-                odd: self.program(pointers)?,
-            },
+            0x11 => {
+                let (even_at, even) = self.ptr()?;
+                let (odd_at, odd) = self.ptr()?;
+                C::ChooseTwoTurnAnim {
+                    even: pointers.program(even_at, even)?,
+                    odd: pointers.program(odd_at, odd)?,
+                }
+            }
             0x12 => C::JumpIfMoveTurn {
                 turn: self.u8()?,
                 target: self.program(pointers)?,
@@ -267,10 +272,10 @@ impl Cursor<'_, '_> {
             0x1E => C::SetBldCnt(self.u16()?),
             0x1F => {
                 let (at, ptr) = self.ptr()?;
-                let task = pointers.task(at, ptr)?;
+                let args = self.args()?;
                 C::CreateSoundTask {
-                    task,
-                    args: self.args()?,
+                    task: pointers.task(at, ptr)?,
+                    args,
                 }
             }
             _ => return self.late_command(opcode_at, opcode, pointers),

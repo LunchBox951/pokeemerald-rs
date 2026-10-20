@@ -640,6 +640,25 @@ fn the_limit_is_checked_before_each_command_is_read() {
         "{err}"
     );
     assert_eq!(pointers.calls, 0, "no operand past the limit is resolved");
+
+    // The pointer fits inside the limit but the flags byte after it does not:
+    // the pointer is still not resolved, because every operand is read before
+    // any pointer resolves.
+    let err = decode_program(&RomReader::new(&image), at(MAIN), 6, &mut pointers).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            ImportError::StructMismatch {
+                field: "program length",
+                ..
+            }
+        ),
+        "{err}"
+    );
+    assert_eq!(
+        pointers.calls, 0,
+        "a pointer is not resolved before its command's later operands"
+    );
 }
 
 #[test]
