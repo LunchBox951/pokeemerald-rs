@@ -75,26 +75,33 @@ fn extra_iteration_can_fire_the_first_release_decrement_on_the_note_off_frame() 
 fn extra_iteration_is_skipped_the_frame_release_enters_the_pseudo_echo_tail() {
     // A zero release enters the echo tail directly, bypassing the doubling
     // check, so a doubled frame must not also consume a tail frame.
+    const GOAL: u8 = 8;
+    const HALF_SCALE_ECHO_VOLUME: u8 = 128;
     let adsr = CgbAdsr {
         attack: 0,
         decay: 0,
         sustain: 15,
         release: 0,
     };
-    let mut env = CgbEnvelope::new(adsr, 8, 128, 2);
-    env.step_frame(false, 8);
-    assert_eq!(env.volume(), 8);
+    let mut env = CgbEnvelope::new(adsr, GOAL, HALF_SCALE_ECHO_VOLUME, 2);
+    env.step_frame(false, GOAL);
+    assert_eq!(env.volume(), GOAL);
     env.note_off();
-    env.step_frame(true, 8); // doubled frame
-    assert_eq!(env.volume(), 4);
+    env.step_frame(true, GOAL); // doubled frame
+    assert_eq!(
+        env.volume(),
+        GOAL / 2,
+        "a half-scale echo volume floors the tail at half the goal"
+    );
     assert!(
         env.is_active(),
         "an echo floor must hold, not silence outright"
     );
-    // A tail ticked twice on entry would already be one frame short.
-    env.step_frame(false, 8);
+    // A doubled entry frame that also ticked the tail would leave it one
+    // frame short.
+    env.step_frame(false, GOAL);
     assert!(env.is_active(), "tail must still hold after 1 of 2 ticks");
-    env.step_frame(false, 8);
+    env.step_frame(false, GOAL);
     assert!(!env.is_active(), "2-frame tail exhausts on the 2nd tick");
 }
 
