@@ -9,6 +9,7 @@ use crate::audio::AudioOutput;
 use crate::ring::ring_buffer;
 
 mod setup_and_backlog;
+mod stopped_queue_and_cooldown;
 
 type DataFn<T> = Box<dyn FnMut(&mut [T], &cpal::OutputCallbackInfo) + Send>;
 
@@ -244,10 +245,12 @@ fn retries_are_bounded_by_a_burst_then_a_cooldown() {
     let mut rig = rig(&w, 4);
     let mut attempts = Vec::new();
     let mut now = Duration::ZERO;
-    for _ in 0..6 {
-        let before = with(&w).discoveries;
+    // An attempt reschedules the retry; a discovery probe in a cooldown
+    // leaves it alone while the identity stays the same.
+    while attempts.len() < 6 {
+        let before = rig.transport.next_attempt;
         let next = rig.transport.step(now);
-        if with(&w).discoveries > before {
+        if rig.transport.next_attempt != before {
             attempts.push(now);
         }
         // Waking early does nothing.
@@ -259,6 +262,8 @@ fn retries_are_bounded_by_a_burst_then_a_cooldown() {
         attempts,
         [MS(0), MS(100), MS(300), MS(700), MS(5_700), MS(5_800)]
     );
+    // Six attempts plus one probe a second through the cooldown.
+    assert_eq!(with(&w).discoveries, 6 + 4);
     assert_eq!(
         rig.events(),
         [TransportState::Unavailable(TransportFailure::NoOutput)],
@@ -407,7 +412,6 @@ fn a_stream_that_keeps_failing_cannot_reset_the_retry_budget() {
 fn queued_history_is_discarded_when_a_stream_reattaches() {
     let w = world(|w| w.default = Some("a".into()));
     let mut rig = rig(&w, 4);
-    rig.shared.ever_started.store(true, Ordering::Release);
     rig.shared.running.store(true, Ordering::Release);
     rig.transport.step(Duration::ZERO);
     assert_eq!(rig.events().last(), Some(&TransportState::Ready));
@@ -599,7 +603,6 @@ fn startup_prefill_survives_start_before_the_first_attach() {
     let w = world(|w| w.default = Some("a".into()));
     let mut rig = rig(&w, 4);
     assert_eq!(rig.producer.push(&[0.25; 6]), 6);
-    rig.shared.ever_started.store(true, Ordering::Release);
     rig.shared.running.store(true, Ordering::Release);
     rig.transport.step(Duration::ZERO);
     assert_eq!(rig.events().last(), Some(&TransportState::Ready));

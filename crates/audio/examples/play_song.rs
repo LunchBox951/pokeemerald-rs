@@ -71,6 +71,9 @@ fn main() -> ExitCode {
     if let Some(code) = settle_transport(&mut output) {
         return code;
     }
+    // `stream_errors` counts every stream the transport has built; only an
+    // error during this playback fails the run.
+    let errors = ErrorBaseline::of(&output);
     let producer = output.producer();
     let ring_capacity_samples = RING_CAPACITY_FRAMES * usize::from(output.channels());
     // Pace at the real game-frame period, the same cadence the output's
@@ -109,7 +112,7 @@ fn main() -> ExitCode {
             &buffer,
             &policy,
             |chunk| producer.push(chunk),
-            || output.stream_errors(),
+            || errors.since(&output),
             Instant::now,
             std::thread::sleep,
         );
@@ -128,7 +131,7 @@ fn main() -> ExitCode {
         ring_capacity_samples,
         &policy,
         || producer.available_space(),
-        || output.stream_errors(),
+        || errors.since(&output),
         Instant::now,
         std::thread::sleep,
     ) {
@@ -155,7 +158,7 @@ fn main() -> ExitCode {
         output.device_sample_rate(),
         &policy,
         || output.playback_progress(),
-        || output.stream_errors(),
+        || errors.since(&output),
         Instant::now,
         std::thread::sleep,
     );
@@ -164,6 +167,22 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
     ExitCode::SUCCESS
+}
+
+/// The lifetime [`AudioOutput::stream_errors`] count when playback began, so
+/// an error a since-replaced stream reported earlier does not fail it.
+#[derive(Clone, Copy, Debug)]
+struct ErrorBaseline(u64);
+
+impl ErrorBaseline {
+    fn of(output: &AudioOutput) -> Self {
+        Self(output.stream_errors())
+    }
+
+    /// Stream errors reported since the baseline was taken.
+    fn since(self, output: &AudioOutput) -> u64 {
+        output.stream_errors().saturating_sub(self.0)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -228,9 +247,11 @@ fn settle_transport(output: &mut AudioOutput) -> Option<ExitCode> {
 fn await_transport(output: &mut AudioOutput, timeout: Duration) -> TransportOutcome {
     let deadline = Instant::now() + timeout;
     loop {
-        let settled = std::iter::from_fn(|| output.poll_transport_state())
-            .find_map(classify_transport)
-            .or_else(|| classify_transport(output.transport_state()));
+        let current = output.transport_state();
+        let settled = settle_transport_once(
+            std::iter::from_fn(|| output.poll_transport_state()),
+            current,
+        );
         if let Some(outcome) = settled {
             return outcome;
         }
@@ -239,6 +260,17 @@ fn await_transport(output: &mut AudioOutput, timeout: Duration) -> TransportOutc
         }
         std::thread::sleep(Duration::from_millis(10));
     }
+}
+
+/// One look at the transport: `current` decides and the `queued`
+/// transitions are drained unread, so an older `Unavailable` still queued
+/// behind a later `Ready` cannot end the run as headless.
+fn settle_transport_once(
+    queued: impl Iterator<Item = TransportState>,
+    current: TransportState,
+) -> Option<TransportOutcome> {
+    queued.for_each(drop);
+    classify_transport(current)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

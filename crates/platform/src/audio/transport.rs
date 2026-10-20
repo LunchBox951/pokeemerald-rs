@@ -17,17 +17,20 @@
 //!   output's identity differs from the one the stream was built for, or when
 //!   the default output disappears. The default is re-discovered every
 //!   [`DISCOVERY_INTERVAL`] because `cpal` offers no default-change
-//!   subscription.
+//!   subscription, attached or not: a retry cooldown delays the next attempt
+//!   on the identity that failed, never the discovery of a different one.
 //! - Failed attempts retry [`ATTEMPTS_PER_BURST`] times with doubling delays
 //!   from [`RETRY_BASE`], then wait [`COOLDOWN`] before the next burst, so a
 //!   missing or flapping output is polled at a bounded rate and never given
 //!   up on. A newly observed default identity starts a fresh burst; a stream
 //!   that fails again before surviving [`STABLE_AFTER`] continues the old one.
-//! - When a stream re-attaches after an earlier one and playback was ever
-//!   started, samples queued while no stream was draining are discarded, so
-//!   playback resumes at the producer's current position instead of replaying
-//!   history. The first attach keeps the queue: that is the producer's startup
-//!   prefill, whether or not it has already called `start`.
+//! - When a stream re-attaches after an earlier one and playback was meant to
+//!   advance while no stream drained the ring (a stream was lost while
+//!   started, or `start` held while none was attached), the queued samples
+//!   are discarded, so playback resumes at the producer's current position
+//!   instead of replaying history. A queue left while stopped is kept for the
+//!   next `start`. The first attach keeps the queue: that is the producer's
+//!   startup prefill, whether or not it has already called `start`.
 //! - Each distinct [`TransportState`] is published once, in order, for the
 //!   application to report. At most [`MAX_PENDING_EVENTS`] unpolled
 //!   transitions are kept; a caller that never polls loses the oldest, and
@@ -56,7 +59,7 @@ mod tests;
 pub(super) const MAX_PENDING_EVENTS: usize = 8;
 /// How often a healthy stream's failure flag and play intent are checked.
 pub(super) const HEALTH_POLL: Duration = Duration::from_millis(20);
-/// How often the OS default output is re-discovered while a stream is up.
+/// How often the OS default output is re-discovered, attached or not.
 pub(super) const DISCOVERY_INTERVAL: Duration = Duration::from_secs(1);
 /// Attempts made per burst before the cooldown.
 pub(super) const ATTEMPTS_PER_BURST: u32 = 4;
@@ -104,8 +107,6 @@ pub enum TransportFailure {
 pub(super) struct Shared {
     /// Playback intent set by `start`/`stop`.
     pub(super) running: AtomicBool,
-    /// Set once `start` has ever been called.
-    pub(super) ever_started: AtomicBool,
     pub(super) shutdown: AtomicBool,
     pub(super) stream_errors: Arc<AtomicU64>,
     pub(super) playback_clock: Arc<PlaybackClock>,
@@ -126,7 +127,6 @@ impl Shared {
     ) -> Self {
         Self {
             running: AtomicBool::new(false),
-            ever_started: AtomicBool::new(false),
             shutdown: AtomicBool::new(false),
             stream_errors: Arc::new(AtomicU64::new(0)),
             playback_clock: Arc::new(PlaybackClock::new()),
@@ -193,6 +193,11 @@ pub(super) struct Transport<H: OutputHost> {
     /// Whether any stream has attached yet; the first attach keeps the
     /// producer's startup prefill.
     attached_before: bool,
+    /// Whether playback was meant to advance while no stream drained the
+    /// ring, so the queue holds history the next attach must discard.
+    stale_queue: bool,
+    /// The default identity the last discovery saw.
+    observed: Observed,
     next_attempt: Duration,
     next_discovery: Duration,
 }
@@ -209,6 +214,8 @@ impl<H: OutputHost> Transport<H> {
             state: TransportState::Connecting,
             failures: 0,
             attached_before: false,
+            stale_queue: false,
+            observed: Observed::Nothing,
             next_attempt: Duration::ZERO,
             next_discovery: Duration::ZERO,
         }
@@ -220,13 +227,34 @@ impl<H: OutputHost> Transport<H> {
         if self.live.is_some() {
             self.supervise(now);
         }
-        if self.live.is_none() && now >= self.next_attempt {
-            self.attempt(now);
+        if self.live.is_none() {
+            if self.shared.running.load(Ordering::Acquire) {
+                self.stale_queue = true;
+            }
+            if now >= self.next_attempt {
+                self.attempt(now);
+            } else if now >= self.next_discovery {
+                self.probe(now);
+            }
         }
         if self.live.is_some() {
             now + HEALTH_POLL
         } else {
-            self.next_attempt
+            self.next_attempt.min(self.next_discovery)
+        }
+    }
+
+    /// Re-discover the default while waiting out a retry delay, and attempt
+    /// at once on a fresh burst when its identity changed.
+    fn probe(&mut self, now: Duration) {
+        self.next_discovery = now + DISCOVERY_INTERVAL;
+        // A failed query says nothing new; the scheduled retry stands.
+        let Ok(found) = self.host.default_output() else {
+            return;
+        };
+        let id = found.as_ref().map(|(id, _)| id.as_str());
+        if !self.observed.is(id) {
+            self.attempt_with(now, Ok(found));
         }
     }
 
@@ -279,7 +307,23 @@ impl<H: OutputHost> Transport<H> {
     }
 
     fn attempt(&mut self, now: Duration) {
-        match self.connect(now) {
+        let found = self.host.default_output();
+        self.attempt_with(now, found);
+    }
+
+    /// Connect to `found`, the default a discovery just returned. A default
+    /// whose identity differs from the last one observed starts a fresh
+    /// burst.
+    fn attempt_with(&mut self, now: Duration, found: Discovered<H>) {
+        self.next_discovery = now + DISCOVERY_INTERVAL;
+        if let Ok(found) = &found {
+            let id = found.as_ref().map(|(id, _)| id.as_str());
+            if matches!(self.observed, Observed::Default(_)) && !self.observed.is(id) {
+                self.failures = 0;
+            }
+            self.observed = Observed::Default(id.map(str::to_owned));
+        }
+        match self.connect(now, found) {
             Ok(()) => {}
             Err(reason) => {
                 self.publish(TransportState::Unavailable(reason));
@@ -288,8 +332,8 @@ impl<H: OutputHost> Transport<H> {
         }
     }
 
-    fn connect(&mut self, now: Duration) -> Result<(), TransportFailure> {
-        let (id, device) = match self.host.default_output() {
+    fn connect(&mut self, now: Duration, found: Discovered<H>) -> Result<(), TransportFailure> {
+        let (id, device) = match found {
             Ok(Some(found)) => found,
             Ok(None) => return Err(TransportFailure::NoOutput),
             Err(err) => return Err(failure_of(&PlatformError::Audio(err))),
@@ -300,7 +344,9 @@ impl<H: OutputHost> Transport<H> {
             .producer
             .reclaim_consumer()
             .ok_or(TransportFailure::ConnectFailed)?;
-        if self.attached_before && self.shared.ever_started.load(Ordering::Acquire) {
+        // Taken, so a stopped retry after a failed build keeps what the
+        // producer queues next.
+        if std::mem::take(&mut self.stale_queue) && self.attached_before {
             consumer.discard_queued();
         }
         let source = source_for_device(
@@ -357,6 +403,9 @@ impl<H: OutputHost> Transport<H> {
     /// Drop the attached stream on this (the driver's) thread and publish why.
     fn retire(&mut self, reason: TransportFailure) {
         self.live = None;
+        if self.shared.running.load(Ordering::Acquire) {
+            self.stale_queue = true;
+        }
         self.publish(TransportState::Unavailable(reason));
     }
 
@@ -386,6 +435,23 @@ impl<H: OutputHost> Transport<H> {
         self.shared.push_event(state);
     }
 }
+
+/// The default identity a transport last discovered.
+enum Observed {
+    /// No discovery has returned yet.
+    Nothing,
+    /// The last discovery's identity, `None` when there was no output.
+    Default(Option<String>),
+}
+
+impl Observed {
+    fn is(&self, id: Option<&str>) -> bool {
+        matches!(self, Self::Default(seen) if seen.as_deref() == id)
+    }
+}
+
+/// What one [`OutputHost::default_output`] call returned.
+type Discovered<H> = Result<Option<(String, <H as OutputHost>::Device)>, cpal::Error>;
 
 fn failure_of(err: &PlatformError) -> TransportFailure {
     match err {

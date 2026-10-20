@@ -146,3 +146,17 @@ fn the_null_backend_needs_no_transport_wait() {
         TransportOutcome::Ready
     );
 }
+
+#[test]
+fn a_current_ready_state_wins_over_an_older_queued_no_output() {
+    use platform::audio::{TransportFailure, TransportState};
+    let queued = [
+        TransportState::Unavailable(TransportFailure::NoOutput),
+        TransportState::Ready,
+    ];
+    assert_eq!(
+        settle_transport_once(queued.into_iter(), TransportState::Ready),
+        Some(TransportOutcome::Ready),
+        "a device that attached before the first poll must play, not exit headless"
+    );
+}

@@ -38,15 +38,17 @@
 //! - **Stream health**: underruns cover the producer-outran-consumer case,
 //!   but a `cpal` stream can also fail asynchronously (device disconnect,
 //!   driver error) on its own callback thread. Those are counted separately
-//!   via [`AudioOutput::stream_errors`]; a nonzero count means the stream is
-//!   unhealthy even when [`AudioOutput::underruns`] stays flat.
+//!   via [`AudioOutput::stream_errors`], a lifetime count across every stream
+//!   the transport builds: a rise during an operation means a stream failed
+//!   then, even when [`AudioOutput::underruns`] stays flat, while
+//!   [`AudioOutput::transport_state`] says whether a stream is attached now.
 //! - **Transport**: [`AudioOutput::open`] never waits for or fails on a
 //!   missing device. A worker thread (see the private `transport` module)
 //!   discovers the OS default output, builds the stream, and rebuilds it
 //!   after a stream failure or a default-output change, with bounded
 //!   retries. Producers keep the same ring and handle throughout; samples
-//!   queued while nothing was draining are discarded when a stream re-attaches
-//!   after playback was started. Distinct [`TransportState`] transitions are
+//!   queued while playback was started but nothing was draining are discarded
+//!   when a stream re-attaches, and a queue left while stopped is kept. Distinct [`TransportState`] transitions are
 //!   available from [`AudioOutput::poll_transport_state`]; neither the device
 //!   callbacks nor the game loop connect, wait, or log.
 //! - **Playback position**: a real device's callback captures
@@ -371,7 +373,6 @@ impl AudioOutput {
     /// the earlier synchronous contract. A stream that refuses to play is
     /// reported as a [`TransportState::Unavailable`] transition instead.
     pub fn start(&mut self) -> Result<(), PlatformError> {
-        self.shared.ever_started.store(true, Ordering::Release);
         self.set_running(true);
         Ok(())
     }
@@ -472,14 +473,16 @@ impl AudioOutput {
         self.producer.underruns()
     }
 
-    /// Count of asynchronous `cpal` stream errors reported since the stream
-    /// was built (device disconnect, driver failure, …).
+    /// Count of asynchronous `cpal` stream errors (device disconnect, driver
+    /// failure, xrun, …) reported during this output's lifetime, including
+    /// by streams the transport has since replaced.
     ///
-    /// A nonzero value means the stream is unhealthy: playback may have
-    /// stopped at the OS level even though [`Self::is_running`] still reports
-    /// `true` and [`Self::underruns`] is flat, because the callback that
-    /// drains the ring buffer is no longer being invoked. Always zero for the
-    /// null backend, which owns no `cpal` stream.
+    /// A lifetime diagnostic, not the current transport state: compare it
+    /// with a value read when an operation began to learn whether a stream
+    /// failed during that operation, which [`Self::is_running`] and a flat
+    /// [`Self::underruns`] cannot show, and use [`Self::transport_state`] to
+    /// learn whether a stream is attached now. Always zero for the null
+    /// backend, which owns no `cpal` stream.
     #[must_use]
     pub fn stream_errors(&self) -> u64 {
         self.shared.stream_errors.load(Ordering::Relaxed)
