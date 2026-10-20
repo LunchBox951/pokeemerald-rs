@@ -254,6 +254,9 @@ fn the_menu_frame_driver_never_opens_a_menu_itself() {
     let mut save_slot = temp.slot();
 
     let mut phase = new_game_phase();
+    // A pack-free menu build, so the removed fresh-open branch would have
+    // opened a menu here rather than failing its pack load.
+    phase.synthetic_start_menu = super::overworld_phase::SyntheticStartMenu::Builds;
     settle(&mut phase);
     assert!(
         phase.start_menu_may_open(pressed(Buttons::START), false),
