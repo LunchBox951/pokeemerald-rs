@@ -40,13 +40,14 @@ use super::OverworldPhase;
 const NO_LEAD_SLOT: usize = 0;
 
 impl OverworldPhase {
-    /// Drives the start menu for one frame; returns whether the menu owned the
-    /// frame, in which case the caller must not advance movement.
+    /// Drives an already-open start menu for one frame; returns whether the
+    /// menu owned the frame, in which case the caller must not advance
+    /// movement. With no menu open it returns `false` and does nothing.
     ///
-    /// A fresh `START` press opens the menu (see [`Self::start_menu_may_open`])
-    /// and consumes that frame without ticking the new menu. While a menu is
-    /// open it is ticked every frame, and its cursor is kept on the phase so
-    /// the next menu opens where this one left off.
+    /// The menu is ticked every frame, and its cursor is kept on the phase so
+    /// the next menu opens where this one left off. Opening a menu from a
+    /// fresh `START` press is [`Self::step`]'s alone (see
+    /// [`Self::start_menu_may_open`]).
     ///
     /// `save_slot` is only written if the player completes the SAVE flow.
     pub(in crate::flow) fn advance_start_menu_frame(
@@ -54,21 +55,17 @@ impl OverworldPhase {
         buttons: ButtonState,
         save_slot: &mut SaveSlot,
     ) -> bool {
-        let open_menu = self.start_menu.take();
-        if open_menu.is_none()
-            && (!self.start_menu_may_open(buttons, false) || !self.try_open_start_menu())
-        {
+        let Some(mut menu) = self.start_menu.take() else {
             return false;
-        }
+        };
 
         self.take_field_lock();
+        // `StopPlayerAvatar` in `ShowStartMenu` (`start_menu.c:581-588`).
+        self.player.reset_movement_direction_to_facing();
 
         // Step does not run on frames the menu owns.
         self.advance_tileset_anim_tick();
 
-        let Some(mut menu) = open_menu else {
-            return true;
-        };
         let mut target = PhaseSaveTarget {
             phase: RefCell::new(self),
             save_slot,
@@ -178,10 +175,11 @@ impl OverworldPhase {
     /// and count stay exactly as loaded; upstream's `SavePlayerParty` also
     /// copies all records and the count unconditionally.
     ///
-    /// The player's facing and movement directions come from separate fields:
-    /// they differ on a forced-slide landing frame, when START is claimed
-    /// before `ForcedMovement_None` resets the movement direction
-    /// (`src/field_player_avatar.c`).
+    /// The player's facing and movement directions are saved from separate
+    /// fields. Opening the menu has already reset the movement direction to
+    /// the facing, as `StopPlayerAvatar` does (`src/start_menu.c:581-588`,
+    /// `src/field_player_avatar.c:1223-1228`), so a save from a slide's
+    /// landing frame stores the locked facing in both.
     pub(super) fn copy_party_and_objects_to_save(&mut self) {
         let slot = self.party_lead_slot;
         if let Some(lead) = &self.party_lead {

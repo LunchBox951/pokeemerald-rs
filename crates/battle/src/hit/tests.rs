@@ -66,7 +66,7 @@ const UNKNOWN_MOVE: MoveId = MoveId(60_000);
 /// Normal-type (physical), 75 accuracy.
 const SLAM: MoveId = MoveId::SLAM;
 
-const THICK_FAT: AbilityId = AbilityId(47);
+const THICK_FAT: AbilityId = AbilityId::THICK_FAT;
 /// `SPECIES_SHEDINJA`: Wonder Guard in its primary (and only) ability slot.
 const SHEDINJA: SpeciesId = SpeciesId(303);
 const FAINT_ATTACK: MoveId = MoveId::FAINT_ATTACK;
