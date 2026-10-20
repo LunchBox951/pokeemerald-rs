@@ -616,6 +616,38 @@ fn dropping_a_session_removes_save_media_created_under_an_owner_stripping_umask(
     );
 }
 
+/// The recovered descriptor is opened through the pin that was verified and
+/// chmod-ed, not by re-resolving the name, so a directory installed at the
+/// name after the chmod (even one reusing the listed inode number) can never
+/// be the one emptied. Runs as root too: it calls the recovery directly.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[test]
+fn recovered_unreadable_directory_is_read_through_the_verified_pin() {
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+    let base = private_base("cleanup-unreadable-pin");
+    let root = base.join("root");
+    std::fs::create_dir_all(root.join("listed").join("inner")).unwrap();
+    std::fs::set_permissions(root.join("listed"), std::fs::Permissions::from_mode(0o333)).unwrap();
+    let listed = std::fs::symlink_metadata(root.join("listed")).unwrap();
+    let parent = std::fs::File::open(&root).unwrap();
+    let readable = restore_owner_access(&parent, c"listed", listed.dev(), listed.ino());
+    let mode = std::fs::symlink_metadata(root.join("listed"))
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o7777;
+    let _ = std::fs::set_permissions(root.join("listed"), std::fs::Permissions::from_mode(0o700));
+    let _ = std::fs::remove_dir_all(&base);
+    let readable = std::fs::File::from(readable.unwrap());
+    let found = readable.metadata().unwrap();
+    assert_eq!(
+        (found.dev(), found.ino()),
+        (listed.dev(), listed.ino()),
+        "the readable descriptor is the pinned, listed inode"
+    );
+    assert_eq!(mode, 0o700, "owner access was restored on the listed inode");
+}
+
 #[cfg(any(target_os = "linux", target_os = "android"))]
 #[test]
 fn cleanup_never_chmods_an_unreadable_directory_swapped_in_after_the_listing() {
