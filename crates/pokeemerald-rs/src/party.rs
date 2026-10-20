@@ -683,6 +683,17 @@ pub(crate) fn is_traded_record(record: &Pokemon, owner_id: u32, owner_name: &[u8
         .any(|(index, byte)| owner_name.get(index) != Some(byte))
 }
 
+/// Whether `record` carries the save owner's OT id but no OT name at all.
+/// [`merge_into_save_pokemon`] builds such a record from the battler alone
+/// ("this path has no save identity"), e.g. a healed new-game starter, so it
+/// is the owner's own Pokémon rather than a traded one even though
+/// [`is_traded_record`] sees a name mismatch.
+pub(crate) fn has_unstamped_owner_name(record: &Pokemon, owner_id: u32) -> bool {
+    let bytes = record.to_bytes();
+    let name = &bytes[BOX_OT_NAME_OFFSET..BOX_OT_NAME_OFFSET + engine::save::BOX_OT_NAME_LEN];
+    record.box_data.ot_id() == owner_id && name.iter().all(|byte| *byte == 0)
+}
+
 #[cfg(test)]
 mod traded_tests;
 

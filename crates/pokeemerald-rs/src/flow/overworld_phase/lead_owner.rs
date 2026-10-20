@@ -64,6 +64,7 @@ impl OverworldPhase {
             .is_some_and(|record| {
                 record.box_data.personality() == lead.personality()
                     && record.box_data.ot_id() == lead.original_trainer_id()
+                    && !party::has_unstamped_owner_name(record, owner_id)
                     && party::is_traded_record(record, owner_id, &self.save2.player_name)
             });
         let traded = traded || lead.is_traded_recipient();

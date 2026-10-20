@@ -91,3 +91,19 @@ fn a_lead_with_no_matching_saved_record_keeps_its_own_classification() {
     phase.save1.player_party[0] = engine::save::Pokemon::default();
     assert!(!phase.lead_for_battle().unwrap().is_traded_recipient());
 }
+
+#[test]
+fn a_new_game_starter_healed_into_its_empty_record_stays_domestic() {
+    let mut phase = new_game_phase();
+    phase.save2.player_trainer_id = OWNER_ID.to_le_bytes();
+    phase.save2.player_name = *b"RUSTY\xFF\0\0";
+    phase.party_lead =
+        Some(crate::new_game::provisional_starter().with_original_trainer_id(OWNER_ID));
+    phase.party_lead_slot = 0;
+    assert!(!phase.lead_for_battle().unwrap().is_traded_recipient());
+    phase.heal_whole_party_and_reselect_lead("test");
+    assert!(
+        !phase.lead_for_battle().unwrap().is_traded_recipient(),
+        "the player's own starter must not be classified as traded after a heal"
+    );
+}
