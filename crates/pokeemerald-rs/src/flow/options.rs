@@ -22,6 +22,13 @@ pub(crate) struct OptionsState {
 }
 
 impl OptionsState {
+    /// The committed `optionsButtonMode` in the retained save. The menu's
+    /// uncommitted cursor value does not count: upstream writes the option
+    /// bytes only when the screen saves (`option_menu.c` `Task_OptionMenuSave`).
+    pub(super) fn button_mode(&self) -> engine::save::ButtonMode {
+        self.main.saved.block2.options_button_mode
+    }
+
     #[cfg(test)]
     pub(super) const fn is_accepting_input(&self) -> bool {
         matches!(self.menu.phase(), crate::options::OptionsPhase::Input)
