@@ -378,7 +378,7 @@ fn extract_interface_palettes(
 ) -> Result<(), ExtractError> {
     push_palette_entry(
         &upstream.join("graphics/interface/main_menu_bg.pal"),
-        "interface/palette/main_menu_bg".to_owned(),
+        scope::MAIN_MENU_BG_PALETTE_ID.to_owned(),
         writer,
     )
 }
