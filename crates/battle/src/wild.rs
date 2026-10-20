@@ -61,7 +61,7 @@ pub fn ensure_wild_startable(dex: &Dex, species: SpeciesId, level: u8) -> Result
 #[must_use]
 pub fn pick_wild_nature(synchronize_nature: Option<Nature>, rng: &mut impl BattleRng) -> Nature {
     if let Some(lead_nature) = synchronize_nature {
-        if rng.next_u16() % 2 == 0 {
+        if rng.next_u16().is_multiple_of(2) {
             return lead_nature;
         }
     }
