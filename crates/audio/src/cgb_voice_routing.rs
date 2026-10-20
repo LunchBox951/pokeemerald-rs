@@ -127,14 +127,9 @@ fn a_pending_pan_change_commits_by_the_next_sustain_refresh_on_wave() {
 
 #[test]
 fn an_equal_goal_hard_pan_reroute_still_commits_on_wave_at_a_sustain_refresh() {
-    // A hard-right and a hard-left route resolve to the *same* envelope
-    // goal of 15 (`cgb_envelope_goal`, `cgb_envelope.rs`), so a flat
-    // sustain refresh reassigns the volume it already holds and reports
-    // no transition. Upstream still recomputes `chan->pan` on that
-    // boundary regardless of whether the volume moved (`m4a.c:1077-1085`),
-    // and Wave commits that recompute to NR51 every such boundary
-    // (`:1081-1082`), so the pending hard-left route must not stay
-    // latched forever even though the goal never changes.
+    // Hard-left and hard-right share envelope goal 15, so the refresh moves
+    // no volume; upstream still recomputes the pan on that boundary and
+    // Wave commits it to NR51 (`m4a.c:1077-1085`).
     let mut voice = wave_voice(
         false,
         TestNote {
@@ -169,13 +164,9 @@ fn an_equal_goal_hard_pan_reroute_still_commits_on_wave_at_a_sustain_refresh() {
 
 #[test]
 fn a_sustained_square_holds_its_route_until_the_next_modify_volume_write() {
-    // A bare sustain refresh recomputes `chan->pan` through `CgbModVol`
-    // but, for square and noise, raises no `CGB_CHANNEL_MO_VOL`
-    // (`m4a.c:1077-1085`), and NR51 -- the audible stereo route -- is
-    // rewritten only under that bit (`:1205-1208`). A sustained square
-    // whose track pan flipped hard right therefore keeps playing both
-    // sides until an actual volume write carries the recomputed pan to
-    // NR51.
+    // For square and noise a sustain refresh recomputes the pan without
+    // raising `CGB_CHANNEL_MO_VOL` (`m4a.c:1077-1085`), and NR51 is
+    // rewritten only under that bit (`:1205-1208`).
     let mut voice = square_voice(CgbChannelNumber::Square1, None, TestNote::default());
     let (left, right) = frame_side_energy(&mut voice);
     assert!(

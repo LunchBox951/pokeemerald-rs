@@ -398,16 +398,8 @@ fn centred_goal_thirty_one_decay_freezes_at_zero_before_software_reaches_it() {
 
 #[test]
 fn live_track_volume_drop_during_sustain_does_not_silence_the_channel() {
-    // Sustain's periodic refresh (`CgbEnvelope::sustain_step`, every
-    // `SUSTAIN_REFRESH_FRAMES`) only updates software bookkeeping and
-    // never sets a hardware write -- upstream's own sustain-refresh
-    // branch never raises `CGB_CHANNEL_MO_VOL` (`m4a.c:1128-1137`).
-    // `set_track_volume` itself retriggers immediately, but that write
-    // lands before the software goal has caught up (still the stale
-    // value), so it changes nothing audible; the *later*, unwritten
-    // refresh is the one that actually snaps to the new low goal.
-    // `HardwareEnvelopeVolume::track` must not read that unwritten snap
-    // as gradual hardware envelope motion and silence the channel.
+    // A sustain refresh never writes hardware (`m4a.c:1128-1137`), so its
+    // unwritten snap to a lower goal must not read as envelope motion.
     let held_at_full_sustain = CgbAdsr {
         attack: 0,
         decay: 0,
