@@ -20,8 +20,8 @@ pub struct WaveChannel {
     step_delta: u32,
     /// The held output, already shifted by the NR32 gain it was latched
     /// under and centered on zero; distinct from the RAM head `phase`
-    /// indexes. `None` until the first `sample` resolves it, since creation
-    /// does not know the volume.
+    /// indexes. `None` until the first `sample` resolves a cold zero nibble,
+    /// since creation does not know the volume.
     latch: Option<i32>,
 }
 
@@ -99,11 +99,13 @@ impl WaveChannel {
     /// (`mgba/src/gb/audio.c:557-568,768-774`); a volume change alone never
     /// moves the held output, matching the GBA volume-write path, which
     /// leaves the sample alone (`mgba/src/gba/io.c:633-637`,
-    /// `mgba/src/gba/audio.c:158-162`). The first call latches the head.
+    /// `mgba/src/gba/audio.c:158-162`). A cold channel with no latch holds a
+    /// zero nibble, independent of the uploaded RAM, until its first wave
+    /// clock (`mgba/src/gb/audio.c:92-95,326-335,513-517`).
     pub fn sample(&mut self, gain_256: u32) -> i32 {
         let output = match self.latch {
             Some(held) => held,
-            None => Self::resolve(self.samples[self.head()], gain_256),
+            None => Self::resolve(-NIBBLE_ZERO, gain_256),
         };
         self.latch = Some(output);
         let old_clock = self.phase / PHASE_ONE;
@@ -122,6 +124,19 @@ mod tests {
 
     const FULL: u32 = 256;
 
+    /// Uploaded RAM does not reach the output before the first wave clock;
+    /// once clocked the outputs diverge (`mgba/src/gb/audio.c:92-95,513-517`).
+    #[test]
+    fn cold_start_output_ignores_wave_ram_until_the_first_wave_clock() {
+        const LOW_FREQUENCY: u16 = 0x400;
+        let mut loud = WaveChannel::new(WaveChannel::decode_wave_ram(&[0xF0; 16]), LOW_FREQUENCY);
+        let mut quiet = WaveChannel::new(WaveChannel::decode_wave_ram(&[0x00; 16]), LOW_FREQUENCY);
+        while loud.phase / PHASE_ONE == 0 {
+            assert_eq!(loud.sample(FULL), quiet.sample(FULL));
+        }
+        assert_ne!(loud.sample(FULL), quiet.sample(FULL));
+    }
+
     #[test]
     fn wave_ram_decodes_high_nibble_first() {
         let bytes = [0xF0, 0x08, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
@@ -133,7 +148,8 @@ mod tests {
     fn wave_channel_emits_raw_decoded_nibbles() {
         let full_amplitude_wave = WaveChannel::decode_wave_ram(&[0xF0; WAVE_RAM_BYTES]);
         let mut wave = WaveChannel::new(full_amplitude_wave, 0);
-        wave.step_delta = 0;
+        wave.step_delta = PHASE_ONE;
+        wave.sample(FULL);
         assert_eq!(wave.sample(FULL), 7);
     }
 
@@ -198,9 +214,9 @@ mod tests {
         let wave_ram = WaveChannel::decode_wave_ram(&[0xF0; WAVE_RAM_BYTES]);
         let mut wave = WaveChannel::new(wave_ram, 0);
         wave.step_delta = PHASE_ONE;
-        // The first sample latches the head (7); the first clock removes that
-        // same nibble, and only the second clock reaches the low nibble (-8).
-        assert_eq!(wave.sample(FULL), 7);
+        // The cold latch holds a zero nibble (-8); the first clock removes the
+        // head (7), and only the second clock reaches the low nibble (-8).
+        assert_eq!(wave.sample(FULL), -8);
         assert_eq!(wave.sample(FULL), 7);
         assert_eq!(wave.sample(FULL), -8);
         assert_eq!(wave.sample(FULL), 7);
@@ -264,7 +280,7 @@ mod tests {
         const QUARTER: u32 = 64;
         let wave_ram = WaveChannel::decode_wave_ram(&[0xFF; WAVE_RAM_BYTES]);
         let mut wave = WaveChannel::new(wave_ram, 0x400);
-        assert_eq!(wave.sample(FULL), 7, "first call latches at full volume");
+        assert_eq!(wave.sample(FULL), -8, "first call latches the cold nibble");
         // Every call below holds until the clock-crossing call, which still
         // returns the old latch while latching the next one at quarter volume.
         let mut held = Vec::new();
@@ -273,7 +289,7 @@ mod tests {
         }
         assert!(held.len() > 1, "the hold must span several samples");
         assert!(
-            held.iter().all(|&out| out == 7),
+            held.iter().all(|&out| out == -8),
             "held output rescaled: {held:?}"
         );
         assert_eq!(wave.sample(FULL), 1, "next clock latched at quarter volume");
