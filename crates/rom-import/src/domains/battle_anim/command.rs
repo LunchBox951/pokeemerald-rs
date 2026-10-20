@@ -260,6 +260,19 @@ impl Cursor<'_, '_> {
                     args: self.args()?,
                 }
             }
+            _ => return self.late_command(opcode_at, opcode, pointers),
+        })
+    }
+
+    /// The commands from `waitsound` on.
+    fn late_command(
+        &mut self,
+        opcode_at: usize,
+        opcode: u8,
+        pointers: &mut impl AnimPointers,
+    ) -> Result<AnimCommand, ImportError> {
+        use AnimCommand as C;
+        Ok(match opcode {
             0x20 => C::WaitSound,
             0x21 => C::JumpArgEq {
                 arg: self.u8()?,

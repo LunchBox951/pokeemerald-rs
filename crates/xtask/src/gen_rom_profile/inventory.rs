@@ -172,8 +172,8 @@ pub fn preflight(pack: &PackSource, bag_ids: &[String]) -> Result<(), GenRomProf
     require_layouts(pack)?;
     require_text_window(pack)?;
     require_sprites(pack)?;
+    require_battle_anims(pack)?;
     require_battlers(pack)?;
     require_battle_messages(pack)?;
-    require_battle_anims(pack)?;
     require_bag(pack, bag_ids)
 }

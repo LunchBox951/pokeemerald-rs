@@ -29,7 +29,6 @@ const MAIN: usize = 0x3010;
 const TEMPLATE: usize = 0x5000;
 /// A task function: code, so its operand carries the Thumb bit.
 const TASK: usize = 0x6000;
-const SLOT_COUNT: usize = 355 + 9 + 23 + 7;
 
 fn small(off: usize) -> u32 {
     u32::try_from(off).expect("a fixture offset fits in u32")
@@ -98,10 +97,8 @@ fn selector_programs() -> Vec<u16> {
         for index in 0..table.len() {
             slots.push(if index + 1 == table.len() {
                 2
-            } else if table == AnimationTable::Moves && index == 0 {
-                1
             } else {
-                0
+                u16::from(table == AnimationTable::Moves && index == 0)
             });
         }
     }
@@ -666,9 +663,16 @@ fn sweep() -> PanSweep {
 
 #[test]
 fn every_command_reads_its_macro_layout() {
+    let mut cases = early_cases();
+    cases.extend(middle_cases());
+    cases.extend(late_cases());
+    assert_eq!(cases.len(), 0x30, "one case per sScriptCmdTable slot");
+    check_cases(cases);
+}
+
+fn early_cases() -> Vec<(Vec<u8>, AnimCommand)> {
     let ptr = ptr_bytes(SHORT);
-    let sweep_bytes = [0x02, 0x01, 0xC0, 0x3F, 0xFF, 0x04];
-    let cases: Vec<(Vec<u8>, AnimCommand)> = vec![
+    vec![
         (
             vec![0x00, 0x10, 0x27],
             AnimCommand::LoadSpriteGfx(EffectSpriteId::new(0).unwrap()),
@@ -709,6 +713,13 @@ fn every_command_reads_its_macro_layout() {
             AnimCommand::Call(ProgramId::new(1)),
         ),
         (vec![0x0F], AnimCommand::Return),
+    ]
+}
+
+fn middle_cases() -> Vec<(Vec<u8>, AnimCommand)> {
+    let ptr = ptr_bytes(SHORT);
+    let sweep_bytes = [0x02, 0x01, 0xC0, 0x3F, 0xFF, 0x04];
+    vec![
         (
             vec![0x10, 15, 0xFF, 0xFF],
             AnimCommand::SetArg { arg: 15, value: -1 },
@@ -773,6 +784,13 @@ fn every_command_reads_its_macro_layout() {
                 args: vec![3],
             },
         ),
+    ]
+}
+
+fn late_cases() -> Vec<(Vec<u8>, AnimCommand)> {
+    let ptr = ptr_bytes(SHORT);
+    let sweep_bytes = [0x02, 0x01, 0xC0, 0x3F, 0xFF, 0x04];
+    vec![
         (vec![0x20], AnimCommand::WaitSound),
         (
             [&[0x21, 15, 0x01, 0x00][..], &ptr].concat(),
@@ -812,8 +830,10 @@ fn every_command_reads_its_macro_layout() {
         (vec![0x2D, 11], AnimCommand::TeamAttackMoveBack(11)),
         (vec![0x2E, 12], AnimCommand::TeamAttackMoveFwd(12)),
         (vec![0x2F], AnimCommand::StopSound),
-    ];
-    assert_eq!(cases.len(), 0x30, "one case per sScriptCmdTable slot");
+    ]
+}
+
+fn check_cases(cases: Vec<(Vec<u8>, AnimCommand)>) {
     let mut image = fixture().finish();
     for (index, (bytes, command)) in cases.into_iter().enumerate() {
         assert_eq!(usize::from(bytes[0]), index, "{command:?}");

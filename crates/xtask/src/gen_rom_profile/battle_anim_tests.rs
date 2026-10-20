@@ -101,16 +101,13 @@ fn slot_program(table: AnimationTable, index: u16) -> u16 {
     let last = table.len() - 1;
     let main_slots: &[u16] = match table {
         AnimationTable::Moves => &[last],
-        AnimationTable::StatusConditions => &[0, last],
+        AnimationTable::StatusConditions | AnimationTable::Special => &[0, last],
         AnimationTable::General => &[0, 1, last],
-        AnimationTable::Special => &[0, last],
     };
     if main_slots.contains(&index) {
         2
-    } else if table == AnimationTable::Moves && index == 0 {
-        1
     } else {
-        0
+        u16::from(table == AnimationTable::Moves && index == 0)
     }
 }
 
