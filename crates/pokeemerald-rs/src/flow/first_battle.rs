@@ -50,6 +50,7 @@ pub fn start_first_battle(
     rng: &mut Rng,
 ) -> Result<Battle, BattleError> {
     battle::ensure_participant_admissible(&player_lead)?;
+    let player_lead = super::wild_encounter::classify_traded_lead(player_lead, player_trainer_id);
     let dex = Dex::new();
     let opponent_moves =
         battle::initial_moveset(FIRST_BATTLE_OPPONENT_SPECIES, FIRST_BATTLE_OPPONENT_LEVEL);
