@@ -1,7 +1,7 @@
 use super::*;
 
 const FIRST_ID_BYTE: usize = size_of::<u16>();
-const EMPTY_ID_SONG_METADATA_BYTES: usize = size_of::<u16>() + 4;
+const EMPTY_ID_SONG_METADATA_BYTES: usize = size_of::<u16>() + size_of::<u16>() + 4;
 const FIRST_EVENT_TAG_BYTE: usize = EMPTY_ID_SONG_METADATA_BYTES + size_of::<u32>();
 const FIRST_EVENT_OPERAND_BYTE: usize = FIRST_EVENT_TAG_BYTE + 1;
 
@@ -28,6 +28,7 @@ fn sample_track() -> Vec<SongEvent> {
 fn song(tracks: Vec<Vec<SongEvent>>) -> Song {
     Song::new(
         VoiceGroupId("audio/voicegroup/title".to_owned()),
+        MusicPlayerId(0),
         0,
         None,
         tracks,
@@ -36,9 +37,15 @@ fn song(tracks: Vec<Vec<SongEvent>>) -> Song {
 }
 
 fn single_event_bytes(event: SongEvent) -> Vec<u8> {
-    Song::new(VoiceGroupId(String::new()), 0, None, vec![vec![event]])
-        .expect("single-event test song fits schema bounds")
-        .encode()
+    Song::new(
+        VoiceGroupId(String::new()),
+        MusicPlayerId(0),
+        0,
+        None,
+        vec![vec![event]],
+    )
+    .expect("single-event test song fits schema bounds")
+    .encode()
 }
 
 fn overwrite_trailing_u32(bytes: &mut [u8], value: u32) {
@@ -50,6 +57,7 @@ fn overwrite_trailing_u32(bytes: &mut [u8], value: u32) {
 fn a_typical_song_round_trips() {
     let song = Song::new(
         VoiceGroupId("audio/voicegroup/title".to_owned()),
+        MusicPlayerId(0),
         0,
         Some(80),
         vec![sample_track(), sample_track()],
@@ -60,9 +68,84 @@ fn a_typical_song_round_trips() {
 }
 
 #[test]
+fn the_player_assignment_round_trips_at_both_ends_of_its_range() {
+    for player in [0, 1, 2, 3, 0x0102, u16::MAX] {
+        let song = Song::new(
+            VoiceGroupId("audio/voicegroup/title".to_owned()),
+            MusicPlayerId(player),
+            0,
+            None,
+            vec![sample_track()],
+        )
+        .unwrap();
+        let decoded = Song::decode(&song.encode()).unwrap();
+        assert_eq!(decoded.player(), MusicPlayerId(player));
+        assert_eq!(decoded, song);
+    }
+}
+
+#[test]
+fn the_player_assignment_is_stored_little_endian_after_the_voicegroup_id() {
+    let id = "audio/voicegroup/title";
+    let bytes = Song::new(
+        VoiceGroupId(id.to_owned()),
+        MusicPlayerId(0x0102),
+        0x77,
+        None,
+        vec![],
+    )
+    .unwrap()
+    .encode();
+    let player_at = FIRST_ID_BYTE + id.len();
+    assert_eq!(bytes[player_at..player_at + 2], [0x02, 0x01]);
+    assert_eq!(bytes[player_at + 2], 0x77, "priority follows the player");
+}
+
+#[test]
+fn songs_differing_only_in_player_are_unequal() {
+    let make = |player| {
+        Song::new(
+            VoiceGroupId("x".to_owned()),
+            MusicPlayerId(player),
+            0,
+            None,
+            vec![],
+        )
+        .unwrap()
+    };
+    assert_ne!(make(0), make(1));
+    assert_ne!(make(0).encode(), make(1).encode());
+}
+
+#[test]
+fn a_payload_in_the_layout_without_a_player_is_rejected() {
+    // Voicegroup "x", priority 5, reverb 30, no tracks: the previous layout, with no player field.
+    let legacy = [1, 0, b'x', 5, 1, 30, 0];
+    assert_eq!(Song::decode(&legacy), Err(AudioError::Truncated));
+}
+
+#[test]
+fn a_payload_cut_inside_the_player_field_is_rejected() {
+    let bytes = Song::new(
+        VoiceGroupId("x".to_owned()),
+        MusicPlayerId(0x0102),
+        0,
+        None,
+        vec![],
+    )
+    .unwrap()
+    .encode();
+    let player_at = FIRST_ID_BYTE + 1;
+    for cut in player_at..=player_at + 1 {
+        assert_eq!(Song::decode(&bytes[..cut]), Err(AudioError::Truncated));
+    }
+}
+
+#[test]
 fn no_reverb_override_round_trips() {
     let song = Song::new(
         VoiceGroupId("audio/voicegroup/dummy".to_owned()),
+        MusicPlayerId(0),
         5,
         None,
         vec![vec![SongEvent::Fine]],
@@ -141,6 +224,7 @@ fn every_event_variant_round_trips_with_full_width_controller_values() {
     ];
     let song = Song::new(
         VoiceGroupId("audio/voicegroup/vs_rayquaza".to_owned()),
+        MusicPlayerId(0),
         1,
         Some(0),
         vec![track],
@@ -249,7 +333,13 @@ fn the_maximum_track_count_round_trips() {
 fn too_many_tracks_is_rejected_by_the_constructor() {
     let tracks = vec![vec![SongEvent::Fine]; MAX_TRACKS + 1];
     assert_eq!(
-        Song::new(VoiceGroupId("x".to_owned()), 0, None, tracks),
+        Song::new(
+            VoiceGroupId("x".to_owned()),
+            MusicPlayerId(0),
+            0,
+            None,
+            tracks
+        ),
         Err(AudioError::TooManyTracks(MAX_TRACKS + 1))
     );
 }
@@ -258,7 +348,7 @@ fn too_many_tracks_is_rejected_by_the_constructor() {
 fn an_oversize_voicegroup_id_is_rejected_by_the_constructor() {
     let id = VoiceGroupId("x".repeat(usize::from(u16::MAX) + 1));
     assert_eq!(
-        Song::new(id, 0, None, vec![]),
+        Song::new(id, MusicPlayerId(0), 0, None, vec![]),
         Err(AudioError::IdTooLong(usize::from(u16::MAX) + 1))
     );
 }
@@ -266,7 +356,7 @@ fn an_oversize_voicegroup_id_is_rejected_by_the_constructor() {
 #[test]
 fn the_longest_encodable_voicegroup_id_is_accepted() {
     let id = VoiceGroupId("x".repeat(usize::from(u16::MAX)));
-    let song = Song::new(id.clone(), 0, None, vec![]).unwrap();
+    let song = Song::new(id.clone(), MusicPlayerId(0), 0, None, vec![]).unwrap();
     assert_eq!(Song::decode(&song.encode()).unwrap().voicegroup(), &id);
 }
 
@@ -316,6 +406,7 @@ fn the_memacc_conditional_loop_round_trips() {
     ];
     let song = Song::new(
         VoiceGroupId("audio/voicegroup/vs_trainer".to_owned()),
+        MusicPlayerId(0),
         0,
         Some(50),
         vec![track],
@@ -395,9 +486,15 @@ fn decode_rejects_trailing_bytes() {
 
 #[test]
 fn a_non_utf8_voicegroup_id_is_rejected() {
-    let mut bytes = Song::new(VoiceGroupId("x".to_owned()), 0, None, vec![])
-        .unwrap()
-        .encode();
+    let mut bytes = Song::new(
+        VoiceGroupId("x".to_owned()),
+        MusicPlayerId(0),
+        0,
+        None,
+        vec![],
+    )
+    .unwrap()
+    .encode();
     bytes[FIRST_ID_BYTE] = u8::MAX;
     assert_eq!(Song::decode(&bytes), Err(AudioError::InvalidString));
 }
@@ -406,6 +503,7 @@ fn a_non_utf8_voicegroup_id_is_rejected() {
 fn truncated_input_is_rejected() {
     let bytes = Song::new(
         VoiceGroupId("audio/voicegroup/title".to_owned()),
+        MusicPlayerId(0),
         3,
         Some(10),
         vec![sample_track()],
@@ -612,6 +710,7 @@ fn the_constructor_rejects_a_jump_target_at_or_past_the_track_length() {
             assert_eq!(
                 Song::new(
                     VoiceGroupId("audio/voicegroup/title".to_owned()),
+                    MusicPlayerId(0),
                     0,
                     None,
                     vec![track],
