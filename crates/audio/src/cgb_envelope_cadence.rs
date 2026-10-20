@@ -137,10 +137,10 @@ fn extra_iteration_is_skipped_while_already_in_the_pseudo_echo_tail() {
 }
 
 #[test]
-fn extra_iteration_is_skipped_the_frame_the_voice_retires() {
-    // A zero release with no echo floor retires outright, bypassing the
-    // doubling check. This pins the resulting state: a dead envelope neither
-    // revives nor mis-steps.
+fn a_voice_retired_on_a_doubled_frame_stays_dead() {
+    // A zero release with no echo floor retires outright. The retired arm is
+    // a no-op either way, so this cannot observe the doubling guard; it pins
+    // that a dead envelope neither revives nor mis-steps.
     let adsr = CgbAdsr {
         attack: 0,
         decay: 0,
