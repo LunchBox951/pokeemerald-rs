@@ -2,8 +2,8 @@
 
 /// Countdown to a note's automatic release.
 ///
-/// A gate time of zero is tied and never expires. [`Gate::tick`] returns
-/// `true` exactly once, on the sequencer tick that reaches zero.
+/// A gate time of zero is tied: [`Gate::tick`] never returns `true`. A counting
+/// gate returns `true` exactly once, on the sequencer tick that reaches zero.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Gate {
     Tied,
