@@ -7,7 +7,7 @@
 //! refuses.
 
 use assets::audio::{MemAccCondition, MemAccOp};
-use assets::{Song, SongEvent, VoiceGroupId};
+use assets::{MusicPlayerId, Song, SongEvent, VoiceGroupId};
 
 use super::{decode_track, song, write, CMD_PATT, CMD_VOICE};
 use crate::error::{ImportError, SongFault};
@@ -188,7 +188,8 @@ fn rom() -> Rom {
     let mut table = at(TRACK_A).raw().to_le_bytes().to_vec();
     table.extend([0, 0, 0, 0]);
     table.extend(at(HEADER).raw().to_le_bytes());
-    table.extend([0, 0, 0, 0]);
+    // `ms` is 0x0102 and `me` differs, so the song reads the right field of its own entry.
+    table.extend([0x02, 0x01, 0x09, 0x09]);
     let mut header = vec![2, 0, 5, 0x80 | 0x32];
     header.extend(at(VOICEGROUP).raw().to_le_bytes());
     header.extend(at(TRACK_A).raw().to_le_bytes());
@@ -263,8 +264,10 @@ fn the_song_carries_its_header_and_canonical_tracks() {
     );
     assert_eq!(decoded.priority(), 5);
     assert_eq!(decoded.reverb(), Some(50));
+    assert_eq!(decoded.player(), MusicPlayerId(0x0102));
     let expected = Song::new(
         VoiceGroupId("audio/voicegroup/g".into()),
+        MusicPlayerId(0x0102),
         5,
         Some(50),
         vec![track_a_events(), track_b_events()],

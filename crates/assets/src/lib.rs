@@ -70,9 +70,9 @@ pub use abilities::{Abilities, AbilityData, ABILITIES_COUNT};
 // between them stay reachable through the `audio` module path too.
 pub use audio::{
     cry_id, AudioError, CryId, CryMode, CrySettings, CryTable, DirectSoundMode, DirectSoundSample,
-    DirectSoundVoice, Envelope, KeySplitVoice, NoiseVoice, ProgrammableWave, ProgrammableWaveVoice,
-    RhythmVoice, Sample, SampleId, Song, SongEvent, Square1Voice, Square2Voice, VoiceEntry,
-    VoiceGroup, VoiceGroupId, MAX_TRACKS, VOICE_SLOT_COUNT,
+    DirectSoundVoice, Envelope, KeySplitVoice, MusicPlayerId, NoiseVoice, ProgrammableWave,
+    ProgrammableWaveVoice, RhythmVoice, Sample, SampleId, Song, SongEvent, Square1Voice,
+    Square2Voice, VoiceEntry, VoiceGroup, VoiceGroupId, MAX_TRACKS, VOICE_SLOT_COUNT,
 };
 pub use battle_moves::{
     MoveData, MoveEffect, MoveFlags, MoveId, MoveTable, MoveTarget, MoveType, MOVES_COUNT,

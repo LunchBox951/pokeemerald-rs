@@ -85,6 +85,9 @@ pub(super) fn tokenize(src: &str) -> Result<Vec<Token>, Fault> {
                     }
                     i += if c[i] == '\\' { 2 } else { 1 };
                 }
+                if i >= c.len() {
+                    return Err(Fault::new(line, "unterminated character literal"));
+                }
                 i += 1;
             }
             _ if ch.is_ascii_alphabetic() || ch == '_' => {
