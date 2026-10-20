@@ -617,9 +617,9 @@ fn dropping_a_session_removes_save_media_created_under_an_owner_stripping_umask(
 }
 
 /// The recovered descriptor is opened through the pin that was verified and
-/// chmod-ed, not by re-resolving the name, so a directory installed at the
-/// name after the chmod (even one reusing the listed inode number) can never
-/// be the one emptied. Runs as root too: it calls the recovery directly.
+/// chmod-ed, not by re-resolving the name: a different directory installed at
+/// the name between the chmod and the reopen is never the one returned, and
+/// its mode is left alone. Runs as root too: it calls the recovery directly.
 #[cfg(any(target_os = "linux", target_os = "android"))]
 #[test]
 fn recovered_unreadable_directory_is_read_through_the_verified_pin() {
@@ -630,22 +630,48 @@ fn recovered_unreadable_directory_is_read_through_the_verified_pin() {
     std::fs::set_permissions(root.join("listed"), std::fs::Permissions::from_mode(0o333)).unwrap();
     let listed = std::fs::symlink_metadata(root.join("listed")).unwrap();
     let parent = std::fs::File::open(&root).unwrap();
-    let readable = restore_owner_access(&parent, c"listed", listed.dev(), listed.ino());
-    let mode = std::fs::symlink_metadata(root.join("listed"))
-        .unwrap()
-        .permissions()
-        .mode()
-        & 0o7777;
-    let _ = std::fs::set_permissions(root.join("listed"), std::fs::Permissions::from_mode(0o700));
+    let readable =
+        restore_owner_access_with(&parent, c"listed", listed.dev(), listed.ino(), || {
+            // The window the fix closes: the chmod-ed inode moves away and a
+            // different directory takes its name before the reopen.
+            std::fs::rename(root.join("listed"), root.join("moved")).unwrap();
+            std::fs::create_dir(root.join("listed")).unwrap();
+            std::fs::set_permissions(root.join("listed"), std::fs::Permissions::from_mode(0o555))
+                .unwrap();
+        });
+    let mode = |name: &str| {
+        std::fs::symlink_metadata(root.join(name))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o7777
+    };
+    let (moved_mode, replacement_mode) = (mode("moved"), mode("listed"));
+    let replacement = std::fs::symlink_metadata(root.join("listed")).unwrap();
+    for name in ["moved", "listed"] {
+        let _ = std::fs::set_permissions(root.join(name), std::fs::Permissions::from_mode(0o700));
+    }
     let _ = std::fs::remove_dir_all(&base);
     let readable = std::fs::File::from(readable.unwrap());
     let found = readable.metadata().unwrap();
+    assert_ne!(
+        (replacement.dev(), replacement.ino()),
+        (listed.dev(), listed.ino()),
+        "setup: the replacement is a different inode"
+    );
     assert_eq!(
         (found.dev(), found.ino()),
         (listed.dev(), listed.ino()),
-        "the readable descriptor is the pinned, listed inode"
+        "the readable descriptor is the pinned, listed inode, not the replacement"
     );
-    assert_eq!(mode, 0o700, "owner access was restored on the listed inode");
+    assert_eq!(
+        moved_mode, 0o700,
+        "owner access was restored on the listed inode"
+    );
+    assert_eq!(
+        replacement_mode, 0o555,
+        "the replacement at the name is never chmod-ed"
+    );
 }
 
 #[cfg(any(target_os = "linux", target_os = "android"))]

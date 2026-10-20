@@ -222,11 +222,25 @@ pub(super) fn remove_contents(
 /// inode itself (a path-based chmod could hit a replacement), so recovery is
 /// refused and the open's `EACCES` stands.
 #[cfg(any(target_os = "linux", target_os = "android"))]
-pub(super) fn restore_owner_access(
+fn restore_owner_access(
     dir: &std::fs::File,
     name: &std::ffi::CStr,
     dev: u64,
     ino: u64,
+) -> std::io::Result<std::os::fd::OwnedFd> {
+    restore_owner_access_with(dir, name, dev, ino, || {})
+}
+
+/// [`restore_owner_access`] with a hook run between the chmod and the
+/// reopen, so a test can install a replacement at `name` in exactly that
+/// window and check that the returned descriptor is still the pinned inode.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+pub(super) fn restore_owner_access_with(
+    dir: &std::fs::File,
+    name: &std::ffi::CStr,
+    dev: u64,
+    ino: u64,
+    after_chmod: impl FnOnce(),
 ) -> std::io::Result<std::os::fd::OwnedFd> {
     use std::os::fd::AsRawFd as _;
     use std::os::unix::fs::PermissionsExt as _;
@@ -245,6 +259,7 @@ pub(super) fn restore_owner_access(
     // inode itself; `NOFOLLOW` would refuse that link, and is not needed.
     let pinned_path = format!("/proc/self/fd/{}", pinned.as_raw_fd());
     std::fs::set_permissions(&pinned_path, std::fs::Permissions::from_mode(0o700))?;
+    after_chmod();
     let readable = rustix::fs::open(
         pinned_path.as_str(),
         rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::CLOEXEC,

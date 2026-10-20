@@ -18,7 +18,7 @@ mod hold;
 
 use hold::open_hold;
 #[cfg(all(test, any(target_os = "linux", target_os = "android")))]
-use hold::restore_owner_access;
+use hold::restore_owner_access_with;
 #[cfg(unix)]
 use hold::{is_empty, remove_contents, restore_private_mode};
 
