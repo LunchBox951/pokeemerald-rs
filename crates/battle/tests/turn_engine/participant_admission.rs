@@ -204,6 +204,11 @@ fn trainer_constructor_refuses_a_later_player_reserve_before_drawing() {
 
 #[test]
 fn a_fainted_reserve_is_admitted_because_it_can_never_enter() {
+    assert_ne!(
+        healthy(SpeciesId::MUDKIP).speed_for_turn_order(),
+        healthy(SpeciesId::ZIGZAGOON).speed_for_turn_order(),
+        "the active pair must not tie on Speed, so construction draws no tiebreak and admission_script(false) fits"
+    );
     for (index, (mut bad, _)) in refused().into_iter().enumerate() {
         bad.apply_damage(u32::MAX);
         assert!(bad.is_fainted());
