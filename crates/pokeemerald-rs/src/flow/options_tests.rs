@@ -332,6 +332,10 @@ fn returning_fades_in_over_empty_windows_and_draws_the_menu_after() {
         }
         if matches!(next, AppScene::MainMenu(_)) {
             assert!(
+                *frame == *main_menu_state(&next).scene.compose_frame(),
+                "the handoff frame is the rebuilt menu"
+            );
+            assert!(
                 fade_in_frames > 1,
                 "the fade begins a frame after the handoff"
             );
