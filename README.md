@@ -6,7 +6,7 @@ A from-scratch native Rust port of Pokémon Emerald for Windows, macOS, and desk
 
 ## How this project is built
 
-Professor Birch is owner-local automation that helps maintain this repository. Public contribution and product policy remains in this repository; human-only decisions include playtests, dependencies, and final release approval.
+Owner-local automation helps maintain this repository. Public contribution and product policy remains in this repository; human-only decisions include playtests, dependencies, and final release approval.
 
 Contributors should start with [`CONTRIBUTING.md`](CONTRIBUTING.md). The documentation router is [`docs/README.md`](docs/README.md), and the project invariants are [`docs/principles.md`](docs/principles.md).
 

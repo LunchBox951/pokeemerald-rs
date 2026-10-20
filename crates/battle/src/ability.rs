@@ -7,43 +7,43 @@ use crate::damage::MoveCategory;
 use crate::status1::Status1;
 
 /// Battle Armor's ability ID.
-pub const BATTLE_ARMOR: AbilityId = AbilityId(4);
+pub const BATTLE_ARMOR: AbilityId = AbilityId::BATTLE_ARMOR;
 
 /// Huge Power's ability ID.
-pub const HUGE_POWER: AbilityId = AbilityId(37);
+pub const HUGE_POWER: AbilityId = AbilityId::HUGE_POWER;
 
 /// Liquid Ooze's ability ID.
-pub const LIQUID_OOZE: AbilityId = AbilityId(64);
+pub const LIQUID_OOZE: AbilityId = AbilityId::LIQUID_OOZE;
 
 /// Overgrow's ability ID.
-pub const OVERGROW: AbilityId = AbilityId(65);
+pub const OVERGROW: AbilityId = AbilityId::OVERGROW;
 
 /// Blaze's ability ID.
-pub const BLAZE: AbilityId = AbilityId(66);
+pub const BLAZE: AbilityId = AbilityId::BLAZE;
 
 /// Torrent's ability ID.
-pub const TORRENT: AbilityId = AbilityId(67);
+pub const TORRENT: AbilityId = AbilityId::TORRENT;
 
 /// Swarm's ability ID.
-pub const SWARM: AbilityId = AbilityId(68);
+pub const SWARM: AbilityId = AbilityId::SWARM;
 
 /// Pure Power's ability ID.
-pub const PURE_POWER: AbilityId = AbilityId(74);
+pub const PURE_POWER: AbilityId = AbilityId::PURE_POWER;
 
 /// Shell Armor's ability ID.
-pub const SHELL_ARMOR: AbilityId = AbilityId(75);
+pub const SHELL_ARMOR: AbilityId = AbilityId::SHELL_ARMOR;
 
 /// Guts' ability ID.
-pub const GUTS: AbilityId = AbilityId(62);
+pub const GUTS: AbilityId = AbilityId::GUTS;
 
 /// Marvel Scale's ability ID.
-pub const MARVEL_SCALE: AbilityId = AbilityId(63);
+pub const MARVEL_SCALE: AbilityId = AbilityId::MARVEL_SCALE;
 
 /// Thick Fat's ability ID.
-pub const THICK_FAT: AbilityId = AbilityId(47);
+pub const THICK_FAT: AbilityId = AbilityId::THICK_FAT;
 
 /// Hustle's ability ID.
-pub const HUSTLE: AbilityId = AbilityId(55);
+pub const HUSTLE: AbilityId = AbilityId::HUSTLE;
 
 /// Low-HP power-boosting abilities paired with their boosted move type.
 pub const PINCH_BOOSTS: [(AbilityId, Type); 4] = [
@@ -127,6 +127,30 @@ pub fn thick_fat_special_attack(
     }
 }
 
+/// Applies Plus and Minus to a raw Special Attack stat.
+///
+/// A Plus holder with Minus on the field, or a Minus holder with Plus, has raw
+/// Special Attack raised 150%, truncated, before stat-stage scaling. Upstream's
+/// field scan covers every battler with no side or HP filter, so in singles the
+/// opposing active mon counts (`pokeemerald/src/pokemon.c:3207-3210`,
+/// `pokeemerald/src/battle_util.c:3128-3137`).
+#[must_use]
+pub fn plus_minus_special_attack(
+    attacker_ability: AbilityId,
+    other_active_ability: AbilityId,
+    move_category: MoveCategory,
+    raw_special_attack: u32,
+) -> u32 {
+    let complementary = (attacker_ability == AbilityId::PLUS
+        && other_active_ability == AbilityId::MINUS)
+        || (attacker_ability == AbilityId::MINUS && other_active_ability == AbilityId::PLUS);
+    if move_category == MoveCategory::Special && complementary {
+        one_and_a_half(raw_special_attack)
+    } else {
+        raw_special_attack
+    }
+}
+
 /// Raises a raw stat 150%, truncated; a result above `u32::MAX` saturates like the
 /// other scaling helpers (upstream's `u16` stats at `pokemon.c:3205-3214` never overflow).
 fn one_and_a_half(raw: u32) -> u32 {
@@ -195,7 +219,7 @@ mod tests {
     use assets::species::AbilityId;
     use assets::{SpeciesId, Type};
 
-    const NO_ABILITY: AbilityId = AbilityId(0);
+    const NO_ABILITY: AbilityId = AbilityId::NONE;
     const TENTACOOL: SpeciesId = SpeciesId(72);
     const MARILL: SpeciesId = SpeciesId(183);
     const TREECKO: SpeciesId = SpeciesId(277);
@@ -481,5 +505,23 @@ mod tests {
         for move_type in [Type::Water, Type::Normal, Type::Electric] {
             assert_eq!(thick_fat_special_attack(THICK_FAT, move_type, 15), 15);
         }
+    }
+
+    #[test]
+    fn plus_and_minus_raise_raw_special_attack_only_for_the_complement() {
+        use super::plus_minus_special_attack as boost;
+        let (plus, minus) = (AbilityId::PLUS, AbilityId::MINUS);
+        assert_eq!(boost(plus, minus, MoveCategory::Special, 15), 22);
+        assert_eq!(boost(minus, plus, MoveCategory::Special, 15), 22);
+        assert_eq!(boost(plus, plus, MoveCategory::Special, 15), 15);
+        assert_eq!(boost(minus, minus, MoveCategory::Special, 15), 15);
+        assert_eq!(boost(plus, NO_ABILITY, MoveCategory::Special, 15), 15);
+        assert_eq!(boost(NO_ABILITY, minus, MoveCategory::Special, 15), 15);
+        assert_eq!(boost(plus, minus, MoveCategory::Physical, 15), 15);
+        assert_eq!(boost(plus, minus, MoveCategory::Special, 0), 0);
+        assert_eq!(
+            boost(plus, minus, MoveCategory::Special, u32::MAX),
+            u32::MAX
+        );
     }
 }

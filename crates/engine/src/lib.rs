@@ -17,4 +17,5 @@ pub mod overworld;
 pub mod rng;
 pub mod save;
 pub mod script;
+pub mod settings;
 pub mod text;

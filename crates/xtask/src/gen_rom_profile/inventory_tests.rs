@@ -12,20 +12,21 @@ use super::{
 };
 use crate::extract::scope::{
     layout_ids, sprite_palette_ids, sprite_sheet_ids, text_window_ids, tileset_animation_ids,
-    title_ids, BATTLERS, FONTS, LAYOUTS, TEXT_WINDOW_IMAGE_STEMS, TEXT_WINDOW_PALETTE_STEMS,
-    TILESETS,
+    title_ids, BATTLERS, FONTS, INTERFACE_PALETTE_IDS, LAYOUTS, TEXT_WINDOW_IMAGE_STEMS,
+    TEXT_WINDOW_PALETTE_STEMS, TILESETS,
 };
 
 /// A placeholder for every fixed root; presence is all the preflight reads.
 fn complete_inventory() -> Vec<PackEntry> {
     TILESETS
         .iter()
-        .map(|tileset| tileset.tiles_id())
+        .flat_map(|tileset| inventory::tileset_payload_ids(tileset.name))
         .chain(tileset_animation_ids())
         .chain(title_ids())
         .chain(FONTS.iter().map(|font| font.pack_id.to_owned()))
         .chain(layout_ids())
         .chain(text_window_ids())
+        .chain(INTERFACE_PALETTE_IDS.map(str::to_owned))
         .chain(sprite_sheet_ids())
         // Palettes stay so a sheet deletion is the only thing missing.
         .chain(sprite_palette_ids())
@@ -124,6 +125,35 @@ fn a_pack_missing_a_tileset_is_refused() {
             &id,
             "tilesets",
         );
+    }
+}
+
+#[test]
+fn a_pack_missing_any_tileset_payload_root_is_refused() {
+    for tileset in TILESETS {
+        for id in inventory::tileset_payload_ids(tileset.name) {
+            assert_refused(
+                &format!("no-payload-{}", id.replace('/', "-")),
+                without(&id),
+                &id,
+                "tilesets",
+            );
+        }
+    }
+}
+
+#[test]
+fn the_tileset_payload_roots_are_the_tiles_metatiles_attributes_and_sixteen_palettes() {
+    let ids = inventory::tileset_payload_ids("general");
+    assert_eq!(ids.len(), 3 + 16);
+    for want in [
+        "tileset/general/tiles",
+        "tileset/general/metatiles",
+        "tileset/general/metatile-attributes",
+        "tileset/general/palette/00",
+        "tileset/general/palette/15",
+    ] {
+        assert!(ids.iter().any(|id| id == want), "{want} in {ids:?}");
     }
 }
 
@@ -450,4 +480,26 @@ fn a_refused_generation_leaves_the_previous_module_untouched() {
             std::fs::remove_dir_all(&dir).expect("cleanup");
         });
     }
+}
+
+#[test]
+fn an_unrelated_interface_palette_does_not_satisfy_the_main_menu_requirement() {
+    let mut entries = complete_inventory();
+    entries.retain(|entry| entry.id != "interface/palette/main_menu_bg");
+    entries.push(raw_entry("interface/palette/other".to_owned(), vec![0]));
+    let rom = RomFixture::new().emerald_header().finish();
+    with_context("no-main-menu-bg", &rom, entries, |ctx| {
+        let err = inventory::preflight(ctx.pack, &ctx.bag_ids).unwrap_err();
+        assert!(
+            matches!(&err, GenRomProfileError::MissingPackEntry(id) if id == "interface/palette/main_menu_bg"),
+            "{err:?}"
+        );
+        let mut report = Vec::new();
+        let err = super::locate_interface_palettes(ctx, &mut report).unwrap_err();
+        assert!(
+            matches!(&err, GenRomProfileError::MissingPackEntry(id) if id == "interface/palette/main_menu_bg"),
+            "{err:?}"
+        );
+        assert!(report.is_empty(), "{report:?}");
+    });
 }

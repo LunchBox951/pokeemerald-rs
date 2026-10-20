@@ -4,7 +4,9 @@
 
 use assets::{AbilityId, Effectiveness, MoveId, Type, TypeChart};
 
-use crate::ability::{huge_power_attack, pinch_boosts_power, thick_fat_special_attack};
+use crate::ability::{
+    huge_power_attack, pinch_boosts_power, plus_minus_special_attack, thick_fat_special_attack,
+};
 use crate::damage::{
     apply_dual_type_effectiveness, apply_stab, apply_type_effectiveness, base_damage, has_stab,
     DamageInput, MoveCategory, Weather,
@@ -183,6 +185,10 @@ fn stale_base_damage(
     // Thick Fat halves raw Special Attack before stage scaling
     // (`pokemon.c:3202-3204`), after Huge/Pure Power as in the trainer AI.
     let attack_stat = thick_fat_special_attack(player.ability(), move_type, attack_stat);
+    // Plus/Minus apply with the other active mon regardless of HP
+    // (`pokemon.c:3207-3210`, `battle_util.c:3128-3137`).
+    let attack_stat =
+        plus_minus_special_attack(fainted.ability(), player.ability(), category, attack_stat);
     let (defense_stat, defense_stage) = player.defending_stat(category);
     let input = DamageInput {
         attacker_level: fainted.level(),
@@ -677,5 +683,40 @@ mod tests {
             Ok(Some(1)),
             "without Thick Fat Wing Attack's score wraps below Tackle's"
         );
+    }
+
+    /// Plus/Minus ignore HP in upstream's field scan, so a fainted Plus attacker
+    /// still boosts against a Minus player (`battle_util.c:3128-3137`).
+    #[test]
+    fn stale_base_damage_carries_a_fainted_plus_attackers_boost_against_minus() {
+        const WATER_GUN: MoveId = MoveId::WATER_GUN;
+        let dex = Dex::new();
+        let build = |species| {
+            BattlePokemon::new(
+                &dex,
+                SpeciesId(species),
+                20,
+                fixed_ivs(255),
+                0,
+                vec![WATER_GUN],
+            )
+            .expect("dex-resident")
+        };
+        let mut plusle = build(353);
+        plusle.apply_damage(plusle.stats().max_hp);
+        assert_eq!(plusle.current_hp(), 0);
+        let minun = build(354);
+        let plusle_target = build(353);
+        assert_eq!(plusle.ability(), AbilityId::PLUS);
+        assert_eq!(minun.ability(), AbilityId::MINUS);
+
+        let boosted = super::stale_base_damage(&dex, WATER_GUN, &plusle, &minun)
+            .unwrap()
+            .unwrap();
+        let control = super::stale_base_damage(&dex, WATER_GUN, &plusle, &plusle_target)
+            .unwrap()
+            .unwrap();
+
+        assert!(boosted > control, "{boosted} vs {control}");
     }
 }

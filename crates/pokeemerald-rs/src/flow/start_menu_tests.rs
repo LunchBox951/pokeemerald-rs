@@ -1,8 +1,8 @@
 //! The field start menu's own behaviour, driven through a real
-//! [`OverworldPhase`] (I-6, issue #232) -- the `START` gate, frame
+//! [`OverworldPhase`] (I-6) -- the `START` gate, frame
 //! ownership, and the close paths that must never write.
 //!
-//! Split from the sibling [`super::save_continue_round_trip_tests`] (`one module = one
+//! Kept apart from the sibling [`super::save_continue_round_trip_tests`] (`one module = one
 //! concept` `(oop-boundaries)`, the same split
 //! `crate::main_menu::saved_game_tests` already makes): that file owns the
 //! save/reload/continue round trip, this one owns "when may a menu open,
@@ -243,6 +243,27 @@ fn the_start_menu_does_not_open_over_an_open_dialog() {
         !phase.start_menu_may_open(pressed(Buttons::START), false),
         "START must not open the start menu while a message box is up"
     );
+}
+
+/// `advance_start_menu_frame` drives only an already-open menu: with none
+/// open, even a `START` press that `start_menu_may_open` admits is left to
+/// `step` -- the driver returns `false` and opens nothing.
+#[test]
+fn the_menu_frame_driver_never_opens_a_menu_itself() {
+    let temp = TempSave::new("driver-never-opens");
+    let mut save_slot = temp.slot();
+
+    let mut phase = new_game_phase();
+    // A pack-free menu build, so the removed fresh-open branch would have
+    // opened a menu here rather than failing its pack load.
+    phase.synthetic_start_menu = super::overworld_phase::SyntheticStartMenu::Builds;
+    settle(&mut phase);
+    assert!(
+        phase.start_menu_may_open(pressed(Buttons::START), false),
+        "setup: a fresh START is admitted on a settled field"
+    );
+    assert!(!phase.advance_start_menu_frame(pressed(Buttons::START), &mut save_slot));
+    assert!(phase.start_menu().is_none());
 }
 
 /// The start menu freezes the overworld while it is open, the same way a

@@ -333,7 +333,9 @@ impl PlayerState {
     /// Returns the current movement direction, which a slide leaves on its
     /// own direction while facing stays locked, until the next poll off
     /// the tile resynchronises the two ([`step`](Self::step)'s "Forced
-    /// movement"), as `GetPlayerMovementDirection` reads
+    /// movement") or the start menu opens
+    /// ([`reset_movement_direction_to_facing`](Self::reset_movement_direction_to_facing)),
+    /// as `GetPlayerMovementDirection` reads
     /// `movementDirection` (`field_player_avatar.c:429-440, 526-532`).
     #[must_use]
     pub const fn movement_direction(&self) -> Direction {
@@ -363,6 +365,15 @@ impl PlayerState {
         self.rest_pose = RestPose::Standing;
         self.turn_frames_remaining = 0;
         self.bump_frames_remaining = 0;
+    }
+
+    /// Resets the movement direction to the current facing, as
+    /// `StopPlayerAvatar`'s `SetObjectEventDirection(facingDirection)` does
+    /// (`pokeemerald/src/field_player_avatar.c:1223-1228`,
+    /// `event_object_movement.c:2361-2371`). Facing and every other field
+    /// stay as they are.
+    pub const fn reset_movement_direction_to_facing(&mut self) {
+        self.movement_direction = self.facing;
     }
 
     /// Returns whether the standing tile is in upstream's forced-movement
@@ -877,7 +888,15 @@ impl PlayerState {
         maps: &impl ConnectedMapData,
     ) -> Result<Landing, Collision> {
         let (dx, dy) = direction.delta();
-        let target = (self.position.0 + dx, self.position.1 + dy);
+        // `PlayerState::new` accepts any `i32` pair, so a coordinate at the
+        // numeric edge has no representable neighbour: that is no tile at all.
+        let (Some(x), Some(y)) = (
+            self.position.0.checked_add(dx),
+            self.position.1.checked_add(dy),
+        ) else {
+            return Err(Collision::Impassable);
+        };
+        let target = (x, y);
 
         if let Some(cell) = runtime.metatile_cell(target.0, target.1) {
             let target_behavior = runtime

@@ -1,5 +1,5 @@
 //! `--import-rom`: turn the player's own ROM into the runtime asset pack
-//! (S-4, Discussion #71 policy C, issue #122).
+//! (S-4, Discussion #71 policy C).
 //!
 //! `rom_import` owns reading the cartridge and assembling the pack. This
 //! module owns the two things only the shipped binary can decide: *where*
