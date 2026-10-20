@@ -254,6 +254,14 @@ pub fn run() -> Result<CompiledArtifact, RomBuildError> {
     build(&BuildConfig::for_repo()?)
 }
 
+/// Whether the `agbcc` install lies within the reference checkout, where its
+/// untracked files would fail the clean-tree verification. Paths are compared
+/// canonically so symlinks and `..` cannot hide containment.
+fn agbcc_inside_reference(config: &BuildConfig) -> bool {
+    let canon = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    canon(&config.agbcc_source).starts_with(canon(&config.reference))
+}
+
 /// Verifies the reference, builds the pinned tree in scratch storage, and
 /// returns its compiled outputs.
 ///
@@ -262,6 +270,13 @@ pub fn run() -> Result<CompiledArtifact, RomBuildError> {
 /// A [`RomBuildError`] naming the first failed stage; nothing is returned
 /// from a partial build.
 pub fn build(config: &BuildConfig) -> Result<CompiledArtifact, RomBuildError> {
+    if agbcc_inside_reference(config) {
+        return Err(RomBuildError::MissingTool(format!(
+            "agbcc ({} is inside the reference checkout {}; install it elsewhere)",
+            config.agbcc_source.display(),
+            config.reference.display()
+        )));
+    }
     checkout::verify_reference(&config.reference, &config.pinned_revision)?;
     if !config.agbcc_source.join("bin").is_dir() {
         return Err(RomBuildError::MissingTool(format!(
