@@ -7,7 +7,7 @@ use super::error::GenRomProfileError;
 use super::pack_source::PackSource;
 use crate::extract::scope::{
     layout_ids, sprite_palette_ids, sprite_sheet_ids, text_window_ids, tileset_animation_ids,
-    title_ids, BATTLERS, FONTS, TILESETS,
+    title_ids, BATTLERS, FONTS, INTERFACE_PALETTE_IDS, TILESETS,
 };
 
 /// Every fixed payload root of a tileset: tiles, metatiles, metatile
@@ -150,6 +150,17 @@ pub fn require_bag(pack: &PackSource, expected: &[String]) -> Result<(), GenRomP
     Ok(())
 }
 
+/// Require every fixed interface palette root.
+///
+/// # Errors
+///
+/// [`GenRomProfileError::MissingPackEntry`] naming the first absent root.
+pub fn require_interface_palettes(pack: &PackSource) -> Result<(), GenRomProfileError> {
+    INTERFACE_PALETTE_IDS
+        .into_iter()
+        .try_for_each(|id| pack.get(id).map(|_| ()))
+}
+
 /// Require every fixed root, before any domain writes a report line.
 ///
 /// # Errors
@@ -165,5 +176,6 @@ pub fn preflight(pack: &PackSource, bag_ids: &[String]) -> Result<(), GenRomProf
     require_sprites(pack)?;
     require_battlers(pack)?;
     require_battle_messages(pack)?;
+    require_interface_palettes(pack)?;
     require_bag(pack, bag_ids)
 }

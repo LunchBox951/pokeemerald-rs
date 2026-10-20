@@ -121,9 +121,9 @@ status=$?
 set -e
 
 [[ "$status" -ne 0 ]] || fail "init.sh exited 0 on a pin mismatch; expected a hard failure"
-echo "$stderr_out" | grep -qF "$sha_b_poke" || fail "mismatch error didn't name the actual SHA ($sha_b_poke); got: $stderr_out"
-echo "$stderr_out" | grep -qF "$sha_a_poke" || fail "mismatch error didn't name the pinned SHA ($sha_a_poke); got: $stderr_out"
-echo "$stderr_out" | grep -qi "rm -rf" || fail "mismatch error didn't give recovery instructions; got: $stderr_out"
+grep -qF "$sha_b_poke" <<<"$stderr_out" || fail "mismatch error didn't name the actual SHA ($sha_b_poke); got: $stderr_out"
+grep -qF "$sha_a_poke" <<<"$stderr_out" || fail "mismatch error didn't name the pinned SHA ($sha_a_poke); got: $stderr_out"
+grep -qi "rm -rf" <<<"$stderr_out" || fail "mismatch error didn't give recovery instructions; got: $stderr_out"
 
 still_head="$(git -C "$checkout3/pokeemerald" rev-parse HEAD)"
 [[ "$still_head" == "$sha_b_poke" ]] || fail "init.sh mutated the mismatched checkout instead of just failing"
@@ -168,8 +168,8 @@ status=$?
 set -e
 
 [[ "$status" -ne 0 ]] || fail "init.sh exited 0 on a dirty pinned checkout; expected a hard failure"
-echo "$stderr_out" | grep -qi "not clean" || fail "dirty-tree error missing; got: $stderr_out"
-echo "$stderr_out" | grep -qi "rm -rf" || fail "dirty-tree error didn't give recovery instructions; got: $stderr_out"
+grep -qi "not clean" <<<"$stderr_out" || fail "dirty-tree error missing; got: $stderr_out"
+grep -qi "rm -rf" <<<"$stderr_out" || fail "dirty-tree error didn't give recovery instructions; got: $stderr_out"
 
 echo "ok: dirty-but-pinned checkout was rejected"
 
@@ -187,7 +187,7 @@ status=$?
 set -e
 
 [[ "$status" -ne 0 ]] || fail "worktree init.sh exited 0 over a mismatched main checkout; expected a hard failure"
-echo "$stderr_out" | grep -qF "$sha_b_poke" || fail "worktree mismatch error didn't name the actual SHA; got: $stderr_out"
+grep -qF "$sha_b_poke" <<<"$stderr_out" || fail "worktree mismatch error didn't name the actual SHA; got: $stderr_out"
 [[ ! -L "$worktree3/pokeemerald" ]] || fail "worktree symlinked a mismatched reference anyway"
 
 echo "ok: worktree refused to symlink a mismatched main checkout"
@@ -206,7 +206,7 @@ status=$?
 set -e
 
 [[ "$status" -ne 0 ]] || fail "worktree init.sh exited 0 with a rogue pokeemerald symlink; expected a hard failure"
-echo "$stderr_out" | grep -qi "symlink" || fail "rogue-symlink error missing; got: $stderr_out"
+grep -qi "symlink" <<<"$stderr_out" || fail "rogue-symlink error missing; got: $stderr_out"
 [[ "$(readlink "$worktree6/pokeemerald")" == "$workdir/rogue-tree" ]] || fail "init.sh mutated the rogue symlink instead of just failing"
 
 echo "ok: rogue pre-existing symlink was rejected"
@@ -258,7 +258,7 @@ status=$?
 set -e
 
 [[ "$status" -ne 0 ]] || fail "init.sh exited 0 with a worktree-linked reference at the wrong commit"
-echo "$stderr_out" | grep -qF "$sha_b_poke" || fail "worktree-reference error didn't name the actual SHA; got: $stderr_out"
+grep -qF "$sha_b_poke" <<<"$stderr_out" || fail "worktree-reference error didn't name the actual SHA; got: $stderr_out"
 
 echo "ok: linked-worktree reference at the wrong commit was rejected"
 
@@ -282,7 +282,7 @@ status=$?
 set -e
 
 [[ "$status" -ne 0 ]] || fail "init.sh exited 0 on a sparse reference checkout"
-echo "$stderr_out" | grep -qi "sparse" || fail "sparse-checkout error missing; got: $stderr_out"
+grep -qi "sparse" <<<"$stderr_out" || fail "sparse-checkout error missing; got: $stderr_out"
 
 echo "ok: sparse reference checkout was rejected"
 
@@ -310,7 +310,7 @@ status=$?
 set -e
 
 [[ "$status" -ne 0 ]] || fail "init.sh exited 0 with a git-ignored planted file in the reference tree"
-echo "$stderr_out" | grep -qF "planted.png" || fail "ignored-file error didn't name the planted file; got: $stderr_out"
+grep -qF "planted.png" <<<"$stderr_out" || fail "ignored-file error didn't name the planted file; got: $stderr_out"
 
 echo "ok: git-ignored planted file was rejected"
 
@@ -329,7 +329,7 @@ status=$?
 set -e
 
 [[ "$status" -ne 0 ]] || fail "init.sh exited 0 on a reference tree with no git metadata"
-echo "$stderr_out" | grep -qi "no git metadata" || fail "no-metadata error missing; got: $stderr_out"
+grep -qi "no git metadata" <<<"$stderr_out" || fail "no-metadata error missing; got: $stderr_out"
 
 echo "ok: unverifiable reference tree was rejected (fail closed)"
 
@@ -354,7 +354,7 @@ status=$?
 set -e
 
 [[ "$status" -ne 0 ]] || fail "init.sh exited 0 with an injected file hidden by showUntrackedFiles=no"
-echo "$stderr_out" | grep -qF "injected_asset.png" || fail "injected-file error didn't name the file; got: $stderr_out"
+grep -qF "injected_asset.png" <<<"$stderr_out" || fail "injected-file error didn't name the file; got: $stderr_out"
 
 echo "ok: showUntrackedFiles=no could not hide the injected file"
 
@@ -379,7 +379,7 @@ status=$?
 set -e
 
 [[ "$status" -ne 0 ]] || fail "init.sh exited 0 with an assume-unchanged tampered file"
-echo "$stderr_out" | grep -qi "index-hidden" || fail "index-hidden error missing; got: $stderr_out"
+grep -qi "index-hidden" <<<"$stderr_out" || fail "index-hidden error missing; got: $stderr_out"
 
 echo "ok: assume-unchanged tampering was rejected"
 
@@ -404,7 +404,7 @@ status=$?
 set -e
 
 [[ "$status" -ne 0 ]] || fail "init.sh exited 0 with a replacement ref shadowing the pin"
-echo "$stderr_out" | grep -qi "replace" || fail "replacement-ref error missing; got: $stderr_out"
+grep -qi "replace" <<<"$stderr_out" || fail "replacement-ref error missing; got: $stderr_out"
 
 echo "ok: replacement refs were rejected"
 
@@ -428,7 +428,7 @@ status=$?
 set -e
 
 [[ "$status" -ne 0 ]] || fail "init.sh exited 0 with a local content filter configured"
-echo "$stderr_out" | grep -qi "filter" || fail "filter-config error missing; got: $stderr_out"
+grep -qi "filter" <<<"$stderr_out" || fail "filter-config error missing; got: $stderr_out"
 
 echo "ok: local content-filter config was rejected"
 
@@ -453,7 +453,7 @@ status=$?
 set -e
 
 [[ "$status" -ne 0 ]] || fail "init.sh exited 0 with a tampered file under core.fsmonitor"
-echo "$stderr_out" | grep -qi "not clean" || fail "fsmonitor-bypass tamper not caught; got: $stderr_out"
+grep -qi "not clean" <<<"$stderr_out" || fail "fsmonitor-bypass tamper not caught; got: $stderr_out"
 
 echo "ok: tamper caught despite core.fsmonitor config"
 
@@ -477,7 +477,7 @@ status=$?
 set -e
 
 [[ "$status" -ne 0 ]] || fail "init.sh exited 0 with a local info/attributes override"
-echo "$stderr_out" | grep -qi "attribute" || fail "info/attributes error missing; got: $stderr_out"
+grep -qi "attribute" <<<"$stderr_out" || fail "info/attributes error missing; got: $stderr_out"
 
 echo "ok: local info/attributes override was rejected"
 
@@ -513,7 +513,7 @@ status=$?
 set -e
 
 [[ "$status" -ne 0 ]] || fail "init.sh exited 0 with a tamper laundered by a global clean filter"
-echo "$stderr_out" | grep -qi "not clean" || fail "global-filter tamper not caught; got: $stderr_out"
+grep -qi "not clean" <<<"$stderr_out" || fail "global-filter tamper not caught; got: $stderr_out"
 
 echo "ok: host-global clean filter could not launder the tamper"
 
@@ -543,7 +543,7 @@ status=$?
 set -e
 
 [[ "$status" -ne 0 ]] || fail "init.sh exited 0 on a same-size tamper under core.checkStat=minimal"
-echo "$stderr_out" | grep -qF "VERSION" || fail "checkStat tamper error didn't name the file; got: $stderr_out"
+grep -qF "VERSION" <<<"$stderr_out" || fail "checkStat tamper error didn't name the file; got: $stderr_out"
 
 echo "ok: stat-cache evasion could not hide the tamper"
 
@@ -584,7 +584,7 @@ status=$?
 set -e
 
 [[ "$status" -ne 0 ]] || fail "init.sh exited 0 with a tamper laundered by a committed filter binding"
-echo "$stderr_out" | grep -qF "VERSION" || fail "committed-filter tamper error didn't name the file; got: $stderr_out"
+grep -qF "VERSION" <<<"$stderr_out" || fail "committed-filter tamper error didn't name the file; got: $stderr_out"
 
 echo "ok: committed filter binding could not launder the tamper"
 
@@ -629,7 +629,7 @@ stderr_out="$(cd "$checkout21" && POKEEMERALD_REMOTE="$fake_poke21" MGBA_REMOTE=
 status=$?
 set -e
 [[ "$status" -ne 0 ]] || fail "tampered eol=crlf file passed verification"
-echo "$stderr_out" | grep -qF "colors.pal" || fail "tampered CRLF file not named; got: $stderr_out"
+grep -qF "colors.pal" <<<"$stderr_out" || fail "tampered CRLF file not named; got: $stderr_out"
 
 echo "ok: legitimate CRLF checkout accepted; tampered CRLF file rejected"
 

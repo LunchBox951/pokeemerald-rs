@@ -212,6 +212,11 @@ pub(crate) struct MainMenuFadeIn {
 }
 
 impl MainMenuFadeIn {
+    /// The retained save's committed `optionsButtonMode`.
+    pub(super) fn button_mode(&self) -> engine::save::ButtonMode {
+        self.state.saved.block2.options_button_mode
+    }
+
     /// The item the retained menu has selected.
     pub(crate) fn selected(&self) -> MainMenuItem {
         self.state.scene.selected()
