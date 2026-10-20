@@ -1021,6 +1021,8 @@ mod step_tests;
 #[cfg(test)]
 mod test_support;
 #[cfg(test)]
+mod traded_lead_battle_tests;
+#[cfg(test)]
 mod warp_tests;
 #[cfg(test)]
 mod wild_battle_tests;

@@ -670,13 +670,6 @@ const NAME_TERMINATOR: u8 = 0xFF;
 /// Decided here, at the save boundary, because only the save owner's id and
 /// name are visible; battle receives the result through
 /// [`BattlePokemon::with_traded_recipient`].
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the overworld load paths adopt it in a follow-up slice"
-    )
-)]
 pub(crate) fn is_traded_record(record: &Pokemon, owner_id: u32, owner_name: &[u8]) -> bool {
     if record.box_data.ot_id() != owner_id {
         return true;
