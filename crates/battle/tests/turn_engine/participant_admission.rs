@@ -2,7 +2,7 @@
 //! (`battle_util.c:2873-2951`) and always-refused abilities (Truant, Intimidate, Speed Boost,
 //! Color Change, Trace, Effect Spore, Flame Body, Cute Charm, Drizzle, Drought, Sand Stream), before any RNG draw.
 
-use crate::common::{max_iv_mon, SequenceRng};
+use crate::common::{admission_script, max_iv_mon, SequenceRng};
 use assets::trainers::TrainerId;
 use assets::{AbilityId, MoveId, SpeciesId};
 use battle::{Battle, BattleError, BattlePokemon, Dex, Status1};
@@ -207,7 +207,7 @@ fn a_fainted_reserve_is_admitted_because_it_can_never_enter() {
     for (index, (mut bad, _)) in refused().into_iter().enumerate() {
         bad.apply_damage(u32::MAX);
         assert!(bad.is_fainted());
-        let mut rng = SequenceRng::new([0, 0]);
+        let mut rng = SequenceRng::new(admission_script(false));
         wild(
             healthy(SpeciesId::MUDKIP),
             vec![bad],
@@ -216,9 +216,10 @@ fn a_fainted_reserve_is_admitted_because_it_can_never_enter() {
             &mut rng,
         )
         .unwrap();
+        rng.assert_exhausted();
         let (mut bad, _) = refused().into_iter().nth(index).unwrap();
         bad.apply_damage(u32::MAX);
-        let mut rng = SequenceRng::new([0, 0]);
+        let mut rng = SequenceRng::new(admission_script(false));
         trainer(
             healthy(SpeciesId::MUDKIP),
             vec![],
@@ -226,6 +227,7 @@ fn a_fainted_reserve_is_admitted_because_it_can_never_enter() {
             &mut rng,
         )
         .unwrap();
+        rng.assert_exhausted();
     }
 }
 
@@ -233,26 +235,27 @@ fn a_fainted_reserve_is_admitted_because_it_can_never_enter() {
 fn confusion_is_refused_only_for_own_tempo() {
     let mut zigzagoon = healthy(SpeciesId::ZIGZAGOON);
     zigzagoon.volatiles_mut().set_confusion(3);
-    let mut rng = SequenceRng::new([0, 0]);
-    let battle = wild(
-        zigzagoon,
-        vec![],
-        healthy(SpeciesId::ZIGZAGOON),
-        false,
-        &mut rng,
-    )
-    .unwrap();
+    let enemy = healthy(SpeciesId::ZIGZAGOON);
+    assert_eq!(
+        zigzagoon.speed_for_turn_order(),
+        enemy.speed_for_turn_order(),
+        "the mirror fixture ties on Speed, so construction draws the seed and the order tiebreak"
+    );
+    let mut rng = SequenceRng::new(admission_script(true));
+    let battle = wild(zigzagoon, vec![], enemy, false, &mut rng).unwrap();
     assert!(battle.player().volatiles().confused());
+    rng.assert_exhausted();
 
-    let mut rng = SequenceRng::new([0, 0]);
-    wild(
-        healthy(SpeciesId::SPINDA),
-        vec![],
-        healthy(SpeciesId::ZIGZAGOON),
-        false,
-        &mut rng,
-    )
-    .unwrap();
+    let spinda = healthy(SpeciesId::SPINDA);
+    let enemy = healthy(SpeciesId::ZIGZAGOON);
+    assert_eq!(
+        spinda.speed_for_turn_order(),
+        enemy.speed_for_turn_order(),
+        "Spinda ties Zigzagoon on Speed, so construction draws the seed and the order tiebreak"
+    );
+    let mut rng = SequenceRng::new(admission_script(true));
+    wild(spinda, vec![], enemy, false, &mut rng).unwrap();
+    rng.assert_exhausted();
 }
 
 #[test]
@@ -307,28 +310,18 @@ fn the_selected_ability_slot_decides_not_the_species_pool() {
     ] {
         let holder = mon(species, slot, Status1::Healthy);
         assert_eq!(holder.ability(), ability);
-        let mut rng = SequenceRng::new([0, 0]);
-        wild(
-            holder,
-            vec![],
-            healthy(SpeciesId::ZIGZAGOON),
-            false,
-            &mut rng,
-        )
-        .unwrap();
-        assert!(rng.draws() >= 1);
+        let enemy = healthy(SpeciesId::ZIGZAGOON);
+        assert_ne!(holder.speed_for_turn_order(), enemy.speed_for_turn_order());
+        let mut rng = SequenceRng::new(admission_script(false));
+        wild(holder, vec![], enemy, false, &mut rng).unwrap();
+        rng.assert_exhausted();
     }
 
     let snorlax = mon(SpeciesId::SNORLAX, 1, Status1::Poisoned);
     assert_eq!(snorlax.ability(), AbilityId::THICK_FAT);
-    let mut rng = SequenceRng::new([0, 0]);
-    wild(
-        snorlax,
-        vec![],
-        healthy(SpeciesId::ZIGZAGOON),
-        false,
-        &mut rng,
-    )
-    .unwrap();
-    assert!(rng.draws() >= 1);
+    let enemy = healthy(SpeciesId::ZIGZAGOON);
+    assert_ne!(snorlax.speed_for_turn_order(), enemy.speed_for_turn_order());
+    let mut rng = SequenceRng::new(admission_script(false));
+    wild(snorlax, vec![], enemy, false, &mut rng).unwrap();
+    rng.assert_exhausted();
 }
