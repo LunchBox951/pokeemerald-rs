@@ -16,7 +16,7 @@ pub(super) struct TempPackFile {
 }
 
 impl TempPackFile {
-    pub(super) fn write(path: &std::path::Path, bytes: Vec<u8>) -> Self {
+    pub(super) fn write(path: &std::path::Path, bytes: &[u8]) -> Self {
         use std::io::Write as _;
         // `create_new` (O_EXCL) never follows a symlink at `path`. A stale
         // occupant is unlinked (the link itself, never its target) and retried.
@@ -38,7 +38,7 @@ impl TempPackFile {
             }
         }
         file.expect("the scratch path is exclusively creatable")
-            .write_all(&bytes)
+            .write_all(bytes)
             .expect("the scratch pack is writable");
         Self {
             path: path.to_path_buf(),
@@ -127,7 +127,7 @@ fn scratch_pack_writer_does_not_follow_a_planted_symlink() {
     std::fs::write(&victim, b"precious").unwrap();
     let path = dir.join("scratch.pack");
     std::os::unix::fs::symlink(&victim, &path).unwrap();
-    let fixture = TempPackFile::write(&path, vec![1, 2, 3]);
+    let fixture = TempPackFile::write(&path, &[1, 2, 3]);
     let after = std::fs::read(&victim).unwrap();
     drop(fixture);
     let _ = std::fs::remove_dir_all(&dir);
