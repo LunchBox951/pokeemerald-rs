@@ -142,6 +142,11 @@ pub struct CgbVoice {
     /// The note-on trigger, owed until the first frame so a pre-render retune
     /// reaches the sweep (`m4a.c:988-994,1219-1225`).
     initial_trigger: InitialTrigger,
+    /// The track's latest requested `(note_key, fine_pitch)`, committed to the
+    /// oscillator only when [`Self::begin_frame`] reaches upstream's pitch
+    /// write (`m4a.c:1194-1203`); a retiring frame jumps to `CgbOscOff` and
+    /// skips it (`m4a.c:1053-1056`), discarding the request.
+    pending_pitch: Option<(u8, u8)>,
     /// Set when a sweep overflow silences the hardware channel, whether at a
     /// trigger or on a later 128 Hz tick; the envelope stays alive so a safe
     /// trigger can revive it (`mgba/src/gb/audio.c:180-186`, `:667-672`).
@@ -382,6 +387,7 @@ impl CgbVoice {
             dac_correction,
             pending_retrigger: false,
             initial_trigger: InitialTrigger::Pending,
+            pending_pitch: None,
             hardware_muted: false,
             hardware_envelope_volume,
         }
@@ -561,11 +567,14 @@ impl CgbVoice {
         self.pending_retrigger = true;
     }
 
-    /// Retune from the owning track while preserving note identity and noise width.
+    /// Request a retune from the owning track, preserving note identity and
+    /// noise width. The request is held until [`Self::begin_frame`] commits it
+    /// to the oscillator, and is discarded if that frame retires the voice
+    /// (`m4a.c:1053-1056`, `:1194-1203`).
     pub fn set_track_pitch(&mut self, key_m: i32, pit_m: u8) {
         let translated_key = (i32::from(self.identity.pitch_key) + key_m).max(0) % MIDI_KEY_COUNT;
         let note_key = u8::try_from(translated_key).unwrap_or(0);
-        self.oscillator.retune(note_key, pit_m, self.dac_correction);
+        self.pending_pitch = Some((note_key, pit_m));
     }
 
     /// Whether this voice's initial trigger has been written to hardware.
@@ -597,6 +606,14 @@ impl CgbVoice {
         let (retriggered_by_transition, envelope_boundary) = self
             .envelope
             .step_frame(extra_envelope_iteration, live_goal);
+        // The pitch write sits after the retirement jump, so a retiring frame
+        // never commits it (`m4a.c:1053-1056`, `:1194-1203`).
+        if let Some((note_key, fine_pitch)) = self.pending_pitch.take() {
+            if self.envelope.is_active() {
+                self.oscillator
+                    .retune(note_key, fine_pitch, self.dac_correction);
+            }
+        }
         // `CgbModVol` recomputes `chan->pan` at every boundary, transition or
         // not (`m4a.c:1077-1085`); by itself this writes nothing audible.
         if envelope_boundary {

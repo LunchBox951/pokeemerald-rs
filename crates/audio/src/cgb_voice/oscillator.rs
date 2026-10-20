@@ -193,7 +193,12 @@ mod nr32_attenuation_tests {
 
     fn render(nibble: u8, level: u8) -> i32 {
         let samples = WaveChannel::decode_wave_ram(&[nibble << 4 | nibble; 16]);
-        WaveChannel::new(samples, 0).sample(cgb3_wave_gain_256(level)) * WAVE_SAMPLE_SCALE
+        let gain = cgb3_wave_gain_256(level);
+        // The cold latch holds a zero nibble; 0x7FF clocks every sample, so the
+        // second call returns the RAM nibble the first clock latched.
+        let mut wave = WaveChannel::new(samples, 0x7FF);
+        wave.sample(gain);
+        wave.sample(gain) * WAVE_SAMPLE_SCALE
     }
 
     #[test]
@@ -245,6 +250,7 @@ mod changed_wave_asset_latch_tests {
             wave_id: Arc::from("old"),
             channel: WaveChannel::new(high, 0x7FF),
         };
+        previous.frame_contribution(256, 0, 15);
         assert_eq!(
             previous.frame_contribution(256, 0, 15),
             7 * WAVE_SAMPLE_SCALE
@@ -280,6 +286,7 @@ mod changed_wave_asset_latch_tests {
             channel: WaveChannel::new(ram, 0x7FF),
         };
         let mut previous = wave("a");
+        previous.frame_contribution(256, 0, 15);
         assert_eq!(
             previous.frame_contribution(256, 0, 15),
             7 * WAVE_SAMPLE_SCALE
