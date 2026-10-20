@@ -181,6 +181,7 @@ fn empty_and_nested_key_split_children_do_not_evict_an_occupied_voice() {
 
     let control = assets::Song::new(
         VoiceGroupId(TOP_VG_ID.to_owned()),
+        assets::MusicPlayerId(0),
         0,
         None,
         vec![occupant_track()],
@@ -188,6 +189,7 @@ fn empty_and_nested_key_split_children_do_not_evict_an_occupied_voice() {
     .expect("one track is well-formed");
     let empty_child = assets::Song::new(
         VoiceGroupId(TOP_VG_ID.to_owned()),
+        assets::MusicPlayerId(0),
         0,
         None,
         vec![occupant_track(), evictor_track(60)],
@@ -195,6 +197,7 @@ fn empty_and_nested_key_split_children_do_not_evict_an_occupied_voice() {
     .expect("two tracks is well-formed");
     let nested_child = assets::Song::new(
         VoiceGroupId(TOP_VG_ID.to_owned()),
+        assets::MusicPlayerId(0),
         0,
         None,
         vec![occupant_track(), evictor_track(61)],
