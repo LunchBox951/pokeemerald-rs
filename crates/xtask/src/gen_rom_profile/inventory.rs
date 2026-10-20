@@ -107,6 +107,15 @@ pub fn require_battle_messages(pack: &PackSource) -> Result<(), GenRomProfileErr
     pack.get(rom_import::BATTLE_MESSAGE_PACK_ID).map(|_| ())
 }
 
+/// Require the battle-animation catalog root.
+///
+/// # Errors
+///
+/// [`GenRomProfileError::MissingPackEntry`] when the pack lacks it.
+pub fn require_battle_anims(pack: &PackSource) -> Result<(), GenRomProfileError> {
+    pack.get(rom_import::BATTLE_ANIM_PACK_ID).map(|_| ())
+}
+
 /// Require every starter battler image and palette.
 ///
 /// # Errors
@@ -165,5 +174,6 @@ pub fn preflight(pack: &PackSource, bag_ids: &[String]) -> Result<(), GenRomProf
     require_sprites(pack)?;
     require_battlers(pack)?;
     require_battle_messages(pack)?;
+    require_battle_anims(pack)?;
     require_bag(pack, bag_ids)
 }

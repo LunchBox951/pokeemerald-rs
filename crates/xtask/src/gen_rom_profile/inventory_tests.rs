@@ -7,8 +7,8 @@ use rom_import::fixture::RomFixture;
 use super::error::GenRomProfileError;
 use super::tests::{synthetic_bag_ids, with_context};
 use super::{
-    bag, battle_messages, battlers, fonts, inventory, layouts, locate_profile, sprites,
-    text_window, tilesets, title,
+    bag, battle_anims, battle_messages, battlers, fonts, inventory, layouts, locate_profile,
+    sprites, text_window, tilesets, title,
 };
 use crate::extract::scope::{
     layout_ids, sprite_palette_ids, sprite_sheet_ids, text_window_ids, tileset_animation_ids,
@@ -30,7 +30,10 @@ fn complete_inventory() -> Vec<PackEntry> {
         // Palettes stay so a sheet deletion is the only thing missing.
         .chain(sprite_palette_ids())
         .chain(BATTLERS.iter().flat_map(|battler| battler.ids()))
-        .chain([rom_import::BATTLE_MESSAGE_PACK_ID.to_owned()])
+        .chain([
+            rom_import::BATTLE_MESSAGE_PACK_ID.to_owned(),
+            rom_import::BATTLE_ANIM_PACK_ID.to_owned(),
+        ])
         .chain(synthetic_bag_ids())
         .map(|id| raw_entry(id, vec![0]))
         .collect()
@@ -64,6 +67,8 @@ fn assert_refused(label: &str, entries: Vec<PackEntry>, missing: &str, domain: &
             bag::locate(ctx, &mut report).map(|_| ())
         } else if domain == "battlers" {
             battlers::locate(ctx, &mut report).map(|_| ())
+        } else if domain == "battle_anims" {
+            battle_anims::locate(ctx, &mut report).map(|_| ())
         } else if domain == "battle_messages" {
             battle_messages::locate(ctx, &mut report).map(|_| ())
         } else {
@@ -246,6 +251,12 @@ fn a_pack_missing_the_battle_message_table_is_refused() {
         id,
         "battle_messages",
     );
+}
+
+#[test]
+fn a_pack_missing_the_battle_animation_catalog_is_refused() {
+    let id = rom_import::BATTLE_ANIM_PACK_ID;
+    assert_refused("no-battle-anim-catalog", without(id), id, "battle_anims");
 }
 
 #[test]
