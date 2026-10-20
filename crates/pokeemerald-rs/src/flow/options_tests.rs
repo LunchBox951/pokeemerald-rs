@@ -332,6 +332,10 @@ fn returning_fades_in_over_empty_windows_and_draws_the_menu_after() {
         }
         if matches!(next, AppScene::MainMenu(_)) {
             assert!(
+                *frame == *main_menu_state(&next).scene.compose_frame(),
+                "the handoff frame is the rebuilt menu"
+            );
+            assert!(
                 fade_in_frames > 1,
                 "the fade begins a frame after the handoff"
             );
@@ -340,4 +344,106 @@ fn returning_fades_in_over_empty_windows_and_draws_the_menu_after() {
         scene = next;
     }
     panic!("never returned to the main menu");
+}
+
+/// A main menu on `OPTION` whose save holds `mode`.
+fn option_menu_with_mode(f: &mut Fixture, mode: ButtonMode) -> AppScene {
+    let mut saved = f.slot.load();
+    // `Ok` keeps the boot from defaulting the block over the mode under test.
+    saved.status = crate::game_save::SaveFileStatus::Ok;
+    saved.block2.options_button_mode = mode;
+    f.main_menu_on_option(saved)
+}
+
+#[test]
+fn l_equals_a_makes_a_fresh_l_confirm_the_main_menu() {
+    // `ReadKeys` (`pokeemerald/src/main.c:279-288`): with L=A saved, a new
+    // L press also sets A in `newKeys`.
+    let mut f = Fixture::new("l-equals-a");
+    let mut buttons = ButtonState::new();
+    let scene = option_menu_with_mode(&mut f, ButtonMode::LEqualsA);
+    let scene = f.step(scene, &mut buttons, Buttons::NONE);
+    let scene = f.step(scene, &mut buttons, Buttons::L);
+    assert!(
+        matches!(scene, AppScene::MainMenuFadeWait(_)),
+        "L under L=A should confirm OPTION like A"
+    );
+}
+
+#[test]
+fn l_does_not_confirm_under_the_other_button_modes() {
+    for mode in [ButtonMode::Normal, ButtonMode::Lr, ButtonMode::Other(9)] {
+        let mut f = Fixture::new("l-not-a");
+        let mut buttons = ButtonState::new();
+        let scene = option_menu_with_mode(&mut f, mode);
+        let scene = f.step(scene, &mut buttons, Buttons::NONE);
+        let scene = f.step(scene, &mut buttons, Buttons::L);
+        assert!(matches!(scene, AppScene::MainMenu(_)), "{mode:?}");
+    }
+}
+
+#[test]
+fn a_held_l_is_not_a_second_confirm_and_a_separate_a_still_edges() {
+    // `newKeys` and `heldKeys` are remapped independently.
+    let mut f = Fixture::new("l-held");
+    let mut buttons = ButtonState::new();
+    // L is already down when the menu first sees input: its edge was
+    // consumed by the earlier frame, so the held frame confirms nothing.
+    buttons.update(Buttons::L);
+    let scene = option_menu_with_mode(&mut f, ButtonMode::LEqualsA);
+    let scene = f.step(scene, &mut buttons, Buttons::L);
+    assert!(matches!(scene, AppScene::MainMenu(_)));
+    // A physical A press while L stays held is its own fresh edge.
+    let scene = f.step(scene, &mut buttons, Buttons::L | Buttons::A);
+    assert!(matches!(scene, AppScene::MainMenuFadeWait(_)));
+}
+
+#[test]
+fn a_committed_l_equals_a_applies_to_the_returned_main_menu() {
+    // The Options commit writes the retained save (`Task_OptionMenuSave`),
+    // and the very next scenes read it: Normal -> LR -> L=A on the button
+    // mode row, then L confirms OPTION again.
+    let mut f = Fixture::new("l-equals-a-commit");
+    let mut buttons = ButtonState::new();
+    let scene = option_menu_with_mode(&mut f, ButtonMode::Normal);
+    let mut scene = f.open_options(scene, &mut buttons);
+    for _ in 0..4 {
+        scene = tap(&mut f, scene, &mut buttons, Buttons::DOWN);
+    }
+    scene = tap(&mut f, scene, &mut buttons, Buttons::RIGHT);
+    scene = tap(&mut f, scene, &mut buttons, Buttons::RIGHT);
+    scene = f.step(scene, &mut buttons, Buttons::B);
+    scene = f.until(scene, &mut buttons, |s| matches!(s, AppScene::MainMenu(_)));
+    assert_eq!(
+        main_menu_state(&scene).saved.block2.options_button_mode,
+        ButtonMode::LEqualsA
+    );
+    let scene = f.step(scene, &mut buttons, Buttons::L);
+    assert!(matches!(scene, AppScene::MainMenuFadeWait(_)));
+}
+
+#[test]
+fn every_handoff_scene_reports_the_save_it_carries() {
+    // The mode follows the save through the Options screen, the fade scenes,
+    // and the overworld a CONTINUE (or NEW GAME) builds.
+    let mut f = Fixture::new("l-equals-a-scenes");
+    let mut buttons = ButtonState::new();
+    let scene = option_menu_with_mode(&mut f, ButtonMode::LEqualsA);
+    assert_eq!(scene.button_mode(), ButtonMode::LEqualsA);
+    let scene = f.step(scene, &mut buttons, Buttons::A);
+    assert_eq!(scene.button_mode(), ButtonMode::LEqualsA, "fade wait");
+    let scene = f.until(scene, &mut buttons, |s| matches!(s, AppScene::Options(_)));
+    assert_eq!(scene.button_mode(), ButtonMode::LEqualsA, "options");
+
+    let mut phase = new_game_phase();
+    assert_eq!(
+        AppScene::Overworld(Box::new(new_game_phase())).button_mode(),
+        ButtonMode::Normal
+    );
+    phase.save2.options_button_mode = ButtonMode::LEqualsA;
+    assert_eq!(
+        AppScene::Overworld(Box::new(phase)).button_mode(),
+        ButtonMode::LEqualsA,
+        "overworld"
+    );
 }
