@@ -32503,13 +32503,13 @@
           "status": "stubbed"
         },
         "CreateWildMon": {
-          "reason": "wild_encounter.c:379. The plain (no Cute Charm) nature-then-personality-then-IV construction order modelled (build_wild_pokemon), reusing src/pokemon.c#CreateMonWithNature's RNG path. Cute Charm's gender-flip branch and CreateMonWithGenderNatureLetter are not modelled (abilities out of scope).",
+          "reason": "wild_encounter.c:379. The nature-then-personality-then-IV construction order is modelled (build_wild_pokemon), reusing src/pokemon.c#CreateMonWithNature's RNG path, with the nature chosen by src/wild_encounter.c#PickWildMonNature including its Synchronize branch. NOT modelled: Cute Charm's gender-flip branch (:396-398, which reads gPlayerParty[0]) and CreateMonWithGenderNatureLetter. A Cute Charm battle lead is refused at participant admission, but a fainted Cute Charm mon in slot 0 behind a usable lead is not screened, so that case silently skips the branch.",
           "rust_target": "crates/battle/src/wild.rs",
           "spec": "S-6",
           "status": "stubbed"
         },
         "PickWildMonNature": {
-          "reason": "wild_encounter.c:335. Only the plain random-nature tail (Random() % NUM_NATURES, roll_nature) modelled. Safari Zone Pokéblock-weighted nature selection and the leading party mon's Synchronize check are not modelled (abilities/game-mode out of scope).",
+          "reason": "wild_encounter.c:335-376. The non-Safari tail is modelled in order (pick_wild_nature, called by build_wild_pokemon): a party slot 0 that is not an egg and holds Synchronize spends one Random() % 2 coin draw, a zero returns its personality % NUM_NATURES with no further draw (:367-372), and a lost flip or any other slot 0 falls through to Random() % NUM_NATURES (roll_nature), so a lost flip costs two draws (:376). Slot 0 is read from the save record whether or not it is fainted or the battle lead (party::slot_zero_synchronize_nature, passed by OverworldPhase::begin_wild_battle to flow::wild_encounter::start_wild_battle_with_synchronize). NOT modelled: the Safari Zone branch (:339-364) with its 80% Pokeblock-weighted nature selection, because Safari Zone mode does not exist in this port.",
           "rust_target": "crates/battle/src/wild.rs",
           "spec": "S-6",
           "status": "stubbed"

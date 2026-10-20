@@ -665,6 +665,20 @@ fn record_is_egg_or_bad_egg(record: &Pokemon) -> bool {
         })
 }
 
+/// The nature party slot 0 hands a wild Pokémon through Synchronize:
+/// `PickWildMonNature`'s check of `gPlayerParty[0]` -- not an egg, ability
+/// Synchronize (`pokeemerald/src/wild_encounter.c:367-372`) -- whether or not
+/// that slot is fainted or is the battle lead. `None` for an empty party, an
+/// egg, an undecodable record, or any other ability.
+pub(crate) fn slot_zero_synchronize_nature(dex: &Dex, party: &[Pokemon]) -> Option<battle::Nature> {
+    let slot_zero = party.first()?;
+    if record_is_egg_or_bad_egg(slot_zero) {
+        return None;
+    }
+    let mon = from_save_pokemon(dex, slot_zero).ok()?;
+    (mon.ability() == assets::AbilityId::SYNCHRONIZE).then(|| mon.nature())
+}
+
 /// Selects which saved slot is the active battler on continue: the first
 /// non-egg, non-Bad-Egg, non-fainted slot in `party` -- `SetBattlePartyIds`'s
 /// player-side scan (`pokeemerald/src/battle_controllers.c:585-606`,
