@@ -22,7 +22,7 @@ const TACKLE_BASE_PP: u8 = 35;
 const SCRATCH: MoveId = MoveId::SCRATCH;
 const TENTACOOL: SpeciesId = SpeciesId(72);
 const ZIGZAGOON: SpeciesId = SpeciesId(288);
-const PICKUP: AbilityId = AbilityId(53);
+const PICKUP: AbilityId = AbilityId::PICKUP;
 /// Old-Unown reserved range and its real neighbours (`include/constants/species.h:255-283`).
 const PINNED_OLD_UNOWN_B: u16 = 252;
 const PINNED_OLD_UNOWN_Z: u16 = 276;

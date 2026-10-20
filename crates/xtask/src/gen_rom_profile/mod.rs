@@ -309,7 +309,8 @@ fn generate(
 /// # Errors
 ///
 /// [`GenRomProfileError::MissingPackEntry`] if the pack holds no
-/// `interface/palette/*` entries at all, or any other
+/// `interface/palette/*` entries at all or lacks a required fixed
+/// interface palette, or any other
 /// [`GenRomProfileError`] [`palettes::locate_unique`] raises.
 fn locate_interface_palettes(
     ctx: &Context<'_>,
@@ -321,6 +322,7 @@ fn locate_interface_palettes(
             "interface/palette/*".to_owned(),
         ));
     }
+    inventory::require_interface_palettes(ctx.pack)?;
     palettes::locate_unique(ctx, &ids, &interface_palette_symbol, report)
 }
 
