@@ -1,7 +1,7 @@
 use super::super::{FORMAT_VERSION, MAGIC};
 use crate::audio::{
-    DirectSoundMode, DirectSoundSample, DirectSoundVoice, Envelope, ProgrammableWave, Sample,
-    SampleId, Song, SongEvent, VoiceEntry, VoiceGroup, VoiceGroupId,
+    DirectSoundMode, DirectSoundSample, DirectSoundVoice, Envelope, MusicPlayerId,
+    ProgrammableWave, Sample, SampleId, Song, SongEvent, VoiceEntry, VoiceGroup, VoiceGroupId,
 };
 
 pub(super) const IMAGE_KIND_TAG: u8 = 0;
@@ -239,6 +239,7 @@ pub(super) fn synthetic_pack() -> Vec<u8> {
             meta: vec![],
             payload: Song::new(
                 VoiceGroupId("audio/voicegroup/test_group".to_owned()),
+                MusicPlayerId(1),
                 5,
                 Some(30),
                 vec![vec![
