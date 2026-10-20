@@ -152,6 +152,7 @@ fn later_track_gate_expiry_does_not_change_earlier_track_slot_selection() {
     // when track 0 allocates: track 0 steals its own weaker tied voice.
     let tracks = vec![
         vec![
+            Event::Voice(0),
             Event::Priority(10),
             tied_note(50),
             Event::Wait(1),
@@ -160,6 +161,7 @@ fn later_track_gate_expiry_does_not_change_earlier_track_slot_selection() {
             Event::Wait(8),
         ],
         vec![
+            Event::Voice(0),
             Event::Priority(20),
             Event::Note {
                 key: 60,
@@ -192,12 +194,14 @@ fn later_track_gate_expiry_does_not_change_earlier_track_slot_selection() {
 fn higher_priority_later_track_voice_survives_earlier_track_allocation_on_expiry_tick() {
     let tracks = vec![
         vec![
+            Event::Voice(0),
             Event::Priority(10),
             Event::Wait(1),
             tied_note(64),
             Event::Wait(8),
         ],
         vec![
+            Event::Voice(0),
             Event::Priority(20),
             Event::Note {
                 key: 60,
@@ -254,4 +258,54 @@ fn higher_priority_later_track_cgb_voice_survives_earlier_track_allocation_on_ex
         .expect("track 1's voice must still occupy Square1");
     assert_eq!((square1.track(), square1.midi_key()), (1, 60));
     assert!(square1.is_stopping());
+}
+
+fn single_note_track(voice: Option<u8>) -> Vec<Event> {
+    let mut track: Vec<Event> = voice.map(Event::Voice).into_iter().collect();
+    track.extend([
+        Event::Volume(127),
+        Event::Note {
+            key: 60,
+            velocity: 127,
+            gate: 4,
+        },
+        Event::Wait(48),
+        Event::Fine,
+    ]);
+    track
+}
+
+#[test]
+fn note_before_any_voice_command_does_not_play_voicegroup_entry_zero() {
+    // Upstream clears the track and sets only tone.type = 1
+    // (m4a_1.s:1218-1230); it never reads voicegroup entry 0 until VOICE.
+    let run = |voice: Option<u8>| {
+        let song = Song::new(vec![direct_sound(100)], vec![single_note_track(voice)], 150);
+        let mut seq = Sequencer::new(song);
+        let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
+        seq.render_frame(&mut out);
+        (seq.mixer.voices().len(), out)
+    };
+    let (explicit_voices, explicit_out) = run(Some(0));
+    let (omitted_voices, omitted_out) = run(None);
+    assert_eq!(explicit_voices, 1, "explicit VOICE 0 plays entry zero");
+    assert!(explicit_out.iter().any(|s| *s != 0.0));
+    assert_eq!(
+        omitted_voices, 0,
+        "pre-VOICE note allocated voicegroup entry zero's DirectSound instrument"
+    );
+    assert_ne!(omitted_out, explicit_out);
+}
+
+#[test]
+fn startup_tone_is_square1_until_voice_selects_a_bank_entry() {
+    let song = Song::new(vec![direct_sound(100)], vec![single_note_track(None)], 150);
+    let mut seq = Sequencer::new(song);
+    assert_eq!(seq.tracks[0].voice, None);
+    seq.do_tick();
+    assert!(
+        seq.mixer.cgb_voices()[CgbChannelNumber::Square1.slot()].is_some(),
+        "the startup tone allocates the Square1 channel"
+    );
+    assert!(seq.mixer.voices().is_empty());
 }
