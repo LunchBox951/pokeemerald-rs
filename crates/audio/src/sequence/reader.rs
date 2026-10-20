@@ -100,7 +100,6 @@ impl<'a> CommandReader<'a> {
             TUNE => self.unary(|value| Event::Tune(centered(value))),
             XCMD => {
                 let kind = self.byte()?;
-                // The track ends here, so no payload or suffix is read.
                 if xcmd_ends_track(kind) {
                     return Ok(Event::Fine);
                 }
