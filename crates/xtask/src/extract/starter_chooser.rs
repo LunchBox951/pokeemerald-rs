@@ -15,6 +15,8 @@ struct SheetSource {
     palette_id: &'static str,
     width: u32,
     height: u32,
+    /// The PNG bit depth the typed accessor requires of this sheet.
+    bit_depth: u8,
     colors: usize,
 }
 
@@ -36,6 +38,7 @@ const SHEETS: [SheetSource; 3] = [
         palette_id: "starter-chooser/palette/tiles",
         width: 128,
         height: 128,
+        bit_depth: 8,
         colors: 32,
     },
     SheetSource {
@@ -45,6 +48,7 @@ const SHEETS: [SheetSource; 3] = [
         palette_id: "starter-chooser/palette/pokeball_selection",
         width: 32,
         height: 128,
+        bit_depth: 4,
         colors: 16,
     },
     SheetSource {
@@ -54,6 +58,7 @@ const SHEETS: [SheetSource; 3] = [
         palette_id: "starter-chooser/palette/starter_circle",
         width: 64,
         height: 64,
+        bit_depth: 4,
         colors: 16,
     },
 ];
@@ -141,6 +146,15 @@ fn extract_sheet(
             ),
         ));
     }
+    if image.bit_depth != sheet.bit_depth {
+        return Err(mismatch(
+            &path,
+            format!(
+                "is {}-bit: expected {}-bit",
+                image.bit_depth, sheet.bit_depth
+            ),
+        ));
+    }
 
     let palette_path = path.clone();
     let colors = png::decode_palette(&bytes).map_err(|e| ExtractError::Png(path.clone(), e))?;
@@ -187,10 +201,11 @@ mod tests {
 
     use assets::{AssetPack, StarterSpecies};
 
+    use super::super::png::tests::indexed_png_from_raw_with_plte;
     use super::super::{extract_to, repo_root, upstream_present};
     use super::{
         extract_sheet, extract_starter_chooser, extract_tilemap, extract_tilemap_with,
-        push_tilemap, SHEETS, TILEMAPS,
+        push_tilemap, SheetSource, SHEETS, TILEMAPS,
     };
     use crate::extract::ExtractError;
     use pack_format::PackWriter;
@@ -344,6 +359,59 @@ mod tests {
         assert_eq!(writer.len(), 0);
 
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A sheet-shaped PNG at `bit_depth` with the sheet's own palette size.
+    fn sheet_png(sheet: SheetSource, bit_depth: u8) -> Vec<u8> {
+        let row_bytes = (sheet.width as usize * usize::from(bit_depth)).div_ceil(8);
+        let mut raw = Vec::new();
+        for _ in 0..sheet.height {
+            raw.push(0);
+            raw.resize(raw.len() + row_bytes, 0);
+        }
+        let plte = vec![7; sheet.colors * 3];
+        indexed_png_from_raw_with_plte(bit_depth, sheet.width, sheet.height, &raw, &plte)
+    }
+
+    #[test]
+    fn sheets_of_the_wrong_bit_depth_are_rejected() {
+        let required = [
+            ("tiles.png", 8u8),
+            ("pokeball_selection.png", 4),
+            ("starter_circle.png", 4),
+        ];
+        for (sheet, (png, depth)) in SHEETS.into_iter().zip(required) {
+            assert_eq!(sheet.png, png);
+            for wrong in [2u8, 4, 8].into_iter().filter(|&d| d != depth) {
+                let dir = scratch_dir("bit-depth");
+                let path = dir.join(sheet.directory).join(sheet.png);
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(&path, sheet_png(sheet, wrong)).unwrap();
+                let mut writer = PackWriter::new();
+
+                let err = extract_sheet(&dir, sheet, &mut writer).unwrap_err();
+                match &err {
+                    ExtractError::StarterChooserAssetMismatch {
+                        path: error_path,
+                        detail,
+                    } => {
+                        assert_eq!(error_path, &path);
+                        assert!(
+                            detail.contains(&format!("{wrong}-bit"))
+                                && detail.contains(&format!("{depth}-bit")),
+                            "{png} at {wrong}: {detail}"
+                        );
+                    }
+                    other => panic!("{png} at {wrong}-bit: wrong error {other:?}"),
+                }
+                assert_eq!(writer.len(), 0);
+
+                std::fs::write(&path, sheet_png(sheet, depth)).unwrap();
+                extract_sheet(&dir, sheet, &mut writer).unwrap();
+                assert_eq!(writer.len(), 2);
+                std::fs::remove_dir_all(dir).unwrap();
+            }
+        }
     }
 
     #[test]
