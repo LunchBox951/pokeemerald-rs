@@ -6,7 +6,9 @@
 //! rollback, made beside the outermost level rollback may take back, so it
 //! is never inside a level it empties. A level on another filesystem than
 //! that quarantine (`EXDEV`, as behind a `..` into a mount) gets a
-//! quarantine of its own beside it, removed before the walk goes on. In a
+//! quarantine of its own beside it, removed before the walk goes on; the
+//! shared one is removed and its descriptor released first, and a level
+//! further out claims a fresh one. In a
 //! quarantine the level is re-checked by identity and unlinked through the
 //! held quarantine, or put back (no-replace) under its name, or beside it
 //! as `<name>.restored-<n>`, if it is not ours or holds something. Every
@@ -88,6 +90,13 @@ pub(super) fn undo_created_directories_with_hooks(
                     Outcome::Taken => {}
                     Outcome::Stopped => break,
                     Outcome::CrossDevice => {
+                        // The shared quarantine's descriptor is released
+                        // first, so the fallback can open what it needs even
+                        // when that descriptor took the last free slot; a
+                        // level further out claims a fresh one.
+                        if let Some(shared) = quarantine.take() {
+                            remove_quarantine(&shared, &mut || {});
+                        }
                         if !take_back_beside(parent, dir) {
                             break;
                         }
@@ -226,19 +235,34 @@ fn is_fresh_quarantine(quarantine: &mut rustix::fs::Dir) -> bool {
 /// `parent`, not the path; elsewhere, or without `/proc`, it is the
 /// recorded path's sibling, which a rename since creation would make stale.
 pub(super) fn located_beside(parent: impl AsFd, dir: &CreatedDirectory, entry: &OsStr) -> PathBuf {
+    located_in(parent, entry).unwrap_or_else(|| dir.path.with_file_name(entry))
+}
+
+/// Where `entry` in the held directory `home` is now, read through
+/// `/proc/self/fd` on Linux and Android; `None` elsewhere or without
+/// `/proc`.
+fn located_in(home: impl AsFd, entry: &OsStr) -> Option<PathBuf> {
     #[cfg(any(target_os = "linux", target_os = "android"))]
     {
         use std::os::fd::AsRawFd as _;
-        let link = format!("/proc/self/fd/{}", parent.as_fd().as_raw_fd());
+        let link = format!("/proc/self/fd/{}", home.as_fd().as_raw_fd());
         if let Ok(held) = std::fs::read_link(link) {
             if held.is_absolute() {
-                return held.join(entry);
+                return Some(held.join(entry));
             }
         }
     }
     #[cfg(not(any(target_os = "linux", target_os = "android")))]
-    let _ = parent;
-    dir.path.with_file_name(entry)
+    let _ = (home, entry);
+    None
+}
+
+/// Where the quarantine `name` in the held `home` is now, for a warning:
+/// read from `home` as [`located_beside`] reads a level's parent, since
+/// `home` may have been renamed since the quarantine was made; `recorded`,
+/// its location when it was made, elsewhere or without `/proc`.
+fn quarantine_location(home: BorrowedFd<'_>, name: &str, recorded: &Path) -> PathBuf {
+    located_in(home, OsStr::new(name)).unwrap_or_else(|| recorded.to_owned())
 }
 
 /// A quarantine this rollback made and holds open, in `home` under `name`.
@@ -249,7 +273,7 @@ pub(super) struct Quarantine<'a> {
     home: BorrowedFd<'a>,
     /// Its random basename in `home`.
     name: String,
-    /// Where it is, for warnings.
+    /// Where it was when it was made: the fallback for [`Self::location`].
     path: PathBuf,
 }
 
@@ -257,6 +281,11 @@ impl Quarantine<'_> {
     /// The held descriptor, for calls that do not depend on its position.
     fn fd(&self) -> Option<BorrowedFd<'_>> {
         self.dir.fd().ok()
+    }
+
+    /// Where it is now, for a warning.
+    fn location(&self) -> PathBuf {
+        quarantine_location(self.home, &self.name, &self.path)
     }
 }
 
@@ -398,20 +427,30 @@ fn take_back_into(
     // A replacement that was captured, or this level holding something: put
     // it back under its name, or beside it if the name was retaken
     // meanwhile, so it never survives only under the hidden quarantine.
-    if let Some(warning) = restore_capture(held, &quarantine.path, parent, dir) {
+    if let Some(warning) = restore_capture(
+        held,
+        quarantine.home,
+        &quarantine.name,
+        &quarantine.path,
+        parent,
+        dir,
+    ) {
         eprintln!("{warning}");
     }
     Outcome::Stopped
 }
 
-/// Moves the capture in `quarantine` (at `quarantine_path`) back under
+/// Moves the capture in `quarantine` (named `quarantine_name` in the held
+/// `quarantine_home`, and at `recorded` when it was made) back under
 /// `dir`'s name, or under the first free `<name>.restored-<n>` beside it.
 /// Returns the warning to print when the capture did not come back under
 /// its own name, naming exactly where it is: the `.restored-<n>` path, or
-/// the quarantine path if none took it.
+/// the quarantine's current path if none took it.
 pub(super) fn restore_capture(
     quarantine: BorrowedFd<'_>,
-    quarantine_path: &Path,
+    quarantine_home: BorrowedFd<'_>,
+    quarantine_name: &str,
+    recorded: &Path,
     parent: &OwnedFd,
     dir: &CreatedDirectory,
 ) -> Option<String> {
@@ -433,7 +472,9 @@ pub(super) fn restore_capture(
     Some(format!(
         "warning: could not put {} back; its contents remain in {}",
         OneLinePath(&beside(&dir.name)),
-        OneLinePath(&quarantine_path.join(QUARANTINE_ENTRY))
+        OneLinePath(
+            &quarantine_location(quarantine_home, quarantine_name, recorded).join(QUARANTINE_ENTRY)
+        )
     ))
 }
 
@@ -454,7 +495,7 @@ fn remove_quarantine(quarantine: &Quarantine<'_>, before_removal: &mut dyn FnMut
     {
         eprintln!(
             "warning: cleanup directory {} no longer resolves to the one rollback made; it is left in place",
-            OneLinePath(&quarantine.path)
+            OneLinePath(&quarantine.location())
         );
         return;
     }
@@ -465,7 +506,7 @@ fn remove_quarantine(quarantine: &Quarantine<'_>, before_removal: &mut dyn FnMut
     ) {
         eprintln!(
             "warning: could not remove cleanup directory {}: {}; it is left in place",
-            OneLinePath(&quarantine.path),
+            OneLinePath(&quarantine.location()),
             std::io::Error::from(err)
         );
     }

@@ -1356,6 +1356,8 @@ fn restore_capture_puts_contents_beside_a_retaken_name() {
 
     let warning = super::take_back::restore_capture(
         std::os::fd::AsFd::as_fd(&quarantine),
+        std::os::fd::AsFd::as_fd(parent),
+        ".undo-held",
         &super::take_back::located_beside(parent, &created[0], std::ffi::OsStr::new(".undo-held")),
         parent,
         &created[0],
@@ -1435,6 +1437,8 @@ fn a_capture_no_name_takes_back_is_reported_at_its_exact_quarantine_path() {
 
     let warning = super::take_back::restore_capture(
         std::os::fd::AsFd::as_fd(&quarantine),
+        std::os::fd::AsFd::as_fd(parent),
+        ".undo-held",
         &super::take_back::located_beside(parent, &created[0], std::ffi::OsStr::new(".undo-held")),
         parent,
         &created[0],
@@ -1565,6 +1569,8 @@ fn a_stranded_capture_is_reported_under_its_parents_current_name() {
 
     let warning = super::take_back::restore_capture(
         std::os::fd::AsFd::as_fd(&quarantine),
+        std::os::fd::AsFd::as_fd(parent),
+        ".undo-held",
         &super::take_back::located_beside(parent, level, std::ffi::OsStr::new(".undo-held")),
         parent,
         level,
@@ -1598,6 +1604,8 @@ fn a_cleanup_warning_keeps_a_control_character_in_a_path_on_one_line() {
 
     let warning = super::take_back::restore_capture(
         std::os::fd::AsFd::as_fd(&quarantine),
+        std::os::fd::AsFd::as_fd(parent),
+        ".undo-held",
         &super::take_back::located_beside(parent, &created[0], std::ffi::OsStr::new(".undo-held")),
         parent,
         &created[0],
@@ -1876,4 +1884,128 @@ fn a_level_on_another_filesystem_is_taken_back_through_a_quarantine_beside_it() 
     fs::remove_dir_all(&other).unwrap();
     assert!(on_shm.is_empty(), "left on /dev/shm: {on_shm:?}");
     assert_eq!(in_base, ["m"], "left in the base: {in_base:?}");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_level_on_another_filesystem_is_taken_back_when_one_descriptor_is_free() {
+    use std::os::unix::fs::MetadataExt as _;
+    // As above, but rollback starts with one free descriptor slot. The
+    // shared quarantine beside `new` takes it, so the cross-device fallback
+    // for `more` must free that quarantine first, or it cannot read
+    // `/dev/urandom` and strands `more` and `new` both.
+    if !in_descriptor_pressure_child() {
+        run_under_descriptor_pressure(
+            "import_rom::created_dirs::tests::a_level_on_another_filesystem_is_taken_back_when_one_descriptor_is_free",
+        );
+        return;
+    }
+    let shm = std::path::Path::new("/dev/shm");
+    let dir = TempDir::new("cross-device-pressure");
+    let Ok(shm_meta) = fs::metadata(shm) else {
+        panic!("this test needs /dev/shm");
+    };
+    assert_ne!(
+        shm_meta.dev(),
+        fs::metadata(&dir.path).unwrap().dev(),
+        "this test needs /dev/shm on another filesystem than the temp dir"
+    );
+    let other = shm.join(format!(
+        "pokeemerald-rs-cross-device-pressure-{}",
+        std::process::id()
+    ));
+    fs::create_dir(&other).unwrap();
+    std::os::unix::fs::symlink(&other, dir.join("m")).unwrap();
+    let target = dir.join("new").join("..").join("m").join("more");
+    let created = super::create_directories(&target).unwrap();
+    assert!(other.join("more").is_dir(), "more was made on /dev/shm");
+
+    let mut fillers = None;
+    super::take_back::undo_created_directories_with_hooks(&created, &mut || {
+        if fillers.is_none() {
+            fillers = Some(fill_descriptor_table_leaving(1));
+        }
+    });
+    drop(fillers);
+
+    let on_shm = entry_names(&other);
+    let in_base = entry_names(&dir.path);
+    fs::remove_dir_all(&other).unwrap();
+    assert!(on_shm.is_empty(), "left on /dev/shm: {on_shm:?}");
+    assert_eq!(in_base, ["m"], "left in the base: {in_base:?}");
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[test]
+fn a_stranded_capture_is_reported_in_its_quarantines_current_place() {
+    // The quarantine was made in `a`, so the location recorded then is
+    // `a/.undo-held`; `a` is renamed to `b` before the capture is given up
+    // on, and the warning must name where it is now, under `b`.
+    let dir = TempDir::new("restore-renamed-quarantine-home");
+    let created = super::create_directories(&dir.join("a").join("new")).unwrap();
+    let level = created.last().unwrap();
+    let parent = level.parent.as_deref().unwrap();
+    let recorded = dir.join("a").join(".undo-held");
+    fs::rename(dir.join("a"), dir.join("b")).unwrap();
+    let moved = fs::canonicalize(dir.join("b")).unwrap();
+    let quarantine = stage_unrestorable_capture(&moved, parent);
+
+    let warning = super::take_back::restore_capture(
+        std::os::fd::AsFd::as_fd(&quarantine),
+        std::os::fd::AsFd::as_fd(parent),
+        ".undo-held",
+        &recorded,
+        parent,
+        level,
+    );
+
+    assert_eq!(
+        warning.as_deref(),
+        Some(
+            format!(
+                "warning: could not put {} back; its contents remain in {}",
+                moved.join("new").display(),
+                moved
+                    .join(".undo-held")
+                    .join(super::take_back::QUARANTINE_ENTRY)
+                    .display()
+            )
+            .as_str()
+        )
+    );
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[test]
+fn a_quarantine_whose_removal_fails_is_reported_under_its_homes_current_name() {
+    // The quarantine's home `a` is renamed to `b` after the quarantine is
+    // made, then something lands in it so its removal fails; the warning
+    // must name `b/.undo-r`, where it is, not `a/.undo-r`.
+    if !in_rollback_stderr_child() {
+        let stderr = rerun_alone_for_stderr(
+            "import_rom::created_dirs::tests::a_quarantine_whose_removal_fails_is_reported_under_its_homes_current_name",
+        );
+        let warned = warned_path(
+            &stderr,
+            "warning: could not remove cleanup directory ",
+            ": ",
+        );
+        assert_names_marked_path(&stderr, warned, "quarantine at: ");
+        return;
+    }
+    let dir = TempDir::new("quarantine-home-renamed");
+    let created = super::create_directories(&dir.join("a").join("new")).unwrap();
+    let level = created.last().unwrap();
+    let parent = level.parent.as_deref().unwrap();
+    let moved = dir.join("b");
+    let proceeded = super::take_back::take_back_level_with_hooks(
+        parent,
+        level,
+        ".undo-r",
+        &mut || fs::rename(dir.join("a"), &moved).unwrap(),
+        &mut || fs::write(moved.join(".undo-r").join("held"), b"x").unwrap(),
+    );
+    assert!(proceeded, "the level itself was taken back");
+    assert!(moved.join(".undo-r").join("held").is_file());
+    mark_path("quarantine at: ", &moved.join(".undo-r"));
 }
