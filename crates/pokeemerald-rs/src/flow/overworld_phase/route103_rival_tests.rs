@@ -321,7 +321,9 @@ fn the_trigger_never_fires_off_route_103() {
 fn walking_north_from_route_101_crosses_oldale_town_into_route_103() {
     let route101 = MapId("MAP_ROUTE101");
     let oldale = MapId("MAP_OLDALE_TOWN");
-    let scene = crate::overworld::load_room(
+    let source = crate::pack_source::PackSource::Repo;
+    let scene = crate::overworld::load_room_from_source(
+        &source,
         route101,
         crate::overworld::PlayerCharacter::Brendan,
         &EventData::new(),
@@ -330,7 +332,7 @@ fn walking_north_from_route_101_crosses_oldale_town_into_route_103() {
 
     // One ordinary tile south of Route 101's own north edge (module docs).
     let player = PlayerState::new((10, 1), 3, Direction::North);
-    let mut phase = OverworldPhase::for_test(scene, route101, player, None);
+    let mut phase = OverworldPhase::for_test_with_source(scene, route101, player, None, source);
 
     let walk_north_one_tile = |phase: &mut OverworldPhase| {
         phase.step(held(Buttons::UP));
