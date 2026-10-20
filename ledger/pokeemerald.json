@@ -30505,6 +30505,12 @@
     },
     "src/main.c": {
       "artifacts": {
+        "ReadKeys": {
+          "reason": "main.c:279-288 (L=A remap tail only). ButtonState::with_l_equals_a adds A to the newly-pressed view when L is newly pressed and to the held view when L is held, independently and keeping physical L; flow::advance_scene applies it ahead of scene dispatch using the optionsButtonMode the active scene carries: the live SaveBlock2 for the main menu, its fades, the Options commit and the overworld/continue, and the NewGameOptions mode for the intro. NOT modelled: the title scenes read the default Normal, because upstream loads the save during the copyright screen (intro.c:1147-1156) so L=A applies on its title, while this port loads the save only at the Title to MainMenu transition; the rest of ReadKeys (key-repeat counter and delay, watchedKeysMask, soft-reset combo, link/recorded input); the naming screen keeps its own raw input (crates/pokeemerald-rs/src/naming.rs).",
+          "rust_target": "crates/platform/src/input.rs",
+          "spec": "I-6",
+          "status": "stubbed"
+        },
         "SeedRngAndSetTrainerId": {
           "reason": "main.c:208-214. Upstream reseeds gRngValue from the TM1CNT_L hardware timer at new-game time (SeedRng(REG_TM1CNT_L)) and stores that same timer value as sTrainerId, the GetGeneratedTrainerIdLower source InitPlayerTrainerId ORs in; retail compiles the boot-time SeedRngWithRtc call out (:229-236 is #ifdef BUGFIX), so gRngValue stays 0 until this runs. NOT modelled: no timer register exists in this port, so new_game::NEW_GAME_RNG_SEED (0, upstream's real pre-seed boot state) stands in and a fresh run is deterministic where retail is not -- deliberate, to keep the headless xtask e2e lanes reproducible (flow::overworld_phase's rng field docs, PR #207). The trainer-id draw shape itself is modelled in new_game::init_save_blocks (see include/global.h's SaveBlock2 coverage).",
           "rust_target": "crates/pokeemerald-rs/src/new_game.rs",
