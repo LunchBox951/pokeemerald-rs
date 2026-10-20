@@ -635,13 +635,9 @@ fn turning_to_face_the_lab_door_does_not_warp_on_the_turning_frame() {
     );
 }
 
-/// Pack-free half of [`walking_up_to_the_lab_door_enters_it_on_the_next_input_frame`].
-///
-/// Holding Up through two tile crossings drains the walk on frame
-/// `2 * WALK_FRAMES_PER_TILE`. The next held frame is the first input read
-/// with the player at rest on `(7, 17)`, and the door must claim it instead of
-/// letting the player step onto the walkable door tile `(7, 16)`. Only the
-/// negative half is asserted, as in
+/// Pack-free half of [`walking_up_to_the_lab_door_enters_it_on_the_next_input_frame`]:
+/// the door must claim the first input read with the player at rest in front
+/// of it, ahead of that frame's step. Only the negative half is asserted, as in
 /// [`facing_the_lab_door_and_holding_north_preempts_movement_instead_of_stepping`].
 #[test]
 fn walking_up_to_the_lab_door_preempts_the_final_step_onto_it() {
