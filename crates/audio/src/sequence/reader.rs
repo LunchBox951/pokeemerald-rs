@@ -55,7 +55,6 @@ impl<'a> CommandReader<'a> {
         };
         match command {
             WAIT_LO..=WAIT_HI => Ok(Event::Wait(CLOCK_TABLE[usize::from(command - WAIT_LO)])),
-            // Reserved command slots behave as FINE.
             FINE
             | RESERVED_AFTER_REPT..=RESERVED_BEFORE_MEMACC
             | RESERVED_AFTER_MODT..=RESERVED_BEFORE_TUNE
