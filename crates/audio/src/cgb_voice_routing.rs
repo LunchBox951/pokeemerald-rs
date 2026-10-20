@@ -42,14 +42,8 @@ fn frame_side_energy(voice: &mut CgbVoice) -> (i32, i32) {
 
 #[test]
 fn a_live_volume_write_keeps_the_latched_pan_for_that_frame() {
-    // `chan->pan` is written only by `CgbPan`/`CgbModVol`, which run at
-    // note-on and at an envelope transition whose counter reached zero
-    // (`m4a.c:878-923`, `:994`, `:1077-1085`). A live `MPT_FLG_VOLCHG`
-    // rewrites only `rightVolume`/`leftVolume` and raises
-    // `CGB_CHANNEL_MO_VOL` (`m4a_1.s:1391-1400`, `:1508-1536`), so the
-    // NR51 write it triggers still carries the previously latched pan
-    // (`m4a.c:1205-1208`): a hard-pan flip cannot reroute a sustained
-    // note on the frame of the write.
+    // A live volume write leaves `chan->pan` alone (`m4a_1.s:1508-1536`), so
+    // its NR51 write still carries the latched pan (`m4a.c:1205-1208`).
     let mut voice = square_voice(CgbChannelNumber::Square1, None, TestNote::default());
     let (centred_left, centred_right) = frame_side_energy(&mut voice);
     assert!(
@@ -68,12 +62,7 @@ fn a_live_volume_write_keeps_the_latched_pan_for_that_frame() {
 
 #[test]
 fn commit_pan_reroutes_from_the_latest_volumes_once_called() {
-    // Companion to `a_live_volume_write_keeps_the_latched_pan_for_that_frame`:
-    // the deferred route is not stuck forever. `update_volumes` alone
-    // (the live-write path) must not move it, but `commit_pan` (the
-    // `CgbModVol`/`CgbPan` boundary, `m4a.c:878-923`) must reroute it
-    // from whatever side volumes are current at that point, not just the
-    // ones in effect when it was last called.
+    // `commit_pan` is the `CgbModVol`/`CgbPan` boundary (`m4a.c:878-923`).
     let mut routing = StereoRouting::new(FULL_TRACK_VOLUME, FULL_TRACK_VOLUME, FULL_VELOCITY, 0);
     assert!(
         routing.right_enabled && routing.left_enabled,
@@ -114,8 +103,7 @@ fn a_pending_pan_change_commits_by_the_next_sustain_refresh_on_wave() {
     // Wave alone raises `CGB_CHANNEL_MO_VOL` at every bare
     // `envelopeCounter == 0` boundary, not only a retrigger-worthy one
     // (`m4a.c:1081-1082`), so its rendered route must catch up with no
-    // second live write -- unlike square/noise
-    // (`a_sustained_square_holds_its_route_until_the_next_modify_volume_write`).
+    // second live write, unlike square and noise.
     let mut voice = wave_voice(false, TestNote::default());
     let (centred_left, centred_right) = frame_side_energy(&mut voice); // enters sustain
     assert!(

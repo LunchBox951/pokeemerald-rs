@@ -33,8 +33,6 @@ fn square_peak_at_level(track_volume: u8, expected_level: u8) -> i32 {
 
 #[test]
 fn square_envelope_levels_above_fifteen_render_through_the_nrx2_low_nibble() {
-    // Pins the write half of `HardwareEnvelopeVolume`'s contract: levels
-    // 16 and 30 must render through the low nibble, not the raw byte.
     let level_14_peak = square_peak_at_level(121, 14);
     let level_15_peak = square_peak_at_level(130, 15);
 
@@ -79,10 +77,9 @@ fn square_peaks_from_note_on(adsr: CgbAdsr, frames: usize) -> Vec<i32> {
 
 #[test]
 fn note_on_arms_the_hardware_timer_from_the_decoded_nrx2_period() {
-    // Pins the note-on half of `HardwareEnvelopeVolume`'s contract: the
-    // note-on write programs NRx2 with the attack's decoded nibble, so a
-    // fresh voice's timer starts from the decoded period, not the raw
-    // attack byte.
+    // The note-on write programs NRx2 with the attack's decoded nibble, so a
+    // fresh voice's timer starts from the decoded period, not the raw attack
+    // byte.
     //
     // Attack 17 writes `(17 + CGB_NRx2_ENV_DIR_INC) & 0xF == 9`: period
     // 1, upward. The nibble leaves zero on the second frame, not on the
@@ -108,17 +105,9 @@ fn note_on_arms_the_hardware_timer_from_the_decoded_nrx2_period() {
 
 #[test]
 fn a_doubled_note_on_frame_still_owes_its_write_until_the_frame_ends() {
-    // Upstream stores NRx2 once per `CgbSound` pass, at its end
-    // (`m4a.c:1206-1226`), after that pass's envelope stepping — including
-    // the doubling re-entry (`m4a.c:1176-1180`). A note-on frame that runs
-    // two software iterations therefore still ends with a freshly armed
-    // hardware timer, exactly as the single-iteration note-on frame does
-    // (`note_on_arms_the_hardware_timer_from_the_decoded_nrx2_period`).
-    //
-    // Attack 17 writes `(17 + CGB_NRx2_ENV_DIR_INC) & 0xF == 9`: period 1,
-    // upward, so a timer that runs during the note-on pass steps the
-    // nibble a whole frame early and the fresh voice is audible on its own
-    // note-on frame.
+    // Upstream stores NRx2 once per `CgbSound` pass, after the doubling
+    // re-entry (`m4a.c:1176-1226`), so the hardware timer stays unarmed
+    // through the whole note-on frame.
     let adsr = CgbAdsr {
         attack: 17,
         decay: 0,
@@ -157,8 +146,8 @@ fn a_doubled_note_on_frame_still_owes_its_write_until_the_frame_ends() {
 
 #[test]
 fn a_downward_note_on_write_at_level_zero_leaves_hardware_dead() {
-    // The other half: the note-on timer takes the same saturation check
-    // `write` applies. Attack 9 writes
+    // The note-on timer takes the same saturation check as any NRx2 write.
+    // Attack 9 writes
     // `(9 + CGB_NRx2_ENV_DIR_INC) & 0xF == 1`: period 1, downward, and
     // the note-on level of zero is already saturated in that direction,
     // so the write leaves hardware dead rather than stepping the nibble
@@ -181,9 +170,8 @@ fn a_downward_note_on_write_at_level_zero_leaves_hardware_dead() {
 
 #[test]
 fn centred_goal_thirty_one_decay_falls_with_the_hardware_envelope_between_writes() {
-    // Pins the continuation half of `HardwareEnvelopeVolume`'s contract:
-    // the frame right after a write is already one hardware step
-    // quieter, not still holding the write frame's loudness.
+    // The frame right after a write is already one hardware step quieter,
+    // not still holding the write frame's loudness.
     let level_15_peak = square_peak_at_level(130, 15);
     let level_14_peak = square_peak_at_level(121, 14);
 
@@ -247,16 +235,9 @@ fn frame_peak(voice: &mut CgbVoice) -> i32 {
 
 #[test]
 fn live_volume_write_mid_decay_restarts_the_hardware_envelope_timer() {
-    // A live `MPT_FLG_VOLCHG` raises `CGB_CHANNEL_MO_VOL`
-    // (`m4a_1.s:1394`..`:1400`) without touching `envelopeCounter`, and
-    // that write ends in `*nrx4ptr = channels->n4 | 0x80`
-    // (`m4a.c:1222`..`:1223`), whose trigger bit reloads the hardware
-    // envelope timer from NRx2's step-time nibble (`_resetEnvelope`'s
-    // `nextStep = stepTime`, `mgba/src/gb/audio.c:856`..`:859`, reached
-    // from `GBAudioWriteNR14`'s restart branch, `:180`..`:181`). The
-    // software counter keeps its own phase across that write, so the
-    // hardware level must pace from the write, not from whatever the
-    // stale software counter had left.
+    // A live volume write retriggers NRx4 (`m4a.c:1222`), which reloads the
+    // hardware envelope timer (`mgba/src/gb/audio.c:856-859`) while the
+    // software counter keeps its phase.
     let level_15_peak = square_peak_at_level(130, 15);
     let level_14_peak = square_peak_at_level(121, 14);
     assert_ne!(
@@ -320,8 +301,8 @@ fn live_volume_write_mid_decay_restarts_the_hardware_envelope_timer() {
 
 #[test]
 fn centred_goal_thirty_one_attack_climbs_with_the_hardware_envelope_then_freezes_at_fifteen() {
-    // Pins the climbing direction and the saturation ceiling of
-    // `HardwareEnvelopeVolume`'s contract.
+    // The hardware envelope climbs while the level is in range and stays at
+    // level 15's loudness once the level exceeds it.
     let paced_attack = CgbAdsr {
         attack: 1,
         decay: 1,
@@ -375,9 +356,8 @@ fn centred_goal_thirty_one_attack_climbs_with_the_hardware_envelope_then_freezes
 
 #[test]
 fn centred_goal_thirty_one_decay_freezes_at_zero_before_software_reaches_it() {
-    // Pins the saturation floor of `HardwareEnvelopeVolume`'s contract:
-    // hardware goes silent well before the software envelope itself
-    // reaches zero.
+    // Hardware goes silent well before the software envelope itself reaches
+    // zero.
     let paced_decay_to_silence = CgbAdsr {
         attack: 0,
         decay: 1,
@@ -467,8 +447,8 @@ fn live_track_volume_drop_during_sustain_does_not_silence_the_channel() {
 #[test]
 fn square_gain_at_the_nibble_ceiling_reaches_near_full_scale_like_the_wave_arm() {
     // `envelope_gain_256`'s square/noise arm must reach a ceiling
-    // comparable to the wave arm's full-scale gain (`cgb3_wave_gain_256`,
-    // above) once both read the same 0..=15 nibble domain. The bound
+    // comparable to the wave arm's full-scale gain (`cgb3_wave_gain_256`)
+    // once both read the same 0..=15 nibble domain. The bound
     // allows one hardware step (`LINEAR_ENVELOPE_SCALE`, the finest step
     // this linear law can represent) short of that ceiling.
     let square = Oscillator::Square(SquareChannel::new(HALF_DUTY, 0, None));
