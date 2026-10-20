@@ -398,3 +398,69 @@ fn a_program_nothing_reaches_is_refused() {
     assert_eq!(id, "Stray");
     assert!(reason.contains("reaches"), "{reason}");
 }
+
+#[test]
+fn a_catalog_of_the_maximum_program_count_is_refused_not_panicked() {
+    let extra: Vec<BattleAnimationProgram> = (4..u32::from(u16::MAX))
+        .map(|n| {
+            BattleAnimationProgram::new(symbol(&format!("Extra{n}")), vec![AnimCommand::End])
+                .unwrap()
+        })
+        .collect();
+    let catalog = catalog_with(extra);
+    assert_eq!(catalog.programs().len(), usize::from(u16::MAX));
+    let (id, reason) = refused(locate_in("ba-max-count", full_rom(), pack(&catalog)));
+    assert_eq!(id, "Extra4");
+    assert!(
+        reason.contains("no table, branch, or call reaches"),
+        "{reason}"
+    );
+}
+
+#[test]
+fn a_fully_reachable_catalog_of_the_maximum_program_count_does_not_panic() {
+    const CHAIN: usize = 0x10000;
+    let count = usize::from(u16::MAX);
+    let at = |n: usize| CHAIN + (n - 4) * 5;
+    let mut chained_other = other_commands();
+    *chained_other.last_mut().unwrap() = AnimCommand::Goto(ProgramId::new(4));
+    let mut programs = vec![
+        BattleAnimationProgram::new(symbol("Short"), vec![AnimCommand::End]).unwrap(),
+        BattleAnimationProgram::new(symbol("Alias"), vec![AnimCommand::End]).unwrap(),
+        BattleAnimationProgram::new(symbol("Main"), main_commands()).unwrap(),
+        BattleAnimationProgram::new(symbol("Other"), chained_other).unwrap(),
+    ];
+    let mut other = other_bytes();
+    other.pop();
+    other.push(0x13);
+    other.extend(ptr_bytes(at(4)));
+    let mut rom = full_rom().write(OTHER, &other);
+    for n in 4..count {
+        let commands = if n + 1 < count {
+            let next = u16::try_from(n + 1).unwrap();
+            let mut bytes = vec![0x13];
+            bytes.extend(ptr_bytes(at(n + 1)));
+            rom = rom.write(at(n), &bytes);
+            vec![AnimCommand::Goto(ProgramId::new(next))]
+        } else {
+            rom = rom.write(at(n), &[0x08]);
+            vec![AnimCommand::End]
+        };
+        programs.push(BattleAnimationProgram::new(symbol(&format!("Chain{n}")), commands).unwrap());
+    }
+    let mut selectors = Vec::new();
+    for table in AnimationTable::ALL {
+        for index in 0..table.len() {
+            selectors.push((
+                AnimationSelector::new(table, index).unwrap(),
+                ProgramId::new(slot_program(table, index)),
+            ));
+        }
+    }
+    let catalog = BattleAnimationCatalog::new(programs, selectors).unwrap();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        locate_in("ba-max-reachable", rom, pack(&catalog))
+    }));
+    let located = result.expect("locate panicked instead of returning");
+    located.expect("a consistent maximum-size catalog locates");
+}

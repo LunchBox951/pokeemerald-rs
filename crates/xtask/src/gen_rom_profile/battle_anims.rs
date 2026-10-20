@@ -104,10 +104,17 @@ struct Expected<'a> {
 
 impl<'a> Expected<'a> {
     fn new(catalog: &'a BattleAnimationCatalog) -> Result<Self, GenRomProfileError> {
-        let by_symbol: HashMap<&str, ProgramId> = (0..)
-            .zip(catalog.programs())
-            .map(|(index, program)| (program.symbol().as_str(), ProgramId::new(index)))
-            .collect();
+        let by_symbol: HashMap<&str, ProgramId> = catalog
+            .programs()
+            .iter()
+            .enumerate()
+            .map(|(index, program)| {
+                let id = u16::try_from(index).map(ProgramId::new).map_err(|_| {
+                    mismatch(PACK_ID, "more programs than a u16 id names".to_owned())
+                })?;
+                Ok((program.symbol().as_str(), id))
+            })
+            .collect::<Result<_, GenRomProfileError>>()?;
         let mut slots: [Vec<ProgramId>; 4] = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
         for (table, ids) in AnimationTable::ALL.into_iter().zip(&mut slots) {
             for index in 0..table.len() {
@@ -311,8 +318,10 @@ impl Bindings {
         tables: [u32; 4],
     ) -> Result<BattleAnimationPlan, GenRomProfileError> {
         let mut programs = Vec::new();
-        for (index, program) in (0..).zip(expected.catalog.programs()) {
+        for (position, program) in expected.catalog.programs().iter().enumerate() {
             let symbol = program.symbol().as_str();
+            let index = u16::try_from(position)
+                .map_err(|_| mismatch(symbol, "more programs than a u16 id names".to_owned()))?;
             let Some((addr, len)) = self.programs.get(&index) else {
                 return Err(mismatch(
                     symbol,
