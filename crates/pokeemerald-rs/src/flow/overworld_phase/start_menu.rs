@@ -62,6 +62,8 @@ impl OverworldPhase {
         }
 
         self.take_field_lock();
+        // `StopPlayerAvatar` in `ShowStartMenu` (`start_menu.c:581-588`).
+        self.player.reset_movement_direction_to_facing();
 
         // Step does not run on frames the menu owns.
         self.advance_tileset_anim_tick();
@@ -178,10 +180,11 @@ impl OverworldPhase {
     /// and count stay exactly as loaded; upstream's `SavePlayerParty` also
     /// copies all records and the count unconditionally.
     ///
-    /// The player's facing and movement directions come from separate fields:
-    /// they differ on a forced-slide landing frame, when START is claimed
-    /// before `ForcedMovement_None` resets the movement direction
-    /// (`src/field_player_avatar.c`).
+    /// The player's facing and movement directions are saved from separate
+    /// fields. Opening the menu has already reset the movement direction to
+    /// the facing, as `StopPlayerAvatar` does (`src/start_menu.c:581-588`,
+    /// `src/field_player_avatar.c:1223-1228`), so a save from a slide's
+    /// landing frame stores the locked facing in both.
     pub(super) fn copy_party_and_objects_to_save(&mut self) {
         let slot = self.party_lead_slot;
         if let Some(lead) = &self.party_lead {
