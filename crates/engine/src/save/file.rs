@@ -384,7 +384,7 @@ impl SaveFile {
     fn open_for_read(&self) -> Result<Option<std::fs::File>, SaveFileError> {
         refuse_an_unusable_entry(&self.path)
             .map_err(|unusable| self.unusable_entry_error(unusable))?;
-        #[cfg(test)]
+        #[cfg(all(test, unix))]
         after_inspection_seam::run();
 
         let mut options = std::fs::OpenOptions::new();
@@ -630,7 +630,7 @@ pub struct SaveFileGuard {
 /// Test-only sequencing seam: lets a test run code on the reading thread
 /// after `open_for_read`'s up-front inspection and before its open, so the
 /// swap window is hit deterministically instead of by racing a thread.
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) mod after_inspection_seam {
     use std::cell::RefCell;
 
