@@ -446,44 +446,33 @@ fn reading_a_fifo_in_the_files_place_fails_rather_than_waiting_for_a_writer() {
 }
 
 /// The save path's refusal must survive an entry that changes underneath it:
-/// a party that swaps a symlink in after the inspection but before the open
-/// must not get that link followed and its target accepted as save data.
+/// a symlink swapped in after the inspection but before the open must not be
+/// followed and its target accepted as save data. The swap runs at exactly
+/// that point through `open_for_read_with`, so the check is deterministic.
 #[cfg(unix)]
 #[test]
 fn a_save_path_swapped_after_inspection_is_still_not_followed() {
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Arc;
     let dir = TempDir::new("read-swap");
     let target = dir.join("link-target");
     let (store, _, _) = saved_store();
     SaveFile::at(&target).write(&store).unwrap();
     let path = dir.join(SAVE_FILE_NAME);
-    let stop = Arc::new(AtomicBool::new(false));
-    let swapper = {
-        let (stop, path, target) = (Arc::clone(&stop), path.clone(), target.clone());
-        let alias_stage = dir.join("stage-alias");
-        let plain_stage = dir.join("stage-plain");
-        std::thread::spawn(move || {
-            while !stop.load(Ordering::Relaxed) {
-                drop(std::fs::remove_file(&alias_stage));
-                if std::os::unix::fs::symlink(&target, &alias_stage).is_ok() {
-                    drop(std::fs::rename(&alias_stage, &path));
-                }
-                if std::fs::write(&plain_stage, [0u8; 10]).is_ok() {
-                    drop(std::fs::rename(&plain_stage, &path));
-                }
-            }
-        })
-    };
-    let file = SaveFile::at(&path);
-    let mut followed = false;
-    for _ in 0..200_000 {
-        if matches!(file.read(), Ok(Some(_))) {
-            followed = true;
-            break;
-        }
+    // A plain file passes the up-front inspection.
+    std::fs::write(&path, [0u8; 10]).unwrap();
+    let swapped = std::cell::Cell::new(false);
+    let result = SaveFile::at(&path).open_for_read_with(|| {
+        std::fs::remove_file(&path).unwrap();
+        std::os::unix::fs::symlink(&target, &path).unwrap();
+        swapped.set(true);
+    });
+    assert!(
+        swapped.get(),
+        "the hook never ran, so the swap window was not exercised"
+    );
+    match result {
+        Err(SaveFileError::SavePathIsAlias { path: refused }) => assert_eq!(refused, path),
+        other => panic!(
+            "a symlink swapped in after the inspection must be refused as an alias, got {other:?}"
+        ),
     }
-    stop.store(true, Ordering::Relaxed);
-    swapper.join().unwrap();
-    assert!(!followed, "a symlink swapped in after the inspection was followed and its target accepted as save data, so the refusal at {} is bypassable", path.display());
 }
