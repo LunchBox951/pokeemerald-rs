@@ -3,8 +3,9 @@
 //! The reader's own logic is the check of `sTextWindowPalettes`, so the
 //! cases are a table that agrees with the profile, one whose first bank is
 //! not the message box's colours, one whose `text_pal*` banks are not
-//! where the profile says, a profile missing one of the five, and a table
-//! addressed past the image.
+//! where the profile says, a profile missing one of the five, a bank root
+//! recorded with fifteen colours (narrow) or seventeen (oversized), and a
+//! table addressed past the image.
 
 use pack_format::{parse_directory, DirectoryEntry, PackWriter};
 
