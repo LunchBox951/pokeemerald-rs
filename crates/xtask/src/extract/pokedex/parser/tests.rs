@@ -660,3 +660,15 @@ fn redefined_or_undefined_count_aliases_are_refused() {
         );
     }
 }
+
+#[test]
+fn redefined_or_undefined_dex_constants_are_refused() {
+    for extra in [
+        "#define NATIONAL_DEX_MON_1 2\n#define NATIONAL_DEX_MON_2 1\n",
+        "#undef NATIONAL_DEX_MON_1\n",
+    ] {
+        let mut f = fixture();
+        replace_once(&mut f.constants, "#endif", &format!("{extra}#endif"));
+        assert!(f.parse().is_err(), "override accepted: {extra}");
+    }
+}

@@ -475,9 +475,18 @@ fn parse_constants(text: &str) -> Result<Constants> {
         let (Some(&directive), Some(&name)) = (words.first(), words.get(1)) else {
             continue;
         };
-        if !matches!(directive, "define" | "undef")
-            || !COUNT_ALIASES.iter().any(|(alias, _, _)| *alias == name)
-        {
+        if !matches!(directive, "define" | "undef") {
+            continue;
+        }
+        // Redefining or undefining a declared constant would change its identity.
+        if values.contains_key(name) {
+            return Err(PokedexSourceError::Malformed {
+                source: PokedexSource::Constants,
+                line: token.line,
+                expected: "no preprocessor override of a National Dex constant",
+            });
+        }
+        if !COUNT_ALIASES.iter().any(|(alias, _, _)| *alias == name) {
             continue;
         }
         // A count alias must be defined once as `#define NAME CONSTANT`.
