@@ -498,6 +498,78 @@ fn cleanup_refuses_to_unlink_a_file_swapped_in_after_the_listing() {
     assert_eq!(kept.unwrap(), b"keep me");
 }
 
+/// Root bypasses mode bits, so the unreadable-directory cases cannot occur.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn running_as_root() -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    std::fs::metadata("/proc/self").is_ok_and(|meta| meta.uid() == 0)
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[test]
+fn cleanup_recovers_engine_created_unreadable_directories() {
+    use std::os::unix::fs::PermissionsExt as _;
+    if running_as_root() {
+        eprintln!("skipped: root ignores directory modes, so 0333 stays readable");
+        return;
+    }
+    let base = private_base("cleanup-unreadable");
+    let root = base.join("root");
+    let deep = root.join("save").join("deep");
+    std::fs::create_dir_all(&deep).unwrap();
+    std::fs::write(deep.join("x.sav"), b"x").unwrap();
+    std::fs::write(root.join("save").join("a.sav"), b"a").unwrap();
+    let set = |path: &Path, mode| {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    };
+    set(&root.join("save").join("a.sav"), 0o222);
+    set(&deep, 0o333);
+    set(&root.join("save"), 0o333);
+    let result = remove_contents(&std::fs::File::open(&root).unwrap(), &mut |_| {});
+    let left = std::fs::read_dir(&root).map(Iterator::count);
+    let _ = std::fs::remove_dir_all(&base);
+    result.unwrap();
+    assert_eq!(left.unwrap(), 0, "the unreadable tree is fully removed");
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[test]
+fn cleanup_never_chmods_an_unreadable_directory_swapped_in_after_the_listing() {
+    use std::os::unix::fs::PermissionsExt as _;
+    if running_as_root() {
+        eprintln!("skipped: root ignores directory modes, so 0333 stays readable");
+        return;
+    }
+    let base = private_base("cleanup-unreadable-swap");
+    let root = base.join("root");
+    std::fs::create_dir_all(root.join("listed")).unwrap();
+    std::fs::set_permissions(root.join("listed"), std::fs::Permissions::from_mode(0o333)).unwrap();
+    let elsewhere = base.join("elsewhere");
+    std::fs::create_dir(&elsewhere).unwrap();
+    std::fs::set_permissions(&elsewhere, std::fs::Permissions::from_mode(0o333)).unwrap();
+    let result = remove_contents(&std::fs::File::open(&root).unwrap(), &mut |name| {
+        if name.to_bytes() == b"listed" {
+            std::fs::rename(root.join("listed"), base.join("aside")).unwrap();
+            std::fs::rename(&elsewhere, root.join("listed")).unwrap();
+        }
+    });
+    let mode = std::fs::metadata(root.join("listed"))
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o7777;
+    for dir in [root.join("listed"), base.join("aside")] {
+        let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+    }
+    let _ = std::fs::remove_dir_all(&base);
+    let error = result.expect_err("a swapped-in directory must not be recovered");
+    assert!(
+        error.to_string().contains("replaced during cleanup"),
+        "{error}"
+    );
+    assert_eq!(mode, 0o333, "a foreign directory is never chmod-ed");
+}
+
 #[cfg(windows)]
 #[test]
 fn windows_cleanup_empties_the_held_scratch_and_leaves_a_sibling_untouched() {
