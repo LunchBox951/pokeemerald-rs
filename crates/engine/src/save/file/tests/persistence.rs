@@ -447,13 +447,11 @@ fn reading_a_fifo_in_the_files_place_fails_rather_than_waiting_for_a_writer() {
 
 /// The save path's refusal must survive an entry that changes underneath it:
 /// a symlink swapped in after the inspection but before the open must not be
-/// followed and its target accepted as save data. The swap runs through the
-/// `after_inspection_seam` at exactly that point, so the check is
-/// deterministic.
+/// followed and its target accepted as save data. The swap runs at exactly
+/// that point through `open_for_read_with`, so the check is deterministic.
 #[cfg(unix)]
 #[test]
 fn a_save_path_swapped_after_inspection_is_still_not_followed() {
-    use super::super::after_inspection_seam;
     let dir = TempDir::new("read-swap");
     let target = dir.join("link-target");
     let (store, _, _) = saved_store();
@@ -461,17 +459,15 @@ fn a_save_path_swapped_after_inspection_is_still_not_followed() {
     let path = dir.join(SAVE_FILE_NAME);
     // A plain file passes the up-front inspection.
     std::fs::write(&path, [0u8; 10]).unwrap();
-    after_inspection_seam::arm({
-        let (path, target) = (path.clone(), target.clone());
-        move || {
-            std::fs::remove_file(&path).unwrap();
-            std::os::unix::fs::symlink(&target, &path).unwrap();
-        }
+    let swapped = std::cell::Cell::new(false);
+    let result = SaveFile::at(&path).open_for_read_with(|| {
+        std::fs::remove_file(&path).unwrap();
+        std::os::unix::fs::symlink(&target, &path).unwrap();
+        swapped.set(true);
     });
-    let result = SaveFile::at(&path).read();
     assert!(
-        !after_inspection_seam::is_armed(),
-        "the seam never ran, so the swap window was not exercised"
+        swapped.get(),
+        "the hook never ran, so the swap window was not exercised"
     );
     match result {
         Err(SaveFileError::SavePathIsAlias { path: refused }) => assert_eq!(refused, path),
