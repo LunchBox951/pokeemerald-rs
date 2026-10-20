@@ -77,6 +77,7 @@ pub mod jasc_pal;
 mod layouts_json;
 pub(crate) mod midi;
 pub mod png;
+mod pokedex;
 mod pokedex_graphics;
 mod publish;
 pub(crate) mod scope;
