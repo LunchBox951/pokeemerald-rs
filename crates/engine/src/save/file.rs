@@ -384,6 +384,8 @@ impl SaveFile {
     fn open_for_read(&self) -> Result<Option<std::fs::File>, SaveFileError> {
         refuse_an_unusable_entry(&self.path)
             .map_err(|unusable| self.unusable_entry_error(unusable))?;
+        #[cfg(test)]
+        after_inspection_seam::run();
 
         let mut options = std::fs::OpenOptions::new();
         options.read(true);
@@ -623,6 +625,34 @@ impl SaveFile {
 pub struct SaveFileGuard {
     _lock_file: std::fs::File,
     _directory: std::sync::Arc<LockedDirectory>,
+}
+
+/// Test-only sequencing seam: lets a test run code on the reading thread
+/// after `open_for_read`'s up-front inspection and before its open, so the
+/// swap window is hit deterministically instead of by racing a thread.
+#[cfg(test)]
+pub(crate) mod after_inspection_seam {
+    use std::cell::RefCell;
+
+    thread_local! {
+        static HOOK: RefCell<Option<Box<dyn FnOnce()>>> = const { RefCell::new(None) };
+    }
+
+    /// Arms `hook` to run once, on this thread, at the next inspection gap.
+    pub(crate) fn arm(hook: impl FnOnce() + 'static) {
+        HOOK.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+    }
+
+    /// Whether an armed hook is still waiting to run.
+    pub(crate) fn is_armed() -> bool {
+        HOOK.with(|slot| slot.borrow().is_some())
+    }
+
+    pub(super) fn run() {
+        if let Some(hook) = HOOK.with(|slot| slot.borrow_mut().take()) {
+            hook();
+        }
+    }
 }
 
 #[cfg(test)]
