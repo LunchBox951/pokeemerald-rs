@@ -170,8 +170,6 @@ fn a_downward_note_on_write_at_level_zero_leaves_hardware_dead() {
 
 #[test]
 fn centred_goal_thirty_one_decay_falls_with_the_hardware_envelope_between_writes() {
-    // The frame right after a write is already one hardware step quieter,
-    // not still holding the write frame's loudness.
     let level_15_peak = square_peak_at_level(130, 15);
     let level_14_peak = square_peak_at_level(121, 14);
 
@@ -235,7 +233,7 @@ fn frame_peak(voice: &mut CgbVoice) -> i32 {
 
 #[test]
 fn live_volume_write_mid_decay_restarts_the_hardware_envelope_timer() {
-    // A live volume write retriggers NRx4 (`m4a.c:1222`), which reloads the
+    // A live volume write retriggers NRx4 (`m4a.c:1223`), which reloads the
     // hardware envelope timer (`mgba/src/gb/audio.c:856-859`) while the
     // software counter keeps its phase.
     let level_15_peak = square_peak_at_level(130, 15);
@@ -301,8 +299,6 @@ fn live_volume_write_mid_decay_restarts_the_hardware_envelope_timer() {
 
 #[test]
 fn centred_goal_thirty_one_attack_climbs_with_the_hardware_envelope_then_freezes_at_fifteen() {
-    // The hardware envelope climbs while the level is in range and stays at
-    // level 15's loudness once the level exceeds it.
     let paced_attack = CgbAdsr {
         attack: 1,
         decay: 1,
@@ -356,8 +352,6 @@ fn centred_goal_thirty_one_attack_climbs_with_the_hardware_envelope_then_freezes
 
 #[test]
 fn centred_goal_thirty_one_decay_freezes_at_zero_before_software_reaches_it() {
-    // Hardware goes silent well before the software envelope itself reaches
-    // zero.
     let paced_decay_to_silence = CgbAdsr {
         attack: 0,
         decay: 1,
