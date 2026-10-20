@@ -14,6 +14,8 @@ use pack_format::PackWriter;
 
 const SIDE: u32 = 64;
 const COLORS: usize = 16;
+/// The PNG bit depth the typed accessor requires of every battler image.
+const BIT_DEPTH: u8 = 4;
 
 /// Extracts every starter's front and back images and both palettes.
 pub(super) fn extract_battlers(
@@ -50,6 +52,12 @@ fn extract_battler(
                     "is {}x{}: expected {SIDE}x{SIDE}",
                     image.width, image.height
                 ),
+            ));
+        }
+        if image.bit_depth != BIT_DEPTH {
+            return Err(mismatch(
+                &path,
+                format!("is {}-bit: expected {BIT_DEPTH}-bit", image.bit_depth),
             ));
         }
         if let Some(&pixel) = image
@@ -101,6 +109,7 @@ mod tests {
 
     use assets::{AssetPack, BattlerDirection, PaletteVariant, SpeciesId};
 
+    use super::super::png::tests::indexed_png_from_raw_with_plte;
     use super::super::{extract_to, repo_root, upstream_present};
     use super::extract_battlers;
     use crate::extract::scope::BATTLERS;
@@ -187,6 +196,51 @@ mod tests {
         assert_eq!(writer.len(), 0);
 
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A 64x64 all-zero image at `bit_depth` with a 16-colour palette.
+    fn battler_png(bit_depth: u8) -> Vec<u8> {
+        let row_bytes = (64 * usize::from(bit_depth)).div_ceil(8);
+        let mut raw = Vec::new();
+        for _ in 0..64 {
+            raw.push(0);
+            raw.resize(raw.len() + row_bytes, 0);
+        }
+        indexed_png_from_raw_with_plte(bit_depth, 64, 64, &raw, &[7; 48])
+    }
+
+    #[test]
+    fn images_of_the_wrong_bit_depth_are_rejected_without_queuing_anything() {
+        let source = BATTLERS[0];
+        let palette = "JASC-PAL\n0100\n16\n".to_string() + &"0 0 0\n".repeat(16);
+        for bad_file in ["front.png", "back.png"] {
+            for wrong in [2u8, 8] {
+                let dir = scratch_dir("bit-depth");
+                let upstream = dir.join("graphics/pokemon").join(source.name);
+                std::fs::create_dir_all(&upstream).unwrap();
+                std::fs::write(upstream.join("normal.pal"), &palette).unwrap();
+                std::fs::write(upstream.join("shiny.pal"), &palette).unwrap();
+                for file in ["front.png", "back.png"] {
+                    let depth = if file == bad_file { wrong } else { 4 };
+                    std::fs::write(upstream.join(file), battler_png(depth)).unwrap();
+                }
+                let mut writer = PackWriter::new();
+
+                let err = extract_battlers(&dir, &mut writer).unwrap_err();
+                match &err {
+                    ExtractError::BattlerAssetMismatch { path, detail } => {
+                        assert_eq!(path, &upstream.join(bad_file));
+                        assert!(
+                            detail.contains(&format!("{wrong}-bit")) && detail.contains("4-bit"),
+                            "{bad_file} at {wrong}: {detail}"
+                        );
+                    }
+                    other => panic!("{bad_file} at {wrong}-bit: wrong error {other:?}"),
+                }
+                assert_eq!(writer.len(), 0);
+                std::fs::remove_dir_all(dir).unwrap();
+            }
+        }
     }
 
     #[test]

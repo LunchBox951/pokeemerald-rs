@@ -67,6 +67,18 @@ pub(super) fn route_103_phase(player: PlayerState) -> OverworldPhase {
     )
 }
 
+/// [`route_103_phase`] that retains the checkout pack, for the real-pack
+/// tests whose deferred dialog work must read the repository's own extract.
+pub(super) fn repo_route_103_phase(player: PlayerState) -> OverworldPhase {
+    OverworldPhase::for_test_with_source(
+        crate::overworld::test_support::synthetic_scene(80, 16),
+        ROUTE_103,
+        player,
+        None,
+        crate::pack_source::PackSource::Repo,
+    )
+}
+
 /// A battle-ready lead of `species`/`level` with a single `move_id`, mirroring
 /// `route103_rival_test_support::lead`.
 pub(super) fn lead(species: u16, level: u8, move_id: u16) -> BattlePokemon {

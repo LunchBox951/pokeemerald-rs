@@ -245,6 +245,27 @@ fn the_start_menu_does_not_open_over_an_open_dialog() {
     );
 }
 
+/// `advance_start_menu_frame` drives only an already-open menu: with none
+/// open, even a `START` press that `start_menu_may_open` admits is left to
+/// `step` -- the driver returns `false` and opens nothing.
+#[test]
+fn the_menu_frame_driver_never_opens_a_menu_itself() {
+    let temp = TempSave::new("driver-never-opens");
+    let mut save_slot = temp.slot();
+
+    let mut phase = new_game_phase();
+    // A pack-free menu build, so the removed fresh-open branch would have
+    // opened a menu here rather than failing its pack load.
+    phase.synthetic_start_menu = super::overworld_phase::SyntheticStartMenu::Builds;
+    settle(&mut phase);
+    assert!(
+        phase.start_menu_may_open(pressed(Buttons::START), false),
+        "setup: a fresh START is admitted on a settled field"
+    );
+    assert!(!phase.advance_start_menu_frame(pressed(Buttons::START), &mut save_slot));
+    assert!(phase.start_menu().is_none());
+}
+
 /// The start menu freezes the overworld while it is open, the same way a
 /// message box does: a held direction moves nobody until the menu closes,
 /// and `EXIT` hands field control back without writing anything.
