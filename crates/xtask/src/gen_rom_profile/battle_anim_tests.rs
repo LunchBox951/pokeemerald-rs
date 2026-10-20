@@ -464,3 +464,23 @@ fn a_fully_reachable_catalog_of_the_maximum_program_count_does_not_panic() {
     let located = result.expect("locate panicked instead of returning");
     located.expect("a consistent maximum-size catalog locates");
 }
+
+#[test]
+fn a_table_ending_at_the_rom_end_is_located() {
+    let offsets = program_offsets();
+    let special = AnimationTable::Special;
+    let len = usize::from(special.len()) * 4;
+    let end = RomFixture::new().finish().len() - len;
+    // Wipe the planted Special table and plant it flush with the ROM's end,
+    // the last offset a complete table can start at.
+    let mut rom = full_rom().write(TABLES[3], &vec![0u8; len]);
+    for index in 0..special.len() {
+        let program = usize::from(slot_program(special, index));
+        rom = rom.write_ptr(
+            end + usize::from(index) * 4,
+            GbaPtr::at(bus(offsets[program])),
+        );
+    }
+    let (plan, _) = locate_in("ba-table-at-end", rom, pack(&catalog())).expect("located");
+    assert_eq!(plan.tables[3], bus(end));
+}

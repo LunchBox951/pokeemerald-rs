@@ -380,10 +380,11 @@ fn locate_tables(
     for (index, table) in AnimationTable::ALL.into_iter().enumerate() {
         let symbol = TABLE_SYMBOLS[index];
         let slots = &expected.slots[index];
-        let candidates: Vec<usize> = (0..ctx.rom.len().saturating_sub(slots.len() * POINTER_BYTES))
-            .step_by(POINTER_BYTES)
-            .filter(|&offset| table_at(ctx.rom, expected, slots, offset))
-            .collect();
+        let candidates: Vec<usize> =
+            (0..=ctx.rom.len().saturating_sub(slots.len() * POINTER_BYTES))
+                .step_by(POINTER_BYTES)
+                .filter(|&offset| table_at(ctx.rom, expected, slots, offset))
+                .collect();
         let [offset] = candidates.as_slice() else {
             return Err(mismatch(
                 symbol,
