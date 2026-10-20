@@ -216,11 +216,18 @@ fn lex(source: PokedexSource, text: &str) -> Result<Vec<Token>> {
                 let mut body = String::new();
                 i += 1;
                 while i < chars.len() && chars[i] != '\n' {
-                    body.push(chars[i]);
-                    i += 1;
-                }
-                if let Some(cut) = body.find("//") {
-                    body.truncate(cut);
+                    if chars[i] == '/' && chars.get(i + 1) == Some(&'/') {
+                        while i < chars.len() && chars[i] != '\n' {
+                            i += 1;
+                        }
+                    } else if chars[i] == '/' && chars.get(i + 1) == Some(&'*') {
+                        // A comment is one space, as in the C preprocessor.
+                        i = skip_block_comment(source, &chars, i, &mut line)?;
+                        body.push(' ');
+                    } else {
+                        body.push(chars[i]);
+                        i += 1;
+                    }
                 }
                 tokens.push(Token {
                     tok: Tok::Directive(body.trim().to_owned()),
