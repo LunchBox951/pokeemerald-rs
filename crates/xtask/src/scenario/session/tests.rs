@@ -532,6 +532,90 @@ fn cleanup_recovers_engine_created_unreadable_directories() {
     assert_eq!(left.unwrap(), 0, "the unreadable tree is fully removed");
 }
 
+/// Set in the child [`dropping_a_session_removes_save_media_created_under_an_owner_stripping_umask`]
+/// re-runs itself as, so only that child changes its own umask.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+const SAVE_UMASK_CHILD: &str = "POKEEMERALD_SCENARIO_SAVE_UMASK_CHILD";
+
+/// The engine creates `save/` and its save file by pathname under the
+/// process umask (`App::new_headless_real_at` through `SaveSlot::at_path`),
+/// so under 0o444 they are 0o333 and 0o222. `create_dir_all` and `write`
+/// under that same umask create the same media without a real pack; dropping
+/// the session must then remove the whole scratch tree.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[test]
+fn dropping_a_session_removes_save_media_created_under_an_owner_stripping_umask() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let name = "scenario::session::tests::\
+                dropping_a_session_removes_save_media_created_under_an_owner_stripping_umask";
+    if std::env::var_os(SAVE_UMASK_CHILD).is_none() {
+        if running_as_root() {
+            eprintln!("skipped: root ignores directory modes, so 0333 stays readable");
+            return;
+        }
+        // The umask is process-wide, so the 0o444 one is set only in a
+        // re-run of this test binary that runs this test alone.
+        let output = std::process::Command::new("/bin/sh")
+            .args(["-c", "umask 0444 && exec \"$0\" \"$@\""])
+            .arg(std::env::current_exe().unwrap())
+            .args(["--exact", name, "--test-threads=1"])
+            .env(SAVE_UMASK_CHILD, "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains("1 passed"),
+            "umask 0444 child failed:\n{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let base = private_base("save-umask");
+    let source = base.join("source.pack");
+    std::fs::write(&source, b"not a real pack").unwrap();
+    std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let session = Session::new_in(&PackSelection::Prepared(source), &base).unwrap();
+    let scratch = session.scratch.path.clone();
+    let save_dir = session.save.parent().unwrap().to_path_buf();
+    std::fs::create_dir_all(save_dir.join("deep")).unwrap();
+    std::fs::write(save_dir.join("deep").join("x.sav"), b"x").unwrap();
+    std::fs::write(&session.save, b"save").unwrap();
+    let mode = |path: &Path| {
+        std::fs::symlink_metadata(path)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o7777
+    };
+    let modes = (
+        mode(&save_dir),
+        mode(&save_dir.join("deep")),
+        mode(&session.save),
+    );
+    drop(session);
+    let removed = !scratch.exists();
+    // Leave nothing behind even if cleanup failed: give the owner access back
+    // to every directory the umask stripped before removing the base.
+    for dir in [
+        base.clone(),
+        scratch.clone(),
+        save_dir.clone(),
+        save_dir.join("deep"),
+    ] {
+        let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+    }
+    std::fs::remove_dir_all(&base).unwrap();
+    assert_eq!(
+        modes,
+        (0o333, 0o333, 0o222),
+        "the umask stripped owner read"
+    );
+    assert!(
+        removed,
+        "dropping the session removes the whole scratch tree"
+    );
+}
+
 #[cfg(any(target_os = "linux", target_os = "android"))]
 #[test]
 fn cleanup_never_chmods_an_unreadable_directory_swapped_in_after_the_listing() {
