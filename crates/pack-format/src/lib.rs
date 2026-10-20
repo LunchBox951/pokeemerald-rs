@@ -2,7 +2,7 @@
 //! and C): the one owner of the layout `cargo xtask extract` and
 //! `pokeemerald-rs --import-rom` write and `crates/assets` reads.
 //!
-//! # Format (version 10)
+//! # Format (version 11)
 //!
 //! All multi-byte integers are little-endian. Layout, in order:
 //!

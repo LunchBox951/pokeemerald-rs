@@ -1,6 +1,6 @@
-//! Score-and-draw fixtures for the `AI_CheckBadMove` prologue, the audited
-//! no-`if_effect` rows (`data/battle_ai_scripts.s:51-104`), and the
-//! Paralyze, Confuse and Focus Energy handlers (`:382-403`).
+//! Score and draw-budget fixtures for the `AI_CheckBadMove` prologue, the
+//! scoreable effects with no `if_effect` row, and the Paralyze, Confuse and
+//! Focus Energy handlers.
 
 use super::{
     choose_trainer_action, ensure_scoreable, fold_ai_type_effectiveness, score_bad_move,
@@ -57,14 +57,16 @@ fn draws() -> SequenceRng {
     SequenceRng::new([MAX_DAMAGE_DRAW; MAX_MON_MOVES])
 }
 
-/// Runs only `AI_CheckBadMove` on slot 0 and returns its score; the four
-/// simulated-damage draws are the only ones consumed.
 fn bad_move_score(move_id: MoveId, target: &BattlePokemon) -> i8 {
     let user = mon(TREECKO, &[move_id]);
     let mut rng = draws();
     let mut scores = MoveScores::initialize(&user, &mut rng);
     score_bad_move(&Dex::new(), &mut scores, 0, move_id, &user, target).unwrap();
-    assert_eq!(rng.draws(), MAX_MON_MOVES, "the prologue never draws");
+    assert_eq!(
+        rng.draws(),
+        MAX_MON_MOVES,
+        "only the simulated-damage draws are consumed"
+    );
     scores.values[0]
 }
 
@@ -90,7 +92,6 @@ fn power_gate_skips_chart_and_ability_checks_for_unranked_moves() {
     let gastly = mon(GASTLY, &[MoveId::POUND]);
     let shedinja = mon(SHEDINJA, &[MoveId::POUND]);
     let jolteon = mon(JOLTEON, &[MoveId::POUND]);
-    // Power 0 (Splash, Charge) and power 1 (Dragon Rage) are `MOVE_POWER_OTHER`.
     assert_eq!(bad_move_score(MoveId::SPLASH, &gastly), FULL);
     assert_eq!(bad_move_score(MoveId::SPLASH, &shedinja), FULL);
     assert_eq!(bad_move_score(MoveId::CHARGE, &jolteon), FULL);
@@ -119,7 +120,6 @@ fn water_absorb_cancels_water_with_minus_twelve() {
 fn flash_fire_cancels_fire_with_minus_twelve() {
     let flareon = mon(FLAREON, &[MoveId::POUND]);
     assert_eq!(flareon.ability(), AbilityId::FLASH_FIRE);
-    // Ember's BURN_HIT is not an admitted effect, so drive the prologue.
     assert_eq!(prologue(MoveId::EMBER, &flareon), (true, MINUS_12));
     assert_eq!(prologue(MoveId::WATER_GUN, &flareon), (false, FULL));
 }
@@ -144,10 +144,12 @@ fn levitate_cancels_ground_with_minus_ten() {
 fn soundproof_runs_after_the_checks_and_ignores_the_power_gate() {
     let mut mime = mon(MR_MIME, &[MoveId::POUND]);
     assert_eq!(bad_move_score(MoveId::GROWL, &mime), MINUS_10);
-    // At the stage floor the Growl guard would add a second -10; the
-    // Soundproof termination comes first.
     mime.stages_mut().attack = StatStage::MIN;
-    assert_eq!(bad_move_score(MoveId::GROWL, &mime), MINUS_10);
+    assert_eq!(
+        bad_move_score(MoveId::GROWL, &mime),
+        MINUS_10,
+        "Soundproof ends the script before the stage-floor guard can penalise again"
+    );
     assert_eq!(bad_move_score(MoveId::HYPER_VOICE, &mime), FULL);
 }
 
@@ -178,10 +180,37 @@ fn every_no_row_effect_is_unchanged_after_a_passing_prologue() {
 
 #[test]
 fn the_audited_row_set_is_exact() {
-    // ABSORB, POISON_HIT, ALWAYS_HIT, MULTI_HIT, DRAGON_RAGE, HIGH_CRITICAL,
-    // SPEED_DOWN_HIT, EVASION_DOWN_HIT, CONFUSE_HIT, VITAL_THROW, SPLASH,
-    // QUICK_ATTACK, CHARGE.
-    let effects = [3, 2, 17, 29, 41, 43, 70, 74, 76, 78, 85, 103, 174].map(MoveEffect);
+    const ABSORB: u8 = 3;
+    const POISON_HIT: u8 = 2;
+    const ALWAYS_HIT: u8 = 17;
+    const MULTI_HIT: u8 = 29;
+    const DRAGON_RAGE: u8 = 41;
+    const HIGH_CRITICAL: u8 = 43;
+    const SPEED_DOWN_HIT: u8 = 70;
+    const EVASION_DOWN_HIT: u8 = 74;
+    const CONFUSE_HIT: u8 = 76;
+    const VITAL_THROW: u8 = 78;
+    const SPLASH: u8 = 85;
+    const QUICK_ATTACK: u8 = 103;
+    const CHARGE: u8 = 174;
+    const SLEEP: u8 = 1;
+    const BURN_HIT: u8 = 4;
+    let effects = [
+        ABSORB,
+        POISON_HIT,
+        ALWAYS_HIT,
+        MULTI_HIT,
+        DRAGON_RAGE,
+        HIGH_CRITICAL,
+        SPEED_DOWN_HIT,
+        EVASION_DOWN_HIT,
+        CONFUSE_HIT,
+        VITAL_THROW,
+        SPLASH,
+        QUICK_ATTACK,
+        CHARGE,
+    ]
+    .map(MoveEffect);
     let raw: Vec<u8> = effects.iter().map(|effect| effect.0).collect();
     let mut expected = UNCHANGED_AFTER_PROLOGUE_EFFECTS.to_vec();
     expected.sort_unstable();
@@ -194,9 +223,8 @@ fn the_audited_row_set_is_exact() {
             Some(ScoreableEffect::UnchangedAfterPrologue(effect))
         );
     }
-    // An unlisted effect (Sleep, Burn Hit) is never an implicit no-op.
-    assert_eq!(ScoreableEffect::from_raw(MoveEffect(1)), None);
-    assert_eq!(ScoreableEffect::from_raw(MoveEffect(4)), None);
+    assert_eq!(ScoreableEffect::from_raw(MoveEffect(SLEEP)), None);
+    assert_eq!(ScoreableEffect::from_raw(MoveEffect(BURN_HIT)), None);
 }
 
 #[test]
@@ -252,8 +280,6 @@ fn admission_is_flag_aware() {
             "{move_id:?}"
         );
     }
-    // Charge's doubled damage is not in the simulated-damage estimate, which
-    // only TRY_TO_FAINT reads; CHECK_VIABILITY has no Charge branch.
     assert_eq!(
         ensure_scoreable(&dex, MoveId::CHARGE, only_cbm.union(AiFlags::TRY_TO_FAINT)),
         Err(BattleError::UnscoreableMoveEffect(MoveId::CHARGE))
@@ -320,7 +346,6 @@ fn confuse_hit_keeps_the_bad_move_score_and_draw_budget() {
 fn chooser_draws_four_damage_rolls_and_the_tie_break_only() {
     let enemy = mon(TREECKO, &[MoveId::SPLASH, MoveId::SLASH]);
     let player = mon(GASTLY, &[MoveId::POUND]);
-    // Slash is chart-immune (-10); Splash is unranked and untouched.
     let mut rng = SequenceRng::new([MAX_DAMAGE_DRAW, 0, 0, 0, 1]);
     let action = choose_trainer_action(
         &Dex::new(),
@@ -364,14 +389,12 @@ fn dual_type_folding_follows_chart_order_not_defender_slot_order() {
         electric([Type::Flying, Type::Ground])
     );
     assert_eq!(electric([Type::Ground, Type::Flying]), 1);
-    // Immune Ground then non-immune Flying: a later non-immune row lifts the folded zero back to one.
     let ground_first = fold_ai_type_effectiveness(
         AI_EFFECTIVENESS_NEUTRAL,
         Type::Ground,
         [Type::Flying, Type::Water],
     );
     assert_eq!(ground_first, 0);
-    // A single type folds once.
     assert_eq!(
         fold_ai_type_effectiveness(
             AI_EFFECTIVENESS_NEUTRAL,
@@ -400,10 +423,12 @@ fn confused(species: SpeciesId) -> BattlePokemon {
 fn paralysis_type_immunity_ends_at_one_minus_ten() {
     let sandshrew = mon(SANDSHREW, &[MoveId::POUND]);
     assert_eq!(bad_move_score(MoveId::THUNDER_WAVE, &sandshrew), MINUS_10);
-    // `Score_Minus10` ends the script, so an already-paralysed immune target
-    // is not charged again (`data/battle_ai_scripts.s:397-398`).
     let paralysed = with_status(SANDSHREW, Status1::Paralysed);
-    assert_eq!(bad_move_score(MoveId::THUNDER_WAVE, &paralysed), MINUS_10);
+    assert_eq!(
+        bad_move_score(MoveId::THUNDER_WAVE, &paralysed),
+        MINUS_10,
+        "an already-paralysed immune target is penalised once"
+    );
     let gastly = mon(GASTLY, &[MoveId::POUND]);
     assert_eq!(bad_move_score(MoveId::GLARE, &gastly), MINUS_10);
 }
@@ -438,9 +463,11 @@ fn confusion_scores_minus_five_distinct_from_own_tempo_minus_ten() {
             FULL
         );
         assert_eq!(bad_move_score(move_id, &confused(MUDKIP)), MINUS_5);
-        // Confusion is tested before the ability read, and Confuse has no
-        // type check, so a Ghost move still scores against a Normal target.
-        assert_eq!(bad_move_score(move_id, &mon(DITTO, &[MoveId::POUND])), FULL);
+        assert_eq!(
+            bad_move_score(move_id, &mon(DITTO, &[MoveId::POUND])),
+            FULL,
+            "Confuse has no type check, so a Ghost move still scores against a Normal target"
+        );
     }
 }
 
@@ -489,18 +516,19 @@ fn active_focus_energy_on_the_user_scores_minus_ten() {
     assert_eq!(score(&user), FULL);
     user.volatiles_mut().set_focus_energy();
     assert_eq!(score(&user), MINUS_10);
-    // The target's own latch does not matter.
     let mut latched_target = mon(MUDKIP, &[MoveId::POUND]);
     latched_target.volatiles_mut().set_focus_energy();
-    assert_eq!(bad_move_score(MoveId::FOCUS_ENERGY, &latched_target), FULL);
+    assert_eq!(
+        bad_move_score(MoveId::FOCUS_ENERGY, &latched_target),
+        FULL,
+        "only the user's Focus Energy latch is read"
+    );
 }
 
 #[test]
 fn status_handlers_pick_the_action_and_draw_budget() {
     let dex = Dex::new();
     let flags = AiFlags::CHECK_BAD_MOVE;
-    // Thunder Wave is -10 against Sandshrew, so Pound wins; the draws are the
-    // four simulated-damage rolls plus the tie-break.
     let enemy = mon(TREECKO, &[MoveId::THUNDER_WAVE, MoveId::POUND]);
     let mut rng = SequenceRng::new([MAX_DAMAGE_DRAW, 0, 0, 0, 0]);
     let sandshrew = mon(SANDSHREW, &[MoveId::POUND]);
@@ -508,7 +536,6 @@ fn status_handlers_pick_the_action_and_draw_budget() {
     assert_eq!(action, EnemyAction::Move(1));
     assert_eq!(rng.draws(), MAX_MON_MOVES + 1);
 
-    // Equal -5 and -5 versus the untouched move: Confuse Ray loses to Pound.
     let enemy = mon(TREECKO, &[MoveId::CONFUSE_RAY, MoveId::POUND]);
     let mut rng = SequenceRng::new([MAX_DAMAGE_DRAW, 0, 0, 0, 0]);
     let action =
@@ -580,7 +607,6 @@ fn status_handler_admission_is_flag_aware_and_exact() {
             "{move_id:?}"
         );
     }
-    // Only Focus Energy has no `AI_CheckViability` branch.
     let viability = cbm.union(AiFlags::CHECK_VIABILITY);
     assert_eq!(
         ensure_scoreable(&dex, MoveId::FOCUS_ENERGY, viability),
@@ -592,8 +618,6 @@ fn status_handler_admission_is_flag_aware_and_exact() {
             Err(BattleError::UnscoreableMoveEffect(move_id))
         );
     }
-    // Other handlers, including the Safeguard setter and the other routes into
-    // `AI_CBM_Confuse`, stay unscoreable.
     for move_id in [
         MoveId::SAFEGUARD,
         MoveId::TOXIC,

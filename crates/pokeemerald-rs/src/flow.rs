@@ -49,6 +49,7 @@
 //!   whenever a menu is open. There is deliberately **no** save on exit:
 //!   upstream writes nothing when the lid closes.
 
+use engine::save::ButtonMode;
 use engine::settings::GameSettings;
 use engine::text::render::PrinterInput;
 use platform::{ButtonState, Buttons, Frame};
@@ -229,6 +230,30 @@ pub(crate) enum AppScene {
     /// The overworld loop: the player, movable, in
     /// [`crate::new_game::SPAWN_MAP_ID`].
     Overworld(Box<OverworldPhase>),
+}
+
+impl AppScene {
+    /// The `optionsButtonMode` this scene's save carries
+    /// (`pokeemerald/src/main.c:279-288`'s source). Known gap: upstream loads
+    /// the save during the copyright screen, so L=A already applies on the
+    /// title; this port loads it only at the `Title` -> `MainMenu`
+    /// transition, so the title scenes read the default `Normal`. The intro
+    /// carries the mode in its [`NewGameOptions`] rather than a `SaveBlock2`.
+    fn button_mode(&self) -> ButtonMode {
+        match self {
+            Self::Title(_) | Self::TitleFadeWait(_) => ButtonMode::Normal,
+            Self::MainMenu(state) | Self::MainMenuHighlight(state) => {
+                state.saved.block2.options_button_mode
+            }
+            Self::MainMenuFadeWait(wait) => wait.state.saved.block2.options_button_mode,
+            Self::Options(state) => state.button_mode(),
+            Self::MainMenuFadeIn(fade) => fade.button_mode(),
+            Self::Intro(intro) | Self::OverworldLoadFailed(intro) => {
+                intro.new_game_options().button_mode
+            }
+            Self::Overworld(phase) => phase.button_mode(),
+        }
+    }
 }
 
 /// [`AppScene::MainMenu`]'s state: the rendered menu, plus the save the boot
@@ -509,6 +534,14 @@ pub(crate) fn advance_scene(
     save_slot: &mut SaveSlot,
     pack_source: crate::pack_source::PackSource,
 ) -> (AppScene, Box<Frame>) {
+    // `ReadKeys` (`pokeemerald/src/main.c:279-288`) applies the saved L=A
+    // mode before any scene reads input, so the projection lives here, ahead
+    // of dispatch, using the mode the active scene's live save carries.
+    let buttons = if scene.button_mode() == ButtonMode::LEqualsA {
+        buttons.with_l_equals_a()
+    } else {
+        buttons
+    };
     match scene {
         AppScene::Title(title) => advance_title(title, buttons),
         AppScene::TitleFadeWait(wait) => advance_title_fade_wait(wait, save_slot, &pack_source),

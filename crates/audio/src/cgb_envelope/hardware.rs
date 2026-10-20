@@ -1,16 +1,10 @@
-//! The NRx2 envelope register a live square or noise channel runs on: what a
-//! `CGB_CHANNEL_MO_VOL` store puts there, and how the APU's own timer paces
-//! it until the next one. Owns that contract for [`super::CgbEnvelope`] and
+//! The NRx2 envelope register of a live square or noise channel: the level a
+//! `CGB_CHANNEL_MO_VOL` store latches and how the APU's own timer steps it
+//! until the next store. Contract for [`super::CgbEnvelope`] and
 //! [`crate::cgb_voice`].
 
-/// The nibble upstream masks its step-time-and-direction field to before
-/// adding the volume nibble into one NRx2 byte (`m4a.c:1221`..`:1222`).
 const NRX2_ENV_FIELD_MASK: u8 = 0x0F;
-/// NRx2 bits 0-2 (`GBAudioRegisterSweep`,
-/// `mgba/include/mgba/internal/gb/audio.h:24`..`:25`).
 const NRX2_ENV_STEP_TIME_MASK: u8 = 0x07;
-/// NRx2 bit 3: upstream's `CGB_NRx2_ENV_DIR_INC`, whose `_DEC` counterpart is
-/// zero (`m4a_internal.h:84`..`:85`).
 pub(super) const NRX2_ENV_DIR_INC: u8 = 0x08;
 const NIBBLE_MASK: u8 = 0x0F;
 
@@ -24,12 +18,9 @@ pub(crate) struct HardwareEnvelopePacing {
 }
 
 impl HardwareEnvelopePacing {
-    /// Decode a store's step-time-and-direction field (`_writeEnvelope`,
-    /// `mgba/src/gb/audio.c:891`..`:893`). A zero step time is a dead
-    /// envelope rather than a slow one, whatever bit 3 says
-    /// (`_updateEnvelopeDead`, `mgba/src/gb/audio.c:948`..`:950`), so a phase
-    /// byte above 7 can pace at another period, in the other direction, or
-    /// not at all.
+    /// Decodes a store's step-time-and-direction field. A zero step time
+    /// yields `None`: the hardware treats it as a dead envelope, not a slow
+    /// one, whatever the direction bit says.
     pub(super) fn from_nrx2_step_time_and_dir(step_time_and_dir: u8) -> Option<Self> {
         let field = step_time_and_dir & NRX2_ENV_FIELD_MASK;
         let step_time = field & NRX2_ENV_STEP_TIME_MASK;
@@ -43,13 +34,10 @@ impl HardwareEnvelopePacing {
 /// The NRx2 volume nibble a live square or noise channel holds, and the
 /// hardware timer pacing it.
 ///
-/// A store latches the level and restarts the timer from that store's own
-/// step time (`m4a.c:1219`..`:1223`; `_resetEnvelope`,
-/// `mgba/src/gb/audio.c:856`..`:860`); between stores the timer steps the
-/// nibble one level in NRx2's direction and dies at 0 or 15 rather than
-/// wrapping (`_updateEnvelope`, `mgba/src/gb/audio.c:931`..`:945`). It is
-/// never the software envelope's counter: a live volume write lands mid-phase
-/// without disturbing upstream's `envelopeCounter` (`m4a_1.s:1394`..`:1400`).
+/// A store latches the level and restarts the timer; between stores the timer
+/// steps the nibble one level in NRx2's direction and stops at 0 or 15 rather
+/// than wrapping. It is independent of the software envelope's counter: a live
+/// volume write does not disturb it.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct HardwareEnvelopeVolume {
     volume: u8,
@@ -58,8 +46,8 @@ pub(crate) struct HardwareEnvelopeVolume {
 }
 
 impl HardwareEnvelopeVolume {
-    /// A fresh voice: silent, and owing the note-on store its first
-    /// `CgbSound` pass ends with (`m4a.c:993`, `:1206`..`:1226`).
+    /// A fresh voice: silent, and owing the note-on store that ends its
+    /// first pass.
     pub(crate) fn at_note_on() -> Self {
         Self {
             volume: 0,
@@ -68,12 +56,10 @@ impl HardwareEnvelopeVolume {
         }
     }
 
-    /// Settle one render frame, `iterations` software iterations long. A
-    /// frame that stores NRx2 does so once, at the pass's end after those
-    /// iterations (`m4a.c:1206`..`:1226`); any other lets the timer run.
-    /// Returns whether the timer actually stepped the nibble, as opposed to a
-    /// direct store: only a step re-resolves a noise latch
-    /// (`mgba/src/gb/audio.c:730-732`).
+    /// Settles one render frame of `iterations` software iterations. A frame
+    /// that stores NRx2 does so once, after those iterations; any other lets
+    /// the timer run. Returns whether the timer stepped the nibble rather than
+    /// a direct store, because only a step re-resolves a noise latch.
     pub(crate) fn end_frame(
         &mut self,
         iterations: u8,
@@ -90,8 +76,8 @@ impl HardwareEnvelopeVolume {
         }
     }
 
-    /// The off-write's `NR42 = 8` store (`m4a.c:873`): volume zero with no
-    /// timer, and no note-on store left owing.
+    /// The off-write's `NR42 = 8` store: volume zero, no timer, and no
+    /// note-on store left owing.
     pub(crate) fn write_off(&mut self) {
         self.volume = 0;
         self.iterations_until_step = 0;
@@ -105,8 +91,7 @@ impl HardwareEnvelopeVolume {
 
     fn write(&mut self, level: u8, pacing: Option<HardwareEnvelopePacing>) {
         self.volume = level & NIBBLE_MASK;
-        // A level already saturated in the store's own direction is dead on
-        // arrival (`_updateEnvelopeDead`, `mgba/src/gb/audio.c:948`..`:954`).
+        // A level already saturated in the store's own direction never steps.
         self.iterations_until_step = match pacing {
             Some(pacing) if !self.is_saturated_toward(pacing) => pacing.step_time,
             _ => 0,
@@ -158,10 +143,8 @@ mod tests {
 
     #[test]
     fn a_note_on_pass_arms_the_timer_only_once_it_ends() {
-        // The note-on store lands after the pass's own envelope stepping,
-        // doubling re-entry included (`m4a.c:1176`..`:1180`), so however many
-        // iterations that pass ran, it ends with a freshly armed timer and a
-        // nibble still at the level it stored.
+        // The note-on store lands after the pass's own stepping, so however
+        // many iterations ran, the pass ends with a freshly armed timer.
         for iterations in [1, 2] {
             let mut hardware = HardwareEnvelopeVolume::at_note_on();
 
