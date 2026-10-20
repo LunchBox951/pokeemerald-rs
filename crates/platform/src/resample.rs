@@ -852,14 +852,11 @@ mod tests {
 
     #[test]
     fn empty_fill_before_priming_does_not_touch_queue_or_prime() {
-        // Regression: on a never-primed resampler, a `fill` that computed
-        // its 2-frame priming drain from `self.primed` alone would run that
-        // drain for an empty `out` too. The queue here is deliberately
-        // starved to 1 sample (fewer than the 2 priming frames such a drain
-        // would take), so both symptoms are directly observable:
-        // `Consumer::fill`'s shortfall padding would count 1 underrun on a
-        // call that produced no output, and the queue would lose its 1
-        // queued sample even though nothing was emitted.
+        // A `fill` with an empty `out` must be a no-op on a never-primed
+        // resampler. The queue holds exactly the one sample priming would
+        // load as `prev`, so a priming load on an empty call is observable:
+        // the sample would be consumed with nothing emitted, and `primed`
+        // would latch.
         let (producer, consumer) = ring_buffer(16);
         assert_eq!(producer.push(&[7.0]), 1);
         let mut resampler = Resampler::new(consumer, 1, 100.0, 100, 16).unwrap();
@@ -869,12 +866,8 @@ mod tests {
         assert_eq!(resampler.underruns(), 0);
         assert!(!resampler.primed);
 
-        // Such a drain would also have latched `primed = true` with
-        // `prev = 7.0` (the one real sample it grabbed) and `next = 0.0`
-        // (silence, padded for the shortfall) — corrupting the interpolator
-        // before any real output existed. Queue the rest of the stream and
-        // run a real fill: with the empty fill correctly a no-op, priming
-        // still happens here, against the real, un-poisoned data.
+        // Queue the rest of the stream and run a real fill: priming happens
+        // here, so the first output is the 7.0 the empty fill left queued.
         assert_eq!(producer.push(&[8.0, 9.0, 10.0]), 3);
         let mut out = [0.0; 2];
         resampler.fill(&mut out);
@@ -974,9 +967,9 @@ mod tests {
         with_empty.fill(&mut first_b);
         assert_eq!(first_a, first_b);
         assert!(baseline.primed);
-        // Both queues are fully drained by the first fill (2 pushed, 2
-        // consumed for priming, 0 crossings) -- an absolute checkpoint, not
-        // just a relative one, before the empty fill is spliced in.
+        // Both queues are fully drained by the first fill (2 pushed: one
+        // loaded as `prev` by priming, one at the single crossing) -- an
+        // absolute checkpoint before the empty fill is spliced in.
         assert_eq!(producer_a.available_space(), 16);
         assert_eq!(producer_b.available_space(), 16);
 
