@@ -548,3 +548,59 @@ fn checkout_pack_composes_non_blank_deterministic_frames_for_both_selection_stat
         "DPAD_UP on the first item must not wrap"
     );
 }
+
+#[test]
+fn compose_with_palette_fades_source_colors_before_the_highlight_darkening() {
+    use rendering::{NormalPaletteFade, PaletteFadeTarget};
+
+    // Independent 5-bit black fade of white at coefficient 8: 31 + (-31 * 8 >> 4)
+    // = 15, expanded to 123.
+    let faded_white = rgb(123, 123, 123);
+
+    let scene = load_synthetic_scene();
+    let mut fade = NormalPaletteFade::begin(PaletteFadeTarget::Black);
+    while fade.bg_blend().coefficient() < 8 {
+        fade.update();
+    }
+    let fb = scene.compose_with_palette(fade.palette_stage());
+
+    assert_eq!(fb.pixel(18, 10), Some(faded_white), "selected header");
+    let unselected = fb.pixel(18, 42);
+    assert_eq!(
+        unselected,
+        Some(rendering::darken(faded_white, DARKEN_WEIGHT)),
+        "the fade runs before the darkening"
+    );
+    let darkened_then_faded = {
+        let d = rendering::darken(HEADER_TEXT_BG, DARKEN_WEIGHT);
+        let fade5 = |c: u8| {
+            let c5 = i32::from(c >> 3);
+            let f = c5 + ((-c5 * 8) >> 4);
+            u8::try_from((f << 3) | (f >> 2)).unwrap()
+        };
+        rgb(fade5(d.r), fade5(d.g), fade5(d.b))
+    };
+    assert_ne!(unselected, Some(darkened_then_faded));
+
+    let backdrop = Bgr555::from_channels(4, 4, 16).to_rgb888();
+    let faded_backdrop = |c: u8| {
+        let c5 = i32::from(c >> 3);
+        let f = c5 + ((-c5 * 8) >> 4);
+        u8::try_from((f << 3) | (f >> 2)).unwrap()
+    };
+    assert_eq!(
+        fb.pixel(5, 130),
+        Some(rgb(
+            faded_backdrop(backdrop.r),
+            faded_backdrop(backdrop.g),
+            faded_backdrop(backdrop.b)
+        ))
+    );
+
+    let unchanged = scene.compose_with_palette(rendering::PaletteStage::default());
+    assert_eq!(unchanged.pixels(), scene.compose().pixels());
+}
+
+fn rgb(r: u8, g: u8, b: u8) -> Rgb888 {
+    Rgb888 { r, g, b }
+}

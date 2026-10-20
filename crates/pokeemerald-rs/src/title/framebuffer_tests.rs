@@ -121,3 +121,94 @@ fn compose_draws_banner_segments_from_their_upstream_sheet_columns() {
     );
     assert_eq!(composed.pixel(200, 144), Some(blue), "copyright segment 4");
 }
+
+/// Independent 5-bit `BlendPalette` white fade of one channel: the channel is
+/// compressed to 5 bits, blended toward 31 by `coefficient / 16`, and expanded.
+fn white_faded_channel(channel5: u32, coefficient: u32) -> u32 {
+    let faded = channel5 + (((31 - channel5) * coefficient) >> 4);
+    (faded << 3) | (faded >> 2)
+}
+
+#[test]
+fn compose_with_palette_blends_palettes_before_the_title_alpha_blend() {
+    use rendering::{
+        Bgr555, NormalPaletteFade, Palette, PaletteFadeTarget, PaletteStage, ScreenEntry, Tilemap,
+        Tileset,
+    };
+
+    let rayquaza5 = (24u32, 8u32, 0u32);
+    let clouds5 = (31u32, 0u32, 8u32);
+    let mut colors = [Bgr555::default(); Palette::LEN];
+    colors[1] = Bgr555::from_channels(24, 8, 0);
+    colors[2] = Bgr555::from_channels(31, 0, 8);
+
+    // The left version banner's 8bpp OBJ covers (66, 50), above every BG.
+    let banner5 = (12u32, 4u32, 20u32);
+    let mut sprite_colors = [Bgr555::default(); Palette::LEN];
+    sprite_colors[1] = Bgr555::from_channels(12, 4, 20);
+
+    let map = || Tilemap::new(32, 32, vec![ScreenEntry::from_raw(0); 1024]).unwrap();
+    let scene = super::TitleScene {
+        rayquaza_tiles: Tileset::decode(BitDepth::Bpp4, &[0x11; 32]).unwrap(),
+        clouds_tiles: Tileset::decode(BitDepth::Bpp4, &[0x22; 32]).unwrap(),
+        logo_tiles: Tileset::decode(BitDepth::Bpp8, &[0u8; 64]).unwrap(),
+        palette: Palette::new(colors),
+        rayquaza_map: map(),
+        clouds_map: map(),
+        logo_map: rendering::AffineTilemap::new(32, 32, vec![0u8; 1024]).unwrap(),
+        sprite_tiles_4bpp: Tileset::decode(BitDepth::Bpp4, &[0u8; 32]).unwrap(),
+        sprite_tiles_8bpp: Tileset::decode(BitDepth::Bpp8, &[1u8; 64]).unwrap(),
+        sprite_palette: Palette::new(sprite_colors),
+    };
+
+    let unfaded = scene.compose_with_palette(0, PaletteStage::default());
+    assert_eq!(unfaded.pixel(0, 0), scene.compose(0).pixel(0, 0));
+
+    let mut fade = NormalPaletteFade::begin(PaletteFadeTarget::White);
+    while fade.bg_blend().coefficient() < 8 {
+        fade.update();
+    }
+    assert_eq!(fade.bg_blend().coefficient(), 8);
+    let mid = scene.compose_with_palette(0, fade.palette_stage());
+
+    // Title weights: 6/16 clouds over 15/16 Rayquaza, clamped to 255.
+    let blend = |clouds: u32, rayquaza: u32| {
+        u8::try_from(((6 * clouds + 15 * rayquaza) / 16).min(255)).unwrap()
+    };
+    let channel =
+        |c: u32, r: u32, y: u32| blend(white_faded_channel(c, y), white_faded_channel(r, y));
+    let expected = rgb(
+        channel(clouds5.0, rayquaza5.0, 8),
+        channel(clouds5.1, rayquaza5.1, 8),
+        channel(clouds5.2, rayquaza5.2, 8),
+    );
+    assert_eq!(expected, rgb(255, 192, 173));
+    assert_eq!(mid.pixel(0, 0), Some(expected));
+
+    // The OBJ bank runs one call behind the BG bank, so the banner is blended
+    // independently at the OBJ half's own coefficient.
+    let obj_y = u32::from(fade.obj_blend().coefficient());
+    assert_eq!(obj_y, 6);
+    let faded_obj = |c: u32| u8::try_from(white_faded_channel(c, obj_y)).unwrap();
+    let obj_expected = rgb(
+        faded_obj(banner5.0),
+        faded_obj(banner5.1),
+        faded_obj(banner5.2),
+    );
+    assert_ne!(unfaded.pixel(66, 50), Some(obj_expected));
+    assert_eq!(mid.pixel(66, 50), Some(obj_expected));
+
+    // Fading the already blended pixel compresses it to 5 bits first and
+    // lands elsewhere.
+    let blended = unfaded.pixel(0, 0).unwrap();
+    let late = rgb(
+        u8::try_from(white_faded_channel(u32::from(blended.r) >> 3, 8)).unwrap(),
+        u8::try_from(white_faded_channel(u32::from(blended.g) >> 3, 8)).unwrap(),
+        u8::try_from(white_faded_channel(u32::from(blended.b) >> 3, 8)).unwrap(),
+    );
+    assert_ne!(mid.pixel(0, 0), Some(late));
+}
+
+fn rgb(r: u8, g: u8, b: u8) -> rendering::Rgb888 {
+    rendering::Rgb888 { r, g, b }
+}

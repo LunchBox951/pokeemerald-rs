@@ -23,7 +23,7 @@ use super::error::GenRomProfileError;
 use super::images::{locate_images, ImageQuery};
 use super::pack_source::PackSource;
 use super::palettes::locate_unique;
-use super::plan::{AudioPlan, Resolution, SymbolExpectation};
+use super::plan::{AudioPlan, ReportLine, Resolution, SymbolExpectation};
 use super::search::{Lz77Search, PointerIndex, RawSearch};
 use super::Context;
 
@@ -35,6 +35,28 @@ fn scratch(name: &str) -> PathBuf {
     ));
     std::fs::create_dir_all(&dir).expect("scratch directory");
     dir
+}
+
+/// Run `lines` through [`super::cross_check`] against a map shaped like
+/// GNU ld `-Map` output, which lists linker-global symbols only: the global
+/// `gGlobalTable` sits 0x10 bytes past `table`, and nothing is listed at
+/// `table` itself because the table is a translation-unit-local `static`.
+pub(super) fn assert_survives_ld_map(name: &str, table: u32, lines: &mut [ReportLine]) {
+    let dir = scratch(name);
+    let map_path = dir.join("pokeemerald.map");
+    let map = format!(
+        ".rodata         0x{table:016x}       0x20\n \
+         *(.rodata .rodata.* .gnu.linkonce.r.*)\n \
+         .rodata        0x{table:016x}       0x20 t.o\n \
+         {pad}0x{global:016x}                gGlobalTable\n",
+        pad = " ".repeat(15),
+        global = table + 0x10,
+    );
+    std::fs::write(&map_path, map).expect("write map");
+    let result = super::cross_check(Some(&map_path), lines);
+    let _ = std::fs::remove_file(&map_path);
+    let _ = std::fs::remove_dir(&dir);
+    result.expect("a correctly located static table must survive a real GNU ld map");
 }
 
 /// Tile bytes that are distinctive enough to anchor a search.
@@ -303,6 +325,33 @@ pub(super) fn lz77_literals(data: &[u8]) -> Vec<u8> {
 }
 
 #[test]
+fn the_map_summary_counts_interior_and_local_skips_apart() {
+    let report = super::GenReport {
+        out_path: PathBuf::from("profile.rs"),
+        lines: Vec::new(),
+        map_named: 3,
+        map_confirmed: 2,
+        map_skipped: 5,
+        map_local: 1,
+        map_used: true,
+    };
+    let summary = report.map_summary().expect("a map was used");
+    assert!(
+        summary.contains("5 interior address(es) skipped"),
+        "{summary}"
+    );
+    assert!(
+        summary.contains("1 translation-unit-local symbol(s) skipped"),
+        "{summary}"
+    );
+    let unused = super::GenReport {
+        map_used: false,
+        ..report
+    };
+    assert!(unused.map_summary().is_none());
+}
+
+#[test]
 fn a_map_checks_names_where_they_are_derivable_and_presence_where_they_are_not() {
     use super::plan::ReportLine;
 
@@ -324,11 +373,19 @@ fn a_map_checks_names_where_they_are_derivable_and_presence_where_they_are_not()
             .symbol_contains(["gObjectEventPic_"]),
         ReportLine::unique("layout/littleroot_town", 0x083E_A284, 24),
         ReportLine::unique("tileset/general/palette/01", 0x08DD_4E30, 32).interior(),
+        ReportLine::unique("sTextWindowPalettes", 0x0851_0000, 160)
+            .local_symbol("sTextWindowPalettes"),
     ];
     let check = super::cross_check(Some(&map_path), &mut lines).expect("cross-check");
     assert_eq!(
-        (check.named, check.confirmed, check.skipped, check.used),
-        (2, 1, 1, true)
+        (
+            check.named,
+            check.confirmed,
+            check.skipped,
+            check.local,
+            check.used
+        ),
+        (2, 1, 1, 1, true)
     );
     assert_eq!(lines[0].note.as_deref(), Some("map: gTileset_General"));
     assert!(lines[3].note.is_none(), "an interior address is skipped");
