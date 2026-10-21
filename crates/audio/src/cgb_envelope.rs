@@ -177,11 +177,12 @@ impl CgbEnvelope {
         }
     }
 
-    /// Enter release, reporting whether release is itself the retrigger-worthy
-    /// volume write (`m4a.c:1060-1069`).
+    /// Enter release from attack, decay or sustain, reporting whether release is
+    /// itself the retrigger-worthy volume write (`m4a.c:1060-1069`).
     ///
-    /// A note stopped before its first `step` retires on that pass instead
-    /// (`m4a.c:988-1046,1053-1057`).
+    /// Any other phase only records the request and returns `false`: a note
+    /// stopped before its first `step` retires on that pass instead
+    /// (`m4a.c:988-1046,1053-1057`), and a pseudo-echo tail runs on.
     pub fn note_off(&mut self) -> bool {
         let live = matches!(self.phase, Phase::Attack | Phase::Decay | Phase::Sustain);
         self.note_off_requested = true;
@@ -204,8 +205,12 @@ impl CgbEnvelope {
         self.sustain_goal = sustain_goal_of(goal, self.adsr.sustain);
     }
 
-    /// Advance one software iteration against the current goal, returning
-    /// `(transitioned, boundary)`.
+    /// Advance one software iteration against the current goal. Hardware pace
+    /// is 16 iterations per 15 render frames (`m4a.c:1173-1180`), so one call
+    /// per frame runs slow.
+    ///
+    /// Returns whether a retrigger-worthy volume transition occurred and whether
+    /// the iteration reached an envelope boundary (`m4a.c:1077-1158`).
     pub fn step(&mut self) -> (bool, bool) {
         self.step_with_goal(self.goal)
     }

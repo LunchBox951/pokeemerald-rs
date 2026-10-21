@@ -247,6 +247,7 @@ impl CgbVoice {
     }
 
     /// Start a programmable-wave voice from 32 decoded wave-RAM samples.
+    /// `fixed_rate` applies the 8-bit DAC correction at note-on and retunes.
     ///
     /// Equal `wave_id`s must name the same table; a voice replacing one with an
     /// equal ID keeps its wave-RAM rotation (`m4a.c:1003-1012`).
@@ -516,12 +517,16 @@ impl CgbVoice {
 
     /// Update the live base volume and owe a retrigger, as upstream's live
     /// volume/pan write does (`m4a_1.s:1391-1400`).
+    ///
+    /// The new volumes reach the envelope goal and the stereo route only from
+    /// the envelope's next boundary on (`m4a.c:903-923,1077-1085`).
     pub fn set_track_volume(&mut self, vol_mr: u8, vol_ml: u8) {
         self.routing.update_volumes(vol_mr, vol_ml);
         self.pending_retrigger = true;
     }
 
-    /// Request a retune, held until [`Self::begin_frame`] commits it.
+    /// Request a retune, held until [`Self::begin_frame`] commits it; a frame
+    /// that retires the voice discards it (`m4a.c:1053-1056`).
     pub fn set_track_pitch(&mut self, key_m: i32, pit_m: u8) {
         let translated_key = (i32::from(self.identity.pitch_key) + key_m).max(0) % MIDI_KEY_COUNT;
         let note_key = u8::try_from(translated_key).unwrap_or(0);
