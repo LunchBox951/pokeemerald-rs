@@ -589,7 +589,7 @@ fn a_sync_out_of_descriptors_still_syncs_every_levels_parent() {
 
     let mut refused_once = false;
     let mut synced = Vec::new();
-    super::sync_created_directories_with(&mut created, &mut |parent| {
+    super::sync::sync_created_directories_with(&mut created, &mut |parent| {
         if !refused_once {
             refused_once = true;
             return Err(std::io::Error::from(rustix::io::Errno::MFILE));
@@ -634,7 +634,7 @@ fn the_held_final_directory_does_not_cost_a_new_levels_parent_sync() {
     let creation = super::create_directories_pinned(&target).expect("one level is created");
     let mut created = creation.created;
     let mut synced = false;
-    super::sync_created_directories_with(&mut created, &mut |parent| {
+    super::sync::sync_created_directories_with(&mut created, &mut |parent| {
         let real = super::super::dest::reopen_for_sync(parent)?;
         synced = true;
         Ok(real)
@@ -699,7 +699,7 @@ fn acquiring_the_destination_under_three_free_descriptors_keeps_the_parent_sync(
         .expect("the destination opens through the pin");
     drop(creation.final_directory);
     let mut synced = Vec::new();
-    super::sync_shed_parents_with(&mut created, &dest, &mut |parent| {
+    super::sync::sync_shed_parents_with(&mut created, &dest, &mut |parent| {
         let stat = rustix::fs::fstat(parent).expect("parent stats");
         synced.push((stat.st_dev, stat.st_ino));
         true
@@ -751,7 +751,7 @@ fn a_shed_parent_past_a_raced_level_is_synced_not_its_child() {
     created[0].parent = None;
     created[0].own = None;
     let mut synced = Vec::new();
-    super::sync_shed_parents_with(&mut created, &dest, &mut |parent| {
+    super::sync::sync_shed_parents_with(&mut created, &dest, &mut |parent| {
         let stat = rustix::fs::fstat(parent).expect("parent stats");
         synced.push((stat.st_dev, stat.st_ino));
         true
@@ -781,7 +781,7 @@ fn a_shed_level_off_the_destinations_ancestry_does_not_stop_the_parent_sync() {
     created[0].parent = None;
     created[0].own = None;
     let mut synced = Vec::new();
-    super::sync_shed_parents_with(&mut created, &dest, &mut |parent| {
+    super::sync::sync_shed_parents_with(&mut created, &dest, &mut |parent| {
         let stat = rustix::fs::fstat(parent).expect("parent stats");
         synced.push((stat.st_dev, stat.st_ino));
         true
@@ -827,7 +827,7 @@ fn a_full_table_after_acquisition_still_syncs_every_shed_parent() {
     }
     let fillers = fill_descriptor_table_leaving(0);
     let mut synced = Vec::new();
-    super::sync_shed_parents_with(&mut created, &dest, &mut |parent| {
+    super::sync::sync_shed_parents_with(&mut created, &dest, &mut |parent| {
         let stat = rustix::fs::fstat(parent).expect("parent stats");
         synced.push((stat.st_dev, stat.st_ino));
         true
@@ -893,7 +893,7 @@ fn a_shed_parent_behind_a_symlinked_level_is_still_synced() {
         .clone()
         .or_else(|| created[1].own_pin())
         .expect("pinned");
-    let dest = super::open_shedding_pins_with(
+    let dest = super::sync::open_shedding_pins_with(
         &mut created,
         || {
             if !refused {
@@ -911,11 +911,11 @@ fn a_shed_parent_behind_a_symlinked_level_is_still_synced() {
     drop(pin);
     drop(creation.final_directory);
     assert!(created[0].parent.is_none(), "a was shed");
-    super::sync_shed_parents_with(&mut created, &dest, &mut |parent| {
+    super::sync::sync_shed_parents_with(&mut created, &dest, &mut |parent| {
         synced.push(record(parent));
         true
     });
-    super::sync_created_directories_with(&mut created, &mut |parent| {
+    super::sync::sync_created_directories_with(&mut created, &mut |parent| {
         synced.push(record(parent));
         super::super::dest::reopen_for_sync(parent)
     });
@@ -1060,7 +1060,7 @@ fn a_failed_shed_time_sync_leaves_the_entry_unsynced() {
     let creation = create_pinned_unsynced(&target).expect("one level is created");
     let mut created = creation.created;
     let mut refused = false;
-    let opened = super::open_shedding_pins_with(
+    let opened = super::sync::open_shedding_pins_with(
         &mut created,
         || {
             if std::mem::replace(&mut refused, true) {
@@ -1082,7 +1082,10 @@ fn a_failed_recovery_sync_leaves_the_entry_unsynced_and_the_final_pass_retries()
     let target = dir.join("new");
     let creation = create_pinned_unsynced(&target).expect("one level is created");
     let mut created = creation.created;
-    super::sync_created_directories_with(&mut created, &mut reopen_to_an_unsyncable_descriptor);
+    super::sync::sync_created_directories_with(
+        &mut created,
+        &mut reopen_to_an_unsyncable_descriptor,
+    );
     assert!(!created[0].entry_synced, "a failed sync is not a sync");
     super::sync_created_directories(&mut created);
     assert!(created[0].entry_synced, "the retry syncs the entry");
@@ -1104,13 +1107,16 @@ fn a_failed_final_sync_does_not_unsync_an_entry_synced_at_creation() {
         created.iter().all(|level| level.entry_synced),
         "creation synced both entries"
     );
-    super::sync_created_directories_with(&mut created, &mut reopen_to_an_unsyncable_descriptor);
+    super::sync::sync_created_directories_with(
+        &mut created,
+        &mut reopen_to_an_unsyncable_descriptor,
+    );
     assert!(
         created.iter().all(|level| level.entry_synced),
         "a failed redundant sync keeps an earlier sync"
     );
     let mut pressure = true;
-    let opened: std::io::Result<()> = super::open_shedding_pins_with(
+    let opened: std::io::Result<()> = super::sync::open_shedding_pins_with(
         &mut created,
         || {
             if std::mem::replace(&mut pressure, false) {
@@ -1123,4 +1129,1693 @@ fn a_failed_final_sync_does_not_unsync_an_entry_synced_at_creation() {
     assert!(opened.is_err(), "the import fails");
     super::undo_created_directories(&created);
     assert!(!target.exists(), "b is taken back");
+}
+
+#[cfg(unix)]
+fn entry_names(dir: &std::path::Path) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+#[cfg(unix)]
+#[test]
+fn undo_preserves_a_replacement_swapped_after_validation() {
+    // The hook runs after the name validated and before the level is taken
+    // back -- the window a name-based `unlinkat` would delete through. The
+    // replacement is empty: a sentinel inside it would make a plain removal
+    // refuse and hide the bug.
+    let dir = TempDir::new("undo-after-validation");
+    let level = dir.join("new");
+    let moved = dir.join("original");
+    let created = super::create_directories(&level).unwrap();
+    let mut ran = 0;
+    super::take_back::undo_created_directories_with_hooks(&created, &mut || {
+        ran += 1;
+        fs::rename(&level, &moved).unwrap();
+        fs::create_dir(&level).unwrap();
+    });
+
+    assert_eq!(ran, 1, "the hook ran once");
+    assert!(level.is_dir(), "the replacement was deleted");
+    assert!(moved.is_dir(), "the original is left standing");
+    assert_eq!(
+        entry_names(&dir.path),
+        ["new", "original"],
+        "no quarantine is left behind"
+    );
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[test]
+fn a_level_replaced_after_validation_is_reported_where_it_was_moved() {
+    // The same swap as `undo_preserves_a_replacement_swapped_after_validation`:
+    // the replacement is restored silently, but the directory rollback made
+    // still stands where it was moved, so the warning names that place,
+    // read through the held original.
+    if !in_rollback_stderr_child() {
+        let stderr = rerun_alone_for_stderr(
+            "import_rom::created_dirs::tests::a_level_replaced_after_validation_is_reported_where_it_was_moved",
+        );
+        let warned = warned_path(&stderr, "warning: ", " is the directory rollback made for ");
+        assert_names_marked_path(&stderr, warned, "original at: ");
+        return;
+    }
+    let dir = TempDir::new("undo-replaced-reported");
+    let level = dir.join("new");
+    let moved = dir.join("original");
+    let created = super::create_directories(&level).unwrap();
+    super::take_back::undo_created_directories_with_hooks(&created, &mut || {
+        fs::rename(&level, &moved).unwrap();
+        fs::create_dir(&level).unwrap();
+    });
+    assert!(level.is_dir() && moved.is_dir());
+    mark_path("original at: ", &moved);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_level_that_gained_contents_is_reported_left_in_place() {
+    // The level is put back under its own name, so restoration itself has
+    // nothing to warn about; the warning must still say the level stands
+    // and why it could not be removed.
+    if !in_rollback_stderr_child() {
+        let stderr = rerun_alone_for_stderr(
+            "import_rom::created_dirs::tests::a_level_that_gained_contents_is_reported_left_in_place",
+        );
+        let warned = warned_path(
+            &stderr,
+            "warning: ",
+            " is left in place: it could not be removed: ",
+        );
+        assert_names_marked_path(&stderr, warned, "level at: ");
+        return;
+    }
+    let dir = TempDir::new("undo-gained-contents-reported");
+    let level = dir.join("new");
+    let created = super::create_directories(&level).unwrap();
+    super::take_back::undo_created_directories_with_hooks(&created, &mut || {
+        fs::write(level.join("keep"), b"x").unwrap();
+    });
+    assert!(level.join("keep").is_file());
+    mark_path("level at: ", &level);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_capture_that_cannot_be_examined_is_reported_left_in_place() {
+    // The capture is hidden only while its identity is checked, so that
+    // check fails, and is back before it is put back: restoration under its
+    // own name has nothing to warn about, but the walk stops there, so the
+    // warning must say the level and those above it are left.
+    if !in_rollback_stderr_child() {
+        let stderr = rerun_alone_for_stderr(
+            "import_rom::created_dirs::tests::a_capture_that_cannot_be_examined_is_reported_left_in_place",
+        );
+        let warned = warned_path(
+            &stderr,
+            "warning: ",
+            " is left in place: it could not be examined in its cleanup directory: ",
+        );
+        assert_names_marked_path(&stderr, warned, "level at: ");
+        assert!(
+            stderr.contains("the levels above it are left too"),
+            "stderr:\n{stderr}"
+        );
+        return;
+    }
+    let dir = TempDir::new("undo-unexamined-capture");
+    let level = dir.join("above").join("new");
+    let created = super::create_directories(&level).unwrap();
+    let mut stages = Vec::new();
+    super::take_back::undo_created_directories_with_capture_hooks(
+        &created,
+        &mut || {},
+        &mut |stage, held| {
+            stages.push(stage);
+            match stage {
+                super::take_back::CaptureStage::BeforeCheck => {
+                    rustix::fs::renameat(held, super::take_back::QUARANTINE_ENTRY, held, "hidden")
+                        .unwrap();
+                }
+                super::take_back::CaptureStage::BeforeRestore => {
+                    rustix::fs::renameat(held, "hidden", held, super::take_back::QUARANTINE_ENTRY)
+                        .unwrap();
+                }
+                super::take_back::CaptureStage::Verified => {}
+            }
+        },
+    );
+    assert_eq!(
+        stages,
+        [
+            super::take_back::CaptureStage::BeforeCheck,
+            super::take_back::CaptureStage::BeforeRestore
+        ]
+    );
+    assert!(level.is_dir(), "the capture is put back under its name");
+    assert_eq!(
+        entry_names(&dir.path),
+        ["above"],
+        "no quarantine is left behind"
+    );
+    mark_path("level at: ", &level);
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[test]
+fn a_level_moved_out_of_its_quarantine_before_restoration_is_reported_where_it_went() {
+    // The level gains contents, so it cannot be removed; another writer then
+    // moves it out of the quarantine before it is put back. The warning must
+    // name where it went, read through the held original, not the
+    // quarantine it left.
+    if !in_rollback_stderr_child() {
+        let stderr = rerun_alone_for_stderr(
+            "import_rom::created_dirs::tests::a_level_moved_out_of_its_quarantine_before_restoration_is_reported_where_it_went",
+        );
+        let warned = warned_path(&stderr, "warning: ", " is the directory rollback made for ");
+        assert_names_marked_path(&stderr, warned, "moved to: ");
+        assert!(
+            !stderr.contains("its contents remain in"),
+            "stderr:\n{stderr}"
+        );
+        return;
+    }
+    let dir = TempDir::new("undo-moved-out-of-quarantine");
+    let level = dir.join("new");
+    let moved = dir.join("moved");
+    let created = super::create_directories(&level).unwrap();
+    super::take_back::undo_created_directories_with_capture_hooks(
+        &created,
+        &mut || fs::write(level.join("keep"), b"x").unwrap(),
+        &mut |stage, held| {
+            if stage == super::take_back::CaptureStage::BeforeRestore {
+                rustix::fs::renameat(
+                    held,
+                    super::take_back::QUARANTINE_ENTRY,
+                    rustix::fs::CWD,
+                    &moved,
+                )
+                .unwrap();
+            }
+        },
+    );
+    assert!(moved.join("keep").is_file());
+    assert_eq!(
+        entry_names(&dir.path),
+        ["moved"],
+        "no quarantine is left behind"
+    );
+    mark_path("moved to: ", &moved);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_level_swapped_in_its_quarantine_before_a_put_back_aside_is_not_placed_there() {
+    // The level gains contents, so it cannot be removed; before it is put
+    // back another writer moves it out of the quarantine, leaves an empty
+    // directory there, and retakes its name, so what goes back lands at
+    // `new.restored-0`. That is not the level: the warning must not say its
+    // contents are there, and the level is reported where it went.
+    if !in_rollback_stderr_child() {
+        let stderr = rerun_alone_for_stderr(
+            "import_rom::created_dirs::tests::a_level_swapped_in_its_quarantine_before_a_put_back_aside_is_not_placed_there",
+        );
+        assert!(!stderr.contains("its contents are in"), "stderr:\n{stderr}");
+        assert!(
+            stderr.contains("but it is not the directory rollback made"),
+            "stderr:\n{stderr}"
+        );
+        let warned = warned_path(&stderr, "warning: ", " is the directory rollback made for ");
+        assert_names_marked_path(&stderr, warned, "moved to: ");
+        return;
+    }
+    let dir = TempDir::new("undo-swapped-before-aside");
+    let level = dir.join("new");
+    let moved = dir.join("moved");
+    let created = super::create_directories(&level).unwrap();
+    super::take_back::undo_created_directories_with_capture_hooks(
+        &created,
+        &mut || fs::write(level.join("keep"), b"x").unwrap(),
+        &mut |stage, held| {
+            if stage == super::take_back::CaptureStage::BeforeRestore {
+                rustix::fs::renameat(
+                    held,
+                    super::take_back::QUARANTINE_ENTRY,
+                    rustix::fs::CWD,
+                    &moved,
+                )
+                .unwrap();
+                rustix::fs::mkdirat(
+                    held,
+                    super::take_back::QUARANTINE_ENTRY,
+                    rustix::fs::Mode::RWXU,
+                )
+                .unwrap();
+                fs::create_dir(&level).unwrap();
+            }
+        },
+    );
+    assert!(moved.join("keep").is_file());
+    assert!(dir.join("new.restored-0").is_dir());
+    mark_path("moved to: ", &moved);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_level_swapped_in_its_quarantine_before_a_failed_put_back_is_not_placed_there() {
+    // As above, but every name a put-back could use is taken, so what is in
+    // the quarantine stays there. It is not the level: the warning must not
+    // say the level's contents remain there.
+    if !in_rollback_stderr_child() {
+        let stderr = rerun_alone_for_stderr(
+            "import_rom::created_dirs::tests::a_level_swapped_in_its_quarantine_before_a_failed_put_back_is_not_placed_there",
+        );
+        assert!(
+            !stderr.contains("its contents remain in"),
+            "stderr:\n{stderr}"
+        );
+        let warned = warned_path(&stderr, "warning: ", " is the directory rollback made for ");
+        assert_names_marked_path(&stderr, warned, "moved to: ");
+        return;
+    }
+    let dir = TempDir::new("undo-swapped-before-stranding");
+    let level = dir.join("new");
+    let moved = dir.join("moved");
+    let created = super::create_directories(&level).unwrap();
+    super::take_back::undo_created_directories_with_capture_hooks(
+        &created,
+        &mut || fs::write(level.join("keep"), b"x").unwrap(),
+        &mut |stage, held| {
+            if stage == super::take_back::CaptureStage::BeforeRestore {
+                rustix::fs::renameat(
+                    held,
+                    super::take_back::QUARANTINE_ENTRY,
+                    rustix::fs::CWD,
+                    &moved,
+                )
+                .unwrap();
+                rustix::fs::mkdirat(
+                    held,
+                    super::take_back::QUARANTINE_ENTRY,
+                    rustix::fs::Mode::RWXU,
+                )
+                .unwrap();
+                fs::create_dir(&level).unwrap();
+                for n in 0..16 {
+                    fs::create_dir(dir.join(&format!("new.restored-{n}"))).unwrap();
+                }
+            }
+        },
+    );
+    assert!(moved.join("keep").is_file());
+    mark_path("moved to: ", &moved);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_quarantine_whose_check_fails_is_reported_with_the_error() {
+    // The freshly made quarantine's check fails with an error (an `EIO`
+    // listing or `fchmod`, injected through the seam). That says nothing
+    // about whose directory it is: the warning gives the error, not an
+    // ownership swap, and both the level and the quarantine are left.
+    if !in_rollback_stderr_child() {
+        let stderr = rerun_alone_for_stderr(
+            "import_rom::created_dirs::tests::a_quarantine_whose_check_fails_is_reported_with_the_error",
+        );
+        assert!(
+            !stderr.contains("is not the private cleanup directory rollback made"),
+            "stderr:\n{stderr}"
+        );
+        assert!(
+            stderr.contains("could not be checked: "),
+            "stderr:\n{stderr}"
+        );
+        assert!(
+            stderr.contains(&std::io::Error::from(rustix::io::Errno::IO).to_string()),
+            "stderr:\n{stderr}"
+        );
+        return;
+    }
+    let dir = TempDir::new("quarantine-check-fails");
+    let level = dir.join("new");
+    let created = super::create_directories(&level).unwrap();
+    let parent = created[0].parent.as_deref().unwrap();
+    let proceeded =
+        super::take_back::take_back_level_vouched_by(parent, &created[0], ".undo-check", |_| {
+            Err(rustix::io::Errno::IO)
+        });
+    assert!(!proceeded, "rollback must not proceed");
+    assert!(level.is_dir(), "the level is left standing");
+    assert!(dir.join(".undo-check").is_dir(), "the quarantine is left");
+}
+
+#[cfg(unix)]
+#[test]
+fn undo_puts_back_a_level_that_gained_contents_after_validation() {
+    let dir = TempDir::new("undo-gained-contents");
+    let level = dir.join("new");
+    let created = super::create_directories(&level).unwrap();
+    super::take_back::undo_created_directories_with_hooks(&created, &mut || {
+        fs::write(level.join("keep"), b"x").unwrap();
+    });
+
+    assert!(level.join("keep").is_file());
+    assert_eq!(entry_names(&dir.path), ["new"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn undo_does_not_strand_contents_when_the_name_is_retaken_before_restoration() {
+    // `new` gains `keep`, so removal from the quarantine refuses and the
+    // level must be put back; a racer re-creates `new` once the name frees,
+    // so the put-back hits EEXIST. `keep` must not end up only under
+    // `.undo-*/level` with nothing reported.
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    for attempt in 0..500 {
+        let dir = TempDir::new(&format!("undo-retaken-{attempt}"));
+        let level = dir.join("new");
+        let created = super::create_directories(&level).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let mut racer = None;
+        super::take_back::undo_created_directories_with_hooks(&created, &mut || {
+            fs::write(level.join("keep"), b"x").unwrap();
+            let (level, stop) = (level.clone(), Arc::clone(&stop));
+            racer = Some(std::thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    if fs::create_dir(&level).is_ok() {
+                        return;
+                    }
+                }
+            }));
+            std::thread::yield_now();
+        });
+        stop.store(true, Ordering::Relaxed);
+        racer.unwrap().join().unwrap();
+        let stranded: Vec<String> = entry_names(&dir.path)
+            .into_iter()
+            .filter(|name| name.starts_with(".undo-"))
+            .filter(|name| dir.path.join(name).join("level").join("keep").is_file())
+            .collect();
+        assert!(
+            stranded.is_empty(),
+            "attempt {attempt}: keep stranded in {stranded:?}, not at {}: {:?}",
+            level.display(),
+            entry_names(&dir.path)
+        );
+        let restored = entry_names(&dir.path).into_iter().any(|name| {
+            (name == "new" || name.starts_with("new.restored-"))
+                && dir.path.join(&name).join("keep").is_file()
+        });
+        assert!(
+            restored,
+            "attempt {attempt}: keep is neither at {} nor beside it: {:?}",
+            level.display(),
+            entry_names(&dir.path)
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn rollback_refuses_a_quarantine_name_already_taken() {
+    // The quarantine name is injected so a directory (or symlink) is already
+    // there when rollback tries to claim it. `mkdirat` must refuse it: the
+    // staged entry is never filled, emptied, or removed, and the level stays.
+    for staged_kind in ["empty-0700-dir", "dir-with-data", "symlink"] {
+        let dir = TempDir::new(&format!("quarantine-taken-{staged_kind}"));
+        let level = dir.join("new");
+        let staged = dir.join(".undo-staged");
+        let created = super::create_directories(&level).unwrap();
+        match staged_kind {
+            "empty-0700-dir" => fs::create_dir(&staged).unwrap(),
+            "dir-with-data" => {
+                fs::create_dir(&staged).unwrap();
+                fs::write(staged.join("mine"), b"x").unwrap();
+            }
+            _ => std::os::unix::fs::symlink(&level, &staged).unwrap(),
+        }
+        let parent = created[0].parent.as_deref().unwrap();
+        assert!(
+            !super::take_back::take_back_level_via(parent, &created[0], ".undo-staged", &mut || {}),
+            "{staged_kind}: rollback must not proceed"
+        );
+        assert!(level.is_dir(), "{staged_kind}: the level is left standing");
+        assert!(
+            fs::symlink_metadata(&staged).is_ok(),
+            "{staged_kind}: the staged entry is left in place"
+        );
+        if staged_kind == "dir-with-data" {
+            assert!(staged.join("mine").is_file(), "its contents are untouched");
+        }
+        assert_eq!(entry_names(&dir.path), [".undo-staged", "new"]);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn rollback_refuses_a_quarantine_swapped_between_mkdir_and_open() {
+    use std::os::unix::fs::PermissionsExt;
+    // Between rollback's `mkdirat` and `openat` the name is swapped for a
+    // directory that is not a fresh private quarantine. It must be neither
+    // filled nor removed, and the level must stay.
+    for kind in ["non-empty-0700", "empty-0755"] {
+        let dir = TempDir::new(&format!("quarantine-swap-{kind}"));
+        let level = dir.join("new");
+        let (name, away) = (dir.join(".undo-swap"), dir.join("away"));
+        let created = super::create_directories(&level).unwrap();
+        let parent = created[0].parent.as_deref().unwrap();
+        let mut swapped = 0;
+        let proceeded =
+            super::take_back::take_back_level_via(parent, &created[0], ".undo-swap", &mut || {
+                swapped += 1;
+                fs::rename(&name, &away).unwrap();
+                fs::create_dir(&name).unwrap();
+                if kind == "non-empty-0700" {
+                    fs::write(name.join("mine"), b"x").unwrap();
+                } else {
+                    fs::set_permissions(&name, fs::Permissions::from_mode(0o755)).unwrap();
+                }
+            });
+        assert_eq!(swapped, 1, "{kind}: the hook ran once");
+        assert!(!proceeded, "{kind}: rollback must not proceed");
+        assert!(level.is_dir(), "{kind}: the level is left standing");
+        assert!(name.is_dir(), "{kind}: the replacement was removed");
+        assert_eq!(
+            fs::read_dir(&name).unwrap().count(),
+            usize::from(kind == "non-empty-0700"),
+            "{kind}: the replacement was filled or emptied"
+        );
+        assert!(
+            away.is_dir(),
+            "{kind}: the original quarantine is untouched"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn quarantine_names_are_random_and_hidden() {
+    let a = super::take_back::unguessable_quarantine_name().unwrap();
+    let b = super::take_back::unguessable_quarantine_name().unwrap();
+    assert_ne!(a, b);
+    assert!(a.starts_with(".undo-") && a.len() == ".undo-".len() + 16);
+}
+
+#[cfg(unix)]
+#[test]
+fn restore_capture_puts_contents_beside_a_retaken_name() {
+    // Deterministic form of the retake race: the level sits in a quarantine
+    // holding `keep`, and its name was re-created meanwhile. The capture must
+    // come back beside it, not stay only under the hidden quarantine.
+    let dir = TempDir::new("restore-retaken");
+    let created = super::create_directories(&dir.join("new")).unwrap();
+    let parent = created[0].parent.as_deref().unwrap();
+    let quarantine_path = dir.join(".undo-held");
+    fs::create_dir(&quarantine_path).unwrap();
+    let quarantine = rustix::fs::openat(
+        parent,
+        ".undo-held",
+        rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )
+    .unwrap();
+    fs::rename(
+        dir.join("new"),
+        quarantine_path.join(super::take_back::QUARANTINE_ENTRY),
+    )
+    .unwrap();
+    fs::write(
+        quarantine_path
+            .join(super::take_back::QUARANTINE_ENTRY)
+            .join("keep"),
+        b"x",
+    )
+    .unwrap();
+    fs::create_dir(dir.join("new")).unwrap();
+
+    let warning = super::take_back::restore_capture(
+        std::os::fd::AsFd::as_fd(&quarantine),
+        std::os::fd::AsFd::as_fd(parent),
+        ".undo-held",
+        &super::take_back::located_beside(parent, &created[0], std::ffi::OsStr::new(".undo-held")),
+        parent,
+        &created[0],
+    );
+
+    assert_eq!(
+        warning.as_deref(),
+        Some(
+            format!(
+                "warning: {} was recreated during cleanup; its contents are in {}",
+                dir.join("new").display(),
+                dir.join("new.restored-0").display()
+            )
+            .as_str()
+        )
+    );
+    assert!(dir.join("new.restored-0").join("keep").is_file());
+    assert!(!quarantine_path
+        .join(super::take_back::QUARANTINE_ENTRY)
+        .exists());
+    assert_eq!(fs::read_dir(dir.join("new")).unwrap().count(), 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn rollback_takes_back_a_level_when_the_quarantine_open_takes_the_last_descriptor() {
+    // The quarantine's `openat` takes the table's last free slot. Checking
+    // that quarantine must not cost a second descriptor, or rollback strands
+    // both the level and an empty `.undo-*` beside it.
+    if !in_descriptor_pressure_child() {
+        run_under_descriptor_pressure(
+            "import_rom::created_dirs::tests::rollback_takes_back_a_level_when_the_quarantine_open_takes_the_last_descriptor",
+        );
+        return;
+    }
+    let dir = TempDir::new("quarantine-last-descriptor");
+    let level = dir.join("new");
+    let created = super::create_directories(&level).unwrap();
+    let parent = created[0].parent.as_deref().unwrap();
+    let mut fillers = None;
+    let proceeded =
+        super::take_back::take_back_level_via(parent, &created[0], ".undo-last", &mut || {
+            fillers = Some(fill_descriptor_table_leaving(1));
+        });
+    drop(fillers);
+    assert!(proceeded, "the level is taken back");
+    assert!(!level.exists(), "the level is removed");
+    assert!(entry_names(&dir.path).is_empty(), "no quarantine is left");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_capture_no_name_takes_back_is_reported_at_its_exact_quarantine_path() {
+    // The level's name and all sixteen `.restored-<n>` names are taken, so
+    // the capture stays in the quarantine; the warning must name that exact
+    // directory, not a `.undo-*` pattern among other quarantines.
+    let dir = TempDir::new("restore-all-taken");
+    let created = super::create_directories(&dir.join("new")).unwrap();
+    let parent = created[0].parent.as_deref().unwrap();
+    let quarantine_path = dir.join(".undo-held");
+    fs::create_dir(&quarantine_path).unwrap();
+    let quarantine = rustix::fs::openat(
+        parent,
+        ".undo-held",
+        rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )
+    .unwrap();
+    let capture = quarantine_path.join(super::take_back::QUARANTINE_ENTRY);
+    fs::rename(dir.join("new"), &capture).unwrap();
+    fs::write(capture.join("keep"), b"x").unwrap();
+    fs::create_dir(dir.join("new")).unwrap();
+    for n in 0..16 {
+        fs::create_dir(dir.join(&format!("new.restored-{n}"))).unwrap();
+    }
+    fs::create_dir(dir.join(".undo-other")).unwrap();
+
+    let warning = super::take_back::restore_capture(
+        std::os::fd::AsFd::as_fd(&quarantine),
+        std::os::fd::AsFd::as_fd(parent),
+        ".undo-held",
+        &super::take_back::located_beside(parent, &created[0], std::ffi::OsStr::new(".undo-held")),
+        parent,
+        &created[0],
+    );
+
+    assert!(capture.join("keep").is_file(), "the capture stays put");
+    assert_eq!(
+        warning.as_deref(),
+        Some(
+            format!(
+                "warning: could not put {} back; its contents remain in {}",
+                dir.join("new").display(),
+                capture.display()
+            )
+            .as_str()
+        )
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_swapped_quarantine_is_not_removed_when_its_open_fails() {
+    // Between `mkdirat` and `openat` the quarantine name is swapped for
+    // someone else's empty directory, and the descriptor table is full, so
+    // the open fails. Nothing then proves what the name denotes: it must not
+    // be unlinked by name.
+    if !in_descriptor_pressure_child() {
+        run_under_descriptor_pressure(
+            "import_rom::created_dirs::tests::a_swapped_quarantine_is_not_removed_when_its_open_fails",
+        );
+        return;
+    }
+    let dir = TempDir::new("swap-open-fails");
+    let level = dir.join("new");
+    let (name, away) = (dir.join(".undo-v"), dir.join("away"));
+    let created = super::create_directories(&level).unwrap();
+    let parent = created[0].parent.as_deref().unwrap();
+    let mut fillers = None;
+    let proceeded =
+        super::take_back::take_back_level_via(parent, &created[0], ".undo-v", &mut || {
+            fs::rename(&name, &away).unwrap();
+            fs::create_dir(&name).unwrap(); // someone else's empty directory
+            fillers = Some(fill_descriptor_table_leaving(0));
+        });
+    drop(fillers);
+    assert!(!proceeded);
+    assert!(level.is_dir());
+    assert!(
+        name.is_dir(),
+        "the replacement directory was unlinked by its mutable name"
+    );
+}
+
+#[cfg(unix)]
+const UMASK_CHILD: &str = "POKEEMERALD_IMPORT_ROLLBACK_UMASK_CHILD";
+
+#[cfg(unix)]
+#[test]
+fn rollback_takes_back_a_level_under_a_umask_that_masks_owner_bits() {
+    // Under umask 0177 the quarantine's `mkdirat(0700)` yields 0600: still
+    // private, but without the search bit the capture's rename needs. The
+    // umask is process-wide, so the body runs alone in a child.
+    const TEST: &str = "import_rom::created_dirs::tests::rollback_takes_back_a_level_under_a_umask_that_masks_owner_bits";
+    if std::env::var_os(UMASK_CHILD).is_none() {
+        let exe = std::env::current_exe().unwrap();
+        let output = std::process::Command::new(exe)
+            .args([TEST, "--exact", "--nocapture"])
+            .env(UMASK_CHILD, "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("1 passed"),
+            "child status {:?}\nstdout:\n{stdout}\nstderr:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let dir = TempDir::new("umask-0177");
+    let level = dir.join("new");
+    let created = super::create_directories(&level).unwrap();
+    let previous = rustix::process::umask(rustix::fs::Mode::from_raw_mode(0o177));
+    super::undo_created_directories(&created);
+    rustix::process::umask(previous);
+    assert!(!level.exists(), "the level is taken back");
+    assert!(entry_names(&dir.path).is_empty(), "no quarantine is left");
+}
+
+/// Stages a capture in `<parent>/.undo-held/level` holding `keep`, with the
+/// level's name and all sixteen `.restored-<n>` names taken, so
+/// `restore_capture` must leave it there and report it.
+#[cfg(unix)]
+fn stage_unrestorable_capture(
+    parent_path: &std::path::Path,
+    parent: &std::os::fd::OwnedFd,
+) -> std::os::fd::OwnedFd {
+    let quarantine_path = parent_path.join(".undo-held");
+    fs::create_dir(&quarantine_path).unwrap();
+    let quarantine = rustix::fs::openat(
+        parent,
+        ".undo-held",
+        rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )
+    .unwrap();
+    let capture = quarantine_path.join(super::take_back::QUARANTINE_ENTRY);
+    fs::create_dir(&capture).unwrap();
+    fs::write(capture.join("keep"), b"x").unwrap();
+    for n in 0..16 {
+        fs::create_dir(parent_path.join(format!("new.restored-{n}"))).unwrap();
+    }
+    quarantine
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[test]
+fn a_stranded_capture_is_reported_under_its_parents_current_name() {
+    // The level's parent `a` is renamed to `b` after creation; rollback acts
+    // through the held parent, so the warning must name `b`, not `a`.
+    let dir = TempDir::new("restore-renamed-parent");
+    let created = super::create_directories(&dir.join("a").join("new")).unwrap();
+    let level = created.last().unwrap();
+    let parent = level.parent.as_deref().unwrap();
+    fs::rename(dir.join("a"), dir.join("b")).unwrap();
+    let moved = fs::canonicalize(dir.join("b")).unwrap();
+    let quarantine = stage_unrestorable_capture(&moved, parent);
+
+    let warning = super::take_back::restore_capture(
+        std::os::fd::AsFd::as_fd(&quarantine),
+        std::os::fd::AsFd::as_fd(parent),
+        ".undo-held",
+        &super::take_back::located_beside(parent, level, std::ffi::OsStr::new(".undo-held")),
+        parent,
+        level,
+    );
+
+    assert_eq!(
+        warning.as_deref(),
+        Some(
+            format!(
+                "warning: could not put {} back; its contents remain in {}",
+                moved.join("new").display(),
+                moved
+                    .join(".undo-held")
+                    .join(super::take_back::QUARANTINE_ENTRY)
+                    .display()
+            )
+            .as_str()
+        )
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_cleanup_warning_keeps_a_control_character_in_a_path_on_one_line() {
+    let dir = TempDir::new("restore-newline");
+    let parent_path = dir.join("line\nbreak");
+    fs::create_dir(&parent_path).unwrap();
+    let created = super::create_directories(&parent_path.join("new")).unwrap();
+    let parent = created[0].parent.as_deref().unwrap();
+    let quarantine = stage_unrestorable_capture(&parent_path, parent);
+
+    let warning = super::take_back::restore_capture(
+        std::os::fd::AsFd::as_fd(&quarantine),
+        std::os::fd::AsFd::as_fd(parent),
+        ".undo-held",
+        &super::take_back::located_beside(parent, &created[0], std::ffi::OsStr::new(".undo-held")),
+        parent,
+        &created[0],
+    )
+    .expect("the capture is reported");
+
+    assert!(!warning.contains('\n'), "{warning:?}");
+    assert!(warning.contains("line\\nbreak"), "{warning:?}");
+}
+
+#[cfg(unix)]
+const ROLLBACK_STDERR_CHILD: &str = "POKEEMERALD_IMPORT_ROLLBACK_STDERR_CHILD";
+
+/// Whether this process is the child [`rerun_alone_for_stderr`] spawned.
+#[cfg(unix)]
+fn in_rollback_stderr_child() -> bool {
+    std::env::var_os(ROLLBACK_STDERR_CHILD).is_some()
+}
+
+/// Reruns the test at `test_path` alone in a child, fails unless it passes
+/// there, and returns the child's stderr, where rollback warns.
+#[cfg(unix)]
+fn rerun_alone_for_stderr(test_path: &str) -> String {
+    let exe = std::env::current_exe().unwrap();
+    let output = std::process::Command::new(exe)
+        .args([test_path, "--exact", "--nocapture"])
+        .env(ROLLBACK_STDERR_CHILD, "1")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert!(
+        stdout.contains("1 passed"),
+        "child failed\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    stderr
+}
+
+#[cfg(unix)]
+#[test]
+fn a_quarantine_that_cannot_be_made_reports_the_level_left_standing() {
+    // A file already sits at the quarantine name, so `mkdirat` fails with
+    // EEXIST; the warning names the level rollback leaves and the cause.
+    if !in_rollback_stderr_child() {
+        let stderr = rerun_alone_for_stderr(
+            "import_rom::created_dirs::tests::a_quarantine_that_cannot_be_made_reports_the_level_left_standing",
+        );
+        assert!(
+            stderr.contains("/new is left in place: could not create cleanup directory ")
+                && stderr.contains("/.undo-f: "),
+            "the retained level is not reported; stderr:\n{stderr}"
+        );
+        return;
+    }
+    let dir = TempDir::new("quarantine-mkdir-fails");
+    let level = dir.join("new");
+    let created = super::create_directories(&level).unwrap();
+    fs::write(dir.join(".undo-f"), b"theirs").unwrap();
+    let parent = created[0].parent.as_deref().unwrap();
+    assert!(!super::take_back::take_back_level_via(
+        parent,
+        &created[0],
+        ".undo-f",
+        &mut || {}
+    ));
+    assert!(level.is_dir(), "the level is left standing");
+    assert_eq!(fs::read(dir.join(".undo-f")).unwrap(), b"theirs");
+}
+
+/// The path a `<lead><path><tail>` line in `stderr` names.
+#[cfg(unix)]
+fn warned_path<'a>(stderr: &'a str, lead: &str, tail: &str) -> &'a str {
+    stderr
+        .lines()
+        .find_map(|line| {
+            let rest = line.strip_prefix(lead)?;
+            rest.find(tail).map(|end| &rest[..end])
+        })
+        .unwrap_or_else(|| panic!("no {lead:?}...{tail:?} line; stderr:\n{stderr}"))
+}
+
+/// Asserts `warned` is the path the child printed on its `marker` line,
+/// as recorded or made canonical: Linux reports it through `/proc`, which
+/// resolves symlinks, elsewhere it is the recorded path, which may run
+/// through one (macOS's `/var`).
+#[cfg(unix)]
+fn assert_names_marked_path(stderr: &str, warned: &str, marker: &str) {
+    let line = stderr
+        .lines()
+        .find_map(|line| line.strip_prefix(marker))
+        .unwrap_or_else(|| panic!("no {marker:?} line; stderr:\n{stderr}"));
+    let (recorded, canonical) = line.split_once(" | ").expect("recorded | canonical");
+    assert!(
+        warned == recorded || warned == canonical,
+        "warned {warned:?}, expected {recorded:?} or {canonical:?}"
+    );
+}
+
+/// Prints `path` after `marker` as recorded and canonical, for
+/// [`assert_names_marked_path`] in the parent.
+#[cfg(unix)]
+fn mark_path(marker: &str, path: &std::path::Path) {
+    eprintln!(
+        "{marker}{} | {}",
+        path.display(),
+        fs::canonicalize(path).unwrap().display()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_taken_back_level_removes_its_quarantine_without_a_warning() {
+    // The happy path leaves no trace: the level and its quarantine are both
+    // gone, and nothing is printed.
+    if !in_rollback_stderr_child() {
+        let stderr = rerun_alone_for_stderr(
+            "import_rom::created_dirs::tests::a_taken_back_level_removes_its_quarantine_without_a_warning",
+        );
+        assert!(!stderr.contains("warning:"), "stderr:\n{stderr}");
+        return;
+    }
+    let dir = TempDir::new("quarantine-removed");
+    let level = dir.join("new");
+    let created = super::create_directories(&level).unwrap();
+    let parent = created[0].parent.as_deref().unwrap();
+    assert!(super::take_back::take_back_level_via(
+        parent,
+        &created[0],
+        ".undo-q",
+        &mut || {}
+    ));
+    assert!(entry_names(&dir.path).is_empty(), "no trace is left");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_quarantine_whose_removal_fails_is_reported_at_its_path() {
+    // Something lands in the quarantine before its removal, so
+    // `unlinkat(REMOVEDIR)` refuses it; it stays, reported at its path.
+    if !in_rollback_stderr_child() {
+        let stderr = rerun_alone_for_stderr(
+            "import_rom::created_dirs::tests::a_quarantine_whose_removal_fails_is_reported_at_its_path",
+        );
+        let warned = warned_path(
+            &stderr,
+            "warning: could not remove cleanup directory ",
+            ": ",
+        );
+        assert_names_marked_path(&stderr, warned, "quarantine at: ");
+        assert!(
+            stderr.contains("; it is left in place"),
+            "stderr:\n{stderr}"
+        );
+        return;
+    }
+    let dir = TempDir::new("quarantine-unlink-fails");
+    let level = dir.join("new");
+    let name = dir.join(".undo-r");
+    let created = super::create_directories(&level).unwrap();
+    let parent = created[0].parent.as_deref().unwrap();
+    let proceeded = super::take_back::take_back_level_with_hooks(
+        parent,
+        &created[0],
+        ".undo-r",
+        &mut || {},
+        &mut || fs::write(name.join("held"), b"x").unwrap(),
+    );
+    assert!(proceeded, "the level itself was taken back");
+    assert!(
+        name.join("held").is_file(),
+        "the quarantine is left, with what it holds"
+    );
+    mark_path("quarantine at: ", &name);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_directory_swapped_in_at_the_quarantine_name_is_left_standing_and_reported() {
+    // Before the quarantine's re-check, it is moved away and a directory of
+    // someone else's, holding data, takes its name. The name no longer
+    // resolves to the held quarantine, so neither is removed, and the
+    // warning names the quarantine's path.
+    if !in_rollback_stderr_child() {
+        let stderr = rerun_alone_for_stderr(
+            "import_rom::created_dirs::tests::a_directory_swapped_in_at_the_quarantine_name_is_left_standing_and_reported",
+        );
+        let warned = warned_path(
+            &stderr,
+            "warning: cleanup directory ",
+            " no longer resolves to the one rollback made; it is left in place",
+        );
+        assert_names_marked_path(&stderr, warned, "name at: ");
+        return;
+    }
+    let dir = TempDir::new("swap-at-quarantine-name");
+    let level = dir.join("new");
+    let (name, away) = (dir.join(".undo-r"), dir.join("away"));
+    let created = super::create_directories(&level).unwrap();
+    let parent = created[0].parent.as_deref().unwrap();
+    let mut swapped = 0;
+    let proceeded = super::take_back::take_back_level_with_hooks(
+        parent,
+        &created[0],
+        ".undo-r",
+        &mut || {},
+        &mut || {
+            swapped += 1;
+            fs::rename(&name, &away).unwrap();
+            fs::create_dir(&name).unwrap();
+            fs::write(name.join("theirs"), b"x").unwrap();
+        },
+    );
+    assert_eq!(swapped, 1, "the hook ran once");
+    assert!(proceeded, "the level itself was taken back");
+    assert!(!level.exists(), "the level is removed");
+    assert!(
+        name.join("theirs").is_file(),
+        "the replacement or its data was removed"
+    );
+    assert!(
+        entry_names(&away).is_empty(),
+        "the moved quarantine stays, empty"
+    );
+    mark_path("name at: ", &name);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_deep_rollback_takes_back_every_level_and_its_quarantine() {
+    // Three levels are taken back through one quarantine made beside the
+    // outermost, which is then removed: no trace is left.
+    let dir = TempDir::new("deep-one-quarantine");
+    let created = super::create_directories(&dir.join("a").join("b").join("c")).unwrap();
+    assert_eq!(created.len(), 3);
+    super::undo_created_directories(&created);
+    assert!(
+        entry_names(&dir.path).is_empty(),
+        "{:?}",
+        entry_names(&dir.path)
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_level_on_another_filesystem_is_taken_back_through_a_quarantine_beside_it() {
+    // `new/../m/more`: `new` is made in the base directory, then `m`, a
+    // symlink to a directory on /dev/shm, is descended through and `more`
+    // is made there. A rename of `more` into the quarantine beside `new`
+    // fails with EXDEV; `more` must be taken back through a quarantine on
+    // its own filesystem, and `new` still through the shared one.
+    use std::os::unix::fs::MetadataExt as _;
+    let shm = std::path::Path::new("/dev/shm");
+    let dir = TempDir::new("cross-device");
+    let Ok(shm_meta) = fs::metadata(shm) else {
+        panic!("this test needs /dev/shm");
+    };
+    assert_ne!(
+        shm_meta.dev(),
+        fs::metadata(&dir.path).unwrap().dev(),
+        "this test needs /dev/shm on another filesystem than the temp dir"
+    );
+    let other = shm.join(format!(
+        "pokeemerald-rs-cross-device-{}",
+        std::process::id()
+    ));
+    fs::create_dir(&other).unwrap();
+    std::os::unix::fs::symlink(&other, dir.join("m")).unwrap();
+    let target = dir.join("new").join("..").join("m").join("more");
+    let created = super::create_directories(&target).unwrap();
+    assert!(other.join("more").is_dir(), "more was made on /dev/shm");
+
+    super::undo_created_directories(&created);
+
+    let on_shm = entry_names(&other);
+    let in_base = entry_names(&dir.path);
+    fs::remove_dir_all(&other).unwrap();
+    assert!(on_shm.is_empty(), "left on /dev/shm: {on_shm:?}");
+    assert_eq!(in_base, ["m"], "left in the base: {in_base:?}");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_level_on_another_filesystem_is_taken_back_when_one_descriptor_is_free() {
+    use std::os::unix::fs::MetadataExt as _;
+    // As above, but rollback starts with one free descriptor slot. The
+    // shared quarantine beside `new` takes it, so the cross-device fallback
+    // for `more` must free that quarantine first, or it cannot read
+    // `/dev/urandom` and strands `more` and `new` both.
+    if !in_descriptor_pressure_child() {
+        run_under_descriptor_pressure(
+            "import_rom::created_dirs::tests::a_level_on_another_filesystem_is_taken_back_when_one_descriptor_is_free",
+        );
+        return;
+    }
+    let shm = std::path::Path::new("/dev/shm");
+    let dir = TempDir::new("cross-device-pressure");
+    let Ok(shm_meta) = fs::metadata(shm) else {
+        panic!("this test needs /dev/shm");
+    };
+    assert_ne!(
+        shm_meta.dev(),
+        fs::metadata(&dir.path).unwrap().dev(),
+        "this test needs /dev/shm on another filesystem than the temp dir"
+    );
+    let other = shm.join(format!(
+        "pokeemerald-rs-cross-device-pressure-{}",
+        std::process::id()
+    ));
+    fs::create_dir(&other).unwrap();
+    std::os::unix::fs::symlink(&other, dir.join("m")).unwrap();
+    let target = dir.join("new").join("..").join("m").join("more");
+    let created = super::create_directories(&target).unwrap();
+    assert!(other.join("more").is_dir(), "more was made on /dev/shm");
+
+    let mut fillers = None;
+    super::take_back::undo_created_directories_with_hooks(&created, &mut || {
+        if fillers.is_none() {
+            fillers = Some(fill_descriptor_table_leaving(1));
+        }
+    });
+    drop(fillers);
+
+    let on_shm = entry_names(&other);
+    let in_base = entry_names(&dir.path);
+    fs::remove_dir_all(&other).unwrap();
+    assert!(on_shm.is_empty(), "left on /dev/shm: {on_shm:?}");
+    assert_eq!(in_base, ["m"], "left in the base: {in_base:?}");
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[test]
+fn a_stranded_capture_is_reported_in_its_quarantines_current_place() {
+    // The quarantine was made in `a`, so the location recorded then is
+    // `a/.undo-held`; `a` is renamed to `b` before the capture is given up
+    // on, and the warning must name where it is now, under `b`.
+    let dir = TempDir::new("restore-renamed-quarantine-home");
+    let created = super::create_directories(&dir.join("a").join("new")).unwrap();
+    let level = created.last().unwrap();
+    let parent = level.parent.as_deref().unwrap();
+    let recorded = dir.join("a").join(".undo-held");
+    fs::rename(dir.join("a"), dir.join("b")).unwrap();
+    let moved = fs::canonicalize(dir.join("b")).unwrap();
+    let quarantine = stage_unrestorable_capture(&moved, parent);
+
+    let warning = super::take_back::restore_capture(
+        std::os::fd::AsFd::as_fd(&quarantine),
+        std::os::fd::AsFd::as_fd(parent),
+        ".undo-held",
+        &recorded,
+        parent,
+        level,
+    );
+
+    assert_eq!(
+        warning.as_deref(),
+        Some(
+            format!(
+                "warning: could not put {} back; its contents remain in {}",
+                moved.join("new").display(),
+                moved
+                    .join(".undo-held")
+                    .join(super::take_back::QUARANTINE_ENTRY)
+                    .display()
+            )
+            .as_str()
+        )
+    );
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[test]
+fn a_stranded_capture_is_reported_under_the_quarantines_own_current_name() {
+    // The quarantine itself, not its home, is renamed after it is made:
+    // `.undo-held` becomes `.undo-moved`, and the warning must name the
+    // capture under `.undo-moved`, where it is, read through the held
+    // quarantine descriptor rather than rebuilt from its original name.
+    let dir = TempDir::new("restore-renamed-quarantine");
+    let created = super::create_directories(&dir.join("a").join("new")).unwrap();
+    let level = created.last().unwrap();
+    let parent = level.parent.as_deref().unwrap();
+    let home = fs::canonicalize(dir.join("a")).unwrap();
+    let recorded = home.join(".undo-held");
+    let quarantine = stage_unrestorable_capture(&home, parent);
+    fs::rename(&recorded, home.join(".undo-moved")).unwrap();
+
+    let warning = super::take_back::restore_capture(
+        std::os::fd::AsFd::as_fd(&quarantine),
+        std::os::fd::AsFd::as_fd(parent),
+        ".undo-held",
+        &recorded,
+        parent,
+        level,
+    );
+
+    assert_eq!(
+        warning.as_deref(),
+        Some(
+            format!(
+                "warning: could not put {} back; its contents remain in {}",
+                home.join("new").display(),
+                home.join(".undo-moved")
+                    .join(super::take_back::QUARANTINE_ENTRY)
+                    .display()
+            )
+            .as_str()
+        )
+    );
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[test]
+fn a_quarantine_whose_removal_fails_is_reported_under_its_homes_current_name() {
+    // The quarantine's home `a` is renamed to `b` after the quarantine is
+    // made, then something lands in it so its removal fails; the warning
+    // must name `b/.undo-r`, where it is, not `a/.undo-r`.
+    if !in_rollback_stderr_child() {
+        let stderr = rerun_alone_for_stderr(
+            "import_rom::created_dirs::tests::a_quarantine_whose_removal_fails_is_reported_under_its_homes_current_name",
+        );
+        let warned = warned_path(
+            &stderr,
+            "warning: could not remove cleanup directory ",
+            ": ",
+        );
+        assert_names_marked_path(&stderr, warned, "quarantine at: ");
+        return;
+    }
+    let dir = TempDir::new("quarantine-home-renamed");
+    let created = super::create_directories(&dir.join("a").join("new")).unwrap();
+    let level = created.last().unwrap();
+    let parent = level.parent.as_deref().unwrap();
+    let moved = dir.join("b");
+    let proceeded = super::take_back::take_back_level_with_hooks(
+        parent,
+        level,
+        ".undo-r",
+        &mut || fs::rename(dir.join("a"), &moved).unwrap(),
+        &mut || fs::write(moved.join(".undo-r").join("held"), b"x").unwrap(),
+    );
+    assert!(proceeded, "the level itself was taken back");
+    assert!(moved.join(".undo-r").join("held").is_file());
+    mark_path("quarantine at: ", &moved.join(".undo-r"));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_level_whose_name_was_retaken_before_rollback_is_reported_left_in_place() {
+    // The name is swapped before rollback starts, so the first check fails:
+    // the replacement and the levels above stay, and rollback says so
+    // without calling the replacement the level it made.
+    if !in_rollback_stderr_child() {
+        let stderr = rerun_alone_for_stderr(
+            "import_rom::created_dirs::tests::a_level_whose_name_was_retaken_before_rollback_is_reported_left_in_place",
+        );
+        let warned = warned_path(
+            &stderr,
+            "warning: ",
+            " is left in place: another entry has taken its name; the levels above it are left too",
+        );
+        assert_names_marked_path(&stderr, warned, "level at: ");
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        {
+            let moved = warned_path(&stderr, "warning: ", " is the directory rollback made for ");
+            assert_names_marked_path(&stderr, moved, "original at: ");
+        }
+        return;
+    }
+    let dir = TempDir::new("undo-retaken-before-reported");
+    let level = dir.join("new");
+    let moved = dir.join("original");
+    let created = super::create_directories(&level).unwrap();
+    fs::rename(&level, &moved).unwrap();
+    fs::create_dir(&level).unwrap();
+    super::undo_created_directories(&created);
+    assert!(level.is_dir() && moved.is_dir());
+    mark_path("level at: ", &level);
+    mark_path("original at: ", &moved);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_level_rollback_no_longer_holds_is_reported_left_in_place() {
+    // The reopen failed, so no pin vouches for the level: it is left
+    // standing, and the warning says why.
+    if !in_rollback_stderr_child() {
+        let stderr = rerun_alone_for_stderr(
+            "import_rom::created_dirs::tests::a_level_rollback_no_longer_holds_is_reported_left_in_place",
+        );
+        let warned = warned_path(
+            &stderr,
+            "warning: ",
+            " is left in place: rollback no longer holds it open to confirm it is the directory this import made",
+        );
+        assert_names_marked_path(&stderr, warned, "level at: ");
+        return;
+    }
+    let dir = TempDir::new("undo-unheld-reported");
+    let level = dir.join("new");
+    let (created, _source) = super::create_directories_with_hooks(
+        &level,
+        super::MAX_PINNED_LEVELS,
+        &mut || {},
+        &mut || Some(std::io::Error::other("reopen forced to fail for the test")),
+        &mut || None,
+    )
+    .expect_err("a forced reopen failure fails the create");
+    super::undo_created_directories(&created);
+    assert!(level.is_dir());
+    mark_path("level at: ", &level);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_level_that_cannot_be_examined_is_reported_left_in_place() {
+    // The name check fails with something other than ENOENT (here
+    // ENAMETOOLONG, standing in for EACCES or EMFILE): the level is left
+    // standing, and the warning carries the error.
+    if !in_rollback_stderr_child() {
+        let stderr = rerun_alone_for_stderr(
+            "import_rom::created_dirs::tests::a_level_that_cannot_be_examined_is_reported_left_in_place",
+        );
+        assert!(
+            stderr.contains(" is left in place: it could not be examined: ")
+                && stderr.contains("; the levels above it are left too"),
+            "the unexamined level is not reported; stderr:\n{stderr}"
+        );
+        return;
+    }
+    let dir = TempDir::new("undo-unexamined-reported");
+    let level = dir.join("new");
+    let mut created = super::create_directories(&level).unwrap();
+    created[0].name = std::ffi::OsString::from("n".repeat(4096));
+    super::undo_created_directories(&created);
+    assert!(level.is_dir());
+}
+
+#[cfg(unix)]
+#[test]
+fn an_unpinned_level_is_reported_left_in_place() {
+    // A pin budget of one sheds the outer levels' pins as the inner ones
+    // are made: rollback takes back the pinned innermost level and reports
+    // the unpinned one it leaves, rather than skipping it silently.
+    if !in_rollback_stderr_child() {
+        let stderr = rerun_alone_for_stderr(
+            "import_rom::created_dirs::tests::an_unpinned_level_is_reported_left_in_place",
+        );
+        let warned = warned_path(
+            &stderr,
+            "warning: ",
+            " is left in place: it was not held open, so rollback could not confirm it is the directory this import made; the levels above it are left too",
+        );
+        assert_names_marked_path(&stderr, warned, "level at: ");
+        return;
+    }
+    let dir = TempDir::new("undo-unpinned-reported");
+    let outer = dir.join("a");
+    let target = outer.join("b").join("c");
+    let created =
+        super::create_directories_with_hooks(&target, 1, &mut || {}, &mut || None, &mut || None)
+            .expect("every level is created");
+    assert!(created[0].parent.is_none() && created[1].parent.is_none());
+    assert!(created[2].parent.is_some());
+    super::undo_created_directories(&created);
+    assert!(!target.exists(), "the pinned level is taken back");
+    assert!(
+        outer.join("b").is_dir(),
+        "the unpinned level is left standing"
+    );
+    mark_path("level at: ", &outer.join("b"));
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[test]
+fn a_level_moved_away_after_validation_is_reported_where_it_was_moved() {
+    // The validated level is renamed away with nothing put in its place,
+    // so its take-back finds the name gone; the directory rollback made
+    // still stands where it was moved, and the warning names that place.
+    if !in_rollback_stderr_child() {
+        let stderr = rerun_alone_for_stderr(
+            "import_rom::created_dirs::tests::a_level_moved_away_after_validation_is_reported_where_it_was_moved",
+        );
+        let warned = warned_path(&stderr, "warning: ", " is the directory rollback made for ");
+        assert_names_marked_path(&stderr, warned, "original at: ");
+        assert!(
+            stderr.contains(", moved away before rollback could take it back; it is left in place"),
+            "stderr:\n{stderr}"
+        );
+        return;
+    }
+    let dir = TempDir::new("undo-moved-away-reported");
+    let level = dir.join("new");
+    let moved = dir.join("original");
+    let created = super::create_directories(&level).unwrap();
+    super::take_back::undo_created_directories_with_hooks(&created, &mut || {
+        fs::rename(&level, &moved).unwrap();
+    });
+    assert!(!level.exists() && moved.is_dir());
+    assert_eq!(
+        entry_names(&dir.path),
+        ["original"],
+        "no quarantine is left behind"
+    );
+    mark_path("original at: ", &moved);
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[test]
+fn a_level_removed_by_another_writer_after_validation_is_not_reported() {
+    // Removed outright, not moved: nothing of it is left, so rollback
+    // reports nothing.
+    if !in_rollback_stderr_child() {
+        let stderr = rerun_alone_for_stderr(
+            "import_rom::created_dirs::tests::a_level_removed_by_another_writer_after_validation_is_not_reported",
+        );
+        assert!(!stderr.contains("warning:"), "stderr:\n{stderr}");
+        return;
+    }
+    let dir = TempDir::new("undo-removed-silent");
+    let level = dir.join("new");
+    let created = super::create_directories(&level).unwrap();
+    super::take_back::undo_created_directories_with_hooks(&created, &mut || {
+        fs::remove_dir(&level).unwrap();
+    });
+    assert!(entry_names(&dir.path).is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn an_unpinned_level_missing_from_its_path_is_reported() {
+    // A pin budget of one leaves `a` and `a/b` unpinned; `a` is renamed
+    // while the pinned `c` is taken back, so neither recorded path resolves
+    // and `b` stands under the new name. Rollback cannot tell that from a
+    // removal, so it says the level may be left elsewhere rather than
+    // skipping it silently.
+    if !in_rollback_stderr_child() {
+        let stderr = rerun_alone_for_stderr(
+            "import_rom::created_dirs::tests::an_unpinned_level_missing_from_its_path_is_reported",
+        );
+        let warned = warned_path(
+            &stderr,
+            "warning: ",
+            " is no longer at its recorded path, and rollback did not hold it open; if it was moved rather than removed, the directory this import made is left elsewhere",
+        );
+        assert_names_marked_path(&stderr, warned, "level at: ");
+        return;
+    }
+    let dir = TempDir::new("undo-unpinned-moved-reported");
+    let outer = dir.join("a");
+    let target = outer.join("b").join("c");
+    let created =
+        super::create_directories_with_hooks(&target, 1, &mut || {}, &mut || None, &mut || None)
+            .expect("every level is created");
+    assert!(created[0].parent.is_none() && created[1].parent.is_none());
+    let moved = dir.join("moved");
+    super::take_back::undo_created_directories_with_hooks(&created, &mut || {
+        fs::rename(&outer, &moved).unwrap();
+    });
+    assert!(
+        moved.join("b").is_dir(),
+        "the unpinned level stands elsewhere"
+    );
+    assert!(
+        !moved.join("b").join("c").exists(),
+        "the pinned level is taken back"
+    );
+    eprintln!(
+        "level at: {} | {}",
+        outer.join("b").display(),
+        outer.join("b").display()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_level_removed_and_replaced_after_validation_is_not_reported_as_moved() {
+    // The validated level is removed outright and another directory made at
+    // its name: the replacement is restored, nothing of the original is
+    // left, so rollback must not claim it was moved and still stands; it
+    // reports only the replacement that leaves the levels above standing.
+    if !in_rollback_stderr_child() {
+        let stderr = rerun_alone_for_stderr(
+            "import_rom::created_dirs::tests::a_level_removed_and_replaced_after_validation_is_not_reported_as_moved",
+        );
+        assert!(
+            !stderr.contains(" is the directory rollback made for ")
+                && !stderr.contains("moved away")
+                && !stderr.contains("(deleted)"),
+            "a removed original is reported as moved; stderr:\n{stderr}"
+        );
+        let warned = warned_path(
+            &stderr,
+            "warning: ",
+            " is left in place: another entry has taken its name; the levels above it are left too",
+        );
+        assert_names_marked_path(&stderr, warned, "level at: ");
+        return;
+    }
+    let dir = TempDir::new("undo-removed-replaced");
+    let level = dir.join("new");
+    let created = super::create_directories(&level).unwrap();
+    super::take_back::undo_created_directories_with_hooks(&created, &mut || {
+        fs::remove_dir(&level).unwrap();
+        fs::create_dir(&level).unwrap();
+    });
+    assert!(level.is_dir(), "the replacement is kept");
+    assert_eq!(
+        entry_names(&dir.path),
+        ["new"],
+        "no quarantine is left behind"
+    );
+    mark_path("level at: ", &level);
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[test]
+fn a_level_swapped_out_of_its_quarantine_before_put_back_is_reported_where_it_went() {
+    // The level gains contents, so it cannot be removed; before it is put
+    // back another writer moves it out of the quarantine and puts an empty
+    // directory there, which the put-back then restores under the level's
+    // name. The original must be reported where it went, and the name as
+    // taken by another entry, not the replacement as the level that could
+    // not be removed.
+    if !in_rollback_stderr_child() {
+        let stderr = rerun_alone_for_stderr(
+            "import_rom::created_dirs::tests::a_level_swapped_out_of_its_quarantine_before_put_back_is_reported_where_it_went",
+        );
+        let warned = warned_path(&stderr, "warning: ", " is the directory rollback made for ");
+        assert_names_marked_path(&stderr, warned, "moved to: ");
+        let taken = warned_path(
+            &stderr,
+            "warning: ",
+            " is left in place: another entry has taken its name; the levels above it are left too",
+        );
+        assert_names_marked_path(&stderr, taken, "level at: ");
+        assert!(
+            !stderr.contains("it could not be removed"),
+            "the replacement is reported as the level; stderr:\n{stderr}"
+        );
+        return;
+    }
+    let dir = TempDir::new("undo-swapped-before-put-back");
+    let level = dir.join("new");
+    let moved = dir.join("moved");
+    let created = super::create_directories(&level).unwrap();
+    super::take_back::undo_created_directories_with_capture_hooks(
+        &created,
+        &mut || fs::write(level.join("keep"), b"x").unwrap(),
+        &mut |stage, held| {
+            if stage == super::take_back::CaptureStage::BeforeRestore {
+                rustix::fs::renameat(
+                    held,
+                    super::take_back::QUARANTINE_ENTRY,
+                    rustix::fs::CWD,
+                    &moved,
+                )
+                .unwrap();
+                rustix::fs::mkdirat(
+                    held,
+                    super::take_back::QUARANTINE_ENTRY,
+                    rustix::fs::Mode::RWXU,
+                )
+                .unwrap();
+            }
+        },
+    );
+    assert!(moved.join("keep").is_file(), "the original is kept");
+    assert!(level.is_dir(), "the replacement is put back");
+    assert_eq!(
+        entry_names(&dir.path),
+        ["moved", "new"],
+        "no quarantine is left behind"
+    );
+    mark_path("moved to: ", &moved);
+    mark_path("level at: ", &level);
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[test]
+fn a_level_swapped_out_of_its_quarantine_before_its_unlink_is_reported_where_it_went() {
+    // The capture is found to be this level; before its unlink another
+    // writer moves it out of the quarantine and puts an empty directory
+    // there, which the unlink removes. The original still stands where it
+    // was moved, and must be reported there.
+    if !in_rollback_stderr_child() {
+        let stderr = rerun_alone_for_stderr(
+            "import_rom::created_dirs::tests::a_level_swapped_out_of_its_quarantine_before_its_unlink_is_reported_where_it_went",
+        );
+        let warned = warned_path(&stderr, "warning: ", " is the directory rollback made for ");
+        assert_names_marked_path(&stderr, warned, "moved to: ");
+        return;
+    }
+    let dir = TempDir::new("undo-swapped-before-unlink");
+    let level = dir.join("new");
+    let moved = dir.join("moved");
+    let created = super::create_directories(&level).unwrap();
+    let mut swapped = 0;
+    super::take_back::undo_created_directories_with_capture_hooks(
+        &created,
+        &mut || {},
+        &mut |stage, held| {
+            if stage == super::take_back::CaptureStage::Verified {
+                swapped += 1;
+                rustix::fs::renameat(
+                    held,
+                    super::take_back::QUARANTINE_ENTRY,
+                    rustix::fs::CWD,
+                    &moved,
+                )
+                .unwrap();
+                rustix::fs::mkdirat(
+                    held,
+                    super::take_back::QUARANTINE_ENTRY,
+                    rustix::fs::Mode::RWXU,
+                )
+                .unwrap();
+            }
+        },
+    );
+    assert_eq!(swapped, 1, "the hook ran once");
+    assert!(moved.is_dir(), "the original is kept");
+    assert_eq!(
+        entry_names(&dir.path),
+        ["moved"],
+        "the replacement and the quarantine are removed"
+    );
+    mark_path("moved to: ", &moved);
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[test]
+fn a_quarantine_renamed_before_its_removal_is_reported_where_it_went() {
+    // Before the quarantine's re-check it is renamed, leaving its name
+    // vacant. The warning must name the quarantine's new place, read
+    // through its held descriptor, not the vacated `.undo-*` path.
+    if !in_rollback_stderr_child() {
+        let stderr = rerun_alone_for_stderr(
+            "import_rom::created_dirs::tests::a_quarantine_renamed_before_its_removal_is_reported_where_it_went",
+        );
+        let warned = warned_path(
+            &stderr,
+            "warning: ",
+            " is the cleanup directory rollback made, moved away from ",
+        );
+        assert_names_marked_path(&stderr, warned, "quarantine at: ");
+        assert!(
+            !stderr.contains("no longer resolves"),
+            "the vacated name is reported; stderr:\n{stderr}"
+        );
+        return;
+    }
+    let dir = TempDir::new("quarantine-renamed-before-removal");
+    let level = dir.join("new");
+    let (name, away) = (dir.join(".undo-r"), dir.join("away"));
+    let created = super::create_directories(&level).unwrap();
+    let parent = created[0].parent.as_deref().unwrap();
+    let proceeded = super::take_back::take_back_level_with_hooks(
+        parent,
+        &created[0],
+        ".undo-r",
+        &mut || {},
+        &mut || fs::rename(&name, &away).unwrap(),
+    );
+    assert!(proceeded, "the level itself was taken back");
+    assert!(!level.exists() && !name.exists());
+    assert!(entry_names(&away).is_empty(), "the moved quarantine stays");
+    mark_path("quarantine at: ", &away);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_quarantine_whose_name_cannot_be_examined_is_reported_with_the_error() {
+    // The quarantine's re-check fails with something other than ENOENT
+    // (here ENAMETOOLONG, standing in for EACCES on its parent): it is left
+    // in place, and the warning carries the error, not a claim that its
+    // name no longer resolves to it or that it was moved away.
+    if !in_rollback_stderr_child() {
+        let stderr = rerun_alone_for_stderr(
+            "import_rom::created_dirs::tests::a_quarantine_whose_name_cannot_be_examined_is_reported_with_the_error",
+        );
+        assert!(
+            stderr.contains("warning: cleanup directory ")
+                && stderr.contains(" could not be examined: ")
+                && stderr.contains("; it is left in place"),
+            "the unexamined quarantine is not reported; stderr:\n{stderr}"
+        );
+        assert!(
+            !stderr.contains("no longer resolves") && !stderr.contains("moved away"),
+            "the lookup error is reported as a moved quarantine; stderr:\n{stderr}"
+        );
+        return;
+    }
+    let dir = TempDir::new("quarantine-unexamined");
+    let level = dir.join("new");
+    let name = dir.join(".undo-r");
+    let created = super::create_directories(&level).unwrap();
+    let parent = created[0].parent.as_deref().unwrap();
+    let proceeded = super::take_back::take_back_level_looking_up(
+        parent,
+        &created[0],
+        ".undo-r",
+        &"n".repeat(4096),
+    );
+    assert!(proceeded, "the level itself was taken back");
+    assert!(!level.exists(), "the level is removed");
+    assert!(
+        entry_names(&name).is_empty(),
+        "the quarantine is left, empty"
+    );
 }
