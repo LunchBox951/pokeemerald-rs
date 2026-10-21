@@ -122,5 +122,6 @@ pub(super) fn image_twin(id: &str, payload: &[u8]) -> pack_format::PackEntry {
 }
 
 mod audio;
+mod audio_bytecode;
 mod locator;
 mod publication;

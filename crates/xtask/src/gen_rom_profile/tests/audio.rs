@@ -6,13 +6,12 @@ use assets::audio::{
     DirectSoundMode, DirectSoundVoice, Envelope, SampleId, Square1Voice, VoiceEntry, VoiceGroup,
     VOICE_SLOT_COUNT,
 };
-use pack_format::{image_entry, PackWriter};
+use pack_format::PackWriter;
 use rom_import::fixture::RomFixture;
 
 use super::super::audio;
 use super::super::error::GenRomProfileError;
 use super::super::pack_source::PackSource;
-use super::super::plan::AudioPlan;
 use super::super::search::{Lz77Search, PointerIndex, RawSearch};
 use super::super::Context;
 use super::{image_twin, scratch, synthetic_bag_ids};
@@ -70,7 +69,7 @@ const AUDIO_FILLER_SLOT: [u8; 12] = [1, 60, 0, 0, 2, 0, 0, 0, 0, 0, 15, 0];
 
 /// The slots [`audio_rom`] holds for `voicegroup_title`, as the importer
 /// reads them.
-fn title_voicegroup_slots() -> Vec<VoiceEntry> {
+pub(super) fn title_voicegroup_slots() -> Vec<VoiceEntry> {
     let mut slots = vec![VoiceEntry::DirectSound(DirectSoundVoice {
         base_key: 60,
         pan: None,
@@ -102,7 +101,7 @@ fn title_voicegroup_slots() -> Vec<VoiceEntry> {
 }
 
 /// The encoded pack voicegroup [`audio_rom`]'s title group yields.
-fn title_voicegroup_payload() -> Vec<u8> {
+pub(super) fn title_voicegroup_payload() -> Vec<u8> {
     VoiceGroup::new(title_voicegroup_slots())
         .expect("128 slots are a valid voicegroup")
         .encode()
@@ -151,7 +150,7 @@ fn with_audio_context<T>(name: &str, songs: &[&str], body: impl FnOnce(&Context<
 
 /// The encoded pack song [`audio_rom`]'s header describes: one track, the
 /// given priority, no reverb, playing through `voicegroup_title`.
-fn title_song_payload(priority: u8) -> Vec<u8> {
+pub(super) fn title_song_payload(priority: u8) -> Vec<u8> {
     assets::audio::Song::new(
         assets::audio::VoiceGroupId("audio/voicegroup/title".to_owned()),
         assets::audio::MusicPlayerId(0),
@@ -177,7 +176,7 @@ fn with_audio_song_payload<T>(
 }
 
 /// [`with_audio_song_payload`] after `mutate` has edited the ROM image.
-fn with_audio_song_rom<T>(
+pub(super) fn with_audio_song_rom<T>(
     name: &str,
     songs: &[&str],
     song_payload: &[u8],
@@ -190,7 +189,7 @@ fn with_audio_song_rom<T>(
 
 /// The deepest fixture: `voicegroup` is the payload of the pack's
 /// `audio/voicegroup/title` entry, or `None` to leave the entry out.
-fn with_audio_pack<T>(
+pub(super) fn with_audio_pack<T>(
     name: &str,
     songs: &[&str],
     song_payload: &[u8],
@@ -209,7 +208,7 @@ fn with_audio_pack<T>(
 
 /// [`with_audio_pack`] with the `audio/voicegroup/` entries given whole, so a
 /// test can choose their kind and add groups the plan never reaches.
-fn with_audio_pack_entry<T>(
+pub(super) fn with_audio_pack_entry<T>(
     name: &str,
     songs: &[&str],
     song_payload: &[u8],
@@ -304,103 +303,6 @@ fn the_audio_fixture_locates_its_one_song() {
     });
 }
 
-/// Locate against a pack whose `audio/voicegroup/title` holds `voicegroup`.
-fn locate_with_voicegroup(
-    name: &str,
-    voicegroup: Option<&[u8]>,
-) -> Result<AudioPlan, GenRomProfileError> {
-    with_audio_pack(
-        name,
-        &["audio/song/mus_title"],
-        &title_song_payload(0),
-        voicegroup,
-        |_| {},
-        |ctx| audio::locate(ctx, &mut Vec::new()),
-    )
-}
-
-#[test]
-fn a_missing_voicegroup_entry_is_refused() {
-    let err = locate_with_voicegroup("audio-voicegroup-missing", None)
-        .expect_err("a pack without the voicegroup cannot corroborate the root");
-    assert!(
-        matches!(&err, GenRomProfileError::MissingPackEntry(id) if id == "audio/voicegroup/title"),
-        "{err:?}"
-    );
-}
-
-#[test]
-fn a_malformed_voicegroup_entry_is_refused() {
-    let err = locate_with_voicegroup("audio-voicegroup-malformed", Some(&[129]))
-        .expect_err("a payload that is not a voicegroup is refused");
-    assert!(
-        matches!(&err, GenRomProfileError::EntryShape { id, .. } if id == "audio/voicegroup/title"),
-        "{err:?}"
-    );
-}
-
-#[test]
-fn a_voicegroup_entry_that_disagrees_with_the_rom_is_refused() {
-    // Same slot count and sample as the ROM; only one instrument field
-    // differs, so a refusal can only come from comparing the group's content.
-    let mut slots = title_voicegroup_slots();
-    let VoiceEntry::DirectSound(voice) = &mut slots[0] else {
-        panic!("slot 0 is the DirectSound voice");
-    };
-    voice.envelope.release = 164;
-    let altered = VoiceGroup::new(slots).expect("valid group").encode();
-    let err = locate_with_voicegroup("audio-voicegroup-mismatch", Some(&altered))
-        .expect_err("an altered instrument is refused");
-    assert!(
-        matches!(&err, GenRomProfileError::StructMismatch { id, .. } if id == "audio/voicegroup/title"),
-        "{err:?}"
-    );
-
-    // A borrowed slot past the declared one is compared too.
-    let mut slots = title_voicegroup_slots();
-    let VoiceEntry::Square1(voice) = &mut slots[5] else {
-        panic!("slot 5 is a square-1 voice");
-    };
-    voice.duty = 1;
-    let altered = VoiceGroup::new(slots).expect("valid group").encode();
-    let err = locate_with_voicegroup("audio-voicegroup-borrowed", Some(&altered))
-        .expect_err("an altered borrowed slot is refused");
-    assert!(
-        matches!(&err, GenRomProfileError::StructMismatch { id, .. } if id == "audio/voicegroup/title"),
-        "{err:?}"
-    );
-}
-
-#[test]
-fn a_voicegroup_entry_that_matches_the_rom_is_accepted() {
-    let plan = locate_with_voicegroup("audio-voicegroup-match", Some(&title_voicegroup_payload()))
-        .expect("the matching entry locates");
-    assert_eq!(plan.voicegroups.len(), 1);
-}
-
-#[test]
-fn a_voicegroup_entry_of_the_wrong_kind_is_refused() {
-    // The matching payload, stored as an 8-bit image the runtime's raw()
-    // lookup rejects.
-    let payload = title_voicegroup_payload();
-    let width = u32::try_from(payload.len()).expect("payload fits in u32");
-    let entry = image_entry("audio/voicegroup/title".to_owned(), width, 1, 8, payload)
-        .expect("valid image entry");
-    let err = with_audio_pack_entry(
-        "audio-voicegroup-wrong-kind",
-        &["audio/song/mus_title"],
-        &title_song_payload(0),
-        vec![entry],
-        |_| {},
-        |ctx| audio::locate(ctx, &mut Vec::new()),
-    )
-    .expect_err("an image-kind voicegroup entry is refused");
-    assert!(
-        matches!(&err, GenRomProfileError::WrongPackEntryKind { id, .. } if id == "audio/voicegroup/title"),
-        "{err:?}"
-    );
-}
-
 fn wrong_kind_id(err: &GenRomProfileError) -> Option<&str> {
     match err {
         GenRomProfileError::WrongPackEntryKind { id, .. } => Some(id),
@@ -469,31 +371,6 @@ fn a_song_entry_of_the_wrong_kind_is_refused() {
     )
     .expect_err("an image-kind song entry is refused");
     assert_eq!(wrong_kind_id(&err), Some(id), "{err:?}");
-}
-
-#[test]
-fn a_voicegroup_entry_the_plan_never_reaches_is_refused() {
-    // The title entry matches the ROM; the extra group is what a stale or
-    // wider extraction would leave behind, and the importer never emits it.
-    let payload = title_voicegroup_payload();
-    let entries = vec![
-        pack_format::raw_entry("audio/voicegroup/title".to_owned(), payload.clone()),
-        pack_format::raw_entry("audio/voicegroup/stale".to_owned(), payload),
-    ];
-    let err = with_audio_pack_entry(
-        "audio-voicegroup-extra",
-        &["audio/song/mus_title"],
-        &title_song_payload(0),
-        entries,
-        |_| {},
-        |ctx| audio::locate(ctx, &mut Vec::new()),
-    )
-    .expect_err("a pack voicegroup outside the plan is refused");
-    let GenRomProfileError::StructMismatch { id, reason } = &err else {
-        panic!("{err:?}");
-    };
-    assert_eq!(id, "audio/voicegroup/*");
-    assert!(reason.contains("audio/voicegroup/stale"), "{reason}");
 }
 
 #[test]
@@ -590,56 +467,5 @@ fn a_lone_unsupported_song_is_refused_by_the_singleton_check() {
             report.is_empty(),
             "refused before locating anything: {report:?}"
         );
-    });
-}
-
-/// Run `locate` against the audio fixture with `mutate` applied to the ROM
-/// and assert it fails closed with `SongBytecodeMismatch` for the song.
-fn assert_bytecode_refused(name: &str, mutate: impl FnOnce(&mut Vec<u8>)) {
-    with_audio_song_rom(
-        name,
-        &["audio/song/mus_title"],
-        &title_song_payload(0),
-        mutate,
-        |ctx| {
-            let mut report = Vec::new();
-            let err = audio::locate(ctx, &mut report).expect_err("bytecode must be compared");
-            let GenRomProfileError::SongBytecodeMismatch { id, .. } = &err else {
-                panic!("{err:?}");
-            };
-            assert_eq!(id, "audio/song/mus_title");
-        },
-    );
-}
-
-#[test]
-fn a_song_table_player_that_disagrees_with_the_pack_is_refused() {
-    with_audio_song_rom(
-        "audio-song-player",
-        &["audio/song/mus_title"],
-        &title_song_payload(0),
-        |rom| rom[0x50_000C..0x50_000E].copy_from_slice(&1u16.to_le_bytes()),
-        |ctx| {
-            let err = audio::locate(ctx, &mut Vec::new()).expect_err("`ms` must be compared");
-            assert!(
-                matches!(&err, GenRomProfileError::StructMismatch { id, reason }
-                    if id == "audio/song/mus_title" && reason.contains("`ms`")),
-                "{err:?}"
-            );
-        },
-    );
-}
-
-#[test]
-fn a_changed_track_byte_is_refused() {
-    // Header metadata is untouched; only WAIT 1 becomes WAIT 2.
-    assert_bytecode_refused("audio-track-byte", |rom| rom[0x40_0000] = 0x82);
-}
-
-#[test]
-fn a_missing_track_is_refused() {
-    // Point the track at the ROM window's end, where no bytes exist.
-    assert_bytecode_refused("audio-track-missing", |rom| {
-        rom[0x30_0008..0x30_000C].copy_from_slice(&0x0900_0000u32.to_le_bytes());
     });
 }
