@@ -540,9 +540,9 @@ fn a_pre_existing_lock_file_keeps_its_mode() {
     drop(guard);
 }
 
-/// Creation never unlinks by pathname: an entry that replaces the fresh slot
-/// after it is created survives, and the widening reaches only the inode
-/// created, through the handle.
+/// Creation never unlinks the slot: an entry that replaces the fresh slot
+/// after it is published survives, and the widening, done before publication
+/// through the handle, never reaches it.
 #[cfg(unix)]
 #[test]
 fn a_replacement_landed_after_creation_survives_and_is_not_widened() {
@@ -550,11 +550,15 @@ fn a_replacement_landed_after_creation_survives_and_is_not_widened() {
     let dir = TempDir::new("lock-replaced-after-create");
     let lock_path = dir.path.join(LOCK_FILE_NAME);
 
-    let created = SaveFile::create_lock_file_with(&lock_path, |path| {
-        std::fs::remove_file(path).unwrap();
-        std::fs::write(path, b"a replacement").unwrap();
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
-    })
+    let created = SaveFile::create_lock_file_observing(
+        &lock_path,
+        |_| {},
+        |path| {
+            std::fs::remove_file(path).unwrap();
+            std::fs::write(path, b"a replacement").unwrap();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        },
+    )
     .expect("creation succeeds");
 
     assert!(created.is_some(), "the slot was created");
@@ -584,6 +588,63 @@ fn creation_beside_an_existing_slot_reports_it_and_leaves_it_alone() {
 
     assert!(created.is_none());
     assert_eq!(std::fs::read(&lock_path).unwrap(), b"held");
+}
+
+/// A slot that appears while the lock file is staged is reported and left
+/// alone, and the staging leaves nothing behind.
+#[cfg(unix)]
+#[test]
+fn a_slot_appearing_during_staging_is_reported_and_left_alone() {
+    let dir = TempDir::new("lock-slot-appears");
+    let lock_path = dir.path.join(LOCK_FILE_NAME);
+
+    let created = SaveFile::create_lock_file_with(&lock_path, |path| {
+        std::fs::write(path, b"a rival's slot").unwrap();
+    })
+    .expect("a rival's slot is not an error");
+
+    assert!(created.is_none());
+    assert_eq!(std::fs::read(&lock_path).unwrap(), b"a rival's slot");
+    let leftovers: Vec<_> = std::fs::read_dir(&dir.path)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .filter(|name| name != LOCK_FILE_NAME)
+        .collect();
+    assert!(leftovers.is_empty(), "staging left {leftovers:?} behind");
+}
+
+/// A creator that dies between creating the lock file and widening it must
+/// not leave a slot narrower than `0666`.
+#[cfg(unix)]
+#[test]
+fn a_creator_dying_before_widening_leaves_no_narrow_slot() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = TempDir::new("lock-dies-before-widen");
+    let lock_path = dir.path.join(LOCK_FILE_NAME);
+    let died = std::panic::catch_unwind(|| {
+        let _ = SaveFile::create_lock_file_with(&lock_path, |_| panic!("creator dies"));
+    });
+    assert!(died.is_err());
+    if let Ok(meta) = std::fs::metadata(&lock_path) {
+        assert_eq!(
+            meta.permissions().mode() & 0o777,
+            0o666,
+            "a narrow slot was published"
+        );
+    }
+}
+
+/// The staged path, private directory and file, is no longer than the slot
+/// path, so staging fits wherever the lock name does.
+#[cfg(unix)]
+#[test]
+fn the_lock_staging_path_is_no_longer_than_the_lock_name() {
+    let staged = std::path::Path::new(&SaveFile::lock_staging_directory_name())
+        .join(SaveFile::lock_staging_file_name());
+    assert!(
+        staged.as_os_str().len() <= LOCK_FILE_NAME.len(),
+        "{staged:?} is longer than {LOCK_FILE_NAME:?}"
+    );
 }
 
 /// Leftover staging-style names beside an absent slot are never disturbed.
