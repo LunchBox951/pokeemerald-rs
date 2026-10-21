@@ -104,7 +104,7 @@ pub(crate) mod overworld_phase;
 /// place both this module's own trigger and [`overworld_phase`]'s
 /// `sight_trainer_trigger` build their battles.
 pub(crate) mod route103_rival;
-/// The boot-loaded button mode on the title scenes (I-3, issue #2491).
+/// The boot-loaded button mode on the title scenes (I-6).
 #[cfg(test)]
 mod title_button_mode_tests;
 mod wild_encounter;

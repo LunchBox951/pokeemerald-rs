@@ -1,5 +1,5 @@
-//! The title scenes carry the boot-loaded `optionsButtonMode` (I-3, issue
-//! #2491): upstream reads the save during the copyright screen
+//! The title scenes carry the boot-loaded `optionsButtonMode` (I-6):
+//! upstream reads the save during the copyright screen
 //! (`pokeemerald/src/intro.c:1147-1156`), so `ReadKeys`
 //! (`pokeemerald/src/main.c:279-288`) applies L=A on the title.
 
