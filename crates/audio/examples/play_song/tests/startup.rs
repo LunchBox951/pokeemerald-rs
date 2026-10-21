@@ -147,16 +147,62 @@ fn the_null_backend_needs_no_transport_wait() {
     );
 }
 
+/// A fake transport: `queued` transitions and the current state, which
+/// `publish_on_drain` replaces once the queue empties, as a worker would
+/// mid-drain.
+struct FakeTransport {
+    queued: std::collections::VecDeque<platform::audio::TransportState>,
+    current: platform::audio::TransportState,
+    publish_on_drain: Option<platform::audio::TransportState>,
+}
+
+impl FakeTransport {
+    fn poll(&mut self) -> Option<platform::audio::TransportState> {
+        let next = self.queued.pop_front();
+        if next.is_none() {
+            if let Some(state) = self.publish_on_drain.take() {
+                self.current = state;
+            }
+        }
+        next
+    }
+
+    fn settle(&mut self) -> Option<TransportOutcome> {
+        settle_transport_once(self, Self::poll, |t| t.current)
+    }
+}
+
 #[test]
 fn a_current_ready_state_wins_over_an_older_queued_no_output() {
     use platform::audio::{TransportFailure, TransportState};
-    let queued = [
-        TransportState::Unavailable(TransportFailure::NoOutput),
-        TransportState::Ready,
-    ];
+    let mut transport = FakeTransport {
+        queued: [
+            TransportState::Unavailable(TransportFailure::NoOutput),
+            TransportState::Ready,
+        ]
+        .into(),
+        current: TransportState::Ready,
+        publish_on_drain: None,
+    };
     assert_eq!(
-        settle_transport_once(queued.into_iter(), TransportState::Ready),
+        transport.settle(),
         Some(TransportOutcome::Ready),
         "a device that attached before the first poll must play, not exit headless"
+    );
+}
+
+#[test]
+fn a_loss_published_while_draining_is_not_hidden_by_an_earlier_ready() {
+    use platform::audio::{TransportFailure, TransportState};
+    let lost = TransportState::Unavailable(TransportFailure::StreamLost);
+    let mut transport = FakeTransport {
+        queued: [TransportState::Ready].into(),
+        current: TransportState::Ready,
+        publish_on_drain: Some(lost),
+    };
+    assert_eq!(
+        transport.settle(),
+        Some(TransportOutcome::SetupFailure(lost)),
+        "the state read after draining decides"
     );
 }

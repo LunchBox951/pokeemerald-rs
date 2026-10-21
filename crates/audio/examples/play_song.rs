@@ -247,10 +247,10 @@ fn settle_transport(output: &mut AudioOutput) -> Option<ExitCode> {
 fn await_transport(output: &mut AudioOutput, timeout: Duration) -> TransportOutcome {
     let deadline = Instant::now() + timeout;
     loop {
-        let current = output.transport_state();
         let settled = settle_transport_once(
-            std::iter::from_fn(|| output.poll_transport_state()),
-            current,
+            output,
+            AudioOutput::poll_transport_state,
+            AudioOutput::transport_state,
         );
         if let Some(outcome) = settled {
             return outcome;
@@ -262,15 +262,17 @@ fn await_transport(output: &mut AudioOutput, timeout: Duration) -> TransportOutc
     }
 }
 
-/// One look at the transport: `current` decides and the `queued`
-/// transitions are drained unread, so an older `Unavailable` still queued
-/// behind a later `Ready` cannot end the run as headless.
-fn settle_transport_once(
-    queued: impl Iterator<Item = TransportState>,
-    current: TransportState,
+/// One look at the transport: the `queued` transitions are drained unread,
+/// then `current` is read and decides. An older `Unavailable` still queued
+/// behind a later `Ready` cannot end the run as headless, and reading after
+/// the drain means no discarded transition is newer than the deciding state.
+fn settle_transport_once<O>(
+    output: &mut O,
+    mut poll: impl FnMut(&mut O) -> Option<TransportState>,
+    current: impl FnOnce(&O) -> TransportState,
 ) -> Option<TransportOutcome> {
-    queued.for_each(drop);
-    classify_transport(current)
+    while poll(output).is_some() {}
+    classify_transport(current(output))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
