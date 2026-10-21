@@ -526,7 +526,8 @@ impl CgbVoice {
     }
 
     /// Request a retune, held until [`Self::begin_frame`] commits it; a frame
-    /// that retires the voice discards it (`m4a.c:1053-1056`).
+    /// that retires the voice discards it (`m4a.c:1053-1056`). Noise ignores
+    /// `pit_m` (`m4a.c:810-826`).
     pub fn set_track_pitch(&mut self, key_m: i32, pit_m: u8) {
         let translated_key = (i32::from(self.identity.pitch_key) + key_m).max(0) % MIDI_KEY_COUNT;
         let note_key = u8::try_from(translated_key).unwrap_or(0);

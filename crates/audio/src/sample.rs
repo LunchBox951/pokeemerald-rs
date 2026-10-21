@@ -33,8 +33,8 @@ impl WaveData {
         }
     }
 
-    /// Construct a looping wave, clamping its loop start to the final sample or
-    /// zero when empty.
+    /// Construct a looping wave with every sample logically playable, clamping
+    /// its loop start to the final sample or zero when empty.
     #[must_use]
     pub fn looping(base_frequency: u32, loop_start: u32, samples: Vec<i8>) -> Self {
         let requested_start = usize::try_from(loop_start).unwrap_or(usize::MAX);
