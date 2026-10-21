@@ -38,6 +38,76 @@ const BLUE_BGR555: u16 = 0x7C00;
 const TILESET_PALETTE_BANK_COUNT: u8 = 16;
 const SPRITE_PALETTE_COLOR_COUNT: u16 = 16;
 
+/// The scratch path [`synthetic_scene_result_with_connections_and_events`]
+/// writes its pack to.
+pub(super) fn scene_scratch_pack_path() -> std::path::PathBuf {
+    std::env::temp_dir().join(format!(
+        "pokeemerald-rs-overworld-test-{}-{:?}.pack",
+        std::process::id(),
+        std::thread::current().id()
+    ))
+}
+
+/// Writes `bytes` to a fresh file at `path`. `create_new` (`O_EXCL`) never
+/// follows a symlink at `path`, so a planted link cannot redirect the write
+/// onto its target. A stale occupant is unlinked (the entry itself, never
+/// what it points to) and the claim retried once.
+pub(crate) fn write_scratch_exclusive(path: &std::path::Path, bytes: impl AsRef<[u8]>) {
+    use std::io::Write as _;
+    let mut file = None;
+    for _ in 0..2 {
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+        {
+            Ok(f) => {
+                file = Some(f);
+                break;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                std::fs::remove_file(path).expect("a stale scratch entry is removable");
+            }
+            Err(e) => panic!("the scratch directory is writable: {e}"),
+        }
+    }
+    file.expect("the scratch path is exclusively creatable")
+        .write_all(bytes.as_ref())
+        .expect("the scratch pack is writable");
+}
+
+/// Plants a symlink at `path` pointing at a fresh victim file holding
+/// `sentinel`, runs `write`, and asserts the victim is untouched. Returns
+/// after removing the planted entry and the victim.
+#[cfg(unix)]
+pub(crate) fn assert_planted_symlink_untouched(path: &std::path::Path, write: impl FnOnce()) {
+    let victim = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-symlink-victim-{}-{:?}-{}",
+        std::process::id(),
+        std::thread::current().id(),
+        path.file_name().unwrap().to_string_lossy()
+    ));
+    let sentinel = b"victim must survive";
+    // The victim's path is as predictable as `path`, so it is claimed the
+    // same way: a link planted there cannot turn the setup itself into the
+    // overwrite these regressions guard against.
+    write_scratch_exclusive(&victim, sentinel);
+    let _ = std::fs::remove_file(path);
+    std::os::unix::fs::symlink(&victim, path).unwrap();
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(write));
+    let after = std::fs::read(&victim).unwrap();
+    let _ = std::fs::remove_file(path);
+    let _ = std::fs::remove_file(&victim);
+    assert_eq!(
+        after, sentinel,
+        "a planted symlink's target was overwritten"
+    );
+    assert!(
+        outcome.is_ok(),
+        "the writer must replace a planted symlink, not panic on it"
+    );
+}
+
 /// Serializes `entries`, sorted by id as the pack format requires, into a
 /// pack file's bytes.
 pub(super) fn write_synthetic_pack(mut entries: Vec<Entry>) -> Vec<u8> {
@@ -537,12 +607,8 @@ pub(super) fn synthetic_scene_result_with_connections_and_events(
 ) -> Result<super::OverworldScene, OverworldSceneError> {
     // pid + thread id keep concurrently-running tests' scratch packs from
     // colliding on the same path.
-    let path = std::env::temp_dir().join(format!(
-        "pokeemerald-rs-overworld-test-{}-{:?}.pack",
-        std::process::id(),
-        std::thread::current().id()
-    ));
-    std::fs::write(&path, pack_bytes).unwrap();
+    let path = scene_scratch_pack_path();
+    write_scratch_exclusive(&path, pack_bytes);
     let pack = AssetPack::load(&path).unwrap();
     let layout = MapLayout {
         id: LayoutId("LAYOUT_MAP_TEST"),
@@ -611,7 +677,7 @@ pub(crate) fn write_oldale_layout_pack(path: &std::path::Path, sprite_paths: &[&
             payload: vec![3u8; 144 * 32],
         });
     }
-    std::fs::write(path, write_synthetic_pack(entries)).unwrap();
+    write_scratch_exclusive(path, write_synthetic_pack(entries));
 }
 
 /// Writes a synthetic pack at `path` that loads the *real* bundled
@@ -661,5 +727,5 @@ pub(crate) fn write_route101_oldale_layout_pack(
             payload: vec![3u8; 144 * 32],
         });
     }
-    std::fs::write(path, write_synthetic_pack(entries)).unwrap();
+    write_scratch_exclusive(path, write_synthetic_pack(entries));
 }
