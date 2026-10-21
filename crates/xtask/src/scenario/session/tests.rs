@@ -110,12 +110,12 @@ fn a_scratch_directory_under_a_setgid_base_is_claimed() {
 
 /// Set in the child [`a_session_under_an_owner_stripping_umask_is_private_and_readable`]
 /// re-runs itself as, so only that child changes its own umask.
-#[cfg(any(target_os = "linux", target_os = "android"))]
+#[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
 const UMASK_CHILD: &str = "POKEEMERALD_SCENARIO_UMASK_CHILD";
 
-/// Linux only: other Unixes refuse, rather than restore, a scratch directory
-/// the umask left without owner read (see `restore_private_mode`).
-#[cfg(any(target_os = "linux", target_os = "android"))]
+/// Linux and Apple only: other Unixes refuse, rather than restore, a scratch
+/// directory the umask left without owner read (see `restore_private_mode`).
+#[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
 #[test]
 fn a_session_under_an_owner_stripping_umask_is_private_and_readable() {
     use std::os::unix::fs::PermissionsExt as _;
@@ -211,11 +211,15 @@ fn restoring_the_private_mode_fixes_or_refuses_a_search_only_directory() {
         .mode()
         & 0o7777;
     let _ = std::fs::remove_dir_all(&base);
-    if cfg!(any(target_os = "linux", target_os = "android")) {
+    if cfg!(any(
+        target_os = "linux",
+        target_os = "android",
+        target_vendor = "apple"
+    )) {
         result.unwrap();
         assert_eq!(mode, 0o700);
     } else {
-        // No safe restore beyond Linux: refused, and the mode is unchanged.
+        // No safe restore on other Unixes: refused, and the mode is unchanged.
         assert!(result.unwrap_err().contains("#2475"));
         assert_eq!(mode, 0o300);
     }
