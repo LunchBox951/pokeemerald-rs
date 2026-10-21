@@ -114,7 +114,7 @@ pub(super) fn settle_outcome(
 /// consumed either way, so it cannot outlive its own observation.
 pub(super) fn observe_tile(
     pending_turn: &mut Option<TilePos>,
-    player: &PlayerState,
+    player: &mut PlayerState,
     runtime: &engine::overworld::MapRuntime<'_>,
     landed: Option<TilePos>,
 ) -> Option<TilePos> {
@@ -126,16 +126,22 @@ pub(super) fn observe_tile(
 /// (`field_player_avatar.c:901-915` exempts turns from the stationary-animation
 /// skip). Always consumed when ready, so a suppressed observation cannot fire
 /// on a later idle frame; returned only when the tile is not a forced-movement
-/// input tile (`field_control_avatar.c:116-122`).
+/// input tile (`field_control_avatar.c:116-122`). On a forced tile the
+/// observation is dropped but the frame is still a `T_TILE_CENTER` one, so the
+/// player's field input is suppressed for it (`field_control_avatar.c:93-113`).
 fn take_completed_turn(
     pending_turn: &mut Option<TilePos>,
-    player: &PlayerState,
+    player: &mut PlayerState,
     runtime: &engine::overworld::MapRuntime<'_>,
 ) -> Option<TilePos> {
     let (x, y) =
         pending_turn.take_if(|_| !player.in_transit() && player.turn_frames_remaining() == 0)?;
     let behavior = runtime.metatile_behavior(x, y).unwrap_or(MB_NORMAL);
-    (!is_forced_movement_input_tile(behavior)).then_some((x, y))
+    if is_forced_movement_input_tile(behavior) {
+        player.suppress_field_input_for_forced_turn();
+        return None;
+    }
+    Some((x, y))
 }
 
 /// Latch the tile a just-applied frame of movement started walking onto, if
