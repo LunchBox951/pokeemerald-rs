@@ -1226,6 +1226,113 @@ fn a_level_that_gained_contents_is_reported_left_in_place() {
 
 #[cfg(unix)]
 #[test]
+fn a_capture_that_cannot_be_examined_is_reported_left_in_place() {
+    // The capture is hidden only while its identity is checked, so that
+    // check fails, and is back before it is put back: restoration under its
+    // own name has nothing to warn about, but the walk stops there, so the
+    // warning must say the level and those above it are left.
+    if !in_rollback_stderr_child() {
+        let stderr = rerun_alone_for_stderr(
+            "import_rom::created_dirs::tests::a_capture_that_cannot_be_examined_is_reported_left_in_place",
+        );
+        let warned = warned_path(
+            &stderr,
+            "warning: ",
+            " is left in place: it could not be examined in its cleanup directory: ",
+        );
+        assert_names_marked_path(&stderr, warned, "level at: ");
+        assert!(
+            stderr.contains("the levels above it are left too"),
+            "stderr:\n{stderr}"
+        );
+        return;
+    }
+    let dir = TempDir::new("undo-unexamined-capture");
+    let level = dir.join("above").join("new");
+    let created = super::create_directories(&level).unwrap();
+    let mut stages = Vec::new();
+    super::take_back::undo_created_directories_with_capture_hooks(
+        &created,
+        &mut || {},
+        &mut |stage, held| {
+            stages.push(stage);
+            match stage {
+                super::take_back::CaptureStage::BeforeCheck => {
+                    rustix::fs::renameat(held, super::take_back::QUARANTINE_ENTRY, held, "hidden")
+                        .unwrap();
+                }
+                super::take_back::CaptureStage::BeforeRestore => {
+                    rustix::fs::renameat(held, "hidden", held, super::take_back::QUARANTINE_ENTRY)
+                        .unwrap();
+                }
+            }
+        },
+    );
+    assert_eq!(
+        stages,
+        [
+            super::take_back::CaptureStage::BeforeCheck,
+            super::take_back::CaptureStage::BeforeRestore
+        ]
+    );
+    assert!(level.is_dir(), "the capture is put back under its name");
+    assert_eq!(
+        entry_names(&dir.path),
+        ["above"],
+        "no quarantine is left behind"
+    );
+    mark_path("level at: ", &level);
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[test]
+fn a_level_moved_out_of_its_quarantine_before_restoration_is_reported_where_it_went() {
+    // The level gains contents, so it cannot be removed; another writer then
+    // moves it out of the quarantine before it is put back. The warning must
+    // name where it went, read through the held original, not the
+    // quarantine it left.
+    if !in_rollback_stderr_child() {
+        let stderr = rerun_alone_for_stderr(
+            "import_rom::created_dirs::tests::a_level_moved_out_of_its_quarantine_before_restoration_is_reported_where_it_went",
+        );
+        let warned = warned_path(&stderr, "warning: ", " is the directory rollback made for ");
+        assert_names_marked_path(&stderr, warned, "moved to: ");
+        assert!(
+            !stderr.contains("its contents remain in"),
+            "stderr:\n{stderr}"
+        );
+        return;
+    }
+    let dir = TempDir::new("undo-moved-out-of-quarantine");
+    let level = dir.join("new");
+    let moved = dir.join("moved");
+    let created = super::create_directories(&level).unwrap();
+    super::take_back::undo_created_directories_with_capture_hooks(
+        &created,
+        &mut || fs::write(level.join("keep"), b"x").unwrap(),
+        &mut |stage, held| {
+            if stage == super::take_back::CaptureStage::BeforeRestore {
+                rustix::fs::renameat(
+                    held,
+                    super::take_back::QUARANTINE_ENTRY,
+                    rustix::fs::CWD,
+                    &moved,
+                )
+                .unwrap();
+            }
+        },
+    );
+    assert!(moved.join("keep").is_file());
+    assert_eq!(
+        entry_names(&dir.path),
+        ["moved"],
+        "no quarantine is left behind"
+    );
+    mark_path("moved to: ", &moved);
+}
+
+#[cfg(unix)]
+#[test]
 fn undo_puts_back_a_level_that_gained_contents_after_validation() {
     let dir = TempDir::new("undo-gained-contents");
     let level = dir.join("new");
