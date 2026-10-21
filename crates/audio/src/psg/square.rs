@@ -41,10 +41,9 @@ impl SquareDuty {
     }
 }
 
-/// Re-expresses the time since a square channel's last duty step, held as a
-/// phase remainder accumulated at `from_delta` per sample, at `to_delta` per
-/// sample, keeping the duty index. Whole steps that time now covers advance
-/// the index (`mgba/src/gb/audio.c:493-510`).
+/// Re-expresses the phase remainder accumulated at `from_delta` per sample at
+/// `to_delta`, advancing the duty index by any whole steps it now covers
+/// (`mgba/src/gb/audio.c:493-510`).
 fn retime_step_remainder(phase: u32, from_delta: u32, to_delta: u32) -> u32 {
     let index = phase & !(PHASE_ONE - 1);
     let remainder = u64::from(phase & (PHASE_ONE - 1));
@@ -60,8 +59,8 @@ fn retime_step_remainder(phase: u32, from_delta: u32, to_delta: u32) -> u32 {
 }
 
 /// The register between a pitch write's `NR13` and `NR14` stores: the new low
-/// byte under the old high bits, whose period the `NR14` catch-up measures
-/// (`pokeemerald/src/m4a.c:1197-1203`, `mgba/src/gb/audio.c:162-171,493-501`).
+/// byte under the old high bits (`pokeemerald/src/m4a.c:1197-1203`,
+/// `mgba/src/gb/audio.c:162-171,493-501`).
 fn intermediate_frequency(old: u16, new: u16) -> u16 {
     (old & FREQUENCY_HIGH_BITS) | (new & FREQUENCY_LOW_BYTE)
 }
@@ -79,33 +78,25 @@ pub struct SquareChannel {
     duty: SquareDuty,
     phase: u32,
     step_delta: u32,
-    /// The played 11-bit frequency: `NR13`'s low byte and `NR14`'s high three
-    /// bits, both of which a sweep write-back replaces
-    /// (`mgba/src/gb/audio.c:160-171`, `:978-979`).
+    /// The played 11-bit frequency, which a sweep write-back replaces
+    /// (`mgba/src/gb/audio.c:160-171,978-979`).
     frequency: u16,
-    /// The high three bits a pitch write last left in `NR14`. A volume-only
-    /// trigger rewrites `NR14` without `NR13`, so it rejoins these bits to
-    /// whatever low byte the sweep has reached (`pokeemerald/src/m4a.c:1198-1203`,
-    /// `:1219-1225`).
+    /// The `NR14` high bits a pitch write last left; a volume-only trigger
+    /// rejoins them to the swept low byte (`pokeemerald/src/m4a.c:1198-1203,1219-1225`).
     note_high_bits: u16,
     sweep: Option<Sweep>,
     disabled_at_trigger: bool,
-    /// Samples an idle slot has spent since `phase` was last settled: the
-    /// hardware defers the duty catch-up to the next register write, so a
-    /// sweep retuning meanwhile does not rate those samples
-    /// ([`Self::defer_idle_samples`]'s doc).
+    /// Idle samples since `phase` was last settled ([`Self::defer_idle_samples`]).
     idle_samples: u32,
-    /// The step rate `phase`'s fractional remainder was encoded at when the
-    /// current deferral began. While set, sweep retunes leave `phase`
-    /// untouched (the hardware keeps the index and last-update time while
-    /// dead, `mgba/src/gb/audio.c:493-503,975-979`) and
-    /// [`Self::settled_phase`] retimes it once at the final rate.
+    /// The step rate `phase`'s remainder was encoded at when the deferral
+    /// began. While set, sweep retunes leave `phase` untouched
+    /// (`mgba/src/gb/audio.c:493-503,975-979`) and [`Self::settled_phase`]
+    /// retimes it once.
     idle_step_delta: Option<u32>,
 }
 
 impl SquareChannel {
-    /// Creates a square channel from its duty and frequency register values.
-    /// The low two duty bits select the pattern; `sweep` is present only for channel 1.
+    /// The low two `duty` bits select the pattern; `sweep` is present only for channel 1.
     #[must_use]
     pub fn new(duty: u8, freq_reg: u16, sweep: Option<Sweep>) -> Self {
         let disabled_at_trigger = sweep.as_ref().is_some_and(Sweep::overflows_at_trigger);
@@ -140,8 +131,7 @@ impl SquareChannel {
         self.settled_phase()
     }
 
-    /// The duty position once the deferred idle samples are rated at the
-    /// current frequency.
+    /// The duty position with deferred idle samples rated at the current frequency.
     fn settled_phase(&self) -> u32 {
         self.idle_step_delta
             .map_or(self.phase, |from_delta| {
@@ -150,17 +140,15 @@ impl SquareChannel {
             .wrapping_add(self.step_delta.wrapping_mul(self.idle_samples))
     }
 
-    /// Catches the duty position up over the deferred idle samples at the
-    /// current frequency, as a register write does (`mgba/src/gb/audio.c:162-171`).
+    /// Catches the duty position up as a register write does (`mgba/src/gb/audio.c:162-171`).
     fn settle_idle_samples(&mut self) {
         self.phase = self.settled_phase();
         self.idle_samples = 0;
         self.idle_step_delta = None;
     }
 
-    /// Continues the duty position of `previous`, the note this one replaces
-    /// on the same hardware slot: a restart keeps the duty index and the time
-    /// since the last step (`mgba/src/gb/audio.c:168-194`, `:493-510`).
+    /// Continues the duty index and time since the last step of `previous`,
+    /// the note this one replaces on the slot (`mgba/src/gb/audio.c:168-194,493-510`).
     pub(crate) fn continue_duty_from(&mut self, previous: &Self) {
         let intermediate = intermediate_frequency(previous.frequency, self.frequency);
         let intermediate_delta = frequency_step_delta(intermediate);
@@ -174,21 +162,18 @@ impl SquareChannel {
         self.idle_step_delta = None;
     }
 
-    /// Records `samples` of an idle slot's silence without advancing the duty
-    /// position. The disabled channel's catch-up is skipped at every frame and
-    /// sweep tick (`GBAudioRun`'s `dead != 2` gate, `mgba/src/gb/audio.c:493-510`)
-    /// and runs once at the next register write, at whatever frequency the
-    /// sweep has reached by then (`:162-171`), not at each intermediate one.
+    /// Records idle `samples` without advancing the duty position: a disabled
+    /// channel's catch-up is skipped (`GBAudioRun`'s `dead != 2` gate,
+    /// `mgba/src/gb/audio.c:493-510`) until the next register write
+    /// (`:162-171`).
     pub(crate) fn defer_idle_samples(&mut self, samples: usize) {
         let samples = u32::try_from(samples).unwrap_or(u32::MAX);
         self.idle_step_delta.get_or_insert(self.step_delta);
         self.idle_samples = self.idle_samples.wrapping_add(samples);
     }
 
-    /// Advances the duty position through `samples` of silence. A disabled
-    /// channel's index still catches up over that time at the next write to
-    /// its registers, including the note-on of whichever note replaces it
-    /// (`mgba/src/gb/audio.c:140-141,493-501`).
+    /// Advances the duty position through `samples` of silence; a disabled
+    /// channel's index still catches up (`mgba/src/gb/audio.c:140-141,493-501`).
     pub(crate) fn advance_silently(&mut self, samples: usize) {
         self.settle_idle_samples();
         let samples = u32::try_from(samples).unwrap_or(u32::MAX);
@@ -197,21 +182,15 @@ impl SquareChannel {
             .wrapping_add(self.step_delta.wrapping_mul(samples));
     }
 
-    /// Applies the off-write an idling slot's `NR14`/`NR24` restart makes:
-    /// it clears the frequency register's high three bits, so a later
-    /// catch-up rates against the low byte alone
-    /// (`pokeemerald/src/m4a.c:857-868`, `mgba/src/gb/audio.c:168-171,219-222`).
-    /// The write is also a trigger, so channel 1's sweep reloads from the
-    /// truncated frequency and rechecks overflow (`mgba/src/gb/audio.c:168-186`);
-    /// returns whether the channel still plays.
+    /// Applies an idling slot's `NR14`/`NR24` off-write, which clears the
+    /// frequency's high bits and retriggers (`pokeemerald/src/m4a.c:857-868`).
     pub(crate) fn apply_hardware_off_write(&mut self) -> bool {
         self.set_frequency(self.frequency & FREQUENCY_LOW_BYTE);
         self.retrigger()
     }
 
-    /// Retunes the channel from an 11-bit frequency register value, as a pitch
-    /// write does through both `NR13` and `NR14`
-    /// (`pokeemerald/src/m4a.c:1198-1203`).
+    /// Retunes from an 11-bit frequency register value as a pitch write does
+    /// through `NR13` then `NR14` (`pokeemerald/src/m4a.c:1198-1203`).
     pub fn set_frequency(&mut self, freq_reg: u16) {
         self.settle_idle_samples();
         let freq_reg = freq_reg.min(MAX_FREQUENCY_REGISTER);
@@ -227,9 +206,8 @@ impl SquareChannel {
         self.play_frequency(freq_reg);
     }
 
-    /// Every frequency write catches the duty index up at the old rate and
-    /// keeps the time since its last step, which the new rate then measures
-    /// (`mgba/src/gb/audio.c:162-171,493-510,648-668`).
+    /// A frequency write catches the duty index up at the old rate and keeps
+    /// the time since its last step (`mgba/src/gb/audio.c:162-171,493-510,648-668`).
     fn play_frequency(&mut self, freq_reg: u16) {
         self.frequency = freq_reg;
         let hz = register_frequency_hz(freq_reg, SQUARE_CLOCK_HZ);
@@ -240,11 +218,9 @@ impl SquareChannel {
         self.step_delta = step_delta;
     }
 
-    /// Applies a volume-only trigger: its `NR14` write restores the note's high
-    /// bits over the swept low byte, and the sweep reloads from that rebuilt
-    /// frequency and rechecks overflow (`mgba/src/gb/audio.c:170-186`).
-    ///
-    /// Returns whether the channel still plays.
+    /// Applies a volume-only trigger: `NR14` restores the note's high bits over
+    /// the swept low byte and the sweep reloads and rechecks overflow
+    /// (`mgba/src/gb/audio.c:170-186`). Returns whether the channel still plays.
     #[must_use]
     pub fn retrigger(&mut self) -> bool {
         self.settle_idle_samples();
@@ -369,8 +345,6 @@ mod tests {
 
     #[test]
     fn a_volume_only_trigger_revives_a_note_that_a_full_reload_would_leave_muted() {
-        // Reloading the whole swept frequency (1912) would overflow again;
-        // only the NR13/NR14 split explains the note coming back.
         const NOTE: u16 = 1700;
         const SWEPT: u16 = 1912;
         let mut square = SquareChannel::new(
@@ -472,10 +446,8 @@ mod tests {
             .expect("a square channel always reaches its next duty step")
     }
 
-    /// A note replacing another at a different pitch keeps the duty index and
-    /// the time elapsed since its last step, so its first step lands one new
-    /// period after the outgoing note's last step
-    /// (`SquareChannel::continue_duty_from`'s doc).
+    /// A replacement note's first step lands one new period after the outgoing
+    /// note's last step.
     #[test]
     fn a_replacement_at_another_pitch_steps_one_new_period_after_the_last_step() {
         const OUTGOING_FREQUENCY: u16 = 0x700;
@@ -483,7 +455,6 @@ mod tests {
         const ELAPSED_SAMPLES: u32 = 2;
 
         let mut outgoing = SquareChannel::new(HALF_DUTY_REGISTER, OUTGOING_FREQUENCY, None);
-        // Walk into the middle of a step so a remainder is actually carried.
         while outgoing.phase / PHASE_ONE == 0 {
             outgoing.sample();
         }
@@ -510,10 +481,8 @@ mod tests {
         );
     }
 
-    /// A higher replacement whose period is shorter than the time elapsed
-    /// since the outgoing note's last step advances the index by every whole
-    /// new period that time covers, as mGBA's catch-up does
-    /// (`SquareChannel::continue_duty_from`'s doc).
+    /// A replacement with a shorter period advances the index by every whole
+    /// new period elapsed.
     #[test]
     fn a_higher_replacement_advances_the_index_by_the_new_periods_already_elapsed() {
         const OUTGOING_FREQUENCY: u16 = 0x000;
@@ -560,9 +529,7 @@ mod tests {
         );
     }
 
-    /// A retune keeps the time since the last duty step, so a later
-    /// replacement measures the whole time, spent at both rates, against its
-    /// own period (`SquareChannel::play_frequency`'s doc).
+    /// A later replacement measures the time spent at both rates.
     #[test]
     fn a_replacement_after_a_retune_measures_the_time_spent_at_both_rates() {
         const FIRST_FREQUENCY: u16 = 0x400;
@@ -689,9 +656,8 @@ mod tests {
         assert_ne!(replacement.phase / PHASE_ONE, direct.phase / PHASE_ONE);
     }
 
-    /// The off-write rates the channel as if only its low frequency byte
-    /// survived, without itself moving the duty index
-    /// (`SquareChannel::apply_hardware_off_write`'s doc).
+    /// The off-write rates the channel by its low frequency byte alone without
+    /// moving the duty index.
     #[test]
     fn the_hardware_off_write_truncates_the_frequency_to_its_low_byte() {
         let mut square = SquareChannel::new(HALF_DUTY_REGISTER, HIGH_FREQUENCY_REGISTER, None);

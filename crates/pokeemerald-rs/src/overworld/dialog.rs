@@ -862,6 +862,37 @@ mod tests {
         panic!("a message of {glyph_count} glyphs must print within {PRINT_FRAME_BUDGET} frames");
     }
 
+    fn field_dialog_scratch_path() -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "pokeemerald-rs-field-dialog-text-speed-{}-{:?}.pack",
+            std::process::id(),
+            std::thread::current().id()
+        ))
+    }
+
+    /// Writes the synthetic field-dialog pack to its scratch path and
+    /// returns that path; the pacing test and its planted-symlink regression
+    /// share this one writer.
+    fn write_field_dialog_scratch_pack() -> std::path::PathBuf {
+        let path = field_dialog_scratch_path();
+        crate::overworld::test_support::write_scratch_exclusive(
+            &path,
+            synthetic_field_dialog_pack_bytes(),
+        );
+        path
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn field_dialog_scratch_pack_refuses_a_planted_symlink() {
+        crate::overworld::test_support::assert_planted_symlink_untouched(
+            &field_dialog_scratch_path(),
+            || {
+                write_field_dialog_scratch_pack();
+            },
+        );
+    }
+
     /// A dialog opened at a given speed paces at it: FAST prints the same
     /// message in fewer frames than SLOW (`sTextSpeedFrameDelays`,
     /// `pokeemerald/src/menu.c:77-82`, `:191-196`).
@@ -877,13 +908,7 @@ mod tests {
             ]
         };
 
-        let path = std::env::temp_dir().join(format!(
-            "pokeemerald-rs-field-dialog-text-speed-{}-{:?}.pack",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        std::fs::write(&path, synthetic_field_dialog_pack_bytes())
-            .expect("the scratch directory is writable");
+        let path = write_field_dialog_scratch_pack();
         let pack = AssetPack::load(&path).expect("the synthetic field-dialog pack must load");
         let _ = std::fs::remove_file(&path);
 
