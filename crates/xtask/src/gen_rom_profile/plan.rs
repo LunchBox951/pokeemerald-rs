@@ -397,6 +397,41 @@ pub struct BattleMessagePlan {
     pub specials: Vec<SpecialMessagePlan>,
 }
 
+/// One battle-animation program's root, owned.
+#[derive(Debug, Clone)]
+pub struct AnimProgramPlan {
+    /// The upstream label, as the catalog spells it.
+    pub symbol: String,
+    /// The GBA bus address of the program's first command.
+    pub addr: u32,
+    /// The bytes through the program's first terminator.
+    pub len: u16,
+}
+
+/// A sprite template or task function a script command names, owned.
+#[derive(Debug, Clone)]
+pub struct AnimSymbolPlan {
+    /// The upstream C identifier.
+    pub symbol: String,
+    /// The address the command operand holds.
+    pub addr: u32,
+}
+
+/// The battle-animation roots, owned.
+#[derive(Debug, Clone)]
+pub struct BattleAnimationPlan {
+    /// The four selector tables, in `AnimationTable::ALL` order.
+    pub tables: [u32; 4],
+    /// Every program, in catalog order.
+    pub programs: Vec<AnimProgramPlan>,
+    /// Every `createsprite` template, by name.
+    pub templates: Vec<AnimSymbolPlan>,
+    /// Every task function, by name.
+    pub tasks: Vec<AnimSymbolPlan>,
+    /// The program each selector runs, as a position in `programs`.
+    pub selectors: Vec<u16>,
+}
+
 /// The ordinary-bag roots, owned.
 #[derive(Debug, Clone)]
 pub struct BagPlan {
@@ -459,6 +494,8 @@ pub struct ProfilePlan {
     pub audio: AudioPlan,
     /// The battle-message token table.
     pub battle_messages: BattleMessagePlan,
+    /// The battle-animation program catalog.
+    pub battle_anims: BattleAnimationPlan,
     /// The ordinary bag's images, palettes, and tilemap.
     pub bag: BagPlan,
     /// The starters' static battler art.
