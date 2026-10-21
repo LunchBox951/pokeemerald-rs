@@ -973,13 +973,10 @@ fn score_viability(
         ScoreableEffect::Hit
         | ScoreableEffect::UnchangedAfterPrologue(_)
         | ScoreableEffect::FocusEnergy => {}
-        ScoreableEffect::Paralyze | ScoreableEffect::Confuse => {
-            return Err(BattleError::UnscoreableMoveEffect(move_id));
-        }
         // Defense Curl is absent from `AI_CheckViability`'s dispatch
         // (`data/battle_ai_scripts.s:652-776`); every other label is unported.
         ScoreableEffect::StatLabel(effect, _) if effect.0 == EFFECT_DEFENSE_CURL_RAW => {}
-        ScoreableEffect::StatLabel(..) => {
+        ScoreableEffect::Paralyze | ScoreableEffect::Confuse | ScoreableEffect::StatLabel(..) => {
             return Err(BattleError::UnscoreableMoveEffect(move_id));
         }
         ScoreableEffect::AttackDown => {

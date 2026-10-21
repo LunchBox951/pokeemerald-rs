@@ -50,7 +50,7 @@ fn staged(mut pokemon: BattlePokemon, stat: ChangedStat, offset: i8) -> BattlePo
     pokemon
 }
 
-/// The CheckBadMove score of `move_id`, asserting only the simulated-damage
+/// The `CheckBadMove` score of `move_id`, asserting only the simulated-damage
 /// draws are consumed.
 fn score(move_id: MoveId, user: &BattlePokemon, target: &BattlePokemon) -> i8 {
     let mut rng = SequenceRng::new([0; MAX_MON_MOVES]);
