@@ -16,7 +16,7 @@ use platform::{ButtonState, Buttons};
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn stepping_onto_the_bedroom_stair_warp_transitions_to_the_1f_map() {
-    let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+    let mut phase = checkout_pack_phase();
     let bedroom = phase.map_id;
 
     phase.player = PlayerState::new((7, 2), new_game::SPAWN_ELEVATION, Direction::North);
@@ -109,7 +109,7 @@ fn stepping_onto_the_bedroom_stair_warp_transitions_to_the_1f_map() {
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn stepping_onto_an_ordinary_tile_does_not_warp() {
-    let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+    let mut phase = checkout_pack_phase();
     let starting_map = phase.map_id;
 
     phase.step(held(Buttons::DOWN));
@@ -205,7 +205,7 @@ fn the_front_door_warp_faces_north_from_the_destination_tiles_behavior() {
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn warping_to_the_front_doormat_faces_north_and_rebinds_the_scene() {
-    let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+    let mut phase = checkout_pack_phase();
     let one_f = assets::MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F");
 
     phase.warp_to(one_f, 1);
@@ -222,7 +222,8 @@ fn warping_to_the_front_doormat_faces_north_and_rebinds_the_scene() {
         "arrival must face North from the destination doormat behavior"
     );
     assert_eq!(phase.tick, 0, "warp_to must reset the frame tick");
-    let fresh = crate::overworld::load_room(
+    let fresh = crate::overworld::load_room_from_source(
+        &crate::pack_source::PackSource::Repo,
         one_f,
         crate::overworld::PlayerCharacter::Brendan,
         &phase.save1.event_data,
@@ -242,7 +243,7 @@ fn warping_clears_temp_field_event_data_but_not_persistent_flags() {
     const VAR_TEMP_3: u16 = 0x4003;
     const FLAG_HIDE_ROUTE_103_RIVAL: u16 = 0x2D3;
 
-    let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+    let mut phase = checkout_pack_phase();
     phase.save1.event_data.flag_set(FLAG_TEMP_12).unwrap();
     phase.save1.event_data.var_set(VAR_TEMP_3, 7).unwrap();
     phase
@@ -273,11 +274,12 @@ fn warping_clears_temp_field_event_data_but_not_persistent_flags() {
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn warping_restarts_the_wild_encounter_immunity_window() {
-    let mut phase = OverworldPhase::for_test(
+    let mut phase = OverworldPhase::for_test_with_source(
         crate::overworld::test_support::synthetic_scene(10, 10),
         MapId("MAP_ROUTE101"),
         PlayerState::new((2, 5), 3, Direction::East),
         None,
+        crate::pack_source::PackSource::Repo,
     );
     phase.rng = Rng::new(IMMUNITY_SEED);
 
@@ -313,7 +315,7 @@ fn warping_restarts_the_wild_encounter_immunity_window() {
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn a_successful_warp_replaces_the_live_object_events_with_the_destinations() {
-    let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+    let mut phase = checkout_pack_phase();
     let destination = MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F");
 
     phase.warp_to(destination, 2);

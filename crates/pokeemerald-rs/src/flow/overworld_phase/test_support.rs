@@ -235,6 +235,26 @@ pub(super) fn one_f_phase(position: (i32, i32), facing: Direction) -> OverworldP
     )
 }
 
+/// The new-game phase loaded from this checkout's own pack, so a locally
+/// installed earlier-rung pack cannot satisfy a real-pack assertion. Requires
+/// the pack.
+pub(super) fn checkout_pack_phase() -> OverworldPhase {
+    OverworldPhase::load(
+        crate::pack_source::PackSource::Repo,
+        crate::new_game::NewGameOptions::DEFAULT,
+        crate::new_game::NewGameIdentity::DEFAULT,
+    )
+    .expect("run `cargo xtask extract` first")
+}
+
+/// `phase` with its deferred room, warp, and dialog loads pinned to this
+/// checkout's pack. For the ignored tests that reuse a pack-free fixture
+/// builder whose phase otherwise reads `PackSource::Runtime`.
+pub(super) fn on_checkout_pack(mut phase: OverworldPhase) -> OverworldPhase {
+    phase.pack_source = crate::pack_source::PackSource::Repo;
+    phase
+}
+
 const ONE_F_DOORMAT_WARP_INDEX: usize = 1;
 const ONE_F_DOORMAT_EVENT_TILE: (i16, i16) = (8, 8);
 const ONE_F_DOORMAT_SCENE_TILE: (u16, u16) = (8, 8);

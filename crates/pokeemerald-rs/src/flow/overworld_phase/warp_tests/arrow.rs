@@ -286,7 +286,7 @@ fn a_legal_step_in_the_arrow_direction_is_preempted_without_starting_a_walk() {
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn a_legal_step_in_the_arrow_direction_lands_the_warp() {
-    let mut phase = south_facing_doormat_phase_with_walkable_exit();
+    let mut phase = on_checkout_pack(south_facing_doormat_phase_with_walkable_exit());
 
     phase.step(held(Buttons::DOWN));
 
