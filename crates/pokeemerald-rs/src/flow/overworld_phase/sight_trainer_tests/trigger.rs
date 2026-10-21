@@ -81,10 +81,13 @@ fn start_does_not_preempt_the_sight_trainer_scan_on_its_trigger_frame() {
     let mut refused = route_103_phase(PlayerState::new((rx, ry + 1), 3, Direction::North));
     refused.party_lead = Some(overwhelming_lead());
     refused.synthetic_start_menu = SyntheticStartMenu::Builds;
+    // Rhett's own party now constructs; Marcos's (Sonic Boom) still does not,
+    // so his id stands in for the refusal at Rhett's cone.
+    refused.synthetic_sight_trainer = Some(assets::trainers::TrainerId(TRAINER_MARCOS));
     refused.step(pressed(Buttons::START));
     assert!(
         refused.sight_approach.is_none(),
-        "setup: Rhett's own real party must still refuse to construct"
+        "setup: a refused real party must not claim the frame"
     );
     assert!(
         refused.start_menu().is_some(),
@@ -110,13 +113,20 @@ fn standing_in_a_cone_for_many_frames_never_touches_the_rng_stream() {
     let (mx, my) = MIGUEL_TILE;
     let (ax, ay) = AMY_TILE;
     let cases = [
-        ("Rhett (unimplemented moveset)", (rx, ry + 1)),
+        (
+            "Marcos at Rhett's cone (unimplemented moveset)",
+            (rx, ry + 1),
+        ),
         ("Miguel (held-item party)", (mx + 2, my)),
         ("Amy (double battle)", (ax, ay + 1)),
     ];
     for (name, tile) in cases {
         let mut phase = route_103_phase(PlayerState::new(tile, 3, Direction::North));
         phase.party_lead = Some(overwhelming_lead());
+        if name.starts_with("Marcos") {
+            // Rhett's own party constructs now; Marcos's still refuses.
+            phase.synthetic_sight_trainer = Some(assets::trainers::TrainerId(TRAINER_MARCOS));
+        }
         let before = phase.rng.state();
         for frame in 0..FRAMES_STANDING_STILL {
             phase.step(ButtonState::new());

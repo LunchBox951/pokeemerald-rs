@@ -26,6 +26,10 @@ pub(super) const TRAINER_FLAGS_START: u16 = 0x500;
 /// range 2.
 pub(super) const TRAINER_RHETT: u16 = 703;
 
+/// `TRAINER_MARCOS` (`include/constants/opponents.h`): his party still fails to
+/// construct (`MOVE_SONIC_BOOM`), so tests use his id as the refused party.
+pub(super) const TRAINER_MARCOS: u16 = 702;
+
 /// `MOVE_PURSUIT`, Treecko's own level-16 learnset move: `EFFECT_PURSUIT`
 /// has no resolver, so `validate_player_move` refuses it ahead of any draw
 /// (`crates/battle/src/battle.rs:415`) while a full-PP slot keeps the

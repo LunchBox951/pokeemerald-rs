@@ -834,15 +834,14 @@ mod tests {
         // move in that trainer's own level-up-derived moveset that some
         // screen refuses.
         //
-        // Screech and Defense Curl are executable, so those parties get past
-        // `ensure_executable` and stop at
-        // `battle::battle::trainer_ai::ensure_scoreable` instead -- the
-        // trainer AI cannot yet score those effects. Stun Spore, Thunder
-        // Wave, Supersonic, and Focus Energy are now scoreable (the
-        // `CheckBadMove` Paralyze, Confuse, and Focus Energy handlers), as
-        // are Absorb, Splash, Charge, and Poison Sting, so those parties stop
-        // at their next refused move. Andrew's whole party now constructs
-        // (`andrews_real_party_constructs_and_plays_to_a_win`). Both screens
+        // Stun Spore, Thunder Wave, Supersonic, and Focus Energy are now
+        // scoreable (the `CheckBadMove` Paralyze, Confuse, and Focus Energy
+        // handlers), as are Absorb, Splash, Charge, and Poison Sting, and so
+        // are the stat-stage labels (Sand-Attack, Screech, Defense Curl), so
+        // those parties stop at their next refused move. Andrew's and Rhett's
+        // whole parties now construct
+        // (`andrews_real_party_constructs_and_plays_to_a_win`,
+        // `rhetts_real_party_constructs_and_plays_to_a_win`). Both screens
         // run before the first draw, so the per-frame cone check stays
         // draw-free.
         let expected = [
@@ -860,23 +859,16 @@ mod tests {
             ),
             ("Miguel", TrainerId(293), HeldItemParty(TrainerId(293))),
             (
-                "Rhett",
-                TrainerId(703),
-                Battle(BattleError::UnscoreableMoveEffect(
-                    assets::MoveId::SAND_ATTACK,
-                )),
-            ),
-            (
                 "Marcos",
                 TrainerId(702),
-                Battle(BattleError::UnscoreableMoveEffect(assets::MoveId::SCREECH)),
+                Battle(BattleError::UnscoreableMoveEffect(
+                    assets::MoveId::SONIC_BOOM,
+                )),
             ),
             (
                 "Isabelle",
                 TrainerId(736),
-                Battle(BattleError::UnscoreableMoveEffect(
-                    assets::MoveId::DEFENSE_CURL,
-                )),
+                Battle(BattleError::UnsupportedMoveEffect(assets::MoveId::ROLLOUT)),
             ),
             (
                 "Pete",
@@ -892,7 +884,7 @@ mod tests {
         let covered: std::collections::HashSet<u16> = expected
             .iter()
             .map(|(_, id, _)| id.0)
-            .chain([ANDREW.0])
+            .chain([ANDREW.0, RHETT.0])
             .collect();
         assert_eq!(
             distinct, covered,
@@ -928,11 +920,11 @@ mod tests {
     }
 
     const ANDREW: TrainerId = TrainerId(336);
+    const RHETT: TrainerId = TrainerId(703);
 
-    /// Andrew (`CheckBadMove` only) has Supersonic on his Tentacool, which
-    /// the Confuse handler now scores, so his party constructs and plays out.
-    #[test]
-    fn andrews_real_party_constructs_and_plays_to_a_win() {
+    /// Plays `trainer`'s real party against a strong lead and returns the
+    /// outcome.
+    fn real_party_outcome(trainer: TrainerId) -> Option<battle::BattleOutcome> {
         let lead = battle::BattlePokemon::new(
             &battle::Dex::new(),
             assets::SpeciesId(277), // SPECIES_TREECKO
@@ -944,8 +936,8 @@ mod tests {
         .expect("Treecko/Slash is a valid pairing");
         let mut rng = engine::rng::Rng::new(1);
         let mut slot = Some(
-            npc_trainer_battle::start_npc_trainer_battle(lead, ANDREW, &mut rng)
-                .expect("Andrew's party must construct"),
+            npc_trainer_battle::start_npc_trainer_battle(lead, trainer, &mut rng)
+                .expect("the party must construct"),
         );
         let mut written_back = None;
         let mut money = 0;
@@ -961,6 +953,26 @@ mod tests {
                 break;
             }
         }
-        assert_eq!(outcome, Some(battle::BattleOutcome::PlayerWon));
+        outcome
+    }
+
+    /// Andrew (`CheckBadMove` only) has Supersonic on his Tentacool, which
+    /// the Confuse handler now scores, so his party constructs and plays out.
+    #[test]
+    fn andrews_real_party_constructs_and_plays_to_a_win() {
+        assert_eq!(
+            real_party_outcome(ANDREW),
+            Some(battle::BattleOutcome::PlayerWon)
+        );
+    }
+
+    /// Rhett's Sand-Attack is scored by the Accuracy-down label, so his whole
+    /// party constructs and plays out.
+    #[test]
+    fn rhetts_real_party_constructs_and_plays_to_a_win() {
+        assert_eq!(
+            real_party_outcome(RHETT),
+            Some(battle::BattleOutcome::PlayerWon)
+        );
     }
 }
