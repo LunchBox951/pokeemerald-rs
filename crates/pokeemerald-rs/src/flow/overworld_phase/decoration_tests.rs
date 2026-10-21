@@ -40,7 +40,7 @@ fn every_decoration_flag_id_is_settable() {
 
 #[test]
 fn the_decoration_flag_map_list_covers_every_bundled_map_with_placeholders() {
-    // Mirrors `crates/xtask/src/extract/mod.rs` `LAYOUTS` (no `xtask` dependency here);
+    // Mirrors `crates/xtask/src/extract/scope.rs` `LAYOUTS` (no `xtask` dependency here);
     // `the_bundled_layout_set_is_pinned_for_the_tables_derived_from_it` pins that list.
     const BUNDLED_LAYOUTS: [&str; 10] = [
         "LAYOUT_LITTLEROOT_TOWN",
