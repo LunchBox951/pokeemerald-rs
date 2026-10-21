@@ -134,7 +134,7 @@ mod tests {
     use crate::new_game_flags::RESET_MAP_FLAGS;
     use crate::wild_encounters::MapId;
 
-    /// Mirrors `crates/xtask/src/extract/mod.rs`'s `LAYOUTS`, which `assets`
+    /// Mirrors `crates/xtask/src/extract/scope.rs`'s `LAYOUTS`, which `assets`
     /// cannot depend on. xtask's
     /// `the_bundled_layout_set_is_pinned_for_the_tables_derived_from_it`
     /// fails when that manifest changes, as the prompt to update this mirror.

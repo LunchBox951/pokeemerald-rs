@@ -16,7 +16,7 @@ use crate::extract::scope::{
     TEXT_WINDOW_PALETTE_STEMS, TILESETS,
 };
 
-/// A placeholder for every fixed root; presence is all the preflight reads.
+/// One placeholder entry per fixed root and per bag id; the preflight checks presence only.
 fn complete_inventory() -> Vec<PackEntry> {
     TILESETS
         .iter()
@@ -28,7 +28,7 @@ fn complete_inventory() -> Vec<PackEntry> {
         .chain(text_window_ids())
         .chain(INTERFACE_PALETTE_IDS.map(str::to_owned))
         .chain(sprite_sheet_ids())
-        // Palettes stay so a sheet deletion is the only thing missing.
+        // Sprite palettes stay, so deleting a sheet removes only that sheet.
         .chain(sprite_palette_ids())
         .chain(BATTLERS.iter().flat_map(|battler| battler.ids()))
         .chain([
@@ -40,7 +40,7 @@ fn complete_inventory() -> Vec<PackEntry> {
         .collect()
 }
 
-/// Refuse `entries` through the aggregate and the domain locator, expecting `missing`.
+/// Assert `entries` are refused with `MissingPackEntry(missing)` by both `locate_profile` and the `domain` locator, and neither writes a report line.
 fn assert_refused(label: &str, entries: Vec<PackEntry>, missing: &str, domain: &str) {
     let rom = RomFixture::new().emerald_header().finish();
     with_context(label, &rom, entries, |ctx| {
@@ -330,7 +330,7 @@ fn the_animation_inventory_matches_the_committed_profile() {
         .flat_map(|t| t.anims.iter())
         .flat_map(|a| a.frames.iter().map(|frame| frame.id.to_owned()))
         .collect();
-    // No dedup: a duplicated profile id must surface as a mismatch.
+    // Duplicates are kept, so a duplicated profile id fails the equality below.
     expected.sort();
     let mut actual = tileset_animation_ids();
     actual.sort();
@@ -395,7 +395,7 @@ fn the_sprite_sheet_inventory_matches_the_committed_profile() {
         .iter()
         .map(|sheet| sheet.id.to_owned())
         .collect();
-    // No dedup: a duplicated profile id must surface as a mismatch.
+    // Duplicates are kept, so a duplicated profile id fails the equality below.
     expected.sort();
     let mut actual = sprite_sheet_ids();
     actual.sort();
