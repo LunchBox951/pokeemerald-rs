@@ -69,6 +69,10 @@ struct BurstProbe {
     /// When the doubling schedule would overflow, `steps` restarts at zero
     /// and the schedule begins again, so the snapshot keeps refreshing.
     next_snapshot: Option<u32>,
+    /// The run stopped at `TRACK_COMMANDS_PER_TICK` and must resume. Kept
+    /// apart from `steps`, which the schedule restart can leave at zero on
+    /// the very command that yields.
+    yielded: bool,
 }
 
 impl BurstProbe {
@@ -77,6 +81,7 @@ impl BurstProbe {
             snapshot: None,
             steps: 0,
             next_snapshot: Some(1),
+            yielded: false,
         }
     }
 }
@@ -488,7 +493,7 @@ impl Sequencer {
         for track_id in 0..self.tracks.len() {
             if !self.tracks[track_id].ended
                 && self.tracks[track_id].wait == 0
-                && self.bursts[track_id].steps > 0
+                && self.bursts[track_id].yielded
             {
                 self.step_track(track_id, false);
             }
@@ -583,6 +588,7 @@ impl Sequencer {
                     }
                 }
                 if ran >= TRACK_COMMANDS_PER_TICK {
+                    burst.yielded = true;
                     return;
                 }
                 ran += 1;

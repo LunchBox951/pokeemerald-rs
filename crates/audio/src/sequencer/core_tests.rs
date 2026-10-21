@@ -615,3 +615,28 @@ fn a_yielded_burst_finishes_when_tempo_is_zero_at_the_yield() {
     render_frames(&mut seq, 5);
     assert_eq!(seq.voice_count(), 1, "the note after the burst plays");
 }
+
+#[test]
+fn a_yielded_burst_resumes_under_tempo_zero_when_the_schedule_restarts_on_the_yield() {
+    // The schedule restart at step 2^31 lands on the last command of a
+    // budget slice, so the run yields with `steps == 0`; with tempo zero no
+    // tick fires, and only the yielded marker can resume it.
+    let mut t = vec![Event::Voice(0), Event::Volume(127), Event::Tempo(0)];
+    t.extend(std::iter::repeat_n(Event::Volume(127), 65_536));
+    t.extend([
+        Event::Tempo(150),
+        tied_note(60),
+        Event::Wait(48),
+        Event::Fine,
+    ]);
+    let mut seq = Sequencer::new(test_song(vec![t], 150));
+    seq.bursts[0].steps = (1 << 31) - TRACK_COMMANDS_PER_TICK;
+    seq.bursts[0].next_snapshot = Some(1 << 31);
+    render_frames(&mut seq, 1);
+    assert_eq!(seq.bursts[0].steps, 0, "the restart falls on the yield");
+    assert!(!seq.tracks[0].ended, "the yielded burst is still live");
+    assert_eq!(seq.voice_count(), 0, "the burst has not reached its note");
+    render_frames(&mut seq, 4);
+    assert!(!seq.tracks[0].ended, "the resumed burst is not ended");
+    assert_eq!(seq.voice_count(), 1, "the note after the burst plays");
+}
