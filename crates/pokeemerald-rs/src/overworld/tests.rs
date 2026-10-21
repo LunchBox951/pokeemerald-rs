@@ -159,7 +159,7 @@ fn with_palette_at(
         payload,
     }]);
     let _guard = TempPackGuard(path.to_path_buf());
-    std::fs::write(path, bytes).unwrap();
+    super::test_support::write_scratch_exclusive(path, &bytes);
     let pack = AssetPack::load(path).unwrap();
     check(pack.palette("p").unwrap());
 }
@@ -2249,5 +2249,62 @@ fn compose_paints_each_latched_flower_frame_into_the_animated_tile_range() {
         sample(48),
         color(0x7C00),
         "tick 48 latches sequence position 3 -- flower asset 2 (blue)"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn with_palette_refuses_a_planted_symlink() {
+    let path = regression_pack_path("planted-symlink");
+    super::test_support::assert_planted_symlink_untouched(&path, || {
+        with_palette_at(&path, 3, |_| {});
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn scene_scratch_pack_refuses_a_planted_symlink() {
+    let path = super::test_support::scene_scratch_pack_path();
+    super::test_support::assert_planted_symlink_untouched(&path, || {
+        let _ = super::test_support::synthetic_scene_result(
+            super::test_support::write_synthetic_pack(Vec::new()),
+            "none",
+            1,
+            1,
+        );
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn layout_pack_writers_refuse_a_planted_symlink() {
+    let path = regression_pack_path("planted-layout-symlink");
+    super::test_support::assert_planted_symlink_untouched(&path, || {
+        super::test_support::write_oldale_layout_pack(&path, &[]);
+    });
+    super::test_support::assert_planted_symlink_untouched(&path, || {
+        super::test_support::write_route101_oldale_layout_pack(&path, &[], &[]);
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn scratch_writer_replaces_a_planted_symlink_with_the_new_pack() {
+    let path = regression_pack_path("planted-symlink-replaced");
+    let bytes = b"fresh scratch pack".to_vec();
+    let mut completed = false;
+    super::test_support::assert_planted_symlink_untouched(&path, || {
+        super::test_support::write_scratch_exclusive(&path, &bytes);
+        let meta = std::fs::symlink_metadata(&path).unwrap();
+        assert!(
+            meta.file_type().is_file(),
+            "the stale link is replaced by a regular file"
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        completed = true;
+    });
+    assert!(
+        completed,
+        "the writer completed instead of rejecting the stale entry"
     );
 }

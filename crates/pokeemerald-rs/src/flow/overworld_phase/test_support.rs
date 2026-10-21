@@ -235,6 +235,26 @@ pub(super) fn one_f_phase(position: (i32, i32), facing: Direction) -> OverworldP
     )
 }
 
+/// The new-game phase loaded from this checkout's own pack, so a locally
+/// installed earlier-rung pack cannot satisfy a real-pack assertion. Requires
+/// the pack.
+pub(super) fn checkout_pack_phase() -> OverworldPhase {
+    OverworldPhase::load(
+        crate::pack_source::PackSource::Repo,
+        crate::new_game::NewGameOptions::DEFAULT,
+        crate::new_game::NewGameIdentity::DEFAULT,
+    )
+    .expect("run `cargo xtask extract` first")
+}
+
+/// `phase` with its deferred room, warp, and dialog loads pinned to this
+/// checkout's pack. For the ignored tests that reuse a pack-free fixture
+/// builder whose phase otherwise reads `PackSource::Runtime`.
+pub(super) fn on_checkout_pack(mut phase: OverworldPhase) -> OverworldPhase {
+    phase.pack_source = crate::pack_source::PackSource::Repo;
+    phase
+}
+
 const ONE_F_DOORMAT_WARP_INDEX: usize = 1;
 const ONE_F_DOORMAT_EVENT_TILE: (i16, i16) = (8, 8);
 const ONE_F_DOORMAT_SCENE_TILE: (u16, u16) = (8, 8);
@@ -580,5 +600,31 @@ impl OverworldPhase {
             self.owns_lead_slot(expected_slot),
             "expected a live lead backed by slot {expected_slot}"
         );
+    }
+}
+
+#[cfg(test)]
+mod checkout_pack_helper_tests {
+    use super::*;
+    use crate::pack_source::PackSource;
+
+    /// `on_checkout_pack` repins a `Runtime` fixture to `Repo`, so an
+    /// installed earlier-rung pack can never satisfy a deferred warp load.
+    #[test]
+    fn on_checkout_pack_repins_a_runtime_fixture_to_repo() {
+        let base = synthetic_phase(PlayerState::new((2, 2), 3, Direction::South), None);
+        assert_eq!(
+            base.pack_source,
+            PackSource::Runtime,
+            "fixture precondition"
+        );
+        assert_eq!(on_checkout_pack(base).pack_source, PackSource::Repo);
+    }
+
+    /// `checkout_pack_phase` loads and retains `Repo`, not `Runtime`.
+    #[test]
+    #[ignore = "needs a local pack: run `cargo xtask extract` first"]
+    fn checkout_pack_phase_retains_repo() {
+        assert_eq!(checkout_pack_phase().pack_source, PackSource::Repo);
     }
 }
