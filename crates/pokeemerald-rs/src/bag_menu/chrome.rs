@@ -26,6 +26,11 @@ const H_FLIP_BIT: u16 = 0x0400;
 const V_FLIP_BIT: u16 = 0x0800;
 const PALETTE_BANK_SHIFT: u16 = 12;
 const BANK_COLORS: usize = 16;
+const WINDOW_TEXT_INDEX: usize = 1;
+const WINDOW_SHADOW_INDEX: usize = 4;
+/// Stands in a label for `{NO}`, the extra-symbol glyph `F9 08`.
+pub(super) const NO_SYMBOL: char = '\u{E008}';
+const NO_EXTRA_SYMBOL: u8 = 0x08;
 
 /// A palette-indexed picture with its palette decoded; index 0 is transparent.
 #[derive(Debug)]
@@ -235,6 +240,19 @@ impl BagChrome {
         textbox::blit_frame_tiles(fb, &border, self.window.image(), &self.window.palette);
     }
 
+    /// The colours of the list, description, and pocket-name windows, which
+    /// use screen palette bank 1 (`item_menu.c:393-420`): index 1 text over
+    /// index 4 shadow.
+    pub(super) fn window_text_colors(&self) -> [Option<Rgb888>; 4] {
+        let color = |index: usize| self.screen_palette.get(BANK_COLORS + index).copied();
+        [
+            None,
+            color(WINDOW_TEXT_INDEX),
+            color(WINDOW_SHADOW_INDEX),
+            None,
+        ]
+    }
+
     /// The message-box glyph colours every list and window text uses.
     pub(super) fn text_colors(&self) -> [Option<Rgb888>; 4] {
         self.message.glyph_colors()
@@ -261,12 +279,10 @@ pub(super) fn width_of(glyphs: &[RevealedGlyph]) -> i32 {
 fn render(font: &OwnedFontGlyphSheet, text: &str) -> Vec<RevealedGlyph> {
     let mut tokens: Vec<Token> = text
         .chars()
-        .map(|c| {
-            if c == '\n' {
-                Token::Newline
-            } else {
-                Token::Char(c)
-            }
+        .map(|c| match c {
+            '\n' => Token::Newline,
+            NO_SYMBOL => Token::ExtraSymbol(NO_EXTRA_SYMBOL),
+            c => Token::Char(c),
         })
         .collect();
     tokens.push(Token::End);

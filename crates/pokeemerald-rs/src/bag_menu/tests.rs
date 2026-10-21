@@ -7,7 +7,7 @@ use platform::{ButtonState, Buttons};
 use rendering::{Framebuffer, Rgb888};
 
 use super::pack_fixture::{
-    bag_frame_color, bag_pack, entries, icon_color, load, BACKGROUND, INDICATOR_CURRENT,
+    bag_frame_color, bag_pack, entries, icon_color, load, BACKGROUND, BAG_TEXT, INDICATOR_CURRENT,
     INDICATOR_IDLE, TEXT, WINDOW_BORDER, WINDOW_FILL,
 };
 use super::{
@@ -62,11 +62,11 @@ fn painted(fb: &Framebuffer, x: usize, y: usize, w: usize, h: usize, color: Rgb8
 }
 
 fn row_has_text(fb: &Framebuffer, row: usize) -> bool {
-    painted(fb, LIST_X + 8, LIST_Y + row * ROW, 100, ROW, TEXT)
+    painted(fb, LIST_X + 8, LIST_Y + row * ROW, 100, ROW, BAG_TEXT)
 }
 
 fn cursor_row(fb: &Framebuffer) -> Option<usize> {
-    (0..8).find(|&row| painted(fb, LIST_X, LIST_Y + row * ROW, 6, ROW, TEXT))
+    (0..8).find(|&row| painted(fb, LIST_X, LIST_Y + row * ROW, 6, ROW, BAG_TEXT))
 }
 
 #[test]
@@ -81,7 +81,7 @@ fn selected_row_shows_cursor_icon_and_description() {
         "the third row is past the two items and the close row"
     );
     assert_eq!(at(&fb, ICON_PIXEL.0, ICON_PIXEL.1), icon_color("potion"));
-    assert!(painted(&fb, 3, DESCRIPTION_Y + 1, 100, 48, TEXT));
+    assert!(painted(&fb, 3, DESCRIPTION_Y + 1, 100, 48, BAG_TEXT));
 
     assert_eq!(screen.tick(press(Buttons::DOWN)), BagScreenTick::Open);
     let fb = frame_of(&screen);
@@ -106,7 +106,7 @@ fn quantity_prints_on_rows_but_not_for_key_items() {
     let mut screen = open_screen(BagScreenMode::Field, &bag);
     let fb = frame_of(&screen);
     assert!(
-        painted(&fb, LIST_X + 90, LIST_Y, 29, ROW, TEXT),
+        painted(&fb, LIST_X + 90, LIST_Y, 29, ROW, BAG_TEXT),
         "the item row has a quantity"
     );
     for _ in 0..4 {
@@ -115,7 +115,7 @@ fn quantity_prints_on_rows_but_not_for_key_items() {
     assert_eq!(screen.menu.pocket(), Pocket::KeyItems);
     let fb = frame_of(&screen);
     assert!(
-        !painted(&fb, LIST_X + 90, LIST_Y, 29, ROW, TEXT),
+        !painted(&fb, LIST_X + 90, LIST_Y, 29, ROW, BAG_TEXT),
         "a key item shows no quantity"
     );
 }
@@ -182,7 +182,7 @@ fn the_close_row_words_its_description_for_each_mode() {
         let fb = frame_of(&open_screen(mode, &Bag::default()));
         (0..110)
             .rev()
-            .find(|&x| painted(&fb, x, DESCRIPTION_Y + 17, 1, 15, TEXT))
+            .find(|&x| painted(&fb, x, DESCRIPTION_Y + 17, 1, 15, BAG_TEXT))
     };
     let field = description_width(BagScreenMode::Field);
     let battle = description_width(BagScreenMode::Battle);
@@ -366,7 +366,7 @@ fn opening_fails_on_a_pack_without_the_bag_graphics() {
 /// The checkout's extracted pack draws every pocket in both modes with
 /// production assets.
 #[test]
-#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+#[ignore = "needs a local pack extracted by `cargo xtask extract`"]
 fn production_pack_draws_every_pocket_in_both_modes() {
     let pack = assets::AssetPack::load_repo().expect("the checkout pack loads");
     let mut bag = sample_bag();
@@ -395,4 +395,98 @@ fn production_pack_draws_every_pocket_in_both_modes() {
         screen.tick(press(Buttons::A));
         assert_ne!(screen.menu.context_grid(), None);
     }
+}
+
+#[test]
+fn bag_window_text_uses_screen_palette_bank_1() {
+    let screen = open_screen(BagScreenMode::Field, &sample_bag());
+    let fb = frame_of(&screen);
+    let fg = screen.chrome.window_text_colors()[1].expect("bank 1 index 1 exists");
+    assert_eq!(fg, BAG_TEXT);
+    assert!(painted(&fb, 32, 8, 64, 16, fg), "pocket name");
+    assert!(painted(&fb, LIST_X + 8, LIST_Y, 100, ROW, fg), "list text");
+    assert!(
+        painted(&fb, 3, DESCRIPTION_Y + 1, 100, 48, fg),
+        "description"
+    );
+}
+
+#[test]
+fn tmhm_context_menu_does_not_print_is_selected_in_description() {
+    let mut bag = Bag::default();
+    assert!(bag.add_item(ItemId::TM_FOCUS_PUNCH, 1));
+    let mut screen = open_screen(BagScreenMode::Field, &bag);
+    screen.tick(press(Buttons::RIGHT));
+    screen.tick(press(Buttons::RIGHT));
+    assert_eq!(screen.menu.pocket(), Pocket::TmHm);
+    assert_eq!(screen.tick(press(Buttons::A)), BagScreenTick::Open);
+    assert!(screen.menu.context_grid().is_some());
+    let fb = frame_of(&screen);
+    // `item_menu.c:1642-1648`: the TM/HM pocket clears the description window.
+    assert!(!painted(&fb, 3, DESCRIPTION_Y + 1, 100, 48, BAG_TEXT));
+}
+
+#[test]
+fn simultaneous_down_and_a_in_a_multi_row_context_moves_to_toss() {
+    let mut screen = open_screen(BagScreenMode::Field, &sample_bag());
+    assert_eq!(screen.tick(press(Buttons::A)), BagScreenTick::Open);
+    // `Task_ItemContext_MultipleRows` checks the D-pad before A.
+    assert_eq!(
+        screen.tick(press(Buttons::DOWN | Buttons::A)),
+        BagScreenTick::Open,
+        "DOWN wins over A in the choice grid"
+    );
+    let BagScreenTick::Action { action, .. } = screen.tick(press(Buttons::A)) else {
+        panic!("confirming returns the choice");
+    };
+    assert_eq!(action, BagAction::Toss);
+}
+
+#[test]
+fn tm_hm_and_berry_rows_are_numbered_and_hms_carry_the_mark() {
+    use super::chrome::NO_SYMBOL;
+    use super::labels::row_label;
+    let tm = row_label(Pocket::TmHm, ItemId::TM_FOCUS_PUNCH, Some("TM01"));
+    assert_eq!(
+        (tm.number, tm.is_hm),
+        (Some(format!("{NO_SYMBOL}01")), false)
+    );
+    let hm = row_label(Pocket::TmHm, ItemId::HM_CUT, Some("HM01"));
+    assert_eq!((hm.number.as_deref(), hm.is_hm), (Some("1"), true));
+    assert_eq!(hm.name, "CUT");
+    let berry = row_label(Pocket::Berries, ItemId::CHERI_BERRY, Some("CHERI BERRY"));
+    assert_eq!(berry.number, Some(format!("{NO_SYMBOL}01")));
+    assert!(!berry.is_hm);
+
+    let mut bag = sample_bag();
+    assert!(bag.add_item(ItemId::TM_FOCUS_PUNCH, 1));
+    assert!(bag.add_item(ItemId::HM_CUT, 1));
+    let mut screen = open_screen(BagScreenMode::Field, &bag);
+    screen.tick(press(Buttons::RIGHT));
+    screen.tick(press(Buttons::RIGHT));
+    assert_eq!(screen.menu.pocket(), Pocket::TmHm);
+    let fb = frame_of(&screen);
+    // The HM mark (screen palette bank 1 index 1) sits at list x 8 on exactly
+    // one of the two item rows.
+    let marked: Vec<usize> = (0..2)
+        .filter(|&row| {
+            painted(
+                &fb,
+                LIST_X + 8,
+                LIST_Y + row * ROW - 1,
+                16,
+                16,
+                INDICATOR_IDLE,
+            )
+        })
+        .collect();
+    assert!(!marked.is_empty());
+    assert!(row_has_text(&fb, 0) && row_has_text(&fb, 1));
+
+    screen.tick(press(Buttons::RIGHT));
+    assert_eq!(screen.menu.pocket(), Pocket::Berries);
+    assert!(
+        row_has_text(&frame_of(&screen), 0),
+        "the berry row prints its number and name"
+    );
 }

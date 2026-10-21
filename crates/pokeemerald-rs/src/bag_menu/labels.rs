@@ -6,6 +6,7 @@ use assets::move_names::MoveNames;
 use assets::tmhm_learnsets::TmHmLearnsets;
 use engine::bag_menu::BagAction;
 
+use super::chrome::NO_SYMBOL;
 use super::BagScreenMode;
 
 /// `ITEM_TM01`, whose offset indexes the TM/HM move sequence.
@@ -18,7 +19,7 @@ const CLOSE_ROW_LABEL: &str = "CLOSE BAG";
 
 /// An item row's printable parts: the optional number column and the name.
 pub(super) struct RowLabel {
-    /// `"No01"` for TMs and berries, `"1"` for HMs, which sit beside the HM
+    /// `{NO}01` for TMs and berries, `"1"` for HMs, which sit beside the HM
     /// mark.
     pub(super) number: Option<String>,
     pub(super) is_hm: bool,
@@ -43,14 +44,14 @@ pub(super) fn row_label(pocket: Pocket, item: ItemId, name: Option<&str>) -> Row
                 }
             } else {
                 RowLabel {
-                    number: Some(format!("No{:02}", slot + 1)),
+                    number: Some(format!("{NO_SYMBOL}{:02}", slot + 1)),
                     is_hm: false,
                     name: move_name,
                 }
             }
         }
         Pocket::Berries if item.0 >= FIRST_BERRY => RowLabel {
-            number: Some(format!("No{:02}", item.0 - FIRST_BERRY + 1)),
+            number: Some(format!("{NO_SYMBOL}{:02}", item.0 - FIRST_BERRY + 1)),
             is_hm: false,
             name: plain,
         },

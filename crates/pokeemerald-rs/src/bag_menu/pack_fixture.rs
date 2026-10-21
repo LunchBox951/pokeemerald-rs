@@ -24,6 +24,8 @@ pub(super) const WINDOW_BORDER: Rgb888 = rgb(0, 31, 0);
 pub(super) const INDICATOR_IDLE: Rgb888 = rgb(10, 0, 0);
 pub(super) const INDICATOR_CURRENT: Rgb888 = rgb(20, 0, 0);
 /// The tile-0 colour, drawn by the tilemap's all-zero entries.
+/// Bag-window text: screen palette bank 1, index 1 (also the idle indicator).
+pub(super) const BAG_TEXT: Rgb888 = INDICATOR_IDLE;
 pub(super) const BACKGROUND: Rgb888 = rgb(0, 10, 10);
 
 const fn rgb(r: u8, g: u8, b: u8) -> Rgb888 {
@@ -123,6 +125,7 @@ fn screen_entries() -> Vec<PackEntry> {
         (3u8, Bgr555::from_channels(0, 10, 10)),
         (17, Bgr555::from_channels(10, 0, 0)),
         (18, Bgr555::from_channels(20, 0, 0)),
+        (20, Bgr555::from_channels(5, 5, 5)),
     ];
     vec![
         pack_format::image_entry(

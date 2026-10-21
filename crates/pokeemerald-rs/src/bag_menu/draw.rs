@@ -56,20 +56,6 @@ const INDICATOR_CURRENT_ENTRY: u16 = 0x102B;
 const BAG_FRAMES: [usize; 5] = [1, 3, 4, 5, 2];
 const SELECTOR_ARROW: &str = "▶";
 const QUANTITY_PREFIX: char = '×';
-const POCKET_NAME_COLORS: [Option<Rgb888>; 4] = [
-    None,
-    Some(Rgb888 {
-        r: 255,
-        g: 255,
-        b: 255,
-    }),
-    Some(Rgb888 {
-        r: 99,
-        g: 99,
-        b: 99,
-    }),
-    None,
-];
 /// Context-choice window cells (`item_menu.c:452-489`): tile rectangles by
 /// grid shape, each column half the window.
 const CELL_WIDTH: i32 = 56;
@@ -116,12 +102,12 @@ impl BagScreen {
             POCKET_NAME_SIZE,
             (centred, 1),
             &name,
-            &POCKET_NAME_COLORS,
+            &self.chrome.window_text_colors(),
         );
     }
 
     fn draw_list(&self, fb: &mut Framebuffer) {
-        let colors = self.chrome.text_colors();
+        let colors = self.chrome.window_text_colors();
         for (slot, row) in self.menu.visible_rows().into_iter().enumerate() {
             let y = ROW_TOP + i32::try_from(slot).unwrap_or(0) * ROW_HEIGHT;
             match row {
@@ -147,7 +133,7 @@ impl BagScreen {
         quantity: u16,
         name: Option<&str>,
     ) {
-        let colors = self.chrome.text_colors();
+        let colors = self.chrome.window_text_colors();
         let pocket = self.menu.pocket();
         let label = labels::row_label(pocket, item, name);
         let mut name_x = NAME_X;
@@ -210,7 +196,13 @@ impl BagScreen {
         if let Some(icon) = self.chrome.icon(item) {
             icon.blit_rows(fb, ICON_ORIGIN, 0, ICON_SIDE);
         }
-        let description = if self.menu.context_grid().is_some() {
+        let description = if self.menu.context_grid().is_some()
+            && self.menu.pocket() == assets::items::Pocket::TmHm
+        {
+            // The TM/HM pocket clears the window for its move data, which is
+            // not drawn (`item_menu.c:1642-1648`).
+            String::new()
+        } else if self.menu.context_grid().is_some() {
             // `OpenContextMenu` swaps the description for this
             // (`item_menu.c:1651-1655`).
             let table = assets::items::ItemDisplayTable::new();
@@ -233,7 +225,7 @@ selected.",
             DESCRIPTION_SIZE,
             DESCRIPTION_TEXT_OFFSET,
             &text,
-            &self.chrome.text_colors(),
+            &self.chrome.window_text_colors(),
         );
     }
 
