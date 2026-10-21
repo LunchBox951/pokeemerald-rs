@@ -298,21 +298,34 @@ pub(super) fn unguessable_quarantine_name() -> Option<String> {
 /// masks the owner's search bit the capture's rename needs. It is read
 /// through its own descriptor, never a second one opened for the listing,
 /// so a quarantine that took the last free descriptor can still be vouched
-/// for; an entry that cannot be read counts as not empty.
-fn is_fresh_quarantine(quarantine: &mut rustix::fs::Dir) -> bool {
+/// for. A stat, listing or `fchmod` that fails is the error, not a verdict:
+/// it says nothing about whose directory this is.
+fn is_fresh_quarantine(quarantine: &mut Dir) -> rustix::io::Result<bool> {
     use rustix::fs::{FileType, Mode};
-    let Ok(stat) = quarantine.stat() else {
-        return false;
-    };
-    let empty = quarantine
-        .all(|entry| entry.is_ok_and(|entry| matches!(entry.file_name().to_bytes(), b"." | b"..")));
-    FileType::from_raw_mode(stat.st_mode) == FileType::Directory
-        && stat.st_uid == rustix::process::geteuid().as_raw()
-        && (Mode::from_raw_mode(stat.st_mode) & Mode::RWXG.union(Mode::RWXO)).is_empty()
-        && empty
-        && quarantine
-            .fd()
-            .is_ok_and(|fd| rustix::fs::fchmod(fd, Mode::RWXU).is_ok())
+    let stat = quarantine.stat()?;
+    if FileType::from_raw_mode(stat.st_mode) != FileType::Directory
+        || stat.st_uid != rustix::process::geteuid().as_raw()
+        || !(Mode::from_raw_mode(stat.st_mode) & Mode::RWXG.union(Mode::RWXO)).is_empty()
+    {
+        return Ok(false);
+    }
+    let mut listed = Ok(true);
+    quarantine.all(|entry| match entry {
+        Ok(entry) if matches!(entry.file_name().to_bytes(), b"." | b"..") => true,
+        Ok(_) => {
+            listed = Ok(false);
+            false
+        }
+        Err(err) => {
+            listed = Err(err);
+            false
+        }
+    });
+    if !listed? {
+        return Ok(false);
+    }
+    rustix::fs::fchmod(quarantine.fd()?, Mode::RWXU)?;
+    Ok(true)
 }
 
 /// Where `entry` beside `dir` is, for a warning. On Linux and Android it is
@@ -445,6 +458,26 @@ fn open_quarantine<'a>(
     dir: &CreatedDirectory,
     after_mkdir: &mut dyn FnMut(),
 ) -> Option<Quarantine<'a>> {
+    open_quarantine_vouched_by(
+        home,
+        home_level,
+        name,
+        dir,
+        after_mkdir,
+        is_fresh_quarantine,
+    )
+}
+
+/// [`open_quarantine`] with `vouch` in place of [`is_fresh_quarantine`], so
+/// a test can make the freshness check fail with an error.
+fn open_quarantine_vouched_by<'a>(
+    home: BorrowedFd<'a>,
+    home_level: &CreatedDirectory,
+    name: &str,
+    dir: &CreatedDirectory,
+    after_mkdir: &mut dyn FnMut(),
+    vouch: fn(&mut Dir) -> rustix::io::Result<bool>,
+) -> Option<Quarantine<'a>> {
     let path = located_beside(home, home_level, OsStr::new(name));
     if let Err(err) = rustix::fs::mkdirat(home, name, Mode::RWXU) {
         warn_left_standing(
@@ -479,17 +512,33 @@ fn open_quarantine<'a>(
         );
         return None;
     };
-    // The name was swapped for someone else's directory before the open:
-    // it is not ours to fill or remove.
-    if !is_fresh_quarantine(&mut held) {
-        warn_left_standing(
-            dir,
-            format_args!(
-                "{} is not the private cleanup directory rollback made, so it is left untouched",
-                OneLinePath(&path)
-            ),
-        );
-        return None;
+    match vouch(&mut held) {
+        Ok(true) => {}
+        // The name was swapped for someone else's directory before the
+        // open: it is not ours to fill or remove.
+        Ok(false) => {
+            warn_left_standing(
+                dir,
+                format_args!(
+                    "{} is not the private cleanup directory rollback made, so it is left untouched",
+                    OneLinePath(&path)
+                ),
+            );
+            return None;
+        }
+        // The check itself failed: the directory may well be the one just
+        // made, but nothing vouches for it, so it is left, with the error.
+        Err(err) => {
+            warn_left_standing(
+                dir,
+                format_args!(
+                    "cleanup directory {} could not be checked: {}; it is left in place too",
+                    OneLinePath(&path),
+                    std::io::Error::from(err)
+                ),
+            );
+            return None;
+        }
     }
     Some(Quarantine {
         dir: held,
@@ -593,6 +642,17 @@ fn take_back_into(
             warn_if_moved_away(dir);
             return Outcome::Taken;
         }
+        // What came back, or stayed in the quarantine, is no longer this
+        // level: the warnings written for it would place its contents
+        // where they are not. This level is reported below, where it is
+        // now; a capture stranded in the quarantine keeps it from being
+        // removed, which its removal reports.
+        PutBack::Aside { name, .. } if ours && !original_put_back => eprintln!(
+            "warning: {} was put back during cleanup in place of {}, but it is not the directory rollback made",
+            OneLinePath(&located_beside(parent, dir, &name)),
+            OneLinePath(&level_location(dir))
+        ),
+        PutBack::Stranded(_) if ours && !original_put_back => {}
         PutBack::Gone(warning) | PutBack::Aside { warning, .. } | PutBack::Stranded(warning) => {
             eprintln!("{warning}");
         }
@@ -897,6 +957,26 @@ pub(super) fn take_back_level_via(
     after_mkdir: &mut dyn FnMut(),
 ) -> bool {
     take_back_level_with_hooks(parent, dir, quarantine_name, after_mkdir, &mut || {})
+}
+
+#[cfg(test)]
+/// [`take_back_level_via`] with the new quarantine vouched for by `vouch`
+/// instead of [`is_fresh_quarantine`], so a test can make that check fail
+/// with an error.
+pub(super) fn take_back_level_vouched_by(
+    parent: &OwnedFd,
+    dir: &CreatedDirectory,
+    quarantine_name: &str,
+    vouch: fn(&mut Dir) -> rustix::io::Result<bool>,
+) -> bool {
+    let Some(quarantine) =
+        open_quarantine_vouched_by(parent.as_fd(), dir, quarantine_name, dir, &mut || {}, vouch)
+    else {
+        return false;
+    };
+    let taken = take_back_into(&quarantine, parent, dir, &mut |_, _| {}) == Outcome::Taken;
+    remove_quarantine(&quarantine, &mut || {});
+    taken
 }
 
 #[cfg(test)]

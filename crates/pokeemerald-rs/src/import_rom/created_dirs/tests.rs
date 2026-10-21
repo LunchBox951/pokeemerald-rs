@@ -1334,6 +1334,147 @@ fn a_level_moved_out_of_its_quarantine_before_restoration_is_reported_where_it_w
 
 #[cfg(unix)]
 #[test]
+fn a_level_swapped_in_its_quarantine_before_a_put_back_aside_is_not_placed_there() {
+    // The level gains contents, so it cannot be removed; before it is put
+    // back another writer moves it out of the quarantine, leaves an empty
+    // directory there, and retakes its name, so what goes back lands at
+    // `new.restored-0`. That is not the level: the warning must not say its
+    // contents are there, and the level is reported where it went.
+    if !in_rollback_stderr_child() {
+        let stderr = rerun_alone_for_stderr(
+            "import_rom::created_dirs::tests::a_level_swapped_in_its_quarantine_before_a_put_back_aside_is_not_placed_there",
+        );
+        assert!(!stderr.contains("its contents are in"), "stderr:\n{stderr}");
+        assert!(
+            stderr.contains("but it is not the directory rollback made"),
+            "stderr:\n{stderr}"
+        );
+        let warned = warned_path(&stderr, "warning: ", " is the directory rollback made for ");
+        assert_names_marked_path(&stderr, warned, "moved to: ");
+        return;
+    }
+    let dir = TempDir::new("undo-swapped-before-aside");
+    let level = dir.join("new");
+    let moved = dir.join("moved");
+    let created = super::create_directories(&level).unwrap();
+    super::take_back::undo_created_directories_with_capture_hooks(
+        &created,
+        &mut || fs::write(level.join("keep"), b"x").unwrap(),
+        &mut |stage, held| {
+            if stage == super::take_back::CaptureStage::BeforeRestore {
+                rustix::fs::renameat(
+                    held,
+                    super::take_back::QUARANTINE_ENTRY,
+                    rustix::fs::CWD,
+                    &moved,
+                )
+                .unwrap();
+                rustix::fs::mkdirat(
+                    held,
+                    super::take_back::QUARANTINE_ENTRY,
+                    rustix::fs::Mode::RWXU,
+                )
+                .unwrap();
+                fs::create_dir(&level).unwrap();
+            }
+        },
+    );
+    assert!(moved.join("keep").is_file());
+    assert!(dir.join("new.restored-0").is_dir());
+    mark_path("moved to: ", &moved);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_level_swapped_in_its_quarantine_before_a_failed_put_back_is_not_placed_there() {
+    // As above, but every name a put-back could use is taken, so what is in
+    // the quarantine stays there. It is not the level: the warning must not
+    // say the level's contents remain there.
+    if !in_rollback_stderr_child() {
+        let stderr = rerun_alone_for_stderr(
+            "import_rom::created_dirs::tests::a_level_swapped_in_its_quarantine_before_a_failed_put_back_is_not_placed_there",
+        );
+        assert!(
+            !stderr.contains("its contents remain in"),
+            "stderr:\n{stderr}"
+        );
+        let warned = warned_path(&stderr, "warning: ", " is the directory rollback made for ");
+        assert_names_marked_path(&stderr, warned, "moved to: ");
+        return;
+    }
+    let dir = TempDir::new("undo-swapped-before-stranding");
+    let level = dir.join("new");
+    let moved = dir.join("moved");
+    let created = super::create_directories(&level).unwrap();
+    super::take_back::undo_created_directories_with_capture_hooks(
+        &created,
+        &mut || fs::write(level.join("keep"), b"x").unwrap(),
+        &mut |stage, held| {
+            if stage == super::take_back::CaptureStage::BeforeRestore {
+                rustix::fs::renameat(
+                    held,
+                    super::take_back::QUARANTINE_ENTRY,
+                    rustix::fs::CWD,
+                    &moved,
+                )
+                .unwrap();
+                rustix::fs::mkdirat(
+                    held,
+                    super::take_back::QUARANTINE_ENTRY,
+                    rustix::fs::Mode::RWXU,
+                )
+                .unwrap();
+                fs::create_dir(&level).unwrap();
+                for n in 0..16 {
+                    fs::create_dir(dir.join(&format!("new.restored-{n}"))).unwrap();
+                }
+            }
+        },
+    );
+    assert!(moved.join("keep").is_file());
+    mark_path("moved to: ", &moved);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_quarantine_whose_check_fails_is_reported_with_the_error() {
+    // The freshly made quarantine's check fails with an error (an `EIO`
+    // listing or `fchmod`, injected through the seam). That says nothing
+    // about whose directory it is: the warning gives the error, not an
+    // ownership swap, and both the level and the quarantine are left.
+    if !in_rollback_stderr_child() {
+        let stderr = rerun_alone_for_stderr(
+            "import_rom::created_dirs::tests::a_quarantine_whose_check_fails_is_reported_with_the_error",
+        );
+        assert!(
+            !stderr.contains("is not the private cleanup directory rollback made"),
+            "stderr:\n{stderr}"
+        );
+        assert!(
+            stderr.contains("could not be checked: "),
+            "stderr:\n{stderr}"
+        );
+        assert!(
+            stderr.contains(&std::io::Error::from(rustix::io::Errno::IO).to_string()),
+            "stderr:\n{stderr}"
+        );
+        return;
+    }
+    let dir = TempDir::new("quarantine-check-fails");
+    let level = dir.join("new");
+    let created = super::create_directories(&level).unwrap();
+    let parent = created[0].parent.as_deref().unwrap();
+    let proceeded =
+        super::take_back::take_back_level_vouched_by(parent, &created[0], ".undo-check", |_| {
+            Err(rustix::io::Errno::IO)
+        });
+    assert!(!proceeded, "rollback must not proceed");
+    assert!(level.is_dir(), "the level is left standing");
+    assert!(dir.join(".undo-check").is_dir(), "the quarantine is left");
+}
+
+#[cfg(unix)]
+#[test]
 fn undo_puts_back_a_level_that_gained_contents_after_validation() {
     let dir = TempDir::new("undo-gained-contents");
     let level = dir.join("new");
