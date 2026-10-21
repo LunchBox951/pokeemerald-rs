@@ -8,19 +8,41 @@ use battle::{Battle, BattleEvent, BattlePokemon, Dex, PlayerAction, Status1};
 const PIKACHU: SpeciesId = SpeciesId::PIKACHU;
 const WATER_GUN: MoveId = MoveId::WATER_GUN;
 
-/// Both battlers use their first move: construction's turn-number draw, the
-/// turn-start draw, the enemy's move selection, then per acting battler
-/// accuracy, crit (`1`: no crit), damage roll, and a discarded
-/// secondary-effect draw. [`PIKACHU`] acts first.
-const BOTH_ACT: [u16; 11] = [0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0];
+const CONSTRUCTION_TURN_NUMBER: u16 = 0;
+const TURN_START: u16 = 0;
+const ENEMY_MOVE_SELECTION: u16 = 0;
+const ACCURACY_HITS: u16 = 0;
+const NO_CRIT: u16 = 1;
+const DAMAGE_ROLL: u16 = 0;
+const DISCARDED_SECONDARY_EFFECT: u16 = 0;
 
-/// [`BOTH_ACT`] truncated after a level-50 player's first hit, which knocks
-/// the enemy out before it acts.
-const PLAYER_ACTS_ALONE: [u16; 7] = [0, 0, 0, 0, 1, 0, 0];
-
-/// The Static roll is `Random() % 3`: zero paralyses.
+/// Static paralyses on a zero `Random() % 3` roll.
 const STATIC_TRIGGERS: u16 = 0;
 const STATIC_MISSES: u16 = 1;
+
+const PLAYER_ACTS_ALONE: [u16; 7] = [
+    CONSTRUCTION_TURN_NUMBER,
+    TURN_START,
+    ENEMY_MOVE_SELECTION,
+    ACCURACY_HITS,
+    NO_CRIT,
+    DAMAGE_ROLL,
+    DISCARDED_SECONDARY_EFFECT,
+];
+
+const BOTH_ACT: [u16; 11] = [
+    CONSTRUCTION_TURN_NUMBER,
+    TURN_START,
+    ENEMY_MOVE_SELECTION,
+    ACCURACY_HITS,
+    NO_CRIT,
+    DAMAGE_ROLL,
+    DISCARDED_SECONDARY_EFFECT,
+    ACCURACY_HITS,
+    NO_CRIT,
+    DAMAGE_ROLL,
+    DISCARDED_SECONDARY_EFFECT,
+];
 
 fn pikachu(dex: &Dex, level: u8, moves: Vec<MoveId>) -> BattlePokemon {
     let mon = max_iv_mon(dex, PIKACHU, level, moves);
@@ -144,15 +166,32 @@ fn a_fainted_static_holder_still_rolls_and_paralyses_the_attacker() {
 
 #[test]
 fn a_multi_hit_contact_move_rolls_static_after_every_hit() {
+    const HIT_COUNT_TWO: u16 = 0;
+    const FIRST_HIT_STATIC_ROLL: u16 = STATIC_MISSES;
+    const SECOND_HIT_STATIC_ROLL: u16 = STATIC_TRIGGERS;
+    const DOUBLE_SLAP_EFFECT_CHANCE: u16 = 0;
     let dex = Dex::new();
     let player = max_iv_mon(&dex, RATTATA, 60, vec![MoveId::DOUBLE_SLAP]);
     let enemy = pikachu(&dex, 40, vec![TACKLE]);
 
-    // Construction and turn-start draws, Double Slap's accuracy and hit count
-    // (two hits), then per hit crit, damage roll and Static roll (the first
-    // misses, the second paralyses), the trailing effect-chance draw, and the
-    // enemy's Tackle.
-    let mut rng = SequenceRng::new([0, 0, 0, 0, 0, 1, 0, 1, 1, 0, 0, 0, 0, 1, 0, 0]);
+    let mut rng = SequenceRng::new([
+        CONSTRUCTION_TURN_NUMBER,
+        TURN_START,
+        ENEMY_MOVE_SELECTION,
+        ACCURACY_HITS,
+        HIT_COUNT_TWO,
+        NO_CRIT,
+        DAMAGE_ROLL,
+        FIRST_HIT_STATIC_ROLL,
+        NO_CRIT,
+        DAMAGE_ROLL,
+        SECOND_HIT_STATIC_ROLL,
+        DOUBLE_SLAP_EFFECT_CHANCE,
+        ACCURACY_HITS,
+        NO_CRIT,
+        DAMAGE_ROLL,
+        DISCARDED_SECONDARY_EFFECT,
+    ]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)

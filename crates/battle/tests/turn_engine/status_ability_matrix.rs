@@ -10,7 +10,7 @@
 //! Armor (`battle_script_commands.c:2291-2393`), Flash Fire (`battle_util.c:2703-2705`),
 //! Natural Cure (`battle_script_commands.c:9590-9607`).
 
-use crate::common::{max_iv_mon, SequenceRng};
+use crate::common::{admission_script, max_iv_mon, SequenceRng};
 use assets::{AbilityId, MoveId, SpeciesId};
 use battle::{Battle, BattleError, BattlePokemon, Dex, Status1};
 
@@ -117,8 +117,21 @@ fn the_status1_matrix_refuses_exactly_the_limber_and_immunity_cures() {
         for status in STATUSES {
             let mon = holder(species, slot, status);
             assert_eq!(mon.ability(), ability, "{name} fixture ability");
-            let mut rng = SequenceRng::new([0, 0]);
-            let result = Battle::new(Dex::new(), mon, opponent(), false, &mut rng);
+            let mon_speed = mon.speed_for_turn_order();
+            let enemy = opponent();
+            assert_ne!(
+                mon_speed,
+                enemy.speed_for_turn_order(),
+                "{name} with {status:?} fixture Speeds must not tie"
+            );
+            // A refusal draws nothing, so its script is oversupplied on
+            // purpose; an admission draws only the seed.
+            let mut rng = SequenceRng::new(if refused == Some(status) {
+                vec![0, 0]
+            } else {
+                admission_script(false)
+            });
+            let result = Battle::new(Dex::new(), mon, enemy, false, &mut rng);
             if refused == Some(status) {
                 assert!(
                     matches!(
@@ -130,7 +143,8 @@ fn the_status1_matrix_refuses_exactly_the_limber_and_immunity_cures() {
                 assert_eq!(rng.draws(), 0, "{name} refusal precedes every draw");
             } else {
                 assert!(result.is_ok(), "{name} with {status:?} must be admitted");
-                assert!(rng.draws() >= 1, "{name} with {status:?} initialises");
+                assert_eq!(rng.draws(), 1, "{name} with {status:?} draws only the seed");
+                rng.assert_exhausted();
             }
         }
     }

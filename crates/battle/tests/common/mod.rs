@@ -34,6 +34,16 @@ pub fn script(groups: &[&[u16]]) -> Vec<u16> {
     groups.concat()
 }
 
+/// The exact constructor script: the turn-number seed draw, plus the discarded
+/// initial-order draw only when both sides' turn-order Speeds are equal.
+pub fn admission_script(speed_tie: bool) -> Vec<u16> {
+    if speed_tie {
+        script(&[&[0], &[0]])
+    } else {
+        script(&[&[0]])
+    }
+}
+
 impl BattleRng for SequenceRng {
     fn next_u16(&mut self) -> u16 {
         let value = self

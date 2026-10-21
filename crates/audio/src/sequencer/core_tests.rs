@@ -243,7 +243,7 @@ fn wait_goto_and_voice_commands_update_track_control_state() {
 
     assert_eq!(sequencer.tracks[0].wait, 24);
     assert_eq!(sequencer.tracks[0].cursor, 17);
-    assert_eq!(sequencer.tracks[0].voice, 3);
+    assert_eq!(sequencer.tracks[0].voice, Some(3));
 }
 
 #[test]

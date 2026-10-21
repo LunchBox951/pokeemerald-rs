@@ -313,6 +313,9 @@ fn ensure_wild_startable_refuses_a_species_with_any_always_refused_slot() {
         (SpeciesId::PARASECT, assets::AbilityId::EFFECT_SPORE),
         (SpeciesId::SHROOMISH, assets::AbilityId::EFFECT_SPORE),
         (SpeciesId::BRELOOM, assets::AbilityId::EFFECT_SPORE),
+        (SpeciesId::KYOGRE, assets::AbilityId::DRIZZLE),
+        (SpeciesId::GROUDON, assets::AbilityId::DROUGHT),
+        (SpeciesId::TYRANITAR, assets::AbilityId::SAND_STREAM),
     ] {
         assert_eq!(
             ensure_wild_startable(&dex, species, 1),

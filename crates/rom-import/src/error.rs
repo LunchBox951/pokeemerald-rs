@@ -353,6 +353,32 @@ pub enum ImportError {
         /// What the schema objected to.
         source: assets::pack::BattleMessageError,
     },
+    /// The battle-animation schema refused what the ROM holds: a program
+    /// whose shape or operands the catalog cannot carry, or roots it cannot
+    /// be assembled from.
+    BattleAnimation {
+        /// The pack id being built.
+        id: &'static str,
+        /// What the schema objected to.
+        source: assets::BattleAnimationError,
+    },
+    /// A battle-animation command byte is not one of `sScriptCmdTable`'s slots.
+    AnimationOpcode {
+        /// The ROM offset of the command.
+        at: usize,
+        /// The byte found.
+        opcode: u8,
+    },
+    /// A battle-animation command names a template, task, or program the
+    /// profile does not record.
+    AnimationPointer {
+        /// The ROM offset of the operand.
+        at: usize,
+        /// What the operand should name: a template, a task, or a program.
+        what: &'static str,
+        /// The address found.
+        ptr: crate::reader::GbaPtr,
+    },
     /// The asset pack could not be assembled.
     PackWrite(pack_format::PackWriteError),
     /// The pack's destination is the source ROM itself.
@@ -489,6 +515,16 @@ impl fmt::Display for ImportError {
             } => write!(f, "`{id}` track {track} at ROM offset {at:#08x}: {fault}"),
             Self::Audio { id, source } => write!(f, "`{id}`: {source}"),
             Self::BattleMessage { id, source } => write!(f, "`{id}`: {source}"),
+            Self::BattleAnimation { id, source } => write!(f, "`{id}`: {source}"),
+            Self::AnimationOpcode { at, opcode } => write!(
+                f,
+                "battle animation command at ROM offset {at:#08x} has opcode {opcode:#04x}, which is not a command"
+            ),
+            Self::AnimationPointer { at, what, ptr } => write!(
+                f,
+                "battle animation operand at ROM offset {at:#08x} points at {what} {:#010x}, which this revision profile does not record",
+                ptr.raw()
+            ),
             Self::PackWrite(source) => write!(f, "could not assemble the asset pack: {source}"),
             Self::SameFile { path } => write!(
                 f,
@@ -534,6 +570,7 @@ impl std::error::Error for ImportError {
             Self::EntryShape { source, .. } => Some(source),
             Self::Audio { source, .. } => Some(source),
             Self::BattleMessage { source, .. } => Some(source),
+            Self::BattleAnimation { source, .. } => Some(source),
             _ => None,
         }
     }
@@ -745,6 +782,19 @@ mod tests {
             ImportError::BattleMessage {
                 id: "battle-message/table",
                 source: assets::pack::BattleMessageError::Truncated,
+            },
+            ImportError::BattleAnimation {
+                id: "battle-anim/catalog",
+                source: assets::BattleAnimationError::EmptyProgram,
+            },
+            ImportError::AnimationOpcode {
+                at: 0x20,
+                opcode: 0x30,
+            },
+            ImportError::AnimationPointer {
+                at: 0x24,
+                what: "a template",
+                ptr: crate::reader::GbaPtr::AT_BASE,
             },
             ImportError::Song {
                 id: "audio/song/mus_title",

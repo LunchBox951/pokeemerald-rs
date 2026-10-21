@@ -331,7 +331,10 @@ pub struct TrainerPartyMon<'a> {
 /// slots, its selected ability is not a trapping one, and the trainer scores
 /// with `CheckBadMove` (the only script that reads the target's ability), or
 /// [`BattleError::UnportedAbilityInteraction`] when a member's personality selects an
-/// always-refused ability.
+/// always-refused ability or a member's PP-positive move would be refused by
+/// [`secondary::ensure_admissible`](crate::secondary::ensure_admissible)
+/// against `player_lead` (for example Serene Grace with a Confuse Hit move).
+/// Only the lead is screened; reserves are screened by `Battle::new_trainer`.
 pub fn ensure_trainer_party_startable(
     dex: &Dex,
     player_lead: &BattlePokemon,
@@ -348,8 +351,22 @@ pub fn ensure_trainer_party_startable(
     }
     super::trainer_ai::ensure_supported_flags(data.ai_flags)?;
     for mon in party {
-        for move_id in mon.moves {
-            ensure_move_playable(dex, *move_id, data.ai_flags)?;
+        // `BattlePokemon::new` draws no RNG; the OT-ID roll is the only draw
+        // `build_trainer_pokemon` adds, and the screen never reads it. IVs do
+        // not affect the ability or any secondary-effect screen.
+        let attacker = BattlePokemon::new(
+            dex,
+            mon.species,
+            mon.level,
+            fixed_ivs(0),
+            mon.personality,
+            mon.moves.to_vec(),
+        )?;
+        for slot in attacker.moves() {
+            ensure_move_playable(dex, slot.move_id, data.ai_flags)?;
+            if slot.pp > 0 {
+                super::secondary::ensure_admissible(dex, slot.move_id, &attacker, player_lead)?;
+            }
         }
     }
     if data.ai_flags.contains(AiFlags::CHECK_BAD_MOVE) {
@@ -557,6 +574,9 @@ mod tests {
                 assets::AbilityId::EFFECT_SPORE,
             ),
             (SpeciesId::BRELOOM, SLOT_1, assets::AbilityId::EFFECT_SPORE),
+            (SpeciesId::KYOGRE, SLOT_0, assets::AbilityId::DRIZZLE),
+            (SpeciesId::GROUDON, SLOT_0, assets::AbilityId::DROUGHT),
+            (SpeciesId::TYRANITAR, SLOT_0, assets::AbilityId::SAND_STREAM),
         ] {
             let refused = TrainerPartyMon {
                 species,
@@ -707,6 +727,48 @@ mod tests {
         )
         .expect_err("the battle refuses the same moveset");
         assert_eq!(screened, handoff);
+    }
+
+    #[test]
+    fn the_pre_flight_refuses_a_serene_grace_confuse_hit_member_before_any_draw() {
+        let dex = Dex::new();
+        let moves = [MoveId::PSYBEAM];
+        let party = [TrainerPartyMon {
+            species: SpeciesId::DUNSPARCE,
+            level: ROUTE_103_RIVAL_LEVEL,
+            moves: &moves,
+            personality: SLOT_0,
+        }];
+        let enemy = crate::pokemon::BattlePokemon::new(
+            &dex,
+            SpeciesId::DUNSPARCE,
+            ROUTE_103_RIVAL_LEVEL,
+            fixed_ivs(0),
+            SLOT_0,
+            moves.to_vec(),
+        )
+        .unwrap();
+        assert_eq!(enemy.ability(), assets::AbilityId::SERENE_GRACE);
+        let refusal = Err(crate::error::BattleError::UnportedAbilityInteraction(
+            assets::AbilityId::SERENE_GRACE,
+        ));
+        assert_eq!(
+            ensure_trainer_party_startable(&dex, &lead(TREECKO), MAY_ROUTE_103_MUDKIP, &party),
+            refusal
+        );
+        let mut rng = SequenceRng::new([]);
+        assert_eq!(
+            crate::battle::Battle::new_trainer(
+                Dex::new(),
+                lead(TREECKO),
+                MAY_ROUTE_103_MUDKIP,
+                vec![enemy],
+                &mut rng,
+            )
+            .map(|_| ()),
+            refusal
+        );
+        assert_eq!(rng.draws(), 0);
     }
 
     #[test]
