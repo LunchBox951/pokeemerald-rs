@@ -2,7 +2,7 @@
 //! with. Synthetic packs come from the shared [`crate::pack_test_support`].
 
 use super::save_continue_support::{new_game_phase, save_from_the_start_menu};
-use super::tests::TempSave;
+use super::tests::{write_scratch_exclusive, TempSave};
 use super::{menu_type_for, window_frame_for};
 use crate::main_menu::{MainMenuScene, MainMenuType};
 use crate::pack_test_support::{image_entry, pack_bytes, palette_entry_with_color};
@@ -41,13 +41,17 @@ struct TempPack {
 }
 
 impl TempPack {
-    fn new(label: &str) -> Self {
-        let path = std::env::temp_dir().join(format!(
+    fn scratch_path(label: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
             "pokeemerald-rs-flow-window-frame-pack-{label}-{}-{:?}.pack",
             std::process::id(),
             std::thread::current().id()
-        ));
-        std::fs::write(&path, synthetic_two_frame_pack_bytes()).unwrap();
+        ))
+    }
+
+    fn new(label: &str) -> Self {
+        let path = Self::scratch_path(label);
+        write_scratch_exclusive(&path, synthetic_two_frame_pack_bytes());
         Self { path }
     }
 }
@@ -244,13 +248,8 @@ fn a_continued_saves_own_frame_reaches_the_field_start_menu_it_opens() {
         return;
     }
 
-    let pack_path = std::env::temp_dir().join(format!(
-        "pokeemerald-rs-1180-field-start-menu-frame-{}-{:?}.pack",
-        std::process::id(),
-        std::thread::current().id()
-    ));
-    std::fs::write(&pack_path, field_start_menu_two_frame_pack_bytes())
-        .expect("the scratch pack path must be writable");
+    let pack_path = field_start_menu_scratch_path();
+    write_scratch_exclusive(&pack_path, field_start_menu_two_frame_pack_bytes());
 
     let exe = std::env::current_exe().expect("the running test binary has a path");
     let output = std::process::Command::new(exe)
@@ -282,4 +281,32 @@ fn a_continued_saves_own_frame_reaches_the_field_start_menu_it_opens() {
         "the filtered child must report one executed test -- an unmatched \
          filter exits 0 having run nothing\nstdout:\n{stdout}\nstderr:\n{stderr}"
     );
+}
+
+fn field_start_menu_scratch_path() -> std::path::PathBuf {
+    std::env::temp_dir().join(format!(
+        "pokeemerald-rs-1180-field-start-menu-frame-{}-{:?}.pack",
+        std::process::id(),
+        std::thread::current().id()
+    ))
+}
+
+#[cfg(unix)]
+#[test]
+fn the_temp_pack_refuses_a_planted_symlink() {
+    let label = "symlink-regression";
+    super::tests::assert_planted_symlink_untouched(&TempPack::scratch_path(label), || {
+        drop(TempPack::new(label));
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn the_field_start_menu_frame_pack_refuses_a_planted_symlink() {
+    super::tests::assert_planted_symlink_untouched(&field_start_menu_scratch_path(), || {
+        write_scratch_exclusive(
+            &field_start_menu_scratch_path(),
+            field_start_menu_two_frame_pack_bytes(),
+        );
+    });
 }
