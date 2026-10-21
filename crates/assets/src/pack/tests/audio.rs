@@ -5,8 +5,8 @@ use super::shared::{
     UNKNOWN_SAMPLE_KIND_TAG,
 };
 use crate::audio::{
-    AudioError, CryTable, Sample, SampleId, SongEvent, VoiceEntry, VoiceGroupId, CRY_TABLE_LEN,
-    CRY_TABLE_PACK_ID,
+    AudioError, CryTable, MusicPlayerId, Sample, SampleId, SongEvent, VoiceEntry, VoiceGroupId,
+    CRY_TABLE_LEN, CRY_TABLE_PACK_ID,
 };
 
 #[test]
@@ -18,6 +18,7 @@ fn song_accessor_decodes_the_named_entry_through_the_song_schema() {
         song.voicegroup(),
         &VoiceGroupId("audio/voicegroup/test_group".to_owned())
     );
+    assert_eq!(song.player(), MusicPlayerId(1));
     assert_eq!(song.priority(), 5);
     assert_eq!(song.reverb(), Some(30));
     assert_eq!(
@@ -253,4 +254,18 @@ fn cry_table_accessor_reports_a_malformed_payload() {
             source: AudioError::Truncated,
         })
     );
+}
+
+#[test]
+fn a_pack_from_the_format_without_song_players_is_refused_on_load() {
+    const PREVIOUS_FORMAT_VERSION: u32 = 10;
+    let path = write_synthetic_pack("song-player-previous-version");
+    let mut bytes = std::fs::read(&path).unwrap();
+    bytes[8..12].copy_from_slice(&PREVIOUS_FORMAT_VERSION.to_le_bytes());
+    std::fs::write(&path, bytes).unwrap();
+    assert_eq!(
+        AssetPack::load(&path).map(|_| ()),
+        Err(PackError::UnsupportedVersion(PREVIOUS_FORMAT_VERSION))
+    );
+    let _ = std::fs::remove_file(path);
 }

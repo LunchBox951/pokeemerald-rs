@@ -44,7 +44,7 @@ pub use cry::{
 };
 pub use error::AudioError;
 pub use sample::{DirectSoundSample, ProgrammableWave, Sample, SampleId};
-pub use song::{MemAccCondition, MemAccOp, Song, SongEvent, MAX_TRACKS};
+pub use song::{MemAccCondition, MemAccOp, MusicPlayerId, Song, SongEvent, MAX_TRACKS};
 pub use voicegroup::{
     DirectSoundMode, DirectSoundVoice, Envelope, KeySplitVoice, NoiseVoice, ProgrammableWaveVoice,
     RhythmVoice, Square1Voice, Square2Voice, VoiceEntry, VoiceGroup, VoiceGroupId,
