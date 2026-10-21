@@ -1,12 +1,11 @@
-//! Locator tests over synthetic ROMs, plus the real-ROM drift check.
-//!
-//! Every test here but the last builds its own ROM-shaped image with
+//! Shared fixtures for the ROM-profile regression tests, which live in the
+//! concern modules below: `locator` (image, palette, map, committed-profile
+//! and missing-domain checks, plus the `#[ignore]`d real-ROM drift check),
+//! `publication` (destination and cleanup), `audio` (audio fixture,
+//! pack-entry and song checks) and `audio_bytecode` (voicegroup and song
+//! bytecode). Every synthetic test builds its own ROM-shaped image with
 //! `rom_import::fixture::RomFixture` and its own pack, so the suite needs
-//! no copyrighted ROM and no real upstream checkout -- the audio tests
-//! build their own synthetic stand-in for the `sound/` files that domain
-//! reads. The last test needs both a real ROM and a real checkout and is
-//! `#[ignore]`d: it regenerates the profile and asserts the committed file
-//! is what a fresh run would write.
+//! no copyrighted ROM and no real upstream checkout.
 
 use std::path::PathBuf;
 
@@ -59,7 +58,6 @@ pub(super) fn distinctive_tiles(tile_count: usize) -> Vec<u8> {
         .collect()
 }
 
-/// Run a body against a fixture ROM and a pack built from `entries`.
 /// The bag expectation synthetic contexts carry: one root of every family.
 pub(super) fn synthetic_bag_ids() -> Vec<String> {
     [
@@ -73,6 +71,7 @@ pub(super) fn synthetic_bag_ids() -> Vec<String> {
     .to_vec()
 }
 
+/// Run a body against a fixture ROM and a pack built from `entries`.
 pub(super) fn with_context<T>(
     name: &str,
     rom: &[u8],

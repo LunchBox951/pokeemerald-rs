@@ -1,4 +1,4 @@
-//! Audio fixture, pack-entry, song, voicegroup and bytecode regression tests.
+//! Audio fixture, pack-entry and song regression tests.
 
 use std::path::{Path, PathBuf};
 
