@@ -663,7 +663,7 @@ struct Endless {
 
 impl std::io::Read for Endless {
     fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
-        let n = out.len().min(self.left as usize);
+        let n = usize::try_from(self.left).map_or(out.len(), |left| out.len().min(left));
         out[..n].fill(b'x');
         self.left -= n as u64;
         Ok(n)
@@ -678,7 +678,7 @@ fn overlong_status_line_is_discarded_through_a_bounded_buffer() {
     let mut reader = BufReader::with_capacity(4096, Endless { left: 64 << 20 }.chain(tail));
     MAX_ALLOC.with(|m| m.set(0));
     checkout::discard_line(&mut reader).unwrap();
-    let largest = MAX_ALLOC.with(|m| m.get());
+    let largest = MAX_ALLOC.with(std::cell::Cell::get);
     let mut next = String::new();
     reader.read_line(&mut next).unwrap();
     assert_eq!(next, "next\n");
