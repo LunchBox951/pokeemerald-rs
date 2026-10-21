@@ -25,7 +25,7 @@ const MEGA_DRAIN: MoveId = MoveId::MEGA_DRAIN;
 const GIGA_DRAIN: MoveId = MoveId::GIGA_DRAIN;
 const UNKNOWN_MOVE: MoveId = MoveId(60_000);
 
-const STENCH: AbilityId = AbilityId(1);
+const STENCH: AbilityId = AbilityId::STENCH;
 
 const MAX_IVS: Ivs = Ivs {
     hp: 31,
