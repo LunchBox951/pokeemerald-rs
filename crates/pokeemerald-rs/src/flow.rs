@@ -33,8 +33,9 @@
 //! Two points, both taking the session's [`SaveSlot`] as an argument rather
 //! than reaching for a global `(oop-boundaries)`:
 //!
-//! * **Read**, on `Title` -> `MainMenu`: [`advance_scene`] loads the save and
-//!   [`menu_type_for`] turns its `gSaveFileStatus` into the item list to
+//! * **Read**, at boot, before the title ([`AnimatedTitle::boot`], as
+//!   upstream's copyright screen does): the title scenes carry the loaded save,
+//!   and on `Title` -> `MainMenu` [`menu_type_for`] turns its `gSaveFileStatus` into the item list to
 //!   show, so a valid save produces upstream's `HAS_SAVED_GAME` menu with
 //!   `CONTINUE` on it while anything else falls back to `HAS_NO_SAVED_GAME`.
 //!   The loaded blocks ride along in [`MainMenuState`] until
@@ -91,6 +92,7 @@ pub(crate) mod npc_trainer_battle;
 mod options;
 #[cfg(test)]
 mod options_tests;
+
 pub(crate) mod overworld_phase;
 /// The scripted Route 103 rival battle's own choice of trainer:
 /// [`overworld_phase`]'s `route103_rival_trigger` (beside its
@@ -102,6 +104,9 @@ pub(crate) mod overworld_phase;
 /// place both this module's own trigger and [`overworld_phase`]'s
 /// `sight_trainer_trigger` build their battles.
 pub(crate) mod route103_rival;
+/// The boot-loaded button mode on the title scenes (I-3, issue #2491).
+#[cfg(test)]
+mod title_button_mode_tests;
 mod wild_encounter;
 pub(crate) use overworld_phase::OverworldPhase;
 
@@ -174,6 +179,27 @@ pub(crate) struct AnimatedTitle {
     pub(crate) scene: TitleScene,
     pub(crate) tick: u32,
     pub(crate) presented: bool,
+    /// The save the boot load recovered, boot defaults applied. Upstream reads
+    /// it during the copyright screen (`pokeemerald/src/intro.c:1147-1156`),
+    /// before the title screen and its `ReadKeys` (`main.c:279-288`), so the
+    /// title scenes carry its `optionsButtonMode` and the `Title` ->
+    /// `MainMenu` handoff hands the same blocks on instead of loading again.
+    pub(crate) saved: SavedGame,
+}
+
+impl AnimatedTitle {
+    /// The fresh, un-presented title at tick 0, after the boot load of
+    /// `save_slot` (module docs on [`AnimatedTitle::saved`]).
+    pub(crate) fn boot(scene: TitleScene, save_slot: &mut SaveSlot) -> Self {
+        let mut saved = save_slot.load();
+        apply_boot_defaults(&mut saved);
+        Self {
+            scene,
+            tick: 0,
+            presented: false,
+            saved,
+        }
+    }
 }
 
 /// [`crate::app::App`]'s real (windowed) game-flow state (module docs):
@@ -234,14 +260,13 @@ pub(crate) enum AppScene {
 
 impl AppScene {
     /// The `optionsButtonMode` this scene's save carries
-    /// (`pokeemerald/src/main.c:279-288`'s source). Known gap: upstream loads
-    /// the save during the copyright screen, so L=A already applies on the
-    /// title; this port loads it only at the `Title` -> `MainMenu`
-    /// transition, so the title scenes read the default `Normal`. The intro
-    /// carries the mode in its [`NewGameOptions`] rather than a `SaveBlock2`.
+    /// (`pokeemerald/src/main.c:279-288`'s source). The title scenes carry the
+    /// boot load's save ([`AnimatedTitle::saved`]), as upstream reads it during
+    /// the copyright screen (`intro.c:1147-1156`). The intro carries the mode in its [`NewGameOptions`] rather than a `SaveBlock2`.
     fn button_mode(&self) -> ButtonMode {
         match self {
-            Self::Title(_) | Self::TitleFadeWait(_) => ButtonMode::Normal,
+            Self::Title(title) => title.saved.block2.options_button_mode,
+            Self::TitleFadeWait(wait) => wait.button_mode(),
             Self::MainMenu(state) | Self::MainMenuHighlight(state) => {
                 state.saved.block2.options_button_mode
             }
@@ -454,36 +479,41 @@ fn main_menu_load_failure_message(err: &MainMenuSceneError) -> String {
 
 /// The `Title` -> `MainMenu` half of [`advance_scene`]'s
 /// `AppScene::TitleFadeWait` arm, split out so that arm stays under the
-/// lint's line budget `(oop-boundaries)`: reads `save_slot`, builds the menu
-/// bordered with the save's own window frame, and returns the next scene and
-/// its first frame on success -- upstream reads the save before the title
-/// screen ever draws, in `CB2_InitCopyrightScreenAfterBootup`
-/// (`src/intro.c:1147-1159`), and parks the verdict in `gSaveFileStatus` for
-/// `Task_MainMenuCheckSaveFile` to branch on later. This port has no
-/// copyright screen and no globals `(oop-boundaries)`, so the load happens
-/// at the one moment its result is first needed -- once the title's fade
-/// reports done -- and travels onward as a value in `MainMenuState`. The
-/// observable result is identical: the menu shown is the one the save on
-/// disk selects.
+/// lint's line budget `(oop-boundaries)`: builds the menu the title's
+/// boot-loaded save selects, bordered with that save's window frame, and
+/// returns the next scene and its first frame, handing the save on in
+/// `MainMenuState`. Upstream reads the save before the title ever draws
+/// (`CB2_InitCopyrightScreenAfterBootup`, `src/intro.c:1147-1159`) and parks
+/// the verdict in `gSaveFileStatus` for `Task_MainMenuCheckSaveFile`; here
+/// [`AnimatedTitle::boot`] does that read and the title carries the result.
 ///
-/// Returns `None`, after logging, if the pack load fails -- the caller stays
-/// on the title screen.
+/// Returns the title back as `Err`, after logging, if the pack load fails --
+/// the caller stays on the title screen.
 fn title_to_main_menu(
     pack_source: &crate::pack_source::PackSource,
-    save_slot: &mut SaveSlot,
-) -> Option<(AppScene, Box<Frame>)> {
-    let mut saved = save_slot.load();
-    apply_boot_defaults(&mut saved);
+    title: Box<AnimatedTitle>,
+) -> Result<(AppScene, Box<Frame>), Box<AnimatedTitle>> {
+    let Some(menu) = load_menu_for(pack_source, &title.saved) else {
+        return Err(title);
+    };
+    let AnimatedTitle { saved, .. } = *title;
+    let state = MainMenuState { scene: menu, saved };
+    let frame = state.scene.compose_frame();
+    Ok((AppScene::MainMenu(Box::new(state)), frame))
+}
+
+/// The menu `saved` selects, bordered with its window frame, or `None` after
+/// logging when the pack load fails.
+fn load_menu_for(
+    pack_source: &crate::pack_source::PackSource,
+    saved: &SavedGame,
+) -> Option<MainMenuScene> {
     match main_menu::load_with_window_frame(
         pack_source,
-        menu_type_for(&saved),
-        window_frame_for(&saved),
+        menu_type_for(saved),
+        window_frame_for(saved),
     ) {
-        Ok(menu) => {
-            let state = MainMenuState { scene: menu, saved };
-            let frame = state.scene.compose_frame();
-            Some((AppScene::MainMenu(Box::new(state)), frame))
-        }
+        Ok(menu) => Some(menu),
         Err(err) => {
             eprintln!("{}", main_menu_load_failure_message(&err));
             None
@@ -514,11 +544,9 @@ fn title_to_main_menu(
 /// variant's own doc comment) so the failed attempt isn't repeated every
 /// frame.
 ///
-/// `save_slot` is this session's save medium ([`SaveSlot`]). The `Title` ->
-/// `MainMenu` transition reads it (upstream's boot-time
-/// `LoadGameSave(SAVE_NORMAL)`, deferred to here because this port has no
-/// pre-title copyright screen to run it on -- see the `MainMenu` arm), and
-/// the `Overworld` arm hands it to
+/// `save_slot` is this session's save medium ([`SaveSlot`]). The boot load
+/// ([`AnimatedTitle::boot`]) already read it before the title, so the `Title`
+/// -> `MainMenu` transition hands that save on, and the `Overworld` arm hands it to
 /// [`OverworldPhase::advance_start_menu_frame`], the *only* write side
 /// (module docs).
 ///
@@ -544,7 +572,7 @@ pub(crate) fn advance_scene(
     };
     match scene {
         AppScene::Title(title) => advance_title(title, buttons),
-        AppScene::TitleFadeWait(wait) => advance_title_fade_wait(wait, save_slot, &pack_source),
+        AppScene::TitleFadeWait(wait) => advance_title_fade_wait(wait, &pack_source),
         AppScene::MainMenu(state) => advance_main_menu(state, buttons),
         AppScene::MainMenuHighlight(state) => {
             let frame = state.scene.compose_frame();

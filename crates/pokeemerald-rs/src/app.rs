@@ -334,13 +334,14 @@ pub struct App {
 /// and [`App::new_headless_animated`] (which takes an already-loaded scene,
 /// for tests that need their own reference copy to compare ticks against)
 /// never hand-write these same three lines twice `(oop-boundaries)`.
-fn compose_title_scene(scene: title::TitleScene) -> (Box<Frame>, AppScene) {
+fn compose_title_scene(
+    scene: title::TitleScene,
+    save_slot: &mut SaveSlot,
+) -> (Box<Frame>, AppScene) {
     let frame = to_platform_frame(&scene.compose(0));
-    let app_scene = AppScene::Title(Box::new(AnimatedTitle {
-        scene,
-        tick: 0,
-        presented: false,
-    }));
+    // The boot load runs here, before the title's first frame is stepped, as
+    // upstream's copyright screen reads the save ahead of the title.
+    let app_scene = AppScene::Title(Box::new(AnimatedTitle::boot(scene, save_slot)));
     (frame, app_scene)
 }
 
@@ -402,14 +403,11 @@ impl App {
     ) -> Result<Self, AppError> {
         // Load first: no window or save medium is opened if the pack is
         // missing.
-        let loaded = compose_title_scene(load_title()?);
+        let title = load_title()?;
         let platform = open_platform()?;
-        Ok(Self::assemble(
-            platform,
-            loaded,
-            open_save_slot()?,
-            pack_source,
-        ))
+        let mut save_slot = open_save_slot()?;
+        let loaded = compose_title_scene(title, &mut save_slot);
+        Ok(Self::assemble(platform, loaded, save_slot, pack_source))
     }
 
     /// Load the real title screen (I-2) from the local asset pack, then open
@@ -637,10 +635,11 @@ impl App {
     /// [`App::new`] always opens one).
     #[cfg(test)]
     fn new_headless_animated(scene: title::TitleScene) -> Self {
+        let mut save_slot = SaveSlot::disabled();
         Self::assemble(
             Platform::new_headless(),
-            compose_title_scene(scene),
-            SaveSlot::disabled(),
+            compose_title_scene(scene, &mut save_slot),
+            save_slot,
             crate::pack_source::PackSource::Runtime,
         )
     }

@@ -9,7 +9,7 @@ use super::{
     should_retry_overworld_load, title_advance_pressed, window_frame_for, AnimatedTitle, AppScene,
     MainMenuAction, MainMenuState,
 };
-use crate::game_save::{SaveSlot, SavedGame};
+use crate::game_save::{SaveFileStatus, SaveSlot, SavedGame};
 use crate::intro::{self, IntroStatus};
 use crate::main_menu::{MainMenuItem, MainMenuScene, MainMenuSceneError, MainMenuType};
 use crate::new_game::{self, NewGameOptions};
@@ -231,9 +231,8 @@ fn title_a_or_start_button_transitions_to_main_menu() {
     for button in [Buttons::START, Buttons::A] {
         let title_scene = crate::title::load_repo().expect("run `cargo xtask extract` first");
         let scene = AppScene::Title(Box::new(AnimatedTitle {
-            scene: title_scene,
-            tick: 0,
             presented: false,
+            ..AnimatedTitle::boot(title_scene, &mut save_slot)
         }));
 
         // I-3, issue #1329: the press must land in the white fade-wait
@@ -322,9 +321,10 @@ fn write_empty_scratch_pack(label: &str) -> std::path::PathBuf {
 #[test]
 fn title_to_main_menu_failure_emits_its_subsystem_prefix_once_at_the_eprintln_boundary() {
     if std::env::var_os(MAIN_MENU_LOAD_FAILURE_BOUNDARY_CHILD).is_some() {
-        let (_temp, mut save_slot) = empty_slot("main-menu-load-failure-boundary-child");
-        let transitioned =
-            super::title_to_main_menu(&crate::pack_source::PackSource::Runtime, &mut save_slot);
+        let transitioned = super::load_menu_for(
+            &crate::pack_source::PackSource::Runtime,
+            &SavedGame::defaulted(SaveFileStatus::Empty),
+        );
         assert!(
             transitioned.is_none(),
             "an entryless pack must fail the main menu load, not build one"
@@ -395,9 +395,8 @@ fn real_pack_title_transition_borders_the_main_menu_with_the_saves_window_frame(
 
     let title_scene = crate::title::load_repo().expect("run `cargo xtask extract` first");
     let scene = AppScene::Title(Box::new(AnimatedTitle {
-        scene: title_scene,
-        tick: 0,
         presented: false,
+        ..AnimatedTitle::boot(title_scene, &mut save_slot)
     }));
 
     let (waiting, _press_frame) = advance_scene(
@@ -446,14 +445,13 @@ fn real_pack_title_transition_borders_the_main_menu_with_the_saves_window_frame(
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn title_without_start_stays_on_title_and_keeps_animating() {
+    let (_temp, mut save_slot) = empty_slot("title-keeps-animating");
     let title_scene = crate::title::load_repo().expect("run `cargo xtask extract` first");
     let scene = AppScene::Title(Box::new(AnimatedTitle {
-        scene: title_scene,
-        tick: 0,
-        presented: true, // as if this were the second frame onward.
+        presented: true,
+        ..AnimatedTitle::boot(title_scene, &mut save_slot)
     }));
 
-    let (_temp, mut save_slot) = empty_slot("title-keeps-animating");
     let (next, _frame) = advance_scene(
         scene,
         ButtonState::new(),
