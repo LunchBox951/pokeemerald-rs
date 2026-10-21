@@ -8,10 +8,10 @@ use engine::rng::Rng;
 use platform::{ButtonState, Buttons};
 
 /// Issue #207 review, round 2: the production starter *wiring*, not just the
-/// starter constructor -- [`OverworldPhase::load_default`] must hand back a
+/// starter constructor -- [`OverworldPhase::load`] must hand back a
 /// phase whose party lead is the provisional starter, or a real playthrough
 /// rolls I-4 encounters it can never fight. Mutation-pinned: deleting
-/// `load_default`'s `party_lead` assignment fails only here, because every
+/// `OverworldPhase::load`'s `party_lead` assignment fails only here, because every
 /// pack-free test builds its phase through `for_test`, which deliberately
 /// leaves the lead `None`.
 #[test]
