@@ -299,21 +299,117 @@ fn main_menu_load_failure_names_its_subsystem_once() {
 const MAIN_MENU_LOAD_FAILURE_BOUNDARY_CHILD: &str =
     "POKEEMERALD_RS_923_MAIN_MENU_LOAD_FAILURE_BOUNDARY_CHILD";
 
+/// Writes `bytes` to a fresh file at `path`. `create_new` (`O_EXCL`) never
+/// follows a symlink at `path`, so a planted link cannot redirect the write
+/// onto its target. A stale occupant is unlinked (the entry itself, never
+/// what it points to) and the claim retried once.
+pub(super) fn write_scratch_exclusive(path: &std::path::Path, bytes: impl AsRef<[u8]>) {
+    use std::io::Write as _;
+    let mut file = None;
+    for _ in 0..2 {
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+        {
+            Ok(f) => {
+                file = Some(f);
+                break;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                std::fs::remove_file(path).expect("a stale scratch entry is removable");
+            }
+            Err(e) => panic!("the scratch directory is writable: {e}"),
+        }
+    }
+    file.expect("the scratch path is exclusively creatable")
+        .write_all(bytes.as_ref())
+        .expect("the scratch pack is writable");
+}
+
+/// Plants a symlink at `path` pointing at a fresh victim file holding a
+/// sentinel, runs `write`, and asserts the victim is untouched and the
+/// writer replaced the link with a regular file holding `expected`. `write`
+/// returns whatever guard keeps its file alive (a fixture whose `Drop`
+/// removes it, or the path itself); the guard is dropped only after the
+/// replacement is checked, so a writer that silently skips the write fails.
+/// The victim is claimed through [`write_scratch_exclusive`], so a link
+/// planted at its own predictable name is never followed either. Removes
+/// the planted entry and the victim afterwards.
+#[cfg(unix)]
+pub(super) fn assert_planted_symlink_untouched<G>(
+    path: &std::path::Path,
+    expected: &[u8],
+    write: impl FnOnce() -> G,
+) {
+    let victim = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-symlink-victim-{}-{:?}-{}",
+        std::process::id(),
+        std::thread::current().id(),
+        path.file_name().unwrap().to_string_lossy()
+    ));
+    let sentinel = b"victim must survive";
+    write_scratch_exclusive(&victim, sentinel);
+    let _ = std::fs::remove_file(path);
+    std::os::unix::fs::symlink(&victim, path).unwrap();
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(write));
+    let replaced = std::fs::symlink_metadata(path).map(|m| m.file_type().is_file());
+    let written = std::fs::read(path);
+    let completed = outcome.is_ok();
+    drop(outcome);
+    let after = std::fs::read(&victim).unwrap();
+    let _ = std::fs::remove_file(path);
+    let _ = std::fs::remove_file(&victim);
+    assert_eq!(
+        after, sentinel,
+        "a planted symlink's target was overwritten"
+    );
+    assert!(
+        completed,
+        "the writer must replace a planted symlink, not panic on it"
+    );
+    assert!(
+        matches!(replaced, Ok(true)),
+        "the writer must leave a regular file where the symlink was, got {replaced:?}"
+    );
+    assert_eq!(
+        written.ok().as_deref(),
+        Some(expected),
+        "the writer must write its bytes to the replaced path"
+    );
+}
+
 /// A scratch, valid but entryless asset pack -- see
 /// `app::tests::subprocess_harness::write_empty_scratch_pack` for the rationale; duplicated
 /// because the two boundary tests live in sibling modules with no shared
 /// test-only module to hold it.
-fn write_empty_scratch_pack(label: &str) -> std::path::PathBuf {
-    let path = std::env::temp_dir().join(format!(
+fn scratch_pack_path(label: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!(
         "pokeemerald-rs-923-flow-{label}-{}-{:?}.pack",
         std::process::id(),
         std::thread::current().id()
-    ));
+    ))
+}
+
+fn write_empty_scratch_pack(label: &str) -> std::path::PathBuf {
+    let path = scratch_pack_path(label);
     let bytes = pack_format::PackWriter::new()
         .finish()
         .expect("an entryless pack always serializes");
-    std::fs::write(&path, bytes).expect("the scratch pack path must be writable");
+    write_scratch_exclusive(&path, bytes);
     path
+}
+
+#[cfg(unix)]
+#[test]
+fn the_empty_scratch_pack_writer_refuses_a_planted_symlink() {
+    let label = "symlink-regression";
+    let expected = pack_format::PackWriter::new()
+        .finish()
+        .expect("an entryless pack always serializes");
+    assert_planted_symlink_untouched(&scratch_pack_path(label), &expected, || {
+        write_empty_scratch_pack(label)
+    });
 }
 
 /// Re-executes this test binary as a child against [`empty_slot`] and a
