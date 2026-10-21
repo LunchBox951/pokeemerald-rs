@@ -2636,3 +2636,45 @@ fn a_quarantine_renamed_before_its_removal_is_reported_where_it_went() {
     assert!(entry_names(&away).is_empty(), "the moved quarantine stays");
     mark_path("quarantine at: ", &away);
 }
+
+#[cfg(unix)]
+#[test]
+fn a_quarantine_whose_name_cannot_be_examined_is_reported_with_the_error() {
+    // The quarantine's re-check fails with something other than ENOENT
+    // (here ENAMETOOLONG, standing in for EACCES on its parent): it is left
+    // in place, and the warning carries the error, not a claim that its
+    // name no longer resolves to it or that it was moved away.
+    if !in_rollback_stderr_child() {
+        let stderr = rerun_alone_for_stderr(
+            "import_rom::created_dirs::tests::a_quarantine_whose_name_cannot_be_examined_is_reported_with_the_error",
+        );
+        assert!(
+            stderr.contains("warning: cleanup directory ")
+                && stderr.contains(" could not be examined: ")
+                && stderr.contains("; it is left in place"),
+            "the unexamined quarantine is not reported; stderr:\n{stderr}"
+        );
+        assert!(
+            !stderr.contains("no longer resolves") && !stderr.contains("moved away"),
+            "the lookup error is reported as a moved quarantine; stderr:\n{stderr}"
+        );
+        return;
+    }
+    let dir = TempDir::new("quarantine-unexamined");
+    let level = dir.join("new");
+    let name = dir.join(".undo-r");
+    let created = super::create_directories(&level).unwrap();
+    let parent = created[0].parent.as_deref().unwrap();
+    let proceeded = super::take_back::take_back_level_looking_up(
+        parent,
+        &created[0],
+        ".undo-r",
+        &"n".repeat(4096),
+    );
+    assert!(proceeded, "the level itself was taken back");
+    assert!(!level.exists(), "the level is removed");
+    assert!(
+        entry_names(&name).is_empty(),
+        "the quarantine is left, empty"
+    );
+}

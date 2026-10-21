@@ -799,10 +799,11 @@ fn put_back(
 
 /// Removes the empty `quarantine` by its name, only while that name still
 /// resolves to the held quarantine, checked by the `statat` just before the
-/// unlink; a mismatch or a failed unlink leaves it standing. A failed
-/// unlink is reported at its name's path, which is what the unlink acts on;
-/// a mismatch through [`warn_quarantine_not_at_name`]. `before_removal`
-/// runs before that check, where a test swaps the name.
+/// unlink; a mismatch, a name that could not be examined, or a failed
+/// unlink leaves it standing. A failed unlink or examination is reported at
+/// its name's path, with the error, since that is what the call acts on; a
+/// mismatch through [`warn_quarantine_not_at_name`]. `before_removal` runs
+/// before that check, where a test swaps the name.
 fn remove_quarantine(quarantine: &Quarantine<'_>, before_removal: &mut dyn FnMut()) {
     let held = quarantine.dir.stat();
     before_removal();
@@ -811,6 +812,20 @@ fn remove_quarantine(quarantine: &Quarantine<'_>, before_removal: &mut dyn FnMut
         quarantine.name.as_str(),
         AtFlags::SYMLINK_NOFOLLOW,
     );
+    // A lookup that failed other than for a vacant name says nothing about
+    // where the quarantine is: it is left, and the error is the cause.
+    if let Some(&err) = by_name
+        .as_ref()
+        .err()
+        .filter(|&&err| err != rustix::io::Errno::NOENT)
+    {
+        eprintln!(
+            "warning: cleanup directory {} could not be examined: {}; it is left in place",
+            OneLinePath(&quarantine.name_location()),
+            std::io::Error::from(err)
+        );
+        return;
+    }
     let resolves = match (&held, &by_name) {
         (Ok(held), Ok(by_name)) => same_directory_identity(held, by_name),
         _ => false,
@@ -882,6 +897,27 @@ pub(super) fn take_back_level_via(
     after_mkdir: &mut dyn FnMut(),
 ) -> bool {
     take_back_level_with_hooks(parent, dir, quarantine_name, after_mkdir, &mut || {})
+}
+
+#[cfg(test)]
+/// [`take_back_level_via`] with the quarantine's name re-checked for its
+/// removal as `looked_up` instead, so a test can make that lookup fail
+/// other than with `ENOENT` (an over-long name gives `ENAMETOOLONG`).
+pub(super) fn take_back_level_looking_up(
+    parent: &OwnedFd,
+    dir: &CreatedDirectory,
+    quarantine_name: &str,
+    looked_up: &str,
+) -> bool {
+    let Some(mut quarantine) =
+        open_quarantine(parent.as_fd(), dir, quarantine_name, dir, &mut || {})
+    else {
+        return false;
+    };
+    let taken = take_back_into(&quarantine, parent, dir, &mut |_, _| {}) == Outcome::Taken;
+    looked_up.clone_into(&mut quarantine.name);
+    remove_quarantine(&quarantine, &mut || {});
+    taken
 }
 
 #[cfg(test)]
