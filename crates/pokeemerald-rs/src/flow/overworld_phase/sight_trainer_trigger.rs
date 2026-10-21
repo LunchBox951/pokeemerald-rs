@@ -818,9 +818,8 @@ mod tests {
     /// (issue #264 review): the reason a trainer is unreachable is the
     /// interesting fact, and naming the offending move id is what forces a
     /// future move-coverage slice to come back here -- scoring a
-    /// trainer's refusing move leaves one who fails on the next one (Rhett's
-    /// `MOVE_SAND_ATTACK` was the last), and a bare `is_err()` would have
-    /// hidden that.
+    /// trainer's refusing move leaves one who fails on the next one, and a
+    /// bare `is_err()` would hide that.
     ///
     /// Each refusal must also cost **nothing**: the whole party is screened
     /// before the first draw (`npc_trainer_battle`'s module docs), which is
@@ -835,14 +834,10 @@ mod tests {
         // move in that trainer's own level-up-derived moveset that some
         // screen refuses.
         //
-        // Stun Spore, Thunder Wave, Supersonic, and Focus Energy are now
-        // scoreable (the `CheckBadMove` Paralyze, Confuse, and Focus Energy
-        // handlers), as are Absorb, Splash, Charge, and Poison Sting, and so
-        // are the stat-stage labels (Sand-Attack, Screech, Defense Curl), so
-        // those parties stop at their next refused move. Andrew's and Rhett's
-        // whole parties now construct
+        // Andrew's and Rhett's whole parties construct
         // (`andrews_real_party_constructs_and_plays_to_a_win`,
-        // `rhetts_real_party_constructs_and_plays_to_a_win`). Both screens
+        // `rhetts_real_party_constructs_and_plays_to_a_win`); each party below
+        // stops at the first move some screen refuses. Both screens
         // run before the first draw, so the per-frame cone check stays
         // draw-free.
         let expected = [

@@ -67,8 +67,8 @@ fn start_does_not_preempt_the_sight_trainer_scan_on_its_trigger_frame() {
     let mut refused = route_103_phase(PlayerState::new((rx, ry + 1), 3, Direction::North));
     refused.party_lead = Some(overwhelming_lead());
     refused.synthetic_start_menu = SyntheticStartMenu::Builds;
-    // Rhett's own party now constructs; Marcos's (Sonic Boom) still does not,
-    // so his id stands in for the refusal at Rhett's cone.
+    // Rhett's party constructs; Marcos's (Sonic Boom) does not, so his id
+    // stands in for the refusal at Rhett's cone.
     refused.synthetic_sight_trainer = Some(assets::trainers::TrainerId(TRAINER_MARCOS));
     refused.step(pressed(Buttons::START));
     assert!(
@@ -111,7 +111,7 @@ fn standing_in_a_cone_for_many_frames_never_touches_the_rng_stream() {
         let mut phase = route_103_phase(PlayerState::new(tile, 3, Direction::North));
         phase.party_lead = Some(overwhelming_lead());
         if name.starts_with("Marcos") {
-            // Rhett's own party constructs now; Marcos's still refuses.
+            // Rhett's party constructs; Marcos's refuses.
             phase.synthetic_sight_trainer = Some(assets::trainers::TrainerId(TRAINER_MARCOS));
         }
         let before = phase.rng.state();
@@ -382,8 +382,8 @@ fn real_pack_rhetts_cone_reaches_the_player_over_real_terrain_and_draws_nothing(
 
     let mut phase = OverworldPhase::for_test_with_source(scene, ROUTE_103, player, None, source);
     phase.party_lead = Some(overwhelming_lead());
-    // Rhett's own party constructs now; Marcos's still refuses, so his id
-    // stands in at Rhett's real cone.
+    // Rhett's party constructs; Marcos's refuses, so his id stands in at
+    // Rhett's real cone.
     phase.synthetic_sight_trainer = Some(assets::trainers::TrainerId(TRAINER_MARCOS));
     let before = phase.rng.state();
 

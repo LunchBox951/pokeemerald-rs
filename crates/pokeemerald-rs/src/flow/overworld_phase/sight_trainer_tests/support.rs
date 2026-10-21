@@ -26,7 +26,7 @@ pub(super) const TRAINER_FLAGS_START: u16 = 0x500;
 /// range 2.
 pub(super) const TRAINER_RHETT: u16 = 703;
 
-/// `TRAINER_MARCOS` (`include/constants/opponents.h`): his party still fails to
+/// `TRAINER_MARCOS` (`include/constants/opponents.h`): his party fails to
 /// construct (`MOVE_SONIC_BOOM`), so tests use his id as the refused party.
 pub(super) const TRAINER_MARCOS: u16 = 702;
 

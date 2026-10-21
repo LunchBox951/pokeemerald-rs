@@ -46,7 +46,6 @@
 //! carries Rhett's own real `TrainerId` -- so the *defeated-flag* half is
 //! pinned honestly (the
 //! real id the flag ends up keyed to) even though the *party* is borrowed.
-//! Rhett's real party now constructs, so the two halves can be merged back into one real end-to-end test.
 //!
 //! [advance]: super::OverworldPhase::advance_sight_trainer_battle_frame
 //! [active]: super::OverworldPhase::active_battle
