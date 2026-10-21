@@ -121,12 +121,8 @@ const EFFECT_FOCUS_ENERGY_RAW: u8 = 47;
 const EFFECT_CONFUSE_RAW: u8 = 49;
 const EFFECT_PARALYZE_RAW: u8 = 67;
 
-/// The raw effect IDs `AI_CheckBadMove` sends to a shared `AI_CBM_*Up` or
-/// `AI_CBM_*Down` label (`data/battle_ai_scripts.s:108-121,133-146`) that execution's `STAT_CHANGE_EFFECTS` does not map,
-/// because the shipped game runs them through the ordinary-hit script or its
-/// own persistent-flag script. Only the AI reads this table; it never makes a
-/// move executable. Minimize (108) scores as `AI_CBM_EvasionUp` and Defense
-/// Curl (156) as `AI_CBM_DefenseUp` (`:163,186`).
+/// AI-only: effects `AI_CheckBadMove` routes to an `AI_CBM_*Up` / `*Down` label
+/// that execution does not map (`data/battle_ai_scripts.s:108-121,133-146,163,186`).
 const AI_ONLY_STAT_LABELS: [(u8, ChangedStat, StatChangeMagnitude, StatChangeDirection); 12] = {
     use ChangedStat::{Accuracy, Defense, Evasion, SpAttack, SpDefense, Speed};
     use StatChangeDirection::{Lower, Raise};
@@ -852,17 +848,8 @@ fn score_bad_move(
     Ok(())
 }
 
-/// The `AI_CBM_*Up` and `AI_CBM_*Down` labels
-/// (`data/battle_ai_scripts.s:248-312`). A raise ends at `-10` when the user's
-/// stage is already at the cap and otherwise leaves the score alone. A drop
-/// ends at `-10` at the target's floor, then runs its own ability guard where
-/// it has one -- Hyper Cutter for Attack, Speed Boost for Speed, Keen Eye for
-/// Accuracy -- and finally falls through to the shared Clear Body / White
-/// Smoke guard (`CheckIfAbilityBlocksStatChange`, `:308-311`); Defense, Special
-/// Attack, Special Defense and Evasion go straight to the shared guard. The
-/// first guard that fires ends the script, so a score takes at most one
-/// penalty. No guard draws: each ability read is the unambiguous one
-/// [`ai_get_ability`] allows. Speed's `if_ability` is a plain comparison.
+/// `AI_CBM_*Up` / `AI_CBM_*Down` (`data/battle_ai_scripts.s:248-312`): the
+/// first guard that fires ends the script.
 fn stat_label_penalty(
     user: &BattlePokemon,
     target: &BattlePokemon,
@@ -875,17 +862,23 @@ fn stat_label_penalty(
     if label.affects_user() {
         return Ok(None);
     }
-    let label_guard = match label.stat {
+    let blocked = stat_specific_drop_guard(target, label.stat)?
+        || ai_clear_body_or_white_smoke_blocks(ai_get_ability(target)?);
+    Ok(blocked.then_some(STRONGLY_DISCOURAGE))
+}
+
+/// The guard a drop label runs before `CheckIfAbilityBlocksStatChange`
+/// (`data/battle_ai_scripts.s:277-281,287-290,300-304`).
+fn stat_specific_drop_guard(
+    target: &BattlePokemon,
+    stat: ChangedStat,
+) -> Result<bool, BattleError> {
+    Ok(match stat {
         ChangedStat::Attack => ai_hyper_cutter_blocks(ai_get_ability(target)?),
         ChangedStat::Speed => ai_get_ability(target)? == AbilityId::SPEED_BOOST,
         ChangedStat::Accuracy => ai_get_ability(target)? == KEEN_EYE,
         _ => false,
-    };
-    if label_guard || ai_clear_body_or_white_smoke_blocks(ai_get_ability(target)?) {
-        Ok(Some(STRONGLY_DISCOURAGE))
-    } else {
-        Ok(None)
-    }
+    })
 }
 
 /// `AI_CBM_Paralyze`: each guard ends the script with its own single penalty,
