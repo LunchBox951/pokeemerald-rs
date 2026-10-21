@@ -20,11 +20,15 @@ pub(super) const ROUTE_103: MapId = MapId("MAP_ROUTE103");
 pub(super) const TRAINER_FLAGS_START: u16 = 0x500;
 
 /// `TRAINER_RHETT` (`include/constants/opponents.h`): a single-battle,
-/// no-held-item, level-15 party -- the main subject for the
+/// no-held-item, level-15 party that constructs -- the main subject for the
 /// trigger/win/loss/defeated-flag tests. His own object event stands at
 /// `(67, 5)`, elevation 3, facing south (`MOVEMENT_TYPE_FACE_DOWN`), sight
 /// range 2.
 pub(super) const TRAINER_RHETT: u16 = 703;
+
+/// `TRAINER_MARCOS` (`include/constants/opponents.h`): his party fails to
+/// construct (`MOVE_SONIC_BOOM`), so tests use his id as the refused party.
+pub(super) const TRAINER_MARCOS: u16 = 702;
 
 /// `MOVE_PURSUIT`, Treecko's own level-16 learnset move: `EFFECT_PURSUIT`
 /// has no resolver, so `validate_player_move` refuses it ahead of any draw
