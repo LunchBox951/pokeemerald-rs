@@ -435,10 +435,14 @@ impl SaveFile {
         let named = (0..=u8::MAX)
             .map(|_| path.with_file_name(Self::lock_staging_directory_name()))
             .find(|candidate| private.create(candidate).is_ok())?;
-        // Whatever now sits at the directory's name, only a directory nobody
-        // but its owner can write is staged in, and the staged name is removed
-        // only once the file created there shows that owner is this user.
-        let held = std::fs::File::open(&named).ok().filter(|held| {
+        // Whatever now sits at the directory's name is opened without following
+        // a symlink or blocking on a FIFO; only a directory nobody but its
+        // owner can write is staged in, and the staged name is removed only
+        // once the file created there shows that owner is this user.
+        let mut directory_only = std::fs::OpenOptions::new();
+        directory_only.read(true);
+        refuse_unusable_opens(&mut directory_only);
+        let held = directory_only.open(&named).ok().filter(|held| {
             held.metadata()
                 .is_ok_and(|directory| directory.is_dir() && directory.mode() & 0o022 == 0)
         });
