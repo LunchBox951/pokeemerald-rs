@@ -578,8 +578,8 @@ pub(super) fn create_directories_pinned(
 /// Removes, innermost first, each created level that is still empty and
 /// still resolves in its pinned parent to the identity captured at
 /// creation, so a failed import leaves no chain of empty directories, through
-/// the protocol in [`take_back`]. The first refusal ends the walk; an
-/// unpinned level is skipped.
+/// the protocol in [`take_back`]. The first refusal, or the first unpinned
+/// level still standing, ends the walk, with a warning naming the level.
 #[cfg(unix)]
 pub(super) fn undo_created_directories(created: &[CreatedDirectory]) {
     take_back::undo_created_directories_with_hooks(created, &mut || {});

@@ -75,7 +75,21 @@ pub(super) fn undo_created_directories_with_hooks(
     let mut quarantine = None;
     for dir in created.iter().rev() {
         let Some(parent) = dir.parent.as_deref() else {
-            continue;
+            // Shedding releases pins outermost first, so every level from
+            // here out is unpinned too: none can be vouched for, and the
+            // walk stops at the first one still standing, saying so.
+            match std::fs::symlink_metadata(&dir.path) {
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+                _ => {
+                    warn_left_standing(
+                        dir,
+                        format_args!(
+                            "it was not held open, so rollback could not confirm it is the directory this import made; the levels above it are left too"
+                        ),
+                    );
+                    break;
+                }
+            }
         };
         match rustix::fs::statat(parent, &dir.name, AtFlags::SYMLINK_NOFOLLOW) {
             Ok(stat) if is_this_level(dir, &stat) => {
@@ -104,12 +118,44 @@ pub(super) fn undo_created_directories_with_hooks(
                 }
             }
             // Gone already -- nothing to remove here, and the level above is
-            // unaffected by that.
-            Err(err) if err == rustix::io::Errno::NOENT => {}
-            // Some other entry sits at the name now, or it could not be
-            // examined at all: not this run's directory either way, so it
-            // is left alone, and the levels above are left too.
-            _ => break,
+            // unaffected by that; but if it was moved rather than removed,
+            // it still stands elsewhere, and that is reported.
+            Err(err) if err == rustix::io::Errno::NOENT => warn_if_moved_away(dir),
+            // Some other entry sits at the name now, or the level is no
+            // longer held open to vouch for it: not provably this run's
+            // directory, so it is left alone, and the levels above are left
+            // too.
+            Ok(stat) => {
+                if same_directory_identity(&stat, &dir.identity) {
+                    warn_left_standing(
+                        dir,
+                        format_args!(
+                            "rollback no longer holds it open to confirm it is the directory this import made; the levels above it are left too"
+                        ),
+                    );
+                } else {
+                    warn_left_standing(
+                        dir,
+                        format_args!(
+                            "another entry has taken its name; the levels above it are left too"
+                        ),
+                    );
+                    warn_if_moved_away(dir);
+                }
+                break;
+            }
+            // It could not be examined at all: left alone, as are the
+            // levels above.
+            Err(err) => {
+                warn_left_standing(
+                    dir,
+                    format_args!(
+                        "it could not be examined: {}; the levels above it are left too",
+                        std::io::Error::from(err)
+                    ),
+                );
+                break;
+            }
         }
     }
     if let Some(held) = quarantine {
@@ -435,6 +481,7 @@ fn take_back_into(
             Err(err) if err == rustix::io::Errno::NOENT
         );
         if gone {
+            warn_if_moved_away(dir);
             return Outcome::Taken;
         }
         warn_left_standing(
@@ -498,6 +545,32 @@ fn warn_replaced(dir: &CreatedDirectory) {
         ),
         None => eprintln!(
             "warning: {} was moved away and replaced before rollback could take it back; the directory rollback made is left elsewhere",
+            OneLinePath(&level)
+        ),
+    }
+}
+
+/// Reports that the directory rollback made for `dir`, no longer under its
+/// name, was moved away rather than removed, naming where the held
+/// original is now where `/proc` can say. Silent when it has no link left
+/// (removed outright) or is no longer held open, so nothing can be said.
+fn warn_if_moved_away(dir: &CreatedDirectory) {
+    let Some(own) = dir.own.as_deref() else {
+        return;
+    };
+    match rustix::fs::fstat(own) {
+        Ok(held) if held.st_nlink != 0 => {}
+        _ => return,
+    }
+    let level = level_location(dir);
+    match held_location(own) {
+        Some(now) => eprintln!(
+            "warning: {} is the directory rollback made for {}, moved away before rollback could take it back; it is left in place",
+            OneLinePath(&now),
+            OneLinePath(&level)
+        ),
+        None => eprintln!(
+            "warning: {} was moved away before rollback could take it back; the directory rollback made is left elsewhere",
             OneLinePath(&level)
         ),
     }
