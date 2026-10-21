@@ -87,7 +87,9 @@ impl WaveChannel {
         shift(i32::from(sample) + zero) - shift(zero)
     }
 
-    /// Each wave clock latches the nibble it removes from the head at
+    /// Returns the held output, then advances time, so a call on a phase
+    /// crossing yields the pre-clock value and stores the crossed nibble for
+    /// the next call. Each wave clock latches the nibble it removes from the head at
     /// `gain_256` (`mgba/src/gb/audio.c:557-568,768-774`); a volume change
     /// alone leaves the held output (`mgba/src/gba/io.c:633-637`). A cold
     /// channel holds a zero nibble until its first clock (`audio.c:92-95,513-517`).
