@@ -343,6 +343,9 @@ pub struct BattlePokemon {
     original_trainer_id: u32,
     /// Raw game-text OT name with its terminator; `None` when the boundary
     /// that built this Pokémon never recorded one.
+    ///
+    /// Excluded from [`PartialEq`] (below): the save encoder does not write
+    /// it back, so a reloaded Pokémon differs only in this provenance.
     original_trainer_name: Option<[u8; 8]>,
     types: [Type; 2],
     base_stats: BaseStats,
@@ -382,7 +385,7 @@ impl PartialEq for BattlePokemon {
             personality,
             ability_slot,
             original_trainer_id,
-            original_trainer_name,
+            original_trainer_name: _,
             types,
             base_stats,
             experience,
@@ -404,7 +407,6 @@ impl PartialEq for BattlePokemon {
             && *personality == other.personality
             && *ability_slot == other.ability_slot
             && *original_trainer_id == other.original_trainer_id
-            && *original_trainer_name == other.original_trainer_name
             && *types == other.types
             && *base_stats == other.base_stats
             && *experience == other.experience
