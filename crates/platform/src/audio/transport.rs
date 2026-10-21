@@ -15,12 +15,16 @@
 //! - A stream is replaced when its error callback reports a failure that
 //!   needs a rebuild (see `stream::error_requires_rebuild`), when the default
 //!   output's identity differs from the one the stream was built for, or when
-//!   the default output disappears. The default is re-discovered every
+//!   the default output disappears. A stream whose backend has reported
+//!   `DeviceChanged` follows the default by itself, so a changed identity
+//!   is recorded for it instead of rebuilt; a change discovered before that
+//!   report arrives still rebuilds. The default is re-discovered every
 //!   [`DISCOVERY_INTERVAL`] because `cpal` offers no default-change
 //!   subscription, attached or not: a retry cooldown delays the next attempt
 //!   on the identity that failed, never the discovery of a different one.
 //! - Failed attempts retry [`ATTEMPTS_PER_BURST`] times with doubling delays
-//!   from [`RETRY_BASE`], then wait [`COOLDOWN`] before the next burst, so a
+//!   from [`RETRY_BASE`], then wait [`COOLDOWN`] before the next burst,
+//!   each measured from when the failed attempt finished, so a
 //!   missing or flapping output is polled at a bounded rate and never given
 //!   up on. A newly observed default identity starts a fresh burst; a stream
 //!   that fails again before surviving [`STABLE_AFTER`] continues the old one.
@@ -47,7 +51,7 @@ use crate::ring::Producer;
 use super::config::{max_buffer_frames, negotiate};
 use super::playback::PlaybackClock;
 use super::source_for_device;
-use super::stream::{build_stream, OutputDevice, OutputStream};
+use super::stream::{build_stream, OutputDevice, OutputStream, StreamHealth};
 
 mod worker;
 pub(super) use worker::{CpalHost, Worker};
@@ -177,7 +181,7 @@ struct Live<S> {
     stream: S,
     id: String,
     /// Raised by this stream's error callback; a replacement gets its own.
-    lost: Arc<AtomicBool>,
+    health: Arc<StreamHealth>,
     playing: bool,
     since: Duration,
 }
@@ -200,6 +204,10 @@ pub(super) struct Transport<H: OutputHost> {
     observed: Observed,
     next_attempt: Duration,
     next_discovery: Duration,
+    /// Reads the driver's monotonic time after blocking OS calls, so retry
+    /// delays and stability run from when an attempt finished, not from the
+    /// `now` it started at. Never earlier than that `now`.
+    clock: Box<dyn Fn() -> Duration + Send>,
 }
 
 impl<H: OutputHost> Transport<H> {
@@ -218,7 +226,19 @@ impl<H: OutputHost> Transport<H> {
             observed: Observed::Nothing,
             next_attempt: Duration::ZERO,
             next_discovery: Duration::ZERO,
+            clock: Box::new(|| Duration::ZERO),
         }
+    }
+
+    /// Read `clock` after blocking work; it must share `step`'s origin.
+    pub(super) fn with_clock(mut self, clock: impl Fn() -> Duration + Send + 'static) -> Self {
+        self.clock = Box::new(clock);
+        self
+    }
+
+    /// The time a blocking call that began at `now` finished.
+    fn finished(&self, now: Duration) -> Duration {
+        now.max((self.clock)())
     }
 
     /// Advance to time `now` (a monotonic offset from any fixed origin) and
@@ -262,7 +282,13 @@ impl<H: OutputHost> Transport<H> {
         let Some(live) = self.live.as_ref() else {
             return;
         };
-        if live.lost.load(Ordering::Acquire) {
+        if live.health.lost.load(Ordering::Acquire) {
+            // The stream died while it was playing, so playback was meant to
+            // advance even if `stop` landed before this poll. A refused
+            // pause below is a deliberate stop and stays exempt.
+            if live.playing {
+                self.stale_queue = true;
+            }
             self.retire(TransportFailure::StreamLost);
             self.fail(now);
             return;
@@ -273,7 +299,17 @@ impl<H: OutputHost> Transport<H> {
         if now >= self.next_discovery {
             self.next_discovery = now + DISCOVERY_INTERVAL;
             let current = live.id.as_str();
+            let follows_default = live.health.follows_default.load(Ordering::Acquire);
             let verdict = match self.host.default_output() {
+                // The backend already rerouted this stream to the new
+                // default; record its identity instead of rebuilding.
+                Ok(Some((id, _))) if id != current && follows_default => {
+                    self.observed = Observed::Default(Some(id.clone()));
+                    if let Some(live) = self.live.as_mut() {
+                        live.id = id;
+                    }
+                    None
+                }
                 Ok(Some((id, _))) if id != current => Some(TransportFailure::DefaultChanged),
                 Ok(None) => Some(TransportFailure::NoOutput),
                 // A failed query says nothing about the healthy stream.
@@ -301,7 +337,7 @@ impl<H: OutputHost> Transport<H> {
                 live.playing = want;
             } else {
                 self.retire(TransportFailure::StreamLost);
-                self.fail(now);
+                self.fail(self.finished(now));
             }
         }
     }
@@ -326,8 +362,10 @@ impl<H: OutputHost> Transport<H> {
         match self.connect(now, found) {
             Ok(()) => {}
             Err(reason) => {
+                let done = self.finished(now);
+                self.next_discovery = done + DISCOVERY_INTERVAL;
                 self.publish(TransportState::Unavailable(reason));
-                self.fail(now);
+                self.fail(done);
             }
         }
     }
@@ -357,13 +395,13 @@ impl<H: OutputHost> Transport<H> {
         )
         .map_err(|err| failure_of(&err))?;
         let settle_margin = source.settle_margin_frames();
-        let lost = Arc::new(AtomicBool::new(false));
+        let health = Arc::new(StreamHealth::default());
         let stream = build_stream(
             &device,
             &config,
             source,
             Arc::clone(&self.shared.stream_errors),
-            Arc::clone(&lost),
+            Arc::clone(&health),
             Arc::clone(&self.shared.playback_clock),
         )
         .map_err(|err| match err {
@@ -378,6 +416,7 @@ impl<H: OutputHost> Transport<H> {
         if playing {
             stream.play().map_err(|_| TransportFailure::ConnectFailed)?;
         }
+        let done = self.finished(now);
         self.shared
             .device_sample_rate
             .store(config.sample_rate(), Ordering::Release);
@@ -390,12 +429,12 @@ impl<H: OutputHost> Transport<H> {
         self.live = Some(Live {
             stream,
             id,
-            lost,
+            health,
             playing,
-            since: now,
+            since: done,
         });
         self.attached_before = true;
-        self.next_discovery = now + DISCOVERY_INTERVAL;
+        self.next_discovery = done + DISCOVERY_INTERVAL;
         self.publish(TransportState::Ready);
         Ok(())
     }

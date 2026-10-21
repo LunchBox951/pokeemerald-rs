@@ -58,8 +58,9 @@ impl Worker {
             .name("audio-transport".into())
             .spawn(move || {
                 // Built here because a stream is not `Send` on every host.
-                let mut transport = Transport::new(host, producer, Arc::clone(&driver_shared));
                 let origin = Instant::now();
+                let mut transport = Transport::new(host, producer, Arc::clone(&driver_shared))
+                    .with_clock(move || origin.elapsed());
                 while !driver_shared.shutdown.load(Ordering::Acquire) {
                     let next = transport.step(origin.elapsed());
                     thread::park_timeout(next.saturating_sub(origin.elapsed()));

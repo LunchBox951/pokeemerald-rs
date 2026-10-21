@@ -2,13 +2,13 @@
 
 use super::config::{negotiate, sample_format_rank, select_config};
 use super::playback::PlaybackClock;
-use super::stream::build_stream;
+use super::stream::{build_stream, StreamHealth};
 use super::stream::{
     f32_to_i16, fill_i16_output, i16_scratch_capacity, OutputDevice, DEFAULT_SCRATCH_SAMPLES,
     MAX_SCRATCH_CALLBACK_FRAMES,
 };
 use super::*;
-use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::atomic::AtomicU64;
 
 /// A device whose every `cpal` call fails with one chosen kind.
 ///
@@ -108,7 +108,7 @@ fn a_lost_device_after_the_query_stays_an_audio_error() {
             &config,
             Source::Direct(consumer),
             Arc::new(AtomicU64::new(0)),
-            Arc::new(AtomicBool::new(false)),
+            Arc::new(StreamHealth::default()),
             Arc::new(PlaybackClock::new()),
         ) else {
             panic!("the fake device always fails the build");

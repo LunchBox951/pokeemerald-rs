@@ -127,3 +127,25 @@ fn a_default_that_appears_after_no_output_starts_a_fresh_burst() {
         "the new identity's first failure retries at the burst's first delay"
     );
 }
+
+#[test]
+fn a_loss_while_playing_is_stale_even_if_stop_lands_before_the_worker_sees_it() {
+    let w = world(|w| w.default = Some("a".into()));
+    let mut rig = rig(&w, 4);
+    rig.shared.running.store(true, Ordering::Release);
+    rig.transport.step(Duration::ZERO);
+
+    // The stream dies while playing; the producer keeps queuing, then stops,
+    // all before the worker's next health poll.
+    raise_error(&w, 0, cpal::ErrorKind::DeviceNotAvailable);
+    assert_eq!(rig.producer.push(&[0.5; 4]), 4);
+    rig.shared.running.store(false, Ordering::Release);
+    rig.transport.step(MS(20));
+    rig.transport.step(MS(120));
+    assert_eq!(with(&w).builds, 2);
+    assert_eq!(
+        rig.producer.available_space(),
+        rig.producer.capacity(),
+        "history queued after a loss while playing is discarded"
+    );
+}

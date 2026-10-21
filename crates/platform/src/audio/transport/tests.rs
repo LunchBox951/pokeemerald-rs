@@ -8,6 +8,7 @@ use super::*;
 use crate::audio::AudioOutput;
 use crate::ring::ring_buffer;
 
+mod reroute;
 mod setup_and_backlog;
 mod stopped_queue_and_cooldown;
 
@@ -30,6 +31,10 @@ struct World {
     build_kind: Option<cpal::ErrorKind>,
     fail_play: bool,
     no_hw_pause: bool,
+    /// Fake monotonic time the transport reads after blocking calls.
+    clock: Duration,
+    /// How far each `build` advances `clock`, as a slow OS call would.
+    build_latency: Duration,
     /// Every call that reaches the audio stack, host or device or stream.
     ops: usize,
     discoveries: usize,
@@ -108,6 +113,8 @@ impl OutputDevice for FakeDevice {
     {
         let mut w = with(&self.0);
         w.ops += 1;
+        let latency = w.build_latency;
+        w.clock += latency;
         if w.fail_build {
             return Err(cpal::Error::new(
                 w.build_kind.unwrap_or(cpal::ErrorKind::BackendError),
@@ -193,11 +200,13 @@ fn rig(world: &SharedWorld, frames: usize) -> Rig {
     let (producer, consumer) = ring_buffer(frames * 2);
     drop(consumer);
     let shared = Arc::new(Shared::new(TransportState::Connecting, 13_379, 0));
+    let clock = Arc::clone(world);
     let transport = Transport::new(
         FakeHost(Arc::clone(world)),
         producer.clone(),
         Arc::clone(&shared),
-    );
+    )
+    .with_clock(move || with(&clock).clock);
     Rig {
         transport,
         producer,

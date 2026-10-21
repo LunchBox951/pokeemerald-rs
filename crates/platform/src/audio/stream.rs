@@ -127,6 +127,17 @@ pub(super) fn error_requires_rebuild(kind: cpal::ErrorKind) -> bool {
     )
 }
 
+/// What one stream's error callback has told the transport worker.
+#[derive(Default)]
+pub(super) struct StreamHealth {
+    /// An error left the stream unusable, so it must be rebuilt.
+    pub(super) lost: AtomicBool,
+    /// The backend reported [`cpal::ErrorKind::DeviceChanged`]: this stream
+    /// follows the OS default by itself, so a changed default identity needs
+    /// no rebuild.
+    pub(super) follows_default: AtomicBool,
+}
+
 impl OutputDevice for cpal::Device {
     type Stream = cpal::Stream;
 
@@ -155,8 +166,9 @@ impl OutputDevice for cpal::Device {
 /// Build (but do not start) the output stream for `config`, driven by
 /// `source`. Asynchronous stream errors are recorded into `stream_errors`,
 /// the counter [`AudioOutput::stream_errors`](super::AudioOutput::stream_errors) reads;
-/// an error that leaves the stream unusable also raises `lost`, which the
-/// transport worker polls to rebuild it. Every callback also
+/// an error that leaves the stream unusable also raises `health.lost`, which
+/// the transport worker polls to rebuild it, and an automatic reroute raises
+/// `health.follows_default`. Every callback also
 /// records its device-frame count and the host's callback timestamp into
 /// `playback_clock` (see [`PlaybackClock::record_callback`]) *before*
 /// `source` consumes them, the signal [`AudioOutput::playback_progress`](super::AudioOutput::playback_progress)
@@ -166,7 +178,7 @@ pub(super) fn build_stream<D: OutputDevice>(
     config: &cpal::SupportedStreamConfig,
     mut source: Source,
     stream_errors: Arc<AtomicU64>,
-    lost: Arc<AtomicBool>,
+    health: Arc<StreamHealth>,
     playback_clock: Arc<PlaybackClock>,
 ) -> Result<D::Stream, PlatformError> {
     let stream_config = config.config();
@@ -180,7 +192,9 @@ pub(super) fn build_stream<D: OutputDevice>(
     let err_fn = move |err: cpal::Error| {
         stream_errors.fetch_add(1, Ordering::Relaxed);
         if error_requires_rebuild(err.kind()) {
-            lost.store(true, Ordering::Release);
+            health.lost.store(true, Ordering::Release);
+        } else if err.kind() == cpal::ErrorKind::DeviceChanged {
+            health.follows_default.store(true, Ordering::Release);
         }
     };
 
