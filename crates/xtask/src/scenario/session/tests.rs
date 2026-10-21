@@ -71,7 +71,7 @@ fn cleanup_aimed_at_a_directory_that_is_not_the_held_one_removes_nothing() {
 
 /// A base directory private to one test, so a name vacated by a swap can
 /// never be claimed by another test's scratch directory.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn private_base(tag: &str) -> PathBuf {
     let base = std::env::temp_dir().join(format!(
         "pokeemerald-scenario-base-{}-{tag}",
@@ -730,4 +730,54 @@ fn windows_cleanup_empties_the_held_scratch_and_leaves_a_sibling_untouched() {
     result.unwrap();
     assert!(!path.exists(), "the emptied scratch root is removed");
     assert_eq!(kept.unwrap(), b"keep me");
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_cleanup_refuses_a_directory_swapped_in_under_the_held_root() {
+    let scratch = Scratch::create_in(&std::env::temp_dir()).unwrap();
+    let foreign = foreign_dir("windows-swap");
+    let listed = scratch.path.join("listed");
+    std::fs::create_dir(&listed).unwrap();
+    std::fs::write(listed.join("own.txt"), b"own").unwrap();
+    let aside = foreign.with_extension("aside");
+    let _ = std::fs::remove_dir_all(&aside);
+    let mut swapped = false;
+    let result = remove_contents(scratch.hold().unwrap(), &scratch.path, &mut |name| {
+        if name == "listed" && !swapped {
+            swapped = true;
+            std::fs::rename(&listed, &aside).unwrap();
+            std::fs::rename(&foreign, &listed).unwrap();
+        }
+    });
+    let kept = std::fs::read(listed.join("keep.txt"));
+    let moved = std::fs::read(aside.join("own.txt"));
+    // Put the trees back where they were made so the cleanups can run.
+    let _ = std::fs::remove_dir_all(&aside);
+    let _ = std::fs::remove_dir_all(&listed);
+    let error = result.expect_err("a swapped-in directory must not be removed");
+    assert!(
+        error.to_string().contains("replaced during cleanup"),
+        "{error}"
+    );
+    assert_eq!(kept.unwrap(), b"keep me", "the foreign tree survives");
+    assert_eq!(moved.unwrap(), b"own", "the original is not deleted");
+}
+
+#[cfg(windows)]
+#[test]
+fn a_held_scratch_directory_keeps_its_parent_from_being_renamed() {
+    let base = private_base("windows-parent");
+    let scratch = Scratch::create_in(&base).unwrap();
+    let aside = base.with_extension("aside");
+    let renamed = std::fs::rename(&base, &aside);
+    if renamed.is_ok() {
+        let _ = std::fs::rename(&aside, &base);
+    }
+    drop(scratch);
+    let _ = std::fs::remove_dir_all(&base);
+    assert!(
+        renamed.is_err(),
+        "NTFS refuses to rename a directory with an open handle in its subtree"
+    );
 }
