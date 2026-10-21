@@ -25,18 +25,12 @@ impl OutputHost for CpalHost {
         let Some(device) = host.default_output_device() else {
             return Ok(None);
         };
-        match device.id() {
-            Ok(id) => Ok(Some((id.to_string(), device))),
-            Err(err)
-                if matches!(
-                    err.kind(),
-                    cpal::ErrorKind::DeviceNotAvailable | cpal::ErrorKind::HostUnavailable
-                ) =>
-            {
-                Ok(None)
-            }
-            Err(err) => Err(err),
-        }
+        // Only an absent default is `None`. A failed identity query (CoreAudio
+        // reports a timed-out property read as `DeviceNotAvailable`) stays an
+        // error: an attached stream ignores it, and an attempt still
+        // classifies these kinds as `NoOutput`.
+        let id = device.id()?;
+        Ok(Some((id.to_string(), device)))
     }
 }
 

@@ -18,10 +18,12 @@
 //!   the default output disappears. A stream whose backend has reported
 //!   `DeviceChanged` follows the default by itself, so a changed identity
 //!   is recorded for it instead of rebuilt; a change discovered before that
-//!   report arrives still rebuilds. The default is re-discovered every
-//!   [`DISCOVERY_INTERVAL`] because `cpal` offers no default-change
-//!   subscription, attached or not: a retry cooldown delays the next attempt
-//!   on the identity that failed, never the discovery of a different one.
+//!   report arrives still rebuilds. The default is re-discovered
+//!   [`DISCOVERY_INTERVAL`] after the previous query returned, because `cpal`
+//!   offers no default-change subscription, attached or not: a retry
+//!   cooldown delays the next attempt on the identity that failed, never the
+//!   discovery of a different one. A failed identity query is not an absent
+//!   default, so it never retires an attached stream.
 //! - Failed attempts retry [`ATTEMPTS_PER_BURST`] times with doubling delays
 //!   from [`RETRY_BASE`], then wait [`COOLDOWN`] before the next burst,
 //!   each measured from when the failed attempt finished, so a
@@ -267,9 +269,12 @@ impl<H: OutputHost> Transport<H> {
     /// Re-discover the default while waiting out a retry delay, and attempt
     /// at once on a fresh burst when its identity changed.
     fn probe(&mut self, now: Duration) {
-        self.next_discovery = now + DISCOVERY_INTERVAL;
+        let found = self.host.default_output();
+        // Scheduled from when the query returned, so a slow one cannot run
+        // back to back.
+        self.next_discovery = self.finished(now) + DISCOVERY_INTERVAL;
         // A failed query says nothing new; the scheduled retry stands.
-        let Ok(found) = self.host.default_output() else {
+        let Ok(found) = found else {
             return;
         };
         let id = found.as_ref().map(|(id, _)| id.as_str());
@@ -297,10 +302,14 @@ impl<H: OutputHost> Transport<H> {
             self.failures = 0;
         }
         if now >= self.next_discovery {
-            self.next_discovery = now + DISCOVERY_INTERVAL;
-            let current = live.id.as_str();
             let follows_default = live.health.follows_default.load(Ordering::Acquire);
-            let verdict = match self.host.default_output() {
+            let found = self.host.default_output();
+            self.next_discovery = self.finished(now) + DISCOVERY_INTERVAL;
+            let Some(live) = self.live.as_ref() else {
+                return;
+            };
+            let current = live.id.as_str();
+            let verdict = match found {
                 // The backend already rerouted this stream to the new
                 // default; record its identity instead of rebuilding.
                 Ok(Some((id, _))) if id != current && follows_default => {
@@ -333,6 +342,12 @@ impl<H: OutputHost> Transport<H> {
             } else {
                 live.stream.pause()
             };
+            // A loss raised after the check above, while this stream was
+            // still playing, happened while started; latch it before a
+            // concurrent `stop` clears `playing` or retires the stream.
+            if live.playing && live.health.lost.load(Ordering::Acquire) {
+                self.stale_queue = true;
+            }
             if result.is_ok() {
                 live.playing = want;
             } else {
@@ -382,9 +397,13 @@ impl<H: OutputHost> Transport<H> {
             .producer
             .reclaim_consumer()
             .ok_or(TransportFailure::ConnectFailed)?;
-        // Taken, so a stopped retry after a failed build keeps what the
-        // producer queues next.
-        if std::mem::take(&mut self.stale_queue) && self.attached_before {
+        // One read of intent decides both the discard and whether the new
+        // stream starts: a `start` that landed while this attempt blocked
+        // was held with nothing attached, and a later one finds an attached
+        // paused stream. The latch is taken, so a stopped retry after a
+        // failed build keeps what the producer queues next.
+        let playing = self.shared.running.load(Ordering::Acquire);
+        if (std::mem::take(&mut self.stale_queue) || playing) && self.attached_before {
             consumer.discard_queued();
         }
         let source = source_for_device(
@@ -412,7 +431,6 @@ impl<H: OutputHost> Transport<H> {
         })?;
 
         // A built stream is paused, so only a started transport plays it.
-        let playing = self.shared.running.load(Ordering::Acquire);
         if playing {
             stream.play().map_err(|_| TransportFailure::ConnectFailed)?;
         }

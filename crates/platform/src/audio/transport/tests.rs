@@ -8,6 +8,7 @@ use super::*;
 use crate::audio::AudioOutput;
 use crate::ring::ring_buffer;
 
+mod discovery_and_loss_races;
 mod reroute;
 mod setup_and_backlog;
 mod stopped_queue_and_cooldown;
@@ -35,6 +36,14 @@ struct World {
     clock: Duration,
     /// How far each `build` advances `clock`, as a slow OS call would.
     build_latency: Duration,
+    /// How far each discovery advances `clock`.
+    discovery_latency: Duration,
+    /// Raise a fatal error on the stream from inside `pause`, as a callback
+    /// racing a `stop` would.
+    lose_during_pause: bool,
+    /// Call `start` from inside the next discovery, as a caller racing a
+    /// blocked attempt would.
+    start_during_discovery: Option<Arc<Shared>>,
     /// Every call that reaches the audio stack, host or device or stream.
     ops: usize,
     discoveries: usize,
@@ -71,6 +80,11 @@ impl OutputHost for FakeHost {
         let mut w = with(&self.0);
         w.ops += 1;
         w.discoveries += 1;
+        let latency = w.discovery_latency;
+        w.clock += latency;
+        if let Some(shared) = w.start_during_discovery.take() {
+            shared.running.store(true, Ordering::Release);
+        }
         w.discovery_threads.push(std::thread::current().id());
         Ok(w.default
             .clone()
@@ -146,6 +160,10 @@ impl OutputStream for FakeStream {
     fn pause(&self) -> Result<(), cpal::Error> {
         let mut w = with(&self.0);
         w.ops += 1;
+        if w.lose_during_pause {
+            let index = self.1;
+            (w.streams[index].error)(cpal::Error::new(cpal::ErrorKind::DeviceNotAvailable));
+        }
         if w.no_hw_pause {
             return Err(cpal::Error::new(cpal::ErrorKind::UnsupportedOperation));
         }
