@@ -2512,10 +2512,35 @@ fn an_output_directory_swapped_before_the_pointer_publication_is_not_reported_as
     );
 }
 
+/// Opens `path` asking for delete access with every share flag. A held
+/// directory whose share mode lacks `FILE_SHARE_DELETE` refuses it with a
+/// sharing violation, but only when the hold itself requested access: a
+/// zero-access hold is not checked, so this open would succeed against it.
+#[cfg(windows)]
+fn assert_delete_open_hits_a_sharing_violation(path: &std::path::Path) {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    const DELETE: u32 = 0x0001_0000;
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    const ERROR_SHARING_VIOLATION: i32 = 32;
+    let error = std::fs::OpenOptions::new()
+        .access_mode(DELETE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .share_mode(0x1 | 0x2 | 0x4)
+        .open(path)
+        .expect_err("a held directory was opened for delete");
+    assert_eq!(
+        error.raw_os_error(),
+        Some(ERROR_SHARING_VIOLATION),
+        "{} was refused for a reason other than its share mode: {error}",
+        path.display()
+    );
+}
+
 /// Windows enforces a share mode only against opens that request access, so
 /// the directory holds must request real access for their share modes to bind.
 /// A held staging directory and a held output directory can be neither renamed
-/// nor replaced by a directory renamed over them.
+/// nor replaced by a directory renamed over them. The replacement targets are
+/// empty, because a non-empty destination is refused whatever the hold.
 #[cfg(windows)]
 #[test]
 fn held_directories_cannot_be_renamed_or_replaced() {
@@ -2523,20 +2548,29 @@ fn held_directories_cannot_be_renamed_or_replaced() {
     let _guard = ScratchGuard(root.clone());
     let output_dir = root.join("out");
     let staged = output_dir.join(".held.staged");
-    std::fs::create_dir_all(&staged).unwrap();
+    let empty_output = root.join("empty-out");
+    let empty_staged = root.join("empty.staged");
+    for dir in [&staged, &empty_output, &empty_staged] {
+        std::fs::create_dir_all(dir).unwrap();
+    }
 
     let output_claim = super::claim_output_dir(&output_dir).unwrap();
     let staged_claim = super::claim_staged_dir(&staged).unwrap();
+    let empty_output_claim = super::claim_output_dir(&empty_output).unwrap();
+    let empty_staged_claim = super::claim_staged_dir(&empty_staged).unwrap();
     // Neither hold forbids concurrent file creation inside the directory.
     std::fs::write(staged.join("inside"), b"payload").unwrap();
 
-    for held in [&staged, &output_dir] {
+    for held in [&staged, &output_dir, &empty_output, &empty_staged] {
+        assert_delete_open_hits_a_sharing_violation(held);
         let moved = root.join("moved");
         assert!(
             std::fs::rename(held, &moved).is_err(),
             "{} was renamed while held",
             held.display()
         );
+    }
+    for held in [&empty_output, &empty_staged] {
         let replacement = root.join("replacement");
         std::fs::create_dir_all(&replacement).unwrap();
         assert!(
@@ -2544,15 +2578,20 @@ fn held_directories_cannot_be_renamed_or_replaced() {
             "{} was replaced while held",
             held.display()
         );
+        assert!(replacement.is_dir(), "the replacement must stay in place");
         std::fs::remove_dir(&replacement).unwrap();
     }
     assert!(
-        super::claim_staged_dir(&staged).is_err(),
+        super::claim_staged_dir(&empty_staged).is_err(),
         "the staging hold must refuse concurrent sharing"
     );
 
-    drop(staged_claim);
-    drop(output_claim);
+    drop((
+        staged_claim,
+        output_claim,
+        empty_output_claim,
+        empty_staged_claim,
+    ));
     let moved = root.join("moved");
     std::fs::rename(&staged, &moved).expect("the released staging directory can be renamed");
     std::fs::rename(&moved, &staged).unwrap();
@@ -2560,8 +2599,10 @@ fn held_directories_cannot_be_renamed_or_replaced() {
 }
 
 /// Between the RGB and metadata writes, a held staging directory and a held
-/// output directory still cannot be renamed or replaced, and the capture
-/// publishes normally afterwards.
+/// output directory still cannot be opened for delete, renamed, or replaced,
+/// and the capture publishes normally afterwards. Both directories are
+/// non-empty by then, so the share-mode check is the delete open; the rename
+/// and replacement attempts are kept as end-to-end checks.
 #[cfg(windows)]
 #[test]
 fn directories_held_between_the_rgb_and_metadata_writes_cannot_be_replaced() {
@@ -2582,6 +2623,7 @@ fn directories_held_between_the_rgb_and_metadata_writes_cannot_be_replaced() {
             })
             .expect("this call's own staging directory must exist by now");
         for held in [&staged, &output_dir] {
+            assert_delete_open_hits_a_sharing_violation(held);
             let replacement = root.join("replacement");
             std::fs::create_dir_all(&replacement).unwrap();
             assert!(
