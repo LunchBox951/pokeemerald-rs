@@ -20,6 +20,31 @@ pub(super) struct Token {
     pub(super) line: usize,
 }
 
+/// The length of the backslash-newline line splice at `i`, or 0 when none.
+fn splice_len(chars: &[char], i: usize) -> usize {
+    match (chars.get(i), chars.get(i + 1), chars.get(i + 2)) {
+        (Some('\\'), Some('\n'), _) => 2,
+        (Some('\\'), Some('\r'), Some('\n')) => 3,
+        _ => 0,
+    }
+}
+
+/// Skips the line comment opening at `start` up to its newline; a line splice
+/// continues it onto the next line, as in the C preprocessor.
+fn skip_line_comment(chars: &[char], start: usize, line: &mut usize) -> usize {
+    let mut i = start;
+    while i < chars.len() && chars[i] != '\n' {
+        let splice = splice_len(chars, i);
+        if splice > 0 {
+            *line += 1;
+            i += splice;
+        } else {
+            i += 1;
+        }
+    }
+    i
+}
+
 /// Skips the block comment opening at `start`; returns the index after it.
 pub(super) fn skip_block_comment(
     source: PokedexSource,
@@ -101,9 +126,7 @@ pub(super) fn lex(source: PokedexSource, text: &str) -> Result<Vec<Token>> {
             }
             c if c.is_whitespace() => i += 1,
             '/' if chars.get(i + 1) == Some(&'/') => {
-                while i < chars.len() && chars[i] != '\n' {
-                    i += 1;
-                }
+                i = skip_line_comment(&chars, i, &mut line);
             }
             '/' if chars.get(i + 1) == Some(&'*') => {
                 i = skip_block_comment(source, &chars, i, &mut line)?;
@@ -112,10 +135,13 @@ pub(super) fn lex(source: PokedexSource, text: &str) -> Result<Vec<Token>> {
                 let mut body = String::new();
                 i += 1;
                 while i < chars.len() && chars[i] != '\n' {
-                    if chars[i] == '/' && chars.get(i + 1) == Some(&'/') {
-                        while i < chars.len() && chars[i] != '\n' {
-                            i += 1;
-                        }
+                    let splice = splice_len(&chars, i);
+                    if splice > 0 {
+                        // A line splice continues the directive, as in the C preprocessor.
+                        line += 1;
+                        i += splice;
+                    } else if chars[i] == '/' && chars.get(i + 1) == Some(&'/') {
+                        i = skip_line_comment(&chars, i, &mut line);
                     } else if chars[i] == '/' && chars.get(i + 1) == Some(&'*') {
                         // A comment is one space, as in the C preprocessor.
                         i = skip_block_comment(source, &chars, i, &mut line)?;

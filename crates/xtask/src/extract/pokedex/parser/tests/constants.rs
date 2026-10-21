@@ -154,3 +154,86 @@ fn comment_attached_dex_constant_overrides_are_refused() {
         assert!(f.parse().is_err(), "override accepted: {extra}");
     }
 }
+
+#[test]
+fn spliced_dex_constant_overrides_are_refused() {
+    for extra in [
+        "#define \\\nNATIONAL_DEX_MON_1 2\n",
+        "#undef \\\nNATIONAL_DEX_MON_1\n",
+        "#define \\\r\nNATIONAL_DEX_MON_1 2\n",
+        "#undef \\\r\nNATIONAL_DEX_MON_1\n",
+    ] {
+        let mut f = fixture();
+        replace_once(&mut f.constants, "#endif", &format!("{extra}#endif"));
+        assert!(f.parse().is_err(), "override accepted: {extra:?}");
+    }
+}
+
+#[test]
+fn a_spliced_line_comment_hides_the_next_line() {
+    // C reads the second alias line as part of the comment, so the alias is missing.
+    let mut f = fixture();
+    replace_once(
+        &mut f.constants,
+        "#define KANTO_DEX_COUNT     NATIONAL_DEX_MEW\n",
+        "// note \\\n#define KANTO_DEX_COUNT     NATIONAL_DEX_MEW\n",
+    );
+    assert!(matches!(
+        err(&f),
+        PokedexSourceError::MissingCountAlias {
+            name: "KANTO_DEX_COUNT"
+        }
+    ));
+}
+
+#[test]
+fn spliced_count_alias_still_resolves() {
+    let mut f = fixture();
+    replace_once(
+        &mut f.constants,
+        "#define KANTO_DEX_COUNT     NATIONAL_DEX_MEW",
+        "#define KANTO_DEX_COUNT \\\n    NATIONAL_DEX_MEW",
+    );
+    f.parse().expect("a spliced alias is one directive");
+}
+
+#[test]
+fn conditional_preprocessing_around_the_enum_is_refused() {
+    // An inactive enum that swaps two Dex numbers ahead of the real one.
+    let mut f = fixture();
+    let start = f.constants.find("enum {").unwrap();
+    let end = f.constants.find("};").unwrap() + "};\n".len();
+    let swapped = f.constants[start..end]
+        .replacen("NATIONAL_DEX_MON_1,", "NATIONAL_DEX_SWAP,", 1)
+        .replacen("NATIONAL_DEX_MON_2,", "NATIONAL_DEX_MON_1,", 1)
+        .replacen("NATIONAL_DEX_SWAP,", "NATIONAL_DEX_MON_2,", 1);
+    f.constants
+        .insert_str(start, &format!("#if 0\n{swapped}#endif\n"));
+    assert!(f.parse().is_err(), "an inactive enum was parsed");
+
+    for extra in [
+        "#if 0\n#define KANTO_DEX_COUNT NATIONAL_DEX_MEW\n#endif\n",
+        "#ifdef X\n#endif\n",
+        "#else\n",
+        "#include \"other.h\"\n",
+    ] {
+        let mut f = fixture();
+        replace_once(&mut f.constants, "#endif", &format!("{extra}#endif"));
+        assert!(f.parse().is_err(), "directive accepted: {extra:?}");
+    }
+
+    let mut f = fixture();
+    replace_once(&mut f.constants, "#ifndef GUARD\n#define GUARD\n", "");
+    replace_once(&mut f.constants, "#endif // GUARD\n", "");
+    assert!(
+        f.parse().is_err(),
+        "a header without its include guard was accepted"
+    );
+
+    let mut f = fixture();
+    replace_once(&mut f.constants, "#define GUARD\n", "#define OTHER\n");
+    assert!(
+        f.parse().is_err(),
+        "a mismatched include guard was accepted"
+    );
+}

@@ -42,9 +42,7 @@ impl Constants {
 
 pub(super) fn parse_constants(text: &str) -> Result<Constants> {
     let mut cur = Cursor::new(PokedexSource::Constants, text)?;
-    while matches!(cur.peek(), Some(Tok::Directive(_))) {
-        cur.pos += 1;
-    }
+    let guard = include_guard(&mut cur)?;
     cur.keyword("enum", "the National Dex `enum {`")?;
     cur.punct('{', "`{` opening the National Dex enum")?;
     let mut values: HashMap<String, u16> = HashMap::new();
@@ -85,17 +83,30 @@ pub(super) fn parse_constants(text: &str) -> Result<Constants> {
         });
     }
 
+    // The include guard's `#endif` must be the last token.
+    let Some((closing, rest)) = cur.tokens[cur.pos..].split_last() else {
+        return Err(cur.fail("the include guard's `#endif`"));
+    };
+    if !matches!(&closing.tok, Tok::Directive(body) if body == "endif") {
+        return Err(PokedexSourceError::Malformed {
+            source: PokedexSource::Constants,
+            line: closing.line,
+            expected: "the include guard's `#endif` closing the file",
+        });
+    }
     let mut aliases: HashMap<String, String> = HashMap::new();
-    for token in &cur.tokens[cur.pos..] {
+    for token in rest {
         let Tok::Directive(body) = &token.tok else {
             continue;
         };
         let words: Vec<&str> = body.split_whitespace().collect();
         let (Some(&directive), Some(&name)) = (words.first(), words.get(1)) else {
-            continue;
+            return Err(unsupported_directive(token.line));
         };
-        if !matches!(directive, "define" | "undef") {
-            continue;
+        // Only unconditional macro definitions are read; any other directive
+        // could change what the compiler sees, so it is refused.
+        if !matches!(directive, "define" | "undef") || name == guard {
+            return Err(unsupported_directive(token.line));
         }
         // Redefining or undefining a declared constant would change its identity.
         if values.contains_key(name) {
@@ -132,4 +143,33 @@ pub(super) fn parse_constants(text: &str) -> Result<Constants> {
         }
     }
     Ok(Constants { values })
+}
+
+/// Consumes the leading `#ifndef NAME` / `#define NAME` pair; returns `NAME`.
+fn include_guard(cur: &mut Cursor) -> Result<String> {
+    let expected = "the `#ifndef`/`#define` include guard before the enum";
+    let mut guard_line = |word: &str| -> Result<String> {
+        let name = match cur.peek() {
+            Some(Tok::Directive(body)) => match body.split_whitespace().collect::<Vec<_>>()[..] {
+                [directive, name] if directive == word => name.to_owned(),
+                _ => return Err(cur.fail(expected)),
+            },
+            _ => return Err(cur.fail(expected)),
+        };
+        cur.pos += 1;
+        Ok(name)
+    };
+    let guard = guard_line("ifndef")?;
+    if guard_line("define")? != guard {
+        return Err(cur.fail(expected));
+    }
+    Ok(guard)
+}
+
+fn unsupported_directive(line: usize) -> PokedexSourceError {
+    PokedexSourceError::Malformed {
+        source: PokedexSource::Constants,
+        line,
+        expected: "only `#define` or `#undef` between the enum and the guard's `#endif`",
+    }
 }
