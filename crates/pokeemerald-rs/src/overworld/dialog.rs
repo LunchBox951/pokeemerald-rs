@@ -870,16 +870,27 @@ mod tests {
         ))
     }
 
+    /// Writes the synthetic field-dialog pack to its scratch path and
+    /// returns that path; the pacing test and its planted-symlink regression
+    /// share this one writer.
+    fn write_field_dialog_scratch_pack() -> std::path::PathBuf {
+        let path = field_dialog_scratch_path();
+        crate::overworld::test_support::write_scratch_exclusive(
+            &path,
+            synthetic_field_dialog_pack_bytes(),
+        );
+        path
+    }
+
     #[cfg(unix)]
     #[test]
     fn field_dialog_scratch_pack_refuses_a_planted_symlink() {
-        let path = field_dialog_scratch_path();
-        crate::overworld::test_support::assert_planted_symlink_untouched(&path, || {
-            crate::overworld::test_support::write_scratch_exclusive(
-                &path,
-                synthetic_field_dialog_pack_bytes(),
-            );
-        });
+        crate::overworld::test_support::assert_planted_symlink_untouched(
+            &field_dialog_scratch_path(),
+            || {
+                write_field_dialog_scratch_pack();
+            },
+        );
     }
 
     /// A dialog opened at a given speed paces at it: FAST prints the same
@@ -897,11 +908,7 @@ mod tests {
             ]
         };
 
-        let path = field_dialog_scratch_path();
-        crate::overworld::test_support::write_scratch_exclusive(
-            &path,
-            synthetic_field_dialog_pack_bytes(),
-        );
+        let path = write_field_dialog_scratch_pack();
         let pack = AssetPack::load(&path).expect("the synthetic field-dialog pack must load");
         let _ = std::fs::remove_file(&path);
 

@@ -88,8 +88,10 @@ pub(crate) fn assert_planted_symlink_untouched(path: &std::path::Path, write: im
         path.file_name().unwrap().to_string_lossy()
     ));
     let sentinel = b"victim must survive";
-    let _ = std::fs::remove_file(&victim);
-    std::fs::write(&victim, sentinel).unwrap();
+    // The victim's path is as predictable as `path`, so it is claimed the
+    // same way: a link planted there cannot turn the setup itself into the
+    // overwrite these regressions guard against.
+    write_scratch_exclusive(&victim, sentinel);
     let _ = std::fs::remove_file(path);
     std::os::unix::fs::symlink(&victim, path).unwrap();
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(write));
