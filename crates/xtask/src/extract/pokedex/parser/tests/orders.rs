@@ -137,3 +137,32 @@ fn none_in_an_order_is_refused() {
         PokedexSourceError::Payload(PokedexError::NoneInOrder(PokedexOrderKind::Alphabetical))
     );
 }
+
+#[test]
+fn size_orders_hold_only_species_identities() {
+    for (symbol, order, replaced) in [
+        (
+            "gPokedexOrder_Weight",
+            PokedexOrderKind::Weight,
+            "NATIONAL_DEX_MON_5,",
+        ),
+        (
+            "gPokedexOrder_Height",
+            PokedexOrderKind::Height,
+            "NATIONAL_DEX_MON_5,",
+        ),
+    ] {
+        let mut f = fixture();
+        let start = f.orders.find(symbol).unwrap();
+        let end = f.orders[start..].find("};").unwrap() + start;
+        let block = f.orders[start..end].replacen(replaced, "NATIONAL_DEX_OLD_UNOWN_390,", 1);
+        f.orders.replace_range(start..end, &block);
+        assert!(
+            matches!(
+                err(&f),
+                PokedexSourceError::OrderMemberNotSpecies { order: o, dex_no: 390, .. } if o == order
+            ),
+            "{symbol}"
+        );
+    }
+}

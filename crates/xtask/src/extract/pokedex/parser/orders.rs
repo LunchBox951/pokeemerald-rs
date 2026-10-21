@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use assets::pokedex::{NationalDexNo, PokedexOrderKind};
+use assets::pokedex::{NationalDexNo, PokedexOrderKind, NATIONAL_DEX_COUNT};
 
 use super::constants::Constants;
 use super::lexer::Cursor;
@@ -10,6 +10,11 @@ use super::Result;
 use crate::extract::pokedex::error::{PokedexSource, PokedexSourceError};
 
 /// The observed member counts of the three orders.
+///
+/// The weight and height orders hold species only: `src/pokedex.c` walks them
+/// for `NATIONAL_DEX_COUNT` slots, and upstream lists no old-Unown identity in
+/// either. With 386 distinct nonzero members, that bound makes each exactly the
+/// species set.
 const ORDER_LENGTHS: [(PokedexOrderKind, &str, usize); 3] = [
     (
         PokedexOrderKind::Alphabetical,
@@ -48,7 +53,16 @@ pub(super) fn parse_orders(text: &str, constants: &Constants) -> Result<RawOrder
         while !cur.eat_punct('}') {
             let line = cur.line();
             let member = cur.ident("a National Dex constant")?;
-            members.push(constants.resolve(PokedexSource::Orders, line, &member)?);
+            let dex_no = constants.resolve(PokedexSource::Orders, line, &member)?;
+            let order = ORDER_LENGTHS[slot].0;
+            if order != PokedexOrderKind::Alphabetical && dex_no.get() > NATIONAL_DEX_COUNT {
+                return Err(PokedexSourceError::OrderMemberNotSpecies {
+                    order,
+                    line,
+                    dex_no: dex_no.get(),
+                });
+            }
+            members.push(dex_no);
             if !cur.eat_punct(',') {
                 cur.punct('}', "`,` or `}` after an order member")?;
                 break;

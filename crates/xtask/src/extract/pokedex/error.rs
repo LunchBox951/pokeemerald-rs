@@ -116,6 +116,13 @@ pub enum PokedexSourceError {
         expected: usize,
         actual: usize,
     },
+    /// A weight or height order names an identity above `NATIONAL_DEX_COUNT`,
+    /// such as an old-Unown constant, in place of a species.
+    OrderMemberNotSpecies {
+        order: PokedexOrderKind,
+        line: usize,
+        dex_no: u16,
+    },
     /// The assembled payload broke a rule `assets::pokedex` enforces, such as a
     /// repeated order member.
     Payload(PokedexError),
@@ -231,6 +238,16 @@ impl fmt::Display for PokedexSourceError {
                 expected,
                 actual,
             } => write!(f, "{order} order has {actual} members, expected {expected}"),
+            Self::OrderMemberNotSpecies {
+                order,
+                line,
+                dex_no,
+            } => write!(
+                f,
+                "{}:{line}: {order} order names National Dex number {dex_no}, \
+                 above NATIONAL_DEX_COUNT",
+                PokedexSource::Orders.path()
+            ),
             Self::Payload(error) => write!(f, "Pokédex payload rejected: {error}"),
         }
     }
