@@ -12,7 +12,7 @@ use assets::{AssetPack, PackError};
 use rendering::{
     compose_frame_with_effects, AffineBgLayer, AffineMatrix, AffineTilemap, BgLayer, BgSlot,
     BitDepth, ColorEffect, EffectsConfig, FrameEffects, Framebuffer, LayerTargets, Overflow,
-    Palette, RenderError, SpriteLayer, Tilemap, Tileset,
+    Palette, PaletteStage, RenderError, SpriteLayer, Tilemap, Tileset,
 };
 
 const BG_DIM_TILES: usize = 32;
@@ -274,6 +274,18 @@ impl TitleScene {
     /// Composes a deterministic title framebuffer for an idle-frame index.
     #[must_use]
     pub fn compose(&self, frame: u32) -> Framebuffer {
+        self.compose_with_palette(frame, PaletteStage::default())
+    }
+
+    /// Composes an idle frame with `palette` applied to the BG and OBJ
+    /// colours (and the backdrop, on the BG side) before layer composition
+    /// and the title's alpha blend.
+    #[must_use]
+    pub(crate) fn compose_with_palette(
+        &self,
+        frame: u32,
+        palette: PaletteStage<'_>,
+    ) -> Framebuffer {
         let rayquaza_layer = BgLayer::new(&self.rayquaza_tiles, &self.palette, &self.rayquaza_map);
         let clouds_layer = BgLayer::new(&self.clouds_tiles, &self.palette, &self.clouds_map);
         let logo_layer = AffineBgLayer::new(&self.logo_tiles, &self.palette, &self.logo_map);
@@ -335,6 +347,7 @@ impl TitleScene {
                 evy: 0,
             },
             backdrop: self.palette.color(0).to_rgb888(),
+            palette,
             ..FrameEffects::default()
         };
 
