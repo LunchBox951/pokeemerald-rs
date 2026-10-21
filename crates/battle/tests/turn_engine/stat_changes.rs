@@ -1,7 +1,7 @@
 //! Stat-stage move effects and their downstream battle behavior.
 
 use crate::common::{max_iv_mon, SequenceRng};
-use assets::MoveId;
+use assets::{MoveId, SpeciesId};
 use battle::{
     Battle, BattleEvent, BattleOutcome, ChangedStat, Dex, PlayerAction, StatStage, StatStages,
     Volatiles,
@@ -13,8 +13,13 @@ fn wild_zigzagoon_growl_executes_when_the_rejection_loop_lands_on_it() {
     // The enemy knows two moves so the rejection loop can land on either
     // slot; this run pins it landing on Growl. Rattata is faster than
     // Zigzagoon, so Rattata's Tackle resolves first every turn.
-    let player = max_iv_mon(&dex, 19, 5, vec![MoveId::TACKLE]); // Rattata/Tackle
-    let enemy = max_iv_mon(&dex, 288, 3, vec![MoveId::TACKLE, MoveId::GROWL]); // Zigzagoon: Tackle, Growl
+    let player = max_iv_mon(&dex, SpeciesId::RATTATA, 5, vec![MoveId::TACKLE]); // Rattata/Tackle
+    let enemy = max_iv_mon(
+        &dex,
+        SpeciesId::ZIGZAGOON,
+        3,
+        vec![MoveId::TACKLE, MoveId::GROWL],
+    ); // Zigzagoon: Tackle, Growl
     let enemy_hp_before = enemy.current_hp();
     // Pins the level-3 fixture's HP construction independently of the
     // damage arithmetic below.
@@ -64,8 +69,13 @@ fn wild_wurmple_string_shot_misses_when_the_rejection_loop_lands_on_it() {
     // The enemy knows two moves so the rejection loop can land on either
     // slot; this run pins it landing on String Shot. Rattata is faster
     // than Wurmple, so Rattata's Tackle resolves first.
-    let player = max_iv_mon(&dex, 19, 5, vec![MoveId::TACKLE]); // Rattata/Tackle
-    let enemy = max_iv_mon(&dex, 290, 3, vec![MoveId::TACKLE, MoveId::STRING_SHOT]); // Wurmple: Tackle, String Shot
+    let player = max_iv_mon(&dex, SpeciesId::RATTATA, 5, vec![MoveId::TACKLE]); // Rattata/Tackle
+    let enemy = max_iv_mon(
+        &dex,
+        SpeciesId::WURMPLE,
+        3,
+        vec![MoveId::TACKLE, MoveId::STRING_SHOT],
+    ); // Wurmple: Tackle, String Shot
     let enemy_hp_before = enemy.current_hp();
     // Pins the level-3 fixture's HP construction independently of the
     // damage arithmetic below.
@@ -116,8 +126,8 @@ fn a_stat_already_at_the_floor_reports_wont_go_lower_and_stays_put() {
     // stage is already at the floor. Upstream's ChangeStatBuffs checks the
     // floor after the accuracy check passes, so the move still connects
     // even though the stage cannot move (battle_script_commands.c:7056).
-    let player = max_iv_mon(&dex, 19, 5, vec![MoveId::GROWL]); // Rattata/Growl
-    let mut enemy = max_iv_mon(&dex, 1, 5, vec![MoveId::TACKLE]); // Bulbasaur/Tackle
+    let player = max_iv_mon(&dex, SpeciesId::RATTATA, 5, vec![MoveId::GROWL]); // Rattata/Growl
+    let mut enemy = max_iv_mon(&dex, SpeciesId::BULBASAUR, 5, vec![MoveId::TACKLE]); // Bulbasaur/Tackle
     enemy.stages_mut().attack = StatStage::MIN;
 
     // battle start, turn number, enemy pick (its only move), Growl's
@@ -165,8 +175,8 @@ fn growl_lowers_the_players_subsequent_tackle_damage() {
     // The faster enemy's Growl resolves before the player's own Tackle in
     // the same turn, so the Tackle's damage must read the already-lowered
     // Attack stage rather than the player's neutral baseline.
-    let enemy = max_iv_mon(&dex, 19, 5, vec![MoveId::GROWL]); // Rattata/Growl
-    let player = max_iv_mon(&dex, 1, 5, vec![MoveId::TACKLE]); // Bulbasaur/Tackle
+    let enemy = max_iv_mon(&dex, SpeciesId::RATTATA, 5, vec![MoveId::GROWL]); // Rattata/Growl
+    let player = max_iv_mon(&dex, SpeciesId::BULBASAUR, 5, vec![MoveId::TACKLE]); // Bulbasaur/Tackle
 
     // battle start, turn number, enemy pick (its only move), Growl's
     // 1-draw accuracy check (100 accuracy: cannot miss), then the
@@ -210,8 +220,13 @@ fn string_shot_flips_turn_order_once_the_targets_effective_speed_drops_below_the
     // Poochyena's effective Speed truncates down to a value below
     // Wurmple's untouched Speed from turn 2 on, flipping who moves first
     // despite Wurmple being the raw-slower mon.
-    let player = max_iv_mon(&dex, 290, 5, vec![MoveId::STRING_SHOT, MoveId::TACKLE]); // Wurmple: String Shot, Tackle
-    let enemy = max_iv_mon(&dex, 286, 5, vec![MoveId::TACKLE]); // Poochyena: Tackle
+    let player = max_iv_mon(
+        &dex,
+        SpeciesId::WURMPLE,
+        5,
+        vec![MoveId::STRING_SHOT, MoveId::TACKLE],
+    ); // Wurmple: String Shot, Tackle
+    let enemy = max_iv_mon(&dex, SpeciesId::POOCHYENA, 5, vec![MoveId::TACKLE]); // Poochyena: Tackle
     let player_hp_before = player.current_hp();
     let enemy_hp_before = enemy.current_hp();
     // Pin both level-5 fixtures' HP construction independently of the
@@ -303,11 +318,11 @@ fn a_fainting_battler_drops_its_accumulated_stages() {
     // The enemy Hardens on itself first, then the player finishes it off
     // in the same turn: Harden does not damage or delay the enemy's own
     // faint.
-    let mut enemy = max_iv_mon(&dex, 19, 50, vec![MoveId::HARDEN]); // Rattata/Harden
+    let mut enemy = max_iv_mon(&dex, SpeciesId::RATTATA, 50, vec![MoveId::HARDEN]); // Rattata/Harden
     enemy.apply_damage(enemy.current_hp() - 1);
     enemy.volatiles_mut().set_focus_energy();
     enemy.volatiles_mut().set_charge();
-    let player = max_iv_mon(&dex, 1, 5, vec![MoveId::TACKLE]); // Bulbasaur/Tackle
+    let player = max_iv_mon(&dex, SpeciesId::BULBASAUR, 5, vec![MoveId::TACKLE]); // Bulbasaur/Tackle
 
     // battle start, turn number, the enemy's 1-draw rejection-loop pick
     // (only slot 0 is known, so draw 0 -> 0 % 4 == 0 lands immediately),
@@ -353,8 +368,8 @@ fn a_fainting_battler_drops_its_accumulated_stages() {
 #[test]
 fn deoxys_speed_forme_attack_and_defense_drive_both_directions_of_damage() {
     let dex = Dex::new();
-    let deoxys = max_iv_mon(&dex, 410, 50, vec![MoveId::TACKLE]);
-    let jolteon = max_iv_mon(&dex, 135, 60, vec![MoveId::TACKLE]);
+    let deoxys = max_iv_mon(&dex, SpeciesId::DEOXYS, 50, vec![MoveId::TACKLE]);
+    let jolteon = max_iv_mon(&dex, SpeciesId::JOLTEON, 60, vec![MoveId::TACKLE]);
     let mut rng = SequenceRng::new([
         0, // battle start
         0, 0, // turn number, enemy pick
@@ -393,8 +408,8 @@ fn deoxys_speed_forme_speed_outruns_a_target_the_normal_forme_would_lose_to() {
     let dex = Dex::new();
     // Level-50 Deoxys: Speed Forme 200, Normal Forme 170. Level-60 Jolteon
     // sits between at 179, so only the corrected Speed moves Deoxys first.
-    let deoxys = max_iv_mon(&dex, 410, 50, vec![MoveId::TACKLE]);
-    let jolteon = max_iv_mon(&dex, 135, 60, vec![MoveId::TACKLE]);
+    let deoxys = max_iv_mon(&dex, SpeciesId::DEOXYS, 50, vec![MoveId::TACKLE]);
+    let jolteon = max_iv_mon(&dex, SpeciesId::JOLTEON, 60, vec![MoveId::TACKLE]);
     assert_eq!(deoxys.stats().speed, 200);
     assert_eq!(jolteon.stats().speed, 179);
     let mut rng = SequenceRng::new(vec![0; 64]);
@@ -422,7 +437,7 @@ fn deoxys_speed_forme_speed_outruns_a_target_the_normal_forme_would_lose_to() {
 #[test]
 fn deoxys_speed_forme_stats_pick_up_earned_evs_at_the_next_battle() {
     let dex = Dex::new();
-    let mut deoxys = max_iv_mon(&dex, 410, 50, vec![MoveId::TACKLE]);
+    let mut deoxys = max_iv_mon(&dex, SpeciesId::DEOXYS, 50, vec![MoveId::TACKLE]);
     assert_eq!(deoxys.stats().attack, 115);
     // Four Attack EVs cross one `EV / 4` step without a level-up; the
     // earning battle's stats stay as they were.
@@ -436,7 +451,7 @@ fn deoxys_speed_forme_stats_pick_up_earned_evs_at_the_next_battle() {
     });
     assert_eq!(deoxys.stats().attack, 115);
 
-    let jolteon = max_iv_mon(&dex, 135, 60, vec![MoveId::TACKLE]);
+    let jolteon = max_iv_mon(&dex, SpeciesId::JOLTEON, 60, vec![MoveId::TACKLE]);
     let mut rng = SequenceRng::new(vec![0; 64]);
     let battle = Battle::new(dex, deoxys, jolteon, false, &mut rng).unwrap();
     // ((95*2 + 31 + 4/4) * 50) / 100 + 5.

@@ -25,31 +25,31 @@ const THUNDER_WAVE: MoveId = MoveId::THUNDER_WAVE;
 const ABSORB: MoveId = MoveId::ABSORB;
 
 /// `SPECIES_RATTATA`: base Speed 72, the fast mover in every fixture below.
-const RATTATA: u16 = 19;
+const RATTATA: SpeciesId = SpeciesId::RATTATA;
 /// `SPECIES_CHARMANDER`, level 50 against level-2 Rattata: one-shots it, the
 /// same overkill fixture `move_resolution.rs`'s own test uses.
-const CHARMANDER: u16 = 4;
+const CHARMANDER: SpeciesId = SpeciesId::CHARMANDER;
 /// `SPECIES_BULBASAUR`: the enemy fixture `move_resolution.rs`'s own
 /// forced-Struggle test survives a Rattata Tackle from, reused here so this
 /// module does not need to re-derive that damage figure.
-const BULBASAUR: u16 = 1;
+const BULBASAUR: SpeciesId = SpeciesId::BULBASAUR;
 /// `SPECIES_TENTACOOL`: Clear Body in ability slot 0, **Liquid Ooze** in slot
 /// 1, so an odd personality (`turn_engine/pipelines.rs`'s own convention)
 /// fields the ability whose recoil produces this module's double faint.
-const TENTACOOL: u16 = 72;
+const TENTACOOL: SpeciesId = SpeciesId::TENTACOOL;
 /// `SPECIES_GASTLY`: Ghost/Poison, immune to the Normal-type Tackle used to
 /// keep a target alive without hand-computing damage.
-const GASTLY: u16 = 92;
+const GASTLY: SpeciesId = SpeciesId::GASTLY;
 /// `SPECIES_ZIGZAGOON`: an ordinary Normal-type target for Thunder Wave.
-const ZIGZAGOON: u16 = 288;
+const ZIGZAGOON: SpeciesId = SpeciesId::ZIGZAGOON;
 /// `SPECIES_SANDSHREW`: pure Ground, immune to Thunder Wave's Electric type.
-const SANDSHREW: u16 = 27;
+const SANDSHREW: SpeciesId = SpeciesId::SANDSHREW;
 /// `SPECIES_MAKUHITA`: Fighting/Fighting, Guts in ability slot 1 (Thick Fat
 /// is slot 0).
-const MAKUHITA: u16 = 335;
+const MAKUHITA: SpeciesId = SpeciesId::MAKUHITA;
 /// `SPECIES_MILOTIC`: Water/Water, Marvel Scale in its primary (and only)
 /// ability slot.
-const MILOTIC: u16 = 329;
+const MILOTIC: SpeciesId = SpeciesId::MILOTIC;
 
 #[test]
 fn full_paralysis_cancels_before_the_no_pp_abort_and_retains_pp() {
@@ -392,16 +392,14 @@ fn a_faint_clears_the_corpse_primary_status() {
 #[test]
 fn a_double_faint_clears_both_corpses_primary_status() {
     let dex = Dex::new();
-    let mut player =
-        BattlePokemon::new(&dex, SpeciesId(BULBASAUR), 50, MAX_IVS, 0, vec![ABSORB]).unwrap();
+    let mut player = BattlePokemon::new(&dex, BULBASAUR, 50, MAX_IVS, 0, vec![ABSORB]).unwrap();
     let player_max_hp = player.stats().max_hp;
     // Leave the attacker on less HP than the Liquid Ooze recoil will take,
     // matching `turn_engine/pipelines.rs`'s own fixture exactly.
     player.apply_damage(player_max_hp - 6);
     player.set_status1(Status1::Paralysed);
     // Odd personality selects ability slot 1: Liquid Ooze, not Clear Body.
-    let mut enemy =
-        BattlePokemon::new(&dex, SpeciesId(TENTACOOL), 5, MAX_IVS, 1, vec![TACKLE]).unwrap();
+    let mut enemy = BattlePokemon::new(&dex, TENTACOOL, 5, MAX_IVS, 1, vec![TACKLE]).unwrap();
     enemy.set_status1(Status1::Paralysed);
 
     // battle-start turn number, the turn's own turn number, the enemy's
@@ -461,7 +459,7 @@ fn a_surviving_paralysed_winner_keeps_its_status_after_the_opponent_faints() {
 
 /// `SPECIES_RALTS`: Psychic (not immune to Thunder Wave), **Synchronize** in
 /// its primary ability slot, and a Route 102 wild encounter.
-const RALTS: u16 = 392;
+const RALTS: SpeciesId = SpeciesId::RALTS;
 
 #[test]
 fn thunder_wave_against_a_synchronize_target_reflects_paralysis_at_move_end() {
@@ -515,7 +513,7 @@ fn thunder_wave_against_a_synchronize_target_reflects_paralysis_at_move_end() {
 
 /// `SPECIES_PERSIAN`: Normal, Limber in its only ability slot, faster than
 /// Ralts even unquartered.
-const PERSIAN: u16 = 53;
+const PERSIAN: SpeciesId = SpeciesId::PERSIAN;
 
 #[test]
 fn a_limber_original_attacker_blocks_its_own_reflected_paralysis() {
@@ -561,7 +559,7 @@ fn a_limber_original_attacker_blocks_its_own_reflected_paralysis() {
 
 /// `SPECIES_ONIX`: Rock/Ground, immune to Thunder Wave's Electric type, and
 /// faster than Ralts.
-const ONIX: u16 = 95;
+const ONIX: SpeciesId = SpeciesId::ONIX;
 
 #[test]
 fn synchronize_reflects_paralysis_onto_a_type_immune_original_attacker() {
@@ -691,11 +689,11 @@ fn a_paralysed_attacker_reaches_the_canceller_against_a_synchronize_defender() {
 }
 
 /// `SPECIES_SEVIPER`: Poison, Shed Skin in its primary ability slot.
-const SEVIPER: u16 = 379;
+const SEVIPER: SpeciesId = SpeciesId::SEVIPER;
 /// `SPECIES_ABRA`: Psychic, raw Speed 15 at level 5 -- faster than
 /// [`SEVIPER`]'s 13, so the player's Thunder Wave resolves first with no
 /// speed-tie draw.
-const ABRA: u16 = 63;
+const ABRA: SpeciesId = SpeciesId::ABRA;
 
 /// A fresh paralysis on a Shed Skin holder lands, and the same end turn rolls
 /// the cure for the newly statused holder (`src/battle_util.c:2620`-`:2621`).

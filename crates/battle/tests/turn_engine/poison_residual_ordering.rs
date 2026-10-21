@@ -3,12 +3,13 @@
 
 use crate::common::slow_runner_rattata;
 use crate::poison_support::*;
+use assets::SpeciesId;
 use battle::status1::poison_residual_damage;
 use battle::{Battle, BattleEvent, BattleOutcome, Dex, PlayerAction, Status1};
 
 /// `SPECIES_ABRA`: faster than [`slow_runner_rattata`]'s Rattata, so a run
 /// is never automatic, and too weak to end the battle before the residuals.
-const ABRA: u16 = 63;
+const ABRA: SpeciesId = SpeciesId::ABRA;
 
 /// An escape roll that fails for [`slow_runner_rattata`] against [`ABRA`]
 /// (`battle::escape`'s own tests pin the threshold).
@@ -439,9 +440,14 @@ fn a_speed_drop_during_the_action_phase_flips_the_same_turns_poison_order() {
     let dex = Dex::new();
     // Poochyena (Speed 10) beats Wurmple (Speed 8) in the action phase; the
     // String Shot it eats drops it to 6 before the residual pass.
-    let mut player = max_iv_mon(&dex, 290, 5, vec![assets::MoveId::STRING_SHOT]);
+    let mut player = max_iv_mon(
+        &dex,
+        SpeciesId::WURMPLE,
+        5,
+        vec![assets::MoveId::STRING_SHOT],
+    );
     player.set_status1(Status1::Poisoned);
-    let mut enemy = max_iv_mon(&dex, 286, 5, vec![TACKLE]);
+    let mut enemy = max_iv_mon(&dex, SpeciesId::POOCHYENA, 5, vec![TACKLE]);
     enemy.set_status1(Status1::Poisoned);
 
     let mut rng = SequenceRng::new([

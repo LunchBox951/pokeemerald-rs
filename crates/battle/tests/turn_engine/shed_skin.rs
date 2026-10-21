@@ -19,16 +19,16 @@ const POISON_TAIL: MoveId = MoveId::POISON_TAIL;
 
 /// Shed Skin in its only ability slot; at level 10 faster than [`ZIGZAGOON`]
 /// and [`DRATINI`].
-const SEVIPER: u16 = 379;
+const SEVIPER: SpeciesId = SpeciesId::SEVIPER;
 /// Has no ability the residual pass reads; slower than [`SEVIPER`].
-const ZIGZAGOON: u16 = 288;
+const ZIGZAGOON: SpeciesId = SpeciesId::ZIGZAGOON;
 /// Shed Skin in its only ability slot; slower than [`SEVIPER`].
-const DRATINI: u16 = 147;
+const DRATINI: SpeciesId = SpeciesId::DRATINI;
 /// A level-5 Rattata that a level-50 [`SEVIPER`] knocks out in one Tackle.
-const RATTATA: u16 = 19;
-const TREECKO: u16 = 277;
+const RATTATA: SpeciesId = SpeciesId::RATTATA;
+const TREECKO: SpeciesId = SpeciesId::TREECKO;
 /// Serene Grace in its primary ability slot.
-const DUNSPARCE: u16 = 206;
+const DUNSPARCE: SpeciesId = SpeciesId::DUNSPARCE;
 /// A 30% poison secondary that Serene Grace doubles to 60%. The doubling is
 /// unmodelled, so `secondary::ensure_admissible` refuses the pairing whenever
 /// the poison could newly land.
@@ -229,7 +229,7 @@ fn a_direct_hit_wild_ko_ends_the_battle_before_the_winners_shed_skin_cure_can_dr
 #[test]
 fn resolve_move_learn_threads_rng_into_the_deferred_shed_skin_cure_draw() {
     let dex = Dex::new();
-    let growth_rate = dex.species(SpeciesId(SEVIPER)).unwrap().growth_rate;
+    let growth_rate = dex.species(SEVIPER).unwrap().growth_rate;
     let level_16 = assets::experience_for_level(growth_rate, 16).unwrap();
     let mut player = max_iv_mon(&dex, SEVIPER, 15, vec![SCRATCH, GROWL, TACKLE, LEER]);
     assert!(player
@@ -279,7 +279,7 @@ fn resolve_move_learn_threads_rng_into_the_deferred_shed_skin_cure_draw() {
                 move_id: POISON_TAIL
             },
             BattleEvent::TrainerSentOut {
-                species: SpeciesId(TREECKO),
+                species: TREECKO,
                 bench_remaining: 0,
             },
             BattleEvent::ShedSkinCured {
