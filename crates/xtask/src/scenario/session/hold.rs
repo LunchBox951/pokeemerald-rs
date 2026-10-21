@@ -76,7 +76,8 @@ const APPLE_SEARCH: rustix::fs::OFlags = rustix::fs::OFlags::from_bits_retain(0x
 /// dev/ino must match the `lstat` of the pathname, and only then is the mode
 /// changed, by `fchmod` on that descriptor, so a replacement swapped in after
 /// the `lstat` is refused before any mode of its own changes. Emptiness is read
-/// through the pin (`openat(pin, ".")`); a non-empty entry gets its mode back.
+/// through the pin (`openat(pin, ".")`); a non-empty entry, or one whose
+/// emptiness cannot be read, gets its mode back.
 #[cfg(target_vendor = "apple")]
 pub(super) fn restore_private_mode(path: &Path) -> std::io::Result<()> {
     use std::os::unix::fs::MetadataExt as _;
@@ -114,22 +115,34 @@ pub(super) fn restore_private_mode(path: &Path) -> std::io::Result<()> {
     let same = stat.st_dev as u64 == found.dev() && stat.st_ino as u64 == found.ino();
     if !same
         || rustix::fs::FileType::from_raw_mode(stat.st_mode) != rustix::fs::FileType::Directory
-        || stat.st_mode & 0o7777 != mode
+        || u32::from(stat.st_mode & 0o7777) != mode
     {
         return Err(not_created_here());
     }
+    // Apple's `st_mode` is the `u16` that `Mode` takes, and it equals `mode`.
+    let original = rustix::fs::Mode::from_raw_mode(stat.st_mode & 0o7777);
     rustix::fs::fchmod(&pinned, rustix::fs::Mode::RWXU)?;
-    let readable = rustix::fs::openat(
+    // Until emptiness proves the entry fresh, every way out puts the old mode
+    // back, so a refusal or a failed read never leaves a changed mode behind.
+    let empty = rustix::fs::openat(
         &pinned,
         ".",
         rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::CLOEXEC,
         rustix::fs::Mode::empty(),
-    )?;
-    if !is_empty(&readable)? {
-        rustix::fs::fchmod(&pinned, rustix::fs::Mode::from_raw_mode(mode))?;
-        return Err(not_created_here());
+    )
+    .map_err(std::io::Error::from)
+    .and_then(is_empty);
+    match empty {
+        Ok(true) => Ok(()),
+        Ok(false) => {
+            rustix::fs::fchmod(&pinned, original)?;
+            Err(not_created_here())
+        }
+        Err(error) => {
+            rustix::fs::fchmod(&pinned, original)?;
+            Err(error)
+        }
     }
-    Ok(())
 }
 
 /// Other Unixes have no permission-free directory pin through the approved
