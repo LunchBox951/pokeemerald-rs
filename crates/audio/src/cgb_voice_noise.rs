@@ -220,19 +220,87 @@ fn first_sample_after(predecessor: &CgbVoice, mut replacement: CgbVoice) -> i32 
     acc[0].0
 }
 
+/// The replacement's note-on writes (`m4a.c:1020-1022,1197-1202`) clock the
+/// predecessor at the width-only rate before the trigger
+/// (`mgba/src/gb/audio.c:354-362,371-383,602-644`), so the latch it starts on
+/// is the one that catch-up leaves, not the predecessor's last resolved level.
 #[test]
-fn replacing_a_sounding_noise_voice_keeps_its_output_latch() {
+fn replacing_a_sounding_noise_voice_inherits_the_latch_its_width_only_write_leaves() {
     for width in [WIDE_NOISE, NARROW_NOISE] {
         let predecessor = noise_voice_latched(CgbAdsr::flat(), SLOW_NOISE_KEY, width);
         assert_eq!(predecessor.noise_output_latch(), Some(FULL_VOLUME));
+        let expected = reference_catch_up(&PredecessorRun::latched(width), width);
         let mut mixer = crate::mixer::Mixer::default();
         assert!(mixer.add_cgb_voice(predecessor));
         assert!(mixer.add_cgb_voice(slow_noise_replacement(width)));
         assert_mixed(
             first_mixed_sample(&mut mixer),
-            expected_mixed(FULL_VOLUME, FULL_VOLUME),
-            "a replacement must start on the predecessor's high latch (width {width})",
+            expected_mixed(expected, FULL_VOLUME),
+            "a replacement starts on the latch the fast catch-up leaves (width {width})",
         );
+    }
+}
+
+/// Reference model of a predecessor that has run `samples` from its trigger,
+/// then takes the width-only and pitched `NR43` writes of a replacement.
+struct PredecessorRun {
+    key: u8,
+    width: u8,
+    samples: usize,
+}
+
+impl PredecessorRun {
+    /// The run `noise_voice_latched` stops at: the first sample whose clock raises the latch.
+    fn latched(width: u8) -> Self {
+        Self {
+            key: SLOW_NOISE_KEY,
+            width,
+            samples: usize::try_from(slow_period(SLOW_NOISE_KEY).div_ceil(BASE_TICKS_PER_SAMPLE))
+                .unwrap(),
+        }
+    }
+}
+
+const BASE_TICKS_PER_SAMPLE: u64 = 524_288;
+
+fn slow_period(key: u8) -> u64 {
+    let control = midi_key_to_noise_control(key);
+    let divisor = u64::from(control & 7);
+    let ticks = (if divisor == 0 { 1 } else { 2 * divisor }) << (control >> 4);
+    ticks * u64::from(crate::pitch::MIXER_RATE)
+}
+
+fn lfsr_clock(lfsr: u16, narrow: bool) -> (u16, bool) {
+    let feedback_high = (lfsr ^ (lfsr >> 1)) & 1 == 0;
+    let bits = 0x4000 | if narrow { 0x40 } else { 0 };
+    let next = if feedback_high {
+        (lfsr >> 1) | bits
+    } else {
+        (lfsr >> 1) & !bits
+    };
+    (next, feedback_high)
+}
+
+/// Independent re-derivation of the latch left after the predecessor's own
+/// clocks and the fast catch-up under the replacement's width.
+fn reference_catch_up(run: &PredecessorRun, new_width: u8) -> u8 {
+    let slow_period = slow_period(run.key);
+    let (mut lfsr, mut high, mut elapsed) = (0u16, false, 0u64);
+    for _ in 0..run.samples {
+        elapsed += BASE_TICKS_PER_SAMPLE;
+        while elapsed >= slow_period {
+            elapsed -= slow_period;
+            (lfsr, high) = lfsr_clock(lfsr, run.width == NARROW_NOISE);
+        }
+    }
+    let fast_period = u64::from(crate::pitch::MIXER_RATE);
+    for _ in 0..elapsed / fast_period {
+        (lfsr, high) = lfsr_clock(lfsr, new_width == NARROW_NOISE);
+    }
+    if high {
+        FULL_VOLUME
+    } else {
+        0
     }
 }
 
@@ -366,8 +434,26 @@ fn a_noise_note_after_retirement_keeps_a_slow_latch_until_the_first_clock() {
         assert!(mixer.add_cgb_voice(slow_noise_replacement(width)));
         assert_mixed(
             first_mixed_sample(&mut mixer),
+            expected_mixed(0, 0),
+            "the replacement's width-only write clocks the idle slot's elapsed time at the \
+             off-write's zero volume (width {width})",
+        );
+    }
+}
+
+/// With no time between the off-write and the next note-on, no catch-up clock
+/// is owed, so the latch survives (`gb/audio.c:371-383,602-644`).
+#[test]
+fn a_noise_note_added_at_the_off_write_keeps_the_latch() {
+    for width in [WIDE_NOISE, NARROW_NOISE] {
+        let mut mixer = crate::mixer::Mixer::default();
+        assert!(mixer.add_cgb_voice(noise_voice_latched(CgbAdsr::flat(), SLOW_NOISE_KEY, width)));
+        mixer.stop_track(0);
+        assert!(mixer.add_cgb_voice(slow_noise_replacement(width)));
+        assert_mixed(
+            first_mixed_sample(&mut mixer),
             expected_mixed(FULL_VOLUME, FULL_VOLUME),
-            "the latch survives the off-write until a clock (width {width})",
+            "no elapsed time, no catch-up clock (width {width})",
         );
     }
 }
@@ -412,15 +498,12 @@ fn a_second_off_write_restarts_the_phase_and_keeps_the_latch() {
         WIDE_NOISE
     )));
     mixer.stop_track(0);
-    for _ in 0..10 {
-        first_mixed_sample(&mut mixer);
-    }
     assert!(mixer.add_cgb_voice(slow_noise_replacement(WIDE_NOISE)));
-    first_mixed_sample(&mut mixer);
-    mixer.stop_track(0);
-    for _ in 0..10 {
+    // Stay short of the restarted phase's first clock, then off-write again.
+    for _ in 0..(SLOW_KEY_FIRST_CLOCK_SAMPLE / crate::SAMPLES_PER_FRAME - 1) {
         assert!(first_mixed_sample(&mut mixer) > 0.0);
     }
+    mixer.stop_track(0);
     assert!(mixer.add_cgb_voice(slow_noise_replacement(WIDE_NOISE)));
     assert_mixed(
         first_mixed_sample(&mut mixer),
@@ -439,8 +522,9 @@ fn a_noise_note_after_release_retirement_keeps_a_slow_latch_until_the_first_cloc
         assert!(mixer.add_cgb_voice(slow_noise_replacement(width)));
         assert_mixed(
             first_mixed_sample(&mut mixer),
-            expected_mixed(FULL_VOLUME, FULL_VOLUME),
-            "a released note's off-write leaves its latch for the first clock (width {width})",
+            expected_mixed(0, 0),
+            "the frame after a released note's off-write owes fast catch-up clocks at volume 0 \
+             (width {width})",
         );
     }
 }
@@ -669,4 +753,92 @@ fn retiring_from_a_low_clock_leaves_no_idle_tail() {
         expected_mixed(0, 0),
         "no settling edge after retirement",
     );
+}
+
+fn first_frame_predecessor(width: u8) -> CgbVoice {
+    let mut predecessor = noise_voice(CgbAdsr::flat(), width, TestNote::at_key(SLOW_NOISE_KEY));
+    predecessor.begin_frame(false);
+    let mut frame = [(0i32, 0i32); crate::SAMPLES_PER_FRAME];
+    predecessor.render(&mut frame, &[]);
+    predecessor
+}
+
+fn latch_after_note_on(predecessor: &CgbVoice, mut replacement: CgbVoice) -> Option<u8> {
+    replacement.carry_hardware_state_from(predecessor);
+    replacement.begin_frame(false);
+    replacement.noise_output_latch()
+}
+
+/// After one frame a slow predecessor has made no clock of its own, yet the
+/// width-only `NR43` write (`m4a.c:1020-1022`) makes the pitched write
+/// (`m4a.c:1197-1202`) clock the whole elapsed frame at the fastest rate and
+/// the predecessor's volume (`mgba/src/gb/audio.c:354-362,602-644`).
+#[test]
+fn a_slow_same_key_replacement_inherits_the_latch_the_fast_catch_up_leaves() {
+    let predecessor = first_frame_predecessor(WIDE_NOISE);
+    assert_eq!(
+        predecessor.noise_output_latch(),
+        Some(0),
+        "no own clock yet"
+    );
+    assert_eq!(predecessor.noise_lfsr(), Some(0));
+    let expected = reference_catch_up(
+        &PredecessorRun {
+            key: SLOW_NOISE_KEY,
+            width: WIDE_NOISE,
+            samples: crate::SAMPLES_PER_FRAME,
+        },
+        WIDE_NOISE,
+    );
+    assert_eq!(
+        expected, FULL_VOLUME,
+        "sanity: the catch-up raises the latch"
+    );
+    let replacement = noise_voice_at(CgbAdsr::flat(), SLOW_NOISE_KEY, WIDE_NOISE);
+    assert_eq!(
+        latch_after_note_on(&predecessor, replacement),
+        Some(expected)
+    );
+}
+
+/// The catch-up runs under the replacement's width, which the width-only write
+/// has already installed (`mgba/src/gb/audio.c:359-363,630-644`).
+#[test]
+fn a_changed_width_replacement_catches_up_under_its_own_width() {
+    let mut outcomes = Vec::new();
+    for new_width in [WIDE_NOISE, NARROW_NOISE] {
+        let predecessor = noise_voice_latched(CgbAdsr::flat(), SLOW_NOISE_KEY, WIDE_NOISE);
+        let expected = reference_catch_up(&PredecessorRun::latched(WIDE_NOISE), new_width);
+        let replacement = noise_voice_at(CgbAdsr::flat(), SLOW_NOISE_KEY, new_width);
+        assert_eq!(
+            latch_after_note_on(&predecessor, replacement),
+            Some(expected),
+            "replacement width {new_width}"
+        );
+        outcomes.push(expected);
+    }
+    assert_ne!(
+        outcomes[0], outcomes[1],
+        "sanity: the width decides the latch"
+    );
+}
+
+/// A replacement that stops before its first pass writes nothing
+/// (`m4a.c:1043-1056`), so the predecessor's state is not clocked: the slot
+/// keeps the low latch the predecessor had, not the raised one the catch-up
+/// would leave.
+#[test]
+fn a_cancelled_replacement_leaves_the_predecessors_hardware_unclocked() {
+    for width in [WIDE_NOISE, NARROW_NOISE] {
+        let mut mixer = crate::mixer::Mixer::default();
+        assert!(mixer.add_cgb_voice(first_frame_predecessor(width)));
+        assert!(mixer.add_cgb_voice(slow_noise_replacement(width)));
+        mixer.stop_track(0);
+        assert!(mixer.add_cgb_voice(slow_noise_replacement(width)));
+        assert_mixed(
+            first_mixed_sample(&mut mixer),
+            expected_mixed(0, 0),
+            "cancelled replacement width {width}",
+        );
+    }
 }
