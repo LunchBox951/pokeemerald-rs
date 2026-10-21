@@ -9,8 +9,11 @@
 //! # Deliberately out of scope
 //!
 //! Formatting, audio, and window-buffer controls are consumed without applying
-//! effects. Placeholders, dynamic tokens, and keypad icons are skipped because
-//! this renderer has no expansion context or corresponding glyphs. `CLEAR`,
+//! effects. Placeholders and dynamic tokens are skipped because this renderer
+//! has no expansion context. A keypad icon is not skipped: it advances the
+//! cursor by the icon's width and is reported through
+//! [`Printer::keypad_icon`] for the caller to draw, since this crate owns
+//! no icon bitmaps. `CLEAR`,
 //! `CLEAR_TO`, and `FILL_WINDOW` are the exceptions: they move the cursor, so
 //! `CLEAR`/`CLEAR_TO`'s geometry is reported as a [`ClearedSpan`] and
 //! `FILL_WINDOW`'s whole-window equivalent through
@@ -82,6 +85,40 @@ pub struct ClearedSpan {
     pub width: i32,
     /// Height in pixels: the font's Latin glyph height.
     pub height: i32,
+}
+
+/// Width and height in pixels of keypad icon `id`, or `None` for an id
+/// outside the thirteen icons the source defines.
+///
+/// Mirrors the per-icon size table behind `DrawKeypadIcon`
+/// (`pokeemerald/src/text.c:98-115`, `:1609-1623`).
+#[must_use]
+pub const fn keypad_icon_size(id: u8) -> Option<(u8, u8)> {
+    match id {
+        2 | 3 => Some((16, 12)),
+        4 | 5 => Some((24, 12)),
+        0..=12 => Some((8, 12)),
+        _ => None,
+    }
+}
+
+/// A keypad icon the most recent [`Printer::tick`] placed.
+///
+/// Upstream blits the icon into the window itself; this printer owns no icon
+/// bitmaps, so it reports the placement and the caller draws it. See
+/// [`Printer::keypad_icon`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KeypadIconPlacement {
+    /// Window-local left edge.
+    pub x: i32,
+    /// Window-local top edge.
+    pub y: i32,
+    /// The icon id carried by the token (`CHAR_A_BUTTON` and its siblings).
+    pub id: u8,
+    /// Icon width in pixels; the cursor advanced by this much.
+    pub width: u8,
+    /// Icon height in pixels.
+    pub height: u8,
 }
 
 /// Text reveal cadence.
@@ -212,7 +249,8 @@ enum PrinterState {
 /// The result of one [`Printer::tick`] call.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TickEvent {
-    /// The frame revealed no glyph: either the reveal delay consumed it, or a
+    /// The frame revealed no glyph: either the reveal delay consumed it, a
+    /// keypad icon was placed ([`Printer::keypad_icon`]), or a
     /// `CLEAR`/`CLEAR_TO` control erased a span. Upstream ends the frame for
     /// both (`RENDER_UPDATE` and `RENDER_PRINT`, `pokeemerald/src/text.c`
     /// `:352-360`). [`Printer::cleared_span`] distinguishes them. At Slow/Mid
@@ -302,6 +340,7 @@ pub struct Printer<S> {
     clear_height: i32,
     cleared_span: Option<ClearedSpan>,
     cleared_window: bool,
+    keypad_icon: Option<KeypadIconPlacement>,
     state: PrinterState,
     allows_ab_speed_up: bool,
     ab_speed_up_latched: bool,
@@ -320,6 +359,7 @@ impl<S: GlyphSource> Printer<S> {
             clear_height: clear_span_height(glyphs.font()),
             cleared_span: None,
             cleared_window: false,
+            keypad_icon: None,
             glyphs,
             speed,
             reveal_delay_frames_remaining: 0,
@@ -368,6 +408,19 @@ impl<S: GlyphSource> Printer<S> {
         self.cleared_span
     }
 
+    /// The keypad icon the most recent [`Self::tick`] placed, if any.
+    ///
+    /// Upstream draws the icon, advances the cursor by its width, and returns
+    /// `RENDER_PRINT`, ending the frame (`pokeemerald/src/text.c:1114-1118`);
+    /// that tick returns [`TickEvent::Idle`]. This printer owns no icon
+    /// bitmaps, so a caller draws the icon at the reported position. The
+    /// printer has no template letter spacing, so the advance is the width
+    /// alone.
+    #[must_use]
+    pub const fn keypad_icon(&self) -> Option<KeypadIconPlacement> {
+        self.keypad_icon
+    }
+
     /// Whether the most recent [`Self::tick`] cleared the complete window and
     /// reset the cursor to the origin: set by a forward `FILL_WINDOW`
     /// (`pokeemerald/src/text.c:1052-1056`) or by the page-clear prompt's
@@ -397,6 +450,7 @@ impl<S: GlyphSource> Printer<S> {
         self.cursor = self.origin;
         self.cleared_span = None;
         self.cleared_window = false;
+        self.keypad_icon = None;
         self.state = PrinterState::HandleChar;
         self.ab_speed_up_latched = false;
     }
@@ -409,6 +463,7 @@ impl<S: GlyphSource> Printer<S> {
     pub fn tick(&mut self, input: PrinterInput) -> TickEvent {
         self.cleared_span = None;
         self.cleared_window = false;
+        self.keypad_icon = None;
         match self.state {
             PrinterState::Finished => TickEvent::Finished,
             PrinterState::HandleChar => self.tick_handle_char(input),
@@ -527,6 +582,21 @@ impl<S: GlyphSource> Printer<S> {
                         None
                     }
                 },
+                Token::KeypadIcon(id) => {
+                    let Some((width, height)) = keypad_icon_size(id) else {
+                        continue;
+                    };
+                    self.keypad_icon = Some(KeypadIconPlacement {
+                        x: self.cursor.0,
+                        y: self.cursor.1,
+                        id,
+                        width,
+                        height,
+                    });
+                    self.cursor.0 = self.cursor.0.saturating_add(i32::from(width));
+                    // `RENDER_PRINT` ends the frame (`text.c:1118`).
+                    return TickEvent::Idle;
+                }
                 ref other => glyph_id_for_token(other),
             };
 
@@ -1459,6 +1529,44 @@ mod tests {
             panic!("expected a glyph")
         };
         assert_eq!((g.x, g.y), (0, 1));
+    }
+
+    #[test]
+    fn keypad_icon_reserves_its_width_before_the_next_glyph() {
+        let pixels = blank_sheet_pixels();
+        let sheet = synthetic_sheet(&pixels, FontId::Normal);
+        let tokens = decode_tokens(&[
+            super::super::CHAR_KEYPAD_ICON,
+            0x00,
+            ENCODED_A,
+            super::super::EOS,
+        ]);
+        assert_eq!(tokens[0], Token::KeypadIcon(0));
+        let mut printer = Printer::new(tokens, sheet, TextSpeed::Instant, (0, 1));
+        assert_eq!(printer.tick(PrinterInput::none()), TickEvent::Idle);
+        assert_eq!(
+            printer.keypad_icon(),
+            Some(KeypadIconPlacement {
+                x: 0,
+                y: 1,
+                id: 0,
+                width: 8,
+                height: 12
+            })
+        );
+        assert_eq!(printer.cursor(), (8, 1));
+        let TickEvent::Glyph(a) = printer.tick(PrinterInput::none()) else {
+            panic!("expected glyph");
+        };
+        assert_eq!(a.x, 8);
+        assert_eq!(printer.keypad_icon(), None);
+    }
+
+    #[test]
+    fn keypad_icon_widths_follow_the_source_table() {
+        let widths: Vec<u8> = (0..=12).map(|i| keypad_icon_size(i).unwrap().0).collect();
+        assert_eq!(widths, [8, 8, 16, 16, 24, 24, 8, 8, 8, 8, 8, 8, 8]);
+        assert_eq!(keypad_icon_size(13), None);
     }
 
     #[test]
