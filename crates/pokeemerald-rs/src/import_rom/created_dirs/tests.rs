@@ -2286,3 +2286,90 @@ fn a_level_removed_by_another_writer_after_validation_is_not_reported() {
     });
     assert!(entry_names(&dir.path).is_empty());
 }
+
+#[cfg(unix)]
+#[test]
+fn an_unpinned_level_missing_from_its_path_is_reported() {
+    // A pin budget of one leaves `a` and `a/b` unpinned; `a` is renamed
+    // while the pinned `c` is taken back, so neither recorded path resolves
+    // and `b` stands under the new name. Rollback cannot tell that from a
+    // removal, so it says the level may be left elsewhere rather than
+    // skipping it silently.
+    if !in_rollback_stderr_child() {
+        let stderr = rerun_alone_for_stderr(
+            "import_rom::created_dirs::tests::an_unpinned_level_missing_from_its_path_is_reported",
+        );
+        let warned = warned_path(
+            &stderr,
+            "warning: ",
+            " is no longer at its recorded path, and rollback did not hold it open; if it was moved rather than removed, the directory this import made is left elsewhere",
+        );
+        assert_names_marked_path(&stderr, warned, "level at: ");
+        return;
+    }
+    let dir = TempDir::new("undo-unpinned-moved-reported");
+    let outer = dir.join("a");
+    let target = outer.join("b").join("c");
+    let created =
+        super::create_directories_with_hooks(&target, 1, &mut || {}, &mut || None, &mut || None)
+            .expect("every level is created");
+    assert!(created[0].parent.is_none() && created[1].parent.is_none());
+    let moved = dir.join("moved");
+    super::take_back::undo_created_directories_with_hooks(&created, &mut || {
+        fs::rename(&outer, &moved).unwrap();
+    });
+    assert!(
+        moved.join("b").is_dir(),
+        "the unpinned level stands elsewhere"
+    );
+    assert!(
+        !moved.join("b").join("c").exists(),
+        "the pinned level is taken back"
+    );
+    eprintln!(
+        "level at: {} | {}",
+        outer.join("b").display(),
+        outer.join("b").display()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_level_removed_and_replaced_after_validation_is_not_reported_as_moved() {
+    // The validated level is removed outright and another directory made at
+    // its name: the replacement is restored, nothing of the original is
+    // left, so rollback must not claim it was moved and still stands; it
+    // reports only the replacement that leaves the levels above standing.
+    if !in_rollback_stderr_child() {
+        let stderr = rerun_alone_for_stderr(
+            "import_rom::created_dirs::tests::a_level_removed_and_replaced_after_validation_is_not_reported_as_moved",
+        );
+        assert!(
+            !stderr.contains(" is the directory rollback made for ")
+                && !stderr.contains("moved away")
+                && !stderr.contains("(deleted)"),
+            "a removed original is reported as moved; stderr:\n{stderr}"
+        );
+        let warned = warned_path(
+            &stderr,
+            "warning: ",
+            " is left in place: another entry has taken its name; the levels above it are left too",
+        );
+        assert_names_marked_path(&stderr, warned, "level at: ");
+        return;
+    }
+    let dir = TempDir::new("undo-removed-replaced");
+    let level = dir.join("new");
+    let created = super::create_directories(&level).unwrap();
+    super::take_back::undo_created_directories_with_hooks(&created, &mut || {
+        fs::remove_dir(&level).unwrap();
+        fs::create_dir(&level).unwrap();
+    });
+    assert!(level.is_dir(), "the replacement is kept");
+    assert_eq!(
+        entry_names(&dir.path),
+        ["new"],
+        "no quarantine is left behind"
+    );
+    mark_path("level at: ", &level);
+}

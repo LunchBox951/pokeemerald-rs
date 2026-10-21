@@ -77,9 +77,18 @@ pub(super) fn undo_created_directories_with_hooks(
         let Some(parent) = dir.parent.as_deref() else {
             // Shedding releases pins outermost first, so every level from
             // here out is unpinned too: none can be vouched for, and the
-            // walk stops at the first one still standing, saying so.
+            // walk stops at the first one still standing, saying so. One
+            // missing from its recorded path may have been removed, or moved
+            // with an ancestor renamed; nothing held tells which, so that is
+            // said too.
             match std::fs::symlink_metadata(&dir.path) {
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                    eprintln!(
+                        "warning: {} is no longer at its recorded path, and rollback did not hold it open; if it was moved rather than removed, the directory this import made is left elsewhere",
+                        OneLinePath(&dir.path)
+                    );
+                    continue;
+                }
                 _ => {
                     warn_left_standing(
                         dir,
@@ -526,28 +535,18 @@ fn take_back_into(
             }
         }
     }
+    // Something else took the name after validation: the replacement, put
+    // back above, stops the walk, which leaves the levels above standing.
+    // The original is reported where it went only if it still has a link,
+    // since it may have been removed rather than moved.
     if captured.is_some() && !ours {
-        warn_replaced(dir);
+        warn_left_standing(
+            dir,
+            format_args!("another entry has taken its name; the levels above it are left too"),
+        );
+        warn_if_moved_away(dir);
     }
     Outcome::Stopped
-}
-
-/// Reports that the directory rollback made at `dir` was moved away and
-/// something else took its name before it could be taken back, naming
-/// where the held original is now where `/proc` can say.
-fn warn_replaced(dir: &CreatedDirectory) {
-    let level = level_location(dir);
-    match dir.own.as_deref().and_then(held_location) {
-        Some(now) => eprintln!(
-            "warning: {} is the directory rollback made for {}, moved away and replaced before rollback could take it back",
-            OneLinePath(&now),
-            OneLinePath(&level)
-        ),
-        None => eprintln!(
-            "warning: {} was moved away and replaced before rollback could take it back; the directory rollback made is left elsewhere",
-            OneLinePath(&level)
-        ),
-    }
 }
 
 /// Reports that the directory rollback made for `dir`, no longer under its
