@@ -494,7 +494,7 @@ fn a_hidden_npcs_tile_is_walkable() {
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn overworld_movement_input_turns_the_player() {
-    // `OverworldPhase::load_default` itself (not a hand-built struct
+    // `OverworldPhase::load` itself (not a hand-built struct
     // literal) so this also exercises the save-state wiring (finding
     // 1) the same way production reaches this state.
     let mut phase = OverworldPhase::load(
