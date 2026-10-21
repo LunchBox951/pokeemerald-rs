@@ -225,3 +225,26 @@ fn a_missing_bag_entry_is_refused_before_any_report_line() {
         assert!(report.is_empty());
     });
 }
+
+#[test]
+fn static_bag_roots_survive_a_map_that_omits_locals() {
+    use crate::gen_rom_profile::plan::{ReportLine, SymbolExpectation};
+    use crate::gen_rom_profile::tests::assert_survives_ld_map;
+
+    let mut lines = vec![
+        ReportLine::unique("bag/palette/rotating_ball", 0x0812_0000, 32)
+            .with_symbol(super::palette_symbol("bag/palette/rotating_ball")),
+        ReportLine::unique("bag/image/rotating_ball", 0x0812_0000, 32).with_symbol(
+            crate::gen_rom_profile::images::local_image_symbol("bag/image/rotating_ball")
+                .map_or(SymbolExpectation::Unnamed, SymbolExpectation::Local),
+        ),
+    ];
+    assert!(matches!(lines[0].symbol, SymbolExpectation::Local(_)));
+    assert!(matches!(lines[1].symbol, SymbolExpectation::Local(_)));
+    assert_survives_ld_map("bag-statics", 0x0812_0000, &mut lines);
+    // A global bag palette keeps its map check.
+    assert_eq!(
+        super::palette_symbol("bag/palette/bag"),
+        SymbolExpectation::Unnamed
+    );
+}
