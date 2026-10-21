@@ -592,7 +592,7 @@ fn creation_beside_an_existing_slot_reports_it_and_leaves_it_alone() {
 
 /// A slot that appears while the lock file is staged is reported and left
 /// alone, and the staging leaves nothing behind.
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[test]
 fn a_slot_appearing_during_staging_is_reported_and_left_alone() {
     let dir = TempDir::new("lock-slot-appears");
@@ -614,8 +614,9 @@ fn a_slot_appearing_during_staging_is_reported_and_left_alone() {
 }
 
 /// A creator that dies between creating the lock file and widening it must
-/// not leave a slot narrower than `0666`.
-#[cfg(unix)]
+/// not leave a slot narrower than `0666`; Linux stages through a held
+/// directory, so the slot is absent until the file is widened.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_creator_dying_before_widening_leaves_no_narrow_slot() {
     use std::os::unix::fs::PermissionsExt;
@@ -636,7 +637,7 @@ fn a_creator_dying_before_widening_leaves_no_narrow_slot() {
 
 /// The staged path, private directory and file, is no longer than the slot
 /// path, so staging fits wherever the lock name does.
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[test]
 fn the_lock_staging_path_is_no_longer_than_the_lock_name() {
     let staged = std::path::Path::new(&SaveFile::lock_staging_directory_name())

@@ -345,16 +345,19 @@ impl SaveFile {
 
     /// Creates the lock slot, or returns `None` when it already exists.
     ///
-    /// The file is made in a fresh `0700` directory beside the slot, widened
-    /// to `0666` through its handle, and only then published at the slot by
-    /// `link(2)`, which never replaces or follows an existing entry. So a
-    /// `umask 077` creator never exposes a `0600` lock, even one that dies
-    /// part-way: the slot is either absent or already widened. The staged
-    /// file's name is drawn after the directory exists and no other user can
-    /// list it, so the one unlink by pathname here names an entry nobody else
-    /// can know to replace; the slot itself is never unlinked, and the
-    /// directory is removed only by `rmdir`, which refuses anything non-empty.
-    /// Without hard links the slot is created in place and widened after.
+    /// On Linux the file is made in a fresh `0700` directory beside the slot,
+    /// reached only through a handle on that directory (`/proc/self/fd`), so
+    /// renaming or replacing the directory's name cannot redirect anything
+    /// done inside it. The file is widened to `0666` through its own handle
+    /// and only then published at the slot by `link(2)`, which never replaces
+    /// or follows an existing entry: a `umask 077` creator never exposes a
+    /// `0600` lock, even one that dies part-way. The staged name is removed
+    /// only once the held directory is shown to be this user's and writable
+    /// by nobody else, so no other user can have replaced it; the slot is
+    /// never unlinked, and the directory goes only by `rmdir`, which refuses
+    /// anything non-empty. Where that staging is unavailable, the slot is
+    /// created in place and widened through the handle after, leaving the
+    /// window [`SaveFile::open_existing_lock`] retries over.
     #[cfg(unix)]
     fn create_lock_file(path: &Path) -> std::io::Result<Option<std::fs::File>> {
         Self::create_lock_file_with(path, |_| {})
@@ -372,15 +375,15 @@ impl SaveFile {
     }
 
     /// As [`SaveFile::create_lock_file_with`], also running `after_publish`
-    /// once the slot names the file and before the staged name is removed,
-    /// the window a rival could replace the slot in.
+    /// once the slot names the file and before anything is cleaned up, the
+    /// window a rival could replace the slot in.
     #[cfg(unix)]
     pub(super) fn create_lock_file_observing(
         path: &Path,
         after_create: impl FnOnce(&Path),
         after_publish: impl FnOnce(&Path),
     ) -> std::io::Result<Option<std::fs::File>> {
-        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+        use std::os::unix::fs::PermissionsExt;
         // A slot already present is reported without staging anything; the
         // `link` below stays the authority for one that appears meanwhile.
         match std::fs::symlink_metadata(path) {
@@ -388,75 +391,124 @@ impl SaveFile {
             Err(missing) if missing.kind() == std::io::ErrorKind::NotFound => {}
             Err(other) => return Err(other),
         }
-        let mut private = std::fs::DirBuilder::new();
-        private.mode(0o700);
-        let directory = 'draw: {
-            for _ in 0..=u8::MAX {
-                let candidate = path.with_file_name(Self::lock_staging_directory_name());
-                match private.create(&candidate) {
-                    Ok(()) => break 'draw candidate,
-                    Err(exists) if exists.kind() == std::io::ErrorKind::AlreadyExists => {}
-                    Err(other) => return Err(other),
-                }
-            }
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::AlreadyExists,
-                "every lock staging directory name beside the lock slot is taken",
-            ));
-        };
-        let staged = directory.join(Self::lock_staging_file_name());
-        let mut options = std::fs::OpenOptions::new();
-        options.read(true).write(true).create_new(true);
-        let file = match options.open(&staged) {
-            Ok(file) => file,
-            Err(other) => {
-                let _ = std::fs::remove_dir(&directory);
-                return Err(other);
-            }
-        };
-        after_create(path);
-        let _ = file.set_permissions(std::fs::Permissions::from_mode(0o666));
-        let linked = std::fs::hard_link(&staged, path);
-        if linked.is_ok() {
-            after_publish(path);
+        let mut after_create = Some(after_create);
+        let mut after_publish = Some(after_publish);
+        match Self::publish_staged_lock(path, &mut after_create, &mut after_publish) {
+            Some(Ok(Some(file))) => return Ok(Some(file)),
+            Some(Ok(None)) => return Ok(None),
+            Some(Err(other)) => return Err(other),
+            None => {}
         }
-        let _ = std::fs::remove_file(&staged);
-        let _ = std::fs::remove_dir(&directory);
-        match linked {
-            Ok(()) => Ok(Some(file)),
-            Err(exists) if exists.kind() == std::io::ErrorKind::AlreadyExists => Ok(None),
-            Err(_) => {
-                let mut in_place = std::fs::OpenOptions::new();
-                in_place.read(true).write(true).create_new(true);
-                match in_place.open(path) {
-                    Ok(file) => {
-                        let _ = file.set_permissions(std::fs::Permissions::from_mode(0o666));
-                        Ok(Some(file))
-                    }
-                    Err(exists) if exists.kind() == std::io::ErrorKind::AlreadyExists => Ok(None),
-                    Err(other) => Err(other),
+        let mut in_place = std::fs::OpenOptions::new();
+        in_place.read(true).write(true).create_new(true);
+        match in_place.open(path) {
+            Ok(file) => {
+                if let Some(after_create) = after_create.take() {
+                    after_create(path);
                 }
+                if let Some(after_publish) = after_publish.take() {
+                    after_publish(path);
+                }
+                let _ = file.set_permissions(std::fs::Permissions::from_mode(0o666));
+                Ok(Some(file))
             }
+            Err(exists) if exists.kind() == std::io::ErrorKind::AlreadyExists => Ok(None),
+            Err(other) => Err(other),
         }
     }
 
+    /// Stages, widens, and publishes the lock file through a held private
+    /// directory, as [`SaveFile::create_lock_file`] describes. `None` means
+    /// the staging was unavailable and nothing was published, so the caller
+    /// creates the slot in place; each hook is taken only once it has run.
+    #[cfg(target_os = "linux")]
+    fn publish_staged_lock(
+        path: &Path,
+        after_create: &mut Option<impl FnOnce(&Path)>,
+        after_publish: &mut Option<impl FnOnce(&Path)>,
+    ) -> Option<std::io::Result<Option<std::fs::File>>> {
+        use std::os::fd::AsRawFd;
+        use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+
+        let mut private = std::fs::DirBuilder::new();
+        private.mode(0o700);
+        let named = (0..=u8::MAX)
+            .map(|_| path.with_file_name(Self::lock_staging_directory_name()))
+            .find(|candidate| private.create(candidate).is_ok())?;
+        // Whatever now sits at the directory's name, only a directory nobody
+        // but its owner can write is staged in, and the staged name is removed
+        // only once the file created there shows that owner is this user.
+        let held = std::fs::File::open(&named).ok().filter(|held| {
+            held.metadata()
+                .is_ok_and(|directory| directory.is_dir() && directory.mode() & 0o022 == 0)
+        });
+        let staged = held.as_ref().map(|held| {
+            Path::new("/proc/self/fd")
+                .join(held.as_raw_fd().to_string())
+                .join(Self::lock_staging_file_name())
+        });
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true).write(true).create_new(true);
+        let file = staged.as_ref().and_then(|staged| options.open(staged).ok());
+        let private_to_us = match (&held, &file) {
+            (Some(held), Some(file)) => match (held.metadata(), file.metadata()) {
+                (Ok(directory), Ok(created)) => directory.uid() == created.uid(),
+                _ => false,
+            },
+            _ => false,
+        };
+        let published = match (&file, &staged) {
+            (Some(file), Some(staged)) if private_to_us => {
+                if let Some(after_create) = after_create.take() {
+                    after_create(path);
+                }
+                let _ = file.set_permissions(std::fs::Permissions::from_mode(0o666));
+                let linked = std::fs::hard_link(staged, path);
+                if linked.is_ok() {
+                    if let Some(after_publish) = after_publish.take() {
+                        after_publish(path);
+                    }
+                }
+                let _ = std::fs::remove_file(staged);
+                Some(linked)
+            }
+            _ => None,
+        };
+        drop(held);
+        let _ = std::fs::remove_dir(&named);
+        match published? {
+            Ok(()) => Some(Ok(file)),
+            Err(exists) if exists.kind() == std::io::ErrorKind::AlreadyExists => Some(Ok(None)),
+            Err(_) => None,
+        }
+    }
+
+    /// Without a descriptor-relative path to a held directory, staging could
+    /// be redirected by renaming its directory, so it is never attempted.
+    #[cfg(all(unix, not(target_os = "linux")))]
+    fn publish_staged_lock(
+        _path: &Path,
+        _after_create: &mut Option<impl FnOnce(&Path)>,
+        _after_publish: &mut Option<impl FnOnce(&Path)>,
+    ) -> Option<std::io::Result<Option<std::fs::File>>> {
+        None
+    }
+
     /// `.lk` and 3 hex digits: with [`SaveFile::lock_staging_file_name`] and
-    /// the separator, no longer than the lock name, so staging fits wherever
-    /// the slot does.
-    #[cfg(unix)]
+    /// the separator, no longer than the lock name.
+    #[cfg(target_os = "linux")]
     pub(super) fn lock_staging_directory_name() -> String {
         format!(".lk{:03x}", Self::lock_staging_draw() & 0xFFF)
     }
 
-    /// 6 hex digits, drawn only once the private directory exists, so no
-    /// other user can learn it by listing.
-    #[cfg(unix)]
+    /// 6 hex digits, drawn only once the private directory exists.
+    #[cfg(target_os = "linux")]
     pub(super) fn lock_staging_file_name() -> String {
         format!("{:06x}", Self::lock_staging_draw() & 0xFF_FFFF)
     }
 
     /// A draw from this process's random hasher keys.
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     fn lock_staging_draw() -> u64 {
         use std::hash::{BuildHasher, Hasher};
         std::collections::hash_map::RandomState::new()
