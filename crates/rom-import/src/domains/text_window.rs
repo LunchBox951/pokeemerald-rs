@@ -11,7 +11,8 @@
 //! is not read as an entry; it is read to check that the profile's message
 //! box palette agrees with it, and the four banks after it are checked to
 //! be where the profile says the `text_pal*` entries are. Either
-//! disagreement is [`ImportError::StructMismatch`].
+//! disagreement is [`ImportError::StructMismatch`], as is a palette root whose
+//! colour count is not the table's sixteen.
 
 use pack_format::PackWriter;
 
@@ -66,6 +67,17 @@ fn corroborate(reader: &RomReader<'_>, text_window: &TextWindowRoots) -> Result<
         return Ok(());
     }
     let table = text_window.window_palettes;
+
+    // Every bank is `u16[16]` (`text_window.c:51-58`), so a root of any
+    // other shape cannot be one of the five banks.
+    for id in std::iter::once(&MESSAGE_BOX).chain(WINDOW_BANKS.iter()) {
+        if usize::from(find(text_window, id)?.color_count) * 2 != BANK_BYTES {
+            return Err(ImportError::StructMismatch {
+                root: TABLE,
+                field: id,
+            });
+        }
+    }
 
     // Bank 0 duplicates the message box's palette; the bytes have to agree.
     let message_box = find(text_window, MESSAGE_BOX)?;

@@ -28,6 +28,8 @@ const POISON_TAIL: MoveId = MoveId::POISON_TAIL;
 const THUNDER_SHOCK: MoveId = MoveId::THUNDER_SHOCK;
 /// `MOVE_PSYBEAM` (`EFFECT_CONFUSE_HIT`), 100 accuracy, 10% chance, Psychic type.
 const PSYBEAM: MoveId = MoveId::PSYBEAM;
+/// `MOVE_DYNAMIC_PUNCH` (`EFFECT_CONFUSE_HIT`), 100% `secondaryEffectChance`.
+const DYNAMIC_PUNCH: MoveId = MoveId::DYNAMIC_PUNCH;
 const DRAW_WRAPPING_BELOW_THUNDER_SHOCK_CHANCE: u16 = 109;
 const DRAW_WRAPPING_ONTO_THUNDER_SHOCK_CHANCE: u16 = 110;
 const FAKE_OUT: MoveId = MoveId::FAKE_OUT;
@@ -849,5 +851,25 @@ fn a_serene_grace_attacker_is_still_refused_against_a_currently_confused_defende
         Err(BattleError::UnportedAbilityInteraction(
             AbilityId::SERENE_GRACE
         ))
+    );
+}
+
+/// `MOVE_DYNAMIC_PUNCH`'s 100% chance is unchanged by Serene Grace's doubling
+/// (`battle_script_commands.c:2912-2930`), so the screen admits it.
+#[test]
+fn a_serene_grace_attacker_is_admitted_for_a_guaranteed_confusion_move() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, DUNSPARCE);
+    assert_eq!(attacker.ability(), AbilityId::SERENE_GRACE);
+    let defender = mon(&dex, ZIGZAGOON);
+    assert_eq!(
+        dex.move_data(DYNAMIC_PUNCH)
+            .unwrap()
+            .secondary_effect_chance,
+        100
+    );
+    assert_eq!(
+        ensure_admissible(&dex, DYNAMIC_PUNCH, &attacker, &defender),
+        Ok(())
     );
 }

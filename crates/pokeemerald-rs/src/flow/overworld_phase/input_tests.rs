@@ -1,5 +1,5 @@
-//! Tests for [`super::input::advance_player_one_frame`] and
-//! [`super::input::held_direction`].
+//! Tests for [`super::input::advance_player_one_frame`],
+//! [`super::input::held_direction`], and [`super::input::run_held`].
 
 use super::input::run_held;
 use super::test_support::*;
@@ -7,24 +7,31 @@ use super::OverworldPhase;
 use engine::overworld::{Direction, PlayerState, StepOutcome};
 use platform::{ButtonState, Buttons};
 
-/// Senior review round 3 regression, correcting the prior (empirically
-/// wrong -- see [`advance_player_one_frame`]'s own doc comment) "skip
-/// the first tick" change: the first frame composed after a step begins
-/// must see `step_progress() == 1`, not `0` -- upstream applies the
-/// first walk-animation frame in the very call that starts the step
-/// (`MovementAction_WalkNormalDown_Step0`'s `InitMovementNormal`
-/// immediately followed by `Step1` -> `UpdateMovementNormal` ->
-/// `NpcTakeStep`, `pokeemerald/src/event_object_movement.c:5354-5358`)
-/// -- and a full tile crossing takes exactly
-/// [`engine::overworld::WALK_FRAMES_PER_TILE`] (16) rendered frames.
+const FLAG_SYS_B_DASH: u16 = 0x8C0;
+
+// Expected cadences, fixed here rather than imported so that a change to the
+// engine's constants fails these tests instead of moving the oracle with them.
+// Walking is 16 frames per tile (`sStepTimes[MOVE_SPEED_NORMAL]`, and the
+// 16-entry `sStep1Funcs`, `event_object_movement.c`); sliding and running are
+// 8, and current movers 6 (`field_player_avatar.c:473-552`,
+// `event_object_movement.c:8233-8298`). A turn in place holds input for 8
+// frames.
+const WALK_FRAMES: u8 = 16;
+const SLIDE_FRAMES: u8 = 8;
+const RUN_FRAMES: u8 = 8;
+const CURRENT_FRAMES: u8 = 6;
+const TURN_BUSY_FRAMES: u8 = 8;
+
+/// The frame that begins a step already shows `step_progress() == 1`, and a
+/// tile crossing takes exactly `WALK_FRAMES` frames, because upstream
+/// applies the first animation frame in the call that starts the step.
 #[test]
-fn advance_player_one_frame_shows_progress_1_on_the_frame_a_step_begins_and_takes_16_frames_per_tile(
+fn advance_player_one_frame_shows_progress_1_on_the_frame_a_step_begins_and_takes_walk_frames_per_tile(
 ) {
     let runtime = flat_runtime(5, 5);
     let mut player = PlayerState::new((2, 2), 3, Direction::South);
 
-    // Facing South already; a held South poll steps immediately (no
-    // turn-in-place first, since the direction already matches facing).
+    // Already facing South, so a held South poll steps without turning first.
     advance_player_one_frame(
         &mut player,
         Some(Direction::South),
@@ -39,13 +46,11 @@ fn advance_player_one_frame_shows_progress_1_on_the_frame_a_step_begins_and_take
         player.step_progress(),
         1,
         "the frame that just started a step is already 1px into the \
-         walk animation, matching upstream's InitMovementNormal-then- \
-         immediately-Step1 shape"
+         walk animation"
     );
 
-    // Every following frame advances the timer by exactly 1 while the
-    // input stays held.
-    for expected in 2..engine::overworld::WALK_FRAMES_PER_TILE {
+    // Each following frame advances the timer by 1 while the input stays held.
+    for expected in 2..WALK_FRAMES {
         advance_player_one_frame(
             &mut player,
             Some(Direction::South),
@@ -61,9 +66,7 @@ fn advance_player_one_frame_shows_progress_1_on_the_frame_a_step_begins_and_take
         "still mid-transit one frame before settling"
     );
 
-    // The 16th frame (this crossing's `WALK_FRAMES_PER_TILE`th) is the
-    // one where the transit settles -- 16 rendered frames total to
-    // cross one tile, not 17.
+    // The transit settles on the `WALK_FRAMES`th frame, not one later.
     advance_player_one_frame(
         &mut player,
         Some(Direction::South),
@@ -74,7 +77,7 @@ fn advance_player_one_frame_shows_progress_1_on_the_frame_a_step_begins_and_take
     );
     assert!(
         !player.in_transit(),
-        "the transit must settle on exactly the 16th frame"
+        "the transit must settle on exactly the last frame of the crossing"
     );
 }
 
@@ -97,8 +100,8 @@ fn advance_player_one_frame_turning_in_place_never_enters_transit() {
     assert_eq!(player.step_progress(), 0);
 }
 
-/// A held direction stays swallowed through the turn's busy window and
-/// lands its first step on the 9th frame, not the 2nd.
+/// A held direction is swallowed through the turn's busy window; the first
+/// step begins on the frame after `TURN_BUSY_FRAMES` have drained.
 #[test]
 fn advance_player_one_frame_swallows_input_through_the_turns_busy_window_before_stepping() {
     let runtime = flat_runtime(5, 5);
@@ -114,7 +117,7 @@ fn advance_player_one_frame_swallows_input_through_the_turns_busy_window_before_
     );
     assert_eq!(outcome, StepOutcome::Turned(Direction::East));
 
-    for frame in 2..=8 {
+    for frame in 2..=TURN_BUSY_FRAMES {
         let outcome = advance_player_one_frame(
             &mut player,
             Some(Direction::East),
@@ -126,7 +129,7 @@ fn advance_player_one_frame_swallows_input_through_the_turns_busy_window_before_
         assert_eq!(
             outcome,
             StepOutcome::Idle,
-            "frame {frame} is still inside the turn's 8-frame busy window"
+            "frame {frame} is still inside the turn's busy window"
         );
         assert_eq!(player.position(), (2, 2), "frame {frame} must not move");
     }
@@ -151,9 +154,6 @@ fn advance_player_one_frame_swallows_input_through_the_turns_busy_window_before_
 
 #[test]
 fn held_direction_prioritizes_up_over_every_other_direction() {
-    // field_control_avatar.c's own if/else-if chain order (see
-    // `held_direction`'s doc comment): up beats every simultaneous
-    // combination.
     assert_eq!(
         held_direction(held(
             Buttons::UP | Buttons::DOWN | Buttons::LEFT | Buttons::RIGHT
@@ -180,11 +180,11 @@ fn run_held_follows_the_held_b_bit_not_the_press_edge() {
 }
 
 #[test]
-fn held_b_with_the_shoes_flag_crosses_a_tile_in_eight_rendered_frames() {
+fn held_b_with_the_shoes_flag_crosses_a_tile_in_run_frames_per_tile() {
     let runtime = flat_runtime(5, 5);
     let mut player = PlayerState::new((2, 2), 3, Direction::South);
     let mut shoes = engine::event_data::EventData::new();
-    shoes.flag_set(0x8C0).unwrap();
+    shoes.flag_set(FLAG_SYS_B_DASH).unwrap();
     advance_player_one_frame(
         &mut player,
         Some(Direction::South),
@@ -194,7 +194,7 @@ fn held_b_with_the_shoes_flag_crosses_a_tile_in_eight_rendered_frames() {
         &shoes,
     );
     assert_eq!(player.step_progress(), 1);
-    for expected in 2..engine::overworld::RUN_FRAMES_PER_TILE {
+    for expected in 2..RUN_FRAMES {
         advance_player_one_frame(
             &mut player,
             Some(Direction::South),
@@ -206,31 +206,42 @@ fn held_b_with_the_shoes_flag_crosses_a_tile_in_eight_rendered_frames() {
         assert_eq!(player.step_progress(), expected);
     }
     advance_player_one_frame(&mut player, None, true, &runtime, &no_connections, &shoes);
-    assert!(!player.in_transit(), "the eighth frame drains the run");
+    assert!(
+        !player.in_transit(),
+        "the last frame of the crossing drains the run"
+    );
 }
 
-/// Every forced mover reaches the player through the production driver on a
-/// `None` poll and on a held-opposite poll, with the cadence its own upstream
-/// mover uses: walk 16, slide and slip 8, current 6 frames
-/// (`field_player_avatar.c:473-552`, `event_object_movement.c:8233-8298`).
-/// The triggering call shows progress 1 and the crossing settles on call N.
+/// Each forced-movement behavior with the direction it moves the player and
+/// the frames its crossing takes.
+fn forced_movers() -> [(u8, Direction, u8); 11] {
+    use engine::overworld::metatile_behavior::*;
+    [
+        (MB_WALK_EAST, Direction::East, WALK_FRAMES),
+        (MB_SLIDE_SOUTH, Direction::South, SLIDE_FRAMES),
+        (MB_ICE, Direction::East, SLIDE_FRAMES),
+        (MB_ICE, Direction::North, SLIDE_FRAMES),
+        (MB_TRICK_HOUSE_PUZZLE_8_FLOOR, Direction::West, SLIDE_FRAMES),
+        (
+            MB_TRICK_HOUSE_PUZZLE_8_FLOOR,
+            Direction::South,
+            SLIDE_FRAMES,
+        ),
+        (MB_SOUTHWARD_CURRENT, Direction::South, CURRENT_FRAMES),
+        (MB_NORTHWARD_CURRENT, Direction::North, CURRENT_FRAMES),
+        (MB_WESTWARD_CURRENT, Direction::West, CURRENT_FRAMES),
+        (MB_EASTWARD_CURRENT, Direction::East, CURRENT_FRAMES),
+        (MB_SLIDE_WEST, Direction::West, SLIDE_FRAMES),
+    ]
+}
+
+/// Every forced mover reaches the player through `advance_player_one_frame`
+/// on a `None` poll and on a held-opposite poll, at its own cadence
+/// (`field_player_avatar.c:473-552`, `event_object_movement.c:8233-8298`). The
+/// triggering call shows progress 1 and the crossing settles on call `frames`.
 #[test]
 fn advance_player_one_frame_drives_every_forced_mover_at_its_own_cadence() {
-    use engine::overworld::metatile_behavior::*;
-    let movers: [(u8, Direction, u8); 11] = [
-        (MB_WALK_EAST, Direction::East, 16),
-        (MB_SLIDE_SOUTH, Direction::South, 8),
-        (MB_ICE, Direction::East, 8),
-        (MB_ICE, Direction::North, 8),
-        (MB_TRICK_HOUSE_PUZZLE_8_FLOOR, Direction::West, 8),
-        (MB_TRICK_HOUSE_PUZZLE_8_FLOOR, Direction::South, 8),
-        (MB_SOUTHWARD_CURRENT, Direction::South, 6),
-        (MB_NORTHWARD_CURRENT, Direction::North, 6),
-        (MB_WESTWARD_CURRENT, Direction::West, 6),
-        (MB_EASTWARD_CURRENT, Direction::East, 6),
-        (MB_SLIDE_WEST, Direction::West, 8),
-    ];
-    for (behavior, direction, frames) in movers {
+    for (behavior, direction, frames) in forced_movers() {
         for held_opposite in [false, true] {
             let scene = crate::overworld::test_support::synthetic_scene_with_special_tile(
                 10,
@@ -255,7 +266,7 @@ fn advance_player_one_frame_drives_every_forced_mover_at_its_own_cadence() {
                 &no_connections,
                 &NO_FLAGS,
             );
-            for _ in 1..engine::overworld::WALK_FRAMES_PER_TILE {
+            for _ in 1..WALK_FRAMES {
                 advance_player_one_frame(
                     &mut player,
                     None,

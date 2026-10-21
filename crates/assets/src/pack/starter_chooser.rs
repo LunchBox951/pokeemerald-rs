@@ -22,7 +22,6 @@ const POKEBALL_WIDTH: u32 = 32;
 const POKEBALL_HEIGHT: u32 = 128;
 const CIRCLE_SIDE: u32 = 64;
 const BANK_PALETTE_COLORS: u16 = 16;
-const TILES_BIT_DEPTH: u8 = 8;
 const BANK_BIT_DEPTH: u8 = 4;
 const TILEMAP_ENTRY_BYTES: usize = 2;
 const PALETTE_ENTRY_BYTES: usize = 2;
@@ -68,6 +67,11 @@ pub struct PalettedImage<'a> {
 #[derive(Debug, Clone, Copy)]
 pub struct StarterChooserHandle<'a> {
     /// Bag and grass background tile sheet with its 32-colour palette.
+    ///
+    /// Pixels are 4-bit (0-15), one per byte: upstream's build keeps the low
+    /// nibble of the 8-bit PNG. The palette holds two 16-colour banks; a
+    /// tilemap entry's palette-bank bits (12-15) pick the bank, a pixel
+    /// indexes within it (`bank * 16 + pixel`), and pixel 0 is transparent.
     pub tiles: PalettedImage<'a>,
     /// Poké Ball and hand sheet with its 16-colour palette.
     pub pokeball_selection: PalettedImage<'a>,
@@ -95,14 +99,14 @@ impl AssetPack {
     ///
     /// [`PackError::UnknownAsset`] or [`PackError::WrongKind`] for a missing or
     /// wrong-kind entry; [`PackError::MalformedStarterAsset`] when dimensions,
-    /// source bit depth, palette size, pixel indices, or tilemap length differ from upstream.
+    /// bit depth (4 for every chooser sheet), palette size, pixel indices, or tilemap length differ from upstream.
     pub fn starter_chooser(&self) -> Result<StarterChooserHandle<'_>, PackError> {
         Ok(StarterChooserHandle {
             tiles: self.starter_image(
                 TILES_IMAGE_ID,
                 TILES_PALETTE_ID,
                 (TILES_SIDE, TILES_SIDE),
-                TILES_BIT_DEPTH,
+                BANK_BIT_DEPTH,
                 TILES_PALETTE_COLORS,
             )?,
             pokeball_selection: self.starter_image(
@@ -210,13 +214,12 @@ impl AssetPack {
                 ),
             ));
         }
-        if let Some(&pixel) = image
-            .pixels
-            .iter()
-            .find(|&&pixel| u16::from(pixel) >= palette.color_count)
-        {
+        if let Some(&pixel) = image.pixels.iter().find(|&&pixel| {
+            u16::from(pixel) >= palette.color_count
+                || (bit_depth < 8 && u16::from(pixel) >> bit_depth != 0)
+        }) {
             return Err(fault(format!(
-                "has pixel index {pixel}: its palette only has {} colours",
+                "has pixel index {pixel}: outside its palette's {} colours or {bit_depth}-bit range",
                 palette.color_count
             )));
         }

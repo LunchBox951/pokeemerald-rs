@@ -205,17 +205,17 @@ fn cgb_note_resets_modulation_only_after_allocation() {
     let song = Song::new(instruments, vec![vec![], vec![]], 150);
     let mut seq = Sequencer::with_config(song, DEFAULT_MASTER_VOLUME, 2);
 
-    seq.tracks[0].voice = 1;
+    seq.tracks[0].voice = Some(1);
     seq.tracks[0].priority = 10;
     apply_test_event(&mut seq, 0, &tied_note(50));
 
-    seq.tracks[1].voice = 0;
+    seq.tracks[1].voice = Some(0);
     seq.tracks[1].modulation_target = ModulationTarget::AMPLITUDE;
     seq.tracks[1].modulation = 64;
     apply_test_event(&mut seq, 1, &tied_note(60));
     let modulated_volume = seq.mixer.voices()[0].base_volume();
 
-    seq.tracks[1].voice = 1;
+    seq.tracks[1].voice = Some(1);
     seq.tracks[1].lfo_delay = 7;
     seq.tracks[1].lfo_delay_remaining = 3;
     seq.tracks[1].lfo_phase = 91;
@@ -257,6 +257,7 @@ fn accepted_cgb_sweep_note_uses_reset_pitch_modulation() {
     let song = Song::new(instruments, vec![vec![]], 150);
     let mut seq = Sequencer::new(song);
 
+    seq.tracks[0].voice = Some(0);
     seq.tracks[0].modulation_target = ModulationTarget::PITCH;
     seq.tracks[0].modulation = 127;
     seq.tracks[0].lfo_delay = 7;
@@ -280,6 +281,8 @@ fn direct_sound_note_resets_modulation_only_after_allocation() {
     let song = Song::new(vec![direct_sound(100)], vec![vec![], vec![]], 150);
     let mut seq = Sequencer::with_config(song, DEFAULT_MASTER_VOLUME, 2);
 
+    seq.tracks[0].voice = Some(0);
+    seq.tracks[1].voice = Some(0);
     seq.tracks[1].priority = 10;
     seq.tracks[1].modulation = 32;
     apply_test_event(&mut seq, 1, &tied_note(60));
