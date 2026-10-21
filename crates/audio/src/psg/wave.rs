@@ -10,18 +10,16 @@ const GAIN_BITS: u32 = 8;
 /// CGB channel 3 generator over 32 decoded wave-RAM samples.
 ///
 /// M4A applies `gCgb3Vol` through `NR32` (`pokeemerald/src/m4a.c:1205-1212`).
-/// The volume shift happens when a sample is latched, so the held output
-/// stays at the volume it was latched with until the next wave clock
+/// The volume shift applies when a sample is latched, not while it is held
 /// (`mgba/src/gb/audio.c:549-575,768-774`).
 #[derive(Clone, Debug)]
 pub struct WaveChannel {
     samples: [i8; WAVE_SAMPLES],
     phase: u32,
     step_delta: u32,
-    /// The held output, already shifted by the NR32 gain it was latched
-    /// under and centered on zero; distinct from the RAM head `phase`
-    /// indexes. `None` until the first `sample` resolves a cold zero nibble,
-    /// since creation does not know the volume.
+    /// The held output, shifted by the NR32 gain it was latched under and
+    /// centered on zero. `None` until the first `sample`, since creation does
+    /// not know the volume.
     latch: Option<i32>,
 }
 
@@ -54,27 +52,24 @@ impl WaveChannel {
         chan
     }
 
-    /// Retunes the channel from an 11-bit frequency register value, keeping
-    /// the sample index but starting a fresh period at the new rate
-    /// (`mgba/src/gb/audio.c:331-335`).
+    /// Retunes from an 11-bit frequency register value, keeping the sample
+    /// index and starting a fresh period (`mgba/src/gb/audio.c:331-335`).
     pub fn set_frequency(&mut self, freq_reg: u16) {
         let hz = register_frequency_hz(freq_reg, WAVE_CLOCK_HZ);
         self.step_delta = phase_delta(hz, WAVE_STEPS_PER_CYCLE);
         self.phase &= !(PHASE_ONE - 1);
     }
 
-    /// Carries the retained wave-RAM rotation of `previous` onto this freshly
-    /// triggered channel: the whole-step phase is the RAM head, while the
-    /// fraction is trigger timing and restarts (`mgba/src/gb/audio.c:549-568`).
+    /// Carries `previous`'s wave-RAM head and latch onto a freshly triggered
+    /// channel; the step fraction restarts (`mgba/src/gb/audio.c:549-568`).
     pub(crate) fn continue_rotation_from(&mut self, previous: &Self) {
         self.samples = previous.samples;
         self.phase = previous.phase & !(PHASE_ONE - 1);
         self.latch = previous.latch;
     }
 
-    /// Carries only the held output nibble of `previous` onto this freshly
-    /// uploaded channel: a new wave asset replaces the RAM, and the next
-    /// wave clock is the first to latch from it (`mgba/src/gb/audio.c:300-337`).
+    /// Carries only `previous`'s held output onto a freshly uploaded channel
+    /// (`mgba/src/gb/audio.c:300-337`).
     pub(crate) fn continue_latch_from(&mut self, previous: &Self) {
         self.latch = previous.latch;
     }
@@ -83,9 +78,8 @@ impl WaveChannel {
         (self.phase / PHASE_ONE) as usize % self.samples.len()
     }
 
-    /// Shifts the unsigned nibble by `gain_256` (an NR32 gain out of 256),
-    /// so neighbouring nibbles can collapse, and re-centers the shifted DC
-    /// offset (`mgba/src/gb/audio.c:519-533,567-574`).
+    /// Shifts the unsigned nibble by `gain_256` (an NR32 gain out of 256) and
+    /// re-centers it (`mgba/src/gb/audio.c:519-533,567-574`).
     fn resolve(sample: i8, gain_256: u32) -> i32 {
         let gain = i32::try_from(gain_256).unwrap_or(0);
         let shift = |nibble: i32| (nibble * gain) >> GAIN_BITS;
@@ -93,15 +87,12 @@ impl WaveChannel {
         shift(i32::from(sample) + zero) - shift(zero)
     }
 
-    /// Produces the held output in centered, NR32-shifted units, then
-    /// advances time. Each wave clock latches the nibble it removes from the
-    /// head at `gain_256`, so the latch trails the head
-    /// (`mgba/src/gb/audio.c:557-568,768-774`); a volume change alone never
-    /// moves the held output, matching the GBA volume-write path, which
-    /// leaves the sample alone (`mgba/src/gba/io.c:633-637`,
-    /// `mgba/src/gba/audio.c:158-162`). A cold channel with no latch holds a
-    /// zero nibble, independent of the uploaded RAM, until its first wave
-    /// clock (`mgba/src/gb/audio.c:92-95,326-335,513-517`).
+    /// Returns the held output, then advances time, so a call on a phase
+    /// crossing yields the pre-clock value and stores the crossed nibble for
+    /// the next call. Each wave clock latches the nibble it removes from the head at
+    /// `gain_256` (`mgba/src/gb/audio.c:557-568,768-774`); a volume change
+    /// alone leaves the held output (`mgba/src/gba/io.c:633-637`). A cold
+    /// channel holds a zero nibble until its first clock (`audio.c:92-95,513-517`).
     pub fn sample(&mut self, gain_256: u32) -> i32 {
         let output = match self.latch {
             Some(held) => held,
@@ -163,10 +154,7 @@ mod tests {
             .expect("a wave channel always reaches its next step")
     }
 
-    /// A retune mid-step keeps the sample index but discards the fraction
-    /// of the old step already elapsed, so the new rate's first step lands
-    /// one new period after the retune itself, not after the step it
-    /// interrupted (`WaveChannel::set_frequency`'s doc).
+    /// A mid-step retune discards the elapsed step fraction.
     #[test]
     fn a_wave_retune_mid_step_lands_the_next_step_one_new_period_after_the_retune() {
         const FIRST_FREQUENCY: u16 = 0x400;
@@ -175,7 +163,6 @@ mod tests {
 
         let wave_ram = WaveChannel::decode_wave_ram(&[0xF0; WAVE_RAM_BYTES]);
         let mut wave = WaveChannel::new(wave_ram, FIRST_FREQUENCY);
-        // Walk into the middle of a step so a remainder is actually carried.
         while wave.phase / PHASE_ONE == 0 {
             wave.sample(FULL);
         }
@@ -273,8 +260,7 @@ mod tests {
         assert_eq!(next.phase % PHASE_ONE, 0);
     }
 
-    /// A volume change mid-hold leaves the held output alone; only the next
-    /// wave clock latches under the new volume (`mgba/src/gba/io.c:633-637`).
+    /// Only the next wave clock latches under a new volume (`mgba/src/gba/io.c:633-637`).
     #[test]
     fn a_volume_change_mid_hold_waits_for_the_next_wave_clock() {
         const QUARTER: u32 = 64;
