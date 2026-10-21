@@ -81,7 +81,7 @@ fn spawn_failure(err: &std::io::Error) -> RomBuildError {
 
 /// Consume input through the next newline (or EOF) without retaining it:
 /// memory stays bounded by the reader's fixed buffer, however long the line.
-pub(super) fn discard_line<R: BufRead>(reader: &mut R) -> std::io::Result<()> {
+fn discard_line<R: BufRead>(reader: &mut R) -> std::io::Result<()> {
     loop {
         let (used, done) = {
             let buf = match reader.fill_buf() {
@@ -101,6 +101,35 @@ pub(super) fn discard_line<R: BufRead>(reader: &mut R) -> std::io::Result<()> {
         if done {
             return Ok(());
         }
+    }
+}
+
+/// Reads at most `limit` lines from `reader`, each cut to `MAX_STATUS_LINE`
+/// bytes, and reports whether more followed and any read error. An
+/// over-long line's remainder is discarded without being retained.
+pub(super) fn read_head<R: BufRead>(
+    reader: &mut R,
+    limit: usize,
+) -> (Vec<String>, bool, Option<std::io::Error>) {
+    let mut lines = Vec::new();
+    loop {
+        let mut line = Vec::new();
+        match (&mut *reader)
+            .take(MAX_STATUS_LINE)
+            .read_until(b'\n', &mut line)
+        {
+            Ok(0) => return (lines, false, None),
+            Ok(_) => {}
+            Err(err) => return (lines, false, Some(err)),
+        }
+        if !line.ends_with(b"\n") && line.len() as u64 == MAX_STATUS_LINE {
+            // Skip the rest of an over-long line.
+            let _ = discard_line(reader);
+        }
+        if lines.len() == limit {
+            return (lines, true, None);
+        }
+        lines.push(String::from_utf8_lossy(&line).trim_end().to_owned());
     }
 }
 
@@ -125,35 +154,10 @@ fn git_head(cwd: &Path, args: &[&str], limit: usize) -> Result<(Vec<String>, boo
             kept
         })
     });
-    let mut lines = Vec::new();
-    let mut more = false;
-    let mut read_error = None;
-    if let Some(stdout) = child.stdout.take() {
-        let mut stdout = BufReader::new(stdout);
-        loop {
-            let mut line = Vec::new();
-            match (&mut stdout)
-                .take(MAX_STATUS_LINE)
-                .read_until(b'\n', &mut line)
-            {
-                Ok(0) => break,
-                Ok(_) => {}
-                Err(err) => {
-                    read_error = Some(err);
-                    break;
-                }
-            }
-            if !line.ends_with(b"\n") && line.len() as u64 == MAX_STATUS_LINE {
-                // Skip the rest of an over-long line.
-                let _ = discard_line(&mut stdout);
-            }
-            if lines.len() == limit {
-                more = true;
-                break;
-            }
-            lines.push(String::from_utf8_lossy(&line).trim_end().to_owned());
-        }
-    }
+    let (lines, more, read_error) = match child.stdout.take() {
+        Some(stdout) => read_head(&mut BufReader::new(stdout), limit),
+        None => (Vec::new(), false, None),
+    };
     if more {
         let _ = child.kill();
     }

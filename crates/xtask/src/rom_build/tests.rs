@@ -672,16 +672,18 @@ impl std::io::Read for Endless {
 
 #[test]
 fn overlong_status_line_is_discarded_through_a_bounded_buffer() {
-    use std::io::{BufRead, BufReader, Read};
+    use std::io::{BufReader, Read};
     // 64 MiB of line with no newline, then a newline-terminated tail.
     let tail = std::io::Cursor::new(b"\nnext\n".to_vec());
     let mut reader = BufReader::with_capacity(4096, Endless { left: 64 << 20 }.chain(tail));
     MAX_ALLOC.with(|m| m.set(0));
-    checkout::discard_line(&mut reader).unwrap();
+    let (lines, more, error) = checkout::read_head(&mut reader, 8);
     let largest = MAX_ALLOC.with(std::cell::Cell::get);
-    let mut next = String::new();
-    reader.read_line(&mut next).unwrap();
-    assert_eq!(next, "next\n");
+    assert!(error.is_none(), "{error:?}");
+    assert!(!more);
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0], "x".repeat(8192));
+    assert_eq!(lines[1], "next");
     // An unbounded `read_until` into a Vec would allocate the whole 64 MiB.
     assert!(
         largest <= 64 << 10,
