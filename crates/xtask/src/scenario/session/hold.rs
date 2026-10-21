@@ -6,9 +6,10 @@ use std::path::Path;
 
 /// Sets the directory at `path` to 0o700 if its mode differs, without ever
 /// following a symlink, and only on a directory this session could have
-/// created: Linux pins the entry with `O_PATH | O_NOFOLLOW | O_DIRECTORY`
-/// (which needs no permission bits) and changes the mode of that pinned
-/// inode. Other Unixes never change the mode (see their variant below).
+/// created: Linux pins the entry with `O_PATH | O_NOFOLLOW | O_DIRECTORY` and
+/// Apple targets with `O_SEARCH | O_NOFOLLOW | O_DIRECTORY` (Apple needs
+/// owner search, Linux no bits at all), and the mode of that pinned inode is changed. Other
+/// Unixes never change the mode (see their variant below).
 ///
 /// `mkdir(0o700)` can only yield a subset of 0o700 (plus an inherited
 /// setgid bit), so an entry with any other bit is left untouched and refused.
@@ -61,12 +62,85 @@ pub(super) fn restore_private_mode(path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Beyond Linux there is no permission-free directory pin through the
-/// approved `rustix` surface, so nothing here changes a mode: a directory that
-/// already has owner rwx (and no bits beyond 0o700 and setgid) proceeds to the
-/// claim, and one the umask left without owner read or search is refused
-/// rather than restored by pathname (#2475).
-#[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
+/// `O_SEARCH` on Apple targets, which have no `O_PATH`: search access to a
+/// directory without the read access `O_RDONLY` demands. Apple spells it
+/// `O_EXEC | O_DIRECTORY`, and `O_EXEC` is `0x4000_0000` in Apple's
+/// `<sys/fcntl.h>`; `rustix` 1.1 has no flag for it, so the value travels as
+/// externally defined `OFlags` bits. Callers always add `DIRECTORY`.
+#[cfg(target_vendor = "apple")]
+const APPLE_SEARCH: rustix::fs::OFlags = rustix::fs::OFlags::from_bits_retain(0x4000_0000);
+
+/// Apple counterpart of the Linux variant: the entry is pinned first with
+/// `O_SEARCH | O_DIRECTORY | O_NOFOLLOW` (owner search permission is needed,
+/// read is not; a mode without owner search is refused up front), its
+/// dev/ino must match the `lstat` of the pathname, and only then is the mode
+/// changed, by `fchmod` on that descriptor, so a replacement swapped in after
+/// the `lstat` is refused before any mode of its own changes. Emptiness is read
+/// through the pin (`openat(pin, ".")`); a non-empty entry gets its mode back.
+#[cfg(target_vendor = "apple")]
+pub(super) fn restore_private_mode(path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::MetadataExt as _;
+    use std::os::unix::fs::PermissionsExt as _;
+    let found = std::fs::symlink_metadata(path)?;
+    let mode = found.permissions().mode() & 0o7777;
+    if !found.is_dir() || mode & 0o5077 != 0 {
+        return Err(not_created_here());
+    }
+    if mode & 0o777 == 0o700 {
+        return Ok(());
+    }
+    // `O_SEARCH` still needs owner search permission, so a directory the umask
+    // left without it cannot be pinned, and so cannot be restored safely.
+    if mode & 0o100 == 0 {
+        return Err(std::io::Error::other(format!(
+            "the scratch directory was created mode {mode:o}: the process umask withheld owner \
+             search, and it cannot be pinned for a safe restore (#2475)"
+        )));
+    }
+    let pinned = rustix::fs::open(
+        path,
+        APPLE_SEARCH
+            | rustix::fs::OFlags::DIRECTORY
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )?;
+    let stat = rustix::fs::fstat(&pinned)?;
+    #[allow(
+        clippy::unnecessary_cast,
+        clippy::cast_sign_loss,
+        reason = "`st_dev` is `i32` and `st_ino` already `u64` on Apple targets"
+    )]
+    let same = stat.st_dev as u64 == found.dev() && stat.st_ino as u64 == found.ino();
+    if !same
+        || rustix::fs::FileType::from_raw_mode(stat.st_mode) != rustix::fs::FileType::Directory
+        || stat.st_mode & 0o7777 != mode
+    {
+        return Err(not_created_here());
+    }
+    rustix::fs::fchmod(&pinned, rustix::fs::Mode::RWXU)?;
+    let readable = rustix::fs::openat(
+        &pinned,
+        ".",
+        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )?;
+    if !is_empty(&readable)? {
+        rustix::fs::fchmod(&pinned, rustix::fs::Mode::from_raw_mode(mode))?;
+        return Err(not_created_here());
+    }
+    Ok(())
+}
+
+/// Other Unixes have no permission-free directory pin through the approved
+/// `rustix` surface, so nothing here changes a mode: a directory that already
+/// has owner rwx (and no bits beyond 0o700 and setgid) proceeds to the claim,
+/// and one the umask left without owner read or search is refused rather than
+/// restored by pathname (#2475).
+#[cfg(all(
+    unix,
+    not(any(target_os = "linux", target_os = "android", target_vendor = "apple"))
+))]
 pub(super) fn restore_private_mode(path: &Path) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt as _;
     let found = std::fs::symlink_metadata(path)?;
