@@ -3,9 +3,9 @@
 //! The visibility/spatial queries below still read static object-event templates.
 //! [`ObjectEventState`] is the movable position/elevation/facing/movement representation a caller
 //! holds, either as a standalone script-local copy or, via [`ObjectEventCollection`], as one entry
-//! in a map-scoped collection keyed by `local_id`. Neither form is yet wired into rendering,
-//! collision, interaction, or sight -- those still consult the static templates this module also
-//! exposes.
+//! in a map-scoped collection keyed by `local_id`. Trainer sight reads the collection's live
+//! state; rendering, collision, and interaction still consult the static templates this module
+//! also exposes.
 
 use assets::{MovementType, ObjectEvent};
 
@@ -211,8 +211,8 @@ pub const fn trainer_facing_movement_type(facing: Direction) -> MovementType {
 /// object-event template.
 ///
 /// Template overrides remain inside this value; map queries and later spawns do not observe them
-/// unless a caller holds this value inside an [`ObjectEventCollection`], which does not itself
-/// feed those queries yet. Walking commits the destination immediately, while the owning script
+/// unless a caller holds this value inside an [`ObjectEventCollection`], which feeds trainer sight
+/// but not those queries. Walking commits the destination immediately, while the owning script
 /// or collection entry tracks animation time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ObjectEventState {

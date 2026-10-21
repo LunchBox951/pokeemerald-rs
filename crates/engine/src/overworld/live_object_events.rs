@@ -100,6 +100,12 @@ impl ObjectEventCollection {
             ex == x && ey == y && elevations_compatible(entry.state.elevation(), elevation)
         })
     }
+
+    /// Iterates every entry in declaration order, the order upstream's
+    /// `gObjectEvents` slot scan visits them (`trainer_see.c:196-219`).
+    pub fn entries(&self) -> impl Iterator<Item = &LiveObjectEvent> {
+        self.entries.iter()
+    }
 }
 
 #[cfg(test)]

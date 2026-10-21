@@ -38,9 +38,10 @@
 //! (`TRSEE_REVEAL_DISGUISE`/`_BURIED`) are unreachable without one.
 
 use assets::trainers::TrainerId;
-use assets::{MapEventsTable, MapHeaderTable, ObjectEvent, TrainerType};
+use assets::{MapEventsTable, MapHeaderTable, TrainerType};
 use engine::event_data::EventData;
-use engine::overworld::{trainer_can_see_player, MapRuntime, ObjectEventState, PlayerState};
+use engine::overworld::object_event::{LiveObjectEvent, ObjectEventCollection};
+use engine::overworld::{trainer_can_see_player, MapRuntime, PlayerState};
 
 use crate::flow::npc_trainer_battle;
 
@@ -202,9 +203,10 @@ fn trainer_data_wants_double_battle(trainer_id: TrainerId) -> bool {
 /// because the caller's *logging* needs to know whether the player is still
 /// standing in any cone at all ([`SightTrainerLog`]).
 #[derive(Debug, Default)]
-struct SightScan<'a> {
-    /// The first eligible candidate, in scan order, or `None`.
-    selected: Option<(&'a ObjectEvent, &'static SightTrainer)>,
+struct SightScan {
+    /// The first eligible candidate, in scan order, or `None`: its live
+    /// entry (carrying the local ID a later approach keeps) and table row.
+    selected: Option<(LiveObjectEvent, &'static SightTrainer)>,
     /// Whether *any* not-yet-defeated `TRAINER_TYPE_NORMAL` cone reached the
     /// player this scan, selected or refused. `false` is "the player is
     /// outside every cone", the one fact that resets [`SightTrainerLog`].
@@ -214,7 +216,7 @@ struct SightScan<'a> {
     doubles_refused: Vec<TrainerId>,
 }
 
-/// Scan `runtime`'s object events for the first `TRAINER_TYPE_NORMAL` sight
+/// Scan `objects`' live entries, in declaration order, for the first `TRAINER_TYPE_NORMAL` sight
 /// trainer whose cone reaches `player` and who is currently eligible to
 /// fight.
 ///
@@ -232,13 +234,15 @@ struct SightScan<'a> {
 /// gate can decide what is worth saying on a check that reruns sixty times a
 /// second.
 #[must_use]
-fn find_sight_trainer<'a>(
-    runtime: &MapRuntime<'a>,
+fn find_sight_trainer(
+    objects: &ObjectEventCollection,
+    runtime: &MapRuntime<'_>,
     player: &PlayerState,
     event_data: &EventData,
-) -> SightScan<'a> {
+) -> SightScan {
     let mut scan = SightScan::default();
-    for event in runtime.events().object_events {
+    for live in objects.entries() {
+        let event = live.template();
         if event.trainer_type != TrainerType::Normal {
             continue;
         }
@@ -248,7 +252,7 @@ fn find_sight_trainer<'a>(
         if already_defeated(entry.id, event_data) {
             continue;
         }
-        if !trainer_can_see_player(event, runtime, player, event_data) {
+        if !trainer_can_see_player(live, objects, runtime, player, event_data) {
             continue;
         }
         scan.any_cone_reached = true;
@@ -257,7 +261,7 @@ fn find_sight_trainer<'a>(
             continue;
         }
         if scan.selected.is_none() {
-            scan.selected = Some((event, entry));
+            scan.selected = Some((*live, entry));
         }
     }
     scan
@@ -451,7 +455,12 @@ impl OverworldPhase {
             return SightTrainerOutcome::Refused;
         };
         let runtime = self.scene.runtime(self.map_id, header, events);
-        let scan = find_sight_trainer(&runtime, &self.player, &self.save1.event_data);
+        let scan = find_sight_trainer(
+            &self.object_events,
+            &runtime,
+            &self.player,
+            &self.save1.event_data,
+        );
         if !scan.any_cone_reached {
             self.sight_trainer_log.left_every_cone();
             return SightTrainerOutcome::Refused;
@@ -466,7 +475,7 @@ impl OverworldPhase {
                 );
             }
         }
-        let Some((object, entry)) = scan.selected else {
+        let Some((live, entry)) = scan.selected else {
             return SightTrainerOutcome::Refused;
         };
         let trainer_id = entry.id;
@@ -498,9 +507,10 @@ impl OverworldPhase {
         // screened").
         match npc_trainer_battle::start_npc_trainer_battle(lead, trainer_id, &mut self.rng) {
             Ok(battle) => {
-                let trainer = ObjectEventState::from_template(object);
+                let trainer = *live.state();
                 let walk_tiles = approach_walk_tiles(trainer.position(), self.player.position());
                 self.sight_approach = Some(SightApproach::new(
+                    live.template().local_id,
                     trainer,
                     walk_tiles,
                     entry.intro,
@@ -700,10 +710,11 @@ mod tests {
             .resolve(map_id)
             .expect("MAP_ROUTE103 is bundled map data");
         let runtime = scene.runtime(map_id, header, events);
+        let objects = ObjectEventCollection::from_templates(events.object_events);
         let player = PlayerState::new((67, 6), 3, engine::overworld::Direction::North);
 
         let event_data = EventData::new();
-        let scan = find_sight_trainer(&runtime, &player, &event_data);
+        let scan = find_sight_trainer(&objects, &runtime, &player, &event_data);
         let (_, entry) = scan
             .selected
             .expect("Rhett's own south-facing cone must reach a player one tile south of him");
@@ -714,7 +725,7 @@ mod tests {
         defeated
             .flag_set(TRAINER_FLAGS_START + 703)
             .expect("TRAINER_FLAGS_START + 703 is an ordinary ranged flag id");
-        let scan = find_sight_trainer(&runtime, &player, &defeated);
+        let scan = find_sight_trainer(&objects, &runtime, &player, &defeated);
         assert!(
             scan.selected.is_none(),
             "an already-defeated trainer must not be selected even though the geometry \
@@ -742,9 +753,10 @@ mod tests {
             .resolve(map_id)
             .expect("MAP_ROUTE103 is bundled map data");
         let runtime = scene.runtime(map_id, header, events);
+        let objects = ObjectEventCollection::from_templates(events.object_events);
         let player = PlayerState::new((64, 13), 3, engine::overworld::Direction::North);
 
-        let scan = find_sight_trainer(&runtime, &player, &EventData::new());
+        let scan = find_sight_trainer(&objects, &runtime, &player, &EventData::new());
         assert_eq!(
             scan.doubles_refused,
             vec![TrainerId(481)],
