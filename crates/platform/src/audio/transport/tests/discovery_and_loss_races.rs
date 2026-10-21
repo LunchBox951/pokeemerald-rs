@@ -59,7 +59,12 @@ fn a_loss_raised_while_a_stop_is_applied_is_still_a_loss_while_playing() {
     // The fatal callback lands after the poll's loss check, during the
     // pause that applies a concurrent `stop`.
     with(&w).lose_during_pause = true;
-    rig.shared.running.store(false, Ordering::Release);
+    assert_eq!(
+        rig.producer.push(&[0.25; 4]),
+        4,
+        "undrained before the stop"
+    );
+    rig.shared.set_running(false, &rig.producer);
     rig.transport.step(MS(20));
     assert_eq!(with(&w).pauses, 1);
     with(&w).lose_during_pause = false;
@@ -69,13 +74,13 @@ fn a_loss_raised_while_a_stop_is_applied_is_still_a_loss_while_playing() {
         rig.events(),
         [TransportState::Unavailable(TransportFailure::StreamLost)]
     );
-    assert_eq!(rig.producer.push(&[0.5; 4]), 4);
+    assert_eq!(rig.producer.push(&[0.5; 2]), 2, "queued while stopped");
     rig.transport.step(MS(140));
     assert_eq!(with(&w).builds, 2);
     assert_eq!(
         rig.producer.available_space(),
-        rig.producer.capacity(),
-        "history queued after a loss while playing is discarded"
+        rig.producer.capacity() - 2,
+        "history queued before the stop is discarded; the stopped queue is kept"
     );
 }
 
@@ -90,13 +95,18 @@ fn a_loss_raised_during_a_refused_pause_is_still_a_loss_while_playing() {
     rig.transport.step(Duration::ZERO);
 
     with(&w).lose_during_pause = true;
-    rig.shared.running.store(false, Ordering::Release);
+    assert_eq!(
+        rig.producer.push(&[0.25; 4]),
+        4,
+        "undrained before the stop"
+    );
+    rig.shared.set_running(false, &rig.producer);
     rig.transport.step(MS(20));
     with(&w).lose_during_pause = false;
-    assert_eq!(rig.producer.push(&[0.5; 4]), 4);
+    assert_eq!(rig.producer.push(&[0.5; 2]), 2, "queued while stopped");
     rig.transport.step(MS(120));
     assert_eq!(with(&w).builds, 2);
-    assert_eq!(rig.producer.available_space(), rig.producer.capacity());
+    assert_eq!(rig.producer.available_space(), rig.producer.capacity() - 2);
 }
 
 #[test]
@@ -157,7 +167,7 @@ fn a_stopped_rebuild_after_a_loss_while_started_keeps_what_queues_during_it() {
     raise_error(&w, 0, cpal::ErrorKind::DeviceNotAvailable);
     rig.transport.step(MS(20));
     assert_eq!(rig.producer.push(&[0.25; 8]), 8, "history from the loss");
-    rig.shared.running.store(false, Ordering::Release);
+    rig.shared.set_running(false, &rig.producer);
 
     // Stopped now, so what queues during the rebuild is a stopped queue.
     let producer = rig.producer.clone();
@@ -210,7 +220,7 @@ fn a_failed_running_reattach_keeps_the_queue_stale_after_a_stop() {
     // Queued while started with nothing draining, then stopped before the
     // worker's next step.
     assert_eq!(rig.producer.push(&[0.5; 4]), 4);
-    rig.shared.running.store(false, Ordering::Release);
+    rig.shared.set_running(false, &rig.producer);
 
     rig.transport.step(MS(320));
     assert_eq!(with(&w).builds, 2);
@@ -218,5 +228,57 @@ fn a_failed_running_reattach_keeps_the_queue_stale_after_a_stop() {
         rig.producer.available_space(),
         rig.producer.capacity(),
         "history queued during the failed running attempt is discarded"
+    );
+}
+
+#[test]
+fn a_queue_left_after_a_stop_survives_the_history_discard() {
+    let w = world(|w| w.default = Some("a".into()));
+    let mut rig = rig(&w, 4);
+    rig.shared.set_running(true, &rig.producer);
+    rig.transport.step(Duration::ZERO);
+    raise_error(&w, 0, cpal::ErrorKind::DeviceNotAvailable);
+    rig.transport.step(MS(20));
+    assert_eq!(rig.producer.push(&[0.25; 2]), 2, "history from the loss");
+    rig.shared.set_running(false, &rig.producer);
+    // Prefill for the next start, queued before the retry.
+    assert_eq!(rig.producer.push(&[0.5; 4]), 4);
+    rig.transport.step(MS(120));
+    assert_eq!(with(&w).builds, 2);
+    assert_eq!(rig.producer.available_space(), rig.producer.capacity() - 4);
+
+    rig.shared.set_running(true, &rig.producer);
+    rig.transport.step(MS(140));
+    assert_eq!(with(&w).plays, 2);
+    let out = run_data_callback::<f32>(&w, 1, 8);
+    assert!(
+        out[..4] == [0.5; 4] && !out.contains(&0.25),
+        "the prefill plays at the next start, without the history: {out:?}"
+    );
+}
+
+#[test]
+fn history_after_a_later_start_is_still_discarded() {
+    let w = world(|w| w.default = Some("a".into()));
+    let mut rig = rig(&w, 4);
+    rig.shared.set_running(true, &rig.producer);
+    rig.transport.step(Duration::ZERO);
+    rig.shared.set_running(false, &rig.producer);
+    rig.transport.step(MS(20));
+    rig.shared.set_running(true, &rig.producer);
+    rig.transport.step(MS(40));
+
+    // Lost while playing after the second start: nothing drains what the
+    // producer queues next, and no stop has landed since it.
+    raise_error(&w, 0, cpal::ErrorKind::DeviceNotAvailable);
+    rig.transport.step(MS(60));
+    assert_eq!(rig.producer.push(&[0.25; 4]), 4);
+    rig.shared.set_running(false, &rig.producer);
+    rig.transport.step(MS(160));
+    assert_eq!(with(&w).builds, 2);
+    assert_eq!(
+        rig.producer.available_space(),
+        rig.producer.capacity(),
+        "history queued after the second start is discarded"
     );
 }

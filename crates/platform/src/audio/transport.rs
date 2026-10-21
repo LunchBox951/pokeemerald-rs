@@ -34,9 +34,11 @@
 //!   advance while no stream drained the ring (a stream was lost while
 //!   started, or `start` held while none was attached), the queued samples
 //!   are discarded, so playback resumes at the producer's current position
-//!   instead of replaying history. A stream that starts as it attaches also
-//!   drops, at its first callback, what the producer queued while it was
-//!   being built. A queue left while stopped is kept for the
+//!   instead of replaying history. When playback has been stopped since,
+//!   only what was queued before that `stop` is history: what the producer
+//!   queues after it is a stopped queue. A stream that starts as it
+//!   attaches also drops, at its first callback, what the producer queued
+//!   while it was being built. A queue left while stopped is kept for the
 //!   next `start`. The first attach keeps the queue: that is the producer's
 //!   startup prefill, whether or not it has already called `start`.
 //! - Each distinct [`TransportState`] is published once, in order, for the
@@ -115,6 +117,9 @@ pub enum TransportFailure {
 pub(super) struct Shared {
     /// Playback intent set by `start`/`stop`.
     pub(super) running: AtomicBool,
+    /// [`Producer::pushed`] at the latest `stop` of a started transport:
+    /// what was queued after it is a stopped queue.
+    stopped_at: AtomicU64,
     pub(super) shutdown: AtomicBool,
     pub(super) stream_errors: Arc<AtomicU64>,
     pub(super) playback_clock: Arc<PlaybackClock>,
@@ -135,6 +140,7 @@ impl Shared {
     ) -> Self {
         Self {
             running: AtomicBool::new(false),
+            stopped_at: AtomicU64::new(0),
             shutdown: AtomicBool::new(false),
             stream_errors: Arc::new(AtomicU64::new(0)),
             playback_clock: Arc::new(PlaybackClock::new()),
@@ -144,6 +150,17 @@ impl Shared {
             state: Mutex::new(state),
             events: Mutex::new(VecDeque::new()),
         }
+    }
+
+    /// Record playback intent. A stop of a started transport first marks
+    /// where it landed in `producer`'s queue, so a re-attach that discards
+    /// history keeps what is queued after it.
+    pub(super) fn set_running(&self, running: bool, producer: &Producer) {
+        if !running && self.running.load(Ordering::Acquire) {
+            self.stopped_at.store(producer.pushed(), Ordering::Relaxed);
+        }
+        // Release: a worker that reads this stop also reads its mark.
+        self.running.store(running, Ordering::Release);
     }
 
     /// Queue a transition for the application, discarding the oldest pending
@@ -406,7 +423,14 @@ impl<H: OutputHost> Transport<H> {
         // failed build keeps what the producer queues next.
         let playing = self.shared.running.load(Ordering::Acquire);
         if (std::mem::take(&mut self.stale_queue) || playing) && self.attached_before {
-            consumer.discard_queued();
+            if playing {
+                consumer.discard_queued();
+            } else {
+                // Stopped since playback was meant to advance: only what
+                // queued before the stop is history; the rest is a stopped
+                // queue, kept for the next start.
+                consumer.discard_pushed_before(self.shared.stopped_at.load(Ordering::Relaxed));
+            }
         }
         // A started producer keeps pushing while the build below blocks,
         // and the consumer is the new stream's from then on, so what queues

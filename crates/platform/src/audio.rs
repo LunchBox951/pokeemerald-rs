@@ -389,7 +389,7 @@ impl AudioOutput {
     }
 
     fn set_running(&self, running: bool) {
-        self.shared.running.store(running, Ordering::Release);
+        self.shared.set_running(running, &self.producer);
         if let Backend::Device(worker) = &self.backend {
             worker.wake();
         }

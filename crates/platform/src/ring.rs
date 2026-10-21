@@ -52,6 +52,9 @@ struct Shared {
     /// and consumer sides share. Always in `[0, capacity]`.
     occupied: AtomicUsize,
     underruns: AtomicU64,
+    /// Samples ever accepted by [`Producer::push`], wrapping. Written only
+    /// while `head` is held, so it and the write index advance together.
+    pushed: AtomicU64,
     /// Whether a [`Consumer`] currently exists. Lets a replacement consumer be
     /// claimed after the previous one is dropped with its device stream.
     consumer_alive: AtomicBool,
@@ -82,6 +85,7 @@ pub fn ring_buffer(capacity: usize) -> (Producer, Consumer) {
         head: Mutex::new(0),
         occupied: AtomicUsize::new(0),
         underruns: AtomicU64::new(0),
+        pushed: AtomicU64::new(0),
         consumer_alive: AtomicBool::new(true),
     });
     (
@@ -134,8 +138,24 @@ impl Producer {
             // Release: publishes the slot stores above to the consumer's
             // `Acquire` load of `occupied`.
             self.shared.occupied.fetch_add(n, Ordering::Release);
+            // Relaxed: only ever read or written while `head` is held.
+            let pushed = self.shared.pushed.load(Ordering::Relaxed);
+            self.shared.pushed.store(
+                pushed.wrapping_add(u64::try_from(n).unwrap_or(u64::MAX)),
+                Ordering::Relaxed,
+            );
         }
         n
+    }
+
+    /// Samples ever accepted by [`Self::push`], wrapping on overflow.
+    ///
+    /// A mark taken here splits the queue: [`Consumer::discard_pushed_before`]
+    /// keeps only what was pushed after it. Used by the audio transport to
+    /// record where a `stop` landed.
+    pub(crate) fn pushed(&self) -> u64 {
+        let _head = lock_head(&self.shared.head);
+        self.shared.pushed.load(Ordering::Relaxed)
     }
 
     /// Total samples this ring holds, fixed when it was created.
@@ -298,6 +318,32 @@ impl Consumer {
         self.shared.occupied.store(0, Ordering::Release);
     }
 
+    /// Drop the queued samples pushed before [`Producer::pushed`] returned
+    /// `mark`, keeping those pushed since, without counting an underrun.
+    ///
+    /// Queued samples are unread and in push order, so the newest
+    /// `pushed - mark` of them are the ones pushed after the mark. Takes the
+    /// producer lock, like [`Self::discard_queued`].
+    pub(crate) fn discard_pushed_before(&mut self, mark: u64) {
+        let _head = lock_head(&self.shared.head);
+        let since = self
+            .shared
+            .pushed
+            .load(Ordering::Relaxed)
+            .wrapping_sub(mark);
+        let since = usize::try_from(since).unwrap_or(usize::MAX);
+        // Acquire: synchronizes-with the producer's `Release` `fetch_add`.
+        let queued = self.shared.occupied.load(Ordering::Acquire);
+        let stale = queued - queued.min(since);
+        if stale == 0 {
+            return;
+        }
+        self.tail = (self.tail + stale) % self.shared.capacity;
+        // Release: publishes the freed slots to the producer's `Acquire`
+        // load of `occupied`.
+        self.shared.occupied.fetch_sub(stale, Ordering::Release);
+    }
+
     /// Drop whatever is queued when this consumer is next read, before that
     /// read, without counting an underrun.
     ///
@@ -398,6 +444,30 @@ mod tests {
         let (producer, consumer) = ring_buffer(0);
         drop(consumer);
         assert!(producer.reclaim_consumer().is_some());
+    }
+
+    #[test]
+    fn a_discard_before_a_mark_keeps_what_was_pushed_after_it() {
+        let (producer, mut consumer) = ring_buffer(8);
+        assert_eq!(producer.push(&[0.25; 3]), 3);
+        let mut out = [0.0; 2];
+        consumer.fill(&mut out);
+        assert_eq!(producer.push(&[0.25; 5]), 5);
+        let mark = producer.pushed();
+        assert_eq!(mark, 8);
+        assert_eq!(producer.push(&[0.5; 2]), 2);
+
+        consumer.discard_pushed_before(mark);
+        assert_eq!(consumer.available(), 2);
+        let mut out = [0.0; 3];
+        consumer.fill(&mut out);
+        assert_eq!(out, [0.5, 0.5, 0.0]);
+        assert_eq!(consumer.underruns(), 1, "only the read shortfall counts");
+
+        // A mark at the current count drops everything queued.
+        assert_eq!(producer.push(&[0.5; 2]), 2);
+        consumer.discard_pushed_before(producer.pushed());
+        assert_eq!(consumer.available(), 0);
     }
 
     #[test]

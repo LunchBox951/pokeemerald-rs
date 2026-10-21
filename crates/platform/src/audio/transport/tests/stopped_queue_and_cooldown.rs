@@ -16,7 +16,7 @@ fn stopping_a_stream_without_hardware_pause_keeps_the_queue_for_the_next_start()
 
     assert_eq!(rig.producer.push(&[0.5; 4]), 4);
     // `stop`: the pause is refused, so the worker rebuilds a paused stream.
-    rig.shared.running.store(false, Ordering::Release);
+    rig.shared.set_running(false, &rig.producer);
     rig.transport.step(MS(20));
     rig.transport.step(MS(120));
     assert_eq!(with(&w).builds, 2);
@@ -34,7 +34,7 @@ fn a_default_replaced_while_stopped_keeps_the_queue() {
     let mut rig = rig(&w, 4);
     rig.shared.running.store(true, Ordering::Release);
     rig.transport.step(Duration::ZERO);
-    rig.shared.running.store(false, Ordering::Release);
+    rig.shared.set_running(false, &rig.producer);
     rig.transport.step(MS(20));
     assert_eq!(with(&w).pauses, 1);
 
@@ -55,7 +55,7 @@ fn a_stream_lost_while_started_is_stale_even_if_stopped_before_it_returns() {
     raise_error(&w, 0, cpal::ErrorKind::DeviceNotAvailable);
     rig.transport.step(MS(20));
     assert_eq!(rig.producer.push(&[0.5; 4]), 4);
-    rig.shared.running.store(false, Ordering::Release);
+    rig.shared.set_running(false, &rig.producer);
     rig.transport.step(MS(120));
     assert_eq!(with(&w).builds, 2);
     assert_eq!(
@@ -139,7 +139,7 @@ fn a_loss_while_playing_is_stale_even_if_stop_lands_before_the_worker_sees_it() 
     // all before the worker's next health poll.
     raise_error(&w, 0, cpal::ErrorKind::DeviceNotAvailable);
     assert_eq!(rig.producer.push(&[0.5; 4]), 4);
-    rig.shared.running.store(false, Ordering::Release);
+    rig.shared.set_running(false, &rig.producer);
     rig.transport.step(MS(20));
     rig.transport.step(MS(120));
     assert_eq!(with(&w).builds, 2);

@@ -439,7 +439,7 @@ fn playback_intent_is_applied_by_the_worker_and_failures_are_reported() {
     rig.transport.step(MS(40));
     assert_eq!(with(&w).plays, 1, "start is applied once");
 
-    rig.shared.running.store(false, Ordering::Release);
+    rig.shared.set_running(false, &rig.producer);
     rig.transport.step(MS(60));
     assert_eq!(with(&w).pauses, 1);
 
