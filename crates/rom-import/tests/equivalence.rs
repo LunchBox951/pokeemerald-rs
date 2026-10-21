@@ -62,6 +62,7 @@ const COMPLETE_PREFIXES: &[&str] = &[
     "text-window/",
     "audio/",
     "battle-message/",
+    "battle-anim/",
     "bag/",
 ];
 

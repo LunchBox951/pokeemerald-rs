@@ -2,11 +2,9 @@
 
 use super::BattleAnimationError;
 
-/// The length of `gBattleAnimArgs` (`include/battle_anim.h:36`). Script
-/// commands index it with no bounds check (`Cmd_setarg`,
-/// `src/battle_anim.c:1055-1071`; `Cmd_jumpargeq`, `:1663-1676`), and
-/// `createsprite`, `createvisualtask`, and `createsoundtask` copy their
-/// argument lists into it (`:379`, `:435`, `:1627`).
+/// The length of `gBattleAnimArgs` (`include/battle_anim.h:36`), which
+/// `createsprite`, `createvisualtask`, and `createsoundtask` fill from their
+/// argument lists.
 pub const ANIM_ARGS_COUNT: usize = 8;
 
 /// How many effect-sprite resources upstream names: `ANIM_TAG_BONE` through
@@ -18,10 +16,9 @@ pub const EFFECT_SPRITE_COUNT: u16 = 289;
 /// (`asm/macros/battle_anim_script.inc:13-25`).
 pub const SUBPRIORITY_MASK: u8 = 0x7F;
 
-/// A stable reference to one effect sprite sheet and palette: the index
-/// `GET_TRUE_SPRITE_INDEX` (`include/constants/battle_anim.h:5`) takes from an
-/// `ANIM_TAG_*` into `gBattleAnimPicTable` and `gBattleAnimPaletteTable`
-/// (`src/battle_anim.c:340-341`). `loadspritegfx` creates the reference.
+/// One effect sprite sheet and palette: the `ANIM_TAG_*` index into
+/// `gBattleAnimPicTable` and `gBattleAnimPaletteTable`
+/// (`GET_TRUE_SPRITE_INDEX`, `include/constants/battle_anim.h:5`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct EffectSpriteId(u16);
 
@@ -45,8 +42,8 @@ impl EffectSpriteId {
     }
 }
 
-/// The position of a program in its catalog, as `call`, `goto`, and the
-/// conditional jumps name their target. Resolve it with
+/// A program's catalog position, the target of `call`, `goto`, and the
+/// conditional jumps. Resolve it with
 /// [`BattleAnimationCatalog::program_by_id`](super::BattleAnimationCatalog::program_by_id).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ProgramId(u16);
@@ -115,14 +112,14 @@ pub struct PanSweep {
     pub delay: u8,
 }
 
-/// One script command. Each variant is the command of the same-numbered
-/// `sScriptCmdTable` slot (`src/battle_anim.c:118-171`); the wire opcode is that
-/// slot. Operands keep the byte widths and signedness the macros emit
-/// (`asm/macros/battle_anim_script.inc`).
+/// One script command. The hex number on each variant is its
+/// `sScriptCmdTable` slot (`src/battle_anim.c:118-171`) and wire opcode.
+/// Operands keep the widths and signedness of
+/// `asm/macros/battle_anim_script.inc`.
 ///
-/// Battler operands are the raw `ANIM_ATTACKER`..`ANIM_DEF_PARTNER` selectors
-/// (`include/constants/battle_anim.h:301-304`); background operands are the raw
-/// `BG_*` ids. This contract does not interpret either.
+/// Battler operands are raw `ANIM_ATTACKER`..`ANIM_DEF_PARTNER` selectors
+/// (`include/constants/battle_anim.h:301-304`) and background operands raw
+/// `BG_*` ids; neither is interpreted here.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AnimCommand {
     /// 0x00 `loadspritegfx`: load a sprite sheet and palette.
@@ -182,9 +179,8 @@ pub enum AnimCommand {
     Return,
     /// 0x10 `setarg`: write `gBattleAnimArgs[arg]`.
     SetArg {
-        /// The raw argument index. Upstream does not bounds-check it; any `u8`
-        /// is kept, and the runtime owns modelling an index past
-        /// [`ANIM_ARGS_COUNT`].
+        /// The raw argument index, kept even past [`ANIM_ARGS_COUNT`]
+        /// (upstream does not bounds-check it).
         arg: u8,
         /// The value written.
         value: i16,
@@ -260,10 +256,9 @@ pub enum AnimCommand {
     WaitSound,
     /// 0x21 `jumpargeq`: jump when `gBattleAnimArgs[arg] == value`.
     JumpArgEq {
-        /// The raw argument index. Stock `Move_MAGNITUDE` jumps on index 15
-        /// (`data/battle_anim_scripts.s:3324-3326`), past the 8 entries of
-        /// `gBattleAnimArgs`; the catalog keeps it and the runtime owns the
-        /// out-of-bounds read.
+        /// The raw argument index, kept even past [`ANIM_ARGS_COUNT`]; stock
+        /// `Move_MAGNITUDE` jumps on index 15
+        /// (`data/battle_anim_scripts.s:3324-3326`).
         arg: u8,
         /// The compared value.
         value: i16,
@@ -330,9 +325,8 @@ impl AnimCommand {
         first.into_iter().chain(second)
     }
 
-    /// Rejects an operand the catalog cannot hold: a `createsprite` subpriority
-    /// with the target bit set, or an argument list longer than the 8 entries
-    /// of `gBattleAnimArgs`. Argument indexes stay raw (see [`Self::SetArg`]).
+    /// Rejects a `createsprite` subpriority above [`SUBPRIORITY_MASK`] or an
+    /// argument list longer than [`ANIM_ARGS_COUNT`].
     pub(super) fn check_operands(&self) -> Result<(), BattleAnimationError> {
         match self {
             Self::CreateSprite {

@@ -2,6 +2,7 @@
 
 use std::path::Path;
 
+use super::scope::MAIN_MENU_BG_PALETTE_ID;
 use super::{push_palette_entry, ExtractError};
 use pack_format::PackWriter;
 
@@ -11,7 +12,7 @@ pub(super) fn extract_interface_palettes(
 ) -> Result<(), ExtractError> {
     push_palette_entry(
         &upstream.join("graphics/interface/main_menu_bg.pal"),
-        "interface/palette/main_menu_bg".to_owned(),
+        MAIN_MENU_BG_PALETTE_ID.to_owned(),
         writer,
     )
 }

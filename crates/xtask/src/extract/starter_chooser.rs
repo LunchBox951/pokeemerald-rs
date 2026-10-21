@@ -15,6 +15,13 @@ struct SheetSource {
     palette_id: &'static str,
     width: u32,
     height: u32,
+    /// The PNG bit depth the checkout's file must carry.
+    input_bit_depth: u8,
+    /// The bit depth the pack publishes, which the typed accessor requires.
+    /// `tiles.png` is an 8-bit PNG that upstream's build converts to 4-bit
+    /// by keeping each pixel's low nibble; its pixel values 16-31 only
+    /// annotate the palette bank, which the tilemaps select on cartridge.
+    output_bit_depth: u8,
     colors: usize,
 }
 
@@ -36,6 +43,8 @@ const SHEETS: [SheetSource; 3] = [
         palette_id: "starter-chooser/palette/tiles",
         width: 128,
         height: 128,
+        input_bit_depth: 8,
+        output_bit_depth: 4,
         colors: 32,
     },
     SheetSource {
@@ -45,6 +54,8 @@ const SHEETS: [SheetSource; 3] = [
         palette_id: "starter-chooser/palette/pokeball_selection",
         width: 32,
         height: 128,
+        input_bit_depth: 4,
+        output_bit_depth: 4,
         colors: 16,
     },
     SheetSource {
@@ -54,6 +65,8 @@ const SHEETS: [SheetSource; 3] = [
         palette_id: "starter-chooser/palette/starter_circle",
         width: 64,
         height: 64,
+        input_bit_depth: 4,
+        output_bit_depth: 4,
         colors: 16,
     },
 ];
@@ -141,6 +154,15 @@ fn extract_sheet(
             ),
         ));
     }
+    if image.bit_depth != sheet.input_bit_depth {
+        return Err(mismatch(
+            &path,
+            format!(
+                "is {}-bit: expected {}-bit",
+                image.bit_depth, sheet.input_bit_depth
+            ),
+        ));
+    }
 
     let palette_path = path.clone();
     let colors = png::decode_palette(&bytes).map_err(|e| ExtractError::Png(path.clone(), e))?;
@@ -164,6 +186,8 @@ fn extract_sheet(
         ));
     }
 
+    let image = normalise_depth(image, sheet.output_bit_depth);
+
     writer.push(build_palette_entry(
         &palette_path,
         &colors,
@@ -171,6 +195,20 @@ fn extract_sheet(
     )?);
     writer.push(build_image_entry(&path, sheet.image_id.to_owned(), image)?);
     Ok(())
+}
+
+/// Upstream's four-bit conversion keeps each pixel's low nibble; the 32-colour
+/// sheet's bank annotation (bit 4) is dropped, and composition picks the bank
+/// from the preserved tilemaps with local index zero transparent.
+fn normalise_depth(mut image: png::IndexedImage, output_bit_depth: u8) -> png::IndexedImage {
+    if image.bit_depth != output_bit_depth {
+        debug_assert_eq!(output_bit_depth, 4);
+        for pixel in &mut image.pixels {
+            *pixel &= 0x0F;
+        }
+        image.bit_depth = output_bit_depth;
+    }
+    image
 }
 
 fn mismatch(path: &Path, detail: String) -> ExtractError {
@@ -187,10 +225,11 @@ mod tests {
 
     use assets::{AssetPack, StarterSpecies};
 
+    use super::super::png::tests::indexed_png_from_raw_with_plte;
     use super::super::{extract_to, repo_root, upstream_present};
     use super::{
         extract_sheet, extract_starter_chooser, extract_tilemap, extract_tilemap_with,
-        push_tilemap, SHEETS, TILEMAPS,
+        push_tilemap, SheetSource, SHEETS, TILEMAPS,
     };
     use crate::extract::ExtractError;
     use pack_format::PackWriter;
@@ -346,6 +385,91 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
+    /// A sheet-shaped PNG at `bit_depth` with the sheet's own palette size.
+    fn sheet_png(sheet: SheetSource, bit_depth: u8) -> Vec<u8> {
+        let row_bytes = (sheet.width as usize * usize::from(bit_depth)).div_ceil(8);
+        let mut raw = Vec::new();
+        for _ in 0..sheet.height {
+            raw.push(0);
+            raw.resize(raw.len() + row_bytes, 0);
+        }
+        let plte = vec![7; sheet.colors * 3];
+        indexed_png_from_raw_with_plte(bit_depth, sheet.width, sheet.height, &raw, &plte)
+    }
+
+    #[test]
+    fn sheets_of_the_wrong_bit_depth_are_rejected() {
+        // The depth the checkout file must carry (input), not the pack's.
+        let required = [
+            ("tiles.png", 8u8),
+            ("pokeball_selection.png", 4),
+            ("starter_circle.png", 4),
+        ];
+        for (sheet, (png, depth)) in SHEETS.into_iter().zip(required) {
+            assert_eq!(sheet.png, png);
+            for wrong in [2u8, 4, 8].into_iter().filter(|&d| d != depth) {
+                let dir = scratch_dir("bit-depth");
+                let path = dir.join(sheet.directory).join(sheet.png);
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(&path, sheet_png(sheet, wrong)).unwrap();
+                let mut writer = PackWriter::new();
+
+                let err = extract_sheet(&dir, sheet, &mut writer).unwrap_err();
+                match &err {
+                    ExtractError::StarterChooserAssetMismatch {
+                        path: error_path,
+                        detail,
+                    } => {
+                        assert_eq!(error_path, &path);
+                        assert!(
+                            detail.contains(&format!("{wrong}-bit"))
+                                && detail.contains(&format!("{depth}-bit")),
+                            "{png} at {wrong}: {detail}"
+                        );
+                    }
+                    other => panic!("{png} at {wrong}-bit: wrong error {other:?}"),
+                }
+                assert_eq!(writer.len(), 0);
+
+                std::fs::write(&path, sheet_png(sheet, depth)).unwrap();
+                extract_sheet(&dir, sheet, &mut writer).unwrap();
+                assert_eq!(writer.len(), 2);
+                std::fs::remove_dir_all(dir).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn tiles_are_published_as_four_bit_low_nibbles() {
+        let sheet = SHEETS[0];
+        assert_eq!((sheet.input_bit_depth, sheet.output_bit_depth), (8, 4));
+        let pixels = (0..sheet.width * sheet.height)
+            .map(|i| (i % 32) as u8)
+            .collect::<Vec<_>>();
+        let mut raw = Vec::new();
+        for row in pixels.chunks(sheet.width as usize) {
+            raw.push(0);
+            raw.extend_from_slice(row);
+        }
+        let plte = vec![7; sheet.colors * 3];
+        let png = indexed_png_from_raw_with_plte(8, sheet.width, sheet.height, &raw, &plte);
+        let dir = scratch_dir("tiles-nibble");
+        let path = dir.join(sheet.directory).join(sheet.png);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, png).unwrap();
+        let mut writer = PackWriter::new();
+        extract_sheet(&dir, sheet, &mut writer).unwrap();
+        let pack = writer.finish().unwrap();
+        let entries = pack_format::parse_directory(&pack).unwrap();
+        let image = entries.iter().find(|e| e.id == sheet.image_id).unwrap();
+        let payload = &pack[image.offset..image.offset + image.length];
+        let expected: Vec<u8> = pixels.iter().map(|p| p & 0x0F).collect();
+        assert_eq!(payload, expected.as_slice());
+        let palette = entries.iter().find(|e| e.id == sheet.palette_id).unwrap();
+        assert_eq!(palette.length, 32 * 2);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
     fn starter_chooser_graphics_are_extracted() {
@@ -365,6 +489,9 @@ mod tests {
         }
 
         let chooser = pack.starter_chooser().unwrap();
+        assert_eq!(chooser.tiles.image.bit_depth, 4);
+        assert!(chooser.tiles.image.pixels.iter().all(|&p| p < 16));
+        assert_eq!(chooser.tiles.palette.color_count, 32);
         let upstream = repo_root().join("pokeemerald");
         for (tilemap, source) in [
             (chooser.bag_tilemap, "birch_bag.bin"),

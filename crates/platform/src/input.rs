@@ -137,6 +137,24 @@ impl ButtonState {
         self.held = currently_held;
     }
 
+    /// This frame's views with the saved `L=A` button mode applied.
+    ///
+    /// Mirrors the tail of upstream's `ReadKeys`
+    /// (`pokeemerald/src/main.c:279-288`): a newly pressed `L` also sets `A`
+    /// in the newly-pressed view, and a held `L` also sets `A` in the held
+    /// view. Physical `L` stays set, and the two views are remapped
+    /// independently, so a physical `A` edge is untouched by a held `L`.
+    #[must_use]
+    pub fn with_l_equals_a(mut self) -> Self {
+        if self.newly_pressed.intersects(Buttons::L) {
+            self.newly_pressed |= Buttons::A;
+        }
+        if self.held.intersects(Buttons::L) {
+            self.held |= Buttons::A;
+        }
+        self
+    }
+
     /// Every button currently held down.
     #[must_use]
     pub const fn held(&self) -> Buttons {
@@ -304,6 +322,34 @@ mod tests {
         assert!(!state.is_newly_pressed(Buttons::UP));
         assert!(state.is_held(Buttons::A));
         assert!(state.is_newly_pressed(Buttons::A));
+    }
+
+    #[test]
+    fn l_equals_a_adds_a_to_each_view_from_its_own_l_state() {
+        let mut state = ButtonState::new();
+        state.update(Buttons::L);
+        let mapped = state.with_l_equals_a();
+        assert!(mapped.is_newly_pressed(Buttons::A | Buttons::L));
+        assert!(mapped.is_held(Buttons::A) && mapped.is_held(Buttons::L));
+
+        // Held L: no new edge, but A stays held.
+        state.update(Buttons::L);
+        let mapped = state.with_l_equals_a();
+        assert!(!mapped.is_newly_pressed(Buttons::A));
+        assert!(!mapped.is_newly_pressed(Buttons::L));
+        assert!(mapped.is_held(Buttons::A));
+
+        // A physical A press while L is held is a fresh A edge as usual.
+        state.update(Buttons::L | Buttons::A);
+        let mapped = state.with_l_equals_a();
+        assert!(mapped.is_newly_pressed(Buttons::A));
+        assert!(!mapped.is_newly_pressed(Buttons::L));
+
+        // Without L, nothing is added.
+        state.update(Buttons::B);
+        let mapped = state.with_l_equals_a();
+        assert!(!mapped.is_held(Buttons::A));
+        assert!(!mapped.is_newly_pressed(Buttons::A));
     }
 
     #[test]
