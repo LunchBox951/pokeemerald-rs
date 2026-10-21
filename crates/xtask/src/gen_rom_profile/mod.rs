@@ -53,6 +53,7 @@
 
 mod audio;
 mod bag;
+mod battle_anims;
 mod battle_messages;
 mod battlers;
 mod emit;
@@ -195,6 +196,7 @@ fn locate_profile(
         interface: locate_interface_palettes(ctx, lines)?,
         audio: audio::locate(ctx, lines)?,
         battle_messages: battle_messages::locate(ctx, lines)?,
+        battle_anims: battle_anims::locate(ctx, lines)?,
         bag: bag::locate(ctx, lines)?,
         battlers: battlers::locate(ctx, lines)?,
     })
@@ -564,6 +566,8 @@ fn temp_sibling(path: &Path) -> PathBuf {
     ))
 }
 
+#[cfg(test)]
+mod battle_anim_tests;
 #[cfg(test)]
 mod battle_message_tests;
 #[cfg(test)]

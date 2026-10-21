@@ -374,6 +374,52 @@ pub struct BattleMessageRoots {
     pub specials: &'static [SpecialMessageRoot],
 }
 
+/// One battle-animation program: a label and where its commands start.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AnimProgramRoot {
+    /// The upstream label (`Move_POUND`), which names the catalog program.
+    pub symbol: &'static str,
+    /// Where the program's first command is. Labels with no commands between
+    /// them share an address.
+    pub addr: GbaPtr,
+    /// The program's bytes, from its first command through its first
+    /// terminator (`end`, `return`, `goto`, or `choosetwoturnanim`).
+    pub len: u16,
+}
+
+/// A sprite template or task function a script command names by address.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AnimSymbolRoot {
+    /// The upstream C identifier, as the catalog spells it.
+    pub symbol: &'static str,
+    /// The address the command operand holds. A task function is code, so
+    /// its operand keeps the Thumb bit.
+    pub addr: GbaPtr,
+}
+
+/// The battle-animation scripts (`data/battle_anim_scripts.s`).
+///
+/// The four selector tables hold one pointer per slot, and a branch operand
+/// holds a program's address. Labels that share an address cannot be told
+/// apart by it, so the roots name each slot's program and a branch operand
+/// resolves to the first program at its address.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BattleAnimationRoots {
+    /// `gBattleAnims_Moves`, `gBattleAnims_StatusConditions`,
+    /// `gBattleAnims_General`, and `gBattleAnims_Special`, in
+    /// `assets::AnimationTable::ALL` order.
+    pub tables: [GbaPtr; 4],
+    /// Every program, in catalog order: a program's position is its id.
+    pub programs: &'static [AnimProgramRoot],
+    /// Every `createsprite` template the programs name.
+    pub templates: &'static [AnimSymbolRoot],
+    /// Every `createvisualtask` and `createsoundtask` function the programs name.
+    pub tasks: &'static [AnimSymbolRoot],
+    /// The program each selector runs, as a position in `programs`: the
+    /// tables' slots in `tables` order.
+    pub selectors: &'static [u16],
+}
+
 /// The ordinary-bag assets (`graphics/bag` and the item icons).
 ///
 /// Holds the pack ids the checkout extractor emits under `bag/`: the fixed
@@ -450,6 +496,8 @@ pub struct Roots {
     pub audio: AudioRoots,
     /// The battle-message token table.
     pub battle_messages: BattleMessageRoots,
+    /// The battle-animation program catalog.
+    pub battle_anims: BattleAnimationRoots,
     /// The ordinary-bag images, palettes, and tilemap.
     pub bag: BagRoots,
     /// The starters' static battler images and palettes.
@@ -492,6 +540,7 @@ impl Roots {
             programmable_wave: &[],
         },
         battle_messages: BattleMessageRoots::NONE,
+        battle_anims: BattleAnimationRoots::NONE,
         bag: BagRoots::NONE,
         battlers: BattlerRoots::NONE,
     };
@@ -547,6 +596,17 @@ impl BattleMessageRoots {
     };
 }
 
+impl BattleAnimationRoots {
+    /// No battle-animation roots recorded: the domain writes nothing.
+    pub const NONE: Self = Self {
+        tables: [GbaPtr::AT_BASE; 4],
+        programs: &[],
+        templates: &[],
+        tasks: &[],
+        selectors: &[],
+    };
+}
+
 impl BagRoots {
     /// No bag roots recorded: the domain writes nothing.
     pub const NONE: Self = Self {
@@ -575,7 +635,7 @@ impl Default for Roots {
 
 #[cfg(test)]
 mod tests {
-    use super::{Encoding, ImageRoot, Roots};
+    use super::{BattleAnimationRoots, Encoding, ImageRoot, Roots};
     use crate::reader::GbaPtr;
 
     fn image(id: &'static str, depth: u8, tiles: u32) -> ImageRoot {
@@ -600,6 +660,7 @@ mod tests {
         assert_eq!(roots.palettes().count(), 0);
         assert_eq!(Roots::default(), Roots::NONE);
         assert!(roots.battle_messages.specials.is_empty());
+        assert_eq!(roots.battle_anims, BattleAnimationRoots::NONE);
     }
 
     #[test]
