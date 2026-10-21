@@ -25,9 +25,7 @@ pub fn tileset_payload_ids(name: &str) -> Vec<String> {
     .collect()
 }
 
-/// Require every fixed tileset root: each tileset's tile sheet, metatiles,
-/// attributes, and palette banks, then every pinned animation frame,
-/// independent of which frames the pack happens to hold.
+/// Require every tileset payload root and every pinned animation frame, whether or not the pack holds the frames.
 ///
 /// # Errors
 ///
@@ -42,7 +40,7 @@ pub fn require_tilesets(pack: &PackSource) -> Result<(), GenRomProfileError> {
         .try_for_each(|id| pack.get(id).map(|_| ()))
 }
 
-/// Require every pinned people sprite sheet and fixed sprite palette, independent of which the pack holds.
+/// Require every pinned people sprite sheet and sprite palette root.
 ///
 /// # Errors
 ///
@@ -170,7 +168,7 @@ pub fn require_interface_palettes(pack: &PackSource) -> Result<(), GenRomProfile
         .try_for_each(|id| pack.get(id).map(|_| ()))
 }
 
-/// Require every fixed root, before any domain writes a report line.
+/// Require every fixed root in the pack, so a missing root is refused before any domain writes a report line.
 ///
 /// # Errors
 ///
