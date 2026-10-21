@@ -11,6 +11,8 @@ const BGR555_CHANNEL_BITS: u32 = 5;
 const RGB888_TO_BGR555_SHIFT: u32 = u8::BITS - BGR555_CHANNEL_BITS;
 const BGR555_GREEN_SHIFT: u32 = BGR555_CHANNEL_BITS;
 const BGR555_BLUE_SHIFT: u32 = BGR555_CHANNEL_BITS * 2;
+/// The smallest palette upstream accepts (`jasc_pal.c`: `numColors < 1`).
+const MIN_COLORS: usize = 1;
 /// The largest palette a GBA-native consumer can hold (one full 256-color
 /// palette). A declared count above this is rejected before any allocation.
 const MAX_COLORS: usize = 256;
@@ -24,6 +26,8 @@ pub enum JascPalError {
     UnsupportedVersion,
     /// The declared color count is missing or invalid.
     BadColorCount,
+    /// The declared color count is zero; upstream requires at least one.
+    NoColors,
     /// The declared color count exceeds what a GBA palette can hold.
     TooManyColors { max: usize, declared: usize },
     /// The file contains fewer colors than it declares.
@@ -39,6 +43,7 @@ impl fmt::Display for JascPalError {
             Self::BadMagic => write!(f, "JASC-PAL: missing or wrong magic header"),
             Self::UnsupportedVersion => write!(f, "JASC-PAL: unsupported version (expected 0100)"),
             Self::BadColorCount => write!(f, "JASC-PAL: missing or invalid colour count"),
+            Self::NoColors => write!(f, "JASC-PAL: header declared zero colours (minimum is 1)"),
             Self::TooManyColors { max, declared } => {
                 write!(
                     f,
@@ -102,6 +107,9 @@ pub fn parse(text: &str) -> Result<Vec<Rgb888>, JascPalError> {
         .next()
         .and_then(|line| line.trim().parse().ok())
         .ok_or(JascPalError::BadColorCount)?;
+    if declared_color_count < MIN_COLORS {
+        return Err(JascPalError::NoColors);
+    }
     if declared_color_count > MAX_COLORS {
         return Err(JascPalError::TooManyColors {
             max: MAX_COLORS,
@@ -182,6 +190,12 @@ mod tests {
     fn rejects_bad_magic() {
         let err = parse("NOT-JASC\r\n0100\r\n0\r\n").unwrap_err();
         assert_eq!(err, JascPalError::BadMagic);
+    }
+
+    #[test]
+    fn rejects_zero_declared_colors() {
+        let err = parse("JASC-PAL\r\n0100\r\n0\r\n").unwrap_err();
+        assert_eq!(err, JascPalError::NoColors);
     }
 
     #[test]
