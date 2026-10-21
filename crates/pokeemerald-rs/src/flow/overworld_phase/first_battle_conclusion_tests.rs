@@ -101,6 +101,18 @@ fn route_101_trigger_phase(player: PlayerState) -> OverworldPhase {
     )
 }
 
+/// [`route_101_trigger_phase`] that retains the checkout pack, so the
+/// conclusion's deferred Birch's Lab warp reads the repository's own extract.
+fn repo_route_101_trigger_phase(player: PlayerState) -> OverworldPhase {
+    OverworldPhase::for_test_with_source(
+        crate::overworld::test_support::synthetic_scene(25, 25),
+        ROUTE_101,
+        player,
+        None,
+        crate::pack_source::PackSource::Repo,
+    )
+}
+
 fn play_first_battle_to_conclusion(phase: &mut OverworldPhase) {
     let (tx, ty) = ROUTE_101_TRIGGER_TILE;
     assert_eq!(
@@ -423,7 +435,7 @@ fn an_aborted_first_battle_does_not_run_the_conclusion() {
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_a_lost_first_battle_still_heals_and_reaches_the_lab() {
     let (tx, ty) = ROUTE_101_TRIGGER_TILE;
-    let mut phase = route_101_trigger_phase(PlayerState::new(
+    let mut phase = repo_route_101_trigger_phase(PlayerState::new(
         (tx - 1, ty),
         ROUTE_101_TRIGGER_ELEVATION,
         Direction::East,
@@ -471,7 +483,7 @@ fn real_pack_a_lost_first_battle_still_heals_and_reaches_the_lab() {
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_first_battle_conclusion_relocation_adopts_the_labs_elevation_before_any_movement() {
     let (tx, ty) = ROUTE_101_TRIGGER_TILE;
-    let mut phase = route_101_trigger_phase(PlayerState::new(
+    let mut phase = repo_route_101_trigger_phase(PlayerState::new(
         (tx - 1, ty),
         ROUTE_101_TRIGGER_ELEVATION,
         Direction::East,

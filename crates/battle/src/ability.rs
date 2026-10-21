@@ -7,43 +7,43 @@ use crate::damage::MoveCategory;
 use crate::status1::Status1;
 
 /// Battle Armor's ability ID.
-pub const BATTLE_ARMOR: AbilityId = AbilityId(4);
+pub const BATTLE_ARMOR: AbilityId = AbilityId::BATTLE_ARMOR;
 
 /// Huge Power's ability ID.
-pub const HUGE_POWER: AbilityId = AbilityId(37);
+pub const HUGE_POWER: AbilityId = AbilityId::HUGE_POWER;
 
 /// Liquid Ooze's ability ID.
-pub const LIQUID_OOZE: AbilityId = AbilityId(64);
+pub const LIQUID_OOZE: AbilityId = AbilityId::LIQUID_OOZE;
 
 /// Overgrow's ability ID.
-pub const OVERGROW: AbilityId = AbilityId(65);
+pub const OVERGROW: AbilityId = AbilityId::OVERGROW;
 
 /// Blaze's ability ID.
-pub const BLAZE: AbilityId = AbilityId(66);
+pub const BLAZE: AbilityId = AbilityId::BLAZE;
 
 /// Torrent's ability ID.
-pub const TORRENT: AbilityId = AbilityId(67);
+pub const TORRENT: AbilityId = AbilityId::TORRENT;
 
 /// Swarm's ability ID.
-pub const SWARM: AbilityId = AbilityId(68);
+pub const SWARM: AbilityId = AbilityId::SWARM;
 
 /// Pure Power's ability ID.
-pub const PURE_POWER: AbilityId = AbilityId(74);
+pub const PURE_POWER: AbilityId = AbilityId::PURE_POWER;
 
 /// Shell Armor's ability ID.
-pub const SHELL_ARMOR: AbilityId = AbilityId(75);
+pub const SHELL_ARMOR: AbilityId = AbilityId::SHELL_ARMOR;
 
 /// Guts' ability ID.
-pub const GUTS: AbilityId = AbilityId(62);
+pub const GUTS: AbilityId = AbilityId::GUTS;
 
 /// Marvel Scale's ability ID.
-pub const MARVEL_SCALE: AbilityId = AbilityId(63);
+pub const MARVEL_SCALE: AbilityId = AbilityId::MARVEL_SCALE;
 
 /// Thick Fat's ability ID.
-pub const THICK_FAT: AbilityId = AbilityId(47);
+pub const THICK_FAT: AbilityId = AbilityId::THICK_FAT;
 
 /// Hustle's ability ID.
-pub const HUSTLE: AbilityId = AbilityId(55);
+pub const HUSTLE: AbilityId = AbilityId::HUSTLE;
 
 /// Low-HP power-boosting abilities paired with their boosted move type.
 pub const PINCH_BOOSTS: [(AbilityId, Type); 4] = [
@@ -219,7 +219,7 @@ mod tests {
     use assets::species::AbilityId;
     use assets::{SpeciesId, Type};
 
-    const NO_ABILITY: AbilityId = AbilityId(0);
+    const NO_ABILITY: AbilityId = AbilityId::NONE;
     const TENTACOOL: SpeciesId = SpeciesId(72);
     const MARILL: SpeciesId = SpeciesId(183);
     const TREECKO: SpeciesId = SpeciesId(277);

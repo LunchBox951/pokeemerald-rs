@@ -362,11 +362,39 @@ pub(super) fn write_synthetic_pack(dir_hint: &str) -> std::path::PathBuf {
     write_pack(dir_hint, &synthetic_pack())
 }
 
-pub(super) fn write_pack(dir_hint: &str, bytes: &[u8]) -> std::path::PathBuf {
-    let path = std::env::temp_dir().join(format!(
-        "pokeemerald-rs-assets-pack-test-{dir_hint}-{}.pack",
+/// Candidate fixture path for `dir_hint`; attempt 0 is the plain name.
+pub(super) fn pack_fixture_path(dir_hint: &str, attempt: u32) -> std::path::PathBuf {
+    let suffix = if attempt == 0 {
+        String::new()
+    } else {
+        format!("-{attempt}")
+    };
+    std::env::temp_dir().join(format!(
+        "pokeemerald-rs-assets-pack-test-{dir_hint}-{}{suffix}.pack",
         std::process::id()
-    ));
-    std::fs::write(&path, bytes).unwrap();
-    path
+    ))
+}
+
+/// Writes `bytes` to a freshly created file. Creation is exclusive
+/// (`O_EXCL`), which refuses any existing entry, including a symlink, so a
+/// preplanted link is never followed or truncated; a taken name moves on to
+/// the next candidate.
+pub(super) fn write_pack(dir_hint: &str, bytes: &[u8]) -> std::path::PathBuf {
+    use std::io::Write;
+    for attempt in 0.. {
+        let path = pack_fixture_path(dir_hint, attempt);
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(mut file) => {
+                file.write_all(bytes).unwrap();
+                return path;
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(err) => panic!("create pack fixture {}: {err}", path.display()),
+        }
+    }
+    unreachable!()
 }
