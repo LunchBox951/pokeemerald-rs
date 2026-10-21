@@ -1,7 +1,7 @@
 use crate::pitch::MIXER_RATE;
 
-/// The 524_288 Hz noise base clock, counted in whole ticks per output sample so
-/// every completed LFSR period survives slow rates (`mgba/src/gb/audio.c:602-644`).
+/// The 524_288 Hz noise base clock in whole ticks per output sample, so slow
+/// rates lose no completed LFSR period (`mgba/src/gb/audio.c:602-644`).
 const TICKS_PER_SAMPLE: u64 = 524_288;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -57,22 +57,20 @@ impl NoiseControl {
 
 /// CGB channel 4 noise generator.
 ///
-/// Besides the LFSR it holds the channel's output latch, `ch4.sample`: the
-/// volume-resolved level (0..=15) the last LFSR clock or envelope step left
-/// (`mgba/src/gb/audio.c:641,730-732`). Triggers, retunes, and direct volume
-/// writes never rewrite it.
+/// Besides the LFSR it holds the output latch, `ch4.sample`: the
+/// volume-resolved level (0..=15) left by the last LFSR clock or envelope step
+/// (`mgba/src/gb/audio.c:641,730-732`).
 #[derive(Clone, Debug)]
 pub struct NoiseChannel {
     lfsr: u16,
     width: LfsrWidth,
-    /// Elapsed base ticks (scaled by `MIXER_RATE`); after a retune it can
-    /// hold whole periods owed to the next clock-enabled sample.
+    /// Elapsed base ticks scaled by `MIXER_RATE`; a retune can leave whole
+    /// periods owed.
     elapsed: u64,
     period: u64,
     output: i8,
     level: u8,
-    /// The volume the latch was last resolved against: the render path's
-    /// DC centre, rewritten only where the latch itself is.
+    /// The volume the latch was last resolved against, the render DC centre.
     centre: u8,
     clocking: bool,
 }
@@ -97,27 +95,16 @@ impl NoiseChannel {
     /// Retunes the clock without resetting the LFSR or its trigger-time width.
     ///
     /// M4A preserves the `NR43` width bit during pitch writes
-    /// (`pokeemerald/src/m4a.c:1197-1201`).
-    ///
-    /// mGBA settles the old rate before an `NR43` write and keeps `lastEvent`,
-    /// so the new period is measured against the clock time already elapsed
-    /// (`mgba/src/gb/audio.c:354-358,602-607,630-644`). The phase is therefore
-    /// rescaled by the rate ratio, whole periods included; the next
-    /// clock-enabled sample, or a trigger first ([`Self::settle_owed_clocks`]),
-    /// clocks them, so the retune itself leaves the latch untouched.
+    /// (`pokeemerald/src/m4a.c:1197-1201`). Elapsed time is kept, so whole new
+    /// periods stay owed (`mgba/src/gb/audio.c:354-358,602-607,630-644`).
     pub fn retune(&mut self, byte: u8) {
-        // Elapsed time is kept exactly; only the period changes, which is the
-        // old-to-new rate-ratio rescaling of the normalised phase.
         self.period = NoiseControl::from_byte(byte).period;
     }
 
     /// Clocks the whole periods a retune left owed, at hardware `volume`.
     ///
     /// mGBA runs channel 4 before each `NR42`/`NR44` write
-    /// (`mgba/src/gb/audio.c:347,362,602-644`), so a trigger following a
-    /// retune first clocks every whole new-rate period already elapsed, and
-    /// the latch they leave survives the trigger. A stopped channel owes
-    /// nothing (`audio.c:585`).
+    /// (`mgba/src/gb/audio.c:347,362,602-644`); a stopped channel owes nothing.
     pub fn settle_owed_clocks(&mut self, volume: u8) {
         if !self.clocking {
             return;
@@ -135,12 +122,8 @@ impl NoiseChannel {
         self.lfsr = 0;
     }
 
-    /// The retirement off-write (`NR42 = 8; NR44 = 0x80`, `m4a.c:873-874`):
-    /// restarts the LFSR and phase and leaves the channel clocking, keeping a
-    /// raised latch for the first clock to settle. A latch already at zero
-    /// renders the same zero level at every volume, so its DC centre drops
-    /// with the volume rather than inventing a settling edge at the next
-    /// clock (`mgba/src/gb/audio.c:371-383,641`).
+    /// The retirement off-write (`NR42 = 8; NR44 = 0x80`, `m4a.c:873-874`);
+    /// a zero latch drops its DC centre (`mgba/src/gb/audio.c:371-383,641`).
     pub fn off_write(&mut self) {
         self.retrigger();
         self.clocking = true;
@@ -149,48 +132,35 @@ impl NoiseChannel {
         }
     }
 
-    /// Keeps the previous note's output latch across a trigger: `ch4.sample`
-    /// is only rewritten when the LFSR clocks or the envelope steps, so the
-    /// predecessor's resolved level persists into the next note until then
-    /// (`mgba/src/gb/audio.c:371-383,602-644`). The level is carried as
-    /// resolved, whatever the predecessor's current hardware volume: a
-    /// volume write or zero-volume trigger does not recompute it.
+    /// Keeps the previous note's latch across a trigger, as resolved: only an
+    /// LFSR clock or envelope step rewrites it (`mgba/src/gb/audio.c:371-383,602-644`).
     pub fn continue_output_from(&mut self, previous: &Self) {
         self.level = previous.level;
         self.centre = previous.centre;
     }
 
-    /// Re-resolves the latch at an envelope step: the sample is rewritten as
-    /// `(sample > 0) * currentVolume` (`mgba/src/gb/audio.c:730-732`), so a
-    /// raised latch follows the stepped volume while a low one stays low.
+    /// Re-resolves the latch at an envelope step as
+    /// `(sample > 0) * currentVolume` (`mgba/src/gb/audio.c:730-732`).
     pub fn apply_envelope_step(&mut self, volume: u8) {
-        // The step rewrites `ch4.sample = (sample > 0) * currentVolume`
-        // (`mgba/src/gb/audio.c:730-732`), so the centre follows every step
-        // while a low latch stays at zero.
         self.centre = volume & 0x0F;
         if self.level > 0 {
             self.level = self.centre;
         }
     }
 
-    /// Whether the last trigger left the channel running. A trigger with
-    /// initial volume zero and a decreasing envelope disables it
-    /// (`mgba/src/gb/audio.c:371-372,856-860`): the LFSR stops clocking
-    /// (`audio.c:585`) while the held latch is still output (`audio.c:782`).
+    /// Zero initial volume with a decreasing envelope stops the LFSR while the
+    /// held latch is still output (`mgba/src/gb/audio.c:371-372,585,782,856-860`).
     pub fn set_clocking(&mut self, clocking: bool) {
         self.clocking = clocking;
     }
 
-    /// The signed render level, `2 * level - centre`: the latch measured from
-    /// the volume it was resolved against, so it is unchanged by anything but
-    /// the writes that rewrite the latch itself.
+    /// The signed render level, `2 * level - centre`.
     #[must_use]
     pub fn centred_level(&self) -> i32 {
         2 * i32::from(self.level) - i32::from(self.centre)
     }
 
-    /// Whether the held latch still renders a nonzero level that a clock
-    /// has yet to settle.
+    /// Whether the held latch still renders a nonzero level.
     #[must_use]
     pub fn has_unsettled_output(&self) -> bool {
         self.level != 0 || self.centre != 0
@@ -210,7 +180,7 @@ impl NoiseChannel {
             self.lfsr |= feedback_bits;
         }
         self.output = if feedback_is_high { 1 } else { -1 };
-        // `ch4.sample = lsb * currentVolume` (`mgba/src/gb/audio.c:641`).
+        // `ch4.sample = lsb * currentVolume` (`mgba/src/gb/audio.c:641`)
         self.level = if feedback_is_high { volume & 0x0F } else { 0 };
         self.centre = volume & 0x0F;
     }
@@ -225,8 +195,7 @@ impl NoiseChannel {
         self.lfsr
     }
 
-    /// Advances one output sample at hardware `volume`, clocking the LFSR
-    /// whenever its phase wraps, and returns the resolved latch (0..=15).
+    /// Advances one output sample at hardware `volume` and returns the latch (0..=15).
     pub fn clock_sample(&mut self, volume: u8) -> u8 {
         if !self.clocking {
             return self.level;
@@ -239,7 +208,7 @@ impl NoiseChannel {
         self.level
     }
 
-    /// Produces the next bipolar sample, clocking the LFSR when its phase advances.
+    /// Produces the next bipolar sample.
     pub fn sample(&mut self) -> i8 {
         self.clock_sample(NOISE_UNIT_VOLUME);
         self.output
@@ -430,7 +399,6 @@ mod tests {
         let mut successor = NoiseChannel::from_control_byte(0x25);
         successor.continue_output_from(&noise);
         assert_eq!(successor.level(), 9);
-        // The first sample after the trigger (no clock yet) still reads it.
         assert_eq!(successor.clock_sample(0), 9);
     }
 
