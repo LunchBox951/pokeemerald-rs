@@ -38,7 +38,7 @@
 //! know the difference.
 
 use assets::audio::{MemAccCondition, MemAccOp};
-use assets::{Song, SongEvent, VoiceGroupId};
+use assets::{MusicPlayerId, Song, SongEvent, VoiceGroupId};
 use pack_format::{raw_entry, PackEntry, PackWriter};
 
 use super::check_pointer;
@@ -100,6 +100,8 @@ const HEADER_PARTS: usize = 8;
 const REVERB_SET: u8 = 0x80;
 /// One `gSongTable` entry: header pointer, `ms`, `me`.
 const SONG_TABLE_STRIDE: usize = 8;
+/// `Song.ms`'s offset within a `gSongTable` entry.
+const SONG_TABLE_MS: usize = 4;
 
 /// Write every song.
 ///
@@ -166,14 +168,20 @@ pub(crate) fn song(
             ptr: root.voicegroup,
         })?;
 
+    // `m4aSongNumStart` indexes `gMPlayTable` with this entry's `ms` (`m4a.c:107-114`).
+    let player = MusicPlayerId(reader.u16_le(
+        audio.song_table.offset() + usize::from(root.index) * SONG_TABLE_STRIDE + SONG_TABLE_MS,
+    )?);
+
     Ok(raw_entry(
         id.to_owned(),
-        decode_song_bytes(reader, id, root.header, voicegroup)?,
+        decode_song_bytes(reader, id, root.header, voicegroup, player)?,
     ))
 }
 
 /// Decode the song whose `SongHeader` is at `header` into its canonical pack
-/// payload. Callers must corroborate `voicegroup` themselves.
+/// payload. Callers must corroborate `voicegroup` and `player` (the
+/// `gSongTable` entry's `ms`) themselves.
 ///
 /// # Errors
 ///
@@ -183,8 +191,15 @@ pub fn decode_song_payload(
     id: &'static str,
     header: GbaPtr,
     voicegroup: &str,
+    player: u16,
 ) -> Result<Vec<u8>, ImportError> {
-    decode_song_bytes(reader, id, header, VoiceGroupId(voicegroup.to_owned()))
+    decode_song_bytes(
+        reader,
+        id,
+        header,
+        VoiceGroupId(voicegroup.to_owned()),
+        MusicPlayerId(player),
+    )
 }
 
 fn decode_song_bytes(
@@ -192,6 +207,7 @@ fn decode_song_bytes(
     id: &'static str,
     header: GbaPtr,
     voicegroup: VoiceGroupId,
+    player: MusicPlayerId,
 ) -> Result<Vec<u8>, ImportError> {
     let base = header.offset();
     let track_count = reader.u8(base + HEADER_TRACK_COUNT)?;
@@ -203,7 +219,7 @@ fn decode_song_bytes(
         let start = reader.ptr(base + HEADER_PARTS + track * 4)?;
         tracks.push(decode_track(reader, id, track, start)?);
     }
-    let song = Song::new(voicegroup, priority, reverb, tracks)
+    let song = Song::new(voicegroup, player, priority, reverb, tracks)
         .map_err(|source| ImportError::Audio { id, source })?;
     Ok(song.encode())
 }

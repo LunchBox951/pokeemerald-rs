@@ -991,26 +991,21 @@ fn a_connection_target_with_a_truncated_grid_is_an_error_not_a_silent_omission()
     );
 }
 
-/// Loads the *real* local pack (`cargo xtask extract`'s output) and
-/// exercises the full `load_default_room` + `compose` pipeline against
-/// the protagonist's bedroom (Brendan's house 2F) -- proof this module's
-/// decoding agrees with the real extracted overworld assets, not just the
-/// synthetic fixture above. Needs a local pack: run `cargo xtask extract`
-/// first, then `cargo test -p pokeemerald-rs -- --ignored`.
+/// `OverworldScene` loaded from the checkout pack for the protagonist's
+/// bedroom (Brendan's house 2F) composes deterministic, non-blank frames,
+/// and a different frame when the player's position and facing change
+/// together. Needs a local pack: run `cargo xtask extract` first, then
+/// `cargo test -p pokeemerald-rs -- --ignored`.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_composes_non_blank_deterministic_overworld_frames() {
-    // The production fresh-save flag store, so the bedroom renders exactly
-    // as it would for a real new game -- same reasoning as
-    // `fresh_save_event_data` below: a fixture that claims to *be*
-    // production state has to come from production state.
+    // Fresh-save flags, so the bedroom's object events resolve as in a new game.
     let event_data = fresh_save_event_data();
     let scene =
         super::load_repo_default_room(&event_data).expect("run `cargo xtask extract` first");
 
-    // A couple of on-foot player states across the bedroom's 9x8 interior
-    // (`LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F`), including one mid-step,
-    // so the scroll-lag path is exercised too.
+    // Two on-foot player states inside the bedroom's 9x8 interior
+    // (`LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F`).
     let standing = PlayerState::new((5, 5), 3, Direction::South);
     let frame_a = scene.compose(&standing, &event_data, 0);
     let frame_b = scene.compose(&standing, &event_data, 0);
@@ -1043,43 +1038,35 @@ fn real_pack_composes_non_blank_deterministic_overworld_frames() {
     );
 }
 
-// -- Real-pack NPC rendering (issue #161) ------------------------------------
+// -- Real-pack NPC rendering -------------------------------------------------
 
-/// Brendan's House 1F: the only bundled map whose *fresh-save* object
-/// events include NPCs this module actually draws (Mom at `(2, 6)` and the
-/// rival's mom at `(2, 7)`, hidden on a fresh male save); the bedroom's own two events both resolve to
-/// nothing renderable on a fresh save, which is why these tests use 1F.
+/// Brendan's House 1F: the bundled map whose fresh-save object events
+/// include a drawn NPC (Mom at `(2, 6)`); the rival's mom at `(2, 7)` is
+/// hidden on a fresh male save. The bedroom's two object events resolve to
+/// nothing renderable on a fresh save, so the NPC tests use 1F.
 const ONE_F: assets::MapId = assets::MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F");
 
 /// `FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_MOM`
-/// (`include/constants/flags.h:809`) -- deliberately *not* one of
+/// (`include/constants/flags.h:809`). It is not in
 /// [`assets::RESET_MAP_FLAGS`], so Mom is visible on a fresh save and
-/// setting this id is an observable change.
+/// setting the flag hides her.
 const FLAG_HIDE_BRENDANS_HOUSE_MOM: u16 = 0x2F6;
 
-/// The fresh-save flag store [`crate::new_game::init_save_blocks_for_new_game`]
-/// builds, so these tests see exactly the object-event visibility a real new
-/// game would.
-///
-/// **Delegates to the production constructor** rather than rebuilding the
-/// flag set from [`assets::RESET_MAP_FLAGS`]. It used to do the latter,
-/// which silently stopped matching its own doc comment the moment
-/// `init_save_blocks` grew a second effect (the skipped truck sequence's
-/// gender branch -- `crate::new_game::apply_truck_intro_flags`): the tests
-/// below kept passing against a flag set no real save ever has. A helper
-/// that claims to *be* production state has to come from production state.
+/// The `EventData` that [`crate::new_game::init_save_blocks_for_new_game`]
+/// builds, so object-event visibility matches a real new game. It calls the
+/// production constructor instead of rebuilding the flag set, so every flag
+/// the new-game path sets (reset-map flags, the wall-clock Vigoroth flags,
+/// the truck-intro gender flags) is present.
 fn fresh_save_event_data() -> engine::event_data::EventData {
     let (block1, _) = crate::new_game::init_save_blocks_for_new_game();
     block1.event_data
 }
 
-/// The issue's own "NPCs actually reach the framebuffer" guard, and the
-/// mutation guard for [`super::sprites::SceneSprites::entries`]' NPC half:
-/// composing 1F with a fresh save must differ, pixel for pixel, from
-/// composing it with Mom's hide flag set. Both halves are load-bearing --
-/// it pins that Mom *draws* (a no-op NPC OAM step would make the two
-/// frames identical) and that the hide-flag gate reaches rendering (an
-/// unfiltered NPC list would too).
+/// Composing 1F on a fresh save differs pixel for pixel from composing it
+/// with Mom's hide flag set. That pins both that Mom is drawn by
+/// [`super::sprites::SceneSprites::entries`] (without NPC entries the two
+/// frames would match) and that the hide flag reaches rendering (an
+/// unfiltered NPC list would match too).
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_hiding_mom_changes_the_composed_1f_frame() {
@@ -1126,11 +1113,10 @@ fn real_pack_hiding_mom_changes_the_composed_1f_frame() {
     );
 }
 
-/// The OAM half of the same guard, against the *real*
-/// [`assets::MapEventsTable`] entry rather than a hand-built fixture: the
-/// exact entries 1F yields on a fresh save, including each NPC's resolved
-/// frame block in the scene's combined sprite tileset and its generic
-/// palette bank.
+/// [`super::sprites::SceneSprites::entries`] for 1F on a fresh save yields
+/// exactly the player and Mom, with Mom's frame block in the combined sprite
+/// tileset, generic palette bank, facing, and screen position taken from the
+/// real [`assets::MapEventsTable`] entry.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_1f_oam_entries_cover_every_drawn_fresh_save_npc() {
@@ -1148,15 +1134,11 @@ fn real_pack_1f_oam_entries_cover_every_drawn_fresh_save_npc() {
     assert_eq!(
         entries.len(),
         2,
-        "the player and Mom, and nobody else. 1F's Vigoroths are hidden \
-         by the skipped wall-clock script's flags \
-         (`crate::new_game::apply_wall_clock_vigoroth_flags`); its \
-         dad and the rival are hidden by RESET_MAP_FLAGS; and the rival's \
-         *mom* and *sibling* are hidden by the male branch of the skipped \
-         truck sequence (`crate::new_game::apply_truck_intro_flags`). This \
-         assertion was `3` while that branch went unapplied -- a second, \
-         duplicated mother standing in the player's own house, which is \
-         exactly the bug it now guards"
+        "the player and Mom, and nobody else: 1F's Vigoroths are hidden by \
+         `crate::new_game::apply_wall_clock_vigoroth_flags`; its dad and \
+         the rival are hidden by RESET_MAP_FLAGS; the rival's mom and \
+         sibling are hidden by the male branch of \
+         `crate::new_game::apply_truck_intro_flags`"
     );
 
     // Entry 0 is always the player, at its fixed screen position.
@@ -1167,11 +1149,10 @@ fn real_pack_1f_oam_entries_cover_every_drawn_fresh_save_npc() {
     assert_eq!(entries[0].y(), super::avatar::PLAYER_OBJ_Y);
     assert_eq!(entries[0].palette_bank(), 0);
 
-    // The one NPC entry. Mom faces east (`MOVEMENT_TYPE_FACE_RIGHT`), which
-    // reuses the west stand frame h-flipped (`avatar::stand_frame_for`), and
-    // sits in the combined sprite tileset at the first `FRAME_BLOCK_TILES`
-    // stride after the player's own block -- her sheet is packed first, as
-    // `object_events[0]`.
+    // Mom faces east (`MOVEMENT_TYPE_FACE_RIGHT`), which reuses the west
+    // stand frame h-flipped (`avatar::stand_frame_for`). Her sheet is packed
+    // first (`object_events[0]`), one `FRAME_BLOCK_TILES` stride after the
+    // player's block.
     let block = super::avatar::FRAME_BLOCK_TILES;
     let west_stand = super::avatar::FRAME_WEST_STAND * super::avatar::FRAME_TILES;
     let metatile_px = u16::try_from(super::METATILE_PX).unwrap();
@@ -1193,9 +1174,8 @@ fn real_pack_1f_oam_entries_cover_every_drawn_fresh_save_npc() {
         "one metatile north of the player: Mom stands at (2, 6)"
     );
 
-    // The rival's mother is *not* drawn: her object event at (2, 7) --
-    // this fixture's own player tile, where she would have overlapped the
-    // player exactly -- is hidden by the truck sequence's male branch.
+    // The rival's mother is not drawn: her object event at (2, 7), the
+    // player's own tile, is hidden by the truck sequence's male branch.
     let rival_mom = assets::MapEventsTable::new()
         .resolve(ONE_F)
         .unwrap()
@@ -1210,33 +1190,29 @@ fn real_pack_1f_oam_entries_cover_every_drawn_fresh_save_npc() {
          male player (InsideOfTruck/scripts.inc:29)"
     );
 
-    // The bindings those tile indices address, cross-checked against the
-    // packing order `npc::resolve_bindings` walks.
+    // Bindings follow the packing order `npc::resolve_bindings` walks.
     let bindings = scene.sprites.bindings();
     assert_eq!(bindings.len(), 4, "mom, woman_4, norman, and the rival");
     assert!(
         bindings.contains_key("OBJ_EVENT_GFX_RIVAL_BRENDAN_NORMAL"),
-        "the rival is bound (to the player's own sheet) even though \
-         RESET_MAP_FLAGS hides him: bindings are per-`graphics_id`, not \
-         per-visibility"
+        "the rival is bound to the player's own sheet even though \
+         RESET_MAP_FLAGS hides him: bindings are per `graphics_id`, not per \
+         visibility"
     );
     assert!(!bindings.contains_key("OBJ_EVENT_GFX_VIGOROTH_CARRYING_BOX"));
     assert!(!bindings.contains_key("OBJ_EVENT_GFX_NINJA_BOY"));
 }
 
-/// The opposite-gender rival regression against the *real* pack, both ways
-/// round: the rival object event a player can actually meet lives in the
-/// other protagonist's house and carries that protagonist's graphics id
+/// `SceneSprites::bindings` binds the opposite-gender rival for either
+/// player. The rival a player can meet lives in the other protagonist's
+/// house and carries that protagonist's graphics id
 /// (`LittlerootTown_MaysHouse_2F/map.json:19` ->
-/// `OBJ_EVENT_GFX_RIVAL_MAY_NORMAL`, and vice versa), so a binding must
-/// resolve for it whichever gender this run is. Before the fix, playing as
-/// Brendan resolved a binding only for `..._RIVAL_BRENDAN_NORMAL` -- the id
-/// that stays hidden in his own house -- leaving the real rival undrawn
-/// once its hide flag cleared.
+/// `OBJ_EVENT_GFX_RIVAL_MAY_NORMAL`, and vice versa), so a Brendan player
+/// must bind `..._RIVAL_MAY_NORMAL` and a May player `..._RIVAL_BRENDAN_NORMAL`.
 ///
-/// Real-pack, because the point is partly that both protagonists' walking
-/// sheets *and* palettes are actually extracted and decodable
-/// (`sprite/{brendan,may}/walking`, `sprite/palette/{brendan,may}`).
+/// Uses the real pack because both protagonists' walking sheets and palettes
+/// must be extracted and decodable (`sprite/{brendan,may}/walking`,
+/// `sprite/palette/{brendan,may}`).
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_the_opposite_gender_rival_binds_for_either_player() {
@@ -1293,9 +1269,8 @@ fn real_pack_the_opposite_gender_rival_binds_for_either_player() {
         "the two configurations are mirror images -- same bank, same stride"
     );
 
-    // And the *resident's own* id still binds, to the already-loaded player
-    // sheet at bank 0 / base tile 0 (it is hidden in play, but the binding
-    // is correct rather than absent).
+    // The resident's own id binds to the player's sheet at bank 0 / base
+    // tile 0, even though that object event is hidden in play.
     let brendan_at_home = scene_for(BRENDANS_2F, super::PlayerCharacter::Brendan);
     let own = brendan_at_home
         .sprites
@@ -1306,23 +1281,17 @@ fn real_pack_the_opposite_gender_rival_binds_for_either_player() {
     assert_eq!((own.palette_bank(), own.base_tile()), (0, 0));
 }
 
-/// The rendering half of [`super::npc`]'s `OBJ_EVENT_GFX_VAR_0` exception
-/// (issue #248): Route 103's real rival object event shares that exact
-/// `graphics_id` with every bedroom decoration placeholder, so this proves
-/// the *scene-decode* path -- not just [`super::npc::resolve_sprite_source`]
-/// in isolation -- resolves it to a real sprite binding once
-/// `VAR_OBJ_GFX_ID_0` names a real rival id, using the real
-/// [`assets::MapEventsTable`] entry against the real pack.
+/// With `VAR_OBJ_GFX_ID_0` naming a rival graphics id, `SceneSprites` binds
+/// Route 103's `OBJ_EVENT_GFX_VAR_0` rival object event to the opposite
+/// protagonist's sheet. This exercises scene decode (not just
+/// [`super::npc::resolve_sprite_source`]) against the real
+/// [`assets::MapEventsTable`] entry and pack.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_route_103_rival_binds_to_the_opposite_protagonists_sheet() {
     const ROUTE_103: assets::MapId = assets::MapId("MAP_ROUTE103");
     // `VAR_OBJ_GFX_ID_0` (`include/constants/vars.h:32`) and
-    // `OBJ_EVENT_GFX_RIVAL_MAY_NORMAL`'s own numeric id
-    // (`include/constants/event_objects.h:112`) -- independently
-    // transcribed here too, the same convention every module citing these
-    // ids uses (`crate::flow::overworld_phase::route103_rival_trigger`'s
-    // own docs).
+    // `OBJ_EVENT_GFX_RIVAL_MAY_NORMAL` (`include/constants/event_objects.h:112`).
     const VAR_OBJ_GFX_ID_0: u16 = 0x4010;
     const RIVAL_MAY_NORMAL_GFX_ID: u16 = 105;
 
@@ -1351,10 +1320,7 @@ fn real_pack_route_103_rival_binds_to_the_opposite_protagonists_sheet() {
         .bindings()
         .get("OBJ_EVENT_GFX_VAR_0")
         .copied()
-        .expect(
-            "VAR_OBJ_GFX_ID_0 naming a real rival id must bind a sprite, not stay `None` \
-             like a bedroom decoration",
-        );
+        .expect("VAR_OBJ_GFX_ID_0 naming a rival id must bind a sprite for OBJ_EVENT_GFX_VAR_0");
     assert_ne!(
         binding.palette_bank(),
         0,
@@ -1368,22 +1334,16 @@ fn real_pack_route_103_rival_binds_to_the_opposite_protagonists_sheet() {
     );
 }
 
-// -- Real-pack Oldale Town / Route 103 background NPCs (issue #262) --------
+// -- Real-pack Oldale Town / Route 103 background NPCs -----------------------
 
-/// One [`super::npc::SpriteBinding`]'s worth of proof that a newly-bound
-/// background-NPC `graphics_id` really decodes against the real extracted
-/// pack -- not just that [`super::npc::resolve_sprite_source`] names a
-/// `sprite/<path>` id (already pinned pack-free by
-/// `npc::binding_tests::resolve_sprite_source_resolves_the_oldale_and_route_103_background_npcs`),
-/// but that `AssetPack::sprite` actually finds that entry and
-/// `avatar::pack_people_sheet_frames` accepts its real dimensions (any
-/// mismatch is a real, real-pack-only failure mode --
-/// [`super::OverworldSceneError::SpriteSheetWrongDimensions`]/
-/// `ImagePixelCountMismatch`/`ImageNotTileAligned`). A nonzero base tile and
-/// the expected `npc_<n>` palette bank rule out the two ways a binding could
-/// silently be wrong instead of simply absent: reusing the player's own
-/// block (base tile `0`) or a different generic palette than upstream's
-/// `.paletteTag` names.
+/// Asserts that `graphics_id` has a [`super::npc::SpriteBinding`] in
+/// `bindings` with `expected_palette_bank` and its own frame block. The
+/// binding exists only if `AssetPack::sprite` finds the entry and
+/// `avatar::pack_people_sheet_frames` accepts its dimensions
+/// ([`super::OverworldSceneError::SpriteSheetWrongDimensions`],
+/// `ImagePixelCountMismatch`, `ImageNotTileAligned`). A nonzero base tile
+/// rules out reusing the player's block (base tile `0`), and the palette
+/// bank must match the upstream `.paletteTag` of the graphics info.
 fn assert_background_npc_binds(
     bindings: &HashMap<&'static str, super::npc::SpriteBinding>,
     graphics_id: &str,
@@ -1406,40 +1366,30 @@ fn assert_background_npc_binds(
     );
 }
 
-/// The other half of "no longer invisible": a [`super::npc::SpriteBinding`]
-/// alone still draws nothing unless [`super::npc::oam_entries`] actually
-/// emits an entry for the object event using it. Mirrors
-/// [`real_pack_1f_oam_entries_cover_every_drawn_fresh_save_npc`]'s
-/// mechanics -- binding frame block, palette bank, 16x32 shape, and screen
-/// position derived from the player's own fixed one -- for a single
-/// `graphics_id`, one at a time rather than over a shared player position:
-/// `engine::overworld::object_event_is_in_view`'s spawn window is only ~17
-/// metatiles wide, and Route 103's trainers are spread across a 70-tile
-/// route, so no one player tile holds them all. The player is parked one
-/// metatile *north* of the NPC's own template tile, which puts it in that
-/// window and makes the expected entry position exactly one metatile south
-/// of [`super::avatar::PLAYER_OBJ_Y`] -- the same relationship the 1F test
-/// asserts for Mom, with the signs swapped.
+/// Asserts that [`super::sprites::SceneSprites::entries`] emits exactly one
+/// OAM entry for the fresh-save-visible object event using `graphics_id`,
+/// with the binding's frame block and palette bank, a 16x32 shape, and the
+/// player's column.
 ///
-/// Matching is by frame block rather than by count: bindings' blocks are
-/// disjoint by construction, so "exactly one entry addressing this
-/// binding's block" identifies this NPC's entry without assuming anything
-/// about how many *other* object events happen to share the window (Route
-/// 103's berry and cuttable trees are still unbound, and its twins are
-/// declared twice).
+/// Each `graphics_id` is checked alone because
+/// `engine::overworld::object_event_is_in_view` covers only ~17 metatiles
+/// and Route 103's trainers span a 70-tile route. The player stands one
+/// metatile north of the NPC, so the entry sits one metatile south of
+/// [`super::avatar::PLAYER_OBJ_Y`].
+///
+/// The entry is found by frame block rather than by count: binding blocks
+/// are disjoint, and other object events share the window (Route 103's
+/// berry and cuttable trees are unbound, and its twins are declared twice).
 fn assert_background_npc_draws_an_oam_entry(
     scene: &super::OverworldScene,
     map: assets::MapId,
     data: &engine::event_data::EventData,
     graphics_id: &str,
 ) {
-    // `oldale_town_npc_reposition::resolve_map_events` (issue #281), not a
-    // bare `MapEventsTable::resolve`: `scene` above was itself built through
-    // `load_room`, which already resolves through that same wrapper, so the
-    // expected position/facing this assertion computes below must agree --
-    // for Oldale Town's own footprints man and mart employee, that means
-    // their post-`OldaleTown_OnTransition` tiles, not their bare map.json
-    // ones. A no-op for every other map, Route 103 included.
+    // `load_room` resolves events through `resolve_map_events`, so the
+    // expected position must too: Oldale Town's footprints man and mart
+    // employee stand at their post-`OldaleTown_OnTransition` tiles, not the
+    // map.json ones. Other maps, Route 103 included, are unchanged.
     let event = super::oldale_town_npc_reposition::resolve_map_events(map, data)
         .unwrap()
         .object_events
@@ -1469,9 +1419,8 @@ fn assert_background_npc_draws_an_oam_entry(
     assert_eq!(
         drawn.len(),
         1,
-        "{graphics_id} must contribute exactly one OAM entry, drawn from \
-         its own binding's frame block -- a bound but never-emitted NPC is \
-         still invisible, which is the bug issue #262 fixes"
+        "{graphics_id} must contribute exactly one OAM entry drawn from its \
+         own binding's frame block; a bound but never-emitted NPC is invisible"
     );
 
     let entry = drawn[0];
@@ -1498,7 +1447,7 @@ fn assert_background_npc_draws_an_oam_entry(
     );
 }
 
-/// Oldale Town's three fresh-save-visible background NPCs (issue #262):
+/// Oldale Town's three fresh-save-visible background NPCs bind and draw:
 /// the girl (`GIRL_3`, `data/maps/OldaleTown/map.json:33-45`), the mart
 /// employee (`MART_EMPLOYEE`, `:46-59`), and the footprints man/maniac
 /// (`MANIAC`, `:60-73`) -- all `"flag": "0"`, so all three are always
@@ -1530,11 +1479,11 @@ fn real_pack_oldale_town_binds_its_background_npcs() {
     }
 }
 
-/// Route 103's own background NPCs/trainers (issue #262), every one of them
-/// `"flag": "0"` on a fresh save (`data/maps/Route103/map.json`) -- unlike
-/// its own rival (`FLAG_HIDE_ROUTE_103_RIVAL`) and Professor Birch
-/// (`FLAG_HIDE_ROUTE_103_BIRCH`, already bound before this slice). Palette
-/// banks per each id's own `gObjectEventGraphicsInfo_*.paletteTag`.
+/// Route 103's background NPCs and trainers bind and draw. Each is
+/// `"flag": "0"` on a fresh save (`data/maps/Route103/map.json`), unlike its
+/// rival (`FLAG_HIDE_ROUTE_103_RIVAL`) and Professor Birch
+/// (`FLAG_HIDE_ROUTE_103_BIRCH`). Palette banks follow each id's
+/// `gObjectEventGraphicsInfo_*.paletteTag`.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_route_103_binds_its_background_npcs() {
@@ -1565,10 +1514,10 @@ fn real_pack_route_103_binds_its_background_npcs() {
     }
 }
 
-/// A female saved game must build Route 103 around May's player assets,
-/// while the map's variable graphics object resolves independently to
-/// Brendan as her rival. This pins the public `load_room` boundary where
-/// the saved-gender selection used to be discarded in favor of Brendan.
+/// Loading Route 103 for a `PlayerCharacter::May` save uses May's sheet and
+/// palette bank 0 for the player's `SceneSprites` tiles, while the map's
+/// `OBJ_EVENT_GFX_VAR_0` object resolves independently to Brendan as the
+/// rival.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn female_route_103_room_load_uses_may_for_player_and_brendan_for_rival() {
@@ -1588,8 +1537,7 @@ fn female_route_103_room_load_uses_may_for_player_and_brendan_for_rival() {
         &event_data,
     )
     .expect("run `cargo xtask extract` first");
-    // The reference sheets below must come from the same pack the scene
-    // just read.
+    // Reference sheets come from the same pack the scene read.
     let pack = assets::pack::AssetPack::load_repo().unwrap();
 
     let may_pixels = pack.sprite("may/walking").unwrap();
