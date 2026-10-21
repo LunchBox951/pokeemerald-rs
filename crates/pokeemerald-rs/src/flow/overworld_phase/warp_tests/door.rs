@@ -98,7 +98,7 @@ fn walking_up_to_the_lab_door_preempts_the_final_step_onto_it() {
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn facing_the_lab_door_and_holding_north_enters_birchs_lab() {
-    let mut phase = facing_littleroot_lab_door_phase(Direction::North);
+    let mut phase = on_checkout_pack(facing_littleroot_lab_door_phase(Direction::North));
 
     phase.step(held(Buttons::UP));
 
@@ -125,7 +125,7 @@ fn facing_the_lab_door_and_holding_north_enters_birchs_lab() {
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn walking_up_to_the_lab_door_enters_it_on_the_next_input_frame() {
-    let mut phase = approaching_littleroot_lab_door_phase();
+    let mut phase = on_checkout_pack(approaching_littleroot_lab_door_phase());
 
     for _ in 0..2 * u32::from(WALK_FRAMES_PER_TILE) {
         phase.step(held(Buttons::UP));
