@@ -61,6 +61,8 @@ const TYPE_KEYSPLIT: u8 = 0x40;
 const TYPE_RHYTHM: u8 = 0x80;
 /// One `gSongTable` entry is a header pointer and two `u16` player ids.
 const SONG_TABLE_ENTRY_BYTES: u32 = 8;
+/// `Song.ms`'s offset within a `gSongTable` entry.
+const SONG_TABLE_MS_OFFSET: u32 = 4;
 /// The most tracks any song header declares.
 const MAX_TRACKS: u8 = 16;
 /// A CGB programmable-wave table is 32 four-bit samples.
@@ -768,14 +770,13 @@ fn locate_song(
         |&base| is_song_header(ctx, base),
     )?;
     let track_count = super::locate::u8_at_addr(ctx.rom, header).unwrap_or(0);
-    check_song_header(ctx, song_id, voicegroup_label, header)?;
-
     let entry = only_one_matching(
         song_id,
         "a gSongTable entry",
         ctx.pointers.refs_to(header).iter().copied(),
         |_| true,
     )?;
+    check_song_header(ctx, song_id, voicegroup_label, header, entry)?;
     let index = song_index(&ctx.upstream, song_id)?;
     let table = entry
         .checked_sub(u32::from(index) * SONG_TABLE_ENTRY_BYTES)
@@ -809,7 +810,8 @@ fn locate_song(
 }
 
 /// Decode the pack's song through the canonical wire schema and check the
-/// located `SongHeader` against it: track count, priority, and reverb.
+/// located `SongHeader` against it: track count, priority, and reverb, and
+/// the `gSongTable` entry at `entry` against its `Song.ms` player index.
 ///
 /// It then decodes the ROM's track byte-code with `rom-import` and requires
 /// the canonical bytes to equal the pack payload exactly.
@@ -826,6 +828,7 @@ fn check_song_header(
     song_id: &str,
     voicegroup_label: &str,
     header: u32,
+    entry: u32,
 ) -> Result<(), GenRomProfileError> {
     let shape = |reason: String| GenRomProfileError::EntryShape {
         id: song_id.to_owned(),
@@ -867,6 +870,14 @@ fn check_song_header(
         )));
     }
 
+    let player = super::locate::u16_at_addr(ctx.rom, entry + SONG_TABLE_MS_OFFSET);
+    if player != Some(song.player().0) {
+        return Err(mismatch(format!(
+            "the song-table `ms` is {player:?}, the pack song's is {}",
+            song.player().0
+        )));
+    }
+
     let bytecode = |reason: String| GenRomProfileError::SongBytecodeMismatch {
         id: song_id.to_owned(),
         reason,
@@ -874,9 +885,14 @@ fn check_song_header(
     let ptr = rom_import::GbaPtr::new(header)
         .ok_or_else(|| bytecode(format!("the header {header:08X} is outside the ROM")))?;
     let reader = rom_import::RomReader::new(ctx.rom);
-    let decoded =
-        rom_import::decode_song_payload(&reader, SUPPORTED_SONG_ID, ptr, &song.voicegroup().0)
-            .map_err(|err| bytecode(format!("the ROM tracks do not decode: {err}")))?;
+    let decoded = rom_import::decode_song_payload(
+        &reader,
+        SUPPORTED_SONG_ID,
+        ptr,
+        &song.voicegroup().0,
+        song.player().0,
+    )
+    .map_err(|err| bytecode(format!("the ROM tracks do not decode: {err}")))?;
     if decoded != ctx.pack.get(song_id)?.payload {
         return Err(bytecode(
             "the ROM's decoded tracks differ from the pack payload".to_owned(),

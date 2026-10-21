@@ -7,7 +7,10 @@
 //! encoded wait sequence while validating its structure.
 //!
 //! [`Song`] retains the priority, reverb, voicegroup, and track order represented by upstream's
-//! `struct SongHeader` (`include/gba/m4a_internal.h`). Pattern-block bookkeeping is absent because
+//! `struct SongHeader` (`include/gba/m4a_internal.h`), plus the [`MusicPlayerId`] that the
+//! `gSongTable` entry's `struct Song` carries in its `ms` field. The assignment lives in the table
+//! entry, not the header: `m4aSongNumStart` selects `gMPlayTable[song->ms]` before it starts the
+//! header (`src/m4a.c:107-114`). Pattern-block bookkeeping is absent because
 //! the normalized streams contain the expanded events. Tempo remains a [`SongEvent::Tempo`] in its
 //! track because `SongHeader` has no tempo field.
 
@@ -383,10 +386,19 @@ fn check_jump_targets(
     Ok(())
 }
 
-/// A song's voicegroup, priority, optional reverb override, and normalized tracks.
+/// The music player a song plays on: the `Song.ms` field of its `gSongTable` entry, which
+/// `m4aSongNumStart` uses to index `gMPlayTable` (`src/m4a.c:107-114`). The value is the raw table
+/// index (`MUSIC_PLAYER_BGM` is `0`, `MUSIC_PLAYER_SE1` is `1`, and so on, per
+/// `sound/song_table.inc`); it is stored as a table value and not translated here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct MusicPlayerId(pub u16);
+
+/// A song's voicegroup, player assignment, priority, optional reverb override, and normalized
+/// tracks.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Song {
     voicegroup: VoiceGroupId,
+    player: MusicPlayerId,
     priority: u8,
     reverb: Option<u8>,
     tracks: Vec<Vec<SongEvent>>,
@@ -395,7 +407,8 @@ pub struct Song {
 impl Song {
     /// Builds a song and canonicalizes each track's waits.
     ///
-    /// `voicegroup` identifies the [`super::VoiceGroup`] selected by `Voice` events. `reverb` is
+    /// `voicegroup` identifies the [`super::VoiceGroup`] selected by `Voice` events. `player` is the
+    /// `gSongTable` entry's `ms` value. `reverb` is
     /// `None` when the song does not override the player setting. Track order is playback order.
     ///
     /// # Errors
@@ -406,6 +419,7 @@ impl Song {
     /// [`AudioError::JumpTargetOutOfRange`] when a jump does not address its own track.
     pub fn new(
         voicegroup: VoiceGroupId,
+        player: MusicPlayerId,
         priority: u8,
         reverb: Option<u8>,
         tracks: Vec<Vec<SongEvent>>,
@@ -425,6 +439,7 @@ impl Song {
         }
         Ok(Self {
             voicegroup,
+            player,
             priority,
             reverb,
             tracks,
@@ -435,6 +450,12 @@ impl Song {
     #[must_use]
     pub fn voicegroup(&self) -> &VoiceGroupId {
         &self.voicegroup
+    }
+
+    /// Returns the `gSongTable` entry's music-player assignment (`Song.ms`).
+    #[must_use]
+    pub fn player(&self) -> MusicPlayerId {
+        self.player
     }
 
     /// Returns the song's playback priority.
@@ -465,6 +486,7 @@ impl Song {
     pub fn encode(&self) -> Vec<u8> {
         let mut w = Writer::new();
         w.string(&self.voicegroup.0);
+        w.u16(self.player.0);
         w.u8(self.priority);
         w.bool(self.reverb.is_some());
         w.u8(self.reverb.unwrap_or(0));
@@ -494,6 +516,7 @@ impl Song {
     pub fn decode(bytes: &[u8]) -> Result<Self, AudioError> {
         let mut r = Reader::new(bytes);
         let voicegroup = VoiceGroupId(r.string()?);
+        let player = MusicPlayerId(r.u16()?);
         let priority = r.u8()?;
         let has_reverb = r.bool()?;
         let reverb_value = r.u8()?;
@@ -514,6 +537,7 @@ impl Song {
         r.expect_eof()?;
         Ok(Self {
             voicegroup,
+            player,
             priority,
             reverb,
             tracks,
