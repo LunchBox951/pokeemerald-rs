@@ -6,7 +6,7 @@
 //! module docs for the transition diagram this phase slots into.
 //!
 //! This file keeps [`OverworldPhase`] itself -- its fields and
-//! construction ([`OverworldPhase::load_default`]/[`OverworldPhase::new`])
+//! construction ([`OverworldPhase::load`]/[`OverworldPhase::new`])
 //! -- and delegates each per-frame concern to a focused sibling module,
 //! each contributing its own `impl OverworldPhase` block: [`step`] (input
 //! -> movement -> warp/interaction/encounter, [`OverworldPhase::step`]),
@@ -196,7 +196,7 @@ pub(crate) struct OverworldPhase {
     /// an open start menu freezes movement (upstream's
     /// `UpdateTilesetAnimations` runs every `VBlank` regardless of
     /// message-box state), and reset to `0` on a full map load
-    /// ([`Self::load_default`]/[`Self::warp_to`]) or any battle
+    /// ([`Self::load`]/[`Self::warp_to`]) or any battle
     /// return ([`Self::reinit_field_tileset_animations`]),
     /// but *not* on a connection crossing: upstream's seamless
     /// camera transition re-inits only the secondary tileset counter,
@@ -368,18 +368,6 @@ pub(crate) struct OverworldPhase {
 }
 
 impl OverworldPhase {
-    /// Test-only: [`Self::load`] with [`PackSource::Runtime`](crate::pack_source::PackSource::Runtime)
-    /// and default new-game options, for the many tests that don't care
-    /// which pack source they get.
-    #[cfg(test)]
-    pub(super) fn load_default() -> Result<Self, OverworldSceneError> {
-        Self::load(
-            crate::pack_source::PackSource::Runtime,
-            new_game::NewGameOptions::DEFAULT,
-            new_game::NewGameIdentity::DEFAULT,
-        )
-    }
-
     /// Start a new overworld run from `source`, with `options` carrying the
     /// `SaveBlock2` preferences a NEW GAME over an intact save must inherit
     /// rather than default (module docs on [`Self::new`]).
