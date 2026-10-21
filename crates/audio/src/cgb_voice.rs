@@ -544,7 +544,8 @@ impl CgbVoice {
     /// full scale (`pokeemerald/src/m4a.c:267-275,365-373`).
     pub fn begin_frame(&mut self, extra_envelope_iteration: bool) {
         let retriggered_by_note_off = std::mem::take(&mut self.pending_retrigger);
-        // `m4a.c:1043-1056`
+        // A note stopped before its first pass never reaches the note-on
+        // hardware writes (`m4a.c:1043-1056`).
         let initial_trigger =
             self.initial_trigger == InitialTrigger::Pending && !self.envelope.is_stopping();
         if self.initial_trigger == InitialTrigger::Pending {
@@ -558,14 +559,15 @@ impl CgbVoice {
         let (retriggered_by_transition, envelope_boundary) = self
             .envelope
             .step_frame(extra_envelope_iteration, live_goal);
-        // `m4a.c:1053-1056,1194-1203`
+        // A retiring frame skips the pitch write (`m4a.c:1053-1056,1194-1203`).
         if let Some((note_key, fine_pitch)) = self.pending_pitch.take() {
             if self.envelope.is_active() {
                 self.oscillator
                     .retune(note_key, fine_pitch, self.dac_correction);
             }
         }
-        // `m4a.c:1077-1085`
+        // Pan is recomputed at every boundary, transition or not
+        // (`m4a.c:1077-1085`).
         if envelope_boundary {
             self.routing.recompute_pan();
         }
@@ -580,7 +582,8 @@ impl CgbVoice {
         }
         let software_volume = self.envelope.volume();
         if hardware_write || initial_trigger {
-            // `mgba/src/gb/audio.c:856-860`
+            // A zero volume nibble with a clear direction bit disables the
+            // channel (`mgba/src/gb/audio.c:856-860`).
             let runs = self.envelope.hardware_dac_enabled();
             if let Some(noise) = self.oscillator.noise_mut() {
                 noise.set_clocking(runs);
@@ -604,7 +607,8 @@ impl CgbVoice {
         self.frame_gain = i32::try_from(envelope_gain).unwrap_or(i32::MAX);
     }
 
-    /// `mgba/src/gb/audio.c:493-503,948-954`
+    /// A square held at hardware level 0 skips its duty catch-up
+    /// (`mgba/src/gb/audio.c:493-503,948-954`).
     fn is_dead_at_zero(&self) -> bool {
         matches!(self.oscillator, Oscillator::Square(_))
             && self.envelope.is_active()
