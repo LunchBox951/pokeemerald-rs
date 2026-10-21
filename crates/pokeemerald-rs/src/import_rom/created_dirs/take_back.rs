@@ -450,13 +450,18 @@ fn take_back_into(
     let ours = captured
         .as_ref()
         .is_some_and(|stat| is_this_level(dir, stat));
-    if ours && rustix::fs::unlinkat(held, QUARANTINE_ENTRY, AtFlags::REMOVEDIR).is_ok() {
-        return Outcome::Taken;
-    }
+    let not_removed = if ours {
+        match rustix::fs::unlinkat(held, QUARANTINE_ENTRY, AtFlags::REMOVEDIR) {
+            Ok(()) => return Outcome::Taken,
+            Err(err) => Some(err),
+        }
+    } else {
+        None
+    };
     // A replacement that was captured, or this level holding something: put
     // it back under its name, or beside it if the name was retaken
     // meanwhile, so it never survives only under the hidden quarantine.
-    if let Some(warning) = restore_capture(
+    match restore_capture(
         held,
         quarantine.home,
         &quarantine.name,
@@ -464,7 +469,15 @@ fn take_back_into(
         parent,
         dir,
     ) {
-        eprintln!("{warning}");
+        Some(warning) => eprintln!("{warning}"),
+        None => {
+            if let Some(err) = not_removed {
+                warn_left_standing(
+                    dir,
+                    format_args!("it could not be removed: {}", std::io::Error::from(err)),
+                );
+            }
+        }
     }
     if captured.is_some() && !ours {
         warn_replaced(dir);

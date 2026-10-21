@@ -1198,6 +1198,34 @@ fn a_level_replaced_after_validation_is_reported_where_it_was_moved() {
 
 #[cfg(unix)]
 #[test]
+fn a_level_that_gained_contents_is_reported_left_in_place() {
+    // The level is put back under its own name, so restoration itself has
+    // nothing to warn about; the warning must still say the level stands
+    // and why it could not be removed.
+    if !in_rollback_stderr_child() {
+        let stderr = rerun_alone_for_stderr(
+            "import_rom::created_dirs::tests::a_level_that_gained_contents_is_reported_left_in_place",
+        );
+        let warned = warned_path(
+            &stderr,
+            "warning: ",
+            " is left in place: it could not be removed: ",
+        );
+        assert_names_marked_path(&stderr, warned, "level at: ");
+        return;
+    }
+    let dir = TempDir::new("undo-gained-contents-reported");
+    let level = dir.join("new");
+    let created = super::create_directories(&level).unwrap();
+    super::take_back::undo_created_directories_with_hooks(&created, &mut || {
+        fs::write(level.join("keep"), b"x").unwrap();
+    });
+    assert!(level.join("keep").is_file());
+    mark_path("level at: ", &level);
+}
+
+#[cfg(unix)]
+#[test]
 fn undo_puts_back_a_level_that_gained_contents_after_validation() {
     let dir = TempDir::new("undo-gained-contents");
     let level = dir.join("new");
