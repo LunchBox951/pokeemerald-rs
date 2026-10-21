@@ -26,7 +26,15 @@
 //! - The captured level is unlinked by its name inside the quarantine,
 //!   after its identity check. That same writer could swap it in between;
 //!   `unlinkat(.., REMOVEDIR)` removes only an empty directory, so the
-//!   worst outcome is the loss of one empty directory.
+//!   worst outcome is the loss of one empty directory. A level that writer
+//!   moved out of the quarantine before that unlink is reported where it
+//!   went on Linux and Android, where the held original's link count says
+//!   whether it was moved or removed; elsewhere (Apple), a directory
+//!   removed while held open still reads a nonzero `st_nlink`, so the two
+//!   cannot be told apart without a trace after every rollback, and that
+//!   moved level goes unreported. Where a level is reported missing from
+//!   its name on such a platform, the warning says it may have been moved
+//!   rather than claiming it was.
 //! - The freshness check proves the shape of what `openat` opened, not who
 //!   made it: the same writer could substitute an empty private directory
 //!   at the random name between `mkdirat` and `openat`. A level held there
@@ -81,6 +89,8 @@ pub(super) enum CaptureStage {
     /// The level was just renamed into the quarantine; its identity there
     /// is checked next.
     BeforeCheck,
+    /// The capture was found to be this level; unlinking it is next.
+    Verified,
     /// The capture was not removed; putting it back is next.
     BeforeRestore,
 }
@@ -530,8 +540,20 @@ fn take_back_into(
     let captured = rustix::fs::statat(held, QUARANTINE_ENTRY, AtFlags::SYMLINK_NOFOLLOW);
     let ours = captured.as_ref().is_ok_and(|stat| is_this_level(dir, stat));
     let not_removed = if ours {
+        in_quarantine(CaptureStage::Verified, held);
         match rustix::fs::unlinkat(held, QUARANTINE_ENTRY, AtFlags::REMOVEDIR) {
-            Ok(()) => return Outcome::Taken,
+            // The unlink acts on a name: had another writer moved this level
+            // out and put an empty directory in its place, the replacement
+            // went and the level stands wherever it was moved, so it is
+            // reported there. Only where a removed directory's link count
+            // reads 0 can that be told apart from the level's own removal;
+            // elsewhere this is an accepted residual (module doc).
+            Ok(()) => {
+                if let Standing::Linked(_) = standing(dir) {
+                    warn_if_moved_away(dir);
+                }
+                return Outcome::Taken;
+            }
             Err(err) => Some(err),
         }
     } else {
@@ -541,14 +563,26 @@ fn take_back_into(
     // A replacement that was captured, or this level holding something: put
     // it back under its name, or beside it if the name was retaken
     // meanwhile, so it never survives only under the hidden quarantine.
-    match put_back(
+    let put = put_back(
         held,
         quarantine.home,
         &quarantine.name,
         &quarantine.path,
         parent,
         dir,
-    ) {
+    );
+    // What was put back is this level only if it still is once there: a
+    // writer could have moved it out of the quarantine and put another
+    // directory in its place before the put-back, which then moved the
+    // replacement and left this level wherever that writer put it.
+    let original_put_back = ours
+        && match &put {
+            PutBack::InPlace => holds_this_level(parent.as_fd(), &dir.name, dir),
+            PutBack::Aside { name, .. } => holds_this_level(parent.as_fd(), name, dir),
+            PutBack::Stranded(_) => holds_this_level(held, QUARANTINE_ENTRY.as_ref(), dir),
+            PutBack::Gone(_) => false,
+        };
+    match put {
         // This level, not removed, was moved out of the quarantine by
         // another writer before it could be put back: it stands wherever
         // that writer put it, so it is reported there, through the held
@@ -559,9 +593,11 @@ fn take_back_into(
             warn_if_moved_away(dir);
             return Outcome::Taken;
         }
-        PutBack::Gone(warning) | PutBack::Elsewhere(warning) => eprintln!("{warning}"),
+        PutBack::Gone(warning) | PutBack::Aside { warning, .. } | PutBack::Stranded(warning) => {
+            eprintln!("{warning}");
+        }
         PutBack::InPlace => {
-            if let Some(err) = not_removed {
+            if let (Some(err), true) = (not_removed, original_put_back) {
                 warn_left_standing(
                     dir,
                     format_args!("it could not be removed: {}", std::io::Error::from(err)),
@@ -572,10 +608,11 @@ fn take_back_into(
     // Something else took the name after validation: the replacement, put
     // back above, stops the walk, which leaves the levels above standing.
     // The original is reported where it went only if it still has a link,
-    // since it may have been removed rather than moved. A capture that
-    // could not be examined stops the walk too, and says so.
+    // since it may have been removed rather than moved. So is this level
+    // when what was put back turned out to be another writer's directory.
+    // A capture that could not be examined stops the walk too, and says so.
     match captured {
-        Ok(_) if !ours => {
+        Ok(_) if !ours || !original_put_back => {
             warn_left_standing(
                 dir,
                 format_args!("another entry has taken its name; the levels above it are left too"),
@@ -599,27 +636,70 @@ fn take_back_into(
 /// Reports that the directory rollback made for `dir`, no longer under its
 /// name, was moved away rather than removed, naming where the held
 /// original is now where `/proc` can say. Silent when it has no link left
-/// (removed outright) or is no longer held open, so nothing can be said.
+/// (removed outright) or is no longer held open, so nothing can be said;
+/// where its link count cannot tell moved from removed ([`Standing::Unknown`]),
+/// the warning says it may have been moved.
 fn warn_if_moved_away(dir: &CreatedDirectory) {
-    let Some(own) = dir.own.as_deref() else {
-        return;
-    };
-    match rustix::fs::fstat(own) {
-        Ok(held) if held.st_nlink != 0 => {}
-        _ => return,
-    }
     let level = level_location(dir);
-    match held_location(own) {
-        Some(now) => eprintln!(
+    match standing(dir) {
+        Standing::Gone => {}
+        Standing::Linked(Some(now)) => eprintln!(
             "warning: {} is the directory rollback made for {}, moved away before rollback could take it back; it is left in place",
             OneLinePath(&now),
             OneLinePath(&level)
         ),
-        None => eprintln!(
+        Standing::Linked(None) => eprintln!(
             "warning: {} was moved away before rollback could take it back; the directory rollback made is left elsewhere",
             OneLinePath(&level)
         ),
+        Standing::Unknown => eprintln!(
+            "warning: {} is no longer under its name; if it was moved rather than removed, the directory rollback made is left elsewhere",
+            OneLinePath(&level)
+        ),
     }
+}
+
+/// What the held original's link count says about it.
+enum Standing {
+    /// Removed outright, or no longer held or examinable, so nothing can be
+    /// said about it.
+    Gone,
+    /// Still linked somewhere; where, if `/proc` can say.
+    Linked(Option<PathBuf>),
+    /// Its link count does not tell: on Apple a directory removed while
+    /// held open still reads a nonzero `st_nlink` (the
+    /// `a_level_removed_and_replaced_after_validation_is_not_reported_as_moved`
+    /// failure on macOS CI), so outside Linux and Android only a count of 0
+    /// is trusted.
+    Unknown,
+}
+
+/// [`Standing`] of the directory `dir` holds open.
+fn standing(dir: &CreatedDirectory) -> Standing {
+    let Some(own) = dir.own.as_deref() else {
+        return Standing::Gone;
+    };
+    held_standing(own.as_fd())
+}
+
+/// [`Standing`] of the held directory `held`.
+fn held_standing(held: BorrowedFd<'_>) -> Standing {
+    match rustix::fs::fstat(held) {
+        Ok(stat) if stat.st_nlink != 0 => {}
+        _ => return Standing::Gone,
+    }
+    if cfg!(any(target_os = "linux", target_os = "android")) {
+        Standing::Linked(held_location(held))
+    } else {
+        Standing::Unknown
+    }
+}
+
+/// Whether `name` in the held `home` is the directory `dir` created and
+/// still holds open.
+fn holds_this_level(home: BorrowedFd<'_>, name: &OsStr, dir: &CreatedDirectory) -> bool {
+    rustix::fs::statat(home, name, AtFlags::SYMLINK_NOFOLLOW)
+        .is_ok_and(|stat| is_this_level(dir, &stat))
 }
 
 /// Moves the capture in `quarantine` (named `quarantine_name` in the held
@@ -646,7 +726,9 @@ pub(super) fn restore_capture(
         dir,
     ) {
         PutBack::InPlace => None,
-        PutBack::Elsewhere(warning) | PutBack::Gone(warning) => Some(warning),
+        PutBack::Aside { warning, .. } | PutBack::Stranded(warning) | PutBack::Gone(warning) => {
+            Some(warning)
+        }
     }
 }
 
@@ -654,9 +736,15 @@ pub(super) fn restore_capture(
 enum PutBack {
     /// Back under its own name.
     InPlace,
-    /// Under a `.restored-<n>` name, or still in the quarantine: the
-    /// warning names exactly where.
-    Elsewhere(String),
+    /// Under the `.restored-<n>` name `name`: the warning names it.
+    Aside {
+        /// The warning naming where it is.
+        warning: String,
+        /// The `.restored-<n>` name it is under.
+        name: std::ffi::OsString,
+    },
+    /// Still in the quarantine: the warning names exactly where.
+    Stranded(String),
     /// No longer in the quarantine, so another writer moved or removed it
     /// before it could be put back: the warning says so.
     Gone(String),
@@ -680,11 +768,14 @@ fn put_back(
         let mut aside = dir.name.clone();
         aside.push(format!(".restored-{n}"));
         if rename_without_replacing(quarantine, QUARANTINE_ENTRY, parent, &aside).is_ok() {
-            return PutBack::Elsewhere(format!(
-                "warning: {} was recreated during cleanup; its contents are in {}",
-                OneLinePath(&beside(&dir.name)),
-                OneLinePath(&beside(&aside))
-            ));
+            return PutBack::Aside {
+                warning: format!(
+                    "warning: {} was recreated during cleanup; its contents are in {}",
+                    OneLinePath(&beside(&dir.name)),
+                    OneLinePath(&beside(&aside))
+                ),
+                name: aside,
+            };
         }
     }
     let location =
@@ -699,7 +790,7 @@ fn put_back(
             OneLinePath(&location)
         ));
     }
-    PutBack::Elsewhere(format!(
+    PutBack::Stranded(format!(
         "warning: could not put {} back; its contents remain in {}",
         OneLinePath(&beside(&dir.name)),
         OneLinePath(&location.join(QUARANTINE_ENTRY))
@@ -708,9 +799,10 @@ fn put_back(
 
 /// Removes the empty `quarantine` by its name, only while that name still
 /// resolves to the held quarantine, checked by the `statat` just before the
-/// unlink; a mismatch or a failed unlink leaves it standing, reported at
-/// its name's path, which is what the check and the unlink act on. `before_removal` runs before that check, where a test swaps
-/// the name.
+/// unlink; a mismatch or a failed unlink leaves it standing. A failed
+/// unlink is reported at its name's path, which is what the unlink acts on;
+/// a mismatch through [`warn_quarantine_not_at_name`]. `before_removal`
+/// runs before that check, where a test swaps the name.
 fn remove_quarantine(quarantine: &Quarantine<'_>, before_removal: &mut dyn FnMut()) {
     let held = quarantine.dir.stat();
     before_removal();
@@ -719,12 +811,12 @@ fn remove_quarantine(quarantine: &Quarantine<'_>, before_removal: &mut dyn FnMut
         quarantine.name.as_str(),
         AtFlags::SYMLINK_NOFOLLOW,
     );
-    if !matches!((held, by_name), (Ok(held), Ok(by_name)) if same_directory_identity(&held, &by_name))
-    {
-        eprintln!(
-            "warning: cleanup directory {} no longer resolves to the one rollback made; it is left in place",
-            OneLinePath(&quarantine.name_location())
-        );
+    let resolves = match (&held, &by_name) {
+        (Ok(held), Ok(by_name)) => same_directory_identity(held, by_name),
+        _ => false,
+    };
+    if !resolves {
+        warn_quarantine_not_at_name(quarantine, held.is_ok(), &by_name);
         return;
     }
     if let Err(err) = rustix::fs::unlinkat(
@@ -737,6 +829,43 @@ fn remove_quarantine(quarantine: &Quarantine<'_>, before_removal: &mut dyn FnMut
             OneLinePath(&quarantine.name_location()),
             std::io::Error::from(err)
         );
+    }
+}
+
+/// Reports a quarantine whose name no longer resolves to it, so it was not
+/// removed: whatever now holds the name is described as such, and the held
+/// quarantine, the directory rollback actually leaves, is named where it is
+/// now where `/proc` can say. Its name is all that is known when the held
+/// quarantine could not be examined, or (outside Linux and Android) its
+/// link count does not tell whether it was moved or removed.
+fn warn_quarantine_not_at_name(
+    quarantine: &Quarantine<'_>,
+    held_examined: bool,
+    by_name: &rustix::io::Result<rustix::fs::Stat>,
+) {
+    let name = quarantine.name_location();
+    let vacant = matches!(by_name, Err(err) if *err == rustix::io::Errno::NOENT);
+    let standing = match quarantine.fd() {
+        Some(fd) if held_examined => held_standing(fd),
+        _ => Standing::Unknown,
+    };
+    if !vacant || matches!(standing, Standing::Unknown) {
+        eprintln!(
+            "warning: cleanup directory {} no longer resolves to the one rollback made; it is left in place",
+            OneLinePath(&name)
+        );
+    }
+    match standing {
+        Standing::Linked(Some(now)) => eprintln!(
+            "warning: {} is the cleanup directory rollback made, moved away from {}; it is left in place",
+            OneLinePath(&now),
+            OneLinePath(&name)
+        ),
+        Standing::Linked(None) => eprintln!(
+            "warning: cleanup directory {} was moved away before rollback could remove it; it is left elsewhere",
+            OneLinePath(&name)
+        ),
+        Standing::Gone | Standing::Unknown => {}
     }
 }
 
