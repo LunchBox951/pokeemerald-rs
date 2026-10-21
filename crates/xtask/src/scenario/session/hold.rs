@@ -193,9 +193,10 @@ pub(super) fn remove_contents(
 
 /// Refuses a volume that cannot open a file by its ID: only there is a file ID
 /// a stable identity rather than a directory-entry position that a
-/// replacement can reuse.
+/// replacement can reuse. The claim runs this before the session writes
+/// anything, and cleanup runs it again before it removes anything.
 #[cfg(windows)]
-fn require_unique_file_ids(dir: &std::fs::File) -> std::io::Result<()> {
+pub(super) fn require_unique_file_ids(dir: &std::fs::File) -> std::io::Result<()> {
     use std::os::windows::io::AsRawHandle as _;
     use windows_sys::Win32::Storage::FileSystem::GetVolumeInformationByHandleW;
     const FILE_SUPPORTS_OPEN_BY_FILE_ID: u32 = 0x0100_0000;
@@ -219,7 +220,8 @@ fn require_unique_file_ids(dir: &std::fs::File) -> std::io::Result<()> {
     }
     if flags & FILE_SUPPORTS_OPEN_BY_FILE_ID == 0 {
         return Err(std::io::Error::other(
-            "the scratch volume has no stable file IDs to verify cleanup against",
+            "the scratch volume has no stable file IDs to verify cleanup against (FAT or \
+             exFAT); point TEMP at an NTFS or ReFS volume",
         ));
     }
     Ok(())

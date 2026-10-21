@@ -19,6 +19,8 @@ mod hold;
 use hold::open_hold;
 #[cfg(any(unix, windows))]
 use hold::remove_contents;
+#[cfg(windows)]
+use hold::require_unique_file_ids;
 #[cfg(all(test, any(target_os = "linux", target_os = "android")))]
 use hold::restore_owner_access_with;
 #[cfg(unix)]
@@ -77,8 +79,10 @@ impl PackSelection {
 /// without `FILE_SHARE_DELETE` also keeps the directory from being renamed
 /// away), but Windows has no handle-relative create here, so a swap between
 /// that check and the following pathname operation remains possible there for
-/// a write. Windows cleanup is a handle walk: it refuses a volume without
-/// stable file IDs (FAT, exFAT), lists the held directory, opens each child by
+/// a write. Windows refuses a scratch volume without stable file IDs (FAT,
+/// exFAT) when it claims the directory, before anything is written, and
+/// cleanup checks again before it removes anything. Windows cleanup is a
+/// handle walk: it lists the held directory, opens each child by
 /// name under the held root without following reparse points and with no
 /// delete sharing, verifies the opened 128-bit file ID against the listing
 /// before deleting through that handle, and recurses through the
@@ -145,6 +149,17 @@ impl Scratch {
         if let Err(error) = proven {
             // Never let `Drop` clean up a directory that was not proven ours.
             scratch.hold = None;
+            return Err(error);
+        }
+        // Windows cleanup can verify entries only on a volume with stable
+        // file IDs, so refuse any other volume here, before anything is
+        // written, rather than leave the session's media behind at drop. The
+        // directory is proven ours and still empty, so it goes with the same
+        // empty-only `remove_dir` that ends a normal cleanup.
+        #[cfg(windows)]
+        if let Err(error) = scratch.hold().and_then(require_unique_file_ids) {
+            scratch.hold = None;
+            let _ = std::fs::remove_dir(&scratch.path);
             return Err(error);
         }
         Ok(scratch)
