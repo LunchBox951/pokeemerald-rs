@@ -6,14 +6,10 @@ use crate::cgb_pitch::{midi_key_to_cgb_freq_reg, midi_key_to_noise_control};
 use crate::psg::{NoiseChannel, SquareChannel, WaveChannel};
 use std::sync::Arc;
 
-/// Clocks `noise` one sample at `hardware_volume` and maps its held latch
-/// into the centred render path. The DAC level is output directly
-/// (`mgba/src/gb/audio.c:782`); like the other channels the render path
-/// removes the DC offset by centring, here on the volume the latch was last
-/// resolved against ([`NoiseChannel::centred_level`]). A clock at volume `v`
-/// reproduces the usual `+-v` swing, and nothing but a clock or envelope step
-/// moves the rendered level, so a trigger, volume write, or replacement leaves
-/// it as it was and a settled latch is silent.
+/// Clocks `noise` once at `hardware_volume` and renders its held latch
+/// (`mgba/src/gb/audio.c:782`) centred on the volume it was last resolved against.
+/// Only a clock or envelope step moves the level, so a trigger, volume write,
+/// or replacement leaves it unchanged.
 fn noise_contribution(noise: &mut NoiseChannel, hardware_volume: u8) -> i32 {
     noise.clock_sample(hardware_volume);
     (noise.centred_level() * NOISE_LEVEL_GAIN * BIPOLAR_SAMPLE_SCALE) >> SAMPLE_GAIN_BITS
@@ -34,11 +30,9 @@ pub(super) enum Oscillator {
 }
 
 impl Oscillator {
-    /// One sample's pre-routing contribution. Square scales its waveform by
-    /// `frame_gain`; Wave latches each nibble through NR32 at
-    /// `envelope_volume` on its wave clocks and its `frame_gain` is full scale; Noise ignores
-    /// both and renders its resolved output latch directly
-    /// ([`noise_contribution`]).
+    /// One sample's pre-routing contribution. Wave ignores `hardware_volume`
+    /// and uses `envelope_volume` for NR32; Noise ignores `frame_gain` and
+    /// `envelope_volume` ([`noise_contribution`]).
     pub(super) fn frame_contribution(
         &mut self,
         frame_gain: i32,
@@ -57,7 +51,6 @@ impl Oscillator {
         }
     }
 
-    /// The retained noise latch, for the idle-slot and completion paths.
     pub(super) fn noise_mut(&mut self) -> Option<&mut NoiseChannel> {
         match self {
             Self::Noise(noise) => Some(noise),
@@ -65,9 +58,8 @@ impl Oscillator {
         }
     }
 
-    /// `hardware_volume` is [`HardwareEnvelopeVolume`](crate::cgb_envelope::HardwareEnvelopeVolume)'s resolved byte; the
-    /// Wave arm ignores both: NR32 attenuation is an integer shift of the
-    /// unsigned nibble, applied when [`WaveChannel::sample`] latches.
+    /// Wave is always full gain: NR32 attenuation is applied when
+    /// [`WaveChannel::sample`] latches.
     pub(super) fn envelope_gain_256(&self, _envelope_volume: u8, hardware_volume: u8) -> u32 {
         match self {
             Self::Wave { .. } => FULL_GAIN_256,
@@ -88,27 +80,21 @@ impl Oscillator {
         }
     }
 
-    /// Keeps a hardware-muted square's duty position running
-    /// ([`SquareChannel::advance_silently`]'s doc). Only a square sweep ever
-    /// mutes the hardware, so Wave/Noise never reach this.
+    /// Only a square sweep mutes the hardware, so Wave and Noise are no-ops.
     pub(super) fn advance_silently(&mut self, samples: usize) {
         if let Self::Square(square) = self {
             square.advance_silently(samples);
         }
     }
 
-    /// Defers an idle square slot's duty catch-up
-    /// ([`SquareChannel::defer_idle_samples`]'s doc); a no-op for Wave/Noise.
     pub(super) fn defer_idle_samples(&mut self, samples: usize) {
         if let Self::Square(square) = self {
             square.defer_idle_samples(samples);
         }
     }
 
-    /// Applies the hardware off-write's frequency truncation
-    /// ([`SquareChannel::apply_hardware_off_write`]'s doc) and the noise
-    /// channel's zero-volume retrigger, which restarts its phase and LFSR but
-    /// leaves the latch for the next clock to settle; a no-op for Wave.
+    /// The noise off-write restarts phase and LFSR but leaves the latch for
+    /// the next clock to settle; a no-op for Wave.
     pub(super) fn apply_hardware_off_write(&mut self) -> bool {
         match self {
             Self::Square(square) => square.apply_hardware_off_write(),
@@ -127,14 +113,9 @@ impl Oscillator {
         }
     }
 
-    /// Carries a square oscillator's duty position or a noise oscillator's
-    /// output latch forward onto its replacement
-    /// ([`SquareChannel::continue_duty_from`]'s and
-    /// [`NoiseChannel::continue_output_from`]'s docs). A wave oscillator
-    /// always keeps the held output nibble, and keeps its retained wave-RAM
-    /// rotation only when the replacement names the same wave asset; a
-    /// different asset is a fresh upload (`m4a.c:1003-1012`) that the next
-    /// wave clock latches from.
+    /// Wave keeps its wave-RAM rotation only for the same `wave_id`; a
+    /// different asset is a fresh upload (`m4a.c:1003-1012`) that keeps only
+    /// the held nibble.
     pub(super) fn carry_hardware_state_from(&mut self, other: &Self) {
         match (self, other) {
             (Self::Square(square), Self::Square(previous)) => square.continue_duty_from(previous),
@@ -161,8 +142,8 @@ impl Oscillator {
         }
     }
 
-    /// Re-applies a `CGB_CHANNEL_MO_VOL` volume-write trigger (`m4a.c:1219-1226`)
-    /// to the channel's own state and returns whether it still plays.
+    /// Applies a `CGB_CHANNEL_MO_VOL` trigger (`m4a.c:1219-1226`); returns
+    /// whether the channel still plays.
     pub(super) fn retrigger(&mut self) -> bool {
         match self {
             Self::Square(square) => square.retrigger(),
@@ -194,8 +175,7 @@ mod nr32_attenuation_tests {
     fn render(nibble: u8, level: u8) -> i32 {
         let samples = WaveChannel::decode_wave_ram(&[nibble << 4 | nibble; 16]);
         let gain = cgb3_wave_gain_256(level);
-        // The cold latch holds a zero nibble; 0x7FF clocks every sample, so the
-        // second call returns the RAM nibble the first clock latched.
+        // The cold latch is zero, so the second sample is the first RAM nibble.
         let mut wave = WaveChannel::new(samples, 0x7FF);
         wave.sample(gain);
         wave.sample(gain) * WAVE_SAMPLE_SCALE
@@ -222,7 +202,6 @@ mod nr32_attenuation_tests {
 
     #[test]
     fn three_quarter_volume_collapses_nibbles_hardware_collapses() {
-        // (n + 2n) >> 2: nibbles 0 and 1 both give 0; 5 and 6 give 3 and 4.
         assert_eq!(render(0, 10), render(1, 10));
         assert_ne!(render(5, 10), render(6, 10));
     }
@@ -239,9 +218,7 @@ mod changed_wave_asset_latch_tests {
     use super::*;
     use crate::psg::WaveChannel;
 
-    /// A changed wave asset uploads new RAM but leaves the held channel-3
-    /// output sample alone; only the next wave clock latches from the new
-    /// RAM (`mgba/src/gb/audio.c:300-337`).
+    /// `mgba/src/gb/audio.c:300-337`.
     #[test]
     fn a_changed_wave_asset_keeps_the_previous_latch_until_the_first_clock() {
         let high = WaveChannel::decode_wave_ram(&[0xFF; 16]);
@@ -268,7 +245,6 @@ mod changed_wave_asset_latch_tests {
             7,
             "old latch before first clock"
         );
-        // 0x7FF clocks the wave every sample, so the new RAM follows.
         assert_eq!(
             channel.sample(FULL_GAIN_256),
             -8,
@@ -276,8 +252,6 @@ mod changed_wave_asset_latch_tests {
         );
     }
 
-    /// A replacement at a different volume still holds the old, already
-    /// shifted output until its first clock, then latches at the new volume.
     #[test]
     fn a_replacement_at_a_new_volume_holds_the_old_output_until_the_first_clock() {
         let ram = WaveChannel::decode_wave_ram(&[0xFF; 16]);
