@@ -77,10 +77,11 @@ impl PackSelection {
 /// without `FILE_SHARE_DELETE` also keeps the directory from being renamed
 /// away), but Windows has no handle-relative create here, so a swap between
 /// that check and the following pathname operation remains possible there for
-/// a write. Windows cleanup is a handle walk: it lists the held directory,
-/// opens each child by name under the held root without following reparse
-/// points and with no delete sharing, verifies the opened file ID against the
-/// listing before deleting through that handle, and recurses through the
+/// a write. Windows cleanup is a handle walk: it refuses a volume without
+/// stable file IDs (FAT, exFAT), lists the held directory, opens each child by
+/// name under the held root without following reparse points and with no
+/// delete sharing, verifies the opened 128-bit file ID against the listing
+/// before deleting through that handle, and recurses through the
 /// child's own handle, so a child swapped in under the root is refused as on
 /// Unix. `OpenFileById` is not used because it sits behind `windows-sys`'s
 /// `Win32_Security` feature, outside the approved surface. The open hold is
