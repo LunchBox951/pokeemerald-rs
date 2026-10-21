@@ -4,9 +4,10 @@
 //! (`m4a_1.s:396..437`); this mixer accumulates each output sample in its own
 //! `i32` and does not reproduce that bleed.
 //!
-//! Loop and retirement use [`WaveData::logical_len`]. Interpolation still
-//! reads one guard sample beyond it, matching the `current + 1` prefetch in
-//! `m4a_1.s:399-407`.
+//! Loop and retirement use [`WaveData::logical_len`]. Interpolation reads
+//! the sample after the current one (the `current + 1` prefetch in
+//! `m4a_1.s:399-407`): a retained guard sample past `logical_len` when the
+//! wave carries one, otherwise the loop start or the current sample.
 
 use std::sync::Arc;
 
