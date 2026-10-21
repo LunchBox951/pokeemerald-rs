@@ -157,7 +157,7 @@ fn parse_byte(operand: &str, group: &str, line: &str) -> Result<u8, VoiceGroupEr
 /// The largest `DirectSound` pan override the asset schema accepts (see
 /// `crates/assets::audio::voicegroup`'s private `MAX_PAN_OVERRIDE`,
 /// duplicated here rather than shared -- this extraction pipeline never
-/// depends on `crates/assets`, matching `crate::extract::BORDER_BLOCK_BYTES`'s
+/// depends on `crates/assets`, matching `crate::extract::layouts::BORDER_BLOCK_BYTES`'s
 /// documented decoupling from the same crate).
 const MAX_PAN_OVERRIDE: u8 = 127;
 
