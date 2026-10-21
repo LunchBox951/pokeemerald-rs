@@ -38,8 +38,6 @@ const BLUE_BGR555: u16 = 0x7C00;
 const TILESET_PALETTE_BANK_COUNT: u8 = 16;
 const SPRITE_PALETTE_COLOR_COUNT: u16 = 16;
 
-/// Serializes `entries`, sorted by id as the pack format requires, into a
-/// pack file's bytes.
 /// The scratch path [`synthetic_scene_result_with_connections_and_events`]
 /// writes its pack to.
 pub(super) fn scene_scratch_pack_path() -> std::path::PathBuf {
@@ -102,9 +100,14 @@ pub(crate) fn assert_planted_symlink_untouched(path: &std::path::Path, write: im
         after, sentinel,
         "a planted symlink's target was overwritten"
     );
-    drop(outcome);
+    assert!(
+        outcome.is_ok(),
+        "the writer must replace a planted symlink, not panic on it"
+    );
 }
 
+/// Serializes `entries`, sorted by id as the pack format requires, into a
+/// pack file's bytes.
 pub(super) fn write_synthetic_pack(mut entries: Vec<Entry>) -> Vec<u8> {
     entries.sort_by(|a, b| a.id.cmp(&b.id));
 

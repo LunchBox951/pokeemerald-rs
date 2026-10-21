@@ -2286,3 +2286,25 @@ fn layout_pack_writers_refuse_a_planted_symlink() {
         super::test_support::write_route101_oldale_layout_pack(&path, &[], &[]);
     });
 }
+
+#[cfg(unix)]
+#[test]
+fn scratch_writer_replaces_a_planted_symlink_with_the_new_pack() {
+    let path = regression_pack_path("planted-symlink-replaced");
+    let bytes = b"fresh scratch pack".to_vec();
+    let mut completed = false;
+    super::test_support::assert_planted_symlink_untouched(&path, || {
+        super::test_support::write_scratch_exclusive(&path, &bytes);
+        let meta = std::fs::symlink_metadata(&path).unwrap();
+        assert!(
+            meta.file_type().is_file(),
+            "the stale link is replaced by a regular file"
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        completed = true;
+    });
+    assert!(
+        completed,
+        "the writer completed instead of rejecting the stale entry"
+    );
+}
