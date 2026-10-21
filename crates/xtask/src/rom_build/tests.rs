@@ -312,7 +312,9 @@ fn an_agbcc_install_inside_the_reference_is_rejected_before_verification() {
     let err = build(&fx.config).unwrap_err();
     assert!(
         matches!(&err, RomBuildError::MissingTool(t)
-            if t.starts_with("agbcc") && t.contains("inside the reference")),
+            if t.starts_with("agbcc") && t.contains("inside the reference")
+                && t.contains("./install.sh <dir>")
+                && t.contains("POKEEMERALD_AGBCC=<dir>/tools/agbcc")),
         "{err}"
     );
     assert_eq!(fx.scratch_entries(), 0);
@@ -332,6 +334,30 @@ fn an_agbcc_symlink_inside_the_reference_is_rejected_before_verification() {
         "{err}"
     );
     assert_eq!(fx.scratch_entries(), 0);
+}
+
+#[test]
+#[cfg(unix)]
+fn an_agbcc_path_through_a_symlinked_directory_inside_the_reference_is_rejected() {
+    let mut fx = Fixture::new("agbcc-ancestor-link", GOOD);
+    let alias = fx.config.reference.join("alias");
+    std::os::unix::fs::symlink(&fx.root, &alias).unwrap();
+    fx.config.agbcc_source = alias.join("agbcc-install");
+    let err = build(&fx.config).unwrap_err();
+    assert!(
+        matches!(&err, RomBuildError::MissingTool(t)
+            if t.starts_with("agbcc") && t.contains("inside the reference")),
+        "{err}"
+    );
+    assert_eq!(fx.scratch_entries(), 0);
+}
+
+#[test]
+fn an_agbcc_path_that_leaves_the_reference_through_dotdot_is_not_contained() {
+    let fx = Fixture::new("agbcc-dotdot-out", GOOD);
+    let mut config = fx.config.clone();
+    config.agbcc_source = fx.config.reference.join("..").join("agbcc-install");
+    assert!(!super::agbcc_inside_reference_from(&config, &fx.root));
 }
 
 #[test]
