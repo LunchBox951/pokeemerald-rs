@@ -32,6 +32,7 @@ mod gen_rom_profile;
 mod profile_launch;
 #[cfg(feature = "scenes")]
 mod record_snapshot;
+mod rom_build;
 #[cfg(any(feature = "scenario", all(test, feature = "scenes")))]
 mod scenario;
 mod staging_names;
@@ -47,6 +48,8 @@ commands:
   gen-rom-profile --rom <path> [--out <file>] [--map <file>]
                      derive rom-import's ROM address table from a
                      cartridge image (developer-only)
+  rom-build          build the pinned upstream checkout in scratch storage and
+                     check its compiled outputs (developer-only)
   record-snapshot --scene <name>
                      record a deterministic frame capture; <name> is
                      title | main-menu-new-game | main-menu-option
@@ -100,6 +103,9 @@ pub enum XtaskError {
     /// `extract` ran but failed. Carries [`extract::ExtractError`]'s
     /// rendered message.
     ExtractFailed(String),
+    /// `rom-build` ran but failed. Carries [`rom_build::RomBuildError`]'s
+    /// rendered message.
+    RomBuildFailed(String),
     /// `e2e --suite smoke` ran but did not report a clean boot. Carries
     /// `e2e::E2eError`'s rendered message.
     SmokeFailed(String),
@@ -169,6 +175,9 @@ impl fmt::Display for XtaskError {
             }
             Self::ExtractFailed(reason) => {
                 return write!(f, "error: `extract` failed: {reason}");
+            }
+            Self::RomBuildFailed(reason) => {
+                return write!(f, "error: `rom-build` failed: {reason}");
             }
             Self::SmokeFailed(reason) => {
                 return write!(f, "error: `e2e --suite smoke` failed: {reason}");
@@ -326,6 +335,8 @@ impl ScenarioName {
 pub enum Command {
     /// `extract`
     Extract,
+    /// `rom-build`
+    RomBuild,
     /// `gen-rom-profile --rom <path> [--out <file>] [--map <file>]`
     GenRomProfile {
         /// The parsed invocation.
@@ -389,6 +400,7 @@ pub fn parse(args: &[OsString]) -> Result<Command, XtaskError> {
         // can be non-UTF-8 and still be valid, so they are decoded once
         // here and the parsers below keep taking `&str`.
         "extract" => no_args(&decode(rest)?).map(|()| Command::Extract),
+        "rom-build" => no_args(&decode(rest)?).map(|()| Command::RomBuild),
         "record-snapshot" => {
             parse_record_snapshot(&decode(rest)?).map(|scene| Command::RecordSnapshot { scene })
         }
@@ -598,6 +610,17 @@ fn dispatch(cmd: &Command) -> Result<(), XtaskError> {
             );
             Ok(())
         }
+        Command::RomBuild => {
+            let artifact =
+                rom_build::run().map_err(|err| XtaskError::RomBuildFailed(err.to_string()))?;
+            println!(
+                "built pinned revision {} ({}): {} byte image, linker map read",
+                artifact.provenance().pinned_revision,
+                artifact.provenance().build_command,
+                artifact.rom().len(),
+            );
+            Ok(())
+        }
         Command::GenRomProfile { options } => {
             let report = gen_rom_profile::run(options)
                 .map_err(|err| XtaskError::GenRomProfileFailed(err.to_string()))?;
@@ -622,12 +645,8 @@ fn dispatch(cmd: &Command) -> Result<(), XtaskError> {
                 report.arbitrary_count(),
                 report.out_path.display()
             );
-            if report.map_used {
-                println!(
-                    "map cross-check: {} symbol name(s) matched, {} address(es) confirmed \
-                     unnamed, {} interior address(es) skipped",
-                    report.map_named, report.map_confirmed, report.map_skipped
-                );
+            if let Some(summary) = report.map_summary() {
+                println!("{summary}");
             }
             Ok(())
         }
@@ -760,6 +779,15 @@ mod tests {
     #[test]
     fn parse_extract_routes() {
         assert_eq!(parse(&args(&["extract"])).unwrap(), Command::Extract);
+    }
+
+    #[test]
+    fn parse_rom_build_routes_and_rejects_arguments() {
+        assert_eq!(parse(&args(&["rom-build"])).unwrap(), Command::RomBuild);
+        assert!(matches!(
+            parse(&args(&["rom-build", "--x"])),
+            Err(XtaskError::UnexpectedArg(_))
+        ));
     }
 
     #[test]

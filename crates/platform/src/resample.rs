@@ -19,7 +19,9 @@
 //! the per-frame advance runs *before* producing each frame (never as a
 //! trailing step after the last one), so the lookahead frame the *next*
 //! callback needs is deferred to that callback — when the producer has had
-//! time to refill. Pulling it eagerly at end-of-callback would latch a
+//! time to refill. The same holds at an exact source position: an output
+//! landing on a whole frame (`frac == 0.0`) blends nothing from `next`, so
+//! `next` stays unloaded until an output actually needs it. Pulling it eagerly at end-of-callback would latch a
 //! spurious underrun/silence into `next` whenever the producer was momentarily
 //! one frame short, a glitch the direct path never produces.
 
@@ -50,8 +52,10 @@ const MAX_SCRATCH_SOURCE_FRAMES: usize = 32_768;
 /// audible content derived from buffered `prev`/`next` interpolation state
 /// rather than pure silence -- see the module docs' "deferred lookahead
 /// pull". Bounded by two segments of at most `ceil(1/step)` frames each:
-/// one for the deferred pull itself to occur (the crossing from a real
-/// `prev`/real `next` pair to real `prev`/silent `next`), and one more for
+/// one for the deferred pull itself to occur (the first fractional output
+/// after the ring empties, which loads a silent `next` against a real
+/// `prev`; an output on an exact source position leaves `next` pending
+/// until then), and one more for
 /// the resulting real-to-silence blend to fully decay (the next crossing,
 /// to silent/silent). See [`Resampler::settle_margin_frames`].
 fn resample_settle_margin_frames(step: f64) -> u64 {
@@ -157,6 +161,11 @@ pub struct Resampler {
     /// each frame — rather than after — is what defers the trailing lookahead
     /// pull to the next callback (see the module docs).
     need_advance: bool,
+    /// Whether `next` is not loaded yet. Set when the cursor sits exactly on
+    /// a source frame (`frac == 0.0`): that output uses only `prev`, so the
+    /// following frame is left in the ring until an output actually blends it
+    /// (see the module docs).
+    next_pending: bool,
 }
 
 impl Resampler {
@@ -230,6 +239,7 @@ impl Resampler {
             chunk_frames: bound,
             primed: false,
             need_advance: false,
+            next_pending: true,
         })
     }
 
@@ -297,9 +307,11 @@ impl Resampler {
         // below (a trailing partial frame still advances the cursor).
         let steps = out.len().div_ceil(self.channels);
 
-        // Source frames this call consumes: 2 to prime the `prev`/`next`
-        // lookahead on the very first call, plus one per source-frame boundary
-        // the interpolation cursor crosses. The advance runs *before* each
+        // Source frames this call consumes: 1 to prime `prev` on the very
+        // first call (`next` stays pending), plus one per boundary crossing
+        // that lands on a still-pending `next` (a crossing onto an already
+        // loaded `next` swaps and pulls nothing), plus one for each lookahead
+        // `next` loaded at a nonzero `frac`. The advance runs *before* each
         // frame (skipped only for the very first frame ever), so the trailing
         // lookahead pull is deferred to the next callback — see the module
         // docs. Count the crossings with a dry run that mirrors the loop below
@@ -317,10 +329,13 @@ impl Resampler {
         // it ever to fire regardless, the leftover `frac_probe >= 1.0` would
         // carry over unresolved rather than spin or index unboundedly — the
         // same shape `Self::fill_chunk`'s own advance loop below mirrors.
-        let prime = if self.primed { 0 } else { 2 };
+        // `pending` mirrors `self.next_pending` through the loop below.
+        let prime = usize::from(!self.primed);
         let mut frac_probe = self.frac;
         let mut advance_probe = self.need_advance;
+        let mut pending = self.next_pending;
         let mut crossings = 0usize;
+        let mut loads = prime;
         'dry_run: for _ in 0..steps {
             if advance_probe {
                 frac_probe += self.step;
@@ -330,12 +345,17 @@ impl Resampler {
                     }
                     frac_probe -= 1.0;
                     crossings += 1;
+                    loads += usize::from(pending);
+                    pending = true;
                 }
             }
             advance_probe = true;
+            if frac_probe > 0.0 && pending {
+                loads += 1;
+                pending = false;
+            }
         }
-        let source_frames = prime + crossings;
-        let needed = source_frames * self.channels;
+        let needed = loads * self.channels;
 
         // Bulk-drain every needed source frame in ONE non-blocking call, into
         // the fixed `scratch`. `out.len() <= chunk_frames * channels` (see
@@ -352,19 +372,16 @@ impl Resampler {
         let mut src = 0;
         if !self.primed {
             self.prev.copy_from_slice(&self.scratch[..self.channels]);
-            self.next
-                .copy_from_slice(&self.scratch[self.channels..2 * self.channels]);
-            src = 2;
+            src = 1;
             self.primed = true;
         }
 
         let mut crossed = 0usize;
         for frame in out.chunks_mut(self.channels) {
-            // Advance to this frame's position first, pulling the source
-            // frame(s) it needs. Skipped only for the first frame ever, which
-            // sits exactly on the primed `prev`/`next` pair at `frac == 0`.
-            // Mirrors the dry run's own `crossings` cap, so this never reads
-            // past what was actually drained into `scratch`.
+            // Advance to this frame's position first. Skipped only for the
+            // first frame ever, which sits exactly on the primed `prev` at
+            // `frac == 0`. Mirrors the dry run's own `crossings` cap, so this
+            // never reads past what was actually drained into `scratch`.
             if self.need_advance {
                 self.frac += self.step;
                 while self.frac >= 1.0 {
@@ -372,15 +389,32 @@ impl Resampler {
                         break;
                     }
                     self.frac -= 1.0;
-                    std::mem::swap(&mut self.prev, &mut self.next);
-                    let base = src * self.channels;
-                    self.next
-                        .copy_from_slice(&self.scratch[base..base + self.channels]);
-                    src += 1;
+                    if self.next_pending {
+                        let base = src * self.channels;
+                        self.prev
+                            .copy_from_slice(&self.scratch[base..base + self.channels]);
+                        src += 1;
+                    } else {
+                        std::mem::swap(&mut self.prev, &mut self.next);
+                    }
+                    self.next_pending = true;
                     crossed += 1;
                 }
             }
             self.need_advance = true;
+
+            if self.frac > 0.0 && self.next_pending {
+                let base = src * self.channels;
+                self.next
+                    .copy_from_slice(&self.scratch[base..base + self.channels]);
+                src += 1;
+                self.next_pending = false;
+            }
+
+            if self.frac == 0.0 {
+                frame.copy_from_slice(&self.prev[..frame.len()]);
+                continue;
+            }
 
             // `self.frac` is a loop invariant always in `[0.0, 1.0)` (see
             // the `while` above), so narrowing to `f32` here never
@@ -417,9 +451,10 @@ mod tests {
 
     #[test]
     fn identity_ratio_passes_frames_through_unchanged() {
-        // With the deferred lookahead pull, priming plus 4 output frames pulls
-        // only 5 source frames within this call (the 6th is deferred to a next
-        // callback that never comes here); push a comfortable margin so the
+        // With the deferred lookahead pull, priming loads one frame and the
+        // three later crossings load one each, so 4 identity outputs pull
+        // exactly 4 source frames (the lookahead stays pending for a next
+        // callback that never comes here); push a margin so the
         // pass-through values are exercised without a tail-end underrun
         // (production code never hits this identity case: `AudioOutput::open`
         // only builds a `Resampler` when the rates actually differ).
@@ -772,15 +807,56 @@ mod tests {
     }
 
     #[test]
+    fn a_callback_ending_on_an_integer_source_position_defers_the_lookahead_pull() {
+        // step = 0.5, 3 outputs land at source positions 0.0, 0.5, 1.0. The
+        // last sits exactly on frame 1 (frac == 0), so it consumes nothing
+        // past the 2 queued frames; the frame-2 lookahead must be deferred
+        // to callback 2, after the producer has supplied it.
+        let (producer, consumer) = ring_buffer(16);
+        assert_eq!(producer.push(&[0.0, 10.0]), 2);
+        let mut resampler = Resampler::new(consumer, 1, 1.0, 2, 8).unwrap();
+
+        let mut cb1 = [0.0; 3];
+        resampler.fill(&mut cb1);
+        assert_eq!(cb1, [0.0, 5.0, 10.0]);
+        assert_eq!(resampler.underruns(), 0);
+
+        assert_eq!(producer.push(&[20.0]), 1);
+        let mut cb2 = [0.0; 1];
+        resampler.fill(&mut cb2);
+        assert_eq!(cb2, [15.0]);
+        assert_eq!(resampler.underruns(), 0);
+    }
+
+    #[test]
+    fn multiple_crossings_ending_on_an_integer_position_defer_the_lookahead_pull() {
+        // step = 2.5: outputs 0..=2 sit at source positions 0.0, 2.5, 5.0, so
+        // only frames 0..=5 are used; frame 6 (the lookahead past the exact
+        // boundary at 5.0) must wait for the next callback.
+        let (producer, consumer) = ring_buffer(16);
+        let ramp: Vec<f32> = (0..6u8).map(f32::from).collect();
+        assert_eq!(producer.push(&ramp), 6);
+        let mut resampler = Resampler::new(consumer, 1, 5.0, 2, 8).unwrap();
+
+        let mut cb1 = [0.0; 3];
+        resampler.fill(&mut cb1);
+        assert_eq!(cb1, [0.0, 2.5, 5.0]);
+        assert_eq!(resampler.underruns(), 0);
+
+        assert_eq!(producer.push(&[6.0, 7.0, 8.0]), 3);
+        let mut cb2 = [0.0; 1];
+        resampler.fill(&mut cb2);
+        assert_eq!(cb2, [7.5]);
+        assert_eq!(resampler.underruns(), 0);
+    }
+
+    #[test]
     fn empty_fill_before_priming_does_not_touch_queue_or_prime() {
-        // Regression: on a never-primed resampler, a `fill` that computed
-        // its 2-frame priming drain from `self.primed` alone would run that
-        // drain for an empty `out` too. The queue here is deliberately
-        // starved to 1 sample (fewer than the 2 priming frames such a drain
-        // would take), so both symptoms are directly observable:
-        // `Consumer::fill`'s shortfall padding would count 1 underrun on a
-        // call that produced no output, and the queue would lose its 1
-        // queued sample even though nothing was emitted.
+        // A `fill` with an empty `out` must be a no-op on a never-primed
+        // resampler. The queue holds exactly the one sample priming would
+        // load as `prev`, so a priming load on an empty call is observable:
+        // the sample would be consumed with nothing emitted, and `primed`
+        // would latch.
         let (producer, consumer) = ring_buffer(16);
         assert_eq!(producer.push(&[7.0]), 1);
         let mut resampler = Resampler::new(consumer, 1, 100.0, 100, 16).unwrap();
@@ -790,12 +866,8 @@ mod tests {
         assert_eq!(resampler.underruns(), 0);
         assert!(!resampler.primed);
 
-        // Such a drain would also have latched `primed = true` with
-        // `prev = 7.0` (the one real sample it grabbed) and `next = 0.0`
-        // (silence, padded for the shortfall) — corrupting the interpolator
-        // before any real output existed. Queue the rest of the stream and
-        // run a real fill: with the empty fill correctly a no-op, priming
-        // still happens here, against the real, un-poisoned data.
+        // Queue the rest of the stream and run a real fill: priming happens
+        // here, so the first output is the 7.0 the empty fill left queued.
         assert_eq!(producer.push(&[8.0, 9.0, 10.0]), 3);
         let mut out = [0.0; 2];
         resampler.fill(&mut out);
@@ -895,9 +967,9 @@ mod tests {
         with_empty.fill(&mut first_b);
         assert_eq!(first_a, first_b);
         assert!(baseline.primed);
-        // Both queues are fully drained by the first fill (2 pushed, 2
-        // consumed for priming, 0 crossings) -- an absolute checkpoint, not
-        // just a relative one, before the empty fill is spliced in.
+        // Both queues are fully drained by the first fill (2 pushed: one
+        // loaded as `prev` by priming, one at the single crossing) -- an
+        // absolute checkpoint before the empty fill is spliced in.
         assert_eq!(producer_a.available_space(), 16);
         assert_eq!(producer_b.available_space(), 16);
 
@@ -908,6 +980,7 @@ mod tests {
         assert_eq!(baseline.underruns(), with_empty.underruns());
         assert_eq!(baseline.primed, with_empty.primed);
         assert_eq!(baseline.need_advance, with_empty.need_advance);
+        assert_eq!(baseline.next_pending, with_empty.next_pending);
         assert_eq!(baseline.frac, with_empty.frac);
         assert_eq!(baseline.prev, with_empty.prev);
         assert_eq!(baseline.next, with_empty.next);
