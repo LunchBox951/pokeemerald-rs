@@ -357,7 +357,7 @@ impl SaveFile {
     /// Without hard links the slot is created in place and widened after.
     #[cfg(unix)]
     fn create_lock_file(path: &Path) -> std::io::Result<Option<std::fs::File>> {
-        Self::create_lock_file_observing(path, |_| {}, |_| {})
+        Self::create_lock_file_with(path, |_| {})
     }
 
     /// As the `unix` [`SaveFile::create_lock_file`], running `after_create`
