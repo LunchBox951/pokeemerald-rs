@@ -88,7 +88,8 @@ pub fn require_battlers(pack: &PackSource) -> Result<(), GenRomProfileError> {
 }
 
 /// Refuses with `MissingPackEntry` for an absent or empty (`bag/*`) expectation, and with
-/// [`GenRomProfileError::StructMismatch`] for a pack `bag/` entry the expectation lacks.
+/// [`GenRomProfileError::StructMismatch`] for a pack `bag/` entry the expectation lacks, which
+/// the bag locator, reading only the expectation, would otherwise silently leave out of the profile.
 pub fn require_bag(pack: &PackSource, expected: &[String]) -> Result<(), GenRomProfileError> {
     if expected.is_empty() {
         return Err(GenRomProfileError::MissingPackEntry("bag/*".to_owned()));
