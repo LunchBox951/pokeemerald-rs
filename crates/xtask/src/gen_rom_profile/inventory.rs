@@ -87,7 +87,8 @@ pub fn require_battlers(pack: &PackSource) -> Result<(), GenRomProfileError> {
         .try_for_each(|id| pack.get(&id).map(|_| ()))
 }
 
-/// Refuses with `MissingPackEntry` for an absent or empty (`bag/*`) expectation, and with
+/// Refuses with `MissingPackEntry` for an absent entry, or for an empty expectation (`bag/*`) so a
+/// whole missing family cannot pass as a complete one, and with
 /// [`GenRomProfileError::StructMismatch`] for a pack `bag/` entry the expectation lacks, which
 /// the bag locator, reading only the expectation, would otherwise silently leave out of the profile.
 pub fn require_bag(pack: &PackSource, expected: &[String]) -> Result<(), GenRomProfileError> {
