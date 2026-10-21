@@ -602,3 +602,29 @@ impl OverworldPhase {
         );
     }
 }
+
+#[cfg(test)]
+mod checkout_pack_helper_tests {
+    use super::*;
+    use crate::pack_source::PackSource;
+
+    /// `on_checkout_pack` repins a `Runtime` fixture to `Repo`, so an
+    /// installed earlier-rung pack can never satisfy a deferred warp load.
+    #[test]
+    fn on_checkout_pack_repins_a_runtime_fixture_to_repo() {
+        let base = synthetic_phase(PlayerState::new((2, 2), 3, Direction::South), None);
+        assert_eq!(
+            base.pack_source,
+            PackSource::Runtime,
+            "fixture precondition"
+        );
+        assert_eq!(on_checkout_pack(base).pack_source, PackSource::Repo);
+    }
+
+    /// `checkout_pack_phase` loads and retains `Repo`, not `Runtime`.
+    #[test]
+    #[ignore = "needs a local pack: run `cargo xtask extract` first"]
+    fn checkout_pack_phase_retains_repo() {
+        assert_eq!(checkout_pack_phase().pack_source, PackSource::Repo);
+    }
+}
