@@ -341,7 +341,7 @@ impl OverworldPhase {
             );
             return;
         };
-        let Some(lead) = self.party_lead.clone() else {
+        let Some(lead) = self.lead_for_battle() else {
             eprintln!("route 103 rival: no party mon yet -- no battle to start");
             return;
         };

@@ -341,6 +341,11 @@ pub struct BattlePokemon {
     personality: u32,
     ability_slot: u8,
     original_trainer_id: u32,
+    /// Whether the save owner is not this Pokémon's original trainer
+    /// (`IsTradedMon`, `pokeemerald/src/pokemon.c:6602-6609`). Decided at the
+    /// save boundary, which alone sees the owner's name and id; battle only
+    /// reads it, for `Cmd_getexp`'s traded-recipient bonus.
+    traded_recipient: bool,
     types: [Type; 2],
     base_stats: BaseStats,
     experience: u32,
@@ -379,6 +384,7 @@ impl PartialEq for BattlePokemon {
             personality,
             ability_slot,
             original_trainer_id,
+            traded_recipient,
             types,
             base_stats,
             experience,
@@ -400,6 +406,7 @@ impl PartialEq for BattlePokemon {
             && *personality == other.personality
             && *ability_slot == other.ability_slot
             && *original_trainer_id == other.original_trainer_id
+            && *traded_recipient == other.traded_recipient
             && *types == other.types
             && *base_stats == other.base_stats
             && *experience == other.experience
@@ -506,6 +513,7 @@ impl BattlePokemon {
             personality,
             ability_slot: initial_ability_slot(base, personality),
             original_trainer_id: 0,
+            traded_recipient: false,
             types: base.types,
             base_stats: *base,
             experience,
@@ -630,6 +638,21 @@ impl BattlePokemon {
     #[must_use]
     pub const fn original_trainer_id(&self) -> u32 {
         self.original_trainer_id
+    }
+
+    /// Whether this Pokémon was classified as traded relative to the save
+    /// owner (`IsTradedMon`, `pokeemerald/src/pokemon.c:6602-6609`). `false`
+    /// until [`Self::with_traded_recipient`] says otherwise.
+    #[must_use]
+    pub const fn is_traded_recipient(&self) -> bool {
+        self.traded_recipient
+    }
+
+    /// Record the traded-recipient classification made at the save boundary.
+    #[must_use]
+    pub const fn with_traded_recipient(mut self, traded_recipient: bool) -> Self {
+        self.traded_recipient = traded_recipient;
+        self
     }
 
     /// Assign the original-trainer identity at the boundary that creates or

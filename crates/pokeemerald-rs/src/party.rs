@@ -654,6 +654,49 @@ pub(crate) fn from_save_pokemon(dex: &Dex, saved: &Pokemon) -> Result<BattlePoke
     Ok(mon)
 }
 
+/// Byte offset of a party record's OT name in its unencrypted header
+/// (`struct BoxPokemon.otName`, `pokeemerald/include/pokemon.h:198`).
+const BOX_OT_NAME_OFFSET: usize = 20;
+/// The text terminator (`EOS`) that ends an OT or player name.
+const NAME_TERMINATOR: u8 = 0xFF;
+
+/// Whether `record` was traded relative to the save owner: `IsTradedMon`
+/// (`pokeemerald/src/pokemon.c:6602-6609`) through `IsOtherTrainer`
+/// (`:6611-:6626`). A differing OT id is traded outright; an equal id is
+/// traded only if the record's OT name differs from the owner's up to the
+/// record's own terminator (`:6618-:6621`), so a longer owner name with an
+/// equal prefix is not.
+///
+/// Decided here, at the save boundary, because only the save owner's id and
+/// name are visible; battle receives the result through
+/// [`BattlePokemon::with_traded_recipient`].
+pub(crate) fn is_traded_record(record: &Pokemon, owner_id: u32, owner_name: &[u8]) -> bool {
+    if record.box_data.ot_id() != owner_id {
+        return true;
+    }
+    let bytes = record.to_bytes();
+    let ot_name = &bytes[BOX_OT_NAME_OFFSET..BOX_OT_NAME_OFFSET + engine::save::BOX_OT_NAME_LEN];
+    ot_name
+        .iter()
+        .take_while(|byte| **byte != NAME_TERMINATOR)
+        .enumerate()
+        .any(|(index, byte)| owner_name.get(index) != Some(byte))
+}
+
+/// Whether `record` carries the save owner's OT id but no OT name at all.
+/// [`merge_into_save_pokemon`] builds such a record from the battler alone
+/// ("this path has no save identity"), e.g. a healed new-game starter, so it
+/// is the owner's own Pokémon rather than a traded one even though
+/// [`is_traded_record`] sees a name mismatch.
+pub(crate) fn has_unstamped_owner_name(record: &Pokemon, owner_id: u32) -> bool {
+    let bytes = record.to_bytes();
+    let name = &bytes[BOX_OT_NAME_OFFSET..BOX_OT_NAME_OFFSET + engine::save::BOX_OT_NAME_LEN];
+    record.box_data.ot_id() == owner_id && name.iter().all(|byte| *byte == 0)
+}
+
+#[cfg(test)]
+mod traded_tests;
+
 /// Whether `record` is an egg or Bad Egg: the unencrypted header's
 /// `isBadEgg` bit, or the secure-region IV word's egg flag. Checked ahead
 /// of decode since [`from_save_pokemon`] itself does not reject either, and

@@ -49,6 +49,28 @@ impl OverworldPhase {
         self.party_lead.as_mut()
     }
 
+    /// A copy of the live lead for a battle start, classified against the
+    /// save owner: `IsTradedMon` (`pokeemerald/src/pokemon.c:6602-6626`)
+    /// compares the backing record's OT id and OT name with the owner's.
+    /// The record backs the lead only if its personality and OT id match the
+    /// battler's, so a lead installed without a saved record is left as is.
+    pub(super) fn lead_for_battle(&self) -> Option<BattlePokemon> {
+        let lead = self.party_lead.clone()?;
+        let owner_id = u32::from_le_bytes(self.save2.player_trainer_id);
+        let traded = self
+            .save1
+            .player_party
+            .get(self.party_lead_slot)
+            .is_some_and(|record| {
+                record.box_data.personality() == lead.personality()
+                    && record.box_data.ot_id() == lead.original_trainer_id()
+                    && !party::has_unstamped_owner_name(record, owner_id)
+                    && party::is_traded_record(record, owner_id, &self.save2.player_name)
+            });
+        let traded = traded || lead.is_traded_recipient();
+        Some(lead.with_traded_recipient(traded))
+    }
+
     /// Lend: moves the battler out for a battle. The selected slot and the
     /// hidden-HP offset stay with the owner, so [`Self::restore_lead_battler`]
     /// merges back into the same record. `None` when no lead is loaded.
