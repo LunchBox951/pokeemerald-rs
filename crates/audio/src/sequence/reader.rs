@@ -5,6 +5,13 @@ use super::{
     VOL, WAIT_HI, WAIT_LO, XCMD,
 };
 
+const RESERVED_AFTER_REPT: u8 = REPT + 1;
+const RESERVED_BEFORE_MEMACC: u8 = MEMACC - 1;
+const RESERVED_AFTER_MODT: u8 = MODT + 1;
+const RESERVED_BEFORE_TUNE: u8 = TUNE - 1;
+const RESERVED_AFTER_TUNE: u8 = TUNE + 1;
+const RESERVED_BEFORE_PORT: u8 = PORT - 1;
+
 pub(super) struct CommandReader<'a> {
     bytes: &'a [u8],
     pub(super) cursor: usize,
@@ -48,11 +55,12 @@ impl<'a> CommandReader<'a> {
         };
         match command {
             WAIT_LO..=WAIT_HI => Ok(Event::Wait(CLOCK_TABLE[usize::from(command - WAIT_LO)])),
-            // gMPlayJumpTable's reserved slots (0xB6-0xB8, 0xC6-0xC7, 0xC9-0xCB) are
-            // unpatched `ply_fine` entries, same as FINE (m4a_1.s:1256-1268; m4a_tables.c:6-44; m4a.c:287-305).
-            FINE | 0xB6..=0xB8 | 0xC6..=0xC7 | 0xC9..=0xCB => Ok(Event::Fine),
+            FINE
+            | RESERVED_AFTER_REPT..=RESERVED_BEFORE_MEMACC
+            | RESERVED_AFTER_MODT..=RESERVED_BEFORE_TUNE
+            | RESERVED_AFTER_TUNE..=RESERVED_BEFORE_PORT => Ok(Event::Fine),
             GOTO => Ok(Event::Goto(self.target()?)),
-            // m4a_1.s:851-866: a call past the depth limit ends the track before reading its pointer.
+            // A call past the depth limit ends the track before its pointer is read.
             PATT if !self.pattern_allowed => Ok(Event::Fine),
             PATT => Ok(Event::Pattern(self.target()?)),
             PEND => Ok(Event::PatternEnd),
@@ -91,8 +99,6 @@ impl<'a> CommandReader<'a> {
             TUNE => self.unary(|value| Event::Tune(centered(value))),
             XCMD => {
                 let kind = self.byte()?;
-                // `ply_xxx` is `ply_fine` (`m4a_tables.c:293`, `:296`); the
-                // track ends here, so no payload or suffix is read.
                 if xcmd_ends_track(kind) {
                     return Ok(Event::Fine);
                 }

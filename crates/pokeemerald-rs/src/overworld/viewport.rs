@@ -126,9 +126,11 @@ const BACKUP_MAP_MAX_PAST_SOUTH: i32 = MAP_OFFSET_H - 1 - MAP_OFFSET;
 ///
 /// Its odd width reaches one cell farther east than its even height reaches
 /// south (`InitMapLayoutData`, `pokeemerald/src/fieldmap.c`).
-fn within_backup_map_band(width: u16, height: u16, x: i32, y: i32) -> bool {
-    (BACKUP_MAP_MIN..=i32::from(width) + BACKUP_MAP_MAX_PAST_EAST).contains(&x)
-        && (BACKUP_MAP_MIN..=i32::from(height) + BACKUP_MAP_MAX_PAST_SOUTH).contains(&y)
+fn within_backup_map_band(width: u16, height: u16, x: i64, y: i64) -> bool {
+    (i64::from(BACKUP_MAP_MIN)..=i64::from(width) + i64::from(BACKUP_MAP_MAX_PAST_EAST))
+        .contains(&x)
+        && (i64::from(BACKUP_MAP_MIN)..=i64::from(height) + i64::from(BACKUP_MAP_MAX_PAST_SOUTH))
+            .contains(&y)
 }
 
 /// A connected layout positioned relative to the active layout.
@@ -147,9 +149,10 @@ fn connected_cell_at(
     connections: &[ConnectionView<'_>],
     width: u16,
     height: u16,
-    x: i32,
-    y: i32,
+    x: impl Into<i64>,
+    y: impl Into<i64>,
 ) -> Option<MetatileCell> {
+    let (x, y) = (x.into(), y.into());
     if !within_backup_map_band(width, height, x, y) {
         return None;
     }
@@ -157,20 +160,19 @@ fn connected_cell_at(
     connections
         .iter()
         .filter_map(|connection| {
+            let offset = i64::from(connection.offset);
             let (target_x, target_y) = match connection.direction {
-                ConnectionDirection::South if y >= i32::from(height) => {
-                    (x - connection.offset, y - i32::from(height))
+                ConnectionDirection::South if y >= i64::from(height) => {
+                    (x - offset, y - i64::from(height))
                 }
-                ConnectionDirection::North if y < 0 => (
-                    x - connection.offset,
-                    i32::from(connection.grid.height()) + y,
-                ),
-                ConnectionDirection::West if x < 0 => (
-                    i32::from(connection.grid.width()) + x,
-                    y - connection.offset,
-                ),
-                ConnectionDirection::East if x >= i32::from(width) => {
-                    (x - i32::from(width), y - connection.offset)
+                ConnectionDirection::North if y < 0 => {
+                    (x - offset, i64::from(connection.grid.height()) + y)
+                }
+                ConnectionDirection::West if x < 0 => {
+                    (i64::from(connection.grid.width()) + x, y - offset)
+                }
+                ConnectionDirection::East if x >= i64::from(width) => {
+                    (x - i64::from(width), y - offset)
                 }
                 _ => return None,
             };
@@ -181,14 +183,20 @@ fn connected_cell_at(
         .next_back()
 }
 
+/// Reduces a widened backup-map coordinate to its border repeat phase.
+fn border_parity(backup_map_coordinate: i64) -> i32 {
+    i32::try_from(backup_map_coordinate.rem_euclid(2)).expect("a remainder of two fits in i32")
+}
+
 /// Resolves the active grid, the last matching connection, then the border.
 fn cell_at(
     grid: &LayoutGrid<'_>,
     border: &BorderGrid<'_>,
     connections: &[ConnectionView<'_>],
-    x: i32,
-    y: i32,
+    x: impl Into<i64>,
+    y: impl Into<i64>,
 ) -> MetatileCell {
+    let (x, y) = (x.into(), y.into());
     if let (Ok(ux), Ok(uy)) = (u16::try_from(x), u16::try_from(y)) {
         if let Some(cell) = grid.cell_at(ux, uy) {
             return cell;
@@ -197,8 +205,10 @@ fn cell_at(
     if let Some(cell) = connected_cell_at(connections, grid.width(), grid.height(), x, y) {
         return cell;
     }
-    let backup_map_x = x + MAP_OFFSET;
-    let backup_map_y = y + MAP_OFFSET;
+    // The border repeats with period two, so only the parity of the widened
+    // backup-map coordinate matters; reduce it before narrowing to `i32`.
+    let backup_map_x = border_parity(x + i64::from(MAP_OFFSET));
+    let backup_map_y = border_parity(y + i64::from(MAP_OFFSET));
     border.cell_at(backup_map_x, backup_map_y)
 }
 
@@ -330,8 +340,8 @@ pub(super) fn build_tilemaps(
     let north_padding = i32::from(vertical_step > 0) * PAD;
     let south_padding = i32::from(vertical_step < 0) * PAD;
 
-    let anchor_x = base_x - PLAYER_VIEW_COL - west_padding;
-    let anchor_y = base_y - PLAYER_VIEW_ROW - north_padding;
+    let anchor_x = i64::from(base_x) - i64::from(PLAYER_VIEW_COL) - i64::from(west_padding);
+    let anchor_y = i64::from(base_y) - i64::from(PLAYER_VIEW_ROW) - i64::from(north_padding);
     let cols_metatiles = VIEW_COLS + west_padding + east_padding;
     let rows_metatiles = VIEW_ROWS + north_padding + south_padding + RESTING_SCROLL_ROW;
     #[expect(
@@ -353,7 +363,13 @@ pub(super) fn build_tilemaps(
 
     for my in 0..rows_metatiles {
         for mx in 0..cols_metatiles {
-            let cell = cell_at(grid, border, connections, anchor_x + mx, anchor_y + my);
+            let cell = cell_at(
+                grid,
+                border,
+                connections,
+                anchor_x + i64::from(mx),
+                anchor_y + i64::from(my),
+            );
             let Some((entries, layer_type)) = metatile_layers(
                 cell.metatile_id,
                 primary_metatiles,
@@ -1266,6 +1282,62 @@ mod tests {
             viewport.scroll_y, 8,
             "upstream's resting 8px BG offset (field_camera.c:74-85)"
         );
+    }
+
+    #[test]
+    fn build_tilemaps_composes_a_stationary_player_at_every_extreme_coordinate() {
+        let grid_bytes = uniform_grid_bytes(4, 4, INTERIOR_METATILE_ID);
+        let layout = test_layout(4, 4);
+        let grid = layout.grid(&grid_bytes).unwrap();
+        let border_bytes = synthetic_border_bytes();
+        let border = BorderGrid::new(&border_bytes).unwrap();
+        let (metatiles, attrs) = synthetic_metatiles_and_attrs();
+        let attrs = MetatileAttributeTable::new(&attrs);
+        let no_secondary = MetatileAttributeTable::new(&[]);
+
+        for position in [
+            (i32::MIN, 0),
+            (i32::MAX, 0),
+            (0, i32::MIN),
+            (0, i32::MAX),
+            (i32::MIN, i32::MIN),
+            (i32::MAX, i32::MAX),
+        ] {
+            let player = PlayerState::new(position, WALKABLE_ELEVATION, EngineDirection::South);
+            let viewport = build_tilemaps(
+                &player,
+                &grid,
+                &border,
+                &[],
+                &metatiles,
+                &[],
+                &attrs,
+                &no_secondary,
+                0,
+            );
+            assert_eq!(viewport.bottom.width_tiles(), (VIEW_COLS * 2) as usize);
+            assert_eq!(
+                viewport.bottom.entry(0, 0).unwrap().tile_index(),
+                BORDER_TILE_INDEX,
+                "{position:?} lies far outside the active grid, so the border fills the view"
+            );
+            assert_eq!((viewport.scroll_x, viewport.scroll_y), (0, 8));
+        }
+    }
+
+    #[test]
+    fn cell_at_resolves_extreme_coordinates_to_the_border() {
+        let grid_bytes = uniform_grid_bytes(4, 4, INTERIOR_METATILE_ID);
+        let layout = test_layout(4, 4);
+        let grid = layout.grid(&grid_bytes).unwrap();
+        let border_bytes = synthetic_border_bytes();
+        let border = BorderGrid::new(&border_bytes).unwrap();
+        for (x, y) in [(i32::MAX, 0), (i32::MIN, 0), (0, i32::MAX), (0, i32::MIN)] {
+            assert_eq!(
+                cell_at(&grid, &border, &[], x, y).metatile_id,
+                BORDER_METATILE_ID
+            );
+        }
     }
 
     #[test]

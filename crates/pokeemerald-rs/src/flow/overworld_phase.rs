@@ -428,6 +428,11 @@ impl OverworldPhase {
         Ok(phase)
     }
 
+    /// The live `optionsButtonMode` (`SaveBlock2`) the session plays under.
+    pub(super) fn button_mode(&self) -> engine::save::ButtonMode {
+        self.save2.options_button_mode
+    }
+
     /// `CB2_ContinueSavedGame` (`pokeemerald/src/overworld.c:1705-1754`):
     /// resume play from an already-loaded save pair, at the map and
     /// position the save names. See [`Self::from_saved`] for the facing
