@@ -88,7 +88,11 @@ pub fn ring_buffer(capacity: usize) -> (Producer, Consumer) {
         Producer {
             shared: Arc::clone(&shared),
         },
-        Consumer { shared, tail: 0 },
+        Consumer {
+            shared,
+            tail: 0,
+            discard_pending: false,
+        },
     )
 }
 
@@ -187,6 +191,7 @@ impl Producer {
         Some(Consumer {
             shared: Arc::clone(&self.shared),
             tail,
+            discard_pending: false,
         })
     }
 }
@@ -203,6 +208,9 @@ pub struct Consumer {
     /// This consumer's own read index (`< capacity`). Touched by no one
     /// else, ever — see the module docs' "Invariants" section.
     tail: usize,
+    /// Set by [`Consumer::discard_queued_at_first_read`]: the next read
+    /// drops whatever is queued at that moment before reading.
+    discard_pending: bool,
 }
 
 impl Consumer {
@@ -211,6 +219,7 @@ impl Consumer {
     /// A pure query: does not touch the underrun counter. Most callers want
     /// [`Consumer::pop_or_silence`] or [`Consumer::fill`] instead.
     pub fn try_pop(&mut self) -> Option<f32> {
+        self.settle_pending_discard();
         // Acquire: synchronizes-with the producer's `Release` `fetch_add`,
         // so a published slot's value is visible before this reads it.
         if self.shared.occupied.load(Ordering::Acquire) == 0 {
@@ -250,6 +259,7 @@ impl Consumer {
     /// counter in one update — identical accounting to calling
     /// [`Consumer::pop_or_silence`] once per missing sample.
     pub fn fill(&mut self, out: &mut [f32]) {
+        self.settle_pending_discard();
         // Acquire: synchronizes-with the producer's `Release` `fetch_add`,
         // so every published slot this observes is visible before the reads
         // below.
@@ -288,6 +298,33 @@ impl Consumer {
         self.shared.occupied.store(0, Ordering::Release);
     }
 
+    /// Drop whatever is queued when this consumer is next read, before that
+    /// read, without counting an underrun.
+    ///
+    /// Lock-free, so it holds once the consumer has moved into a device
+    /// callback: everything the producer pushed before the stream's first
+    /// callback is dropped there, however long the stream took to build.
+    pub(crate) fn discard_queued_at_first_read(&mut self) {
+        self.discard_pending = true;
+    }
+
+    fn settle_pending_discard(&mut self) {
+        if !std::mem::take(&mut self.discard_pending) {
+            return;
+        }
+        // Acquire: synchronizes-with the producer's `Release` `fetch_add`.
+        // Only this consumer ever lowers `occupied`, so these slots stay
+        // queued until the `fetch_sub` below frees them.
+        let queued = self.shared.occupied.load(Ordering::Acquire);
+        if queued == 0 {
+            return;
+        }
+        self.tail = (self.tail + queued) % self.shared.capacity;
+        // Release: publishes the freed slots to the producer's `Acquire`
+        // load of `occupied`.
+        self.shared.occupied.fetch_sub(queued, Ordering::Release);
+    }
+
     /// Samples currently queued and ready to read.
     #[must_use]
     pub fn available(&self) -> usize {
@@ -324,6 +361,21 @@ mod tests {
         let second = producer.reclaim_consumer().expect("vacant slot");
         assert!(producer.reclaim_consumer().is_none());
         drop(second);
+    }
+
+    #[test]
+    fn a_first_read_discard_drops_what_was_queued_before_that_read() {
+        let (producer, mut consumer) = ring_buffer(4);
+        assert_eq!(producer.push(&[1.0]), 1);
+        consumer.discard_queued_at_first_read();
+        assert_eq!(producer.push(&[2.0, 3.0]), 2); // queued after the request
+        let mut out = [9.0; 2];
+        consumer.fill(&mut out);
+        assert_eq!(out, [0.0, 0.0]);
+        assert_eq!(producer.available_space(), 4);
+        assert_eq!(producer.push(&[4.0, 5.0, 6.0]), 3); // wraps the write index
+        consumer.fill(&mut out);
+        assert_eq!(out, [4.0, 5.0], "the discard applies to one read only");
     }
 
     #[test]

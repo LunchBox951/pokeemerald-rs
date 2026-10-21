@@ -34,7 +34,9 @@
 //!   advance while no stream drained the ring (a stream was lost while
 //!   started, or `start` held while none was attached), the queued samples
 //!   are discarded, so playback resumes at the producer's current position
-//!   instead of replaying history. A queue left while stopped is kept for the
+//!   instead of replaying history. A stream that starts as it attaches also
+//!   drops, at its first callback, what the producer queued while it was
+//!   being built. A queue left while stopped is kept for the
 //!   next `start`. The first attach keeps the queue: that is the producer's
 //!   startup prefill, whether or not it has already called `start`.
 //! - Each distinct [`TransportState`] is published once, in order, for the
@@ -405,6 +407,13 @@ impl<H: OutputHost> Transport<H> {
         let playing = self.shared.running.load(Ordering::Acquire);
         if (std::mem::take(&mut self.stale_queue) || playing) && self.attached_before {
             consumer.discard_queued();
+        }
+        // A started producer keeps pushing while the build below blocks,
+        // and the consumer is the new stream's from then on, so what queues
+        // meanwhile is dropped at its first callback. A stopped attach keeps
+        // it, as it keeps any queue left while stopped.
+        if playing && self.attached_before {
+            consumer.discard_queued_at_first_read();
         }
         // A started attempt that fails leaves what was queued meanwhile as
         // history, even if `stop` lands before the next step.

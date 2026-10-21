@@ -47,6 +47,9 @@ struct World {
     start_during_discovery: Option<Arc<Shared>>,
     /// Run inside the next discovery, as a callback racing it would.
     during_discovery: Option<WorldHook>,
+    /// Run inside the next successful build, as a producer pushing while it
+    /// blocks would.
+    during_build: Option<WorldHook>,
     /// Every call that reaches the audio stack, host or device or stream.
     ops: usize,
     discoveries: usize,
@@ -142,6 +145,9 @@ impl OutputDevice for FakeDevice {
                 w.build_kind.unwrap_or(cpal::ErrorKind::BackendError),
             ));
         }
+        if let Some(hook) = w.during_build.take() {
+            hook(&mut w);
+        }
         w.builds += 1;
         w.log.push("build");
         let index = w.streams.len();
@@ -192,12 +198,13 @@ impl Drop for FakeStream {
     }
 }
 
-/// Invoke stream `index`'s data callback once, as the audio thread would.
+/// Invoke stream `index`'s data callback once, as the audio thread would,
+/// and return what it wrote.
 fn run_data_callback<T: cpal::SizedSample + Default + 'static>(
     world: &SharedWorld,
     index: usize,
     len: usize,
-) {
+) -> Vec<T> {
     let mut w = with(world);
     let callback = w.streams[index]
         .data
@@ -209,6 +216,7 @@ fn run_data_callback<T: cpal::SizedSample + Default + 'static>(
         playback: cpal::StreamInstant::from_millis(10),
     };
     callback(&mut buffer, &cpal::OutputCallbackInfo::new(stamp));
+    buffer
 }
 
 fn raise_error(world: &SharedWorld, index: usize, kind: cpal::ErrorKind) {

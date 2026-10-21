@@ -123,6 +123,61 @@ fn a_start_that_lands_during_a_reattach_attempt_discards_the_history() {
 }
 
 #[test]
+fn history_queued_during_a_slow_started_rebuild_is_not_replayed() {
+    let w = world(|w| w.default = Some("a".into()));
+    let mut rig = rig(&w, 4);
+    rig.shared.running.store(true, Ordering::Release);
+    rig.transport.step(Duration::ZERO);
+    raise_error(&w, 0, cpal::ErrorKind::DeviceNotAvailable);
+    rig.transport.step(MS(20));
+
+    // The producer keeps pushing while the rebuild blocks in the OS.
+    let producer = rig.producer.clone();
+    with(&w).during_build = Some(Box::new(move |_| {
+        assert_eq!(producer.push(&[0.5; 8]), 8);
+    }));
+    rig.transport.step(MS(120));
+    assert_eq!(with(&w).builds, 2);
+    assert_eq!(rig.events().last(), Some(&TransportState::Ready));
+
+    let out = run_data_callback::<f32>(&w, 1, 8);
+    assert!(
+        out.iter().all(|&sample| sample == 0.0),
+        "the rebuilt stream does not replay what queued during its build: {out:?}"
+    );
+    assert_eq!(rig.producer.available_space(), rig.producer.capacity());
+}
+
+#[test]
+fn a_stopped_rebuild_after_a_loss_while_started_keeps_what_queues_during_it() {
+    let w = world(|w| w.default = Some("a".into()));
+    let mut rig = rig(&w, 4);
+    rig.shared.running.store(true, Ordering::Release);
+    rig.transport.step(Duration::ZERO);
+    raise_error(&w, 0, cpal::ErrorKind::DeviceNotAvailable);
+    rig.transport.step(MS(20));
+    assert_eq!(rig.producer.push(&[0.25; 8]), 8, "history from the loss");
+    rig.shared.running.store(false, Ordering::Release);
+
+    // Stopped now, so what queues during the rebuild is a stopped queue.
+    let producer = rig.producer.clone();
+    with(&w).during_build = Some(Box::new(move |_| {
+        assert_eq!(producer.push(&[0.5; 4]), 4);
+    }));
+    rig.transport.step(MS(120));
+    assert_eq!(with(&w).builds, 2);
+    rig.shared.running.store(true, Ordering::Release);
+    rig.transport.step(MS(140));
+    assert_eq!(with(&w).plays, 2);
+
+    let out = run_data_callback::<f32>(&w, 1, 8);
+    assert!(
+        out.iter().any(|&sample| sample != 0.0),
+        "the queue left while stopped plays at the next start: {out:?}"
+    );
+}
+
+#[test]
 fn a_stopped_reattach_keeps_the_queue_for_a_later_start() {
     let w = world(|w| w.default = Some("a".into()));
     let mut rig = rig(&w, 4);
