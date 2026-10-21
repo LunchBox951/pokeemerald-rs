@@ -49,11 +49,14 @@ const TRACK_VOLUME_SCALE: u8 = 0x40;
 /// resolved reverb level into (`m4a_internal.h:12`, `m4a.c:445`).
 const MAX_REVERB_LEVEL: u8 = 127;
 
-/// Commands one track runs in one tick before it yields to the rest of the
-/// mixer and resumes from the same command next tick. Upstream's command
-/// loop has no bound and spends however long it needs (`m4a_1.s:1232`..
-/// `:1284`); yielding keeps `render_frame` returning while a long
-/// state-changing loop (a `MEMACC` counter) still runs to its `Wait`/`Fine`.
+/// Commands one track runs in one frame before the tick it belongs to is
+/// suspended and `render_frame` returns. Upstream's command loop has no
+/// bound and spends however long it needs (`m4a_1.s:1232`..`:1284`);
+/// suspending keeps `render_frame` returning while a long state-changing
+/// loop (a `MEMACC` counter) still runs to its `Wait`/`Fine`. The next frame
+/// resumes the same logical tick at the same command: no gate expires, no
+/// later track runs, and no dirty volume or pitch reaches a voice until the
+/// run ends, so the tick stays atomic as upstream's is.
 const TRACK_COMMANDS_PER_TICK: u32 = 1 << 16;
 
 /// Cycle-detection state for one track's current zero-wait run, carried
@@ -279,6 +282,11 @@ pub struct Sequencer {
     tempo_c: u16,
     mem_acc: MemAccArea,
     paused: bool,
+    /// The track whose zero-wait run yielded mid-tick. That logical tick is
+    /// unfinished: the next frame resumes it at this track before anything
+    /// else (`MPlayMain` walks every track within one tick,
+    /// `m4a_1.s:1173`-`:1355`).
+    suspended_tick: Option<usize>,
 }
 
 impl Sequencer {
@@ -332,6 +340,7 @@ impl Sequencer {
             mem_acc: MemAccArea::default(),
             bursts,
             paused: false,
+            suspended_tick: None,
         }
     }
 
@@ -454,8 +463,9 @@ impl Sequencer {
     ///
     /// # Overflow
     ///
-    /// `tempo_c += tempo_i` never overflows: the loop below always leaves
-    /// `tempo_c < TEMPO_UNIT`, and every `tempo_i` ingestion point
+    /// `tempo_c += tempo_i` never overflows: the loop below leaves
+    /// `tempo_c < TEMPO_UNIT` unless a tick is suspended, and a frame that
+    /// resumes a suspended tick adds no tempo, and every `tempo_i` ingestion point
     /// ([`Song::new`]'s initial tempo, [`Event::Tempo`]'s runtime assignment
     /// in [`Self::handle_event`]) clamps to [`MAX_TEMPO_BPM`], so their sum
     /// stays far under `u16::MAX`.
@@ -463,41 +473,50 @@ impl Sequencer {
         if self.paused {
             return;
         }
-        debug_assert!(self.tempo_c < TEMPO_UNIT);
         debug_assert!(self.tempo_i <= MAX_TEMPO_BPM);
-        self.tempo_c += self.tempo_i;
-        let mut ticked = false;
+        if let Some(track_id) = self.suspended_tick {
+            // This frame continues the frame whose tick yielded: its tempo
+            // was already added, so only that frame's remaining ticks run.
+            if !self.finish_tick(track_id, false) {
+                return;
+            }
+        } else {
+            debug_assert!(self.tempo_c < TEMPO_UNIT);
+            self.tempo_c += self.tempo_i;
+        }
         while self.tempo_c >= TEMPO_UNIT {
             self.tempo_c -= TEMPO_UNIT;
-            self.do_tick();
-            ticked = true;
-        }
-        if !ticked {
-            self.resume_yielded_bursts();
+            if !self.do_tick() {
+                return;
+            }
         }
         // Once per frame after every tick, matching `MPlayMain`'s single
         // pass after its tempo loop (`m4a_1.s:1169`-`:1175`, `:1341`-`:1360`).
+        // A suspended tick returns above, so a half-run burst's volume or
+        // pitch never reaches a voice.
         self.propagate_dirty_tracks();
     }
 
-    fn do_tick(&mut self) {
-        for track_id in 0..self.tracks.len() {
-            self.step_track(track_id, true);
-        }
+    /// Runs one whole tick; `false` if a track's run yielded and the tick is
+    /// suspended.
+    fn do_tick(&mut self) -> bool {
+        self.finish_tick(0, true)
     }
 
-    /// Finish yielded zero-wait bursts on a frame where no tick fired (a
-    /// tempo of zero reached mid-burst), since upstream's command loop would
-    /// have run them to their `Wait`/`Fine` within the same tick.
-    fn resume_yielded_bursts(&mut self) {
-        for track_id in 0..self.tracks.len() {
-            if !self.tracks[track_id].ended
-                && self.tracks[track_id].wait == 0
-                && self.bursts[track_id].yielded
-            {
-                self.step_track(track_id, false);
+    /// Runs the tick from `first` onward. `first_ticks_gates` is `false`
+    /// when `first` resumes a yielded run whose gates already expired this
+    /// tick. Returns `false` if a run yielded, recording where the tick
+    /// resumes.
+    fn finish_tick(&mut self, first: usize, first_ticks_gates: bool) -> bool {
+        self.suspended_tick = None;
+        for track_id in first..self.tracks.len() {
+            self.step_track(track_id, first_ticks_gates || track_id != first);
+            if self.bursts[track_id].yielded {
+                self.suspended_tick = Some(track_id);
+                return false;
             }
         }
+        true
     }
 
     fn step_track(&mut self, track_id: usize, tick_gates: bool) {
@@ -575,10 +594,10 @@ impl Sequencer {
         if track.wait == 0 {
             // Upstream's command loop has no bound: a finite burst of any
             // length runs to its next `Wait` or `Fine` (`m4a_1.s:1232`..
-            // `:1284`). A run longer than `TRACK_COMMANDS_PER_TICK` yields
-            // and resumes next tick, with `burst` carried over. Only a run
-            // that revisits an identical track and accumulator state can
-            // never progress, and only that is ended.
+            // `:1284`). A run longer than `TRACK_COMMANDS_PER_TICK` yields,
+            // and its suspended tick resumes next frame with `burst` carried
+            // over. Only a run that revisits an identical track and
+            // accumulator state can never progress, and only that is ended.
             let mut ran: u32 = 0;
             loop {
                 if let Some((seen_track, seen_acc)) = &burst.snapshot {

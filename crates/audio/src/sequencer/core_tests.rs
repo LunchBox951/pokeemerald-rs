@@ -640,3 +640,100 @@ fn a_yielded_burst_resumes_under_tempo_zero_when_the_schedule_restarts_on_the_yi
     assert!(!seq.tracks[0].ended, "the resumed burst is not ended");
     assert_eq!(seq.voice_count(), 1, "the note after the burst plays");
 }
+
+/// One voice and a finite-gate note, a one-tick wait, then a zero-wait run
+/// longer than one frame's command budget, a `Wait` and `Fine`.
+fn gated_note_then_long_burst(burst: Vec<Event>) -> Vec<Event> {
+    let mut track = vec![
+        Event::Voice(0),
+        Event::Volume(127),
+        Event::Note {
+            key: 60,
+            velocity: 127,
+            gate: 2,
+        },
+        Event::Wait(1),
+    ];
+    track.extend(burst);
+    track.extend([Event::Wait(2), Event::Fine]);
+    track
+}
+
+#[test]
+fn a_yielded_burst_does_not_expire_gates_again_within_its_tick() {
+    // Tick 1 expires the gate once (2 -> 1) and runs the whole burst
+    // (`m4a_1.s:1191`-`:1284`); the gate reaches zero only at tick 2.
+    let burst = vec![Event::Volume(127); TRACK_COMMANDS_PER_TICK as usize + 10];
+    let mut seq = Sequencer::new(test_song(vec![gated_note_then_long_burst(burst)], 150));
+    render_frames(&mut seq, 1);
+    assert_eq!(seq.voice_count(), 1, "the gated note starts on tick 0");
+    while seq.tracks[0].wait == 0 && !seq.tracks[0].ended {
+        render_frames(&mut seq, 1);
+    }
+    let voices = seq.mixer.voices();
+    assert_eq!(voices.len(), 1);
+    assert!(
+        !voices[0].is_stopping(),
+        "the gate must not expire before the tick that holds the burst ends"
+    );
+}
+
+#[test]
+fn a_later_track_does_not_run_while_an_earlier_tracks_tick_is_suspended() {
+    // `MPlayMain` runs tracks in order within a tick (`m4a_1.s:1178`-`:1334`),
+    // so track 1 runs tick 0 only after track 0's burst reaches its `Wait`.
+    let mut a = vec![Event::Voice(0)];
+    a.extend(std::iter::repeat_n(
+        Event::Volume(127),
+        TRACK_COMMANDS_PER_TICK as usize + 10,
+    ));
+    a.extend([Event::Wait(1), Event::Fine]);
+    let b = vec![Event::Wait(1), Event::Wait(1), Event::Wait(1), Event::Fine];
+    let mut seq = Sequencer::new(test_song(vec![a, b], 150));
+    render_frames(&mut seq, 1);
+    assert_eq!(seq.tracks[0].wait, 0, "track 0's burst yielded");
+    assert_eq!(
+        seq.tracks[1].cursor, 0,
+        "track 1 waits for the suspended tick"
+    );
+    render_frames(&mut seq, 1);
+    assert_eq!(
+        seq.tracks[1].cursor, 1,
+        "the resumed tick runs track 1 once"
+    );
+    render_frames(&mut seq, 1);
+    assert_eq!(seq.tracks[1].cursor, 2, "then one tick per frame resumes");
+}
+
+#[test]
+fn a_yielded_burst_holds_its_pitch_change_until_the_run_ends() {
+    // The post-tick dirty pass runs after the tempo loop (`m4a_1.s:1360`), so
+    // a bend undone within the same zero-wait run never reaches a voice.
+    let mut burst = vec![Event::Bend(63)];
+    burst.extend(std::iter::repeat_n(
+        Event::Volume(127),
+        TRACK_COMMANDS_PER_TICK as usize + 10,
+    ));
+    burst.push(Event::Bend(0));
+    let mut track = vec![
+        Event::Voice(0),
+        Event::Volume(127),
+        tied_note(60),
+        Event::Wait(1),
+    ];
+    track.extend(burst);
+    track.extend([Event::Wait(4), Event::Fine]);
+    let mut seq = Sequencer::new(test_song(vec![track], 150));
+    render_frames(&mut seq, 1);
+    let before = seq.mixer.voices()[0].frequency();
+    render_frames(&mut seq, 1);
+    assert_eq!(
+        seq.tracks[0].wait, 0,
+        "the burst yielded with the bend applied"
+    );
+    assert_eq!(
+        seq.mixer.voices()[0].frequency(),
+        before,
+        "a half-run burst's pitch must not reach the voice"
+    );
+}
