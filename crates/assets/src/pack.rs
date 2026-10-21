@@ -388,8 +388,8 @@ impl AssetPack {
     }
 
     /// Bundle a border frame's tiles and palette. `frame_id` is upstream's
-    /// zero-based `sWindowFrames` index; as in `GetWindowFrameTilesPal`,
-    /// an id at or above `WINDOW_FRAMES_COUNT` selects frame `0`.
+    /// zero-based `sWindowFrames` index (`0..=19`); as in
+    /// `GetWindowFrameTilesPal`, an id of `20` or above selects frame `0`.
     ///
     /// # Errors
     ///
