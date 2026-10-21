@@ -85,32 +85,32 @@
     "data/battle_anim_scripts.s": {
       "artifacts": {
         "gBattleAnims_General": {
-          "reason": "gBattleAnims_General: normalized selector and program data extracted from the checkout into the battle-anim/catalog pack entry; excludes the unreachable Move_COUNT entry and dead tails after the first terminator, with UBFIX undefined. Execution behaviour (S-6), rendering and effect resources stay pending, so the parent file stays pending.",
-          "rust_target": "crates/xtask/src/extract/battle_anim.rs",
+          "reason": "gBattleAnims_General: normalized selector and program data reaches battle-anim/catalog from both builders: cargo xtask extract from the checkout (crates/xtask/src/extract/battle_anim.rs) and the ROM importer following the four selector tables and compiled command streams (crates/rom-import/src/domains/battle_anim.rs). tests/equivalence.rs requires identical kind, metadata, IDs, and bytes. Both exclude the unreachable Move_COUNT entry and stop each program at its first terminator, with UBFIX undefined. Execution behaviour (S-6), rendering and effect resources stay pending, so the parent file stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_anim.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "gBattleAnims_Moves": {
-          "reason": "gBattleAnims_Moves: normalized selector and program data extracted from the checkout into the battle-anim/catalog pack entry; excludes the unreachable Move_COUNT entry and dead tails after the first terminator, with UBFIX undefined. Execution behaviour (S-6), rendering and effect resources stay pending, so the parent file stays pending.",
-          "rust_target": "crates/xtask/src/extract/battle_anim.rs",
+          "reason": "gBattleAnims_Moves: normalized selector and program data reaches battle-anim/catalog from both builders: cargo xtask extract from the checkout (crates/xtask/src/extract/battle_anim.rs) and the ROM importer following the four selector tables and compiled command streams (crates/rom-import/src/domains/battle_anim.rs). tests/equivalence.rs requires identical kind, metadata, IDs, and bytes. Both exclude the unreachable Move_COUNT entry and stop each program at its first terminator, with UBFIX undefined. Execution behaviour (S-6), rendering and effect resources stay pending, so the parent file stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_anim.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "gBattleAnims_Special": {
-          "reason": "gBattleAnims_Special: normalized selector and program data extracted from the checkout into the battle-anim/catalog pack entry; excludes the unreachable Move_COUNT entry and dead tails after the first terminator, with UBFIX undefined. Execution behaviour (S-6), rendering and effect resources stay pending, so the parent file stays pending.",
-          "rust_target": "crates/xtask/src/extract/battle_anim.rs",
+          "reason": "gBattleAnims_Special: normalized selector and program data reaches battle-anim/catalog from both builders: cargo xtask extract from the checkout (crates/xtask/src/extract/battle_anim.rs) and the ROM importer following the four selector tables and compiled command streams (crates/rom-import/src/domains/battle_anim.rs). tests/equivalence.rs requires identical kind, metadata, IDs, and bytes. Both exclude the unreachable Move_COUNT entry and stop each program at its first terminator, with UBFIX undefined. Execution behaviour (S-6), rendering and effect resources stay pending, so the parent file stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_anim.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "gBattleAnims_StatusConditions": {
-          "reason": "gBattleAnims_StatusConditions: normalized selector and program data extracted from the checkout into the battle-anim/catalog pack entry; excludes the unreachable Move_COUNT entry and dead tails after the first terminator, with UBFIX undefined. Execution behaviour (S-6), rendering and effect resources stay pending, so the parent file stays pending.",
-          "rust_target": "crates/xtask/src/extract/battle_anim.rs",
+          "reason": "gBattleAnims_StatusConditions: normalized selector and program data reaches battle-anim/catalog from both builders: cargo xtask extract from the checkout (crates/xtask/src/extract/battle_anim.rs) and the ROM importer following the four selector tables and compiled command streams (crates/rom-import/src/domains/battle_anim.rs). tests/equivalence.rs requires identical kind, metadata, IDs, and bytes. Both exclude the unreachable Move_COUNT entry and stop each program at its first terminator, with UBFIX undefined. Execution behaviour (S-6), rendering and effect resources stay pending, so the parent file stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_anim.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "reachable-normalized-programs": {
-          "reason": "reachable-normalized-programs: normalized selector and program data extracted from the checkout into the battle-anim/catalog pack entry; excludes the unreachable Move_COUNT entry and dead tails after the first terminator, with UBFIX undefined. Execution behaviour (S-6), rendering and effect resources stay pending, so the parent file stays pending.",
-          "rust_target": "crates/xtask/src/extract/battle_anim.rs",
+          "reason": "reachable-normalized-programs: normalized selector and program data reaches battle-anim/catalog from both builders: cargo xtask extract from the checkout (crates/xtask/src/extract/battle_anim.rs) and the ROM importer following the four selector tables and compiled command streams (crates/rom-import/src/domains/battle_anim.rs). tests/equivalence.rs requires identical kind, metadata, IDs, and bytes. Both exclude the unreachable Move_COUNT entry and stop each program at its first terminator, with UBFIX undefined. Execution behaviour (S-6), rendering and effect resources stay pending, so the parent file stays pending.",
+          "rust_target": "crates/rom-import/src/domains/battle_anim.rs",
           "spec": "S-4",
           "status": "ported"
         }
