@@ -570,6 +570,33 @@ mod tests {
     }
 
     #[test]
+    fn zero_colour_jasc_palette_is_rejected_without_queuing_an_entry() {
+        let dir = std::env::temp_dir().join(format!(
+            "pokeemerald-rs-extract-zero-jasc-test-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("zero.pal");
+        std::fs::write(&path, "JASC-PAL\r\n0100\r\n0\r\n").unwrap();
+
+        let mut writer = pack_format::PackWriter::new();
+        let err =
+            super::push_palette_entry(&path, "test/palette".to_owned(), &mut writer).unwrap_err();
+        assert!(
+            matches!(
+                &err,
+                ExtractError::Pal(error_path, jasc_pal::JascPalError::NoColors)
+                    if error_path == &path
+            ),
+            "wrong error for a zero-colour JASC palette: {err:?}"
+        );
+        assert_eq!(writer.len(), 0, "zero-colour palette must not be queued");
+
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_dir(&dir).unwrap();
+    }
+
+    #[test]
     fn collect_pngs_sorted_rejects_missing_dir() {
         let err = collect_pngs_sorted(std::path::Path::new("/does/not/exist")).unwrap_err();
         assert!(matches!(err, super::ExtractError::ReadFailed(..)));
