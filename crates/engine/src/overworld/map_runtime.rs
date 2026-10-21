@@ -293,7 +293,7 @@ fn landing_position(
 ) -> Option<(i32, i32)> {
     match direction {
         Direction::South | Direction::North => {
-            let target_x = x - connection.offset;
+            let target_x = x.checked_sub(connection.offset)?;
             if target_x < 0 || target_x >= i32::from(target_width) {
                 return None;
             }
@@ -305,7 +305,7 @@ fn landing_position(
             Some((target_x, target_y))
         }
         Direction::West | Direction::East => {
-            let target_y = y - connection.offset;
+            let target_y = y.checked_sub(connection.offset)?;
             if target_y < 0 || target_y >= i32::from(target_height) {
                 return None;
             }
@@ -1025,6 +1025,68 @@ mod tests {
             .is_some());
         assert!(runtime
             .resolve_connection(Direction::South, out_of_bounds_target_x, 5, &dims)
+            .is_none());
+    }
+
+    fn runtime_with_connection(direction: assets::Direction, offset: i32) -> MapRuntime<'static> {
+        let connections: &'static [MapConnection] = Box::leak(Box::new([MapConnection {
+            direction,
+            offset,
+            target: MapId("MAP_NEIGHBOR"),
+        }]));
+        let hdr = header("MAP_HOME", connections);
+        let events = empty_events("MAP_HOME");
+        let bytes: &'static [u8] = Box::leak(grid_bytes(6, 6, cell(0, 0, 0)).into_boxed_slice());
+        let layout = assets::MapLayout {
+            id: assets::LayoutId("MAP_HOME"),
+            name: "MapHome",
+            width: 6,
+            height: 6,
+            primary_tileset: "gTileset_General",
+            secondary_tileset: "gTileset_General",
+        };
+        let grid = layout.grid(bytes).unwrap();
+        MapRuntime::new(
+            MapId("MAP_HOME"),
+            Box::leak(Box::new(hdr)),
+            Box::leak(Box::new(events)),
+            grid,
+            MetatileAttributeTable::new(&[]),
+            MetatileAttributeTable::new(&[]),
+        )
+    }
+
+    #[test]
+    fn resolve_connection_refuses_offset_subtraction_overflowing_upward() {
+        let dims = |_: MapId| Some((10, 10));
+        let south = runtime_with_connection(assets::Direction::South, -1);
+        assert!(south
+            .resolve_connection(Direction::South, i32::MAX, 6, &dims)
+            .is_none());
+        let east = runtime_with_connection(assets::Direction::East, -1);
+        assert!(east
+            .resolve_connection(Direction::East, 6, i32::MAX, &dims)
+            .is_none());
+    }
+
+    #[test]
+    fn resolve_connection_refuses_offset_subtraction_overflowing_downward() {
+        let dims = |_: MapId| Some((10, 10));
+        let south = runtime_with_connection(assets::Direction::South, i32::MIN);
+        assert!(south
+            .resolve_connection(Direction::South, 2, 6, &dims)
+            .is_none());
+        let east = runtime_with_connection(assets::Direction::East, i32::MIN);
+        assert!(east
+            .resolve_connection(Direction::East, 6, 2, &dims)
+            .is_none());
+        let south = runtime_with_connection(assets::Direction::South, i32::MAX);
+        assert!(south
+            .resolve_connection(Direction::South, i32::MIN, 6, &dims)
+            .is_none());
+        let east = runtime_with_connection(assets::Direction::East, i32::MAX);
+        assert!(east
+            .resolve_connection(Direction::East, 6, i32::MIN, &dims)
             .is_none());
     }
 

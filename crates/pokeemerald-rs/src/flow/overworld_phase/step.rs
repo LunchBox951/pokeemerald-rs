@@ -713,6 +713,10 @@ impl OverworldPhase {
     fn commit_start_menu(&mut self, ready: Option<StartMenu>) {
         if let Some(menu) = ready {
             self.take_field_lock();
+            // `ShowStartMenu` also runs `StopPlayerAvatar`, which resets
+            // movementDirection to facingDirection before any save can copy
+            // it (`start_menu.c:581-588`, `field_player_avatar.c:1223-1228`).
+            self.player.reset_movement_direction_to_facing();
             self.start_menu = Some(menu);
         }
     }
