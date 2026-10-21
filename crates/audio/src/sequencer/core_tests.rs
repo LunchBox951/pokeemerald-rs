@@ -469,3 +469,271 @@ fn an_out_of_range_resolved_reverb_level_clamps_to_the_canonical_maximum() {
         assert_eq!(a, b, "255 must render exactly as the clamped 127");
     }
 }
+
+#[test]
+fn a_finite_zero_wait_burst_longer_than_the_old_cap_still_reaches_its_note() {
+    // The former 4,096-command per-tick cap ended valid tracks; upstream's
+    // command loop has no cap, so a long finite burst must play through.
+    const BURST: usize = 10_000;
+    let mut track = vec![Event::Voice(0)];
+    track.extend(std::iter::repeat_n(Event::Volume(127), BURST));
+    track.extend([tied_note(60), Event::Wait(48), Event::Fine]);
+    let mut seq = Sequencer::new(test_song(vec![track], 150));
+    render_frames(&mut seq, 1);
+    assert!(!seq.tracks[0].ended, "finite burst must not end the track");
+    assert_eq!(seq.voice_count(), 1, "the note after the burst plays");
+}
+
+#[test]
+fn a_zero_wait_loop_that_never_yields_still_ends_the_track() {
+    let track = vec![Event::Voice(0), Event::Volume(100), Event::Goto(0)];
+    let mut seq = Sequencer::new(test_song(vec![track], 150));
+    render_frames(&mut seq, 1);
+    assert!(seq.tracks[0].ended, "a non-progressing loop must not hang");
+}
+
+/// Three carry-chained `MEMACC` counter cells (`ADD 1`, then `NE 0` back to
+/// event 2). The state does not repeat for about 2^24 commands.
+fn counter_burst_prelude() -> Vec<Event> {
+    let mut track = vec![Event::Voice(0), Event::Volume(127)];
+    for addr in 0..3 {
+        track.push(Event::MemAcc {
+            op: 1,
+            addr,
+            value: 1,
+            target: None,
+        });
+        track.push(Event::MemAcc {
+            op: 7,
+            addr,
+            value: 0,
+            target: Some(2),
+        });
+    }
+    track
+}
+
+#[test]
+fn a_finite_memacc_counter_burst_past_one_tick_budget_still_reaches_its_note() {
+    let mut track = counter_burst_prelude();
+    track.extend([tied_note(60), Event::Wait(48), Event::Fine]);
+    let mut seq = Sequencer::new(test_song(vec![track], 150));
+    let mut frames = 0;
+    while seq.voice_count() == 0 {
+        assert!(
+            !seq.tracks[0].ended,
+            "a finite counter burst must not end the track"
+        );
+        assert!(frames < 100_000, "the burst must finish in bounded frames");
+        render_frames(&mut seq, 1);
+        frames += 1;
+    }
+    assert!(frames > 1, "the burst spans more than one frame budget");
+    assert!(!seq.tracks[0].ended);
+}
+
+#[test]
+fn a_non_repeating_zero_wait_loop_keeps_render_frame_bounded_and_the_track_alive() {
+    let mut track = counter_burst_prelude();
+    track.push(Event::Goto(2));
+    let mut seq = Sequencer::new(test_song(vec![track], 150));
+    // Each frame returns after a bounded command budget instead of hanging.
+    render_frames(&mut seq, 3);
+    assert!(
+        !seq.tracks[0].ended,
+        "the loop is not yet known to be stuck"
+    );
+}
+
+#[test]
+fn a_yielded_burst_is_not_ended_by_a_shared_memacc_change_from_another_track() {
+    let mut a = vec![Event::Voice(0), Event::Volume(127), Event::Wait(1)];
+    a.extend(std::iter::repeat_n(Event::Wait(0), 65_535));
+    let add = a.len();
+    a.push(Event::MemAcc {
+        op: 1,
+        addr: 0,
+        value: 1,
+        target: None,
+    });
+    a.push(Event::MemAcc {
+        op: 6,
+        addr: 0,
+        value: 255,
+        target: Some(add + 3),
+    });
+    a.push(Event::Goto(add));
+    a.extend([tied_note(60), Event::Wait(48), Event::Fine]);
+    let b = vec![
+        Event::Wait(1),
+        Event::MemAcc {
+            op: 0,
+            addr: 0,
+            value: 0,
+            target: None,
+        },
+        Event::Fine,
+    ];
+    let mut seq = Sequencer::new(test_song(vec![a, b], 150));
+    render_frames(&mut seq, 5);
+    assert!(
+        !seq.tracks[0].ended,
+        "a progressing counter loop must not end"
+    );
+    assert_eq!(seq.voice_count(), 1, "the note after the loop plays");
+}
+
+#[test]
+fn a_stuck_loop_entered_after_the_snapshot_schedule_saturates_still_ends_the_track() {
+    let track = vec![Event::Voice(0), Event::Volume(100), Event::Goto(2)];
+    let mut seq = Sequencer::new(test_song(vec![track], 150));
+    seq.bursts[0].steps = (1 << 31) - 1;
+    seq.bursts[0].next_snapshot = Some(1 << 31);
+    let budget_frames = 3 * (1u64 << 31) / u64::from(TRACK_COMMANDS_PER_TICK);
+    let mut frames = 0u64;
+    while !seq.tracks[0].ended && frames < budget_frames {
+        render_frames(&mut seq, 1);
+        frames += 1;
+    }
+    assert!(
+        seq.tracks[0].ended,
+        "a stuck loop must end even after {frames} frames past schedule saturation"
+    );
+}
+
+#[test]
+fn a_yielded_burst_finishes_when_tempo_is_zero_at_the_yield() {
+    let mut t = vec![Event::Voice(0), Event::Volume(127), Event::Tempo(0)];
+    t.extend(std::iter::repeat_n(Event::Volume(127), 65_536));
+    t.extend([
+        Event::Tempo(150),
+        tied_note(60),
+        Event::Wait(48),
+        Event::Fine,
+    ]);
+    let mut seq = Sequencer::new(test_song(vec![t], 150));
+    render_frames(&mut seq, 5);
+    assert_eq!(seq.voice_count(), 1, "the note after the burst plays");
+}
+
+#[test]
+fn a_yielded_burst_resumes_under_tempo_zero_when_the_schedule_restarts_on_the_yield() {
+    // The schedule restart at step 2^31 lands on the last command of a
+    // budget slice, so the run yields with `steps == 0`; with tempo zero no
+    // tick fires, and only the yielded marker can resume it.
+    let mut t = vec![Event::Voice(0), Event::Volume(127), Event::Tempo(0)];
+    t.extend(std::iter::repeat_n(Event::Volume(127), 65_536));
+    t.extend([
+        Event::Tempo(150),
+        tied_note(60),
+        Event::Wait(48),
+        Event::Fine,
+    ]);
+    let mut seq = Sequencer::new(test_song(vec![t], 150));
+    seq.bursts[0].steps = (1 << 31) - TRACK_COMMANDS_PER_TICK;
+    seq.bursts[0].next_snapshot = Some(1 << 31);
+    render_frames(&mut seq, 1);
+    assert_eq!(seq.bursts[0].steps, 0, "the restart falls on the yield");
+    assert!(!seq.tracks[0].ended, "the yielded burst is still live");
+    assert_eq!(seq.voice_count(), 0, "the burst has not reached its note");
+    render_frames(&mut seq, 4);
+    assert!(!seq.tracks[0].ended, "the resumed burst is not ended");
+    assert_eq!(seq.voice_count(), 1, "the note after the burst plays");
+}
+
+/// One voice and a finite-gate note, a one-tick wait, then a zero-wait run
+/// longer than one frame's command budget, a `Wait` and `Fine`.
+fn gated_note_then_long_burst(burst: Vec<Event>) -> Vec<Event> {
+    let mut track = vec![
+        Event::Voice(0),
+        Event::Volume(127),
+        Event::Note {
+            key: 60,
+            velocity: 127,
+            gate: 2,
+        },
+        Event::Wait(1),
+    ];
+    track.extend(burst);
+    track.extend([Event::Wait(2), Event::Fine]);
+    track
+}
+
+#[test]
+fn a_yielded_burst_does_not_expire_gates_again_within_its_tick() {
+    // Tick 1 expires the gate once (2 -> 1) and runs the whole burst
+    // (`m4a_1.s:1191`-`:1284`); the gate reaches zero only at tick 2.
+    let burst = vec![Event::Volume(127); TRACK_COMMANDS_PER_TICK as usize + 10];
+    let mut seq = Sequencer::new(test_song(vec![gated_note_then_long_burst(burst)], 150));
+    render_frames(&mut seq, 1);
+    assert_eq!(seq.voice_count(), 1, "the gated note starts on tick 0");
+    while seq.tracks[0].wait == 0 && !seq.tracks[0].ended {
+        render_frames(&mut seq, 1);
+    }
+    let voices = seq.mixer.voices();
+    assert_eq!(voices.len(), 1);
+    assert!(
+        !voices[0].is_stopping(),
+        "the gate must not expire before the tick that holds the burst ends"
+    );
+}
+
+#[test]
+fn a_later_track_does_not_run_while_an_earlier_tracks_tick_is_suspended() {
+    // `MPlayMain` runs tracks in order within a tick (`m4a_1.s:1178`-`:1334`),
+    // so track 1 runs tick 0 only after track 0's burst reaches its `Wait`.
+    let mut a = vec![Event::Voice(0)];
+    a.extend(std::iter::repeat_n(
+        Event::Volume(127),
+        TRACK_COMMANDS_PER_TICK as usize + 10,
+    ));
+    a.extend([Event::Wait(1), Event::Fine]);
+    let b = vec![Event::Wait(1), Event::Wait(1), Event::Wait(1), Event::Fine];
+    let mut seq = Sequencer::new(test_song(vec![a, b], 150));
+    render_frames(&mut seq, 1);
+    assert_eq!(seq.tracks[0].wait, 0, "track 0's burst yielded");
+    assert_eq!(
+        seq.tracks[1].cursor, 0,
+        "track 1 waits for the suspended tick"
+    );
+    render_frames(&mut seq, 1);
+    assert_eq!(
+        seq.tracks[1].cursor, 1,
+        "the resumed tick runs track 1 once"
+    );
+    render_frames(&mut seq, 1);
+    assert_eq!(seq.tracks[1].cursor, 2, "then one tick per frame resumes");
+}
+
+#[test]
+fn a_yielded_burst_holds_its_pitch_change_until_the_run_ends() {
+    // The post-tick dirty pass runs after the tempo loop (`m4a_1.s:1360`), so
+    // a bend undone within the same zero-wait run never reaches a voice.
+    let mut burst = vec![Event::Bend(63)];
+    burst.extend(std::iter::repeat_n(
+        Event::Volume(127),
+        TRACK_COMMANDS_PER_TICK as usize + 10,
+    ));
+    burst.push(Event::Bend(0));
+    let mut track = vec![
+        Event::Voice(0),
+        Event::Volume(127),
+        tied_note(60),
+        Event::Wait(1),
+    ];
+    track.extend(burst);
+    track.extend([Event::Wait(4), Event::Fine]);
+    let mut seq = Sequencer::new(test_song(vec![track], 150));
+    render_frames(&mut seq, 1);
+    let before = seq.mixer.voices()[0].frequency();
+    render_frames(&mut seq, 1);
+    assert_eq!(
+        seq.tracks[0].wait, 0,
+        "the burst yielded with the bend applied"
+    );
+    assert_eq!(
+        seq.mixer.voices()[0].frequency(),
+        before,
+        "a half-run burst's pitch must not reach the voice"
+    );
+}
