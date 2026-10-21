@@ -10,12 +10,16 @@ pub enum Event {
     /// Plays a note for `gate` ticks. A zero gate ties it until an end-of-tie
     /// or explicit stop.
     Note {
+        /// MIDI key.
         key: u8,
+        /// Note velocity.
         velocity: u8,
+        /// Gate length in ticks.
         gate: u8,
     },
     /// Ends a tie, using the track's current key when `key` is `None`.
     EndOfTie {
+        /// Key to release, or the track's current key.
         key: Option<u8>,
     },
     /// Delays this track for the given number of sequencer ticks.
@@ -36,34 +40,55 @@ pub enum Event {
     BendRange(u8),
     /// Centre-relative fine tuning.
     Tune(i8),
+    /// Jumps to another decoded event.
     Goto(usize),
+    /// Ends the track.
     Fine,
+    /// Sets track priority.
     Priority(u8),
+    /// Sets LFO speed.
     LfoSpeed(u8),
+    /// Sets LFO delay.
     LfoDelay(u8),
+    /// Sets modulation depth.
     Modulation(u8),
+    /// Sets modulation type.
     ModType(u8),
+    /// Calls the pattern at another decoded event.
     Pattern(usize),
+    /// Returns from a pattern.
     PatternEnd,
+    /// Repeats from `target` for `count` iterations.
     Repeat {
+        /// Iteration count.
         count: u8,
+        /// Decoded event index to repeat from.
         target: usize,
     },
     /// Mutates or compares sequence memory. Conditional operations carry a
     /// decoded jump target; mutation operations do not.
     MemAcc {
+        /// Operation selector.
         op: u8,
+        /// Sequence-memory address.
         addr: u8,
+        /// Operand value.
         value: u8,
+        /// Jump target of a conditional operation.
         target: Option<usize>,
     },
+    /// Extended command with its little-endian payload.
     Xcmd {
+        /// Extended-command kind.
         kind: u8,
+        /// Little-endian payload.
         value: u32,
     },
-    /// Decoded for stream fidelity; the sequencer does not perform the write.
+    /// Writes `value` to a CGB control; decoded only, the sequencer does not perform it.
     Port {
+        /// CGB control selector.
         control: u8,
+        /// Value to write.
         value: u8,
     },
 }
@@ -80,11 +105,32 @@ pub fn clamp_tempo(bpm: u16) -> u16 {
 /// An invalid track byte program.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DecodeError {
+    /// The stream ended mid-command.
     UnexpectedEnd,
-    RunningStatusWithoutCommand { offset: usize },
-    UnknownCommand { offset: usize, byte: u8 },
-    UnresolvedJump { offset: usize, target: u32 },
-    ExpansionLimit { limit: usize },
+    /// An argument byte has no running-status command before it.
+    RunningStatusWithoutCommand {
+        /// Byte offset of the argument.
+        offset: usize,
+    },
+    /// The status byte has no defined command.
+    UnknownCommand {
+        /// Byte offset of the command.
+        offset: usize,
+        /// The undefined status byte.
+        byte: u8,
+    },
+    /// The jump target is outside the track program.
+    UnresolvedJump {
+        /// Byte offset of the jump.
+        offset: usize,
+        /// The out-of-range target offset.
+        target: u32,
+    },
+    /// Decoding would exceed the execution-context limit.
+    ExpansionLimit {
+        /// Maximum decoding contexts.
+        limit: usize,
+    },
 }
 
 impl fmt::Display for DecodeError {

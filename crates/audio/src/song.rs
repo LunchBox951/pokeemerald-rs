@@ -17,12 +17,15 @@ const MAX_REVERB_LEVEL: u8 = 127;
 /// One DirectSound instrument from a voicegroup.
 #[derive(Clone, Debug)]
 pub struct ToneData {
+    /// The wave this instrument plays.
     pub wave: Arc<WaveData>,
+    /// The volume envelope.
     pub adsr: Adsr,
     fixed_rate: bool,
 }
 
 impl ToneData {
+    /// Creates a pitched DirectSound instrument.
     #[must_use]
     pub fn new(wave: Arc<WaveData>, adsr: Adsr) -> Self {
         Self {
@@ -40,6 +43,7 @@ impl ToneData {
         self
     }
 
+    /// Whether playback ignores pitch scaling.
     #[must_use]
     pub fn is_fixed_rate(&self) -> bool {
         self.fixed_rate
@@ -53,6 +57,7 @@ pub struct SquareTone {
     pub duty: u8,
     /// Raw `NR10` sweep byte, ignored by square channel 2.
     pub sweep: u8,
+    /// The volume envelope.
     pub adsr: CgbAdsr,
     /// Uses Emerald's fixed-rate CGB tuning.
     pub fixed_rate: bool,
@@ -66,6 +71,7 @@ pub struct WaveTone {
     pub wave_id: Arc<str>,
     /// Two 4-bit samples per byte.
     pub table: [u8; 16],
+    /// The volume envelope.
     pub adsr: CgbAdsr,
     /// Uses Emerald's fixed-rate CGB tuning.
     pub fixed_rate: bool,
@@ -76,18 +82,26 @@ pub struct WaveTone {
 pub struct NoiseTone {
     /// A set low bit selects the 7-bit LFSR; otherwise the 15-bit LFSR.
     pub lfsr_width_selector: u8,
+    /// The volume envelope.
     pub adsr: CgbAdsr,
 }
 
 /// A playable voice or a key-based indirection to a playable voice.
 #[derive(Clone, Debug)]
 pub enum Instrument {
+    /// A DirectSound instrument.
     DirectSound(ToneData),
+    /// CGB square channel 1.
     CgbSquare1(SquareTone),
+    /// CGB square channel 2.
     CgbSquare2(SquareTone),
+    /// CGB programmable-wave channel.
     CgbWave(WaveTone),
+    /// CGB noise channel.
     CgbNoise(NoiseTone),
+    /// Selects a child through a key-split table.
     KeySplit(KeySplit),
+    /// Selects a rhythm child directly by played key.
     Rhythm(Rhythm),
 }
 
@@ -95,6 +109,7 @@ pub enum Instrument {
 /// key. Nested indirections produce no note (`m4a_1.s:1582..1609`).
 #[derive(Clone, Debug)]
 pub struct KeySplit {
+    /// Child index for each played key.
     pub table: [u8; KEY_SLOTS],
     /// Indexed by [`Self::table`]; `None` slots produce no note.
     pub children: Vec<Option<Instrument>>,
@@ -110,6 +125,7 @@ pub struct Rhythm {
 /// A rhythm voice with its own pitch key and optional pan.
 #[derive(Clone, Debug)]
 pub struct RhythmChild {
+    /// The leaf instrument this key triggers.
     pub instrument: Instrument,
     /// Pitches the child instead of the played key.
     pub base_key: u8,
@@ -159,6 +175,7 @@ impl Song {
         self
     }
 
+    /// Returns the song priority.
     #[must_use]
     pub fn priority(&self) -> u8 {
         self.priority
@@ -187,21 +204,25 @@ impl Song {
         self.reverb_override
     }
 
+    /// The instrument at `index`, if any.
     #[must_use]
     pub fn voice(&self, index: usize) -> Option<&Instrument> {
         self.voices.get(index)
     }
 
+    /// The decoded tracks.
     #[must_use]
     pub fn tracks(&self) -> &[Vec<Event>] {
         &self.tracks
     }
 
+    /// Number of tracks.
     #[must_use]
     pub fn track_count(&self) -> usize {
         self.tracks.len()
     }
 
+    /// The starting tempo in BPM.
     #[must_use]
     pub fn initial_tempo(&self) -> u16 {
         self.initial_tempo_bpm
