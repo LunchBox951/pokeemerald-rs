@@ -211,7 +211,7 @@ fn load_default_hides_the_spawn_bedrooms_decoration_placeholders() {
     assert_eq!(
         phase.player.position(),
         PLACEHOLDER_TILE,
-        "load_default must leave an empty decoration slot's tile walkable in the real room"
+        "OverworldPhase::load must leave an empty decoration slot's tile walkable in the real room"
     );
 }
 

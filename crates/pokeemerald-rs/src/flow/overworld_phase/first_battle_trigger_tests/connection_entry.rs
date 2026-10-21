@@ -75,7 +75,7 @@ fn real_pack_crossing_into_route_101_lands_on_the_rescue_trigger_and_starts_the_
 
     let player = PlayerState::new((10, 2), 3, Direction::North);
     let mut phase = OverworldPhase::for_test_with_source(scene, littleroot, player, None, source);
-    // Stands in for the un-ported Birch-bag handout, as `load_default` assigns it.
+    // Stands in for the un-ported Birch-bag handout, as `OverworldPhase::load` assigns it.
     phase.party_lead = Some(new_game::provisional_starter());
 
     for _ in 0..3 {
