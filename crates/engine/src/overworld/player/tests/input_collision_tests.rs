@@ -245,6 +245,7 @@ fn elevation_mismatch_blocks_the_step() {
         allow_run: true,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: None,
         connections: &[] as &'static [MapConnection],
     };
     let events = MapEvents {

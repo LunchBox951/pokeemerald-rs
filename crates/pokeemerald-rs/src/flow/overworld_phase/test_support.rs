@@ -133,6 +133,7 @@ fn runtime_with_connections(
         allow_run: true,
         show_name: false,
         battle_scene: assets::BattleScene::Normal,
+        map_scripts: None,
         connections,
     }));
     let events: &'static MapEvents = Box::leak(Box::new(MapEvents {
@@ -364,7 +365,6 @@ const LITTLEROOT_MOM_OBJECT_INDEX: usize = 3;
 const LITTLEROOT_HOUSE_EVENT_TILE: (i16, i16) = (5, 8);
 const LITTLEROOT_HOUSE_SCENE_TILE: (u16, u16) = (5, 8);
 const LITTLEROOT_HOUSE_PRESS_TILE: (i32, i32) = (5, 9);
-const NULL_EVENT_SCRIPT: &str = "0x0";
 
 /// A phase with Mom standing on Brendan's-house door tile in Littleroot Town,
 /// an `MB_ANIMATED_DOOR` on a synthetic scene like [`littleroot_lab_door_scene`].
@@ -386,7 +386,7 @@ pub(super) fn mom_standing_in_the_house_door_phase() -> OverworldPhase {
         "fixture precondition: Mom stands on the house door tile"
     );
     assert_ne!(
-        mom.script, NULL_EVENT_SCRIPT,
+        mom.script, None,
         "fixture precondition: Mom has a real script, so A interacts"
     );
 

@@ -188,6 +188,7 @@ fn elevation_mismatch_outranks_an_object_event_on_the_same_tile() {
         allow_run: true,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: None,
         connections: &[] as &'static [MapConnection],
     };
     let objects: &'static [ObjectEvent] = Box::leak(Box::new([object(1, 2, 3, 3, "0")]));

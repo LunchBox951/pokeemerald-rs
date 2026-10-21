@@ -506,7 +506,7 @@ fn hblank_budget_regression_fixture() -> (
             movement_range_y: 0,
             trainer_type: TrainerType::None,
             trainer_sight_or_berry_tree_id: "0",
-            script: "0x0",
+            script: None,
             flag: "0",
         });
     }
@@ -521,7 +521,7 @@ fn hblank_budget_regression_fixture() -> (
         movement_range_y: 0,
         trainer_type: TrainerType::None,
         trainer_sight_or_berry_tree_id: "0",
-        script: "0x0",
+        script: None,
         flag: "0",
     });
     let object_events: &'static [ObjectEvent] = Box::leak(object_events.into_boxed_slice());
@@ -2095,7 +2095,7 @@ fn equal_priority_overlap_orders_the_player_and_npc_by_screen_depth() {
             movement_range_y: 0,
             trainer_type: TrainerType::None,
             trainer_sight_or_berry_tree_id: "0",
-            script: "0x0",
+            script: None,
             flag: "0",
         }]));
         let events: &'static assets::MapEvents = Box::leak(Box::new(assets::MapEvents {

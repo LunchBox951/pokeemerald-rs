@@ -121,6 +121,7 @@ fn transition_tile_lets_the_next_step_cross_between_elevations() {
         allow_run: true,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: None,
         connections: &[] as &'static [MapConnection],
     };
     let events = MapEvents {
@@ -227,6 +228,7 @@ fn previous_elevation_survives_a_raised_tile_flanked_by_transitions_on_both_side
         allow_run: true,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: None,
         connections: &[] as &'static [MapConnection],
     };
     let events = MapEvents {
@@ -312,6 +314,7 @@ fn a_multi_level_origin_defers_the_elevation_update_to_the_finished_step() {
         allow_run: true,
         show_name: false,
         battle_scene: BattleScene::Normal,
+        map_scripts: None,
         connections: &[] as &'static [MapConnection],
     };
     let events = MapEvents {
