@@ -67,6 +67,8 @@ use std::ops::Range;
 use battle::{BattlePokemon, Dex, Ivs, MAX_MON_MOVES};
 use engine::save::{BoxPokemon, Pokemon, PokemonSubstructures, BOX_NICKNAME_LEN, SUBSTRUCTURE_LEN};
 
+/// `struct BoxPokemon::otName` offset (`pokemon.h:207`).
+const OT_NAME_OFFSET: usize = 20;
 const MAIL_NONE: u8 = u8::MAX;
 const SPECIES_NONE: u16 = 0;
 
@@ -564,6 +566,15 @@ impl core::fmt::Display for NotTheBattlersRecord {
     }
 }
 
+/// `BoxPokemon::otName`'s seven saved bytes (`pokemon.h:207`).
+fn saved_ot_name(boxed: &BoxPokemon) -> Option<[u8; 7]> {
+    let bytes = boxed.to_bytes();
+    let mut name = [0u8; 7];
+    name.copy_from_slice(&bytes[OT_NAME_OFFSET..OT_NAME_OFFSET + 7]);
+    // `to_save_pokemon` leaves the name zeroed: unrecorded, not a name.
+    (name != [0u8; 7]).then_some(name)
+}
+
 /// Converts a validated save record into a battle-ready party member --
 /// `LoadPlayerParty`'s per-mon half (`src/load_save.c:170-178`).
 ///
@@ -635,6 +646,10 @@ pub(crate) fn from_save_pokemon(dex: &Dex, saved: &Pokemon) -> Result<BattlePoke
     .with_ability_slot(ability_slot)
     .with_pp_bonuses(dex, pp_bonuses)?
     .with_evs(evs);
+
+    if let Some(name) = saved_ot_name(&saved.box_data) {
+        mon = mon.with_original_trainer_name(name);
+    }
 
     let saved_experience = read_u32(&substructures.growth, GROWTH_EXPERIENCE);
     // Match `CalculateMonStats`: derive level from experience without invoking

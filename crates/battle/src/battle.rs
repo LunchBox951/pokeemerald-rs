@@ -110,6 +110,9 @@ pub struct Battle {
     /// base-damage move, matching upstream
     /// (`pokeemerald/src/battle_ai_switch_items.c:772`-`:779`).
     last_move_used: MoveId,
+    /// The player's identity and badge limit; `None` skips the obedience
+    /// gate (every Pokémon obeys).
+    player_obedience: Option<crate::obedience::PlayerObedience>,
 }
 
 #[derive(Debug, Clone)]
@@ -328,6 +331,7 @@ impl Battle {
             pending_residual_selection: None,
             retained_slots: [0; 2],
             last_move_used: MOVE_NONE,
+            player_obedience: None,
         })
     }
 
@@ -460,7 +464,26 @@ impl Battle {
             pending_residual_selection: None,
             retained_slots: [0; 2],
             last_move_used: MOVE_NONE,
+            player_obedience: None,
         })
+    }
+
+    /// Supplies the player's identity and badge limit so the pre-PP
+    /// obedience gate runs for Pokémon of another original trainer
+    /// (`IsMonDisobedient`, `src/battle_util.c:3923`-`:4038`).
+    #[must_use]
+    pub const fn with_player_obedience(
+        mut self,
+        obedience: crate::obedience::PlayerObedience,
+    ) -> Self {
+        self.player_obedience = Some(obedience);
+        self
+    }
+
+    /// The identity and badge limit the obedience gate runs on, if supplied.
+    #[must_use]
+    pub const fn player_obedience(&self) -> Option<&crate::obedience::PlayerObedience> {
+        self.player_obedience.as_ref()
     }
 
     /// Returns the opponent's trainer context, if this is a trainer battle.
@@ -1229,7 +1252,7 @@ impl Battle {
                 by_player: player_is_attacker,
             });
             if draws_confusion_self_hit(rng) {
-                self.apply_confusion_self_hit(player_is_attacker, rng, events);
+                self.apply_self_hit(player_is_attacker, false, rng, events);
                 return Ok(());
             }
         }
@@ -1272,21 +1295,47 @@ impl Battle {
             } else {
                 self.enemy.moves()[slot].pp
             };
-            if slot_pp == 0 {
-                // `Cmd_attackcanceler` exempts Struggle from the no-PP abort
-                // (`battle_script_commands.c:934`); `Cmd_ppreduce` spends
-                // nothing from an empty slot (`:1230`).
-                if move_id != STRUGGLE {
-                    events.push(BattleEvent::FailedNoPp {
-                        by_player: player_is_attacker,
-                        move_id,
-                    });
-                    return Ok(());
+            // `Cmd_attackcanceler` exempts Struggle from the no-PP abort
+            // (`battle_script_commands.c:934`); `Cmd_ppreduce` spends
+            // nothing from an empty slot (`:1230`).
+            if slot_pp == 0 && move_id != STRUGGLE {
+                events.push(BattleEvent::FailedNoPp {
+                    by_player: player_is_attacker,
+                    move_id,
+                });
+                return Ok(());
+            }
+        }
+        // `IsMonDisobedient` runs after the no-PP abort and before
+        // `ppreduce` (`battle_script_commands.c:944`-`:957`), so a refused
+        // action spends no PP.
+        if player_is_attacker {
+            if let Some(obedience) = self.player_obedience {
+                match crate::obedience::check(&obedience, &self.player, rng)? {
+                    crate::obedience::Obedience::Obeys => {}
+                    crate::obedience::Obedience::Loafs(message) => {
+                        events.push(BattleEvent::Disobeyed { message });
+                        return Ok(());
+                    }
+                    crate::obedience::Obedience::HurtsItself => {
+                        self.apply_self_hit(true, true, rng, events);
+                        return Ok(());
+                    }
                 }
-            } else if player_is_attacker {
-                self.player.deduct_pp_by(slot, pp_cost)?;
+            }
+        }
+        if let Some(slot) = slot {
+            let spent = if player_is_attacker {
+                self.player.moves()[slot].pp == 0
             } else {
-                self.enemy.deduct_pp_by(slot, pp_cost)?;
+                self.enemy.moves()[slot].pp == 0
+            };
+            if !spent {
+                if player_is_attacker {
+                    self.player.deduct_pp_by(slot, pp_cost)?;
+                } else {
+                    self.enemy.deduct_pp_by(slot, pp_cost)?;
+                }
             }
         }
         self.execute_move(player_is_attacker, move_id, rng, events)
@@ -1422,6 +1471,7 @@ mod tests {
             pending_residual_selection: None,
             retained_slots: [0; 2],
             last_move_used: MOVE_NONE,
+            player_obedience: None,
         };
         (battle, player_max_hp, player_move_max_pp)
     }
