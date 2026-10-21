@@ -90,18 +90,22 @@ pub fn locate(
     palettes.sort_by(|a, b| a.id.cmp(&b.id));
 
     let window_palettes = locate_window_palettes(ctx, &palettes, bank_bytes, &asset.payload)?;
-    report.push(
-        ReportLine::unique("sTextWindowPalettes", window_palettes, bank_bytes * 5)
-            .with(Resolution::StructDerived)
-            .symbol("sTextWindowPalettes")
-            .note("one bank before the first text_pal bank"),
-    );
+    report.push(window_palettes_line(window_palettes, bank_bytes));
 
     Ok(TextWindowPlan {
         images,
         palettes,
         window_palettes,
     })
+}
+
+/// The report line for `sTextWindowPalettes`, a `static` upstream and so
+/// absent from an ordinary linker map.
+fn window_palettes_line(addr: u32, bank_bytes: u32) -> ReportLine {
+    ReportLine::unique("sTextWindowPalettes", addr, bank_bytes * 5)
+        .with(Resolution::StructDerived)
+        .local_symbol("sTextWindowPalettes")
+        .note("one bank before the first text_pal bank")
 }
 
 /// What a linker map should say at one text-window palette's address.
