@@ -804,8 +804,9 @@ mod tests {
 
     /// The emergent construction wall, pinned rather than left as prose:
     /// every one of [`SIGHT_TRAINERS`]' distinct trainer ids except Andrew's
-    /// (whose party now constructs,
-    /// `andrews_real_party_constructs_and_plays_to_a_win`) currently fails
+    /// and Rhett's (whose parties now construct,
+    /// `andrews_real_party_constructs_and_plays_to_a_win` and
+    /// `rhetts_real_party_constructs_and_plays_to_a_win`) currently fail
     /// to construct through
     /// [`npc_trainer_battle::start_npc_trainer_battle`] -- Miguel for his
     /// held item, every other refused one for a specific move this battle
@@ -816,10 +817,10 @@ mod tests {
     /// The **exact** refusal is pinned per trainer, not merely "it fails"
     /// (issue #264 review): the reason a trainer is unreachable is the
     /// interesting fact, and naming the offending move id is what forces a
-    /// future move-coverage slice to come back here -- scoring Rhett's
-    /// former `MOVE_FOCUS_ENERGY` left a Rhett who now fails on
-    /// `MOVE_SAND_ATTACK`, and a bare `is_err()` would have hidden
-    /// that.
+    /// future move-coverage slice to come back here -- scoring a
+    /// trainer's refusing move leaves one who fails on the next one (Rhett's
+    /// `MOVE_SAND_ATTACK` was the last), and a bare `is_err()` would have
+    /// hidden that.
     ///
     /// Each refusal must also cost **nothing**: the whole party is screened
     /// before the first draw (`npc_trainer_battle`'s module docs), which is

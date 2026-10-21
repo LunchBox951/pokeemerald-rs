@@ -20,7 +20,7 @@ pub(super) const ROUTE_103: MapId = MapId("MAP_ROUTE103");
 pub(super) const TRAINER_FLAGS_START: u16 = 0x500;
 
 /// `TRAINER_RHETT` (`include/constants/opponents.h`): a single-battle,
-/// no-held-item, level-15 party -- the main subject for the
+/// no-held-item, level-15 party that constructs -- the main subject for the
 /// trigger/win/loss/defeated-flag tests. His own object event stands at
 /// `(67, 5)`, elevation 3, facing south (`MOVEMENT_TYPE_FACE_DOWN`), sight
 /// range 2.
