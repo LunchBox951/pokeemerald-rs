@@ -1,16 +1,12 @@
 //! DirectSound voice playback and stereo accumulation.
 //!
-//! `SoundMainRAM` mixes four packed sample lanes and permits carry between
-//! adjacent lanes (`m4a_1.s:396..437`). This native mixer accumulates each
-//! output sample independently in an `i32`, so it does not reproduce that
-//! cross-lane bleed. Fixed-rate voices advance by exactly one source sample,
-//! which also preserves their raw, un-interpolated playback.
+//! `SoundMainRAM` lets packed sample lanes carry into each other
+//! (`m4a_1.s:396..437`); this mixer accumulates each output sample in its own
+//! `i32` and does not reproduce that bleed.
 //!
-//! A [`WaveData`] whose buffer retains a trailing interpolation guard past
-//! [`WaveData::logical_len`] (`crates/audio/src/sample.rs`) loops and retires
-//! using that logical length, while [`SourcePosition::interpolated_sample`]
-//! still reads the guard as its final boundary lookahead, matching upstream's
-//! `current + 1` prefetch (`m4a_1.s:399-407`).
+//! Loop and retirement use [`WaveData::logical_len`]. Interpolation still
+//! reads one guard sample beyond it, matching the `current + 1` prefetch in
+//! `m4a_1.s:399-407`.
 
 use std::sync::Arc;
 
@@ -61,10 +57,6 @@ impl SourcePosition {
         let samples = wave.samples();
         let current = i32::from(samples[self.sample_index]);
         let next_index = self.sample_index + 1;
-        // `samples` may hold one more value than `wave.logical_len()`: a
-        // retained interpolation guard. Reading it here, rather than
-        // `logical_len()`, is what lets the final step before a loop wraps or
-        // a one-shot retires interpolate toward it (`m4a_1.s:399-407`).
         let next = if next_index < samples.len() {
             samples[next_index]
         } else if wave.is_looping() {
@@ -72,8 +64,6 @@ impl SourcePosition {
         } else {
             samples[self.sample_index]
         };
-        // `SoundMainRAM` multiplies and arithmetically shifts the signed delta
-        // before adding the current sample (`m4a_1.s:396..407`).
         let weighted_delta = (i64::from(self.fractional_phase)
             * i64::from(i32::from(next) - current))
             >> pitch::FRAC_BITS;
@@ -81,8 +71,6 @@ impl SourcePosition {
     }
 
     fn advance_wrapping(&mut self, phase_step: u32) {
-        // `SoundMainRAM` advances its 32-bit phase with wrapping addition
-        // (`m4a_1.s:413..418`).
         self.fractional_phase = self.fractional_phase.wrapping_add(phase_step);
         self.sample_index +=
             usize::try_from(self.fractional_phase >> pitch::FRAC_BITS).unwrap_or(0);
@@ -239,8 +227,8 @@ impl Voice {
 
     #[must_use]
     pub(crate) fn with_pitch_key(mut self, pitch_key: u8) -> Self {
-        // `ply_note` pitches a rhythm voice from its child key, while
-        // `ply_endtie` matches the played track key (`m4a_1.s:1594,1819`).
+        // `ply_note` pitches from the child key; `ply_endtie` matches the
+        // played key (`m4a_1.s:1594,1819`).
         self.identity.pitch_key = pitch_key;
         self
     }
@@ -282,8 +270,7 @@ impl Voice {
         self.identity.track
     }
 
-    /// Clear allocation ownership so a released-slot tie never favours this
-    /// voice over one a track still owns (`RealClearChain`, `m4a_1.s:744-745`).
+    /// Drop track ownership (`RealClearChain`, `m4a_1.s:744-745`).
     pub(crate) fn detach_track(&mut self) {
         self.identity.track = None;
     }
@@ -355,8 +342,6 @@ impl Voice {
     pub fn render(&mut self, acc: &mut [StereoAcc]) {
         let phase_step = self.playback_rate.phase_step(self.frequency);
         if self.wave.is_empty() {
-            // An empty wave is already exhausted and cannot produce release or
-            // pseudo-echo samples.
             self.envelope.retire();
             return;
         }
@@ -566,11 +551,6 @@ mod tests {
 
     #[test]
     fn interpolated_sample_reads_the_retained_guard_at_the_final_logical_step() {
-        // The buffer holds one logical sample (0) plus a retained guard (40).
-        // Upstream's `SoundMainRAM` prefetches that guard for its final
-        // interpolation step before a loop wraps or a one-shot retires
-        // (`m4a_1.s:399-407`), so interpolation here must move toward 40,
-        // not repeat the current sample.
         let wave = WaveData::one_shot(0, vec![0, 40]).with_logical_len(1);
         let mut position = SourcePosition::start();
         position.fractional_phase = pitch::FRAC_ONE / 2;
@@ -583,9 +563,6 @@ mod tests {
 
     #[test]
     fn normalize_retires_a_one_shot_at_the_logical_end_not_the_buffer_end() {
-        // `sample_index` 1 is past `logical_len` (1) but still inside the
-        // two-element buffer; a one-shot must not treat the retained guard
-        // as a genuine playable step.
         let wave = WaveData::one_shot(0, vec![0, 40]).with_logical_len(1);
         let mut position = SourcePosition::start();
         position.sample_index = 1;
@@ -594,10 +571,6 @@ mod tests {
 
     #[test]
     fn normalize_wraps_a_loop_using_the_logical_length_not_the_retained_guard() {
-        // Buffer length 3, logical length 2: `sample_index` 2 is one past the
-        // logical end but still inside the buffer. The loop period must be 2
-        // (wrapping straight back to index 0), not 3 (which would read the
-        // retained guard at index 2 as a genuine third step).
         let wave = WaveData::looping(0, 0, vec![10, -10, 99]).with_logical_len(2);
         let mut position = SourcePosition::start();
         position.sample_index = 2;
@@ -607,9 +580,6 @@ mod tests {
 
     #[test]
     fn looping_wave_wraps_using_the_logical_length_not_the_retained_guard() {
-        // Buffer length 3, logical length 2: the loop period must be 2, so
-        // index 2 replays index 0, never reading the retained guard at index
-        // 2 as a genuine third step.
         let first_sample = 10;
         let wave =
             Arc::new(WaveData::looping(0, 0, vec![first_sample, -10, 99]).with_logical_len(2));

@@ -9,9 +9,15 @@ use std::mem::size_of;
 pub enum Event {
     /// Plays a note for `gate` ticks. A zero gate ties it until an end-of-tie
     /// or explicit stop.
-    Note { key: u8, velocity: u8, gate: u8 },
+    Note {
+        key: u8,
+        velocity: u8,
+        gate: u8,
+    },
     /// Ends a tie, using the track's current key when `key` is `None`.
-    EndOfTie { key: Option<u8> },
+    EndOfTie {
+        key: Option<u8>,
+    },
     /// Delays this track for the given number of sequencer ticks.
     Wait(u8),
     /// Selects an instrument from the song's voicegroup.
@@ -22,34 +28,27 @@ pub enum Event {
     Pan(i8),
     /// Sets tempo in BPM, clamped by the sequencer to [`MAX_TEMPO_BPM`].
     Tempo(u16),
-    /// Transposes the track by whole semitones.
+    /// Transposition in semitones.
     KeyShift(i8),
-    /// Sets centre-relative pitch bend.
+    /// Centre-relative pitch bend.
     Bend(i8),
     /// Sets pitch-bend range in semitones.
     BendRange(u8),
-    /// Sets centre-relative fine tuning.
+    /// Centre-relative fine tuning.
     Tune(i8),
-    /// Jumps to another decoded event.
     Goto(usize),
-    /// Ends the track.
     Fine,
-    /// Sets track priority.
     Priority(u8),
-    /// Sets LFO speed.
     LfoSpeed(u8),
-    /// Sets LFO delay.
     LfoDelay(u8),
-    /// Sets modulation depth.
     Modulation(u8),
-    /// Sets modulation type.
     ModType(u8),
-    /// Calls a pattern at another decoded event.
     Pattern(usize),
-    /// Returns from a pattern.
     PatternEnd,
-    /// Repeats from `target` for `count` iterations.
-    Repeat { count: u8, target: usize },
+    Repeat {
+        count: u8,
+        target: usize,
+    },
     /// Mutates or compares sequence memory. Conditional operations carry a
     /// decoded jump target; mutation operations do not.
     MemAcc {
@@ -58,17 +57,21 @@ pub enum Event {
         value: u8,
         target: Option<usize>,
     },
-    /// Carries an extended command and its little-endian payload.
-    Xcmd { kind: u8, value: u32 },
-    /// Writes `value` to a CGB sound control selected by `control`. Decoded
-    /// for stream fidelity; the sequencer does not perform the write.
-    Port { control: u8, value: u8 },
+    Xcmd {
+        kind: u8,
+        value: u32,
+    },
+    /// Decoded for stream fidelity; the sequencer does not perform the write.
+    Port {
+        control: u8,
+        value: u8,
+    },
 }
 
 /// Largest BPM representable by a doubled one-byte tempo operand.
 pub const MAX_TEMPO_BPM: u16 = u8::MAX as u16 * 2;
 
-/// Clamps BPM to the sequence tempo command's domain.
+/// Clamps `bpm` to [`MAX_TEMPO_BPM`].
 #[must_use]
 pub fn clamp_tempo(bpm: u16) -> u16 {
     bpm.min(MAX_TEMPO_BPM)
@@ -77,15 +80,10 @@ pub fn clamp_tempo(bpm: u16) -> u16 {
 /// An invalid track byte program.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DecodeError {
-    /// The stream ended in the middle of a command.
     UnexpectedEnd,
-    /// An argument byte appeared with no preceding running-status command.
     RunningStatusWithoutCommand { offset: usize },
-    /// A status byte has no defined command.
     UnknownCommand { offset: usize, byte: u8 },
-    /// A jump target byte offset is outside the supplied track program.
     UnresolvedJump { offset: usize, target: u32 },
-    /// Compiling the track would exceed the bounded number of decoding contexts.
     ExpansionLimit { limit: usize },
 }
 
@@ -143,8 +141,8 @@ const FIRST_MEMACC_CONDITION: u8 = 6;
 const LAST_MEMACC_CONDITION: u8 = 17;
 const MEMACC_CONDITIONS: std::ops::RangeInclusive<u8> =
     FIRST_MEMACC_CONDITION..=LAST_MEMACC_CONDITION;
-/// Kinds 0 and 3 map to `ply_xxx` (`m4a_tables.c:293`, `:296`), which calls the
-/// `ply_fine` jump-table entry (`m4a.c:1531`..`:1534`).
+// Kinds 0 and 3 map to `ply_xxx`, which runs `ply_fine`
+// (`m4a_tables.c:293,296`; `m4a.c:1531..1534`).
 const XCMD_RESERVED_0: u8 = 0x00;
 const XCMD_WAVE: u8 = 0x01;
 const XCMD_RESERVED_3: u8 = 0x03;
@@ -164,10 +162,8 @@ mod reader;
 
 /// Decode the commands reachable from the start of a track into typed [`Event`]s.
 ///
-/// Jump operands are little-endian byte offsets within `bytes`. Calls, returns,
-/// and repeats are lowered with the executed running status and note state;
-/// conditional memory jumps remain runtime decisions. Repeated contexts reuse
-/// event blocks, so looping tracks have finite output.
+/// Jump operands are little-endian byte offsets within `bytes`. Calls, returns
+/// and repeats are lowered; conditional memory jumps stay runtime decisions.
 ///
 /// # Errors
 ///
@@ -177,13 +173,12 @@ pub fn decode_track(bytes: &[u8]) -> Result<Vec<Event>, DecodeError> {
     decode::decode(bytes)
 }
 
-/// Whether an `XCMD` kind ends the track: `ply_xxx` runs `ply_fine`.
 pub(crate) fn xcmd_ends_track(kind: u8) -> bool {
     matches!(kind, XCMD_RESERVED_0 | XCMD_RESERVED_3)
 }
 
-/// Returns the payload width read by each `gXcmdTable` handler (`m4a.c:1523`,
-/// `:1531`..`:1652`). Unknown kinds retain one argument byte.
+// Widths follow each `gXcmdTable` handler (`m4a.c:1523,1531..1652`); unknown
+// kinds keep one argument byte.
 fn xcmd_payload_width(kind: u8) -> usize {
     match kind {
         XCMD_RESERVED_0 | XCMD_RESERVED_3 => 0,
@@ -205,9 +200,7 @@ fn as_signed(value: u8) -> i8 {
 mod tests {
     use super::*;
 
-    // Canonical MP2K wire bytes, spelled as literals rather than derived from
-    // the decoder's own TIE/WAIT_LO/XCMD constants: a drift in a production
-    // boundary must fail these tests, not move the fixtures with it.
+    // Literal wire bytes, not the decoder's constants, so a production drift fails.
     const NOTE_1: u8 = 0xD0;
     const NOTE_4: u8 = 0xD3;
     const NOTE_24: u8 = 0xE7;
@@ -241,8 +234,7 @@ mod tests {
 
     #[test]
     fn reserved_jump_table_slots_decode_as_fine() {
-        // gMPlayJumpTable's unpatched ply_fine aliases must terminate like FINE, not
-        // reject as unknown commands (m4a_1.s:1256-1268; m4a_tables.c:6-44; m4a.c:287-305).
+        // Unpatched `ply_fine` aliases (`m4a_1.s:1256-1268`, `m4a_tables.c:6-44`).
         for opcode in [0xB6, 0xB7, 0xB8, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB] {
             assert_eq!(
                 decode_track(&[opcode, VOICE, 0]).unwrap(),
@@ -289,8 +281,7 @@ mod tests {
 
     #[test]
     fn first_note_without_operands_uses_cleared_track_state() {
-        // Both operands omitted: the note sounds the cleared track's key and
-        // velocity, zero (`m4a.c:243`, `m4a_1.s:1556-1573`).
+        // `m4a.c:243`, `m4a_1.s:1556-1573`.
         let events = decode_track(&[NOTE_24, WAIT_24, FINE]).unwrap();
         assert_eq!(
             events,
@@ -308,7 +299,7 @@ mod tests {
 
     #[test]
     fn first_note_without_velocity_uses_cleared_track_velocity() {
-        // Velocity omitted: it stays the cleared track's zero (`m4a_1.s:1560-1565`).
+        // `m4a_1.s:1560-1565`.
         let events = decode_track(&[NOTE_24, 60, WAIT_24, FINE]).unwrap();
         assert_eq!(
             events,
@@ -427,8 +418,6 @@ mod tests {
         let middle_of_voice_command = 1_u32;
         let mut bytes = vec![VOICE, 0, GOTO];
         bytes.extend_from_slice(&middle_of_voice_command.to_le_bytes());
-        // Upstream interprets the target under the executed running status;
-        // a byte used as an operand on one path can start a command on another.
         assert_eq!(
             decode_track(&bytes).unwrap(),
             [Event::Voice(0), Event::Voice(0), Event::Goto(1)]
