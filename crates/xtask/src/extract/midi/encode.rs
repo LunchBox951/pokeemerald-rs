@@ -4,7 +4,8 @@
 //!
 //! MIDI extraction writes this schema without using the `assets` encoder, so
 //! schema changes must be mirrored between them. Strings are UTF-8 prefixed by
-//! their `u16` little-endian byte length. Each track is prefixed by its `u32`
+//! their `u16` little-endian byte length. The voicegroup id is followed by the `u16`
+//! little-endian `gSongTable` `ms` music-player index. Each track is prefixed by its `u32`
 //! little-endian event count.
 
 use super::compile::CompiledSong;
@@ -117,7 +118,8 @@ fn write_track(out: &mut Vec<u8>, track: &[SongEvent]) -> Result<(), MidiError> 
     Ok(())
 }
 
-/// Encodes a compiled song in the asset pack's song schema.
+/// Encodes a compiled song in the asset pack's song schema. `player` is the song's
+/// `gSongTable` `ms` value.
 ///
 /// # Errors
 ///
@@ -126,7 +128,7 @@ fn write_track(out: &mut Vec<u8>, track: &[SongEvent]) -> Result<(), MidiError> 
 /// encoded voicegroup pack id does not fit the schema's `u16` string-length
 /// field, or [`MidiError::TooManyTrackEvents`] when a track's event count
 /// does not fit the schema's `u32` field.
-pub(super) fn encode_song(song: &CompiledSong) -> Result<Vec<u8>, MidiError> {
+pub(super) fn encode_song(song: &CompiledSong, player: u16) -> Result<Vec<u8>, MidiError> {
     let track_count =
         u8::try_from(song.tracks.len()).map_err(|_| MidiError::TooManyTracks(song.tracks.len()))?;
     let mut out = Vec::new();
@@ -134,6 +136,7 @@ pub(super) fn encode_song(song: &CompiledSong) -> Result<Vec<u8>, MidiError> {
         &mut out,
         &format!("{VOICEGROUP_PACK_ID_PREFIX}{}", song.voicegroup_label),
     )?;
+    out.extend_from_slice(&player.to_le_bytes());
     out.extend_from_slice(&[
         song.priority,
         u8::from(song.reverb.is_some()),

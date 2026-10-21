@@ -257,8 +257,8 @@ impl Battle {
     /// lost a member before the battle. A non-fainted participant that is
     /// Paralysed with Limber, Poisoned with Immunity, confused with Own Tempo,
     /// or holds Truant, Intimidate, Speed Boost, Color Change, Trace, Effect
-    /// Spore, Flame Body or Cute Charm fails with
-    /// [`BattleError::UnportedAbilityInteraction`].
+    /// Spore, Flame Body, Cute Charm, Drizzle, Drought or Sand Stream fails
+    /// with [`BattleError::UnportedAbilityInteraction`].
     /// Errors leave the RNG untouched.
     pub fn new_with_player_reserves(
         dex: Dex,

@@ -655,6 +655,54 @@ fn main_menu_confirm_on_new_game_waits_for_the_fade_before_dispatching() {
     );
 }
 
+/// The first fade-wait frame composes the menu from palettes already faded
+/// toward black, so the highlight darkening acts on the faded colours: fading
+/// the already darkened pixel would land elsewhere.
+#[test]
+fn main_menu_fade_wait_frame_fades_palettes_before_the_highlight_darkening() {
+    let (_temp, mut save_slot) = empty_slot("menu-fade-wait-recompose");
+    let menu = crate::main_menu::synthetic_scene(MainMenuType::NoSavedGame);
+    let scene = AppScene::MainMenu(Box::new(MainMenuState {
+        scene: menu,
+        saved: save_slot.load(),
+    }));
+    let pack_path = write_empty_scratch_pack("menu-fade-wait-recompose");
+    let leaked_path: &'static std::path::Path = Box::leak(pack_path.clone().into_boxed_path());
+    let pack_source = crate::pack_source::PackSource::Test(leaked_path);
+
+    let (scene, _press) = advance_scene(
+        scene,
+        pressed(Buttons::A),
+        &mut save_slot,
+        pack_source.clone(),
+    );
+    let (_scene, frame) = advance_scene(scene, ButtonState::new(), &mut save_slot, pack_source);
+    drop(std::fs::remove_file(&pack_path));
+
+    // Coefficient 2 of the 5-bit black blend: white 31 -> 31 + (-31 * 2 >> 4)
+    // = 27, expanded to 222.
+    let faded_white: u8 = 222;
+    let pixel = |x: usize, y: usize| frame[y * 240 + x];
+    assert_eq!(
+        pixel(18, 10),
+        u32::from_be_bytes([0, faded_white, faded_white, faded_white]),
+        "selected header window"
+    );
+    let darkened = rendering::darken(
+        rendering::Rgb888 {
+            r: faded_white,
+            g: faded_white,
+            b: faded_white,
+        },
+        7,
+    );
+    assert_eq!(
+        pixel(18, 42),
+        u32::from_be_bytes([0, darkened.r, darkened.g, darkened.b]),
+        "unselected header window darkens the faded colour"
+    );
+}
+
 /// Issue #216 regression, the half the scene-level test above cannot
 /// see: with no pack, a failed `intro::load_default`, a failed
 /// `OverworldPhase::continue_saved_game`, and an Options screen that fails to load

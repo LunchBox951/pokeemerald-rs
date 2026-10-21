@@ -3,8 +3,8 @@ use std::fmt::Write as _;
 use rom_import::Encoding;
 
 use super::plan::{
-    BagPlan, BattleMessagePlan, BattlerPlan, BlobPlan, ImagePlan, MapLayoutPlan, PalettePlan,
-    ProfilePlan, ReportLine, Resolution, TileAnimPlan, TilesetPlan,
+    BagPlan, BattleAnimationPlan, BattleMessagePlan, BattlerPlan, BlobPlan, ImagePlan,
+    MapLayoutPlan, PalettePlan, ProfilePlan, ReportLine, Resolution, TileAnimPlan, TilesetPlan,
 };
 
 /// The header paragraph saying how roots were settled, as `//!` lines.
@@ -67,10 +67,11 @@ fn header(sha1: &str, lines: &[ReportLine]) -> String {
 
 use crate::reader::GbaPtr;
 use crate::roots::{{
-    AudioRoots, BagRoots, BattleMessageRoots, BattlerRoot, BattlerRoots, BlobRoot, Encoding,
-    FontRoot, ImageRoot, InterfaceRoots, KeysplitRoot, MapLayoutRoot, PaletteRoot, Roots,
-    SampleRoot, SongRoot, SpecialMessageRoot, SpriteRoots, TextWindowRoots, TileAnimRoot,
-    TilesetRoot, TitleScreenRoots, VoicegroupRoot,
+    AnimProgramRoot, AnimSymbolRoot, AudioRoots, BagRoots, BattleAnimationRoots,
+    BattleMessageRoots, BattlerRoot, BattlerRoots, BlobRoot, Encoding, FontRoot, ImageRoot,
+    InterfaceRoots, KeysplitRoot, MapLayoutRoot, PaletteRoot, Roots, SampleRoot, SongRoot,
+    SpecialMessageRoot, SpriteRoots, TextWindowRoots, TileAnimRoot, TilesetRoot, TitleScreenRoots,
+    VoicegroupRoot,
 }};
 
 /// Pokemon Emerald (US) rev 0's root table.
@@ -123,6 +124,7 @@ pub fn module(plan: &ProfilePlan, sha1: &str, lines: &[ReportLine]) -> String {
 
     audio_roots(&mut out, plan);
     battle_message_roots(&mut out, &plan.battle_messages);
+    battle_anim_roots(&mut out, &plan.battle_anims);
 
     bag_roots(&mut out, &plan.bag);
 
@@ -289,6 +291,49 @@ fn battle_message_roots(out: &mut String, messages: &BattleMessagePlan) {
     let _ = writeln!(out, "        ],");
     let _ = writeln!(out, "    }},");
 }
+
+fn battle_anim_roots(out: &mut String, anims: &BattleAnimationPlan) {
+    let _ = writeln!(out, "    battle_anims: BattleAnimationRoots {{");
+    let tables: Vec<String> = anims
+        .tables
+        .iter()
+        .map(|&t| gba_ptr_expression(t))
+        .collect();
+    let _ = writeln!(out, "        tables: [{}],", tables.join(", "));
+    let _ = writeln!(out, "        programs: &[");
+    for program in &anims.programs {
+        let _ = writeln!(
+            out,
+            "            AnimProgramRoot {{ symbol: {:?}, addr: {}, len: {} }},",
+            program.symbol,
+            gba_ptr_expression(program.addr),
+            program.len
+        );
+    }
+    let _ = writeln!(out, "        ],");
+    for (field, roots) in [("templates", &anims.templates), ("tasks", &anims.tasks)] {
+        let _ = writeln!(out, "        {field}: &[");
+        for root in roots {
+            let _ = writeln!(
+                out,
+                "            AnimSymbolRoot {{ symbol: {:?}, addr: {} }},",
+                root.symbol,
+                gba_ptr_expression(root.addr)
+            );
+        }
+        let _ = writeln!(out, "        ],");
+    }
+    let _ = writeln!(out, "        selectors: &[");
+    for row in anims.selectors.chunks(SELECTORS_PER_LINE) {
+        let row: Vec<String> = row.iter().map(u16::to_string).collect();
+        let _ = writeln!(out, "            {},", row.join(", "));
+    }
+    let _ = writeln!(out, "        ],");
+    let _ = writeln!(out, "    }},");
+}
+
+/// How many selector ids share a line in the emitted table.
+const SELECTORS_PER_LINE: usize = 16;
 
 fn battler_roots(out: &mut String, battlers: &BattlerPlan) {
     let _ = writeln!(out, "    battlers: BattlerRoots {{");
@@ -487,6 +532,49 @@ mod tests {
     }
 
     #[test]
+    fn battle_anim_roots_render_one_record_per_line() {
+        use super::battle_anim_roots;
+        use crate::gen_rom_profile::plan::{AnimProgramPlan, AnimSymbolPlan, BattleAnimationPlan};
+
+        let mut out = String::new();
+        battle_anim_roots(
+            &mut out,
+            &BattleAnimationPlan {
+                tables: [0x0860_0000, 0x0860_0800, 0x0860_0900, 0x0860_0A00],
+                programs: vec![AnimProgramPlan {
+                    symbol: "Move_POUND".to_owned(),
+                    addr: 0x0860_1000,
+                    len: 24,
+                }],
+                templates: vec![AnimSymbolPlan {
+                    symbol: "gBasicHitSplatSpriteTemplate".to_owned(),
+                    addr: 0x0861_0000,
+                }],
+                tasks: vec![AnimSymbolPlan {
+                    symbol: "AnimTask_ShakeMon".to_owned(),
+                    addr: 0x0810_0001,
+                }],
+                selectors: (0..20).collect(),
+            },
+        );
+        assert!(
+            out.contains("tables: [GbaPtr::at(0x0860_0000), GbaPtr::at(0x0860_0800), GbaPtr::at(0x0860_0900), GbaPtr::at(0x0860_0A00)],"),
+            "{out}"
+        );
+        assert!(
+            out.contains("AnimProgramRoot { symbol: \"Move_POUND\", addr: GbaPtr::at(0x0860_1000), len: 24 },"),
+            "{out}"
+        );
+        assert!(
+            out.contains(
+                "AnimSymbolRoot { symbol: \"AnimTask_ShakeMon\", addr: GbaPtr::at(0x0810_0001) },"
+            ),
+            "{out}"
+        );
+        assert!(out.contains("            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,\n            16, 17, 18, 19,\n"), "{out}");
+    }
+
+    #[test]
     fn every_encoding_has_a_path() {
         assert_eq!(encoding_variant_path(Encoding::Raw), "Encoding::Raw");
         assert_eq!(encoding_variant_path(Encoding::Lz77), "Encoding::Lz77");
@@ -616,8 +704,8 @@ mod tests {
 mod bag_field_tests {
     use super::module;
     use crate::gen_rom_profile::plan::{
-        AudioPlan, BagPlan, BattleMessagePlan, BattlerPlan, BlobPlan, ImagePlan, PalettePlan,
-        ProfilePlan, SpritePlan, TextWindowPlan, TitleScreenPlan,
+        AudioPlan, BagPlan, BattleAnimationPlan, BattleMessagePlan, BattlerPlan, BlobPlan,
+        ImagePlan, PalettePlan, ProfilePlan, SpritePlan, TextWindowPlan, TitleScreenPlan,
     };
     use rom_import::Encoding;
 
@@ -656,6 +744,13 @@ mod bag_field_tests {
             battle_messages: BattleMessagePlan {
                 table: base,
                 specials: vec![],
+            },
+            battle_anims: BattleAnimationPlan {
+                tables: [base; 4],
+                programs: vec![],
+                templates: vec![],
+                tasks: vec![],
+                selectors: vec![],
             },
             battlers: BattlerPlan {
                 front_table: base,

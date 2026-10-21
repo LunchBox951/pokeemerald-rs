@@ -1,5 +1,8 @@
 use super::*;
 
+/// A non-zero player so a dropped or misplaced field cannot pass as the default.
+const PLAYER: u16 = 0x0102;
+
 fn encoded_event(event: &SongEvent) -> Vec<u8> {
     let mut bytes = Vec::new();
     write_event(&mut bytes, event);
@@ -149,11 +152,12 @@ fn song_encoding_frames_metadata_and_each_track() {
 
     let mut expected = Vec::new();
     push_expected_string(&mut expected, "audio/voicegroup/title");
+    expected.extend_from_slice(&PLAYER.to_le_bytes());
     expected.extend_from_slice(&[song.priority, u8::from(true), 50, 2]);
     push_expected_track(&mut expected, &first_track);
     push_expected_track(&mut expected, &second_track);
 
-    assert_eq!(encode_song(&song).unwrap(), expected);
+    assert_eq!(encode_song(&song, PLAYER).unwrap(), expected);
 }
 
 #[test]
@@ -166,9 +170,10 @@ fn absent_reverb_encodes_a_false_flag_and_zero_value() {
     };
     let mut expected = Vec::new();
     push_expected_string(&mut expected, "audio/voicegroup/title");
+    expected.extend_from_slice(&PLAYER.to_le_bytes());
     expected.extend_from_slice(&[song.priority, u8::from(false), 0, 0]);
 
-    assert_eq!(encode_song(&song).unwrap(), expected);
+    assert_eq!(encode_song(&song, PLAYER).unwrap(), expected);
 }
 
 #[test]
@@ -176,12 +181,16 @@ fn track_count_must_fit_the_wire_field() {
     let maximum_track_count = usize::from(u8::MAX);
     let first_unrepresentable_track_count = maximum_track_count + 1;
 
-    assert!(encode_song(&song_with_tracks(vec![Vec::new(); maximum_track_count])).is_ok());
+    assert!(encode_song(
+        &song_with_tracks(vec![Vec::new(); maximum_track_count]),
+        PLAYER
+    )
+    .is_ok());
     assert_eq!(
-        encode_song(&song_with_tracks(vec![
-            Vec::new();
-            first_unrepresentable_track_count
-        ]))
+        encode_song(
+            &song_with_tracks(vec![Vec::new(); first_unrepresentable_track_count]),
+            PLAYER
+        )
         .unwrap_err(),
         MidiError::TooManyTracks(first_unrepresentable_track_count)
     );
@@ -211,9 +220,9 @@ fn voicegroup_pack_id_length_must_fit_the_wire_field() {
     };
     let longest_label_len = usize::from(u16::MAX) - "audio/voicegroup/".len();
 
-    assert!(encode_song(&song_with_label("v".repeat(longest_label_len))).is_ok());
+    assert!(encode_song(&song_with_label("v".repeat(longest_label_len)), PLAYER).is_ok());
     assert_eq!(
-        encode_song(&song_with_label("v".repeat(longest_label_len + 1))).unwrap_err(),
+        encode_song(&song_with_label("v".repeat(longest_label_len + 1)), PLAYER).unwrap_err(),
         MidiError::VoiceGroupPackIdTooLong(usize::from(u16::MAX) + 1)
     );
 }

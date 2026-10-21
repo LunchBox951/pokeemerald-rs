@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use super::AnimationSelector;
+use super::{AnimationSelector, ANIM_ARGS_COUNT};
 
 /// A battle-animation catalog construction or decoding failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -97,7 +97,7 @@ impl fmt::Display for BattleAnimationError {
             Self::ArgCountTooLarge(count) => {
                 write!(
                     f,
-                    "command carries {count} arguments, above the 8 upstream holds"
+                    "command carries {count} arguments, above the {ANIM_ARGS_COUNT} upstream holds"
                 )
             }
             Self::SubpriorityOutOfRange(byte) => {
