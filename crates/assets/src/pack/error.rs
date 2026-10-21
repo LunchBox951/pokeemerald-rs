@@ -280,7 +280,6 @@ impl fmt::Display for PackError {
 
 impl std::error::Error for PackError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        // An exhaustive match forces new source-carrying variants to choose their error chain.
         match self {
             Self::AudioDecode { source, .. } => Some(source),
             Self::BattleMessageDecode { source, .. } => Some(source),
