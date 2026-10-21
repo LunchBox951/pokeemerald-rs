@@ -114,7 +114,7 @@ fn wrapping_the_tick_through_the_start_menu_frame_also_lands_on_the_upstream_per
 /// map (re)load restarts the room's animation counter at 0, mirroring
 /// upstream's `InitTilesetAnimations` call sites
 /// (`pokeemerald/src/overworld.c`). Real-pack, because both constructors
-/// under test load rooms: [`OverworldPhase::load_default`] must hand back a
+/// under test load rooms: [`OverworldPhase::load`] must hand back a
 /// phase at tick 0, and [`OverworldPhase::warp_to`] must reset a
 /// *already-advanced* counter -- deleting `self.tick = 0` from `warp_to`
 /// leaves the destination map's flowers/water mid-cycle and must fail here.
