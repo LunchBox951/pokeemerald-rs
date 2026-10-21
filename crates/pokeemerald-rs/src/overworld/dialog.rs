@@ -862,6 +862,26 @@ mod tests {
         panic!("a message of {glyph_count} glyphs must print within {PRINT_FRAME_BUDGET} frames");
     }
 
+    fn field_dialog_scratch_path() -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "pokeemerald-rs-field-dialog-text-speed-{}-{:?}.pack",
+            std::process::id(),
+            std::thread::current().id()
+        ))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn field_dialog_scratch_pack_refuses_a_planted_symlink() {
+        let path = field_dialog_scratch_path();
+        crate::overworld::test_support::assert_planted_symlink_untouched(&path, || {
+            crate::overworld::test_support::write_scratch_exclusive(
+                &path,
+                synthetic_field_dialog_pack_bytes(),
+            );
+        });
+    }
+
     /// A dialog opened at a given speed paces at it: FAST prints the same
     /// message in fewer frames than SLOW (`sTextSpeedFrameDelays`,
     /// `pokeemerald/src/menu.c:77-82`, `:191-196`).
@@ -877,13 +897,11 @@ mod tests {
             ]
         };
 
-        let path = std::env::temp_dir().join(format!(
-            "pokeemerald-rs-field-dialog-text-speed-{}-{:?}.pack",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        std::fs::write(&path, synthetic_field_dialog_pack_bytes())
-            .expect("the scratch directory is writable");
+        let path = field_dialog_scratch_path();
+        crate::overworld::test_support::write_scratch_exclusive(
+            &path,
+            synthetic_field_dialog_pack_bytes(),
+        );
         let pack = AssetPack::load(&path).expect("the synthetic field-dialog pack must load");
         let _ = std::fs::remove_file(&path);
 
