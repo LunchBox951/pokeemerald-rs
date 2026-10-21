@@ -1169,6 +1169,33 @@ fn undo_preserves_a_replacement_swapped_after_validation() {
     );
 }
 
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[test]
+fn a_level_replaced_after_validation_is_reported_where_it_was_moved() {
+    // The same swap as `undo_preserves_a_replacement_swapped_after_validation`:
+    // the replacement is restored silently, but the directory rollback made
+    // still stands where it was moved, so the warning names that place,
+    // read through the held original.
+    if !in_rollback_stderr_child() {
+        let stderr = rerun_alone_for_stderr(
+            "import_rom::created_dirs::tests::a_level_replaced_after_validation_is_reported_where_it_was_moved",
+        );
+        let warned = warned_path(&stderr, "warning: ", " is the directory rollback made for ");
+        assert_names_marked_path(&stderr, warned, "original at: ");
+        return;
+    }
+    let dir = TempDir::new("undo-replaced-reported");
+    let level = dir.join("new");
+    let moved = dir.join("original");
+    let created = super::create_directories(&level).unwrap();
+    super::take_back::undo_created_directories_with_hooks(&created, &mut || {
+        fs::rename(&level, &moved).unwrap();
+        fs::create_dir(&level).unwrap();
+    });
+    assert!(level.is_dir() && moved.is_dir());
+    mark_path("original at: ", &moved);
+}
+
 #[cfg(unix)]
 #[test]
 fn undo_puts_back_a_level_that_gained_contents_after_validation() {

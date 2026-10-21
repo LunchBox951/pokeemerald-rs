@@ -446,8 +446,10 @@ fn take_back_into(
         );
         return Outcome::Stopped;
     }
-    let captured = rustix::fs::statat(held, QUARANTINE_ENTRY, AtFlags::SYMLINK_NOFOLLOW);
-    let ours = captured.is_ok_and(|stat| is_this_level(dir, &stat));
+    let captured = rustix::fs::statat(held, QUARANTINE_ENTRY, AtFlags::SYMLINK_NOFOLLOW).ok();
+    let ours = captured
+        .as_ref()
+        .is_some_and(|stat| is_this_level(dir, stat));
     if ours && rustix::fs::unlinkat(held, QUARANTINE_ENTRY, AtFlags::REMOVEDIR).is_ok() {
         return Outcome::Taken;
     }
@@ -464,7 +466,28 @@ fn take_back_into(
     ) {
         eprintln!("{warning}");
     }
+    if captured.is_some() && !ours {
+        warn_replaced(dir);
+    }
     Outcome::Stopped
+}
+
+/// Reports that the directory rollback made at `dir` was moved away and
+/// something else took its name before it could be taken back, naming
+/// where the held original is now where `/proc` can say.
+fn warn_replaced(dir: &CreatedDirectory) {
+    let level = level_location(dir);
+    match dir.own.as_deref().and_then(held_location) {
+        Some(now) => eprintln!(
+            "warning: {} is the directory rollback made for {}, moved away and replaced before rollback could take it back",
+            OneLinePath(&now),
+            OneLinePath(&level)
+        ),
+        None => eprintln!(
+            "warning: {} was moved away and replaced before rollback could take it back; the directory rollback made is left elsewhere",
+            OneLinePath(&level)
+        ),
+    }
 }
 
 /// Moves the capture in `quarantine` (named `quarantine_name` in the held
