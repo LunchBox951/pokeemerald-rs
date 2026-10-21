@@ -2391,4 +2391,22 @@ mod display_tests {
             16
         );
     }
+
+    fn fnv1a64(bytes: &[u8]) -> u64 {
+        bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+            (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3)
+        })
+    }
+
+    #[test]
+    fn every_display_row_matches_the_canonical_digest() {
+        let mut out = Vec::new();
+        for item in ItemDisplayTable::new().iter() {
+            out.extend_from_slice(item.name.as_bytes());
+            out.push(0);
+            out.extend_from_slice(item.description.as_bytes());
+            out.push(0);
+        }
+        assert_eq!(format!("{:016x}", fnv1a64(&out)), "a0400f1e6f4576ce");
+    }
 }
