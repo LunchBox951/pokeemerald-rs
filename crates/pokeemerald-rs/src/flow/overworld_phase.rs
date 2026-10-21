@@ -6,7 +6,7 @@
 //! module docs for the transition diagram this phase slots into.
 //!
 //! This file keeps [`OverworldPhase`] itself -- its fields and
-//! construction ([`OverworldPhase::load_default`]/[`OverworldPhase::new`])
+//! construction ([`OverworldPhase::load`]/[`OverworldPhase::new`])
 //! -- and delegates each per-frame concern to a focused sibling module,
 //! each contributing its own `impl OverworldPhase` block: [`step`] (input
 //! -> movement -> warp/interaction/encounter, [`OverworldPhase::step`]),
