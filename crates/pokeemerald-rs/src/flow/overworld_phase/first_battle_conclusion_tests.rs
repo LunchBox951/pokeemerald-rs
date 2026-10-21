@@ -1,7 +1,5 @@
-//! Tests for [`super::first_battle_conclusion`] (issue #251):
-//! `Route101_EventScript_BirchsBag`'s post-battle heal, its three var
-//! writes, and the warp to Birch's lab -- pinned per-area, the same split
-//! `first_battle_trigger_tests`/`route103_rival_tests` already use.
+//! Tests for [`super::first_battle_conclusion`]: heal, flag and var writes,
+//! and the warp to Birch's lab, on both terminal outcomes and on an abort.
 
 use super::test_support::*;
 use super::OverworldPhase;
@@ -12,42 +10,63 @@ use engine::overworld::{Direction, PlayerState};
 use engine::rng::Rng;
 use platform::Buttons;
 
-/// One of the real Route 101 rescue coord-event trigger tiles -- see
-/// `super::first_battle_trigger_tests::support`'s own identical constant for the
-/// full citation; independently transcribed here too, the same "each test
-/// file names its own fixture" convention this crate's test suite already
-/// keeps throughout.
+/// A Route 101 rescue coord-event trigger tile `(x, y)`.
 const ROUTE_101_TRIGGER_TILE: (i32, i32) = (10, 19);
 
-/// [`ROUTE_101_TRIGGER_TILE`]'s own elevation.
 const ROUTE_101_TRIGGER_ELEVATION: u8 = 3;
 
-/// `VAR_ROUTE101_STATE` (`include/constants/vars.h:116`) -- independently
-/// transcribed, matching this crate's own "own copy per module" convention.
+/// Seed under which the provisional starter beats the Zigzagoon.
+const WINNING_SEED: u32 = 4242;
+
+/// Seed under which [`fragile_treecko_lead`] loses to the Zigzagoon.
+const LOSING_SEED: u32 = 1;
+
+/// `VAR_ROUTE101_STATE` (`include/constants/vars.h:116`). The constants in
+/// this file are independent transcriptions of upstream, not production
+/// imports.
 const VAR_ROUTE101_STATE: u16 = 0x4060;
+
+/// `VAR_ROUTE101_STATE` after the trigger consumes the scene, before the
+/// conclusion.
+const ROUTE101_STATE_TRIGGER_CONSUMED: u16 = 2;
+
+/// `setvar VAR_ROUTE101_STATE, 3` in `Route101_EventScript_BirchsBag`.
+const ROUTE101_STATE_CONCLUDED: u16 = 3;
 
 /// `VAR_BIRCH_LAB_STATE` (`include/constants/vars.h:152`).
 const VAR_BIRCH_LAB_STATE: u16 = 0x4084;
 
+/// `setvar VAR_BIRCH_LAB_STATE, 2` in `Route101_EventScript_BirchsBag`.
+const BIRCH_LAB_STATE_STARTER_GIVEN: u16 = 2;
+
 /// `VAR_STARTER_MON` (`include/constants/vars.h:53`).
 const VAR_STARTER_MON: u16 = 0x4023;
 
-/// `MOVE_PURSUIT`, Treecko's own level-16 learnset move: `EFFECT_PURSUIT`
-/// has no resolver, so `validate_player_move` refuses every slot holding it
-/// ahead of any draw (`crates/battle/src/battle.rs:415`), and its full PP
-/// keeps the all-spent Struggle diversion (`crates/battle/src/battle.rs:491`)
-/// from turning the abort into a played turn.
+/// `VAR_STARTER_MON` encoding of Treecko, the provisional starter.
+const STARTER_MON_TREECKO: u16 = 0;
+
+/// `VAR_STARTER_MON` encoding of Mudkip.
+const STARTER_MON_MUDKIP: u16 = 2;
+
+/// Every var starts at 0 in a fresh `EventData`.
+const VAR_DEFAULT: u16 = 0;
+
+const TREECKO_SPECIES: SpeciesId = SpeciesId(277);
+
+/// Treecko's level-16 learnset move. `EFFECT_PURSUIT` has no resolver, so
+/// `validate_player_move` refuses every slot holding it before any draw
+/// (`crates/battle/src/battle.rs:415`), and its full PP keeps the all-spent
+/// Struggle diversion (`crates/battle/src/battle.rs:491`) from turning the
+/// abort into a played turn.
 const UNEXECUTABLE_MOVE: MoveId = MoveId::PURSUIT;
 
 /// `FLAG_HIDE_ROUTE_101_BIRCH_ZIGZAGOON_BATTLE`
-/// (`include/constants/flags.h:769`) -- independently transcribed, same
-/// convention as the vars above. Assigned to the local-ID-2 rescue-battle
-/// Birch template only; the Zigzagoon's own hide flag is separate, below.
+/// (`include/constants/flags.h:769`), the hide flag of the rescue-battle
+/// Birch template.
 const FLAG_HIDE_ROUTE_101_BIRCH_ZIGZAGOON_BATTLE: u16 = 0x2D0;
 
-/// `FLAG_HIDE_ROUTE_101_ZIGZAGOON` (`include/constants/flags.h:801`) --
-/// the local-ID-4 rescue Zigzagoon template's flag, which upstream sets
-/// through `removeobject` rather than a literal `setflag` line.
+/// `FLAG_HIDE_ROUTE_101_ZIGZAGOON` (`include/constants/flags.h:801`), the
+/// hide flag of the rescue Zigzagoon template.
 const FLAG_HIDE_ROUTE_101_ZIGZAGOON: u16 = 0x2EE;
 
 /// `FLAG_HIDE_LITTLEROOT_TOWN_BIRCHS_LAB_BIRCH`
@@ -58,23 +77,42 @@ const FLAG_HIDE_LITTLEROOT_TOWN_BIRCHS_LAB_BIRCH: u16 = 0x2D1;
 /// (`include/constants/flags.h:749`).
 const FLAG_HIDE_ROUTE_101_BIRCH_STARTERS_BAG: u16 = 0x2BC;
 
-/// A synthetic, fully open room named `MAP_ROUTE101` -- [`super::first_battle_trigger_tests::support`]'s
-/// own `route_101_trigger_phase` fixture, reconstructed locally (this
-/// module cannot import a sibling test file's private items).
+const ROUTE_101: assets::MapId = assets::MapId("MAP_ROUTE101");
+
+const BIRCHS_LAB: assets::MapId = assets::MapId("MAP_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB");
+
+/// The `warp` coordinates in `Route101_EventScript_BirchsBag`
+/// (`scripts.inc:242`).
+const BIRCHS_LAB_ARRIVAL: (i32, i32) = (6, 5);
+
+/// Elevation of [`BIRCHS_LAB_ARRIVAL`] in the real layout.
+const BIRCHS_LAB_ARRIVAL_ELEVATION: u8 = 3;
+
+/// The player's money in the loss tests; odd so that halving would change it.
+const STARTING_MONEY: u32 = 2001;
+
+/// A synthetic, fully open `MAP_ROUTE101` phase with the given player.
 fn route_101_trigger_phase(player: PlayerState) -> OverworldPhase {
     OverworldPhase::for_test(
         crate::overworld::test_support::synthetic_scene(25, 25),
-        assets::MapId("MAP_ROUTE101"),
+        ROUTE_101,
         player,
         None,
     )
 }
 
-/// Walk onto [`ROUTE_101_TRIGGER_TILE`] from one tile west and play the
-/// scripted first battle out to a terminal outcome, `held(Buttons::RIGHT)`
-/// every frame (mirroring `first_battle_trigger_tests`' own pattern) --
-/// the shared setup every test below needs before it can inspect what
-/// [`super::OverworldPhase::conclude_first_battle`] left behind.
+/// [`route_101_trigger_phase`] that retains the checkout pack, so the
+/// conclusion's deferred Birch's Lab warp reads the repository's own extract.
+fn repo_route_101_trigger_phase(player: PlayerState) -> OverworldPhase {
+    OverworldPhase::for_test_with_source(
+        crate::overworld::test_support::synthetic_scene(25, 25),
+        ROUTE_101,
+        player,
+        None,
+        crate::pack_source::PackSource::Repo,
+    )
+}
+
 fn play_first_battle_to_conclusion(phase: &mut OverworldPhase) {
     let (tx, ty) = ROUTE_101_TRIGGER_TILE;
     assert_eq!(
@@ -97,12 +135,11 @@ fn play_first_battle_to_conclusion(phase: &mut OverworldPhase) {
     }
 }
 
-/// A deliberately fragile level-1 Treecko (zero Defense IV, Pound only)
-/// whose max HP a level-2 Zigzagoon's Tackle can overkill in one hit from
-/// above the `AI_FirstBattle` flee threshold -- see
-/// `crate::flow::wild_encounter::first_battle_recovery_tests::a_lost_route_101_first_battle_heals_the_lead_instead_of_leaving_it_fainted`'s
-/// own doc comment for the full derivation of why seed `1` reliably
-/// produces [`BattleOutcome::PlayerLost`] with this exact lead.
+/// A level-1 Treecko with zero Defense IV and only Pound. A level-2
+/// Zigzagoon's Tackle can overkill it in one hit from above the
+/// `AI_FirstBattle` flee threshold, so [`LOSING_SEED`] yields
+/// [`BattleOutcome::PlayerLost`]. The derivation is in
+/// `crate::flow::wild_encounter::first_battle_recovery_tests::a_lost_route_101_first_battle_heals_the_lead_instead_of_leaving_it_fainted`.
 fn fragile_treecko_lead() -> BattlePokemon {
     let ivs = Ivs {
         hp: MAX_IV,
@@ -112,15 +149,12 @@ fn fragile_treecko_lead() -> BattlePokemon {
         sp_attack: MAX_IV,
         sp_defense: MAX_IV,
     };
-    BattlePokemon::new(&Dex::new(), SpeciesId(277), 1, ivs, 0, vec![MoveId::POUND])
+    BattlePokemon::new(&Dex::new(), TREECKO_SPECIES, 1, ivs, 0, vec![MoveId::POUND])
         .expect("Treecko/Pound must be in the dex")
 }
 
-/// The heal runs on a **win** too, and is observable: seed `4242` (the same
-/// seed `first_battle_trigger_tests` already uses for its own passing
-/// scenario) has the provisional starter take real damage and spend real PP
-/// on the way to victory, so a heal that silently no-op'd would be
-/// indistinguishable from one that never ran without this.
+/// A win heals the lead. [`WINNING_SEED`] has the provisional starter take
+/// damage and spend PP on the way to victory, so a missing heal is visible.
 #[test]
 fn conclude_first_battle_heals_the_lead_on_a_win() {
     let (tx, ty) = ROUTE_101_TRIGGER_TILE;
@@ -129,7 +163,7 @@ fn conclude_first_battle_heals_the_lead_on_a_win() {
         ROUTE_101_TRIGGER_ELEVATION,
         Direction::East,
     ));
-    phase.rng = Rng::new(4242);
+    phase.rng = Rng::new(WINNING_SEED);
     phase.party_lead = Some(new_game::provisional_starter());
     let max_hp = phase.party_lead.as_ref().unwrap().stats().max_hp;
     let base_pp = phase.party_lead.as_ref().unwrap().moves()[0].pp;
@@ -158,18 +192,20 @@ fn conclude_first_battle_heals_the_lead_on_a_win() {
     );
 }
 
-/// The three var writes run on **either** terminal outcome (module docs,
-/// "The upstream chain": `CB2_EndFirstBattle` never branches on the
-/// outcome) -- proven side by side rather than duplicated per outcome.
+/// The three var writes happen on both a win and a loss.
 #[test]
 fn conclude_first_battle_writes_all_three_vars_on_both_outcomes() {
     for (seed, lead, expected_outcome) in [
         (
-            4242,
+            WINNING_SEED,
             new_game::provisional_starter(),
             BattleOutcome::PlayerWon,
         ),
-        (1, fragile_treecko_lead(), BattleOutcome::PlayerLost),
+        (
+            LOSING_SEED,
+            fragile_treecko_lead(),
+            BattleOutcome::PlayerLost,
+        ),
     ] {
         let (tx, ty) = ROUTE_101_TRIGGER_TILE;
         let mut phase = route_101_trigger_phase(PlayerState::new(
@@ -179,13 +215,12 @@ fn conclude_first_battle_writes_all_three_vars_on_both_outcomes() {
         ));
         phase.rng = Rng::new(seed);
         phase.party_lead = Some(lead);
-        // Pre-poison the var with Mudkip's encoding: Treecko's `0` is also
-        // `EventData`'s fresh default, so only an overwrite from a non-zero
-        // value proves the write actually ran (issue #251 review).
+        // Treecko's encoding equals the fresh default, so a non-default start
+        // is needed to show the write ran.
         phase
             .save1
             .event_data
-            .var_set(VAR_STARTER_MON, 2)
+            .var_set(VAR_STARTER_MON, STARTER_MON_MUDKIP)
             .expect("VAR_STARTER_MON is an ordinary var");
 
         play_first_battle_to_conclusion(&mut phase);
@@ -197,46 +232,38 @@ fn conclude_first_battle_writes_all_three_vars_on_both_outcomes() {
         );
         assert_eq!(
             phase.save1.event_data.var_get(VAR_ROUTE101_STATE),
-            Ok(3),
+            Ok(ROUTE101_STATE_CONCLUDED),
             "outcome {expected_outcome:?}: setvar VAR_ROUTE101_STATE, 3"
         );
         assert_eq!(
             phase.save1.event_data.var_get(VAR_BIRCH_LAB_STATE),
-            Ok(2),
+            Ok(BIRCH_LAB_STATE_STARTER_GIVEN),
             "outcome {expected_outcome:?}: setvar VAR_BIRCH_LAB_STATE, 2"
         );
         assert_eq!(
             phase.save1.event_data.var_get(VAR_STARTER_MON),
-            Ok(0),
-            "outcome {expected_outcome:?}: the conclusion overwrites the pre-poisoned var with Treecko's own encoding"
+            Ok(STARTER_MON_TREECKO),
+            "outcome {expected_outcome:?}: the conclusion overwrites the preset Mudkip encoding with Treecko's"
         );
     }
 }
 
-/// The four object-event flag writes -- the tail's own three
-/// (`scripts.inc:233-235`) plus `removeobject LOCALID_ROUTE101_ZIGZAGOON`'s
-/// persistent flag-set equivalent (`:224`; the module docs carry the
-/// `RemoveObjectEventByLocalIdAndMap` -> `FlagSet` citation) -- run on
-/// **either** terminal outcome, same as the vars, and each one is
-/// asserted from a starting state that can only reach the expected value
-/// through the write itself: the lab-Birch flag starts *set* (as
-/// [`crate::new_game`] seeds every fresh save) and must come out cleared,
-/// while the three Route 101 flags start clear (their fresh-save state,
-/// which is exactly why the rescue-battle Birch, its separately-flagged
-/// Zigzagoon, and the bag are visible for the rescue at all) and must
-/// come out set (PR #291 review: the generated map events carry these
-/// flag names per object and `engine::overworld::object_event` hides a
-/// set-flag template from rendering and collision, so skipping any write
-/// leaves that rescue object standing, or the lab empty).
+/// The four hide-flag writes happen on both a win and a loss. The lab-Birch
+/// flag starts set, as in a new save, and ends cleared. The three Route 101
+/// flags start clear and end set.
 #[test]
 fn conclude_first_battle_writes_the_object_event_flags_on_both_outcomes() {
     for (seed, lead, expected_outcome) in [
         (
-            4242,
+            WINNING_SEED,
             new_game::provisional_starter(),
             BattleOutcome::PlayerWon,
         ),
-        (1, fragile_treecko_lead(), BattleOutcome::PlayerLost),
+        (
+            LOSING_SEED,
+            fragile_treecko_lead(),
+            BattleOutcome::PlayerLost,
+        ),
     ] {
         let (tx, ty) = ROUTE_101_TRIGGER_TILE;
         let mut phase = route_101_trigger_phase(PlayerState::new(
@@ -246,9 +273,8 @@ fn conclude_first_battle_writes_the_object_event_flags_on_both_outcomes() {
         ));
         phase.rng = Rng::new(seed);
         phase.party_lead = Some(lead);
-        // The fresh-save posture, seeded explicitly so this fixture (which
-        // bypasses `new_game::init_save_blocks`) proves the *clear*, not a
-        // default that was never set.
+        // This fixture bypasses `new_game::init_save_blocks`, so seed the
+        // flag that a new save starts with.
         phase
             .save1
             .event_data
@@ -298,11 +324,8 @@ fn conclude_first_battle_writes_the_object_event_flags_on_both_outcomes() {
     }
 }
 
-/// `Route101_EventScript_BirchsBag`'s own `HealPlayerParty` has no
-/// accompanying `SetMoney(.../2)` -- unlike [`super::white_out`], this
-/// conclusion must never halve the player's money, on either outcome
-/// (module docs, "What's modelled, narrowly": halving money for a
-/// story-mandated fight would be a fidelity bug, not a shortcut).
+/// The conclusion leaves money unchanged on a loss, unlike a white-out,
+/// which halves it.
 #[test]
 fn conclude_first_battle_never_halves_money_even_on_a_loss() {
     let (tx, ty) = ROUTE_101_TRIGGER_TILE;
@@ -311,9 +334,9 @@ fn conclude_first_battle_never_halves_money_even_on_a_loss() {
         ROUTE_101_TRIGGER_ELEVATION,
         Direction::East,
     ));
-    phase.rng = Rng::new(1);
+    phase.rng = Rng::new(LOSING_SEED);
     phase.party_lead = Some(fragile_treecko_lead());
-    phase.save1.money = 2001;
+    phase.save1.money = STARTING_MONEY;
 
     play_first_battle_to_conclusion(&mut phase);
 
@@ -323,14 +346,14 @@ fn conclude_first_battle_never_halves_money_even_on_a_loss() {
         "setup: this seed/lead combination must really lose"
     );
     assert_eq!(
-        phase.save1.money, 2001,
-        "the Birch's-bag heal must never halve money, unlike white_out's own DoWhiteOut"
+        phase.save1.money, STARTING_MONEY,
+        "the first-battle heal must not halve money"
     );
 }
 
-/// A Treecko whose only move is [`UNEXECUTABLE_MOVE`] -- the one lead
-/// `crate::flow::first_battle::advance_first_battle` still aborts on, since
-/// its fallback scan finds no slot `validate_player_move` accepts.
+/// A Treecko whose only move is [`UNEXECUTABLE_MOVE`], so
+/// `crate::flow::first_battle::advance_first_battle` aborts: its fallback
+/// scan finds no slot `validate_player_move` accepts.
 fn unplayable_treecko_lead() -> BattlePokemon {
     let ivs = Ivs {
         hp: MAX_IV,
@@ -342,7 +365,7 @@ fn unplayable_treecko_lead() -> BattlePokemon {
     };
     BattlePokemon::new(
         &Dex::new(),
-        SpeciesId(277),
+        TREECKO_SPECIES,
         5,
         ivs,
         0,
@@ -351,13 +374,9 @@ fn unplayable_treecko_lead() -> BattlePokemon {
     .expect("Treecko/Pursuit must be in the dex")
 }
 
-/// An **aborted** first battle (module docs, "The upstream chain": no real
-/// outcome, no upstream counterpart) must not run the conclusion at all --
-/// no heal, no var writes, no warp. Mirrors
-/// `first_battle_trigger_tests::trigger::an_aborted_first_battle_still_consumes_the_route_101_trigger`'s
-/// own fixture, since an unexecutable moveset is the one remaining way
-/// `crate::flow::first_battle::advance_first_battle` reports `None` instead
-/// of a real outcome.
+/// An aborted battle (no reported outcome) does not conclude: no heal, no
+/// var writes, no warp. The fixture matches
+/// `first_battle_trigger_tests::trigger::an_aborted_first_battle_still_consumes_the_route_101_trigger`.
 #[test]
 fn an_aborted_first_battle_does_not_run_the_conclusion() {
     let (tx, ty) = ROUTE_101_TRIGGER_TILE;
@@ -366,7 +385,7 @@ fn an_aborted_first_battle_does_not_run_the_conclusion() {
         ROUTE_101_TRIGGER_ELEVATION,
         Direction::East,
     ));
-    phase.rng = Rng::new(4242);
+    phase.rng = Rng::new(WINNING_SEED);
     phase.party_lead = Some(unplayable_treecko_lead());
 
     walk_one_tile_east(&mut phase);
@@ -375,8 +394,8 @@ fn an_aborted_first_battle_does_not_run_the_conclusion() {
         "setup: the trigger must fire"
     );
 
-    // One driver frame: the turn fails pre-draw, so the battle ends with no
-    // outcome at all -- and no conclusion may run off it.
+    // The turn fails before any draw, so one frame ends the battle with no
+    // outcome.
     phase.step(held(Buttons::RIGHT));
     assert!(
         !phase.is_first_battle_active(),
@@ -390,45 +409,38 @@ fn an_aborted_first_battle_does_not_run_the_conclusion() {
 
     assert_eq!(
         phase.save1.event_data.var_get(VAR_ROUTE101_STATE),
-        Ok(2),
-        "the trigger's own TRIGGER_CONSUMED_STATE, not the conclusion's terminal 3"
+        Ok(ROUTE101_STATE_TRIGGER_CONSUMED),
+        "the trigger's consumed state, not the conclusion's terminal value"
     );
     assert_eq!(
         phase.save1.event_data.var_get(VAR_BIRCH_LAB_STATE),
-        Ok(0),
-        "no conclusion ran, so this var must still read its fresh-save default"
+        Ok(VAR_DEFAULT),
+        "no conclusion ran, so this var must still read its default"
     );
     assert_eq!(
         phase.save1.event_data.var_get(VAR_STARTER_MON),
-        Ok(0),
-        "unwritten, so this reads the same 0 default VAR_STARTER_MON always starts at -- not \
-         proof either way, but consistent with no write having happened"
+        Ok(STARTER_MON_TREECKO),
+        "unwritten; Treecko's encoding equals the default, so this is consistent with no write \
+         but does not prove it"
     );
     assert_eq!(
-        phase.map_id,
-        assets::MapId("MAP_ROUTE101"),
-        "no conclusion ran, so no warp fired -- the player stays exactly where the aborted \
-         battle left them"
+        phase.map_id, ROUTE_101,
+        "no conclusion ran, so no warp fired"
     );
 }
 
-/// The real-pack acceptance path: a lost Route 101 first battle really does
-/// land the player inside Birch's lab, on the exact tile the `warp`
-/// command names (`scripts.inc:242`) -- the standing proof the lab's own
-/// bundled layout/tileset (module docs, "What's modelled, narrowly") are
-/// enough for [`super::OverworldPhase::warp_to_position`] to resolve a real
-/// room, not merely an id that happens to parse.
+/// With the real pack, a lost first battle heals the lead and lands the
+/// player in Birch's lab on the `warp` tile, so the warp resolves a real room.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_a_lost_first_battle_still_heals_and_reaches_the_lab() {
-    let lab = assets::MapId("MAP_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB");
     let (tx, ty) = ROUTE_101_TRIGGER_TILE;
-    let mut phase = route_101_trigger_phase(PlayerState::new(
+    let mut phase = repo_route_101_trigger_phase(PlayerState::new(
         (tx - 1, ty),
         ROUTE_101_TRIGGER_ELEVATION,
         Direction::East,
     ));
-    phase.rng = Rng::new(1);
+    phase.rng = Rng::new(LOSING_SEED);
     phase.party_lead = Some(fragile_treecko_lead());
 
     play_first_battle_to_conclusion(&mut phase);
@@ -447,70 +459,54 @@ fn real_pack_a_lost_first_battle_still_heals_and_reaches_the_lab() {
         "healed even against the real pack's own dex data"
     );
     assert_eq!(
-        phase.map_id, lab,
+        phase.map_id, BIRCHS_LAB,
         "warp MAP_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB, 6, 5 must actually resolve the lab"
     );
     assert_eq!(
         phase.player.position(),
-        (6, 5),
+        BIRCHS_LAB_ARRIVAL,
         "the warp's own explicit coordinates"
     );
 }
 
-/// Issue #379's counterpart to
-/// `white_out::tests::real_pack_white_out_relocation_adopts_the_heal_locations_elevation_before_any_movement`:
-/// the lab arrival's elevation must already be the real destination tile's
-/// own elevation the instant [`super::OverworldPhase::conclude_first_battle`]
-/// returns, before any subsequent step -- not the `ELEVATION_TRANSITION`
-/// wildcard [`super::OverworldPhase::warp_to_position`] used to hardcode.
-/// `(6, 5)` on Birch's lab is elevation `3` in the real bundled layout --
-/// one of the two elevation-`3` landings
-/// [`super::OverworldPhase::warp_to_position`]'s own docs name (the other
-/// is the white-out's heal location, the player's house at `(4, 2)`) --
-/// confirmed here against the bundled pack rather than merely asserted, so
-/// a fixture that stopped matching the real tile would fail loudly instead
-/// of passing vacuously. Both [`engine::overworld::PlayerState::elevation`]
-/// and [`engine::overworld::PlayerState::previous_elevation`] must read
-/// `3`: [`engine::overworld::PlayerState::new`]'s own doc comment records
-/// that a freshly placed player starts both fields equal.
+/// With the real pack, the lab arrival adopts the destination tile's real
+/// elevation as soon as the conclusion returns, rather than the
+/// `ELEVATION_TRANSITION` wildcard. Both current and previous elevation
+/// match, as for any freshly placed [`engine::overworld::PlayerState`].
+/// The same relocation is checked for white-out in
+/// `white_out::tests::real_pack_white_out_relocation_adopts_the_heal_locations_elevation_before_any_movement`.
 ///
-/// The two setup assertions come first on purpose: the Route 101 trigger
-/// tile this test starts on is itself elevation
-/// [`ROUTE_101_TRIGGER_ELEVATION`] (`3`), so the elevation assertions alone
-/// would pass unchanged if the warp never fired at all.
+/// The map and position assertions come first because the Route 101 trigger
+/// tile has the same elevation, so the elevation assertions alone would pass
+/// if the warp never fired.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_first_battle_conclusion_relocation_adopts_the_labs_elevation_before_any_movement() {
     let (tx, ty) = ROUTE_101_TRIGGER_TILE;
-    let mut phase = route_101_trigger_phase(PlayerState::new(
+    let mut phase = repo_route_101_trigger_phase(PlayerState::new(
         (tx - 1, ty),
         ROUTE_101_TRIGGER_ELEVATION,
         Direction::East,
     ));
-    phase.rng = Rng::new(4242);
+    phase.rng = Rng::new(WINNING_SEED);
     phase.party_lead = Some(new_game::provisional_starter());
 
     play_first_battle_to_conclusion(&mut phase);
 
-    assert_eq!(
-        phase.map_id,
-        assets::MapId("MAP_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB"),
-        "setup: the conclusion's warp must really have fired -- the elevation \
-         assertions below read the same 3 the Route 101 trigger tile already had"
-    );
+    assert_eq!(phase.map_id, BIRCHS_LAB, "setup: the warp must have fired");
     assert_eq!(
         phase.player.position(),
-        (6, 5),
+        BIRCHS_LAB_ARRIVAL,
         "setup: the lab arrival tile whose elevation is under test"
     );
     assert_eq!(
         phase.player.elevation(),
-        3,
+        BIRCHS_LAB_ARRIVAL_ELEVATION,
         "the lab arrival tile's own real elevation, not the transition wildcard"
     );
     assert_eq!(
         phase.player.previous_elevation(),
-        3,
-        "a freshly placed player's previous elevation starts equal to its current one"
+        BIRCHS_LAB_ARRIVAL_ELEVATION,
+        "previous elevation equals the current one for a freshly placed player"
     );
 }

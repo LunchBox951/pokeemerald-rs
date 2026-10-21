@@ -15,6 +15,7 @@ fn decode(bytes: &[u8]) -> Vec<SongEvent> {
     .unwrap();
     let song = assets::Song::new(
         assets::VoiceGroupId("audio/voicegroup/g".into()),
+        assets::MusicPlayerId(0),
         0,
         None,
         vec![events],

@@ -191,6 +191,33 @@ fn poison_can_land(move_type: Type, defender: &BattlePokemon) -> bool {
         && defender.ability() != AbilityId::SHIELD_DUST
 }
 
+/// Whether Poison Point's `MOVE_EFFECT_AFFECTS_USER | MOVE_EFFECT_POISON` can
+/// poison `attacker`.
+///
+/// The ability re-enters `SetMoveEffect` through `seteffectsecondary` with
+/// `primary == FALSE` and no certain flag, so the Immunity and Poison-/Steel-type
+/// prevention branches stay silent and fall through to the plain guards: a
+/// Poison or Steel type, an existing primary status, or Immunity leave the
+/// attacker unchanged (`battle_util.c:2806`-`:2818`,
+/// `battle_script_commands.c:2299`-`:2340`). Shield Dust is skipped because the
+/// ability marker `HITMARKER_STATUS_ABILITY_EFFECT` is set (`:2253`-`:2255`).
+#[must_use]
+pub(crate) fn poison_point_can_land(attacker: &BattlePokemon) -> bool {
+    let types = attacker.types();
+    attacker.status1().is_healthy()
+        && !types.contains(&Type::Poison)
+        && !types.contains(&Type::Steel)
+        && attacker.ability() != AbilityId::IMMUNITY
+}
+
+/// A `secondaryEffectChance` that every roll of `Cmd_seteffectwithchance`'s
+/// chance branch passes. That branch still spends its `Random() % 100` draw,
+/// and both this value and Serene Grace's doubled 200 clear the same
+/// comparison, so the doubling is unobservable
+/// (`battle_script_commands.c:2912-2930`). The draw-free branch at `:2917`
+/// is chosen by a prepared `MOVE_EFFECT_CERTAIN` flag, never by this chance.
+const GUARANTEED_EFFECT_CHANCE: u8 = 100;
+
 /// `SetMoveEffect`'s `MOVE_EFFECT_CONFUSION` guards for the trampoline path:
 /// Own Tempo and an already-active confusion volatile both leave the byte
 /// silently discarded (`battle_script_commands.c:2531-2538`), and Shield
@@ -241,6 +268,11 @@ fn confuse_hit_could_ever_land(defender: &BattlePokemon) -> bool {
 /// `confuse_hit_could_ever_land` rather than `poison_can_land`'s full
 /// landing check -- see that function's docs for why the defender's current
 /// confusion volatile is deliberately not read here.
+/// A move whose `secondaryEffectChance` is already 100 is exempt: Serene
+/// Grace only doubles it to 200 (`battle_script_commands.c:2912-2915`), and
+/// both values stay in the same chance branch, spend its `Random() % 100`
+/// draw, and clear the same comparison (`:2923-2930`), so the doubling
+/// changes neither outcome nor RNG use.
 ///
 /// # Errors
 ///
@@ -269,6 +301,7 @@ pub fn ensure_admissible(
         return Ok(());
     }
     if is_confuse_hit_effect(mv.effect)
+        && mv.secondary_effect_chance < GUARANTEED_EFFECT_CHANCE
         && attacker.ability() == AbilityId::SERENE_GRACE
         && confuse_hit_could_ever_land(defender)
     {

@@ -1,9 +1,13 @@
 use super::super::{AssetPack, PackError};
 use super::shared::{
-    write_synthetic_pack, EXCESS_VOICE_SLOT_COUNT_BYTE, PROGRAMMABLE_WAVE_BYTE_COUNT,
+    image_meta, pack_bytes, write_pack, write_synthetic_pack, Entry, EXCESS_VOICE_SLOT_COUNT_BYTE,
+    IMAGE_KIND_TAG, INDEXED_8_BIT, PROGRAMMABLE_WAVE_BYTE_COUNT, RAW_KIND_TAG,
     UNKNOWN_SAMPLE_KIND_TAG,
 };
-use crate::audio::{Sample, SampleId, SongEvent, VoiceEntry, VoiceGroupId};
+use crate::audio::{
+    AudioError, CryTable, MusicPlayerId, Sample, SampleId, SongEvent, VoiceEntry, VoiceGroupId,
+    CRY_TABLE_LEN, CRY_TABLE_PACK_ID,
+};
 
 #[test]
 fn song_accessor_decodes_the_named_entry_through_the_song_schema() {
@@ -14,6 +18,7 @@ fn song_accessor_decodes_the_named_entry_through_the_song_schema() {
         song.voicegroup(),
         &VoiceGroupId("audio/voicegroup/test_group".to_owned())
     );
+    assert_eq!(song.player(), MusicPlayerId(1));
     assert_eq!(song.priority(), 5);
     assert_eq!(song.reverb(), Some(30));
     assert_eq!(
@@ -176,5 +181,91 @@ fn sample_accessor_reports_a_malformed_payload() {
             source: crate::audio::AudioError::UnknownSampleKind(UNKNOWN_SAMPLE_KIND_TAG),
         }) if got == &id.0
     ));
+    let _ = std::fs::remove_file(path);
+}
+
+fn cry_table() -> CryTable {
+    CryTable::new(
+        (0..CRY_TABLE_LEN)
+            .map(|position| SampleId(format!("audio/sample/direct-sound/cry_{position}")))
+            .collect(),
+    )
+    .unwrap()
+}
+
+fn pack_with_cry_entry(tag: &str, kind_tag: u8, meta: Vec<u8>, payload: Vec<u8>) -> AssetPack {
+    let bytes = pack_bytes(vec![Entry {
+        id: CRY_TABLE_PACK_ID,
+        kind_tag,
+        meta,
+        payload,
+    }]);
+    let path = write_pack(tag, &bytes);
+    let pack = AssetPack::load(&path).unwrap();
+    let _ = std::fs::remove_file(path);
+    pack
+}
+
+#[test]
+fn cry_table_accessor_decodes_the_raw_payload() {
+    let expected = cry_table();
+    let pack = pack_with_cry_entry("cry-ok", RAW_KIND_TAG, vec![], expected.encode());
+    assert_eq!(pack.cry_table(), Ok(expected));
+}
+
+#[test]
+fn cry_table_accessor_reports_a_missing_entry() {
+    let path = write_pack("cry-missing", &pack_bytes(vec![]));
+    let pack = AssetPack::load(&path).unwrap();
+    let _ = std::fs::remove_file(path);
+    assert_eq!(
+        pack.cry_table(),
+        Err(PackError::UnknownAsset(CRY_TABLE_PACK_ID.to_owned()))
+    );
+}
+
+#[test]
+fn cry_table_accessor_reports_the_wrong_kind() {
+    let pack = pack_with_cry_entry(
+        "cry-wrong-kind",
+        IMAGE_KIND_TAG,
+        image_meta(1, 1, INDEXED_8_BIT),
+        vec![0],
+    );
+    assert!(matches!(
+        pack.cry_table(),
+        Err(PackError::WrongKind {
+            expected: "raw blob",
+            actual: "image",
+            ..
+        })
+    ));
+}
+
+#[test]
+fn cry_table_accessor_reports_a_malformed_payload() {
+    let mut bytes = cry_table().encode();
+    bytes.pop();
+    let pack = pack_with_cry_entry("cry-malformed", RAW_KIND_TAG, vec![], bytes);
+    assert_eq!(
+        pack.cry_table(),
+        Err(PackError::AudioDecode {
+            id: CRY_TABLE_PACK_ID.to_owned(),
+            source: AudioError::Truncated,
+        })
+    );
+}
+
+#[test]
+fn a_pack_from_the_format_without_song_players_is_refused_on_load() {
+    const PREVIOUS_FORMAT_VERSION: u32 = 10;
+    let path = write_synthetic_pack("song-player-previous-version");
+    let mut bytes = std::fs::read(&path).unwrap();
+    bytes[8..12].copy_from_slice(&PREVIOUS_FORMAT_VERSION.to_le_bytes());
+    std::fs::write(&path, bytes).unwrap();
+    assert_eq!(
+        AssetPack::load(&path).map(|_| ()),
+        Err(PackError::UnsupportedVersion(PREVIOUS_FORMAT_VERSION))
+    );
     let _ = std::fs::remove_file(path);
 }

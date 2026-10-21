@@ -7,11 +7,27 @@ use super::error::GenRomProfileError;
 use super::pack_source::PackSource;
 use crate::extract::scope::{
     layout_ids, sprite_palette_ids, sprite_sheet_ids, text_window_ids, tileset_animation_ids,
-    title_ids, BATTLERS, FONTS, TILESETS,
+    title_ids, BATTLERS, FONTS, INTERFACE_PALETTE_IDS, TILESETS,
 };
 
-/// Require every fixed tileset root: all tile sheets, then every pinned
-/// animation frame, independent of which frames the pack happens to hold.
+/// Every fixed payload root of a tileset: tiles, metatiles, metatile
+/// attributes, and each palette bank, as `tilesets::locate_one` asks for them.
+pub fn tileset_payload_ids(name: &str) -> Vec<String> {
+    [
+        format!("tileset/{name}/tiles"),
+        format!("tileset/{name}/metatiles"),
+        format!("tileset/{name}/metatile-attributes"),
+    ]
+    .into_iter()
+    .chain(
+        (0..super::tilesets::PALETTE_BANKS).map(|bank| format!("tileset/{name}/palette/{bank:02}")),
+    )
+    .collect()
+}
+
+/// Require every fixed tileset root: each tileset's tile sheet, metatiles,
+/// attributes, and palette banks, then every pinned animation frame,
+/// independent of which frames the pack happens to hold.
 ///
 /// # Errors
 ///
@@ -19,7 +35,8 @@ use crate::extract::scope::{
 pub fn require_tilesets(pack: &PackSource) -> Result<(), GenRomProfileError> {
     TILESETS
         .into_iter()
-        .try_for_each(|tileset| pack.get(&tileset.tiles_id()).map(|_| ()))?;
+        .flat_map(|tileset| tileset_payload_ids(tileset.name))
+        .try_for_each(|id| pack.get(&id).map(|_| ()))?;
     tileset_animation_ids()
         .iter()
         .try_for_each(|id| pack.get(id).map(|_| ()))
@@ -90,6 +107,15 @@ pub fn require_battle_messages(pack: &PackSource) -> Result<(), GenRomProfileErr
     pack.get(rom_import::BATTLE_MESSAGE_PACK_ID).map(|_| ())
 }
 
+/// Require the battle-animation catalog root.
+///
+/// # Errors
+///
+/// [`GenRomProfileError::MissingPackEntry`] when the pack lacks it.
+pub fn require_battle_anims(pack: &PackSource) -> Result<(), GenRomProfileError> {
+    pack.get(rom_import::BATTLE_ANIM_PACK_ID).map(|_| ())
+}
+
 /// Require every starter battler image and palette.
 ///
 /// # Errors
@@ -133,6 +159,17 @@ pub fn require_bag(pack: &PackSource, expected: &[String]) -> Result<(), GenRomP
     Ok(())
 }
 
+/// Require every fixed interface palette root.
+///
+/// # Errors
+///
+/// [`GenRomProfileError::MissingPackEntry`] naming the first absent root.
+pub fn require_interface_palettes(pack: &PackSource) -> Result<(), GenRomProfileError> {
+    INTERFACE_PALETTE_IDS
+        .into_iter()
+        .try_for_each(|id| pack.get(id).map(|_| ()))
+}
+
 /// Require every fixed root, before any domain writes a report line.
 ///
 /// # Errors
@@ -146,7 +183,9 @@ pub fn preflight(pack: &PackSource, bag_ids: &[String]) -> Result<(), GenRomProf
     require_layouts(pack)?;
     require_text_window(pack)?;
     require_sprites(pack)?;
+    require_battle_anims(pack)?;
     require_battlers(pack)?;
     require_battle_messages(pack)?;
+    require_interface_palettes(pack)?;
     require_bag(pack, bag_ids)
 }

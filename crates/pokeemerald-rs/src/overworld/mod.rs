@@ -66,6 +66,8 @@ pub use engine::event_data::EventData;
 pub use engine::overworld::Direction;
 /// Holds the player position and movement state used to compose a frame.
 pub use engine::overworld::PlayerState;
+/// Frames a normal on-foot step takes to cross one tile.
+pub use engine::overworld::WALK_FRAMES_PER_TILE;
 
 mod avatar;
 pub(crate) mod dialog;

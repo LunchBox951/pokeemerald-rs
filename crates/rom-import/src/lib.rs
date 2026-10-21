@@ -1,4 +1,4 @@
-//! ROM import (S-4, F-3, Discussion #71 policy C, issue #122): turn a
+//! ROM import (S-4, F-3, Discussion #71 policy C): turn a
 //! user-supplied Pokemon Emerald cartridge image into an asset pack.
 //!
 //! Policy A extracts assets from a `pokeemerald` decomp checkout, which
@@ -95,6 +95,10 @@ mod sha1;
 use std::path::{Path, PathBuf};
 
 pub use domains::audio::decode_voicegroup_payload;
+pub use domains::battle_anim::{
+    decode_battle_anim_payload, decode_battle_anim_program, AnimPointers, DecodedProgram,
+    PACK_ID as BATTLE_ANIM_PACK_ID,
+};
 pub use domains::battle_messages::{
     decode_battle_message_payload, PACK_ID as BATTLE_MESSAGE_PACK_ID,
 };
@@ -109,10 +113,11 @@ pub use profile::{
 pub use reader::{GbaPtr, RomReader, ROM_BASE, ROM_WINDOW_END};
 pub use rom::{GbaHeader, Rom, ROM_SIZE};
 pub use roots::{
-    AudioRoots, BagRoots, BattleMessageRoots, BattlerRoot, BattlerRoots, BlobRoot, Encoding,
-    FontRoot, ImageRoot, InterfaceRoots, KeysplitRoot, MapLayoutRoot, PaletteRoot, Roots,
-    SampleRoot, SongRoot, SpecialMessageRoot, SpriteRoots, TextWindowRoots, TileAnimRoot,
-    TilesetRoot, TitleScreenRoots, VoicegroupRoot,
+    AnimProgramRoot, AnimSymbolRoot, AudioRoots, BagRoots, BattleAnimationRoots,
+    BattleMessageRoots, BattlerRoot, BattlerRoots, BlobRoot, Encoding, FontRoot, ImageRoot,
+    InterfaceRoots, KeysplitRoot, MapLayoutRoot, PaletteRoot, Roots, SampleRoot, SongRoot,
+    SpecialMessageRoot, SpriteRoots, TextWindowRoots, TileAnimRoot, TilesetRoot, TitleScreenRoots,
+    VoicegroupRoot,
 };
 pub use sha1::{sha1, Digest, DigestParseError, Sha1};
 

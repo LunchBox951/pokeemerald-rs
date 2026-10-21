@@ -19,7 +19,14 @@ The scheduled promotion App opens or reconciles one exact next-rung pull request
 
 The nightly uses the existing CI and CodeQL gates. At 02:17 America/Toronto each night, the promotion App attempts the current `dev` candidate. Pending or failed gates leave the previous nightly in place; no earlier commit is substituted. GitHub may delay scheduled runs.
 
-Players download the Linux or Windows archive and run its binary to import their own supported Emerald ROM, then launch the game. The ROM, its path, and its contents never enter the repository, Actions, artifacts, logs, or releases. Local ROM verification can still record evidence with `scripts/record_nightly_readiness.py`, but its `release-readiness` status is not a promotion gate.
+Players download the Linux or Windows archive and run its binary to import their own supported Emerald ROM, then launch the game. The ROM, its path, and its contents never enter the repository, Actions, artifacts, logs, or releases. Only the repository owner's GitHub account, including automation running under it, may record local evidence as a `release-readiness` status; the recorder refuses any other identity. The status is not a promotion gate. The official-ROM verification is a clean release-build import of that ROM into a fresh pack, built from a clean checkout of the live `dev` SHA (`git status --porcelain` empty, `git rev-parse HEAD` equal to `<dev-sha>`):
+
+```bash
+cargo build --release -p pokeemerald-rs &&
+  POKEEMERALD_PACK=<fresh temp dir>/pokeemerald.pack ./target/release/pokeemerald-rs --import-rom /path/to/pokeemerald.gba
+```
+
+On exit 0, record the result from the owner's account with `python3 scripts/record_nightly_readiness.py --repository LunchBox951/pokeemerald-rs <dev-sha>`. The real-ROM equivalence check in [`AGENTS.md` §Verify](AGENTS.md#verify) is separate from readiness; that section says when a change requires it.
 
 Nightlies may contain unknown gameplay and save issues. Playtesting and explicit owner approval remain required before promotion to `stable` and again to `main`.
 
@@ -109,7 +116,7 @@ R-1 remains incomplete until a configured binary archive runs on a clean target 
 | `MAJOR` | large completed playable step before v1; normal project phase after v1 | `MINOR`, `PATCH → 0` | normal PR flow |
 | `FINAL` | the owner agrees the project is complete | `MAJOR`, `MINOR`, `PATCH → 0` | owner only |
 
-Every ordinary pull request into `dev` advances `VERSION`; an unchanged or lower version fails CI. Choose the highest applicable component from delivered behaviour, not diff size. Closing a milestone requires at least `MINOR`. Before v1, non-playable repository work takes at most `MINOR`, and `MAJOR` normally marks meaningful playable progress.
+Every ordinary pull request into `dev` advances `VERSION` past current `dev`; an unchanged or lower version fails CI. [`CONTRIBUTING.md` §Pull requests](CONTRIBUTING.md#pull-requests) owns the bump workflow, including redoing it after merging `dev`. Choose the highest applicable component from delivered behaviour, not diff size. Closing a milestone requires at least `MINOR`. Before v1, non-playable repository work takes at most `MINOR`, and `MAJOR` normally marks meaningful playable progress.
 
 Promotions and health checks compare cumulative endpoints. They preserve channel ordering without replaying reset or FINAL-marker rules already enforced when changes entered `dev`.
 

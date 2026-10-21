@@ -66,7 +66,7 @@ const UNKNOWN_MOVE: MoveId = MoveId(60_000);
 /// Normal-type (physical), 75 accuracy.
 const SLAM: MoveId = MoveId::SLAM;
 
-const THICK_FAT: AbilityId = AbilityId(47);
+const THICK_FAT: AbilityId = AbilityId::THICK_FAT;
 /// `SPECIES_SHEDINJA`: Wonder Guard in its primary (and only) ability slot.
 const SHEDINJA: SpeciesId = SpeciesId(303);
 const FAINT_ATTACK: MoveId = MoveId::FAINT_ATTACK;
@@ -1526,4 +1526,77 @@ fn a_latched_flash_fire_boosts_ember_before_the_final_plus_two() {
     .unwrap()
     .damage;
     assert_eq!(tackle_latched, tackle_control);
+}
+
+/// Upstream raises raw Special Attack 150% for Plus against Minus and for
+/// Minus against Plus, opponents included, before stage scaling
+/// (`pokemon.c:3207-3210`, `battle_util.c:3128-3137`).
+fn plus_minus_expected_damage(
+    dex: &Dex,
+    attacker: &BattlePokemon,
+    defender: &BattlePokemon,
+    boosted: bool,
+) -> u32 {
+    let raw = attacker.stats().sp_attack;
+    let (defense, defense_stage) = defender.defending_stat(MoveCategory::Special);
+    let expected_base = base_damage(&DamageInput {
+        attacker_level: attacker.level(),
+        power: u32::from(dex.move_data(WATER_GUN).unwrap().power),
+        move_type: Type::Water,
+        attack_stat: if boosted { raw * 150 / 100 } else { raw },
+        attack_stage: attacker.stages().sp_attack,
+        defense_stat: defense,
+        defense_stage,
+        attacker_burned: false,
+        reflect: false,
+        light_screen: false,
+        weather: Weather::None,
+        is_solar_beam: false,
+        attacker_pinch_boost: false,
+    });
+    apply_dual_type_effectiveness(expected_base, Type::Water, defender.types())
+}
+
+#[test]
+fn plus_and_minus_boost_special_attack_against_the_complementary_opponent() {
+    let dex = Dex::new();
+    let mut plusle = mon(&dex, SpeciesId(353), 20, vec![WATER_GUN]);
+    let mut minun = mon(&dex, SpeciesId(354), 20, vec![WATER_GUN]);
+    assert_eq!(plusle.ability(), AbilityId::PLUS);
+    assert_eq!(minun.ability(), AbilityId::MINUS);
+    // An odd raw stat at stage +2 separates "boost then stage" from any other order.
+    plusle.stages_mut().sp_attack = StatStage::new(2).unwrap();
+    minun.stages_mut().sp_attack = StatStage::new(2).unwrap();
+    assert_eq!(plusle.stats().sp_attack % 2, 1, "pin truncation");
+    assert_eq!(minun.stats().sp_attack % 2, 1, "pin truncation");
+
+    for (attacker, defender) in [(&plusle, &minun), (&minun, &plusle)] {
+        let mut rng = SequenceRng::new([ORDINARY_NO_CRIT_DRAW]);
+        let raw = damage_before_roll(&dex, WATER_GUN, attacker, defender, false, &mut rng).unwrap();
+        assert_eq!(
+            raw.damage,
+            plus_minus_expected_damage(&dex, attacker, defender, true)
+        );
+        assert_ne!(
+            raw.damage,
+            plus_minus_expected_damage(&dex, attacker, defender, false)
+        );
+    }
+}
+
+#[test]
+fn plus_without_a_complementary_opponent_gets_no_special_attack_boost() {
+    let dex = Dex::new();
+    let plusle = mon(&dex, SpeciesId(353), 20, vec![WATER_GUN]);
+    let squirtle = mon(&dex, SQUIRTLE, 20, vec![WATER_GUN]);
+    let other_plusle = mon(&dex, SpeciesId(353), 20, vec![WATER_GUN]);
+
+    for defender in [&squirtle, &other_plusle] {
+        let mut rng = SequenceRng::new([ORDINARY_NO_CRIT_DRAW]);
+        let raw = damage_before_roll(&dex, WATER_GUN, &plusle, defender, false, &mut rng).unwrap();
+        assert_eq!(
+            raw.damage,
+            plus_minus_expected_damage(&dex, &plusle, defender, false)
+        );
+    }
 }

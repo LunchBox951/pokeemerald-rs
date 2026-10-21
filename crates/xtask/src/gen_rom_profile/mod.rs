@@ -1,5 +1,5 @@
-//! `cargo xtask gen-rom-profile` (S-4, F-3, Discussion #71 policy C, issue
-//! #122): derive `rom-import`'s address table from a real ROM, once, and
+//! `cargo xtask gen-rom-profile` (S-4, F-3, Discussion #71 policy C):
+//! derive `rom-import`'s address table from a real ROM, once, and
 //! commit the result.
 //!
 //! The shipped importer never scans a ROM. It reads
@@ -53,6 +53,7 @@
 
 mod audio;
 mod bag;
+mod battle_anims;
 mod battle_messages;
 mod battlers;
 mod emit;
@@ -81,7 +82,7 @@ use std::time::SystemTime;
 use rom_import::{select_profile, Rom};
 
 pub use error::GenRomProfileError;
-use map_file::SymbolMap;
+pub(crate) use map_file::SymbolMap;
 use pack_source::PackSource;
 use plan::{ProfilePlan, ReportLine, SymbolExpectation};
 use search::{Lz77Search, PointerIndex, RawSearch};
@@ -115,6 +116,9 @@ pub struct GenReport {
     pub map_confirmed: usize,
     /// How many roots the cross-check skipped as interior addresses.
     pub map_skipped: usize,
+    /// How many roots the cross-check skipped as translation-unit-local
+    /// symbols, which an ordinary linker map does not list.
+    pub map_local: usize,
     /// Whether a map was given at all.
     pub map_used: bool,
 }
@@ -142,6 +146,19 @@ impl GenReport {
             .iter()
             .filter(|line| line.resolution == plan::Resolution::ArbitraryAmongIdentical)
             .count()
+    }
+
+    /// The one-line `--map` cross-check summary, or `None` without a map.
+    #[must_use]
+    pub fn map_summary(&self) -> Option<String> {
+        self.map_used.then(|| {
+            format!(
+                "map cross-check: {} symbol name(s) matched, {} address(es) confirmed \
+                 unnamed, {} interior address(es) skipped, {} translation-unit-local \
+                 symbol(s) skipped",
+                self.map_named, self.map_confirmed, self.map_skipped, self.map_local
+            )
+        })
     }
 }
 
@@ -179,6 +196,7 @@ fn locate_profile(
         interface: locate_interface_palettes(ctx, lines)?,
         audio: audio::locate(ctx, lines)?,
         battle_messages: battle_messages::locate(ctx, lines)?,
+        battle_anims: battle_anims::locate(ctx, lines)?,
         bag: bag::locate(ctx, lines)?,
         battlers: battlers::locate(ctx, lines)?,
     })
@@ -281,6 +299,7 @@ fn generate(
         map_named: map.named,
         map_confirmed: map.confirmed,
         map_skipped: map.skipped,
+        map_local: map.local,
         map_used: map.used,
     })
 }
@@ -290,7 +309,8 @@ fn generate(
 /// # Errors
 ///
 /// [`GenRomProfileError::MissingPackEntry`] if the pack holds no
-/// `interface/palette/*` entries at all, or any other
+/// `interface/palette/*` entries at all or lacks a required fixed
+/// interface palette, or any other
 /// [`GenRomProfileError`] [`palettes::locate_unique`] raises.
 fn locate_interface_palettes(
     ctx: &Context<'_>,
@@ -302,6 +322,7 @@ fn locate_interface_palettes(
             "interface/palette/*".to_owned(),
         ));
     }
+    inventory::require_interface_palettes(ctx.pack)?;
     palettes::locate_unique(ctx, &ids, &interface_palette_symbol, report)
 }
 
@@ -322,6 +343,8 @@ struct MapCheck {
     confirmed: usize,
     /// Roots skipped because their address is interior to another symbol.
     skipped: usize,
+    /// Roots skipped because their symbol is local to a translation unit.
+    local: usize,
     /// Whether a map was given at all.
     used: bool,
 }
@@ -329,7 +352,8 @@ struct MapCheck {
 /// Cross-check every root against a linker map, if one was given.
 ///
 /// Three outcomes per root, driven by what the locator recorded:
-/// an interior address is skipped, an unnamed root only has to have *some*
+/// an interior address or a translation-unit-local `static` is skipped
+/// (an ordinary linker map lists only global symbols), an unnamed root only has to have *some*
 /// symbol starting at it, and a named root's symbol has to match. A
 /// disagreement is a failure, not an annotation: the whole point of the
 /// map is to be a second, independent witness, and a witness that only
@@ -347,13 +371,22 @@ fn cross_check(
         ..MapCheck::default()
     };
     for line in lines.iter_mut() {
-        if line.symbol == SymbolExpectation::Interior {
-            check.skipped += 1;
-            continue;
+        match line.symbol {
+            SymbolExpectation::Interior => {
+                check.skipped += 1;
+                continue;
+            }
+            SymbolExpectation::Local(_) => {
+                check.local += 1;
+                continue;
+            }
+            _ => {}
         }
         let symbols = map.symbols_at(line.addr);
         let accepted = match &line.symbol {
-            SymbolExpectation::Interior => unreachable!("skipped above"),
+            SymbolExpectation::Interior | SymbolExpectation::Local(_) => {
+                unreachable!("skipped above")
+            }
             SymbolExpectation::Unnamed => !symbols.is_empty(),
             SymbolExpectation::Exact(name) => symbols.iter().any(|found| found == name),
             SymbolExpectation::Contains(fragments) => symbols
@@ -386,6 +419,7 @@ fn cross_check(
 fn describe(expectation: &SymbolExpectation) -> String {
     match expectation {
         SymbolExpectation::Interior => "an interior address".to_owned(),
+        SymbolExpectation::Local(name) => format!("the translation-unit-local `{name}`"),
         SymbolExpectation::Unnamed => "any symbol".to_owned(),
         SymbolExpectation::Exact(name) => format!("the symbol `{name}`"),
         SymbolExpectation::Contains(fragments) => {
@@ -532,6 +566,8 @@ fn temp_sibling(path: &Path) -> PathBuf {
     ))
 }
 
+#[cfg(test)]
+mod battle_anim_tests;
 #[cfg(test)]
 mod battle_message_tests;
 #[cfg(test)]
