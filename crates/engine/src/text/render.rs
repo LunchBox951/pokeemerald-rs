@@ -338,7 +338,7 @@ impl<S: GlyphSource> Printer<S> {
     /// the same distance (`text.c:1184`). Printers default to zero spacing.
     #[must_use]
     pub fn with_line_spacing(mut self, line_spacing: u8) -> Self {
-        self.line_height = max_letter_height(self.glyphs.font()) + line_spacing as i32;
+        self.line_height = max_letter_height(self.glyphs.font()) + i32::from(line_spacing);
         self
     }
 
