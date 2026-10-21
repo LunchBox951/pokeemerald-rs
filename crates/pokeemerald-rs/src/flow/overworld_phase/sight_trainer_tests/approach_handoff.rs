@@ -145,7 +145,7 @@ fn the_intro_speech_holds_the_battle_until_the_player_dismisses_it() {
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_the_intro_message_opens_prints_and_dismisses_for_real() {
     let (rx, ry) = RHETT_TILE;
-    let mut phase = route_103_phase(PlayerState::new((rx, ry + 1), 3, Direction::North));
+    let mut phase = repo_route_103_phase(PlayerState::new((rx, ry + 1), 3, Direction::North));
     seed_approach(&mut phase, 0);
 
     // Icon, then the trainer's own zero-tile `MOVEMENT_ACTION_FACE_PLAYER`

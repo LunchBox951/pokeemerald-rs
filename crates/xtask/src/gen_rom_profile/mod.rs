@@ -53,6 +53,7 @@
 
 mod audio;
 mod bag;
+mod battle_anims;
 mod battle_messages;
 mod battlers;
 mod emit;
@@ -195,6 +196,7 @@ fn locate_profile(
         interface: locate_interface_palettes(ctx, lines)?,
         audio: audio::locate(ctx, lines)?,
         battle_messages: battle_messages::locate(ctx, lines)?,
+        battle_anims: battle_anims::locate(ctx, lines)?,
         bag: bag::locate(ctx, lines)?,
         battlers: battlers::locate(ctx, lines)?,
     })
@@ -307,7 +309,8 @@ fn generate(
 /// # Errors
 ///
 /// [`GenRomProfileError::MissingPackEntry`] if the pack holds no
-/// `interface/palette/*` entries at all, or any other
+/// `interface/palette/*` entries at all or lacks a required fixed
+/// interface palette, or any other
 /// [`GenRomProfileError`] [`palettes::locate_unique`] raises.
 fn locate_interface_palettes(
     ctx: &Context<'_>,
@@ -319,6 +322,7 @@ fn locate_interface_palettes(
             "interface/palette/*".to_owned(),
         ));
     }
+    inventory::require_interface_palettes(ctx.pack)?;
     palettes::locate_unique(ctx, &ids, &interface_palette_symbol, report)
 }
 
@@ -562,6 +566,8 @@ fn temp_sibling(path: &Path) -> PathBuf {
     ))
 }
 
+#[cfg(test)]
+mod battle_anim_tests;
 #[cfg(test)]
 mod battle_message_tests;
 #[cfg(test)]
