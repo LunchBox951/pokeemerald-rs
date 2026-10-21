@@ -170,8 +170,14 @@ pub(super) fn fixed_rate_voicegroup(wave_id: &str) -> VoiceGroup {
 pub(super) fn pack_with_song(test_name: &str, reverb: Option<u8>) -> (AssetPack, TempPackGuard) {
     let vg_id = "audio/voicegroup/fixtest";
     let wave_id = "audio/sample/fixtest_wave";
-    let song = assets::Song::new(VoiceGroupId(vg_id.to_owned()), 0, reverb, vec![vec![]])
-        .expect("a one-empty-track song is well-formed");
+    let song = assets::Song::new(
+        VoiceGroupId(vg_id.to_owned()),
+        assets::MusicPlayerId(0),
+        0,
+        reverb,
+        vec![vec![]],
+    )
+    .expect("a one-empty-track song is well-formed");
     let sample = Sample::ProgrammableWave(ProgrammableWave { table: [0x88; 16] });
     let temp_pack = write_pack(
         test_name,
@@ -204,8 +210,14 @@ pub(super) fn pack_with_direct_sound_sample(
 ) -> (AssetPack, TempPackGuard) {
     let vg_id = "audio/voicegroup/fixtest_direct_sound";
     let wave_id = "audio/sample/fixtest_direct_sound_wave";
-    let song = assets::Song::new(VoiceGroupId(vg_id.to_owned()), 0, None, vec![vec![]])
-        .expect("a one-empty-track song is well-formed");
+    let song = assets::Song::new(
+        VoiceGroupId(vg_id.to_owned()),
+        assets::MusicPlayerId(0),
+        0,
+        None,
+        vec![vec![]],
+    )
+    .expect("a one-empty-track song is well-formed");
     let temp_pack = write_pack(
         test_name,
         &[
@@ -223,8 +235,14 @@ pub(super) fn pack_with_direct_sound_sample(
 pub(super) fn pack_with_priority(test_name: &str, priority: u8) -> (AssetPack, TempPackGuard) {
     let vg_id = "audio/voicegroup/fixtest";
     let wave_id = "audio/sample/fixtest_wave";
-    let song = assets::Song::new(VoiceGroupId(vg_id.to_owned()), priority, None, vec![vec![]])
-        .expect("a one-empty-track song is well-formed");
+    let song = assets::Song::new(
+        VoiceGroupId(vg_id.to_owned()),
+        assets::MusicPlayerId(0),
+        priority,
+        None,
+        vec![vec![]],
+    )
+    .expect("a one-empty-track song is well-formed");
     let sample = Sample::ProgrammableWave(ProgrammableWave { table: [0x88; 16] });
     let temp_pack = write_pack(
         test_name,

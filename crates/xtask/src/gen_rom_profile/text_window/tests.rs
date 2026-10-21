@@ -53,6 +53,12 @@ fn locate(name: &str, banks: [u32; 4]) -> Result<u32, GenRomProfileError> {
 }
 
 #[test]
+fn a_gnu_ld_map_that_omits_the_static_window_table_does_not_reject_it() {
+    let mut lines = vec![super::window_palettes_line(TABLE_ADDR, BANK_BYTES)];
+    crate::gen_rom_profile::tests::assert_survives_ld_map("tw-static-map", TABLE_ADDR, &mut lines);
+}
+
+#[test]
 fn banks_in_table_order_derive_the_table() {
     assert_eq!(
         locate("tw-ordered", [1, 2, 3, 4]).expect("ordered"),

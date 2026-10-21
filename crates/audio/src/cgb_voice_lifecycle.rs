@@ -29,12 +29,8 @@ fn echo_volume_and_length_are_copied_into_the_envelope_at_construction() {
 
 #[test]
 fn a_live_volume_write_leaves_the_pseudo_echo_floor_on_the_latched_goal() {
-    // `ChnVolSetAsm` writes only the side volumes; `chan->envelopeGoal` is
-    // recomputed by `CgbModVol` alone, which runs at note-on and at every
-    // `envelopeCounter == 0` boundary (`m4a.c:903-923`, `:994`, `:1084`).
-    // A zero-release note-off jumps straight to `envelope_pseudoecho_start`,
-    // past that recompute (`m4a.c:1060-1073`), so its floor scales the goal
-    // latched before the live write.
+    // A zero-release note-off skips the `CgbModVol` goal recompute
+    // (`m4a.c:1060-1073`), so the floor scales the goal latched before the write.
     let echo_note = TestNote {
         track_right: 128,
         track_left: 128,
@@ -48,7 +44,7 @@ fn a_live_volume_write_leaves_the_pseudo_echo_floor_on_the_latched_goal() {
     assert_eq!(
         voice.envelope.volume(),
         15,
-        "sanity: the note sustains at the goal CgbModVol latched at note-on"
+        "the note sustains at the goal CgbModVol latched at note-on"
     );
 
     // One tick's `VOL` then `EOT`, with no envelope boundary between them.
@@ -66,13 +62,8 @@ fn a_live_volume_write_leaves_the_pseudo_echo_floor_on_the_latched_goal() {
 
 #[test]
 fn a_live_volume_write_before_the_first_pass_still_latches_at_note_on() {
-    // `CgbModVol` runs unconditionally in the `SOUND_CHANNEL_SF_START`
-    // branch, before upstream even reads the attack period
-    // (`m4a.c:988-995`), so a live write that lands before the first
-    // `CgbSound` pass for this channel is already reflected the first
-    // time the goal latches -- unlike a write after that first pass
-    // (`a_live_volume_write_leaves_the_pseudo_echo_floor_on_the_latched_goal`),
-    // which the note-on latch has already passed.
+    // Note-on runs `CgbModVol` before reading the attack period
+    // (`m4a.c:988-995`), so a write before the first pass is in the first latch.
     let echo_note = TestNote {
         track_right: 128,
         track_left: 128,

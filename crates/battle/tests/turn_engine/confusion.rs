@@ -370,6 +370,11 @@ fn a_self_hit_rates_against_the_users_own_attack_and_defense_stages() {
 const CONFUSE_RAY: MoveId = MoveId::CONFUSE_RAY;
 const SWEET_KISS: MoveId = MoveId::SWEET_KISS;
 const PSYBEAM: MoveId = MoveId::PSYBEAM;
+const DYNAMIC_PUNCH: MoveId = MoveId::DYNAMIC_PUNCH;
+/// `SPECIES_DUNSPARCE`, Serene Grace.
+const DUNSPARCE: u16 = 206;
+/// `SPECIES_SNORLAX`: slow and bulky enough to survive the punch.
+const SNORLAX: u16 = 143;
 /// `SPECIES_SPINDA`: Own Tempo in its only ability slot.
 const SPINDA: u16 = 308;
 
@@ -667,4 +672,32 @@ fn an_own_tempo_target_is_hit_by_psybeam_but_never_confused() {
     );
     assert_eq!(events.len(), 4, "{events:?}");
     assert!(!battle.enemy().volatiles().confused());
+}
+
+/// A Serene Grace holder's Dynamic Punch (100% chance) is admitted at
+/// construction and consumes the same chance and duration draws as any
+/// holder (`battle_script_commands.c:2912-2930`, `:2528-2544`).
+#[test]
+fn a_serene_grace_dynamic_punch_is_constructed_and_confuses_with_its_usual_draws() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, DUNSPARCE, 10, vec![DYNAMIC_PUNCH]);
+    assert_eq!(player.ability(), assets::AbilityId::SERENE_GRACE);
+    let enemy = max_iv_mon(&dex, SNORLAX, 10, vec![TACKLE]);
+
+    let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 9, 0, 1, 0, 1, 0, 0]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng)
+        .expect("a guaranteed confusion chance is unchanged by Serene Grace");
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    assert!(
+        events.contains(&BattleEvent::ConfusionInflicted {
+            by_player: true,
+            move_id: DYNAMIC_PUNCH,
+        }),
+        "{events:?}"
+    );
+    assert!(battle.enemy().volatiles().confused());
+    assert_eq!(rng.draws(), 13, "chance and duration draws are both spent");
 }
