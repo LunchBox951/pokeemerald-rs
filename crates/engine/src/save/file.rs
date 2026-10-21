@@ -382,8 +382,20 @@ impl SaveFile {
     /// between this check and the open could otherwise slip through.
     #[cfg(not(windows))]
     fn open_for_read(&self) -> Result<Option<std::fs::File>, SaveFileError> {
+        self.open_for_read_with(|| {})
+    }
+
+    /// [`Self::open_for_read`] with a hook run between the up-front
+    /// inspection and the open, so a test can swap the entry in exactly that
+    /// window without racing a thread against it.
+    #[cfg(not(windows))]
+    fn open_for_read_with(
+        &self,
+        after_inspection: impl FnOnce(),
+    ) -> Result<Option<std::fs::File>, SaveFileError> {
         refuse_an_unusable_entry(&self.path)
             .map_err(|unusable| self.unusable_entry_error(unusable))?;
+        after_inspection();
 
         let mut options = std::fs::OpenOptions::new();
         options.read(true);

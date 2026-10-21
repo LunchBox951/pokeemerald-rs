@@ -5,11 +5,12 @@
 //! `PORT` and every `XCMD` besides the pseudo-echo pair (`xIECV`/`xIECL`)
 //! and the terminal reserved kinds 0 and 3 decode but never execute.
 
+use crate::cgb_envelope::CgbAdsr;
 use crate::cgb_voice::{CgbChannelNumber, CgbVoice};
 use crate::pitch::{self, SAMPLES_PER_FRAME};
 use crate::psg::WaveChannel;
 use crate::sequence::{clamp_tempo, xcmd_ends_track, Event, MAX_TEMPO_BPM};
-use crate::song::{Instrument, Song};
+use crate::song::{Instrument, Song, SquareTone};
 use crate::voice::{channel_volume, pan_terms, Voice};
 use crate::{Mixer, DEFAULT_MASTER_VOLUME, DEFAULT_MAX_VOICES};
 
@@ -115,7 +116,10 @@ struct TrackState {
     cursor: usize,
     wait: u16,
     ended: bool,
-    voice: usize,
+    /// The `VOICE`-selected bank entry; `None` is the cleared startup tone
+    /// (`Clear64byte` then `tone.type = 1`, `m4a_1.s:1218`..`:1230`), which
+    /// never reads the voicegroup.
+    voice: Option<usize>,
     vol: u8,
     /// This track's `volX` input to `TrkVolPitSet` (`m4a.c:772`).
     vol_x: u8,
@@ -160,7 +164,7 @@ impl TrackState {
             cursor: 0,
             wait: 0,
             ended: false,
-            voice: 0,
+            voice: None,
             vol: DEFAULT_TRACK_VOLUME,
             vol_x: TRACK_VOLUME_SCALE,
             pan: 0,
@@ -535,7 +539,7 @@ impl Sequencer {
                 Self::finish_track(track, mixer, track_id);
             }
             Event::Goto(index) => track.cursor = index,
-            Event::Voice(v) => track.voice = usize::from(v),
+            Event::Voice(v) => track.voice = Some(usize::from(v)),
             Event::Volume(v) => {
                 track.vol = v;
                 track.vol_dirty = true;
@@ -841,8 +845,15 @@ impl Sequencer {
         velocity: u8,
         gate: u8,
     ) -> bool {
-        let Some(instrument) = song.voice(track.voice) else {
-            return false;
+        let startup;
+        let instrument = if let Some(index) = track.voice {
+            let Some(instrument) = song.voice(index) else {
+                return false;
+            };
+            instrument
+        } else {
+            startup = startup_tone();
+            &startup
         };
         let Some((instrument, pitch_key, rhythm_pan)) = resolve_instrument(instrument, key) else {
             return false;
@@ -982,6 +993,23 @@ impl Sequencer {
     fn note_priority(song: &Song, track: &TrackState) -> u8 {
         song.priority().saturating_add(track.priority)
     }
+}
+
+/// The tone a track holds until its first `VOICE`: type 1 (Square1) with
+/// every other field cleared (`Clear64byte`, `tone.type = 1`,
+/// `m4a_1.s:1218`..`:1230`).
+fn startup_tone() -> Instrument {
+    Instrument::CgbSquare1(SquareTone {
+        duty: 0,
+        sweep: 0,
+        adsr: CgbAdsr {
+            attack: 0,
+            decay: 0,
+            sustain: 0,
+            release: 0,
+        },
+        fixed_rate: false,
+    })
 }
 
 /// `ply_note` refuses (rather than recurses into) an indirect key-split or

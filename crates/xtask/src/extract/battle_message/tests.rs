@@ -348,6 +348,14 @@ fn lexer_skips_comments_preprocessor_and_char_literals() {
 }
 
 #[test]
+fn lexer_refuses_character_literals_cut_off_at_end_of_input() {
+    assert!(tokenize("'").is_err());
+    assert!(tokenize("int a = 'x").is_err());
+    assert!(tokenize("int a = '\\").is_err());
+    assert!(tokenize("int a = '\\n'").is_ok());
+}
+
+#[test]
 #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
 fn battle_message_table_is_extracted_from_the_real_checkout() {
     assert!(super::super::upstream_present(), "run ./init.sh first");

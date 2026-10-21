@@ -347,7 +347,9 @@ fn the_trigger_never_fires_off_route_103() {
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_rhetts_cone_reaches_the_player_over_real_terrain_and_draws_nothing() {
-    let scene = crate::overworld::load_room(
+    let source = crate::pack_source::PackSource::Repo;
+    let scene = crate::overworld::load_room_from_source(
+        &source,
         ROUTE_103,
         crate::overworld::PlayerCharacter::Brendan,
         &engine::event_data::EventData::new(),
@@ -387,7 +389,7 @@ fn real_pack_rhetts_cone_reaches_the_player_over_real_terrain_and_draws_nothing(
          terrain -- including the final tile's own collision/impassability arms"
     );
 
-    let mut phase = OverworldPhase::for_test(scene, ROUTE_103, player, None);
+    let mut phase = OverworldPhase::for_test_with_source(scene, ROUTE_103, player, None, source);
     phase.party_lead = Some(overwhelming_lead());
     let before = phase.rng.state();
 

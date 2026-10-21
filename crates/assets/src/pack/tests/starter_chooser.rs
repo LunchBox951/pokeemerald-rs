@@ -38,7 +38,12 @@ fn raw(id: &'static str, len: usize, fill: u8) -> Entry {
 
 fn starter_entries() -> Vec<Entry> {
     vec![
-        image("starter-chooser/image/tiles", (128, 128), INDEXED_8_BIT, 31),
+        image(
+            "starter-chooser/image/tiles",
+            (128, 128),
+            TEXT_WINDOW_BIT_DEPTH,
+            15,
+        ),
         palette("starter-chooser/palette/tiles", 32, 0x0101),
         image(
             "starter-chooser/image/pokeball_selection",
@@ -85,7 +90,7 @@ fn starter_chooser_bundles_every_graphic_and_tilemap() {
 
     let chooser = pack.starter_chooser().unwrap();
     assert_eq!(chooser.tiles.image.width, 128);
-    assert_eq!(chooser.tiles.image.bit_depth, 8);
+    assert_eq!(chooser.tiles.image.bit_depth, 4);
     assert_eq!(chooser.tiles.palette.color_count, 32);
     assert_eq!(chooser.tiles.palette.color(0), Some(0x0101));
     assert_eq!(
@@ -174,11 +179,15 @@ fn malformed_chooser_entries_are_rejected_on_read() {
         ),
         (
             "starter-chooser/image/tiles",
+            image("starter-chooser/image/tiles", (128, 128), INDEXED_8_BIT, 15),
+        ),
+        (
+            "starter-chooser/image/tiles",
             image(
                 "starter-chooser/image/tiles",
                 (128, 128),
                 TEXT_WINDOW_BIT_DEPTH,
-                31,
+                16,
             ),
         ),
         (

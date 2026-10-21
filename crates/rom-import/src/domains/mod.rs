@@ -25,6 +25,7 @@
 
 pub(crate) mod audio;
 pub(crate) mod bag;
+pub(crate) mod battle_anim;
 pub(crate) mod battle_messages;
 pub(crate) mod battlers;
 pub(crate) mod fonts;
@@ -62,6 +63,7 @@ pub(crate) const DOMAINS: &[Domain] = &[
     audio::write,
     song::write,
     battle_messages::write,
+    battle_anim::write,
     bag::write,
     battlers::write,
 ];

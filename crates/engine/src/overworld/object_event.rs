@@ -41,17 +41,21 @@ pub fn visible_object_events<'a>(
         .filter(move |event| object_event_is_visible(event, event_data))
 }
 
-const SPAWN_MIN_X_OFFSET: i32 = -9;
-const SPAWN_MAX_X_OFFSET: i32 = 10;
-const SPAWN_MIN_Y_OFFSET: i32 = -7;
-const SPAWN_MAX_Y_OFFSET: i32 = 9;
+const SPAWN_MIN_X_OFFSET: i64 = -9;
+const SPAWN_MAX_X_OFFSET: i64 = 10;
+const SPAWN_MIN_Y_OFFSET: i64 = -7;
+const SPAWN_MAX_Y_OFFSET: i64 = 9;
 
 /// Returns whether an object lies in upstream `TrySpawnObjectEvents`'s asymmetric
 /// spawn window; admitted 32-pixel sprites reach the 256-pixel OAM wrap with no headroom.
+///
+/// Mirrors the window compare in `TrySpawnObjectEvents` (`event_object_movement.c:1645-1675`).
+/// The offsets are taken in `i64`, so every `i32` player position is a total query: positions far
+/// outside the window are simply out of view rather than an overflow.
 #[must_use]
 pub fn object_event_is_in_view(event: &ObjectEvent, player_position: (i32, i32)) -> bool {
-    let x_offset = i32::from(event.x) - player_position.0;
-    let y_offset = i32::from(event.y) - player_position.1;
+    let x_offset = i64::from(event.x) - i64::from(player_position.0);
+    let y_offset = i64::from(event.y) - i64::from(player_position.1);
     (SPAWN_MIN_X_OFFSET..=SPAWN_MAX_X_OFFSET).contains(&x_offset)
         && (SPAWN_MIN_Y_OFFSET..=SPAWN_MAX_Y_OFFSET).contains(&y_offset)
 }
@@ -78,6 +82,10 @@ pub fn visible_object_event_at<'a>(
 /// also a wildcard, matching `GetInFrontOfPlayerPosition` (`field_control_avatar.c:200-210`).
 /// Otherwise the query uses the retained previous elevation, as `PlayerGetElevation` returns
 /// `previousElevation` (`field_player_avatar.c:1192-1195`), not the collision elevation.
+///
+/// The front tile is the player tile plus the facing delta, as `GetInFrontOfPlayerPosition` computes it through
+/// `GetXYCoordsOneStepInFrontOfPlayer` (`field_player_avatar.c:1134`);
+/// a front tile outside `i32` cannot hold an object, so it yields `None` instead of overflowing.
 #[must_use]
 pub fn facing_object_event<'a>(
     player: &PlayerState,
@@ -86,7 +94,7 @@ pub fn facing_object_event<'a>(
 ) -> Option<&'a ObjectEvent> {
     let (px, py) = player.position();
     let (dx, dy) = player.facing().delta();
-    let (fx, fy) = (px + dx, py + dy);
+    let (fx, fy) = (px.checked_add(dx)?, py.checked_add(dy)?);
 
     let query_elevation = match runtime.metatile_cell(px, py) {
         Some(cell) if cell.elevation != ELEVATION_TRANSITION => player.previous_elevation(),
@@ -488,6 +496,37 @@ mod tests {
         let player = PlayerState::new((2, 2), 3, Direction::North);
         let found = facing_object_event(&player, &runtime, &data).unwrap();
         assert_eq!(found.local_id, 1);
+    }
+
+    #[test]
+    fn in_view_is_total_at_extreme_player_coordinates() {
+        let event = object(1, 0, 0, 3, "0");
+        for p in [i32::MIN, i32::MAX] {
+            assert!(!object_event_is_in_view(&event, (p, 0)));
+            assert!(!object_event_is_in_view(&event, (0, p)));
+            assert!(!object_event_is_in_view(&event, (p, p)));
+        }
+        assert!(object_event_is_in_view(&event, (0, 0)));
+    }
+
+    #[test]
+    fn facing_object_event_is_total_at_extreme_player_coordinates() {
+        let grid_bytes = flat_grid_bytes(5, 5);
+        let object_events: &'static [ObjectEvent] = Box::leak(Box::new([object(1, 2, 1, 3, "0")]));
+        let events = events_with(object_events);
+        let runtime = runtime_with_object(&grid_bytes, &events);
+        let data = EventData::new();
+        for (pos, facing) in [
+            ((i32::MAX, 0), Direction::East),
+            ((i32::MIN, 0), Direction::West),
+            ((0, i32::MAX), Direction::South),
+            ((0, i32::MIN), Direction::North),
+            ((i32::MAX, i32::MAX), Direction::East),
+            ((i32::MIN, i32::MIN), Direction::North),
+        ] {
+            let player = PlayerState::new(pos, 3, facing);
+            assert!(facing_object_event(&player, &runtime, &data).is_none());
+        }
     }
 
     #[test]
