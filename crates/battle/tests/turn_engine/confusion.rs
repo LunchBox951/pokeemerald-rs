@@ -368,9 +368,9 @@ const SWEET_KISS: MoveId = MoveId::SWEET_KISS;
 const PSYBEAM: MoveId = MoveId::PSYBEAM;
 const DYNAMIC_PUNCH: MoveId = MoveId::DYNAMIC_PUNCH;
 /// `SPECIES_DUNSPARCE`, Serene Grace.
-const DUNSPARCE: u16 = 206;
+const DUNSPARCE: SpeciesId = SpeciesId::DUNSPARCE;
 /// `SPECIES_SNORLAX`: slow and bulky enough to survive the punch.
-const SNORLAX: u16 = 143;
+const SNORLAX: SpeciesId = SpeciesId::SNORLAX;
 /// `SPECIES_SPINDA`: Own Tempo in its only ability slot.
 const SPINDA: SpeciesId = SpeciesId::SPINDA;
 
