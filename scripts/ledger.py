@@ -165,6 +165,10 @@ POKEEMERALD_RULES = [
     Rule("graphics.trainer",      "files", ["graphics/trainers/front_pics/*.png",
                                             "graphics/trainers/back_pics/*.png"],
          spec_owner="S-4"),
+    # Only the palettes of the pictures the pack publishes are tracked.
+    Rule("graphics.trainer",      "files", ["graphics/trainers/palettes/brendan.pal",
+                                            "graphics/trainers/palettes/may.pal"],
+         spec_owner="S-4"),
     Rule("graphics.object_event", "dirs",  ["graphics/object_events/pics/*"],
          spec_owner="S-4"),
     Rule("graphics.item",         "files", ["graphics/items/icons/*.png",

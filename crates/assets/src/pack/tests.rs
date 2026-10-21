@@ -12,3 +12,4 @@ mod pokedex;
 mod pokedex_graphics;
 mod real_pack;
 mod starter_chooser;
+mod trainer_pic;
