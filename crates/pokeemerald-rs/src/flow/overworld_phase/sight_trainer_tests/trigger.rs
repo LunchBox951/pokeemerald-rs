@@ -395,6 +395,9 @@ fn real_pack_rhetts_cone_reaches_the_player_over_real_terrain_and_draws_nothing(
 
     let mut phase = OverworldPhase::for_test_with_source(scene, ROUTE_103, player, None, source);
     phase.party_lead = Some(overwhelming_lead());
+    // Rhett's own party constructs now; Marcos's still refuses, so his id
+    // stands in at Rhett's real cone.
+    phase.synthetic_sight_trainer = Some(assets::trainers::TrainerId(TRAINER_MARCOS));
     let before = phase.rng.state();
 
     for frame in 0..FRAMES_STANDING_STILL {
