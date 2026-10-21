@@ -329,9 +329,19 @@ pub(super) fn write_scratch_exclusive(path: &std::path::Path, bytes: impl AsRef<
 
 /// Plants a symlink at `path` pointing at a fresh victim file holding a
 /// sentinel, runs `write`, and asserts the victim is untouched and the
-/// writer completed. Removes the planted entry and the victim afterwards.
+/// writer replaced the link with a regular file holding `expected`. `write`
+/// returns whatever guard keeps its file alive (a fixture whose `Drop`
+/// removes it, or the path itself); the guard is dropped only after the
+/// replacement is checked, so a writer that silently skips the write fails.
+/// The victim is claimed through [`write_scratch_exclusive`], so a link
+/// planted at its own predictable name is never followed either. Removes
+/// the planted entry and the victim afterwards.
 #[cfg(unix)]
-pub(super) fn assert_planted_symlink_untouched(path: &std::path::Path, write: impl FnOnce()) {
+pub(super) fn assert_planted_symlink_untouched<G>(
+    path: &std::path::Path,
+    expected: &[u8],
+    write: impl FnOnce() -> G,
+) {
     let victim = std::env::temp_dir().join(format!(
         "pokeemerald-rs-symlink-victim-{}-{:?}-{}",
         std::process::id(),
@@ -339,11 +349,14 @@ pub(super) fn assert_planted_symlink_untouched(path: &std::path::Path, write: im
         path.file_name().unwrap().to_string_lossy()
     ));
     let sentinel = b"victim must survive";
-    let _ = std::fs::remove_file(&victim);
-    std::fs::write(&victim, sentinel).unwrap();
+    write_scratch_exclusive(&victim, sentinel);
     let _ = std::fs::remove_file(path);
     std::os::unix::fs::symlink(&victim, path).unwrap();
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(write));
+    let replaced = std::fs::symlink_metadata(path).map(|m| m.file_type().is_file());
+    let written = std::fs::read(path);
+    let completed = outcome.is_ok();
+    drop(outcome);
     let after = std::fs::read(&victim).unwrap();
     let _ = std::fs::remove_file(path);
     let _ = std::fs::remove_file(&victim);
@@ -352,8 +365,17 @@ pub(super) fn assert_planted_symlink_untouched(path: &std::path::Path, write: im
         "a planted symlink's target was overwritten"
     );
     assert!(
-        outcome.is_ok(),
+        completed,
         "the writer must replace a planted symlink, not panic on it"
+    );
+    assert!(
+        matches!(replaced, Ok(true)),
+        "the writer must leave a regular file where the symlink was, got {replaced:?}"
+    );
+    assert_eq!(
+        written.ok().as_deref(),
+        Some(expected),
+        "the writer must write its bytes to the replaced path"
     );
 }
 
@@ -382,9 +404,11 @@ fn write_empty_scratch_pack(label: &str) -> std::path::PathBuf {
 #[test]
 fn the_empty_scratch_pack_writer_refuses_a_planted_symlink() {
     let label = "symlink-regression";
-    assert_planted_symlink_untouched(&scratch_pack_path(label), || {
-        let path = write_empty_scratch_pack(label);
-        drop(std::fs::remove_file(path));
+    let expected = pack_format::PackWriter::new()
+        .finish()
+        .expect("an entryless pack always serializes");
+    assert_planted_symlink_untouched(&scratch_pack_path(label), &expected, || {
+        write_empty_scratch_pack(label)
     });
 }
 

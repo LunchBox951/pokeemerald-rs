@@ -295,18 +295,24 @@ fn field_start_menu_scratch_path() -> std::path::PathBuf {
 #[test]
 fn the_temp_pack_refuses_a_planted_symlink() {
     let label = "symlink-regression";
-    super::tests::assert_planted_symlink_untouched(&TempPack::scratch_path(label), || {
-        drop(TempPack::new(label));
-    });
+    super::tests::assert_planted_symlink_untouched(
+        &TempPack::scratch_path(label),
+        &synthetic_two_frame_pack_bytes(),
+        || TempPack::new(label),
+    );
 }
 
 #[cfg(unix)]
 #[test]
 fn the_field_start_menu_frame_pack_refuses_a_planted_symlink() {
-    super::tests::assert_planted_symlink_untouched(&field_start_menu_scratch_path(), || {
-        write_scratch_exclusive(
-            &field_start_menu_scratch_path(),
-            field_start_menu_two_frame_pack_bytes(),
-        );
-    });
+    super::tests::assert_planted_symlink_untouched(
+        &field_start_menu_scratch_path(),
+        &field_start_menu_two_frame_pack_bytes(),
+        || {
+            write_scratch_exclusive(
+                &field_start_menu_scratch_path(),
+                field_start_menu_two_frame_pack_bytes(),
+            );
+        },
+    );
 }

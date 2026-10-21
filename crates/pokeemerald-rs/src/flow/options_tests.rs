@@ -456,7 +456,9 @@ fn every_handoff_scene_reports_the_save_it_carries() {
 #[test]
 fn the_options_fixture_refuses_a_planted_symlink() {
     let label = "symlink-regression";
-    super::tests::assert_planted_symlink_untouched(&Fixture::pack_path(label), || {
-        drop(Fixture::new(label));
-    });
+    super::tests::assert_planted_symlink_untouched(
+        &Fixture::pack_path(label),
+        &synthetic_options_pack_bytes(),
+        || Fixture::new(label),
+    );
 }
