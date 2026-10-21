@@ -123,8 +123,11 @@ pub(super) fn read_head<R: BufRead>(
             Err(err) => return (lines, false, Some(err)),
         }
         if !line.ends_with(b"\n") && line.len() as u64 == MAX_STATUS_LINE {
-            // Skip the rest of an over-long line.
-            let _ = discard_line(reader);
+            // Skip the rest of an over-long line; a failure there is a read
+            // error like any other, or its remainder would parse as new lines.
+            if let Err(err) = discard_line(reader) {
+                return (lines, false, Some(err));
+            }
         }
         if lines.len() == limit {
             return (lines, true, None);

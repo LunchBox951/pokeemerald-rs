@@ -690,3 +690,56 @@ fn overlong_status_line_is_discarded_through_a_bounded_buffer() {
         "discarding allocated {largest} bytes at once"
     );
 }
+
+#[test]
+fn read_head_reports_a_read_error_while_discarding_an_overlong_line() {
+    struct Flaky {
+        stage: u8,
+        tail: &'static [u8],
+        buf: Vec<u8>,
+    }
+    impl std::io::Read for Flaky {
+        fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+            unreachable!("read_head reads through fill_buf")
+        }
+    }
+    impl std::io::BufRead for Flaky {
+        fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
+            match self.stage {
+                0 => Ok(&self.buf),
+                1 => {
+                    self.stage = 2;
+                    Err(std::io::Error::other("transient"))
+                }
+                _ => Ok(self.tail),
+            }
+        }
+        fn consume(&mut self, n: usize) {
+            if self.stage == 0 {
+                self.buf.drain(..n);
+                if self.buf.is_empty() {
+                    self.stage = 1;
+                }
+            } else {
+                self.tail = &self.tail[n..];
+            }
+        }
+    }
+
+    let mut reader = Flaky {
+        stage: 0,
+        tail: b"tail\n",
+        buf: vec![b'a'; 8192],
+    };
+    let (lines, more, error) = checkout::read_head(&mut reader, 8);
+    assert!(
+        error.is_some(),
+        "a discard failure must surface as a read error; lines = {:?}",
+        lines.iter().map(String::len).collect::<Vec<_>>()
+    );
+    assert!(!more, "a failed read reports nothing beyond it");
+    assert!(
+        lines.iter().all(|l| l != "tail"),
+        "the overlong line's remainder must not parse as a new line"
+    );
+}
