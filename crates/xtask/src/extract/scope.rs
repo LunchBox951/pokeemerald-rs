@@ -263,6 +263,12 @@ pub(crate) const TITLE_SCREEN_FILE_PALETTES: [&str; 3] =
 // `graphics_file_rules.mk` builds `pokemon_logo.gbapal` with this limit.
 pub(crate) const TITLE_SCREEN_PALETTE_CUTS: [(&str, usize); 1] = [("pokemon_logo", 224)];
 
+/// The pack id of the main-menu background palette.
+pub(crate) const MAIN_MENU_BG_PALETTE_ID: &str = "interface/palette/main_menu_bg";
+
+/// Every interface palette pack id extraction writes and the generator requires.
+pub(crate) const INTERFACE_PALETTE_IDS: [&str; 1] = [MAIN_MENU_BG_PALETTE_ID];
+
 /// Every title pack id the generator requires, in manifest order.
 pub(crate) fn title_ids() -> Vec<String> {
     let images = TITLE_SCREEN_IMAGES.map(|s| format!("title/image/{s}"));

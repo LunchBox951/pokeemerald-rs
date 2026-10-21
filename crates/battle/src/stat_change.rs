@@ -63,19 +63,19 @@ const EFFECT_SPEED_DOWN_TWO: MoveEffect = MoveEffect(60);
 const EFFECT_SPECIAL_DEFENSE_DOWN_TWO: MoveEffect = MoveEffect(62);
 
 /// The Clear Body ability ID.
-pub const CLEAR_BODY: AbilityId = AbilityId(29);
+pub const CLEAR_BODY: AbilityId = AbilityId::CLEAR_BODY;
 
 /// The White Smoke ability ID.
-pub const WHITE_SMOKE: AbilityId = AbilityId(73);
+pub const WHITE_SMOKE: AbilityId = AbilityId::WHITE_SMOKE;
 
 /// The Keen Eye ability ID.
-pub const KEEN_EYE: AbilityId = AbilityId(51);
+pub const KEEN_EYE: AbilityId = AbilityId::KEEN_EYE;
 
 /// The Hyper Cutter ability ID.
-pub const HYPER_CUTTER: AbilityId = AbilityId(52);
+pub const HYPER_CUTTER: AbilityId = AbilityId::HYPER_CUTTER;
 
 /// The Soundproof ability ID.
-pub const SOUNDPROOF: AbilityId = AbilityId(43);
+pub const SOUNDPROOF: AbilityId = AbilityId::SOUNDPROOF;
 
 /// Emerald's sound-based moves, in the order of `sSoundMovesTable`
 /// (`src/battle_util.c:686-692`). Soundproof blocks every entry, whatever the

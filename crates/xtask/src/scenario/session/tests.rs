@@ -498,6 +498,220 @@ fn cleanup_refuses_to_unlink_a_file_swapped_in_after_the_listing() {
     assert_eq!(kept.unwrap(), b"keep me");
 }
 
+/// Root bypasses mode bits, so the unreadable-directory cases cannot occur.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn running_as_root() -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    std::fs::metadata("/proc/self").is_ok_and(|meta| meta.uid() == 0)
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[test]
+fn cleanup_recovers_engine_created_unreadable_directories() {
+    use std::os::unix::fs::PermissionsExt as _;
+    if running_as_root() {
+        eprintln!("skipped: root ignores directory modes, so 0333 stays readable");
+        return;
+    }
+    let base = private_base("cleanup-unreadable");
+    let root = base.join("root");
+    let deep = root.join("save").join("deep");
+    std::fs::create_dir_all(&deep).unwrap();
+    std::fs::write(deep.join("x.sav"), b"x").unwrap();
+    std::fs::write(root.join("save").join("a.sav"), b"a").unwrap();
+    let set = |path: &Path, mode| {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    };
+    set(&root.join("save").join("a.sav"), 0o222);
+    set(&deep, 0o333);
+    set(&root.join("save"), 0o333);
+    let result = remove_contents(&std::fs::File::open(&root).unwrap(), &mut |_| {});
+    let left = std::fs::read_dir(&root).map(Iterator::count);
+    let _ = std::fs::remove_dir_all(&base);
+    result.unwrap();
+    assert_eq!(left.unwrap(), 0, "the unreadable tree is fully removed");
+}
+
+/// Set in the child [`dropping_a_session_removes_save_media_created_under_an_owner_stripping_umask`]
+/// re-runs itself as, so only that child changes its own umask.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+const SAVE_UMASK_CHILD: &str = "POKEEMERALD_SCENARIO_SAVE_UMASK_CHILD";
+
+/// The engine creates `save/` and its save file by pathname under the
+/// process umask (`App::new_headless_real_at` through `SaveSlot::at_path`),
+/// so under 0o444 they are 0o333 and 0o222. `create_dir_all` and `write`
+/// under that same umask create the same media without a real pack; dropping
+/// the session must then remove the whole scratch tree.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[test]
+fn dropping_a_session_removes_save_media_created_under_an_owner_stripping_umask() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let name = "scenario::session::tests::\
+                dropping_a_session_removes_save_media_created_under_an_owner_stripping_umask";
+    if std::env::var_os(SAVE_UMASK_CHILD).is_none() {
+        if running_as_root() {
+            eprintln!("skipped: root ignores directory modes, so 0333 stays readable");
+            return;
+        }
+        // The umask is process-wide, so the 0o444 one is set only in a
+        // re-run of this test binary that runs this test alone.
+        let output = std::process::Command::new("/bin/sh")
+            .args(["-c", "umask 0444 && exec \"$0\" \"$@\""])
+            .arg(std::env::current_exe().unwrap())
+            .args(["--exact", name, "--test-threads=1"])
+            .env(SAVE_UMASK_CHILD, "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains("1 passed"),
+            "umask 0444 child failed:\n{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let base = private_base("save-umask");
+    let source = base.join("source.pack");
+    std::fs::write(&source, b"not a real pack").unwrap();
+    std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let session = Session::new_in(&PackSelection::Prepared(source), &base).unwrap();
+    let scratch = session.scratch.path.clone();
+    let save_dir = session.save.parent().unwrap().to_path_buf();
+    std::fs::create_dir_all(save_dir.join("deep")).unwrap();
+    std::fs::write(save_dir.join("deep").join("x.sav"), b"x").unwrap();
+    std::fs::write(&session.save, b"save").unwrap();
+    let mode = |path: &Path| {
+        std::fs::symlink_metadata(path)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o7777
+    };
+    let modes = (
+        mode(&save_dir),
+        mode(&save_dir.join("deep")),
+        mode(&session.save),
+    );
+    drop(session);
+    let removed = !scratch.exists();
+    // Leave nothing behind even if cleanup failed: give the owner access back
+    // to every directory the umask stripped before removing the base.
+    for dir in [
+        base.clone(),
+        scratch.clone(),
+        save_dir.clone(),
+        save_dir.join("deep"),
+    ] {
+        let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+    }
+    std::fs::remove_dir_all(&base).unwrap();
+    assert_eq!(
+        modes,
+        (0o333, 0o333, 0o222),
+        "the umask stripped owner read"
+    );
+    assert!(
+        removed,
+        "dropping the session removes the whole scratch tree"
+    );
+}
+
+/// The recovered descriptor is opened through the pin that was verified and
+/// chmod-ed, not by re-resolving the name: a different directory installed at
+/// the name between the chmod and the reopen is never the one returned, and
+/// its mode is left alone. Runs as root too: it calls the recovery directly.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[test]
+fn recovered_unreadable_directory_is_read_through_the_verified_pin() {
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+    let base = private_base("cleanup-unreadable-pin");
+    let root = base.join("root");
+    std::fs::create_dir_all(root.join("listed").join("inner")).unwrap();
+    std::fs::set_permissions(root.join("listed"), std::fs::Permissions::from_mode(0o333)).unwrap();
+    let listed = std::fs::symlink_metadata(root.join("listed")).unwrap();
+    let parent = std::fs::File::open(&root).unwrap();
+    let readable =
+        restore_owner_access_with(&parent, c"listed", listed.dev(), listed.ino(), || {
+            // The window the fix closes: the chmod-ed inode moves away and a
+            // different directory takes its name before the reopen.
+            std::fs::rename(root.join("listed"), root.join("moved")).unwrap();
+            std::fs::create_dir(root.join("listed")).unwrap();
+            std::fs::set_permissions(root.join("listed"), std::fs::Permissions::from_mode(0o555))
+                .unwrap();
+        });
+    let mode = |name: &str| {
+        std::fs::symlink_metadata(root.join(name))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o7777
+    };
+    let (moved_mode, replacement_mode) = (mode("moved"), mode("listed"));
+    let replacement = std::fs::symlink_metadata(root.join("listed")).unwrap();
+    for name in ["moved", "listed"] {
+        let _ = std::fs::set_permissions(root.join(name), std::fs::Permissions::from_mode(0o700));
+    }
+    let _ = std::fs::remove_dir_all(&base);
+    let readable = std::fs::File::from(readable.unwrap());
+    let found = readable.metadata().unwrap();
+    assert_ne!(
+        (replacement.dev(), replacement.ino()),
+        (listed.dev(), listed.ino()),
+        "setup: the replacement is a different inode"
+    );
+    assert_eq!(
+        (found.dev(), found.ino()),
+        (listed.dev(), listed.ino()),
+        "the readable descriptor is the pinned, listed inode, not the replacement"
+    );
+    assert_eq!(
+        moved_mode, 0o700,
+        "owner access was restored on the listed inode"
+    );
+    assert_eq!(
+        replacement_mode, 0o555,
+        "the replacement at the name is never chmod-ed"
+    );
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[test]
+fn cleanup_never_chmods_an_unreadable_directory_swapped_in_after_the_listing() {
+    use std::os::unix::fs::PermissionsExt as _;
+    if running_as_root() {
+        eprintln!("skipped: root ignores directory modes, so 0333 stays readable");
+        return;
+    }
+    let base = private_base("cleanup-unreadable-swap");
+    let root = base.join("root");
+    std::fs::create_dir_all(root.join("listed")).unwrap();
+    std::fs::set_permissions(root.join("listed"), std::fs::Permissions::from_mode(0o333)).unwrap();
+    let elsewhere = base.join("elsewhere");
+    std::fs::create_dir(&elsewhere).unwrap();
+    std::fs::set_permissions(&elsewhere, std::fs::Permissions::from_mode(0o333)).unwrap();
+    let result = remove_contents(&std::fs::File::open(&root).unwrap(), &mut |name| {
+        if name.to_bytes() == b"listed" {
+            std::fs::rename(root.join("listed"), base.join("aside")).unwrap();
+            std::fs::rename(&elsewhere, root.join("listed")).unwrap();
+        }
+    });
+    let mode = std::fs::metadata(root.join("listed"))
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o7777;
+    for dir in [root.join("listed"), base.join("aside")] {
+        let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+    }
+    let _ = std::fs::remove_dir_all(&base);
+    let error = result.expect_err("a swapped-in directory must not be recovered");
+    assert!(
+        error.to_string().contains("replaced during cleanup"),
+        "{error}"
+    );
+    assert_eq!(mode, 0o333, "a foreign directory is never chmod-ed");
+}
+
 #[cfg(windows)]
 #[test]
 fn windows_cleanup_empties_the_held_scratch_and_leaves_a_sibling_untouched() {
