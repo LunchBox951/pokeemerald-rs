@@ -1,42 +1,18 @@
 //! Per-frame CGB PSG envelope and stereo-panning state.
 //!
-//! The native mixer models the hardware's coarse 16-level envelope with
-//! whole-frame step counters rather than the hardware's 1/64s envelope clock
-//! `(no-verbatim)` — the same deliberate, benign simplification
-//! [`crate::psg::Sweep`] documents, since it has no GB APU envelope clock to
-//! delegate to. [`CgbEnvelope::step`] is one such software iteration; it does
-//! not always land one-for-one with a render frame — see
-//! [`CgbEnvelopeCadence`].
+//! The envelope steps in whole frames rather than on the hardware's 1/64 s
+//! clock `(no-verbatim)`, as [`crate::psg::Sweep`] does for its clock.
 
-/// Mirrors upstream's shared `soundInfo->c15` counter (`m4a.c:941`..`:945`),
-/// which paces a once-per-15-frames correction: one [`CgbEnvelope::step`] per
-/// render frame alone runs at ~59.73 Hz, visibly slower than
-/// hardware's true 1/64s (~63.71 Hz) envelope rate, so every 15th frame runs
-/// a second iteration to keep up (`m4a.c:1173`..`:1180`, "every 15 frames,
-/// envelope calculation has to be done twice to keep up with the hardware
-/// envelope rate"). `14` single-iteration frames plus `1` double-iteration
-/// frame gives 16 iterations per 15 frames, matching hardware's cadence over
-/// that span.
-///
-/// One cadence is shared by all four CGB channels, driven from a single
-/// per-render-frame call — upstream updates `soundInfo->c15` once per
-/// `CgbSound` call, before its per-channel loop, and every channel reads the
-/// same resulting value as `prevC15` (`m4a.c:941`..`:985`). Callers must
-/// therefore own exactly one instance across the whole CGB channel set (see
-/// [`crate::mixer::Mixer`]'s `cgb_envelope_cadence` field), not one per
-/// voice — a per-voice clock would desync the correction frame between
-/// channels started at different times, which [`CgbEnvelope::step_frame`]'s
-/// contract does not allow for.
+/// Shared `soundInfo->c15` counter (`m4a.c:941-945`): every 15th render frame
+/// runs a second envelope iteration to keep up with the hardware envelope rate
+/// (`m4a.c:1173-1180`). One instance serves all four CGB channels.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct CgbEnvelopeCadence {
-    /// Upstream's `soundInfo->c15`, `0..=14`.
     c15: u8,
 }
 
 impl CgbEnvelopeCadence {
-    /// Advance by one render frame, returning whether this frame gets the
-    /// extra iteration (`Self`'s doc). `m4a.c:941`..`:945`, `:984`,
-    /// `:1177`..`:1180`.
+    /// Advance one render frame, returning whether it gets the extra iteration.
     pub(crate) fn advance_frame(&mut self) -> bool {
         if self.c15 != 0 {
             self.c15 -= 1;
@@ -54,8 +30,7 @@ pub(crate) use hardware::{HardwareEnvelopePacing, HardwareEnvelopeVolume};
 
 const CGB_ENVELOPE_LEVELS: u32 = 16;
 const CGB_ENVELOPE_LEVEL_MAX: u8 = 15;
-/// NRx2 bits 4-7 hold the volume; `envelopeVolume << 4` keeps its low
-/// nibble only (`m4a.c:1222`).
+/// Only the low nibble of the envelope volume reaches NRx2's high nibble (`m4a.c:1222`).
 const NRX2_VOLUME_NIBBLE_MASK: u8 = 0x0F;
 const PSEUDO_ECHO_SCALE: u32 = 256;
 const SUSTAIN_REFRESH_FRAMES: u8 = 7;
@@ -89,7 +64,6 @@ impl CgbAdsr {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Phase {
-    /// Awaiting its first `CgbSound` pass; not yet running the attack.
     Starting,
     Attack,
     Decay,
@@ -120,9 +94,7 @@ fn sustain_goal_of(goal: u8, sustain: u8) -> u8 {
 }
 
 fn transition_frame_delay(period: u8) -> u16 {
-    // CgbSound renders the note-on or note-off frame before decrementing its
-    // counter (m4a.c:1031..1035, 1063..1067, 1176). This state machine checks
-    // before rendering, so one extra frame preserves that cadence.
+    // `m4a.c:1031-1035,1063-1067,1176`: upstream decrements after rendering.
     u16::from(period) + 1
 }
 
@@ -163,10 +135,8 @@ impl CgbEnvelope {
         self.note_off_requested
     }
 
-    /// Return whether `ply_endtie` may select this envelope's channel: not
-    /// merely non-stopping, since an automatic pseudo-echo tail also fails
-    /// upstream's `START | ENV` match test (`m4a_1.s:1835`..`:1848`,
-    /// `m4a.c:1090`..`:1129`).
+    /// Return whether `ply_endtie` may select this envelope's channel; a
+    /// pseudo-echo tail fails upstream's `START | ENV` test (`m4a_1.s:1835-1848`).
     #[must_use]
     pub(crate) fn is_end_tie_eligible(&self) -> bool {
         !self.note_off_requested
@@ -176,25 +146,17 @@ impl CgbEnvelope {
             )
     }
 
-    /// The pacing this phase's NRx2 store programs, decoded by
-    /// [`HardwareEnvelopePacing`]; `None` where the phase stores a bare
-    /// direction bit and no step time, leaving hardware dead at its last
-    /// level (sustain-start `m4a.c:1132-1137`, pseudo-echo-start
-    /// `:1090-1098`, and the refreshes that store nothing at all).
-    /// The software envelope keeps its own pace off the raw phase byte, as
-    /// upstream's `envelopeCounter` does (`m4a.c:1031`, `:1063`, `:1152`).
+    /// The pacing this phase's NRx2 store programs; `None` where the store
+    /// holds no step time (`m4a.c:1090-1098,1132-1137`).
     #[must_use]
     pub(crate) fn hardware_envelope_pacing(&self) -> Option<HardwareEnvelopePacing> {
         self.nrx2_step_time_and_dir()
             .and_then(HardwareEnvelopePacing::from_nrx2_step_time_and_dir)
     }
 
-    /// Whether this phase's NRx2 store leaves channel 4's DAC on, so its
-    /// LFSR keeps clocking: the stored byte's volume nibble or direction bit
-    /// is set, whatever its step time (`_writeEnvelope`/`_resetEnvelope`,
-    /// `mgba/src/gb/audio.c:346-352,856-860,890-913`). The byte is
-    /// `(field & 0xF) + (envelopeVolume << 4)` (`m4a.c:1222`), so a volume of
-    /// 16 wraps to a zero nibble.
+    /// Whether this phase's NRx2 store leaves channel 4's DAC on
+    /// (`mgba/src/gb/audio.c:346-352,856-860,890-913`). A volume of 16 wraps to
+    /// a zero nibble (`m4a.c:1222`).
     #[must_use]
     pub(crate) fn hardware_dac_enabled(&self) -> bool {
         let direction_up = self
@@ -203,15 +165,8 @@ impl CgbEnvelope {
         self.volume & NRX2_VOLUME_NIBBLE_MASK != 0 || direction_up
     }
 
-    /// The step-time-and-direction field this phase last stored to NRx2,
-    /// unmasked: `channels->attack + CGB_NRx2_ENV_DIR_INC` (`m4a.c:1024`,
-    /// which note-on stores too, `:993`), `channels->decay |
-    /// CGB_NRx2_ENV_DIR_DEC` (`:1158`) and `channels->release |
-    /// CGB_NRx2_ENV_DIR_DEC` (`:1068`), whose direction constant is zero
-    /// (`m4a_internal.h:84`), or the bare `CGB_NRx2_ENV_DIR_INC` of
-    /// sustain-start (`:1136`) and pseudo-echo-start (`:1097`), which later
-    /// volume-only stores read back (`:985`). Only the low nibble reaches
-    /// NRx2, so wrapping at a byte discards nothing the mask would keep.
+    /// The unmasked step-time-and-direction field the phase last stored to NRx2
+    /// (`m4a.c:985,993,1024,1068,1097,1136,1158`; `m4a_internal.h:84`).
     fn nrx2_step_time_and_dir(&self) -> Option<u8> {
         match self.phase {
             Phase::Attack => Some(self.adsr.attack.wrapping_add(NRX2_ENV_DIR_INC)),
@@ -222,12 +177,11 @@ impl CgbEnvelope {
         }
     }
 
-    /// Enter the release phase, reporting whether release itself is the
-    /// retrigger-worthy volume write, once only (`m4a.c:1060-1069,1062`).
-    /// Only a live phase releases: a note stopped before its first `step`
-    /// records the request and retires on that pass instead
-    /// (`m4a.c:988..1046`, `:1053..1057`), and one already past sustain has
-    /// no release write left to report.
+    /// Enter release, reporting whether release is itself the retrigger-worthy
+    /// volume write (`m4a.c:1060-1069`).
+    ///
+    /// A note stopped before its first `step` retires on that pass instead
+    /// (`m4a.c:988-1046,1053-1057`).
     pub fn note_off(&mut self) -> bool {
         let live = matches!(self.phase, Phase::Attack | Phase::Decay | Phase::Sustain);
         self.note_off_requested = true;
@@ -244,35 +198,25 @@ impl CgbEnvelope {
         self.phase = Phase::Retired;
     }
 
-    /// Latch a boundary's freshly recomputed goal, matching `CgbModVol`
-    /// setting `chan->envelopeGoal`/`sustainGoal` (`m4a.c:903-923`). Callers
-    /// invoke this only where upstream actually calls `CgbModVol` — see
-    /// [`Self::step_with_goal`].
+    /// Latch a boundary's recomputed goal as `CgbModVol` does (`m4a.c:903-923`).
     fn latch_goal(&mut self, goal: u8) {
         self.goal = goal;
         self.sustain_goal = sustain_goal_of(goal, self.adsr.sustain);
     }
 
-    /// Advance the envelope by one software iteration, with no live goal to
-    /// fold in (`self.goal` stands in for it). A render frame is one or two
-    /// iterations, so production rendering drives the envelope through
-    /// `step_frame` rather than calling this directly (module docs).
-    ///
-    /// Returns `(transitioned, boundary)` ([`Self::step_with_goal`]'s doc).
+    /// Advance one software iteration against the current goal, returning
+    /// `(transitioned, boundary)`.
     pub fn step(&mut self) -> (bool, bool) {
         self.step_with_goal(self.goal)
     }
 
-    /// Advance one software iteration, latching `live_goal` only where
-    /// upstream's `CgbModVol` actually runs -- note-on and every
-    /// `envelopeCounter == 0` boundary except the zero-release shortcut,
-    /// which bypasses it (`m4a.c:903-923`, `:994`, `:1060-1074`, `:1084`).
+    /// Advance one software iteration, latching `live_goal` where `CgbModVol`
+    /// runs: note-on and each `envelopeCounter == 0` boundary except the
+    /// zero-release shortcut (`m4a.c:903-923,994,1060-1074,1084`).
     ///
-    /// Returns `(transitioned, boundary)`: whether this iteration crossed a
-    /// retrigger-worthy `CGB_CHANNEL_MO_VOL` transition (`m4a.c:1090-1158`;
-    /// see [`crate::cgb_voice::Oscillator::retrigger`]), and whether it ran
-    /// the `envelopeCounter == 0` `CgbModVol` recompute at all -- true even
-    /// for a bare refresh that reports no transition (`m4a.c:1077-1085`).
+    /// Returns whether a `CGB_CHANNEL_MO_VOL` transition occurred
+    /// (`m4a.c:1090-1158`) and whether the `CgbModVol` recompute ran
+    /// (`m4a.c:1077-1085`).
     fn step_with_goal(&mut self, live_goal: u8) -> (bool, bool) {
         match self.phase {
             Phase::Starting => (self.start(live_goal), true),
@@ -291,25 +235,11 @@ impl CgbEnvelope {
         }
     }
 
-    /// Advance by one render frame, honoring [`CgbEnvelopeCadence`]'s extra
-    /// iteration (`envelope_step_complete`'s `prevC15 == 0` re-entry into
-    /// `envelope_step_repeat`, `m4a.c:1176`..`:1180`). Both iterations of a
-    /// doubled frame share one `live_goal` ([`Self::step_with_goal`]'s doc),
-    /// matching upstream reading the same `chan->rightVolume`/`leftVolume`
-    /// across one `CgbSound` call.
+    /// Advance one render frame, running the cadence's extra iteration with the
+    /// same `live_goal`, and return `(transitioned, boundary)` OR'd across both.
     ///
-    /// Skipped whenever the first iteration this call already entered the
-    /// pseudo-echo tail or retired the voice: those transitions, and an
-    /// already-ongoing tail, all reach upstream via a `goto` that jumps past
-    /// `envelope_step_complete`'s doubling check entirely
-    /// (`m4a.c:1048`..`:1059`, `:1087`..`:1103`, `:1125`..`:1129`). Every
-    /// other transition — note-on/note-off held frames included — falls
-    /// through to that check normally and can be doubled.
-    ///
-    /// Returns `(transitioned, boundary)` OR'd across both iterations:
-    /// upstream applies at most one hardware write per `CgbSound` iteration
-    /// (`m4a.c:1206-1226`), but `chan->pan` still recomputes on either
-    /// (`step_with_goal`'s doc).
+    /// The extra iteration is skipped once the first entered the pseudo-echo tail
+    /// or retired the voice (`m4a.c:1048-1059,1087-1103,1125-1129`).
     pub(crate) fn step_frame(&mut self, extra_iteration: bool, live_goal: u8) -> (bool, bool) {
         let (transitioned, boundary) = self.step_with_goal(live_goal);
         if extra_iteration && !matches!(self.phase, Phase::PseudoEcho | Phase::Retired) {
@@ -319,28 +249,17 @@ impl CgbEnvelope {
         (transitioned, boundary)
     }
 
-    /// Decrement this phase's frame counter and report whether it just reached
-    /// zero — the frame a paced step fires. The counter is *armed on entry* to
-    /// the phase ([`Self::new`], [`Self::enter_decay`], [`Self::note_off`]) and
-    /// reloaded by the caller only while the phase continues, the same
-    /// decrement-first `frames_until_step -= 1; fire at 0` shape
-    /// [`Self::sustain_step`] uses. Upstream decrements `envelopeCounter` once
-    /// per frame at `envelope_step_complete` (`m4a.c:1176`) and fires the next
-    /// frame whose `envelope_step_repeat` sees it at zero (`m4a.c:1080`). Only
-    /// ever called with a non-zero armed counter; zero-period phases
-    /// transition instantly and never reach here (see [`Self::step_with_goal`]).
+    /// Decrement the frame counter, returning whether it reached zero.
+    ///
+    /// Upstream decrements at `m4a.c:1176` and fires at `m4a.c:1080`.
     fn paced_step_is_due(&mut self) -> bool {
         self.frames_until_step -= 1;
         self.frames_until_step == 0
     }
 
-    /// Apply this note's first `CgbSound` pass: retire at once if it was
-    /// already stopped, else latch `live_goal` and begin its attack
-    /// (`Self::note_off`'s doc). `CgbModVol` runs unconditionally here,
-    /// before upstream even reads the attack period (`m4a.c:988-995`); a
-    /// stopped note never reaches it, so it must not latch either. Reports
-    /// the attack's own volume write; silencing a stopped note is not one
-    /// (see [`Self::enter_pseudo_echo_or_silence`]).
+    /// Apply the note's first pass: retire a stopped note, else latch
+    /// `live_goal` and begin the attack (`m4a.c:988-995`). Returns the attack's
+    /// own volume write.
     fn start(&mut self, live_goal: u8) -> bool {
         if self.note_off_requested {
             self.silence();
@@ -371,8 +290,7 @@ impl CgbEnvelope {
         (transitioned, true)
     }
 
-    /// Enter decay, reporting whether this is the attack-to-decay
-    /// volume write (`m4a.c:1140-1158`).
+    /// Enter decay, reporting the attack-to-decay volume write (`m4a.c:1140-1158`).
     fn enter_decay(&mut self) -> bool {
         if self.adsr.decay == 0 {
             return self.enter_sustain_start();
@@ -400,8 +318,7 @@ impl CgbEnvelope {
         (transitioned, true)
     }
 
-    /// Enter sustain, reporting whether this is the decay-to-sustain
-    /// volume write (`m4a.c:1126-1137`).
+    /// Enter sustain, reporting the decay-to-sustain volume write (`m4a.c:1126-1137`).
     fn enter_sustain_start(&mut self) -> bool {
         if self.adsr.sustain == 0 {
             return self.enter_pseudo_echo_or_silence();
@@ -412,9 +329,7 @@ impl CgbEnvelope {
         true
     }
 
-    /// Reports whether the refresh was due, i.e. an `envelopeCounter == 0`
-    /// `CgbModVol` boundary (`step_with_goal`'s doc), not just whether
-    /// `volume` moved.
+    /// Reports whether the refresh was due, even when `volume` did not move.
     fn sustain_step(&mut self, live_goal: u8) -> bool {
         if self.paced_step_is_due() {
             self.latch_goal(live_goal);
@@ -443,12 +358,11 @@ impl CgbEnvelope {
         (transitioned, true)
     }
 
-    /// Enter the pseudo-echo tail, or silence outright when its floor is
-    /// zero, reporting whether entering the tail is the pseudo-echo-start
-    /// volume write (`m4a.c:1090-1103`; see [`crate::cgb_voice::Oscillator::retrigger`]
-    /// for why silence is not). Reads `self.goal` as last latched at a real
-    /// boundary: the zero-release arm reaches here before `step_with_goal`
-    /// could ever fold `live_goal` in (`m4a.c:1060-1074`, `:1084`, `:1090-1092`).
+    /// Enter the pseudo-echo tail, or silence when its floor is zero, returning
+    /// whether the tail's start is a volume write (`m4a.c:1090-1103`).
+    ///
+    /// Reads the goal last latched at a boundary: the zero-release arm reaches
+    /// here before any live goal folds in (`m4a.c:1060-1074,1084,1090-1092`).
     fn enter_pseudo_echo_or_silence(&mut self) -> bool {
         let floor = cgb_echo_floor(self.goal, self.echo_volume);
         if floor == 0 {
@@ -463,8 +377,7 @@ impl CgbEnvelope {
 
     fn pseudo_echo_step(&mut self) {
         self.echo_length = self.echo_length.wrapping_sub(1);
-        // CgbSound tests the decremented xIECL counter as an i8
-        // (m4a.c:1050..1051), so values with the high bit set are exhausted.
+        // `m4a.c:1050-1051` tests the counter as an i8.
         if i8::from_ne_bytes([self.echo_length]) <= 0 {
             self.phase = Phase::Retired;
         }
@@ -585,8 +498,6 @@ mod tests {
         assert_eq!(step_volumes::<5>(&mut env), [0, 0, 1, 1, 2]);
     }
 
-    /// An attack of 255 reaches its first `CgbModVol` boundary on iteration
-    /// 256, one past note-on's counter load (`m4a.c:1035`, `:1176`).
     #[test]
     fn a_maximal_attack_period_latches_on_upstreams_boundary_iteration() {
         let mut env = plain_envelope(adsr(u8::MAX, 0, 15, 0), 15);
@@ -625,9 +536,6 @@ mod tests {
 
     #[test]
     fn sustain_re_snaps_live_goal_within_seven_frames() {
-        // A live write only changes `live_goal`'s input; it is folded into
-        // `self.goal` only at the next real boundary (`step_with_goal`'s
-        // doc) -- here, the sustain refresh 7 frames later.
         let adsr = adsr(0, 0, 8, 0);
         let mut env = plain_envelope(adsr, 10);
         env.step();
@@ -642,10 +550,6 @@ mod tests {
 
     #[test]
     fn hardware_envelope_is_paced_only_through_attack_decay_and_release() {
-        // Pins every phase `hardware_envelope_pacing` classifies, and the
-        // step time and direction each paced phase writes into NRx2 (that
-        // method's doc). Each phase gets its own minimal envelope so a
-        // zero-delay neighbor can't skip past it before its pacing is observed.
         let up = |step_time| {
             Some(HardwareEnvelopePacing {
                 step_time,
@@ -710,11 +614,8 @@ mod tests {
 
     #[test]
     fn envelope_bytes_above_seven_pace_hardware_through_the_nrx2_nibble() {
-        // Pins `hardware_envelope_pacing`'s decode: a phase byte wider than
-        // NRx2's 3-bit step time reaches hardware as the low nibble of the
-        // byte upstream combines with its direction constant, so it can pace
-        // at a different period and in the opposite direction from the raw
-        // byte, or not at all.
+        // NRx2 keeps only the low nibble of the byte upstream combines with the
+        // direction constant.
         let up = |step_time| {
             Some(HardwareEnvelopePacing {
                 step_time,
@@ -744,17 +645,16 @@ mod tests {
             env
         };
 
-        // `(8 + CGB_NRx2_ENV_DIR_INC) & 0xF == 0`: a dead, downward envelope,
-        // not an upward step every 8 iterations.
+        // `(8 + CGB_NRx2_ENV_DIR_INC) & 0xF == 0`
         assert_eq!(attacking(8).hardware_envelope_pacing(), None);
         // `(9 + CGB_NRx2_ENV_DIR_INC) & 0xF == 1`.
         assert_eq!(attacking(9).hardware_envelope_pacing(), down(1));
-        // `15 + CGB_NRx2_ENV_DIR_INC` keeps only the step time it overflows into.
+        // `15 + CGB_NRx2_ENV_DIR_INC`
         assert_eq!(attacking(15).hardware_envelope_pacing(), down(7));
 
-        // `8 | CGB_NRx2_ENV_DIR_DEC == 8`: bit 3 alone, so dead again.
+        // `8 | CGB_NRx2_ENV_DIR_DEC == 8`
         assert_eq!(decaying(8).hardware_envelope_pacing(), None);
-        // `9 | CGB_NRx2_ENV_DIR_DEC == 9`: bit 3 turns the decay upward.
+        // `9 | CGB_NRx2_ENV_DIR_DEC == 9`
         assert_eq!(decaying(9).hardware_envelope_pacing(), up(1));
 
         assert_eq!(releasing(12).hardware_envelope_pacing(), up(4));
@@ -809,8 +709,7 @@ mod tests {
 
     #[test]
     fn note_off_before_the_first_pass_retires_at_once_unlike_after_it() {
-        // Stopped before its first pass: `CgbSound`'s `SF_START | SF_STOP`
-        // check retires it at once, bypassing pseudo-echo (`m4a.c:988..1046`).
+        // `SF_START | SF_STOP` retires at once, bypassing pseudo-echo (`m4a.c:988-1046`).
         let mut env = CgbEnvelope::new(adsr(0, 0, 15, 0), 8, 128, 2);
 
         assert!(
@@ -910,9 +809,6 @@ mod tests {
     }
 }
 
-/// [`CgbEnvelopeCadence`]/[`CgbEnvelope::step_frame`]'s own tests, kept out
-/// of [`tests`] for the same per-file-size reason `mixer.rs` splits off
-/// `mixer_priority.rs`/`mixer_mixing.rs` (issue #453).
 #[cfg(test)]
 #[path = "cgb_envelope_cadence.rs"]
 mod cadence_tests;

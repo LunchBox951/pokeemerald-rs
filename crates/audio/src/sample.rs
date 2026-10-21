@@ -8,16 +8,10 @@ enum Playback {
 
 /// An owned, decoded DirectSound sample.
 ///
-/// `samples` may hold one more value than [`Self::logical_len`]: a retained
-/// interpolation guard past the sample's logical end. Upstream's
-/// `WaveData.size` (the boundary a loop wraps or a one-shot retires at) and
-/// its compiled binary's payload length can differ by exactly one sample
-/// when an `agbl` override trims the logical count below the unoverridden
-/// encoder boundary (`crates/xtask/src/extract/wav.rs`'s module docs;
-/// `pokeemerald/src/m4a_1.s:399-407`). `logical_len` carries that boundary so
-/// looping and one-shot retirement key off it, while `samples` keeps the
-/// extra value available for `crates/audio/src/voice.rs`'s boundary
-/// interpolation lookahead.
+/// `samples` may hold one more value than [`Self::logical_len`]: an
+/// interpolation guard past the point where a loop wraps or a one-shot retires.
+/// The mismatch is upstream's `agbl` override trimming the logical count (see
+/// `pokeemerald/src/m4a_1.s:399-407`).
 #[derive(Clone, Debug)]
 pub struct WaveData {
     base_frequency: u32,
@@ -27,11 +21,7 @@ pub struct WaveData {
 }
 
 impl WaveData {
-    /// Construct a one-shot wave with the given base frequency.
-    ///
-    /// Every sample in `samples` is treated as logically playable. Use
-    /// [`Self::with_logical_len`] to retain a trailing interpolation guard
-    /// past the logical end instead.
+    /// Construct a one-shot wave with every sample logically playable.
     #[must_use]
     pub fn one_shot(base_frequency: u32, samples: Vec<i8>) -> Self {
         let logical_len = samples.len();
@@ -45,10 +35,6 @@ impl WaveData {
 
     /// Construct a looping wave, clamping its loop start to the final sample or
     /// zero when empty.
-    ///
-    /// Every sample in `samples` is treated as logically playable. Use
-    /// [`Self::with_logical_len`] to retain a trailing interpolation guard
-    /// past the logical end instead.
     #[must_use]
     pub fn looping(base_frequency: u32, loop_start: u32, samples: Vec<i8>) -> Self {
         let requested_start = usize::try_from(loop_start).unwrap_or(usize::MAX);
@@ -62,12 +48,10 @@ impl WaveData {
         }
     }
 
-    /// Narrow the sample's logical length (where a loop wraps or a one-shot
-    /// retires) below its buffer length, keeping the trailing values only as
-    /// interpolation lookahead.
+    /// Narrow the logical length, keeping the trailing samples as interpolation
+    /// guard.
     ///
-    /// Clamps `logical_len` to the buffer length and re-clamps a looping
-    /// wave's start into the narrowed range.
+    /// Clamps to the buffer length and re-clamps a looping start.
     #[must_use]
     pub fn with_logical_len(mut self, logical_len: usize) -> Self {
         self.logical_len = logical_len.min(self.samples.len());
@@ -111,9 +95,8 @@ impl WaveData {
         self.samples.len()
     }
 
-    /// Return the logical sample count: where a loop wraps or a one-shot
-    /// retires. At most [`Self::len`]; less when the buffer retains a
-    /// trailing interpolation guard (see [`Self::with_logical_len`]).
+    /// Return the count where a loop wraps or a one-shot retires, at most
+    /// [`Self::len`].
     #[must_use]
     pub fn logical_len(&self) -> usize {
         self.logical_len
