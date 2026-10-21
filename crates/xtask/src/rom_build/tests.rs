@@ -303,6 +303,80 @@ fn agbcc_is_provisioned_into_the_scratch_tree_only() {
 
 #[test]
 #[cfg(unix)]
+fn an_agbcc_install_inside_the_reference_is_rejected_before_verification() {
+    let mut fx = Fixture::new("agbcc-inside", GOOD);
+    let inside = fx.config.reference.join("agbcc-install");
+    fs::create_dir_all(inside.join("bin")).unwrap();
+    fs::write(inside.join("bin/agbcc"), "cc1").unwrap();
+    fx.config.agbcc_source = inside.join("..").join("agbcc-install");
+    let err = build(&fx.config).unwrap_err();
+    assert!(
+        matches!(&err, RomBuildError::MissingTool(t)
+            if t.starts_with("agbcc") && t.contains("inside the reference")
+                && t.contains("./install.sh <dir>")
+                && t.contains("POKEEMERALD_AGBCC=<dir>/tools/agbcc")),
+        "{err}"
+    );
+    assert_eq!(fx.scratch_entries(), 0);
+}
+
+#[test]
+#[cfg(unix)]
+fn an_agbcc_symlink_inside_the_reference_is_rejected_before_verification() {
+    let mut fx = Fixture::new("agbcc-symlink-inside", GOOD);
+    let link = fx.config.reference.join("agbcc-link");
+    std::os::unix::fs::symlink(&fx.config.agbcc_source, &link).unwrap();
+    fx.config.agbcc_source = link;
+    let err = build(&fx.config).unwrap_err();
+    assert!(
+        matches!(&err, RomBuildError::MissingTool(t)
+            if t.starts_with("agbcc") && t.contains("inside the reference")),
+        "{err}"
+    );
+    assert_eq!(fx.scratch_entries(), 0);
+}
+
+#[test]
+#[cfg(unix)]
+fn an_agbcc_path_through_a_symlinked_directory_inside_the_reference_is_rejected() {
+    let mut fx = Fixture::new("agbcc-ancestor-link", GOOD);
+    let alias = fx.config.reference.join("alias");
+    std::os::unix::fs::symlink(&fx.root, &alias).unwrap();
+    fx.config.agbcc_source = alias.join("agbcc-install");
+    let err = build(&fx.config).unwrap_err();
+    assert!(
+        matches!(&err, RomBuildError::MissingTool(t)
+            if t.starts_with("agbcc") && t.contains("inside the reference")),
+        "{err}"
+    );
+    assert_eq!(fx.scratch_entries(), 0);
+}
+
+#[test]
+fn an_agbcc_path_that_leaves_the_reference_through_dotdot_is_not_contained() {
+    let fx = Fixture::new("agbcc-dotdot-out", GOOD);
+    let mut config = fx.config.clone();
+    config.agbcc_source = fx.config.reference.join("..").join("agbcc-install");
+    assert!(!super::agbcc_inside_reference_from(&config, &fx.root));
+}
+
+#[test]
+#[cfg(unix)]
+fn a_bare_relative_agbcc_symlink_inside_the_reference_is_contained() {
+    let fx = Fixture::new("agbcc-relative-link", GOOD);
+    let link = fx.config.reference.join("agbcc-link");
+    std::os::unix::fs::symlink(&fx.config.agbcc_source, &link).unwrap();
+    let mut config = fx.config.clone();
+    config.agbcc_source = PathBuf::from("agbcc-link");
+    assert!(super::agbcc_inside_reference_from(
+        &config,
+        &fx.config.reference
+    ));
+    assert!(!super::agbcc_inside_reference_from(&config, &fx.root));
+}
+
+#[test]
+#[cfg(unix)]
 fn a_missing_agbcc_install_is_a_missing_tool() {
     let mut fx = Fixture::new("noagbcc", GOOD);
     fx.config.agbcc_source = fx.root.join("absent");

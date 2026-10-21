@@ -18,7 +18,7 @@ use std::collections::VecDeque;
 use std::ffi::OsString;
 use std::fmt;
 use std::io::{ErrorKind, Read};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{mpsc, Arc, Mutex};
 
@@ -254,6 +254,61 @@ pub fn run() -> Result<CompiledArtifact, RomBuildError> {
     build(&BuildConfig::for_repo()?)
 }
 
+/// Whether the `agbcc` install lies within the reference checkout, where its
+/// untracked files (or a symlink to it) would fail the clean-tree
+/// verification. The resolved path, the path's own location (its parent
+/// resolved, its final component left unfollowed), and the location of every
+/// symlink the path passes through are compared canonically, so symlinks at
+/// any depth and `..` cannot hide containment.
+fn agbcc_inside_reference(config: &BuildConfig) -> bool {
+    let base = std::env::current_dir().unwrap_or_default();
+    agbcc_inside_reference_from(config, &base)
+}
+
+/// [`agbcc_inside_reference`] with the directory that relative paths are
+/// taken from made explicit, so a bare relative name (empty parent) resolves
+/// against `base` rather than staying relative to an absolute reference.
+fn agbcc_inside_reference_from(config: &BuildConfig, base: &Path) -> bool {
+    let canon = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    let reference = canon(&base.join(&config.reference));
+    let source = base.join(&config.agbcc_source);
+    let located = match (source.parent(), source.file_name()) {
+        (Some(parent), Some(name)) => canon(parent).join(name),
+        _ => source.clone(),
+    };
+    canon(&source).starts_with(&reference)
+        || located.starts_with(&reference)
+        || passes_through_symlink_inside(&source, &reference)
+}
+
+/// Whether resolving `source` one component at a time meets a symlink whose
+/// own location (everything before it resolved) lies within `reference`, as
+/// with `reference/alias/agbcc` where `alias` points outside. A `..` steps
+/// back from what has been resolved so far, as the OS does.
+fn passes_through_symlink_inside(source: &Path, reference: &Path) -> bool {
+    let mut walked = PathBuf::new();
+    for component in source.components() {
+        match component {
+            Component::Normal(name) => {
+                let located = walked.join(name);
+                let is_link = located
+                    .symlink_metadata()
+                    .is_ok_and(|meta| meta.file_type().is_symlink());
+                if is_link && located.starts_with(reference) {
+                    return true;
+                }
+                walked = located.canonicalize().unwrap_or(located);
+            }
+            Component::ParentDir => {
+                walked.pop();
+            }
+            Component::CurDir => {}
+            Component::RootDir | Component::Prefix(_) => walked.push(component),
+        }
+    }
+    false
+}
+
 /// Verifies the reference, builds the pinned tree in scratch storage, and
 /// returns its compiled outputs.
 ///
@@ -262,6 +317,15 @@ pub fn run() -> Result<CompiledArtifact, RomBuildError> {
 /// A [`RomBuildError`] naming the first failed stage; nothing is returned
 /// from a partial build.
 pub fn build(config: &BuildConfig) -> Result<CompiledArtifact, RomBuildError> {
+    if agbcc_inside_reference(config) {
+        return Err(RomBuildError::MissingTool(format!(
+            "agbcc ({} is inside the reference checkout {}, which must stay clean; \
+             install it outside with `./install.sh <dir>` and set \
+             {AGBCC_ENV}=<dir>/tools/agbcc)",
+            config.agbcc_source.display(),
+            config.reference.display()
+        )));
+    }
     checkout::verify_reference(&config.reference, &config.pinned_revision)?;
     if !config.agbcc_source.join("bin").is_dir() {
         return Err(RomBuildError::MissingTool(format!(
