@@ -90,7 +90,7 @@ pub enum ExtractError {
         /// Parser failure.
         LayoutsJsonError,
     ),
-    /// A [`super::LAYOUTS`] ID is absent from the layout manifest.
+    /// A [`super::scope::LAYOUTS`] ID is absent from the layout manifest.
     UnknownLayoutInJson(
         /// Manifest path.
         PathBuf,

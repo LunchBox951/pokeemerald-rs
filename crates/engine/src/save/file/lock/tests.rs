@@ -950,3 +950,52 @@ fn an_ancestor_retargeted_and_restored_mid_acquisition_cannot_bind_the_wrong_dir
     drop(rival.lock().expect("a's own slot was never locked"));
     drop(acquired);
 }
+
+/// The parent retargeted to a FIFO between the identity read and the slot's
+/// open must not block acquisition and must not yield a guard.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn a_parent_retargeted_to_a_fifo_mid_lock_does_not_block() {
+    let dir = TempDir::new("lock-acquire-fifo-race");
+    let real = dir.join("real");
+    std::fs::create_dir(&real).unwrap();
+    let fifo = dir.join("fifo");
+    assert!(std::process::Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .unwrap()
+        .success());
+    let link = dir.join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let (l, f) = (link.clone(), fifo.clone());
+    std::thread::spawn(move || {
+        let file = SaveFile::at(l.join(SAVE_FILE_NAME));
+        let mut step = 0;
+        let acquired = file.lock_observing(
+            |_| {},
+            || {
+                step += 1;
+                if step == 1 {
+                    std::fs::remove_file(&l).unwrap();
+                    std::os::unix::fs::symlink(&f, &l).unwrap();
+                }
+            },
+        );
+        let _ = tx.send(acquired.map(drop).map_err(|e| format!("{e:?}")));
+    });
+    let outcome = rx.recv_timeout(std::time::Duration::from_secs(2));
+    if outcome.is_err() {
+        // Unblock a stuck open so the test process can exit; read+write
+        // never blocks on a FIFO, even if no reader is waiting.
+        let _ = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&fifo);
+    }
+    let outcome = outcome.expect("acquisition blocked on a FIFO swapped in for the parent");
+    assert!(
+        outcome.is_err(),
+        "no guard may be issued over a FIFO parent"
+    );
+}
