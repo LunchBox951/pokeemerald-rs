@@ -7,8 +7,8 @@ use platform::{ButtonState, Buttons};
 use rendering::{Framebuffer, Rgb888};
 
 use super::pack_fixture::{
-    bag_frame_color, bag_pack, entries, icon_color, load, BACKGROUND, BAG_TEXT, INDICATOR_CURRENT,
-    INDICATOR_IDLE, TEXT, WINDOW_BORDER, WINDOW_FILL,
+    bag_frame_color, bag_pack, entries, icon_color, load, BACKGROUND, BAG_TEXT, HM_MARK,
+    INDICATOR_CURRENT, INDICATOR_IDLE, NORMAL_SHADOW, TEXT, WINDOW_BORDER, WINDOW_FILL,
 };
 use super::{
     open, open_from_pack, BagScreen, BagScreenError, BagScreenMode, BagScreenRequest,
@@ -469,18 +469,9 @@ fn tm_hm_and_berry_rows_are_numbered_and_hms_carry_the_mark() {
     // The HM mark (screen palette bank 1 index 1) sits at list x 8 on exactly
     // one of the two item rows.
     let marked: Vec<usize> = (0..2)
-        .filter(|&row| {
-            painted(
-                &fb,
-                LIST_X + 8,
-                LIST_Y + row * ROW - 1,
-                16,
-                16,
-                INDICATOR_IDLE,
-            )
-        })
+        .filter(|&row| painted(&fb, LIST_X + 8, LIST_Y + row * ROW - 1, 16, 16, HM_MARK))
         .collect();
-    assert!(!marked.is_empty());
+    assert_eq!(marked.len(), 1, "exactly the HM row carries the mark");
     assert!(row_has_text(&fb, 0) && row_has_text(&fb, 1));
 
     screen.tick(press(Buttons::RIGHT));
@@ -489,4 +480,60 @@ fn tm_hm_and_berry_rows_are_numbered_and_hms_carry_the_mark() {
         row_has_text(&frame_of(&screen), 0),
         "the berry row prints its number and name"
     );
+}
+
+#[test]
+fn bag_list_and_description_shadow_is_screen_bank_1_index_3() {
+    let screen = open_screen(BagScreenMode::Field, &sample_bag());
+    // `COLORID_NORMAL` (`item_menu.c:386`): foreground 1, shadow 3.
+    assert_eq!(
+        screen.chrome.normal_text_colors()[2],
+        Some(NORMAL_SHADOW),
+        "bank 1 index 3"
+    );
+    let fb = frame_of(&screen);
+    assert!(
+        painted(&fb, LIST_X + 8, LIST_Y, 100, ROW, NORMAL_SHADOW),
+        "list text shadow"
+    );
+    assert!(
+        painted(&fb, 3, DESCRIPTION_Y + 1, 100, 48, NORMAL_SHADOW),
+        "description shadow"
+    );
+    // The pocket header keeps `COLORID_POCKET_NAME`'s shadow, index 4.
+    assert_ne!(screen.chrome.window_text_colors()[2], Some(NORMAL_SHADOW));
+}
+
+#[test]
+fn r_moves_right_in_a_multi_row_context_in_lr_mode() {
+    let mut request = BagScreenRequest::new(BagScreenMode::Field);
+    request.lr_buttons = true;
+    let mut screen = open_with(request, &sample_bag());
+    assert_eq!(screen.tick(press(Buttons::A)), BagScreenTick::Open);
+    assert_eq!(screen.tick(press(Buttons::R)), BagScreenTick::Open);
+    let BagScreenTick::Action { action, .. } = screen.tick(press(Buttons::A)) else {
+        panic!("confirming returns the choice");
+    };
+    assert_eq!(action, BagAction::Give, "R moved from Use to Give");
+    // Without L/R mode the shoulder buttons do nothing in the grid.
+    let mut plain = open_screen(BagScreenMode::Field, &sample_bag());
+    plain.tick(press(Buttons::A));
+    plain.tick(press(Buttons::R));
+    let BagScreenTick::Action { action, .. } = plain.tick(press(Buttons::A)) else {
+        panic!("confirming returns the choice");
+    };
+    assert_eq!(action, BagAction::Use);
+}
+
+#[test]
+fn simultaneous_down_and_a_in_a_single_row_context_confirms() {
+    let mut screen = open_screen(BagScreenMode::Battle, &sample_bag());
+    assert_eq!(screen.tick(press(Buttons::A)), BagScreenTick::Open);
+    let grid = screen.menu.context_grid().expect("the choices are open");
+    assert_eq!(grid.columns, 1, "a battle item has Use and Cancel only");
+    // `Menu_ProcessInputNoWrap` tests A before the D-pad.
+    assert!(matches!(
+        screen.tick(press(Buttons::DOWN | Buttons::A)),
+        BagScreenTick::Closed(BagScreenResult::Item(_))
+    ));
 }

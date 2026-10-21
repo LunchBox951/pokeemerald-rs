@@ -26,6 +26,10 @@ pub(super) const INDICATOR_CURRENT: Rgb888 = rgb(20, 0, 0);
 /// The tile-0 colour, drawn by the tilemap's all-zero entries.
 /// Bag-window text: screen palette bank 1, index 1 (also the idle indicator).
 pub(super) const BAG_TEXT: Rgb888 = INDICATOR_IDLE;
+/// Screen palette bank 1 index 4, drawn only by the HM mark in the list.
+pub(super) const HM_MARK: Rgb888 = rgb(5, 5, 5);
+/// Screen palette bank 1 index 3, the shadow of list and description text.
+pub(super) const NORMAL_SHADOW: Rgb888 = rgb(0, 20, 0);
 pub(super) const BACKGROUND: Rgb888 = rgb(0, 10, 10);
 
 const fn rgb(r: u8, g: u8, b: u8) -> Rgb888 {
@@ -75,14 +79,20 @@ fn leaked(id: String) -> &'static str {
     Box::leak(id.into_boxed_str())
 }
 
+/// Every glyph is solid text (index 1) with its odd columns shadow (index 2).
 fn glyph_sheet(font: &str) -> PackEntry {
-    image_entry(
-        leaked(format!("font/{font}/glyphs")),
-        assets::fonts::SHEET_WIDTH,
-        assets::fonts::SHEET_HEIGHT,
+    let (width, height) = (assets::fonts::SHEET_WIDTH, assets::fonts::SHEET_HEIGHT);
+    let pixels = (0..width * height)
+        .map(|i| if i % 2 == 1 { 2 } else { 1 })
+        .collect();
+    pack_format::image_entry(
+        format!("font/{font}/glyphs"),
+        width,
+        height,
         GLYPH_DEPTH,
-        1,
+        pixels,
     )
+    .unwrap()
 }
 
 fn window_entries() -> Vec<PackEntry> {
@@ -125,6 +135,7 @@ fn screen_entries() -> Vec<PackEntry> {
         (3u8, Bgr555::from_channels(0, 10, 10)),
         (17, Bgr555::from_channels(10, 0, 0)),
         (18, Bgr555::from_channels(20, 0, 0)),
+        (19, Bgr555::from_channels(0, 20, 0)),
         (20, Bgr555::from_channels(5, 5, 5)),
     ];
     vec![
@@ -170,7 +181,7 @@ fn picture_entries() -> Vec<PackEntry> {
         image_entry("bag/image/rotating_ball", 16, 16, BIT_DEPTH, 0),
         palette_entry_with_colors("bag/palette/rotating_ball", 16, &[]),
         image_entry("bag/image/select_button", 24, 16, BIT_DEPTH, 0),
-        image_entry("bag/image/hm", 16, 16, BIT_DEPTH, 1),
+        image_entry("bag/image/hm", 16, 16, BIT_DEPTH, 4),
     ]
 }
 

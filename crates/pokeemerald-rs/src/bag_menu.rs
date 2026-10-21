@@ -181,8 +181,11 @@ impl BagScreen {
         if let Some(result) = self.done {
             return BagScreenTick::Closed(result);
         }
-        let Some(input) = input_of(buttons, self.lr_buttons, self.menu.context_grid().is_some())
-        else {
+        let Some(input) = input_of(
+            buttons,
+            self.lr_buttons,
+            self.menu.context_grid().map(|grid| grid.columns),
+        ) else {
             return BagScreenTick::Open;
         };
         match self.menu.handle_input(input) {
@@ -218,29 +221,54 @@ impl BagScreen {
     }
 }
 
-fn input_of(buttons: ButtonState, lr_buttons: bool, in_context: bool) -> Option<BagMenuInput> {
+fn input_of(
+    buttons: ButtonState,
+    lr_buttons: bool,
+    context_columns: Option<usize>,
+) -> Option<BagMenuInput> {
     let pressed = |button| buttons.is_newly_pressed(button);
-    if in_context {
-        // `Task_ItemContext_MultipleRows` tests the D-pad before A and B.
-        return if pressed(Buttons::UP) {
-            Some(BagMenuInput::Up)
-        } else if pressed(Buttons::DOWN) {
-            Some(BagMenuInput::Down)
-        } else if pressed(Buttons::LEFT) {
-            Some(BagMenuInput::Left)
-        } else if pressed(Buttons::RIGHT) {
-            Some(BagMenuInput::Right)
-        } else if pressed(Buttons::A) {
-            Some(BagMenuInput::Confirm)
-        } else if pressed(Buttons::B) {
-            Some(BagMenuInput::Cancel)
-        } else {
-            None
-        };
+    let left = pressed(Buttons::LEFT) || (lr_buttons && pressed(Buttons::L));
+    let right = pressed(Buttons::RIGHT) || (lr_buttons && pressed(Buttons::R));
+    match context_columns {
+        // `Task_ItemContext_SingleRow` runs `Menu_ProcessInputNoWrap`: A, B,
+        // then Up and Down; Left and Right do nothing.
+        Some(1) => {
+            return if pressed(Buttons::A) {
+                Some(BagMenuInput::Confirm)
+            } else if pressed(Buttons::B) {
+                Some(BagMenuInput::Cancel)
+            } else if pressed(Buttons::UP) {
+                Some(BagMenuInput::Up)
+            } else if pressed(Buttons::DOWN) {
+                Some(BagMenuInput::Down)
+            } else {
+                None
+            };
+        }
+        // `Task_ItemContext_MultipleRows` tests the D-pad (L and R alias Left
+        // and Right in L/R mode) before A and B.
+        Some(_) => {
+            return if pressed(Buttons::UP) {
+                Some(BagMenuInput::Up)
+            } else if pressed(Buttons::DOWN) {
+                Some(BagMenuInput::Down)
+            } else if left {
+                Some(BagMenuInput::Left)
+            } else if right {
+                Some(BagMenuInput::Right)
+            } else if pressed(Buttons::A) {
+                Some(BagMenuInput::Confirm)
+            } else if pressed(Buttons::B) {
+                Some(BagMenuInput::Cancel)
+            } else {
+                None
+            };
+        }
+        None => {}
     }
-    if pressed(Buttons::LEFT) || (lr_buttons && pressed(Buttons::L)) {
+    if left {
         Some(BagMenuInput::Left)
-    } else if pressed(Buttons::RIGHT) || (lr_buttons && pressed(Buttons::R)) {
+    } else if right {
         Some(BagMenuInput::Right)
     } else if pressed(Buttons::A) {
         Some(BagMenuInput::Confirm)

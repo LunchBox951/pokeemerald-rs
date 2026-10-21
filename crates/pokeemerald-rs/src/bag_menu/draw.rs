@@ -107,7 +107,7 @@ impl BagScreen {
     }
 
     fn draw_list(&self, fb: &mut Framebuffer) {
-        let colors = self.chrome.window_text_colors();
+        let colors = self.chrome.normal_text_colors();
         for (slot, row) in self.menu.visible_rows().into_iter().enumerate() {
             let y = ROW_TOP + i32::try_from(slot).unwrap_or(0) * ROW_HEIGHT;
             match row {
@@ -133,7 +133,7 @@ impl BagScreen {
         quantity: u16,
         name: Option<&str>,
     ) {
-        let colors = self.chrome.window_text_colors();
+        let colors = self.chrome.normal_text_colors();
         let pocket = self.menu.pocket();
         let label = labels::row_label(pocket, item, name);
         let mut name_x = NAME_X;
@@ -225,7 +225,7 @@ selected.",
             DESCRIPTION_SIZE,
             DESCRIPTION_TEXT_OFFSET,
             &text,
-            &self.chrome.window_text_colors(),
+            &self.chrome.normal_text_colors(),
         );
     }
 
