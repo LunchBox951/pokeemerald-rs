@@ -32271,7 +32271,7 @@
           "status": "stubbed"
         },
         "sFontInfos": {
-          "reason": "Only the maxLetterHeight column (the \\n line-advance metric) is transcribed, as max_letter_height; fontFunction/letterSpacing/lineSpacing/fgColor/bgColor/shadowColor are out of this slice's scope (glyph decompression lives in assets::fonts, colour is deliberately unmodelled here), so the file's own status stays pending.",
+          "reason": "Only the maxLetterHeight column (the \\n line-advance metric) is transcribed, as max_letter_height, plus the template lineSpacing that adds to it: Printer::with_line_spacing makes a newline advance maxLetterHeight + lineSpacing (text.c:970) and a \\l scroll cover the same sum (text.c:1184); the default is zero. fontFunction/letterSpacing/fgColor/bgColor/shadowColor are out of this slice's scope (glyph decompression lives in assets::fonts, colour is deliberately unmodelled here), so the file's own status stays pending.",
           "rust_target": "crates/engine/src/text/render.rs",
           "spec": "S-5",
           "status": "ported"
