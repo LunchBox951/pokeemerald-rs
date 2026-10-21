@@ -626,3 +626,65 @@ fn a_symlinked_output_is_refused() {
         "{err}"
     );
 }
+
+thread_local! {
+    /// Largest single allocation made on this thread since it was last reset.
+    static MAX_ALLOC: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+struct TrackingAlloc;
+
+// SAFETY: every call forwards unchanged to the system allocator, which upholds
+// the `GlobalAlloc` contract; the added thread-local counter never allocates.
+unsafe impl std::alloc::GlobalAlloc for TrackingAlloc {
+    unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
+        MAX_ALLOC.with(|m| m.set(m.get().max(layout.size())));
+        // SAFETY: same layout the caller passed, caller's contract applies.
+        unsafe { std::alloc::System.alloc(layout) }
+    }
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: std::alloc::Layout) {
+        // SAFETY: `ptr`/`layout` come from a matching `alloc` above.
+        unsafe { std::alloc::System.dealloc(ptr, layout) }
+    }
+    unsafe fn realloc(&self, ptr: *mut u8, layout: std::alloc::Layout, new: usize) -> *mut u8 {
+        MAX_ALLOC.with(|m| m.set(m.get().max(new)));
+        // SAFETY: `ptr`/`layout` come from a matching `alloc`; `new` is the caller's.
+        unsafe { std::alloc::System.realloc(ptr, layout, new) }
+    }
+}
+
+#[global_allocator]
+static ALLOC: TrackingAlloc = TrackingAlloc;
+
+/// Endless run of non-newline bytes, `left` long.
+struct Endless {
+    left: u64,
+}
+
+impl std::io::Read for Endless {
+    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+        let n = out.len().min(self.left as usize);
+        out[..n].fill(b'x');
+        self.left -= n as u64;
+        Ok(n)
+    }
+}
+
+#[test]
+fn overlong_status_line_is_discarded_through_a_bounded_buffer() {
+    use std::io::{BufRead, BufReader, Read};
+    // 64 MiB of line with no newline, then a newline-terminated tail.
+    let tail = std::io::Cursor::new(b"\nnext\n".to_vec());
+    let mut reader = BufReader::with_capacity(4096, Endless { left: 64 << 20 }.chain(tail));
+    MAX_ALLOC.with(|m| m.set(0));
+    checkout::discard_line(&mut reader).unwrap();
+    let largest = MAX_ALLOC.with(|m| m.get());
+    let mut next = String::new();
+    reader.read_line(&mut next).unwrap();
+    assert_eq!(next, "next\n");
+    // An unbounded `read_until` into a Vec would allocate the whole 64 MiB.
+    assert!(
+        largest <= 64 << 10,
+        "discarding allocated {largest} bytes at once"
+    );
+}

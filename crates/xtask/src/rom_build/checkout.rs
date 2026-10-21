@@ -79,6 +79,31 @@ fn spawn_failure(err: &std::io::Error) -> RomBuildError {
     }
 }
 
+/// Consume input through the next newline (or EOF) without retaining it:
+/// memory stays bounded by the reader's fixed buffer, however long the line.
+pub(super) fn discard_line<R: BufRead>(reader: &mut R) -> std::io::Result<()> {
+    loop {
+        let (used, done) = {
+            let buf = match reader.fill_buf() {
+                Ok(buf) => buf,
+                Err(err) if err.kind() == ErrorKind::Interrupted => continue,
+                Err(err) => return Err(err),
+            };
+            if buf.is_empty() {
+                return Ok(());
+            }
+            match buf.iter().position(|&b| b == b'\n') {
+                Some(i) => (i + 1, true),
+                None => (buf.len(), false),
+            }
+        };
+        reader.consume(used);
+        if done {
+            return Ok(());
+        }
+    }
+}
+
 /// Runs git in `cwd` and returns at most the first `limit` lines of its
 /// stdout, and whether more followed. It stops reading once past `limit`
 /// and kills git, so a huge listing is never held in memory.
@@ -120,8 +145,7 @@ fn git_head(cwd: &Path, args: &[&str], limit: usize) -> Result<(Vec<String>, boo
             }
             if !line.ends_with(b"\n") && line.len() as u64 == MAX_STATUS_LINE {
                 // Skip the rest of an over-long line.
-                let mut rest = Vec::new();
-                let _ = stdout.read_until(b'\n', &mut rest);
+                let _ = discard_line(&mut stdout);
             }
             if lines.len() == limit {
                 more = true;
