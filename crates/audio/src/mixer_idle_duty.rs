@@ -333,3 +333,101 @@ fn cancelled_pending_square_preserves_committed_hardware() {
         }
     }
 }
+
+/// Retires `voice` on a track-0 mixer after `settled_frames` of sound, with
+/// `retiring_key_shift` applied on the retiring frame, then returns the
+/// rendered frames of the idle tail (and, for a square, a replacement note's
+/// first frame). A pitch write on that frame is never committed: upstream's
+/// `oscillator_off` jumps to `channel_complete`, skipping the
+/// `CGB_CHANNEL_MO_PIT` NRx3/NRx4 write (`pokeemerald/src/m4a.c:1053-1056`,
+/// `:1196-1203`).
+fn retire_with_key_shift(
+    voice: &CgbVoice,
+    slot: usize,
+    settled_frames: usize,
+    retiring_key_shift: Option<i32>,
+    replacement: Option<CgbVoice>,
+) -> Vec<f32> {
+    const TRACK: usize = 0;
+    const IDLE_FRAMES: usize = 40;
+    const MAX_FRAMES_TO_RETIRE: usize = 32;
+    let mut mixer = Mixer::new(MAX_MASTER_VOLUME, 1);
+    assert!(mixer.add_cgb_voice(voice.clone()));
+    let mut frame = vec![0.0; SAMPLES_PER_FRAME * 2];
+    let mut rendered = Vec::new();
+    for _ in 0..settled_frames {
+        mixer.mix_frame(&mut frame);
+    }
+    mixer.note_off_track(TRACK, 60);
+    if let Some(shift) = retiring_key_shift {
+        mixer.set_track_pitch(TRACK, shift, 0);
+    }
+    for _ in 0..MAX_FRAMES_TO_RETIRE {
+        mixer.mix_frame(&mut frame);
+        rendered.extend_from_slice(&frame);
+        if mixer.cgb_voices()[slot].is_none() {
+            break;
+        }
+    }
+    assert!(mixer.cgb_voices()[slot].is_none(), "the voice must retire");
+    for _ in 0..IDLE_FRAMES {
+        mixer.mix_frame(&mut frame);
+        rendered.extend_from_slice(&frame);
+    }
+    if let Some(next) = replacement {
+        assert!(mixer.add_cgb_voice(next));
+        mixer.mix_frame(&mut frame);
+        rendered.extend_from_slice(&frame);
+    }
+    rendered
+}
+
+#[test]
+fn a_pitch_write_on_the_retiring_frame_never_reaches_the_retained_square() {
+    const TRACK: usize = 0;
+    const KEY: u8 = 60;
+    let voice = committed_voice(cgb_keyed_voice(TRACK, KEY));
+    let slot = CgbChannelNumber::Square1.slot();
+    let replacement = || Some(cgb_keyed_voice(TRACK, KEY));
+    assert_eq!(
+        retire_with_key_shift(&voice, slot, 0, None, replacement()),
+        retire_with_key_shift(&voice, slot, 0, Some(7), replacement()),
+        "a retiring square's discarded pitch write must not move the duty \
+         phase the next note continues from",
+    );
+}
+
+#[test]
+fn a_pitch_write_on_the_retiring_frame_never_reaches_the_retained_noise_latch() {
+    const TRACK: usize = 0;
+    const KEY: u8 = 60;
+    const SLOW_KEY_SHIFT: i32 = -39;
+    const SETTLE_FRAME_RANGE: std::ops::Range<usize> = 0..24;
+    let voice = CgbVoice::noise(
+        CgbAdsr::flat(),
+        KEY,
+        0,
+        FULL_TRACK_VOLUME,
+        FULL_TRACK_VOLUME,
+        TEST_VELOCITY,
+        TIED_GATE_TIME,
+        KEY,
+        TRACK,
+        0,
+        0,
+        0,
+    );
+    let slot = CgbChannelNumber::Noise.slot();
+    // Whether the latch is raised when the voice retires depends on where its
+    // clock lands, so sweep the retirement point across several clock phases.
+    for settled_frames in SETTLE_FRAME_RANGE {
+        let plain = retire_with_key_shift(&voice, slot, settled_frames, None, None);
+        let shifted =
+            retire_with_key_shift(&voice, slot, settled_frames, Some(SLOW_KEY_SHIFT), None);
+        assert_eq!(
+            plain, shifted,
+            "after {settled_frames} frames a retiring noise voice must \
+             off-write its committed clock, not the discarded pitch",
+        );
+    }
+}

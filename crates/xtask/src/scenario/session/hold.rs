@@ -166,15 +166,28 @@ pub(super) fn remove_contents(
         if kind == rustix::fs::FileType::Directory {
             // A test seam: the instant between the listing and the open.
             before_remove(name.as_c_str());
-            let child = rustix::fs::openat(
-                dir,
-                name.as_c_str(),
-                rustix::fs::OFlags::RDONLY
-                    | rustix::fs::OFlags::DIRECTORY
-                    | rustix::fs::OFlags::NOFOLLOW
-                    | rustix::fs::OFlags::CLOEXEC,
-                rustix::fs::Mode::empty(),
-            )?;
+            let open = || {
+                rustix::fs::openat(
+                    dir,
+                    name.as_c_str(),
+                    rustix::fs::OFlags::RDONLY
+                        | rustix::fs::OFlags::DIRECTORY
+                        | rustix::fs::OFlags::NOFOLLOW
+                        | rustix::fs::OFlags::CLOEXEC,
+                    rustix::fs::Mode::empty(),
+                )
+            };
+            let child = match open() {
+                Ok(child) => child,
+                Err(rustix::io::Errno::ACCESS) => {
+                    // An engine created under a restrictive umask leaves a
+                    // directory its owner cannot read; restore owner access to
+                    // that exact listed inode and open it through its pin, so
+                    // the name is never resolved again.
+                    restore_owner_access(dir, &name, dev, ino)?
+                }
+                Err(error) => return Err(error.into()),
+            };
             let child = std::fs::File::from(child);
             require_entry(&child, dev, ino)?;
             remove_contents(&child, before_remove)?;
@@ -197,6 +210,73 @@ pub(super) fn remove_contents(
         }
     }
     Ok(())
+}
+
+/// Restores owner rwx on the listed subdirectory `name` of `dir` after
+/// confirming, through a path-only descriptor, that it is still the inode the
+/// listing named, so a foreign directory swapped in is never chmod-ed, then
+/// opens it for reading through that same pin while the pin is still held,
+/// so the returned descriptor is the verified inode and never a replacement
+/// installed at `name` after the chmod (even one reusing its inode number).
+/// Linux only: elsewhere there is no way to change the mode of the verified
+/// inode itself (a path-based chmod could hit a replacement), so recovery is
+/// refused and the open's `EACCES` stands.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn restore_owner_access(
+    dir: &std::fs::File,
+    name: &std::ffi::CStr,
+    dev: u64,
+    ino: u64,
+) -> std::io::Result<std::os::fd::OwnedFd> {
+    restore_owner_access_with(dir, name, dev, ino, || {})
+}
+
+/// [`restore_owner_access`] with a hook run between the chmod and the
+/// reopen, so a test can install a replacement at `name` in exactly that
+/// window and check that the returned descriptor is still the pinned inode.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+pub(super) fn restore_owner_access_with(
+    dir: &std::fs::File,
+    name: &std::ffi::CStr,
+    dev: u64,
+    ino: u64,
+    after_chmod: impl FnOnce(),
+) -> std::io::Result<std::os::fd::OwnedFd> {
+    use std::os::fd::AsRawFd as _;
+    use std::os::unix::fs::PermissionsExt as _;
+    let pinned = rustix::fs::openat(
+        dir,
+        name,
+        rustix::fs::OFlags::PATH
+            | rustix::fs::OFlags::DIRECTORY
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )?;
+    let pinned = std::fs::File::from(pinned);
+    require_entry(&pinned, dev, ino)?;
+    // Both the `chmod` and the open follow the `/proc` link to the pinned
+    // inode itself; `NOFOLLOW` would refuse that link, and is not needed.
+    let pinned_path = format!("/proc/self/fd/{}", pinned.as_raw_fd());
+    std::fs::set_permissions(&pinned_path, std::fs::Permissions::from_mode(0o700))?;
+    after_chmod();
+    let readable = rustix::fs::open(
+        pinned_path.as_str(),
+        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )?;
+    drop(pinned);
+    Ok(readable)
+}
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
+fn restore_owner_access(
+    _dir: &std::fs::File,
+    _name: &std::ffi::CStr,
+    _dev: u64,
+    _ino: u64,
+) -> std::io::Result<std::os::fd::OwnedFd> {
+    Err(std::io::ErrorKind::PermissionDenied.into())
 }
 
 /// Fails unless `child` is the inode its parent's listing named, so a
