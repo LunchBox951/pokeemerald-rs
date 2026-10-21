@@ -201,11 +201,12 @@ pub(super) fn claim_staged_dir(path: &Path) -> std::io::Result<StagedDirClaim> {
     const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
     const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
     // Real access, not zero: Windows checks sharing only against handles that
-    // hold access, so a zero-access hold would not deny rename or delete.
-    const FILE_LIST_DIRECTORY: u32 = 0x1;
-    const FILE_READ_ATTRIBUTES: u32 = 0x0080;
+    // hold access, so a zero-access hold would not deny rename or delete. The
+    // payload writes need `FILE_ADD_FILE` here anyway, so asking for it adds
+    // no requirement, where list access would refuse a write-only directory.
+    const FILE_ADD_FILE: u32 = 0x2;
     let hold = std::fs::OpenOptions::new()
-        .access_mode(FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES)
+        .access_mode(FILE_ADD_FILE)
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
         .share_mode(0)
         .open(path)?;
@@ -427,8 +428,10 @@ pub(super) fn claim_output_dir(path: &Path) -> std::io::Result<OutputDirClaim> {
     Ok(OutputDirClaim { hold: hold? })
 }
 
-/// Opens `path` following any symlink or junction, with list and attribute
-/// access (a zero-access open is not checked against share modes) and without
+/// Opens `path` following any symlink or junction, with the directory write
+/// access a capture needs anyway to create its staging directory and pointer
+/// (a zero-access open is not checked against share modes, and list access
+/// would refuse a write-only output directory) and without
 /// `FILE_SHARE_DELETE`, so an open handle keeps the directory from being
 /// renamed or deleted.
 #[cfg(windows)]
@@ -437,10 +440,10 @@ fn open_output_dir(path: &Path) -> std::io::Result<std::fs::File> {
     const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
     const FILE_SHARE_READ: u32 = 1;
     const FILE_SHARE_WRITE: u32 = 2;
-    const FILE_LIST_DIRECTORY: u32 = 0x1;
-    const FILE_READ_ATTRIBUTES: u32 = 0x0080;
+    const FILE_ADD_FILE: u32 = 0x2;
+    const FILE_ADD_SUBDIRECTORY: u32 = 0x4;
     std::fs::OpenOptions::new()
-        .access_mode(FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES)
+        .access_mode(FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY)
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
         .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
         .open(path)
