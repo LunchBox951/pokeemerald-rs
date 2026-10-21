@@ -1977,6 +1977,46 @@ fn a_stranded_capture_is_reported_in_its_quarantines_current_place() {
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
 #[test]
+fn a_stranded_capture_is_reported_under_the_quarantines_own_current_name() {
+    // The quarantine itself, not its home, is renamed after it is made:
+    // `.undo-held` becomes `.undo-moved`, and the warning must name the
+    // capture under `.undo-moved`, where it is, read through the held
+    // quarantine descriptor rather than rebuilt from its original name.
+    let dir = TempDir::new("restore-renamed-quarantine");
+    let created = super::create_directories(&dir.join("a").join("new")).unwrap();
+    let level = created.last().unwrap();
+    let parent = level.parent.as_deref().unwrap();
+    let home = fs::canonicalize(dir.join("a")).unwrap();
+    let recorded = home.join(".undo-held");
+    let quarantine = stage_unrestorable_capture(&home, parent);
+    fs::rename(&recorded, home.join(".undo-moved")).unwrap();
+
+    let warning = super::take_back::restore_capture(
+        std::os::fd::AsFd::as_fd(&quarantine),
+        std::os::fd::AsFd::as_fd(parent),
+        ".undo-held",
+        &recorded,
+        parent,
+        level,
+    );
+
+    assert_eq!(
+        warning.as_deref(),
+        Some(
+            format!(
+                "warning: could not put {} back; its contents remain in {}",
+                home.join("new").display(),
+                home.join(".undo-moved")
+                    .join(super::take_back::QUARANTINE_ENTRY)
+                    .display()
+            )
+            .as_str()
+        )
+    );
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[test]
 fn a_quarantine_whose_removal_fails_is_reported_under_its_homes_current_name() {
     // The quarantine's home `a` is renamed to `b` after the quarantine is
     // made, then something lands in it so its removal fails; the warning

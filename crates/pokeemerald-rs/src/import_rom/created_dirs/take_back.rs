@@ -257,12 +257,39 @@ fn located_in(home: impl AsFd, entry: &OsStr) -> Option<PathBuf> {
     None
 }
 
-/// Where the quarantine `name` in the held `home` is now, for a warning:
-/// read from `home` as [`located_beside`] reads a level's parent, since
-/// `home` may have been renamed since the quarantine was made; `recorded`,
-/// its location when it was made, elsewhere or without `/proc`.
-fn quarantine_location(home: BorrowedFd<'_>, name: &str, recorded: &Path) -> PathBuf {
-    located_in(home, OsStr::new(name)).unwrap_or_else(|| recorded.to_owned())
+/// Where the held directory `held` is now, read through `/proc/self/fd`
+/// on Linux and Android; `None` elsewhere or without `/proc`.
+fn held_location(held: impl AsFd) -> Option<PathBuf> {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    {
+        use std::os::fd::AsRawFd as _;
+        let link = format!("/proc/self/fd/{}", held.as_fd().as_raw_fd());
+        if let Ok(now) = std::fs::read_link(link) {
+            if now.is_absolute() {
+                return Some(now);
+            }
+        }
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    let _ = held;
+    None
+}
+
+/// Where the quarantine is now, for a warning: its own held descriptor
+/// first, since the quarantine itself may have been renamed; then `name`
+/// in the held `home`, as [`located_beside`] reads a level's parent, since
+/// `home` may have been renamed; then `recorded`, its location when it was
+/// made, elsewhere or without `/proc`.
+fn quarantine_location(
+    quarantine: Option<BorrowedFd<'_>>,
+    home: BorrowedFd<'_>,
+    name: &str,
+    recorded: &Path,
+) -> PathBuf {
+    quarantine
+        .and_then(held_location)
+        .or_else(|| located_in(home, OsStr::new(name)))
+        .unwrap_or_else(|| recorded.to_owned())
 }
 
 /// A quarantine this rollback made and holds open, in `home` under `name`.
@@ -283,9 +310,9 @@ impl Quarantine<'_> {
         self.dir.fd().ok()
     }
 
-    /// Where it is now, for a warning.
-    fn location(&self) -> PathBuf {
-        quarantine_location(self.home, &self.name, &self.path)
+    /// Where its name in `home` is now, for a warning about that name.
+    fn name_location(&self) -> PathBuf {
+        quarantine_location(None, self.home, &self.name, &self.path)
     }
 }
 
@@ -473,7 +500,8 @@ pub(super) fn restore_capture(
         "warning: could not put {} back; its contents remain in {}",
         OneLinePath(&beside(&dir.name)),
         OneLinePath(
-            &quarantine_location(quarantine_home, quarantine_name, recorded).join(QUARANTINE_ENTRY)
+            &quarantine_location(Some(quarantine), quarantine_home, quarantine_name, recorded)
+                .join(QUARANTINE_ENTRY)
         )
     ))
 }
@@ -481,7 +509,7 @@ pub(super) fn restore_capture(
 /// Removes the empty `quarantine` by its name, only while that name still
 /// resolves to the held quarantine, checked by the `statat` just before the
 /// unlink; a mismatch or a failed unlink leaves it standing, reported at
-/// its path. `before_removal` runs before that check, where a test swaps
+/// its name's path, which is what the check and the unlink act on. `before_removal` runs before that check, where a test swaps
 /// the name.
 fn remove_quarantine(quarantine: &Quarantine<'_>, before_removal: &mut dyn FnMut()) {
     let held = quarantine.dir.stat();
@@ -495,7 +523,7 @@ fn remove_quarantine(quarantine: &Quarantine<'_>, before_removal: &mut dyn FnMut
     {
         eprintln!(
             "warning: cleanup directory {} no longer resolves to the one rollback made; it is left in place",
-            OneLinePath(&quarantine.location())
+            OneLinePath(&quarantine.name_location())
         );
         return;
     }
@@ -506,7 +534,7 @@ fn remove_quarantine(quarantine: &Quarantine<'_>, before_removal: &mut dyn FnMut
     ) {
         eprintln!(
             "warning: could not remove cleanup directory {}: {}; it is left in place",
-            OneLinePath(&quarantine.location()),
+            OneLinePath(&quarantine.name_location()),
             std::io::Error::from(err)
         );
     }
