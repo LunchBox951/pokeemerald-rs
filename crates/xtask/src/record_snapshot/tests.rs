@@ -2511,3 +2511,101 @@ fn an_output_directory_swapped_before_the_pointer_publication_is_not_reported_as
         "the pointer in the held directory names the generation beside it"
     );
 }
+
+/// Windows enforces a share mode only against opens that request access, so
+/// the directory holds must request real access for their share modes to bind.
+/// A held staging directory and a held output directory can be neither renamed
+/// nor replaced by a directory renamed over them.
+#[cfg(windows)]
+#[test]
+fn held_directories_cannot_be_renamed_or_replaced() {
+    let root = scratch_path("held-directories-bind");
+    let _guard = ScratchGuard(root.clone());
+    let output_dir = root.join("out");
+    let staged = output_dir.join(".held.staged");
+    std::fs::create_dir_all(&staged).unwrap();
+
+    let output_claim = super::claim_output_dir(&output_dir).unwrap();
+    let staged_claim = super::claim_staged_dir(&staged).unwrap();
+    // Neither hold forbids concurrent file creation inside the directory.
+    std::fs::write(staged.join("inside"), b"payload").unwrap();
+
+    for held in [&staged, &output_dir] {
+        let moved = root.join("moved");
+        assert!(
+            std::fs::rename(held, &moved).is_err(),
+            "{} was renamed while held",
+            held.display()
+        );
+        let replacement = root.join("replacement");
+        std::fs::create_dir_all(&replacement).unwrap();
+        assert!(
+            std::fs::rename(&replacement, held).is_err(),
+            "{} was replaced while held",
+            held.display()
+        );
+        std::fs::remove_dir(&replacement).unwrap();
+    }
+    assert!(
+        super::claim_staged_dir(&staged).is_err(),
+        "the staging hold must refuse concurrent sharing"
+    );
+
+    drop(staged_claim);
+    drop(output_claim);
+    let moved = root.join("moved");
+    std::fs::rename(&staged, &moved).expect("the released staging directory can be renamed");
+    std::fs::rename(&moved, &staged).unwrap();
+    std::fs::rename(&output_dir, &moved).expect("the released output directory can be renamed");
+}
+
+/// Between the RGB and metadata writes, a held staging directory and a held
+/// output directory still cannot be renamed or replaced, and the capture
+/// publishes normally afterwards.
+#[cfg(windows)]
+#[test]
+fn directories_held_between_the_rgb_and_metadata_writes_cannot_be_replaced() {
+    let scene = Scene::MainMenuNewGame;
+    let root = scratch_path("held-between-writes");
+    let _guard = ScratchGuard(root.clone());
+    let output_dir = root.join("out");
+    std::fs::create_dir_all(&output_dir).unwrap();
+
+    let attempt_replacement = || {
+        let staged = std::fs::read_dir(&output_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with('.') && name.ends_with(".staged"))
+            })
+            .expect("this call's own staging directory must exist by now");
+        for held in [&staged, &output_dir] {
+            let replacement = root.join("replacement");
+            std::fs::create_dir_all(&replacement).unwrap();
+            assert!(
+                std::fs::rename(&replacement, held).is_err(),
+                "{} was replaced between the writes",
+                held.display()
+            );
+            assert!(
+                std::fs::rename(held, root.join("moved")).is_err(),
+                "{} was renamed between the writes",
+                held.display()
+            );
+            std::fs::remove_dir(&replacement).unwrap();
+        }
+        Ok(())
+    };
+
+    super::publish_generation(
+        scene,
+        &output_dir,
+        b"rgb-bytes",
+        b"meta-bytes",
+        attempt_replacement,
+    )
+    .expect("an unreplaced capture publishes");
+    assert!(visible_generation(&output_dir, scene).is_some());
+}
