@@ -16,8 +16,10 @@
 //! `--map` adds an independent witness ([`map_file`]).
 //!
 //! No ROM bytes leave this tool: the table carries offsets, lengths,
-//! dimensions, counts, and names only. A pack missing the whole fixed asset
-//! domain (fonts, tilesets, layouts, interface palettes) is refused.
+//! dimensions, counts, and names, plus the whole-file SHA-1 `rom_import`
+//! already ships, and no other hash of ROM data. A pack missing the whole
+//! fixed asset domain (fonts, tilesets, layouts, interface palettes) is
+//! refused.
 
 mod audio;
 mod bag;
