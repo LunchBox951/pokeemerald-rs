@@ -1,4 +1,6 @@
-use super::common::{phase_delta, register_frequency_hz, PHASE_ONE};
+use super::common::{
+    phase_delta, register_frequency_hz, FREQUENCY_REGISTER_RANGE, MAX_FREQUENCY_REGISTER, PHASE_ONE,
+};
 
 const WAVE_CLOCK_HZ: f64 = 65_536.0;
 const WAVE_STEPS_PER_CYCLE: f64 = 32.0;
@@ -6,6 +8,8 @@ const WAVE_RAM_BYTES: usize = 16;
 const WAVE_SAMPLES: usize = WAVE_RAM_BYTES * 2;
 const NIBBLE_ZERO: i8 = 8;
 const GAIN_BITS: u32 = 8;
+const FIRST_CLOCK_DELAY_CYCLES: f64 = 6.0;
+const CYCLES_PER_REGISTER_STEP: f64 = 2.0;
 
 /// CGB channel 3 generator over 32 decoded wave-RAM samples.
 ///
@@ -17,6 +21,9 @@ pub struct WaveChannel {
     samples: [i8; WAVE_SAMPLES],
     phase: u32,
     step_delta: u32,
+    /// Phase still owed before the first clock after a start or retune, from
+    /// the six extra cycles in `mgba/src/gb/audio.c:331-335`.
+    first_clock_delay: u32,
     /// The held output, shifted by the NR32 gain it was latched under and
     /// centered on zero. `None` until the first `sample`, since creation does
     /// not know the volume.
@@ -46,6 +53,7 @@ impl WaveChannel {
             samples,
             phase: 0,
             step_delta: 0,
+            first_clock_delay: 0,
             latch: None,
         };
         chan.set_frequency(freq_reg);
@@ -53,11 +61,24 @@ impl WaveChannel {
     }
 
     /// Retunes from an 11-bit frequency register value, keeping the sample
-    /// index and starting a fresh period (`mgba/src/gb/audio.c:331-335`).
+    /// index and starting a fresh period that lasts six cycles longer than
+    /// later ones (`mgba/src/gb/audio.c:331-335`).
     pub fn set_frequency(&mut self, freq_reg: u16) {
         let hz = register_frequency_hz(freq_reg, WAVE_CLOCK_HZ);
         self.step_delta = phase_delta(hz, WAVE_STEPS_PER_CYCLE);
         self.phase &= !(PHASE_ONE - 1);
+        let period_cycles = CYCLES_PER_REGISTER_STEP
+            * (f64::from(FREQUENCY_REGISTER_RANGE)
+                - f64::from(freq_reg.min(MAX_FREQUENCY_REGISTER)));
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "the delay is a positive fraction of at most three phase steps"
+        )]
+        {
+            self.first_clock_delay =
+                (FIRST_CLOCK_DELAY_CYCLES / period_cycles * f64::from(PHASE_ONE)) as u32;
+        }
     }
 
     /// Carries `previous`'s wave-RAM head and latch onto a freshly triggered
@@ -100,7 +121,9 @@ impl WaveChannel {
         };
         self.latch = Some(output);
         let old_clock = self.phase / PHASE_ONE;
-        self.phase = self.phase.wrapping_add(self.step_delta);
+        let absorbed = self.first_clock_delay.min(self.step_delta);
+        self.first_clock_delay -= absorbed;
+        self.phase = self.phase.wrapping_add(self.step_delta - absorbed);
         if self.phase / PHASE_ONE != old_clock {
             let outgoing = (self.head() + self.samples.len() - 1) % self.samples.len();
             self.latch = Some(Self::resolve(self.samples[outgoing], gain_256));
@@ -128,6 +151,46 @@ mod tests {
         assert_ne!(loud.sample(FULL), quiet.sample(FULL));
     }
 
+    /// For 0x764 the steady period is 312 cycles and one mixer sample spans
+    /// about 313.5, so the first clock at 318 cycles lands at the end of the second sample
+    /// interval; later clocks step by the ordinary period
+    /// (`mgba/src/gb/audio.c:331-335,513-575`).
+    #[test]
+    fn first_wave_clock_includes_mgba_six_cycle_delay() {
+        const REGISTER: u16 = 0x764;
+        let ram = WaveChannel::decode_wave_ram(&[0xF0; WAVE_RAM_BYTES]);
+        let mut wave = WaveChannel::new(ram, REGISTER);
+        assert_eq!(wave.sample(FULL), -8);
+        assert_eq!(wave.head(), 0, "no clock inside the first interval");
+        assert_eq!(
+            wave.sample(FULL),
+            -8,
+            "the second sample still holds the cold latch"
+        );
+        assert_eq!(
+            wave.head(),
+            1,
+            "the delayed clock lands by the end of the second interval"
+        );
+        assert_eq!(
+            wave.sample(FULL),
+            i32::from(ram[0]),
+            "the first clock latched the head"
+        );
+        assert_eq!(
+            wave.head(),
+            2,
+            "the next clock (cycle 630) keeps the ordinary period"
+        );
+
+        let mut retuned = WaveChannel::new(ram, 0x400);
+        retuned.set_frequency(REGISTER);
+        assert_eq!(retuned.sample(FULL), -8);
+        assert_eq!(retuned.head(), 0, "a retune delays its first clock too");
+        assert_eq!(retuned.sample(FULL), -8);
+        assert_eq!(retuned.head(), 1);
+    }
+
     #[test]
     fn wave_ram_decodes_high_nibble_first() {
         let bytes = [0xF0, 0x08, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
@@ -140,6 +203,7 @@ mod tests {
         let full_amplitude_wave = WaveChannel::decode_wave_ram(&[0xF0; WAVE_RAM_BYTES]);
         let mut wave = WaveChannel::new(full_amplitude_wave, 0);
         wave.step_delta = PHASE_ONE;
+        wave.first_clock_delay = 0;
         wave.sample(FULL);
         assert_eq!(wave.sample(FULL), 7);
     }
@@ -201,6 +265,7 @@ mod tests {
         let wave_ram = WaveChannel::decode_wave_ram(&[0xF0; WAVE_RAM_BYTES]);
         let mut wave = WaveChannel::new(wave_ram, 0);
         wave.step_delta = PHASE_ONE;
+        wave.first_clock_delay = 0;
         // The cold latch holds a zero nibble (-8); the first clock removes the
         // head (7), and only the second clock reaches the low nibble (-8).
         assert_eq!(wave.sample(FULL), -8);
