@@ -36,3 +36,25 @@ fn a_rerouted_stream_survives_the_changed_default_identity() {
         [TransportState::Unavailable(TransportFailure::NoOutput)]
     );
 }
+
+#[test]
+fn a_reroute_reported_while_discovery_runs_keeps_the_stream() {
+    let w = world(|w| w.default = Some("a".into()));
+    let mut rig = rig(&w, 4);
+    rig.shared.running.store(true, Ordering::Release);
+    rig.transport.step(Duration::ZERO);
+    rig.events();
+    assert_eq!(rig.producer.push(&[0.5; 4]), 4);
+
+    // The backend reroutes and reports it while the query that finds the
+    // new default is still running.
+    with(&w).default = Some("b".into());
+    with(&w).during_discovery = Some(Box::new(|w: &mut World| {
+        (w.streams[0].error)(cpal::Error::new(cpal::ErrorKind::DeviceChanged));
+    }));
+    rig.transport.step(MS(1_000));
+
+    assert_eq!(rig.events(), [], "no loss is reported for a reroute");
+    assert_eq!(with(&w).log, ["build"], "the rerouted stream is kept");
+    assert_eq!(rig.producer.available_space(), rig.producer.capacity() - 4);
+}

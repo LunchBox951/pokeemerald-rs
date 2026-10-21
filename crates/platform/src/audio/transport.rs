@@ -48,7 +48,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use crate::error::PlatformError;
-use crate::ring::Producer;
+use crate::ring::{Consumer, Producer};
 
 use super::config::{max_buffer_frames, negotiate};
 use super::playback::PlaybackClock;
@@ -302,12 +302,13 @@ impl<H: OutputHost> Transport<H> {
             self.failures = 0;
         }
         if now >= self.next_discovery {
-            let follows_default = live.health.follows_default.load(Ordering::Acquire);
             let found = self.host.default_output();
             self.next_discovery = self.finished(now) + DISCOVERY_INTERVAL;
             let Some(live) = self.live.as_ref() else {
                 return;
             };
+            // Read after the query, so a reroute reported while it ran counts.
+            let follows_default = live.health.follows_default.load(Ordering::Acquire);
             let current = live.id.as_str();
             let verdict = match found {
                 // The backend already rerouted this stream to the new
@@ -392,7 +393,6 @@ impl<H: OutputHost> Transport<H> {
             Err(err) => return Err(failure_of(&PlatformError::Audio(err))),
         };
         let config = negotiate(&device).map_err(|err| failure_of(&err))?;
-        let max_frames = max_buffer_frames(&config);
         let mut consumer = self
             .producer
             .reclaim_consumer()
@@ -406,6 +406,24 @@ impl<H: OutputHost> Transport<H> {
         if (std::mem::take(&mut self.stale_queue) || playing) && self.attached_before {
             consumer.discard_queued();
         }
+        // A started attempt that fails leaves what was queued meanwhile as
+        // history, even if `stop` lands before the next step.
+        self.stale_queue = playing;
+        self.attach(now, id, &device, &config, consumer, playing)?;
+        self.stale_queue = false;
+        Ok(())
+    }
+
+    fn attach(
+        &mut self,
+        now: Duration,
+        id: String,
+        device: &H::Device,
+        config: &cpal::SupportedStreamConfig,
+        consumer: Consumer,
+        playing: bool,
+    ) -> Result<(), TransportFailure> {
+        let max_frames = max_buffer_frames(config);
         let source = source_for_device(
             consumer,
             config.channels(),
@@ -416,8 +434,8 @@ impl<H: OutputHost> Transport<H> {
         let settle_margin = source.settle_margin_frames();
         let health = Arc::new(StreamHealth::default());
         let stream = build_stream(
-            &device,
-            &config,
+            device,
+            config,
             source,
             Arc::clone(&self.shared.stream_errors),
             Arc::clone(&health),

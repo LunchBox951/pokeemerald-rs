@@ -8,6 +8,7 @@ use super::*;
 use crate::audio::AudioOutput;
 use crate::ring::ring_buffer;
 
+mod callbacks_and_errors;
 mod discovery_and_loss_races;
 mod reroute;
 mod setup_and_backlog;
@@ -44,6 +45,8 @@ struct World {
     /// Call `start` from inside the next discovery, as a caller racing a
     /// blocked attempt would.
     start_during_discovery: Option<Arc<Shared>>,
+    /// Run inside the next discovery, as a callback racing it would.
+    during_discovery: Option<WorldHook>,
     /// Every call that reaches the audio stack, host or device or stream.
     ops: usize,
     discoveries: usize,
@@ -56,6 +59,8 @@ struct World {
 }
 
 type SharedWorld = Arc<Mutex<World>>;
+
+type WorldHook = Box<dyn FnOnce(&mut World) + Send>;
 
 fn world(f: impl FnOnce(&mut World)) -> SharedWorld {
     let mut w = World::default();
@@ -84,6 +89,9 @@ impl OutputHost for FakeHost {
         w.clock += latency;
         if let Some(shared) = w.start_during_discovery.take() {
             shared.running.store(true, Ordering::Release);
+        }
+        if let Some(hook) = w.during_discovery.take() {
+            hook(&mut w);
         }
         w.discovery_threads.push(std::thread::current().id());
         Ok(w.default
@@ -315,63 +323,6 @@ fn unsupported_configuration_is_reported_and_retried_within_bounds() {
 }
 
 #[test]
-fn a_fatal_stream_error_rebuilds_on_the_current_default() {
-    let w = world(|w| w.default = Some("a".into()));
-    let mut rig = rig(&w, 4);
-    rig.transport.step(Duration::ZERO);
-    assert_eq!(rig.events(), [TransportState::Ready]);
-
-    raise_error(&w, 0, cpal::ErrorKind::DeviceNotAvailable);
-    // Nothing happens on the audio thread beyond the flag.
-    assert_eq!(with(&w).builds, 1);
-    let next = rig.transport.step(MS(20));
-    assert_eq!(next, MS(120));
-    assert_eq!(
-        rig.events(),
-        [TransportState::Unavailable(TransportFailure::StreamLost)]
-    );
-
-    rig.transport.step(MS(120));
-    assert_eq!(rig.events(), [TransportState::Ready]);
-    assert_eq!(with(&w).log, ["build", "drop", "build"]);
-}
-
-#[test]
-fn recoverable_stream_errors_are_counted_but_do_not_rebuild() {
-    let w = world(|w| w.default = Some("a".into()));
-    let mut rig = rig(&w, 4);
-    rig.transport.step(Duration::ZERO);
-    rig.events();
-    for kind in [
-        cpal::ErrorKind::Xrun,
-        cpal::ErrorKind::RealtimeDenied,
-        cpal::ErrorKind::DeviceChanged,
-    ] {
-        raise_error(&w, 0, kind);
-    }
-    rig.transport.step(MS(20));
-    assert_eq!(rig.events(), []);
-    assert_eq!(with(&w).builds, 1);
-    assert_eq!(rig.shared.stream_errors.load(Ordering::Relaxed), 3);
-}
-
-#[test]
-fn a_late_error_from_a_replaced_stream_does_not_poison_its_successor() {
-    let w = world(|w| w.default = Some("a".into()));
-    let mut rig = rig(&w, 4);
-    rig.transport.step(Duration::ZERO);
-    raise_error(&w, 0, cpal::ErrorKind::DeviceNotAvailable);
-    rig.transport.step(MS(20));
-    rig.transport.step(MS(120));
-    rig.events();
-
-    raise_error(&w, 0, cpal::ErrorKind::DeviceNotAvailable);
-    rig.transport.step(MS(140));
-    assert_eq!(rig.events(), []);
-    assert_eq!(with(&w).builds, 2);
-}
-
-#[test]
 fn a_replaced_default_output_is_followed_with_the_old_stream_released_first() {
     let w = world(|w| w.default = Some("a".into()));
     let mut rig = rig(&w, 4);
@@ -462,40 +413,6 @@ fn a_queue_prefilled_before_the_first_start_is_kept() {
     assert_eq!(rig.producer.push(&[0.25; 6]), 6);
     rig.transport.step(Duration::ZERO);
     assert_eq!(rig.producer.available_space(), 2);
-}
-
-fn assert_callbacks_do_no_connection_work<T: cpal::SizedSample + Default + 'static>() {
-    let w = world(|w| {
-        w.default = Some("a".into());
-        if std::any::TypeId::of::<T>() == std::any::TypeId::of::<i16>() {
-            w.format = Some(cpal::SampleFormat::I16);
-        }
-    });
-    let mut rig = rig(&w, 64);
-    rig.transport.step(Duration::ZERO);
-    assert_eq!(with(&w).builds, 1);
-
-    let ops = with(&w).ops;
-    for _ in 0..3 {
-        run_data_callback::<T>(&w, 0, 128);
-    }
-    raise_error(&w, 0, cpal::ErrorKind::Xrun);
-    raise_error(&w, 0, cpal::ErrorKind::DeviceNotAvailable);
-    assert_eq!(
-        with(&w).ops,
-        ops,
-        "callbacks must not discover, negotiate, build, play, pause or drop"
-    );
-    // The reconnect happens only when the worker steps.
-    rig.transport.step(MS(20));
-    rig.transport.step(MS(120));
-    assert!(with(&w).ops > ops);
-}
-
-#[test]
-fn callbacks_do_no_connection_work_in_either_sample_format() {
-    assert_callbacks_do_no_connection_work::<f32>();
-    assert_callbacks_do_no_connection_work::<i16>();
 }
 
 #[test]
@@ -598,20 +515,6 @@ fn the_null_backend_has_no_transport() {
     assert!(output.is_running());
     output.stop().unwrap();
     assert!(!output.is_running());
-}
-
-#[test]
-fn a_busy_device_error_rebuilds_because_the_stream_may_have_ended() {
-    let w = world(|w| w.default = Some("a".into()));
-    let mut rig = rig(&w, 4);
-    rig.transport.step(Duration::ZERO);
-    rig.events();
-    raise_error(&w, 0, cpal::ErrorKind::DeviceBusy);
-    rig.transport.step(MS(20));
-    assert_eq!(
-        rig.events(),
-        [TransportState::Unavailable(TransportFailure::StreamLost)]
-    );
 }
 
 #[test]

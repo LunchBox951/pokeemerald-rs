@@ -138,3 +138,30 @@ fn a_stopped_reattach_keeps_the_queue_for_a_later_start() {
     assert_eq!(with(&w).plays, 1);
     assert_eq!(rig.producer.available_space(), rig.producer.capacity() - 4);
 }
+
+#[test]
+fn a_failed_running_reattach_keeps_the_queue_stale_after_a_stop() {
+    let w = world(|w| w.default = Some("a".into()));
+    let mut rig = rig(&w, 4);
+    rig.shared.running.store(true, Ordering::Release);
+    rig.transport.step(Duration::ZERO);
+    raise_error(&w, 0, cpal::ErrorKind::DeviceNotAvailable);
+    rig.transport.step(MS(20));
+
+    // The running retry discards the old queue, then its build fails.
+    with(&w).fail_build = true;
+    rig.transport.step(MS(120));
+    with(&w).fail_build = false;
+    // Queued while started with nothing draining, then stopped before the
+    // worker's next step.
+    assert_eq!(rig.producer.push(&[0.5; 4]), 4);
+    rig.shared.running.store(false, Ordering::Release);
+
+    rig.transport.step(MS(320));
+    assert_eq!(with(&w).builds, 2);
+    assert_eq!(
+        rig.producer.available_space(),
+        rig.producer.capacity(),
+        "history queued during the failed running attempt is discarded"
+    );
+}
