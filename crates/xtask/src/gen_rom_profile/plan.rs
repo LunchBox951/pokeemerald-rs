@@ -107,6 +107,13 @@ impl ReportLine {
         self
     }
 
+    /// Set the symbol expectation directly.
+    #[must_use]
+    pub fn with_symbol(mut self, symbol: SymbolExpectation) -> Self {
+        self.symbol = symbol;
+        self
+    }
+
     /// Mark the address as interior to another symbol.
     #[must_use]
     pub fn interior(mut self) -> Self {
