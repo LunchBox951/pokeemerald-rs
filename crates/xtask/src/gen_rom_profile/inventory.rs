@@ -3,8 +3,8 @@
 use super::error::GenRomProfileError;
 use super::pack_source::PackSource;
 use crate::extract::scope::{
-    layout_ids, sprite_palette_ids, sprite_sheet_ids, text_window_ids, tileset_animation_ids,
-    title_ids, BATTLERS, FONTS, INTERFACE_PALETTE_IDS, TILESETS,
+    layout_ids, sprite_palette_ids, sprite_sheet_ids, starter_chooser_ids, text_window_ids,
+    tileset_animation_ids, title_ids, BATTLERS, FONTS, INTERFACE_PALETTE_IDS, TILESETS,
 };
 
 /// Every fixed payload root of a tileset: tiles, metatiles, metatile
@@ -111,6 +111,28 @@ pub fn require_bag(pack: &PackSource, expected: &[String]) -> Result<(), GenRomP
     Ok(())
 }
 
+/// Refuses with [`GenRomProfileError::MissingPackEntry`] unless every starter-chooser image,
+/// palette, and tilemap is present, and with [`GenRomProfileError::StructMismatch`] for a pack
+/// `starter-chooser/` entry outside the fixed inventory, which the locator, reading only the
+/// inventory, would otherwise silently leave out of the profile.
+pub fn require_starter_chooser(pack: &PackSource) -> Result<(), GenRomProfileError> {
+    let expected = starter_chooser_ids();
+    expected
+        .iter()
+        .try_for_each(|id| pack.get(id).map(|_| ()))?;
+    if let Some(surplus) = pack
+        .ids_with_prefix("starter-chooser/")
+        .into_iter()
+        .find(|id| !expected.contains(id))
+    {
+        return Err(GenRomProfileError::StructMismatch {
+            id: surplus,
+            reason: "is not in the checkout's starter-chooser inventory".to_owned(),
+        });
+    }
+    Ok(())
+}
+
 /// Refuses with [`GenRomProfileError::MissingPackEntry`] unless every interface palette is present.
 pub fn require_interface_palettes(pack: &PackSource) -> Result<(), GenRomProfileError> {
     INTERFACE_PALETTE_IDS
@@ -130,5 +152,6 @@ pub fn preflight(pack: &PackSource, bag_ids: &[String]) -> Result<(), GenRomProf
     require_battlers(pack)?;
     require_battle_messages(pack)?;
     require_interface_palettes(pack)?;
-    require_bag(pack, bag_ids)
+    require_bag(pack, bag_ids)?;
+    require_starter_chooser(pack)
 }

@@ -64,6 +64,7 @@ const COMPLETE_PREFIXES: &[&str] = &[
     "battle-message/",
     "battle-anim/",
     "bag/",
+    "starter-chooser/",
 ];
 
 /// The starters' static battler entries: 12 ids the ROM backend must write

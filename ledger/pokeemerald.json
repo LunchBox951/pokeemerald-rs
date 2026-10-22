@@ -19247,7 +19247,7 @@
     "graphics/starter_choose": {
       "category": "graphics.ui",
       "kind": "dir",
-      "reason": "Complete chooser graphics directory extracted: three indexed PNG sheets with their embedded palettes and both raw tilemaps; exposed by typed starter chooser handles. No chooser rendering or ROM extraction claimed.",
+      "reason": "Complete chooser graphics directory extracted: three indexed PNG sheets with their embedded palettes and both raw tilemaps; exposed by typed starter chooser handles. The ROM importer reproduces the same eight pack entries from the BPEE rev-0 profile (rom-import's domains::starter_choose, gated by the real-ROM equivalence test's starter-chooser/ prefix). No chooser rendering claimed.",
       "rust_target": "crates/xtask/src/extract/starter_chooser.rs",
       "spec": "S-4",
       "status": "ported"

@@ -473,6 +473,17 @@ pub struct BattlerPlan {
     pub species: Vec<BattlerSpeciesPlan>,
 }
 
+/// The starter chooser's roots, owned.
+#[derive(Debug, Clone)]
+pub struct StarterChooserPlan {
+    /// Every `starter-chooser/image/*` root.
+    pub images: Vec<ImagePlan>,
+    /// Every `starter-chooser/palette/*` root.
+    pub palettes: Vec<PalettePlan>,
+    /// Every `starter-chooser/raw/*` tilemap root.
+    pub tilemaps: Vec<BlobPlan>,
+}
+
 /// Everything one generator run derived.
 #[derive(Debug, Clone)]
 pub struct ProfilePlan {
@@ -498,6 +509,8 @@ pub struct ProfilePlan {
     pub battle_anims: BattleAnimationPlan,
     /// The ordinary bag's images, palettes, and tilemap.
     pub bag: BagPlan,
+    /// The starter chooser's sheets, palettes, and background tilemaps.
+    pub starter_chooser: StarterChooserPlan,
     /// The starters' static battler art.
     pub battlers: BattlerPlan,
 }

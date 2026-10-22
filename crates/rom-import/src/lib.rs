@@ -43,7 +43,8 @@
 //!   and border blocks), the object-event sprites (`sprite/*` sheets and
 //!   `sprite/palette/*` banks), the Latin glyph sheets (`font/*/glyphs`,
 //!   decoded from `gbagfx`'s `.latfont` layout), and the text windows
-//!   (`text-window/image/*`, `text-window/palette/*`). The sound engine's
+//!   (`text-window/image/*`, `text-window/palette/*`), and the starter
+//!   chooser's sheets, palettes and tilemaps (`starter-chooser/*`). The sound engine's
 //!   data is wired too: `DirectSound` samples and programmable waves
 //!   (`audio/sample/*`) and voicegroups (`audio/voicegroup/*`), read from
 //!   the m4a `WaveData` and `ToneData` structs and emitted through
@@ -116,8 +117,8 @@ pub use roots::{
     AnimProgramRoot, AnimSymbolRoot, AudioRoots, BagRoots, BattleAnimationRoots,
     BattleMessageRoots, BattlerRoot, BattlerRoots, BlobRoot, Encoding, FontRoot, ImageRoot,
     InterfaceRoots, KeysplitRoot, MapLayoutRoot, PaletteRoot, Roots, SampleRoot, SongRoot,
-    SpecialMessageRoot, SpriteRoots, TextWindowRoots, TileAnimRoot, TilesetRoot, TitleScreenRoots,
-    VoicegroupRoot,
+    SpecialMessageRoot, SpriteRoots, StarterChooserRoots, TextWindowRoots, TileAnimRoot,
+    TilesetRoot, TitleScreenRoots, VoicegroupRoot,
 };
 pub use sha1::{sha1, Digest, DigestParseError, Sha1};
 

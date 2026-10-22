@@ -436,6 +436,21 @@ pub struct BagRoots {
     pub raws: &'static [BlobRoot],
 }
 
+/// The starter chooser's graphics (`graphics/starter_choose`).
+///
+/// The three sheets' images and palettes plus the two Birch background
+/// tilemaps, under the `starter-chooser/` pack ids the checkout extractor
+/// emits. The starters' shared battler art is the battler family's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StarterChooserRoots {
+    /// Every `starter-chooser/image/*` entry.
+    pub images: &'static [ImageRoot],
+    /// Every `starter-chooser/palette/*` entry.
+    pub palettes: &'static [PaletteRoot],
+    /// Every `starter-chooser/raw/*` entry.
+    pub tilemaps: &'static [BlobRoot],
+}
+
 /// One species' static battler art: the rows its `SPECIES_*` index selects in
 /// `gMonStillFrontPicTable`, `gMonBackPicTable`, `gMonPaletteTable`, and
 /// `gMonShinyPaletteTable`.
@@ -500,6 +515,8 @@ pub struct Roots {
     pub battle_anims: BattleAnimationRoots,
     /// The ordinary-bag images, palettes, and tilemap.
     pub bag: BagRoots,
+    /// The starter chooser's sheets, palettes, and background tilemaps.
+    pub starter_chooser: StarterChooserRoots,
     /// The starters' static battler images and palettes.
     pub battlers: BattlerRoots,
 }
@@ -542,6 +559,7 @@ impl Roots {
         battle_messages: BattleMessageRoots::NONE,
         battle_anims: BattleAnimationRoots::NONE,
         bag: BagRoots::NONE,
+        starter_chooser: StarterChooserRoots::NONE,
         battlers: BattlerRoots::NONE,
     };
 
@@ -561,6 +579,7 @@ impl Roots {
             .chain(self.sprites.sheets.iter())
             .chain(self.text_window.images.iter())
             .chain(self.bag.images.iter())
+            .chain(self.starter_chooser.images.iter())
             .chain(
                 self.battlers
                     .species
@@ -579,6 +598,7 @@ impl Roots {
             .chain(self.text_window.palettes.iter())
             .chain(self.interface.palettes.iter())
             .chain(self.bag.palettes.iter())
+            .chain(self.starter_chooser.palettes.iter())
             .chain(
                 self.battlers
                     .species
@@ -613,6 +633,15 @@ impl BagRoots {
         images: &[],
         palettes: &[],
         raws: &[],
+    };
+}
+
+impl StarterChooserRoots {
+    /// No starter-chooser roots recorded: the domain writes nothing.
+    pub const NONE: Self = Self {
+        images: &[],
+        palettes: &[],
+        tilemaps: &[],
     };
 }
 
