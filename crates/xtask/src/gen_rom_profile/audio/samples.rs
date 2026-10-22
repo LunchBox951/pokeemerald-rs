@@ -1,4 +1,4 @@
-//! Locating `DirectSound` and programmable-wave samples by their payloads, with their colocated tests.
+//! Locates `DirectSound` and programmable-wave samples by their payloads.
 
 use assets::audio::{DirectSoundSample, ProgrammableWave, Sample};
 
@@ -12,7 +12,7 @@ use super::{
     PROGRAMMABLE_WAVE_SYMBOL, WAVE_HEADER_BYTES, WAVE_STATUS_LOOP, WAVE_TABLE_BYTES,
 };
 
-/// Locate every `DirectSound` sample by its PCM, then check its header.
+/// Locates every `DirectSound` sample by its PCM and checks its `WaveData` header.
 pub(super) fn locate_direct_sound(
     ctx: &Context<'_>,
     report: &mut Vec<ReportLine>,
@@ -38,10 +38,7 @@ pub(super) fn locate_direct_sound(
         })?;
         let sample = &samples[index];
         check_wave_header(ctx, id, addr, sample)?;
-        // The needle is the buffer the canonical schema retains: `data_len`
-        // logical samples (`sample.sample_count()`) plus one
-        // interpolation-guard byte wav2agb's payload writer always emits
-        // (`crates/xtask/src/extract/wav.rs`'s module docs).
+        // The needle ends with the interpolation-guard byte wav2agb always emits.
         let buffer_len = u32::try_from(needles[index].len()).expect("a sample fits in u32");
         let data_len = sample.sample_count();
         let symbol = format!(
@@ -63,18 +60,13 @@ pub(super) fn locate_direct_sound(
     Ok(plans)
 }
 
-/// Decode and validate a `DirectSound` pack entry through the canonical
-/// wire schema (`assets::audio::Sample::decode`): the same schema the
-/// runtime pack loader enforces decides whether a payload is well-formed
-/// enough to search for, so a declared `sample_count` that disagrees with
-/// the retained PCM, or any other canonical violation (loop bounds,
-/// trailing bytes, an unrecognized kind tag), is refused here rather than
-/// reaching the ROM search.
+/// Decodes a `DirectSound` pack entry with `Sample::decode`, so only payloads
+/// the runtime pack loader accepts reach the ROM search.
 ///
 /// # Errors
 ///
 /// [`GenRomProfileError::EntryShape`] naming `id` when the payload does not
-/// decode as a valid `DirectSound` sample.
+/// decode as a `DirectSound` sample.
 fn direct_sound_of(ctx: &Context<'_>, id: &str) -> Result<DirectSoundSample, GenRomProfileError> {
     let payload = raw_payload(ctx, id)?;
     match Sample::decode(payload) {
@@ -90,11 +82,7 @@ fn direct_sound_of(ctx: &Context<'_>, id: &str) -> Result<DirectSoundSample, Gen
     }
 }
 
-/// The ROM's raw PCM bytes for a validated `DirectSound` sample.
-///
-/// [`DirectSoundSample::data`] returns `i8` values in playback order; the
-/// ROM (and the pack payload the schema decoded them from) stores the
-/// identical bit pattern as plain bytes.
+/// The sample's PCM as the raw bytes the ROM stores.
 fn pcm_needle(sample: &DirectSoundSample) -> Vec<u8> {
     sample
         .data()
@@ -103,7 +91,13 @@ fn pcm_needle(sample: &DirectSoundSample) -> Vec<u8> {
         .collect()
 }
 
-/// Check a `WaveData` header against the pack entry's own validated fields.
+/// Requires the `WaveData` header at `addr` to be type 0 with the sample's
+/// loop flag, base frequency, loop start and sample count.
+///
+/// # Errors
+///
+/// [`GenRomProfileError::StructMismatch`] naming `id` when the header is
+/// truncated or any field differs.
 fn check_wave_header(
     ctx: &Context<'_>,
     id: &str,
@@ -140,12 +134,12 @@ fn check_wave_header(
     Ok(())
 }
 
-/// A programmable-wave table's length, as the `u32` the profile records.
+/// The programmable-wave table length as a `u32`.
 fn wave_table_len() -> u32 {
     u32::try_from(WAVE_TABLE_BYTES).expect("16 fits in u32")
 }
 
-/// Decode a programmable-wave pack entry through the canonical sample schema.
+/// Decodes a programmable-wave pack entry with `Sample::decode`.
 ///
 /// # Errors
 ///
@@ -169,7 +163,7 @@ fn programmable_wave_of(
     }
 }
 
-/// Locate every programmable-wave table by its 16 bytes.
+/// Locates every programmable-wave table by its bytes.
 pub(super) fn locate_programmable_wave(
     ctx: &Context<'_>,
     report: &mut Vec<ReportLine>,
@@ -184,7 +178,7 @@ pub(super) fn locate_programmable_wave(
     let mut plans = Vec::with_capacity(ids.len());
     for (index, id) in ids.iter().enumerate() {
         let addr = exactly_one(id, &hits[index])?;
-        // The pack pads the index to two digits; upstream does not.
+        // Pack ids pad the index to two digits; upstream symbol names do not.
         let number = id
             .trim_start_matches(PROGRAMMABLE_WAVE_PREFIX)
             .trim_start_matches('0');
@@ -217,20 +211,17 @@ mod tests {
             .collect()
     }
 
-    /// A distinctive byte appended past `data`'s declared count: the
-    /// retained interpolation guard `wav.rs` always keeps (module docs).
+    /// The interpolation-guard byte `wav.rs` always appends.
     const GUARD_SAMPLE: u8 = 0xA5;
 
-    /// `data` with [`GUARD_SAMPLE`] appended, matching the buffer `wav.rs`
-    /// and the ROM importer both retain past the logical sample count.
+    /// `data` followed by [`GUARD_SAMPLE`].
     fn with_guard(data: &[u8]) -> Vec<u8> {
         let mut out = data.to_vec();
         out.push(GUARD_SAMPLE);
         out
     }
 
-    /// A `DirectSound` pack payload: kind, freq, loop flag, loop start,
-    /// logical sample count, PCM, and the retained guard byte.
+    /// A `DirectSound` pack payload with a guard byte after `data`.
     fn direct_sound_payload(freq: u32, loop_start: Option<u32>, data: &[u8]) -> Vec<u8> {
         let mut payload = vec![0u8];
         payload.extend_from_slice(&freq.to_le_bytes());
@@ -245,8 +236,7 @@ mod tests {
         payload
     }
 
-    /// A ROM `WaveData` header: type, status, freq, loop start, size (the
-    /// logical sample count).
+    /// A ROM `WaveData` header.
     fn wave_header(wave_type: u16, status: u16, freq: u32, loop_start: u32, size: u32) -> Vec<u8> {
         let mut header = Vec::with_capacity(16);
         header.extend_from_slice(&wave_type.to_le_bytes());
@@ -257,9 +247,8 @@ mod tests {
         header
     }
 
-    /// Plant one sample at `0x10_0000` and locate it against a one-entry
-    /// pack. `data` is the logical PCM; the retained guard byte is appended
-    /// to what lands in the ROM.
+    /// Plants `header` and `data` plus its guard byte in a ROM and locates the
+    /// sample against a one-entry pack holding `payload`.
     fn locate_one(
         name: &str,
         header: &[u8],
@@ -283,8 +272,7 @@ mod tests {
         let data = pcm();
         let freq = 1 << 20;
         let size = u32::try_from(data.len()).expect("a sample fits in u32");
-        // All currently checked fields agree: both numeric loop starts are
-        // zero. Only the ROM status says the sample loops.
+        // Only the ROM status flag says the sample loops; both loop starts are zero.
         let header = wave_header(0, WAVE_STATUS_LOOP, freq, 0, size);
         let payload = direct_sound_payload(freq, None, &data);
 
@@ -325,10 +313,6 @@ mod tests {
         let size = u32::try_from(data.len()).expect("a sample fits in u32");
         let header = wave_header(0, 0, freq, 0, size);
         let mut payload = direct_sound_payload(freq, None, &data);
-        // Corrupt only the serialized sample_count (bytes 10..14). The
-        // canonical decoder (`assets::audio::Sample::decode`) requires it
-        // to agree with the retained PCM and rejects this payload before
-        // the generator ever searches the ROM for it.
         payload[10..14].copy_from_slice(&(size + 7).to_le_bytes());
 
         let err = locate_one("declared-count-too-large", &header, payload, &data).unwrap_err();
@@ -349,8 +333,6 @@ mod tests {
         let size = u32::try_from(data.len()).expect("a sample fits in u32");
         let header = wave_header(0, 0, freq, 0, size);
         let mut payload = direct_sound_payload(freq, None, &data);
-        // Shrink the declared sample_count so the retained buffer holds
-        // bytes past what the canonical schema's `expect_eof` allows.
         payload[10..14].copy_from_slice(&(size - 1).to_le_bytes());
 
         let err = locate_one("declared-count-too-small", &header, payload, &data).unwrap_err();
@@ -443,9 +425,6 @@ mod tests {
 
     #[test]
     fn a_programmable_wave_payload_with_a_malformed_length_is_rejected() {
-        // Short payloads were already refused by the raw slice; this pins that
-        // refusal through the canonical decoder (the oversized case is the
-        // trailing-bytes test, which is the regression).
         let mut payload = programmable_wave_payload();
         payload.pop();
         assert_wave_entry_shape("wave-truncated", payload, &WAVE_TABLE);
