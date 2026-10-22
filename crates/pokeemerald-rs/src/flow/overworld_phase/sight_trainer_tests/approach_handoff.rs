@@ -4,6 +4,7 @@ use engine::overworld::{Direction, PlayerState};
 use platform::{ButtonState, Buttons};
 
 use super::super::test_support::pressed;
+use super::super::OverworldPhase;
 use super::support::*;
 
 /// `EventScript_ShowTrainerIntroMsg` (`trainer_battle.inc:101-107`): the
@@ -68,7 +69,7 @@ fn the_intro_speech_holds_the_battle_until_the_player_dismisses_it() {
             "frame {frame}: `dotrainerbattle` must not run until the speech is dismissed"
         );
         assert!(
-            phase.party_lead.is_some(),
+            phase.lead_for_test().is_some(),
             "frame {frame}: and the lead is still the player's"
         );
     }
@@ -106,7 +107,7 @@ fn the_intro_speech_holds_the_battle_until_the_player_dismisses_it() {
         "the approach is over once its battle has started"
     );
     assert!(
-        phase.party_lead.is_none(),
+        phase.lead_for_test().is_none(),
         "`dotrainerbattle` is where the lead is finally taken into the fight"
     );
     assert_eq!(
@@ -261,7 +262,66 @@ fn a_running_approach_preempts_the_cone_check_that_started_it() {
         );
     }
     assert!(
-        phase.party_lead.is_some(),
+        phase.lead_for_test().is_some(),
         "the trigger never got a second chance to spend the lead"
     );
+}
+
+/// Drives a seeded approach through its intro box to the battle start.
+fn hand_off_to_the_battle(phase: &mut OverworldPhase) {
+    use engine::text::Token;
+
+    seed_approach(phase, 0);
+    phase
+        .sight_approach
+        .as_mut()
+        .expect("just seeded")
+        .skip_to_open_intro_message();
+    phase.dialog = Some(
+        crate::overworld::dialog::synthetic_dialog(vec![Token::Char('W'), Token::End])
+            .with_waitbuttonpress(),
+    );
+    for _ in 0..FRAMES_STANDING_STILL {
+        phase.step(ButtonState::new());
+    }
+    phase.step(pressed(Buttons::A));
+    assert!(phase.is_sight_trainer_battle_active(), "setup: handed off");
+}
+
+/// The approach only observes the lead; it stays at home to be lent at the
+/// handoff, so the owner can still lend it mid-approach.
+#[test]
+fn a_running_approach_has_not_lent_the_lead() {
+    let (rx, ry) = RHETT_TILE;
+    let mut phase = route_103_phase(PlayerState::new((rx, ry + 1), 3, Direction::North));
+    seed_approach(&mut phase, 3);
+    let lent = phase
+        .take_lead_battler()
+        .expect("an approach in flight leaves the lead with the owner");
+    phase.restore_lead_battler(lent);
+    phase.assert_lead_at_slot_for_test(0);
+}
+
+/// The handoff lends the lead, so a second lend is refused.
+#[test]
+#[should_panic(expected = "lent out to a battle")]
+fn a_started_sight_battle_holds_the_lead_on_loan() {
+    let (rx, ry) = RHETT_TILE;
+    let mut phase = route_103_phase(PlayerState::new((rx, ry + 1), 3, Direction::North));
+    hand_off_to_the_battle(&mut phase);
+    let _ = phase.take_lead_battler();
+}
+
+/// The battle returns the lead to its slot through the owner when it ends.
+#[test]
+fn a_finished_sight_battle_restores_the_lead_to_its_slot() {
+    let (rx, ry) = RHETT_TILE;
+    let mut phase = route_103_phase(PlayerState::new((rx, ry + 1), 3, Direction::North));
+    hand_off_to_the_battle(&mut phase);
+    assert!(phase.lead_for_test().is_none(), "the lead is on loan");
+
+    let outcome = play_out_sight_battle(&mut phase, 32);
+    assert!(outcome.is_some(), "the fight must conclude");
+    assert!(phase.lead_for_test().is_some(), "the lead came back");
+    phase.assert_lead_at_slot_for_test(0);
 }
