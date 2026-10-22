@@ -119,20 +119,23 @@ impl OverworldPhase {
                  may re-fire"
             );
         }
-        let Some(lead) = self.party_lead.clone() else {
+        let Some(lead) = self.take_lead_battler() else {
             eprintln!("first battle: no party mon yet -- no battle to start");
             return;
         };
         let player_trainer_id = u32::from_le_bytes(self.save2.player_trainer_id);
-        match first_battle::start_first_battle(lead, player_trainer_id, &mut self.rng) {
+        // The start consumes its copy; the lent original returns on rejection.
+        match first_battle::start_first_battle(lead.clone(), player_trainer_id, &mut self.rng) {
             Ok(battle) => {
-                self.party_lead = None;
                 self.active_battle = Some(ActiveBattle::First(battle));
                 // The first battle restarts wild-encounter immunity like any battle
                 // (`pokeemerald/src/battle_setup.c:941`).
                 self.wild.restart_immunity_steps();
             }
-            Err(error) => eprintln!("first battle: can't start ({error:?})"),
+            Err(error) => {
+                eprintln!("first battle: can't start ({error:?})");
+                self.restore_lead_battler(lead);
+            }
         }
     }
 
@@ -141,9 +144,13 @@ impl OverworldPhase {
         battle: battle::Battle,
     ) -> Option<ActiveBattle> {
         let mut slot = Some(battle);
-        if let Some(outcome) =
-            first_battle::advance_first_battle(&mut slot, &mut self.party_lead, &mut self.rng)
-        {
+        let mut returned_lead = None;
+        let outcome =
+            first_battle::advance_first_battle(&mut slot, &mut returned_lead, &mut self.rng);
+        if let Some(lead) = returned_lead {
+            self.restore_lead_battler(lead);
+        }
+        if let Some(outcome) = outcome {
             eprintln!("first battle: ended -- {outcome:?}");
             self.first_battle_outcome = Some(outcome);
             self.conclude_first_battle();

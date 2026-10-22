@@ -89,7 +89,7 @@ fn stepping_onto_the_route_101_trigger_tile_starts_the_scripted_first_battle() {
     );
     assert_eq!(battle.enemy().level(), 2);
     assert!(
-        phase.party_lead.is_none(),
+        phase.lead_for_test().is_none(),
         "the lead mon moved into the battle"
     );
 }
@@ -416,7 +416,7 @@ fn an_aborted_first_battle_still_consumes_the_route_101_trigger() {
         "setup: the aborted battle must have emptied the slot"
     );
     assert!(
-        phase.party_lead.is_some(),
+        phase.lead_for_test().is_some(),
         "setup: the abort writes the lead back all the same"
     );
     assert_eq!(
@@ -505,5 +505,6 @@ fn an_inadmissible_lead_leaves_the_rescue_armed_without_drawing() {
         Ok(1),
         "the rescue stays armed for a lead the engine can fight with"
     );
-    assert!(phase.party_lead.is_some(), "the lead stays home");
+    assert!(phase.lead_for_test().is_some(), "the lead stays home");
+    phase.assert_lead_at_slot_for_test(0);
 }
