@@ -97,8 +97,7 @@ impl OverworldPhase {
     /// only a lead the turn engine refuses leaves it armed, with nothing drawn.
     pub(super) fn begin_first_battle(&mut self) {
         if let Some(Err(error)) = self
-            .party_lead
-            .as_ref()
+            .lead_battler()
             .map(battle::ensure_participant_admissible)
         {
             eprintln!("first battle: can't start ({error:?}) -- the rescue stays armed");
