@@ -550,6 +550,8 @@ fn a_concluded_rival_battle_restores_the_lead_to_its_slot() {
     assert!(play_out_rival_battle(&mut phase, 32).is_some());
     assert!(phase.lead_for_test().is_some(), "the lead came back");
     phase.assert_lead_at_slot_for_test(0);
+    let lent = phase.take_lead_battler().expect("the loan was closed");
+    phase.restore_lead_battler(lent);
 }
 
 /// A refused rival start returns the lent lead, which can then be lent again.

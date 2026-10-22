@@ -324,4 +324,6 @@ fn a_finished_sight_battle_restores_the_lead_to_its_slot() {
     assert!(outcome.is_some(), "the fight must conclude");
     assert!(phase.lead_for_test().is_some(), "the lead came back");
     phase.assert_lead_at_slot_for_test(0);
+    let lent = phase.take_lead_battler().expect("the loan was closed");
+    phase.restore_lead_battler(lent);
 }
