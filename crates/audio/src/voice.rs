@@ -8,8 +8,8 @@
 //!
 //! A [`WaveData`] whose buffer retains a trailing interpolation guard past
 //! [`WaveData::logical_len`] (`crates/audio/src/sample.rs`) loops and retires
-//! using that logical length, while [`SourcePosition::interpolated_sample`]
-//! still reads the guard as its final boundary lookahead, matching upstream's
+//! using that logical length, while the interpolated sample read still
+//! treats the guard as its final boundary lookahead, matching upstream's
 //! `current + 1` prefetch (`m4a_1.s:399-407`).
 
 use std::sync::Arc;

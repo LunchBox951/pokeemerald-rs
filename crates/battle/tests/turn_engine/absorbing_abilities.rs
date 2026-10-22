@@ -1,7 +1,5 @@
-//! `ABILITYEFFECT_ABSORBING` (`battle_util.c:2676`-`:2744`): Volt Absorb,
-//! Water Absorb and Flash Fire end an ordinary hit after its accuracy stage
-//! and before the critical, variance and secondary draws. PP is spent once
-//! before execution regardless (`Cmd_ppreduce`).
+//! Absorbing abilities (`ABILITYEFFECT_ABSORBING`, `battle_util.c:2676`-`:2744`)
+//! end a hit after its accuracy stage; PP is still spent (`Cmd_ppreduce`).
 
 use crate::common::{max_iv_mon, SequenceRng};
 use assets::trainers::TrainerId;
@@ -9,11 +7,10 @@ use assets::MoveId;
 use battle::{Battle, BattleEvent, BattlePokemon, Dex, PlayerAction};
 
 const WATER_GUN: MoveId = MoveId::WATER_GUN;
-/// Electric, power 7, `EFFECT_ALWAYS_HIT`: consumes no accuracy draw.
+/// `EFFECT_ALWAYS_HIT`: consumes no accuracy draw.
 const SHOCK_WAVE: MoveId = MoveId::SHOCK_WAVE;
 const SCRATCH: MoveId = MoveId::SCRATCH;
-/// Self-targeting and draw-free, so the opposing side adds nothing to the
-/// script.
+/// Draw-free, so the enemy side adds nothing to the script.
 const SWORDS_DANCE: MoveId = MoveId::SWORDS_DANCE;
 const FOCUS_ENERGY: MoveId = MoveId::FOCUS_ENERGY;
 
@@ -23,12 +20,12 @@ const JOLTEON: u16 = 135;
 const FLAREON: u16 = 136;
 const MUDKIP: u16 = 283;
 
-/// `TRAINER_GRUNT_AQUA_HIDEOUT_1`, scored by `AI_CheckBadMove` alone.
+/// Trainer whose move choice is scored by `AI_CheckBadMove` alone.
 const GRUNT_AQUA_HIDEOUT_1: TrainerId = TrainerId(2);
 
 /// `Battle::new` turn seed (`battle_main.c:3140`).
 const CONSTRUCTION_SEED: u16 = 0;
-/// Per wild turn: the random-turn number and the enemy move-slot pick.
+/// The random-turn number and the enemy move-slot pick.
 const WILD_TURN_SETUP: [u16; 2] = [0, 0];
 const ACCURACY_HIT: u16 = 0;
 
@@ -185,9 +182,7 @@ fn flash_fire_has_no_executable_fire_move_to_absorb_and_water_still_hits_it() {
     rng.assert_exhausted();
 }
 
-/// The trainer's only move is Water Gun against a Water Absorb holder:
-/// `AI_CheckBadMove` scores it down but, as the sole move, it is still
-/// chosen and executed -- and absorbed, dealing no damage.
+/// `AI_CheckBadMove` scores the move down, but as the sole move it is still chosen.
 #[test]
 fn a_trainer_whose_only_move_is_absorbed_deals_no_damage() {
     let dex = Dex::new();
@@ -201,7 +196,7 @@ fn a_trainer_whose_only_move_is_absorbed_deals_no_damage() {
             .into_iter()
             .chain([0; 4]) // simulated-damage rolls
             .chain([0]) // final move pick
-            .chain([ACCURACY_HIT]), // absorbed Water Gun
+            .chain([ACCURACY_HIT]),
     );
     let mut battle =
         Battle::new_trainer(dex, vaporeon, GRUNT_AQUA_HIDEOUT_1, vec![enemy], &mut rng).unwrap();
