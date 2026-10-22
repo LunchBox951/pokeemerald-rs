@@ -724,6 +724,64 @@ mod bag_field_tests {
     };
     use rom_import::Encoding;
 
+    fn bag_plan() -> BagPlan {
+        BagPlan {
+            images: vec![ImagePlan {
+                id: "bag/image/hm".to_owned(),
+                addr: 0x0812_0000,
+                encoding: Encoding::Raw,
+                rom_bit_depth: 4,
+                pack_bit_depth: 4,
+                width: 16,
+                height: 16,
+                metatile_width: 1,
+                metatile_height: 1,
+                tile_count: 4,
+            }],
+            palettes: vec![PalettePlan {
+                id: "bag/item-icon/palette/potion".to_owned(),
+                addr: 0x0813_0000,
+                color_count: 16,
+                encoding: Encoding::Lz77,
+            }],
+            raws: vec![BlobPlan {
+                id: "bag/raw/menu".to_owned(),
+                addr: 0x0814_0000,
+                encoding: Encoding::Lz77,
+                len: 2048,
+            }],
+        }
+    }
+
+    fn scene_plan() -> OpeningScenePlan {
+        OpeningScenePlan {
+            images: vec![ImagePlan {
+                id: "opening-scene/image/birch".to_owned(),
+                addr: 0x0815_0000,
+                encoding: Encoding::Raw,
+                rom_bit_depth: 4,
+                pack_bit_depth: 4,
+                width: 64,
+                height: 64,
+                metatile_width: 8,
+                metatile_height: 8,
+                tile_count: 64,
+            }],
+            palettes: vec![PalettePlan {
+                id: "opening-scene/palette/lotad".to_owned(),
+                addr: 0x0816_0000,
+                color_count: 16,
+                encoding: Encoding::Lz77,
+            }],
+            tilemaps: vec![BlobPlan {
+                id: "opening-scene/raw/clock_start".to_owned(),
+                addr: 0x0817_0000,
+                encoding: Encoding::Lz77,
+                len: 1280,
+            }],
+        }
+    }
+
     #[test]
     fn the_emitted_roots_literal_populates_the_bag_family() {
         let base = 0x0800_0000;
@@ -774,58 +832,8 @@ mod bag_field_tests {
                 shiny_palette_table: base,
                 species: vec![],
             },
-            bag: BagPlan {
-                images: vec![ImagePlan {
-                    id: "bag/image/hm".to_owned(),
-                    addr: 0x0812_0000,
-                    encoding: Encoding::Raw,
-                    rom_bit_depth: 4,
-                    pack_bit_depth: 4,
-                    width: 16,
-                    height: 16,
-                    metatile_width: 1,
-                    metatile_height: 1,
-                    tile_count: 4,
-                }],
-                palettes: vec![PalettePlan {
-                    id: "bag/item-icon/palette/potion".to_owned(),
-                    addr: 0x0813_0000,
-                    color_count: 16,
-                    encoding: Encoding::Lz77,
-                }],
-                raws: vec![BlobPlan {
-                    id: "bag/raw/menu".to_owned(),
-                    addr: 0x0814_0000,
-                    encoding: Encoding::Lz77,
-                    len: 2048,
-                }],
-            },
-            opening_scene: OpeningScenePlan {
-                images: vec![ImagePlan {
-                    id: "opening-scene/image/birch".to_owned(),
-                    addr: 0x0815_0000,
-                    encoding: Encoding::Raw,
-                    rom_bit_depth: 4,
-                    pack_bit_depth: 4,
-                    width: 64,
-                    height: 64,
-                    metatile_width: 8,
-                    metatile_height: 8,
-                    tile_count: 64,
-                }],
-                palettes: vec![PalettePlan {
-                    id: "opening-scene/palette/lotad".to_owned(),
-                    addr: 0x0816_0000,
-                    color_count: 16,
-                    encoding: Encoding::Lz77,
-                }],
-                tilemaps: vec![BlobPlan {
-                    id: "opening-scene/raw/clock_start".to_owned(),
-                    addr: 0x0817_0000,
-                    encoding: Encoding::Lz77,
-                    len: 1280,
-                }],
-            },
+            bag: bag_plan(),
+            opening_scene: scene_plan(),
         };
         let module = module(&plan, "0", &[]);
         assert!(
