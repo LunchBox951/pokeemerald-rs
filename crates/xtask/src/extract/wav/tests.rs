@@ -663,3 +663,18 @@ fn every_smpl_chunk_is_validated_even_when_a_later_one_is_effective() {
         Err(WavError::TooManySampleLoops { count: 2 })
     ));
 }
+
+#[test]
+fn a_later_invalid_fmt_chunk_is_rejected_after_a_valid_one() {
+    let mut bad = fmt_chunk(PCM_U8, FIXTURE_MONO_CHANNEL_COUNT, 8000);
+    bad[2] = 2; // stereo
+    let bytes = build_riff(&[
+        (
+            *b"fmt ",
+            fmt_chunk(PCM_U8, FIXTURE_MONO_CHANNEL_COUNT, 8000),
+        ),
+        (*b"fmt ", bad),
+        (*b"data", vec![128u8]),
+    ]);
+    assert!(matches!(decode(&bytes), Err(WavError::NotMono { .. })));
+}
