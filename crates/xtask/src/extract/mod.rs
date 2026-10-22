@@ -26,8 +26,13 @@
 //!   main-menu background palette; and
 //! - the starter chooser's tile, Poké Ball, and circle sheets with their
 //!   palettes and both Birch tilemaps;
+//! - Birch's speech scene (shadow sheet, background tilemap and palettes, his
+//!   sprite, and Lotad's front picture with its normal palette) and the wall
+//!   clock (face and hand sheets, both gender palettes, the prompt palette, and
+//!   both tilemaps);
 //! - the static battler art of Treecko, Torchic, and Mudkip: front and back
 //!   images with normal and shiny palettes;
+//! - the Brendan and May trainer front pictures with their palettes;
 //! - the ordinary bag's screen, tilemap, sex palettes, male and female sheets
 //!   and palette, rotating ball, select and HM marks, and the image and
 //!   palette of every item icon `gItemIconTable` selects; and
@@ -52,6 +57,8 @@
 //! - `text-window/{image,palette}/<stem>`
 //! - `interface/palette/main_menu_bg`
 //! - `starter-chooser/{image,palette,raw}/<stem>`
+//! - `opening-scene/{image,palette,raw}/<name>`
+//! - `trainer-pic/<trainer>/{front,palette}`
 //! - `bag/{image,palette,raw}/<name>` and `bag/item-icon/{image,palette}/<stem>`
 //! - `battle-interface/{image,palette,raw}/<name>`
 //! - `pokemon/<species>/{front,back}` and `pokemon/<species>/palette/{normal,shiny}`
@@ -69,6 +76,8 @@ mod battle_anim;
 mod battle_interface;
 mod battle_message;
 mod battler;
+#[cfg(test)]
+mod checkpoint_maps_tests;
 mod error;
 mod fonts;
 pub mod inflate;
@@ -77,6 +86,7 @@ pub mod jasc_pal;
 mod layouts;
 mod layouts_json;
 pub(crate) mod midi;
+mod opening_scene;
 pub mod png;
 mod pokedex_graphics;
 mod publish;
@@ -86,6 +96,7 @@ mod starter_chooser;
 mod text_window;
 mod tilesets;
 mod title;
+mod trainer_pic;
 pub(crate) mod voicegroups;
 mod wav;
 
@@ -152,11 +163,13 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     }
     title::extract_title_screen(&upstream, &mut writer)?;
     sprites::extract_sprites(&upstream, &mut writer)?;
+    trainer_pic::extract_trainer_pics(&upstream, &mut writer)?;
     layouts::extract_layouts(&upstream, &mut writer)?;
     fonts::extract_fonts(&upstream, &mut writer)?;
     text_window::extract_text_window(&upstream, &mut writer)?;
     interface::extract_interface_palettes(&upstream, &mut writer)?;
     starter_chooser::extract_starter_chooser(&upstream, &mut writer)?;
+    opening_scene::extract_opening_scene(&upstream, &mut writer)?;
     battler::extract_battlers(&upstream, &mut writer)?;
     bag::extract_bag(&upstream, &mut writer)?;
     pokedex_graphics::extract_pokedex_graphics(&upstream, &mut writer)?;
