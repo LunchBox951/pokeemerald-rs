@@ -10,6 +10,7 @@ use crate::SpeciesId;
 
 use super::battle_message::BattleMessageError;
 use crate::battle_anim::BattleAnimationError;
+use crate::TrainerPicId;
 
 use super::format::FORMAT_VERSION;
 
@@ -97,6 +98,23 @@ pub enum PackError {
     },
     /// The pack carries no battler art for this species.
     UnsupportedBattlerSpecies(SpeciesId),
+    /// A trainer front picture entry differs from the upstream graphic's shape.
+    MalformedTrainerPicAsset {
+        /// Asset id.
+        id: String,
+        /// What differs from the expected shape.
+        detail: String,
+    },
+    /// The pack carries no trainer picture for this identity.
+    UnsupportedTrainerPic(TrainerPicId),
+    /// An opening-scene entry (Birch's speech scene or the wall clock) differs
+    /// from the upstream graphic's shape.
+    MalformedOpeningSceneAsset {
+        /// Asset id.
+        id: String,
+        /// What differs from the expected shape.
+        detail: String,
+    },
     /// A Pokédex graphics entry differs from the upstream graphic's shape.
     MalformedPokedexGraphic {
         /// Asset id.
@@ -257,6 +275,17 @@ impl fmt::Display for PackError {
                 "asset pack: no battler art for species {}",
                 species.index()
             ),
+            Self::MalformedTrainerPicAsset { id, detail } => {
+                write!(f, "asset pack: trainer picture entry `{id}` {detail}")
+            }
+            Self::UnsupportedTrainerPic(pic) => write!(
+                f,
+                "asset pack: no trainer picture for index {}",
+                pic.index()
+            ),
+            Self::MalformedOpeningSceneAsset { id, detail } => {
+                write!(f, "asset pack: opening-scene entry `{id}` {detail}")
+            }
             Self::MalformedPokedexGraphic { id, detail } => {
                 write!(f, "asset pack: Pokédex graphics entry `{id}` {detail}")
             }
@@ -308,7 +337,6 @@ impl fmt::Display for PackError {
 
 impl std::error::Error for PackError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        // An exhaustive match forces new source-carrying variants to choose their error chain.
         match self {
             Self::AudioDecode { source, .. } => Some(source),
             Self::BattleMessageDecode { source, .. } => Some(source),
@@ -332,6 +360,9 @@ impl std::error::Error for PackError {
             | Self::MalformedStarterAsset { .. }
             | Self::MalformedBattlerAsset { .. }
             | Self::UnsupportedBattlerSpecies(_)
+            | Self::MalformedTrainerPicAsset { .. }
+            | Self::UnsupportedTrainerPic(_)
+            | Self::MalformedOpeningSceneAsset { .. }
             | Self::MalformedPokedexGraphic { .. }
             | Self::MalformedBattleInterfaceAsset { .. }
             | Self::MalformedBagAsset { .. } => None,

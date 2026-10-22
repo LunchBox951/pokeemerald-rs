@@ -12,42 +12,28 @@ use super::support::*;
 
 // -- Sight-cone geometry, through the real trigger -------------------------
 
-/// The trigger itself (issue #264): standing within a real sight trainer's
-/// cone attempts the battle on an ordinary frame -- **no button press at
+/// The trigger itself (issue #264): standing within a real trainer's
+/// cone starts the approach on an ordinary frame -- **no button press at
 /// all** (unlike the rival's own A-press interaction trigger), matching
 /// upstream's `CheckForTrainersWantingBattle` running unconditionally ahead
-/// of every other per-frame check. The attempt itself currently fails to
-/// construct (`begin_sight_trainer_approach_if_seen`'s own docs: Rhett's
-/// real level-up moveset includes a move this battle engine does not yet
-/// implement) -- so this pins the *honest current* observable behaviour:
-/// the cone genuinely fires, the real handoff is genuinely attempted against
-/// the real extracted party, it genuinely fails, and the failure is logged
-/// rather than silently swallowed or soft-locking the player. Not a
-/// contradiction of that issue's own "starts the battle" framing so much as a
-/// gap this port's own tests should not paper over -- see
-/// `battle::winning_sets_the_defeated_flag_and_the_fight_cannot_restart` and
-/// the rest of `battle` for how the win/loss/defeated-flag *driver* half is
-/// still pinned, with a stand-in constructible party.
+/// of every other per-frame check. Rhett's real party constructs, so the
+/// real handoff succeeds against the real extracted party and the approach
+/// begins without consuming the lead.
 #[test]
-fn standing_in_a_real_trainers_cone_attempts_the_real_handoff_which_currently_fails_to_construct() {
+fn standing_in_a_real_trainers_cone_starts_the_approach_with_the_real_party() {
     let (rx, ry) = RHETT_TILE;
     let mut phase = route_103_phase(PlayerState::new((rx, ry + 1), 3, Direction::North));
-    phase.party_lead = Some(overwhelming_lead());
+    phase.set_fresh_lead_for_test(overwhelming_lead());
 
-    assert!(
-        !phase.is_sight_trainer_battle_active(),
-        "setup: no battle yet"
-    );
+    assert!(phase.sight_approach.is_none(), "setup: no approach yet");
     phase.step(ButtonState::new());
     assert!(
-        !phase.is_sight_trainer_battle_active(),
-        "Rhett's real moveset currently fails construction (the trigger's own \
-         `Refusals cost nothing, forever`) -- \
-         update this test once move coverage grows enough for it to succeed"
+        phase.sight_approach.is_some(),
+        "Rhett's real party constructs, so his cone must claim the frame"
     );
     assert!(
-        phase.party_lead.is_some(),
-        "a refused handoff must not consume the lead -- no soft lock"
+        phase.lead_for_test().is_some(),
+        "the handoff must not consume the lead -- no soft lock"
     );
 }
 
@@ -65,7 +51,7 @@ fn start_does_not_preempt_the_sight_trainer_scan_on_its_trigger_frame() {
     let (rx, ry) = RHETT_TILE;
 
     let mut claimed = route_103_phase(PlayerState::new((rx, ry + 1), 3, Direction::North));
-    claimed.party_lead = Some(overwhelming_lead());
+    claimed.set_fresh_lead_for_test(overwhelming_lead());
     claimed.synthetic_start_menu = SyntheticStartMenu::Builds;
     claimed.synthetic_sight_trainer = Some(assets::trainers::TrainerId(STAND_IN_TRAINER));
     claimed.step(pressed(Buttons::START));
@@ -79,12 +65,15 @@ fn start_does_not_preempt_the_sight_trainer_scan_on_its_trigger_frame() {
     );
 
     let mut refused = route_103_phase(PlayerState::new((rx, ry + 1), 3, Direction::North));
-    refused.party_lead = Some(overwhelming_lead());
+    refused.set_fresh_lead_for_test(overwhelming_lead());
     refused.synthetic_start_menu = SyntheticStartMenu::Builds;
+    // Rhett's party constructs; Marcos's (Sonic Boom) does not, so his id
+    // stands in for the refusal at Rhett's cone.
+    refused.synthetic_sight_trainer = Some(assets::trainers::TrainerId(TRAINER_MARCOS));
     refused.step(pressed(Buttons::START));
     assert!(
         refused.sight_approach.is_none(),
-        "setup: Rhett's own real party must still refuse to construct"
+        "setup: a refused real party must not claim the frame"
     );
     assert!(
         refused.start_menu().is_some(),
@@ -100,8 +89,9 @@ fn start_does_not_preempt_the_sight_trainer_scan_on_its_trigger_frame() {
 /// this leaked `CreateNPCTrainerParty`'s per-mon OT-id draws sixty times a
 /// second off the one stream every wild encounter and battle turn shares.
 ///
-/// All three refusal shapes are covered: an unimplemented moveset (Rhett,
-/// the trigger's own "Refusals cost nothing, forever"), a held-item party
+/// All three refusal shapes are covered: an unimplemented moveset (Marcos's
+/// Sonic Boom at Rhett's cone, the trigger's own "Refusals cost nothing,
+/// forever"), a held-item party
 /// (Miguel, same), and a double battle refused before construction is even
 /// attempted (Amy, `trainer_data_wants_double_battle`).
 #[test]
@@ -110,13 +100,20 @@ fn standing_in_a_cone_for_many_frames_never_touches_the_rng_stream() {
     let (mx, my) = MIGUEL_TILE;
     let (ax, ay) = AMY_TILE;
     let cases = [
-        ("Rhett (unimplemented moveset)", (rx, ry + 1)),
+        (
+            "Marcos at Rhett's cone (unimplemented moveset)",
+            (rx, ry + 1),
+        ),
         ("Miguel (held-item party)", (mx + 2, my)),
         ("Amy (double battle)", (ax, ay + 1)),
     ];
     for (name, tile) in cases {
         let mut phase = route_103_phase(PlayerState::new(tile, 3, Direction::North));
-        phase.party_lead = Some(overwhelming_lead());
+        phase.set_fresh_lead_for_test(overwhelming_lead());
+        if name.starts_with("Marcos") {
+            // Rhett's party constructs; Marcos's refuses.
+            phase.synthetic_sight_trainer = Some(assets::trainers::TrainerId(TRAINER_MARCOS));
+        }
         let before = phase.rng.state();
         for frame in 0..FRAMES_STANDING_STILL {
             phase.step(ButtonState::new());
@@ -132,7 +129,7 @@ fn standing_in_a_cone_for_many_frames_never_touches_the_rng_stream() {
             );
         }
         assert!(
-            phase.party_lead.is_some(),
+            phase.lead_for_test().is_some(),
             "{name}: the lead is never consumed by a refusal"
         );
     }
@@ -149,7 +146,7 @@ fn a_player_beyond_range_does_not_trigger() {
     let (ax, ay) = ANDREW_TILE;
     // Andrew's own range is 3; four tiles south is one past it.
     let mut phase = route_103_phase(PlayerState::new((ax, ay + 4), 3, Direction::North));
-    phase.party_lead = Some(overwhelming_lead());
+    phase.set_fresh_lead_for_test(overwhelming_lead());
     phase.synthetic_sight_trainer = Some(assets::trainers::TrainerId(STAND_IN_TRAINER));
     phase.step(ButtonState::new());
     assert!(
@@ -158,7 +155,10 @@ fn a_player_beyond_range_does_not_trigger() {
          that could actually construct"
     );
     assert!(!phase.is_sight_trainer_battle_active());
-    assert!(phase.party_lead.is_some(), "the lead must be untouched");
+    assert!(
+        phase.lead_for_test().is_some(),
+        "the lead must be untouched"
+    );
 }
 
 /// A player off a trainer's own facing axis must not trigger, even standing
@@ -170,7 +170,7 @@ fn a_player_beyond_range_does_not_trigger() {
 fn a_player_off_the_facing_axis_does_not_trigger() {
     let (ax, ay) = ANDREW_TILE;
     let mut phase = route_103_phase(PlayerState::new((ax + 1, ay), 3, Direction::North));
-    phase.party_lead = Some(overwhelming_lead());
+    phase.set_fresh_lead_for_test(overwhelming_lead());
     phase.synthetic_sight_trainer = Some(assets::trainers::TrainerId(STAND_IN_TRAINER));
     phase.step(ButtonState::new());
     assert!(
@@ -187,7 +187,7 @@ fn a_player_off_the_facing_axis_does_not_trigger() {
 fn a_refused_sight_check_draws_nothing() {
     let (ax, ay) = ANDREW_TILE;
     let mut phase = route_103_phase(PlayerState::new((ax, ay + 4), 3, Direction::North));
-    phase.party_lead = Some(overwhelming_lead());
+    phase.set_fresh_lead_for_test(overwhelming_lead());
     let before = phase.rng.state();
     phase.step(ButtonState::new());
     assert_eq!(
@@ -226,13 +226,13 @@ fn a_fainted_lead_is_refused_through_the_trigger_without_a_draw() {
     let mut fainted = overmatched_lead();
     fainted.apply_damage(u32::MAX);
     assert!(fainted.is_fainted(), "setup: the lead really is fainted");
-    phase.party_lead = Some(fainted);
+    phase.set_fresh_lead_for_test(fainted);
 
     let before = phase.rng.state();
     phase.step(ButtonState::new());
     assert!(!phase.is_sight_trainer_battle_active());
     assert!(
-        phase.party_lead.is_some(),
+        phase.lead_for_test().is_some(),
         "the refused handoff leaves the lead in the party"
     );
     assert_eq!(phase.rng.state(), before);
@@ -249,7 +249,7 @@ fn miguels_held_item_party_refuses_to_construct() {
     let (mx, my) = MIGUEL_TILE;
     // Miguel faces east; two tiles east of him is within his own range-5 cone.
     let mut phase = route_103_phase(PlayerState::new((mx + 2, my), 3, Direction::West));
-    phase.party_lead = Some(overwhelming_lead());
+    phase.set_fresh_lead_for_test(overwhelming_lead());
     let before = phase.rng.state();
 
     phase.step(ButtonState::new());
@@ -258,7 +258,7 @@ fn miguels_held_item_party_refuses_to_construct() {
         "Miguel's held-item party must refuse to construct (not modelled)"
     );
     assert!(
-        phase.party_lead.is_some(),
+        phase.lead_for_test().is_some(),
         "the refused handoff leaves the lead in the party"
     );
     assert_eq!(
@@ -275,14 +275,14 @@ fn miguels_held_item_party_refuses_to_construct() {
 fn amys_double_battle_party_is_refused() {
     let (ax, ay) = AMY_TILE;
     let mut phase = route_103_phase(PlayerState::new((ax, ay + 1), 3, Direction::North));
-    phase.party_lead = Some(overwhelming_lead());
+    phase.set_fresh_lead_for_test(overwhelming_lead());
 
     phase.step(ButtonState::new());
     assert!(
         !phase.is_sight_trainer_battle_active(),
         "Amy & Liv's shared double-battle party must never be selected"
     );
-    assert!(phase.party_lead.is_some());
+    assert!(phase.lead_for_test().is_some());
 }
 
 // -- No party lead ------------------------------------------------------------
@@ -293,7 +293,7 @@ fn amys_double_battle_party_is_refused() {
 fn the_trigger_with_no_party_lead_logs_and_starts_nothing() {
     let (rx, ry) = RHETT_TILE;
     let mut phase = route_103_phase(PlayerState::new((rx, ry + 1), 3, Direction::North));
-    assert!(phase.party_lead.is_none(), "setup");
+    assert!(phase.lead_for_test().is_none(), "setup");
     phase.step(ButtonState::new());
     assert!(!phase.is_sight_trainer_battle_active());
 }
@@ -313,7 +313,7 @@ fn the_trigger_never_fires_off_route_103() {
         PlayerState::new((rx, ry + 1), 3, Direction::North),
         None,
     );
-    phase.party_lead = Some(overwhelming_lead());
+    phase.set_fresh_lead_for_test(overwhelming_lead());
     phase.step(ButtonState::new());
     assert!(!phase.is_sight_trainer_battle_active());
 }
@@ -384,14 +384,17 @@ fn real_pack_rhetts_cone_reaches_the_player_over_real_terrain_and_draws_nothing(
     );
 
     let mut phase = OverworldPhase::for_test_with_source(scene, ROUTE_103, player, None, source);
-    phase.party_lead = Some(overwhelming_lead());
+    phase.set_fresh_lead_for_test(overwhelming_lead());
+    // Rhett's party constructs; Marcos's refuses, so his id stands in at
+    // Rhett's real cone.
+    phase.synthetic_sight_trainer = Some(assets::trainers::TrainerId(TRAINER_MARCOS));
     let before = phase.rng.state();
 
     for frame in 0..FRAMES_STANDING_STILL {
         phase.step(ButtonState::new());
         assert!(
             !phase.is_sight_trainer_battle_active(),
-            "frame {frame}: the real handoff still fails to construct (the trigger's own docs)"
+            "frame {frame}: the refused stand-in party still fails to construct (the trigger's own docs)"
         );
         assert_eq!(
             phase.rng.state(),
@@ -401,7 +404,7 @@ fn real_pack_rhetts_cone_reaches_the_player_over_real_terrain_and_draws_nothing(
         );
     }
     assert!(
-        phase.party_lead.is_some(),
+        phase.lead_for_test().is_some(),
         "a refused handoff must not consume the lead -- no soft lock"
     );
 }
