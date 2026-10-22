@@ -60,7 +60,7 @@ fn field<'a>(text: &'a str, key: &str) -> &'a str {
         .expect("identifier")
 }
 
-/// `CamelCase` as the snake_case directory upstream names it.
+/// `CamelCase` as the `snake_case` directory upstream names it.
 fn snake(camel: &str) -> String {
     let mut out = String::new();
     for (index, ch) in camel.chars().enumerate() {
@@ -104,8 +104,8 @@ fn graphic(upstream: &Path, gfx: &str) -> Graphic {
     let info_name = pointers
         .lines()
         .find(|line| line.contains(&format!("[{gfx}]")))
-        .map(|line| field(line, "&"))
         .unwrap_or_else(|| panic!("{gfx} has no graphics info"));
+    let info_name = field(info_name, "&");
     let infos = read("object_event_graphics_info.h");
     let info = block(&infos, &format!("{info_name} = "));
     let tag = field(info, ".paletteTag = ");
@@ -133,19 +133,17 @@ fn graphic(upstream: &Path, gfx: &str) -> Graphic {
     }
 
     let movement = read_text(&upstream.join("src/event_object_movement.c")).expect("movement");
-    let palette_symbol = block(&movement, "sObjectEventSpritePalettes[] = ")
+    let palette_line = block(&movement, "sObjectEventSpritePalettes[] = ")
         .lines()
         .find(|line| line.contains(tag))
-        .map(|line| {
-            line.trim()
-                .trim_start_matches('{')
-                .split(',')
-                .next()
-                .expect("symbol")
-                .to_owned()
-        })
         .unwrap_or_else(|| panic!("{tag} is not in sObjectEventSpritePalettes"));
-    let pal_path = png_of(&palette_symbol);
+    let palette_symbol = palette_line
+        .trim()
+        .trim_start_matches('{')
+        .split(',')
+        .next()
+        .expect("symbol");
+    let pal_path = png_of(palette_symbol);
     let name = pal_path
         .strip_prefix("graphics/object_events/palettes/")
         .and_then(|rest| rest.strip_suffix(".pal"))
