@@ -10,6 +10,7 @@ mod battle_interface;
 mod battle_message;
 mod battler;
 mod error;
+mod event_scripts;
 mod format;
 mod handles;
 mod opening_scene;

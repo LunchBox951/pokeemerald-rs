@@ -65,7 +65,7 @@ impl OverworldPhase {
     /// (`OBJ_EVENT_GFX_MOM`'s script) is byte-identical to before this
     /// method grew a second arm.
     ///
-    /// Below that, only `"0x0"` (upstream's `NULL`-script sentinel) means no
+    /// Below that, only a `None` script (upstream's `NULL` script) means no
     /// interaction; any other unrecognized script still consumes the frame
     /// upstream (`field_control_avatar.c:172`).
     fn find_interaction_outcome(
@@ -73,14 +73,12 @@ impl OverworldPhase {
         runtime: &engine::overworld::MapRuntime<'_>,
     ) -> Option<InteractionOutcome> {
         let object = facing_object_event(&self.player, runtime, &self.save1.event_data)?;
-        if super::route103_rival_trigger::is_rival_trigger(self.map_id, object.script) {
+        let script = object.script?.id();
+        if super::route103_rival_trigger::is_rival_trigger(self.map_id, script) {
             return Some(InteractionOutcome::RivalBattle);
         }
-        if object.script == "0x0" {
-            return None;
-        }
         Some(
-            npc_scripts::script_text(object.script)
+            npc_scripts::script_text(script)
                 .map_or(InteractionOutcome::Unmodelled, InteractionOutcome::Dialog),
         )
     }
@@ -100,7 +98,7 @@ pub(super) enum InteractionOutcome {
     /// Start the Route 103 rival battle
     /// ([`OverworldPhase::begin_route103_rival_battle`]).
     RivalBattle,
-    /// A real, non-`"0x0"` script [`npc_scripts::script_text`] doesn't
+    /// A real, non-null script [`npc_scripts::script_text`] doesn't
     /// recognize: upstream still consumes the frame (`find_interaction_outcome`'s
     /// own doc comment), but this port has nothing to render for it.
     Unmodelled,

@@ -18,8 +18,6 @@ use crate::event_data::EventData;
 
 /// Upstream's script for a sign whose `script` is null.
 const NULL_SIGN_SCRIPT: &str = "EventScript_TestSignpostMsg";
-/// `"0x0"` in map data is a null script pointer.
-const NO_SCRIPT: &str = "0x0";
 /// `EventScript_HiddenItemScript` adds one item.
 const HIDDEN_ITEM_QUANTITY: u16 = 1;
 
@@ -91,12 +89,15 @@ pub fn resolve_background_event(
             facing: required,
             script,
         } => {
-            if script == NO_SCRIPT {
-                Some(BackgroundEventTarget::Script {
+            let Some(script) = script else {
+                return Some(BackgroundEventTarget::Script {
                     script: NULL_SIGN_SCRIPT,
+                });
+            };
+            if facing_matches(required, facing) {
+                Some(BackgroundEventTarget::Script {
+                    script: script.id(),
                 })
-            } else if facing_matches(required, facing) {
-                Some(BackgroundEventTarget::Script { script })
             } else {
                 None
             }
@@ -120,7 +121,7 @@ pub fn resolve_background_event(
 
 #[cfg(test)]
 mod tests {
-    use assets::{BgEvent, MapEventsTable, MapId};
+    use assets::{BgEvent, MapEventsTable, MapId, ScriptRef};
 
     use super::*;
 
@@ -138,7 +139,7 @@ mod tests {
         y: u16,
         elevation: u8,
         facing: FacingDirection,
-        script: &'static str,
+        script: Option<ScriptRef>,
     ) -> BgEvent {
         BgEvent {
             x,
@@ -194,7 +195,13 @@ mod tests {
             (FacingDirection::West, Some(Direction::West)),
             (FacingDirection::Any, None),
         ] {
-            let map = events(Box::leak(Box::new([sign(3, 4, 0, required, "Sign")])));
+            let map = events(Box::leak(Box::new([sign(
+                3,
+                4,
+                0,
+                required,
+                Some(ScriptRef::new("Sign")),
+            )])));
             for facing in ALL {
                 let expected = if only.is_none_or(|d| d == facing) {
                     Some(script("Sign"))
@@ -212,7 +219,7 @@ mod tests {
 
     #[test]
     fn null_sign_script_resolves_to_the_test_signpost_for_any_facing_requirement() {
-        const BG: [BgEvent; 1] = [sign(3, 4, 0, FacingDirection::North, "0x0")];
+        const BG: [BgEvent; 1] = [sign(3, 4, 0, FacingDirection::North, None)];
         let map = events(&BG);
         assert_eq!(
             resolve(&map, 0, Direction::South, &EventData::new()),
@@ -223,8 +230,14 @@ mod tests {
     #[test]
     fn event_elevation_zero_matches_any_player_elevation_and_nonzero_must_be_equal() {
         const BG: [BgEvent; 2] = [
-            sign(3, 4, 3, FacingDirection::Any, "Three"),
-            sign(1, 1, 0, FacingDirection::Any, "Transition"),
+            sign(3, 4, 3, FacingDirection::Any, Some(ScriptRef::new("Three"))),
+            sign(
+                1,
+                1,
+                0,
+                FacingDirection::Any,
+                Some(ScriptRef::new("Transition")),
+            ),
         ];
         let map = events(&BG);
         let data = EventData::new();
@@ -245,9 +258,21 @@ mod tests {
     #[test]
     fn duplicate_positions_keep_declaration_order() {
         const BG: [BgEvent; 3] = [
-            sign(3, 4, 2, FacingDirection::Any, "WrongElevation"),
-            sign(3, 4, 0, FacingDirection::Any, "First"),
-            sign(3, 4, 0, FacingDirection::Any, "Second"),
+            sign(
+                3,
+                4,
+                2,
+                FacingDirection::Any,
+                Some(ScriptRef::new("WrongElevation")),
+            ),
+            sign(3, 4, 0, FacingDirection::Any, Some(ScriptRef::new("First"))),
+            sign(
+                3,
+                4,
+                0,
+                FacingDirection::Any,
+                Some(ScriptRef::new("Second")),
+            ),
         ];
         let map = events(&BG);
         assert_eq!(
@@ -259,8 +284,14 @@ mod tests {
     #[test]
     fn rejected_first_candidate_does_not_fall_through_to_a_later_duplicate() {
         const BG: [BgEvent; 2] = [
-            sign(3, 4, 0, FacingDirection::North, "North"),
-            sign(3, 4, 0, FacingDirection::Any, "Any"),
+            sign(
+                3,
+                4,
+                0,
+                FacingDirection::North,
+                Some(ScriptRef::new("North")),
+            ),
+            sign(3, 4, 0, FacingDirection::Any, Some(ScriptRef::new("Any"))),
         ];
         let map = events(&BG);
         assert_eq!(resolve(&map, 0, Direction::South, &EventData::new()), None);
@@ -268,7 +299,13 @@ mod tests {
 
     #[test]
     fn missing_position_resolves_to_nothing() {
-        const BG: [BgEvent; 1] = [sign(3, 4, 0, FacingDirection::Any, "Sign")];
+        const BG: [BgEvent; 1] = [sign(
+            3,
+            4,
+            0,
+            FacingDirection::Any,
+            Some(ScriptRef::new("Sign")),
+        )];
         let map = events(&BG);
         let data = EventData::new();
         assert_eq!(
@@ -299,7 +336,10 @@ mod tests {
 
     #[test]
     fn collected_hidden_item_is_suppressed_without_falling_through() {
-        const BG: [BgEvent; 2] = [candy(3, 4, 0), sign(3, 4, 0, FacingDirection::Any, "Later")];
+        const BG: [BgEvent; 2] = [
+            candy(3, 4, 0),
+            sign(3, 4, 0, FacingDirection::Any, Some(ScriptRef::new("Later"))),
+        ];
         let map = events(&BG);
         let mut data = EventData::new();
         data.flag_set(CANDY_FLAG_ID).unwrap();

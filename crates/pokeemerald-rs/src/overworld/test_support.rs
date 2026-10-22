@@ -634,6 +634,7 @@ pub(super) fn synthetic_scene_result_with_connections_and_events(
         allow_run: true,
         show_name: false,
         battle_scene: assets::BattleScene::Normal,
+        map_scripts: None,
         connections,
     };
     let scene = super::OverworldScene::from_pack(

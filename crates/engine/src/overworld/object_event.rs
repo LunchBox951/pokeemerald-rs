@@ -343,7 +343,7 @@ mod tests {
             movement_range_y: 0,
             trainer_type: TrainerType::None,
             trainer_sight_or_berry_tree_id: "0",
-            script: "SomeScript",
+            script: Some(assets::ScriptRef::new("SomeScript")),
             flag,
         }
     }
@@ -453,6 +453,7 @@ mod tests {
             allow_run: false,
             show_name: false,
             battle_scene: BattleScene::Normal,
+            map_scripts: None,
             connections: &[] as &[MapConnection],
         };
         let layout = MapLayout {
@@ -762,11 +763,14 @@ mod tests {
             .filter(|o| (o.x, o.y) == (6, 8))
             .collect();
         assert_eq!(
-            balls.iter().map(|o| o.script).collect::<Vec<_>>(),
+            balls
+                .iter()
+                .map(|o| o.script.map(assets::ScriptRef::id))
+                .collect::<Vec<_>>(),
             vec![
-                "LittlerootTown_ProfessorBirchsLab_EventScript_Cyndaquil",
-                "LittlerootTown_ProfessorBirchsLab_EventScript_Totodile",
-                "LittlerootTown_ProfessorBirchsLab_EventScript_Chikorita",
+                Some("LittlerootTown_ProfessorBirchsLab_EventScript_Cyndaquil"),
+                Some("LittlerootTown_ProfessorBirchsLab_EventScript_Totodile"),
+                Some("LittlerootTown_ProfessorBirchsLab_EventScript_Chikorita"),
             ],
             "fixture precondition: three starter balls stacked on (6, 8), in \
              this declaration order"
@@ -783,13 +787,17 @@ mod tests {
 
         let mut data = EventData::new();
         assert_eq!(
-            visible_object_event_at(&runtime, 6, 8, 3, &data).map(|o| o.script),
+            visible_object_event_at(&runtime, 6, 8, 3, &data)
+                .and_then(|o| o.script)
+                .map(assets::ScriptRef::id),
             Some("LittlerootTown_ProfessorBirchsLab_EventScript_Cyndaquil")
         );
 
         data.flag_set(cyndaquil).unwrap();
         assert_eq!(
-            visible_object_event_at(&runtime, 6, 8, 3, &data).map(|o| o.script),
+            visible_object_event_at(&runtime, 6, 8, 3, &data)
+                .and_then(|o| o.script)
+                .map(assets::ScriptRef::id),
             Some("LittlerootTown_ProfessorBirchsLab_EventScript_Totodile"),
             "a hidden first template must be scanned past, not returned and \
              then rejected"
@@ -797,7 +805,9 @@ mod tests {
 
         data.flag_set(totodile).unwrap();
         assert_eq!(
-            visible_object_event_at(&runtime, 6, 8, 3, &data).map(|o| o.script),
+            visible_object_event_at(&runtime, 6, 8, 3, &data)
+                .and_then(|o| o.script)
+                .map(assets::ScriptRef::id),
             Some("LittlerootTown_ProfessorBirchsLab_EventScript_Chikorita")
         );
 
@@ -808,7 +818,9 @@ mod tests {
         data.flag_set(cyndaquil).unwrap();
         let player = PlayerState::new((6, 9), 3, Direction::North);
         assert_eq!(
-            facing_object_event(&player, &runtime, &data).map(|o| o.script),
+            facing_object_event(&player, &runtime, &data)
+                .and_then(|o| o.script)
+                .map(assets::ScriptRef::id),
             Some("LittlerootTown_ProfessorBirchsLab_EventScript_Totodile")
         );
     }

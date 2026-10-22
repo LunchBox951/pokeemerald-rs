@@ -33,8 +33,8 @@ fn rescue_trigger_candidate() -> assets::CoordEvent {
             assets::CoordEventKind::Trigger {
                 var: "VAR_ROUTE101_STATE",
                 var_value: 1,
-                script: "Route101_EventScript_StartBirchRescue",
-            }
+                script,
+            } if script.id() == "Route101_EventScript_StartBirchRescue"
         ),
         "fixture precondition: the rescue tile's real coord event is the \
          VAR_ROUTE101_STATE == 1 Birch-rescue trigger"
@@ -95,7 +95,7 @@ fn a_weather_and_failed_var_candidate_stacked_ahead_do_not_hide_the_rescue_trigg
             candidate_on_the_trigger_tile(assets::CoordEventKind::Trigger {
                 var: "VAR_ROUTE101_STATE",
                 var_value: 2,
-                script: "Route101_EventScript_PreventExitSouth",
+                script: assets::ScriptRef::new("Route101_EventScript_PreventExitSouth"),
             }),
             rescue_trigger_candidate(),
         ],
@@ -119,7 +119,7 @@ fn a_run_immediately_candidate_stacked_ahead_does_not_hide_the_rescue_trigger() 
             candidate_on_the_trigger_tile(assets::CoordEventKind::Trigger {
                 var: "TRIGGER_RUN_IMMEDIATELY",
                 var_value: 0,
-                script: "LavaridgeTown_EventScript_HotSpringsTrigger",
+                script: assets::ScriptRef::new("LavaridgeTown_EventScript_HotSpringsTrigger"),
             }),
             rescue_trigger_candidate(),
         ],
@@ -144,7 +144,7 @@ fn a_foreign_trigger_whose_guard_passes_wins_the_tile_from_the_rescue_trigger() 
             candidate_on_the_trigger_tile(assets::CoordEventKind::Trigger {
                 var: "VAR_ROUTE101_STATE",
                 var_value: 1,
-                script: "Route101_EventScript_SomeOtherTrigger",
+                script: assets::ScriptRef::new("Route101_EventScript_SomeOtherTrigger"),
             }),
             rescue_trigger_candidate(),
         ],
@@ -168,7 +168,7 @@ fn a_trigger_on_an_unevaluable_var_stacked_ahead_fails_closed() {
             candidate_on_the_trigger_tile(assets::CoordEventKind::Trigger {
                 var: "VAR_LITTLEROOT_TOWN_STATE",
                 var_value: 1,
-                script: "LittlerootTown_EventScript_GoSaveBirchTrigger",
+                script: assets::ScriptRef::new("LittlerootTown_EventScript_GoSaveBirchTrigger"),
             }),
             rescue_trigger_candidate(),
         ],

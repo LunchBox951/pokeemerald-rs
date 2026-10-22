@@ -242,7 +242,10 @@ fn find_sight_trainer<'a>(
         if event.trainer_type != TrainerType::Normal {
             continue;
         }
-        let Some(entry) = sight_trainer_for_script(event.script) else {
+        let Some(entry) = event
+            .script
+            .and_then(|script| sight_trainer_for_script(script.id()))
+        else {
             continue;
         };
         if already_defeated(entry.id, event_data) {
@@ -591,7 +594,7 @@ mod tests {
             .object_events
             .iter()
             .filter(|e| e.trainer_type == assets::TrainerType::Normal)
-            .map(|e| e.script)
+            .filter_map(|e| e.script.map(assets::ScriptRef::id))
             .collect();
         assert_eq!(
             normal_trainer_scripts.len(),
