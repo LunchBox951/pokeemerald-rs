@@ -12,8 +12,10 @@ mod battler;
 mod error;
 mod format;
 mod handles;
+mod opening_scene;
 mod pokedex_graphics;
 mod starter_chooser;
+mod trainer_pic;
 
 use std::path::{Path, PathBuf};
 
@@ -35,10 +37,13 @@ pub use battler::{BattlerDirection, BattlerHandle, PaletteVariant};
 pub use error::PackError;
 pub use format::{DirectoryEntry, EntryKind, FORMAT_VERSION, MAGIC};
 pub use handles::{ImageRef, PaletteRef, TilesetHandle, WindowFrameHandle};
+pub use opening_scene::{BirchSpeechHandle, WallClockHandle};
 pub use pokedex_graphics::PokedexGraphicsHandle;
 pub use starter_chooser::{
     PalettedImage, StarterChooserHandle, StarterPreviewHandle, StarterSpecies,
 };
+
+pub use trainer_pic::TrainerPicHandle;
 
 use format::kind_label;
 
@@ -335,7 +340,8 @@ impl AssetPack {
         })
     }
 
-    /// Look up the `sprite/{path}` sheet (e.g. `"brendan/walking"`).
+    /// Look up the `sprite/{path}` sheet (e.g. `"brendan/walking"`, or a
+    /// non-people picture such as `"misc/truck"`).
     ///
     /// # Errors
     ///
@@ -344,8 +350,9 @@ impl AssetPack {
         self.image(&format!("sprite/{path}"))
     }
 
-    /// Look up a sprite palette: `"brendan"`, `"may"`, or
-    /// `"npc_1"`..`"npc_4"`.
+    /// Look up a sprite palette: `"brendan"`, `"may"`,
+    /// `"npc_1"`..`"npc_4"`, `"enemy_zigzagoon"`, `"moving_box"`, `"truck"`,
+    /// or `"vigoroth"`.
     ///
     /// # Errors
     ///

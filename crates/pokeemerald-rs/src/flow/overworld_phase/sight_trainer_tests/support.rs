@@ -158,13 +158,18 @@ pub(super) fn seed_battle(
     rng_seed: u32,
 ) {
     phase.rng = engine::rng::Rng::new(rng_seed);
+    // Lend through the owner, as `start_sight_trainer_battle` does; the battle
+    // is built from the lent mon and hands it back when it ends.
+    phase.set_fresh_lead_for_test(player_lead);
+    let lent = phase
+        .take_lead_battler()
+        .expect("the lead was just installed");
     let battle = crate::flow::npc_trainer_battle::start_npc_trainer_battle(
-        player_lead,
+        lent,
         assets::trainers::TrainerId(STAND_IN_TRAINER),
         &mut phase.rng,
     )
     .expect("the stand-in Route 103 rival must always construct");
-    phase.party_lead = None;
     phase.active_battle = Some(ActiveBattle::SightTrainer {
         battle,
         trainer_id: assets::trainers::TrainerId(trainer_id),
@@ -217,7 +222,7 @@ pub(super) fn seed_approach(phase: &mut OverworldPhase, walk_tiles: u8) {
         &mut phase.rng,
     )
     .expect("the stand-in Route 103 rival must always construct");
-    phase.party_lead = Some(overwhelming_lead());
+    phase.set_fresh_lead_for_test(overwhelming_lead());
     phase.sight_approach = Some(SightApproach::new(
         ObjectEventState::from_template(rhetts_object_event()),
         walk_tiles,
