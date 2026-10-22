@@ -248,3 +248,20 @@ fn static_bag_roots_survive_a_map_that_omits_locals() {
         SymbolExpectation::Unnamed
     );
 }
+
+#[test]
+fn the_static_select_button_survives_a_map_that_omits_locals() {
+    use crate::gen_rom_profile::plan::{ReportLine, SymbolExpectation};
+    use crate::gen_rom_profile::tests::assert_survives_ld_map;
+
+    let mut lines = vec![
+        ReportLine::unique("bag/image/select_button", 0x0812_0000, 32).with_symbol(
+            crate::gen_rom_profile::images::local_image_symbol("bag/image/select_button")
+                .map_or(SymbolExpectation::Unnamed, SymbolExpectation::Local),
+        ),
+    ];
+    assert!(
+        matches!(&lines[0].symbol, SymbolExpectation::Local(name) if name == "sRegisteredSelect_Gfx")
+    );
+    assert_survives_ld_map("bag-select-static", 0x0812_0000, &mut lines);
+}
