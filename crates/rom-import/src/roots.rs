@@ -478,7 +478,7 @@ pub struct BattlerRoots {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Roots {
-    /// The five tilesets Littleroot Town's layout family references.
+    /// The tilesets the checkpoint maps' layouts reference.
     pub tilesets: &'static [TilesetRoot],
     /// The title screen.
     pub title_screen: TitleScreenRoots,
