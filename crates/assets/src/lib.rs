@@ -125,7 +125,8 @@ pub use move_names::MoveNames;
 pub use pack::{
     AssetPack, BagAssets, BattlerDirection, BattlerHandle, BirchSpeechHandle, EntryKind, ImageRef,
     PackError, PaletteRef, PaletteVariant, PalettedImage, PokedexGraphicsHandle,
-    StarterChooserHandle, StarterPreviewHandle, StarterSpecies, TilesetHandle, WallClockHandle,
+    StarterChooserHandle, StarterPreviewHandle, StarterSpecies, TilesetHandle, TrainerPicHandle,
+    WallClockHandle,
 };
 pub use pokedex::{
     NationalDexNo, PokedexData, PokedexEntry, PokedexError, PokedexOrderKind, PokedexOrders,
