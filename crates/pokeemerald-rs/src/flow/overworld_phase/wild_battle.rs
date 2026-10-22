@@ -101,6 +101,7 @@ impl OverworldPhase {
         let player_trainer_id = u32::from_le_bytes(self.save2.player_trainer_id);
         match wild_encounter::start_wild_battle(lead, encounter, player_trainer_id, &mut self.rng) {
             Ok(battle) => {
+                let battle = battle.with_player_obedience(self.player_obedience());
                 self.party_lead = None;
                 self.active_battle = Some(ActiveBattle::Wild(battle));
             }

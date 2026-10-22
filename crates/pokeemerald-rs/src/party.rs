@@ -12,9 +12,13 @@
 //!
 //! Deliberately not modelled by `battle`, and so retained from the backing
 //! record by [`merge_into_save_pokemon`]: held item, friendship, pokérus,
-//! met data, poké ball, OT gender, ribbons, markings, nickname, OT name,
+//! met data, poké ball, OT gender, ribbons, markings, nickname,
 //! language, mail, the egg bit, and contest condition (`PokemonSubstruct2`'s
-//! trailing six bytes). [`to_save_pokemon`], which has no record to retain
+//! trailing six bytes). The OT name is retained from the record too, but
+//! `battle` does carry a copy: [`from_save_pokemon`] reads it into
+//! [`battle::BattlePokemon::original_trainer_name`] only for the obedience
+//! gate's `IsOtherTrainer` comparison. It is never re-encoded from the
+//! battler (an all-zero name reads back as unrecorded). [`to_save_pokemon`], which has no record to retain
 //! them from, writes upstream's own `CreateMon` default for whichever of
 //! those it can derive from its own two arguments: nickname
 //! (the species' display name), language (`GAME_LANGUAGE`), met level
@@ -67,6 +71,8 @@ use std::ops::Range;
 use battle::{BattlePokemon, Dex, Ivs, MAX_MON_MOVES};
 use engine::save::{BoxPokemon, Pokemon, PokemonSubstructures, BOX_NICKNAME_LEN, SUBSTRUCTURE_LEN};
 
+/// `struct BoxPokemon::otName` offset (`pokemon.h:207`).
+const OT_NAME_OFFSET: usize = 20;
 const MAIL_NONE: u8 = u8::MAX;
 const SPECIES_NONE: u16 = 0;
 
@@ -564,6 +570,15 @@ impl core::fmt::Display for NotTheBattlersRecord {
     }
 }
 
+/// `BoxPokemon::otName`'s seven saved bytes (`pokemon.h:207`).
+fn saved_ot_name(boxed: &BoxPokemon) -> Option<[u8; 7]> {
+    let bytes = boxed.to_bytes();
+    let mut name = [0u8; 7];
+    name.copy_from_slice(&bytes[OT_NAME_OFFSET..OT_NAME_OFFSET + 7]);
+    // `to_save_pokemon` leaves the name zeroed: unrecorded, not a name.
+    (name != [0u8; 7]).then_some(name)
+}
+
 /// Converts a validated save record into a battle-ready party member --
 /// `LoadPlayerParty`'s per-mon half (`src/load_save.c:170-178`).
 ///
@@ -635,6 +650,10 @@ pub(crate) fn from_save_pokemon(dex: &Dex, saved: &Pokemon) -> Result<BattlePoke
     .with_ability_slot(ability_slot)
     .with_pp_bonuses(dex, pp_bonuses)?
     .with_evs(evs);
+
+    if let Some(name) = saved_ot_name(&saved.box_data) {
+        mon = mon.with_original_trainer_name(name);
+    }
 
     let saved_experience = read_u32(&substructures.growth, GROWTH_EXPERIENCE);
     // Match `CalculateMonStats`: derive level from experience without invoking

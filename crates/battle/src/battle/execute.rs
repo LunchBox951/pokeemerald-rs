@@ -539,9 +539,10 @@ impl Battle {
     /// Upstream's self-target `MOVE_POUND` damage call
     /// (`src/battle_util.c:2157`-`:2166`): 40 power, one variance draw, no
     /// accuracy, critical, STAB, or type stage, and no PP spent.
-    pub(super) fn apply_confusion_self_hit(
+    pub(super) fn apply_self_hit(
         &mut self,
         battler_is_player: bool,
+        disobedient: bool,
         rng: &mut impl BattleRng,
         events: &mut Vec<BattleEvent>,
     ) {
@@ -579,9 +580,16 @@ impl Battle {
         };
         let hp_lost = damage.min(battler.current_hp());
         battler.apply_damage(hp_lost);
-        events.push(BattleEvent::ConfusionSelfHit {
-            by_player: battler_is_player,
-            damage: hp_lost,
+        events.push(if disobedient {
+            BattleEvent::DisobedientSelfHit {
+                by_player: battler_is_player,
+                damage: hp_lost,
+            }
+        } else {
+            BattleEvent::ConfusionSelfHit {
+                by_player: battler_is_player,
+                damage: hp_lost,
+            }
         });
         self.settle_faint(battler_is_player, events);
     }

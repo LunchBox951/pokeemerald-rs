@@ -126,6 +126,7 @@ impl OverworldPhase {
         let player_trainer_id = u32::from_le_bytes(self.save2.player_trainer_id);
         match first_battle::start_first_battle(lead, player_trainer_id, &mut self.rng) {
             Ok(battle) => {
+                let battle = battle.with_player_obedience(self.player_obedience());
                 self.party_lead = None;
                 self.active_battle = Some(ActiveBattle::First(battle));
                 // The first battle restarts wild-encounter immunity like any battle

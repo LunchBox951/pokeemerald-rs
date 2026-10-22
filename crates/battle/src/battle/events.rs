@@ -74,6 +74,21 @@ pub enum BattleEvent {
         /// HP removed from that battler, capped at its HP before the hit.
         damage: u32,
     },
+    /// A traded Pokémon above its obedience limit ignored the order and
+    /// loafed (`IsMonDisobedient`, `src/battle_util.c:4030`-`:4035`). No PP
+    /// is spent.
+    Disobeyed {
+        /// The loaf text drawn.
+        message: crate::obedience::LoafMessage,
+    },
+    /// A disobedient player Pokémon hurt itself instead of acting
+    /// (`src/battle_util.c:4020`-`:4027`). No PP is spent.
+    DisobedientSelfHit {
+        /// Whether the player's battler hurt itself.
+        by_player: bool,
+        /// HP removed from that battler, capped at its HP before the hit.
+        damage: u32,
+    },
     /// A paralysed battler's full-paralysis draw cancelled its chosen move
     /// before any PP was spent.
     FullyParalyzed {
