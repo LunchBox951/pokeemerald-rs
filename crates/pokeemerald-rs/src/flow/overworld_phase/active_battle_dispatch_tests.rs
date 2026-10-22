@@ -37,7 +37,9 @@ fn load_default_hands_back_a_fightable_provisional_starter() {
 fn lend_lead_to_wild_or_first(phase: &mut OverworldPhase, variant: &ActiveBattle) {
     if matches!(variant, ActiveBattle::Wild(_) | ActiveBattle::First(_)) {
         phase.set_fresh_lead_for_test(new_game::provisional_starter());
-        phase.take_lead_battler().expect("the lead was just installed");
+        phase
+            .take_lead_battler()
+            .expect("the lead was just installed");
     }
 }
 

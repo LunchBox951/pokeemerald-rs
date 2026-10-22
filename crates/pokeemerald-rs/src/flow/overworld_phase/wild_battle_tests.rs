@@ -108,7 +108,10 @@ fn a_rejected_wild_start_keeps_the_lead_and_can_lend_it_again() {
         level: 0,
         slot: 0,
     }));
-    assert!(!phase.is_wild_battle_active(), "setup: the start is refused");
+    assert!(
+        !phase.is_wild_battle_active(),
+        "setup: the start is refused"
+    );
     assert_eq!(phase.lead_for_test(), Some(&before), "the lead is not lost");
     let lent = phase.take_lead_battler().expect("still restorable");
     phase.restore_lead_battler(lent);
