@@ -76,11 +76,7 @@ fn locate_tilemaps(
         let addr = exactly_one(id, &hits[index])?;
         let len = len32(ctx.pack.raw_payload(id)?);
         let name = camel_case(id.trim_start_matches("title/raw/"));
-        report.push(ReportLine::unique(id, addr, len).symbol_contains([
-            "TitleScreen".to_owned(),
-            name,
-            "Tilemap".to_owned(),
-        ]));
+        report.push(ReportLine::unique(id, addr, len).with_symbol(tilemap_symbol(&name)));
         plans.push(BlobPlan {
             id: id.clone(),
             addr,
@@ -89,6 +85,22 @@ fn locate_tilemaps(
         });
     }
     Ok(plans)
+}
+
+/// What a linker map should say at the tilemap named `name` (CamelCase).
+///
+/// `sTitleScreenRayquazaTilemap` is `static` (`title_screen.c:64`), so a map
+/// omits it.
+fn tilemap_symbol(name: &str) -> SymbolExpectation {
+    if name == "Rayquaza" {
+        SymbolExpectation::Local("sTitleScreenRayquazaTilemap".to_owned())
+    } else {
+        SymbolExpectation::Contains(vec![
+            "TitleScreen".to_owned(),
+            name.to_owned(),
+            "Tilemap".to_owned(),
+        ])
+    }
 }
 
 /// Locate every title palette, including the one the ROM stores short.
@@ -143,8 +155,9 @@ fn palette_symbol(id: &str) -> SymbolExpectation {
         "title/palette/press_start" => {
             SymbolExpectation::Exact("gTitleScreenPressStartPal".to_owned())
         }
-        // `sUnusedUnknownPal` is a `static` with no caller; assert only that
-        // some symbol starts there.
+        // `sUnusedUnknownPal` is a `static` (title_screen.c:61); a linker map
+        // does not list it.
+        "title/palette/unused" => SymbolExpectation::Local("sUnusedUnknownPal".to_owned()),
         _ => SymbolExpectation::Unnamed,
     }
 }
@@ -181,6 +194,77 @@ fn locate_trimmed_palette(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gen_rom_profile::images::local_image_symbol;
+    use crate::gen_rom_profile::tests::{assert_survives_ld_map, distinctive_tiles, lz77_literals};
+    use pack_format::{image_entry_from_tiles, palette_entry, raw_entry};
+    use rom_import::fixture::RomFixture;
+
+    /// Tiles unique to `seed`, so each planted sheet has exactly one hit.
+    fn seeded_tiles(seed: u8) -> Vec<u8> {
+        distinctive_tiles(4)
+            .into_iter()
+            .map(|byte| byte ^ seed)
+            .collect()
+    }
+
+    #[test]
+    fn static_title_roots_survive_a_map_that_omits_locals() {
+        // The production locators build every report line, so the test fails
+        // if `assign`, `locate_tilemaps` or `palette_symbol` stops marking an
+        // upstream `static` root as local.
+        let images = [("rayquaza", 0x11), ("logo_shine", 0x22), ("clouds", 0x33)];
+        let tilemap: Vec<u8> = (0..64u8).map(|n| n.wrapping_mul(13) ^ 0x5a).collect();
+        let colors: Vec<u16> = (0..16u16).map(|n| n * 0x0421 + 0x0777).collect();
+        let color_bytes: Vec<u8> = colors.iter().flat_map(|c| c.to_le_bytes()).collect();
+        let mut fixture = RomFixture::new().emerald_header();
+        let mut entries = Vec::new();
+        for (index, (name, seed)) in (0usize..).zip(images) {
+            let tiles = seeded_tiles(seed);
+            fixture = fixture.write(0x40_0000 + index * 0x1000, &lz77_literals(&tiles));
+            entries.push(
+                image_entry_from_tiles(format!("title/image/{name}"), &tiles, 4, 16, 16, None)
+                    .expect("image entry"),
+            );
+        }
+        let rom = fixture
+            .write(0x41_0000, &lz77_literals(&tilemap))
+            .write(0x42_0000, &color_bytes)
+            .finish();
+        entries.push(raw_entry("title/raw/rayquaza".into(), tilemap));
+        entries.push(palette_entry("title/palette/unused".into(), &colors).expect("palette"));
+
+        with_context("title-statics", &rom, entries, |ctx| {
+            let mut report = Vec::new();
+            let queries: Vec<ImageQuery> = images
+                .iter()
+                .map(|(name, _)| ImageQuery::lz77(format!("title/image/{name}")))
+                .collect();
+            locate_images(ctx, &queries, &mut report).expect("images located");
+            locate_tilemaps(ctx, &mut report).expect("tilemap located");
+            locate_unique(
+                ctx,
+                &["title/palette/unused".to_owned()],
+                &palette_symbol,
+                &mut report,
+            )
+            .expect("palette located");
+            assert_eq!(report.len(), 5);
+            assert_survives_ld_map("title-statics-map", 0x0854_0000, &mut report);
+        });
+    }
+
+    #[test]
+    fn global_title_roots_keep_their_map_check() {
+        assert!(matches!(
+            tilemap_symbol("Clouds"),
+            SymbolExpectation::Contains(_)
+        ));
+        assert_eq!(local_image_symbol("title/image/pokemon_logo"), None);
+        assert_eq!(
+            palette_symbol("title/palette/press_start"),
+            SymbolExpectation::Exact("gTitleScreenPressStartPal".to_owned())
+        );
+    }
     use crate::gen_rom_profile::tests::{image_twin, with_context};
 
     #[test]

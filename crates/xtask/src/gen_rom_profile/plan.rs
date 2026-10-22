@@ -107,6 +107,13 @@ impl ReportLine {
         self
     }
 
+    /// Set the symbol expectation directly.
+    #[must_use]
+    pub fn with_symbol(mut self, symbol: SymbolExpectation) -> Self {
+        self.symbol = symbol;
+        self
+    }
+
     /// Mark the address as interior to another symbol.
     #[must_use]
     pub fn interior(mut self) -> Self {
@@ -473,6 +480,28 @@ pub struct BattlerPlan {
     pub species: Vec<BattlerSpeciesPlan>,
 }
 
+/// The starter chooser's roots, owned.
+#[derive(Debug, Clone)]
+pub struct StarterChooserPlan {
+    /// Every `starter-chooser/image/*` root.
+    pub images: Vec<ImagePlan>,
+    /// Every `starter-chooser/palette/*` root.
+    pub palettes: Vec<PalettePlan>,
+    /// Every `starter-chooser/raw/*` tilemap root.
+    pub tilemaps: Vec<BlobPlan>,
+}
+
+/// Birch's speech scene and the wall clock, owned.
+#[derive(Debug, Clone)]
+pub struct OpeningScenePlan {
+    /// Every `opening-scene/image/*` root.
+    pub images: Vec<ImagePlan>,
+    /// Every `opening-scene/palette/*` root.
+    pub palettes: Vec<PalettePlan>,
+    /// Every `opening-scene/raw/*` tilemap root.
+    pub tilemaps: Vec<BlobPlan>,
+}
+
 /// Everything one generator run derived.
 #[derive(Debug, Clone)]
 pub struct ProfilePlan {
@@ -498,6 +527,10 @@ pub struct ProfilePlan {
     pub battle_anims: BattleAnimationPlan,
     /// The ordinary bag's images, palettes, and tilemap.
     pub bag: BagPlan,
+    /// The starter chooser's sheets, palettes, and background tilemaps.
+    pub starter_chooser: StarterChooserPlan,
+    /// Birch's speech scene and the wall clock.
+    pub opening_scene: OpeningScenePlan,
     /// The starters' static battler art.
     pub battlers: BattlerPlan,
 }
