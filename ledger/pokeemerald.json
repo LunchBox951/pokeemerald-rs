@@ -19567,8 +19567,10 @@
     "graphics/trainers/front_pics/brendan.png": {
       "category": "graphics.trainer",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Trainer front picture published as pack id trainer-pic/brendan/front (64x64, 4bpp) by the checkout extractor and read through AssetPack::trainer_pic(TrainerPicId::BRENDAN). Upstream binds gTrainerFrontPic_Brendan at src/data/graphics/trainers.h:214-218 as TRAINER_PIC_BRENDAN (constants/trainers.h:90-91), size 8 (front_pic_tables.h:74-75,173-174); Birch's speech draws it through CreateTrainerSprite (main_menu.c:1878-1905). LZ77 encoding, ROM import, and CreateTrainerSprite behaviour are not ported.",
+      "rust_target": "crates/xtask/src/extract/trainer_pic.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/trainers/front_pics/brendan_rs.png": {
       "category": "graphics.trainer",
@@ -19819,8 +19821,10 @@
     "graphics/trainers/front_pics/may.png": {
       "category": "graphics.trainer",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Trainer front picture published as pack id trainer-pic/may/front (64x64, 4bpp) by the checkout extractor and read through AssetPack::trainer_pic(TrainerPicId::MAY). Upstream binds gTrainerFrontPic_May at src/data/graphics/trainers.h:214-218 as TRAINER_PIC_MAY (constants/trainers.h:90-91), size 8 (front_pic_tables.h:74-75,173-174); Birch's speech draws it through CreateTrainerSprite (main_menu.c:1878-1905). LZ77 encoding, ROM import, and CreateTrainerSprite behaviour are not ported.",
+      "rust_target": "crates/xtask/src/extract/trainer_pic.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/trainers/front_pics/may_rs.png": {
       "category": "graphics.trainer",
@@ -20051,6 +20055,46 @@
       "status": "pending"
     },
     "graphics/trainers/front_pics/youngster.png": {
+      "category": "graphics.trainer",
+      "kind": "file",
+      "spec_owner": "S-4",
+      "status": "pending"
+    },
+    "graphics/trainers/palettes/brendan.pal": {
+      "category": "graphics.trainer",
+      "kind": "file",
+      "reason": "Trainer front palette published as pack id trainer-pic/brendan/palette (16 colours) by the checkout extractor and paired with the front image by AssetPack::trainer_pic(TrainerPicId::BRENDAN). Upstream binds gTrainerPalette_Brendan at src/data/graphics/trainers.h:214-218 as TRAINER_PIC_BRENDAN. The .gbapal.lz compression is not ported.",
+      "rust_target": "crates/xtask/src/extract/trainer_pic.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/trainers/palettes/brendan_rs.pal": {
+      "category": "graphics.trainer",
+      "kind": "file",
+      "spec_owner": "S-4",
+      "status": "pending"
+    },
+    "graphics/trainers/palettes/may.pal": {
+      "category": "graphics.trainer",
+      "kind": "file",
+      "reason": "Trainer front palette published as pack id trainer-pic/may/palette (16 colours) by the checkout extractor and paired with the front image by AssetPack::trainer_pic(TrainerPicId::MAY). Upstream binds gTrainerPalette_May at src/data/graphics/trainers.h:214-218 as TRAINER_PIC_MAY. The .gbapal.lz compression is not ported.",
+      "rust_target": "crates/xtask/src/extract/trainer_pic.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/trainers/palettes/may_rs.pal": {
+      "category": "graphics.trainer",
+      "kind": "file",
+      "spec_owner": "S-4",
+      "status": "pending"
+    },
+    "graphics/trainers/palettes/steven.pal": {
+      "category": "graphics.trainer",
+      "kind": "file",
+      "spec_owner": "S-4",
+      "status": "pending"
+    },
+    "graphics/trainers/palettes/wally.pal": {
       "category": "graphics.trainer",
       "kind": "file",
       "spec_owner": "S-4",
