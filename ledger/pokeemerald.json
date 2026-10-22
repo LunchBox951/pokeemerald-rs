@@ -32524,6 +32524,12 @@
           "spec": "S-5",
           "status": "ported"
         },
+        "sKeypadIcons": {
+          "reason": "The thirteen-entry keypad-icon size table (text.c:98-115), ported as keypad_icon_size: each CHAR_KEYPAD_ICON id maps to its width and height in pixels, which the printer uses for the icon's placement and cursor advance (text.c:1114-1118). The table's tile offsets and the bitmap draw (DrawKeypadIcon, text.c:1609-1623) are not modelled here; drawing the icon remains with #2589.",
+          "rust_target": "crates/engine/src/text/render/keypad_icon.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
         "sWindowVerticalScrollSpeeds": {
           "reason": "Per-text-speed \\l scroll animation rate (px/frame), transcribed as TextSpeed::scroll_px_per_frame.",
           "rust_target": "crates/engine/src/text/render.rs",
