@@ -220,89 +220,6 @@ fn first_sample_after(predecessor: &CgbVoice, mut replacement: CgbVoice) -> i32 
     acc[0].0
 }
 
-#[test]
-fn replacing_a_sounding_noise_voice_keeps_its_output_latch() {
-    for width in [WIDE_NOISE, NARROW_NOISE] {
-        let predecessor = noise_voice_latched(CgbAdsr::flat(), SLOW_NOISE_KEY, width);
-        assert_eq!(predecessor.noise_output_latch(), Some(FULL_VOLUME));
-        let mut mixer = crate::mixer::Mixer::default();
-        assert!(mixer.add_cgb_voice(predecessor));
-        assert!(mixer.add_cgb_voice(slow_noise_replacement(width)));
-        assert_mixed(
-            first_mixed_sample(&mut mixer),
-            expected_mixed(FULL_VOLUME, FULL_VOLUME),
-            "a replacement must start on the predecessor's high latch (width {width})",
-        );
-    }
-}
-
-/// `mgba/src/gb/audio.c:641,782`: the latch is the predecessor's resolved level.
-#[test]
-fn a_replacement_outputs_the_predecessors_resolved_level_until_its_first_clock() {
-    let quiet = sustained_adsr(10);
-    let quiet_predecessor = noise_voice_latched(quiet, SLOW_NOISE_KEY, WIDE_NOISE);
-    let quiet_level = quiet_predecessor.noise_output_latch().unwrap();
-    assert!(
-        quiet_level > 0 && quiet_level < FULL_VOLUME,
-        "sanity: predecessor latched below full volume, got {quiet_level}"
-    );
-    let loud_predecessor = noise_voice_latched(CgbAdsr::flat(), SLOW_NOISE_KEY, WIDE_NOISE);
-
-    assert_eq!(
-        first_sample_after(&quiet_predecessor, slow_noise_replacement(WIDE_NOISE)),
-        expected_contribution(quiet_level, quiet_level),
-        "the predecessor's level, not the replacement's volume"
-    );
-    assert_ne!(
-        expected_contribution(quiet_level, quiet_level),
-        expected_contribution(FULL_VOLUME, FULL_VOLUME),
-        "sanity: the two levels render differently"
-    );
-    assert_eq!(
-        first_sample_after(
-            &loud_predecessor,
-            noise_voice_at(quiet, SLOW_NOISE_KEY, WIDE_NOISE)
-        ),
-        expected_contribution(FULL_VOLUME, FULL_VOLUME),
-    );
-}
-
-/// mGBA clocks `ch4.sample = lsb * currentVolume` (`gb/audio.c:641`): a
-/// predecessor clocked at hardware volume zero leaves the latch at zero
-/// whatever its LFSR polarity reads, and the trigger does not rewrite it.
-#[test]
-fn replacing_a_zero_volume_noise_voice_starts_low() {
-    let adsr = CgbAdsr {
-        attack: 4,
-        ..CgbAdsr::flat()
-    };
-    let mut predecessor = noise_voice(adsr, WIDE_NOISE, TestNote::default());
-    predecessor.begin_frame(false);
-    let mut acc = [(0i32, 0i32); 1];
-    for _ in 0..MAX_SAMPLES_TO_LATCH_HIGH {
-        if predecessor.noise_lfsr() != Some(0) {
-            break;
-        }
-        predecessor.render(&mut acc, &[]);
-    }
-    assert!(predecessor.is_active(), "sanity: attack voice still active");
-    assert_eq!(
-        predecessor.envelope_volume(),
-        0,
-        "sanity: clocked at volume zero"
-    );
-    assert_ne!(predecessor.noise_lfsr(), Some(0), "sanity: LFSR clocked");
-    assert_eq!(predecessor.noise_output_latch(), Some(0));
-    let mut mixer = crate::mixer::Mixer::default();
-    assert!(mixer.add_cgb_voice(predecessor));
-    assert!(mixer.add_cgb_voice(slow_noise_replacement(WIDE_NOISE)));
-    assert_mixed(
-        first_mixed_sample(&mut mixer),
-        expected_mixed(0, 0),
-        "a zero-volume predecessor's latch is zero",
-    );
-}
-
 /// A direct NR42 volume write to zero leaves `ch4.sample` alone
 /// (`gb/audio.c:641,730-732,890-913`).
 #[test]
@@ -366,8 +283,26 @@ fn a_noise_note_after_retirement_keeps_a_slow_latch_until_the_first_clock() {
         assert!(mixer.add_cgb_voice(slow_noise_replacement(width)));
         assert_mixed(
             first_mixed_sample(&mut mixer),
+            expected_mixed(0, 0),
+            "the replacement's width-only write clocks the idle slot's elapsed time at the \
+             off-write's zero volume (width {width})",
+        );
+    }
+}
+
+/// With no time between the off-write and the next note-on, no catch-up clock
+/// is owed, so the latch survives (`gb/audio.c:371-383,602-644`).
+#[test]
+fn a_noise_note_added_at_the_off_write_keeps_the_latch() {
+    for width in [WIDE_NOISE, NARROW_NOISE] {
+        let mut mixer = crate::mixer::Mixer::default();
+        assert!(mixer.add_cgb_voice(noise_voice_latched(CgbAdsr::flat(), SLOW_NOISE_KEY, width)));
+        mixer.stop_track(0);
+        assert!(mixer.add_cgb_voice(slow_noise_replacement(width)));
+        assert_mixed(
+            first_mixed_sample(&mut mixer),
             expected_mixed(FULL_VOLUME, FULL_VOLUME),
-            "the latch survives the off-write until a clock (width {width})",
+            "no elapsed time, no catch-up clock (width {width})",
         );
     }
 }
@@ -412,15 +347,12 @@ fn a_second_off_write_restarts_the_phase_and_keeps_the_latch() {
         WIDE_NOISE
     )));
     mixer.stop_track(0);
-    for _ in 0..10 {
-        first_mixed_sample(&mut mixer);
-    }
     assert!(mixer.add_cgb_voice(slow_noise_replacement(WIDE_NOISE)));
-    first_mixed_sample(&mut mixer);
-    mixer.stop_track(0);
-    for _ in 0..10 {
+    // Stay short of the restarted phase's first clock, then off-write again.
+    for _ in 0..(SLOW_KEY_FIRST_CLOCK_SAMPLE / crate::SAMPLES_PER_FRAME - 1) {
         assert!(first_mixed_sample(&mut mixer) > 0.0);
     }
+    mixer.stop_track(0);
     assert!(mixer.add_cgb_voice(slow_noise_replacement(WIDE_NOISE)));
     assert_mixed(
         first_mixed_sample(&mut mixer),
@@ -439,8 +371,9 @@ fn a_noise_note_after_release_retirement_keeps_a_slow_latch_until_the_first_cloc
         assert!(mixer.add_cgb_voice(slow_noise_replacement(width)));
         assert_mixed(
             first_mixed_sample(&mut mixer),
-            expected_mixed(FULL_VOLUME, FULL_VOLUME),
-            "a released note's off-write leaves its latch for the first clock (width {width})",
+            expected_mixed(0, 0),
+            "the frame after a released note's off-write owes fast catch-up clocks at volume 0 \
+             (width {width})",
         );
     }
 }
@@ -576,56 +509,6 @@ fn a_zero_volume_store_with_the_direction_bit_keeps_clocking() {
     assert_eq!(latch, Some(0), "a zero-volume clock settles the latch low");
 }
 
-/// `gb/audio.c:782`.
-#[test]
-fn a_replacement_continues_the_predecessors_last_rendered_sample() {
-    let mut predecessor = noise_voice_latched(sustained_adsr(10), SLOW_NOISE_KEY, WIDE_NOISE);
-    let mut acc = [(0i32, 0i32); 1];
-    predecessor.render(&mut acc, &[]);
-    let last = acc[0].0;
-    assert_ne!(last, 0, "sanity: a raised latch renders");
-    for replacement_sustain in [3, 10, 15] {
-        let replacement = noise_voice_at(
-            sustained_adsr(replacement_sustain),
-            SLOW_NOISE_KEY,
-            WIDE_NOISE,
-        );
-        assert_eq!(
-            first_sample_after(&predecessor, replacement),
-            last,
-            "replacement sustain {replacement_sustain}"
-        );
-    }
-}
-
-#[test]
-fn an_inherited_settled_zero_latch_renders_the_same_across_a_replacement() {
-    let mut predecessor = noise_voice_at(CgbAdsr::flat(), SLOW_NOISE_KEY, WIDE_NOISE);
-    predecessor.begin_frame(false);
-    let mut acc = [(0i32, 0i32); 1];
-    for _ in 0..MAX_SAMPLES_TO_LATCH_HIGH {
-        if predecessor
-            .noise_output_latch()
-            .is_some_and(|level| level > 0)
-        {
-            break;
-        }
-        predecessor.render(&mut acc, &[]);
-    }
-    predecessor.apply_hardware_off_write();
-    for _ in 0..(2 * SLOW_KEY_FIRST_CLOCK_SAMPLE) {
-        predecessor.render(&mut acc, &[]);
-    }
-    assert_eq!(predecessor.noise_output_latch(), Some(0), "sanity: settled");
-    acc[0] = (0, 0);
-    predecessor.render(&mut acc, &[]);
-    let before = acc[0].0;
-    for sustain in [4, 15] {
-        let replacement = noise_voice_at(sustained_adsr(sustain), SLOW_NOISE_KEY, WIDE_NOISE);
-        assert_eq!(first_sample_after(&predecessor, replacement), before);
-    }
-}
-
 /// The mixer is not idle until the first zero-volume clock settles the latch.
 #[test]
 fn a_vacated_slow_noise_slot_is_not_idle_until_its_latch_settles() {
@@ -670,3 +553,6 @@ fn retiring_from_a_low_clock_leaves_no_idle_tail() {
         "no settling edge after retirement",
     );
 }
+
+#[path = "cgb_voice_noise_replacement.rs"]
+mod replacement_tests;
