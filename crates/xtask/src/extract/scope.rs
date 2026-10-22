@@ -6,6 +6,7 @@
 use std::path::Path;
 
 use super::bag::{fixed_ids, icon_ids};
+use super::opening_scene::pack_ids as opening_scene_pack_ids;
 use super::sprites::{FIRST_GENERIC_NPC_PALETTE, LAST_GENERIC_NPC_PALETTE};
 use super::ExtractError;
 
@@ -610,4 +611,10 @@ pub(crate) const BATTLERS: [BattlerSource; 3] = [
 /// [`ExtractError`] if the checkout's icon table cannot be read.
 pub(crate) fn bag_ids(upstream: &Path) -> Result<Vec<String>, ExtractError> {
     Ok([fixed_ids(), icon_ids(upstream)?].concat())
+}
+
+/// Every `opening-scene/` pack id extraction emits: five sheets, eight
+/// palettes, and three tilemaps.
+pub(crate) fn opening_scene_ids() -> Vec<String> {
+    opening_scene_pack_ids()
 }
