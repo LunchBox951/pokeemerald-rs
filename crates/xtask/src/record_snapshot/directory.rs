@@ -1,7 +1,7 @@
 use std::path::Path;
 
 #[cfg(windows)]
-use crate::windows_file_identity::WindowsFileIdentity;
+use win_fs::WindowsFileIdentity;
 
 /// Pins the directory used for payload writes. The claim starts at the
 /// successful open, not at the directory's creation.
