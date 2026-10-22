@@ -40,6 +40,9 @@ pub const DEFAULT_MAX_VOICES: usize = 5;
 const MAX_SWEEP_TICKS_PER_FRAME: usize =
     (SAMPLES_PER_FRAME * 128).div_ceil(crate::pitch::MIXER_RATE as usize);
 
+/// The four-bit master-volume field of the driver's mode word.
+const MASTER_VOLUME_MASK: u8 = 0x0F;
+
 #[derive(Clone, Copy, Debug)]
 enum VoiceSlot {
     DirectSound(usize),
@@ -76,13 +79,16 @@ impl Default for Mixer {
 
 impl Mixer {
     /// A mixer with an explicit DirectSound master volume and voice cap.
+    ///
+    /// `master_volume` runs 0..=15; larger values are masked to the low four
+    /// bits, as the driver's mode-word field is (`m4a.c:466`..`:469`).
     #[must_use]
     pub fn new(master_volume: u8, max_voices: usize) -> Self {
         Self {
             direct_sound_slots: std::iter::repeat_with(|| None).take(max_voices).collect(),
             cgb_slots: [None, None, None, None],
             idle_cgb_hardware: [None, None, None, None],
-            master_volume,
+            master_volume: master_volume & MASTER_VOLUME_MASK,
             next_note_on_ordinal: 0,
             mix_buffer: vec![(0, 0); SAMPLES_PER_FRAME],
             reverb: Reverb::new(0),

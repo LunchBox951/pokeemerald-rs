@@ -132,3 +132,24 @@ fn voice_cap_drops_extra_notes() {
     assert!(!mixer.add_voice(constant_voice(10, 2)));
     assert_eq!(mixer.voice_count(), 2);
 }
+
+#[test]
+fn master_volume_above_documented_maximum_is_constrained() {
+    const SAMPLE: i8 = 50;
+    let render = |master: u8| {
+        let mut mixer = Mixer::new(master, DEFAULT_MAX_VOICES);
+        mixer.add_voice(constant_voice(SAMPLE, 0));
+        let mut out = vec![0.0; SAMPLES_PER_FRAME * 2];
+        mixer.mix_frame(&mut out);
+        out
+    };
+    assert_eq!(render(255)[0], render(MAX_MASTER_VOLUME)[0]);
+}
+
+#[test]
+fn master_volume_is_masked_to_its_four_bit_field() {
+    assert_eq!(Mixer::new(255, 1).master_volume(), 15);
+    assert_eq!(Mixer::new(16, 1).master_volume(), 0);
+    assert_eq!(Mixer::new(0x1B, 1).master_volume(), 11);
+    assert_eq!(Mixer::new(MAX_MASTER_VOLUME, 1).master_volume(), 15);
+}
