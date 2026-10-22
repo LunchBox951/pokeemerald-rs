@@ -8,12 +8,12 @@ use super::error::GenRomProfileError;
 use super::tests::{synthetic_bag_ids, with_context};
 use super::{
     bag, battle_anims, battle_messages, battlers, fonts, inventory, layouts, locate_profile,
-    opening_scene, sprites, text_window, tilesets, title,
+    opening_scene, sprites, starter_chooser, text_window, tilesets, title,
 };
 use crate::extract::scope::{
-    layout_ids, opening_scene_ids, sprite_palette_ids, sprite_sheet_ids, text_window_ids,
-    tileset_animation_ids, title_ids, BATTLERS, FONTS, INTERFACE_PALETTE_IDS, LAYOUTS,
-    TEXT_WINDOW_IMAGE_STEMS, TEXT_WINDOW_PALETTE_STEMS, TILESETS,
+    layout_ids, opening_scene_ids, sprite_palette_ids, sprite_sheet_ids, starter_chooser_ids,
+    text_window_ids, tileset_animation_ids, title_ids, BATTLERS, FONTS, INTERFACE_PALETTE_IDS,
+    LAYOUTS, TEXT_WINDOW_IMAGE_STEMS, TEXT_WINDOW_PALETTE_STEMS, TILESETS,
 };
 
 /// One placeholder entry per fixed root and per bag id; the preflight checks presence only.
@@ -36,6 +36,7 @@ fn complete_inventory() -> Vec<PackEntry> {
             rom_import::BATTLE_ANIM_PACK_ID.to_owned(),
         ])
         .chain(synthetic_bag_ids())
+        .chain(starter_chooser_ids())
         .chain(opening_scene_ids())
         .map(|id| raw_entry(id, vec![0]))
         .collect()
@@ -67,6 +68,8 @@ fn assert_refused(label: &str, entries: Vec<PackEntry>, missing: &str, domain: &
             text_window::locate(ctx, &mut report).map(|_| ())
         } else if domain == "bag" {
             bag::locate(ctx, &mut report).map(|_| ())
+        } else if domain == "starter_chooser" {
+            starter_chooser::locate(ctx, &mut report).map(|_| ())
         } else if domain == "opening_scene" {
             opening_scene::locate(ctx, &mut report).map(|_| ())
         } else if domain == "battlers" {
@@ -121,6 +124,7 @@ fn the_fixed_inventory_ids_are_unique() {
         layout_ids(),
         text_window_ids(),
         title_ids(),
+        starter_chooser_ids(),
         opening_scene_ids(),
     ] {
         let unique: std::collections::BTreeSet<_> = ids.iter().collect();
@@ -285,6 +289,38 @@ fn a_pack_missing_the_whole_bag_family_is_refused_by_id() {
     let mut entries = complete_inventory();
     entries.retain(|entry| !entry.id.starts_with("bag/"));
     assert_refused("no-bag", entries, &synthetic_bag_ids()[0], "bag");
+}
+
+#[test]
+fn a_pack_missing_a_starter_chooser_entry_is_refused() {
+    for id in starter_chooser_ids() {
+        let label = format!("no-{}", id.replace('/', "-"));
+        assert_refused(&label, without(&id), &id, "starter_chooser");
+    }
+}
+
+#[test]
+fn a_surplus_starter_chooser_entry_is_refused_by_id() {
+    let surplus = "starter-chooser/image/not_in_the_inventory";
+    let mut entries = complete_inventory();
+    entries.push(raw_entry(surplus.to_owned(), vec![0]));
+    let rom = RomFixture::new().emerald_header().finish();
+    with_context("surplus-starter-chooser", &rom, entries, |ctx| {
+        let err = inventory::preflight(ctx.pack, &ctx.bag_ids).unwrap_err();
+        assert!(
+            matches!(&err, GenRomProfileError::StructMismatch { id, .. } if id == surplus),
+            "{err:?}"
+        );
+        let mut report = Vec::new();
+        let err = starter_chooser::locate(ctx, &mut report)
+            .map(|_| ())
+            .unwrap_err();
+        assert!(
+            matches!(&err, GenRomProfileError::StructMismatch { id, .. } if id == surplus),
+            "{err:?}"
+        );
+        assert!(report.is_empty(), "{report:?}");
+    });
 }
 
 #[test]
