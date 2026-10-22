@@ -6,6 +6,14 @@
 //!   alignment, and sample width. The supported mono layouts are unsigned
 //!   8-bit PCM, signed 16/24/32-bit PCM, and 32/64-bit IEEE float
 //!   (`wav_file.cpp:125-156`).
+//! - Repeated chunks: the last `fmt `, `data`, `smpl`, `agbp`, and `agbl`
+//!   chunk is the effective one, as wav2agb overwrites its active state for
+//!   each later match (`wav_file.cpp:125-192`). Every `fmt ` and `smpl` chunk
+//!   is still validated, as wav2agb throws on any bad one. A later `smpl`
+//!   with zero loops updates only the key and tuning, leaving an earlier
+//!   chunk's loop enabled. A `agbp`/`agbl` chunk shorter than four bytes is
+//!   ignored, leaving any earlier valid one in place, as wav2agb assigns
+//!   only when the chunk is at least four bytes (`wav_file.cpp:183-193`).
 //! - `smpl` supplies the MIDI unity note, pitch fraction, and optional forward
 //!   loop. wav2agb divides the pitch fraction by `2^32 * 100` despite its
 //!   adjacent comment claiming a `0..100` cent range; this decoder preserves
@@ -227,11 +235,19 @@ fn read_chunks(bytes: &[u8]) -> Result<Vec<Chunk<'_>>, WavError> {
     Ok(chunks)
 }
 
-fn find_chunk<'a>(chunks: &'a [Chunk<'a>], id: [u8; 4]) -> Option<&'a [u8]> {
+/// Every chunk body with `id`, in file order.
+fn chunks_with_id<'a>(chunks: &'a [Chunk<'a>], id: [u8; 4]) -> impl Iterator<Item = &'a [u8]> + 'a {
     chunks
         .iter()
-        .find(|chunk| chunk.id == id)
+        .filter(move |chunk| chunk.id == id)
         .map(|chunk| chunk.data)
+}
+
+/// The effective chunk for `id`: the LAST one in file order, because wav2agb
+/// overwrites its active state for every later matching chunk
+/// (`wav_file.cpp:125-192`).
+fn find_chunk<'a>(chunks: &'a [Chunk<'a>], id: [u8; 4]) -> Option<&'a [u8]> {
+    chunks_with_id(chunks, id).last()
 }
 
 fn read_u16(bytes: &[u8], offset: usize) -> Result<u16, WavError> {
@@ -417,11 +433,15 @@ fn parse_smpl_chunk(smpl: &[u8], num_samples: u32) -> Result<SampleMetadata, Wav
     })
 }
 
-fn read_nonzero_override(chunks: &[Chunk<'_>], id: [u8; 4]) -> Result<Option<u32>, WavError> {
-    find_chunk(chunks, id)
-        .map(|chunk| read_u32(chunk, 0))
-        .transpose()
-        .map(|value| value.filter(|&word| word != 0))
+/// The last `agbp`/`agbl` chunk of at least four bytes, when non-zero.
+/// wav2agb assigns these words only for `chunkLen >= 4`, so a shorter chunk
+/// neither errors nor replaces an earlier one (`wav_file.cpp:183-193`).
+fn read_nonzero_override(chunks: &[Chunk<'_>], id: [u8; 4]) -> Option<u32> {
+    chunks_with_id(chunks, id)
+        .filter(|chunk| chunk.len() >= size_of::<u32>())
+        .last()
+        .and_then(|chunk| read_u32(chunk, 0).ok())
+        .filter(|&word| word != 0)
 }
 
 fn derive_pitch(sample_rate: u32, midi_key: u8, tuning_cents: f64, exact: Option<u32>) -> u32 {
@@ -477,8 +497,12 @@ pub(super) fn decode(bytes: &[u8]) -> Result<WavSample, WavError> {
     }
 
     let chunks = read_chunks(&bytes[RIFF_HEADER_SIZE..])?;
-    let fmt = find_chunk(&chunks, *b"fmt ").ok_or(WavError::MissingFmtChunk)?;
-    let (format, sample_rate) = parse_fmt_chunk(fmt)?;
+    // wav2agb validates every `fmt ` chunk as it scans, then keeps the last.
+    let mut fmt_result = None;
+    for fmt in chunks_with_id(&chunks, *b"fmt ") {
+        fmt_result = Some(parse_fmt_chunk(fmt)?);
+    }
+    let (format, sample_rate) = fmt_result.ok_or(WavError::MissingFmtChunk)?;
 
     let data = find_chunk(&chunks, *b"data").ok_or(WavError::MissingDataChunk)?;
     let bytes_per_sample = format.bytes_per_sample();
@@ -491,12 +515,24 @@ pub(super) fn decode(bytes: &[u8]) -> Result<WavSample, WavError> {
     #[allow(clippy::cast_possible_truncation)]
     let num_samples = (data.len() / bytes_per_sample as usize) as u32;
 
-    let metadata = match find_chunk(&chunks, *b"smpl") {
-        Some(smpl) => parse_smpl_chunk(smpl, num_samples)?,
-        None => SampleMetadata::without_sampler_chunk(num_samples),
-    };
-    let exact_pitch = read_nonzero_override(&chunks, *b"agbp")?;
-    let exact_sample_count = read_nonzero_override(&chunks, *b"agbl")?;
+    // Every `smpl` chunk is validated; the last one supplies the metadata.
+    let mut metadata = SampleMetadata::without_sampler_chunk(num_samples);
+    for smpl in chunks_with_id(&chunks, *b"smpl") {
+        let next = parse_smpl_chunk(smpl, num_samples)?;
+        // A zero-loop chunk updates only key and tuning; an earlier chunk's
+        // loop stays enabled, as in wav2agb (`wav_file.cpp:174-182`).
+        metadata = if next.loop_start.is_none() && metadata.loop_start.is_some() {
+            SampleMetadata {
+                midi_key: next.midi_key,
+                tuning_cents: next.tuning_cents,
+                ..metadata
+            }
+        } else {
+            next
+        };
+    }
+    let exact_pitch = read_nonzero_override(&chunks, *b"agbp");
+    let exact_sample_count = read_nonzero_override(&chunks, *b"agbl");
     let base_frequency = derive_pitch(
         sample_rate,
         metadata.midi_key,
