@@ -73,6 +73,16 @@ pub struct NoiseChannel {
     /// The volume the latch was last resolved against, the render DC centre.
     centre: u8,
     clocking: bool,
+    /// The predecessor's running hardware, held until this channel's note-on
+    /// writes commit; a replacement cancelled first never consumes it.
+    inherited: Option<InheritedHardware>,
+}
+
+/// A replaced noise channel's clock state and the hardware volume it ran at.
+#[derive(Clone, Debug)]
+struct InheritedHardware {
+    channel: Box<NoiseChannel>,
+    volume: u8,
 }
 
 impl NoiseChannel {
@@ -89,6 +99,7 @@ impl NoiseChannel {
             level: 0,
             centre: 0,
             clocking: true,
+            inherited: None,
         }
     }
 
@@ -137,6 +148,47 @@ impl NoiseChannel {
     pub fn continue_output_from(&mut self, previous: &Self) {
         self.level = previous.level;
         self.centre = previous.centre;
+    }
+
+    /// Holds the replaced channel's whole clock state until
+    /// [`Self::commit_initial_writes`], and meanwhile keeps its latch as
+    /// [`Self::continue_output_from`] does. `volume` is the predecessor's
+    /// hardware volume, which its pending clocks resolve against.
+    pub fn inherit_hardware_from(&mut self, previous: &Self, volume: u8) {
+        self.continue_output_from(previous);
+        let mut channel = Box::new(previous.clone());
+        channel.inherited = None;
+        self.inherited = Some(InheritedHardware { channel, volume });
+    }
+
+    /// Plays the note-on writes that precede the trigger against the held
+    /// predecessor: `NR43` carrying only the width (`pokeemerald/src/m4a.c:1020-1022`),
+    /// then the pitched `NR43` (`m4a.c:1197-1202`). mGBA runs channel 4 before
+    /// each `NR43` write and keeps `lastEvent` across it
+    /// (`mgba/src/gb/audio.c:354-358,602-644`), so the first write settles the
+    /// predecessor's owed clocks at its own rate and the second clocks the whole
+    /// elapsed time at the width-only rate, all at the predecessor's volume.
+    /// The latch that results is what the trigger leaves in place
+    /// (`audio.c:371-383`).
+    pub fn commit_initial_writes(&mut self) {
+        let Some(InheritedHardware {
+            mut channel,
+            volume,
+        }) = self.inherited.take()
+        else {
+            return;
+        };
+        channel.settle_owed_clocks(volume);
+        let width_only = if self.width == LfsrWidth::SevenBit {
+            NoiseControl::WIDTH_BIT
+        } else {
+            0
+        };
+        channel.width = self.width;
+        channel.retune(width_only);
+        channel.settle_owed_clocks(volume);
+        self.level = channel.level;
+        self.centre = channel.centre;
     }
 
     /// Re-resolves the latch at an envelope step as
