@@ -64,7 +64,7 @@ fn a_lost_battle_now_heals_the_party_and_halves_money() {
     let base_pp = dex.move_data(MoveId::POUND).unwrap().pp;
     lead.deduct_pp(0).unwrap();
     assert!(lead.moves()[0].pp < base_pp, "setup: PP really is short");
-    phase.party_lead = Some(lead);
+    phase.set_fresh_lead_for_test(lead);
 
     walk_east_and_land(&mut phase, 5);
     assert_eq!(phase.player.position(), (7, 5));
@@ -86,8 +86,7 @@ fn a_lost_battle_now_heals_the_party_and_halves_money() {
          2001 / 2 == 1000, not 1000.5 rounded up"
     );
     let lead = phase
-        .party_lead
-        .as_ref()
+        .lead_for_test()
         .expect("the battle writes the lead mon back, and white_out heals it in place");
     assert!(
         !lead.is_fainted(),
@@ -147,7 +146,7 @@ fn after_a_white_out_a_later_grass_step_rolls_again() {
     };
     let mut lead = player_mon(SHUCKLE, 2, vec![MoveId::POUND]);
     lead.apply_damage(lead.stats().max_hp - 1);
-    phase.party_lead = Some(lead);
+    phase.set_fresh_lead_for_test(lead);
 
     walk_east_and_land(&mut phase, 5);
     assert!(phase.is_wild_battle_active(), "setup: the roll fired");
@@ -159,8 +158,7 @@ fn after_a_white_out_a_later_grass_step_rolls_again() {
     }
     assert!(
         !phase
-            .party_lead
-            .as_ref()
+            .lead_for_test()
             .expect("the battle writes the lead back")
             .is_fainted(),
         "setup: the loss whited out, so the lead is healed"
@@ -223,7 +221,7 @@ fn real_pack_a_lost_wild_battle_warps_home_to_the_default_heal_location() {
     phase.rng = Rng::new(ENCOUNTER_SEED);
     let mut lead = player_mon(SHUCKLE, 2, vec![MoveId::POUND]);
     lead.apply_damage(lead.stats().max_hp - 1);
-    phase.party_lead = Some(lead);
+    phase.set_fresh_lead_for_test(lead);
 
     walk_east_and_land(&mut phase, 5);
     assert!(phase.is_wild_battle_active(), "setup: the roll fired");

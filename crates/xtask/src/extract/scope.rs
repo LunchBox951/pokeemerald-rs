@@ -6,6 +6,7 @@
 use std::path::Path;
 
 use super::bag::{fixed_ids, icon_ids};
+use super::opening_scene::pack_ids as opening_scene_pack_ids;
 use super::sprites::{FIRST_GENERIC_NPC_PALETTE, LAST_GENERIC_NPC_PALETTE};
 use super::ExtractError;
 
@@ -54,7 +55,7 @@ pub(crate) fn tileset_animation_ids() -> Vec<String> {
         .collect()
 }
 
-pub(crate) const TILESETS: [TilesetSource; 5] = [
+pub(crate) const TILESETS: [TilesetSource; 9] = [
     TilesetSource {
         category: "primary",
         name: "general",
@@ -78,6 +79,26 @@ pub(crate) const TILESETS: [TilesetSource; 5] = [
     TilesetSource {
         category: "secondary",
         name: "lab",
+        animations: &[],
+    },
+    TilesetSource {
+        category: "secondary",
+        name: "generic_building",
+        animations: &[],
+    },
+    TilesetSource {
+        category: "secondary",
+        name: "pokemon_center",
+        animations: &[],
+    },
+    TilesetSource {
+        category: "secondary",
+        name: "shop",
+        animations: &[],
+    },
+    TilesetSource {
+        category: "secondary",
+        name: "inside_of_truck",
         animations: &[],
     },
 ];
@@ -220,9 +241,95 @@ pub(crate) const PEOPLE_SHEETS: [&str; 133] = [
     "youngster",
 ];
 
-/// Every required people sprite sheet id, in manifest order.
+/// A non-people object-event sheet: its directory under
+/// `graphics/object_events/pics` and its file stem. The pack id is
+/// `sprite/<dir>/<stem>`, which no people sheet's `sprite/<stem>` can equal.
+#[derive(Clone, Copy)]
+pub(crate) struct ObjectSheet {
+    pub(crate) dir: &'static str,
+    pub(crate) stem: &'static str,
+}
+
+impl ObjectSheet {
+    /// The pack id of this sheet.
+    pub(crate) fn pack_id(self) -> String {
+        format!("sprite/{}/{}", self.dir, self.stem)
+    }
+}
+
+// The non-people `gObjectEventGraphicsInfo_*` pictures the checkpoint maps'
+// fixed object events name (`data/maps/*/map.json`, `graphics_id`): the
+// truck and moving box, Birch's bag, item balls, cuttable trees, the
+// Vigoroth and Zigzagoon, the two bedroom dolls, and the berry-tree stages
+// (`dirt_pile`, `sprout`) with the Cheri and Leppa sheets Route 103 grows.
+pub(crate) const OBJECT_SHEETS: [ObjectSheet; 13] = [
+    ObjectSheet {
+        dir: "berry_trees",
+        stem: "cheri",
+    },
+    ObjectSheet {
+        dir: "berry_trees",
+        stem: "dirt_pile",
+    },
+    ObjectSheet {
+        dir: "berry_trees",
+        stem: "leppa",
+    },
+    ObjectSheet {
+        dir: "berry_trees",
+        stem: "sprout",
+    },
+    ObjectSheet {
+        dir: "dolls",
+        stem: "pichu_doll",
+    },
+    ObjectSheet {
+        dir: "dolls",
+        stem: "swablu_doll",
+    },
+    ObjectSheet {
+        dir: "misc",
+        stem: "birchs_bag",
+    },
+    ObjectSheet {
+        dir: "misc",
+        stem: "cuttable_tree",
+    },
+    ObjectSheet {
+        dir: "misc",
+        stem: "item_ball",
+    },
+    ObjectSheet {
+        dir: "misc",
+        stem: "moving_box",
+    },
+    ObjectSheet {
+        dir: "misc",
+        stem: "truck",
+    },
+    ObjectSheet {
+        dir: "pokemon",
+        stem: "enemy_zigzagoon",
+    },
+    ObjectSheet {
+        dir: "pokemon",
+        stem: "vigoroth",
+    },
+];
+
+/// The palettes beside the generic `npc_*` banks that those pictures load
+/// through `sObjectEventSpritePalettes`.
+pub(crate) const OBJECT_PALETTES: [&str; 4] =
+    ["enemy_zigzagoon", "moving_box", "truck", "vigoroth"];
+
+/// Every required object-event sheet id: the people sheets, then the
+/// non-people ones, in manifest order.
 pub(crate) fn sprite_sheet_ids() -> Vec<String> {
-    PEOPLE_SHEETS.map(|stem| format!("sprite/{stem}")).to_vec()
+    PEOPLE_SHEETS
+        .map(|stem| format!("sprite/{stem}"))
+        .into_iter()
+        .chain(OBJECT_SHEETS.map(ObjectSheet::pack_id))
+        .collect()
 }
 
 /// Every required sprite palette id, in extraction order.
@@ -234,6 +341,7 @@ pub(crate) fn sprite_palette_ids() -> Vec<String> {
             (FIRST_GENERIC_NPC_PALETTE..=LAST_GENERIC_NPC_PALETTE)
                 .map(|n| format!("sprite/palette/npc_{n}")),
         )
+        .chain(OBJECT_PALETTES.map(|name| format!("sprite/palette/{name}")))
         .collect()
 }
 
@@ -315,7 +423,7 @@ pub(crate) struct LayoutSource {
     pub(crate) pack_name: &'static str,
 }
 
-pub(crate) const LAYOUTS: [LayoutSource; 10] = [
+pub(crate) const LAYOUTS: [LayoutSource; 16] = [
     LayoutSource {
         upstream_id: "LAYOUT_LITTLEROOT_TOWN",
         pack_name: "littleroot_town",
@@ -355,6 +463,30 @@ pub(crate) const LAYOUTS: [LayoutSource; 10] = [
     LayoutSource {
         upstream_id: "LAYOUT_ROUTE103",
         pack_name: "route103",
+    },
+    LayoutSource {
+        upstream_id: "LAYOUT_INSIDE_OF_TRUCK",
+        pack_name: "inside_of_truck",
+    },
+    LayoutSource {
+        upstream_id: "LAYOUT_HOUSE1",
+        pack_name: "house1",
+    },
+    LayoutSource {
+        upstream_id: "LAYOUT_HOUSE2",
+        pack_name: "house2",
+    },
+    LayoutSource {
+        upstream_id: "LAYOUT_MART",
+        pack_name: "mart",
+    },
+    LayoutSource {
+        upstream_id: "LAYOUT_POKEMON_CENTER_1F",
+        pack_name: "pokemon_center_1f",
+    },
+    LayoutSource {
+        upstream_id: "LAYOUT_POKEMON_CENTER_2F",
+        pack_name: "pokemon_center_2f",
     },
 ];
 
@@ -479,4 +611,10 @@ pub(crate) const BATTLERS: [BattlerSource; 3] = [
 /// [`ExtractError`] if the checkout's icon table cannot be read.
 pub(crate) fn bag_ids(upstream: &Path) -> Result<Vec<String>, ExtractError> {
     Ok([fixed_ids(), icon_ids(upstream)?].concat())
+}
+
+/// Every `opening-scene/` pack id extraction emits: five sheets, eight
+/// palettes, and three tilemaps.
+pub(crate) fn opening_scene_ids() -> Vec<String> {
+    opening_scene_pack_ids()
 }

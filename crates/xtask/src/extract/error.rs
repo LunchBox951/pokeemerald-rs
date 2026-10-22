@@ -170,6 +170,14 @@ pub enum ExtractError {
         /// What differs from the expected shape.
         detail: String,
     },
+    /// An opening-scene source (Birch's speech scene or the wall clock) differs
+    /// from its upstream graphic's shape.
+    OpeningSceneAssetMismatch {
+        /// Source path.
+        path: PathBuf,
+        /// What differs from the expected shape.
+        detail: String,
+    },
     /// A battler source differs from its upstream graphic's shape.
     BattlerAssetMismatch {
         /// Source path.
@@ -380,6 +388,9 @@ impl fmt::Display for ExtractError {
             ),
             Self::StarterChooserAssetMismatch { path, detail } => {
                 write!(f, "starter-chooser asset `{}` {detail}", path.display())
+            }
+            Self::OpeningSceneAssetMismatch { path, detail } => {
+                write!(f, "opening-scene asset `{}` {detail}", path.display())
             }
             Self::BattlerAssetMismatch { path, detail } => {
                 write!(f, "battler asset `{}` {detail}", path.display())
