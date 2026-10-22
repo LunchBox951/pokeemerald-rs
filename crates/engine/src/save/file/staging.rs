@@ -8,10 +8,10 @@
 use std::path::{Path, PathBuf};
 
 // `WindowsFileIdentity`: the per-object identity a handle exposes regardless
-// of which path opened it, owned by `open` and shared with its verified
-// save-path read, which compares it the same way.
+// of which path opened it, and the handle-bound delete that verifies it, both
+// owned by `win_fs` and shared with the verified save-path read in `open`.
 #[cfg(windows)]
-use super::open::WindowsFileIdentity;
+use win_fs::{remove_through_verified_handle, WindowsFileIdentity};
 
 /// A first guess at the per-component limit most POSIX and Windows
 /// filesystems share, in bytes -- not a promise every filesystem keeps:
@@ -371,158 +371,6 @@ fn release(_hold: &mut Hold) {}
 #[cfg(windows)]
 fn release(hold: &mut Hold) {
     drop(hold.file.take());
-}
-
-/// Opens `path` for [`remove_through_verified_handle`]'s identity check and
-/// delete: `DELETE | FILE_READ_ATTRIBUTES` access,
-/// `FILE_FLAG_OPEN_REPARSE_POINT` so a reparse point planted at the final
-/// component is not followed underneath the check, and
-/// `FILE_FLAG_BACKUP_SEMANTICS` so a directory that took the name opens and
-/// fails the identity check instead of failing the open as access denied.
-///
-/// The share mode admits every other opener. A deny-all open would fail as
-/// a sharing violation whenever a scanner or indexer still held the freshly
-/// written file, leaving it behind; sharing cannot redirect the check or the
-/// delete, since both go through this handle.
-#[cfg(windows)]
-fn open_for_verified_delete(path: &Path) -> std::io::Result<std::fs::File> {
-    use std::os::windows::fs::OpenOptionsExt as _;
-    use windows_sys::Win32::Storage::FileSystem::{
-        DELETE, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
-        FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
-    };
-
-    std::fs::OpenOptions::new()
-        .access_mode(DELETE | FILE_READ_ATTRIBUTES)
-        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
-        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
-        .open(path)
-}
-
-/// What [`remove_through_verified_handle`] did about `path`.
-#[cfg(windows)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum VerifiedRemoval {
-    /// `path` no longer reached the verified object, so nothing was touched.
-    NotOurs,
-    /// The object was deleted with POSIX semantics: its name left the
-    /// directory when the verifying handle closed, even if another process
-    /// still holds the object open.
-    Unlinked,
-    /// The volume refused POSIX semantics, so the object was only marked
-    /// delete-on-close: its name stays in the directory, refusing a
-    /// same-name create, until every other handle to it closes.
-    Pending,
-}
-
-/// Deletes the object `handle` refers to through `handle` itself rather
-/// than a second lookup of its path.
-///
-/// POSIX semantics (`FileDispositionInfoEx`) is tried first, so the name is
-/// gone once `handle` closes whatever other opener remains. A volume or
-/// Windows release without it answers `ERROR_NOT_SUPPORTED`,
-/// `ERROR_INVALID_PARAMETER`, or `ERROR_INVALID_FUNCTION`, and falls back to
-/// the plain `FileDispositionInfo` delete-on-close, reported as
-/// [`VerifiedRemoval::Pending`] because another handle can hold the name.
-#[cfg(windows)]
-fn delete_through_handle(handle: &std::fs::File) -> std::io::Result<VerifiedRemoval> {
-    use windows_sys::Win32::Foundation::{
-        ERROR_INVALID_FUNCTION, ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED,
-    };
-    use windows_sys::Win32::Storage::FileSystem::{
-        FileDispositionInfo, FileDispositionInfoEx, FILE_DISPOSITION_FLAG_DELETE,
-        FILE_DISPOSITION_FLAG_POSIX_SEMANTICS, FILE_DISPOSITION_INFO, FILE_DISPOSITION_INFO_EX,
-    };
-
-    let posix = FILE_DISPOSITION_INFO_EX {
-        Flags: FILE_DISPOSITION_FLAG_DELETE | FILE_DISPOSITION_FLAG_POSIX_SEMANTICS,
-    };
-    // SAFETY: `FileDispositionInfoEx` takes a `FILE_DISPOSITION_INFO_EX`, which `posix` is.
-    match unsafe { set_file_information(handle, FileDispositionInfoEx, &posix) } {
-        Ok(()) => return Ok(VerifiedRemoval::Unlinked),
-        Err(refused)
-            if refused
-                .raw_os_error()
-                .and_then(|code| u32::try_from(code).ok())
-                .is_some_and(|code| {
-                    matches!(
-                        code,
-                        ERROR_NOT_SUPPORTED | ERROR_INVALID_PARAMETER | ERROR_INVALID_FUNCTION
-                    )
-                }) => {}
-        Err(failed) => return Err(failed),
-    }
-    let legacy = FILE_DISPOSITION_INFO { DeleteFile: true };
-    // SAFETY: `FileDispositionInfo` takes a `FILE_DISPOSITION_INFO`, which `legacy` is.
-    unsafe { set_file_information(handle, FileDispositionInfo, &legacy) }?;
-    Ok(VerifiedRemoval::Pending)
-}
-
-/// `SetFileInformationByHandle` on `handle` with `info` as the buffer.
-///
-/// # Safety
-///
-/// `T` must be the structure `class` documents as its buffer.
-#[cfg(windows)]
-unsafe fn set_file_information<T>(
-    handle: &std::fs::File,
-    class: windows_sys::Win32::Storage::FileSystem::FILE_INFO_BY_HANDLE_CLASS,
-    info: &T,
-) -> std::io::Result<()> {
-    use std::os::windows::io::AsRawHandle as _;
-    use windows_sys::Win32::Storage::FileSystem::SetFileInformationByHandle;
-
-    let size = u32::try_from(std::mem::size_of::<T>())
-        .expect("a file-information structure is far smaller than u32::MAX");
-    // SAFETY: `handle` stays open for the call, the caller guarantees `T` matches `class`, and `size` is `T`'s exact size.
-    let ok = unsafe {
-        SetFileInformationByHandle(
-            handle.as_raw_handle(),
-            class,
-            std::ptr::from_ref(info).cast(),
-            size,
-        )
-    };
-    if ok == 0 {
-        Err(std::io::Error::last_os_error())
-    } else {
-        Ok(())
-    }
-}
-
-/// Removes the file `identity` names if `path` still reaches it, deleting
-/// through the same handle the identity check opens so no re-lookup of
-/// `path` occurs between the check and the delete. A path that now reaches a
-/// different object is left alone ([`VerifiedRemoval::NotOurs`]). A path
-/// that reaches nothing at all is an error (`NotFound`), not `NotOurs`: an
-/// ancestor retargeted to an empty directory makes the staged image
-/// unreachable without removing it, so
-/// [`StagedSave::remove_after`] reports it as left behind, as the
-/// non-Windows arm's `symlink_metadata` does.
-#[cfg(windows)]
-fn remove_through_verified_handle(
-    path: &Path,
-    identity: WindowsFileIdentity,
-) -> std::io::Result<VerifiedRemoval> {
-    remove_through_verified_handle_with(path, identity, |_handle| {})
-}
-
-/// [`remove_through_verified_handle`] with a hook run between the identity
-/// check and the delete, so a test can land a retarget in exactly that
-/// window without a real race: a test's only other way to reach it would be
-/// two threads racing the OS, which no cheap seam makes deterministic.
-#[cfg(windows)]
-fn remove_through_verified_handle_with(
-    path: &Path,
-    identity: WindowsFileIdentity,
-    before_delete: impl FnOnce(&std::fs::File),
-) -> std::io::Result<VerifiedRemoval> {
-    let handle = open_for_verified_delete(path)?;
-    if WindowsFileIdentity::of(&handle)? != identity {
-        return Ok(VerifiedRemoval::NotOurs);
-    }
-    before_delete(&handle);
-    delete_through_handle(&handle)
 }
 
 /// Folds `cleanup_err` into `source`, keeping `source`'s `ErrorKind` (mirrors

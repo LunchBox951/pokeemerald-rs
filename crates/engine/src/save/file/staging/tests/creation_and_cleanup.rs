@@ -6,17 +6,17 @@ use crate::save::store::FLASH_IMAGE_LEN;
 
 #[cfg(target_os = "linux")]
 use super::super::fill_new_file;
-#[cfg(windows)]
-use super::super::{
-    remove_through_verified_handle, remove_through_verified_handle_with, VerifiedRemoval,
-    WindowsFileIdentity,
-};
 #[cfg(unix)]
 use crate::save::file::tests::guessable_pid_staging_path;
 #[cfg(any(unix, windows))]
 use crate::save::file::SaveFileError;
 #[cfg(windows)]
 use std::path::Path;
+#[cfg(windows)]
+use win_fs::{
+    remove_through_verified_handle, remove_through_verified_handle_with, VerifiedRemoval,
+    WindowsFileIdentity,
+};
 
 #[test]
 fn a_staging_name_collision_is_retried_onto_a_fresh_name() {
