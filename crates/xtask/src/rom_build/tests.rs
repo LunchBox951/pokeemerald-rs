@@ -7,14 +7,9 @@ use super::*;
 use std::fs;
 use std::process::Command;
 
+/// A fresh, exclusively created directory inside this test's private root.
 fn temp_dir(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "pokeemerald-rs-rom-build-test-{name}-{}",
-        std::process::id()
-    ));
-    let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).unwrap();
-    dir
+    crate::test_support::private_dir(name)
 }
 
 fn git(dir: &Path, args: &[&str]) -> String {
@@ -628,3 +623,14 @@ fn a_symlinked_output_is_refused() {
 }
 
 mod checkout_reading;
+
+/// A fixture directory is claimed exclusively: a populated directory already
+/// holding the requested name keeps its contents.
+#[test]
+fn temp_dir_does_not_delete_a_preexisting_populated_directory() {
+    let first = temp_dir("preexisting");
+    fs::write(first.join("keep.txt"), b"keep me").unwrap();
+    let second = temp_dir("preexisting");
+    assert_ne!(first, second);
+    assert_eq!(fs::read(first.join("keep.txt")).unwrap(), b"keep me");
+}

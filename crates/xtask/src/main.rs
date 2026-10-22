@@ -36,6 +36,8 @@ mod rom_build;
 #[cfg(any(feature = "scenario", all(test, feature = "scenes")))]
 mod scenario;
 mod staging_names;
+#[cfg(test)]
+mod test_support;
 #[cfg(windows)]
 mod windows_file_identity;
 

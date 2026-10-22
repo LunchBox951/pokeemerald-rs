@@ -4,6 +4,14 @@ fn missing(name: &str) -> PathBuf {
     std::env::temp_dir().join(format!("pokeemerald-no-such-{}-{name}", std::process::id()))
 }
 
+/// Writes a stand-in source pack at a new name under `base`, refusing any
+/// entry already there.
+fn write_source_pack(base: &Path, name: &str) -> std::io::Result<PathBuf> {
+    let path = base.join(name);
+    crate::test_support::write_new(&path, b"not a real pack")?;
+    Ok(path)
+}
+
 #[test]
 fn a_missing_source_pack_is_a_setup_error() {
     let error = Session::new(&PackSelection::Prepared(missing("pack")))
@@ -20,11 +28,7 @@ fn a_missing_rom_is_a_setup_error() {
 
 #[test]
 fn a_prepared_pack_is_copied_into_an_owned_scratch_directory() {
-    let source = std::env::temp_dir().join(format!(
-        "pokeemerald-scenario-source-{}.pack",
-        std::process::id()
-    ));
-    std::fs::write(&source, b"not a real pack").unwrap();
+    let source = write_source_pack(&crate::test_support::private_root(), "source.pack").unwrap();
     let first = Session::new(&PackSelection::Prepared(source.clone())).unwrap();
     let second = Session::new(&PackSelection::Prepared(source.clone())).unwrap();
     std::fs::remove_file(&source).unwrap();
@@ -41,12 +45,7 @@ fn a_prepared_pack_is_copied_into_an_owned_scratch_directory() {
 }
 
 fn foreign_dir(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "pokeemerald-scenario-foreign-{}-{tag}",
-        std::process::id()
-    ));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir(&dir).unwrap();
+    let dir = crate::test_support::private_dir(&format!("foreign-{tag}"));
     std::fs::write(dir.join("keep.txt"), b"keep me").unwrap();
     dir
 }
@@ -73,13 +72,7 @@ fn cleanup_aimed_at_a_directory_that_is_not_the_held_one_removes_nothing() {
 /// never be claimed by another test's scratch directory.
 #[cfg(unix)]
 fn private_base(tag: &str) -> PathBuf {
-    let base = std::env::temp_dir().join(format!(
-        "pokeemerald-scenario-base-{}-{tag}",
-        std::process::id()
-    ));
-    let _ = std::fs::remove_dir_all(&base);
-    std::fs::create_dir(&base).unwrap();
-    base
+    crate::test_support::private_dir(&format!("base-{tag}"))
 }
 
 #[cfg(unix)]
@@ -166,6 +159,11 @@ fn a_session_under_an_owner_stripping_umask_is_private_and_readable() {
     // list; give the owner access back so the run leaves nothing behind.
     std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o700)).unwrap();
     std::fs::remove_dir_all(&base).unwrap();
+    let root_mode = std::fs::metadata(crate::test_support::private_root())
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(root_mode & 0o700, 0o700, "private root mode {root_mode:o}");
     assert_eq!(
         observed.unwrap(),
         (0o700, 0o600, b"not a real pack".to_vec())
@@ -255,11 +253,11 @@ fn a_replaced_scratch_directory_receives_no_pack_write() {
 fn dropping_a_session_never_removes_a_tree_that_replaced_its_scratch() {
     for symlink in [false, true] {
         let target = foreign_dir("drop-target");
-        let source = std::env::temp_dir().join(format!(
-            "pokeemerald-scenario-replaced-{}-{symlink}.pack",
-            std::process::id()
-        ));
-        std::fs::write(&source, b"not a real pack").unwrap();
+        let source = write_source_pack(
+            &crate::test_support::private_root(),
+            &format!("replaced-{symlink}.pack"),
+        )
+        .unwrap();
         let base = private_base("drop");
         let session = Session::new_in(&PackSelection::Prepared(source.clone()), &base).unwrap();
         std::fs::remove_file(&source).unwrap();
@@ -293,11 +291,7 @@ fn dropping_a_session_never_removes_a_tree_that_replaced_its_scratch() {
 #[cfg(unix)]
 #[test]
 fn a_session_whose_scratch_was_replaced_refuses_to_start() {
-    let source = std::env::temp_dir().join(format!(
-        "pokeemerald-scenario-nostart-{}.pack",
-        std::process::id()
-    ));
-    std::fs::write(&source, b"not a real pack").unwrap();
+    let source = write_source_pack(&crate::test_support::private_root(), "nostart.pack").unwrap();
     let base = private_base("nostart");
     let session = Session::new_in(&PackSelection::Prepared(source.clone()), &base).unwrap();
     std::fs::remove_file(&source).unwrap();
@@ -328,11 +322,8 @@ fn a_held_scratch_directory_cannot_be_renamed_away() {
 #[cfg(unix)]
 #[test]
 fn a_directory_swapped_in_before_the_claim_is_never_adopted_or_emptied() {
-    let path =
-        std::env::temp_dir().join(format!("pokeemerald-scenario-swap-{}", std::process::id()));
+    let path = crate::test_support::private_path("swap");
     let aside = path.with_extension("aside");
-    let _ = std::fs::remove_dir_all(&path);
-    let _ = std::fs::remove_dir_all(&aside);
     create_private_dir(&path).unwrap();
     std::fs::rename(&path, &aside).unwrap();
     let foreign = foreign_dir("swap");
@@ -355,11 +346,7 @@ fn a_directory_swapped_in_before_the_claim_is_never_adopted_or_emptied() {
 
 #[test]
 fn a_session_that_cannot_load_its_pack_reports_start_failure_not_success() {
-    let source = std::env::temp_dir().join(format!(
-        "pokeemerald-scenario-garbage-{}.pack",
-        std::process::id()
-    ));
-    std::fs::write(&source, b"not a real pack").unwrap();
+    let source = write_source_pack(&crate::test_support::private_root(), "garbage.pack").unwrap();
     let session = Session::new(&PackSelection::Prepared(source.clone())).unwrap();
     std::fs::remove_file(&source).unwrap();
     let Err(error) = session.start() else {
@@ -730,4 +717,21 @@ fn windows_cleanup_empties_the_held_scratch_and_leaves_a_sibling_untouched() {
     result.unwrap();
     assert!(!path.exists(), "the emptied scratch root is removed");
     assert_eq!(kept.unwrap(), b"keep me");
+}
+
+/// A source-pack fixture is created with `create_new`: a symlink already at its
+/// name is refused and its target is left untouched.
+#[cfg(unix)]
+#[test]
+fn the_prepared_pack_fixture_does_not_follow_a_planted_symlink() {
+    let base = crate::test_support::private_dir("planted");
+    let victim = base.join("victim");
+    std::fs::write(&victim, b"precious").unwrap();
+    std::os::unix::fs::symlink(&victim, base.join("planted.pack")).unwrap();
+    assert!(write_source_pack(&base, "planted.pack").is_err());
+    assert_eq!(
+        std::fs::read(&victim).unwrap(),
+        b"precious",
+        "the fixture followed a planted symlink"
+    );
 }
