@@ -469,6 +469,7 @@ version = "0.0.67+gamepatch.0"
 dependencies = [
  "assets",
  "pack-format",
+ "win-fs",
  "windows-sys 0.61.2",
 ]
 
@@ -1464,7 +1465,7 @@ version = "0.0.67+gamepatch.0"
 dependencies = [
  "assets",
  "pack-format",
- "windows-sys 0.61.2",
+ "win-fs",
 ]
 
 [[package]]
@@ -2046,6 +2047,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "win-fs"
+version = "0.0.67+gamepatch.0"
+dependencies = [
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "winapi-util"
 version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2388,7 +2396,7 @@ dependencies = [
  "pokeemerald-rs",
  "rom-import",
  "rustix 1.1.5",
- "windows-sys 0.61.2",
+ "win-fs",
 ]
 
 [[package]]
