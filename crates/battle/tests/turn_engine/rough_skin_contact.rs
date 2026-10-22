@@ -1,24 +1,20 @@
-//! Rough Skin's contact damage (`MOVEEND_ON_DAMAGE_ABILITIES`,
-//! `battle_util.c:2767`-`:2780`): no RNG, so every script is the plain move
-//! script.
+//! Rough Skin contact damage (`MOVEEND_ON_DAMAGE_ABILITIES`,
+//! `battle_util.c:2767`-`:2780`) consumes no RNG.
 
 use crate::poison_support::*;
 use assets::{AbilityId, MoveId};
 use battle::{Battle, BattleEvent, BattlePokemon, Dex, PlayerAction};
 
-/// `SPECIES_CARVANHA`: Rough Skin, and slower than [`RATTATA`] at equal level.
+/// Rough Skin holder, slower than [`RATTATA`] except at levels 1, 2 and 5.
 const CARVANHA: u16 = 330;
 const WATER_GUN: MoveId = MoveId::WATER_GUN;
 const DOUBLE_SLAP: MoveId = MoveId::DOUBLE_SLAP;
 
-/// Both battlers use their first move: construction's turn-number draw, the
-/// turn-start draw, the enemy's move selection, then per acting battler
-/// accuracy, crit (`1`: no crit), damage roll, and a discarded
-/// secondary-effect draw. [`RATTATA`] acts first at any level above 5, where their Speed stats tie.
+/// Construction, turn start and enemy move selection, then per acting battler
+/// accuracy, crit (`1`: no crit), damage roll and a discarded secondary-effect
+/// draw. [`RATTATA`] acts first unless both are level 1, 2 or 5, where Speed ties.
 const BOTH_ACT: [u16; 11] = [0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0];
 
-/// [`BOTH_ACT`] truncated after the first mover's hit, when the second mover
-/// is knocked out or the battle ends before it acts.
 const FIRST_ACTS_ALONE: [u16; 7] = [0, 0, 0, 0, 1, 0, 0];
 
 fn carvanha(dex: &Dex, level: u8, moves: Vec<MoveId>) -> BattlePokemon {
@@ -73,8 +69,6 @@ fn a_contact_hit_into_an_enemy_rough_skin_holder_hurts_the_player_by_a_sixteenth
 
     let (battle, events) = take_player_move(player, enemy, dex, &BOTH_ACT);
 
-    // The enemy's own Tackle into the player draws no recoil: the player's
-    // ability is not Rough Skin.
     let hurt = BattleEvent::RoughSkinDamage {
         by_player: true,
         move_id: TACKLE,
@@ -222,9 +216,7 @@ fn a_multi_hit_contact_move_hurts_the_attacker_after_every_hit() {
     let enemy = carvanha(&dex, 40, vec![TACKLE]);
     let recoil = player.stats().max_hp / 16;
 
-    // Construction, turn-start and selection draws, Double Slap's accuracy and
-    // hit count (two hits), per hit crit and damage roll, the trailing
-    // effect-chance draw, and the enemy's Tackle.
+    // Double Slap's hit count draw is 0, which rolls two hits.
     let script = [0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0];
     let (battle, events) = take_player_move(player, enemy, dex, &script);
 
@@ -243,7 +235,6 @@ fn a_multi_hit_sequence_stops_when_the_recoil_knocks_the_attacker_out() {
     let player = with_hp(max_iv_mon(&dex, RATTATA, 60, vec![DOUBLE_SLAP]), 1);
     let enemy = carvanha(&dex, 40, vec![TACKLE]);
 
-    // Two hits are rolled but the first recoil ends the attacker.
     let script = [0, 0, 0, 0, 0, 1, 0, 0];
     let (battle, events) = take_player_move(player, enemy, dex, &script);
 
