@@ -221,6 +221,9 @@ mod tests {
         out
     }
 
+    /// The serialized `sample_count` in a [`direct_sound_payload`].
+    const SAMPLE_COUNT_FIELD: std::ops::Range<usize> = 10..14;
+
     /// A `DirectSound` pack payload with a guard byte after `data`.
     fn direct_sound_payload(freq: u32, loop_start: Option<u32>, data: &[u8]) -> Vec<u8> {
         let mut payload = vec![0u8];
@@ -313,7 +316,8 @@ mod tests {
         let size = u32::try_from(data.len()).expect("a sample fits in u32");
         let header = wave_header(0, 0, freq, 0, size);
         let mut payload = direct_sound_payload(freq, None, &data);
-        payload[10..14].copy_from_slice(&(size + 7).to_le_bytes());
+        assert_eq!(payload[SAMPLE_COUNT_FIELD], size.to_le_bytes());
+        payload[SAMPLE_COUNT_FIELD].copy_from_slice(&(size + 7).to_le_bytes());
 
         let err = locate_one("declared-count-too-large", &header, payload, &data).unwrap_err();
         assert!(
@@ -333,7 +337,8 @@ mod tests {
         let size = u32::try_from(data.len()).expect("a sample fits in u32");
         let header = wave_header(0, 0, freq, 0, size);
         let mut payload = direct_sound_payload(freq, None, &data);
-        payload[10..14].copy_from_slice(&(size - 1).to_le_bytes());
+        assert_eq!(payload[SAMPLE_COUNT_FIELD], size.to_le_bytes());
+        payload[SAMPLE_COUNT_FIELD].copy_from_slice(&(size - 1).to_le_bytes());
 
         let err = locate_one("declared-count-too-small", &header, payload, &data).unwrap_err();
         assert!(
