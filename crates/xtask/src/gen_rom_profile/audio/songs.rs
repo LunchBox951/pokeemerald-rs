@@ -1,4 +1,4 @@
-//! Locating the song header and table entry, and reading the song's `MUS_*` constant, with the song-constant tests.
+//! Resolves the song header and `gSongTable` for a planned voicegroup.
 
 use std::path::Path;
 
@@ -15,7 +15,16 @@ use crate::gen_rom_profile::Context;
 
 use super::{raw_payload, MAX_TRACKS, SLOT_POINTER, SONG_TABLE_ENTRY_BYTES, SONG_TABLE_MS_OFFSET};
 
-/// Find the song header that plays through `voicegroup`, and its table.
+const HEADER_TRACK_COUNT_OFFSET: u32 = 0;
+const HEADER_PRIORITY_OFFSET: u32 = 2;
+const HEADER_REVERB_OFFSET: u32 = 3;
+const HEADER_FIXED_BYTES: u32 = 8;
+const TRACK_POINTER_BYTES: u32 = 4;
+const REVERB_ENABLED_BIT: u8 = 0x80;
+
+/// Finds the header of the song that plays through `voicegroup`, and the
+/// `gSongTable` holding it: the table starts at the header's entry minus
+/// the song's `MUS_*` index in entries.
 pub(super) fn locate_song(
     ctx: &Context<'_>,
     song_id: &str,
@@ -32,7 +41,7 @@ pub(super) fn locate_song(
             .filter_map(|at| at.checked_sub(SLOT_POINTER)),
         |&base| is_song_header(ctx, base),
     )?;
-    let track_count = u8_at_addr(ctx.rom, header).unwrap_or(0);
+    let track_count = u8_at_addr(ctx.rom, header + HEADER_TRACK_COUNT_OFFSET).unwrap_or(0);
     let entry = only_one_matching(
         song_id,
         "a gSongTable entry",
@@ -49,9 +58,13 @@ pub(super) fn locate_song(
         })?;
 
     report.push(
-        ReportLine::unique(song_id, header, 8 + u32::from(track_count) * 4)
-            .with(Resolution::StructDerived)
-            .note(format!("{track_count} tracks")),
+        ReportLine::unique(
+            song_id,
+            header,
+            HEADER_FIXED_BYTES + u32::from(track_count) * TRACK_POINTER_BYTES,
+        )
+        .with(Resolution::StructDerived)
+        .note(format!("{track_count} tracks")),
     );
     report.push(
         ReportLine::unique("gSongTable", table, 0)
@@ -72,12 +85,9 @@ pub(super) fn locate_song(
     ))
 }
 
-/// Decode the pack's song through the canonical wire schema and check the
-/// located `SongHeader` against it: track count, priority, and reverb, and
-/// the `gSongTable` entry at `entry` against its `Song.ms` player index.
-///
-/// It then decodes the ROM's track byte-code with `rom-import` and requires
-/// the canonical bytes to equal the pack payload exactly.
+/// Checks the located header and `gSongTable` entry against the pack's
+/// canonical [`Song`], and requires the ROM's decoded tracks to equal the
+/// pack payload byte for byte.
 ///
 /// # Errors
 ///
@@ -111,21 +121,22 @@ fn check_song_header(
         reason,
     };
     let byte = |offset: u32| u8_at_addr(ctx.rom, header + offset);
-    let track_count = byte(0);
+    let track_count = byte(HEADER_TRACK_COUNT_OFFSET);
     if track_count.map(usize::from) != Some(song.tracks().len()) {
         return Err(mismatch(format!(
             "the header at {header:08X} holds {track_count:?} tracks, the pack song {}",
             song.tracks().len()
         )));
     }
-    if byte(2) != Some(song.priority()) {
+    if byte(HEADER_PRIORITY_OFFSET) != Some(song.priority()) {
         return Err(mismatch(format!(
             "the header priority is {:?}, the pack song's is {}",
-            byte(2),
+            byte(HEADER_PRIORITY_OFFSET),
             song.priority()
         )));
     }
-    let reverb = byte(3).and_then(|value| (value & 0x80 != 0).then_some(value & !0x80));
+    let reverb = byte(HEADER_REVERB_OFFSET)
+        .and_then(|value| (value & REVERB_ENABLED_BIT != 0).then_some(value & !REVERB_ENABLED_BIT));
     if reverb != song.reverb() {
         return Err(mismatch(format!(
             "the header reverb is {reverb:?}, the pack song's is {:?}",
@@ -164,20 +175,22 @@ fn check_song_header(
     Ok(())
 }
 
-/// Whether the bytes at `base` read as an MP2K song header.
 fn is_song_header(ctx: &Context<'_>, base: u32) -> bool {
-    let Some(track_count) = u8_at_addr(ctx.rom, base) else {
+    let Some(track_count) = u8_at_addr(ctx.rom, base + HEADER_TRACK_COUNT_OFFSET) else {
         return false;
     };
     if track_count == 0 || track_count > MAX_TRACKS {
         return false;
     }
     (0..u32::from(track_count)).all(|track| {
-        u32_at_addr(ctx.rom, base + 8 + track * 4).is_some_and(|value| to_offset(value).is_some())
+        u32_at_addr(
+            ctx.rom,
+            base + HEADER_FIXED_BYTES + track * TRACK_POINTER_BYTES,
+        )
+        .is_some_and(|value| to_offset(value).is_some())
     })
 }
 
-/// The `MUS_*` index a song pack id names, from `constants/songs.h`.
 fn song_index(upstream: &Path, song_id: &str) -> Result<u16, GenRomProfileError> {
     let stem = song_id.rsplit('/').next().unwrap_or(song_id);
     let symbol = stem.to_ascii_uppercase();
@@ -193,7 +206,6 @@ fn song_index(upstream: &Path, song_id: &str) -> Result<u16, GenRomProfileError>
     })
 }
 
-/// Find `#define <symbol> <number>` in a C header.
 fn parse_song_constant(text: &str, symbol: &str) -> Option<u16> {
     for line in text.lines() {
         let mut tokens = line.split_whitespace();
