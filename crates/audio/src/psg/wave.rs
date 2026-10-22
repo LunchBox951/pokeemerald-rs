@@ -70,6 +70,8 @@ impl WaveChannel {
         let period_cycles = CYCLES_PER_REGISTER_STEP
             * (f64::from(FREQUENCY_REGISTER_RANGE)
                 - f64::from(freq_reg.min(MAX_FREQUENCY_REGISTER)));
+        // Rounded up: `step_delta` is truncated, so a truncated delay could
+        // let the delayed clock land one sample early (register 0x0AA).
         #[expect(
             clippy::cast_possible_truncation,
             clippy::cast_sign_loss,
@@ -77,7 +79,7 @@ impl WaveChannel {
         )]
         {
             self.first_clock_delay =
-                (FIRST_CLOCK_DELAY_CYCLES / period_cycles * f64::from(PHASE_ONE)) as u32;
+                (FIRST_CLOCK_DELAY_CYCLES / period_cycles * f64::from(PHASE_ONE)).ceil() as u32;
         }
     }
 
@@ -189,6 +191,38 @@ mod tests {
         assert_eq!(retuned.head(), 0, "a retune delays its first clock too");
         assert_eq!(retuned.sample(FULL), -8);
         assert_eq!(retuned.head(), 1);
+    }
+
+    /// Register 0x0AA's delayed first clock falls at cycle 3762, just after
+    /// twelve mixer intervals (3761.989 cycles), so it belongs to the
+    /// thirteenth sample (`mgba/src/gb/audio.c:331-335`). Twelve truncated
+    /// steps of 5470 less a truncated 104-unit delay would reach one whole
+    /// step exactly and latch a sample early, under the wrong NR32 gain.
+    #[test]
+    fn first_wave_clock_delay_rounds_up_at_the_sample_boundary() {
+        const REGISTER: u16 = 0x0AA;
+        const HALF: u32 = 128;
+        let ram = WaveChannel::decode_wave_ram(&[0xF0; WAVE_RAM_BYTES]);
+        let mut wave = WaveChannel::new(ram, REGISTER);
+        for _ in 0..12 {
+            assert_eq!(wave.sample(FULL), -8);
+        }
+        assert_eq!(wave.head(), 0, "no clock inside the first twelve intervals");
+        assert_eq!(
+            wave.sample(HALF),
+            -8,
+            "the cold latch holds through call 13"
+        );
+        assert_eq!(
+            wave.head(),
+            1,
+            "the delayed clock lands in the thirteenth interval"
+        );
+        assert_eq!(
+            wave.sample(FULL),
+            WaveChannel::resolve(ram[0], HALF),
+            "the clock latched the head under the gain in effect when it fired"
+        );
     }
 
     #[test]
