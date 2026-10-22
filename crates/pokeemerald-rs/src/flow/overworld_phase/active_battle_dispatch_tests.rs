@@ -32,15 +32,14 @@ fn load_default_hands_back_a_fightable_provisional_starter() {
     assert!(!lead.is_fainted(), "the lead must be able to fight");
 }
 
-/// A wild or first battle holds the lead on loan, as `begin_wild_battle` and
-/// `begin_first_battle` leave it; the frame drivers restore it when they end.
-fn lend_lead_to_wild_or_first(phase: &mut OverworldPhase, variant: &ActiveBattle) {
-    if matches!(variant, ActiveBattle::Wild(_) | ActiveBattle::First(_)) {
-        phase.set_fresh_lead_for_test(new_game::provisional_starter());
-        phase
-            .take_lead_battler()
-            .expect("the lead was just installed");
-    }
+/// Every active battle holds the lead on loan, as `begin_wild_battle`,
+/// `begin_first_battle` and the trainer-battle starts leave it; the frame
+/// drivers restore it when they end.
+fn lend_lead_to_battle(phase: &mut OverworldPhase) {
+    phase.set_fresh_lead_for_test(new_game::provisional_starter());
+    phase
+        .take_lead_battler()
+        .expect("the lead was just installed");
 }
 
 /// Each [`OverworldPhase::active_battle`] variant is reported by exactly
@@ -194,7 +193,7 @@ fn step_dispatches_each_active_battle_variant_to_its_own_driver() {
     for variant in variants {
         let kind = std::mem::discriminant(&variant);
         let mut phase = synthetic_phase(PlayerState::new((4, 6), 3, Direction::West), None);
-        lend_lead_to_wild_or_first(&mut phase, &variant);
+        lend_lead_to_battle(&mut phase);
         phase.active_battle = Some(variant);
         phase.step(held(Buttons::LEFT));
         assert_eq!(
@@ -260,7 +259,7 @@ fn step_drives_each_active_battle_variant_to_completion() {
     for variant in variants {
         let kind = std::mem::discriminant(&variant);
         let mut phase = synthetic_phase(PlayerState::new((4, 6), 3, Direction::West), None);
-        lend_lead_to_wild_or_first(&mut phase, &variant);
+        lend_lead_to_battle(&mut phase);
         phase.active_battle = Some(variant);
         let mut frames = 0;
         while phase.active_battle.is_some() && frames < 1000 {
