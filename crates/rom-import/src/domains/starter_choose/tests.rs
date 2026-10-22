@@ -232,15 +232,6 @@ fn lz77_literals(data: &[u8]) -> Vec<u8> {
 
 #[test]
 fn a_compressed_four_bit_sheet_and_tilemap_round_trip() {
-    const SHEET: usize = 0x4000;
-    const MAP: usize = 0x5000;
-    let tilemap = [0x01, 0x10, 0x02, 0x20];
-    let bytes = RomFixture::new()
-        .emerald_header()
-        .write(SHEET, &lz77_literals(&tile()))
-        .write(MAP, &lz77_literals(&tilemap))
-        .finish();
-    let rom = Rom::from_bytes(bytes).expect("the fixture header is valid");
     static IMAGES: &[ImageRoot] = &[ImageRoot {
         addr: at(0x4000),
         encoding: Encoding::Lz77,
@@ -252,6 +243,15 @@ fn a_compressed_four_bit_sheet_and_tilemap_round_trip() {
         len: 4,
         ..RAW
     }];
+    const SHEET: usize = 0x4000;
+    const MAP: usize = 0x5000;
+    let tilemap = [0x01, 0x10, 0x02, 0x20];
+    let bytes = RomFixture::new()
+        .emerald_header()
+        .write(SHEET, &lz77_literals(&tile()))
+        .write(MAP, &lz77_literals(&tilemap))
+        .finish();
+    let rom = Rom::from_bytes(bytes).expect("the fixture header is valid");
     let roots = roots(StarterChooserRoots {
         images: IMAGES,
         tilemaps: TILEMAPS,
