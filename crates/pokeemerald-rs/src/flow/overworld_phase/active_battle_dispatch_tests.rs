@@ -32,6 +32,20 @@ fn load_default_hands_back_a_fightable_provisional_starter() {
     assert!(!lead.is_fainted(), "the lead must be able to fight");
 }
 
+/// A rival or sight-trainer battle holds the lead on loan, as their starts
+/// leave it; the frame drivers restore it when they end.
+fn lend_lead_to_trainer_battle(phase: &mut OverworldPhase, variant: &ActiveBattle) {
+    if matches!(
+        variant,
+        ActiveBattle::Rival { .. } | ActiveBattle::SightTrainer { .. }
+    ) {
+        phase.set_fresh_lead_for_test(new_game::provisional_starter());
+        phase
+            .take_lead_battler()
+            .expect("the lead was just installed");
+    }
+}
+
 /// Each [`OverworldPhase::active_battle`] variant is reported by exactly
 /// one `is_*_battle_active` accessor, and `in_battle()` by all of them.
 #[test]
@@ -248,6 +262,7 @@ fn step_drives_each_active_battle_variant_to_completion() {
     for variant in variants {
         let kind = std::mem::discriminant(&variant);
         let mut phase = synthetic_phase(PlayerState::new((4, 6), 3, Direction::West), None);
+        lend_lead_to_trainer_battle(&mut phase, &variant);
         phase.active_battle = Some(variant);
         let mut frames = 0;
         while phase.active_battle.is_some() && frames < 1000 {
