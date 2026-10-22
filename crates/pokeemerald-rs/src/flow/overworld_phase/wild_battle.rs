@@ -4,6 +4,7 @@
 //! live in [`crate::flow::wild_encounter`].
 
 use crate::flow::wild_encounter;
+use battle::Dex;
 
 use super::{ActiveBattle, OverworldPhase};
 
@@ -99,7 +100,24 @@ impl OverworldPhase {
             return;
         };
         let player_trainer_id = u32::from_le_bytes(self.save2.player_trainer_id);
-        match wild_encounter::start_wild_battle(lead, encounter, player_trainer_id, &mut self.rng) {
+        // `PickWildMonNature` consults party slot 0, which is not the battle lead when it is
+        // fainted; an unsaved party (count 0) has the live lead as its whole party.
+        let stored = usize::from(self.save1.player_party_count).min(self.save1.player_party.len());
+        let synchronize_nature = if stored == 0 {
+            (lead.ability() == assets::AbilityId::SYNCHRONIZE).then(|| lead.nature())
+        } else {
+            crate::party::slot_zero_synchronize_nature(
+                &Dex::new(),
+                &self.save1.player_party[..stored],
+            )
+        };
+        match wild_encounter::start_wild_battle_with_synchronize(
+            lead,
+            synchronize_nature,
+            encounter,
+            player_trainer_id,
+            &mut self.rng,
+        ) {
             Ok(battle) => {
                 self.party_lead = None;
                 self.active_battle = Some(ActiveBattle::Wild(battle));

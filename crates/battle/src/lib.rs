@@ -324,5 +324,5 @@ pub use status1::Status1;
 pub use volatile::Volatiles;
 pub use wild::{
     build_pokemon_with_random_personality, build_wild_pokemon, ensure_wild_startable,
-    initial_moveset,
+    initial_moveset, pick_wild_nature,
 };
