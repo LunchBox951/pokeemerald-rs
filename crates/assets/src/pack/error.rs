@@ -96,6 +96,14 @@ pub enum PackError {
     },
     /// The pack carries no battler art for this species.
     UnsupportedBattlerSpecies(SpeciesId),
+    /// An opening-scene entry (Birch's speech scene or the wall clock) differs
+    /// from the upstream graphic's shape.
+    MalformedOpeningSceneAsset {
+        /// Asset id.
+        id: String,
+        /// What differs from the expected shape.
+        detail: String,
+    },
     /// A Pokédex graphics entry differs from the upstream graphic's shape.
     MalformedPokedexGraphic {
         /// Asset id.
@@ -241,6 +249,9 @@ impl fmt::Display for PackError {
                 "asset pack: no battler art for species {}",
                 species.index()
             ),
+            Self::MalformedOpeningSceneAsset { id, detail } => {
+                write!(f, "asset pack: opening-scene entry `{id}` {detail}")
+            }
             Self::MalformedPokedexGraphic { id, detail } => {
                 write!(f, "asset pack: Pokédex graphics entry `{id}` {detail}")
             }
@@ -300,6 +311,7 @@ impl std::error::Error for PackError {
             | Self::MalformedStarterAsset { .. }
             | Self::MalformedBattlerAsset { .. }
             | Self::UnsupportedBattlerSpecies(_)
+            | Self::MalformedOpeningSceneAsset { .. }
             | Self::MalformedPokedexGraphic { .. }
             | Self::MalformedBattleInterfaceAsset { .. }
             | Self::MalformedBagAsset { .. } => None,

@@ -34,6 +34,7 @@ mod inventory;
 mod layouts;
 mod locate;
 mod map_file;
+mod opening_scene;
 mod pack_source;
 mod palettes;
 mod plan;
@@ -166,6 +167,7 @@ fn locate_profile(
         battle_anims: battle_anims::locate(ctx, lines)?,
         bag: bag::locate(ctx, lines)?,
         starter_chooser: starter_chooser::locate(ctx, lines)?,
+        opening_scene: opening_scene::locate(ctx, lines)?,
         battlers: battlers::locate(ctx, lines)?,
     })
 }

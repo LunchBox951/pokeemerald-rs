@@ -4,8 +4,8 @@ use rom_import::Encoding;
 
 use super::plan::{
     BagPlan, BattleAnimationPlan, BattleMessagePlan, BattlerPlan, BlobPlan, ImagePlan,
-    MapLayoutPlan, PalettePlan, ProfilePlan, ReportLine, Resolution, StarterChooserPlan,
-    TileAnimPlan, TilesetPlan,
+    MapLayoutPlan, OpeningScenePlan, PalettePlan, ProfilePlan, ReportLine, Resolution,
+    StarterChooserPlan, TileAnimPlan, TilesetPlan,
 };
 
 /// The header paragraph saying how roots were settled, as `//!` lines.
@@ -70,8 +70,8 @@ use crate::reader::GbaPtr;
 use crate::roots::{{
     AnimProgramRoot, AnimSymbolRoot, AudioRoots, BagRoots, BattleAnimationRoots,
     BattleMessageRoots, BattlerRoot, BattlerRoots, BlobRoot, Encoding, FontRoot, ImageRoot,
-    InterfaceRoots, KeysplitRoot, MapLayoutRoot, PaletteRoot, Roots, SampleRoot, SongRoot,
-    SpecialMessageRoot, SpriteRoots, StarterChooserRoots, TextWindowRoots, TileAnimRoot,
+    InterfaceRoots, KeysplitRoot, MapLayoutRoot, OpeningSceneRoots, PaletteRoot, Roots, SampleRoot,
+    SongRoot, SpecialMessageRoot, SpriteRoots, StarterChooserRoots, TextWindowRoots, TileAnimRoot,
     TilesetRoot, TitleScreenRoots, VoicegroupRoot,
 }};
 
@@ -129,6 +129,7 @@ pub fn module(plan: &ProfilePlan, sha1: &str, lines: &[ReportLine]) -> String {
 
     bag_roots(&mut out, &plan.bag);
     starter_chooser_roots(&mut out, &plan.starter_chooser);
+    opening_scene_roots(&mut out, &plan.opening_scene);
 
     battler_roots(&mut out, &plan.battlers);
 
@@ -154,6 +155,18 @@ fn starter_chooser_roots(out: &mut String, chooser: &StarterChooserPlan) {
     palette_slice(out, "        ", &chooser.palettes);
     let _ = writeln!(out, "        tilemaps: &[");
     for blob in &chooser.tilemaps {
+        let _ = writeln!(out, "            {},", blob_root(blob));
+    }
+    let _ = writeln!(out, "        ],");
+    let _ = writeln!(out, "    }},");
+}
+
+fn opening_scene_roots(out: &mut String, scene: &OpeningScenePlan) {
+    let _ = writeln!(out, "    opening_scene: OpeningSceneRoots {{");
+    image_slice(out, "        ", "images", &scene.images);
+    palette_slice(out, "        ", &scene.palettes);
+    let _ = writeln!(out, "        tilemaps: &[");
+    for blob in &scene.tilemaps {
         let _ = writeln!(out, "            {},", blob_root(blob));
     }
     let _ = writeln!(out, "        ],");
@@ -719,8 +732,8 @@ mod bag_field_tests {
     use super::module;
     use crate::gen_rom_profile::plan::{
         AudioPlan, BagPlan, BattleAnimationPlan, BattleMessagePlan, BattlerPlan, BlobPlan,
-        ImagePlan, PalettePlan, ProfilePlan, SpritePlan, StarterChooserPlan, TextWindowPlan,
-        TitleScreenPlan,
+        ImagePlan, OpeningScenePlan, PalettePlan, ProfilePlan, SpritePlan, StarterChooserPlan,
+        TextWindowPlan, TitleScreenPlan,
     };
     use rom_import::Encoding;
 
@@ -782,6 +795,75 @@ mod bag_field_tests {
         }
     }
 
+    fn scene_plan() -> OpeningScenePlan {
+        OpeningScenePlan {
+            images: vec![ImagePlan {
+                id: "opening-scene/image/birch".to_owned(),
+                addr: 0x0815_0000,
+                encoding: Encoding::Raw,
+                rom_bit_depth: 4,
+                pack_bit_depth: 4,
+                width: 64,
+                height: 64,
+                metatile_width: 8,
+                metatile_height: 8,
+                tile_count: 64,
+            }],
+            palettes: vec![PalettePlan {
+                id: "opening-scene/palette/lotad".to_owned(),
+                addr: 0x0816_0000,
+                color_count: 16,
+                encoding: Encoding::Lz77,
+            }],
+            tilemaps: vec![BlobPlan {
+                id: "opening-scene/raw/clock_start".to_owned(),
+                addr: 0x0817_0000,
+                encoding: Encoding::Lz77,
+                len: 1280,
+            }],
+        }
+    }
+
+    fn assert_chooser_roots(module: &str) {
+        assert!(
+            module.contains("    starter_chooser: StarterChooserRoots {"),
+            "{module}"
+        );
+        assert!(
+            module.contains("ImageRoot { id: \"starter-chooser/image/tiles\", addr: GbaPtr::at(0x0815_0000), encoding: Encoding::Lz77, rom_bit_depth: 4, pack_bit_depth: 4,"),
+            "{module}"
+        );
+        assert!(
+            module.contains("PaletteRoot { id: \"starter-chooser/palette/tiles\", addr: GbaPtr::at(0x0816_0000), color_count: 32, encoding: Encoding::Raw }"),
+            "{module}"
+        );
+        assert!(
+            module.contains("BlobRoot { id: \"starter-chooser/raw/birch_bag\", addr: GbaPtr::at(0x0817_0000), encoding: Encoding::Lz77, len: 1280 }"),
+            "{module}"
+        );
+        assert!(!module.contains("StarterChooserRoots::NONE"), "{module}");
+    }
+
+    fn assert_scene_roots(module: &str) {
+        assert!(
+            module.contains("    opening_scene: OpeningSceneRoots {"),
+            "{module}"
+        );
+        assert!(
+            module.contains("ImageRoot { id: \"opening-scene/image/birch\", addr: GbaPtr::at(0x0815_0000), encoding: Encoding::Raw, rom_bit_depth: 4, pack_bit_depth: 4,"),
+            "{module}"
+        );
+        assert!(
+            module.contains("PaletteRoot { id: \"opening-scene/palette/lotad\", addr: GbaPtr::at(0x0816_0000), color_count: 16, encoding: Encoding::Lz77 }"),
+            "{module}"
+        );
+        assert!(
+            module.contains("BlobRoot { id: \"opening-scene/raw/clock_start\", addr: GbaPtr::at(0x0817_0000), encoding: Encoding::Lz77, len: 1280 }"),
+            "{module}"
+        );
+        assert!(!module.contains("OpeningSceneRoots::NONE"), "{module}");
+    }
+
     #[test]
     fn the_emitted_roots_literal_populates_the_bag_family() {
         let base = 0x0800_0000;
@@ -834,25 +916,11 @@ mod bag_field_tests {
             },
             bag: bag_plan(),
             starter_chooser: chooser_plan(),
+            opening_scene: scene_plan(),
         };
         let module = module(&plan, "0", &[]);
-        assert!(
-            module.contains("    starter_chooser: StarterChooserRoots {"),
-            "{module}"
-        );
-        assert!(
-            module.contains("ImageRoot { id: \"starter-chooser/image/tiles\", addr: GbaPtr::at(0x0815_0000), encoding: Encoding::Lz77, rom_bit_depth: 4, pack_bit_depth: 4,"),
-            "{module}"
-        );
-        assert!(
-            module.contains("PaletteRoot { id: \"starter-chooser/palette/tiles\", addr: GbaPtr::at(0x0816_0000), color_count: 32, encoding: Encoding::Raw }"),
-            "{module}"
-        );
-        assert!(
-            module.contains("BlobRoot { id: \"starter-chooser/raw/birch_bag\", addr: GbaPtr::at(0x0817_0000), encoding: Encoding::Lz77, len: 1280 }"),
-            "{module}"
-        );
-        assert!(!module.contains("StarterChooserRoots::NONE"), "{module}");
+        assert_chooser_roots(&module);
+        assert_scene_roots(&module);
         assert!(module.contains("    bag: BagRoots {"), "{module}");
         assert!(
             module.contains("ImageRoot { id: \"bag/image/hm\""),

@@ -1,4 +1,4 @@
-//! Locating the five bundled tilesets.
+//! Locating the bundled tilesets.
 //!
 //! A tileset's `struct Tileset` is small, so it is found through its metatile
 //! table, a large blob that identifies itself. The locator

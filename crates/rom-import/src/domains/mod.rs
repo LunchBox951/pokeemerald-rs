@@ -31,6 +31,7 @@ pub(crate) mod battlers;
 pub(crate) mod fonts;
 pub(crate) mod interface;
 pub(crate) mod layouts;
+pub(crate) mod opening_scene;
 pub(crate) mod song;
 pub(crate) mod sprites;
 pub(crate) mod starter_choose;
@@ -67,6 +68,7 @@ pub(crate) const DOMAINS: &[Domain] = &[
     battle_anim::write,
     bag::write,
     starter_choose::write,
+    opening_scene::write,
     battlers::write,
 ];
 
