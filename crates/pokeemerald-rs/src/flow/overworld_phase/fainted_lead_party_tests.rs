@@ -58,11 +58,10 @@ fn continued_phase_with_trailing_member(member: &BattlePokemon) -> OverworldPhas
 #[test]
 fn continue_selects_the_first_healthy_slot_behind_a_fainted_lead() {
     let phase = continued_phase_with_trailing_member(&new_game::provisional_starter());
-    assert_eq!(phase.party_lead_slot, 1);
+    phase.assert_lead_at_slot_for_test(1);
     assert!(
         !phase
-            .party_lead
-            .as_ref()
+            .lead_for_test()
             .expect("a usable member was selected")
             .is_fainted(),
         "the selected lead must not be the fainted slot 0"
@@ -76,7 +75,7 @@ fn continue_selects_the_first_healthy_slot_behind_a_fainted_lead() {
 #[test]
 fn a_healthy_slot_behind_a_fainted_lead_fights_a_rolled_wild_encounter() {
     let mut phase = continued_phase_with_trailing_member(&new_game::provisional_starter());
-    let selected_species = phase.party_lead.as_ref().unwrap().species();
+    let selected_species = phase.lead_for_test().unwrap().species();
 
     phase.begin_wild_battle(Some(WildEncounter {
         species: WURMPLE,
@@ -89,7 +88,7 @@ fn a_healthy_slot_behind_a_fainted_lead_fights_a_rolled_wild_encounter() {
     };
     assert_eq!(battle.player().species(), selected_species);
     assert!(
-        phase.party_lead.is_none(),
+        phase.lead_for_test().is_none(),
         "the selected lead is borrowed for the fight's duration"
     );
 }
@@ -99,7 +98,7 @@ fn a_healthy_slot_behind_a_fainted_lead_fights_a_rolled_wild_encounter() {
 #[test]
 fn a_healthy_slot_behind_a_fainted_lead_fights_the_route_103_rival() {
     let mut phase = continued_phase_with_trailing_member(&new_game::provisional_starter());
-    let selected_species = phase.party_lead.as_ref().unwrap().species();
+    let selected_species = phase.lead_for_test().unwrap().species();
 
     phase.begin_route103_rival_battle();
 
@@ -116,8 +115,7 @@ fn an_all_fainted_continued_party_still_refuses_a_wild_battle() {
     let mut phase = continued_phase_with_trailing_member(&fainted_starter());
     assert!(
         phase
-            .party_lead
-            .as_ref()
+            .lead_for_test()
             .expect("the fallback slot 0 decode still yields a lead")
             .is_fainted(),
         "setup: no usable member exists"
@@ -238,14 +236,10 @@ fn continue_scans_a_trailing_slot_beyond_the_stored_party_count() {
         seed.save2,
     );
 
-    assert_eq!(
-        phase.party_lead_slot, 1,
-        "a healthy slot beyond the stored count of 1 must still be selected"
-    );
+    phase.assert_lead_at_slot_for_test(1);
     assert!(
         !phase
-            .party_lead
-            .as_ref()
+            .lead_for_test()
             .expect("a usable member was selected")
             .is_fainted(),
         "the selected lead must not be the fainted slot 0"
@@ -276,7 +270,7 @@ fn a_zero_stored_count_still_resumes_with_no_lead() {
     );
 
     assert!(
-        phase.party_lead.is_none(),
+        phase.lead_for_test().is_none(),
         "a stored count of zero must resume with no lead even though slot 1 still holds a \
          healthy, decodable record"
     );
@@ -303,19 +297,14 @@ fn a_white_out_reselects_a_trailing_slot_beyond_the_stored_party_count() {
     ));
     phase.save1.player_party[1] =
         crate::party::to_save_pokemon(&dex, &new_game::provisional_starter());
-    phase.party_lead = None;
-    phase.party_lead_slot = 0;
+    phase.clear_lead_for_test();
 
     phase.white_out();
 
-    assert_eq!(
-        phase.party_lead_slot, 1,
-        "the healthy slot beyond the stored count of 1 must be reselected after healing"
-    );
+    phase.assert_lead_at_slot_for_test(1);
     assert!(
         !phase
-            .party_lead
-            .as_ref()
+            .lead_for_test()
             .expect("a usable member was reselected")
             .is_fainted(),
         "the reselected lead must not be fainted"
@@ -339,16 +328,11 @@ fn a_white_out_with_a_zero_stored_count_skips_reselecting_the_lead() {
     phase.save1.player_party[0] = as_egg(crate::party::to_save_pokemon(&dex, &fainted_starter()));
     phase.save1.player_party[1] =
         crate::party::to_save_pokemon(&dex, &new_game::provisional_starter());
-    phase.party_lead = Some(fainted_starter());
-    phase.party_lead_slot = 0;
+    phase.set_fresh_lead_for_test(fainted_starter());
 
     phase.white_out();
 
-    assert_eq!(
-        phase.party_lead_slot, 0,
-        "a stored count of zero must skip the rescan entirely, leaving the existing lead \
-         selected even though slot 1 holds a healthy, decodable record"
-    );
+    phase.assert_lead_at_slot_for_test(0);
 }
 
 /// A trailing lead beyond the stored count is not "occupied", so it must
@@ -377,26 +361,19 @@ fn a_white_out_merges_a_full_scan_selected_trailing_lead_without_healing_it_or_t
         seed.save1,
         seed.save2,
     );
-    assert_eq!(
-        phase.party_lead_slot, 1,
-        "setup: the trailing slot was selected"
-    );
+    phase.assert_lead_at_slot_for_test(1);
 
     // Simulate the lost battle's damage on the live battler: white-out's
     // heal must not erase this for a slot outside the stored count.
     phase
-        .party_lead
-        .as_mut()
+        .lead_mut_for_test()
         .expect("setup: a lead was selected")
         .apply_damage(DAMAGE);
-    let hp_after_damage = phase.party_lead.as_ref().unwrap().current_hp();
+    let hp_after_damage = phase.lead_for_test().unwrap().current_hp();
 
     phase.white_out();
 
-    assert_eq!(
-        phase.party_lead_slot, 1,
-        "the merged trailing lead is still the first usable slot"
-    );
+    phase.assert_lead_at_slot_for_test(1);
     let merged = phase.save1.player_party[1];
     assert_eq!(
         u32::from(merged.hp),
@@ -425,7 +402,7 @@ fn a_white_out_heals_every_occupied_slot_and_reselects_the_first_usable_one() {
     const STORED_STATUS: u32 = 0x40;
 
     let mut phase = continued_phase_with_trailing_member(&new_game::provisional_starter());
-    assert_eq!(phase.party_lead_slot, 1, "setup: slot 1 was selected");
+    phase.assert_lead_at_slot_for_test(1);
 
     phase.save1.player_party[0].status = STORED_STATUS;
     phase.save1.player_party[1].status = STORED_STATUS;
@@ -448,14 +425,10 @@ fn a_white_out_heals_every_occupied_slot_and_reselects_the_first_usable_one() {
         selected.hp, selected.max_hp,
         "the selected slot must be filled to its retained maximum"
     );
-    assert_eq!(
-        phase.party_lead_slot, 0,
-        "with slot 0 healed too, it is the first usable slot again"
-    );
+    phase.assert_lead_at_slot_for_test(0);
     assert!(
         !phase
-            .party_lead
-            .as_ref()
+            .lead_for_test()
             .expect("a usable member was reselected")
             .is_fainted(),
         "the reselected lead must not be fainted"
@@ -469,7 +442,7 @@ fn a_white_out_heals_every_occupied_slot_and_reselects_the_first_usable_one() {
 #[test]
 fn a_white_out_heals_every_occupied_party_member() {
     let mut phase = continued_phase_with_trailing_member(&new_game::provisional_starter());
-    assert_eq!(phase.party_lead_slot, 1, "setup: slot 1 was selected");
+    phase.assert_lead_at_slot_for_test(1);
     assert_eq!(phase.save1.player_party[0].hp, 0, "setup: slot 0 fainted");
 
     phase.white_out();
@@ -486,10 +459,7 @@ fn a_white_out_heals_every_occupied_party_member() {
         phase.save1.clone(),
         phase.save2.clone(),
     );
-    assert_eq!(
-        continued.party_lead_slot, 0,
-        "with the whole party healed, SetBattlePartyIds sends out slot 0 again"
-    );
+    continued.assert_lead_at_slot_for_test(0);
 }
 
 /// The first-battle conclusion's own `HealPlayerParty` reaches every
@@ -503,7 +473,7 @@ fn a_white_out_heals_every_occupied_party_member() {
 #[test]
 fn the_first_battle_conclusion_heals_every_occupied_slot_and_reselects_the_first_usable_one() {
     let mut phase = continued_phase_with_trailing_member(&new_game::provisional_starter());
-    assert_eq!(phase.party_lead_slot, 1, "setup: slot 1 was selected");
+    phase.assert_lead_at_slot_for_test(1);
     assert_eq!(phase.save1.player_party[0].hp, 0, "setup: slot 0 fainted");
 
     phase.conclude_first_battle();
@@ -513,10 +483,7 @@ fn the_first_battle_conclusion_heals_every_occupied_slot_and_reselects_the_first
         unselected.hp, unselected.max_hp,
         "HealPlayerParty restores every occupied member's HP, not just the selected battler's"
     );
-    assert_eq!(
-        phase.party_lead_slot, 0,
-        "with slot 0 healed too, it is the first usable slot again"
-    );
+    phase.assert_lead_at_slot_for_test(0);
 }
 
 /// The single-member counterpart of the same regression: `HealPlayerParty`
@@ -536,7 +503,7 @@ fn the_first_battle_conclusion_clears_the_stored_status_of_a_single_member_party
     stored.status = STORED_STATUS;
     phase.save1.player_party_count = 1;
     phase.save1.player_party[0] = stored;
-    phase.party_lead = Some(lead);
+    phase.set_fresh_lead_for_test(lead);
     assert_ne!(
         phase.save1.player_party[0].status, 0,
         "setup: the saved record is statused"
@@ -607,4 +574,29 @@ fn a_fainted_synchronize_slot_zero_still_synchronizes_for_the_wild_mon() {
         panic!("the healthy lead must fight");
     };
     assert_eq!(battle.enemy().nature(), battle::Nature::Hardy);
+}
+
+/// A white-out that reselects a different slot while the old lead is still
+/// lent out installs the replacement as an ordinary, un-lent lead: the
+/// owner clears the loan with the reselection, so the next battle can borrow
+/// it, and the healed record is what the next save flushes.
+#[test]
+fn white_out_reselection_over_a_lent_lead_installs_a_borrowable_healed_replacement() {
+    let mut phase = continued_phase_with_trailing_member(&new_game::provisional_starter());
+    phase.assert_lead_at_slot_for_test(1);
+    assert_eq!(phase.save1.player_party[0].hp, 0, "setup: slot 0 fainted");
+    let lent = phase.take_lead_battler().expect("setup: a lead to lend");
+    drop(lent);
+
+    phase.white_out();
+
+    phase.assert_lead_at_slot_for_test(0);
+    let replacement = phase.take_lead_battler().expect("the replacement lead");
+    assert!(!replacement.is_fainted());
+    assert_eq!(replacement.current_hp(), replacement.stats().max_hp);
+    phase.restore_lead_battler(replacement);
+    phase.flush_lead_to_save();
+    let flushed = phase.save1.player_party[0];
+    assert_eq!(flushed.hp, flushed.max_hp, "the healed lead is what saves");
+    assert_ne!(flushed.hp, 0);
 }

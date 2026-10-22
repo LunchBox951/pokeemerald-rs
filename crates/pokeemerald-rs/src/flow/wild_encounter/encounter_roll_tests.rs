@@ -235,7 +235,7 @@ impl battle::BattleRng for ScriptedTurns<'_> {
 
 /// With no party mon there is nothing to fight with, so the encounter is
 /// logged and dropped. Production play never reaches this state --
-/// `load_default` assigns `new_game::provisional_starter` (issue #207
+/// `OverworldPhase::load` assigns `new_game::provisional_starter` (issue #207
 /// review) -- so this pins the defensive arm a bare test phase exercises.
 /// The roll still happened, so the player keeps walking rather than being
 /// wedged.
