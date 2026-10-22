@@ -12,9 +12,13 @@
 //!
 //! Deliberately not modelled by `battle`, and so retained from the backing
 //! record by [`merge_into_save_pokemon`]: held item, friendship, pokérus,
-//! met data, poké ball, OT gender, ribbons, markings, nickname, OT name,
+//! met data, poké ball, OT gender, ribbons, markings, nickname,
 //! language, mail, the egg bit, and contest condition (`PokemonSubstruct2`'s
-//! trailing six bytes). [`to_save_pokemon`], which has no record to retain
+//! trailing six bytes). The OT name is retained from the record too, but
+//! `battle` does carry a copy: [`from_save_pokemon`] reads it into
+//! [`battle::BattlePokemon::original_trainer_name`] only for the obedience
+//! gate's `IsOtherTrainer` comparison. It is never re-encoded from the
+//! battler (an all-zero name reads back as unrecorded). [`to_save_pokemon`], which has no record to retain
 //! them from, writes upstream's own `CreateMon` default for whichever of
 //! those it can derive from its own two arguments: nickname
 //! (the species' display name), language (`GAME_LANGUAGE`), met level
