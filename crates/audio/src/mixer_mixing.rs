@@ -143,7 +143,10 @@ fn master_volume_above_documented_maximum_is_constrained() {
         mixer.mix_frame(&mut out);
         out
     };
-    assert_eq!(render(255)[0], render(MAX_MASTER_VOLUME)[0]);
+    assert_eq!(
+        render(255)[0].to_bits(),
+        render(MAX_MASTER_VOLUME)[0].to_bits()
+    );
 }
 
 #[test]
