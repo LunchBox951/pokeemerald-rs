@@ -10,12 +10,40 @@ const CARVANHA: u16 = 330;
 const WATER_GUN: MoveId = MoveId::WATER_GUN;
 const DOUBLE_SLAP: MoveId = MoveId::DOUBLE_SLAP;
 
-/// Construction, turn start and enemy move selection, then per acting battler
-/// accuracy, crit (`1`: no crit), damage roll and a discarded secondary-effect
-/// draw. [`RATTATA`] acts first unless both are level 1, 2 or 5, where Speed ties.
-const BOTH_ACT: [u16; 11] = [0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0];
+const CONSTRUCTION_TURN_NUMBER: u16 = 0;
+const TURN_START: u16 = 0;
+const ENEMY_MOVE_SELECTION: u16 = 0;
+const ACCURACY_HITS: u16 = 0;
+const NO_CRIT: u16 = 1;
+const DAMAGE_ROLL: u16 = 0;
+const DISCARDED_SECONDARY_EFFECT: u16 = 0;
+const HIT_COUNT_TWO: u16 = 0;
+const DOUBLE_SLAP_EFFECT_CHANCE: u16 = 0;
 
-const FIRST_ACTS_ALONE: [u16; 7] = [0, 0, 0, 0, 1, 0, 0];
+/// [`RATTATA`] acts first unless both are level 1, 2 or 5, where Speed ties.
+const BOTH_ACT: [u16; 11] = [
+    CONSTRUCTION_TURN_NUMBER,
+    TURN_START,
+    ENEMY_MOVE_SELECTION,
+    ACCURACY_HITS,
+    NO_CRIT,
+    DAMAGE_ROLL,
+    DISCARDED_SECONDARY_EFFECT,
+    ACCURACY_HITS,
+    NO_CRIT,
+    DAMAGE_ROLL,
+    DISCARDED_SECONDARY_EFFECT,
+];
+
+const FIRST_ACTS_ALONE: [u16; 7] = [
+    CONSTRUCTION_TURN_NUMBER,
+    TURN_START,
+    ENEMY_MOVE_SELECTION,
+    ACCURACY_HITS,
+    NO_CRIT,
+    DAMAGE_ROLL,
+    DISCARDED_SECONDARY_EFFECT,
+];
 
 fn carvanha(dex: &Dex, level: u8, moves: Vec<MoveId>) -> BattlePokemon {
     let mon = max_iv_mon(dex, CARVANHA, level, moves);
@@ -216,8 +244,22 @@ fn a_multi_hit_contact_move_hurts_the_attacker_after_every_hit() {
     let enemy = carvanha(&dex, 40, vec![TACKLE]);
     let recoil = player.stats().max_hp / 16;
 
-    // Double Slap's hit count draw is 0, which rolls two hits.
-    let script = [0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0];
+    let script = [
+        CONSTRUCTION_TURN_NUMBER,
+        TURN_START,
+        ENEMY_MOVE_SELECTION,
+        ACCURACY_HITS,
+        HIT_COUNT_TWO,
+        NO_CRIT,
+        DAMAGE_ROLL,
+        NO_CRIT,
+        DAMAGE_ROLL,
+        DOUBLE_SLAP_EFFECT_CHANCE,
+        ACCURACY_HITS,
+        NO_CRIT,
+        DAMAGE_ROLL,
+        DISCARDED_SECONDARY_EFFECT,
+    ];
     let (battle, events) = take_player_move(player, enemy, dex, &script);
 
     let hurt = BattleEvent::RoughSkinDamage {
@@ -235,7 +277,16 @@ fn a_multi_hit_sequence_stops_when_the_recoil_knocks_the_attacker_out() {
     let player = with_hp(max_iv_mon(&dex, RATTATA, 60, vec![DOUBLE_SLAP]), 1);
     let enemy = carvanha(&dex, 40, vec![TACKLE]);
 
-    let script = [0, 0, 0, 0, 0, 1, 0, 0];
+    let script = [
+        CONSTRUCTION_TURN_NUMBER,
+        TURN_START,
+        ENEMY_MOVE_SELECTION,
+        ACCURACY_HITS,
+        HIT_COUNT_TWO,
+        NO_CRIT,
+        DAMAGE_ROLL,
+        DOUBLE_SLAP_EFFECT_CHANCE,
+    ];
     let (battle, events) = take_player_move(player, enemy, dex, &script);
 
     assert!(battle.player().is_fainted(), "{events:?}");
@@ -256,7 +307,18 @@ fn recoil_on_the_final_rolled_hit_is_capped_at_the_attackers_remaining_hp() {
     let player = with_hp(player, recoil + 1);
     let enemy = carvanha(&dex, 40, vec![TACKLE]);
 
-    let script = [0, 0, 0, 0, 0, 1, 0, 1, 0, 0];
+    let script = [
+        CONSTRUCTION_TURN_NUMBER,
+        TURN_START,
+        ENEMY_MOVE_SELECTION,
+        ACCURACY_HITS,
+        HIT_COUNT_TWO,
+        NO_CRIT,
+        DAMAGE_ROLL,
+        NO_CRIT,
+        DAMAGE_ROLL,
+        DOUBLE_SLAP_EFFECT_CHANCE,
+    ];
     let (battle, events) = take_player_move(player, enemy, dex, &script);
 
     let hurt = |damage| BattleEvent::RoughSkinDamage {
