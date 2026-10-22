@@ -84,6 +84,69 @@ const STARTER_BATTLER_IDS: [&str; 12] = [
     "pokemon/mudkip/palette/shiny",
 ];
 
+/// The layout names the checkpoint maps added beyond the Littleroot, Route 101,
+/// Oldale, and Route 103 grids: `MAP_INSIDE_OF_TRUCK` and the Oldale interiors.
+const CHECKPOINT_LAYOUTS: [&str; 6] = [
+    "inside_of_truck",
+    "house1",
+    "house2",
+    "mart",
+    "pokemon_center_1f",
+    "pokemon_center_2f",
+];
+
+/// The tilesets those layouts and their neighbours draw with.
+const CHECKPOINT_TILESETS: [&str; 4] = [
+    "generic_building",
+    "pokemon_center",
+    "shop",
+    "inside_of_truck",
+];
+
+/// The non-people object-event pictures and palettes the checkpoint maps'
+/// fixed objects render.
+const CHECKPOINT_OBJECT_IDS: [&str; 17] = [
+    "sprite/berry_trees/cheri",
+    "sprite/berry_trees/dirt_pile",
+    "sprite/berry_trees/leppa",
+    "sprite/berry_trees/sprout",
+    "sprite/dolls/pichu_doll",
+    "sprite/dolls/swablu_doll",
+    "sprite/misc/birchs_bag",
+    "sprite/misc/cuttable_tree",
+    "sprite/misc/item_ball",
+    "sprite/misc/moving_box",
+    "sprite/misc/truck",
+    "sprite/pokemon/enemy_zigzagoon",
+    "sprite/pokemon/vigoroth",
+    "sprite/palette/enemy_zigzagoon",
+    "sprite/palette/moving_box",
+    "sprite/palette/truck",
+    "sprite/palette/vigoroth",
+];
+
+/// Every pack id the checkpoint maps' payloads add: each new layout's grid and
+/// border, each new tileset's tiles, metatile tables, and sixteen palette
+/// banks, and the object pictures and palettes.
+fn checkpoint_payload_ids() -> Vec<String> {
+    let layouts = CHECKPOINT_LAYOUTS.iter().flat_map(|name| {
+        [
+            format!("layout/{name}/map"),
+            format!("layout/{name}/border"),
+        ]
+    });
+    let tilesets = CHECKPOINT_TILESETS.iter().flat_map(|name| {
+        ["tiles", "metatiles", "metatile-attributes"]
+            .map(|part| format!("tileset/{name}/{part}"))
+            .into_iter()
+            .chain((0..16).map(move |bank| format!("tileset/{name}/palette/{bank:02}")))
+    });
+    layouts
+        .chain(tilesets)
+        .chain(CHECKPOINT_OBJECT_IDS.map(str::to_owned))
+        .collect()
+}
+
 /// Ids the two backends are known and accepted to disagree on, each with
 /// the reason it was signed off.
 ///
@@ -151,6 +214,18 @@ fn the_rom_backend_matches_the_checkout_pack() {
     for id in STARTER_BATTLER_IDS {
         if !imported.contains_key(id) {
             differences.push(format!("{id}: the ROM backend wrote no such entry"));
+        }
+    }
+
+    // Named by id so a payload both backends drop together still fails.
+    for id in checkpoint_payload_ids() {
+        for (what, ids) in [
+            ("the ROM backend", &imported),
+            ("the checkout pack", &checkout),
+        ] {
+            if !ids.contains_key(&id) {
+                differences.push(format!("{id}: {what} wrote no such entry"));
+            }
         }
     }
 

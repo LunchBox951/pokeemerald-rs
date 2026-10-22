@@ -74,6 +74,8 @@ mod battle_anim;
 mod battle_interface;
 mod battle_message;
 mod battler;
+#[cfg(test)]
+mod checkpoint_maps_tests;
 mod error;
 mod fonts;
 pub mod inflate;

@@ -1024,14 +1024,18 @@
     "data/layouts/House1": {
       "category": "data.layout",
       "kind": "dir",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "pack ids layout/house1/map and layout/house1/border; map.bin/border.bin extracted as opaque raw blobs into the local gitignored asset pack (crates/xtask/src/extract/layouts.rs::extract_layouts's LAYOUTS table in crates/xtask/src/extract/scope.rs, resolved via data/layouts/layouts.json). Read back with AssetPack::layout_map/layout_border and decoded into typed grids via crates/assets/src/map_layouts.rs. The same normalized pack entries are also produced from the player's own ROM by crates/rom-import/src/domains/layouts.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+      "rust_target": "crates/xtask/src/extract/layouts.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "data/layouts/House2": {
       "category": "data.layout",
       "kind": "dir",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "pack ids layout/house2/map and layout/house2/border; map.bin/border.bin extracted as opaque raw blobs into the local gitignored asset pack (crates/xtask/src/extract/layouts.rs::extract_layouts's LAYOUTS table in crates/xtask/src/extract/scope.rs, resolved via data/layouts/layouts.json). Read back with AssetPack::layout_map/layout_border and decoded into typed grids via crates/assets/src/map_layouts.rs. The same normalized pack entries are also produced from the player's own ROM by crates/rom-import/src/domains/layouts.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+      "rust_target": "crates/xtask/src/extract/layouts.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "data/layouts/House3": {
       "category": "data.layout",
@@ -1054,8 +1058,10 @@
     "data/layouts/InsideOfTruck": {
       "category": "data.layout",
       "kind": "dir",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "pack ids layout/inside_of_truck/map and layout/inside_of_truck/border; map.bin/border.bin extracted as opaque raw blobs into the local gitignored asset pack (crates/xtask/src/extract/layouts.rs::extract_layouts's LAYOUTS table in crates/xtask/src/extract/scope.rs, resolved via data/layouts/layouts.json). Read back with AssetPack::layout_map/layout_border and decoded into typed grids via crates/assets/src/map_layouts.rs. The same normalized pack entries are also produced from the player's own ROM by crates/rom-import/src/domains/layouts.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+      "rust_target": "crates/xtask/src/extract/layouts.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "data/layouts/IslandCave": {
       "category": "data.layout",
@@ -1320,8 +1326,10 @@
     "data/layouts/Mart": {
       "category": "data.layout",
       "kind": "dir",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "pack ids layout/mart/map and layout/mart/border; map.bin/border.bin extracted as opaque raw blobs into the local gitignored asset pack (crates/xtask/src/extract/layouts.rs::extract_layouts's LAYOUTS table in crates/xtask/src/extract/scope.rs, resolved via data/layouts/layouts.json). Read back with AssetPack::layout_map/layout_border and decoded into typed grids via crates/assets/src/map_layouts.rs. The same normalized pack entries are also produced from the player's own ROM by crates/rom-import/src/domains/layouts.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+      "rust_target": "crates/xtask/src/extract/layouts.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "data/layouts/MauvilleCity": {
       "category": "data.layout",
@@ -1604,14 +1612,18 @@
     "data/layouts/PokemonCenter_1F": {
       "category": "data.layout",
       "kind": "dir",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "pack ids layout/pokemon_center_1f/map and layout/pokemon_center_1f/border; map.bin/border.bin extracted as opaque raw blobs into the local gitignored asset pack (crates/xtask/src/extract/layouts.rs::extract_layouts's LAYOUTS table in crates/xtask/src/extract/scope.rs, resolved via data/layouts/layouts.json). Read back with AssetPack::layout_map/layout_border and decoded into typed grids via crates/assets/src/map_layouts.rs. The same normalized pack entries are also produced from the player's own ROM by crates/rom-import/src/domains/layouts.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+      "rust_target": "crates/xtask/src/extract/layouts.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "data/layouts/PokemonCenter_2F": {
       "category": "data.layout",
       "kind": "dir",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "pack ids layout/pokemon_center_2f/map and layout/pokemon_center_2f/border; map.bin/border.bin extracted as opaque raw blobs into the local gitignored asset pack (crates/xtask/src/extract/layouts.rs::extract_layouts's LAYOUTS table in crates/xtask/src/extract/scope.rs, resolved via data/layouts/layouts.json). Read back with AssetPack::layout_map/layout_border and decoded into typed grids via crates/assets/src/map_layouts.rs. The same normalized pack entries are also produced from the player's own ROM by crates/rom-import/src/domains/layouts.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+      "rust_target": "crates/xtask/src/extract/layouts.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "data/layouts/RecordCorner": {
       "category": "data.layout",
@@ -12163,14 +12175,18 @@
     "data/tilesets/secondary/generic_building": {
       "category": "data.tileset",
       "kind": "dir",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Directory extracted into the local gitignored asset pack by crates/xtask/src/extract/tilesets.rs (TILESETS in crates/xtask/src/extract/scope.rs): tiles.png decoded via the std-only PNG/inflate decoder, all 16 palettes/NN.pal via the JASC-PAL parser, and metatiles.bin/metatile_attributes.bin as opaque raw blobs. Read back with AssetPack::tileset in crates/assets/src/pack.rs. The same normalized pack entries are also produced from the player's own ROM by crates/rom-import/src/domains/tilesets.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+      "rust_target": "crates/xtask/src/extract/tilesets.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "data/tilesets/secondary/inside_of_truck": {
       "category": "data.tileset",
       "kind": "dir",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Directory extracted into the local gitignored asset pack by crates/xtask/src/extract/tilesets.rs (TILESETS in crates/xtask/src/extract/scope.rs): tiles.png decoded via the std-only PNG/inflate decoder, all 16 palettes/NN.pal via the JASC-PAL parser, and metatiles.bin/metatile_attributes.bin as opaque raw blobs. Read back with AssetPack::tileset in crates/assets/src/pack.rs. The same normalized pack entries are also produced from the player's own ROM by crates/rom-import/src/domains/tilesets.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+      "rust_target": "crates/xtask/src/extract/tilesets.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "data/tilesets/secondary/inside_ship": {
       "category": "data.tileset",
@@ -12305,8 +12321,10 @@
     "data/tilesets/secondary/pokemon_center": {
       "category": "data.tileset",
       "kind": "dir",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Directory extracted into the local gitignored asset pack by crates/xtask/src/extract/tilesets.rs (TILESETS in crates/xtask/src/extract/scope.rs): tiles.png decoded via the std-only PNG/inflate decoder, all 16 palettes/NN.pal via the JASC-PAL parser, and metatiles.bin/metatile_attributes.bin as opaque raw blobs. Read back with AssetPack::tileset in crates/assets/src/pack.rs. The same normalized pack entries are also produced from the player's own ROM by crates/rom-import/src/domains/tilesets.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+      "rust_target": "crates/xtask/src/extract/tilesets.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "data/tilesets/secondary/pokemon_day_care": {
       "category": "data.tileset",
@@ -12365,8 +12383,10 @@
     "data/tilesets/secondary/shop": {
       "category": "data.tileset",
       "kind": "dir",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Directory extracted into the local gitignored asset pack by crates/xtask/src/extract/tilesets.rs (TILESETS in crates/xtask/src/extract/scope.rs): tiles.png decoded via the std-only PNG/inflate decoder, all 16 palettes/NN.pal via the JASC-PAL parser, and metatiles.bin/metatile_attributes.bin as opaque raw blobs. Read back with AssetPack::tileset in crates/assets/src/pack.rs. The same normalized pack entries are also produced from the player's own ROM by crates/rom-import/src/domains/tilesets.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+      "rust_target": "crates/xtask/src/extract/tilesets.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "data/tilesets/secondary/slateport": {
       "category": "data.tileset",
@@ -16537,6 +16557,32 @@
       "status": "pending"
     },
     "graphics/object_events/pics/berry_trees": {
+      "artifacts": {
+        "cheri": {
+          "reason": "pack id sprite/berry_trees/cheri; Extracted as a decoded image into the local gitignored asset pack by crates/xtask/src/extract/sprites.rs (OBJECT_SHEETS in crates/xtask/src/extract/scope.rs) for the checkpoint maps' fixed object events; read back with AssetPack::sprite. The same entry is produced from the player's own ROM by crates/rom-import/src/domains/sprites.rs, equivalence-checked byte-for-byte by crates/rom-import/tests/equivalence.rs. The directory's other pictures are not extracted.",
+          "rust_target": "crates/xtask/src/extract/sprites.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "dirt_pile": {
+          "reason": "pack id sprite/berry_trees/dirt_pile; Extracted as a decoded image into the local gitignored asset pack by crates/xtask/src/extract/sprites.rs (OBJECT_SHEETS in crates/xtask/src/extract/scope.rs) for the checkpoint maps' fixed object events; read back with AssetPack::sprite. The same entry is produced from the player's own ROM by crates/rom-import/src/domains/sprites.rs, equivalence-checked byte-for-byte by crates/rom-import/tests/equivalence.rs. The directory's other pictures are not extracted.",
+          "rust_target": "crates/xtask/src/extract/sprites.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "leppa": {
+          "reason": "pack id sprite/berry_trees/leppa; Extracted as a decoded image into the local gitignored asset pack by crates/xtask/src/extract/sprites.rs (OBJECT_SHEETS in crates/xtask/src/extract/scope.rs) for the checkpoint maps' fixed object events; read back with AssetPack::sprite. The same entry is produced from the player's own ROM by crates/rom-import/src/domains/sprites.rs, equivalence-checked byte-for-byte by crates/rom-import/tests/equivalence.rs. The directory's other pictures are not extracted.",
+          "rust_target": "crates/xtask/src/extract/sprites.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprout": {
+          "reason": "pack id sprite/berry_trees/sprout; Extracted as a decoded image into the local gitignored asset pack by crates/xtask/src/extract/sprites.rs (OBJECT_SHEETS in crates/xtask/src/extract/scope.rs) for the checkpoint maps' fixed object events; read back with AssetPack::sprite. The same entry is produced from the player's own ROM by crates/rom-import/src/domains/sprites.rs, equivalence-checked byte-for-byte by crates/rom-import/tests/equivalence.rs. The directory's other pictures are not extracted.",
+          "rust_target": "crates/xtask/src/extract/sprites.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.object_event",
       "kind": "dir",
       "spec_owner": "S-4",
@@ -16549,12 +16595,58 @@
       "status": "pending"
     },
     "graphics/object_events/pics/dolls": {
+      "artifacts": {
+        "pichu_doll": {
+          "reason": "pack id sprite/dolls/pichu_doll; Extracted as a decoded image into the local gitignored asset pack by crates/xtask/src/extract/sprites.rs (OBJECT_SHEETS in crates/xtask/src/extract/scope.rs) for the checkpoint maps' fixed object events; read back with AssetPack::sprite. The same entry is produced from the player's own ROM by crates/rom-import/src/domains/sprites.rs, equivalence-checked byte-for-byte by crates/rom-import/tests/equivalence.rs. The directory's other pictures are not extracted.",
+          "rust_target": "crates/xtask/src/extract/sprites.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "swablu_doll": {
+          "reason": "pack id sprite/dolls/swablu_doll; Extracted as a decoded image into the local gitignored asset pack by crates/xtask/src/extract/sprites.rs (OBJECT_SHEETS in crates/xtask/src/extract/scope.rs) for the checkpoint maps' fixed object events; read back with AssetPack::sprite. The same entry is produced from the player's own ROM by crates/rom-import/src/domains/sprites.rs, equivalence-checked byte-for-byte by crates/rom-import/tests/equivalence.rs. The directory's other pictures are not extracted.",
+          "rust_target": "crates/xtask/src/extract/sprites.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.object_event",
       "kind": "dir",
       "spec_owner": "S-4",
       "status": "pending"
     },
     "graphics/object_events/pics/misc": {
+      "artifacts": {
+        "birchs_bag": {
+          "reason": "pack id sprite/misc/birchs_bag; Extracted as a decoded image into the local gitignored asset pack by crates/xtask/src/extract/sprites.rs (OBJECT_SHEETS in crates/xtask/src/extract/scope.rs) for the checkpoint maps' fixed object events; read back with AssetPack::sprite. The same entry is produced from the player's own ROM by crates/rom-import/src/domains/sprites.rs, equivalence-checked byte-for-byte by crates/rom-import/tests/equivalence.rs. The directory's other pictures are not extracted.",
+          "rust_target": "crates/xtask/src/extract/sprites.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "cuttable_tree": {
+          "reason": "pack id sprite/misc/cuttable_tree; Extracted as a decoded image into the local gitignored asset pack by crates/xtask/src/extract/sprites.rs (OBJECT_SHEETS in crates/xtask/src/extract/scope.rs) for the checkpoint maps' fixed object events; read back with AssetPack::sprite. The same entry is produced from the player's own ROM by crates/rom-import/src/domains/sprites.rs, equivalence-checked byte-for-byte by crates/rom-import/tests/equivalence.rs. The directory's other pictures are not extracted.",
+          "rust_target": "crates/xtask/src/extract/sprites.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "item_ball": {
+          "reason": "pack id sprite/misc/item_ball; Extracted as a decoded image into the local gitignored asset pack by crates/xtask/src/extract/sprites.rs (OBJECT_SHEETS in crates/xtask/src/extract/scope.rs) for the checkpoint maps' fixed object events; read back with AssetPack::sprite. The same entry is produced from the player's own ROM by crates/rom-import/src/domains/sprites.rs, equivalence-checked byte-for-byte by crates/rom-import/tests/equivalence.rs. The directory's other pictures are not extracted.",
+          "rust_target": "crates/xtask/src/extract/sprites.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "moving_box": {
+          "reason": "pack id sprite/misc/moving_box; Extracted as a decoded image into the local gitignored asset pack by crates/xtask/src/extract/sprites.rs (OBJECT_SHEETS in crates/xtask/src/extract/scope.rs) for the checkpoint maps' fixed object events; read back with AssetPack::sprite. The same entry is produced from the player's own ROM by crates/rom-import/src/domains/sprites.rs, equivalence-checked byte-for-byte by crates/rom-import/tests/equivalence.rs. The directory's other pictures are not extracted.",
+          "rust_target": "crates/xtask/src/extract/sprites.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "truck": {
+          "reason": "pack id sprite/misc/truck; Extracted as a decoded image into the local gitignored asset pack by crates/xtask/src/extract/sprites.rs (OBJECT_SHEETS in crates/xtask/src/extract/scope.rs) for the checkpoint maps' fixed object events; read back with AssetPack::sprite. The same entry is produced from the player's own ROM by crates/rom-import/src/domains/sprites.rs, equivalence-checked byte-for-byte by crates/rom-import/tests/equivalence.rs. The directory's other pictures are not extracted.",
+          "rust_target": "crates/xtask/src/extract/sprites.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.object_event",
       "kind": "dir",
       "spec_owner": "S-4",
@@ -16563,12 +16655,26 @@
     "graphics/object_events/pics/people": {
       "category": "graphics.object_event",
       "kind": "dir",
-      "reason": "Every PNG in the directory (133 files) decoded via the std-only PNG/inflate decoder into the local gitignored asset pack (issue #81, Discussion #71 policy A, F-3's real cargo xtask extract). Brendan's and May's real in-game palettes (object_events/palettes/{brendan,may}.pal) are extracted alongside as the two unambiguous player-character palette matches. Issue #161's NPC object-event rendering slice additionally extracts the four generic NPC palette banks (object_events/palettes/npc_{1,2,3,4}.pal, OBJ_EVENT_PAL_TAG_NPC_1..4) that every 'standard' 16x32 NPC graphics id it resolves (Mom, the twin, Professor Birch, ...) draws from -- crates/pokeemerald-rs/src/overworld/npc.rs's own bounded graphics-id table. The broader NPC roster's remaining per-character palettes (truck.pal, vigoroth.pal, every *_reflection.pal) and the full object_event_graphics_info indirection table are still not modelled, remaining a future slice. Read back via AssetPack::sprite/sprite_palette in crates/assets/src/pack.rs. Since the #122 ROM-import series the same normalized pack entries are also produced directly from the player's own ROM by crates/rom-import/src/domains/sprites.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+      "reason": "Every PNG in the directory (133 files) decoded via the std-only PNG/inflate decoder into the local gitignored asset pack. Brendan's and May's in-game palettes (object_events/palettes/{brendan,may}.pal) are extracted alongside, with the four generic NPC palette banks (object_events/palettes/npc_{1,2,3,4}.pal, OBJ_EVENT_PAL_TAG_NPC_1..4) that every 'standard' 16x32 NPC graphics id draws from, and the truck.pal, moving_box.pal, vigoroth.pal and enemy_zigzagoon.pal banks the checkpoint maps' non-people objects load (sprite/palette/*, OBJECT_PALETTES in crates/xtask/src/extract/scope.rs). Every *_reflection.pal and the full object_event_graphics_info indirection table are still not modelled. Read back via AssetPack::sprite/sprite_palette in crates/assets/src/pack.rs. The same normalized pack entries are also produced from the player's own ROM by crates/rom-import/src/domains/sprites.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
       "rust_target": "crates/xtask/src/extract/sprites.rs",
       "spec": "I-3",
       "status": "ported"
     },
     "graphics/object_events/pics/pokemon": {
+      "artifacts": {
+        "enemy_zigzagoon": {
+          "reason": "pack id sprite/pokemon/enemy_zigzagoon; Extracted as a decoded image into the local gitignored asset pack by crates/xtask/src/extract/sprites.rs (OBJECT_SHEETS in crates/xtask/src/extract/scope.rs) for the checkpoint maps' fixed object events; read back with AssetPack::sprite. The same entry is produced from the player's own ROM by crates/rom-import/src/domains/sprites.rs, equivalence-checked byte-for-byte by crates/rom-import/tests/equivalence.rs. The directory's other pictures are not extracted.",
+          "rust_target": "crates/xtask/src/extract/sprites.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "vigoroth": {
+          "reason": "pack id sprite/pokemon/vigoroth; Extracted as a decoded image into the local gitignored asset pack by crates/xtask/src/extract/sprites.rs (OBJECT_SHEETS in crates/xtask/src/extract/scope.rs) for the checkpoint maps' fixed object events; read back with AssetPack::sprite. The same entry is produced from the player's own ROM by crates/rom-import/src/domains/sprites.rs, equivalence-checked byte-for-byte by crates/rom-import/tests/equivalence.rs. The directory's other pictures are not extracted.",
+          "rust_target": "crates/xtask/src/extract/sprites.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.object_event",
       "kind": "dir",
       "spec_owner": "S-4",

@@ -95,15 +95,15 @@ fn without(id: &str) -> Vec<PackEntry> {
 
 #[test]
 fn the_fixed_inventory_holds_the_committed_profile_counts() {
-    assert_eq!(TILESETS.len(), 5);
+    assert_eq!(TILESETS.len(), 9);
     assert_eq!(FONTS.len(), 5);
     let ids = title_ids();
     let count = |prefix: &str| ids.iter().filter(|id| id.starts_with(prefix)).count();
     assert_eq!(count("title/image/"), 6);
     assert_eq!(count("title/raw/"), 3);
     assert_eq!(count("title/palette/"), 5);
-    assert_eq!(LAYOUTS.len(), 10);
-    assert_eq!(layout_ids().len(), 20);
+    assert_eq!(LAYOUTS.len(), 16);
+    assert_eq!(layout_ids().len(), 32);
     let windows = text_window_ids();
     let count = |prefix: &str| windows.iter().filter(|id| id.starts_with(prefix)).count();
     assert_eq!(count("text-window/image/"), TEXT_WINDOW_IMAGE_STEMS.len());
@@ -450,7 +450,7 @@ fn the_sprite_sheet_inventory_matches_the_committed_profile() {
     let mut actual = sprite_sheet_ids();
     actual.sort();
     assert_eq!(actual, expected);
-    assert_eq!(actual.len(), 133);
+    assert_eq!(actual.len(), 146);
 }
 
 #[test]
@@ -470,12 +470,23 @@ fn a_pack_missing_any_one_sprite_palette_is_refused() {
 }
 
 #[test]
-fn the_sprite_palette_inventory_holds_all_six_fixed_banks() {
+fn the_sprite_palette_inventory_holds_all_ten_fixed_banks() {
     assert_eq!(
         sprite_palette_ids(),
-        ["brendan", "may", "npc_1", "npc_2", "npc_3", "npc_4"]
-            .map(|name| format!("sprite/palette/{name}"))
-            .to_vec()
+        [
+            "brendan",
+            "may",
+            "npc_1",
+            "npc_2",
+            "npc_3",
+            "npc_4",
+            "enemy_zigzagoon",
+            "moving_box",
+            "truck",
+            "vigoroth",
+        ]
+        .map(|name| format!("sprite/palette/{name}"))
+        .to_vec()
     );
 }
 
