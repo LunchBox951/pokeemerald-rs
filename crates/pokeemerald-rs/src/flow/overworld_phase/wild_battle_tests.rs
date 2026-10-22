@@ -129,3 +129,18 @@ fn a_wild_encounter_without_a_lead_starts_nothing() {
     assert!(!phase.is_wild_battle_active());
     assert!(phase.lead_for_test().is_none());
 }
+
+/// A successful wild start leaves the lead lent, so a second lend is refused.
+#[test]
+#[should_panic(expected = "lent out to a battle")]
+fn a_started_wild_battle_holds_the_lead_on_loan() {
+    let mut phase = new_game_phase();
+    phase.set_fresh_lead_for_test(crate::new_game::provisional_starter());
+    phase.begin_wild_battle(Some(WildEncounter {
+        species: WURMPLE,
+        level: 2,
+        slot: 0,
+    }));
+    assert!(phase.is_wild_battle_active(), "setup: the battle started");
+    let _ = phase.take_lead_battler();
+}

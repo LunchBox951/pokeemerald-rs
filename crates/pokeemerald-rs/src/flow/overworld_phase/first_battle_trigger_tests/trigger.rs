@@ -508,3 +508,23 @@ fn an_inadmissible_lead_leaves_the_rescue_armed_without_drawing() {
     assert!(phase.lead_for_test().is_some(), "the lead stays home");
     phase.assert_lead_at_slot_for_test(0);
 }
+
+/// A successful first-battle start leaves the lead lent, so a second lend is refused.
+#[test]
+#[should_panic(expected = "lent out to a battle")]
+fn a_started_first_battle_holds_the_lead_on_loan() {
+    let (tx, ty) = ROUTE_101_TRIGGER_TILE;
+    let mut phase = route_101_trigger_phase(PlayerState::new(
+        (tx - 1, ty),
+        ROUTE_101_TRIGGER_ELEVATION,
+        Direction::East,
+    ));
+    phase.rng = Rng::new(4242);
+    phase.set_fresh_lead_for_test(new_game::provisional_starter());
+    walk_one_tile_east(&mut phase);
+    assert!(
+        matches!(phase.active_battle, Some(ActiveBattle::First(_))),
+        "setup: the battle started"
+    );
+    let _ = phase.take_lead_battler();
+}
