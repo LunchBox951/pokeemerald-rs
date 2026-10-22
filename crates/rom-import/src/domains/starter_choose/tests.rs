@@ -61,8 +61,11 @@ const RAW: BlobRoot = BlobRoot {
 };
 
 /// The bus address of a fixture offset.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "fixture offsets are small constants far below u32::MAX"
+)]
 const fn at(off: usize) -> GbaPtr {
-    #[allow(clippy::cast_possible_truncation)]
     GbaPtr::at(ROM_BASE + off as u32)
 }
 
