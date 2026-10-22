@@ -35,9 +35,12 @@ pub enum Status1 {
     /// Asleep with `turns` actions left before waking: the canceller
     /// ([`tick_sleep`]) decrements it ahead of every chosen move
     /// (`CANCELER_ASLEEP`, `pokeemerald/src/battle_util.c:2015`-`:2057`).
-    /// Every value [`draw_sleep_duration`] returns is in `2..=5`.
+    /// Every value [`draw_sleep_duration`] returns is in `2..=5`. Zero
+    /// remaining turns is upstream's cleared sleep bits, a healthy battler:
+    /// [`Status1::is_asleep`] is false for it, [`tick_sleep`] ignores it, and
+    /// `BattlePokemon::set_status1` stores it as [`Status1::Healthy`].
     Asleep {
-        /// Remaining sleep turns, never zero for a battler still asleep.
+        /// Remaining sleep turns; zero reads as not asleep.
         turns: u8,
     },
 }
@@ -55,17 +58,29 @@ impl Status1 {
         matches!(self, Self::Poisoned)
     }
 
-    /// Whether this status is [`Status1::Asleep`], whatever its remaining turns.
+    /// Whether this status is [`Status1::Asleep`] with at least one turn left;
+    /// zero turns are upstream's cleared sleep bits, a healthy battler.
     #[must_use]
     pub const fn is_asleep(self) -> bool {
-        matches!(self, Self::Asleep { .. })
+        matches!(self, Self::Asleep { turns } if turns != 0)
+    }
+
+    /// Maps the unreachable `Asleep { turns: 0 }` to [`Status1::Healthy`],
+    /// upstream's cleared sleep bits; every other value is unchanged.
+    #[must_use]
+    pub const fn normalised(self) -> Self {
+        if let Self::Asleep { turns: 0 } = self {
+            Self::Healthy
+        } else {
+            self
+        }
     }
 
     /// Whether no primary status is set, the guard every infliction path this
     /// crate models shares (`pokeemerald/src/battle_script_commands.c:2334`-`:2335`).
     #[must_use]
     pub const fn is_healthy(self) -> bool {
-        matches!(self, Self::Healthy)
+        matches!(self.normalised(), Self::Healthy)
     }
 }
 
@@ -90,7 +105,7 @@ pub enum SleepTick {
 /// Talk exemption (`:2038`) are not modelled.
 #[must_use]
 pub const fn tick_sleep(status1: Status1, ability: AbilityId) -> SleepTick {
-    let Status1::Asleep { turns } = status1 else {
+    let Status1::Asleep { turns } = status1.normalised() else {
         return SleepTick::NotAsleep;
     };
     let decrement = if ability.0 == AbilityId::EARLY_BIRD.0 {

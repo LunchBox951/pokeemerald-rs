@@ -222,3 +222,25 @@ fn a_sleeper_that_can_wake_mid_turn_keeps_the_serene_grace_poison_screen_closed(
         rng.assert_exhausted();
     }
 }
+
+#[test]
+fn a_zero_turn_sleep_field_is_a_healthy_battler_and_never_wakes() {
+    // Upstream's sleep bits at zero are a healthy battler: `CANCELER_ASLEEP`
+    // never fires, so no wake-up message precedes the move.
+    let dex = Dex::new();
+    let player = sleeper(&dex, GASTLY, 0);
+    let enemy = sleeping_gastly(&dex);
+    let mut rng = SequenceRng::new([&SETUP[..], &TURN, &IMMUNE_TACKLE].concat());
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    assert!(
+        !battle.player().status1().is_asleep(),
+        "a zero sleep duration is not asleep"
+    );
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    assert!(
+        !events.contains(&BattleEvent::WokeUp { by_player: true }),
+        "a battler with no sleep left has nothing to wake from: {events:?}"
+    );
+}
