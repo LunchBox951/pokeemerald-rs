@@ -396,8 +396,8 @@ impl OverworldPhase {
     ///   which this port cannot do for a sequence whose field-effect timing
     ///   it is already approximating.
     ///
-    /// [`OverworldPhase::party_lead`] is deliberately *not* taken here, only
-    /// cloned: it is emptied when the battle actually starts
+    /// The lead is deliberately *not* lent here, only
+    /// observed and cloned: it is lent when the battle actually starts
     /// ([`super::sight_trainer_approach`]). A mid-approach save cannot
     /// observe the difference -- `start_menu_may_open` refuses `START` while
     /// an approach is in flight ([`super::start_menu`]'s gates) -- but
@@ -484,7 +484,7 @@ impl OverworldPhase {
             );
         }
 
-        let Some(lead) = self.party_lead.clone() else {
+        let Some(lead) = self.lead_battler().cloned() else {
             if first_report {
                 eprintln!("sight trainer: no party mon yet -- no battle to start");
             }
@@ -535,12 +535,17 @@ impl OverworldPhase {
         trainer_id: TrainerId,
     ) -> Option<ActiveBattle> {
         let mut slot = Some(battle);
+        let mut returned_lead = None;
         let outcome = npc_trainer_battle::advance_npc_trainer_battle(
             &mut slot,
-            &mut self.party_lead,
+            &mut returned_lead,
             &mut self.save1.money,
             &mut self.rng,
         );
+        // Back with the owner before the flags, the white-out or any routing.
+        if let Some(lead) = returned_lead {
+            self.restore_lead_battler(lead);
+        }
         if let Some(outcome) = outcome {
             eprintln!("sight trainer: ended -- {outcome:?}");
             self.sight_trainer_battle_outcome = Some(outcome);
