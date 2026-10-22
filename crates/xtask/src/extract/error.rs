@@ -170,8 +170,23 @@ pub enum ExtractError {
         /// What differs from the expected shape.
         detail: String,
     },
+    /// An opening-scene source (Birch's speech scene or the wall clock) differs
+    /// from its upstream graphic's shape.
+    OpeningSceneAssetMismatch {
+        /// Source path.
+        path: PathBuf,
+        /// What differs from the expected shape.
+        detail: String,
+    },
     /// A battler source differs from its upstream graphic's shape.
     BattlerAssetMismatch {
+        /// Source path.
+        path: PathBuf,
+        /// What differs from the expected shape.
+        detail: String,
+    },
+    /// A trainer front picture source differs from its upstream graphic's shape.
+    TrainerPicAssetMismatch {
         /// Source path.
         path: PathBuf,
         /// What differs from the expected shape.
@@ -381,8 +396,14 @@ impl fmt::Display for ExtractError {
             Self::StarterChooserAssetMismatch { path, detail } => {
                 write!(f, "starter-chooser asset `{}` {detail}", path.display())
             }
+            Self::OpeningSceneAssetMismatch { path, detail } => {
+                write!(f, "opening-scene asset `{}` {detail}", path.display())
+            }
             Self::BattlerAssetMismatch { path, detail } => {
                 write!(f, "battler asset `{}` {detail}", path.display())
+            }
+            Self::TrainerPicAssetMismatch { path, detail } => {
+                write!(f, "trainer picture asset `{}` {detail}", path.display())
             }
             Self::PokedexGraphicsAssetMismatch { path, detail } => {
                 write!(f, "pokedex-graphics asset `{}` {detail}", path.display())

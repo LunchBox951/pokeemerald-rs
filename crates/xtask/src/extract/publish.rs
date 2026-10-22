@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 #[cfg(windows)]
-use crate::windows_file_identity::WindowsFileIdentity;
+use win_fs::WindowsFileIdentity;
 
 use super::ExtractError;
 
