@@ -71,8 +71,8 @@ use crate::roots::{{
     AnimProgramRoot, AnimSymbolRoot, AudioRoots, BagRoots, BattleAnimationRoots,
     BattleMessageRoots, BattlerRoot, BattlerRoots, BlobRoot, Encoding, FontRoot, ImageRoot,
     InterfaceRoots, KeysplitRoot, MapLayoutRoot, PaletteRoot, Roots, SampleRoot, SongRoot,
-    SpecialMessageRoot, SpriteRoots, StarterChooserRoots, TextWindowRoots, TileAnimRoot, TilesetRoot, TitleScreenRoots,
-    VoicegroupRoot,
+    SpecialMessageRoot, SpriteRoots, StarterChooserRoots, TextWindowRoots, TileAnimRoot,
+    TilesetRoot, TitleScreenRoots, VoicegroupRoot,
 }};
 
 /// Pokemon Emerald (US) rev 0's root table.
