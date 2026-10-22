@@ -666,13 +666,19 @@ fn record_is_egg_or_bad_egg(record: &Pokemon) -> bool {
 }
 
 /// The nature party slot 0 hands a wild Pokémon through Synchronize:
-/// `PickWildMonNature`'s check of `gPlayerParty[0]` -- not an egg, ability
-/// Synchronize (`pokeemerald/src/wild_encounter.c:367-372`) -- whether or not
-/// that slot is fainted or is the battle lead. `None` for an empty party, an
-/// egg, an undecodable record, or any other ability.
+/// `PickWildMonNature`'s check of `gPlayerParty[0]` -- not an egg by the
+/// unencrypted header's `isEgg` bit (`MON_DATA_SANITY_IS_EGG`,
+/// `pokeemerald/src/pokemon.c:3805-3806`), ability Synchronize
+/// (`pokeemerald/src/wild_encounter.c:367-372`) -- whether or not that slot is
+/// fainted or is the battle lead. The ability is the stored slot's entry in the
+/// species table, as `GetAbilityBySpecies` reads it (`abilities[abilityNum]`,
+/// `pokeemerald/src/pokemon.c:4546-4553`), so a slot-1 record of a
+/// single-ability species has no ability rather than falling back to the
+/// primary. `None` for an empty party, an egg or Bad Egg, an undecodable
+/// record, or any other ability.
 pub(crate) fn slot_zero_synchronize_nature(dex: &Dex, party: &[Pokemon]) -> Option<battle::Nature> {
     let slot_zero = party.first()?;
-    if record_is_egg_or_bad_egg(slot_zero) {
+    if slot_zero.box_data.is_egg_header_flag() || slot_zero.box_data.is_bad_egg() {
         return None;
     }
     // Only egg status, ability and personality matter upstream, so read just those
@@ -681,9 +687,12 @@ pub(crate) fn slot_zero_synchronize_nature(dex: &Dex, party: &[Pokemon]) -> Opti
     let substructures = slot_zero.box_data.substructures().ok()?;
     let species = assets::SpeciesId(read_u16(&substructures.growth, GROWTH_SPECIES));
     let iv_word = read_u32(&substructures.misc, MISC_IV_WORD);
-    let ability_slot = u8::from(iv_word >> ABILITY_SLOT_SHIFT != 0);
-    // The probe's level, IVs and move do not affect its ability or nature.
-    let probe = BattlePokemon::new(
+    let ability_slot = usize::from(iv_word >> ABILITY_SLOT_SHIFT != 0);
+    if dex.species(species).ok()?.abilities[ability_slot] != assets::AbilityId::SYNCHRONIZE {
+        return None;
+    }
+    // The probe's level, IVs and move do not affect its nature.
+    BattlePokemon::new(
         dex,
         species,
         1,
@@ -691,9 +700,8 @@ pub(crate) fn slot_zero_synchronize_nature(dex: &Dex, party: &[Pokemon]) -> Opti
         slot_zero.box_data.personality(),
         vec![assets::MoveId::POUND],
     )
-    .ok()?
-    .with_ability_slot(ability_slot);
-    (probe.ability() == assets::AbilityId::SYNCHRONIZE).then(|| probe.nature())
+    .ok()
+    .map(|probe| probe.nature())
 }
 
 /// Selects which saved slot is the active battler on continue: the first
