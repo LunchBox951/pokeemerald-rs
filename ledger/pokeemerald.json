@@ -30323,6 +30323,12 @@
           "spec": "S-3",
           "status": "rewritten"
         },
+        "m4aSoundMode": {
+          "reason": "Only the master-volume field of m4aSoundMode is modelled: Mixer::new masks its master_volume argument to the low four bits, the width of the SOUND_MODE_MASVOL field (m4a.c:466-469, m4a_internal.h:16-17; issue #2569). Not modelled: the other SOUND_MODE fields (reverb set/value, max channels, DA bits, frequency), and the skip-when-zero write that leaves the previous master volume in place, so a masked zero means silent.",
+          "rust_target": "crates/audio/src/mixer.rs",
+          "spec": "S-3",
+          "status": "stubbed"
+        },
         "ply_memacc": {
           "reason": "ply_memacc's complete 0..=17 mutation and conditional-jump table executes as Sequencer::exec_memacc, dispatched from handle_event (S-3, issue #394). MemAccArea belongs to one Sequencer and starts zeroed; memacc_cells_are_private_to_each_sequencer pins that deliberate divergence from upstream's shared, cross-song gMPlayMemAccArea lifetime.",
           "rust_target": "crates/audio/src/sequencer.rs",
