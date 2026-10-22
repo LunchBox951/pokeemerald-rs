@@ -104,6 +104,12 @@ mod tests {
                 "LAYOUT_ROUTE101",
                 "LAYOUT_OLDALE_TOWN",
                 "LAYOUT_ROUTE103",
+                "LAYOUT_INSIDE_OF_TRUCK",
+                "LAYOUT_HOUSE1",
+                "LAYOUT_HOUSE2",
+                "LAYOUT_MART",
+                "LAYOUT_POKEMON_CENTER_1F",
+                "LAYOUT_POKEMON_CENTER_2F",
             ],
             "update the cross-crate LAYOUTS mirrors with this manifest"
         );
@@ -123,6 +129,10 @@ mod tests {
                     || *id == "LAYOUT_ROUTE101"
                     || *id == "LAYOUT_OLDALE_TOWN"
                     || *id == "LAYOUT_ROUTE103"
+                    || *id == "LAYOUT_INSIDE_OF_TRUCK"
+                    || id.starts_with("LAYOUT_HOUSE")
+                    || *id == "LAYOUT_MART"
+                    || id.starts_with("LAYOUT_POKEMON_CENTER_")
             );
         }
         for name in &names {
@@ -131,6 +141,10 @@ mod tests {
                     || *name == "route101"
                     || *name == "oldale_town"
                     || *name == "route103"
+                    || *name == "inside_of_truck"
+                    || name.starts_with("house")
+                    || *name == "mart"
+                    || name.starts_with("pokemon_center_")
             );
             assert!(name
                 .chars()
