@@ -196,7 +196,10 @@ pub(super) fn synthetic_phase(
 pub(super) fn runtime_for(phase: &OverworldPhase) -> MapRuntime<'_> {
     let header = assets::MapHeaderTable::new().header(ONE_F).unwrap();
     let events = assets::MapEventsTable::new().resolve(ONE_F).unwrap();
-    phase.scene.runtime(ONE_F, header, events)
+    phase
+        .scene
+        .runtime(ONE_F, header, events)
+        .with_object_events(&phase.object_events)
 }
 
 /// A flat map with one connection from `direction` edge to `target` at
