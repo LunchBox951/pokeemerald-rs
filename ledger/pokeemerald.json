@@ -30324,7 +30324,7 @@
           "status": "rewritten"
         },
         "m4aSoundMode": {
-          "reason": "Only the master-volume field of m4aSoundMode is modelled: Mixer::new masks its master_volume argument to the low four bits, the width of the SOUND_MODE_MASVOL field (m4a.c:466-469, m4a_internal.h:16-17; issue #2569). Not modelled: the other SOUND_MODE fields (reverb set/value, max channels, DA bits, frequency), and the skip-when-zero write that leaves the previous master volume in place, so a masked zero means silent.",
+          "reason": "Only the master-volume field of m4aSoundMode is modelled: Mixer::new masks its master_volume argument to the low four bits, the width of the SOUND_MODE_MASVOL field (m4a.c:466-469, m4a_internal.h:16-17). Not modelled: the other SOUND_MODE fields (reverb set/value, max channels, DA bits, frequency), and the skip-when-zero write that leaves the previous master volume in place, so a masked zero means silent.",
           "rust_target": "crates/audio/src/mixer.rs",
           "spec": "S-3",
           "status": "stubbed"
