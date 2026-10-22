@@ -148,10 +148,16 @@ impl Drop for ScratchGuard {
 }
 
 fn write_pack(name: &str) -> (PathBuf, ScratchGuard) {
-    let path = scratch_path(&format!("{name}.pack"));
-    crate::test_support::write_new(&path, &synthetic_main_menu_pack_bytes()).unwrap();
+    write_pack_in(&crate::test_support::private_root(), name).unwrap()
+}
+
+/// Writes the synthetic pack at a new name under `base`, refusing any entry
+/// already there.
+fn write_pack_in(base: &std::path::Path, name: &str) -> std::io::Result<(PathBuf, ScratchGuard)> {
+    let path = base.join(format!("{name}.pack"));
+    crate::test_support::write_new(&path, &synthetic_main_menu_pack_bytes())?;
     let guard = ScratchGuard(path.clone());
-    (path, guard)
+    Ok((path, guard))
 }
 
 /// Fails unless every staged pointer file left in `output_dir` is named by
@@ -2506,26 +2512,19 @@ fn an_output_directory_swapped_before_the_pointer_publication_is_not_reported_as
     );
 }
 
-/// `write_pack` once wrote through `std::fs::write` to a predictable name in
-/// the shared temporary directory, truncating whatever a symlink there named.
+/// The pack fixture is created with `create_new`: a symlink already at its
+/// name is refused and its target is left untouched.
 #[cfg(unix)]
 #[test]
 fn write_pack_does_not_follow_a_planted_symlink() {
-    let victim = crate::test_support::private_path("victim");
+    let base = crate::test_support::private_dir("planted");
+    let victim = base.join("victim");
     std::fs::write(&victim, b"precious").unwrap();
-    let legacy = std::env::temp_dir().join(format!(
-        "pokeemerald-rs-xtask-record-snapshot-test-{}-{:?}-planted.pack",
-        std::process::id(),
-        std::thread::current().id()
-    ));
-    // Plant only if the name is free; an entry already there is not ours to remove.
-    std::os::unix::fs::symlink(&victim, &legacy).unwrap();
-    let (path, _guard) = write_pack("planted");
-    let contents = std::fs::read(&victim).unwrap();
-    let _ = std::fs::remove_file(&legacy);
-    assert_ne!(path, legacy);
+    std::os::unix::fs::symlink(&victim, base.join("planted.pack")).unwrap();
+    assert!(write_pack_in(&base, "planted").is_err());
     assert_eq!(
-        contents, b"precious",
+        std::fs::read(&victim).unwrap(),
+        b"precious",
         "write_pack followed a planted symlink"
     );
 }

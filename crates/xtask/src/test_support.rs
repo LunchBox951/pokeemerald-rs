@@ -11,35 +11,74 @@ use std::cell::RefCell;
 use std::fs::{DirBuilder, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 
-static NEXT: AtomicU64 = AtomicU64::new(0);
+/// A directory this module created, with the identity it had when claimed.
+/// Dropping it removes the tree only while that same directory still sits at
+/// the path; a substituted tree is left alone.
+struct Owned {
+    path: PathBuf,
+    #[cfg(unix)]
+    identity: (u64, u64),
+}
 
-/// A directory this module created; dropping it removes exactly that tree.
-struct Owned(PathBuf);
+#[cfg(unix)]
+fn identity_of(metadata: &std::fs::Metadata) -> (u64, u64) {
+    use std::os::unix::fs::MetadataExt as _;
+    (metadata.dev(), metadata.ino())
+}
 
-impl Drop for Owned {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+impl Owned {
+    fn claim(path: PathBuf) -> io::Result<Self> {
+        #[cfg(unix)]
+        let identity = identity_of(&std::fs::symlink_metadata(&path)?);
+        Ok(Self {
+            path,
+            #[cfg(unix)]
+            identity,
+        })
+    }
+
+    fn still_ours(&self) -> bool {
+        #[cfg(unix)]
+        {
+            std::fs::symlink_metadata(&self.path)
+                .is_ok_and(|metadata| identity_of(&metadata) == self.identity)
+        }
+        #[cfg(not(unix))]
+        {
+            true
+        }
     }
 }
 
+impl Drop for Owned {
+    fn drop(&mut self) {
+        if self.still_ours() {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+}
+
+/// Creates a new directory under `parent` with `create_dir`, retrying under a
+/// fresh name while the name is taken, and leaves its owner able to list,
+/// write and enter it whatever the process umask stripped.
 fn claim_in(parent: &Path, tag: &str) -> io::Result<PathBuf> {
     let mut builder = DirBuilder::new();
     #[cfg(unix)]
     std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
     let mut last = None;
-    for _ in 0..64 {
+    for attempt in 0..64 {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.subsec_nanos());
-        let path = parent.join(format!(
-            "{tag}-{}-{}-{nanos:x}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
+        let path = parent.join(format!("{tag}-{}-{attempt}-{nanos:x}", std::process::id()));
         match builder.create(&path) {
-            Ok(()) => return Ok(path),
+            Ok(()) => {
+                #[cfg(unix)]
+                File::open(&path)?
+                    .set_permissions(std::os::unix::fs::PermissionsExt::from_mode(0o700))?;
+                return Ok(path);
+            }
             Err(err) if err.kind() == io::ErrorKind::AlreadyExists => last = Some(err),
             Err(err) => return Err(err),
         }
@@ -58,9 +97,9 @@ pub(crate) fn private_root() -> PathBuf {
         if root.is_none() {
             let path = claim_in(&std::env::temp_dir(), "pokeemerald-rs-xtask-test")
                 .expect("claim a private test directory");
-            *root = Some(Owned(path));
+            *root = Some(Owned::claim(path).expect("identify the private test directory"));
         }
-        root.as_ref().map(|owned| owned.0.clone()).unwrap()
+        root.as_ref().map(|owned| owned.path.clone()).unwrap()
     })
 }
 
@@ -119,6 +158,36 @@ mod tests {
         write_new(&path, b"first").unwrap();
         assert!(write_new(&path, b"second").is_err());
         assert_eq!(std::fs::read(&path).unwrap(), b"first");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_private_root_stays_owner_accessible_under_a_stripping_umask() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = std::fs::metadata(private_dir("mode"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o700, 0o700, "mode {mode:o}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cleanup_does_not_delete_a_tree_substituted_at_the_root_path() {
+        let (root, moved) = std::thread::spawn(|| {
+            let root = private_root();
+            let moved = root.with_extension("aside");
+            std::fs::rename(&root, &moved).unwrap();
+            std::fs::create_dir(&root).unwrap();
+            std::fs::write(root.join("foreign.txt"), b"not yours").unwrap();
+            (root, moved)
+        })
+        .join()
+        .unwrap();
+        let survived = std::fs::read(root.join("foreign.txt")).ok();
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&moved);
+        assert_eq!(survived.as_deref(), Some(&b"not yours"[..]));
     }
 
     #[test]

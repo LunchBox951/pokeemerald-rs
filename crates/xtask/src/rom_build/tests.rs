@@ -624,19 +624,13 @@ fn a_symlinked_output_is_refused() {
 
 mod checkout_reading;
 
-/// The directory the fixture used to claim by predictable name, and recursively
-/// delete first; one it did not create must survive.
+/// A fixture directory is claimed exclusively: a populated directory already
+/// holding the requested name keeps its contents.
 #[test]
 fn temp_dir_does_not_delete_a_preexisting_populated_directory() {
-    let legacy = std::env::temp_dir().join(format!(
-        "pokeemerald-rs-rom-build-test-preexisting-{}",
-        std::process::id()
-    ));
-    fs::create_dir(&legacy).unwrap();
-    fs::write(legacy.join("keep.txt"), b"keep me").unwrap();
-    let claimed = temp_dir("preexisting");
-    let survived = fs::read(legacy.join("keep.txt")).ok();
-    let _ = fs::remove_dir_all(&legacy);
-    assert_eq!(survived.as_deref(), Some(&b"keep me"[..]));
-    assert_ne!(claimed, legacy);
+    let first = temp_dir("preexisting");
+    fs::write(first.join("keep.txt"), b"keep me").unwrap();
+    let second = temp_dir("preexisting");
+    assert_ne!(first, second);
+    assert_eq!(fs::read(first.join("keep.txt")).unwrap(), b"keep me");
 }
