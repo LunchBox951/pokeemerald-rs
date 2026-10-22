@@ -143,6 +143,15 @@ pub(crate) fn check(
     if level <= limit {
         return Ok(Obedience::Obeys);
     }
+    // Upstream tests the Mew/Deoxys guard first (`battle_util.c:3913-3934`):
+    // a traded one above the limit disobeys unless it carries the modern
+    // fateful-encounter bit, which skips every exemption above. This port
+    // keeps the guard after the ownership, badge and level exemptions on
+    // purpose and does not model the bit. Every legitimate upstream source of
+    // a Mew or Deoxys sets it (`seteventmon` -> `CreateEventMon`,
+    // `pokemon.c:2633-2639`) and trades refuse one without it
+    // (`trade.c:1577-1582`), so a guard-first order with no bit to read would
+    // refuse every legitimately caught Mew. A domestic Mew therefore obeys.
     if matches!(mon.species(), MEW | DEOXYS) {
         return Err(BattleError::UnportedDisobedience);
     }

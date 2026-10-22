@@ -212,3 +212,32 @@ fn a_traded_mew_above_its_limit_is_refused_before_any_obedience_draw() {
     // Only the turn-number draw and the enemy's selection ran.
     assert_eq!(rng.draws() - before, 2);
 }
+
+/// A Mew the player owns above the badge limit obeys with no obedience draw.
+/// Upstream tests the Mew/Deoxys guard before ownership
+/// (`battle_util.c:3913-3934`), but the port keeps it after the exemptions on
+/// purpose: every legitimate source of a Mew sets the fateful-encounter bit
+/// (`pokemon.c:2633-2639`), trades refuse one without it (`trade.c:1577-1582`),
+/// and the port has no field for the bit, so a guard-first order would refuse
+/// every legitimately caught Mew.
+#[test]
+fn a_domestic_mew_above_its_limit_obeys_because_the_port_does_not_model_the_fateful_bit() {
+    let draws = |gated: bool| {
+        let dex = Dex::new();
+        let player = max_iv_mon(&dex, 151, 20, vec![TACKLE]).with_original_trainer_id(PLAYER_ID);
+        let enemy = max_iv_mon(&dex, ZIGZAGOON, 5, vec![TACKLE]);
+        let mut rng = SequenceRng::new(vec![0; 40]);
+        let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+        if gated {
+            battle = battle.with_player_obedience(no_badges());
+        }
+        battle
+            .take_turn(PlayerAction::UseMove(0), &mut rng)
+            .unwrap();
+        (rng.draws(), battle.player().moves()[0].pp)
+    };
+    let (ungated_draws, ungated_pp) = draws(false);
+    let (gated_draws, gated_pp) = draws(true);
+    assert_eq!(gated_draws, ungated_draws);
+    assert_eq!(gated_pp, ungated_pp);
+}
