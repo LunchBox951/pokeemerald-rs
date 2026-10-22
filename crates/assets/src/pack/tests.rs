@@ -8,6 +8,7 @@ mod battle_message;
 mod battler;
 mod container;
 mod layout;
+mod opening_scene;
 mod pokedex;
 mod pokedex_graphics;
 mod real_pack;

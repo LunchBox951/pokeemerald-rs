@@ -1024,14 +1024,18 @@
     "data/layouts/House1": {
       "category": "data.layout",
       "kind": "dir",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "pack ids layout/house1/map and layout/house1/border; map.bin/border.bin extracted as opaque raw blobs into the local gitignored asset pack (crates/xtask/src/extract/layouts.rs::extract_layouts's LAYOUTS table in crates/xtask/src/extract/scope.rs, resolved via data/layouts/layouts.json). Read back with AssetPack::layout_map/layout_border and decoded into typed grids via crates/assets/src/map_layouts.rs. The same normalized pack entries are also produced from the player's own ROM by crates/rom-import/src/domains/layouts.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+      "rust_target": "crates/xtask/src/extract/layouts.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "data/layouts/House2": {
       "category": "data.layout",
       "kind": "dir",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "pack ids layout/house2/map and layout/house2/border; map.bin/border.bin extracted as opaque raw blobs into the local gitignored asset pack (crates/xtask/src/extract/layouts.rs::extract_layouts's LAYOUTS table in crates/xtask/src/extract/scope.rs, resolved via data/layouts/layouts.json). Read back with AssetPack::layout_map/layout_border and decoded into typed grids via crates/assets/src/map_layouts.rs. The same normalized pack entries are also produced from the player's own ROM by crates/rom-import/src/domains/layouts.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+      "rust_target": "crates/xtask/src/extract/layouts.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "data/layouts/House3": {
       "category": "data.layout",
@@ -1054,8 +1058,10 @@
     "data/layouts/InsideOfTruck": {
       "category": "data.layout",
       "kind": "dir",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "pack ids layout/inside_of_truck/map and layout/inside_of_truck/border; map.bin/border.bin extracted as opaque raw blobs into the local gitignored asset pack (crates/xtask/src/extract/layouts.rs::extract_layouts's LAYOUTS table in crates/xtask/src/extract/scope.rs, resolved via data/layouts/layouts.json). Read back with AssetPack::layout_map/layout_border and decoded into typed grids via crates/assets/src/map_layouts.rs. The same normalized pack entries are also produced from the player's own ROM by crates/rom-import/src/domains/layouts.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+      "rust_target": "crates/xtask/src/extract/layouts.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "data/layouts/IslandCave": {
       "category": "data.layout",
@@ -1320,8 +1326,10 @@
     "data/layouts/Mart": {
       "category": "data.layout",
       "kind": "dir",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "pack ids layout/mart/map and layout/mart/border; map.bin/border.bin extracted as opaque raw blobs into the local gitignored asset pack (crates/xtask/src/extract/layouts.rs::extract_layouts's LAYOUTS table in crates/xtask/src/extract/scope.rs, resolved via data/layouts/layouts.json). Read back with AssetPack::layout_map/layout_border and decoded into typed grids via crates/assets/src/map_layouts.rs. The same normalized pack entries are also produced from the player's own ROM by crates/rom-import/src/domains/layouts.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+      "rust_target": "crates/xtask/src/extract/layouts.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "data/layouts/MauvilleCity": {
       "category": "data.layout",
@@ -1604,14 +1612,18 @@
     "data/layouts/PokemonCenter_1F": {
       "category": "data.layout",
       "kind": "dir",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "pack ids layout/pokemon_center_1f/map and layout/pokemon_center_1f/border; map.bin/border.bin extracted as opaque raw blobs into the local gitignored asset pack (crates/xtask/src/extract/layouts.rs::extract_layouts's LAYOUTS table in crates/xtask/src/extract/scope.rs, resolved via data/layouts/layouts.json). Read back with AssetPack::layout_map/layout_border and decoded into typed grids via crates/assets/src/map_layouts.rs. The same normalized pack entries are also produced from the player's own ROM by crates/rom-import/src/domains/layouts.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+      "rust_target": "crates/xtask/src/extract/layouts.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "data/layouts/PokemonCenter_2F": {
       "category": "data.layout",
       "kind": "dir",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "pack ids layout/pokemon_center_2f/map and layout/pokemon_center_2f/border; map.bin/border.bin extracted as opaque raw blobs into the local gitignored asset pack (crates/xtask/src/extract/layouts.rs::extract_layouts's LAYOUTS table in crates/xtask/src/extract/scope.rs, resolved via data/layouts/layouts.json). Read back with AssetPack::layout_map/layout_border and decoded into typed grids via crates/assets/src/map_layouts.rs. The same normalized pack entries are also produced from the player's own ROM by crates/rom-import/src/domains/layouts.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+      "rust_target": "crates/xtask/src/extract/layouts.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "data/layouts/RecordCorner": {
       "category": "data.layout",
@@ -12163,14 +12175,18 @@
     "data/tilesets/secondary/generic_building": {
       "category": "data.tileset",
       "kind": "dir",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Directory extracted into the local gitignored asset pack by crates/xtask/src/extract/tilesets.rs (TILESETS in crates/xtask/src/extract/scope.rs): tiles.png decoded via the std-only PNG/inflate decoder, all 16 palettes/NN.pal via the JASC-PAL parser, and metatiles.bin/metatile_attributes.bin as opaque raw blobs. Read back with AssetPack::tileset in crates/assets/src/pack.rs. The same normalized pack entries are also produced from the player's own ROM by crates/rom-import/src/domains/tilesets.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+      "rust_target": "crates/xtask/src/extract/tilesets.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "data/tilesets/secondary/inside_of_truck": {
       "category": "data.tileset",
       "kind": "dir",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Directory extracted into the local gitignored asset pack by crates/xtask/src/extract/tilesets.rs (TILESETS in crates/xtask/src/extract/scope.rs): tiles.png decoded via the std-only PNG/inflate decoder, all 16 palettes/NN.pal via the JASC-PAL parser, and metatiles.bin/metatile_attributes.bin as opaque raw blobs. Read back with AssetPack::tileset in crates/assets/src/pack.rs. The same normalized pack entries are also produced from the player's own ROM by crates/rom-import/src/domains/tilesets.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+      "rust_target": "crates/xtask/src/extract/tilesets.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "data/tilesets/secondary/inside_ship": {
       "category": "data.tileset",
@@ -12305,8 +12321,10 @@
     "data/tilesets/secondary/pokemon_center": {
       "category": "data.tileset",
       "kind": "dir",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Directory extracted into the local gitignored asset pack by crates/xtask/src/extract/tilesets.rs (TILESETS in crates/xtask/src/extract/scope.rs): tiles.png decoded via the std-only PNG/inflate decoder, all 16 palettes/NN.pal via the JASC-PAL parser, and metatiles.bin/metatile_attributes.bin as opaque raw blobs. Read back with AssetPack::tileset in crates/assets/src/pack.rs. The same normalized pack entries are also produced from the player's own ROM by crates/rom-import/src/domains/tilesets.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+      "rust_target": "crates/xtask/src/extract/tilesets.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "data/tilesets/secondary/pokemon_day_care": {
       "category": "data.tileset",
@@ -12365,8 +12383,10 @@
     "data/tilesets/secondary/shop": {
       "category": "data.tileset",
       "kind": "dir",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Directory extracted into the local gitignored asset pack by crates/xtask/src/extract/tilesets.rs (TILESETS in crates/xtask/src/extract/scope.rs): tiles.png decoded via the std-only PNG/inflate decoder, all 16 palettes/NN.pal via the JASC-PAL parser, and metatiles.bin/metatile_attributes.bin as opaque raw blobs. Read back with AssetPack::tileset in crates/assets/src/pack.rs. The same normalized pack entries are also produced from the player's own ROM by crates/rom-import/src/domains/tilesets.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+      "rust_target": "crates/xtask/src/extract/tilesets.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "data/tilesets/secondary/slateport": {
       "category": "data.tileset",
@@ -12589,6 +12609,44 @@
       "status": "pending"
     },
     "graphics/birch_speech": {
+      "artifacts": {
+        "bg0.pal": {
+          "reason": "Birch speech background palette bank 0 (16 colours), published as opening-scene/palette/bg0 and read through BirchSpeechHandle::background_palettes; upstream sBirchSpeechBgPals row 0 is loaded at background palette slot 0 (main_menu.c:250-253,1280). Byte-identical to bg1.pal, so ROM import pairs the two copies in address order.",
+          "rust_target": "crates/xtask/src/extract/opening_scene.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "bg1.pal": {
+          "reason": "Birch speech background palette bank 1 (16 colours), published as opening-scene/palette/bg1 and read through BirchSpeechHandle::background_palettes; upstream sBirchSpeechBgPals row 1 is loaded at background palette slot 1 (main_menu.c:250-253,1280). Byte-identical to bg0.pal, so ROM import pairs the two copies in address order.",
+          "rust_target": "crates/xtask/src/extract/opening_scene.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "bg2.pal": {
+          "reason": "Birch speech gradient palette (16 colours), published as opening-scene/palette/bg2 and read through BirchSpeechHandle::gradient_palette; upstream sBirchSpeechBgGradientPal colours 8-15 are loaded over background colours 1-8 (main_menu.c:257,1281). The partial load is not ported; the whole bank is published.",
+          "rust_target": "crates/xtask/src/extract/opening_scene.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "birch.png": {
+          "reason": "Birch's new-game sprite, 64x64 4bpp, published as opening-scene/image/birch with the PNG's own 16-colour PLTE as opening-scene/palette/birch and read through BirchSpeechHandle::birch; upstream sNewGameBirch_Gfx is .4bpp (uncompressed) and sNewGameBirch_Pal is the PNG's .gbapal, shown through a 64x64 sprite template (field_effect.c:245-247,328-359,909-913). Sprite creation and animation are not ported.",
+          "rust_target": "crates/xtask/src/extract/opening_scene.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "map.bin": {
+          "reason": "Birch speech background tilemap, 32x20 entries (1280 bytes), published raw as opening-scene/raw/birch_speech_map and read through BirchSpeechHandle::background_tilemap; upstream sBirchSpeechBgMap is .lz, decompressed to screen block 7 (main_menu.c:256,1279). ROM import reads it as an LZ77 blob. No scene rendering is ported.",
+          "rust_target": "crates/xtask/src/extract/opening_scene.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "shadow.png": {
+          "reason": "Birch speech shadow and platform tile sheet, 128x24 4bpp, published as pack id opening-scene/image/shadow and read through AssetPack::birch_speech (BirchSpeechHandle::shadow); upstream loads it as sBirchSpeechShadowGfx (.4bpp.lz) into VRAM (main_menu.c:255,1278). ROM import reads it as an LZ77 root. No scene rendering is ported.",
+          "rust_target": "crates/xtask/src/extract/opening_scene.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.scene",
       "kind": "dir",
       "spec_owner": "S-4",
@@ -16499,6 +16557,32 @@
       "status": "pending"
     },
     "graphics/object_events/pics/berry_trees": {
+      "artifacts": {
+        "cheri": {
+          "reason": "pack id sprite/berry_trees/cheri; Extracted as a decoded image into the local gitignored asset pack by crates/xtask/src/extract/sprites.rs (OBJECT_SHEETS in crates/xtask/src/extract/scope.rs) for the checkpoint maps' fixed object events; read back with AssetPack::sprite. The same entry is produced from the player's own ROM by crates/rom-import/src/domains/sprites.rs, equivalence-checked byte-for-byte by crates/rom-import/tests/equivalence.rs. The directory's other pictures are not extracted.",
+          "rust_target": "crates/xtask/src/extract/sprites.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "dirt_pile": {
+          "reason": "pack id sprite/berry_trees/dirt_pile; Extracted as a decoded image into the local gitignored asset pack by crates/xtask/src/extract/sprites.rs (OBJECT_SHEETS in crates/xtask/src/extract/scope.rs) for the checkpoint maps' fixed object events; read back with AssetPack::sprite. The same entry is produced from the player's own ROM by crates/rom-import/src/domains/sprites.rs, equivalence-checked byte-for-byte by crates/rom-import/tests/equivalence.rs. The directory's other pictures are not extracted.",
+          "rust_target": "crates/xtask/src/extract/sprites.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "leppa": {
+          "reason": "pack id sprite/berry_trees/leppa; Extracted as a decoded image into the local gitignored asset pack by crates/xtask/src/extract/sprites.rs (OBJECT_SHEETS in crates/xtask/src/extract/scope.rs) for the checkpoint maps' fixed object events; read back with AssetPack::sprite. The same entry is produced from the player's own ROM by crates/rom-import/src/domains/sprites.rs, equivalence-checked byte-for-byte by crates/rom-import/tests/equivalence.rs. The directory's other pictures are not extracted.",
+          "rust_target": "crates/xtask/src/extract/sprites.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprout": {
+          "reason": "pack id sprite/berry_trees/sprout; Extracted as a decoded image into the local gitignored asset pack by crates/xtask/src/extract/sprites.rs (OBJECT_SHEETS in crates/xtask/src/extract/scope.rs) for the checkpoint maps' fixed object events; read back with AssetPack::sprite. The same entry is produced from the player's own ROM by crates/rom-import/src/domains/sprites.rs, equivalence-checked byte-for-byte by crates/rom-import/tests/equivalence.rs. The directory's other pictures are not extracted.",
+          "rust_target": "crates/xtask/src/extract/sprites.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.object_event",
       "kind": "dir",
       "spec_owner": "S-4",
@@ -16511,12 +16595,58 @@
       "status": "pending"
     },
     "graphics/object_events/pics/dolls": {
+      "artifacts": {
+        "pichu_doll": {
+          "reason": "pack id sprite/dolls/pichu_doll; Extracted as a decoded image into the local gitignored asset pack by crates/xtask/src/extract/sprites.rs (OBJECT_SHEETS in crates/xtask/src/extract/scope.rs) for the checkpoint maps' fixed object events; read back with AssetPack::sprite. The same entry is produced from the player's own ROM by crates/rom-import/src/domains/sprites.rs, equivalence-checked byte-for-byte by crates/rom-import/tests/equivalence.rs. The directory's other pictures are not extracted.",
+          "rust_target": "crates/xtask/src/extract/sprites.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "swablu_doll": {
+          "reason": "pack id sprite/dolls/swablu_doll; Extracted as a decoded image into the local gitignored asset pack by crates/xtask/src/extract/sprites.rs (OBJECT_SHEETS in crates/xtask/src/extract/scope.rs) for the checkpoint maps' fixed object events; read back with AssetPack::sprite. The same entry is produced from the player's own ROM by crates/rom-import/src/domains/sprites.rs, equivalence-checked byte-for-byte by crates/rom-import/tests/equivalence.rs. The directory's other pictures are not extracted.",
+          "rust_target": "crates/xtask/src/extract/sprites.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.object_event",
       "kind": "dir",
       "spec_owner": "S-4",
       "status": "pending"
     },
     "graphics/object_events/pics/misc": {
+      "artifacts": {
+        "birchs_bag": {
+          "reason": "pack id sprite/misc/birchs_bag; Extracted as a decoded image into the local gitignored asset pack by crates/xtask/src/extract/sprites.rs (OBJECT_SHEETS in crates/xtask/src/extract/scope.rs) for the checkpoint maps' fixed object events; read back with AssetPack::sprite. The same entry is produced from the player's own ROM by crates/rom-import/src/domains/sprites.rs, equivalence-checked byte-for-byte by crates/rom-import/tests/equivalence.rs. The directory's other pictures are not extracted.",
+          "rust_target": "crates/xtask/src/extract/sprites.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "cuttable_tree": {
+          "reason": "pack id sprite/misc/cuttable_tree; Extracted as a decoded image into the local gitignored asset pack by crates/xtask/src/extract/sprites.rs (OBJECT_SHEETS in crates/xtask/src/extract/scope.rs) for the checkpoint maps' fixed object events; read back with AssetPack::sprite. The same entry is produced from the player's own ROM by crates/rom-import/src/domains/sprites.rs, equivalence-checked byte-for-byte by crates/rom-import/tests/equivalence.rs. The directory's other pictures are not extracted.",
+          "rust_target": "crates/xtask/src/extract/sprites.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "item_ball": {
+          "reason": "pack id sprite/misc/item_ball; Extracted as a decoded image into the local gitignored asset pack by crates/xtask/src/extract/sprites.rs (OBJECT_SHEETS in crates/xtask/src/extract/scope.rs) for the checkpoint maps' fixed object events; read back with AssetPack::sprite. The same entry is produced from the player's own ROM by crates/rom-import/src/domains/sprites.rs, equivalence-checked byte-for-byte by crates/rom-import/tests/equivalence.rs. The directory's other pictures are not extracted.",
+          "rust_target": "crates/xtask/src/extract/sprites.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "moving_box": {
+          "reason": "pack id sprite/misc/moving_box; Extracted as a decoded image into the local gitignored asset pack by crates/xtask/src/extract/sprites.rs (OBJECT_SHEETS in crates/xtask/src/extract/scope.rs) for the checkpoint maps' fixed object events; read back with AssetPack::sprite. The same entry is produced from the player's own ROM by crates/rom-import/src/domains/sprites.rs, equivalence-checked byte-for-byte by crates/rom-import/tests/equivalence.rs. The directory's other pictures are not extracted.",
+          "rust_target": "crates/xtask/src/extract/sprites.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "truck": {
+          "reason": "pack id sprite/misc/truck; Extracted as a decoded image into the local gitignored asset pack by crates/xtask/src/extract/sprites.rs (OBJECT_SHEETS in crates/xtask/src/extract/scope.rs) for the checkpoint maps' fixed object events; read back with AssetPack::sprite. The same entry is produced from the player's own ROM by crates/rom-import/src/domains/sprites.rs, equivalence-checked byte-for-byte by crates/rom-import/tests/equivalence.rs. The directory's other pictures are not extracted.",
+          "rust_target": "crates/xtask/src/extract/sprites.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.object_event",
       "kind": "dir",
       "spec_owner": "S-4",
@@ -16525,12 +16655,26 @@
     "graphics/object_events/pics/people": {
       "category": "graphics.object_event",
       "kind": "dir",
-      "reason": "Every PNG in the directory (133 files) decoded via the std-only PNG/inflate decoder into the local gitignored asset pack (issue #81, Discussion #71 policy A, F-3's real cargo xtask extract). Brendan's and May's real in-game palettes (object_events/palettes/{brendan,may}.pal) are extracted alongside as the two unambiguous player-character palette matches. Issue #161's NPC object-event rendering slice additionally extracts the four generic NPC palette banks (object_events/palettes/npc_{1,2,3,4}.pal, OBJ_EVENT_PAL_TAG_NPC_1..4) that every 'standard' 16x32 NPC graphics id it resolves (Mom, the twin, Professor Birch, ...) draws from -- crates/pokeemerald-rs/src/overworld/npc.rs's own bounded graphics-id table. The broader NPC roster's remaining per-character palettes (truck.pal, vigoroth.pal, every *_reflection.pal) and the full object_event_graphics_info indirection table are still not modelled, remaining a future slice. Read back via AssetPack::sprite/sprite_palette in crates/assets/src/pack.rs. Since the #122 ROM-import series the same normalized pack entries are also produced directly from the player's own ROM by crates/rom-import/src/domains/sprites.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+      "reason": "Every PNG in the directory (133 files) decoded via the std-only PNG/inflate decoder into the local gitignored asset pack. Brendan's and May's in-game palettes (object_events/palettes/{brendan,may}.pal) are extracted alongside, with the four generic NPC palette banks (object_events/palettes/npc_{1,2,3,4}.pal, OBJ_EVENT_PAL_TAG_NPC_1..4) that every 'standard' 16x32 NPC graphics id draws from, and the truck.pal, moving_box.pal, vigoroth.pal and enemy_zigzagoon.pal banks the checkpoint maps' non-people objects load (sprite/palette/*, OBJECT_PALETTES in crates/xtask/src/extract/scope.rs). Every *_reflection.pal and the full object_event_graphics_info indirection table are still not modelled. Read back via AssetPack::sprite/sprite_palette in crates/assets/src/pack.rs. The same normalized pack entries are also produced from the player's own ROM by crates/rom-import/src/domains/sprites.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
       "rust_target": "crates/xtask/src/extract/sprites.rs",
       "spec": "I-3",
       "status": "ported"
     },
     "graphics/object_events/pics/pokemon": {
+      "artifacts": {
+        "enemy_zigzagoon": {
+          "reason": "pack id sprite/pokemon/enemy_zigzagoon; Extracted as a decoded image into the local gitignored asset pack by crates/xtask/src/extract/sprites.rs (OBJECT_SHEETS in crates/xtask/src/extract/scope.rs) for the checkpoint maps' fixed object events; read back with AssetPack::sprite. The same entry is produced from the player's own ROM by crates/rom-import/src/domains/sprites.rs, equivalence-checked byte-for-byte by crates/rom-import/tests/equivalence.rs. The directory's other pictures are not extracted.",
+          "rust_target": "crates/xtask/src/extract/sprites.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "vigoroth": {
+          "reason": "pack id sprite/pokemon/vigoroth; Extracted as a decoded image into the local gitignored asset pack by crates/xtask/src/extract/sprites.rs (OBJECT_SHEETS in crates/xtask/src/extract/scope.rs) for the checkpoint maps' fixed object events; read back with AssetPack::sprite. The same entry is produced from the player's own ROM by crates/rom-import/src/domains/sprites.rs, equivalence-checked byte-for-byte by crates/rom-import/tests/equivalence.rs. The directory's other pictures are not extracted.",
+          "rust_target": "crates/xtask/src/extract/sprites.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.object_event",
       "kind": "dir",
       "spec_owner": "S-4",
@@ -17799,6 +17943,20 @@
       "status": "pending"
     },
     "graphics/pokemon/lotad": {
+      "artifacts": {
+        "front.png": {
+          "reason": "Lotad's still front picture, 64x64 4bpp, published as opening-scene/image/lotad and read through BirchSpeechHandle::lotad; upstream gMonStillFrontPic_Lotad is .4bpp.lz (src/data/graphics/pokemon.h:1888). Birch's speech draws Lotad through CreateMonPicSprite_Affine (main_menu.c:1873-1876), which loads the animation sheet's first frame (anim_front.png); that frame is pixel-identical to front.png, so the still picture stands for it. Lotad's other pictures and sheets are not published; no general species lookup is ported.",
+          "rust_target": "crates/xtask/src/extract/opening_scene.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "normal.pal": {
+          "reason": "Lotad's normal palette (16 colours), published as opening-scene/palette/lotad and paired with its front picture in BirchSpeechHandle::lotad; upstream gMonPalette_Lotad is .gbapal.lz (src/data/graphics/pokemon.h:1889), the one compressed palette ROM import reads as an LZ77 palette root. The shiny palette is not published.",
+          "rust_target": "crates/xtask/src/extract/opening_scene.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.pokemon",
       "kind": "dir",
       "spec_owner": "S-4",
@@ -19937,10 +20095,56 @@
       "status": "pending"
     },
     "graphics/wallclock": {
+      "artifacts": {
+        "clock.png": {
+          "reason": "Wall-clock face tile sheet, 128x64 4bpp, published as opening-scene/image/wall_clock and read through WallClockHandle::screen; upstream gWallClock_Gfx is .4bpp.lz decompressed to VRAM (graphics.c:1352; wallclock.c:647). No clock rendering is ported.",
+          "rust_target": "crates/xtask/src/extract/opening_scene.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "clock_start.bin": {
+          "reason": "Clock-setting screen tilemap, 32x20 entries (1280 bytes), published raw as opening-scene/raw/clock_start and read through WallClockHandle::start_tilemap; upstream gWallClockStart_Tilemap is .lz decompressed to screen block 7 (graphics.c:1353; wallclock.c:692).",
+          "rust_target": "crates/xtask/src/extract/opening_scene.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "clock_view.bin": {
+          "reason": "Clock-viewing screen tilemap, 32x20 entries (1280 bytes), published raw as opening-scene/raw/clock_view and read through WallClockHandle::view_tilemap; upstream gWallClockView_Tilemap is .lz decompressed to screen block 7 (graphics.c:1354; wallclock.c:736).",
+          "rust_target": "crates/xtask/src/extract/opening_scene.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "female.pal": {
+          "reason": "Wall-clock female palette bank (16 colours), published as opening-scene/palette/clock_female and read through WallClockHandle::female_palette; upstream gWallClockFemale_Pal colours the screen and the hand sprite (graphics.c:1351; wallclock.c:140-149,649-652).",
+          "rust_target": "crates/xtask/src/extract/opening_scene.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "hand.png": {
+          "reason": "Wall-clock hand sprite sheet, 64x144 4-bit grayscale, published as opening-scene/image/clock_hand (gbagfx inverts each sample into the palette index, which the extractor reproduces) and read through WallClockHandle::hand; upstream sHand_Gfx is .4bpp.lz loaded as sprite sheet sSpriteSheet_ClockHand (wallclock.c:74,132-135,669). No hand animation is ported.",
+          "rust_target": "crates/xtask/src/extract/opening_scene.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "male.pal": {
+          "reason": "Wall-clock male palette bank (16 colours), published as opening-scene/palette/clock_male and read through WallClockHandle::male_palette; upstream gWallClockMale_Pal colours the screen and the hand sprite (graphics.c:1350; wallclock.c:140-149,649-652).",
+          "rust_target": "crates/xtask/src/extract/opening_scene.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "text_prompt.pal": {
+          "reason": "Wall-clock prompt palette (4 colours), published as opening-scene/palette/clock_text_prompt and read through WallClockHandle::text_prompt_palette; upstream sTextPrompt_Pal is loaded at background palette 12 for the Cancel and Confirm labels (wallclock.c:75,655).",
+          "rust_target": "crates/xtask/src/extract/opening_scene.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.ui",
       "kind": "dir",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Complete wall-clock graphics directory extracted: the face sheet, the grayscale hand sheet, the male, female, and prompt palettes, and both screen tilemaps, published under opening-scene/ and read through AssetPack::wall_clock (WallClockHandle) from checkout extraction and ROM import alike. No clock rendering, hand animation, or time input is ported.",
+      "rust_target": "crates/xtask/src/extract/opening_scene.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/weather": {
       "category": "graphics.scene",
@@ -32087,7 +32291,7 @@
     "src/script_pokemon_util.c": {
       "artifacts": {
         "HealPlayerParty": {
-          "reason": "script_pokemon_util.c:30-59. battle::BattlePokemon::heal reproduces the per-mon effect for the one party slot this crate models (the crate's own module docs record the one-mon-party limit): restore current HP to Stats::max_hp (upstream's MAX_HP write, :39-42), restore every known move's PP to BattlePokemon::max_pp, which is upstream's own CalculatePPWithBonus(move, ppBonuses, j) (:47) -- as of issue #304 the ppBonuses byte is real state (see src/pokemon.c#CalculatePPWithBonus), so a slot carrying PP Ups heals to the UPGRADED maximum rather than to the move's base PP; pinned by heal_restores_pp_to_the_pp_up_adjusted_maximum (crates/battle/src/pokemon/tests.rs) and healing_a_restored_mon_refills_to_the_upgraded_maximum (crates/pokeemerald-rs/src/party/tests/codec.rs). Upstream's third effect -- zeroing MON_DATA_STATUS (:52-57) -- now has a partial in-model counterpart since issue #783: battle::status1::Status1 models paralysis, and heal() clears it to Status1::Healthy in the same pass as HP and PP (pinned by heal_cures_primary_status, crates/battle/src/pokemon/tests.rs). That clear is in-battle-only, though: the party-level status BYTE this file's own module docs describe is a separate, still-unmodelled thing (crates/pokeemerald-rs/src/party.rs's module docs) -- party::merge_into_save_pokemon retains it from the backing record untouched across an ordinary save, so heal()'s in-memory Status1 clear and the retained save-format byte can disagree until a later slice wires Status1 into the merge like any other battle-owned field, matching this crate's parallel EV precedent. The white-out call site still separately clears the retained record's status byte at flow::overworld_phase::white_out directly (pinned by white_out_clears_stored_status_before_an_immediate_save), which is the other half of this same still-open split. The loop over gPlayerPartyCount (:37) is the call site's own responsibility, not this method's: since issue #800 (I-6), both flow::overworld_phase::white_out::OverworldPhase::white_out and flow::overworld_phase::first_battle_conclusion::OverworldPhase::conclude_first_battle share one call-site routine, flow::overworld_phase::white_out::OverworldPhase::heal_whole_party_and_reselect_lead, that loops every occupied slot itself, healing the selected slot through this method's live battler when that slot is within the stored count (or the count is still zero, an unsaved new game) and every other occupied slot through a decode/heal/merge round trip on its own saved bytes (party::from_save_pokemon/party::merge_into_save_pokemon) -- a selected slot beyond a nonzero stored count merges its current, un-healed battle state instead (issue #1241) -- then re-runs SetBattlePartyIds's own active-battler re-scan, over all PARTY_SIZE slots for a nonzero stored count (party::select_active_battler) -- a clamped stored count of zero skips this rescan by the same zero-means-no-lead design issue #353 established -- see src/overworld.c#DoWhiteOut for the widened call site's own citation. Three flow-level callers share this one primitive (oop-boundaries): flow::overworld_phase::white_out::OverworldPhase::white_out (issue #261, DoWhiteOut's own HealPlayerParty call on a wild/trainer loss, alongside a money halve and a heal-location warp neither belongs to this method); since issue #251, flow::overworld_phase::first_battle_conclusion::OverworldPhase::conclude_first_battle (Route101_EventScript_BirchsBag's own special HealPlayerParty, with no accompanying money halve or heal-location warp -- the only respects in which it is narrower than white_out's call, not in slot coverage: both now heal and reselect across the whole party, per issue #800); and flow::overworld_phase::OverworldPhase::from_saved's legacy-save migration (PR #291 review), a port-only call with no upstream counterpart -- upstream's load path never heals -- that repairs the fainted lead only a pre-#251 build could have serialized after a lost first battle.",
+          "reason": "script_pokemon_util.c:30-59. battle::BattlePokemon::heal reproduces the per-mon effect for the one party slot this crate models (the crate's own module docs record the one-mon-party limit): restore current HP to Stats::max_hp (upstream's MAX_HP write, :39-42), restore every known move's PP to BattlePokemon::max_pp, which is upstream's own CalculatePPWithBonus(move, ppBonuses, j) (:47) -- as of issue #304 the ppBonuses byte is real state (see src/pokemon.c#CalculatePPWithBonus), so a slot carrying PP Ups heals to the UPGRADED maximum rather than to the move's base PP; pinned by heal_restores_pp_to_the_pp_up_adjusted_maximum (crates/battle/src/pokemon/tests.rs) and healing_a_restored_mon_refills_to_the_upgraded_maximum (crates/pokeemerald-rs/src/party/tests/codec.rs). Upstream's third effect -- zeroing MON_DATA_STATUS (:52-57) -- now has a partial in-model counterpart since issue #783: battle::status1::Status1 models paralysis, and heal() clears it to Status1::Healthy in the same pass as HP and PP (pinned by heal_cures_primary_status, crates/battle/src/pokemon/tests.rs). That clear is in-battle-only, though: the party-level status BYTE this file's own module docs describe is a separate, still-unmodelled thing (crates/pokeemerald-rs/src/party.rs's module docs) -- party::merge_into_save_pokemon retains it from the backing record untouched across an ordinary save, so heal()'s in-memory Status1 clear and the retained save-format byte can disagree until a later slice wires Status1 into the merge like any other battle-owned field, matching this crate's parallel EV precedent. The white-out call site still separately clears the retained record's status byte, now through the lead owner's flow::overworld_phase::lead_owner::OverworldPhase::heal_whole_lead rather than by editing the lead fields in flow::overworld_phase::white_out (pinned by white_out_clears_stored_status_before_an_immediate_save), which is the other half of this same still-open split. The loop over gPlayerPartyCount (:37) is the call site's own responsibility, not this method's: since issue #800 (I-6), both flow::overworld_phase::white_out::OverworldPhase::white_out and flow::overworld_phase::first_battle_conclusion::OverworldPhase::conclude_first_battle share one call-site routine, flow::overworld_phase::white_out::OverworldPhase::heal_whole_party_and_reselect_lead, that loops every occupied slot itself, healing the selected slot through this method's live battler when that slot is within the stored count (or the count is still zero, an unsaved new game) and every other occupied slot through a decode/heal/merge round trip on its own saved bytes (party::from_save_pokemon/party::merge_into_save_pokemon) -- a selected slot beyond a nonzero stored count merges its current, un-healed battle state instead (issue #1241) -- then re-runs SetBattlePartyIds's own active-battler re-scan, over all PARTY_SIZE slots for a nonzero stored count (party::select_active_battler) -- a clamped stored count of zero skips this rescan by the same zero-means-no-lead design issue #353 established -- see src/overworld.c#DoWhiteOut for the widened call site's own citation. Three flow-level callers share this one primitive (oop-boundaries): flow::overworld_phase::white_out::OverworldPhase::white_out (issue #261, DoWhiteOut's own HealPlayerParty call on a wild/trainer loss, alongside a money halve and a heal-location warp neither belongs to this method); since issue #251, flow::overworld_phase::first_battle_conclusion::OverworldPhase::conclude_first_battle (Route101_EventScript_BirchsBag's own special HealPlayerParty, with no accompanying money halve or heal-location warp -- the only respects in which it is narrower than white_out's call, not in slot coverage: both now heal and reselect across the whole party, per issue #800); and flow::overworld_phase::OverworldPhase::from_saved's legacy-save migration (PR #291 review), a port-only call with no upstream counterpart -- upstream's load path never heals -- that repairs the fainted lead only a pre-#251 build could have serialized after a lost first battle.",
           "rust_target": "crates/battle/src/pokemon.rs",
           "spec": "I-4",
           "status": "rewritten"
