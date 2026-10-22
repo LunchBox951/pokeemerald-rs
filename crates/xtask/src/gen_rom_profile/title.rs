@@ -195,35 +195,62 @@ fn locate_trimmed_palette(
 mod tests {
     use super::*;
     use crate::gen_rom_profile::images::local_image_symbol;
-    use crate::gen_rom_profile::tests::assert_survives_ld_map;
+    use crate::gen_rom_profile::tests::{assert_survives_ld_map, distinctive_tiles, lz77_literals};
+    use pack_format::{image_entry_from_tiles, palette_entry, raw_entry};
+    use rom_import::fixture::RomFixture;
 
-    fn line_with(id: &str, addr: u32, symbol: SymbolExpectation) -> ReportLine {
-        let mut line = ReportLine::unique(id, addr, 32);
-        line.symbol = symbol;
-        line
+    /// Tiles unique to `seed`, so each planted sheet has exactly one hit.
+    fn seeded_tiles(seed: u8) -> Vec<u8> {
+        distinctive_tiles(4)
+            .into_iter()
+            .map(|byte| byte ^ seed)
+            .collect()
     }
 
     #[test]
     fn static_title_roots_survive_a_map_that_omits_locals() {
-        let mut lines = vec![
-            line_with(
-                "title/palette/unused",
-                0x0854_0000,
-                palette_symbol("title/palette/unused"),
-            ),
-            line_with(
-                "title/raw/rayquaza",
-                0x0854_0000,
-                tilemap_symbol("Rayquaza"),
-            ),
-        ];
-        for name in ["rayquaza", "logo_shine", "clouds"] {
-            let id = format!("title/image/{name}");
-            let mut line = ReportLine::unique(&id, 0x0854_0000, 32);
-            line = line.local_symbol(local_image_symbol(&id).expect("static image"));
-            lines.push(line);
+        // The production locators build every report line, so the test fails
+        // if `assign`, `locate_tilemaps` or `palette_symbol` stops marking an
+        // upstream `static` root as local.
+        let images = [("rayquaza", 0x11), ("logo_shine", 0x22), ("clouds", 0x33)];
+        let tilemap: Vec<u8> = (0..64u8).map(|n| n.wrapping_mul(13) ^ 0x5a).collect();
+        let colors: Vec<u16> = (0..16u16).map(|n| n * 0x0421 + 0x0777).collect();
+        let color_bytes: Vec<u8> = colors.iter().flat_map(|c| c.to_le_bytes()).collect();
+        let mut fixture = RomFixture::new().emerald_header();
+        let mut entries = Vec::new();
+        for (index, (name, seed)) in (0usize..).zip(images) {
+            let tiles = seeded_tiles(seed);
+            fixture = fixture.write(0x40_0000 + index * 0x1000, &lz77_literals(&tiles));
+            entries.push(
+                image_entry_from_tiles(format!("title/image/{name}"), &tiles, 4, 16, 16, None)
+                    .expect("image entry"),
+            );
         }
-        assert_survives_ld_map("title-statics", 0x0854_0000, &mut lines);
+        let rom = fixture
+            .write(0x41_0000, &lz77_literals(&tilemap))
+            .write(0x42_0000, &color_bytes)
+            .finish();
+        entries.push(raw_entry("title/raw/rayquaza".into(), tilemap));
+        entries.push(palette_entry("title/palette/unused".into(), &colors).expect("palette"));
+
+        with_context("title-statics", &rom, entries, |ctx| {
+            let mut report = Vec::new();
+            let queries: Vec<ImageQuery> = images
+                .iter()
+                .map(|(name, _)| ImageQuery::lz77(format!("title/image/{name}")))
+                .collect();
+            locate_images(ctx, &queries, &mut report).expect("images located");
+            locate_tilemaps(ctx, &mut report).expect("tilemap located");
+            locate_unique(
+                ctx,
+                &["title/palette/unused".to_owned()],
+                &palette_symbol,
+                &mut report,
+            )
+            .expect("palette located");
+            assert_eq!(report.len(), 5);
+            assert_survives_ld_map("title-statics-map", 0x0854_0000, &mut report);
+        });
     }
 
     #[test]
