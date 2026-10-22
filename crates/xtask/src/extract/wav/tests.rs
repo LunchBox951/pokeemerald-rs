@@ -249,12 +249,64 @@ fn short_smpl_loop_record_is_rejected() {
 }
 
 #[test]
-fn truncated_override_chunk_is_rejected() {
+fn a_lone_short_override_chunk_is_ignored_like_wav2agb() {
+    // wav2agb only assigns agbPitch/agbLoopEnd when chunkLen >= 4
+    // (wav_file.cpp:183-193), so a short chunk is not an error.
     let data = [128u8, 129];
     for id in [b"agbp", b"agbl"] {
         let bytes = build_wav(PCM_U8, 3344, &[(id, &[0u8, 0])], &data);
-        assert_eq!(decode(&bytes).unwrap_err(), WavError::ChunkTruncated);
+        let sample = decode(&bytes).unwrap();
+        assert_eq!(sample.base_frequency, 3344 * 1024);
+        assert_eq!(sample.sample_count, 2);
     }
+}
+
+#[test]
+fn a_short_override_chunk_before_a_valid_one_yields_the_valid_one() {
+    let smpl = smpl_chunk(60, 0, 0, 3);
+    let data = [128u8, 128, 128, 128];
+    let valid_pitch = u32_chunk(0x0034_2000);
+    let valid_len = u32_chunk(2);
+    let bytes = build_wav(
+        PCM_U8,
+        8000,
+        &[
+            (b"smpl", &smpl),
+            (b"agbp", &[0u8, 0]),
+            (b"agbp", &valid_pitch),
+            (b"agbl", &[0u8, 0]),
+            (b"agbl", &valid_len),
+        ],
+        &data,
+    );
+    let sample = decode(&bytes).unwrap();
+    assert_eq!(sample.base_frequency, 0x0034_2000);
+    assert_eq!(sample.sample_count, 2);
+}
+
+#[test]
+fn a_later_short_override_chunk_keeps_the_earlier_valid_override_like_wav2agb() {
+    // wav2agb only assigns agbPitch/agbLoopEnd when chunkLen >= 4
+    // (wav_file.cpp:183-193), so a later short chunk leaves the earlier value.
+    let smpl = smpl_chunk(60, 0, 0, 3);
+    let data = [128u8, 128, 128, 128];
+    let valid_pitch = u32_chunk(0x0034_2000);
+    let valid_len = u32_chunk(2);
+    let bytes = build_wav(
+        PCM_U8,
+        8000,
+        &[
+            (b"smpl", &smpl),
+            (b"agbp", &valid_pitch),
+            (b"agbp", &[0u8, 0]),
+            (b"agbl", &valid_len),
+            (b"agbl", &[0u8, 0]),
+        ],
+        &data,
+    );
+    let sample = decode(&bytes).unwrap();
+    assert_eq!(sample.base_frequency, 0x0034_2000);
+    assert_eq!(sample.sample_count, 2);
 }
 
 #[test]

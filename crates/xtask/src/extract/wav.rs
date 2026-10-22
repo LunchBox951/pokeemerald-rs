@@ -11,8 +11,9 @@
 //!   each later match (`wav_file.cpp:125-192`). Every `fmt ` and `smpl` chunk
 //!   is still validated, as wav2agb throws on any bad one. A later `smpl`
 //!   with zero loops updates only the key and tuning, leaving an earlier
-//!   chunk's loop enabled. A too-short `agbp`/`agbl` stays an error, even
-//!   after a valid one.
+//!   chunk's loop enabled. A `agbp`/`agbl` chunk shorter than four bytes is
+//!   ignored, leaving any earlier valid one in place, as wav2agb assigns
+//!   only when the chunk is at least four bytes (`wav_file.cpp:183-193`).
 //! - `smpl` supplies the MIDI unity note, pitch fraction, and optional forward
 //!   loop. wav2agb divides the pitch fraction by `2^32 * 100` despite its
 //!   adjacent comment claiming a `0..100` cent range; this decoder preserves
@@ -432,11 +433,15 @@ fn parse_smpl_chunk(smpl: &[u8], num_samples: u32) -> Result<SampleMetadata, Wav
     })
 }
 
-fn read_nonzero_override(chunks: &[Chunk<'_>], id: [u8; 4]) -> Result<Option<u32>, WavError> {
-    find_chunk(chunks, id)
-        .map(|chunk| read_u32(chunk, 0))
-        .transpose()
-        .map(|value| value.filter(|&word| word != 0))
+/// The last `agbp`/`agbl` chunk of at least four bytes, when non-zero.
+/// wav2agb assigns these words only for `chunkLen >= 4`, so a shorter chunk
+/// neither errors nor replaces an earlier one (`wav_file.cpp:183-193`).
+fn read_nonzero_override(chunks: &[Chunk<'_>], id: [u8; 4]) -> Option<u32> {
+    chunks_with_id(chunks, id)
+        .filter(|chunk| chunk.len() >= size_of::<u32>())
+        .last()
+        .and_then(|chunk| read_u32(chunk, 0).ok())
+        .filter(|&word| word != 0)
 }
 
 fn derive_pitch(sample_rate: u32, midi_key: u8, tuning_cents: f64, exact: Option<u32>) -> u32 {
@@ -526,8 +531,8 @@ pub(super) fn decode(bytes: &[u8]) -> Result<WavSample, WavError> {
             next
         };
     }
-    let exact_pitch = read_nonzero_override(&chunks, *b"agbp")?;
-    let exact_sample_count = read_nonzero_override(&chunks, *b"agbl")?;
+    let exact_pitch = read_nonzero_override(&chunks, *b"agbp");
+    let exact_sample_count = read_nonzero_override(&chunks, *b"agbl");
     let base_frequency = derive_pitch(
         sample_rate,
         metadata.midi_key,
