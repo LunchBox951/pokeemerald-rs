@@ -211,10 +211,11 @@ pub const fn trainer_facing_movement_type(facing: Direction) -> MovementType {
 /// Mutable position, previous-position, elevation, facing, and movement state copied from an
 /// object-event template.
 ///
-/// Template overrides remain inside this value; map queries and later spawns do not observe them
-/// unless a caller holds this value inside an [`ObjectEventCollection`], which does not itself
-/// feed those queries yet. Walking commits the destination immediately, while the owning script
-/// or collection entry tracks animation time.
+/// Template overrides remain inside this value. A map runtime observes them only through an
+/// [`ObjectEventCollection`] bound to it, which then answers collision and interaction queries
+/// from each object's live position and elevation; an unbound runtime still reads the authored
+/// template coordinates. Walking commits the destination immediately, while the owning script or
+/// collection entry tracks animation time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ObjectEventState {
     position: TilePos,
