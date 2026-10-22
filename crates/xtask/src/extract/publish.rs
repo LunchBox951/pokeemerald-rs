@@ -87,13 +87,29 @@ fn stage_at_first_free_name(
 /// Gives the owner read and write on the staged file through its open handle,
 /// keeping whatever the umask withheld from group and other: a umask such as
 /// 0444 would otherwise leave a pack its owner cannot read back.
+///
+/// The mode is changed only when an owner bit is missing, so the usual umask
+/// asks nothing of a filesystem that creates files but refuses mode changes.
 #[cfg(unix)]
 fn restore_owner_read_write(file: &std::fs::File) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt as _;
 
-    let mut permissions = file.metadata()?.permissions();
-    permissions.set_mode(permissions.mode() | 0o600);
-    file.set_permissions(permissions)
+    let mode = file.metadata()?.permissions().mode();
+    if let Some(restored) = owner_read_write_restored(mode) {
+        file.set_permissions(std::fs::Permissions::from_mode(restored))?;
+    }
+    Ok(())
+}
+
+/// The permission bits of `mode` with owner read and write added, or `None`
+/// when the owner already has both and nothing needs changing.
+#[cfg(unix)]
+const fn owner_read_write_restored(mode: u32) -> Option<u32> {
+    if mode & 0o600 == 0o600 {
+        None
+    } else {
+        Some((mode & 0o7777) | 0o600)
+    }
 }
 
 /// Nothing to restore where permissions are not mode bits.
@@ -719,6 +735,18 @@ mod tests {
             "post-stage-regular",
             Replacement::UnrelatedRegularFile,
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn owner_read_write_is_restored_only_when_an_owner_bit_is_missing() {
+        use super::owner_read_write_restored;
+
+        assert_eq!(owner_read_write_restored(0o100_644), None);
+        assert_eq!(owner_read_write_restored(0o100_600), None);
+        assert_eq!(owner_read_write_restored(0o100_222), Some(0o622));
+        assert_eq!(owner_read_write_restored(0o100_444), Some(0o644));
+        assert_eq!(owner_read_write_restored(0o100_000), Some(0o600));
     }
 
     #[cfg(target_os = "linux")]
