@@ -4,7 +4,8 @@ use rom_import::Encoding;
 
 use super::plan::{
     BagPlan, BattleAnimationPlan, BattleMessagePlan, BattlerPlan, BlobPlan, ImagePlan,
-    MapLayoutPlan, PalettePlan, ProfilePlan, ReportLine, Resolution, TileAnimPlan, TilesetPlan,
+    MapLayoutPlan, OpeningScenePlan, PalettePlan, ProfilePlan, ReportLine, Resolution,
+    TileAnimPlan, TilesetPlan,
 };
 
 /// The header paragraph saying how roots were settled, as `//!` lines.
@@ -69,9 +70,9 @@ use crate::reader::GbaPtr;
 use crate::roots::{{
     AnimProgramRoot, AnimSymbolRoot, AudioRoots, BagRoots, BattleAnimationRoots,
     BattleMessageRoots, BattlerRoot, BattlerRoots, BlobRoot, Encoding, FontRoot, ImageRoot,
-    InterfaceRoots, KeysplitRoot, MapLayoutRoot, PaletteRoot, Roots, SampleRoot, SongRoot,
-    SpecialMessageRoot, SpriteRoots, TextWindowRoots, TileAnimRoot, TilesetRoot, TitleScreenRoots,
-    VoicegroupRoot,
+    InterfaceRoots, KeysplitRoot, MapLayoutRoot, OpeningSceneRoots, PaletteRoot, Roots, SampleRoot,
+    SongRoot, SpecialMessageRoot, SpriteRoots, TextWindowRoots, TileAnimRoot, TilesetRoot,
+    TitleScreenRoots, VoicegroupRoot,
 }};
 
 /// Pokemon Emerald (US) rev 0's root table.
@@ -127,6 +128,7 @@ pub fn module(plan: &ProfilePlan, sha1: &str, lines: &[ReportLine]) -> String {
     battle_anim_roots(&mut out, &plan.battle_anims);
 
     bag_roots(&mut out, &plan.bag);
+    opening_scene_roots(&mut out, &plan.opening_scene);
 
     battler_roots(&mut out, &plan.battlers);
 
@@ -140,6 +142,18 @@ fn bag_roots(out: &mut String, bag: &BagPlan) {
     palette_slice(out, "        ", &bag.palettes);
     let _ = writeln!(out, "        raws: &[");
     for blob in &bag.raws {
+        let _ = writeln!(out, "            {},", blob_root(blob));
+    }
+    let _ = writeln!(out, "        ],");
+    let _ = writeln!(out, "    }},");
+}
+
+fn opening_scene_roots(out: &mut String, scene: &OpeningScenePlan) {
+    let _ = writeln!(out, "    opening_scene: OpeningSceneRoots {{");
+    image_slice(out, "        ", "images", &scene.images);
+    palette_slice(out, "        ", &scene.palettes);
+    let _ = writeln!(out, "        tilemaps: &[");
+    for blob in &scene.tilemaps {
         let _ = writeln!(out, "            {},", blob_root(blob));
     }
     let _ = writeln!(out, "        ],");
@@ -705,7 +719,8 @@ mod bag_field_tests {
     use super::module;
     use crate::gen_rom_profile::plan::{
         AudioPlan, BagPlan, BattleAnimationPlan, BattleMessagePlan, BattlerPlan, BlobPlan,
-        ImagePlan, PalettePlan, ProfilePlan, SpritePlan, TextWindowPlan, TitleScreenPlan,
+        ImagePlan, OpeningScenePlan, PalettePlan, ProfilePlan, SpritePlan, TextWindowPlan,
+        TitleScreenPlan,
     };
     use rom_import::Encoding;
 
@@ -785,8 +800,51 @@ mod bag_field_tests {
                     len: 2048,
                 }],
             },
+            opening_scene: OpeningScenePlan {
+                images: vec![ImagePlan {
+                    id: "opening-scene/image/birch".to_owned(),
+                    addr: 0x0815_0000,
+                    encoding: Encoding::Raw,
+                    rom_bit_depth: 4,
+                    pack_bit_depth: 4,
+                    width: 64,
+                    height: 64,
+                    metatile_width: 8,
+                    metatile_height: 8,
+                    tile_count: 64,
+                }],
+                palettes: vec![PalettePlan {
+                    id: "opening-scene/palette/lotad".to_owned(),
+                    addr: 0x0816_0000,
+                    color_count: 16,
+                    encoding: Encoding::Lz77,
+                }],
+                tilemaps: vec![BlobPlan {
+                    id: "opening-scene/raw/clock_start".to_owned(),
+                    addr: 0x0817_0000,
+                    encoding: Encoding::Lz77,
+                    len: 1280,
+                }],
+            },
         };
         let module = module(&plan, "0", &[]);
+        assert!(
+            module.contains("    opening_scene: OpeningSceneRoots {"),
+            "{module}"
+        );
+        assert!(
+            module.contains("ImageRoot { id: \"opening-scene/image/birch\", addr: GbaPtr::at(0x0815_0000), encoding: Encoding::Raw, rom_bit_depth: 4, pack_bit_depth: 4,"),
+            "{module}"
+        );
+        assert!(
+            module.contains("PaletteRoot { id: \"opening-scene/palette/lotad\", addr: GbaPtr::at(0x0816_0000), color_count: 16, encoding: Encoding::Lz77 }"),
+            "{module}"
+        );
+        assert!(
+            module.contains("BlobRoot { id: \"opening-scene/raw/clock_start\", addr: GbaPtr::at(0x0817_0000), encoding: Encoding::Lz77, len: 1280 }"),
+            "{module}"
+        );
+        assert!(!module.contains("OpeningSceneRoots::NONE"), "{module}");
         assert!(module.contains("    bag: BagRoots {"), "{module}");
         assert!(
             module.contains("ImageRoot { id: \"bag/image/hm\""),

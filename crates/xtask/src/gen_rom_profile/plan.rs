@@ -473,6 +473,17 @@ pub struct BattlerPlan {
     pub species: Vec<BattlerSpeciesPlan>,
 }
 
+/// Birch's speech scene and the wall clock, owned.
+#[derive(Debug, Clone)]
+pub struct OpeningScenePlan {
+    /// Every `opening-scene/image/*` root.
+    pub images: Vec<ImagePlan>,
+    /// Every `opening-scene/palette/*` root.
+    pub palettes: Vec<PalettePlan>,
+    /// Every `opening-scene/raw/*` tilemap root.
+    pub tilemaps: Vec<BlobPlan>,
+}
+
 /// Everything one generator run derived.
 #[derive(Debug, Clone)]
 pub struct ProfilePlan {
@@ -498,6 +509,8 @@ pub struct ProfilePlan {
     pub battle_anims: BattleAnimationPlan,
     /// The ordinary bag's images, palettes, and tilemap.
     pub bag: BagPlan,
+    /// Birch's speech scene and the wall clock.
+    pub opening_scene: OpeningScenePlan,
     /// The starters' static battler art.
     pub battlers: BattlerPlan,
 }
