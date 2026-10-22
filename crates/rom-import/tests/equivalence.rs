@@ -64,6 +64,7 @@ const COMPLETE_PREFIXES: &[&str] = &[
     "battle-message/",
     "battle-anim/",
     "bag/",
+    "starter-chooser/",
     "opening-scene/",
 ];
 

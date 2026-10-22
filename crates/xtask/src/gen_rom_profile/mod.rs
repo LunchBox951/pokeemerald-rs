@@ -40,6 +40,7 @@ mod palettes;
 mod plan;
 mod search;
 mod sprites;
+mod starter_chooser;
 mod text_window;
 mod tilesets;
 mod title;
@@ -165,6 +166,7 @@ fn locate_profile(
         battle_messages: battle_messages::locate(ctx, lines)?,
         battle_anims: battle_anims::locate(ctx, lines)?,
         bag: bag::locate(ctx, lines)?,
+        starter_chooser: starter_chooser::locate(ctx, lines)?,
         opening_scene: opening_scene::locate(ctx, lines)?,
         battlers: battlers::locate(ctx, lines)?,
     })
