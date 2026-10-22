@@ -218,9 +218,11 @@
 //! stat-drop guards — Clear Body, White Smoke, Keen Eye,
 //! Hyper Cutter ([`stat_change`]'s module docs; Shield Dust is the one
 //! guard left unmodelled there; [`secondary`] models it for poison) —
-//! held items, every primary status but
-//! [`status1::Status1::Paralysed`] and [`status1::Status1::Poisoned`]
-//! (sleep, freeze, burn, toxic — see [`status1`]'s module docs), every
+//! held items, every primary status but [`status1::Status1::Paralysed`],
+//! [`status1::Status1::Poisoned`], and [`status1::Status1::Asleep`] (freeze,
+//! burn, toxic — see [`status1`]'s module docs; no modelled move inflicts
+//! sleep yet, so it arrives only through
+//! [`pokemon::BattlePokemon::set_status1`]), every
 //! `status2`/`gStatuses3` bit outside [`volatile::Volatiles`]'s four
 //! (Substitute chief among them — see [`volatile`]'s module docs), weather,
 //! multi/double battles, Mist/Substitute/Safeguard/Protect, and the
