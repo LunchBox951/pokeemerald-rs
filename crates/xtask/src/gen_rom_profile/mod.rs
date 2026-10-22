@@ -1,55 +1,25 @@
 //! `cargo xtask gen-rom-profile` (S-4, F-3, Discussion #71 policy C):
-//! derive `rom-import`'s address table from a real ROM, once, and
-//! commit the result.
+//! derive `rom-import`'s address table from a real ROM, once, and commit
+//! the result to `crates/rom-import/src/profiles/bpee_rev0.rs`. The shipped
+//! importer never scans a ROM; this developer-only tool is the one place a
+//! heuristic runs.
 //!
-//! The shipped importer never scans a ROM. It reads
-//! `crates/rom-import/src/profiles/bpee_rev0.rs`, a table of offsets,
-//! lengths, dimensions, counts, and names. This is the developer-only tool
-//! that writes that table, and it is the only place a heuristic ever runs.
+//! Every root is located by searching the ROM for the exact bytes the
+//! `cargo xtask extract` pack holds for it (see [`pack_source`]), and is
+//! accepted only when exactly one place matches. A tie is broken by a struct
+//! back-reference or adjacency to an already-unique root, and the report
+//! names which; otherwise it is an error, never a first-match-wins guess.
+//! The one exception is [`plan::Resolution::ArbitraryAmongIdentical`], for
+//! sheets whose duplicate candidates hold identical bytes, so the choice
+//! cannot change the pack entry. The ROM is admitted only after
+//! `rom_import`'s profile selection accepts its whole-file SHA-1, and
+//! `--map` adds an independent witness ([`map_file`]).
 //!
-//! # Why generate rather than hand-write
-//!
-//! Several hundred addresses, each of which produces plausible garbage
-//! rather than a clean failure when it is wrong. A machine that derives
-//! every one of them from evidence, asserts each is unique, and checks that
-//! the bytes it found really are the bytes the pack holds, is the only way
-//! that table is trustworthy.
-//!
-//! # What counts as evidence
-//!
-//! `cargo xtask extract` already turned the upstream checkout into a pack.
-//! That pack is the expectation: every root is located by looking for the
-//! exact bytes the pack says the asset is, repacked into whatever shape a
-//! ROM stores (see [`pack_source`]). A root is only accepted when exactly
-//! one place in the ROM holds those bytes. When more than one does, a
-//! struct back-reference or an adjacency to an already-unique root breaks
-//! the tie, and the report says which and why -- never a first-match-wins
-//! guess.
-//!
-//! Three sheets are byte-identical to another sheet and sit in the ROM
-//! twice, and nothing there distinguishes the two symbols. Those get
-//! [`plan::Resolution::ArbitraryAmongIdentical`]: the choice really is
-//! arbitrary, and the report says so rather than dressing it up as
-//! evidence. It is sound only because every candidate holds the same
-//! bytes, so the pack entry is identical either way.
-//!
-//! The ROM itself is admitted only after `rom_import`'s own profile
-//! selection accepts its whole-file SHA-1, so the heuristics never run
-//! against an image that is merely similar. Passing `--map` adds a second,
-//! independent witness: see [`map_file`].
-//!
-//! # What never leaves this tool
-//!
-//! ROM bytes. The generated table carries offsets, lengths, dimensions,
-//! counts, and names, and nothing else: no payloads, no decompressed data,
-//! no hashes of ROM regions beyond the whole-file SHA-1 `rom_import`
-//! already ships.
-//!
-//! # Completeness
-//!
-//! A fixed asset domain (fonts, tilesets, layouts, interface palettes) is
-//! required, not optional: a pack missing the whole domain is refused
-//! rather than plans built from whichever ids happen to remain.
+//! No ROM bytes leave this tool: the table carries offsets, lengths,
+//! dimensions, counts, and names, plus the whole-file SHA-1 `rom_import`
+//! already ships, and no other hash of ROM data. A pack missing the whole
+//! fixed asset domain (fonts, tilesets, layouts, interface palettes) is
+//! refused.
 
 mod audio;
 mod bag;
@@ -64,11 +34,13 @@ mod inventory;
 mod layouts;
 mod locate;
 mod map_file;
+mod opening_scene;
 mod pack_source;
 mod palettes;
 mod plan;
 mod search;
 mod sprites;
+mod starter_chooser;
 mod text_window;
 mod tilesets;
 mod title;
@@ -87,7 +59,7 @@ use pack_source::PackSource;
 use plan::{ProfilePlan, ReportLine, SymbolExpectation};
 use search::{Lz77Search, PointerIndex, RawSearch};
 
-/// Where the generated profile is committed, relative to the repo root.
+/// Default output, relative to the repo root.
 pub const PROFILE_RELATIVE_PATH: &str = "crates/rom-import/src/profiles/bpee_rev0.rs";
 
 /// One `gen-rom-profile` invocation.
@@ -95,10 +67,9 @@ pub const PROFILE_RELATIVE_PATH: &str = "crates/rom-import/src/profiles/bpee_rev
 pub struct Options {
     /// The ROM to derive addresses from.
     pub rom: PathBuf,
-    /// Where to write the generated module. Defaults to
-    /// [`PROFILE_RELATIVE_PATH`] under the repo root.
+    /// Defaults to [`PROFILE_RELATIVE_PATH`] under the repo root.
     pub out: Option<PathBuf>,
-    /// An optional GNU `ld` map to cross-check every address against.
+    /// A GNU `ld` map to cross-check every address against.
     pub map: Option<PathBuf>,
 }
 
@@ -109,28 +80,26 @@ pub struct GenReport {
     pub out_path: PathBuf,
     /// One line per located root.
     pub lines: Vec<ReportLine>,
-    /// How many roots the `--map` cross-check confirmed by exact name.
+    /// Roots the `--map` cross-check confirmed by name.
     pub map_named: usize,
-    /// How many roots the cross-check confirmed as some symbol's own
-    /// address, without asserting a name.
+    /// Roots confirmed as some symbol's address, with no name asserted.
     pub map_confirmed: usize,
-    /// How many roots the cross-check skipped as interior addresses.
+    /// Roots skipped as interior addresses.
     pub map_skipped: usize,
-    /// How many roots the cross-check skipped as translation-unit-local
-    /// symbols, which an ordinary linker map does not list.
+    /// Roots skipped as translation-unit-local symbols.
     pub map_local: usize,
-    /// Whether a map was given at all.
+    /// Whether a map was given.
     pub map_used: bool,
 }
 
 impl GenReport {
-    /// How many roots were located.
+    /// Roots located.
     #[must_use]
     pub fn root_count(&self) -> usize {
         self.lines.len()
     }
 
-    /// How many roots needed something other than a unique signature.
+    /// Roots resolved by something other than a unique signature.
     #[must_use]
     pub fn resolved_count(&self) -> usize {
         self.lines
@@ -139,7 +108,7 @@ impl GenReport {
             .count()
     }
 
-    /// How many roots were picked arbitrarily from identical candidates.
+    /// Roots picked arbitrarily from identical candidates.
     #[must_use]
     pub fn arbitrary_count(&self) -> usize {
         self.lines
@@ -148,7 +117,7 @@ impl GenReport {
             .count()
     }
 
-    /// The one-line `--map` cross-check summary, or `None` without a map.
+    /// `None` without a map.
     #[must_use]
     pub fn map_summary(&self) -> Option<String> {
         self.map_used.then(|| {
@@ -162,11 +131,11 @@ impl GenReport {
     }
 }
 
-/// Everything the locators read.
+/// Read-only inputs shared by every locator.
 pub struct Context<'a> {
     /// The validated ROM image.
     pub rom: &'a [u8],
-    /// The pack that says what each asset's bytes are.
+    /// The pack holding each asset's expected bytes.
     pub pack: &'a PackSource,
     /// Batch search for uncompressed bytes.
     pub raw: RawSearch<'a>,
@@ -176,11 +145,10 @@ pub struct Context<'a> {
     pub pointers: PointerIndex,
     /// The `pokeemerald/` reference checkout.
     pub upstream: PathBuf,
-    /// Every `bag/` pack id the checkout's inventory expects.
+    /// The `bag/` pack ids the checkout's inventory expects.
     pub bag_ids: Vec<String>,
 }
 
-/// Locate every domain, after checking the pack holds every fixed root.
 fn locate_profile(
     ctx: &Context<'_>,
     lines: &mut Vec<ReportLine>,
@@ -198,6 +166,8 @@ fn locate_profile(
         battle_messages: battle_messages::locate(ctx, lines)?,
         battle_anims: battle_anims::locate(ctx, lines)?,
         bag: bag::locate(ctx, lines)?,
+        starter_chooser: starter_chooser::locate(ctx, lines)?,
+        opening_scene: opening_scene::locate(ctx, lines)?,
         battlers: battlers::locate(ctx, lines)?,
     })
 }
@@ -223,26 +193,10 @@ pub fn run(options: &Options) -> Result<GenReport, GenRomProfileError> {
         .out
         .clone()
         .unwrap_or_else(|| repo_root.join(PROFILE_RELATIVE_PATH));
-    // Refused before the search, not only at the write: a developer who
-    // spelled one file two ways should hear about it before minutes of
-    // scanning, not after. Creating the output's directory is the one
-    // thing a run does that can change this answer, so `write_module`
-    // asks again on the far side of it.
-    //
-    // Before `select_profile` too, deliberately. The ROM is the one input
-    // here that cannot be regenerated -- a developer's own cartridge dump,
-    // which this project never ships -- and `Rom::load` has already read
-    // the whole of it into memory, so nothing downstream would notice the
-    // output landing on it and `write_module` would truncate the cartridge
-    // image into a Rust file. Whether the image is the *supported* build is
-    // a smaller question than whether this run is about to destroy it, so
-    // it is asked second.
-    //
-    // The shipped importer refuses the same shape for the same reason
-    // (`ImportRomError::DestinationIsSource`); this is that refusal on the
-    // developer tool, through the helper `rom_import` exposes for it. Hard
-    // links and symlink aliases are covered, which comparing the two path
-    // strings would miss.
+    // Asked before `select_profile` and before the search: the ROM is the
+    // developer's own dump and cannot be regenerated. `write_module` asks
+    // again after creating the output directory, which can change the answer.
+    // Same refusal as `ImportRomError::DestinationIsSource`.
     if rom_import::overwrites_rom(&options.rom, &out_path) {
         return Err(GenRomProfileError::OutputIsRom {
             rom_path: options.rom.clone(),
@@ -250,8 +204,6 @@ pub fn run(options: &Options) -> Result<GenReport, GenRomProfileError> {
         });
     }
 
-    // Heuristics only ever run against a ROM whose whole-file hash already
-    // matched a shipped profile.
     let profile = select_profile(&rom).map_err(|err| GenRomProfileError::RomUnusable {
         path: options.rom.clone(),
         reason: err.to_string(),
@@ -278,7 +230,7 @@ pub fn run(options: &Options) -> Result<GenReport, GenRomProfileError> {
     generate(&ctx, &profile.sha1.to_string(), options, out_path)
 }
 
-/// Locate, cross-check, and write; nothing is written unless all of it succeeds.
+/// Nothing is written unless locating and the map cross-check both succeed.
 fn generate(
     ctx: &Context<'_>,
     sha1: &str,
@@ -304,8 +256,6 @@ fn generate(
     })
 }
 
-/// Locate every interface palette the pack holds.
-///
 /// # Errors
 ///
 /// [`GenRomProfileError::MissingPackEntry`] if the pack holds no
@@ -326,15 +276,12 @@ fn locate_interface_palettes(
     palettes::locate_unique(ctx, &ids, &interface_palette_symbol, report)
 }
 
-/// What a linker map should say at an interface palette's address.
-///
-/// Upstream names these after the file, in `sCamelCasePal` form.
+/// Upstream names these `sCamelCasePal` after the file.
 fn interface_palette_symbol(id: &str) -> SymbolExpectation {
     let stem = id.trim_start_matches("interface/palette/");
     SymbolExpectation::Contains(vec![format!("{}Pal", locate::camel_case(stem))])
 }
 
-/// What a `--map` cross-check settled.
 #[derive(Debug, Default, Clone, Copy)]
 struct MapCheck {
     /// Roots whose expected symbol name the map confirmed.
@@ -349,15 +296,8 @@ struct MapCheck {
     used: bool,
 }
 
-/// Cross-check every root against a linker map, if one was given.
-///
-/// Three outcomes per root, driven by what the locator recorded:
-/// an interior address or a translation-unit-local `static` is skipped
-/// (an ordinary linker map lists only global symbols), an unnamed root only has to have *some*
-/// symbol starting at it, and a named root's symbol has to match. A
-/// disagreement is a failure, not an annotation: the whole point of the
-/// map is to be a second, independent witness, and a witness that only
-/// ever agrees is not one.
+/// Interior and translation-unit-local roots are skipped (a linker map lists
+/// only global symbols). A disagreement is an error, not an annotation.
 fn cross_check(
     map_path: Option<&Path>,
     lines: &mut [ReportLine],
@@ -415,7 +355,6 @@ fn cross_check(
     Ok(check)
 }
 
-/// Render an expectation for an error message.
 fn describe(expectation: &SymbolExpectation) -> String {
     match expectation {
         SymbolExpectation::Interior => "an interior address".to_owned(),
@@ -428,17 +367,10 @@ fn describe(expectation: &SymbolExpectation) -> String {
     }
 }
 
-/// Create the output's directory, ask [`run`]'s question once more now
-/// that the answer can change, and publish the module.
-///
-/// `run` refuses an `--out` that names the ROM before the search starts,
-/// but it asks about the paths as they stand then. An output that reaches
-/// the ROM through a directory that does not exist yet and a `..`
-/// (`--out absent/../emerald.gba` beside the ROM) resolves to nothing, and
-/// `rom_import::overwrites_rom` answers `false` for what it cannot
-/// resolve. Creating the parent is what makes that path resolve, and it
-/// resolves to the ROM. So the guard runs again between that creation and
-/// the rename, the step that would land on the cartridge image.
+/// Repeats [`run`]'s ROM-overwrite guard after creating the parent: an
+/// `--out absent/../emerald.gba` beside the ROM resolves to nothing until
+/// the parent exists, and `rom_import::overwrites_rom` answers `false` for
+/// what it cannot resolve.
 fn write_module(rom_path: &Path, path: &Path, module: &str) -> Result<(), GenRomProfileError> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|err| GenRomProfileError::WriteFailed {
@@ -455,37 +387,15 @@ fn write_module(rom_path: &Path, path: &Path, module: &str) -> Result<(), GenRom
     publish(path, module)
 }
 
-/// Write the module through a sibling temporary file and a rename, never a
-/// truncating write onto `path`. Two reasons, and the second is why it is
-/// not merely tidy:
-///
-/// 1. A run that dies mid-write leaves the previous profile intact instead
-///    of a half-written module that will not compile — the same reason
-///    `import_rom` and `engine`'s save writer publish by rename.
-/// 2. It replaces a *name*, so it cannot destroy a file reachable under
-///    another one. [`write_module`]'s guards catch an `--out` that
-///    resolves to the ROM, but `rom_import::overwrites_rom` cannot see a
-///    hard link off Unix (`std` exposes no file identity there). A
-///    truncating write through such an alias would destroy the cartridge
-///    image under every one of its names; a rename retires only the alias,
-///    and the ROM survives under the name `--rom` gave.
-///
-/// Same directory on both sides, so the rename is atomic and never
-/// `EXDEV`.
+/// Never a truncating write onto `path`: the rename replaces a name, so a
+/// hard link to the ROM that `rom_import::overwrites_rom` cannot see off
+/// Unix loses only the alias. A mid-write death also keeps the old profile.
 fn publish(path: &Path, module: &str) -> Result<(), GenRomProfileError> {
     publish_with(path, |file, _temp| file.write_all(module.as_bytes()))
 }
 
-/// [`publish`] with the write injected, so a cleanup failure is testable
-/// without a real full-disk condition (`rom_import`'s `write_new_with`
-/// precedent). `write` sees the temporary path alongside the handle, since
-/// that path is picked inside this call and a test driving the cleanup
-/// failure has to act on the exact name in use, not a freshly guessed one.
-///
-/// The rename is the only step that publishes anything, so a failure at or
-/// before it leaves the old profile in place and the temporary file would
-/// be litter beside it — [`remove_after`] is what takes that litter with
-/// the failure instead of leaving it unreported.
+/// [`publish`] with the write injected for tests; `write` receives the
+/// temporary path picked inside this call.
 fn publish_with(
     path: &Path,
     write: impl FnOnce(&mut std::fs::File, &Path) -> std::io::Result<()>,
@@ -495,8 +405,6 @@ fn publish_with(
         reason: err.to_string(),
     };
     let temp = temp_sibling(path);
-    // Exclusive create, so a name two runs somehow both chose fails here
-    // instead of putting both of them on one file.
     let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -508,26 +416,16 @@ fn publish_with(
     {
         Ok(()) => Ok(()),
         Err(err) => {
-            // Dropped before the removal: Windows refuses to unlink a file
-            // that is still open (the same reason `rom_import` and
-            // `import_rom` drop their own handle first).
+            // Windows refuses to unlink an open file.
             drop(file);
             Err(failed(remove_after(&temp, err)))
         }
     }
 }
 
-/// Removes the temporary file [`publish_with`] leaves behind after
-/// `original`, folding a cleanup failure into `original` instead of
-/// discarding it -- silently dropping it would leave a `.profile.*.tmp`
-/// sibling unreported, and, because [`temp_sibling`]'s name is never
-/// chosen twice, no later run would ever revisit that exact path to clean
-/// it up either. Keeps `original`'s `ErrorKind` so a caller matching on it
-/// still sees the write or rename failure that actually happened. A
-/// `NotFound` from the removal means nothing was left to remove, so there
-/// is nothing abandoned to report (`rom_import`'s own `remove_after` and
-/// `crates/xtask/src/extract/mod.rs`'s `remove_abandoned_staging_file` do
-/// the same for their own staged writes).
+/// Folds a cleanup failure into `original`, keeping its `ErrorKind`, because
+/// [`temp_sibling`] never reuses a name and nothing would clean it later.
+/// `NotFound` means nothing was left to remove.
 fn remove_after(path: &Path, original: std::io::Error) -> std::io::Error {
     match std::fs::remove_file(path) {
         Ok(()) => original,
@@ -542,24 +440,16 @@ fn remove_after(path: &Path, original: std::io::Error) -> std::io::Error {
     }
 }
 
-/// A scratch name beside `path`, in the same directory so the rename that
-/// follows it stays within one filesystem.
-///
-/// The clock reading and a fresh `RandomState` hash are what keep two
-/// concurrent runs off each other's name; a process id alone does not, since
-/// two runs in separate PID namespaces over one checkout can carry the same
-/// one. `import_rom`'s destination names its temporary the same way.
-///
-/// Not a security boundary — this is a developer tool writing into a
-/// checkout — and [`publish`]'s exclusive create is what makes a
-/// collision an error rather than two writers on one file.
+/// Same directory as `path`, so the rename never crosses filesystems. The
+/// clock and `RandomState` salt keep concurrent runs apart where a PID
+/// alone would not (separate PID namespaces); [`publish`]'s exclusive
+/// create turns a collision into an error.
 fn temp_sibling(path: &Path) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .map_or(0, |since| since.as_nanos());
     let salt = RandomState::new().build_hasher().finish();
-    // A fixed prefix keeps the name inside any component limit the output's
-    // own basename already fits; the uniqueness fields carry no basename.
+    // No basename, so the name fits any component limit the output's does.
     path.with_file_name(format!(
         ".profile.{}.{nanos:x}.{salt:x}.tmp",
         std::process::id()

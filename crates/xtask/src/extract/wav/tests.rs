@@ -249,11 +249,15 @@ fn short_smpl_loop_record_is_rejected() {
 }
 
 #[test]
-fn truncated_override_chunk_is_rejected() {
+fn a_lone_short_override_chunk_is_ignored_like_wav2agb() {
+    // wav2agb only assigns agbPitch/agbLoopEnd when chunkLen >= 4
+    // (wav_file.cpp:183-193), so a short chunk is not an error.
     let data = [128u8, 129];
     for id in [b"agbp", b"agbl"] {
         let bytes = build_wav(PCM_U8, 3344, &[(id, &[0u8, 0])], &data);
-        assert_eq!(decode(&bytes).unwrap_err(), WavError::ChunkTruncated);
+        let sample = decode(&bytes).unwrap();
+        assert_eq!(sample.base_frequency, 3344 * 1024);
+        assert_eq!(sample.sample_count, 2);
     }
 }
 
@@ -523,3 +527,5 @@ fn each_sample_format_reports_its_encoded_width() {
     assert_eq!(SampleFormat::F32.bytes_per_sample(), 4);
     assert_eq!(SampleFormat::F64.bytes_per_sample(), 8);
 }
+
+mod repeated_chunks;
