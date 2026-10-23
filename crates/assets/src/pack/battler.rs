@@ -89,7 +89,8 @@ impl AssetPack {
     /// [`PackError::UnsupportedBattlerSpecies`] for species outside the starter inventory;
     /// [`PackError::UnknownAsset`] or [`PackError::WrongKind`] for missing or wrong-kind entries;
     /// [`PackError::MalformedBattlerAsset`] for invalid image dimensions, source bit depth,
-    /// pixel payload length, palette size or payload length, or pixel indices.
+    /// palette size, or pixel indices. Payload lengths are checked by `pack_format` at load,
+    /// so a loaded pack never reaches this method with a misshapen payload.
     pub fn species_battler(
         &self,
         species: SpeciesId,
