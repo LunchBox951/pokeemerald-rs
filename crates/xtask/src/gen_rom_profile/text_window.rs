@@ -28,6 +28,13 @@ const WINDOW_BANKS: [&str; 4] = [
     "text-window/palette/text_pal4",
 ];
 
+/// Colours in each `sTextWindowPalettes` bank: the table is `u16[][16]`
+/// (`text_window.c:51-58`), and the importer's `corroborate` rejects any other
+/// shape.
+const BANK_COLORS: u16 = 16;
+/// Bytes in each `sTextWindowPalettes` bank, the table's fixed stride.
+const BANK_BYTES: u32 = 32;
+
 /// Locates the text-window frames, message box, and palettes.
 ///
 /// # Errors
@@ -114,8 +121,34 @@ fn palette_symbol(id: &str) -> SymbolExpectation {
     SymbolExpectation::Contains(vec![format!("TextWindowFrame{stem}_Pal")])
 }
 
+/// Requires a bank to hold exactly one full 16-colour, 32-byte palette.
+///
+/// A shorter bank still matches the ROM by prefix and passes the address
+/// checks, but `rom-import` refuses it with `StructMismatch`.
+fn require_full_bank(
+    id: &str,
+    color_count: u16,
+    payload_bytes: u32,
+) -> Result<(), GenRomProfileError> {
+    if color_count == BANK_COLORS && payload_bytes == BANK_BYTES {
+        return Ok(());
+    }
+    Err(GenRomProfileError::StructMismatch {
+        id: id.to_owned(),
+        reason: format!(
+            "sTextWindowPalettes banks must hold exactly {BANK_COLORS} colours \
+             ({BANK_BYTES} bytes), found {color_count} colours ({payload_bytes} bytes)"
+        ),
+    })
+}
+
 /// Derives `sTextWindowPalettes` from the bank before `text_pal1`, then
 /// requires each `text_pal*` bank at its table index.
+///
+/// # Errors
+///
+/// [`GenRomProfileError::StructMismatch`] when the message box or a bank is not exactly
+/// 16 colours / 32 bytes, or the banks are not the table's in order.
 fn locate_window_palettes(
     ctx: &Context<'_>,
     palettes: &[PalettePlan],
@@ -129,6 +162,13 @@ fn locate_window_palettes(
             .map(|plan| plan.addr)
             .ok_or_else(|| GenRomProfileError::MissingPackEntry(id.to_owned()))
     };
+    for id in std::iter::once(DUPLICATED_PALETTE).chain(WINDOW_BANKS) {
+        let plan = palettes
+            .iter()
+            .find(|plan| plan.id == id)
+            .ok_or_else(|| GenRomProfileError::MissingPackEntry(id.to_owned()))?;
+        require_full_bank(id, plan.color_count, bank_bytes)?;
+    }
     let first = bank_addr(WINDOW_BANKS[0])?;
     let table = first
         .checked_sub(bank_bytes)
