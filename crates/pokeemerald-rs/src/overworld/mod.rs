@@ -860,17 +860,14 @@ pub(crate) fn load_room_from_source(
     OverworldScene::from_pack(&pack, header, layout, player, &events, event_data)
 }
 
+/// Returns the asset-pack name of `tileset_symbol`, which must be one of the
+/// [`assets::bundled_overworld::BUNDLED_TILESETS`]: the only tilesets the
+/// pack carries, so a layout naming any other cannot be composed.
 pub(crate) fn resolve_tileset_pack_name(
     tileset_symbol: &'static str,
 ) -> Result<&'static str, OverworldSceneError> {
-    match tileset_symbol {
-        "gTileset_General" => Ok("general"),
-        "gTileset_Building" => Ok("building"),
-        "gTileset_Petalburg" => Ok("petalburg"),
-        "gTileset_BrendansMaysHouse" => Ok("brendans_mays_house"),
-        "gTileset_Lab" => Ok("lab"),
-        unknown_symbol => Err(OverworldSceneError::UnknownTileset(unknown_symbol)),
-    }
+    assets::bundled_overworld::bundled_tileset_pack_name(tileset_symbol)
+        .ok_or(OverworldSceneError::UnknownTileset(tileset_symbol))
 }
 
 /// Returns the asset-pack layout name after removing `LAYOUT_` and lowercasing

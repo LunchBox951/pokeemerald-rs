@@ -56,7 +56,11 @@ impl StagedDirClaim {
                 | rustix::fs::Mode::ROTH
                 | rustix::fs::Mode::WOTH,
         )?;
-        std::fs::File::from(fd).write_all(bytes)
+        let mut file = std::fs::File::from(fd);
+        // Under a umask that strips owner bits the open left a file its owner
+        // cannot read back; the rename into the output carries the mode over.
+        super::staging::restore_owner_access(&file)?;
+        file.write_all(bytes)
     }
 
     #[cfg(not(unix))]

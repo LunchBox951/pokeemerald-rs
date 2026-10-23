@@ -25,21 +25,40 @@ fn default_room_map_id_matches_new_games_spawn_map_id() {
 }
 
 #[test]
-fn resolve_tileset_pack_name_covers_every_bundled_tileset() {
-    assert_eq!(resolve_tileset_pack_name("gTileset_General"), Ok("general"));
+fn resolve_tileset_pack_name_maps_each_bundled_symbol_to_its_pack_name() {
+    let expected = [
+        ("gTileset_General", "general"),
+        ("gTileset_Building", "building"),
+        ("gTileset_Petalburg", "petalburg"),
+        ("gTileset_BrendansMaysHouse", "brendans_mays_house"),
+        ("gTileset_Lab", "lab"),
+        ("gTileset_GenericBuilding", "generic_building"),
+        ("gTileset_PokemonCenter", "pokemon_center"),
+        ("gTileset_Shop", "shop"),
+        ("gTileset_InsideOfTruck", "inside_of_truck"),
+    ];
+    for (symbol, pack_name) in expected {
+        assert_eq!(resolve_tileset_pack_name(symbol), Ok(pack_name), "{symbol}");
+    }
     assert_eq!(
-        resolve_tileset_pack_name("gTileset_Building"),
-        Ok("building")
+        assets::bundled_overworld::BUNDLED_TILESETS.len(),
+        expected.len(),
+        "a newly bundled tileset needs its expected pack name here"
     );
-    assert_eq!(
-        resolve_tileset_pack_name("gTileset_Petalburg"),
-        Ok("petalburg")
-    );
-    assert_eq!(
-        resolve_tileset_pack_name("gTileset_BrendansMaysHouse"),
-        Ok("brendans_mays_house")
-    );
-    assert_eq!(resolve_tileset_pack_name("gTileset_Lab"), Ok("lab"));
+}
+
+#[test]
+fn resolve_tileset_pack_name_resolves_both_tilesets_of_every_bundled_layout() {
+    let layouts = assets::LayoutTable::new();
+    for id in assets::bundled_overworld::BUNDLED_LAYOUT_IDS {
+        let layout = layouts.layout(*id).unwrap();
+        for symbol in [layout.primary_tileset, layout.secondary_tileset] {
+            assert!(
+                resolve_tileset_pack_name(symbol).is_ok(),
+                "{id:?} names unresolved tileset {symbol}"
+            );
+        }
+    }
 }
 
 #[test]

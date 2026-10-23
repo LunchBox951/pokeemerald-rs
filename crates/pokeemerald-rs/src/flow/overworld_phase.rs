@@ -954,6 +954,8 @@ mod bedroom_collision_tests;
 #[cfg(test)]
 mod connections_tests;
 #[cfg(test)]
+mod cute_charm_slot_zero_tests;
+#[cfg(test)]
 mod decoration_tests;
 #[cfg(test)]
 mod dialog_pacing_tests;
@@ -977,6 +979,8 @@ mod forced_movement_encounter_tests;
 mod frame_tests;
 #[cfg(test)]
 mod input_tests;
+#[cfg(test)]
+mod interaction_tests;
 #[cfg(test)]
 mod landing_call_arrow_elevation_tests;
 /// `crate::overworld::oldale_town_npc_reposition` collision tests reachable

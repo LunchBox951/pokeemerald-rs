@@ -97,33 +97,7 @@ pub(super) fn scene_scratch_pack_path() -> std::path::PathBuf {
     ))
 }
 
-/// Writes `bytes` to a fresh file at `path`. `create_new` (`O_EXCL`) never
-/// follows a symlink at `path`, so a planted link cannot redirect the write
-/// onto its target. A stale occupant is unlinked (the entry itself, never
-/// what it points to) and the claim retried once.
-pub(crate) fn write_scratch_exclusive(path: &std::path::Path, bytes: impl AsRef<[u8]>) {
-    use std::io::Write as _;
-    let mut file = None;
-    for _ in 0..2 {
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(path)
-        {
-            Ok(f) => {
-                file = Some(f);
-                break;
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                std::fs::remove_file(path).expect("a stale scratch entry is removable");
-            }
-            Err(e) => panic!("the scratch directory is writable: {e}"),
-        }
-    }
-    file.expect("the scratch path is exclusively creatable")
-        .write_all(bytes.as_ref())
-        .expect("the scratch pack is writable");
-}
+pub(crate) use crate::pack_test_support::write_scratch_exclusive;
 
 /// Plants a symlink at `path` pointing at a fresh victim file holding
 /// `sentinel`, runs `write`, and asserts the victim is untouched. Returns
