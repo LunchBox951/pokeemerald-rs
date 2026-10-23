@@ -71,8 +71,13 @@ struct Variant {
 /// The upstream name of an image root declared `static` (so a linker map
 /// cannot list it), or `None` for a global root.
 ///
-/// `title_screen.c:63-66`, `item_menu_icons.c:37`, `item_menu.c:374`.
+/// `title_screen.c:63-66`, `item_menu_icons.c:37`, `item_menu.c:374`,
+/// `text_window.c:10-28`.
 pub(super) fn local_image_symbol(id: &str) -> Option<String> {
+    if let Some(stem) = id.strip_prefix("text-window/image/") {
+        return super::text_window::is_static_frame(stem)
+            .then(|| format!("sTextWindowFrame{stem}_Gfx"));
+    }
     if let Some(name) = id.strip_prefix("title/image/") {
         let camel = super::locate::camel_case(name);
         return matches!(camel.as_str(), "Rayquaza" | "LogoShine" | "Clouds")
@@ -117,6 +122,9 @@ fn symbol_fragments(id: &str) -> Vec<String> {
             return vec!["gMessageBox_Gfx".to_owned()];
         }
         return vec![format!("TextWindowFrame{stem}_Gfx")];
+    }
+    if id == "battle-interface/image/textbox" {
+        return vec!["gBattleTextboxTiles".to_owned()];
     }
     Vec::new()
 }
@@ -392,6 +400,10 @@ mod tests {
         assert_eq!(
             symbol_fragments("text-window/image/message_box"),
             ["gMessageBox_Gfx"]
+        );
+        assert_eq!(
+            symbol_fragments("battle-interface/image/textbox"),
+            ["gBattleTextboxTiles"]
         );
         // No convention asserts nothing; `symbol_contains` then accepts any symbol.
         assert!(symbol_fragments("tileset/general/anim/water/0").is_empty());

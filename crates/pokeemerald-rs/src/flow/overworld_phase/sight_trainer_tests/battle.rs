@@ -293,4 +293,13 @@ fn an_aborted_sight_battle_clears_the_trainer_id_with_the_slot() {
         "the trainer id must be cleared on an abort too -- an id retained past the point the \
          battle slot emptied is stale the instant a fresh cone entry reuses the field"
     );
+    assert!(
+        phase.lead_for_test().is_some(),
+        "an abort hands the lead back"
+    );
+    phase.assert_lead_at_slot_for_test(0);
+    let lent = phase
+        .take_lead_battler()
+        .expect("the abort closed the loan");
+    phase.restore_lead_battler(lent);
 }

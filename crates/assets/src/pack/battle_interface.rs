@@ -184,6 +184,85 @@ impl SinglesHealthboxSide {
     }
 }
 
+const TILE_4BPP_BYTES: usize = 32;
+const HEALTHBOX_ELEMENT_COUNT: usize = 13;
+/// `hpbar_anim_unused` (18 tiles), `numbers1` (11), then `numbers2` (12).
+const BATTLE_BAR_TILES: usize = 18 + 11 + 12;
+
+/// A constituent of `gHealthboxElementsGfxTable`, declared in upstream table
+/// order (`graphics.c:358-370`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HealthboxElement {
+    HpBar,
+    ExpBar,
+    Status,
+    Misc,
+    HpBarAnim,
+    MiscFrameEnd,
+    BallDisplay,
+    BallCaughtIndicator,
+    Status2,
+    Status3,
+    Status4,
+    HealthboxDoublesFrameEnd,
+    HealthboxDoublesFrameEndBar,
+}
+
+impl HealthboxElement {
+    /// Every constituent in `gHealthboxElementsGfxTable` order.
+    pub const TABLE: [Self; HEALTHBOX_ELEMENT_COUNT] = [
+        Self::HpBar,
+        Self::ExpBar,
+        Self::Status,
+        Self::Misc,
+        Self::HpBarAnim,
+        Self::MiscFrameEnd,
+        Self::BallDisplay,
+        Self::BallCaughtIndicator,
+        Self::Status2,
+        Self::Status3,
+        Self::Status4,
+        Self::HealthboxDoublesFrameEnd,
+        Self::HealthboxDoublesFrameEndBar,
+    ];
+
+    /// 8x8 tiles in the constituent's `.4bpp` file.
+    #[must_use]
+    pub const fn tile_count(self) -> usize {
+        match self {
+            Self::HpBar => 12,
+            Self::ExpBar => 9,
+            Self::Status | Self::Status2 | Self::Status3 | Self::Status4 => 15,
+            Self::Misc => 11,
+            Self::HpBarAnim => 18,
+            Self::BallDisplay => 4,
+            Self::MiscFrameEnd
+            | Self::BallCaughtIndicator
+            | Self::HealthboxDoublesFrameEnd
+            | Self::HealthboxDoublesFrameEndBar => 1,
+        }
+    }
+
+    /// The pack name, which is the upstream file stem.
+    const fn pack_name(self) -> &'static str {
+        match self {
+            Self::HpBar => "hpbar",
+            Self::ExpBar => "expbar",
+            Self::Status => "status",
+            Self::Misc => "misc",
+            Self::HpBarAnim => "hpbar_anim",
+            Self::MiscFrameEnd => "misc_frameend",
+            Self::BallDisplay => "ball_display",
+            Self::BallCaughtIndicator => "ball_caught_indicator",
+            Self::Status2 => "status2",
+            Self::Status3 => "status3",
+            Self::Status4 => "status4",
+            Self::HealthboxDoublesFrameEnd => "healthbox_doubles_frameend",
+            Self::HealthboxDoublesFrameEndBar => "healthbox_doubles_frameend_bar",
+        }
+    }
+}
+
 /// One side's singles health-box frame, borrowing the pack for `'a`.
 #[derive(Debug, Clone, Copy)]
 pub struct SinglesHealthboxFrameHandle<'a> {
@@ -223,6 +302,52 @@ pub struct SinglesHealthboxFramesHandle<'a> {
     pub ball_status_bar_palette: PaletteRef<'a>,
     /// `gBattleInterface_BallDisplayPal`, 16 colours.
     pub ball_display_palette: PaletteRef<'a>,
+}
+
+/// The 4bpp tiles of `gHealthboxElementsGfxTable`, borrowing the pack for `'a`.
+#[derive(Debug, Clone, Copy)]
+pub struct HealthboxElementsHandle<'a> {
+    /// Indexed by [`HealthboxElement`] discriminant, so in table order.
+    sheets: [&'a [u8]; HEALTHBOX_ELEMENT_COUNT],
+}
+
+impl<'a> HealthboxElementsHandle<'a> {
+    /// The raw 4bpp bytes of one constituent: 32 bytes per tile.
+    #[must_use]
+    pub fn sheet(&self, element: HealthboxElement) -> &'a [u8] {
+        self.sheets[element as usize]
+    }
+
+    /// Constituents with their bytes, in table order.
+    pub fn sheets(&self) -> impl Iterator<Item = (HealthboxElement, &'a [u8])> + '_ {
+        HealthboxElement::TABLE
+            .into_iter()
+            .map(|element| (element, self.sheet(element)))
+    }
+
+    /// Row `index` of `gHealthboxElementsGfxTable`, the 32 bytes of one tile,
+    /// or `None` past the last tile.
+    #[must_use]
+    pub fn tile(&self, index: usize) -> Option<&'a [u8]> {
+        let mut first_tile = 0;
+        for (element, sheet) in self.sheets() {
+            let end_tile = first_tile + element.tile_count();
+            if index < end_tile {
+                let start = (index - first_tile) * TILE_4BPP_BYTES;
+                return Some(&sheet[start..start + TILE_4BPP_BYTES]);
+            }
+            first_tile = end_tile;
+        }
+        None
+    }
+}
+
+/// `gBattleInterfaceGfx_BattleBar` before compression, borrowing the pack for `'a`.
+#[derive(Debug, Clone, Copy)]
+pub struct BattleBarHandle<'a> {
+    /// `hpbar_anim_unused`, `numbers1`, and `numbers2` as raw 4bpp tiles, in that
+    /// order (`graphics_file_rules.mk:90-93`).
+    pub tiles: &'a [u8],
 }
 
 impl AssetPack {
@@ -307,5 +432,36 @@ impl AssetPack {
             )));
         }
         Ok(image)
+    }
+
+    /// The health-box element sheets in upstream table order.
+    ///
+    /// # Errors
+    ///
+    /// [`PackError::UnknownAsset`] or [`PackError::WrongKind`] for a missing or
+    /// wrong-kind entry; [`PackError::MalformedBattleInterfaceAsset`] when a
+    /// sheet's length differs from its upstream tile count.
+    pub fn healthbox_elements(&self) -> Result<HealthboxElementsHandle<'_>, PackError> {
+        let mut sheets = [&[][..]; HEALTHBOX_ELEMENT_COUNT];
+        for element in HealthboxElement::TABLE {
+            sheets[element as usize] = self.battle_interface_raw(
+                &format!("healthbox_element/{}", element.pack_name()),
+                element.tile_count() * TILE_4BPP_BYTES,
+            )?;
+        }
+        Ok(HealthboxElementsHandle { sheets })
+    }
+
+    /// The generated battle bar.
+    ///
+    /// # Errors
+    ///
+    /// [`PackError::UnknownAsset`] or [`PackError::WrongKind`] for a missing or
+    /// wrong-kind entry; [`PackError::MalformedBattleInterfaceAsset`] when its
+    /// length differs from the three source sheets' tile count.
+    pub fn battle_bar(&self) -> Result<BattleBarHandle<'_>, PackError> {
+        Ok(BattleBarHandle {
+            tiles: self.battle_interface_raw("battle_bar", BATTLE_BAR_TILES * TILE_4BPP_BYTES)?,
+        })
     }
 }
