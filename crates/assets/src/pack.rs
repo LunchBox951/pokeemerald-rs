@@ -10,6 +10,7 @@ mod battle_interface;
 mod battle_message;
 mod battler;
 mod error;
+mod evolution_scene;
 mod format;
 mod handles;
 mod opening_scene;
@@ -35,6 +36,7 @@ pub use battle_message::{
 };
 pub use battler::{BattlerDirection, BattlerHandle, PaletteVariant};
 pub use error::PackError;
+pub use evolution_scene::EvolutionSceneHandle;
 pub use format::{DirectoryEntry, EntryKind, FORMAT_VERSION, MAGIC};
 pub use handles::{ImageRef, PaletteRef, TilesetHandle, WindowFrameHandle};
 pub use opening_scene::{BirchSpeechHandle, WallClockHandle};

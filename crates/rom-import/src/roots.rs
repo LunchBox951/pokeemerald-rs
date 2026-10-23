@@ -467,6 +467,22 @@ pub struct OpeningSceneRoots {
     pub tilemaps: &'static [BlobRoot],
 }
 
+/// The evolution scene's animated background and sparkle sprite
+/// (`graphics/evolution_scene`, `graphics/misc/evo_sparkle.png`).
+///
+/// The two images, three palettes, and two tilemaps under the
+/// `evolution-scene/` pack ids the checkout extractor emits. The images and
+/// tilemaps are stored compressed; the palettes are raw `.gbapal` runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EvolutionSceneRoots {
+    /// Every `evolution-scene/image/*` entry.
+    pub images: &'static [ImageRoot],
+    /// Every `evolution-scene/palette/*` entry.
+    pub palettes: &'static [PaletteRoot],
+    /// Every `evolution-scene/raw/*` tilemap.
+    pub tilemaps: &'static [BlobRoot],
+}
+
 /// One species' static battler art: the rows its `SPECIES_*` index selects in
 /// `gMonStillFrontPicTable`, `gMonBackPicTable`, `gMonPaletteTable`, and
 /// `gMonShinyPaletteTable`.
@@ -535,6 +551,8 @@ pub struct Roots {
     pub starter_chooser: StarterChooserRoots,
     /// Birch's speech scene and the wall clock.
     pub opening_scene: OpeningSceneRoots,
+    /// The evolution scene's background and sparkle sprite.
+    pub evolution_scene: EvolutionSceneRoots,
     /// The starters' static battler images and palettes.
     pub battlers: BattlerRoots,
 }
@@ -579,6 +597,7 @@ impl Roots {
         bag: BagRoots::NONE,
         starter_chooser: StarterChooserRoots::NONE,
         opening_scene: OpeningSceneRoots::NONE,
+        evolution_scene: EvolutionSceneRoots::NONE,
         battlers: BattlerRoots::NONE,
     };
 
@@ -600,6 +619,7 @@ impl Roots {
             .chain(self.bag.images.iter())
             .chain(self.starter_chooser.images.iter())
             .chain(self.opening_scene.images.iter())
+            .chain(self.evolution_scene.images.iter())
             .chain(
                 self.battlers
                     .species
@@ -620,6 +640,7 @@ impl Roots {
             .chain(self.bag.palettes.iter())
             .chain(self.starter_chooser.palettes.iter())
             .chain(self.opening_scene.palettes.iter())
+            .chain(self.evolution_scene.palettes.iter())
             .chain(
                 self.battlers
                     .species
@@ -668,6 +689,15 @@ impl StarterChooserRoots {
 
 impl OpeningSceneRoots {
     /// No opening-scene roots recorded: the domain writes nothing.
+    pub const NONE: Self = Self {
+        images: &[],
+        palettes: &[],
+        tilemaps: &[],
+    };
+}
+
+impl EvolutionSceneRoots {
+    /// No evolution-scene roots recorded: the domain writes nothing.
     pub const NONE: Self = Self {
         images: &[],
         palettes: &[],
