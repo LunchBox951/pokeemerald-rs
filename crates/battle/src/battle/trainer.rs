@@ -566,14 +566,6 @@ mod tests {
             (SpeciesId::RALTS, SLOT_1, assets::AbilityId::TRACE),
             (SpeciesId::KIRLIA, SLOT_1, assets::AbilityId::TRACE),
             (SpeciesId::GARDEVOIR, SLOT_1, assets::AbilityId::TRACE),
-            (SpeciesId::PARAS, SLOT_0, assets::AbilityId::EFFECT_SPORE),
-            (SpeciesId::PARASECT, SLOT_1, assets::AbilityId::EFFECT_SPORE),
-            (
-                SpeciesId::SHROOMISH,
-                SLOT_0,
-                assets::AbilityId::EFFECT_SPORE,
-            ),
-            (SpeciesId::BRELOOM, SLOT_1, assets::AbilityId::EFFECT_SPORE),
             (SpeciesId::KYOGRE, SLOT_0, assets::AbilityId::DRIZZLE),
             (SpeciesId::GROUDON, SLOT_0, assets::AbilityId::DROUGHT),
             (SpeciesId::TYRANITAR, SLOT_0, assets::AbilityId::SAND_STREAM),
@@ -618,6 +610,10 @@ mod tests {
             (SpeciesId::RALTS, SLOT_0),
             (SpeciesId::KIRLIA, SLOT_0),
             (SpeciesId::GARDEVOIR, SLOT_0),
+            (SpeciesId::PARAS, SLOT_0),
+            (SpeciesId::PARASECT, SLOT_1),
+            (SpeciesId::SHROOMISH, SLOT_0),
+            (SpeciesId::BRELOOM, SLOT_1),
         ] {
             assert!(ensure_trainer_party_startable(
                 &dex,
