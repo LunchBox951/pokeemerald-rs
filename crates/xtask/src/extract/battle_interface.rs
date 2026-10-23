@@ -19,6 +19,7 @@ use super::{read_file, read_text, ExtractError};
 use pack_format::PackWriter;
 
 pub(super) use healthbox_elements::extract_healthbox_elements;
+pub(super) use healthbox_elements::pack_ids as healthbox_element_pack_ids;
 
 const DIRECTORY: &str = "graphics/battle_interface";
 const IMAGE_PREFIX: &str = "battle-interface/image";

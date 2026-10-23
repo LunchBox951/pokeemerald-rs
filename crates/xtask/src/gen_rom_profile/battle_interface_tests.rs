@@ -8,7 +8,7 @@ use rom_import::fixture::RomFixture;
 use rom_import::Encoding;
 
 use super::locate;
-use crate::extract::scope::battle_interface_ids;
+use crate::extract::scope::{battle_interface_ids, healthbox_element_ids};
 use crate::gen_rom_profile::error::GenRomProfileError;
 use crate::gen_rom_profile::plan::{ReportLine, Resolution, SymbolExpectation};
 use crate::gen_rom_profile::tests::{distinctive_tiles, lz77_literals, with_context};
@@ -88,6 +88,29 @@ fn the_fixed_inventory_is_one_sheet_three_palettes_and_one_tilemap() {
             TILEMAP_ID
         ]
     );
+}
+
+#[test]
+fn the_health_box_records_beside_the_textbox_are_left_unclaimed() {
+    let (rom, mut entries) = fixture();
+    let health_box = healthbox_element_ids();
+    assert_eq!(health_box.len(), 14);
+    entries.extend(health_box.into_iter().map(|id| raw_entry(id, vec![0; 32])));
+    with_context("battle-interface-health-box", &rom, entries, |ctx| {
+        let mut report = Vec::new();
+        let plan = locate(ctx, &mut report).expect("located beside the health-box records");
+        let mut located: Vec<&str> = plan
+            .images
+            .iter()
+            .map(|i| i.id.as_str())
+            .chain(plan.palettes.iter().map(|p| p.id.as_str()))
+            .chain(plan.tilemaps.iter().map(|t| t.id.as_str()))
+            .collect();
+        located.sort_unstable();
+        let mut expected = battle_interface_ids();
+        expected.sort();
+        assert_eq!(located, expected);
+    });
 }
 
 #[test]

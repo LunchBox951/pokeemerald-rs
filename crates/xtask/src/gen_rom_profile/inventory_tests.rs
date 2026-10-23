@@ -11,9 +11,10 @@ use super::{
     locate_profile, opening_scene, sprites, starter_chooser, text_window, tilesets, title,
 };
 use crate::extract::scope::{
-    battle_interface_ids, layout_ids, opening_scene_ids, sprite_palette_ids, sprite_sheet_ids,
-    starter_chooser_ids, text_window_ids, tileset_animation_ids, title_ids, BATTLERS, FONTS,
-    INTERFACE_PALETTE_IDS, LAYOUTS, TEXT_WINDOW_IMAGE_STEMS, TEXT_WINDOW_PALETTE_STEMS, TILESETS,
+    battle_interface_ids, healthbox_element_ids, layout_ids, opening_scene_ids, sprite_palette_ids,
+    sprite_sheet_ids, starter_chooser_ids, text_window_ids, tileset_animation_ids, title_ids,
+    BATTLERS, FONTS, INTERFACE_PALETTE_IDS, LAYOUTS, TEXT_WINDOW_IMAGE_STEMS,
+    TEXT_WINDOW_PALETTE_STEMS, TILESETS,
 };
 
 /// One placeholder entry per fixed root and per bag id; the preflight checks presence only.
@@ -398,6 +399,21 @@ fn a_surplus_battle_interface_entry_is_refused_by_id() {
             "{err:?}"
         );
         assert!(report.is_empty(), "{report:?}");
+    });
+}
+
+#[test]
+fn the_extracted_health_box_records_pass_preflight_unclaimed() {
+    let mut entries = complete_inventory();
+    entries.extend(
+        healthbox_element_ids()
+            .into_iter()
+            .map(|id| raw_entry(id, vec![0])),
+    );
+    let rom = RomFixture::new().emerald_header().finish();
+    with_context("health-box-unclaimed", &rom, entries, |ctx| {
+        inventory::preflight(ctx.pack, &ctx.bag_ids)
+            .expect("the health-box records are extracted beside the textbox");
     });
 }
 

@@ -56,6 +56,16 @@ const BATTLE_BAR_SOURCES: [Sheet; 3] = [
     sheet("numbers2", 96, 8),
 ];
 
+/// Every pack id [`extract_healthbox_elements`] emits: the thirteen table
+/// elements in table order, then the battle bar.
+pub(in crate::extract) fn pack_ids() -> Vec<String> {
+    ELEMENT_TABLE
+        .iter()
+        .map(|element| format!("{RAW_PREFIX}/healthbox_element/{}", element.stem))
+        .chain([format!("{RAW_PREFIX}/battle_bar")])
+        .collect()
+}
+
 /// Extracts the element table and the battle bar.
 pub(in crate::extract) fn extract_healthbox_elements(
     upstream: &Path,
@@ -130,7 +140,7 @@ mod tests {
     use super::super::super::png::tests::{grayscale_png_from_raw, indexed_png_from_raw_with_plte};
     use super::super::super::{extract_to, repo_root, upstream_present};
     use super::{
-        convert_sheet, extract_healthbox_elements, tiles_4bpp, Sheet, BATTLE_BAR_SOURCES,
+        convert_sheet, extract_healthbox_elements, pack_ids, tiles_4bpp, Sheet, BATTLE_BAR_SOURCES,
         ELEMENT_TABLE, TILE_SIDE,
     };
     use super::{png, DIRECTORY};
@@ -331,9 +341,12 @@ mod tests {
             .map(|sheet| format!("battle-interface/raw/healthbox_element/{}", sheet.stem))
             .chain(["battle-interface/raw/battle_bar".to_owned()])
             .collect();
+        let mut declared = pack_ids();
         ids.sort();
         expected.sort();
+        declared.sort();
         assert_eq!(ids, expected);
+        assert_eq!(declared, expected);
         std::fs::remove_dir_all(dir).unwrap();
     }
 
