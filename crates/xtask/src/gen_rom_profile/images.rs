@@ -71,8 +71,13 @@ struct Variant {
 /// The upstream name of an image root declared `static` (so a linker map
 /// cannot list it), or `None` for a global root.
 ///
-/// `title_screen.c:63-66`, `item_menu_icons.c:37`, `item_menu.c:374`.
+/// `title_screen.c:63-66`, `item_menu_icons.c:37`, `item_menu.c:374`,
+/// `text_window.c:10-28`.
 pub(super) fn local_image_symbol(id: &str) -> Option<String> {
+    if let Some(stem) = id.strip_prefix("text-window/image/") {
+        return super::text_window::is_static_frame(stem)
+            .then(|| format!("sTextWindowFrame{stem}_Gfx"));
+    }
     if let Some(name) = id.strip_prefix("title/image/") {
         let camel = super::locate::camel_case(name);
         return matches!(camel.as_str(), "Rayquaza" | "LogoShine" | "Clouds")
