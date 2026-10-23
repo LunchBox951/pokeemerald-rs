@@ -6,6 +6,14 @@
 //! a new name when the name is taken, never `create_dir_all` over an existing
 //! path) and places everything below it. The root is removed when the thread
 //! ends, and only because this module created it.
+//!
+//! Once claimed, the root can be renamed or replaced only by its own user (or
+//! root): `/tmp` is sticky, and the macOS and Windows temporary directories
+//! are per-user. The identity check before cleanup therefore guards against
+//! accidents, not an adversary; it is not atomic with the removal, and the
+//! paths handed out are plain pathnames. A same-user process able to swap the
+//! root in those instants could already delete or write anything the swap
+//! would reach.
 
 use std::cell::RefCell;
 use std::fs::{DirBuilder, File, OpenOptions};
@@ -81,12 +89,9 @@ type Handle = ();
 /// at it and restores owner rwx through that handle, whatever the process
 /// umask stripped from `mkdir(0700)`. Linux pins it with `O_PATH`, which asks
 /// for no permission bits, so a umask that left the directory without owner
-/// read (mode 0300 under umask 0444) cannot lock the claim out; the mode is
-/// changed through the pinned descriptor's `/proc` entry, which names the
-/// inode itself and not the path.
+/// read (mode 0300 under umask 0444) cannot lock the claim out.
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn pin_directory(path: &Path) -> io::Result<Handle> {
-    use std::os::fd::AsRawFd as _;
     let pinned = File::from(rustix::fs::open(
         path,
         rustix::fs::OFlags::PATH
@@ -95,6 +100,30 @@ fn pin_directory(path: &Path) -> io::Result<Handle> {
             | rustix::fs::OFlags::CLOEXEC,
         rustix::fs::Mode::empty(),
     )?);
+    restore_owner_rwx_with(&pinned, chmod_through_proc)?;
+    Ok(pinned)
+}
+
+/// Leaves `pinned` alone when the umask kept owner rwx, the usual case, so
+/// a Linux without a mounted `/proc` can still claim directories; otherwise
+/// changes the mode through `chmod_pinned`.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn restore_owner_rwx_with(
+    pinned: &File,
+    chmod_pinned: impl FnOnce(&File) -> io::Result<()>,
+) -> io::Result<()> {
+    let owner = rustix::fs::Mode::RWXU.bits();
+    if rustix::fs::fstat(pinned)?.st_mode & owner == owner {
+        return Ok(());
+    }
+    chmod_pinned(pinned)
+}
+
+/// Sets mode 0700 through the pinned descriptor's `/proc` entry, which names
+/// the inode itself and not the path; an `O_PATH` descriptor cannot `fchmod`.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn chmod_through_proc(pinned: &File) -> io::Result<()> {
+    use std::os::fd::AsRawFd as _;
     let through_proc = format!("/proc/self/fd/{}", pinned.as_raw_fd());
     rustix::fs::chmodat(
         rustix::fs::CWD,
@@ -102,7 +131,7 @@ fn pin_directory(path: &Path) -> io::Result<Handle> {
         rustix::fs::Mode::RWXU,
         rustix::fs::AtFlags::empty(),
     )?;
-    Ok(pinned)
+    Ok(())
 }
 
 /// Opens the directory `path` without following a symlink and restores owner
@@ -316,6 +345,23 @@ mod tests {
             std::fs::read(path.join("foreign.txt")).unwrap(),
             b"not yours"
         );
+    }
+
+    /// A claim whose umask kept owner rwx never needs `/proc`: the fallback
+    /// that would change the mode through it is not called.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[test]
+    fn an_owner_accessible_directory_is_pinned_without_procfs() {
+        let dir = private_dir("no-proc");
+        let pinned = File::from(
+            rustix::fs::open(
+                &dir,
+                rustix::fs::OFlags::PATH | rustix::fs::OFlags::DIRECTORY,
+                rustix::fs::Mode::empty(),
+            )
+            .unwrap(),
+        );
+        restore_owner_rwx_with(&pinned, |_| Err(io::Error::other("no /proc here"))).unwrap();
     }
 
     /// Set in the child [`a_claim_under_an_owner_stripping_umask_stays_owner_accessible`]
