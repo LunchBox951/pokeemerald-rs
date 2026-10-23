@@ -12536,6 +12536,36 @@
     },
     "graphics/battle_interface": {
       "artifacts": {
+        "ball_display.png": {
+          "reason": "Only the embedded 16-colour palette (gBattleInterface_BallDisplayPal, graphics.c:356) is extracted, as battle-interface/palette/ball_display read by AssetPack::singles_healthbox_frames; the sheet's 4bpp tiles are not extracted here, and the other battle_interface sources remain pending.",
+          "rust_target": "crates/xtask/src/extract/battle_interface/healthbox_frames.rs",
+          "spec": "S-4",
+          "status": "stubbed"
+        },
+        "ball_status_bar.png": {
+          "reason": "Only the embedded 16-colour palette (gBattleInterface_BallStatusBarPal, graphics.c:354) is extracted, read by AssetPack::singles_healthbox_frames; the status-bar image (gBattleInterface_BallStatusBarGfx) is not extracted, and the other battle_interface sources remain pending.",
+          "rust_target": "crates/xtask/src/extract/battle_interface/healthbox_frames.rs",
+          "spec": "S-4",
+          "status": "stubbed"
+        },
+        "enemy_mon_shadow.png": {
+          "reason": "Kept as a validated 4-bit 32x8 raster image (gEnemyMonShadow_Gfx, graphics.c:1037) and read by AssetPack::enemy_mon_shadow; the other battle_interface sources remain pending.",
+          "rust_target": "crates/xtask/src/extract/battle_interface/healthbox_frames.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "healthbox_singles_opponent.png": {
+          "reason": "Kept as a validated 4-bit 128x32 raster image (two 8x4-tile metatiles, graphics.c:629) and read as the opponent singles frame by AssetPack::singles_healthbox_frames; the other battle_interface sources remain pending.",
+          "rust_target": "crates/xtask/src/extract/battle_interface/healthbox_frames.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "healthbox_singles_player.png": {
+          "reason": "Kept as a validated 4-bit 128x64 raster image (two 8x8-tile metatiles, graphics.c:628) and read as the player singles frame by AssetPack::singles_healthbox_frames; the other battle_interface sources remain pending.",
+          "rust_target": "crates/xtask/src/extract/battle_interface/healthbox_frames.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
         "text.pal": {
           "reason": "Battle textbox and menu text source transcoded to a validated typed pack entry read by AssetPack::battle_interface; the other battle_interface sources remain pending.",
           "rust_target": "crates/xtask/src/extract/battle_interface.rs",

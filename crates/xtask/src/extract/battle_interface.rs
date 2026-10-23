@@ -148,6 +148,10 @@ fn mismatch(path: &Path, detail: String) -> ExtractError {
     }
 }
 
+mod healthbox_frames;
+
+pub(super) use healthbox_frames::extract_healthbox_frames;
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;

@@ -526,5 +526,9 @@ fn wrong_kind(id: &str, expected: &'static str, actual: EntryKind) -> PackError 
     }
 }
 
+pub use battle_interface::{
+    SinglesHealthboxFrameHandle, SinglesHealthboxFramesHandle, SinglesHealthboxSide,
+};
+
 #[cfg(test)]
 mod tests;

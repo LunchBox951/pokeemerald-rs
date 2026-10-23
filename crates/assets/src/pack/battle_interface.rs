@@ -136,3 +136,176 @@ impl AssetPack {
         Ok(bytes)
     }
 }
+
+/// Pixels along one side of an 8x8 tile.
+const FRAME_TILE_PIXELS: u32 = 8;
+/// Both singles sheets hold two metatiles side by side.
+const FRAME_METATILES_ACROSS: u32 = 2;
+const ENEMY_SHADOW_WIDTH: u32 = 32;
+const ENEMY_SHADOW_HEIGHT: u32 = 8;
+
+/// Which side's singles health-box frame, whose sheet `gbagfx` groups into
+/// different metatiles (`graphics.c:628-629`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SinglesHealthboxSide {
+    /// `gHealthboxSinglesPlayerGfx`.
+    Player,
+    /// `gHealthboxSinglesOpponentGfx`.
+    Opponent,
+}
+
+impl SinglesHealthboxSide {
+    /// Metatile width and height in 8x8 tiles: 8x8 for the player, 8x4 for the
+    /// opponent.
+    #[must_use]
+    pub const fn metatile_tiles(self) -> (u32, u32) {
+        match self {
+            Self::Player => (8, 8),
+            Self::Opponent => (8, 4),
+        }
+    }
+
+    /// Width and height in pixels of the source sheet: two metatiles across,
+    /// one down.
+    #[must_use]
+    pub const fn image_size(self) -> (u32, u32) {
+        let (width, height) = self.metatile_tiles();
+        (
+            FRAME_METATILES_ACROSS * width * FRAME_TILE_PIXELS,
+            height * FRAME_TILE_PIXELS,
+        )
+    }
+
+    const fn pack_name(self) -> &'static str {
+        match self {
+            Self::Player => "healthbox_singles_player",
+            Self::Opponent => "healthbox_singles_opponent",
+        }
+    }
+}
+
+/// One side's singles health-box frame, borrowing the pack for `'a`.
+#[derive(Debug, Clone, Copy)]
+pub struct SinglesHealthboxFrameHandle<'a> {
+    image: ImageRef<'a>,
+    side: SinglesHealthboxSide,
+}
+
+impl<'a> SinglesHealthboxFrameHandle<'a> {
+    /// The source sheet in PNG raster order, one palette index per pixel.
+    #[must_use]
+    pub fn image(&self) -> ImageRef<'a> {
+        self.image
+    }
+
+    /// The side whose geometry the sheet was validated against.
+    #[must_use]
+    pub fn side(&self) -> SinglesHealthboxSide {
+        self.side
+    }
+
+    /// Metatile width and height in 8x8 tiles, as for [`SinglesHealthboxSide`].
+    #[must_use]
+    pub fn metatile_tiles(&self) -> (u32, u32) {
+        self.side.metatile_tiles()
+    }
+}
+
+/// The singles health-box frames and the two palettes beside them, borrowing
+/// the pack for `'a`.
+#[derive(Debug, Clone, Copy)]
+pub struct SinglesHealthboxFramesHandle<'a> {
+    /// `gHealthboxSinglesPlayerGfx`.
+    pub player: SinglesHealthboxFrameHandle<'a>,
+    /// `gHealthboxSinglesOpponentGfx`.
+    pub opponent: SinglesHealthboxFrameHandle<'a>,
+    /// `gBattleInterface_BallStatusBarPal`, 16 colours.
+    pub ball_status_bar_palette: PaletteRef<'a>,
+    /// `gBattleInterface_BallDisplayPal`, 16 colours.
+    pub ball_display_palette: PaletteRef<'a>,
+}
+
+impl AssetPack {
+    /// Bundle the singles health-box frames and their two palettes.
+    ///
+    /// # Errors
+    ///
+    /// [`PackError::UnknownAsset`] or [`PackError::WrongKind`] for a missing or
+    /// wrong-kind entry; [`PackError::MalformedBattleInterfaceAsset`] when a
+    /// frame's dimensions, depth, or pixel indices, or a palette's size, differ
+    /// from upstream.
+    pub fn singles_healthbox_frames(&self) -> Result<SinglesHealthboxFramesHandle<'_>, PackError> {
+        let frame = |side: SinglesHealthboxSide| -> Result<_, PackError> {
+            let (width, height) = side.image_size();
+            Ok(SinglesHealthboxFrameHandle {
+                image: self.battle_interface_bank_image(side.pack_name(), width, height)?,
+                side,
+            })
+        };
+        Ok(SinglesHealthboxFramesHandle {
+            player: frame(SinglesHealthboxSide::Player)?,
+            opponent: frame(SinglesHealthboxSide::Opponent)?,
+            ball_status_bar_palette: self
+                .battle_interface_palette("ball_status_bar", BANK_COLORS)?,
+            ball_display_palette: self.battle_interface_palette("ball_display", BANK_COLORS)?,
+        })
+    }
+
+    /// The enemy shadow sheet `LoadAndCreateEnemyShadowSprites` loads.
+    ///
+    /// # Errors
+    ///
+    /// [`PackError::UnknownAsset`] or [`PackError::WrongKind`] for a missing or
+    /// wrong-kind entry; [`PackError::MalformedBattleInterfaceAsset`] when its
+    /// dimensions, depth, or pixel indices differ from upstream.
+    pub fn enemy_mon_shadow(&self) -> Result<ImageRef<'_>, PackError> {
+        self.battle_interface_bank_image(
+            "enemy_mon_shadow",
+            ENEMY_SHADOW_WIDTH,
+            ENEMY_SHADOW_HEIGHT,
+        )
+    }
+
+    /// A 4bpp image of `width` x `height` whose indices stay within one bank.
+    fn battle_interface_bank_image(
+        &self,
+        name: &str,
+        width: u32,
+        height: u32,
+    ) -> Result<ImageRef<'_>, PackError> {
+        let id = format!("{IMAGE_PREFIX}/{name}");
+        let image = self.image(&id)?;
+        let fault = |detail: String| PackError::MalformedBattleInterfaceAsset {
+            id: id.clone(),
+            detail,
+        };
+        if image.bit_depth != TEXTBOX_BIT_DEPTH {
+            return Err(fault(format!(
+                "is {}-bit: expected {TEXTBOX_BIT_DEPTH}-bit",
+                image.bit_depth
+            )));
+        }
+        if (image.width, image.height) != (width, height) {
+            return Err(fault(format!(
+                "is {}x{}: expected {width}x{height}",
+                image.width, image.height
+            )));
+        }
+        if image.pixels.len() != (width * height) as usize {
+            return Err(fault(format!(
+                "carries {} payload bytes: expected one per pixel",
+                image.pixels.len()
+            )));
+        }
+        if let Some(&pixel) = image
+            .pixels
+            .iter()
+            .find(|&&pixel| u16::from(pixel) >= BANK_COLORS)
+        {
+            return Err(fault(format!(
+                "has pixel index {pixel}: a 4bpp tile selects within one {BANK_COLORS}-colour bank"
+            )));
+        }
+        Ok(image)
+    }
+}
