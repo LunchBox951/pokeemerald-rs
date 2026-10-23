@@ -29797,7 +29797,7 @@
           "status": "rewritten"
         },
         "GetInFrontOfPlayerPosition": {
-          "reason": "The facing-tile position (GetXYCoordsOneStepInFrontOfPlayer, player position + facing delta) plus the elevation rule rewritten as engine::overworld::facing_object_event's query-elevation derivation: the player's own grid cell only selects the wildcard (ELEVATION_TRANSITION cell or off-grid), otherwise the query is the retained previousElevation that PlayerGetElevation returns, not the collision elevation.",
+          "reason": "The facing-tile position (GetXYCoordsOneStepInFrontOfPlayer, player position + facing delta) plus the elevation rule rewritten as the engine-internal front_tile, shared by facing_object_event and select_interaction_target: the player's own grid cell only selects the wildcard (ELEVATION_TRANSITION cell or off-grid), otherwise the query is the retained previousElevation that PlayerGetElevation returns, not the collision elevation.",
           "rust_target": "crates/engine/src/overworld/object_event.rs",
           "spec": "I-3",
           "status": "rewritten"
@@ -29813,6 +29813,18 @@
           "rust_target": "crates/engine/src/overworld/metatile_interaction.rs",
           "spec": "S-5",
           "status": "rewritten"
+        },
+        "GetInteractedObjectEventScript": {
+          "reason": "Selects the visible live object at the front tile, else, only when the front tile is a counter, the one on its far side at the same query elevation (field_control_avatar.c:287-313); an object whose script is null selects nothing and falls through without the counter retry. The result carries the object's local id (gSpecialVar_LastTalked) and the player's facing (gSpecialVar_Facing). Not modelled: writing gSelectedObjectEvent and the special variables, the Trainer Hill script override, and the saved RAM-script override GetRamScript applies.",
+          "rust_target": "crates/engine/src/overworld/interaction.rs",
+          "spec": "S-5",
+          "status": "stubbed"
+        },
+        "GetInteractionScript": {
+          "reason": "engine::overworld::select_interaction_target selects the first target of GetInteractedObjectEventScript, GetInteractedBackgroundEventScript, then GetInteractedMetatileScript (script-returning branches only) as a typed InteractionTarget, querying the tile in front of the player at the elevation GetInFrontOfPlayerPosition derives and reading that front tile's metatile behavior (field_control_avatar.c:170-172,240-258). A secret-base entrance already among the caller's saved secret bases selects no background event, so the metatile stage runs next (TrySetCurSecretBase failing, field_control_avatar.c:354-361). Not selected: GetInteractedWaterScript (Surf and Waterfall), because water eligibility depends on party and badge state; launching the selected script, which stays with the caller.",
+          "rust_target": "crates/engine/src/overworld/interaction.rs",
+          "spec": "S-5",
+          "status": "stubbed"
         },
         "IsArrowWarpMetatileBehavior": {
           "reason": "engine::overworld::warp::is_arrow_warp_trigger: dispatches by direction to metatile_behavior::is_{north,south,west,east}_arrow_warp exactly as upstream's sArrowWarpMetatileBehaviorChecks table does (field_player_avatar.c:226-232). Issue #174.",
@@ -29839,7 +29851,7 @@
           "status": "folded"
         },
         "TryStartInteractionScript": {
-          "reason": "OverworldPhase::step's A-press handling covers only the object-event branch of GetInteractionScript (GetInteractedObjectEventScript, via engine::overworld::facing_object_event), routed to a NpcDialog through crate::overworld::npc_scripts::script_text's own small, hardcoded msgbox-style script-text table (issue's own DoD: 'a direct msgbox-style script subset is enough'). Not modelled: GetInteractedBackgroundEventScript/GetInteractedMetatileScript/GetInteractedWaterScript's fallback chain (sign posts, counters, water-adjacent interactions), GetInteractedLinkPlayerScript, RamScript, and the interaction sound effect (PlaySE(SE_SELECT)). Issue #435: the lookup runs from the frame-start (pre-movement) player position and facing, before PlayerStep could turn or step the player, matching ProcessPlayerFieldInput reading playerDirection/position before ever calling PlayerStep (field_control_avatar.c:143-145, overworld.c:1444-1455). A successful interaction, or a found object event whose script is real but unrecognized by this table, consumes the frame and preempts movement outright (InteractionOutcome::Unmodelled), matching TryStartInteractionScript returning TRUE for any non-NULL script (:172). Only the literal '0x0' NULL-script sentinel, or no object event found at all, lets the frame's direction input reach PlayerState unconsumed. Issue #1039 placed it below the completed step's own events, as upstream does: a landing whose walk animation drained is now processed at the start of the *next* step call (upstream's T_TILE_CENTER CB1, field_player_avatar.c:901-915 over main.c:188-195 / overworld.c:1438-1469), and a coord event, a door-shaped warp or a wild encounter claiming that landing (TryStartStepBasedScript :155-161, CheckStandardWildEncounter :162) returns from ProcessPlayerFieldInput before this check at :172 is ever reached, so the A press is not consumed on that frame.",
+          "reason": "OverworldPhase::step's A-press handling routes the target engine::overworld::select_interaction_target selects (object, then background event, then script-backed metatile; GetInteractionScript's order). An object script crate::overworld::npc_scripts::script_text recognizes opens a NpcDialog from that module's own small hardcoded msgbox-style table, and the Route 103 rival object starts its battle. Every other selected target (an unrecognized object script, a sign, hidden item or secret-base entrance, a script-backed metatile) consumes the frame as InteractionOutcome::Unmodelled, matching TryStartInteractionScript returning TRUE for any non-NULL script (field_control_avatar.c:172), but starts no script. A secret-base entrance is selected only when the list of saved secret bases passed to the selector lacks its base, as TrySetCurSecretBase requires (field_control_avatar.c:354-361); the save block holds no secret bases, so this application passes an empty list and every north-facing entrance is selected. Reading the saved bases from the save is not modelled. Only a press that selects nothing lets the frame's direction input reach PlayerState unconsumed. Not modelled: GetInteractedWaterScript, GetInteractedLinkPlayerScript, RamScript, and the interaction sound effect (PlaySE(SE_SELECT)). The lookup runs from the frame-start (pre-movement) player position and facing, before PlayerStep could turn or step the player, matching ProcessPlayerFieldInput reading playerDirection/position before ever calling PlayerStep (field_control_avatar.c:143-145, overworld.c:1444-1455). It sits below the completed step's own events, as upstream does: a landing whose walk animation drained is processed at the start of the next step call (upstream's T_TILE_CENTER CB1, field_player_avatar.c:901-915 over main.c:188-195 / overworld.c:1438-1469), and a coord event, a door-shaped warp or a wild encounter claiming that landing (TryStartStepBasedScript :155-161, CheckStandardWildEncounter :162) returns from ProcessPlayerFieldInput before this check at :172 is ever reached, so the A press is not consumed on that frame.",
           "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/interaction.rs",
           "spec": "I-3",
           "status": "stubbed"
@@ -30925,6 +30937,12 @@
         },
         "MetatileBehavior_IsClosedSootopolisDoor": {
           "reason": "Script-target behavior identity and applicable north-facing gate reimplemented as a pure predicate with exhaustive byte-domain tests.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsCounter": {
+          "reason": "is_counter is an exact-equality predicate on MB_COUNTER (0x80), the value following MB_BIKE_BRIDGE_OVER_BARRIER in the upstream behavior enumeration, verified over all 256 behavior bytes (metatile_behavior.c:473-479).",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
           "status": "rewritten"

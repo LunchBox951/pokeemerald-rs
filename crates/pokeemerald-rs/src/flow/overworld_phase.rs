@@ -985,6 +985,8 @@ mod frame_tests;
 #[cfg(test)]
 mod input_tests;
 #[cfg(test)]
+mod interaction_tests;
+#[cfg(test)]
 mod landing_call_arrow_elevation_tests;
 /// `crate::overworld::oldale_town_npc_reposition` collision tests reachable
 /// from this module; its own unit tests live with that module instead.

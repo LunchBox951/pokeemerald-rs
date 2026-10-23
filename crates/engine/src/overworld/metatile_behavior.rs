@@ -317,6 +317,9 @@ pub const fn is_south_arrow_warp(behavior: u8) -> bool {
 /// Behavior identity of a television screen.
 pub const MB_TELEVISION: u8 = 0x86;
 
+/// Behavior identity of a counter, across which an object is interactable.
+pub const MB_COUNTER: u8 = 0x80;
+
 /// Behavior identity of a PC.
 pub const MB_PC: u8 = 0x83;
 
@@ -390,6 +393,13 @@ pub const MB_SECRET_BASE_TV_SHIELD: u8 = 0xC4;
 #[must_use]
 pub const fn is_player_facing_tv_screen(behavior: u8, direction: Direction) -> bool {
     behavior == MB_TELEVISION && matches!(direction, Direction::North)
+}
+
+/// Returns whether a behavior is a counter (`MetatileBehavior_IsCounter`,
+/// `metatile_behavior.c:473-479`).
+#[must_use]
+pub const fn is_counter(behavior: u8) -> bool {
+    behavior == MB_COUNTER
 }
 
 /// Returns whether a behavior is a PC.
@@ -888,7 +898,8 @@ mod tests {
 
     #[test]
     fn unary_interaction_predicates_accept_exactly_their_behavior() {
-        let table: [(UnaryPredicate, u8); 21] = [
+        let table: [(UnaryPredicate, u8); 22] = [
+            (is_counter, MB_COUNTER),
             (is_pc, MB_PC),
             (is_closed_sootopolis_door, MB_CLOSED_SOOTOPOLIS_DOOR),
             (is_sky_pillar_closed_door, MB_SKY_PILLAR_CLOSED_DOOR),
