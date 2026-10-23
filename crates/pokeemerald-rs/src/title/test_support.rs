@@ -19,35 +19,32 @@ pub(super) fn tiled_image(
     pixels
 }
 
-/// A fixture file's identity, recorded when it is claimed so [`Drop`] removes
-/// only the entry this guard created. On Unix that is device and inode. Other
-/// platforms use length and creation time (a modification time can still change
-/// when the writing handle closes); a file whose creation time the platform
-/// cannot report has no identity, and [`Drop`] then leaves it in place rather
-/// than risk unlinking an entry it cannot prove it owns.
+/// A fixture file's identity, read from the handle the guard keeps open so
+/// [`Drop`] can tell the file it created from anything later placed at the
+/// same path. Holding that handle also pins the inode, so deleting the file
+/// and creating another cannot hand the replacement the same identity.
+#[cfg(unix)]
 #[derive(PartialEq, Eq)]
 struct FileIdentity(u64, u64);
 
+#[cfg(unix)]
 impl FileIdentity {
-    // Unix always has an identity; other platforms may not.
-    #[cfg_attr(unix, allow(clippy::unnecessary_wraps))]
-    fn of(meta: &std::fs::Metadata) -> Option<Self> {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::MetadataExt as _;
-            Some(Self(meta.dev(), meta.ino()))
-        }
-        #[cfg(not(unix))]
-        {
-            let created = meta
-                .created()
-                .ok()?
-                .duration_since(std::time::UNIX_EPOCH)
-                .ok()?;
-            Some(Self(meta.len(), u64::try_from(created.as_nanos()).ok()?))
-        }
+    fn of(meta: &std::fs::Metadata) -> Self {
+        use std::os::unix::fs::MetadataExt as _;
+        Self(meta.dev(), meta.ino())
     }
 }
+
+/// Windows reads the volume serial number and file ID off the open handle
+/// (`win-fs` owns that query), so a same-length file recreated under the
+/// same name is a different identity.
+#[cfg(windows)]
+type FileIdentity = win_fs::WindowsFileIdentity;
+
+/// No supported identity: [`Drop`] leaves the file in place rather than risk
+/// unlinking an entry it cannot prove it owns.
+#[cfg(not(any(unix, windows)))]
+struct FileIdentity;
 
 /// How many candidate names a claim tries before giving up.
 const MAX_CLAIM_ATTEMPTS: u32 = 1024;
@@ -94,7 +91,9 @@ fn claim_exclusive(path: &std::path::Path) -> (std::path::PathBuf, std::fs::File
 /// file on drop, so a failed assertion or panic still cleans up.
 pub(super) struct TempPackFile {
     pub(super) path: std::path::PathBuf,
-    identity: Option<FileIdentity>,
+    identity: FileIdentity,
+    /// Kept open through `Drop`: it pins the inode the identity names.
+    _claim: std::fs::File,
 }
 
 impl TempPackFile {
@@ -104,24 +103,42 @@ impl TempPackFile {
         use std::io::Write as _;
         let (path, mut file) = claim_exclusive(path);
         file.write_all(bytes).expect("the scratch pack is writable");
+        #[cfg(unix)]
         let identity = FileIdentity::of(&file.metadata().expect("the scratch pack has metadata"));
-        Self { path, identity }
+        #[cfg(windows)]
+        let identity = FileIdentity::of(&file).expect("the scratch pack has a file identity");
+        #[cfg(not(any(unix, windows)))]
+        let identity = FileIdentity;
+        Self {
+            path,
+            identity,
+            _claim: file,
+        }
     }
 }
 
 impl Drop for TempPackFile {
+    /// Removes the file this guard created, and nothing else.
+    ///
+    /// On Windows the identity check and the delete go through one open
+    /// handle (`win-fs`), so no second lookup of the path can be redirected.
+    /// On Unix `std` has no delete bound to a verified object: the path is
+    /// checked (`lstat`: still a regular file with the recorded device and
+    /// inode) and then unlinked as two separate lookups, so another process
+    /// that renames a different file over the path inside that window has
+    /// its file removed. The path is a private candidate name this guard
+    /// created exclusively moments earlier, which makes the window a
+    /// current limitation rather than something a test run reaches.
     fn drop(&mut self) {
-        // Remove the entry only while it is still the regular file this guard
-        // created; anything else now at the path belongs to someone else. The
-        // identity check and the unlink are separate path lookups, a window
-        // std cannot close (handle-bound delete is `win-fs`'s, off this
-        // crate's dependency set); the path is a private candidate name this
-        // guard created exclusively moments ago.
+        #[cfg(unix)]
         if let Ok(meta) = std::fs::symlink_metadata(&self.path) {
-            let owned = self.identity.is_some() && FileIdentity::of(&meta) == self.identity;
-            if meta.is_file() && owned {
+            if meta.is_file() && FileIdentity::of(&meta) == self.identity {
                 let _ = std::fs::remove_file(&self.path);
             }
+        }
+        #[cfg(windows)]
+        if let Ok(handle) = win_fs::open_for_verified_delete(&self.path) {
+            let _ = win_fs::remove_through_open_handle(&handle, self.identity, |_| {});
         }
     }
 }
@@ -239,16 +256,15 @@ fn scratch_pack_writer_skips_every_occupied_candidate_name() {
     assert_eq!(kept, (b"zero".to_vec(), b"one".to_vec()));
 }
 
+#[cfg(unix)]
 #[test]
 fn scratch_pack_guard_removes_only_the_file_it_created() {
     let dir = claim_private_dir("title-identity");
     let path = dir.join("scratch.pack");
     let fixture = TempPackFile::write(&path, &[1, 2, 3]);
     let claimed = fixture.path.clone();
-    // Keep the guard's file alive under another name so the replacement
-    // below cannot be handed the same inode number.
-    let kept = dir.join("kept");
-    std::fs::hard_link(&claimed, &kept).unwrap();
+    // The guard still holds its file open, so the freed name cannot hand the
+    // replacement the guard's inode number.
     std::fs::remove_file(&claimed).unwrap();
     std::fs::write(&claimed, b"someone else's").unwrap();
     drop(fixture);
