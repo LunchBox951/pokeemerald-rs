@@ -29,6 +29,10 @@
 
 use crate::reader::GbaPtr;
 
+mod poke_ball;
+
+pub use poke_ball::{PokeBallRoot, PokeBallRoots};
+
 /// How a root's bytes sit in the ROM.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Encoding {
@@ -537,6 +541,8 @@ pub struct Roots {
     pub opening_scene: OpeningSceneRoots,
     /// The starters' static battler images and palettes.
     pub battlers: BattlerRoots,
+    /// The Poké Ball's sheet, palette, and opened-ball sheet.
+    pub poke_ball: PokeBallRoots,
 }
 
 impl Roots {
@@ -580,6 +586,7 @@ impl Roots {
         starter_chooser: StarterChooserRoots::NONE,
         opening_scene: OpeningSceneRoots::NONE,
         battlers: BattlerRoots::NONE,
+        poke_ball: PokeBallRoots::NONE,
     };
 
     /// Every image root in the table, across every domain.
@@ -606,6 +613,12 @@ impl Roots {
                     .iter()
                     .flat_map(|battler| [&battler.front, &battler.back]),
             )
+            .chain(
+                self.poke_ball
+                    .poke_ball
+                    .iter()
+                    .flat_map(|ball| [&ball.sheet, &ball.open_sheet]),
+            )
     }
 
     /// Every palette root in the table, across every domain.
@@ -626,6 +639,7 @@ impl Roots {
                     .iter()
                     .flat_map(|battler| [&battler.normal, &battler.shiny]),
             )
+            .chain(self.poke_ball.poke_ball.iter().map(|ball| &ball.palette))
     }
 }
 

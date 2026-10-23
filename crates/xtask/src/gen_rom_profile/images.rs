@@ -118,7 +118,11 @@ fn symbol_fragments(id: &str) -> Vec<String> {
         }
         return vec![format!("TextWindowFrame{stem}_Gfx")];
     }
-    Vec::new()
+    match id {
+        "poke-ball/image/poke" => vec!["gBallGfx_Poke".to_owned()],
+        "poke-ball/image/open" => vec!["gOpenPokeballGfx".to_owned()],
+        _ => Vec::new(),
+    }
 }
 
 /// The ROM bit depths a pack entry of `pack_bit_depth` may be stored at,

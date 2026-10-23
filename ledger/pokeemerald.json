@@ -12511,6 +12511,20 @@
       "status": "pending"
     },
     "graphics/balls": {
+      "artifacts": {
+        "open.png": {
+          "reason": "open.png: the 16x16 4bpp opened-ball sheet (poke-ball/image/open) reaches the pack from both builders: cargo xtask extract from the checkout (crates/xtask/src/extract/poke_ball.rs) and the ROM importer reading the LZ77 stream a profile root records (crates/rom-import/src/domains/poke_ball.rs). tests/equivalence.rs requires identical entries, and AssetPack::poke_ball resolves equal handles from both packs. Upstream links no palette for it; typed access draws it with the Poke Ball palette. The other ball PNGs, the throw, shake and capture animations and every effect sheet stay pending, so the directory stays pending.",
+          "rust_target": "crates/xtask/src/extract/poke_ball.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "poke.png": {
+          "reason": "poke.png: the 16x48 4bpp Poke Ball sheet (poke-ball/image/poke) and its 16-colour embedded palette (poke-ball/palette/poke) reaches the pack from both builders: cargo xtask extract from the checkout (crates/xtask/src/extract/poke_ball.rs) and the ROM importer reading the LZ77 stream a profile root records (crates/rom-import/src/domains/poke_ball.rs). tests/equivalence.rs requires identical entries, and AssetPack::poke_ball resolves equal handles from both packs. Typed access requires both. The other eleven ball PNGs, throw, shake and capture state, sound and every effect sheet stay pending, so the directory stays pending.",
+          "rust_target": "crates/xtask/src/extract/poke_ball.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.ui",
       "kind": "dir",
       "spec_owner": "S-4",
@@ -28746,6 +28760,26 @@
       "status": "pending"
     },
     "src/data/graphics/pokeballs.h": {
+      "artifacts": {
+        "gBallGfx_Poke": {
+          "reason": "gBallGfx_Poke: the Poke Ball sheet's LZ77 4bpp graphic, reaching poke-ball/image/poke reaches the pack from both builders: cargo xtask extract from the checkout (crates/xtask/src/extract/poke_ball.rs) and the ROM importer reading the LZ77 stream a profile root records (crates/rom-import/src/domains/poke_ball.rs). tests/equivalence.rs requires identical entries, and AssetPack::poke_ball resolves equal handles from both packs. The other eleven ball graphics stay pending, so the header stays pending.",
+          "rust_target": "crates/xtask/src/extract/poke_ball.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "gBallPal_Poke": {
+          "reason": "gBallPal_Poke: the Poke Ball's LZ77 16-colour palette, reaching poke-ball/palette/poke reaches the pack from both builders: cargo xtask extract from the checkout (crates/xtask/src/extract/poke_ball.rs) and the ROM importer reading the LZ77 stream a profile root records (crates/rom-import/src/domains/poke_ball.rs). tests/equivalence.rs requires identical entries, and AssetPack::poke_ball resolves equal handles from both packs. The other eleven ball palettes stay pending, so the header stays pending.",
+          "rust_target": "crates/xtask/src/extract/poke_ball.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "gOpenPokeballGfx": {
+          "reason": "gOpenPokeballGfx: the opened-ball LZ77 4bpp graphic, reaching poke-ball/image/open reaches the pack from both builders: cargo xtask extract from the checkout (crates/xtask/src/extract/poke_ball.rs) and the ROM importer reading the LZ77 stream a profile root records (crates/rom-import/src/domains/poke_ball.rs). tests/equivalence.rs requires identical entries, and AssetPack::poke_ball resolves equal handles from both packs. Loading it over the thrown ball's tiles stays pending, so the header stays pending.",
+          "rust_target": "crates/xtask/src/extract/poke_ball.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
@@ -31527,6 +31561,20 @@
       "status": "pending"
     },
     "src/pokeball.c": {
+      "artifacts": {
+        "gBallSpritePalettes[BALL_POKE]": {
+          "reason": "gBallSpritePalettes[BALL_POKE]: the first row of the compressed sprite-palette table. The ROM importer requires it to hold the recorded poke-ball/palette/poke address and tag GFX_TAG_POKE_BALL before reading the palette (crates/rom-import/src/domains/poke_ball.rs); cargo xtask extract supplies the same palette from graphics/balls/poke.png. The other eleven rows, palette loading and launching stay pending, so the file stays pending.",
+          "rust_target": "crates/rom-import/src/domains/poke_ball.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "gBallSpriteSheets[BALL_POKE]": {
+          "reason": "gBallSpriteSheets[BALL_POKE]: the first row of the compressed sprite-sheet table. The ROM importer requires it to hold the recorded poke-ball/image/poke address, size 384 and tag GFX_TAG_POKE_BALL before reading the sheet (crates/rom-import/src/domains/poke_ball.rs); cargo xtask extract supplies the same sheet from graphics/balls/poke.png. The other eleven rows, sheet loading and launching stay pending, so the file stays pending.",
+          "rust_target": "crates/rom-import/src/domains/poke_ball.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"

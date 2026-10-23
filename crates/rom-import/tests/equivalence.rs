@@ -66,6 +66,7 @@ const COMPLETE_PREFIXES: &[&str] = &[
     "bag/",
     "starter-chooser/",
     "opening-scene/",
+    "poke-ball/",
 ];
 
 /// The starters' static battler entries: 12 ids the ROM backend must write
@@ -244,6 +245,59 @@ fn the_rom_backend_matches_the_checkout_pack() {
         "{} entry difference(s) between the ROM backend and the checkout pack",
         differences.len()
     );
+}
+
+/// The Poké Ball resolves through the typed handle from both packs, and the two
+/// handles are equal. The handle requires each of its three constituents, so
+/// a constituent both backends drop together still fails here.
+#[test]
+#[ignore = "needs $POKEEMERALD_ROM and a `cargo xtask extract` pack"]
+fn the_poke_ball_handle_is_equal_from_the_rom_and_the_checkout() {
+    let Some(rom_path) = rom_path() else {
+        eprintln!("skipped: set {ROM_ENV} to a Pokemon Emerald (US) rev 0 ROM to run this");
+        return;
+    };
+    let checkout_path = checkout_pack_path();
+    if !checkout_path.is_file() {
+        eprintln!(
+            "skipped: no pack at {}; run `cargo xtask extract` first",
+            checkout_path.display()
+        );
+        return;
+    }
+    let rom_bytes = rom_import::import_to_bytes(&rom_path)
+        .unwrap_or_else(|err| panic!("importing the ROM failed: {err}"));
+    let imported_path = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-equivalence-poke-ball-{}.pack",
+        std::process::id()
+    ));
+    std::fs::write(&imported_path, rom_bytes).expect("write the imported pack");
+
+    let imported = assets::AssetPack::load(&imported_path).expect("the imported pack loads");
+    let checkout = assets::AssetPack::load(&checkout_path).expect("the checkout pack loads");
+    let from_rom = imported.poke_ball().expect("the imported pack's Poké Ball");
+    let from_checkout = checkout.poke_ball().expect("the checkout pack's Poké Ball");
+    let _ = std::fs::remove_file(imported_path);
+
+    assert_eq!(
+        (from_rom.sheet.image.width, from_rom.sheet.image.height),
+        (16, 48)
+    );
+    assert_eq!(from_rom.sheet.palette.color_count, 16);
+    assert_eq!(
+        (from_rom.open_sheet.width, from_rom.open_sheet.height),
+        (16, 16)
+    );
+    assert_eq!(
+        from_rom.sheet.image.pixels,
+        from_checkout.sheet.image.pixels
+    );
+    assert!(from_rom
+        .sheet
+        .palette
+        .colors()
+        .eq(from_checkout.sheet.palette.colors()));
+    assert_eq!(from_rom.open_sheet.pixels, from_checkout.open_sheet.pixels);
 }
 
 /// `mus_title.mid` plays key 33 on program 48 (channel 2, tick 2160). That is

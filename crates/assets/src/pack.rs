@@ -13,6 +13,7 @@ mod error;
 mod format;
 mod handles;
 mod opening_scene;
+mod poke_ball;
 mod pokedex_graphics;
 mod starter_chooser;
 mod trainer_pic;
@@ -38,6 +39,7 @@ pub use error::PackError;
 pub use format::{DirectoryEntry, EntryKind, FORMAT_VERSION, MAGIC};
 pub use handles::{ImageRef, PaletteRef, TilesetHandle, WindowFrameHandle};
 pub use opening_scene::{BirchSpeechHandle, WallClockHandle};
+pub use poke_ball::PokeBallHandle;
 pub use pokedex_graphics::PokedexGraphicsHandle;
 pub use starter_chooser::{
     PalettedImage, StarterChooserHandle, StarterPreviewHandle, StarterSpecies,
