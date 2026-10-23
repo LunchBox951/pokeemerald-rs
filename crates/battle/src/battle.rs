@@ -395,6 +395,7 @@ impl Battle {
         }
         let data = trainer::trainer_data(trainer)?;
         trainer_ai::ensure_supported_flags(data.ai_flags)?;
+        held_item::ensure_trainer_bag_unused(&data.items)?;
         if player.is_fainted() {
             return Err(BattleError::FaintedBattler(true));
         }

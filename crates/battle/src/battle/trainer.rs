@@ -338,8 +338,9 @@ pub struct TrainerPartyMon<'a> {
 /// always-refused ability or a member's PP-positive move would be refused by
 /// [`secondary::ensure_admissible`](crate::secondary::ensure_admissible)
 /// against `player_lead` (for example Serene Grace with a Confuse Hit move).
-/// or [`BattleError::UnsupportedHeldItem`] when a member's held item has an
-/// effect no pipeline models.
+/// [`BattleError::UnsupportedHeldItem`] when a member's held item has an
+/// effect no pipeline models, or [`BattleError::UnsupportedTrainerBagItem`]
+/// when the trainer's bag holds any item.
 /// Only the lead is screened; reserves are screened by `Battle::new_trainer`.
 pub fn ensure_trainer_party_startable(
     dex: &Dex,
@@ -351,6 +352,7 @@ pub fn ensure_trainer_party_startable(
         return Err(BattleError::EmptyTrainerParty(trainer));
     }
     let data = trainer_data(trainer)?;
+    super::held_item::ensure_trainer_bag_unused(&data.items)?;
     for mon in party {
         BattlePokemon::validate(dex, mon.species, mon.level, mon.moves)?;
         super::admission::ensure_selected_ability_admissible(dex, mon.species, mon.personality)?;

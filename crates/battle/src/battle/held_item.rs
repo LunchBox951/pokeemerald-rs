@@ -11,6 +11,8 @@
 //! berries, the herbs and the type-boosting items trainers hold, and also the
 //! few effects that happen never to reach a battle: a refusal of those costs a
 //! trainer fight, a silent admission of an unported effect costs correctness.
+//! A trainer's bag is a separate boundary ([`ensure_trainer_bag_unused`]).
+//!
 //! Enigma Berry carries [`HoldEffect::NONE`] in the static table, but upstream
 //! reads its effect from the save block (`battle_util.c:3266-3287`), so it is
 //! refused by name.
@@ -38,6 +40,21 @@ pub fn ensure_held_item_playable(item: ItemId) -> Result<(), BattleError> {
         Ok(())
     } else {
         Err(BattleError::UnsupportedHeldItem(item))
+    }
+}
+
+/// Refuses a trainer whose bag holds any item: `ShouldUseItem` would consider
+/// each one on every turn (`battle_ai_switch_items.c`), and trainer action
+/// selection here never uses items.
+///
+/// # Errors
+///
+/// Returns [`BattleError::UnsupportedTrainerBagItem`] for the first item that
+/// is not [`ItemId::NONE`].
+pub fn ensure_trainer_bag_unused(bag: &[ItemId]) -> Result<(), BattleError> {
+    match bag.iter().find(|item| **item != ItemId::NONE) {
+        Some(item) => Err(BattleError::UnsupportedTrainerBagItem(*item)),
+        None => Ok(()),
     }
 }
 
@@ -121,6 +138,15 @@ mod tests {
         assert_eq!(
             ensure_held_item_playable(unknown),
             Err(BattleError::UnsupportedHeldItem(unknown))
+        );
+    }
+
+    #[test]
+    fn any_trainer_bag_item_is_refused_and_an_empty_bag_is_not() {
+        assert_eq!(ensure_trainer_bag_unused(&[ItemId::NONE; 4]), Ok(()));
+        assert_eq!(
+            ensure_trainer_bag_unused(&[ItemId::NONE, ItemId::SUPER_POTION, ItemId::FULL_RESTORE]),
+            Err(BattleError::UnsupportedTrainerBagItem(ItemId::SUPER_POTION))
         );
     }
 

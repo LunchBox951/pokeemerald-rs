@@ -5,9 +5,10 @@
 //! to its conclusion, and the defeated flag and prize money land.
 //!
 //! Nothing here borrows the stand-in party of [`super::support::seed_battle`].
-//! The approach's message box takes its documented fallback (a pack-less
-//! phase cannot open one, `sight_trainer_approach::advance_intro_message`),
-//! which starts the battle the frame the speech would have opened; the
+//! The approach's message box either takes its documented fallback (a
+//! pack-less phase cannot open one, `sight_trainer_approach::advance_intro_message`),
+//! which starts the battle the frame the speech would have opened, or opens
+//! against a pack on disk and is confirmed by the alternating A presses; the
 //! speech's own handshake has its own tests in `approach_handoff`.
 //!
 //! # Where the goldens come from
@@ -28,8 +29,9 @@
 use assets::trainers::TrainerId;
 use assets::{AbilityId, MoveId, SpeciesId};
 use engine::overworld::{Direction, PlayerState};
-use platform::ButtonState;
+use platform::{ButtonState, Buttons};
 
+use super::super::test_support::pressed;
 use super::super::OverworldPhase;
 use super::support::*;
 
@@ -221,6 +223,20 @@ fn assert_member_matches(name: &str, index: usize, member: &Member, mon: &battle
     assert_eq!(moves, member.moves, "{context}");
 }
 
+/// Trainer action selection never uses items, so a fighting trainer's bag
+/// must be empty for the fight to be the one upstream plays.
+#[test]
+fn the_four_fighting_trainers_carry_no_bag_items() {
+    for fighter in &FIGHTERS {
+        let bag = battle::trainer_data(TrainerId(fighter.id)).unwrap().items;
+        assert!(
+            bag.iter().all(|item| *item == assets::items::ItemId::NONE),
+            "{}: {bag:?}",
+            fighter.name
+        );
+    }
+}
+
 /// The trigger builds exactly the party and stream state upstream's
 /// `CreateNPCTrainerParty` would, on the first frame, and the approach then
 /// spends no more of the shared stream.
@@ -280,8 +296,15 @@ fn each_cone_runs_start_to_conclusion_and_rewards_the_win() {
         let after_construction = phase.rng.state();
 
         let mut handed_off = false;
-        for _ in 0..600 {
-            phase.step(ButtonState::new());
+        for frame in 0..600 {
+            // A pack on disk opens the real intro box, which waits for a
+            // fresh confirm edge; without one the documented fallback starts
+            // the battle directly. Alternating frames serve both.
+            phase.step(if frame % 2 == 1 {
+                pressed(Buttons::A)
+            } else {
+                ButtonState::new()
+            });
             if phase.is_sight_trainer_battle_active() {
                 handed_off = true;
                 break;

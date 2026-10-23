@@ -433,7 +433,8 @@ mod tests {
         assert!(result.is_ok(), "{:?}", result.err());
     }
 
-    const NUGGET_TRAINER_ONE_MON: TrainerId = TrainerId(114);
+    /// A Lady holding a Nugget, with a Full Restore in her bag.
+    const CINDY_WITH_FULL_RESTORE: TrainerId = TrainerId(114);
     const NUGGET_THEN_EMPTY_PARTY: TrainerId = TrainerId(694);
     const ORAN_BERRY_PARTY: TrainerId = TrainerId(292);
 
@@ -510,7 +511,7 @@ mod tests {
     #[test]
     fn a_held_item_party_still_has_its_personalities() {
         for id in [
-            NUGGET_TRAINER_ONE_MON,
+            CINDY_WITH_FULL_RESTORE,
             NUGGET_THEN_EMPTY_PARTY,
             ORAN_BERRY_PARTY,
         ] {
@@ -525,11 +526,6 @@ mod tests {
 
     #[test]
     fn an_effect_free_held_item_is_carried_onto_the_built_party() {
-        let mut rng = Rng::new(1);
-        let battle = start_npc_trainer_battle(treecko_lead(), NUGGET_TRAINER_ONE_MON, &mut rng)
-            .expect("a Nugget holder constructs");
-        assert_eq!(battle.enemy().held_item(), ItemId::NUGGET);
-
         let mut rng = Rng::new(1);
         let battle = start_npc_trainer_battle(treecko_lead(), NUGGET_THEN_EMPTY_PARTY, &mut rng)
             .expect("a Nugget holder with a bare reserve constructs");
@@ -549,7 +545,7 @@ mod tests {
         let mut rng = Rng::new(1);
         let before = rng.state();
         let lead = treecko_lead().with_held_item(ItemId::ORAN_BERRY);
-        let result = start_npc_trainer_battle(lead, NUGGET_TRAINER_ONE_MON, &mut rng);
+        let result = start_npc_trainer_battle(lead, NUGGET_THEN_EMPTY_PARTY, &mut rng);
         assert_eq!(
             result.err(),
             Some(NpcTrainerBattleError::Battle(
@@ -561,6 +557,21 @@ mod tests {
             before,
             "the lead's item is screened before every draw"
         );
+    }
+
+    #[test]
+    fn a_trainer_with_a_bag_item_is_refused_before_any_ot_id_draw() {
+        let mut rng = Rng::new(1);
+        let before = rng.state();
+        let result = start_npc_trainer_battle(treecko_lead(), CINDY_WITH_FULL_RESTORE, &mut rng);
+        assert_eq!(
+            result.err(),
+            Some(NpcTrainerBattleError::Battle(
+                BattleError::UnsupportedTrainerBagItem(ItemId::FULL_RESTORE)
+            )),
+            "her party is playable; only her bag is not"
+        );
+        assert_eq!(rng.state(), before, "the bag screen precedes every draw");
     }
 
     #[test]

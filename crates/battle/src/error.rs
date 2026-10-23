@@ -68,6 +68,12 @@ pub enum BattleError {
     /// reported by the pre-turn and constructor screens before any draw.
     UnsupportedHeldItem(ItemId),
 
+    /// A trainer's bag holds an item its AI would use mid-battle
+    /// (`ShouldUseItem`, `battle_ai_switch_items.c`). Trainer action
+    /// selection has no item use, so the battle is refused before any draw
+    /// instead of silently playing out without the item.
+    UnsupportedTrainerBagItem(ItemId),
+
     /// A species was an empty or compatibility placeholder:
     /// [`crate::pokemon::SPECIES_NONE`] or
     /// [`crate::pokemon::SPECIES_OLD_UNOWN_B`]`..=`
@@ -167,6 +173,11 @@ impl fmt::Display for BattleError {
             Self::UnsupportedHeldItem(id) => write!(
                 f,
                 "held item `{}` has a battle effect no pipeline models",
+                id.0
+            ),
+            Self::UnsupportedTrainerBagItem(id) => write!(
+                f,
+                "trainer bag item `{}` would be used by an AI that never uses items here",
                 id.0
             ),
             Self::PlaceholderSpecies => {

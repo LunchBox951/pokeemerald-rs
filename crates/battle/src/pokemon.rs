@@ -1,7 +1,9 @@
 //! A Pokémon's owned battle state, stat calculation, HP, experience, and
 //! move slots.
 //!
-//! [`BattlePokemon`] does not retain held items. It carries primary status
+//! [`BattlePokemon`] carries its held item ([`BattlePokemon::held_item`]); a
+//! battle admits it only when the item's hold effect is none
+//! ([`crate::ensure_held_item_playable`]). It carries primary status
 //! ([`Status1`]) distinct from [`Volatiles`] — see that type's own docs for
 //! what is and is not modelled. Shedinja's 1-HP special case *is* modelled —
 //! see `calc_max_hp`.
