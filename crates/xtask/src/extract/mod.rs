@@ -43,9 +43,11 @@
 //! - the raw 4bpp tiles of the thirteen `gHealthboxElementsGfxTable` sheets and of
 //!   the battle bar built from `hpbar_anim_unused`, `numbers1`, and `numbers2`;
 //! - `mus_title`, its transitive voicegroup tree, and every sample that tree
-//!   references; and
+//!   references;
 //! - the battle-message token table (`gBattleStringsTable` plus the special
-//!   templates `BufferStringBattle` selects).
+//!   templates `BufferStringBattle` selects); and
+//! - the naming screen's 15 sheets (the three cursors cut to their first five
+//!   tiles), seven palettes, and four decoded tilemaps.
 //!
 //! # Asset id scheme
 //!
@@ -69,6 +71,7 @@
 //! - `audio/sample/{direct-sound,programmable-wave}/<name>`
 //! - `audio/voicegroup/<label>` and `audio/song/<name>`
 //! - `battle-message/table`
+//! - `naming-screen/{image,palette,raw}/<stem>`
 //!
 //! Names preserve normalized upstream directory, file, or symbol names; they
 //! never use linker-style `gTileset_*` identifiers.
@@ -91,6 +94,7 @@ pub mod jasc_pal;
 mod layouts;
 mod layouts_json;
 pub(crate) mod midi;
+mod naming_screen;
 mod opening_scene;
 pub mod png;
 mod pokedex_graphics;
@@ -185,6 +189,7 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     midi::extract_song(&upstream, &mut writer)?;
     battle_message::extract_battle_message(&upstream, &mut writer)?;
     battle_anim::extract_battle_anim(&upstream, &mut writer)?;
+    naming_screen::extract_naming_screen(&upstream, &mut writer)?;
 
     let entry_count = writer.len();
     let bytes = writer.finish()?;
