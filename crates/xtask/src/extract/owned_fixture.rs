@@ -22,27 +22,56 @@ pub(crate) struct OwnedDir {
     identity: Identity,
 }
 
-/// What `mkdir` created: on Unix its device and inode, elsewhere only the
-/// fact that it was a real (non-symlink) directory.
+/// What `mkdir` created: a real (non-symlink) directory plus, where the
+/// platform can name one, a per-object token that survives a rename and is
+/// never shared by two live directories.
 #[derive(Debug, PartialEq, Eq)]
-struct Identity(Option<(u64, u64)>);
+struct Identity {
+    token: Option<Token>,
+}
+
+/// Unix: device and inode.
+#[cfg(unix)]
+type Token = (u64, u64);
+
+/// Windows: the volume and file ID read off a handle opened without
+/// following a reparse point.
+#[cfg(windows)]
+type Token = win_fs::WindowsFileIdentity;
+
+/// Any other target has no identity this helper can read, so no token is ever
+/// produced and [`OwnedDir`] fails closed: it removes nothing on drop.
+#[cfg(not(any(unix, windows)))]
+type Token = ();
 
 impl Identity {
     /// The identity of the real directory at `path`, or `None` when `path` is
-    /// absent, a symlink or not a directory.
+    /// absent, a symlink or not a directory (on Windows, also when the
+    /// identity cannot be read).
     fn of(path: &Path) -> Option<Self> {
         let metadata = std::fs::symlink_metadata(path).ok()?;
         if !metadata.file_type().is_dir() {
             return None;
         }
         #[cfg(unix)]
-        let ids = {
+        let token = {
             use std::os::unix::fs::MetadataExt as _;
             Some((metadata.dev(), metadata.ino()))
         };
-        #[cfg(not(unix))]
-        let ids = None;
-        Some(Self(ids))
+        #[cfg(windows)]
+        let token = Some(
+            win_fs::open_for_verified_delete(path)
+                .and_then(|handle| win_fs::WindowsFileIdentity::of(&handle))
+                .ok()?,
+        );
+        #[cfg(not(any(unix, windows)))]
+        let token: Option<Token> = None;
+        Some(Self { token })
+    }
+
+    /// Whether this identity can vouch for ownership at all.
+    fn is_verifiable(&self) -> bool {
+        self.token.is_some()
     }
 }
 
@@ -108,13 +137,17 @@ impl OwnedDir {
 impl Drop for OwnedDir {
     /// Removes the tree only while the path still names the directory `mkdir`
     /// created; a replacement (symlink or another directory) is left alone.
+    /// On a target with no readable identity (neither Unix nor Windows) the
+    /// directory cannot be told from a replacement, so nothing is removed.
     ///
     /// Still exposed: a same-user process that swaps the path between this
     /// check and the removal, and fixture writes that go through `path()`
     /// after a swap. A test fixture in a private temp name accepts both; the
     /// check bounds the damage to a swap landing inside that window.
     fn drop(&mut self) {
-        if Identity::of(&self.path).as_ref() == Some(&self.identity) {
+        if self.identity.is_verifiable()
+            && Identity::of(&self.path).as_ref() == Some(&self.identity)
+        {
             let _ = std::fs::remove_dir_all(&self.path);
         }
     }
@@ -184,6 +217,17 @@ mod tests {
         for attempt in 0..ATTEMPTS {
             assert!(OwnedDir::candidate(base.path(), "fx", attempt).is_dir());
         }
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn two_live_directories_have_different_identities() {
+        let base = private_base("identity");
+        let first = OwnedDir::create_in(base.path(), "fx").unwrap();
+        let second = OwnedDir::create_in(base.path(), "fx").unwrap();
+        assert!(first.identity.is_verifiable());
+        assert_ne!(Identity::of(first.path()), Identity::of(second.path()));
+        assert_eq!(Identity::of(first.path()).as_ref(), Some(&first.identity));
     }
 
     #[cfg(unix)]
