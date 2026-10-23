@@ -1282,32 +1282,29 @@ fn a_malformed_song_payload_is_refused_as_an_entry_shape() {
 }
 
 #[test]
-fn a_second_song_is_refused_by_name_instead_of_mapped_through_mus_title() {
-    // Pins the refusal naming both offending ids, before any root is
-    // located.
+fn songs_beside_mus_title_are_left_to_the_checkout_instead_of_refused() {
+    // `cargo xtask extract` emits the whole checkpoint manifest (#1848), but
+    // the ROM backend imports only `mus_title` until #1850; the locator plans
+    // that one song and claims nothing about the others.
     with_audio_context(
         "audio-two-songs",
         &["audio/song/mus_other", "audio/song/mus_title"],
         |ctx| {
             let mut report = Vec::new();
-            let err = audio::locate(ctx, &mut report)
-                .expect_err("a pack with more than the one supported song must be refused");
-            let GenRomProfileError::StructMismatch { id, reason } = &err else {
-                panic!("{err:?}");
-            };
-            assert_eq!(id, "audio/song/*");
-            assert!(reason.contains("audio/song/mus_other"), "{reason}");
-            assert!(reason.contains("audio/song/mus_title"), "{reason}");
+            let plan = audio::locate(ctx, &mut report)
+                .expect("a pack holding mus_title among other songs locates");
+            assert_eq!(plan.songs.len(), 1);
+            assert_eq!(plan.songs[0].id, "audio/song/mus_title");
             assert!(
-                report.is_empty(),
-                "refused before locating anything: {report:?}"
+                report.iter().all(|line| line.id != "audio/song/mus_other"),
+                "the other song is not claimed: {report:?}"
             );
         },
     );
 }
 
 #[test]
-fn no_song_at_all_is_refused_by_the_same_singleton_check() {
+fn no_song_at_all_is_refused_by_the_same_title_check() {
     // Pins the same `StructMismatch` on an empty `audio/song/` id set.
     with_audio_context("audio-no-song", &[], |ctx| {
         let mut report = Vec::new();
@@ -1321,8 +1318,8 @@ fn no_song_at_all_is_refused_by_the_same_singleton_check() {
 }
 
 #[test]
-fn a_lone_unsupported_song_is_refused_by_the_singleton_check() {
-    // Pins the id half of the singleton check: one entry, but not mus_title.
+fn a_lone_unsupported_song_is_refused_by_the_title_check() {
+    // Pins the id half of the title check: one entry, but not mus_title.
     with_audio_context("audio-lone-other", &["audio/song/mus_other"], |ctx| {
         let mut report = Vec::new();
         let err = audio::locate(ctx, &mut report)
