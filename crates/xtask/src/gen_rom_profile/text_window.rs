@@ -102,14 +102,28 @@ fn window_palettes_line(addr: u32, bank_bytes: u32) -> ReportLine {
         .note("one bank before the first text_pal bank")
 }
 
+/// Whether the frame named by `stem` (`1`..`20`) is declared `static`
+/// upstream, so a linker map omits both its tiles and its palette.
+///
+/// `text_window.c:10-28` and `:31-49`: only frame 1 is global
+/// (`gTextWindowFrame1_Gfx`, `gTextWindowFrame1_Pal`).
+pub(super) fn is_static_frame(stem: &str) -> bool {
+    // Canonical decimal only: `02` or `+2` names no upstream frame.
+    stem.parse::<u32>()
+        .is_ok_and(|frame| (2..=20).contains(&frame) && frame.to_string() == stem)
+}
+
 /// The linker-map expectation at a palette's address; `text_pal*` banks are
-/// interior to `sTextWindowPalettes`.
+/// interior to `sTextWindowPalettes`, and frames 2-20 are `static`.
 fn palette_symbol(id: &str) -> SymbolExpectation {
     let Some(stem) = id.strip_prefix("text-window/palette/") else {
         return SymbolExpectation::Unnamed;
     };
     if stem.starts_with("text_pal") {
         return SymbolExpectation::Interior;
+    }
+    if is_static_frame(stem) {
+        return SymbolExpectation::Local(format!("sTextWindowFrame{stem}_Pal"));
     }
     SymbolExpectation::Contains(vec![format!("TextWindowFrame{stem}_Pal")])
 }
