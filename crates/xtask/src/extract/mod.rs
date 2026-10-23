@@ -40,7 +40,8 @@
 //!   palette files, and 15 raw tilemap and data files;
 //! - the battle textbox sheet, its 32-colour palette and tilemap, and the battle-window
 //!   and PP text palettes;
-//! - `mus_title`, its transitive voicegroup tree, and every sample that tree
+//! - every checkpoint song in the song manifest (`midi::manifest`), plus
+//!   `mus_title`'s transitive voicegroup tree and every sample that tree
 //!   references; and
 //! - the battle-message token table (`gBattleStringsTable` plus the special
 //!   templates `BufferStringBattle` selects).
@@ -176,7 +177,7 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     battle_interface::extract_battle_interface(&upstream, &mut writer)?;
     audio_samples::extract_audio_samples(&upstream, &mut writer)?;
     voicegroups::extract_voicegroups(&upstream, &mut writer)?;
-    midi::extract_song(&upstream, &mut writer)?;
+    midi::extract_songs(&upstream, &mut writer)?;
     battle_message::extract_battle_message(&upstream, &mut writer)?;
     battle_anim::extract_battle_anim(&upstream, &mut writer)?;
 

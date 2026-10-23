@@ -23021,8 +23021,14 @@
     },
     "sound/song_table.inc": {
       "artifacts": {
+        "CheckpointSongAssignments": {
+          "reason": "sound/song_table.inc:1-4 define the MUSIC_PLAYER_* indices and each song row (asm/macros/m4a.inc:1-5) assigns one. The xtask song-table reader resolves the ms of every checkpoint-manifest row, checks it against the manifest's expected player, and fails with typed errors when the row is missing, duplicated, malformed, or assigned differently. Rows outside the manifest, Song.me, and runtime dispatch are not modelled. The parent file stays pending.",
+          "rust_target": "crates/xtask/src/extract/midi/song_table.rs",
+          "spec": "S-3",
+          "status": "ported"
+        },
         "gSongTable": {
-          "reason": "sound/song_table.inc:1-8,422. Modelled: the Song.ms field as assets::audio::MusicPlayerId, the index m4aSongNumStart uses to select gMPlayTable[song->ms] (m4a.c:107-114), carried by assets::audio::Song and AssetPack::song beside the voicegroup, priority, reverb, and tracks, and kept as the raw table index. Producers cover only mus_title's row (xtask extraction) and the profile's supported song entry (ROM import). Not modelled: the table as a whole, the other rows, the header pointer, Song.me, and the mapping of ms to BGM, SE, or cry runtime state. The parent file stays pending.",
+          "reason": "sound/song_table.inc:1-8. Modelled: the Song.ms field as assets::audio::MusicPlayerId, the index m4aSongNumStart uses to select gMPlayTable[song->ms] (m4a.c:107-114), carried by assets::audio::Song and AssetPack::song beside the voicegroup, priority, reverb, and tracks, and kept as the raw table index. Checkout extraction produces it for every song of the checkpoint manifest; ROM import produces only the profile's supported song entry. Not modelled: the table as a whole, rows outside the manifest, the header pointer, Song.me, and the mapping of ms to BGM, SE, or cry runtime state. The parent file stays pending.",
           "rust_target": "crates/assets/src/audio/song.rs",
           "spec": "S-3",
           "status": "stubbed"
@@ -23126,8 +23132,10 @@
     "sound/songs/midi/mus_birch_lab.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:16 (`-E -R50 -G_birch_lab -V080`) and sound/song_table.inc:392 (music player 0). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/mus_birch_lab: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/mus_c_comm_center.mid": {
       "category": "audio.song",
@@ -23150,8 +23158,10 @@
     "sound/songs/midi/mus_caught.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:20 (`-E -R50 -G_victory_wild -V080`) and sound/song_table.inc:361 (music player 0). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/mus_caught: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/mus_cave_of_origin.mid": {
       "category": "audio.song",
@@ -23204,8 +23214,10 @@
     "sound/songs/midi/mus_dummy.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:29 (`-E -R40`) and sound/song_table.inc:9 (music player 0). upstream's silence: the MIDI holds only an end-of-track marker, so it compiles to no tracks. Its entry has no -G flag, and tools/mid2agb/main.cpp:36 defaults the voicegroup to _dummy, so the pack song names audio/voicegroup/dummy; xtask accepts that default only for a song with no playable tracks and fails with a typed error otherwise. SongHeader priority 0 and reverb 40 and the table ms come from the same sources, emitted as audio/song/mus_dummy. Voicegroup resolution and playback are not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/mus_encounter_aqua.mid": {
       "category": "audio.song",
@@ -23216,8 +23228,10 @@
     "sound/songs/midi/mus_encounter_brendan.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:31 (`-E -R50 -G_encounter_brendan -V078`) and sound/song_table.inc:430 (music player 0). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/mus_encounter_brendan: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/mus_encounter_champion.mid": {
       "category": "audio.song",
@@ -23264,8 +23278,10 @@
     "sound/songs/midi/mus_encounter_interviewer.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:39 (`-E -R50 -G_encounter_interviewer -V062`) and sound/song_table.inc:462 (music player 0). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/mus_encounter_interviewer: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/mus_encounter_magma.mid": {
       "category": "audio.song",
@@ -23282,8 +23298,10 @@
     "sound/songs/midi/mus_encounter_may.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:42 (`-E -R50 -G_encounter_may -V078`) and sound/song_table.inc:424 (music player 0). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/mus_encounter_may: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/mus_encounter_rich.mid": {
       "category": "audio.song",
@@ -23324,20 +23342,26 @@
     "sound/songs/midi/mus_evolution.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:50 (`-E -R50 -G_evolution -V080`) and sound/song_table.inc:386 (music player 0). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/mus_evolution: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/mus_evolution_intro.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:49 (`-E -R50 -G_evolution -V080`) and sound/song_table.inc:385 (music player 2). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/mus_evolution_intro: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/mus_evolved.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:51 (`-E -R50 -G_fanfare -V090 -P5`) and sound/song_table.inc:380 (music player 2). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/mus_evolved: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/mus_fallarbor.mid": {
       "category": "audio.song",
@@ -23348,8 +23372,10 @@
     "sound/songs/midi/mus_follow_me.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:53 (`-E -R50 -G_follow_me -V074`) and sound/song_table.inc:429 (music player 0). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/mus_follow_me: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/mus_fortree.mid": {
       "category": "audio.song",
@@ -23396,32 +23422,42 @@
     "sound/songs/midi/mus_heal.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:61 (`-E -R50 -G_fanfare -V090 -P5`) and sound/song_table.inc:377 (music player 2). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/mus_heal: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/mus_help.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:62 (`-E -R50 -G_help -V078`) and sound/song_table.inc:419 (music player 0). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/mus_help: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/mus_intro.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:64 (`-E -R50 -G_intro -V090`) and sound/song_table.inc:423 (music player 0). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/mus_intro: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/mus_intro_battle.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:63 (`-E -R50 -G_intro_battle -V088`) and sound/song_table.inc:451 (music player 0). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/mus_intro_battle: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/mus_level_up.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:65 (`-E -R50 -G_fanfare -V090 -P5`) and sound/song_table.inc:376 (music player 2). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/mus_level_up: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/mus_lilycove.mid": {
       "category": "audio.song",
@@ -23462,8 +23498,10 @@
     "sound/songs/midi/mus_littleroot.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:73 (`-E -R50 -G_littleroot -V100`) and sound/song_table.inc:414 (music player 0). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/mus_littleroot: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/mus_littleroot_test.mid": {
       "category": "audio.song",
@@ -23516,8 +23554,10 @@
     "sound/songs/midi/mus_obtain_item.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:81 (`-E -R50 -G_fanfare -V090 -P5`) and sound/song_table.inc:379 (music player 2). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/mus_obtain_item: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/mus_obtain_symbol.mid": {
       "category": "audio.song",
@@ -23540,8 +23580,10 @@
     "sound/songs/midi/mus_oldale.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:85 (`-E -R50 -G_oldale -V080`) and sound/song_table.inc:372 (music player 0). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/mus_oldale: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/mus_petalburg.mid": {
       "category": "audio.song",
@@ -23558,14 +23600,18 @@
     "sound/songs/midi/mus_poke_center.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:88 (`-E -R50 -G_poke_center -V092`) and sound/song_table.inc:409 (music player 0). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/mus_poke_center: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/mus_poke_mart.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:89 (`-E -R50 -G_poke_mart -V085`) and sound/song_table.inc:413 (music player 0). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/mus_poke_mart: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/mus_rayquaza_appears.mid": {
       "category": "audio.song",
@@ -23594,8 +23640,10 @@
     "sound/songs/midi/mus_rg_caught_intro.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:93 (`-E -R50 -G_rg_caught_intro -V094 -P5`) and sound/song_table.inc:540 (music player 2). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/mus_rg_caught_intro: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/mus_rg_celadon.mid": {
       "category": "audio.song",
@@ -24038,8 +24086,10 @@
     "sound/songs/midi/mus_route101.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:168 (`-E -R50 -G_route101 -V080`) and sound/song_table.inc:368 (music player 0). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/mus_route101: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/mus_route104.mid": {
       "category": "audio.song",
@@ -24080,8 +24130,10 @@
     "sound/songs/midi/mus_route122.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:175 (`-E -R50 -G_route122 -V080`) and sound/song_table.inc:383 (music player 0). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/mus_route122: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/mus_rustboro.mid": {
       "category": "audio.song",
@@ -24146,9 +24198,9 @@
     "sound/songs/midi/mus_title.mid": {
       "category": "audio.song",
       "kind": "file",
-      "reason": "Compiled the way tools/mid2agb interprets it at its real midi.cfg flags (-E -R50 -G_title -V090): notes/ties (velocity-LUT quantized, exact -E gate length, >96-tick tie-splitting), tempo (round(60e6/us-per-quarter) quantized to the even effective rate (BPM/2)*2 -- agb.cpp:505-507 emits BPM*tbs/2 and m4a_1.s:920-929 doubles it; mus_title's own tempos are all even so its bytes are unchanged, reaching only the first compiled track same as upstream's own Tempo-stripping), program change, pan/volume(master-volume-scaled)/modulation/LFO-speed/bend/bend-range/tune/priority controllers, the pseudo-echo XCMD pair, and loop markers (] and ][ emit the backward Goto; [ and ][ record the target it points at; : (Label) emits nothing at all -- all four unexercised by mus_title itself but pinned on crafted fragments) into crates/assets::audio::song::SongEvent streams (one per real MIDI channel, 10 total), emitted via cargo xtask extract as pack id audio/song/mus_title (issue #181, S-4, #115 child 2). A channel becomes a track only when it carries a note-on of nonzero raw tick duration, upstream's own s_minNote gate (midi.cpp:484-490, :933). Deliberately NOT modelled, each an honest scope cut (crates/xtask/src/extract/midi/compile.rs's module docs): the note-duration LUT quantization path (only reachable without -E, which mus_title never omits), -X/48-clocks-per-beat (this schema has no ticks-per-quarter-note field to record it), tools/mid2agb's WAIT-opcode-legal-value bucketing and whole-note pattern-compression bookkeeping (SplitTime/WholeNoteMark/PATT/PEND -- on-disk artifacts with zero audible effect, except the first InsertTimingEvents/SplitTime boundary after a CC 0x1E, which bounds the dropped wait below and is modelled), operand elision (EOT's omitted key, compressed note/velocity mnemonics -- this compiler's stream is always fully explicit), and the MEMACC controller family (0x0C/0x0D/0x0E/0x0F/0x10/0x11 -- mus_title carries zero, confirmed against a locally built tools/mid2agb oracle; the schema's one canonical MEMACC user, mus_vs_trainer, is a different song out of this issue's scope). One behavioural divergence from tools/mid2agb, unobservable for mus_title (all ten compiled tracks match the oracle's validated semantics -- track count, hand-verified command values, XCMD/Goto counts, and end boundaries -- with Wait placement free to differ in representation while encoding identical delays, per crates/xtask/src/extract/midi/mod.rs's oracle-comparison test docs) but real for other songs, so recorded here rather than left inside the cut list: status bytes 0xF1..0xF6/0xF8..0xFE are rejected fail-closed where upstream skips them as SysEx-by-declared-length (midi.cpp:199-204), which is the wrong framing for them; no standard MIDI file stores those (crates/xtask/src/extract/midi/parse.rs's module docs). The wait that follows a CC 0x1E extended-command selector is now reproduced rather than diverged from: agb.cpp:402-405's case 0x1E: has no PrintWait, but by then InsertTimingEvents (midi.cpp:653-686) and SplitTime have subdivided the gap -- a wait-printing timing mark at every whole-note grid line (96*clocks_per_beat ticks, re-phased by each file time-signature event, themselves now parsed for exactly this) and a wait-printing TimeSplit at the off-grid remainder's g_noteDurationLUT floor -- so this compiler records the selector as a timing-only marker and emit_track drops only that first chunk: the gap clamped to the next grid mark, floored through the LUT (agb.cpp:488-494, :518-520); silent controllers stay in the item list so their bare-PrintWait waits survive (crates/xtask/src/extract/midi/translate.rs's module docs) -- mus_title's own six CC 0x1E occurrences (two each on the three pseudo-echo tracks) all sit at tick 0 with a zero gap either way, so it was and remains unobservable there. Tempo BPM overflow (round(60e6/us-per-quarter) not fitting a u16) also now fails closed rather than silently saturating to 65535 (crates/xtask/src/extract/midi/translate.rs's bpm_from_microseconds), unreachable for mus_title's own real tempos. Since the #122 ROM-import series the same normalized pack entries are also produced directly from the player's own ROM by crates/rom-import/src/domains/audio.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+      "reason": "sound/songs/midi/midi.cfg:186 (-E -R50 -G_title -V090) and sound/song_table.inc:422 (music player 0). Compiled the way tools/mid2agb interprets it at its real flags into assets::audio::song::SongEvent streams (one per real MIDI channel, 10 total), emitted via cargo xtask extract as pack id audio/song/mus_title with the SongHeader voicegroup, priority and reverb and the table's Song.ms. Modelled: notes and ties (velocity-LUT quantized, exact -E gate length, ties split above 96 ticks), tempo (round(60e6/us-per-quarter) quantized to the even effective rate (BPM/2)*2, agb.cpp:505-507 and m4a_1.s:920-929, reaching only the first compiled track as upstream's Tempo-stripping does), program change, pan, master-volume-scaled volume, modulation, LFO speed, bend, bend range, tune and priority controllers, the pseudo-echo XCMD pair, and loop markers (] and ][ emit the backward Goto; [ and ][ record its target; : emits nothing). A channel becomes a track only when it carries a note-on of nonzero raw tick duration, upstream's s_minNote gate (midi.cpp:484-490, :933). The wait after a CC 0x1E extended-command selector follows agb.cpp:402-405 through the whole-note grid marks InsertTimingEvents and SplitTime (midi.cpp:653-686) insert. Tempo BPM overflow fails closed. Not modelled: the note-duration LUT path (reachable only without -E, which the compiler rejects), -X/48 clocks per beat (the schema has no ticks-per-quarter-note field), the WAIT-opcode bucketing and whole-note pattern-compression bookkeeping (SplitTime/WholeNoteMark/PATT/PEND, which have no audible effect), and operand elision (the stream is always fully explicit). MEMACC controllers (0x0C-0x11) fail closed on a playable channel. Status bytes 0xF1..0xF6/0xF8..0xFE are rejected fail-closed where upstream skips them as SysEx-by-declared-length (midi.cpp:199-204); no standard MIDI file stores them. The ten-track result matches a locally built tools/mid2agb oracle (track count, hand-verified command values, XCMD and Goto counts, end boundaries), with Wait placement free to differ in representation while encoding identical delays. The same normalized entry is produced from the player's own ROM by crates/rom-import/src/domains/audio.rs and equivalence-checked byte-for-byte against this extraction by crates/rom-import/tests/equivalence.rs. The voicegroup is named, not resolved here.",
       "rust_target": "crates/xtask/src/extract/midi/mod.rs",
-      "spec": "S-4",
+      "spec": "S-3",
       "status": "ported"
     },
     "sound/songs/midi/mus_too_bad.mid": {
@@ -24202,14 +24254,18 @@
     "sound/songs/midi/mus_victory_trainer.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:195 (`-E -R50 -G_victory_trainer -V091`) and sound/song_table.inc:421 (music player 0). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/mus_victory_trainer: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/mus_victory_wild.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:196 (`-E -R50 -G_victory_wild -V080`) and sound/song_table.inc:362 (music player 0). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/mus_victory_wild: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/mus_vs_aqua_magma.mid": {
       "category": "audio.song",
@@ -24274,8 +24330,10 @@
     "sound/songs/midi/mus_vs_rival.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:207 (`-E -R50 -G_vs_rival -V080 -P1`) and sound/song_table.inc:490 (music player 0). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/mus_vs_rival: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/mus_vs_trainer.mid": {
       "category": "audio.song",
@@ -24286,8 +24344,10 @@
     "sound/songs/midi/mus_vs_wild.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:209 (`-E -R50 -G_vs_wild -V080 -P1`) and sound/song_table.inc:483 (music player 0). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/mus_vs_wild: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/mus_weather_groudon.mid": {
       "category": "audio.song",
@@ -24628,68 +24688,90 @@
     "sound/songs/midi/se_ball.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:276 (`-E -R50 -G_rs_sfx_1 -V070 -P4`) and sound/song_table.inc:32 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_ball: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_ball_bounce_1.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:266 (`-E -R50 -G_rs_sfx_2 -V100 -P4`) and sound/song_table.inc:65 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_ball_bounce_1: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_ball_bounce_2.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:267 (`-E -R50 -G_rs_sfx_2 -V100 -P4`) and sound/song_table.inc:66 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_ball_bounce_2: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_ball_bounce_3.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:268 (`-E -R50 -G_rs_sfx_2 -V100 -P4`) and sound/song_table.inc:67 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_ball_bounce_3: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_ball_bounce_4.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:269 (`-E -R50 -G_rs_sfx_2 -V100 -P4`) and sound/song_table.inc:68 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_ball_bounce_4: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_ball_open.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:270 (`-E -R50 -G_rs_sfx_1 -V100 -P5`) and sound/song_table.inc:24 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_ball_open: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_ball_throw.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:271 (`-E -R50 -G_rs_sfx_2 -V120 -P5`) and sound/song_table.inc:70 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_ball_throw: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_ball_trade.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:272 (`-E -R50 -G_rs_sfx_1 -V100 -P5`) and sound/song_table.inc:69 (music player 2). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_ball_trade: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_ball_tray_ball.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:273 (`-E -R50 -G_rs_sfx_2 -V110 -P5`) and sound/song_table.inc:124 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_ball_tray_ball: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_ball_tray_enter.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:274 (`-E -R50 -G_rs_sfx_2 -V110 -P5`) and sound/song_table.inc:123 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_ball_tray_enter: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_ball_tray_exit.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:275 (`-E -R50 -G_rs_sfx_1 -V100 -P5`) and sound/song_table.inc:125 (music player 2). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_ball_tray_exit: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_balloon_blue.mid": {
       "category": "audio.song",
@@ -24736,8 +24818,10 @@
     "sound/songs/midi/se_boo.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:284 (`-E -R50 -G_rs_sfx_1 -V110 -P4`) and sound/song_table.inc:31 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_boo: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_breakable_door.mid": {
       "category": "audio.song",
@@ -24760,8 +24844,10 @@
     "sound/songs/midi/se_click.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:288 (`-E -R50 -G_rs_sfx_1 -V110 -P4`) and sound/song_table.inc:45 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_click: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_contest_condition_lose.mid": {
       "category": "audio.song",
@@ -24814,20 +24900,26 @@
     "sound/songs/midi/se_dex_page.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:297 (`-E -R50 -G_rs_sfx_1 -P5`) and sound/song_table.inc:118 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_dex_page: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_dex_scroll.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:298 (`-E -R50 -G_rs_sfx_1 -P5`) and sound/song_table.inc:117 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_dex_scroll: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_dex_search.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:299 (`-E -R50 -G_rs_sfx_1 -v100 -P5`) and sound/song_table.inc:121 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_dex_search: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_ding_dong.mid": {
       "category": "audio.song",
@@ -24838,8 +24930,10 @@
     "sound/songs/midi/se_door.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:301 (`-E -R50 -G_rs_sfx_1 -V080 -P5`) and sound/song_table.inc:17 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_door: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_downpour.mid": {
       "category": "audio.song",
@@ -24862,8 +24956,10 @@
     "sound/songs/midi/se_effective.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:305 (`-E -R50 -G_rs_sfx_1 -V110 -P5`) and sound/song_table.inc:22 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_effective: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_egg_hatch.mid": {
       "category": "audio.song",
@@ -24880,38 +24976,50 @@
     "sound/songs/midi/se_escalator.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:308 (`-E -R50 -G_rs_sfx_2 -V100 -P4`) and sound/song_table.inc:89 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_escalator: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_exit.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:309 (`-E -R50 -G_rs_sfx_1 -V120 -P5`) and sound/song_table.inc:18 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_exit: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_exp.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:311 (`-E -R50 -G_rs_sfx_1 -V080 -P5`) and sound/song_table.inc:42 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_exp: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_exp_max.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:310 (`-E -R50 -G_rs_sfx_2 -V094 -P5`) and sound/song_table.inc:100 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_exp_max: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_failure.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:312 (`-E -R50 -G_rs_sfx_1 -V120 -P4`) and sound/song_table.inc:41 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_failure: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_faint.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:313 (`-E -R50 -G_rs_sfx_1 -V110 -P5`) and sound/song_table.inc:25 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_faint: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_fall.mid": {
       "category": "audio.song",
@@ -24928,8 +25036,10 @@
     "sound/songs/midi/se_flee.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:316 (`-E -R50 -G_rs_sfx_1 -V090 -P5`) and sound/song_table.inc:26 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_flee: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_fu_zaku.mid": {
       "category": "audio.song",
@@ -24970,8 +25080,10 @@
     "sound/songs/midi/se_intro_blast.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:323 (`-E -R50 -G_rs_sfx_1 -V100 -P5`) and sound/song_table.inc:112 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_intro_blast: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_itemfinder.mid": {
       "category": "audio.song",
@@ -24988,26 +25100,34 @@
     "sound/songs/midi/se_ledge.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:326 (`-E -R50 -G_rs_sfx_1 -V100 -P4`) and sound/song_table.inc:19 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_ledge: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_low_health.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:327 (`-E -R50 -G_rs_sfx_1 -V100 -P3`) and sound/song_table.inc:99 (music player 3). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_low_health: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_absorb.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:328 (`-E -R50 -G_rs_sfx_2 -P4`) and sound/song_table.inc:189 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_absorb: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_absorb_2.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:329 (`-E -R50 -G_rs_sfx_2 -P4`) and sound/song_table.inc:188 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_absorb_2: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_acid_armor.mid": {
       "category": "audio.song",
@@ -25018,14 +25138,18 @@
     "sound/songs/midi/se_m_attract.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:331 (`-E -R50 -G_rs_sfx_2 -P4`) and sound/song_table.inc:235 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_attract: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_attract2.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:332 (`-E -R50 -G_rs_sfx_2 -P4`) and sound/song_table.inc:236 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_attract2: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_barrier.mid": {
       "category": "audio.song",
@@ -25042,8 +25166,10 @@
     "sound/songs/midi/se_m_belly_drum.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:335 (`-E -R50 -G_rs_sfx_2 -P4`) and sound/song_table.inc:194 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_belly_drum: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_bind.mid": {
       "category": "audio.song",
@@ -25054,8 +25180,10 @@
     "sound/songs/midi/se_m_bite.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:337 (`-E -R50 -G_rs_sfx_2 -P4`) and sound/song_table.inc:170 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_bite: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_blizzard.mid": {
       "category": "audio.song",
@@ -25084,20 +25212,26 @@
     "sound/songs/midi/se_m_bubble.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:342 (`-E -R50 -G_rs_sfx_2 -P4`) and sound/song_table.inc:133 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_bubble: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_bubble2.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:343 (`-E -R50 -G_rs_sfx_2 -P4`) and sound/song_table.inc:134 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_bubble2: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_bubble3.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:344 (`-E -R50 -G_rs_sfx_2 -P4`) and sound/song_table.inc:135 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_bubble3: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_bubble_beam.mid": {
       "category": "audio.song",
@@ -25108,8 +25242,10 @@
     "sound/songs/midi/se_m_bubble_beam2.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:346 (`-E -R50 -G_rs_sfx_2 -P4`) and sound/song_table.inc:192 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_bubble_beam2: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_charge.mid": {
       "category": "audio.song",
@@ -25120,14 +25256,18 @@
     "sound/songs/midi/se_m_charm.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:348 (`-E -R50 -G_rs_sfx_2 -P4`) and sound/song_table.inc:221 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_charm: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_comet_punch.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:349 (`-E -R50 -G_rs_sfx_2 -V120 -P4`) and sound/song_table.inc:148 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_comet_punch: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_confuse_ray.mid": {
       "category": "audio.song",
@@ -25144,26 +25284,34 @@
     "sound/songs/midi/se_m_crabhammer.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:352 (`-E -R50 -G_rs_sfx_2 -P4`) and sound/song_table.inc:151 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_crabhammer: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_cut.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:353 (`-E -R50 -G_rs_sfx_2 -V120 -P4`) and sound/song_table.inc:137 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_cut: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_detect.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:354 (`-E -R50 -G_rs_sfx_2 -P4`) and sound/song_table.inc:218 (music player 2). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_detect: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_dig.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:355 (`-E -R50 -G_rs_sfx_2 -P4`) and sound/song_table.inc:184 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_dig: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_dive.mid": {
       "category": "audio.song",
@@ -25174,38 +25322,50 @@
     "sound/songs/midi/se_m_dizzy_punch.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:357 (`-E -R50 -G_rs_sfx_2 -P4`) and sound/song_table.inc:185 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_dizzy_punch: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_double_slap.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:358 (`-E -R50 -G_rs_sfx_2 -V110 -P4`) and sound/song_table.inc:143 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_double_slap: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_double_team.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:359 (`-E -R50 -G_rs_sfx_2 -P4`) and sound/song_table.inc:144 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_double_team: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_dragon_rage.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:360 (`-E -R50 -G_rs_sfx_2 -P4`) and sound/song_table.inc:180 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_dragon_rage: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_earthquake.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:361 (`-E -R50 -G_rs_sfx_2 -P4`) and sound/song_table.inc:243 (music player 2). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_earthquake: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_ember.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:362 (`-E -R50 -G_rs_sfx_2 -P4`) and sound/song_table.inc:160 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_ember: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_encore.mid": {
       "category": "audio.song",
@@ -25234,14 +25394,18 @@
     "sound/songs/midi/se_m_fire_punch.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:367 (`-E -R50 -G_rs_sfx_2 -V110 -P4`) and sound/song_table.inc:156 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_fire_punch: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_flame_wheel.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:368 (`-E -R50 -G_rs_sfx_2 -P4`) and sound/song_table.inc:153 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_flame_wheel: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_flame_wheel2.mid": {
       "category": "audio.song",
@@ -25252,8 +25416,10 @@
     "sound/songs/midi/se_m_flamethrower.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:370 (`-E -R50 -G_rs_sfx_2 -P4`) and sound/song_table.inc:155 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_flamethrower: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_flatter.mid": {
       "category": "audio.song",
@@ -25270,8 +25436,10 @@
     "sound/songs/midi/se_m_giga_drain.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:373 (`-E -R50 -G_rs_sfx_2 -P4`) and sound/song_table.inc:208 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_giga_drain: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_grasswhistle.mid": {
       "category": "audio.song",
@@ -25282,14 +25450,18 @@
     "sound/songs/midi/se_m_gust.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:375 (`-E -R50 -G_rs_sfx_2 -V110 -P4`) and sound/song_table.inc:141 (music player 2). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_gust: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_gust2.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:376 (`-E -R50 -G_rs_sfx_2 -V110 -P4`) and sound/song_table.inc:142 (music player 2). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_gust2: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_hail.mid": {
       "category": "audio.song",
@@ -25300,8 +25472,10 @@
     "sound/songs/midi/se_m_harden.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:378 (`-E -R50 -G_rs_sfx_2 -P4`) and sound/song_table.inc:129 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_harden: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_haze.mid": {
       "category": "audio.song",
@@ -25312,8 +25486,10 @@
     "sound/songs/midi/se_m_headbutt.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:380 (`-E -R50 -G_rs_sfx_2 -V110 -P4`) and sound/song_table.inc:171 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_headbutt: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_heal_bell.mid": {
       "category": "audio.song",
@@ -25330,14 +25506,18 @@
     "sound/songs/midi/se_m_horn_attack.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:383 (`-E -R50 -G_rs_sfx_2 -V110 -P4`) and sound/song_table.inc:175 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_horn_attack: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_hydro_pump.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:384 (`-E -R50 -G_rs_sfx_2 -P4`) and sound/song_table.inc:173 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_hydro_pump: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_hyper_beam.mid": {
       "category": "audio.song",
@@ -25360,14 +25540,18 @@
     "sound/songs/midi/se_m_jump_kick.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:388 (`-E -R50 -G_rs_sfx_2 -V110 -P4`) and sound/song_table.inc:152 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_jump_kick: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_leer.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:389 (`-E -R50 -G_rs_sfx_2 -V110 -P4`) and sound/song_table.inc:201 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_leer: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_lick.mid": {
       "category": "audio.song",
@@ -25384,20 +25568,26 @@
     "sound/songs/midi/se_m_mega_kick.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:392 (`-E -R50 -G_rs_sfx_2 -V090 -P4`) and sound/song_table.inc:149 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_mega_kick: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_mega_kick2.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:393 (`-E -R50 -G_rs_sfx_2 -V110 -P4`) and sound/song_table.inc:150 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_mega_kick2: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_metronome.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:394 (`-E -R50 -G_rs_sfx_2 -P4`) and sound/song_table.inc:195 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_metronome: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_milk_drink.mid": {
       "category": "audio.song",
@@ -25414,20 +25604,26 @@
     "sound/songs/midi/se_m_mist.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:397 (`-E -R50 -G_rs_sfx_2 -P4`) and sound/song_table.inc:177 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_mist: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_moonlight.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:398 (`-E -R50 -G_rs_sfx_2 -P4`) and sound/song_table.inc:220 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_moonlight: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_morning_sun.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:399 (`-E -R50 -G_rs_sfx_2 -P5`) and sound/song_table.inc:237 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_morning_sun: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_nightmare.mid": {
       "category": "audio.song",
@@ -25450,26 +25646,34 @@
     "sound/songs/midi/se_m_petal_dance.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:403 (`-E -R50 -G_rs_sfx_2 -P4`) and sound/song_table.inc:211 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_petal_dance: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_poison_powder.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:404 (`-E -R50 -G_rs_sfx_2 -P4`) and sound/song_table.inc:178 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_poison_powder: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_psybeam.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:405 (`-E -R50 -G_rs_sfx_2 -P4`) and sound/song_table.inc:198 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_psybeam: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_psybeam2.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:406 (`-E -R50 -G_rs_sfx_2 -P4`) and sound/song_table.inc:209 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_psybeam2: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_rain_dance.mid": {
       "category": "audio.song",
@@ -25480,20 +25684,26 @@
     "sound/songs/midi/se_m_razor_wind.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:408 (`-E -R50 -G_rs_sfx_2 -V110 -P4`) and sound/song_table.inc:145 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_razor_wind: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_razor_wind2.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:409 (`-E -R50 -G_rs_sfx_2 -V090 -P4`) and sound/song_table.inc:169 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_razor_wind2: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_reflect.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:410 (`-E -R50 -G_rs_sfx_2 -P4`) and sound/song_table.inc:216 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_reflect: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_reversal.mid": {
       "category": "audio.song",
@@ -25516,14 +25726,18 @@
     "sound/songs/midi/se_m_sacred_fire2.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:414 (`-E -R50 -G_rs_sfx_2 -P4`) and sound/song_table.inc:159 (music player 2). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_sacred_fire2: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_sand_attack.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:415 (`-E -R50 -G_rs_sfx_2 -V110 -P4`) and sound/song_table.inc:168 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_sand_attack: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_sand_tomb.mid": {
       "category": "audio.song",
@@ -25540,14 +25754,18 @@
     "sound/songs/midi/se_m_scratch.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:418 (`-E -R50 -G_rs_sfx_2 -V110 -P4`) and sound/song_table.inc:164 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_scratch: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_screech.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:419 (`-E -R50 -G_rs_sfx_2 -V110 -P4`) and sound/song_table.inc:190 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_screech: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_self_destruct.mid": {
       "category": "audio.song",
@@ -25564,20 +25782,26 @@
     "sound/songs/midi/se_m_sketch.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:422 (`-E -R50 -G_rs_sfx_2 -P4`) and sound/song_table.inc:214 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_sketch: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_sky_uppercut.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:423 (`-E -R50 -G_rs_sfx_2 -P4`) and sound/song_table.inc:247 (music player 2). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_sky_uppercut: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_snore.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:424 (`-E -R50 -G_rs_sfx_2 -V120 -P4`) and sound/song_table.inc:206 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_snore: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_solar_beam.mid": {
       "category": "audio.song",
@@ -25588,20 +25812,26 @@
     "sound/songs/midi/se_m_spit_up.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:426 (`-E -R50 -G_rs_sfx_2 -P4`) and sound/song_table.inc:241 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_spit_up: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_stat_decrease.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:427 (`-E -R50 -G_rs_sfx_2 -P4`) and sound/song_table.inc:254 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_stat_decrease: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_stat_increase.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:428 (`-E -R50 -G_rs_sfx_2 -P4`) and sound/song_table.inc:248 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_stat_increase: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_strength.mid": {
       "category": "audio.song",
@@ -25612,20 +25842,26 @@
     "sound/songs/midi/se_m_string_shot.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:430 (`-E -R50 -G_rs_sfx_2 -P4`) and sound/song_table.inc:138 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_string_shot: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_string_shot2.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:431 (`-E -R50 -G_rs_sfx_2 -P4`) and sound/song_table.inc:139 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_string_shot2: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_supersonic.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:432 (`-E -R50 -G_rs_sfx_2 -P4`) and sound/song_table.inc:193 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_supersonic: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_surf.mid": {
       "category": "audio.song",
@@ -25636,14 +25872,18 @@
     "sound/songs/midi/se_m_swagger.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:434 (`-E -R50 -G_rs_sfx_2 -P4`) and sound/song_table.inc:202 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_swagger: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_swagger2.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:435 (`-E -R50 -G_rs_sfx_2 -P4`) and sound/song_table.inc:203 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_swagger2: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_sweet_scent.mid": {
       "category": "audio.song",
@@ -25666,14 +25906,18 @@
     "sound/songs/midi/se_m_tail_whip.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:439 (`-E -R50 -G_rs_sfx_2 -V110 -P4`) and sound/song_table.inc:176 (music player 2). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_tail_whip: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_take_down.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:440 (`-E -R50 -G_rs_sfx_2 -V105 -P4`) and sound/song_table.inc:161 (music player 2). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_take_down: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_teeter_dance.mid": {
       "category": "audio.song",
@@ -25702,14 +25946,18 @@
     "sound/songs/midi/se_m_thunderbolt2.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:445 (`-E -R50 -G_rs_sfx_2 -P4`) and sound/song_table.inc:128 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_thunderbolt2: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_toxic.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:446 (`-E -R50 -G_rs_sfx_2 -P4`) and sound/song_table.inc:157 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_toxic: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_tri_attack.mid": {
       "category": "audio.song",
@@ -25744,14 +25992,18 @@
     "sound/songs/midi/se_m_vital_throw.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:452 (`-E -R50 -G_rs_sfx_2 -P4`) and sound/song_table.inc:131 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_vital_throw: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_vital_throw2.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:453 (`-E -R50 -G_rs_sfx_2 -P4`) and sound/song_table.inc:132 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_vital_throw2: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_waterfall.mid": {
       "category": "audio.song",
@@ -25762,14 +26014,18 @@
     "sound/songs/midi/se_m_whirlpool.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:455 (`-E -R50 -G_rs_sfx_2 -P4`) and sound/song_table.inc:174 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_whirlpool: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_wing_attack.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:456 (`-E -R50 -G_rs_sfx_2 -V105 -P4`) and sound/song_table.inc:166 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_m_wing_attack: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_m_yawn.mid": {
       "category": "audio.song",
@@ -25798,8 +26054,10 @@
     "sound/songs/midi/se_not_effective.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:461 (`-E -R50 -G_rs_sfx_1 -V110 -P5`) and sound/song_table.inc:21 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_not_effective: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_note_a.mid": {
       "category": "audio.song",
@@ -25864,20 +26122,26 @@
     "sound/songs/midi/se_pc_login.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:472 (`-E -R50 -G_rs_sfx_1 -V100 -P5`) and sound/song_table.inc:11 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_pc_login: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_pc_off.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:473 (`-E -R50 -G_rs_sfx_1 -V100 -P5`) and sound/song_table.inc:12 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_pc_off: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_pc_on.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:474 (`-E -R50 -G_rs_sfx_1 -V100 -P5`) and sound/song_table.inc:13 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_pc_on: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_pike_curtain_close.mid": {
       "category": "audio.song",
@@ -25894,8 +26158,10 @@
     "sound/songs/midi/se_pin.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:477 (`-E -R50 -G_rs_sfx_1 -V060 -P4`) and sound/song_table.inc:30 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_pin: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_pokenav_call.mid": {
       "category": "audio.song",
@@ -25942,8 +26208,10 @@
     "sound/songs/midi/se_repel.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:485 (`-E -R50 -G_rs_sfx_1 -V090 -P4`) and sound/song_table.inc:56 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_repel: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_rg_bag_cursor.mid": {
       "category": "audio.song",
@@ -25960,26 +26228,34 @@
     "sound/songs/midi/se_rg_ball_click.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:488 (`-E -R50 -G_frlg_sfx -V100 -P5`) and sound/song_table.inc:263 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_rg_ball_click: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_rg_card_flip.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:489 (`-E -R50 -G_frlg_sfx -P5`) and sound/song_table.inc:258 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_rg_card_flip: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_rg_card_flipping.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:490 (`-E -R50 -G_frlg_sfx -P5`) and sound/song_table.inc:259 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_rg_card_flipping: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_rg_card_open.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:491 (`-E -R50 -G_frlg_sfx -V112 -P5`) and sound/song_table.inc:260 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_rg_card_open: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_rg_deoxys_move.mid": {
       "category": "audio.song",
@@ -26056,20 +26332,26 @@
     "sound/songs/midi/se_save.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:504 (`-E -R50 -G_rs_sfx_2 -V080 -P5`) and sound/song_table.inc:64 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_save: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_select.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:505 (`-E -R50 -G_rs_sfx_1 -V080 -P5`) and sound/song_table.inc:14 (music player 2). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_select: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_shiny.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:506 (`-E -R50 -G_rs_sfx_2 -V095 -P5`) and sound/song_table.inc:111 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_shiny: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_ship.mid": {
       "category": "audio.song",
@@ -26080,20 +26362,26 @@
     "sound/songs/midi/se_shop.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:508 (`-E -R50 -G_rs_sfx_1 -V090 -P5`) and sound/song_table.inc:104 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_shop: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_sliding_door.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:509 (`-E -R50 -G_rs_sfx_2 -V095 -P4`) and sound/song_table.inc:27 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_sliding_door: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_success.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:510 (`-E -R50 -G_rs_sfx_1 -V080 -P4`) and sound/song_table.inc:40 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_success: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_sudowoodo_shake.mid": {
       "category": "audio.song",
@@ -26104,8 +26392,10 @@
     "sound/songs/midi/se_super_effective.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:512 (`-E -R50 -G_rs_sfx_1 -V110 -P5`) and sound/song_table.inc:23 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_super_effective: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_switch.mid": {
       "category": "audio.song",
@@ -26146,26 +26436,34 @@
     "sound/songs/midi/se_truck_door.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:519 (`-E -R50 -G_rs_sfx_2 -V110 -P4`) and sound/song_table.inc:61 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_truck_door: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_truck_move.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:520 (`-E -R50 -G_rs_sfx_2 -P4`) and sound/song_table.inc:58 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_truck_move: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_truck_stop.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:521 (`-E -R50 -G_rs_sfx_2 -P4`) and sound/song_table.inc:59 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_truck_stop: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_truck_unload.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:522 (`-E -R50 -G_rs_sfx_1 -P4`) and sound/song_table.inc:60 (music player 2). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_truck_unload: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_u.mid": {
       "category": "audio.song",
@@ -26182,8 +26480,10 @@
     "sound/songs/midi/se_use_item.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:525 (`-E -R50 -G_rs_sfx_1 -V100 -P5`) and sound/song_table.inc:10 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_use_item: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_vend.mid": {
       "category": "audio.song",
@@ -26194,8 +26494,10 @@
     "sound/songs/midi/se_wall_hit.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:527 (`-E -R50 -G_rs_sfx_1 -P2`) and sound/song_table.inc:16 (music player 2). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_wall_hit: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/songs/midi/se_warp_in.mid": {
       "category": "audio.song",
@@ -26212,8 +26514,10 @@
     "sound/songs/midi/se_win_open.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "S-3",
-      "status": "pending"
+      "reason": "sound/songs/midi/midi.cfg:530 (`-E -R50 -G_rs_sfx_1 -P5`) and sound/song_table.inc:15 (music player 1). Compiled by the xtask MIDI pipeline at those flags (exact gate time, 24 clocks per beat) into audio/song/se_win_open: the SongHeader voicegroup, priority and reverb, the table's Song.ms, and normalized SongEvent tracks, one per channel with a nonzero-length note. -X, a missing -E, and MEMACC controllers on a playable channel fail with typed errors. The voicegroup is named, not resolved; playback is not modelled.",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-3",
+      "status": "ported"
     },
     "sound/voice_groups.inc": {
       "category": "audio.misc",

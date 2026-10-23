@@ -1,27 +1,26 @@
-//! Compiles `mus_title.mid` into the normalized compiler event model
-//! ([`event::SongEvent`]) that [`encode`] writes as the asset pack's
-//! backend-neutral song schema.
+//! Compiles the checkpoint song manifest's MIDI sources into the normalized compiler event
+//! model ([`event::SongEvent`]) that [`encode`] writes as the asset pack's backend-neutral song
+//! schema.
 //!
-//! # Scope: `mus_title` only, at its own compile flags
+//! # Scope: the checkpoint manifest, at each song's own compile flags
 //!
-//! This is a *title-scoped* compiler, not a general `tools/mid2agb`
-//! reimplementation: it reads `sound/songs/midi/midi.cfg`'s `mus_title.mid`
-//! line generically ([`mod@cfg`]), but [`compile`] hard-requires `-E`
-//! (exact gate time) and rejects `-X` (48-clocks-per-beat) — the two
-//! constraints `mus_title.mid`'s own line always satisfies — and fails
-//! closed ([`error::MidiError::NonExactGateTime`]/
-//! [`error::MidiError::UnsupportedClocksPerBeat`]) if a future caller ever
-//! points it at a `midi.cfg` entry that doesn't. See [`compile`]'s module
-//! docs for why each flag is required. A `MEMACC` controller fails closed
-//! ([`error::MidiError::UnsupportedMemAccController`]) only on a playable
-//! channel; [`compile`] drops unplayable channels before reading their
-//! controllers at all. `mus_title.mid` carries none, and the pack schema's
-//! one `MEMACC` user, `mus_vs_trainer`, is a different song this compiler
-//! never touches.
+//! This is not a general `tools/mid2agb` reimplementation. [`manifest::CHECKPOINT_SONGS`] lists
+//! the songs the early-game checkpoint reaches. For each, [`mod@cfg`] reads the song's
+//! `sound/songs/midi/midi.cfg` line (the flags `audio_rules.mk`'s `MID_RULE` passes to
+//! `mid2agb`) and [`song_table`] reads its `Song.ms` music player from
+//! `sound/song_table.inc`. [`compile`] hard-requires `-E` (exact gate time) and rejects `-X`
+//! (48-clocks-per-beat), and fails closed ([`error::MidiError::NonExactGateTime`] and
+//! [`error::MidiError::UnsupportedClocksPerBeat`]) on a manifest song whose line does neither
+//! constraint's way. See [`compile`]'s module docs for why each flag is required. A `MEMACC`
+//! controller fails closed ([`error::MidiError::UnsupportedMemAccController`]) only on a
+//! playable channel; [`compile`] drops unplayable channels before reading their controllers at
+//! all. No manifest song carries one.
 //!
-//! The compiler models every command family [`event::SongEvent`] can
-//! represent, including loop markers, which `mus_title.mid` itself never
-//! reaches but [`compile`]'s own tests pin on crafted fragments.
+//! A manifest song with no `-G` flag (`mus_dummy`, upstream's silence) takes upstream's `dummy`
+//! voicegroup, and only if it compiles to no tracks
+//! ([`error::MidiError::DefaultVoiceGroupOnPlayableSong`]).
+//!
+//! Voicegroup and sample resolution are not done here: a song only names its voicegroup.
 //!
 //! # Pipeline
 //!
@@ -37,84 +36,145 @@
 //!
 //! # Output
 //!
-//! Reads `sound/songs/midi/midi.cfg` and [`SONG_MIDI_FILENAME`] from the
-//! upstream checkout and writes the compiled result as one
-//! [`pack_format::EntryKind::Raw`] entry under [`SONG_PACK_ID`] (`crate::extract`'s
-//! "Asset id scheme" docs).
+//! Writes each compiled song as one [`pack_format::EntryKind::Raw`] entry under
+//! `audio/song/<symbol>` (`crate::extract`'s "Asset id scheme" docs).
 
 mod cfg;
 mod compile;
 mod encode;
 mod error;
 mod event;
+mod manifest;
 mod parse;
 mod reader;
 mod song_table;
 mod translate;
 mod velocity;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub(crate) use error::MidiError;
 
 use super::{read_file, read_text, ExtractError};
+use manifest::{SongSource, VoiceGroupSource, CHECKPOINT_SONGS};
 use pack_format::PackWriter;
 
-const SONG_MIDI_FILENAME: &str = "mus_title.mid";
-/// `SONG_MIDI_FILENAME`'s row symbol in `sound/song_table.inc`.
-const SONG_TABLE_SYMBOL: &str = "mus_title";
-/// The one song id this compiler ever writes. Crate-visible: `gen_rom_profile::audio`
-/// reuses this exact id as the one `audio/song/` entry it locates a ROM
-/// address for, the same reuse [`super::voicegroups`]'s `groups_by_label`
-/// documents for the voicegroup index.
+/// The pack id of the one song the ROM profile locates (`mus_title`), which the manifest also
+/// carries. Crate-visible: `gen_rom_profile::audio` reuses this exact id as the one
+/// `audio/song/` entry it locates a ROM address for, the same reuse [`super::voicegroups`]'s
+/// `groups_by_label` documents for the voicegroup index.
 pub(crate) const SONG_PACK_ID: &str = "audio/song/mus_title";
 
-/// Compile [`SONG_MIDI_FILENAME`] into its normalized [`event::SongEvent`]
-/// streams (per [`compile::compile`]'s own semantics) and write it as a
-/// [`pack_format::EntryKind::Raw`] entry under [`SONG_PACK_ID`].
+/// Upstream's voicegroup for a `midi.cfg` entry with no `-G` flag: `g_voiceGroup` starts as
+/// `_dummy` (`tools/mid2agb/main.cpp:36`), and the leading underscore is the assembler symbol's.
+const DEFAULT_VOICEGROUP_LABEL: &str = "dummy";
+
+/// The checkout's `midi.cfg` and `song_table.inc`, read once for every manifest song.
+struct SongSources {
+    cfg_path: PathBuf,
+    cfg_text: String,
+    table_path: PathBuf,
+    table_text: String,
+    midi_dir: PathBuf,
+}
+
+impl SongSources {
+    fn read(upstream: &Path) -> Result<Self, ExtractError> {
+        let cfg_path = upstream.join("sound/songs/midi/midi.cfg");
+        let table_path = upstream.join("sound/song_table.inc");
+        Ok(Self {
+            cfg_text: read_text(&cfg_path)?,
+            table_text: read_text(&table_path)?,
+            cfg_path,
+            table_path,
+            midi_dir: upstream.join("sound/songs/midi"),
+        })
+    }
+
+    /// Encodes `source` from its `.mid`, `midi.cfg` line, and song-table row.
+    fn encode(&self, source: &SongSource) -> Result<Vec<u8>, ExtractError> {
+        let in_table = |error| ExtractError::Midi(self.table_path.clone(), error);
+        let player = song_table::player_for(&self.table_text, source.symbol).map_err(in_table)?;
+        if player != source.player {
+            return Err(in_table(MidiError::SongTablePlayerMismatch {
+                symbol: source.symbol.to_owned(),
+                expected: source.player,
+                actual: player,
+            }));
+        }
+
+        let in_cfg = |error| ExtractError::MidiCfg(self.cfg_path.clone(), error);
+        let filename = source.midi_filename();
+        let (mut entry, defaulted_group) = match source.voicegroup {
+            VoiceGroupSource::Configured => (
+                cfg::parse_entry_for(&self.cfg_text, &filename).map_err(in_cfg)?,
+                false,
+            ),
+            VoiceGroupSource::DefaultWhenSilent => {
+                let entry = cfg::parse_entry_flags(&self.cfg_text, &filename).map_err(in_cfg)?;
+                let defaulted = entry.voicegroup_label.is_empty();
+                (entry, defaulted)
+            }
+        };
+        if defaulted_group {
+            DEFAULT_VOICEGROUP_LABEL.clone_into(&mut entry.voicegroup_label);
+        }
+
+        let midi_path = self.midi_dir.join(&filename);
+        let in_midi = |error| ExtractError::Midi(midi_path.clone(), error);
+        let song = compile::compile(&read_file(&midi_path)?, &entry).map_err(in_midi)?;
+        if defaulted_group && !song.tracks.is_empty() {
+            return Err(in_midi(MidiError::DefaultVoiceGroupOnPlayableSong));
+        }
+        encode::encode_song(&song, player).map_err(in_midi)
+    }
+}
+
+/// Compile every [`CHECKPOINT_SONGS`] source into its normalized [`event::SongEvent`] streams
+/// (per [`compile::compile`]'s own semantics) and write each as a
+/// [`pack_format::EntryKind::Raw`] entry under `audio/song/<symbol>`.
 ///
 /// # Errors
 ///
-/// [`ExtractError::ReadFailed`] if `midi.cfg` or the `.mid` source is
-/// missing; [`ExtractError::MidiCfg`] if `midi.cfg` has no entry for
-/// [`SONG_MIDI_FILENAME`] or that entry is malformed; [`ExtractError::Midi`]
-/// if compiling the `.mid` source itself fails, or if the compiled song
-/// carries more tracks than the wire format's `u8` count can describe (see
-/// [`error::MidiError`]'s variants).
-pub(super) fn extract_song(upstream: &Path, writer: &mut PackWriter) -> Result<(), ExtractError> {
-    let cfg_path = upstream.join("sound/songs/midi/midi.cfg");
-    let cfg_text = read_text(&cfg_path)?;
-    let entry = cfg::parse_entry_for(&cfg_text, SONG_MIDI_FILENAME)
-        .map_err(|e| ExtractError::MidiCfg(cfg_path.clone(), e))?;
+/// [`ExtractError::ReadFailed`] if `midi.cfg`, `song_table.inc`, or a `.mid` source is
+/// missing; [`ExtractError::MidiCfg`] if a song's `midi.cfg` entry is absent, duplicated, or
+/// malformed; [`ExtractError::Midi`] if the manifest is malformed, a song's song-table row is
+/// absent, duplicated, malformed, or assigns a different music player than the manifest
+/// expects, compiling the `.mid` source itself fails, or the compiled song carries more
+/// tracks than the wire format's `u8` count can describe (see [`error::MidiError`]'s variants).
+pub(super) fn extract_songs(upstream: &Path, writer: &mut PackWriter) -> Result<(), ExtractError> {
+    extract_listed_songs(upstream, writer, &CHECKPOINT_SONGS)
+}
 
-    let midi_path = upstream.join("sound/songs/midi").join(SONG_MIDI_FILENAME);
-    let midi_bytes = read_file(&midi_path)?;
-    let song = compile::compile(&midi_bytes, &entry)
-        .map_err(|e| ExtractError::Midi(midi_path.clone(), e))?;
-    let table_path = upstream.join("sound/song_table.inc");
-    let player = song_table::player_for(&read_text(&table_path)?, SONG_TABLE_SYMBOL)
-        .map_err(|e| ExtractError::Midi(table_path.clone(), e))?;
-    let payload =
-        encode::encode_song(&song, player).map_err(|e| ExtractError::Midi(midi_path.clone(), e))?;
-
-    writer.push(pack_format::raw_entry(SONG_PACK_ID.to_owned(), payload));
+fn extract_listed_songs(
+    upstream: &Path,
+    writer: &mut PackWriter,
+    sources: &[SongSource],
+) -> Result<(), ExtractError> {
+    let files = SongSources::read(upstream)?;
+    manifest::check_manifest(sources)
+        .map_err(|error| ExtractError::Midi(files.table_path.clone(), error))?;
+    for source in sources {
+        let payload = files.encode(source)?;
+        writer.push(pack_format::raw_entry(source.pack_id(), payload));
+    }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::event::SongEvent;
-    use super::{extract_song, SONG_PACK_ID};
+    use super::{extract_songs, SONG_PACK_ID};
     use pack_format::PackWriter;
 
     #[test]
     #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
-    fn mus_title_compiles_and_reaches_the_pack() {
+    fn mus_title_reaches_the_pack_beside_the_manifest() {
         use super::super::{repo_root, upstream_present};
         assert!(upstream_present(), "run ./init.sh first");
         let upstream = repo_root().join("pokeemerald");
         let mut writer = PackWriter::new();
-        extract_song(&upstream, &mut writer).expect("mus_title.mid should compile");
+        extract_songs(&upstream, &mut writer).expect("the manifest songs should compile");
         let bytes = writer.finish().expect("packing should succeed");
         assert!(
             bytes
