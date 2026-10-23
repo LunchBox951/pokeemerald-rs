@@ -24,7 +24,7 @@ const TEXTBOX_TILEMAP_BYTES: usize = TEXTBOX_TILEMAP_BLOCKS
     * TILEMAP_ENTRY_BYTES;
 
 /// Textbox pixels address one palette bank; tilemap entries select the bank.
-/// Upstream: `src/graphics.c:4-6`, `src/bg.c:1169-1186`.
+/// Upstream: `src/graphics.c:4-6`, `src/battle_bg.c:1216-1223`.
 #[derive(Debug, Clone, Copy)]
 pub struct BattleTextboxHandle<'a> {
     /// 128x128 4bpp tile sheet.
