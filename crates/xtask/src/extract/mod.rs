@@ -40,6 +40,8 @@
 //!   palette files, and 15 raw tilemap and data files;
 //! - the battle textbox sheet, its 32-colour palette and tilemap, and the battle-window
 //!   and PP text palettes;
+//! - the raw 4bpp tiles of the thirteen `gHealthboxElementsGfxTable` sheets and of
+//!   the battle bar built from `hpbar_anim_unused`, `numbers1`, and `numbers2`;
 //! - `mus_title`, its transitive voicegroup tree, and every sample that tree
 //!   references; and
 //! - the battle-message token table (`gBattleStringsTable` plus the special
@@ -60,7 +62,8 @@
 //! - `opening-scene/{image,palette,raw}/<name>`
 //! - `trainer-pic/<trainer>/{front,palette}`
 //! - `bag/{image,palette,raw}/<name>` and `bag/item-icon/{image,palette}/<stem>`
-//! - `battle-interface/{image,palette,raw}/<name>`
+//! - `battle-interface/{image,palette,raw}/<name>` and
+//!   `battle-interface/raw/healthbox_element/<stem>`
 //! - `pokemon/<species>/{front,back}` and `pokemon/<species>/palette/{normal,shiny}`
 //! - `pokedex-graphics/{image,image-palette,palette,raw}/<name>`
 //! - `audio/sample/{direct-sound,programmable-wave}/<name>`
@@ -176,6 +179,7 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     bag::extract_bag(&upstream, &mut writer)?;
     pokedex_graphics::extract_pokedex_graphics(&upstream, &mut writer)?;
     battle_interface::extract_battle_interface(&upstream, &mut writer)?;
+    battle_interface::extract_healthbox_elements(&upstream, &mut writer)?;
     audio_samples::extract_audio_samples(&upstream, &mut writer)?;
     voicegroups::extract_voicegroups(&upstream, &mut writer)?;
     midi::extract_song(&upstream, &mut writer)?;

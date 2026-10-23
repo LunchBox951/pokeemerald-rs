@@ -6,12 +6,19 @@
 //! followed by `textbox_1.pal`, as `graphics_file_rules.mk` concatenates their
 //! `.gbapal` files. A missing file or a neighbour the typed
 //! `assets::BattleInterfaceHandle` never reads cannot change the pack.
+//!
+//! The health-box element table and the battle bar are extracted separately, as
+//! raw 4bpp, by [`extract_healthbox_elements`].
+
+mod healthbox_elements;
 
 use std::path::Path;
 
 use super::{build_image_entry, build_palette_entry, jasc_pal, png, push_raw_bytes};
 use super::{read_file, read_text, ExtractError};
 use pack_format::PackWriter;
+
+pub(super) use healthbox_elements::extract_healthbox_elements;
 
 const DIRECTORY: &str = "graphics/battle_interface";
 const IMAGE_PREFIX: &str = "battle-interface/image";
