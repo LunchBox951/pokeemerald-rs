@@ -18,18 +18,87 @@ use super::{
 };
 use crate::layout::OUTPUT_RELATIVE_PATH;
 
-/// Claims a fresh, empty scratch directory under the temp dir and returns it.
+/// What names one directory on disk, so a later check can tell it from a
+/// different directory that took the same path. On Unix this is the device
+/// and inode; elsewhere `std` offers no stable identity, so any real
+/// directory (not a symlink) at the path is taken to be the same one.
+#[cfg(unix)]
+type Identity = (u64, u64);
+#[cfg(not(unix))]
+type Identity = ();
+
+/// The identity of the real directory at `path`, or `None` when nothing is
+/// there, a symlink is, or it is not a directory. Reads the link itself, never
+/// what it points at.
+fn directory_identity(path: &Path) -> Option<Identity> {
+    let metadata = std::fs::symlink_metadata(path).ok()?;
+    if !metadata.is_dir() {
+        return None;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        Some((metadata.dev(), metadata.ino()))
+    }
+    #[cfg(not(unix))]
+    {
+        Some(())
+    }
+}
+
+/// A scratch directory this fixture created, removed with its contents when
+/// dropped, but only while the path still names the directory it created.
 ///
-/// The name is `<prefix>-<pid>-<attempt>` and is taken with `create_dir`,
-/// which fails if anything already occupies it. An occupied name (a leftover
-/// from a process that reused this PID, or something planted in a shared
-/// `/tmp`) moves on to the next attempt and is never removed or entered, so a
-/// fixture only ever deletes a directory it created itself.
-fn claim_scratch_root(prefix: &str) -> PathBuf {
+/// The name is claimed with `create_dir`, which fails if anything already
+/// occupies it. The directory's identity is recorded at that moment, and the
+/// drop re-reads it: a path another process has since emptied and refilled,
+/// or replaced with a symlink, is left alone. So a fixture never deletes a
+/// directory it did not create. The path derefs to `&Path`.
+struct ScratchRoot {
+    path: PathBuf,
+    identity: Identity,
+}
+
+impl ScratchRoot {
+    /// Creates `path` as a new directory, failing if the name is taken.
+    fn claim_at(path: PathBuf) -> std::io::Result<Self> {
+        std::fs::create_dir(&path)?;
+        let identity = directory_identity(&path).ok_or_else(|| {
+            std::io::Error::other(format!(
+                "{} is not the directory just created",
+                path.display()
+            ))
+        })?;
+        Ok(Self { path, identity })
+    }
+}
+
+impl std::ops::Deref for ScratchRoot {
+    type Target = Path;
+
+    fn deref(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for ScratchRoot {
+    fn drop(&mut self) {
+        if directory_identity(&self.path) == Some(self.identity) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+}
+
+/// Claims a fresh, empty scratch directory under the temp dir.
+///
+/// The name is `<prefix>-<pid>-<attempt>`. An occupied name (a leftover from a
+/// process that reused this PID, or something planted in a shared `/tmp`)
+/// moves on to the next attempt and is never removed or entered.
+fn claim_scratch_root(prefix: &str) -> ScratchRoot {
     for attempt in 0.. {
         let root = std::env::temp_dir().join(format!("{prefix}-{}-{attempt}", std::process::id()));
-        match std::fs::create_dir(&root) {
-            Ok(()) => return root,
+        match ScratchRoot::claim_at(root.clone()) {
+            Ok(claimed) => return claimed,
             Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(err) => panic!("claim scratch root {}: {err}", root.display()),
         }
@@ -466,12 +535,11 @@ fn the_developer_checkout_guard_agrees_with_resolution_about_an_unreadable_user_
     let guard_skips = a_user_pack_may_stop_resolution(&candidate);
     // `default_pack_path`'s own core, driven with the same `HOME` and the
     // same real probe.
-    let home_env = home.clone().into_os_string();
+    let home_env = home.as_os_str().to_owned();
     let env = move |key: &str| (key == "HOME").then(|| home_env.clone());
     let resolved = resolve(&env, Some(Path::new("/opt/game")), &probe, HostFamily::Xdg);
 
-    let _ = std::fs::remove_file(&candidate);
-    let _ = std::fs::remove_dir_all(&home);
+    drop(home);
 
     if guard_skips {
         return;
@@ -555,9 +623,6 @@ fn the_real_probe_separates_absent_from_unreadable_and_finds_a_file() {
     // A directory wearing the pack's name is not a pack, and the next rung
     // is a better answer than a read error on it.
     assert_eq!(probe(&dir), Probe::Missing);
-
-    let _ = std::fs::remove_file(&file);
-    let _ = std::fs::remove_dir(&dir);
 }
 
 #[cfg(unix)]
@@ -589,10 +654,6 @@ fn the_real_probe_reports_a_pack_behind_an_unsearchable_directory_as_unreadable(
             "a pack behind an unsearchable directory is not the same as no pack"
         );
     }
-
-    let _ = std::fs::remove_file(&pack);
-    let _ = std::fs::remove_dir(&inner);
-    let _ = std::fs::remove_dir(&root);
 }
 
 /// A regular file where a candidate's *parent directory* should be proves
@@ -611,8 +672,7 @@ fn the_real_probe_reports_a_candidate_under_a_regular_file_as_missing() {
 
     let observed = probe(&intermediate.join("pokeemerald.pack"));
 
-    let _ = std::fs::remove_file(&intermediate);
-    let _ = std::fs::remove_dir(&root);
+    drop(root);
 
     assert_eq!(
         observed,
@@ -666,9 +726,7 @@ fn a_regular_file_at_the_user_data_rung_advances_resolution_to_a_valid_later_run
         HostFamily::Xdg | HostFamily::Windows => data_home.clone(),
     };
 
-    let _ = std::fs::remove_file(&data_home);
-    let _ = std::fs::remove_dir_all(&exe_dir);
-    let _ = std::fs::remove_dir(&root);
+    drop(root);
 
     if super::RELEASE_CHANNEL == "dev" {
         assert_eq!(
@@ -844,28 +902,27 @@ fn claiming_a_scratch_root_never_disturbs_a_directory_already_at_that_name() {
     std::fs::write(&sentinel, b"keep me").expect("the occupant's file writes");
 
     // Plant at the old predictable name too, which the fixtures used to
-    // empty before using it.
-    let legacy = std::env::temp_dir().join(format!("pack-format-probe-{}", std::process::id()));
-    let legacy_owned = std::fs::create_dir(&legacy).is_ok();
-    let legacy_sentinel = legacy.join("someone-elses-file");
-    if legacy_owned {
-        std::fs::write(&legacy_sentinel, b"keep me").expect("the legacy file writes");
+    // empty before using it. Only a directory this test created is planted
+    // in; a name already taken by someone else is left alone and unchecked.
+    let legacy = ScratchRoot::claim_at(
+        std::env::temp_dir().join(format!("pack-format-probe-{}", std::process::id())),
+    )
+    .ok();
+    let legacy_sentinel = legacy.as_ref().map(|root| root.join("someone-elses-file"));
+    if let Some(path) = &legacy_sentinel {
+        std::fs::write(path, b"keep me").expect("the legacy file writes");
     }
     the_real_probe_separates_absent_from_unreadable_and_finds_a_file();
-    let legacy_survived = !legacy_owned || legacy_sentinel.exists();
+    let legacy_survived = legacy_sentinel.as_ref().is_none_or(|path| path.exists());
 
     let second = claim_scratch_root("pack-format-claim");
-    let second_entries = std::fs::read_dir(&second).expect("the claim lists").count();
+    let second_entries = std::fs::read_dir(&*second)
+        .expect("the claim lists")
+        .count();
     let kept = std::fs::read(&sentinel);
 
-    let _ = std::fs::remove_dir_all(&second);
-    let _ = std::fs::remove_dir_all(&occupied);
-    if legacy_owned {
-        let _ = std::fs::remove_dir_all(&legacy);
-    }
-
     assert_ne!(
-        second, occupied,
+        *second, *occupied,
         "an occupied name must not be claimed again"
     );
     assert_eq!(second_entries, 0, "a claimed root starts empty");
@@ -878,4 +935,42 @@ fn claiming_a_scratch_root_never_disturbs_a_directory_already_at_that_name() {
         legacy_survived,
         "a fixture emptied the old predictable path"
     );
+}
+
+/// A claimed root that another process swaps out between the claim and the
+/// fixture's cleanup must not lose the replacement's contents to that cleanup.
+#[test]
+fn fixture_cleanup_deletes_only_the_directory_it_claimed() {
+    let home = claim_scratch_root("pack-format-swap");
+    let path = home.to_path_buf();
+    let aside = path.with_extension("aside");
+    std::fs::rename(&path, &aside).expect("the claimed root moves aside");
+    std::fs::create_dir(&path).expect("the replacement directory");
+    let sentinel = path.join("someone-elses-file");
+    std::fs::write(&sentinel, b"keep me").expect("the replacement's file writes");
+
+    // The fixtures' cleanup.
+    drop(home);
+
+    let survived = sentinel.exists();
+    let _ = std::fs::remove_dir_all(&aside);
+    let _ = std::fs::remove_dir_all(&path);
+    assert!(
+        survived,
+        "cleanup deleted a directory the fixture did not create"
+    );
+}
+
+/// The claimed directory itself is removed with everything the fixture put in
+/// it, so an owned root does not leak into the shared temp directory.
+#[test]
+fn fixture_cleanup_removes_the_directory_it_claimed() {
+    let home = claim_scratch_root("pack-format-owned");
+    let path = home.to_path_buf();
+    std::fs::create_dir_all(path.join("nested")).expect("a nested directory");
+    std::fs::write(path.join("nested").join("file"), b"mine").expect("a nested file");
+
+    drop(home);
+
+    assert!(!path.exists(), "an owned root was left behind");
 }
