@@ -17049,6 +17049,32 @@
       "status": "pending"
     },
     "graphics/pokemon/beautifly": {
+      "artifacts": {
+        "back.png": {
+          "reason": "Static 64x64 beautifly image extracted as the typed battler lookup's back image and recorded as a ROM-profile battler root; animation sheets, icons, and footprints remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "front.png": {
+          "reason": "Static beautifly still-front image (`gMonStillFrontPic_Beautifly`) extracted as the typed battler lookup's front image and recorded as a ROM-profile battler root. Animation sheets, icons, and footprints remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "normal.pal": {
+          "reason": "Sixteen-colour JASC beautifly palette (normal) extracted for the typed battler lookup and recorded as a ROM-profile battler root; palette application stays pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "shiny.pal": {
+          "reason": "Sixteen-colour JASC beautifly palette (shiny) extracted for the typed battler lookup and recorded as a ROM-profile battler root; palette application stays pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.pokemon",
       "kind": "dir",
       "spec_owner": "S-4",
@@ -17139,6 +17165,32 @@
       "status": "pending"
     },
     "graphics/pokemon/cascoon": {
+      "artifacts": {
+        "back.png": {
+          "reason": "Static 64x64 cascoon image extracted as the typed battler lookup's back image and recorded as a ROM-profile battler root; animation sheets, icons, and footprints remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "front.png": {
+          "reason": "Static cascoon still-front image (`gMonStillFrontPic_Cascoon`) extracted as the typed battler lookup's front image and recorded as a ROM-profile battler root. Animation sheets, icons, and footprints remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "normal.pal": {
+          "reason": "Sixteen-colour JASC cascoon palette (normal) extracted for the typed battler lookup and recorded as a ROM-profile battler root; palette application stays pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "shiny.pal": {
+          "reason": "Sixteen-colour JASC cascoon palette (shiny) extracted for the typed battler lookup and recorded as a ROM-profile battler root; palette application stays pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.pokemon",
       "kind": "dir",
       "spec_owner": "S-4",
@@ -17397,6 +17449,32 @@
       "status": "pending"
     },
     "graphics/pokemon/dustox": {
+      "artifacts": {
+        "back.png": {
+          "reason": "Static 64x64 dustox image extracted as the typed battler lookup's back image and recorded as a ROM-profile battler root; animation sheets, icons, and footprints remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "front.png": {
+          "reason": "Static dustox still-front image (`gMonStillFrontPic_Dustox`) extracted as the typed battler lookup's front image and recorded as a ROM-profile battler root. Animation sheets, icons, and footprints remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "normal.pal": {
+          "reason": "Sixteen-colour JASC dustox palette (normal) extracted for the typed battler lookup and recorded as a ROM-profile battler root; palette application stays pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "shiny.pal": {
+          "reason": "Sixteen-colour JASC dustox palette (shiny) extracted for the typed battler lookup and recorded as a ROM-profile battler root; palette application stays pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.pokemon",
       "kind": "dir",
       "spec_owner": "S-4",
@@ -17931,6 +18009,32 @@
       "status": "pending"
     },
     "graphics/pokemon/linoone": {
+      "artifacts": {
+        "back.png": {
+          "reason": "Static 64x64 linoone image extracted as the typed battler lookup's back image and recorded as a ROM-profile battler root; animation sheets, icons, and footprints remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "front.png": {
+          "reason": "Static linoone still-front image (`gMonStillFrontPic_Linoone`) extracted as the typed battler lookup's front image and recorded as a ROM-profile battler root. Animation sheets, icons, and footprints remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "normal.pal": {
+          "reason": "Sixteen-colour JASC linoone palette (normal) extracted for the typed battler lookup and recorded as a ROM-profile battler root; palette application stays pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "shiny.pal": {
+          "reason": "Sixteen-colour JASC linoone palette (shiny) extracted for the typed battler lookup and recorded as a ROM-profile battler root; palette application stays pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.pokemon",
       "kind": "dir",
       "spec_owner": "S-4",
@@ -18161,6 +18265,32 @@
       "status": "pending"
     },
     "graphics/pokemon/mightyena": {
+      "artifacts": {
+        "back.png": {
+          "reason": "Static 64x64 mightyena image extracted as the typed battler lookup's back image and recorded as a ROM-profile battler root; animation sheets, icons, and footprints remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "front.png": {
+          "reason": "Static mightyena still-front image (`gMonStillFrontPic_Mightyena`) extracted as the typed battler lookup's front image and recorded as a ROM-profile battler root. Animation sheets, icons, and footprints remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "normal.pal": {
+          "reason": "Sixteen-colour JASC mightyena palette (normal) extracted for the typed battler lookup and recorded as a ROM-profile battler root; palette application stays pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "shiny.pal": {
+          "reason": "Sixteen-colour JASC mightyena palette (shiny) extracted for the typed battler lookup and recorded as a ROM-profile battler root; palette application stays pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.pokemon",
       "kind": "dir",
       "spec_owner": "S-4",
@@ -18373,6 +18503,32 @@
       "status": "pending"
     },
     "graphics/pokemon/pelipper": {
+      "artifacts": {
+        "back.png": {
+          "reason": "Static 64x64 pelipper image extracted as the typed battler lookup's back image and recorded as a ROM-profile battler root; animation sheets, icons, and footprints remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "front.png": {
+          "reason": "Static pelipper still-front image (`gMonStillFrontPic_Pelipper`) extracted as the typed battler lookup's front image and recorded as a ROM-profile battler root. Animation sheets, icons, and footprints remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "normal.pal": {
+          "reason": "Sixteen-colour JASC pelipper palette (normal) extracted for the typed battler lookup and recorded as a ROM-profile battler root; palette application stays pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "shiny.pal": {
+          "reason": "Sixteen-colour JASC pelipper palette (shiny) extracted for the typed battler lookup and recorded as a ROM-profile battler root; palette application stays pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.pokemon",
       "kind": "dir",
       "spec_owner": "S-4",
@@ -18475,6 +18631,32 @@
       "status": "pending"
     },
     "graphics/pokemon/poochyena": {
+      "artifacts": {
+        "back.png": {
+          "reason": "Static 64x64 poochyena image extracted as the typed battler lookup's back image and recorded as a ROM-profile battler root; animation sheets, icons, and footprints remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "front.png": {
+          "reason": "Static poochyena still-front image (`gMonStillFrontPic_Poochyena`) extracted as the typed battler lookup's front image and recorded as a ROM-profile battler root. Its 64x256 sheet is kept whole in the pack; the typed lookup reads the top 64x64 picture the species table loads. Animation sheets, icons, and footprints remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "normal.pal": {
+          "reason": "Sixteen-colour JASC poochyena palette (normal) extracted for the typed battler lookup and recorded as a ROM-profile battler root; palette application stays pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "shiny.pal": {
+          "reason": "Sixteen-colour JASC poochyena palette (shiny) extracted for the typed battler lookup and recorded as a ROM-profile battler root; palette application stays pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.pokemon",
       "kind": "dir",
       "spec_owner": "S-4",
@@ -18757,6 +18939,32 @@
       "status": "pending"
     },
     "graphics/pokemon/silcoon": {
+      "artifacts": {
+        "back.png": {
+          "reason": "Static 64x64 silcoon image extracted as the typed battler lookup's back image and recorded as a ROM-profile battler root; animation sheets, icons, and footprints remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "front.png": {
+          "reason": "Static silcoon still-front image (`gMonStillFrontPic_Silcoon`) extracted as the typed battler lookup's front image and recorded as a ROM-profile battler root. Animation sheets, icons, and footprints remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "normal.pal": {
+          "reason": "Sixteen-colour JASC silcoon palette (normal) extracted for the typed battler lookup and recorded as a ROM-profile battler root; palette application stays pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "shiny.pal": {
+          "reason": "Sixteen-colour JASC silcoon palette (shiny) extracted for the typed battler lookup and recorded as a ROM-profile battler root; palette application stays pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.pokemon",
       "kind": "dir",
       "spec_owner": "S-4",
@@ -19283,6 +19491,32 @@
       "status": "pending"
     },
     "graphics/pokemon/wingull": {
+      "artifacts": {
+        "back.png": {
+          "reason": "Static 64x64 wingull image extracted as the typed battler lookup's back image and recorded as a ROM-profile battler root; animation sheets, icons, and footprints remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "front.png": {
+          "reason": "Static wingull still-front image (`gMonStillFrontPic_Wingull`) extracted as the typed battler lookup's front image and recorded as a ROM-profile battler root. Animation sheets, icons, and footprints remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "normal.pal": {
+          "reason": "Sixteen-colour JASC wingull palette (normal) extracted for the typed battler lookup and recorded as a ROM-profile battler root; palette application stays pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "shiny.pal": {
+          "reason": "Sixteen-colour JASC wingull palette (shiny) extracted for the typed battler lookup and recorded as a ROM-profile battler root; palette application stays pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.pokemon",
       "kind": "dir",
       "spec_owner": "S-4",
@@ -19301,6 +19535,32 @@
       "status": "pending"
     },
     "graphics/pokemon/wurmple": {
+      "artifacts": {
+        "back.png": {
+          "reason": "Static 64x64 wurmple image extracted as the typed battler lookup's back image and recorded as a ROM-profile battler root; animation sheets, icons, and footprints remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "front.png": {
+          "reason": "Static wurmple still-front image (`gMonStillFrontPic_Wurmple`) extracted as the typed battler lookup's front image and recorded as a ROM-profile battler root. Animation sheets, icons, and footprints remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "normal.pal": {
+          "reason": "Sixteen-colour JASC wurmple palette (normal) extracted for the typed battler lookup and recorded as a ROM-profile battler root; palette application stays pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "shiny.pal": {
+          "reason": "Sixteen-colour JASC wurmple palette (shiny) extracted for the typed battler lookup and recorded as a ROM-profile battler root; palette application stays pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.pokemon",
       "kind": "dir",
       "spec_owner": "S-4",
@@ -19337,6 +19597,32 @@
       "status": "pending"
     },
     "graphics/pokemon/zigzagoon": {
+      "artifacts": {
+        "back.png": {
+          "reason": "Static 64x64 zigzagoon image extracted as the typed battler lookup's back image and recorded as a ROM-profile battler root; animation sheets, icons, and footprints remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "front.png": {
+          "reason": "Static zigzagoon still-front image (`gMonStillFrontPic_Zigzagoon`) extracted as the typed battler lookup's front image and recorded as a ROM-profile battler root. Animation sheets, icons, and footprints remain pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "normal.pal": {
+          "reason": "Sixteen-colour JASC zigzagoon palette (normal) extracted for the typed battler lookup and recorded as a ROM-profile battler root; palette application stays pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "shiny.pal": {
+          "reason": "Sixteen-colour JASC zigzagoon palette (shiny) extracted for the typed battler lookup and recorded as a ROM-profile battler root; palette application stays pending.",
+          "rust_target": "crates/xtask/src/extract/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.pokemon",
       "kind": "dir",
       "spec_owner": "S-4",
@@ -29163,8 +29449,56 @@
     },
     "src/data/pokemon_graphics/back_pic_table.h": {
       "artifacts": {
+        "BEAUTIFLY": {
+          "reason": "The BEAUTIFLY row of `gMonBackPicTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "CASCOON": {
+          "reason": "The CASCOON row of `gMonBackPicTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "DUSTOX": {
+          "reason": "The DUSTOX row of `gMonBackPicTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "LINOONE": {
+          "reason": "The LINOONE row of `gMonBackPicTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "MIGHTYENA": {
+          "reason": "The MIGHTYENA row of `gMonBackPicTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
         "MUDKIP": {
           "reason": "The MUDKIP row is the typed starter battler lookup's species key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "PELIPPER": {
+          "reason": "The PELIPPER row of `gMonBackPicTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "POOCHYENA": {
+          "reason": "The POOCHYENA row of `gMonBackPicTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "SILCOON": {
+          "reason": "The SILCOON row of `gMonBackPicTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
           "rust_target": "crates/assets/src/pack/battler.rs",
           "spec": "S-4",
           "status": "ported"
@@ -29177,6 +29511,24 @@
         },
         "TREECKO": {
           "reason": "The TREECKO row is the typed starter battler lookup's species key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "WINGULL": {
+          "reason": "The WINGULL row of `gMonBackPicTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "WURMPLE": {
+          "reason": "The WURMPLE row of `gMonBackPicTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "ZIGZAGOON": {
+          "reason": "The ZIGZAGOON row of `gMonBackPicTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
           "rust_target": "crates/assets/src/pack/battler.rs",
           "spec": "S-4",
           "status": "ported"
@@ -29213,8 +29565,56 @@
     },
     "src/data/pokemon_graphics/palette_table.h": {
       "artifacts": {
+        "BEAUTIFLY": {
+          "reason": "The BEAUTIFLY row of `gMonPaletteTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "CASCOON": {
+          "reason": "The CASCOON row of `gMonPaletteTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "DUSTOX": {
+          "reason": "The DUSTOX row of `gMonPaletteTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "LINOONE": {
+          "reason": "The LINOONE row of `gMonPaletteTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "MIGHTYENA": {
+          "reason": "The MIGHTYENA row of `gMonPaletteTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
         "MUDKIP": {
           "reason": "The MUDKIP row is the typed starter battler lookup's species key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "PELIPPER": {
+          "reason": "The PELIPPER row of `gMonPaletteTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "POOCHYENA": {
+          "reason": "The POOCHYENA row of `gMonPaletteTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "SILCOON": {
+          "reason": "The SILCOON row of `gMonPaletteTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
           "rust_target": "crates/assets/src/pack/battler.rs",
           "spec": "S-4",
           "status": "ported"
@@ -29227,6 +29627,24 @@
         },
         "TREECKO": {
           "reason": "The TREECKO row is the typed starter battler lookup's species key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "WINGULL": {
+          "reason": "The WINGULL row of `gMonPaletteTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "WURMPLE": {
+          "reason": "The WURMPLE row of `gMonPaletteTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "ZIGZAGOON": {
+          "reason": "The ZIGZAGOON row of `gMonPaletteTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
           "rust_target": "crates/assets/src/pack/battler.rs",
           "spec": "S-4",
           "status": "ported"
@@ -29238,8 +29656,56 @@
     },
     "src/data/pokemon_graphics/shiny_palette_table.h": {
       "artifacts": {
+        "BEAUTIFLY": {
+          "reason": "The BEAUTIFLY row of `gMonShinyPaletteTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "CASCOON": {
+          "reason": "The CASCOON row of `gMonShinyPaletteTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "DUSTOX": {
+          "reason": "The DUSTOX row of `gMonShinyPaletteTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "LINOONE": {
+          "reason": "The LINOONE row of `gMonShinyPaletteTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "MIGHTYENA": {
+          "reason": "The MIGHTYENA row of `gMonShinyPaletteTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
         "MUDKIP": {
           "reason": "The MUDKIP row is the typed starter battler lookup's species key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "PELIPPER": {
+          "reason": "The PELIPPER row of `gMonShinyPaletteTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "POOCHYENA": {
+          "reason": "The POOCHYENA row of `gMonShinyPaletteTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "SILCOON": {
+          "reason": "The SILCOON row of `gMonShinyPaletteTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
           "rust_target": "crates/assets/src/pack/battler.rs",
           "spec": "S-4",
           "status": "ported"
@@ -29252,6 +29718,24 @@
         },
         "TREECKO": {
           "reason": "The TREECKO row is the typed starter battler lookup's species key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "WINGULL": {
+          "reason": "The WINGULL row of `gMonShinyPaletteTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "WURMPLE": {
+          "reason": "The WURMPLE row of `gMonShinyPaletteTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "ZIGZAGOON": {
+          "reason": "The ZIGZAGOON row of `gMonShinyPaletteTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
           "rust_target": "crates/assets/src/pack/battler.rs",
           "spec": "S-4",
           "status": "ported"
@@ -29263,8 +29747,56 @@
     },
     "src/data/pokemon_graphics/still_front_pic_table.h": {
       "artifacts": {
+        "BEAUTIFLY": {
+          "reason": "The BEAUTIFLY row of `gMonStillFrontPicTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "CASCOON": {
+          "reason": "The CASCOON row of `gMonStillFrontPicTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "DUSTOX": {
+          "reason": "The DUSTOX row of `gMonStillFrontPicTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "LINOONE": {
+          "reason": "The LINOONE row of `gMonStillFrontPicTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "MIGHTYENA": {
+          "reason": "The MIGHTYENA row of `gMonStillFrontPicTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
         "MUDKIP": {
           "reason": "The MUDKIP row is the typed starter battler lookup's species key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "PELIPPER": {
+          "reason": "The PELIPPER row of `gMonStillFrontPicTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "POOCHYENA": {
+          "reason": "The POOCHYENA row of `gMonStillFrontPicTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "SILCOON": {
+          "reason": "The SILCOON row of `gMonStillFrontPicTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
           "rust_target": "crates/assets/src/pack/battler.rs",
           "spec": "S-4",
           "status": "ported"
@@ -29277,6 +29809,24 @@
         },
         "TREECKO": {
           "reason": "The TREECKO row is the typed starter battler lookup's species key and is corroborated by the ROM importer's battler domain; every other species row stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "WINGULL": {
+          "reason": "The WINGULL row of `gMonStillFrontPicTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "WURMPLE": {
+          "reason": "The WURMPLE row of `gMonStillFrontPicTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
+          "rust_target": "crates/assets/src/pack/battler.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "ZIGZAGOON": {
+          "reason": "The ZIGZAGOON row of `gMonStillFrontPicTable` is the typed battler lookup's species key and is corroborated by the ROM importer's battler domain; every species the lookup does not key stays pending.",
           "rust_target": "crates/assets/src/pack/battler.rs",
           "spec": "S-4",
           "status": "ported"

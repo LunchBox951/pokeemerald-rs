@@ -11,8 +11,13 @@ use super::starter_chooser::PalettedImage;
 use super::{AssetPack, PackError};
 use crate::SpeciesId;
 
-/// Width and height of every battler image: one 64x64 mon pic (`MON_PIC_WIDTH`).
+/// Width and height of every battler picture: one 64x64 mon pic (`MON_PIC_WIDTH`).
 pub(super) const BATTLER_SIDE: u32 = 64;
+/// Rows of Poochyena's stored still-front image, which upstream draws as a
+/// 64x256 sheet: only the first `BATTLER_SIDE` rows are the picture, since
+/// every table row loads `MON_PIC_SIZE` bytes (`still_front_pic_table.h:292`).
+const POOCHYENA_FRONT_SHEET_HEIGHT: u32 = 256;
+const BATTLER_PICTURE_PIXELS: usize = 64 * 64;
 const BATTLER_BIT_DEPTH: u8 = 4;
 const BATTLER_PALETTE_COLORS: u16 = 16;
 
@@ -47,12 +52,73 @@ pub struct BattlerHandle<'a> {
     pub art: PalettedImage<'a>,
 }
 
-/// The species whose battler art the pack carries, with their asset directory.
-const SPECIES: [(SpeciesId, &str); 3] = [
-    (SpeciesId::TREECKO, "treecko"),
-    (SpeciesId::TORCHIC, "torchic"),
-    (SpeciesId::MUDKIP, "mudkip"),
+/// The pack ids of one species' battler art.
+struct BattlerArt {
+    species: SpeciesId,
+    /// Rows of the stored front image; the picture is its first
+    /// [`BATTLER_SIDE`] rows.
+    front_height: u32,
+    front: &'static str,
+    back: &'static str,
+    normal_palette: &'static str,
+    shiny_palette: &'static str,
+}
+
+/// Names the pack ids of `$species` from its asset directory `$name`.
+macro_rules! battler_art {
+    ($species:ident, $name:literal) => {
+        battler_art!($species, $name, BATTLER_SIDE)
+    };
+    ($species:ident, $name:literal, $front_height:expr) => {
+        BattlerArt {
+            species: SpeciesId::$species,
+            front_height: $front_height,
+            front: concat!("pokemon/", $name, "/front"),
+            back: concat!("pokemon/", $name, "/back"),
+            normal_palette: concat!("pokemon/", $name, "/palette/normal"),
+            shiny_palette: concat!("pokemon/", $name, "/palette/shiny"),
+        }
+    };
+}
+
+/// The species whose battler art the pack carries.
+const ARTS: [BattlerArt; 14] = [
+    battler_art!(TREECKO, "treecko"),
+    battler_art!(TORCHIC, "torchic"),
+    battler_art!(MUDKIP, "mudkip"),
+    battler_art!(POOCHYENA, "poochyena", POOCHYENA_FRONT_SHEET_HEIGHT),
+    battler_art!(MIGHTYENA, "mightyena"),
+    battler_art!(WURMPLE, "wurmple"),
+    battler_art!(SILCOON, "silcoon"),
+    battler_art!(BEAUTIFLY, "beautifly"),
+    battler_art!(CASCOON, "cascoon"),
+    battler_art!(DUSTOX, "dustox"),
+    battler_art!(ZIGZAGOON, "zigzagoon"),
+    battler_art!(LINOONE, "linoone"),
+    battler_art!(WINGULL, "wingull"),
+    battler_art!(PELIPPER, "pelipper"),
 ];
+
+fn art_of(species: SpeciesId) -> Option<&'static BattlerArt> {
+    ARTS.iter().find(|art| art.species == species)
+}
+
+/// The image and palette ids of one species' battler.
+fn art_ids(
+    art: &BattlerArt,
+    direction: BattlerDirection,
+    variant: PaletteVariant,
+) -> (&'static str, &'static str) {
+    let image = match direction {
+        BattlerDirection::Front => art.front,
+        BattlerDirection::Back => art.back,
+    };
+    let palette = match variant {
+        PaletteVariant::Normal => art.normal_palette,
+        PaletteVariant::Shiny => art.shiny_palette,
+    };
+    (image, palette)
+}
 
 /// Image and palette ids for one battler, or `None` for a species without art.
 pub(super) fn ids(
@@ -60,45 +126,16 @@ pub(super) fn ids(
     direction: BattlerDirection,
     variant: PaletteVariant,
 ) -> Option<(&'static str, &'static str)> {
-    let index = SPECIES.iter().position(|&(id, _)| id == species)?;
-    Some(match (index, direction, variant) {
-        (0, BattlerDirection::Front, PaletteVariant::Normal) => {
-            ("pokemon/treecko/front", "pokemon/treecko/palette/normal")
-        }
-        (0, BattlerDirection::Front, PaletteVariant::Shiny) => {
-            ("pokemon/treecko/front", "pokemon/treecko/palette/shiny")
-        }
-        (0, BattlerDirection::Back, PaletteVariant::Normal) => {
-            ("pokemon/treecko/back", "pokemon/treecko/palette/normal")
-        }
-        (0, BattlerDirection::Back, PaletteVariant::Shiny) => {
-            ("pokemon/treecko/back", "pokemon/treecko/palette/shiny")
-        }
-        (1, BattlerDirection::Front, PaletteVariant::Normal) => {
-            ("pokemon/torchic/front", "pokemon/torchic/palette/normal")
-        }
-        (1, BattlerDirection::Front, PaletteVariant::Shiny) => {
-            ("pokemon/torchic/front", "pokemon/torchic/palette/shiny")
-        }
-        (1, BattlerDirection::Back, PaletteVariant::Normal) => {
-            ("pokemon/torchic/back", "pokemon/torchic/palette/normal")
-        }
-        (1, BattlerDirection::Back, PaletteVariant::Shiny) => {
-            ("pokemon/torchic/back", "pokemon/torchic/palette/shiny")
-        }
-        (_, BattlerDirection::Front, PaletteVariant::Normal) => {
-            ("pokemon/mudkip/front", "pokemon/mudkip/palette/normal")
-        }
-        (_, BattlerDirection::Front, PaletteVariant::Shiny) => {
-            ("pokemon/mudkip/front", "pokemon/mudkip/palette/shiny")
-        }
-        (_, BattlerDirection::Back, PaletteVariant::Normal) => {
-            ("pokemon/mudkip/back", "pokemon/mudkip/palette/normal")
-        }
-        (_, BattlerDirection::Back, PaletteVariant::Shiny) => {
-            ("pokemon/mudkip/back", "pokemon/mudkip/palette/shiny")
-        }
-    })
+    art_of(species).map(|art| art_ids(art, direction, variant))
+}
+
+/// Rows of the image stored under `direction`, which is taller than the
+/// picture for the one sheet upstream draws that way.
+fn stored_height(art: &BattlerArt, direction: BattlerDirection) -> u32 {
+    match direction {
+        BattlerDirection::Front => art.front_height,
+        BattlerDirection::Back => BATTLER_SIDE,
+    }
 }
 
 impl AssetPack {
@@ -117,16 +154,19 @@ impl AssetPack {
         direction: BattlerDirection,
         variant: PaletteVariant,
     ) -> Result<BattlerHandle<'_>, PackError> {
-        let (image_id, palette_id) = ids(species, direction, variant)
-            .ok_or(PackError::UnsupportedBattlerSpecies(species))?;
-        let art = self.paired_image(
+        let battler = art_of(species).ok_or(PackError::UnsupportedBattlerSpecies(species))?;
+        let (image_id, palette_id) = art_ids(battler, direction, variant);
+        let mut art = self.paired_image(
             image_id,
             palette_id,
-            (BATTLER_SIDE, BATTLER_SIDE),
+            (BATTLER_SIDE, stored_height(battler, direction)),
             BATTLER_BIT_DEPTH,
             BATTLER_PALETTE_COLORS,
             |id, detail| PackError::MalformedBattlerAsset { id, detail },
         )?;
+        // Validation covered the whole stored image; the picture is its top rows.
+        art.image.height = BATTLER_SIDE;
+        art.image.pixels = &art.image.pixels[..BATTLER_PICTURE_PIXELS];
         Ok(BattlerHandle {
             species,
             direction,

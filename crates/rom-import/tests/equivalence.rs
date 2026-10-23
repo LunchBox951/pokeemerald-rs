@@ -65,25 +65,44 @@ const COMPLETE_PREFIXES: &[&str] = &[
     "battle-anim/",
     "bag/",
     "starter-chooser/",
+    "pokemon/",
     "opening-scene/",
 ];
 
-/// The starters' static battler entries: 12 ids the ROM backend must write
-/// although `pokemon/` is not yet in [`COMPLETE_PREFIXES`].
-const STARTER_BATTLER_IDS: [&str; 12] = [
-    "pokemon/treecko/front",
-    "pokemon/treecko/back",
-    "pokemon/treecko/palette/normal",
-    "pokemon/treecko/palette/shiny",
-    "pokemon/torchic/front",
-    "pokemon/torchic/back",
-    "pokemon/torchic/palette/normal",
-    "pokemon/torchic/palette/shiny",
-    "pokemon/mudkip/front",
-    "pokemon/mudkip/back",
-    "pokemon/mudkip/palette/normal",
-    "pokemon/mudkip/palette/shiny",
+/// The species whose static battler art both backends must carry: the
+/// starters, then the checkpoint's other eleven Pokémon.
+const BATTLER_SPECIES: [&str; 14] = [
+    "treecko",
+    "torchic",
+    "mudkip",
+    "poochyena",
+    "mightyena",
+    "wurmple",
+    "silcoon",
+    "beautifly",
+    "cascoon",
+    "dustox",
+    "zigzagoon",
+    "linoone",
+    "wingull",
+    "pelipper",
 ];
+
+/// Every battler entry, named by id so entries both backends drop together
+/// still fail: front, back, then normal and shiny palette per species.
+fn battler_ids() -> Vec<String> {
+    BATTLER_SPECIES
+        .iter()
+        .flat_map(|name| {
+            [
+                format!("pokemon/{name}/front"),
+                format!("pokemon/{name}/back"),
+                format!("pokemon/{name}/palette/normal"),
+                format!("pokemon/{name}/palette/shiny"),
+            ]
+        })
+        .collect()
+}
 
 /// The layout names the checkpoint maps added beyond the Littleroot, Route 101,
 /// Oldale, and Route 103 grids: `MAP_INSIDE_OF_TRUCK` and the Oldale interiors.
@@ -210,11 +229,14 @@ fn the_rom_backend_matches_the_checkout_pack() {
         }
     }
 
-    // `pokemon/` is not a complete prefix while only the starters exist, so
-    // their entries are pinned by id: a dropped root fails here.
-    for id in STARTER_BATTLER_IDS {
-        if !imported.contains_key(id) {
-            differences.push(format!("{id}: the ROM backend wrote no such entry"));
+    for id in battler_ids() {
+        for (what, ids) in [
+            ("the ROM backend", &imported),
+            ("the checkout pack", &checkout),
+        ] {
+            if !ids.contains_key(&id) {
+                differences.push(format!("{id}: {what} wrote no such entry"));
+            }
         }
     }
 

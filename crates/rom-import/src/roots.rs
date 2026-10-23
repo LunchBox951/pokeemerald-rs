@@ -535,7 +535,7 @@ pub struct Roots {
     pub starter_chooser: StarterChooserRoots,
     /// Birch's speech scene and the wall clock.
     pub opening_scene: OpeningSceneRoots,
-    /// The starters' static battler images and palettes.
+    /// The static battler images and palettes of the species in the pack.
     pub battlers: BattlerRoots,
 }
 

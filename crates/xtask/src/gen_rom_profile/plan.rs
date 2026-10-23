@@ -531,7 +531,7 @@ pub struct ProfilePlan {
     pub starter_chooser: StarterChooserPlan,
     /// Birch's speech scene and the wall clock.
     pub opening_scene: OpeningScenePlan,
-    /// The starters' static battler art.
+    /// The static battler art.
     pub battlers: BattlerPlan,
 }
 

@@ -1,4 +1,4 @@
-//! Static battler art: the starters' `pokemon/<species>/*` entries.
+//! Static battler art: the `pokemon/<species>/*` entries of every species the profile roots.
 //!
 //! Images and palettes are plain LZ77 streams that go through the shared
 //! codecs. What the profile adds is the four species tables
@@ -8,6 +8,10 @@
 //! carries, so a profile that picked a stray copy of the art is
 //! [`ImportError::StructMismatch`] rather than a bank that happens to have
 //! the right pixels today.
+//!
+//! A row's `size` is always the 64x64 picture the game loads, but a stream
+//! may hold more: Poochyena's still front is a 64x256 sheet, so its root
+//! declares the whole sheet and the importer reads every byte of it.
 
 use pack_format::PackWriter;
 
