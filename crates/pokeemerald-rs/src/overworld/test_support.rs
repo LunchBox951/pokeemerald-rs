@@ -16,6 +16,55 @@ pub(super) struct Entry {
     pub(super) payload: Vec<u8>,
 }
 
+/// The map a synthetic scene is built for until a test names its own
+/// ([`super::OverworldScene::in_room_for_test`]): a real map whose events
+/// hold no objects, so no sprite sheet is needed to load it.
+const SYNTHETIC_ROOM_MAP: assets::MapId = assets::MapId("MAP_ROUTE122");
+
+impl super::OverworldScene {
+    /// [`Self::runtime`] answering from `events` in place of the visit's own,
+    /// for the one test that injects a trigger stack.
+    #[must_use]
+    pub(crate) fn runtime_over_events_for_test<'s>(
+        &'s self,
+        events: &'s assets::MapEvents,
+    ) -> engine::overworld::MapRuntime<'s> {
+        self.runtime_over(events)
+    }
+
+    /// Re-labels a synthetic-grid scene as `map`: the map's real header
+    /// (keeping the scene's own synthetic layout id) and its events, or the
+    /// scene's own events when they already belong to `map`'s events owner
+    /// (an explicit set, such as Oldale Town's repositioned one, is kept).
+    ///
+    /// The synthetic grid stands in for `map`'s real one, so a phase test
+    /// can drive `map`'s real warps, NPCs, and triggers over a grid it
+    /// controls. Test-only: a loaded scene gets its identity from
+    /// [`super::OverworldScene::from_pack`]'s validated inputs.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `map` has no header or events.
+    #[must_use]
+    pub(crate) fn in_room_for_test(mut self, map: assets::MapId) -> Self {
+        let header = assets::MapHeaderTable::new()
+            .header(map)
+            .expect("a test room is a real map");
+        let generated = assets::MapEventsTable::new()
+            .resolve(map)
+            .expect("a test room is a real map");
+        self.map_id = map;
+        self.header = assets::MapHeader {
+            layout: self.layout.id,
+            ..*header
+        };
+        if self.events.id != generated.id {
+            self.events = *generated;
+        }
+        self
+    }
+}
+
 const IMAGE_KIND_TAG: u8 = 0;
 pub(super) const PALETTE_KIND_TAG: u8 = 1;
 const RAW_KIND_TAG: u8 = 2;
@@ -48,33 +97,7 @@ pub(super) fn scene_scratch_pack_path() -> std::path::PathBuf {
     ))
 }
 
-/// Writes `bytes` to a fresh file at `path`. `create_new` (`O_EXCL`) never
-/// follows a symlink at `path`, so a planted link cannot redirect the write
-/// onto its target. A stale occupant is unlinked (the entry itself, never
-/// what it points to) and the claim retried once.
-pub(crate) fn write_scratch_exclusive(path: &std::path::Path, bytes: impl AsRef<[u8]>) {
-    use std::io::Write as _;
-    let mut file = None;
-    for _ in 0..2 {
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(path)
-        {
-            Ok(f) => {
-                file = Some(f);
-                break;
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                std::fs::remove_file(path).expect("a stale scratch entry is removable");
-            }
-            Err(e) => panic!("the scratch directory is writable: {e}"),
-        }
-    }
-    file.expect("the scratch path is exclusively creatable")
-        .write_all(bytes.as_ref())
-        .expect("the scratch pack is writable");
-}
+pub(crate) use crate::pack_test_support::write_scratch_exclusive;
 
 /// Plants a symlink at `path` pointing at a fresh victim file holding
 /// `sentinel`, runs `write`, and asserts the victim is untouched. Returns
@@ -394,7 +417,7 @@ fn push_unconditional_sprite_palettes(entries: &mut Vec<Entry>) {
 }
 
 static NO_OBJECT_EVENTS: assets::MapEvents = assets::MapEvents {
-    id: assets::MapId("MAP_TEST"),
+    id: SYNTHETIC_ROOM_MAP,
     shared_events_map: None,
     object_events: &[],
     warp_events: &[],
@@ -619,7 +642,7 @@ pub(super) fn synthetic_scene_result_with_connections_and_events(
         secondary_tileset: tileset_symbol,
     };
     let header = assets::MapHeader {
-        id: assets::MapId("MAP_TEST"),
+        id: events.id,
         group: 0,
         num: 0,
         name: "MapTest",
