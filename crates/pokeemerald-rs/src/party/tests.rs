@@ -7,6 +7,7 @@ mod active_selection;
 mod codec;
 mod common;
 mod create_mon;
+mod cute_charm_wild_gender;
 mod loaded_lead;
 mod merge_hp;
 mod merge_stats;
