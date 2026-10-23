@@ -14,13 +14,13 @@
 //! The pack contains:
 //!
 //! - every tile image and animation, all 16 palettes, and both raw metatile
-//!   tables for the primary `general` and `building` tilesets and the secondary
-//!   `petalburg`, `brendans_mays_house`, and `lab` tilesets;
+//!   tables for each tileset in `TILESETS`;
 //! - every title-screen PNG, palette, and raw tilemap, with embedded PNG
 //!   palettes for `emerald_version` and `press_start` and the upstream colour
 //!   limit applied to `pokemon_logo`;
-//! - every player and NPC PNG, the `brendan` and `may` palettes, and the four
-//!   generic `npc_1` through `npc_4` palettes;
+//! - every player and NPC PNG, the `brendan` and `may` palettes, the four
+//!   generic `npc_1` through `npc_4` palettes, and the non-people sheets and
+//!   palettes in `OBJECT_SHEETS` and `OBJECT_PALETTES`;
 //! - the map and border grids named by `LAYOUTS`;
 //! - the five Latin font sheets, every text-window image and palette, and the
 //!   main-menu background palette; and
@@ -76,6 +76,8 @@ mod battle_anim;
 mod battle_interface;
 mod battle_message;
 mod battler;
+#[cfg(test)]
+mod bundled_inventory_tests;
 #[cfg(test)]
 mod checkpoint_maps_tests;
 mod error;

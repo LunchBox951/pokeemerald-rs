@@ -39,6 +39,7 @@ pub mod abilities;
 pub mod audio;
 pub mod battle_anim;
 pub mod battle_moves;
+pub mod bundled_overworld;
 pub mod egg_moves;
 pub mod error;
 pub mod event_scripts;
