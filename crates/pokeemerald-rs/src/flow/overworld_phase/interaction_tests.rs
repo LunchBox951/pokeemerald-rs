@@ -27,7 +27,8 @@ fn phase_below(tile: (u16, u16), pc_tiles: &[(u16, u16)]) -> OverworldPhase {
     OverworldPhase::for_test(
         crate::overworld::test_support::synthetic_scene_with_special_tiles(
             SCENE_SIDE, SCENE_SIDE, &specials,
-        ),
+        )
+        .in_room_for_test(LITTLEROOT),
         LITTLEROOT,
         PlayerState::new(south_of(tile), FLOOR_ELEVATION, Direction::North),
         None,
@@ -35,11 +36,9 @@ fn phase_below(tile: (u16, u16), pc_tiles: &[(u16, u16)]) -> OverworldPhase {
 }
 
 fn press_a(phase: &OverworldPhase, buttons: Buttons) -> Option<InteractionOutcome> {
-    let scene = &phase.scene;
-    let header = assets::MapHeaderTable::new().header(LITTLEROOT).unwrap();
-    let events = assets::MapEventsTable::new().resolve(LITTLEROOT).unwrap();
-    let runtime = scene
-        .runtime(LITTLEROOT, header, events)
+    let runtime = phase
+        .scene
+        .runtime()
         .with_object_events(&phase.object_events);
     phase.interaction_tokens_this_frame(pressed(buttons), &runtime)
 }
