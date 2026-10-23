@@ -16671,6 +16671,164 @@
       "status": "pending"
     },
     "graphics/naming_screen": {
+      "artifacts": {
+        "back_button.png": {
+          "reason": "graphics.c:1404-1414 (naming_screen.c:185-186 for the PC icons) builds back_button.png as plain 4bpp graphics; the extractor publishes its decoded four-bit index raster at the source size as naming-screen/image/back_button. Colours come from the palette files, not the PNG palette.",
+          "rust_target": "crates/xtask/src/extract/naming_screen.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "background.bin": {
+          "reason": "graphics.c:1416-1419 compresses background.bin to LZ77 for the ROM; the checkout file is the uncompressed 1280-byte 32x20 tilemap, copied unchanged as naming-screen/raw/background.",
+          "rust_target": "crates/xtask/src/extract/naming_screen.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "buttons.pal": {
+          "reason": "One of the six 16-colour rows of gNamingScreenMenu_Pal (graphics.c:1394-1402), loaded as one block by LoadPalettes (naming_screen.c:1883). Published as its own 16-colour palette, naming-screen/palette/buttons.",
+          "rust_target": "crates/xtask/src/extract/naming_screen.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "cursor.pal": {
+          "reason": "One of the six 16-colour rows of gNamingScreenMenu_Pal (graphics.c:1394-1402), loaded as one block by LoadPalettes (naming_screen.c:1883). Published as its own 16-colour palette, naming-screen/palette/cursor.",
+          "rust_target": "crates/xtask/src/extract/naming_screen.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "cursor.png": {
+          "reason": "graphics.c:1410-1412 builds cursor.png as 4bpp with -num_tiles 5, keeping the first five of its six 8x8 tiles. The extractor publishes those tiles stacked in tile order as an 8x40 four-bit raster, naming-screen/image/cursor, and refuses a sheet whose dropped sixth tile holds colour.",
+          "rust_target": "crates/xtask/src/extract/naming_screen.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "cursor_filled.png": {
+          "reason": "graphics.c:1410-1412 builds cursor_filled.png as 4bpp with -num_tiles 5, keeping the first five of its six 8x8 tiles. The extractor publishes those tiles stacked in tile order as an 8x40 four-bit raster, naming-screen/image/cursor_filled, and refuses a sheet whose dropped sixth tile holds colour.",
+          "rust_target": "crates/xtask/src/extract/naming_screen.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "cursor_squished.png": {
+          "reason": "graphics.c:1410-1412 builds cursor_squished.png as 4bpp with -num_tiles 5, keeping the first five of its six 8x8 tiles. The extractor publishes those tiles stacked in tile order as an 8x40 four-bit raster, naming-screen/image/cursor_squished, and refuses a sheet whose dropped sixth tile holds colour.",
+          "rust_target": "crates/xtask/src/extract/naming_screen.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "input_arrow.png": {
+          "reason": "graphics.c:1404-1414 (naming_screen.c:185-186 for the PC icons) builds input_arrow.png as plain 4bpp graphics; the extractor publishes its decoded four-bit index raster at the source size as naming-screen/image/input_arrow. Colours come from the palette files, not the PNG palette.",
+          "rust_target": "crates/xtask/src/extract/naming_screen.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "keyboard.pal": {
+          "reason": "sKeyboard_Pal (naming_screen.c:187), loaded by LoadPalettes (naming_screen.c:1884). Published as the 16-colour palette naming-screen/palette/keyboard.",
+          "rust_target": "crates/xtask/src/extract/naming_screen.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "keyboard_lower.bin": {
+          "reason": "graphics.c:1416-1419 compresses keyboard_lower.bin to LZ77 for the ROM; the checkout file is the uncompressed 1280-byte 32x20 tilemap, copied unchanged as naming-screen/raw/keyboard_lower.",
+          "rust_target": "crates/xtask/src/extract/naming_screen.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "keyboard_symbols.bin": {
+          "reason": "graphics.c:1416-1419 compresses keyboard_symbols.bin to LZ77 for the ROM; the checkout file is the uncompressed 1280-byte 32x20 tilemap, copied unchanged as naming-screen/raw/keyboard_symbols.",
+          "rust_target": "crates/xtask/src/extract/naming_screen.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "keyboard_upper.bin": {
+          "reason": "graphics.c:1416-1419 compresses keyboard_upper.bin to LZ77 for the ROM; the checkout file is the uncompressed 1280-byte 32x20 tilemap, copied unchanged as naming-screen/raw/keyboard_upper.",
+          "rust_target": "crates/xtask/src/extract/naming_screen.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "menu.pal": {
+          "reason": "One of the six 16-colour rows of gNamingScreenMenu_Pal (graphics.c:1394-1402), loaded as one block by LoadPalettes (naming_screen.c:1883). Published as its own 16-colour palette, naming-screen/palette/menu.",
+          "rust_target": "crates/xtask/src/extract/naming_screen.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "menu.png": {
+          "reason": "graphics.c:1403 builds menu.png as 4bpp LZ77 graphics (gNamingScreenMenu_Gfx); the checkout holds the uncompressed source, so the extractor publishes its decoded 24x128 four-bit index raster as naming-screen/image/menu. Its colours come from menu.pal, not the PNG palette.",
+          "rust_target": "crates/xtask/src/extract/naming_screen.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "ok_button.png": {
+          "reason": "graphics.c:1404-1414 (naming_screen.c:185-186 for the PC icons) builds ok_button.png as plain 4bpp graphics; the extractor publishes its decoded four-bit index raster at the source size as naming-screen/image/ok_button. Colours come from the palette files, not the PNG palette.",
+          "rust_target": "crates/xtask/src/extract/naming_screen.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "page_swap_button.png": {
+          "reason": "graphics.c:1404-1414 (naming_screen.c:185-186 for the PC icons) builds page_swap_button.png as plain 4bpp graphics; the extractor publishes its decoded four-bit index raster at the source size as naming-screen/image/page_swap_button. Colours come from the palette files, not the PNG palette.",
+          "rust_target": "crates/xtask/src/extract/naming_screen.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "page_swap_frame.png": {
+          "reason": "graphics.c:1404-1414 (naming_screen.c:185-186 for the PC icons) builds page_swap_frame.png as plain 4bpp graphics; the extractor publishes its decoded four-bit index raster at the source size as naming-screen/image/page_swap_frame. Colours come from the palette files, not the PNG palette.",
+          "rust_target": "crates/xtask/src/extract/naming_screen.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "page_swap_lower.pal": {
+          "reason": "One of the six 16-colour rows of gNamingScreenMenu_Pal (graphics.c:1394-1402), loaded as one block by LoadPalettes (naming_screen.c:1883). Published as its own 16-colour palette, naming-screen/palette/page_swap_lower.",
+          "rust_target": "crates/xtask/src/extract/naming_screen.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "page_swap_lower.png": {
+          "reason": "graphics.c:1404-1414 (naming_screen.c:185-186 for the PC icons) builds page_swap_lower.png as plain 4bpp graphics; the extractor publishes its decoded four-bit index raster at the source size as naming-screen/image/page_swap_lower. Colours come from the palette files, not the PNG palette.",
+          "rust_target": "crates/xtask/src/extract/naming_screen.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "page_swap_others.pal": {
+          "reason": "One of the six 16-colour rows of gNamingScreenMenu_Pal (graphics.c:1394-1402), loaded as one block by LoadPalettes (naming_screen.c:1883). Published as its own 16-colour palette, naming-screen/palette/page_swap_others.",
+          "rust_target": "crates/xtask/src/extract/naming_screen.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "page_swap_others.png": {
+          "reason": "graphics.c:1404-1414 (naming_screen.c:185-186 for the PC icons) builds page_swap_others.png as plain 4bpp graphics; the extractor publishes its decoded four-bit index raster at the source size as naming-screen/image/page_swap_others. Colours come from the palette files, not the PNG palette.",
+          "rust_target": "crates/xtask/src/extract/naming_screen.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "page_swap_upper.pal": {
+          "reason": "One of the six 16-colour rows of gNamingScreenMenu_Pal (graphics.c:1394-1402), loaded as one block by LoadPalettes (naming_screen.c:1883). Published as its own 16-colour palette, naming-screen/palette/page_swap_upper.",
+          "rust_target": "crates/xtask/src/extract/naming_screen.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "page_swap_upper.png": {
+          "reason": "graphics.c:1404-1414 (naming_screen.c:185-186 for the PC icons) builds page_swap_upper.png as plain 4bpp graphics; the extractor publishes its decoded four-bit index raster at the source size as naming-screen/image/page_swap_upper. Colours come from the palette files, not the PNG palette.",
+          "rust_target": "crates/xtask/src/extract/naming_screen.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "pc_icon_off.png": {
+          "reason": "sPCIconOff_Gfx (naming_screen.c:185-186) is built as plain 4bpp graphics; the extractor publishes the decoded 16x24 four-bit index raster as naming-screen/image/pc_icon_off. Colours come from the palette files, not the PNG palette.",
+          "rust_target": "crates/xtask/src/extract/naming_screen.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "pc_icon_on.png": {
+          "reason": "sPCIconOn_Gfx (naming_screen.c:185-186) is built as plain 4bpp graphics; the extractor publishes the decoded 16x24 four-bit index raster as naming-screen/image/pc_icon_on. Colours come from the palette files, not the PNG palette.",
+          "rust_target": "crates/xtask/src/extract/naming_screen.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "underscore.png": {
+          "reason": "graphics.c:1404-1414 (naming_screen.c:185-186 for the PC icons) builds underscore.png as plain 4bpp graphics; the extractor publishes its decoded four-bit index raster at the source size as naming-screen/image/underscore. Colours come from the palette files, not the PNG palette.",
+          "rust_target": "crates/xtask/src/extract/naming_screen.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.ui",
       "kind": "dir",
       "spec_owner": "S-4",
