@@ -961,6 +961,8 @@ mod bedroom_collision_tests;
 #[cfg(test)]
 mod connections_tests;
 #[cfg(test)]
+mod cute_charm_slot_zero_tests;
+#[cfg(test)]
 mod decoration_tests;
 #[cfg(test)]
 mod dialog_pacing_tests;
