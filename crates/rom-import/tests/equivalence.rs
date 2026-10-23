@@ -61,6 +61,7 @@ const COMPLETE_PREFIXES: &[&str] = &[
     "font/",
     "text-window/",
     "audio/",
+    "trainer-pic/",
     "battle-message/",
     "battle-anim/",
     "bag/",
@@ -148,6 +149,15 @@ fn checkpoint_payload_ids() -> Vec<String> {
         .collect()
 }
 
+/// The Birch-speech portraits: the front image and palette of Brendan and of
+/// May. Named by id so portraits both backends drop together still fail.
+const TRAINER_PORTRAIT_IDS: [&str; 4] = [
+    "trainer-pic/brendan/front",
+    "trainer-pic/brendan/palette",
+    "trainer-pic/may/front",
+    "trainer-pic/may/palette",
+];
+
 /// Ids the two backends are known and accepted to disagree on, each with
 /// the reason it was signed off.
 ///
@@ -225,6 +235,17 @@ fn the_rom_backend_matches_the_checkout_pack() {
             ("the checkout pack", &checkout),
         ] {
             if !ids.contains_key(&id) {
+                differences.push(format!("{id}: {what} wrote no such entry"));
+            }
+        }
+    }
+
+    for id in TRAINER_PORTRAIT_IDS {
+        for (what, ids) in [
+            ("the ROM backend", &imported),
+            ("the checkout pack", &checkout),
+        ] {
+            if !ids.contains_key(id) {
                 differences.push(format!("{id}: {what} wrote no such entry"));
             }
         }

@@ -9,6 +9,7 @@ use super::bag::{fixed_ids, icon_ids};
 use super::opening_scene::pack_ids as opening_scene_pack_ids;
 use super::sprites::{FIRST_GENERIC_NPC_PALETTE, LAST_GENERIC_NPC_PALETTE};
 use super::starter_chooser::pack_ids as chooser_pack_ids;
+pub(crate) use super::trainer_pic::PICS as TRAINER_FRONT_PICS;
 use super::ExtractError;
 
 #[derive(Clone, Copy)]
@@ -624,4 +625,14 @@ pub(crate) fn starter_chooser_ids() -> Vec<String> {
 /// palettes, and three tilemaps.
 pub(crate) fn opening_scene_ids() -> Vec<String> {
     opening_scene_pack_ids()
+}
+
+/// Every `trainer-pic/` pack id extraction emits: the front image and
+/// palette of Brendan and of May.
+pub(crate) fn trainer_front_ids() -> Vec<String> {
+    TRAINER_FRONT_PICS
+        .iter()
+        .flat_map(|pic| [pic.image_id, pic.palette_id])
+        .map(str::to_owned)
+        .collect()
 }

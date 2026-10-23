@@ -502,6 +502,33 @@ pub struct BattlerRoots {
     pub species: &'static [BattlerRoot],
 }
 
+/// One trainer front picture: the rows its `TRAINER_PIC_*` index selects in
+/// `gTrainerFrontPicTable` and `gTrainerFrontPicPaletteTable`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TrainerFrontRoot {
+    /// The picture's `TRAINER_PIC_*` value, the row index in both tables.
+    pub trainer_pic: u16,
+    /// The front image `gTrainerFrontPicTable[trainer_pic]` points at.
+    pub front: ImageRoot,
+    /// The palette `gTrainerFrontPicPaletteTable[trainer_pic]` points at.
+    pub palette: PaletteRoot,
+}
+
+/// The Birch-speech trainer front pictures
+/// (`src/data/trainer_graphics/front_pic_tables.h`).
+///
+/// The two tables are recorded so a reader can corroborate each picture's
+/// row by pointer, size and tag rather than trust the addresses alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TrainerFrontRoots {
+    /// `gTrainerFrontPicTable`: 8-byte `{data, size, tag}` rows.
+    pub front_table: GbaPtr,
+    /// `gTrainerFrontPicPaletteTable`: 8-byte `{data, tag}` rows.
+    pub palette_table: GbaPtr,
+    /// Every trainer picture with pack entries.
+    pub trainers: &'static [TrainerFrontRoot],
+}
+
 /// The authoritative ROM addresses a profile carries, grouped by domain.
 ///
 /// `#[non_exhaustive]` so adding a domain stays a non-breaking change for
@@ -537,6 +564,8 @@ pub struct Roots {
     pub opening_scene: OpeningSceneRoots,
     /// The starters' static battler images and palettes.
     pub battlers: BattlerRoots,
+    /// The Birch-speech trainer front pictures.
+    pub trainer_front: TrainerFrontRoots,
 }
 
 impl Roots {
@@ -580,6 +609,7 @@ impl Roots {
         starter_chooser: StarterChooserRoots::NONE,
         opening_scene: OpeningSceneRoots::NONE,
         battlers: BattlerRoots::NONE,
+        trainer_front: TrainerFrontRoots::NONE,
     };
 
     /// Every image root in the table, across every domain.
@@ -606,6 +636,7 @@ impl Roots {
                     .iter()
                     .flat_map(|battler| [&battler.front, &battler.back]),
             )
+            .chain(self.trainer_front.trainers.iter().map(|pic| &pic.front))
     }
 
     /// Every palette root in the table, across every domain.
@@ -626,6 +657,7 @@ impl Roots {
                     .iter()
                     .flat_map(|battler| [&battler.normal, &battler.shiny]),
             )
+            .chain(self.trainer_front.trainers.iter().map(|pic| &pic.palette))
     }
 }
 
@@ -683,6 +715,15 @@ impl BattlerRoots {
         palette_table: GbaPtr::AT_BASE,
         shiny_palette_table: GbaPtr::AT_BASE,
         species: &[],
+    };
+}
+
+impl TrainerFrontRoots {
+    /// No trainer front roots recorded: the domain writes nothing.
+    pub const NONE: Self = Self {
+        front_table: GbaPtr::AT_BASE,
+        palette_table: GbaPtr::AT_BASE,
+        trainers: &[],
     };
 }
 

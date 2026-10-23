@@ -38,6 +38,7 @@ pub(crate) mod starter_choose;
 pub(crate) mod text_window;
 pub(crate) mod tilesets;
 pub(crate) mod title;
+pub(crate) mod trainer_front;
 
 use pack_format::{raw_entry, EntryKind, PackEntry, PackWriter};
 
@@ -70,6 +71,7 @@ pub(crate) const DOMAINS: &[Domain] = &[
     starter_choose::write,
     opening_scene::write,
     battlers::write,
+    trainer_front::write,
 ];
 
 /// Read one image root's tiles and unpack them into a pack entry.
