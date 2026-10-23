@@ -166,48 +166,19 @@ impl AssetPack {
         (width, height): (u32, u32),
         palette_colors: u16,
     ) -> Result<PalettedImage<'_>, PackError> {
-        let image_id = format!("{IMAGE_PREFIX}/{name}");
-        let palette_id = format!("{IMAGE_PALETTE_PREFIX}/{name}");
-        let image = self.image(&image_id)?;
-        let fault = |detail: String| PackError::MalformedPokedexGraphic {
-            id: image_id.clone(),
-            detail,
-        };
         let bit_depth = if palette_colors == FULL_PALETTE_COLORS {
             8
         } else {
             4
         };
-        if image.bit_depth != bit_depth {
-            return Err(fault(format!(
-                "is {}-bit: expected {bit_depth}-bit",
-                image.bit_depth
-            )));
-        }
-        if image.width != width || image.height != height {
-            return Err(fault(format!(
-                "is {}x{}: expected {width}x{height}",
-                image.width, image.height
-            )));
-        }
-        if u64::try_from(image.pixels.len()).ok() != Some(u64::from(width) * u64::from(height)) {
-            return Err(fault(format!(
-                "carries {} payload bytes: expected one per pixel",
-                image.pixels.len()
-            )));
-        }
-        let palette = self.pokedex_palette_entry(&palette_id, palette_colors)?;
-        if let Some(&pixel) = image
-            .pixels
-            .iter()
-            .find(|&&pixel| u16::from(pixel) >= palette.color_count)
-        {
-            return Err(fault(format!(
-                "has pixel index {pixel}: its palette only has {} colours",
-                palette.color_count
-            )));
-        }
-        Ok(PalettedImage { image, palette })
+        self.paired_image(
+            &format!("{IMAGE_PREFIX}/{name}"),
+            &format!("{IMAGE_PALETTE_PREFIX}/{name}"),
+            (width, height),
+            bit_depth,
+            palette_colors,
+            |id, detail| PackError::MalformedPokedexGraphic { id, detail },
+        )
     }
 
     fn pokedex_palette(&self, name: &str, colors: u16) -> Result<PaletteRef<'_>, PackError> {
