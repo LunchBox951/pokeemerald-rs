@@ -156,3 +156,25 @@ fn master_volume_is_masked_to_its_four_bit_field() {
     assert_eq!(Mixer::new(0x1B, 1).master_volume(), 11);
     assert_eq!(Mixer::new(MAX_MASTER_VOLUME, 1).master_volume(), 15);
 }
+
+#[test]
+fn masked_zero_master_volume_is_minimum_gain_not_silence() {
+    // The envelope multiplies by `masterVolume + 1` (m4a_1.s:265-269), so a
+    // zero field is the quietest audible setting, not a mute.
+    const SAMPLE: i8 = 100;
+    let render = |master: u8| {
+        let mut mixer = Mixer::new(master, DEFAULT_MAX_VOICES);
+        mixer.add_voice(constant_voice(SAMPLE, 0));
+        let mut out = vec![0.0; SAMPLES_PER_FRAME * 2];
+        mixer.mix_frame(&mut out);
+        out
+    };
+    let at_masked_zero = render(16);
+    assert!(at_masked_zero.iter().any(|&sample| sample != 0.0));
+    assert_eq!(
+        at_masked_zero[0].to_bits(),
+        render(0)[0].to_bits(),
+        "16 masks to 0"
+    );
+    assert!(at_masked_zero[0].abs() < render(1)[0].abs());
+}
