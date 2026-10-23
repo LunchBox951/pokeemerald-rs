@@ -12633,37 +12633,37 @@
           "status": "ported"
         },
         "text.pal": {
-          "reason": "Battle textbox and menu text source transcoded to a validated typed pack entry read by AssetPack::battle_interface; the other battle_interface sources remain pending.",
+          "reason": "Battle textbox and menu text source transcoded to a validated typed pack entry read by AssetPack::battle_interface; the other battle_interface sources remain pending. The ROM importer (rom-import's domains::battle_interface, gated by the real-ROM equivalence test's pinned battle-interface ids) reproduces the same pack entry from the BPEE rev-0 profile.",
           "rust_target": "crates/xtask/src/extract/battle_interface.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "text_pp.pal": {
-          "reason": "Battle textbox and menu text source transcoded to a validated typed pack entry read by AssetPack::battle_interface; the other battle_interface sources remain pending.",
+          "reason": "Battle textbox and menu text source transcoded to a validated typed pack entry read by AssetPack::battle_interface; the other battle_interface sources remain pending. The ROM importer (rom-import's domains::battle_interface, gated by the real-ROM equivalence test's pinned battle-interface ids) reproduces the same pack entry from the BPEE rev-0 profile.",
           "rust_target": "crates/xtask/src/extract/battle_interface.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "textbox.png": {
-          "reason": "Battle textbox and menu text source transcoded to a validated typed pack entry read by AssetPack::battle_interface; the other battle_interface sources remain pending.",
+          "reason": "Battle textbox and menu text source transcoded to a validated typed pack entry read by AssetPack::battle_interface; the other battle_interface sources remain pending. The ROM importer (rom-import's domains::battle_interface, gated by the real-ROM equivalence test's pinned battle-interface ids) reproduces the same pack entry from the BPEE rev-0 profile.",
           "rust_target": "crates/xtask/src/extract/battle_interface.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "textbox_0.pal": {
-          "reason": "Battle textbox and menu text source transcoded to a validated typed pack entry read by AssetPack::battle_interface; the other battle_interface sources remain pending.",
+          "reason": "Battle textbox and menu text source transcoded to a validated typed pack entry read by AssetPack::battle_interface; the other battle_interface sources remain pending. The ROM importer (rom-import's domains::battle_interface, gated by the real-ROM equivalence test's pinned battle-interface ids) reproduces the same pack entry from the BPEE rev-0 profile; with textbox_1.pal it is one composed 32-colour ROM palette root, not two.",
           "rust_target": "crates/xtask/src/extract/battle_interface.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "textbox_1.pal": {
-          "reason": "Battle textbox and menu text source transcoded to a validated typed pack entry read by AssetPack::battle_interface; the other battle_interface sources remain pending.",
+          "reason": "Battle textbox and menu text source transcoded to a validated typed pack entry read by AssetPack::battle_interface; the other battle_interface sources remain pending. The ROM importer (rom-import's domains::battle_interface, gated by the real-ROM equivalence test's pinned battle-interface ids) reproduces the same pack entry from the BPEE rev-0 profile; with textbox_0.pal it is one composed 32-colour ROM palette root, not two.",
           "rust_target": "crates/xtask/src/extract/battle_interface.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "textbox_map.bin": {
-          "reason": "Battle textbox and menu text source transcoded to a validated typed pack entry read by AssetPack::battle_interface; the other battle_interface sources remain pending.",
+          "reason": "Battle textbox and menu text source transcoded to a validated typed pack entry read by AssetPack::battle_interface; the other battle_interface sources remain pending. The ROM importer (rom-import's domains::battle_interface, gated by the real-ROM equivalence test's pinned battle-interface ids) reproduces the same pack entry from the BPEE rev-0 profile.",
           "rust_target": "crates/xtask/src/extract/battle_interface.rs",
           "spec": "S-4",
           "status": "ported"
