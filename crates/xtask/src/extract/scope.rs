@@ -636,3 +636,15 @@ pub(crate) fn trainer_front_ids() -> Vec<String> {
         .map(str::to_owned)
         .collect()
 }
+
+pub(crate) use super::trainer_battler::TRAINERS as TRAINER_BATTLERS;
+
+/// Every `trainer/` pack id extraction emits: for Brendan and for May the
+/// front picture, the back sheet and the shared palette.
+pub(crate) fn trainer_battler_ids() -> Vec<String> {
+    TRAINER_BATTLERS
+        .iter()
+        .flat_map(|trainer| [trainer.front_id, trainer.back_id, trainer.palette_id])
+        .map(str::to_owned)
+        .collect()
+}

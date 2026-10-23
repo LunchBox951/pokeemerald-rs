@@ -16,7 +16,7 @@ pub(super) const BATTLER_SIDE: u32 = 64;
 const BATTLER_BIT_DEPTH: u8 = 4;
 const BATTLER_PALETTE_COLORS: u16 = 16;
 
-/// Which side of the battler an image shows.
+/// Which side of a battler an image shows, for species and trainers alike.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BattlerDirection {
     /// The opposing side's art (`gMonStillFrontPicTable`).

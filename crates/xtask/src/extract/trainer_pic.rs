@@ -3,14 +3,15 @@
 //! and `TRAINER_PIC_MAY` (`src/data/trainer_graphics/front_pic_tables.h`,
 //! `src/data/graphics/trainers.h:214-218`).
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::{
     build_image_entry, build_palette_entry, jasc_pal, png, read_file, read_text, ExtractError,
 };
 use pack_format::PackWriter;
 
-const SIDE: u32 = 64;
+/// Width of every trainer picture, and the height of a front picture.
+pub(super) const SIDE: u32 = 64;
 const COLORS: usize = 16;
 /// The PNG bit depth the typed accessor requires of every trainer picture.
 const BIT_DEPTH: u8 = 4;
@@ -19,8 +20,8 @@ const BIT_DEPTH: u8 = 4;
 /// and the pack ids it publishes under.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct PicSource {
-    png: &'static str,
-    palette: &'static str,
+    pub(super) png: &'static str,
+    pub(super) palette: &'static str,
     /// The lower-case trainer name; the picture and palette symbols spell it in camel case.
     pub(crate) name: &'static str,
     /// The row of `gTrainerFrontPicTable` and `gTrainerFrontPicPaletteTable` this picture fills.
@@ -53,47 +54,11 @@ pub(super) fn extract_trainer_pics(
     upstream: &Path,
     writer: &mut PackWriter,
 ) -> Result<(), ExtractError> {
+    let directory = upstream.join(TRAINER_GRAPHICS);
     let mut entries = Vec::with_capacity(PICS.len() * 2);
     for pic in PICS {
-        let directory = upstream.join("graphics/trainers");
-        let palette_path = directory.join(pic.palette);
-        let colors = jasc_pal::parse(&read_text(&palette_path)?)
-            .map_err(|e| ExtractError::Pal(palette_path.clone(), e))?;
-        if colors.len() != COLORS {
-            return Err(mismatch(
-                &palette_path,
-                format!("has {} colours: expected {COLORS}", colors.len()),
-            ));
-        }
-
-        let path = directory.join(pic.png);
-        let image =
-            png::decode(&read_file(&path)?).map_err(|e| ExtractError::Png(path.clone(), e))?;
-        if image.width != SIDE || image.height != SIDE {
-            return Err(mismatch(
-                &path,
-                format!(
-                    "is {}x{}: expected {SIDE}x{SIDE}",
-                    image.width, image.height
-                ),
-            ));
-        }
-        if image.bit_depth != BIT_DEPTH {
-            return Err(mismatch(
-                &path,
-                format!("is {}-bit: expected {BIT_DEPTH}-bit", image.bit_depth),
-            ));
-        }
-        if let Some(&pixel) = image
-            .pixels
-            .iter()
-            .find(|&&pixel| usize::from(pixel) >= COLORS)
-        {
-            return Err(mismatch(
-                &path,
-                format!("has pixel index {pixel}: its palette only has {COLORS} colours"),
-            ));
-        }
+        let (palette_path, colors) = read_palette(&directory, pic.palette)?;
+        let (path, image) = read_picture(&directory, pic.png, SIDE)?;
         entries.push(build_image_entry(&path, pic.image_id.to_owned(), image)?);
         entries.push(build_palette_entry(
             &palette_path,
@@ -108,7 +73,64 @@ pub(super) fn extract_trainer_pics(
     Ok(())
 }
 
-fn mismatch(path: &Path, detail: String) -> ExtractError {
+/// Where the trainer graphics sit in the checkout.
+pub(super) const TRAINER_GRAPHICS: &str = "graphics/trainers";
+
+/// Reads one 16-colour palette file of a trainer picture.
+pub(super) fn read_palette(
+    directory: &Path,
+    file: &str,
+) -> Result<(PathBuf, Vec<jasc_pal::Rgb888>), ExtractError> {
+    let path = directory.join(file);
+    let colors =
+        jasc_pal::parse(&read_text(&path)?).map_err(|e| ExtractError::Pal(path.clone(), e))?;
+    if colors.len() != COLORS {
+        return Err(mismatch(
+            &path,
+            format!("has {} colours: expected {COLORS}", colors.len()),
+        ));
+    }
+    Ok((path, colors))
+}
+
+/// Reads one 4bpp, 64-pixel-wide trainer picture of `height` pixels whose
+/// indices all fit a 16-colour palette.
+pub(super) fn read_picture(
+    directory: &Path,
+    file: &str,
+    height: u32,
+) -> Result<(PathBuf, png::IndexedImage), ExtractError> {
+    let path = directory.join(file);
+    let image = png::decode(&read_file(&path)?).map_err(|e| ExtractError::Png(path.clone(), e))?;
+    if image.width != SIDE || image.height != height {
+        return Err(mismatch(
+            &path,
+            format!(
+                "is {}x{}: expected {SIDE}x{height}",
+                image.width, image.height
+            ),
+        ));
+    }
+    if image.bit_depth != BIT_DEPTH {
+        return Err(mismatch(
+            &path,
+            format!("is {}-bit: expected {BIT_DEPTH}-bit", image.bit_depth),
+        ));
+    }
+    if let Some(&pixel) = image
+        .pixels
+        .iter()
+        .find(|&&pixel| usize::from(pixel) >= COLORS)
+    {
+        return Err(mismatch(
+            &path,
+            format!("has pixel index {pixel}: its palette only has {COLORS} colours"),
+        ));
+    }
+    Ok((path, image))
+}
+
+pub(super) fn mismatch(path: &Path, detail: String) -> ExtractError {
     ExtractError::TrainerPicAssetMismatch {
         path: path.to_path_buf(),
         detail,
