@@ -128,9 +128,9 @@ fn a_saved_games_own_window_frame_choice_borders_the_start_menu() {
     const CHOSEN_FRAME: u8 = 5;
 
     let path = synthetic_pack_path("start-menu-window-frame");
-    let _guard = TempPackFile::write(&path, &synthetic_start_menu_pack_bytes());
+    let guard = TempPackFile::write(&path, &synthetic_start_menu_pack_bytes());
 
-    let pack = AssetPack::load(&path).expect("the fixture pack is well-formed");
+    let pack = AssetPack::load(guard.path()).expect("the fixture pack is well-formed");
     let chrome =
         StartMenuChrome::from_pack(&pack, CHOSEN_FRAME).expect("the fixture pack has frame 5");
     let mut menu = StartMenu::assemble(chrome, 0);
