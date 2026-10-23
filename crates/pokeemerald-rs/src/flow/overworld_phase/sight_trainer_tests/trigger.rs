@@ -361,13 +361,8 @@ fn real_pack_rhetts_cone_reaches_the_player_over_real_terrain_and_draws_nothing(
 
     // The cone genuinely reaches, over the real decoded grid -- asked of the
     // same `engine` geometry the trigger uses, with the real object events.
-    let header = assets::MapHeaderTable::new()
-        .header(ROUTE_103)
-        .expect("MAP_ROUTE103 is bundled map data");
-    let events = assets::MapEventsTable::new()
-        .resolve(ROUTE_103)
-        .expect("MAP_ROUTE103 is bundled map data");
-    let rhett = events
+    let rhett = scene
+        .map_events()
         .object_events
         .iter()
         .find(|event| event.script == "Route103_EventScript_Rhett")
@@ -375,7 +370,7 @@ fn real_pack_rhetts_cone_reaches_the_player_over_real_terrain_and_draws_nothing(
     assert!(
         engine::overworld::trainer_can_see_player(
             rhett,
-            &scene.runtime(ROUTE_103, header, events),
+            &scene.runtime(),
             &player,
             &engine::event_data::EventData::new(),
         ),

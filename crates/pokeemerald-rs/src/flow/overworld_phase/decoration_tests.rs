@@ -120,9 +120,8 @@ fn a_decoration_placeholder_would_block_if_its_flag_were_clear() {
          decoration there"
     );
 
-    let header = assets::MapHeaderTable::new().header(BEDROOM).unwrap();
-    let scene = crate::overworld::test_support::synthetic_scene(10, 10);
-    let runtime = scene.runtime(BEDROOM, header, events);
+    let scene = crate::overworld::test_support::synthetic_scene(10, 10).in_room_for_test(BEDROOM);
+    let runtime = scene.runtime();
     let mut player = PlayerState::new(PLACEHOLDER_APPROACH, 3, Direction::North);
     assert!(
         matches!(
