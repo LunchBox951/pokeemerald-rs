@@ -1,4 +1,4 @@
-use super::test_support::{extracted_map_graphics_ids, NON_RIVAL_GFX_ID};
+use super::test_support::{bundled_map_graphics_ids, NON_RIVAL_GFX_ID};
 use super::*;
 
 #[test]
@@ -149,15 +149,99 @@ fn resolve_sprite_source_resolves_the_oldale_and_route_103_background_npcs() {
     }
 }
 
-#[test]
-fn resolve_sprite_source_partitions_every_extracted_map_graphics_id() {
-    const GRAPHICS_ID_COUNT: usize = 46;
+/// The bundled maps' graphics ids `resolve_sprite_source` draws.
+const DRAWN_GRAPHICS_IDS: [&str; 22] = [
+    "OBJ_EVENT_GFX_BLACK_BELT",
+    "OBJ_EVENT_GFX_BOY_1",
+    "OBJ_EVENT_GFX_BOY_2",
+    "OBJ_EVENT_GFX_FAT_MAN",
+    "OBJ_EVENT_GFX_FISHERMAN",
+    "OBJ_EVENT_GFX_GIRL_3",
+    "OBJ_EVENT_GFX_MANIAC",
+    "OBJ_EVENT_GFX_MAN_3",
+    "OBJ_EVENT_GFX_MAN_5",
+    "OBJ_EVENT_GFX_MART_EMPLOYEE",
+    "OBJ_EVENT_GFX_MOM",
+    "OBJ_EVENT_GFX_NORMAN",
+    "OBJ_EVENT_GFX_POKEFAN_M",
+    "OBJ_EVENT_GFX_PROF_BIRCH",
+    "OBJ_EVENT_GFX_RIVAL_BRENDAN_NORMAL",
+    "OBJ_EVENT_GFX_RIVAL_MAY_NORMAL",
+    "OBJ_EVENT_GFX_SCIENTIST_1",
+    "OBJ_EVENT_GFX_SWIMMER_F",
+    "OBJ_EVENT_GFX_SWIMMER_M",
+    "OBJ_EVENT_GFX_TWIN",
+    "OBJ_EVENT_GFX_WOMAN_2",
+    "OBJ_EVENT_GFX_WOMAN_4",
+];
 
-    let reachable = extracted_map_graphics_ids();
+/// The bundled maps' graphics ids `resolve_sprite_source` leaves undrawn.
+const UNDRAWN_GRAPHICS_IDS: [&str; 54] = [
+    "OBJ_EVENT_GFX_BERRY_TREE",
+    "OBJ_EVENT_GFX_BIRCHS_BAG",
+    "OBJ_EVENT_GFX_BOY_3",
+    "OBJ_EVENT_GFX_BUG_CATCHER",
+    "OBJ_EVENT_GFX_CUTTABLE_TREE",
+    "OBJ_EVENT_GFX_EXPERT_F",
+    "OBJ_EVENT_GFX_EXPERT_M",
+    "OBJ_EVENT_GFX_GAMEBOY_KID",
+    "OBJ_EVENT_GFX_GENTLEMAN",
+    "OBJ_EVENT_GFX_GIRL_1",
+    "OBJ_EVENT_GFX_GIRL_2",
+    "OBJ_EVENT_GFX_ITEM_BALL",
+    "OBJ_EVENT_GFX_KECLEON",
+    "OBJ_EVENT_GFX_LASS",
+    "OBJ_EVENT_GFX_LITTLE_BOY",
+    "OBJ_EVENT_GFX_MAN_1",
+    "OBJ_EVENT_GFX_MAN_4",
+    "OBJ_EVENT_GFX_MOVING_BOX",
+    "OBJ_EVENT_GFX_MYSTERY_GIFT_MAN",
+    "OBJ_EVENT_GFX_NINJA_BOY",
+    "OBJ_EVENT_GFX_NURSE",
+    "OBJ_EVENT_GFX_OLD_MAN",
+    "OBJ_EVENT_GFX_OLD_WOMAN",
+    "OBJ_EVENT_GFX_PICHU_DOLL",
+    "OBJ_EVENT_GFX_PICNICKER",
+    "OBJ_EVENT_GFX_PIKACHU",
+    "OBJ_EVENT_GFX_POKEFAN_F",
+    "OBJ_EVENT_GFX_SAILOR",
+    "OBJ_EVENT_GFX_SCHOOL_KID_M",
+    "OBJ_EVENT_GFX_SCOTT",
+    "OBJ_EVENT_GFX_SKITTY",
+    "OBJ_EVENT_GFX_SWABLU_DOLL",
+    "OBJ_EVENT_GFX_TEALA",
+    "OBJ_EVENT_GFX_TRUCK",
+    "OBJ_EVENT_GFX_VAR_0",
+    "OBJ_EVENT_GFX_VAR_1",
+    "OBJ_EVENT_GFX_VAR_2",
+    "OBJ_EVENT_GFX_VAR_3",
+    "OBJ_EVENT_GFX_VAR_4",
+    "OBJ_EVENT_GFX_VAR_5",
+    "OBJ_EVENT_GFX_VAR_6",
+    "OBJ_EVENT_GFX_VAR_7",
+    "OBJ_EVENT_GFX_VAR_8",
+    "OBJ_EVENT_GFX_VAR_9",
+    "OBJ_EVENT_GFX_VAR_A",
+    "OBJ_EVENT_GFX_VAR_B",
+    "OBJ_EVENT_GFX_VIGOROTH_CARRYING_BOX",
+    "OBJ_EVENT_GFX_VIGOROTH_FACING_AWAY",
+    "OBJ_EVENT_GFX_WINGULL",
+    "OBJ_EVENT_GFX_WOMAN_1",
+    "OBJ_EVENT_GFX_WOMAN_3",
+    "OBJ_EVENT_GFX_WOMAN_5",
+    "OBJ_EVENT_GFX_YOUNGSTER",
+    "OBJ_EVENT_GFX_ZIGZAGOON_1",
+];
+
+#[test]
+fn resolve_sprite_source_partitions_every_bundled_map_graphics_id() {
+    const GRAPHICS_ID_COUNT: usize = 76;
+
+    let reachable = bundled_map_graphics_ids();
     assert_eq!(
         reachable.len(),
         GRAPHICS_ID_COUNT,
-        "the extracted map set changed"
+        "the bundled map set changed"
     );
 
     let no_flags = EventData::new();
@@ -166,61 +250,11 @@ fn resolve_sprite_source_partitions_every_extracted_map_graphics_id() {
         .partition(|id| resolve_sprite_source(id, PlayerCharacter::Brendan, &no_flags).is_some());
 
     assert_eq!(
-        drawn,
-        [
-            "OBJ_EVENT_GFX_BLACK_BELT",
-            "OBJ_EVENT_GFX_BOY_1",
-            "OBJ_EVENT_GFX_BOY_2",
-            "OBJ_EVENT_GFX_FAT_MAN",
-            "OBJ_EVENT_GFX_FISHERMAN",
-            "OBJ_EVENT_GFX_GIRL_3",
-            "OBJ_EVENT_GFX_MANIAC",
-            "OBJ_EVENT_GFX_MAN_3",
-            "OBJ_EVENT_GFX_MAN_5",
-            "OBJ_EVENT_GFX_MART_EMPLOYEE",
-            "OBJ_EVENT_GFX_MOM",
-            "OBJ_EVENT_GFX_NORMAN",
-            "OBJ_EVENT_GFX_POKEFAN_M",
-            "OBJ_EVENT_GFX_PROF_BIRCH",
-            "OBJ_EVENT_GFX_RIVAL_BRENDAN_NORMAL",
-            "OBJ_EVENT_GFX_RIVAL_MAY_NORMAL",
-            "OBJ_EVENT_GFX_SCIENTIST_1",
-            "OBJ_EVENT_GFX_SWIMMER_F",
-            "OBJ_EVENT_GFX_SWIMMER_M",
-            "OBJ_EVENT_GFX_TWIN",
-            "OBJ_EVENT_GFX_WOMAN_2",
-            "OBJ_EVENT_GFX_WOMAN_4",
-        ],
+        drawn, DRAWN_GRAPHICS_IDS,
         "the supported graphics-id set changed"
     );
     assert_eq!(
-        not_drawn,
-        [
-            "OBJ_EVENT_GFX_BERRY_TREE",
-            "OBJ_EVENT_GFX_BIRCHS_BAG",
-            "OBJ_EVENT_GFX_CUTTABLE_TREE",
-            "OBJ_EVENT_GFX_ITEM_BALL",
-            "OBJ_EVENT_GFX_NINJA_BOY",
-            "OBJ_EVENT_GFX_PICHU_DOLL",
-            "OBJ_EVENT_GFX_SWABLU_DOLL",
-            "OBJ_EVENT_GFX_TRUCK",
-            "OBJ_EVENT_GFX_VAR_0",
-            "OBJ_EVENT_GFX_VAR_1",
-            "OBJ_EVENT_GFX_VAR_2",
-            "OBJ_EVENT_GFX_VAR_3",
-            "OBJ_EVENT_GFX_VAR_4",
-            "OBJ_EVENT_GFX_VAR_5",
-            "OBJ_EVENT_GFX_VAR_6",
-            "OBJ_EVENT_GFX_VAR_7",
-            "OBJ_EVENT_GFX_VAR_8",
-            "OBJ_EVENT_GFX_VAR_9",
-            "OBJ_EVENT_GFX_VAR_A",
-            "OBJ_EVENT_GFX_VAR_B",
-            "OBJ_EVENT_GFX_VIGOROTH_CARRYING_BOX",
-            "OBJ_EVENT_GFX_VIGOROTH_FACING_AWAY",
-            "OBJ_EVENT_GFX_YOUNGSTER",
-            "OBJ_EVENT_GFX_ZIGZAGOON_1",
-        ],
+        not_drawn, UNDRAWN_GRAPHICS_IDS,
         "the unsupported graphics-id set changed"
     );
 
@@ -230,7 +264,7 @@ fn resolve_sprite_source_partitions_every_extracted_map_graphics_id() {
         .copied()
         .collect();
     assert_eq!(
-        drawn_as_may, drawn,
+        drawn_as_may, DRAWN_GRAPHICS_IDS,
         "graphics-id support must not depend on the player character"
     );
 }
