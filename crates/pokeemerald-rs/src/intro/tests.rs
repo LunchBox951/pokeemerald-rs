@@ -765,23 +765,52 @@ fn a_temp_pack_is_gone_after_a_filesystem_backed_test_body_unwinds() {
     );
 }
 
+/// The live tests' bare scratch names; each is also planted against below.
+const LIVE_SCRATCH_NAMES: [&str; 4] = [
+    "no-message-box",
+    "out-of-range-speed",
+    "regenerated",
+    "unwind-cleanup",
+];
+
+/// The probe-only path the planted-entry regression plants against for a live
+/// test's scratch `name`. The regression unlinks and replaces its target, so
+/// it must never share a path with a test running in parallel.
+fn planted_probe_path(name: &str) -> std::path::PathBuf {
+    temp_pack_path(&format!("planted-{name}"))
+}
+
 /// Every intro pack path is as predictable as its name and the process id, so
 /// a symlink or an occupied file planted there must be replaced, never
 /// written through or truncated in place.
 #[test]
 fn the_intro_scratch_packs_never_write_through_a_planted_entry() {
-    for name in [
-        "no-message-box",
-        "out-of-range-speed",
-        "regenerated",
-        "unwind-cleanup",
-    ] {
-        let path = temp_pack_path(name);
+    for name in LIVE_SCRATCH_NAMES {
+        let path = planted_probe_path(name);
         let entries = || vec![font_entry(TRANSPARENT_PALETTE_INDEX)];
         let expected = crate::pack_test_support::pack_bytes(entries());
         crate::pack_test_support::assert_scratch_claim_is_exclusive(&path, &expected, || {
             TempPackGuard::create(path.clone(), entries())
         });
+    }
+}
+
+/// The planted-entry regression replaces and removes only its own probe
+/// paths, so it cannot substitute or delete a live fixture another test holds
+/// under a bare scratch name while the two run in parallel.
+#[test]
+fn the_planted_entry_regression_never_targets_a_live_scratch_path() {
+    let live: Vec<_> = LIVE_SCRATCH_NAMES
+        .iter()
+        .map(|n| temp_pack_path(n))
+        .collect();
+    for name in LIVE_SCRATCH_NAMES {
+        let probe = planted_probe_path(name);
+        assert!(
+            !live.contains(&probe),
+            "the regression's probe path {} is a live test's scratch path",
+            probe.display()
+        );
     }
 }
 
