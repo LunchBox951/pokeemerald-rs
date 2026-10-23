@@ -37,6 +37,21 @@ const SHADOW_STEM: &str = "enemy_mon_shadow";
 /// Sources whose embedded `PLTE` becomes a palette record of the same stem.
 const PALETTE_STEMS: [&str; 2] = ["ball_status_bar", "ball_display"];
 
+/// Every pack id [`extract_healthbox_frames`] emits: the two frames and the
+/// enemy shadow, then the two palettes.
+pub(in crate::extract) fn pack_ids() -> Vec<String> {
+    FRAME_SOURCES
+        .iter()
+        .map(|(_, stem)| format!("{IMAGE_PREFIX}/{stem}"))
+        .chain([format!("{IMAGE_PREFIX}/{SHADOW_STEM}")])
+        .chain(
+            PALETTE_STEMS
+                .iter()
+                .map(|stem| format!("{PALETTE_PREFIX}/{stem}")),
+        )
+        .collect()
+}
+
 /// Extracts the two frames, the enemy shadow, and the two palettes.
 pub(in crate::extract) fn extract_healthbox_frames(
     upstream: &Path,
@@ -132,7 +147,7 @@ mod tests {
     use super::super::super::png::tests::{indexed_png_from_raw_with_plte, tiny_indexed_png};
     use super::super::super::png::{self, PngError};
     use super::super::super::{extract_to, repo_root, upstream_present};
-    use super::{extract_healthbox_frames, DIRECTORY, FRAME_SOURCES};
+    use super::{extract_healthbox_frames, pack_ids, DIRECTORY, FRAME_SOURCES};
     use crate::extract::ExtractError;
     use pack_format::PackWriter;
 
@@ -255,7 +270,10 @@ mod tests {
         ids.sort();
         let mut expected = RECORD_IDS.map(str::to_owned);
         expected.sort();
+        let mut declared = pack_ids();
+        declared.sort();
         assert_eq!(ids, expected);
+        assert_eq!(declared, expected);
 
         let pack_path = dir.join("frames.pack");
         std::fs::write(&pack_path, bytes).unwrap();
