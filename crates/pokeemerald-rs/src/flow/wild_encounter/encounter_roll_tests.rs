@@ -396,18 +396,12 @@ fn walking_route_101s_real_grass_produces_an_encounter_from_its_own_table() {
         &engine::event_data::EventData::new(),
     )
     .expect("run `cargo xtask extract` first");
-    let header = assets::MapHeaderTable::new()
-        .header(ROUTE_101)
-        .expect("Route 101 resolves in the generated map-header table");
-    let events = assets::MapEventsTable::new()
-        .resolve(ROUTE_101)
-        .expect("Route 101 resolves in the generated map-events table");
 
     // Both chosen tiles really are walkable tall grass in the extracted
     // data -- asserted, not assumed, so a re-extraction that moved the grass
     // fails here rather than silently walking on dirt.
     let elevation = {
-        let runtime = scene.runtime(ROUTE_101, header, events);
+        let runtime = scene.runtime();
         for (x, y) in REAL_GRASS {
             assert_eq!(
                 runtime.metatile_behavior(x, y),
