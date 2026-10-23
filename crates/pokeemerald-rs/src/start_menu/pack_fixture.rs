@@ -36,62 +36,84 @@ type FileIdentity = win_fs::WindowsFileIdentity;
 #[cfg(not(any(unix, windows)))]
 struct FileIdentity;
 
-/// How many candidate names a claim tries before giving up.
+/// How many private-directory names a claim tries before giving up.
 const MAX_CLAIM_ATTEMPTS: u32 = 1024;
 
-/// Candidate `attempt` for `path`: attempt 0 is `path` itself, later attempts
-/// insert `-{attempt}` before the extension.
-fn candidate_path(path: &std::path::Path, attempt: u32) -> std::path::PathBuf {
-    if attempt == 0 {
-        return path.to_path_buf();
-    }
+/// Creates the private directory a guard's file lives in, next to `path`.
+/// `create_dir` (`mkdir`) refuses every existing entry, a symlink or another
+/// run's directory included, so nothing already at a candidate name is
+/// followed or reused: a taken name moves on to the next candidate. On Unix
+/// the directory is created `0700`, so no other user can place an entry in
+/// it. The name is neither `path` nor derived from it alone, so a file a
+/// test or another process leaves at `path` is never inside the directory.
+fn claim_private_scratch_dir(path: &std::path::Path) -> std::path::PathBuf {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(std::path::Path::new("."));
     let stem = path.file_stem().unwrap_or_default().to_string_lossy();
-    let mut name = format!("{stem}-{attempt}");
-    if let Some(ext) = path.extension() {
-        name.push('.');
-        name.push_str(&ext.to_string_lossy());
-    }
-    path.with_file_name(name)
-}
-
-/// Creates a new file at the first free candidate for `path`. `create_new`
-/// (`O_EXCL`) refuses every existing entry, a symlink included, so nothing
-/// already at a candidate is followed, truncated or unlinked: a taken name
-/// moves on to the next candidate.
-fn claim_exclusive(path: &std::path::Path) -> (std::path::PathBuf, std::fs::File) {
     for attempt in 0..MAX_CLAIM_ATTEMPTS {
-        let candidate = candidate_path(path, attempt);
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&candidate)
+        let dir = parent.join(format!("{stem}-{}-{attempt}.d", std::process::id()));
+        let mut builder = std::fs::DirBuilder::new();
+        #[cfg(unix)]
         {
-            Ok(file) => return (candidate, file),
+            use std::os::unix::fs::DirBuilderExt as _;
+            builder.mode(0o700);
+        }
+        match builder.create(&dir) {
+            Ok(()) => return dir,
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(e) => panic!(
-                "the scratch directory is writable ({}): {e}",
-                candidate.display()
-            ),
+            Err(e) => panic!("the scratch directory is writable ({}): {e}", dir.display()),
         }
     }
-    panic!("no free scratch name near {}", path.display());
+    panic!("no free scratch directory near {}", path.display());
 }
 
-/// Writes `bytes` to a scratch file it claims exclusively and removes that
-/// file on drop, so a failed assertion still cleans up.
+/// Creates the guard's file inside a fresh private directory and returns the
+/// directory, the file's path and the open file. The file keeps `path`'s
+/// name; `create_new` (`O_EXCL`) adds a second refusal of anything already
+/// there, though the directory was created a moment earlier and is empty.
+fn claim_exclusive(
+    path: &std::path::Path,
+) -> (std::path::PathBuf, std::path::PathBuf, std::fs::File) {
+    let dir = claim_private_scratch_dir(path);
+    let file_path = dir.join(path.file_name().unwrap_or_default());
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&file_path)
+    {
+        Ok(file) => (dir, file_path, file),
+        Err(e) => {
+            let _ = std::fs::remove_dir(&dir);
+            panic!(
+                "the scratch directory is writable ({}): {e}",
+                file_path.display()
+            );
+        }
+    }
+}
+
+/// Writes `bytes` to a scratch file it claims inside a private directory it
+/// creates, and removes that file and then that directory on drop, so a
+/// failed assertion still cleans up.
 pub(super) struct TempPackFile {
     path: std::path::PathBuf,
+    /// The private directory holding the file, removed after it.
+    dir: std::path::PathBuf,
     identity: FileIdentity,
-    /// Kept open through `Drop`: it pins the inode the identity names.
-    _claim: std::fs::File,
+    /// Kept open until `Drop` has removed the file: it pins the inode the
+    /// identity names.
+    claim: Option<std::fs::File>,
 }
 
 impl TempPackFile {
-    /// Claims the first free name at or after `path` (never an existing
-    /// entry) and writes `bytes` to it; read the claimed name from `path()`.
+    /// Creates a private directory next to `path` and writes `bytes` to a
+    /// file named like `path` inside it; read the claimed file from `path()`.
+    /// Anything already at `path` is left alone.
     pub(super) fn write(path: &std::path::Path, bytes: &[u8]) -> Self {
         use std::io::Write as _;
-        let (path, mut file) = claim_exclusive(path);
+        let (dir, path, mut file) = claim_exclusive(path);
         file.write_all(bytes).expect("the scratch pack is writable");
         #[cfg(unix)]
         let identity = FileIdentity::of(&file.metadata().expect("the scratch pack has metadata"));
@@ -101,8 +123,9 @@ impl TempPackFile {
         let identity = FileIdentity;
         Self {
             path,
+            dir,
             identity,
-            _claim: file,
+            claim: Some(file),
         }
     }
 
@@ -113,17 +136,26 @@ impl TempPackFile {
 }
 
 impl Drop for TempPackFile {
-    /// Removes the file this guard created, and nothing else.
+    /// Removes the file this guard created and then its private directory,
+    /// and nothing else.
+    ///
+    /// The file sits in a directory this guard created with `create_dir`
+    /// (`0700` on Unix) under a name nothing but this run knows, so a
+    /// replacement raced onto the path from outside the test cannot land
+    /// where cleanup looks. The directory is removed with `remove_dir`, which
+    /// refuses a directory that still holds anything: an entry the guard did
+    /// not create keeps the directory and is never deleted.
     ///
     /// On Windows the identity check and the delete go through one open
     /// handle (`win-fs`), so no second lookup of the path can be redirected.
-    /// On Unix `std` has no delete bound to a verified object: the path is
+    /// On Unix `std` has no delete bound to a verified object: the file is
     /// checked (`lstat`: still a regular file with the recorded device and
-    /// inode) and then unlinked as two separate lookups, so another process
-    /// that renames a different file over the path inside that window has
-    /// its file removed. The path is a private candidate name this guard
-    /// created exclusively moments earlier, which makes the window a
-    /// current limitation rather than something a test run reaches.
+    /// inode) and then unlinked as two separate lookups. A process of the
+    /// same user that finds the private directory and renames a different
+    /// file into it inside that window still has that file removed; no other
+    /// user can, and nothing outside this run has a reason to. That is the
+    /// residual window. If `lstat` or the check fails the file stays, and
+    /// `remove_dir` then fails closed on the non-empty directory.
     fn drop(&mut self) {
         #[cfg(unix)]
         if let Ok(meta) = std::fs::symlink_metadata(&self.path) {
@@ -135,6 +167,10 @@ impl Drop for TempPackFile {
         if let Ok(handle) = win_fs::open_for_verified_delete(&self.path) {
             let _ = win_fs::remove_through_open_handle(&handle, self.identity, |_| {});
         }
+        // Close the pinned file before the directory goes, so a platform that
+        // defers a delete until the last handle closes has finished with it.
+        drop(self.claim.take());
+        let _ = std::fs::remove_dir(&self.dir);
     }
 }
 
@@ -199,9 +235,9 @@ pub(super) fn synthetic_start_menu_pack_bytes() -> Vec<u8> {
     ])
 }
 
-/// Creates a directory no one else owns: `create_dir` fails on any existing
+/// Creates a directory the tests own: `create_dir` fails on any existing
 /// entry, so a taken name moves on to the next candidate.
-fn claim_private_dir(label: &str) -> std::path::PathBuf {
+fn claim_test_root(label: &str) -> std::path::PathBuf {
     for attempt in 0.. {
         let dir = std::env::temp_dir().join(format!(
             "pokeemerald-rs-{label}-{}-{attempt}",
@@ -218,7 +254,7 @@ fn claim_private_dir(label: &str) -> std::path::PathBuf {
 
 #[test]
 fn scratch_pack_writer_does_not_unlink_an_unrelated_regular_file() {
-    let dir = claim_private_dir("start-occupant");
+    let dir = claim_test_root("start-occupant");
     let path = dir.join("scratch.pack");
     std::fs::write(&path, b"precious").unwrap();
     let fixture = TempPackFile::write(&path, &[1, 2, 3]);
@@ -245,27 +281,73 @@ fn scratch_pack_writer_does_not_unlink_an_unrelated_regular_file() {
 }
 
 #[test]
-fn scratch_pack_writer_skips_every_occupied_candidate_name() {
-    let dir = claim_private_dir("start-skip");
+fn scratch_pack_writer_skips_every_occupied_private_directory_name() {
+    let dir = claim_test_root("start-skip");
     let path = dir.join("scratch.pack");
-    std::fs::write(&path, b"zero").unwrap();
-    std::fs::write(dir.join("scratch-1.pack"), b"one").unwrap();
+    let taken = |attempt: u32| dir.join(format!("scratch-{}-{attempt}.d", std::process::id()));
+    for attempt in 0..2 {
+        std::fs::create_dir(taken(attempt)).unwrap();
+        std::fs::write(taken(attempt).join("scratch.pack"), b"theirs").unwrap();
+    }
     let fixture = TempPackFile::write(&path, &[9]);
     let claimed = fixture.path().to_path_buf();
+    let claimed_parent = claimed.parent().unwrap().to_path_buf();
     drop(fixture);
-    let kept = (
-        std::fs::read(&path).unwrap(),
-        std::fs::read(dir.join("scratch-1.pack")).unwrap(),
-    );
+    let kept: Vec<_> = (0..2)
+        .map(|attempt| std::fs::read(taken(attempt).join("scratch.pack")).unwrap())
+        .collect();
+    let claimed_dir_left = claimed_parent.exists();
     std::fs::remove_dir_all(&dir).unwrap();
-    assert_eq!(claimed.file_name().unwrap(), "scratch-2.pack");
-    assert_eq!(kept, (b"zero".to_vec(), b"one".to_vec()));
+    assert_eq!(claimed_parent, taken(2));
+    assert_eq!(kept, [b"theirs".to_vec(), b"theirs".to_vec()]);
+    assert!(!claimed_dir_left, "the guard left its own directory behind");
+}
+
+#[test]
+fn scratch_pack_guard_removes_its_directory_and_keeps_a_stranger_in_it() {
+    let dir = claim_test_root("start-stranger");
+    let path = dir.join("scratch.pack");
+    let fixture = TempPackFile::write(&path, &[1, 2, 3]);
+    let claimed = fixture.path().to_path_buf();
+    let private = claimed.parent().unwrap().to_path_buf();
+    let stranger = private.join("stranger.bin");
+    std::fs::write(&stranger, b"not ours").unwrap();
+    drop(fixture);
+    let claimed_after = claimed.exists();
+    let stranger_after = std::fs::read(&stranger).ok();
+    let private_after = private.exists();
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert!(!claimed_after, "the guard left its own file behind");
+    assert_eq!(
+        stranger_after.as_deref(),
+        Some(&b"not ours"[..]),
+        "the guard removed an entry it did not create"
+    );
+    assert!(
+        private_after,
+        "remove_dir must refuse a non-empty directory"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn scratch_pack_directory_is_private_to_its_owner() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = claim_test_root("start-mode");
+    let fixture = TempPackFile::write(&dir.join("scratch.pack"), &[1]);
+    let mode = std::fs::metadata(fixture.path().parent().unwrap())
+        .unwrap()
+        .permissions()
+        .mode();
+    drop(fixture);
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(mode & 0o077, 0, "the private directory is open to others");
 }
 
 #[cfg(unix)]
 #[test]
 fn scratch_pack_guard_removes_only_the_file_it_created() {
-    let dir = claim_private_dir("start-identity");
+    let dir = claim_test_root("start-identity");
     let path = dir.join("scratch.pack");
     let fixture = TempPackFile::write(&path, &[1, 2, 3]);
     let claimed = fixture.path().to_path_buf();
@@ -286,24 +368,36 @@ fn scratch_pack_guard_removes_only_the_file_it_created() {
 #[cfg(unix)]
 #[test]
 fn scratch_pack_writer_does_not_follow_a_planted_symlink() {
-    let dir = claim_private_dir("start-symlink");
+    let dir = claim_test_root("start-symlink");
     let victim = dir.join("victim");
     std::fs::write(&victim, b"precious").unwrap();
     let path = dir.join("scratch.pack");
     std::os::unix::fs::symlink(&victim, &path).unwrap();
+    // A link planted at the first private-directory name must be skipped too.
+    let planted_dir = dir.join(format!("scratch-{}-0.d", std::process::id()));
+    let victim_dir = dir.join("victim-dir");
+    std::fs::create_dir(&victim_dir).unwrap();
+    std::os::unix::fs::symlink(&victim_dir, &planted_dir).unwrap();
     let fixture = TempPackFile::write(&path, &[1, 2, 3]);
     let claimed = fixture.path().to_path_buf();
     drop(fixture);
     let victim_after = std::fs::read(&victim).unwrap();
+    let victim_dir_entries = std::fs::read_dir(&victim_dir).unwrap().count();
     let link_survives = std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink());
+    let dir_link_survives =
+        std::fs::symlink_metadata(&planted_dir).is_ok_and(|m| m.file_type().is_symlink());
     std::fs::remove_dir_all(&dir).unwrap();
     assert_ne!(claimed, path, "the writer reused the planted link's name");
     assert_eq!(
         victim_after, b"precious",
         "the writer followed the symlink and clobbered its target"
     );
+    assert_eq!(
+        victim_dir_entries, 0,
+        "the writer wrote through a planted directory link"
+    );
     assert!(
-        link_survives,
-        "the writer or its guard unlinked the planted link"
+        link_survives && dir_link_survives,
+        "the writer or its guard unlinked a planted link"
     );
 }
