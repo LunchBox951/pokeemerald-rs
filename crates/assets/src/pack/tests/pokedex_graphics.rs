@@ -286,3 +286,33 @@ fn malformed_entries_are_rejected_on_read() {
         let _ = std::fs::remove_file(path);
     }
 }
+
+#[test]
+fn malformed_sheet_reports_the_shared_validation_order_and_wording() {
+    let detail_of = |n: usize, id: &'static str, entry: Entry| {
+        let (pack, path) = load(&format!("pokedex-graphics-detail-{n}"), replaced(id, entry));
+        let error = pack.pokedex_graphics().unwrap_err();
+        let _ = std::fs::remove_file(path);
+        match error {
+            PackError::MalformedPokedexGraphic { id: bad, detail } if bad == id => detail,
+            other => panic!("wrong error for malformed `{id}`: {other:?}"),
+        }
+    };
+    // Wrong geometry and wrong bit depth together: geometry is reported first.
+    let both = Entry {
+        meta: image_meta(64, 64, INDEXED_8_BIT),
+        ..image(image_id("arrows"), (64, 64), 0)
+    };
+    let detail = detail_of(0, image_id("arrows"), both);
+    assert!(detail.contains("is 64x64: expected 8x96"), "{detail}");
+    // A pixel index past the 16-colour palette names the palette bound.
+    let detail = detail_of(
+        1,
+        image_id("area_glow"),
+        image(image_id("area_glow"), (32, 96), 16),
+    );
+    assert!(
+        detail.contains("has pixel index 16: outside its palette's 16 colours"),
+        "{detail}"
+    );
+}
