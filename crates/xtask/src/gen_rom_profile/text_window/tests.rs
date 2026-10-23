@@ -3,7 +3,7 @@
 use rom_import::fixture::RomFixture;
 use rom_import::Encoding;
 
-use super::{locate_window_palettes, WINDOW_BANKS};
+use super::{locate_window_palettes, DUPLICATED_PALETTE, WINDOW_BANKS};
 use crate::gen_rom_profile::error::GenRomProfileError;
 use crate::gen_rom_profile::plan::PalettePlan;
 use crate::gen_rom_profile::tests::with_context;
@@ -34,15 +34,24 @@ fn table_rom() -> Vec<u8> {
 
 /// Plans placing `text_pal1..4` at the given table bank indices.
 fn plans(banks: [u32; 4]) -> Vec<PalettePlan> {
-    WINDOW_BANKS
-        .iter()
-        .zip(banks)
-        .map(|(id, bank)| PalettePlan {
-            id: (*id).to_owned(),
-            addr: TABLE_ADDR + bank * BANK_BYTES,
-            color_count: 16,
-            encoding: Encoding::Raw,
-        })
+    let message_box = PalettePlan {
+        id: DUPLICATED_PALETTE.to_owned(),
+        addr: TABLE_ADDR,
+        color_count: 16,
+        encoding: Encoding::Raw,
+    };
+    std::iter::once(message_box)
+        .chain(
+            WINDOW_BANKS
+                .iter()
+                .zip(banks)
+                .map(|(id, bank)| PalettePlan {
+                    id: (*id).to_owned(),
+                    addr: TABLE_ADDR + bank * BANK_BYTES,
+                    color_count: 16,
+                    encoding: Encoding::Raw,
+                }),
+        )
         .collect()
 }
 
@@ -72,6 +81,47 @@ fn swapped_second_and_third_banks_are_refused_by_name() {
         GenRomProfileError::StructMismatch { id, .. } => {
             assert_eq!(id, "text-window/palette/text_pal2");
         }
+        other => panic!("expected StructMismatch, got {other}"),
+    }
+}
+
+#[test]
+fn a_fifteen_colour_window_bank_is_refused() {
+    let mut banks = plans([1, 2, 3, 4]);
+    banks[4].color_count = 15;
+    let result = with_context("tw-short-count", &table_rom(), Vec::new(), |ctx| {
+        locate_window_palettes(ctx, &banks, BANK_BYTES, &bank_bytes(0))
+    });
+    match result.unwrap_err() {
+        GenRomProfileError::StructMismatch { id, .. } => {
+            assert_eq!(id, "text-window/palette/text_pal4");
+        }
+        other => panic!("expected StructMismatch, got {other}"),
+    }
+}
+
+#[test]
+fn a_short_stride_is_refused_even_when_the_count_says_sixteen() {
+    let result = with_context("tw-short-stride", &table_rom(), Vec::new(), |ctx| {
+        locate_window_palettes(ctx, &plans([1, 2, 3, 4]), 16, &bank_bytes(0)[..16])
+    });
+    // The old placement check names `sTextWindowPalettes`; only the bank-shape
+    // guard names the first bank it measures.
+    match result.unwrap_err() {
+        GenRomProfileError::StructMismatch { id, .. } => assert_eq!(id, DUPLICATED_PALETTE),
+        other => panic!("expected StructMismatch, got {other}"),
+    }
+}
+
+#[test]
+fn a_short_message_box_bank_is_refused() {
+    let mut banks = plans([1, 2, 3, 4]);
+    banks[0].color_count = 8;
+    let result = with_context("tw-short-message-box", &table_rom(), Vec::new(), |ctx| {
+        locate_window_palettes(ctx, &banks, BANK_BYTES, &bank_bytes(0))
+    });
+    match result.unwrap_err() {
+        GenRomProfileError::StructMismatch { id, .. } => assert_eq!(id, DUPLICATED_PALETTE),
         other => panic!("expected StructMismatch, got {other}"),
     }
 }
