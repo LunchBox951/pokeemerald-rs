@@ -173,6 +173,11 @@ fn mismatch(path: &Path, detail: String) -> ExtractError {
     }
 }
 
+mod healthbox_frames;
+
+pub(super) use healthbox_frames::extract_healthbox_frames;
+pub(super) use healthbox_frames::pack_ids as healthbox_frame_pack_ids;
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;

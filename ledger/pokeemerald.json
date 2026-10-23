@@ -12543,10 +12543,22 @@
           "status": "ported"
         },
         "ball_display.png": {
-          "reason": "Pixel indices converted to raw 4bpp tiles as gbagfx writes them and read as a constituent of gHealthboxElementsGfxTable (graphics.c:358-370) in table order by AssetPack::healthbox_elements; the embedded palette (gBattleInterface_BallDisplayPal, graphics.c:356) is not extracted, and the other battle_interface sources remain pending.",
+          "reason": "Both halves are extracted by two extractors. Pixel indices are converted to raw 4bpp tiles as gbagfx writes them and read as a constituent of gHealthboxElementsGfxTable (graphics.c:358-370) in table order by AssetPack::healthbox_elements (healthbox_elements.rs); the embedded 16-colour palette (gBattleInterface_BallDisplayPal, graphics.c:356) is extracted as battle-interface/palette/ball_display and read by AssetPack::singles_healthbox_frames (healthbox_frames.rs). The other battle_interface sources remain pending.",
           "rust_target": "crates/xtask/src/extract/battle_interface/healthbox_elements.rs",
           "spec": "S-4",
+          "status": "ported"
+        },
+        "ball_status_bar.png": {
+          "reason": "Only the embedded 16-colour palette (gBattleInterface_BallStatusBarPal, graphics.c:354) is extracted, read by AssetPack::singles_healthbox_frames; the status-bar image (gBattleInterface_BallStatusBarGfx) is not extracted, and the other battle_interface sources remain pending.",
+          "rust_target": "crates/xtask/src/extract/battle_interface/healthbox_frames.rs",
+          "spec": "S-4",
           "status": "stubbed"
+        },
+        "enemy_mon_shadow.png": {
+          "reason": "Kept as a validated 4-bit 32x8 raster image (gEnemyMonShadow_Gfx, graphics.c:1037) and read by AssetPack::enemy_mon_shadow; the other battle_interface sources remain pending.",
+          "rust_target": "crates/xtask/src/extract/battle_interface/healthbox_frames.rs",
+          "spec": "S-4",
+          "status": "ported"
         },
         "expbar.png": {
           "reason": "Pixel indices converted to raw 4bpp tiles as gbagfx writes them and read as a constituent of gHealthboxElementsGfxTable (graphics.c:358-370) in table order by AssetPack::healthbox_elements; the other battle_interface sources remain pending.",
@@ -12563,6 +12575,18 @@
         "healthbox_doubles_frameend_bar.png": {
           "reason": "Pixel indices converted to raw 4bpp tiles as gbagfx writes them and read as a constituent of gHealthboxElementsGfxTable (graphics.c:358-370) in table order by AssetPack::healthbox_elements; the other battle_interface sources remain pending.",
           "rust_target": "crates/xtask/src/extract/battle_interface/healthbox_elements.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "healthbox_singles_opponent.png": {
+          "reason": "Kept as a validated 4-bit 128x32 raster image (two 8x4-tile metatiles, graphics.c:629) and read as the opponent singles frame by AssetPack::singles_healthbox_frames; the other battle_interface sources remain pending.",
+          "rust_target": "crates/xtask/src/extract/battle_interface/healthbox_frames.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "healthbox_singles_player.png": {
+          "reason": "Kept as a validated 4-bit 128x64 raster image (two 8x8-tile metatiles, graphics.c:628) and read as the player singles frame by AssetPack::singles_healthbox_frames; the other battle_interface sources remain pending.",
+          "rust_target": "crates/xtask/src/extract/battle_interface/healthbox_frames.rs",
           "spec": "S-4",
           "status": "ported"
         },

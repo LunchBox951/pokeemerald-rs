@@ -49,6 +49,9 @@
 //! - the naming screen's 15 sheets (the three cursors cut to their first five
 //!   tiles), seven palettes, and four decoded tilemaps.
 //!
+//! The battle interface also contributes the player and opponent singles health-box
+//! frames, the ball-status-bar and ball-display palettes, and the enemy shadow sheet.
+//!
 //! # Asset id scheme
 //!
 //! - `tileset/<name>/{tiles,metatiles,metatile-attributes}`
@@ -189,6 +192,7 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     midi::extract_song(&upstream, &mut writer)?;
     battle_message::extract_battle_message(&upstream, &mut writer)?;
     battle_anim::extract_battle_anim(&upstream, &mut writer)?;
+    battle_interface::extract_healthbox_frames(&upstream, &mut writer)?;
     naming_screen::extract_naming_screen(&upstream, &mut writer)?;
 
     let entry_count = writer.len();

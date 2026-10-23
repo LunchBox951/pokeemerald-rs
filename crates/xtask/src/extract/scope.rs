@@ -9,6 +9,7 @@ use std::path::Path;
 
 use super::bag::{fixed_ids, icon_ids};
 use super::battle_interface::healthbox_element_pack_ids;
+use super::battle_interface::healthbox_frame_pack_ids;
 use super::battle_interface::pack_ids as battle_interface_pack_ids;
 use super::opening_scene::pack_ids as opening_scene_pack_ids;
 use super::sprites::{FIRST_GENERIC_NPC_PALETTE, LAST_GENERIC_NPC_PALETTE};
@@ -733,4 +734,12 @@ pub(crate) fn battle_interface_ids() -> Vec<String> {
 /// yet (#2178), so profile generation leaves them unclaimed.
 pub(crate) fn healthbox_element_ids() -> Vec<String> {
     healthbox_element_pack_ids()
+}
+
+/// Every `battle-interface/` pack id the health-box frame extractor emits: the
+/// singles player and opponent frames, the enemy shadow, and the two ball
+/// palettes. No ROM root imports them yet (#2178), so profile generation
+/// leaves them unclaimed.
+pub(crate) fn healthbox_frame_ids() -> Vec<String> {
+    healthbox_frame_pack_ids()
 }
