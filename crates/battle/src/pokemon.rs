@@ -11,6 +11,7 @@
 //! [`pp_bonuses`] owns packed PP Up state, while [`learn`] owns level-up
 //! move decisions.
 
+use assets::items::ItemId;
 use assets::{experience_for_level, AbilityId, BaseStats, MoveId, SpeciesId, Type};
 
 use crate::dex::Dex;
@@ -341,6 +342,10 @@ pub struct BattlePokemon {
     personality: u32,
     ability_slot: u8,
     original_trainer_id: u32,
+    /// The held item, [`ItemId::NONE`] when empty. Part of the mon's identity,
+    /// so it survives fainting and write-back; which items a battle accepts is
+    /// decided by [`crate::battle::held_item`].
+    held_item: ItemId,
     types: [Type; 2],
     base_stats: BaseStats,
     experience: u32,
@@ -379,6 +384,7 @@ impl PartialEq for BattlePokemon {
             personality,
             ability_slot,
             original_trainer_id,
+            held_item,
             types,
             base_stats,
             experience,
@@ -400,6 +406,7 @@ impl PartialEq for BattlePokemon {
             && *personality == other.personality
             && *ability_slot == other.ability_slot
             && *original_trainer_id == other.original_trainer_id
+            && *held_item == other.held_item
             && *types == other.types
             && *base_stats == other.base_stats
             && *experience == other.experience
@@ -506,6 +513,7 @@ impl BattlePokemon {
             personality,
             ability_slot: initial_ability_slot(base, personality),
             original_trainer_id: 0,
+            held_item: ItemId::NONE,
             types: base.types,
             base_stats: *base,
             experience,
@@ -637,6 +645,21 @@ impl BattlePokemon {
     #[must_use]
     pub const fn with_original_trainer_id(mut self, original_trainer_id: u32) -> Self {
         self.original_trainer_id = original_trainer_id;
+        self
+    }
+
+    /// The item this Pokémon holds, [`ItemId::NONE`] when empty.
+    #[must_use]
+    pub const fn held_item(&self) -> ItemId {
+        self.held_item
+    }
+
+    /// Give this Pokémon `held_item` at the boundary that creates or restores
+    /// it, mirroring `MON_DATA_HELD_ITEM` written after `CreateMon`
+    /// (`battle_main.c:2035-2065`).
+    #[must_use]
+    pub const fn with_held_item(mut self, held_item: ItemId) -> Self {
+        self.held_item = held_item;
         self
     }
 

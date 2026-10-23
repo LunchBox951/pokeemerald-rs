@@ -32,6 +32,7 @@ use crate::volatile::draws_confusion_self_hit;
 pub(crate) mod admission;
 mod events;
 mod execute;
+pub(crate) mod held_item;
 pub(crate) mod opponent_ai;
 pub mod trainer;
 pub(crate) mod trainer_ai;
@@ -312,6 +313,13 @@ impl Battle {
                     .filter(|reserve| !reserve.is_fainted()),
             ),
         )?;
+        held_item::ensure_participants_hold_playable_items(
+            [&player, &enemy].into_iter().chain(
+                player_reserves
+                    .iter()
+                    .filter(|reserve| !reserve.is_fainted()),
+            ),
+        )?;
         let random_turn_number = initialize_turn_rng_state(&player, &enemy, rng);
         Ok(Self {
             dex,
@@ -417,6 +425,16 @@ impl Battle {
         }
 
         admission::ensure_participants_admissible(
+            std::iter::once(&player)
+                .chain(party.iter().filter(|mon| !mon.is_fainted()))
+                .chain(
+                    player_reserves
+                        .iter()
+                        .filter(|reserve| !reserve.is_fainted()),
+                ),
+        )?;
+
+        held_item::ensure_participants_hold_playable_items(
             std::iter::once(&player)
                 .chain(party.iter().filter(|mon| !mon.is_fainted()))
                 .chain(

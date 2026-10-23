@@ -1,5 +1,5 @@
-//! Sight-cone geometry, the fainted-lead screen, the honest cuts (held-item and
-//! double-battle parties), the no-lead and off-Route-103 refusals, and the
+//! Sight-cone geometry, the fainted-lead screen, the honest cuts (Miguel's and
+//! the double-battle party), the no-lead and off-Route-103 refusals, and the
 //! real-pack terrain check, all through the real trigger.
 
 use assets::MapId;
@@ -67,9 +67,9 @@ fn start_does_not_preempt_the_sight_trainer_scan_on_its_trigger_frame() {
     let mut refused = route_103_phase(PlayerState::new((rx, ry + 1), 3, Direction::North));
     refused.set_fresh_lead_for_test(overwhelming_lead());
     refused.synthetic_start_menu = SyntheticStartMenu::Builds;
-    // Rhett's party constructs; Marcos's (Sonic Boom) does not, so his id
+    // Rhett's party constructs; Isabelle's (Rollout) does not, so her id
     // stands in for the refusal at Rhett's cone.
-    refused.synthetic_sight_trainer = Some(assets::trainers::TrainerId(TRAINER_MARCOS));
+    refused.synthetic_sight_trainer = Some(assets::trainers::TrainerId(TRAINER_ISABELLE));
     refused.step(pressed(Buttons::START));
     assert!(
         refused.sight_approach.is_none(),
@@ -89,10 +89,10 @@ fn start_does_not_preempt_the_sight_trainer_scan_on_its_trigger_frame() {
 /// this leaked `CreateNPCTrainerParty`'s per-mon OT-id draws sixty times a
 /// second off the one stream every wild encounter and battle turn shares.
 ///
-/// All three refusal shapes are covered: an unimplemented moveset (Marcos's
-/// Sonic Boom at Rhett's cone, the trigger's own "Refusals cost nothing,
-/// forever"), a held-item party
-/// (Miguel, same), and a double battle refused before construction is even
+/// All three refusal shapes are covered: an unimplemented moveset (Isabelle's
+/// Rollout at Rhett's cone, the trigger's own "Refusals cost nothing,
+/// forever"), an unported ability
+/// (Miguel's Cute Charm, same), and a double battle refused before construction is even
 /// attempted (Amy, `trainer_data_wants_double_battle`).
 #[test]
 fn standing_in_a_cone_for_many_frames_never_touches_the_rng_stream() {
@@ -101,18 +101,18 @@ fn standing_in_a_cone_for_many_frames_never_touches_the_rng_stream() {
     let (ax, ay) = AMY_TILE;
     let cases = [
         (
-            "Marcos at Rhett's cone (unimplemented moveset)",
+            "Isabelle at Rhett's cone (unimplemented moveset)",
             (rx, ry + 1),
         ),
-        ("Miguel (held-item party)", (mx + 2, my)),
+        ("Miguel (unported ability)", (mx + 2, my)),
         ("Amy (double battle)", (ax, ay + 1)),
     ];
     for (name, tile) in cases {
         let mut phase = route_103_phase(PlayerState::new(tile, 3, Direction::North));
         phase.set_fresh_lead_for_test(overwhelming_lead());
-        if name.starts_with("Marcos") {
-            // Rhett's party constructs; Marcos's refuses.
-            phase.synthetic_sight_trainer = Some(assets::trainers::TrainerId(TRAINER_MARCOS));
+        if name.starts_with("Isabelle") {
+            // Rhett's party constructs; Isabelle's refuses.
+            phase.synthetic_sight_trainer = Some(assets::trainers::TrainerId(TRAINER_ISABELLE));
         }
         let before = phase.rng.state();
         for frame in 0..FRAMES_STANDING_STILL {
@@ -238,14 +238,15 @@ fn a_fainted_lead_is_refused_through_the_trigger_without_a_draw() {
     assert_eq!(phase.rng.state(), before);
 }
 
-// -- Honest cuts: Miguel's held item, Amy & Liv's double battle -------------
+// -- Honest cuts: Miguel's party, Amy & Liv's double battle ----------------
 
-/// The held-item cut (issue #264): Miguel's cone reaches, but his real
-/// held-item party refuses to construct -- no battle starts, the lead is
-/// untouched, and the refusal draws nothing (the held-item error is raised
-/// before any RNG draw, `crate::flow::npc_trainer_battle`'s own docs).
+/// Miguel's cone reaches, but his real party refuses to construct -- his
+/// Skitty's selected Cute Charm, ahead of its Attract and its Oran Berry --
+/// so no battle starts, the lead is untouched, and the refusal draws nothing
+/// (the pre-flight runs before any RNG draw,
+/// `crate::flow::npc_trainer_battle`'s own docs).
 #[test]
-fn miguels_held_item_party_refuses_to_construct() {
+fn miguels_party_refuses_to_construct() {
     let (mx, my) = MIGUEL_TILE;
     // Miguel faces east; two tiles east of him is within his own range-5 cone.
     let mut phase = route_103_phase(PlayerState::new((mx + 2, my), 3, Direction::West));
@@ -255,17 +256,13 @@ fn miguels_held_item_party_refuses_to_construct() {
     phase.step(ButtonState::new());
     assert!(
         !phase.is_sight_trainer_battle_active(),
-        "Miguel's held-item party must refuse to construct (not modelled)"
+        "Miguel's party must refuse to construct (unmodelled ability, move and item)"
     );
     assert!(
         phase.lead_for_test().is_some(),
         "the refused handoff leaves the lead in the party"
     );
-    assert_eq!(
-        phase.rng.state(),
-        before,
-        "the held-item refusal must draw nothing"
-    );
+    assert_eq!(phase.rng.state(), before, "the refusal must draw nothing");
 }
 
 /// The doubles cut (issue #264): Amy's cone reaches, but her real party
@@ -385,9 +382,9 @@ fn real_pack_rhetts_cone_reaches_the_player_over_real_terrain_and_draws_nothing(
 
     let mut phase = OverworldPhase::for_test_with_source(scene, ROUTE_103, player, None, source);
     phase.set_fresh_lead_for_test(overwhelming_lead());
-    // Rhett's party constructs; Marcos's refuses, so his id stands in at
+    // Rhett's party constructs; Isabelle's refuses, so her id stands in at
     // Rhett's real cone.
-    phase.synthetic_sight_trainer = Some(assets::trainers::TrainerId(TRAINER_MARCOS));
+    phase.synthetic_sight_trainer = Some(assets::trainers::TrainerId(TRAINER_ISABELLE));
     let before = phase.rng.state();
 
     for frame in 0..FRAMES_STANDING_STILL {
