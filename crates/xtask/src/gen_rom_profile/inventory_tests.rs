@@ -248,7 +248,7 @@ fn a_pack_missing_a_whole_window_frame_is_refused_by_id() {
 }
 
 #[test]
-fn a_pack_missing_a_starter_battler_root_is_refused() {
+fn a_pack_missing_a_battler_root_is_refused() {
     for id in BATTLERS.iter().flat_map(|battler| battler.ids()) {
         let label = format!("no-{}", id.replace('/', "-"));
         assert_refused(&label, without(&id), &id, "battlers");
