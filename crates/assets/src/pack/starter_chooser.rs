@@ -4,7 +4,7 @@
 //! re-validates shapes, since a hand-built or corrupt pack can bypass extraction.
 
 use super::battler::{self, BattlerDirection, PaletteVariant};
-use super::{AssetPack, ImageRef, PackError, PaletteRef};
+use super::{AssetPack, PackError, PalettedImage};
 use crate::SpeciesId;
 
 const TILES_IMAGE_ID: &str = "starter-chooser/image/tiles";
@@ -24,7 +24,6 @@ const CIRCLE_SIDE: u32 = 64;
 const BANK_PALETTE_COLORS: u16 = 16;
 const BANK_BIT_DEPTH: u8 = 4;
 const TILEMAP_ENTRY_BYTES: usize = 2;
-const PALETTE_ENTRY_BYTES: usize = 2;
 const BAG_TILEMAP_BYTES: usize = 32 * 20 * TILEMAP_ENTRY_BYTES;
 const GRASS_TILEMAP_BYTES: usize = 32 * 32 * TILEMAP_ENTRY_BYTES;
 
@@ -49,15 +48,6 @@ impl StarterSpecies {
             Self::Mudkip => SpeciesId::MUDKIP,
         }
     }
-}
-
-/// An indexed image paired with the palette its pixel indices select from.
-#[derive(Debug, Clone, Copy)]
-pub struct PalettedImage<'a> {
-    /// One palette index per pixel.
-    pub image: ImageRef<'a>,
-    /// Palette the pixel indices select from.
-    pub palette: PaletteRef<'a>,
 }
 
 /// Every graphic the starter chooser draws, borrowing the pack for `'a`.
@@ -168,62 +158,6 @@ impl AssetPack {
             palette_colors,
             |id, detail| PackError::MalformedStarterAsset { id, detail },
         )
-    }
-
-    /// An image and the palette its indices select from, checked against the
-    /// shape upstream gives them; `malformed` names the failure for the caller's family.
-    pub(super) fn paired_image(
-        &self,
-        image_id: &str,
-        palette_id: &str,
-        (width, height): (u32, u32),
-        bit_depth: u8,
-        palette_colors: u16,
-        malformed: fn(String, String) -> PackError,
-    ) -> Result<PalettedImage<'_>, PackError> {
-        let image = self.image(image_id)?;
-        let fault = |detail: String| malformed(image_id.to_owned(), detail);
-        if image.width != width || image.height != height {
-            return Err(fault(format!(
-                "is {}x{}: expected {width}x{height}",
-                image.width, image.height
-            )));
-        }
-        if image.bit_depth != bit_depth {
-            return Err(fault(format!(
-                "is {}-bit: expected {bit_depth}-bit",
-                image.bit_depth
-            )));
-        }
-        if u64::try_from(image.pixels.len()).ok() != Some(u64::from(width) * u64::from(height)) {
-            return Err(fault(format!(
-                "carries {} payload bytes: expected one per pixel",
-                image.pixels.len()
-            )));
-        }
-        let palette = self.palette(palette_id)?;
-        if palette.color_count != palette_colors
-            || palette.raw.len() != usize::from(palette_colors) * PALETTE_ENTRY_BYTES
-        {
-            return Err(malformed(
-                palette_id.to_owned(),
-                format!(
-                    "declares {} colours in {} bytes: expected {palette_colors} colours",
-                    palette.color_count,
-                    palette.raw.len()
-                ),
-            ));
-        }
-        if let Some(&pixel) = image.pixels.iter().find(|&&pixel| {
-            u16::from(pixel) >= palette.color_count
-                || (bit_depth < 8 && u16::from(pixel) >> bit_depth != 0)
-        }) {
-            return Err(fault(format!(
-                "has pixel index {pixel}: outside its palette's {} colours or {bit_depth}-bit range",
-                palette.color_count
-            )));
-        }
-        Ok(PalettedImage { image, palette })
     }
 
     fn starter_tilemap(&self, id: &str, expected_len: usize) -> Result<&[u8], PackError> {

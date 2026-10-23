@@ -14,13 +14,13 @@
 //! The pack contains:
 //!
 //! - every tile image and animation, all 16 palettes, and both raw metatile
-//!   tables for the primary `general` and `building` tilesets and the secondary
-//!   `petalburg`, `brendans_mays_house`, and `lab` tilesets;
+//!   tables for each tileset in `TILESETS`;
 //! - every title-screen PNG, palette, and raw tilemap, with embedded PNG
 //!   palettes for `emerald_version` and `press_start` and the upstream colour
 //!   limit applied to `pokemon_logo`;
-//! - every player and NPC PNG, the `brendan` and `may` palettes, and the four
-//!   generic `npc_1` through `npc_4` palettes;
+//! - every player and NPC PNG, the `brendan` and `may` palettes, the four
+//!   generic `npc_1` through `npc_4` palettes, and the non-people sheets and
+//!   palettes in `OBJECT_SHEETS` and `OBJECT_PALETTES`;
 //! - the map and border grids named by `LAYOUTS`;
 //! - the five Latin font sheets, every text-window image and palette, and the
 //!   main-menu background palette; and
@@ -40,6 +40,8 @@
 //!   palette files, and 15 raw tilemap and data files;
 //! - the battle textbox sheet, its 32-colour palette and tilemap, and the battle-window
 //!   and PP text palettes;
+//! - the raw 4bpp tiles of the thirteen `gHealthboxElementsGfxTable` sheets and of
+//!   the battle bar built from `hpbar_anim_unused`, `numbers1`, and `numbers2`;
 //! - `mus_title`, its transitive voicegroup tree, and every sample that tree
 //!   references; and
 //! - the battle-message token table (`gBattleStringsTable` plus the special
@@ -60,7 +62,8 @@
 //! - `opening-scene/{image,palette,raw}/<name>`
 //! - `trainer-pic/<trainer>/{front,palette}`
 //! - `bag/{image,palette,raw}/<name>` and `bag/item-icon/{image,palette}/<stem>`
-//! - `battle-interface/{image,palette,raw}/<name>`
+//! - `battle-interface/{image,palette,raw}/<name>` and
+//!   `battle-interface/raw/healthbox_element/<stem>`
 //! - `pokemon/<species>/{front,back}` and `pokemon/<species>/palette/{normal,shiny}`
 //! - `pokedex-graphics/{image,image-palette,palette,raw}/<name>`
 //! - `audio/sample/{direct-sound,programmable-wave}/<name>`
@@ -76,6 +79,8 @@ mod battle_anim;
 mod battle_interface;
 mod battle_message;
 mod battler;
+#[cfg(test)]
+mod bundled_inventory_tests;
 #[cfg(test)]
 mod checkpoint_maps_tests;
 mod error;
@@ -174,6 +179,7 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     bag::extract_bag(&upstream, &mut writer)?;
     pokedex_graphics::extract_pokedex_graphics(&upstream, &mut writer)?;
     battle_interface::extract_battle_interface(&upstream, &mut writer)?;
+    battle_interface::extract_healthbox_elements(&upstream, &mut writer)?;
     audio_samples::extract_audio_samples(&upstream, &mut writer)?;
     voicegroups::extract_voicegroups(&upstream, &mut writer)?;
     midi::extract_song(&upstream, &mut writer)?;
