@@ -8,6 +8,8 @@
 use std::path::Path;
 
 use super::bag::{fixed_ids, icon_ids};
+use super::battle_interface::healthbox_element_pack_ids;
+use super::battle_interface::pack_ids as battle_interface_pack_ids;
 use super::opening_scene::pack_ids as opening_scene_pack_ids;
 use super::sprites::{FIRST_GENERIC_NPC_PALETTE, LAST_GENERIC_NPC_PALETTE};
 use super::starter_chooser::pack_ids as chooser_pack_ids;
@@ -718,4 +720,17 @@ pub(crate) fn naming_screen_ids() -> Vec<String> {
         .iter()
         .map(|stem| format!("naming-screen/raw/{stem}"));
     images.chain(palettes).chain(tilemaps).collect()
+}
+
+/// Every `battle-interface/` pack id extraction emits: the textbox sheet,
+/// its three palettes, and the textbox tilemap.
+pub(crate) fn battle_interface_ids() -> Vec<String> {
+    battle_interface_pack_ids()
+}
+
+/// Every `battle-interface/` pack id the health-box extractor emits: the
+/// thirteen health-box elements and the battle bar. No ROM root imports them
+/// yet (#2178), so profile generation leaves them unclaimed.
+pub(crate) fn healthbox_element_ids() -> Vec<String> {
+    healthbox_element_pack_ids()
 }

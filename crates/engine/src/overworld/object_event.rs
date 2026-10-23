@@ -75,9 +75,15 @@ pub fn visible_object_event_at<'a>(
         .find(|event| object_event_is_visible(event, event_data))
 }
 
-/// Returns the visible object one tile in front of the player.
-///
-/// `runtime` must be bound to the map containing `player`.
+/// The tile an interaction targets, with the elevation every lookup at it uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct FrontTile {
+    pub(super) x: i32,
+    pub(super) y: i32,
+    pub(super) elevation: u8,
+}
+
+/// Returns the tile one step in front of the player and the elevation to query it at.
 ///
 /// The player's own grid cell decides whether elevation is a wildcard. An off-grid player cell is
 /// also a wildcard, matching `GetInFrontOfPlayerPosition` (`field_control_avatar.c:200-210`).
@@ -86,23 +92,32 @@ pub fn visible_object_event_at<'a>(
 ///
 /// The front tile is the player tile plus the facing delta, as `GetInFrontOfPlayerPosition` computes it through
 /// `GetXYCoordsOneStepInFrontOfPlayer` (`field_player_avatar.c:1134`);
-/// a front tile outside `i32` cannot hold an object, so it yields `None` instead of overflowing.
+/// a front tile outside `i32` cannot hold anything, so it yields `None` instead of overflowing.
+pub(super) fn front_tile(player: &PlayerState, runtime: &MapRuntime<'_>) -> Option<FrontTile> {
+    let (px, py) = player.position();
+    let (dx, dy) = player.facing().delta();
+    let (x, y) = (px.checked_add(dx)?, py.checked_add(dy)?);
+
+    let elevation = match runtime.metatile_cell(px, py) {
+        Some(cell) if cell.elevation != ELEVATION_TRANSITION => player.previous_elevation(),
+        _ => ELEVATION_TRANSITION,
+    };
+
+    Some(FrontTile { x, y, elevation })
+}
+
+/// Returns the visible object one tile in front of the player.
+///
+/// `runtime` must be bound to the map containing `player`. The tile and elevation are
+/// [`front_tile`]'s.
 #[must_use]
 pub fn facing_object_event<'a>(
     player: &PlayerState,
     runtime: &MapRuntime<'a>,
     event_data: &EventData,
 ) -> Option<&'a ObjectEvent> {
-    let (px, py) = player.position();
-    let (dx, dy) = player.facing().delta();
-    let (fx, fy) = (px.checked_add(dx)?, py.checked_add(dy)?);
-
-    let query_elevation = match runtime.metatile_cell(px, py) {
-        Some(cell) if cell.elevation != ELEVATION_TRANSITION => player.previous_elevation(),
-        _ => ELEVATION_TRANSITION,
-    };
-
-    visible_object_event_at(runtime, fx, fy, query_elevation, event_data)
+    let front = front_tile(player, runtime)?;
+    visible_object_event_at(runtime, front.x, front.y, front.elevation, event_data)
 }
 
 /// Returns the initial facing direction for a movement type.

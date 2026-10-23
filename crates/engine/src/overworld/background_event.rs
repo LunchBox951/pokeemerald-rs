@@ -19,7 +19,7 @@ use crate::event_data::EventData;
 /// Upstream's script for a sign whose `script` is null.
 const NULL_SIGN_SCRIPT: &str = "EventScript_TestSignpostMsg";
 /// `"0x0"` in map data is a null script pointer.
-const NO_SCRIPT: &str = "0x0";
+pub(super) const NO_SCRIPT: &str = "0x0";
 /// `EventScript_HiddenItemScript` adds one item.
 const HIDDEN_ITEM_QUANTITY: u16 = 1;
 
