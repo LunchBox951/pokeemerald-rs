@@ -1,3 +1,8 @@
+//! Typed access to the battle-interface graphics (upstream `graphics/battle_interface/`).
+//!
+//! Pack IDs stay private, and each [`AssetPack::battle_interface`] call
+//! re-validates every entry's shape.
+
 use super::{AssetPack, ImageRef, PackError, PaletteRef};
 
 const IMAGE_PREFIX: &str = "battle-interface/image";
