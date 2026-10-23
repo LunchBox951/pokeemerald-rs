@@ -502,6 +502,28 @@ pub struct OpeningScenePlan {
     pub tilemaps: Vec<BlobPlan>,
 }
 
+/// One trainer front picture's roots, owned.
+#[derive(Debug, Clone)]
+pub struct TrainerFrontPicPlan {
+    /// The picture's `TRAINER_PIC_*` value, the row index in both tables.
+    pub trainer_pic: u16,
+    /// The front image.
+    pub front: ImagePlan,
+    /// The palette.
+    pub palette: PalettePlan,
+}
+
+/// The Birch-speech trainer front pictures, owned.
+#[derive(Debug, Clone)]
+pub struct TrainerFrontPlan {
+    /// `gTrainerFrontPicTable`.
+    pub front_table: u32,
+    /// `gTrainerFrontPicPaletteTable`.
+    pub palette_table: u32,
+    /// Brendan, then May.
+    pub trainers: Vec<TrainerFrontPicPlan>,
+}
+
 /// Everything one generator run derived.
 #[derive(Debug, Clone)]
 pub struct ProfilePlan {
@@ -533,6 +555,8 @@ pub struct ProfilePlan {
     pub opening_scene: OpeningScenePlan,
     /// The starters' static battler art.
     pub battlers: BattlerPlan,
+    /// The Birch-speech trainer front pictures.
+    pub trainer_front: TrainerFrontPlan,
 }
 
 #[cfg(test)]

@@ -1,5 +1,5 @@
 //! The Brendan and May trainer front pictures: the checkout side of the
-//! `gTrainerFrontPicTable` and `gTrainerPalettes` rows for `TRAINER_PIC_BRENDAN`
+//! `gTrainerFrontPicTable` and `gTrainerFrontPicPaletteTable` rows for `TRAINER_PIC_BRENDAN`
 //! and `TRAINER_PIC_MAY` (`src/data/trainer_graphics/front_pic_tables.h`,
 //! `src/data/graphics/trainers.h:214-218`).
 
@@ -18,23 +18,31 @@ const BIT_DEPTH: u8 = 4;
 /// One trainer picture's checkout files, relative to `graphics/trainers/`,
 /// and the pack ids it publishes under.
 #[derive(Clone, Copy, Debug)]
-struct PicSource {
+pub(crate) struct PicSource {
     png: &'static str,
     palette: &'static str,
-    image_id: &'static str,
-    palette_id: &'static str,
+    /// The lower-case trainer name; the picture and palette symbols spell it in camel case.
+    pub(crate) name: &'static str,
+    /// The row of `gTrainerFrontPicTable` and `gTrainerFrontPicPaletteTable` this picture fills.
+    pub(crate) trainer_pic: assets::TrainerPicId,
+    pub(crate) image_id: &'static str,
+    pub(crate) palette_id: &'static str,
 }
 
-const PICS: [PicSource; 2] = [
+pub(crate) const PICS: [PicSource; 2] = [
     PicSource {
+        name: "brendan",
         png: "front_pics/brendan.png",
         palette: "palettes/brendan.pal",
+        trainer_pic: assets::TrainerPicId::BRENDAN,
         image_id: "trainer-pic/brendan/front",
         palette_id: "trainer-pic/brendan/palette",
     },
     PicSource {
+        name: "may",
         png: "front_pics/may.png",
         palette: "palettes/may.pal",
+        trainer_pic: assets::TrainerPicId::MAY,
         image_id: "trainer-pic/may/front",
         palette_id: "trainer-pic/may/palette",
     },

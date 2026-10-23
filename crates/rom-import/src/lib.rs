@@ -45,7 +45,9 @@
 //!   decoded from `gbagfx`'s `.latfont` layout), and the text windows
 //!   (`text-window/image/*`, `text-window/palette/*`), the starter
 //!   chooser's sheets, palettes and tilemaps (`starter-chooser/*`), and
-//!   Birch's speech scene with the wall clock (`opening-scene/*`). The sound engine's
+//!   Birch's speech scene with the wall clock (`opening-scene/*`), and the
+//!   Brendan and May trainer front pictures (`trainer-pic/*`, behind
+//!   `gTrainerFrontPicTable` and `gTrainerFrontPicPaletteTable`). The sound engine's
 //!   data is wired too: `DirectSound` samples and programmable waves
 //!   (`audio/sample/*`) and voicegroups (`audio/voicegroup/*`), read from
 //!   the m4a `WaveData` and `ToneData` structs and emitted through
@@ -121,6 +123,7 @@ pub use roots::{
     SongRoot, SpecialMessageRoot, SpriteRoots, StarterChooserRoots, TextWindowRoots, TileAnimRoot,
     TilesetRoot, TitleScreenRoots, VoicegroupRoot,
 };
+pub use roots::{TrainerFrontRoot, TrainerFrontRoots};
 pub use sha1::{sha1, Digest, DigestParseError, Sha1};
 
 /// What an import produced.

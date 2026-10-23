@@ -10,6 +10,7 @@ use super::{
     bag, battle_anims, battle_messages, battlers, fonts, inventory, layouts, locate_profile,
     opening_scene, sprites, starter_chooser, text_window, tilesets, title,
 };
+use crate::extract::scope::trainer_front_ids;
 use crate::extract::scope::{
     layout_ids, opening_scene_ids, sprite_palette_ids, sprite_sheet_ids, starter_chooser_ids,
     text_window_ids, tileset_animation_ids, title_ids, BATTLERS, FONTS, INTERFACE_PALETTE_IDS,
@@ -37,6 +38,7 @@ fn complete_inventory() -> Vec<PackEntry> {
         ])
         .chain(synthetic_bag_ids())
         .chain(starter_chooser_ids())
+        .chain(trainer_front_ids())
         .chain(opening_scene_ids())
         .map(|id| raw_entry(id, vec![0]))
         .collect()
