@@ -33,7 +33,7 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 ## [0.0.63.0] - 2026-10-20
 
-- Improved the starter-selection graphics.
+- General improvements in preparation for starter-selection graphics.
 - Input now respects the saved button mode.
 - Various menu, battle, audio, and save bugs fixed.
 
