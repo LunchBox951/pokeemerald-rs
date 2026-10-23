@@ -41,7 +41,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use assets::{Song, VoiceEntry, VoiceGroup};
+use assets::{AssetPack, Song, VoiceEntry, VoiceGroup};
 use pack_format::{parse_directory, DirectoryEntry, EntryKind, OUTPUT_RELATIVE_PATH};
 
 /// The environment variable naming the ROM to import.
@@ -66,6 +66,7 @@ const COMPLETE_PREFIXES: &[&str] = &[
     "bag/",
     "starter-chooser/",
     "opening-scene/",
+    "evolution-scene/",
 ];
 
 /// The starters' static battler entries: 12 ids the ROM backend must write
@@ -148,6 +149,18 @@ fn checkpoint_payload_ids() -> Vec<String> {
         .collect()
 }
 
+/// The evolution scene's seven pack ids. A prefix cannot catch both backends
+/// dropping the same constituent, so each is named.
+const EVOLUTION_SCENE_IDS: [&str; 7] = [
+    "evolution-scene/image/bg",
+    "evolution-scene/image/evo_sparkle",
+    "evolution-scene/palette/bg_anim_intro",
+    "evolution-scene/palette/bg_anim",
+    "evolution-scene/palette/evo_sparkle",
+    "evolution-scene/raw/bg_inner",
+    "evolution-scene/raw/bg_outer",
+];
+
 /// Ids the two backends are known and accepted to disagree on, each with
 /// the reason it was signed off.
 ///
@@ -219,7 +232,10 @@ fn the_rom_backend_matches_the_checkout_pack() {
     }
 
     // Named by id so a payload both backends drop together still fails.
-    for id in checkpoint_payload_ids() {
+    for id in checkpoint_payload_ids()
+        .into_iter()
+        .chain(EVOLUTION_SCENE_IDS.map(str::to_owned))
+    {
         for (what, ids) in [
             ("the ROM backend", &imported),
             ("the checkout pack", &checkout),
@@ -244,6 +260,74 @@ fn the_rom_backend_matches_the_checkout_pack() {
         "{} entry difference(s) between the ROM backend and the checkout pack",
         differences.len()
     );
+}
+
+#[test]
+#[ignore = "needs $POKEEMERALD_ROM and a `cargo xtask extract` pack"]
+fn the_evolution_scene_record_is_equal_through_both_backends() {
+    let Some(rom_path) = rom_path() else {
+        eprintln!("skipped: set {ROM_ENV} to a Pokemon Emerald (US) rev 0 ROM to run this");
+        return;
+    };
+    let checkout_path = checkout_pack_path();
+    if !checkout_path.is_file() {
+        eprintln!(
+            "skipped: no pack at {}; run `cargo xtask extract` first",
+            checkout_path.display()
+        );
+        return;
+    }
+    let rom_bytes = rom_import::import_to_bytes(&rom_path)
+        .unwrap_or_else(|err| panic!("importing {} failed: {err}", rom_path.display()));
+    let imported_path = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-evolution-equivalence-{}.pack",
+        std::process::id()
+    ));
+    {
+        use std::io::Write as _;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&imported_path)
+            .unwrap_or_else(|err| panic!("creating {} failed: {err}", imported_path.display()));
+        file.write_all(&rom_bytes)
+            .expect("writing the imported pack");
+    }
+    let imported = AssetPack::load(&imported_path);
+    let _ = std::fs::remove_file(&imported_path);
+    let imported = imported.expect("the imported pack loads");
+    let checkout = AssetPack::load(&checkout_path).expect("the checkout pack loads");
+
+    let ours = imported.evolution_scene().expect("the imported record");
+    let theirs = checkout.evolution_scene().expect("the checkout record");
+    let (a, b) = (&ours.background, &theirs.background);
+    assert_eq!((a.width, a.height, a.bit_depth), (128, 112, 4));
+    assert_eq!(
+        (a.width, a.height, a.bit_depth, a.pixels),
+        (b.width, b.height, b.bit_depth, b.pixels)
+    );
+    assert_eq!(ours.inner_tilemap.len(), 2048);
+    assert_eq!(ours.inner_tilemap, theirs.inner_tilemap);
+    assert_eq!(ours.outer_tilemap, theirs.outer_tilemap);
+    assert_ne!(ours.inner_tilemap, ours.outer_tilemap);
+    for (ours, theirs, colors) in [
+        (ours.intro_palette, theirs.intro_palette, 256),
+        (ours.animation_palette, theirs.animation_palette, 32),
+        (ours.sparkle.palette, theirs.sparkle.palette, 16),
+    ] {
+        assert_eq!(ours.color_count, colors);
+        assert_eq!(
+            ours.colors().collect::<Vec<_>>(),
+            theirs.colors().collect::<Vec<_>>()
+        );
+    }
+    let (a, b) = (&ours.sparkle.image, &theirs.sparkle.image);
+    assert_eq!((a.width, a.height, a.bit_depth), (8, 8, 4));
+    assert_eq!(
+        (a.width, a.height, a.bit_depth, a.pixels),
+        (b.width, b.height, b.bit_depth, b.pixels)
+    );
+    eprintln!("evolution-scene record equal through both backends");
 }
 
 /// `mus_title.mid` plays key 33 on program 48 (channel 2, tick 2160). That is

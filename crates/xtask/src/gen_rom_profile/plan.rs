@@ -502,6 +502,17 @@ pub struct OpeningScenePlan {
     pub tilemaps: Vec<BlobPlan>,
 }
 
+/// The evolution scene's background and sparkle sprite, owned.
+#[derive(Debug, Clone)]
+pub struct EvolutionScenePlan {
+    /// Every `evolution-scene/image/*` root.
+    pub images: Vec<ImagePlan>,
+    /// Every `evolution-scene/palette/*` root.
+    pub palettes: Vec<PalettePlan>,
+    /// Every `evolution-scene/raw/*` tilemap root.
+    pub tilemaps: Vec<BlobPlan>,
+}
+
 /// Everything one generator run derived.
 #[derive(Debug, Clone)]
 pub struct ProfilePlan {
@@ -531,6 +542,8 @@ pub struct ProfilePlan {
     pub starter_chooser: StarterChooserPlan,
     /// Birch's speech scene and the wall clock.
     pub opening_scene: OpeningScenePlan,
+    /// The evolution scene's background and sparkle sprite.
+    pub evolution_scene: EvolutionScenePlan,
     /// The starters' static battler art.
     pub battlers: BattlerPlan,
 }

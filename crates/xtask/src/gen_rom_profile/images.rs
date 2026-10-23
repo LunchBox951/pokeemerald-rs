@@ -71,7 +71,8 @@ struct Variant {
 /// The upstream name of an image root declared `static` (so a linker map
 /// cannot list it), or `None` for a global root.
 ///
-/// `title_screen.c:63-66`, `item_menu_icons.c:37`, `item_menu.c:374`.
+/// `title_screen.c:63-66`, `item_menu_icons.c:37`, `item_menu.c:374`,
+/// `evolution_scene.c:71`, `evolution_graphics.c:42`.
 pub(super) fn local_image_symbol(id: &str) -> Option<String> {
     if let Some(name) = id.strip_prefix("title/image/") {
         let camel = super::locate::camel_case(name);
@@ -81,6 +82,8 @@ pub(super) fn local_image_symbol(id: &str) -> Option<String> {
     match id {
         "bag/image/rotating_ball" => Some("sRotatingBall_Gfx".to_owned()),
         "bag/image/select_button" => Some("sRegisteredSelect_Gfx".to_owned()),
+        "evolution-scene/image/bg" => Some("sBgAnim_Gfx".to_owned()),
+        "evolution-scene/image/evo_sparkle" => Some("sEvoSparkle_Gfx".to_owned()),
         _ => None,
     }
 }

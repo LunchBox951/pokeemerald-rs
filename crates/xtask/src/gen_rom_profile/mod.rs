@@ -28,6 +28,7 @@ mod battle_messages;
 mod battlers;
 mod emit;
 mod error;
+mod evolution_scene;
 mod fonts;
 mod images;
 mod inventory;
@@ -168,6 +169,7 @@ fn locate_profile(
         bag: bag::locate(ctx, lines)?,
         starter_chooser: starter_chooser::locate(ctx, lines)?,
         opening_scene: opening_scene::locate(ctx, lines)?,
+        evolution_scene: evolution_scene::locate(ctx, lines)?,
         battlers: battlers::locate(ctx, lines)?,
     })
 }

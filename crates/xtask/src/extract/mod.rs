@@ -58,6 +58,7 @@
 //! - `interface/palette/main_menu_bg`
 //! - `starter-chooser/{image,palette,raw}/<stem>`
 //! - `opening-scene/{image,palette,raw}/<name>`
+//! - `evolution-scene/{image,palette,raw}/<name>`
 //! - `trainer-pic/<trainer>/{front,palette}`
 //! - `bag/{image,palette,raw}/<name>` and `bag/item-icon/{image,palette}/<stem>`
 //! - `battle-interface/{image,palette,raw}/<name>`
@@ -79,6 +80,7 @@ mod battler;
 #[cfg(test)]
 mod checkpoint_maps_tests;
 mod error;
+mod evolution_scene;
 mod fonts;
 pub mod inflate;
 mod interface;
@@ -170,6 +172,7 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     interface::extract_interface_palettes(&upstream, &mut writer)?;
     starter_chooser::extract_starter_chooser(&upstream, &mut writer)?;
     opening_scene::extract_opening_scene(&upstream, &mut writer)?;
+    evolution_scene::extract_evolution_scene(&upstream, &mut writer)?;
     battler::extract_battlers(&upstream, &mut writer)?;
     bag::extract_bag(&upstream, &mut writer)?;
     pokedex_graphics::extract_pokedex_graphics(&upstream, &mut writer)?;

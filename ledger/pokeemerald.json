@@ -12707,6 +12707,38 @@
       "status": "pending"
     },
     "graphics/evolution_scene": {
+      "artifacts": {
+        "bg.png": {
+          "reason": "Evolution-scene animated background tile sheet, 128x112 4-bit grayscale PNG decoded through gbagfx's sample inversion into 224 tiles of palette indices, published as evolution-scene/image/bg and read through AssetPack::evolution_scene (EvolutionSceneHandle::background); upstream sBgAnim_Gfx is .4bpp.lz, decompressed into background tile memory by StartBgAnimation (evolution_scene.c:71,1608). ROM import reads it as an LZ77 image root and the ignored equivalence test checks it equal to the checkout extraction. Background scrolling, palette animation, and the scene's timing are not ported.",
+          "rust_target": "crates/xtask/src/extract/evolution_scene.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "bg_anim.pal": {
+          "reason": "Evolution-scene animation colour table, 32 colours, published as evolution-scene/palette/bg_anim and read through EvolutionSceneHandle::animation_palette; upstream sBgAnim_Pal is a raw .gbapal that InitMovingBgPalette indexes through sBgAnim_PalIndexes to build the cycling background banks (evolution_scene.c:78,1581-1592). The index table and the palette cycling are not ported.",
+          "rust_target": "crates/xtask/src/extract/evolution_scene.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "bg_anim_intro.pal": {
+          "reason": "Evolution-scene intro palette, all 256 colours the JASC file lists, published as evolution-scene/palette/bg_anim_intro and read through EvolutionSceneHandle::intro_palette; upstream sBgAnim_Intro_Pal is a raw .gbapal of which StartBgAnimation loads only the first 16 colours at background palette 10 (evolution_scene.c:74,1606). The partial load is not ported; the whole file is published.",
+          "rust_target": "crates/xtask/src/extract/evolution_scene.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "bg_inner.bin": {
+          "reason": "Evolution-scene inner background tilemap, 32x32 entries (2048 bytes), published raw as evolution-scene/raw/bg_inner and read through EvolutionSceneHandle::inner_tilemap; upstream sBgAnim_Inner_Tilemap is .lz, copied to the inner background layer by StartBgAnimation (evolution_scene.c:72,1609). ROM import reads it as an LZ77 blob. No scene rendering is ported.",
+          "rust_target": "crates/xtask/src/extract/evolution_scene.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "bg_outer.bin": {
+          "reason": "Evolution-scene outer background tilemap, 32x32 entries (2048 bytes), published raw as evolution-scene/raw/bg_outer and read through EvolutionSceneHandle::outer_tilemap; upstream sBgAnim_Outer_Tilemap is .lz, copied to the outer background layer by StartBgAnimation (evolution_scene.c:73,1610). ROM import reads it as an LZ77 blob. No scene rendering is ported.",
+          "rust_target": "crates/xtask/src/extract/evolution_scene.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.scene",
       "kind": "dir",
       "spec_owner": "S-4",
@@ -16545,6 +16577,14 @@
       "status": "pending"
     },
     "graphics/misc": {
+      "artifacts": {
+        "evo_sparkle.png": {
+          "reason": "Evolution sparkle sprite, 8x8 4-bit indexed PNG published as evolution-scene/image/evo_sparkle with the PNG's own 16-colour PLTE as evolution-scene/palette/evo_sparkle, read through EvolutionSceneHandle::sparkle; upstream sEvoSparkle_Gfx is .4bpp.lz and sEvoSparkle_Pal is the PNG's .gbapal, loaded by LoadEvoSparkleSpriteAndPal (evolution_graphics.c:41-42,283-286). ROM import reads the image as an LZ77 root and the palette as a raw run. Sparkle sprite creation, the sparkle movement tasks, and the unused_*.pal files are not ported.",
+          "rust_target": "crates/xtask/src/extract/evolution_scene.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.misc",
       "kind": "dir",
       "spec_owner": "S-4",

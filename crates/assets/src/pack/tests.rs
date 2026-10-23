@@ -7,6 +7,7 @@ mod battle_interface;
 mod battle_message;
 mod battler;
 mod container;
+mod evolution_scene;
 mod layout;
 mod opening_scene;
 mod pokedex;
