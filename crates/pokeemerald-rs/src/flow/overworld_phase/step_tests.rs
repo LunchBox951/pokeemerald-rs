@@ -240,9 +240,7 @@ fn a_null_script_does_not_preempt_movement_unlike_an_unmodelled_script() {
     );
 
     {
-        let header = assets::MapHeaderTable::new().header(CORRIDOR).unwrap();
-        let events = assets::MapEventsTable::new().resolve(CORRIDOR).unwrap();
-        let runtime = phase.scene.runtime(CORRIDOR, header, events);
+        let runtime = phase.scene.runtime();
         let object = engine::overworld::facing_object_event(
             &phase.player,
             &runtime,

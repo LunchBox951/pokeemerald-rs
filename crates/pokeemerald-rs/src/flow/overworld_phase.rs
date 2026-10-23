@@ -500,12 +500,11 @@ impl OverworldPhase {
         destination: WarpData,
     ) -> Result<Self, ContinueError> {
         let refused = ContinueError::ContinueGameWarp { destination };
-        let (Ok(header), Ok(events)) = (
-            assets::MapHeaderTable::new().header(warp_map),
-            assets::MapEventsTable::new().resolve(warp_map),
-        ) else {
+        if assets::MapHeaderTable::new().header(warp_map).is_err()
+            || assets::MapEventsTable::new().resolve(warp_map).is_err()
+        {
             return Err(refused);
-        };
+        }
         let event_data =
             connections::map_entry_event_data(&block1.event_data, warp_map, block2.player_gender);
         let scene = overworld::load_room_from_source(
@@ -514,12 +513,8 @@ impl OverworldPhase {
             block2.player_gender.into(),
             &event_data,
         )?;
-        let Some(object_events) = connections::seed_object_events(&scene, warp_map) else {
-            return Err(refused);
-        };
-        let Some(landing) =
-            connections::saved_location_landing(&scene, warp_map, header, events, destination)
-        else {
+        let object_events = connections::seed_object_events(&scene);
+        let Some(landing) = connections::saved_location_landing(&scene, destination) else {
             return Err(refused);
         };
         let mut phase = Self::from_saved(scene, warp_map, block1, block2);
@@ -574,16 +569,14 @@ impl OverworldPhase {
             }
         }
         let position = (i32::from(block1.pos.x), i32::from(block1.pos.y));
-        let (tile_elevation, tile_facing) =
-            placement::saved_tile_placement(&scene, map_id, position);
+        let (tile_elevation, tile_facing) = placement::saved_tile_placement(&scene, position);
         let facing = placement::saved_facing(&block1, tile_facing);
         let (elevation, previous_elevation) = placement::saved_elevations(
             &block1,
-            placement::saved_cell_elevation(&scene, map_id, position),
+            placement::saved_cell_elevation(&scene, position),
             tile_elevation,
         );
-        let object_events = connections::seed_object_events(&scene, map_id)
-            .expect("a loaded scene's map has event data");
+        let object_events = connections::seed_object_events(&scene);
         let mut phase = Self {
             scene,
             player: PlayerState::with_saved_elevations(
@@ -667,8 +660,9 @@ impl OverworldPhase {
     }
 
     /// Test-only: a phase around an already-built `scene`. `map_id` must
-    /// still name a real map, since [`Self::step`] resolves its header and
-    /// events from the generated tables every frame.
+    /// name a real map; a synthetic-grid `scene` is re-labelled as that map
+    /// ([`OverworldScene::in_room_for_test`]) so [`Self::step`] queries the
+    /// map's header and events, exactly as a loaded scene's own would answer.
     #[cfg(test)]
     pub(super) fn for_test(
         scene: OverworldScene,
@@ -677,7 +671,7 @@ impl OverworldPhase {
         dialog: Option<NpcDialog>,
     ) -> Self {
         Self::new(
-            scene,
+            scene.in_room_for_test(map_id),
             map_id,
             player,
             dialog,
@@ -701,7 +695,7 @@ impl OverworldPhase {
         pack_source: crate::pack_source::PackSource,
     ) -> Self {
         Self::new(
-            scene,
+            scene.in_room_for_test(map_id),
             map_id,
             player,
             dialog,
@@ -735,8 +729,7 @@ impl OverworldPhase {
             &mut save1.event_data,
             save2.player_gender,
         );
-        let object_events = connections::seed_object_events(&scene, map_id)
-            .expect("a loaded scene's map has event data");
+        let object_events = connections::seed_object_events(&scene);
         Self {
             scene,
             player,

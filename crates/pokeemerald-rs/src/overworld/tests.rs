@@ -526,7 +526,7 @@ fn hblank_budget_regression_fixture() -> (
     });
     let object_events: &'static [ObjectEvent] = Box::leak(object_events.into_boxed_slice());
     let events: &'static assets::MapEvents = Box::leak(Box::new(assets::MapEvents {
-        id: assets::MapId("MAP_TEST"),
+        id: assets::MapId("MAP_ROUTE122"),
         shared_events_map: None,
         object_events,
         warp_events: &[],
@@ -1646,9 +1646,7 @@ fn real_pack_the_bed_side_edge_draws_the_player_obj_at_the_raised_priority() {
     // is used because the fresh event data leaves a decoration placeholder
     // object on the north-edge tile.
     let no_connections = |_: assets::MapId| -> Option<(u16, u16)> { None };
-    let header = assets::MapHeaderTable::new().header(BEDROOM).unwrap();
-    let events = assets::MapEventsTable::new().resolve(BEDROOM).unwrap();
-    let runtime = scene.runtime(BEDROOM, header, events);
+    let runtime = scene.runtime();
     let mut walker = PlayerState::new((0, 5), 4, Direction::South);
     walker.step(Some(Direction::South), &runtime, &no_connections, &data);
     while walker.in_transit() {
@@ -2099,7 +2097,7 @@ fn equal_priority_overlap_orders_the_player_and_npc_by_screen_depth() {
             flag: "0",
         }]));
         let events: &'static assets::MapEvents = Box::leak(Box::new(assets::MapEvents {
-            id: assets::MapId("MAP_TEST"),
+            id: assets::MapId("MAP_ROUTE122"),
             shared_events_map: None,
             object_events,
             warp_events: &[],
@@ -2307,4 +2305,113 @@ fn scratch_writer_replaces_a_planted_symlink_with_the_new_pack() {
         completed,
         "the writer completed instead of rejecting the stale entry"
     );
+}
+
+/// The inputs of a room that is internally coherent: Route 122's header and
+/// events over a 4x4 synthetic petalburg layout.
+fn route_122_room_inputs() -> (
+    assets::MapHeader,
+    assets::MapLayout,
+    &'static assets::MapEvents,
+) {
+    let map = assets::MapId("MAP_ROUTE122");
+    let layout = assets::MapLayout {
+        id: LayoutId("LAYOUT_MAP_TEST"),
+        name: "MapTest",
+        width: 4,
+        height: 4,
+        primary_tileset: "gTileset_Petalburg",
+        secondary_tileset: "gTileset_Petalburg",
+    };
+    let header = assets::MapHeader {
+        layout: layout.id,
+        connections: &[],
+        ..*assets::MapHeaderTable::new().header(map).unwrap()
+    };
+    let events = assets::MapEventsTable::new().resolve(map).unwrap();
+    (header, layout, events)
+}
+
+fn build_route_122_scene(
+    header: &assets::MapHeader,
+    layout: &assets::MapLayout,
+    events: &assets::MapEvents,
+) -> Result<super::OverworldScene, OverworldSceneError> {
+    let path = super::test_support::scene_scratch_pack_path();
+    super::test_support::write_scratch_exclusive(
+        &path,
+        synthetic_overworld_pack_bytes_for("petalburg", 4, 4),
+    );
+    let pack = AssetPack::load(&path).unwrap();
+    std::fs::remove_file(path).unwrap();
+    super::OverworldScene::from_pack(
+        &pack,
+        header,
+        layout,
+        super::PlayerCharacter::Brendan,
+        events,
+        &engine::event_data::EventData::new(),
+    )
+}
+
+/// Control for the two mismatch regressions below: the coherent inputs load,
+/// so a refusal there is the mismatch and not the fixture.
+#[test]
+fn from_pack_loads_a_coherent_room() {
+    let (header, layout, events) = route_122_room_inputs();
+    build_route_122_scene(&header, &layout, events).expect("coherent inputs load");
+}
+
+/// A layout the header does not name is another room's grid: collision and
+/// rendering would answer for one room under another's connections.
+#[test]
+fn from_pack_rejects_a_layout_the_header_does_not_name() {
+    let (header, layout, events) = route_122_room_inputs();
+    let foreign = assets::MapHeader {
+        layout: LayoutId("LAYOUT_ANOTHER_ROOM"),
+        ..header
+    };
+    let err = build_route_122_scene(&foreign, &layout, events)
+        .expect_err("a header naming another layout must be refused");
+    assert_eq!(
+        err,
+        OverworldSceneError::LayoutNotOfHeader {
+            map: header.id,
+            header_layout: LayoutId("LAYOUT_ANOTHER_ROOM"),
+            layout: layout.id,
+        }
+    );
+}
+
+/// Events owned by another map put that map's NPCs, warps, and triggers in
+/// this room.
+#[test]
+fn from_pack_rejects_events_owned_by_another_map() {
+    let (header, layout, _) = route_122_room_inputs();
+    let other = assets::MapEventsTable::new()
+        .resolve(assets::MapId("MAP_EVER_GRANDE_CITY"))
+        .unwrap();
+    let err = build_route_122_scene(&header, &layout, other)
+        .expect_err("another map's events must be refused");
+    assert_eq!(
+        err,
+        OverworldSceneError::EventsNotOfHeader {
+            map: header.id,
+            owner: assets::MapId("MAP_ROUTE122"),
+            events: other.id,
+        }
+    );
+}
+
+/// An aliased map's events resolve to their owner, and the scene's runtime
+/// answers for the map it was loaded for, not the owner.
+#[test]
+fn a_scene_runtime_answers_for_the_room_it_owns() {
+    let (header, layout, events) = route_122_room_inputs();
+    let scene = build_route_122_scene(&header, &layout, events).unwrap();
+    let runtime = scene.runtime();
+    assert_eq!(scene.map_id(), header.id);
+    assert_eq!(runtime.id(), header.id);
+    assert_eq!(runtime.header(), &header);
+    assert_eq!(scene.map_events(), events);
 }
