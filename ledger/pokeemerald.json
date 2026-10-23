@@ -12543,10 +12543,10 @@
           "status": "ported"
         },
         "ball_display.png": {
-          "reason": "Two extractors read this sheet. Pixel indices are converted to raw 4bpp tiles as gbagfx writes them and read as a constituent of gHealthboxElementsGfxTable (graphics.c:358-370) in table order by AssetPack::healthbox_elements (healthbox_elements.rs); the embedded 16-colour palette (gBattleInterface_BallDisplayPal, graphics.c:356) is extracted separately as battle-interface/palette/ball_display and read by AssetPack::singles_healthbox_frames (healthbox_frames.rs). Still unmodelled: the sheet itself is not kept as a raster image, and the other battle_interface sources remain pending.",
+          "reason": "Both halves are extracted by two extractors. Pixel indices are converted to raw 4bpp tiles as gbagfx writes them and read as a constituent of gHealthboxElementsGfxTable (graphics.c:358-370) in table order by AssetPack::healthbox_elements (healthbox_elements.rs); the embedded 16-colour palette (gBattleInterface_BallDisplayPal, graphics.c:356) is extracted as battle-interface/palette/ball_display and read by AssetPack::singles_healthbox_frames (healthbox_frames.rs). The other battle_interface sources remain pending.",
           "rust_target": "crates/xtask/src/extract/battle_interface/healthbox_elements.rs",
           "spec": "S-4",
-          "status": "stubbed"
+          "status": "ported"
         },
         "ball_status_bar.png": {
           "reason": "Only the embedded 16-colour palette (gBattleInterface_BallStatusBarPal, graphics.c:354) is extracted, read by AssetPack::singles_healthbox_frames; the status-bar image (gBattleInterface_BallStatusBarGfx) is not extracted, and the other battle_interface sources remain pending.",
