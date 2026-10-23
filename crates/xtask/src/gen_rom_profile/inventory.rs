@@ -1,13 +1,11 @@
-//! The fixed asset roots a pack must hold before anything is located.
-//!
-//! The ids come from [`crate::extract::scope`], the lists extraction itself
-//! is fixed by, so the two cannot drift.
+//! Fixed pack roots that must exist before location; ids come from [`crate::extract::scope`].
 
 use super::error::GenRomProfileError;
 use super::pack_source::PackSource;
 use crate::extract::scope::{
-    layout_ids, sprite_palette_ids, sprite_sheet_ids, text_window_ids, tileset_animation_ids,
-    title_ids, BATTLERS, FONTS, INTERFACE_PALETTE_IDS, TILESETS,
+    battle_interface_ids, healthbox_element_ids, healthbox_frame_ids, layout_ids,
+    opening_scene_ids, sprite_palette_ids, sprite_sheet_ids, starter_chooser_ids, text_window_ids,
+    tileset_animation_ids, title_ids, BATTLERS, FONTS, INTERFACE_PALETTE_IDS, TILESETS,
 };
 
 /// Every fixed payload root of a tileset: tiles, metatiles, metatile
@@ -25,13 +23,7 @@ pub fn tileset_payload_ids(name: &str) -> Vec<String> {
     .collect()
 }
 
-/// Require every fixed tileset root: each tileset's tile sheet, metatiles,
-/// attributes, and palette banks, then every pinned animation frame,
-/// independent of which frames the pack happens to hold.
-///
-/// # Errors
-///
-/// [`GenRomProfileError::MissingPackEntry`] naming the first absent root.
+/// Refuses with [`GenRomProfileError::MissingPackEntry`] unless every tileset payload root and pinned animation frame is present.
 pub fn require_tilesets(pack: &PackSource) -> Result<(), GenRomProfileError> {
     TILESETS
         .into_iter()
@@ -42,11 +34,7 @@ pub fn require_tilesets(pack: &PackSource) -> Result<(), GenRomProfileError> {
         .try_for_each(|id| pack.get(id).map(|_| ()))
 }
 
-/// Require every pinned people sprite sheet and fixed sprite palette, independent of which the pack holds.
-///
-/// # Errors
-///
-/// [`GenRomProfileError::MissingPackEntry`] naming the first absent root.
+/// Refuses with [`GenRomProfileError::MissingPackEntry`] unless every pinned sprite sheet and sprite palette is present.
 pub fn require_sprites(pack: &PackSource) -> Result<(), GenRomProfileError> {
     sprite_sheet_ids()
         .into_iter()
@@ -54,73 +42,45 @@ pub fn require_sprites(pack: &PackSource) -> Result<(), GenRomProfileError> {
         .try_for_each(|id| pack.get(&id).map(|_| ()))
 }
 
-/// Require every fixed title image, tilemap, and palette root.
-///
-/// # Errors
-///
-/// [`GenRomProfileError::MissingPackEntry`] naming the first absent root.
+/// Refuses with [`GenRomProfileError::MissingPackEntry`] unless every title image, tilemap, and palette is present.
 pub fn require_title(pack: &PackSource) -> Result<(), GenRomProfileError> {
     title_ids()
         .iter()
         .try_for_each(|id| pack.get(id).map(|_| ()))
 }
 
-/// Require every fixed Latin glyph sheet root.
-///
-/// # Errors
-///
-/// [`GenRomProfileError::MissingPackEntry`] naming the first absent root.
+/// Refuses with [`GenRomProfileError::MissingPackEntry`] unless every Latin glyph sheet is present.
 pub fn require_fonts(pack: &PackSource) -> Result<(), GenRomProfileError> {
     FONTS
         .into_iter()
         .try_for_each(|font| pack.get(font.pack_id).map(|_| ()))
 }
 
-/// Require every fixed layout map and border root.
-///
-/// # Errors
-///
-/// [`GenRomProfileError::MissingPackEntry`] naming the first absent root.
+/// Refuses with [`GenRomProfileError::MissingPackEntry`] unless every layout map and border is present.
 pub fn require_layouts(pack: &PackSource) -> Result<(), GenRomProfileError> {
     layout_ids()
         .iter()
         .try_for_each(|id| pack.get(id).map(|_| ()))
 }
 
-/// Require every fixed text-window frame, message box, and palette root.
-///
-/// # Errors
-///
-/// [`GenRomProfileError::MissingPackEntry`] naming the first absent root.
+/// Refuses with [`GenRomProfileError::MissingPackEntry`] unless every text-window frame, message box, and palette is present.
 pub fn require_text_window(pack: &PackSource) -> Result<(), GenRomProfileError> {
     text_window_ids()
         .iter()
         .try_for_each(|id| pack.get(id).map(|_| ()))
 }
 
-/// Require the battle-message token table root.
-///
-/// # Errors
-///
-/// [`GenRomProfileError::MissingPackEntry`] when the pack lacks it.
+/// Refuses with [`GenRomProfileError::MissingPackEntry`] unless the battle-message token table is present.
 pub fn require_battle_messages(pack: &PackSource) -> Result<(), GenRomProfileError> {
     pack.get(rom_import::BATTLE_MESSAGE_PACK_ID).map(|_| ())
 }
 
-/// Require the battle-animation catalog root.
-///
-/// # Errors
-///
-/// [`GenRomProfileError::MissingPackEntry`] when the pack lacks it.
+/// Refuses with [`GenRomProfileError::MissingPackEntry`] unless the battle-animation catalog is present.
 pub fn require_battle_anims(pack: &PackSource) -> Result<(), GenRomProfileError> {
     pack.get(rom_import::BATTLE_ANIM_PACK_ID).map(|_| ())
 }
 
-/// Require every starter battler image and palette.
-///
-/// # Errors
-///
-/// [`GenRomProfileError::MissingPackEntry`] naming the first absent root.
+/// Refuses with [`GenRomProfileError::MissingPackEntry`] unless every starter battler image and palette is present.
 pub fn require_battlers(pack: &PackSource) -> Result<(), GenRomProfileError> {
     BATTLERS
         .iter()
@@ -128,17 +88,10 @@ pub fn require_battlers(pack: &PackSource) -> Result<(), GenRomProfileError> {
         .try_for_each(|id| pack.get(&id).map(|_| ()))
 }
 
-/// Require exactly the bag entries the checkout's inventory expects.
-///
-/// The bag locator derives its roots from the expectation, not the pack, so
-/// a pack entry outside it would otherwise be dropped from the profile.
-///
-/// # Errors
-///
-/// [`GenRomProfileError::MissingPackEntry`] naming the first absent entry,
-/// or `bag/*` when the expectation is empty, so a whole missing family
-/// cannot pass as a complete one. [`GenRomProfileError::StructMismatch`]
-/// naming the first pack `bag/` entry the expectation does not hold.
+/// Refuses with `MissingPackEntry` for an absent entry, or for an empty expectation (`bag/*`) so a
+/// whole missing family cannot pass as a complete one, and with
+/// [`GenRomProfileError::StructMismatch`] for a pack `bag/` entry the expectation lacks, which
+/// the bag locator, reading only the expectation, would otherwise silently leave out of the profile.
 pub fn require_bag(pack: &PackSource, expected: &[String]) -> Result<(), GenRomProfileError> {
     if expected.is_empty() {
         return Err(GenRomProfileError::MissingPackEntry("bag/*".to_owned()));
@@ -159,23 +112,86 @@ pub fn require_bag(pack: &PackSource, expected: &[String]) -> Result<(), GenRomP
     Ok(())
 }
 
-/// Require every fixed interface palette root.
-///
-/// # Errors
-///
-/// [`GenRomProfileError::MissingPackEntry`] naming the first absent root.
+/// Refuses with [`GenRomProfileError::MissingPackEntry`] unless every starter-chooser image,
+/// palette, and tilemap is present, and with [`GenRomProfileError::StructMismatch`] for a pack
+/// `starter-chooser/` entry outside the fixed inventory, which the locator, reading only the
+/// inventory, would otherwise silently leave out of the profile.
+pub fn require_starter_chooser(pack: &PackSource) -> Result<(), GenRomProfileError> {
+    let expected = starter_chooser_ids();
+    expected
+        .iter()
+        .try_for_each(|id| pack.get(id).map(|_| ()))?;
+    if let Some(surplus) = pack
+        .ids_with_prefix("starter-chooser/")
+        .into_iter()
+        .find(|id| !expected.contains(id))
+    {
+        return Err(GenRomProfileError::StructMismatch {
+            id: surplus,
+            reason: "is not in the checkout's starter-chooser inventory".to_owned(),
+        });
+    }
+    Ok(())
+}
+
+/// Refuses with [`GenRomProfileError::MissingPackEntry`] unless every opening-scene image,
+/// palette, and tilemap is present, and with [`GenRomProfileError::StructMismatch`] for a pack
+/// `opening-scene/` entry outside the fixed inventory, which the locator, reading only the
+/// inventory, would otherwise silently leave out of the profile.
+pub fn require_opening_scene(pack: &PackSource) -> Result<(), GenRomProfileError> {
+    let expected = opening_scene_ids();
+    expected
+        .iter()
+        .try_for_each(|id| pack.get(id).map(|_| ()))?;
+    if let Some(surplus) = pack
+        .ids_with_prefix("opening-scene/")
+        .into_iter()
+        .find(|id| !expected.contains(id))
+    {
+        return Err(GenRomProfileError::StructMismatch {
+            id: surplus,
+            reason: "is not in the checkout's opening-scene inventory".to_owned(),
+        });
+    }
+    Ok(())
+}
+
+/// Refuses with [`GenRomProfileError::MissingPackEntry`] unless the battle textbox image, its
+/// three palettes, and its tilemap are present, and with [`GenRomProfileError::StructMismatch`]
+/// for a pack `battle-interface/` entry outside the fixed inventory, which the locator, reading
+/// only the inventory, would otherwise silently leave out of the profile. The health-box
+/// elements, battle bar, singles health-box frames, their palettes, and the enemy shadow the
+/// checkout extracts beside them are left unclaimed: no ROM root imports them until #2178.
+pub fn require_battle_interface(pack: &PackSource) -> Result<(), GenRomProfileError> {
+    let expected = battle_interface_ids();
+    expected
+        .iter()
+        .try_for_each(|id| pack.get(id).map(|_| ()))?;
+    let unclaimed: Vec<String> = healthbox_element_ids()
+        .into_iter()
+        .chain(healthbox_frame_ids())
+        .collect();
+    if let Some(surplus) = pack
+        .ids_with_prefix("battle-interface/")
+        .into_iter()
+        .find(|id| !expected.contains(id) && !unclaimed.contains(id))
+    {
+        return Err(GenRomProfileError::StructMismatch {
+            id: surplus,
+            reason: "is not in the checkout's battle-interface inventory".to_owned(),
+        });
+    }
+    Ok(())
+}
+
+/// Refuses with [`GenRomProfileError::MissingPackEntry`] unless every interface palette is present.
 pub fn require_interface_palettes(pack: &PackSource) -> Result<(), GenRomProfileError> {
     INTERFACE_PALETTE_IDS
         .into_iter()
         .try_for_each(|id| pack.get(id).map(|_| ()))
 }
 
-/// Require every fixed root, before any domain writes a report line.
-///
-/// # Errors
-///
-/// [`GenRomProfileError::MissingPackEntry`] naming the first absent root,
-/// or [`GenRomProfileError::StructMismatch`] for a surplus `bag/` entry.
+/// Refuses every missing fixed root, and any surplus `bag/` entry, before a domain writes a report line.
 pub fn preflight(pack: &PackSource, bag_ids: &[String]) -> Result<(), GenRomProfileError> {
     require_tilesets(pack)?;
     require_title(pack)?;
@@ -187,5 +203,8 @@ pub fn preflight(pack: &PackSource, bag_ids: &[String]) -> Result<(), GenRomProf
     require_battlers(pack)?;
     require_battle_messages(pack)?;
     require_interface_palettes(pack)?;
-    require_bag(pack, bag_ids)
+    require_bag(pack, bag_ids)?;
+    require_starter_chooser(pack)?;
+    require_opening_scene(pack)?;
+    require_battle_interface(pack)
 }

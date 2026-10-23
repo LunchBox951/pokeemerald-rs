@@ -4,7 +4,7 @@
 //! [`crate::pack_test_support`].
 
 use super::save_continue_support::{new_game_phase, save_from_the_start_menu};
-use super::tests::TempSave;
+use super::tests::{write_scratch_exclusive, TempSave};
 use super::{advance_scene, new_game_options_for, window_frame_for, AppScene, MainMenuState};
 use crate::game_save::{SaveSlot, SavedGame};
 use crate::main_menu::{self, MainMenuItem};
@@ -65,15 +65,19 @@ struct Fixture {
 }
 
 impl Fixture {
-    fn new(label: &str) -> Self {
-        let temp = TempSave::new(label);
-        let slot = temp.slot();
-        let pack_path = std::env::temp_dir().join(format!(
+    fn pack_path(label: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
             "pokeemerald-rs-1763-{label}-{}-{:?}.pack",
             std::process::id(),
             std::thread::current().id()
-        ));
-        std::fs::write(&pack_path, synthetic_options_pack_bytes()).unwrap();
+        ))
+    }
+
+    fn new(label: &str) -> Self {
+        let temp = TempSave::new(label);
+        let slot = temp.slot();
+        let pack_path = Self::pack_path(label);
+        write_scratch_exclusive(&pack_path, synthetic_options_pack_bytes());
         // `PackSource::Test` needs a `'static` path, as `flow::tests` does.
         let leaked: &'static std::path::Path = Box::leak(pack_path.clone().into_boxed_path());
         Self {
@@ -445,5 +449,16 @@ fn every_handoff_scene_reports_the_save_it_carries() {
         AppScene::Overworld(Box::new(phase)).button_mode(),
         ButtonMode::LEqualsA,
         "overworld"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn the_options_fixture_refuses_a_planted_symlink() {
+    let label = "symlink-regression";
+    super::tests::assert_planted_symlink_untouched(
+        &Fixture::pack_path(label),
+        &synthetic_options_pack_bytes(),
+        || Fixture::new(label),
     );
 }
