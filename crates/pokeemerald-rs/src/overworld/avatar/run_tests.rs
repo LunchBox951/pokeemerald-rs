@@ -188,7 +188,7 @@ fn real_pack_scenes_draw_the_running_cells_for_both_genders() {
             character,
             &data,
         )
-        .expect("run `cargo xtask extract` first");
+        .expect("the repository pack loads Brendan's house for both characters");
         let mut player = player_at((2, 2), Direction::South);
         player.step_with_run(
             Some(Direction::South),
