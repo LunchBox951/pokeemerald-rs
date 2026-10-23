@@ -62,6 +62,7 @@ const COMPLETE_PREFIXES: &[&str] = &[
     "text-window/",
     "audio/",
     "trainer-pic/",
+    "trainer/",
     "battle-message/",
     "battle-anim/",
     "bag/",
@@ -158,6 +159,18 @@ const TRAINER_PORTRAIT_IDS: [&str; 4] = [
     "trainer-pic/may/palette",
 ];
 
+/// The Brendan and May trainer battlers: the front image, back sheet and
+/// shared palette of each. Named by id so entries both backends drop together
+/// still fail.
+const TRAINER_BATTLER_IDS: [&str; 6] = [
+    "trainer/brendan/front",
+    "trainer/brendan/back",
+    "trainer/brendan/palette",
+    "trainer/may/front",
+    "trainer/may/back",
+    "trainer/may/palette",
+];
+
 /// Ids the two backends are known and accepted to disagree on, each with
 /// the reason it was signed off.
 ///
@@ -240,7 +253,7 @@ fn the_rom_backend_matches_the_checkout_pack() {
         }
     }
 
-    for id in TRAINER_PORTRAIT_IDS {
+    for id in TRAINER_PORTRAIT_IDS.into_iter().chain(TRAINER_BATTLER_IDS) {
         for (what, ids) in [
             ("the ROM backend", &imported),
             ("the checkout pack", &checkout),

@@ -524,6 +524,30 @@ pub struct TrainerFrontPlan {
     pub trainers: Vec<TrainerFrontPicPlan>,
 }
 
+/// One trainer back picture's root, owned.
+#[derive(Debug, Clone)]
+pub struct TrainerBackPlan {
+    /// The trainer's front picture index, naming the front plan whose palette it shares.
+    pub trainer_pic: u16,
+    /// The picture's `TRAINER_BACK_PIC_*` value, the row index in both back tables.
+    pub back_pic: u16,
+    /// The uncompressed four-frame sheet.
+    pub back: ImagePlan,
+}
+
+/// The Brendan and May trainer battlers, owned.
+#[derive(Debug, Clone)]
+pub struct TrainerBattlerPlan {
+    /// The `trainer/` front pictures and palettes, with the front tables.
+    pub front: TrainerFrontPlan,
+    /// `gTrainerBackPicTable`.
+    pub back_table: u32,
+    /// `gTrainerBackPicPaletteTable`.
+    pub back_palette_table: u32,
+    /// Brendan, then May.
+    pub backs: Vec<TrainerBackPlan>,
+}
+
 /// Everything one generator run derived.
 #[derive(Debug, Clone)]
 pub struct ProfilePlan {
@@ -557,6 +581,8 @@ pub struct ProfilePlan {
     pub battlers: BattlerPlan,
     /// The Birch-speech trainer front pictures.
     pub trainer_front: TrainerFrontPlan,
+    /// The Brendan and May trainer battlers.
+    pub trainer_battlers: TrainerBattlerPlan,
 }
 
 #[cfg(test)]

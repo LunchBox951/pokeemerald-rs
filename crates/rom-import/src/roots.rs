@@ -514,8 +514,9 @@ pub struct TrainerFrontRoot {
     pub palette: PaletteRoot,
 }
 
-/// The Birch-speech trainer front pictures
-/// (`src/data/trainer_graphics/front_pic_tables.h`).
+/// A set of trainer front pictures with the tables that index them
+/// (`src/data/trainer_graphics/front_pic_tables.h`): the Birch-speech
+/// portraits, and the front half of the trainer battlers.
 ///
 /// The two tables are recorded so a reader can corroborate each picture's
 /// row by pointer, size and tag rather than trust the addresses alone.
@@ -527,6 +528,39 @@ pub struct TrainerFrontRoots {
     pub palette_table: GbaPtr,
     /// Every trainer picture with pack entries.
     pub trainers: &'static [TrainerFrontRoot],
+}
+
+/// One trainer back picture: the row its `TRAINER_BACK_PIC_*` index selects
+/// in `gTrainerBackPicTable`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TrainerBackRoot {
+    /// The trainer's front picture index, naming the [`TrainerFrontRoot`] whose
+    /// palette the back picture shares.
+    pub trainer_pic: u16,
+    /// The picture's `TRAINER_BACK_PIC_*` value, the row index in both back
+    /// tables. A different index space from `trainer_pic`.
+    pub back_pic: u16,
+    /// The uncompressed four-frame sheet `gTrainerBackPicTable[back_pic]` points at.
+    pub back: ImageRoot,
+}
+
+/// The Brendan and May trainer battlers
+/// (`src/data/trainer_graphics/front_pic_tables.h`, `back_pic_tables.h`).
+///
+/// The front half reuses [`TrainerFrontRoots`]: the same tables and the same
+/// ROM payloads the Birch-speech portraits read, published under the battler
+/// ids. Each back picture's palette row in `gTrainerBackPicPaletteTable` points
+/// at that trainer's front palette, so the palette is recorded once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TrainerBattlerRoots {
+    /// The front pictures and palettes, with the front tables.
+    pub front: TrainerFrontRoots,
+    /// `gTrainerBackPicTable`: 8-byte `{data, size, tag}` rows.
+    pub back_table: GbaPtr,
+    /// `gTrainerBackPicPaletteTable`: 8-byte `{data, tag}` rows.
+    pub back_palette_table: GbaPtr,
+    /// Every trainer back picture with a pack entry.
+    pub backs: &'static [TrainerBackRoot],
 }
 
 /// The authoritative ROM addresses a profile carries, grouped by domain.
@@ -566,6 +600,8 @@ pub struct Roots {
     pub battlers: BattlerRoots,
     /// The Birch-speech trainer front pictures.
     pub trainer_front: TrainerFrontRoots,
+    /// The Brendan and May trainer battlers.
+    pub trainer_battlers: TrainerBattlerRoots,
 }
 
 impl Roots {
@@ -610,6 +646,7 @@ impl Roots {
         opening_scene: OpeningSceneRoots::NONE,
         battlers: BattlerRoots::NONE,
         trainer_front: TrainerFrontRoots::NONE,
+        trainer_battlers: TrainerBattlerRoots::NONE,
     };
 
     /// Every image root in the table, across every domain.
@@ -637,6 +674,14 @@ impl Roots {
                     .flat_map(|battler| [&battler.front, &battler.back]),
             )
             .chain(self.trainer_front.trainers.iter().map(|pic| &pic.front))
+            .chain(
+                self.trainer_battlers
+                    .front
+                    .trainers
+                    .iter()
+                    .map(|pic| &pic.front),
+            )
+            .chain(self.trainer_battlers.backs.iter().map(|pic| &pic.back))
     }
 
     /// Every palette root in the table, across every domain.
@@ -658,6 +703,13 @@ impl Roots {
                     .flat_map(|battler| [&battler.normal, &battler.shiny]),
             )
             .chain(self.trainer_front.trainers.iter().map(|pic| &pic.palette))
+            .chain(
+                self.trainer_battlers
+                    .front
+                    .trainers
+                    .iter()
+                    .map(|pic| &pic.palette),
+            )
     }
 }
 
@@ -724,6 +776,16 @@ impl TrainerFrontRoots {
         front_table: GbaPtr::AT_BASE,
         palette_table: GbaPtr::AT_BASE,
         trainers: &[],
+    };
+}
+
+impl TrainerBattlerRoots {
+    /// No trainer battler roots recorded: the domain writes nothing.
+    pub const NONE: Self = Self {
+        front: TrainerFrontRoots::NONE,
+        back_table: GbaPtr::AT_BASE,
+        back_palette_table: GbaPtr::AT_BASE,
+        backs: &[],
     };
 }
 

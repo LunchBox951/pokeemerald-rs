@@ -15,6 +15,7 @@ mod handles;
 mod opening_scene;
 mod pokedex_graphics;
 mod starter_chooser;
+mod trainer_battler;
 mod trainer_pic;
 
 use std::path::{Path, PathBuf};
@@ -43,6 +44,7 @@ pub use starter_chooser::{
     PalettedImage, StarterChooserHandle, StarterPreviewHandle, StarterSpecies,
 };
 
+pub use trainer_battler::TrainerBattlerHandle;
 pub use trainer_pic::TrainerPicHandle;
 
 use format::kind_label;

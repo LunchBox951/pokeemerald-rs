@@ -10,12 +10,12 @@ use super::{
     bag, battle_anims, battle_messages, battlers, fonts, inventory, layouts, locate_profile,
     opening_scene, sprites, starter_chooser, text_window, tilesets, title,
 };
-use crate::extract::scope::trainer_front_ids;
 use crate::extract::scope::{
     layout_ids, opening_scene_ids, sprite_palette_ids, sprite_sheet_ids, starter_chooser_ids,
     text_window_ids, tileset_animation_ids, title_ids, BATTLERS, FONTS, INTERFACE_PALETTE_IDS,
     LAYOUTS, TEXT_WINDOW_IMAGE_STEMS, TEXT_WINDOW_PALETTE_STEMS, TILESETS,
 };
+use crate::extract::scope::{trainer_battler_ids, trainer_front_ids};
 
 /// One placeholder entry per fixed root and per bag id; the preflight checks presence only.
 fn complete_inventory() -> Vec<PackEntry> {
@@ -39,6 +39,7 @@ fn complete_inventory() -> Vec<PackEntry> {
         .chain(synthetic_bag_ids())
         .chain(starter_chooser_ids())
         .chain(trainer_front_ids())
+        .chain(trainer_battler_ids())
         .chain(opening_scene_ids())
         .map(|id| raw_entry(id, vec![0]))
         .collect()
@@ -128,6 +129,7 @@ fn the_fixed_inventory_ids_are_unique() {
         title_ids(),
         starter_chooser_ids(),
         opening_scene_ids(),
+        trainer_battler_ids(),
     ] {
         let unique: std::collections::BTreeSet<_> = ids.iter().collect();
         assert_eq!(unique.len(), ids.len(), "{ids:?}");

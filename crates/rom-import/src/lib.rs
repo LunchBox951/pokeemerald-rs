@@ -47,7 +47,10 @@
 //!   chooser's sheets, palettes and tilemaps (`starter-chooser/*`), and
 //!   Birch's speech scene with the wall clock (`opening-scene/*`), and the
 //!   Brendan and May trainer front pictures (`trainer-pic/*`, behind
-//!   `gTrainerFrontPicTable` and `gTrainerFrontPicPaletteTable`). The sound engine's
+//!   `gTrainerFrontPicTable` and `gTrainerFrontPicPaletteTable`) and trainer
+//!   battlers (`trainer/*`: the same front pictures again, the uncompressed
+//!   four-frame back sheets behind `gTrainerBackPicTable`, and one palette per
+//!   trainer that `gTrainerBackPicPaletteTable` shares with the front). The sound engine's
 //!   data is wired too: `DirectSound` samples and programmable waves
 //!   (`audio/sample/*`) and voicegroups (`audio/voicegroup/*`), read from
 //!   the m4a `WaveData` and `ToneData` structs and emitted through
@@ -123,6 +126,7 @@ pub use roots::{
     SongRoot, SpecialMessageRoot, SpriteRoots, StarterChooserRoots, TextWindowRoots, TileAnimRoot,
     TilesetRoot, TitleScreenRoots, VoicegroupRoot,
 };
+pub use roots::{TrainerBackRoot, TrainerBattlerRoots};
 pub use roots::{TrainerFrontRoot, TrainerFrontRoots};
 pub use sha1::{sha1, Digest, DigestParseError, Sha1};
 

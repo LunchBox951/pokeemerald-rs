@@ -34,7 +34,7 @@ use super::Context;
 use crate::extract::scope::TRAINER_FRONT_PICS;
 
 /// One table row, in bytes.
-const RECORD_BYTES: u32 = 8;
+pub(super) const RECORD_BYTES: u32 = 8;
 /// How many rows each table holds: `TRAINER_PIC_RS_MAY + 1`.
 const TABLE_ROWS: u32 = 93;
 /// `TRAINER_PIC_SIZE`, the `size` of a front picture row: 64x64 pixels at 4bpp.
@@ -48,18 +48,24 @@ const PALETTE_TAG_FIELD: u32 = 4;
 
 /// What a table's row for one trainer picture must carry besides the pointer.
 #[derive(Clone, Copy)]
-enum Row {
-    /// `{data, size: TRAINER_PIC_SIZE, tag: trainer_pic}`.
-    Picture,
+pub(super) enum Row {
+    /// `{data, size, tag: trainer_pic}`.
+    Picture {
+        /// The row's `size` field.
+        size: u16,
+    },
     /// `{data, tag: trainer_pic}`.
     Palette,
 }
 
 impl Row {
+    /// A front picture row: `TRAINER_PIC_SIZE` bytes of art.
+    const FRONT_PICTURE: Self = Self::Picture { size: PICTURE_SIZE };
+
     fn holds(self, ctx: &Context<'_>, row: u32, trainer_pic: u16) -> bool {
         match self {
-            Self::Picture => {
-                u16_at_addr(ctx.rom, row + PICTURE_SIZE_FIELD) == Some(PICTURE_SIZE)
+            Self::Picture { size } => {
+                u16_at_addr(ctx.rom, row + PICTURE_SIZE_FIELD) == Some(size)
                     && u16_at_addr(ctx.rom, row + PICTURE_TAG_FIELD) == Some(trainer_pic)
             }
             Self::Palette => u16_at_addr(ctx.rom, row + PALETTE_TAG_FIELD) == Some(trainer_pic),
@@ -104,7 +110,8 @@ pub fn locate(
         ctx,
         "gTrainerFrontPicTable",
         &picture_rows,
-        Row::Picture,
+        Row::FRONT_PICTURE,
+        TABLE_ROWS,
         report,
     )?;
     let palette_table = find_table(
@@ -112,6 +119,7 @@ pub fn locate(
         "gTrainerFrontPicPaletteTable",
         &palette_rows,
         Row::Palette,
+        TABLE_ROWS,
         report,
     )?;
 
@@ -214,12 +222,15 @@ fn palette_plan(
     })
 }
 
-/// Find the one table whose every trainer row points at that trainer's art.
-fn find_table(
+/// Find the one table of `table_rows` rows whose every trainer row points at
+/// that trainer's art; `rows` pairs each trainer's table index with the
+/// addresses its art may sit at.
+pub(super) fn find_table(
     ctx: &Context<'_>,
     name: &'static str,
     rows: &[(u16, Vec<u32>)],
     shape: Row,
+    table_rows: u32,
     report: &mut Vec<ReportLine>,
 ) -> Result<u32, GenRomProfileError> {
     let Some((first_trainer, first_art)) = rows.first() else {
@@ -247,10 +258,10 @@ fn find_table(
         },
     )?;
     report.push(
-        ReportLine::unique(name, base, TABLE_ROWS * RECORD_BYTES)
+        ReportLine::unique(name, base, table_rows * RECORD_BYTES)
             .with(Resolution::StructDerived)
             .symbol(name)
-            .note("anchored by the pointers from its Birch-speech rows"),
+            .note("anchored by the pointers from its trainer rows"),
     );
     Ok(base)
 }
