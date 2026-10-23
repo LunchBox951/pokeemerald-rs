@@ -643,6 +643,7 @@ mod tests {
         assert_eq!(MB_WATER_SOUTH_ARROW_WARP, 0x6D);
         assert_eq!(MB_DEEP_SOUTH_WARP, 0x6E);
         assert_eq!(MB_PETALBURG_GYM_DOOR, 0x8D);
+        assert_eq!(MB_COUNTER, 0x80);
     }
 
     #[test]
