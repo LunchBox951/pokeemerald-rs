@@ -859,13 +859,22 @@ fn put_back(
 
 /// Removes the empty `quarantine` by its name, only while that name still
 /// resolves to the held quarantine, checked by the `statat` just before the
-/// unlink; a mismatch, a name that could not be examined, or a failed
-/// unlink leaves it standing. A failed unlink or examination is reported at
+/// unlink; a mismatch, a name or held quarantine that could not be
+/// examined, or a failed unlink leaves it standing. A failed unlink or examination is reported at
 /// its name's path, with the error, since that is what the call acts on; a
 /// mismatch through [`warn_quarantine_not_at_name`]. `before_removal` runs
 /// before that check, where a test swaps the name.
 fn remove_quarantine(quarantine: &Quarantine<'_>, before_removal: &mut dyn FnMut()) {
-    let held = quarantine.dir.stat();
+    remove_quarantine_held_as(quarantine, quarantine.dir.stat(), before_removal);
+}
+
+/// [`remove_quarantine`] with `held` as what the held quarantine's own
+/// `fstat` gave, so a test can make that examination fail.
+fn remove_quarantine_held_as(
+    quarantine: &Quarantine<'_>,
+    held: rustix::io::Result<rustix::fs::Stat>,
+    before_removal: &mut dyn FnMut(),
+) {
     before_removal();
     let by_name = rustix::fs::statat(
         quarantine.home,
@@ -883,6 +892,17 @@ fn remove_quarantine(quarantine: &Quarantine<'_>, before_removal: &mut dyn FnMut
             "warning: cleanup directory {} could not be examined: {}; it is left in place",
             OneLinePath(&quarantine.name_location()),
             std::io::Error::from(err)
+        );
+        return;
+    }
+    // The name resolves to something, but the held quarantine could not be
+    // examined to compare with it: that says nothing about where the
+    // quarantine is either, so it is left with that error as the cause.
+    if let (Err(err), Ok(_)) = (&held, &by_name) {
+        eprintln!(
+            "warning: cleanup directory {} could not be examined: {}; it is left in place",
+            OneLinePath(&quarantine.name_location()),
+            std::io::Error::from(*err)
         );
         return;
     }
@@ -997,6 +1017,24 @@ pub(super) fn take_back_level_looking_up(
     let taken = take_back_into(&quarantine, parent, dir, &mut |_, _| {}) == Outcome::Taken;
     looked_up.clone_into(&mut quarantine.name);
     remove_quarantine(&quarantine, &mut || {});
+    taken
+}
+
+#[cfg(test)]
+/// [`take_back_level_via`] with the held quarantine's examination for its
+/// removal failing with `err`, while its name still resolves.
+pub(super) fn take_back_level_held_stat_failing(
+    parent: &OwnedFd,
+    dir: &CreatedDirectory,
+    quarantine_name: &str,
+    err: rustix::io::Errno,
+) -> bool {
+    let Some(quarantine) = open_quarantine(parent.as_fd(), dir, quarantine_name, dir, &mut || {})
+    else {
+        return false;
+    };
+    let taken = take_back_into(&quarantine, parent, dir, &mut |_, _| {}) == Outcome::Taken;
+    remove_quarantine_held_as(&quarantine, Err(err), &mut || {});
     taken
 }
 

@@ -1349,8 +1349,19 @@ fn a_level_swapped_in_its_quarantine_before_a_put_back_aside_is_not_placed_there
             stderr.contains("but it is not the directory rollback made"),
             "stderr:\n{stderr}"
         );
-        let warned = warned_path(&stderr, "warning: ", " is the directory rollback made for ");
-        assert_names_marked_path(&stderr, warned, "moved to: ");
+        // Only Linux and Android can tell a moved held level from a removed
+        // one and say where it went; elsewhere the warning is hedged
+        // (`Standing::Unknown`, #2576).
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        {
+            let warned = warned_path(&stderr, "warning: ", " is the directory rollback made for ");
+            assert_names_marked_path(&stderr, warned, "moved to: ");
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "android")))]
+        assert!(
+            stderr.contains(" is no longer under its name; if it was moved rather than removed"),
+            "stderr:\n{stderr}"
+        );
         return;
     }
     let dir = TempDir::new("undo-swapped-before-aside");
@@ -1398,8 +1409,19 @@ fn a_level_swapped_in_its_quarantine_before_a_failed_put_back_is_not_placed_ther
             !stderr.contains("its contents remain in"),
             "stderr:\n{stderr}"
         );
-        let warned = warned_path(&stderr, "warning: ", " is the directory rollback made for ");
-        assert_names_marked_path(&stderr, warned, "moved to: ");
+        // Only Linux and Android can tell a moved held level from a removed
+        // one and say where it went; elsewhere the warning is hedged
+        // (`Standing::Unknown`, #2576).
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        {
+            let warned = warned_path(&stderr, "warning: ", " is the directory rollback made for ");
+            assert_names_marked_path(&stderr, warned, "moved to: ");
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "android")))]
+        assert!(
+            stderr.contains(" is no longer under its name; if it was moved rather than removed"),
+            "stderr:\n{stderr}"
+        );
         return;
     }
     let dir = TempDir::new("undo-swapped-before-stranding");
@@ -2776,6 +2798,50 @@ fn a_quarantine_renamed_before_its_removal_is_reported_where_it_went() {
     assert!(!level.exists() && !name.exists());
     assert!(entry_names(&away).is_empty(), "the moved quarantine stays");
     mark_path("quarantine at: ", &away);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_quarantine_whose_held_descriptor_cannot_be_examined_is_reported_with_the_error() {
+    // The quarantine's name still resolves, but its held descriptor cannot
+    // be examined (EIO through a test seam): it is left in place, and the
+    // warning carries the error, not a claim that its name no longer
+    // resolves to it.
+    if !in_rollback_stderr_child() {
+        let stderr = rerun_alone_for_stderr(
+            "import_rom::created_dirs::tests::a_quarantine_whose_held_descriptor_cannot_be_examined_is_reported_with_the_error",
+        );
+        let io = std::io::Error::from(rustix::io::Errno::IO).to_string();
+        assert!(
+            stderr.contains("warning: cleanup directory ")
+                && stderr.contains(&format!(
+                    " could not be examined: {io}; it is left in place"
+                )),
+            "the unexamined quarantine is not reported with its error; stderr:\n{stderr}"
+        );
+        assert!(
+            !stderr.contains("no longer resolves") && !stderr.contains("moved away"),
+            "the examination error is reported as a moved quarantine; stderr:\n{stderr}"
+        );
+        return;
+    }
+    let dir = TempDir::new("quarantine-held-unexamined");
+    let level = dir.join("new");
+    let name = dir.join(".undo-r");
+    let created = super::create_directories(&level).unwrap();
+    let parent = created[0].parent.as_deref().unwrap();
+    let proceeded = super::take_back::take_back_level_held_stat_failing(
+        parent,
+        &created[0],
+        ".undo-r",
+        rustix::io::Errno::IO,
+    );
+    assert!(proceeded, "the level itself was taken back");
+    assert!(!level.exists(), "the level is removed");
+    assert!(
+        entry_names(&name).is_empty(),
+        "the quarantine is left, empty"
+    );
 }
 
 #[cfg(unix)]
