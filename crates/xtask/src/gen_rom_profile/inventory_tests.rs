@@ -8,12 +8,12 @@ use super::error::GenRomProfileError;
 use super::tests::{synthetic_bag_ids, with_context};
 use super::{
     bag, battle_anims, battle_messages, battlers, fonts, inventory, layouts, locate_profile,
-    opening_scene, sprites, starter_chooser, text_window, tilesets, title,
+    opening_scene, poke_ball, sprites, starter_chooser, text_window, tilesets, title,
 };
 use crate::extract::scope::{
-    layout_ids, opening_scene_ids, sprite_palette_ids, sprite_sheet_ids, starter_chooser_ids,
-    text_window_ids, tileset_animation_ids, title_ids, BATTLERS, FONTS, INTERFACE_PALETTE_IDS,
-    LAYOUTS, TEXT_WINDOW_IMAGE_STEMS, TEXT_WINDOW_PALETTE_STEMS, TILESETS,
+    layout_ids, opening_scene_ids, poke_ball_ids, sprite_palette_ids, sprite_sheet_ids,
+    starter_chooser_ids, text_window_ids, tileset_animation_ids, title_ids, BATTLERS, FONTS,
+    INTERFACE_PALETTE_IDS, LAYOUTS, TEXT_WINDOW_IMAGE_STEMS, TEXT_WINDOW_PALETTE_STEMS, TILESETS,
 };
 
 /// One placeholder entry per fixed root and per bag id; the preflight checks presence only.
@@ -38,6 +38,7 @@ fn complete_inventory() -> Vec<PackEntry> {
         .chain(synthetic_bag_ids())
         .chain(starter_chooser_ids())
         .chain(opening_scene_ids())
+        .chain(poke_ball_ids())
         .map(|id| raw_entry(id, vec![0]))
         .collect()
 }
@@ -72,6 +73,8 @@ fn assert_refused(label: &str, entries: Vec<PackEntry>, missing: &str, domain: &
             starter_chooser::locate(ctx, &mut report).map(|_| ())
         } else if domain == "opening_scene" {
             opening_scene::locate(ctx, &mut report).map(|_| ())
+        } else if domain == "poke_ball" {
+            poke_ball::locate(ctx, &mut report).map(|_| ())
         } else if domain == "battlers" {
             battlers::locate(ctx, &mut report).map(|_| ())
         } else if domain == "battle_anims" {
@@ -126,6 +129,7 @@ fn the_fixed_inventory_ids_are_unique() {
         title_ids(),
         starter_chooser_ids(),
         opening_scene_ids(),
+        poke_ball_ids(),
     ] {
         let unique: std::collections::BTreeSet<_> = ids.iter().collect();
         assert_eq!(unique.len(), ids.len(), "{ids:?}");
@@ -610,4 +614,12 @@ fn an_unrelated_interface_palette_does_not_satisfy_the_main_menu_requirement() {
         );
         assert!(report.is_empty(), "{report:?}");
     });
+}
+
+#[test]
+fn a_pack_missing_a_poke_ball_entry_is_refused() {
+    for id in poke_ball_ids() {
+        let label = format!("no-{}", id.replace('/', "-"));
+        assert_refused(&label, without(&id), &id, "poke_ball");
+    }
 }

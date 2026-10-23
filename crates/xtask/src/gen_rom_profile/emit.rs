@@ -1,5 +1,7 @@
 use std::fmt::Write as _;
 
+mod poke_ball;
+
 use rom_import::Encoding;
 
 use super::plan::{
@@ -70,9 +72,10 @@ use crate::reader::GbaPtr;
 use crate::roots::{{
     AnimProgramRoot, AnimSymbolRoot, AudioRoots, BagRoots, BattleAnimationRoots,
     BattleMessageRoots, BattlerRoot, BattlerRoots, BlobRoot, Encoding, FontRoot, ImageRoot,
-    InterfaceRoots, KeysplitRoot, MapLayoutRoot, OpeningSceneRoots, PaletteRoot, Roots, SampleRoot,
-    SongRoot, SpecialMessageRoot, SpriteRoots, StarterChooserRoots, TextWindowRoots, TileAnimRoot,
-    TilesetRoot, TitleScreenRoots, VoicegroupRoot,
+    InterfaceRoots, KeysplitRoot, MapLayoutRoot, OpeningSceneRoots, PaletteRoot, PokeBallRoot,
+    PokeBallRoots, Roots, SampleRoot, SongRoot, SpecialMessageRoot, SpriteRoots,
+    StarterChooserRoots, TextWindowRoots, TileAnimRoot, TilesetRoot, TitleScreenRoots,
+    VoicegroupRoot,
 }};
 
 /// Pokemon Emerald (US) rev 0's root table.
@@ -132,6 +135,7 @@ pub fn module(plan: &ProfilePlan, sha1: &str, lines: &[ReportLine]) -> String {
     opening_scene_roots(&mut out, &plan.opening_scene);
 
     battler_roots(&mut out, &plan.battlers);
+    poke_ball::poke_ball_roots(&mut out, &plan.poke_ball);
 
     let _ = writeln!(out, "}};");
     out
@@ -917,10 +921,15 @@ mod bag_field_tests {
             bag: bag_plan(),
             starter_chooser: chooser_plan(),
             opening_scene: scene_plan(),
+            poke_ball: super::poke_ball::tests::plan(),
         };
         let module = module(&plan, "0", &[]);
         assert_chooser_roots(&module);
         assert_scene_roots(&module);
+        assert!(
+            module.contains("    poke_ball: PokeBallRoots {"),
+            "{module}"
+        );
         assert!(module.contains("    bag: BagRoots {"), "{module}");
         assert!(
             module.contains("ImageRoot { id: \"bag/image/hm\""),

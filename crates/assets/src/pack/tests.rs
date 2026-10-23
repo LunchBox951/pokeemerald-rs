@@ -9,6 +9,7 @@ mod battler;
 mod container;
 mod layout;
 mod opening_scene;
+mod poke_ball;
 mod pokedex;
 mod pokedex_graphics;
 mod real_pack;

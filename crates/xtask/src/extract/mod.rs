@@ -41,9 +41,11 @@
 //! - the battle textbox sheet, its 32-colour palette and tilemap, and the battle-window
 //!   and PP text palettes;
 //! - `mus_title`, its transitive voicegroup tree, and every sample that tree
-//!   references; and
+//!   references;
 //! - the battle-message token table (`gBattleStringsTable` plus the special
-//!   templates `BufferStringBattle` selects).
+//!   templates `BufferStringBattle` selects); and
+//! - the Poké Ball's 16x48 sheet with its embedded palette and the opened-ball
+//!   sheet.
 //!
 //! # Asset id scheme
 //!
@@ -66,6 +68,7 @@
 //! - `audio/sample/{direct-sound,programmable-wave}/<name>`
 //! - `audio/voicegroup/<label>` and `audio/song/<name>`
 //! - `battle-message/table`
+//! - `poke-ball/{image,palette}/<name>`
 //!
 //! Names preserve normalized upstream directory, file, or symbol names; they
 //! never use linker-style `gTileset_*` identifiers.
@@ -88,6 +91,7 @@ mod layouts_json;
 pub(crate) mod midi;
 mod opening_scene;
 pub mod png;
+pub(crate) mod poke_ball;
 mod pokedex_graphics;
 mod publish;
 pub(crate) mod scope;
@@ -179,6 +183,7 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     midi::extract_song(&upstream, &mut writer)?;
     battle_message::extract_battle_message(&upstream, &mut writer)?;
     battle_anim::extract_battle_anim(&upstream, &mut writer)?;
+    poke_ball::extract_poke_ball(&upstream, &mut writer)?;
 
     let entry_count = writer.len();
     let bytes = writer.finish()?;
