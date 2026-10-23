@@ -87,6 +87,8 @@ mod layouts;
 mod layouts_json;
 pub(crate) mod midi;
 mod opening_scene;
+#[cfg(test)]
+mod owned_fixture;
 pub mod png;
 mod pokedex_graphics;
 mod publish;

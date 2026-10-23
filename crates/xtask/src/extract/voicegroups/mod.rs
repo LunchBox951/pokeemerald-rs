@@ -205,6 +205,7 @@ mod tests {
         discover_voicegroup_sources, extract_voicegroups, index_link_order,
         index_voicegroup_sources, link_order_successors, TITLE_VOICEGROUP_LABEL,
     };
+    use crate::extract::owned_fixture::OwnedDir;
     use pack_format::PackWriter;
 
     const REFERENCE_VOICEGROUP_SOURCE_COUNT: usize = 195;
@@ -447,19 +448,15 @@ mod tests {
 
     #[test]
     fn two_inc_files_declaring_the_same_label_are_rejected() {
-        let root = std::env::temp_dir().join(format!(
-            "pokeemerald-rs-voicegroup-duplicate-label-test-{}",
-            std::process::id()
-        ));
+        let owned = OwnedDir::create("pokeemerald-rs-voicegroup-duplicate-label-test").unwrap();
+        let root = owned.path().to_path_buf();
         let dir = root.join("sound/voicegroups");
-        let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&dir).unwrap();
         let body = "voice_group demo\n\tvoice_square_1 60, 0, 0, 2, 0, 0, 15, 0\n";
         std::fs::write(dir.join("a.inc"), body).unwrap();
         std::fs::write(dir.join("b.inc"), body).unwrap();
 
         let err = index_voicegroup_sources(&root).unwrap_err();
-        std::fs::remove_dir_all(&root).unwrap();
 
         match err {
             crate::extract::ExtractError::DuplicateVoiceGroupLabel {
@@ -481,11 +478,8 @@ mod tests {
         labels_by_relative_path.insert("a.inc".to_owned(), "a".to_owned());
         labels_by_relative_path.insert("b.inc".to_owned(), "b".to_owned());
         labels_by_relative_path.insert("c.inc".to_owned(), "c".to_owned());
-        let root = std::env::temp_dir().join(format!(
-            "pokeemerald-rs-voicegroup-link-order-test-{}-{}",
-            std::process::id(),
-            line!()
-        ));
+        let owned = OwnedDir::create("pokeemerald-rs-voicegroup-link-order-test").unwrap();
+        let root = owned.path().to_path_buf();
         std::fs::create_dir_all(root.join("sound")).unwrap();
         std::fs::write(
             root.join("sound/voice_groups.inc"),
@@ -494,7 +488,6 @@ mod tests {
         .unwrap();
 
         let successors = link_order_successors(&root, "a", &labels_by_relative_path).unwrap();
-        std::fs::remove_dir_all(&root).unwrap();
 
         assert_eq!(successors, vec!["b".to_owned(), "c".to_owned()]);
     }
@@ -504,11 +497,8 @@ mod tests {
         let mut labels_by_relative_path = std::collections::HashMap::new();
         labels_by_relative_path.insert("a.inc".to_owned(), "a".to_owned());
         labels_by_relative_path.insert("b.inc".to_owned(), "b".to_owned());
-        let root = std::env::temp_dir().join(format!(
-            "pokeemerald-rs-voicegroup-link-order-last-test-{}-{}",
-            std::process::id(),
-            line!()
-        ));
+        let owned = OwnedDir::create("pokeemerald-rs-voicegroup-link-order-last-test").unwrap();
+        let root = owned.path().to_path_buf();
         std::fs::create_dir_all(root.join("sound")).unwrap();
         std::fs::write(
             root.join("sound/voice_groups.inc"),
@@ -517,7 +507,6 @@ mod tests {
         .unwrap();
 
         let successors = link_order_successors(&root, "b", &labels_by_relative_path).unwrap();
-        std::fs::remove_dir_all(&root).unwrap();
 
         assert_eq!(successors, Vec::<String>::new());
     }
@@ -528,11 +517,8 @@ mod tests {
         labels_by_relative_path.insert("a.inc".to_owned(), "a".to_owned());
         labels_by_relative_path.insert("b.inc".to_owned(), "b".to_owned());
         labels_by_relative_path.insert("c.inc".to_owned(), "c".to_owned());
-        let root = std::env::temp_dir().join(format!(
-            "pokeemerald-rs-voicegroup-link-order-barrier-test-{}-{}",
-            std::process::id(),
-            line!()
-        ));
+        let owned = OwnedDir::create("pokeemerald-rs-voicegroup-link-order-barrier-test").unwrap();
+        let root = owned.path().to_path_buf();
         std::fs::create_dir_all(root.join("sound")).unwrap();
         std::fs::write(
             root.join("sound/voice_groups.inc"),
@@ -542,7 +528,6 @@ mod tests {
 
         let before_barrier = link_order_successors(&root, "a", &labels_by_relative_path).unwrap();
         let after_barrier = link_order_successors(&root, "b", &labels_by_relative_path).unwrap();
-        std::fs::remove_dir_all(&root).unwrap();
 
         assert_eq!(before_barrier, Vec::<String>::new());
         assert_eq!(after_barrier, vec!["c".to_owned()]);
@@ -551,16 +536,12 @@ mod tests {
     #[test]
     fn link_order_successors_is_empty_when_top_label_is_unlinked() {
         let labels_by_relative_path = std::collections::HashMap::new();
-        let root = std::env::temp_dir().join(format!(
-            "pokeemerald-rs-voicegroup-link-order-unlinked-test-{}-{}",
-            std::process::id(),
-            line!()
-        ));
+        let owned = OwnedDir::create("pokeemerald-rs-voicegroup-link-order-unlinked-test").unwrap();
+        let root = owned.path().to_path_buf();
         std::fs::create_dir_all(root.join("sound")).unwrap();
         std::fs::write(root.join("sound/voice_groups.inc"), "").unwrap();
 
         let successors = link_order_successors(&root, "solo", &labels_by_relative_path).unwrap();
-        std::fs::remove_dir_all(&root).unwrap();
 
         assert_eq!(successors, Vec::<String>::new());
     }
@@ -568,11 +549,9 @@ mod tests {
     #[test]
     fn link_order_successors_rejects_an_unindexed_linked_file() {
         let labels_by_relative_path = std::collections::HashMap::new();
-        let root = std::env::temp_dir().join(format!(
-            "pokeemerald-rs-voicegroup-link-order-unindexed-test-{}-{}",
-            std::process::id(),
-            line!()
-        ));
+        let owned =
+            OwnedDir::create("pokeemerald-rs-voicegroup-link-order-unindexed-test").unwrap();
+        let root = owned.path().to_path_buf();
         std::fs::create_dir_all(root.join("sound")).unwrap();
         std::fs::write(
             root.join("sound/voice_groups.inc"),
@@ -581,7 +560,6 @@ mod tests {
         .unwrap();
 
         let err = link_order_successors(&root, "ghost", &labels_by_relative_path).unwrap_err();
-        std::fs::remove_dir_all(&root).unwrap();
 
         match err {
             crate::extract::ExtractError::VoiceGroup(
