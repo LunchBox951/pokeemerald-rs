@@ -312,3 +312,18 @@ fn cursors_stay_bounded_by_capacity_so_no_usize_rollover_exists() {
         assert_eq!(consumer.underruns(), 0);
     }
 }
+
+#[test]
+fn reading_the_push_mark_never_waits_on_a_producer_holding_the_lock() {
+    let (producer, _consumer) = ring_buffer(4);
+    assert_eq!(producer.push(&[1.0, 2.0]), 2);
+    // A concurrent producer stalled mid-push holds the write lock.
+    let held = lock_head(&producer.shared.head);
+    let (sent, received) = std::sync::mpsc::channel();
+    let reader = producer.clone();
+    let mark = std::thread::spawn(move || sent.send(reader.pushed()));
+    let result = received.recv_timeout(std::time::Duration::from_secs(1));
+    drop(held);
+    mark.join().unwrap().ok();
+    assert_eq!(result, Ok(2), "the mark is read while the lock is held");
+}

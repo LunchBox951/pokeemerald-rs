@@ -10,9 +10,11 @@ use crate::ring::ring_buffer;
 
 mod callbacks_and_errors;
 mod discovery_and_loss_races;
+mod intent_during_attach;
 mod reroute;
 mod setup_and_backlog;
 mod stopped_queue_and_cooldown;
+mod teardown;
 
 type DataFn<T> = Box<dyn FnMut(&mut [T], &cpal::OutputCallbackInfo) + Send>;
 
@@ -50,6 +52,9 @@ struct World {
     /// Run inside the next successful build, as a producer pushing while it
     /// blocks would.
     during_build: Option<WorldHook>,
+    /// Block the next discovery, with the world unlocked, until this
+    /// channel's sender sends or drops, as a wedged audio server would.
+    block_discovery: Option<std::sync::mpsc::Receiver<()>>,
     /// Every call that reaches the audio stack, host or device or stream.
     ops: usize,
     discoveries: usize,
@@ -85,6 +90,10 @@ impl OutputHost for FakeHost {
     type Device = FakeDevice;
 
     fn default_output(&mut self) -> Result<Option<(String, FakeDevice)>, cpal::Error> {
+        let block = with(&self.0).block_discovery.take();
+        if let Some(block) = block {
+            let _ = block.recv();
+        }
         let mut w = with(&self.0);
         w.ops += 1;
         w.discoveries += 1;

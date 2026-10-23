@@ -53,7 +53,8 @@ struct Shared {
     occupied: AtomicUsize,
     underruns: AtomicU64,
     /// Samples ever accepted by [`Producer::push`], wrapping. Written only
-    /// while `head` is held, so it and the write index advance together.
+    /// while `head` is held, so it and the write index advance together;
+    /// [`Producer::pushed`] reads it without the lock.
     pushed: AtomicU64,
     /// Whether a [`Consumer`] currently exists. Lets a replacement consumer be
     /// claimed after the previous one is dropped with its device stream.
@@ -138,7 +139,8 @@ impl Producer {
             // Release: publishes the slot stores above to the consumer's
             // `Acquire` load of `occupied`.
             self.shared.occupied.fetch_add(n, Ordering::Release);
-            // Relaxed: only ever read or written while `head` is held.
+            // Relaxed: only ever written while `head` is held, and a reader
+            // without it needs only some value this counter has held.
             let pushed = self.shared.pushed.load(Ordering::Relaxed);
             self.shared.pushed.store(
                 pushed.wrapping_add(u64::try_from(n).unwrap_or(u64::MAX)),
@@ -153,8 +155,11 @@ impl Producer {
     /// A mark taken here splits the queue: [`Consumer::discard_pushed_before`]
     /// keeps only what was pushed after it. Used by the audio transport to
     /// record where a `stop` landed.
+    ///
+    /// Never takes the producer lock, so a `stop` cannot wait behind another
+    /// producer's push. A push still in progress may or may not be counted;
+    /// either way the mark falls between whole pushes.
     pub(crate) fn pushed(&self) -> u64 {
-        let _head = lock_head(&self.shared.head);
         self.shared.pushed.load(Ordering::Relaxed)
     }
 

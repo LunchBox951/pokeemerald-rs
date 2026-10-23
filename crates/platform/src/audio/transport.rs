@@ -38,9 +38,11 @@
 //!   only what was queued before that `stop` is history: what the producer
 //!   queues after it is a stopped queue. A stream that starts as it
 //!   attaches also drops, at its first callback, what the producer queued
-//!   while it was being built. A queue left while stopped is kept for the
-//!   next `start`. The first attach keeps the queue: that is the producer's
-//!   startup prefill, whether or not it has already called `start`.
+//!   while it was being built; a `start` or `stop` that lands during that
+//!   build has the re-attaching stream built again for the new intent. A
+//!   queue left while stopped is kept for the next `start`. The first
+//!   attach keeps the queue: that is the producer's startup prefill,
+//!   whether or not it has already called `start`.
 //! - Each distinct [`TransportState`] is published once, in order, for the
 //!   application to report. At most [`MAX_PENDING_EVENTS`] unpolled
 //!   transitions are kept; a caller that never polls loses the oldest, and
@@ -329,11 +331,15 @@ impl<H: OutputHost> Transport<H> {
             // Read after the query, so a reroute reported while it ran counts.
             let follows_default = live.health.follows_default.load(Ordering::Acquire);
             let current = live.id.as_str();
-            let verdict = match found {
+            // A loss raised while the query ran, on a stream still playing,
+            // happened while started even if `stop` has landed since.
+            let lost_playing = live.playing && live.health.lost.load(Ordering::Acquire);
+            let verdict = match &found {
                 // The backend already rerouted this stream to the new
                 // default; record its identity instead of rebuilding.
                 Ok(Some((id, _))) if id != current && follows_default => {
                     self.observed = Observed::Default(Some(id.clone()));
+                    let id = id.clone();
                     if let Some(live) = self.live.as_mut() {
                         live.id = id;
                     }
@@ -345,10 +351,14 @@ impl<H: OutputHost> Transport<H> {
                 Ok(Some(_)) | Err(_) => None,
             };
             if let Some(reason) = verdict {
-                // A different (or missing) output deserves a fresh burst.
+                if lost_playing {
+                    self.stale_queue = true;
+                }
+                // A different (or missing) output deserves a fresh burst, on
+                // the default this query returned rather than a second one.
                 self.retire(reason);
                 self.failures = 0;
-                self.next_attempt = now;
+                self.attempt_with(now, found);
                 return;
             }
         }
@@ -396,7 +406,9 @@ impl<H: OutputHost> Transport<H> {
         }
         match self.connect(now, found) {
             Ok(()) => {}
-            Err(reason) => {
+            // Nothing failed; decide the queue again for the new intent.
+            Err(NotAttached::IntentChanged) => self.next_attempt = self.finished(now),
+            Err(NotAttached::Failed(reason)) => {
                 let done = self.finished(now);
                 self.next_discovery = done + DISCOVERY_INTERVAL;
                 self.publish(TransportState::Unavailable(reason));
@@ -405,11 +417,11 @@ impl<H: OutputHost> Transport<H> {
         }
     }
 
-    fn connect(&mut self, now: Duration, found: Discovered<H>) -> Result<(), TransportFailure> {
+    fn connect(&mut self, now: Duration, found: Discovered<H>) -> Result<(), NotAttached> {
         let (id, device) = match found {
             Ok(Some(found)) => found,
-            Ok(None) => return Err(TransportFailure::NoOutput),
-            Err(err) => return Err(failure_of(&PlatformError::Audio(err))),
+            Ok(None) => return Err(TransportFailure::NoOutput.into()),
+            Err(err) => return Err(failure_of(&PlatformError::Audio(err)).into()),
         };
         let config = negotiate(&device).map_err(|err| failure_of(&err))?;
         let mut consumer = self
@@ -418,9 +430,10 @@ impl<H: OutputHost> Transport<H> {
             .ok_or(TransportFailure::ConnectFailed)?;
         // One read of intent decides both the discard and whether the new
         // stream starts: a `start` that landed while this attempt blocked
-        // was held with nothing attached, and a later one finds an attached
-        // paused stream. The latch is taken, so a stopped retry after a
-        // failed build keeps what the producer queues next.
+        // was held with nothing attached, one during the build below has a
+        // re-attaching stream built again, and a later one finds an attached
+        // paused stream. The latch is taken, so a stopped retry after a failed
+        // build keeps what the producer queues next.
         let playing = self.shared.running.load(Ordering::Acquire);
         if (std::mem::take(&mut self.stale_queue) || playing) && self.attached_before {
             if playing {
@@ -455,7 +468,7 @@ impl<H: OutputHost> Transport<H> {
         config: &cpal::SupportedStreamConfig,
         consumer: Consumer,
         playing: bool,
-    ) -> Result<(), TransportFailure> {
+    ) -> Result<(), NotAttached> {
         let max_frames = max_buffer_frames(config);
         let source = source_for_device(
             consumer,
@@ -480,6 +493,14 @@ impl<H: OutputHost> Transport<H> {
             PlatformError::Audio(_) => TransportFailure::ConnectFailed,
             other => failure_of(&other),
         })?;
+
+        // The queue's discard was decided for the intent read before the
+        // build, and the consumer is the stream's now. A `start` or `stop`
+        // that landed while it blocked would replay history or drop a
+        // stopped queue, so drop the unplayed stream and decide again.
+        if self.attached_before && self.shared.running.load(Ordering::Acquire) != playing {
+            return Err(NotAttached::IntentChanged);
+        }
 
         // A built stream is paused, so only a started transport plays it.
         if playing {
@@ -541,6 +562,20 @@ impl<H: OutputHost> Transport<H> {
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = state;
         self.shared.push_event(state);
+    }
+}
+
+/// Why [`Transport::connect`] attached no stream.
+enum NotAttached {
+    Failed(TransportFailure),
+    /// Playback intent changed while a re-attaching stream was built; the
+    /// attempt is repeated at once and counts as no failure.
+    IntentChanged,
+}
+
+impl From<TransportFailure> for NotAttached {
+    fn from(reason: TransportFailure) -> Self {
+        Self::Failed(reason)
     }
 }
 

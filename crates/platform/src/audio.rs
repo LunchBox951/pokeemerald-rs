@@ -166,8 +166,11 @@ enum Backend {
 ///
 /// No global state: every [`AudioOutput`] owns its own device/stream (or
 /// null stand-in) and ring buffer. Dropping it tears the backend down
-/// cleanly — `cpal::Stream`'s own `Drop` stops the stream and releases the
-/// device; the null backend holds no OS resources to release.
+/// cleanly — the transport worker drops its `cpal::Stream`, whose own `Drop`
+/// stops the stream and releases the device; the null backend holds no OS
+/// resources to release. The drop waits for that release for at most a
+/// short grace period: a worker still blocked in an OS audio call is
+/// detached and releases the device when the call returns.
 pub struct AudioOutput {
     backend: Backend,
     producer: Producer,
