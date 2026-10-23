@@ -1,115 +1,96 @@
-//! Typed static battler art (upstream `gMonStillFrontPicTable`, `gMonBackPicTable`,
-//! `gMonPaletteTable`, `gMonShinyPaletteTable`).
+//! Static battler art for Treecko, Torchic, and Mudkip.
+//! Starter inventory: `src/starter_choose.c:113-118`.
 //!
-//! The pack ids stay private so battle code composes no strings. Only the
-//! species the pack carries resolve; every lookup re-validates shapes, since
-//! a hand-built or corrupt pack can bypass extraction. Which palette a
-//! battler draws is the caller's choice, as upstream picks it by species and
-//! personality (`GetMonSpritePalFromSpeciesAndPersonality`).
+//! Pack IDs stay private; [`AssetPack::species_battler`] validates each requested pair.
 
 use super::{AssetPack, PackError, PalettedImage};
 use crate::SpeciesId;
 
-/// Width and height of every battler image: one 64x64 mon pic (`MON_PIC_WIDTH`).
+/// One mon-picture frame (`include/constants/pokemon.h:262-264`).
 pub(super) const BATTLER_SIDE: u32 = 64;
 const BATTLER_BIT_DEPTH: u8 = 4;
-const BATTLER_PALETTE_COLORS: u16 = 16;
+const BATTLER_PALETTE_COLORS: u16 = 1 << BATTLER_BIT_DEPTH;
 
-/// Which side of the battler an image shows.
+/// Static image orientation, independent of palette selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BattlerDirection {
-    /// The opposing side's art (`gMonStillFrontPicTable`).
+    /// `gMonStillFrontPicTable` entry (`src/data/pokemon_graphics/still_front_pic_table.h:1`).
     Front,
-    /// The player's side's art (`gMonBackPicTable`).
+    /// `gMonBackPicTable` entry (`src/data/pokemon_graphics/back_pic_table.h:1`).
     Back,
 }
 
-/// Which colouring a battler draws with.
+/// Explicit palette choice; shininess is not inferred from trainer ID or personality.
+/// Upstream selection: `src/pokemon.c:6541-6552`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PaletteVariant {
-    /// The species palette (`gMonPaletteTable`).
+    /// `gMonPaletteTable` entry (`src/data/pokemon_graphics/palette_table.h:1`).
     Normal,
-    /// The shiny palette (`gMonShinyPaletteTable`).
+    /// `gMonShinyPaletteTable` entry (`src/data/pokemon_graphics/shiny_palette_table.h:1`).
     Shiny,
 }
 
-/// One species' battler image and palette, borrowing the pack for `'a`.
+/// Requested identity and art returned by [`AssetPack::species_battler`].
 #[derive(Debug, Clone, Copy)]
 pub struct BattlerHandle<'a> {
-    /// The species the art belongs to.
+    /// Lookup key, without species substitution.
     pub species: SpeciesId,
-    /// Which side the image shows.
+    /// Requested view, without front/back substitution.
     pub direction: BattlerDirection,
-    /// Which palette the image is paired with.
+    /// Requested palette, without normal/shiny substitution.
     pub variant: PaletteVariant,
-    /// The 64x64 image with its 16-colour palette.
+    /// 64x64 4bpp image paired with exactly 16 colours.
     pub art: PalettedImage<'a>,
 }
 
-/// The species whose battler art the pack carries, with their asset directory.
-const SPECIES: [(SpeciesId, &str); 3] = [
-    (SpeciesId::TREECKO, "treecko"),
-    (SpeciesId::TORCHIC, "torchic"),
-    (SpeciesId::MUDKIP, "mudkip"),
-];
-
-/// Image and palette ids for one battler, or `None` for a species without art.
+/// Image and palette pack keys; `None` for every species outside the starter inventory.
 pub(super) fn ids(
     species: SpeciesId,
     direction: BattlerDirection,
     variant: PaletteVariant,
 ) -> Option<(&'static str, &'static str)> {
-    let index = SPECIES.iter().position(|&(id, _)| id == species)?;
-    Some(match (index, direction, variant) {
-        (0, BattlerDirection::Front, PaletteVariant::Normal) => {
-            ("pokemon/treecko/front", "pokemon/treecko/palette/normal")
-        }
-        (0, BattlerDirection::Front, PaletteVariant::Shiny) => {
-            ("pokemon/treecko/front", "pokemon/treecko/palette/shiny")
-        }
-        (0, BattlerDirection::Back, PaletteVariant::Normal) => {
-            ("pokemon/treecko/back", "pokemon/treecko/palette/normal")
-        }
-        (0, BattlerDirection::Back, PaletteVariant::Shiny) => {
-            ("pokemon/treecko/back", "pokemon/treecko/palette/shiny")
-        }
-        (1, BattlerDirection::Front, PaletteVariant::Normal) => {
-            ("pokemon/torchic/front", "pokemon/torchic/palette/normal")
-        }
-        (1, BattlerDirection::Front, PaletteVariant::Shiny) => {
-            ("pokemon/torchic/front", "pokemon/torchic/palette/shiny")
-        }
-        (1, BattlerDirection::Back, PaletteVariant::Normal) => {
-            ("pokemon/torchic/back", "pokemon/torchic/palette/normal")
-        }
-        (1, BattlerDirection::Back, PaletteVariant::Shiny) => {
-            ("pokemon/torchic/back", "pokemon/torchic/palette/shiny")
-        }
-        (_, BattlerDirection::Front, PaletteVariant::Normal) => {
-            ("pokemon/mudkip/front", "pokemon/mudkip/palette/normal")
-        }
-        (_, BattlerDirection::Front, PaletteVariant::Shiny) => {
-            ("pokemon/mudkip/front", "pokemon/mudkip/palette/shiny")
-        }
-        (_, BattlerDirection::Back, PaletteVariant::Normal) => {
-            ("pokemon/mudkip/back", "pokemon/mudkip/palette/normal")
-        }
-        (_, BattlerDirection::Back, PaletteVariant::Shiny) => {
-            ("pokemon/mudkip/back", "pokemon/mudkip/palette/shiny")
-        }
-    })
+    let (front_image_id, back_image_id, normal_palette_id, shiny_palette_id) = match species {
+        SpeciesId::TREECKO => (
+            "pokemon/treecko/front",
+            "pokemon/treecko/back",
+            "pokemon/treecko/palette/normal",
+            "pokemon/treecko/palette/shiny",
+        ),
+        SpeciesId::TORCHIC => (
+            "pokemon/torchic/front",
+            "pokemon/torchic/back",
+            "pokemon/torchic/palette/normal",
+            "pokemon/torchic/palette/shiny",
+        ),
+        SpeciesId::MUDKIP => (
+            "pokemon/mudkip/front",
+            "pokemon/mudkip/back",
+            "pokemon/mudkip/palette/normal",
+            "pokemon/mudkip/palette/shiny",
+        ),
+        _ => return None,
+    };
+    let image_id = match direction {
+        BattlerDirection::Front => front_image_id,
+        BattlerDirection::Back => back_image_id,
+    };
+    let palette_id = match variant {
+        PaletteVariant::Normal => normal_palette_id,
+        PaletteVariant::Shiny => shiny_palette_id,
+    };
+    Some((image_id, palette_id))
 }
 
 impl AssetPack {
-    /// One species' battler image paired with a palette, validated.
+    /// Requested starter art, with the image-palette pair validated on every call.
     ///
     /// # Errors
     ///
-    /// [`PackError::UnsupportedBattlerSpecies`] for a species the pack has no
-    /// battler art for; [`PackError::UnknownAsset`] or [`PackError::WrongKind`]
-    /// for a missing or wrong-kind entry; [`PackError::MalformedBattlerAsset`]
-    /// when dimensions, source bit depth, palette size, or pixel indices differ
-    /// from upstream.
+    /// [`PackError::UnsupportedBattlerSpecies`] for species outside the starter inventory;
+    /// [`PackError::UnknownAsset`] or [`PackError::WrongKind`] for missing or wrong-kind entries;
+    /// [`PackError::MalformedBattlerAsset`] for invalid image dimensions, source bit depth,
+    /// palette size, or pixel indices. Payload lengths are checked by `pack_format` at load,
+    /// so a loaded pack never reaches this method with a misshapen payload.
     pub fn species_battler(
         &self,
         species: SpeciesId,
