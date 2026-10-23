@@ -494,7 +494,7 @@ fn a_hidden_npcs_tile_is_walkable() {
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn overworld_movement_input_turns_the_player() {
-    // `OverworldPhase::load_default` itself (not a hand-built struct
+    // `OverworldPhase::load` itself (not a hand-built struct
     // literal) so this also exercises the save-state wiring (finding
     // 1) the same way production reaches this state.
     let mut phase = OverworldPhase::load(
@@ -573,4 +573,45 @@ fn the_tv_and_sink_tiles_of_both_houses_are_enterable_on_a_fresh_save() {
             );
         }
     }
+}
+
+/// Mom stands at `ONE_F` (2, 6); the live collection walks her north to
+/// (2, 5). Her authored tile frees up and the live one fills, for both
+/// interaction and movement.
+fn phase_with_mom_moved_north(start: (i32, i32)) -> OverworldPhase {
+    let mut phase = synthetic_phase(PlayerState::new(start, 3, Direction::West), None);
+    phase
+        .object_events
+        .get_mut(1)
+        .expect("Mom is local id 1 in ONE_F")
+        .state_mut()
+        .walk(Direction::North);
+    phase
+}
+
+#[test]
+fn a_moved_npc_is_found_at_its_live_tile_and_not_its_authored_one() {
+    let at_authored = phase_with_mom_moved_north((3, 6));
+    let runtime = runtime_for(&at_authored);
+    assert!(at_authored
+        .interaction_tokens_this_frame(pressed(Buttons::A), &runtime)
+        .is_none());
+
+    let at_live = phase_with_mom_moved_north((3, 5));
+    let runtime = runtime_for(&at_live);
+    assert!(matches!(
+        at_live.interaction_tokens_this_frame(pressed(Buttons::A), &runtime),
+        Some(InteractionOutcome::Dialog(_))
+    ));
+}
+
+#[test]
+fn a_moved_npc_vacates_its_authored_tile_and_blocks_its_live_one() {
+    let mut vacated = phase_with_mom_moved_north((3, 6));
+    vacated.step(held(Buttons::LEFT));
+    assert_eq!(vacated.player.position(), (2, 6));
+
+    let mut occupied = phase_with_mom_moved_north((3, 5));
+    occupied.step(held(Buttons::LEFT));
+    assert_eq!(occupied.player.position(), (3, 5));
 }

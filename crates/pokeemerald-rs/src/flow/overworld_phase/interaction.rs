@@ -47,12 +47,14 @@ impl OverworldPhase {
         if self.player.in_transit() || !buttons.is_newly_pressed(Buttons::A) {
             return None;
         }
-        self.find_interaction_outcome(runtime)
+        let selected = facing_object_event(&self.player, runtime, &self.save1.event_data)?;
+        self.find_interaction_outcome(selected)
     }
 
     /// The lookup half of [`OverworldPhase::interaction_tokens_this_frame`]:
-    /// find the object event `self.player` currently faces
-    /// ([`facing_object_event`]) and decide what an A press on it does.
+    /// decide what an A press on `object`, the event
+    /// `self.player` currently faces ([`facing_object_event`]), does. Its
+    /// `local_id` identifies the selected live object within this map.
     ///
     /// Route 103's rival object event (issue #248,
     /// `super::route103_rival_trigger::is_rival_trigger`) is checked
@@ -68,11 +70,7 @@ impl OverworldPhase {
     /// Below that, only `"0x0"` (upstream's `NULL`-script sentinel) means no
     /// interaction; any other unrecognized script still consumes the frame
     /// upstream (`field_control_avatar.c:172`).
-    fn find_interaction_outcome(
-        &self,
-        runtime: &engine::overworld::MapRuntime<'_>,
-    ) -> Option<InteractionOutcome> {
-        let object = facing_object_event(&self.player, runtime, &self.save1.event_data)?;
+    fn find_interaction_outcome(&self, object: &assets::ObjectEvent) -> Option<InteractionOutcome> {
         if super::route103_rival_trigger::is_rival_trigger(self.map_id, object.script) {
             return Some(InteractionOutcome::RivalBattle);
         }

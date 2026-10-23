@@ -109,6 +109,17 @@ fn locate_expected(
     })
 }
 
+/// What a linker map should say at one bag palette's address.
+///
+/// `sRotatingBall_Pal` is `static` (`item_menu_icons.c:36`), so a map omits it.
+fn palette_symbol(id: &str) -> SymbolExpectation {
+    if id == "bag/palette/rotating_ball" {
+        SymbolExpectation::Local("sRotatingBall_Pal".to_owned())
+    } else {
+        SymbolExpectation::Unnamed
+    }
+}
+
 /// Locate each palette under the encoding its family stores it in.
 fn locate_palettes(
     ctx: &Context<'_>,
@@ -126,7 +137,7 @@ fn locate_palettes(
             ctx,
             &group,
             encoding,
-            &|_| SymbolExpectation::Unnamed,
+            &palette_symbol,
             report,
         )?);
     }

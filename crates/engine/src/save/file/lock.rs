@@ -504,11 +504,11 @@ pub(super) struct LockedDirectory {
 #[cfg(unix)]
 type DirectoryIdentity = (u64, u64);
 #[cfg(windows)]
-type DirectoryIdentity = super::open::WindowsFileIdentity;
+type DirectoryIdentity = win_fs::WindowsFileIdentity;
 #[cfg(unix)]
 type SlotIdentity = (u64, u64);
 #[cfg(windows)]
-type SlotIdentity = super::open::WindowsFileIdentity;
+type SlotIdentity = win_fs::WindowsFileIdentity;
 
 impl LockedDirectory {
     /// Binds `identity`, which [`Self::identity_at`] read from `directory`
@@ -557,7 +557,7 @@ impl LockedDirectory {
 
     #[cfg(windows)]
     fn slot_identity_of(slot: &std::fs::File) -> std::io::Result<SlotIdentity> {
-        super::open::WindowsFileIdentity::of(slot)
+        win_fs::WindowsFileIdentity::of(slot)
     }
 
     /// Opens the slot entry itself (`FILE_FLAG_OPEN_REPARSE_POINT`) for
@@ -581,7 +581,7 @@ impl LockedDirectory {
             Err(missing) if missing.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(other) => return Err(other),
         };
-        super::open::WindowsFileIdentity::of(&handle).map(Some)
+        win_fs::WindowsFileIdentity::of(&handle).map(Some)
     }
 
     /// Unix reads the identity by `stat`, which neither needs list
@@ -598,7 +598,7 @@ impl LockedDirectory {
     #[cfg(windows)]
     fn identity_at(directory: &Path) -> std::io::Result<DirectoryIdentity> {
         let handle = Self::open_handle(directory)?;
-        super::open::WindowsFileIdentity::of(&handle)
+        win_fs::WindowsFileIdentity::of(&handle)
     }
 
     #[cfg(windows)]

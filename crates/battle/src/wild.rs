@@ -1,6 +1,6 @@
-//! Wild Pokémon construction with the upstream RNG order: nature, matching
-//! personality, then packed IVs (`pokeemerald/src/wild_encounter.c:379`;
-//! `src/pokemon.c:2205-2309`).
+//! Wild Pokémon construction with the upstream RNG order: nature (with the
+//! party lead's Synchronize coin flip), matching personality, then packed IVs
+//! (`pokeemerald/src/wild_encounter.c:367-379`; `src/pokemon.c:2205-2309`).
 
 use assets::{LevelUpLearnsets, MoveId, SpeciesId};
 
@@ -51,6 +51,23 @@ pub fn ensure_wild_startable(dex: &Dex, species: SpeciesId, level: u8) -> Result
     Ok(())
 }
 
+/// Chooses the wild Pokémon's nature as upstream's `PickWildMonNature` does
+/// outside the Safari Zone (`pokeemerald/src/wild_encounter.c:367-376`).
+///
+/// A `Some` lead nature means the party's first Pokémon is a non-egg holder of
+/// Synchronize: one coin draw (`Random() % 2`) is spent first, and a zero hands
+/// back that nature with no further draw. Otherwise (the flip lost, or `None`)
+/// the plain random-nature draw follows, so a lost flip costs two draws.
+#[must_use]
+pub fn pick_wild_nature(synchronize_nature: Option<Nature>, rng: &mut impl BattleRng) -> Nature {
+    if let Some(lead_nature) = synchronize_nature {
+        if rng.next_u16().is_multiple_of(2) {
+            return lead_nature;
+        }
+    }
+    roll_nature(rng)
+}
+
 /// Chooses a nature from one RNG draw using its numeric ID order.
 #[must_use]
 pub fn roll_nature(rng: &mut impl BattleRng) -> Nature {
@@ -97,6 +114,9 @@ pub fn roll_ivs(rng: &mut impl BattleRng) -> Ivs {
 /// Builds a wild Pokémon after validating every input without consuming RNG.
 /// Draws its nature, matching personality, and IVs in that order.
 ///
+/// `synchronize_nature` is the lead's nature when the party's first Pokémon
+/// has Synchronize and is not an egg, else `None`; see [`pick_wild_nature`].
+///
 /// # Errors
 ///
 /// Returns the first Pokémon validation error without consuming RNG.
@@ -105,10 +125,11 @@ pub fn build_wild_pokemon(
     species: SpeciesId,
     level: u8,
     moves: Vec<MoveId>,
+    synchronize_nature: Option<Nature>,
     rng: &mut impl BattleRng,
 ) -> Result<BattlePokemon, BattleError> {
     BattlePokemon::validate(dex, species, level, &moves)?;
-    let requested_nature = roll_nature(rng);
+    let requested_nature = pick_wild_nature(synchronize_nature, rng);
     let personality = roll_personality_for_nature(requested_nature, rng);
     let ivs = roll_ivs(rng);
     BattlePokemon::new(dex, species, level, ivs, personality, moves)
