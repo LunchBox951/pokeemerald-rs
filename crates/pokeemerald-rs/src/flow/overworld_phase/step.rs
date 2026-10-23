@@ -254,15 +254,15 @@ impl OverworldPhase {
     /// any of it, so a B press that closes a box cannot also do something
     /// else on the same frame.
     ///
-    /// Otherwise, a fresh A-press resolves [`engine::overworld::facing_object_event`] against
+    /// Otherwise, a fresh A-press resolves [`engine::overworld::select_interaction_target`] against
     /// `self.player`'s pre-movement facing, ahead of this frame's movement:
     /// upstream reaches `TryStartInteractionScript` inside
     /// `ProcessPlayerFieldInput`, and `PlayerStep` never runs once that
     /// returns `TRUE` (`field_control_avatar.c:143-145`, `:172`,
     /// `overworld.c:1444-1455`). A script [`crate::overworld::npc_scripts::script_text`]
-    /// recognizes opens an [`NpcDialog`]; any other script still preempts
-    /// the frame, and only the `"0x0"` sentinel finds nothing
-    /// ([`InteractionOutcome`]). Gated on the player being between steps --
+    /// recognizes opens an [`NpcDialog`]; any other selected target still
+    /// preempts the frame, and only a press that selects nothing falls through
+    /// to movement ([`InteractionOutcome`]). Gated on the player being between steps --
     /// see [`OverworldPhase::interaction_tokens_this_frame`].
     ///
     /// # Wild encounters (issue #169)
@@ -781,7 +781,10 @@ impl OverworldPhase {
                 Some(InteractionOutcome::RivalBattle) => self.begin_route103_rival_battle(),
                 // Consumed upstream too (`InteractionOutcome::Unmodelled`'s
                 // own doc comment) -- fail closed, nothing to render.
-                Some(InteractionOutcome::Unmodelled) | None => {}
+                Some(InteractionOutcome::Unmodelled(target)) => {
+                    eprintln!("interaction: no launcher for {target:?} -- frame consumed");
+                }
+                None => {}
             }
         }
 
