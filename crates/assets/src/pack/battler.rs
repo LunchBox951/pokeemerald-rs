@@ -7,8 +7,7 @@
 //! battler draws is the caller's choice, as upstream picks it by species and
 //! personality (`GetMonSpritePalFromSpeciesAndPersonality`).
 
-use super::starter_chooser::PalettedImage;
-use super::{AssetPack, PackError};
+use super::{AssetPack, PackError, PalettedImage};
 use crate::SpeciesId;
 
 /// Width and height of every battler image: one 64x64 mon pic (`MON_PIC_WIDTH`).
