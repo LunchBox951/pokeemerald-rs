@@ -60,13 +60,26 @@ const COMPLETE_PREFIXES: &[&str] = &[
     "sprite/",
     "font/",
     "text-window/",
-    "audio/",
+    "audio/voicegroup/",
+    "audio/sample/",
     "battle-message/",
     "battle-anim/",
     "bag/",
     "starter-chooser/",
     "opening-scene/",
 ];
+
+/// The only song the ROM backend imports, by id: its song root is the profile's lone
+/// `mus_title` entry. The checkout pack also carries every other checkpoint song, so
+/// `audio/song/` is not in [`COMPLETE_PREFIXES`]; a dropped title still fails by this id.
+const ROM_IMPORTED_SONG_IDS: [&str; 1] = ["audio/song/mus_title"];
+
+/// Whether the ROM backend claims every checkout entry with this id.
+fn is_claimed_complete(id: &str) -> bool {
+    COMPLETE_PREFIXES
+        .iter()
+        .any(|prefix| id.starts_with(prefix))
+}
 
 /// The starters' static battler entries: 12 ids the ROM backend must write
 /// although `pokemon/` is not yet in [`COMPLETE_PREFIXES`].
@@ -157,6 +170,22 @@ fn checkpoint_payload_ids() -> Vec<String> {
 const REVIEWED_DIFFERENCES: &[(&str, &str)] = &[];
 
 #[test]
+fn the_rom_backend_imports_only_the_title_song_so_no_other_song_is_claimed() {
+    assert!(is_claimed_complete("audio/voicegroup/title"));
+    assert!(is_claimed_complete(
+        "audio/sample/direct-sound/sc88pro_trumpet_60"
+    ));
+    for id in ROM_IMPORTED_SONG_IDS {
+        assert!(
+            !is_claimed_complete(id),
+            "{id} is pinned by id, not by prefix"
+        );
+    }
+    assert!(!is_claimed_complete("audio/song/se_select"));
+    assert!(!is_claimed_complete("audio/song/mus_vs_wild"));
+}
+
+#[test]
 #[ignore = "needs $POKEEMERALD_ROM and a `cargo xtask extract` pack"]
 fn the_rom_backend_matches_the_checkout_pack() {
     let Some(rom_path) = rom_path() else {
@@ -202,10 +231,16 @@ fn the_rom_backend_matches_the_checkout_pack() {
     }
 
     for id in checkout.keys() {
-        let claimed = COMPLETE_PREFIXES
-            .iter()
-            .any(|prefix| id.starts_with(prefix));
-        if claimed && !imported.contains_key(id) && !reviewed.contains_key(id.as_str()) {
+        if is_claimed_complete(id)
+            && !imported.contains_key(id)
+            && !reviewed.contains_key(id.as_str())
+        {
+            differences.push(format!("{id}: the ROM backend wrote no such entry"));
+        }
+    }
+
+    for id in ROM_IMPORTED_SONG_IDS {
+        if !imported.contains_key(id) {
             differences.push(format!("{id}: the ROM backend wrote no such entry"));
         }
     }
