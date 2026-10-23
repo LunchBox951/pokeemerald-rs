@@ -4,8 +4,9 @@ use super::{
 };
 use crate::dex::Dex;
 use crate::error::BattleError;
+use crate::gender::Gender;
 use crate::nature::Nature;
-use crate::pokemon::{Ivs, MAX_MON_MOVES, MOVE_NONE};
+use crate::pokemon::{BattlePokemon, Ivs, MAX_MON_MOVES, MOVE_NONE};
 use crate::script_rng::SequenceRng;
 use assets::{MoveId, SpeciesId};
 
@@ -127,7 +128,7 @@ fn build_wild_pokemon_draws_nature_then_personality_then_ivs_in_order() {
         hp_only_iv_draw,
         special_attack_only_iv_draw,
     ]);
-    let mon = build_wild_pokemon(&dex, BULBASAUR, 5, vec![TACKLE], None, &mut rng).unwrap();
+    let mon = build_wild_pokemon(&dex, BULBASAUR, 5, vec![TACKLE], None, None, &mut rng).unwrap();
     assert_eq!(mon.nature(), Nature::Quirky);
     assert_eq!(mon.personality(), personality);
     assert_eq!(
@@ -163,7 +164,7 @@ fn build_wild_pokemon_rejects_bad_inputs_before_drawing_anything() {
     ] {
         let mut rng = SequenceRng::new([]);
         assert_eq!(
-            build_wild_pokemon(&dex, BULBASAUR, level, moves, None, &mut rng),
+            build_wild_pokemon(&dex, BULBASAUR, level, moves, None, None, &mut rng),
             Err(expected)
         );
         assert_eq!(rng.draws(), 0, "a rejected request must not draw");
@@ -356,7 +357,7 @@ fn an_unknown_species_yields_no_moves_and_is_rejected_downstream() {
     let dex = Dex::new();
     let mut rng = SequenceRng::new([]);
     assert_eq!(
-        build_wild_pokemon(&dex, UNKNOWN_SPECIES, 5, Vec::new(), None, &mut rng),
+        build_wild_pokemon(&dex, UNKNOWN_SPECIES, 5, Vec::new(), None, None, &mut rng),
         Err(BattleError::InvalidMoveCount(0))
     );
     assert_eq!(rng.draws(), 0);
@@ -402,6 +403,7 @@ fn build_wild_pokemon_with_a_winning_synchronize_flip_uses_the_lead_nature() {
         5,
         vec![TACKLE],
         Some(Nature::Quirky),
+        None,
         &mut rng,
     )
     .unwrap();
@@ -422,9 +424,12 @@ fn build_wild_pokemon_with_a_losing_synchronize_flip_draws_six_times() {
         5,
         vec![TACKLE],
         Some(Nature::Quirky),
+        None,
         &mut rng,
     )
     .unwrap();
     assert_eq!(mon.nature(), Nature::Adamant);
     assert_eq!(rng.draws(), 6);
 }
+
+mod cute_charm;

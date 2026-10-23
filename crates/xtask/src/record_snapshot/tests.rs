@@ -2511,3 +2511,70 @@ fn an_output_directory_swapped_before_the_pointer_publication_is_not_reported_as
         "the pointer in the held directory names the generation beside it"
     );
 }
+
+/// Set in the child [`a_capture_under_an_owner_stripping_umask_stays_owner_readable`]
+/// re-runs itself as, so only that child changes its own umask.
+#[cfg(unix)]
+const SNAPSHOT_UMASK_CHILD: &str = "POKEEMERALD_RECORD_SNAPSHOT_UMASK_CHILD";
+
+/// A capture under a umask that strips the owner bits (`0444`) replaces a
+/// readable pointer with one its owner can still read, and publishes payloads
+/// the owner can read. The assertions are on mode bits, so they hold as root.
+#[cfg(unix)]
+#[test]
+fn a_capture_under_an_owner_stripping_umask_stays_owner_readable() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let name = "record_snapshot::tests::\
+                a_capture_under_an_owner_stripping_umask_stays_owner_readable";
+    if std::env::var_os(SNAPSHOT_UMASK_CHILD).is_none() {
+        // The umask is process-wide, so the 0o444 one is set only in a re-run
+        // of this test binary that runs this test alone.
+        let output = std::process::Command::new("/bin/sh")
+            .args(["-c", "umask 0444 && exec \"$0\" \"$@\""])
+            .arg(std::env::current_exe().unwrap())
+            .args(["--exact", name, "--test-threads=1"])
+            .env(SNAPSHOT_UMASK_CHILD, "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains("1 passed"),
+            "umask 0444 child failed:\n{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+
+    let output = scratch_path("owner-stripping-umask");
+    let _guard = ScratchGuard(output.clone());
+    std::fs::create_dir_all(&output).unwrap();
+    std::fs::set_permissions(&output, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let pointer = output.join(format!("{}.generation", Scene::MainMenuNewGame.name()));
+    std::fs::write(&pointer, b"previous").unwrap();
+    std::fs::set_permissions(&pointer, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+    let (rgb, meta) =
+        super::publish_generation(Scene::MainMenuNewGame, &output, b"rgb", b"meta", || Ok(()))
+            .expect("the capture is published");
+
+    let mode = |path: &std::path::Path| {
+        std::fs::symlink_metadata(path)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777
+    };
+    // 0666 & !0444 leaves 0222 for everyone; only the owner read is restored.
+    assert_eq!(mode(&rgb), 0o622, "rgb payload: {:o}", mode(&rgb));
+    assert_eq!(mode(&meta), 0o622, "meta payload: {:o}", mode(&meta));
+    assert_eq!(mode(&pointer), 0o622, "pointer: {:o}", mode(&pointer));
+
+    // The generation directory is search-only under this umask; open it up so
+    // the read-back below does not depend on the privilege of the runner.
+    let generation = rgb.parent().unwrap();
+    std::fs::set_permissions(generation, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(std::fs::read(&rgb).unwrap(), b"rgb");
+    assert_eq!(std::fs::read(&meta).unwrap(), b"meta");
+    assert_ne!(std::fs::read(&pointer).unwrap(), b"previous");
+}
