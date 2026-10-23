@@ -33,6 +33,7 @@ use crate::status1::Status1;
 
 use super::{Battle, BattleEvent};
 
+mod effect_spore;
 mod pipelines;
 use pipelines::hit_failure_event;
 
@@ -141,6 +142,7 @@ impl Battle {
     ) -> Result<(), BattleError> {
         self.apply_static_contact(attacker_is_player, move_id, rng, events)?;
         self.apply_poison_point_contact(attacker_is_player, move_id, rng, events)?;
+        self.apply_effect_spore_contact(attacker_is_player, move_id, rng, events)?;
         self.apply_rough_skin_contact(attacker_is_player, move_id, events)
     }
 
@@ -210,27 +212,39 @@ impl Battle {
             return Ok(());
         }
         let attacker_synchronizes = attacker.ability() == AbilityId::SYNCHRONIZE;
-        let (attacker, holder) = if attacker_is_player {
-            (&mut self.player, &mut self.enemy)
-        } else {
-            (&mut self.enemy, &mut self.player)
-        };
-        attacker.set_status1(Status1::Paralysed);
+        self.battler_mut(attacker_is_player)
+            .set_status1(Status1::Paralysed);
         events.push(BattleEvent::ParalyzedByStatic {
             by_player: attacker_is_player,
             move_id,
         });
-        if attacker_synchronizes
-            && !holder.is_fainted()
-            && resolve_synchronize_reflection(holder) == SynchronizeReflectionOutcome::Applied
-        {
-            holder.set_status1(Status1::Paralysed);
-            events.push(BattleEvent::ParalyzedByAttackerSynchronize {
-                by_player: attacker_is_player,
-                move_id,
-            });
+        if attacker_synchronizes {
+            self.reflect_contact_paralysis(attacker_is_player, move_id, events);
         }
         Ok(())
+    }
+
+    /// `MOVEEND_SYNCHRONIZE_ATTACKER` for a paralysis a contact ability just
+    /// put on the attacker (`battle_util.c:2987`-`:3001`): a surviving holder
+    /// that Limber and an existing primary status leave open is paralysed
+    /// without a draw.
+    fn reflect_contact_paralysis(
+        &mut self,
+        attacker_is_player: bool,
+        move_id: MoveId,
+        events: &mut Vec<BattleEvent>,
+    ) {
+        let holder = self.battler_mut(!attacker_is_player);
+        if holder.is_fainted()
+            || resolve_synchronize_reflection(holder) != SynchronizeReflectionOutcome::Applied
+        {
+            return;
+        }
+        holder.set_status1(Status1::Paralysed);
+        events.push(BattleEvent::ParalyzedByAttackerSynchronize {
+            by_player: attacker_is_player,
+            move_id,
+        });
     }
 
     /// `MOVEEND_ON_DAMAGE_ABILITIES` for `ABILITY_POISON_POINT`
@@ -266,18 +280,32 @@ impl Battle {
             return Ok(());
         }
         let attacker_synchronizes = attacker.ability() == AbilityId::SYNCHRONIZE;
-        let (attacker, holder) = if attacker_is_player {
-            (&mut self.player, &mut self.enemy)
-        } else {
-            (&mut self.enemy, &mut self.player)
-        };
-        attacker.set_status1(Status1::Poisoned);
+        self.battler_mut(attacker_is_player)
+            .set_status1(Status1::Poisoned);
         events.push(BattleEvent::PoisonedByPoisonPoint {
             by_player: attacker_is_player,
             move_id,
         });
-        if !attacker_synchronizes || holder.is_fainted() {
-            return Ok(());
+        if attacker_synchronizes {
+            self.reflect_contact_poison(attacker_is_player, move_id, events);
+        }
+        Ok(())
+    }
+
+    /// `MOVEEND_SYNCHRONIZE_ATTACKER` for a poison a contact ability just put
+    /// on the attacker (`battle_util.c:2987`-`:3001`): a surviving holder is
+    /// poisoned without a draw, and the reflection is `primary`, so a Poison-
+    /// or Steel-typed holder earns its own prevention event
+    /// (`battle_script_commands.c:2320`-`:2329`).
+    fn reflect_contact_poison(
+        &mut self,
+        attacker_is_player: bool,
+        move_id: MoveId,
+        events: &mut Vec<BattleEvent>,
+    ) {
+        let holder = self.battler_mut(!attacker_is_player);
+        if holder.is_fainted() {
+            return;
         }
         match resolve_synchronize_poison_reflection(holder) {
             SynchronizePoisonReflectionOutcome::Applied => {
@@ -295,10 +323,9 @@ impl Battle {
             }
             SynchronizePoisonReflectionOutcome::AlreadyStatused => {}
             SynchronizePoisonReflectionOutcome::ImmunityProtected => {
-                unreachable!("a Poison Point holder does not carry Immunity")
+                unreachable!("a contact-ability holder does not carry Immunity")
             }
         }
-        Ok(())
     }
 
     fn execute_move_pipeline(
@@ -903,6 +930,14 @@ impl Battle {
                     move_id,
                 });
             }
+        }
+    }
+
+    const fn battler_mut(&mut self, is_player: bool) -> &mut crate::pokemon::BattlePokemon {
+        if is_player {
+            &mut self.player
+        } else {
+            &mut self.enemy
         }
     }
 
