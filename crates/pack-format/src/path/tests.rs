@@ -20,8 +20,8 @@ use crate::layout::OUTPUT_RELATIVE_PATH;
 
 /// What names one directory on disk, so a later check can tell it from a
 /// different directory that took the same path. On Unix this is the device
-/// and inode; elsewhere `std` offers no stable identity, so any real
-/// directory (not a symlink) at the path is taken to be the same one.
+/// and inode. Elsewhere `std` offers no stable identity, so the value carries
+/// nothing and [`ScratchRoot`] never treats a path as still its own there.
 #[cfg(unix)]
 type Identity = (u64, u64);
 #[cfg(not(unix))]
@@ -54,6 +54,13 @@ fn directory_identity(path: &Path) -> Option<Identity> {
 /// drop re-reads it: a path another process has since emptied and refilled,
 /// or replaced with a symlink, is left alone. So a fixture never deletes a
 /// directory it did not create. The path derefs to `&Path`.
+///
+/// Off Unix the drop removes nothing. `std` has no stable way to read a
+/// directory's identity there (`std::os::windows::fs::MetadataExt::file_index`
+/// is unstable), so the drop cannot tell the claimed directory from one that
+/// replaced it, and recursively deleting an unowned tree is worse than a
+/// leaked scratch directory. The claimed directory stays in the temp
+/// directory for the OS or the user to clear.
 struct ScratchRoot {
     path: PathBuf,
     identity: Identity,
@@ -71,6 +78,20 @@ impl ScratchRoot {
         })?;
         Ok(Self { path, identity })
     }
+
+    /// Whether the entry at the path is still the directory this guard created.
+    /// Always `false` off Unix, where that cannot be established.
+    fn still_claimed(&self) -> bool {
+        #[cfg(unix)]
+        {
+            directory_identity(&self.path) == Some(self.identity)
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = self.identity;
+            false
+        }
+    }
 }
 
 impl std::ops::Deref for ScratchRoot {
@@ -83,7 +104,7 @@ impl std::ops::Deref for ScratchRoot {
 
 impl Drop for ScratchRoot {
     fn drop(&mut self) {
-        if directory_identity(&self.path) == Some(self.identity) {
+        if self.still_claimed() {
             let _ = std::fs::remove_dir_all(&self.path);
         }
     }
@@ -963,6 +984,7 @@ fn fixture_cleanup_deletes_only_the_directory_it_claimed() {
 
 /// The claimed directory itself is removed with everything the fixture put in
 /// it, so an owned root does not leak into the shared temp directory.
+#[cfg(unix)]
 #[test]
 fn fixture_cleanup_removes_the_directory_it_claimed() {
     let home = claim_scratch_root("pack-format-owned");
@@ -973,4 +995,23 @@ fn fixture_cleanup_removes_the_directory_it_claimed() {
     drop(home);
 
     assert!(!path.exists(), "an owned root was left behind");
+}
+
+/// Off Unix the claim cannot be proved still ours, so the cleanup fails closed:
+/// the claimed directory stays in the temp directory rather than risk deleting
+/// a replacement. The test removes it by hand.
+#[cfg(not(unix))]
+#[test]
+fn fixture_cleanup_leaves_the_directory_it_claimed_where_ownership_is_unprovable() {
+    let home = claim_scratch_root("pack-format-owned");
+    let path = home.to_path_buf();
+
+    drop(home);
+
+    let left_behind = path.is_dir();
+    let _ = std::fs::remove_dir_all(&path);
+    assert!(
+        left_behind,
+        "cleanup removed a directory it cannot prove it owns"
+    );
 }
