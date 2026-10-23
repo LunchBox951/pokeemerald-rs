@@ -6,6 +6,7 @@
 use std::path::Path;
 
 use super::bag::{fixed_ids, icon_ids};
+use super::battle_interface::pack_ids as battle_interface_pack_ids;
 use super::opening_scene::pack_ids as opening_scene_pack_ids;
 use super::sprites::{FIRST_GENERIC_NPC_PALETTE, LAST_GENERIC_NPC_PALETTE};
 use super::starter_chooser::pack_ids as chooser_pack_ids;
@@ -624,4 +625,10 @@ pub(crate) fn starter_chooser_ids() -> Vec<String> {
 /// palettes, and three tilemaps.
 pub(crate) fn opening_scene_ids() -> Vec<String> {
     opening_scene_pack_ids()
+}
+
+/// Every `battle-interface/` pack id extraction emits: the textbox sheet,
+/// its three palettes, and the textbox tilemap.
+pub(crate) fn battle_interface_ids() -> Vec<String> {
+    battle_interface_pack_ids()
 }

@@ -118,6 +118,9 @@ fn symbol_fragments(id: &str) -> Vec<String> {
         }
         return vec![format!("TextWindowFrame{stem}_Gfx")];
     }
+    if id == "battle-interface/image/textbox" {
+        return vec!["gBattleTextboxTiles".to_owned()];
+    }
     Vec::new()
 }
 
@@ -392,6 +395,10 @@ mod tests {
         assert_eq!(
             symbol_fragments("text-window/image/message_box"),
             ["gMessageBox_Gfx"]
+        );
+        assert_eq!(
+            symbol_fragments("battle-interface/image/textbox"),
+            ["gBattleTextboxTiles"]
         );
         // No convention asserts nothing; `symbol_contains` then accepts any symbol.
         assert!(symbol_fragments("tileset/general/anim/water/0").is_empty());
