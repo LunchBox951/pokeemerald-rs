@@ -100,20 +100,26 @@ impl OverworldPhase {
             return;
         };
         let player_trainer_id = u32::from_le_bytes(self.save2.player_trainer_id);
-        // `PickWildMonNature` consults party slot 0, which is not the battle lead when it is
+        // `CreateWildMon` consults party slot 0, which is not the battle lead when it is
         // fainted; an unsaved party (count 0) has the live lead as its whole party.
         let stored = usize::from(self.save1.player_party_count).min(self.save1.player_party.len());
-        let synchronize_nature = if stored == 0 {
-            (lead.ability() == assets::AbilityId::SYNCHRONIZE).then(|| lead.nature())
+        let dex = Dex::new();
+        let (synchronize_nature, cute_charm_gender) = if stored == 0 {
+            (
+                (lead.ability() == assets::AbilityId::SYNCHRONIZE).then(|| lead.nature()),
+                crate::party::live_lead_cute_charm_wild_gender(&dex, &lead),
+            )
         } else {
-            crate::party::slot_zero_synchronize_nature(
-                &Dex::new(),
-                &self.save1.player_party[..stored],
+            let saved_party = &self.save1.player_party[..stored];
+            (
+                crate::party::slot_zero_synchronize_nature(&dex, saved_party),
+                crate::party::slot_zero_cute_charm_wild_gender(&dex, saved_party),
             )
         };
-        match wild_encounter::start_wild_battle_with_synchronize(
+        match wild_encounter::start_wild_battle_with_lead_effects(
             lead,
             synchronize_nature,
+            cute_charm_gender,
             encounter,
             player_trainer_id,
             &mut self.rng,

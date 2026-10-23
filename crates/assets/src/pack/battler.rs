@@ -3,8 +3,7 @@
 //!
 //! Pack IDs stay private; [`AssetPack::species_battler`] validates each requested pair.
 
-use super::starter_chooser::PalettedImage;
-use super::{AssetPack, PackError};
+use super::{AssetPack, PackError, PalettedImage};
 use crate::SpeciesId;
 
 /// One mon-picture frame (`include/constants/pokemon.h:262-264`).
