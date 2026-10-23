@@ -627,4 +627,39 @@ fn a_symlinked_output_is_refused() {
     );
 }
 
+/// The hook lands the swap a concurrent writer would: the checked file is
+/// carried away and a regular file of the same name takes its place, after the
+/// pre-open check and before the open.
+#[cfg(any(unix, windows))]
+fn swap_in_a_regular_map(tree: &Path) {
+    fs::rename(tree.join(MAP_FILE), tree.join("carried-away.map")).unwrap();
+    fs::write(tree.join(MAP_FILE), "  0x08000000  gForged\n").unwrap();
+}
+
+#[test]
+#[cfg(any(unix, windows))]
+fn a_regular_output_swapped_for_another_before_the_open_is_refused() {
+    let tree = temp_dir("swapped-regular-output");
+    fs::write(tree.join(MAP_FILE), "  0x08000000  gStart\n").unwrap();
+    let err = open_output_between(&tree, MAP_FILE, || swap_in_a_regular_map(&tree)).unwrap_err();
+    assert!(
+        matches!(&err, RomBuildError::InvalidOutput { file, reason }
+            if *file == MAP_FILE && reason == "replaced while it was being opened"),
+        "{err}"
+    );
+    let _ = fs::remove_dir_all(&tree);
+}
+
+#[test]
+#[cfg(any(unix, windows))]
+fn an_unswapped_regular_output_opens_and_reads_back() {
+    let tree = temp_dir("unswapped-regular-output");
+    fs::write(tree.join(MAP_FILE), "  0x08000000  gStart\n").unwrap();
+    let mut file = open_output_between(&tree, MAP_FILE, || {}).unwrap();
+    let mut text = String::new();
+    file.read_to_string(&mut text).unwrap();
+    assert_eq!(text, "  0x08000000  gStart\n");
+    let _ = fs::remove_dir_all(&tree);
+}
+
 mod checkout_reading;
