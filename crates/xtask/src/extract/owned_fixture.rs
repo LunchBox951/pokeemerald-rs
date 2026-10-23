@@ -19,6 +19,31 @@ const ATTEMPTS: u64 = 64;
 #[derive(Debug)]
 pub(crate) struct OwnedDir {
     path: PathBuf,
+    identity: Identity,
+}
+
+/// What `mkdir` created: on Unix its device and inode, elsewhere only the
+/// fact that it was a real (non-symlink) directory.
+#[derive(Debug, PartialEq, Eq)]
+struct Identity(Option<(u64, u64)>);
+
+impl Identity {
+    /// The identity of the real directory at `path`, or `None` when `path` is
+    /// absent, a symlink or not a directory.
+    fn of(path: &Path) -> Option<Self> {
+        let metadata = std::fs::symlink_metadata(path).ok()?;
+        if !metadata.file_type().is_dir() {
+            return None;
+        }
+        #[cfg(unix)]
+        let ids = {
+            use std::os::unix::fs::MetadataExt as _;
+            Some((metadata.dev(), metadata.ino()))
+        };
+        #[cfg(not(unix))]
+        let ids = None;
+        Some(Self(ids))
+    }
 }
 
 impl OwnedDir {
@@ -63,8 +88,15 @@ impl OwnedDir {
         #[cfg(unix)]
         std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
         builder.create(path)?;
+        let identity = Identity::of(path).ok_or_else(|| {
+            io::Error::other(format!(
+                "{} was replaced right after it was created",
+                path.display()
+            ))
+        })?;
         Ok(Self {
             path: path.to_path_buf(),
+            identity,
         })
     }
 
@@ -74,8 +106,17 @@ impl OwnedDir {
 }
 
 impl Drop for OwnedDir {
+    /// Removes the tree only while the path still names the directory `mkdir`
+    /// created; a replacement (symlink or another directory) is left alone.
+    ///
+    /// Still exposed: a same-user process that swaps the path between this
+    /// check and the removal, and fixture writes that go through `path()`
+    /// after a swap. A test fixture in a private temp name accepts both; the
+    /// check bounds the damage to a swap landing inside that window.
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.path);
+        if Identity::of(&self.path).as_ref() == Some(&self.identity) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
     }
 }
 
@@ -191,5 +232,41 @@ mod tests {
             .permissions()
             .mode();
         assert_eq!(mode & 0o077, 0, "mode {mode:o}");
+    }
+
+    #[test]
+    fn drop_removes_only_the_claimed_tree_after_a_post_claim_replacement() {
+        let base = private_base("swap");
+        let claimed = OwnedDir::create_in(base.path(), "fx").unwrap();
+        std::fs::write(claimed.path().join("charmap.txt"), "fixture").unwrap();
+        let path = claimed.path().to_path_buf();
+        let aside = base.path().join("aside");
+        std::fs::rename(&path, &aside).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        std::fs::write(path.join("sentinel"), "precious").unwrap();
+        drop(claimed);
+        assert_eq!(
+            std::fs::read(path.join("sentinel")).ok().as_deref(),
+            Some(&b"precious"[..]),
+            "drop deleted the replacement it never claimed"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn drop_does_not_follow_a_symlink_swapped_in_after_the_claim() {
+        let base = private_base("swap-link");
+        let victim = private_base("swap-link-victim");
+        std::fs::write(victim.path().join("sentinel"), "precious").unwrap();
+        let claimed = OwnedDir::create_in(base.path(), "fx").unwrap();
+        let path = claimed.path().to_path_buf();
+        std::fs::remove_dir(&path).unwrap();
+        std::os::unix::fs::symlink(victim.path(), &path).unwrap();
+        drop(claimed);
+        assert_eq!(
+            std::fs::read(victim.path().join("sentinel")).unwrap(),
+            b"precious"
+        );
+        assert!(path.is_symlink());
     }
 }
