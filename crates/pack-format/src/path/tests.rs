@@ -18,6 +18,25 @@ use super::{
 };
 use crate::layout::OUTPUT_RELATIVE_PATH;
 
+/// Claims a fresh, empty scratch directory under the temp dir and returns it.
+///
+/// The name is `<prefix>-<pid>-<attempt>` and is taken with `create_dir`,
+/// which fails if anything already occupies it. An occupied name (a leftover
+/// from a process that reused this PID, or something planted in a shared
+/// `/tmp`) moves on to the next attempt and is never removed or entered, so a
+/// fixture only ever deletes a directory it created itself.
+fn claim_scratch_root(prefix: &str) -> PathBuf {
+    for attempt in 0.. {
+        let root = std::env::temp_dir().join(format!("{prefix}-{}-{attempt}", std::process::id()));
+        match std::fs::create_dir(&root) {
+            Ok(()) => return root,
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(err) => panic!("claim scratch root {}: {err}", root.display()),
+        }
+    }
+    unreachable!()
+}
+
 /// The one seam the table-driven cases call the shared resolver through, so
 /// a change to [`data_dir_for`]'s signature touches this line alone.
 fn data_dir(env: &impl Fn(&str) -> Option<OsString>, family: HostFamily) -> Option<PathBuf> {
@@ -433,8 +452,7 @@ fn the_default_path_is_the_repo_path_in_a_plain_developer_checkout() {
 fn the_developer_checkout_guard_agrees_with_resolution_about_an_unreadable_user_pack() {
     use super::probe;
 
-    let home = std::env::temp_dir().join(format!("pack-format-guard-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&home);
+    let home = claim_scratch_root("pack-format-guard");
     let app = home.join(".local").join("share").join("pokeemerald-rs");
     std::fs::create_dir_all(&app).expect("scratch directories");
     // A self-referential symlink where the pack file goes: `metadata` fails
@@ -528,9 +546,7 @@ fn a_missing_candidate_still_advances_to_the_next_rung() {
 fn the_real_probe_separates_absent_from_unreadable_and_finds_a_file() {
     use super::{probe, Probe};
 
-    let dir = std::env::temp_dir().join(format!("pack-format-probe-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("scratch directory");
+    let dir = claim_scratch_root("pack-format-probe");
 
     let file = dir.join("pokeemerald.pack");
     std::fs::write(&file, b"not really a pack").expect("the candidate writes");
@@ -551,8 +567,7 @@ fn the_real_probe_reports_a_pack_behind_an_unsearchable_directory_as_unreadable(
 
     use super::{probe, Probe};
 
-    let root = std::env::temp_dir().join(format!("pack-format-noaccess-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
+    let root = claim_scratch_root("pack-format-noaccess");
     let inner = root.join("pokeemerald-rs");
     std::fs::create_dir_all(&inner).expect("scratch directories");
     let pack = inner.join("pokeemerald.pack");
@@ -587,9 +602,7 @@ fn the_real_probe_reports_a_pack_behind_an_unsearchable_directory_as_unreadable(
 fn the_real_probe_reports_a_candidate_under_a_regular_file_as_missing() {
     use super::{probe, Probe};
 
-    let root = std::env::temp_dir().join(format!("pack-format-notdir-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(&root).expect("scratch directory");
+    let root = claim_scratch_root("pack-format-notdir");
 
     // `$XDG_DATA_HOME/pokeemerald-rs` is a regular file, not this
     // project's data directory.
@@ -616,10 +629,7 @@ fn the_real_probe_reports_a_candidate_under_a_regular_file_as_missing() {
 fn a_regular_file_at_the_user_data_rung_advances_resolution_to_a_valid_later_rung() {
     use super::{probe, HOST_RULE};
 
-    let root =
-        std::env::temp_dir().join(format!("pack-format-resolve-notdir-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(&root).expect("scratch directory");
+    let root = claim_scratch_root("pack-format-resolve-notdir");
 
     // Stands in for the user-data directory: a regular file, not a
     // directory, so no candidate can exist beneath it under any convention.
@@ -822,5 +832,50 @@ fn a_volume_guid_appdata_is_an_absolute_windows_root() {
             HostFamily::Windows
         ),
         Some(PathBuf::from(root))
+    );
+}
+
+/// An occupied scratch name is skipped, not cleared: the claim lands on a
+/// different, empty directory and the occupant keeps everything it held.
+#[test]
+fn claiming_a_scratch_root_never_disturbs_a_directory_already_at_that_name() {
+    let occupied = claim_scratch_root("pack-format-claim");
+    let sentinel = occupied.join("someone-elses-file");
+    std::fs::write(&sentinel, b"keep me").expect("the occupant's file writes");
+
+    // Plant at the old predictable name too, which the fixtures used to
+    // empty before using it.
+    let legacy = std::env::temp_dir().join(format!("pack-format-probe-{}", std::process::id()));
+    let legacy_owned = std::fs::create_dir(&legacy).is_ok();
+    let legacy_sentinel = legacy.join("someone-elses-file");
+    if legacy_owned {
+        std::fs::write(&legacy_sentinel, b"keep me").expect("the legacy file writes");
+    }
+    the_real_probe_separates_absent_from_unreadable_and_finds_a_file();
+    let legacy_survived = !legacy_owned || legacy_sentinel.exists();
+
+    let second = claim_scratch_root("pack-format-claim");
+    let second_entries = std::fs::read_dir(&second).expect("the claim lists").count();
+    let kept = std::fs::read(&sentinel);
+
+    let _ = std::fs::remove_dir_all(&second);
+    let _ = std::fs::remove_dir_all(&occupied);
+    if legacy_owned {
+        let _ = std::fs::remove_dir_all(&legacy);
+    }
+
+    assert_ne!(
+        second, occupied,
+        "an occupied name must not be claimed again"
+    );
+    assert_eq!(second_entries, 0, "a claimed root starts empty");
+    assert_eq!(
+        kept.expect("the occupant's file survives"),
+        b"keep me",
+        "claiming must not touch what is already there"
+    );
+    assert!(
+        legacy_survived,
+        "a fixture emptied the old predictable path"
     );
 }
