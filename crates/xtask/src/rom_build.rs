@@ -524,7 +524,7 @@ const O_NONBLOCK: Option<i32> = if cfg!(all(
 /// The opened handle is compared with the object the pre-open check saw: by
 /// device and inode on Unix, and on Windows by the volume and file ID of a
 /// witness handle opened (asking for no access, not following a final
-/// symlink) before the real open.
+/// symlink) as the pre-open check itself, before the real open.
 fn open_output(tree: &Path, name: &'static str) -> Result<std::fs::File, RomBuildError> {
     open_output_between(tree, name, || {})
 }
@@ -539,33 +539,28 @@ fn open_output_between(
 ) -> Result<std::fs::File, RomBuildError> {
     let invalid = |reason: String| RomBuildError::InvalidOutput { file: name, reason };
     let path = tree.join(name);
-    let before = match std::fs::symlink_metadata(&path) {
-        Ok(metadata) => metadata,
-        Err(err) if err.kind() == ErrorKind::NotFound => {
-            return Err(RomBuildError::MissingOutput(name.to_owned()));
+    let unreadable = |err: std::io::Error| {
+        if err.kind() == ErrorKind::NotFound {
+            RomBuildError::MissingOutput(name.to_owned())
+        } else {
+            invalid(err.to_string())
         }
-        Err(err) => return Err(invalid(err.to_string())),
     };
+    // Windows has no inode on the metadata, so the pre-open check is itself
+    // made on a witness handle: the object it refers to is pinned from the
+    // first look, and every later replacement is compared against it.
+    #[cfg(windows)]
+    let witness = open_without_access(&path).map_err(unreadable)?;
+    #[cfg(windows)]
+    let before = witness.metadata().map_err(|err| invalid(err.to_string()))?;
+    #[cfg(not(windows))]
+    let before = std::fs::symlink_metadata(&path).map_err(unreadable)?;
     if !before.file_type().is_file() {
         return Err(invalid(format!(
             "not a regular file ({:?})",
             before.file_type()
         )));
     }
-    // Windows has no inode on the metadata, so the object the check refers to
-    // is pinned by a handle: the same regular-file check, made on the handle.
-    #[cfg(windows)]
-    let witness = {
-        let witness = open_without_access(&path).map_err(|err| invalid(err.to_string()))?;
-        let found = witness.metadata().map_err(|err| invalid(err.to_string()))?;
-        if !found.file_type().is_file() {
-            return Err(invalid(format!(
-                "not a regular file ({:?})",
-                found.file_type()
-            )));
-        }
-        witness
-    };
     between();
     let mut options = std::fs::OpenOptions::new();
     options.read(true);
