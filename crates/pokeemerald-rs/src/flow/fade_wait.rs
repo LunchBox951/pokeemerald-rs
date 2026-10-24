@@ -22,6 +22,11 @@ use crate::main_menu::{MainMenuItem, MainMenuScene};
 /// alongside the fade whose palettes recompose its last tick toward white.
 pub(crate) struct TitleFadeWait {
     title: Box<AnimatedTitle>,
+    /// The cloud-scroll clock, frozen at the last frame before the confirming press: upstream's
+    /// confirm branch skips the background counter update (`title_screen.c:782-787, :805-814`),
+    /// while [`AnimatedTitle::tick`] (the sprite clock) takes that frame's `AnimateSprites`
+    /// step (`title_screen.c:675-681`) before freezing for the rest of the fade.
+    background_tick: u32,
     fade: NormalPaletteFade,
 }
 
@@ -61,13 +66,28 @@ fn faded_frame(source: &Framebuffer, fade: &NormalPaletteFade) -> Box<Frame> {
     to_platform_frame(&faded)
 }
 
-/// The retained title at its frozen tick, recomposed from `fade`'s palettes.
-fn faded_title_frame(title: &AnimatedTitle, fade: &NormalPaletteFade) -> Box<Frame> {
-    to_platform_frame(
-        &title
-            .scene
-            .compose_with_palette(title.tick, fade.palette_stage()),
-    )
+/// The background clock of the confirming press frame, given the sprite clock `tick` already
+/// advanced for it: one step behind, because `Task_TitleScreenPhase3`'s confirm branch skips
+/// the cloud counter update while `MainCB2` still animates the sprites
+/// (`title_screen.c:675-681, :782-787, :805-814`). A press on the very first frame
+/// (`tick == 0`, nothing presented yet) wraps to the pre-Phase3 clock, whose scroll is 0 --
+/// the same offset as frame 0.
+pub(super) const fn confirm_background_tick(tick: u32) -> u32 {
+    tick.wrapping_sub(1)
+}
+
+/// The retained title recomposed from `fade`'s palettes: clouds at `background_tick`, sprites
+/// at the title's own frozen tick.
+fn faded_title_frame(
+    title: &AnimatedTitle,
+    background_tick: u32,
+    fade: &NormalPaletteFade,
+) -> Box<Frame> {
+    to_platform_frame(&title.scene.compose_split_with_palette(
+        background_tick,
+        title.tick,
+        fade.palette_stage(),
+    ))
 }
 
 /// The retained menu recomposed from `fade`'s palettes.
@@ -89,10 +109,17 @@ pub(super) fn advance_title(
     title.presented = true;
 
     if title_advance_pressed(buttons) {
+        // The sprite clock above has already taken this frame's `AnimateSprites` step; the
+        // clouds keep the previous frame's offset (`confirm_background_tick`).
+        let background_tick = confirm_background_tick(title.tick);
         let fade = begin_on_press_frame(PaletteFadeTarget::White);
-        let frame = faded_title_frame(&title, &fade);
+        let frame = faded_title_frame(&title, background_tick, &fade);
         return (
-            AppScene::TitleFadeWait(Box::new(TitleFadeWait { title, fade })),
+            AppScene::TitleFadeWait(Box::new(TitleFadeWait {
+                title,
+                background_tick,
+                fade,
+            })),
             frame,
         );
     }
@@ -113,11 +140,15 @@ pub(super) fn advance_title_fade_wait(
         if let Some(result) = title_to_main_menu(pack_source, save_slot) {
             return result;
         }
-        let frame = to_platform_frame(&wait.title.scene.compose(wait.title.tick));
+        let frame = to_platform_frame(&wait.title.scene.compose_split_with_palette(
+            wait.background_tick,
+            wait.title.tick,
+            rendering::PaletteStage::default(),
+        ));
         return (AppScene::Title(wait.title), frame);
     }
     wait.fade.update();
-    let frame = faded_title_frame(&wait.title, &wait.fade);
+    let frame = faded_title_frame(&wait.title, wait.background_tick, &wait.fade);
     (AppScene::TitleFadeWait(wait), frame)
 }
 
