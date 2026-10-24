@@ -327,3 +327,47 @@ fn reading_the_push_mark_never_waits_on_a_producer_holding_the_lock() {
     mark.join().unwrap().ok();
     assert_eq!(result, Ok(2), "the mark is read while the lock is held");
 }
+
+#[test]
+fn a_mark_narrows_a_pending_first_read_discard_to_what_preceded_it() {
+    let (producer, mut consumer) = ring_buffer(8);
+    // Nothing pending: a mark is a no-op and the queue reads through.
+    assert_eq!(producer.push(&[0.25; 2]), 2);
+    producer.keep_pushed_from_at_first_read(producer.pushed());
+    let mut out = [0.0; 2];
+    consumer.fill(&mut out);
+    assert_eq!(out, [0.25; 2]);
+
+    assert_eq!(producer.push(&[0.25; 3]), 3);
+    consumer.discard_queued_at_first_read();
+    let mark = producer.pushed();
+    producer.keep_pushed_from_at_first_read(mark);
+    assert_eq!(producer.push(&[0.5; 2]), 2);
+    // A later mark does not widen what the first one keeps.
+    producer.keep_pushed_from_at_first_read(producer.pushed());
+    assert_eq!(producer.push(&[0.75; 1]), 1);
+
+    let mut out = [0.0; 4];
+    consumer.fill(&mut out);
+    assert_eq!(out, [0.5, 0.5, 0.75, 0.0]);
+    assert_eq!(consumer.underruns(), 1, "only the read shortfall counts");
+
+    // Without a mark the pending discard still drops everything queued.
+    assert_eq!(producer.push(&[0.25; 2]), 2);
+    consumer.discard_queued_at_first_read();
+    let mut out = [0.0; 1];
+    consumer.fill(&mut out);
+    assert_eq!(out, [0.0]);
+}
+
+#[test]
+fn a_reclaimed_consumer_does_not_inherit_a_pending_discard() {
+    let (producer, mut consumer) = ring_buffer(4);
+    consumer.discard_queued_at_first_read();
+    drop(consumer);
+    assert_eq!(producer.push(&[0.5; 2]), 2);
+    let mut consumer = producer.reclaim_consumer().expect("consumer was dropped");
+    let mut out = [0.0; 2];
+    consumer.fill(&mut out);
+    assert_eq!(out, [0.5; 2]);
+}

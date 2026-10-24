@@ -59,7 +59,18 @@ struct Shared {
     /// Whether a [`Consumer`] currently exists. Lets a replacement consumer be
     /// claimed after the previous one is dropped with its device stream.
     consumer_alive: AtomicBool,
+    /// The discard the consumer's next read applies: [`NO_DISCARD`],
+    /// [`DISCARD_ALL`], or a [`Producer::pushed`] mark before which queued
+    /// samples are dropped. Shared so a producer-side `stop` can bound a
+    /// discard the consumer, already moved into a device callback, still
+    /// holds.
+    pending_discard: AtomicU64,
 }
+
+/// [`Shared::pending_discard`]: nothing to drop at the next read.
+const NO_DISCARD: u64 = u64::MAX;
+/// [`Shared::pending_discard`]: drop everything queued at the next read.
+const DISCARD_ALL: u64 = u64::MAX - 1;
 
 /// Lock `head`, recovering from poisoning rather than propagating a panic.
 ///
@@ -88,16 +99,13 @@ pub fn ring_buffer(capacity: usize) -> (Producer, Consumer) {
         underruns: AtomicU64::new(0),
         pushed: AtomicU64::new(0),
         consumer_alive: AtomicBool::new(true),
+        pending_discard: AtomicU64::new(NO_DISCARD),
     });
     (
         Producer {
             shared: Arc::clone(&shared),
         },
-        Consumer {
-            shared,
-            tail: 0,
-            discard_pending: false,
-        },
+        Consumer { shared, tail: 0 },
     )
 }
 
@@ -136,16 +144,18 @@ impl Producer {
         }
         if n > 0 {
             *head = (*head + n) % self.shared.capacity;
-            // Release: publishes the slot stores above to the consumer's
-            // `Acquire` load of `occupied`.
-            self.shared.occupied.fetch_add(n, Ordering::Release);
-            // Relaxed: only ever written while `head` is held, and a reader
+            // Counted before `occupied` publishes the samples, so a consumer
+            // that sees them queued also sees them counted. Otherwise
+            // relaxed: only ever written while `head` is held, and a reader
             // without it needs only some value this counter has held.
             let pushed = self.shared.pushed.load(Ordering::Relaxed);
             self.shared.pushed.store(
                 pushed.wrapping_add(u64::try_from(n).unwrap_or(u64::MAX)),
                 Ordering::Relaxed,
             );
+            // Release: publishes the slot stores and the count above to the
+            // consumer's `Acquire` load of `occupied`.
+            self.shared.occupied.fetch_add(n, Ordering::Release);
         }
         n
     }
@@ -161,6 +171,19 @@ impl Producer {
     /// either way the mark falls between whole pushes.
     pub(crate) fn pushed(&self) -> u64 {
         self.shared.pushed.load(Ordering::Relaxed)
+    }
+
+    /// Narrow a pending [`Consumer::discard_queued_at_first_read`] to the
+    /// samples pushed before `mark`, so what is pushed after it survives
+    /// that read. Does nothing once the read has happened, when nothing is
+    /// pending, or when an earlier mark already bounds it. Lock-free.
+    pub(crate) fn keep_pushed_from_at_first_read(&self, mark: u64) {
+        let _ = self.shared.pending_discard.compare_exchange(
+            DISCARD_ALL,
+            mark.min(DISCARD_ALL - 1),
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
     }
 
     /// Total samples this ring holds, fixed when it was created.
@@ -213,10 +236,13 @@ impl Producer {
         } else {
             (*head + capacity - occupied) % capacity
         };
+        // A discard left by the previous consumer was for its stream.
+        self.shared
+            .pending_discard
+            .store(NO_DISCARD, Ordering::Release);
         Some(Consumer {
             shared: Arc::clone(&self.shared),
             tail,
-            discard_pending: false,
         })
     }
 }
@@ -233,9 +259,6 @@ pub struct Consumer {
     /// This consumer's own read index (`< capacity`). Touched by no one
     /// else, ever — see the module docs' "Invariants" section.
     tail: usize,
-    /// Set by [`Consumer::discard_queued_at_first_read`]: the next read
-    /// drops whatever is queued at that moment before reading.
-    discard_pending: bool,
 }
 
 impl Consumer {
@@ -355,18 +378,43 @@ impl Consumer {
     /// Lock-free, so it holds once the consumer has moved into a device
     /// callback: everything the producer pushed before the stream's first
     /// callback is dropped there, however long the stream took to build.
+    /// [`Producer::keep_pushed_from_at_first_read`] can narrow it before
+    /// that read.
     pub(crate) fn discard_queued_at_first_read(&mut self) {
-        self.discard_pending = true;
+        self.shared
+            .pending_discard
+            .store(DISCARD_ALL, Ordering::Release);
     }
 
     fn settle_pending_discard(&mut self) {
-        if !std::mem::take(&mut self.discard_pending) {
+        if self.shared.pending_discard.load(Ordering::Acquire) == NO_DISCARD {
             return;
         }
-        // Acquire: synchronizes-with the producer's `Release` `fetch_add`.
-        // Only this consumer ever lowers `occupied`, so these slots stay
-        // queued until the `fetch_sub` below frees them.
-        let queued = self.shared.occupied.load(Ordering::Acquire);
+        let pending = self
+            .shared
+            .pending_discard
+            .swap(NO_DISCARD, Ordering::AcqRel);
+        // Acquire: synchronizes-with the producer's `Release` `fetch_add`,
+        // which follows its `pushed` update, so every sample counted here
+        // as queued is also counted as pushed. Only this consumer ever
+        // lowers `occupied`, so these slots stay queued until the
+        // `fetch_sub` below frees them.
+        let mut queued = self.shared.occupied.load(Ordering::Acquire);
+        match pending {
+            NO_DISCARD => return,
+            DISCARD_ALL => {}
+            mark => {
+                // A push landing between these loads is counted as pushed
+                // since the mark but not as queued, so this errs toward
+                // keeping a sample, never toward dropping one after `mark`.
+                let since = self
+                    .shared
+                    .pushed
+                    .load(Ordering::Relaxed)
+                    .wrapping_sub(mark);
+                queued -= queued.min(usize::try_from(since).unwrap_or(usize::MAX));
+            }
+        }
         if queued == 0 {
             return;
         }

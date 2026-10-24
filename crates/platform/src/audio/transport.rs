@@ -39,7 +39,8 @@
 //!   only what was queued before that `stop` is history: what the producer
 //!   queues after it is a stopped queue. A stream that starts as it
 //!   attaches also drops, at its first callback, what the producer queued
-//!   while it was being built; a `start` or `stop` that lands during that
+//!   while it was being built, keeping what follows a `stop` that lands
+//!   before that callback; a `start` or `stop` that lands during that
 //!   build has the re-attaching stream built again for the new intent. A
 //!   queue left while stopped is kept for the next `start`. The first
 //!   attach keeps the queue: that is the producer's startup prefill,
@@ -169,7 +170,12 @@ impl Shared {
             self.starts.fetch_add(1, Ordering::Relaxed);
         }
         if !running && was_running {
-            self.stopped_at.store(producer.pushed(), Ordering::Relaxed);
+            let mark = producer.pushed();
+            self.stopped_at.store(mark, Ordering::Relaxed);
+            // A started stream that has not read yet still holds its
+            // first-read discard; what is queued after this stop is a
+            // stopped queue that discard must keep.
+            producer.keep_pushed_from_at_first_read(mark);
         }
         // Release: a worker that reads this stop also reads its mark.
         self.running.store(running, Ordering::Release);

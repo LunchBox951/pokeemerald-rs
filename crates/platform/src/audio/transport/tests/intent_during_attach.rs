@@ -172,3 +172,35 @@ fn a_start_and_stop_while_a_stopped_reattach_builds_discard_the_history() {
         "a start held while the stream was built makes the earlier queue history"
     );
 }
+
+#[test]
+fn a_stop_after_a_started_reattach_but_before_its_first_callback_keeps_the_stopped_queue() {
+    let w = world(|w| w.default = Some("a".into()));
+    let mut rig = rig(&w, 4);
+    rig.shared.set_running(true, &rig.producer);
+    rig.transport.step(Duration::ZERO);
+    raise_error(&w, 0, cpal::ErrorKind::DeviceNotAvailable);
+    rig.transport.step(MS(20));
+    // The started retry attaches and plays, holding its first-read discard
+    // for what queued while it was built.
+    let now = rig.transport.step(MS(120));
+    assert_eq!(rig.shared.state(), TransportState::Ready);
+    assert_eq!(rig.producer.push(&[0.25; 2]), 2, "history from the build");
+
+    // `stop` lands before the stream's first callback, the pause succeeds,
+    // and the producer queues a prefill for the next start.
+    rig.shared.set_running(false, &rig.producer);
+    let now = rig.transport.step(now);
+    let pauses = with(&w).pauses;
+    assert_eq!(pauses, 1);
+    assert_eq!(rig.producer.push(&[0.5; 4]), 4);
+
+    rig.shared.set_running(true, &rig.producer);
+    rig.transport.step(now);
+    let last = with(&w).streams.len() - 1;
+    let out = run_data_callback::<f32>(&w, last, 8);
+    assert!(
+        out[..4] == [0.5; 4] && !out.contains(&0.25),
+        "the prefill queued after the stop plays at the next start: {out:?}"
+    );
+}
