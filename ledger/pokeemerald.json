@@ -29965,7 +29965,7 @@
           "status": "stubbed"
         },
         "TrySpawnObjectEvents": {
-          "reason": "The in-range rectangle that decides whether a template spawns, rewritten as engine::overworld::object_event_is_in_view (issue #161 review): transcribed in upstream's own two coordinate spaces (the window around gSaveBlock1Ptr->pos, each candidate tested as template->{x,y} + MAP_OFFSET), which reduces to player.x - 9 ..= player.x + 10 by player.y - 7 ..= player.y + 9. RemoveObjectEventIfOutsideView spells the same bounds as the despawn test. Consumed by the NPC render path (crate::overworld::npc::oam_entries) only, and load-bearing there rather than an optimization: the GBA OAM y field is 8 bits, so without this gate an object event exactly 16 metatiles away wraps onto the player's own screen row (MAP_LITTLEROOT_TOWN's unhideable boy at (14, 17) did). Deliberately NOT applied to the collision/interaction path, where it is unobservable -- those only ever query a tile adjacent to the player. The flag-gate half of this function stays recorded under TrySpawnObjectEventTemplate; not modelled here: the camera-radius spawn/despawn lifecycle itself, RemoveObjectEvent, and the Trainer Hill/Battle Pyramid object-count special cases.",
+          "reason": "The in-range rectangle that decides whether a template spawns, rewritten as engine::overworld::object_event::tile_is_in_view, with object_event_is_in_view applying it to a template's authored tile: transcribed in upstream's own two coordinate spaces (the window around gSaveBlock1Ptr->pos, each candidate tested as template->{x,y} + MAP_OFFSET), which reduces to player.x - 9 ..= player.x + 10 by player.y - 7 ..= player.y + 9. RemoveObjectEventIfOutsideView spells the same bounds as the despawn test. Consumed by the NPC render path (crate::overworld::npc::oam_entries) only, at each object's live tile, and load-bearing there rather than an optimization: the GBA OAM y field is 8 bits, so without this gate an object event exactly 16 metatiles away wraps onto the player's own screen row (MAP_LITTLEROOT_TOWN's unhideable boy at (14, 17) did). Deliberately NOT applied to the collision/interaction path, where it is unobservable -- those only ever query a tile adjacent to the player. The flag-gate half of this function stays recorded under TrySpawnObjectEventTemplate; not modelled here: the camera-radius spawn/despawn lifecycle itself, RemoveObjectEvent, and the Trainer Hill/Battle Pyramid object-count special cases.",
           "rust_target": "crates/engine/src/overworld/object_event.rs",
           "spec": "I-3",
           "status": "stubbed"
@@ -30692,6 +30692,12 @@
     },
     "src/item_menu.c": {
       "artifacts": {
+        "bag_menu_screen": {
+          "reason": "BagScreen composes the bag over a supplied field or battle frame: screen tilemap, per-pocket bag picture and indicator squares (item_menu.c:1407-1414), pocket name (item_menu.c:2408-2420), the eight-row list with numbered TM/HM/berry labels and quantities (item_menu.c:896-922, 946-990), the selected icon and description (item_menu.c:994-1011), and the context-choice windows (item_menu.c:452-489). It hands input to the engine BagMenu and returns the typed result for the host; GoToBagMenu field and battle locations (item_menu.c:560-571) differ only in selection mode and close wording. The rotating pocket-switch ball, bag animation, scroll arrows, SELECT swap, quantity prompts, and every other location remain pending. No start-menu entry or battle caller opens the screen yet; it is exercised by its own tests only.",
+          "rust_target": "crates/pokeemerald-rs/src/bag_menu.rs",
+          "spec": "C-5",
+          "status": "rewritten"
+        },
         "bag_menu_state": {
           "reason": "BagMenu models pocket browse order, retained cursor and scroll with upstream list-window rules, field/battle/fixed-pocket selection, and context-action requests; swap, quantity prompts, Wally, shop, PC, and renderer remain pending.",
           "rust_target": "crates/engine/src/bag_menu.rs",
