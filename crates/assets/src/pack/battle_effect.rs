@@ -17,7 +17,9 @@
 use std::collections::BTreeSet;
 
 use super::{AssetPack, PackError, PalettedImage};
-use crate::battle_anim::{AnimCommand, BattleAnimationCatalog, EffectSpriteId};
+use crate::battle_anim::{
+    AnimCommand, BattleAnimationCatalog, BattleAnimationProgram, EffectSpriteId,
+};
 
 /// Every battle-effect sheet is a 4bpp sprite sheet (`*.4bpp.lz` in
 /// `src/data/battle_anim.h`).
@@ -75,7 +77,7 @@ impl BattleEffectRecord {
         let sprites: BTreeSet<EffectSpriteId> = catalog
             .programs()
             .iter()
-            .flat_map(|program| program.commands())
+            .flat_map(BattleAnimationProgram::commands)
             .filter_map(|command| match command {
                 AnimCommand::LoadSpriteGfx(sprite) => Some(*sprite),
                 _ => None,
@@ -116,7 +118,7 @@ impl AssetPack {
         let record = BattleEffectRecord::new(sprite);
         let (image_id, palette_id) = (record.image_id(), record.palette_id());
         let sheet = self.image(&image_id)?;
-        let whole_tiles = |side: u32| side != 0 && side % TILE_SIDE == 0;
+        let whole_tiles = |side: u32| side != 0 && side.is_multiple_of(TILE_SIDE);
         if !whole_tiles(sheet.width) || !whole_tiles(sheet.height) {
             return Err(PackError::MalformedBattleEffectAsset {
                 id: image_id,
@@ -127,7 +129,7 @@ impl AssetPack {
             });
         }
         let colors = self.palette(&palette_id)?.color_count;
-        if colors == 0 || colors % PALETTE_BANK_COLORS != 0 {
+        if colors == 0 || !colors.is_multiple_of(PALETTE_BANK_COLORS) {
             return Err(PackError::MalformedBattleEffectAsset {
                 id: palette_id,
                 detail: format!(
