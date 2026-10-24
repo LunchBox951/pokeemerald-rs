@@ -33,7 +33,7 @@ fn a_continued_multi_member_party_preserves_trailing_slots_and_count() {
         seed.save2,
     );
     assert_eq!(resumed.save1.player_party_count, 4);
-    assert_eq!(resumed.party_lead, Some(lead));
+    assert_eq!(resumed.lead_for_test(), Some(&lead));
 
     save_from_the_start_menu(&mut resumed, &mut slot);
     let saved = slot.load();
@@ -115,7 +115,7 @@ fn a_re_saved_continued_lead_keeps_the_bytes_no_battle_model_carries() {
     );
     // Play the session, so the write under test is a real re-save rather
     // than the retained record handed back untouched.
-    let live = resumed.party_lead.as_mut().expect("the fixture has a lead");
+    let live = resumed.lead_mut_for_test().expect("the fixture has a lead");
     live.apply_damage(4);
     live.deduct_pp(0).unwrap();
     let played = live.clone();
@@ -193,8 +193,7 @@ fn a_continued_traded_lead_preserves_its_original_trainer_id() {
     );
     assert_eq!(
         resumed
-            .party_lead
-            .as_ref()
+            .lead_for_test()
             .map(battle::BattlePokemon::original_trainer_id),
         Some(TRADED_OT_ID)
     );
@@ -213,8 +212,7 @@ fn a_continued_traded_lead_preserves_its_original_trainer_id() {
     );
     assert_eq!(
         reloaded
-            .party_lead
-            .as_ref()
+            .lead_for_test()
             .map(battle::BattlePokemon::original_trainer_id),
         Some(TRADED_OT_ID)
     );
@@ -231,5 +229,5 @@ fn a_save_with_an_empty_party_resumes_with_no_lead() {
         SaveBlock1::default(),
         SaveBlock2::default(),
     );
-    assert!(resumed.party_lead.is_none());
+    assert!(resumed.lead_for_test().is_none());
 }
