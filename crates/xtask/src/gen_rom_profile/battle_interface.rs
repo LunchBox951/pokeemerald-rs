@@ -151,8 +151,10 @@ fn check_tiles(
             reason: format!("is not the importer's `{expected_id}` at this position"),
         });
     }
+    // Compared as `usize`: a pack payload may exceed `u32`, which `len32`
+    // would panic on.
     let expected = tiles * HEALTHBOX_TILE_BYTES;
-    if len32(payload) != expected {
+    if usize::try_from(expected).ok() != Some(payload.len()) {
         return Err(GenRomProfileError::StructMismatch {
             id: id.to_owned(),
             reason: format!(
@@ -173,9 +175,9 @@ fn locate_element_table(
     let ids = healthbox_table_ids();
     let mut payloads = Vec::with_capacity(ids.len());
     for (id, (expected_id, tiles)) in ids.iter().zip(HEALTHBOX_ELEMENTS) {
-        let payload = ctx.pack.raw_payload(id)?.to_vec();
-        check_tiles(id, expected_id, &payload, tiles)?;
-        payloads.push(payload);
+        let payload = ctx.pack.raw_payload(id)?;
+        check_tiles(id, expected_id, payload, tiles)?;
+        payloads.push(payload.to_vec());
     }
     let run: Vec<u8> = payloads.concat();
     let first = &ids[0];
@@ -210,10 +212,11 @@ fn locate_battle_bar(
     report: &mut Vec<ReportLine>,
 ) -> Result<BlobPlan, GenRomProfileError> {
     let id = healthbox_battle_bar_id();
-    let payload = ctx.pack.raw_payload(&id)?.to_vec();
+    let payload = ctx.pack.raw_payload(&id)?;
     let (expected_id, tiles) = HEALTHBOX_BATTLE_BAR;
-    check_tiles(&id, expected_id, &payload, tiles)?;
-    let len = len32(&payload);
+    check_tiles(&id, expected_id, payload, tiles)?;
+    let len = len32(payload);
+    let payload = payload.to_vec();
     let hits = ctx.lz77.find_all(&[payload]);
     let addr = exactly_one(&id, &hits[0])?;
     report.push(ReportLine::unique(&id, addr, len).symbol(BATTLE_BAR_SYMBOL));

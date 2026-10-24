@@ -255,6 +255,22 @@ fn a_row_boundary_moved_inside_the_run_is_refused() {
 }
 
 #[test]
+fn an_oversized_element_or_bar_payload_is_a_struct_mismatch_not_a_panic() {
+    // Zeroed allocation: the kernel maps it lazily, so no 4 GiB is touched.
+    let payload = vec![0u8; usize::try_from(u32::MAX).expect("64-bit host") + 1];
+    for (expected_id, tiles) in [
+        rom_import::HEALTHBOX_ELEMENTS[0],
+        rom_import::HEALTHBOX_BATTLE_BAR,
+    ] {
+        let err = super::check_tiles(expected_id, expected_id, &payload, tiles).unwrap_err();
+        assert!(
+            matches!(err, GenRomProfileError::StructMismatch { .. }),
+            "{expected_id}: {err}"
+        );
+    }
+}
+
+#[test]
 fn a_battle_bar_of_the_wrong_length_is_refused() {
     let (rom, mut entries) = fixture();
     let bar_id = healthbox_battle_bar_id();
