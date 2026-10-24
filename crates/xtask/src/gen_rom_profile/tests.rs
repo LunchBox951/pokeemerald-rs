@@ -89,6 +89,16 @@ pub(super) fn with_context<T>(
     entries: Vec<pack_format::PackEntry>,
     body: impl FnOnce(&Context<'_>) -> T,
 ) -> T {
+    with_indexed_context(name, rom, entries, PointerIndex::build(rom), body).0
+}
+
+pub(super) fn with_indexed_context<T>(
+    name: &str,
+    rom: &[u8],
+    entries: Vec<pack_format::PackEntry>,
+    pointers: PointerIndex,
+    body: impl FnOnce(&Context<'_>) -> T,
+) -> (T, PointerIndex) {
     let dir = scratch(name);
     let pack_path = dir.join("test.pack");
     let mut writer = PackWriter::new();
@@ -102,14 +112,14 @@ pub(super) fn with_context<T>(
         pack: &pack,
         raw: RawSearch::new(rom),
         lz77: Lz77Search::new(rom),
-        pointers: PointerIndex::build(rom),
+        pointers,
         upstream: dir.join("no-checkout"),
         bag_ids: synthetic_bag_ids(),
     };
     let out = body(&ctx);
     let _ = std::fs::remove_file(&pack_path);
     let _ = std::fs::remove_dir(&dir);
-    out
+    (out, ctx.pointers)
 }
 
 #[test]

@@ -5,7 +5,8 @@ use pack_format::{raw_entry, PackEntry};
 use rom_import::fixture::RomFixture;
 
 use super::error::GenRomProfileError;
-use super::tests::{synthetic_bag_ids, with_context};
+use super::search::PointerIndex;
+use super::tests::{synthetic_bag_ids, with_context, with_indexed_context};
 use super::{
     bag, battle_anims, battle_interface, battle_messages, battlers, fonts, inventory, layouts,
     locate_profile, opening_scene, sprites, starter_chooser, text_window, tilesets, title,
@@ -48,50 +49,79 @@ fn complete_inventory() -> Vec<PackEntry> {
 fn assert_refused(label: &str, entries: Vec<PackEntry>, missing: &str, domain: &str) {
     let rom = RomFixture::new().emerald_header().finish();
     with_context(label, &rom, entries, |ctx| {
-        let mut report = Vec::new();
-        let Err(err) = locate_profile(ctx, &mut report) else {
-            panic!("{missing} is missing; the aggregate must refuse");
-        };
-        assert!(
-            matches!(&err, GenRomProfileError::MissingPackEntry(id) if id == missing),
-            "{err:?}"
-        );
-        assert!(report.is_empty(), "{report:?}");
-
-        let err = if domain == "tilesets" {
-            tilesets::locate(ctx, &mut report).map(|_| ())
-        } else if domain == "fonts" {
-            fonts::locate(ctx, &mut report).map(|_| ())
-        } else if domain == "layouts" {
-            layouts::locate(ctx, &mut report).map(|_| ())
-        } else if domain == "sprites" {
-            sprites::locate(ctx, &mut report).map(|_| ())
-        } else if domain == "text_window" {
-            text_window::locate(ctx, &mut report).map(|_| ())
-        } else if domain == "bag" {
-            bag::locate(ctx, &mut report).map(|_| ())
-        } else if domain == "starter_chooser" {
-            starter_chooser::locate(ctx, &mut report).map(|_| ())
-        } else if domain == "opening_scene" {
-            opening_scene::locate(ctx, &mut report).map(|_| ())
-        } else if domain == "battle_interface" {
-            battle_interface::locate(ctx, &mut report).map(|_| ())
-        } else if domain == "battlers" {
-            battlers::locate(ctx, &mut report).map(|_| ())
-        } else if domain == "battle_anims" {
-            battle_anims::locate(ctx, &mut report).map(|_| ())
-        } else if domain == "battle_messages" {
-            battle_messages::locate(ctx, &mut report).map(|_| ())
-        } else {
-            title::locate(ctx, &mut report).map(|_| ())
-        }
-        .expect_err("the domain locator must refuse too");
-        assert!(
-            matches!(&err, GenRomProfileError::MissingPackEntry(id) if id == missing),
-            "{err:?}"
-        );
-        assert!(report.is_empty(), "{report:?}");
+        assert_refused_in(ctx, missing, domain);
     });
+}
+
+fn assert_refused_in(ctx: &super::Context<'_>, missing: &str, domain: &str) {
+    let mut report = Vec::new();
+    let Err(err) = locate_profile(ctx, &mut report) else {
+        panic!("{missing} is missing; the aggregate must refuse");
+    };
+    assert!(
+        matches!(&err, GenRomProfileError::MissingPackEntry(id) if id == missing),
+        "{err:?}"
+    );
+    assert!(report.is_empty(), "{report:?}");
+
+    let err = if domain == "tilesets" {
+        tilesets::locate(ctx, &mut report).map(|_| ())
+    } else if domain == "fonts" {
+        fonts::locate(ctx, &mut report).map(|_| ())
+    } else if domain == "layouts" {
+        layouts::locate(ctx, &mut report).map(|_| ())
+    } else if domain == "sprites" {
+        sprites::locate(ctx, &mut report).map(|_| ())
+    } else if domain == "text_window" {
+        text_window::locate(ctx, &mut report).map(|_| ())
+    } else if domain == "bag" {
+        bag::locate(ctx, &mut report).map(|_| ())
+    } else if domain == "starter_chooser" {
+        starter_chooser::locate(ctx, &mut report).map(|_| ())
+    } else if domain == "opening_scene" {
+        opening_scene::locate(ctx, &mut report).map(|_| ())
+    } else if domain == "battle_interface" {
+        battle_interface::locate(ctx, &mut report).map(|_| ())
+    } else if domain == "battlers" {
+        battlers::locate(ctx, &mut report).map(|_| ())
+    } else if domain == "battle_anims" {
+        battle_anims::locate(ctx, &mut report).map(|_| ())
+    } else if domain == "battle_messages" {
+        battle_messages::locate(ctx, &mut report).map(|_| ())
+    } else {
+        title::locate(ctx, &mut report).map(|_| ())
+    }
+    .expect_err("the domain locator must refuse too");
+    assert!(
+        matches!(&err, GenRomProfileError::MissingPackEntry(id) if id == missing),
+        "{err:?}"
+    );
+    assert!(report.is_empty(), "{report:?}");
+}
+
+fn assert_missing_roots(label: &str, ids: impl IntoIterator<Item = String>, domain: &str) {
+    let rom = RomFixture::new().emerald_header().finish();
+    let mut pointers = PointerIndex::build(&rom);
+    let inventory = complete_inventory();
+    for id in ids {
+        let entries = inventory
+            .iter()
+            .filter(|entry| entry.id != id)
+            .map(|entry| PackEntry {
+                id: entry.id.clone(),
+                kind: entry.kind,
+                payload: entry.payload.clone(),
+            })
+            .collect();
+        pointers = with_indexed_context(
+            &format!("missing-{label}-{}", id.replace('/', "-")),
+            &rom,
+            entries,
+            pointers,
+            |ctx| assert_refused_in(ctx, &id, domain),
+        )
+        .1;
+    }
 }
 
 fn without(id: &str) -> Vec<PackEntry> {
@@ -139,29 +169,22 @@ fn the_fixed_inventory_ids_are_unique() {
 
 #[test]
 fn a_pack_missing_a_tileset_is_refused() {
-    for tileset in TILESETS {
-        let id = tileset.tiles_id();
-        assert_refused(
-            &format!("no-tileset-{}", tileset.name),
-            without(&id),
-            &id,
-            "tilesets",
-        );
-    }
+    assert_missing_roots(
+        "tileset",
+        TILESETS.iter().map(|tileset| tileset.tiles_id()),
+        "tilesets",
+    );
 }
 
 #[test]
 fn a_pack_missing_any_tileset_payload_root_is_refused() {
-    for tileset in TILESETS {
-        for id in inventory::tileset_payload_ids(tileset.name) {
-            assert_refused(
-                &format!("no-payload-{}", id.replace('/', "-")),
-                without(&id),
-                &id,
-                "tilesets",
-            );
-        }
-    }
+    assert_missing_roots(
+        "tileset-payload",
+        TILESETS
+            .iter()
+            .flat_map(|tileset| inventory::tileset_payload_ids(tileset.name)),
+        "tilesets",
+    );
 }
 
 #[test]
@@ -181,48 +204,49 @@ fn the_tileset_payload_roots_are_the_tiles_metatiles_attributes_and_sixteen_pale
 
 #[test]
 fn a_pack_missing_a_title_image_is_refused() {
-    for id in title_ids()
-        .iter()
-        .filter(|id| id.starts_with("title/image/"))
-    {
-        let label = format!("no-{}", id.replace('/', "-"));
-        assert_refused(&label, without(id), id, "title");
-    }
+    assert_missing_roots(
+        "title-image",
+        title_ids()
+            .into_iter()
+            .filter(|id| id.starts_with("title/image/")),
+        "title",
+    );
 }
 
 #[test]
 fn a_pack_missing_a_title_tilemap_is_refused() {
-    for id in title_ids().iter().filter(|id| id.starts_with("title/raw/")) {
-        let label = format!("no-{}", id.replace('/', "-"));
-        assert_refused(&label, without(id), id, "title");
-    }
+    assert_missing_roots(
+        "title-tilemap",
+        title_ids()
+            .into_iter()
+            .filter(|id| id.starts_with("title/raw/")),
+        "title",
+    );
 }
 
 #[test]
 fn a_pack_missing_a_title_palette_is_refused() {
-    for id in title_ids()
-        .iter()
-        .filter(|id| id.starts_with("title/palette/"))
-    {
-        let label = format!("no-{}", id.replace('/', "-"));
-        assert_refused(&label, without(id), id, "title");
-    }
+    assert_missing_roots(
+        "title-palette",
+        title_ids()
+            .into_iter()
+            .filter(|id| id.starts_with("title/palette/")),
+        "title",
+    );
 }
 
 #[test]
 fn a_pack_missing_a_font_sheet_is_refused() {
-    for font in FONTS {
-        let label = format!("no-{}", font.pack_id.replace('/', "-"));
-        assert_refused(&label, without(font.pack_id), font.pack_id, "fonts");
-    }
+    assert_missing_roots(
+        "font",
+        FONTS.iter().map(|font| font.pack_id.to_owned()),
+        "fonts",
+    );
 }
 
 #[test]
 fn a_pack_missing_a_layout_map_or_border_is_refused() {
-    for id in layout_ids() {
-        let label = format!("no-{}", id.replace('/', "-"));
-        assert_refused(&label, without(&id), &id, "layouts");
-    }
+    assert_missing_roots("layout", layout_ids(), "layouts");
 }
 
 #[test]
@@ -234,10 +258,7 @@ fn a_pack_missing_a_whole_layout_is_refused_by_id() {
 
 #[test]
 fn a_pack_missing_a_text_window_root_is_refused() {
-    for id in text_window_ids() {
-        let label = format!("no-{}", id.replace('/', "-"));
-        assert_refused(&label, without(&id), &id, "text_window");
-    }
+    assert_missing_roots("text-window", text_window_ids(), "text_window");
 }
 
 #[test]
@@ -254,10 +275,11 @@ fn a_pack_missing_a_whole_window_frame_is_refused_by_id() {
 
 #[test]
 fn a_pack_missing_a_starter_battler_root_is_refused() {
-    for id in BATTLERS.iter().flat_map(|battler| battler.ids()) {
-        let label = format!("no-{}", id.replace('/', "-"));
-        assert_refused(&label, without(&id), &id, "battlers");
-    }
+    assert_missing_roots(
+        "battler",
+        BATTLERS.iter().flat_map(|battler| battler.ids()),
+        "battlers",
+    );
 }
 
 #[test]
@@ -279,14 +301,7 @@ fn a_pack_missing_the_battle_animation_catalog_is_refused() {
 
 #[test]
 fn a_pack_missing_any_expected_bag_entry_is_refused() {
-    for id in synthetic_bag_ids() {
-        assert_refused(
-            &format!("no-{}", id.replace('/', "-")),
-            without(&id),
-            &id,
-            "bag",
-        );
-    }
+    assert_missing_roots("bag", synthetic_bag_ids(), "bag");
 }
 
 #[test]
@@ -298,10 +313,7 @@ fn a_pack_missing_the_whole_bag_family_is_refused_by_id() {
 
 #[test]
 fn a_pack_missing_a_starter_chooser_entry_is_refused() {
-    for id in starter_chooser_ids() {
-        let label = format!("no-{}", id.replace('/', "-"));
-        assert_refused(&label, without(&id), &id, "starter_chooser");
-    }
+    assert_missing_roots("starter-chooser", starter_chooser_ids(), "starter_chooser");
 }
 
 #[test]
@@ -340,10 +352,7 @@ fn the_opening_scene_inventory_is_five_sheets_eight_palettes_and_three_tilemaps(
 
 #[test]
 fn a_pack_missing_an_opening_scene_entry_is_refused() {
-    for id in opening_scene_ids() {
-        let label = format!("no-{}", id.replace('/', "-"));
-        assert_refused(&label, without(&id), &id, "opening_scene");
-    }
+    assert_missing_roots("opening-scene", opening_scene_ids(), "opening_scene");
 }
 
 #[test]
@@ -372,10 +381,11 @@ fn a_surplus_opening_scene_entry_is_refused_by_id() {
 
 #[test]
 fn a_pack_missing_a_battle_interface_entry_is_refused() {
-    for id in battle_interface_ids() {
-        let label = format!("no-{}", id.replace('/', "-"));
-        assert_refused(&label, without(&id), &id, "battle_interface");
-    }
+    assert_missing_roots(
+        "battle-interface",
+        battle_interface_ids(),
+        "battle_interface",
+    );
 }
 
 #[test]
@@ -497,10 +507,7 @@ fn a_pack_missing_the_last_water_frame_is_refused() {
 
 #[test]
 fn a_pack_missing_any_one_animation_frame_is_refused() {
-    for id in tileset_animation_ids() {
-        let label = format!("no-{}", id.replace('/', "-"));
-        assert_refused(&label, without(&id), &id, "tilesets");
-    }
+    assert_missing_roots("animation-frame", tileset_animation_ids(), "tilesets");
 }
 
 #[test]
@@ -556,18 +563,12 @@ fn the_sprite_sheet_inventory_matches_the_committed_profile() {
 
 #[test]
 fn a_pack_missing_any_one_sprite_sheet_is_refused() {
-    for id in sprite_sheet_ids() {
-        let label = format!("no-{}", id.replace('/', "-"));
-        assert_refused(&label, without(&id), &id, "sprites");
-    }
+    assert_missing_roots("sprite-sheet", sprite_sheet_ids(), "sprites");
 }
 
 #[test]
 fn a_pack_missing_any_one_sprite_palette_is_refused() {
-    for id in sprite_palette_ids() {
-        let label = format!("no-{}", id.replace('/', "-"));
-        assert_refused(&label, without(&id), &id, "sprites");
-    }
+    assert_missing_roots("sprite-palette", sprite_palette_ids(), "sprites");
 }
 
 #[test]
@@ -593,19 +594,17 @@ fn the_sprite_palette_inventory_holds_all_ten_fixed_banks() {
 
 #[test]
 fn a_pack_missing_a_player_sheet_is_refused() {
-    for id in [
-        "sprite/brendan/walking",
-        "sprite/may/walking",
-        "sprite/brendan/running",
-        "sprite/may/running",
-    ] {
-        assert_refused(
-            &format!("no-{}", id.replace('/', "-")),
-            without(id),
-            id,
-            "sprites",
-        );
-    }
+    assert_missing_roots(
+        "player-sheet",
+        [
+            "sprite/brendan/walking",
+            "sprite/may/walking",
+            "sprite/brendan/running",
+            "sprite/may/running",
+        ]
+        .map(str::to_owned),
+        "sprites",
+    );
 }
 
 #[test]
