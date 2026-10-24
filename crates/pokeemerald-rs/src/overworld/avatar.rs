@@ -23,6 +23,7 @@ pub(super) const NUM_WALK_FRAMES: usize = 9;
 )]
 pub(super) const FRAME_TILES: u16 =
     (FRAME_W / BitDepth::TILE_DIM * FRAME_H / BitDepth::TILE_DIM) as u16;
+#[cfg(test)]
 #[expect(
     clippy::cast_possible_truncation,
     reason = "the nine-frame block fits in u16"
