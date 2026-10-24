@@ -325,6 +325,56 @@ class TestChangelogIntegration(unittest.TestCase):
         self.repo.sync_cargo_manifest()
         self.assertEqual(self.repo.run_version_check(base="baseline"), 0)
 
+    def test_fenced_example_does_not_satisfy_changelog_requirement(self):
+        self.repo.write("VERSION", "0.1.3.0\n")
+        self.repo.sync_cargo_manifest()
+        for opening, closing in (
+            ("```markdown", "```"),
+            ("~~~markdown", "~~~"),
+            ("   ````markdown", "   `````"),
+            ("~~~~markdown", ""),
+        ):
+            with self.subTest(opening=opening, closing=closing):
+                self.repo.write(
+                    "CHANGELOG.md",
+                    opening + "\n" + changelog("0.1.3.0") + closing + "\n",
+                )
+                self.assertNotEqual(
+                    self.repo.run_version_check(base="baseline"), 0
+                )
+
+    def test_visible_heading_with_only_fenced_bullets_fails(self):
+        self.repo.write("VERSION", "0.1.3.0\n")
+        self.repo.sync_cargo_manifest()
+        self.repo.write(
+            "CHANGELOG.md", "## [0.1.3.0] - 2026-10-23\n\n"
+            "~~~\n- Various bug fixes.\n~~~\n"
+        )
+        self.assertNotEqual(self.repo.run_version_check(base="baseline"), 0)
+
+    def test_short_or_different_fence_does_not_end_example(self):
+        self.repo.write("VERSION", "0.1.3.0\n")
+        self.repo.sync_cargo_manifest()
+        for closing in ("```", "~~~~", "````not-a-close"):
+            with self.subTest(closing=closing):
+                self.repo.write(
+                    "CHANGELOG.md", "````\nExample\n" + closing + "\n"
+                    + changelog("0.1.3.0")
+                )
+                self.assertNotEqual(
+                    self.repo.run_version_check(base="baseline"), 0
+                )
+
+    def test_real_entry_outside_fenced_examples_passes(self):
+        self.repo.write("VERSION", "0.1.3.0\n")
+        self.repo.sync_cargo_manifest()
+        self.repo.write(
+            "CHANGELOG.md", "~~~markdown\n" + changelog("0.1.3.0")
+            + "~~~~\n" + changelog("0.1.3.0")
+            + "\n```\n" + changelog("0.1.3.0") + "```\n"
+        )
+        self.assertEqual(self.repo.run_version_check(base="baseline"), 0)
+
     def test_invalid_entries_fail(self):
         self.repo.write("VERSION", "0.1.3.0\n")
         self.repo.sync_cargo_manifest()

@@ -558,9 +558,27 @@ def check_transition(
         # head[i] == base[i]: tier unchanged, inspect the next tier down.
 
 
+def changelog_text(raw: str) -> str:
+    uncommented = re.sub(r"<!--.*?-->", "", raw, flags=re.DOTALL)
+    visible_lines = []
+    fence = ""
+    for line in uncommented.splitlines():
+        marker = re.match(r" {0,3}(`{3,}|~{3,})(.*)$", line)
+        if fence:
+            if (
+                marker and marker[1][0] == fence[0]
+                and len(marker[1]) >= len(fence) and not marker[2].strip()
+            ):
+                fence = ""
+        elif marker and (marker[1][0] != "`" or "`" not in marker[2]):
+            fence = marker[1]
+        else:
+            visible_lines.append(line)
+    return "\n".join(visible_lines)
+
+
 def changelog_entries(raw: str, version: Version) -> list[str]:
-    visible = re.sub(r"<!--.*?-->", "", raw, flags=re.DOTALL)
-    sections = re.split(r"(?=^## )", visible, flags=re.MULTILINE)
+    sections = re.split(r"(?=^## )", changelog_text(raw), flags=re.MULTILINE)
     heading = f"## [{fmt(version)}]"
     return [
         section.strip() for section in sections
