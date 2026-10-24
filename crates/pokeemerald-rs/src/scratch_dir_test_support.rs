@@ -25,9 +25,13 @@ const CLAIM_ATTEMPTS: u32 = 1_000;
 /// entry (the directory is then left behind rather than guessed at). On unix drop also
 /// checks the name still holds the claimed inode (device and inode number)
 /// before touching it. The residual is a same-user swap that recreates the
-/// exact recorded names between that check and the removals. Off unix there
-/// is no identity to check, so drop fails closed: it removes nothing and
-/// leaves the directory behind.
+/// exact recorded names between that check and the removals. Windows has no
+/// inode identity to check here (this crate does not depend on `win-fs`), so
+/// drop there skips the identity check and keeps the rest of the contract:
+/// it removes only the recorded entries by name, then the non-recursive
+/// `remove_dir`, never the root by name, and relies on the per-user
+/// temporary directory for the swapped-name case. On any other platform
+/// drop fails closed: it removes nothing and leaves the directory behind.
 pub(crate) struct ScratchDir {
     path: PathBuf,
     /// The claimed directory's identity, so cleanup can tell it from
@@ -111,10 +115,11 @@ fn identity_of(path: &Path) -> Option<(u64, u64)> {
 impl Drop for ScratchDir {
     fn drop(&mut self) {
         #[cfg(unix)]
+        if identity_of(&self.path) != Some(self.identity) {
+            return;
+        }
+        #[cfg(any(unix, windows))]
         {
-            if identity_of(&self.path) != Some(self.identity) {
-                return;
-            }
             let entries = std::mem::take(&mut *self.entries.lock().expect("the entry list"));
             for name in entries {
                 let entry = self.path.join(name);
@@ -216,8 +221,9 @@ pub(crate) fn assert_claim_spares_planted_occupants<G>(
                 .is_symlink(),
             "the planted link was replaced"
         );
-        assert!(!claimed.exists(), "the claim left its own directory behind");
     }
+    #[cfg(any(unix, windows))]
+    assert!(!claimed.exists(), "the claim left its own directory behind");
 }
 
 #[cfg(test)]
@@ -301,6 +307,7 @@ mod tests {
         assert_eq!(mode & 0o777, 0o700);
     }
 
+    #[cfg(unix)]
     #[test]
     fn dropping_a_claim_spares_a_stranger_that_took_its_name() {
         let root = ScratchDir::new("scratch-replaced-root");
@@ -323,7 +330,7 @@ mod tests {
         assert_eq!(std::fs::read(path.join("sentinel")).unwrap(), b"not yours");
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[test]
     fn drop_removes_what_the_fixture_recorded_and_the_directory() {
         let root = ScratchDir::new("scratch-cleanup-root");
@@ -336,7 +343,7 @@ mod tests {
         assert!(!path.exists());
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[test]
     fn drop_leaves_an_unrecorded_entry_and_its_directory_in_place() {
         let root = ScratchDir::new("scratch-unrecorded-root");
