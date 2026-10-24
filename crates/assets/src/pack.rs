@@ -6,6 +6,7 @@
 //! [`crate::error`].
 
 mod bag;
+mod battle_effect;
 mod battle_interface;
 mod battle_message;
 mod battler;
@@ -27,6 +28,7 @@ use crate::fonts::{FontId, FontImageRef};
 use crate::pokedex::PokedexData;
 
 pub use bag::BagAssets;
+pub use battle_effect::{BattleEffectHandle, BattleEffectRecord};
 pub use battle_interface::{
     BattleBarHandle, BattleInterfaceHandle, BattleTextboxHandle, HealthboxElement,
     HealthboxElementsHandle,
