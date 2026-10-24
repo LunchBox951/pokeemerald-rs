@@ -37,8 +37,7 @@ fn saving_twice_in_one_session_files_the_same_bytes() {
         seed.save2,
     );
     resumed
-        .party_lead
-        .as_mut()
+        .lead_mut_for_test()
         .expect("the fixture has a lead")
         .apply_damage(DAMAGE);
 
