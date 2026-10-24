@@ -257,5 +257,11 @@ fn locate_battle_bar(
 #[path = "battle_interface_frame_tests.rs"]
 mod frame_tests;
 #[cfg(test)]
+#[path = "battle_interface_healthbox_tests.rs"]
+mod healthbox_tests;
+#[cfg(test)]
+#[path = "battle_interface_inventory_tests.rs"]
+mod inventory_tests;
+#[cfg(test)]
 #[path = "battle_interface_tests.rs"]
 mod tests;
