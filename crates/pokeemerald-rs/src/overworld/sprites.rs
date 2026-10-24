@@ -8,8 +8,8 @@
 use std::collections::HashMap;
 
 use assets::pack::AssetPack;
-use assets::ObjectEvent;
 use engine::event_data::EventData;
+use engine::overworld::object_event::ObjectEventCollection;
 use engine::overworld::PlayerState;
 use rendering::{BitDepth, OamEntry, Palette, Tileset};
 
@@ -24,7 +24,8 @@ pub(super) struct SceneSprites {
     /// First tile of the player's running sheet, packed after every NPC sheet
     /// so NPC blocks keep their offsets from the walking block.
     run_base_tile: u16,
-    object_events: &'static [ObjectEvent],
+    /// Template-seeded state for callers that own no live collection.
+    seed_objects: ObjectEventCollection,
     bindings: HashMap<&'static str, SpriteBinding>,
 }
 
@@ -53,22 +54,35 @@ impl SceneSprites {
             tiles: Tileset::decode(BitDepth::Bpp4, &bytes)?,
             run_base_tile,
             palette: npc::build_combined_palette(pack, player, palette_ref)?,
-            object_events: events.object_events,
+            seed_objects: ObjectEventCollection::from_templates(events.object_events),
             bindings,
         })
     }
 
-    /// Lists the player first, then NPCs in template order, then orders by OBJ
-    /// priority and y-derived subpriority
-    /// ([`npc::order_by_depth`]); the player leads a tie in every sort key.
+    /// [`Self::live_entries`] over the template-seeded state.
     #[must_use]
     pub(super) fn entries(&self, player: &PlayerState, event_data: &EventData) -> Vec<OamEntry> {
+        self.live_entries(&self.seed_objects, player, event_data)
+    }
+
+    /// Lists the player first, then NPCs in `objects` order, then orders by OBJ
+    /// priority and y-derived subpriority
+    /// ([`npc::order_by_depth`]); the player leads a tie in every sort key.
+    /// `objects` supplies tile, facing, and elevation; the scene's templates
+    /// keep the graphics bindings.
+    #[must_use]
+    pub(super) fn live_entries(
+        &self,
+        objects: &ObjectEventCollection,
+        player: &PlayerState,
+        event_data: &EventData,
+    ) -> Vec<OamEntry> {
         let mut entries = vec![(
             avatar::player_entry(player, self.run_base_tile),
             player.previous_elevation(),
         )];
         entries.extend(npc::elevated_oam_entries(
-            self.object_events,
+            objects,
             &self.bindings,
             player,
             event_data,
