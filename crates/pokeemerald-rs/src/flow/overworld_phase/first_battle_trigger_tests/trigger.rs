@@ -42,7 +42,8 @@ fn continuing_on_route_101_only_advances_the_fresh_rescue_state() {
             .var_set(VAR_ROUTE101_STATE, saved_state)
             .unwrap();
         let resumed = OverworldPhase::from_saved(
-            crate::overworld::test_support::synthetic_scene(25, 25),
+            crate::overworld::test_support::synthetic_scene(25, 25)
+                .in_room_for_test(MapId("MAP_ROUTE101")),
             MapId("MAP_ROUTE101"),
             block1,
             block2,

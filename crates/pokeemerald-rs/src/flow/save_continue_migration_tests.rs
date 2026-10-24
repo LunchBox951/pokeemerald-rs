@@ -30,8 +30,12 @@ fn continue_on_a_multi_level_tile_resumes_at_the_transition_elevation() {
     block1.pos.x = i16::try_from(bridge_tile.0).unwrap();
     block1.pos.y = i16::try_from(bridge_tile.1).unwrap();
 
-    let resumed =
-        OverworldPhase::from_saved(scene, new_game::SPAWN_MAP_ID, block1, SaveBlock2::default());
+    let resumed = OverworldPhase::from_saved(
+        scene.in_room_for_test(new_game::SPAWN_MAP_ID),
+        new_game::SPAWN_MAP_ID,
+        block1,
+        SaveBlock2::default(),
+    );
     assert_eq!(
         resumed.player.elevation(),
         ELEVATION_TRANSITION,
@@ -52,7 +56,8 @@ fn a_save_with_no_recorded_facing_falls_back_to_the_tile_derived_direction() {
         "a zeroed block holds DIR_NONE"
     );
     let resumed = OverworldPhase::from_saved(
-        crate::overworld::test_support::synthetic_scene(10, 10),
+        crate::overworld::test_support::synthetic_scene(10, 10)
+            .in_room_for_test(new_game::SPAWN_MAP_ID),
         new_game::SPAWN_MAP_ID,
         block1,
         SaveBlock2::default(),
@@ -76,7 +81,8 @@ fn a_save_with_a_legacy_zeroed_heal_location_adopts_the_gender_default() {
         "a zeroed block holds the legacy marker"
     );
     let resumed = OverworldPhase::from_saved(
-        crate::overworld::test_support::synthetic_scene(10, 10),
+        crate::overworld::test_support::synthetic_scene(10, 10)
+            .in_room_for_test(new_game::SPAWN_MAP_ID),
         new_game::SPAWN_MAP_ID,
         block1,
         SaveBlock2::default(),
@@ -100,7 +106,8 @@ fn a_save_with_a_legacy_zeroed_heal_location_adopts_the_gender_default() {
         ..SaveBlock1::default()
     };
     let resumed = OverworldPhase::from_saved(
-        crate::overworld::test_support::synthetic_scene(10, 10),
+        crate::overworld::test_support::synthetic_scene(10, 10)
+            .in_room_for_test(new_game::SPAWN_MAP_ID),
         new_game::SPAWN_MAP_ID,
         block1,
         SaveBlock2::default(),
@@ -145,7 +152,7 @@ fn a_save_with_a_fainted_lead_is_healed_on_continue() {
                 .expect("VAR_ROUTE101_STATE is an ordinary var");
         }
         OverworldPhase::from_saved(
-            crate::overworld::test_support::synthetic_scene(10, 10),
+            crate::overworld::test_support::synthetic_scene(10, 10).in_room_for_test(seed.map_id),
             seed.map_id,
             seed.save1,
             seed.save2,

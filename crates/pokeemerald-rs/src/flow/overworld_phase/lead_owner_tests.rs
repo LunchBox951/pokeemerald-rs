@@ -31,7 +31,7 @@ fn continued(members: &[BattlePokemon], count: u8) -> OverworldPhase {
         seed.save1.player_party[slot] = record_of(member);
     }
     OverworldPhase::from_saved(
-        crate::overworld::test_support::synthetic_scene(10, 10),
+        crate::overworld::test_support::synthetic_scene(10, 10).in_room_for_test(seed.map_id),
         seed.map_id,
         seed.save1,
         seed.save2,
@@ -372,7 +372,7 @@ fn an_undecodable_slot_loads_empty_and_a_flush_returns_its_bytes_unchanged() {
     seed.save1.player_party[0] = stored;
     let before = seed.save1.player_party;
     let mut phase = OverworldPhase::from_saved(
-        crate::overworld::test_support::synthetic_scene(10, 10),
+        crate::overworld::test_support::synthetic_scene(10, 10).in_room_for_test(seed.map_id),
         seed.map_id,
         seed.save1,
         seed.save2,
