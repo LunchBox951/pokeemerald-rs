@@ -28,6 +28,7 @@ use engine::overworld::{
 use rendering::{Bgr555, BitDepth, OamEntry, Palette};
 
 use super::avatar::{self, PlayerCharacter};
+use super::grass;
 use super::{fill_palette_bank, OverworldSceneError, METATILE_PX};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -290,7 +291,8 @@ pub(super) fn resolve_bindings(
     Ok(bindings)
 }
 
-/// Loads the player, four generic NPC, and other-protagonist palette banks.
+/// Loads the player, four generic NPC, and other-protagonist palette banks,
+/// and the tall-grass effect's bank when `grass_palette` is present.
 ///
 /// # Errors
 ///
@@ -299,9 +301,13 @@ pub(super) fn build_combined_palette(
     pack: &AssetPack,
     player: PlayerCharacter,
     player_bank0: PaletteRef<'_>,
+    grass_palette: Option<PaletteRef<'_>>,
 ) -> Result<Palette, OverworldSceneError> {
     let mut colors = [Bgr555::default(); Palette::LEN];
     fill_palette_bank(&mut colors, usize::from(PLAYER_PALETTE_BANK), player_bank0);
+    if let Some(grass) = grass_palette {
+        fill_palette_bank(&mut colors, usize::from(grass::GENERAL_1_BANK), grass);
+    }
     for tag in [
         NpcPaletteTag::Npc1,
         NpcPaletteTag::Npc2,
@@ -324,7 +330,7 @@ const OAM_Y_MODULUS: i32 = 256;
     clippy::cast_possible_truncation,
     reason = "rem_euclid bounds the result to the nine-bit OAM x range"
 )]
-fn wrap_oam_x(x: i32) -> u16 {
+pub(super) fn wrap_oam_x(x: i32) -> u16 {
     x.rem_euclid(OAM_X_MODULUS) as u16
 }
 
@@ -333,7 +339,7 @@ fn wrap_oam_x(x: i32) -> u16 {
     clippy::cast_possible_truncation,
     reason = "rem_euclid bounds the result to the eight-bit OAM y range"
 )]
-fn wrap_oam_y(y: i32) -> u8 {
+pub(super) fn wrap_oam_y(y: i32) -> u8 {
     y.rem_euclid(OAM_Y_MODULUS) as u8
 }
 
@@ -358,29 +364,48 @@ const ELEVATION_TO_SUBPRIORITY: [u16; 16] = [
     115, 115, 83, 115, 83, 115, 83, 115, 83, 115, 83, 115, 83, 0, 0, 115,
 ];
 
-/// Upstream's subpriority for an OBJ at `elevation` whose rendered top is `y`:
-/// `sElevationToSubpriority[elevation] + (16 - (((y + 8) & 0xFF) >> 4)) * 2 + 1`
-/// (`SetObjectSubpriorityByElevation`, `:7739-7745`, called with subpriority 1),
-/// where upstream's `y` is the sprite bottom, so the 32px height is added.
-fn subpriority(entry: OamEntry, elevation: u8) -> u16 {
-    let bottom_plus_bias = (u16::from(entry.y()) + SPRITE_H_PX + 8) & 0xFF;
+/// `SetObjectSubpriorityByElevation` (`event_object_movement.c:7773-7787`) for
+/// an OBJ whose rendered bottom edge is `bottom`:
+/// `sElevationToSubpriority[elevation] + (16 - (((bottom + 8) & 0xFF) >> 4)) * 2 + bias`.
+pub(super) fn subpriority_from_bottom(bottom: i32, elevation: u8, bias: u16) -> u16 {
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "rem_euclid bounds the value to the eight-bit sprite coordinate"
+    )]
+    let bottom_plus_bias = (bottom + 8).rem_euclid(OAM_Y_MODULUS) as u16;
     let base = ELEVATION_TO_SUBPRIORITY
         .get(usize::from(elevation))
         .copied()
         .unwrap_or(ELEVATION_TO_SUBPRIORITY[0]);
-    base + (16 - (bottom_plus_bias >> 4)) * 2 + 1
+    base + (16 - (bottom_plus_bias >> 4)) * 2 + bias
+}
+
+/// Upstream's subpriority for a bound object at `elevation` whose rendered top
+/// is `entry.y()`: `SetObjectSubpriorityByElevation` called with subpriority 1
+/// (`SetObjectSubpriorityByElevation`, `:7739-7745`), where upstream's `y` is
+/// the sprite bottom, so the 32px height is added.
+pub(super) fn subpriority(entry: OamEntry, elevation: u8) -> u16 {
+    subpriority_from_bottom(i32::from(entry.y()) + i32::from(SPRITE_H_PX), elevation, 1)
 }
 
 /// Orders pairs as upstream emits OAM: ascending OBJ priority, then subpriority,
 /// then lower on-screen `y` (`SortSprites`, `sprite.c:413-419`); ties keep input order.
+#[cfg(test)]
 pub(super) fn order_by_depth(entries: &[(OamEntry, u8)]) -> Vec<OamEntry> {
+    let keyed: Vec<(OamEntry, u16)> = entries
+        .iter()
+        .map(|&(entry, elevation)| (entry, subpriority(entry, elevation)))
+        .collect();
+    order_by_subpriority(&keyed)
+}
+
+/// Orders entries of known subpriority, which lets an effect sprite compete
+/// beside object-event sprites; [`order_by_depth`] derives the subpriority of
+/// object-event entries from their elevation.
+pub(super) fn order_by_subpriority(entries: &[(OamEntry, u16)]) -> Vec<OamEntry> {
     let mut ordered = entries.to_vec();
-    ordered.sort_by_key(|&(entry, elevation)| {
-        (
-            entry.priority(),
-            subpriority(entry, elevation),
-            std::cmp::Reverse(entry.y()),
-        )
+    ordered.sort_by_key(|&(entry, subpriority)| {
+        (entry.priority(), subpriority, std::cmp::Reverse(entry.y()))
     });
     ordered.into_iter().map(|(entry, _)| entry).collect()
 }

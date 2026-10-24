@@ -2,8 +2,8 @@
 //!
 //! [`rendering::SpriteLayer`] accepts one tileset and palette. Player walking
 //! frames occupy the first tile block; distinct NPC sheets follow, then the
-//! player's running frames, with palette banks
-//! assigned by [`npc::build_combined_palette`].
+//! player's running frames, then the tall-grass effect's cells, with palette
+//! banks assigned by [`npc::build_combined_palette`].
 
 use std::collections::HashMap;
 
@@ -14,6 +14,7 @@ use engine::overworld::PlayerState;
 use rendering::{BitDepth, OamEntry, Palette, Tileset};
 
 use super::avatar::{self, PlayerCharacter};
+use super::grass::{self, DepthObject, TallGrassEffects};
 use super::npc::{self, SpriteBinding};
 use super::OverworldSceneError;
 
@@ -24,6 +25,9 @@ pub(super) struct SceneSprites {
     /// First tile of the player's running sheet, packed after every NPC sheet
     /// so NPC blocks keep their offsets from the walking block.
     run_base_tile: u16,
+    /// First tile of the tall-grass effect's cells, packed after the running
+    /// sheet; `None` when the pack carries no field-effect sheet.
+    grass_base_tile: Option<u16>,
     object_events: &'static [ObjectEvent],
     bindings: HashMap<&'static str, SpriteBinding>,
 }
@@ -49,31 +53,79 @@ impl SceneSprites {
             "sprite/*/running",
             pack.sprite(player.run_sprite_path())?,
         )?);
+        let grass = grass::load_resources(pack)?;
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "a scene contains only a small number of sprite sheets"
+        )]
+        let grass_base_tile = grass
+            .as_ref()
+            .map(|_| (bytes.len() / BitDepth::Bpp4.tile_byte_len()) as u16);
+        if let Some(grass) = &grass {
+            bytes.extend_from_slice(&grass.tile_bytes);
+        }
         Ok(Self {
             tiles: Tileset::decode(BitDepth::Bpp4, &bytes)?,
             run_base_tile,
-            palette: npc::build_combined_palette(pack, player, palette_ref)?,
+            grass_base_tile,
+            palette: npc::build_combined_palette(
+                pack,
+                player,
+                palette_ref,
+                grass.as_ref().map(|grass| grass.palette),
+            )?,
             object_events: events.object_events,
             bindings,
         })
     }
 
-    /// Lists the player first, then NPCs in template order, then orders by OBJ
-    /// priority and y-derived subpriority
-    /// ([`npc::order_by_depth`]); the player leads a tie in every sort key.
+    #[cfg(test)]
+    pub(super) const fn grass_base_tile(&self) -> Option<u16> {
+        self.grass_base_tile
+    }
+
+    /// Whether the pack supplied the tall-grass effect's sheet and palette.
+    pub(super) const fn draws_tall_grass(&self) -> bool {
+        self.grass_base_tile.is_some()
+    }
+
+    /// Lists the player first, then NPCs in template order, then the tall-grass
+    /// effects, and orders by OBJ priority and y-derived subpriority
+    /// ([`npc::order_by_subpriority`]); the player leads a tie in every sort
+    /// key.
     #[must_use]
-    pub(super) fn entries(&self, player: &PlayerState, event_data: &EventData) -> Vec<OamEntry> {
-        let mut entries = vec![(
+    pub(super) fn entries(
+        &self,
+        player: &PlayerState,
+        event_data: &EventData,
+        grass: &TallGrassEffects,
+    ) -> Vec<OamEntry> {
+        let mut objects = vec![(
             avatar::player_entry(player, self.run_base_tile),
             player.previous_elevation(),
         )];
-        entries.extend(npc::elevated_oam_entries(
+        objects.extend(npc::elevated_oam_entries(
             self.object_events,
             &self.bindings,
             player,
             event_data,
         ));
-        npc::order_by_depth(&entries)
+        let mut entries: Vec<(OamEntry, u16)> = objects
+            .iter()
+            .map(|&(entry, elevation)| (entry, npc::subpriority(entry, elevation)))
+            .collect();
+        if let Some(first_tile) = self.grass_base_tile {
+            let depth_objects: Vec<DepthObject> = entries
+                .iter()
+                .map(|&(entry, subpriority)| DepthObject {
+                    left: i32::from(entry.x()),
+                    top: signed_screen_y(entry.y()),
+                    subpriority,
+                })
+                .collect();
+            entries.extend(grass.oam_entries(player, first_tile, &depth_objects));
+        }
+        npc::order_by_subpriority(&entries)
     }
 
     pub(super) const fn tiles(&self) -> &Tileset {
@@ -87,5 +139,17 @@ impl SceneSprites {
     #[cfg(test)]
     pub(super) const fn bindings(&self) -> &HashMap<&'static str, SpriteBinding> {
         &self.bindings
+    }
+}
+
+/// An OAM `y` as a screen row, reading the wrapped rows just above the screen
+/// as negative.
+fn signed_screen_y(y: u8) -> i32 {
+    const SCREEN_BOTTOM: i32 = 192;
+    let y = i32::from(y);
+    if y > SCREEN_BOTTOM {
+        y - 256
+    } else {
+        y
     }
 }

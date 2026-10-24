@@ -364,6 +364,26 @@ impl AssetPack {
         self.palette(&format!("sprite/palette/{who}"))
     }
 
+    /// Look up the `field-effect/image/{name}` sheet (`"tall_grass"`), a
+    /// field-effect picture upstream keeps under `graphics/field_effects/pics`.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`image`](Self::image).
+    pub fn field_effect_image(&self, name: &str) -> Result<ImageRef<'_>, PackError> {
+        self.image(&format!("field-effect/image/{name}"))
+    }
+
+    /// Look up the `field-effect/palette/{name}` palette (`"general_1"`), a
+    /// bank upstream keeps under `graphics/field_effects/palettes`.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`palette`](Self::palette).
+    pub fn field_effect_palette(&self, name: &str) -> Result<PaletteRef<'_>, PackError> {
+        self.palette(&format!("field-effect/palette/{name}"))
+    }
+
     /// Look up a layout's `map.bin` bytes (e.g. `"littleroot_town"`), for
     /// [`MapLayout::grid`](crate::map_layouts::MapLayout::grid) or
     /// [`LayoutGrid::new`](crate::map_layouts::LayoutGrid::new).
