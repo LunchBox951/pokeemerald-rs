@@ -53,18 +53,12 @@ pub(super) fn saved_elevations(
     }
 }
 
-/// The raw grid-cell elevation at `position` on `map_id`, or `None` when the
-/// map's header or events are missing or the cell does not decode. It is not
+/// The raw grid-cell elevation at `position` on `scene`'s map, or `None` when
+/// the cell does not decode. It is not
 /// [`saved_tile_placement`]'s `arrival_elevation`, which substitutes for
 /// multi-level cells.
-pub(super) fn saved_cell_elevation(
-    scene: &OverworldScene,
-    map_id: assets::MapId,
-    position: TilePos,
-) -> Option<u8> {
-    let header = assets::MapHeaderTable::new().header(map_id).ok()?;
-    let events = assets::MapEventsTable::new().resolve(map_id).ok()?;
-    let runtime = scene.runtime(map_id, header, events);
+pub(super) fn saved_cell_elevation(scene: &OverworldScene, position: TilePos) -> Option<u8> {
+    let runtime = scene.runtime();
     Some(runtime.metatile_cell(position.0, position.1)?.elevation)
 }
 
@@ -82,17 +76,10 @@ pub(super) fn saved_cell_elevation(
 /// (`src/overworld.c:951`).
 pub(super) fn saved_tile_placement(
     scene: &OverworldScene,
-    map_id: assets::MapId,
     position: TilePos,
 ) -> (u8, engine::overworld::Direction) {
     let fallback = (new_game::SPAWN_ELEVATION, new_game::SPAWN_FACING);
-    let Ok(header) = assets::MapHeaderTable::new().header(map_id) else {
-        return fallback;
-    };
-    let Ok(events) = assets::MapEventsTable::new().resolve(map_id) else {
-        return fallback;
-    };
-    let runtime = scene.runtime(map_id, header, events);
+    let runtime = scene.runtime();
     let Some(elevation) = runtime.arrival_elevation(position.0, position.1) else {
         return fallback;
     };

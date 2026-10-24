@@ -6,6 +6,11 @@
 //! followed by `textbox_1.pal`, as `graphics_file_rules.mk` concatenates their
 //! `.gbapal` files. A missing file or a neighbour the typed
 //! `assets::BattleInterfaceHandle` never reads cannot change the pack.
+//!
+//! The health-box element table and the battle bar are extracted separately, as
+//! raw 4bpp, by [`extract_healthbox_elements`].
+
+mod healthbox_elements;
 
 use std::path::Path;
 
@@ -13,11 +18,16 @@ use super::{build_image_entry, build_palette_entry, jasc_pal, png, push_raw_byte
 use super::{read_file, read_text, ExtractError};
 use pack_format::PackWriter;
 
+pub(super) use healthbox_elements::extract_healthbox_elements;
+pub(super) use healthbox_elements::pack_ids as healthbox_element_pack_ids;
+
 const DIRECTORY: &str = "graphics/battle_interface";
 const IMAGE_PREFIX: &str = "battle-interface/image";
 const PALETTE_PREFIX: &str = "battle-interface/palette";
 const RAW_PREFIX: &str = "battle-interface/raw";
 
+const TEXTBOX_IMAGE_NAME: &str = "textbox";
+const TILEMAP_NAME: &str = "textbox_map";
 const TEXTBOX_SIZE: u32 = 128;
 const TEXTBOX_BIT_DEPTH: u8 = 4;
 /// Colours in one 4bpp bank, the size of every source palette.
@@ -46,6 +56,21 @@ const PALETTES: [PaletteSource; 3] = [
         files: &["text_pp.pal"],
     },
 ];
+
+/// Every pack id [`extract_battle_interface`] emits: the image, then the
+/// palettes, then the tilemap. The profile generator reads this as its fixed
+/// inventory so extraction and generation cannot drift apart.
+pub(crate) fn pack_ids() -> Vec<String> {
+    [format!("{IMAGE_PREFIX}/{TEXTBOX_IMAGE_NAME}")]
+        .into_iter()
+        .chain(
+            PALETTES
+                .iter()
+                .map(|source| format!("{PALETTE_PREFIX}/{}", source.name)),
+        )
+        .chain([format!("{RAW_PREFIX}/{TILEMAP_NAME}")])
+        .collect()
+}
 
 /// Extracts the battle interface manifest: the textbox sheet, three palettes,
 /// and the textbox tilemap.
@@ -84,7 +109,7 @@ fn extract_textbox_image(upstream: &Path, writer: &mut PackWriter) -> Result<(),
     }
     writer.push(build_image_entry(
         &path,
-        format!("{IMAGE_PREFIX}/textbox"),
+        format!("{IMAGE_PREFIX}/{TEXTBOX_IMAGE_NAME}"),
         image,
     )?);
     Ok(())
@@ -137,7 +162,7 @@ fn extract_tilemap(
             ),
         ));
     }
-    push_raw_bytes(format!("{RAW_PREFIX}/textbox_map"), payload, writer);
+    push_raw_bytes(format!("{RAW_PREFIX}/{TILEMAP_NAME}"), payload, writer);
     Ok(())
 }
 
@@ -147,6 +172,11 @@ fn mismatch(path: &Path, detail: String) -> ExtractError {
         detail,
     }
 }
+
+mod healthbox_frames;
+
+pub(super) use healthbox_frames::extract_healthbox_frames;
+pub(super) use healthbox_frames::pack_ids as healthbox_frame_pack_ids;
 
 #[cfg(test)]
 mod tests {
@@ -159,7 +189,7 @@ mod tests {
     use super::super::{extract_to, repo_root, upstream_present};
     use super::{
         extract_battle_interface, extract_palette, extract_textbox_image, extract_tilemap,
-        DIRECTORY, PALETTES, TEXTBOX_TILEMAP_BYTES,
+        pack_ids, DIRECTORY, PALETTES, TEXTBOX_TILEMAP_BYTES,
     };
     use crate::extract::ExtractError;
     use pack_format::PackWriter;
@@ -247,6 +277,26 @@ mod tests {
             ]
         );
         assert_eq!(TEXTBOX_TILEMAP_BYTES, 4096);
+    }
+
+    #[test]
+    fn the_fixed_inventory_is_the_ids_extraction_emits() {
+        assert_eq!(pack_ids(), MANIFEST_IDS);
+
+        let dir = scratch_dir("inventory");
+        write_valid_checkout(&dir);
+        let mut writer = PackWriter::new();
+        extract_battle_interface(&dir, &mut writer).unwrap();
+        let pack = writer.finish().unwrap();
+        let emitted: Vec<String> = pack_format::parse_directory(&pack)
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.id)
+            .collect();
+        let mut inventory = pack_ids();
+        inventory.sort();
+        assert_eq!(emitted, inventory);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

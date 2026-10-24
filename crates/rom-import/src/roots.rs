@@ -467,6 +467,23 @@ pub struct OpeningSceneRoots {
     pub tilemaps: &'static [BlobRoot],
 }
 
+/// The battle textbox and menu text graphics (`graphics/battle_interface`).
+///
+/// The textbox sheet, its composed 32-colour palette and tilemap, and the
+/// battle-window and PP text palettes, under the `battle-interface/` pack ids
+/// the checkout extractor emits. The textbox palette is one ROM root: the
+/// build concatenates `textbox_0.pal` and `textbox_1.pal` into a single
+/// `gBattleTextboxPalette`. The health boxes and battle bars are not here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BattleInterfaceRoots {
+    /// Every `battle-interface/image/*` entry.
+    pub images: &'static [ImageRoot],
+    /// Every `battle-interface/palette/*` entry.
+    pub palettes: &'static [PaletteRoot],
+    /// Every `battle-interface/raw/*` tilemap.
+    pub tilemaps: &'static [BlobRoot],
+}
+
 /// One species' static battler art: the rows its `SPECIES_*` index selects in
 /// `gMonStillFrontPicTable`, `gMonBackPicTable`, `gMonPaletteTable`, and
 /// `gMonShinyPaletteTable`.
@@ -535,6 +552,8 @@ pub struct Roots {
     pub starter_chooser: StarterChooserRoots,
     /// Birch's speech scene and the wall clock.
     pub opening_scene: OpeningSceneRoots,
+    /// The battle textbox and menu text palettes.
+    pub battle_interface: BattleInterfaceRoots,
     /// The starters' static battler images and palettes.
     pub battlers: BattlerRoots,
 }
@@ -579,6 +598,7 @@ impl Roots {
         bag: BagRoots::NONE,
         starter_chooser: StarterChooserRoots::NONE,
         opening_scene: OpeningSceneRoots::NONE,
+        battle_interface: BattleInterfaceRoots::NONE,
         battlers: BattlerRoots::NONE,
     };
 
@@ -600,6 +620,7 @@ impl Roots {
             .chain(self.bag.images.iter())
             .chain(self.starter_chooser.images.iter())
             .chain(self.opening_scene.images.iter())
+            .chain(self.battle_interface.images.iter())
             .chain(
                 self.battlers
                     .species
@@ -620,6 +641,7 @@ impl Roots {
             .chain(self.bag.palettes.iter())
             .chain(self.starter_chooser.palettes.iter())
             .chain(self.opening_scene.palettes.iter())
+            .chain(self.battle_interface.palettes.iter())
             .chain(
                 self.battlers
                     .species
@@ -668,6 +690,15 @@ impl StarterChooserRoots {
 
 impl OpeningSceneRoots {
     /// No opening-scene roots recorded: the domain writes nothing.
+    pub const NONE: Self = Self {
+        images: &[],
+        palettes: &[],
+        tilemaps: &[],
+    };
+}
+
+impl BattleInterfaceRoots {
+    /// No battle-interface roots recorded: the domain writes nothing.
     pub const NONE: Self = Self {
         images: &[],
         palettes: &[],

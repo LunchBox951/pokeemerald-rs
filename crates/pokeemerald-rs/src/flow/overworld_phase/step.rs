@@ -18,7 +18,6 @@
 //! [`crate::flow::wild_encounter`]'s predicates already model the
 //! wild-encounter half of this pipeline's precedence rules.
 
-use assets::MapHeaderTable;
 use engine::overworld::{
     trigger_arrow_warp, trigger_door_warp, Direction, MapRuntime, PlayerState, WarpTrigger,
 };
@@ -254,15 +253,15 @@ impl OverworldPhase {
     /// any of it, so a B press that closes a box cannot also do something
     /// else on the same frame.
     ///
-    /// Otherwise, a fresh A-press resolves [`engine::overworld::facing_object_event`] against
+    /// Otherwise, a fresh A-press resolves [`engine::overworld::select_interaction_target`] against
     /// `self.player`'s pre-movement facing, ahead of this frame's movement:
     /// upstream reaches `TryStartInteractionScript` inside
     /// `ProcessPlayerFieldInput`, and `PlayerStep` never runs once that
     /// returns `TRUE` (`field_control_avatar.c:143-145`, `:172`,
     /// `overworld.c:1444-1455`). A script [`crate::overworld::npc_scripts::script_text`]
-    /// recognizes opens an [`NpcDialog`]; any other script still preempts
-    /// the frame, and only the `"0x0"` sentinel finds nothing
-    /// ([`InteractionOutcome`]). Gated on the player being between steps --
+    /// recognizes opens an [`NpcDialog`]; any other selected target still
+    /// preempts the frame, and only a press that selects nothing falls through
+    /// to movement ([`InteractionOutcome`]). Gated on the player being between steps --
     /// see [`OverworldPhase::interaction_tokens_this_frame`].
     ///
     /// # Wild encounters (issue #169)
@@ -393,182 +392,166 @@ impl OverworldPhase {
         // `&mut self`; a memo hit is a map-id comparison.
         let wild_table_fightable = self.wild_table_fightable();
         let wild_lead_admissible = self.wild_lead_admissible();
-        // The scene's own load-time events, not a fresh resolution: Oldale
+        // The scene's own room: its header and load-time events, so Oldale
         // Town's flag-chosen placement holds for the visit and matches the
         // object events the scene draws.
-        let map_events = self.scene.map_events(self.map_id);
-        if let (Ok(header), Ok(events)) = (
-            MapHeaderTable::new().header(self.map_id),
-            map_events.as_ref(),
-        ) {
-            let runtime = self.scene.runtime(self.map_id, header, events);
+        let runtime = self.scene.runtime().with_object_events(&self.object_events);
 
-            // `in_transit` read before this call's own movement, which is
-            // what defers a completed step to the call after the one that
-            // drained its animation (the "Frame shape" section above owns
-            // the derivation).
-            //
-            // `field_input_suppressed` withholds a forced landing from every
-            // completed-step consumer below, per upstream's `tookStep`/
-            // `checkStandardWildEncounter` exclusion (`field_control_avatar.c:116-122`).
-            let stepped_onto = self
-                .pending_landing
-                .take_if(|_| !self.player.in_transit())
-                .filter(|_| !self.player.field_input_suppressed());
-            // A stationary turn's own tile-centre observation, taken once its
-            // busy timer has drained (`field_player_avatar.c:901-915`). It
-            // feeds only the encounter gate below -- never the coord-event,
-            // door-warp, or step-script consumers of `stepped_onto`.
-            // The Route 101 scripted first-battle coord-event trigger
-            // outranks the door warp, the wild-encounter roll, and the arrow
-            // poll below, the same as a fired encounter already does
-            // (`field_control_avatar.c:155-163,483-495`).
-            //
-            // Upstream reaches the coord-event check *inside*
-            // `TryStartStepBasedScript` (`TryStartCoordEventScript`,
-            // `:485-486`) and returns TRUE out of `ProcessPlayerFieldInput`
-            // the moment it fires, so nothing downstream sees the step at
-            // all. `landed` below is that single fact, as a value: the
-            // completed step the rest of this frame is allowed to know
-            // about. One filter, not one per consumer -- the door check and
-            // the encounter roll both read it, so neither can drift out of
-            // the precedence on its own.
-            let first_battle_triggered = self.first_battle_trigger_ready(&runtime, stepped_onto);
-            let landed = stepped_onto.filter(|_| !first_battle_triggered);
-            // Retained previous elevation, not collision -- contract noted at
-            // `resolve_pre_movement_field_input`'s `previous_elevation` local.
-            let door_warp = landed.and_then(|(x, y)| {
-                trigger_door_warp(&runtime, x, y, self.player.previous_elevation())
-            });
-            // The roll happens only on a completed step the door-shaped warp
-            // has not already claimed (`roll_eligible_landing`), only on a
-            // fightable map (`wild_table_fightable`), and only with a lead the
-            // turn engine admits (`wild_lead_admissible`). A fainted-lead filter
-            // used to sit here too, for the one loss path issue #261's
-            // white-out could not yet cover (a lost Route 101 first battle --
-            // `CB2_EndFirstBattle` has no `IsPlayerDefeated` branch); issue
-            // #251's `first_battle_conclusion` now heals that lead the
-            // instant the battle ends, on every outcome, and a pre-#251 save
-            // that *serialized* the residual state is healed at load
-            // (`from_saved`'s migration, PR #291 review), so no path can
-            // leave a fainted lead standing here any more and the filter
-            // was removed
-            // (`crate::flow::wild_encounter`'s module docs, "Lead-health
-            // eligibility"). The landed tile is the player's own tile by
-            // now, and it is what `GetPlayerPosition` would report there.
-            let tile_center = observe_tile(&mut self.pending_turn, &self.player, &runtime, landed);
-            let encounter = wild_encounter::roll_for_step(
-                &mut self.wild,
-                &mut self.rng,
-                self.map_id,
-                &runtime,
-                wild_encounter::roll_eligible_landing(tile_center, door_warp)
-                    .filter(|_| wild_table_fightable && wild_lead_admissible),
-            );
-            // Neither consumer of `field_event_fired` can be driven to the
-            // coord-event arm over bundled data -- Route 101 declares no warp
-            // events, and no object event stands beside the rescue tiles --
-            // so that arm is encoded and documented rather than
-            // behaviourally pinned. Both of those data facts are themselves
-            // asserted, so a change that makes it reachable fails a test
-            // first (`first_battle_trigger_tests::precedence::route_101_has_no_warp_events_so_the_trigger_can_never_race_one`,
-            // `first_battle_trigger_tests::precedence::no_route_101_object_event_stands_beside_the_rescue_trigger_tiles`).
-            let field_event_fired = encounter.is_some() || first_battle_triggered;
-            // `ProcessPlayerFieldInput` returns TRUE the moment any of the
-            // three completed-step branches above fires --
-            // `TryStartStepBasedScript` at `:155-161` (the coord event and
-            // the door-shaped warp) and `CheckStandardWildEncounter` at
-            // `:162` -- so nothing below `:164` is reached on that frame:
-            // not `TryArrowWarp` (`:164-168`), not
-            // `TryStartInteractionScript` (`:172`), not `TryDoorWarp`
-            // (`:170-178`), not `pressedStartButton` (`:182`), and not
-            // `PlayerStep` either (`src/overworld.c:1444-1455`). One value
-            // for all of them, so the pre-movement resolver and the movement
-            // branch cannot disagree about which events claim a frame.
-            let landing_claimed = field_event_fired || door_warp.is_some();
+        // `in_transit` read before this call's own movement, which is
+        // what defers a completed step to the call after the one that
+        // drained its animation (the "Frame shape" section above owns
+        // the derivation).
+        //
+        // `field_input_suppressed` withholds a forced landing from every
+        // completed-step consumer below, per upstream's `tookStep`/
+        // `checkStandardWildEncounter` exclusion (`field_control_avatar.c:116-122`).
+        let stepped_onto = self
+            .pending_landing
+            .take_if(|_| !self.player.in_transit())
+            .filter(|_| !self.player.field_input_suppressed());
+        // A stationary turn's own tile-centre observation, taken once its
+        // busy timer has drained (`field_player_avatar.c:901-915`). It
+        // feeds only the encounter gate below -- never the coord-event,
+        // door-warp, or step-script consumers of `stepped_onto`.
+        // The Route 101 scripted first-battle coord-event trigger
+        // outranks the door warp, the wild-encounter roll, and the arrow
+        // poll below, the same as a fired encounter already does
+        // (`field_control_avatar.c:155-163,483-495`).
+        //
+        // Upstream reaches the coord-event check *inside*
+        // `TryStartStepBasedScript` (`TryStartCoordEventScript`,
+        // `:485-486`) and returns TRUE out of `ProcessPlayerFieldInput`
+        // the moment it fires, so nothing downstream sees the step at
+        // all. `landed` below is that single fact, as a value: the
+        // completed step the rest of this frame is allowed to know
+        // about. One filter, not one per consumer -- the door check and
+        // the encounter roll both read it, so neither can drift out of
+        // the precedence on its own.
+        let first_battle_triggered = self.first_battle_trigger_ready(&runtime, stepped_onto);
+        let landed = stepped_onto.filter(|_| !first_battle_triggered);
+        // Retained previous elevation, not collision -- contract noted at
+        // `resolve_pre_movement_field_input`'s `previous_elevation` local.
+        let door_warp = landed
+            .and_then(|(x, y)| trigger_door_warp(&runtime, x, y, self.player.previous_elevation()));
+        // The roll happens only on a completed step the door-shaped warp
+        // has not already claimed (`roll_eligible_landing`), only on a
+        // fightable map (`wild_table_fightable`), and only with a lead the
+        // turn engine admits (`wild_lead_admissible`). A fainted-lead filter
+        // used to sit here too, for the one loss path issue #261's
+        // white-out could not yet cover (a lost Route 101 first battle --
+        // `CB2_EndFirstBattle` has no `IsPlayerDefeated` branch); issue
+        // #251's `first_battle_conclusion` now heals that lead the
+        // instant the battle ends, on every outcome, and a pre-#251 save
+        // that *serialized* the residual state is healed at load
+        // (`from_saved`'s migration, PR #291 review), so no path can
+        // leave a fainted lead standing here any more and the filter
+        // was removed
+        // (`crate::flow::wild_encounter`'s module docs, "Lead-health
+        // eligibility"). The landed tile is the player's own tile by
+        // now, and it is what `GetPlayerPosition` would report there.
+        let tile_center = observe_tile(&mut self.pending_turn, &self.player, &runtime, landed);
+        let encounter = wild_encounter::roll_for_step(
+            &mut self.wild,
+            &mut self.rng,
+            self.map_id,
+            &runtime,
+            wild_encounter::roll_eligible_landing(tile_center, door_warp)
+                .filter(|_| wild_table_fightable && wild_lead_admissible),
+        );
+        // Neither consumer of `field_event_fired` can be driven to the
+        // coord-event arm over bundled data -- Route 101 declares no warp
+        // events, and no object event stands beside the rescue tiles --
+        // so that arm is encoded and documented rather than
+        // behaviourally pinned. Both of those data facts are themselves
+        // asserted, so a change that makes it reachable fails a test
+        // first (`first_battle_trigger_tests::precedence::route_101_has_no_warp_events_so_the_trigger_can_never_race_one`,
+        // `first_battle_trigger_tests::precedence::no_route_101_object_event_stands_beside_the_rescue_trigger_tiles`).
+        let field_event_fired = encounter.is_some() || first_battle_triggered;
+        // `ProcessPlayerFieldInput` returns TRUE the moment any of the
+        // three completed-step branches above fires --
+        // `TryStartStepBasedScript` at `:155-161` (the coord event and
+        // the door-shaped warp) and `CheckStandardWildEncounter` at
+        // `:162` -- so nothing below `:164` is reached on that frame:
+        // not `TryArrowWarp` (`:164-168`), not
+        // `TryStartInteractionScript` (`:172`), not `TryDoorWarp`
+        // (`:170-178`), not `pressedStartButton` (`:182`), and not
+        // `PlayerStep` either (`src/overworld.c:1444-1455`). One value
+        // for all of them, so the pre-movement resolver and the movement
+        // branch cannot disagree about which events claim a frame.
+        let landing_claimed = field_event_fired || door_warp.is_some();
 
-            // Upstream polls `TryArrowWarp` *before* `PlayerStep` mutates the
-            // player (`field_control_avatar.c:164-168` runs ahead of
-            // movement), so the gate below must read this frame's
-            // pre-movement facing: a one-frame Down tap on the doormat while
-            // facing North only *turns* the player upstream, and reading the
-            // post-turn facing here would warp on that same tap frame. The
-            // position is captured alongside for the same reason. Every
-            // branch this resolves is a CB1 branch like the completed-step
-            // work above it, in `ProcessPlayerFieldInput`'s own order.
-            let pre = self.resolve_pre_movement_field_input(
-                buttons,
-                direction,
-                &runtime,
-                landing_claimed,
-            );
+        // Upstream polls `TryArrowWarp` *before* `PlayerStep` mutates the
+        // player (`field_control_avatar.c:164-168` runs ahead of
+        // movement), so the gate below must read this frame's
+        // pre-movement facing: a one-frame Down tap on the doormat while
+        // facing North only *turns* the player upstream, and reading the
+        // post-turn facing here would warp on that same tap frame. The
+        // position is captured alongside for the same reason. Every
+        // branch this resolves is a CB1 branch like the completed-step
+        // work above it, in `ProcessPlayerFieldInput`'s own order.
+        let pre =
+            self.resolve_pre_movement_field_input(buttons, direction, &runtime, landing_claimed);
 
-            // Latched here (issue #177), tested only on a later call -- see
-            // `advance_or_skip_for_preempt`'s own doc comment for why a
-            // crossing can't be applied to `self` right away. A free
-            // function, not a method, so this call only takes disjoint
-            // borrows of `self.player`/`self.pending_landing`/
-            // `self.save1.event_data` rather than all of `self` -- `runtime`
-            // (an immutable borrow of `self.scene`) is still needed below.
-            let maps = MapConnections {
-                pack: &self.connection_pack,
-                source: self.pack_source.clone(),
-            };
-            // `interaction` preempts movement too (issue #435), and so do a
-            // claimed fresh `START`, the pre-movement animated-door check
-            // (issue #851), and every completed-step event above
-            // (`landing_claimed`).
-            let pre_step_player = self.player;
-            let outcome = advance_or_skip_for_preempt(
-                &mut self.player,
-                &mut self.pending_landing,
-                buttons,
-                &runtime,
-                &maps,
-                &self.save1.event_data,
-                landing_claimed
-                    || pre.arrow_trigger.is_some()
-                    || pre.animated_door_trigger.is_some()
-                    || pre.interaction.is_some()
-                    || pre.start_menu.is_some(),
-            );
+        // Latched here (issue #177), tested only on a later call -- see
+        // `advance_or_skip_for_preempt`'s own doc comment for why a
+        // crossing can't be applied to `self` right away. A free
+        // function, not a method, so this call only takes disjoint
+        // borrows of `self.player`/`self.pending_landing`/
+        // `self.save1.event_data` rather than all of `self` -- `runtime`
+        // (an immutable borrow of `self.scene`) is still needed below.
+        let maps = MapConnections {
+            pack: &self.connection_pack,
+            source: self.pack_source.clone(),
+        };
+        // `interaction` preempts movement too (issue #435), and so do a
+        // claimed fresh `START`, the pre-movement animated-door check
+        // (issue #851), and every completed-step event above
+        // (`landing_claimed`).
+        let pre_step_player = self.player;
+        let outcome = advance_or_skip_for_preempt(
+            &mut self.player,
+            &mut self.pending_landing,
+            buttons,
+            &runtime,
+            &maps,
+            &self.save1.event_data,
+            landing_claimed
+                || pre.arrow_trigger.is_some()
+                || pre.animated_door_trigger.is_some()
+                || pre.interaction.is_some()
+                || pre.start_menu.is_some(),
+        );
 
-            // At most one warp per frame, in `ProcessPlayerFieldInput`'s own
-            // order: the completed step's door-shaped warp
-            // (`TryStartStepBasedScript`, `:155-161`), then the arrow poll
-            // (`TryArrowWarp`, `:164-168`), then the animated door
-            // (`TryDoorWarp`, `:170-178`). All three are decided from this
-            // call's frame-start stance, so `or` is the whole precedence:
-            // the post-movement arrow re-poll this method used to fall
-            // through to is gone along with the drain-frame compression it
-            // existed to patch up (issue #1039).
-            let warp_trigger = door_warp
-                .or(pre.arrow_trigger)
-                .or(pre.animated_door_trigger);
+        // At most one warp per frame, in `ProcessPlayerFieldInput`'s own
+        // order: the completed step's door-shaped warp
+        // (`TryStartStepBasedScript`, `:155-161`), then the arrow poll
+        // (`TryArrowWarp`, `:164-168`), then the animated door
+        // (`TryDoorWarp`, `:170-178`). All three are decided from this
+        // call's frame-start stance, so `or` is the whole precedence:
+        // the post-movement arrow re-poll this method used to fall
+        // through to is gone along with the drain-frame compression it
+        // existed to patch up (issue #1039).
+        let warp_trigger = door_warp
+            .or(pre.arrow_trigger)
+            .or(pre.animated_door_trigger);
 
-            // Warp, interaction, battle, then the START menu, in upstream's
-            // `ProcessPlayerFieldInput` order.
-            self.resolve_step_events(
-                warp_trigger,
-                encounter,
-                field_event_fired,
-                first_battle_triggered,
-                pre.interaction,
-                pre.start_menu,
-            );
+        // Warp, interaction, battle, then the START menu, in upstream's
+        // `ProcessPlayerFieldInput` order.
+        self.resolve_step_events(
+            warp_trigger,
+            encounter,
+            field_event_fired,
+            first_battle_triggered,
+            pre.interaction,
+            pre.start_menu,
+        );
 
-            // Map-edge connection crossing (issue #177): deferred to here,
-            // `runtime`'s last use above (method docs' own section on this).
-            // Never coincides with `warp_fired`: a crossing leaves
-            // `self.player.in_transit()` true, the same gate that already
-            // makes the `warp_trigger` closure above return `None`.
-            self.finish_crossing(outcome, pre_step_player);
-        } else {
-            self.player.tick();
-            if self.start_menu_may_open(buttons, false) {
-                self.try_open_start_menu();
-            }
-        }
+        // Map-edge connection crossing (issue #177): deferred to here,
+        // `runtime`'s last use above (method docs' own section on this).
+        // Never coincides with `warp_fired`: a crossing leaves
+        // `self.player.in_transit()` true, the same gate that already
+        // makes the `warp_trigger` closure above return `None`.
+        self.finish_crossing(outcome, pre_step_player);
         // Mirror the logical tile into the retained save state every frame
         // (upstream keeps `gSaveBlock1Ptr->pos` current as the player moves);
         // map tiles are far inside i16, so the saturation never fires. Runs
@@ -774,7 +757,10 @@ impl OverworldPhase {
                 Some(InteractionOutcome::RivalBattle) => self.begin_route103_rival_battle(),
                 // Consumed upstream too (`InteractionOutcome::Unmodelled`'s
                 // own doc comment) -- fail closed, nothing to render.
-                Some(InteractionOutcome::Unmodelled) | None => {}
+                Some(InteractionOutcome::Unmodelled(target)) => {
+                    eprintln!("interaction: no launcher for {target:?} -- frame consumed");
+                }
+                None => {}
             }
         }
 

@@ -519,6 +519,63 @@ fn the_first_battle_conclusion_clears_the_stored_status_of_a_single_member_party
     );
 }
 
+/// `PickWildMonNature` consults `gPlayerParty[0]` even when it is fainted
+/// (`pokeemerald/src/wild_encounter.c:367-372`), not the battle lead behind it.
+#[test]
+fn a_fainted_synchronize_slot_zero_still_synchronizes_for_the_wild_mon() {
+    let dex = Dex::new();
+    let ivs = Ivs {
+        hp: battle::MAX_IV,
+        attack: battle::MAX_IV,
+        defense: battle::MAX_IV,
+        speed: battle::MAX_IV,
+        sp_attack: battle::MAX_IV,
+        sp_defense: battle::MAX_IV,
+    };
+    // Mew, personality 0: Synchronize, Hardy.
+    let mut mew = BattlePokemon::new(&dex, SpeciesId(151), 50, ivs, 0, vec![MoveId::POUND])
+        .expect("Mew is in the dex");
+    mew.apply_damage(u32::MAX);
+    let mut seed = new_game_phase();
+    seed.save1.player_party_count = 2;
+    seed.save1.player_party[0] = crate::party::to_save_pokemon(&dex, &mew);
+    seed.save1.player_party[1] =
+        crate::party::to_save_pokemon(&dex, &new_game::provisional_starter());
+    let mut phase = OverworldPhase::from_saved(
+        crate::overworld::test_support::synthetic_scene(10, 10),
+        seed.map_id,
+        seed.save1,
+        seed.save2,
+    );
+    assert_eq!(phase.party_lead_slot, 1, "setup: slot 1 is the battle lead");
+
+    // A winning coin flip where neither a missing flip nor a plain draw yields Hardy.
+    let mut probe = phase.rng.clone();
+    let mut found = None;
+    for _ in 0..4096 {
+        let mut trial = probe.clone();
+        let coin = trial.next_u16();
+        let random_nature = trial.next_u16();
+        if coin.is_multiple_of(2) && !coin.is_multiple_of(25) && !random_nature.is_multiple_of(25) {
+            found = Some(probe.clone());
+            break;
+        }
+        let _ = probe.next_u16();
+    }
+    phase.rng = found.expect("a winning-flip state exists within the scan");
+
+    phase.begin_wild_battle(Some(WildEncounter {
+        species: WURMPLE,
+        level: 2,
+        slot: 0,
+    }));
+
+    let Some(ActiveBattle::Wild(battle)) = phase.active_battle.as_ref() else {
+        panic!("the healthy lead must fight");
+    };
+    assert_eq!(battle.enemy().nature(), battle::Nature::Hardy);
+}
+
 /// A white-out that reselects a different slot while the old lead is still
 /// lent out installs the replacement as an ordinary, un-lent lead: the
 /// owner clears the loan with the reselection, so the next battle can borrow
