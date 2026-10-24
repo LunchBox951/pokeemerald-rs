@@ -34,7 +34,7 @@ const NO_LEAD_SLOT: usize = 0;
     not(test),
     expect(
         dead_code,
-        reason = "compatibility boundary awaiting its flow adopters"
+        reason = "compatibility boundary awaiting its remaining flow adopters"
     )
 )]
 impl OverworldPhase {
@@ -125,10 +125,53 @@ impl OverworldPhase {
         }
     }
 
-    /// Load and selection: rebuilds the lead from the saved party
-    /// ([`party::select_active_battler`]), measuring what the load hid.
+    /// Load and selection (the party half of `CopyPartyAndObjectsFromSave`,
+    /// `LoadPlayerParty`, `src/load_save.c:160-205`): rebuilds the lead from
+    /// the saved party using [`party::select_active_battler`], measuring what
+    /// the load hid. Reads the saved party and count; writes no saved bytes.
+    ///
+    /// The lead is empty when the stored party count is zero (the port's
+    /// deliberate difference from `SetBattlePartyIds`'s count-blind scan in
+    /// `src/battle_controllers.c`) or when no slot decodes into a usable
+    /// battler. The second case is logged and sets
+    /// [`OverworldPhase::undecodable_lead_retained`]; no replacement starter
+    /// is fabricated, because that would hand the player a Pokemon they did
+    /// not save. The object-event half lives in [`OverworldPhase::from_saved`],
+    /// because the player's facing must be known before the player state is
+    /// built.
     pub(super) fn load_lead_from_save(&mut self) {
-        self.copy_party_and_objects_from_save();
+        self.lead_loan = LeadLoan::NotLent;
+        if self.save1.player_party_count == 0 {
+            self.set_no_party_lead(false);
+            return;
+        }
+        let dex = Dex::new();
+        // `SetBattlePartyIds` scans every party slot, not only the stored count.
+        match party::select_active_battler(&dex, &self.save1.player_party) {
+            Ok((slot, lead)) => {
+                self.lead_hp_hidden_by_load =
+                    party::hp_hidden_by_load(&dex, &self.save1.player_party[slot], &lead);
+                self.party_lead = Some(lead);
+                self.party_lead_slot = slot;
+                self.undecodable_lead_retained = false;
+            }
+            Err(err) => {
+                eprintln!(
+                    "continue: {err} -- slot 0's record and stored party count are \
+                     retained; resuming with an empty party"
+                );
+                // A decode failure is this port's limit, not proof the bytes
+                // are junk, so the next SAVE must not erase them.
+                self.set_no_party_lead(true);
+            }
+        }
+    }
+
+    fn set_no_party_lead(&mut self, undecodable_lead_retained: bool) {
+        self.party_lead = None;
+        self.party_lead_slot = NO_LEAD_SLOT;
+        self.lead_hp_hidden_by_load = 0;
+        self.undecodable_lead_retained = undecodable_lead_retained;
     }
 
     /// Whole-lead healing (`HealPlayerParty`, `script_pokemon_util.c:30-58`):
