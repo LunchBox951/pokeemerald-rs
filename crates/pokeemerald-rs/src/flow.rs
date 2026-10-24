@@ -192,7 +192,9 @@ pub(crate) enum AppScene {
     /// for the front-end palette fade" section). [`AnimatedTitle::tick`]
     /// stays fixed here -- the retained title stops animating, matching
     /// upstream parking `CB2_GoToMainMenu` on the fade rather than the
-    /// title task.
+    /// title task. The cloud scroll is held one tick behind it: the
+    /// confirming frame skips the background counter update but not
+    /// `AnimateSprites` (`title_screen.c:675-681, :782-787, :805-814`).
     TitleFadeWait(Box<TitleFadeWait>),
     /// The main menu (I-3, issue #216; I-6, issue #214): Up/Down move the
     /// selection, A confirms it (module docs on [`advance_scene`]'s
