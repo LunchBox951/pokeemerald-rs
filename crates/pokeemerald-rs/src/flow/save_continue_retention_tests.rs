@@ -101,10 +101,10 @@ fn a_slot_that_will_not_decode_survives_an_ordinary_save() {
 /// that somehow inherited a set `undecodable_lead_retained` flag alongside
 /// stale bytes (issue #353 review, requirement 2) -- the state a bug in a
 /// future retention path could leave behind. Reproduces the shape of
-/// `OverworldPhase::load_default`'s provisional-starter grant -- the
+/// `OverworldPhase::load`'s provisional-starter grant -- the
 /// flag's only production write site outside the load path, and a no-op
 /// one at that (`false` onto `false`) -- without the asset pack a real
-/// `load_default` call needs.
+/// `OverworldPhase::load` call needs.
 ///
 /// `copy_party_and_objects_to_save`'s merge arm is gated on `party_lead`
 /// being `Some` and is checked first, so a real lead always overrides a
@@ -137,7 +137,7 @@ fn a_deliberate_identity_change_overrides_a_retained_undecodable_slot() {
     phase.save1.player_party[0] = garbage;
     phase.undecodable_lead_retained = true;
 
-    // The deliberate identity change `load_default` performs: a fresh
+    // The deliberate identity change `OverworldPhase::load` performs: a fresh
     // provisional starter. That constructor also clears the retention flag
     // belt-and-suspenders style, and this test deliberately does *not* --
     // the flag stays `true` across the save below, so what follows proves

@@ -1,14 +1,10 @@
-//! Locating the text-window frames, the message box, and their palettes.
+//! Locates the text-window frames, the message box, and their palettes.
 //!
-//! The 21 tile sheets and 24 of the 25 palettes are unique, so they pin
-//! themselves. The message box's palette does not: upstream stores it
-//! twice, once as `gMessageBox_Pal` beside the message box's own tiles and
-//! once as the first bank of `sTextWindowPalettes`. Both hold the same
-//! colours, so nothing in the bytes chooses; adjacency does. The pack id
-//! names the message box, so the generator records the copy that sits
-//! immediately before `gMessageBox_Gfx` -- which is unique -- and records
-//! `sTextWindowPalettes` separately, derived from the first `text_pal*`
-//! bank and then required to hold all four in order.
+//! The 21 tile sheets and 24 of 25 palettes are unique. The message box
+//! palette is stored twice, as `gMessageBox_Pal` and as bank 0 of
+//! `sTextWindowPalettes`, with identical bytes. The copy immediately before
+//! the unique `gMessageBox_Gfx` is recorded for it; `sTextWindowPalettes` is
+//! derived from `text_pal1` and must hold all four banks in order.
 
 use rom_import::Encoding;
 
@@ -20,12 +16,11 @@ use super::plan::{PalettePlan, ReportLine, Resolution, SymbolExpectation, TextWi
 use super::tilesets::len32;
 use super::Context;
 
-/// The pack id whose palette the ROM stores twice.
+/// Pack id of the palette stored twice in the ROM.
 const DUPLICATED_PALETTE: &str = "text-window/palette/message_box";
-/// The image whose tiles the duplicated palette sits beside.
+/// Image that the `gMessageBox_Pal` copy immediately precedes.
 const ADJACENT_IMAGE: &str = "text-window/image/message_box";
-/// The pack ids of `sTextWindowPalettes[1..=4]`, in table order. The first
-/// follows `sTextWindowPalettes[0]`.
+/// Pack ids of `sTextWindowPalettes[1..=4]`, in table order.
 const WINDOW_BANKS: [&str; 4] = [
     "text-window/palette/text_pal1",
     "text-window/palette/text_pal2",
@@ -33,7 +28,14 @@ const WINDOW_BANKS: [&str; 4] = [
     "text-window/palette/text_pal4",
 ];
 
-/// Locate the whole text-window domain.
+/// Colours in each `sTextWindowPalettes` bank: the table is `u16[][16]`
+/// (`text_window.c:51-58`), and the importer's `corroborate` rejects any other
+/// shape.
+const BANK_COLORS: u16 = 16;
+/// Bytes in each `sTextWindowPalettes` bank, the table's fixed stride.
+const BANK_BYTES: u32 = 32;
+
+/// Locates the text-window frames, message box, and palettes.
 ///
 /// # Errors
 ///
@@ -99,8 +101,7 @@ pub fn locate(
     })
 }
 
-/// The report line for `sTextWindowPalettes`, a `static` upstream and so
-/// absent from an ordinary linker map.
+/// The report line for `sTextWindowPalettes`, a `static` absent from linker maps.
 fn window_palettes_line(addr: u32, bank_bytes: u32) -> ReportLine {
     ReportLine::unique("sTextWindowPalettes", addr, bank_bytes * 5)
         .with(Resolution::StructDerived)
@@ -108,10 +109,19 @@ fn window_palettes_line(addr: u32, bank_bytes: u32) -> ReportLine {
         .note("one bank before the first text_pal bank")
 }
 
-/// What a linker map should say at one text-window palette's address.
+/// Whether the frame named by `stem` (`1`..`20`) is declared `static`
+/// upstream, so a linker map omits both its tiles and its palette.
 ///
-/// The four `text_pal*` banks are entries 1..4 of `sTextWindowPalettes`,
-/// so only the array itself is a symbol.
+/// `text_window.c:10-28` and `:31-49`: only frame 1 is global
+/// (`gTextWindowFrame1_Gfx`, `gTextWindowFrame1_Pal`).
+pub(super) fn is_static_frame(stem: &str) -> bool {
+    // Canonical decimal only: `02` or `+2` names no upstream frame.
+    stem.parse::<u32>()
+        .is_ok_and(|frame| (2..=20).contains(&frame) && frame.to_string() == stem)
+}
+
+/// The linker-map expectation at a palette's address; `text_pal*` banks are
+/// interior to `sTextWindowPalettes`, and frames 2-20 are `static`.
 fn palette_symbol(id: &str) -> SymbolExpectation {
     let Some(stem) = id.strip_prefix("text-window/palette/") else {
         return SymbolExpectation::Unnamed;
@@ -119,11 +129,40 @@ fn palette_symbol(id: &str) -> SymbolExpectation {
     if stem.starts_with("text_pal") {
         return SymbolExpectation::Interior;
     }
+    if is_static_frame(stem) {
+        return SymbolExpectation::Local(format!("sTextWindowFrame{stem}_Pal"));
+    }
     SymbolExpectation::Contains(vec![format!("TextWindowFrame{stem}_Pal")])
 }
 
-/// Derive `sTextWindowPalettes` from the bank that follows its first entry,
-/// then require every `text_pal*` bank at its indexed place in the table.
+/// Requires a bank to hold exactly one full 16-colour, 32-byte palette.
+///
+/// A shorter bank still matches the ROM by prefix and passes the address
+/// checks, but `rom-import` refuses it with `StructMismatch`.
+fn require_full_bank(
+    id: &str,
+    color_count: u16,
+    payload_bytes: u32,
+) -> Result<(), GenRomProfileError> {
+    if color_count == BANK_COLORS && payload_bytes == BANK_BYTES {
+        return Ok(());
+    }
+    Err(GenRomProfileError::StructMismatch {
+        id: id.to_owned(),
+        reason: format!(
+            "sTextWindowPalettes banks must hold exactly {BANK_COLORS} colours \
+             ({BANK_BYTES} bytes), found {color_count} colours ({payload_bytes} bytes)"
+        ),
+    })
+}
+
+/// Derives `sTextWindowPalettes` from the bank before `text_pal1`, then
+/// requires each `text_pal*` bank at its table index.
+///
+/// # Errors
+///
+/// [`GenRomProfileError::StructMismatch`] when the message box or a bank is not exactly
+/// 16 colours / 32 bytes, or the banks are not the table's in order.
 fn locate_window_palettes(
     ctx: &Context<'_>,
     palettes: &[PalettePlan],
@@ -137,6 +176,13 @@ fn locate_window_palettes(
             .map(|plan| plan.addr)
             .ok_or_else(|| GenRomProfileError::MissingPackEntry(id.to_owned()))
     };
+    for id in std::iter::once(DUPLICATED_PALETTE).chain(WINDOW_BANKS) {
+        let plan = palettes
+            .iter()
+            .find(|plan| plan.id == id)
+            .ok_or_else(|| GenRomProfileError::MissingPackEntry(id.to_owned()))?;
+        require_full_bank(id, plan.color_count, bank_bytes)?;
+    }
     let first = bank_addr(WINDOW_BANKS[0])?;
     let table = first
         .checked_sub(bank_bytes)

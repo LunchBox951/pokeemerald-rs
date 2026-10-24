@@ -122,6 +122,7 @@
 
 pub mod app;
 mod authored_message;
+mod bag_menu;
 mod flow;
 pub mod frame;
 mod game_save;
@@ -160,7 +161,9 @@ pub use platform::Buttons as AppButtons;
 #[cfg(test)]
 mod voicegroup_pack_tests;
 
-/// Synthetic `AssetPack` fixture helpers shared by [`main_menu::tests`],
-/// [`intro::tests`], and [`start_menu::palette_tests`].
+/// Synthetic `AssetPack` fixture helpers and exclusive-create scratch-pack
+/// writers shared by [`main_menu::tests`], [`intro::tests`],
+/// [`music::tests`], [`overworld::test_support`], and
+/// [`start_menu::palette_tests`].
 #[cfg(test)]
 mod pack_test_support;

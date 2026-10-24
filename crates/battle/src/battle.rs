@@ -22,13 +22,17 @@ use crate::exp::{trainer_faint_exp, wild_faint_exp};
 use crate::pokemon::{BattlePokemon, MoveLearnDecision, PendingMoveLearn, MAX_LEVEL, MOVE_NONE};
 use crate::secondary;
 use crate::stat_change;
-use crate::status1::{draws_full_paralysis, draws_shed_skin_cure, poison_residual_damage, Status1};
+use crate::status1::{
+    draws_full_paralysis, draws_shed_skin_cure, poison_residual_damage, tick_sleep, SleepTick,
+    Status1,
+};
 use crate::turn_order::{resolve_order, Order};
 use crate::volatile::draws_confusion_self_hit;
 
 pub(crate) mod admission;
 mod events;
 mod execute;
+pub(crate) mod held_item;
 pub(crate) mod opponent_ai;
 pub mod trainer;
 pub(crate) mod trainer_ai;
@@ -255,10 +259,11 @@ impl Battle {
     /// enemy's moveset against the active member or any non-fainted reserve.
     /// A fainted reserve is admitted: it models a player party that already
     /// lost a member before the battle. A non-fainted participant that is
-    /// Paralysed with Limber, Poisoned with Immunity, confused with Own Tempo,
-    /// or holds Truant, Intimidate, Speed Boost, Color Change, Trace, Effect
-    /// Spore, Flame Body, Cute Charm, Drizzle, Drought or Sand Stream fails
-    /// with [`BattleError::UnportedAbilityInteraction`].
+    /// Paralysed with Limber, Poisoned with Immunity, asleep with Insomnia or
+    /// Vital Spirit, confused with Own Tempo, or holds Truant, Intimidate,
+    /// Speed Boost, Color Change, Trace, Effect Spore, Flame Body, Cute Charm,
+    /// Drizzle, Drought or Sand Stream fails with
+    /// [`BattleError::UnportedAbilityInteraction`].
     /// Errors leave the RNG untouched.
     pub fn new_with_player_reserves(
         dex: Dex,
@@ -302,6 +307,13 @@ impl Battle {
             }
         }
         admission::ensure_participants_admissible(
+            [&player, &enemy].into_iter().chain(
+                player_reserves
+                    .iter()
+                    .filter(|reserve| !reserve.is_fainted()),
+            ),
+        )?;
+        held_item::ensure_participants_hold_playable_items(
             [&player, &enemy].into_iter().chain(
                 player_reserves
                     .iter()
@@ -383,6 +395,7 @@ impl Battle {
         }
         let data = trainer::trainer_data(trainer)?;
         trainer_ai::ensure_supported_flags(data.ai_flags)?;
+        held_item::ensure_trainer_bag_unused(&data.items)?;
         if player.is_fainted() {
             return Err(BattleError::FaintedBattler(true));
         }
@@ -413,6 +426,16 @@ impl Battle {
         }
 
         admission::ensure_participants_admissible(
+            std::iter::once(&player)
+                .chain(party.iter().filter(|mon| !mon.is_fainted()))
+                .chain(
+                    player_reserves
+                        .iter()
+                        .filter(|reserve| !reserve.is_fainted()),
+                ),
+        )?;
+
+        held_item::ensure_participants_hold_playable_items(
             std::iter::once(&player)
                 .chain(party.iter().filter(|mon| !mon.is_fainted()))
                 .chain(
@@ -1211,6 +1234,31 @@ impl Battle {
         // `pokeemerald/src/battle_util.c:78`-`:137`), so it holds the move
         // even when full paralysis or empty PP stop this one from landing.
         self.last_move_used = move_id;
+        // `CANCELER_ASLEEP` decrements sleep ahead of every other modelled
+        // canceller (`src/battle_util.c:2015`-`:2057`): a duration that
+        // survives cancels the move, expiry lets it proceed.
+        let attacker = if player_is_attacker {
+            &mut self.player
+        } else {
+            &mut self.enemy
+        };
+        match tick_sleep(attacker.status1(), attacker.ability()) {
+            SleepTick::NotAsleep => {}
+            SleepTick::StillAsleep(status) => {
+                attacker.set_status1(status);
+                events.push(BattleEvent::FastAsleep {
+                    by_player: player_is_attacker,
+                    move_id,
+                });
+                return Ok(());
+            }
+            SleepTick::WokeUp => {
+                attacker.set_status1(Status1::Healthy);
+                events.push(BattleEvent::WokeUp {
+                    by_player: player_is_attacker,
+                });
+            }
+        }
         // `CANCELER_CONFUSED` decrements the attacker's confusion duration
         // ahead of `CANCELER_PARALYZED` (`src/battle_util.c:2157`-`:2199`).
         // A duration that survives the decrement draws once more before the

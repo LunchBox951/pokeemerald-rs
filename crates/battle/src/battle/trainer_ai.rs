@@ -24,10 +24,13 @@ use crate::damage::{apply_stab, apply_type_effectiveness, base_damage, has_stab,
 use crate::damage::{DamageInput, MoveCategory, Weather};
 use crate::dex::Dex;
 use crate::error::BattleError;
+use crate::fixed_damage::EFFECT_SONICBOOM;
 use crate::hit::defender_levitate_blocked;
 use crate::pokemon::{BattlePokemon, MAX_MON_MOVES};
 use crate::stat_change::{
-    CLEAR_BODY, EFFECT_ATTACK_DOWN, EFFECT_DEFENSE_DOWN, HYPER_CUTTER, SOUNDPROOF, WHITE_SMOKE,
+    stage_of, stat_change_for_effect, ChangedStat, StatChangeDirection, StatChangeEffect,
+    StatChangeMagnitude, CLEAR_BODY, EFFECT_ATTACK_DOWN, EFFECT_DEFENSE_DOWN, HYPER_CUTTER,
+    KEEN_EYE, SOUNDPROOF, WHITE_SMOKE,
 };
 use crate::stat_stage::StatStage;
 use crate::status1::Status1;
@@ -119,6 +122,45 @@ const EFFECT_FOCUS_ENERGY_RAW: u8 = 47;
 const EFFECT_CONFUSE_RAW: u8 = 49;
 const EFFECT_PARALYZE_RAW: u8 = 67;
 
+/// AI-only: effects `AI_CheckBadMove` routes to an `AI_CBM_*Up` / `*Down` label
+/// that execution does not map (`data/battle_ai_scripts.s:108-121,133-146,163,186`).
+const AI_ONLY_STAT_LABELS: [(u8, ChangedStat, StatChangeMagnitude, StatChangeDirection); 12] = {
+    use ChangedStat::{Accuracy, Defense, Evasion, SpAttack, SpDefense, Speed};
+    use StatChangeDirection::{Lower, Raise};
+    use StatChangeMagnitude::{One, Two};
+    [
+        (12, Speed, One, Raise),
+        (14, SpDefense, One, Raise),
+        (15, Accuracy, One, Raise),
+        (21, SpAttack, One, Lower),
+        (22, SpDefense, One, Lower),
+        (55, Accuracy, Two, Raise),
+        (56, Evasion, Two, Raise),
+        (61, SpAttack, Two, Lower),
+        (63, Accuracy, Two, Lower),
+        (64, Evasion, Two, Lower),
+        (EFFECT_MINIMIZE_RAW, Evasion, One, Raise),
+        (EFFECT_DEFENSE_CURL_RAW, Defense, One, Raise),
+    ]
+};
+
+const EFFECT_MINIMIZE_RAW: u8 = 108;
+const EFFECT_DEFENSE_CURL_RAW: u8 = 156;
+
+/// The stat change an `AI_CBM_*` stat label scores for `effect`.
+fn ai_stat_label(effect: MoveEffect) -> Option<StatChangeEffect> {
+    stat_change_for_effect(effect).or_else(|| {
+        AI_ONLY_STAT_LABELS
+            .iter()
+            .find(|(raw, ..)| *raw == effect.0)
+            .map(|&(_, stat, magnitude, direction)| StatChangeEffect {
+                stat,
+                magnitude,
+                direction,
+            })
+    })
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ScoreableEffect {
     Hit,
@@ -130,12 +172,19 @@ enum ScoreableEffect {
     Confuse,
     /// `AI_CBM_FocusEnergy` (`data/battle_ai_scripts.s:382-384`).
     FocusEnergy,
+    /// `AI_CBM_HighRiskForDamage`, reached from Sonic Boom
+    /// (`data/battle_ai_scripts.s:177,368-376`).
+    HighRiskForDamage,
     /// One of [`UNCHANGED_AFTER_PROLOGUE_EFFECTS`].
     UnchangedAfterPrologue(MoveEffect),
+    /// Any other shared stat-stage label (see [`ai_stat_label`]). Its
+    /// `AI_CheckViability` and `AI_SetupFirstTurn` branches are not ported,
+    /// except that Defense Curl has no viability branch.
+    StatLabel(MoveEffect, StatChangeEffect),
 }
 
 impl ScoreableEffect {
-    const fn from_raw(effect: MoveEffect) -> Option<Self> {
+    fn from_raw(effect: MoveEffect) -> Option<Self> {
         if effect.0 == EFFECT_HIT.0 {
             Some(Self::Hit)
         } else if effect.0 == EFFECT_ATTACK_DOWN.0 {
@@ -148,6 +197,10 @@ impl ScoreableEffect {
             Some(Self::Confuse)
         } else if effect.0 == EFFECT_FOCUS_ENERGY_RAW {
             Some(Self::FocusEnergy)
+        } else if effect == EFFECT_SONICBOOM {
+            Some(Self::HighRiskForDamage)
+        } else if let Some(label) = ai_stat_label(effect) {
+            Some(Self::StatLabel(effect, label))
         } else {
             let mut index = 0;
             while index < UNCHANGED_AFTER_PROLOGUE_EFFECTS.len() {
@@ -181,6 +234,12 @@ impl ScoreableEffect {
                 return self.supported_with_status_handler(flags);
             }
             Self::UnchangedAfterPrologue(effect) => effect,
+            Self::StatLabel(effect, _) => {
+                return !flags.contains(AiFlags::SETUP_FIRST_TURN)
+                    && (effect.0 == EFFECT_DEFENSE_CURL_RAW
+                        || !flags.contains(AiFlags::CHECK_VIABILITY));
+            }
+            Self::HighRiskForDamage => return flags == AiFlags::CHECK_BAD_MOVE,
             Self::Hit | Self::AttackDown | Self::DefenseDown => return true,
         };
         if flags.contains(AiFlags::CHECK_VIABILITY)
@@ -763,38 +822,73 @@ fn score_bad_move(
         return Ok(());
     }
 
-    // A stat drop checks the target's stage floor, then reads the
-    // ability at each of its own guards -- Hyper Cutter only for Attack, then
-    // Clear Body/White Smoke shared by both stats
-    // (`data/battle_ai_scripts.s:277-285,308-311`).
     let penalty = match effect {
         ScoreableEffect::Hit | ScoreableEffect::UnchangedAfterPrologue(_) => None,
-        ScoreableEffect::AttackDown => {
-            if target.stages().attack == StatStage::MIN {
-                Some(STRONGLY_DISCOURAGE)
-            } else {
-                let hyper_cutter_ability = ai_get_ability(target)?;
-                if ai_hyper_cutter_blocks(hyper_cutter_ability) {
-                    Some(STRONGLY_DISCOURAGE)
-                } else {
-                    ai_clear_body_or_white_smoke_blocks(ai_get_ability(target)?)
-                        .then_some(STRONGLY_DISCOURAGE)
-                }
-            }
-        }
-        ScoreableEffect::DefenseDown => (target.stages().defense == StatStage::MIN
-            || ai_clear_body_or_white_smoke_blocks(ai_get_ability(target)?))
-        .then_some(STRONGLY_DISCOURAGE),
+        ScoreableEffect::AttackDown => stat_label_penalty(
+            user,
+            target,
+            StatChangeEffect {
+                stat: ChangedStat::Attack,
+                magnitude: StatChangeMagnitude::One,
+                direction: StatChangeDirection::Lower,
+            },
+        )?,
+        ScoreableEffect::DefenseDown => stat_label_penalty(
+            user,
+            target,
+            StatChangeEffect {
+                stat: ChangedStat::Defense,
+                magnitude: StatChangeMagnitude::One,
+                direction: StatChangeDirection::Lower,
+            },
+        )?,
+        ScoreableEffect::StatLabel(_, label) => stat_label_penalty(user, target, label)?,
         ScoreableEffect::Paralyze => paralyze_penalty(dex, move_id, user, target)?,
         ScoreableEffect::Confuse => confuse_penalty(target)?,
         ScoreableEffect::FocusEnergy => {
             user.volatiles().focus_energy.then_some(STRONGLY_DISCOURAGE)
+        }
+        ScoreableEffect::HighRiskForDamage => {
+            high_risk_for_damage_penalty(dex, move_id, user, target)?
         }
     };
     if let Some(penalty) = penalty {
         scores.adjust(slot, penalty);
     }
     Ok(())
+}
+
+/// `AI_CBM_*Up` / `AI_CBM_*Down` (`data/battle_ai_scripts.s:248-312`): the
+/// first guard that fires ends the script.
+fn stat_label_penalty(
+    user: &BattlePokemon,
+    target: &BattlePokemon,
+    label: StatChangeEffect,
+) -> Result<Option<i8>, BattleError> {
+    let holder = if label.affects_user() { user } else { target };
+    if stage_of(holder, label.stat) == label.cap() {
+        return Ok(Some(STRONGLY_DISCOURAGE));
+    }
+    if label.affects_user() {
+        return Ok(None);
+    }
+    let blocked = stat_specific_drop_guard(target, label.stat)?
+        || ai_clear_body_or_white_smoke_blocks(ai_get_ability(target)?);
+    Ok(blocked.then_some(STRONGLY_DISCOURAGE))
+}
+
+/// The guard a drop label runs before `CheckIfAbilityBlocksStatChange`
+/// (`data/battle_ai_scripts.s:277-281,287-290,300-304`).
+fn stat_specific_drop_guard(
+    target: &BattlePokemon,
+    stat: ChangedStat,
+) -> Result<bool, BattleError> {
+    Ok(match stat {
+        ChangedStat::Attack => ai_hyper_cutter_blocks(ai_get_ability(target)?),
+        ChangedStat::Speed => ai_get_ability(target)? == AbilityId::SPEED_BOOST,
+        ChangedStat::Accuracy => ai_get_ability(target)? == KEEN_EYE,
+        _ => false,
+    })
 }
 
 /// `AI_CBM_Paralyze`: each guard ends the script with its own single penalty,
@@ -815,6 +909,21 @@ fn paralyze_penalty(
     } else {
         Ok(None)
     }
+}
+
+/// `AI_CBM_HighRiskForDamage`: a chart-immune target or a Wonder Guard target
+/// the move does not hit for exactly double damage ends at `-10`
+/// (`data/battle_ai_scripts.s:368-376`). Unlike the prologue, it runs for
+/// power-1 moves too, and it draws nothing.
+fn high_risk_for_damage_penalty(
+    dex: &Dex,
+    move_id: MoveId,
+    user: &BattlePokemon,
+    target: &BattlePokemon,
+) -> Result<Option<i8>, BattleError> {
+    let blocked = has_no_effect(dex, move_id, user, target)?
+        || ai_wonder_guard_blocks(dex, move_id, user, target, ai_get_ability(target)?)?;
+    Ok(blocked.then_some(STRONGLY_DISCOURAGE))
 }
 
 /// `AI_CBM_Confuse`: active confusion ends at `-5` before any ability read;
@@ -882,7 +991,13 @@ fn score_viability(
         ScoreableEffect::Hit
         | ScoreableEffect::UnchangedAfterPrologue(_)
         | ScoreableEffect::FocusEnergy => {}
-        ScoreableEffect::Paralyze | ScoreableEffect::Confuse => {
+        ScoreableEffect::HighRiskForDamage => {
+            return Err(BattleError::UnscoreableMoveEffect(move_id))
+        }
+        // Defense Curl is absent from `AI_CheckViability`'s dispatch
+        // (`data/battle_ai_scripts.s:652-776`); every other label is unported.
+        ScoreableEffect::StatLabel(effect, _) if effect.0 == EFFECT_DEFENSE_CURL_RAW => {}
+        ScoreableEffect::Paralyze | ScoreableEffect::Confuse | ScoreableEffect::StatLabel(..) => {
             return Err(BattleError::UnscoreableMoveEffect(move_id));
         }
         ScoreableEffect::AttackDown => {
@@ -1939,3 +2054,5 @@ mod tests {
 
 #[cfg(test)]
 mod prologue_tests;
+#[cfg(test)]
+mod stat_stage_tests;

@@ -213,6 +213,12 @@ impl SightApproach {
         &self.trainer
     }
 
+    /// The already-constructed fight, for tests that pin its party.
+    #[cfg(test)]
+    pub(super) const fn battle(&self) -> &battle::Battle {
+        &self.battle
+    }
+
     /// Test-only: jump straight to the intro message's
     /// `waitmessage`/`waitbuttonpress` half, as though the box had already
     /// been opened.
@@ -626,13 +632,15 @@ impl OverworldPhase {
     /// already built becomes
     /// [`OverworldPhase::advance_sight_trainer_battle_frame`]'s to drive.
     ///
-    /// This is where [`OverworldPhase::party_lead`] is finally taken -- not
+    /// This is where the lead is finally lent -- not
     /// at trigger time (module docs on the mid-approach save).
     fn start_sight_trainer_battle(&mut self) -> SightTrainerOutcome {
         let Some(approach) = self.sight_approach.take() else {
             return SightTrainerOutcome::Refused;
         };
-        self.party_lead = None;
+        // The battle was built from a copy of the lead; lend the original so
+        // the owner holds it on loan until the battle returns it.
+        let _lent = self.take_lead_battler();
         self.active_battle = Some(ActiveBattle::SightTrainer {
             battle: approach.battle,
             trainer_id: approach.trainer_id,

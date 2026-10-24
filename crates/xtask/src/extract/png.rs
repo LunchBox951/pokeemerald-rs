@@ -1,7 +1,7 @@
 //! Indexed PNG decoding for extracted graphics.
 //!
 //! [`decode`] accepts non-interlaced, indexed images with 2-, 4-, or 8-bit
-//! pixels and PNG's standard compression and filter methods. It verifies each
+//! pixels (and 4-bit grayscale images, whose inverted samples are the indices) and PNG's standard compression and filter methods. It verifies each
 //! parsed chunk's CRC, ignores unknown ancillary chunks, rejects unknown
 //! critical chunks and any byte following the `IEND` chunk, and returns
 //! unpacked palette-index pixels in scanline order. [`decode_palette`] reads
@@ -145,6 +145,12 @@ const PLTE: [u8; CHUNK_KIND_SIZE] = *b"PLTE";
 const IDAT: [u8; CHUNK_KIND_SIZE] = *b"IDAT";
 const IEND: [u8; CHUNK_KIND_SIZE] = *b"IEND";
 const INDEXED_COLOR_TYPE: u8 = 3;
+/// `gbagfx` has no palette to read from a grayscale image and instead takes
+/// each 4-bit sample inverted (`15 - sample`) as the palette index
+/// (`tools/gbagfx/gfx.c`, `ConvertToTiles4Bpp`), so such an image decodes like
+/// an indexed one that carries no `PLTE`.
+const GRAYSCALE_COLOR_TYPE: u8 = 0;
+const GRAYSCALE_INDEX_MAX: u8 = 15;
 const DEFLATE_COMPRESSION_METHOD: u8 = 0;
 const ADAPTIVE_FILTER_METHOD: u8 = 0;
 const NO_INTERLACE: u8 = 0;
@@ -288,8 +294,13 @@ impl Header {
         if self.width == 0 || self.height == 0 {
             return Err(PngError::Unsupported("width or height is zero"));
         }
-        if self.color_type != INDEXED_COLOR_TYPE {
-            return Err(PngError::Unsupported("colour type is not 3 (indexed)"));
+        match self.color_type {
+            INDEXED_COLOR_TYPE => {}
+            GRAYSCALE_COLOR_TYPE if self.bit_depth == FOUR_BIT_DEPTH => {}
+            GRAYSCALE_COLOR_TYPE => {
+                return Err(PngError::Unsupported("grayscale image is not 4-bit"));
+            }
+            _ => return Err(PngError::Unsupported("colour type is not 3 (indexed)")),
         }
         if !matches!(
             self.bit_depth,
@@ -385,7 +396,12 @@ pub fn decode(data: &[u8]) -> Result<IndexedImage, PngError> {
     }
 
     let raw = inflate::inflate_zlib(&idat)?;
-    let pixels = defilter_and_unpack(&raw, header.width, header.height, header.bit_depth)?;
+    let mut pixels = defilter_and_unpack(&raw, header.width, header.height, header.bit_depth)?;
+    if header.color_type == GRAYSCALE_COLOR_TYPE {
+        for pixel in &mut pixels {
+            *pixel = GRAYSCALE_INDEX_MAX - *pixel;
+        }
+    }
     let palette = match chunks.iter().find(|chunk| chunk.kind == PLTE) {
         Some(chunk) => parse_plte(chunk.data)?,
         None => Vec::new(),
@@ -626,11 +642,46 @@ pub(crate) mod tests {
         raw: &[u8],
         palette: Option<&[u8]>,
     ) -> Vec<u8> {
+        png_of_color_type(
+            super::INDEXED_COLOR_TYPE,
+            bit_depth,
+            width,
+            height,
+            raw,
+            palette,
+        )
+    }
+
+    /// A 4-bit (or other depth) grayscale PNG: samples are the indices.
+    pub(crate) fn grayscale_png_from_raw(
+        bit_depth: u8,
+        width: u32,
+        height: u32,
+        raw: &[u8],
+    ) -> Vec<u8> {
+        png_of_color_type(
+            super::GRAYSCALE_COLOR_TYPE,
+            bit_depth,
+            width,
+            height,
+            raw,
+            None,
+        )
+    }
+
+    fn png_of_color_type(
+        color_type: u8,
+        bit_depth: u8,
+        width: u32,
+        height: u32,
+        raw: &[u8],
+        palette: Option<&[u8]>,
+    ) -> Vec<u8> {
         let mut png = Vec::new();
         png.extend_from_slice(&super::SIGNATURE);
         png.extend_from_slice(&chunk(
             super::IHDR,
-            &ihdr(bit_depth, super::INDEXED_COLOR_TYPE, width, height),
+            &ihdr(bit_depth, color_type, width, height),
         ));
         if let Some(palette) = palette {
             png.extend_from_slice(&chunk(super::PLTE, palette));
@@ -976,6 +1027,25 @@ pub(crate) mod tests {
                 actual: 3,
             },
             "a 1x1 PNG whose IDAT inflates to one extra byte is malformed, not a one-pixel image"
+        );
+    }
+
+    #[test]
+    fn four_bit_grayscale_samples_decode_as_inverted_indices_without_a_palette() {
+        // Two rows of one filter byte and two packed samples (0x1F, 0xA0).
+        let raw = [0, 0x1F, 0xA0, 0, 0x03, 0x70];
+        let image = decode(&super::tests::grayscale_png_from_raw(4, 4, 2, &raw)).unwrap();
+        assert_eq!((image.width, image.height, image.bit_depth), (4, 2, 4));
+        assert_eq!(image.pixels, [14, 0, 5, 15, 15, 12, 8, 15]);
+        assert!(image.palette.is_empty());
+    }
+
+    #[test]
+    fn rejects_grayscale_other_than_four_bit() {
+        let png = super::tests::grayscale_png_from_raw(8, 1, 1, &[0, 0]);
+        assert_eq!(
+            decode(&png).unwrap_err(),
+            PngError::Unsupported("grayscale image is not 4-bit")
         );
     }
 
