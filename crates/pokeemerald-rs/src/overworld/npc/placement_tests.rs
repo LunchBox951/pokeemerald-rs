@@ -60,10 +60,7 @@ fn the_spawn_window_keeps_every_admitted_sprite_clear_of_the_oam_y_wrap() {
     let mut bindings = HashMap::new();
     bindings.insert(
         "OBJ_EVENT_GFX_MOM",
-        SpriteBinding {
-            base_tile: avatar::FRAME_BLOCK_TILES,
-            palette_bank: NpcPaletteTag::Npc4.bank(),
-        },
+        SpriteBinding::people(avatar::FRAME_BLOCK_TILES, NpcPaletteTag::Npc4.bank()),
     );
     let data = EventData::new();
     let here: &'static [ObjectEvent] = Box::leak(Box::new([object(
@@ -158,10 +155,7 @@ fn oam_entries_skips_a_hidden_object_and_one_with_no_binding() {
     let mut bindings = HashMap::new();
     bindings.insert(
         "OBJ_EVENT_GFX_RIVAL_BRENDAN_NORMAL",
-        SpriteBinding {
-            base_tile: 0,
-            palette_bank: PLAYER_PALETTE_BANK,
-        },
+        SpriteBinding::people(0, PLAYER_PALETTE_BANK),
     );
 
     let player = PlayerState::new((7, 2), DEFAULT_ELEVATION, Direction::North);
@@ -181,10 +175,7 @@ fn oam_entries_draws_a_visible_recognized_object() {
     let mut bindings = HashMap::new();
     bindings.insert(
         "OBJ_EVENT_GFX_MOM",
-        SpriteBinding {
-            base_tile: avatar::FRAME_BLOCK_TILES,
-            palette_bank: NpcPaletteTag::Npc4.bank(),
-        },
+        SpriteBinding::people(avatar::FRAME_BLOCK_TILES, NpcPaletteTag::Npc4.bank()),
     );
 
     let player = PlayerState::new((2, 6), DEFAULT_ELEVATION, Direction::South);
@@ -207,10 +198,7 @@ fn oam_entries_take_their_priority_from_the_templates_elevation() {
     let mut bindings = HashMap::new();
     bindings.insert(
         "OBJ_EVENT_GFX_MOM",
-        SpriteBinding {
-            base_tile: avatar::FRAME_BLOCK_TILES,
-            palette_bank: NpcPaletteTag::Npc4.bank(),
-        },
+        SpriteBinding::people(avatar::FRAME_BLOCK_TILES, NpcPaletteTag::Npc4.bank()),
     );
     let player = PlayerState::new((2, 6), DEFAULT_ELEVATION, Direction::South);
 
@@ -268,10 +256,7 @@ fn a_distant_object_event_produces_no_oam_entry_instead_of_wrapping_onto_the_pla
     let mut bindings = HashMap::new();
     bindings.insert(
         "OBJ_EVENT_GFX_BOY_2",
-        SpriteBinding {
-            base_tile: avatar::FRAME_BLOCK_TILES,
-            palette_bank: NpcPaletteTag::Npc1.bank(),
-        },
+        SpriteBinding::people(avatar::FRAME_BLOCK_TILES, NpcPaletteTag::Npc1.bank()),
     );
     let data = EventData::new();
 
@@ -305,10 +290,7 @@ fn oam_entries_glues_a_stationary_npc_to_the_camera_through_every_direction_of_a
     let mut bindings = HashMap::new();
     bindings.insert(
         "OBJ_EVENT_GFX_MOM",
-        SpriteBinding {
-            base_tile: avatar::FRAME_BLOCK_TILES,
-            palette_bank: NpcPaletteTag::Npc4.bank(),
-        },
+        SpriteBinding::people(avatar::FRAME_BLOCK_TILES, NpcPaletteTag::Npc4.bank()),
     );
 
     for direction in [

@@ -29157,6 +29157,92 @@
       "status": "pending"
     },
     "src/data/object_events/object_event_graphics_info.h": {
+      "artifacts": {
+        "gObjectEventGraphicsInfo_BerryTree": {
+          "reason": "Route 103's three berry trees at BERRY_STAGE_BERRIES (npc/sheets.rs initial_berry_sheet): stage 4's 16x32 Cheri/Leppa cell 4 (sAnim_BerryTreeStage4 pic 7, sPicTable_CheriBerryTree/LeppaBerryTree) with gBerryTreePaletteSlotTable_Cheri/_Leppa's NPC_3/NPC_2 slot. A static fresh-save state: berry growth, planting, watering and SetBerryTreeGraphics' per-save stage are not modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
+        "gObjectEventGraphicsInfo_BirchsBag": {
+          "reason": "Typed row npc/sheets.rs object_sheet(): 16x16 inanimate, with this struct's .width/.height, palette tag/slot and .anims transcribed as the sheet's frame geometry, native palette bank and stationary-pose cell mapping. Only the initial stationary frame is modelled; the rest of the animation table is not run.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
+        "gObjectEventGraphicsInfo_CuttableTree": {
+          "reason": "Typed row npc/sheets.rs object_sheet(): 16x16, inanimate, stay-still cell 0 of four, with this struct's .width/.height, palette tag/slot and .anims transcribed as the sheet's frame geometry, native palette bank and stationary-pose cell mapping. Only the initial stationary frame is modelled; the rest of the animation table is not run.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
+        "gObjectEventGraphicsInfo_EnemyZigzagoon": {
+          "reason": "Typed row npc/sheets.rs object_sheet(): 32x32, nine-cell Standard, with this struct's .width/.height, palette tag/slot and .anims transcribed as the sheet's frame geometry, native palette bank and stationary-pose cell mapping. Only the initial stationary frame is modelled; the rest of the animation table is not run.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
+        "gObjectEventGraphicsInfo_ItemBall": {
+          "reason": "Typed row npc/sheets.rs object_sheet(): 16x16 inanimate, with this struct's .width/.height, palette tag/slot and .anims transcribed as the sheet's frame geometry, native palette bank and stationary-pose cell mapping. Only the initial stationary frame is modelled; the rest of the animation table is not run.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
+        "gObjectEventGraphicsInfo_MovingBox": {
+          "reason": "Typed row npc/sheets.rs object_sheet(): 16x16 inanimate, with this struct's .width/.height, palette tag/slot and .anims transcribed as the sheet's frame geometry, native palette bank and stationary-pose cell mapping. Only the initial stationary frame is modelled; the rest of the animation table is not run.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
+        "gObjectEventGraphicsInfo_MysteryEventDeliveryman": {
+          "reason": "Typed row npc/sheets.rs object_sheet(): 16x32, three-cell Standard, with this struct's .width/.height, palette tag/slot and .anims transcribed as the sheet's frame geometry, native palette bank and stationary-pose cell mapping. Only the initial stationary frame is modelled; the rest of the animation table is not run.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
+        "gObjectEventGraphicsInfo_NinjaBoy": {
+          "reason": "Typed row npc/sheets.rs object_sheet(): 16x16, nine-cell Standard, with this struct's .width/.height, palette tag/slot and .anims transcribed as the sheet's frame geometry, native palette bank and stationary-pose cell mapping. Only the initial stationary frame is modelled; the rest of the animation table is not run.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
+        "gObjectEventGraphicsInfo_Nurse": {
+          "reason": "Typed row npc/sheets.rs object_sheet(): 16x32, four-cell sAnimTable_Nurse, with this struct's .width/.height, palette tag/slot and .anims transcribed as the sheet's frame geometry, native palette bank and stationary-pose cell mapping. Only the initial stationary frame is modelled; the rest of the animation table is not run.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
+        "gObjectEventGraphicsInfo_PichuDoll": {
+          "reason": "Typed row npc/sheets.rs object_sheet(): 16x16 inanimate, with this struct's .width/.height, palette tag/slot and .anims transcribed as the sheet's frame geometry, native palette bank and stationary-pose cell mapping. Only the initial stationary frame is modelled; the rest of the animation table is not run.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
+        "gObjectEventGraphicsInfo_SwabluDoll": {
+          "reason": "Typed row npc/sheets.rs object_sheet(): 16x16 inanimate, with this struct's .width/.height, palette tag/slot and .anims transcribed as the sheet's frame geometry, native palette bank and stationary-pose cell mapping. Only the initial stationary frame is modelled; the rest of the animation table is not run.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
+        "gObjectEventGraphicsInfo_Truck": {
+          "reason": "Typed row npc/sheets.rs object_sheet(): 48x48 inanimate, with this struct's .width/.height, palette tag/slot and .anims transcribed as the sheet's frame geometry, native palette bank and stationary-pose cell mapping. Only the initial stationary frame is modelled; the rest of the animation table is not run.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
+        "gObjectEventGraphicsInfo_VigorothCarryingBox": {
+          "reason": "Typed row npc/sheets.rs object_sheet(): 32x32, cells 0 for every stand frame, with this struct's .width/.height, palette tag/slot and .anims transcribed as the sheet's frame geometry, native palette bank and stationary-pose cell mapping. Only the initial stationary frame is modelled; the rest of the animation table is not run.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
+        "gObjectEventGraphicsInfo_VigorothFacingAway": {
+          "reason": "Typed row npc/sheets.rs object_sheet(): 32x32, cell 3 for every stand frame, with this struct's .width/.height, palette tag/slot and .anims transcribed as the sheet's frame geometry, native palette bank and stationary-pose cell mapping. Only the initial stationary frame is modelled; the rest of the animation table is not run.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc/sheets.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
@@ -29164,7 +29250,7 @@
     "src/data/object_events/object_event_graphics_info_pointers.h": {
       "artifacts": {
         "OBJ_EVENT_GFX_to_graphics_info": {
-          "reason": "npc::resolve_sprite_source is a bounded, explicit re-derivation of this table's OBJ_EVENT_GFX_* -> gObjectEventGraphicsInfo_* mapping (plus each pointed-to struct's own .images/.paletteTag fields, object_event_pic_tables.h/object_event_graphics.h). Partial coverage, stated exactly: it has 23 resolving arms -- 20 'standard' 16x32 NPCs (the Littleroot-family eight plus Oldale Town's girl/mart employee/footprints man and Route 103's black belt/boy 1/fisherman/man 3/man 5/pokefan m/swimmer f/swimmer m/woman 2) and the two rival variants (all 22 fixed-id arms resolving for either PlayerCharacter), plus the OBJ_EVENT_GFX_VAR_0 live-var arm below -- against the 76 distinct graphics ids the 76 maps whose layouts are bundled (assets::bundled_overworld::maps_with_bundled_layouts: the six Littleroot-family maps, Route 101, Oldale Town, Route 103, and every map reusing the truck, house, mart and Pokemon Center layouts) object events actually reference; a test pins that exact drawn/not-drawn partition, and that it is gender-independent, so a newly reachable standard NPC cannot silently stop drawing. The rival pair is deliberately NOT gender-filtered: gObjectEventGraphicsInfo_RivalBrendanNormal/_RivalMayNormal (object_event_graphics_info.h:1920-1937, :2015-2032) simply reuse the corresponding protagonist's own sPicTable_* and OBJ_EVENT_PAL_TAG_*, with no rival-specific art existing at all -- and the rival a player can actually meet is always the OPPOSITE protagonist's object event, since the two Littleroot houses are mirrored maps hardcoding their own resident's id and the intro warp picks which is home (LittlerootTown/scripts.inc:116/:127). The port keeps upstream's PALSLOT_NPC_SPECIAL vs PALSLOT_PLAYER distinction as a separate palette bank, so a rival and the player can be on screen together. The remaining 54 reachable ids on a fresh store (the OBJ_EVENT_GFX_VAR_* decorations, item balls, dolls, the truck, the moving box, Vigoroth, Zigzagoon, berry-tree and cuttable-tree props, the ninja boy, and the people sheets without a binding such as the nurse) and every one of this 239-entry table's other rows are untracked: resolve_sprite_source returns None for them, so their object events are still hide-flag-filtered and interaction-eligible but draw no sprite -- a follow-on slice's job to extend, not a silent mis-render. GetObjectEventGraphicsInfo's OBJ_EVENT_GFX_VARS -> VarGetObjectEventGraphicsId indirection (event_object_movement.c:1914-1931) is modelled for n == 0 only, narrowed to the two rival ids: the OBJ_EVENT_GFX_VAR_0 arm reads VAR_OBJ_GFX_ID_0 and resolves a protagonist sheet exactly when the var holds OBJ_EVENT_GFX_RIVAL_BRENDAN_NORMAL's or _MAY_NORMAL's numeric id (Route 103's rival). VAR_1..VAR_B, and any non-rival var value (a real decoration id), still resolve to None -- the decoration system remains unmodelled.",
+          "reason": "npc::resolve_sprite_source (with npc/sheets.rs object_sheet and initial_berry_sheet) is a bounded re-derivation of this table's OBJ_EVENT_GFX_* -> gObjectEventGraphicsInfo_* mapping and of each pointed-to struct's .width/.height/.paletteTag/.paletteSlot/.inanimate/.images/.anims fields (object_event_graphics_info.h, object_event_pic_tables.h, object_event_anims.h) for every graphics id the fixed object events of the checkpoint maps name. Modelled: the two protagonist sheets and both rival variants (reusing the matching protagonist's art, kept on its own palette bank for PALSLOT_NPC_SPECIAL), 26 standard nine-frame 16x32 people, the 16x16 ninja boy, item ball, Birch's bag, cuttable tree, moving box and two dolls, the 16x32 nurse and mystery-event deliveryman (4- and 3-cell sheets), the two 32x32 Vigoroth variants and Zigzagoon, the 48x48 truck, and Route 103's three berry trees at the BERRY_STAGE_BERRIES stage new_game.inc plants them at (resolved per event by trainer_sight_or_berry_tree_id; no berry state, growth, planting or watering). Each graphic shows its initial stationary frame: the cell sAnimTable_Standard/_Nurse/_Inanimate/_CuttableTree/_BerryTree select for the event's initial facing, with the pic table's own cell remapping (Vigoroth cells 0 and 3, nurse and deliveryman cells 0-2); walking, bowing, cutting and growth animation are not run. Packing keeps only the sheet cells some event of the scene shows, so Route 103's eleven people sheets fit the 1024-tile OBJ space. Upstream's single resident NPC_SPECIAL palette slot (the last special palette loaded wins) is not reproduced: moving box, truck, Vigoroth and Zigzagoon each get their own native bank. Not modelled: the OBJ_EVENT_GFX_VAR_1..VAR_B decoration slots and every non-rival OBJ_EVENT_GFX_VAR_0 value (GetObjectEventGraphicsInfo's VarGetObjectEventGraphicsId indirection, event_object_movement.c:1914-1931, is modelled for n == 0 narrowed to the two rival ids), every graphics id outside the checkpoint maps, and the rest of this 239-entry table's rows.",
           "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
           "spec": "I-3",
           "status": "stubbed"
@@ -29212,6 +29298,12 @@
           "spec": "I-3",
           "status": "rewritten"
         },
+        "sPicTable_Gentleman": {
+          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the one avatar::pack_people_sheet_frames packs for the player's own sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's sprite/<name> pack entry and packs only the stationary cells a scene shows: the walking, running and bow cells of the pic table are modelled by no NPC.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
         "sPicTable_Girl3": {
           "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
           "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
@@ -29254,6 +29346,12 @@
           "spec": "I-3",
           "status": "rewritten"
         },
+        "sPicTable_PokefanF": {
+          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the one avatar::pack_people_sheet_frames packs for the player's own sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's sprite/<name> pack entry and packs only the stationary cells a scene shows: the walking, running and bow cells of the pic table are modelled by no NPC.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
         "sPicTable_PokefanM": {
           "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
           "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
@@ -29265,6 +29363,12 @@
           "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
           "spec": "I-3",
           "status": "rewritten"
+        },
+        "sPicTable_SchoolKidM": {
+          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the one avatar::pack_people_sheet_frames packs for the player's own sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's sprite/<name> pack entry and packs only the stationary cells a scene shows: the walking, running and bow cells of the pic table are modelled by no NPC.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "spec": "I-3",
+          "status": "stubbed"
         },
         "sPicTable_Scientist1": {
           "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
@@ -29284,6 +29388,12 @@
           "spec": "I-3",
           "status": "rewritten"
         },
+        "sPicTable_Teala": {
+          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the one avatar::pack_people_sheet_frames packs for the player's own sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's sprite/<name> pack entry and packs only the stationary cells a scene shows: the walking, running and bow cells of the pic table are modelled by no NPC.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
         "sPicTable_Twin": {
           "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
           "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
@@ -29301,6 +29411,18 @@
           "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
           "spec": "I-3",
           "status": "rewritten"
+        },
+        "sPicTable_Woman5": {
+          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the one avatar::pack_people_sheet_frames packs for the player's own sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's sprite/<name> pack entry and packs only the stationary cells a scene shows: the walking, running and bow cells of the pic table are modelled by no NPC.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
+        "sPicTable_Youngster": {
+          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the one avatar::pack_people_sheet_frames packs for the player's own sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's sprite/<name> pack entry and packs only the stationary cells a scene shows: the walking, running and bow cells of the pic table are modelled by no NPC.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "spec": "I-3",
+          "status": "stubbed"
         }
       },
       "category": "code.header",
@@ -29308,6 +29430,14 @@
       "status": "pending"
     },
     "src/data/object_events/object_event_subsprites.h": {
+      "artifacts": {
+        "sOamTables_48x48": {
+          "reason": "sOamTable_48x48's twelve pieces (a 32x8 then a 16x8 per 8-pixel row, tile offsets 0, 4, 6, 10, ... in the row-major frame, all priority 2) transcribed as npc::truck_entries. Every table number maps to the same table, so no elevation or long-grass variant exists to model.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "spec": "I-3",
+          "status": "ported"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
@@ -29959,7 +30089,7 @@
           "status": "stubbed"
         },
         "UpdateObjectEventElevationAndPriority": {
-          "reason": "sElevationToPriority transcribed as avatar::ELEVATION_TO_PRIORITY / priority_for_elevation, now driving BOTH the player OBJ's OAM priority (from PlayerState::previous_elevation) and every stationary NPC/object event's (from its template elevation, npc::oam_entries) -- replacing the fixed PLAYER_OBJ_PRIORITY both used to draw at. sElevationToSubspriteTableNum (:7733-7735) has no counterpart, and for 16x32 object events it costs nothing: its values index sOamTables_16x32 (object_event_subsprites.h:176-183) entries 1/2/0, which are a single full-size 16x32 subsprite at priority 2, a single full-size 16x32 at priority 1, and the empty table AddSubspritesToOamBuffer copies through as the plain OBJ at oam.priority -- exactly the values sElevationToPriority already gives, so one OBJ at priority_for_elevation's value is pixel-identical. The genuinely multi-piece tables are reached only by SetObjectEventSpriteOamTableForLongGrass (:7690-7705, table nums 4/5), an unported ground effect. Stubbed, not rewritten: the fixedPriority branch is NOT modelled -- the Rust render path unconditionally derives an elevation priority, so a fixed-priority object event would diverge once one is bundled. Subpriority is modelled: npc::subpriority computes sElevationToSubpriority[elevation] (:7691-7693, npc::ELEVATION_TO_SUBPRIORITY) + (16 - (((y + 8) & 0xFF) >> 4)) * 2 + 1 from SetObjectSubpriorityByElevation (:7739-7745), with y the OBJ's rendered top plus its 32px height, and npc::order_by_depth sorts the whole OAM list by ascending OBJ priority, then subpriority, so the lower subpriority of each OBJ priority gets the lower OAM index (the renderer keeps the earlier entry on an equal-priority tie) and slot order matches what SortSprites hands the PPU across priorities (#1630), equal subpriorities falling to the lower on-screen y first as SortSprites does (sprite.c:413-415) and full ties keeping player-then-template order; the elevation base matters because elevations 2 and 3 share priority 2. Upstream's object-allocation order for exact ties is not reproduced. Also NOT modelled: the grid re-derivation of an object's previousElevation on its first DoGroundEffects_OnSpawn pass (SceneSprites has no layout grid; see npc::oam_entries' comment for the one bundled object it would move, an unbound doll). This function is also where a freshly spawned object event's ELEVATION_TRANSITION landing sentinel gets resolved (first statement past the fixedPriority early-return): its ObjectEventUpdateElevation(objEvent) call (event_object_movement.c:7742) runs from DoGroundEffects_OnSpawn (:4931, gated by triggerGroundEffectsOnMove = TRUE, set for every fresh spawn by InitObjectEventStateFromTemplate at :1301) on the spawn frame itself, before input unlocks -- not deferred to the object's first subsequent step. engine::overworld::warp_destination_position (crates/engine/src/overworld/warp.rs) is this port's faithful model of that same spawn-frame resolution for OverworldPhase::warp_to's resolved-warp-event landings (issue #297).",
+          "reason": "sElevationToPriority transcribed as avatar::ELEVATION_TO_PRIORITY / priority_for_elevation, driving the player OBJ's OAM priority (from PlayerState::previous_elevation) and every stationary object event's (from the elevation it settles at). sElevationToSubspriteTableNum (:7733-7735) has no counterpart: its values index the sOamTables_16x16/16x32/32x32 entries 1/2/0 (object_event_subsprites.h), a single full-size subsprite at priority 2, one at priority 1, and the empty table AddSubspritesToOamBuffer copies through as the plain OBJ at oam.priority -- exactly sElevationToPriority's values, so one OBJ per sprite at priority_for_elevation is pixel-identical; the 48x48 truck's six tables are identical priority-2 pieces, so it draws at priority 2 whatever its elevation while sorting by its parent's elevation priority (npc::truck_entries). The multi-piece long-grass tables (SetObjectEventSpriteOamTableForLongGrass, :7690-7705, table nums 4/5) are an unported ground effect. Stubbed, not rewritten: the fixedPriority branch is not modelled (a fixed-priority object event would diverge once one is bundled), and priority and subpriority are computed once per scene load, not recomputed as an object moves. Modelled: npc::subpriority_from_bottom computes sElevationToSubpriority[elevation] (:7691-7693) + (16 - (((bottom + 8) & 0xFF) >> 4)) * 2 + 1 from SetObjectSubpriorityByElevation (:7739-7745) with bottom the sprite's rendered bottom edge for its own height (16, 32 or 48), and npc::order_sprites sorts by ascending parent OBJ priority, then subpriority, then lower on-screen y (SortSprites, sprite.c:413-415), keeping a multi-OBJ sprite together and ties in player-then-template order; upstream's object-allocation order for exact ties is not reproduced. Each stationary object's elevation is its template's replaced by its own layout-grid cell's elevation unless that cell is ELEVATION_TRANSITION or ELEVATION_MULTI_LEVEL (sprites::effective_elevation, the ObjectEventUpdateElevation :7759-7771 pass DoGroundEffects_OnSpawn reaches on the spawn frame: :4931, gated by triggerGroundEffectsOnMove = TRUE from InitObjectEventStateFromTemplate :1301), so May's Pichu doll authored at elevation 4 on a cell of elevation 3 draws at priority 2. engine::overworld::warp_destination_position (crates/engine/src/overworld/warp.rs) is this port's model of that same spawn-frame resolution for OverworldPhase::warp_to's resolved-warp landings.",
           "rust_target": "crates/pokeemerald-rs/src/overworld/avatar.rs",
           "spec": "S-5",
           "status": "stubbed"
@@ -32683,7 +32813,7 @@
     "src/sprite.c": {
       "artifacts": {
         "UpdateOamCoords": {
-          "reason": "The coordOffsetEnabled branch (gSpriteCoordOffsetX/Y added to an enabled sprite's OAM position) ported as npc::oam_entries' own camera_lag addition inside object_screen_position (issue #217, I-3) -- the fix for NPC sprites snapping to their destination tile at step start instead of staying glued to the camera through the walk animation. The branch *selection* (which sprites opt in) is not modelled, and honestly cannot be split by sprite: upstream sets coordOffsetEnabled = TRUE unconditionally in TrySetupObjectEventSprite (src/event_object_movement.c:1466), which every object event reaches -- the player's own included (InitPlayerAvatar -> SpawnSpecialObjectEvent -> TrySpawnObjectEventTemplate -> TrySetupObjectEventSprite; src/field_player_avatar.c:1399, src/event_object_movement.c:1490,1507). So the offset is on for every sprite this module draws and the branch is unconditional here. The player nevertheless looks screen-fixed upstream (and is drawn at the fixed avatar::PLAYER_OBJ_X/Y here) for a different reason than 'no offset': its own walk animation advances sprite->x/y by 1px/frame along travel (Step1, src/event_object_movement.c:8191), cancelling the coord offset frame for frame. This port collapses that cancellation to a constant rather than reproducing both halves -- see SetSpritePosToMapCoords' own ledger entry.",
+          "reason": "The coordOffsetEnabled branch (gSpriteCoordOffsetX/Y added to an enabled sprite's OAM position) ported as npc::object_origin's camera_lag addition, which anchors a sprite of any size centred on its tile with its bottom edge on the tile's bottom edge (event_object_movement.c:1459-1464: centre (16x + 8, 16y + 16 - height/2), then centerToCornerVec); the OBJ then wraps to OAM coordinates (issue #217, I-3) so NPC sprites stay glued to the camera through the walk animation instead of snapping to the destination tile at step start. The branch selection (which sprites opt in) is not modelled and cannot be split by sprite: upstream sets coordOffsetEnabled = TRUE unconditionally in TrySetupObjectEventSprite (src/event_object_movement.c:1466), which every object event reaches, the player's own included (InitPlayerAvatar -> SpawnSpecialObjectEvent -> TrySpawnObjectEventTemplate -> TrySetupObjectEventSprite; src/field_player_avatar.c:1399, src/event_object_movement.c:1490,1507). So the offset is on for every sprite this module draws. The player looks screen-fixed upstream (and is drawn at the fixed avatar::PLAYER_OBJ_X/Y here) because its own walk animation advances sprite->x/y by 1px/frame along travel (Step1, src/event_object_movement.c:8191), cancelling the coord offset frame for frame; this port collapses that cancellation to a constant -- see SetSpritePosToMapCoords' own ledger entry.",
           "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
           "spec": "I-3",
           "status": "rewritten"
