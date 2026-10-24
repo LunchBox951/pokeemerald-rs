@@ -20,27 +20,59 @@ pub(super) struct Token {
     pub(super) line: usize,
 }
 
-/// The length of the backslash-newline line splice at `i`, or 0 when none.
-fn splice_len(chars: &[char], i: usize) -> usize {
-    match (chars.get(i), chars.get(i + 1), chars.get(i + 2)) {
-        (Some('\\'), Some('\n'), _) => 2,
-        (Some('\\'), Some('\r'), Some('\n')) => 3,
-        _ => 0,
+/// Source text after translation phase 2: every backslash-newline line
+/// splice removed, as in the C preprocessor, so comment boundaries and tokens
+/// are recognized across them. `lines[i]` is the physical line of `chars[i]`.
+pub(super) struct Spliced {
+    pub(super) chars: Vec<char>,
+    lines: Vec<usize>,
+    last_line: usize,
+}
+
+impl Spliced {
+    pub(super) fn new(text: &str) -> Self {
+        let raw: Vec<char> = text.chars().collect();
+        let mut chars = Vec::with_capacity(raw.len());
+        let mut lines = Vec::with_capacity(raw.len());
+        let mut line = 1;
+        let mut i = 0;
+        while i < raw.len() {
+            let splice = match (raw.get(i), raw.get(i + 1), raw.get(i + 2)) {
+                (Some('\\'), Some('\n'), _) => 2,
+                (Some('\\'), Some('\r'), Some('\n')) => 3,
+                _ => 0,
+            };
+            if splice > 0 {
+                // A splice consumes a physical line.
+                line += 1;
+                i += splice;
+                continue;
+            }
+            chars.push(raw[i]);
+            lines.push(line);
+            if raw[i] == '\n' {
+                line += 1;
+            }
+            i += 1;
+        }
+        Self {
+            chars,
+            lines,
+            last_line: line,
+        }
+    }
+
+    /// The physical line of the character at `i`, or of the end of the text.
+    pub(super) fn line(&self, i: usize) -> usize {
+        self.lines.get(i).copied().unwrap_or(self.last_line)
     }
 }
 
-/// Skips the line comment opening at `start` up to its newline; a line splice
-/// continues it onto the next line, as in the C preprocessor.
-fn skip_line_comment(chars: &[char], start: usize, line: &mut usize) -> usize {
+/// Skips the line comment opening at `start` up to its newline.
+fn skip_line_comment(chars: &[char], start: usize) -> usize {
     let mut i = start;
     while i < chars.len() && chars[i] != '\n' {
-        let splice = splice_len(chars, i);
-        if splice > 0 {
-            *line += 1;
-            i += splice;
-        } else {
-            i += 1;
-        }
+        i += 1;
     }
     i
 }
@@ -48,25 +80,19 @@ fn skip_line_comment(chars: &[char], start: usize, line: &mut usize) -> usize {
 /// Skips the block comment opening at `start`; returns the index after it.
 pub(super) fn skip_block_comment(
     source: PokedexSource,
-    chars: &[char],
+    text: &Spliced,
     start: usize,
-    line: &mut usize,
 ) -> Result<usize> {
-    let opened = *line;
+    let chars = &text.chars;
     let mut i = start + 2;
     loop {
         match (chars.get(i), chars.get(i + 1)) {
             (Some('*'), Some('/')) => return Ok(i + 2),
-            (Some(c), _) => {
-                if *c == '\n' {
-                    *line += 1;
-                }
-                i += 1;
-            }
+            (Some(_), _) => i += 1,
             (None, _) => {
                 return Err(PokedexSourceError::UnterminatedComment {
                     source,
-                    line: opened,
+                    line: text.line(start),
                 });
             }
         }
@@ -113,51 +139,44 @@ pub(super) fn lex_string(
 }
 
 pub(super) fn lex(source: PokedexSource, text: &str) -> Result<Vec<Token>> {
-    let chars: Vec<char> = text.chars().collect();
+    let text = Spliced::new(text);
+    let chars = &text.chars;
     let mut tokens = Vec::new();
     let mut i = 0;
-    let mut line = 1;
     while i < chars.len() {
         let c = chars[i];
+        let line = text.line(i);
         match c {
-            '\n' => {
-                line += 1;
-                i += 1;
-            }
             c if c.is_whitespace() => i += 1,
             '/' if chars.get(i + 1) == Some(&'/') => {
-                i = skip_line_comment(&chars, i, &mut line);
+                i = skip_line_comment(chars, i);
             }
             '/' if chars.get(i + 1) == Some(&'*') => {
-                i = skip_block_comment(source, &chars, i, &mut line)?;
+                i = skip_block_comment(source, &text, i)?;
             }
             '#' => {
                 let mut body = String::new();
                 i += 1;
                 while i < chars.len() && chars[i] != '\n' {
-                    let splice = splice_len(&chars, i);
-                    if splice > 0 {
-                        // A line splice continues the directive, as in the C preprocessor.
-                        line += 1;
-                        i += splice;
-                    } else if chars[i] == '/' && chars.get(i + 1) == Some(&'/') {
-                        i = skip_line_comment(&chars, i, &mut line);
+                    if chars[i] == '/' && chars.get(i + 1) == Some(&'/') {
+                        i = skip_line_comment(chars, i);
                     } else if chars[i] == '/' && chars.get(i + 1) == Some(&'*') {
                         // A comment is one space, as in the C preprocessor.
-                        i = skip_block_comment(source, &chars, i, &mut line)?;
+                        i = skip_block_comment(source, &text, i)?;
                         body.push(' ');
                     } else {
                         body.push(chars[i]);
                         i += 1;
                     }
                 }
+                // The directive's line is where it ends, past any splices.
                 tokens.push(Token {
                     tok: Tok::Directive(body.trim().to_owned()),
-                    line,
+                    line: text.line(i),
                 });
             }
             '"' => {
-                let (value, next) = lex_string(source, &chars, i, line)?;
+                let (value, next) = lex_string(source, chars, i, line)?;
                 i = next;
                 tokens.push(Token {
                     tok: Tok::Str(value),

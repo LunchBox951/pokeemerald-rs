@@ -122,3 +122,68 @@ fn leading_zero_numbers_are_refused() {
     replace_once(&mut f.entries, ".height = 7,", ".height = 0,");
     assert!(f.parse().is_ok());
 }
+
+#[test]
+fn a_spliced_block_comment_terminator_ends_the_comment() {
+    let mut f = fixture();
+    replace_once(
+        &mut f.entries,
+        ".height = 7,",
+        ".height = 7 /* *\\\n/ + 1 /* */,",
+    );
+    match f.parse() {
+        // The entry grammar takes one literal, so the exposed `+ 1` is refused.
+        Err(error) => assert!(
+            matches!(error, PokedexSourceError::Malformed { .. }),
+            "{error:?}"
+        ),
+        Ok(data) => assert_eq!(
+            data.entries()[0].1.height,
+            8,
+            "C splices `*\\\\\\n/` into `*/`, exposing `+ 1`"
+        ),
+    }
+}
+
+#[test]
+fn a_spliced_line_comment_swallows_the_next_line() {
+    let mut f = fixture();
+    replace_once(
+        &mut f.entries,
+        ".height = 7,",
+        "// note \\\n.height = 8,\n.height = 7,",
+    );
+    assert_eq!(f.parse().unwrap().entries()[0].1.height, 7);
+}
+
+#[test]
+fn a_splice_inside_a_token_joins_it() {
+    for (spliced, height) in [
+        (".hei\\\nght = 7,", 7),
+        (".height = 1\\\n2,", 12),
+        (".height = 1\\\r\n3,", 13),
+    ] {
+        let mut f = fixture();
+        replace_once(&mut f.entries, ".height = 7,", spliced);
+        assert_eq!(
+            f.parse().unwrap().entries()[0].1.height,
+            height,
+            "{spliced:?}"
+        );
+    }
+}
+
+#[test]
+fn a_splice_consumes_a_physical_line_in_diagnostics() {
+    let line_of = |replacement: &str| {
+        let mut f = fixture();
+        replace_once(&mut f.entries, ".height = 7,", replacement);
+        match err(&f) {
+            PokedexSourceError::MalformedNumber { line, .. } => line,
+            other => panic!("{other:?}"),
+        }
+    };
+    let plain = line_of(".height = 12abc,");
+    assert_eq!(line_of(".height = \\\n12abc,"), plain + 1);
+    assert_eq!(line_of(".hei\\\nght = \\\r\n12abc,"), plain + 2);
+}
