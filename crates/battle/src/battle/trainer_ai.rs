@@ -24,6 +24,7 @@ use crate::damage::{apply_stab, apply_type_effectiveness, base_damage, has_stab,
 use crate::damage::{DamageInput, MoveCategory, Weather};
 use crate::dex::Dex;
 use crate::error::BattleError;
+use crate::fixed_damage::EFFECT_SONICBOOM;
 use crate::hit::defender_levitate_blocked;
 use crate::pokemon::{BattlePokemon, MAX_MON_MOVES};
 use crate::stat_change::{
@@ -171,6 +172,9 @@ enum ScoreableEffect {
     Confuse,
     /// `AI_CBM_FocusEnergy` (`data/battle_ai_scripts.s:382-384`).
     FocusEnergy,
+    /// `AI_CBM_HighRiskForDamage`, reached from Sonic Boom
+    /// (`data/battle_ai_scripts.s:177,368-376`).
+    HighRiskForDamage,
     /// One of [`UNCHANGED_AFTER_PROLOGUE_EFFECTS`].
     UnchangedAfterPrologue(MoveEffect),
     /// Any other shared stat-stage label (see [`ai_stat_label`]). Its
@@ -193,6 +197,8 @@ impl ScoreableEffect {
             Some(Self::Confuse)
         } else if effect.0 == EFFECT_FOCUS_ENERGY_RAW {
             Some(Self::FocusEnergy)
+        } else if effect == EFFECT_SONICBOOM {
+            Some(Self::HighRiskForDamage)
         } else if let Some(label) = ai_stat_label(effect) {
             Some(Self::StatLabel(effect, label))
         } else {
@@ -233,6 +239,7 @@ impl ScoreableEffect {
                     && (effect.0 == EFFECT_DEFENSE_CURL_RAW
                         || !flags.contains(AiFlags::CHECK_VIABILITY));
             }
+            Self::HighRiskForDamage => return flags == AiFlags::CHECK_BAD_MOVE,
             Self::Hit | Self::AttackDown | Self::DefenseDown => return true,
         };
         if flags.contains(AiFlags::CHECK_VIABILITY)
@@ -841,6 +848,9 @@ fn score_bad_move(
         ScoreableEffect::FocusEnergy => {
             user.volatiles().focus_energy.then_some(STRONGLY_DISCOURAGE)
         }
+        ScoreableEffect::HighRiskForDamage => {
+            high_risk_for_damage_penalty(dex, move_id, user, target)?
+        }
     };
     if let Some(penalty) = penalty {
         scores.adjust(slot, penalty);
@@ -899,6 +909,21 @@ fn paralyze_penalty(
     } else {
         Ok(None)
     }
+}
+
+/// `AI_CBM_HighRiskForDamage`: a chart-immune target or a Wonder Guard target
+/// the move does not hit for exactly double damage ends at `-10`
+/// (`data/battle_ai_scripts.s:368-376`). Unlike the prologue, it runs for
+/// power-1 moves too, and it draws nothing.
+fn high_risk_for_damage_penalty(
+    dex: &Dex,
+    move_id: MoveId,
+    user: &BattlePokemon,
+    target: &BattlePokemon,
+) -> Result<Option<i8>, BattleError> {
+    let blocked = has_no_effect(dex, move_id, user, target)?
+        || ai_wonder_guard_blocks(dex, move_id, user, target, ai_get_ability(target)?)?;
+    Ok(blocked.then_some(STRONGLY_DISCOURAGE))
 }
 
 /// `AI_CBM_Confuse`: active confusion ends at `-5` before any ability read;
@@ -966,6 +991,9 @@ fn score_viability(
         ScoreableEffect::Hit
         | ScoreableEffect::UnchangedAfterPrologue(_)
         | ScoreableEffect::FocusEnergy => {}
+        ScoreableEffect::HighRiskForDamage => {
+            return Err(BattleError::UnscoreableMoveEffect(move_id))
+        }
         // Defense Curl is absent from `AI_CheckViability`'s dispatch
         // (`data/battle_ai_scripts.s:652-776`); every other label is unported.
         ScoreableEffect::StatLabel(effect, _) if effect.0 == EFFECT_DEFENSE_CURL_RAW => {}

@@ -12,9 +12,10 @@
 //! implemented, so an effect that would apply fails closed after consuming
 //! exactly the draw Emerald consumes.
 //!
-//! [`EFFECT_POISON_HIT`] (`battle_script_commands.c:2299-2340`) and
+//! [`EFFECT_POISON_HIT`] (`battle_script_commands.c:2299-2340`),
 //! [`EFFECT_CONFUSE_HIT`] (the `status2` `MOVE_EFFECT_CONFUSION` case,
-//! `:2528-2544`) are the two ported trampolines.
+//! `:2528-2544`) and [`EFFECT_SPEED_DOWN_HIT`] (the `MOVE_EFFECT_SPD_MINUS_1`
+//! case, `:2666-2683`) are the three ported trampolines.
 
 use assets::{AbilityId, Effectiveness, MoveEffect, MoveId, Type};
 
@@ -34,7 +35,8 @@ const EFFECT_TRI_ATTACK: MoveEffect = MoveEffect(36);
 const EFFECT_TRAP: MoveEffect = MoveEffect(42);
 const EFFECT_ATTACK_DOWN_HIT: MoveEffect = MoveEffect(68);
 const EFFECT_DEFENSE_DOWN_HIT: MoveEffect = MoveEffect(69);
-const EFFECT_SPEED_DOWN_HIT: MoveEffect = MoveEffect(70);
+/// Move effect shared by Constrict, Bubble, Bubble Beam, Icy Wind and Mud Shot.
+pub const EFFECT_SPEED_DOWN_HIT: MoveEffect = MoveEffect(70);
 const EFFECT_SPECIAL_ATTACK_DOWN_HIT: MoveEffect = MoveEffect(71);
 const EFFECT_SPECIAL_DEFENSE_DOWN_HIT: MoveEffect = MoveEffect(72);
 const EFFECT_ACCURACY_DOWN_HIT: MoveEffect = MoveEffect(73);
@@ -170,6 +172,27 @@ pub fn is_poison_hit_effect(effect: MoveEffect) -> bool {
 #[must_use]
 pub fn is_confuse_hit_effect(effect: MoveEffect) -> bool {
     effect == EFFECT_CONFUSE_HIT
+}
+
+/// Returns whether `effect` is [`EFFECT_SPEED_DOWN_HIT`], the third
+/// [`SECONDARY_TRAMPOLINES`] entry [`spend_effect_chance_draw`] resolves.
+#[must_use]
+pub fn is_speed_down_hit_effect(effect: MoveEffect) -> bool {
+    effect == EFFECT_SPEED_DOWN_HIT
+}
+
+/// `MOVE_EFFECT_SPD_MINUS_1`'s silent guards on a secondary landing: Clear
+/// Body and White Smoke refuse any stat drop that is not `certain`, and Shield
+/// Dust refuses it when `ChangeStatBuffs` runs with `flags == 0`, which is how
+/// `SetMoveEffect` calls it (`battle_script_commands.c:6987-7007,7035-7037`).
+/// Each leaves the defender unchanged with no message, unlike the
+/// `STAT_CHANGE_ALLOW_PTR` path a stat-lowering move takes.
+#[must_use]
+fn speed_drop_can_land(defender: &BattlePokemon) -> bool {
+    !matches!(
+        defender.ability(),
+        AbilityId::CLEAR_BODY | AbilityId::WHITE_SMOKE | AbilityId::SHIELD_DUST
+    )
 }
 
 /// `SetMoveEffect`'s silent `STATUS1_POISON` guards
@@ -317,10 +340,14 @@ pub fn ensure_admissible(
         }
         return Ok(());
     }
-    if is_confuse_hit_effect(mv.effect)
+    let status_could_ever_land = if is_confuse_hit_effect(mv.effect) {
+        confuse_hit_could_ever_land(defender)
+    } else {
+        is_speed_down_hit_effect(mv.effect) && speed_drop_can_land(defender)
+    };
+    if status_could_ever_land
         && mv.secondary_effect_chance < GUARANTEED_EFFECT_CHANCE
         && attacker.ability() == AbilityId::SERENE_GRACE
-        && confuse_hit_could_ever_land(defender)
     {
         return Err(BattleError::UnportedAbilityInteraction(
             AbilityId::SERENE_GRACE,
@@ -350,6 +377,11 @@ pub enum SecondaryApplication {
     /// check: the duration draw itself is inside the guard, not before it
     /// (`battle_script_commands.c:2529-2544`).
     Confuse,
+    /// The caller must lower the defender's Speed stage by one, subject to
+    /// the same post-damage faint check. A defender already at the minimum
+    /// stage is left unchanged without a message
+    /// (`battle_script_commands.c:7056-7059,7094-7095`).
+    SpeedDown,
 }
 
 /// Spends the post-damage effect-chance draw for `move_id`.
@@ -362,8 +394,8 @@ pub enum SecondaryApplication {
 ///
 /// Returns [`BattleError::UnknownMove`] before drawing when `move_id` is not
 /// in `dex`. Returns [`BattleError::UnportedSecondaryEffect`] when a modeled
-/// trampoline effect other than [`EFFECT_POISON_HIT`] or
-/// [`EFFECT_CONFUSE_HIT`], or Struggle's certain recoil effect, would apply,
+/// trampoline effect other than [`EFFECT_POISON_HIT`], [`EFFECT_CONFUSE_HIT`]
+/// or [`EFFECT_SPEED_DOWN_HIT`], or Struggle's certain recoil effect, would apply,
 /// or [`BattleError::UnsupportedMoveType`] for an [`EFFECT_POISON_HIT`] move
 /// whose type cannot participate in battle calculations; either way, any
 /// required chance draw has already been consumed.
@@ -406,6 +438,14 @@ pub fn spend_effect_chance_draw(
     if is_confuse_hit_effect(mv.effect) {
         return Ok(if confuse_hit_can_land(defender) {
             SecondaryApplication::Confuse
+        } else {
+            SecondaryApplication::None
+        });
+    }
+
+    if is_speed_down_hit_effect(mv.effect) {
+        return Ok(if speed_drop_can_land(defender) {
+            SecondaryApplication::SpeedDown
         } else {
             SecondaryApplication::None
         });
