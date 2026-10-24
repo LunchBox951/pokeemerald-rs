@@ -7,9 +7,14 @@ use pack_format::{image_entry_from_tiles, palette_entry, raw_entry, PackEntry};
 use rom_import::fixture::RomFixture;
 use rom_import::Encoding;
 
+use super::frame_tests::{
+    shadow_tiles, BALL_DISPLAY_AT, BALL_DISPLAY_ID, BALL_STATUS_AT, BALL_STATUS_ID, OPPONENT,
+    OPPONENT_AT, OPPONENT_ID, PLAYER, PLAYER_AT, PLAYER_ID, SHADOW_AT, SHADOW_ID,
+};
 use super::locate;
 use crate::extract::scope::{
-    battle_interface_ids, healthbox_battle_bar_id, healthbox_element_ids, healthbox_table_ids,
+    battle_interface_ids, healthbox_battle_bar_id, healthbox_element_ids, healthbox_frame_ids,
+    healthbox_table_ids,
 };
 use crate::gen_rom_profile::error::GenRomProfileError;
 use crate::gen_rom_profile::plan::{ReportLine, Resolution, SymbolExpectation};
@@ -30,9 +35,8 @@ const TEXTBOX_PALETTE_ID: &str = "battle-interface/palette/textbox";
 const WINDOW_TEXT_ID: &str = "battle-interface/palette/window_text";
 const PP_TEXT_ID: &str = "battle-interface/palette/pp_text";
 const TILEMAP_ID: &str = "battle-interface/raw/textbox_map";
-
 /// `count` BGR555 colours starting from `seed`, as values and ROM bytes.
-fn palette_bytes(seed: u16, count: u16) -> (Vec<u16>, Vec<u8>) {
+pub(super) fn palette_bytes(seed: u16, count: u16) -> (Vec<u16>, Vec<u8>) {
     let colors: Vec<u16> = (0..count).map(|n| (seed + n * 0x21) & 0x7FFF).collect();
     let bytes = colors.iter().flat_map(|c| c.to_le_bytes()).collect();
     (colors, bytes)
@@ -72,13 +76,15 @@ fn battle_bar() -> Vec<u8> {
         .collect()
 }
 
-/// A ROM and pack holding all nineteen roots, one distinct copy each.
-fn fixture() -> (Vec<u8>, Vec<PackEntry>) {
+/// A ROM and pack holding all twenty-four roots, one distinct copy each.
+pub(super) fn fixture() -> (Vec<u8>, Vec<PackEntry>) {
     let tiles = distinctive_tiles(256);
     let (textbox_colors, textbox_bytes) = palette_bytes(0x1000, 32);
     let (window_colors, window_bytes) = palette_bytes(0x2000, 16);
     let (pp_colors, pp_bytes) = palette_bytes(0x3000, 16);
     let map = tilemap();
+    let (status_colors, status_bytes) = palette_bytes(0x4000, 16);
+    let (display_colors, display_bytes) = palette_bytes(0x5000, 16);
     let rom = RomFixture::new()
         .emerald_header()
         .write(SHEET_AT, &lz77_literals(&tiles))
@@ -88,6 +94,11 @@ fn fixture() -> (Vec<u8>, Vec<PackEntry>) {
         .write(TILEMAP_AT, &lz77_literals(&map))
         .write(ELEMENTS_AT, &element_table())
         .write(BAR_AT, &lz77_literals(&battle_bar()))
+        .write(PLAYER_AT, &lz77_literals(&PLAYER.tiles()))
+        .write(OPPONENT_AT, &lz77_literals(&OPPONENT.tiles()))
+        .write(SHADOW_AT, &lz77_literals(&shadow_tiles()))
+        .write(BALL_STATUS_AT, &status_bytes)
+        .write(BALL_DISPLAY_AT, &display_bytes)
         .finish();
     let mut entries = vec![
         image_entry_from_tiles(TEXTBOX_ID.to_owned(), &tiles, 4, 128, 128, None).expect("sheet"),
@@ -103,6 +114,14 @@ fn fixture() -> (Vec<u8>, Vec<PackEntry>) {
             .map(|(index, id)| raw_entry(id, element_bytes(index))),
     );
     entries.push(raw_entry(healthbox_battle_bar_id(), battle_bar()));
+    entries.extend([
+        PLAYER.entry(),
+        OPPONENT.entry(),
+        image_entry_from_tiles(SHADOW_ID.to_owned(), &shadow_tiles(), 4, 32, 8, None)
+            .expect("shadow"),
+        palette_entry(BALL_STATUS_ID.to_owned(), &status_colors).expect("palette"),
+        palette_entry(BALL_DISPLAY_ID.to_owned(), &display_colors).expect("palette"),
+    ]);
     (rom, entries)
 }
 
@@ -112,7 +131,7 @@ fn without(mut entries: Vec<PackEntry>, id: &str) -> Vec<PackEntry> {
 }
 
 /// Plant `bytes` over the spare area of `rom`.
-fn with_spare_copy(mut rom: Vec<u8>, bytes: &[u8]) -> Vec<u8> {
+pub(super) fn with_spare_copy(mut rom: Vec<u8>, bytes: &[u8]) -> Vec<u8> {
     rom[SPARE_AT..SPARE_AT + bytes.len()].copy_from_slice(bytes);
     rom
 }
@@ -132,14 +151,11 @@ fn the_fixed_inventory_is_one_sheet_three_palettes_and_one_tilemap() {
 }
 
 #[test]
-fn the_health_box_records_are_located_with_the_textbox_and_no_frame_record_is() {
-    let (rom, mut entries) = fixture();
-    // The singles frames, their palettes, and the shadow stay unclaimed.
-    let frames = crate::extract::scope::healthbox_frame_ids();
-    entries.extend(frames.iter().cloned().map(|id| raw_entry(id, vec![0; 32])));
+fn the_health_box_and_frame_records_are_located_with_the_textbox() {
+    let (rom, entries) = fixture();
     with_context("battle-interface-health-box", &rom, entries, |ctx| {
         let mut report = Vec::new();
-        let plan = locate(ctx, &mut report).expect("located beside the frame records");
+        let plan = locate(ctx, &mut report).expect("located");
         let mut located: Vec<&str> = plan
             .images
             .iter()
@@ -152,9 +168,9 @@ fn the_health_box_records_are_located_with_the_textbox_and_no_frame_record_is() 
         located.sort_unstable();
         let mut expected = battle_interface_ids();
         expected.extend(healthbox_element_ids());
+        expected.extend(healthbox_frame_ids());
         expected.sort();
         assert_eq!(located, expected);
-        assert!(frames.iter().all(|id| !located.contains(&id.as_str())));
     });
 }
 
@@ -382,13 +398,30 @@ fn every_family_is_located_with_its_own_encoding() {
             .collect();
         assert_eq!(
             images,
-            [(
-                TEXTBOX_ID,
-                0x0810_0000,
-                Encoding::Lz77,
-                (4, 4),
-                (128, 128, 256)
-            )]
+            [
+                (SHADOW_ID, 0x081A_0000, Encoding::Lz77, (4, 4), (32, 8, 4)),
+                (
+                    OPPONENT_ID,
+                    0x0819_0000,
+                    Encoding::Lz77,
+                    (4, 4),
+                    (128, 32, 64)
+                ),
+                (
+                    PLAYER_ID,
+                    0x0818_0000,
+                    Encoding::Lz77,
+                    (4, 4),
+                    (128, 64, 128)
+                ),
+                (
+                    TEXTBOX_ID,
+                    0x0810_0000,
+                    Encoding::Lz77,
+                    (4, 4),
+                    (128, 128, 256)
+                ),
+            ]
         );
         let palettes: Vec<_> = plan
             .palettes
@@ -398,6 +431,8 @@ fn every_family_is_located_with_its_own_encoding() {
         assert_eq!(
             palettes,
             [
+                (BALL_DISPLAY_ID, 0x081C_0000, Encoding::Raw, 16),
+                (BALL_STATUS_ID, 0x081B_0000, Encoding::Raw, 16),
                 (PP_TEXT_ID, 0x0813_0000, Encoding::Raw, 16),
                 (TEXTBOX_PALETTE_ID, 0x0811_0000, Encoding::Lz77, 32),
                 (WINDOW_TEXT_ID, 0x0812_0000, Encoding::Lz77, 16),
@@ -409,7 +444,7 @@ fn every_family_is_located_with_its_own_encoding() {
             .map(|t| (t.id.as_str(), t.addr, t.encoding, t.len))
             .collect();
         assert_eq!(tilemaps, [(TILEMAP_ID, 0x0814_0000, Encoding::Lz77, 4096)]);
-        assert_eq!(report.len(), 19);
+        assert_eq!(report.len(), 24);
         assert!(report
             .iter()
             .all(|line| line.resolution == Resolution::UniqueSignature));
@@ -427,13 +462,16 @@ fn every_root_expects_its_global_upstream_symbol() {
             .map(|line| (line.id.as_str(), line.symbol.clone()))
             .collect();
         let exact = |name: &str| SymbolExpectation::Exact(name.to_owned());
+        let contains = |name: &str| SymbolExpectation::Contains(vec![name.to_owned()]);
         assert_eq!(
             expected,
             [
-                (
-                    TEXTBOX_ID,
-                    SymbolExpectation::Contains(vec!["gBattleTextboxTiles".to_owned()])
-                ),
+                (SHADOW_ID, contains("gEnemyMonShadow_Gfx")),
+                (OPPONENT_ID, contains(OPPONENT.symbol)),
+                (PLAYER_ID, contains(PLAYER.symbol)),
+                (TEXTBOX_ID, contains("gBattleTextboxTiles")),
+                (BALL_DISPLAY_ID, exact("gBattleInterface_BallDisplayPal")),
+                (BALL_STATUS_ID, exact("gBattleInterface_BallStatusBarPal")),
                 (PP_TEXT_ID, exact("gPPTextPalette")),
                 (TEXTBOX_PALETTE_ID, exact("gBattleTextboxPalette")),
                 (WINDOW_TEXT_ID, exact("gBattleWindowTextPalette")),
@@ -504,6 +542,11 @@ fn a_map_naming_every_symbol_confirms_them_and_a_missing_one_names_its_id() {
         ("gBattleTextboxTilemap", 0x0814_0000),
         ("gHealthboxElementsGfxTable", 0x0816_0000),
         ("gBattleInterfaceGfx_BattleBar", 0x0817_0000),
+        ("gHealthboxSinglesPlayerGfx", 0x0818_0000),
+        ("gHealthboxSinglesOpponentGfx", 0x0819_0000),
+        ("gEnemyMonShadow_Gfx", 0x081A_0000),
+        ("gBattleInterface_BallStatusBarPal", 0x081B_0000),
+        ("gBattleInterface_BallDisplayPal", 0x081C_0000),
     ];
     cross_check_against_map("battle-interface-all", &symbols, &mut report.clone())
         .expect("every symbol is named");
@@ -534,6 +577,7 @@ fn a_missing_entry_or_family_is_refused_before_any_report_line() {
     for id in battle_interface_ids()
         .into_iter()
         .chain(healthbox_element_ids())
+        .chain(healthbox_frame_ids())
     {
         let (rom, entries) = fixture();
         with_context(
@@ -605,6 +649,19 @@ fn a_wrong_kind_entry_is_refused() {
             "battle-interface/raw/battle_bar",
             palette_entry("battle-interface/raw/battle_bar".into(), &[0; 16]).expect("palette"),
         ),
+        (
+            PLAYER_ID,
+            palette_entry(PLAYER_ID.into(), &[0; 16]).expect("palette"),
+        ),
+        (SHADOW_ID, raw_entry(SHADOW_ID.into(), vec![0; 32])),
+        (
+            BALL_STATUS_ID,
+            raw_entry(BALL_STATUS_ID.into(), vec![0; 32]),
+        ),
+        (
+            BALL_DISPLAY_ID,
+            image_entry_from_tiles(BALL_DISPLAY_ID.into(), &[0; 32], 4, 8, 8, None).expect("image"),
+        ),
     ] {
         let (rom, entries) = fixture();
         let mut entries = without(entries, id);
@@ -626,7 +683,9 @@ fn each_root_must_be_stored_in_its_own_encoding() {
     let (_, textbox_bytes) = palette_bytes(0x1000, 32);
     let (_, window_bytes) = palette_bytes(0x2000, 16);
     let (_, pp_bytes) = palette_bytes(0x3000, 16);
-    let cases: [(&str, usize, Vec<u8>, Vec<u8>); 4] = [
+    let (_, status_bytes) = palette_bytes(0x4000, 16);
+    let (_, display_bytes) = palette_bytes(0x5000, 16);
+    let cases: [(&str, usize, Vec<u8>, Vec<u8>); 8] = [
         (
             TEXTBOX_PALETTE_ID,
             TEXTBOX_PALETTE_AT,
@@ -646,6 +705,34 @@ fn each_root_must_be_stored_in_its_own_encoding() {
             pp_bytes.clone(),
         ),
         (TILEMAP_ID, TILEMAP_AT, tilemap(), lz77_literals(&tilemap())),
+        // The two ball palettes are `.gbapal` runs, never compressed
+        // (`src/graphics.c:354,356`).
+        (
+            BALL_STATUS_ID,
+            BALL_STATUS_AT,
+            lz77_literals(&status_bytes),
+            status_bytes.clone(),
+        ),
+        (
+            BALL_DISPLAY_ID,
+            BALL_DISPLAY_AT,
+            lz77_literals(&display_bytes),
+            display_bytes.clone(),
+        ),
+        // The frames and the shadow are `.4bpp.lz`, never raw tiles
+        // (`src/graphics.c:628-629,1037`).
+        (
+            SHADOW_ID,
+            SHADOW_AT,
+            shadow_tiles(),
+            lz77_literals(&shadow_tiles()),
+        ),
+        (
+            PLAYER_ID,
+            PLAYER_AT,
+            PLAYER.tiles(),
+            lz77_literals(&PLAYER.tiles()),
+        ),
     ];
     for (id, at, replacement, original) in cases {
         let (mut rom, entries) = fixture();

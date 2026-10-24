@@ -41,6 +41,7 @@ fn complete_inventory() -> Vec<PackEntry> {
         .chain(opening_scene_ids())
         .chain(battle_interface_ids())
         .chain(healthbox_element_ids())
+        .chain(healthbox_frame_ids())
         .map(|id| raw_entry(id, vec![0]))
         .collect()
 }
@@ -376,6 +377,7 @@ fn a_pack_missing_a_battle_interface_entry_is_refused() {
     for id in battle_interface_ids()
         .into_iter()
         .chain(healthbox_element_ids())
+        .chain(healthbox_frame_ids())
     {
         let label = format!("no-{}", id.replace('/', "-"));
         assert_refused(&label, without(&id), &id, "battle_interface");
@@ -422,15 +424,23 @@ fn the_health_box_element_records_are_part_of_the_required_inventory() {
 }
 
 #[test]
-fn the_extracted_health_box_frame_records_pass_preflight_unclaimed() {
+fn the_health_box_frame_records_are_part_of_the_required_inventory() {
     let frames = healthbox_frame_ids();
-    assert_eq!(frames.len(), 5, "{frames:?}");
-    let mut entries = complete_inventory();
-    entries.extend(frames.into_iter().map(|id| raw_entry(id, vec![0])));
+    assert_eq!(
+        frames,
+        [
+            "battle-interface/image/healthbox_singles_player",
+            "battle-interface/image/healthbox_singles_opponent",
+            "battle-interface/image/enemy_mon_shadow",
+            "battle-interface/palette/ball_status_bar",
+            "battle-interface/palette/ball_display",
+        ]
+    );
+    // Each is refused when absent (see the missing-entry test above); present,
+    // all pass the preflight beside the textbox and element ids.
     let rom = RomFixture::new().emerald_header().finish();
-    with_context("health-box-frames-unclaimed", &rom, entries, |ctx| {
-        inventory::preflight(ctx.pack, &ctx.bag_ids)
-            .expect("the health-box frame records are extracted beside the textbox");
+    with_context("health-box-frames", &rom, complete_inventory(), |ctx| {
+        inventory::preflight(ctx.pack, &ctx.bag_ids).expect("complete inventory");
     });
 }
 

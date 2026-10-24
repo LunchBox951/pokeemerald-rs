@@ -467,22 +467,30 @@ pub struct OpeningSceneRoots {
     pub tilemaps: &'static [BlobRoot],
 }
 
-/// The battle textbox and menu text graphics (`graphics/battle_interface`).
+/// The battle textbox, menu text, and singles health-box graphics
+/// (`graphics/battle_interface`).
 ///
 /// The textbox sheet, its composed 32-colour palette and tilemap, and the
 /// battle-window and PP text palettes, under the `battle-interface/` pack ids
-/// the checkout extractor emits. The textbox palette is one ROM root: the
+/// the checkout extractor emits. The singles player and opponent frames
+/// (`gHealthboxSinglesPlayerGfx`, `gHealthboxSinglesOpponentGfx`,
+/// `src/graphics.c:628-629`) and the enemy shadow (`gEnemyMonShadow_Gfx`,
+/// `:1037`) are further `.4bpp.lz` [`ImageRoot`]s in `images`, each frame with
+/// its own metatile shape; the two ball palettes
+/// (`gBattleInterface_BallStatusBarPal`, `gBattleInterface_BallDisplayPal`,
+/// `:354,356`) are raw 16-colour [`PaletteRoot`]s in `palettes`. The textbox palette is one ROM root: the
 /// build concatenates `textbox_0.pal` and `textbox_1.pal` into a single
 /// `gBattleTextboxPalette`.
 ///
 /// The health-box element table and the battle bar are raw 4bpp tile runs,
-/// recorded as [`BlobRoot`]s beside the textbox records. The singles
-/// health-box frames, their palettes, and the enemy shadow are not here.
+/// recorded as [`BlobRoot`]s beside the textbox records.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BattleInterfaceRoots {
-    /// Every `battle-interface/image/*` entry.
+    /// Every `battle-interface/image/*` entry: the textbox sheet, the two
+    /// singles frames, and the enemy shadow.
     pub images: &'static [ImageRoot],
-    /// Every `battle-interface/palette/*` entry.
+    /// Every `battle-interface/palette/*` entry: the three text palettes and
+    /// the two ball palettes.
     pub palettes: &'static [PaletteRoot],
     /// Every `battle-interface/raw/*` tilemap.
     pub tilemaps: &'static [BlobRoot],

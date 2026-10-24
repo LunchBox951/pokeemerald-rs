@@ -1,5 +1,6 @@
-//! The battle textbox, menu text palettes, health-box elements, and battle
-//! bar: `battle-interface/*`.
+//! The battle textbox, menu text palettes, health-box elements, battle bar,
+//! singles health-box frames, enemy shadow, and ball palettes:
+//! `battle-interface/*`.
 //!
 //! The textbox sheet, its 32-colour palette, and the window-text palette are
 //! LZ77 streams; the PP text palette is a raw `.gbapal` run; the textbox
@@ -21,6 +22,17 @@
 //! raw record: `gBattleInterfaceGfx_BattleBar` is the LZ77 stream of
 //! `hpbar_anim_unused`, `numbers1`, and `numbers2` concatenated
 //! (`graphics_file_rules.mk:90-93`).
+//!
+//! The singles frames and the enemy shadow are ordinary compressed images, and
+//! the two ball palettes ordinary raw palettes, so they ride in the same
+//! `images` and `palettes` slices as the textbox records and go through the
+//! shared codecs. `gHealthboxSinglesPlayerGfx` and `gHealthboxSinglesOpponentGfx`
+//! (`src/graphics.c:628-629`) are `.4bpp.lz` cut with `-mwidth 8 -mheight 8`
+//! and `-mwidth 8 -mheight 4`; each root carries its own metatile shape, which
+//! the image reader walks to rebuild the PNG raster order the checkout pack
+//! holds. `gEnemyMonShadow_Gfx` (`graphics.c:1037`) is a plain `.4bpp.lz`, and
+//! `gBattleInterface_BallStatusBarPal` and `gBattleInterface_BallDisplayPal`
+//! (`graphics.c:354,356`) are uncompressed `.gbapal` runs.
 
 use pack_format::PackWriter;
 
@@ -159,5 +171,7 @@ fn check_battle_bar(bar: &BlobRoot) -> Result<(), ImportError> {
     Ok(())
 }
 
+#[cfg(test)]
+mod frame_tests;
 #[cfg(test)]
 mod tests;

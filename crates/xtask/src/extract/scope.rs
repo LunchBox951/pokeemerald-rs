@@ -733,7 +733,7 @@ pub(crate) fn battle_interface_ids() -> Vec<String> {
 
 /// Every `battle-interface/` pack id the health-box extractor emits: the
 /// thirteen health-box elements and the battle bar. ROM import claims all
-/// fourteen.
+/// fourteen; the frames are [`healthbox_frame_ids`].
 pub(crate) fn healthbox_element_ids() -> Vec<String> {
     healthbox_element_pack_ids()
 }
@@ -752,8 +752,8 @@ pub(crate) fn healthbox_battle_bar_id() -> String {
 
 /// Every `battle-interface/` pack id the health-box frame extractor emits: the
 /// singles player and opponent frames, the enemy shadow, and the two ball
-/// palettes. No ROM root imports them yet, so profile generation leaves
-/// them unclaimed.
+/// palettes. ROM import claims all five, so profile generation requires them
+/// beside the textbox and element ids.
 pub(crate) fn healthbox_frame_ids() -> Vec<String> {
     healthbox_frame_pack_ids()
 }
