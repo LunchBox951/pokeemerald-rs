@@ -76,6 +76,9 @@ pub(super) fn requests(
     if let Some(requests) = announcements(narrator, event) {
         return Ok(requests);
     }
+    if let Some(requests) = sleep_results(narrator, event) {
+        return Ok(requests);
+    }
     if let Some(requests) = ability_results(narrator, event)? {
         return Ok(requests);
     }
@@ -86,6 +89,20 @@ pub(super) fn requests(
         return Ok(requests);
     }
     lifecycle::requests(narrator, names, event)
+}
+
+/// `CANCELER_ASLEEP`'s messages, in the sleeper's own name:
+/// `BattleScript_MoveUsedIsAsleep` prints in place of the move announcement
+/// and `BattleScript_MoveUsedWokeUp` ahead of it
+/// (`data/battle_scripts_1.s:3717`-`:3728`).
+fn sleep_results(narrator: &Narrator, event: &BattleEvent) -> Option<Vec<NarrationRequest>> {
+    let (template, by_player) = match *event {
+        BattleEvent::FastAsleep { by_player, .. } => (id::PKMNFASTASLEEP, by_player),
+        BattleEvent::WokeUp { by_player } => (id::PKMNWOKEUP, by_player),
+        _ => return None,
+    };
+    let context = narrator.context().user_vs_target(Side::user(by_player));
+    Some(vec![table(template, context)])
 }
 
 /// Announcements and failures printed in the user's own name.

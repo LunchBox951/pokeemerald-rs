@@ -30,6 +30,8 @@ fn move_events() -> Vec<BattleEvent> {
             damage: 3,
         },
         BattleEvent::FullyParalyzed { by_player, move_id },
+        BattleEvent::FastAsleep { by_player, move_id },
+        BattleEvent::WokeUp { by_player },
         BattleEvent::NoEffect { by_player, move_id },
         BattleEvent::LevitateBlocked { by_player, move_id },
         BattleEvent::WonderGuardBlocked { by_player, move_id },
