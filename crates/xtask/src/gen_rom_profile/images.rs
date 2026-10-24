@@ -1,34 +1,21 @@
-//! Locating an image asset without being told how it is stored.
+//! Locates image assets in the ROM by searching for their packed tiles.
 //!
-//! A pack image entry says what the art *looks like*, not how upstream
-//! packed it: the bit depth `gbagfx` used and the `-mwidth`/`-mheight`
-//! metatile walk it wrote the tiles in are build options, invisible in the
-//! pack. Rather than restate those options here, this module lets the ROM
-//! answer. It packs the raster under every depth and metatile shape that
-//! could produce it, searches for all of them at once, and keeps the one
-//! that turns up.
-//!
-//! That is a real signature, not a guess: a wrong metatile walk permutes
-//! tiles, and a permuted sheet does not appear anywhere in the ROM. Where
-//! several shapes produce byte-identical output (a sheet whose whole grid
-//! is one metatile), the largest is reported, which is the one upstream
-//! wrote.
+//! A pack image entry carries no `gbagfx` bit depth or `-mwidth`/`-mheight`
+//! metatile shape. Each raster is packed under every candidate depth and
+//! metatile shape, all needles are searched at once, and the shape that
+//! matches is kept. A wrong metatile walk permutes tiles, so a wrong shape
+//! does not match; when several shapes give identical bytes (one-metatile
+//! grid), the largest is reported, as upstream wrote it.
 //!
 //! # Duplicate art
 //!
-//! A handful of sheets are byte-identical to another and appear twice in
-//! the ROM under two symbols. Nothing in the *bytes* tells the two symbols
-//! apart, and neither does the struct chain around them: the object-event
-//! graphics-info table distinguishes them only by an `OBJ_EVENT_GFX_*`
-//! constant, which is a name, not evidence, and carrying those names is
-//! exactly the hand-maintained knowledge this design exists to avoid.
-//!
-//! So the choice is arbitrary, and says so: duplicates are paired off in
-//! address order against the ids that share the art, each gets a note, and
-//! each is recorded as [`Resolution::ArbitraryAmongIdentical`] rather than
-//! as a struct-derived resolution it is not. That is sound only because
-//! every candidate holds identical bytes, so the pack entry the importer
-//! writes is the same whichever one it reads.
+//! Some sheets are byte-identical and appear under two symbols. Neither the
+//! bytes nor the struct chain separates them: the object-event
+//! graphics-info table distinguishes them only by `OBJ_EVENT_GFX_*` names,
+//! which this generator does not carry. Duplicates are paired with the ids
+//! sharing the art in address order and recorded as
+//! [`Resolution::ArbitraryAmongIdentical`] with a note; the importer's pack
+//! entry is the same whichever copy it reads.
 
 use std::collections::BTreeMap;
 
@@ -67,15 +54,13 @@ impl ImageQuery {
     }
 }
 
-/// How one image's tiles are laid out: ROM bit depth, metatile shape, and
-/// how many tiles are stored.
+/// ROM bit depth, metatile shape, and stored tile count of one image.
 type Packing = (u8, (u32, u32), u32);
 
-/// Every address one image's art was found at, with the packing that
-/// matched there.
+/// Each address one image matched at, with the matching packing.
 type Candidates = BTreeMap<u32, Packing>;
 
-/// One candidate packing of one image.
+/// One candidate packing of the query at `query_index`.
 struct Variant {
     query_index: usize,
     rom_bit_depth: u8,
@@ -83,12 +68,30 @@ struct Variant {
     tile_count: u32,
 }
 
-/// The fragments a linker map's symbol for `id` must contain.
+/// The upstream name of an image root declared `static` (so a linker map
+/// cannot list it), or `None` for a global root.
 ///
-/// Upstream's naming is only loosely conventional -- a `static` sheet and a
-/// global one differ in their prefix, and `walking.png` becomes `Normal` --
-/// so the check asserts the family the symbol belongs to, not a name this
-/// generator would have to guess.
+/// `title_screen.c:63-66`, `item_menu_icons.c:37`, `item_menu.c:374`,
+/// `text_window.c:10-28`.
+pub(super) fn local_image_symbol(id: &str) -> Option<String> {
+    if let Some(stem) = id.strip_prefix("text-window/image/") {
+        return super::text_window::is_static_frame(stem)
+            .then(|| format!("sTextWindowFrame{stem}_Gfx"));
+    }
+    if let Some(name) = id.strip_prefix("title/image/") {
+        let camel = super::locate::camel_case(name);
+        return matches!(camel.as_str(), "Rayquaza" | "LogoShine" | "Clouds")
+            .then(|| format!("sTitleScreen{camel}Gfx"));
+    }
+    match id {
+        "bag/image/rotating_ball" => Some("sRotatingBall_Gfx".to_owned()),
+        "bag/image/select_button" => Some("sRegisteredSelect_Gfx".to_owned()),
+        _ => None,
+    }
+}
+
+/// The fragments a linker-map symbol for `id` must contain; empty when the
+/// domain has no naming convention.
 fn symbol_fragments(id: &str) -> Vec<String> {
     if let Some(name) = id.strip_prefix("title/image/") {
         return vec![
@@ -102,8 +105,7 @@ fn symbol_fragments(id: &str) -> Vec<String> {
     }
     if let Some(species) = id.strip_prefix("pokemon/") {
         if let Some((name, direction)) = species.split_once('/') {
-            // `front.png` is upstream's still front (`gMonStillFrontPic_*`);
-            // `gMonFrontPic_*` is the animation sheet.
+            // `front.png` is `gMonStillFrontPic_*`; `gMonFrontPic_*` is the animation sheet.
             let table = if direction == "back" {
                 "Back"
             } else {
@@ -121,20 +123,18 @@ fn symbol_fragments(id: &str) -> Vec<String> {
         }
         return vec![format!("TextWindowFrame{stem}_Gfx")];
     }
+    if id == "battle-interface/image/textbox" {
+        return vec!["gBattleTextboxTiles".to_owned()];
+    }
     Vec::new()
 }
 
-/// Which ROM bit depths could produce a pack entry of this depth, the
-/// entry's own depth first and any narrower depth after it.
+/// The ROM bit depths a pack entry of `pack_bit_depth` may be stored at,
+/// authoritative depth first.
 ///
-/// A 4bpp entry can only have come from 4bpp tiles, and a 2bpp entry's sole
-/// candidate is 4bpp too; both are authoritative, so a palette index that
-/// does not fit there is a malformed pack. An 8bpp entry usually came from
-/// 8bpp tiles, but not always: the title screen's press-start banner is an
-/// 8-bit-indexed PNG whose indices all fit a nibble, and upstream stores it
-/// as 4bpp. That second candidate is a speculative probe, so a raster whose
-/// indices do not fit it is simply not stored at that depth
-/// ([`probe_image_tiles`]).
+/// 2bpp and 4bpp entries are stored as 4bpp only. An 8bpp entry may also be
+/// 4bpp (the title press-start banner has nibble-sized indices); that second
+/// depth is a probe ([`probe_image_tiles`]).
 fn rom_depths(pack_bit_depth: u8) -> &'static [u8] {
     match pack_bit_depth {
         8 => &[8, 4],
@@ -142,9 +142,8 @@ fn rom_depths(pack_bit_depth: u8) -> &'static [u8] {
     }
 }
 
-/// [`image_tiles`] for a speculative narrower-depth candidate of
-/// [`rom_depths`]: an out-of-range palette index resolves to `None`, the
-/// raster was never stored at this depth, rather than aborting the search.
+/// [`image_tiles`] for a probe depth of [`rom_depths`]; a palette index that
+/// does not fit the depth gives `None` instead of an error.
 ///
 /// # Errors
 ///
@@ -175,7 +174,7 @@ fn probe_image_tiles(
     }
 }
 
-/// Drop trailing all-zero tiles, the way upstream's own art is stored.
+/// The byte length of `tiles` without its trailing all-zero tiles.
 fn trim_zero_tiles(tiles: &[u8], bytes_per_tile: usize) -> usize {
     let mut kept = tiles.len();
     while kept >= bytes_per_tile
@@ -188,7 +187,7 @@ fn trim_zero_tiles(tiles: &[u8], bytes_per_tile: usize) -> usize {
     kept
 }
 
-/// Locate every image in `queries`, in as few ROM passes as possible.
+/// Locates every image in `queries` with one raw and one LZ77 ROM search.
 ///
 /// # Errors
 ///
@@ -208,15 +207,12 @@ pub fn locate_images(
 
     for (query_index, query) in queries.iter().enumerate() {
         let asset = ctx.pack.get(&query.id)?;
-        // Shape validated against the payload before anything enumerates
-        // over it: a malformed pack's dimensions drive the metatile walk
-        // and the tile packing, so they must be backed by real bytes.
+        // Validates the dimensions against the payload before they drive packing.
         let (_, width, height, pack_bit_depth) = asset.image_raster(&query.id)?;
         for (depth_index, &rom_bit_depth) in rom_depths(pack_bit_depth).iter().enumerate() {
             let bytes_per_tile = if rom_bit_depth == 4 { 32 } else { 64 };
             for metatile in metatile_candidates(width, height) {
-                // Only a later `rom_depths` candidate is a guess (its docs
-                // own why); the first is authoritative and reports as is.
+                // Only depths after the first are probes; see `rom_depths`.
                 let tiles = if depth_index == 0 {
                     image_tiles(ctx.pack, &query.id, rom_bit_depth, metatile)?
                 } else {
@@ -228,13 +224,9 @@ pub fn locate_images(
                     tiles
                 };
                 let full = tiles.len();
-                // Upstream cuts art short in two ways -- `-num_tiles`, and
-                // dropping trailing all-zero tiles -- and the two do not
-                // always agree, so the exact cut is not derivable. What is
-                // derivable is the range it must lie in: no shorter than
-                // the last tile with art in it, no longer than the whole
-                // sheet. Uncompressed art is stored whole, so a raw search
-                // only looks for the whole sheet.
+                // LZ77 art may be cut by `-num_tiles` or trailing-zero trimming, so
+                // search every length from the last non-zero tile to the full
+                // sheet. Raw art is stored whole.
                 let kept = match query.encoding {
                     Encoding::Raw => full,
                     Encoding::Lz77 => trim_zero_tiles(&tiles, bytes_per_tile).min(full),
@@ -243,11 +235,8 @@ pub fn locate_images(
                     Encoding::Raw => (&mut raw_needles, &mut raw_variants),
                     Encoding::Lz77 => (&mut lz_needles, &mut lz_variants),
                 };
-                // One tile is the floor: an all-zero sheet trims to nothing,
-                // and an empty needle carries no signature at all.
-                // `Lz77Search` buckets needles by decompressed size, so it
-                // would report every declared-size-zero stream in the ROM as
-                // a hit and turn a blank image into `Ambiguous`.
+                // One tile minimum: an empty needle would match every declared-size-zero
+                // LZ77 stream in the ROM.
                 for len in (kept.max(bytes_per_tile)..=full).step_by(bytes_per_tile) {
                     variants.push(Variant {
                         query_index,
@@ -265,7 +254,7 @@ pub fn locate_images(
     let raw_hits = ctx.raw.find_all(&raw_needles);
     let lz_hits = ctx.lz77.find_all(&lz_needles);
 
-    // Collect, per query, every (address, packing) the ROM agreed with.
+    // Per query, every (address, packing) the ROM matched.
     let mut found: Vec<Candidates> = vec![BTreeMap::new(); queries.len()];
     for (variants, hits) in [(&raw_variants, &raw_hits), (&lz_variants, &lz_hits)] {
         for (variant, offsets) in variants.iter().zip(hits.iter()) {
@@ -273,10 +262,8 @@ pub fn locate_images(
                 let slot = found[variant.query_index]
                     .entry(to_addr(offset))
                     .or_insert((variant.rom_bit_depth, variant.metatile, variant.tile_count));
-                // Shapes are enumerated largest first, so the first packing
-                // recorded for an address is the one to keep; a longer tile
-                // run at the same address wins, since it is the whole sheet
-                // rather than a prefix of it.
+                // Shapes are enumerated largest first, so the first packing at an
+                // address stays unless a longer tile run (the whole sheet) matches.
                 if variant.tile_count > slot.2 {
                     *slot = (variant.rom_bit_depth, variant.metatile, variant.tile_count);
                 }
@@ -287,18 +274,15 @@ pub fn locate_images(
     assign(ctx, queries, &found, report)
 }
 
-/// Turn per-query candidate addresses into one plan each.
-///
-/// Ids whose art is byte-identical share a duplicate set and are paired off
-/// in address order; see the module docs.
+/// One plan per query from its candidate addresses; ids with identical
+/// address sets are paired in address order (see the module docs).
 fn assign(
     ctx: &Context<'_>,
     queries: &[ImageQuery],
     found: &[Candidates],
     report: &mut Vec<ReportLine>,
 ) -> Result<Vec<ImagePlan>, GenRomProfileError> {
-    // Group ids that landed on the exact same address set: those are the
-    // ones sharing art.
+    // Ids with the same address set share art.
     let mut groups: BTreeMap<Vec<u32>, Vec<usize>> = BTreeMap::new();
     for (index, candidates) in found.iter().enumerate() {
         groups
@@ -324,9 +308,7 @@ fn assign(
                 addrs,
             });
         }
-        // More copies than ids, or exactly as many: pair them off in
-        // address order. Every copy holds the same bytes, so the pack entry
-        // is the same whichever one a reader takes.
+        // At least as many copies as ids: pair in address order; copies are identical.
         for (slot, index) in members.iter().enumerate() {
             chosen[*index] = Some(addrs[slot]);
             notes[*index] = Some(format!(
@@ -353,9 +335,13 @@ fn assign(
         if let Some(note) = notes[index].clone() {
             line = line.with(Resolution::ArbitraryAmongIdentical).note(note);
         }
-        let fragments = symbol_fragments(&query.id);
-        if !fragments.is_empty() {
-            line = line.symbol_contains(fragments);
+        if let Some(name) = local_image_symbol(&query.id) {
+            line = line.local_symbol(name);
+        } else {
+            let fragments = symbol_fragments(&query.id);
+            if !fragments.is_empty() {
+                line = line.symbol_contains(fragments);
+            }
         }
         report.push(line);
         plans.push(ImagePlan {
@@ -415,8 +401,11 @@ mod tests {
             symbol_fragments("text-window/image/message_box"),
             ["gMessageBox_Gfx"]
         );
-        // A domain with no convention asserts nothing, which
-        // `symbol_contains` turns into "any symbol starts here".
+        assert_eq!(
+            symbol_fragments("battle-interface/image/textbox"),
+            ["gBattleTextboxTiles"]
+        );
+        // No convention asserts nothing; `symbol_contains` then accepts any symbol.
         assert!(symbol_fragments("tileset/general/anim/water/0").is_empty());
     }
 
@@ -425,10 +414,10 @@ mod tests {
         let mut tiles = vec![1u8; 32];
         tiles.extend_from_slice(&[0u8; 64]);
         assert_eq!(trim_zero_tiles(&tiles, 32), 32);
-        // A tile that is only partly zero survives.
+        // A partly-zero tile stays.
         tiles[95] = 9;
         assert_eq!(trim_zero_tiles(&tiles, 32), 96);
-        // An entirely zero sheet trims to nothing.
+        // An all-zero sheet trims to nothing.
         assert_eq!(trim_zero_tiles(&[0u8; 64], 32), 0);
     }
 }

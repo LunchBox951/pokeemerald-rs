@@ -90,7 +90,7 @@ pub enum ExtractError {
         /// Parser failure.
         LayoutsJsonError,
     ),
-    /// A [`super::LAYOUTS`] ID is absent from the layout manifest.
+    /// A [`super::scope::LAYOUTS`] ID is absent from the layout manifest.
     UnknownLayoutInJson(
         /// Manifest path.
         PathBuf,
@@ -170,8 +170,23 @@ pub enum ExtractError {
         /// What differs from the expected shape.
         detail: String,
     },
+    /// An opening-scene source (Birch's speech scene or the wall clock) differs
+    /// from its upstream graphic's shape.
+    OpeningSceneAssetMismatch {
+        /// Source path.
+        path: PathBuf,
+        /// What differs from the expected shape.
+        detail: String,
+    },
     /// A battler source differs from its upstream graphic's shape.
     BattlerAssetMismatch {
+        /// Source path.
+        path: PathBuf,
+        /// What differs from the expected shape.
+        detail: String,
+    },
+    /// A trainer front picture source differs from its upstream graphic's shape.
+    TrainerPicAssetMismatch {
         /// Source path.
         path: PathBuf,
         /// What differs from the expected shape.
@@ -186,6 +201,13 @@ pub enum ExtractError {
     },
     /// A battle interface source differs from its upstream graphic's shape.
     BattleInterfaceAssetMismatch {
+        /// Source path.
+        path: PathBuf,
+        /// What differs from the expected shape.
+        detail: String,
+    },
+    /// A naming-screen source differs from its upstream graphic's shape.
+    NamingScreenAssetMismatch {
         /// Source path.
         path: PathBuf,
         /// What differs from the expected shape.
@@ -381,14 +403,23 @@ impl fmt::Display for ExtractError {
             Self::StarterChooserAssetMismatch { path, detail } => {
                 write!(f, "starter-chooser asset `{}` {detail}", path.display())
             }
+            Self::OpeningSceneAssetMismatch { path, detail } => {
+                write!(f, "opening-scene asset `{}` {detail}", path.display())
+            }
             Self::BattlerAssetMismatch { path, detail } => {
                 write!(f, "battler asset `{}` {detail}", path.display())
+            }
+            Self::TrainerPicAssetMismatch { path, detail } => {
+                write!(f, "trainer picture asset `{}` {detail}", path.display())
             }
             Self::PokedexGraphicsAssetMismatch { path, detail } => {
                 write!(f, "pokedex-graphics asset `{}` {detail}", path.display())
             }
             Self::BattleInterfaceAssetMismatch { path, detail } => {
                 write!(f, "battle interface asset `{}` {detail}", path.display())
+            }
+            Self::NamingScreenAssetMismatch { path, detail } => {
+                write!(f, "naming-screen asset `{}` {detail}", path.display())
             }
             Self::BagAssetMismatch { path, detail } => {
                 write!(f, "bag asset `{}` {detail}", path.display())

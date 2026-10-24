@@ -72,14 +72,8 @@ pub(super) fn warp_tile_behavior(map: assets::MapId, warp_index: usize) -> ((i16
         &engine::event_data::EventData::new(),
     )
     .expect("run `cargo xtask extract` first");
-    let header = assets::MapHeaderTable::new()
-        .header(map)
-        .expect("map must resolve in the generated map-header table");
-    let events = assets::MapEventsTable::new()
-        .resolve(map)
-        .expect("map must resolve in the generated map-events table");
-    let warp = events.warp_events[warp_index];
-    let runtime = scene.runtime(map, header, events);
+    let warp = scene.map_events().warp_events[warp_index];
+    let runtime = scene.runtime();
     let behavior = runtime
         .metatile_behavior(i32::from(warp.x), i32::from(warp.y))
         .expect("a warp event's own tile must decode");
@@ -194,9 +188,10 @@ pub(super) fn synthetic_phase(
 /// The [`MapRuntime`] [`OverworldPhase::step`] builds from `phase`'s scene and
 /// [`ONE_F`]'s real event data.
 pub(super) fn runtime_for(phase: &OverworldPhase) -> MapRuntime<'_> {
-    let header = assets::MapHeaderTable::new().header(ONE_F).unwrap();
-    let events = assets::MapEventsTable::new().resolve(ONE_F).unwrap();
-    phase.scene.runtime(ONE_F, header, events)
+    phase
+        .scene
+        .runtime()
+        .with_object_events(&phase.object_events)
 }
 
 /// A flat map with one connection from `direction` edge to `target` at
@@ -233,6 +228,26 @@ pub(super) fn one_f_phase(position: (i32, i32), facing: Direction) -> OverworldP
         None,
         crate::pack_source::PackSource::Repo,
     )
+}
+
+/// The new-game phase loaded from this checkout's own pack, so a locally
+/// installed earlier-rung pack cannot satisfy a real-pack assertion. Requires
+/// the pack.
+pub(super) fn checkout_pack_phase() -> OverworldPhase {
+    OverworldPhase::load(
+        crate::pack_source::PackSource::Repo,
+        crate::new_game::NewGameOptions::DEFAULT,
+        crate::new_game::NewGameIdentity::DEFAULT,
+    )
+    .expect("run `cargo xtask extract` first")
+}
+
+/// `phase` with its deferred room, warp, and dialog loads pinned to this
+/// checkout's pack. For the ignored tests that reuse a pack-free fixture
+/// builder whose phase otherwise reads `PackSource::Runtime`.
+pub(super) fn on_checkout_pack(mut phase: OverworldPhase) -> OverworldPhase {
+    phase.pack_source = crate::pack_source::PackSource::Repo;
+    phase
 }
 
 const ONE_F_DOORMAT_WARP_INDEX: usize = 1;
@@ -318,17 +333,12 @@ pub(super) fn littleroot_lab_door_scene() -> OverworldScene {
         LITTLEROOT_LAB_SCENE_TILE,
         MB_ANIMATED_DOOR,
     )
+    .in_room_for_test(LITTLEROOT)
 }
 
 /// A runtime over `scene` bound to Littleroot's real header and events.
 pub(super) fn littleroot_runtime(scene: &OverworldScene) -> MapRuntime<'_> {
-    let header = assets::MapHeaderTable::new()
-        .header(LITTLEROOT)
-        .expect("MAP_LITTLEROOT_TOWN must resolve in the generated map-header table");
-    let events = assets::MapEventsTable::new()
-        .resolve(LITTLEROOT)
-        .expect("MAP_LITTLEROOT_TOWN must resolve in the generated map-events table");
-    scene.runtime(LITTLEROOT, header, events)
+    scene.runtime()
 }
 
 /// [`littleroot_lab_door_scene`] with the player one tile south of the door,
@@ -580,5 +590,31 @@ impl OverworldPhase {
             self.owns_lead_slot(expected_slot),
             "expected a live lead backed by slot {expected_slot}"
         );
+    }
+}
+
+#[cfg(test)]
+mod checkout_pack_helper_tests {
+    use super::*;
+    use crate::pack_source::PackSource;
+
+    /// `on_checkout_pack` repins a `Runtime` fixture to `Repo`, so an
+    /// installed earlier-rung pack can never satisfy a deferred warp load.
+    #[test]
+    fn on_checkout_pack_repins_a_runtime_fixture_to_repo() {
+        let base = synthetic_phase(PlayerState::new((2, 2), 3, Direction::South), None);
+        assert_eq!(
+            base.pack_source,
+            PackSource::Runtime,
+            "fixture precondition"
+        );
+        assert_eq!(on_checkout_pack(base).pack_source, PackSource::Repo);
+    }
+
+    /// `checkout_pack_phase` loads and retains `Repo`, not `Runtime`.
+    #[test]
+    #[ignore = "needs a local pack: run `cargo xtask extract` first"]
+    fn checkout_pack_phase_retains_repo() {
+        assert_eq!(checkout_pack_phase().pack_source, PackSource::Repo);
     }
 }

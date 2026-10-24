@@ -84,6 +84,12 @@ const RIVAL_BRENDAN_NORMAL_GFX_ID: u16 = 100;
 /// `OBJ_EVENT_GFX_RIVAL_MAY_NORMAL` (`event_objects.h:112`).
 const RIVAL_MAY_NORMAL_GFX_ID: u16 = 105;
 
+/// Returns how to draw `graphics_id`, or `None` for one that is not drawn.
+///
+/// Only the people sheets with a `NpcSpriteSource::People16x32` binding (and
+/// the protagonist sheets) are drawn; every non-people object sheet, the
+/// `OBJ_EVENT_GFX_VAR_*` slots whose variable is unset, and the people without
+/// a binding stay undrawn even though their sheets are extracted.
 fn resolve_sprite_source(
     graphics_id: &str,
     player: PlayerCharacter,
