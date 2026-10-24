@@ -95,6 +95,8 @@ mod reader;
 mod rom;
 mod roots;
 mod sha1;
+#[cfg(test)]
+mod test_support;
 
 use std::path::{Path, PathBuf};
 
@@ -676,6 +678,7 @@ mod tests {
         ImportError, ImportReport, PartialFile, Roots, WriteFailure,
     };
     use crate::fixture::{shared_emerald_rom, RomFixture};
+    use crate::test_support::TempDir;
     use std::path::{Path, PathBuf};
 
     #[cfg(windows)]
@@ -712,34 +715,36 @@ mod tests {
         assert!(matches!(err, ImportError::EmptyPack));
     }
 
-    /// A fresh directory under the OS temporary directory, removed on drop.
-    struct TempDir {
-        path: PathBuf,
-    }
-
-    impl TempDir {
-        fn new(label: &str) -> Self {
-            use std::sync::atomic::{AtomicU32, Ordering};
-            static COUNTER: AtomicU32 = AtomicU32::new(0);
-            let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
-            let path = std::env::temp_dir().join(format!(
-                "rom-import-{label}-{}-{unique}",
-                std::process::id()
-            ));
-            let _ = std::fs::remove_dir_all(&path);
-            std::fs::create_dir_all(&path).expect("a temporary directory");
-            Self { path }
+    #[test]
+    fn temp_dir_never_claims_a_directory_it_did_not_create() {
+        // Plant a populated stranger at every name the first claims would
+        // reach, under the real temporary directory: the helper has to pass
+        // over them rather than wipe, reuse or later delete one.
+        let pid = std::process::id();
+        let planted: Vec<PathBuf> = (0..512u32)
+            .map(|attempt| {
+                let path = std::env::temp_dir()
+                    .join(format!("rom-import-ownership-probe-{pid}-{attempt}"));
+                std::fs::create_dir(&path).expect("an unused probe name");
+                std::fs::write(path.join("sentinel"), b"not yours").expect("the sentinel");
+                path
+            })
+            .collect();
+        let claimed = TempDir::new("ownership-probe");
+        let survived = planted.iter().all(|path| path.join("sentinel").exists());
+        drop(claimed);
+        let survived_drop = planted.iter().all(|path| path.join("sentinel").exists());
+        for path in &planted {
+            let _ = std::fs::remove_dir_all(path);
         }
-
-        fn join(&self, name: &str) -> PathBuf {
-            self.path.join(name)
-        }
-    }
-
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.path);
-        }
+        assert!(
+            survived,
+            "TempDir::new deleted a pre-existing directory it then claimed"
+        );
+        assert!(
+            survived_drop,
+            "TempDir drop deleted a pre-existing directory"
+        );
     }
 
     /// Write a header-valid synthetic ROM image and return its path.
