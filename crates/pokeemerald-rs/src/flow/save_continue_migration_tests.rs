@@ -160,8 +160,7 @@ fn a_save_with_a_fainted_lead_is_healed_on_continue() {
     let resumed = resume(seed, Some(2));
     assert!(
         !resumed
-            .party_lead
-            .as_ref()
+            .lead_for_test()
             .expect("the migrated save still has its lead")
             .is_fainted(),
         "a fainted lead from a pre-#251 save is healed on load"
@@ -177,8 +176,7 @@ fn a_save_with_a_fainted_lead_is_healed_on_continue() {
     let resumed = resume(seed, Some(2));
     assert!(
         resumed
-            .party_lead
-            .as_ref()
+            .lead_for_test()
             .expect("the multi-member save still has its lead")
             .is_fainted(),
         "a fainted lead backed by a healthy member is no legacy marker and stays fainted"
@@ -193,8 +191,7 @@ fn a_save_with_a_fainted_lead_is_healed_on_continue() {
     let resumed = resume(seed, None);
     assert!(
         resumed
-            .party_lead
-            .as_ref()
+            .lead_for_test()
             .expect("the out-of-signature save still has its lead")
             .is_fainted(),
         "a fainted lead without the var-at-2 signature stays fainted"
@@ -211,8 +208,7 @@ fn a_save_with_a_fainted_lead_is_healed_on_continue() {
     let resumed = resume(seed, Some(2));
     assert_eq!(
         resumed
-            .party_lead
-            .as_ref()
+            .lead_for_test()
             .expect("the damaged save still has its lead")
             .current_hp(),
         expected_hp,
