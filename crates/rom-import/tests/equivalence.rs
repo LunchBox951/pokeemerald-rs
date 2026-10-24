@@ -68,16 +68,37 @@ const COMPLETE_PREFIXES: &[&str] = &[
     "opening-scene/",
 ];
 
-/// The battle textbox and menu text entries: 5 ids the ROM backend must write
-/// although `battle-interface/` is not in [`COMPLETE_PREFIXES`]. The checkout
-/// also extracts the health-box elements and battle bar there, which no ROM
-/// root imports until #2178.
-const BATTLE_INTERFACE_IDS: [&str; 5] = [
+/// The battle textbox and menu text entries, the thirteen health-box elements
+/// in `gHealthboxElementsGfxTable` order, the battle bar, the singles
+/// health-box frames, the enemy shadow, and the two ball palettes: 24 ids the
+/// ROM backend must write although `battle-interface/` is not in
+/// [`COMPLETE_PREFIXES`]. They are every `battle-interface/` entry the checkout
+/// extracts, so a narrow pin of these ids stands in for the prefix.
+const BATTLE_INTERFACE_IDS: [&str; 24] = [
     "battle-interface/image/textbox",
     "battle-interface/palette/textbox",
     "battle-interface/palette/window_text",
     "battle-interface/palette/pp_text",
     "battle-interface/raw/textbox_map",
+    "battle-interface/raw/healthbox_element/hpbar",
+    "battle-interface/raw/healthbox_element/expbar",
+    "battle-interface/raw/healthbox_element/status",
+    "battle-interface/raw/healthbox_element/misc",
+    "battle-interface/raw/healthbox_element/hpbar_anim",
+    "battle-interface/raw/healthbox_element/misc_frameend",
+    "battle-interface/raw/healthbox_element/ball_display",
+    "battle-interface/raw/healthbox_element/ball_caught_indicator",
+    "battle-interface/raw/healthbox_element/status2",
+    "battle-interface/raw/healthbox_element/status3",
+    "battle-interface/raw/healthbox_element/status4",
+    "battle-interface/raw/healthbox_element/healthbox_doubles_frameend",
+    "battle-interface/raw/healthbox_element/healthbox_doubles_frameend_bar",
+    "battle-interface/raw/battle_bar",
+    "battle-interface/image/healthbox_singles_player",
+    "battle-interface/image/healthbox_singles_opponent",
+    "battle-interface/image/enemy_mon_shadow",
+    "battle-interface/palette/ball_status_bar",
+    "battle-interface/palette/ball_display",
 ];
 
 /// The starters' static battler entries: 12 ids the ROM backend must write
@@ -230,8 +251,8 @@ fn the_rom_backend_matches_the_checkout_pack() {
         }
     }
 
-    // `battle-interface/` is not a complete prefix while the health boxes are
-    // checkout-only, so the textbox entries are pinned by id.
+    // `battle-interface/` is not a complete prefix, so the textbox, element,
+    // battle-bar, frame, shadow, and ball-palette entries are pinned by id.
     for id in BATTLE_INTERFACE_IDS {
         if !imported.contains_key(id) {
             differences.push(format!("{id}: the ROM backend wrote no such entry"));
@@ -266,8 +287,10 @@ fn the_rom_backend_matches_the_checkout_pack() {
     );
 }
 
-/// The pinned battle-interface ids are exactly the profile's roots, and no
-/// complete prefix claims the checkout-only health-box records.
+/// The pinned battle-interface ids are exactly the profile's roots, with the
+/// thirteen elements in table order and each starting where the last ends, the
+/// two frames keeping their own metatile shapes, and no complete prefix
+/// claiming any of them.
 #[test]
 fn the_battle_interface_ids_are_pinned_not_claimed_by_prefix() {
     let roots = &rom_import::EMERALD_US_REV0.roots.battle_interface;
@@ -277,20 +300,103 @@ fn the_battle_interface_ids_are_pinned_not_claimed_by_prefix() {
         .map(|root| root.id)
         .chain(roots.palettes.iter().map(|root| root.id))
         .chain(roots.tilemaps.iter().map(|root| root.id))
+        .chain(roots.healthbox_elements.iter().map(|root| root.id))
+        .chain(roots.battle_bar.iter().map(|root| root.id))
         .collect();
     profiled.sort_unstable();
     let mut pinned = BATTLE_INTERFACE_IDS;
     pinned.sort_unstable();
     assert_eq!(profiled, pinned);
+
+    // The table is one run: the pinned order, each root's length, and each
+    // address the previous root's end.
+    let elements: Vec<&str> = roots.healthbox_elements.iter().map(|r| r.id).collect();
+    assert_eq!(elements, BATTLE_INTERFACE_IDS[5..18]);
+    for pair in roots.healthbox_elements.windows(2) {
+        assert_eq!(
+            pair[0].addr.raw() + pair[0].len,
+            pair[1].addr.raw(),
+            "{} ends where {} starts",
+            pair[0].id,
+            pair[1].id
+        );
+    }
+    assert_eq!(
+        roots.healthbox_elements.iter().map(|r| r.len).sum::<u32>(),
+        118 * 32
+    );
+    assert_eq!(
+        roots.battle_bar.map(|bar| bar.id),
+        Some(BATTLE_INTERFACE_IDS[18])
+    );
+
+    // The singles frames keep the metatile cut each is built with
+    // (`src/graphics.c:628-629`), the shadow and ball palettes their roots.
+    let image = |id: &str| {
+        roots
+            .images
+            .iter()
+            .find(|root| root.id == id)
+            .unwrap_or_else(|| panic!("{id} is not an image root"))
+    };
+    let player = image("battle-interface/image/healthbox_singles_player");
+    let opponent = image("battle-interface/image/healthbox_singles_opponent");
+    assert_eq!(
+        (
+            player.width,
+            player.height,
+            player.metatile(),
+            player.tile_count
+        ),
+        (128, 64, (8, 8), 128)
+    );
+    assert_eq!(
+        (
+            opponent.width,
+            opponent.height,
+            opponent.metatile(),
+            opponent.tile_count
+        ),
+        (128, 32, (8, 4), 64)
+    );
+    let shadow = image("battle-interface/image/enemy_mon_shadow");
+    assert_eq!((shadow.width, shadow.height, shadow.tile_count), (32, 8, 4));
+    for root in [player, opponent, shadow] {
+        assert_eq!(
+            (root.encoding, root.rom_bit_depth, root.pack_bit_depth),
+            (rom_import::Encoding::Lz77, 4, 4),
+            "{}",
+            root.id
+        );
+    }
+    for id in [
+        "battle-interface/palette/ball_status_bar",
+        "battle-interface/palette/ball_display",
+    ] {
+        let root = roots
+            .palettes
+            .iter()
+            .find(|root| root.id == id)
+            .unwrap_or_else(|| panic!("{id} is not a palette root"));
+        assert_eq!(
+            (root.color_count, root.encoding),
+            (16, rom_import::Encoding::Raw),
+            "{id}"
+        );
+    }
+
     for id in [
         "battle-interface/raw/battle_bar",
         "battle-interface/raw/healthbox_element/hpbar",
+        "battle-interface/palette/ball_display",
+        "battle-interface/image/healthbox_singles_player",
+        "battle-interface/image/enemy_mon_shadow",
     ] {
         assert!(
             !COMPLETE_PREFIXES
                 .iter()
                 .any(|prefix| id.starts_with(prefix)),
-            "{id} is checkout-only until #2178"
+            "{id} must stay pinned by id, not claimed by a prefix"
         );
     }
 }

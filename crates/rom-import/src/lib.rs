@@ -103,6 +103,9 @@ pub use domains::battle_anim::{
     decode_battle_anim_payload, decode_battle_anim_program, AnimPointers, DecodedProgram,
     PACK_ID as BATTLE_ANIM_PACK_ID,
 };
+pub use domains::battle_interface::{
+    HEALTHBOX_BATTLE_BAR, HEALTHBOX_ELEMENTS, HEALTHBOX_TILE_BYTES,
+};
 pub use domains::battle_messages::{
     decode_battle_message_payload, PACK_ID as BATTLE_MESSAGE_PACK_ID,
 };

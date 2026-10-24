@@ -12537,121 +12537,121 @@
     "graphics/battle_interface": {
       "artifacts": {
         "ball_caught_indicator.png": {
-          "reason": "Pixel indices converted to raw 4bpp tiles as gbagfx writes them and read as a constituent of gHealthboxElementsGfxTable (graphics.c:358-370) in table order by AssetPack::healthbox_elements; the other battle_interface sources remain pending.",
+          "reason": "Pixel indices converted to raw 4bpp tiles as gbagfx writes them and read as a constituent of gHealthboxElementsGfxTable (graphics.c:358-370) in table order by AssetPack::healthbox_elements; the other battle_interface sources remain pending.  The ROM importer (rom-import's domains::battle_interface, gated by the real-ROM equivalence test's pinned battle-interface ids) reproduces the same raw record from the BPEE rev-0 profile as one row of gHealthboxElementsGfxTable, checking the table's order, each record's length, and that the thirteen records are back to back.",
           "rust_target": "crates/xtask/src/extract/battle_interface/healthbox_elements.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "ball_display.png": {
-          "reason": "Both halves are extracted by two extractors. Pixel indices are converted to raw 4bpp tiles as gbagfx writes them and read as a constituent of gHealthboxElementsGfxTable (graphics.c:358-370) in table order by AssetPack::healthbox_elements (healthbox_elements.rs); the embedded 16-colour palette (gBattleInterface_BallDisplayPal, graphics.c:356) is extracted as battle-interface/palette/ball_display and read by AssetPack::singles_healthbox_frames (healthbox_frames.rs). The other battle_interface sources remain pending.",
+          "reason": "Both halves are extracted by two extractors. Pixel indices are converted to raw 4bpp tiles as gbagfx writes them and read as a constituent of gHealthboxElementsGfxTable (graphics.c:358-370) in table order by AssetPack::healthbox_elements (healthbox_elements.rs); the embedded 16-colour palette (gBattleInterface_BallDisplayPal, graphics.c:356) is extracted as battle-interface/palette/ball_display and read by AssetPack::singles_healthbox_frames (healthbox_frames.rs). The other battle_interface sources remain pending.  The ROM importer (rom-import's domains::battle_interface, gated by the real-ROM equivalence test's pinned battle-interface ids) reproduces the same raw record from the BPEE rev-0 profile as one row of gHealthboxElementsGfxTable, checking the table's order, each record's length, and that the thirteen records are back to back.  The ROM importer likewise reproduces the palette record battle-interface/palette/ball_display from the BPEE rev-0 profile as the raw 16-colour .gbapal run gBattleInterface_BallDisplayPal (graphics.c:356), byte-identical to the checkout extractor's output, and the real-ROM equivalence test pins its id.",
           "rust_target": "crates/xtask/src/extract/battle_interface/healthbox_elements.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "ball_status_bar.png": {
-          "reason": "Only the embedded 16-colour palette (gBattleInterface_BallStatusBarPal, graphics.c:354) is extracted, read by AssetPack::singles_healthbox_frames; the status-bar image (gBattleInterface_BallStatusBarGfx) is not extracted, and the other battle_interface sources remain pending.",
+          "reason": "Only the embedded 16-colour palette (gBattleInterface_BallStatusBarPal, graphics.c:354) is extracted, read by AssetPack::singles_healthbox_frames; the status-bar image (gBattleInterface_BallStatusBarGfx) is not extracted, and the other battle_interface sources remain pending.  The ROM importer (rom-import's domains::battle_interface, gated by the real-ROM equivalence test's pinned battle-interface ids) reproduces the palette record from the BPEE rev-0 profile as the raw 16-colour .gbapal run gBattleInterface_BallStatusBarPal (graphics.c:354), byte-identical to the checkout extractor's output; the image half stays unimported.",
           "rust_target": "crates/xtask/src/extract/battle_interface/healthbox_frames.rs",
           "spec": "S-4",
           "status": "stubbed"
         },
         "enemy_mon_shadow.png": {
-          "reason": "Kept as a validated 4-bit 32x8 raster image (gEnemyMonShadow_Gfx, graphics.c:1037) and read by AssetPack::enemy_mon_shadow; the other battle_interface sources remain pending.",
+          "reason": "Kept as a validated 4-bit 32x8 raster image (gEnemyMonShadow_Gfx, graphics.c:1037) and read by AssetPack::enemy_mon_shadow; the other battle_interface sources remain pending.  The ROM importer (rom-import's domains::battle_interface, gated by the real-ROM equivalence test's pinned battle-interface ids) reproduces the same 4-bit raster image from the BPEE rev-0 profile as an LZ77 ImageRoot (gEnemyMonShadow_Gfx, graphics.c:1037), byte-identical to the checkout extractor's output.",
           "rust_target": "crates/xtask/src/extract/battle_interface/healthbox_frames.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "expbar.png": {
-          "reason": "Pixel indices converted to raw 4bpp tiles as gbagfx writes them and read as a constituent of gHealthboxElementsGfxTable (graphics.c:358-370) in table order by AssetPack::healthbox_elements; the other battle_interface sources remain pending.",
+          "reason": "Pixel indices converted to raw 4bpp tiles as gbagfx writes them and read as a constituent of gHealthboxElementsGfxTable (graphics.c:358-370) in table order by AssetPack::healthbox_elements; the other battle_interface sources remain pending.  The ROM importer (rom-import's domains::battle_interface, gated by the real-ROM equivalence test's pinned battle-interface ids) reproduces the same raw record from the BPEE rev-0 profile as one row of gHealthboxElementsGfxTable, checking the table's order, each record's length, and that the thirteen records are back to back.",
           "rust_target": "crates/xtask/src/extract/battle_interface/healthbox_elements.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "healthbox_doubles_frameend.png": {
-          "reason": "Pixel indices converted to raw 4bpp tiles as gbagfx writes them and read as a constituent of gHealthboxElementsGfxTable (graphics.c:358-370) in table order by AssetPack::healthbox_elements; the other battle_interface sources remain pending.",
+          "reason": "Pixel indices converted to raw 4bpp tiles as gbagfx writes them and read as a constituent of gHealthboxElementsGfxTable (graphics.c:358-370) in table order by AssetPack::healthbox_elements; the other battle_interface sources remain pending.  The ROM importer (rom-import's domains::battle_interface, gated by the real-ROM equivalence test's pinned battle-interface ids) reproduces the same raw record from the BPEE rev-0 profile as one row of gHealthboxElementsGfxTable, checking the table's order, each record's length, and that the thirteen records are back to back.",
           "rust_target": "crates/xtask/src/extract/battle_interface/healthbox_elements.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "healthbox_doubles_frameend_bar.png": {
-          "reason": "Pixel indices converted to raw 4bpp tiles as gbagfx writes them and read as a constituent of gHealthboxElementsGfxTable (graphics.c:358-370) in table order by AssetPack::healthbox_elements; the other battle_interface sources remain pending.",
+          "reason": "Pixel indices converted to raw 4bpp tiles as gbagfx writes them and read as a constituent of gHealthboxElementsGfxTable (graphics.c:358-370) in table order by AssetPack::healthbox_elements; the other battle_interface sources remain pending.  The ROM importer (rom-import's domains::battle_interface, gated by the real-ROM equivalence test's pinned battle-interface ids) reproduces the same raw record from the BPEE rev-0 profile as one row of gHealthboxElementsGfxTable, checking the table's order, each record's length, and that the thirteen records are back to back.",
           "rust_target": "crates/xtask/src/extract/battle_interface/healthbox_elements.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "healthbox_singles_opponent.png": {
-          "reason": "Kept as a validated 4-bit 128x32 raster image (two 8x4-tile metatiles, graphics.c:629) and read as the opponent singles frame by AssetPack::singles_healthbox_frames; the other battle_interface sources remain pending.",
+          "reason": "Kept as a validated 4-bit 128x32 raster image (two 8x4-tile metatiles, graphics.c:629) and read as the opponent singles frame by AssetPack::singles_healthbox_frames; the other battle_interface sources remain pending.  The ROM importer (rom-import's domains::battle_interface, gated by the real-ROM equivalence test's pinned battle-interface ids) reproduces the same 4-bit raster image from the BPEE rev-0 profile as an LZ77 ImageRoot (gHealthboxSinglesOpponentGfx, graphics.c:629) cut as 8x4-tile metatiles, byte-identical to the checkout extractor's output.",
           "rust_target": "crates/xtask/src/extract/battle_interface/healthbox_frames.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "healthbox_singles_player.png": {
-          "reason": "Kept as a validated 4-bit 128x64 raster image (two 8x8-tile metatiles, graphics.c:628) and read as the player singles frame by AssetPack::singles_healthbox_frames; the other battle_interface sources remain pending.",
+          "reason": "Kept as a validated 4-bit 128x64 raster image (two 8x8-tile metatiles, graphics.c:628) and read as the player singles frame by AssetPack::singles_healthbox_frames; the other battle_interface sources remain pending.  The ROM importer (rom-import's domains::battle_interface, gated by the real-ROM equivalence test's pinned battle-interface ids) reproduces the same 4-bit raster image from the BPEE rev-0 profile as an LZ77 ImageRoot (gHealthboxSinglesPlayerGfx, graphics.c:628) cut as 8x8-tile metatiles, byte-identical to the checkout extractor's output.",
           "rust_target": "crates/xtask/src/extract/battle_interface/healthbox_frames.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "hpbar.png": {
-          "reason": "Pixel indices converted to raw 4bpp tiles as gbagfx writes them and read as a constituent of gHealthboxElementsGfxTable (graphics.c:358-370) in table order by AssetPack::healthbox_elements; the other battle_interface sources remain pending.",
+          "reason": "Pixel indices converted to raw 4bpp tiles as gbagfx writes them and read as a constituent of gHealthboxElementsGfxTable (graphics.c:358-370) in table order by AssetPack::healthbox_elements; the other battle_interface sources remain pending.  The ROM importer (rom-import's domains::battle_interface, gated by the real-ROM equivalence test's pinned battle-interface ids) reproduces the same raw record from the BPEE rev-0 profile as one row of gHealthboxElementsGfxTable, checking the table's order, each record's length, and that the thirteen records are back to back.",
           "rust_target": "crates/xtask/src/extract/battle_interface/healthbox_elements.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "hpbar_anim.png": {
-          "reason": "Pixel indices converted to raw 4bpp tiles as gbagfx writes them and read as a constituent of gHealthboxElementsGfxTable (graphics.c:358-370) in table order by AssetPack::healthbox_elements; the other battle_interface sources remain pending.",
+          "reason": "Pixel indices converted to raw 4bpp tiles as gbagfx writes them and read as a constituent of gHealthboxElementsGfxTable (graphics.c:358-370) in table order by AssetPack::healthbox_elements; the other battle_interface sources remain pending.  The ROM importer (rom-import's domains::battle_interface, gated by the real-ROM equivalence test's pinned battle-interface ids) reproduces the same raw record from the BPEE rev-0 profile as one row of gHealthboxElementsGfxTable, checking the table's order, each record's length, and that the thirteen records are back to back.",
           "rust_target": "crates/xtask/src/extract/battle_interface/healthbox_elements.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "hpbar_anim_unused.png": {
-          "reason": "Pixel indices converted to raw 4bpp tiles as gbagfx writes them and concatenated in the order hpbar_anim_unused, numbers1, numbers2 into gBattleInterfaceGfx_BattleBar (graphics.c:169; graphics_file_rules.mk:90-93), read by AssetPack::battle_bar; the other battle_interface sources remain pending.",
+          "reason": "Pixel indices converted to raw 4bpp tiles as gbagfx writes them and concatenated in the order hpbar_anim_unused, numbers1, numbers2 into gBattleInterfaceGfx_BattleBar (graphics.c:169; graphics_file_rules.mk:90-93), read by AssetPack::battle_bar; the other battle_interface sources remain pending.  The ROM importer (rom-import's domains::battle_interface, gated by the real-ROM equivalence test's pinned battle-interface ids) reproduces battle-interface/raw/battle_bar from the BPEE rev-0 profile by decoding the LZ77 stream gBattleInterfaceGfx_BattleBar.",
           "rust_target": "crates/xtask/src/extract/battle_interface/healthbox_elements.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "misc.png": {
-          "reason": "Pixel indices converted to raw 4bpp tiles as gbagfx writes them and read as a constituent of gHealthboxElementsGfxTable (graphics.c:358-370) in table order by AssetPack::healthbox_elements; the other battle_interface sources remain pending.",
+          "reason": "Pixel indices converted to raw 4bpp tiles as gbagfx writes them and read as a constituent of gHealthboxElementsGfxTable (graphics.c:358-370) in table order by AssetPack::healthbox_elements; the other battle_interface sources remain pending.  The ROM importer (rom-import's domains::battle_interface, gated by the real-ROM equivalence test's pinned battle-interface ids) reproduces the same raw record from the BPEE rev-0 profile as one row of gHealthboxElementsGfxTable, checking the table's order, each record's length, and that the thirteen records are back to back.",
           "rust_target": "crates/xtask/src/extract/battle_interface/healthbox_elements.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "misc_frameend.png": {
-          "reason": "Pixel indices converted to raw 4bpp tiles as gbagfx writes them and read as a constituent of gHealthboxElementsGfxTable (graphics.c:358-370) in table order by AssetPack::healthbox_elements; the other battle_interface sources remain pending.",
+          "reason": "Pixel indices converted to raw 4bpp tiles as gbagfx writes them and read as a constituent of gHealthboxElementsGfxTable (graphics.c:358-370) in table order by AssetPack::healthbox_elements; the other battle_interface sources remain pending.  The ROM importer (rom-import's domains::battle_interface, gated by the real-ROM equivalence test's pinned battle-interface ids) reproduces the same raw record from the BPEE rev-0 profile as one row of gHealthboxElementsGfxTable, checking the table's order, each record's length, and that the thirteen records are back to back.",
           "rust_target": "crates/xtask/src/extract/battle_interface/healthbox_elements.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "numbers1.png": {
-          "reason": "Pixel indices converted to raw 4bpp tiles as gbagfx writes them and concatenated in the order hpbar_anim_unused, numbers1, numbers2 into gBattleInterfaceGfx_BattleBar (graphics.c:169; graphics_file_rules.mk:90-93), read by AssetPack::battle_bar; the other battle_interface sources remain pending.",
+          "reason": "Pixel indices converted to raw 4bpp tiles as gbagfx writes them and concatenated in the order hpbar_anim_unused, numbers1, numbers2 into gBattleInterfaceGfx_BattleBar (graphics.c:169; graphics_file_rules.mk:90-93), read by AssetPack::battle_bar; the other battle_interface sources remain pending.  The ROM importer (rom-import's domains::battle_interface, gated by the real-ROM equivalence test's pinned battle-interface ids) reproduces battle-interface/raw/battle_bar from the BPEE rev-0 profile by decoding the LZ77 stream gBattleInterfaceGfx_BattleBar.",
           "rust_target": "crates/xtask/src/extract/battle_interface/healthbox_elements.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "numbers2.png": {
-          "reason": "Pixel indices converted to raw 4bpp tiles as gbagfx writes them and concatenated in the order hpbar_anim_unused, numbers1, numbers2 into gBattleInterfaceGfx_BattleBar (graphics.c:169; graphics_file_rules.mk:90-93), read by AssetPack::battle_bar; the other battle_interface sources remain pending.",
+          "reason": "Pixel indices converted to raw 4bpp tiles as gbagfx writes them and concatenated in the order hpbar_anim_unused, numbers1, numbers2 into gBattleInterfaceGfx_BattleBar (graphics.c:169; graphics_file_rules.mk:90-93), read by AssetPack::battle_bar; the other battle_interface sources remain pending.  The ROM importer (rom-import's domains::battle_interface, gated by the real-ROM equivalence test's pinned battle-interface ids) reproduces battle-interface/raw/battle_bar from the BPEE rev-0 profile by decoding the LZ77 stream gBattleInterfaceGfx_BattleBar.",
           "rust_target": "crates/xtask/src/extract/battle_interface/healthbox_elements.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "status.png": {
-          "reason": "Pixel indices converted to raw 4bpp tiles as gbagfx writes them and read as a constituent of gHealthboxElementsGfxTable (graphics.c:358-370) in table order by AssetPack::healthbox_elements; the other battle_interface sources remain pending.",
+          "reason": "Pixel indices converted to raw 4bpp tiles as gbagfx writes them and read as a constituent of gHealthboxElementsGfxTable (graphics.c:358-370) in table order by AssetPack::healthbox_elements; the other battle_interface sources remain pending.  The ROM importer (rom-import's domains::battle_interface, gated by the real-ROM equivalence test's pinned battle-interface ids) reproduces the same raw record from the BPEE rev-0 profile as one row of gHealthboxElementsGfxTable, checking the table's order, each record's length, and that the thirteen records are back to back.",
           "rust_target": "crates/xtask/src/extract/battle_interface/healthbox_elements.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "status2.png": {
-          "reason": "Pixel indices converted to raw 4bpp tiles as gbagfx writes them and read as a constituent of gHealthboxElementsGfxTable (graphics.c:358-370) in table order by AssetPack::healthbox_elements; the other battle_interface sources remain pending.",
+          "reason": "Pixel indices converted to raw 4bpp tiles as gbagfx writes them and read as a constituent of gHealthboxElementsGfxTable (graphics.c:358-370) in table order by AssetPack::healthbox_elements; the other battle_interface sources remain pending.  The ROM importer (rom-import's domains::battle_interface, gated by the real-ROM equivalence test's pinned battle-interface ids) reproduces the same raw record from the BPEE rev-0 profile as one row of gHealthboxElementsGfxTable, checking the table's order, each record's length, and that the thirteen records are back to back.",
           "rust_target": "crates/xtask/src/extract/battle_interface/healthbox_elements.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "status3.png": {
-          "reason": "Pixel indices converted to raw 4bpp tiles as gbagfx writes them and read as a constituent of gHealthboxElementsGfxTable (graphics.c:358-370) in table order by AssetPack::healthbox_elements; the other battle_interface sources remain pending.",
+          "reason": "Pixel indices converted to raw 4bpp tiles as gbagfx writes them and read as a constituent of gHealthboxElementsGfxTable (graphics.c:358-370) in table order by AssetPack::healthbox_elements; the other battle_interface sources remain pending.  The ROM importer (rom-import's domains::battle_interface, gated by the real-ROM equivalence test's pinned battle-interface ids) reproduces the same raw record from the BPEE rev-0 profile as one row of gHealthboxElementsGfxTable, checking the table's order, each record's length, and that the thirteen records are back to back.",
           "rust_target": "crates/xtask/src/extract/battle_interface/healthbox_elements.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "status4.png": {
-          "reason": "Pixel indices converted to raw 4bpp tiles as gbagfx writes them and read as a constituent of gHealthboxElementsGfxTable (graphics.c:358-370) in table order by AssetPack::healthbox_elements; the other battle_interface sources remain pending.",
+          "reason": "Pixel indices converted to raw 4bpp tiles as gbagfx writes them and read as a constituent of gHealthboxElementsGfxTable (graphics.c:358-370) in table order by AssetPack::healthbox_elements; the other battle_interface sources remain pending.  The ROM importer (rom-import's domains::battle_interface, gated by the real-ROM equivalence test's pinned battle-interface ids) reproduces the same raw record from the BPEE rev-0 profile as one row of gHealthboxElementsGfxTable, checking the table's order, each record's length, and that the thirteen records are back to back.",
           "rust_target": "crates/xtask/src/extract/battle_interface/healthbox_elements.rs",
           "spec": "S-4",
           "status": "ported"
