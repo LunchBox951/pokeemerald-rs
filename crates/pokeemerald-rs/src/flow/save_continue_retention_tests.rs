@@ -74,7 +74,7 @@ fn a_slot_that_will_not_decode_survives_an_ordinary_save() {
         seed.save2,
     );
     assert!(
-        resumed.party_lead.is_none(),
+        resumed.lead_for_test().is_none(),
         "an undecodable slot leaves the lead empty, exactly as an empty slot does"
     );
     assert_eq!(
@@ -191,7 +191,7 @@ fn a_genuinely_empty_partys_residual_slot_survives_an_ordinary_save() {
         seed.save1,
         seed.save2,
     );
-    assert!(resumed.party_lead.is_none());
+    assert!(resumed.lead_for_test().is_none());
 
     save_from_the_start_menu(&mut resumed, &mut slot);
 
