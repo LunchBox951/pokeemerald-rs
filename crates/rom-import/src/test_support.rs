@@ -1,26 +1,38 @@
 //! Scratch directories for the crate's unit tests.
 
-use std::path::{Path, PathBuf};
+use std::ffi::OsString;
+use std::path::{Component, Path, PathBuf};
+use std::sync::Mutex;
 
 /// How many names a claim tries before it gives up.
 const CLAIM_ATTEMPTS: u32 = 1_000;
 
-/// A fresh directory this process created, removed on drop.
+/// A fresh directory this process created, cleaned up on drop.
 ///
 /// A predictable name is only safe to use once `create_dir` has made it:
 /// `create_dir` fails on any existing entry, including a populated
 /// directory or a symlink, so the name is retried rather than reused, and
 /// no candidate is ever deleted or written through before it is claimed.
-/// Only a directory this value created is removed, so a stranger that
-/// holds a candidate name keeps its contents. On unix cleanup also checks
-/// the name still holds the claimed directory's inode, so a stranger that
-/// replaces the claim before drop keeps its contents too.
+///
+/// Cleanup never deletes by the directory's name alone, because a name can
+/// be swapped between a check and the delete. Every path a test derives
+/// through [`TempDir::join`] is recorded; drop removes only those entries
+/// and then calls the non-recursive `remove_dir`, which refuses a
+/// non-empty directory. A stranger that swaps itself in at the claimed name
+/// therefore survives, and so does anything the fixture left unrecorded
+/// (the directory is then left behind rather than guessed at). On unix drop
+/// also checks the name still holds the claimed inode before touching it.
+/// The residual is a same-user swap that recreates the exact recorded
+/// names. Off unix there is no identity to check, so drop removes nothing
+/// and leaves the directory.
 pub(crate) struct TempDir {
     path: PathBuf,
     /// The claimed directory's identity, so cleanup can tell it from
     /// whatever occupies the name afterwards.
     #[cfg(unix)]
     identity: (u64, u64),
+    /// First path component of everything handed out by `join`.
+    entries: Mutex<Vec<OsString>>,
 }
 
 impl TempDir {
@@ -47,28 +59,11 @@ impl TempDir {
     }
 
     fn owning(path: PathBuf) -> Self {
-        #[cfg(unix)]
-        {
-            let identity = identity_of(&path).expect("the directory just created");
-            Self { path, identity }
-        }
-        #[cfg(not(unix))]
-        {
-            Self { path }
-        }
-    }
-
-    /// Whether the name still holds the directory this value created.
-    /// Non-unix targets have no cheap identity to compare, so they trust
-    /// the name.
-    fn still_owns_path(&self) -> bool {
-        #[cfg(unix)]
-        {
-            identity_of(&self.path) == Some(self.identity)
-        }
-        #[cfg(not(unix))]
-        {
-            true
+        Self {
+            #[cfg(unix)]
+            identity: identity_of(&path).expect("the directory just created"),
+            path,
+            entries: Mutex::new(Vec::new()),
         }
     }
 
@@ -76,7 +71,15 @@ impl TempDir {
         &self.path
     }
 
+    /// A path inside the directory. Its first component is recorded so drop
+    /// can remove it.
     pub(crate) fn join(&self, name: &str) -> PathBuf {
+        if let Some(Component::Normal(first)) = Path::new(name).components().next() {
+            let mut entries = self.entries.lock().expect("the entry list");
+            if !entries.iter().any(|known| known == first) {
+                entries.push(first.to_os_string());
+            }
+        }
         self.path.join(name)
     }
 }
@@ -92,8 +95,23 @@ fn identity_of(path: &Path) -> Option<(u64, u64)> {
 
 impl Drop for TempDir {
     fn drop(&mut self) {
-        if self.still_owns_path() {
-            let _ = std::fs::remove_dir_all(&self.path);
+        #[cfg(unix)]
+        {
+            if identity_of(&self.path) != Some(self.identity) {
+                return;
+            }
+            let entries = std::mem::take(&mut *self.entries.lock().expect("the entry list"));
+            for name in entries {
+                let entry = self.path.join(name);
+                // `symlink_metadata` so a link is unlinked, never followed.
+                let _ = match std::fs::symlink_metadata(&entry) {
+                    Ok(meta) if meta.is_dir() => std::fs::remove_dir_all(&entry),
+                    Ok(_) => std::fs::remove_file(&entry),
+                    Err(err) => Err(err),
+                };
+            }
+            // Non-recursive: a non-empty directory is left alone.
+            let _ = std::fs::remove_dir(&self.path);
         }
     }
 }
@@ -103,14 +121,16 @@ mod tests {
     use super::TempDir;
 
     /// The name the first claim under `root` would take for `label`.
-    fn first_candidate(root: &std::path::Path, label: &str) -> std::path::PathBuf {
-        root.join(format!("rom-import-{label}-{}-0", std::process::id()))
+    /// Recorded in `root`, so the test's own cleanup removes whatever it
+    /// plants there.
+    fn first_candidate(root: &TempDir, label: &str) -> std::path::PathBuf {
+        root.join(&format!("rom-import-{label}-{}-0", std::process::id()))
     }
 
     #[test]
     fn a_claim_leaves_an_occupied_candidate_and_its_contents_alone() {
         let root = TempDir::new("occupied-root");
-        let occupied = first_candidate(root.path(), "probe");
+        let occupied = first_candidate(&root, "probe");
         std::fs::create_dir(&occupied).expect("the stranger's directory");
         std::fs::write(occupied.join("sentinel"), b"not yours").expect("the sentinel");
 
@@ -130,12 +150,17 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn dropping_a_claim_spares_a_stranger_that_took_its_name() {
         let root = TempDir::new("replaced-root");
         let claimed = TempDir::new_in(root.path(), "probe");
-        let path = claimed.path().to_path_buf();
+        let path = root.join(
+            claimed
+                .path()
+                .file_name()
+                .and_then(|name| name.to_str())
+                .expect("a utf-8 claim name"),
+        );
         // Moved, not removed: a freed inode number can be handed straight
         // to the stranger, which would make the two indistinguishable.
         let moved = root.join("moved-claim");
@@ -149,11 +174,92 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn drop_removes_what_the_fixture_recorded_and_the_directory() {
+        let root = TempDir::new("cleanup-root");
+        let claimed = TempDir::new_in(root.path(), "probe");
+        let path = claimed.path().to_path_buf();
+        std::fs::write(claimed.join("emerald.gba"), b"rom").unwrap();
+        std::fs::create_dir(claimed.join("nested")).unwrap();
+        std::fs::write(claimed.join("nested").join("inner"), b"x").unwrap();
+        drop(claimed);
+        assert!(!path.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn drop_leaves_an_unrecorded_entry_and_its_directory_in_place() {
+        let root = TempDir::new("unrecorded-root");
+        let claimed = TempDir::new_in(root.path(), "probe");
+        // Recorded in `root`, whose own drop sweeps up the kept directory.
+        let path = root.join(
+            claimed
+                .path()
+                .file_name()
+                .and_then(|name| name.to_str())
+                .expect("a utf-8 claim name"),
+        );
+        std::fs::write(path.join("not-via-join"), b"kept").unwrap();
+        drop(claimed);
+        assert_eq!(std::fs::read(path.join("not-via-join")).unwrap(), b"kept");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dropping_a_claim_spares_a_stranger_swapped_in_during_cleanup() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        // A same-user peer keeps swapping a populated stranger in and out of
+        // the claimed name while the claim is dropped. Bounded: the race
+        // window is a few instructions wide, so this raises the odds of a
+        // by-name recursive delete failing rather than guaranteeing them.
+        let root = TempDir::new("race-root");
+        for round in 0..2_000u32 {
+            let claimed = TempDir::new_in(root.path(), "probe");
+            let path = claimed.path().to_path_buf();
+            let stash = root.join(&format!("stash-{round}"));
+            let stranger = root.join(&format!("stranger-{round}"));
+            std::fs::create_dir(&stranger).unwrap();
+            std::fs::write(stranger.join("sentinel"), b"not yours").unwrap();
+            let stop = Arc::new(AtomicBool::new(false));
+            let attacker = {
+                let (path, stash, stranger, stop) =
+                    (path.clone(), stash.clone(), stranger.clone(), stop.clone());
+                std::thread::spawn(move || {
+                    while !stop.load(Ordering::Relaxed) {
+                        if std::fs::rename(&path, &stash).is_err() {
+                            continue;
+                        }
+                        let _ = std::fs::rename(&stranger, &path);
+                        let _ = std::fs::rename(&path, &stranger);
+                        let _ = std::fs::rename(&stash, &path);
+                    }
+                })
+            };
+            std::thread::yield_now();
+            drop(claimed);
+            stop.store(true, Ordering::Relaxed);
+            attacker.join().unwrap();
+            let survived = [&stranger, &path, &stash].iter().any(|dir| {
+                std::fs::read(dir.join("sentinel")).ok().as_deref() == Some(&b"not yours"[..])
+            });
+            assert!(
+                survived,
+                "round {round}: cleanup deleted the stranger's directory"
+            );
+            for dir in [&stranger, &path, &stash] {
+                let _ = std::fs::remove_dir_all(dir);
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn a_claim_never_writes_through_a_planted_symlink() {
         let root = TempDir::new("symlink-root");
         let victim = TempDir::new("symlink-victim");
         std::fs::write(victim.join("sentinel"), b"not yours").expect("the sentinel");
-        let link = first_candidate(root.path(), "probe");
+        let link = first_candidate(&root, "probe");
         std::os::unix::fs::symlink(victim.path(), &link).expect("the planted link");
 
         let claimed = TempDir::new_in(root.path(), "probe");
@@ -178,7 +284,7 @@ mod tests {
     #[test]
     fn a_dangling_symlink_at_a_candidate_is_not_claimed_either() {
         let root = TempDir::new("dangling-root");
-        let link = first_candidate(root.path(), "probe");
+        let link = first_candidate(&root, "probe");
         let target = root.join("not-yet-created");
         std::os::unix::fs::symlink(&target, &link).expect("the planted link");
 
