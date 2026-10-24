@@ -255,7 +255,9 @@ fn options_survive_save_exit_and_continue() {
     assert_eq!(state.saved.block2.options_text_speed, 0);
 
     let mut resumed = super::OverworldPhase::from_saved(
-        crate::overworld::test_support::synthetic_scene(10, 10),
+        crate::overworld::test_support::synthetic_scene(10, 10).in_room_for_test(
+            crate::flow::overworld_phase::saved_map_id(state.saved.block1.location).unwrap(),
+        ),
         crate::flow::overworld_phase::saved_map_id(state.saved.block1.location).unwrap(),
         state.saved.block1.clone(),
         state.saved.block2.clone(),
