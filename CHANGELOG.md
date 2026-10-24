@@ -6,7 +6,7 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 ## [0.0.69.0] - 2026-10-24
 
-- Button icons in dialogue now draw in place instead of leaving a gap.
+- General improvements in preparation for button icons in dialogue.
 
 ## [0.0.68.0] - 2026-10-23
 
