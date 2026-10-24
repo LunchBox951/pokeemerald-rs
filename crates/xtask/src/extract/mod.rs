@@ -14,20 +14,25 @@
 //! The pack contains:
 //!
 //! - every tile image and animation, all 16 palettes, and both raw metatile
-//!   tables for the primary `general` and `building` tilesets and the secondary
-//!   `petalburg`, `brendans_mays_house`, and `lab` tilesets;
+//!   tables for each tileset in `TILESETS`;
 //! - every title-screen PNG, palette, and raw tilemap, with embedded PNG
 //!   palettes for `emerald_version` and `press_start` and the upstream colour
 //!   limit applied to `pokemon_logo`;
-//! - every player and NPC PNG, the `brendan` and `may` palettes, and the four
-//!   generic `npc_1` through `npc_4` palettes;
+//! - every player and NPC PNG, the `brendan` and `may` palettes, the four
+//!   generic `npc_1` through `npc_4` palettes, and the non-people sheets and
+//!   palettes in `OBJECT_SHEETS` and `OBJECT_PALETTES`;
 //! - the map and border grids named by `LAYOUTS`;
 //! - the five Latin font sheets, every text-window image and palette, and the
 //!   main-menu background palette; and
 //! - the starter chooser's tile, Poké Ball, and circle sheets with their
 //!   palettes and both Birch tilemaps;
+//! - Birch's speech scene (shadow sheet, background tilemap and palettes, his
+//!   sprite, and Lotad's front picture with its normal palette) and the wall
+//!   clock (face and hand sheets, both gender palettes, the prompt palette, and
+//!   both tilemaps);
 //! - the static battler art of Treecko, Torchic, and Mudkip: front and back
 //!   images with normal and shiny palettes;
+//! - the Brendan and May trainer front pictures with their palettes;
 //! - the ordinary bag's screen, tilemap, sex palettes, male and female sheets
 //!   and palette, rotating ball, select and HM marks, and the image and
 //!   palette of every item icon `gItemIconTable` selects; and
@@ -35,10 +40,17 @@
 //!   palette files, and 15 raw tilemap and data files;
 //! - the battle textbox sheet, its 32-colour palette and tilemap, and the battle-window
 //!   and PP text palettes;
+//! - the raw 4bpp tiles of the thirteen `gHealthboxElementsGfxTable` sheets and of
+//!   the battle bar built from `hpbar_anim_unused`, `numbers1`, and `numbers2`;
 //! - `mus_title`, its transitive voicegroup tree, and every sample that tree
-//!   references; and
+//!   references;
 //! - the battle-message token table (`gBattleStringsTable` plus the special
-//!   templates `BufferStringBattle` selects).
+//!   templates `BufferStringBattle` selects); and
+//! - the naming screen's 15 sheets (the three cursors cut to their first five
+//!   tiles), seven palettes, and four decoded tilemaps.
+//!
+//! The battle interface also contributes the player and opponent singles health-box
+//! frames, the ball-status-bar and ball-display palettes, and the enemy shadow sheet.
 //!
 //! # Asset id scheme
 //!
@@ -52,13 +64,17 @@
 //! - `text-window/{image,palette}/<stem>`
 //! - `interface/palette/main_menu_bg`
 //! - `starter-chooser/{image,palette,raw}/<stem>`
+//! - `opening-scene/{image,palette,raw}/<name>`
+//! - `trainer-pic/<trainer>/{front,palette}`
 //! - `bag/{image,palette,raw}/<name>` and `bag/item-icon/{image,palette}/<stem>`
-//! - `battle-interface/{image,palette,raw}/<name>`
+//! - `battle-interface/{image,palette,raw}/<name>` and
+//!   `battle-interface/raw/healthbox_element/<stem>`
 //! - `pokemon/<species>/{front,back}` and `pokemon/<species>/palette/{normal,shiny}`
 //! - `pokedex-graphics/{image,image-palette,palette,raw}/<name>`
 //! - `audio/sample/{direct-sound,programmable-wave}/<name>`
 //! - `audio/voicegroup/<label>` and `audio/song/<name>`
 //! - `battle-message/table`
+//! - `naming-screen/{image,palette,raw}/<stem>`
 //!
 //! Names preserve normalized upstream directory, file, or symbol names; they
 //! never use linker-style `gTileset_*` identifiers.
@@ -69,6 +85,10 @@ mod battle_anim;
 mod battle_interface;
 mod battle_message;
 mod battler;
+#[cfg(test)]
+mod bundled_inventory_tests;
+#[cfg(test)]
+mod checkpoint_maps_tests;
 mod error;
 mod fonts;
 pub mod inflate;
@@ -77,6 +97,8 @@ pub mod jasc_pal;
 mod layouts;
 mod layouts_json;
 pub(crate) mod midi;
+mod naming_screen;
+mod opening_scene;
 pub mod png;
 mod pokedex_graphics;
 mod publish;
@@ -86,6 +108,7 @@ mod starter_chooser;
 mod text_window;
 mod tilesets;
 mod title;
+mod trainer_pic;
 pub(crate) mod voicegroups;
 mod wav;
 
@@ -152,20 +175,25 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     }
     title::extract_title_screen(&upstream, &mut writer)?;
     sprites::extract_sprites(&upstream, &mut writer)?;
+    trainer_pic::extract_trainer_pics(&upstream, &mut writer)?;
     layouts::extract_layouts(&upstream, &mut writer)?;
     fonts::extract_fonts(&upstream, &mut writer)?;
     text_window::extract_text_window(&upstream, &mut writer)?;
     interface::extract_interface_palettes(&upstream, &mut writer)?;
     starter_chooser::extract_starter_chooser(&upstream, &mut writer)?;
+    opening_scene::extract_opening_scene(&upstream, &mut writer)?;
     battler::extract_battlers(&upstream, &mut writer)?;
     bag::extract_bag(&upstream, &mut writer)?;
     pokedex_graphics::extract_pokedex_graphics(&upstream, &mut writer)?;
     battle_interface::extract_battle_interface(&upstream, &mut writer)?;
+    battle_interface::extract_healthbox_elements(&upstream, &mut writer)?;
     audio_samples::extract_audio_samples(&upstream, &mut writer)?;
     voicegroups::extract_voicegroups(&upstream, &mut writer)?;
     midi::extract_song(&upstream, &mut writer)?;
     battle_message::extract_battle_message(&upstream, &mut writer)?;
     battle_anim::extract_battle_anim(&upstream, &mut writer)?;
+    battle_interface::extract_healthbox_frames(&upstream, &mut writer)?;
+    naming_screen::extract_naming_screen(&upstream, &mut writer)?;
 
     let entry_count = writer.len();
     let bytes = writer.finish()?;
@@ -354,6 +382,33 @@ mod tests {
             "wrong error for a {count}-colour JASC palette: {err:?}"
         );
         assert_eq!(writer.len(), 0, "oversized palette must not be serialized");
+
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_dir(&dir).unwrap();
+    }
+
+    #[test]
+    fn zero_colour_jasc_palette_is_rejected_without_queuing_an_entry() {
+        let dir = std::env::temp_dir().join(format!(
+            "pokeemerald-rs-extract-zero-jasc-test-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("zero.pal");
+        std::fs::write(&path, "JASC-PAL\r\n0100\r\n0\r\n").unwrap();
+
+        let mut writer = pack_format::PackWriter::new();
+        let err =
+            super::push_palette_entry(&path, "test/palette".to_owned(), &mut writer).unwrap_err();
+        assert!(
+            matches!(
+                &err,
+                ExtractError::Pal(error_path, jasc_pal::JascPalError::NoColors)
+                    if error_path == &path
+            ),
+            "wrong error for a zero-colour JASC palette: {err:?}"
+        );
+        assert_eq!(writer.len(), 0, "zero-colour palette must not be queued");
 
         std::fs::remove_file(&path).unwrap();
         std::fs::remove_dir(&dir).unwrap();

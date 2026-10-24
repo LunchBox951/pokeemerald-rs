@@ -78,7 +78,7 @@ fn the_approach_owns_every_frame_and_walks_one_tile_per_sixteen() {
         "no battle before the approach finishes"
     );
     assert!(
-        phase.party_lead.is_some(),
+        phase.lead_for_test().is_some(),
         "the lead stays in the party for the whole approach -- a save taken mid-cutscene \
          must persist an honest pre-battle overworld"
     );
@@ -529,7 +529,7 @@ fn a_trigger_frame_that_drains_the_step_still_spends_the_after_drain_handoff() {
     let mut phase = route_103_phase(PlayerState::new((rx, ry + 2), 3, Direction::South));
     phase.synthetic_sight_trainer = Some(assets::trainers::TrainerId(STAND_IN_TRAINER));
     assert!(
-        phase.party_lead.is_none(),
+        phase.lead_for_test().is_none(),
         "setup: the cone refuses while walking"
     );
 
@@ -542,7 +542,7 @@ fn a_trigger_frame_that_drains_the_step_still_spends_the_after_drain_handoff() {
     assert!(phase.player.in_transit(), "setup: one tick left");
 
     phase.rng = engine::rng::Rng::new(7);
-    phase.party_lead = Some(overwhelming_lead());
+    phase.set_fresh_lead_for_test(overwhelming_lead());
     phase.step(ButtonState::new()); // trigger frame == drain frame
     assert!(
         phase.sight_approach.is_some(),
@@ -578,7 +578,7 @@ fn a_standing_trigger_walks_its_first_tile_after_the_icon_dispatch_frames() {
     let (rx, ry) = RHETT_TILE;
     let mut phase = route_103_phase(PlayerState::new((rx, ry + 2), 3, Direction::South));
     phase.rng = engine::rng::Rng::new(7);
-    phase.party_lead = Some(overwhelming_lead());
+    phase.set_fresh_lead_for_test(overwhelming_lead());
     phase.synthetic_sight_trainer = Some(assets::trainers::TrainerId(STAND_IN_TRAINER));
     phase.step(ButtonState::new());
     assert!(phase.sight_approach.is_some(), "setup: frame 0 triggers");

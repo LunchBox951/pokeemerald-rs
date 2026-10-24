@@ -47,7 +47,7 @@
     "data/battle_ai_scripts.s": {
       "artifacts": {
         "AI_CheckBadMove": {
-          "reason": "data/battle_ai_scripts.s:51-104,277-312 (#1311, #1861, #1862, #1863). The prologue is modelled in script order (score_bad_move_prologue): get_how_powerful_move_is gates the chart/ability block (power 0/1 or an sIgnoredPowerfulMoveEffects effect jumps straight to Soundproof; Fissure/Horn Drill bypass the gate, src/battle_ai_script_commands.c:1174-1239), then chart immunity (-10, terminates), then Volt Absorb/Electric, Water Absorb/Water, Flash Fire/Fire (-12, terminates), Wonder Guard (-10 unless the AI-normalized effectiveness is exactly 2x; a 4x hit is not exempt, :1528-1556) and Levitate on a Ground move (-10), then the nine-move Soundproof list (-10, terminates before any if_effect; omits Hyper Voice unlike executions sSoundMovesTable). Dual-type folding keeps Cmd_if_type_effectiveness ordering and its zero-resurrection quirk (:1515-1556). Exactly fourteen audited rows are classified unchanged after the prologue because none appears in the :105-214 if_effect chain: EFFECT_HIT, ABSORB, POISON_HIT, ALWAYS_HIT, MULTI_HIT, DRAGON_RAGE, HIGH_CRITICAL, SPEED_DOWN_HIT, EVASION_DOWN_HIT, CONFUSE_HIT, VITAL_THROW, SPLASH, QUICK_ATTACK, CHARGE; any unlisted effect stays refused whenever a scoring flag is enabled; a flagless trainer (AiFlags::NONE, e.g. JANI) runs no script (src/battle_ai_script_commands.c:405-415), so only ensure_executable and dex residency gate its moves (#2300). ensure_scoreable is flag-aware: those rows are admitted for a CHECK_BAD_MOVE-only trainer and refused when CHECK_VIABILITY would take an unported branch (ABSORB, ALWAYS_HIT, HIGH_CRITICAL, SPEED_DOWN_HIT, VITAL_THROW; :655,666,686,706,708) or TRY_TO_FAINT would (QUICK_ATTACK +2, :2629-2634); EFFECT_CHARGE is also refused under TRY_TO_FAINT, the one script that reads simulated damage (if_can_faint, :2618), because estimated_damage omits the AI_CalcDmg Charge doubling (src/battle_script_commands.c:1306-1316); AI_CheckViability neither dispatches EFFECT_CHARGE nor reads damage (:619-743), so a CHECK_VIABILITY trainer admits it. Execution still lacks Volt Absorb/Water Absorb/Flash Fire absorption, so those cancellations are scored but a sole absorbed move still executes (executor stays the authority); admission is validated before the four simulated-damage draws. The stat guards remain: EFFECT_ATTACK_DOWN screens the stage floor (:278), Hyper Cutter (:279-280), then Clear Body/White Smoke (:308-311) shared with EFFECT_DEFENSE_DOWN (:284). Every get_ability AI_TARGET read is restricted to a single-ability target or a true Shadow Tag/Magnet Pull/Arena Trap (read directly ahead of the guess, :1368-1376) and draws no RNG; any other two-ability target is refused (BattleError::AmbiguousPlayerAbility) because battle history and the Random() & 1 guess (:1350-1396) are not modelled, including the boundary that upstream BATTLE_HISTORY->abilities[0] can hold a field-effect ability the port models no events for. Execution still gates what runs: no EVASION_DOWN_HIT move exists in the dex, and SPEED_DOWN_HIT, HIGH_CRITICAL etc. stay subject to ensure_executable. STILL deferred: the other if_effect handler bodies in the :104-216 chain (Toxic/EFFECT_POISON, sleep, burn, freeze, Substitute, Swagger/Flatter, Safeguard, the remaining stat-stage and the rest), Keen Eye, and the CHECK_VIABILITY/TRY_TO_FAINT branches of the refused rows. The parent artifact stays pending. EFFECT_CONFUSE_HIT (raw 76; include/constants/battle_move_effects.h:80) has no AI_CheckBadMove dispatch (:104-214), no AI_CheckViability dispatch (:652-776), no special AI_TryToFaint branch (:2616-2636) and no AI_SetupFirstTurn list entry (:2638-2705), so it is admitted under all four modelled flags; TRY_TO_FAINT still applies its generic damage scoring. Three handlers are scored (#1863): AI_CBM_Paralyze (:397-403) stops at its first Score_Minus10 in command order -- AI type effectiveness x0, then Limber via get_ability AI_TARGET, then any non-Healthy Status1 -- so an immune or already-statused target takes one -10, never a stacked -20; AI_CBM_Confuse (:386-395) scores active target confusion -5 (Score_Minus5, distinct from -10) before any ability read, then Own Tempo -10; AI_CBM_FocusEnergy (:382-384) scores the USER's active Focus Energy volatile -10. Their moves are Stun Spore, Thunder Wave, Glare, Supersonic, Confuse Ray, Sweet Kiss and Focus Energy; each target ability read goes through ai_get_ability under the lead-admission invariant (no guess, no draw). Safeguard (:391,401) stays unrepresentable: no admitted move or state can establish it, and Swagger/Flatter, which also route to AI_CBM_Confuse (:169,193), stay refused. Because AI_CheckViability branches on Paralyze and Confuse (:687,704) and AI_SetupFirstTurn rolls for all three (:2667,2668,2685), ensure_scoreable refuses Paralyze/Confuse under CHECK_VIABILITY and all three under SETUP_FIRST_TURN; Focus Energy has no viability branch, and TRY_TO_FAINT keeps its generic x4 roll.",
+          "reason": "data/battle_ai_scripts.s:51-104,277-312. The prologue is modelled in script order (score_bad_move_prologue): get_how_powerful_move_is gates the chart/ability block (power 0/1 or an sIgnoredPowerfulMoveEffects effect jumps straight to Soundproof; Fissure/Horn Drill bypass the gate, src/battle_ai_script_commands.c:1174-1239), then chart immunity (-10, terminates), then Volt Absorb/Electric, Water Absorb/Water, Flash Fire/Fire (-12, terminates), Wonder Guard (-10 unless the AI-normalized effectiveness is exactly 2x; a 4x hit is not exempt, :1528-1556) and Levitate on a Ground move (-10), then the nine-move Soundproof list (-10, terminates before any if_effect; omits Hyper Voice unlike executions sSoundMovesTable). Dual-type folding keeps Cmd_if_type_effectiveness ordering and its zero-resurrection quirk (:1515-1556). Exactly fourteen audited rows are classified unchanged after the prologue because none appears in the :105-214 if_effect chain: EFFECT_HIT, ABSORB, POISON_HIT, ALWAYS_HIT, MULTI_HIT, DRAGON_RAGE, HIGH_CRITICAL, SPEED_DOWN_HIT, EVASION_DOWN_HIT, CONFUSE_HIT, VITAL_THROW, SPLASH, QUICK_ATTACK, CHARGE; any unlisted effect stays refused whenever a scoring flag is enabled; a flagless trainer (AiFlags::NONE, e.g. JANI) runs no script (src/battle_ai_script_commands.c:405-415), so only ensure_executable and dex residency gate its moves. ensure_scoreable is flag-aware: those rows are admitted for a CHECK_BAD_MOVE-only trainer and refused when CHECK_VIABILITY would take an unported branch (ABSORB, ALWAYS_HIT, HIGH_CRITICAL, SPEED_DOWN_HIT, VITAL_THROW; :655,666,686,706,708) or TRY_TO_FAINT would (QUICK_ATTACK +2, :2629-2634); EFFECT_CHARGE is also refused under TRY_TO_FAINT, the one script that reads simulated damage (if_can_faint, :2618), because estimated_damage omits the AI_CalcDmg Charge doubling (src/battle_script_commands.c:1306-1316); AI_CheckViability neither dispatches EFFECT_CHARGE nor reads damage (:619-743), so a CHECK_VIABILITY trainer admits it. Execution still lacks Volt Absorb/Water Absorb/Flash Fire absorption, so those cancellations are scored but a sole absorbed move still executes (executor stays the authority); admission is validated before the four simulated-damage draws. The shared stat-stage labels are scored through stat_label_penalty, StatChangeEffect, ChangedStat, affects_user, cap and stage_of: every AI_CBM_*Up (:248-272) ends at -10 when the user's stage is at MAX, every AI_CBM_*Down (:274-312) ends at -10 at the target's MIN, then takes its own ability guard -- Hyper Cutter for Attack (:279-280), Speed Boost for Speed (:291), Keen Eye for Accuracy (:300-301) -- before the shared Clear Body/White Smoke fall-through (:308-311); Defense, Special Attack, Special Defense and Evasion go straight to the shared guard, and the first guard that fires ends the script (one penalty, no draw). One- and two-stage effects share a label. Minimize scores as AI_CBM_EvasionUp (:163) and Defense Curl as AI_CBM_DefenseUp (:186), reading Evasion and Defense, not their persistent flags. Effects execution's STAT_CHANGE_EFFECTS does not map (raw 12, 14, 15, 21, 22, 55, 56, 61, 63, 64; no shipped move) are scored through an AI-only table that never makes a move executable. ensure_scoreable refuses the new labels under SETUP_FIRST_TURN (every one is in :2650-2693) and under CHECK_VIABILITY (all dispatch, :659-701,724) except Defense Curl, which has no viability branch; Growl and Leer keep their ported viability and setup branches. Every get_ability AI_TARGET read is restricted to a single-ability target or a true Shadow Tag/Magnet Pull/Arena Trap (read directly ahead of the guess, :1368-1376) and draws no RNG; any other two-ability target is refused (BattleError::AmbiguousPlayerAbility) because battle history and the Random() & 1 guess (:1350-1396) are not modelled, including the boundary that upstream BATTLE_HISTORY->abilities[0] can hold a field-effect ability the port models no events for. Execution still gates what runs: no EVASION_DOWN_HIT move exists in the dex, and SPEED_DOWN_HIT, HIGH_CRITICAL etc. stay subject to ensure_executable. STILL deferred: the other if_effect handler bodies in the :104-216 chain (Toxic/EFFECT_POISON, sleep, burn, freeze, Substitute, Swagger/Flatter, Safeguard, Mist, Haze, weather and screen handlers, the unported CHECK_VIABILITY/SETUP_FIRST_TURN branches of the new stat labels, and the CHECK_VIABILITY/TRY_TO_FAINT branches of the refused rows. The parent artifact stays pending. EFFECT_CONFUSE_HIT (raw 76; include/constants/battle_move_effects.h:80) has no AI_CheckBadMove dispatch (:104-214), no AI_CheckViability dispatch (:652-776), no special AI_TryToFaint branch (:2616-2636) and no AI_SetupFirstTurn list entry (:2638-2705), so it is admitted under all four modelled flags; TRY_TO_FAINT still applies its generic damage scoring. Three handlers are scored: AI_CBM_Paralyze (:397-403) stops at its first Score_Minus10 in command order -- AI type effectiveness x0, then Limber via get_ability AI_TARGET, then any non-Healthy Status1 -- so an immune or already-statused target takes one -10, never a stacked -20; AI_CBM_Confuse (:386-395) scores active target confusion -5 (Score_Minus5, distinct from -10) before any ability read, then Own Tempo -10; AI_CBM_FocusEnergy (:382-384) scores the USER's active Focus Energy volatile -10. Their moves are Stun Spore, Thunder Wave, Glare, Supersonic, Confuse Ray, Sweet Kiss and Focus Energy; each target ability read goes through ai_get_ability under the lead-admission invariant (no guess, no draw). Safeguard (:391,401) stays unrepresentable: no admitted move or state can establish it, and Swagger/Flatter, which also route to AI_CBM_Confuse (:169,193), stay refused. Because AI_CheckViability branches on Paralyze and Confuse (:687,704) and AI_SetupFirstTurn rolls for all three (:2667,2668,2685), ensure_scoreable refuses Paralyze/Confuse under CHECK_VIABILITY and all three under SETUP_FIRST_TURN; Focus Energy has no viability branch, and TRY_TO_FAINT keeps its generic x4 roll.",
           "rust_target": "crates/battle/src/battle/trainer_ai.rs",
           "spec": "S-6",
           "status": "stubbed"
@@ -1024,14 +1024,18 @@
     "data/layouts/House1": {
       "category": "data.layout",
       "kind": "dir",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "pack ids layout/house1/map and layout/house1/border; map.bin/border.bin extracted as opaque raw blobs into the local gitignored asset pack (crates/xtask/src/extract/layouts.rs::extract_layouts's LAYOUTS table in crates/xtask/src/extract/scope.rs, resolved via data/layouts/layouts.json). Read back with AssetPack::layout_map/layout_border and decoded into typed grids via crates/assets/src/map_layouts.rs. The same normalized pack entries are also produced from the player's own ROM by crates/rom-import/src/domains/layouts.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+      "rust_target": "crates/xtask/src/extract/layouts.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "data/layouts/House2": {
       "category": "data.layout",
       "kind": "dir",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "pack ids layout/house2/map and layout/house2/border; map.bin/border.bin extracted as opaque raw blobs into the local gitignored asset pack (crates/xtask/src/extract/layouts.rs::extract_layouts's LAYOUTS table in crates/xtask/src/extract/scope.rs, resolved via data/layouts/layouts.json). Read back with AssetPack::layout_map/layout_border and decoded into typed grids via crates/assets/src/map_layouts.rs. The same normalized pack entries are also produced from the player's own ROM by crates/rom-import/src/domains/layouts.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+      "rust_target": "crates/xtask/src/extract/layouts.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "data/layouts/House3": {
       "category": "data.layout",
@@ -1054,8 +1058,10 @@
     "data/layouts/InsideOfTruck": {
       "category": "data.layout",
       "kind": "dir",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "pack ids layout/inside_of_truck/map and layout/inside_of_truck/border; map.bin/border.bin extracted as opaque raw blobs into the local gitignored asset pack (crates/xtask/src/extract/layouts.rs::extract_layouts's LAYOUTS table in crates/xtask/src/extract/scope.rs, resolved via data/layouts/layouts.json). Read back with AssetPack::layout_map/layout_border and decoded into typed grids via crates/assets/src/map_layouts.rs. The same normalized pack entries are also produced from the player's own ROM by crates/rom-import/src/domains/layouts.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+      "rust_target": "crates/xtask/src/extract/layouts.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "data/layouts/IslandCave": {
       "category": "data.layout",
@@ -1320,8 +1326,10 @@
     "data/layouts/Mart": {
       "category": "data.layout",
       "kind": "dir",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "pack ids layout/mart/map and layout/mart/border; map.bin/border.bin extracted as opaque raw blobs into the local gitignored asset pack (crates/xtask/src/extract/layouts.rs::extract_layouts's LAYOUTS table in crates/xtask/src/extract/scope.rs, resolved via data/layouts/layouts.json). Read back with AssetPack::layout_map/layout_border and decoded into typed grids via crates/assets/src/map_layouts.rs. The same normalized pack entries are also produced from the player's own ROM by crates/rom-import/src/domains/layouts.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+      "rust_target": "crates/xtask/src/extract/layouts.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "data/layouts/MauvilleCity": {
       "category": "data.layout",
@@ -1604,14 +1612,18 @@
     "data/layouts/PokemonCenter_1F": {
       "category": "data.layout",
       "kind": "dir",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "pack ids layout/pokemon_center_1f/map and layout/pokemon_center_1f/border; map.bin/border.bin extracted as opaque raw blobs into the local gitignored asset pack (crates/xtask/src/extract/layouts.rs::extract_layouts's LAYOUTS table in crates/xtask/src/extract/scope.rs, resolved via data/layouts/layouts.json). Read back with AssetPack::layout_map/layout_border and decoded into typed grids via crates/assets/src/map_layouts.rs. The same normalized pack entries are also produced from the player's own ROM by crates/rom-import/src/domains/layouts.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+      "rust_target": "crates/xtask/src/extract/layouts.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "data/layouts/PokemonCenter_2F": {
       "category": "data.layout",
       "kind": "dir",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "pack ids layout/pokemon_center_2f/map and layout/pokemon_center_2f/border; map.bin/border.bin extracted as opaque raw blobs into the local gitignored asset pack (crates/xtask/src/extract/layouts.rs::extract_layouts's LAYOUTS table in crates/xtask/src/extract/scope.rs, resolved via data/layouts/layouts.json). Read back with AssetPack::layout_map/layout_border and decoded into typed grids via crates/assets/src/map_layouts.rs. The same normalized pack entries are also produced from the player's own ROM by crates/rom-import/src/domains/layouts.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+      "rust_target": "crates/xtask/src/extract/layouts.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "data/layouts/RecordCorner": {
       "category": "data.layout",
@@ -7743,7 +7755,7 @@
           "status": "pending"
         },
         "Route103_SightTrainers": {
-          "reason": "data/maps/Route103/scripts.inc:202-287 (Route103_EventScript_Daisy/Amy/Liv/Andrew/Miguel/Rhett/Marcos/Isabelle/Pete and their trainerbattle_single/trainerbattle_double callees), wired to the nine TRAINER_TYPE_NORMAL object events data/maps/Route103/map.json declares (issue #264). Ported: the sight-cone trigger (sight_trainer_trigger::find_sight_trainer, backed by engine::overworld::trainer_sight -- see src/trainer_see.c#CheckForTrainersWantingBattle) scanning in map.json declaration order every ordinary frame, no button press; the object-event-script -> TRAINER_* id table (SIGHT_TRAINERS, cross-checked against include/constants/opponents.h); the real CreateNPCTrainerParty construction and headless one-turn driver via crate::flow::npc_trainer_battle (the same machinery src/battle_setup.c#DoTrainerBattle's own entry covers) for the seven trainerbattle_single trainers (Daisy TRAINER_DAISY, Andrew TRAINER_ANDREW, Miguel TRAINER_MIGUEL_1, Rhett TRAINER_RHETT, Marcos TRAINER_MARCOS, Isabelle TRAINER_ISABELLE, Pete TRAINER_PETE); the FLAG_TRAINER_FLAGS_START + trainerId defeated-flag write on a win (SetBattledTrainersFlags's real effect) and the shared white_out path on a loss (issue #261's own machinery). The approach cutscene between the cone and the fight -- exclamation mark, walk-up, both parties turning, the template write-back, and each trainer's own Route103_Text_*Intro speech transcribed from data/text/trainers.inc -- is modelled as of issue #300 (crates/pokeemerald-rs/src/flow/overworld_phase/sight_trainer_approach.rs; see src/trainer_see.c#Task_RunTrainerSeeFuncList for what within it is still only timed rather than drawn). NOT modelled: Amy and Liv's shared TRAINER_AMY_AND_LIV_1 double battle (both trainerbattle_double, data/maps/Route103/scripts.inc:207-230) -- this port has no doubles support in the battle crate and tracks at most one party mon, so GetMonsStateToDoubles_2's own PLAYER_HAS_TWO_USABLE_MONS gate can never pass, the real outcome upstream would also produce for a permanently-one-mon party; Miguel's real TrainerParty::ItemDefaultMoves held-item party, which crate::flow::npc_trainer_battle's construction refuses rather than silently drop the item; and, discovered while wiring this issue, every one of the other six trainerbattle_single trainers' own real level-up-derived default moveset includes at least one move some screen still refuses -- Pete's Poison Sting at BattlePokemon::validate, and Daisy's Absorb, Amy & Liv's Thunder Wave, Andrew's Splash, Rhett's Focus Energy, Marcos's Charge, and Isabelle's Defense Curl past ensure_executable at battle::battle::trainer_ai::ensure_scoreable, which cannot yet score those effects -- so none of the nine sight trainers can currently complete a real construction (pinned by sight_trainer_trigger::tests::every_sight_trainers_real_party_fails_to_construct_for_exactly_these_reasons, which pins each trainer's exact refusal and offending move id -- Daisy MOVE_ABSORB, Amy & Liv MOVE_THUNDER_WAVE, Andrew MOVE_SPLASH, Rhett MOVE_FOCUS_ENERGY, Marcos MOVE_CHARGE, Isabelle MOVE_DEFENSE_CURL, Pete MOVE_POISON_STING, Miguel the held-item party -- so a future move-coverage slice that fixes one is forced to update that test). Also not modelled: TRAINER_BATTLE_* script parameter parsing generally (this crate has no script bytecode at all, per every other ledger entry in this family) and the post-battle msgbox/rematch-registration scripts (Route103_Text_*PostBattle, ShouldTryRematchBattle, the Route102_EventScript_*RegisterMatchCallAfterBattle callbacks). Issue #264's review closed two per-frame defects in this trigger: crate::flow::npc_trainer_battle now screens the whole party through battle::ensure_trainer_party_startable BEFORE its first RNG draw, and each refusal is logged once per cone entry rather than once per frame. This trigger has no button gate, so a cone whose battle cannot be built is re-attempted on every frame the player stands in it; refusing after construction leaked CreateNPCTrainerParty's per-mon OT-id draws off the one shared stream on every one of those frames. A refused cone now draws nothing, ever.",
+          "reason": "data/maps/Route103/scripts.inc:202-287 (Route103_EventScript_Daisy/Amy/Liv/Andrew/Miguel/Rhett/Marcos/Isabelle/Pete and their trainerbattle_single/trainerbattle_double callees), wired to the nine TRAINER_TYPE_NORMAL object events data/maps/Route103/map.json declares. Ported: the sight-cone trigger (sight_trainer_trigger::find_sight_trainer, backed by engine::overworld::trainer_sight -- see src/trainer_see.c#CheckForTrainersWantingBattle) scanning in map.json declaration order every ordinary frame, no button press; the object-event-script -> TRAINER_* id table (SIGHT_TRAINERS, cross-checked against include/constants/opponents.h); the real CreateNPCTrainerParty construction and headless driver via crate::flow::npc_trainer_battle (the same machinery src/battle_setup.c#DoTrainerBattle covers) for the seven trainerbattle_single trainers (Daisy TRAINER_DAISY, Andrew TRAINER_ANDREW, Miguel TRAINER_MIGUEL_1, Rhett TRAINER_RHETT, Marcos TRAINER_MARCOS, Isabelle TRAINER_ISABELLE, Pete TRAINER_PETE); the FLAG_TRAINER_FLAGS_START + trainerId defeated-flag write on a win (SetBattledTrainersFlags's real effect) and the shared white_out path on a loss. The approach cutscene between the cone and the fight -- exclamation mark, walk-up, both parties turning, the template write-back, and each trainer's own Route103_Text_*Intro speech transcribed from data/text/trainers.inc -- is modelled in crates/pokeemerald-rs/src/flow/overworld_phase/sight_trainer_approach.rs (see src/trainer_see.c#Task_RunTrainerSeeFuncList for what within it is still only timed rather than drawn). Andrew's and Rhett's real level-up-derived parties construct and play to PlayerWon (sight_trainer_trigger::tests::andrews_real_party_constructs_and_plays_to_a_win and rhetts_real_party_constructs_and_plays_to_a_win). NOT modelled: Amy and Liv's shared TRAINER_AMY_AND_LIV_1 double battle (both trainerbattle_double, data/maps/Route103/scripts.inc:207-230) -- this port has no doubles support in the battle crate and tracks at most one party mon, so GetMonsStateToDoubles_2's own PLAYER_HAS_TWO_USABLE_MONS gate can never pass, the real outcome upstream would also produce for a permanently-one-mon party, and their party built directly would also stop at Helping Hand (NonDamagingMove at battle::ensure_executable); and the other five trainerbattle_single parties, which battle::ensure_trainer_party_startable refuses before any RNG draw -- Daisy's at the Effect Spore ability (UnportedAbilityInteraction, battle::battle::admission), Miguel's TrainerParty::ItemDefaultMoves held-item party (crate::flow::npc_trainer_battle refuses rather than silently drop the item), Marcos's Sonic Boom at battle::battle::trainer_ai::ensure_scoreable, and Isabelle's Rollout and Pete's Constrict at battle::ensure_executable. Each refusal and its offending move, ability or held-item party is pinned by sight_trainer_trigger::tests::refused_sight_trainers_real_parties_fail_to_construct_for_exactly_these_reasons. This trigger has no button gate, so a cone whose battle cannot be built is re-attempted on every frame the player stands in it; the pre-draw screen means a refused cone draws nothing, ever, and each refusal is logged once per cone entry rather than once per frame. Also not modelled: TRAINER_BATTLE_* script parameter parsing generally (this crate has no script bytecode at all, per every other ledger entry in this family) and the post-battle msgbox/rematch-registration scripts (Route103_Text_*PostBattle, ShouldTryRematchBattle, the Route102_EventScript_*RegisterMatchCallAfterBattle callbacks).",
           "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/sight_trainer_trigger.rs",
           "spec": "I-5",
           "status": "stubbed"
@@ -12163,14 +12175,18 @@
     "data/tilesets/secondary/generic_building": {
       "category": "data.tileset",
       "kind": "dir",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Directory extracted into the local gitignored asset pack by crates/xtask/src/extract/tilesets.rs (TILESETS in crates/xtask/src/extract/scope.rs): tiles.png decoded via the std-only PNG/inflate decoder, all 16 palettes/NN.pal via the JASC-PAL parser, and metatiles.bin/metatile_attributes.bin as opaque raw blobs. Read back with AssetPack::tileset in crates/assets/src/pack.rs. The same normalized pack entries are also produced from the player's own ROM by crates/rom-import/src/domains/tilesets.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+      "rust_target": "crates/xtask/src/extract/tilesets.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "data/tilesets/secondary/inside_of_truck": {
       "category": "data.tileset",
       "kind": "dir",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Directory extracted into the local gitignored asset pack by crates/xtask/src/extract/tilesets.rs (TILESETS in crates/xtask/src/extract/scope.rs): tiles.png decoded via the std-only PNG/inflate decoder, all 16 palettes/NN.pal via the JASC-PAL parser, and metatiles.bin/metatile_attributes.bin as opaque raw blobs. Read back with AssetPack::tileset in crates/assets/src/pack.rs. The same normalized pack entries are also produced from the player's own ROM by crates/rom-import/src/domains/tilesets.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+      "rust_target": "crates/xtask/src/extract/tilesets.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "data/tilesets/secondary/inside_ship": {
       "category": "data.tileset",
@@ -12305,8 +12321,10 @@
     "data/tilesets/secondary/pokemon_center": {
       "category": "data.tileset",
       "kind": "dir",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Directory extracted into the local gitignored asset pack by crates/xtask/src/extract/tilesets.rs (TILESETS in crates/xtask/src/extract/scope.rs): tiles.png decoded via the std-only PNG/inflate decoder, all 16 palettes/NN.pal via the JASC-PAL parser, and metatiles.bin/metatile_attributes.bin as opaque raw blobs. Read back with AssetPack::tileset in crates/assets/src/pack.rs. The same normalized pack entries are also produced from the player's own ROM by crates/rom-import/src/domains/tilesets.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+      "rust_target": "crates/xtask/src/extract/tilesets.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "data/tilesets/secondary/pokemon_day_care": {
       "category": "data.tileset",
@@ -12365,8 +12383,10 @@
     "data/tilesets/secondary/shop": {
       "category": "data.tileset",
       "kind": "dir",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Directory extracted into the local gitignored asset pack by crates/xtask/src/extract/tilesets.rs (TILESETS in crates/xtask/src/extract/scope.rs): tiles.png decoded via the std-only PNG/inflate decoder, all 16 palettes/NN.pal via the JASC-PAL parser, and metatiles.bin/metatile_attributes.bin as opaque raw blobs. Read back with AssetPack::tileset in crates/assets/src/pack.rs. The same normalized pack entries are also produced from the player's own ROM by crates/rom-import/src/domains/tilesets.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+      "rust_target": "crates/xtask/src/extract/tilesets.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "data/tilesets/secondary/slateport": {
       "category": "data.tileset",
@@ -12516,38 +12536,158 @@
     },
     "graphics/battle_interface": {
       "artifacts": {
+        "ball_caught_indicator.png": {
+          "reason": "Pixel indices converted to raw 4bpp tiles as gbagfx writes them and read as a constituent of gHealthboxElementsGfxTable (graphics.c:358-370) in table order by AssetPack::healthbox_elements; the other battle_interface sources remain pending.",
+          "rust_target": "crates/xtask/src/extract/battle_interface/healthbox_elements.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "ball_display.png": {
+          "reason": "Both halves are extracted by two extractors. Pixel indices are converted to raw 4bpp tiles as gbagfx writes them and read as a constituent of gHealthboxElementsGfxTable (graphics.c:358-370) in table order by AssetPack::healthbox_elements (healthbox_elements.rs); the embedded 16-colour palette (gBattleInterface_BallDisplayPal, graphics.c:356) is extracted as battle-interface/palette/ball_display and read by AssetPack::singles_healthbox_frames (healthbox_frames.rs). The other battle_interface sources remain pending.",
+          "rust_target": "crates/xtask/src/extract/battle_interface/healthbox_elements.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "ball_status_bar.png": {
+          "reason": "Only the embedded 16-colour palette (gBattleInterface_BallStatusBarPal, graphics.c:354) is extracted, read by AssetPack::singles_healthbox_frames; the status-bar image (gBattleInterface_BallStatusBarGfx) is not extracted, and the other battle_interface sources remain pending.",
+          "rust_target": "crates/xtask/src/extract/battle_interface/healthbox_frames.rs",
+          "spec": "S-4",
+          "status": "stubbed"
+        },
+        "enemy_mon_shadow.png": {
+          "reason": "Kept as a validated 4-bit 32x8 raster image (gEnemyMonShadow_Gfx, graphics.c:1037) and read by AssetPack::enemy_mon_shadow; the other battle_interface sources remain pending.",
+          "rust_target": "crates/xtask/src/extract/battle_interface/healthbox_frames.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "expbar.png": {
+          "reason": "Pixel indices converted to raw 4bpp tiles as gbagfx writes them and read as a constituent of gHealthboxElementsGfxTable (graphics.c:358-370) in table order by AssetPack::healthbox_elements; the other battle_interface sources remain pending.",
+          "rust_target": "crates/xtask/src/extract/battle_interface/healthbox_elements.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "healthbox_doubles_frameend.png": {
+          "reason": "Pixel indices converted to raw 4bpp tiles as gbagfx writes them and read as a constituent of gHealthboxElementsGfxTable (graphics.c:358-370) in table order by AssetPack::healthbox_elements; the other battle_interface sources remain pending.",
+          "rust_target": "crates/xtask/src/extract/battle_interface/healthbox_elements.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "healthbox_doubles_frameend_bar.png": {
+          "reason": "Pixel indices converted to raw 4bpp tiles as gbagfx writes them and read as a constituent of gHealthboxElementsGfxTable (graphics.c:358-370) in table order by AssetPack::healthbox_elements; the other battle_interface sources remain pending.",
+          "rust_target": "crates/xtask/src/extract/battle_interface/healthbox_elements.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "healthbox_singles_opponent.png": {
+          "reason": "Kept as a validated 4-bit 128x32 raster image (two 8x4-tile metatiles, graphics.c:629) and read as the opponent singles frame by AssetPack::singles_healthbox_frames; the other battle_interface sources remain pending.",
+          "rust_target": "crates/xtask/src/extract/battle_interface/healthbox_frames.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "healthbox_singles_player.png": {
+          "reason": "Kept as a validated 4-bit 128x64 raster image (two 8x8-tile metatiles, graphics.c:628) and read as the player singles frame by AssetPack::singles_healthbox_frames; the other battle_interface sources remain pending.",
+          "rust_target": "crates/xtask/src/extract/battle_interface/healthbox_frames.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "hpbar.png": {
+          "reason": "Pixel indices converted to raw 4bpp tiles as gbagfx writes them and read as a constituent of gHealthboxElementsGfxTable (graphics.c:358-370) in table order by AssetPack::healthbox_elements; the other battle_interface sources remain pending.",
+          "rust_target": "crates/xtask/src/extract/battle_interface/healthbox_elements.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "hpbar_anim.png": {
+          "reason": "Pixel indices converted to raw 4bpp tiles as gbagfx writes them and read as a constituent of gHealthboxElementsGfxTable (graphics.c:358-370) in table order by AssetPack::healthbox_elements; the other battle_interface sources remain pending.",
+          "rust_target": "crates/xtask/src/extract/battle_interface/healthbox_elements.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "hpbar_anim_unused.png": {
+          "reason": "Pixel indices converted to raw 4bpp tiles as gbagfx writes them and concatenated in the order hpbar_anim_unused, numbers1, numbers2 into gBattleInterfaceGfx_BattleBar (graphics.c:169; graphics_file_rules.mk:90-93), read by AssetPack::battle_bar; the other battle_interface sources remain pending.",
+          "rust_target": "crates/xtask/src/extract/battle_interface/healthbox_elements.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "misc.png": {
+          "reason": "Pixel indices converted to raw 4bpp tiles as gbagfx writes them and read as a constituent of gHealthboxElementsGfxTable (graphics.c:358-370) in table order by AssetPack::healthbox_elements; the other battle_interface sources remain pending.",
+          "rust_target": "crates/xtask/src/extract/battle_interface/healthbox_elements.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "misc_frameend.png": {
+          "reason": "Pixel indices converted to raw 4bpp tiles as gbagfx writes them and read as a constituent of gHealthboxElementsGfxTable (graphics.c:358-370) in table order by AssetPack::healthbox_elements; the other battle_interface sources remain pending.",
+          "rust_target": "crates/xtask/src/extract/battle_interface/healthbox_elements.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "numbers1.png": {
+          "reason": "Pixel indices converted to raw 4bpp tiles as gbagfx writes them and concatenated in the order hpbar_anim_unused, numbers1, numbers2 into gBattleInterfaceGfx_BattleBar (graphics.c:169; graphics_file_rules.mk:90-93), read by AssetPack::battle_bar; the other battle_interface sources remain pending.",
+          "rust_target": "crates/xtask/src/extract/battle_interface/healthbox_elements.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "numbers2.png": {
+          "reason": "Pixel indices converted to raw 4bpp tiles as gbagfx writes them and concatenated in the order hpbar_anim_unused, numbers1, numbers2 into gBattleInterfaceGfx_BattleBar (graphics.c:169; graphics_file_rules.mk:90-93), read by AssetPack::battle_bar; the other battle_interface sources remain pending.",
+          "rust_target": "crates/xtask/src/extract/battle_interface/healthbox_elements.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "status.png": {
+          "reason": "Pixel indices converted to raw 4bpp tiles as gbagfx writes them and read as a constituent of gHealthboxElementsGfxTable (graphics.c:358-370) in table order by AssetPack::healthbox_elements; the other battle_interface sources remain pending.",
+          "rust_target": "crates/xtask/src/extract/battle_interface/healthbox_elements.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "status2.png": {
+          "reason": "Pixel indices converted to raw 4bpp tiles as gbagfx writes them and read as a constituent of gHealthboxElementsGfxTable (graphics.c:358-370) in table order by AssetPack::healthbox_elements; the other battle_interface sources remain pending.",
+          "rust_target": "crates/xtask/src/extract/battle_interface/healthbox_elements.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "status3.png": {
+          "reason": "Pixel indices converted to raw 4bpp tiles as gbagfx writes them and read as a constituent of gHealthboxElementsGfxTable (graphics.c:358-370) in table order by AssetPack::healthbox_elements; the other battle_interface sources remain pending.",
+          "rust_target": "crates/xtask/src/extract/battle_interface/healthbox_elements.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "status4.png": {
+          "reason": "Pixel indices converted to raw 4bpp tiles as gbagfx writes them and read as a constituent of gHealthboxElementsGfxTable (graphics.c:358-370) in table order by AssetPack::healthbox_elements; the other battle_interface sources remain pending.",
+          "rust_target": "crates/xtask/src/extract/battle_interface/healthbox_elements.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
         "text.pal": {
-          "reason": "Battle textbox and menu text source transcoded to a validated typed pack entry read by AssetPack::battle_interface; the other battle_interface sources remain pending.",
+          "reason": "Battle textbox and menu text source transcoded to a validated typed pack entry read by AssetPack::battle_interface; the other battle_interface sources remain pending. The ROM importer (rom-import's domains::battle_interface, gated by the real-ROM equivalence test's pinned battle-interface ids) reproduces the same pack entry from the BPEE rev-0 profile.",
           "rust_target": "crates/xtask/src/extract/battle_interface.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "text_pp.pal": {
-          "reason": "Battle textbox and menu text source transcoded to a validated typed pack entry read by AssetPack::battle_interface; the other battle_interface sources remain pending.",
+          "reason": "Battle textbox and menu text source transcoded to a validated typed pack entry read by AssetPack::battle_interface; the other battle_interface sources remain pending. The ROM importer (rom-import's domains::battle_interface, gated by the real-ROM equivalence test's pinned battle-interface ids) reproduces the same pack entry from the BPEE rev-0 profile.",
           "rust_target": "crates/xtask/src/extract/battle_interface.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "textbox.png": {
-          "reason": "Battle textbox and menu text source transcoded to a validated typed pack entry read by AssetPack::battle_interface; the other battle_interface sources remain pending.",
+          "reason": "Battle textbox and menu text source transcoded to a validated typed pack entry read by AssetPack::battle_interface; the other battle_interface sources remain pending. The ROM importer (rom-import's domains::battle_interface, gated by the real-ROM equivalence test's pinned battle-interface ids) reproduces the same pack entry from the BPEE rev-0 profile.",
           "rust_target": "crates/xtask/src/extract/battle_interface.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "textbox_0.pal": {
-          "reason": "Battle textbox and menu text source transcoded to a validated typed pack entry read by AssetPack::battle_interface; the other battle_interface sources remain pending.",
+          "reason": "Battle textbox and menu text source transcoded to a validated typed pack entry read by AssetPack::battle_interface; the other battle_interface sources remain pending. The ROM importer (rom-import's domains::battle_interface, gated by the real-ROM equivalence test's pinned battle-interface ids) reproduces the same pack entry from the BPEE rev-0 profile; with textbox_1.pal it is one composed 32-colour ROM palette root, not two.",
           "rust_target": "crates/xtask/src/extract/battle_interface.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "textbox_1.pal": {
-          "reason": "Battle textbox and menu text source transcoded to a validated typed pack entry read by AssetPack::battle_interface; the other battle_interface sources remain pending.",
+          "reason": "Battle textbox and menu text source transcoded to a validated typed pack entry read by AssetPack::battle_interface; the other battle_interface sources remain pending. The ROM importer (rom-import's domains::battle_interface, gated by the real-ROM equivalence test's pinned battle-interface ids) reproduces the same pack entry from the BPEE rev-0 profile; with textbox_0.pal it is one composed 32-colour ROM palette root, not two.",
           "rust_target": "crates/xtask/src/extract/battle_interface.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "textbox_map.bin": {
-          "reason": "Battle textbox and menu text source transcoded to a validated typed pack entry read by AssetPack::battle_interface; the other battle_interface sources remain pending.",
+          "reason": "Battle textbox and menu text source transcoded to a validated typed pack entry read by AssetPack::battle_interface; the other battle_interface sources remain pending. The ROM importer (rom-import's domains::battle_interface, gated by the real-ROM equivalence test's pinned battle-interface ids) reproduces the same pack entry from the BPEE rev-0 profile.",
           "rust_target": "crates/xtask/src/extract/battle_interface.rs",
           "spec": "S-4",
           "status": "ported"
@@ -12589,6 +12729,44 @@
       "status": "pending"
     },
     "graphics/birch_speech": {
+      "artifacts": {
+        "bg0.pal": {
+          "reason": "Birch speech background palette bank 0 (16 colours), published as opening-scene/palette/bg0 and read through BirchSpeechHandle::background_palettes; upstream sBirchSpeechBgPals row 0 is loaded at background palette slot 0 (main_menu.c:250-253,1280). Byte-identical to bg1.pal, so ROM import pairs the two copies in address order.",
+          "rust_target": "crates/xtask/src/extract/opening_scene.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "bg1.pal": {
+          "reason": "Birch speech background palette bank 1 (16 colours), published as opening-scene/palette/bg1 and read through BirchSpeechHandle::background_palettes; upstream sBirchSpeechBgPals row 1 is loaded at background palette slot 1 (main_menu.c:250-253,1280). Byte-identical to bg0.pal, so ROM import pairs the two copies in address order.",
+          "rust_target": "crates/xtask/src/extract/opening_scene.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "bg2.pal": {
+          "reason": "Birch speech gradient palette (16 colours), published as opening-scene/palette/bg2 and read through BirchSpeechHandle::gradient_palette; upstream sBirchSpeechBgGradientPal colours 8-15 are loaded over background colours 1-8 (main_menu.c:257,1281). The partial load is not ported; the whole bank is published.",
+          "rust_target": "crates/xtask/src/extract/opening_scene.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "birch.png": {
+          "reason": "Birch's new-game sprite, 64x64 4bpp, published as opening-scene/image/birch with the PNG's own 16-colour PLTE as opening-scene/palette/birch and read through BirchSpeechHandle::birch; upstream sNewGameBirch_Gfx is .4bpp (uncompressed) and sNewGameBirch_Pal is the PNG's .gbapal, shown through a 64x64 sprite template (field_effect.c:245-247,328-359,909-913). Sprite creation and animation are not ported.",
+          "rust_target": "crates/xtask/src/extract/opening_scene.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "map.bin": {
+          "reason": "Birch speech background tilemap, 32x20 entries (1280 bytes), published raw as opening-scene/raw/birch_speech_map and read through BirchSpeechHandle::background_tilemap; upstream sBirchSpeechBgMap is .lz, decompressed to screen block 7 (main_menu.c:256,1279). ROM import reads it as an LZ77 blob. No scene rendering is ported.",
+          "rust_target": "crates/xtask/src/extract/opening_scene.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "shadow.png": {
+          "reason": "Birch speech shadow and platform tile sheet, 128x24 4bpp, published as pack id opening-scene/image/shadow and read through AssetPack::birch_speech (BirchSpeechHandle::shadow); upstream loads it as sBirchSpeechShadowGfx (.4bpp.lz) into VRAM (main_menu.c:255,1278). ROM import reads it as an LZ77 root. No scene rendering is ported.",
+          "rust_target": "crates/xtask/src/extract/opening_scene.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.scene",
       "kind": "dir",
       "spec_owner": "S-4",
@@ -16493,12 +16671,196 @@
       "status": "pending"
     },
     "graphics/naming_screen": {
+      "artifacts": {
+        "back_button.png": {
+          "reason": "graphics.c:1404-1414 (naming_screen.c:185-186 for the PC icons) builds back_button.png as plain 4bpp graphics; the extractor publishes its decoded four-bit index raster at the source size as naming-screen/image/back_button. Colours come from the palette files, not the PNG palette.",
+          "rust_target": "crates/xtask/src/extract/naming_screen.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "background.bin": {
+          "reason": "graphics.c:1416-1419 compresses background.bin to LZ77 for the ROM; the checkout file is the uncompressed 1280-byte 32x20 tilemap, copied unchanged as naming-screen/raw/background.",
+          "rust_target": "crates/xtask/src/extract/naming_screen.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "buttons.pal": {
+          "reason": "One of the six 16-colour rows of gNamingScreenMenu_Pal (graphics.c:1394-1402), loaded as one block by LoadPalettes (naming_screen.c:1883). Published as its own 16-colour palette, naming-screen/palette/buttons.",
+          "rust_target": "crates/xtask/src/extract/naming_screen.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "cursor.pal": {
+          "reason": "One of the six 16-colour rows of gNamingScreenMenu_Pal (graphics.c:1394-1402), loaded as one block by LoadPalettes (naming_screen.c:1883). Published as its own 16-colour palette, naming-screen/palette/cursor.",
+          "rust_target": "crates/xtask/src/extract/naming_screen.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "cursor.png": {
+          "reason": "graphics.c:1410-1412 builds cursor.png as 4bpp with -num_tiles 5, keeping the first five of its six 8x8 tiles. The extractor publishes those tiles stacked in tile order as an 8x40 four-bit raster, naming-screen/image/cursor, and refuses a sheet whose dropped sixth tile holds colour.",
+          "rust_target": "crates/xtask/src/extract/naming_screen.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "cursor_filled.png": {
+          "reason": "graphics.c:1410-1412 builds cursor_filled.png as 4bpp with -num_tiles 5, keeping the first five of its six 8x8 tiles. The extractor publishes those tiles stacked in tile order as an 8x40 four-bit raster, naming-screen/image/cursor_filled, and refuses a sheet whose dropped sixth tile holds colour.",
+          "rust_target": "crates/xtask/src/extract/naming_screen.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "cursor_squished.png": {
+          "reason": "graphics.c:1410-1412 builds cursor_squished.png as 4bpp with -num_tiles 5, keeping the first five of its six 8x8 tiles. The extractor publishes those tiles stacked in tile order as an 8x40 four-bit raster, naming-screen/image/cursor_squished, and refuses a sheet whose dropped sixth tile holds colour.",
+          "rust_target": "crates/xtask/src/extract/naming_screen.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "input_arrow.png": {
+          "reason": "graphics.c:1404-1414 (naming_screen.c:185-186 for the PC icons) builds input_arrow.png as plain 4bpp graphics; the extractor publishes its decoded four-bit index raster at the source size as naming-screen/image/input_arrow. Colours come from the palette files, not the PNG palette.",
+          "rust_target": "crates/xtask/src/extract/naming_screen.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "keyboard.pal": {
+          "reason": "sKeyboard_Pal (naming_screen.c:187), loaded by LoadPalettes (naming_screen.c:1884). Published as the 16-colour palette naming-screen/palette/keyboard.",
+          "rust_target": "crates/xtask/src/extract/naming_screen.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "keyboard_lower.bin": {
+          "reason": "graphics.c:1416-1419 compresses keyboard_lower.bin to LZ77 for the ROM; the checkout file is the uncompressed 1280-byte 32x20 tilemap, copied unchanged as naming-screen/raw/keyboard_lower.",
+          "rust_target": "crates/xtask/src/extract/naming_screen.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "keyboard_symbols.bin": {
+          "reason": "graphics.c:1416-1419 compresses keyboard_symbols.bin to LZ77 for the ROM; the checkout file is the uncompressed 1280-byte 32x20 tilemap, copied unchanged as naming-screen/raw/keyboard_symbols.",
+          "rust_target": "crates/xtask/src/extract/naming_screen.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "keyboard_upper.bin": {
+          "reason": "graphics.c:1416-1419 compresses keyboard_upper.bin to LZ77 for the ROM; the checkout file is the uncompressed 1280-byte 32x20 tilemap, copied unchanged as naming-screen/raw/keyboard_upper.",
+          "rust_target": "crates/xtask/src/extract/naming_screen.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "menu.pal": {
+          "reason": "One of the six 16-colour rows of gNamingScreenMenu_Pal (graphics.c:1394-1402), loaded as one block by LoadPalettes (naming_screen.c:1883). Published as its own 16-colour palette, naming-screen/palette/menu.",
+          "rust_target": "crates/xtask/src/extract/naming_screen.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "menu.png": {
+          "reason": "graphics.c:1403 builds menu.png as 4bpp LZ77 graphics (gNamingScreenMenu_Gfx); the checkout holds the uncompressed source, so the extractor publishes its decoded 24x128 four-bit index raster as naming-screen/image/menu. Its colours come from menu.pal, not the PNG palette.",
+          "rust_target": "crates/xtask/src/extract/naming_screen.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "ok_button.png": {
+          "reason": "graphics.c:1404-1414 (naming_screen.c:185-186 for the PC icons) builds ok_button.png as plain 4bpp graphics; the extractor publishes its decoded four-bit index raster at the source size as naming-screen/image/ok_button. Colours come from the palette files, not the PNG palette.",
+          "rust_target": "crates/xtask/src/extract/naming_screen.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "page_swap_button.png": {
+          "reason": "graphics.c:1404-1414 (naming_screen.c:185-186 for the PC icons) builds page_swap_button.png as plain 4bpp graphics; the extractor publishes its decoded four-bit index raster at the source size as naming-screen/image/page_swap_button. Colours come from the palette files, not the PNG palette.",
+          "rust_target": "crates/xtask/src/extract/naming_screen.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "page_swap_frame.png": {
+          "reason": "graphics.c:1404-1414 (naming_screen.c:185-186 for the PC icons) builds page_swap_frame.png as plain 4bpp graphics; the extractor publishes its decoded four-bit index raster at the source size as naming-screen/image/page_swap_frame. Colours come from the palette files, not the PNG palette.",
+          "rust_target": "crates/xtask/src/extract/naming_screen.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "page_swap_lower.pal": {
+          "reason": "One of the six 16-colour rows of gNamingScreenMenu_Pal (graphics.c:1394-1402), loaded as one block by LoadPalettes (naming_screen.c:1883). Published as its own 16-colour palette, naming-screen/palette/page_swap_lower.",
+          "rust_target": "crates/xtask/src/extract/naming_screen.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "page_swap_lower.png": {
+          "reason": "graphics.c:1404-1414 (naming_screen.c:185-186 for the PC icons) builds page_swap_lower.png as plain 4bpp graphics; the extractor publishes its decoded four-bit index raster at the source size as naming-screen/image/page_swap_lower. Colours come from the palette files, not the PNG palette.",
+          "rust_target": "crates/xtask/src/extract/naming_screen.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "page_swap_others.pal": {
+          "reason": "One of the six 16-colour rows of gNamingScreenMenu_Pal (graphics.c:1394-1402), loaded as one block by LoadPalettes (naming_screen.c:1883). Published as its own 16-colour palette, naming-screen/palette/page_swap_others.",
+          "rust_target": "crates/xtask/src/extract/naming_screen.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "page_swap_others.png": {
+          "reason": "graphics.c:1404-1414 (naming_screen.c:185-186 for the PC icons) builds page_swap_others.png as plain 4bpp graphics; the extractor publishes its decoded four-bit index raster at the source size as naming-screen/image/page_swap_others. Colours come from the palette files, not the PNG palette.",
+          "rust_target": "crates/xtask/src/extract/naming_screen.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "page_swap_upper.pal": {
+          "reason": "One of the six 16-colour rows of gNamingScreenMenu_Pal (graphics.c:1394-1402), loaded as one block by LoadPalettes (naming_screen.c:1883). Published as its own 16-colour palette, naming-screen/palette/page_swap_upper.",
+          "rust_target": "crates/xtask/src/extract/naming_screen.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "page_swap_upper.png": {
+          "reason": "graphics.c:1404-1414 (naming_screen.c:185-186 for the PC icons) builds page_swap_upper.png as plain 4bpp graphics; the extractor publishes its decoded four-bit index raster at the source size as naming-screen/image/page_swap_upper. Colours come from the palette files, not the PNG palette.",
+          "rust_target": "crates/xtask/src/extract/naming_screen.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "pc_icon_off.png": {
+          "reason": "sPCIconOff_Gfx (naming_screen.c:185-186) is built as plain 4bpp graphics; the extractor publishes the decoded 16x24 four-bit index raster as naming-screen/image/pc_icon_off. Colours come from the palette files, not the PNG palette.",
+          "rust_target": "crates/xtask/src/extract/naming_screen.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "pc_icon_on.png": {
+          "reason": "sPCIconOn_Gfx (naming_screen.c:185-186) is built as plain 4bpp graphics; the extractor publishes the decoded 16x24 four-bit index raster as naming-screen/image/pc_icon_on. Colours come from the palette files, not the PNG palette.",
+          "rust_target": "crates/xtask/src/extract/naming_screen.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "underscore.png": {
+          "reason": "graphics.c:1404-1414 (naming_screen.c:185-186 for the PC icons) builds underscore.png as plain 4bpp graphics; the extractor publishes its decoded four-bit index raster at the source size as naming-screen/image/underscore. Colours come from the palette files, not the PNG palette.",
+          "rust_target": "crates/xtask/src/extract/naming_screen.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.ui",
       "kind": "dir",
       "spec_owner": "S-4",
       "status": "pending"
     },
     "graphics/object_events/pics/berry_trees": {
+      "artifacts": {
+        "cheri": {
+          "reason": "pack id sprite/berry_trees/cheri; Extracted as a decoded image into the local gitignored asset pack by crates/xtask/src/extract/sprites.rs (OBJECT_SHEETS in crates/xtask/src/extract/scope.rs) for the checkpoint maps' fixed object events; read back with AssetPack::sprite. The same entry is produced from the player's own ROM by crates/rom-import/src/domains/sprites.rs, equivalence-checked byte-for-byte by crates/rom-import/tests/equivalence.rs. The directory's other pictures are not extracted.",
+          "rust_target": "crates/xtask/src/extract/sprites.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "dirt_pile": {
+          "reason": "pack id sprite/berry_trees/dirt_pile; Extracted as a decoded image into the local gitignored asset pack by crates/xtask/src/extract/sprites.rs (OBJECT_SHEETS in crates/xtask/src/extract/scope.rs) for the checkpoint maps' fixed object events; read back with AssetPack::sprite. The same entry is produced from the player's own ROM by crates/rom-import/src/domains/sprites.rs, equivalence-checked byte-for-byte by crates/rom-import/tests/equivalence.rs. The directory's other pictures are not extracted.",
+          "rust_target": "crates/xtask/src/extract/sprites.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "leppa": {
+          "reason": "pack id sprite/berry_trees/leppa; Extracted as a decoded image into the local gitignored asset pack by crates/xtask/src/extract/sprites.rs (OBJECT_SHEETS in crates/xtask/src/extract/scope.rs) for the checkpoint maps' fixed object events; read back with AssetPack::sprite. The same entry is produced from the player's own ROM by crates/rom-import/src/domains/sprites.rs, equivalence-checked byte-for-byte by crates/rom-import/tests/equivalence.rs. The directory's other pictures are not extracted.",
+          "rust_target": "crates/xtask/src/extract/sprites.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "sprout": {
+          "reason": "pack id sprite/berry_trees/sprout; Extracted as a decoded image into the local gitignored asset pack by crates/xtask/src/extract/sprites.rs (OBJECT_SHEETS in crates/xtask/src/extract/scope.rs) for the checkpoint maps' fixed object events; read back with AssetPack::sprite. The same entry is produced from the player's own ROM by crates/rom-import/src/domains/sprites.rs, equivalence-checked byte-for-byte by crates/rom-import/tests/equivalence.rs. The directory's other pictures are not extracted.",
+          "rust_target": "crates/xtask/src/extract/sprites.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.object_event",
       "kind": "dir",
       "spec_owner": "S-4",
@@ -16511,12 +16873,58 @@
       "status": "pending"
     },
     "graphics/object_events/pics/dolls": {
+      "artifacts": {
+        "pichu_doll": {
+          "reason": "pack id sprite/dolls/pichu_doll; Extracted as a decoded image into the local gitignored asset pack by crates/xtask/src/extract/sprites.rs (OBJECT_SHEETS in crates/xtask/src/extract/scope.rs) for the checkpoint maps' fixed object events; read back with AssetPack::sprite. The same entry is produced from the player's own ROM by crates/rom-import/src/domains/sprites.rs, equivalence-checked byte-for-byte by crates/rom-import/tests/equivalence.rs. The directory's other pictures are not extracted.",
+          "rust_target": "crates/xtask/src/extract/sprites.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "swablu_doll": {
+          "reason": "pack id sprite/dolls/swablu_doll; Extracted as a decoded image into the local gitignored asset pack by crates/xtask/src/extract/sprites.rs (OBJECT_SHEETS in crates/xtask/src/extract/scope.rs) for the checkpoint maps' fixed object events; read back with AssetPack::sprite. The same entry is produced from the player's own ROM by crates/rom-import/src/domains/sprites.rs, equivalence-checked byte-for-byte by crates/rom-import/tests/equivalence.rs. The directory's other pictures are not extracted.",
+          "rust_target": "crates/xtask/src/extract/sprites.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.object_event",
       "kind": "dir",
       "spec_owner": "S-4",
       "status": "pending"
     },
     "graphics/object_events/pics/misc": {
+      "artifacts": {
+        "birchs_bag": {
+          "reason": "pack id sprite/misc/birchs_bag; Extracted as a decoded image into the local gitignored asset pack by crates/xtask/src/extract/sprites.rs (OBJECT_SHEETS in crates/xtask/src/extract/scope.rs) for the checkpoint maps' fixed object events; read back with AssetPack::sprite. The same entry is produced from the player's own ROM by crates/rom-import/src/domains/sprites.rs, equivalence-checked byte-for-byte by crates/rom-import/tests/equivalence.rs. The directory's other pictures are not extracted.",
+          "rust_target": "crates/xtask/src/extract/sprites.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "cuttable_tree": {
+          "reason": "pack id sprite/misc/cuttable_tree; Extracted as a decoded image into the local gitignored asset pack by crates/xtask/src/extract/sprites.rs (OBJECT_SHEETS in crates/xtask/src/extract/scope.rs) for the checkpoint maps' fixed object events; read back with AssetPack::sprite. The same entry is produced from the player's own ROM by crates/rom-import/src/domains/sprites.rs, equivalence-checked byte-for-byte by crates/rom-import/tests/equivalence.rs. The directory's other pictures are not extracted.",
+          "rust_target": "crates/xtask/src/extract/sprites.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "item_ball": {
+          "reason": "pack id sprite/misc/item_ball; Extracted as a decoded image into the local gitignored asset pack by crates/xtask/src/extract/sprites.rs (OBJECT_SHEETS in crates/xtask/src/extract/scope.rs) for the checkpoint maps' fixed object events; read back with AssetPack::sprite. The same entry is produced from the player's own ROM by crates/rom-import/src/domains/sprites.rs, equivalence-checked byte-for-byte by crates/rom-import/tests/equivalence.rs. The directory's other pictures are not extracted.",
+          "rust_target": "crates/xtask/src/extract/sprites.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "moving_box": {
+          "reason": "pack id sprite/misc/moving_box; Extracted as a decoded image into the local gitignored asset pack by crates/xtask/src/extract/sprites.rs (OBJECT_SHEETS in crates/xtask/src/extract/scope.rs) for the checkpoint maps' fixed object events; read back with AssetPack::sprite. The same entry is produced from the player's own ROM by crates/rom-import/src/domains/sprites.rs, equivalence-checked byte-for-byte by crates/rom-import/tests/equivalence.rs. The directory's other pictures are not extracted.",
+          "rust_target": "crates/xtask/src/extract/sprites.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "truck": {
+          "reason": "pack id sprite/misc/truck; Extracted as a decoded image into the local gitignored asset pack by crates/xtask/src/extract/sprites.rs (OBJECT_SHEETS in crates/xtask/src/extract/scope.rs) for the checkpoint maps' fixed object events; read back with AssetPack::sprite. The same entry is produced from the player's own ROM by crates/rom-import/src/domains/sprites.rs, equivalence-checked byte-for-byte by crates/rom-import/tests/equivalence.rs. The directory's other pictures are not extracted.",
+          "rust_target": "crates/xtask/src/extract/sprites.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.object_event",
       "kind": "dir",
       "spec_owner": "S-4",
@@ -16525,12 +16933,26 @@
     "graphics/object_events/pics/people": {
       "category": "graphics.object_event",
       "kind": "dir",
-      "reason": "Every PNG in the directory (133 files) decoded via the std-only PNG/inflate decoder into the local gitignored asset pack (issue #81, Discussion #71 policy A, F-3's real cargo xtask extract). Brendan's and May's real in-game palettes (object_events/palettes/{brendan,may}.pal) are extracted alongside as the two unambiguous player-character palette matches. Issue #161's NPC object-event rendering slice additionally extracts the four generic NPC palette banks (object_events/palettes/npc_{1,2,3,4}.pal, OBJ_EVENT_PAL_TAG_NPC_1..4) that every 'standard' 16x32 NPC graphics id it resolves (Mom, the twin, Professor Birch, ...) draws from -- crates/pokeemerald-rs/src/overworld/npc.rs's own bounded graphics-id table. The broader NPC roster's remaining per-character palettes (truck.pal, vigoroth.pal, every *_reflection.pal) and the full object_event_graphics_info indirection table are still not modelled, remaining a future slice. Read back via AssetPack::sprite/sprite_palette in crates/assets/src/pack.rs. Since the #122 ROM-import series the same normalized pack entries are also produced directly from the player's own ROM by crates/rom-import/src/domains/sprites.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+      "reason": "Every PNG in the directory (133 files) decoded via the std-only PNG/inflate decoder into the local gitignored asset pack. Brendan's and May's in-game palettes (object_events/palettes/{brendan,may}.pal) are extracted alongside, with the four generic NPC palette banks (object_events/palettes/npc_{1,2,3,4}.pal, OBJ_EVENT_PAL_TAG_NPC_1..4) that every 'standard' 16x32 NPC graphics id draws from, and the truck.pal, moving_box.pal, vigoroth.pal and enemy_zigzagoon.pal banks the checkpoint maps' non-people objects load (sprite/palette/*, OBJECT_PALETTES in crates/xtask/src/extract/scope.rs). Every *_reflection.pal and the full object_event_graphics_info indirection table are still not modelled. Read back via AssetPack::sprite/sprite_palette in crates/assets/src/pack.rs. The same normalized pack entries are also produced from the player's own ROM by crates/rom-import/src/domains/sprites.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
       "rust_target": "crates/xtask/src/extract/sprites.rs",
       "spec": "I-3",
       "status": "ported"
     },
     "graphics/object_events/pics/pokemon": {
+      "artifacts": {
+        "enemy_zigzagoon": {
+          "reason": "pack id sprite/pokemon/enemy_zigzagoon; Extracted as a decoded image into the local gitignored asset pack by crates/xtask/src/extract/sprites.rs (OBJECT_SHEETS in crates/xtask/src/extract/scope.rs) for the checkpoint maps' fixed object events; read back with AssetPack::sprite. The same entry is produced from the player's own ROM by crates/rom-import/src/domains/sprites.rs, equivalence-checked byte-for-byte by crates/rom-import/tests/equivalence.rs. The directory's other pictures are not extracted.",
+          "rust_target": "crates/xtask/src/extract/sprites.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "vigoroth": {
+          "reason": "pack id sprite/pokemon/vigoroth; Extracted as a decoded image into the local gitignored asset pack by crates/xtask/src/extract/sprites.rs (OBJECT_SHEETS in crates/xtask/src/extract/scope.rs) for the checkpoint maps' fixed object events; read back with AssetPack::sprite. The same entry is produced from the player's own ROM by crates/rom-import/src/domains/sprites.rs, equivalence-checked byte-for-byte by crates/rom-import/tests/equivalence.rs. The directory's other pictures are not extracted.",
+          "rust_target": "crates/xtask/src/extract/sprites.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.object_event",
       "kind": "dir",
       "spec_owner": "S-4",
@@ -17799,6 +18221,20 @@
       "status": "pending"
     },
     "graphics/pokemon/lotad": {
+      "artifacts": {
+        "front.png": {
+          "reason": "Lotad's still front picture, 64x64 4bpp, published as opening-scene/image/lotad and read through BirchSpeechHandle::lotad; upstream gMonStillFrontPic_Lotad is .4bpp.lz (src/data/graphics/pokemon.h:1888). Birch's speech draws Lotad through CreateMonPicSprite_Affine (main_menu.c:1873-1876), which loads the animation sheet's first frame (anim_front.png); that frame is pixel-identical to front.png, so the still picture stands for it. Lotad's other pictures and sheets are not published; no general species lookup is ported.",
+          "rust_target": "crates/xtask/src/extract/opening_scene.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "normal.pal": {
+          "reason": "Lotad's normal palette (16 colours), published as opening-scene/palette/lotad and paired with its front picture in BirchSpeechHandle::lotad; upstream gMonPalette_Lotad is .gbapal.lz (src/data/graphics/pokemon.h:1889), the one compressed palette ROM import reads as an LZ77 palette root. The shiny palette is not published.",
+          "rust_target": "crates/xtask/src/extract/opening_scene.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.pokemon",
       "kind": "dir",
       "spec_owner": "S-4",
@@ -19247,7 +19683,7 @@
     "graphics/starter_choose": {
       "category": "graphics.ui",
       "kind": "dir",
-      "reason": "Complete chooser graphics directory extracted: three indexed PNG sheets with their embedded palettes and both raw tilemaps; exposed by typed starter chooser handles. No chooser rendering or ROM extraction claimed.",
+      "reason": "Complete chooser graphics directory extracted: three indexed PNG sheets with their embedded palettes and both raw tilemaps; exposed by typed starter chooser handles. The ROM importer reproduces the same eight pack entries from the BPEE rev-0 profile (rom-import's domains::starter_choose, gated by the real-ROM equivalence test's starter-chooser/ prefix). No chooser rendering claimed.",
       "rust_target": "crates/xtask/src/extract/starter_chooser.rs",
       "spec": "S-4",
       "status": "ported"
@@ -19409,8 +19845,10 @@
     "graphics/trainers/front_pics/brendan.png": {
       "category": "graphics.trainer",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Trainer front picture published as pack id trainer-pic/brendan/front (64x64, 4bpp) by the checkout extractor and read through AssetPack::trainer_pic(TrainerPicId::BRENDAN). Upstream binds gTrainerFrontPic_Brendan at src/data/graphics/trainers.h:214-218 as TRAINER_PIC_BRENDAN (constants/trainers.h:90-91), size 8 (front_pic_tables.h:74-75,173-174); Birch's speech draws it through CreateTrainerSprite (main_menu.c:1878-1905). LZ77 encoding, ROM import, and CreateTrainerSprite behaviour are not ported.",
+      "rust_target": "crates/xtask/src/extract/trainer_pic.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/trainers/front_pics/brendan_rs.png": {
       "category": "graphics.trainer",
@@ -19661,8 +20099,10 @@
     "graphics/trainers/front_pics/may.png": {
       "category": "graphics.trainer",
       "kind": "file",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Trainer front picture published as pack id trainer-pic/may/front (64x64, 4bpp) by the checkout extractor and read through AssetPack::trainer_pic(TrainerPicId::MAY). Upstream binds gTrainerFrontPic_May at src/data/graphics/trainers.h:214-218 as TRAINER_PIC_MAY (constants/trainers.h:90-91), size 8 (front_pic_tables.h:74-75,173-174); Birch's speech draws it through CreateTrainerSprite (main_menu.c:1878-1905). LZ77 encoding, ROM import, and CreateTrainerSprite behaviour are not ported.",
+      "rust_target": "crates/xtask/src/extract/trainer_pic.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/trainers/front_pics/may_rs.png": {
       "category": "graphics.trainer",
@@ -19898,6 +20338,46 @@
       "spec_owner": "S-4",
       "status": "pending"
     },
+    "graphics/trainers/palettes/brendan.pal": {
+      "category": "graphics.trainer",
+      "kind": "file",
+      "reason": "Trainer front palette published as pack id trainer-pic/brendan/palette (16 colours) by the checkout extractor and paired with the front image by AssetPack::trainer_pic(TrainerPicId::BRENDAN). Upstream binds gTrainerPalette_Brendan at src/data/graphics/trainers.h:214-218 as TRAINER_PIC_BRENDAN. The .gbapal.lz compression is not ported.",
+      "rust_target": "crates/xtask/src/extract/trainer_pic.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/trainers/palettes/brendan_rs.pal": {
+      "category": "graphics.trainer",
+      "kind": "file",
+      "spec_owner": "S-4",
+      "status": "pending"
+    },
+    "graphics/trainers/palettes/may.pal": {
+      "category": "graphics.trainer",
+      "kind": "file",
+      "reason": "Trainer front palette published as pack id trainer-pic/may/palette (16 colours) by the checkout extractor and paired with the front image by AssetPack::trainer_pic(TrainerPicId::MAY). Upstream binds gTrainerPalette_May at src/data/graphics/trainers.h:214-218 as TRAINER_PIC_MAY. The .gbapal.lz compression is not ported.",
+      "rust_target": "crates/xtask/src/extract/trainer_pic.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "graphics/trainers/palettes/may_rs.pal": {
+      "category": "graphics.trainer",
+      "kind": "file",
+      "spec_owner": "S-4",
+      "status": "pending"
+    },
+    "graphics/trainers/palettes/steven.pal": {
+      "category": "graphics.trainer",
+      "kind": "file",
+      "spec_owner": "S-4",
+      "status": "pending"
+    },
+    "graphics/trainers/palettes/wally.pal": {
+      "category": "graphics.trainer",
+      "kind": "file",
+      "spec_owner": "S-4",
+      "status": "pending"
+    },
     "graphics/types": {
       "category": "graphics.ui",
       "kind": "dir",
@@ -19917,10 +20397,56 @@
       "status": "pending"
     },
     "graphics/wallclock": {
+      "artifacts": {
+        "clock.png": {
+          "reason": "Wall-clock face tile sheet, 128x64 4bpp, published as opening-scene/image/wall_clock and read through WallClockHandle::screen; upstream gWallClock_Gfx is .4bpp.lz decompressed to VRAM (graphics.c:1352; wallclock.c:647). No clock rendering is ported.",
+          "rust_target": "crates/xtask/src/extract/opening_scene.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "clock_start.bin": {
+          "reason": "Clock-setting screen tilemap, 32x20 entries (1280 bytes), published raw as opening-scene/raw/clock_start and read through WallClockHandle::start_tilemap; upstream gWallClockStart_Tilemap is .lz decompressed to screen block 7 (graphics.c:1353; wallclock.c:692).",
+          "rust_target": "crates/xtask/src/extract/opening_scene.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "clock_view.bin": {
+          "reason": "Clock-viewing screen tilemap, 32x20 entries (1280 bytes), published raw as opening-scene/raw/clock_view and read through WallClockHandle::view_tilemap; upstream gWallClockView_Tilemap is .lz decompressed to screen block 7 (graphics.c:1354; wallclock.c:736).",
+          "rust_target": "crates/xtask/src/extract/opening_scene.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "female.pal": {
+          "reason": "Wall-clock female palette bank (16 colours), published as opening-scene/palette/clock_female and read through WallClockHandle::female_palette; upstream gWallClockFemale_Pal colours the screen and the hand sprite (graphics.c:1351; wallclock.c:140-149,649-652).",
+          "rust_target": "crates/xtask/src/extract/opening_scene.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "hand.png": {
+          "reason": "Wall-clock hand sprite sheet, 64x144 4-bit grayscale, published as opening-scene/image/clock_hand (gbagfx inverts each sample into the palette index, which the extractor reproduces) and read through WallClockHandle::hand; upstream sHand_Gfx is .4bpp.lz loaded as sprite sheet sSpriteSheet_ClockHand (wallclock.c:74,132-135,669). No hand animation is ported.",
+          "rust_target": "crates/xtask/src/extract/opening_scene.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "male.pal": {
+          "reason": "Wall-clock male palette bank (16 colours), published as opening-scene/palette/clock_male and read through WallClockHandle::male_palette; upstream gWallClockMale_Pal colours the screen and the hand sprite (graphics.c:1350; wallclock.c:140-149,649-652).",
+          "rust_target": "crates/xtask/src/extract/opening_scene.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "text_prompt.pal": {
+          "reason": "Wall-clock prompt palette (4 colours), published as opening-scene/palette/clock_text_prompt and read through WallClockHandle::text_prompt_palette; upstream sTextPrompt_Pal is loaded at background palette 12 for the Cancel and Confirm labels (wallclock.c:75,655).",
+          "rust_target": "crates/xtask/src/extract/opening_scene.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.ui",
       "kind": "dir",
-      "spec_owner": "S-4",
-      "status": "pending"
+      "reason": "Complete wall-clock graphics directory extracted: the face sheet, the grayscale hand sheet, the male, female, and prompt palettes, and both screen tilemaps, published under opening-scene/ and read through AssetPack::wall_clock (WallClockHandle) from checkout extraction and ROM import alike. No clock rendering, hand animation, or time input is ported.",
+      "rust_target": "crates/xtask/src/extract/opening_scene.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/weather": {
       "category": "graphics.scene",
@@ -20414,7 +20940,7 @@
           "status": "ported"
         },
         "object_event_hide_flags": {
-          "reason": "assets::object_event_flags::resolve transcribes the numeric FLAG_* id for every ObjectEvent::flag name reachable from a map this port's extraction pipeline bundles (the Littleroot Town layout family plus, since issues #177/#248, Route 101, Oldale Town, and Route 103): 53 entries -- the 37 distinct FLAG_HIDE_* ids carried by object events across all nine maps, the twelve generic FLAG_DECORATION_1..12 ids Littleroot's two player-house bedrooms also carry, and four non-hide/non-decoration flags the newly bundled maps' object events name (FLAG_TEMP_12/FLAG_TEMP_13 and the two Route 103 item-ball flags FLAG_ITEM_ROUTE_103_GUARD_SPEC/FLAG_ITEM_ROUTE_103_PP_UP; the literal \"0\" no-flag sentinel is handled by resolve itself, not a table entry). The table is asserted to be exactly that reachable set -- no extra entries, none missing -- and cross-checked against the independently-transcribed new_game_flags::RESET_MAP_FLAGS table where the two overlap. Bounded, not a full flags.h name table: a FLAG_* outside this set can never occur for any map this port renders (see that module's own docs), so extending it further would transcribe data no code here consumes.",
+          "reason": "assets::object_event_flags::resolve transcribes the numeric FLAG_* id for every ObjectEvent::flag name reachable from a map whose layout this port's extraction pipeline bundles (assets::bundled_overworld::maps_with_bundled_layouts: the Littleroot Town layout family, Route 101, Oldale Town, Route 103, and every map that reuses the shared truck, house, mart and Pokemon Center layouts): 59 entries -- the 43 distinct FLAG_HIDE_* ids carried by object events across the 76 maps those layouts build, the twelve generic FLAG_DECORATION_1..12 ids Littleroot's two player-house bedrooms also carry, and four non-hide/non-decoration flags (FLAG_TEMP_12/FLAG_TEMP_13 and the two Route 103 item-ball flags FLAG_ITEM_ROUTE_103_GUARD_SPEC/FLAG_ITEM_ROUTE_103_PP_UP; the literal \"0\" no-flag sentinel is handled by resolve itself, not a table entry). The table is asserted to be exactly that reachable set -- no extra entries, none missing -- and cross-checked against the independently-transcribed new_game_flags::RESET_MAP_FLAGS table where the two overlap. Bounded, not a full flags.h name table: a FLAG_* outside this set can never occur for any map this port renders (see that module's own docs), so extending it further would transcribe data no code here consumes.",
           "rust_target": "crates/assets/src/object_event_flags.rs",
           "spec": "I-3",
           "status": "ported"
@@ -27804,8 +28330,14 @@
           "status": "stubbed"
         },
         "SetMoveEffect": {
-          "reason": "battle_script_commands.c:2234. Modelled through four reached entry points, each applying its own effect once its own script's guards clear: (1) Cmd_seteffectprimary (:2941-:2944, SetMoveEffect(TRUE, 0)), BattleScript_EffectParalyze's own last command -- crate::battle::Battle::execute_paralyze_move writes Status1::Paralysed on ParalyzeOutcome::Applied, unconditionally once reached, since the script's own Limber/typecalc/already-statused guards (data/battle_scripts_1.s:1011-:1017) already ran ahead of accuracycheck. This includes the MOVE_EFFECT_AFFECTS_USER re-entry from ABILITYEFFECT_SYNCHRONIZE (:2240-2245, :2395-2425; ledger src/battle_util.c#AbilityBattleEffects): a paralysed Synchronize holder's reflection re-checks Limber and any existing primary status against the original attacker, with no typecalc and no accuracycheck, and never recurses. Guts and Marvel Scale's damage-calc reads (src/pokemon.c#CalculateBaseDamage) are modelled at the accessor boundary, and Shed Skin's own end-turn cure draw lives in ABILITYEFFECT_ENDTURN, not the pre-turn admission screen (ledger src/battle_util.c#AbilityBattleEffects), so none of the three is refused on either side of a fresh paralysis or its reflection. (2) the STATUS1_POISON case (:2299-:2340, reached from Cmd_seteffectwithchance for EFFECT_POISON_HIT) -- crate::battle::Battle::execute_hit_move writes Status1::Poisoned once secondary::spend_effect_chance_draw's SecondaryApplication::Poison signal is returned, additionally checking the target has not fainted from this same hit's damage first (:2261-:2264's hp == 0 guard, which the pure draw in secondary.rs cannot itself observe). The STATUS1_ANY guard at data/battle_scripts_1.s:1016 (paralyze.rs's own ParalyzeOutcome::AlreadyStatused) and the mutual-exclusion check at :2334-:2335 (secondary::poison_can_land) both matter across two statuses instead of one, since Status1 carries Healthy, Paralysed, or Poisoned. Guts and Marvel Scale are admitted on the poison path too, matching the paralysis path's existing policy: their damage-calc reads are modelled at the accessor boundary, and upstream's STATUS1_POISON case never guarded either ability. The MOVE_EFFECT_AFFECTS_USER re-entry from ABILITYEFFECT_SYNCHRONIZE covers this case too (:2971-2986; ledger src/battle_util.c#AbilityBattleEffects): crate::battle::Battle::reflect_synchronize_poison re-enters STATUS1_POISON against the original attacker after the target's own tryfaintmon (data/battle_scripts_1.s:265-267), with no typecalc and no accuracycheck, guarded by crate::battle::secondary::resolve_synchronize_poison_reflection -- unlike the paralysis reflection's Limber check, primary == TRUE here always takes the STATUS1_POISON guarded prevention branches first, so an Immunity holder or a Poison-/Steel-typed original attacker earns its own BattleScript_PSNPrevention observable ahead of the existing-status no-op, where the initial hit's own poison_can_land guard would have refused it silently. secondary::ensure_admissible does not refuse a Synchronize defender. (3) MOVE_EFFECT_RECOIL_25 (:2636-2642, reached from Cmd_seteffectwithchance's certain-effect branch for Struggle's own EFFECT_RECOIL; ledger data/battle_scripts_1.s#BattleScript_EffectRecoil) -- crate::battle::Battle::execute_hit_move applies max(1, target HP actually lost / 4) recoil to the attacker, unconditionally for Struggle (Rock Head is not modelled and upstream's own jumpifmove MOVE_STRUGGLE branch bypasses it anyway), settling the attacker's faint ahead of the target's. (4) the status2 MOVE_EFFECT_CONFUSION case (:2528-:2544, ledger data/battle_scripts_1.s#BattleScript_EffectConfuse and #BattleScript_EffectConfuseHit) -- reached from both Cmd_seteffectprimary (the direct EFFECT_CONFUSE script) and Cmd_seteffectwithchance (EFFECT_CONFUSE_HIT's trampoline): Own Tempo or an already-active confusion volatile silently discard the byte (no application, no draw), matching SetMoveEffect's own gBattlescriptCurrInstr++ no-op; otherwise a single Random() % 4 + 2 duration draw runs (confuse::draw_confusion_duration) and crate::battle::execute::Battle writes it to Volatiles::set_confusion, directly on ConfuseOutcome::Applied or, for the trampoline, only once the target is confirmed to have survived the same hit (the shared hp == 0 guard this case sits behind too). This status2 arm has no Synchronize re-entry: ABILITYEFFECT_SYNCHRONIZE's own check only matches the STATUS1_* MOVE_EFFECT_BYTE values (:2503-2511), not MOVE_EFFECT_CONFUSION. NOT modelled: the other abilities each landed status wakes, refused by secondary::ensure_admissible with BattleError::UnportedAbilityInteraction at the pre-turn screen (checked on either side of a Synchronize reflection where relevant, and for confusion's own Serene Grace doubling too) -- Serene Grace's chance-doubling for both EFFECT_POISON_HIT and EFFECT_CONFUSE_HIT, except a move whose secondaryEffectChance is already 100 (Dynamic Punch), which the doubling (:2912-2915) leaves in Cmd_seteffectwithchance's same chance branch, spending the same Random() % 100 draw and clearing the same comparison (:2923-2930), and so is admitted. Also NOT modelled: every other case of the switch (toxic, burn, freeze, sleep, flinch, the stat-drop rows, EFFECT_RECOIL for any move but Struggle, and the payday family), the Safeguard check (:2257-:2259) and confusion's own SIDE_STATUS_SAFEGUARD jump (:912), and the further Random() calls some cases make (sleep-turn) -- issue #323's. Status1 reader disposition: the constructors refuse an inherited Paralysed Limber or Poisoned Immunity participant before any draw (crate::battle::admission), so the Limber and Immunity prevention branches (:2299-2340) are only reached for a fresh infliction. Vital Spirit and Insomnia sleep prevention (:2291-2294), Water Veil burn prevention (:2342-2374) and Magma Armor freeze prevention (:2380-2393) stay deferred with the absent sleep, burn and freeze statuses.",
+          "reason": "battle_script_commands.c:2234. Modelled through four reached entry points, each applying its own effect once its own script's guards clear: (1) Cmd_seteffectprimary (:2941-:2944, SetMoveEffect(TRUE, 0)), BattleScript_EffectParalyze's own last command -- crate::battle::Battle::execute_paralyze_move writes Status1::Paralysed on ParalyzeOutcome::Applied, unconditionally once reached, since the script's own Limber/typecalc/already-statused guards (data/battle_scripts_1.s:1011-:1017) already ran ahead of accuracycheck. This includes the MOVE_EFFECT_AFFECTS_USER re-entry from ABILITYEFFECT_SYNCHRONIZE (:2240-2245, :2395-2425; ledger src/battle_util.c#AbilityBattleEffects): a paralysed Synchronize holder's reflection re-checks Limber and any existing primary status against the original attacker, with no typecalc and no accuracycheck, and never recurses. Guts and Marvel Scale's damage-calc reads (src/pokemon.c#CalculateBaseDamage) are modelled at the accessor boundary, and Shed Skin's own end-turn cure draw lives in ABILITYEFFECT_ENDTURN, not the pre-turn admission screen (ledger src/battle_util.c#AbilityBattleEffects), so none of the three is refused on either side of a fresh paralysis or its reflection. (2) the STATUS1_POISON case (:2299-:2340, reached from Cmd_seteffectwithchance for EFFECT_POISON_HIT) -- crate::battle::Battle::execute_hit_move writes Status1::Poisoned once secondary::spend_effect_chance_draw's SecondaryApplication::Poison signal is returned, additionally checking the target has not fainted from this same hit's damage first (:2261-:2264's hp == 0 guard, which the pure draw in secondary.rs cannot itself observe). The STATUS1_ANY guard at data/battle_scripts_1.s:1016 (paralyze.rs's own ParalyzeOutcome::AlreadyStatused) and the mutual-exclusion check at :2334-:2335 (secondary::poison_can_land) both matter across two statuses instead of one, since Status1 carries Healthy, Paralysed, Poisoned, or Asleep. Guts and Marvel Scale are admitted on the poison path too, matching the paralysis path's existing policy: their damage-calc reads are modelled at the accessor boundary, and upstream's STATUS1_POISON case never guarded either ability. The MOVE_EFFECT_AFFECTS_USER re-entry from ABILITYEFFECT_SYNCHRONIZE covers this case too (:2971-2986; ledger src/battle_util.c#AbilityBattleEffects): crate::battle::Battle::reflect_synchronize_poison re-enters STATUS1_POISON against the original attacker after the target's own tryfaintmon (data/battle_scripts_1.s:265-267), with no typecalc and no accuracycheck, guarded by crate::battle::secondary::resolve_synchronize_poison_reflection -- unlike the paralysis reflection's Limber check, primary == TRUE here always takes the STATUS1_POISON guarded prevention branches first, so an Immunity holder or a Poison-/Steel-typed original attacker earns its own BattleScript_PSNPrevention observable ahead of the existing-status no-op, where the initial hit's own poison_can_land guard would have refused it silently. secondary::ensure_admissible does not refuse a Synchronize defender. (3) MOVE_EFFECT_RECOIL_25 (:2636-2642, reached from Cmd_seteffectwithchance's certain-effect branch for Struggle's own EFFECT_RECOIL; ledger data/battle_scripts_1.s#BattleScript_EffectRecoil) -- crate::battle::Battle::execute_hit_move applies max(1, target HP actually lost / 4) recoil to the attacker, unconditionally for Struggle (Rock Head is not modelled and upstream's own jumpifmove MOVE_STRUGGLE branch bypasses it anyway), settling the attacker's faint ahead of the target's. (4) the status2 MOVE_EFFECT_CONFUSION case (:2528-:2544, ledger data/battle_scripts_1.s#BattleScript_EffectConfuse and #BattleScript_EffectConfuseHit) -- reached from both Cmd_seteffectprimary (the direct EFFECT_CONFUSE script) and Cmd_seteffectwithchance (EFFECT_CONFUSE_HIT's trampoline): Own Tempo or an already-active confusion volatile silently discard the byte (no application, no draw), matching SetMoveEffect's own gBattlescriptCurrInstr++ no-op; otherwise a single Random() % 4 + 2 duration draw runs (confuse::draw_confusion_duration) and crate::battle::execute::Battle writes it to Volatiles::set_confusion, directly on ConfuseOutcome::Applied or, for the trampoline, only once the target is confirmed to have survived the same hit (the shared hp == 0 guard this case sits behind too). This status2 arm has no Synchronize re-entry: ABILITYEFFECT_SYNCHRONIZE's own check only matches the STATUS1_* MOVE_EFFECT_BYTE values (:2503-2511), not MOVE_EFFECT_CONFUSION. The STATUS1_SLEEP case (:2273-2298, :2480-2487) is recorded under src/battle_script_commands.c#SetMoveEffect-sleep. NOT modelled: the other abilities each landed status wakes, refused by secondary::ensure_admissible with BattleError::UnportedAbilityInteraction at the pre-turn screen (checked on either side of a Synchronize reflection where relevant, and for confusion's own Serene Grace doubling too) -- Serene Grace's chance-doubling for both EFFECT_POISON_HIT and EFFECT_CONFUSE_HIT, except a move whose secondaryEffectChance is already 100 (Dynamic Punch), which the doubling (:2912-2915) leaves in Cmd_seteffectwithchance's same chance branch, spending the same Random() % 100 draw and clearing the same comparison (:2923-2930), and so is admitted. Also NOT modelled: every other case of the switch (toxic, burn, freeze, flinch, the stat-drop rows, EFFECT_RECOIL for any move but Struggle, and the payday family), the Safeguard check (:2257-:2259) and confusion's own SIDE_STATUS_SAFEGUARD jump (:912), and the further Random() calls some cases make. Status1 reader disposition: the constructors refuse an inherited Paralysed Limber or Poisoned Immunity participant before any draw (crate::battle::admission), so the Limber and Immunity prevention branches (:2299-2340) are only reached for a fresh infliction. Water Veil burn prevention (:2342-2374) and Magma Armor freeze prevention (:2380-2393) stay deferred with the absent burn and freeze statuses.",
           "rust_target": "crates/battle/src/battle/execute.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
+        "SetMoveEffect-sleep": {
+          "reason": "SetMoveEffect's STATUS1_SLEEP case (battle_script_commands.c:2273-2298, :2480-2487), modelled with no caller yet: crate::status1::try_inflict_sleep refuses a target with any primary status, Vital Spirit, or Insomnia without drawing, and otherwise writes Status1::Asleep with a single (Random() & 3) + 2 duration draw (crate::status1::draw_sleep_duration, two to five turns). NOT modelled: any move or ability that reaches this case, the Uproar scan (:2275-2289), and the Safeguard check (:2257-:2259).",
+          "rust_target": "crates/battle/src/status1.rs",
           "spec": "S-6",
           "status": "stubbed"
         }
@@ -27817,7 +28349,7 @@
     "src/battle_setup.c": {
       "artifacts": {
         "BattleSetup_StartWildBattle": {
-          "reason": "battle_setup.c:389-395 (BattleSetup_StartWildBattle itself; its non-Safari arm DoStandardWildBattle is :402-419, and the battle transition that schedules is CreateBattleStartTask :414 with its Task_BattleStart :351-376). What is modelled is the handoff itself: flow::wild_encounter::start_wild_battle builds the rolled wild mon through CreateWildMon's RNG path (battle::build_wild_pokemon) with GiveBoxMonInitialMoveset's real level-up moveset, then constructs a battle::Battle around the player's lead mon -- all off the same single Random() stream the encounter roll drew from, so the draw order across the overworld/battle boundary is upstream's. NOT modelled: gBattleTypeFlags / BATTLE_TYPE_FIRST_BATTLE, ScriptContext_SetupScript(EventScript_StartWildBattle) and the whole script-driven entry, LockPlayerFieldControls, the battle transition (BattleTransition_StartOnField / IsBattleTransitionDone) and CleanupOverworldWindowsAndTilemaps, SetMainCallback2(CB2_InitBattle), most of CB2_EndWildBattle's non-defeat return path (script re-entry, presentation cleanup), ClearPoisonStepCounter, IncrementGameStat(GAME_STAT_TOTAL_BATTLES / GAME_STAT_WILD_BATTLES) and IncrementDailyWildBattles, and the whole battle presentation (backdrop, sprites, message box, and the action menu). The player-loss path IS modelled as of issue #261: CB2_EndWildBattle's IsPlayerDefeated branch (:602-616) routing to CB2_WhiteOut is now flow::overworld_phase::white_out::OverworldPhase::white_out, called by advance_wild_battle_frame the instant BattleOutcome::PlayerLost is reported -- see src/overworld.c#DoWhiteOut for the full citation. As of issue #865, the non-defeat branch's tileset-animation reset is modelled too: CB2_EndWildBattle's non-defeat arm (:602-615) takes SetMainCallback2(CB2_ReturnToField) -> CB2_ReturnToFieldLocal/ReturnToFieldLocal's InitViewGraphics (overworld.c:1961-1976,2088-2094) -> InitMapView's InitTilesetAnimations (overworld.c:523-530), which zeroes sPrimaryTilesetAnimCounter (tileset_anims.c:600-615); flow::overworld_phase::wild_battle::OverworldPhase::advance_wild_battle_frame now resets OverworldPhase::tick to 0 whenever the battle slot clears without BattleOutcome::PlayerLost, covering a win, a successful run, and a turn that failed with no formal outcome. The fail-closed lead_can_fight guard is fully retired (issue #251): an ordinary wild or trainer loss heals the lead in the same frame the outcome is reported (issue #261's white-out), and a concluded Route 101 first battle now heals it too -- CB2_EndFirstBattle (:950-954) unconditionally resumes Route101_EventScript_BirchsBag, whose HealPlayerParty/var-writes/warp tail flow::overworld_phase::first_battle_conclusion models on every outcome -- so no loss path leaves a fainted lead free-roaming and no roll guard remains. The write-back still resets in-battle stat stages to neutral first: upstream keeps them in gBattleMons[].statStages only, set to DEFAULT_STAT_STAGE when each battler's gBattleMons entry is built at battle entry (BattleIntroDrawTrainersOrMonsSprites, battle_main.c:3423-3424) and again at switch-in (SwitchInClearSetData, :3161); the party's struct Pokemon has no stage field, so a String Shot taken in one encounter can never slow the next one. The same fail-closed no-draw policy still gates whole maps for an unrelated reason: upstream never rejects a wild battle, so a land table that can roll a moveset the turn engine cannot execute yet (Route 102's level-3 Seedot knows Bide/Harden) is screened up front (flow::wild_encounter::map_wild_table_fightable over battle::ensure_wild_startable, computed per map transition) and encounter rolls are disabled on that map entirely -- no draws with no upstream counterpart, widening automatically as move support grows (PR #207 review round 3). With no action menu, OverworldPhase drives the encounter headlessly with a run attempt every turn -- a stand-in for the player's choice, not a modelled behaviour; every rule it exercises (turn order, the wild mon's move pick, escape odds, damage, fainting) is the real crates/battle engine.",
+          "reason": "battle_setup.c:389-395 (BattleSetup_StartWildBattle itself; its non-Safari arm DoStandardWildBattle is :402-419, and the battle transition that schedules is CreateBattleStartTask :414 with its Task_BattleStart :351-376). What is modelled is the handoff itself: flow::wild_encounter::start_wild_battle_with_lead_effects builds the rolled wild mon through CreateWildMon's RNG path (battle::build_wild_pokemon) with GiveBoxMonInitialMoveset's real level-up moveset, then constructs a battle::Battle around the player's lead mon -- all off the same single Random() stream the encounter roll drew from, so the draw order across the overworld/battle boundary is upstream's. NOT modelled: gBattleTypeFlags / BATTLE_TYPE_FIRST_BATTLE, ScriptContext_SetupScript(EventScript_StartWildBattle) and the whole script-driven entry, LockPlayerFieldControls, the battle transition (BattleTransition_StartOnField / IsBattleTransitionDone) and CleanupOverworldWindowsAndTilemaps, SetMainCallback2(CB2_InitBattle), most of CB2_EndWildBattle's non-defeat return path (script re-entry, presentation cleanup), ClearPoisonStepCounter, IncrementGameStat(GAME_STAT_TOTAL_BATTLES / GAME_STAT_WILD_BATTLES) and IncrementDailyWildBattles, and the whole battle presentation (backdrop, sprites, message box, and the action menu). The player-loss path IS modelled as of issue #261: CB2_EndWildBattle's IsPlayerDefeated branch (:602-616) routing to CB2_WhiteOut is now flow::overworld_phase::white_out::OverworldPhase::white_out, called by advance_wild_battle_frame the instant BattleOutcome::PlayerLost is reported -- see src/overworld.c#DoWhiteOut for the full citation. As of issue #865, the non-defeat branch's tileset-animation reset is modelled too: CB2_EndWildBattle's non-defeat arm (:602-615) takes SetMainCallback2(CB2_ReturnToField) -> CB2_ReturnToFieldLocal/ReturnToFieldLocal's InitViewGraphics (overworld.c:1961-1976,2088-2094) -> InitMapView's InitTilesetAnimations (overworld.c:523-530), which zeroes sPrimaryTilesetAnimCounter (tileset_anims.c:600-615); flow::overworld_phase::wild_battle::OverworldPhase::advance_wild_battle_frame now resets OverworldPhase::tick to 0 whenever the battle slot clears without BattleOutcome::PlayerLost, covering a win, a successful run, and a turn that failed with no formal outcome. The fail-closed lead_can_fight guard is fully retired (issue #251): an ordinary wild or trainer loss heals the lead in the same frame the outcome is reported (issue #261's white-out), and a concluded Route 101 first battle now heals it too -- CB2_EndFirstBattle (:950-954) unconditionally resumes Route101_EventScript_BirchsBag, whose HealPlayerParty/var-writes/warp tail flow::overworld_phase::first_battle_conclusion models on every outcome -- so no loss path leaves a fainted lead free-roaming and no roll guard remains. The write-back still resets in-battle stat stages to neutral first: upstream keeps them in gBattleMons[].statStages only, set to DEFAULT_STAT_STAGE when each battler's gBattleMons entry is built at battle entry (BattleIntroDrawTrainersOrMonsSprites, battle_main.c:3423-3424) and again at switch-in (SwitchInClearSetData, :3161); the party's struct Pokemon has no stage field, so a String Shot taken in one encounter can never slow the next one. The same fail-closed no-draw policy still gates whole maps for an unrelated reason: upstream never rejects a wild battle, so a land table that can roll a moveset the turn engine cannot execute yet (Route 102's level-3 Seedot knows Bide/Harden) is screened up front (flow::wild_encounter::map_wild_table_fightable over battle::ensure_wild_startable, computed per map transition) and encounter rolls are disabled on that map entirely -- no draws with no upstream counterpart, widening automatically as move support grows (PR #207 review round 3). With no action menu, OverworldPhase drives the encounter headlessly with a run attempt every turn -- a stand-in for the player's choice, not a modelled behaviour; every rule it exercises (turn order, the wild mon's move pick, escape odds, damage, fainting) is the real crates/battle engine.",
           "rust_target": "crates/pokeemerald-rs/src/flow/wild_encounter.rs",
           "spec": "I-4",
           "status": "stubbed"
@@ -27829,13 +28361,13 @@
           "status": "stubbed"
         },
         "CB2_StartFirstBattle": {
-          "reason": "battle_setup.c:930-948. gBattleTypeFlags = BATTLE_TYPE_FIRST_BATTLE and the resulting battle are what this port models: the battle rules themselves are flow::first_battle::start_first_battle, calling battle::Battle::new(..., first_battle = true, ...) (issue #187's crit-suppression/RunForbidden/AI_FirstBattle rules, issue #221's construction), and flow::first_battle::advance_first_battle plays it headlessly. Issue #231 wires a real caller: flow::overworld_phase::first_battle_trigger recognizes Route101_EventScript_StartBirchRescue's own coord-event trigger (data/maps/Route101/map.json's coord_events at (10,19)/(11,19), elevation 3, gated on VAR_ROUTE101_STATE == 1, transcribed into assets::MapEventsTable) and calls start_first_battle/advance_first_battle directly from OverworldPhase::step the instant the player's step lands on that tile -- the 'minimum honest cut' the issue scoped: it skips straight from the trigger tile to the fight, never running Route101_EventScript_StartBirchRescue's own cutscene (scripts.inc:19-42, Birch/Zigzagoon movement and dialog) or reaching Route101_EventScript_BirchsBag's special ChooseStarter/CB2_GiveStarter chain (scripts.inc:218-245) this callback's real upstream caller. The trigger advances VAR_ROUTE101_STATE to 2 the moment it fires -- Route101_EventScript_StartBirchRescue's own setvar VAR_ROUTE101_STATE, 2 at scripts.inc:40, which upstream also runs mid-cutscene, before the battle -- not upstream's eventual 3 (only reached after the bag/heal/warp chain this slice does not run), so the tile cannot re-fire however the battle ends, including advance_first_battle's abort path, which produces no outcome at all. A one-line stand-in for Route101_OnFrame's own map_script_2 VAR_ROUTE101_STATE, 0, ... guard (scripts.inc:10-11, target script :14-17) bumps a fresh save's var from 0 to 1 on entering the map, or the trigger could never gate open in real play at all. CB2_EndFirstBattle (:950-954) is modelled to the extent it matters here: it goes straight to CB2_ReturnToFieldContinueScriptPlayMapMusic with no IsPlayerDefeated branch (unlike CB2_EndWildBattle, :602-616), which is why advance_first_battle's write-back of a possibly-fainted lead is fidelity rather than a gap. NOT modelled: the whole rescue cutscene and PreventExit* fencing coord events; the starter-select UI and ScriptGiveMon starter handout (stood in for by new_game::provisional_starter, tracked on CB2_GiveStarter's own sub-artifact); IsBattleTransitionDone's wait loop and B_TRANSITION_BLUR; gMain.savedCallback = CB2_EndFirstBattle; SetMainCallback2(CB2_InitBattle) and the whole callback-driven battle presentation; ClearPoisonStepCounter/IncrementGameStat(TOTAL_BATTLES)/IncrementGameStat(WILD_BATTLES)/IncrementDailyWildBattles (:942-945 -- no poison-step or game-stat model exists; RestartWildEncounterImmunitySteps at :941 IS mirrored -- begin_first_battle calls WildEncounterState::restart_immunity_steps, the same modelled counter warp_to/cross_connection already restart); TryUpdateGymLeaderRematchFromWild (:946). SetWildMonHeldItem's Random() % 100 stream draw is now consumed here and in the ordinary wild handoff alike (flow::wild_encounter::start_wild_battle), spent immediately before Battle::new so the shared stream's frame-free draw sequence matches upstream's (the per-vblank seed advance is VBlankCB_Battle's, left pending, scope decision in the flow module docs); held-item selection and storage remain unmodelled -- battle::BattlePokemon carries no held-item field for the roll to populate. The first-battle driver's field return now reinitialises the tileset animation tick whenever its battle slot empties, including a no-outcome abort, through OverworldPhase::reinit_field_tileset_animations, matching CB2_EndFirstBattle -> CB2_ReturnToFieldContinueScriptPlayMapMusic -> CB2_ReturnToField -> InitMapView -> InitTilesetAnimations (overworld.c:523-530, tileset_anims.c:600-616; issue #1976).",
+          "reason": "battle_setup.c:930-948. gBattleTypeFlags = BATTLE_TYPE_FIRST_BATTLE and the resulting battle are what this port models: the battle rules themselves are flow::first_battle::start_first_battle, calling battle::Battle::new(..., first_battle = true, ...) (issue #187's crit-suppression/RunForbidden/AI_FirstBattle rules, issue #221's construction), and flow::first_battle::advance_first_battle plays it headlessly. Issue #231 wires a real caller: flow::overworld_phase::first_battle_trigger recognizes Route101_EventScript_StartBirchRescue's own coord-event trigger (data/maps/Route101/map.json's coord_events at (10,19)/(11,19), elevation 3, gated on VAR_ROUTE101_STATE == 1, transcribed into assets::MapEventsTable) and calls start_first_battle/advance_first_battle directly from OverworldPhase::step the instant the player's step lands on that tile -- the 'minimum honest cut' the issue scoped: it skips straight from the trigger tile to the fight, never running Route101_EventScript_StartBirchRescue's own cutscene (scripts.inc:19-42, Birch/Zigzagoon movement and dialog) or reaching Route101_EventScript_BirchsBag's special ChooseStarter/CB2_GiveStarter chain (scripts.inc:218-245) this callback's real upstream caller. The trigger advances VAR_ROUTE101_STATE to 2 the moment it fires -- Route101_EventScript_StartBirchRescue's own setvar VAR_ROUTE101_STATE, 2 at scripts.inc:40, which upstream also runs mid-cutscene, before the battle -- not upstream's eventual 3 (only reached after the bag/heal/warp chain this slice does not run), so the tile cannot re-fire however the battle ends, including advance_first_battle's abort path, which produces no outcome at all. A one-line stand-in for Route101_OnFrame's own map_script_2 VAR_ROUTE101_STATE, 0, ... guard (scripts.inc:10-11, target script :14-17) bumps a fresh save's var from 0 to 1 on entering the map, or the trigger could never gate open in real play at all. CB2_EndFirstBattle (:950-954) is modelled to the extent it matters here: it goes straight to CB2_ReturnToFieldContinueScriptPlayMapMusic with no IsPlayerDefeated branch (unlike CB2_EndWildBattle, :602-616), which is why advance_first_battle's write-back of a possibly-fainted lead is fidelity rather than a gap. NOT modelled: the whole rescue cutscene and PreventExit* fencing coord events; the starter-select UI and ScriptGiveMon starter handout (stood in for by new_game::provisional_starter, tracked on CB2_GiveStarter's own sub-artifact); IsBattleTransitionDone's wait loop and B_TRANSITION_BLUR; gMain.savedCallback = CB2_EndFirstBattle; SetMainCallback2(CB2_InitBattle) and the whole callback-driven battle presentation; ClearPoisonStepCounter/IncrementGameStat(TOTAL_BATTLES)/IncrementGameStat(WILD_BATTLES)/IncrementDailyWildBattles (:942-945 -- no poison-step or game-stat model exists; RestartWildEncounterImmunitySteps at :941 IS mirrored -- begin_first_battle calls WildEncounterState::restart_immunity_steps, the same modelled counter warp_to/cross_connection already restart); TryUpdateGymLeaderRematchFromWild (:946). SetWildMonHeldItem's Random() % 100 stream draw is now consumed here and in the ordinary wild handoff alike (flow::wild_encounter::start_wild_battle_with_lead_effects), spent immediately before Battle::new so the shared stream's frame-free draw sequence matches upstream's (the per-vblank seed advance is VBlankCB_Battle's, left pending, scope decision in the flow module docs); held-item selection and storage remain unmodelled -- battle::BattlePokemon carries no held-item field for the roll to populate. The first-battle driver's field return now reinitialises the tileset animation tick whenever its battle slot empties, including a no-outcome abort, through OverworldPhase::reinit_field_tileset_animations, matching CB2_EndFirstBattle -> CB2_ReturnToFieldContinueScriptPlayMapMusic -> CB2_ReturnToField -> InitMapView -> InitTilesetAnimations (overworld.c:523-530, tileset_anims.c:600-616; issue #1976).",
           "rust_target": "crates/pokeemerald-rs/src/flow/first_battle.rs",
           "spec": "I-4",
           "status": "stubbed"
         },
         "DoTrainerBattle": {
-          "reason": "battle_setup.c:459 (DoTrainerBattle, with BattleSetup_StartTrainerBattle at :1272 and CB2_EndTrainerBattle at :1327), plus GetTrainerFlagFromScriptPointer/HasTrainerBeenFought/SetTrainerFlag/SetBattledTrainersFlags (:1215-1249). The battle rules/construction/driver issue #237 built (gBattleTypeFlags = BATTLE_TYPE_TRAINER, CreateNPCTrainerParty via crate::flow::npc_trainer_battle::start_npc_trainer_battle -> battle::Battle::new_trainer, advance_npc_trainer_battle's headless driver, which submits the first move slot the engine's pre-draw validation accepts (issue #1191) -- generalized out of flow::route103_rival by issue #264, which both that module and overworld_phase::sight_trainer_trigger now call) are reachable from real play via two independent triggers: overworld_phase::route103_rival_trigger's A-press interaction (issue #248, Route103_EventScript_Rival's own six TRAINER_*_ROUTE_103_* ids) and overworld_phase::sight_trainer_trigger's per-frame sight cone (issue #264, Route 103's seven trainerbattle_single sight trainers -- see data/maps/Route103#Route103_SightTrainers for that trigger's own full scope). SetBattledTrainersFlags's real effect (FlagSet(TRAINER_FLAGS_START + trainerId) on a win) is modelled directly against EventData's ordinary flag range by both callers -- the rival additionally sets its own FLAG_HIDE_ROUTE_103_RIVAL (a removeobject effect with no sight-trainer counterpart; sight trainers stay standing after defeat exactly as HasTrainerBeenFought's own scope implies). CB2_EndTrainerBattle's IsPlayerDefeated branch (:1333-1338) routing to CB2_WhiteOut is modelled by both callers via the shared overworld_phase::white_out::OverworldPhase::white_out (issue #261) -- see src/overworld.c#DoWhiteOut for the full citation. A win's BattleEvent::MoneyGained is now credited too (advance_npc_trainer_battle now takes the wallet by reference and applies every such event via credit_money, saturating at MAX_MONEY -- src/battle_script_commands.c#Cmd_getmoneyreward has the full citation). Still NOT modelled: TRAINER_BATTLE_* script parameter parsing generally (no script bytecode at all in this port); and, discovered by issue #264, every one of Route 103's own sight trainers' real party is still refused before any RNG draw by battle::ensure_trainer_party_startable's pre-flight screen -- Pete's Poison Sting at battle::BattlePokemon::validate, Miguel's held items, and the other six parties past ensure_executable at battle::battle::trainer_ai::ensure_scoreable, which cannot yet score Absorb, Thunder Wave, Splash, Focus Energy, Charge, or Defense Curl -- so construction itself currently fails for all nine (issue #264 review), pinned with each trainer's exact refusal by sight_trainer_trigger::tests::every_sight_trainers_real_party_fails_to_construct_for_exactly_these_reasons -- an emergent battle-crate move-coverage gap, not an authored guard, recorded on data/maps/Route103#Route103_SightTrainers. The field return after either driver's battle reinitialises the tileset animation tick through OverworldPhase::reinit_field_tileset_animations, matching CB2_ReturnToField -> InitMapView -> InitTilesetAnimations (issue #1955; the reset rule itself is recorded under BattleSetup_StartWildBattle, issue #865).",
+          "reason": "battle_setup.c:459 (DoTrainerBattle, with BattleSetup_StartTrainerBattle at :1272 and CB2_EndTrainerBattle at :1327), plus GetTrainerFlagFromScriptPointer/HasTrainerBeenFought/SetTrainerFlag/SetBattledTrainersFlags (:1215-1249). The battle rules, construction and driver (gBattleTypeFlags = BATTLE_TYPE_TRAINER, CreateNPCTrainerParty via crate::flow::npc_trainer_battle::start_npc_trainer_battle -> battle::Battle::new_trainer, and advance_npc_trainer_battle's headless driver, which submits the first move slot the engine's pre-draw validation accepts) are reachable from real play via two independent triggers that both call crate::flow::npc_trainer_battle: overworld_phase::route103_rival_trigger's A-press interaction (Route103_EventScript_Rival's own six TRAINER_*_ROUTE_103_* ids) and overworld_phase::sight_trainer_trigger's per-frame sight cone (Route 103's seven trainerbattle_single sight trainers -- see data/maps/Route103#Route103_SightTrainers for that trigger's own full scope). SetBattledTrainersFlags's real effect (FlagSet(TRAINER_FLAGS_START + trainerId) on a win) is modelled directly against EventData's ordinary flag range by both callers -- the rival additionally sets its own FLAG_HIDE_ROUTE_103_RIVAL (a removeobject effect with no sight-trainer counterpart; sight trainers stay standing after defeat exactly as HasTrainerBeenFought's own scope implies). CB2_EndTrainerBattle's IsPlayerDefeated branch (:1333-1338) routing to CB2_WhiteOut is modelled by both callers via the shared overworld_phase::white_out::OverworldPhase::white_out -- see src/overworld.c#DoWhiteOut for the full citation. A win's BattleEvent::MoneyGained is credited (advance_npc_trainer_battle takes the wallet by reference and applies every such event via credit_money, saturating at MAX_MONEY -- src/battle_script_commands.c#Cmd_getmoneyreward has the full citation). Of Route 103's sight trainers, Andrew's and Rhett's real parties construct and play to PlayerWon; battle::ensure_trainer_party_startable's pre-flight screen refuses the rest before any RNG draw -- Daisy's Effect Spore ability, Miguel's held items, Marcos's Sonic Boom at battle::battle::trainer_ai::ensure_scoreable, and Isabelle's Rollout and Pete's Constrict at battle::ensure_executable, with Amy and Liv's double battle unsupported -- pinned per trainer by sight_trainer_trigger::tests::refused_sight_trainers_real_parties_fail_to_construct_for_exactly_these_reasons and recorded on data/maps/Route103#Route103_SightTrainers; these are emergent battle-crate coverage gaps, not authored guards. Still NOT modelled: TRAINER_BATTLE_* script parameter parsing generally (no script bytecode at all in this port). The field return after either driver's battle reinitialises the tileset animation tick through OverworldPhase::reinit_field_tileset_animations, matching CB2_ReturnToField -> InitMapView -> InitTilesetAnimations (the reset rule itself is recorded under BattleSetup_StartWildBattle).",
           "rust_target": "crates/pokeemerald-rs/src/flow/npc_trainer_battle.rs",
           "spec": "I-5",
           "status": "stubbed"
@@ -27891,7 +28423,7 @@
           "status": "stubbed"
         },
         "AtkCanceler_UnableToUseMove": {
-          "reason": "src/battle_util.c:2002-2277. CANCELER_CONFUSED (:2157-2187) decrements the attacker's confusion duration; crate::volatile::Volatiles::tick_confusion holds the counter and crate::battle::Battle::act calls it first among the modelled cases, emitting BattleEvent::SnappedOutOfConfusion only on the tick that reaches zero. A duration that survives the decrement announces itself as BattleEvent::Confused, then draws crate::volatile::draws_confusion_self_hit's one Random() & 1 bit: even cancels the chosen move for a self-hit (crate::battle::execute::Battle::apply_confusion_self_hit -- the self-target MOVE_POUND call at :2157-2166, power 40, no crit, built from BattlePokemon::attacking_stat/defending_stat and crate::ability::huge_power_attack, fed through damage::base_damage/damage::apply_damage_roll against the battler's own Attack and Defense with stages), ending the action with BattleEvent::ConfusionSelfHit and any resulting BattleEvent::Fainted before the paralysis draw or PP handling ever run; odd falls through into them unchanged, matching the move-through branch's own BattleScript_MoveUsedIsConfused continuation. CANCELER_PARALYZED (:2188-2199) is modelled next: a paralysed attacker draws once and cancels its chosen move on Random() % 4 == 0, before Cmd_attackcanceler's no-PP abort and before ppreduce (battle_script_commands.c:930 vs :934), so a cancelled mover keeps every PP it started the turn with. A healthy, unconfused attacker draws nothing from either check. Upstream runs CANCELER_FLAGS through CANCELER_IMPRISONED (:2002-2156) ahead of the confusion case, so any of those ported later must run before the tick. NOT modelled: every other case in the switch (CANCELER_FLAGS, _ASLEEP, _FROZEN, _TRUANT, _RECHARGE, _FLINCH, _DISABLED, _TAUNTED, _IMPRISONED, _IN_LOVE, _BIDE, and the rest) -- no ability-driven cancellers, and no move can yet write an active confusion (every fixture sets it directly).",
+          "reason": "src/battle_util.c:2002-2277. CANCELER_ASLEEP (:2015-2057) runs first among the modelled cases: crate::status1::tick_sleep subtracts one sleep turn, or two for Early Bird, from Status1::Asleep, and crate::battle::Battle::act either cancels the chosen move with BattleEvent::FastAsleep while turns remain -- before the confusion and paralysis draws, the no-PP abort, and ppreduce, so no PP and no extra draw is spent -- or clears the status with BattleEvent::WokeUp on expiry (a count at or below the decrement, never an underflow) and lets the move proceed through the later cancellers. The Snore/Sleep Talk exemption (:2038) and the Uproar wake-up (:2017-2025) are not modelled. CANCELER_CONFUSED (:2157-2187) decrements the attacker's confusion duration; crate::volatile::Volatiles::tick_confusion holds the counter and crate::battle::Battle::act calls it first among the modelled cases, emitting BattleEvent::SnappedOutOfConfusion only on the tick that reaches zero. A duration that survives the decrement announces itself as BattleEvent::Confused, then draws crate::volatile::draws_confusion_self_hit's one Random() & 1 bit: even cancels the chosen move for a self-hit (crate::battle::execute::Battle::apply_confusion_self_hit -- the self-target MOVE_POUND call at :2157-2166, power 40, no crit, built from BattlePokemon::attacking_stat/defending_stat and crate::ability::huge_power_attack, fed through damage::base_damage/damage::apply_damage_roll against the battler's own Attack and Defense with stages), ending the action with BattleEvent::ConfusionSelfHit and any resulting BattleEvent::Fainted before the paralysis draw or PP handling ever run; odd falls through into them unchanged, matching the move-through branch's own BattleScript_MoveUsedIsConfused continuation. CANCELER_PARALYZED (:2188-2199) is modelled next: a paralysed attacker draws once and cancels its chosen move on Random() % 4 == 0, before Cmd_attackcanceler's no-PP abort and before ppreduce (battle_script_commands.c:930 vs :934), so a cancelled mover keeps every PP it started the turn with. A healthy, unconfused attacker draws nothing from either check. Upstream runs CANCELER_FLAGS through CANCELER_IMPRISONED (:2002-2156) ahead of the confusion case; CANCELER_ASLEEP is the one of them modelled here, so any of those ported later must run before the tick. NOT modelled: every other case in the switch (CANCELER_FLAGS, _FROZEN, _TRUANT, _RECHARGE, _FLINCH, _DISABLED, _TAUNTED, _IMPRISONED, _IN_LOVE, _BIDE, and the rest) -- no ability-driven cancellers, and no move can yet write an active confusion (every fixture sets it directly).",
           "rust_target": "crates/battle/src/battle.rs",
           "spec": "S-6",
           "status": "stubbed"
@@ -28632,7 +29164,7 @@
     "src/data/object_events/object_event_graphics_info_pointers.h": {
       "artifacts": {
         "OBJ_EVENT_GFX_to_graphics_info": {
-          "reason": "npc::resolve_sprite_source is a bounded, explicit re-derivation of this table's OBJ_EVENT_GFX_* -> gObjectEventGraphicsInfo_* mapping (plus each pointed-to struct's own .images/.paletteTag fields, object_event_pic_tables.h/object_event_graphics.h). Partial coverage, stated exactly: it has 23 resolving arms -- 20 'standard' 16x32 NPCs (the original 8 plus, since issue #262, Oldale Town's girl/mart employee/footprints man and Route 103's black belt/boy 1/fisherman/man 3/man 5/pokefan m/swimmer f/swimmer m/woman 2) and the two rival variants (all 22 fixed-id arms resolving for either PlayerCharacter), plus the OBJ_EVENT_GFX_VAR_0 live-var arm below (issue #248) -- against the 46 distinct graphics ids the nine bundled maps' (six Littleroot-family, Route 101, Oldale Town, Route 103) object events actually reference; a test pins that exact drawn/not-drawn partition, and that it is gender-independent, so a newly reachable standard NPC cannot silently stop drawing. The rival pair is deliberately NOT gender-filtered (issue #161 review): gObjectEventGraphicsInfo_RivalBrendanNormal/_RivalMayNormal (object_event_graphics_info.h:1920-1937, :2015-2032) simply reuse the corresponding protagonist's own sPicTable_* and OBJ_EVENT_PAL_TAG_*, with no rival-specific art existing at all -- and the rival a player can actually meet is always the OPPOSITE protagonist's object event, since the two Littleroot houses are mirrored maps hardcoding their own resident's id and the intro warp picks which is home (LittlerootTown/scripts.inc:116/:127). The port keeps upstream's PALSLOT_NPC_SPECIAL vs PALSLOT_PLAYER distinction as a separate palette bank, so a rival and the player can be on screen together. The remaining 24 reachable ids on a fresh store (the OBJ_EVENT_GFX_VAR_* decorations, item balls, dolls, the truck, the two non-16x32 shapes Vigoroth/32x32 and the ninja boy/16x16 -- the rival's sibling, declared only by LittlerootTown_BrendansHouse_1F/map.json and LittlerootTown_MaysHouse_1F/map.json, never by Route 103 -- Route 103's own berry tree and cuttable tree props, and Route 101's three unresolved ids) and every one of this 239-entry table's other rows are untracked: resolve_sprite_source returns None for them, so their object events are still hide-flag-filtered and interaction-eligible but draw no sprite -- a follow-on slice's job to extend, not a silent mis-render. GetObjectEventGraphicsInfo's OBJ_EVENT_GFX_VARS -> VarGetObjectEventGraphicsId indirection (event_object_movement.c:1914-1931) is now modelled for n == 0 only, narrowed to the two rival ids: the OBJ_EVENT_GFX_VAR_0 arm reads VAR_OBJ_GFX_ID_0 and resolves a protagonist sheet exactly when the var holds OBJ_EVENT_GFX_RIVAL_BRENDAN_NORMAL's or _MAY_NORMAL's numeric id (issue #248, Route 103's rival). VAR_1..VAR_B, and any non-rival var value (a real decoration id), still resolve to None -- the decoration system remains unmodelled.",
+          "reason": "npc::resolve_sprite_source is a bounded, explicit re-derivation of this table's OBJ_EVENT_GFX_* -> gObjectEventGraphicsInfo_* mapping (plus each pointed-to struct's own .images/.paletteTag fields, object_event_pic_tables.h/object_event_graphics.h). Partial coverage, stated exactly: it has 23 resolving arms -- 20 'standard' 16x32 NPCs (the Littleroot-family eight plus Oldale Town's girl/mart employee/footprints man and Route 103's black belt/boy 1/fisherman/man 3/man 5/pokefan m/swimmer f/swimmer m/woman 2) and the two rival variants (all 22 fixed-id arms resolving for either PlayerCharacter), plus the OBJ_EVENT_GFX_VAR_0 live-var arm below -- against the 76 distinct graphics ids the 76 maps whose layouts are bundled (assets::bundled_overworld::maps_with_bundled_layouts: the six Littleroot-family maps, Route 101, Oldale Town, Route 103, and every map reusing the truck, house, mart and Pokemon Center layouts) object events actually reference; a test pins that exact drawn/not-drawn partition, and that it is gender-independent, so a newly reachable standard NPC cannot silently stop drawing. The rival pair is deliberately NOT gender-filtered: gObjectEventGraphicsInfo_RivalBrendanNormal/_RivalMayNormal (object_event_graphics_info.h:1920-1937, :2015-2032) simply reuse the corresponding protagonist's own sPicTable_* and OBJ_EVENT_PAL_TAG_*, with no rival-specific art existing at all -- and the rival a player can actually meet is always the OPPOSITE protagonist's object event, since the two Littleroot houses are mirrored maps hardcoding their own resident's id and the intro warp picks which is home (LittlerootTown/scripts.inc:116/:127). The port keeps upstream's PALSLOT_NPC_SPECIAL vs PALSLOT_PLAYER distinction as a separate palette bank, so a rival and the player can be on screen together. The remaining 54 reachable ids on a fresh store (the OBJ_EVENT_GFX_VAR_* decorations, item balls, dolls, the truck, the moving box, Vigoroth, Zigzagoon, berry-tree and cuttable-tree props, the ninja boy, and the people sheets without a binding such as the nurse) and every one of this 239-entry table's other rows are untracked: resolve_sprite_source returns None for them, so their object events are still hide-flag-filtered and interaction-eligible but draw no sprite -- a follow-on slice's job to extend, not a silent mis-render. GetObjectEventGraphicsInfo's OBJ_EVENT_GFX_VARS -> VarGetObjectEventGraphicsId indirection (event_object_movement.c:1914-1931) is modelled for n == 0 only, narrowed to the two rival ids: the OBJ_EVENT_GFX_VAR_0 arm reads VAR_OBJ_GFX_ID_0 and resolves a protagonist sheet exactly when the var holds OBJ_EVENT_GFX_RIVAL_BRENDAN_NORMAL's or _MAY_NORMAL's numeric id (Route 103's rival). VAR_1..VAR_B, and any non-rival var value (a real decoration id), still resolve to None -- the decoration system remains unmodelled.",
           "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
           "spec": "I-3",
           "status": "stubbed"
@@ -29337,19 +29869,19 @@
     "src/event_object_movement.c": {
       "artifacts": {
         "DoesObjectCollideWithObjectAt": {
-          "reason": "COLLISION_OBJECT_EVENT: the destination-tile occupancy test, re-implemented as PlayerState::step's third and last collision check (after the grid collision bits and the elevation mismatch, matching GetCollisionAtCoords' own test order), via engine::overworld::object_event::visible_object_event_at. AreElevationsCompatible is the same either-side-ELEVATION_TRANSITION wildcard predicate MapRuntime::object_events_at already applies. Narrowed, all invisible in this slice: upstream's curObject != objectEvent self-skip has no counterpart (the player is a PlayerState, never an entry in the map's own object_events list), upstream's second previousCoords term is unobservable while every object event is stationary, and a connection-crossing step does not run the test at all because ConnectedMapData exposes no neighbouring-map event data.",
+          "reason": "COLLISION_OBJECT_EVENT: the destination-tile occupancy test, re-implemented as PlayerState::step's third and last collision check (after the grid collision bits and the elevation mismatch, matching GetCollisionAtCoords' own test order), via engine::overworld::object_event::visible_object_event_at over the runtime's bound live ObjectEventCollection, so a moved object blocks its live tile and vacates its authored one. AreElevationsCompatible is the same either-side-ELEVATION_TRANSITION wildcard predicate MapRuntime::object_events_at applies. Narrowed: upstream's curObject != objectEvent self-skip has no counterpart (the player is a PlayerState, never a collection entry); upstream's second previousCoords term is not modelled, because ObjectEventState retains its previous position with no animation-completion lifecycle and reserving it would block the vacated tile indefinitely; a connection-crossing step does not run the test at all because ConnectedMapData exposes no neighbouring-map event data.",
           "rust_target": "crates/engine/src/overworld/player.rs",
           "spec": "I-3",
-          "status": "rewritten"
+          "status": "stubbed"
         },
         "GetObjectEventIdByPosition": {
-          "reason": "Position-plus-elevation-wildcard object-event scan rewritten as MapRuntime::object_events_at (issue #108/#149/#161). ObjectEventDoesElevationMatch's rule (either side's ELEVATION_TRANSITION is a wildcard) is folded into that method's own filter predicate. It returns an *iterator* over every match on the tile, not a single hit, because upstream only ever scans spawned object events (a set hide flag prevents the spawn -- see TrySpawnObjectEventTemplate below) while this port scans templates: the hide-flag filter therefore has to run inside the scan, which engine::overworld::object_event::visible_object_event_at does. Both consumers -- the player-interaction lookup (facing_object_event) and the player's own movement collision (PlayerState::step's COLLISION_OBJECT_EVENT check) -- go through that one composed search, so they can never disagree about which object event occupies a tile. Templates really do stack per tile with independent flags (the Birch lab's three starter balls at (6, 8)). Known narrowing: the scan matches the template's map.json elevation, whereas upstream compares currentElevation, which ObjectEventUpdateElevation overwrites from the ground on the spawn frame (event_object_movement.c:1758-1770, :8089); the two agree for every bundled map and cannot diverge while all object events are stationary, but this now governs movement as well as interaction.",
+          "reason": "Position-plus-elevation-wildcard object-event scan rewritten as MapRuntime::object_events_at. With a bound ObjectEventCollection (MapRuntime::with_object_events) it delegates to ObjectEventCollection::object_events_at and compares each object's live position and elevation, returning the authored template as metadata; a bound collection never falls back to authored coordinates. Unbound runtimes (trainer sight) still scan authored coordinates. ObjectEventDoesElevationMatch's rule (either side's ELEVATION_TRANSITION is a wildcard) is the shared collision::elevations_compatible predicate. It returns an iterator over every match on the tile, not a single hit, because upstream only scans spawned object events (a set hide flag prevents the spawn) while this port scans every template: the hide-flag filter therefore runs inside the scan, in engine::overworld::object_event::visible_object_event_at. Both consumers, the facing lookup (facing_object_event) and PlayerState::step's COLLISION_OBJECT_EVENT check, go through that one composed search. Templates stack per tile with independent flags (the Birch lab's three starter balls at (6, 8)). Known narrowing: live elevation is the retained state elevation, which no writer updates from the ground (ObjectEventUpdateElevation, event_object_movement.c:1758-1770, :8089); trainer sight and cross-map objects are not migrated.",
           "rust_target": "crates/engine/src/overworld/map_runtime.rs",
           "spec": "I-3",
           "status": "rewritten"
         },
         "InitObjectEventStateFromTemplate": {
-          "reason": "ObjectEventCollection::from_templates (issue #786) seeds one live ObjectEventState per authored template, in declaration order, reproducing this function's position/previousCoords/elevation/facing/movementType initialization (:1296-1321; the facing derivation itself was already transcribed as gInitialMovementTypeFacingDirections/initial_facing_direction, object_event.rs). Keyed lookup by local_id (LiveObjectEvent::template().local_id) models GetObjectEventIdByLocalId's linear scan (:1275-1285), and ObjectEventCollection::object_events_at models GetObjectEventIdByPosition/ObjectEventDoesElevationMatch's live-position scan (:2192-2215), unlike MapRuntime::object_events_at's static-template scan. Not modelled: GetAvailableObjectEventId's slot reuse/dedup against (localId, mapNum, mapGroup) -- this collection is per-map so mapNum/mapGroup do not apply and every template gets exactly one persistent slot; the active flag, triggerGroundEffectsOnMove, dynamic graphics id, and sMovementTypeHasRange's zero-range-to-one clamp (all sprite/task-simulation concerns out of this engine-only slice's boundary); and the hide-flag/camera-radius spawn gate, which stays object_event.rs's query-time concern (visible_object_event_at/object_event_is_in_view) rather than an admission test this collection performs.",
+          "reason": "ObjectEventCollection::from_templates seeds one live ObjectEventState per authored template, in declaration order, reproducing this function's position/previousCoords/elevation/facing/movementType initialization (:1296-1321; the facing derivation itself was already transcribed as gInitialMovementTypeFacingDirections/initial_facing_direction, object_event.rs). Keyed lookup by local_id (LiveObjectEvent::template().local_id) models GetObjectEventIdByLocalId's linear scan (:1275-1285), and ObjectEventCollection::object_events_at models GetObjectEventIdByPosition/ObjectEventDoesElevationMatch's live-position scan (:2192-2215), which MapRuntime::object_events_at delegates to when a collection is bound. Not modelled: GetAvailableObjectEventId's slot reuse/dedup against (localId, mapNum, mapGroup) -- this collection is per-map so mapNum/mapGroup do not apply and every template gets exactly one persistent slot; the active flag, triggerGroundEffectsOnMove, dynamic graphics id, and sMovementTypeHasRange's zero-range-to-one clamp (all sprite/task-simulation concerns out of this engine-only slice's boundary); and the hide-flag/camera-radius spawn gate, which stays object_event.rs's query-time concern (visible_object_event_at/object_event_is_in_view) rather than an admission test this collection performs.",
           "rust_target": "crates/engine/src/overworld/live_object_events.rs",
           "spec": "S-5",
           "status": "rewritten"
@@ -29543,7 +30075,7 @@
           "status": "rewritten"
         },
         "GetInFrontOfPlayerPosition": {
-          "reason": "The facing-tile position (GetXYCoordsOneStepInFrontOfPlayer, player position + facing delta) plus the elevation rule rewritten as engine::overworld::facing_object_event's query-elevation derivation: the player's own grid cell only selects the wildcard (ELEVATION_TRANSITION cell or off-grid), otherwise the query is the retained previousElevation that PlayerGetElevation returns, not the collision elevation.",
+          "reason": "The facing-tile position (GetXYCoordsOneStepInFrontOfPlayer, player position + facing delta) plus the elevation rule rewritten as the engine-internal front_tile, shared by facing_object_event and select_interaction_target: the player's own grid cell only selects the wildcard (ELEVATION_TRANSITION cell or off-grid), otherwise the query is the retained previousElevation that PlayerGetElevation returns, not the collision elevation.",
           "rust_target": "crates/engine/src/overworld/object_event.rs",
           "spec": "I-3",
           "status": "rewritten"
@@ -29559,6 +30091,18 @@
           "rust_target": "crates/engine/src/overworld/metatile_interaction.rs",
           "spec": "S-5",
           "status": "rewritten"
+        },
+        "GetInteractedObjectEventScript": {
+          "reason": "Selects the visible live object at the front tile, else, only when the front tile is a counter, the one on its far side at the same query elevation (field_control_avatar.c:287-313); an object whose script is null selects nothing and falls through without the counter retry. The result carries the object's local id (gSpecialVar_LastTalked) and the player's facing (gSpecialVar_Facing). Not modelled: writing gSelectedObjectEvent and the special variables, the Trainer Hill script override, and the saved RAM-script override GetRamScript applies.",
+          "rust_target": "crates/engine/src/overworld/interaction.rs",
+          "spec": "S-5",
+          "status": "stubbed"
+        },
+        "GetInteractionScript": {
+          "reason": "engine::overworld::select_interaction_target selects the first target of GetInteractedObjectEventScript, GetInteractedBackgroundEventScript, then GetInteractedMetatileScript (script-returning branches only) as a typed InteractionTarget, querying the tile in front of the player at the elevation GetInFrontOfPlayerPosition derives and reading that front tile's metatile behavior (field_control_avatar.c:170-172,240-258). A secret-base entrance already among the caller's saved secret bases selects no background event, so the metatile stage runs next (TrySetCurSecretBase failing, field_control_avatar.c:354-361). Not selected: GetInteractedWaterScript (Surf and Waterfall), because water eligibility depends on party and badge state; launching the selected script, which stays with the caller.",
+          "rust_target": "crates/engine/src/overworld/interaction.rs",
+          "spec": "S-5",
+          "status": "stubbed"
         },
         "IsArrowWarpMetatileBehavior": {
           "reason": "engine::overworld::warp::is_arrow_warp_trigger: dispatches by direction to metatile_behavior::is_{north,south,west,east}_arrow_warp exactly as upstream's sArrowWarpMetatileBehaviorChecks table does (field_player_avatar.c:226-232). Issue #174.",
@@ -29585,7 +30129,7 @@
           "status": "folded"
         },
         "TryStartInteractionScript": {
-          "reason": "OverworldPhase::step's A-press handling covers only the object-event branch of GetInteractionScript (GetInteractedObjectEventScript, via engine::overworld::facing_object_event), routed to a NpcDialog through crate::overworld::npc_scripts::script_text's own small, hardcoded msgbox-style script-text table (issue's own DoD: 'a direct msgbox-style script subset is enough'). Not modelled: GetInteractedBackgroundEventScript/GetInteractedMetatileScript/GetInteractedWaterScript's fallback chain (sign posts, counters, water-adjacent interactions), GetInteractedLinkPlayerScript, RamScript, and the interaction sound effect (PlaySE(SE_SELECT)). Issue #435: the lookup runs from the frame-start (pre-movement) player position and facing, before PlayerStep could turn or step the player, matching ProcessPlayerFieldInput reading playerDirection/position before ever calling PlayerStep (field_control_avatar.c:143-145, overworld.c:1444-1455). A successful interaction, or a found object event whose script is real but unrecognized by this table, consumes the frame and preempts movement outright (InteractionOutcome::Unmodelled), matching TryStartInteractionScript returning TRUE for any non-NULL script (:172). Only the literal '0x0' NULL-script sentinel, or no object event found at all, lets the frame's direction input reach PlayerState unconsumed. Issue #1039 placed it below the completed step's own events, as upstream does: a landing whose walk animation drained is now processed at the start of the *next* step call (upstream's T_TILE_CENTER CB1, field_player_avatar.c:901-915 over main.c:188-195 / overworld.c:1438-1469), and a coord event, a door-shaped warp or a wild encounter claiming that landing (TryStartStepBasedScript :155-161, CheckStandardWildEncounter :162) returns from ProcessPlayerFieldInput before this check at :172 is ever reached, so the A press is not consumed on that frame.",
+          "reason": "OverworldPhase::step's A-press handling routes the target engine::overworld::select_interaction_target selects (object, then background event, then script-backed metatile; GetInteractionScript's order). An object script crate::overworld::npc_scripts::script_text recognizes opens a NpcDialog from that module's own small hardcoded msgbox-style table, and the Route 103 rival object starts its battle. Every other selected target (an unrecognized object script, a sign, hidden item or secret-base entrance, a script-backed metatile) consumes the frame as InteractionOutcome::Unmodelled, matching TryStartInteractionScript returning TRUE for any non-NULL script (field_control_avatar.c:172), but starts no script. A secret-base entrance is selected only when the list of saved secret bases passed to the selector lacks its base, as TrySetCurSecretBase requires (field_control_avatar.c:354-361); the save block holds no secret bases, so this application passes an empty list and every north-facing entrance is selected. Reading the saved bases from the save is not modelled. Only a press that selects nothing lets the frame's direction input reach PlayerState unconsumed. Not modelled: GetInteractedWaterScript, GetInteractedLinkPlayerScript, RamScript, and the interaction sound effect (PlaySE(SE_SELECT)). The lookup runs from the frame-start (pre-movement) player position and facing, before PlayerStep could turn or step the player, matching ProcessPlayerFieldInput reading playerDirection/position before ever calling PlayerStep (field_control_avatar.c:143-145, overworld.c:1444-1455). It sits below the completed step's own events, as upstream does: a landing whose walk animation drained is processed at the start of the next step call (upstream's T_TILE_CENTER CB1, field_player_avatar.c:901-915 over main.c:188-195 / overworld.c:1438-1469), and a coord event, a door-shaped warp or a wild encounter claiming that landing (TryStartStepBasedScript :155-161, CheckStandardWildEncounter :162) returns from ProcessPlayerFieldInput before this check at :172 is ever reached, so the A press is not consumed on that frame.",
           "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/interaction.rs",
           "spec": "I-3",
           "status": "stubbed"
@@ -30270,7 +30814,7 @@
           "status": "rewritten"
         },
         "CgbOscOff": {
-          "reason": "CgbOscOff's channel-1/2 off-write is reimplemented as SquareChannel::apply_hardware_off_write (crates/audio/src/psg.rs, reached through CgbVoice::apply_hardware_off_write): REG_NR14/REG_NR24 = 0x80 (m4a.c:857-868) clears the frequency register's high three bits, so GBAudioWriteNR14/NR24's catch-up (mgba/src/gb/audio.c:140-194,219-241) rates a later idle-duty advance against the low byte alone rather than the note's last full frequency. The write is also a genuine hardware trigger (GBAudioWriteNR14, mgba/src/gb/audio.c:168-186): it reloads channel 1's sweep from the truncated frequency, rechecks overflow, and revives a muted channel, as SquareChannel::retrigger does. Mixer applies it the instant a Square1/Square2 slot idles, both on TrackStop's immediate clear (src/m4a_1.s#TrackStop) and on natural envelope retirement, tracking the truncated duty position independently of the CgbVoice occupant so the next note-on continues it (issue #1482). NR12=8 leaves the DAC on, so a nonzero-shift channel-1 sweep keeps ticking at 128 Hz and retuning the played frequency while the slot idles (mgba/src/gb/audio.c:965-988); Mixer::mix_frame steps the vacated slot's sweep at the frame's shared tick offsets through CgbVoice::advance_idle_duty, and a sweep overflow mutes the idle channel so its frequency freezes. The idle channel's envelope is dead (volume 0), so GBAudioRun skips its duty catch-up at frame and sweep ticks (mgba/src/gb/audio.c:493-510); the duty catch-up is deferred (SquareChannel::defer_idle_samples) and rated once at the next note-on at the frequency the sweep finally reached. The channel's envelope-silencing half (REG_NR12/REG_NR22/REG_NR42 = 8) remains a byproduct of CgbEnvelope::retire when a note's envelope ends, not a dedicated write; channel 4's noise off-write (NR42 = 8; NR44 = 0x80, m4a.c:873-874) is modeled as a zero-volume preserving retrigger: CgbVoice::apply_hardware_off_write zeroes the hardware volume (HardwareEnvelopeVolume::write_off) and restarts the LFSR and phase (NoiseChannel::retrigger) but leaves the output latch ch4.sample alone, which only an LFSR clock (mgba/src/gb/audio.c:641, lsb * currentVolume) or an envelope step (audio.c:730-732) re-resolves. Mixer applies it on retirement and TrackStop, and the vacated slot keeps its noise clock and phase running and emits the latch through CgbVoice::render_idle_hardware until the first zero-volume clock settles it, so a note triggered inside that period inherits the predecessor's volume-resolved level (NoiseChannel::continue_output_from, 0..=15, never inferred from the predecessor's current volume) and outputs it directly, rendered against the volume it was resolved at so the sample is unchanged until its own first clock, with Mixer::is_idle counting the unsettled idle latch so a fade-end stop does not truncate the tail; channel 3's disable (REG_NR30 = 0) is not modeled.",
+          "reason": "CgbOscOff's channel-1/2 off-write is reimplemented as SquareChannel::apply_hardware_off_write (crates/audio/src/psg.rs, reached through CgbVoice::apply_hardware_off_write): REG_NR14/REG_NR24 = 0x80 (m4a.c:857-868) clears the frequency register's high three bits, so GBAudioWriteNR14/NR24's catch-up (mgba/src/gb/audio.c:140-194,219-241) rates a later idle-duty advance against the low byte alone rather than the note's last full frequency. The write is also a genuine hardware trigger (GBAudioWriteNR14, mgba/src/gb/audio.c:168-186): it reloads channel 1's sweep from the truncated frequency, rechecks overflow, and revives a muted channel, as SquareChannel::retrigger does. Mixer applies it the instant a Square1/Square2 slot idles, both on TrackStop's immediate clear (src/m4a_1.s#TrackStop) and on natural envelope retirement, tracking the truncated duty position independently of the CgbVoice occupant so the next note-on continues it. NR12=8 leaves the DAC on, so a nonzero-shift channel-1 sweep keeps ticking at 128 Hz and retuning the played frequency while the slot idles (mgba/src/gb/audio.c:965-988); Mixer::mix_frame steps the vacated slot's sweep at the frame's shared tick offsets through CgbVoice::advance_idle_duty, and a sweep overflow mutes the idle channel so its frequency freezes. The idle channel's envelope is dead (volume 0), so GBAudioRun skips its duty catch-up at frame and sweep ticks (mgba/src/gb/audio.c:493-510); the duty catch-up is deferred (SquareChannel::defer_idle_samples) and rated once at the next note-on at the frequency the sweep finally reached. The channel's envelope-silencing half (REG_NR12/REG_NR22/REG_NR42 = 8) remains a byproduct of CgbEnvelope::retire when a note's envelope ends, not a dedicated write; channel 4's noise off-write (NR42 = 8; NR44 = 0x80, m4a.c:873-874) is modeled as a zero-volume preserving retrigger: CgbVoice::apply_hardware_off_write zeroes the hardware volume (HardwareEnvelopeVolume::write_off) and restarts the LFSR and phase (NoiseChannel::retrigger) but leaves the output latch ch4.sample alone, which only an LFSR clock (mgba/src/gb/audio.c:641, lsb * currentVolume) or an envelope step (audio.c:730-732) re-resolves. Mixer applies it on retirement and TrackStop, and the vacated slot keeps its noise clock and phase running and emits the latch through CgbVoice::render_idle_hardware until the first zero-volume clock settles it, so a note triggered inside that period inherits the predecessor's volume-resolved level (NoiseChannel::continue_output_from, 0..=15, never inferred from the predecessor's current volume), rendered against the volume it was resolved at, but only after the replacement's note-on NR43 writes have clocked the held predecessor: NoiseChannel::inherit_hardware_from keeps its whole channel state, and once the initial trigger commits NoiseChannel::commit_initial_writes settles its owed clocks, then installs the replacement's width and clocks the elapsed time at the fastest rate (the width-only write, m4a.c:1020-1022, then the pitched write, m4a.c:1197-1202; mgba/src/gb/audio.c:354-383,602-644) at the predecessor's hardware volume, so the latch left by that catch-up (not the unclocked level) is what the new note holds until its own first clock; a replacement cancelled before its first pass never consumes the held state; with Mixer::is_idle counting the unsettled idle latch so a fade-end stop does not truncate the tail; channel 3's disable (REG_NR30 = 0) is not modeled.",
           "rust_target": "crates/audio/src/cgb_voice.rs",
           "spec": "S-3",
           "status": "stubbed"
@@ -30671,6 +31215,12 @@
         },
         "MetatileBehavior_IsClosedSootopolisDoor": {
           "reason": "Script-target behavior identity and applicable north-facing gate reimplemented as a pure predicate with exhaustive byte-domain tests.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsCounter": {
+          "reason": "is_counter is an exact-equality predicate on MB_COUNTER (0x80), the value following MB_BIKE_BRIDGE_OVER_BARRIER in the upstream behavior enumeration, verified over all 256 behavior bytes (metatile_behavior.c:473-479).",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
           "status": "rewritten"
@@ -31371,6 +31921,12 @@
           "spec": "I-6",
           "status": "stubbed"
         },
+        "CreateMonWithGenderNatureLetter": {
+          "reason": "src/pokemon.c:2318-2347. The non-Unown arm is modelled (crates/battle/src/wild.rs roll_personality_for_nature_and_gender, :2335-2343): Random32() is redrawn until the personality has the requested nature and a gender matching the species gender ratio (Gender::of_personality), which is how a Cute Charm lead forces the wild Pokemon gender (wild_encounter.c:386-398, activation roll in roll_cute_charm_gender). The ratio must make the gender reachable. NOT modelled: the Unown arm (:2322-2333), where unownLetter - 1 < NUM_UNOWN_FORMS adds a third acceptance condition on GET_UNOWN_LETTER(personality), so no Unown-letter request can be made; also the trailing CreateMon call (:2345) is reached through the caller build_wild_pokemon, not by this function.",
+          "rust_target": "crates/battle/src/wild.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
         "CreateMonWithNature": {
           "reason": "pokemon.c:2195 (CreateMon), 2206 (CreateBoxMon), 2305 (CreateMonWithNature), 5498 (GetNatureFromPersonality). The RNG-observable USE_RANDOM_IVS path modelled exactly: the personality rejection loop against a target nature (roll_personality_for_nature) and the two-draw five-bit-field IV rolls (roll_ivs). As of issue #237 CreateBoxMon's other two branches are modelled too, in crates/battle/src/battle/trainer.rs for the NPC-trainer construction path: the fixedIV < USE_RANDOM_IVS branch (:2265-:2272), which sets all six IVs from one value and draws nothing (battle::fixed_ivs, scaling a gTrainers party entry's iv byte by MAX_PER_STAT_IVS/255), and the OT_ID_RANDOM_NO_SHINY rejection loop (:2223-:2231), whose Random32-until-not-shiny is battle::roll_non_shiny_ot_id with GET_SHINY_VALUE as battle::shiny_value -- the only RNG a trainer party mon costs, since its personality and IVs are both fixed. A wild mon still takes the player's OT id with no draw, matching CreateWildMon's OT_ID_PLAYER_ID argument. GiveBoxMonInitialMoveset is modelled separately (src/pokemon.c#GiveBoxMonInitialMoveset, battle::wild::initial_moveset) and composed by callers rather than folded into either builder, which both still take an explicit moveset. Still not modelled: OT_ID_PRESET and the checksum/encryption round-trip. The abilityNum personality bit is modelled since issue #322 (src/pokemon.c#GetAbilityBySpecies): CreateBoxMon's guarded write -- personality & 1 only when the species has a second ability (:2296-:2300) -- is reproduced at BattlePokemon construction.",
           "rust_target": "crates/battle/src/wild.rs",
@@ -31432,7 +31988,7 @@
           "status": "rewritten"
         },
         "SetWildMonHeldItem": {
-          "reason": "pokemon.c:6678-:6731, called from CB2_InitBattleInternal (battle_main.c:700) for every non-LINK/non-RECORDED battle; the internal gate at :6680 (!(LEGENDARY|TRAINER|PYRAMID|PIKE)) makes it a draw-free no-op for trainer fights. Modelled (issue #303): the RNG-observable half only -- the unconditional u16 rnd = Random() % 100 at :6682, gated on !(LEGENDARY|TRAINER|PYRAMID|PIKE), which both wild handoffs spend immediately before Battle::new (flow::wild_encounter::start_wild_battle and flow::first_battle's scripted fight), so the shared stream's frame-free draw sequence matches upstream's (the per-vblank seed advance is VBlankCB_Battle's, battle_main.c:2085-:2089 -- left pending in the ledger, with the frame-free scope decision recorded in the flow module docs). NOT modelled: everything the draw decides -- the chanceNoItem/chanceNotRare thresholds, the Compound Eyes adjustment (:6686-:6691), the Altering Cave table branch (:6692-:6712), and the SetMonData(MON_DATA_HELD_ITEM) write -- because battle::BattlePokemon carries no held-item field on this branch for the roll to populate; a follow-up slice can model selection/storage once such a field lands (PR #296 proposes one as BattlePokemon::held_item).",
+          "reason": "pokemon.c:6678-:6731, called from CB2_InitBattleInternal (battle_main.c:700) for every non-LINK/non-RECORDED battle; the internal gate at :6680 (!(LEGENDARY|TRAINER|PYRAMID|PIKE)) makes it a draw-free no-op for trainer fights. Modelled (issue #303): the RNG-observable half only -- the unconditional u16 rnd = Random() % 100 at :6682, gated on !(LEGENDARY|TRAINER|PYRAMID|PIKE), which both wild handoffs spend immediately before Battle::new (flow::wild_encounter::start_wild_battle_with_lead_effects and flow::first_battle's scripted fight), so the shared stream's frame-free draw sequence matches upstream's (the per-vblank seed advance is VBlankCB_Battle's, battle_main.c:2085-:2089 -- left pending in the ledger, with the frame-free scope decision recorded in the flow module docs). NOT modelled: everything the draw decides -- the chanceNoItem/chanceNotRare thresholds, the Compound Eyes adjustment (:6686-:6691), the Altering Cave table branch (:6692-:6712), and the SetMonData(MON_DATA_HELD_ITEM) write -- because battle::BattlePokemon carries no held-item field on this branch for the roll to populate; a follow-up slice can model selection/storage once such a field lands (PR #296 proposes one as BattlePokemon::held_item).",
           "rust_target": "crates/pokeemerald-rs/src/flow/wild_encounter.rs",
           "spec": "I-4",
           "status": "stubbed"
@@ -32067,7 +32623,7 @@
     "src/script_pokemon_util.c": {
       "artifacts": {
         "HealPlayerParty": {
-          "reason": "script_pokemon_util.c:30-59. battle::BattlePokemon::heal reproduces the per-mon effect for the one party slot this crate models (the crate's own module docs record the one-mon-party limit): restore current HP to Stats::max_hp (upstream's MAX_HP write, :39-42), restore every known move's PP to BattlePokemon::max_pp, which is upstream's own CalculatePPWithBonus(move, ppBonuses, j) (:47) -- as of issue #304 the ppBonuses byte is real state (see src/pokemon.c#CalculatePPWithBonus), so a slot carrying PP Ups heals to the UPGRADED maximum rather than to the move's base PP; pinned by heal_restores_pp_to_the_pp_up_adjusted_maximum (crates/battle/src/pokemon/tests.rs) and healing_a_restored_mon_refills_to_the_upgraded_maximum (crates/pokeemerald-rs/src/party/tests/codec.rs). Upstream's third effect -- zeroing MON_DATA_STATUS (:52-57) -- now has a partial in-model counterpart since issue #783: battle::status1::Status1 models paralysis, and heal() clears it to Status1::Healthy in the same pass as HP and PP (pinned by heal_cures_primary_status, crates/battle/src/pokemon/tests.rs). That clear is in-battle-only, though: the party-level status BYTE this file's own module docs describe is a separate, still-unmodelled thing (crates/pokeemerald-rs/src/party.rs's module docs) -- party::merge_into_save_pokemon retains it from the backing record untouched across an ordinary save, so heal()'s in-memory Status1 clear and the retained save-format byte can disagree until a later slice wires Status1 into the merge like any other battle-owned field, matching this crate's parallel EV precedent. The white-out call site still separately clears the retained record's status byte at flow::overworld_phase::white_out directly (pinned by white_out_clears_stored_status_before_an_immediate_save), which is the other half of this same still-open split. The loop over gPlayerPartyCount (:37) is the call site's own responsibility, not this method's: since issue #800 (I-6), both flow::overworld_phase::white_out::OverworldPhase::white_out and flow::overworld_phase::first_battle_conclusion::OverworldPhase::conclude_first_battle share one call-site routine, flow::overworld_phase::white_out::OverworldPhase::heal_whole_party_and_reselect_lead, that loops every occupied slot itself, healing the selected slot through this method's live battler when that slot is within the stored count (or the count is still zero, an unsaved new game) and every other occupied slot through a decode/heal/merge round trip on its own saved bytes (party::from_save_pokemon/party::merge_into_save_pokemon) -- a selected slot beyond a nonzero stored count merges its current, un-healed battle state instead (issue #1241) -- then re-runs SetBattlePartyIds's own active-battler re-scan, over all PARTY_SIZE slots for a nonzero stored count (party::select_active_battler) -- a clamped stored count of zero skips this rescan by the same zero-means-no-lead design issue #353 established -- see src/overworld.c#DoWhiteOut for the widened call site's own citation. Three flow-level callers share this one primitive (oop-boundaries): flow::overworld_phase::white_out::OverworldPhase::white_out (issue #261, DoWhiteOut's own HealPlayerParty call on a wild/trainer loss, alongside a money halve and a heal-location warp neither belongs to this method); since issue #251, flow::overworld_phase::first_battle_conclusion::OverworldPhase::conclude_first_battle (Route101_EventScript_BirchsBag's own special HealPlayerParty, with no accompanying money halve or heal-location warp -- the only respects in which it is narrower than white_out's call, not in slot coverage: both now heal and reselect across the whole party, per issue #800); and flow::overworld_phase::OverworldPhase::from_saved's legacy-save migration (PR #291 review), a port-only call with no upstream counterpart -- upstream's load path never heals -- that repairs the fainted lead only a pre-#251 build could have serialized after a lost first battle.",
+          "reason": "script_pokemon_util.c:30-59. battle::BattlePokemon::heal reproduces the per-mon effect for the one party slot this crate models (the crate's own module docs record the one-mon-party limit): restore current HP to Stats::max_hp (upstream's MAX_HP write, :39-42), restore every known move's PP to BattlePokemon::max_pp, which is upstream's own CalculatePPWithBonus(move, ppBonuses, j) (:47) -- as of issue #304 the ppBonuses byte is real state (see src/pokemon.c#CalculatePPWithBonus), so a slot carrying PP Ups heals to the UPGRADED maximum rather than to the move's base PP; pinned by heal_restores_pp_to_the_pp_up_adjusted_maximum (crates/battle/src/pokemon/tests.rs) and healing_a_restored_mon_refills_to_the_upgraded_maximum (crates/pokeemerald-rs/src/party/tests/codec.rs). Upstream's third effect -- zeroing MON_DATA_STATUS (:52-57) -- now has a partial in-model counterpart since issue #783: battle::status1::Status1 models paralysis, and heal() clears it to Status1::Healthy in the same pass as HP and PP (pinned by heal_cures_primary_status, crates/battle/src/pokemon/tests.rs). That clear is in-battle-only, though: the party-level status BYTE this file's own module docs describe is a separate, still-unmodelled thing (crates/pokeemerald-rs/src/party.rs's module docs) -- party::merge_into_save_pokemon retains it from the backing record untouched across an ordinary save, so heal()'s in-memory Status1 clear and the retained save-format byte can disagree until a later slice wires Status1 into the merge like any other battle-owned field, matching this crate's parallel EV precedent. The white-out call site still separately clears the retained record's status byte, now through the lead owner's flow::overworld_phase::lead_owner::OverworldPhase::heal_whole_lead rather than by editing the lead fields in flow::overworld_phase::white_out (pinned by white_out_clears_stored_status_before_an_immediate_save), which is the other half of this same still-open split. The loop over gPlayerPartyCount (:37) is the call site's own responsibility, not this method's: since issue #800 (I-6), both flow::overworld_phase::white_out::OverworldPhase::white_out and flow::overworld_phase::first_battle_conclusion::OverworldPhase::conclude_first_battle share one call-site routine, flow::overworld_phase::white_out::OverworldPhase::heal_whole_party_and_reselect_lead, that loops every occupied slot itself, healing the selected slot through this method's live battler when that slot is within the stored count (or the count is still zero, an unsaved new game) and every other occupied slot through a decode/heal/merge round trip on its own saved bytes (party::from_save_pokemon/party::merge_into_save_pokemon) -- a selected slot beyond a nonzero stored count merges its current, un-healed battle state instead (issue #1241) -- then re-runs SetBattlePartyIds's own active-battler re-scan, over all PARTY_SIZE slots for a nonzero stored count (party::select_active_battler) -- a clamped stored count of zero skips this rescan by the same zero-means-no-lead design issue #353 established -- see src/overworld.c#DoWhiteOut for the widened call site's own citation. Three flow-level callers share this one primitive (oop-boundaries): flow::overworld_phase::white_out::OverworldPhase::white_out (issue #261, DoWhiteOut's own HealPlayerParty call on a wild/trainer loss, alongside a money halve and a heal-location warp neither belongs to this method); since issue #251, flow::overworld_phase::first_battle_conclusion::OverworldPhase::conclude_first_battle (Route101_EventScript_BirchsBag's own special HealPlayerParty, with no accompanying money halve or heal-location warp -- the only respects in which it is narrower than white_out's call, not in slot coverage: both now heal and reselect across the whole party, per issue #800); and flow::overworld_phase::OverworldPhase::from_saved's legacy-save migration (PR #291 review), a port-only call with no upstream counterpart -- upstream's load path never heals -- that repairs the fainted lead only a pre-#251 build could have serialized after a lost first battle.",
           "rust_target": "crates/battle/src/pokemon.rs",
           "spec": "I-4",
           "status": "rewritten"
@@ -32271,7 +32827,7 @@
           "status": "stubbed"
         },
         "sFontInfos": {
-          "reason": "Only the maxLetterHeight column (the \\n line-advance metric) is transcribed, as max_letter_height; fontFunction/letterSpacing/lineSpacing/fgColor/bgColor/shadowColor are out of this slice's scope (glyph decompression lives in assets::fonts, colour is deliberately unmodelled here), so the file's own status stays pending.",
+          "reason": "Only the maxLetterHeight column (the \\n line-advance metric) is transcribed, as max_letter_height, plus the template lineSpacing that adds to it: Printer::with_line_spacing makes a newline advance maxLetterHeight + lineSpacing (text.c:970) and a \\l scroll cover the same sum (text.c:1184); the default is zero. fontFunction/letterSpacing/fgColor/bgColor/shadowColor are out of this slice's scope (glyph decompression lives in assets::fonts, colour is deliberately unmodelled here), so the file's own status stays pending.",
           "rust_target": "crates/engine/src/text/render.rs",
           "spec": "S-5",
           "status": "ported"
@@ -32509,13 +33065,13 @@
           "status": "stubbed"
         },
         "CreateWildMon": {
-          "reason": "wild_encounter.c:379. The plain (no Cute Charm) nature-then-personality-then-IV construction order modelled (build_wild_pokemon), reusing src/pokemon.c#CreateMonWithNature's RNG path. Cute Charm's gender-flip branch and CreateMonWithGenderNatureLetter are not modelled (abilities out of scope).",
+          "reason": "wild_encounter.c:379-415. The construction order is modelled (build_wild_pokemon): the Cute Charm activation roll, then the nature chosen by src/wild_encounter.c#PickWildMonNature including its Synchronize branch, then the matching personality, then the IVs, reusing src/pokemon.c#CreateMonWithNature's RNG path. Cute Charm's gender-flip branch (:386-412) is modelled: party slot 0, read from the saved party and not from the battle lead (crate::party::slot_zero_cute_charm_wild_gender, called by OverworldPhase::begin_wild_battle), counts when it is not a header-egg or Bad Egg and its stored ability slot is Cute Charm, whether or not it is fainted. When the wild species' ratio byte is not 0x00, 0xFE or 0xFF (assets::GenderRatio::permits_both_genders), build_wild_pokemon spends one Random() % 3 draw before the nature pick; a nonzero result requests the opposite of slot 0's gender (battle::Gender::of_personality over GetGenderFromSpeciesAndPersonality's rule, :3471-3485; a female lead requests male, any other lead female), and the personality rejection loop then accepts only a personality matching both nature and that gender, as CreateMonWithGenderNatureLetter's non-Unown arm does (pokemon.c:2335-2345); a zero result falls through to the ordinary roll. A gender-locked or genderless wild species spends no activation draw. NOT modelled: CreateMonWithGenderNatureLetter's Unown-letter arm (pokemon.c:2322-2334), the Safari Zone nature branch (see PickWildMonNature), and ZeroEnemyPartyMons. A Cute Charm battle lead is still refused at participant admission because infatuation is unmodelled, so a Cute Charm slot 0 reaches this branch only while fainted behind a usable lead; the unsaved-party path computes the same request from the live lead but cannot reach construction.",
           "rust_target": "crates/battle/src/wild.rs",
           "spec": "S-6",
           "status": "stubbed"
         },
         "PickWildMonNature": {
-          "reason": "wild_encounter.c:335. Only the plain random-nature tail (Random() % NUM_NATURES, roll_nature) modelled. Safari Zone Pokéblock-weighted nature selection and the leading party mon's Synchronize check are not modelled (abilities/game-mode out of scope).",
+          "reason": "wild_encounter.c:335-376. The non-Safari tail is modelled in order (pick_wild_nature, called by build_wild_pokemon): a party slot 0 that is not an egg and holds Synchronize spends one Random() % 2 coin draw, a zero returns its personality % NUM_NATURES with no further draw (:367-372), and a lost flip or any other slot 0 falls through to Random() % NUM_NATURES (roll_nature), so a lost flip costs two draws (:376). Slot 0 is read from the save record whether or not it is fainted or the battle lead (party::slot_zero_synchronize_nature, passed by OverworldPhase::begin_wild_battle to flow::wild_encounter::start_wild_battle_with_lead_effects). NOT modelled: the Safari Zone branch (:339-364) with its 80% Pokeblock-weighted nature selection, because Safari Zone mode does not exist in this port.",
           "rust_target": "crates/battle/src/wild.rs",
           "spec": "S-6",
           "status": "stubbed"
