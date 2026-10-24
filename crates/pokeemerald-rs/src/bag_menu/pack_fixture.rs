@@ -1,0 +1,238 @@
+//! A synthetic pack with every entry the bag screen reads, and scratch-file
+//! loading for it. Colours are chosen so a single pixel names what drew it.
+
+use assets::AssetPack;
+use pack_format::PackEntry;
+use rendering::{Bgr555, Rgb888};
+
+use crate::pack_test_support::{image_entry, pack_bytes, palette_entry_with_colors};
+
+const BIT_DEPTH: u8 = 4;
+const GLYPH_DEPTH: u8 = 2;
+const SHEET_TILES_ACROSS: usize = 16;
+const SCREEN_WIDTH: u32 = 128;
+const SCREEN_HEIGHT: u32 = 32;
+const TILEMAP_BYTES: usize = 2048;
+const BAG_SIDE: u32 = 64;
+const BAG_FRAMES: u32 = 6;
+
+/// Colour the message-box palette gives text and window content.
+pub(super) const TEXT: Rgb888 = rgb(0, 0, 31);
+pub(super) const WINDOW_FILL: Rgb888 = rgb(31, 31, 31);
+pub(super) const WINDOW_BORDER: Rgb888 = rgb(0, 31, 0);
+/// Screen palette bank 1 colours drawn by the two pocket-indicator tiles.
+pub(super) const INDICATOR_IDLE: Rgb888 = rgb(10, 0, 0);
+pub(super) const INDICATOR_CURRENT: Rgb888 = rgb(20, 0, 0);
+/// The tile-0 colour, drawn by the tilemap's all-zero entries.
+/// Bag-window text: screen palette bank 1, index 1 (also the idle indicator).
+pub(super) const BAG_TEXT: Rgb888 = INDICATOR_IDLE;
+/// Screen palette bank 1 index 4, drawn only by the HM mark in the list.
+pub(super) const HM_MARK: Rgb888 = rgb(5, 5, 5);
+/// Screen palette bank 1 index 3, the shadow of list and description text.
+pub(super) const NORMAL_SHADOW: Rgb888 = rgb(0, 20, 0);
+pub(super) const BACKGROUND: Rgb888 = rgb(0, 10, 10);
+
+const fn rgb(r: u8, g: u8, b: u8) -> Rgb888 {
+    Bgr555::from_channels(r, g, b).to_rgb888()
+}
+
+/// The icon colour of an item icon palette stem.
+pub(super) const fn icon_color(stem: &str) -> Rgb888 {
+    match stem.as_bytes() {
+        b"potion" => rgb(31, 0, 0),
+        b"antidote" => rgb(0, 31, 0),
+        b"poke_ball" => rgb(0, 0, 31),
+        b"return_to_field_arrow" => rgb(31, 31, 0),
+        _ => rgb(1, 1, 1),
+    }
+}
+
+/// The colour of bag picture frame `frame` (1-5 per pocket; 0 is clear).
+pub(super) fn bag_frame_color(frame: u8) -> Rgb888 {
+    rgb(frame * 4, 5, 5)
+}
+
+const ICON_STEMS: [&str; 9] = [
+    "potion",
+    "great_ball",
+    "antidote",
+    "poke_ball",
+    "return_to_field_arrow",
+    "cheri_berry",
+    "mach_bike",
+    "fighting_tm_hm",
+    "normal_tm_hm",
+];
+const ICON_IMAGES: [&str; 9] = [
+    "potion",
+    "great_ball",
+    "antidote",
+    "poke_ball",
+    "return_to_field_arrow",
+    "cheri_berry",
+    "mach_bike",
+    "tm",
+    "hm",
+];
+
+fn leaked(id: String) -> &'static str {
+    Box::leak(id.into_boxed_str())
+}
+
+/// Every glyph is solid text (index 1) with its odd columns shadow (index 2).
+fn glyph_sheet(font: &str) -> PackEntry {
+    let (width, height) = (assets::fonts::SHEET_WIDTH, assets::fonts::SHEET_HEIGHT);
+    let pixels = (0..width * height)
+        .map(|i| if i % 2 == 1 { 2 } else { 1 })
+        .collect();
+    pack_format::image_entry(
+        format!("font/{font}/glyphs"),
+        width,
+        height,
+        GLYPH_DEPTH,
+        pixels,
+    )
+    .unwrap()
+}
+
+fn window_entries() -> Vec<PackEntry> {
+    vec![
+        image_entry("text-window/image/1", 24, 24, BIT_DEPTH, 1),
+        palette_entry_with_colors("text-window/palette/1", 16, &[(1, WINDOW_BORDER_555)]),
+        image_entry("text-window/image/message_box", 56, 16, BIT_DEPTH, 0),
+        palette_entry_with_colors(
+            "text-window/palette/message_box",
+            16,
+            &[(1, WINDOW_FILL_555), (2, TEXT_555), (3, TEXT_555)],
+        ),
+        glyph_sheet("normal"),
+        glyph_sheet("narrow"),
+    ]
+}
+
+const WINDOW_BORDER_555: Bgr555 = Bgr555::from_channels(0, 31, 0);
+const WINDOW_FILL_555: Bgr555 = Bgr555::from_channels(31, 31, 31);
+const TEXT_555: Bgr555 = Bgr555::from_channels(0, 0, 31);
+
+fn screen_entries() -> Vec<PackEntry> {
+    let mut sheet = vec![0u8; (SCREEN_WIDTH * SCREEN_HEIGHT) as usize];
+    for (tile, index) in [(0x17usize, 1u8), (0x2B, 2)] {
+        let (tile_x, tile_y) = (tile % SHEET_TILES_ACROSS, tile / SHEET_TILES_ACROSS);
+        for y in 0..8 {
+            for x in 0..8 {
+                sheet[(tile_y * 8 + y) * SCREEN_WIDTH as usize + tile_x * 8 + x] = index;
+            }
+        }
+    }
+    // Tile 0 draws index 3 in bank 0, so the all-zero tilemap paints BACKGROUND.
+    for y in 0..8 {
+        for x in 0..8 {
+            sheet[y * SCREEN_WIDTH as usize + x] = 3;
+        }
+    }
+    let tilemap = vec![0u8; TILEMAP_BYTES];
+    let palette = [
+        (3u8, Bgr555::from_channels(0, 10, 10)),
+        (17, Bgr555::from_channels(10, 0, 0)),
+        (18, Bgr555::from_channels(20, 0, 0)),
+        (19, Bgr555::from_channels(0, 20, 0)),
+        (20, Bgr555::from_channels(5, 5, 5)),
+    ];
+    vec![
+        pack_format::image_entry(
+            "bag/image/menu".into(),
+            SCREEN_WIDTH,
+            SCREEN_HEIGHT,
+            BIT_DEPTH,
+            sheet,
+        )
+        .unwrap(),
+        palette_entry_with_colors("bag/palette/menu/male", 32, &palette),
+        palette_entry_with_colors("bag/palette/menu/female", 32, &palette),
+        pack_format::raw_entry("bag/raw/menu".into(), tilemap),
+    ]
+}
+
+fn picture_entries() -> Vec<PackEntry> {
+    let mut pixels = Vec::new();
+    for frame in 0..BAG_FRAMES {
+        pixels.extend(std::iter::repeat_n(
+            u8::try_from(frame).unwrap(),
+            (BAG_SIDE * BAG_SIDE) as usize,
+        ));
+    }
+    let colors: Vec<(u8, Bgr555)> = (1u8..6)
+        .map(|frame| (frame, Bgr555::from_channels(frame * 4, 5, 5)))
+        .collect();
+    let picture = |id: &'static str| {
+        pack_format::image_entry(
+            id.into(),
+            BAG_SIDE,
+            BAG_SIDE * BAG_FRAMES,
+            BIT_DEPTH,
+            pixels.clone(),
+        )
+        .unwrap()
+    };
+    vec![
+        picture("bag/image/male"),
+        picture("bag/image/female"),
+        palette_entry_with_colors("bag/palette/bag", 16, &colors),
+        image_entry("bag/image/rotating_ball", 16, 16, BIT_DEPTH, 0),
+        palette_entry_with_colors("bag/palette/rotating_ball", 16, &[]),
+        image_entry("bag/image/select_button", 24, 16, BIT_DEPTH, 0),
+        image_entry("bag/image/hm", 16, 16, BIT_DEPTH, 4),
+    ]
+}
+
+fn icon_entries() -> Vec<PackEntry> {
+    let mut entries = Vec::new();
+    for image in ICON_IMAGES {
+        entries.push(image_entry(
+            leaked(format!("bag/item-icon/image/{image}")),
+            24,
+            24,
+            BIT_DEPTH,
+            1,
+        ));
+    }
+    for stem in ICON_STEMS {
+        let color = icon_color(stem);
+        entries.push(palette_entry_with_colors(
+            leaked(format!("bag/item-icon/palette/{stem}")),
+            16,
+            &[(
+                1,
+                Bgr555::from_channels(color.r >> 3, color.g >> 3, color.b >> 3),
+            )],
+        ));
+    }
+    entries
+}
+
+/// The pack with every entry the screen reads.
+pub(super) fn entries() -> Vec<PackEntry> {
+    let mut all = window_entries();
+    all.extend(screen_entries());
+    all.extend(picture_entries());
+    all.extend(icon_entries());
+    all
+}
+
+/// Loads `entries` through a real [`AssetPack`] read from a scratch file.
+pub(super) fn load(label: &str, entries: Vec<PackEntry>) -> AssetPack {
+    let path = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-bag-menu-{label}-{}-{:?}.pack",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    std::fs::write(&path, pack_bytes(entries)).expect("the scratch directory is writable");
+    let pack = AssetPack::load(&path);
+    let _ = std::fs::remove_file(&path);
+    pack.expect("the synthetic bag pack loads")
+}
+
+/// The synthetic pack, fully loaded.
+pub(super) fn bag_pack(label: &str) -> AssetPack {
+    load(label, entries())
+}
