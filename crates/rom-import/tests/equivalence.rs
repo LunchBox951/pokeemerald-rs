@@ -64,6 +64,20 @@ const COMPLETE_PREFIXES: &[&str] = &[
     "battle-message/",
     "battle-anim/",
     "bag/",
+    "starter-chooser/",
+    "opening-scene/",
+];
+
+/// The battle textbox and menu text entries: 5 ids the ROM backend must write
+/// although `battle-interface/` is not in [`COMPLETE_PREFIXES`]. The checkout
+/// also extracts the health-box elements and battle bar there, which no ROM
+/// root imports until #2178.
+const BATTLE_INTERFACE_IDS: [&str; 5] = [
+    "battle-interface/image/textbox",
+    "battle-interface/palette/textbox",
+    "battle-interface/palette/window_text",
+    "battle-interface/palette/pp_text",
+    "battle-interface/raw/textbox_map",
 ];
 
 /// The starters' static battler entries: 12 ids the ROM backend must write
@@ -82,6 +96,69 @@ const STARTER_BATTLER_IDS: [&str; 12] = [
     "pokemon/mudkip/palette/normal",
     "pokemon/mudkip/palette/shiny",
 ];
+
+/// The layout names the checkpoint maps added beyond the Littleroot, Route 101,
+/// Oldale, and Route 103 grids: `MAP_INSIDE_OF_TRUCK` and the Oldale interiors.
+const CHECKPOINT_LAYOUTS: [&str; 6] = [
+    "inside_of_truck",
+    "house1",
+    "house2",
+    "mart",
+    "pokemon_center_1f",
+    "pokemon_center_2f",
+];
+
+/// The tilesets those layouts and their neighbours draw with.
+const CHECKPOINT_TILESETS: [&str; 4] = [
+    "generic_building",
+    "pokemon_center",
+    "shop",
+    "inside_of_truck",
+];
+
+/// The non-people object-event pictures and palettes the checkpoint maps'
+/// fixed objects render.
+const CHECKPOINT_OBJECT_IDS: [&str; 17] = [
+    "sprite/berry_trees/cheri",
+    "sprite/berry_trees/dirt_pile",
+    "sprite/berry_trees/leppa",
+    "sprite/berry_trees/sprout",
+    "sprite/dolls/pichu_doll",
+    "sprite/dolls/swablu_doll",
+    "sprite/misc/birchs_bag",
+    "sprite/misc/cuttable_tree",
+    "sprite/misc/item_ball",
+    "sprite/misc/moving_box",
+    "sprite/misc/truck",
+    "sprite/pokemon/enemy_zigzagoon",
+    "sprite/pokemon/vigoroth",
+    "sprite/palette/enemy_zigzagoon",
+    "sprite/palette/moving_box",
+    "sprite/palette/truck",
+    "sprite/palette/vigoroth",
+];
+
+/// Every pack id the checkpoint maps' payloads add: each new layout's grid and
+/// border, each new tileset's tiles, metatile tables, and sixteen palette
+/// banks, and the object pictures and palettes.
+fn checkpoint_payload_ids() -> Vec<String> {
+    let layouts = CHECKPOINT_LAYOUTS.iter().flat_map(|name| {
+        [
+            format!("layout/{name}/map"),
+            format!("layout/{name}/border"),
+        ]
+    });
+    let tilesets = CHECKPOINT_TILESETS.iter().flat_map(|name| {
+        ["tiles", "metatiles", "metatile-attributes"]
+            .map(|part| format!("tileset/{name}/{part}"))
+            .into_iter()
+            .chain((0..16).map(move |bank| format!("tileset/{name}/palette/{bank:02}")))
+    });
+    layouts
+        .chain(tilesets)
+        .chain(CHECKPOINT_OBJECT_IDS.map(str::to_owned))
+        .collect()
+}
 
 /// Ids the two backends are known and accepted to disagree on, each with
 /// the reason it was signed off.
@@ -153,6 +230,26 @@ fn the_rom_backend_matches_the_checkout_pack() {
         }
     }
 
+    // `battle-interface/` is not a complete prefix while the health boxes are
+    // checkout-only, so the textbox entries are pinned by id.
+    for id in BATTLE_INTERFACE_IDS {
+        if !imported.contains_key(id) {
+            differences.push(format!("{id}: the ROM backend wrote no such entry"));
+        }
+    }
+
+    // Named by id so a payload both backends drop together still fails.
+    for id in checkpoint_payload_ids() {
+        for (what, ids) in [
+            ("the ROM backend", &imported),
+            ("the checkout pack", &checkout),
+        ] {
+            if !ids.contains_key(&id) {
+                differences.push(format!("{id}: {what} wrote no such entry"));
+            }
+        }
+    }
+
     for difference in &differences {
         eprintln!("difference: {difference}");
     }
@@ -167,6 +264,35 @@ fn the_rom_backend_matches_the_checkout_pack() {
         "{} entry difference(s) between the ROM backend and the checkout pack",
         differences.len()
     );
+}
+
+/// The pinned battle-interface ids are exactly the profile's roots, and no
+/// complete prefix claims the checkout-only health-box records.
+#[test]
+fn the_battle_interface_ids_are_pinned_not_claimed_by_prefix() {
+    let roots = &rom_import::EMERALD_US_REV0.roots.battle_interface;
+    let mut profiled: Vec<&str> = roots
+        .images
+        .iter()
+        .map(|root| root.id)
+        .chain(roots.palettes.iter().map(|root| root.id))
+        .chain(roots.tilemaps.iter().map(|root| root.id))
+        .collect();
+    profiled.sort_unstable();
+    let mut pinned = BATTLE_INTERFACE_IDS;
+    pinned.sort_unstable();
+    assert_eq!(profiled, pinned);
+    for id in [
+        "battle-interface/raw/battle_bar",
+        "battle-interface/raw/healthbox_element/hpbar",
+    ] {
+        assert!(
+            !COMPLETE_PREFIXES
+                .iter()
+                .any(|prefix| id.starts_with(prefix)),
+            "{id} is checkout-only until #2178"
+        );
+    }
 }
 
 /// `mus_title.mid` plays key 33 on program 48 (channel 2, tick 2160). That is

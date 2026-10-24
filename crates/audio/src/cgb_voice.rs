@@ -435,6 +435,12 @@ impl CgbVoice {
     /// one replaces on the shared slot.
     pub(crate) fn carry_hardware_state_from(&mut self, other: &Self) {
         self.oscillator.carry_hardware_state_from(&other.oscillator);
+        // Hold the predecessor's clocks for the note-on writes (`commit_initial_writes`).
+        if let (Oscillator::Noise(noise), Oscillator::Noise(previous)) =
+            (&mut self.oscillator, &other.oscillator)
+        {
+            noise.inherit_hardware_from(previous, other.hardware_envelope_volume.volume());
+        }
     }
 
     /// Apply the off-write the slot receives the instant its voice idles.
@@ -577,6 +583,9 @@ impl CgbVoice {
             self.routing.commit_pan();
         }
         let hardware_write = retriggered_by_note_off || retriggered_by_transition;
+        if initial_trigger {
+            self.oscillator.commit_initial_writes();
+        }
         if hardware_write || initial_trigger {
             self.apply_retrigger();
         }

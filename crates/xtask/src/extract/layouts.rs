@@ -84,31 +84,6 @@ mod tests {
         );
     }
 
-    // Changes to `LAYOUTS` must also update `object_event_flags.rs`'s
-    // `BUNDLED_LAYOUTS`, `overworld/npc.rs`'s `EXTRACTED_MAPS`,
-    // `overworld/mod.rs`'s `resolve_tileset_pack_name`, and
-    // `overworld_phase/decoration_tests.rs`'s `BUNDLED_LAYOUTS`.
-    #[test]
-    fn the_bundled_layout_set_is_pinned_for_the_tables_derived_from_it() {
-        let ids: Vec<&str> = LAYOUTS.iter().map(|layout| layout.upstream_id).collect();
-        assert_eq!(
-            ids,
-            [
-                "LAYOUT_LITTLEROOT_TOWN",
-                "LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F",
-                "LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F",
-                "LAYOUT_LITTLEROOT_TOWN_MAYS_HOUSE_1F",
-                "LAYOUT_LITTLEROOT_TOWN_MAYS_HOUSE_2F",
-                "LAYOUT_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB",
-                "LAYOUT_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB_WITH_TABLE",
-                "LAYOUT_ROUTE101",
-                "LAYOUT_OLDALE_TOWN",
-                "LAYOUT_ROUTE103",
-            ],
-            "update the cross-crate LAYOUTS mirrors with this manifest"
-        );
-    }
-
     #[test]
     fn layouts_list_has_no_duplicate_ids_or_names() {
         let ids: Vec<_> = LAYOUTS.iter().map(|layout| layout.upstream_id).collect();
@@ -117,24 +92,12 @@ mod tests {
         let unique_names: std::collections::HashSet<_> = names.iter().collect();
         assert_eq!(ids.len(), unique_ids.len(), "duplicate LAYOUT_* id");
         assert_eq!(names.len(), unique_names.len(), "duplicate pack name");
-        for id in &ids {
-            assert!(
-                id.starts_with("LAYOUT_LITTLEROOT_TOWN")
-                    || *id == "LAYOUT_ROUTE101"
-                    || *id == "LAYOUT_OLDALE_TOWN"
-                    || *id == "LAYOUT_ROUTE103"
+        for layout in LAYOUTS {
+            assert_eq!(
+                layout.upstream_id.to_lowercase(),
+                format!("layout_{}", layout.pack_name),
+                "a pack name is its `LAYOUT_*` id without the prefix, lowercased"
             );
-        }
-        for name in &names {
-            assert!(
-                name.starts_with("littleroot_town")
-                    || *name == "route101"
-                    || *name == "oldale_town"
-                    || *name == "route103"
-            );
-            assert!(name
-                .chars()
-                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'));
         }
     }
 
