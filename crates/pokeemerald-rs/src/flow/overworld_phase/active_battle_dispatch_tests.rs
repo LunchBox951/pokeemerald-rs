@@ -8,10 +8,10 @@ use engine::rng::Rng;
 use platform::{ButtonState, Buttons};
 
 /// Issue #207 review, round 2: the production starter *wiring*, not just the
-/// starter constructor -- [`OverworldPhase::load_default`] must hand back a
+/// starter constructor -- [`OverworldPhase::load`] must hand back a
 /// phase whose party lead is the provisional starter, or a real playthrough
 /// rolls I-4 encounters it can never fight. Mutation-pinned: deleting
-/// `load_default`'s `party_lead` assignment fails only here, because every
+/// `OverworldPhase::load`'s `party_lead` assignment fails only here, because every
 /// pack-free test builds its phase through `for_test`, which deliberately
 /// leaves the lead `None`.
 #[test]
@@ -30,6 +30,20 @@ fn load_default_hands_back_a_fightable_provisional_starter() {
     assert_eq!(lead.species(), new_game::PROVISIONAL_STARTER_SPECIES);
     assert_eq!(lead.level(), new_game::PROVISIONAL_STARTER_LEVEL);
     assert!(!lead.is_fainted(), "the lead must be able to fight");
+}
+
+/// A rival or sight-trainer battle holds the lead on loan, as their starts
+/// leave it; the frame drivers restore it when they end.
+fn lend_lead_to_trainer_battle(phase: &mut OverworldPhase, variant: &ActiveBattle) {
+    if matches!(
+        variant,
+        ActiveBattle::Rival { .. } | ActiveBattle::SightTrainer { .. }
+    ) {
+        phase.set_fresh_lead_for_test(new_game::provisional_starter());
+        phase
+            .take_lead_battler()
+            .expect("the lead was just installed");
+    }
 }
 
 /// Each [`OverworldPhase::active_battle`] variant is reported by exactly
@@ -248,6 +262,7 @@ fn step_drives_each_active_battle_variant_to_completion() {
     for variant in variants {
         let kind = std::mem::discriminant(&variant);
         let mut phase = synthetic_phase(PlayerState::new((4, 6), 3, Direction::West), None);
+        lend_lead_to_trainer_battle(&mut phase, &variant);
         phase.active_battle = Some(variant);
         let mut frames = 0;
         while phase.active_battle.is_some() && frames < 1000 {

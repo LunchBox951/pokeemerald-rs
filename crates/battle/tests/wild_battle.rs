@@ -37,8 +37,16 @@ fn scripted_wild_battle_runs_move_vs_move_to_a_faint_and_reports_victory() {
         0, // discarded effect-chance roll
     ]);
 
-    let enemy = build_wild_pokemon(&dex, SpeciesId(19), 5, vec![MoveId::TACKLE], &mut rng)
-        .expect("wild Rattata construction");
+    let enemy = build_wild_pokemon(
+        &dex,
+        SpeciesId(19),
+        5,
+        vec![MoveId::TACKLE],
+        None,
+        None,
+        &mut rng,
+    )
+    .expect("wild Rattata construction");
     assert_eq!(enemy.nature(), Nature::Hardy);
     assert_eq!(enemy.ivs().hp, 0);
 
@@ -138,8 +146,16 @@ fn a_wild_opponent_resolves_its_own_tackle_through_accuracy_crit_and_damage() {
         0,  // enemy's discarded effect-chance roll
     ]);
 
-    let enemy = build_wild_pokemon(&dex, SpeciesId(19), 5, vec![MoveId::TACKLE], &mut rng)
-        .expect("wild Rattata construction");
+    let enemy = build_wild_pokemon(
+        &dex,
+        SpeciesId(19),
+        5,
+        vec![MoveId::TACKLE],
+        None,
+        None,
+        &mut rng,
+    )
+    .expect("wild Rattata construction");
     assert_eq!(
         player.stats().speed,
         13,
@@ -206,8 +222,16 @@ fn a_faster_player_always_escapes_a_wild_battle_successfully() {
     // Draw order: five wild-construction draws, battle-start turn number,
     // turn number, then opponent move selection; guaranteed escape rolls nothing.
     let mut rng = ScriptedRng::new([0, 0, 0, 0, 0, 0, 0, 0]);
-    let enemy = build_wild_pokemon(&dex, SpeciesId(19), 5, vec![MoveId::TACKLE], &mut rng)
-        .expect("wild Rattata construction");
+    let enemy = build_wild_pokemon(
+        &dex,
+        SpeciesId(19),
+        5,
+        vec![MoveId::TACKLE],
+        None,
+        None,
+        &mut rng,
+    )
+    .expect("wild Rattata construction");
 
     let player_hp_before = player.current_hp();
     let enemy_hp_before = enemy.current_hp();

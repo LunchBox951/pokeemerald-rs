@@ -46,6 +46,8 @@ mod pressure;
 mod rough_skin_contact;
 #[path = "turn_engine/shed_skin.rs"]
 mod shed_skin;
+#[path = "turn_engine/sleep.rs"]
+mod sleep;
 #[path = "turn_engine/stat_changes.rs"]
 mod stat_changes;
 #[path = "turn_engine/static_contact.rs"]
