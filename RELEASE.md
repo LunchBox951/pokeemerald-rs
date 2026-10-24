@@ -120,6 +120,16 @@ Every ordinary pull request into `dev` advances `VERSION` past current `dev`; an
 
 Promotions and health checks compare cumulative endpoints. They preserve channel ordering without replaying reset or FINAL-marker rules already enforced when changes entered `dev`.
 
+## Changelog
+
+Every ordinary pull request into `dev` that bumps `MINOR`, `MAJOR`, or `FINAL` must add or update a [`CHANGELOG.md`](CHANGELOG.md) entry for its proposed version. This applies to every contributor. Routine entry updates need no separate owner approval; changes to this policy still require approval, and `FINAL` remains owner-only. A `PATCH` bump requires no entry. Channel promotions carry the existing entries unchanged.
+
+Use `## [FINAL.MAJOR.MINOR.PATCH] - YYYY-MM-DD` followed by patch-note bullets, newest version first. Date the entry when it enters `dev`, and keep its version current when rebasing or merging `dev`. Link the heading to the changes since the preceding entry. Development versions are not claims of published releases; GitHub Releases owns publication dates and artifacts.
+
+Write concise, non-technical notes about what users can experience, including notable fixes since the preceding entry. Describe unfinished features as preparation rather than available gameplay. Use familiar wording such as “Various bug fixes” when fixes occurred, or “General improvements” for internal work without a visible change. Keep implementation details and roadmap state in GitHub.
+
+The policy CI job runs `scripts/version_check.py`, which requires a new or updated entry for the proposed non-patch version, a valid date, and at least one patch-note bullet. Review checks the notes' accuracy; cumulative channel checks do not require new entries.
+
 ## The `FINAL` gate
 
 Automation never bumps `FINAL`. The repository owner must add or change `docs/release/final-gate-approved.md` in the same pull request, naming the exact approved version and date:

@@ -38,7 +38,7 @@
 //! (`TRSEE_REVEAL_DISGUISE`/`_BURIED`) are unreachable without one.
 
 use assets::trainers::TrainerId;
-use assets::{MapEventsTable, MapHeaderTable, ObjectEvent, TrainerType};
+use assets::{ObjectEvent, TrainerType};
 use engine::event_data::EventData;
 use engine::overworld::{trainer_can_see_player, MapRuntime, ObjectEventState, PlayerState};
 
@@ -396,8 +396,8 @@ impl OverworldPhase {
     ///   which this port cannot do for a sequence whose field-effect timing
     ///   it is already approximating.
     ///
-    /// [`OverworldPhase::party_lead`] is deliberately *not* taken here, only
-    /// cloned: it is emptied when the battle actually starts
+    /// The lead is deliberately *not* lent here, only
+    /// observed and cloned: it is lent when the battle actually starts
     /// ([`super::sight_trainer_approach`]). A mid-approach save cannot
     /// observe the difference -- `start_menu_may_open` refuses `START` while
     /// an approach is in flight ([`super::start_menu`]'s gates) -- but
@@ -444,13 +444,7 @@ impl OverworldPhase {
     ///   let it go stale. Widening move coverage is `battle`'s own, much
     ///   larger slice, not this one.
     pub(super) fn begin_sight_trainer_approach_if_seen(&mut self) -> SightTrainerOutcome {
-        let Ok(header) = MapHeaderTable::new().header(self.map_id) else {
-            return SightTrainerOutcome::Refused;
-        };
-        let Ok(events) = MapEventsTable::new().resolve(self.map_id) else {
-            return SightTrainerOutcome::Refused;
-        };
-        let runtime = self.scene.runtime(self.map_id, header, events);
+        let runtime = self.scene.runtime();
         let scan = find_sight_trainer(&runtime, &self.player, &self.save1.event_data);
         if !scan.any_cone_reached {
             self.sight_trainer_log.left_every_cone();
@@ -484,7 +478,7 @@ impl OverworldPhase {
             );
         }
 
-        let Some(lead) = self.party_lead.clone() else {
+        let Some(lead) = self.lead_battler().cloned() else {
             if first_report {
                 eprintln!("sight trainer: no party mon yet -- no battle to start");
             }
@@ -535,12 +529,17 @@ impl OverworldPhase {
         trainer_id: TrainerId,
     ) -> Option<ActiveBattle> {
         let mut slot = Some(battle);
+        let mut returned_lead = None;
         let outcome = npc_trainer_battle::advance_npc_trainer_battle(
             &mut slot,
-            &mut self.party_lead,
+            &mut returned_lead,
             &mut self.save1.money,
             &mut self.rng,
         );
+        // Back with the owner before the flags, the white-out or any routing.
+        if let Some(lead) = returned_lead {
+            self.restore_lead_battler(lead);
+        }
         if let Some(outcome) = outcome {
             eprintln!("sight trainer: ended -- {outcome:?}");
             self.sight_trainer_battle_outcome = Some(outcome);
@@ -692,14 +691,9 @@ mod tests {
     #[test]
     fn find_sight_trainer_matches_rhett_and_is_gated_by_the_defeated_flag() {
         let map_id = assets::MapId("MAP_ROUTE103");
-        let scene = crate::overworld::test_support::synthetic_scene(80, 16);
-        let header = assets::MapHeaderTable::new()
-            .header(map_id)
-            .expect("MAP_ROUTE103 is bundled map data");
-        let events = assets::MapEventsTable::new()
-            .resolve(map_id)
-            .expect("MAP_ROUTE103 is bundled map data");
-        let runtime = scene.runtime(map_id, header, events);
+        let scene =
+            crate::overworld::test_support::synthetic_scene(80, 16).in_room_for_test(map_id);
+        let runtime = scene.runtime();
         let player = PlayerState::new((67, 6), 3, engine::overworld::Direction::North);
 
         let event_data = EventData::new();
@@ -734,14 +728,9 @@ mod tests {
     #[test]
     fn a_double_battle_cone_is_reported_as_reached_but_never_selected() {
         let map_id = assets::MapId("MAP_ROUTE103");
-        let scene = crate::overworld::test_support::synthetic_scene(80, 16);
-        let header = assets::MapHeaderTable::new()
-            .header(map_id)
-            .expect("MAP_ROUTE103 is bundled map data");
-        let events = assets::MapEventsTable::new()
-            .resolve(map_id)
-            .expect("MAP_ROUTE103 is bundled map data");
-        let runtime = scene.runtime(map_id, header, events);
+        let scene =
+            crate::overworld::test_support::synthetic_scene(80, 16).in_room_for_test(map_id);
+        let runtime = scene.runtime();
         let player = PlayerState::new((64, 13), 3, engine::overworld::Direction::North);
 
         let scan = find_sight_trainer(&runtime, &player, &EventData::new());
@@ -804,8 +793,9 @@ mod tests {
 
     /// The emergent construction wall, pinned rather than left as prose:
     /// every one of [`SIGHT_TRAINERS`]' distinct trainer ids except Andrew's
-    /// (whose party now constructs,
-    /// `andrews_real_party_constructs_and_plays_to_a_win`) currently fails
+    /// and Rhett's (whose parties now construct,
+    /// `andrews_real_party_constructs_and_plays_to_a_win` and
+    /// `rhetts_real_party_constructs_and_plays_to_a_win`) currently fail
     /// to construct through
     /// [`npc_trainer_battle::start_npc_trainer_battle`] -- Miguel for his
     /// held item, every other refused one for a specific move this battle
@@ -816,10 +806,9 @@ mod tests {
     /// The **exact** refusal is pinned per trainer, not merely "it fails"
     /// (issue #264 review): the reason a trainer is unreachable is the
     /// interesting fact, and naming the offending move id is what forces a
-    /// future move-coverage slice to come back here -- scoring Rhett's
-    /// former `MOVE_FOCUS_ENERGY` left a Rhett who now fails on
-    /// `MOVE_SAND_ATTACK`, and a bare `is_err()` would have hidden
-    /// that.
+    /// future move-coverage slice to come back here -- scoring a
+    /// trainer's refusing move leaves one who fails on the next one, and a
+    /// bare `is_err()` would hide that.
     ///
     /// Each refusal must also cost **nothing**: the whole party is screened
     /// before the first draw (`npc_trainer_battle`'s module docs), which is
@@ -834,15 +823,10 @@ mod tests {
         // move in that trainer's own level-up-derived moveset that some
         // screen refuses.
         //
-        // Screech and Defense Curl are executable, so those parties get past
-        // `ensure_executable` and stop at
-        // `battle::battle::trainer_ai::ensure_scoreable` instead -- the
-        // trainer AI cannot yet score those effects. Stun Spore, Thunder
-        // Wave, Supersonic, and Focus Energy are now scoreable (the
-        // `CheckBadMove` Paralyze, Confuse, and Focus Energy handlers), as
-        // are Absorb, Splash, Charge, and Poison Sting, so those parties stop
-        // at their next refused move. Andrew's whole party now constructs
-        // (`andrews_real_party_constructs_and_plays_to_a_win`). Both screens
+        // Andrew's and Rhett's whole parties construct
+        // (`andrews_real_party_constructs_and_plays_to_a_win`,
+        // `rhetts_real_party_constructs_and_plays_to_a_win`); each party below
+        // stops at the first move some screen refuses. Both screens
         // run before the first draw, so the per-frame cone check stays
         // draw-free.
         let expected = [
@@ -860,23 +844,16 @@ mod tests {
             ),
             ("Miguel", TrainerId(293), HeldItemParty(TrainerId(293))),
             (
-                "Rhett",
-                TrainerId(703),
-                Battle(BattleError::UnscoreableMoveEffect(
-                    assets::MoveId::SAND_ATTACK,
-                )),
-            ),
-            (
                 "Marcos",
                 TrainerId(702),
-                Battle(BattleError::UnscoreableMoveEffect(assets::MoveId::SCREECH)),
+                Battle(BattleError::UnscoreableMoveEffect(
+                    assets::MoveId::SONIC_BOOM,
+                )),
             ),
             (
                 "Isabelle",
                 TrainerId(736),
-                Battle(BattleError::UnscoreableMoveEffect(
-                    assets::MoveId::DEFENSE_CURL,
-                )),
+                Battle(BattleError::UnsupportedMoveEffect(assets::MoveId::ROLLOUT)),
             ),
             (
                 "Pete",
@@ -892,7 +869,7 @@ mod tests {
         let covered: std::collections::HashSet<u16> = expected
             .iter()
             .map(|(_, id, _)| id.0)
-            .chain([ANDREW.0])
+            .chain([ANDREW.0, RHETT.0])
             .collect();
         assert_eq!(
             distinct, covered,
@@ -928,11 +905,11 @@ mod tests {
     }
 
     const ANDREW: TrainerId = TrainerId(336);
+    const RHETT: TrainerId = TrainerId(703);
 
-    /// Andrew (`CheckBadMove` only) has Supersonic on his Tentacool, which
-    /// the Confuse handler now scores, so his party constructs and plays out.
-    #[test]
-    fn andrews_real_party_constructs_and_plays_to_a_win() {
+    /// Plays `trainer`'s real party against a strong lead and returns the
+    /// outcome.
+    fn real_party_outcome(trainer: TrainerId) -> Option<battle::BattleOutcome> {
         let lead = battle::BattlePokemon::new(
             &battle::Dex::new(),
             assets::SpeciesId(277), // SPECIES_TREECKO
@@ -944,8 +921,8 @@ mod tests {
         .expect("Treecko/Slash is a valid pairing");
         let mut rng = engine::rng::Rng::new(1);
         let mut slot = Some(
-            npc_trainer_battle::start_npc_trainer_battle(lead, ANDREW, &mut rng)
-                .expect("Andrew's party must construct"),
+            npc_trainer_battle::start_npc_trainer_battle(lead, trainer, &mut rng)
+                .expect("the party must construct"),
         );
         let mut written_back = None;
         let mut money = 0;
@@ -961,6 +938,26 @@ mod tests {
                 break;
             }
         }
-        assert_eq!(outcome, Some(battle::BattleOutcome::PlayerWon));
+        outcome
+    }
+
+    /// Andrew (`CheckBadMove` only) has Supersonic on his Tentacool, which
+    /// the Confuse handler now scores, so his party constructs and plays out.
+    #[test]
+    fn andrews_real_party_constructs_and_plays_to_a_win() {
+        assert_eq!(
+            real_party_outcome(ANDREW),
+            Some(battle::BattleOutcome::PlayerWon)
+        );
+    }
+
+    /// Rhett's Sand-Attack is scored by the Accuracy-down label, so his whole
+    /// party constructs and plays out.
+    #[test]
+    fn rhetts_real_party_constructs_and_plays_to_a_win() {
+        assert_eq!(
+            real_party_outcome(RHETT),
+            Some(battle::BattleOutcome::PlayerWon)
+        );
     }
 }

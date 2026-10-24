@@ -11,13 +11,7 @@ const CAVE: assets::MapId = assets::MapId("MAP_GRANITE_CAVE_B1F");
 const DOOR: (u16, u16) = (8, 5);
 
 fn cave_runtime(scene: &crate::overworld::OverworldScene) -> MapRuntime<'_> {
-    let header = assets::MapHeaderTable::new()
-        .header(CAVE)
-        .expect("Granite Cave B1F resolves in the generated map-header table");
-    let events = assets::MapEventsTable::new()
-        .resolve(CAVE)
-        .expect("Granite Cave B1F resolves in the generated map-events table");
-    scene.runtime(CAVE, header, events)
+    scene.runtime()
 }
 
 /// A transition landing then a multi-level landing keeps collision 0 and
