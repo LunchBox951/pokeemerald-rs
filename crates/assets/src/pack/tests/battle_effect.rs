@@ -302,16 +302,47 @@ fn malformed_error_names_the_entry_in_its_message() {
     let _ = std::fs::remove_file(path);
 }
 
-/// The stock catalog's closure: 192 distinct ids, including `ANIM_TAG_IMPACT`,
-/// which the trainer-blocked ball program loads.
+/// The stock catalog's closure: 193 distinct ids, including `ANIM_TAG_IMPACT`,
+/// which the trainer-blocked ball program loads, and `ANIM_TAG_POKEBLOCK`,
+/// which only `AnimTask_LoadPokeblockGfx` loads.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_catalog_inventory_is_the_stock_closure() {
     const IMPACT: u16 = 135;
+    const POKEBLOCK: u16 = 269;
     let pack = AssetPack::load_repo().expect("run `cargo xtask extract` first");
     let catalog = pack.battle_animation_catalog().unwrap();
     let ids = ids(&catalog);
-    assert_eq!(ids.len(), 192);
+    assert_eq!(ids.len(), 193);
     assert!(ids.windows(2).all(|pair| pair[0] < pair[1]));
     assert!(ids.contains(&IMPACT));
+    assert!(ids.contains(&POKEBLOCK));
+}
+
+/// `General_PokeblockThrow` loads `ANIM_TAG_POKEBLOCK` (269) only through
+/// `createvisualtask AnimTask_LoadPokeblockGfx` (`src/battle_anim_throw.c`).
+#[test]
+fn inventory_includes_the_pokeblock_task_load() {
+    let program = BattleAnimationProgram::new(
+        AnimSymbol::new("General_PokeblockThrow").unwrap(),
+        vec![
+            AnimCommand::CreateVisualTask {
+                task: AnimSymbol::new("AnimTask_LoadPokeblockGfx").unwrap(),
+                priority: 2,
+                args: vec![],
+            },
+            AnimCommand::End,
+        ],
+    )
+    .unwrap();
+    let selectors = AnimationTable::ALL.into_iter().flat_map(|table| {
+        (0..table.len()).map(move |index| {
+            (
+                AnimationSelector::new(table, index).unwrap(),
+                ProgramId::new(0),
+            )
+        })
+    });
+    let catalog = BattleAnimationCatalog::new(vec![program], selectors).unwrap();
+    assert!(ids(&catalog).contains(&269), "{:?}", ids(&catalog));
 }
