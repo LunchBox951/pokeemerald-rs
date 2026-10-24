@@ -23,7 +23,8 @@ use crate::dex::Dex;
 use crate::error::BattleError;
 use crate::pokemon::BattlePokemon;
 use crate::secondary::{
-    is_confuse_hit_effect, is_poison_hit_effect, spend_effect_chance_draw, SecondaryApplication,
+    is_confuse_hit_effect, is_poison_hit_effect, is_speed_down_hit_effect,
+    spend_effect_chance_draw, SecondaryApplication,
 };
 
 const EFFECT_HIT: MoveEffect = MoveEffect(0);
@@ -143,12 +144,13 @@ pub fn ensure_resolvable(dex: &Dex, move_id: MoveId) -> Result<(), BattleError> 
     if move_data.move_type.battle_type().is_none() {
         return Err(BattleError::UnsupportedMoveType(move_id));
     }
-    // `EFFECT_POISON_HIT` and `EFFECT_CONFUSE_HIT` resolve through this same
-    // damage script while keeping their own trampoline dispatch in
-    // `spend_effect_chance_draw`.
+    // `EFFECT_POISON_HIT`, `EFFECT_CONFUSE_HIT` and `EFFECT_SPEED_DOWN_HIT`
+    // resolve through this same damage script while keeping their own
+    // trampoline dispatch in `spend_effect_chance_draw`.
     if !is_ordinary_hit_effect(move_data.effect)
         && !is_poison_hit_effect(move_data.effect)
         && !is_confuse_hit_effect(move_data.effect)
+        && !is_speed_down_hit_effect(move_data.effect)
         && move_id != STRUGGLE
     {
         return Err(BattleError::UnsupportedMoveEffect(move_id));
