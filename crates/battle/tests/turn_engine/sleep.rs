@@ -93,6 +93,10 @@ fn a_normal_sleeper_wakes_on_the_action_that_exhausts_its_duration_and_then_acts
         second,
         vec![
             BattleEvent::WokeUp { by_player: true },
+            BattleEvent::UsedMove {
+                by_player: true,
+                move_id: TACKLE,
+            },
             BattleEvent::NoEffect {
                 by_player: true,
                 move_id: TACKLE,
@@ -182,6 +186,10 @@ fn a_waking_battler_goes_on_to_tick_its_confusion_in_the_same_action() {
         vec![
             BattleEvent::WokeUp { by_player: true },
             BattleEvent::SnappedOutOfConfusion { by_player: true },
+            BattleEvent::UsedMove {
+                by_player: true,
+                move_id: TACKLE,
+            },
             BattleEvent::NoEffect {
                 by_player: true,
                 move_id: TACKLE,

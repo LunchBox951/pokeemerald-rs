@@ -3,7 +3,7 @@
 use std::error::Error;
 use std::fmt;
 
-use assets::{AbilityId, MoveId, SpeciesId};
+use assets::{AbilityId, Effectiveness, MoveId, SpeciesId};
 
 use crate::error::BattleError;
 use crate::stat_change::ChangedStat;
@@ -101,9 +101,9 @@ pub enum BattleEvent {
         /// The move that was never attempted.
         move_id: MoveId,
     },
-    /// A move connected, but the target's typing made it ineffective, or the
-    /// target's Volt Absorb or Water Absorb was already at full HP
-    /// (`BattleScript_MonMadeMoveUseless`).
+    /// A move connected, but the target's typing made it ineffective. An
+    /// absorbing ability already at full HP reports
+    /// [`BattleEvent::AbsorbMadeMoveUseless`] instead.
     NoEffect {
         /// Whether the player used the move.
         by_player: bool,
@@ -134,6 +134,8 @@ pub enum BattleEvent {
         move_id: MoveId,
         /// HP the target actually regained.
         healed: u32,
+        /// The target's absorbing ability (`gLastUsedAbility`).
+        ability: AbilityId,
     },
     /// Flash Fire absorbed a Fire move (`BattleScript_FlashFireBoost`).
     FlashFireAbsorbed {
@@ -595,6 +597,42 @@ pub enum BattleEvent {
     ///
     /// This is the final event returned for the battle.
     Ended(BattleOutcome),
+    /// A selected move reached `attackstring`, the announcement that precedes
+    /// its result (`STRINGID_USEDMOVE`, `src/battle_message.c:2155`-`:2166`;
+    /// `data/battle_scripts_1.s:3556`-`:3559`, `:4158`-`:4163`).
+    ///
+    /// It follows the action's confusion and full-paralysis draws, so an action
+    /// cancelled by either never announces its move. It precedes the move's
+    /// no-PP, Soundproof, miss, and hit results.
+    UsedMove {
+        /// Whether the player used the move.
+        by_player: bool,
+        /// The move that was announced.
+        move_id: MoveId,
+    },
+    /// A damaging move's type matchup was not neutral
+    /// (`STRINGID_SUPEREFFECTIVE`, `STRINGID_NOTVERYEFFECTIVE`).
+    ///
+    /// This follows the move's [`BattleEvent::Hit`] (after the last hit of a
+    /// multi-hit move, before its [`BattleEvent::MultiHit`]) and is absent for
+    /// neutral matchups and for Struggle.
+    TypeEffectiveness {
+        /// Whether the player used the move.
+        by_player: bool,
+        /// [`Effectiveness::SuperEffective`] or [`Effectiveness::NotVeryEffective`].
+        effectiveness: Effectiveness,
+    },
+    /// A Volt Absorb or Water Absorb target at full HP made the move useless
+    /// (`BattleScript_MonMadeMoveUseless`, `STRINGID_PKMNSXMADEYUSELESS`),
+    /// where a typing immunity reports [`BattleEvent::NoEffect`].
+    AbsorbMadeMoveUseless {
+        /// Whether the player used the move.
+        by_player: bool,
+        /// The move the ability made useless.
+        move_id: MoveId,
+        /// The target's absorbing ability (`gLastUsedAbility`).
+        ability: AbilityId,
+    },
 }
 
 /// A turn failure together with the observable events committed before it.
