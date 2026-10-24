@@ -473,7 +473,11 @@ pub struct OpeningSceneRoots {
 /// battle-window and PP text palettes, under the `battle-interface/` pack ids
 /// the checkout extractor emits. The textbox palette is one ROM root: the
 /// build concatenates `textbox_0.pal` and `textbox_1.pal` into a single
-/// `gBattleTextboxPalette`. The health boxes and battle bars are not here.
+/// `gBattleTextboxPalette`.
+///
+/// The health-box element table and the battle bar are raw 4bpp tile runs,
+/// recorded as [`BlobRoot`]s beside the textbox records. The singles
+/// health-box frames, their palettes, and the enemy shadow are not here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BattleInterfaceRoots {
     /// Every `battle-interface/image/*` entry.
@@ -482,6 +486,20 @@ pub struct BattleInterfaceRoots {
     pub palettes: &'static [PaletteRoot],
     /// Every `battle-interface/raw/*` tilemap.
     pub tilemaps: &'static [BlobRoot],
+    /// The thirteen `battle-interface/raw/healthbox_element/*` records, in
+    /// `gHealthboxElementsGfxTable` order.
+    ///
+    /// The table (`src/graphics.c:358-370`) is one uncompressed `INCBIN_U8`
+    /// run of the thirteen `.4bpp` files, so each root is a raw slice that
+    /// starts where the one before it ends. The importer checks that order,
+    /// each record's length, and that contiguity rather than trust the
+    /// addresses alone. Empty, or all thirteen.
+    pub healthbox_elements: &'static [BlobRoot],
+    /// `battle-interface/raw/battle_bar`: `gBattleInterfaceGfx_BattleBar`
+    /// (`src/graphics.c:169`), an LZ77 stream of `hpbar_anim_unused`,
+    /// `numbers1`, and `numbers2` concatenated in that order
+    /// (`graphics_file_rules.mk:90-93`). `None` writes nothing.
+    pub battle_bar: Option<BlobRoot>,
 }
 
 /// One species' static battler art: the rows its `SPECIES_*` index selects in
@@ -703,6 +721,8 @@ impl BattleInterfaceRoots {
         images: &[],
         palettes: &[],
         tilemaps: &[],
+        healthbox_elements: &[],
+        battle_bar: None,
     };
 }
 

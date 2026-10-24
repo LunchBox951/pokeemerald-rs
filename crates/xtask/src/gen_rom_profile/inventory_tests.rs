@@ -11,10 +11,10 @@ use super::{
     locate_profile, opening_scene, sprites, starter_chooser, text_window, tilesets, title,
 };
 use crate::extract::scope::{
-    battle_interface_ids, healthbox_element_ids, healthbox_frame_ids, layout_ids,
-    opening_scene_ids, sprite_palette_ids, sprite_sheet_ids, starter_chooser_ids, text_window_ids,
-    tileset_animation_ids, title_ids, BATTLERS, FONTS, INTERFACE_PALETTE_IDS, LAYOUTS,
-    TEXT_WINDOW_IMAGE_STEMS, TEXT_WINDOW_PALETTE_STEMS, TILESETS,
+    battle_interface_ids, healthbox_battle_bar_id, healthbox_element_ids, healthbox_frame_ids,
+    healthbox_table_ids, layout_ids, opening_scene_ids, sprite_palette_ids, sprite_sheet_ids,
+    starter_chooser_ids, text_window_ids, tileset_animation_ids, title_ids, BATTLERS, FONTS,
+    INTERFACE_PALETTE_IDS, LAYOUTS, TEXT_WINDOW_IMAGE_STEMS, TEXT_WINDOW_PALETTE_STEMS, TILESETS,
 };
 
 /// One placeholder entry per fixed root and per bag id; the preflight checks presence only.
@@ -40,6 +40,7 @@ fn complete_inventory() -> Vec<PackEntry> {
         .chain(starter_chooser_ids())
         .chain(opening_scene_ids())
         .chain(battle_interface_ids())
+        .chain(healthbox_element_ids())
         .map(|id| raw_entry(id, vec![0]))
         .collect()
 }
@@ -372,7 +373,10 @@ fn a_surplus_opening_scene_entry_is_refused_by_id() {
 
 #[test]
 fn a_pack_missing_a_battle_interface_entry_is_refused() {
-    for id in battle_interface_ids() {
+    for id in battle_interface_ids()
+        .into_iter()
+        .chain(healthbox_element_ids())
+    {
         let label = format!("no-{}", id.replace('/', "-"));
         assert_refused(&label, without(&id), &id, "battle_interface");
     }
@@ -403,17 +407,17 @@ fn a_surplus_battle_interface_entry_is_refused_by_id() {
 }
 
 #[test]
-fn the_extracted_health_box_records_pass_preflight_unclaimed() {
-    let mut entries = complete_inventory();
-    entries.extend(
-        healthbox_element_ids()
-            .into_iter()
-            .map(|id| raw_entry(id, vec![0])),
-    );
+fn the_health_box_element_records_are_part_of_the_required_inventory() {
+    let elements = healthbox_element_ids();
+    assert_eq!(elements.len(), 14, "{elements:?}");
+    // Thirteen table rows in table order, then the battle bar.
+    assert_eq!(&elements[..13], healthbox_table_ids());
+    assert_eq!(elements[13], healthbox_battle_bar_id());
+    // Each is refused when absent (see the missing-entry test above); present,
+    // all pass the preflight beside the textbox ids.
     let rom = RomFixture::new().emerald_header().finish();
-    with_context("health-box-unclaimed", &rom, entries, |ctx| {
-        inventory::preflight(ctx.pack, &ctx.bag_ids)
-            .expect("the health-box records are extracted beside the textbox");
+    with_context("health-box-required", &rom, complete_inventory(), |ctx| {
+        inventory::preflight(ctx.pack, &ctx.bag_ids).expect("complete inventory");
     });
 }
 

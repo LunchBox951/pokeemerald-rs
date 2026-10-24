@@ -68,16 +68,32 @@ const COMPLETE_PREFIXES: &[&str] = &[
     "opening-scene/",
 ];
 
-/// The battle textbox and menu text entries: 5 ids the ROM backend must write
-/// although `battle-interface/` is not in [`COMPLETE_PREFIXES`]. The checkout
-/// also extracts the health-box elements and battle bar there, which no ROM
-/// root imports until #2178.
-const BATTLE_INTERFACE_IDS: [&str; 5] = [
+/// The battle textbox and menu text entries, the thirteen health-box elements
+/// in `gHealthboxElementsGfxTable` order, and the battle bar: 19 ids the ROM
+/// backend must write although `battle-interface/` is not in
+/// [`COMPLETE_PREFIXES`]. The checkout also extracts the singles health-box
+/// frames, their palettes, and the enemy shadow there, which no ROM root
+/// imports yet.
+const BATTLE_INTERFACE_IDS: [&str; 19] = [
     "battle-interface/image/textbox",
     "battle-interface/palette/textbox",
     "battle-interface/palette/window_text",
     "battle-interface/palette/pp_text",
     "battle-interface/raw/textbox_map",
+    "battle-interface/raw/healthbox_element/hpbar",
+    "battle-interface/raw/healthbox_element/expbar",
+    "battle-interface/raw/healthbox_element/status",
+    "battle-interface/raw/healthbox_element/misc",
+    "battle-interface/raw/healthbox_element/hpbar_anim",
+    "battle-interface/raw/healthbox_element/misc_frameend",
+    "battle-interface/raw/healthbox_element/ball_display",
+    "battle-interface/raw/healthbox_element/ball_caught_indicator",
+    "battle-interface/raw/healthbox_element/status2",
+    "battle-interface/raw/healthbox_element/status3",
+    "battle-interface/raw/healthbox_element/status4",
+    "battle-interface/raw/healthbox_element/healthbox_doubles_frameend",
+    "battle-interface/raw/healthbox_element/healthbox_doubles_frameend_bar",
+    "battle-interface/raw/battle_bar",
 ];
 
 /// The starters' static battler entries: 12 ids the ROM backend must write
@@ -230,8 +246,9 @@ fn the_rom_backend_matches_the_checkout_pack() {
         }
     }
 
-    // `battle-interface/` is not a complete prefix while the health boxes are
-    // checkout-only, so the textbox entries are pinned by id.
+    // `battle-interface/` is not a complete prefix while the singles frames
+    // are checkout-only, so the textbox, element, and battle-bar entries are
+    // pinned by id.
     for id in BATTLE_INTERFACE_IDS {
         if !imported.contains_key(id) {
             differences.push(format!("{id}: the ROM backend wrote no such entry"));
@@ -266,8 +283,9 @@ fn the_rom_backend_matches_the_checkout_pack() {
     );
 }
 
-/// The pinned battle-interface ids are exactly the profile's roots, and no
-/// complete prefix claims the checkout-only health-box records.
+/// The pinned battle-interface ids are exactly the profile's roots, with the
+/// thirteen elements in table order and each starting where the last ends, and
+/// no complete prefix claims the checkout-only singles frame records.
 #[test]
 fn the_battle_interface_ids_are_pinned_not_claimed_by_prefix() {
     let roots = &rom_import::EMERALD_US_REV0.roots.battle_interface;
@@ -277,20 +295,46 @@ fn the_battle_interface_ids_are_pinned_not_claimed_by_prefix() {
         .map(|root| root.id)
         .chain(roots.palettes.iter().map(|root| root.id))
         .chain(roots.tilemaps.iter().map(|root| root.id))
+        .chain(roots.healthbox_elements.iter().map(|root| root.id))
+        .chain(roots.battle_bar.iter().map(|root| root.id))
         .collect();
     profiled.sort_unstable();
     let mut pinned = BATTLE_INTERFACE_IDS;
     pinned.sort_unstable();
     assert_eq!(profiled, pinned);
+
+    // The table is one run: the pinned order, each root's length, and each
+    // address the previous root's end.
+    let elements: Vec<&str> = roots.healthbox_elements.iter().map(|r| r.id).collect();
+    assert_eq!(elements, BATTLE_INTERFACE_IDS[5..18]);
+    for pair in roots.healthbox_elements.windows(2) {
+        assert_eq!(
+            pair[0].addr.raw() + pair[0].len,
+            pair[1].addr.raw(),
+            "{} ends where {} starts",
+            pair[0].id,
+            pair[1].id
+        );
+    }
+    assert_eq!(
+        roots.healthbox_elements.iter().map(|r| r.len).sum::<u32>(),
+        118 * 32
+    );
+    assert_eq!(
+        roots.battle_bar.map(|bar| bar.id),
+        Some(BATTLE_INTERFACE_IDS[18])
+    );
+
     for id in [
         "battle-interface/raw/battle_bar",
         "battle-interface/raw/healthbox_element/hpbar",
+        "battle-interface/palette/ball_display",
     ] {
         assert!(
             !COMPLETE_PREFIXES
                 .iter()
                 .any(|prefix| id.starts_with(prefix)),
-            "{id} is checkout-only until #2178"
+            "{id} must stay pinned by id, not claimed by a prefix"
         );
     }
 }
