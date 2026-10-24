@@ -246,7 +246,7 @@ pub(crate) enum AppScene {
     MainMenuFadeIn(Box<MainMenuFadeIn>),
     /// Birch's speech, paging through [`crate::intro::speech`]'s text.
     Intro(Box<IntroScene>),
-    /// The intro finished, but [`OverworldPhase::load_default`] failed once
+    /// The intro finished, but [`OverworldPhase::load`] failed once
     /// already (module docs' "log-or-ignore is fine" policy, and
     /// [`advance_scene`]'s `Intro`/`OverworldLoadFailed` arms) -- kept
     /// distinct from [`AppScene::Intro`] so a still-failing pack load is
@@ -400,7 +400,7 @@ fn title_advance_pressed(buttons: ButtonState) -> bool {
 }
 
 /// Whether [`AppScene::OverworldLoadFailed`]'s waiting state should retry
-/// [`OverworldPhase::load_default`] this frame -- only on a *fresh* A or B
+/// [`OverworldPhase::load`] this frame -- only on a *fresh* A or B
 /// edge, the same two dialogue-advance buttons [`AppScene::Intro`] itself
 /// reads (module docs on the finding this guards against: the previous
 /// behaviour re-attempted, and re-logged, the load every single frame while
@@ -429,7 +429,7 @@ fn intro_printer_input(buttons: ButtonState) -> PrinterInput {
 }
 
 /// Log the one-time proof that `phase`'s fresh save state
-/// ([`OverworldPhase::load_default`]'s own doc comment, finding 1 of this
+/// ([`OverworldPhase::load`]'s own doc comment, finding 1 of this
 /// module's review pass) actually reached the `Intro` -> `Overworld`
 /// handoff -- the same "log-or-ignore is fine" pipeline-liveness style
 /// [`crate::app::describe_newly_pressed`] already uses for input.

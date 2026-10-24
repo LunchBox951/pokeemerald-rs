@@ -1,0 +1,21 @@
+[package]
+name = "win-fs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+# Windows only: the crate is empty elsewhere. The one external crate this
+# package names (`minimal-deps`): issue #2074 approved moving the handle
+# identity and verified-delete primitives here as the single receiving member
+# for `rom-import`, `engine`, and `xtask`, with the same exact version and
+# feature boundary `#914`/`#1132` approved. The approval trail is recorded in
+# the dependency ledger (`README.md`).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", default-features = false, features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+] }

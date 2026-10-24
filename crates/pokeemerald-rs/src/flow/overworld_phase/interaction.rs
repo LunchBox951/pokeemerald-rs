@@ -1,12 +1,15 @@
-//! NPC A-press interaction lookup ([`OverworldPhase::interaction_tokens_this_frame`])
+//! A-press interaction lookup ([`OverworldPhase::interaction_tokens_this_frame`])
 //! and its [`InteractionOutcome`].
 
-use engine::overworld::facing_object_event;
+use engine::overworld::{select_interaction_target, InteractionTarget};
 use platform::{ButtonState, Buttons};
 
 use crate::overworld::npc_scripts;
 
 use super::OverworldPhase;
+
+/// The save block holds no secret bases yet, so no entrance is ever already taken.
+const NO_SAVED_SECRET_BASES: &[assets::SecretBaseId] = &[];
 
 impl OverworldPhase {
     /// The token stream a [`crate::overworld::NpcDialog`] should open with this frame, or
@@ -47,12 +50,19 @@ impl OverworldPhase {
         if self.player.in_transit() || !buttons.is_newly_pressed(Buttons::A) {
             return None;
         }
-        self.find_interaction_outcome(runtime)
+        let target = select_interaction_target(
+            &self.player,
+            runtime,
+            &self.save1.event_data,
+            NO_SAVED_SECRET_BASES,
+        )?;
+        Some(self.find_interaction_outcome(target))
     }
 
     /// The lookup half of [`OverworldPhase::interaction_tokens_this_frame`]:
-    /// find the object event `self.player` currently faces
-    /// ([`facing_object_event`]) and decide what an A press on it does.
+    /// decide what an A press does with `target`, the first of the object,
+    /// background-event, then metatile stages to select anything
+    /// ([`select_interaction_target`]).
     ///
     /// Route 103's rival object event (issue #248,
     /// `super::route103_rival_trigger::is_rival_trigger`) is checked
@@ -65,32 +75,33 @@ impl OverworldPhase {
     /// (`OBJ_EVENT_GFX_MOM`'s script) is byte-identical to before this
     /// method grew a second arm.
     ///
-    /// Below that, only `"0x0"` (upstream's `NULL`-script sentinel) means no
-    /// interaction; any other unrecognized script still consumes the frame
-    /// upstream (`field_control_avatar.c:172`).
-    fn find_interaction_outcome(
-        &self,
-        runtime: &engine::overworld::MapRuntime<'_>,
-    ) -> Option<InteractionOutcome> {
-        let object = facing_object_event(&self.player, runtime, &self.save1.event_data)?;
-        if super::route103_rival_trigger::is_rival_trigger(self.map_id, object.script) {
-            return Some(InteractionOutcome::RivalBattle);
+    /// Every selected target consumes the frame, as a script start does
+    /// upstream (`field_control_avatar.c:172`); a script this port doesn't
+    /// model has nothing to render.
+    fn find_interaction_outcome(&self, target: InteractionTarget) -> InteractionOutcome {
+        match target {
+            InteractionTarget::Object(object) => {
+                if super::route103_rival_trigger::is_rival_trigger(self.map_id, object.script) {
+                    InteractionOutcome::RivalBattle
+                } else {
+                    npc_scripts::script_text(object.script).map_or(
+                        InteractionOutcome::Unmodelled(target),
+                        InteractionOutcome::Dialog,
+                    )
+                }
+            }
+            InteractionTarget::Background(_) | InteractionTarget::Metatile(_) => {
+                InteractionOutcome::Unmodelled(target)
+            }
         }
-        if object.script == "0x0" {
-            return None;
-        }
-        Some(
-            npc_scripts::script_text(object.script)
-                .map_or(InteractionOutcome::Unmodelled, InteractionOutcome::Dialog),
-        )
     }
 }
 
 /// What a same-frame A-press interaction ([`OverworldPhase::interaction_tokens_this_frame`])
 /// should do -- a dialog box (the ordinary NPC case,
 /// [`npc_scripts::script_text`]), the Route 103 rival battle (issue #248),
-/// or nothing observable for a real script this port doesn't model yet --
-/// never more than one. Not a dialog itself: a
+/// or nothing observable for a selected target this port doesn't launch
+/// yet -- never more than one. Not a dialog itself: a
 /// trainer battle is not a message box, so it needs its own outcome rather
 /// than being squeezed into [`Vec<engine::text::Token>`]'s shape.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,8 +111,10 @@ pub(super) enum InteractionOutcome {
     /// Start the Route 103 rival battle
     /// ([`OverworldPhase::begin_route103_rival_battle`]).
     RivalBattle,
-    /// A real, non-`"0x0"` script [`npc_scripts::script_text`] doesn't
-    /// recognize: upstream still consumes the frame (`find_interaction_outcome`'s
-    /// own doc comment), but this port has nothing to render for it.
-    Unmodelled,
+    /// A selected target this port has no launcher for: an object whose
+    /// script [`npc_scripts::script_text`] doesn't recognize, a sign or
+    /// hidden item, or a script-backed metatile. Upstream still consumes the
+    /// frame ([`OverworldPhase::find_interaction_outcome`]'s own doc
+    /// comment), but this port has nothing to render for it.
+    Unmodelled(InteractionTarget),
 }

@@ -3,8 +3,6 @@
 use super::test_support::*;
 use super::*;
 
-/// CGB output must never reach the DirectSound reverb ring
-/// (`crate::reverb`'s module doc carries the upstream citation).
 #[test]
 fn a_cgb_only_mix_never_feeds_the_directsound_reverb_ring() {
     const REVERB_LEVEL: u8 = 100;
@@ -28,10 +26,6 @@ fn a_cgb_only_mix_never_feeds_the_directsound_reverb_ring() {
     );
 }
 
-/// A CGB voice sounding alongside DirectSound must still leave the reverb
-/// ring exactly as a DirectSound-only mix would, once both retire: the tail
-/// echoed back must match bit-for-bit against a twin mixer that never had a
-/// CGB voice at all.
 #[test]
 fn a_cgb_voice_alongside_directsound_leaves_the_reverb_tap_directsound_only() {
     const REVERB_LEVEL: u8 = 100;

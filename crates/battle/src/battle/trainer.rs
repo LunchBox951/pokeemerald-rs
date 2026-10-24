@@ -6,6 +6,7 @@
 //! [`build_trainer_pokemon`], as `flow::npc_trainer_battle` does: construction
 //! draws OT IDs before `Battle::new_trainer` can refuse an unexecutable move.
 
+use assets::items::ItemId;
 use assets::trainers::{AiFlags, TrainerClass, TrainerData, TrainerId, TrainerParty, TrainerTable};
 use assets::{MoveId, SpeciesId};
 
@@ -315,6 +316,9 @@ pub struct TrainerPartyMon<'a> {
     /// The fixed personality [`build_trainer_pokemon`] will receive; it selects the
     /// ability slot the admission screen checks.
     pub personality: u32,
+    /// The item the member will hold ([`ItemId::NONE`] for none); a held item
+    /// the battle cannot honour is refused before any draw.
+    pub held_item: ItemId,
 }
 
 /// Validates that a trainer party can be built and played without consuming RNG.
@@ -334,6 +338,9 @@ pub struct TrainerPartyMon<'a> {
 /// always-refused ability or a member's PP-positive move would be refused by
 /// [`secondary::ensure_admissible`](crate::secondary::ensure_admissible)
 /// against `player_lead` (for example Serene Grace with a Confuse Hit move).
+/// [`BattleError::UnsupportedHeldItem`] when a member's held item has an
+/// effect no pipeline models, or [`BattleError::UnsupportedTrainerBagItem`]
+/// when the trainer's bag holds any item.
 /// Only the lead is screened; reserves are screened by `Battle::new_trainer`.
 pub fn ensure_trainer_party_startable(
     dex: &Dex,
@@ -345,6 +352,7 @@ pub fn ensure_trainer_party_startable(
         return Err(BattleError::EmptyTrainerParty(trainer));
     }
     let data = trainer_data(trainer)?;
+    super::held_item::ensure_trainer_bag_unused(&data.items)?;
     for mon in party {
         BattlePokemon::validate(dex, mon.species, mon.level, mon.moves)?;
         super::admission::ensure_selected_ability_admissible(dex, mon.species, mon.personality)?;
@@ -368,6 +376,7 @@ pub fn ensure_trainer_party_startable(
                 super::secondary::ensure_admissible(dex, slot.move_id, &attacker, player_lead)?;
             }
         }
+        super::held_item::ensure_held_item_playable(mon.held_item)?;
     }
     if data.ai_flags.contains(AiFlags::CHECK_BAD_MOVE) {
         super::trainer_ai::ensure_target_ability_unambiguous(player_lead)?;
@@ -384,6 +393,7 @@ mod tests {
     };
     use crate::dex::Dex;
     use crate::script_rng::SequenceRng;
+    use assets::items::ItemId;
     use assets::trainers::{TrainerClass, TrainerId};
     use assets::{MoveId, SpeciesId};
 
@@ -583,12 +593,14 @@ mod tests {
                 level: 20,
                 moves: &moves,
                 personality,
+                held_item: ItemId::NONE,
             };
             let ok = TrainerPartyMon {
                 species: SpeciesId::MUDKIP,
                 level: 20,
                 moves: &moves,
                 personality: SLOT_0,
+                held_item: ItemId::NONE,
             };
             for party in [[refused, ok], [ok, refused]] {
                 assert_eq!(
@@ -628,6 +640,7 @@ mod tests {
                     level: 20,
                     moves: &moves,
                     personality,
+                    held_item: ItemId::NONE,
                 }],
             )
             .is_ok());
@@ -670,9 +683,37 @@ mod tests {
                     level: ROUTE_103_RIVAL_LEVEL,
                     moves: &moves,
                     personality: 0,
+                    held_item: ItemId::NONE,
                 }],
             ),
             Ok(())
+        );
+    }
+
+    #[test]
+    fn the_pre_flight_refuses_a_later_members_unmodelled_item_and_admits_an_effect_free_one() {
+        let dex = Dex::new();
+        let moves = [POUND];
+        let member = |held_item| TrainerPartyMon {
+            species: TREECKO,
+            level: ROUTE_103_RIVAL_LEVEL,
+            moves: &moves,
+            personality: 0,
+            held_item,
+        };
+        let screen = |party: &[TrainerPartyMon<'_>]| {
+            ensure_trainer_party_startable(&dex, &lead(TREECKO), MAY_ROUTE_103_MUDKIP, party)
+        };
+
+        assert_eq!(
+            screen(&[member(ItemId::NUGGET), member(ItemId::NONE)]),
+            Ok(())
+        );
+        assert_eq!(
+            screen(&[member(ItemId::NONE), member(ItemId::ORAN_BERRY)]),
+            Err(crate::error::BattleError::UnsupportedHeldItem(
+                ItemId::ORAN_BERRY
+            ))
         );
     }
 
@@ -689,6 +730,7 @@ mod tests {
                 level: ROUTE_103_RIVAL_LEVEL,
                 moves: &moves,
                 personality: 0,
+                held_item: ItemId::NONE,
             }],
         )
         .expect_err("Harden is not executable by this turn engine");
@@ -738,6 +780,7 @@ mod tests {
             level: ROUTE_103_RIVAL_LEVEL,
             moves: &moves,
             personality: SLOT_0,
+            held_item: ItemId::NONE,
         }];
         let enemy = crate::pokemon::BattlePokemon::new(
             &dex,
@@ -791,6 +834,7 @@ mod tests {
                     level: ROUTE_103_RIVAL_LEVEL,
                     moves: &moves,
                     personality: 0,
+                    held_item: ItemId::NONE,
                 }],
             ),
             Err(crate::error::BattleError::UnknownTrainer(UNKNOWN_TRAINER))
@@ -806,6 +850,7 @@ mod tests {
             level: ROUTE_103_RIVAL_LEVEL,
             moves: &moves,
             personality: 0,
+            held_item: ItemId::NONE,
         }];
         assert_eq!(
             trainer_data(TrainerId::JANI).unwrap().ai_flags,
@@ -836,6 +881,7 @@ mod tests {
             level: ROUTE_103_RIVAL_LEVEL,
             moves: &moves,
             personality: 0,
+            held_item: ItemId::NONE,
         }];
         assert_eq!(
             ensure_trainer_party_startable(&dex, &lead(VOLTORB), TrainerId::JANI, &party),
@@ -870,6 +916,7 @@ mod tests {
             level: ROUTE_103_RIVAL_LEVEL,
             moves: &moves,
             personality: 0,
+            held_item: ItemId::NONE,
         }];
         for slot in [0, 1] {
             let voltorb = lead(VOLTORB).with_ability_slot(slot);
