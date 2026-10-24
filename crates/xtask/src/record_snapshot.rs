@@ -23,7 +23,7 @@ mod staging;
 
 #[cfg(windows)]
 use directory::claim_promoted_dir;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 use directory::claim_staged_dir;
 use directory::{claim_output_dir, OutputDirClaim, StagedDirClaim};
 

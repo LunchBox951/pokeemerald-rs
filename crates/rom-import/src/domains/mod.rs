@@ -26,13 +26,16 @@
 pub(crate) mod audio;
 pub(crate) mod bag;
 pub(crate) mod battle_anim;
+pub(crate) mod battle_interface;
 pub(crate) mod battle_messages;
 pub(crate) mod battlers;
 pub(crate) mod fonts;
 pub(crate) mod interface;
 pub(crate) mod layouts;
+pub(crate) mod opening_scene;
 pub(crate) mod song;
 pub(crate) mod sprites;
+pub(crate) mod starter_choose;
 pub(crate) mod text_window;
 pub(crate) mod tilesets;
 pub(crate) mod title;
@@ -65,6 +68,9 @@ pub(crate) const DOMAINS: &[Domain] = &[
     battle_messages::write,
     battle_anim::write,
     bag::write,
+    starter_choose::write,
+    opening_scene::write,
+    battle_interface::write,
     battlers::write,
 ];
 

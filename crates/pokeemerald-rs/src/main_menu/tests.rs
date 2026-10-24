@@ -289,13 +289,22 @@ fn synthetic_main_menu_pack_bytes(font_index: u8) -> Vec<u8> {
     ])
 }
 
+/// Owns a temporary pack path and removes it on drop. Cleanup is installed
+/// only once the path was exclusively claimed, so a failed claim never
+/// removes an entry this guard does not own.
 struct TempPackGuard {
     path: std::path::PathBuf,
 }
 
 impl TempPackGuard {
-    fn new(path: std::path::PathBuf) -> Self {
-        Self { path }
+    /// Exclusively claims `path` (never following a planted symlink or
+    /// truncating an occupant) and writes `bytes` through the claimed handle.
+    fn claim(path: std::path::PathBuf, bytes: &[u8]) -> Self {
+        use std::io::Write as _;
+        let mut file = crate::pack_test_support::claim_scratch_exclusive(&path);
+        let guard = Self { path };
+        file.write_all(bytes).unwrap();
+        guard
     }
 
     fn path(&self) -> &std::path::Path {
@@ -328,43 +337,76 @@ fn load_synthetic_scene_with_font(font_index: u8) -> MainMenuScene {
     load_synthetic_scene_inner(font_index, MainMenuType::NoSavedGame, super::FRAME_ID)
 }
 
+fn synthetic_pack_path(font_index: u8, window_frame: u8) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!(
+        "pokeemerald-rs-main-menu-test-{}-{:?}-{font_index}-{window_frame}.pack",
+        std::process::id(),
+        std::thread::current().id()
+    ))
+}
+
+fn claim_synthetic_pack(font_index: u8, window_frame: u8) -> TempPackGuard {
+    TempPackGuard::claim(
+        synthetic_pack_path(font_index, window_frame),
+        &synthetic_main_menu_pack_bytes(font_index),
+    )
+}
+
 fn load_synthetic_scene_inner(
     font_index: u8,
     menu_type: MainMenuType,
     window_frame: u8,
 ) -> MainMenuScene {
-    let path = std::env::temp_dir().join(format!(
-        "pokeemerald-rs-main-menu-test-{}-{:?}-{font_index}-{window_frame}.pack",
-        std::process::id(),
-        std::thread::current().id()
-    ));
-    let temp_pack = TempPackGuard::new(path);
-    std::fs::write(temp_pack.path(), synthetic_main_menu_pack_bytes(font_index)).unwrap();
+    let temp_pack = claim_synthetic_pack(font_index, window_frame);
     let pack = AssetPack::load(temp_pack.path()).unwrap();
     MainMenuScene::from_pack_with_window_frame(&pack, menu_type, window_frame).unwrap()
 }
 
-#[test]
-fn temp_pack_cleanup_is_unwind_safe() {
-    let path = std::env::temp_dir().join(format!(
+fn unwind_pack_path() -> std::path::PathBuf {
+    std::env::temp_dir().join(format!(
         "pokeemerald-rs-main-menu-unwind-test-{}-{:?}.pack",
         std::process::id(),
         std::thread::current().id()
-    ));
+    ))
+}
+
+fn claim_unwind_pack() -> TempPackGuard {
+    TempPackGuard::claim(
+        unwind_pack_path(),
+        &synthetic_main_menu_pack_bytes(TRANSPARENT_FONT_INDEX),
+    )
+}
+
+#[test]
+fn temp_pack_cleanup_is_unwind_safe() {
+    let path = unwind_pack_path();
 
     let result = std::panic::catch_unwind(|| {
-        let temp_pack = TempPackGuard::new(path.clone());
-        std::fs::write(
-            temp_pack.path(),
-            synthetic_main_menu_pack_bytes(TRANSPARENT_FONT_INDEX),
-        )
-        .unwrap();
+        let temp_pack = claim_unwind_pack();
         assert!(temp_pack.path().exists());
         panic!("deliberate panic to exercise temporary pack cleanup");
     });
 
     assert!(result.is_err(), "the deliberate panic must be observed");
     assert!(!path.exists(), "temporary pack must be removed on unwind");
+}
+
+/// A symlink or an occupied file planted at a main-menu scratch pack's
+/// predictable path must be replaced, never written through or truncated.
+#[test]
+fn the_main_menu_scratch_packs_never_write_through_a_planted_entry() {
+    let font_index = TRANSPARENT_FONT_INDEX;
+    let expected = synthetic_main_menu_pack_bytes(font_index);
+    crate::pack_test_support::assert_scratch_claim_is_exclusive(
+        &synthetic_pack_path(font_index, super::FRAME_ID),
+        &expected,
+        || claim_synthetic_pack(font_index, super::FRAME_ID),
+    );
+    crate::pack_test_support::assert_scratch_claim_is_exclusive(
+        &unwind_pack_path(),
+        &expected,
+        claim_unwind_pack,
+    );
 }
 
 #[test]

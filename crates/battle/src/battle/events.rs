@@ -42,6 +42,25 @@ pub enum BattleEvent {
         /// The move with no PP remaining.
         move_id: MoveId,
     },
+    /// A sleeping battler's remaining duration survived this action's
+    /// decrement, cancelling its chosen move before any PP was spent
+    /// (`CANCELER_ASLEEP`, `src/battle_util.c:2015`-`:2057`).
+    ///
+    /// This precedes the confusion and paralysis cancellers, which do not
+    /// run for the action.
+    FastAsleep {
+        /// Whether the player's battler is asleep.
+        by_player: bool,
+        /// The move that was never attempted.
+        move_id: MoveId,
+    },
+    /// A sleeping battler's duration reached zero this action, so it woke
+    /// and its chosen move proceeds through the remaining cancellers
+    /// (`BattleScript_MoveUsedWokeUp`, `src/battle_util.c:2045`-`:2053`).
+    WokeUp {
+        /// Whether the player's battler woke.
+        by_player: bool,
+    },
     /// A confused battler's duration reached zero this action, ending
     /// confusion before the paralysis draw and PP handling run
     /// (`CANCELER_CONFUSED`, `src/battle_util.c:2157`-`:2187`).
