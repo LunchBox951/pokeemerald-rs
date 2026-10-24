@@ -83,9 +83,9 @@ impl ObjectEventCollection {
     /// Iterates entries at `(x, y, elevation)` by *live* position, in
     /// declaration order.
     ///
-    /// Unlike [`crate::overworld::map_runtime::MapRuntime::object_events_at`],
-    /// which scans authored template coordinates, this scans live position
-    /// and elevation. Either side's elevation may be
+    /// [`crate::overworld::map_runtime::MapRuntime::object_events_at`]
+    /// delegates here when a collection is bound; unbound, it scans authored
+    /// template coordinates instead. Either side's elevation may be
     /// [`crate::overworld::collision::ELEVATION_TRANSITION`] to match the
     /// other, mirroring upstream's `GetObjectEventIdByPosition`/
     /// `ObjectEventDoesElevationMatch` (`event_object_movement.c:2192-2215`).

@@ -19,18 +19,16 @@
 //! # The stand-in party (`seed_battle`)
 //!
 //! `begin_sight_trainer_approach_if_seen`'s own docs ("Refusals cost
-//! nothing, forever") record an emergent gap: every real Route 103 sight trainer's
-//! own default, level-up-derived moveset except Andrew's currently includes
-//! at least one move this battle engine does not yet implement or score, so
+//! nothing, forever") record an emergent gap: most real Route 103 sight
+//! trainers' default, level-up-derived movesets still include a move this
+//! battle engine does not yet implement or score, so
 //! [`crate::flow::npc_trainer_battle::start_npc_trainer_battle`] fails for
-//! all but Andrew today (pinned generically by
+//! them (pinned generically by
 //! `sight_trainer_trigger::tests::refused_sight_trainers_real_parties_fail_to_construct_for_exactly_these_reasons`).
-//! That is a genuine, current fact about this port, not a testing
-//! inconvenience to work around invisibly -- so the `trigger` tests that only
-//! need the trigger/geometry/refusal half
-//! (`standing_in_a_real_trainers_cone_attempts_the_real_handoff_which_currently_fails_to_construct`
-//! and its siblings) exercise Rhett's own real, currently-failing
-//! construction attempt directly, and pin that it fails.
+//! Andrew's and Rhett's real parties do construct. The `trigger` tests that
+//! need a refusal use Marcos's id (his party stops at Sonic Boom) in place of
+//! Rhett's at Rhett's cone through `synthetic_sight_trainer`, so the geometry
+//! stays Rhett's while the refused party is real.
 //!
 //! The win/loss/defeated-flag *driver* half
 //! ([`OverworldPhase::advance_sight_trainer_battle_frame`][advance]) is a
@@ -48,7 +46,6 @@
 //! carries Rhett's own real `TrainerId` -- so the *defeated-flag* half is
 //! pinned honestly (the
 //! real id the flag ends up keyed to) even though the *party* is borrowed.
-//! Once move coverage lets a real sight trainer construct, the two halves should be merged back into one real end-to-end test.
 //!
 //! [advance]: super::OverworldPhase::advance_sight_trainer_battle_frame
 //! [active]: super::OverworldPhase::active_battle

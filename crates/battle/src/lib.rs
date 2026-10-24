@@ -218,9 +218,11 @@
 //! stat-drop guards — Clear Body, White Smoke, Keen Eye,
 //! Hyper Cutter ([`stat_change`]'s module docs; Shield Dust is the one
 //! guard left unmodelled there; [`secondary`] models it for poison) —
-//! held items, every primary status but
-//! [`status1::Status1::Paralysed`] and [`status1::Status1::Poisoned`]
-//! (sleep, freeze, burn, toxic — see [`status1`]'s module docs), every
+//! held items, every primary status but [`status1::Status1::Paralysed`],
+//! [`status1::Status1::Poisoned`], and [`status1::Status1::Asleep`] (freeze,
+//! burn, toxic — see [`status1`]'s module docs; no modelled move inflicts
+//! sleep yet, so it arrives only through
+//! [`pokemon::BattlePokemon::set_status1`]), every
 //! `status2`/`gStatuses3` bit outside [`volatile::Volatiles`]'s four
 //! (Substitute chief among them — see [`volatile`]'s module docs), weather,
 //! multi/double battles, Mist/Substitute/Safeguard/Protect, and the
@@ -259,6 +261,7 @@ pub mod escape;
 pub mod exp;
 pub mod fixed_damage;
 pub mod flag_move;
+pub mod gender;
 pub mod hit;
 mod move_gate;
 pub mod multi_hit;
@@ -298,6 +301,7 @@ pub use error::BattleError;
 pub use exp::{trainer_faint_exp, wild_faint_exp};
 pub use fixed_damage::{is_fixed_damage_effect, resolve_fixed_damage_move, FixedDamage};
 pub use flag_move::{is_flag_move_effect, resolve_flag_move, FlagMoveOutcome};
+pub use gender::Gender;
 pub use hit::{accuracy_roll, damage_core, ensure_resolvable, is_ordinary_hit_effect, HitOutcome};
 pub use multi_hit::{is_multi_hit_effect, roll_hit_count, MAX_HITS, MIN_HITS};
 pub use nature::{Nature, Stat};
@@ -322,5 +326,5 @@ pub use status1::Status1;
 pub use volatile::Volatiles;
 pub use wild::{
     build_pokemon_with_random_personality, build_wild_pokemon, ensure_wild_startable,
-    initial_moveset,
+    initial_moveset, pick_wild_nature,
 };

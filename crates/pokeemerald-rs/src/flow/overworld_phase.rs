@@ -6,7 +6,7 @@
 //! module docs for the transition diagram this phase slots into.
 //!
 //! This file keeps [`OverworldPhase`] itself -- its fields and
-//! construction ([`OverworldPhase::load_default`]/[`OverworldPhase::new`])
+//! construction ([`OverworldPhase::load`]/[`OverworldPhase::new`])
 //! -- and delegates each per-frame concern to a focused sibling module,
 //! each contributing its own `impl OverworldPhase` block: [`step`] (input
 //! -> movement -> warp/interaction/encounter, [`OverworldPhase::step`]),
@@ -196,7 +196,7 @@ pub(crate) struct OverworldPhase {
     /// an open start menu freezes movement (upstream's
     /// `UpdateTilesetAnimations` runs every `VBlank` regardless of
     /// message-box state), and reset to `0` on a full map load
-    /// ([`Self::load_default`]/[`Self::warp_to`]) or any battle
+    /// ([`Self::load`]/[`Self::warp_to`]) or any battle
     /// return ([`Self::reinit_field_tileset_animations`]),
     /// but *not* on a connection crossing: upstream's seamless
     /// camera transition re-inits only the secondary tileset counter,
@@ -368,18 +368,6 @@ pub(crate) struct OverworldPhase {
 }
 
 impl OverworldPhase {
-    /// Test-only: [`Self::load`] with [`PackSource::Runtime`](crate::pack_source::PackSource::Runtime)
-    /// and default new-game options, for the many tests that don't care
-    /// which pack source they get.
-    #[cfg(test)]
-    pub(super) fn load_default() -> Result<Self, OverworldSceneError> {
-        Self::load(
-            crate::pack_source::PackSource::Runtime,
-            new_game::NewGameOptions::DEFAULT,
-            new_game::NewGameIdentity::DEFAULT,
-        )
-    }
-
     /// Start a new overworld run from `source`, with `options` carrying the
     /// `SaveBlock2` preferences a NEW GAME over an intact save must inherit
     /// rather than default (module docs on [`Self::new`]).
@@ -512,12 +500,11 @@ impl OverworldPhase {
         destination: WarpData,
     ) -> Result<Self, ContinueError> {
         let refused = ContinueError::ContinueGameWarp { destination };
-        let (Ok(header), Ok(events)) = (
-            assets::MapHeaderTable::new().header(warp_map),
-            assets::MapEventsTable::new().resolve(warp_map),
-        ) else {
+        if assets::MapHeaderTable::new().header(warp_map).is_err()
+            || assets::MapEventsTable::new().resolve(warp_map).is_err()
+        {
             return Err(refused);
-        };
+        }
         let event_data =
             connections::map_entry_event_data(&block1.event_data, warp_map, block2.player_gender);
         let scene = overworld::load_room_from_source(
@@ -526,12 +513,8 @@ impl OverworldPhase {
             block2.player_gender.into(),
             &event_data,
         )?;
-        let Some(object_events) = connections::seed_object_events(&scene, warp_map) else {
-            return Err(refused);
-        };
-        let Some(landing) =
-            connections::saved_location_landing(&scene, warp_map, header, events, destination)
-        else {
+        let object_events = connections::seed_object_events(&scene);
+        let Some(landing) = connections::saved_location_landing(&scene, destination) else {
             return Err(refused);
         };
         let mut phase = Self::from_saved(scene, warp_map, block1, block2);
@@ -586,16 +569,14 @@ impl OverworldPhase {
             }
         }
         let position = (i32::from(block1.pos.x), i32::from(block1.pos.y));
-        let (tile_elevation, tile_facing) =
-            placement::saved_tile_placement(&scene, map_id, position);
+        let (tile_elevation, tile_facing) = placement::saved_tile_placement(&scene, position);
         let facing = placement::saved_facing(&block1, tile_facing);
         let (elevation, previous_elevation) = placement::saved_elevations(
             &block1,
-            placement::saved_cell_elevation(&scene, map_id, position),
+            placement::saved_cell_elevation(&scene, position),
             tile_elevation,
         );
-        let object_events = connections::seed_object_events(&scene, map_id)
-            .expect("a loaded scene's map has event data");
+        let object_events = connections::seed_object_events(&scene);
         let mut phase = Self {
             scene,
             player: PlayerState::with_saved_elevations(
@@ -679,8 +660,9 @@ impl OverworldPhase {
     }
 
     /// Test-only: a phase around an already-built `scene`. `map_id` must
-    /// still name a real map, since [`Self::step`] resolves its header and
-    /// events from the generated tables every frame.
+    /// name a real map; a synthetic-grid `scene` is re-labelled as that map
+    /// ([`OverworldScene::in_room_for_test`]) so [`Self::step`] queries the
+    /// map's header and events, exactly as a loaded scene's own would answer.
     #[cfg(test)]
     pub(super) fn for_test(
         scene: OverworldScene,
@@ -689,7 +671,7 @@ impl OverworldPhase {
         dialog: Option<NpcDialog>,
     ) -> Self {
         Self::new(
-            scene,
+            scene.in_room_for_test(map_id),
             map_id,
             player,
             dialog,
@@ -713,7 +695,7 @@ impl OverworldPhase {
         pack_source: crate::pack_source::PackSource,
     ) -> Self {
         Self::new(
-            scene,
+            scene.in_room_for_test(map_id),
             map_id,
             player,
             dialog,
@@ -747,8 +729,7 @@ impl OverworldPhase {
             &mut save1.event_data,
             save2.player_gender,
         );
-        let object_events = connections::seed_object_events(&scene, map_id)
-            .expect("a loaded scene's map has event data");
+        let object_events = connections::seed_object_events(&scene);
         Self {
             scene,
             player,
@@ -973,6 +954,8 @@ mod bedroom_collision_tests;
 #[cfg(test)]
 mod connections_tests;
 #[cfg(test)]
+mod cute_charm_slot_zero_tests;
+#[cfg(test)]
 mod decoration_tests;
 #[cfg(test)]
 mod dialog_pacing_tests;
@@ -996,6 +979,8 @@ mod forced_movement_encounter_tests;
 mod frame_tests;
 #[cfg(test)]
 mod input_tests;
+#[cfg(test)]
+mod interaction_tests;
 #[cfg(test)]
 mod landing_call_arrow_elevation_tests;
 /// `crate::overworld::oldale_town_npc_reposition` collision tests reachable
