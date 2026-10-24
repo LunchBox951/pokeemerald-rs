@@ -167,7 +167,7 @@ fn locate_tilemaps(
 fn check_tiles(
     id: &str,
     expected_id: &str,
-    payload: &[u8],
+    payload_len: usize,
     tiles: u32,
 ) -> Result<(), GenRomProfileError> {
     if id != expected_id {
@@ -179,12 +179,11 @@ fn check_tiles(
     // Compared as `usize`: a pack payload may exceed `u32`, which `len32`
     // would panic on.
     let expected = tiles * HEALTHBOX_TILE_BYTES;
-    if usize::try_from(expected).ok() != Some(payload.len()) {
+    if usize::try_from(expected).ok() != Some(payload_len) {
         return Err(GenRomProfileError::StructMismatch {
             id: id.to_owned(),
             reason: format!(
-                "holds {} bytes: the table row is {tiles} tiles, {expected} bytes",
-                payload.len()
+                "holds {payload_len} bytes: the table row is {tiles} tiles, {expected} bytes"
             ),
         });
     }
@@ -201,7 +200,7 @@ fn locate_element_table(
     let mut payloads = Vec::with_capacity(ids.len());
     for (id, (expected_id, tiles)) in ids.iter().zip(HEALTHBOX_ELEMENTS) {
         let payload = ctx.pack.raw_payload(id)?;
-        check_tiles(id, expected_id, payload, tiles)?;
+        check_tiles(id, expected_id, payload.len(), tiles)?;
         payloads.push(payload.to_vec());
     }
     let run: Vec<u8> = payloads.concat();
@@ -239,7 +238,7 @@ fn locate_battle_bar(
     let id = healthbox_battle_bar_id();
     let payload = ctx.pack.raw_payload(&id)?;
     let (expected_id, tiles) = HEALTHBOX_BATTLE_BAR;
-    check_tiles(&id, expected_id, payload, tiles)?;
+    check_tiles(&id, expected_id, payload.len(), tiles)?;
     let len = len32(payload);
     let payload = payload.to_vec();
     let hits = ctx.lz77.find_all(&[payload]);
