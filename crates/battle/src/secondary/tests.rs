@@ -1,9 +1,9 @@
 use super::{
     ensure_admissible, is_confuse_hit_effect, is_poison_hit_effect, is_secondary_effect,
-    resolve_synchronize_poison_reflection, spend_effect_chance_draw, trampoline_for_effect,
-    SecondaryApplication, SynchronizePoisonReflectionOutcome, EFFECT_CONFUSE_HIT,
-    EFFECT_DOUBLE_EDGE, EFFECT_FAKE_OUT, EFFECT_OVERHEAT, EFFECT_POISON_HIT, EFFECT_POISON_TAIL,
-    EFFECT_RAPID_SPIN, EFFECT_SUPERPOWER, SECONDARY_TRAMPOLINES,
+    is_speed_down_hit_effect, resolve_synchronize_poison_reflection, spend_effect_chance_draw,
+    trampoline_for_effect, SecondaryApplication, SynchronizePoisonReflectionOutcome,
+    EFFECT_CONFUSE_HIT, EFFECT_DOUBLE_EDGE, EFFECT_FAKE_OUT, EFFECT_OVERHEAT, EFFECT_POISON_HIT,
+    EFFECT_POISON_TAIL, EFFECT_RAPID_SPIN, EFFECT_SUPERPOWER, SECONDARY_TRAMPOLINES,
 };
 use crate::damage::STRUGGLE;
 use crate::dex::Dex;
@@ -872,4 +872,78 @@ fn a_serene_grace_attacker_is_admitted_for_a_guaranteed_confusion_move() {
         ensure_admissible(&dex, DYNAMIC_PUNCH, &attacker, &defender),
         Ok(())
     );
+}
+
+/// `SPECIES_TENTACOOL`: Clear Body in its first ability slot.
+const TENTACOOL: u16 = 72;
+const CONSTRICT: MoveId = MoveId::CONSTRICT;
+
+#[test]
+fn only_effect_speed_down_hit_is_the_modelled_speed_trampoline() {
+    let dex = Dex::new();
+    assert!(is_speed_down_hit_effect(
+        dex.move_data(CONSTRICT).unwrap().effect
+    ));
+    assert!(!is_speed_down_hit_effect(
+        dex.move_data(TACKLE).unwrap().effect
+    ));
+}
+
+#[test]
+fn constrict_reports_a_speed_drop_on_a_successful_roll_and_draws_once() {
+    let dex = Dex::new();
+    let defender = mon(&dex, ZIGZAGOON);
+    for (roll, expected) in [
+        (9, SecondaryApplication::SpeedDown),
+        (10, SecondaryApplication::None),
+    ] {
+        let mut rng = SequenceRng::new([roll]);
+        assert_eq!(
+            spend_effect_chance_draw(&dex, CONSTRICT, true, &defender, &mut rng),
+            Ok(expected),
+            "roll {roll}"
+        );
+        assert_eq!(rng.draws(), 1);
+    }
+    let mut rng = SequenceRng::new([9]);
+    assert_eq!(
+        spend_effect_chance_draw(&dex, CONSTRICT, false, &defender, &mut rng),
+        Ok(SecondaryApplication::None),
+        "an ineffective hit never carries the secondary"
+    );
+    assert_eq!(rng.draws(), 1);
+}
+
+#[test]
+fn clear_body_and_shield_dust_stop_the_speed_drop_but_still_draw() {
+    let dex = Dex::new();
+    for species in [TENTACOOL, WURMPLE] {
+        let defender = mon(&dex, species);
+        let mut rng = SequenceRng::new([0]);
+        assert_eq!(
+            spend_effect_chance_draw(&dex, CONSTRICT, true, &defender, &mut rng),
+            Ok(SecondaryApplication::None),
+            "species {species}"
+        );
+        assert_eq!(rng.draws(), 1);
+    }
+}
+
+#[test]
+fn a_serene_grace_attacker_is_refused_for_a_speed_down_hit_only_where_it_could_land() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, DUNSPARCE);
+    assert_eq!(
+        ensure_admissible(&dex, CONSTRICT, &attacker, &mon(&dex, ZIGZAGOON)),
+        Err(BattleError::UnportedAbilityInteraction(
+            AbilityId::SERENE_GRACE
+        ))
+    );
+    for species in [TENTACOOL, WURMPLE] {
+        assert_eq!(
+            ensure_admissible(&dex, CONSTRICT, &attacker, &mon(&dex, species)),
+            Ok(()),
+            "species {species}: the drop can never land, so the doubling is unobservable"
+        );
+    }
 }
