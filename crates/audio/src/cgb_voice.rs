@@ -12,10 +12,29 @@ mod routing;
 
 use self::{oscillator::Oscillator, routing::StereoRouting};
 
-const BIPOLAR_SAMPLE_SCALE: i32 = 127;
-const WAVE_SAMPLE_SCALE: i32 = 16;
+// PSG output in DirectSound accumulator units (one s8 FIFO unit each).
+//
+// Emerald mixes the PSG at 100% (`SOUND_ALL_MIX_FULL`) with NR50 = 0x77
+// (`pokeemerald/src/m4a.c:275,370-372`; `include/gba/io_reg.h:618-623`). mGBA sums
+// the unipolar channel outputs, shifts them left 3, and multiplies by
+// `1 + 7` (`mgba/src/gb/audio.c:778-793`), then shifts right by `4 - 2` for the
+// full PSG mix (`mgba/src/gba/audio.c:362-366`): one PSG volume or nibble unit
+// is `8 * 8 >> 2 = 16` hardware units. A full-volume FIFO s8 sample is
+// `<< 2` with no halving (`mgba/src/gba/audio.c:368-384`): 4 hardware units. The mixer
+// accumulates in FIFO units, so one PSG unit is `16 / 4 = 4`.
+const PSG_HARDWARE_UNITS_PER_LEVEL: i32 = ((1 << 3) * (1 + 7)) >> (4 - 2);
+const FIFO_HARDWARE_UNITS_PER_SAMPLE: i32 = 1 << 2;
+const PSG_LEVEL_FIFO_UNITS: i32 = PSG_HARDWARE_UNITS_PER_LEVEL / FIFO_HARDWARE_UNITS_PER_SAMPLE;
+const WAVE_SAMPLE_SCALE: i32 = PSG_LEVEL_FIFO_UNITS;
 const LINEAR_ENVELOPE_SCALE: u32 = 16;
 const SAMPLE_GAIN_BITS: u32 = 8;
+// Square and noise are unipolar on hardware (`0..=volume`, `mgba/src/gb/audio.c:641,917`)
+// but rendered about their midpoint as `+-volume`: one volume unit then spans
+// half of `PSG_LEVEL_FIFO_UNITS` per side. `frame_gain` already carries
+// `LINEAR_ENVELOPE_SCALE` per volume unit in Q8, so the scale below makes a
+// full `+-1` sample contribute `+-volume * PSG_LEVEL_FIFO_UNITS / 2`.
+const BIPOLAR_SAMPLE_SCALE: i32 =
+    (PSG_LEVEL_FIFO_UNITS << SAMPLE_GAIN_BITS) / (2 * LINEAR_ENVELOPE_SCALE.cast_signed());
 const MIDI_KEY_COUNT: i32 = 256;
 const CGB_FREQUENCY_REGISTER_BITS: u32 = 11;
 const EVEN_FREQUENCY_REGISTER_MASK: u16 = (1 << CGB_FREQUENCY_REGISTER_BITS) - 2;
