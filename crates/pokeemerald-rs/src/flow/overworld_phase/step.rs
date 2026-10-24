@@ -19,7 +19,8 @@
 //! wild-encounter half of this pipeline's precedence rules.
 
 use engine::overworld::{
-    trigger_arrow_warp, trigger_door_warp, Direction, MapRuntime, PlayerState, WarpTrigger,
+    trigger_arrow_warp, trigger_door_warp, Direction, MapRuntime, PlayerState, StepOutcome,
+    WarpTrigger,
 };
 use engine::save::Coords16;
 use engine::text::render::TextSpeed;
@@ -329,6 +330,19 @@ impl OverworldPhase {
             return;
         }
 
+        // The player's spawn-time ground effects come before the frame's
+        // movement, and every effect's callback and animation after it, as
+        // `AnimateSprites` runs them once CB1's input has moved the player
+        // (`src/overworld.c:1465-1469`). Every branch below, a dialog or a
+        // cutscene included, leaves the field's sprites animating.
+        self.scene.seed_tall_grass_placement(&self.player);
+        self.step_field_frame(buttons);
+        self.scene.advance_tall_grass(&self.player);
+    }
+
+    /// [`Self::step`]'s input, movement, and event pipeline for a frame no
+    /// battle owns. See [`Self::step`] for the shape it follows.
+    fn step_field_frame(&mut self, buttons: ButtonState) {
         // A sight trainer's approach cutscene (S-5, issue #300,
         // `super::sight_trainer_approach`) owns every frame between the cone
         // check below and the battle above, and drives its own intro message
@@ -522,6 +536,14 @@ impl OverworldPhase {
                 || pre.start_menu.is_some(),
         );
 
+        // `DoGroundEffects_OnBeginStep` runs from the step's first movement
+        // update (`event_object_movement.c:5354-5357`), so the grass it
+        // starts belongs to the tile the step enters, on the frame it begins.
+        if let StepOutcome::Advanced { to, .. } = outcome {
+            self.scene
+                .player_step_began(to, self.player.previous_elevation());
+        }
+
         // At most one warp per frame, in `ProcessPlayerFieldInput`'s own
         // order: the completed step's door-shaped warp
         // (`TryStartStepBasedScript`, `:155-161`), then the arrow poll
@@ -673,7 +695,11 @@ impl OverworldPhase {
         else {
             return;
         };
-        if !self.cross_connection(to_map, to_position) {
+        if self.cross_connection(to_map, to_position) {
+            // The crossing step's own begin-step pass, on the entered map.
+            self.scene
+                .player_step_began(to_position, self.player.previous_elevation());
+        } else {
             // A refused rebind must not leave the player standing at
             // a position expressed in the *entered* map's coordinate
             // space while `map_id`/`scene` still name the departed
