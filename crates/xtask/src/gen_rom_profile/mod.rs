@@ -24,6 +24,7 @@
 mod audio;
 mod bag;
 mod battle_anims;
+mod battle_interface;
 mod battle_messages;
 mod battlers;
 mod emit;
@@ -34,11 +35,13 @@ mod inventory;
 mod layouts;
 mod locate;
 mod map_file;
+mod opening_scene;
 mod pack_source;
 mod palettes;
 mod plan;
 mod search;
 mod sprites;
+mod starter_chooser;
 mod text_window;
 mod tilesets;
 mod title;
@@ -164,6 +167,9 @@ fn locate_profile(
         battle_messages: battle_messages::locate(ctx, lines)?,
         battle_anims: battle_anims::locate(ctx, lines)?,
         bag: bag::locate(ctx, lines)?,
+        starter_chooser: starter_chooser::locate(ctx, lines)?,
+        opening_scene: opening_scene::locate(ctx, lines)?,
+        battle_interface: battle_interface::locate(ctx, lines)?,
         battlers: battlers::locate(ctx, lines)?,
     })
 }

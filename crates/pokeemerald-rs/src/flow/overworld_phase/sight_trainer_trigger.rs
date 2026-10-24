@@ -38,7 +38,7 @@
 //! (`TRSEE_REVEAL_DISGUISE`/`_BURIED`) are unreachable without one.
 
 use assets::trainers::TrainerId;
-use assets::{MapEventsTable, MapHeaderTable, ObjectEvent, TrainerType};
+use assets::{ObjectEvent, TrainerType};
 use engine::event_data::EventData;
 use engine::overworld::{trainer_can_see_player, MapRuntime, ObjectEventState, PlayerState};
 
@@ -396,8 +396,8 @@ impl OverworldPhase {
     ///   which this port cannot do for a sequence whose field-effect timing
     ///   it is already approximating.
     ///
-    /// [`OverworldPhase::party_lead`] is deliberately *not* taken here, only
-    /// cloned: it is emptied when the battle actually starts
+    /// The lead is deliberately *not* lent here, only
+    /// observed and cloned: it is lent when the battle actually starts
     /// ([`super::sight_trainer_approach`]). A mid-approach save cannot
     /// observe the difference -- `start_menu_may_open` refuses `START` while
     /// an approach is in flight ([`super::start_menu`]'s gates) -- but
@@ -444,13 +444,7 @@ impl OverworldPhase {
     ///   let it go stale. Widening move coverage is `battle`'s own, much
     ///   larger slice, not this one.
     pub(super) fn begin_sight_trainer_approach_if_seen(&mut self) -> SightTrainerOutcome {
-        let Ok(header) = MapHeaderTable::new().header(self.map_id) else {
-            return SightTrainerOutcome::Refused;
-        };
-        let Ok(events) = MapEventsTable::new().resolve(self.map_id) else {
-            return SightTrainerOutcome::Refused;
-        };
-        let runtime = self.scene.runtime(self.map_id, header, events);
+        let runtime = self.scene.runtime();
         let scan = find_sight_trainer(&runtime, &self.player, &self.save1.event_data);
         if !scan.any_cone_reached {
             self.sight_trainer_log.left_every_cone();
@@ -484,7 +478,7 @@ impl OverworldPhase {
             );
         }
 
-        let Some(lead) = self.party_lead.clone() else {
+        let Some(lead) = self.lead_battler().cloned() else {
             if first_report {
                 eprintln!("sight trainer: no party mon yet -- no battle to start");
             }
@@ -535,12 +529,17 @@ impl OverworldPhase {
         trainer_id: TrainerId,
     ) -> Option<ActiveBattle> {
         let mut slot = Some(battle);
+        let mut returned_lead = None;
         let outcome = npc_trainer_battle::advance_npc_trainer_battle(
             &mut slot,
-            &mut self.party_lead,
+            &mut returned_lead,
             &mut self.save1.money,
             &mut self.rng,
         );
+        // Back with the owner before the flags, the white-out or any routing.
+        if let Some(lead) = returned_lead {
+            self.restore_lead_battler(lead);
+        }
         if let Some(outcome) = outcome {
             eprintln!("sight trainer: ended -- {outcome:?}");
             self.sight_trainer_battle_outcome = Some(outcome);
@@ -692,14 +691,9 @@ mod tests {
     #[test]
     fn find_sight_trainer_matches_rhett_and_is_gated_by_the_defeated_flag() {
         let map_id = assets::MapId("MAP_ROUTE103");
-        let scene = crate::overworld::test_support::synthetic_scene(80, 16);
-        let header = assets::MapHeaderTable::new()
-            .header(map_id)
-            .expect("MAP_ROUTE103 is bundled map data");
-        let events = assets::MapEventsTable::new()
-            .resolve(map_id)
-            .expect("MAP_ROUTE103 is bundled map data");
-        let runtime = scene.runtime(map_id, header, events);
+        let scene =
+            crate::overworld::test_support::synthetic_scene(80, 16).in_room_for_test(map_id);
+        let runtime = scene.runtime();
         let player = PlayerState::new((67, 6), 3, engine::overworld::Direction::North);
 
         let event_data = EventData::new();
@@ -734,14 +728,9 @@ mod tests {
     #[test]
     fn a_double_battle_cone_is_reported_as_reached_but_never_selected() {
         let map_id = assets::MapId("MAP_ROUTE103");
-        let scene = crate::overworld::test_support::synthetic_scene(80, 16);
-        let header = assets::MapHeaderTable::new()
-            .header(map_id)
-            .expect("MAP_ROUTE103 is bundled map data");
-        let events = assets::MapEventsTable::new()
-            .resolve(map_id)
-            .expect("MAP_ROUTE103 is bundled map data");
-        let runtime = scene.runtime(map_id, header, events);
+        let scene =
+            crate::overworld::test_support::synthetic_scene(80, 16).in_room_for_test(map_id);
+        let runtime = scene.runtime();
         let player = PlayerState::new((64, 13), 3, engine::overworld::Direction::North);
 
         let scan = find_sight_trainer(&runtime, &player, &EventData::new());

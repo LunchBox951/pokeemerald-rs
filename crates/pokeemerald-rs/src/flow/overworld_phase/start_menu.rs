@@ -136,17 +136,6 @@ impl OverworldPhase {
         }
     }
 
-    /// Builds and commits a fresh press's menu; returns whether it opened.
-    pub(super) fn try_open_start_menu(&mut self) -> bool {
-        match self.build_start_menu() {
-            Some(menu) => {
-                self.start_menu = Some(menu);
-                true
-            }
-            None => false,
-        }
-    }
-
     /// The open start menu, drawn over the map by [`OverworldPhase::compose_frame`].
     pub(in crate::flow) const fn start_menu(&self) -> Option<&StartMenu> {
         self.start_menu.as_ref()

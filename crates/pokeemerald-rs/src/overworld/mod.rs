@@ -189,6 +189,29 @@ pub enum OverworldSceneError {
     },
     /// A map layout names a tileset that the scene loader does not support.
     UnknownTileset(&'static str),
+    /// The header a scene was given names a different layout than the layout
+    /// it was given, so the grid would answer for one room under another's
+    /// connections.
+    LayoutNotOfHeader {
+        /// The map the header describes.
+        map: assets::MapId,
+        /// The layout the header names.
+        header_layout: LayoutId,
+        /// The layout the scene was given.
+        layout: LayoutId,
+    },
+    /// The events a scene was given belong to a different map than the one
+    /// its header describes, so another room's NPCs, warps, and triggers
+    /// would stand in this one.
+    EventsNotOfHeader {
+        /// The map the header describes.
+        map: assets::MapId,
+        /// The map that owns `map`'s events
+        /// ([`MapEventsTable::resolve`]).
+        owner: assets::MapId,
+        /// The map that owns the events the scene was given.
+        events: assets::MapId,
+    },
     /// A packed tileset-animation frame has the wrong byte length.
     AnimFrameSizeMismatch {
         /// The animation region name.
@@ -242,6 +265,21 @@ impl std::fmt::Display for OverworldSceneError {
                 f,
                 "overworld scene: tileset `{symbol}` is not one of the tilesets `cargo xtask \
                  extract` bundles"
+            ),
+            Self::LayoutNotOfHeader {
+                map,
+                header_layout,
+                layout,
+            } => write!(
+                f,
+                "overworld scene: map `{}` names layout `{}` but was given layout `{}`",
+                map.0, header_layout.0, layout.0
+            ),
+            Self::EventsNotOfHeader { map, owner, events } => write!(
+                f,
+                "overworld scene: map `{}` takes its events from `{}` but was given the \
+                 events of `{}`",
+                map.0, owner.0, events.0
             ),
             Self::AnimFrameSizeMismatch {
                 anim_name,
@@ -356,9 +394,16 @@ fn resolve_connections(
 /// Loaded render resources and collision data for one overworld room.
 ///
 /// The scene owns its pack-derived data and rebuilds borrowed grid, border,
-/// and metatile-attribute views when needed.
+/// and metatile-attribute views when needed. It also owns the identity of the
+/// room it was loaded for -- its map, header, and the events in force for the
+/// visit -- so collision, warp, and interaction queries ([`Self::runtime`])
+/// answer for the same room the scene draws, and no caller restates it.
 #[derive(Debug)]
 pub struct OverworldScene {
+    /// The map this scene was loaded for; `header.id`.
+    map_id: assets::MapId,
+    /// The header of `map_id`, whose `layout` is [`Self::layout`]'s id.
+    header: assets::MapHeader,
     layout: MapLayout,
     grid_bytes: Vec<u8>,
     border_bytes: Vec<u8>,
@@ -375,25 +420,35 @@ pub struct OverworldScene {
     blank_tile_index: u16,
     tile_anims: tileset_anims::AnimatedTileset,
     sprites: sprites::SceneSprites,
-    /// The events `from_pack` received, fixed for the visit.
+    /// The events `from_pack` received, fixed for the visit. Their owner is
+    /// the one [`MapEventsTable::resolve`] reports for `map_id`; their
+    /// contents may differ from the generated table's, as Oldale Town's
+    /// flag-chosen object placement does.
     events: assets::MapEvents,
 }
 
 impl OverworldScene {
-    /// Loads the render resources for `layout` into an owned scene.
+    /// Loads the render resources for `layout` into an owned scene of the room
+    /// `header` describes.
     ///
-    /// `header` and `events` must belong to the same room as `layout`; nothing
-    /// here cross-checks them, so a mismatch composes a scene with one map's
-    /// grid and another's connections or NPCs. `header` supplies the room's
-    /// connections. `event_data` is the persistent flag and variable state as
-    /// it stands after the destination map's transition updates, not a
-    /// per-room store; with `events` it determines the sprite bindings this
-    /// scene captures for the visit. `events` is also what
-    /// [`Self::map_events`] answers for the rest of the visit.
+    /// `layout` must be the layout `header` names, and `events` must belong to
+    /// the map [`MapEventsTable::resolve`] reports as the owner of
+    /// `header`'s events. Their contents may be the owner's generated lists or
+    /// a load-time replacement of them (Oldale Town's repositioned NPCs).
+    /// `header` supplies the room's connections. `event_data` is the
+    /// persistent flag and variable state as it stands after the destination
+    /// map's transition updates, not a per-room store; with `events` it
+    /// determines the sprite bindings this scene captures for the visit.
+    /// `events` is also what [`Self::map_events`] answers, and what
+    /// [`Self::runtime`] queries, for the rest of the visit.
     ///
     /// # Errors
     ///
-    /// Returns an error when a tileset symbol is unsupported, a required pack
+    /// Returns [`OverworldSceneError::LayoutNotOfHeader`] or
+    /// [`OverworldSceneError::EventsNotOfHeader`] when the inputs do not
+    /// describe one room, and [`OverworldSceneError::Asset`] when `header`'s
+    /// map has no events. Otherwise returns an error when a tileset symbol is
+    /// unsupported, a required pack
     /// entry is missing, or the tile, animation, layout-grid, border, or
     /// sprite-sheet bytes fail to decode. An unbundled connected map is
     /// omitted; present but malformed connection data returns an error.
@@ -408,6 +463,22 @@ impl OverworldScene {
         events: &assets::MapEvents,
         event_data: &EventData,
     ) -> Result<Self, OverworldSceneError> {
+        if layout.id != header.layout {
+            return Err(OverworldSceneError::LayoutNotOfHeader {
+                map: header.id,
+                header_layout: header.layout,
+                layout: layout.id,
+            });
+        }
+        let events_owner = MapEventsTable::new().resolve(header.id)?.id;
+        if events.id != events_owner {
+            return Err(OverworldSceneError::EventsNotOfHeader {
+                map: header.id,
+                owner: events_owner,
+                events: events.id,
+            });
+        }
+
         let primary_tileset_name = resolve_tileset_pack_name(layout.primary_tileset)?;
         let secondary_tileset_name = resolve_tileset_pack_name(layout.secondary_tileset)?;
         let primary_tileset = pack.tileset(primary_tileset_name)?;
@@ -436,6 +507,8 @@ impl OverworldScene {
         let sprites = sprites::SceneSprites::from_pack(pack, player, events, event_data)?;
 
         Ok(Self {
+            map_id: header.id,
+            header: *header,
             layout: *layout,
             grid_bytes,
             border_bytes,
@@ -454,30 +527,21 @@ impl OverworldScene {
         })
     }
 
-    /// The events collision, interaction, and rendering share for `map_id`
-    /// during this visit.
+    /// The map this scene was loaded for.
+    #[must_use]
+    pub const fn map_id(&self) -> assets::MapId {
+        self.map_id
+    }
+
+    /// The events collision, interaction, and rendering share during this
+    /// visit.
     ///
-    /// When the scene was loaded with `map_id`'s own events (the same events
-    /// owner [`MapEventsTable::resolve`] reports), these are the events as
-    /// loaded, so a transition-time object placement such as Oldale Town's
-    /// holds until the next load even if the flags that chose it change.
-    /// A scene loaded with another owner's events answers `map_id`'s
-    /// generated events instead.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`AssetError::UnknownMapEvents`] if `map_id` or its events
-    /// owner is unknown.
-    pub(crate) fn map_events(
-        &self,
-        map_id: assets::MapId,
-    ) -> Result<assets::MapEvents, AssetError> {
-        let generated = MapEventsTable::new().resolve(map_id)?;
-        Ok(if generated.id == self.events.id {
-            self.events
-        } else {
-            *generated
-        })
+    /// These are the events as loaded, so a transition-time object placement
+    /// such as Oldale Town's holds until the next load even if the flags that
+    /// chose it change.
+    #[must_use]
+    pub const fn map_events(&self) -> &assets::MapEvents {
+        &self.events
     }
 
     #[cfg(test)]
@@ -642,22 +706,23 @@ impl OverworldScene {
         crate::frame::to_platform_frame(&self.compose(player, event_data, tick))
     }
 
-    /// Borrows this scene's grid and metatile attributes into a map runtime.
-    ///
-    /// The caller supplies the runtime's `map_id`, `header`, and `events`,
-    /// and all three must describe the room this scene was loaded for;
-    /// nothing here cross-checks them, so a mismatch answers collision, warp,
-    /// and interaction queries against another map's events.
+    /// Borrows this scene's grid, metatile attributes, and owned room identity
+    /// into a map runtime for [`Self::map_id`], answering from
+    /// [`Self::map_events`].
     ///
     /// # Panics
     ///
     /// Panics if the private grid bytes no longer match the layout validated by
     /// [`Self::from_pack`].
     #[must_use]
-    pub fn runtime<'s>(
+    pub fn runtime(&self) -> engine::overworld::MapRuntime<'_> {
+        self.runtime_over(&self.events)
+    }
+
+    /// [`Self::runtime`] answering from `events` in place of the visit's own,
+    /// for the one test that injects a trigger stack.
+    fn runtime_over<'s>(
         &'s self,
-        map_id: assets::MapId,
-        header: &'s assets::MapHeader,
         events: &'s assets::MapEvents,
     ) -> engine::overworld::MapRuntime<'s> {
         let grid = self
@@ -667,8 +732,8 @@ impl OverworldScene {
         let primary_attributes = MetatileAttributeTable::new(&self.primary_attrs_bytes);
         let secondary_attributes = MetatileAttributeTable::new(&self.secondary_attrs_bytes);
         engine::overworld::MapRuntime::new(
-            map_id,
-            header,
+            self.map_id,
+            &self.header,
             events,
             grid,
             primary_attributes,
@@ -795,17 +860,14 @@ pub(crate) fn load_room_from_source(
     OverworldScene::from_pack(&pack, header, layout, player, &events, event_data)
 }
 
+/// Returns the asset-pack name of `tileset_symbol`, which must be one of the
+/// [`assets::bundled_overworld::BUNDLED_TILESETS`]: the only tilesets the
+/// pack carries, so a layout naming any other cannot be composed.
 pub(crate) fn resolve_tileset_pack_name(
     tileset_symbol: &'static str,
 ) -> Result<&'static str, OverworldSceneError> {
-    match tileset_symbol {
-        "gTileset_General" => Ok("general"),
-        "gTileset_Building" => Ok("building"),
-        "gTileset_Petalburg" => Ok("petalburg"),
-        "gTileset_BrendansMaysHouse" => Ok("brendans_mays_house"),
-        "gTileset_Lab" => Ok("lab"),
-        unknown_symbol => Err(OverworldSceneError::UnknownTileset(unknown_symbol)),
-    }
+    assets::bundled_overworld::bundled_tileset_pack_name(tileset_symbol)
+        .ok_or(OverworldSceneError::UnknownTileset(tileset_symbol))
 }
 
 /// Returns the asset-pack layout name after removing `LAYOUT_` and lowercasing

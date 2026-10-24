@@ -72,14 +72,8 @@ pub(super) fn warp_tile_behavior(map: assets::MapId, warp_index: usize) -> ((i16
         &engine::event_data::EventData::new(),
     )
     .expect("run `cargo xtask extract` first");
-    let header = assets::MapHeaderTable::new()
-        .header(map)
-        .expect("map must resolve in the generated map-header table");
-    let events = assets::MapEventsTable::new()
-        .resolve(map)
-        .expect("map must resolve in the generated map-events table");
-    let warp = events.warp_events[warp_index];
-    let runtime = scene.runtime(map, header, events);
+    let warp = scene.map_events().warp_events[warp_index];
+    let runtime = scene.runtime();
     let behavior = runtime
         .metatile_behavior(i32::from(warp.x), i32::from(warp.y))
         .expect("a warp event's own tile must decode");
@@ -194,9 +188,10 @@ pub(super) fn synthetic_phase(
 /// The [`MapRuntime`] [`OverworldPhase::step`] builds from `phase`'s scene and
 /// [`ONE_F`]'s real event data.
 pub(super) fn runtime_for(phase: &OverworldPhase) -> MapRuntime<'_> {
-    let header = assets::MapHeaderTable::new().header(ONE_F).unwrap();
-    let events = assets::MapEventsTable::new().resolve(ONE_F).unwrap();
-    phase.scene.runtime(ONE_F, header, events)
+    phase
+        .scene
+        .runtime()
+        .with_object_events(&phase.object_events)
 }
 
 /// A flat map with one connection from `direction` edge to `target` at
@@ -338,17 +333,12 @@ pub(super) fn littleroot_lab_door_scene() -> OverworldScene {
         LITTLEROOT_LAB_SCENE_TILE,
         MB_ANIMATED_DOOR,
     )
+    .in_room_for_test(LITTLEROOT)
 }
 
 /// A runtime over `scene` bound to Littleroot's real header and events.
 pub(super) fn littleroot_runtime(scene: &OverworldScene) -> MapRuntime<'_> {
-    let header = assets::MapHeaderTable::new()
-        .header(LITTLEROOT)
-        .expect("MAP_LITTLEROOT_TOWN must resolve in the generated map-header table");
-    let events = assets::MapEventsTable::new()
-        .resolve(LITTLEROOT)
-        .expect("MAP_LITTLEROOT_TOWN must resolve in the generated map-events table");
-    scene.runtime(LITTLEROOT, header, events)
+    scene.runtime()
 }
 
 /// [`littleroot_lab_door_scene`] with the player one tile south of the door,
