@@ -31,7 +31,7 @@ fn saving_twice_in_one_session_files_the_same_bytes() {
     seed.save1.player_party[0] = stored;
 
     let mut resumed = OverworldPhase::from_saved(
-        crate::overworld::test_support::synthetic_scene(10, 10),
+        crate::overworld::test_support::synthetic_scene(10, 10).in_room_for_test(seed.map_id),
         seed.map_id,
         seed.save1,
         seed.save2,
