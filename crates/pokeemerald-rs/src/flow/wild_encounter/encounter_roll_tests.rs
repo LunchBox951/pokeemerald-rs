@@ -235,7 +235,7 @@ impl battle::BattleRng for ScriptedTurns<'_> {
 
 /// With no party mon there is nothing to fight with, so the encounter is
 /// logged and dropped. Production play never reaches this state --
-/// `load_default` assigns `new_game::provisional_starter` (issue #207
+/// `OverworldPhase::load` assigns `new_game::provisional_starter` (issue #207
 /// review) -- so this pins the defensive arm a bare test phase exercises.
 /// The roll still happened, so the player keeps walking rather than being
 /// wedged.
@@ -396,18 +396,12 @@ fn walking_route_101s_real_grass_produces_an_encounter_from_its_own_table() {
         &engine::event_data::EventData::new(),
     )
     .expect("run `cargo xtask extract` first");
-    let header = assets::MapHeaderTable::new()
-        .header(ROUTE_101)
-        .expect("Route 101 resolves in the generated map-header table");
-    let events = assets::MapEventsTable::new()
-        .resolve(ROUTE_101)
-        .expect("Route 101 resolves in the generated map-events table");
 
     // Both chosen tiles really are walkable tall grass in the extracted
     // data -- asserted, not assumed, so a re-extraction that moved the grass
     // fails here rather than silently walking on dirt.
     let elevation = {
-        let runtime = scene.runtime(ROUTE_101, header, events);
+        let runtime = scene.runtime();
         for (x, y) in REAL_GRASS {
             assert_eq!(
                 runtime.metatile_behavior(x, y),
@@ -656,4 +650,104 @@ fn start_wild_battle_refuses_an_inadmissible_lead_before_any_draw() {
         )),
     );
     assert_eq!(rng.state(), Rng::new(ENCOUNTER_SEED).state());
+}
+
+/// Mew with personality 0: ability slot 0 is Synchronize and the nature is Hardy.
+fn synchronize_lead() -> BattlePokemon {
+    let lead = player_mon(151, 50, vec![MoveId::POUND]);
+    assert_eq!(lead.ability(), assets::AbilityId::SYNCHRONIZE);
+    assert_eq!(lead.personality() % 25, 0);
+    lead
+}
+
+/// The first personality draw (two `u16`s, low half first) whose `% 25` is `nature`.
+fn matching_personality(probe: &mut Rng, nature: u32) -> u32 {
+    loop {
+        let personality = probe.next_u32();
+        if personality % 25 == nature {
+            return personality;
+        }
+    }
+}
+
+#[test]
+fn a_synchronize_lead_passes_its_nature_on_a_winning_coin_flip() {
+    // Upstream `PickWildMonNature` (`wild_encounter.c:367-372`): a Synchronize lead whose
+    // `Random() % 2 == 0` hands the wild mon its own nature, with no further nature draw.
+    let seed = (0u32..10_000)
+        .find(|&s| {
+            let mut probe = Rng::new(s);
+            let coin = probe.next_u16();
+            let random_nature = probe.next_u16();
+            coin.is_multiple_of(2) && !random_nature.is_multiple_of(25)
+        })
+        .unwrap();
+    let mut rng = Rng::new(seed);
+    let encounter = WildEncounter {
+        slot: 0,
+        species: WURMPLE,
+        level: 2,
+    };
+    let battle = start_wild_battle(
+        synchronize_lead(),
+        encounter,
+        TEST_PLAYER_TRAINER_ID,
+        &mut rng,
+    )
+    .expect("a Synchronize lead is admitted");
+    let mut probe = Rng::new(seed);
+    let _coin = probe.next_u16();
+    let expected = matching_personality(&mut probe, 0);
+    assert_eq!(battle.enemy().personality(), expected, "seed {seed}");
+    assert_eq!(battle.enemy().nature(), synchronize_lead().nature());
+}
+
+#[test]
+fn a_synchronize_lead_spends_a_second_draw_on_a_losing_coin_flip() {
+    // A losing flip falls through to the plain `Random() % NUM_NATURES`, one draw later.
+    let seed = (0u32..10_000)
+        .find(|&s| {
+            let mut probe = Rng::new(s);
+            let coin = probe.next_u16();
+            let random_nature = probe.next_u16();
+            !coin.is_multiple_of(2) && !random_nature.is_multiple_of(25)
+        })
+        .unwrap();
+    let mut rng = Rng::new(seed);
+    let encounter = WildEncounter {
+        slot: 0,
+        species: WURMPLE,
+        level: 2,
+    };
+    let battle = start_wild_battle(
+        synchronize_lead(),
+        encounter,
+        TEST_PLAYER_TRAINER_ID,
+        &mut rng,
+    )
+    .expect("a Synchronize lead is admitted");
+    let mut probe = Rng::new(seed);
+    let _coin = probe.next_u16();
+    let nature = u32::from(probe.next_u16()) % 25;
+    let expected = matching_personality(&mut probe, nature);
+    assert_eq!(battle.enemy().personality(), expected, "seed {seed}");
+    assert_ne!(battle.enemy().nature(), synchronize_lead().nature());
+}
+
+#[test]
+fn a_lead_without_synchronize_spends_no_coin_draw() {
+    let seed = 7;
+    let mut rng = Rng::new(seed);
+    let lead = player_mon(SpeciesId::ZIGZAGOON.0, 50, vec![MoveId::TACKLE]);
+    assert_ne!(lead.ability(), assets::AbilityId::SYNCHRONIZE);
+    let encounter = WildEncounter {
+        slot: 0,
+        species: WURMPLE,
+        level: 2,
+    };
+    let battle = start_wild_battle(lead, encounter, TEST_PLAYER_TRAINER_ID, &mut rng).unwrap();
+    let mut probe = Rng::new(seed);
+    let nature = u32::from(probe.next_u16()) % 25;
+    let expected = matching_personality(&mut probe, nature);
+    assert_eq!(battle.enemy().personality(), expected);
 }

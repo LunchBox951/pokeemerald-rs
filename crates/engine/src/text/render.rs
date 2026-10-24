@@ -3,6 +3,9 @@
 //! [`Printer`] owns its glyph source and render state. The caller supplies
 //! [`PrinterInput`] and calls [`Printer::tick`] once per frame.
 //!
+//! A template line spacing is set with [`Printer::with_line_spacing`] and is
+//! zero by default.
+//!
 //! # Deliberately out of scope
 //!
 //! Formatting, audio, and window-buffer controls are consumed without applying
@@ -326,6 +329,17 @@ impl<S: GlyphSource> Printer<S> {
             allows_ab_speed_up: false,
             ab_speed_up_latched: false,
         }
+    }
+
+    /// Sets the template line spacing in pixels (`TextPrinterTemplate.lineSpacing`).
+    ///
+    /// A newline advances the cursor by the font's maximum letter height plus
+    /// this spacing (`pokeemerald/src/text.c:970`), and a scroll prompt scrolls
+    /// the same distance (`text.c:1184`). Printers default to zero spacing.
+    #[must_use]
+    pub fn with_line_spacing(mut self, line_spacing: u8) -> Self {
+        self.line_height = max_letter_height(self.glyphs.font()) + i32::from(line_spacing);
+        self
     }
 
     /// Enables A/B speed-up for this printer.
@@ -831,6 +845,64 @@ mod tests {
             printer.tick(PrinterInput::none()),
             TickEvent::Glyph(_)
         ));
+    }
+
+    #[test]
+    fn line_spacing_extends_the_newline_advance() {
+        let pixels = blank_sheet_pixels();
+        let sheet = synthetic_sheet(&pixels, FontId::Normal);
+        let tokens = decode_tokens(&[
+            ENCODED_A,
+            super::super::CHAR_NEWLINE,
+            ENCODED_A,
+            super::super::EOS,
+        ]);
+        let mut printer =
+            Printer::new(tokens, sheet, TextSpeed::Instant, (0, 1)).with_line_spacing(1);
+        assert!(matches!(
+            printer.tick(PrinterInput::none()),
+            TickEvent::Glyph(_)
+        ));
+        let TickEvent::Glyph(g) = printer.tick(PrinterInput::none()) else {
+            panic!("expected a glyph after the newline")
+        };
+        assert_eq!((g.x, g.y), (0, 1 + 16 + 1));
+    }
+
+    #[test]
+    fn line_spacing_extends_the_scroll_distance() {
+        let pixels = blank_sheet_pixels();
+        let sheet = synthetic_sheet(&pixels, FontId::Normal);
+        let tokens = decode_tokens(&[
+            ENCODED_A,
+            super::super::CHAR_PROMPT_SCROLL,
+            ENCODED_A,
+            super::super::EOS,
+        ]);
+        let mut printer = Printer::new(tokens, sheet, TextSpeed::Fast, (0, 1)).with_line_spacing(1);
+        assert!(matches!(
+            printer.tick(PrinterInput::none()),
+            TickEvent::Glyph(_)
+        ));
+        assert_eq!(
+            printer.tick(PrinterInput::none()),
+            TickEvent::AwaitingScroll
+        );
+        assert_eq!(printer.tick(press_a()), TickEvent::ScrollStarted);
+        let mut total = 0;
+        let mut frames = 0;
+        loop {
+            match printer.tick(PrinterInput::none()) {
+                TickEvent::Scrolling { dy } => {
+                    total += dy;
+                    frames += 1;
+                }
+                TickEvent::ScrollFinished => break,
+                other => panic!("unexpected event {other:?}"),
+            }
+        }
+        // 17 px at the fast speed's 4 px/frame: 4, 4, 4, 4, 1.
+        assert_eq!((total, frames), (17, 5));
     }
 
     #[test]

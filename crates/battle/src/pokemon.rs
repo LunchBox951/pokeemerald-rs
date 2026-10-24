@@ -744,9 +744,10 @@ impl BattlePokemon {
         self.status1
     }
 
-    /// Overwrites the primary status.
+    /// Overwrites the primary status. `Asleep { turns: 0 }` is stored as
+    /// [`Status1::Healthy`]: upstream's cleared sleep bits are a healthy battler.
     pub const fn set_status1(&mut self, status1: Status1) {
-        self.status1 = status1;
+        self.status1 = status1.normalised();
     }
 
     /// Resets stat stages and volatile conditions before returning this

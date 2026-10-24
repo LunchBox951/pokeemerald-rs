@@ -31,7 +31,9 @@
 //! loading heals the single-member Route 101 rescue state that can otherwise contain a
 //! fainted lead.
 
-use battle::{Battle, BattleError, BattleOutcome, BattlePokemon, BattleRng, Dex, PlayerAction};
+use battle::{
+    Battle, BattleError, BattleOutcome, BattlePokemon, BattleRng, Dex, Gender, Nature, PlayerAction,
+};
 use engine::overworld::metatile_behavior::MB_NORMAL;
 use engine::overworld::warp::WarpTrigger;
 use engine::overworld::wild_encounter::{WildEncounter, WildEncounterState};
@@ -143,12 +145,42 @@ fn consume_unmodelled_wild_held_item_draw(rng: &mut Rng) {
     let _ = rng.next_u16();
 }
 
+#[cfg(test)]
+/// [`start_wild_battle_with_lead_effects`] for a party whose slot 0 is `player_lead`.
+pub(super) fn start_wild_battle(
+    player_lead: BattlePokemon,
+    encounter: WildEncounter,
+    player_trainer_id: u32,
+    rng: &mut Rng,
+) -> Result<Battle, BattleError> {
+    let synchronize_nature =
+        (player_lead.ability() == assets::AbilityId::SYNCHRONIZE).then(|| player_lead.nature());
+    let cute_charm_gender =
+        crate::party::live_lead_cute_charm_wild_gender(&Dex::new(), &player_lead);
+    start_wild_battle_with_lead_effects(
+        player_lead,
+        synchronize_nature,
+        cute_charm_gender,
+        encounter,
+        player_trainer_id,
+        rng,
+    )
+}
+
 /// `player_trainer_id` is the save owner's id, not the party lead's --
 /// upstream's `CreateWildMon` -> `CreateMonWithNature` ->
 /// `CreateMon(..., OT_ID_PLAYER_ID, 0)` (`pokemon.c:2305`) stores
 /// `gSaveBlock2Ptr->playerTrainerId`. An inadmissible lead is refused before any draw.
-pub(super) fn start_wild_battle(
+///
+/// `synchronize_nature` is party slot 0's nature when it is a non-egg Synchronize
+/// holder (`PickWildMonNature` reads `gPlayerParty[0]`, `wild_encounter.c:367-376`), and
+/// `cute_charm_gender` is the gender slot 0 hands the wild mon when it is a non-egg
+/// Cute Charm holder (`CreateWildMon`, `wild_encounter.c:395-412`). Slot 0 need not be
+/// the battle lead `player_lead` when it is fainted.
+pub(super) fn start_wild_battle_with_lead_effects(
     player_lead: BattlePokemon,
+    synchronize_nature: Option<Nature>,
+    cute_charm_gender: Option<Gender>,
     encounter: WildEncounter,
     player_trainer_id: u32,
     rng: &mut Rng,
@@ -161,6 +193,8 @@ pub(super) fn start_wild_battle(
         encounter.species,
         encounter.level,
         wild_moves,
+        synchronize_nature,
+        cute_charm_gender,
         &mut SharedRng::new(rng),
     )?
     .with_original_trainer_id(player_trainer_id);
@@ -198,6 +232,8 @@ pub(super) fn advance_wild_battle(
 mod battle_write_back_tests;
 #[cfg(test)]
 mod completed_turn_tests;
+#[cfg(test)]
+mod cute_charm_gender_tests;
 #[cfg(test)]
 mod encounter_roll_tests;
 #[cfg(test)]
