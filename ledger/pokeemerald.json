@@ -19683,7 +19683,7 @@
     "graphics/starter_choose": {
       "category": "graphics.ui",
       "kind": "dir",
-      "reason": "Complete chooser graphics directory extracted: three indexed PNG sheets with their embedded palettes and both raw tilemaps; exposed by typed starter chooser handles. The ROM importer reproduces the same eight pack entries from the BPEE rev-0 profile (rom-import's domains::starter_choose, gated by the real-ROM equivalence test's starter-chooser/ prefix). No chooser rendering claimed.",
+      "reason": "Complete chooser graphics directory extracted: three indexed PNG sheets with their embedded palettes and both raw tilemaps; exposed by typed starter chooser handles. The ROM importer reproduces the same eight pack entries from the BPEE rev-0 profile (rom-import's domains::starter_choose, gated by the real-ROM equivalence test's starter-chooser/ prefix). The chooser scene (crates/pokeemerald-rs/src/starter_chooser/graphics.rs) decodes these sheets and tilemaps and renders them.",
       "rust_target": "crates/xtask/src/extract/starter_chooser.rs",
       "spec": "S-4",
       "status": "ported"
@@ -32749,6 +32749,116 @@
       "status": "pending"
     },
     "src/starter_choose.c": {
+      "artifacts": {
+        "CB2_ChooseStarter": {
+          "reason": "starter_choose.c:374-463: StarterChooserScene::from_pack builds the chooser with Torchic selected: the bag and grass BGs at their priorities, the standard border and message palette, the ball/hand and circle sheets, the black fade-in (NormalPaletteFade::begin_in), the label window with darkening inside it and no effects outside, and the hand and three balls. Native owned resources replace the hardware register and VRAM reset sequence.",
+          "rust_target": "crates/pokeemerald-rs/src/starter_chooser/mod.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "CB2_StarterChoose": {
+          "reason": "starter_choose.c:465-472: StarterChooserScene::step runs one task handler, then the sprite callbacks and animations, then the palette fade update, in upstream's order. A handler that installs its successor does not run it until the next frame.",
+          "rust_target": "crates/pokeemerald-rs/src/starter_chooser/mod.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "ClearStarterLabel": {
+          "reason": "starter_choose.c:606-615: clearing removes the label text and empties WIN0, so no darkening remains.",
+          "rust_target": "crates/pokeemerald-rs/src/starter_chooser/state.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "CreatePokemonFrontSprite": {
+          "reason": "starter_choose.c:629-636: the preview is the species' normal front art as a 64x64 affine-normal OBJ at palette bank 14 and priority 0, drawn ahead of the circle. No Pokémon is created.",
+          "rust_target": "crates/pokeemerald-rs/src/starter_chooser/sprites.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "CreateStarterPokemonLabel": {
+          "reason": "starter_choose.c:570-604: the label draws the Pokédex category plus POKéMON in the narrow font and the species name in the normal font, each centred in 104 pixels, in the palette's white and light-gray shadow on a transparent window, and sets WIN0 to the window grown by half a tile (the byte registers wrap, so Treecko's left edge is 252). The three category strings are constants because the pack carries no Pokédex payload.",
+          "rust_target": "crates/pokeemerald-rs/src/starter_chooser/text.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "GetStarterPokemon": {
+          "reason": "starter_choose.c:350-356: StarterChoice::species_id maps the three chooser positions (Treecko, Torchic, Mudkip) to their species. The raw u16 ordinal API is not exposed, so upstream's clamp of values above 3 to Treecko and its out-of-range read at 3 have no equivalent.",
+          "rust_target": "crates/pokeemerald-rs/src/starter_chooser/mod.rs",
+          "spec": "I-4",
+          "status": "stubbed"
+        },
+        "SpriteCB_Pokeball": {
+          "reason": "starter_choose.c:647-654 and the animation tables at :211-265: the selected ball plays its 128-frame sheet-frame loop, restarting only when its selection changes; the other balls hold sheet frame 0. Ball coordinates never move.",
+          "rust_target": "crates/pokeemerald-rs/src/starter_chooser/sprites.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "SpriteCB_SelectionHand": {
+          "reason": "starter_choose.c:638-645: the hand follows the selected ball's cursor position and floats by Sin(phase, 8) with the phase advancing 4 per frame, a 64-frame period that never resets across moves, previews or cancels.",
+          "rust_target": "crates/pokeemerald-rs/src/starter_chooser/sprites.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "SpriteCB_StarterPokemon": {
+          "reason": "starter_choose.c:656-667 and the affine tables at :267-282: the Pokémon and circle step toward (120, 64) by 4 horizontally and 2 vertically per frame from their creation frame, with the circle's and picture's affine scales ramping to 320/256 and 256/256 over 16 frames.",
+          "rust_target": "crates/pokeemerald-rs/src/starter_chooser/sprites.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "Task_AskConfirmStarter": {
+          "reason": "starter_choose.c:528-536: the confirmation text, the YES/NO menu with the cursor on YES and a normal-cry request for the selected species at pan zero are produced on their upstream frame. The cry is a typed StarterSoundRequest; nothing plays it yet (tracked by #1700).",
+          "rust_target": "crates/pokeemerald-rs/src/starter_chooser/state.rs",
+          "spec": "I-4",
+          "status": "stubbed"
+        },
+        "Task_CreateStarterLabel": {
+          "reason": "starter_choose.c:623-627: the new label is drawn on its own input-free frame before the input handler runs again.",
+          "rust_target": "crates/pokeemerald-rs/src/starter_chooser/state.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "Task_DeclineStarter": {
+          "reason": "starter_choose.c:565-568: the decline frame only reinstalls the draw task, so the selection screen returns two frames after the cancel and accepts input on the third.",
+          "rust_target": "crates/pokeemerald-rs/src/starter_chooser/state.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "Task_HandleConfirmStarterInput": {
+          "reason": "starter_choose.c:538-563 with menu.c Menu_ProcessInputNoWrapClearOnChoose: A, B, Up and Down are polled in that priority with a nonwrapping cursor. YES returns the typed StarterChoice, and NO or B destroys the preview and returns to the selection after the Select requests upstream makes (two for A on NO). The write to gSpecialVar_Result and the return to the saved callback belong to the caller, which the ChooseStarter script binding does not yet supply (tracked by #1605); nothing plays the sounds yet (tracked by #1700).",
+          "rust_target": "crates/pokeemerald-rs/src/starter_chooser/state.rs",
+          "spec": "I-4",
+          "status": "stubbed"
+        },
+        "Task_HandleStarterChooseInput": {
+          "reason": "starter_choose.c:484-516: a fresh A clears the label and creates the circle and Pokémon preview at the selected ball; otherwise a fresh Left or Right moves the selection without wrapping, each test guarded by its bound, so A outranks Left outranks Right. No sound plays, and the entry fade does not gate input.",
+          "rust_target": "crates/pokeemerald-rs/src/starter_chooser/state.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "Task_MoveStarterChooseCursor": {
+          "reason": "starter_choose.c:617-621: a moved selection clears the old label on its own input-free frame.",
+          "rust_target": "crates/pokeemerald-rs/src/starter_chooser/state.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "Task_StarterChoose": {
+          "reason": "starter_choose.c:474-482: DrawSelection opens the selected starter's label and the instruction window (PROF. BIRCH is in trouble!), then installs the input handler for the next frame.",
+          "rust_target": "crates/pokeemerald-rs/src/starter_chooser/state.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "Task_WaitForStarterSprite": {
+          "reason": "starter_choose.c:518-526: the confirmation is scheduled only once the circle's affine animation has ended and it sits at the preview target, which the task sees on the frame after the animation's last step.",
+          "rust_target": "crates/pokeemerald-rs/src/starter_chooser/state.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "VblankCB_StarterChoose": {
+          "reason": "starter_choose.c:358-363: StarterChooserScene::compose publishes the current OAM, palettes and tiles as an owned frame on demand. The VBlank interrupt, OAM DMA and the sprite-copy and palette-transfer queues are not modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/starter_chooser/graphics.rs",
+          "spec": "I-4",
+          "status": "stubbed"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
