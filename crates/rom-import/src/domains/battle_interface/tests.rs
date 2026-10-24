@@ -5,7 +5,8 @@
 //! 32-colour textbox palette whose two banks differ, a compressed and a raw
 //! 16-colour text palette, and a compressed 4096-byte tilemap. Beside them sit
 //! the health-box element table, thirteen raw records back to back, and the
-//! compressed battle bar. The failure tests break one root at a time and
+//! compressed battle bar. The singles frames, the enemy shadow, and the ball
+//! palettes are in the sibling `frame_tests` module. The failure tests break one root at a time and
 //! require a typed error with nothing queued.
 
 use pack_format::{parse_directory, DirectoryEntry, EntryKind, PackWriter};
@@ -45,7 +46,7 @@ fn sheet_tiles() -> Vec<u8> {
 }
 
 /// A sixteen-colour BGR555 bank starting at `first`, as ROM bytes.
-fn bank(first: u16) -> Vec<u8> {
+pub(super) fn bank(first: u16) -> Vec<u8> {
     (0..16u16)
         .flat_map(|n| (first + n * 0x21).to_le_bytes())
         .collect()
@@ -113,7 +114,7 @@ fn battle_bar() -> Vec<u8> {
 }
 
 /// A literals-only LZ77 stream of `data`, which is all the decoder needs.
-fn lz77_literals(data: &[u8]) -> Vec<u8> {
+pub(super) fn lz77_literals(data: &[u8]) -> Vec<u8> {
     let len = u32::try_from(data.len()).expect("small").to_le_bytes();
     let mut out = vec![0x10, len[0], len[1], len[2]];
     for chunk in data.chunks(8) {
@@ -142,7 +143,7 @@ fn rom() -> Rom {
     clippy::cast_possible_truncation,
     reason = "fixture offsets are far below u32::MAX"
 )]
-const fn at(off: usize) -> GbaPtr {
+pub(super) const fn at(off: usize) -> GbaPtr {
     GbaPtr::at(ROM_BASE + off as u32)
 }
 
@@ -245,7 +246,7 @@ fn written(roots: &Roots) -> Result<(Vec<u8>, Vec<DirectoryEntry>), ImportError>
     Ok((bytes, entries))
 }
 
-fn payload<'a>(bytes: &'a [u8], entries: &[DirectoryEntry], id: &str) -> &'a [u8] {
+pub(super) fn payload<'a>(bytes: &'a [u8], entries: &[DirectoryEntry], id: &str) -> &'a [u8] {
     let entry = entries.iter().find(|e| e.id == id).expect("entry exists");
     &bytes[entry.offset..entry.offset + entry.length]
 }
