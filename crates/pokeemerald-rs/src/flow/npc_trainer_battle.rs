@@ -22,9 +22,13 @@
 //!
 //! # Held-item parties
 //!
-//! [`battle::BattlePokemon`] cannot represent held items. This module rejects either
-//! held-item party shape instead of silently discarding its items.
+//! Both held-item party shapes carry their items onto the built [`battle::BattlePokemon`],
+//! as `CreateNPCTrainerParty` writes `MON_DATA_HELD_ITEM` after `CreateMon`
+//! (`battle_main.c:2035-2065`). The battle crate then refuses an item whose effect it does
+//! not model ([`battle::ensure_held_item_playable`]) with the rest of the pre-flight, before
+//! the first draw.
 
+use assets::items::ItemId;
 use assets::trainers::{TrainerData, TrainerId, TrainerParty};
 use assets::{MoveId, SpeciesNames};
 use battle::{Battle, BattleError, BattleEvent, BattleOutcome, BattlePokemon, Dex};
@@ -49,8 +53,6 @@ pub enum NpcTrainerBattleError {
     Battle(BattleError),
     /// A trainer or species name has no Gen III encoding for its character.
     UnnamedCharacter { name: &'static str, character: char },
-    /// The trainer's party carries held items, which are not modelled.
-    HeldItemParty(TrainerId),
 }
 
 impl core::fmt::Display for NpcTrainerBattleError {
@@ -61,11 +63,6 @@ impl core::fmt::Display for NpcTrainerBattleError {
                 f,
                 "name `{name}` contains `{character}`, which has no Gen-3 charmap byte"
             ),
-            Self::HeldItemParty(id) => write!(
-                f,
-                "trainer `{}` fields held items, which are not modelled",
-                id.0
-            ),
         }
     }
 }
@@ -74,7 +71,7 @@ impl std::error::Error for NpcTrainerBattleError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Battle(error) => Some(error),
-            Self::UnnamedCharacter { .. } | Self::HeldItemParty(_) => None,
+            Self::UnnamedCharacter { .. } => None,
         }
     }
 }
@@ -119,13 +116,19 @@ struct PartyEntry {
     level: u8,
     unscaled_iv: u8,
     custom_moves: Option<Vec<MoveId>>,
+    held_item: ItemId,
 }
 
-fn party_entries(
-    id: TrainerId,
-    trainer: &TrainerData,
-) -> Result<Vec<PartyEntry>, NpcTrainerBattleError> {
-    let entries = match trainer.party {
+fn real_moves(moves: [MoveId; 4]) -> Vec<MoveId> {
+    moves
+        .iter()
+        .copied()
+        .filter(|move_id| *move_id != battle::MOVE_NONE)
+        .collect()
+}
+
+fn party_entries(party: TrainerParty) -> Vec<PartyEntry> {
+    match party {
         TrainerParty::NoItemDefaultMoves(party) => party
             .iter()
             .map(|mon| PartyEntry {
@@ -133,6 +136,7 @@ fn party_entries(
                 level: mon.lvl,
                 unscaled_iv: mon.iv,
                 custom_moves: None,
+                held_item: ItemId::NONE,
             })
             .collect(),
         TrainerParty::NoItemCustomMoves(party) => party
@@ -141,20 +145,31 @@ fn party_entries(
                 species: mon.species,
                 level: mon.lvl,
                 unscaled_iv: mon.iv,
-                custom_moves: Some(
-                    mon.moves
-                        .iter()
-                        .copied()
-                        .filter(|move_id| *move_id != battle::MOVE_NONE)
-                        .collect(),
-                ),
+                custom_moves: Some(real_moves(mon.moves)),
+                held_item: ItemId::NONE,
             })
             .collect(),
-        TrainerParty::ItemDefaultMoves(_) | TrainerParty::ItemCustomMoves(_) => {
-            return Err(NpcTrainerBattleError::HeldItemParty(id))
-        }
-    };
-    Ok(entries)
+        TrainerParty::ItemDefaultMoves(party) => party
+            .iter()
+            .map(|mon| PartyEntry {
+                species: mon.species,
+                level: mon.lvl,
+                unscaled_iv: mon.iv,
+                custom_moves: None,
+                held_item: mon.held_item,
+            })
+            .collect(),
+        TrainerParty::ItemCustomMoves(party) => party
+            .iter()
+            .map(|mon| PartyEntry {
+                species: mon.species,
+                level: mon.lvl,
+                unscaled_iv: mon.iv,
+                custom_moves: Some(real_moves(mon.moves)),
+                held_item: mon.held_item,
+            })
+            .collect(),
+    }
 }
 
 fn party_personalities(
@@ -184,13 +199,12 @@ fn party_personalities(
 ///
 /// # Errors
 ///
-/// Returns [`NpcTrainerBattleError::UnnamedCharacter`] when a name cannot be encoded,
-/// [`NpcTrainerBattleError::HeldItemParty`] for a held-item party, or a battle data error.
+/// Returns [`NpcTrainerBattleError::UnnamedCharacter`] when a name cannot be encoded, or a
+/// battle data error.
 #[cfg(test)]
 pub fn trainer_party_personalities(id: TrainerId) -> Result<Vec<u32>, NpcTrainerBattleError> {
     let trainer = battle::trainer_data(id)?;
-    let entries = party_entries(id, trainer)?;
-    party_personalities(trainer, &entries)
+    party_personalities(trainer, &party_entries(trainer.party))
 }
 
 /// Builds a trainer's party and starts its battle on the shared RNG stream.
@@ -213,7 +227,7 @@ pub fn start_npc_trainer_battle(
     }
     let dex = Dex::new();
     let data = battle::trainer_data(trainer)?;
-    let entries = party_entries(trainer, data)?;
+    let entries = party_entries(data.party);
     let personalities = party_personalities(data, &entries)?;
 
     let movesets: Vec<Vec<MoveId>> = entries
@@ -234,22 +248,27 @@ pub fn start_npc_trainer_battle(
             level: entry.level,
             moves,
             personality,
+            held_item: entry.held_item,
         })
         .collect();
     battle::ensure_trainer_party_startable(&dex, &player_lead, trainer, &specs)?;
     battle::ensure_participant_admissible(&player_lead)?;
+    battle::ensure_held_item_playable(player_lead.held_item())?;
 
     let mut party = Vec::with_capacity(entries.len());
     for ((entry, personality), moves) in entries.iter().zip(personalities).zip(movesets) {
-        party.push(battle::build_trainer_pokemon(
-            &dex,
-            entry.species,
-            entry.level,
-            battle::fixed_ivs(entry.unscaled_iv),
-            personality,
-            moves,
-            &mut SharedRng::new(rng),
-        )?);
+        party.push(
+            battle::build_trainer_pokemon(
+                &dex,
+                entry.species,
+                entry.level,
+                battle::fixed_ivs(entry.unscaled_iv),
+                personality,
+                moves,
+                &mut SharedRng::new(rng),
+            )?
+            .with_held_item(entry.held_item),
+        );
     }
 
     Ok(Battle::new_trainer(
@@ -412,5 +431,160 @@ mod tests {
         let result =
             start_npc_trainer_battle(lead_of(TREECKO), TrainerId::MAY_ROUTE_103_MUDKIP, &mut rng);
         assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    /// A Lady holding a Nugget, with a Full Restore in her bag.
+    const CINDY_WITH_FULL_RESTORE: TrainerId = TrainerId(114);
+    const NUGGET_THEN_EMPTY_PARTY: TrainerId = TrainerId(694);
+    const ORAN_BERRY_PARTY: TrainerId = TrainerId(292);
+
+    fn treecko_lead() -> BattlePokemon {
+        lead_of(TREECKO)
+    }
+
+    #[test]
+    fn every_party_shape_maps_its_item_and_moves() {
+        const NO_ITEM_DEFAULT: [assets::TrainerMonNoItemDefaultMoves; 1] =
+            [assets::TrainerMonNoItemDefaultMoves {
+                iv: 1,
+                lvl: 5,
+                species: TREECKO,
+            }];
+        const NO_ITEM_CUSTOM: [assets::TrainerMonNoItemCustomMoves; 1] =
+            [assets::TrainerMonNoItemCustomMoves {
+                iv: 2,
+                lvl: 6,
+                species: TREECKO,
+                moves: [
+                    SLASH,
+                    battle::MOVE_NONE,
+                    battle::MOVE_NONE,
+                    battle::MOVE_NONE,
+                ],
+            }];
+        const ITEM_DEFAULT: [assets::TrainerMonItemDefaultMoves; 1] =
+            [assets::TrainerMonItemDefaultMoves {
+                iv: 3,
+                lvl: 7,
+                species: TREECKO,
+                held_item: ItemId::NUGGET,
+            }];
+        const ITEM_CUSTOM: [assets::TrainerMonItemCustomMoves; 1] =
+            [assets::TrainerMonItemCustomMoves {
+                iv: 4,
+                lvl: 8,
+                species: TREECKO,
+                held_item: ItemId::ORAN_BERRY,
+                moves: [SLASH, MoveId::TACKLE, battle::MOVE_NONE, battle::MOVE_NONE],
+            }];
+        let entry = |unscaled_iv, level, custom_moves, held_item| PartyEntry {
+            species: TREECKO,
+            level,
+            unscaled_iv,
+            custom_moves,
+            held_item,
+        };
+
+        assert_eq!(
+            party_entries(TrainerParty::NoItemDefaultMoves(&NO_ITEM_DEFAULT)),
+            [entry(1, 5, None, ItemId::NONE)]
+        );
+        assert_eq!(
+            party_entries(TrainerParty::NoItemCustomMoves(&NO_ITEM_CUSTOM)),
+            [entry(2, 6, Some(vec![SLASH]), ItemId::NONE)]
+        );
+        assert_eq!(
+            party_entries(TrainerParty::ItemDefaultMoves(&ITEM_DEFAULT)),
+            [entry(3, 7, None, ItemId::NUGGET)]
+        );
+        assert_eq!(
+            party_entries(TrainerParty::ItemCustomMoves(&ITEM_CUSTOM)),
+            [entry(
+                4,
+                8,
+                Some(vec![SLASH, MoveId::TACKLE]),
+                ItemId::ORAN_BERRY
+            )]
+        );
+    }
+
+    #[test]
+    fn a_held_item_party_still_has_its_personalities() {
+        for id in [
+            CINDY_WITH_FULL_RESTORE,
+            NUGGET_THEN_EMPTY_PARTY,
+            ORAN_BERRY_PARTY,
+        ] {
+            let personalities =
+                trainer_party_personalities(id).expect("personalities are item-blind");
+            assert_eq!(
+                personalities.len(),
+                party_entries(battle::trainer_data(id).unwrap().party).len()
+            );
+        }
+    }
+
+    #[test]
+    fn an_effect_free_held_item_is_carried_onto_the_built_party() {
+        let mut rng = Rng::new(1);
+        let battle = start_npc_trainer_battle(treecko_lead(), NUGGET_THEN_EMPTY_PARTY, &mut rng)
+            .expect("a Nugget holder with a bare reserve constructs");
+        let bench = battle.trainer().expect("a trainer battle").bench();
+        assert_eq!(battle.enemy().held_item(), ItemId::NUGGET);
+        assert_eq!(
+            bench
+                .iter()
+                .map(BattlePokemon::held_item)
+                .collect::<Vec<_>>(),
+            [ItemId::NONE]
+        );
+    }
+
+    #[test]
+    fn a_berry_holding_lead_is_refused_before_any_ot_id_draw() {
+        let mut rng = Rng::new(1);
+        let before = rng.state();
+        let lead = treecko_lead().with_held_item(ItemId::ORAN_BERRY);
+        let result = start_npc_trainer_battle(lead, NUGGET_THEN_EMPTY_PARTY, &mut rng);
+        assert_eq!(
+            result.err(),
+            Some(NpcTrainerBattleError::Battle(
+                BattleError::UnsupportedHeldItem(ItemId::ORAN_BERRY)
+            ))
+        );
+        assert_eq!(
+            rng.state(),
+            before,
+            "the lead's item is screened before every draw"
+        );
+    }
+
+    #[test]
+    fn a_trainer_with_a_bag_item_is_refused_before_any_ot_id_draw() {
+        let mut rng = Rng::new(1);
+        let before = rng.state();
+        let result = start_npc_trainer_battle(treecko_lead(), CINDY_WITH_FULL_RESTORE, &mut rng);
+        assert_eq!(
+            result.err(),
+            Some(NpcTrainerBattleError::Battle(
+                BattleError::UnsupportedTrainerBagItem(ItemId::FULL_RESTORE)
+            )),
+            "her party is playable; only her bag is not"
+        );
+        assert_eq!(rng.state(), before, "the bag screen precedes every draw");
+    }
+
+    #[test]
+    fn a_berry_party_is_refused_before_any_ot_id_draw() {
+        let mut rng = Rng::new(1);
+        let before = rng.state();
+        let result = start_npc_trainer_battle(treecko_lead(), ORAN_BERRY_PARTY, &mut rng);
+        assert_eq!(
+            result.err(),
+            Some(NpcTrainerBattleError::Battle(
+                BattleError::UnsupportedHeldItem(ItemId::ORAN_BERRY)
+            ))
+        );
+        assert_eq!(rng.state(), before, "the item screen precedes every draw");
     }
 }

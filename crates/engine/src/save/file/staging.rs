@@ -66,6 +66,32 @@ pub(super) fn create_new_exclusive(path: &Path) -> std::io::Result<std::fs::File
     options.open(path)
 }
 
+/// Gives the owner read on the freshly created `file` through its handle,
+/// keeping the `0666 & !umask` the open left for group and other.
+///
+/// A umask that strips owner read (`0444`) would otherwise publish a save
+/// its own owner cannot read back, since the rename carries the mode over.
+/// Windows inherits the directory ACL and has no mode to widen.
+#[cfg(unix)]
+fn restore_owner_read(file: &std::fs::File) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let mode = file.metadata()?.permissions().mode();
+    if mode & 0o400 == 0 {
+        file.set_permissions(std::fs::Permissions::from_mode((mode & 0o7777) | 0o400))?;
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "one signature across platforms; the unix arm can fail"
+)]
+fn restore_owner_read(_file: &std::fs::File) -> std::io::Result<()> {
+    Ok(())
+}
+
 /// Stages `bytes` at the first of `names` that `create_new` finds free,
 /// reporting the last collision once they have all turned out to be taken.
 pub(super) fn stage_at_first_free_name(
@@ -130,6 +156,9 @@ fn fill_new_file(
         }
     };
     let result = (|| {
+        // Inside the cleanup scope, so a failure here is reported with the
+        // retained staging path like any other past the open.
+        restore_owner_read(&file)?;
         let mut writer = std::io::BufWriter::new(&file);
         writer.write_all(bytes)?;
         writer.flush()?;

@@ -12,7 +12,9 @@ mod battler;
 mod error;
 mod format;
 mod handles;
+mod naming_screen;
 mod opening_scene;
+mod paletted_image;
 mod pokedex_graphics;
 mod starter_chooser;
 mod trainer_pic;
@@ -25,7 +27,10 @@ use crate::fonts::{FontId, FontImageRef};
 use crate::pokedex::PokedexData;
 
 pub use bag::BagAssets;
-pub use battle_interface::{BattleInterfaceHandle, BattleTextboxHandle};
+pub use battle_interface::{
+    BattleBarHandle, BattleInterfaceHandle, BattleTextboxHandle, HealthboxElement,
+    HealthboxElementsHandle,
+};
 pub use battle_message::{
     BattleMessageError, BattleMessageSection, BattleMessageTable, SpecialBattleMessage,
     SpecialTemplate, SLOT_COUNT as BATTLE_MESSAGE_SLOT_COUNT,
@@ -37,11 +42,11 @@ pub use battler::{BattlerDirection, BattlerHandle, PaletteVariant};
 pub use error::PackError;
 pub use format::{DirectoryEntry, EntryKind, FORMAT_VERSION, MAGIC};
 pub use handles::{ImageRef, PaletteRef, TilesetHandle, WindowFrameHandle};
+pub use naming_screen::NamingScreenHandle;
 pub use opening_scene::{BirchSpeechHandle, WallClockHandle};
+pub use paletted_image::PalettedImage;
 pub use pokedex_graphics::PokedexGraphicsHandle;
-pub use starter_chooser::{
-    PalettedImage, StarterChooserHandle, StarterPreviewHandle, StarterSpecies,
-};
+pub use starter_chooser::{StarterChooserHandle, StarterPreviewHandle, StarterSpecies};
 
 pub use trainer_pic::TrainerPicHandle;
 
@@ -525,6 +530,10 @@ fn wrong_kind(id: &str, expected: &'static str, actual: EntryKind) -> PackError 
         actual: kind_label(actual),
     }
 }
+
+pub use battle_interface::{
+    SinglesHealthboxFrameHandle, SinglesHealthboxFramesHandle, SinglesHealthboxSide,
+};
 
 #[cfg(test)]
 mod tests;

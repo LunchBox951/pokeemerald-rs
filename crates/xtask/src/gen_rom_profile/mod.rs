@@ -24,6 +24,7 @@
 mod audio;
 mod bag;
 mod battle_anims;
+mod battle_interface;
 mod battle_messages;
 mod battlers;
 mod emit;
@@ -168,6 +169,7 @@ fn locate_profile(
         bag: bag::locate(ctx, lines)?,
         starter_chooser: starter_chooser::locate(ctx, lines)?,
         opening_scene: opening_scene::locate(ctx, lines)?,
+        battle_interface: battle_interface::locate(ctx, lines)?,
         battlers: battlers::locate(ctx, lines)?,
     })
 }

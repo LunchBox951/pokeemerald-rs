@@ -225,3 +225,64 @@ fn a_missing_bag_entry_is_refused_before_any_report_line() {
         assert!(report.is_empty());
     });
 }
+
+#[test]
+fn static_bag_roots_survive_a_map_that_omits_locals() {
+    use crate::gen_rom_profile::plan::SymbolExpectation;
+    use crate::gen_rom_profile::tests::assert_survives_ld_map;
+
+    // `locate_expected` (through `locate_images` and `locate_palettes`) builds
+    // every report line, so the test fails if either stops marking an upstream
+    // `static` root as local.
+    let ball_tiles = distinctive_tiles(4);
+    let select_tiles: Vec<u8> = ball_tiles.iter().map(|byte| byte ^ 0x5a).collect();
+    let (ball_colors, ball_bytes) = palette_bytes(0x2222);
+    let rom = RomFixture::new()
+        .emerald_header()
+        .write(0x10_0000, &ball_tiles)
+        .write(0x11_0000, &select_tiles)
+        .write(0x12_0000, &ball_bytes)
+        .finish();
+    let entries = vec![
+        image_entry_from_tiles(
+            "bag/image/rotating_ball".into(),
+            &ball_tiles,
+            4,
+            16,
+            16,
+            None,
+        )
+        .expect("image"),
+        image_entry_from_tiles(
+            "bag/image/select_button".into(),
+            &select_tiles,
+            4,
+            16,
+            16,
+            None,
+        )
+        .expect("image"),
+        palette_entry("bag/palette/rotating_ball".into(), &ball_colors).expect("palette"),
+    ];
+    let expected = ids(&[
+        "bag/image/rotating_ball",
+        "bag/image/select_button",
+        "bag/palette/rotating_ball",
+    ]);
+
+    with_context("bag-statics", &rom, entries, |ctx| {
+        let mut report = Vec::new();
+        locate_expected(ctx, &expected, &mut report).expect("located");
+        assert_eq!(report.len(), 3);
+        assert!(report
+            .iter()
+            .any(|line| line.id == "bag/image/select_button"
+                && line.symbol == SymbolExpectation::Local("sRegisteredSelect_Gfx".to_owned())));
+        assert_survives_ld_map("bag-statics-map", 0x0818_0000, &mut report);
+    });
+    // A global bag palette keeps its map check.
+    assert_eq!(
+        super::palette_symbol("bag/palette/bag"),
+        SymbolExpectation::Unnamed
+    );
+}
