@@ -176,13 +176,19 @@ fn both_genders_pack_their_own_running_sheet_into_nine_cells() {
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_scenes_draw_the_running_cells_for_both_genders() {
-    let pack = assets::pack::AssetPack::load_default().unwrap();
+    let pack = assets::pack::AssetPack::load_repo().expect("run `cargo xtask extract` first");
     let (bytes, header, events) = flat_test_map();
     let runtime = flat_runtime(&bytes, &header, &events);
     let data = shoes();
     let map = assets::MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F");
     for character in [PlayerCharacter::Brendan, PlayerCharacter::May] {
-        let scene = crate::overworld::load_room(map, character, &data).unwrap();
+        let scene = crate::overworld::load_room_from_source(
+            &crate::pack_source::PackSource::Repo,
+            map,
+            character,
+            &data,
+        )
+        .expect("the repository pack loads Brendan's house for both characters");
         let mut player = player_at((2, 2), Direction::South);
         player.step_with_run(
             Some(Direction::South),

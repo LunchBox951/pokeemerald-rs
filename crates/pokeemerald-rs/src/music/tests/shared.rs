@@ -49,8 +49,18 @@ pub(super) struct TempPackGuard {
 }
 
 impl TempPackGuard {
-    fn new(path: std::path::PathBuf) -> Self {
-        Self { path }
+    /// Exclusively claims `path` (never following a planted symlink or
+    /// truncating an occupant) and writes `bytes` through the claimed handle.
+    /// Cleanup is installed only once the claim succeeded, so a failed claim
+    /// never removes an entry this guard does not own; a write panic after it
+    /// still cleans up.
+    fn claim(path: std::path::PathBuf, bytes: &[u8]) -> Self {
+        use std::io::Write as _;
+        let mut file = crate::pack_test_support::claim_scratch_exclusive(&path);
+        let guard = Self { path };
+        file.write_all(bytes)
+            .expect("scratch pack must be writable");
+        guard
     }
 
     pub(super) fn path(&self) -> &std::path::Path {
@@ -99,14 +109,14 @@ pub(super) fn write_pack(test_name: &str, entries: &[(&str, Vec<u8>)]) -> TempPa
         bytes.extend_from_slice(payload);
     }
 
-    let path = std::env::temp_dir().join(format!(
+    TempPackGuard::claim(scratch_pack_path(test_name), &bytes)
+}
+
+fn scratch_pack_path(test_name: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!(
         "pokeemerald-rs-music-test-{}-{test_name}.pack",
         std::process::id()
-    ));
-    // Own the path before writing so a write panic still cleans up.
-    let temp_pack = TempPackGuard::new(path);
-    std::fs::write(temp_pack.path(), bytes).expect("scratch pack must be writable");
-    temp_pack
+    ))
 }
 
 pub(super) fn flat_envelope() -> Envelope {
@@ -286,4 +296,21 @@ pub(super) fn evictor_track(key: u8) -> Vec<SongEvent> {
         SongEvent::Wait(48),
         SongEvent::Fine,
     ]
+}
+
+/// A symlink or an occupied file planted at `write_pack`'s predictable path
+/// must be replaced, never written through or truncated.
+#[test]
+fn write_pack_never_writes_through_a_planted_entry() {
+    let test_name = "planted-entry-probe";
+    let entries = [("x", vec![1, 2, 3])];
+    let expected = {
+        let guard = write_pack("planted-entry-expected", &entries);
+        std::fs::read(guard.path()).unwrap()
+    };
+    crate::pack_test_support::assert_scratch_claim_is_exclusive(
+        &scratch_pack_path(test_name),
+        &expected,
+        || write_pack(test_name, &entries),
+    );
 }

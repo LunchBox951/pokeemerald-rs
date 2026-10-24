@@ -206,6 +206,13 @@ pub enum ExtractError {
         /// What differs from the expected shape.
         detail: String,
     },
+    /// A naming-screen source differs from its upstream graphic's shape.
+    NamingScreenAssetMismatch {
+        /// Source path.
+        path: PathBuf,
+        /// What differs from the expected shape.
+        detail: String,
+    },
     /// An ordinary-bag source differs from its upstream graphic's shape.
     BagAssetMismatch {
         /// Source path.
@@ -410,6 +417,9 @@ impl fmt::Display for ExtractError {
             }
             Self::BattleInterfaceAssetMismatch { path, detail } => {
                 write!(f, "battle interface asset `{}` {detail}", path.display())
+            }
+            Self::NamingScreenAssetMismatch { path, detail } => {
+                write!(f, "naming-screen asset `{}` {detail}", path.display())
             }
             Self::BagAssetMismatch { path, detail } => {
                 write!(f, "bag asset `{}` {detail}", path.display())
