@@ -91,7 +91,7 @@ mod battler;
 mod bundled_inventory_tests;
 #[cfg(test)]
 mod checkpoint_maps_tests;
-mod cry;
+pub(crate) mod cry;
 mod error;
 mod fonts;
 pub mod inflate;

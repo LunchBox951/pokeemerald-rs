@@ -25,6 +25,7 @@ use pack_format::PackWriter;
 use super::audio_samples::direct_sound_entry_from_path;
 use super::{read_text, ExtractError};
 use sources::parse_cry_sources;
+pub(crate) use sources::SAMPLE_ID_PREFIX;
 use tables::parse_cry_tables;
 
 const CRY_TABLES_PATH: &str = "sound/cry_tables.inc";

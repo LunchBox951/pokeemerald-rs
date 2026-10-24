@@ -6,7 +6,8 @@ use super::tables::{code_of, is_cry_symbol};
 use super::LineError;
 
 const CRY_DIR: &str = "sound/direct_sound_samples/cries/";
-const SAMPLE_ID_PREFIX: &str = "audio/sample/direct-sound/cry/";
+/// The pack id prefix of every cry sample, under the `DirectSound` family `CryTable` accepts.
+pub(crate) const SAMPLE_ID_PREFIX: &str = "audio/sample/direct-sound/cry/";
 
 /// One resolved `Cry_*` definition.
 #[derive(Debug, Clone, PartialEq, Eq)]
