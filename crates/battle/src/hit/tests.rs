@@ -1402,6 +1402,54 @@ fn thick_fat_halves_raw_special_attack_before_stage_scaling_in_the_raw_damage_in
     assert_eq!(rng.draws(), 1, "Thick Fat spends no extra draw");
 }
 
+/// Thick Fat halves raw 7 to 3 and -6 truncates it to 0, which upstream never
+/// floors (`pokemon.c:3100-3104`, `:3298-3315`): 2 HP per hit, not 3.
+#[test]
+fn icicle_spear_into_thick_fat_keeps_a_zero_stage_adjusted_special_attack() {
+    const SMEARGLE: SpeciesId = SpeciesId(235);
+    const ADAMANT_PERSONALITY: u32 = 3;
+    const NAIVE_PERSONALITY: u32 = 14;
+    const ZERO_IVS: Ivs = Ivs {
+        hp: 0,
+        attack: 0,
+        defense: 0,
+        speed: 0,
+        sp_attack: 0,
+        sp_defense: 0,
+    };
+    let dex = Dex::new();
+    let mut attacker = BattlePokemon::new(
+        &dex,
+        SMEARGLE,
+        8,
+        ZERO_IVS,
+        ADAMANT_PERSONALITY,
+        vec![ICICLE_SPEAR],
+    )
+    .unwrap();
+    attacker.stages_mut().sp_attack = StatStage::MIN;
+    let mut defender =
+        BattlePokemon::new(&dex, MAKUHITA, 5, ZERO_IVS, NAIVE_PERSONALITY, vec![TACKLE])
+            .unwrap()
+            .with_ability_slot(0);
+    defender.stages_mut().sp_defense = StatStage::MIN;
+    assert_eq!(attacker.stats().sp_attack, 7);
+    assert_eq!(defender.stats().sp_defense, 7);
+    assert_eq!(defender.ability(), THICK_FAT);
+    let mut rng = SequenceRng::new([ORDINARY_NO_CRIT_DRAW, BEST_DAMAGE_DRAW]);
+
+    let outcome = damage_core(&dex, ICICLE_SPEAR, &attacker, &defender, false, &mut rng).unwrap();
+
+    assert_eq!(
+        outcome,
+        HitOutcome::Hit {
+            damage: 2,
+            is_critical: false
+        }
+    );
+    assert_eq!(rng.draws(), 2);
+}
+
 /// `SPECIES_VULPIX`: Flash Fire in its primary (and only) ability slot.
 const VULPIX: SpeciesId = SpeciesId(37);
 /// `MOVE_EMBER` -- `EFFECT_BURN_HIT`, so `resolve_hit` would refuse it at
