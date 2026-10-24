@@ -316,7 +316,7 @@ const fn menu_type_for(saved: &SavedGame) -> MainMenuType {
 /// `SaveBlock2` -- exactly [`crate::game_save::SaveFileStatus::boot_clears_save_block2`]'s
 /// `Empty`/`Corrupt` cases (`pokeemerald/src/intro.c:1154-1156`), even when a
 /// checksum-valid block was recovered. Run once, as the boot load lands in
-/// [`title_to_main_menu`], so the block the Options screen edits is the live
+/// [`AnimatedTitle::boot`], so the block the Options screen edits is the live
 /// one: upstream defaults only at boot, never again on each read.
 fn apply_boot_defaults(saved: &mut SavedGame) {
     if saved.status.boot_clears_save_block2() {
