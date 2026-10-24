@@ -1,4 +1,4 @@
-//! Renders stationary object events backed by supported 16x32 people sprites.
+//! Renders live object events backed by supported 16x32 people sprites.
 //!
 //! [`resolve_sprite_source`] is the complete graphics-id binding table. Hidden
 //! events are filtered through [`visible_object_events`], the same visibility
@@ -9,7 +9,7 @@
 //! hide flag must first write that slot's `VAR_OBJ_GFX_ID_0 + n`, or the
 //! persistent rival id resolves the decoration to a rival sprite.
 //!
-//! Object events retain their initial movement-facing frame. Their positions
+//! Each object draws its live tile and the standing frame of its live facing. Positions
 //! share [`super::viewport::camera_lag_px`] with the background during a step.
 //!
 //! Upstream resolves equal-priority overlap with a y-derived subpriority
@@ -22,9 +22,8 @@ use std::collections::HashMap;
 use assets::pack::{AssetPack, PaletteRef};
 use assets::ObjectEvent;
 use engine::event_data::EventData;
-use engine::overworld::{
-    initial_facing_direction, object_event_is_in_view, visible_object_events, PlayerState,
-};
+use engine::overworld::object_event::{tile_is_in_view, ObjectEventCollection};
+use engine::overworld::{object_event_is_visible, PlayerState};
 use rendering::{Bgr555, BitDepth, OamEntry, Palette};
 
 use super::avatar::{self, PlayerCharacter};
@@ -389,39 +388,47 @@ pub(super) fn order_by_depth(entries: &[(OamEntry, u8)]) -> Vec<OamEntry> {
 #[cfg(test)]
 #[must_use]
 pub(super) fn oam_entries(
-    object_events: &'static [ObjectEvent],
+    objects: &ObjectEventCollection,
     bindings: &HashMap<&'static str, SpriteBinding>,
     player: &PlayerState,
     event_data: &EventData,
 ) -> Vec<OamEntry> {
-    elevated_oam_entries(object_events, bindings, player, event_data)
+    elevated_oam_entries(objects, bindings, player, event_data)
         .into_iter()
         .map(|(entry, _)| entry)
         .collect()
 }
 
-/// [`oam_entries`] with each entry's authored elevation, which selects its
-/// upstream subpriority base.
+/// [`oam_entries`] with each entry's elevation, which selects its upstream
+/// subpriority base.
+///
+/// Position, facing, and elevation come from each entry's live state; the
+/// template keeps the graphics id and hide flag. The standing frame follows
+/// the live facing (`GetFaceDirectionAnimNum`, `event_object_movement.c`), and
+/// the spawn window is evaluated at the live tile.
 #[must_use]
 pub(super) fn elevated_oam_entries(
-    object_events: &'static [ObjectEvent],
+    objects: &ObjectEventCollection,
     bindings: &HashMap<&'static str, SpriteBinding>,
     player: &PlayerState,
     event_data: &EventData,
 ) -> Vec<(OamEntry, u8)> {
     let player_pos = player.position();
     let camera_lag = super::viewport::camera_lag_px(player);
-    visible_object_events_with_binding(object_events, bindings, event_data)
-        .filter(|(event, _)| object_event_is_in_view(event, player_pos))
-        .map(|(event, binding)| {
-            let facing = initial_facing_direction(event.movement_type);
-            let (frame, h_flip) = avatar::stand_frame_for(facing);
+    objects
+        .iter()
+        .filter(|live| object_event_is_visible(live.template(), event_data))
+        .filter_map(|live| {
+            bindings
+                .get(live.template().graphics_id)
+                .map(|binding| (live, binding))
+        })
+        .filter(|(live, _)| tile_is_in_view(live.state().position(), player_pos))
+        .map(|(live, binding)| {
+            let state = live.state();
+            let (frame, h_flip) = avatar::stand_frame_for(state.facing());
             let tile_index = binding.base_tile + frame * avatar::FRAME_TILES;
-            let (x, y) = object_screen_position(
-                (i32::from(event.x), i32::from(event.y)),
-                player_pos,
-                camera_lag,
-            );
+            let (x, y) = object_screen_position(state.position(), player_pos, camera_lag);
             let entry = OamEntry::new(
                 x,
                 y,
@@ -432,38 +439,20 @@ pub(super) fn elevated_oam_entries(
                 false,
                 avatar::PLAYER_OBJ_SHAPE,
                 avatar::PLAYER_OBJ_SIZE,
-                priority_for_stationary_object(event),
+                avatar::priority_for_elevation(state.elevation()),
                 true,
             );
-            (entry, event.elevation)
+            (entry, state.elevation())
         })
         .collect()
-}
-
-/// Uses authored elevation because the sprite resources do not retain the map
-/// grid. Upstream replaces it with the grid elevation on spawn
-/// (`event_object_movement.c:7737-7771`); the only bundled priority-changing
-/// mismatch belongs to an unsupported Pichu doll.
-fn priority_for_stationary_object(event: &ObjectEvent) -> u8 {
-    avatar::priority_for_elevation(event.elevation)
-}
-
-fn visible_object_events_with_binding<'a>(
-    object_events: &'a [ObjectEvent],
-    bindings: &'a HashMap<&'static str, SpriteBinding>,
-    event_data: &'a EventData,
-) -> impl Iterator<Item = (&'a ObjectEvent, &'a SpriteBinding)> {
-    visible_object_events(object_events, event_data).filter_map(move |event| {
-        bindings
-            .get(event.graphics_id)
-            .map(|binding| (event, binding))
-    })
 }
 
 #[cfg(test)]
 mod binding_tests;
 #[cfg(test)]
 mod draw_order_tests;
+#[cfg(test)]
+mod live_state_tests;
 #[cfg(test)]
 mod placement_tests;
 #[cfg(test)]
