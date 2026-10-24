@@ -290,9 +290,14 @@ pub struct App {
     /// section) -- `None` for a headless `App` (module docs), whose
     /// [`BootScene`] frame never changes.
     scene: Option<AppScene>,
-    /// This session's save medium (I-6, issues #214/#232): read by the
-    /// `Title` -> `MainMenu` transition, written by the field start menu's
-    /// `SAVE` action. Owned here, at the one place with a whole-session
+    /// This session's save medium (I-6, issues #214/#232): read once at
+    /// boot by [`compose_title_scene`], before the title's first frame,
+    /// into the [`crate::flow::AnimatedTitle`]'s retained `SavedGame` (as
+    /// upstream's copyright screen reads it ahead of the title,
+    /// `pokeemerald/src/intro.c:1147-1156`) -- the `Title` -> `MainMenu`
+    /// transition hands that same `SavedGame` on rather than reading again
+    /// -- and written by the field start menu's `SAVE` action. Owned here,
+    /// at the one place with a whole-session
     /// lifetime, and passed down `(oop-boundaries)` -- upstream's
     /// equivalent is flash plus the `gSaveCounter`/`gLastWrittenSector`
     /// globals.

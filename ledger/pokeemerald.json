@@ -30635,6 +30635,14 @@
       "status": "pending"
     },
     "src/intro.c": {
+      "artifacts": {
+        "CB2_InitCopyrightScreenAfterBootup": {
+          "reason": "intro.c:1147-1160. Partial: the boot-load tail of the copyright screen is modelled at boot, before the title screen's first frame, as flow::AnimatedTitle::boot (called once from app::compose_title_scene): LoadGameSave(SAVE_NORMAL) (:1154) with its Save_ResetSaveCounters (:1153) is game_save::SaveSlot::load (see save.c#LoadGameSave), and the gSaveFileStatus == SAVE_STATUS_EMPTY/_CORRUPT -> Sav2_ClearSetDefault branch (:1155-1156) is flow::apply_boot_defaults, keyed on SaveFileStatus::boot_clears_save_block2, writing SetDefaultOptions' options (new_game.c:91-98, NewGameOptions::DEFAULT) into the retained SaveBlock2. The loaded SavedGame is kept on AnimatedTitle::saved so the title scenes read its optionsButtonMode for main.c:279-288's L=A remap, and the Title -> MainMenu handoff (flow::title_to_main_menu) passes the same blocks on rather than loading again. NOT modelled: SetUpCopyrightScreen and the copyright screen itself (:1149, no copyright scene; boot goes straight to the title), SetSaveBlocksPointers' randomized RAM block offset (:1151, load_save.c:70-82; no relocatable save-block globals), ResetMenuAndMonGlobals (:1152, new_game.c:139-147), ClearSav2's whole-block zero (new_game.c:135; apply_boot_defaults rewrites only the six option fields, so a Corrupt verdict keeps the other recovered SaveBlock2 bytes), SetPokemonCryStereo(optionsSound) (:1157; no cry stereo side effect, cf. #1700), and InitHeap (:1158; no gHeap).",
+          "rust_target": "crates/pokeemerald-rs/src/flow.rs",
+          "spec": "I-6",
+          "status": "stubbed"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
