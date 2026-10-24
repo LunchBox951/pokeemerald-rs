@@ -1283,9 +1283,9 @@ fn a_malformed_song_payload_is_refused_as_an_entry_shape() {
 
 #[test]
 fn songs_beside_mus_title_are_left_to_the_checkout_instead_of_refused() {
-    // `cargo xtask extract` emits the whole checkpoint manifest (#1848), but
-    // the ROM backend imports only `mus_title` until #1850; the locator plans
-    // that one song and claims nothing about the others.
+    // `cargo xtask extract` emits the whole checkpoint manifest, but the ROM
+    // backend imports only `mus_title` until #1850; the locator plans that one
+    // song and claims nothing about the others.
     with_audio_context(
         "audio-two-songs",
         &["audio/song/mus_other", "audio/song/mus_title"],

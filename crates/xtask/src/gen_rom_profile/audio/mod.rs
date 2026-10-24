@@ -53,9 +53,9 @@ pub fn locate(
     report: &mut Vec<ReportLine>,
 ) -> Result<AudioPlan, GenRomProfileError> {
     // Every derivation below is written around this one song, never a family
-    // of them. The checkout pack carries the whole checkpoint manifest
-    // (#1848), but the ROM backend imports only this song until #1850, so the
-    // others are left unclaimed rather than refused.
+    // of them. The checkout pack carries the whole checkpoint manifest, but
+    // the ROM backend imports only this song until #1850, so the others are
+    // left unclaimed rather than refused.
     let song_ids = ctx.pack.ids_with_prefix("audio/song/");
     if !song_ids.iter().any(|id| id == SUPPORTED_SONG_ID) {
         return Err(GenRomProfileError::StructMismatch {
