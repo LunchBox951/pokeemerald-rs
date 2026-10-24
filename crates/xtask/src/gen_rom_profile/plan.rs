@@ -502,6 +502,17 @@ pub struct OpeningScenePlan {
     pub tilemaps: Vec<BlobPlan>,
 }
 
+/// The battle textbox and menu text palettes, owned.
+#[derive(Debug, Clone)]
+pub struct BattleInterfacePlan {
+    /// Every `battle-interface/image/*` root.
+    pub images: Vec<ImagePlan>,
+    /// Every `battle-interface/palette/*` root.
+    pub palettes: Vec<PalettePlan>,
+    /// Every `battle-interface/raw/*` tilemap root.
+    pub tilemaps: Vec<BlobPlan>,
+}
+
 /// Everything one generator run derived.
 #[derive(Debug, Clone)]
 pub struct ProfilePlan {
@@ -531,6 +542,8 @@ pub struct ProfilePlan {
     pub starter_chooser: StarterChooserPlan,
     /// Birch's speech scene and the wall clock.
     pub opening_scene: OpeningScenePlan,
+    /// The battle textbox and menu text palettes.
+    pub battle_interface: BattleInterfacePlan,
     /// The starters' static battler art.
     pub battlers: BattlerPlan,
 }

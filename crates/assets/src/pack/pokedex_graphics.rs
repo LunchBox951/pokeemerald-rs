@@ -1,7 +1,7 @@
 //! Typed Pokédex screen graphics (upstream `graphics/pokedex/`).
 //!
-//! Pack ids stay private so scene code composes no strings. Every lookup
-//! re-validates shapes, since a hand-built or corrupt pack can bypass extraction.
+//! Pack ids stay private; [`AssetPack::pokedex_graphics`] validates every entry
+//! on each call.
 
 use super::{AssetPack, PackError, PaletteRef, PalettedImage};
 
@@ -10,153 +10,163 @@ const IMAGE_PALETTE_PREFIX: &str = "pokedex-graphics/image-palette";
 const FILE_PALETTE_PREFIX: &str = "pokedex-graphics/palette";
 const RAW_PREFIX: &str = "pokedex-graphics/raw";
 
-const TILEMAP_ENTRY_BYTES: usize = 2;
-const PALETTE_ENTRY_BYTES: usize = 2;
-const BANK_COLORS: u16 = 16;
-const FULL_PALETTE_COLORS: u16 = 256;
-/// Byte length of the extensionless `cry_screen_bg` file.
-const CRY_SCREEN_BG_BYTES: usize = 32;
+const TEXT_TILEMAP_ENTRY_BYTES: usize = std::mem::size_of::<u16>();
+const AFFINE_TILEMAP_ENTRY_BYTES: usize = std::mem::size_of::<u8>();
+const PALETTE_ENTRY_BYTES: usize = std::mem::size_of::<u16>();
+const COLORS_PER_4BPP_BANK: u16 = 1 << 4;
+const FULL_PALETTE_COLORS: u16 = 1 << 8;
+const REGION_MAP_AFFINE_TILEMAP_SIDE_ENTRIES: usize = 64;
+const REGION_MAP_AFFINE_TILEMAP_BYTES: usize = REGION_MAP_AFFINE_TILEMAP_SIDE_ENTRIES
+    * REGION_MAP_AFFINE_TILEMAP_SIDE_ENTRIES
+    * AFFINE_TILEMAP_ENTRY_BYTES;
+const CRY_SCREEN_BG_RAW_BYTES: usize = 32;
 
-/// Every Pokédex tilemap is a screen of 2-byte entries, `width` x `height` tiles.
-const fn tilemap_bytes(width: usize, height: usize) -> usize {
-    width * height * TILEMAP_ENTRY_BYTES
+const fn text_tilemap_bytes(width_tiles: usize, height_tiles: usize) -> usize {
+    width_tiles * height_tiles * TEXT_TILEMAP_ENTRY_BYTES
 }
 
-/// Every Pokédex graphic the scenes draw, borrowing the pack for `'a`.
+/// Every Pokédex graphic the pack carries, each validated against its upstream shape.
 ///
-/// [`AssetPack::pokedex_graphics`] returns it with every entry validated.
-/// Each sheet pairs with the palette embedded in its upstream PNG. The
-/// standalone palettes (`bg_*.pal`, `search_results_bg.pal`, `size_silhouette.pal`,
-/// `search_menu.pal`, `region_map.pal`) are what upstream loads for the menu,
-/// interface, search, and regional-map sheets.
+/// A sheet's palette is the one embedded in its own PNG; the `*_palette`
+/// fields are separate standalone palettes.
 #[derive(Debug, Clone, Copy)]
 pub struct PokedexGraphicsHandle<'a> {
-    /// Main screen sheet (`menu.png`), 128x128.
+    /// 128x128, 4-bit, 16 colours.
     pub menu: PalettedImage<'a>,
-    /// Interface chrome sheet (`interface.png`), 32x512.
+    /// 32x512, 4-bit, 16 colours.
     pub interface: PalettedImage<'a>,
-    /// Unused no-ball cursor (`noball_unused.png`), 8x32.
+    /// 8x32, 4-bit, 16 colours.
     pub noball_unused: PalettedImage<'a>,
-    /// Caught-ball marker (`caught_ball.png`), 8x16.
+    /// 8x16, 4-bit, 16 colours.
     pub caught_ball: PalettedImage<'a>,
-    /// List arrows (`arrows.png`), 8x96.
+    /// 8x96, 4-bit, 16 colours.
     pub arrows: PalettedImage<'a>,
-    /// Search menu sheet (`search_menu.png`), 128x64.
+    /// 128x64, 4-bit, 16 colours.
     pub search_menu: PalettedImage<'a>,
-    /// Area-screen glow (`area_glow.png`), 32x96.
+    /// 32x96, 4-bit, 16 colours.
     pub area_glow: PalettedImage<'a>,
-    /// Area-screen marker (`area_marker.png`), 16x16.
+    /// 16x16, 4-bit, 16 colours.
     pub area_marker: PalettedImage<'a>,
-    /// Area-screen unknown-area art (`area_unknown.png`), 32x96.
+    /// 32x96, 4-bit, 16 colours.
     pub area_unknown: PalettedImage<'a>,
-    /// Regional map (`region_map.png`), 128x120, 256 colours.
+    /// 128x120, 8-bit, 256 colours.
     pub region_map: PalettedImage<'a>,
-    /// Affine regional map (`region_map_affine.png`), 128x120, 256 colours.
+    /// 128x120, 8-bit, 256 colours.
     pub region_map_affine: PalettedImage<'a>,
-    /// Cry meter (`cry_meter.png`), 80x64.
+    /// 80x64, 4-bit, 16 colours.
     pub cry_meter: PalettedImage<'a>,
-    /// Cry meter needle (`cry_meter_needle.png`), 64x64.
+    /// 64x64, 4-bit, 16 colours.
     pub cry_meter_needle: PalettedImage<'a>,
-    /// Cry screen background tile (`cry_screen_bg.png`), 8x8.
+    /// 8x8, 4-bit, 16 colours.
     pub cry_screen_bg: PalettedImage<'a>,
-    /// Hoenn background palette (`bg_hoenn.pal`), 96 colours.
+    /// 96 colours.
     pub bg_hoenn_palette: PaletteRef<'a>,
-    /// National background palette (`bg_national.pal`), 96 colours.
+    /// 96 colours.
     pub bg_national_palette: PaletteRef<'a>,
-    /// Search results background palette (`search_results_bg.pal`), 96 colours.
+    /// 96 colours.
     pub search_results_palette: PaletteRef<'a>,
-    /// Search menu palette (`search_menu.pal`), 64 colours.
+    /// 64 colours.
     pub search_menu_palette: PaletteRef<'a>,
-    /// Regional map palette (`region_map.pal`), 48 colours.
+    /// 48 colours.
     pub region_map_palette: PaletteRef<'a>,
-    /// Size screen silhouette palette (`size_silhouette.pal`), 16 colours.
+    /// 16 colours.
     pub size_silhouette_palette: PaletteRef<'a>,
-    /// Start menu main tilemap (`start_menu_main.bin`).
+    /// 32x12 text tilemap, 768 bytes.
     pub start_menu_main_tilemap: &'a [u8],
-    /// Start menu search results tilemap (`start_menu_search_results.bin`).
+    /// 32x12 text tilemap, 768 bytes.
     pub start_menu_search_results_tilemap: &'a [u8],
-    /// List tilemap (`list.bin`).
+    /// 32x20 text tilemap, 1280 bytes.
     pub list_tilemap: &'a [u8],
-    /// List underlay tilemap (`list_underlay.bin`).
+    /// 32x20 text tilemap, 1280 bytes.
     pub list_underlay_tilemap: &'a [u8],
-    /// Info screen tilemap (`info_screen.bin`).
+    /// 32x20 text tilemap, 1280 bytes.
     pub info_screen_tilemap: &'a [u8],
-    /// Size screen tilemap (`size_screen.bin`).
+    /// 32x20 text tilemap, 1280 bytes.
     pub size_screen_tilemap: &'a [u8],
-    /// Main screen-select bar tilemap (`screen_select_bar_main.bin`).
+    /// 32x3 text tilemap, 192 bytes.
     pub screen_select_bar_main_tilemap: &'a [u8],
-    /// Submenu screen-select bar tilemap (`screen_select_bar_submenu.bin`).
+    /// 32x3 text tilemap, 192 bytes.
     pub screen_select_bar_submenu_tilemap: &'a [u8],
-    /// Hoenn search menu tilemap (`search_menu_hoenn.bin`).
+    /// 32x20 text tilemap, 1280 bytes.
     pub search_menu_hoenn_tilemap: &'a [u8],
-    /// National search menu tilemap (`search_menu_national.bin`).
+    /// 32x20 text tilemap, 1280 bytes.
     pub search_menu_national_tilemap: &'a [u8],
-    /// Regional map tilemap (`region_map.bin`).
+    /// 32x32 text tilemap, 2048 bytes.
     pub region_map_tilemap: &'a [u8],
-    /// Affine regional map tilemap (`region_map_affine.bin`).
+    /// 64x64 affine tilemap of one-byte entries, 4096 bytes.
     pub region_map_affine_tilemap: &'a [u8],
-    /// Cry screen tilemap (`cry_screen.bin`).
+    /// 32x20 text tilemap, 1280 bytes.
     pub cry_screen_tilemap: &'a [u8],
-    /// Unused cry meter tilemap (`cry_meter_map.bin`).
+    /// 10x8 text tilemap, 160 bytes.
     pub cry_meter_tilemap: &'a [u8],
-    /// Extensionless `cry_screen_bg`, 32 bytes; tracked but unreferenced upstream.
+    /// Opaque extensionless `cry_screen_bg` file, 32 bytes.
     pub cry_screen_bg_raw: &'a [u8],
 }
 
 impl AssetPack {
-    /// Bundle every Pokédex screen graphic, palette, and tilemap.
+    /// Every Pokédex graphic, palette, and tilemap, validated against the
+    /// dimensions, bit depth, palette cardinality, and byte lengths upstream gives them.
     ///
     /// # Errors
     ///
     /// [`PackError::UnknownAsset`] or [`PackError::WrongKind`] for a missing or
-    /// wrong-kind entry; [`PackError::MalformedPokedexGraphic`] when dimensions,
-    /// palette size, pixel indices, or tilemap length differ from upstream.
+    /// wrong-kind entry; [`PackError::MalformedPokedexGraphic`] when an image's
+    /// bit depth, dimensions, payload length, or pixel indices, a palette's
+    /// colour count or payload length, or a raw entry's length differs from that shape.
     pub fn pokedex_graphics(&self) -> Result<PokedexGraphicsHandle<'_>, PackError> {
         Ok(PokedexGraphicsHandle {
-            menu: self.pokedex_sheet("menu", (128, 128), BANK_COLORS)?,
-            interface: self.pokedex_sheet("interface", (32, 512), BANK_COLORS)?,
-            noball_unused: self.pokedex_sheet("noball_unused", (8, 32), BANK_COLORS)?,
-            caught_ball: self.pokedex_sheet("caught_ball", (8, 16), BANK_COLORS)?,
-            arrows: self.pokedex_sheet("arrows", (8, 96), BANK_COLORS)?,
-            search_menu: self.pokedex_sheet("search_menu", (128, 64), BANK_COLORS)?,
-            area_glow: self.pokedex_sheet("area_glow", (32, 96), BANK_COLORS)?,
-            area_marker: self.pokedex_sheet("area_marker", (16, 16), BANK_COLORS)?,
-            area_unknown: self.pokedex_sheet("area_unknown", (32, 96), BANK_COLORS)?,
+            menu: self.pokedex_sheet("menu", (128, 128), COLORS_PER_4BPP_BANK)?,
+            interface: self.pokedex_sheet("interface", (32, 512), COLORS_PER_4BPP_BANK)?,
+            noball_unused: self.pokedex_sheet("noball_unused", (8, 32), COLORS_PER_4BPP_BANK)?,
+            caught_ball: self.pokedex_sheet("caught_ball", (8, 16), COLORS_PER_4BPP_BANK)?,
+            arrows: self.pokedex_sheet("arrows", (8, 96), COLORS_PER_4BPP_BANK)?,
+            search_menu: self.pokedex_sheet("search_menu", (128, 64), COLORS_PER_4BPP_BANK)?,
+            area_glow: self.pokedex_sheet("area_glow", (32, 96), COLORS_PER_4BPP_BANK)?,
+            area_marker: self.pokedex_sheet("area_marker", (16, 16), COLORS_PER_4BPP_BANK)?,
+            area_unknown: self.pokedex_sheet("area_unknown", (32, 96), COLORS_PER_4BPP_BANK)?,
             region_map: self.pokedex_sheet("region_map", (128, 120), FULL_PALETTE_COLORS)?,
             region_map_affine: self.pokedex_sheet(
                 "region_map_affine",
                 (128, 120),
                 FULL_PALETTE_COLORS,
             )?,
-            cry_meter: self.pokedex_sheet("cry_meter", (80, 64), BANK_COLORS)?,
-            cry_meter_needle: self.pokedex_sheet("cry_meter_needle", (64, 64), BANK_COLORS)?,
-            cry_screen_bg: self.pokedex_sheet("cry_screen_bg", (8, 8), BANK_COLORS)?,
-            bg_hoenn_palette: self.pokedex_palette("bg_hoenn", 96)?,
-            bg_national_palette: self.pokedex_palette("bg_national", 96)?,
-            search_results_palette: self.pokedex_palette("search_results_bg", 96)?,
-            search_menu_palette: self.pokedex_palette("search_menu", 64)?,
-            region_map_palette: self.pokedex_palette("region_map", 48)?,
-            size_silhouette_palette: self.pokedex_palette("size_silhouette", 16)?,
-            start_menu_main_tilemap: self.pokedex_raw("start_menu_main", tilemap_bytes(32, 12))?,
+            cry_meter: self.pokedex_sheet("cry_meter", (80, 64), COLORS_PER_4BPP_BANK)?,
+            cry_meter_needle: self.pokedex_sheet(
+                "cry_meter_needle",
+                (64, 64),
+                COLORS_PER_4BPP_BANK,
+            )?,
+            cry_screen_bg: self.pokedex_sheet("cry_screen_bg", (8, 8), COLORS_PER_4BPP_BANK)?,
+            bg_hoenn_palette: self.pokedex_palette("bg_hoenn", 6 * COLORS_PER_4BPP_BANK)?,
+            bg_national_palette: self.pokedex_palette("bg_national", 6 * COLORS_PER_4BPP_BANK)?,
+            search_results_palette: self
+                .pokedex_palette("search_results_bg", 6 * COLORS_PER_4BPP_BANK)?,
+            search_menu_palette: self.pokedex_palette("search_menu", 4 * COLORS_PER_4BPP_BANK)?,
+            region_map_palette: self.pokedex_palette("region_map", 3 * COLORS_PER_4BPP_BANK)?,
+            size_silhouette_palette: self
+                .pokedex_palette("size_silhouette", COLORS_PER_4BPP_BANK)?,
+            start_menu_main_tilemap: self
+                .pokedex_raw("start_menu_main", text_tilemap_bytes(32, 12))?,
             start_menu_search_results_tilemap: self
-                .pokedex_raw("start_menu_search_results", tilemap_bytes(32, 12))?,
-            list_tilemap: self.pokedex_raw("list", tilemap_bytes(32, 20))?,
-            list_underlay_tilemap: self.pokedex_raw("list_underlay", tilemap_bytes(32, 20))?,
-            info_screen_tilemap: self.pokedex_raw("info_screen", tilemap_bytes(32, 20))?,
-            size_screen_tilemap: self.pokedex_raw("size_screen", tilemap_bytes(32, 20))?,
+                .pokedex_raw("start_menu_search_results", text_tilemap_bytes(32, 12))?,
+            list_tilemap: self.pokedex_raw("list", text_tilemap_bytes(32, 20))?,
+            list_underlay_tilemap: self.pokedex_raw("list_underlay", text_tilemap_bytes(32, 20))?,
+            info_screen_tilemap: self.pokedex_raw("info_screen", text_tilemap_bytes(32, 20))?,
+            size_screen_tilemap: self.pokedex_raw("size_screen", text_tilemap_bytes(32, 20))?,
             screen_select_bar_main_tilemap: self
-                .pokedex_raw("screen_select_bar_main", tilemap_bytes(32, 3))?,
+                .pokedex_raw("screen_select_bar_main", text_tilemap_bytes(32, 3))?,
             screen_select_bar_submenu_tilemap: self
-                .pokedex_raw("screen_select_bar_submenu", tilemap_bytes(32, 3))?,
+                .pokedex_raw("screen_select_bar_submenu", text_tilemap_bytes(32, 3))?,
             search_menu_hoenn_tilemap: self
-                .pokedex_raw("search_menu_hoenn", tilemap_bytes(32, 20))?,
+                .pokedex_raw("search_menu_hoenn", text_tilemap_bytes(32, 20))?,
             search_menu_national_tilemap: self
-                .pokedex_raw("search_menu_national", tilemap_bytes(32, 20))?,
-            region_map_tilemap: self.pokedex_raw("region_map", tilemap_bytes(32, 32))?,
-            region_map_affine_tilemap: self.pokedex_raw("region_map_affine", 64 * 64)?,
-            cry_screen_tilemap: self.pokedex_raw("cry_screen", tilemap_bytes(32, 20))?,
-            cry_meter_tilemap: self.pokedex_raw("cry_meter_map", tilemap_bytes(10, 8))?,
-            cry_screen_bg_raw: self.pokedex_raw("cry_screen_bg", CRY_SCREEN_BG_BYTES)?,
+                .pokedex_raw("search_menu_national", text_tilemap_bytes(32, 20))?,
+            region_map_tilemap: self.pokedex_raw("region_map", text_tilemap_bytes(32, 32))?,
+            region_map_affine_tilemap: self
+                .pokedex_raw("region_map_affine", REGION_MAP_AFFINE_TILEMAP_BYTES)?,
+            cry_screen_tilemap: self.pokedex_raw("cry_screen", text_tilemap_bytes(32, 20))?,
+            cry_meter_tilemap: self.pokedex_raw("cry_meter_map", text_tilemap_bytes(10, 8))?,
+            cry_screen_bg_raw: self.pokedex_raw("cry_screen_bg", CRY_SCREEN_BG_RAW_BYTES)?,
         })
     }
 
@@ -166,48 +176,19 @@ impl AssetPack {
         (width, height): (u32, u32),
         palette_colors: u16,
     ) -> Result<PalettedImage<'_>, PackError> {
-        let image_id = format!("{IMAGE_PREFIX}/{name}");
-        let palette_id = format!("{IMAGE_PALETTE_PREFIX}/{name}");
-        let image = self.image(&image_id)?;
-        let fault = |detail: String| PackError::MalformedPokedexGraphic {
-            id: image_id.clone(),
-            detail,
-        };
         let bit_depth = if palette_colors == FULL_PALETTE_COLORS {
             8
         } else {
             4
         };
-        if image.bit_depth != bit_depth {
-            return Err(fault(format!(
-                "is {}-bit: expected {bit_depth}-bit",
-                image.bit_depth
-            )));
-        }
-        if image.width != width || image.height != height {
-            return Err(fault(format!(
-                "is {}x{}: expected {width}x{height}",
-                image.width, image.height
-            )));
-        }
-        if u64::try_from(image.pixels.len()).ok() != Some(u64::from(width) * u64::from(height)) {
-            return Err(fault(format!(
-                "carries {} payload bytes: expected one per pixel",
-                image.pixels.len()
-            )));
-        }
-        let palette = self.pokedex_palette_entry(&palette_id, palette_colors)?;
-        if let Some(&pixel) = image
-            .pixels
-            .iter()
-            .find(|&&pixel| u16::from(pixel) >= palette.color_count)
-        {
-            return Err(fault(format!(
-                "has pixel index {pixel}: its palette only has {} colours",
-                palette.color_count
-            )));
-        }
-        Ok(PalettedImage { image, palette })
+        self.paired_image(
+            &format!("{IMAGE_PREFIX}/{name}"),
+            &format!("{IMAGE_PALETTE_PREFIX}/{name}"),
+            (width, height),
+            bit_depth,
+            palette_colors,
+            |id, detail| PackError::MalformedPokedexGraphic { id, detail },
+        )
     }
 
     fn pokedex_palette(&self, name: &str, colors: u16) -> Result<PaletteRef<'_>, PackError> {

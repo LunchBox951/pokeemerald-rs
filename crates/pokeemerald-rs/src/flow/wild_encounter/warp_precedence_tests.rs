@@ -45,6 +45,7 @@ fn granite_cave_scene() -> crate::overworld::OverworldScene {
             (CAVE_WARP_TILE, MB_ANIMATED_DOOR),
         ],
     )
+    .in_room_for_test(GRANITE_CAVE_B1F)
 }
 
 /// Upstream's `ProcessPlayerFieldInput` runs `TryStartStepBasedScript`'s
@@ -68,13 +69,7 @@ fn a_door_warp_frame_never_reaches_the_encounter_roll() {
     // that never happened.
     {
         let scene = granite_cave_scene();
-        let header = assets::MapHeaderTable::new()
-            .header(GRANITE_CAVE_B1F)
-            .expect("Granite Cave B1F resolves in the generated map-header table");
-        let events = assets::MapEventsTable::new()
-            .resolve(GRANITE_CAVE_B1F)
-            .expect("Granite Cave B1F resolves in the generated map-events table");
-        let runtime = scene.runtime(GRANITE_CAVE_B1F, header, events);
+        let runtime = scene.runtime();
         let (wx, wy) = CAVE_WARP_TILE;
         assert!(
             matches!(
