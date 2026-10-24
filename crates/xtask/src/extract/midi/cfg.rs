@@ -58,7 +58,17 @@ fn apply_flag(entry: &mut MidiCfgEntry, token: &str) -> Result<(), MidiError> {
         return Err(MidiError::CfgMalformedFlag(token.to_owned()));
     };
     let value = &flag[letter.len_utf8()..];
-    match letter.to_ascii_uppercase() {
+    let letter = letter.to_ascii_uppercase();
+    let is_switch = [
+        EXACT_GATE_TIME_FLAG,
+        DOUBLE_CLOCKS_PER_BEAT_FLAG,
+        DISABLE_ASSEMBLY_COMPRESSION_FLAG,
+    ]
+    .contains(&letter);
+    if is_switch && !value.is_empty() {
+        return Err(MidiError::CfgMalformedFlag(token.to_owned()));
+    }
+    match letter {
         EXACT_GATE_TIME_FLAG => entry.exact_gate_time = true,
         DOUBLE_CLOCKS_PER_BEAT_FLAG => entry.clocks_per_beat = DOUBLE_CLOCKS_PER_BEAT,
         ASSEMBLY_OUTPUT_LABEL_FLAG | DISABLE_ASSEMBLY_COMPRESSION_FLAG => {}
@@ -73,28 +83,40 @@ fn apply_flag(entry: &mut MidiCfgEntry, token: &str) -> Result<(), MidiError> {
     Ok(())
 }
 
-/// Parses the flags for `filename`.
+/// Parses the flags for `filename` without requiring a `-G` flag: an entry that omits it keeps
+/// an empty [`MidiCfgEntry::voicegroup_label`].
 ///
 /// # Errors
 ///
-/// Returns [`MidiError::CfgEntryMissing`], [`MidiError::CfgMalformedFlag`],
-/// or [`MidiError::CfgMissingVoiceGroup`].
-pub(super) fn parse_entry_for(text: &str, filename: &str) -> Result<MidiCfgEntry, MidiError> {
+/// Returns [`MidiError::CfgEntryMissing`], [`MidiError::CfgEntryDuplicate`], or
+/// [`MidiError::CfgMalformedFlag`].
+pub(super) fn parse_entry_flags(text: &str, filename: &str) -> Result<MidiCfgEntry, MidiError> {
     let prefix = format!("{filename}:");
-    let line = text
+    let mut lines = text
         .lines()
-        .find(|line| line.trim_start().starts_with(&prefix))
+        .map(str::trim_start)
+        .filter_map(|line| line.strip_prefix(&prefix));
+    let rest = lines
+        .next()
         .ok_or_else(|| MidiError::CfgEntryMissing(filename.to_owned()))?;
-    let rest = line
-        .trim_start()
-        .strip_prefix(&prefix)
-        .expect("just matched this exact prefix")
-        .trim();
+    if lines.next().is_some() {
+        return Err(MidiError::CfgEntryDuplicate(filename.to_owned()));
+    }
 
     let mut entry = MidiCfgEntry::default();
     for token in rest.split_whitespace() {
         apply_flag(&mut entry, token)?;
     }
+    Ok(entry)
+}
+
+/// Parses the flags for `filename`, which must carry a `-G` flag.
+///
+/// # Errors
+///
+/// Returns the errors of [`parse_entry_flags`], or [`MidiError::CfgMissingVoiceGroup`].
+pub(super) fn parse_entry_for(text: &str, filename: &str) -> Result<MidiCfgEntry, MidiError> {
+    let entry = parse_entry_flags(text, filename)?;
     if entry.voicegroup_label.is_empty() {
         return Err(MidiError::CfgMissingVoiceGroup);
     }
