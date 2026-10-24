@@ -32,7 +32,8 @@
 //!   that fails again before surviving [`STABLE_AFTER`] continues the old one.
 //! - When a stream re-attaches after an earlier one and playback was meant to
 //!   advance while no stream drained the ring (a stream was lost while
-//!   started, or `start` held while none was attached), the queued samples
+//!   started, or `start` held while none was attached, even when a `stop`
+//!   followed before the driver stepped), the queued samples
 //!   are discarded, so playback resumes at the producer's current position
 //!   instead of replaying history. When playback has been stopped since,
 //!   only what was queued before that `stop` is history: what the producer
@@ -122,6 +123,9 @@ pub(super) struct Shared {
     /// [`Producer::pushed`] at the latest `stop` of a started transport:
     /// what was queued after it is a stopped queue.
     stopped_at: AtomicU64,
+    /// How many times playback has been started, so the worker sees a
+    /// `start` even when a `stop` overwrote it before the next step.
+    starts: AtomicU64,
     pub(super) shutdown: AtomicBool,
     pub(super) stream_errors: Arc<AtomicU64>,
     pub(super) playback_clock: Arc<PlaybackClock>,
@@ -143,6 +147,7 @@ impl Shared {
         Self {
             running: AtomicBool::new(false),
             stopped_at: AtomicU64::new(0),
+            starts: AtomicU64::new(0),
             shutdown: AtomicBool::new(false),
             stream_errors: Arc::new(AtomicU64::new(0)),
             playback_clock: Arc::new(PlaybackClock::new()),
@@ -156,9 +161,14 @@ impl Shared {
 
     /// Record playback intent. A stop of a started transport first marks
     /// where it landed in `producer`'s queue, so a re-attach that discards
-    /// history keeps what is queued after it.
+    /// history keeps what is queued after it. A start of a stopped transport
+    /// is counted, so one the worker never saw running is still history.
     pub(super) fn set_running(&self, running: bool, producer: &Producer) {
-        if !running && self.running.load(Ordering::Acquire) {
+        let was_running = self.running.load(Ordering::Acquire);
+        if running && !was_running {
+            self.starts.fetch_add(1, Ordering::Relaxed);
+        }
+        if !running && was_running {
             self.stopped_at.store(producer.pushed(), Ordering::Relaxed);
         }
         // Release: a worker that reads this stop also reads its mark.
@@ -223,6 +233,9 @@ pub(super) struct Transport<H: OutputHost> {
     /// Whether playback was meant to advance while no stream drained the
     /// ring, so the queue holds history the next attach must discard.
     stale_queue: bool,
+    /// [`Shared::starts`] when the transport last accounted for it; a later
+    /// count is a `start` that landed with no stream attached.
+    seen_starts: u64,
     /// The default identity the last discovery saw.
     observed: Observed,
     next_attempt: Duration,
@@ -246,6 +259,7 @@ impl<H: OutputHost> Transport<H> {
             failures: 0,
             attached_before: false,
             stale_queue: false,
+            seen_starts: 0,
             observed: Observed::Nothing,
             next_attempt: Duration::ZERO,
             next_discovery: Duration::ZERO,
@@ -271,7 +285,7 @@ impl<H: OutputHost> Transport<H> {
             self.supervise(now);
         }
         if self.live.is_none() {
-            if self.shared.running.load(Ordering::Acquire) {
+            if self.started_while_detached() || self.shared.running.load(Ordering::Acquire) {
                 self.stale_queue = true;
             }
             if now >= self.next_attempt {
@@ -285,6 +299,16 @@ impl<H: OutputHost> Transport<H> {
         } else {
             self.next_attempt.min(self.next_discovery)
         }
+    }
+
+    /// Whether `start` was called since the transport last looked, which
+    /// with no stream attached means playback was meant to advance even if a
+    /// `stop` has landed since.
+    fn started_while_detached(&mut self) -> bool {
+        let starts = self.shared.starts.load(Ordering::Acquire);
+        let started = starts != self.seen_starts;
+        self.seen_starts = starts;
+        started
     }
 
     /// Re-discover the default while waiting out a retry delay, and attempt
@@ -433,7 +457,11 @@ impl<H: OutputHost> Transport<H> {
         // was held with nothing attached, one during the build below has a
         // re-attaching stream built again, and a later one finds an attached
         // paused stream. The latch is taken, so a stopped retry after a failed
-        // build keeps what the producer queues next.
+        // build keeps what the producer queues next. A `start` and `stop`
+        // that both landed since the last step still count as a start.
+        if self.started_while_detached() {
+            self.stale_queue = true;
+        }
         let playing = self.shared.running.load(Ordering::Acquire);
         if (std::mem::take(&mut self.stale_queue) || playing) && self.attached_before {
             if playing {
@@ -498,7 +526,11 @@ impl<H: OutputHost> Transport<H> {
         // build, and the consumer is the stream's now. A `start` or `stop`
         // that landed while it blocked would replay history or drop a
         // stopped queue, so drop the unplayed stream and decide again.
-        if self.attached_before && self.shared.running.load(Ordering::Acquire) != playing {
+        // A `start` and `stop` that both landed meanwhile changed it too.
+        if self.attached_before
+            && (self.shared.running.load(Ordering::Acquire) != playing
+                || self.shared.starts.load(Ordering::Acquire) != self.seen_starts)
+        {
             return Err(NotAttached::IntentChanged);
         }
 
@@ -531,6 +563,8 @@ impl<H: OutputHost> Transport<H> {
 
     /// Drop the attached stream on this (the driver's) thread and publish why.
     fn retire(&mut self, reason: TransportFailure) {
+        // Starts so far landed while this stream was attached.
+        self.seen_starts = self.shared.starts.load(Ordering::Acquire);
         self.live = None;
         if self.shared.running.load(Ordering::Acquire) {
             self.stale_queue = true;

@@ -118,3 +118,57 @@ fn a_replacement_found_by_discovery_is_attached_without_querying_again() {
         "the replacement the discovery returned is the one connected"
     );
 }
+
+#[test]
+fn a_start_and_stop_between_steps_while_detached_still_discard_the_history() {
+    let w = world(|w| w.default = Some("a".into()));
+    let mut rig = rig(&w, 4);
+    rig.transport.step(Duration::ZERO);
+    // Lost while stopped: the retry is a stopped reattach.
+    raise_error(&w, 0, cpal::ErrorKind::DeviceNotAvailable);
+    rig.transport.step(MS(20));
+    assert_eq!(rig.producer.push(&[0.25; 2]), 2);
+
+    // During the retry delay, before the worker steps again, playback is
+    // started, the producer queues with nothing draining, and `stop` lands.
+    rig.shared.set_running(true, &rig.producer);
+    assert_eq!(rig.producer.push(&[0.25; 2]), 2);
+    rig.shared.set_running(false, &rig.producer);
+    assert_eq!(rig.producer.push(&[0.5; 4]), 4);
+
+    rig.transport.step(MS(120));
+    assert_eq!(rig.shared.state(), TransportState::Ready);
+    assert_eq!(
+        rig.producer.available_space(),
+        rig.producer.capacity() - 4,
+        "what queued before the stop is history; the stopped queue is kept"
+    );
+}
+
+#[test]
+fn a_start_and_stop_while_a_stopped_reattach_builds_discard_the_history() {
+    let w = world(|w| w.default = Some("a".into()));
+    let mut rig = rig(&w, 4);
+    rig.transport.step(Duration::ZERO);
+    raise_error(&w, 0, cpal::ErrorKind::DeviceNotAvailable);
+    rig.transport.step(MS(20));
+    assert_eq!(rig.producer.push(&[0.25; 2]), 2);
+
+    let (shared, producer) = (Arc::clone(&rig.shared), rig.producer.clone());
+    with(&w).during_build = Some(Box::new(move |_| {
+        shared.set_running(true, &producer);
+        assert_eq!(producer.push(&[0.25; 2]), 2);
+        shared.set_running(false, &producer);
+        assert_eq!(producer.push(&[0.5; 4]), 4);
+    }));
+    let mut now = MS(120);
+    for _ in 0..3 {
+        now = rig.transport.step(now);
+    }
+    assert_eq!(rig.shared.state(), TransportState::Ready);
+    assert_eq!(
+        rig.producer.available_space(),
+        rig.producer.capacity() - 4,
+        "a start held while the stream was built makes the earlier queue history"
+    );
+}

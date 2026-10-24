@@ -206,3 +206,58 @@ fn a_loss_published_while_draining_is_not_hidden_by_an_earlier_ready() {
         "the state read after draining decides"
     );
 }
+
+#[test]
+fn a_state_published_just_before_the_timeout_is_classified_not_failed() {
+    use platform::audio::{TransportFailure, TransportState};
+    for (published, expected) in [
+        (TransportState::Ready, TransportOutcome::Ready),
+        (TransportState::Null, TransportOutcome::Ready),
+        (
+            TransportState::Unavailable(TransportFailure::NoOutput),
+            TransportOutcome::ExpectedHeadless,
+        ),
+    ] {
+        // The settling look reads Connecting; the worker publishes before
+        // the deadline snapshot.
+        let mut transport = FakeTransport {
+            queued: std::collections::VecDeque::new(),
+            current: TransportState::Connecting,
+            publish_on_drain: None,
+        };
+        let mut reads = 0;
+        let outcome = await_transport_with(
+            &mut transport,
+            FakeTransport::poll,
+            |t| {
+                reads += 1;
+                if reads == 1 {
+                    t.current
+                } else {
+                    published
+                }
+            },
+            std::time::Duration::ZERO,
+        );
+        assert_eq!(outcome, expected, "published {published:?} at the deadline");
+    }
+}
+
+#[test]
+fn a_transport_still_connecting_at_the_timeout_is_a_setup_failure() {
+    use platform::audio::TransportState;
+    let mut transport = FakeTransport {
+        queued: std::collections::VecDeque::new(),
+        current: TransportState::Connecting,
+        publish_on_drain: None,
+    };
+    assert_eq!(
+        await_transport_with(
+            &mut transport,
+            FakeTransport::poll,
+            |t| t.current,
+            std::time::Duration::ZERO,
+        ),
+        TransportOutcome::SetupFailure(TransportState::Connecting)
+    );
+}

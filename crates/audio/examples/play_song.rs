@@ -245,18 +245,32 @@ fn settle_transport(output: &mut AudioOutput) -> Option<ExitCode> {
 /// Follow the output's transport transitions until one settles the outcome or
 /// `timeout` passes.
 fn await_transport(output: &mut AudioOutput, timeout: Duration) -> TransportOutcome {
+    await_transport_with(
+        output,
+        AudioOutput::poll_transport_state,
+        AudioOutput::transport_state,
+        timeout,
+    )
+}
+
+/// [`await_transport`] over any `poll`/`current` pair. The state read at the
+/// deadline is classified like any other, so one the worker published after
+/// the last look settles the outcome; only a transport still connecting
+/// fails for the timeout.
+fn await_transport_with<O>(
+    output: &mut O,
+    mut poll: impl FnMut(&mut O) -> Option<TransportState>,
+    mut current: impl FnMut(&O) -> TransportState,
+    timeout: Duration,
+) -> TransportOutcome {
     let deadline = Instant::now() + timeout;
     loop {
-        let settled = settle_transport_once(
-            output,
-            AudioOutput::poll_transport_state,
-            AudioOutput::transport_state,
-        );
-        if let Some(outcome) = settled {
+        if let Some(outcome) = settle_transport_once(output, &mut poll, &mut current) {
             return outcome;
         }
         if Instant::now() >= deadline {
-            return TransportOutcome::SetupFailure(output.transport_state());
+            let state = current(output);
+            return classify_transport(state).unwrap_or(TransportOutcome::SetupFailure(state));
         }
         std::thread::sleep(Duration::from_millis(10));
     }
