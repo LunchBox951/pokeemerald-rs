@@ -68,6 +68,18 @@ const COMPLETE_PREFIXES: &[&str] = &[
     "opening-scene/",
 ];
 
+/// The battle textbox and menu text entries: 5 ids the ROM backend must write
+/// although `battle-interface/` is not in [`COMPLETE_PREFIXES`]. The checkout
+/// also extracts the health-box elements and battle bar there, which no ROM
+/// root imports until #2178.
+const BATTLE_INTERFACE_IDS: [&str; 5] = [
+    "battle-interface/image/textbox",
+    "battle-interface/palette/textbox",
+    "battle-interface/palette/window_text",
+    "battle-interface/palette/pp_text",
+    "battle-interface/raw/textbox_map",
+];
+
 /// The starters' static battler entries: 12 ids the ROM backend must write
 /// although `pokemon/` is not yet in [`COMPLETE_PREFIXES`].
 const STARTER_BATTLER_IDS: [&str; 12] = [
@@ -218,6 +230,14 @@ fn the_rom_backend_matches_the_checkout_pack() {
         }
     }
 
+    // `battle-interface/` is not a complete prefix while the health boxes are
+    // checkout-only, so the textbox entries are pinned by id.
+    for id in BATTLE_INTERFACE_IDS {
+        if !imported.contains_key(id) {
+            differences.push(format!("{id}: the ROM backend wrote no such entry"));
+        }
+    }
+
     // Named by id so a payload both backends drop together still fails.
     for id in checkpoint_payload_ids() {
         for (what, ids) in [
@@ -244,6 +264,35 @@ fn the_rom_backend_matches_the_checkout_pack() {
         "{} entry difference(s) between the ROM backend and the checkout pack",
         differences.len()
     );
+}
+
+/// The pinned battle-interface ids are exactly the profile's roots, and no
+/// complete prefix claims the checkout-only health-box records.
+#[test]
+fn the_battle_interface_ids_are_pinned_not_claimed_by_prefix() {
+    let roots = &rom_import::EMERALD_US_REV0.roots.battle_interface;
+    let mut profiled: Vec<&str> = roots
+        .images
+        .iter()
+        .map(|root| root.id)
+        .chain(roots.palettes.iter().map(|root| root.id))
+        .chain(roots.tilemaps.iter().map(|root| root.id))
+        .collect();
+    profiled.sort_unstable();
+    let mut pinned = BATTLE_INTERFACE_IDS;
+    pinned.sort_unstable();
+    assert_eq!(profiled, pinned);
+    for id in [
+        "battle-interface/raw/battle_bar",
+        "battle-interface/raw/healthbox_element/hpbar",
+    ] {
+        assert!(
+            !COMPLETE_PREFIXES
+                .iter()
+                .any(|prefix| id.starts_with(prefix)),
+            "{id} is checkout-only until #2178"
+        );
+    }
 }
 
 /// `mus_title.mid` plays key 33 on program 48 (channel 2, tick 2160). That is

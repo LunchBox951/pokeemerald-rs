@@ -38,7 +38,7 @@
 //! (`TRSEE_REVEAL_DISGUISE`/`_BURIED`) are unreachable without one.
 
 use assets::trainers::TrainerId;
-use assets::{MapEventsTable, MapHeaderTable, ObjectEvent, TrainerType};
+use assets::{ObjectEvent, TrainerType};
 use engine::event_data::EventData;
 use engine::overworld::{trainer_can_see_player, MapRuntime, ObjectEventState, PlayerState};
 
@@ -436,13 +436,7 @@ impl OverworldPhase {
     /// - **Daisy, Isabelle, Miguel and Amy & Liv** stop on a move, an
     ///   ability or (for Amy & Liv) a double battle this port does not field.
     pub(super) fn begin_sight_trainer_approach_if_seen(&mut self) -> SightTrainerOutcome {
-        let Ok(header) = MapHeaderTable::new().header(self.map_id) else {
-            return SightTrainerOutcome::Refused;
-        };
-        let Ok(events) = MapEventsTable::new().resolve(self.map_id) else {
-            return SightTrainerOutcome::Refused;
-        };
-        let runtime = self.scene.runtime(self.map_id, header, events);
+        let runtime = self.scene.runtime();
         let scan = find_sight_trainer(&runtime, &self.player, &self.save1.event_data);
         if !scan.any_cone_reached {
             self.sight_trainer_log.left_every_cone();
@@ -689,14 +683,9 @@ mod tests {
     #[test]
     fn find_sight_trainer_matches_rhett_and_is_gated_by_the_defeated_flag() {
         let map_id = assets::MapId("MAP_ROUTE103");
-        let scene = crate::overworld::test_support::synthetic_scene(80, 16);
-        let header = assets::MapHeaderTable::new()
-            .header(map_id)
-            .expect("MAP_ROUTE103 is bundled map data");
-        let events = assets::MapEventsTable::new()
-            .resolve(map_id)
-            .expect("MAP_ROUTE103 is bundled map data");
-        let runtime = scene.runtime(map_id, header, events);
+        let scene =
+            crate::overworld::test_support::synthetic_scene(80, 16).in_room_for_test(map_id);
+        let runtime = scene.runtime();
         let player = PlayerState::new((67, 6), 3, engine::overworld::Direction::North);
 
         let event_data = EventData::new();
@@ -731,14 +720,9 @@ mod tests {
     #[test]
     fn a_double_battle_cone_is_reported_as_reached_but_never_selected() {
         let map_id = assets::MapId("MAP_ROUTE103");
-        let scene = crate::overworld::test_support::synthetic_scene(80, 16);
-        let header = assets::MapHeaderTable::new()
-            .header(map_id)
-            .expect("MAP_ROUTE103 is bundled map data");
-        let events = assets::MapEventsTable::new()
-            .resolve(map_id)
-            .expect("MAP_ROUTE103 is bundled map data");
-        let runtime = scene.runtime(map_id, header, events);
+        let scene =
+            crate::overworld::test_support::synthetic_scene(80, 16).in_room_for_test(map_id);
+        let runtime = scene.runtime();
         let player = PlayerState::new((64, 13), 3, engine::overworld::Direction::North);
 
         let scan = find_sight_trainer(&runtime, &player, &EventData::new());
