@@ -6,17 +6,17 @@ use crate::save::store::FLASH_IMAGE_LEN;
 
 #[cfg(target_os = "linux")]
 use super::super::fill_new_file;
-#[cfg(windows)]
-use super::super::{
-    remove_through_verified_handle, remove_through_verified_handle_with, VerifiedRemoval,
-    WindowsFileIdentity,
-};
 #[cfg(unix)]
 use crate::save::file::tests::guessable_pid_staging_path;
 #[cfg(any(unix, windows))]
 use crate::save::file::SaveFileError;
 #[cfg(windows)]
 use std::path::Path;
+#[cfg(windows)]
+use win_fs::{
+    remove_through_verified_handle, remove_through_verified_handle_with, VerifiedRemoval,
+    WindowsFileIdentity,
+};
 
 #[test]
 fn a_staging_name_collision_is_retried_onto_a_fresh_name() {
@@ -655,4 +655,48 @@ fn a_guarded_write_refuses_to_rename_after_a_junction_parent_is_retargeted() {
         "a retarget between staging and rename must name itself: {err:?}"
     );
     assert!(!second.join(SAVE_FILE_NAME).exists());
+}
+
+/// Set in the child [`a_save_written_under_an_owner_stripping_umask_is_owner_readable`]
+/// re-runs itself as, so only that child changes its own umask.
+#[cfg(unix)]
+const UMASK_CHILD: &str = "POKEEMERALD_SAVE_STAGING_UMASK_CHILD";
+
+#[cfg(unix)]
+#[test]
+fn a_save_written_under_an_owner_stripping_umask_is_owner_readable() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let name = "save::file::staging::tests::creation_and_cleanup::\
+                a_save_written_under_an_owner_stripping_umask_is_owner_readable";
+    if std::env::var_os(UMASK_CHILD).is_none() {
+        // The umask is process-wide, so the 0o444 one is set only in a
+        // re-run of this test binary that runs this test alone.
+        let output = std::process::Command::new("/bin/sh")
+            .args(["-c", "umask 0444 && exec \"$0\" \"$@\""])
+            .arg(std::env::current_exe().unwrap())
+            .args(["--exact", name, "--test-threads=1"])
+            .env(UMASK_CHILD, "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains("1 passed"),
+            "umask 0444 child failed:\n{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let dir = TempDir::new("staging-owner-stripping-umask");
+    let path = dir.join(SAVE_FILE_NAME);
+    let file = SaveFile::at(&path);
+    let (store, _, _) = saved_store();
+    file.write(&store).expect("the save is written");
+    let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+    // 0666 & !0444 leaves 0222 for everyone; only owner read is restored.
+    assert_eq!(
+        mode, 0o622,
+        "owner read is restored and group and other keep the umask's mode: {mode:o}"
+    );
+    let reloaded = file.read().unwrap().expect("the save must be readable");
+    assert_eq!(reloaded.flash_image(), store.flash_image());
 }
