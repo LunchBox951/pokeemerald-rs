@@ -393,10 +393,11 @@ fn failed_menu_load_after_title_fade_wait_leaves_title_music_playing() {
     let title_scene = crate::title::load_repo().expect("run `cargo xtask extract` first");
     let missing: &'static std::path::Path =
         Box::leak(std::path::PathBuf::from("/nonexistent/birch/menu.pack").into_boxed_path());
+    let mut save_slot = SaveSlot::disabled();
     let mut app = App::assemble(
         platform::Platform::new_headless(),
-        crate::app::compose_title_scene(title_scene),
-        SaveSlot::disabled(),
+        crate::app::compose_title_scene(title_scene, &mut save_slot),
+        save_slot,
         crate::pack_source::PackSource::Test(missing),
     );
     let output = platform::AudioOutput::null(crate::music::RING_CAPACITY_FRAMES);

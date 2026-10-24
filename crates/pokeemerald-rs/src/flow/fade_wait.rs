@@ -14,8 +14,8 @@ use super::{
     title_to_main_menu, AnimatedTitle, AppScene, MainMenuAction, MainMenuState, OverworldPhase,
 };
 use crate::frame::to_platform_frame;
-use crate::game_save::SaveSlot;
 use crate::main_menu::{MainMenuItem, MainMenuScene};
+use engine::save::ButtonMode;
 
 /// [`AppScene::TitleFadeWait`]'s state: the title retained for its
 /// unfaded-recovery frame ([`advance_title_fade_wait`]'s own doc comment)
@@ -23,6 +23,13 @@ use crate::main_menu::{MainMenuItem, MainMenuScene};
 pub(crate) struct TitleFadeWait {
     title: Box<AnimatedTitle>,
     fade: NormalPaletteFade,
+}
+
+impl TitleFadeWait {
+    /// The boot save's `optionsButtonMode`, carried by the retained title.
+    pub(super) fn button_mode(&self) -> ButtonMode {
+        self.title.saved.block2.options_button_mode
+    }
 }
 
 /// [`AppScene::MainMenuFadeWait`]'s state: the menu retained for its
@@ -106,15 +113,16 @@ pub(super) fn advance_title(
 /// only installs the next callback (`pokeemerald/src/title_screen.c:824-828`).
 pub(super) fn advance_title_fade_wait(
     mut wait: Box<TitleFadeWait>,
-    save_slot: &mut SaveSlot,
     pack_source: &crate::pack_source::PackSource,
 ) -> (AppScene, Box<Frame>) {
     if wait.fade.is_done() {
-        if let Some(result) = title_to_main_menu(pack_source, save_slot) {
-            return result;
-        }
-        let frame = to_platform_frame(&wait.title.scene.compose(wait.title.tick));
-        return (AppScene::Title(wait.title), frame);
+        return match title_to_main_menu(pack_source, wait.title) {
+            Ok(result) => result,
+            Err(title) => {
+                let frame = to_platform_frame(&title.scene.compose(title.tick));
+                (AppScene::Title(title), frame)
+            }
+        };
     }
     wait.fade.update();
     let frame = faded_title_frame(&wait.title, &wait.fade);
