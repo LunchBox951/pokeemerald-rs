@@ -128,6 +128,13 @@ pub enum PackError {
         /// What differs from the expected shape.
         detail: String,
     },
+    /// A battle-effect sprite entry differs from the upstream graphic's shape.
+    MalformedBattleEffectAsset {
+        /// Asset id.
+        id: String,
+        /// What differs from the expected shape.
+        detail: String,
+    },
     /// An ordinary-bag entry differs from the upstream graphic's shape.
     MalformedBagAsset {
         /// Asset id.
@@ -276,6 +283,9 @@ impl fmt::Display for PackError {
             Self::MalformedBattleInterfaceAsset { id, detail } => {
                 write!(f, "asset pack: battle interface entry `{id}` {detail}")
             }
+            Self::MalformedBattleEffectAsset { id, detail } => {
+                write!(f, "asset pack: battle-effect entry `{id}` {detail}")
+            }
             Self::MalformedBagAsset { id, detail } => {
                 write!(f, "asset pack: bag entry `{id}` {detail}")
             }
@@ -334,6 +344,7 @@ impl std::error::Error for PackError {
             | Self::MalformedOpeningSceneAsset { .. }
             | Self::MalformedPokedexGraphic { .. }
             | Self::MalformedBattleInterfaceAsset { .. }
+            | Self::MalformedBattleEffectAsset { .. }
             | Self::MalformedBagAsset { .. } => None,
         }
     }
