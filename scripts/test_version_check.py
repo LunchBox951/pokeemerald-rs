@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unit tests for scripts/version_check.py — focused on the FINAL gate.
+"""Tests for VERSION, Cargo version, FINAL approval, and changelog gates.
 
 Run with:  python3 -m unittest scripts/test_version_check.py
        or:  python3 scripts/test_version_check.py
@@ -8,9 +8,8 @@ Two layers of coverage:
 
 - ``TestCheckTransition`` / ``TestParseMarker`` exercise the pure validation
   functions directly with in-memory marker contents (fast, no git needed).
-- ``TestFinalGateIntegration`` reproduces the issue's exact repro steps
-  against a real throwaway git repository, driving ``main()`` end to end
-  the same way CI invokes the script (``--base <ref> --head HEAD``).
+- Integration tests use throwaway git repositories to drive ``main()``
+  end to end as CI invokes it (``--base <ref> --head HEAD``).
 """
 
 import importlib.util
@@ -33,6 +32,10 @@ MARKER = version_check.DEFAULT_FINAL_GATE_MARKER
 def marker(version: str, when: str = "2026-07-25") -> str:
     """Build valid marker file contents approving ``version``."""
     return f"Approved version: {version}\nDate: {when}\n"
+
+
+def changelog(version: str) -> str:
+    return f"# Changelog\n\n## [{version}] - 2026-10-23\n\n- Various bug fixes.\n"
 
 
 class TestParseMarker(unittest.TestCase):
@@ -286,6 +289,159 @@ class _TempGitRepo:
             outside.cleanup()
 
 
+class TestChangelogIntegration(unittest.TestCase):
+    def setUp(self):
+        self.repo = _TempGitRepo()
+        self.repo.write("VERSION", "0.1.2.5\n")
+        self.repo.commit("baseline")
+
+    def tearDown(self):
+        self.repo.cleanup()
+
+    def test_minor_bump_requires_changelog(self):
+        self.repo.write("VERSION", "0.1.3.0\n")
+        self.repo.sync_cargo_manifest()
+        self.assertNotEqual(
+            self.repo.run_version_check(base="baseline", require_bump=True), 0
+        )
+
+    def test_non_patch_bumps_accept_fresh_entries_and_reject_missing_entries(self):
+        for version in ("0.1.3.0", "0.2.0.0", "1.0.0.0"):
+            with self.subTest(version=version):
+                self.repo.write("VERSION", version + "\n")
+                self.repo.sync_cargo_manifest()
+                self.repo.write(MARKER, marker(version))
+                self.repo.write("CHANGELOG.md", "# Changelog\n")
+                self.assertNotEqual(
+                    self.repo.run_version_check(base="baseline"), 0
+                )
+                self.repo.write("CHANGELOG.md", changelog(version))
+                self.assertEqual(
+                    self.repo.run_version_check(base="baseline"), 0
+                )
+
+    def test_patch_bump_does_not_require_changelog(self):
+        self.repo.write("VERSION", "0.1.2.6\n")
+        self.repo.sync_cargo_manifest()
+        self.assertEqual(self.repo.run_version_check(base="baseline"), 0)
+
+    def test_fenced_example_does_not_satisfy_changelog_requirement(self):
+        self.repo.write("VERSION", "0.1.3.0\n")
+        self.repo.sync_cargo_manifest()
+        for opening, closing in (
+            ("```markdown", "```"),
+            ("~~~markdown", "~~~"),
+            ("   ````markdown", "   `````"),
+            ("~~~~markdown", ""),
+        ):
+            with self.subTest(opening=opening, closing=closing):
+                self.repo.write(
+                    "CHANGELOG.md",
+                    opening + "\n" + changelog("0.1.3.0") + closing + "\n",
+                )
+                self.assertNotEqual(
+                    self.repo.run_version_check(base="baseline"), 0
+                )
+
+    def test_visible_heading_with_only_fenced_bullets_fails(self):
+        self.repo.write("VERSION", "0.1.3.0\n")
+        self.repo.sync_cargo_manifest()
+        self.repo.write(
+            "CHANGELOG.md", "## [0.1.3.0] - 2026-10-23\n\n"
+            "~~~\n- Various bug fixes.\n~~~\n"
+        )
+        self.assertNotEqual(self.repo.run_version_check(base="baseline"), 0)
+
+    def test_short_or_different_fence_does_not_end_example(self):
+        self.repo.write("VERSION", "0.1.3.0\n")
+        self.repo.sync_cargo_manifest()
+        for closing in ("```", "~~~~", "````not-a-close"):
+            with self.subTest(closing=closing):
+                self.repo.write(
+                    "CHANGELOG.md", "````\nExample\n" + closing + "\n"
+                    + changelog("0.1.3.0")
+                )
+                self.assertNotEqual(
+                    self.repo.run_version_check(base="baseline"), 0
+                )
+
+    def test_real_entry_outside_fenced_examples_passes(self):
+        self.repo.write("VERSION", "0.1.3.0\n")
+        self.repo.sync_cargo_manifest()
+        self.repo.write(
+            "CHANGELOG.md", "~~~markdown\n" + changelog("0.1.3.0")
+            + "~~~~\n" + changelog("0.1.3.0")
+            + "\n```\n" + changelog("0.1.3.0") + "```\n"
+        )
+        self.assertEqual(self.repo.run_version_check(base="baseline"), 0)
+
+    def test_invalid_entries_fail(self):
+        self.repo.write("VERSION", "0.1.3.0\n")
+        self.repo.sync_cargo_manifest()
+        for notes in (
+            changelog("0.1.2.0"),
+            "## [0.1.3.0] - 2026-10-23\n",
+            "## [0.1.3.0] - 2026-10-23\n\n### Fixed\n\n- \n",
+            "## [0.1.3.0] - 2026-10-23\n\n" + changelog("0.1.2.0"),
+            changelog("0.1.3.0") * 2,
+            changelog("0.1.3.0").replace("2026-10-23", "2026-02-30"),
+            changelog("0.1.3.0").replace(" - 2026-10-23", ""),
+            "<!--\n" + changelog("0.1.3.0") + "-->\n",
+            "## [0.1.3.0] - 2026-10-23\n<!--\n- Hidden note.\n-->\n",
+        ):
+            with self.subTest(notes=notes):
+                self.repo.write("CHANGELOG.md", notes)
+                self.assertNotEqual(
+                    self.repo.run_version_check(base="baseline"), 0
+                )
+
+    def test_unchanged_entry_fails_even_when_other_notes_change(self):
+        self.repo.write("CHANGELOG.md", changelog("0.1.3.0"))
+        self.repo.commit("prewritten-notes")
+        self.repo.write("VERSION", "0.1.3.0\n")
+        self.repo.sync_cargo_manifest()
+        self.repo.write(
+            "CHANGELOG.md", changelog("0.1.2.0") + changelog("0.1.3.0")
+        )
+        self.assertNotEqual(
+            self.repo.run_version_check(base="prewritten-notes"), 0
+        )
+        self.repo.write(
+            "CHANGELOG.md", changelog("0.1.3.0") + "\n- General improvements.\n"
+        )
+        self.assertEqual(
+            self.repo.run_version_check(base="prewritten-notes"), 0
+        )
+
+    def test_named_head_reads_committed_notes(self):
+        self.repo.write("VERSION", "0.1.3.0\n")
+        self.repo.commit("missing-notes")
+        self.repo.write("CHANGELOG.md", changelog("0.1.3.0"))
+        self.assertNotEqual(
+            self.repo.run_version_check(base="baseline", head="missing-notes"), 0
+        )
+        self.repo.commit("with-notes")
+        self.repo.write("CHANGELOG.md", "# Changelog\n")
+        self.assertEqual(
+            self.repo.run_version_check(base="baseline", head="with-notes"), 0
+        )
+
+    def test_cumulative_promotion_does_not_require_notes(self):
+        self.repo.write("VERSION", "0.2.3.4\n")
+        self.repo.commit("promotion")
+        self.assertEqual(
+            self.repo.run_version_check(
+                base="baseline", mode="cumulative", require_bump=True
+            ), 0
+        )
+
+    def test_final_bump_still_requires_approval_with_valid_notes(self):
+        self.repo.write("VERSION", "1.0.0.0\n")
+        self.repo.sync_cargo_manifest()
+        self.repo.write("CHANGELOG.md", changelog("1.0.0.0"))
+        self.assertNotEqual(self.repo.run_version_check(base="baseline"), 0)
+
+
 class TestFinalGateIntegration(unittest.TestCase):
     """Reproduces issue #129's exact scratch-repo scenario against real git."""
 
@@ -323,6 +479,7 @@ class TestFinalGateIntegration(unittest.TestCase):
         # Step 3: approved 1.0.0.0 bump with a fresh, matching marker.
         self.repo.write("VERSION", "1.0.0.0\n")
         self.repo.write(MARKER, marker("1.0.0.0"))
+        self.repo.write("CHANGELOG.md", changelog("1.0.0.0"))
         self.repo.commit("approved-final")
         # This transition, from baseline, must succeed.
         self.assertEqual(
@@ -347,6 +504,7 @@ class TestFinalGateIntegration(unittest.TestCase):
 
         self.repo.write("VERSION", "1.0.0.0\n")
         self.repo.write(MARKER, marker("1.0.0.0"))
+        self.repo.write("CHANGELOG.md", changelog("1.0.0.0"))
         self.repo.commit("approved-final")
 
         self.assertEqual(
@@ -443,6 +601,7 @@ class TestFinalGateIntegration(unittest.TestCase):
         self.repo.commit("baseline")
         self.repo.write("VERSION", "1.0.0.0\n")
         self.repo.write(MARKER, marker("1.0.0.0"))
+        self.repo.write("CHANGELOG.md", changelog("1.0.0.0"))
         self.repo.commit("approved-final")
         self.repo.write("VERSION", "2.0.0.0\n")
         self.repo.commit("unauthorized-bump")

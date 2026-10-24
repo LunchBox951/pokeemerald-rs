@@ -75,7 +75,7 @@ Write each commit subject as `<subsystem>: <imperative description> (<acceptance
 
 Release impact is not a template field: the `VERSION` bump and CI's gates are its sole authority (see [`RELEASE.md`](RELEASE.md)).
 
-Every ordinary pull request into `dev` advances `VERSION` past the `VERSION` on current `dev`, not past the version your branch started from. After merging `dev` into your branch, redo the bump from the merged `VERSION`. Run `python3 scripts/sync_cargo_version.py` after the chosen `PATCH`, `MINOR`, or `MAJOR` bump, and check it with `python3 scripts/version_check.py --base origin/dev --require-bump` after fetching `dev`. `FINAL` is owner-only. Do not combine feature changes with channel promotion.
+Every ordinary pull request into `dev` advances `VERSION` past the `VERSION` on current `dev`, not past the version your branch started from. After merging `dev` into your branch, redo the bump from the merged `VERSION`. Run `python3 scripts/sync_cargo_version.py` after the chosen `PATCH`, `MINOR`, or `MAJOR` bump, and check it with `python3 scripts/version_check.py --base origin/dev --require-bump` after fetching `dev`. Follow [`RELEASE.md` §Changelog](RELEASE.md#changelog) for required patch notes. `FINAL` is owner-only. Do not combine feature changes with channel promotion.
 
 Repository automation may review and merge ready work. The `needs-operator` label marks a decision or review that automation cannot supply.
 

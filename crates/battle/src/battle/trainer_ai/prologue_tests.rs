@@ -636,3 +636,41 @@ fn status_handler_admission_is_flag_aware_and_exact() {
         );
     }
 }
+
+#[test]
+fn sonic_boom_runs_the_high_risk_handler_even_though_its_power_skips_the_prologue_checks() {
+    let gastly = mon(GASTLY, &[MoveId::POUND]);
+    let shedinja = mon(SHEDINJA, &[MoveId::POUND]);
+    let mudkip = mon(MUDKIP, &[MoveId::POUND]);
+    assert_eq!(
+        prologue(MoveId::SONIC_BOOM, &gastly),
+        (false, FULL),
+        "power 1 skips the prologue's chart check"
+    );
+    assert_eq!(bad_move_score(MoveId::SONIC_BOOM, &gastly), MINUS_10);
+    assert_eq!(bad_move_score(MoveId::SONIC_BOOM, &shedinja), MINUS_10);
+    assert_eq!(bad_move_score(MoveId::SONIC_BOOM, &mudkip), FULL);
+}
+
+#[test]
+fn sonic_boom_is_admitted_for_check_bad_move_alone() {
+    let dex = Dex::new();
+    assert_eq!(
+        ensure_scoreable(&dex, MoveId::SONIC_BOOM, AiFlags::CHECK_BAD_MOVE),
+        Ok(())
+    );
+    for extra in [
+        AiFlags::TRY_TO_FAINT,
+        AiFlags::CHECK_VIABILITY,
+        AiFlags::SETUP_FIRST_TURN,
+    ] {
+        assert_eq!(
+            ensure_scoreable(
+                &dex,
+                MoveId::SONIC_BOOM,
+                AiFlags::CHECK_BAD_MOVE.union(extra)
+            ),
+            Err(BattleError::UnscoreableMoveEffect(MoveId::SONIC_BOOM)),
+        );
+    }
+}
