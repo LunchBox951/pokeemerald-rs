@@ -26,9 +26,10 @@ use crate::secondary::{
     SynchronizePoisonReflectionOutcome,
 };
 use crate::stat_change::{
-    is_stat_change_effect, resolve_stat_change_move, set_stage, StatChangeDirection,
+    is_stat_change_effect, resolve_stat_change_move, set_stage, ChangedStat, StatChangeDirection,
     StatChangeOutcome,
 };
+use crate::stat_stage::StatStage;
 use crate::status1::Status1;
 
 use super::{Battle, BattleEvent};
@@ -481,6 +482,9 @@ impl Battle {
                             });
                         }
                     }
+                    SecondaryApplication::SpeedDown => {
+                        self.apply_secondary_speed_drop(attacker_is_player, move_id, events);
+                    }
                 }
                 // Struggle's certain `MOVE_EFFECT_RECOIL_25` fires from the
                 // same `seteffectwithchance` step, still ahead of the
@@ -498,6 +502,39 @@ impl Battle {
             }
         }
         Ok(())
+    }
+
+    /// `MOVE_EFFECT_SPD_MINUS_1` as a secondary effect: one Speed stage off a
+    /// target that survived the hit. `SetMoveEffect` leads with an `hp == 0`
+    /// guard (`battle_script_commands.c:2261`-`:2264`), and a target already at
+    /// the minimum stage is left alone with no message because
+    /// `ChangeStatBuffs` runs with `flags == 0` (`:7056`-`:7059`,
+    /// `:7094`-`:7095`). Clear Body, White Smoke and Shield Dust never reach
+    /// this point ([`crate::secondary::spend_effect_chance_draw`]).
+    fn apply_secondary_speed_drop(
+        &mut self,
+        attacker_is_player: bool,
+        move_id: MoveId,
+        events: &mut Vec<BattleEvent>,
+    ) {
+        let defender = if attacker_is_player {
+            &mut self.enemy
+        } else {
+            &mut self.player
+        };
+        let current_stage = defender.stages().speed;
+        if defender.is_fainted() || current_stage == StatStage::MIN {
+            return;
+        }
+        let new_stage = current_stage.saturating_add(-1);
+        set_stage(defender, ChangedStat::Speed, new_stage);
+        events.push(BattleEvent::StatFell {
+            by_player: attacker_is_player,
+            move_id,
+            stat: ChangedStat::Speed,
+            new_stage,
+            magnitude: 1,
+        });
     }
 
     /// Applies damage up to the target's remaining HP and returns the HP lost.
@@ -949,7 +986,7 @@ mod pipeline_agreement_tests {
         (&[49], MovePipeline::Confuse),
         (
             &[
-                0, 2, 12, 14, 15, 17, 21, 22, 43, 55, 56, 61, 63, 64, 74, 76, 78, 96, 103, 110,
+                0, 2, 12, 14, 15, 17, 21, 22, 43, 55, 56, 61, 63, 64, 70, 74, 76, 78, 96, 103, 110,
                 131, 141, 163,
             ],
             MovePipeline::OrdinaryHit,

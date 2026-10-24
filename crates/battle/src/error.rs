@@ -1,5 +1,6 @@
 //! Failures reported by battle data, construction, and turn operations.
 
+use assets::items::ItemId;
 use assets::trainers::{AiFlags, TrainerId};
 use assets::{AbilityId, MoveId, SpeciesId};
 use std::error::Error;
@@ -62,6 +63,16 @@ pub enum BattleError {
     /// A battler's ability rewrites the outcome in a way no pipeline models,
     /// reported by the pre-turn and constructor screens before any draw.
     UnportedAbilityInteraction(AbilityId),
+
+    /// A participant holds an item whose in-battle effect no pipeline models,
+    /// reported by the pre-turn and constructor screens before any draw.
+    UnsupportedHeldItem(ItemId),
+
+    /// A trainer's bag holds an item its AI would use mid-battle
+    /// (`ShouldUseItem`, `battle_ai_switch_items.c`). Trainer action
+    /// selection has no item use, so the battle is refused before any draw
+    /// instead of silently playing out without the item.
+    UnsupportedTrainerBagItem(ItemId),
 
     /// A species was an empty or compatibility placeholder:
     /// [`crate::pokemon::SPECIES_NONE`] or
@@ -157,6 +168,16 @@ impl fmt::Display for BattleError {
             Self::UnportedAbilityInteraction(id) => write!(
                 f,
                 "ability `{}` alters this battle in an unmodelled way",
+                id.0
+            ),
+            Self::UnsupportedHeldItem(id) => write!(
+                f,
+                "held item `{}` has a battle effect no pipeline models",
+                id.0
+            ),
+            Self::UnsupportedTrainerBagItem(id) => write!(
+                f,
+                "trainer bag item `{}` would be used by an AI that never uses items here",
                 id.0
             ),
             Self::PlaceholderSpecies => {
