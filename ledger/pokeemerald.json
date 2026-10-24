@@ -30683,6 +30683,12 @@
     },
     "src/item_menu.c": {
       "artifacts": {
+        "bag_menu_screen": {
+          "reason": "BagScreen composes the bag over a supplied field or battle frame: screen tilemap, per-pocket bag picture and indicator squares (item_menu.c:1407-1414), pocket name (item_menu.c:2408-2420), the eight-row list with numbered TM/HM/berry labels and quantities (item_menu.c:896-922, 946-990), the selected icon and description (item_menu.c:994-1011), and the context-choice windows (item_menu.c:452-489). It hands input to the engine BagMenu and returns the typed result for the host; GoToBagMenu field and battle locations (item_menu.c:560-571) differ only in selection mode and close wording. The rotating pocket-switch ball, bag animation, scroll arrows, SELECT swap, quantity prompts, and every other location remain pending. No start-menu entry or battle caller opens the screen yet; it is exercised by its own tests only.",
+          "rust_target": "crates/pokeemerald-rs/src/bag_menu.rs",
+          "spec": "C-5",
+          "status": "rewritten"
+        },
         "bag_menu_state": {
           "reason": "BagMenu models pocket browse order, retained cursor and scroll with upstream list-window rules, field/battle/fixed-pocket selection, and context-action requests; swap, quantity prompts, Wally, shop, PC, and renderer remain pending.",
           "rust_target": "crates/engine/src/bag_menu.rs",
