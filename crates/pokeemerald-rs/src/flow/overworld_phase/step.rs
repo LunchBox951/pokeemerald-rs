@@ -607,7 +607,7 @@ impl OverworldPhase {
         // forced-movement tile that closes the first of those two states
         // (method doc, issue #926).
         let poll_open = wild_encounter::arrow_poll_open(self.player.in_transit(), landing_claimed)
-            && !self.player.field_input_suppressed();
+            && !self.field_input_closed();
         let arrow_direction = direction.filter(|held| *held == facing);
 
         // Gated on transit only, so it fires inside the turn lock (`field_player_avatar.c:901-929`).
@@ -628,7 +628,7 @@ impl OverworldPhase {
         // belong to the pre-warp map, so a same-frame warp drops them
         // rather than opening the departed map's dialog on the destination.
         let interaction =
-            (!landing_claimed && arrow_trigger.is_none() && !self.player.field_input_suppressed())
+            (!landing_claimed && arrow_trigger.is_none() && !self.field_input_closed())
                 .then(|| self.interaction_tokens_this_frame(buttons, runtime))
                 .flatten();
 

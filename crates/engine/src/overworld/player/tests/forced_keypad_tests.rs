@@ -224,49 +224,12 @@ fn a_scripted_face_carries_ices_forced_direction_with_it() {
     );
 }
 
-/// The two Secret Base mats never collision-check, returning TRUE
-/// unconditionally (`field_player_avatar.c:555-565`), so they refuse every
-/// manual poll even with every direction clear `(behavioral-fidelity)`.
-fn assert_secret_base_mat_never_yields_to_the_keypad(mat_behavior: u8) {
-    let mut bytes = Vec::new();
-    for y in 0..5u16 {
-        for x in 0..5u16 {
-            let raw = MetatileCell {
-                metatile_id: u16::from((x, y) == (2, 2)),
-                collision: 0,
-                elevation: 3,
-            }
-            .pack();
-            bytes.extend_from_slice(&raw.to_le_bytes());
-        }
-    }
-    let attrs = [
-        u16::from(MB_NORMAL).to_le_bytes(),
-        u16::from(mat_behavior).to_le_bytes(),
-    ]
-    .concat();
-    let layout = assets::MapLayout {
-        id: assets::LayoutId("MAP_TEST"),
-        name: "MapTest",
-        width: 5,
-        height: 5,
-        primary_tileset: "gTileset_General",
-        secondary_tileset: "gTileset_General",
-    };
-    let (_, header, events) = flat_runtime(1, 1, |_, _| 0);
-    let bytes = Box::leak(bytes.into_boxed_slice());
-    let attrs = Box::leak(attrs.into_boxed_slice());
-    let header = Box::leak(Box::new(header));
-    let events = Box::leak(Box::new(events));
-    let runtime = MapRuntime::new(
-        assets::MapId("MAP_TEST"),
-        header,
-        events,
-        layout.grid(bytes).unwrap(),
-        MetatileAttributeTable::new(attrs),
-        MetatileAttributeTable::new(&[]),
-    );
-
+/// The two Secret Base mats run their sequence on the standing poll and
+/// consume the keypad while it runs (`field_player_avatar.c:555-565`,
+/// `:1544-1644`) `(behavioral-fidelity)`: never a refused step, and never a
+/// fall-through to the keypad.
+fn assert_secret_base_mat_runs_and_ignores_the_keypad(mat_behavior: u8) {
+    let runtime = forced_mover_runtime(mat_behavior, Direction::West, false);
     let mut player = PlayerState::new((1, 2), 3, Direction::East);
     assert_eq!(
         player.step(Some(Direction::East), &runtime, &no_connections, &NO_FLAGS),
@@ -281,28 +244,35 @@ fn assert_secret_base_mat_never_yields_to_the_keypad(mat_behavior: u8) {
         player.tick();
     }
 
+    let outcome = player.step(Some(Direction::West), &runtime, &no_connections, &NO_FLAGS);
+    assert_eq!(
+        outcome,
+        StepOutcome::Idle,
+        "the mat consumes the poll instead of refusing it"
+    );
+    assert!(
+        player.forced_mat().is_some(),
+        "the mat's sequence is running"
+    );
+    player.tick();
     assert_eq!(
         player.step(Some(Direction::West), &runtime, &no_connections, &NO_FLAGS),
-        StepOutcome::Blocked {
-            direction: Direction::West,
-            collision: super::super::collision::Collision::Impassable,
-        },
-        "the mat has no derivable forced direction to collision-test, so it \
-         must never fall through to the keypad"
+        StepOutcome::Idle,
+        "a later held direction stays ignored while the sequence runs"
     );
     assert_eq!(player.position(), (2, 2));
 }
 
 #[test]
-fn the_secret_base_spin_mat_never_yields_to_the_keypad_even_when_every_direction_is_clear() {
-    assert_secret_base_mat_never_yields_to_the_keypad(
+fn the_secret_base_spin_mat_runs_and_ignores_the_keypad() {
+    assert_secret_base_mat_runs_and_ignores_the_keypad(
         super::super::metatile_behavior::MB_SECRET_BASE_SPIN_MAT,
     );
 }
 
 #[test]
-fn the_secret_base_jump_mat_never_yields_to_the_keypad_even_when_every_direction_is_clear() {
-    assert_secret_base_mat_never_yields_to_the_keypad(
+fn the_secret_base_jump_mat_runs_and_ignores_the_keypad() {
+    assert_secret_base_mat_runs_and_ignores_the_keypad(
         super::super::metatile_behavior::MB_SECRET_BASE_JUMP_MAT,
     );
 }
