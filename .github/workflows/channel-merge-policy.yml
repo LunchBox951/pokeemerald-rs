@@ -37,6 +37,9 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
+          # A failure inside a function called via command substitution
+          # (e.g. `x="$(some_func)"`) must abort the run, not read as "$()".
+          shopt -s inherit_errexit
 
           case "${EVENT_BASE}" in
             unstable) expected_head="dev" ;;
@@ -60,6 +63,17 @@ jobs:
             echo "::error::PROMOTION_APP_LOGIN is not configured."
             exit 1
           fi
+          if [[ "${PROMOTION_APP_LOGIN}" != ?*'[bot]' ]]; then
+            echo "::error::PROMOTION_APP_LOGIN must be the REST-form <slug>[bot] login with a non-empty slug, not ${PROMOTION_APP_LOGIN}."
+            exit 1
+          fi
+          promotion_app_slug="${PROMOTION_APP_LOGIN%\[bot\]}"
+
+          # The configured App is one identity behind two representations:
+          # REST uses "<slug>[bot]" (PROMOTION_APP_LOGIN); GraphQL uses "app/<slug>".
+          is_promotion_app_author() {
+            [[ "$1" == "${PROMOTION_APP_LOGIN}" || "$1" == "app/${promotion_app_slug}" ]]
+          }
 
           live="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
           live_base="$(jq -r '.base.ref' <<<"${live}")"
@@ -75,8 +89,8 @@ jobs:
             echo "::error::Pull request base/head changed during policy evaluation; rerun against the live state."
             exit 1
           fi
-          if [[ "${live_author}" != "${PROMOTION_APP_LOGIN}" ]]; then
-            echo "::error::Promotion PR must be opened by ${PROMOTION_APP_LOGIN}, not ${live_author}."
+          if ! is_promotion_app_author "${live_author}"; then
+            echo "::error::Promotion PR must be opened by ${PROMOTION_APP_LOGIN} (REST) or app/${promotion_app_slug} (GraphQL), not ${live_author}."
             exit 1
           fi
 
@@ -98,7 +112,7 @@ jobs:
             *)      preceding_head="" ;;
           esac
           if [[ -n "${preceding_head}" ]]; then
-            provenance="$(gh pr list \
+            candidate_logins="$(gh pr list \
               --repo "${REPOSITORY}" \
               --state merged \
               --base "${EVENT_HEAD}" \
@@ -106,12 +120,19 @@ jobs:
               --limit 100 \
               --json author,baseRefName,headRefName,headRepository,mergeCommit \
               --jq '[.[] | select(
-                .author.login == "'"${PROMOTION_APP_LOGIN}"'" and
                 .headRepository.nameWithOwner == "'"${REPOSITORY}"'" and
                 .baseRefName == "'"${EVENT_HEAD}"'" and
                 .headRefName == "'"${preceding_head}"'" and
                 .mergeCommit.oid == "'"${EVENT_HEAD_SHA}"'"
-              )] | length')"
+              ) | .author.login]')"
+            # A jq failure here must abort, not silently count as zero matches.
+            candidate_login_lines="$(jq -r '.[]' <<<"${candidate_logins}")"
+            provenance=0
+            while IFS= read -r candidate_login; do
+              if [[ -n "${candidate_login}" ]] && is_promotion_app_author "${candidate_login}"; then
+                provenance=$((provenance + 1))
+              fi
+            done <<<"${candidate_login_lines}"
             if [[ "${provenance}" != "1" ]]; then
               echo "::error::${EVENT_HEAD}@${EVENT_HEAD_SHA} is not the merge commit of the preceding App-created ${preceding_head}->${EVENT_HEAD} promotion."
               exit 1

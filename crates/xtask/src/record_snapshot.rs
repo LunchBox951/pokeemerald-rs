@@ -1,0 +1,594 @@
+//! Deterministic RGB and metadata capture for named headless scenes.
+//!
+//! A capture publishes an immutable generation containing `<scene>.rgb` and
+//! `<scene>.meta`, then atomically replaces `<scene>.generation` to make both
+//! payloads visible together. Clean captures are reproducible for the same
+//! commit, retained asset pack, scene, and implied inputs. Dirty captures only
+//! identify their commit with a `-dirty` suffix.
+//!
+//! The FNV-1a hashes locate changes in the RGB payload and retained pack. Only
+//! exact byte comparison establishes equality.
+
+use std::fmt;
+use std::path::{Path, PathBuf};
+
+use assets::pack::{AssetPack, PackError};
+use pokeemerald_rs::main_menu::{MainMenuScene, MainMenuSceneError, MainMenuType};
+use pokeemerald_rs::title::{TitleScene, TitleSceneError};
+
+use crate::Scene;
+
+mod directory;
+mod staging;
+
+#[cfg(windows)]
+use directory::claim_promoted_dir;
+#[cfg(test)]
+use directory::claim_staged_dir;
+use directory::{claim_output_dir, OutputDirClaim, StagedDirClaim};
+
+const SCREEN_WIDTH: usize = 240;
+const SCREEN_HEIGHT: usize = 160;
+
+/// Fixed title frame with the "Press Start" banner visible.
+///
+/// Any fixed frame is deterministic. A visible banner also makes the capture
+/// sensitive to banner regressions.
+const TITLE_FRAME_INDEX: u32 = 16;
+
+const RED_SHIFT: u32 = 16;
+const GREEN_SHIFT: u32 = 8;
+const CHANNEL_MASK: u32 = 0xFF;
+
+/// Failure to load, compose, or publish a snapshot.
+#[derive(Debug)]
+pub enum RecordSnapshotError {
+    /// Loading or decoding the asset pack failed.
+    Pack(PackError),
+    /// Constructing the requested scene from the pack failed.
+    Scene(String),
+    /// Creating or publishing the capture failed at the given path.
+    Write(PathBuf, String),
+}
+
+impl fmt::Display for RecordSnapshotError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Pack(err) => write!(f, "record-snapshot: {err}"),
+            Self::Scene(msg) => write!(f, "record-snapshot: scene failed to build: {msg}"),
+            Self::Write(path, msg) => {
+                write!(
+                    f,
+                    "record-snapshot: writing {} failed: {msg}",
+                    path.display()
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for RecordSnapshotError {}
+
+impl From<PackError> for RecordSnapshotError {
+    fn from(err: PackError) -> Self {
+        Self::Pack(err)
+    }
+}
+
+impl From<TitleSceneError> for RecordSnapshotError {
+    fn from(err: TitleSceneError) -> Self {
+        Self::Scene(err.to_string())
+    }
+}
+
+impl From<MainMenuSceneError> for RecordSnapshotError {
+    fn from(err: MainMenuSceneError) -> Self {
+        Self::Scene(err.to_string())
+    }
+}
+
+/// Paths and provenance for a published capture.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Report {
+    /// Published `<generation>/<scene>.rgb` path.
+    pub rgb_path: PathBuf,
+    /// Published `<generation>/<scene>.meta` path.
+    pub meta_path: PathBuf,
+    /// RGB payload length in bytes.
+    pub payload_len: usize,
+    /// Lowercase FNV-1a hash of the RGB payload.
+    pub rgb_hash: String,
+    /// Lowercase FNV-1a hash of the retained pack bytes.
+    pub pack_hash: String,
+    /// Source commit with an optional `-dirty` suffix, or `"unknown"`.
+    pub git_sha: String,
+}
+
+/// Capture `scene` from the default local pack into `<repo root>/snapshots/`.
+///
+/// # Errors
+///
+/// See [`run_with_paths`].
+pub fn run(scene: Scene) -> Result<Report, RecordSnapshotError> {
+    let repo_root = crate::extract::repo_root();
+    let (pack_path, output_dir) = default_paths(&repo_root);
+    run_with_paths(scene, &pack_path, &output_dir)
+}
+
+fn default_paths(repo_root: &Path) -> (PathBuf, PathBuf) {
+    (
+        repo_root.join(crate::extract::OUTPUT_RELATIVE_PATH),
+        repo_root.join("snapshots"),
+    )
+}
+
+/// Capture `scene` from `pack_path` into a generation under `output_dir`.
+///
+/// # Errors
+///
+/// Returns [`RecordSnapshotError::Pack`] for an invalid pack,
+/// [`RecordSnapshotError::Scene`] when scene construction fails, and
+/// [`RecordSnapshotError::Write`] when generation publication fails.
+pub fn run_with_paths(
+    scene: Scene,
+    pack_path: &Path,
+    output_dir: &Path,
+) -> Result<Report, RecordSnapshotError> {
+    let pack = AssetPack::load(pack_path)?;
+    capture_loaded(scene, &pack, output_dir, || Ok(()))
+}
+
+fn capture_loaded<F>(
+    scene: Scene,
+    pack: &AssetPack,
+    output_dir: &Path,
+    after_rgb_staged: F,
+) -> Result<Report, RecordSnapshotError>
+where
+    F: FnOnce() -> Result<(), RecordSnapshotError>,
+{
+    let (rgb_bytes, inputs) = compose(scene, pack)?;
+    let rgb_hash = format!("{:016x}", fnv1a64(&rgb_bytes));
+    let pack_hash = format!("{:016x}", fnv1a64(pack.bytes()));
+    let git_sha = git_sha(&crate::extract::repo_root()).unwrap_or_else(|| "unknown".to_owned());
+
+    std::fs::create_dir_all(output_dir)
+        .map_err(|e| RecordSnapshotError::Write(output_dir.to_path_buf(), e.to_string()))?;
+
+    let meta = render_meta(scene, &inputs, &rgb_hash, &pack_hash, &git_sha);
+    let (rgb_path, meta_path) = publish_generation(
+        scene,
+        output_dir,
+        &rgb_bytes,
+        meta.as_bytes(),
+        after_rgb_staged,
+    )?;
+
+    Ok(Report {
+        rgb_path,
+        meta_path,
+        payload_len: rgb_bytes.len(),
+        rgb_hash,
+        pack_hash,
+        git_sha,
+    })
+}
+
+fn publish_generation<F>(
+    scene: Scene,
+    output_dir: &Path,
+    rgb_bytes: &[u8],
+    meta_bytes: &[u8],
+    after_rgb_staged: F,
+) -> Result<(PathBuf, PathBuf), RecordSnapshotError>
+where
+    F: FnOnce() -> Result<(), RecordSnapshotError>,
+{
+    publish_generation_with(
+        scene,
+        output_dir,
+        rgb_bytes,
+        meta_bytes,
+        after_rgb_staged,
+        || {},
+        || {},
+        || {},
+    )
+}
+
+/// [`publish_generation`] with a hook between the staging directory's last
+/// identity check and its promoting rename, so tests can land a replacement in
+/// that gap, one between the promoted generation's identity check and
+/// the pointer's staging, so they can swap `output_dir` there, and one just
+/// before the pointer's publication, past the last pre-publish check.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "three test hooks beside the inputs; production passes no-ops through `publish_generation`"
+)]
+fn publish_generation_with<F>(
+    scene: Scene,
+    output_dir: &Path,
+    rgb_bytes: &[u8],
+    meta_bytes: &[u8],
+    after_rgb_staged: F,
+    before_rename: impl FnOnce(),
+    after_generation_check: impl FnOnce(),
+    before_pointer_publish: impl FnOnce(),
+) -> Result<(PathBuf, PathBuf), RecordSnapshotError>
+where
+    F: FnOnce() -> Result<(), RecordSnapshotError>,
+{
+    publish_generation_hooked(
+        scene,
+        output_dir,
+        rgb_bytes,
+        meta_bytes,
+        after_rgb_staged,
+        before_rename,
+        after_generation_check,
+        before_pointer_publish,
+        || {},
+    )
+}
+
+/// [`publish_generation_with`] plus a hook just after the pointer's
+/// publication, so tests can replace the generation once the pointer names it.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "four test hooks beside the inputs; production passes no-ops through `publish_generation`"
+)]
+fn publish_generation_hooked<F>(
+    scene: Scene,
+    output_dir: &Path,
+    rgb_bytes: &[u8],
+    meta_bytes: &[u8],
+    after_rgb_staged: F,
+    before_rename: impl FnOnce(),
+    after_generation_check: impl FnOnce(),
+    before_pointer_publish: impl FnOnce(),
+    after_pointer_publish: impl FnOnce(),
+) -> Result<(PathBuf, PathBuf), RecordSnapshotError>
+where
+    F: FnOnce() -> Result<(), RecordSnapshotError>,
+{
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_GENERATION: AtomicU64 = AtomicU64::new(0);
+    let output_claim = claim_output_dir(output_dir)
+        .map_err(|e| RecordSnapshotError::Write(output_dir.to_path_buf(), e.to_string()))?;
+    let output_dir_matches = || output_claim.require_path(output_dir);
+    let require_output_dir = || {
+        output_dir_matches().map_err(|error| {
+            RecordSnapshotError::Write(output_dir.to_path_buf(), error.to_string())
+        })
+    };
+    let (generation, staged_dir, generation_dir, mut staged_dir_claim) = loop {
+        let generation = format!(
+            "{}.generation-{}-{}",
+            scene.name(),
+            std::process::id(),
+            NEXT_GENERATION.fetch_add(1, Ordering::Relaxed)
+        );
+        let staged_dir = output_dir.join(format!(".{generation}.staged"));
+        let generation_dir = output_dir.join(&generation);
+        // Only the atomic promotion decides whether the generation name is available.
+        if generation_dir.exists() {
+            continue;
+        }
+        if let Some(claim) = create_and_claim_staged_dir(&output_claim, &staged_dir, |path| {
+            output_claim.claim_staged_dir(path)
+        })? {
+            break (generation, staged_dir, generation_dir, claim);
+        }
+    };
+    let pointer_path = output_dir.join(format!("{}.generation", scene.name()));
+    let rgb_name = format!("{}.rgb", scene.name());
+    let meta_name = format!("{}.meta", scene.name());
+    let staged_rgb = staged_dir.join(&rgb_name);
+    let staged_meta = staged_dir.join(&meta_name);
+
+    let mut renamed = false;
+    let generation_matches =
+        |claim: &StagedDirClaim| claim.require_entry_in(&output_claim, &generation_dir);
+    // The held lookup cannot see `output_dir` replaced meanwhile, and the
+    // returned paths resolve through that pathname, so each check ends with a
+    // lookup through it: when it runs last, it covers the paths returned.
+    let require_generation = |claim: &StagedDirClaim| {
+        generation_matches(claim)
+            .and_then(|()| claim.require_path(&generation_dir))
+            .map_err(|error| RecordSnapshotError::Write(generation_dir.clone(), error.to_string()))
+    };
+    let result = (|| {
+        staged_dir_claim
+            .write_payload(&staged_dir, &rgb_name, rgb_bytes)
+            .map_err(|e| RecordSnapshotError::Write(staged_rgb.clone(), e.to_string()))?;
+        after_rgb_staged()?;
+        staged_dir_claim
+            .write_payload(&staged_dir, &meta_name, meta_bytes)
+            .map_err(|e| RecordSnapshotError::Write(staged_meta.clone(), e.to_string()))?;
+        staged_dir_claim
+            .require_path(&staged_dir)
+            .map_err(|error| RecordSnapshotError::Write(staged_dir.clone(), error.to_string()))?;
+        staged_dir_claim.release_hold();
+        promote_staged_dir(&output_claim, &staged_dir, &generation_dir, before_rename)
+            .map_err(|e| RecordSnapshotError::Write(generation_dir.clone(), e.to_string()))?;
+        renamed = true;
+        #[cfg(windows)]
+        {
+            staged_dir_claim = claim_promoted_dir(&generation_dir).map_err(|error| {
+                RecordSnapshotError::Write(generation_dir.clone(), error.to_string())
+            })?;
+        }
+        // Looked up in the held output directory, so the generation the
+        // pointer will name is proven to sit beside it, not merely somewhere
+        // the `output_dir` pathname led at the time.
+        require_generation(&staged_dir_claim)?;
+        after_generation_check();
+        // The generation was verified under `output_dir`; the pointer must land
+        // in that same directory, not in whatever the pathname names now.
+        // Unix stages and renames the pointer relative to the held directory,
+        // so it cannot land elsewhere; only Windows resolves the pathname
+        // again and repeats the check before the rename. Every platform
+        // repeats it after: the returned payload paths are pathnames under
+        // `output_dir`, so success is reported only while that pathname still
+        // names the directory that received the generation.
+        require_output_dir()?;
+        // See `staging` for the guard this stage-then-publish pair provides.
+        let mut staged_pointer = stage_pointer(
+            &output_claim,
+            &pointer_path,
+            format!("{generation}\n").as_bytes(),
+        )
+        .map_err(|e| RecordSnapshotError::Write(pointer_path.clone(), e.to_string()))?;
+        // A check failing from here until `publish` takes the staged pointer
+        // retains it and reports its path, as a failed publish would.
+        if cfg!(not(unix)) {
+            staged_pointer =
+                pointer_still_publishable(staged_pointer, output_dir, output_dir_matches())?;
+        }
+        before_pointer_publish();
+        // The only check that sits between the last hook and the rename: a
+        // generation replaced after the earlier verification must not be named.
+        let staged_pointer = pointer_still_publishable(
+            staged_pointer,
+            &generation_dir,
+            generation_matches(&staged_dir_claim),
+        )?;
+        staged_pointer
+            .publish(&pointer_path)
+            .map_err(|e| RecordSnapshotError::Write(pointer_path.clone(), e.to_string()))?;
+        after_pointer_publish();
+        require_output_dir()?;
+        // The pointer is already replaced; success is still reported only
+        // while the generation it names is the one this capture holds.
+        require_generation(&staged_dir_claim)?;
+        Ok((
+            generation_dir.join(format!("{}.rgb", scene.name())),
+            generation_dir.join(format!("{}.meta", scene.name())),
+        ))
+    })();
+
+    result.map_err(|source| {
+        let retained = if renamed {
+            &generation_dir
+        } else {
+            &staged_dir
+        };
+        report_retained_directory(retained, &source)
+    })
+}
+
+// The rename binds to the staging entry's name in the held output directory,
+// not to the held staging handle, so a replacement landing there after the
+// last identity check is promoted to the generation name. The held handle's
+// check against that name then refuses to publish the pointer, and the
+// directory is retained and reported like every other failure (#1282's
+// retention policy). On Unix a staging directory moved out of the held output
+// directory is not found, so it is never promoted elsewhere.
+fn promote_staged_dir(
+    output: &OutputDirClaim,
+    staged: &Path,
+    generation: &Path,
+    before_rename: impl FnOnce(),
+) -> std::io::Result<()> {
+    before_rename();
+    output.promote_without_replacement(staged, generation)
+}
+
+/// Hands `staged` back while `check` passed; otherwise retains it and reports
+/// its last known path beside the failure, as a failed publish would.
+fn pointer_still_publishable(
+    staged: staging::StagedFile,
+    path: &Path,
+    check: std::io::Result<()>,
+) -> Result<staging::StagedFile, RecordSnapshotError> {
+    match check {
+        Ok(()) => Ok(staged),
+        Err(error) => Err(RecordSnapshotError::Write(
+            path.to_path_buf(),
+            staged.retain(&error).to_string(),
+        )),
+    }
+}
+
+// Neither an open handle nor a metadata comparison makes a later pathname
+// deletion conditional on identity. Leave directories intact on failure.
+fn report_retained_directory(path: &Path, source: &RecordSnapshotError) -> RecordSnapshotError {
+    RecordSnapshotError::Write(
+        path.to_path_buf(),
+        format!(
+            "{source}; the capture directory was not removed; last known path: {}",
+            path.display()
+        ),
+    )
+}
+
+/// Creates a staging directory and pins it for writes. A failed claim leaves
+/// the entry intact because creation and opening cannot establish identity atomically.
+fn create_and_claim_staged_dir(
+    output: &OutputDirClaim,
+    staged_dir: &Path,
+    claim: impl FnOnce(&Path) -> std::io::Result<StagedDirClaim>,
+) -> Result<Option<StagedDirClaim>, RecordSnapshotError> {
+    match output.create_staged_dir(staged_dir) {
+        Ok(()) => claim(staged_dir).map(Some).map_err(|error| {
+            RecordSnapshotError::Write(
+                staged_dir.to_path_buf(),
+                format!(
+                    "{error}; the capture directory was not removed; last known path: {}",
+                    staged_dir.display()
+                ),
+            )
+        }),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(None),
+        Err(error) => Err(RecordSnapshotError::Write(
+            staged_dir.to_path_buf(),
+            error.to_string(),
+        )),
+    }
+}
+
+/// Stages the pointer at an unguessable sibling of `pointer_path`, retrying
+/// through [`crate::staging_names::candidates`] on a genuine name collision.
+fn stage_pointer(
+    output_claim: &OutputDirClaim,
+    pointer_path: &Path,
+    bytes: &[u8],
+) -> std::io::Result<staging::StagedFile> {
+    stage_first_free(
+        bytes,
+        crate::staging_names::candidates(pointer_path),
+        |candidate, bytes| output_claim.stage_pointer(candidate, bytes),
+    )
+}
+
+/// Stages `bytes` at the first of `candidates` that `staging::stage` finds
+/// free, reporting the last collision once they have all turned out taken.
+#[cfg(test)]
+fn stage_pointer_with_candidates(
+    bytes: &[u8],
+    candidates: impl IntoIterator<Item = PathBuf>,
+) -> std::io::Result<staging::StagedFile> {
+    stage_first_free(bytes, candidates, staging::stage)
+}
+
+/// `stage_pointer_with_candidates` with the staging step supplied.
+fn stage_first_free(
+    bytes: &[u8],
+    candidates: impl IntoIterator<Item = PathBuf>,
+    mut stage: impl FnMut(&Path, &[u8]) -> std::io::Result<staging::StagedFile>,
+) -> std::io::Result<staging::StagedFile> {
+    let mut last_collision = None;
+    for candidate in candidates {
+        match stage(&candidate, bytes) {
+            Ok(staged) => return Ok(staged),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                last_collision = Some(error);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Err(last_collision.unwrap_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "exhausted pointer staging attempts",
+        )
+    }))
+}
+
+fn compose(
+    scene: Scene,
+    pack: &AssetPack,
+) -> Result<(Vec<u8>, Vec<&'static str>), RecordSnapshotError> {
+    match scene {
+        Scene::Title => {
+            let title = TitleScene::from_pack(pack)?;
+            let frame = title.compose_frame(TITLE_FRAME_INDEX);
+            Ok((frame_to_rgb_bytes(frame.as_slice()), Vec::new()))
+        }
+        Scene::MainMenuNewGame => {
+            let menu = MainMenuScene::from_pack(pack, MainMenuType::NoSavedGame)?;
+            let frame = menu.compose_frame();
+            Ok((frame_to_rgb_bytes(frame.as_slice()), Vec::new()))
+        }
+        Scene::MainMenuOption => {
+            let mut menu = MainMenuScene::from_pack(pack, MainMenuType::NoSavedGame)?;
+            menu.move_down();
+            let frame = menu.compose_frame();
+            Ok((frame_to_rgb_bytes(frame.as_slice()), vec!["DPAD_DOWN"]))
+        }
+    }
+}
+
+fn frame_to_rgb_bytes(frame: &[u32]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(frame.len() * 3);
+    for &pixel in frame {
+        bytes.push(u8::try_from((pixel >> RED_SHIFT) & CHANNEL_MASK).unwrap_or(0));
+        bytes.push(u8::try_from((pixel >> GREEN_SHIFT) & CHANNEL_MASK).unwrap_or(0));
+        bytes.push(u8::try_from(pixel & CHANNEL_MASK).unwrap_or(0));
+    }
+    bytes
+}
+
+fn render_meta(
+    scene: Scene,
+    inputs: &[&str],
+    rgb_hash: &str,
+    pack_hash: &str,
+    git_sha: &str,
+) -> String {
+    let inputs = if inputs.is_empty() {
+        "none".to_owned()
+    } else {
+        inputs.join(",")
+    };
+    format!(
+        "scene: {}\nwidth: {SCREEN_WIDTH}\nheight: {SCREEN_HEIGHT}\npixel_format: rgb888\ninputs: {inputs}\nrgb_hash: fnv1a64:{rgb_hash}\npack_hash: fnv1a64:{pack_hash}\ngit_sha: {git_sha}\n",
+        scene.name(),
+    )
+}
+
+/// FNV-1a 64-bit change locator. Exact bytes, not this hash, establish equality.
+#[must_use]
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    const OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+
+    let mut hash = OFFSET_BASIS;
+    for &byte in bytes {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(PRIME);
+    }
+    hash
+}
+
+fn git_sha(repo_root: &Path) -> Option<String> {
+    let sha = git_output(repo_root, &["rev-parse", "HEAD"])?;
+    let sha = sha.trim();
+    if sha.is_empty() {
+        return None;
+    }
+    let worktree_dirty_or_unknown = git_output(repo_root, &["status", "--porcelain"])
+        .is_none_or(|status| !status.trim().is_empty());
+    if worktree_dirty_or_unknown {
+        Some(format!("{sha}-dirty"))
+    } else {
+        Some(sha.to_owned())
+    }
+}
+
+fn git_output(repo_root: &Path, args: &[&str]) -> Option<String> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
+        .args(args)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8(output.stdout).ok()
+}
+
+#[cfg(test)]
+mod tests;

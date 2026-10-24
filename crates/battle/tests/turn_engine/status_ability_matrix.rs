@@ -1,0 +1,174 @@
+//! This Status1-only matrix pins the Limber (paralysis) and Immunity (poison)
+//! admission refusals (`battle_util.c:2873-2951`). Confused Own Tempo is also
+//! refused, as its move-end cure is unmodelled; `participant_admission.rs`
+//! covers that volatile. Every other ability here is admitted, whether
+//! modelled or deferred.
+//!
+//! Upstream: Guts and Marvel Scale stat multipliers (`pokemon.c:3211-3214`),
+//! Shed Skin (`battle_util.c:2620-2640`), Synchronize (`battle_util.c:2971-2986`),
+//! Early Bird (`battle_util.c:2030-2037`), Insomnia/Vital Spirit/Water Veil/Magma
+//! Armor (`battle_script_commands.c:2291-2393`), Flash Fire (`battle_util.c:2703-2705`),
+//! Natural Cure (`battle_script_commands.c:9590-9607`).
+
+use crate::common::{admission_script, max_iv_mon, SequenceRng};
+use assets::{AbilityId, MoveId, SpeciesId};
+use battle::{Battle, BattleError, BattlePokemon, Dex, Status1};
+
+const STATUSES: [Status1; 3] = [Status1::Healthy, Status1::Paralysed, Status1::Poisoned];
+
+/// Columns: name, species, saved ability slot, expected ability, and the one
+/// status whose constructor admission is refused, if any.
+const MATRIX: [(&str, SpeciesId, u8, AbilityId, Option<Status1>); 13] = [
+    ("guts", SpeciesId::RATTATA, 1, AbilityId::GUTS, None),
+    (
+        "marvel scale",
+        SpeciesId::MILOTIC,
+        0,
+        AbilityId::MARVEL_SCALE,
+        None,
+    ),
+    (
+        "shed skin",
+        SpeciesId::METAPOD,
+        0,
+        AbilityId::SHED_SKIN,
+        None,
+    ),
+    (
+        "synchronize",
+        SpeciesId::ABRA,
+        0,
+        AbilityId::SYNCHRONIZE,
+        None,
+    ),
+    (
+        "limber",
+        SpeciesId::PERSIAN,
+        0,
+        AbilityId::LIMBER,
+        Some(Status1::Paralysed),
+    ),
+    (
+        "immunity",
+        SpeciesId::SNORLAX,
+        0,
+        AbilityId::IMMUNITY,
+        Some(Status1::Poisoned),
+    ),
+    (
+        "early bird",
+        SpeciesId::DODUO,
+        1,
+        AbilityId::EARLY_BIRD,
+        None,
+    ),
+    ("insomnia", SpeciesId::DROWZEE, 0, AbilityId::INSOMNIA, None),
+    (
+        "vital spirit",
+        SpeciesId::MANKEY,
+        0,
+        AbilityId::VITAL_SPIRIT,
+        None,
+    ),
+    (
+        "water veil",
+        SpeciesId::GOLDEEN,
+        1,
+        AbilityId::WATER_VEIL,
+        None,
+    ),
+    (
+        "magma armor",
+        SpeciesId::SLUGMA,
+        0,
+        AbilityId::MAGMA_ARMOR,
+        None,
+    ),
+    (
+        "flash fire",
+        SpeciesId::VULPIX,
+        0,
+        AbilityId::FLASH_FIRE,
+        None,
+    ),
+    (
+        "natural cure",
+        SpeciesId::CHANSEY,
+        0,
+        AbilityId::NATURAL_CURE,
+        None,
+    ),
+];
+
+fn holder(species: SpeciesId, slot: u8, status: Status1) -> BattlePokemon {
+    let mut mon =
+        max_iv_mon(&Dex::new(), species.0, 20, vec![MoveId::TACKLE]).with_ability_slot(slot);
+    mon.set_status1(status);
+    mon
+}
+
+fn opponent() -> BattlePokemon {
+    max_iv_mon(
+        &Dex::new(),
+        SpeciesId::ZIGZAGOON.0,
+        20,
+        vec![MoveId::TACKLE],
+    )
+}
+
+#[test]
+fn the_status1_matrix_refuses_exactly_the_limber_and_immunity_cures() {
+    for (name, species, slot, ability, refused) in MATRIX {
+        for status in STATUSES {
+            let mon = holder(species, slot, status);
+            assert_eq!(mon.ability(), ability, "{name} fixture ability");
+            let mon_speed = mon.speed_for_turn_order();
+            let enemy = opponent();
+            assert_ne!(
+                mon_speed,
+                enemy.speed_for_turn_order(),
+                "{name} with {status:?} fixture Speeds must not tie"
+            );
+            // A refusal draws nothing, so its script is oversupplied on
+            // purpose; an admission draws only the seed.
+            let mut rng = SequenceRng::new(if refused == Some(status) {
+                vec![0, 0]
+            } else {
+                admission_script(false)
+            });
+            let result = Battle::new(Dex::new(), mon, enemy, false, &mut rng);
+            if refused == Some(status) {
+                assert!(
+                    matches!(
+                        result,
+                        Err(BattleError::UnportedAbilityInteraction(found)) if found == ability
+                    ),
+                    "{name} with {status:?} must be refused"
+                );
+                assert_eq!(rng.draws(), 0, "{name} refusal precedes every draw");
+            } else {
+                assert!(result.is_ok(), "{name} with {status:?} must be admitted");
+                assert_eq!(rng.draws(), 1, "{name} with {status:?} draws only the seed");
+                rng.assert_exhausted();
+            }
+        }
+    }
+}
+
+#[test]
+fn guts_and_marvel_scale_read_each_representable_status() {
+    use battle::damage::MoveCategory::Physical;
+    // Both abilities scale the raw stat by 150% with integer truncation
+    // (`pokemon.c:3211-3214`).
+    for status in [Status1::Paralysed, Status1::Poisoned] {
+        let healthy_guts = holder(SpeciesId::RATTATA, 1, Status1::Healthy);
+        let sick_guts = holder(SpeciesId::RATTATA, 1, status);
+        let base = healthy_guts.attacking_stat(Physical).0;
+        assert_eq!(sick_guts.attacking_stat(Physical).0, base * 150 / 100);
+
+        let healthy_scale = holder(SpeciesId::MILOTIC, 0, Status1::Healthy);
+        let sick_scale = holder(SpeciesId::MILOTIC, 0, status);
+        let base = healthy_scale.defending_stat(Physical).0;
+        assert_eq!(sick_scale.defending_stat(Physical).0, base * 150 / 100);
+    }
+}

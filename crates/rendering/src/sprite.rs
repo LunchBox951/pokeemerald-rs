@@ -1,0 +1,1960 @@
+//! Resolves [`OamEntry`] values into display pixels and the object-window mask.
+//!
+//! [`SpriteLayer`] applies OAM ordering, transparency, clipping, flips, affine
+//! transforms, mosaic, and one-dimensional OBJ tile addressing. Each sprite's
+//! tiles are contiguous and row-major from its OAM tile index.
+//!
+//! Display and OBJWIN queries share one cached OAM admission for the most
+//! recently queried scanline, so that scanline's OBJ cycle budget admits and
+//! drops the same entries for both; a query on a different scanline walks OAM
+//! again.
+//!
+//! Entries use slice order as OAM order. The lowest OBJ priority wins, and an
+//! earlier entry wins a tie. A better-priority transparent texel can promote
+//! an opaque pixel beneath it without replacing its color, so one entry can
+//! supply the color while another supplies its priority.
+
+use crate::affine::AffineMatrix;
+use crate::framebuffer::Framebuffer;
+use crate::mosaic::MosaicSize;
+use crate::oam::{AffineMode, OamEntry, ObjMode};
+use crate::oam_budget::OamAdmission;
+use crate::palette::{Palette, Rgb888};
+use crate::sprite_affine;
+use crate::tile::{BitDepth, Tileset};
+use crate::window::{WindowLayerEnable, WindowPass, WindowRegion};
+use std::cell::RefCell;
+
+/// One opaque sprite-layer result for cross-layer composition.
+///
+/// A better-priority transparent texel can update `priority` and
+/// `semi_transparent` without replacing `color` or `color_semi_transparent`
+/// — mirroring mGBA's flag-only overwrite, which keeps the stored pixel's
+/// color bits while replacing only its order/reblend/target-1 flag bits
+/// (`mgba/src/gba/renderers/software-obj.c:120-126`). So `semi_transparent`
+/// and `color_semi_transparent` can name two different entries: the one that
+/// currently owns priority (and thus forced-alpha eligibility for blending
+/// against a second target) versus the one that actually supplied `color`
+/// (and thus whether that stored color is eligible for mGBA's draw-time
+/// brighten/darken variant, `software-obj.c:177-203`) `(behavioral-fidelity)`.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is an independent mGBA sprite-buffer bit: priority-owner and color-owner each carry their own semi-transparent and window-effects state, plus the OBJWIN-masked draw"
+)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SpritePixel {
+    /// The topmost opaque sprite color.
+    pub color: Rgb888,
+    /// The winning OBJ priority (`0..=3`).
+    pub priority: u8,
+    /// Whether the sprite that set [`priority`](Self::priority) forces alpha
+    /// blending.
+    pub semi_transparent: bool,
+    /// Whether the sprite that supplied [`color`](Self::color) is itself
+    /// [`ObjMode::SemiTransparent`] — separate from
+    /// [`semi_transparent`](Self::semi_transparent) because a later,
+    /// better-priority transparent texel can promote priority without
+    /// replacing the stored color (see this struct's docs).
+    pub color_semi_transparent: bool,
+    /// Whether the control of the hardware-window pass that wrote
+    /// [`priority`](Self::priority) enables effects. mGBA bakes an OBJ's
+    /// `FLAG_TARGET_1` and `FLAG_REBLEND` from the pass whose write lands
+    /// (`software-obj.c:159,176-192`), which is the queried column's own pass
+    /// except for an affine mosaic trailing spill written by an earlier one,
+    /// possibly a zero-length one (`software-obj.c:227-242`); `true` without
+    /// window spans.
+    pub span_effects: bool,
+    /// Whether the control of the pass that wrote [`color`](Self::color)
+    /// enables effects, which chose mGBA's brighten/darken variant palette at
+    /// draw time (`software-obj.c:176-208`). Separate from
+    /// [`span_effects`](Self::span_effects) for the same flag-only-overwrite
+    /// reason as [`color_semi_transparent`](Self::color_semi_transparent).
+    pub color_span_effects: bool,
+    /// Whether an earlier-drawn `OBJWIN` entry had already set this pixel's
+    /// row mask when [`color`](Self::color) was written, so mGBA drew it from
+    /// `objwinPalette` (`software-obj.c:88-105`).
+    pub color_objwin_masked: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CachedScanlineAdmission {
+    scanline: usize,
+    admission: OamAdmission,
+}
+
+/// One scanline's hardware-window passes, as sprite sampling reruns them.
+///
+/// mGBA reruns sprite preprocessing once per pass (`software-obj.c:227-242`,
+/// `video-software.c:1052-1062`); see
+/// [`SpriteLayer::sample_affine_local`](SpriteLayer::sample_affine_local) for
+/// why that matters past a pass's own columns.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct WindowSpans<'a> {
+    /// The scanline's passes in draw order, the first starting at column zero
+    /// ([`crate::window::WindowConfig::scanline_passes`]). Zero-length passes
+    /// share a start with the pass that follows them.
+    passes: &'a [WindowPass],
+    /// Whether `DISPCNT` enables `OBJWIN`, which keeps a pass whose own
+    /// control disables OBJ running the sprite pass (`video-software.c:1056`).
+    objwin_enabled: bool,
+}
+
+impl<'a> WindowSpans<'a> {
+    /// The single OBJ-drawing, non-suppressing pass a caller without window
+    /// state sees.
+    pub(crate) const WHOLE_SCANLINE: Self = Self {
+        passes: &[WindowPass {
+            start: 0,
+            control: WindowLayerEnable::ALL,
+            region: WindowRegion::WinOut,
+        }],
+        objwin_enabled: false,
+    };
+
+    pub(crate) const fn new(passes: &'a [WindowPass], objwin_enabled: bool) -> Self {
+        Self {
+            passes,
+            objwin_enabled,
+        }
+    }
+
+    /// Returns the index of the last pass starting at or before `x`, which is
+    /// the nonempty pass containing it.
+    fn index_at(self, x: usize) -> usize {
+        self.passes
+            .partition_point(|pass| pass.start <= x)
+            .saturating_sub(1)
+    }
+
+    /// Returns where pass `index` begins, or `0` for an absent pass.
+    fn span_start(self, index: usize) -> usize {
+        self.passes.get(index).map_or(0, |pass| pass.start)
+    }
+
+    /// Returns whether pass `index` runs the OBJ pass; an absent pass draws.
+    fn span_draws_obj(self, index: usize) -> bool {
+        self.passes
+            .get(index)
+            .is_none_or(|pass| pass.control.obj || self.objwin_enabled)
+    }
+
+    /// Returns whether pass `index`'s own rank drops a whole `OBJWIN` pass
+    /// `(behavioral-fidelity)`.
+    fn span_suppresses_objwin(self, index: usize) -> bool {
+        self.passes
+            .get(index)
+            .is_some_and(|pass| pass.region.suppresses_objwin_hole())
+    }
+
+    /// Returns whether pass `index`'s own control enables effects; an absent
+    /// pass does.
+    fn span_effects(self, index: usize) -> bool {
+        self.passes
+            .get(index)
+            .is_none_or(|pass| pass.control.effects)
+    }
+}
+
+/// Resolves borrowed sprite data into display pixels and an object-window mask.
+///
+/// The position of an entry in `entries` is its OAM index. Lower indices break
+/// ties between entries at the same OBJ priority. OAM holds 128 entries, so
+/// only the first 128 are ever admitted; any beyond that are never drawn.
+///
+/// 4bpp and 8bpp entries draw from their corresponding [`Tileset`]. Affine
+/// entries select a matrix attached by
+/// [`with_affine_matrices`](Self::with_affine_matrices).
+///
+/// Admission caching is described in the module docs.
+/// [`with_hblank_free_interval`](Self::with_hblank_free_interval) selects the
+/// smaller OBJ cycle budget.
+#[derive(Debug, Clone)]
+pub struct SpriteLayer<'a> {
+    entries: &'a [OamEntry],
+    tileset_4bpp: &'a Tileset,
+    tileset_8bpp: &'a Tileset,
+    palette: &'a Palette,
+    matrices: &'a [AffineMatrix],
+    hblank_free_interval: bool,
+    admission_cache: RefCell<Option<CachedScanlineAdmission>>,
+}
+
+impl<'a> SpriteLayer<'a> {
+    /// Borrows entries in OAM order, separate 4bpp and 8bpp tilesets, and a
+    /// palette. Affine entries require matrices attached with
+    /// [`with_affine_matrices`](Self::with_affine_matrices).
+    #[must_use]
+    pub const fn new(
+        entries: &'a [OamEntry],
+        tileset_4bpp: &'a Tileset,
+        tileset_8bpp: &'a Tileset,
+        palette: &'a Palette,
+    ) -> Self {
+        Self {
+            entries,
+            tileset_4bpp,
+            tileset_8bpp,
+            palette,
+            matrices: &[],
+            hblank_free_interval: false,
+            admission_cache: RefCell::new(None),
+        }
+    }
+
+    /// Attaches the OAM matrix groups selected by affine entries' `matrix_num`.
+    #[must_use]
+    pub const fn with_affine_matrices(mut self, matrices: &'a [AffineMatrix]) -> Self {
+        self.matrices = matrices;
+        self
+    }
+
+    /// Selects whether scanline admission uses `DISPCNT`'s 954-cycle
+    /// HBlank-free interval budget instead of the normal 1,210-cycle budget.
+    /// Setting the budget clears the cached admission.
+    #[must_use]
+    pub const fn with_hblank_free_interval(mut self, hblank_free_interval: bool) -> Self {
+        self.hblank_free_interval = hblank_free_interval;
+        self.admission_cache = RefCell::new(None);
+        self
+    }
+
+    /// Calls `f` with the admission shared by display and OBJWIN queries for
+    /// scanline `y`.
+    ///
+    /// The callback must not query this layer recursively because the cache
+    /// remains mutably borrowed while it runs.
+    fn with_admission<R>(&self, y: usize, f: impl FnOnce(&OamAdmission) -> R) -> R {
+        let load = || CachedScanlineAdmission {
+            scanline: y,
+            admission: OamAdmission::for_scanline(self.entries, y, self.hblank_free_interval),
+        };
+        let mut cache = self.admission_cache.borrow_mut();
+        let cached = cache.get_or_insert_with(load);
+        if cached.scanline != y {
+            *cached = load();
+        }
+        f(&cached.admission)
+    }
+
+    /// Composites the sprite layer over `framebuffer` without background
+    /// layers or color effects.
+    pub fn composite(&self, framebuffer: &mut Framebuffer) {
+        for y in 0..framebuffer.height() {
+            for x in 0..framebuffer.width() {
+                if let Some(pixel) = self.resolve_pixel(x, y) {
+                    framebuffer.set_pixel(x, y, pixel.color);
+                }
+            }
+        }
+    }
+
+    /// Resolves the visible sprite pixel at `(x, y)`.
+    ///
+    /// Lower OBJ priorities win, and earlier OAM entries win ties. A
+    /// better-priority transparent texel promotes an existing opaque result
+    /// without changing its color. Returns `None` outside the framebuffer or
+    /// when no opaque sprite covers the coordinate.
+    #[must_use]
+    pub fn resolve_pixel(&self, x: usize, y: usize) -> Option<SpritePixel> {
+        self.resolve_pixel_inner(x, y, MosaicSize::NONE, WindowSpans::WHOLE_SCANLINE)
+    }
+
+    /// Resolves a sprite pixel after applying `mosaic` to enabled entries.
+    /// [`MosaicSize::NONE`] is equivalent to [`resolve_pixel`](Self::resolve_pixel).
+    #[must_use]
+    pub fn resolve_pixel_with_mosaic(
+        &self,
+        x: usize,
+        y: usize,
+        mosaic: MosaicSize,
+    ) -> Option<SpritePixel> {
+        self.resolve_pixel_inner(x, y, mosaic, WindowSpans::WHOLE_SCANLINE)
+    }
+
+    /// Resolves a mosaic sprite pixel, honoring hardware-window state.
+    ///
+    /// WIN0 and WIN1 outrank OBJWIN, so mGBA drops a whole OBJWIN pass while
+    /// drawing those regions (`software-obj.c:161`,
+    /// `video-software.c:131-134`) -- per the *writing* span, which
+    /// [`WindowSpans::span_suppresses_objwin`] carries in, not the queried
+    /// column's own.
+    ///
+    /// `window_spans` carries this scanline's hardware-window spans
+    /// ([`WindowSpans::WHOLE_SCANLINE`] when the caller has no span state);
+    /// see [`Self::sample_affine_local`] for what it seeds and why an affine
+    /// mosaic sample may need a span other than the one containing `x`.
+    #[must_use]
+    pub(crate) fn resolve_pixel_with_mosaic_windowed(
+        &self,
+        x: usize,
+        y: usize,
+        mosaic: MosaicSize,
+        window_spans: WindowSpans<'_>,
+    ) -> Option<SpritePixel> {
+        self.resolve_pixel_inner(x, y, mosaic, window_spans)
+    }
+
+    fn resolve_pixel_inner(
+        &self,
+        x: usize,
+        y: usize,
+        mosaic: MosaicSize,
+        window_spans: WindowSpans<'_>,
+    ) -> Option<SpritePixel> {
+        if x >= Framebuffer::WIDTH || y >= Framebuffer::HEIGHT {
+            return None;
+        }
+
+        let mut resolved: Option<SpritePixel> = None;
+        self.with_admission(y, |admission| {
+            // mGBA preprocesses OAM-major, running every window pass of one
+            // entry before the next entry draws anything, so only an earlier
+            // OAM entry's `OBJWIN` write, in any pass, masks a color
+            // (`video-software.c:1019-1066`, `software-obj.c:88-105`)
+            // `(behavioral-fidelity)`.
+            let mut objwin_written = false;
+            for (index, entry) in self.entries.iter().enumerate() {
+                if !admission.is_admitted(index) {
+                    continue;
+                }
+
+                // See `sample_affine_local`'s docs for what this changes. An
+                // `OBJWIN` entry's own suppression is decided per writing
+                // span inside sampling, not here from the queried column.
+                let slot_contested = resolved.is_some();
+                let (texel, writer_span) =
+                    self.sample_entry_mosaic(entry, x, y, mosaic, window_spans, slot_contested);
+                let span_effects = window_spans.span_effects(writer_span);
+                if matches!(texel, Texel::Outside) {
+                    continue;
+                }
+                // An opaque `OBJWIN` write sets the row mask whatever its
+                // priority or the sprite slot's contents
+                // (`software-obj.c:101-105`), so it is sampled free of the
+                // display slot.
+                if entry.mode() == ObjMode::Window {
+                    let (mask_texel, _) =
+                        self.sample_entry_mosaic(entry, x, y, mosaic, window_spans, false);
+                    objwin_written |= matches!(mask_texel, Texel::Opaque(_));
+                }
+                if resolved.is_some_and(|pixel| entry.priority() >= pixel.priority) {
+                    continue;
+                }
+
+                match (entry.mode(), texel) {
+                    (ObjMode::Window, Texel::Opaque(_)) => {}
+                    (mode, Texel::Opaque(color)) => {
+                        let semi_transparent = mode == ObjMode::SemiTransparent;
+                        resolved = Some(SpritePixel {
+                            color,
+                            priority: entry.priority(),
+                            semi_transparent,
+                            color_semi_transparent: semi_transparent,
+                            span_effects,
+                            color_span_effects: span_effects,
+                            color_objwin_masked: objwin_written,
+                        });
+                    }
+                    (mode, Texel::Transparent) => {
+                        if let Some(pixel) = resolved.as_mut() {
+                            pixel.priority = entry.priority();
+                            pixel.semi_transparent = mode == ObjMode::SemiTransparent;
+                            pixel.span_effects = span_effects;
+                        }
+                    }
+                    (_, Texel::Outside) => unreachable!("outside texels were skipped"),
+                }
+            }
+        });
+        resolved
+    }
+
+    /// Returns whether an OBJ-window entry has an opaque texel at `(x, y)`.
+    ///
+    /// OBJ-window entries contribute to this mask instead of supplying a
+    /// display color. Returns `false` outside the framebuffer.
+    #[must_use]
+    pub fn objwin_mask(&self, x: usize, y: usize) -> bool {
+        self.objwin_mask_inner(x, y, MosaicSize::NONE, WindowSpans::WHOLE_SCANLINE)
+    }
+
+    /// Resolves the OBJ-window mask after applying `mosaic` to enabled entries.
+    /// [`MosaicSize::NONE`] is equivalent to [`objwin_mask`](Self::objwin_mask).
+    #[must_use]
+    pub fn objwin_mask_with_mosaic(&self, x: usize, y: usize, mosaic: MosaicSize) -> bool {
+        self.objwin_mask_inner(x, y, mosaic, WindowSpans::WHOLE_SCANLINE)
+    }
+
+    /// Resolves the OBJ-window mask as the OR of the opaque writes the
+    /// permitted preprocessing passes of `window_spans` make, so an affine
+    /// mosaic trailing spill written by an earlier pass survives into a later
+    /// span that would not have written it (`mgba/src/gba/renderers/software-obj.c:160-163,227-242`).
+    pub(crate) fn objwin_mask_with_mosaic_windowed(
+        &self,
+        x: usize,
+        y: usize,
+        mosaic: MosaicSize,
+        window_spans: WindowSpans<'_>,
+    ) -> bool {
+        self.objwin_mask_inner(x, y, mosaic, window_spans)
+    }
+
+    fn objwin_mask_inner(
+        &self,
+        x: usize,
+        y: usize,
+        mosaic: MosaicSize,
+        window_spans: WindowSpans<'_>,
+    ) -> bool {
+        if x >= Framebuffer::WIDTH || y >= Framebuffer::HEIGHT {
+            return false;
+        }
+        self.with_admission(y, |admission| {
+            self.entries.iter().enumerate().any(|(index, entry)| {
+                if !admission.is_admitted(index) || entry.mode() != ObjMode::Window {
+                    return false;
+                }
+                // OBJWIN is a per-pixel mask, not a hardware-window span, so
+                // it never restarts an affine mosaic hold
+                // (`behavioral-fidelity`).
+                matches!(
+                    self.sample_entry_mosaic(entry, x, y, mosaic, window_spans, false),
+                    (Texel::Opaque(_), _)
+                )
+            })
+        })
+    }
+
+    /// Samples one entry's texel at `(x, y)`, paired with the index of the
+    /// window span whose pass wrote it.
+    ///
+    /// The writing span matches `x`'s own for every path but an affine
+    /// mosaic trailing spill, which can be written by an earlier span; see
+    /// [`Self::sample_affine_local`] for what `slot_contested` changes there.
+    fn sample_entry_mosaic(
+        &self,
+        entry: &OamEntry,
+        x: usize,
+        y: usize,
+        mosaic: MosaicSize,
+        window_spans: WindowSpans<'_>,
+        slot_contested: bool,
+    ) -> (Texel, usize) {
+        let own_span = window_spans.index_at(x);
+        let mosaic = if entry.mosaic() {
+            mosaic
+        } else {
+            MosaicSize::NONE
+        };
+        let Some((dx, dy)) = Self::footprint(entry, x, y, mosaic) else {
+            return (Texel::Outside, own_span);
+        };
+        if entry.mode() == ObjMode::Window {
+            // mGBA applies only vertical mosaic to OBJ-window sampling (`video-software.c:1027,1042-1050`; `software-obj.c:287-304,344-361`).
+            let vertical_only = mosaic.vertical_only();
+            if matches!(entry.affine(), AffineMode::Regular) {
+                if window_spans.span_suppresses_objwin(own_span) {
+                    return (Texel::Outside, own_span);
+                }
+                let (_, ly) = vertical_only.snap_local((dx, dy), (x, y), entry.bounding_box());
+                (self.sample_local(entry, dx, ly), own_span)
+            } else {
+                self.sample_affine_local(
+                    entry,
+                    dx,
+                    dy,
+                    x,
+                    y,
+                    vertical_only,
+                    window_spans,
+                    slot_contested,
+                )
+            }
+        } else if matches!(entry.affine(), AffineMode::Regular) {
+            let (lx, ly) = mosaic.snap_local((dx, dy), (x, y), entry.bounding_box());
+            (self.sample_local(entry, lx, ly), own_span)
+        } else {
+            self.sample_affine_local(entry, dx, dy, x, y, mosaic, window_spans, slot_contested)
+        }
+    }
+
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        clippy::cast_sign_loss,
+        reason = "framebuffer coordinates, OBJ bounds, and mosaic spill fit in i32"
+    )]
+    fn footprint(
+        entry: &OamEntry,
+        x: usize,
+        y: usize,
+        mosaic: MosaicSize,
+    ) -> Option<(usize, usize)> {
+        let (width, _height) = entry.bounding_box();
+
+        let entry_x = i32::from(entry.x());
+        let dx = x as i32 - entry_x;
+        if dx < 0 {
+            return None;
+        }
+        if dx as usize >= width {
+            // mGBA rounds a mosaic OBJ's trailing edge to a screen-aligned block (`software-obj.c:236-239,320-325`).
+            let raw_end = entry_x + width as i32;
+            if x as i32 >= mosaic.round_trailing_edge(raw_end) {
+                return None;
+            }
+        }
+
+        let dy = entry.vertical_offset(y)?;
+        Some((dx as usize, dy))
+    }
+
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        reason = "OBJ bounds plus mosaic spill keep every tile offset within i16"
+    )]
+    fn sample_local(&self, entry: &OamEntry, dx: usize, dy: usize) -> Texel {
+        const DIM: usize = BitDepth::TILE_DIM;
+        debug_assert!(
+            matches!(entry.affine(), AffineMode::Regular),
+            "sample_local is only called for Regular OamEntry values"
+        );
+        let (width, height) = entry.bounding_box();
+
+        // Regular OBJ flips mirror the complete sprite, not each tile.
+        let source_x = if entry.h_flip() {
+            width as i32 - 1 - dx as i32
+        } else {
+            dx as i32
+        };
+        let source_y = if entry.v_flip() { height - 1 - dy } else { dy };
+
+        let tile_columns = width / DIM;
+        let tile_x = source_x.div_euclid(DIM as i32);
+        let tile_y = source_y / DIM;
+        let tile_offset = (tile_y * tile_columns) as i32 + tile_x;
+        let bit_depth = entry.bit_depth();
+        // Derived tile indices wrap inside the 32 KiB OBJ character window.
+        let tile_index = entry.tile_index().wrapping_add_signed(tile_offset as i16)
+            & bit_depth.obj_tile_index_mask();
+
+        let tileset = match bit_depth {
+            BitDepth::Bpp4 => self.tileset_4bpp,
+            BitDepth::Bpp8 => self.tileset_8bpp,
+        };
+        let local_x = source_x.rem_euclid(DIM as i32) as usize;
+        let local_y = source_y % DIM;
+        let Some(index) =
+            tileset.obj_pixel_index(tile_index, entry.half_tile_offset(), local_x, local_y)
+        else {
+            return Texel::Outside;
+        };
+        // Hardware reserves palette index zero as transparent at both depths.
+        if index == 0 {
+            return Texel::Transparent;
+        }
+        let color = match bit_depth {
+            BitDepth::Bpp4 => self.palette.bank_color(entry.palette_bank(), index),
+            BitDepth::Bpp8 => self.palette.color(index),
+        };
+        Texel::Opaque(color.to_rgb888())
+    }
+
+    /// Samples an affine entry from one footprint-local coordinate per
+    /// mosaic block, seeding each window span's hold from `inX - 1` at its
+    /// own start, and returns the texel the span it was drawn under produces,
+    /// paired with that span's index (`software-obj.c:227-242`).
+    /// `slot_contested` mirrors mGBA's same-entry write lock: a contested
+    /// pixel stops the spill search at the first candidate span, an
+    /// unclaimed one prefers the first opaque one (`software-obj.c:79-85`).
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        clippy::cast_sign_loss,
+        reason = "x < Framebuffer::WIDTH, so the mosaic block origin, window span start, and sprite trailing edge fit in i32 and, once clamped non-negative, in usize"
+    )]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "mirrors mGBA's per-span preprocessing inputs (entry, footprint, screen coordinate, mosaic, window spans, slot contention)"
+    )]
+    fn sample_affine_local(
+        &self,
+        entry: &OamEntry,
+        dx: usize,
+        dy: usize,
+        x: usize,
+        y: usize,
+        mosaic: MosaicSize,
+        window_spans: WindowSpans<'_>,
+        slot_contested: bool,
+    ) -> (Texel, usize) {
+        let (_, local_y) = mosaic.snap_local((dx, dy), (x, y), entry.bounding_box());
+        // Shared by both `sample_entry_mosaic` branches; the contract is on
+        // `floor_dy_to_wrap_boundary_bottom`.
+        let local_y = if mosaic.vertical() > 1 {
+            entry.floor_dy_to_wrap_boundary_bottom(local_y)
+        } else {
+            local_y
+        };
+        let entry_x = i32::from(entry.x());
+        let (width, _) = entry.bounding_box();
+        let block_origin_x = mosaic.snap(x, y).0 as i32;
+
+        let sample_from_span_start = |window_span_start: i32| {
+            let pass_start_x = entry_x.max(window_span_start);
+            let held_screen_x = if block_origin_x >= pass_start_x {
+                block_origin_x
+            } else {
+                pass_start_x - 1
+            };
+            sprite_affine::sample_texel(
+                entry,
+                self.matrices,
+                self.tileset_4bpp,
+                self.tileset_8bpp,
+                self.palette,
+                held_screen_x - entry_x,
+                local_y,
+            )
+        };
+
+        // mGBA drops an OBJWIN entry's whole pass per writing span
+        // (`software-obj.c:161`), so every candidate span below is filtered
+        // by its own rank, never the queried column's `(behavioral-fidelity)`.
+        let objwin_entry = entry.mode() == ObjMode::Window;
+        let span_admits_entry =
+            |span: usize| !(objwin_entry && window_spans.span_suppresses_objwin(span));
+
+        if dx < width {
+            let span = window_spans.index_at(x);
+            if !span_admits_entry(span) {
+                return (Texel::Outside, span);
+            }
+            return (
+                sample_from_span_start(window_spans.span_start(span) as i32),
+                span,
+            );
+        }
+
+        let raw_edge = (entry_x + width as i32).max(0) as usize;
+        let last_span = window_spans.index_at(x);
+        let candidate_spans = (window_spans.index_at(raw_edge)..=last_span)
+            .filter(|&span| window_spans.span_draws_obj(span) && span_admits_entry(span));
+
+        if slot_contested {
+            // A contested slot blocks every span but this entry's first
+            // candidate one, so take that first result, whatever it is.
+            return candidate_spans
+                .map(|span| {
+                    (
+                        sample_from_span_start(window_spans.span_start(span) as i32),
+                        span,
+                    )
+                })
+                .find(|(texel, _)| !matches!(texel, Texel::Outside))
+                .unwrap_or((Texel::Outside, last_span));
+        }
+
+        let mut transparent_fallback = None;
+        for span in candidate_spans {
+            let texel = sample_from_span_start(window_spans.span_start(span) as i32);
+            if matches!(texel, Texel::Opaque(_)) {
+                return (texel, span);
+            }
+            if transparent_fallback.is_none() && matches!(texel, Texel::Transparent) {
+                transparent_fallback = Some((texel, span));
+            }
+        }
+        transparent_fallback.unwrap_or((Texel::Outside, last_span))
+    }
+}
+
+/// The result of sampling one sprite entry at a framebuffer coordinate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Texel {
+    /// The entry does not cover the coordinate.
+    Outside,
+    /// The entry covers the coordinate with palette index zero.
+    Transparent,
+    /// The entry covers the coordinate with an opaque color.
+    Opaque(Rgb888),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SpriteLayer, WindowSpans};
+    use crate::affine::AffineMatrix;
+    use crate::framebuffer::Framebuffer;
+    use crate::mosaic::MosaicSize;
+    use crate::oam::{AffineMode, OamEntry, ObjMode, ObjShape};
+    use crate::palette::{Bgr555, Palette, Rgb888};
+    use crate::tile::{BitDepth, Tileset};
+    use crate::window::{WindowLayerEnable, WindowPass, WindowRegion};
+
+    const BPP4_TILE_BYTES: usize = BitDepth::Bpp4.tile_byte_len();
+    const EIGHT_PIXEL_SQUARE_SIZE: u8 = 0;
+    const SIXTY_FOUR_PIXEL_SQUARE_SIZE: u8 = 3;
+    const FIRST_TILE: u16 = 0;
+    const TRANSPARENT_TILE: u16 = 1;
+    const FIRST_PALETTE_BANK: u8 = 0;
+    const HIGHEST_OBJ_PRIORITY: u8 = 0;
+    const RED_INDEX: u8 = 1;
+    const GREEN_INDEX: u8 = 2;
+    const BLUE_INDEX: u8 = 3;
+    const YELLOW_INDEX: u8 = 4;
+    const FULL_CHANNEL: u8 = 0x1F;
+    const RED: Bgr555 = Bgr555::from_channels(FULL_CHANNEL, 0, 0);
+    const GREEN: Bgr555 = Bgr555::from_channels(0, FULL_CHANNEL, 0);
+    const BLUE: Bgr555 = Bgr555::from_channels(0, 0, FULL_CHANNEL);
+    const YELLOW: Bgr555 = Bgr555::from_channels(FULL_CHANNEL, FULL_CHANNEL, 0);
+
+    fn bpp4_tile(pixels: &[((usize, usize), u8)]) -> [u8; BPP4_TILE_BYTES] {
+        const PIXELS_PER_BYTE: usize = 2;
+        const BITS_PER_PIXEL: usize = 4;
+
+        let mut bytes = [0; BPP4_TILE_BYTES];
+        let bytes_per_row = BitDepth::TILE_DIM / PIXELS_PER_BYTE;
+        for &((x, y), palette_index) in pixels {
+            assert!(x < BitDepth::TILE_DIM && y < BitDepth::TILE_DIM);
+            assert!(usize::from(palette_index) < Palette::BANK_LEN);
+            let byte = y * bytes_per_row + x / PIXELS_PER_BYTE;
+            let shift = (x % PIXELS_PER_BYTE) * BITS_PER_PIXEL;
+            bytes[byte] |= palette_index << shift;
+        }
+        bytes
+    }
+
+    fn palette_with_colors(colors: &[(u8, Bgr555)]) -> Palette {
+        let mut palette = [Bgr555::default(); Palette::LEN];
+        for &(index, color) in colors {
+            palette[usize::from(index)] = color;
+        }
+        Palette::new(palette)
+    }
+
+    fn entry(x_raw: u16, y: u8, enabled: bool) -> OamEntry {
+        OamEntry::new(
+            x_raw,
+            y,
+            FIRST_TILE,
+            FIRST_PALETTE_BANK,
+            BitDepth::Bpp4,
+            false,
+            false,
+            ObjShape::Square,
+            EIGHT_PIXEL_SQUARE_SIZE,
+            HIGHEST_OBJ_PRIORITY,
+            enabled,
+        )
+    }
+
+    fn solid_4bpp_tile(index: u8) -> [u8; BPP4_TILE_BYTES] {
+        [index | (index << 4); BPP4_TILE_BYTES]
+    }
+
+    fn quadrant_tile() -> [u8; BPP4_TILE_BYTES] {
+        bpp4_tile(&[
+            ((1, 0), RED_INDEX),
+            ((0, 1), GREEN_INDEX),
+            ((1, 1), BLUE_INDEX),
+        ])
+    }
+
+    fn quadrant_palette() -> Palette {
+        palette_with_colors(&[(RED_INDEX, RED), (GREEN_INDEX, GREEN), (BLUE_INDEX, BLUE)])
+    }
+
+    #[test]
+    fn composite_skips_transparent_index_0_pixels() {
+        let tileset = Tileset::decode(BitDepth::Bpp4, &quadrant_tile()).unwrap();
+        let palette = quadrant_palette();
+        let entries = [entry(0, 0, true)];
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
+
+        let mut fb = Framebuffer::new();
+        let backdrop = Rgb888 { r: 5, g: 6, b: 7 };
+        fb.fill(backdrop);
+        layer.composite(&mut fb);
+
+        assert_eq!(fb.pixel(0, 0), Some(backdrop));
+        assert_eq!(fb.pixel(1, 0), Some(RED.to_rgb888()));
+        assert_eq!(fb.pixel(0, 1), Some(GREEN.to_rgb888()));
+        assert_eq!(fb.pixel(1, 1), Some(BLUE.to_rgb888()));
+    }
+
+    fn corner_marked_tile() -> [u8; BPP4_TILE_BYTES] {
+        let last_pixel = BitDepth::TILE_DIM - 1;
+        bpp4_tile(&[
+            ((0, 0), RED_INDEX),
+            ((last_pixel, 0), GREEN_INDEX),
+            ((0, last_pixel), BLUE_INDEX),
+            ((last_pixel, last_pixel), YELLOW_INDEX),
+        ])
+    }
+
+    fn corner_marked_palette() -> Palette {
+        palette_with_colors(&[
+            (RED_INDEX, RED),
+            (GREEN_INDEX, GREEN),
+            (BLUE_INDEX, BLUE),
+            (YELLOW_INDEX, YELLOW),
+        ])
+    }
+
+    #[test]
+    fn composite_h_flip_mirrors_the_whole_sprite_footprint() {
+        let tileset = Tileset::decode(BitDepth::Bpp4, &corner_marked_tile()).unwrap();
+        let palette = corner_marked_palette();
+        let entries = [OamEntry::new(
+            0,
+            0,
+            FIRST_TILE,
+            FIRST_PALETTE_BANK,
+            BitDepth::Bpp4,
+            true,
+            false,
+            ObjShape::Square,
+            EIGHT_PIXEL_SQUARE_SIZE,
+            HIGHEST_OBJ_PRIORITY,
+            true,
+        )];
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
+
+        let mut fb = Framebuffer::new();
+        layer.composite(&mut fb);
+
+        assert_eq!(fb.pixel(0, 0), Some(GREEN.to_rgb888()));
+        assert_eq!(fb.pixel(7, 0), Some(RED.to_rgb888()));
+    }
+
+    #[test]
+    fn composite_v_flip_mirrors_the_whole_sprite_footprint() {
+        let tileset = Tileset::decode(BitDepth::Bpp4, &corner_marked_tile()).unwrap();
+        let palette = corner_marked_palette();
+        let entries = [OamEntry::new(
+            0,
+            0,
+            FIRST_TILE,
+            FIRST_PALETTE_BANK,
+            BitDepth::Bpp4,
+            false,
+            true,
+            ObjShape::Square,
+            EIGHT_PIXEL_SQUARE_SIZE,
+            HIGHEST_OBJ_PRIORITY,
+            true,
+        )];
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
+
+        let mut fb = Framebuffer::new();
+        layer.composite(&mut fb);
+
+        assert_eq!(fb.pixel(0, 0), Some(BLUE.to_rgb888()));
+        assert_eq!(fb.pixel(0, 7), Some(RED.to_rgb888()));
+    }
+
+    #[test]
+    fn composite_clips_a_sprite_partially_off_the_left_edge() {
+        const NEGATIVE_FOUR_RAW_X: u16 = 508;
+        const SOURCE_X_AT_SCREEN_EDGE: usize = 4;
+
+        // The whole first row is opaque, so a sampler that ran past the
+        // sprite's width would paint the backdrop at screen x=4.
+        let opaque_row: Vec<((usize, usize), u8)> = (0..BitDepth::TILE_DIM)
+            .map(|x| ((x, 0), RED_INDEX))
+            .collect();
+        let tile = bpp4_tile(&opaque_row);
+        let tileset = Tileset::decode(BitDepth::Bpp4, &tile).unwrap();
+        let palette = palette_with_colors(&[(RED_INDEX, RED)]);
+        let entries = [entry(NEGATIVE_FOUR_RAW_X, 0, true)];
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
+
+        let mut fb = Framebuffer::new();
+        layer.composite(&mut fb);
+
+        assert_eq!(fb.pixel(0, 0), Some(RED.to_rgb888()));
+        assert_eq!(
+            fb.pixel(SOURCE_X_AT_SCREEN_EDGE - 1, 0),
+            Some(RED.to_rgb888())
+        );
+        assert_eq!(fb.pixel(SOURCE_X_AT_SCREEN_EDGE, 0), Some(Rgb888::BLACK));
+    }
+
+    #[test]
+    fn composite_wraps_a_sprite_hanging_off_the_bottom_to_the_top() {
+        const WRAPPED_RAW_Y: u8 = 250;
+        const SOURCE_ROW_AT_SCREEN_TOP: usize = 6;
+        const ROW_BELOW_WRAPPED_FOOTPRINT: usize = 5;
+        const UNRELATED_SCREEN_ROW: usize = 100;
+
+        let tile = bpp4_tile(&[((0, SOURCE_ROW_AT_SCREEN_TOP), RED_INDEX)]);
+        let tileset = Tileset::decode(BitDepth::Bpp4, &tile).unwrap();
+        let palette = palette_with_colors(&[(RED_INDEX, RED)]);
+        let entries = [entry(0, WRAPPED_RAW_Y, true)];
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
+
+        assert_eq!(
+            layer.resolve_pixel(0, 0).map(|p| p.color),
+            Some(RED.to_rgb888())
+        );
+        assert_eq!(layer.resolve_pixel(0, ROW_BELOW_WRAPPED_FOOTPRINT), None);
+        assert_eq!(
+            layer.resolve_pixel(0, UNRELATED_SCREEN_ROW),
+            None,
+            "Y wrapping creates one contiguous footprint"
+        );
+    }
+
+    #[test]
+    fn composite_disabled_sprite_draws_nothing() {
+        let tileset = Tileset::decode(BitDepth::Bpp4, &solid_4bpp_tile(RED_INDEX)).unwrap();
+        let palette = palette_with_colors(&[(RED_INDEX, RED)]);
+        let entries = [entry(0, 0, false)];
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
+
+        assert_eq!(layer.resolve_pixel(0, 0), None);
+    }
+
+    #[test]
+    fn resolve_pixel_sprite_vs_sprite_lower_oam_index_wins_a_priority_tie() {
+        let tileset = Tileset::decode(BitDepth::Bpp4, &[0xFFu8; 32]).unwrap();
+        let mut colors = [Bgr555::default(); Palette::LEN];
+        let bank_zero_opaque_index = OPAQUE_PALETTE_INDEX as usize;
+        let bank_one_opaque_index = Palette::BANK_LEN + bank_zero_opaque_index;
+        colors[bank_zero_opaque_index] = Bgr555::from_channels(0x1F, 0, 0);
+        colors[bank_one_opaque_index] = Bgr555::from_channels(0, 0x1F, 0);
+        let palette = Palette::new(colors);
+
+        let low_index_red = square_8x8(FIRST_TILE, 2, 0);
+        let high_index_green = square_8x8(FIRST_TILE, 2, 1);
+        let entries = [low_index_red, high_index_green];
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
+
+        assert_eq!(
+            layer.resolve_pixel(0, 0).map(|p| p.color),
+            Some(colors[bank_zero_opaque_index].to_rgb888())
+        );
+
+        let entries_reversed = [high_index_green, low_index_red];
+        let layer_reversed = SpriteLayer::new(&entries_reversed, &tileset, &tileset, &palette);
+        assert_eq!(
+            layer_reversed.resolve_pixel(0, 0).map(|p| p.color),
+            Some(colors[bank_one_opaque_index].to_rgb888())
+        );
+    }
+
+    #[test]
+    fn resolve_pixel_lower_priority_number_wins_regardless_of_oam_index() {
+        let tileset = Tileset::decode(BitDepth::Bpp4, &[0xFFu8; 32]).unwrap();
+        let mut colors = [Bgr555::default(); Palette::LEN];
+        let bank_zero_opaque_index = OPAQUE_PALETTE_INDEX as usize;
+        let bank_one_opaque_index = Palette::BANK_LEN + bank_zero_opaque_index;
+        colors[bank_zero_opaque_index] = Bgr555::from_channels(0x1F, 0, 0);
+        colors[bank_one_opaque_index] = Bgr555::from_channels(0, 0x1F, 0);
+        let palette = Palette::new(colors);
+
+        let worse_priority_red = square_8x8(FIRST_TILE, 3, 0);
+        let better_priority_green = square_8x8(FIRST_TILE, 0, 1);
+        let entries = [worse_priority_red, better_priority_green];
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
+
+        assert_eq!(
+            layer.resolve_pixel(0, 0).map(|p| p.color),
+            Some(colors[bank_one_opaque_index].to_rgb888())
+        );
+    }
+
+    #[test]
+    fn multi_tile_sprite_addresses_tiles_row_major_from_its_base_index() {
+        const BASE_TILE: u16 = 5;
+        const NEXT_TILE: u16 = BASE_TILE + 1;
+        const HORIZONTAL_16_BY_8_SIZE: u8 = 0;
+
+        let tile_count = usize::from(NEXT_TILE) + 1;
+        let mut tiles = vec![0u8; BPP4_TILE_BYTES * tile_count];
+        let base_start = usize::from(BASE_TILE) * BPP4_TILE_BYTES;
+        let next_start = usize::from(NEXT_TILE) * BPP4_TILE_BYTES;
+        tiles[base_start] = RED_INDEX;
+        tiles[next_start] = GREEN_INDEX;
+        let tileset = Tileset::decode(BitDepth::Bpp4, &tiles).unwrap();
+        let palette = palette_with_colors(&[(RED_INDEX, RED), (GREEN_INDEX, GREEN)]);
+
+        let entries = [OamEntry::new(
+            0,
+            0,
+            BASE_TILE,
+            FIRST_PALETTE_BANK,
+            BitDepth::Bpp4,
+            false,
+            false,
+            ObjShape::Horizontal,
+            HORIZONTAL_16_BY_8_SIZE,
+            HIGHEST_OBJ_PRIORITY,
+            true,
+        )];
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
+
+        assert_eq!(
+            layer.resolve_pixel(0, 0).map(|p| p.color),
+            Some(RED.to_rgb888())
+        );
+        assert_eq!(
+            layer.resolve_pixel(8, 0).map(|p| p.color),
+            Some(GREEN.to_rgb888())
+        );
+    }
+
+    const OPAQUE_PALETTE_INDEX: u8 = 15;
+
+    fn opaque_and_transparent_tiles() -> (Tileset, Palette) {
+        let mut two_tiles = [0u8; 64];
+        two_tiles[..32].fill(0xFF);
+        let tileset = Tileset::decode(BitDepth::Bpp4, &two_tiles).unwrap();
+        let mut colors = [Bgr555::default(); Palette::LEN];
+        colors[OPAQUE_PALETTE_INDEX as usize] = Bgr555::from_channels(0, 0, 0x1F);
+        (tileset, Palette::new(colors))
+    }
+
+    fn square_8x8(tile: u16, priority: u8, palette_bank: u8) -> OamEntry {
+        OamEntry::new(
+            0,
+            0,
+            tile,
+            palette_bank,
+            BitDepth::Bpp4,
+            false,
+            false,
+            ObjShape::Square,
+            0,
+            priority,
+            true,
+        )
+    }
+
+    #[test]
+    fn resolve_pixel_better_sprites_hole_over_opaque_worse_sprite_upgrades_priority() {
+        let (tileset, palette) = opaque_and_transparent_tiles();
+        let opaque_priority_two = square_8x8(FIRST_TILE, 2, 0);
+        let transparent_priority_zero = square_8x8(TRANSPARENT_TILE, 0, 0);
+        let entries = [opaque_priority_two, transparent_priority_zero];
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
+
+        let pixel = layer.resolve_pixel(0, 0).unwrap();
+        assert_eq!(pixel.color, Bgr555::from_channels(0, 0, 0x1F).to_rgb888());
+        assert_eq!(pixel.priority, 0);
+    }
+
+    #[test]
+    fn resolve_pixel_objwin_transparent_hole_upgrades_an_opaque_worse_sprite() {
+        let (tileset, palette) = opaque_and_transparent_tiles();
+        let opaque_priority_two = square_8x8(FIRST_TILE, 2, 0);
+        let objwin_hole_priority_zero =
+            square_8x8(TRANSPARENT_TILE, 0, 0).with_mode(ObjMode::Window);
+        let entries = [opaque_priority_two, objwin_hole_priority_zero];
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
+
+        let pixel = layer.resolve_pixel(0, 0).unwrap();
+        assert_eq!(pixel.color, Bgr555::from_channels(0, 0, 0x1F).to_rgb888());
+        assert_eq!(pixel.priority, 0);
+
+        let entries_control = [opaque_priority_two];
+        let control = SpriteLayer::new(&entries_control, &tileset, &tileset, &palette);
+        assert_eq!(control.resolve_pixel(0, 0).unwrap().priority, 2);
+    }
+
+    #[test]
+    fn resolve_pixel_with_mosaic_windowed_suppresses_objwin_hole_when_flagged() {
+        let (tileset, palette) = opaque_and_transparent_tiles();
+        let opaque_priority_two = square_8x8(FIRST_TILE, 2, 0);
+        let objwin_hole_priority_zero =
+            square_8x8(TRANSPARENT_TILE, 0, 0).with_mode(ObjMode::Window);
+        let entries = [opaque_priority_two, objwin_hole_priority_zero];
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
+
+        let win0_pass = [WindowPass {
+            start: 0,
+            control: WindowLayerEnable::ALL,
+            region: WindowRegion::Win0,
+        }];
+        let suppressing_span = WindowSpans::new(&win0_pass, false);
+        let suppressed = layer
+            .resolve_pixel_with_mosaic_windowed(0, 0, MosaicSize::NONE, suppressing_span)
+            .unwrap();
+        assert_eq!(suppressed.priority, 2);
+
+        let unsuppressed = layer
+            .resolve_pixel_with_mosaic_windowed(0, 0, MosaicSize::NONE, WindowSpans::WHOLE_SCANLINE)
+            .unwrap();
+        assert_eq!(unsuppressed.priority, 0);
+    }
+
+    #[test]
+    fn resolve_pixel_objwin_opaque_texel_supplies_no_display_pixel() {
+        let (tileset, palette) = opaque_and_transparent_tiles();
+        let objwin_opaque = square_8x8(FIRST_TILE, 0, 0).with_mode(ObjMode::Window);
+        let entries = [objwin_opaque];
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
+        assert_eq!(layer.resolve_pixel(0, 0), None);
+        assert!(layer.objwin_mask(0, 0));
+    }
+
+    #[test]
+    fn resolve_pixel_better_transparent_sprite_before_opaque_worse_does_not_upgrade() {
+        let (tileset, palette) = opaque_and_transparent_tiles();
+        let transparent_priority_zero = square_8x8(TRANSPARENT_TILE, 0, 0);
+        let opaque_priority_two = square_8x8(FIRST_TILE, 2, 0);
+        let entries = [transparent_priority_zero, opaque_priority_two];
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
+
+        let pixel = layer.resolve_pixel(0, 0).unwrap();
+        assert_eq!(pixel.color, Bgr555::from_channels(0, 0, 0x1F).to_rgb888());
+        assert_eq!(pixel.priority, 2);
+    }
+
+    #[test]
+    fn multi_tile_sprite_wraps_a_4bpp_tile_index_off_the_end_of_obj_vram() {
+        const HORIZONTAL_16_BY_8_SIZE: u8 = 0;
+
+        let bit_depth = BitDepth::Bpp4;
+        let tile_count = usize::from(bit_depth.obj_tile_index_mask()) + 1;
+        let last_tile = bit_depth.obj_tile_index_mask();
+        let last_tile_start = usize::from(last_tile) * BPP4_TILE_BYTES;
+        let mut tiles = vec![0u8; BPP4_TILE_BYTES * tile_count];
+        tiles[0] = GREEN_INDEX;
+        tiles[last_tile_start] = RED_INDEX;
+        let tileset = Tileset::decode(bit_depth, &tiles).unwrap();
+        let palette = palette_with_colors(&[(RED_INDEX, RED), (GREEN_INDEX, GREEN)]);
+
+        let entries = [OamEntry::new(
+            0,
+            0,
+            last_tile,
+            FIRST_PALETTE_BANK,
+            bit_depth,
+            false,
+            false,
+            ObjShape::Horizontal,
+            HORIZONTAL_16_BY_8_SIZE,
+            HIGHEST_OBJ_PRIORITY,
+            true,
+        )];
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
+
+        assert_eq!(
+            layer.resolve_pixel(0, 0).map(|p| p.color),
+            Some(RED.to_rgb888())
+        );
+        assert_eq!(
+            layer.resolve_pixel(8, 0).map(|p| p.color),
+            Some(GREEN.to_rgb888())
+        );
+    }
+
+    #[test]
+    fn multi_tile_sprite_wraps_an_8bpp_tile_index_off_the_end_of_obj_vram() {
+        const HORIZONTAL_16_BY_8_SIZE: u8 = 0;
+
+        let bit_depth = BitDepth::Bpp8;
+        let tile_bytes = bit_depth.tile_byte_len();
+        let tile_count = usize::from(bit_depth.obj_tile_index_mask()) + 1;
+        let last_tile = bit_depth.obj_tile_index_mask();
+        let last_tile_start = usize::from(last_tile) * tile_bytes;
+        let mut tiles = vec![0u8; tile_bytes * tile_count];
+        tiles[0] = GREEN_INDEX;
+        tiles[last_tile_start] = RED_INDEX;
+        let tileset = Tileset::decode(bit_depth, &tiles).unwrap();
+        let palette = palette_with_colors(&[(RED_INDEX, RED), (GREEN_INDEX, GREEN)]);
+
+        let entries = [OamEntry::new(
+            0,
+            0,
+            last_tile,
+            FIRST_PALETTE_BANK,
+            bit_depth,
+            false,
+            false,
+            ObjShape::Horizontal,
+            HORIZONTAL_16_BY_8_SIZE,
+            HIGHEST_OBJ_PRIORITY,
+            true,
+        )];
+        let empty_4bpp_tile = [0u8; BPP4_TILE_BYTES];
+        let tileset_4bpp = Tileset::decode(BitDepth::Bpp4, &empty_4bpp_tile).unwrap();
+        let layer = SpriteLayer::new(&entries, &tileset_4bpp, &tileset, &palette);
+
+        assert_eq!(
+            layer.resolve_pixel(0, 0).map(|p| p.color),
+            Some(RED.to_rgb888())
+        );
+        assert_eq!(
+            layer.resolve_pixel(8, 0).map(|p| p.color),
+            Some(GREEN.to_rgb888())
+        );
+    }
+
+    fn horizontal_mosaic_fixture() -> ([u8; BPP4_TILE_BYTES], Palette) {
+        (
+            bpp4_tile(&[
+                ((0, 0), RED_INDEX),
+                ((2, 0), GREEN_INDEX),
+                ((6, 0), BLUE_INDEX),
+            ]),
+            palette_with_colors(&[(RED_INDEX, RED), (GREEN_INDEX, GREEN), (BLUE_INDEX, BLUE)]),
+        )
+    }
+
+    #[test]
+    fn regular_mosaic_leading_partial_block_replicates_the_edge_column() {
+        const SPRITE_X: u16 = 2;
+        const MOSAIC_WIDTH: u8 = 4;
+
+        let (bytes, palette) = horizontal_mosaic_fixture();
+        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
+        let entries = [entry(SPRITE_X, 0, true).with_mosaic(true)];
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
+        let mosaic = MosaicSize::new(MOSAIC_WIDTH, 1);
+
+        for x in usize::from(SPRITE_X)..usize::from(MOSAIC_WIDTH) {
+            assert_eq!(
+                layer
+                    .resolve_pixel_with_mosaic(x, 0, mosaic)
+                    .map(|p| p.color),
+                Some(RED.to_rgb888()),
+                "screen x = {x}"
+            );
+        }
+        for x in usize::from(MOSAIC_WIDTH)..usize::from(MOSAIC_WIDTH) * 2 {
+            assert_eq!(
+                layer
+                    .resolve_pixel_with_mosaic(x, 0, mosaic)
+                    .map(|p| p.color),
+                Some(GREEN.to_rgb888()),
+                "screen x = {x}"
+            );
+        }
+    }
+
+    #[test]
+    fn regular_mosaic_trailing_partial_block_extends_past_the_raw_edge() {
+        const NEGATIVE_FOUR_RAW_X: u16 = 0x01FC;
+        const HORIZONTAL_MOSAIC_SIZE: u8 = 3;
+        const LAST_COVERED_X: usize = 5;
+        const FIRST_UNCOVERED_X: usize = 6;
+
+        let bytes = solid_4bpp_tile(RED_INDEX);
+        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
+        let palette = palette_with_colors(&[(RED_INDEX, RED)]);
+        let entries = [entry(NEGATIVE_FOUR_RAW_X, 0, true).with_mosaic(true)];
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
+        let mosaic = MosaicSize::new(HORIZONTAL_MOSAIC_SIZE, 1);
+
+        for x in 0..=LAST_COVERED_X {
+            assert_eq!(
+                layer
+                    .resolve_pixel_with_mosaic(x, 0, mosaic)
+                    .map(|p| p.color),
+                Some(RED.to_rgb888()),
+                "screen x = {x}"
+            );
+        }
+        assert_eq!(
+            layer.resolve_pixel_with_mosaic(FIRST_UNCOVERED_X, 0, mosaic),
+            None,
+            "screen x = {FIRST_UNCOVERED_X}"
+        );
+    }
+
+    #[test]
+    fn regular_mosaic_leading_partial_block_uses_the_nearest_source_column() {
+        const SPRITE_X: u16 = 2;
+        const MOSAIC_WIDTH: u8 = 4;
+
+        let (bytes, palette) = horizontal_mosaic_fixture();
+        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
+        let entries = [entry(SPRITE_X, 0, true).with_mosaic(true)];
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
+        let mosaic = MosaicSize::new(MOSAIC_WIDTH, 1);
+
+        for x in usize::from(SPRITE_X)..usize::from(MOSAIC_WIDTH) {
+            assert_eq!(
+                layer
+                    .resolve_pixel_with_mosaic(x, 0, mosaic)
+                    .map(|p| p.color),
+                Some(RED.to_rgb888()),
+                "screen x = {x}"
+            );
+        }
+    }
+
+    #[test]
+    fn affine_mosaic_leading_partial_block_leaves_the_source_unwritten() {
+        const SPRITE_X: u16 = 2;
+        const MOSAIC_WIDTH: u8 = 4;
+
+        let (bytes, palette) = horizontal_mosaic_fixture();
+        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
+        let entries = [entry(SPRITE_X, 0, true)
+            .with_mosaic(true)
+            .with_affine(AffineMode::Affine { matrix_num: 0 })];
+        let matrices = [AffineMatrix::IDENTITY];
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette)
+            .with_affine_matrices(&matrices);
+        let mosaic = MosaicSize::new(MOSAIC_WIDTH, 1);
+
+        for x in usize::from(SPRITE_X)..usize::from(MOSAIC_WIDTH) {
+            assert_eq!(
+                layer.resolve_pixel_with_mosaic(x, 0, mosaic),
+                None,
+                "screen x = {x}"
+            );
+        }
+        for x in usize::from(MOSAIC_WIDTH)..usize::from(MOSAIC_WIDTH) * 2 {
+            assert_eq!(
+                layer
+                    .resolve_pixel_with_mosaic(x, 0, mosaic)
+                    .map(|p| p.color),
+                Some(GREEN.to_rgb888()),
+                "screen x = {x}"
+            );
+        }
+        for x in usize::from(MOSAIC_WIDTH) * 2..usize::from(MOSAIC_WIDTH) * 3 {
+            assert_eq!(
+                layer
+                    .resolve_pixel_with_mosaic(x, 0, mosaic)
+                    .map(|p| p.color),
+                Some(BLUE.to_rgb888()),
+                "screen x = {x}"
+            );
+        }
+    }
+
+    #[test]
+    fn affine_mosaic_leading_partial_block_holds_the_transform_not_the_footprint_edge() {
+        const SPRITE_X: u16 = 2;
+        const MOSAIC_WIDTH: u8 = 4;
+        const TRANSFORMED_SOURCE_ROW: usize = 2;
+
+        let bytes = bpp4_tile(&[
+            ((0, TRANSFORMED_SOURCE_ROW), YELLOW_INDEX),
+            ((1, TRANSFORMED_SOURCE_ROW), RED_INDEX),
+            ((3, TRANSFORMED_SOURCE_ROW), GREEN_INDEX),
+            ((5, TRANSFORMED_SOURCE_ROW), BLUE_INDEX),
+        ]);
+        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
+        let palette = palette_with_colors(&[
+            (RED_INDEX, RED),
+            (GREEN_INDEX, GREEN),
+            (BLUE_INDEX, BLUE),
+            (YELLOW_INDEX, YELLOW),
+        ]);
+        let entries = [entry(SPRITE_X, 0, true)
+            .with_mosaic(true)
+            .with_affine(AffineMode::Affine { matrix_num: 0 })];
+        let two_times_magnification = AffineMatrix::ONE / 2;
+        let matrices = [AffineMatrix::new(
+            two_times_magnification,
+            0,
+            0,
+            two_times_magnification,
+        )];
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette)
+            .with_affine_matrices(&matrices);
+        let mosaic = MosaicSize::new(MOSAIC_WIDTH, 1);
+
+        for x in usize::from(SPRITE_X)..usize::from(MOSAIC_WIDTH) {
+            assert_eq!(
+                layer
+                    .resolve_pixel_with_mosaic(x, 0, mosaic)
+                    .map(|p| p.color),
+                Some(RED.to_rgb888()),
+                "screen x = {x}"
+            );
+        }
+        for x in usize::from(MOSAIC_WIDTH)..usize::from(MOSAIC_WIDTH) * 2 {
+            assert_eq!(
+                layer
+                    .resolve_pixel_with_mosaic(x, 0, mosaic)
+                    .map(|p| p.color),
+                Some(GREEN.to_rgb888()),
+                "screen x = {x}"
+            );
+        }
+        for x in usize::from(MOSAIC_WIDTH) * 2..usize::from(MOSAIC_WIDTH) * 3 {
+            assert_eq!(
+                layer
+                    .resolve_pixel_with_mosaic(x, 0, mosaic)
+                    .map(|p| p.color),
+                Some(BLUE.to_rgb888()),
+                "screen x = {x}"
+            );
+        }
+    }
+
+    /// A 64x64 texture for a double-size affine sprite whose box ends
+    /// exactly at the Y-space boundary: source row 0 (top) is red, and
+    /// source row 63 (bottom) marks columns 0 and 1 green so both the
+    /// normal color path and the OBJWIN transparency path can distinguish
+    /// "own row" from "forced bottom row".
+    fn wrap_boundary_affine_double_size_texture() -> (Vec<u8>, Palette) {
+        const PIXELS_PER_BYTE: usize = 2;
+        const BITS_PER_PIXEL: usize = 4;
+        const TEXTURE_TILES_PER_ROW: usize = 64 / BitDepth::TILE_DIM;
+        const TILE_COUNT: usize = TEXTURE_TILES_PER_ROW * TEXTURE_TILES_PER_ROW;
+        const TOP_ROW: usize = 0;
+        const BOTTOM_ROW: usize = 63;
+
+        let mut bytes = vec![0u8; TILE_COUNT * BPP4_TILE_BYTES];
+        let mut set_pixel = |x: usize, y: usize, index: u8| {
+            let bytes_per_tile_row = BitDepth::TILE_DIM / PIXELS_PER_BYTE;
+            let tile_index =
+                (y / BitDepth::TILE_DIM) * TEXTURE_TILES_PER_ROW + (x / BitDepth::TILE_DIM);
+            let (local_x, local_y) = (x % BitDepth::TILE_DIM, y % BitDepth::TILE_DIM);
+            let byte = tile_index * BPP4_TILE_BYTES
+                + local_y * bytes_per_tile_row
+                + local_x / PIXELS_PER_BYTE;
+            bytes[byte] |= index << ((local_x % PIXELS_PER_BYTE) * BITS_PER_PIXEL);
+        };
+        set_pixel(0, TOP_ROW, RED_INDEX);
+        set_pixel(0, BOTTOM_ROW, GREEN_INDEX);
+        set_pixel(1, BOTTOM_ROW, GREEN_INDEX);
+
+        (
+            bytes,
+            palette_with_colors(&[(RED_INDEX, RED), (GREEN_INDEX, GREEN)]),
+        )
+    }
+
+    fn wrap_boundary_double_size_affine_entry(y: u8) -> OamEntry {
+        OamEntry::new(
+            0,
+            y,
+            FIRST_TILE,
+            FIRST_PALETTE_BANK,
+            BitDepth::Bpp4,
+            false,
+            false,
+            ObjShape::Square,
+            SIXTY_FOUR_PIXEL_SQUARE_SIZE,
+            HIGHEST_OBJ_PRIORITY,
+            true,
+        )
+        .with_affine(AffineMode::AffineDoubleSize { matrix_num: 0 })
+    }
+
+    fn half_scale_matrix() -> AffineMatrix {
+        let two_times_magnification = AffineMatrix::ONE / 2;
+        AffineMatrix::new(two_times_magnification, 0, 0, two_times_magnification)
+    }
+
+    /// A double-size affine box (128 tall) at raw Y=128 ends exactly at the
+    /// Y-space boundary, the case `OamEntry::floor_dy_to_wrap_boundary_bottom`
+    /// documents.
+    #[test]
+    fn affine_mosaic_box_ending_at_y_space_samples_its_bottom_row() {
+        const RAW_Y: u8 = 128;
+        const VERTICAL_MOSAIC_SIZE: u8 = 2;
+
+        let (bytes, palette) = wrap_boundary_affine_double_size_texture();
+        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
+        let entries = [wrap_boundary_double_size_affine_entry(RAW_Y).with_mosaic(true)];
+        let matrices = [half_scale_matrix()];
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette)
+            .with_affine_matrices(&matrices);
+        let vertical_mosaic = MosaicSize::new(1, VERTICAL_MOSAIC_SIZE);
+
+        assert_eq!(
+            layer.resolve_pixel(0, usize::from(RAW_Y)).map(|p| p.color),
+            Some(RED.to_rgb888()),
+            "without mosaic, the top row samples its own source row"
+        );
+        for y in usize::from(RAW_Y)..Framebuffer::HEIGHT {
+            assert_eq!(
+                layer
+                    .resolve_pixel_with_mosaic(0, y, vertical_mosaic)
+                    .map(|p| p.color),
+                Some(GREEN.to_rgb888()),
+                "screen y = {y}"
+            );
+        }
+    }
+
+    /// The OBJWIN affine path shares `sample_affine_local` with the normal
+    /// affine path, so it must be pinned to the same forced bottom row.
+    #[test]
+    fn affine_objwin_mosaic_box_ending_at_y_space_samples_its_bottom_row() {
+        const RAW_Y: u8 = 128;
+        const SCREEN_X: usize = 2;
+        const VERTICAL_MOSAIC_SIZE: u8 = 2;
+
+        let (bytes, palette) = wrap_boundary_affine_double_size_texture();
+        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
+        let entries = [wrap_boundary_double_size_affine_entry(RAW_Y)
+            .with_mode(ObjMode::Window)
+            .with_mosaic(true)];
+        let matrices = [half_scale_matrix()];
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette)
+            .with_affine_matrices(&matrices);
+        let vertical_mosaic = MosaicSize::new(1, VERTICAL_MOSAIC_SIZE);
+
+        assert!(
+            !layer.objwin_mask(SCREEN_X, usize::from(RAW_Y)),
+            "without mosaic, the top row's source column is transparent"
+        );
+        for y in usize::from(RAW_Y)..Framebuffer::HEIGHT {
+            assert!(
+                layer.objwin_mask_with_mosaic(SCREEN_X, y, vertical_mosaic),
+                "screen y = {y}"
+            );
+        }
+    }
+
+    #[test]
+    fn affine_objwin_mask_ignores_horizontal_obj_mosaic() {
+        const SPRITE_X: u16 = 2;
+        const HORIZONTAL_MOSAIC_SIZE: u8 = 4;
+        const OBSERVED_WIDTH: usize = 16;
+
+        let (bytes, palette) = horizontal_mosaic_fixture();
+        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
+        let entries = [entry(SPRITE_X, 0, true)
+            .with_mode(ObjMode::Window)
+            .with_mosaic(true)
+            .with_affine(AffineMode::Affine { matrix_num: 0 })];
+        let matrices = [AffineMatrix::IDENTITY];
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette)
+            .with_affine_matrices(&matrices);
+        let horizontal_mosaic = MosaicSize::new(HORIZONTAL_MOSAIC_SIZE, 1);
+        for x in 0..OBSERVED_WIDTH {
+            assert_eq!(
+                layer.objwin_mask_with_mosaic(x, 0, horizontal_mosaic),
+                layer.objwin_mask(x, 0),
+                "screen x = {x}"
+            );
+        }
+    }
+
+    #[test]
+    fn regular_objwin_mask_keeps_the_mosaic_rounded_draw_condition() {
+        const SPRITE_X: u16 = 2;
+        const RAW_END_X: usize = 10;
+        const ROUNDED_END_X: usize = 12;
+        const HORIZONTAL_MOSAIC_SIZE: u8 = 4;
+
+        let mut bytes = [0u8; 64];
+        bytes[..32].copy_from_slice(&solid_4bpp_tile(1));
+        bytes[32..].copy_from_slice(&bpp4_tile(&[((0, 0), 1), ((1, 0), 1)]));
+        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
+        let palette = Palette::new([Bgr555::default(); Palette::LEN]);
+        let entries = [entry(SPRITE_X, 0, true)
+            .with_mode(ObjMode::Window)
+            .with_mosaic(true)];
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
+        let mosaic = MosaicSize::new(HORIZONTAL_MOSAIC_SIZE, 1);
+
+        for x in usize::from(SPRITE_X)..RAW_END_X {
+            assert!(layer.objwin_mask_with_mosaic(x, 0, mosaic));
+        }
+        for x in RAW_END_X..ROUNDED_END_X {
+            assert!(layer.objwin_mask_with_mosaic(x, 0, mosaic));
+        }
+        assert!(!layer.objwin_mask_with_mosaic(ROUNDED_END_X, 0, mosaic));
+    }
+
+    #[test]
+    fn flipped_regular_objwin_mask_wraps_the_mosaic_tail_below_the_sprite_tiles() {
+        const SPRITE_TILE_INDEX: u16 = 1;
+        const SPRITE_X: u16 = 2;
+        const RAW_END_X: usize = 10;
+        const OPAQUE_WRAPPED_TAIL_X: usize = 10;
+        const TRANSPARENT_WRAPPED_TAIL_X: usize = 11;
+        const ROUNDED_END_X: usize = 12;
+        const HORIZONTAL_MOSAIC_SIZE: u8 = 4;
+
+        let mut bytes = [0u8; 64];
+        bytes[..32].copy_from_slice(&bpp4_tile(&[((7, 0), 1)]));
+        bytes[32..].copy_from_slice(&solid_4bpp_tile(1));
+        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
+        let palette = Palette::new([Bgr555::default(); Palette::LEN]);
+        let entries = [OamEntry::new(
+            SPRITE_X,
+            0,
+            SPRITE_TILE_INDEX,
+            FIRST_PALETTE_BANK,
+            BitDepth::Bpp4,
+            true,
+            false,
+            ObjShape::Square,
+            EIGHT_PIXEL_SQUARE_SIZE,
+            HIGHEST_OBJ_PRIORITY,
+            true,
+        )
+        .with_mode(ObjMode::Window)
+        .with_mosaic(true)];
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
+        let mosaic = MosaicSize::new(HORIZONTAL_MOSAIC_SIZE, 1);
+
+        for x in usize::from(SPRITE_X)..RAW_END_X {
+            assert!(layer.objwin_mask_with_mosaic(x, 0, mosaic));
+        }
+        assert!(layer.objwin_mask_with_mosaic(OPAQUE_WRAPPED_TAIL_X, 0, mosaic));
+        assert!(!layer.objwin_mask_with_mosaic(TRANSPARENT_WRAPPED_TAIL_X, 0, mosaic));
+        assert!(!layer.objwin_mask_with_mosaic(ROUNDED_END_X, 0, mosaic));
+    }
+
+    #[test]
+    fn regular_objwin_mask_ignores_horizontal_obj_mosaic() {
+        const SPRITE_X: u16 = 2;
+        const HORIZONTAL_MOSAIC_SIZE: u8 = 4;
+        const OBSERVED_WIDTH: usize = 16;
+
+        let (bytes, palette) = horizontal_mosaic_fixture();
+        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
+        let entries = [entry(SPRITE_X, 0, true)
+            .with_mode(ObjMode::Window)
+            .with_mosaic(true)];
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
+        let horizontal_mosaic = MosaicSize::new(HORIZONTAL_MOSAIC_SIZE, 1);
+        for x in 0..OBSERVED_WIDTH {
+            assert_eq!(
+                layer.objwin_mask_with_mosaic(x, 0, horizontal_mosaic),
+                layer.objwin_mask(x, 0),
+                "screen x = {x}"
+            );
+        }
+    }
+
+    #[test]
+    fn objwin_mask_still_applies_vertical_obj_mosaic() {
+        const OPAQUE_SOURCE_ROW: usize = 1;
+        const VERTICAL_MOSAIC_SIZE: u8 = 4;
+
+        let tileset = Tileset::decode(BitDepth::Bpp4, &quadrant_tile()).unwrap();
+        let palette = quadrant_palette();
+        let entries = [entry(0, 0, true)
+            .with_mode(ObjMode::Window)
+            .with_mosaic(true)];
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
+
+        assert!(layer.objwin_mask_with_mosaic(0, OPAQUE_SOURCE_ROW, MosaicSize::NONE));
+        let vertical_mosaic = MosaicSize::new(1, VERTICAL_MOSAIC_SIZE);
+        assert!(!layer.objwin_mask_with_mosaic(0, OPAQUE_SOURCE_ROW, vertical_mosaic));
+    }
+
+    #[test]
+    fn composite_8bpp_sprite_uses_the_flat_palette_and_its_own_tileset() {
+        const FLAT_PALETTE_INDEX: u8 = 200;
+        const IGNORED_4BPP_PALETTE_BANK: u8 = 3;
+
+        let mut bytes = [0u8; BitDepth::Bpp8.tile_byte_len()];
+        bytes[0] = FLAT_PALETTE_INDEX;
+        let tileset_8bpp = Tileset::decode(BitDepth::Bpp8, &bytes).unwrap();
+        let empty_4bpp_tile = [0u8; BPP4_TILE_BYTES];
+        let tileset_4bpp = Tileset::decode(BitDepth::Bpp4, &empty_4bpp_tile).unwrap();
+        let palette = palette_with_colors(&[(FLAT_PALETTE_INDEX, RED)]);
+
+        let entries = [OamEntry::new(
+            0,
+            0,
+            FIRST_TILE,
+            IGNORED_4BPP_PALETTE_BANK,
+            BitDepth::Bpp8,
+            false,
+            false,
+            ObjShape::Square,
+            EIGHT_PIXEL_SQUARE_SIZE,
+            HIGHEST_OBJ_PRIORITY,
+            true,
+        )];
+        let layer = SpriteLayer::new(&entries, &tileset_4bpp, &tileset_8bpp, &palette);
+
+        assert_eq!(
+            layer.resolve_pixel(0, 0).map(|p| p.color),
+            Some(RED.to_rgb888())
+        );
+    }
+
+    /// Regular sampling applies the half-tile offset that
+    /// [`Tileset::obj_pixel_index`] defines, across the decoded tile
+    /// boundary.
+    #[test]
+    fn composite_8bpp_sprite_honours_a_half_tile_offset_across_the_decoded_tile_boundary() {
+        const IGNORED_4BPP_PALETTE_BANK: u8 = 3;
+        const UNUSED_FIRST_TILE_TOP_HALF: u8 = 9;
+        const HALF_TILE_ROW_BYTES: usize = BitDepth::TILE_DIM * (BitDepth::TILE_DIM / 2);
+
+        let mut bytes = [0u8; 2 * BitDepth::Bpp8.tile_byte_len()];
+        bytes[0] = UNUSED_FIRST_TILE_TOP_HALF;
+        bytes[HALF_TILE_ROW_BYTES] = GREEN_INDEX;
+        bytes[BitDepth::Bpp8.tile_byte_len()] = RED_INDEX;
+        let tileset_8bpp = Tileset::decode(BitDepth::Bpp8, &bytes).unwrap();
+        let empty_4bpp_tile = [0u8; BPP4_TILE_BYTES];
+        let tileset_4bpp = Tileset::decode(BitDepth::Bpp4, &empty_4bpp_tile).unwrap();
+        let palette = palette_with_colors(&[(RED_INDEX, RED), (GREEN_INDEX, GREEN)]);
+
+        let entries = [OamEntry::new(
+            0,
+            0,
+            0,
+            IGNORED_4BPP_PALETTE_BANK,
+            BitDepth::Bpp8,
+            false,
+            false,
+            ObjShape::Square,
+            EIGHT_PIXEL_SQUARE_SIZE,
+            HIGHEST_OBJ_PRIORITY,
+            true,
+        )
+        .with_half_tile_offset(true)];
+        let layer = SpriteLayer::new(&entries, &tileset_4bpp, &tileset_8bpp, &palette);
+
+        assert_eq!(
+            layer.resolve_pixel(0, 0).map(|p| p.color),
+            Some(GREEN.to_rgb888()),
+            "row 0 of the offset sprite is row 4 of decoded tile 0"
+        );
+        assert_eq!(
+            layer.resolve_pixel(0, 4).map(|p| p.color),
+            Some(RED.to_rgb888()),
+            "row 4 of the offset sprite is row 0 of decoded tile 1"
+        );
+    }
+
+    const NORMAL_BUDGET_WIDE_ENTRY_CAPACITY: usize = 19;
+    const HBLANK_FREE_BUDGET_WIDE_ENTRY_CAPACITY: usize = 15;
+
+    /// A 64x64 regular entry at the origin, costing 62 admission cycles per
+    /// covered scanline.
+    fn wide_64_regular(tile: u16) -> OamEntry {
+        OamEntry::new(
+            0,
+            0,
+            tile,
+            FIRST_PALETTE_BANK,
+            BitDepth::Bpp4,
+            false,
+            false,
+            ObjShape::Square,
+            SIXTY_FOUR_PIXEL_SQUARE_SIZE,
+            HIGHEST_OBJ_PRIORITY,
+            true,
+        )
+    }
+
+    #[test]
+    fn resolve_pixel_drops_a_late_opaque_sprite_behind_transparent_fillers_once_the_budget_is_exhausted(
+    ) {
+        let (tileset, palette) = opaque_and_transparent_tiles();
+        let filler = wide_64_regular(TRANSPARENT_TILE);
+        let mut entries = vec![filler; NORMAL_BUDGET_WIDE_ENTRY_CAPACITY];
+        entries.push(wide_64_regular(FIRST_TILE));
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
+
+        assert_eq!(
+            layer.resolve_pixel(0, 0),
+            None,
+            "the late opaque sprite at OAM index 19 is past the scanline's cycle budget"
+        );
+
+        let admitted_entries = entries[1..].to_vec();
+        let control_layer = SpriteLayer::new(&admitted_entries, &tileset, &tileset, &palette);
+        assert_eq!(
+            control_layer.resolve_pixel(0, 0).map(|p| p.color),
+            Some(Bgr555::from_channels(0, 0, 0x1F).to_rgb888()),
+            "one fewer filler admits the same opaque entry at OAM index 18"
+        );
+    }
+
+    #[test]
+    fn objwin_mask_drops_a_late_objwin_sprite_once_the_budget_is_exhausted() {
+        let (tileset, palette) = opaque_and_transparent_tiles();
+        let filler = wide_64_regular(TRANSPARENT_TILE);
+        let mut entries = vec![filler; NORMAL_BUDGET_WIDE_ENTRY_CAPACITY];
+        entries.push(wide_64_regular(FIRST_TILE).with_mode(ObjMode::Window));
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
+
+        assert!(!layer.objwin_mask(0, 0));
+
+        let admitted_entries = entries[1..].to_vec();
+        let control_layer = SpriteLayer::new(&admitted_entries, &tileset, &tileset, &palette);
+        assert!(control_layer.objwin_mask(0, 0));
+    }
+
+    #[test]
+    fn with_hblank_free_interval_applies_the_reduced_954_cycle_budget() {
+        let (tileset, palette) = opaque_and_transparent_tiles();
+        let filler = wide_64_regular(TRANSPARENT_TILE);
+        let mut entries = vec![filler; HBLANK_FREE_BUDGET_WIDE_ENTRY_CAPACITY];
+        entries.push(wide_64_regular(FIRST_TILE));
+
+        let normal = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
+        assert!(
+            normal.resolve_pixel(0, 0).is_some(),
+            "OAM index 15 is still within the normal budget's (index 19) cutoff"
+        );
+
+        let hblank_free = SpriteLayer::new(&entries, &tileset, &tileset, &palette)
+            .with_hblank_free_interval(true);
+        assert_eq!(
+            hblank_free.resolve_pixel(0, 0),
+            None,
+            "with_hblank_free_interval must select the reduced budget, dropping OAM index 15"
+        );
+    }
+
+    #[test]
+    fn with_hblank_free_interval_discards_an_already_populated_admission_cache() {
+        let (tileset, palette) = opaque_and_transparent_tiles();
+        let filler = wide_64_regular(TRANSPARENT_TILE);
+        let mut entries = vec![filler; HBLANK_FREE_BUDGET_WIDE_ENTRY_CAPACITY];
+        entries.push(wide_64_regular(FIRST_TILE));
+
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
+        assert!(
+            layer.resolve_pixel(0, 0).is_some(),
+            "populate the cache under the normal 1210-cycle budget first"
+        );
+        let flipped = layer.with_hblank_free_interval(true);
+        assert_eq!(
+            flipped.resolve_pixel(0, 0),
+            None,
+            "a flag flip after use must not serve the stale 1210-cycle admission"
+        );
+    }
+
+    #[test]
+    fn display_and_objwin_queries_share_one_admission_walk_per_scanline() {
+        let (tileset, palette) = opaque_and_transparent_tiles();
+        let entries = vec![
+            wide_64_regular(FIRST_TILE),
+            wide_64_regular(FIRST_TILE).with_mode(ObjMode::Window),
+        ];
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
+
+        crate::oam_budget::reset_walk_count();
+        for x in 0..Framebuffer::WIDTH {
+            let _ = layer.resolve_pixel(x, 0);
+            let _ = layer.objwin_mask(x, 0);
+        }
+        assert_eq!(
+            crate::oam_budget::walk_count(),
+            1,
+            "480 per-pixel calls on one scanline must share a single OAM walk"
+        );
+
+        for x in 0..Framebuffer::WIDTH {
+            let _ = layer.objwin_mask(x, 1);
+            let _ = layer.resolve_pixel(x, 1);
+        }
+        assert_eq!(
+            crate::oam_budget::walk_count(),
+            2,
+            "one further walk for scanline 1, whichever path asks first"
+        );
+
+        let _ = layer.resolve_pixel(0, 0);
+        assert_eq!(crate::oam_budget::walk_count(), 3);
+    }
+
+    fn assert_display_queries_miss(layer: &SpriteLayer<'_>, x: usize, y: usize) {
+        assert_eq!(layer.resolve_pixel(x, y), None);
+        assert_eq!(
+            layer.resolve_pixel_with_mosaic(x, y, MosaicSize::NONE),
+            None
+        );
+    }
+
+    fn assert_objwin_queries_miss(layer: &SpriteLayer<'_>, x: usize, y: usize) {
+        assert!(!layer.objwin_mask(x, y));
+        assert!(!layer.objwin_mask_with_mosaic(x, y, MosaicSize::NONE));
+    }
+
+    #[test]
+    fn queries_at_the_framebuffer_edge_miss_a_sprite_whose_raw_footprint_reaches_past_it() {
+        const STRADDLING_RIGHT_EDGE_X: u16 = 236;
+        const STRADDLING_BOTTOM_EDGE_Y: u8 = 155;
+        const VERTICAL_8X16_SIZE: u8 = 0;
+
+        let (tileset, palette) = opaque_and_transparent_tiles();
+
+        let x_edge_entry = |mode: ObjMode| {
+            OamEntry::new(
+                STRADDLING_RIGHT_EDGE_X,
+                0,
+                FIRST_TILE,
+                0,
+                BitDepth::Bpp4,
+                false,
+                false,
+                ObjShape::Square,
+                0,
+                0,
+                true,
+            )
+            .with_mode(mode)
+        };
+        let x_entries = [x_edge_entry(ObjMode::Normal)];
+        let x_layer = SpriteLayer::new(&x_entries, &tileset, &tileset, &palette);
+        assert!(x_layer.resolve_pixel(Framebuffer::WIDTH - 1, 0).is_some());
+        assert_display_queries_miss(&x_layer, Framebuffer::WIDTH, 0);
+
+        let x_objwin_entries = [x_edge_entry(ObjMode::Window)];
+        let x_objwin_layer = SpriteLayer::new(&x_objwin_entries, &tileset, &tileset, &palette);
+        assert!(x_objwin_layer.objwin_mask(Framebuffer::WIDTH - 1, 0));
+        assert_objwin_queries_miss(&x_objwin_layer, Framebuffer::WIDTH, 0);
+
+        let y_edge_entry = |mode: ObjMode| {
+            OamEntry::new(
+                0,
+                STRADDLING_BOTTOM_EDGE_Y,
+                FIRST_TILE,
+                0,
+                BitDepth::Bpp4,
+                false,
+                false,
+                ObjShape::Vertical,
+                VERTICAL_8X16_SIZE,
+                0,
+                true,
+            )
+            .with_mode(mode)
+        };
+        let y_entries = [y_edge_entry(ObjMode::Normal)];
+        let y_layer = SpriteLayer::new(&y_entries, &tileset, &tileset, &palette);
+        assert!(y_layer.resolve_pixel(0, Framebuffer::HEIGHT - 1).is_some());
+        assert_display_queries_miss(&y_layer, 0, Framebuffer::HEIGHT);
+
+        let y_objwin_entries = [y_edge_entry(ObjMode::Window)];
+        let y_objwin_layer = SpriteLayer::new(&y_objwin_entries, &tileset, &tileset, &palette);
+        assert!(y_objwin_layer.objwin_mask(0, Framebuffer::HEIGHT - 1));
+        assert_objwin_queries_miss(&y_objwin_layer, 0, Framebuffer::HEIGHT);
+    }
+
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn queries_far_outside_the_framebuffer_miss_a_sprite_at_the_origin() {
+        const COORDINATE_THAT_TRUNCATES_TO_ZERO_AS_I32: usize = 1 << 32;
+
+        let (tileset, palette) = opaque_and_transparent_tiles();
+        let entries = [square_8x8(FIRST_TILE, 0, 0)];
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
+        assert!(layer.resolve_pixel(0, 0).is_some());
+
+        for (x, y) in [
+            (COORDINATE_THAT_TRUNCATES_TO_ZERO_AS_I32, 0),
+            (0, COORDINATE_THAT_TRUNCATES_TO_ZERO_AS_I32),
+        ] {
+            assert_display_queries_miss(&layer, x, y);
+        }
+
+        let objwin_entries = [square_8x8(FIRST_TILE, 0, 0).with_mode(ObjMode::Window)];
+        let objwin_layer = SpriteLayer::new(&objwin_entries, &tileset, &tileset, &palette);
+        assert!(objwin_layer.objwin_mask(0, 0));
+        for (x, y) in [
+            (COORDINATE_THAT_TRUNCATES_TO_ZERO_AS_I32, 0),
+            (0, COORDINATE_THAT_TRUNCATES_TO_ZERO_AS_I32),
+        ] {
+            assert_objwin_queries_miss(&objwin_layer, x, y);
+        }
+    }
+}
