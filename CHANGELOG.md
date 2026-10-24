@@ -4,9 +4,13 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 [`RELEASE.md` §Changelog](RELEASE.md#changelog) owns the update policy and entry format. Versions follow the repository's `FINAL.MAJOR.MINOR.PATCH` scheme.
 
-## [0.0.69.0] - 2026-10-24
+## [0.0.70.0] - 2026-10-24
 
 - General improvements in preparation for button icons in dialogue.
+
+## [0.0.69.0] - 2026-10-24
+
+- General improvements in preparation for the Bag screen in the field and in battle.
 
 ## [0.0.68.0] - 2026-10-23
 
@@ -335,6 +339,7 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 - Initial prerelease establishing the repository release path, with an early title screen, new-game introduction, and exploration of the opening area.
 
+[0.0.70.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/ddd60e3efb8065b0d2a4606dbf63545b51174497...dev
 [0.0.69.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/eb737282b387d993825d6b0582e39de77b682582...dev
 [0.0.68.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/974ece58d7d8a70dbaa7afe7f1b00923037faa59...eb737282b387d993825d6b0582e39de77b682582
 [0.0.67.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/f028fc93e4a2205470d2f46150abdc28d4bd5428...974ece58d7d8a70dbaa7afe7f1b00923037faa59
