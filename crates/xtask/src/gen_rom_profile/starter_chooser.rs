@@ -9,6 +9,11 @@
 //! the sheets are `.4bpp.lz` and the tilemaps `.lz`, both LZ77 streams, while
 //! the palettes are raw `.gbapal` runs. The chooser tiles are 4-bit in the
 //! ROM and in the pack, so the located depth needs no split.
+//!
+//! Linkage is read from the same file. A linker map lists only global
+//! symbols, so a root upstream declares `static` is marked
+//! [`SymbolExpectation::Local`] ([`local_symbol`]) and the rest keep the
+//! any-symbol check.
 
 use rom_import::Encoding;
 
@@ -34,6 +39,22 @@ fn ids_under(prefix: &str) -> Vec<String> {
     ids
 }
 
+/// The upstream name of a chooser root declared `static` (so a linker map
+/// cannot list it), or `None` for a global root.
+///
+/// `starter_choose.c:55-56` makes the pokeball-selection and starter-circle
+/// palettes `static`, and `:61` makes the starter-circle sheet `static`. The
+/// bag/grass palette and sheet (`:54,59`), the pokeball-selection sheet
+/// (`:60`) and both tilemaps (`:57-58`) are global.
+fn local_symbol(id: &str) -> Option<&'static str> {
+    match id {
+        "starter-chooser/palette/pokeball_selection" => Some("sPokeballSelection_Pal"),
+        "starter-chooser/palette/starter_circle" => Some("sStarterCircle_Pal"),
+        "starter-chooser/image/starter_circle" => Some("sStarterCircle_Gfx"),
+        _ => None,
+    }
+}
+
 /// Locate every starter-chooser root the checkout expects.
 ///
 /// # Errors
@@ -53,11 +74,14 @@ pub fn locate(
         .into_iter()
         .map(ImageQuery::lz77)
         .collect();
-    Ok(StarterChooserPlan {
+    let first = report.len();
+    let plan = StarterChooserPlan {
         images: locate_images(ctx, &queries, report)?,
         palettes: locate_palettes(ctx, report)?,
         tilemaps: locate_tilemaps(ctx, report)?,
-    })
+    };
+    super::mark_local_roots(&mut report[first..], &local_symbol);
+    Ok(plan)
 }
 
 /// Locate each palette as the raw `.gbapal` run it is.

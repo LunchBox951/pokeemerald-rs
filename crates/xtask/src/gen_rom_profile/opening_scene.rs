@@ -11,6 +11,11 @@
 //! (`src/data/graphics/pokemon.h:1889`) and the other palettes are raw
 //! `.gbapal` runs; the tilemaps are `.lz` streams. The 16-colour banks are
 //! all 4-bit in the ROM and in the pack, so no depth split is needed.
+//!
+//! Linkage is read from the same files. A linker map lists only global
+//! symbols, so a root upstream declares `static` is marked
+//! [`super::plan::SymbolExpectation::Local`] ([`local_symbol`]) and the rest keep the
+//! any-symbol check.
 
 use std::collections::BTreeMap;
 
@@ -42,6 +47,29 @@ fn ids_under(prefix: &str) -> Vec<String> {
     ids
 }
 
+/// The upstream name of a scene root declared `static` (so a linker map
+/// cannot list it), or `None` for a global root.
+///
+/// Static: `main_menu.c:250-257` (`sBirchSpeechBgPals`, whose rows are `bg0`
+/// and `bg1`, then the shadow sheet, the speech tilemap and the `bg2`
+/// gradient), `field_effect.c:245,247` (Birch's sheet and palette) and
+/// `wallclock.c:74-75` (the hand sheet and the text-prompt palette). Global:
+/// `pokemon.h:1888-1889` (Lotad's sheet and palette) and `graphics.c:1350-1354`
+/// (the clock sheet, the male and female palettes, both tilemaps).
+fn local_symbol(id: &str) -> Option<&'static str> {
+    match id {
+        "opening-scene/image/shadow" => Some("sBirchSpeechShadowGfx"),
+        "opening-scene/image/birch" => Some("sNewGameBirch_Gfx"),
+        "opening-scene/image/clock_hand" => Some("sHand_Gfx"),
+        "opening-scene/palette/bg0" | "opening-scene/palette/bg1" => Some("sBirchSpeechBgPals"),
+        "opening-scene/palette/bg2" => Some("sBirchSpeechBgGradientPal"),
+        "opening-scene/palette/birch" => Some("sNewGameBirch_Pal"),
+        "opening-scene/palette/clock_text_prompt" => Some("sTextPrompt_Pal"),
+        "opening-scene/raw/birch_speech_map" => Some("sBirchSpeechBgMap"),
+        _ => None,
+    }
+}
+
 /// Locate every opening-scene root the checkout expects.
 ///
 /// # Errors
@@ -67,11 +95,14 @@ pub fn locate(
             }
         })
         .collect();
-    Ok(OpeningScenePlan {
+    let first = report.len();
+    let plan = OpeningScenePlan {
         images: locate_images(ctx, &queries, report)?,
         palettes: locate_palettes(ctx, report)?,
         tilemaps: locate_tilemaps(ctx, report)?,
-    })
+    };
+    super::mark_local_roots(&mut report[first..], &local_symbol);
+    Ok(plan)
 }
 
 /// Locate each palette under the encoding its symbol is linked with.
