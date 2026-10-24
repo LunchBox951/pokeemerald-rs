@@ -293,3 +293,81 @@ fn malformed_icon_entries_are_rejected_on_lookup() {
         let _ = std::fs::remove_file(path);
     }
 }
+
+fn bag_fault(
+    entries: Vec<Entry>,
+    name: &str,
+    lookup: impl Fn(&AssetPack) -> PackError,
+) -> (String, String) {
+    let (pack, path) = load(name, entries);
+    let error = lookup(&pack);
+    let _ = std::fs::remove_file(path);
+    match error {
+        PackError::MalformedBagAsset { id, detail } => (id, detail),
+        other => panic!("expected MalformedBagAsset, got {other:?}"),
+    }
+}
+
+#[test]
+fn paired_sheet_faults_follow_the_shared_validation_order_and_wording() {
+    // An out-of-range pixel names the sheet in the shared wording.
+    let (id, detail) = bag_fault(
+        replaced("bag/image/male", image("bag/image/male", (64, 384), 16)),
+        "bag-shared-pixel",
+        |pack| pack.bag_assets().unwrap_err(),
+    );
+    assert_eq!(id, "bag/image/male");
+    assert_eq!(
+        detail,
+        "has pixel index 16: outside its palette's 16 colours or 4-bit range"
+    );
+
+    // The palette is checked before pixel indices: a sheet with a bad pixel
+    // paired with a malformed palette reports the palette.
+    let mut entries = replaced("bag/image/male", image("bag/image/male", (64, 384), 16));
+    entries.retain(|e| e.id != "bag/palette/bag");
+    entries.push(palette("bag/palette/bag", 17, 0));
+    let (id, detail) = bag_fault(entries, "bag-shared-order", |pack| {
+        pack.bag_assets().unwrap_err()
+    });
+    assert_eq!(id, "bag/palette/bag");
+    assert_eq!(
+        detail,
+        "declares 17 colours in 34 bytes: expected 16 colours"
+    );
+
+    // A sheet at the wrong depth reports the shared bit-depth wording.
+    let (id, detail) = bag_fault(
+        replaced(
+            "bag/image/male",
+            Entry {
+                id: "bag/image/male",
+                kind_tag: IMAGE_KIND_TAG,
+                meta: image_meta(64, 384, INDEXED_8_BIT),
+                payload: vec![0; 64 * 384],
+            },
+        ),
+        "bag-shared-depth",
+        |pack| pack.bag_assets().unwrap_err(),
+    );
+    assert_eq!(id, "bag/image/male");
+    assert_eq!(detail, "is 8-bit: expected 4-bit");
+
+    // Item icons share the validator.
+    let icon = "bag/item-icon/image/potion";
+    let (id, detail) = bag_fault(
+        replaced(icon, image(icon, (24, 24), 16)),
+        "bag-shared-icon",
+        |pack| {
+            pack.bag_assets()
+                .unwrap()
+                .item_icon(ItemId(13))
+                .unwrap_err()
+        },
+    );
+    assert_eq!(id, icon);
+    assert_eq!(
+        detail,
+        "has pixel index 16: outside its palette's 16 colours or 4-bit range"
+    );
+}
