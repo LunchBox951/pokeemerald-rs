@@ -32,11 +32,13 @@
 //!   here instead of shipping a pack with a hole in it. A domain slice adds
 //!   its prefix when it lands.
 //!
-//! [`PENDING_DOMAIN_PREFIXES`] names the one domain under a complete prefix
-//! whose ROM producer has not landed: the species-cry table and its samples.
-//! Its checkout ids are counted but not required of the ROM backend, and the
-//! producer's slice removes the constant when it lands. Every other `audio/`
-//! id stays compared.
+//! [`staged_cry_ids`] names the one domain under a complete prefix whose ROM
+//! producer has not landed: the species-cry table and exactly the
+//! [`CRY_TABLE_LEN`] distinct samples it names, read from the checkout's own
+//! table. Only those ids are not required of the ROM backend; any other
+//! `audio/` id, including a stray one under the cry prefixes, stays required.
+//! The staging fails as soon as the ROM backend writes any staged id, so the
+//! producer's slice must remove it. Every other `audio/` id stays compared.
 //!
 //! [`REVIEWED_DIFFERENCES`] is the escape hatch for an id the two backends
 //! genuinely cannot agree on. It is empty, and the intent is that it stays
@@ -44,10 +46,11 @@
 //! resolved by making both backends honour upstream's own `-num_colors`
 //! cut rather than by writing the difference down here.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use assets::{Song, VoiceEntry, VoiceGroup};
+use assets::audio::{CRY_TABLE_LEN, CRY_TABLE_PACK_ID};
+use assets::{CryTable, SampleId, Song, VoiceEntry, VoiceGroup};
 use pack_format::{parse_directory, DirectoryEntry, EntryKind, OUTPUT_RELATIVE_PATH};
 
 /// The environment variable naming the ROM to import.
@@ -86,19 +89,36 @@ const BATTLE_INTERFACE_IDS: [&str; 5] = [
     "battle-interface/raw/textbox_map",
 ];
 
-/// Checkout ids under a [`COMPLETE_PREFIXES`] entry whose ROM producer has not
-/// landed: the `audio/cry/table` payload and the cry samples it names.
+/// The checkout ids under a [`COMPLETE_PREFIXES`] entry whose ROM producer
+/// (#1853) has not landed, read from the checkout's `audio/cry/table`
+/// payload: the table itself and exactly the samples it names.
 ///
-/// This is staging, not a reviewed difference: the ROM cry producer removes
-/// it when it lands, so the cry ids are then required like every other
-/// `audio/` id.
-const PENDING_DOMAIN_PREFIXES: &[&str] = &["audio/cry/", "audio/sample/direct-sound/cry/"];
-
-/// Whether `id` belongs to a domain the ROM backend does not produce yet.
-fn is_pending_domain(id: &str) -> bool {
-    PENDING_DOMAIN_PREFIXES
+/// This is staging, not a reviewed difference. The set is pinned to
+/// `1 + CRY_TABLE_LEN` ids, so a table that repeats or drops a sample fails
+/// instead of widening or narrowing the exemption, and the main test fails
+/// once the ROM backend writes any of them, so the producer's slice removes
+/// the staging and the cry ids are then required like every other `audio/`
+/// id.
+///
+/// # Errors
+///
+/// A description of why the payload cannot define the staged set.
+fn staged_cry_ids(table_payload: &[u8]) -> Result<BTreeSet<String>, String> {
+    let table = CryTable::decode(table_payload)
+        .map_err(|err| format!("{CRY_TABLE_PACK_ID} does not decode: {err}"))?;
+    let mut staged: BTreeSet<String> = table
+        .samples()
         .iter()
-        .any(|prefix| id.starts_with(prefix))
+        .map(|SampleId(id)| id.clone())
+        .collect();
+    if staged.len() != CRY_TABLE_LEN {
+        return Err(format!(
+            "{CRY_TABLE_PACK_ID} names {} distinct samples, not {CRY_TABLE_LEN}",
+            staged.len()
+        ));
+    }
+    staged.insert(CRY_TABLE_PACK_ID.to_owned());
+    Ok(staged)
 }
 
 /// The starters' static battler entries: 12 ids the ROM backend must write
@@ -220,6 +240,22 @@ fn the_rom_backend_matches_the_checkout_pack() {
     let reviewed: BTreeMap<&str, &str> = REVIEWED_DIFFERENCES.iter().copied().collect();
     let mut differences = Vec::new();
 
+    let table = checkout
+        .get(CRY_TABLE_PACK_ID)
+        .unwrap_or_else(|| panic!("the checkout pack has no {CRY_TABLE_PACK_ID}"));
+    let staged = staged_cry_ids(&checkout_bytes[table.offset..table.offset + table.length])
+        .unwrap_or_else(|err| panic!("the checkout pack: {err}"));
+    for id in &staged {
+        if !checkout.contains_key(id) {
+            differences.push(format!("{id}: the checkout pack wrote no such entry"));
+        }
+        if imported.contains_key(id) {
+            differences.push(format!(
+                "{id}: the ROM backend now writes this staged cry id; remove the staging (#1853)"
+            ));
+        }
+    }
+
     for (id, entry) in &imported {
         if let Some(reason) = reviewed.get(id.as_str()) {
             eprintln!("reviewed difference: {id}: {reason}");
@@ -239,7 +275,7 @@ fn the_rom_backend_matches_the_checkout_pack() {
             .iter()
             .any(|prefix| id.starts_with(prefix));
         if claimed
-            && !is_pending_domain(id)
+            && !staged.contains(id)
             && !imported.contains_key(id)
             && !reviewed.contains_key(id.as_str())
         {
@@ -291,12 +327,28 @@ fn the_rom_backend_matches_the_checkout_pack() {
     );
 }
 
+/// A cry table payload naming `samples` in order.
+fn cry_table_payload(samples: Vec<String>) -> Vec<u8> {
+    CryTable::new(samples.into_iter().map(SampleId).collect())
+        .expect("a valid cry table")
+        .encode()
+}
+
+/// The staged set is the table and exactly the samples it names; no other id
+/// under a cry prefix, and no instrument sample, is staged.
 #[test]
-fn only_the_cry_domain_is_pending() {
-    for id in ["audio/cry/table", "audio/sample/direct-sound/cry/groudon"] {
-        assert!(is_pending_domain(id), "{id}");
+fn only_the_cry_table_and_its_samples_are_staged() {
+    let samples: Vec<String> = (0..CRY_TABLE_LEN)
+        .map(|position| format!("audio/sample/direct-sound/cry/c{position}"))
+        .collect();
+    let staged = staged_cry_ids(&cry_table_payload(samples)).expect("388 distinct samples");
+    assert_eq!(staged.len(), CRY_TABLE_LEN + 1);
+    for id in ["audio/cry/table", "audio/sample/direct-sound/cry/c0"] {
+        assert!(staged.contains(id), "{id}");
     }
     for id in [
+        "audio/cry/table_reverse",
+        "audio/sample/direct-sound/cry/unnamed",
         "audio/sample/direct-sound/sc88pro_flute",
         "audio/sample/direct-sound/cryptic",
         "audio/sample/programmable-wave/01",
@@ -304,8 +356,19 @@ fn only_the_cry_domain_is_pending() {
         "audio/song/mus_title",
         "title/image/pokemon_logo",
     ] {
-        assert!(!is_pending_domain(id), "{id}");
+        assert!(!staged.contains(id), "{id}");
     }
+}
+
+/// A table that repeats a sample cannot shrink the pinned staged count.
+#[test]
+fn a_cry_table_with_a_repeated_sample_does_not_define_the_staged_set() {
+    let mut samples: Vec<String> = (0..CRY_TABLE_LEN)
+        .map(|position| format!("audio/sample/direct-sound/cry/c{position}"))
+        .collect();
+    samples[1] = samples[0].clone();
+    let err = staged_cry_ids(&cry_table_payload(samples)).unwrap_err();
+    assert!(err.contains("387 distinct samples"), "{err}");
 }
 
 /// The pinned battle-interface ids are exactly the profile's roots, and no
