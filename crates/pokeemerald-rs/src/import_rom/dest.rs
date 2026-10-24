@@ -347,7 +347,10 @@ pub(super) fn restore_owner_access(file: &File) -> io::Result<()> {
 
 /// Off Unix a file has no owner mode bits to restore.
 #[cfg(not(unix))]
-#[allow(clippy::unnecessary_wraps)]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "the Unix twin is fallible, so callers see one signature on every target"
+)]
 pub(super) fn restore_owner_access(_file: &File) -> io::Result<()> {
     Ok(())
 }
