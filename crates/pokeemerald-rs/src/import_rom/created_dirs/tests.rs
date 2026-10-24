@@ -339,6 +339,8 @@ fn a_destination_with_dotdot_levels_pins_every_directory_it_actually_creates() {
     // component: 11 lexical levels but 6 real directories, the injected
     // budget.
     let dir = TempDir::new("dotdot-budget");
+    // The `..` climbs land `final` beside `d`, so record its name too.
+    let _ = dir.join("final");
     let pin_limit = 6;
     let mut level = dir.join("d");
     for _ in 1..5 {
@@ -806,6 +808,8 @@ fn a_full_table_after_acquisition_still_syncs_every_shed_parent() {
         return;
     }
     let dir = TempDir::new("shed-parent-full-table");
+    // Every level hangs off `l0`, the one name the fixture must remove.
+    let _ = dir.join("l0");
     let paths: Vec<_> = ["l0", "l1", "l2", "l3"]
         .iter()
         .scan(dir.path.clone(), |path, name| {

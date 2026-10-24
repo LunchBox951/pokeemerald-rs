@@ -61,6 +61,8 @@ fn a_pack_directory_spelled_through_dotdot_still_imports() {
     // only an already-real ancestor `create_directories`'s Unix arm has to
     // recognize rather than mistake for an unnameable failure.
     let dir = TempDir::new("dotdot-level");
+    // The `..` lands the pack beside `missing`, so record its name too.
+    let _ = dir.join("pokeemerald.pack");
     let pack_path = dir.join("missing").join("..").join("pokeemerald.pack");
 
     let source = SourceRom::new("dotdot-level-src");
@@ -156,7 +158,7 @@ fn a_non_utf8_pack_name_is_published_byte_for_byte() {
 
     let dir = TempDir::new("non-utf8-name");
     let name = OsStr::from_bytes(b"pok\xe9mon.pack");
-    let pack_path = dir.path.join(name);
+    let pack_path = dir.join(name);
 
     let source = SourceRom::new("non-utf8-name-src");
     let outcome = import_to_with(source.path(), &pack_path, |_rom, _path| {
