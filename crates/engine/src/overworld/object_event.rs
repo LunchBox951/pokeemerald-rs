@@ -5,8 +5,9 @@
 //! authored templates when none is bound.
 //! [`ObjectEventState`] is the movable position/elevation/facing/movement representation a caller
 //! holds, either as a standalone script-local copy or, via [`ObjectEventCollection`], as one entry
-//! in a map-scoped collection keyed by `local_id`. Collision and interaction read the collection;
-//! rendering and sight still consult the static templates this module also exposes.
+//! in a map-scoped collection keyed by `local_id`. Overworld rendering, collision, and
+//! interaction read the collection's live state; sight still consults the static templates this
+//! module also exposes.
 
 use assets::{MovementType, ObjectEvent};
 
@@ -55,8 +56,15 @@ const SPAWN_MAX_Y_OFFSET: i64 = 9;
 /// outside the window are simply out of view rather than an overflow.
 #[must_use]
 pub fn object_event_is_in_view(event: &ObjectEvent, player_position: (i32, i32)) -> bool {
-    let x_offset = i64::from(event.x) - i64::from(player_position.0);
-    let y_offset = i64::from(event.y) - i64::from(player_position.1);
+    tile_is_in_view((i32::from(event.x), i32::from(event.y)), player_position)
+}
+
+/// [`object_event_is_in_view`] for an object's current tile rather than its authored one.
+/// Offsets are taken in `i64`, so every `i32` tile and player position is a total query.
+#[must_use]
+pub fn tile_is_in_view(tile: (i32, i32), player_position: (i32, i32)) -> bool {
+    let x_offset = i64::from(tile.0) - i64::from(player_position.0);
+    let y_offset = i64::from(tile.1) - i64::from(player_position.1);
     (SPAWN_MIN_X_OFFSET..=SPAWN_MAX_X_OFFSET).contains(&x_offset)
         && (SPAWN_MIN_Y_OFFSET..=SPAWN_MAX_Y_OFFSET).contains(&y_offset)
 }
@@ -228,9 +236,9 @@ pub const fn trainer_facing_movement_type(facing: Direction) -> MovementType {
 ///
 /// Template overrides remain inside this value. A map runtime observes them only through an
 /// [`ObjectEventCollection`] bound to it, which then answers collision and interaction queries
-/// from each object's live position and elevation; an unbound runtime still reads the authored
-/// template coordinates. Walking commits the destination immediately, while the owning script or
-/// collection entry tracks animation time.
+/// from each object's live position and elevation and feeds overworld rendering; an unbound
+/// runtime still reads the authored template coordinates. Walking commits the destination
+/// immediately, while the owning script or collection entry tracks animation time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ObjectEventState {
     position: TilePos,
