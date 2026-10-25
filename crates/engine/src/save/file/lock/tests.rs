@@ -1066,3 +1066,88 @@ fn a_parent_retargeted_to_a_fifo_mid_lock_does_not_block() {
         "no guard may be issued over a FIFO parent"
     );
 }
+
+/// A direct write at the lock path is refused before it stages anything, so
+/// the inode a live guard holds is never replaced and no second locker is
+/// admitted alongside it.
+#[cfg(unix)]
+#[test]
+fn a_direct_write_at_the_lock_path_is_refused_and_leaves_the_lock_inode_alone() {
+    use std::os::unix::fs::MetadataExt;
+
+    let dir = TempDir::new("write-over-the-held-lock");
+    let guard = SaveFile::at(dir.join("game.sav"))
+        .lock()
+        .expect("A's guard");
+    let before = std::fs::metadata(dir.join(LOCK_FILE_NAME)).unwrap();
+    let entries_before = entry_names(&dir);
+
+    let at_lock = SaveFile::at(dir.join(LOCK_FILE_NAME));
+    match at_lock.write(&saved_store().0) {
+        Err(SaveFileError::LockPathIsSave { path }) => assert_eq!(path, at_lock.lock_path()),
+        other => panic!("a write at the lock path must be refused, got {other:?}"),
+    }
+
+    let after = std::fs::metadata(dir.join(LOCK_FILE_NAME)).unwrap();
+    assert_eq!(
+        (before.dev(), before.ino(), before.len()),
+        (after.dev(), after.ino(), after.len()),
+        "the lock entry must be the same untouched inode"
+    );
+    assert_eq!(entry_names(&dir), entries_before, "nothing may be staged");
+    let reopened = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(dir.join(LOCK_FILE_NAME))
+        .unwrap();
+    assert!(
+        reopened.try_lock().is_err(),
+        "a second locker must still be excluded while A holds its guard"
+    );
+    drop(guard);
+}
+
+/// With no lock file yet there is nobody to exclude, but the write is still
+/// refused by name, and it creates neither the lock file nor a staged image.
+#[test]
+fn a_direct_write_at_an_absent_lock_path_is_refused_without_creating_anything() {
+    let dir = TempDir::new("write-at-an-absent-lock");
+    let at_lock = SaveFile::at(dir.join(LOCK_FILE_NAME));
+
+    match at_lock.write(&saved_store().0) {
+        Err(SaveFileError::LockPathIsSave { .. }) => {}
+        other => panic!("a write at the lock path must be refused, got {other:?}"),
+    }
+    assert!(entry_names(&dir).is_empty(), "the refusal precedes staging");
+}
+
+/// The refusal recognises the lock entry by identity as well as by name, as
+/// [`SaveFile::lock`] does: a hard link under another name resolves to it.
+#[cfg(unix)]
+#[test]
+fn a_direct_write_at_another_name_for_the_lock_file_is_refused_too() {
+    let dir = TempDir::new("write-at-a-lock-alias");
+    let guard = SaveFile::at(dir.join("game.sav"))
+        .lock()
+        .expect("A's guard");
+    let linked = SaveFile::at(dir.join("linked.sav"));
+    std::fs::hard_link(dir.join(LOCK_FILE_NAME), linked.path()).unwrap();
+    let entries_before = entry_names(&dir);
+
+    match linked.write(&saved_store().0) {
+        Err(SaveFileError::LockPathIsSave { path }) => assert_eq!(path, linked.lock_path()),
+        other => panic!("a write resolving to the lock file must be refused, got {other:?}"),
+    }
+    assert_eq!(entry_names(&dir), entries_before, "nothing may be staged");
+    drop(guard);
+}
+
+/// The names in `dir`, sorted.
+fn entry_names(dir: &TempDir) -> Vec<std::ffi::OsString> {
+    let mut names: Vec<_> = std::fs::read_dir(&dir.path)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    names.sort();
+    names
+}

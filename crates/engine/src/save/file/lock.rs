@@ -269,6 +269,74 @@ impl SaveFile {
         Ok(save == lock)
     }
 
+    /// Refuses a save path that is this directory's lock entry, by name and,
+    /// where the host allows, by identity, before a write stages anything:
+    /// [`SaveFile::write`] renames an image over the save path, so a write at
+    /// the lock entry would replace the inode every locker holds. No guard is
+    /// needed to ask, and nothing is opened, created, or locked to answer.
+    ///
+    /// # Errors
+    ///
+    /// [`SaveFileError::LockPathIsSave`] if the save path is the lock entry
+    /// or resolves to the same file; [`SaveFileError::Lock`] if either could
+    /// not be inspected.
+    pub(super) fn refuse_the_lock_entry(&self) -> Result<(), SaveFileError> {
+        let lock = self.lock_path();
+        let is_lock =
+            self.path.file_name() == lock.file_name() || self.resolves_to_lock_entry(&lock)?;
+        if is_lock {
+            return Err(SaveFileError::LockPathIsSave { path: lock });
+        }
+        Ok(())
+    }
+
+    /// Whether this save path is the inode of the entry at `lock`, by
+    /// `st_dev`/`st_ino` as the `unix` [`SaveFile::resolves_to`] does but
+    /// from the unopened entry. Either one missing means they are not the
+    /// same file.
+    ///
+    /// # Errors
+    ///
+    /// [`SaveFileError::Lock`] if either entry exists but could not be
+    /// inspected.
+    #[cfg(unix)]
+    fn resolves_to_lock_entry(&self, lock: &Path) -> Result<bool, SaveFileError> {
+        use std::os::unix::fs::MetadataExt;
+
+        let Some(save) = self.metadata_following_links()? else {
+            return Ok(false);
+        };
+        match std::fs::symlink_metadata(lock) {
+            Ok(slot) => Ok((slot.dev(), slot.ino()) == (save.dev(), save.ino())),
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(source) => Err(SaveFileError::Lock {
+                path: lock.to_path_buf(),
+                source,
+            }),
+        }
+    }
+
+    /// As the `unix` [`SaveFile::resolves_to_lock_entry`], comparing
+    /// canonical paths as the non-`unix` [`SaveFile::resolves_to`] does.
+    #[cfg(not(unix))]
+    fn resolves_to_lock_entry(&self, lock: &Path) -> Result<bool, SaveFileError> {
+        let Some(_) = self.metadata_following_links()? else {
+            return Ok(false);
+        };
+        let canonical = |path: &Path| match std::fs::canonicalize(path) {
+            Ok(resolved) => Ok(Some(resolved)),
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(source) => Err(SaveFileError::Lock {
+                path: path.to_path_buf(),
+                source,
+            }),
+        };
+        Ok(match (canonical(&self.path)?, canonical(lock)?) {
+            (Some(save), Some(lock)) => save == lock,
+            _ => false,
+        })
+    }
+
     /// This save's metadata, following a final symlink, or `None` when no
     /// file is there yet.
     ///
