@@ -554,5 +554,37 @@ fn retiring_from_a_low_clock_leaves_no_idle_tail() {
     );
 }
 
+/// A note that retires on its first pass still wrote the width-only `NR43`
+/// in the start block (`m4a.c:1020-1022`) but jumps to `oscillator_off` past the
+/// pitched `NR43` (`m4a.c:1197-1202`), so `CgbOscOff` restarts channel 4 at the
+/// width-only rate and the first idle sample clocks the latch low at volume 0.
+#[test]
+fn an_immediately_retiring_noise_note_leaves_the_width_only_rate() {
+    let retiring = CgbAdsr {
+        attack: 0,
+        decay: 0,
+        sustain: 0,
+        release: 0,
+    };
+    for width in [WIDE_NOISE, NARROW_NOISE] {
+        let mut mixer = crate::mixer::Mixer::default();
+        assert!(mixer.add_cgb_voice(noise_voice_latched(CgbAdsr::flat(), SLOW_NOISE_KEY, width)));
+        mixer.stop_track(0);
+        assert!(mixer.add_cgb_voice(noise_voice_at(retiring, SLOW_NOISE_KEY, width)));
+        let mut out = vec![0.0f32; crate::SAMPLES_PER_FRAME * 2];
+        mixer.mix_frame(&mut out);
+        assert_eq!(
+            mixer.voice_count(),
+            0,
+            "sanity: the note retired on its first pass"
+        );
+        assert_mixed(
+            out[crate::SAMPLES_PER_FRAME * 2 - 2],
+            expected_mixed(0, 0),
+            &format!("the width-only rate settles the off-write latch (width {width})"),
+        );
+    }
+}
+
 #[path = "cgb_voice_noise_replacement.rs"]
 mod replacement_tests;

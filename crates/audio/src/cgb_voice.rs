@@ -584,7 +584,8 @@ impl CgbVoice {
         }
         let hardware_write = retriggered_by_note_off || retriggered_by_transition;
         if initial_trigger {
-            self.oscillator.commit_initial_writes();
+            self.oscillator
+                .commit_initial_writes(!self.envelope.is_active());
         }
         if hardware_write || initial_trigger {
             self.apply_retrigger();
