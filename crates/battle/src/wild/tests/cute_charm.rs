@@ -1,14 +1,3 @@
-//! Cute Charm wild-encounter tests.
-//!
-//! These pin the lead's Cute Charm gender forcing in `build_wild_pokemon`,
-//! which follows `CreateWildMon` (`pokeemerald/src/wild_encounter.c:386-398`)
-//! and the non-Unown arm of `CreateMonWithGenderNatureLetter`
-//! (`pokeemerald/src/pokemon.c:2335-2343`): the activation roll and its draw
-//! order against the Synchronize coin flip, the rejection loop that keeps both
-//! the requested nature and gender, and the species and requests that spend no
-//! activation draw. They reuse the fixtures and imports of the parent `wild`
-//! test module.
-
 use super::*;
 
 const RATTATA: SpeciesId = SpeciesId(19);
@@ -16,7 +5,6 @@ const NIDORAN_FEMALE: SpeciesId = SpeciesId(29);
 const NIDORAN_MALE: SpeciesId = SpeciesId(32);
 const MAGNEMITE: SpeciesId = SpeciesId(81);
 
-/// Rattata's ratio byte is 127, so a personality is female below a low byte of 127.
 const RATTATA_FEMALE_PERSONALITY: u32 = 0;
 const RATTATA_MALE_PERSONALITY: u32 = 150;
 const HP_AND_SPECIAL_ATTACK_IV_DRAWS: [u16; 2] = [0x001F, 0x03E0];

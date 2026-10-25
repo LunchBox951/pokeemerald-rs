@@ -80,7 +80,6 @@ const NAME_TILE: i32 = 8;
 /// key items, balls, TMs and HMs, berries (`item_menu_icons.c:58-101`).
 const BAG_FRAMES: [usize; 5] = [1, 3, 4, 5, 2];
 const SELECTOR_ARROW: &str = "▶";
-const QUANTITY_PREFIX: char = '×';
 /// Context-choice window cells (`item_menu.c:452-489`): tile rectangles by
 /// grid shape, each column half the window.
 const CELL_WIDTH: i32 = 56;
@@ -299,7 +298,7 @@ impl BagScreen {
             };
             let text = self
                 .chrome
-                .narrow_text(&format!("{QUANTITY_PREFIX}{quantity:>digits$}"));
+                .narrow_text(&labels::quantity_text(quantity, digits));
             let x = QUANTITY_RIGHT_EDGE - width_of(&text);
             draw_glyphs(fb, LIST_ORIGIN, LIST_SIZE, (x, y), &text, &colors);
         }
