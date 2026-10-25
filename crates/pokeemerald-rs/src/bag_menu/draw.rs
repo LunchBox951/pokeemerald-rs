@@ -1,12 +1,12 @@
 //! Composes the bag screen over a supplied frame.
 
-use engine::bag_menu::{BagContextGrid, BagMenuRow, BROWSE_ORDER};
+use engine::bag_menu::{BagContextGrid, BagMenuRow, BROWSE_ORDER, POCKET_COUNT};
 use engine::text::render::RevealedGlyph;
 use rendering::{Framebuffer, Rgb888};
 
 use super::chrome::width_of;
 use super::labels;
-use super::BagScreen;
+use super::{BagScreen, PocketSwitch, SwitchDirection, SWITCH_WIPE_TICKS};
 
 /// The list window's content rectangle, in pixels (`sDefaultBagWindows`,
 /// `item_menu.c:393-402`: 15x16 tiles at tile (14, 2)).
@@ -51,11 +51,35 @@ const INDICATOR_ROW: usize = 3;
 const INDICATOR_FIRST_COLUMN: usize = 5;
 const INDICATOR_IDLE_ENTRY: u16 = 0x1017;
 const INDICATOR_CURRENT_ENTRY: u16 = 0x102B;
+/// The sheet frame of the closed bag, shown while a switch bobs it
+/// (`SetBagVisualPocketId`, `item_menu_icons.c:446-458`).
+const BAG_CLOSED_FRAME: usize = 0;
+/// The closed bag starts 5 above its place and settles one row a tick, then
+/// the destination's picture replaces it (`SpriteCB_BagVisualSwitchingPockets`).
+const BAG_BOB_START: i32 = -5;
+/// The rotating ball's sprite centre, its corner offset, and its turn per
+/// tick in 1/256 turns, for 16 ticks (`item_menu_icons.c:156-224,497-532`).
+const BALL_CENTRE: i32 = 16;
+const BALL_CORNER: i32 = -8;
+const BALL_TURN: u8 = 8;
+const BALL_TICKS: u8 = 16;
+/// The list background the switch wipes, in tiles (`item_menu.c:1344,1405-1409`):
+/// painted over with the dark tile, then restored one row a tick.
+const WIPE_LEFT: usize = 14;
+const WIPE_TOP: usize = 2;
+const WIPE_WIDTH: usize = 15;
+const WIPE_ROWS: usize = 16;
+const WIPE_COVER_ENTRY: u16 = 11;
+const WIPE_RESTORE_ENTRY: u16 = 17;
+/// The pocket-name strip holds two names side by side, each as wide as the
+/// window, and the switch slides the window across it one tile every two
+/// ticks (`item_menu.c:1334-1341,2429-2442`).
+const NAME_SLIDE_TILES: i32 = 8;
+const NAME_TILE: i32 = 8;
 /// Sheet frame per browse index: the sheet orders its frames closed, items,
 /// key items, balls, TMs and HMs, berries (`item_menu_icons.c:58-101`).
 const BAG_FRAMES: [usize; 5] = [1, 3, 4, 5, 2];
 const SELECTOR_ARROW: &str = "▶";
-const QUANTITY_PREFIX: char = '×';
 /// Context-choice window cells (`item_menu.c:452-489`): tile rectangles by
 /// grid shape, each column half the window.
 const CELL_WIDTH: i32 = 56;
@@ -70,7 +94,15 @@ impl BagScreen {
             return base;
         }
         self.chrome.draw_background(&mut base);
-        self.draw_pocket_header(&mut base);
+        if let Some(switch) = self.switch {
+            self.draw_switching(&mut base, switch);
+            return base;
+        }
+        let current = self.pocket_index();
+        self.chrome
+            .draw_bag(&mut base, BAG_ORIGIN, BAG_FRAMES[current]);
+        self.draw_pocket_indicators(&mut base, current);
+        self.draw_pocket_names(&mut base, (current, None), 0);
         self.draw_list(&mut base);
         self.draw_selection(&mut base);
         if let Some(grid) = self.menu.context_grid() {
@@ -79,12 +111,81 @@ impl BagScreen {
         base
     }
 
-    fn draw_pocket_header(&self, fb: &mut Framebuffer) {
-        let current = BROWSE_ORDER
+    fn pocket_index(&self) -> usize {
+        BROWSE_ORDER
             .iter()
             .position(|&pocket| pocket == self.menu.pocket())
-            .unwrap_or(0);
-        self.chrome.draw_bag(fb, BAG_ORIGIN, BAG_FRAMES[current]);
+            .unwrap_or(0)
+    }
+
+    /// The screen between a pocket press and the new list: the list wiped,
+    /// the bag bobbing, the ball turning, and the names sliding across. The
+    /// engine is still on the pocket being left, so the destination is
+    /// worked out from it.
+    fn draw_switching(&self, fb: &mut Framebuffer, switch: PocketSwitch) {
+        let current = self.pocket_index();
+        let destination = match switch.direction {
+            SwitchDirection::Left => (current + POCKET_COUNT - 1) % POCKET_COUNT,
+            SwitchDirection::Right => (current + 1) % POCKET_COUNT,
+        };
+        self.draw_list_wipe(fb, switch.ticks);
+        self.draw_switching_bag(fb, switch.ticks, destination);
+        self.draw_pocket_indicators(fb, destination);
+        let slid = i32::from(switch.ticks.min(SWITCH_WIPE_TICKS) / 2);
+        match switch.direction {
+            SwitchDirection::Right => {
+                self.draw_pocket_names(fb, (current, Some(destination)), slid * NAME_TILE);
+            }
+            SwitchDirection::Left => {
+                let offset = (NAME_SLIDE_TILES - slid) * NAME_TILE;
+                self.draw_pocket_names(fb, (destination, Some(current)), offset);
+            }
+        }
+        self.draw_rotating_ball(fb, switch);
+    }
+
+    fn draw_list_wipe(&self, fb: &mut Framebuffer, ticks: u8) {
+        let restored = usize::from(ticks).min(WIPE_ROWS);
+        for row in 0..WIPE_ROWS {
+            let entry = if row < restored {
+                WIPE_RESTORE_ENTRY
+            } else {
+                WIPE_COVER_ENTRY
+            };
+            for column in 0..WIPE_WIDTH {
+                self.chrome
+                    .draw_tile(fb, (WIPE_LEFT + column, WIPE_TOP + row), entry);
+            }
+        }
+    }
+
+    fn draw_switching_bag(&self, fb: &mut Framebuffer, ticks: u8, destination: usize) {
+        let bob = BAG_BOB_START + 1 + i32::from(ticks);
+        if bob <= 0 {
+            let origin = (BAG_ORIGIN.0, BAG_ORIGIN.1 + bob);
+            self.chrome.draw_bag(fb, origin, BAG_CLOSED_FRAME);
+        } else {
+            self.chrome
+                .draw_bag(fb, BAG_ORIGIN, BAG_FRAMES[destination]);
+        }
+    }
+
+    /// The ball turns half a turn over 16 ticks, left counter-clockwise. Its
+    /// corner alternates a pixel each tick (`UpdateSwitchPocketRotatingBallCoords`).
+    fn draw_rotating_ball(&self, fb: &mut Framebuffer, switch: PocketSwitch) {
+        if switch.ticks >= BALL_TICKS {
+            return;
+        }
+        let turned = BALL_TURN * (switch.ticks + 1);
+        let angle = match switch.direction {
+            SwitchDirection::Left => turned,
+            SwitchDirection::Right => turned.wrapping_neg(),
+        };
+        let corner = BALL_CENTRE + BALL_CORNER - i32::from((switch.ticks + 1) & 1);
+        self.chrome.draw_ball(fb, (corner, corner), angle);
+    }
+
+    fn draw_pocket_indicators(&self, fb: &mut Framebuffer, current: usize) {
         for index in 0..BROWSE_ORDER.len() {
             let entry = if index == current {
                 INDICATOR_CURRENT_ENTRY
@@ -94,16 +195,31 @@ impl BagScreen {
             self.chrome
                 .draw_tile(fb, (INDICATOR_FIRST_COLUMN + index, INDICATOR_ROW), entry);
         }
-        let name = self.chrome.normal_text(labels::pocket_name(current));
-        let centred = (POCKET_NAME_WIDTH - width_of(&name)) / 2;
-        draw_glyphs(
-            fb,
-            POCKET_NAME_ORIGIN,
-            POCKET_NAME_SIZE,
-            (centred, 1),
-            &name,
-            &self.chrome.window_text_colors(),
-        );
+    }
+
+    /// Draws the name strip scrolled `offset` pixels: the first name centred
+    /// in the window, the second centred in the half beyond it.
+    fn draw_pocket_names(&self, fb: &mut Framebuffer, names: (usize, Option<usize>), offset: i32) {
+        let second = names.1.map(|pocket| (pocket, POCKET_NAME_WIDTH));
+        for (pocket, base) in std::iter::once((names.0, 0)).chain(second) {
+            let glyphs = self.chrome.normal_text(labels::pocket_name(pocket));
+            let x = base + (POCKET_NAME_WIDTH - width_of(&glyphs)) / 2 - offset;
+            let placed: Vec<RevealedGlyph> = glyphs
+                .into_iter()
+                .map(|mut glyph| {
+                    glyph.x += x;
+                    glyph
+                })
+                .collect();
+            draw_glyphs(
+                fb,
+                POCKET_NAME_ORIGIN,
+                POCKET_NAME_SIZE,
+                (0, 1),
+                &placed,
+                &self.chrome.window_text_colors(),
+            );
+        }
     }
 
     fn draw_list(&self, fb: &mut Framebuffer) {
@@ -194,7 +310,7 @@ impl BagScreen {
             };
             let text = self
                 .chrome
-                .narrow_text(&format!("{QUANTITY_PREFIX}{quantity:>digits$}"));
+                .narrow_text(&labels::quantity_text(quantity, digits));
             let x = QUANTITY_RIGHT_EDGE - width_of(&text);
             draw_glyphs(fb, LIST_ORIGIN, LIST_SIZE, (x, y), &text, &colors);
         }
