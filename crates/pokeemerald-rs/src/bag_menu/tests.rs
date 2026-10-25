@@ -15,21 +15,21 @@ use super::{
     BagScreenResult, BagScreenTick,
 };
 
-const LIST_X: usize = 112;
-const LIST_Y: usize = 17;
-const ROW: usize = 16;
+pub(super) const LIST_X: usize = 112;
+pub(super) const LIST_Y: usize = 17;
+pub(super) const ROW: usize = 16;
 const ICON_PIXEL: (usize, usize) = (24, 88);
 const BAG_PIXEL: (usize, usize) = (68, 66);
 const DESCRIPTION_Y: usize = 104;
 const SHOWN_BASE: Rgb888 = Rgb888 { r: 7, g: 77, b: 7 };
 
-fn press(button: Buttons) -> ButtonState {
+pub(super) fn press(button: Buttons) -> ButtonState {
     let mut state = ButtonState::new();
     state.update(button);
     state
 }
 
-fn sample_bag() -> Bag {
+pub(super) fn sample_bag() -> Bag {
     let mut bag = Bag::default();
     assert!(bag.add_item(ItemId::POTION, 5));
     assert!(bag.add_item(ItemId::ANTIDOTE, 2));
@@ -46,7 +46,7 @@ fn open_with(request: BagScreenRequest, bag: &Bag) -> BagScreen {
     open_from_pack(&bag_pack("screen"), bag, request).expect("the synthetic pack opens")
 }
 
-fn frame_of(screen: &BagScreen) -> Framebuffer {
+pub(super) fn frame_of(screen: &BagScreen) -> Framebuffer {
     let mut base = Framebuffer::new();
     base.fill(SHOWN_BASE);
     screen.compose_over(base)
@@ -57,7 +57,14 @@ fn at(fb: &Framebuffer, x: usize, y: usize) -> Rgb888 {
 }
 
 /// Whether any pixel of a region is `color`.
-fn painted(fb: &Framebuffer, x: usize, y: usize, w: usize, h: usize, color: Rgb888) -> bool {
+pub(super) fn painted(
+    fb: &Framebuffer,
+    x: usize,
+    y: usize,
+    w: usize,
+    h: usize,
+    color: Rgb888,
+) -> bool {
     (y..y + h).any(|row| (x..x + w).any(|col| at(fb, col, row) == color))
 }
 

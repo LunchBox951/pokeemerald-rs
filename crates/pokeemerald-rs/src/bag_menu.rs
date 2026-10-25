@@ -356,6 +356,8 @@ fn all_stacks(menu: &BagMenu) -> Vec<BagStack> {
 }
 
 #[cfg(test)]
+mod glyph_tests;
+#[cfg(test)]
 mod pack_fixture;
 #[cfg(test)]
 mod tests;
