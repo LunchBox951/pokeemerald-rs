@@ -13,6 +13,8 @@ enum LfsrWidth {
 impl LfsrWidth {
     const WIDE_FEEDBACK_BIT: u16 = 1 << 14;
     const NARROW_FEEDBACK_BIT: u16 = 1 << 6;
+    const WIDE_PERIOD: u64 = 32_767;
+    const NARROW_PERIOD: u64 = 127;
 
     fn feedback_bits(self) -> u16 {
         Self::WIDE_FEEDBACK_BIT
@@ -20,6 +22,29 @@ impl LfsrWidth {
                 Self::FifteenBit => 0,
                 Self::SevenBit => Self::NARROW_FEEDBACK_BIT,
             }
+    }
+
+    /// The LFSR transitions that leave the state and the last-feedback latch
+    /// exactly as `owed` transitions would.
+    ///
+    /// Complementing the register makes every transition linear over GF(2)
+    /// with a primitive feedback polynomial, so the 15-bit register repeats
+    /// every 32_767 transitions from any state (`0x7FFF` is a fixed point).
+    /// In 7-bit mode bits 0..=6 run on their own with period 127, and bits
+    /// 7..=14 are the previous eight feedbacks, so the whole register repeats
+    /// every 127 transitions once eight have run. The width is fixed for the
+    /// whole catch-up, so one modulus applies throughout. A non-empty replay
+    /// stays non-empty because the latch comes from the last transition.
+    fn replayed_shifts(self, owed: u64) -> u64 {
+        let (settle, period) = match self {
+            Self::FifteenBit => (1, Self::WIDE_PERIOD),
+            Self::SevenBit => (8, Self::NARROW_PERIOD),
+        };
+        if owed < settle {
+            owed
+        } else {
+            settle + (owed - settle) % period
+        }
     }
 }
 
@@ -76,6 +101,9 @@ pub struct NoiseChannel {
     /// The predecessor's running hardware, held until this channel's note-on
     /// writes commit; a replacement cancelled first never consumes it.
     inherited: Option<InheritedHardware>,
+    /// LFSR transitions executed, for the bounded catch-up regressions.
+    #[cfg(test)]
+    shifts_run: u64,
 }
 
 /// A replaced noise channel's clock state and the hardware volume it ran at.
@@ -100,6 +128,8 @@ impl NoiseChannel {
             centre: 0,
             clocking: true,
             inherited: None,
+            #[cfg(test)]
+            shifts_run: 0,
         }
     }
 
@@ -120,8 +150,15 @@ impl NoiseChannel {
         if !self.clocking {
             return;
         }
-        while self.elapsed >= self.period {
-            self.elapsed -= self.period;
+        self.clock_owed(volume);
+    }
+
+    /// Clocks every whole period in `elapsed`, replaying at most one LFSR
+    /// cycle however many a retune left owed (`LfsrWidth::replayed_shifts`).
+    fn clock_owed(&mut self, volume: u8) {
+        let owed = self.elapsed / self.period;
+        self.elapsed -= owed * self.period;
+        for _ in 0..self.width.replayed_shifts(owed) {
             self.shift_lfsr(volume);
         }
     }
@@ -225,6 +262,10 @@ impl NoiseChannel {
     }
 
     fn shift_lfsr(&mut self, volume: u8) {
+        #[cfg(test)]
+        {
+            self.shifts_run += 1;
+        }
         let feedback_is_high = (self.lfsr ^ (self.lfsr >> 1)) & 1 == 0;
         let feedback_bits = self.width.feedback_bits();
         self.lfsr = (self.lfsr >> 1) & !feedback_bits;
@@ -253,10 +294,7 @@ impl NoiseChannel {
             return self.level;
         }
         self.elapsed += TICKS_PER_SAMPLE;
-        while self.elapsed >= self.period {
-            self.elapsed -= self.period;
-            self.shift_lfsr(volume);
-        }
+        self.clock_owed(volume);
         self.level
     }
 
@@ -268,6 +306,9 @@ impl NoiseChannel {
 }
 
 const NOISE_UNIT_VOLUME: u8 = 1;
+
+#[cfg(test)]
+mod catch_up_tests;
 
 #[cfg(test)]
 mod tests {
