@@ -1151,3 +1151,18 @@ fn entry_names(dir: &TempDir) -> Vec<std::ffi::OsString> {
     names.sort();
     names
 }
+
+/// A case-insensitive volume (macOS, Windows) treats `.EMERALD.LOCK` as the
+/// one `.emerald.lock` entry, so an absent ASCII-case alias of the lock name
+/// is refused before staging, as staging refuses case aliases of the save.
+#[test]
+fn a_direct_write_at_an_absent_case_folded_lock_path_is_refused() {
+    let dir = TempDir::new("write-at-a-case-folded-lock");
+    let at_lock = SaveFile::at(dir.join(&LOCK_FILE_NAME.to_ascii_uppercase()));
+
+    match at_lock.write(&saved_store().0) {
+        Err(SaveFileError::LockPathIsSave { .. }) => {}
+        other => panic!("a write at a case alias of the lock path must be refused, got {other:?}"),
+    }
+    assert!(entry_names(&dir).is_empty(), "the refusal precedes staging");
+}

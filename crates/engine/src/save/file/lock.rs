@@ -269,11 +269,12 @@ impl SaveFile {
         Ok(save == lock)
     }
 
-    /// Refuses a save path that is this directory's lock entry, by name and,
-    /// where the host allows, by identity, before a write stages anything:
-    /// [`SaveFile::write`] renames an image over the save path, so a write at
-    /// the lock entry would replace the inode every locker holds. No guard is
-    /// needed to ask, and nothing is opened, created, or locked to answer.
+    /// Refuses a save path that is this directory's lock entry, by name (ASCII
+    /// case folded) and, where the host allows, by identity, before a write
+    /// stages anything: [`SaveFile::write`] renames an image over the save
+    /// path, so a write at the lock entry would replace the inode every
+    /// locker holds. No guard is needed to ask, and nothing is opened,
+    /// created, or locked to answer.
     ///
     /// # Errors
     ///
@@ -282,8 +283,16 @@ impl SaveFile {
     /// not be inspected.
     pub(super) fn refuse_the_lock_entry(&self) -> Result<(), SaveFileError> {
         let lock = self.lock_path();
-        let is_lock =
-            self.path.file_name() == lock.file_name() || self.resolves_to_lock_entry(&lock)?;
+        // The name is compared with ASCII case folded, as staging does for
+        // the save: a case-insensitive volume names the one lock entry by
+        // every spelling, and an absent spelling has no identity to compare.
+        let names_the_lock = match (self.path.file_name(), lock.file_name()) {
+            (Some(save), Some(lock)) => save
+                .as_encoded_bytes()
+                .eq_ignore_ascii_case(lock.as_encoded_bytes()),
+            _ => false,
+        };
+        let is_lock = names_the_lock || self.resolves_to_lock_entry(&lock)?;
         if is_lock {
             return Err(SaveFileError::LockPathIsSave { path: lock });
         }
