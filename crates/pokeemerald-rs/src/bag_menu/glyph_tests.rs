@@ -7,7 +7,7 @@ use platform::Buttons;
 use rendering::Framebuffer;
 
 use super::pack_fixture::{entries_with_marked_narrow_glyphs, load, BAG_TEXT};
-use super::tests::{frame_of, painted, press, sample_bag, LIST_X, LIST_Y, ROW};
+use super::tests::{frame_of, painted, sample_bag, switch_pocket, LIST_X, LIST_Y, ROW};
 use super::{open_from_pack, BagScreen, BagScreenMode, BagScreenRequest};
 
 /// The window-local x of every pixel column of list row `row` that the narrow
@@ -25,7 +25,7 @@ fn marked_screen(marked: &[usize], bag: &Bag, pockets_right: usize) -> BagScreen
     let mut screen = open_from_pack(&pack, bag, BagScreenRequest::new(BagScreenMode::Field))
         .expect("the synthetic pack opens");
     for _ in 0..pockets_right {
-        screen.tick(press(Buttons::RIGHT));
+        switch_pocket(&mut screen, Buttons::RIGHT);
     }
     screen
 }
