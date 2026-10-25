@@ -18,12 +18,12 @@ use rom_import::Encoding;
 
 use super::error::GenRomProfileError;
 use super::images::{locate_images, ImageQuery};
-use super::locate::{camel_case, exactly_one, slice_at_addr};
+use super::locate::{camel_case, slice_at_addr};
+use super::lz77_blobs::locate_lz77_blobs;
 use super::palettes::locate_unique;
 use super::plan::{
     BlobPlan, PalettePlan, ReportLine, Resolution, SymbolExpectation, TitleScreenPlan,
 };
-use super::tilesets::len32;
 use super::Context;
 
 /// The pack id of the palette upstream cuts short.
@@ -65,26 +65,12 @@ fn locate_tilemaps(
     report: &mut Vec<ReportLine>,
 ) -> Result<Vec<BlobPlan>, GenRomProfileError> {
     let ids = ctx.pack.ids_with_prefix("title/raw/");
-    let mut needles = Vec::with_capacity(ids.len());
-    for id in &ids {
-        needles.push(ctx.pack.raw_payload(id)?.to_vec());
-    }
-    let hits = ctx.lz77.find_all(&needles);
-
-    let mut plans = Vec::with_capacity(ids.len());
-    for (index, id) in ids.iter().enumerate() {
-        let addr = exactly_one(id, &hits[index])?;
-        let len = len32(ctx.pack.raw_payload(id)?);
-        let name = camel_case(id.trim_start_matches("title/raw/"));
-        report.push(ReportLine::unique(id, addr, len).with_symbol(tilemap_symbol(&name)));
-        plans.push(BlobPlan {
-            id: id.clone(),
-            addr,
-            encoding: Encoding::Lz77,
-            len,
-        });
-    }
-    Ok(plans)
+    locate_lz77_blobs(
+        ctx,
+        &ids,
+        &|id| tilemap_symbol(&camel_case(id.trim_start_matches("title/raw/"))),
+        report,
+    )
 }
 
 /// What a linker map should say at the tilemap named `name` (CamelCase).
