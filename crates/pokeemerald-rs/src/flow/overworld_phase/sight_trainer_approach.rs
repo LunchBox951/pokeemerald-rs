@@ -213,6 +213,12 @@ impl SightApproach {
         &self.trainer
     }
 
+    /// The already-constructed fight, for tests that pin its party.
+    #[cfg(test)]
+    pub(super) const fn battle(&self) -> &battle::Battle {
+        &self.battle
+    }
+
     /// Test-only: jump straight to the intro message's
     /// `waitmessage`/`waitbuttonpress` half, as though the box had already
     /// been opened.
