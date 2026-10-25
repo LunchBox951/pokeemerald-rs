@@ -1,6 +1,9 @@
 //! The text-window palette table is accepted only in the importer's order.
 
 use std::fmt::Write as _;
+use std::fs::File;
+use std::io::Write as _;
+use std::path::{Path, PathBuf};
 
 use pack_format::{image_entry_from_tiles, palette_entry, PackEntry};
 use rom_import::fixture::RomFixture;
@@ -183,6 +186,131 @@ fn line<'a>(report: &'a [ReportLine], id: &str) -> &'a ReportLine {
         .unwrap_or_else(|| panic!("no report line for {id}"))
 }
 
+/// A scratch directory and map file this fixture created itself, so cleanup
+/// can spare any entry that is not the one it made.
+///
+/// The map's handle stays open until cleanup: an unlinked file's identity can
+/// be reissued to a replacement, but not while a handle to it is open.
+struct OwnedMap {
+    dir: PathBuf,
+    path: PathBuf,
+    file: Option<File>,
+}
+
+impl OwnedMap {
+    /// Claim a fresh `0700` directory under `base` and create the map in it.
+    ///
+    /// The directory name is only a hint: `create_dir` fails on any existing
+    /// entry (a planted symlink included), so the fixture moves to the next
+    /// candidate instead of adopting a path it did not create.
+    fn create_in(base: &Path, name: &str, contents: &str) -> std::io::Result<Self> {
+        for attempt in 0.. {
+            let dir = Self::candidate(base, name, attempt);
+            match Self::create_private_dir(&dir) {
+                Ok(()) => return Self::create_map(dir, contents),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error),
+            }
+        }
+        unreachable!("the attempt counter is unbounded")
+    }
+
+    fn candidate(base: &Path, name: &str, attempt: u32) -> PathBuf {
+        base.join(format!(
+            "pokeemerald-rs-gen-rom-profile-{name}-{}-{attempt}",
+            std::process::id()
+        ))
+    }
+
+    fn create_private_dir(dir: &Path) -> std::io::Result<()> {
+        let mut builder = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+        builder.create(dir)
+    }
+
+    /// Create the map in the just-claimed `dir`, removing the directory again
+    /// if that fails so a failed claim leaves nothing behind.
+    fn create_map(dir: PathBuf, contents: &str) -> std::io::Result<Self> {
+        let path = dir.join("pokeemerald.map");
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        let mut file = match options.open(&path) {
+            Ok(file) => file,
+            Err(error) => {
+                let _ = std::fs::remove_dir(&dir);
+                return Err(error);
+            }
+        };
+        if let Err(error) = file.write_all(contents.as_bytes()) {
+            // The file is ours: `create_new` just made it.
+            drop(file);
+            let _ = std::fs::remove_file(&path);
+            let _ = std::fs::remove_dir(&dir);
+            return Err(error);
+        }
+        Ok(Self {
+            dir,
+            path,
+            file: Some(file),
+        })
+    }
+
+    /// Remove the map only if it is still `file`, the one this fixture
+    /// created; a replacement is left where it is.
+    ///
+    /// Checking the entry and then unlinking it by name would leave a window
+    /// for a swap, so the entry is first renamed to a name only this cleanup
+    /// uses inside the private directory: rename takes whatever sits at the
+    /// path in one step, and the identity check and the unlink then act on
+    /// that moved entry. The residual window is a mismatch: the replacement is
+    /// absent from the map path until the no-clobber `hard_link` puts it back,
+    /// and a same-user process that guesses the aside name could swap it. A
+    /// replacement is never unlinked either way, so the cost is a stray entry
+    /// that makes the final `remove_dir` fail, which is accepted for a test
+    /// fixture whose scratch directory is mode 0700.
+    #[cfg(unix)]
+    fn remove_owned_map(&self, file: &File) {
+        use std::os::unix::fs::MetadataExt as _;
+        let aside = self.dir.join("pokeemerald.map.cleanup");
+        if std::fs::rename(&self.path, &aside).is_err() {
+            return;
+        }
+        let (Ok(created), Ok(moved)) = (file.metadata(), std::fs::symlink_metadata(&aside)) else {
+            return;
+        };
+        let ours = (created.dev(), created.ino()) == (moved.dev(), moved.ino());
+        // Only the fixture's own file, or a replacement already back at the
+        // map path, may lose its aside name.
+        if ours || std::fs::hard_link(&aside, &self.path).is_ok() {
+            let _ = std::fs::remove_file(&aside);
+        }
+    }
+
+    #[cfg(windows)]
+    fn remove_owned_map(&self, file: &File) {
+        if let Ok(identity) = win_fs::WindowsFileIdentity::of(file) {
+            let _ = win_fs::remove_through_verified_handle(&self.path, identity);
+        }
+    }
+
+    /// Without a way to prove ownership the map is left in place.
+    #[cfg(not(any(unix, windows)))]
+    fn remove_owned_map(&self, _file: &File) {}
+}
+
+impl Drop for OwnedMap {
+    fn drop(&mut self) {
+        if let Some(file) = self.file.take() {
+            self.remove_owned_map(&file);
+        }
+        // `remove_dir` refuses a directory that still holds a spared entry.
+        let _ = std::fs::remove_dir(&self.dir);
+    }
+}
+
 /// Run `report` through the production cross-check against a map shaped like
 /// GNU ld `-Map` output: only the global symbols in `globals` are listed.
 fn cross_check_against(
@@ -190,22 +318,14 @@ fn cross_check_against(
     globals: &[(&str, u32)],
     report: &mut [ReportLine],
 ) -> Result<crate::gen_rom_profile::MapCheck, GenRomProfileError> {
-    let dir = std::env::temp_dir().join(format!(
-        "pokeemerald-rs-gen-rom-profile-{name}-{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).expect("scratch directory");
-    let map_path = dir.join("pokeemerald.map");
     let mut map = String::from(".rodata         0x0000000008000000       0x20\n");
     for (symbol, addr) in globals {
         writeln!(map, "               0x{addr:016x}                {symbol}")
             .expect("string write");
     }
-    std::fs::write(&map_path, map).expect("write map");
-    let result = crate::gen_rom_profile::cross_check(Some(&map_path), report);
-    let _ = std::fs::remove_file(&map_path);
-    let _ = std::fs::remove_dir(&dir);
-    result
+    let fixture =
+        OwnedMap::create_in(&std::env::temp_dir(), name, &map).expect("claim the map fixture");
+    crate::gen_rom_profile::cross_check(Some(&fixture.path), report)
 }
 
 fn global_symbols(report: &[ReportLine]) -> Vec<(&'static str, u32)> {
@@ -360,4 +480,83 @@ fn a_short_message_box_bank_is_refused() {
         GenRomProfileError::StructMismatch { id, .. } => assert_eq!(id, DUPLICATED_PALETTE),
         other => panic!("expected StructMismatch, got {other}"),
     }
+}
+
+/// A base directory the test owns, so planted entries never touch the shared
+/// temp directory.
+#[cfg(unix)]
+fn private_base(name: &str) -> OwnedMap {
+    OwnedMap::create_in(&std::env::temp_dir(), name, "").expect("claim the base fixture")
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlink_planted_at_the_predictable_path_is_not_written_through() {
+    let base = private_base("tw-planted-base");
+    let victim = base.dir.join("victim");
+    std::fs::write(&victim, "precious").expect("write victim");
+    let planted = OwnedMap::candidate(&base.dir, "tw-planted", 0);
+    std::os::unix::fs::symlink(&victim, &planted).expect("plant symlink");
+
+    let fixture = OwnedMap::create_in(&base.dir, "tw-planted", "map text").expect("claim");
+    let claimed = fixture.dir.clone();
+    let victim_text = std::fs::read_to_string(&victim).expect("read victim");
+    drop(fixture);
+    let planted_survives = std::fs::symlink_metadata(&planted).is_ok();
+
+    std::fs::remove_file(&planted).expect("unplant");
+    std::fs::remove_file(&victim).expect("remove victim");
+    assert_ne!(claimed, planted, "the fixture adopted the planted path");
+    assert_eq!(victim_text, "precious");
+    assert!(planted_survives, "cleanup removed the planted symlink");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_planted_directory_at_the_predictable_path_keeps_its_map() {
+    let base = private_base("tw-existing-base");
+    let existing = OwnedMap::candidate(&base.dir, "tw-existing", 0);
+    std::fs::create_dir(&existing).expect("plant directory");
+    let existing_map = existing.join("pokeemerald.map");
+    std::fs::write(&existing_map, "user map").expect("plant map");
+
+    let fixture = OwnedMap::create_in(&base.dir, "tw-existing", "map text").expect("claim");
+    drop(fixture);
+    let kept = std::fs::read_to_string(&existing_map);
+
+    std::fs::remove_file(&existing_map).expect("remove planted map");
+    std::fs::remove_dir(&existing).expect("remove planted directory");
+    assert_eq!(kept.expect("planted map survives"), "user map");
+}
+
+#[cfg(unix)]
+#[test]
+fn the_claimed_directory_is_private_and_the_map_holds_the_text() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let base = private_base("tw-private");
+    let mode = std::fs::metadata(&base.dir)
+        .expect("dir")
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o700);
+    let fixture = OwnedMap::create_in(&base.dir, "tw-text", "map text").expect("claim");
+    assert_eq!(
+        std::fs::read_to_string(&fixture.path).expect("map"),
+        "map text"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn cleanup_spares_an_entry_that_replaced_the_map() {
+    let fixture = private_base("tw-replaced");
+    let (dir, path) = (fixture.dir.clone(), fixture.path.clone());
+    std::fs::remove_file(&path).expect("unlink the fixture's map");
+    std::fs::write(&path, "replacement").expect("plant replacement");
+    drop(fixture);
+
+    let spared = std::fs::read_to_string(&path);
+    std::fs::remove_file(&path).expect("remove replacement");
+    std::fs::remove_dir(&dir).expect("remove directory");
+    assert_eq!(spared.expect("replacement survives cleanup"), "replacement");
 }
