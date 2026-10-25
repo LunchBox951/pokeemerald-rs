@@ -30,6 +30,10 @@ pub(super) const BAG_TEXT: Rgb888 = INDICATOR_IDLE;
 pub(super) const HM_MARK: Rgb888 = rgb(5, 5, 5);
 /// Screen palette bank 1 index 3, the shadow of list and description text.
 pub(super) const NORMAL_SHADOW: Rgb888 = rgb(0, 20, 0);
+/// Screen palette bank 1 index 3 is also the gray cursor's text colour, and
+/// index 6 is its shadow (`COLORID_GRAY_CURSOR`, `item_menu.c:388`).
+pub(super) const GRAY_CURSOR_TEXT: Rgb888 = NORMAL_SHADOW;
+pub(super) const GRAY_CURSOR_SHADOW: Rgb888 = rgb(0, 0, 20);
 pub(super) const BACKGROUND: Rgb888 = rgb(0, 10, 10);
 
 const fn rgb(r: u8, g: u8, b: u8) -> Rgb888 {
@@ -137,6 +141,7 @@ fn screen_entries() -> Vec<PackEntry> {
         (18, Bgr555::from_channels(20, 0, 0)),
         (19, Bgr555::from_channels(0, 20, 0)),
         (20, Bgr555::from_channels(5, 5, 5)),
+        (22, Bgr555::from_channels(0, 0, 20)),
     ];
     vec![
         pack_format::image_entry(

@@ -29,6 +29,8 @@ const BANK_COLORS: usize = 16;
 const WINDOW_TEXT_INDEX: usize = 1;
 const WINDOW_SHADOW_INDEX: usize = 4;
 const NORMAL_SHADOW_INDEX: usize = 3;
+const GRAY_CURSOR_TEXT_INDEX: usize = 3;
+const GRAY_CURSOR_SHADOW_INDEX: usize = 6;
 /// Stands in a label for `{NO}`, the extra-symbol glyph `F9 08`.
 pub(super) const NO_SYMBOL: char = '\u{E008}';
 const NO_EXTRA_SYMBOL: u8 = 0x08;
@@ -244,18 +246,25 @@ impl BagChrome {
     /// The pocket-name colours: screen palette bank 1 index 1 text over index 4
     /// shadow (`COLORID_POCKET_NAME`, `item_menu.c:387`).
     pub(super) fn window_text_colors(&self) -> [Option<Rgb888>; 4] {
-        self.bank_1_colors(WINDOW_SHADOW_INDEX)
+        self.bank_1_colors(WINDOW_TEXT_INDEX, WINDOW_SHADOW_INDEX)
     }
 
     /// The list, cursor, and description colours (`COLORID_NORMAL`,
     /// `item_menu.c:386`): bank 1 index 1 text over index 3 shadow.
     pub(super) fn normal_text_colors(&self) -> [Option<Rgb888>; 4] {
-        self.bank_1_colors(NORMAL_SHADOW_INDEX)
+        self.bank_1_colors(WINDOW_TEXT_INDEX, NORMAL_SHADOW_INDEX)
     }
 
-    fn bank_1_colors(&self, shadow: usize) -> [Option<Rgb888>; 4] {
+    /// The list cursor's colours while a context menu is open
+    /// (`COLORID_GRAY_CURSOR`, `item_menu.c:388`): bank 1 index 3 text over
+    /// index 6 shadow.
+    pub(super) fn gray_cursor_colors(&self) -> [Option<Rgb888>; 4] {
+        self.bank_1_colors(GRAY_CURSOR_TEXT_INDEX, GRAY_CURSOR_SHADOW_INDEX)
+    }
+
+    fn bank_1_colors(&self, text: usize, shadow: usize) -> [Option<Rgb888>; 4] {
         let color = |index: usize| self.screen_palette.get(BANK_COLORS + index).copied();
-        [None, color(WINDOW_TEXT_INDEX), color(shadow), None]
+        [None, color(text), color(shadow), None]
     }
 
     /// The message-box glyph colours every list and window text uses.
