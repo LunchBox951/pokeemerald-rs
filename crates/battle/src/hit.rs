@@ -27,50 +27,28 @@ use crate::secondary::{
     spend_effect_chance_draw, SecondaryApplication,
 };
 
-const EFFECT_HIT: MoveEffect = MoveEffect(0);
-const EFFECT_SPEED_UP: MoveEffect = MoveEffect(12);
-const EFFECT_SPECIAL_DEFENSE_UP: MoveEffect = MoveEffect(14);
-const EFFECT_ACCURACY_UP: MoveEffect = MoveEffect(15);
-const EFFECT_ALWAYS_HIT: MoveEffect = MoveEffect(17);
-const EFFECT_SPECIAL_ATTACK_DOWN: MoveEffect = MoveEffect(21);
-const EFFECT_SPECIAL_DEFENSE_DOWN: MoveEffect = MoveEffect(22);
-const EFFECT_HIGH_CRITICAL: MoveEffect = MoveEffect(43);
-const EFFECT_ACCURACY_UP_2: MoveEffect = MoveEffect(55);
-const EFFECT_EVASION_UP_2: MoveEffect = MoveEffect(56);
-const EFFECT_SPECIAL_ATTACK_DOWN_2: MoveEffect = MoveEffect(61);
-const EFFECT_ACCURACY_DOWN_2: MoveEffect = MoveEffect(63);
-const EFFECT_EVASION_DOWN_2: MoveEffect = MoveEffect(64);
-const EFFECT_EVASION_DOWN_HIT: MoveEffect = MoveEffect(74);
-const EFFECT_VITAL_THROW: MoveEffect = MoveEffect(78);
-const EFFECT_UNUSED_60: MoveEffect = MoveEffect(96);
-const EFFECT_QUICK_ATTACK: MoveEffect = MoveEffect(103);
-const EFFECT_UNUSED_6E: MoveEffect = MoveEffect(110);
-const EFFECT_UNUSED_83: MoveEffect = MoveEffect(131);
-const EFFECT_UNUSED_8D: MoveEffect = MoveEffect(141);
-const EFFECT_UNUSED_A3: MoveEffect = MoveEffect(163);
-
 const ORDINARY_HIT_EFFECTS: [MoveEffect; 21] = [
-    EFFECT_HIT,
-    EFFECT_SPEED_UP,
-    EFFECT_SPECIAL_DEFENSE_UP,
-    EFFECT_ACCURACY_UP,
-    EFFECT_ALWAYS_HIT,
-    EFFECT_SPECIAL_ATTACK_DOWN,
-    EFFECT_SPECIAL_DEFENSE_DOWN,
-    EFFECT_HIGH_CRITICAL,
-    EFFECT_ACCURACY_UP_2,
-    EFFECT_EVASION_UP_2,
-    EFFECT_SPECIAL_ATTACK_DOWN_2,
-    EFFECT_ACCURACY_DOWN_2,
-    EFFECT_EVASION_DOWN_2,
-    EFFECT_EVASION_DOWN_HIT,
-    EFFECT_VITAL_THROW,
-    EFFECT_UNUSED_60,
-    EFFECT_QUICK_ATTACK,
-    EFFECT_UNUSED_6E,
-    EFFECT_UNUSED_83,
-    EFFECT_UNUSED_8D,
-    EFFECT_UNUSED_A3,
+    MoveEffect::HIT,
+    MoveEffect::SPEED_UP,
+    MoveEffect::SPECIAL_DEFENSE_UP,
+    MoveEffect::ACCURACY_UP,
+    MoveEffect::ALWAYS_HIT,
+    MoveEffect::SPECIAL_ATTACK_DOWN,
+    MoveEffect::SPECIAL_DEFENSE_DOWN,
+    MoveEffect::HIGH_CRITICAL,
+    MoveEffect::ACCURACY_UP_2,
+    MoveEffect::EVASION_UP_2,
+    MoveEffect::SPECIAL_ATTACK_DOWN_2,
+    MoveEffect::ACCURACY_DOWN_2,
+    MoveEffect::EVASION_DOWN_2,
+    MoveEffect::EVASION_DOWN_HIT,
+    MoveEffect::VITAL_THROW,
+    MoveEffect::UNUSED_60,
+    MoveEffect::QUICK_ATTACK,
+    MoveEffect::UNUSED_6E,
+    MoveEffect::UNUSED_83,
+    MoveEffect::UNUSED_8D,
+    MoveEffect::UNUSED_A3,
 ];
 
 const CRITICAL_DAMAGE_MULTIPLIER: u32 = 2;

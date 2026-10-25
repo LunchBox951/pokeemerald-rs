@@ -17,10 +17,9 @@ use rom_import::Encoding;
 
 use super::error::GenRomProfileError;
 use super::images::{locate_images, ImageQuery};
-use super::locate::exactly_one;
+use super::lz77_blobs::locate_lz77_blobs;
 use super::palettes::{locate_unique, locate_unique_as};
 use super::plan::{BattleInterfacePlan, BlobPlan, PalettePlan, ReportLine, SymbolExpectation};
-use super::tilesets::len32;
 use super::Context;
 
 const IMAGE_PREFIX: &str = "battle-interface/image/";
@@ -106,26 +105,12 @@ fn locate_tilemaps(
     ctx: &Context<'_>,
     report: &mut Vec<ReportLine>,
 ) -> Result<Vec<BlobPlan>, GenRomProfileError> {
-    let ids = ids_under(TILEMAP_PREFIX);
-    let mut needles = Vec::with_capacity(ids.len());
-    for id in &ids {
-        needles.push(ctx.pack.raw_payload(id)?.to_vec());
-    }
-    let hits = ctx.lz77.find_all(&needles);
-
-    let mut plans = Vec::with_capacity(ids.len());
-    for (index, id) in ids.iter().enumerate() {
-        let addr = exactly_one(id, &hits[index])?;
-        let len = len32(&needles[index]);
-        report.push(ReportLine::unique(id, addr, len).symbol(TILEMAP_SYMBOL));
-        plans.push(BlobPlan {
-            id: id.clone(),
-            addr,
-            encoding: Encoding::Lz77,
-            len,
-        });
-    }
-    Ok(plans)
+    locate_lz77_blobs(
+        ctx,
+        &ids_under(TILEMAP_PREFIX),
+        &|_| SymbolExpectation::Exact(TILEMAP_SYMBOL.to_owned()),
+        report,
+    )
 }
 
 #[cfg(test)]

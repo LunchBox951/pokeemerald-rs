@@ -966,7 +966,8 @@ mod pipeline_agreement_tests {
     use crate::damage::STRUGGLE;
 
     /// Independent expectation: every supported effect and its pipeline.
-    /// Effects absent here are unsupported.
+    /// Effects absent here are unsupported. Raw IDs on purpose: this numeric
+    /// table-mapping contract shares no constants with the classifier.
     const EXPECTED: &[(&[u8], MovePipeline)] = &[
         (
             &[
@@ -1027,6 +1028,7 @@ mod pipeline_agreement_tests {
 
     #[test]
     fn every_effect_maps_to_the_expected_pipeline() {
+        // Raw sweep of every effect byte against the raw `EXPECTED` table.
         for raw in u8::MIN..=u8::MAX {
             let effect = MoveEffect(raw);
             let candidate = MovePipeline::candidate_for_effect(effect).0;
