@@ -170,25 +170,32 @@ impl NoiseChannel {
     /// elapsed time at the width-only rate, all at the predecessor's volume.
     /// The latch that results is what the trigger leaves in place
     /// (`audio.c:371-383`).
-    pub fn commit_initial_writes(&mut self) {
-        let Some(InheritedHardware {
-            mut channel,
-            volume,
-        }) = self.inherited.take()
-        else {
-            return;
-        };
-        channel.settle_owed_clocks(volume);
+    ///
+    /// A note that `retires_on_first_pass` reaches `oscillator_off` from the
+    /// start block (`m4a.c:1040,1125-1129,1090-1102`) before the pitched `NR43` write
+    /// (`m4a.c:1197-1202`), so the channel keeps the width-only rate the start
+    /// block wrote for the off-write to restart.
+    pub fn commit_initial_writes(&mut self, retires_on_first_pass: bool) {
         let width_only = if self.width == LfsrWidth::SevenBit {
             NoiseControl::WIDTH_BIT
         } else {
             0
         };
-        channel.width = self.width;
-        channel.retune(width_only);
-        channel.settle_owed_clocks(volume);
-        self.level = channel.level;
-        self.centre = channel.centre;
+        if let Some(InheritedHardware {
+            mut channel,
+            volume,
+        }) = self.inherited.take()
+        {
+            channel.settle_owed_clocks(volume);
+            channel.width = self.width;
+            channel.retune(width_only);
+            channel.settle_owed_clocks(volume);
+            self.level = channel.level;
+            self.centre = channel.centre;
+        }
+        if retires_on_first_pass {
+            self.retune(width_only);
+        }
     }
 
     /// Re-resolves the latch at an envelope step as
