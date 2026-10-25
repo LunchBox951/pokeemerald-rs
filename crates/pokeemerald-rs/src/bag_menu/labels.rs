@@ -6,7 +6,7 @@ use assets::move_names::MoveNames;
 use assets::tmhm_learnsets::TmHmLearnsets;
 use engine::bag_menu::BagAction;
 
-use super::chrome::NO_SYMBOL;
+use super::chrome::{NO_SYMBOL, SPACER_SYMBOL};
 use super::BagScreenMode;
 
 /// `ITEM_TM01`, whose offset indexes the TM/HM move sequence.
@@ -15,6 +15,8 @@ const FIRST_TM: u16 = 289;
 const FIRST_HM: u16 = 339;
 /// `FIRST_BERRY_INDEX`, which numbers the berry list.
 const FIRST_BERRY: u16 = 133;
+/// `gText_xVar1`'s multiplication sign.
+const QUANTITY_PREFIX: char = '×';
 const CLOSE_ROW_LABEL: &str = "CLOSE BAG";
 
 /// An item row's printable parts: the optional number column and the name.
@@ -67,13 +69,23 @@ pub(super) const fn close_row_label() -> &'static str {
     CLOSE_ROW_LABEL
 }
 
-/// The description text of an item, with the one placeholder it carries
-/// expanded.
+/// The description text of an item; a `{POKEBLOCK}` in it is expanded when
+/// the text is rendered.
 pub(super) fn description(item: ItemId) -> String {
-    ItemDisplayTable::new().get(item).map_or_else(
-        |_| String::new(),
-        |data| data.description.replace("{POKEBLOCK}", "POKéBLOCK"),
-    )
+    ItemDisplayTable::new()
+        .get(item)
+        .map_or_else(|_| String::new(), |data| data.description.to_owned())
+}
+
+/// The quantity column's text: `gText_xVar1` (`strings.c:218`) around the
+/// count `ConvertIntToDecimalStringN` right-aligns in `digits` positions
+/// with `CHAR_SPACER` (`item_menu.c:966-974`, `string_util.c:209`).
+pub(super) fn quantity_text(quantity: u16, digits: usize) -> String {
+    let count = quantity.to_string();
+    let padding = SPACER_SYMBOL
+        .to_string()
+        .repeat(digits.saturating_sub(count.len()));
+    format!("{QUANTITY_PREFIX}{padding}{count}")
 }
 
 /// `PrintItemDescription`'s close-row text (`item_menu.c:1003-1008`).
