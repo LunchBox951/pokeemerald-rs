@@ -9,7 +9,7 @@ use assets::pack::{AssetPack, PalettedImage};
 use engine::bag_menu::BagStack;
 use engine::text::render::{Printer, PrinterInput, RevealedGlyph, TextSpeed, TickEvent};
 use engine::text::window as msgwin;
-use engine::text::Token;
+use engine::text::{Symbol, Token};
 use rendering::{Framebuffer, Rgb888};
 
 use super::BagScreenError;
@@ -32,6 +32,21 @@ const NORMAL_SHADOW_INDEX: usize = 3;
 /// Stands in a label for `{NO}`, the extra-symbol glyph `F9 08`.
 pub(super) const NO_SYMBOL: char = '\u{E008}';
 const NO_EXTRA_SYMBOL: u8 = 0x08;
+/// Stands in a label for `CHAR_SPACER` (`0x77`), which `ConvertIntToDecimalStringN`
+/// writes for a leading position of a right-aligned number
+/// (`string_util.c:209`). Its narrow-font advance is 5 pixels, where a space
+/// advances 3.
+pub(super) const SPACER_SYMBOL: char = '\u{E077}';
+/// `{POKEBLOCK}` in a string: the five glyphs `0x55`-`0x59`
+/// (`charmap.txt:52`).
+const POKEBLOCK_PLACEHOLDER: &str = "{POKEBLOCK}";
+const POKEBLOCK_GLYPHS: [Symbol; 5] = [
+    Symbol::Pokeblock1,
+    Symbol::Pokeblock2,
+    Symbol::Pokeblock3,
+    Symbol::Pokeblock4,
+    Symbol::Pokeblock5,
+];
 
 /// A palette-indexed picture with its palette decoded; index 0 is transparent.
 #[derive(Debug)]
@@ -280,16 +295,32 @@ pub(super) fn width_of(glyphs: &[RevealedGlyph]) -> i32 {
         .sum()
 }
 
-/// Renders every glyph of `text` immediately; `\n` breaks the line.
-fn render(font: &OwnedFontGlyphSheet, text: &str) -> Vec<RevealedGlyph> {
-    let mut tokens: Vec<Token> = text
-        .chars()
-        .map(|c| match c {
+/// The tokens of `text`: `\n` breaks the line, [`NO_SYMBOL`] and
+/// [`SPACER_SYMBOL`] stand for their glyphs, and `{POKEBLOCK}` expands to its
+/// five glyphs.
+pub(super) fn tokens_of(text: &str) -> Vec<Token> {
+    let mut tokens = Vec::new();
+    let mut rest = text;
+    while let Some(c) = rest.chars().next() {
+        if let Some(after) = rest.strip_prefix(POKEBLOCK_PLACEHOLDER) {
+            tokens.extend(POKEBLOCK_GLYPHS.map(Token::Symbol));
+            rest = after;
+            continue;
+        }
+        tokens.push(match c {
             '\n' => Token::Newline,
             NO_SYMBOL => Token::ExtraSymbol(NO_EXTRA_SYMBOL),
+            SPACER_SYMBOL => Token::Symbol(Symbol::Spacer),
             c => Token::Char(c),
-        })
-        .collect();
+        });
+        rest = &rest[c.len_utf8()..];
+    }
+    tokens
+}
+
+/// Renders every glyph of `text` immediately.
+fn render(font: &OwnedFontGlyphSheet, text: &str) -> Vec<RevealedGlyph> {
+    let mut tokens = tokens_of(text);
     tokens.push(Token::End);
     let ticks = tokens.len();
     let mut printer = Printer::new(tokens, font.sheet(), TextSpeed::Instant, (0, 0));
