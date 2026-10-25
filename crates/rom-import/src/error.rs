@@ -517,7 +517,7 @@ impl fmt::Display for ImportError {
             } => write!(f, "`{id}` track {track} at ROM offset {at:#08x}: {fault}"),
             Self::Audio { id, source } => write!(f, "`{id}`: {source}"),
             Self::BattleMessage { id, source } => write!(f, "`{id}`: {source}"),
-            Self::BattleAnimation { id, source } => write!(f, "`{id}`: {source}"),
+            Self::BattleAnimation { id, source } => write!(f, "`{id}`: {}", OneLineText(source)),
             Self::AnimationOpcode { at, opcode } => write!(
                 f,
                 "battle animation command at ROM offset {at:#08x} has opcode {opcode:#04x}, which is not a command"
@@ -527,7 +527,9 @@ impl fmt::Display for ImportError {
                 "battle animation operand at ROM offset {at:#08x} points at {what} {:#010x}, which this revision profile does not record",
                 ptr.raw()
             ),
-            Self::PackWrite(source) => write!(f, "could not assemble the asset pack: {source}"),
+            Self::PackWrite(source) => {
+                write!(f, "could not assemble the asset pack: {}", OneLineText(source))
+            }
             Self::SameFile { path } => write!(
                 f,
                 "refusing to write the asset pack over the source ROM `{}`",

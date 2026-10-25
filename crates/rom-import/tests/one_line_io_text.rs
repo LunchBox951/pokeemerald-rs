@@ -80,3 +80,25 @@ fn escaping_the_text_leaves_the_io_error_source_whole() {
         .expect("WriteFailed carries the io::Error itself");
     assert_eq!(io_source.raw_os_error(), Some(28));
 }
+
+#[test]
+fn nested_pack_and_animation_error_text_stays_one_line() {
+    let cases = [
+        ImportError::PackWrite(pack_format::PackWriteError::DuplicateId(
+            "first\nsecond\u{1b}[2K".into(),
+        )),
+        ImportError::BattleAnimation {
+            id: "anim",
+            source: assets::BattleAnimationError::DuplicateSymbol("first\nsecond\u{1b}[2K".into()),
+        },
+    ];
+    let bad: Vec<String> = cases
+        .iter()
+        .map(ToString::to_string)
+        .filter(|text| text.chars().any(char::is_control))
+        .collect();
+    assert!(
+        bad.is_empty(),
+        "multi-line or control-bearing diagnostics: {bad:#?}"
+    );
+}
