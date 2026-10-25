@@ -93,6 +93,8 @@ mod move_learn;
 pub(crate) mod npc_trainer_battle;
 mod options;
 #[cfg(test)]
+mod options_return_tests;
+#[cfg(test)]
 mod options_tests;
 pub(crate) mod overworld_phase;
 /// The scripted Route 103 rival battle's own choice of trainer:
@@ -203,11 +205,11 @@ pub(crate) enum AppScene {
     /// selection, A confirms it (module docs on [`advance_scene`]'s
     /// `MainMenu` arm for what each item does).
     MainMenu(Box<MainMenuState>),
-    /// The highlight-only frame after a successful Up/Down (I-3, issue
-    /// #2223): upstream's navigation task only schedules a callback that
-    /// redraws the new highlight and reinstalls input without polling
-    /// (`pokeemerald/src/main_menu.c:878-881`, `:930-933`;
-    /// `pokeemerald/src/task.c:118-120`), so this step presents the new
+    /// The highlight-only frame after a successful Up/Down (I-3) or after the returning menu's windows are drawn (I-6):
+    /// upstream's navigation and display tasks only schedule a callback that
+    /// redraws the highlight and reinstalls input without polling
+    /// (`pokeemerald/src/main_menu.c:878-888`, `:930-933`;
+    /// `pokeemerald/src/task.c:118-120`), so this step presents the
     /// highlight and ignores every button before [`AppScene::MainMenu`]
     /// resumes.
     MainMenuHighlight(Box<MainMenuState>),
@@ -220,8 +222,9 @@ pub(crate) enum AppScene {
     /// The Options screen, opened from the main menu's `OPTION` item (I-6):
     /// it retains the menu it returns to.
     Options(Box<OptionsState>),
-    /// The main menu fading in from black after the Options screen returns
-    /// (`pokeemerald/src/main_menu.c:583-586`).
+    /// The main menu fading in from black after the Options screen returns,
+    /// then waiting out upstream's save-check, battery-check and window-drawing
+    /// tasks with input ignored (`pokeemerald/src/main_menu.c:583-586,619-748`).
     MainMenuFadeIn(Box<MainMenuFadeIn>),
     /// Birch's speech, paging through [`crate::intro::speech`]'s text.
     Intro(Box<IntroScene>),
