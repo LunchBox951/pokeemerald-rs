@@ -3,6 +3,7 @@
 //! at a time. The turn engine and the RNG adapter it shares with the overworld
 //! live in [`crate::flow::wild_encounter`].
 
+use crate::flow::lead_screen::ensure_lead_can_battle;
 use crate::flow::wild_encounter;
 use battle::Dex;
 
@@ -24,13 +25,13 @@ impl OverworldPhase {
         }
     }
 
-    /// Gates the encounter roll, since `Battle::new` refuses an inadmissible lead
-    /// only after `CreateWildMon`'s draws; a missing lead passes to `begin_wild_battle`.
+    /// Gates the encounter roll, since `Battle::new` refuses an inadmissible lead, or one
+    /// holding an item with a battle effect, only after `CreateWildMon`'s draws; a missing lead passes to `begin_wild_battle`.
     pub(in crate::flow) fn wild_lead_admissible(&mut self) -> bool {
         let refusal = self
             .party_lead
             .as_ref()
-            .and_then(|lead| battle::ensure_participant_admissible(lead).err());
+            .and_then(|lead| ensure_lead_can_battle(lead).err());
         if let Some(error) = refusal {
             if self.wild_lead_refusal != Some(error) {
                 eprintln!(

@@ -27,6 +27,10 @@
 //! (`battle_main.c:2035-2065`). The battle crate then refuses an item whose effect it does
 //! not model ([`battle::ensure_held_item_playable`]) with the rest of the pre-flight, before
 //! the first draw.
+//!
+//! The player's lead gets the same screen ([`super::lead_screen::ensure_lead_can_battle`]): a
+//! saved held item with a battle effect refuses the fight, logged by the caller, and the lead
+//! returns to the party still holding it.
 
 use assets::items::ItemId;
 use assets::trainers::{TrainerData, TrainerId, TrainerParty};
@@ -36,6 +40,7 @@ use engine::rng::Rng;
 
 use super::battle_finalize::finalize_battle_turn;
 use super::first_usable_move::take_first_usable_move_turn;
+use super::lead_screen::ensure_lead_can_battle;
 use super::move_learn::settle_move_learn_prompts;
 use super::wild_encounter::SharedRng;
 
@@ -252,8 +257,7 @@ pub fn start_npc_trainer_battle(
         })
         .collect();
     battle::ensure_trainer_party_startable(&dex, &player_lead, trainer, &specs)?;
-    battle::ensure_participant_admissible(&player_lead)?;
-    battle::ensure_held_item_playable(player_lead.held_item())?;
+    ensure_lead_can_battle(&player_lead)?;
 
     let mut party = Vec::with_capacity(entries.len());
     for ((entry, personality), moves) in entries.iter().zip(personalities).zip(movesets) {

@@ -8,6 +8,7 @@ use engine::event_data::EventData;
 use engine::overworld::MapRuntime;
 
 use crate::flow::first_battle;
+use crate::flow::lead_screen::ensure_lead_can_battle;
 
 use super::{ActiveBattle, OverworldPhase};
 
@@ -94,12 +95,10 @@ impl OverworldPhase {
     }
 
     /// Upstream consumes the rescue before the fight (`Route101/scripts.inc:40`);
-    /// only a lead the turn engine refuses leaves it armed, with nothing drawn.
+    /// only a lead the turn engine refuses (an inadmissible battler, or a saved held item
+    /// whose effect it does not model) leaves it armed, with nothing drawn.
     pub(super) fn begin_first_battle(&mut self) {
-        if let Some(Err(error)) = self
-            .lead_battler()
-            .map(battle::ensure_participant_admissible)
-        {
+        if let Some(Err(error)) = self.lead_battler().map(ensure_lead_can_battle) {
             eprintln!("first battle: can't start ({error:?}) -- the rescue stays armed");
             return;
         }

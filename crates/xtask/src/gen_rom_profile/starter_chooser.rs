@@ -10,14 +10,11 @@
 //! the palettes are raw `.gbapal` runs. The chooser tiles are 4-bit in the
 //! ROM and in the pack, so the located depth needs no split.
 
-use rom_import::Encoding;
-
 use super::error::GenRomProfileError;
 use super::images::{locate_images, ImageQuery};
-use super::locate::exactly_one;
+use super::lz77_blobs::{locate_lz77_blobs, unnamed};
 use super::palettes::locate_unique;
 use super::plan::{BlobPlan, ReportLine, StarterChooserPlan, SymbolExpectation};
-use super::tilesets::len32;
 use super::Context;
 
 const IMAGE_PREFIX: &str = "starter-chooser/image/";
@@ -80,26 +77,7 @@ fn locate_tilemaps(
     ctx: &Context<'_>,
     report: &mut Vec<ReportLine>,
 ) -> Result<Vec<BlobPlan>, GenRomProfileError> {
-    let ids = ids_under(TILEMAP_PREFIX);
-    let mut needles = Vec::with_capacity(ids.len());
-    for id in &ids {
-        needles.push(ctx.pack.raw_payload(id)?.to_vec());
-    }
-    let hits = ctx.lz77.find_all(&needles);
-
-    let mut plans = Vec::with_capacity(ids.len());
-    for (index, id) in ids.iter().enumerate() {
-        let addr = exactly_one(id, &hits[index])?;
-        let len = len32(&needles[index]);
-        report.push(ReportLine::unique(id, addr, len));
-        plans.push(BlobPlan {
-            id: id.clone(),
-            addr,
-            encoding: Encoding::Lz77,
-            len,
-        });
-    }
-    Ok(plans)
+    locate_lz77_blobs(ctx, &ids_under(TILEMAP_PREFIX), &unnamed, report)
 }
 
 #[cfg(test)]
