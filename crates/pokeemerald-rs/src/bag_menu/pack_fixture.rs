@@ -52,7 +52,7 @@ pub(super) fn bag_frame_color(frame: u8) -> Rgb888 {
     rgb(frame * 4, 5, 5)
 }
 
-const ICON_STEMS: [&str; 9] = [
+const ICON_STEMS: [&str; 10] = [
     "potion",
     "great_ball",
     "antidote",
@@ -62,8 +62,9 @@ const ICON_STEMS: [&str; 9] = [
     "mach_bike",
     "fighting_tm_hm",
     "normal_tm_hm",
+    "pokeblock_case",
 ];
-const ICON_IMAGES: [&str; 9] = [
+const ICON_IMAGES: [&str; 10] = [
     "potion",
     "great_ball",
     "antidote",
@@ -73,6 +74,7 @@ const ICON_IMAGES: [&str; 9] = [
     "mach_bike",
     "tm",
     "hm",
+    "pokeblock_case",
 ];
 
 fn leaked(id: String) -> &'static str {
@@ -95,7 +97,36 @@ fn glyph_sheet(font: &str) -> PackEntry {
     .unwrap()
 }
 
-fn window_entries() -> Vec<PackEntry> {
+/// A sheet whose only opaque pixels are the text-coloured left column of each
+/// glyph in `marked`, so a drawn glyph shows as one pixel column at the x it
+/// was placed.
+fn marked_glyph_sheet(font: &str, marked: &[usize]) -> PackEntry {
+    let (width, height) = (
+        assets::fonts::SHEET_WIDTH as usize,
+        assets::fonts::SHEET_HEIGHT as usize,
+    );
+    let cell = assets::fonts::GLYPH_SIZE as usize;
+    let mut pixels = vec![0u8; width * height];
+    for &glyph in marked {
+        let (left, top) = (
+            (glyph % SHEET_TILES_ACROSS) * cell,
+            (glyph / SHEET_TILES_ACROSS) * cell,
+        );
+        for y in top..top + cell {
+            pixels[y * width + left] = 1;
+        }
+    }
+    pack_format::image_entry(
+        format!("font/{font}/glyphs"),
+        assets::fonts::SHEET_WIDTH,
+        assets::fonts::SHEET_HEIGHT,
+        GLYPH_DEPTH,
+        pixels,
+    )
+    .unwrap()
+}
+
+fn window_entries(narrow: PackEntry) -> Vec<PackEntry> {
     vec![
         image_entry("text-window/image/1", 24, 24, BIT_DEPTH, 1),
         palette_entry_with_colors("text-window/palette/1", 16, &[(1, WINDOW_BORDER_555)]),
@@ -106,7 +137,7 @@ fn window_entries() -> Vec<PackEntry> {
             &[(1, WINDOW_FILL_555), (2, TEXT_555), (3, TEXT_555)],
         ),
         glyph_sheet("normal"),
-        glyph_sheet("narrow"),
+        narrow,
     ]
 }
 
@@ -212,7 +243,17 @@ fn icon_entries() -> Vec<PackEntry> {
 
 /// The pack with every entry the screen reads.
 pub(super) fn entries() -> Vec<PackEntry> {
-    let mut all = window_entries();
+    entries_with_narrow(glyph_sheet("narrow"))
+}
+
+/// [`entries`], but the narrow font draws only the left pixel column of the
+/// glyph ids in `marked`.
+pub(super) fn entries_with_marked_narrow_glyphs(marked: &[usize]) -> Vec<PackEntry> {
+    entries_with_narrow(marked_glyph_sheet("narrow", marked))
+}
+
+fn entries_with_narrow(narrow: PackEntry) -> Vec<PackEntry> {
+    let mut all = window_entries(narrow);
     all.extend(screen_entries());
     all.extend(picture_entries());
     all.extend(icon_entries());
