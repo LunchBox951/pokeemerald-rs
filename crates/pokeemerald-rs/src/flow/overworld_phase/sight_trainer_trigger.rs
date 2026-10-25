@@ -499,8 +499,8 @@ impl OverworldPhase {
                 if first_report {
                     eprintln!(
                         "sight trainer: can't start against trainer {trainer_id:?} ({error}) -- \
-                         refused before any draw (a held-item party, an unimplemented moveset, \
-                         or a fainted lead)"
+                         refused before any draw (a held-item party or lead, an unimplemented \
+                         moveset, or a fainted lead)"
                     );
                 }
                 SightTrainerOutcome::Refused
