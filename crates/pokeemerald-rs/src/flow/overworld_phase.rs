@@ -1013,6 +1013,8 @@ mod landing_call_arrow_elevation_tests;
 #[cfg(test)]
 mod lead_owner_tests;
 #[cfg(test)]
+mod mom_faceplayer_tests;
+#[cfg(test)]
 mod oldale_reposition_tests;
 /// Wild and scripted first-battle opponents carry the save owner's OT id.
 #[cfg(test)]
