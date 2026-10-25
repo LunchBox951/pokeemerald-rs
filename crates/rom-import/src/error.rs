@@ -13,7 +13,7 @@ use std::fmt;
 use std::io;
 use std::path::PathBuf;
 
-use crate::one_line::OneLinePath;
+use crate::one_line::{OneLinePath, OneLineText};
 use crate::profile::EMERALD_US_REV0;
 use crate::sha1::Digest;
 
@@ -425,8 +425,9 @@ impl fmt::Display for ImportError {
         match self {
             Self::ReadFailed { path, source } => write!(
                 f,
-                "could not read ROM `{}`: {source}",
-                OneLinePath(path)
+                "could not read ROM `{}`: {}",
+                OneLinePath(path),
+                OneLineText(source)
             ),
             Self::WrongSize { actual } => write!(
                 f,
@@ -449,7 +450,8 @@ impl fmt::Display for ImportError {
             }
             Self::ProfileHeaderMismatch { profile } => write!(
                 f,
-                "ROM matches profile `{profile}` by SHA-1 but its header game code or version disagrees"
+                "ROM matches profile `{}` by SHA-1 but its header game code or version disagrees",
+                OneLineText(profile)
             ),
             Self::PointerOutOfRange { at, raw } => write!(
                 f,
@@ -536,7 +538,12 @@ impl fmt::Display for ImportError {
                 partial,
                 source,
             } => {
-                write!(f, "could not write `{}`: {source}", OneLinePath(path))?;
+                write!(
+                    f,
+                    "could not write `{}`: {}",
+                    OneLinePath(path),
+                    OneLineText(source)
+                )?;
                 match partial {
                     PartialFile::Gone => Ok(()),
                     PartialFile::MayRemain => f.write_str(
@@ -546,12 +553,14 @@ impl fmt::Display for ImportError {
                     PartialFile::Unreadable(why) => write!(
                         f,
                         " (and the destination could not be read to tell whether a partial \
-                         file remains: {why})"
+                         file remains: {})",
+                        OneLineText(why)
                     ),
                     PartialFile::RemovalFailed(why) => write!(
                         f,
-                        " (a partial file remains there and could not be removed: {why}; \
-                         retry with a fresh destination name)"
+                        " (a partial file remains there and could not be removed: {}; \
+                         retry with a fresh destination name)",
+                        OneLineText(why)
                     ),
                 }
             }
