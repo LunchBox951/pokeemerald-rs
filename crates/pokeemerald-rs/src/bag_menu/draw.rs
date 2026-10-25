@@ -237,8 +237,20 @@ impl BagScreen {
             }
         }
         let cursor_y = ROW_TOP + i32::from(self.menu.cursor()) * ROW_HEIGHT;
-        let arrow = self.chrome.narrow_text(SELECTOR_ARROW);
-        draw_glyphs(fb, LIST_ORIGIN, LIST_SIZE, (0, cursor_y), &arrow, &colors);
+        let arrow = self.chrome.normal_text(SELECTOR_ARROW);
+        let cursor_colors = if self.menu.context_grid().is_some() {
+            self.chrome.gray_cursor_colors()
+        } else {
+            colors
+        };
+        draw_glyphs(
+            fb,
+            LIST_ORIGIN,
+            LIST_SIZE,
+            (0, cursor_y),
+            &arrow,
+            &cursor_colors,
+        );
     }
 
     fn draw_item_row(

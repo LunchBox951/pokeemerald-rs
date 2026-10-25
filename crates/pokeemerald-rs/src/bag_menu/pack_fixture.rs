@@ -36,6 +36,10 @@ pub(super) const BAG_TEXT: Rgb888 = INDICATOR_IDLE;
 pub(super) const HM_MARK: Rgb888 = rgb(5, 5, 5);
 /// Screen palette bank 1 index 3, the shadow of list and description text.
 pub(super) const NORMAL_SHADOW: Rgb888 = rgb(0, 20, 0);
+/// Screen palette bank 1 index 3 is also the gray cursor's text colour, and
+/// index 6 is its shadow (`COLORID_GRAY_CURSOR`, `item_menu.c:388`).
+pub(super) const GRAY_CURSOR_TEXT: Rgb888 = NORMAL_SHADOW;
+pub(super) const GRAY_CURSOR_SHADOW: Rgb888 = rgb(0, 0, 20);
 /// The closed bag's marker row, the only thing frame 0 of the sheet draws.
 pub(super) const CLOSED_BAG: Rgb888 = CLOSED_BAG_555.to_rgb888();
 const CLOSED_BAG_555: Bgr555 = bgr(15, 15, 0);
@@ -150,7 +154,7 @@ fn marked_glyph_sheet(font: &str, marked: &[usize]) -> PackEntry {
     .unwrap()
 }
 
-fn window_entries(narrow: PackEntry) -> Vec<PackEntry> {
+fn window_entries(normal: PackEntry, narrow: PackEntry) -> Vec<PackEntry> {
     vec![
         image_entry("text-window/image/1", 24, 24, BIT_DEPTH, 1),
         palette_entry_with_colors("text-window/palette/1", 16, &[(1, WINDOW_BORDER_555)]),
@@ -160,7 +164,7 @@ fn window_entries(narrow: PackEntry) -> Vec<PackEntry> {
             16,
             &[(1, WINDOW_FILL_555), (2, TEXT_555), (3, TEXT_555)],
         ),
-        glyph_sheet("normal"),
+        normal,
         narrow,
     ]
 }
@@ -202,6 +206,7 @@ fn screen_entries() -> Vec<PackEntry> {
         (18, Bgr555::from_channels(20, 0, 0)),
         (19, Bgr555::from_channels(0, 20, 0)),
         (20, Bgr555::from_channels(5, 5, 5)),
+        (22, Bgr555::from_channels(0, 0, 20)),
     ];
     vec![
         pack_format::image_entry(
@@ -301,13 +306,21 @@ pub(super) fn entries() -> Vec<PackEntry> {
 }
 
 /// [`entries`], but the narrow font draws only the left pixel column of the
-/// glyph ids in `marked`.
+/// glyph ids in `marked`, and the normal font, which draws the list cursor,
+/// draws nothing.
 pub(super) fn entries_with_marked_narrow_glyphs(marked: &[usize]) -> Vec<PackEntry> {
-    entries_with_narrow(marked_glyph_sheet("narrow", marked))
+    entries_with_fonts(
+        marked_glyph_sheet("normal", &[]),
+        marked_glyph_sheet("narrow", marked),
+    )
 }
 
 fn entries_with_narrow(narrow: PackEntry) -> Vec<PackEntry> {
-    let mut all = window_entries(narrow);
+    entries_with_fonts(glyph_sheet("normal"), narrow)
+}
+
+fn entries_with_fonts(normal: PackEntry, narrow: PackEntry) -> Vec<PackEntry> {
+    let mut all = window_entries(normal, narrow);
     all.extend(screen_entries());
     all.extend(picture_entries());
     all.extend(icon_entries());

@@ -7,8 +7,9 @@ use platform::{ButtonState, Buttons};
 use rendering::{Framebuffer, Rgb888};
 
 use super::pack_fixture::{
-    bag_frame_color, bag_pack, entries, icon_color, load, BACKGROUND, BAG_TEXT, HM_MARK,
-    INDICATOR_CURRENT, INDICATOR_IDLE, NORMAL_SHADOW, TEXT, WINDOW_BORDER, WINDOW_FILL,
+    bag_frame_color, bag_pack, entries, icon_color, load, BACKGROUND, BAG_TEXT, GRAY_CURSOR_SHADOW,
+    GRAY_CURSOR_TEXT, HM_MARK, INDICATOR_CURRENT, INDICATOR_IDLE, NORMAL_SHADOW, TEXT,
+    WINDOW_BORDER, WINDOW_FILL,
 };
 use super::{
     open, open_from_pack, BagScreen, BagScreenError, BagScreenMode, BagScreenRequest,
@@ -119,6 +120,26 @@ fn selected_row_shows_cursor_icon_and_description() {
     let fb = frame_of(&screen);
     assert_eq!(cursor_row(&fb), Some(1));
     assert_eq!(at(&fb, ICON_PIXEL.0, ICON_PIXEL.1), icon_color("antidote"));
+}
+
+#[test]
+fn context_menu_grays_the_list_cursor_until_it_closes() {
+    let mut screen = open_screen(BagScreenMode::Field, &sample_bag());
+    let cursor =
+        |screen: &BagScreen, color| painted(&frame_of(screen), LIST_X, LIST_Y, 6, ROW, color);
+    assert!(cursor(&screen, BAG_TEXT) && cursor(&screen, NORMAL_SHADOW));
+    assert!(!cursor(&screen, GRAY_CURSOR_SHADOW));
+
+    assert_eq!(screen.tick(press(Buttons::A)), BagScreenTick::Open);
+    assert!(
+        cursor(&screen, GRAY_CURSOR_TEXT) && cursor(&screen, GRAY_CURSOR_SHADOW),
+        "the cursor takes the gray text and green shadow from bank 1"
+    );
+    assert!(!cursor(&screen, BAG_TEXT), "no normal cursor pixel remains");
+
+    assert_eq!(screen.tick(press(Buttons::B)), BagScreenTick::Open);
+    assert!(cursor(&screen, BAG_TEXT) && cursor(&screen, NORMAL_SHADOW));
+    assert!(!cursor(&screen, GRAY_CURSOR_SHADOW));
 }
 
 #[test]
