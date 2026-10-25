@@ -350,16 +350,51 @@ fn release_then_repress_is_logged_again() {
     assert_eq!(describe_newly_pressed(state).as_deref(), Some("input: B"));
 }
 
+/// A scratch directory this test created exclusively and so owns. The path
+/// is claimed with `create_dir` (which fails on an existing entry), an
+/// occupied candidate is skipped rather than reused, and `Drop` removes only
+/// the directory this guard created.
+struct ScratchDir(std::path::PathBuf);
+
+impl ScratchDir {
+    fn new(prefix: &str) -> Self {
+        Self::claim_in(&std::env::temp_dir(), prefix)
+    }
+
+    /// Claims the first unoccupied `<prefix>-<pid>-<n>` under `parent`.
+    fn claim_in(parent: &std::path::Path, prefix: &str) -> Self {
+        for n in 0..u32::MAX {
+            let candidate = parent.join(format!("{prefix}-{}-{n}", std::process::id()));
+            match std::fs::create_dir(&candidate) {
+                Ok(()) => return Self(candidate),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(e) => panic!("cannot create scratch dir {}: {e}", candidate.display()),
+            }
+        }
+        panic!("no unoccupied scratch dir candidate for {prefix}");
+    }
+}
+
+impl Drop for ScratchDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 /// A missing pack fails the explicit-media constructor with the title
 /// error and never opens (so never creates) the save medium.
 #[test]
 fn explicit_media_boot_with_a_missing_pack_fails_before_touching_the_save() {
-    let dir =
-        std::env::temp_dir().join(format!("pokeemerald-explicit-boot-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    assert_missing_pack_fails_before_touching_the_save(&std::env::temp_dir());
+}
+
+/// The body of the missing-pack test, with its scratch directory claimed
+/// under `parent` so a regression can run it somewhere it owns.
+fn assert_missing_pack_fails_before_touching_the_save(parent: &std::path::Path) {
+    let scratch = ScratchDir::claim_in(parent, "pokeemerald-explicit-boot");
+    let dir = &scratch.0;
     let result = App::new_headless_real_at(&dir.join("no.pack"), &dir.join("save").join("a.sav"));
-    let save_dir_created = dir.exists();
-    let _ = std::fs::remove_dir_all(&dir);
+    let save_dir_created = dir.join("save").exists();
     let Err(err) = result else {
         panic!("a missing pack must not boot");
     };
@@ -368,6 +403,47 @@ fn explicit_media_boot_with_a_missing_pack_fails_before_touching_the_save() {
         !save_dir_created,
         "a failed pack load must not open the save"
     );
+}
+
+/// The missing-pack fixture must not delete contents it did not create.
+#[test]
+fn missing_pack_test_leaves_unowned_existing_contents_alone() {
+    let parent = ScratchDir::new("pokeemerald-explicit-boot-guard");
+    let occupied = parent.0.join(format!(
+        "pokeemerald-explicit-boot-{}-0",
+        std::process::id()
+    ));
+    std::fs::create_dir(&occupied).unwrap();
+    let sentinel = occupied.join("unrelated.txt");
+    std::fs::write(&sentinel, b"not yours").unwrap();
+
+    assert_missing_pack_fails_before_touching_the_save(&parent.0);
+
+    assert!(
+        sentinel.exists(),
+        "the test deleted pre-existing unrelated contents"
+    );
+}
+
+/// `ScratchDir` skips an occupied candidate, leaves its contents intact, and
+/// on drop removes only the directory it created.
+#[test]
+fn scratch_dir_skips_occupied_candidates_and_removes_only_its_own() {
+    let outer = ScratchDir::new("pokeemerald-scratch-guard");
+    let occupied = outer.0.join(format!("probe-{}-0", std::process::id()));
+    std::fs::create_dir(&occupied).unwrap();
+    let sentinel = occupied.join("unrelated.txt");
+    std::fs::write(&sentinel, b"not yours").unwrap();
+
+    let owned_path = {
+        let owned = ScratchDir::claim_in(&outer.0, "probe");
+        assert_ne!(owned.0, occupied, "an occupied candidate was reused");
+        assert!(owned.0.is_dir());
+        owned.0.clone()
+    };
+
+    assert!(!owned_path.exists(), "the owned directory was not removed");
+    assert!(sentinel.exists(), "the occupied directory was disturbed");
 }
 
 /// A failed explicit-media boot releases the pack path it was handed. The
