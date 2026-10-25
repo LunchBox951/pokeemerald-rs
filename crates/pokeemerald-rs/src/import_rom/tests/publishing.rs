@@ -68,7 +68,14 @@ fn a_pack_directory_spelled_through_dotdot_still_imports() {
         Ok(fake_pack(b"pack bytes"))
     })
     .expect("a dotdot-spelled destination still imports");
+
     assert_eq!(outcome.pack_path(), pack_path);
+    // `missing/..` resolves back to `dir`, so the pack lands there.
+    assert_eq!(
+        fs::read(dir.join("pokeemerald.pack")).unwrap(),
+        b"pack bytes"
+    );
+    assert_eq!(fs::read(outcome.pack_path()).unwrap(), b"pack bytes");
 }
 
 #[test]
