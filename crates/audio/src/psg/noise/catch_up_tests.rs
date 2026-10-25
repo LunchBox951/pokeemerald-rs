@@ -50,7 +50,7 @@ fn bounded_catch_up_matches_the_unbounded_replay_bit_for_bit() {
     let mut seed = 0x1234_5678_u32;
     let mut next = move || {
         seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-        (seed >> 8) as u16 & 0x7FFF
+        u16::try_from((seed >> 8) & 0x7FFF).expect("fifteen bits")
     };
     let wide_owed = [
         1, 2, 32_766, 32_767, 32_768, 65_534, 65_535, 65_536, 114_701,
