@@ -344,7 +344,7 @@ Concise patch notes for development versions, carried from `dev` through the rel
 - Initial prerelease establishing the repository release path, with an early title screen, new-game introduction, and exploration of the opening area.
 
 [0.0.71.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/ce0fd44c695f1ac523fc958f4401607339397c5b...dev
-[0.0.70.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/ddd60e3efb8065b0d2a4606dbf63545b51174497...dev
+[0.0.70.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/ddd60e3efb8065b0d2a4606dbf63545b51174497...ce0fd44c695f1ac523fc958f4401607339397c5b
 [0.0.69.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/eb737282b387d993825d6b0582e39de77b682582...ddd60e3efb8065b0d2a4606dbf63545b51174497
 [0.0.68.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/974ece58d7d8a70dbaa7afe7f1b00923037faa59...eb737282b387d993825d6b0582e39de77b682582
 [0.0.67.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/f028fc93e4a2205470d2f46150abdc28d4bd5428...974ece58d7d8a70dbaa7afe7f1b00923037faa59

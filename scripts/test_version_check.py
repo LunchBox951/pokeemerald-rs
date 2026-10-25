@@ -442,6 +442,64 @@ class TestChangelogIntegration(unittest.TestCase):
         self.assertNotEqual(self.repo.run_version_check(base="baseline"), 0)
 
 
+def linked_changelog(newest_end: str, older_end: str) -> str:
+    base = "https://example.invalid/compare/"
+    return (
+        "# Changelog\n\n"
+        "## [0.1.3.0] - 2026-10-23\n\n- Various bug fixes.\n\n"
+        "## [0.1.2.0] - 2026-10-22\n\n- Various bug fixes.\n\n"
+        f"[0.1.3.0]: {base}bbb...{newest_end}\n"
+        f"[0.1.2.0]: {base}aaa...{older_end}\n"
+    )
+
+
+class TestChangelogLinks(unittest.TestCase):
+    def test_non_newest_entry_ending_at_dev_is_rejected(self):
+        with self.assertRaisesRegex(version_check.VersionError, r"\[0\.1\.2\.0\]"):
+            version_check.check_changelog_links(linked_changelog("dev", "dev"))
+
+    def test_newest_entry_may_end_at_dev_when_older_is_frozen(self):
+        version_check.check_changelog_links(linked_changelog("dev", "bbb"))
+
+    def test_notes_without_links_pass(self):
+        version_check.check_changelog_links(changelog("0.1.3.0"))
+        version_check.check_changelog_links(None)
+
+    def test_link_example_in_fence_is_ignored(self):
+        notes = changelog("0.1.3.0") + "\n```\n[0.1.2.0]: x/compare/a...dev\n```\n"
+        version_check.check_changelog_links(notes)
+
+    def test_indented_and_angle_bracket_definitions_are_still_checked(self):
+        stale = "[0.1.2.0]: %s\n"
+        for definition in (
+            "  " + stale % "https://example.invalid/compare/aaa...dev",
+            stale % "<https://example.invalid/compare/aaa...dev>",
+        ):
+            with self.subTest(definition=definition):
+                notes = (
+                    changelog("0.1.3.0")
+                    + "\n## [0.1.2.0] - 2026-10-22\n\n- Fixes.\n\n"
+                    + definition
+                )
+                with self.assertRaises(version_check.VersionError):
+                    version_check.check_changelog_links(notes)
+
+    def test_main_rejects_stale_dev_link_even_on_patch_bump(self):
+        repo = _TempGitRepo()
+        try:
+            repo.write("VERSION", "0.1.2.5\n")
+            repo.write("CHANGELOG.md", linked_changelog("dev", "bbb"))
+            repo.commit("baseline")
+            repo.write("VERSION", "0.1.2.6\n")
+            repo.write("CHANGELOG.md", linked_changelog("dev", "dev"))
+            repo.sync_cargo_manifest()
+            self.assertNotEqual(repo.run_version_check(base="baseline"), 0)
+            repo.write("CHANGELOG.md", linked_changelog("dev", "bbb"))
+            self.assertEqual(repo.run_version_check(base="baseline"), 0)
+        finally:
+            repo.cleanup()
+
+
 class TestFinalGateIntegration(unittest.TestCase):
     """Reproduces issue #129's exact scratch-repo scenario against real git."""
 

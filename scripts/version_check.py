@@ -63,6 +63,8 @@ What transition mode checks:
 9. Require a new or updated dated CHANGELOG.md entry with patch-note bullets
    for a FINAL, MAJOR, or MINOR bump. PATCH bumps and cumulative comparisons
    do not require changelog updates.
+10. Reject a CHANGELOG.md compare link that still ends at ``dev`` on any entry
+    but the newest, so the previous range freezes when the next entry lands.
 
 Exit status: ``0`` on success (prints a clear OK line), non-zero with a clear
 message on any rejection or read/parse error.
@@ -624,6 +626,23 @@ def check_changelog(
         )
 
 
+def check_changelog_links(notes: Optional[str]) -> None:
+    text = changelog_text(notes or "")
+    headings = re.findall(r"^## \[([^\]]+)\]", text, flags=re.MULTILINE)
+    if not headings:
+        return
+    newest = headings[0]
+    for label, target in re.findall(
+        r"^ {0,3}\[([^\]]+)\]:[ \t]*<?([^\s>]+)", text, flags=re.MULTILINE
+    ):
+        if label != newest and target.endswith("...dev"):
+            raise VersionError(
+                f"CHANGELOG.md link [{label}] still ends at dev; end it at the "
+                f"commit that starts the range of the entry after it "
+                f"(newest is {newest})"
+            )
+
+
 def check_cumulative(
     base: Version, head: Version, *, require_bump: bool = False
 ) -> None:
@@ -751,6 +770,7 @@ def main(argv: Optional[list] = None) -> int:
                 git_show_file(args.base, "CHANGELOG.md", root),
                 read_ref_file(args.head, "CHANGELOG.md", root),
             )
+            check_changelog_links(read_ref_file(args.head, "CHANGELOG.md", root))
     except VersionError as exc:
         print(f"version_check: FAIL: {exc}", file=sys.stderr)
         return 1
