@@ -70,9 +70,9 @@ fn starter_entries() -> Vec<Entry> {
     ]
 }
 
-fn load(name: &str, entries: Vec<Entry>) -> (AssetPack, std::path::PathBuf) {
+fn load(name: &str, entries: Vec<Entry>) -> AssetPack {
     let path = write_pack(name, &pack_bytes(entries));
-    (AssetPack::load(&path).unwrap(), path)
+    AssetPack::load(&path).unwrap()
 }
 
 fn replaced(id: &str, entry: Entry) -> Vec<Entry> {
@@ -86,7 +86,7 @@ fn replaced(id: &str, entry: Entry) -> Vec<Entry> {
 
 #[test]
 fn starter_chooser_bundles_every_graphic_and_tilemap() {
-    let (pack, path) = load("starter-chooser", starter_entries());
+    let pack = load("starter-chooser", starter_entries());
 
     let chooser = pack.starter_chooser().unwrap();
     assert_eq!(chooser.tiles.image.width, 128);
@@ -105,13 +105,11 @@ fn starter_chooser_bundles_every_graphic_and_tilemap() {
     assert_eq!(chooser.starter_circle.palette.color(0), Some(0x0303));
     assert_eq!(chooser.bag_tilemap, vec![0xB1; BAG_BYTES].as_slice());
     assert_eq!(chooser.grass_tilemap, vec![0xB2; GRASS_BYTES].as_slice());
-
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
 fn starter_preview_returns_each_species_own_front_pair() {
-    let (pack, path) = load("starter-preview", starter_entries());
+    let pack = load("starter-preview", starter_entries());
 
     for (starter, pixel, first) in [
         (StarterSpecies::Treecko, 2, 0x0401),
@@ -124,8 +122,6 @@ fn starter_preview_returns_each_species_own_front_pair() {
         assert_eq!(front.palette.color_count, 16);
         assert_eq!(front.palette.color(0), Some(first));
     }
-
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
@@ -134,15 +130,14 @@ fn missing_or_wrong_kind_chooser_entries_fail_without_substitution() {
         .into_iter()
         .filter(|e| e.id != "pokemon/torchic/front")
         .collect();
-    let (pack, path) = load("starter-missing", entries);
+    let pack = load("starter-missing", entries);
     assert!(pack.starter_preview(StarterSpecies::Treecko).is_ok());
     assert!(matches!(
         pack.starter_preview(StarterSpecies::Torchic).unwrap_err(),
         PackError::UnknownAsset(id) if id == "pokemon/torchic/front"
     ));
-    let _ = std::fs::remove_file(path);
 
-    let (pack, path) = load(
+    let pack = load(
         "starter-wrong-kind",
         replaced(
             "starter-chooser/raw/birch_bag",
@@ -153,7 +148,6 @@ fn missing_or_wrong_kind_chooser_entries_fail_without_substitution() {
         pack.starter_chooser().unwrap_err(),
         PackError::WrongKind { id, expected: "raw blob", .. } if id == "starter-chooser/raw/birch_bag"
     ));
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
@@ -218,7 +212,7 @@ fn malformed_chooser_entries_are_rejected_on_read() {
         ),
     ];
     for (n, (id, entry)) in cases.into_iter().enumerate() {
-        let (pack, path) = load(&format!("starter-malformed-{n}"), replaced(id, entry));
+        let pack = load(&format!("starter-malformed-{n}"), replaced(id, entry));
         assert!(
             matches!(
                 pack.starter_chooser().unwrap_err(),
@@ -226,10 +220,9 @@ fn malformed_chooser_entries_are_rejected_on_read() {
             ),
             "wrong error for malformed `{id}`"
         );
-        let _ = std::fs::remove_file(path);
     }
 
-    let (pack, path) = load(
+    let pack = load(
         "starter-malformed-front",
         replaced(
             "pokemon/mudkip/palette/normal",
@@ -240,9 +233,8 @@ fn malformed_chooser_entries_are_rejected_on_read() {
         pack.starter_preview(StarterSpecies::Mudkip).unwrap_err(),
         PackError::MalformedStarterAsset { id, .. } if id == "pokemon/mudkip/palette/normal"
     ));
-    let _ = std::fs::remove_file(path);
 
-    let (pack, path) = load(
+    let pack = load(
         "starter-malformed-front-depth",
         replaced(
             "pokemon/mudkip/front",
@@ -253,5 +245,4 @@ fn malformed_chooser_entries_are_rejected_on_read() {
         pack.starter_preview(StarterSpecies::Mudkip).unwrap_err(),
         PackError::MalformedStarterAsset { id, .. } if id == "pokemon/mudkip/front"
     ));
-    let _ = std::fs::remove_file(path);
 }

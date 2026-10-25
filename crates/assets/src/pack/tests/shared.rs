@@ -358,43 +358,128 @@ pub(super) fn pack_bytes(mut entries: Vec<Entry>) -> Vec<u8> {
     out
 }
 
-pub(super) fn write_synthetic_pack(dir_hint: &str) -> std::path::PathBuf {
+pub(super) fn write_synthetic_pack(dir_hint: &str) -> PackFixture {
     write_pack(dir_hint, &synthetic_pack())
 }
 
-/// Candidate fixture path for `dir_hint`; attempt 0 is the plain name.
-pub(super) fn pack_fixture_path(dir_hint: &str, attempt: u32) -> std::path::PathBuf {
-    let suffix = if attempt == 0 {
-        String::new()
-    } else {
-        format!("-{attempt}")
-    };
+/// Candidate private directory for `dir_hint`; attempt 0 is the plain name.
+pub(super) fn pack_fixture_dir(dir_hint: &str, attempt: u32) -> std::path::PathBuf {
     std::env::temp_dir().join(format!(
-        "pokeemerald-rs-assets-pack-test-{dir_hint}-{}{suffix}.pack",
+        "pokeemerald-rs-assets-pack-test-{dir_hint}-{}-{attempt}",
         std::process::id()
     ))
 }
 
-/// Writes `bytes` to a freshly created file. Creation is exclusive
-/// (`O_EXCL`), which refuses any existing entry, including a symlink, so a
-/// preplanted link is never followed or truncated; a taken name moves on to
-/// the next candidate.
-pub(super) fn write_pack(dir_hint: &str, bytes: &[u8]) -> std::path::PathBuf {
-    use std::io::Write;
+/// What names a file apart from another at the same path: device and inode.
+#[cfg(unix)]
+type FileIdentity = (u64, u64);
+/// Off Unix, `std` offers no file identity: the bytes written stand in, so a
+/// replacement with other contents is told apart from the fixture.
+#[cfg(not(unix))]
+type FileIdentity = Vec<u8>;
+
+#[cfg(unix)]
+fn identity_of(meta: &std::fs::Metadata) -> FileIdentity {
+    use std::os::unix::fs::MetadataExt as _;
+    (meta.dev(), meta.ino())
+}
+
+/// A pack file this test created inside a directory it also created, removed
+/// on drop. Dereferences to the file's path.
+///
+/// The directory is claimed with `create_dir` (`mkdir`), which refuses every
+/// existing entry, a symlink included, so a taken name moves on to the next
+/// candidate and nothing already there is followed, reused or removed. The
+/// file is created `create_new` (`O_EXCL`) inside it and the handle stays
+/// open until drop, which pins the inode its identity names. Drop removes the
+/// file only while it is still that file, then the directory with
+/// `remove_dir`, which refuses a directory holding anything else: a
+/// replacement or stranger placed by someone else is never deleted.
+pub(super) struct PackFixture {
+    dir: std::path::PathBuf,
+    path: std::path::PathBuf,
+    identity: FileIdentity,
+    claim: Option<std::fs::File>,
+}
+
+impl std::ops::Deref for PackFixture {
+    type Target = std::path::Path;
+
+    fn deref(&self) -> &std::path::Path {
+        &self.path
+    }
+}
+
+impl AsRef<std::path::Path> for PackFixture {
+    fn as_ref(&self) -> &std::path::Path {
+        &self.path
+    }
+}
+
+impl PackFixture {
+    #[cfg(unix)]
+    fn still_ours(&self) -> bool {
+        std::fs::symlink_metadata(&self.path)
+            .is_ok_and(|meta| meta.is_file() && identity_of(&meta) == self.identity)
+    }
+
+    #[cfg(not(unix))]
+    fn still_ours(&self) -> bool {
+        std::fs::symlink_metadata(&self.path).is_ok_and(|meta| meta.is_file())
+            && std::fs::read(&self.path).is_ok_and(|now| now == self.identity)
+    }
+}
+
+impl Drop for PackFixture {
+    fn drop(&mut self) {
+        if self.still_ours() {
+            let _ = std::fs::remove_file(&self.path);
+        }
+        // Close the pinned file first so a platform that defers deletion to
+        // the last handle has finished with it before the directory goes.
+        drop(self.claim.take());
+        let _ = std::fs::remove_dir(&self.dir);
+    }
+}
+
+fn claim_private_dir(dir_hint: &str) -> std::path::PathBuf {
     for attempt in 0.. {
-        let path = pack_fixture_path(dir_hint, attempt);
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)
+        let dir = pack_fixture_dir(dir_hint, attempt);
+        let mut builder = std::fs::DirBuilder::new();
+        #[cfg(unix)]
         {
-            Ok(mut file) => {
-                file.write_all(bytes).unwrap();
-                return path;
-            }
+            use std::os::unix::fs::DirBuilderExt as _;
+            builder.mode(0o700);
+        }
+        match builder.create(&dir) {
+            Ok(()) => return dir,
             Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(err) => panic!("create pack fixture {}: {err}", path.display()),
+            Err(err) => panic!("create pack fixture directory {}: {err}", dir.display()),
         }
     }
     unreachable!()
+}
+
+/// Writes `bytes` to a pack file in a freshly claimed private directory. Build
+/// the exact bytes the test needs first: the fixture is never reopened by name.
+pub(super) fn write_pack(dir_hint: &str, bytes: &[u8]) -> PackFixture {
+    use std::io::Write as _;
+    let dir = claim_private_dir(dir_hint);
+    let path = dir.join("fixture.pack");
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .unwrap_or_else(|err| panic!("create pack fixture {}: {err}", path.display()));
+    file.write_all(bytes).unwrap();
+    #[cfg(unix)]
+    let identity = identity_of(&file.metadata().unwrap());
+    #[cfg(not(unix))]
+    let identity = bytes.to_vec();
+    PackFixture {
+        dir,
+        path,
+        identity,
+        claim: Some(file),
+    }
 }
