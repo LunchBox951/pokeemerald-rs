@@ -52,8 +52,10 @@ pub(super) fn bag_frame_color(frame: u8) -> Rgb888 {
     rgb(frame * 4, 5, 5)
 }
 
-const ICON_STEMS: [&str; 9] = [
+const ICON_STEMS: [&str; 11] = [
     "potion",
+    "super_potion",
+    "hyper_potion",
     "great_ball",
     "antidote",
     "poke_ball",
