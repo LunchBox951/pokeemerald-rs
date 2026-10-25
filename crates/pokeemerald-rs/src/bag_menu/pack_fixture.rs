@@ -15,6 +15,12 @@ const SCREEN_HEIGHT: u32 = 32;
 const TILEMAP_BYTES: usize = 2048;
 const BAG_SIDE: u32 = 64;
 const BAG_FRAMES: u32 = 6;
+/// The local row of frame 0 that [`CLOSED_BAG`] fills.
+pub(super) const CLOSED_BAG_ROW: usize = 10;
+const CLOSED_MARKER_INDEX: u8 = 6;
+const BALL_SIDE: u32 = 16;
+const BALL_A_AT: (usize, usize) = (12, 8);
+const BALL_B_AT: (usize, usize) = (8, 2);
 
 /// Colour the message-box palette gives text and window content.
 pub(super) const TEXT: Rgb888 = rgb(0, 0, 31);
@@ -30,10 +36,28 @@ pub(super) const BAG_TEXT: Rgb888 = INDICATOR_IDLE;
 pub(super) const HM_MARK: Rgb888 = rgb(5, 5, 5);
 /// Screen palette bank 1 index 3, the shadow of list and description text.
 pub(super) const NORMAL_SHADOW: Rgb888 = rgb(0, 20, 0);
+/// The closed bag's marker row, the only thing frame 0 of the sheet draws.
+pub(super) const CLOSED_BAG: Rgb888 = CLOSED_BAG_555.to_rgb888();
+const CLOSED_BAG_555: Bgr555 = bgr(15, 15, 0);
+/// The rotating ball's two markers: A is 4 right of its centre, B 6 above it.
+pub(super) const BALL_A: Rgb888 = BALL_A_555.to_rgb888();
+pub(super) const BALL_B: Rgb888 = BALL_B_555.to_rgb888();
+const BALL_A_555: Bgr555 = bgr(31, 0, 31);
+const BALL_B_555: Bgr555 = bgr(0, 31, 31);
+/// The list-wipe tiles (11 and 17 of the screen sheet, bank 0): the dark one
+/// that covers the list and the one that restores it a row at a time.
+pub(super) const WIPE_COVER: Rgb888 = WIPE_COVER_555.to_rgb888();
+pub(super) const WIPE_RESTORED: Rgb888 = WIPE_RESTORED_555.to_rgb888();
+const WIPE_COVER_555: Bgr555 = bgr(12, 0, 12);
+const WIPE_RESTORED_555: Bgr555 = bgr(0, 12, 12);
 pub(super) const BACKGROUND: Rgb888 = rgb(0, 10, 10);
 
 const fn rgb(r: u8, g: u8, b: u8) -> Rgb888 {
-    Bgr555::from_channels(r, g, b).to_rgb888()
+    bgr(r, g, b).to_rgb888()
+}
+
+const fn bgr(r: u8, g: u8, b: u8) -> Bgr555 {
+    Bgr555::from_channels(r, g, b)
 }
 
 /// The icon colour of an item icon palette stem.
@@ -124,6 +148,14 @@ fn screen_entries() -> Vec<PackEntry> {
             }
         }
     }
+    for (tile, index) in [(11usize, 1u8), (17, 2)] {
+        let (tile_x, tile_y) = (tile % SHEET_TILES_ACROSS, tile / SHEET_TILES_ACROSS);
+        for y in 0..8 {
+            for x in 0..8 {
+                sheet[(tile_y * 8 + y) * SCREEN_WIDTH as usize + tile_x * 8 + x] = index;
+            }
+        }
+    }
     // Tile 0 draws index 3 in bank 0, so the all-zero tilemap paints BACKGROUND.
     for y in 0..8 {
         for x in 0..8 {
@@ -132,7 +164,9 @@ fn screen_entries() -> Vec<PackEntry> {
     }
     let tilemap = vec![0u8; TILEMAP_BYTES];
     let palette = [
-        (3u8, Bgr555::from_channels(0, 10, 10)),
+        (1u8, WIPE_COVER_555),
+        (2, WIPE_RESTORED_555),
+        (3, Bgr555::from_channels(0, 10, 10)),
         (17, Bgr555::from_channels(10, 0, 0)),
         (18, Bgr555::from_channels(20, 0, 0)),
         (19, Bgr555::from_channels(0, 20, 0)),
@@ -161,9 +195,18 @@ fn picture_entries() -> Vec<PackEntry> {
             (BAG_SIDE * BAG_SIDE) as usize,
         ));
     }
-    let colors: Vec<(u8, Bgr555)> = (1u8..6)
+    // The closed bag draws only a marker row.
+    let closed_row = CLOSED_BAG_ROW * BAG_SIDE as usize;
+    pixels[..(BAG_SIDE * BAG_SIDE) as usize].fill(0);
+    pixels[closed_row..closed_row + BAG_SIDE as usize].fill(CLOSED_MARKER_INDEX);
+    let mut colors: Vec<(u8, Bgr555)> = (1u8..6)
         .map(|frame| (frame, Bgr555::from_channels(frame * 4, 5, 5)))
         .collect();
+    colors.push((CLOSED_MARKER_INDEX, CLOSED_BAG_555));
+    let mut ball = vec![0u8; (BALL_SIDE * BALL_SIDE) as usize];
+    for ((x, y), index) in [(BALL_A_AT, 1u8), (BALL_B_AT, 2)] {
+        ball[y * BALL_SIDE as usize + x] = index;
+    }
     let picture = |id: &'static str| {
         pack_format::image_entry(
             id.into(),
@@ -178,8 +221,19 @@ fn picture_entries() -> Vec<PackEntry> {
         picture("bag/image/male"),
         picture("bag/image/female"),
         palette_entry_with_colors("bag/palette/bag", 16, &colors),
-        image_entry("bag/image/rotating_ball", 16, 16, BIT_DEPTH, 0),
-        palette_entry_with_colors("bag/palette/rotating_ball", 16, &[]),
+        pack_format::image_entry(
+            "bag/image/rotating_ball".into(),
+            BALL_SIDE,
+            BALL_SIDE,
+            BIT_DEPTH,
+            ball,
+        )
+        .unwrap(),
+        palette_entry_with_colors(
+            "bag/palette/rotating_ball",
+            16,
+            &[(1, BALL_A_555), (2, BALL_B_555)],
+        ),
         image_entry("bag/image/select_button", 24, 16, BIT_DEPTH, 0),
         image_entry("bag/image/hm", 16, 16, BIT_DEPTH, 4),
     ]

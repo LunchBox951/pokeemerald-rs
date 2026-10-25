@@ -12,7 +12,7 @@ use super::pack_fixture::{
 };
 use super::{
     open, open_from_pack, BagScreen, BagScreenError, BagScreenMode, BagScreenRequest,
-    BagScreenResult, BagScreenTick,
+    BagScreenResult, BagScreenTick, SWITCH_TICKS,
 };
 
 const LIST_X: usize = 112;
@@ -27,6 +27,31 @@ fn press(button: Buttons) -> ButtonState {
     let mut state = ButtonState::new();
     state.update(button);
     state
+}
+
+/// Ticks with nothing pressed.
+fn idle(screen: &mut BagScreen, ticks: u8) {
+    for _ in 0..ticks {
+        assert_eq!(screen.tick(ButtonState::new()), BagScreenTick::Open);
+    }
+}
+
+/// Presses a pocket button and lets the switch it starts run out.
+fn switch_pocket(screen: &mut BagScreen, button: Buttons) {
+    assert_eq!(screen.tick(press(button)), BagScreenTick::Open);
+    idle(screen, SWITCH_TICKS);
+}
+
+/// Presses a pocket button, then idles until the switch is `ticks` old.
+fn switch_for(screen: &mut BagScreen, button: Buttons, ticks: u8) {
+    assert_eq!(screen.tick(press(button)), BagScreenTick::Open);
+    idle(screen, ticks);
+}
+
+fn region(fb: &Framebuffer, x: usize, y: usize, w: usize, h: usize) -> Vec<Rgb888> {
+    (y..y + h)
+        .flat_map(|row| (x..x + w).map(move |col| at(fb, col, row)))
+        .collect()
 }
 
 fn sample_bag() -> Bag {
@@ -110,7 +135,7 @@ fn quantity_prints_on_rows_but_not_for_key_items() {
         "the item row has a quantity"
     );
     for _ in 0..4 {
-        screen.tick(press(Buttons::RIGHT));
+        switch_pocket(&mut screen, Buttons::RIGHT);
     }
     assert_eq!(screen.menu.pocket(), Pocket::KeyItems);
     let fb = frame_of(&screen);
@@ -128,7 +153,7 @@ fn pocket_movement_changes_bag_picture_indicator_and_rows() {
     assert_eq!(at(&fb, 5 * 8 + 1, 3 * 8 + 1), INDICATOR_CURRENT);
     assert_eq!(at(&fb, 6 * 8 + 1, 3 * 8 + 1), INDICATOR_IDLE);
 
-    assert_eq!(screen.tick(press(Buttons::RIGHT)), BagScreenTick::Open);
+    switch_pocket(&mut screen, Buttons::RIGHT);
     let fb = frame_of(&screen);
     assert_eq!(screen.menu.pocket(), Pocket::PokeBalls);
     assert_eq!(at(&fb, BAG_PIXEL.0, BAG_PIXEL.1), bag_frame_color(3));
@@ -139,9 +164,9 @@ fn pocket_movement_changes_bag_picture_indicator_and_rows() {
     // L is inert outside the L/R button mode.
     assert_eq!(screen.tick(press(Buttons::L)), BagScreenTick::Open);
     assert_eq!(screen.menu.pocket(), Pocket::PokeBalls);
-    screen.tick(press(Buttons::LEFT));
+    switch_pocket(&mut screen, Buttons::LEFT);
     assert_eq!(screen.menu.pocket(), Pocket::Items);
-    screen.tick(press(Buttons::LEFT));
+    switch_pocket(&mut screen, Buttons::LEFT);
     assert_eq!(screen.menu.pocket(), Pocket::KeyItems);
 }
 
@@ -150,9 +175,9 @@ fn shoulder_buttons_switch_pockets_only_in_lr_mode() {
     let mut request = BagScreenRequest::new(BagScreenMode::Field);
     request.lr_buttons = true;
     let mut screen = open_with(request, &sample_bag());
-    screen.tick(press(Buttons::R));
+    switch_pocket(&mut screen, Buttons::R);
     assert_eq!(screen.menu.pocket(), Pocket::PokeBalls);
-    screen.tick(press(Buttons::L));
+    switch_pocket(&mut screen, Buttons::L);
     assert_eq!(screen.menu.pocket(), Pocket::Items);
 }
 
@@ -291,7 +316,7 @@ fn field_and_battle_modes_yield_the_same_typed_selection() {
 #[test]
 fn battle_selection_in_the_ball_pocket_is_a_ball() {
     let mut screen = open_screen(BagScreenMode::Battle, &sample_bag());
-    screen.tick(press(Buttons::RIGHT));
+    switch_pocket(&mut screen, Buttons::RIGHT);
     screen.tick(press(Buttons::A));
     let BagScreenTick::Closed(BagScreenResult::Ball(selection)) = screen.tick(press(Buttons::A))
     else {
@@ -307,7 +332,7 @@ fn reopening_keeps_every_pockets_position() {
     assert!(bag.add_item(ItemId::GREAT_BALL, 1));
     let mut screen = open_screen(BagScreenMode::Field, &bag);
     screen.tick(press(Buttons::DOWN));
-    screen.tick(press(Buttons::RIGHT));
+    switch_pocket(&mut screen, Buttons::RIGHT);
     screen.tick(press(Buttons::DOWN));
     let before = frame_of(&screen);
     let kept = screen.positions();
@@ -390,7 +415,7 @@ fn production_pack_draws_every_pocket_in_both_modes() {
                 "each pocket looks different"
             );
             previous = Some(frame.pixels().to_vec());
-            screen.tick(press(Buttons::RIGHT));
+            switch_pocket(&mut screen, Buttons::RIGHT);
         }
         screen.tick(press(Buttons::A));
         assert_ne!(screen.menu.context_grid(), None);
@@ -416,8 +441,8 @@ fn tmhm_context_menu_does_not_print_is_selected_in_description() {
     let mut bag = Bag::default();
     assert!(bag.add_item(ItemId::TM_FOCUS_PUNCH, 1));
     let mut screen = open_screen(BagScreenMode::Field, &bag);
-    screen.tick(press(Buttons::RIGHT));
-    screen.tick(press(Buttons::RIGHT));
+    switch_pocket(&mut screen, Buttons::RIGHT);
+    switch_pocket(&mut screen, Buttons::RIGHT);
     assert_eq!(screen.menu.pocket(), Pocket::TmHm);
     assert_eq!(screen.tick(press(Buttons::A)), BagScreenTick::Open);
     assert!(screen.menu.context_grid().is_some());
@@ -462,8 +487,8 @@ fn tm_hm_and_berry_rows_are_numbered_and_hms_carry_the_mark() {
     assert!(bag.add_item(ItemId::TM_FOCUS_PUNCH, 1));
     assert!(bag.add_item(ItemId::HM_CUT, 1));
     let mut screen = open_screen(BagScreenMode::Field, &bag);
-    screen.tick(press(Buttons::RIGHT));
-    screen.tick(press(Buttons::RIGHT));
+    switch_pocket(&mut screen, Buttons::RIGHT);
+    switch_pocket(&mut screen, Buttons::RIGHT);
     assert_eq!(screen.menu.pocket(), Pocket::TmHm);
     let fb = frame_of(&screen);
     // The HM mark (screen palette bank 1 index 1) sits at list x 8 on exactly
@@ -474,7 +499,7 @@ fn tm_hm_and_berry_rows_are_numbered_and_hms_carry_the_mark() {
     assert_eq!(marked.len(), 1, "exactly the HM row carries the mark");
     assert!(row_has_text(&fb, 0) && row_has_text(&fb, 1));
 
-    screen.tick(press(Buttons::RIGHT));
+    switch_pocket(&mut screen, Buttons::RIGHT);
     assert_eq!(screen.menu.pocket(), Pocket::Berries);
     assert!(
         row_has_text(&frame_of(&screen), 0),
@@ -537,3 +562,5 @@ fn simultaneous_down_and_a_in_a_single_row_context_confirms() {
         BagScreenTick::Closed(BagScreenResult::Item(_))
     ));
 }
+
+mod switch;
