@@ -405,10 +405,7 @@ fn assert_missing_pack_fails_before_touching_the_save(parent: &std::path::Path) 
     );
 }
 
-/// The missing-pack test must not delete a directory it did not create. The
-/// first candidate path (the one the old PID-derived fixture used to wipe) is
-/// pre-populated under a parent this test owns, so no shared-temp path that
-/// a stranger might hold is ever touched.
+/// The missing-pack fixture must not delete contents it did not create.
 #[test]
 fn missing_pack_test_leaves_unowned_existing_contents_alone() {
     let parent = ScratchDir::new("pokeemerald-explicit-boot-guard");
