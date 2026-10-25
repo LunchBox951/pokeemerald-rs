@@ -31073,7 +31073,7 @@
         "InitKeys": {
           "reason": "main.c:238-248 and the keyRepeatCounter walk of ReadKeys (main.c:251-275). gKeyRepeatStartDelay (40) and gKeyRepeatContinueDelay (5) are KeyRepeat's START_DELAY and CONTINUE_DELAY; the counter that resets to the start delay when the held set changes or empties, then re-emits the held set every continue delay, is KeyRepeat::advance, run per screen because platform input carries only held and fresh buttons: the naming screen with its own 16-frame start delay, the bag item list with the default 40 (Up and Down only, as ListMenu_ProcessInput reads JOY_REPEAT). NOT modelled: the gMain key-field resets (platform::input owns the held and fresh views), and L=A mode is not folded into the counter's comparison, matching upstream's raw-input compare.",
           "rust_target": "crates/pokeemerald-rs/src/key_repeat.rs",
-          "spec": "I-6",
+          "spec": "C-5",
           "status": "stubbed"
         },
         "ReadKeys": {
