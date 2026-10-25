@@ -469,6 +469,12 @@ class TestChangelogLinks(unittest.TestCase):
         notes = changelog("0.1.3.0") + "\n```\n[0.1.2.0]: x/compare/a...dev\n```\n"
         version_check.check_changelog_links(notes)
 
+    def test_non_newest_dev_link_with_query_or_fragment_is_rejected(self):
+        for end in ("dev#files", "dev?expand=1"):
+            with self.subTest(end=end):
+                with self.assertRaises(version_check.VersionError):
+                    version_check.check_changelog_links(linked_changelog("dev", end))
+
     def test_indented_and_angle_bracket_definitions_are_still_checked(self):
         stale = "[0.1.2.0]: %s\n"
         for definition in (

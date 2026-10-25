@@ -635,7 +635,8 @@ def check_changelog_links(notes: Optional[str]) -> None:
     for label, target in re.findall(
         r"^ {0,3}\[([^\]]+)\]:[ \t]*<?([^\s>]+)", text, flags=re.MULTILINE
     ):
-        if label != newest and target.endswith("...dev"):
+        range_end = re.split(r"[?#]", target, maxsplit=1)[0].rstrip("/")
+        if label != newest and range_end.endswith("...dev"):
             raise VersionError(
                 f"CHANGELOG.md link [{label}] still ends at dev; end it at the "
                 f"commit that starts the range of the entry after it "
