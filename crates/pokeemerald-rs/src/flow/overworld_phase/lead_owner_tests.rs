@@ -3,7 +3,7 @@
 
 use battle::{BattlePokemon, Dex};
 
-use crate::flow::save_continue_support::new_game_phase;
+use crate::flow::save_continue_support::{dormant_party_member, new_game_phase};
 use crate::new_game;
 use crate::party;
 
@@ -31,7 +31,7 @@ fn continued(members: &[BattlePokemon], count: u8) -> OverworldPhase {
         seed.save1.player_party[slot] = record_of(member);
     }
     OverworldPhase::from_saved(
-        crate::overworld::test_support::synthetic_scene(10, 10),
+        crate::overworld::test_support::synthetic_scene(10, 10).in_room_for_test(seed.map_id),
         seed.map_id,
         seed.save1,
         seed.save2,
@@ -346,4 +346,87 @@ fn reselection_failure_keeps_the_previous_selection() {
 
     phase.assert_lead_at_slot_for_test(1);
     assert_eq!(phase.lead_battler().unwrap().current_hp(), hp);
+}
+
+/// A stored record whose secure region fails its checksum, with sentinel
+/// header bytes, so a rebuild would visibly lose them.
+fn undecodable_record() -> engine::save::Pokemon {
+    let mut record = record_of(&starter());
+    let mut header = record.box_data.to_bytes();
+    header[8..18].copy_from_slice(&[0xAA; 10]);
+    header[40] ^= 0xFF;
+    record.box_data = engine::save::BoxPokemon::from_bytes(header);
+    assert!(
+        record.box_data.substructures().is_err(),
+        "setup: the fixture must fail its checksum"
+    );
+    record
+}
+
+#[test]
+fn an_undecodable_slot_loads_empty_and_a_flush_returns_its_bytes_unchanged() {
+    let stored = undecodable_record();
+    let mut seed = new_game_phase();
+    seed.save1.player_party_count = 1;
+    seed.save1.player_party = [engine::save::Pokemon::default(); 6];
+    seed.save1.player_party[0] = stored;
+    let before = seed.save1.player_party;
+    let mut phase = OverworldPhase::from_saved(
+        crate::overworld::test_support::synthetic_scene(10, 10).in_room_for_test(seed.map_id),
+        seed.map_id,
+        seed.save1,
+        seed.save2,
+    );
+    assert!(phase.lead_battler().is_none());
+
+    phase.flush_lead_to_save();
+    phase.copy_party_and_objects_to_save();
+
+    assert_eq!(
+        phase.save1.player_party, before,
+        "every slot byte-identical"
+    );
+    assert_eq!(phase.save1.player_party_count, 1);
+}
+
+#[test]
+fn a_save_then_load_round_trip_keeps_dormant_slots_byte_identical() {
+    let dormant_first = dormant_party_member(0x11);
+    let dormant_last = dormant_party_member(0x22);
+    let mut phase = continued(&[fainted_starter(), starter()], 2);
+    phase.save1.player_party[0] = dormant_first;
+    phase.save1.player_party[2] = dormant_last;
+    phase.load_lead_from_save();
+    phase.assert_lead_at_slot_for_test(1);
+
+    phase.lead_mut_for_test().unwrap().apply_damage(3);
+    phase.copy_party_and_objects_to_save();
+    let saved = phase.save1.player_party;
+    phase.load_lead_from_save();
+
+    assert_eq!(saved[0], dormant_first);
+    assert_eq!(saved[2], dormant_last);
+    assert_eq!(phase.save1.player_party, saved);
+    phase.assert_lead_at_slot_for_test(1);
+}
+
+#[test]
+fn the_provisional_starter_is_filed_in_slot_zero_by_a_save() {
+    let mut phase = new_game_phase();
+    phase.save1.player_party_count = 0;
+    phase.save1.player_party = [engine::save::Pokemon::default(); 6];
+    let starter = starter();
+    phase.install_fresh_lead(starter.clone());
+
+    phase.copy_party_and_objects_to_save();
+
+    assert_eq!(phase.save1.player_party_count, 1);
+    assert_eq!(
+        party::select_active_battler(&Dex::new(), &phase.save1.player_party)
+            .map(|(slot, mon)| (slot, mon.species())),
+        Ok((0, starter.species()))
+    );
+    assert!(phase.save1.player_party[1..]
+        .iter()
+        .all(|p| *p == engine::save::Pokemon::default()));
 }

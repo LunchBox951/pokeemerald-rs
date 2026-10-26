@@ -577,14 +577,25 @@ impl CgbVoice {
         if envelope_boundary {
             self.routing.recompute_pan();
         }
+        // A retiring frame jumps through `oscillator_off` to `channel_complete`,
+        // past the `CGB_CHANNEL_MO_VOL` NR51 and NRx2/NRx4 writes
+        // (`m4a.c:1053-1056,1084-1101,1205-1226`); only a note's first pass keeps
+        // its note-on writes.
+        let commits_hardware = self.envelope.is_active() || initial_trigger;
         // NR51 moves only under `CGB_CHANNEL_MO_VOL` (`m4a.c:1081-1082,1205-1208`).
         let is_wave = matches!(self.channel, CgbChannelNumber::Wave);
-        if retriggered_by_transition || retriggered_by_note_off || (is_wave && envelope_boundary) {
+        if commits_hardware
+            && (retriggered_by_transition
+                || retriggered_by_note_off
+                || (is_wave && envelope_boundary))
+        {
             self.routing.commit_pan();
         }
-        let hardware_write = retriggered_by_note_off || retriggered_by_transition;
+        let hardware_write =
+            commits_hardware && (retriggered_by_note_off || retriggered_by_transition);
         if initial_trigger {
-            self.oscillator.commit_initial_writes();
+            self.oscillator
+                .commit_initial_writes(!self.envelope.is_active());
         }
         if hardware_write || initial_trigger {
             self.apply_retrigger();

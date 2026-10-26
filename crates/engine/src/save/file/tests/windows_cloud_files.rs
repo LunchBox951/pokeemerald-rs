@@ -1,4 +1,5 @@
 use super::super::open;
+use super::sync_root_retry::{register_with_retry, REGISTER_ATTEMPTS, REGISTER_BACKOFF};
 use super::*;
 
 /// Windows's `FILE_ATTRIBUTE_REPARSE_POINT`, checked below as this test
@@ -62,9 +63,14 @@ fn expose_placeholders_to_this_process() {
 /// namespace declared complete, so the filter never waits on the sync
 /// provider this test does not connect.
 ///
-/// Panics on any registration failure, with no skip path: on a
-/// save-data-risk change a Windows leg that cannot build the fixture must
-/// fail, not read green while the read-path tests never ran.
+/// Retries a bounded number of times on `HRESULT_ERROR_NOT_FOUND` (see
+/// [`super::sync_root_retry`]), the one registration failure documented there
+/// as environmental.
+///
+/// Panics on any other failure, and on that one if it persists through every
+/// attempt, with no skip path: on a save-data-risk change a Windows leg that
+/// cannot build the fixture must fail, not read green while the read-path
+/// tests never ran.
 #[cfg(windows)]
 fn register_sync_root(dir: &TempDir, label: &str) -> SyncRootGuard {
     use windows_sys::Win32::Storage::CloudFilters::{
@@ -72,18 +78,25 @@ fn register_sync_root(dir: &TempDir, label: &str) -> SyncRootGuard {
     };
 
     expose_placeholders_to_this_process();
-    match try_register_sync_root(
-        &dir.path,
-        label,
-        CF_HYDRATION_POLICY_FULL,
-        CF_POPULATION_POLICY_ALWAYS_FULL,
-    ) {
-        Ok(guard) => guard,
-        Err(result) => panic!(
+    register_with_retry(
+        REGISTER_ATTEMPTS,
+        REGISTER_BACKOFF,
+        || {
+            try_register_sync_root(
+                &dir.path,
+                label,
+                CF_HYDRATION_POLICY_FULL,
+                CF_POPULATION_POLICY_ALWAYS_FULL,
+            )
+        },
+        std::thread::sleep,
+    )
+    .unwrap_or_else(|result| {
+        panic!(
             "sync root registration refused: CfRegisterSyncRoot on {} failed with HRESULT {result:#010x}",
             dir.path.display()
-        ),
-    }
+        )
+    })
 }
 
 /// Registers `root` with the given hydration and population policies,

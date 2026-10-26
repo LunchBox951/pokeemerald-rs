@@ -112,7 +112,7 @@ pub use domains::battle_messages::{
 pub use domains::song::decode_song_payload;
 pub use error::{HeaderFault, ImportError, Lz77Fault, PartialFile, SongFault};
 pub use lz77::{decompress as lz77_decompress, decompress_at as lz77_decompress_at, LZ77_TYPE};
-pub use one_line::{OneLine, OneLinePath};
+pub use one_line::{OneLine, OneLinePath, OneLineText};
 pub use profile::{
     select as select_profile, select_with as select_profile_with, RevisionProfile, EMERALD_US_REV0,
     KNOWN_PROFILES,
