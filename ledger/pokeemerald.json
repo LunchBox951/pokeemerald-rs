@@ -20990,7 +20990,7 @@
           "reason": "item_effects.h:4-65 ITEM0..ITEM5 field masks, ITEM_EFFECT_ARG_START and the ITEM6_* special amounts, ported as constants in assets::items::item_effects. Not covered by this artifact: the ITEM_EFFECT_* type ids (:67-90) used by GetItemEffectType, which no consumer reads yet; the parent stays pending for them.",
           "rust_target": "crates/assets/src/items/item_effects.rs",
           "spec": "S-6",
-          "status": "rewritten"
+          "status": "ported"
         }
       },
       "category": "code.constants",
@@ -31983,7 +31983,7 @@
           "status": "rewritten"
         },
         "GetItemEffectParamOffset": {
-          "reason": "pokemon.c:5324-5434 as assets::items::ItemEffect::param_offset, with ItemEffect::heal_hp_param_offset and ItemEffectTable::param_offset/heal_hp_param_offset: same scan order (flag fields 0-5, bit-shifted effect_bit), same early returns of 0 (fields 0-3, ITEM4_EVO_STONE, ITEM5_FRIENDSHIP_HIGH), same PP_UP/REVIVE flag clearing, and 0 for a null table position; differentially checked against the C scan for every effect, field and bit. Not modelled: the Enigma Berry branch (:5337-5343) that reads gEnigmaBerries[gActiveBattler].itemEffect, so Enigma Berry yields 0; offsets are usize, not u8.",
+          "reason": "pokemon.c:5324-5434 as assets::items::ItemEffect::param_offset, with ItemEffect::heal_hp_param_offset and ItemEffectTable::param_offset/heal_hp_param_offset: scan over flag fields 0-5 with the effect bit shifted alongside the flags, early return of 0 for fields 0-3, ITEM4_EVO_STONE and ITEM5_FRIENDSHIP_HIGH, PP_UP and REVIVE flag clearing, and 0 for a null table position. Tests pin the ITEM4_HEAL_HP offset for Potion, Full Restore, Energy Powder, Full Heal, Guard Spec., Dire Hit, each X item, Revive and the heal amount at that offset for ten HP-healing items, plus field/bit probes on HP Up, Sun Stone, Iron, Energy Powder and Guard Spec., and the null, out-of-table and unknown-id slots; other effect, field and bit combinations are not pinned. Not modelled: the Enigma Berry branch (:5337-5343) that reads gEnigmaBerries[gActiveBattler].itemEffect, so Enigma Berry yields 0; offsets are usize, not u8.",
           "rust_target": "crates/assets/src/items/item_effects.rs",
           "spec": "S-6",
           "status": "rewritten"
