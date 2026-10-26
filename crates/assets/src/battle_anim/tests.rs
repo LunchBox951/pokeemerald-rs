@@ -3,6 +3,7 @@ use super::{
     BattleAnimationError, BattleAnimationProgram, EffectSpriteId, PanSweep, ProgramId,
     ANIM_ARGS_COUNT, EFFECT_SPRITE_COUNT,
 };
+use crate::MoveId;
 
 fn symbol(name: &str) -> AnimSymbol {
     AnimSymbol::new(name).unwrap()
@@ -140,7 +141,23 @@ fn catalog() -> BattleAnimationCatalog {
 #[test]
 fn table_sizes_are_the_upstream_counts() {
     let sizes = AnimationTable::ALL.map(AnimationTable::len);
-    assert_eq!(sizes, [355, 9, 23, 7]);
+    let moves = u16::try_from(crate::MOVES_COUNT).unwrap();
+    assert_eq!(sizes, [moves, 9, 23, 7]);
+}
+
+#[test]
+fn move_selectors_span_the_move_table() {
+    assert_eq!(usize::from(AnimationTable::Moves.len()), crate::MOVES_COUNT);
+    let last_move = MoveId::PSYCHO_BOOST;
+    assert_eq!(last_move.index() + 1, AnimationTable::Moves.len());
+    assert!(AnimationSelector::new(AnimationTable::Moves, last_move.index()).is_ok());
+    assert_eq!(
+        AnimationSelector::new(AnimationTable::Moves, last_move.index() + 1),
+        Err(BattleAnimationError::SelectorOutOfRange {
+            table: AnimationTable::Moves,
+            index: last_move.index() + 1
+        })
+    );
 }
 
 #[test]
@@ -204,7 +221,7 @@ fn encoding_pins_a_minimal_catalog() {
     let bytes = catalog.encode();
     // schema version, program count, symbol length and "A", command count, End opcode.
     assert_eq!(bytes[..10], [1, 0, 1, 0, 1, 0, b'A', 1, 0, 0x08]);
-    assert_eq!(bytes.len(), 10 + 2 * (355 + 9 + 23 + 7));
+    assert_eq!(bytes.len(), 10 + 2 * (crate::MOVES_COUNT + 9 + 23 + 7));
 }
 
 #[test]
