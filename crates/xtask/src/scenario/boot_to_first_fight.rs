@@ -8,13 +8,13 @@ use super::{expand_segments, ScenarioFrame, Segment, FADE_WAIT_FRAMES};
 
 const INTRO_HANDOFF_FRAMES: usize = 1;
 const BUTTON_EDGE_FRAMES: usize = 1;
-/// The frames between the title fade's done frame and the one the menu first
-/// honours A on: the handoff's fade-in start, the white fade-in's 22 updates,
-/// then F (the save check), the battery check, the window drawing and the
-/// highlight, with the first input poll on the frame after
+/// The frames between the title fade's done frame, which begins the menu's
+/// white fade-in, and the one the menu first honours A on: the fade-in's 22
+/// updates, then F (the save check), the battery check, the window drawing and
+/// the highlight, with the first input poll on the frame after
 /// (`InitMainMenu(FALSE)`, `pokeemerald/src/main_menu.c:583-608`;
 /// `pokeemerald_rs`'s `flow::boot_setup_frames_tests`).
-const MENU_SETUP_FRAMES: usize = 1 + 22 + 4;
+const MENU_SETUP_FRAMES: usize = 22 + 4;
 const WELCOME_FIRST_PROMPT_RUN_INDEX: usize = 0;
 const MAIN_SPEECH_FIRST_SCROLL_PROMPT_RUN_INDEX: usize = 8;
 const B_CONFIRM_RUN_INDICES: &[usize] = &[

@@ -23,28 +23,22 @@ const WHITE: u32 = 0x00FF_FFFF;
 const FADE_IN_UPDATES: usize = 22;
 
 struct Boot {
-    /// The frame the title's fade-out hands off on.
+    /// The frame the title's fade-out hands off on: the fade-in's first.
     handoff: Box<Frame>,
-    /// The first fade-in frame: still white.
-    fade_start: Box<Frame>,
     /// Frames F onwards, one per entry of `held`.
     phases: Vec<&'static str>,
     frames: Vec<Box<Frame>>,
     scene: AppScene,
 }
 
-/// Runs the title's done frame (`title_to_main_menu`), drives the white
-/// fade-in up to the frame before F, then steps one production frame per
+/// Runs the title's done frame (`title_to_main_menu`, which already begins the
+/// fade), drives the white fade-in up to the frame before F, then steps one production frame per
 /// entry of `held`, starting at F.
 fn boot_menu(f: &mut Fixture, held: &[Buttons]) -> Boot {
     let mut buttons = ButtonState::new();
     let (mut scene, handoff) = title_to_main_menu(&f.pack_source, &mut f.slot)
         .expect("the synthetic pack builds the main menu");
     assert_eq!(phase(&scene), "fade-in");
-    // The first fade-in step begins the fade; each later one advances it.
-    buttons.update(NONE);
-    let (next, fade_start) = advance_scene(scene, buttons, &mut f.slot, f.pack_source.clone());
-    scene = next;
     let mut oracle = NormalPaletteFade::begin_in(PaletteFadeTarget::White);
     let mut fade_updates = 0;
     while !oracle.is_done() {
@@ -66,7 +60,6 @@ fn boot_menu(f: &mut Fixture, held: &[Buttons]) -> Boot {
     }
     Boot {
         handoff,
-        fade_start,
         phases,
         frames,
         scene,
@@ -84,13 +77,12 @@ fn selected(scene: &AppScene) -> MainMenuItem {
 fn the_title_hands_off_on_white_and_fades_in_before_the_setup_frames() {
     let mut f = Fixture::new("boot-white-fade-in");
     let run = boot_menu(&mut f, &[NONE; 5]);
-    assert!(run.handoff.iter().all(|&pixel| pixel == WHITE));
     assert!(
-        run.fade_start.iter().all(|&pixel| pixel == WHITE),
+        run.handoff.iter().all(|&pixel| pixel == WHITE),
         "the fade-in begins at full white"
     );
     assert_ne!(
-        run.frames[0], run.fade_start,
+        run.frames[0], run.handoff,
         "by F the fade has revealed the backdrop"
     );
 }
@@ -150,4 +142,20 @@ fn an_a_held_since_the_setup_is_not_a_fresh_press_on_the_fifth_frame() {
     let held = [NONE, NONE, Buttons::A, Buttons::A, Buttons::A];
     let run = boot_menu(&mut f, &held);
     assert_eq!(run.phases, SETUP_PHASES);
+}
+
+/// The title's done update installs `CB2_InitMainMenu`, so the handoff frame
+/// begins the fade (`title_screen.c:824-828`); input is polled 27 frames on.
+#[test]
+fn a_fresh_a_27_frames_after_the_title_handoff_confirms() {
+    let mut f = Fixture::new("boot-a-27");
+    let mut buttons = ButtonState::new();
+    let (mut scene, _) = title_to_main_menu(&f.pack_source, &mut f.slot)
+        .expect("the synthetic pack builds the main menu");
+    for _ in 0..26 {
+        scene = f.step(scene, &mut buttons, NONE);
+    }
+    assert_eq!(phase(&scene), "menu", "the menu polls input on P+49");
+    scene = f.step(scene, &mut buttons, Buttons::A);
+    assert_eq!(phase(&scene), "confirm", "a fresh A on P+49 confirms");
 }

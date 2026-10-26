@@ -253,7 +253,7 @@ pub(crate) struct MainMenuFadeIn {
 
 /// What the next [`advance_main_menu_fade_in`] call does.
 enum SetupPhase {
-    /// The handoff frame is over: the fade begins on this one.
+    /// The Options return's handoff frame is over: the fade begins on this one.
     BeginFade,
     /// Advancing the fade; observing it done is `Task_MainMenuCheckSaveFile`.
     Fading(NormalPaletteFade),
@@ -275,29 +275,41 @@ impl MainMenuFadeIn {
     }
 
     /// Hands off from the Options screen: a black frame, with the fade to
-    /// follow (`pokeemerald/src/main_menu.c:583-586`).
+    /// follow on the next one -- `Task_OptionMenuFadeOut` sees the fade done
+    /// a frame after its last update (`pokeemerald/src/main_menu.c:583-586`,
+    /// `option_menu.c:137-142,364-372`).
     pub(super) fn begin(state: Box<MainMenuState>) -> (Self, Box<Frame>) {
-        Self::handoff(state, PaletteFadeTarget::Black)
-    }
-
-    /// Hands off from the title's white fade-out, on the frame that fade is
-    /// observed done: `CB2_GoToMainMenu` only installs `CB2_InitMainMenu`
-    /// (`pokeemerald/src/title_screen.c:824-828`), whose `InitMainMenu(FALSE)`
-    /// fades in from white and runs the same task chain
-    /// (`pokeemerald/src/main_menu.c:587-588`). The frame stays white.
-    pub(super) fn from_title(state: Box<MainMenuState>) -> (Self, Box<Frame>) {
-        Self::handoff(state, PaletteFadeTarget::White)
-    }
-
-    fn handoff(state: Box<MainMenuState>, from: PaletteFadeTarget) -> (Self, Box<Frame>) {
         let source = state.scene.compose_backdrop();
-        let frame = faded_frame(&source, &NormalPaletteFade::begin_in(from));
+        let frame = faded_frame(
+            &source,
+            &NormalPaletteFade::begin_in(PaletteFadeTarget::Black),
+        );
         (
             Self {
                 state,
                 source,
-                from,
+                from: PaletteFadeTarget::Black,
                 phase: SetupPhase::BeginFade,
+            },
+            frame,
+        )
+    }
+
+    /// Hands off from the title's white fade-out, on the frame that fade's
+    /// last update reports done: that update installs `CB2_InitMainMenu`
+    /// (`pokeemerald/src/title_screen.c:824-828`), so this frame is
+    /// `InitMainMenu(FALSE)`, which begins the white fade-in
+    /// (`pokeemerald/src/main_menu.c:587-588`). The frame is still white.
+    pub(super) fn from_title(state: Box<MainMenuState>) -> (Self, Box<Frame>) {
+        let source = state.scene.compose_backdrop();
+        let fade = NormalPaletteFade::begin_in(PaletteFadeTarget::White);
+        let frame = faded_frame(&source, &fade);
+        (
+            Self {
+                state,
+                source,
+                from: PaletteFadeTarget::White,
+                phase: SetupPhase::Fading(fade),
             },
             frame,
         )
