@@ -8,7 +8,7 @@ pub(super) struct UnderrunError {
 }
 
 impl UnderrunError {
-    pub(super) fn describe(&self) -> String {
+    pub(super) fn describe(self) -> String {
         format!(
             "{} sample(s) played as silence due to ring-buffer underrun during song rendering",
             self.samples
