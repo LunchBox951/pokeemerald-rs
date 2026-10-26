@@ -19,7 +19,7 @@ fn a_turn_interrupted_by_the_rival_battle_does_not_freeze_the_player_afterwards(
     let (rx, ry) = RIVAL_TILE;
     // Facing North, so the held East below is a standstill turn, not a step.
     let mut phase = route_103_phase(PlayerState::new((rx - 1, ry), 3, Direction::North));
-    phase.party_lead = Some(overwhelming_treecko_lead());
+    phase.set_fresh_lead_for_test(overwhelming_treecko_lead());
 
     phase.step(held(Buttons::RIGHT));
     assert_eq!(
@@ -56,7 +56,7 @@ fn a_turn_interrupted_by_the_rival_battle_does_not_freeze_the_player_afterwards(
 fn the_rival_battle_ends_a_turns_busy_window_on_the_frame_it_claims() {
     let (rx, ry) = RIVAL_TILE;
     let mut phase = route_103_phase(PlayerState::new((rx - 1, ry), 3, Direction::North));
-    phase.party_lead = Some(overwhelming_treecko_lead());
+    phase.set_fresh_lead_for_test(overwhelming_treecko_lead());
 
     phase.step(held(Buttons::RIGHT));
     assert!(

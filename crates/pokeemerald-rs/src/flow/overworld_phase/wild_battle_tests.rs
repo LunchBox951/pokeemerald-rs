@@ -21,7 +21,7 @@ const TICK_AFTER_REINIT: u32 = 0;
 #[test]
 fn a_non_losing_wild_battle_reinitialises_the_tileset_animation_counter() {
     let mut phase = new_game_phase();
-    phase.party_lead = Some(crate::new_game::provisional_starter());
+    phase.set_fresh_lead_for_test(crate::new_game::provisional_starter());
     let map_before = phase.map_id;
     let position_before = phase.player.position();
     let money_before = phase.save1.money;
