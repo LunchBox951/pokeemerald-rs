@@ -46,7 +46,7 @@ fn a_mon_holding_nothing_changes_nothing() {
     assert_eq!(lead.held_item(), ItemId::NONE);
 }
 
-/// Upstream offers TAKE MAIL, not TAKE ITEM, for a mail holder (`party_menu.c:5373`).
+/// Upstream offers TAKE MAIL, not TAKE ITEM, for a mail holder (`SetPartyMonFieldSelectionActions`, `party_menu.c:2631-2634`).
 #[test]
 fn a_mon_holding_mail_is_refused_untouched() {
     let dex = Dex::new();

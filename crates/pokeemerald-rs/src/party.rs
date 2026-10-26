@@ -561,7 +561,7 @@ pub(crate) enum TakeHeldItem {
     NotHolding,
     /// The Pokemon holds mail (`ItemIsMail`, `mail_data.c:185`). Not a
     /// `TryTakeMonItem` outcome: the party menu offers `CursorCb_TakeMail`
-    /// in place of TAKE ITEM for a mail holder (`party_menu.c:5373`), so this
+    /// in place of TAKE ITEM for a mail holder (`SetPartyMonFieldSelectionActions`, `party_menu.c:2631-2634`), so this
     /// port refuses here, unchanged, rather than take mail without clearing
     /// its record.
     HoldsMail(assets::items::ItemId),
