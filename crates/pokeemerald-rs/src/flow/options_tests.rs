@@ -10,7 +10,7 @@ use crate::game_save::{SaveSlot, SavedGame};
 use crate::main_menu::{self, MainMenuItem};
 use crate::new_game::NewGameOptions;
 use crate::pack_source::PackSource;
-use crate::pack_test_support::{image_entry, pack_bytes, palette_entry_with_color};
+use crate::pack_test_support::{image_entry, pack_bytes_with_fonts, palette_entry_with_color};
 use engine::save::{BattleStyle, ButtonMode, SoundMode};
 use engine::settings::GameSettings;
 use platform::{ButtonState, Buttons};
@@ -54,7 +54,7 @@ fn synthetic_options_pack_bytes() -> Vec<u8> {
         0,
         Bgr555::from_channels(4, 4, 16),
     ));
-    pack_bytes(entries)
+    pack_bytes_with_fonts(entries)
 }
 
 pub(super) struct Fixture {

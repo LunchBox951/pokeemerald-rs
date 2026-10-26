@@ -17,7 +17,7 @@
 //! [`Printer::cleared_window`], both for the caller to erase. Which colour
 //! that erase uses stays out of scope with the rest of formatting.
 
-use assets::fonts::{FontId, Glyph, GlyphSource};
+use assets::fonts::{FontId, Glyph, GlyphSource, GlyphSources};
 
 use super::Token;
 
@@ -288,12 +288,18 @@ fn glyph_id_for_token(tok: &Token) -> Option<u16> {
 /// A frame-driven printer over decoded text tokens.
 ///
 /// The printer owns its glyph source and emits blit and layout events rather
-/// than writing a pixel buffer.
+/// than writing a pixel buffer. [`Printer::new`] carries that one source;
+/// [`Printer::with_sources`] also carries the other modelled Latin sources,
+/// retrievable through [`Printer::source`], so a later `FONT` control can
+/// select one. Text always renders from the initial source until then.
 #[derive(Debug)]
 pub struct Printer<S> {
     tokens: Vec<Token>,
     next_token_index: usize,
     glyphs: S,
+    /// The modelled sources other than `glyphs`, in [`FontId::ALL`] order.
+    /// Empty for a printer built by [`Printer::new`].
+    alternate_glyphs: Vec<S>,
     speed: TextSpeed,
     reveal_delay_frames_remaining: u8,
     origin: PixelPos,
@@ -321,6 +327,7 @@ impl<S: GlyphSource> Printer<S> {
             cleared_span: None,
             cleared_window: false,
             glyphs,
+            alternate_glyphs: Vec::new(),
             speed,
             reveal_delay_frames_remaining: 0,
             origin,
@@ -329,6 +336,41 @@ impl<S: GlyphSource> Printer<S> {
             allows_ab_speed_up: false,
             ab_speed_up_latched: false,
         }
+    }
+
+    /// Creates a printer at the window-local `origin` that renders from
+    /// `initial`'s source and also carries every other modelled source.
+    ///
+    /// Behaves exactly as [`Self::new`] over `initial`'s source: nothing
+    /// selects an alternate source yet.
+    #[must_use]
+    pub fn with_sources(
+        tokens: Vec<Token>,
+        sources: GlyphSources<S>,
+        initial: FontId,
+        speed: TextSpeed,
+        origin: PixelPos,
+    ) -> Self {
+        let (selected, alternate_glyphs) = sources.split(initial);
+        Self {
+            alternate_glyphs,
+            ..Self::new(tokens, selected, speed, origin)
+        }
+    }
+
+    /// The font the printer currently renders from.
+    #[must_use]
+    pub fn selected_font(&self) -> FontId {
+        self.glyphs.font()
+    }
+
+    /// The source this printer carries for `font`, or `None` if it was built
+    /// without that font ([`Self::new`] carries only its one source).
+    #[must_use]
+    pub fn source(&self, font: FontId) -> Option<&S> {
+        std::iter::once(&self.glyphs)
+            .chain(&self.alternate_glyphs)
+            .find(|source| source.font() == font)
     }
 
     /// Sets the template line spacing in pixels (`TextPrinterTemplate.lineSpacing`).
@@ -1545,6 +1587,81 @@ mod tests {
         };
         assert_eq!((g.x, g.y), (0, 1));
         assert_eq!(g.glyph.advance_width, NORMAL_A_ADVANCE_WIDTH);
+    }
+
+    /// Per-font pixel fills, each distinct, so a glyph names its source.
+    fn fill_for(font: FontId) -> u8 {
+        match font {
+            FontId::Small => 1,
+            FontId::Normal => 2,
+            FontId::Short => 3,
+            FontId::Narrow => 0,
+            FontId::SmallNarrow => 1,
+        }
+    }
+
+    fn multi_font_printer(initial: FontId) -> Printer<assets::fonts::OwnedFontGlyphSheet> {
+        let sources = GlyphSources::try_from_fn(|font| {
+            let pixels = vec![fill_for(font); (SHEET_WIDTH * SHEET_HEIGHT) as usize];
+            Ok::<_, assets::error::AssetError>(synthetic_sheet(&pixels, font).to_owned_sheet())
+        })
+        .unwrap();
+        Printer::with_sources(
+            decode_tokens(&[ENCODED_A, super::super::EOS]),
+            sources,
+            initial,
+            TextSpeed::Instant,
+            (0, 0),
+        )
+    }
+
+    #[test]
+    fn a_multi_source_printer_retains_separately_identified_font_data() {
+        let printer = multi_font_printer(FontId::Normal);
+        assert_eq!(printer.selected_font(), FontId::Normal);
+        for font in FontId::ALL {
+            let source = printer
+                .source(font)
+                .unwrap_or_else(|| panic!("{font:?} source must be carried"));
+            assert_eq!(source.font(), font);
+            let glyph = source.glyph(1).unwrap();
+            assert_eq!(glyph.pixels[0], fill_for(font), "{font:?} pixels");
+            assert_eq!(glyph.advance_width, font.glyph_width(1).unwrap());
+        }
+        // Normal and an alternate font are different data, not one aliased sheet.
+        let normal = printer.source(FontId::Normal).unwrap().glyph(1).unwrap();
+        let short = printer.source(FontId::Short).unwrap().glyph(1).unwrap();
+        assert_ne!(normal.pixels[0], short.pixels[0]);
+        assert_ne!(normal.advance_width, 0);
+    }
+
+    #[test]
+    fn unchanged_text_renders_from_the_initial_source_not_an_alternate() {
+        for initial in FontId::ALL {
+            let mut printer = multi_font_printer(initial);
+            let TickEvent::Glyph(g) = printer.tick(PrinterInput::none()) else {
+                panic!("expected a glyph")
+            };
+            assert_eq!(g.glyph.pixels[0], fill_for(initial), "{initial:?}");
+            assert_eq!(
+                g.glyph.advance_width,
+                initial.glyph_width(u16::from(ENCODED_A)).unwrap()
+            );
+            assert_eq!(printer.selected_font(), initial);
+        }
+    }
+
+    #[test]
+    fn a_single_source_printer_carries_only_its_one_source() {
+        let pixels = blank_sheet_pixels();
+        let printer = Printer::new(
+            decode_tokens(&[super::super::EOS]),
+            synthetic_sheet(&pixels, FontId::Normal),
+            TextSpeed::Instant,
+            (0, 0),
+        );
+        assert!(printer.source(FontId::Normal).is_some());
+        assert!(printer.source(FontId::Small).is_none());
     }
 
     #[test]

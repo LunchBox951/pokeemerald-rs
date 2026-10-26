@@ -5,7 +5,7 @@ use super::save_continue_support::{new_game_phase, save_from_the_start_menu};
 use super::tests::{write_scratch_exclusive, TempSave};
 use super::{menu_type_for, window_frame_for};
 use crate::main_menu::{MainMenuScene, MainMenuType};
-use crate::pack_test_support::{image_entry, pack_bytes, palette_entry_with_color};
+use crate::pack_test_support::{image_entry, pack_bytes_with_fonts, palette_entry_with_color};
 
 /// A minimal pack covering what [`MainMenuScene::from_pack_with_window_frame`]
 /// needs, with two distinguishable selectable window frames -- frame 0
@@ -18,7 +18,7 @@ fn synthetic_two_frame_pack_bytes() -> Vec<u8> {
     let red = rendering::Bgr555::from_channels(31, 0, 0);
     let dark_blue = rendering::Bgr555::from_channels(4, 4, 16);
 
-    pack_bytes(vec![
+    pack_bytes_with_fonts(vec![
         image_entry("text-window/image/1", 24, 24, 4, 1),
         palette_entry_with_color("text-window/palette/1", 16, 1, green),
         image_entry("text-window/image/6", 24, 24, 4, 1),
@@ -132,7 +132,7 @@ fn field_start_menu_two_frame_pack_bytes() -> Vec<u8> {
     use crate::pack_test_support::{image_entry, palette_entry, palette_entry_with_color};
     use rendering::Bgr555;
 
-    crate::pack_test_support::pack_bytes(vec![
+    crate::pack_test_support::pack_bytes_with_fonts(vec![
         image_entry("text-window/image/1", 24, 24, 4, 1),
         palette_entry_with_color(
             "text-window/palette/1",
