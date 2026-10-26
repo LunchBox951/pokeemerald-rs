@@ -110,11 +110,23 @@ fn direct_sound_entry(upstream: &Path, name: &str) -> Result<PackEntry, ExtractE
     let source_path = upstream
         .join("sound/direct_sound_samples")
         .join(format!("{name}.wav"));
-    let source = read_file(&source_path)?;
-    let sample = wav::decode(&source).map_err(|error| ExtractError::Wav(source_path, error))?;
+    direct_sound_entry_from_path(&source_path, format!("audio/sample/direct-sound/{name}"))
+}
+
+/// Decodes one `DirectSound` WAV and wraps its payload as the raw pack entry `id`.
+///
+/// The one codec every `DirectSound` family shares, so instrument and cry samples are
+/// byte-identical for the same source.
+pub(super) fn direct_sound_entry_from_path(
+    source_path: &Path,
+    id: String,
+) -> Result<PackEntry, ExtractError> {
+    let source = read_file(source_path)?;
+    let sample = wav::decode(&source)
+        .map_err(|error| ExtractError::Wav(source_path.to_path_buf(), error))?;
 
     Ok(pack_format::raw_entry(
-        format!("audio/sample/direct-sound/{name}"),
+        id,
         encode_direct_sound(
             sample.base_frequency,
             sample.loop_start,

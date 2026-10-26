@@ -25,39 +25,11 @@ use crate::error::BattleError;
 use crate::pokemon::BattlePokemon;
 
 /// Move effect shared by Poison Sting, Smog, Sludge, and Sludge Bomb.
-pub const EFFECT_POISON_HIT: MoveEffect = MoveEffect(2);
-const EFFECT_BURN_HIT: MoveEffect = MoveEffect(4);
-const EFFECT_FREEZE_HIT: MoveEffect = MoveEffect(5);
-const EFFECT_PARALYZE_HIT: MoveEffect = MoveEffect(6);
-const EFFECT_FLINCH_HIT: MoveEffect = MoveEffect(31);
-const EFFECT_PAY_DAY: MoveEffect = MoveEffect(34);
-const EFFECT_TRI_ATTACK: MoveEffect = MoveEffect(36);
-const EFFECT_TRAP: MoveEffect = MoveEffect(42);
-const EFFECT_ATTACK_DOWN_HIT: MoveEffect = MoveEffect(68);
-const EFFECT_DEFENSE_DOWN_HIT: MoveEffect = MoveEffect(69);
+pub const EFFECT_POISON_HIT: MoveEffect = MoveEffect::POISON_HIT;
 /// Move effect shared by Constrict, Bubble, Bubble Beam, Icy Wind and Mud Shot.
-pub const EFFECT_SPEED_DOWN_HIT: MoveEffect = MoveEffect(70);
-const EFFECT_SPECIAL_ATTACK_DOWN_HIT: MoveEffect = MoveEffect(71);
-const EFFECT_SPECIAL_DEFENSE_DOWN_HIT: MoveEffect = MoveEffect(72);
-const EFFECT_ACCURACY_DOWN_HIT: MoveEffect = MoveEffect(73);
+pub const EFFECT_SPEED_DOWN_HIT: MoveEffect = MoveEffect::SPEED_DOWN_HIT;
 /// Move effect shared by Confusion and Psybeam.
-pub const EFFECT_CONFUSE_HIT: MoveEffect = MoveEffect(76);
-const EFFECT_THIEF: MoveEffect = MoveEffect(105);
-const EFFECT_THAW_HIT: MoveEffect = MoveEffect(125);
-const EFFECT_RAPID_SPIN: MoveEffect = MoveEffect(129);
-const EFFECT_DEFENSE_UP_HIT: MoveEffect = MoveEffect(138);
-const EFFECT_ATTACK_UP_HIT: MoveEffect = MoveEffect(139);
-const EFFECT_ALL_STATS_UP_HIT: MoveEffect = MoveEffect(140);
-const EFFECT_TWISTER: MoveEffect = MoveEffect(146);
-const EFFECT_FLINCH_MINIMIZE_HIT: MoveEffect = MoveEffect(150);
-const EFFECT_FAKE_OUT: MoveEffect = MoveEffect(158);
-const EFFECT_SUPERPOWER: MoveEffect = MoveEffect(182);
-const EFFECT_KNOCK_OFF: MoveEffect = MoveEffect(188);
-const EFFECT_DOUBLE_EDGE: MoveEffect = MoveEffect(198);
-const EFFECT_BLAZE_KICK: MoveEffect = MoveEffect(200);
-const EFFECT_POISON_FANG: MoveEffect = MoveEffect(202);
-const EFFECT_OVERHEAT: MoveEffect = MoveEffect(204);
-const EFFECT_POISON_TAIL: MoveEffect = MoveEffect(209);
+pub const EFFECT_CONFUSE_HIT: MoveEffect = MoveEffect::CONFUSE_HIT;
 
 /// Metadata for a damaging move-effect script ending in `setmoveeffect`
 /// followed immediately by `goto BattleScript_EffectHit`.
@@ -113,39 +85,42 @@ const fn certain_on_user(effect: MoveEffect, move_effect: &'static str) -> Tramp
 /// script suffix.
 pub const SECONDARY_TRAMPOLINES: [Trampoline; 31] = [
     chance_on_target(EFFECT_POISON_HIT, "MOVE_EFFECT_POISON"),
-    chance_on_target(EFFECT_BURN_HIT, "MOVE_EFFECT_BURN"),
-    chance_on_target(EFFECT_FREEZE_HIT, "MOVE_EFFECT_FREEZE"),
-    chance_on_target(EFFECT_PARALYZE_HIT, "MOVE_EFFECT_PARALYSIS"),
-    chance_on_target(EFFECT_FLINCH_HIT, "MOVE_EFFECT_FLINCH"),
-    chance_on_target(EFFECT_PAY_DAY, "MOVE_EFFECT_PAYDAY"),
-    chance_on_target(EFFECT_TRI_ATTACK, "MOVE_EFFECT_TRI_ATTACK"),
-    chance_on_target(EFFECT_TRAP, "MOVE_EFFECT_WRAP"),
-    chance_on_target(EFFECT_ATTACK_DOWN_HIT, "MOVE_EFFECT_ATK_MINUS_1"),
-    chance_on_target(EFFECT_DEFENSE_DOWN_HIT, "MOVE_EFFECT_DEF_MINUS_1"),
+    chance_on_target(MoveEffect::BURN_HIT, "MOVE_EFFECT_BURN"),
+    chance_on_target(MoveEffect::FREEZE_HIT, "MOVE_EFFECT_FREEZE"),
+    chance_on_target(MoveEffect::PARALYZE_HIT, "MOVE_EFFECT_PARALYSIS"),
+    chance_on_target(MoveEffect::FLINCH_HIT, "MOVE_EFFECT_FLINCH"),
+    chance_on_target(MoveEffect::PAY_DAY, "MOVE_EFFECT_PAYDAY"),
+    chance_on_target(MoveEffect::TRI_ATTACK, "MOVE_EFFECT_TRI_ATTACK"),
+    chance_on_target(MoveEffect::TRAP, "MOVE_EFFECT_WRAP"),
+    chance_on_target(MoveEffect::ATTACK_DOWN_HIT, "MOVE_EFFECT_ATK_MINUS_1"),
+    chance_on_target(MoveEffect::DEFENSE_DOWN_HIT, "MOVE_EFFECT_DEF_MINUS_1"),
     chance_on_target(EFFECT_SPEED_DOWN_HIT, "MOVE_EFFECT_SPD_MINUS_1"),
-    chance_on_target(EFFECT_SPECIAL_ATTACK_DOWN_HIT, "MOVE_EFFECT_SP_ATK_MINUS_1"),
     chance_on_target(
-        EFFECT_SPECIAL_DEFENSE_DOWN_HIT,
+        MoveEffect::SPECIAL_ATTACK_DOWN_HIT,
+        "MOVE_EFFECT_SP_ATK_MINUS_1",
+    ),
+    chance_on_target(
+        MoveEffect::SPECIAL_DEFENSE_DOWN_HIT,
         "MOVE_EFFECT_SP_DEF_MINUS_1",
     ),
-    chance_on_target(EFFECT_ACCURACY_DOWN_HIT, "MOVE_EFFECT_ACC_MINUS_1"),
+    chance_on_target(MoveEffect::ACCURACY_DOWN_HIT, "MOVE_EFFECT_ACC_MINUS_1"),
     chance_on_target(EFFECT_CONFUSE_HIT, "MOVE_EFFECT_CONFUSION"),
-    chance_on_target(EFFECT_THIEF, "MOVE_EFFECT_STEAL_ITEM"),
-    chance_on_target(EFFECT_THAW_HIT, "MOVE_EFFECT_BURN"),
-    certain_on_user(EFFECT_RAPID_SPIN, "MOVE_EFFECT_RAPIDSPIN"),
-    chance_on_user(EFFECT_DEFENSE_UP_HIT, "MOVE_EFFECT_DEF_PLUS_1"),
-    chance_on_user(EFFECT_ATTACK_UP_HIT, "MOVE_EFFECT_ATK_PLUS_1"),
-    chance_on_user(EFFECT_ALL_STATS_UP_HIT, "MOVE_EFFECT_ALL_STATS_UP"),
-    chance_on_target(EFFECT_TWISTER, "MOVE_EFFECT_FLINCH"),
-    chance_on_target(EFFECT_FLINCH_MINIMIZE_HIT, "MOVE_EFFECT_FLINCH"),
-    certain_on_target(EFFECT_FAKE_OUT, "MOVE_EFFECT_FLINCH"),
-    certain_on_user(EFFECT_SUPERPOWER, "MOVE_EFFECT_ATK_DEF_DOWN"),
-    chance_on_target(EFFECT_KNOCK_OFF, "MOVE_EFFECT_KNOCK_OFF"),
-    certain_on_user(EFFECT_DOUBLE_EDGE, "MOVE_EFFECT_RECOIL_33"),
-    chance_on_target(EFFECT_BLAZE_KICK, "MOVE_EFFECT_BURN"),
-    chance_on_target(EFFECT_POISON_FANG, "MOVE_EFFECT_TOXIC"),
-    certain_on_user(EFFECT_OVERHEAT, "MOVE_EFFECT_SP_ATK_TWO_DOWN"),
-    chance_on_target(EFFECT_POISON_TAIL, "MOVE_EFFECT_POISON"),
+    chance_on_target(MoveEffect::THIEF, "MOVE_EFFECT_STEAL_ITEM"),
+    chance_on_target(MoveEffect::THAW_HIT, "MOVE_EFFECT_BURN"),
+    certain_on_user(MoveEffect::RAPID_SPIN, "MOVE_EFFECT_RAPIDSPIN"),
+    chance_on_user(MoveEffect::DEFENSE_UP_HIT, "MOVE_EFFECT_DEF_PLUS_1"),
+    chance_on_user(MoveEffect::ATTACK_UP_HIT, "MOVE_EFFECT_ATK_PLUS_1"),
+    chance_on_user(MoveEffect::ALL_STATS_UP_HIT, "MOVE_EFFECT_ALL_STATS_UP"),
+    chance_on_target(MoveEffect::TWISTER, "MOVE_EFFECT_FLINCH"),
+    chance_on_target(MoveEffect::FLINCH_MINIMIZE_HIT, "MOVE_EFFECT_FLINCH"),
+    certain_on_target(MoveEffect::FAKE_OUT, "MOVE_EFFECT_FLINCH"),
+    certain_on_user(MoveEffect::SUPERPOWER, "MOVE_EFFECT_ATK_DEF_DOWN"),
+    chance_on_target(MoveEffect::KNOCK_OFF, "MOVE_EFFECT_KNOCK_OFF"),
+    certain_on_user(MoveEffect::DOUBLE_EDGE, "MOVE_EFFECT_RECOIL_33"),
+    chance_on_target(MoveEffect::BLAZE_KICK, "MOVE_EFFECT_BURN"),
+    chance_on_target(MoveEffect::POISON_FANG, "MOVE_EFFECT_TOXIC"),
+    certain_on_user(MoveEffect::OVERHEAT, "MOVE_EFFECT_SP_ATK_TWO_DOWN"),
+    chance_on_target(MoveEffect::POISON_TAIL, "MOVE_EFFECT_POISON"),
 ];
 
 /// Returns `effect`'s secondary-effect trampoline metadata.

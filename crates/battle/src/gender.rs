@@ -1,4 +1,4 @@
-//! A Pokémon's gender as its species' ratio and its personality fix it.
+//! Gender classification from species ratios and personalities.
 
 use assets::GenderRatio;
 
@@ -15,10 +15,9 @@ pub enum Gender {
 }
 
 impl Gender {
-    /// The gender a personality gives a member of a species with `ratio`, as
-    /// upstream's `GetGenderFromSpeciesAndPersonality` resolves it
-    /// (`pokeemerald/src/pokemon.c:3471-3485`): a locked ratio byte decides alone,
-    /// otherwise the personality's low byte is female below the ratio byte.
+    /// Classifies gender from the species ratio and the personality's low byte.
+    /// Reserved ratio bytes override the ratio variant
+    /// (`pokeemerald/src/pokemon.c:3473-3478`).
     #[must_use]
     pub const fn of_personality(ratio: GenderRatio, personality: u32) -> Self {
         match ratio.raw() {
@@ -36,8 +35,8 @@ impl Gender {
         }
     }
 
-    /// The gender a Cute Charm lead of this gender hands a wild Pokémon:
-    /// female leads give male, every other lead gives female
+    /// Requests male for a female Cute Charm lead and female otherwise, even for
+    /// a genderless lead, because upstream omits the genderless check
     /// (`pokeemerald/src/wild_encounter.c:402-408`).
     #[must_use]
     pub const fn cute_charm_wild_gender(self) -> Self {

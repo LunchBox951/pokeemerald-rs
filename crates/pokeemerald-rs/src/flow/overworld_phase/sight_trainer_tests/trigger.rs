@@ -2,6 +2,7 @@
 //! the double-battle party), the no-lead and off-Route-103 refusals, and the
 //! real-pack terrain check, all through the real trigger.
 
+use assets::items::ItemId;
 use assets::MapId;
 use engine::overworld::{Direction, PlayerState};
 use platform::{ButtonState, Buttons};
@@ -9,6 +10,7 @@ use platform::{ButtonState, Buttons};
 use super::super::test_support::pressed;
 use super::super::{OverworldPhase, SyntheticStartMenu};
 use super::support::*;
+use crate::flow::lead_screen::loaded_holding;
 
 // -- Sight-cone geometry, through the real trigger -------------------------
 
@@ -236,6 +238,37 @@ fn a_fainted_lead_is_refused_through_the_trigger_without_a_draw() {
         "the refused handoff leaves the lead in the party"
     );
     assert_eq!(phase.rng.state(), before);
+}
+
+/// The player-side item refusal, end to end through the trigger: Rhett's party constructs
+/// for an ordinary lead (the Nugget control), so only the loaded Oran Berry stops the
+/// approach -- before any draw, with the lead left in the party.
+#[test]
+fn a_loaded_lead_holding_a_battle_item_is_refused_through_the_trigger_without_a_draw() {
+    let (rx, ry) = RHETT_TILE;
+    let mut phase = route_103_phase(PlayerState::new((rx, ry + 1), 3, Direction::North));
+    let lead = loaded_holding(&overwhelming_lead(), ItemId::ORAN_BERRY);
+    phase.set_fresh_lead_for_test(lead.clone());
+    let before = phase.rng.state();
+
+    phase.step(ButtonState::new());
+
+    assert!(phase.sight_approach.is_none(), "no approach may start");
+    assert!(!phase.is_sight_trainer_battle_active());
+    assert_eq!(
+        phase.lead_for_test(),
+        Some(&lead),
+        "the lead keeps its item"
+    );
+    assert_eq!(phase.rng.state(), before, "the refusal must draw nothing");
+
+    let mut control = route_103_phase(PlayerState::new((rx, ry + 1), 3, Direction::North));
+    control.set_fresh_lead_for_test(loaded_holding(&overwhelming_lead(), ItemId::NUGGET));
+    control.step(ButtonState::new());
+    assert!(
+        control.sight_approach.is_some(),
+        "an effect-free item does not stop Rhett's approach"
+    );
 }
 
 // -- Honest cuts: Miguel's party, Amy & Liv's double battle ----------------

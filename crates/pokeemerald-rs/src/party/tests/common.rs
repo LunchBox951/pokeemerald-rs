@@ -126,6 +126,15 @@ pub(super) fn retained_evs() -> battle::Evs {
     }
 }
 
+/// A freshly encoded Treecko record whose growth substructure names `item`.
+pub(super) fn saved_treecko_holding(item: assets::items::ItemId) -> Pokemon {
+    let mut record = to_save_pokemon(&Dex::new(), &treecko_fixture());
+    let mut substructures = record.box_data.substructures().unwrap();
+    substructures.growth[EXPECTED_GROWTH_HELD_ITEM].copy_from_slice(&item.0.to_le_bytes());
+    record.box_data.set_substructures(&substructures);
+    record
+}
+
 pub(super) fn stored_record_with_retained_fields() -> Pokemon {
     let mut record = to_save_pokemon(&Dex::new(), &treecko_fixture());
 

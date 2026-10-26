@@ -59,6 +59,51 @@ pub(super) fn assert_survives_ld_map(name: &str, table: u32, lines: &mut [Report
     result.expect("a correctly located static table must survive a real GNU ld map");
 }
 
+/// Run a whole domain's report `lines` through [`super::cross_check`]
+/// against a map shaped like GNU ld `-Map` output: a global symbol at every
+/// root a linker map can list, nothing at a root marked
+/// [`SymbolExpectation::Local`], and nothing at a root named in `unlisted`.
+///
+/// Returns the cross-check's result so a caller can assert either that a
+/// correct ROM/map pair passes or that a missing global symbol is refused.
+pub(super) fn cross_check_ld_map(
+    name: &str,
+    lines: &mut [ReportLine],
+    unlisted: &[&str],
+) -> Result<super::MapCheck, GenRomProfileError> {
+    use std::fmt::Write as _;
+
+    let mut map = String::from(".rodata         0x0000000008000000     0x100000\n");
+    for (index, line) in lines.iter().enumerate() {
+        if matches!(
+            line.symbol,
+            SymbolExpectation::Local(_) | SymbolExpectation::Interior
+        ) || unlisted.contains(&line.id.as_str())
+        {
+            continue;
+        }
+        let symbol = match &line.symbol {
+            SymbolExpectation::Exact(name) => name.clone(),
+            SymbolExpectation::Contains(fragments) => fragments.concat(),
+            _ => format!("gRoot{index}"),
+        };
+        writeln!(
+            map,
+            "{}0x{:016x}                {symbol}",
+            " ".repeat(15),
+            line.addr
+        )
+        .expect("write to a String");
+    }
+    let dir = scratch(name);
+    let map_path = dir.join("pokeemerald.map");
+    std::fs::write(&map_path, map).expect("write map");
+    let result = super::cross_check(Some(&map_path), lines);
+    let _ = std::fs::remove_file(&map_path);
+    let _ = std::fs::remove_dir(&dir);
+    result
+}
+
 /// Tile bytes that are distinctive enough to anchor a search.
 pub(super) fn distinctive_tiles(tile_count: usize) -> Vec<u8> {
     (0..tile_count * 32)
@@ -1545,4 +1590,30 @@ fn a_missing_track_is_refused() {
     assert_bytecode_refused("audio-track-missing", |rom| {
         rom[0x30_0008..0x30_000C].copy_from_slice(&0x0900_0000u32.to_le_bytes());
     });
+}
+
+/// Upstream `main_menu.c:406` declares `sMainMenuBgPal` `static`, so a GNU
+/// ld map lists nothing at its address.
+#[test]
+fn the_static_main_menu_bg_palette_survives_a_real_ld_map() {
+    let id = "interface/palette/main_menu_bg";
+    let mut lines = [
+        ReportLine::unique(id, 0x0850_0000, 32).with_symbol(super::interface_palette_symbol(id))
+    ];
+    assert_survives_ld_map("main-menu-static-map", 0x0850_0000, &mut lines);
+    assert_eq!(
+        super::interface_palette_symbol(id),
+        SymbolExpectation::Local("sMainMenuBgPal".to_owned())
+    );
+}
+
+/// `main_menu.c:407` makes the text palette `static` as well, but extraction
+/// emits no pack entry for it, so an id outside the one fixed palette keeps
+/// the any-symbol check rather than an unverified `Local` claim.
+#[test]
+fn an_interface_palette_without_a_cited_static_keeps_its_map_check() {
+    assert_eq!(
+        super::interface_palette_symbol("interface/palette/other"),
+        SymbolExpectation::Unnamed
+    );
 }

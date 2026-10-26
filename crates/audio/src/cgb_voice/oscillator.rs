@@ -144,9 +144,9 @@ impl Oscillator {
 
     /// Plays the replacement's note-on `NR43` writes against the noise
     /// predecessor it inherited; a no-op otherwise.
-    pub(super) fn commit_initial_writes(&mut self) {
+    pub(super) fn commit_initial_writes(&mut self, retires_on_first_pass: bool) {
         if let Self::Noise(noise) = self {
-            noise.commit_initial_writes();
+            noise.commit_initial_writes(retires_on_first_pass);
         }
     }
 

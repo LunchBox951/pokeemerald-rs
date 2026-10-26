@@ -34,6 +34,7 @@ mod images;
 mod inventory;
 mod layouts;
 mod locate;
+mod lz77_blobs;
 mod map_file;
 mod opening_scene;
 mod pack_source;
@@ -278,10 +279,31 @@ fn locate_interface_palettes(
     palettes::locate_unique(ctx, &ids, &interface_palette_symbol, report)
 }
 
-/// Upstream names these `sCamelCasePal` after the file.
+/// The one interface palette extraction emits is `sMainMenuBgPal`, declared
+/// `static` (`main_menu.c:406`), so a linker map cannot list it. An id with no
+/// cited declaration keeps the any-symbol check instead of a guessed claim.
 fn interface_palette_symbol(id: &str) -> SymbolExpectation {
-    let stem = id.trim_start_matches("interface/palette/");
-    SymbolExpectation::Contains(vec![format!("{}Pal", locate::camel_case(stem))])
+    match id {
+        crate::extract::scope::MAIN_MENU_BG_PALETTE_ID => {
+            SymbolExpectation::Local("sMainMenuBgPal".to_owned())
+        }
+        _ => SymbolExpectation::Unnamed,
+    }
+}
+
+/// Mark every line of `lines` that `local` names as a translation-unit-local
+/// `static`, which a linker map does not list.
+///
+/// A locator that reports through shared helpers
+/// ([`images::locate_images`], [`palettes::locate_unique`]) leaves each root
+/// [`SymbolExpectation::Unnamed`]; its domain calls this once on the lines it
+/// added, from a table of upstream declarations.
+fn mark_local_roots(lines: &mut [ReportLine], local: &dyn Fn(&str) -> Option<&'static str>) {
+    for line in lines {
+        if let Some(name) = local(&line.id) {
+            line.symbol = SymbolExpectation::Local(name.to_owned());
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy)]
