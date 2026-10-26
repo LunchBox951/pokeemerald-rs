@@ -6,12 +6,24 @@
 //! moves and PP, IVs, ability slot, level, and current HP. A new record uses
 //! save-format defaults for everything else; [`merge_into_save_pokemon`]
 //! overlays those fields onto the record that was loaded, retaining its
-//! header, held item, friendship, contest condition, egg flag, encounter
+//! header, friendship, contest condition, egg flag, encounter
 //! data, ribbons, status, and mail. EVs are the battler's: the merge writes
 //! them back from [`battle::BattlePokemon::evs`].
 //!
+//! # Held item
+//!
+//! [`from_save_pokemon`] reads the growth substructure's held item
+//! (`MON_DATA_HELD_ITEM`, `pokeemerald/src/pokemon.c:3833`) onto the battler
+//! through [`battle::BattlePokemon::with_held_item`], whatever its id.
+//! `battle` carries the item but models none of its effects, so
+//! [`battle::ensure_held_item_playable`] refuses a battle whose player-side
+//! item has one; each flow's refusal is documented where it is made. A fresh
+//! [`to_save_pokemon`] record files the battler's item. The merge leaves the
+//! backing record's item bytes alone, as nothing in the port changes a held
+//! item after load.
+//!
 //! Deliberately not modelled by `battle`, and so retained from the backing
-//! record by [`merge_into_save_pokemon`]: held item, friendship, pokérus,
+//! record by [`merge_into_save_pokemon`]: friendship, pokérus,
 //! met data, poké ball, OT gender, ribbons, markings, nickname, OT name,
 //! language, mail, the egg bit, and contest condition (`PokemonSubstruct2`'s
 //! trailing six bytes). [`to_save_pokemon`], which has no record to retain
@@ -71,6 +83,7 @@ const MAIL_NONE: u8 = u8::MAX;
 const SPECIES_NONE: u16 = 0;
 
 const GROWTH_SPECIES: Range<usize> = 0..2;
+const GROWTH_HELD_ITEM: Range<usize> = 2..4;
 const GROWTH_EXPERIENCE: Range<usize> = 4..8;
 const GROWTH_PP_BONUSES: usize = 8;
 const GROWTH_FRIENDSHIP: usize = 9;
@@ -268,6 +281,7 @@ fn zero_ev_max_hp(dex: &Dex, species: u16, level: u8, mon: &BattlePokemon) -> u3
 pub(crate) fn to_save_pokemon(dex: &Dex, mon: &BattlePokemon) -> Pokemon {
     let mut growth = [0u8; SUBSTRUCTURE_LEN];
     growth[GROWTH_SPECIES].copy_from_slice(&mon.species().0.to_le_bytes());
+    growth[GROWTH_HELD_ITEM].copy_from_slice(&mon.held_item().0.to_le_bytes());
     growth[GROWTH_EXPERIENCE].copy_from_slice(&mon.experience().to_le_bytes());
     growth[GROWTH_PP_BONUSES] = mon.pp_bonuses().bits();
     growth[GROWTH_FRIENDSHIP] = dex
@@ -623,6 +637,11 @@ pub(crate) fn from_save_pokemon(dex: &Dex, saved: &Pokemon) -> Result<BattlePoke
     // same EVs, so the order of the two calls does not matter.
     let evs = evs_from_substruct2(&substructures.evs_and_condition);
 
+    // Carried as stored, even an id outside the item table: the battle crate
+    // decides whether a battle can play it (`ensure_held_item_playable`), so a
+    // loaded party never drops an item here.
+    let held_item = assets::items::ItemId(read_u16(&substructures.growth, GROWTH_HELD_ITEM));
+
     let mut mon = BattlePokemon::new(
         dex,
         species,
@@ -634,7 +653,8 @@ pub(crate) fn from_save_pokemon(dex: &Dex, saved: &Pokemon) -> Result<BattlePoke
     .with_original_trainer_id(saved.box_data.ot_id())
     .with_ability_slot(ability_slot)
     .with_pp_bonuses(dex, pp_bonuses)?
-    .with_evs(evs);
+    .with_evs(evs)
+    .with_held_item(held_item);
 
     let saved_experience = read_u32(&substructures.growth, GROWTH_EXPERIENCE);
     // Match `CalculateMonStats`: derive level from experience without invoking

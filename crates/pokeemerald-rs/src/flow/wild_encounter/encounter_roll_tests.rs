@@ -20,7 +20,9 @@ use super::test_support::{
     held, player_mon, route_101_phase, walk_east_and_land, ENCOUNTER_SEED, FRAMES_PER_STEP,
     ROUTE_101, TEST_PLAYER_TRAINER_ID, WURMPLE,
 };
+use crate::flow::lead_screen::loaded_holding;
 use crate::flow::overworld_phase::{ActiveBattle, OverworldPhase};
+use assets::items::ItemId;
 use assets::{MoveId, SpeciesId};
 use battle::{BattleError, BattleOutcome, BattlePokemon, Dex, Ivs, PlayerAction, MAX_IV};
 use engine::overworld::metatile_behavior::MB_TALL_GRASS;
@@ -648,6 +650,61 @@ fn start_wild_battle_refuses_an_inadmissible_lead_before_any_draw() {
         Some(BattleError::UnportedAbilityInteraction(
             assets::AbilityId::TRUANT
         )),
+    );
+    assert_eq!(rng.state(), Rng::new(ENCOUNTER_SEED).state());
+}
+
+/// A loaded lead holding Oran Berry (`HoldEffect` it does not model) disables the roll
+/// like a Truant lead: refused and reported, never silently played without the effect.
+#[test]
+fn a_loaded_lead_holding_a_battle_item_disables_the_roll_without_drawing() {
+    let mut phase = route_101_phase(PlayerState::new((2, 5), 3, Direction::East), (7, 5));
+    phase.rng = Rng::new(ENCOUNTER_SEED);
+    let treecko = player_mon(277, 50, vec![MoveId::POUND]);
+    let lead = loaded_holding(&treecko, ItemId::ORAN_BERRY);
+    phase.party_lead = Some(lead.clone());
+    let immunity_before = phase.wild.immunity_steps();
+
+    walk_east_and_land(&mut phase, 5);
+
+    assert_eq!(phase.player.position(), (7, 5));
+    assert!(!phase.is_wild_battle_active(), "no battle may start");
+    assert_eq!(
+        phase.rng.state(),
+        Rng::new(ENCOUNTER_SEED).state(),
+        "a refused item must not draw at all"
+    );
+    assert_eq!(phase.wild.immunity_steps(), immunity_before);
+    assert_eq!(
+        phase.party_lead,
+        Some(lead),
+        "the lead keeps its item at home"
+    );
+    assert_eq!(
+        phase.wild_lead_refusal,
+        Some(BattleError::UnsupportedHeldItem(ItemId::ORAN_BERRY)),
+    );
+
+    phase.party_lead = Some(loaded_holding(&treecko, ItemId::NUGGET));
+    assert!(phase.wild_lead_admissible(), "Nugget has no effect to drop");
+    assert_eq!(phase.wild_lead_refusal, None);
+}
+
+#[test]
+fn start_wild_battle_refuses_a_battle_item_before_any_draw() {
+    let mut rng = Rng::new(ENCOUNTER_SEED);
+    let lead = loaded_holding(
+        &player_mon(277, 50, vec![MoveId::POUND]),
+        ItemId::ORAN_BERRY,
+    );
+    let encounter = WildEncounter {
+        slot: 0,
+        species: WURMPLE,
+        level: 2,
+    };
+    assert_eq!(
+        start_wild_battle(lead, encounter, TEST_PLAYER_TRAINER_ID, &mut rng).err(),
+        Some(BattleError::UnsupportedHeldItem(ItemId::ORAN_BERRY)),
     );
     assert_eq!(rng.state(), Rng::new(ENCOUNTER_SEED).state());
 }

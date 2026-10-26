@@ -132,7 +132,7 @@ const SIGHT_TRAINERS: &[SightTrainer] = &[
     },
     SightTrainer {
         script: "Route103_EventScript_Miguel",
-        id: TrainerId(293), // TRAINER_MIGUEL_1 (held-item party)
+        id: TrainerId(293), // TRAINER_MIGUEL_1 (Oran Berry held item)
         intro: "My POKéMON is delightfully adorable!\nDon't be shy--I'll show you!",
     },
     SightTrainer {
@@ -419,30 +419,22 @@ impl OverworldPhase {
     /// refused leaves the stream byte-identical for as long as the player
     /// cares to stand there.
     ///
-    /// Two of those refusals are worth naming, because they are what the
-    /// player actually meets on this route today:
+    /// The walls that remain on this route, each pinned with its exact error
+    /// by this module's
+    /// `refused_sight_trainers_real_parties_fail_to_construct_for_exactly_these_reasons`:
     ///
-    /// - **Miguel's held item.** `TRAINER_MIGUEL_1`'s real party is
-    ///   `TrainerParty::ItemDefaultMoves`, which
-    ///   [`crate::flow::npc_trainer_battle`] refuses rather than silently
-    ///   drop the held item (that module's own docs).
-    /// - **The other Route 103 sight trainers' default movesets**, Andrew
-    ///   excepted. Unlike the six Route 103 *rivals*, whose hand-authored
-    ///   `NoItemCustomMoves` movesets were kept inside this crate's early
-    ///   supported-move set, these trainers carry `NoItemDefaultMoves` -- a
-    ///   real level-up moveset ([`battle::initial_moveset`]) that, for every
-    ///   one of them but Andrew, still includes at least one move this
-    ///   engine cannot execute *or* whose effect the trainer AI cannot
-    ///   score. That is an emergent wall, not a
-    ///   guard this module wrote: the geometry, the defeated-flag gating,
-    ///   the eligibility table and now the approach are all real and
-    ///   exercised against genuine Route 103 data; only the last step fails,
-    ///   for all but Andrew, and this module's own
-    ///   `refused_sight_trainers_real_parties_fail_to_construct_for_exactly_these_reasons`
-    ///   pins each trainer's exact refusal -- offending move id included --
-    ///   so a future move-coverage slice is forced to update it rather than
-    ///   let it go stale. Widening move coverage is `battle`'s own, much
-    ///   larger slice, not this one.
+    /// - **Four trainers fight**: Andrew, Rhett, Marcos and Pete carry
+    ///   `NoItemDefaultMoves` parties -- real level-up movesets
+    ///   ([`battle::initial_moveset`]) whose every move the engine executes
+    ///   and the trainer AI scores.
+    /// - **Held items are carried, not dropped**:
+    ///   [`crate::flow::npc_trainer_battle`] threads each member's item onto
+    ///   its `BattlePokemon`, and the battle crate refuses only an item whose
+    ///   effect it does not model ([`battle::ensure_held_item_playable`]).
+    ///   Miguel's Skitty holds an Oran Berry and is refused earlier still,
+    ///   for its selected Cute Charm.
+    /// - **Daisy, Isabelle, Miguel and Amy & Liv** stop on a move, an
+    ///   ability or (for Amy & Liv) a double battle this port does not field.
     pub(super) fn begin_sight_trainer_approach_if_seen(&mut self) -> SightTrainerOutcome {
         let runtime = self.scene.runtime();
         let scan = find_sight_trainer(&runtime, &self.player, &self.save1.event_data);
@@ -507,8 +499,8 @@ impl OverworldPhase {
                 if first_report {
                     eprintln!(
                         "sight trainer: can't start against trainer {trainer_id:?} ({error}) -- \
-                         refused before any draw (a held-item party, an unimplemented moveset, \
-                         or a fainted lead)"
+                         refused before any draw (a held-item party or lead, an unimplemented \
+                         moveset, or a fainted lead)"
                     );
                 }
                 SightTrainerOutcome::Refused
@@ -666,18 +658,18 @@ mod tests {
         }
     }
 
-    /// `TRAINER_MIGUEL_1`'s real party is the held-item shape
-    /// [`OverworldPhase::begin_sight_trainer_approach_if_seen`]'s docs say it
-    /// is -- otherwise the "construction refuses" claim there would be
-    /// describing a gap that no longer exists.
+    /// `TRAINER_MIGUEL_1`'s real party is a single Oran Berry holder -- the
+    /// item the battle crate refuses by name -- so the refusal rows above
+    /// describe a party that really carries it.
     #[test]
-    fn miguel_carries_a_held_item_party() {
+    fn miguel_carries_an_oran_berry_party() {
         let data = battle::trainer_data(TrainerId(293)).expect("TRAINER_MIGUEL_1 must resolve");
-        assert!(matches!(
-            data.party,
-            assets::trainers::TrainerParty::ItemDefaultMoves(_)
-                | assets::trainers::TrainerParty::ItemCustomMoves(_)
-        ));
+        let assets::trainers::TrainerParty::ItemDefaultMoves(party) = data.party else {
+            panic!("Miguel's party is the held-item default-moves shape");
+        };
+        assert_eq!(party.len(), 1);
+        assert_eq!(party[0].species, assets::SpeciesId::SKITTY);
+        assert_eq!(party[0].held_item, assets::items::ItemId::ORAN_BERRY);
     }
 
     /// [`find_sight_trainer`] against the real Route 103 object events:
@@ -791,15 +783,13 @@ mod tests {
         assert!(SightTrainerOutcome::BattleStarted.owns_frame());
     }
 
-    /// The emergent construction wall, pinned rather than left as prose:
-    /// every one of [`SIGHT_TRAINERS`]' distinct trainer ids except Andrew's
-    /// and Rhett's (whose parties now construct,
-    /// `andrews_real_party_constructs_and_plays_to_a_win` and
-    /// `rhetts_real_party_constructs_and_plays_to_a_win`) currently fail
-    /// to construct through
-    /// [`npc_trainer_battle::start_npc_trainer_battle`] -- Miguel for his
-    /// held item, every other refused one for a specific move this battle
-    /// engine does not yet implement or score
+    /// The construction wall that remains, pinned rather than left as prose:
+    /// every one of [`SIGHT_TRAINERS`]' distinct trainer ids except the four
+    /// that fight (Andrew, Rhett, Marcos, Pete: `real_party_outcome` below)
+    /// fails to construct through
+    /// [`npc_trainer_battle::start_npc_trainer_battle`], each for the first
+    /// move this battle engine does not yet implement or score, or for the
+    /// effect of a held item it does not model
     /// ([`OverworldPhase::begin_sight_trainer_approach_if_seen`]'s "Refusals
     /// cost nothing, forever").
     ///
@@ -816,19 +806,14 @@ mod tests {
     #[test]
     fn refused_sight_trainers_real_parties_fail_to_construct_for_exactly_these_reasons() {
         use battle::BattleError;
-        use npc_trainer_battle::NpcTrainerBattleError::{Battle, HeldItemParty};
+        use npc_trainer_battle::NpcTrainerBattleError::Battle;
 
-        // Every distinct id in `SIGHT_TRAINERS`, with the refusal its real
-        // extracted party currently produces. The move ids are the first
-        // move in that trainer's own level-up-derived moveset that some
-        // screen refuses.
-        //
-        // Andrew's and Rhett's whole parties construct
-        // (`andrews_real_party_constructs_and_plays_to_a_win`,
-        // `rhetts_real_party_constructs_and_plays_to_a_win`); each party below
-        // stops at the first move some screen refuses. Both screens
-        // run before the first draw, so the per-frame cone check stays
-        // draw-free.
+        // Every distinct id in `SIGHT_TRAINERS` that does not fight, with the
+        // refusal its real extracted party currently produces. The move ids
+        // are the first move in that trainer's own level-up-derived moveset
+        // that some screen refuses. Miguel's Skitty is refused for its selected
+        // Cute Charm before the ability screen reaches its Attract or its Oran
+        // Berry, each of which the later screens would refuse in turn.
         let expected = [
             (
                 "Daisy",
@@ -842,25 +827,17 @@ mod tests {
                 TrainerId(481),
                 Battle(BattleError::NonDamagingMove(assets::MoveId::HELPING_HAND)),
             ),
-            ("Miguel", TrainerId(293), HeldItemParty(TrainerId(293))),
             (
-                "Marcos",
-                TrainerId(702),
-                Battle(BattleError::UnscoreableMoveEffect(
-                    assets::MoveId::SONIC_BOOM,
+                "Miguel",
+                TrainerId(293),
+                Battle(BattleError::UnportedAbilityInteraction(
+                    assets::AbilityId::CUTE_CHARM,
                 )),
             ),
             (
                 "Isabelle",
                 TrainerId(736),
                 Battle(BattleError::UnsupportedMoveEffect(assets::MoveId::ROLLOUT)),
-            ),
-            (
-                "Pete",
-                TrainerId(735),
-                Battle(BattleError::UnsupportedMoveEffect(
-                    assets::MoveId::CONSTRICT,
-                )),
             ),
         ];
 
@@ -869,7 +846,7 @@ mod tests {
         let covered: std::collections::HashSet<u16> = expected
             .iter()
             .map(|(_, id, _)| id.0)
-            .chain([ANDREW.0, RHETT.0])
+            .chain(FIGHTING_TRAINERS.map(|id| id.0))
             .collect();
         assert_eq!(
             distinct, covered,
@@ -906,6 +883,10 @@ mod tests {
 
     const ANDREW: TrainerId = TrainerId(336);
     const RHETT: TrainerId = TrainerId(703);
+    const MARCOS: TrainerId = TrainerId(702);
+    const PETE: TrainerId = TrainerId(735);
+    /// The four sight trainers whose real parties construct and fight.
+    const FIGHTING_TRAINERS: [TrainerId; 4] = [ANDREW, RHETT, MARCOS, PETE];
 
     /// Plays `trainer`'s real party against a strong lead and returns the
     /// outcome.
@@ -957,6 +938,67 @@ mod tests {
     fn rhetts_real_party_constructs_and_plays_to_a_win() {
         assert_eq!(
             real_party_outcome(RHETT),
+            Some(battle::BattleOutcome::PlayerWon)
+        );
+    }
+
+    /// Marcos's Sonic Boom and Pete's Constrict land when the player's lead
+    /// cannot end the fight quickly: a level-100 lead that only Splashes lets
+    /// the real party spend its whole moveset.
+    #[test]
+    fn marcoss_sonic_boom_and_petes_constrict_land_in_a_long_fight() {
+        let cases = [
+            (MARCOS, assets::MoveId::SONIC_BOOM),
+            (PETE, assets::MoveId::CONSTRICT),
+        ];
+        for (trainer, move_id) in cases {
+            let lead = battle::BattlePokemon::new(
+                &battle::Dex::new(),
+                assets::SpeciesId(280), // SPECIES_TORCHIC
+                100,
+                battle::fixed_ivs(31),
+                0,
+                vec![assets::MoveId::SPLASH],
+            )
+            .expect("Torchic/Splash is a valid pairing");
+            let mut rng = engine::rng::Rng::new(1);
+            let mut battle = npc_trainer_battle::start_npc_trainer_battle(lead, trainer, &mut rng)
+                .expect("the party must construct");
+            let mut used = false;
+            while battle.outcome().is_none() {
+                let events = crate::flow::first_usable_move::take_first_usable_move_turn(
+                    &mut battle,
+                    &mut rng,
+                )
+                .expect("every turn executes");
+                used |= events.iter().any(|event| {
+                    matches!(
+                        event,
+                        battle::BattleEvent::Hit { by_player: false, move_id: used, .. }
+                            if *used == move_id
+                    )
+                });
+            }
+            assert!(used, "{trainer:?} never landed {move_id:?}");
+        }
+    }
+
+    /// Marcos's Voltorb runs Sonic Boom through `AI_CBM_HighRiskForDamage`,
+    /// so his party constructs and plays out.
+    #[test]
+    fn marcoss_real_party_constructs_and_plays_to_a_win() {
+        assert_eq!(
+            real_party_outcome(MARCOS),
+            Some(battle::BattleOutcome::PlayerWon)
+        );
+    }
+
+    /// Pete's Tentacool carries Constrict, whose Speed-drop secondary the hit
+    /// pipeline now applies, so his party constructs and plays out.
+    #[test]
+    fn petes_real_party_constructs_and_plays_to_a_win() {
+        assert_eq!(
+            real_party_outcome(PETE),
             Some(battle::BattleOutcome::PlayerWon)
         );
     }

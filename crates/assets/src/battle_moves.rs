@@ -22,205 +22,439 @@ impl MoveId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct MoveEffect(pub u8);
 
+// Constants mirror `EFFECT_*` in upstream `include/constants/battle_move_effects.h`
+// (0 through 213), including the `UNUSED_*` slots that table reserves.
 impl MoveEffect {
-    pub(crate) const HIT: MoveEffect = MoveEffect(0);
-    pub(crate) const SLEEP: MoveEffect = MoveEffect(1);
-    pub(crate) const POISON_HIT: MoveEffect = MoveEffect(2);
-    pub(crate) const ABSORB: MoveEffect = MoveEffect(3);
-    pub(crate) const BURN_HIT: MoveEffect = MoveEffect(4);
-    pub(crate) const FREEZE_HIT: MoveEffect = MoveEffect(5);
-    pub(crate) const PARALYZE_HIT: MoveEffect = MoveEffect(6);
-    pub(crate) const EXPLOSION: MoveEffect = MoveEffect(7);
-    pub(crate) const DREAM_EATER: MoveEffect = MoveEffect(8);
-    pub(crate) const MIRROR_MOVE: MoveEffect = MoveEffect(9);
-    pub(crate) const ATTACK_UP: MoveEffect = MoveEffect(10);
-    pub(crate) const DEFENSE_UP: MoveEffect = MoveEffect(11);
-    pub(crate) const SPECIAL_ATTACK_UP: MoveEffect = MoveEffect(13);
-    pub(crate) const EVASION_UP: MoveEffect = MoveEffect(16);
-    pub(crate) const ALWAYS_HIT: MoveEffect = MoveEffect(17);
-    pub(crate) const ATTACK_DOWN: MoveEffect = MoveEffect(18);
-    pub(crate) const DEFENSE_DOWN: MoveEffect = MoveEffect(19);
-    pub(crate) const SPEED_DOWN: MoveEffect = MoveEffect(20);
-    pub(crate) const ACCURACY_DOWN: MoveEffect = MoveEffect(23);
-    pub(crate) const EVASION_DOWN: MoveEffect = MoveEffect(24);
-    pub(crate) const HAZE: MoveEffect = MoveEffect(25);
-    pub(crate) const BIDE: MoveEffect = MoveEffect(26);
-    pub(crate) const RAMPAGE: MoveEffect = MoveEffect(27);
-    pub(crate) const ROAR: MoveEffect = MoveEffect(28);
-    pub(crate) const MULTI_HIT: MoveEffect = MoveEffect(29);
-    pub(crate) const CONVERSION: MoveEffect = MoveEffect(30);
-    pub(crate) const FLINCH_HIT: MoveEffect = MoveEffect(31);
-    pub(crate) const RESTORE_HP: MoveEffect = MoveEffect(32);
-    pub(crate) const TOXIC: MoveEffect = MoveEffect(33);
-    pub(crate) const PAY_DAY: MoveEffect = MoveEffect(34);
-    pub(crate) const LIGHT_SCREEN: MoveEffect = MoveEffect(35);
-    pub(crate) const TRI_ATTACK: MoveEffect = MoveEffect(36);
-    pub(crate) const REST: MoveEffect = MoveEffect(37);
-    pub(crate) const OHKO: MoveEffect = MoveEffect(38);
-    pub(crate) const RAZOR_WIND: MoveEffect = MoveEffect(39);
-    pub(crate) const SUPER_FANG: MoveEffect = MoveEffect(40);
-    pub(crate) const DRAGON_RAGE: MoveEffect = MoveEffect(41);
-    pub(crate) const TRAP: MoveEffect = MoveEffect(42);
-    pub(crate) const HIGH_CRITICAL: MoveEffect = MoveEffect(43);
-    pub(crate) const DOUBLE_HIT: MoveEffect = MoveEffect(44);
-    pub(crate) const RECOIL_IF_MISS: MoveEffect = MoveEffect(45);
-    pub(crate) const MIST: MoveEffect = MoveEffect(46);
-    pub(crate) const FOCUS_ENERGY: MoveEffect = MoveEffect(47);
-    pub(crate) const RECOIL: MoveEffect = MoveEffect(48);
-    pub(crate) const CONFUSE: MoveEffect = MoveEffect(49);
-    pub(crate) const ATTACK_UP_2: MoveEffect = MoveEffect(50);
-    pub(crate) const DEFENSE_UP_2: MoveEffect = MoveEffect(51);
-    pub(crate) const SPEED_UP_2: MoveEffect = MoveEffect(52);
-    pub(crate) const SPECIAL_ATTACK_UP_2: MoveEffect = MoveEffect(53);
-    pub(crate) const SPECIAL_DEFENSE_UP_2: MoveEffect = MoveEffect(54);
-    pub(crate) const TRANSFORM: MoveEffect = MoveEffect(57);
-    pub(crate) const ATTACK_DOWN_2: MoveEffect = MoveEffect(58);
-    pub(crate) const DEFENSE_DOWN_2: MoveEffect = MoveEffect(59);
-    pub(crate) const SPEED_DOWN_2: MoveEffect = MoveEffect(60);
-    pub(crate) const SPECIAL_DEFENSE_DOWN_2: MoveEffect = MoveEffect(62);
-    pub(crate) const REFLECT: MoveEffect = MoveEffect(65);
-    pub(crate) const POISON: MoveEffect = MoveEffect(66);
-    pub(crate) const PARALYZE: MoveEffect = MoveEffect(67);
-    pub(crate) const ATTACK_DOWN_HIT: MoveEffect = MoveEffect(68);
-    pub(crate) const DEFENSE_DOWN_HIT: MoveEffect = MoveEffect(69);
-    pub(crate) const SPEED_DOWN_HIT: MoveEffect = MoveEffect(70);
-    pub(crate) const SPECIAL_ATTACK_DOWN_HIT: MoveEffect = MoveEffect(71);
-    pub(crate) const SPECIAL_DEFENSE_DOWN_HIT: MoveEffect = MoveEffect(72);
-    pub(crate) const ACCURACY_DOWN_HIT: MoveEffect = MoveEffect(73);
-    pub(crate) const SKY_ATTACK: MoveEffect = MoveEffect(75);
-    pub(crate) const CONFUSE_HIT: MoveEffect = MoveEffect(76);
-    pub(crate) const TWINEEDLE: MoveEffect = MoveEffect(77);
-    pub(crate) const VITAL_THROW: MoveEffect = MoveEffect(78);
-    pub(crate) const SUBSTITUTE: MoveEffect = MoveEffect(79);
-    pub(crate) const RECHARGE: MoveEffect = MoveEffect(80);
-    pub(crate) const RAGE: MoveEffect = MoveEffect(81);
-    pub(crate) const MIMIC: MoveEffect = MoveEffect(82);
-    pub(crate) const METRONOME: MoveEffect = MoveEffect(83);
-    pub(crate) const LEECH_SEED: MoveEffect = MoveEffect(84);
-    pub(crate) const SPLASH: MoveEffect = MoveEffect(85);
-    pub(crate) const DISABLE: MoveEffect = MoveEffect(86);
-    pub(crate) const LEVEL_DAMAGE: MoveEffect = MoveEffect(87);
-    pub(crate) const PSYWAVE: MoveEffect = MoveEffect(88);
-    pub(crate) const COUNTER: MoveEffect = MoveEffect(89);
-    pub(crate) const ENCORE: MoveEffect = MoveEffect(90);
-    pub(crate) const PAIN_SPLIT: MoveEffect = MoveEffect(91);
-    pub(crate) const SNORE: MoveEffect = MoveEffect(92);
-    pub(crate) const CONVERSION_2: MoveEffect = MoveEffect(93);
-    pub(crate) const LOCK_ON: MoveEffect = MoveEffect(94);
-    pub(crate) const SKETCH: MoveEffect = MoveEffect(95);
-    pub(crate) const SLEEP_TALK: MoveEffect = MoveEffect(97);
-    pub(crate) const DESTINY_BOND: MoveEffect = MoveEffect(98);
-    pub(crate) const FLAIL: MoveEffect = MoveEffect(99);
-    pub(crate) const SPITE: MoveEffect = MoveEffect(100);
-    pub(crate) const FALSE_SWIPE: MoveEffect = MoveEffect(101);
-    pub(crate) const HEAL_BELL: MoveEffect = MoveEffect(102);
-    pub(crate) const QUICK_ATTACK: MoveEffect = MoveEffect(103);
-    pub(crate) const TRIPLE_KICK: MoveEffect = MoveEffect(104);
-    pub(crate) const THIEF: MoveEffect = MoveEffect(105);
-    pub(crate) const MEAN_LOOK: MoveEffect = MoveEffect(106);
-    pub(crate) const NIGHTMARE: MoveEffect = MoveEffect(107);
-    pub(crate) const MINIMIZE: MoveEffect = MoveEffect(108);
-    pub(crate) const CURSE: MoveEffect = MoveEffect(109);
-    pub(crate) const PROTECT: MoveEffect = MoveEffect(111);
-    pub(crate) const SPIKES: MoveEffect = MoveEffect(112);
-    pub(crate) const FORESIGHT: MoveEffect = MoveEffect(113);
-    pub(crate) const PERISH_SONG: MoveEffect = MoveEffect(114);
-    pub(crate) const SANDSTORM: MoveEffect = MoveEffect(115);
-    pub(crate) const ENDURE: MoveEffect = MoveEffect(116);
-    pub(crate) const ROLLOUT: MoveEffect = MoveEffect(117);
-    pub(crate) const SWAGGER: MoveEffect = MoveEffect(118);
-    pub(crate) const FURY_CUTTER: MoveEffect = MoveEffect(119);
-    pub(crate) const ATTRACT: MoveEffect = MoveEffect(120);
-    pub(crate) const RETURN: MoveEffect = MoveEffect(121);
-    pub(crate) const PRESENT: MoveEffect = MoveEffect(122);
-    pub(crate) const FRUSTRATION: MoveEffect = MoveEffect(123);
-    pub(crate) const SAFEGUARD: MoveEffect = MoveEffect(124);
-    pub(crate) const THAW_HIT: MoveEffect = MoveEffect(125);
-    pub(crate) const MAGNITUDE: MoveEffect = MoveEffect(126);
-    pub(crate) const BATON_PASS: MoveEffect = MoveEffect(127);
-    pub(crate) const PURSUIT: MoveEffect = MoveEffect(128);
-    pub(crate) const RAPID_SPIN: MoveEffect = MoveEffect(129);
-    pub(crate) const SONICBOOM: MoveEffect = MoveEffect(130);
-    pub(crate) const MORNING_SUN: MoveEffect = MoveEffect(132);
-    pub(crate) const SYNTHESIS: MoveEffect = MoveEffect(133);
-    pub(crate) const MOONLIGHT: MoveEffect = MoveEffect(134);
-    pub(crate) const HIDDEN_POWER: MoveEffect = MoveEffect(135);
-    pub(crate) const RAIN_DANCE: MoveEffect = MoveEffect(136);
-    pub(crate) const SUNNY_DAY: MoveEffect = MoveEffect(137);
-    pub(crate) const DEFENSE_UP_HIT: MoveEffect = MoveEffect(138);
-    pub(crate) const ATTACK_UP_HIT: MoveEffect = MoveEffect(139);
-    pub(crate) const ALL_STATS_UP_HIT: MoveEffect = MoveEffect(140);
-    pub(crate) const BELLY_DRUM: MoveEffect = MoveEffect(142);
-    pub(crate) const PSYCH_UP: MoveEffect = MoveEffect(143);
-    pub(crate) const MIRROR_COAT: MoveEffect = MoveEffect(144);
-    pub(crate) const SKULL_BASH: MoveEffect = MoveEffect(145);
-    pub(crate) const TWISTER: MoveEffect = MoveEffect(146);
-    pub(crate) const EARTHQUAKE: MoveEffect = MoveEffect(147);
-    pub(crate) const FUTURE_SIGHT: MoveEffect = MoveEffect(148);
-    pub(crate) const GUST: MoveEffect = MoveEffect(149);
-    pub(crate) const FLINCH_MINIMIZE_HIT: MoveEffect = MoveEffect(150);
-    pub(crate) const SOLAR_BEAM: MoveEffect = MoveEffect(151);
-    pub(crate) const THUNDER: MoveEffect = MoveEffect(152);
-    pub(crate) const TELEPORT: MoveEffect = MoveEffect(153);
-    pub(crate) const BEAT_UP: MoveEffect = MoveEffect(154);
-    pub(crate) const SEMI_INVULNERABLE: MoveEffect = MoveEffect(155);
-    pub(crate) const DEFENSE_CURL: MoveEffect = MoveEffect(156);
-    pub(crate) const SOFTBOILED: MoveEffect = MoveEffect(157);
-    pub(crate) const FAKE_OUT: MoveEffect = MoveEffect(158);
-    pub(crate) const UPROAR: MoveEffect = MoveEffect(159);
-    pub(crate) const STOCKPILE: MoveEffect = MoveEffect(160);
-    pub(crate) const SPIT_UP: MoveEffect = MoveEffect(161);
-    pub(crate) const SWALLOW: MoveEffect = MoveEffect(162);
-    pub(crate) const HAIL: MoveEffect = MoveEffect(164);
-    pub(crate) const TORMENT: MoveEffect = MoveEffect(165);
-    pub(crate) const FLATTER: MoveEffect = MoveEffect(166);
-    pub(crate) const WILL_O_WISP: MoveEffect = MoveEffect(167);
-    pub(crate) const MEMENTO: MoveEffect = MoveEffect(168);
-    pub(crate) const FACADE: MoveEffect = MoveEffect(169);
-    pub(crate) const FOCUS_PUNCH: MoveEffect = MoveEffect(170);
-    pub(crate) const SMELLINGSALT: MoveEffect = MoveEffect(171);
-    pub(crate) const FOLLOW_ME: MoveEffect = MoveEffect(172);
-    pub(crate) const NATURE_POWER: MoveEffect = MoveEffect(173);
-    pub(crate) const CHARGE: MoveEffect = MoveEffect(174);
-    pub(crate) const TAUNT: MoveEffect = MoveEffect(175);
-    pub(crate) const HELPING_HAND: MoveEffect = MoveEffect(176);
-    pub(crate) const TRICK: MoveEffect = MoveEffect(177);
-    pub(crate) const ROLE_PLAY: MoveEffect = MoveEffect(178);
-    pub(crate) const WISH: MoveEffect = MoveEffect(179);
-    pub(crate) const ASSIST: MoveEffect = MoveEffect(180);
-    pub(crate) const INGRAIN: MoveEffect = MoveEffect(181);
-    pub(crate) const SUPERPOWER: MoveEffect = MoveEffect(182);
-    pub(crate) const MAGIC_COAT: MoveEffect = MoveEffect(183);
-    pub(crate) const RECYCLE: MoveEffect = MoveEffect(184);
-    pub(crate) const REVENGE: MoveEffect = MoveEffect(185);
-    pub(crate) const BRICK_BREAK: MoveEffect = MoveEffect(186);
-    pub(crate) const YAWN: MoveEffect = MoveEffect(187);
-    pub(crate) const KNOCK_OFF: MoveEffect = MoveEffect(188);
-    pub(crate) const ENDEAVOR: MoveEffect = MoveEffect(189);
-    pub(crate) const ERUPTION: MoveEffect = MoveEffect(190);
-    pub(crate) const SKILL_SWAP: MoveEffect = MoveEffect(191);
-    pub(crate) const IMPRISON: MoveEffect = MoveEffect(192);
-    pub(crate) const REFRESH: MoveEffect = MoveEffect(193);
-    pub(crate) const GRUDGE: MoveEffect = MoveEffect(194);
-    pub(crate) const SNATCH: MoveEffect = MoveEffect(195);
-    pub(crate) const LOW_KICK: MoveEffect = MoveEffect(196);
-    pub(crate) const SECRET_POWER: MoveEffect = MoveEffect(197);
-    pub(crate) const DOUBLE_EDGE: MoveEffect = MoveEffect(198);
-    pub(crate) const TEETER_DANCE: MoveEffect = MoveEffect(199);
-    pub(crate) const BLAZE_KICK: MoveEffect = MoveEffect(200);
-    pub(crate) const MUD_SPORT: MoveEffect = MoveEffect(201);
-    pub(crate) const POISON_FANG: MoveEffect = MoveEffect(202);
-    pub(crate) const WEATHER_BALL: MoveEffect = MoveEffect(203);
-    pub(crate) const OVERHEAT: MoveEffect = MoveEffect(204);
-    pub(crate) const TICKLE: MoveEffect = MoveEffect(205);
-    pub(crate) const COSMIC_POWER: MoveEffect = MoveEffect(206);
-    pub(crate) const SKY_UPPERCUT: MoveEffect = MoveEffect(207);
-    pub(crate) const BULK_UP: MoveEffect = MoveEffect(208);
-    pub(crate) const POISON_TAIL: MoveEffect = MoveEffect(209);
-    pub(crate) const WATER_SPORT: MoveEffect = MoveEffect(210);
-    pub(crate) const CALM_MIND: MoveEffect = MoveEffect(211);
-    pub(crate) const DRAGON_DANCE: MoveEffect = MoveEffect(212);
-    pub(crate) const CAMOUFLAGE: MoveEffect = MoveEffect(213);
+    /// Upstream `EFFECT_HIT` (`battle_move_effects.h:4`).
+    pub const HIT: MoveEffect = MoveEffect(0);
+    /// Upstream `EFFECT_SLEEP` (`battle_move_effects.h:5`).
+    pub const SLEEP: MoveEffect = MoveEffect(1);
+    /// Upstream `EFFECT_POISON_HIT` (`battle_move_effects.h:6`).
+    pub const POISON_HIT: MoveEffect = MoveEffect(2);
+    /// Upstream `EFFECT_ABSORB` (`battle_move_effects.h:7`).
+    pub const ABSORB: MoveEffect = MoveEffect(3);
+    /// Upstream `EFFECT_BURN_HIT` (`battle_move_effects.h:8`).
+    pub const BURN_HIT: MoveEffect = MoveEffect(4);
+    /// Upstream `EFFECT_FREEZE_HIT` (`battle_move_effects.h:9`).
+    pub const FREEZE_HIT: MoveEffect = MoveEffect(5);
+    /// Upstream `EFFECT_PARALYZE_HIT` (`battle_move_effects.h:10`).
+    pub const PARALYZE_HIT: MoveEffect = MoveEffect(6);
+    /// Upstream `EFFECT_EXPLOSION` (`battle_move_effects.h:11`).
+    pub const EXPLOSION: MoveEffect = MoveEffect(7);
+    /// Upstream `EFFECT_DREAM_EATER` (`battle_move_effects.h:12`).
+    pub const DREAM_EATER: MoveEffect = MoveEffect(8);
+    /// Upstream `EFFECT_MIRROR_MOVE` (`battle_move_effects.h:13`).
+    pub const MIRROR_MOVE: MoveEffect = MoveEffect(9);
+    /// Upstream `EFFECT_ATTACK_UP` (`battle_move_effects.h:14`).
+    pub const ATTACK_UP: MoveEffect = MoveEffect(10);
+    /// Upstream `EFFECT_DEFENSE_UP` (`battle_move_effects.h:15`).
+    pub const DEFENSE_UP: MoveEffect = MoveEffect(11);
+    /// Upstream `EFFECT_SPEED_UP` (`battle_move_effects.h:16`).
+    pub const SPEED_UP: MoveEffect = MoveEffect(12);
+    /// Upstream `EFFECT_SPECIAL_ATTACK_UP` (`battle_move_effects.h:17`).
+    pub const SPECIAL_ATTACK_UP: MoveEffect = MoveEffect(13);
+    /// Upstream `EFFECT_SPECIAL_DEFENSE_UP` (`battle_move_effects.h:18`).
+    pub const SPECIAL_DEFENSE_UP: MoveEffect = MoveEffect(14);
+    /// Upstream `EFFECT_ACCURACY_UP` (`battle_move_effects.h:19`).
+    pub const ACCURACY_UP: MoveEffect = MoveEffect(15);
+    /// Upstream `EFFECT_EVASION_UP` (`battle_move_effects.h:20`).
+    pub const EVASION_UP: MoveEffect = MoveEffect(16);
+    /// Upstream `EFFECT_ALWAYS_HIT` (`battle_move_effects.h:21`).
+    pub const ALWAYS_HIT: MoveEffect = MoveEffect(17);
+    /// Upstream `EFFECT_ATTACK_DOWN` (`battle_move_effects.h:22`).
+    pub const ATTACK_DOWN: MoveEffect = MoveEffect(18);
+    /// Upstream `EFFECT_DEFENSE_DOWN` (`battle_move_effects.h:23`).
+    pub const DEFENSE_DOWN: MoveEffect = MoveEffect(19);
+    /// Upstream `EFFECT_SPEED_DOWN` (`battle_move_effects.h:24`).
+    pub const SPEED_DOWN: MoveEffect = MoveEffect(20);
+    /// Upstream `EFFECT_SPECIAL_ATTACK_DOWN` (`battle_move_effects.h:25`).
+    pub const SPECIAL_ATTACK_DOWN: MoveEffect = MoveEffect(21);
+    /// Upstream `EFFECT_SPECIAL_DEFENSE_DOWN` (`battle_move_effects.h:26`).
+    pub const SPECIAL_DEFENSE_DOWN: MoveEffect = MoveEffect(22);
+    /// Upstream `EFFECT_ACCURACY_DOWN` (`battle_move_effects.h:27`).
+    pub const ACCURACY_DOWN: MoveEffect = MoveEffect(23);
+    /// Upstream `EFFECT_EVASION_DOWN` (`battle_move_effects.h:28`).
+    pub const EVASION_DOWN: MoveEffect = MoveEffect(24);
+    /// Upstream `EFFECT_HAZE` (`battle_move_effects.h:29`).
+    pub const HAZE: MoveEffect = MoveEffect(25);
+    /// Upstream `EFFECT_BIDE` (`battle_move_effects.h:30`).
+    pub const BIDE: MoveEffect = MoveEffect(26);
+    /// Upstream `EFFECT_RAMPAGE` (`battle_move_effects.h:31`).
+    pub const RAMPAGE: MoveEffect = MoveEffect(27);
+    /// Upstream `EFFECT_ROAR` (`battle_move_effects.h:32`).
+    pub const ROAR: MoveEffect = MoveEffect(28);
+    /// Upstream `EFFECT_MULTI_HIT` (`battle_move_effects.h:33`).
+    pub const MULTI_HIT: MoveEffect = MoveEffect(29);
+    /// Upstream `EFFECT_CONVERSION` (`battle_move_effects.h:34`).
+    pub const CONVERSION: MoveEffect = MoveEffect(30);
+    /// Upstream `EFFECT_FLINCH_HIT` (`battle_move_effects.h:35`).
+    pub const FLINCH_HIT: MoveEffect = MoveEffect(31);
+    /// Upstream `EFFECT_RESTORE_HP` (`battle_move_effects.h:36`).
+    pub const RESTORE_HP: MoveEffect = MoveEffect(32);
+    /// Upstream `EFFECT_TOXIC` (`battle_move_effects.h:37`).
+    pub const TOXIC: MoveEffect = MoveEffect(33);
+    /// Upstream `EFFECT_PAY_DAY` (`battle_move_effects.h:38`).
+    pub const PAY_DAY: MoveEffect = MoveEffect(34);
+    /// Upstream `EFFECT_LIGHT_SCREEN` (`battle_move_effects.h:39`).
+    pub const LIGHT_SCREEN: MoveEffect = MoveEffect(35);
+    /// Upstream `EFFECT_TRI_ATTACK` (`battle_move_effects.h:40`).
+    pub const TRI_ATTACK: MoveEffect = MoveEffect(36);
+    /// Upstream `EFFECT_REST` (`battle_move_effects.h:41`).
+    pub const REST: MoveEffect = MoveEffect(37);
+    /// Upstream `EFFECT_OHKO` (`battle_move_effects.h:42`).
+    pub const OHKO: MoveEffect = MoveEffect(38);
+    /// Upstream `EFFECT_RAZOR_WIND` (`battle_move_effects.h:43`).
+    pub const RAZOR_WIND: MoveEffect = MoveEffect(39);
+    /// Upstream `EFFECT_SUPER_FANG` (`battle_move_effects.h:44`).
+    pub const SUPER_FANG: MoveEffect = MoveEffect(40);
+    /// Upstream `EFFECT_DRAGON_RAGE` (`battle_move_effects.h:45`).
+    pub const DRAGON_RAGE: MoveEffect = MoveEffect(41);
+    /// Upstream `EFFECT_TRAP` (`battle_move_effects.h:46`).
+    pub const TRAP: MoveEffect = MoveEffect(42);
+    /// Upstream `EFFECT_HIGH_CRITICAL` (`battle_move_effects.h:47`).
+    pub const HIGH_CRITICAL: MoveEffect = MoveEffect(43);
+    /// Upstream `EFFECT_DOUBLE_HIT` (`battle_move_effects.h:48`).
+    pub const DOUBLE_HIT: MoveEffect = MoveEffect(44);
+    /// Upstream `EFFECT_RECOIL_IF_MISS` (`battle_move_effects.h:49`).
+    pub const RECOIL_IF_MISS: MoveEffect = MoveEffect(45);
+    /// Upstream `EFFECT_MIST` (`battle_move_effects.h:50`).
+    pub const MIST: MoveEffect = MoveEffect(46);
+    /// Upstream `EFFECT_FOCUS_ENERGY` (`battle_move_effects.h:51`).
+    pub const FOCUS_ENERGY: MoveEffect = MoveEffect(47);
+    /// Upstream `EFFECT_RECOIL` (`battle_move_effects.h:52`).
+    pub const RECOIL: MoveEffect = MoveEffect(48);
+    /// Upstream `EFFECT_CONFUSE` (`battle_move_effects.h:53`).
+    pub const CONFUSE: MoveEffect = MoveEffect(49);
+    /// Upstream `EFFECT_ATTACK_UP_2` (`battle_move_effects.h:54`).
+    pub const ATTACK_UP_2: MoveEffect = MoveEffect(50);
+    /// Upstream `EFFECT_DEFENSE_UP_2` (`battle_move_effects.h:55`).
+    pub const DEFENSE_UP_2: MoveEffect = MoveEffect(51);
+    /// Upstream `EFFECT_SPEED_UP_2` (`battle_move_effects.h:56`).
+    pub const SPEED_UP_2: MoveEffect = MoveEffect(52);
+    /// Upstream `EFFECT_SPECIAL_ATTACK_UP_2` (`battle_move_effects.h:57`).
+    pub const SPECIAL_ATTACK_UP_2: MoveEffect = MoveEffect(53);
+    /// Upstream `EFFECT_SPECIAL_DEFENSE_UP_2` (`battle_move_effects.h:58`).
+    pub const SPECIAL_DEFENSE_UP_2: MoveEffect = MoveEffect(54);
+    /// Upstream `EFFECT_ACCURACY_UP_2` (`battle_move_effects.h:59`).
+    pub const ACCURACY_UP_2: MoveEffect = MoveEffect(55);
+    /// Upstream `EFFECT_EVASION_UP_2` (`battle_move_effects.h:60`).
+    pub const EVASION_UP_2: MoveEffect = MoveEffect(56);
+    /// Upstream `EFFECT_TRANSFORM` (`battle_move_effects.h:61`).
+    pub const TRANSFORM: MoveEffect = MoveEffect(57);
+    /// Upstream `EFFECT_ATTACK_DOWN_2` (`battle_move_effects.h:62`).
+    pub const ATTACK_DOWN_2: MoveEffect = MoveEffect(58);
+    /// Upstream `EFFECT_DEFENSE_DOWN_2` (`battle_move_effects.h:63`).
+    pub const DEFENSE_DOWN_2: MoveEffect = MoveEffect(59);
+    /// Upstream `EFFECT_SPEED_DOWN_2` (`battle_move_effects.h:64`).
+    pub const SPEED_DOWN_2: MoveEffect = MoveEffect(60);
+    /// Upstream `EFFECT_SPECIAL_ATTACK_DOWN_2` (`battle_move_effects.h:65`).
+    pub const SPECIAL_ATTACK_DOWN_2: MoveEffect = MoveEffect(61);
+    /// Upstream `EFFECT_SPECIAL_DEFENSE_DOWN_2` (`battle_move_effects.h:66`).
+    pub const SPECIAL_DEFENSE_DOWN_2: MoveEffect = MoveEffect(62);
+    /// Upstream `EFFECT_ACCURACY_DOWN_2` (`battle_move_effects.h:67`).
+    pub const ACCURACY_DOWN_2: MoveEffect = MoveEffect(63);
+    /// Upstream `EFFECT_EVASION_DOWN_2` (`battle_move_effects.h:68`).
+    pub const EVASION_DOWN_2: MoveEffect = MoveEffect(64);
+    /// Upstream `EFFECT_REFLECT` (`battle_move_effects.h:69`).
+    pub const REFLECT: MoveEffect = MoveEffect(65);
+    /// Upstream `EFFECT_POISON` (`battle_move_effects.h:70`).
+    pub const POISON: MoveEffect = MoveEffect(66);
+    /// Upstream `EFFECT_PARALYZE` (`battle_move_effects.h:71`).
+    pub const PARALYZE: MoveEffect = MoveEffect(67);
+    /// Upstream `EFFECT_ATTACK_DOWN_HIT` (`battle_move_effects.h:72`).
+    pub const ATTACK_DOWN_HIT: MoveEffect = MoveEffect(68);
+    /// Upstream `EFFECT_DEFENSE_DOWN_HIT` (`battle_move_effects.h:73`).
+    pub const DEFENSE_DOWN_HIT: MoveEffect = MoveEffect(69);
+    /// Upstream `EFFECT_SPEED_DOWN_HIT` (`battle_move_effects.h:74`).
+    pub const SPEED_DOWN_HIT: MoveEffect = MoveEffect(70);
+    /// Upstream `EFFECT_SPECIAL_ATTACK_DOWN_HIT` (`battle_move_effects.h:75`).
+    pub const SPECIAL_ATTACK_DOWN_HIT: MoveEffect = MoveEffect(71);
+    /// Upstream `EFFECT_SPECIAL_DEFENSE_DOWN_HIT` (`battle_move_effects.h:76`).
+    pub const SPECIAL_DEFENSE_DOWN_HIT: MoveEffect = MoveEffect(72);
+    /// Upstream `EFFECT_ACCURACY_DOWN_HIT` (`battle_move_effects.h:77`).
+    pub const ACCURACY_DOWN_HIT: MoveEffect = MoveEffect(73);
+    /// Upstream `EFFECT_EVASION_DOWN_HIT` (`battle_move_effects.h:78`).
+    pub const EVASION_DOWN_HIT: MoveEffect = MoveEffect(74);
+    /// Upstream `EFFECT_SKY_ATTACK` (`battle_move_effects.h:79`).
+    pub const SKY_ATTACK: MoveEffect = MoveEffect(75);
+    /// Upstream `EFFECT_CONFUSE_HIT` (`battle_move_effects.h:80`).
+    pub const CONFUSE_HIT: MoveEffect = MoveEffect(76);
+    /// Upstream `EFFECT_TWINEEDLE` (`battle_move_effects.h:81`).
+    pub const TWINEEDLE: MoveEffect = MoveEffect(77);
+    /// Upstream `EFFECT_VITAL_THROW` (`battle_move_effects.h:82`).
+    pub const VITAL_THROW: MoveEffect = MoveEffect(78);
+    /// Upstream `EFFECT_SUBSTITUTE` (`battle_move_effects.h:83`).
+    pub const SUBSTITUTE: MoveEffect = MoveEffect(79);
+    /// Upstream `EFFECT_RECHARGE` (`battle_move_effects.h:84`).
+    pub const RECHARGE: MoveEffect = MoveEffect(80);
+    /// Upstream `EFFECT_RAGE` (`battle_move_effects.h:85`).
+    pub const RAGE: MoveEffect = MoveEffect(81);
+    /// Upstream `EFFECT_MIMIC` (`battle_move_effects.h:86`).
+    pub const MIMIC: MoveEffect = MoveEffect(82);
+    /// Upstream `EFFECT_METRONOME` (`battle_move_effects.h:87`).
+    pub const METRONOME: MoveEffect = MoveEffect(83);
+    /// Upstream `EFFECT_LEECH_SEED` (`battle_move_effects.h:88`).
+    pub const LEECH_SEED: MoveEffect = MoveEffect(84);
+    /// Upstream `EFFECT_SPLASH` (`battle_move_effects.h:89`).
+    pub const SPLASH: MoveEffect = MoveEffect(85);
+    /// Upstream `EFFECT_DISABLE` (`battle_move_effects.h:90`).
+    pub const DISABLE: MoveEffect = MoveEffect(86);
+    /// Upstream `EFFECT_LEVEL_DAMAGE` (`battle_move_effects.h:91`).
+    pub const LEVEL_DAMAGE: MoveEffect = MoveEffect(87);
+    /// Upstream `EFFECT_PSYWAVE` (`battle_move_effects.h:92`).
+    pub const PSYWAVE: MoveEffect = MoveEffect(88);
+    /// Upstream `EFFECT_COUNTER` (`battle_move_effects.h:93`).
+    pub const COUNTER: MoveEffect = MoveEffect(89);
+    /// Upstream `EFFECT_ENCORE` (`battle_move_effects.h:94`).
+    pub const ENCORE: MoveEffect = MoveEffect(90);
+    /// Upstream `EFFECT_PAIN_SPLIT` (`battle_move_effects.h:95`).
+    pub const PAIN_SPLIT: MoveEffect = MoveEffect(91);
+    /// Upstream `EFFECT_SNORE` (`battle_move_effects.h:96`).
+    pub const SNORE: MoveEffect = MoveEffect(92);
+    /// Upstream `EFFECT_CONVERSION_2` (`battle_move_effects.h:97`).
+    pub const CONVERSION_2: MoveEffect = MoveEffect(93);
+    /// Upstream `EFFECT_LOCK_ON` (`battle_move_effects.h:98`).
+    pub const LOCK_ON: MoveEffect = MoveEffect(94);
+    /// Upstream `EFFECT_SKETCH` (`battle_move_effects.h:99`).
+    pub const SKETCH: MoveEffect = MoveEffect(95);
+    /// Upstream `EFFECT_UNUSED_60` (`battle_move_effects.h:100`).
+    pub const UNUSED_60: MoveEffect = MoveEffect(96);
+    /// Upstream `EFFECT_SLEEP_TALK` (`battle_move_effects.h:101`).
+    pub const SLEEP_TALK: MoveEffect = MoveEffect(97);
+    /// Upstream `EFFECT_DESTINY_BOND` (`battle_move_effects.h:102`).
+    pub const DESTINY_BOND: MoveEffect = MoveEffect(98);
+    /// Upstream `EFFECT_FLAIL` (`battle_move_effects.h:103`).
+    pub const FLAIL: MoveEffect = MoveEffect(99);
+    /// Upstream `EFFECT_SPITE` (`battle_move_effects.h:104`).
+    pub const SPITE: MoveEffect = MoveEffect(100);
+    /// Upstream `EFFECT_FALSE_SWIPE` (`battle_move_effects.h:105`).
+    pub const FALSE_SWIPE: MoveEffect = MoveEffect(101);
+    /// Upstream `EFFECT_HEAL_BELL` (`battle_move_effects.h:106`).
+    pub const HEAL_BELL: MoveEffect = MoveEffect(102);
+    /// Upstream `EFFECT_QUICK_ATTACK` (`battle_move_effects.h:107`).
+    pub const QUICK_ATTACK: MoveEffect = MoveEffect(103);
+    /// Upstream `EFFECT_TRIPLE_KICK` (`battle_move_effects.h:108`).
+    pub const TRIPLE_KICK: MoveEffect = MoveEffect(104);
+    /// Upstream `EFFECT_THIEF` (`battle_move_effects.h:109`).
+    pub const THIEF: MoveEffect = MoveEffect(105);
+    /// Upstream `EFFECT_MEAN_LOOK` (`battle_move_effects.h:110`).
+    pub const MEAN_LOOK: MoveEffect = MoveEffect(106);
+    /// Upstream `EFFECT_NIGHTMARE` (`battle_move_effects.h:111`).
+    pub const NIGHTMARE: MoveEffect = MoveEffect(107);
+    /// Upstream `EFFECT_MINIMIZE` (`battle_move_effects.h:112`).
+    pub const MINIMIZE: MoveEffect = MoveEffect(108);
+    /// Upstream `EFFECT_CURSE` (`battle_move_effects.h:113`).
+    pub const CURSE: MoveEffect = MoveEffect(109);
+    /// Upstream `EFFECT_UNUSED_6E` (`battle_move_effects.h:114`).
+    pub const UNUSED_6E: MoveEffect = MoveEffect(110);
+    /// Upstream `EFFECT_PROTECT` (`battle_move_effects.h:115`).
+    pub const PROTECT: MoveEffect = MoveEffect(111);
+    /// Upstream `EFFECT_SPIKES` (`battle_move_effects.h:116`).
+    pub const SPIKES: MoveEffect = MoveEffect(112);
+    /// Upstream `EFFECT_FORESIGHT` (`battle_move_effects.h:117`).
+    pub const FORESIGHT: MoveEffect = MoveEffect(113);
+    /// Upstream `EFFECT_PERISH_SONG` (`battle_move_effects.h:118`).
+    pub const PERISH_SONG: MoveEffect = MoveEffect(114);
+    /// Upstream `EFFECT_SANDSTORM` (`battle_move_effects.h:119`).
+    pub const SANDSTORM: MoveEffect = MoveEffect(115);
+    /// Upstream `EFFECT_ENDURE` (`battle_move_effects.h:120`).
+    pub const ENDURE: MoveEffect = MoveEffect(116);
+    /// Upstream `EFFECT_ROLLOUT` (`battle_move_effects.h:121`).
+    pub const ROLLOUT: MoveEffect = MoveEffect(117);
+    /// Upstream `EFFECT_SWAGGER` (`battle_move_effects.h:122`).
+    pub const SWAGGER: MoveEffect = MoveEffect(118);
+    /// Upstream `EFFECT_FURY_CUTTER` (`battle_move_effects.h:123`).
+    pub const FURY_CUTTER: MoveEffect = MoveEffect(119);
+    /// Upstream `EFFECT_ATTRACT` (`battle_move_effects.h:124`).
+    pub const ATTRACT: MoveEffect = MoveEffect(120);
+    /// Upstream `EFFECT_RETURN` (`battle_move_effects.h:125`).
+    pub const RETURN: MoveEffect = MoveEffect(121);
+    /// Upstream `EFFECT_PRESENT` (`battle_move_effects.h:126`).
+    pub const PRESENT: MoveEffect = MoveEffect(122);
+    /// Upstream `EFFECT_FRUSTRATION` (`battle_move_effects.h:127`).
+    pub const FRUSTRATION: MoveEffect = MoveEffect(123);
+    /// Upstream `EFFECT_SAFEGUARD` (`battle_move_effects.h:128`).
+    pub const SAFEGUARD: MoveEffect = MoveEffect(124);
+    /// Upstream `EFFECT_THAW_HIT` (`battle_move_effects.h:129`).
+    pub const THAW_HIT: MoveEffect = MoveEffect(125);
+    /// Upstream `EFFECT_MAGNITUDE` (`battle_move_effects.h:130`).
+    pub const MAGNITUDE: MoveEffect = MoveEffect(126);
+    /// Upstream `EFFECT_BATON_PASS` (`battle_move_effects.h:131`).
+    pub const BATON_PASS: MoveEffect = MoveEffect(127);
+    /// Upstream `EFFECT_PURSUIT` (`battle_move_effects.h:132`).
+    pub const PURSUIT: MoveEffect = MoveEffect(128);
+    /// Upstream `EFFECT_RAPID_SPIN` (`battle_move_effects.h:133`).
+    pub const RAPID_SPIN: MoveEffect = MoveEffect(129);
+    /// Upstream `EFFECT_SONICBOOM` (`battle_move_effects.h:134`).
+    pub const SONICBOOM: MoveEffect = MoveEffect(130);
+    /// Upstream `EFFECT_UNUSED_83` (`battle_move_effects.h:135`).
+    pub const UNUSED_83: MoveEffect = MoveEffect(131);
+    /// Upstream `EFFECT_MORNING_SUN` (`battle_move_effects.h:136`).
+    pub const MORNING_SUN: MoveEffect = MoveEffect(132);
+    /// Upstream `EFFECT_SYNTHESIS` (`battle_move_effects.h:137`).
+    pub const SYNTHESIS: MoveEffect = MoveEffect(133);
+    /// Upstream `EFFECT_MOONLIGHT` (`battle_move_effects.h:138`).
+    pub const MOONLIGHT: MoveEffect = MoveEffect(134);
+    /// Upstream `EFFECT_HIDDEN_POWER` (`battle_move_effects.h:139`).
+    pub const HIDDEN_POWER: MoveEffect = MoveEffect(135);
+    /// Upstream `EFFECT_RAIN_DANCE` (`battle_move_effects.h:140`).
+    pub const RAIN_DANCE: MoveEffect = MoveEffect(136);
+    /// Upstream `EFFECT_SUNNY_DAY` (`battle_move_effects.h:141`).
+    pub const SUNNY_DAY: MoveEffect = MoveEffect(137);
+    /// Upstream `EFFECT_DEFENSE_UP_HIT` (`battle_move_effects.h:142`).
+    pub const DEFENSE_UP_HIT: MoveEffect = MoveEffect(138);
+    /// Upstream `EFFECT_ATTACK_UP_HIT` (`battle_move_effects.h:143`).
+    pub const ATTACK_UP_HIT: MoveEffect = MoveEffect(139);
+    /// Upstream `EFFECT_ALL_STATS_UP_HIT` (`battle_move_effects.h:144`).
+    pub const ALL_STATS_UP_HIT: MoveEffect = MoveEffect(140);
+    /// Upstream `EFFECT_UNUSED_8D` (`battle_move_effects.h:145`).
+    pub const UNUSED_8D: MoveEffect = MoveEffect(141);
+    /// Upstream `EFFECT_BELLY_DRUM` (`battle_move_effects.h:146`).
+    pub const BELLY_DRUM: MoveEffect = MoveEffect(142);
+    /// Upstream `EFFECT_PSYCH_UP` (`battle_move_effects.h:147`).
+    pub const PSYCH_UP: MoveEffect = MoveEffect(143);
+    /// Upstream `EFFECT_MIRROR_COAT` (`battle_move_effects.h:148`).
+    pub const MIRROR_COAT: MoveEffect = MoveEffect(144);
+    /// Upstream `EFFECT_SKULL_BASH` (`battle_move_effects.h:149`).
+    pub const SKULL_BASH: MoveEffect = MoveEffect(145);
+    /// Upstream `EFFECT_TWISTER` (`battle_move_effects.h:150`).
+    pub const TWISTER: MoveEffect = MoveEffect(146);
+    /// Upstream `EFFECT_EARTHQUAKE` (`battle_move_effects.h:151`).
+    pub const EARTHQUAKE: MoveEffect = MoveEffect(147);
+    /// Upstream `EFFECT_FUTURE_SIGHT` (`battle_move_effects.h:152`).
+    pub const FUTURE_SIGHT: MoveEffect = MoveEffect(148);
+    /// Upstream `EFFECT_GUST` (`battle_move_effects.h:153`).
+    pub const GUST: MoveEffect = MoveEffect(149);
+    /// Upstream `EFFECT_FLINCH_MINIMIZE_HIT` (`battle_move_effects.h:154`).
+    pub const FLINCH_MINIMIZE_HIT: MoveEffect = MoveEffect(150);
+    /// Upstream `EFFECT_SOLAR_BEAM` (`battle_move_effects.h:155`).
+    pub const SOLAR_BEAM: MoveEffect = MoveEffect(151);
+    /// Upstream `EFFECT_THUNDER` (`battle_move_effects.h:156`).
+    pub const THUNDER: MoveEffect = MoveEffect(152);
+    /// Upstream `EFFECT_TELEPORT` (`battle_move_effects.h:157`).
+    pub const TELEPORT: MoveEffect = MoveEffect(153);
+    /// Upstream `EFFECT_BEAT_UP` (`battle_move_effects.h:158`).
+    pub const BEAT_UP: MoveEffect = MoveEffect(154);
+    /// Upstream `EFFECT_SEMI_INVULNERABLE` (`battle_move_effects.h:159`).
+    pub const SEMI_INVULNERABLE: MoveEffect = MoveEffect(155);
+    /// Upstream `EFFECT_DEFENSE_CURL` (`battle_move_effects.h:160`).
+    pub const DEFENSE_CURL: MoveEffect = MoveEffect(156);
+    /// Upstream `EFFECT_SOFTBOILED` (`battle_move_effects.h:161`).
+    pub const SOFTBOILED: MoveEffect = MoveEffect(157);
+    /// Upstream `EFFECT_FAKE_OUT` (`battle_move_effects.h:162`).
+    pub const FAKE_OUT: MoveEffect = MoveEffect(158);
+    /// Upstream `EFFECT_UPROAR` (`battle_move_effects.h:163`).
+    pub const UPROAR: MoveEffect = MoveEffect(159);
+    /// Upstream `EFFECT_STOCKPILE` (`battle_move_effects.h:164`).
+    pub const STOCKPILE: MoveEffect = MoveEffect(160);
+    /// Upstream `EFFECT_SPIT_UP` (`battle_move_effects.h:165`).
+    pub const SPIT_UP: MoveEffect = MoveEffect(161);
+    /// Upstream `EFFECT_SWALLOW` (`battle_move_effects.h:166`).
+    pub const SWALLOW: MoveEffect = MoveEffect(162);
+    /// Upstream `EFFECT_UNUSED_A3` (`battle_move_effects.h:167`).
+    pub const UNUSED_A3: MoveEffect = MoveEffect(163);
+    /// Upstream `EFFECT_HAIL` (`battle_move_effects.h:168`).
+    pub const HAIL: MoveEffect = MoveEffect(164);
+    /// Upstream `EFFECT_TORMENT` (`battle_move_effects.h:169`).
+    pub const TORMENT: MoveEffect = MoveEffect(165);
+    /// Upstream `EFFECT_FLATTER` (`battle_move_effects.h:170`).
+    pub const FLATTER: MoveEffect = MoveEffect(166);
+    /// Upstream `EFFECT_WILL_O_WISP` (`battle_move_effects.h:171`).
+    pub const WILL_O_WISP: MoveEffect = MoveEffect(167);
+    /// Upstream `EFFECT_MEMENTO` (`battle_move_effects.h:172`).
+    pub const MEMENTO: MoveEffect = MoveEffect(168);
+    /// Upstream `EFFECT_FACADE` (`battle_move_effects.h:173`).
+    pub const FACADE: MoveEffect = MoveEffect(169);
+    /// Upstream `EFFECT_FOCUS_PUNCH` (`battle_move_effects.h:174`).
+    pub const FOCUS_PUNCH: MoveEffect = MoveEffect(170);
+    /// Upstream `EFFECT_SMELLINGSALT` (`battle_move_effects.h:175`).
+    pub const SMELLINGSALT: MoveEffect = MoveEffect(171);
+    /// Upstream `EFFECT_FOLLOW_ME` (`battle_move_effects.h:176`).
+    pub const FOLLOW_ME: MoveEffect = MoveEffect(172);
+    /// Upstream `EFFECT_NATURE_POWER` (`battle_move_effects.h:177`).
+    pub const NATURE_POWER: MoveEffect = MoveEffect(173);
+    /// Upstream `EFFECT_CHARGE` (`battle_move_effects.h:178`).
+    pub const CHARGE: MoveEffect = MoveEffect(174);
+    /// Upstream `EFFECT_TAUNT` (`battle_move_effects.h:179`).
+    pub const TAUNT: MoveEffect = MoveEffect(175);
+    /// Upstream `EFFECT_HELPING_HAND` (`battle_move_effects.h:180`).
+    pub const HELPING_HAND: MoveEffect = MoveEffect(176);
+    /// Upstream `EFFECT_TRICK` (`battle_move_effects.h:181`).
+    pub const TRICK: MoveEffect = MoveEffect(177);
+    /// Upstream `EFFECT_ROLE_PLAY` (`battle_move_effects.h:182`).
+    pub const ROLE_PLAY: MoveEffect = MoveEffect(178);
+    /// Upstream `EFFECT_WISH` (`battle_move_effects.h:183`).
+    pub const WISH: MoveEffect = MoveEffect(179);
+    /// Upstream `EFFECT_ASSIST` (`battle_move_effects.h:184`).
+    pub const ASSIST: MoveEffect = MoveEffect(180);
+    /// Upstream `EFFECT_INGRAIN` (`battle_move_effects.h:185`).
+    pub const INGRAIN: MoveEffect = MoveEffect(181);
+    /// Upstream `EFFECT_SUPERPOWER` (`battle_move_effects.h:186`).
+    pub const SUPERPOWER: MoveEffect = MoveEffect(182);
+    /// Upstream `EFFECT_MAGIC_COAT` (`battle_move_effects.h:187`).
+    pub const MAGIC_COAT: MoveEffect = MoveEffect(183);
+    /// Upstream `EFFECT_RECYCLE` (`battle_move_effects.h:188`).
+    pub const RECYCLE: MoveEffect = MoveEffect(184);
+    /// Upstream `EFFECT_REVENGE` (`battle_move_effects.h:189`).
+    pub const REVENGE: MoveEffect = MoveEffect(185);
+    /// Upstream `EFFECT_BRICK_BREAK` (`battle_move_effects.h:190`).
+    pub const BRICK_BREAK: MoveEffect = MoveEffect(186);
+    /// Upstream `EFFECT_YAWN` (`battle_move_effects.h:191`).
+    pub const YAWN: MoveEffect = MoveEffect(187);
+    /// Upstream `EFFECT_KNOCK_OFF` (`battle_move_effects.h:192`).
+    pub const KNOCK_OFF: MoveEffect = MoveEffect(188);
+    /// Upstream `EFFECT_ENDEAVOR` (`battle_move_effects.h:193`).
+    pub const ENDEAVOR: MoveEffect = MoveEffect(189);
+    /// Upstream `EFFECT_ERUPTION` (`battle_move_effects.h:194`).
+    pub const ERUPTION: MoveEffect = MoveEffect(190);
+    /// Upstream `EFFECT_SKILL_SWAP` (`battle_move_effects.h:195`).
+    pub const SKILL_SWAP: MoveEffect = MoveEffect(191);
+    /// Upstream `EFFECT_IMPRISON` (`battle_move_effects.h:196`).
+    pub const IMPRISON: MoveEffect = MoveEffect(192);
+    /// Upstream `EFFECT_REFRESH` (`battle_move_effects.h:197`).
+    pub const REFRESH: MoveEffect = MoveEffect(193);
+    /// Upstream `EFFECT_GRUDGE` (`battle_move_effects.h:198`).
+    pub const GRUDGE: MoveEffect = MoveEffect(194);
+    /// Upstream `EFFECT_SNATCH` (`battle_move_effects.h:199`).
+    pub const SNATCH: MoveEffect = MoveEffect(195);
+    /// Upstream `EFFECT_LOW_KICK` (`battle_move_effects.h:200`).
+    pub const LOW_KICK: MoveEffect = MoveEffect(196);
+    /// Upstream `EFFECT_SECRET_POWER` (`battle_move_effects.h:201`).
+    pub const SECRET_POWER: MoveEffect = MoveEffect(197);
+    /// Upstream `EFFECT_DOUBLE_EDGE` (`battle_move_effects.h:202`).
+    pub const DOUBLE_EDGE: MoveEffect = MoveEffect(198);
+    /// Upstream `EFFECT_TEETER_DANCE` (`battle_move_effects.h:203`).
+    pub const TEETER_DANCE: MoveEffect = MoveEffect(199);
+    /// Upstream `EFFECT_BLAZE_KICK` (`battle_move_effects.h:204`).
+    pub const BLAZE_KICK: MoveEffect = MoveEffect(200);
+    /// Upstream `EFFECT_MUD_SPORT` (`battle_move_effects.h:205`).
+    pub const MUD_SPORT: MoveEffect = MoveEffect(201);
+    /// Upstream `EFFECT_POISON_FANG` (`battle_move_effects.h:206`).
+    pub const POISON_FANG: MoveEffect = MoveEffect(202);
+    /// Upstream `EFFECT_WEATHER_BALL` (`battle_move_effects.h:207`).
+    pub const WEATHER_BALL: MoveEffect = MoveEffect(203);
+    /// Upstream `EFFECT_OVERHEAT` (`battle_move_effects.h:208`).
+    pub const OVERHEAT: MoveEffect = MoveEffect(204);
+    /// Upstream `EFFECT_TICKLE` (`battle_move_effects.h:209`).
+    pub const TICKLE: MoveEffect = MoveEffect(205);
+    /// Upstream `EFFECT_COSMIC_POWER` (`battle_move_effects.h:210`).
+    pub const COSMIC_POWER: MoveEffect = MoveEffect(206);
+    /// Upstream `EFFECT_SKY_UPPERCUT` (`battle_move_effects.h:211`).
+    pub const SKY_UPPERCUT: MoveEffect = MoveEffect(207);
+    /// Upstream `EFFECT_BULK_UP` (`battle_move_effects.h:212`).
+    pub const BULK_UP: MoveEffect = MoveEffect(208);
+    /// Upstream `EFFECT_POISON_TAIL` (`battle_move_effects.h:213`).
+    pub const POISON_TAIL: MoveEffect = MoveEffect(209);
+    /// Upstream `EFFECT_WATER_SPORT` (`battle_move_effects.h:214`).
+    pub const WATER_SPORT: MoveEffect = MoveEffect(210);
+    /// Upstream `EFFECT_CALM_MIND` (`battle_move_effects.h:215`).
+    pub const CALM_MIND: MoveEffect = MoveEffect(211);
+    /// Upstream `EFFECT_DRAGON_DANCE` (`battle_move_effects.h:216`).
+    pub const DRAGON_DANCE: MoveEffect = MoveEffect(212);
+    /// Upstream `EFFECT_CAMOUFLAGE` (`battle_move_effects.h:217`).
+    pub const CAMOUFLAGE: MoveEffect = MoveEffect(213);
+    /// Upstream `NUM_BATTLE_MOVE_EFFECTS` (`battle_move_effects.h:219`): one past the last id.
+    pub const COUNT: u8 = 214;
 
     /// Returns the stored effect identifier.
     #[must_use]

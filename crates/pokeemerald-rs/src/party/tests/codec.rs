@@ -5,10 +5,12 @@ use super::super::{
     PartyError, MAIL_NONE,
 };
 use super::common::{
-    torchic_before_learning_peck, treecko_fixture, EXPECTED_ATTACK_PP_OFFSET,
-    EXPECTED_GROWTH_EXPERIENCE, EXPECTED_GROWTH_FRIENDSHIP, EXPECTED_IS_EGG_BIT,
-    FIXTURE_PERSONALITY, GROWL, POUND, SCRATCH, TREECKO,
+    saved_treecko_holding, torchic_before_learning_peck, treecko_fixture,
+    EXPECTED_ATTACK_PP_OFFSET, EXPECTED_GROWTH_EXPERIENCE, EXPECTED_GROWTH_FRIENDSHIP,
+    EXPECTED_GROWTH_HELD_ITEM, EXPECTED_IS_EGG_BIT, FIXTURE_PERSONALITY, GROWL, POUND, SCRATCH,
+    TREECKO,
 };
+use assets::items::ItemId;
 use battle::{BattlePokemon, Dex, Ivs};
 use engine::save::{BoxPokemon, Pokemon};
 
@@ -124,6 +126,39 @@ fn a_battler_round_trips_through_the_save_layout() {
         "the fixture must save a damaged mon, or full-HP restore would pass"
     );
     assert_eq!(restored.moves(), mon.moves(), "moves and PP, slot for slot");
+}
+
+#[test]
+fn a_saved_held_item_decodes_onto_the_battler() {
+    let dex = Dex::new();
+    for item in [
+        ItemId::NONE,
+        ItemId::NUGGET,
+        ItemId::ORAN_BERRY,
+        ItemId(0xFFFF),
+    ] {
+        let restored = from_save_pokemon(&dex, &saved_treecko_holding(item))
+            .expect("a record naming any u16 item decodes");
+        assert_eq!(restored.held_item(), item, "{item:?}");
+    }
+}
+
+#[test]
+fn a_held_item_survives_the_battler_round_trip() {
+    let dex = Dex::new();
+    let mon = treecko_fixture().with_held_item(ItemId::NUGGET);
+
+    let saved = to_save_pokemon(&dex, &mon);
+
+    assert_eq!(
+        saved.box_data.substructures().unwrap().growth[EXPECTED_GROWTH_HELD_ITEM],
+        ItemId::NUGGET.0.to_le_bytes(),
+        "a record encoded from a battler files the item it holds"
+    );
+    assert_eq!(
+        from_save_pokemon(&dex, &saved).unwrap().held_item(),
+        ItemId::NUGGET
+    );
 }
 
 #[test]
