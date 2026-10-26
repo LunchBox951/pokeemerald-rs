@@ -13,6 +13,12 @@
 //! `src/graphics.c:1151-1152`, whose palette is the PNG's own) are the two
 //! sprite sheets the bag screen draws beyond its own directory.
 //!
+//! The menu-info icon sheet (`graphics/interface/menu_info.png`,
+//! `gMenuInfoElements_Gfx`) and its three palettes (`menu_info{1,2,3}.pal`,
+//! `gMenuInfoElements{1,2,3}_Pal`, `src/graphics.c:1264-1267`) hold the type
+//! and TYPE/POWER/ACCURACY/PP label icons the TM/HM move-data window blits
+//! (`src/menu.c` `BlitMenuInfoIcon`).
+//!
 //! Ids are `bag/{image,palette,raw}/<name>` and
 //! `bag/item-icon/{image,palette}/<stem>`.
 
@@ -31,6 +37,13 @@ const ICON_TABLE: &str = "src/data/item_icon_table.h";
 const ICON_GRAPHICS: &str = "src/data/graphics/items.h";
 
 const SOURCE_BIT_DEPTH: u8 = 4;
+/// `menu_info.png` is an 8-bit indexed PNG over three 16-colour banks (48
+/// colours). Its rule is `.4bpp`, and `gbagfx` narrows an 8-bit PNG to 4bpp by
+/// keeping each index modulo 16 (`tools/gbagfx/convert_png.c` `ConvertBitDepth`),
+/// so the sheet the ROM holds, and the pack stores, is that narrowed 4bpp image.
+/// Keeps an index within its 16-colour bank: modulo 16.
+const BANK_INDEX_MASK: u8 = 0x0F;
+const MENU_INFO_PNG_BIT_DEPTH: u8 = 8;
 const BANK_COLORS: usize = 16;
 const MENU_COLORS: usize = 32;
 const ICON_SIDE: u32 = 24;
@@ -43,6 +56,9 @@ struct ImageSource {
     id: &'static str,
     width: u32,
     height: u32,
+    /// Bit depth the PNG is stored at. An 8-bit PNG is narrowed to the 4bpp
+    /// image the pack carries, as `gbagfx` does for a `.4bpp` rule.
+    png_bit_depth: u8,
     /// Pack id of the PNG's embedded palette, when the pack carries it.
     embedded_palette_id: Option<&'static str>,
 }
@@ -61,13 +77,15 @@ const fn image(png: &'static str, id: &'static str, width: u32, height: u32) -> 
         id,
         width,
         height,
+        png_bit_depth: SOURCE_BIT_DEPTH,
         embedded_palette_id: None,
     }
 }
 
-/// `graphics.c:1136-1143,1151,1269`, `list_menu.c:290`, `item_menu_icons.c:36-37`,
-/// `item_menu.c:374`. `gSwapLinePal` is the PNG's own palette.
-const IMAGES: [ImageSource; 8] = [
+/// `graphics.c:1136-1143,1151,1267,1269`, `list_menu.c:290`,
+/// `item_menu_icons.c:36-37`, `item_menu.c:374`. `gSwapLinePal` is the PNG's own
+/// palette; the menu-info sheet's three palettes are separate `.pal` files.
+const IMAGES: [ImageSource; 9] = [
     image("graphics/bag/menu.png", "bag/image/menu", 128, 32),
     image("graphics/bag/bag_male.png", "bag/image/male", 64, 384),
     image("graphics/bag/bag_female.png", "bag/image/female", 64, 384),
@@ -102,10 +120,19 @@ const IMAGES: [ImageSource; 8] = [
             32,
         )
     },
+    ImageSource {
+        png_bit_depth: MENU_INFO_PNG_BIT_DEPTH,
+        ..image(
+            "graphics/interface/menu_info.png",
+            "bag/image/menu_info",
+            128,
+            128,
+        )
+    },
 ];
 
-/// `graphics.c:1138-1141`, `list_menu.c:289`.
-const PALETTES: [PaletteSource; 4] = [
+/// `graphics.c:1138-1141,1264-1266`, `list_menu.c:289`.
+const PALETTES: [PaletteSource; 7] = [
     PaletteSource {
         pal: "graphics/bag/menu_male.pal",
         id: "bag/palette/menu/male",
@@ -124,6 +151,21 @@ const PALETTES: [PaletteSource; 4] = [
     PaletteSource {
         pal: "graphics/interface/red.pal",
         id: "bag/palette/scroll_indicator",
+        colors: BANK_COLORS,
+    },
+    PaletteSource {
+        pal: "graphics/interface/menu_info1.pal",
+        id: "bag/palette/menu_info1",
+        colors: BANK_COLORS,
+    },
+    PaletteSource {
+        pal: "graphics/interface/menu_info2.pal",
+        id: "bag/palette/menu_info2",
+        colors: BANK_COLORS,
+    },
+    PaletteSource {
+        pal: "graphics/interface/menu_info3.pal",
+        id: "bag/palette/menu_info3",
         colors: BANK_COLORS,
     },
 ];
@@ -188,8 +230,8 @@ pub(super) fn extract_bag(upstream: &Path, writer: &mut PackWriter) -> Result<()
     let palettes: BTreeSet<&str> = rows.iter().map(|(_, palette)| palette.as_str()).collect();
     for image_path in images {
         let id = format!("bag/item-icon/image/{}", stem(image_path));
-        let size = (ICON_SIDE, ICON_SIDE);
-        decode_into(&upstream.join(image_path), id, size, None, writer)?;
+        let shape = (ICON_SIDE, ICON_SIDE, SOURCE_BIT_DEPTH);
+        decode_into(&upstream.join(image_path), id, shape, None, writer)?;
     }
     for palette_path in palettes {
         let path = upstream.join(palette_path);
@@ -208,11 +250,11 @@ fn extract_image(
     source: &ImageSource,
     writer: &mut PackWriter,
 ) -> Result<(), ExtractError> {
-    let size = (source.width, source.height);
+    let shape = (source.width, source.height, source.png_bit_depth);
     decode_into(
         path,
         source.id.to_owned(),
-        size,
+        shape,
         source.embedded_palette_id,
         writer,
     )
@@ -221,12 +263,12 @@ fn extract_image(
 fn decode_into(
     path: &Path,
     id: String,
-    (width, height): (u32, u32),
+    (width, height, png_bit_depth): (u32, u32, u8),
     embedded_palette_id: Option<&str>,
     writer: &mut PackWriter,
 ) -> Result<(), ExtractError> {
     let bytes = read_file(path)?;
-    let image = png::decode(&bytes).map_err(|e| ExtractError::Png(path.to_path_buf(), e))?;
+    let mut image = png::decode(&bytes).map_err(|e| ExtractError::Png(path.to_path_buf(), e))?;
     if image.width != width || image.height != height {
         return Err(mismatch(
             path,
@@ -236,14 +278,20 @@ fn decode_into(
             ),
         ));
     }
-    if image.bit_depth != SOURCE_BIT_DEPTH {
+    if image.bit_depth != png_bit_depth {
         return Err(mismatch(
             path,
             format!(
-                "has bit depth {}: expected {SOURCE_BIT_DEPTH}",
+                "has bit depth {}: expected {png_bit_depth}",
                 image.bit_depth
             ),
         ));
+    }
+    if png_bit_depth != SOURCE_BIT_DEPTH {
+        for pixel in &mut image.pixels {
+            *pixel &= BANK_INDEX_MASK;
+        }
+        image.bit_depth = SOURCE_BIT_DEPTH;
     }
     if let Some(&pixel) = image
         .pixels
@@ -530,6 +578,10 @@ const u32 gItemIconPalette_Blue[] = INCGFX_U32(\"graphics/items/icon_palettes/bl
             "bag/palette/scroll_indicator",
             "bag/image/swap_line",
             "bag/palette/swap_line",
+            "bag/image/menu_info",
+            "bag/palette/menu_info1",
+            "bag/palette/menu_info2",
+            "bag/palette/menu_info3",
         ]
         .into_iter()
         .collect();
@@ -554,6 +606,7 @@ const u32 gItemIconPalette_Blue[] = INCGFX_U32(\"graphics/items/icon_palettes/bl
                 ("graphics/bag/hm.png", 16, 16),
                 ("graphics/interface/scroll_indicator.png", 16, 32),
                 ("graphics/interface/swap_line.png", 16, 32),
+                ("graphics/interface/menu_info.png", 128, 128),
             ]
         );
         let palettes: Vec<_> = PALETTES
@@ -567,6 +620,9 @@ const u32 gItemIconPalette_Blue[] = INCGFX_U32(\"graphics/items/icon_palettes/bl
                 ("graphics/bag/menu_female.pal", 32),
                 ("graphics/bag/bag.pal", 16),
                 ("graphics/interface/red.pal", 16),
+                ("graphics/interface/menu_info1.pal", 16),
+                ("graphics/interface/menu_info2.pal", 16),
+                ("graphics/interface/menu_info3.pal", 16),
             ]
         );
     }
@@ -643,6 +699,52 @@ const u32 gItemIconPalette_Blue[] = INCGFX_U32(\"graphics/items/icon_palettes/bl
             ExtractError::BagAssetMismatch { path, .. } if path == palette_path
         ));
         assert_eq!(writer.len(), 0);
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_menu_info_sheet_is_narrowed_to_4bpp_like_gbagfx() {
+        use super::super::png::tests::indexed_png_from_raw_with_plte;
+
+        let dir = scratch_dir("menu-info-narrowing");
+        let path = dir.join("menu_info.png");
+        // One 8-bit row of indices spanning all three 16-colour banks.
+        let indices: Vec<u8> = (0..128u32).map(|n| u8::try_from(n % 48).unwrap()).collect();
+        let mut raw = Vec::new();
+        for _ in 0..128 {
+            raw.push(0);
+            raw.extend_from_slice(&indices);
+        }
+        std::fs::write(
+            &path,
+            indexed_png_from_raw_with_plte(8, 128, 128, &raw, &[7; 48 * 3]),
+        )
+        .unwrap();
+
+        let source = IMAGES
+            .iter()
+            .find(|source| source.id == "bag/image/menu_info")
+            .unwrap();
+        let mut writer = PackWriter::new();
+        extract_image(&path, source, &mut writer).unwrap();
+        let pack = writer.finish().unwrap();
+        let entries = pack_format::parse_directory(&pack).unwrap();
+        assert_eq!(entries.len(), 1);
+        let entry = &entries[0];
+        let pixels = &pack[entry.offset..entry.offset + entry.length];
+        // gbagfx keeps each index modulo 16: 16..=47 land back on 0..=15.
+        let expected: Vec<u8> = (0..128u32)
+            .map(|n| u8::try_from(n % 48 % 16).unwrap())
+            .collect();
+        assert_eq!(&pixels[..128], expected.as_slice());
+        assert!(pixels.iter().all(|&pixel| pixel < 16));
+
+        // A 4-bit PNG is not what upstream ships for this sheet.
+        let narrow = indexed_png_from_raw_with_plte(4, 128, 128, &vec![0; 128 * 65], &[7; 48]);
+        std::fs::write(&path, narrow).unwrap();
+        let err = extract_image(&path, source, &mut PackWriter::new()).unwrap_err();
+        assert!(matches!(err, ExtractError::BagAssetMismatch { path: bad, .. } if bad == path));
 
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -764,6 +866,19 @@ const u32 gItemIconPalette_Blue[] = INCGFX_U32(\"graphics/items/icon_palettes/bl
         let expected: Vec<_> = embedded.iter().map(|c| Some(c.to_gba555())).collect();
         let actual: Vec<_> = (0..16).map(|i| line.palette.color(i)).collect();
         assert_eq!(actual, expected);
+
+        let info = bag.menu_info().unwrap();
+        let sheet = pixels("graphics/interface/menu_info.png");
+        // `gbagfx` keeps each PNG index modulo 16 for a `.4bpp` rule.
+        let narrowed: Vec<u8> = sheet.iter().map(|pixel| pixel % 16).collect();
+        assert_eq!(info.sheet.pixels, narrowed.as_slice());
+        for (n, file) in ["menu_info1.pal", "menu_info2.pal", "menu_info3.pal"]
+            .into_iter()
+            .enumerate()
+        {
+            let actual: Vec<_> = (0..16).map(|i| info.palettes[n].color(i)).collect();
+            assert_eq!(actual, colors(&format!("graphics/interface/{file}")));
+        }
 
         let rows = icon_rows(&upstream).unwrap();
         assert_eq!(rows.len(), ITEMS_COUNT + 1);
