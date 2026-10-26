@@ -206,11 +206,14 @@ impl NpcDialog {
         }
         match event {
             TickEvent::Glyph(g) => self.ops.push(WindowOp::Glyph(g)),
-            TickEvent::Scrolling { dy } => {
-                for op in &mut self.ops {
-                    op.shift_y(-dy);
-                }
-            }
+            // `ScrollWindow` fills the exposed rows with the background in
+            // force; no token runs while a scroll is in flight.
+            TickEvent::Scrolling { dy } => textbox::scroll_window_ops(
+                &mut self.ops,
+                dy,
+                self.printer.colors(),
+                textbox::STANDARD_BOX_CONTENT_SIZE_PX,
+            ),
             TickEvent::Finished => {
                 if self.wait_for_button_press {
                     self.state = DialogState::AwaitingButtonPress;
@@ -1009,5 +1012,30 @@ mod tests {
             textbox::STANDARD_PRINTER_ORIGIN.1 + 8,
         ));
         assert_eq!(composed.pixel(glyph_x, glyph_y), Some(HIGHLIGHT_COLOR));
+    }
+
+    #[test]
+    fn a_scroll_after_highlight_fills_the_exposed_rows_with_the_highlight() {
+        // `ScrollWindow(..., PIXEL_FILL(bgColor))` (`pokeemerald/src/text.c:1196-1201`).
+        let mut dialog = opaque_synthetic_dialog(vec![
+            Token::Char('A'),
+            Token::ExtCtrl {
+                sub: 0x02,
+                args: vec![4],
+            },
+            Token::PromptScroll,
+            Token::End,
+        ]);
+        dialog.frame.palette[HIGHLIGHT_PALETTE_INDEX] = HIGHLIGHT_COLOR;
+        for _ in 0..8 {
+            dialog.tick(NO_INPUT);
+        }
+        dialog.tick(A_PRESS);
+        for _ in 0..16 {
+            dialog.tick(NO_INPUT);
+        }
+        let fb = dialog.compose_over(Framebuffer::new());
+        let (x, y) = box_pixel((150, textbox::STANDARD_BOX_CONTENT_SIZE_PX.1 - 2));
+        assert_eq!(fb.pixel(x, y), Some(HIGHLIGHT_COLOR));
     }
 }
