@@ -8,14 +8,22 @@
 //!
 //! # Deliberately out of scope
 //!
-//! Formatting, audio, and window-buffer controls are consumed without applying
+//! Font, audio, and window-buffer controls are consumed without applying
 //! effects. Placeholders, dynamic tokens, and keypad icons are skipped because
 //! this renderer has no expansion context or corresponding glyphs. `CLEAR`,
 //! `CLEAR_TO`, and `FILL_WINDOW` are the exceptions: they move the cursor, so
 //! `CLEAR`/`CLEAR_TO`'s geometry is reported as a [`ClearedSpan`] and
 //! `FILL_WINDOW`'s whole-window equivalent through
-//! [`Printer::cleared_window`], both for the caller to erase. Which colour
-//! that erase uses stays out of scope with the rest of formatting.
+//! [`Printer::cleared_window`], both for the caller to erase.
+//!
+//! # Colour state
+//!
+//! `COLOR`, `HIGHLIGHT`, `SHADOW`, and `COLOR_HIGHLIGHT_SHADOW` update the
+//! printer's [`TextColors`] (`pokeemerald/src/text.c:980-1003`). Every
+//! [`RevealedGlyph`] and [`ClearedSpan`] carries the colours in force when it
+//! was produced, and [`Printer::cleared_window_colors`] carries those a
+//! whole-window clear erases with, so the caller composes each operation with
+//! its own palette indices.
 
 use assets::fonts::{FontId, Glyph, GlyphSource};
 
@@ -31,6 +39,10 @@ mod ext_ctrl {
     pub const FILL_WINDOW: u8 = super::super::EXT_CTRL_CODE_FILL_WINDOW;
     pub const PAUSE: u8 = super::super::EXT_CTRL_CODE_PAUSE;
     pub const PAUSE_UNTIL_PRESS: u8 = super::super::EXT_CTRL_CODE_PAUSE_UNTIL_PRESS;
+    pub const COLOR: u8 = super::super::EXT_CTRL_CODE_COLOR;
+    pub const HIGHLIGHT: u8 = super::super::EXT_CTRL_CODE_HIGHLIGHT;
+    pub const SHADOW: u8 = super::super::EXT_CTRL_CODE_SHADOW;
+    pub const COLOR_HIGHLIGHT_SHADOW: u8 = super::super::EXT_CTRL_CODE_COLOR_HIGHLIGHT_SHADOW;
 }
 
 const EXTRA_SYMBOL_PAGE_START: u16 = 0x100;
@@ -64,6 +76,41 @@ const fn clear_span_height(font: FontId) -> i32 {
     }
 }
 
+/// The palette indices a printer draws with: upstream's `fgColor`, `bgColor`,
+/// and `shadowColor` (`pokeemerald/src/text.c:980-1003`), each an index into
+/// the window's palette.
+///
+/// [`Default`] is the message-box selection `AddTextPrinterForMessage` makes:
+/// `TEXT_COLOR_DARK_GRAY` foreground, `TEXT_COLOR_WHITE` background, and
+/// `TEXT_COLOR_LIGHT_GRAY` shadow (`pokeemerald/src/menu.c:191-201`,
+/// `pokeemerald/include/constants/characters.h:230-248`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TextColors {
+    /// Palette index the glyph's foreground pixels (value 1) draw with.
+    pub foreground: u8,
+    /// Palette index the glyph's background pixels (value 0) and a clear's
+    /// erase draw with; 0 is transparent.
+    pub background: u8,
+    /// Palette index the glyph's shadow pixels (value 2) draw with.
+    pub shadow: u8,
+}
+
+impl TextColors {
+    /// The message-box colours: dark-gray text, white background, light-gray
+    /// shadow.
+    pub const MESSAGE_BOX: Self = Self {
+        foreground: 2,
+        background: 1,
+        shadow: 3,
+    };
+}
+
+impl Default for TextColors {
+    fn default() -> Self {
+        Self::MESSAGE_BOX
+    }
+}
+
 /// The pixels one `CLEAR` or `CLEAR_TO` control erased.
 ///
 /// Upstream's `ClearTextSpan` paints this rectangle into the window's tile
@@ -82,6 +129,9 @@ pub struct ClearedSpan {
     pub width: i32,
     /// Height in pixels: the font's Latin glyph height.
     pub height: i32,
+    /// The colours in force for the erase; `colors.background` fills it
+    /// (`pokeemerald/src/text.c:649-674`).
+    pub colors: TextColors,
 }
 
 /// Text reveal cadence.
@@ -196,6 +246,35 @@ pub struct RevealedGlyph {
     pub y: i32,
     /// The glyph's bitmap and advance width.
     pub glyph: Glyph,
+    /// The colours in force when the glyph was revealed.
+    pub colors: TextColors,
+    /// Rows of background upstream paints under the glyph: the font's Latin
+    /// glyph height ([`ClearedSpan::height`]).
+    pub raster_height: i32,
+    /// Whether the glyph's background pixels paint `colors.background`. False
+    /// while the printer still uses the unmodified message-box background,
+    /// which the window already shows; true once a `HIGHLIGHT` (or a
+    /// non-default configured background) selects one.
+    pub paint_background: bool,
+}
+
+/// Whether glyph background pixels paint `TextColors::background`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BackgroundPaint {
+    /// The window's own background shows: the unmodified message-box default.
+    Window,
+    /// A `HIGHLIGHT`, or a configured non-default background, selected one.
+    Painted,
+}
+
+impl BackgroundPaint {
+    const fn for_initial(colors: TextColors) -> Self {
+        if colors.background == TextColors::MESSAGE_BOX.background {
+            Self::Window
+        } else {
+            Self::Painted
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -305,6 +384,10 @@ pub struct Printer<S> {
     state: PrinterState,
     allows_ab_speed_up: bool,
     ab_speed_up_latched: bool,
+    initial_colors: TextColors,
+    colors: TextColors,
+    background: BackgroundPaint,
+    cleared_window_colors: Option<TextColors>,
 }
 
 impl<S: GlyphSource> Printer<S> {
@@ -328,6 +411,10 @@ impl<S: GlyphSource> Printer<S> {
             state: PrinterState::HandleChar,
             allows_ab_speed_up: false,
             ab_speed_up_latched: false,
+            initial_colors: TextColors::MESSAGE_BOX,
+            colors: TextColors::MESSAGE_BOX,
+            background: BackgroundPaint::Window,
+            cleared_window_colors: None,
         }
     }
 
@@ -347,6 +434,23 @@ impl<S: GlyphSource> Printer<S> {
     pub const fn with_ab_speed_up_print(mut self) -> Self {
         self.allows_ab_speed_up = true;
         self
+    }
+
+    /// Starts the printer with `colors` instead of the message-box defaults
+    /// (`TextPrinterTemplate.fgColor`/`bgColor`/`shadowColor`). A background
+    /// other than the default is painted under glyphs from the first one.
+    #[must_use]
+    pub fn with_text_colors(mut self, colors: TextColors) -> Self {
+        self.initial_colors = colors;
+        self.colors = colors;
+        self.background = BackgroundPaint::for_initial(colors);
+        self
+    }
+
+    /// The colours currently in force: what the next glyph or erase uses.
+    #[must_use]
+    pub const fn colors(&self) -> TextColors {
+        self.colors
     }
 
     /// The cursor's current window-local pixel position.
@@ -383,6 +487,16 @@ impl<S: GlyphSource> Printer<S> {
         self.cleared_window
     }
 
+    /// The colours the most recent [`Self::tick`]'s whole-window clear erased
+    /// with, when [`Self::cleared_window`] is set.
+    ///
+    /// Captured when the clear happened: a `HIGHLIGHT` later in the same tick
+    /// changes [`Self::colors`] but not this.
+    #[must_use]
+    pub const fn cleared_window_colors(&self) -> Option<TextColors> {
+        self.cleared_window_colors
+    }
+
     /// Returns whether the token stream has ended.
     #[must_use]
     pub const fn is_finished(&self) -> bool {
@@ -397,6 +511,9 @@ impl<S: GlyphSource> Printer<S> {
         self.cursor = self.origin;
         self.cleared_span = None;
         self.cleared_window = false;
+        self.cleared_window_colors = None;
+        self.colors = self.initial_colors;
+        self.background = BackgroundPaint::for_initial(self.initial_colors);
         self.state = PrinterState::HandleChar;
         self.ab_speed_up_latched = false;
     }
@@ -409,6 +526,7 @@ impl<S: GlyphSource> Printer<S> {
     pub fn tick(&mut self, input: PrinterInput) -> TickEvent {
         self.cleared_span = None;
         self.cleared_window = false;
+        self.cleared_window_colors = None;
         match self.state {
             PrinterState::Finished => TickEvent::Finished,
             PrinterState::HandleChar => self.tick_handle_char(input),
@@ -439,6 +557,7 @@ impl<S: GlyphSource> Printer<S> {
                 if input.confirm_pressed() {
                     self.cursor = self.origin;
                     self.cleared_window = true;
+                    self.cleared_window_colors = Some(self.colors);
                     self.state = PrinterState::HandleChar;
                     TickEvent::Cleared
                 } else {
@@ -524,6 +643,7 @@ impl<S: GlyphSource> Printer<S> {
                     // returns, so token handling keeps going here.
                     ControlOutcome::ClearedWindow => {
                         self.cleared_window = true;
+                        self.cleared_window_colors = Some(self.colors);
                         None
                     }
                 },
@@ -541,6 +661,9 @@ impl<S: GlyphSource> Printer<S> {
                 x: self.cursor.0,
                 y: self.cursor.1,
                 glyph,
+                colors: self.colors,
+                raster_height: self.clear_height,
+                paint_background: self.background == BackgroundPaint::Painted,
             };
             self.cursor.0 = self.cursor.0.saturating_add(i32::from(glyph.advance_width));
             return TickEvent::Glyph(Box::new(placement));
@@ -603,9 +726,41 @@ impl<S: GlyphSource> Printer<S> {
                 self.cursor = self.origin;
                 return ControlOutcome::ClearedWindow;
             }
+            // `text.c:980-1003`: each updates its own palette index and
+            // repeats. A hand-built token short of its arguments changes
+            // nothing rather than partially assigning.
+            ext_ctrl::COLOR => {
+                if let Some(&index) = arguments.first() {
+                    self.colors.foreground = index;
+                }
+            }
+            ext_ctrl::HIGHLIGHT => {
+                if let Some(&index) = arguments.first() {
+                    self.set_background(index);
+                }
+            }
+            ext_ctrl::SHADOW => {
+                if let Some(&index) = arguments.first() {
+                    self.colors.shadow = index;
+                }
+            }
+            ext_ctrl::COLOR_HIGHLIGHT_SHADOW => {
+                if let [foreground, background, shadow, ..] = *arguments {
+                    self.colors.foreground = foreground;
+                    self.colors.shadow = shadow;
+                    self.set_background(background);
+                }
+            }
             _ => {}
         }
         ControlOutcome::Repeat
+    }
+
+    /// An accepted `HIGHLIGHT` selects the background upstream paints under
+    /// every later glyph, including an explicit return to the default one.
+    fn set_background(&mut self, index: u8) {
+        self.colors.background = index;
+        self.background = BackgroundPaint::Painted;
     }
 
     /// Records `width` pixels erased at the cursor and advances past them.
@@ -628,6 +783,7 @@ impl<S: GlyphSource> Printer<S> {
                 y: self.cursor.1,
                 width: representable,
                 height: self.clear_height,
+                colors: self.colors,
             });
             self.cursor.0 = self.cursor.0.saturating_add(representable);
         }
@@ -1173,6 +1329,7 @@ mod tests {
                 y: 1,
                 width: 4,
                 height: 15,
+                colors: TextColors::default(),
             })
         );
         assert_eq!(printer.cursor(), (cursor_before_clear.0 + 4, 1));
@@ -1345,6 +1502,7 @@ mod tests {
                 y: 1,
                 width: 14,
                 height: 15,
+                colors: TextColors::default(),
             })
         );
         assert_eq!(printer.cursor(), (23, 1));
@@ -1911,5 +2069,225 @@ mod tests {
                 "raw value {raw} is out of OPTIONS_TEXT_SPEED's 0..=2 range and must clamp to Mid"
             );
         }
+    }
+    fn colored(foreground: u8, background: u8, shadow: u8) -> TextColors {
+        TextColors {
+            foreground,
+            background,
+            shadow,
+        }
+    }
+
+    fn printer_for(bytes: &[u8], speed: TextSpeed) -> Printer<FontGlyphSheet<'static>> {
+        let pixels: &'static [u8] = Box::leak(blank_sheet_pixels().into_boxed_slice());
+        Printer::new(
+            decode_tokens(bytes),
+            synthetic_sheet(pixels, FontId::Normal),
+            speed,
+            (0, 1),
+        )
+    }
+
+    /// Every revealed glyph's colours, ticking until the stream finishes.
+    fn glyph_colors_of(bytes: &[u8]) -> Vec<((i32, i32), TextColors)> {
+        let mut printer = printer_for(bytes, TextSpeed::Instant);
+        let mut out = Vec::new();
+        for _ in 0..64 {
+            match printer.tick(PrinterInput::none()) {
+                TickEvent::Glyph(g) => out.push(((g.x, g.y), g.colors)),
+                TickEvent::Finished => break,
+                _ => {}
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn color_blue_prefix_is_carried_on_the_revealed_glyph() {
+        // gText_ColorBlue is `{COLOR BLUE}`: FC 01 08 (strings.c:1234).
+        let plain = glyph_colors_of(&[ENCODED_A, super::super::EOS]);
+        let blue = glyph_colors_of(&[0xFC, 0x01, 0x08, ENCODED_A, super::super::EOS]);
+        assert_eq!(plain, vec![((0, 1), colored(2, 1, 3))]);
+        assert_eq!(blue, vec![((0, 1), colored(8, 1, 3))]);
+    }
+
+    #[test]
+    fn each_color_control_updates_its_own_index() {
+        let eos = super::super::EOS;
+        let cases: [(&[u8], TextColors); 4] = [
+            (&[0xFC, 0x01, 0x08, ENCODED_A, eos], colored(8, 1, 3)),
+            (&[0xFC, 0x02, 0x04, ENCODED_A, eos], colored(2, 4, 3)),
+            (&[0xFC, 0x03, 0x09, ENCODED_A, eos], colored(2, 1, 9)),
+            (
+                &[0xFC, 0x04, 0x08, 0x04, 0x09, ENCODED_A, eos],
+                colored(8, 4, 9),
+            ),
+        ];
+        for (bytes, expected) in cases {
+            assert_eq!(
+                glyph_colors_of(bytes),
+                vec![((0, 1), expected)],
+                "{bytes:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn colors_persist_across_glyphs_and_newlines_without_rewriting_earlier_glyphs() {
+        let eos = super::super::EOS;
+        let got = glyph_colors_of(&[ENCODED_A, 0xFC, 0x01, 0x08, ENCODED_A, 0xFE, ENCODED_A, eos]);
+        assert_eq!(
+            got,
+            vec![
+                ((0, 1), colored(2, 1, 3)),
+                ((6, 1), colored(8, 1, 3)),
+                ((0, 17), colored(8, 1, 3)),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_highlight_paints_glyph_backgrounds_from_then_on_even_back_to_white() {
+        let eos = super::super::EOS;
+        let mut printer = printer_for(
+            &[
+                ENCODED_A, 0xFC, 0x02, 0x04, ENCODED_A, 0xFC, 0x02, 0x01, ENCODED_A, eos,
+            ],
+            TextSpeed::Instant,
+        );
+        let mut paint = Vec::new();
+        while !printer.is_finished() {
+            if let TickEvent::Glyph(g) = printer.tick(PrinterInput::none()) {
+                paint.push((g.colors.background, g.paint_background, g.raster_height));
+            }
+        }
+        assert_eq!(paint, vec![(1, false, 15), (4, true, 15), (1, true, 15)]);
+    }
+
+    #[test]
+    fn color_controls_keep_upstreams_repeat_timing() {
+        let eos = super::super::EOS;
+        let prefixes: [&[u8]; 4] = [
+            &[0xFC, 0x01, 0x08],
+            &[0xFC, 0x02, 0x04],
+            &[0xFC, 0x03, 0x09],
+            &[0xFC, 0x04, 0x08, 0x04, 0x09],
+        ];
+        for prefix in prefixes {
+            let mut bytes = prefix.to_vec();
+            bytes.extend([ENCODED_A, eos]);
+            for (speed, idle_ticks) in [
+                (TextSpeed::Slow, 7),
+                (TextSpeed::Mid, 3),
+                (TextSpeed::Fast, 0),
+                (TextSpeed::Instant, 0),
+            ] {
+                let mut printer = printer_for(&bytes, speed);
+                for tick in 0..idle_ticks {
+                    assert_eq!(
+                        printer.tick(PrinterInput::none()),
+                        TickEvent::Idle,
+                        "{prefix:?} {speed:?} tick {tick}"
+                    );
+                }
+                assert!(
+                    matches!(printer.tick(PrinterInput::none()), TickEvent::Glyph(_)),
+                    "{prefix:?} {speed:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn clear_reports_the_highlight_in_force() {
+        let mut printer = printer_for(
+            &[0xFC, 0x02, 0x04, 0xFC, 0x11, 0x03, super::super::EOS],
+            TextSpeed::Instant,
+        );
+        assert_eq!(printer.tick(PrinterInput::none()), TickEvent::Idle);
+        assert_eq!(
+            printer.cleared_span(),
+            Some(ClearedSpan {
+                x: 0,
+                y: 1,
+                width: 3,
+                height: 15,
+                colors: colored(2, 4, 3),
+            })
+        );
+    }
+
+    #[test]
+    fn fill_window_reports_the_background_at_the_clear_not_the_one_after() {
+        let mut printer = printer_for(
+            &[
+                0xFC,
+                0x02,
+                0x04,
+                0xFC,
+                0x0F,
+                0xFC,
+                0x02,
+                0x08,
+                ENCODED_A,
+                super::super::EOS,
+            ],
+            TextSpeed::Instant,
+        );
+        let TickEvent::Glyph(g) = printer.tick(PrinterInput::none()) else {
+            panic!("expected a glyph")
+        };
+        assert!(printer.cleared_window());
+        assert_eq!(printer.cleared_window_colors(), Some(colored(2, 4, 3)));
+        assert_eq!(g.colors.background, 8);
+        printer.tick(PrinterInput::none());
+        assert_eq!(printer.cleared_window_colors(), None);
+    }
+
+    #[test]
+    fn short_hand_built_color_tokens_change_nothing() {
+        let tokens = vec![
+            Token::ExtCtrl {
+                sub: ext_ctrl::COLOR,
+                args: Vec::new(),
+            },
+            Token::ExtCtrl {
+                sub: ext_ctrl::COLOR_HIGHLIGHT_SHADOW,
+                args: vec![8, 4],
+            },
+            Token::End,
+        ];
+        let pixels = blank_sheet_pixels();
+        let mut printer = Printer::new(
+            tokens,
+            synthetic_sheet(&pixels, FontId::Normal),
+            TextSpeed::Instant,
+            (0, 1),
+        );
+        while printer.tick(PrinterInput::none()) != TickEvent::Finished {}
+        assert_eq!(printer.colors(), TextColors::default());
+    }
+
+    #[test]
+    fn configured_colors_apply_until_restart_resets_them() {
+        let eos = super::super::EOS;
+        let pixels = blank_sheet_pixels();
+        let mut printer = Printer::new(
+            decode_tokens(&[0xFC, 0x01, 0x08, ENCODED_A, eos]),
+            synthetic_sheet(&pixels, FontId::Normal),
+            TextSpeed::Instant,
+            (0, 1),
+        )
+        .with_text_colors(colored(5, 6, 7));
+        let TickEvent::Glyph(g) = printer.tick(PrinterInput::none()) else {
+            panic!("expected a glyph")
+        };
+        assert_eq!(g.colors, colored(8, 6, 7));
+        assert!(g.paint_background);
+        printer.restart(decode_tokens(&[ENCODED_A, eos]));
+        let TickEvent::Glyph(g) = printer.tick(PrinterInput::none()) else {
+            panic!("expected a glyph")
+        };
+        assert_eq!(g.colors, colored(5, 6, 7));
     }
 }
