@@ -476,8 +476,15 @@ impl SaveFile {
     /// is best-effort synchronised after the rename; see the private
     /// `SaveFile::ensure_parent_directory`.
     ///
+    /// A save path that is the directory's lock entry is refused, guard or
+    /// not, before anything is staged: the rename would replace the inode
+    /// every locker holds.
+    ///
     /// # Errors
     ///
+    /// [`SaveFileError::LockPathIsSave`] if this save path is the
+    /// directory's lock entry or resolves to the same file;
+    /// [`SaveFileError::Lock`] if either could not be inspected;
     /// [`SaveFileError::CreateDirectory`] if the parent directory could not
     /// be created; [`SaveFileError::Write`] if the temporary file could not
     /// be written, synced, or renamed into place, or if something replaced
@@ -512,6 +519,7 @@ impl SaveFile {
     ) -> Result<(), SaveFileError> {
         let held = self.held_directory.current();
         self.refuse_a_retargeted_parent(held.as_deref())?;
+        self.refuse_the_lock_entry()?;
         self.ensure_parent_directory()?;
 
         let write_error = |source: std::io::Error| SaveFileError::Write {
