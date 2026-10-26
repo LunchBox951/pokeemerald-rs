@@ -19,7 +19,7 @@ use crate::move_gate::ensure_resolvable_effect;
 use crate::pokemon::BattlePokemon;
 
 /// Move effect shared by Supersonic, Confuse Ray, and Sweet Kiss.
-pub const EFFECT_CONFUSE: MoveEffect = MoveEffect(49);
+pub const EFFECT_CONFUSE: MoveEffect = MoveEffect::CONFUSE;
 
 const CONFUSION_DURATION_OFFSET_MASK: u16 = 0b11;
 

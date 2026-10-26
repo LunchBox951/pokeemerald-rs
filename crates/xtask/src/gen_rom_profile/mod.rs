@@ -34,6 +34,7 @@ mod images;
 mod inventory;
 mod layouts;
 mod locate;
+mod lz77_blobs;
 mod map_file;
 mod opening_scene;
 mod pack_source;

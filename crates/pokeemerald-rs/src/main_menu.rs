@@ -14,6 +14,8 @@ const MENU_WIDTH: i32 = 26;
 const WINDOW_FRAME_THICKNESS_TILES: i32 = 1;
 const HIGHLIGHT_SHADOW_PADDING_PX: i32 = 1;
 const UNSELECTED_DARKEN_AMOUNT: u8 = 7;
+/// An empty highlight rectangle: nothing is spared from the darkening.
+const NO_HIGHLIGHT: (i32, i32, i32, i32) = (0, 0, 0, 0);
 const LABEL_TOP_OFFSET_PX: i32 = 1;
 
 const TILE_SIZE_PX: i32 = 8;
@@ -206,6 +208,24 @@ impl MainMenuScene {
     /// the OBJ transform has no effect.
     #[must_use]
     pub(crate) fn compose_with_palette(&self, palette: PaletteStage<'_>) -> Framebuffer {
+        let highlight = highlight_rect(self.rendered_items[self.selected_index].window);
+        self.compose_darkened_outside(palette, highlight)
+    }
+
+    /// Composes the windows with every one darkened: `Task_DisplayMainMenu`
+    /// draws them before `Task_HighlightSelectedMainMenuItem` opens the
+    /// selection's highlight a frame later
+    /// (`pokeemerald/src/main_menu.c:747-753`, `:884-888`, `:1170-1201`).
+    #[must_use]
+    pub(crate) fn compose_before_highlight(&self) -> Framebuffer {
+        self.compose_darkened_outside(PaletteStage::default(), NO_HIGHLIGHT)
+    }
+
+    fn compose_darkened_outside(
+        &self,
+        palette: PaletteStage<'_>,
+        highlight: (i32, i32, i32, i32),
+    ) -> Framebuffer {
         let map = |color: Rgb888| palette.bg.map_or(color, |blend| blend.transform(color));
         let frame_palette: Vec<Rgb888> = self.frame.palette.iter().map(|&c| map(c)).collect();
         let glyph_colors = HEADER_GLYPH_COLORS.map(|color| color.map(map));
@@ -229,11 +249,7 @@ impl MainMenuScene {
             );
         }
 
-        darken_outside(
-            &mut fb,
-            &painted_bg0,
-            highlight_rect(self.rendered_items[self.selected_index].window),
-        );
+        darken_outside(&mut fb, &painted_bg0, highlight);
 
         fb
     }

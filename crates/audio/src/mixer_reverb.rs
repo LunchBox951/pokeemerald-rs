@@ -79,3 +79,44 @@ fn a_cgb_voice_alongside_directsound_leaves_the_reverb_tap_directsound_only() {
         );
     }
 }
+
+#[test]
+fn an_overflowing_directsound_mix_feeds_its_wrapped_bytes_into_the_reverb_tail() {
+    const REVERB_LEVEL: u8 = 100;
+    const VOICES: usize = 4;
+    // The short tap is one frame shorter than the ring, so frame 0's committed
+    // samples first return as wet audio six frames later.
+    const SHORT_TAP_FRAME: usize = 6;
+
+    let mut mixer =
+        Mixer::new(MAX_MASTER_VOLUME, DEFAULT_MAX_VOICES).with_reverb_level(REVERB_LEVEL);
+    for track in 0..VOICES {
+        assert!(mixer.add_voice(constant_voice(i8::MAX, track)));
+    }
+    let contribution =
+        FLAT_ENVELOPE_GAIN_AT_MAX_MASTER_VOLUME * i32::from(i8::MAX) / SAMPLE_GAIN_DIVISOR;
+    let wrapped = byte_lane(4 * contribution);
+    let clipped = (4 * contribution).clamp(-128, 127);
+    assert_ne!(wrapped, clipped);
+
+    let mut out = vec![0.0; SAMPLES_PER_FRAME * 2];
+    mixer.mix_frame(&mut out);
+    assert!((out[0] - wrapped as f32 / OUTPUT_SCALE).abs() < ASSERTION_TOLERANCE);
+    for _ in 1..=SHORT_TAP_FRAME {
+        mixer.mix_frame(&mut out);
+    }
+
+    let wet = |stored: i32| {
+        let shifted = (2 * stored * i32::from(REVERB_LEVEL)) >> 9;
+        shifted + i32::from(shifted & 0x80 != 0)
+    };
+    let expected = wet(wrapped);
+    assert_ne!(expected, wet(clipped));
+    assert!(
+        (out[0] - expected as f32 / OUTPUT_SCALE).abs() < ASSERTION_TOLERANCE,
+        "tail {} must come from the wrapped byte {wrapped} (expected {}), not clipped {clipped} ({})",
+        out[0] * OUTPUT_SCALE,
+        expected,
+        wet(clipped),
+    );
+}

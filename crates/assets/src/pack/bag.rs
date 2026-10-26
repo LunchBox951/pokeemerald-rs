@@ -19,6 +19,16 @@ const ROTATING_BALL_IMAGE_ID: &str = "bag/image/rotating_ball";
 const ROTATING_BALL_PALETTE_ID: &str = "bag/palette/rotating_ball";
 const SELECT_BUTTON_IMAGE_ID: &str = "bag/image/select_button";
 const HM_IMAGE_ID: &str = "bag/image/hm";
+const SCROLL_INDICATOR_IMAGE_ID: &str = "bag/image/scroll_indicator";
+const SCROLL_INDICATOR_PALETTE_ID: &str = "bag/palette/scroll_indicator";
+const SWAP_LINE_IMAGE_ID: &str = "bag/image/swap_line";
+const SWAP_LINE_PALETTE_ID: &str = "bag/palette/swap_line";
+const MENU_INFO_IMAGE_ID: &str = "bag/image/menu_info";
+const MENU_INFO_PALETTE_IDS: [&str; MENU_INFO_PALETTES] = [
+    "bag/palette/menu_info1",
+    "bag/palette/menu_info2",
+    "bag/palette/menu_info3",
+];
 const ICON_IMAGE_PREFIX: &str = "bag/item-icon/image/";
 const ICON_PALETTE_PREFIX: &str = "bag/item-icon/palette/";
 
@@ -33,9 +43,31 @@ const ROTATING_BALL_SIDE: u32 = 16;
 const SELECT_BUTTON_WIDTH: u32 = 24;
 const SELECT_BUTTON_HEIGHT: u32 = 16;
 const HM_SIDE: u32 = 16;
+const SCROLL_INDICATOR_WIDTH: u32 = 16;
+const SCROLL_INDICATOR_HEIGHT: u32 = 32;
+const SWAP_LINE_WIDTH: u32 = 16;
+const SWAP_LINE_HEIGHT: u32 = 32;
+const MENU_INFO_SIDE: u32 = 128;
 const ICON_SIDE: u32 = 24;
 const TILEMAP_BYTES: usize = 32 * 32 * 2;
 const PALETTE_ENTRY_BYTES: usize = 2;
+
+/// Upstream `gMenuInfoElements{1,2,3}_Pal` (`src/graphics.c:1264-1266`).
+const MENU_INFO_PALETTES: usize = 3;
+/// Tiles per row of the menu-info sheet, which `gMenuInfoElements_Gfx` stores
+/// tile by tile and `sMenuInfoIcons` indexes by tile.
+const MENU_INFO_TILES_PER_ROW: u32 = MENU_INFO_SIDE / 8;
+const TYPE_ICON_WIDTH: u32 = 32;
+const LABEL_ICON_WIDTH: u32 = 42;
+const MENU_INFO_ICON_HEIGHT: u32 = 12;
+
+/// `sMenuInfoIcons[TYPE_x + 1].offset` (`src/menu.c:115-133`) in tiles, indexed
+/// by the combat-type id `gBattleMoves[].type`, `TYPE_NORMAL` through
+/// `TYPE_DARK` (the `TYPE_MYSTERY` slot included).
+const TYPE_ICON_OFFSETS: [u16; 18] = [
+    0x20, 0x64, 0x60, 0x80, 0x48, 0x44, 0x6C, 0x68, 0x88, 0xA4, 0x24, 0x28, 0x2C, 0x40, 0x84, 0x4C,
+    0xA0, 0x8C,
+];
 
 /// Upstream `ITEM_LIST_END`, which selects the "return to field" arrow icon.
 const LIST_END: ItemId = ItemId(u16::MAX);
@@ -423,8 +455,113 @@ const ICON_STEMS: [(&str, &str); ITEMS_COUNT + 1] = [
     ("return_to_field_arrow", "return_to_field_arrow"),
 ];
 
+/// A rectangle of the menu-info sheet, in pixels from its top-left corner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MenuInfoIcon {
+    /// Left edge.
+    pub x: u32,
+    /// Top edge.
+    pub y: u32,
+    /// Width in pixels.
+    pub width: u32,
+    /// Height in pixels.
+    pub height: u32,
+}
+
+impl MenuInfoIcon {
+    fn at_tile(offset: u16, width: u32) -> Self {
+        let tile = u32::from(offset);
+        Self {
+            x: tile % MENU_INFO_TILES_PER_ROW * 8,
+            y: tile / MENU_INFO_TILES_PER_ROW * 8,
+            width,
+            height: MENU_INFO_ICON_HEIGHT,
+        }
+    }
+}
+
+/// A label icon of the TM/HM move-data window, in `sMenuInfoIcons` order
+/// (`MENU_INFO_ICON_TYPE` through `MENU_INFO_ICON_PP`, `include/menu.h:17-20`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MenuInfoLabel {
+    /// "TYPE" (`sMenuInfoIcons` tile offset 0xA8).
+    Type,
+    /// "POWER" (tile offset 0xC0).
+    Power,
+    /// "ACCURACY" (tile offset 0xC8).
+    Accuracy,
+    /// "PP" (tile offset 0xE0).
+    Pp,
+}
+
+impl MenuInfoLabel {
+    /// Every label, in `sMenuInfoIcons` order.
+    pub const ALL: [Self; 4] = [Self::Type, Self::Power, Self::Accuracy, Self::Pp];
+
+    const fn tile_offset(self) -> u16 {
+        match self {
+            Self::Type => 0xA8,
+            Self::Power => 0xC0,
+            Self::Accuracy => 0xC8,
+            Self::Pp => 0xE0,
+        }
+    }
+}
+
+/// The menu-info icon sheet (`gMenuInfoElements_Gfx`) with its three palettes
+/// (`gMenuInfoElements{1,2,3}_Pal`), as `BlitMenuInfoIcon` reads them
+/// (`src/menu.c:2098-2101`): a 128x128 sheet holding the 18 type icons (32x12)
+/// and the TYPE, POWER, ACCURACY and PP labels (42x12).
+#[derive(Debug, Clone, Copy)]
+pub struct MenuInfoAssets<'a> {
+    /// The 128x128 sheet: 4bpp palette indices (`.4bpp` keeps each PNG index modulo 16).
+    pub sheet: ImageRef<'a>,
+    /// `ListMenuLoadStdPalAt` palettes 0, 1 and 2: 16 colours each.
+    pub palettes: [PaletteRef<'a>; MENU_INFO_PALETTES],
+}
+
+impl<'a> MenuInfoAssets<'a> {
+    /// The 32x12 icon for combat type id `type_id` (`gBattleMoves[].type`,
+    /// 0 for `TYPE_NORMAL` through 17 for `TYPE_DARK`, 9 being `TYPE_MYSTERY`),
+    /// or `None` for an id outside the 18 upstream types.
+    #[must_use]
+    pub fn type_icon(&self, type_id: u8) -> Option<MenuInfoIcon> {
+        let offset = *TYPE_ICON_OFFSETS.get(usize::from(type_id))?;
+        Some(MenuInfoIcon::at_tile(offset, TYPE_ICON_WIDTH))
+    }
+
+    /// The 42x12 icon for `label`.
+    #[must_use]
+    pub fn label_icon(&self, label: MenuInfoLabel) -> MenuInfoIcon {
+        MenuInfoIcon::at_tile(label.tile_offset(), LABEL_ICON_WIDTH)
+    }
+
+    /// Row `row` of `icon`'s pixels: `icon.width` palette indices from the
+    /// sheet, or `None` when `row` is past the icon's height or any part of the
+    /// icon lies outside the sheet.
+    #[must_use]
+    pub fn icon_row(&self, icon: MenuInfoIcon, row: u32) -> Option<&'a [u8]> {
+        let right = icon.x.checked_add(icon.width)?;
+        let bottom = icon.y.checked_add(icon.height)?;
+        if row >= icon.height || right > self.sheet.width || bottom > self.sheet.height {
+            return None;
+        }
+        // `icon.y + row < bottom`, which fits in `u32`.
+        let start =
+            (u64::from(icon.y) + u64::from(row)) * u64::from(self.sheet.width) + u64::from(icon.x);
+        let start = usize::try_from(start).ok()?;
+        self.sheet
+            .pixels
+            .get(start..start.checked_add(usize::try_from(icon.width).ok()?)?)
+    }
+}
+
 /// Every ordinary-bag graphic. Fixed entries are validated by
-/// [`AssetPack::bag_assets`]; icons by [`item_icon`](Self::item_icon).
+/// [`AssetPack::bag_assets`]; icons by [`item_icon`](Self::item_icon); the
+/// list-scroll arrows and the swap line, which the screen draws only on demand,
+/// by [`scroll_indicator`](Self::scroll_indicator) and
+/// [`swap_line`](Self::swap_line); the TM/HM move-data window's icon sheet by
+/// [`menu_info`](Self::menu_info).
 #[derive(Debug, Clone, Copy)]
 pub struct BagAssets<'a> {
     /// Bag screen tile sheet (`menu.png`), 4bpp bank-local indices.
@@ -441,9 +578,9 @@ pub struct BagAssets<'a> {
     pub female: PalettedImage<'a>,
     /// Rotating Poké Ball with its own palette.
     pub rotating_ball: PalettedImage<'a>,
-    /// Registered-select mark; uses the item-list window's palette.
+    /// Registered-select mark; indexes the item-list window's palette, bank 1 of the screen palette.
     pub registered_select: ImageRef<'a>,
-    /// HM mark; uses the item-list window's palette.
+    /// HM mark; indexes the item-list window's palette, bank 1 of the screen palette.
     pub hm: ImageRef<'a>,
     pack: &'a AssetPack,
 }
@@ -604,6 +741,63 @@ impl<'a> BagAssets<'a> {
             (ICON_SIDE, ICON_SIDE),
             BANK_PALETTE_COLORS,
         )
+    }
+
+    /// The list scroll-arrow sheet (`graphics/interface/scroll_indicator.png`)
+    /// with its `red.pal` palette, as `AddScrollIndicatorArrowPair` loads them
+    /// (`src/list_menu.c:289-290`): 16x32, two 16x16 frames, the up arrow at
+    /// tile offset 4 and the down arrow the same tiles flipped vertically.
+    ///
+    /// # Errors
+    ///
+    /// [`PackError::UnknownAsset`], [`PackError::WrongKind`], or
+    /// [`PackError::MalformedBagAsset`] when the sheet or palette is missing,
+    /// of the wrong kind, or not a 16x32 image with a 16-colour palette.
+    pub fn scroll_indicator(&self) -> Result<PalettedImage<'a>, PackError> {
+        self.pack.bag_paletted(
+            SCROLL_INDICATOR_IMAGE_ID,
+            SCROLL_INDICATOR_PALETTE_ID,
+            (SCROLL_INDICATOR_WIDTH, SCROLL_INDICATOR_HEIGHT),
+            BANK_PALETTE_COLORS,
+        )
+    }
+
+    /// The SELECT swap-line sprite sheet (`gSwapLineGfx`) with its palette
+    /// (`gSwapLinePal`), the PNG's own (`src/graphics.c:1151-1152`): 16x32.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`scroll_indicator`](Self::scroll_indicator).
+    pub fn swap_line(&self) -> Result<PalettedImage<'a>, PackError> {
+        self.pack.bag_paletted(
+            SWAP_LINE_IMAGE_ID,
+            SWAP_LINE_PALETTE_ID,
+            (SWAP_LINE_WIDTH, SWAP_LINE_HEIGHT),
+            BANK_PALETTE_COLORS,
+        )
+    }
+
+    /// The menu-info icon sheet (`graphics/interface/menu_info.png`) with its
+    /// three palettes (`menu_info1.pal` through `menu_info3.pal`), the sources
+    /// of the type and label icons `BlitMenuInfoIcon` blits into the TM/HM
+    /// move-data window (`src/graphics.c:1264-1267`, `src/menu.c:2098`).
+    ///
+    /// # Errors
+    ///
+    /// [`PackError::UnknownAsset`], [`PackError::WrongKind`], or
+    /// [`PackError::MalformedBagAsset`] when the sheet or a palette is missing,
+    /// of the wrong kind, or not a 128x128 4bpp image with three
+    /// 16-colour palettes.
+    pub fn menu_info(&self) -> Result<MenuInfoAssets<'a>, PackError> {
+        let sheet = self
+            .pack
+            .bag_sheet(MENU_INFO_IMAGE_ID, (MENU_INFO_SIDE, MENU_INFO_SIDE))?;
+        let [first, second, third] = MENU_INFO_PALETTE_IDS;
+        let palette = |id| self.pack.bag_palette(id, BANK_PALETTE_COLORS);
+        Ok(MenuInfoAssets {
+            sheet,
+            palettes: [palette(first)?, palette(second)?, palette(third)?],
+        })
     }
 
     /// The "return to field" arrow icon that ends an item list.
