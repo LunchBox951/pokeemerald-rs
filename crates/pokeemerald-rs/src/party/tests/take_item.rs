@@ -61,6 +61,34 @@ fn a_mon_holding_mail_is_refused_untouched() {
     assert_eq!(lead.held_item(), ItemId::ORANGE_MAIL);
 }
 
+/// `ItemIsMail` checks mail ids, not `ItemType(0)`, which Master Ball shares.
+#[test]
+fn a_master_ball_is_taken_not_refused_as_mail() {
+    let dex = Dex::new();
+    let mut lead = from_save_pokemon(&dex, &saved_treecko_holding(ItemId::MASTER_BALL)).unwrap();
+    let mut bag = Bag::default();
+
+    assert_eq!(
+        take_held_item(&mut lead, &mut bag),
+        TakeHeldItem::Took(ItemId::MASTER_BALL)
+    );
+    assert_eq!(lead.held_item(), ItemId::NONE);
+}
+
+/// Both ends of the mail id range are mail.
+#[test]
+fn the_first_and_last_mail_ids_are_refused() {
+    let dex = Dex::new();
+    for mail in [ItemId::ORANGE_MAIL, ItemId::RETRO_MAIL] {
+        let mut lead = from_save_pokemon(&dex, &saved_treecko_holding(mail)).unwrap();
+        let mut bag = Bag::default();
+        assert_eq!(
+            take_held_item(&mut lead, &mut bag),
+            TakeHeldItem::HoldsMail(mail)
+        );
+    }
+}
+
 /// `AddBagItem` fails ahead of the clear (`party_menu.c:1818-1822`): the item
 /// stays on the Pokemon rather than vanishing.
 #[test]

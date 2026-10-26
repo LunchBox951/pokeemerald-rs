@@ -559,9 +559,11 @@ pub(crate) fn merge_into_save_pokemon(
 pub(crate) enum TakeHeldItem {
     /// The Pokemon holds nothing (`return 0`); nothing changed.
     NotHolding,
-    /// The Pokemon holds mail. Upstream's menu offers `CursorCb_TakeMail`
-    /// there instead of TAKE ITEM (`party_menu.c:5373`, `ItemIsMail`), which
-    /// also clears the mail record; that is not modelled, so nothing changed.
+    /// The Pokemon holds mail (`ItemIsMail`, `mail_data.c:185`). Not a
+    /// `TryTakeMonItem` outcome: the party menu offers `CursorCb_TakeMail`
+    /// in place of TAKE ITEM for a mail holder (`party_menu.c:5373`), so this
+    /// port refuses here, unchanged, rather than take mail without clearing
+    /// its record.
     HoldsMail(assets::items::ItemId),
     /// `AddBagItem` refused the item (`return 1`, "bag full, could not
     /// remove"); the bag and the Pokemon are exactly as they were.
@@ -574,7 +576,9 @@ pub(crate) enum TakeHeldItem {
 /// `TryTakeMonItem` (`pokeemerald/src/party_menu.c:1813-1825`), the effect of
 /// `CursorCb_TakeItem` (`:3273-3298`): moves `mon`'s held item into `bag`.
 ///
-/// Mail is refused untouched ([`TakeHeldItem::HoldsMail`]).
+/// Mail is refused untouched ([`TakeHeldItem::HoldsMail`]); that check is the
+/// port's stand-in for the menu never offering TAKE ITEM there, not part of
+/// `TryTakeMonItem` itself.
 ///
 /// `AddBagItem(item, 1)` runs before the item is cleared, so a bag that cannot
 /// take it leaves the item on the Pokemon rather than losing it. The change
@@ -584,10 +588,7 @@ pub(crate) fn take_held_item(mon: &mut BattlePokemon, bag: &mut engine::save::Ba
     if item == assets::items::ItemId::NONE {
         return TakeHeldItem::NotHolding;
     }
-    let is_mail = assets::items::ItemTable::new()
-        .get(item)
-        .is_ok_and(|data| data.item_type == assets::items::ItemType::USE_MAIL);
-    if is_mail {
+    if item_is_mail(item) {
         return TakeHeldItem::HoldsMail(item);
     }
     if !bag.add_item(item, 1) {
@@ -595,6 +596,13 @@ pub(crate) fn take_held_item(mon: &mut BattlePokemon, bag: &mut engine::save::Ba
     }
     *mon = mon.clone().with_held_item(assets::items::ItemId::NONE);
     TakeHeldItem::Took(item)
+}
+
+/// `ItemIsMail` (`pokeemerald/src/mail_data.c:185`): the twelve mail ids,
+/// `ITEM_ORANGE_MAIL..=ITEM_RETRO_MAIL`. Not an item-type test: Master Ball
+/// shares mail's `ItemType(0)`.
+fn item_is_mail(item: assets::items::ItemId) -> bool {
+    (assets::items::ItemId::ORANGE_MAIL..=assets::items::ItemId::RETRO_MAIL).contains(&item)
 }
 
 fn backing_substructures(
