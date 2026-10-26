@@ -151,7 +151,7 @@ impl OverworldPhase {
     /// `CopyPartyAndObjectsToSave` (`src/load_save.c`): mirrors the live party
     /// lead and the player object event into the save blocks before a write.
     ///
-    /// The lead is merged into `player_party[party_lead_slot]` through
+    /// The lead is merged into `player_party[LoadedLead::slot]` through
     /// [`party::merge_into_save_pokemon`], which keeps the loaded record's
     /// fields the battle model does not carry and builds a fresh record when
     /// the slot cannot be reused. Other slots and an existing party count are

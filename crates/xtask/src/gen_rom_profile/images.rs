@@ -72,7 +72,7 @@ struct Variant {
 /// cannot list it), or `None` for a global root.
 ///
 /// `title_screen.c:63-66`, `item_menu_icons.c:37`, `item_menu.c:374`,
-/// `text_window.c:10-28`.
+/// `list_menu.c:290`, `text_window.c:10-28`.
 pub(super) fn local_image_symbol(id: &str) -> Option<String> {
     if let Some(stem) = id.strip_prefix("text-window/image/") {
         return super::text_window::is_static_frame(stem)
@@ -86,6 +86,7 @@ pub(super) fn local_image_symbol(id: &str) -> Option<String> {
     match id {
         "bag/image/rotating_ball" => Some("sRotatingBall_Gfx".to_owned()),
         "bag/image/select_button" => Some("sRegisteredSelect_Gfx".to_owned()),
+        "bag/image/scroll_indicator" => Some("sScrollIndicator_Gfx".to_owned()),
         _ => None,
     }
 }
@@ -123,8 +124,16 @@ fn symbol_fragments(id: &str) -> Vec<String> {
         }
         return vec![format!("TextWindowFrame{stem}_Gfx")];
     }
-    if id == "battle-interface/image/textbox" {
-        return vec!["gBattleTextboxTiles".to_owned()];
+    match id {
+        "battle-interface/image/textbox" => return vec!["gBattleTextboxTiles".to_owned()],
+        "battle-interface/image/healthbox_singles_player" => {
+            return vec!["gHealthboxSinglesPlayerGfx".to_owned()];
+        }
+        "battle-interface/image/healthbox_singles_opponent" => {
+            return vec!["gHealthboxSinglesOpponentGfx".to_owned()];
+        }
+        "battle-interface/image/enemy_mon_shadow" => return vec!["gEnemyMonShadow_Gfx".to_owned()],
+        _ => {}
     }
     Vec::new()
 }
@@ -404,6 +413,18 @@ mod tests {
         assert_eq!(
             symbol_fragments("battle-interface/image/textbox"),
             ["gBattleTextboxTiles"]
+        );
+        assert_eq!(
+            symbol_fragments("battle-interface/image/healthbox_singles_player"),
+            ["gHealthboxSinglesPlayerGfx"]
+        );
+        assert_eq!(
+            symbol_fragments("battle-interface/image/healthbox_singles_opponent"),
+            ["gHealthboxSinglesOpponentGfx"]
+        );
+        assert_eq!(
+            symbol_fragments("battle-interface/image/enemy_mon_shadow"),
+            ["gEnemyMonShadow_Gfx"]
         );
         // No convention asserts nothing; `symbol_contains` then accepts any symbol.
         assert!(symbol_fragments("tileset/general/anim/water/0").is_empty());
