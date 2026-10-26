@@ -177,7 +177,7 @@ fn resumed_phase_saved_with_frame(
     assert!(saved.status.menu_shows_continue());
     let map = saved_map_id(saved.block1.location).expect("the saved location must resolve");
     OverworldPhase::from_saved(
-        crate::overworld::test_support::synthetic_scene(10, 10),
+        crate::overworld::test_support::synthetic_scene(10, 10).in_room_for_test(map),
         map,
         saved.block1,
         saved.block2,

@@ -10,9 +10,11 @@
 //! slot (`m4a_1.s:1647..1668`).
 //!
 //! Reverb seeds an `i32` accumulator before DirectSound voices render and
-//! commits only that clipped frame to the delay before CGB voices add their
-//! own signal (ring contract: `crate::reverb`). Upstream instead sums packed
-//! 8-bit lanes with wrapping carry between adjacent samples (`m4a_1.s:396..437`).
+//! commits only that frame, wrapped to a signed byte per sample, to the delay
+//! before CGB voices add their own signal (ring contract: `crate::reverb`).
+//! Upstream sums packed 8-bit lanes; each voice term lands only in a lane's top
+//! byte, so a lane wraps modulo 256 and never carries into its neighbour
+//! (`m4a_1.s:308..339`, `395..416`). CGB output is still clipped, not wrapped.
 
 use crate::cgb_envelope::CgbEnvelopeCadence;
 use crate::cgb_voice::CgbVoice;
@@ -398,10 +400,12 @@ impl Mixer {
             }
         }
 
-        // Clip and commit the DirectSound-only frame before CGB renders, so
+        // Wrap and commit the DirectSound-only frame before CGB renders, so
         // CGB output never enters the DirectSound reverb ring (m4a_1.s:88..119).
+        // Each output sample is one 8-bit lane that wraps modulo 256, never
+        // saturating (m4a_1.s:308..339).
         for sample in &mut self.mix_buffer {
-            *sample = (clip_to_s8(sample.0), clip_to_s8(sample.1));
+            *sample = (wrap_to_s8(sample.0), wrap_to_s8(sample.1));
         }
         self.reverb.commit_frame(&self.mix_buffer);
 
@@ -458,6 +462,13 @@ fn clip_to_s8(sample: i32) -> i32 {
     sample.clamp(-128, 127)
 }
 
+/// Reduce a DirectSound sum to the signed byte lane upstream stores it in:
+/// `mul`/`bic 0xFF0000`/`add ... ror 8` leaves only bits 24..=31 of each voice
+/// term, so the lane wraps modulo 256 with no carry into its neighbour.
+fn wrap_to_s8(sample: i32) -> i32 {
+    (sample.wrapping_add(128) & 0xFF) - 128
+}
+
 fn normalise_s8(sample: i32) -> f32 {
     #[expect(
         clippy::cast_precision_loss,
@@ -494,6 +505,11 @@ mod tie_tests;
 mod sweep_tests;
 
 #[cfg(test)]
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "expected values are computed from small integer terms whose casts \
+              are exact at these magnitudes"
+)]
 #[path = "mixer_reverb.rs"]
 mod reverb_tests;
 

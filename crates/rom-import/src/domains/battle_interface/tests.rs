@@ -1,11 +1,14 @@
 //! Battle-interface reader tests over a synthetic ROM.
 //!
-//! The five records are planted under the real `battle-interface/` ids at
-//! their production shapes: a compressed 128x128 sheet, a compressed
+//! The five textbox records are planted under the real `battle-interface/`
+//! ids at their production shapes: a compressed 128x128 sheet, a compressed
 //! 32-colour textbox palette whose two banks differ, a compressed and a raw
-//! 16-colour text palette, and a compressed 4096-byte tilemap. The failure
-//! tests break one root at a time and require a typed error with nothing
-//! queued.
+//! 16-colour text palette, and a compressed 4096-byte tilemap. Beside them sit
+//! the health-box element table, thirteen raw records back to back, and the
+//! compressed battle bar, whose reader tests are in the sibling
+//! `healthbox_tests` module. The singles frames, the enemy shadow, and the
+//! ball palettes are in the sibling `frame_tests` module. The failure tests
+//! break one root at a time and require a typed error with nothing queued.
 
 use pack_format::{parse_directory, DirectoryEntry, EntryKind, PackWriter};
 
@@ -22,6 +25,10 @@ const TEXTBOX_PALETTE: usize = 0x2_0000;
 const WINDOW_TEXT_PALETTE: usize = 0x2_1000;
 const PP_TEXT_PALETTE: usize = 0x2_2000;
 const TILEMAP_AT: usize = 0x3_0000;
+const ELEMENTS_AT: usize = 0x4_0000;
+pub(super) const BAR_AT: usize = 0x5_0000;
+/// Free ROM space, matching nothing.
+pub(super) const SPARE_AT: usize = 0x6_0000;
 
 const SHEET_TILES: usize = 256;
 const TILEMAP_LEN: usize = 4096;
@@ -40,7 +47,7 @@ fn sheet_tiles() -> Vec<u8> {
 }
 
 /// A sixteen-colour BGR555 bank starting at `first`, as ROM bytes.
-fn bank(first: u16) -> Vec<u8> {
+pub(super) fn bank(first: u16) -> Vec<u8> {
     (0..16u16)
         .flat_map(|n| (first + n * 0x21).to_le_bytes())
         .collect()
@@ -56,8 +63,59 @@ fn tilemap() -> Vec<u8> {
         .collect()
 }
 
+/// The table's rows in order: pack id and tile count.
+pub(super) const ELEMENTS: [(&str, usize); 13] = [
+    ("battle-interface/raw/healthbox_element/hpbar", 12),
+    ("battle-interface/raw/healthbox_element/expbar", 9),
+    ("battle-interface/raw/healthbox_element/status", 15),
+    ("battle-interface/raw/healthbox_element/misc", 11),
+    ("battle-interface/raw/healthbox_element/hpbar_anim", 18),
+    ("battle-interface/raw/healthbox_element/misc_frameend", 1),
+    ("battle-interface/raw/healthbox_element/ball_display", 4),
+    (
+        "battle-interface/raw/healthbox_element/ball_caught_indicator",
+        1,
+    ),
+    ("battle-interface/raw/healthbox_element/status2", 15),
+    ("battle-interface/raw/healthbox_element/status3", 15),
+    ("battle-interface/raw/healthbox_element/status4", 15),
+    (
+        "battle-interface/raw/healthbox_element/healthbox_doubles_frameend",
+        1,
+    ),
+    (
+        "battle-interface/raw/healthbox_element/healthbox_doubles_frameend_bar",
+        1,
+    ),
+];
+pub(super) const BAR_ID: &str = "battle-interface/raw/battle_bar";
+const BAR_TILES: usize = 41;
+
+/// Row `index` of the table: `tiles` tiles whose every byte names the row
+/// and its position, so a record read from the wrong place cannot match.
+pub(super) fn element_bytes(index: usize, tiles: usize) -> Vec<u8> {
+    (0..tiles * 32)
+        .map(|n| u8::try_from((index * 31 + n * 7 + 1) % 251).expect("below 251"))
+        .collect()
+}
+
+/// The thirteen rows concatenated, as `INCBIN_U8` lays the table out.
+fn element_table() -> Vec<u8> {
+    ELEMENTS
+        .iter()
+        .enumerate()
+        .flat_map(|(index, (_, tiles))| element_bytes(index, *tiles))
+        .collect()
+}
+
+pub(super) fn battle_bar() -> Vec<u8> {
+    (0..BAR_TILES * 32)
+        .map(|n| u8::try_from((n * 11 + 5) % 253).expect("below 253"))
+        .collect()
+}
+
 /// A literals-only LZ77 stream of `data`, which is all the decoder needs.
-fn lz77_literals(data: &[u8]) -> Vec<u8> {
+pub(super) fn lz77_literals(data: &[u8]) -> Vec<u8> {
     let len = u32::try_from(data.len()).expect("small").to_le_bytes();
     let mut out = vec![0x10, len[0], len[1], len[2]];
     for chunk in data.chunks(8) {
@@ -67,7 +125,7 @@ fn lz77_literals(data: &[u8]) -> Vec<u8> {
     out
 }
 
-fn rom() -> Rom {
+pub(super) fn rom() -> Rom {
     let bytes = RomFixture::new()
         .emerald_header()
         .write(SHEET, &lz77_literals(&sheet_tiles()))
@@ -75,6 +133,8 @@ fn rom() -> Rom {
         .write(WINDOW_TEXT_PALETTE, &lz77_literals(&bank(0x0200)))
         .write(PP_TEXT_PALETTE, &bank(0x0300))
         .write(TILEMAP_AT, &lz77_literals(&tilemap()))
+        .write(ELEMENTS_AT, &element_table())
+        .write(BAR_AT, &lz77_literals(&battle_bar()))
         .finish();
     Rom::from_bytes(bytes).expect("the fixture header is valid")
 }
@@ -84,7 +144,7 @@ fn rom() -> Rom {
     clippy::cast_possible_truncation,
     reason = "fixture offsets are far below u32::MAX"
 )]
-const fn at(off: usize) -> GbaPtr {
+pub(super) const fn at(off: usize) -> GbaPtr {
     GbaPtr::at(ROM_BASE + off as u32)
 }
 
@@ -125,6 +185,40 @@ const TEXTBOX_MAP: BlobRoot = BlobRoot {
     len: 4096,
 };
 
+/// The table's thirteen roots, each beginning where the last ends.
+pub(super) fn element_roots() -> Vec<BlobRoot> {
+    let mut next = ELEMENTS_AT;
+    ELEMENTS
+        .iter()
+        .map(|&(id, tiles)| {
+            let root = BlobRoot {
+                id,
+                addr: at(next),
+                encoding: Encoding::Raw,
+                len: u32::try_from(tiles * 32).expect("small"),
+            };
+            next += tiles * 32;
+            root
+        })
+        .collect()
+}
+
+pub(super) const BATTLE_BAR_ROOT: BlobRoot = BlobRoot {
+    id: BAR_ID,
+    addr: at(BAR_AT),
+    encoding: Encoding::Lz77,
+    len: 1312,
+};
+
+/// The roots with the table leaked as the `'static` slice a profile holds.
+pub(super) fn health_box(elements: Vec<BlobRoot>, bar: Option<BlobRoot>) -> Roots {
+    roots(BattleInterfaceRoots {
+        healthbox_elements: Vec::leak(elements),
+        battle_bar: bar,
+        ..BattleInterfaceRoots::NONE
+    })
+}
+
 static IMAGES: &[ImageRoot] = &[TEXTBOX_IMAGE];
 static PALETTES: &[PaletteRoot] = &[TEXTBOX_PALETTE_ROOT, WINDOW_TEXT_ROOT, PP_TEXT_ROOT];
 static TILEMAPS: &[BlobRoot] = &[TEXTBOX_MAP];
@@ -134,6 +228,7 @@ fn full() -> Roots {
         images: IMAGES,
         palettes: PALETTES,
         tilemaps: TILEMAPS,
+        ..BattleInterfaceRoots::NONE
     })
 }
 
@@ -144,7 +239,7 @@ fn roots(battle_interface: BattleInterfaceRoots) -> Roots {
     }
 }
 
-fn written(roots: &Roots) -> Result<(Vec<u8>, Vec<DirectoryEntry>), ImportError> {
+pub(super) fn written(roots: &Roots) -> Result<(Vec<u8>, Vec<DirectoryEntry>), ImportError> {
     let mut writer = PackWriter::new();
     write(&rom(), roots, &mut writer)?;
     let bytes = writer.finish().expect("no duplicate ids");
@@ -152,7 +247,7 @@ fn written(roots: &Roots) -> Result<(Vec<u8>, Vec<DirectoryEntry>), ImportError>
     Ok((bytes, entries))
 }
 
-fn payload<'a>(bytes: &'a [u8], entries: &[DirectoryEntry], id: &str) -> &'a [u8] {
+pub(super) fn payload<'a>(bytes: &'a [u8], entries: &[DirectoryEntry], id: &str) -> &'a [u8] {
     let entry = entries.iter().find(|e| e.id == id).expect("entry exists");
     &bytes[entry.offset..entry.offset + entry.length]
 }
@@ -280,6 +375,7 @@ fn a_root_past_the_rom_fails_with_nothing_queued() {
         images: IMAGES,
         palettes: LATE_PALETTES,
         tilemaps: TILEMAPS,
+        ..BattleInterfaceRoots::NONE
     });
     let mut writer = PackWriter::new();
     let err = write(&rom(), &roots, &mut writer).unwrap_err();
