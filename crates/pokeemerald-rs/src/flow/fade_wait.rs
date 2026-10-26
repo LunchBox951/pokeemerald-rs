@@ -32,12 +32,29 @@ pub(crate) struct TitleFadeWait {
 
 /// [`AppScene::MainMenuFadeWait`]'s state: the menu retained for its
 /// unfaded-recovery frame ([`advance_main_menu_fade_wait`]'s own doc
-/// comment), the [`MainMenuAction`] the press that started the fade
-/// confirmed, and the fade whose palettes recompose the menu toward black.
+/// comment), the [`MenuExit`] the press that started the fade chose, and the
+/// fade whose palettes recompose the menu toward black (A) or white (B).
 pub(crate) struct MainMenuFadeWait {
     pub(crate) state: Box<MainMenuState>,
-    action: MainMenuAction,
+    exit: MenuExit,
     fade: NormalPaletteFade,
+}
+
+/// How the menu is being left, fixed by the press that began the fade.
+#[derive(Clone, Copy)]
+enum MenuExit {
+    /// A: the black fade, then the confirmed [`MainMenuAction`].
+    Confirm(MainMenuAction),
+    /// B: the white fade, then `CB2_InitTitleScreen`
+    /// (`pokeemerald/src/main_menu.c:895-902,1109-1120`).
+    Back,
+}
+
+impl MainMenuFadeWait {
+    /// Whether this wait is the B path back to the title screen.
+    pub(super) const fn returns_to_title(&self) -> bool {
+        matches!(self.exit, MenuExit::Back)
+    }
 }
 
 /// Upstream's press frame runs two fade updates: `BeginNormalPaletteFade`'s
@@ -90,9 +107,15 @@ fn faded_title_frame(
     ))
 }
 
-/// The retained menu recomposed from `fade`'s palettes.
-fn faded_menu_frame(state: &MainMenuState, fade: &NormalPaletteFade) -> Box<Frame> {
-    to_platform_frame(&state.scene.compose_with_palette(fade.palette_stage()))
+/// The retained menu recomposed from `fade`'s palettes. The B path's `WIN0`
+/// covers the whole screen, so none of its windows are darkened
+/// (`MainMenuScene::compose_with_open_window`).
+fn faded_menu_frame(state: &MainMenuState, exit: MenuExit, fade: &NormalPaletteFade) -> Box<Frame> {
+    let palette = fade.palette_stage();
+    to_platform_frame(&match exit {
+        MenuExit::Confirm(_) => state.scene.compose_with_palette(palette),
+        MenuExit::Back => state.scene.compose_with_open_window(palette),
+    })
 }
 
 /// The [`AppScene::Title`] arm of [`super::advance_scene`]: on a fresh
@@ -137,7 +160,9 @@ pub(super) fn advance_title_fade_wait(
     pack_source: &crate::pack_source::PackSource,
 ) -> (AppScene, Box<Frame>) {
     if wait.fade.is_done() {
-        if let Some(result) = title_to_main_menu(pack_source, save_slot) {
+        if let Some(result) =
+            title_to_main_menu(pack_source, save_slot, &mut wait.title.retained_save)
+        {
             return result;
         }
         let frame = to_platform_frame(&wait.title.scene.compose_split_with_palette(
@@ -166,16 +191,12 @@ pub(super) fn advance_main_menu(
         // mapping is pinned by a pack-less test -- see `menu_action`'s own
         // doc comment.
         let action = menu_action(state.scene.selected());
-        let fade = begin_on_press_frame(PaletteFadeTarget::Black);
-        let frame = faded_menu_frame(&state, &fade);
-        return (
-            AppScene::MainMenuFadeWait(Box::new(MainMenuFadeWait {
-                state,
-                action,
-                fade,
-            })),
-            frame,
-        );
+        return begin_menu_exit(state, MenuExit::Confirm(action), PaletteFadeTarget::Black);
+    } else if buttons.is_newly_pressed(Buttons::B) {
+        // Checked after A and ahead of the D-pad (`main_menu.c:895-902`), so
+        // B with a direction cancels rather than navigates. Upstream also
+        // plays `SE_SELECT` here; the port models no sound effects yet.
+        return begin_menu_exit(state, MenuExit::Back, PaletteFadeTarget::White);
     } else if buttons.is_newly_pressed(Buttons::UP) && state.scene.can_move_up() {
         // Upstream guards each arm (`main_menu.c:903`, `:915`), so a blocked
         // Up falls through to Down when both are newly pressed together.
@@ -185,6 +206,21 @@ pub(super) fn advance_main_menu(
     }
     let frame = state.scene.compose_frame();
     (AppScene::MainMenu(state), frame)
+}
+
+/// The press frame of either exit: begins `target`'s fade and presents its
+/// first update over the retained menu.
+fn begin_menu_exit(
+    state: Box<MainMenuState>,
+    exit: MenuExit,
+    target: PaletteFadeTarget,
+) -> (AppScene, Box<Frame>) {
+    let fade = begin_on_press_frame(target);
+    let frame = faded_menu_frame(&state, exit, &fade);
+    (
+        AppScene::MainMenuFadeWait(Box::new(MainMenuFadeWait { state, exit, fade })),
+        frame,
+    )
 }
 
 /// Moves the selection but presents the prior highlight, then hands off to
@@ -209,7 +245,11 @@ pub(super) fn advance_main_menu_fade_wait(
     pack_source: crate::pack_source::PackSource,
 ) -> (AppScene, Box<Frame>) {
     if wait.fade.is_done() {
-        if matches!(wait.action, MainMenuAction::Options) {
+        let action = match wait.exit {
+            MenuExit::Back => return main_menu_to_title(wait.state, &pack_source),
+            MenuExit::Confirm(action) => action,
+        };
+        if matches!(action, MainMenuAction::Options) {
             return match super::options::open(&pack_source, wait.state) {
                 Ok(result) => result,
                 Err(state) => {
@@ -218,15 +258,57 @@ pub(super) fn advance_main_menu_fade_wait(
                 }
             };
         }
-        if let Some(result) = dispatch_main_menu_action(wait.action, pack_source, &wait.state) {
+        if let Some(result) = dispatch_main_menu_action(action, pack_source, &wait.state) {
             return result;
         }
         let frame = wait.state.scene.compose_frame();
         return (AppScene::MainMenu(wait.state), frame);
     }
     wait.fade.update();
-    let frame = faded_menu_frame(&wait.state, &wait.fade);
+    let frame = faded_menu_frame(&wait.state, wait.exit, &wait.fade);
     (AppScene::MainMenuFadeWait(wait), frame)
+}
+
+/// `Task_HandleMainMenuBPressed`'s hand-off once the white fade is done:
+/// `SetMainCallback2(CB2_InitTitleScreen)` (`pokeemerald/src/main_menu.c:1109-1120`).
+/// The title is rebuilt from `pack_source` like the boot title -- tick 0, not
+/// yet presented -- and the menu is dropped; the app restarts the title music
+/// on this transition (`App::step`).
+///
+/// Known gap: `CB2_InitTitleScreen` spans several callback frames and fades
+/// in from white (`title_screen.c:570-671`), while the port's title models
+/// only the settled idle screen (`title.rs` module docs), so the title
+/// appears at once.
+///
+/// A failed pack load is logged once and leaves the menu as it was, like
+/// [`title_to_main_menu`].
+fn main_menu_to_title(
+    state: Box<MainMenuState>,
+    pack_source: &crate::pack_source::PackSource,
+) -> (AppScene, Box<Frame>) {
+    let loaded = pack_source
+        .load()
+        .map_err(crate::title::TitleSceneError::from)
+        .and_then(|pack| crate::title::TitleScene::from_pack(&pack));
+    match loaded {
+        Ok(scene) => {
+            let frame = scene.compose_frame(0);
+            let title = AnimatedTitle {
+                scene,
+                tick: 0,
+                presented: false,
+                // The session save travels with the title (`AnimatedTitle`'s
+                // field docs).
+                retained_save: Some(Box::new(state.saved)),
+            };
+            (AppScene::Title(Box::new(title)), frame)
+        }
+        Err(err) => {
+            eprintln!("{err} -- staying on the main menu");
+            let frame = state.scene.compose_frame();
+            (AppScene::MainMenu(state), frame)
+        }
+    }
 }
 
 /// [`AppScene::MainMenuFadeIn`]'s state: the rebuilt menu, held back while the
