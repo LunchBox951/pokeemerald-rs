@@ -6,6 +6,11 @@
 //! cleanly. The helper tests (`play_song/tests/`) do run under `cargo test`; see this
 //! crate's `Cargo.toml`.
 //!
+//! A smoke run fails if the device played any of the song's own samples as
+//! silence (ring-buffer underrun) while it was still being rendered. Silence
+//! after the last frame is queued -- the drain and device-tail waits -- is
+//! expected and is not checked.
+//!
 //! Run with: `cargo run -p audio --example play_song`.
 
 use std::process::ExitCode;
@@ -15,6 +20,10 @@ use std::time::{Duration, Instant};
 use audio::{decode_track, Adsr, Instrument, Sequencer, Song, ToneData, WaveData, MIXER_RATE};
 use platform::audio::{PlaybackProgress, UsableReading};
 use platform::{AudioOutput, PlatformError, Producer, GBA_FRAME_PERIOD};
+
+#[path = "play_song/health.rs"]
+mod health;
+use health::check_underruns;
 
 const RING_CAPACITY_FRAMES: usize = 4096;
 
@@ -82,6 +91,9 @@ fn main() -> ExitCode {
     };
     let mut buffer = vec![0.0_f32; Sequencer::FRAME_SAMPLES];
 
+    // Snapshot before playback begins; the prefill is queued before the device
+    // starts, so any increase after this point is a real dropout.
+    let underrun_baseline = output.underruns();
     match prefill_then_start(
         &mut seq,
         &producer,
@@ -111,6 +123,14 @@ fn main() -> ExitCode {
             std::thread::sleep,
         );
         if let Err(err) = pushed {
+            eprintln!("audio playback stopped: {}", err.describe());
+            return ExitCode::FAILURE;
+        }
+        // Checked at the enqueue boundary, before the pacing wait: this sees
+        // every earlier dropout (the counter only grows), and on the final
+        // frame it stops before the device can drain the ring into the
+        // expected end-of-song silence.
+        if let Err(err) = check_underruns(underrun_baseline, output.underruns()) {
             eprintln!("audio playback stopped: {}", err.describe());
             return ExitCode::FAILURE;
         }
@@ -220,7 +240,8 @@ fn prefill(
 }
 
 /// The first device callback may run immediately; starting with an empty
-/// ring risks an underrun.
+/// ring risks an underrun. `main` snapshots the underrun counter before this
+/// call, so a callback that still outruns the prefill counts as a dropout.
 fn prefill_then_start(
     seq: &mut Sequencer,
     producer: &Producer,

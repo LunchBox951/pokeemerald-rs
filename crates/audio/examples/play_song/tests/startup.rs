@@ -106,3 +106,42 @@ fn a_refused_prefill_is_a_setup_failure_and_never_starts_the_device() {
         "the accepted head of the prefill is still queued; only the tail was refused"
     );
 }
+
+#[test]
+fn a_callback_inside_the_prefill_is_clean_but_one_past_it_trips_the_baseline() {
+    let mut output = AudioOutput::null(512);
+    let producer = output.producer();
+    let mut seq = Sequencer::new(build_song());
+    let mut buffer = vec![0.0_f32; Sequencer::FRAME_SAMPLES];
+    let baseline = output.underruns();
+    let queued = Cell::new(0_usize);
+
+    let result = prefill_then_start(
+        &mut seq,
+        &producer,
+        &mut buffer,
+        &mut output,
+        |chunk| producer.push(chunk),
+        |output| {
+            queued.set(producer.capacity() - producer.available_space());
+            let mut inside = vec![0.0_f32; queued.get()];
+            output.pull_null(&mut inside);
+            assert_eq!(
+                super::check_underruns(baseline, output.underruns()),
+                Ok(()),
+                "an immediate callback covered by the prefill is not a dropout"
+            );
+            let mut past = [0.0_f32; 8];
+            output.pull_null(&mut past);
+            AudioOutput::start(output)
+        },
+    );
+
+    assert_eq!(result, StartOutcome::Playing);
+    assert!(queued.get() > 0);
+    assert_eq!(
+        super::check_underruns(baseline, output.underruns()),
+        Err(UnderrunError { samples: 8 }),
+        "a callback outrunning the prefill must not be baselined away"
+    );
+}
