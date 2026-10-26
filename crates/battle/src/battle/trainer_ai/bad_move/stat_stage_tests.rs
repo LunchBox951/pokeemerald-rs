@@ -1,7 +1,7 @@
-use super::{
-    ai_stat_label, ensure_scoreable, score_bad_move, stat_label_penalty, MoveScores,
-    AI_ONLY_STAT_LABELS,
-};
+use super::{score_bad_move, stat_label_penalty};
+use crate::battle::trainer_ai::admission::{ai_stat_label, AI_ONLY_STAT_LABELS};
+use crate::battle::trainer_ai::ensure_scoreable;
+use crate::battle::trainer_ai::scores::MoveScores;
 use crate::dex::Dex;
 use crate::error::BattleError;
 use crate::pokemon::{BattlePokemon, Ivs, MAX_MON_MOVES};

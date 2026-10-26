@@ -2,12 +2,15 @@
 //! scoreable effects with no `if_effect` row, and the Paralyze, Confuse and
 //! Focus Energy handlers.
 
-use super::{
-    choose_trainer_action, ensure_scoreable, fold_ai_type_effectiveness, score_bad_move,
-    score_bad_move_prologue, MoveScores, ScoreableEffect, AI_EFFECTIVENESS_NEUTRAL,
-    UNCHANGED_AFTER_PROLOGUE_EFFECTS,
-};
+use super::{score_bad_move, score_bad_move_prologue};
 use crate::battle::opponent_ai::EnemyAction;
+use crate::battle::trainer_ai::admission::ScoreableEffect;
+use crate::battle::trainer_ai::admission::UNCHANGED_AFTER_PROLOGUE_EFFECTS;
+use crate::battle::trainer_ai::scores::MoveScores;
+use crate::battle::trainer_ai::type_effectiveness::{
+    fold_ai_type_effectiveness, AI_EFFECTIVENESS_NEUTRAL,
+};
+use crate::battle::trainer_ai::{choose_trainer_action, ensure_scoreable};
 use crate::dex::Dex;
 use crate::error::BattleError;
 use crate::pokemon::{BattlePokemon, Ivs, MAX_MON_MOVES};
@@ -552,7 +555,7 @@ fn try_to_faint_still_rolls_for_a_quadruple_effective_status_move() {
             &gyarados,
         )
         .unwrap();
-        super::score_try_to_faint(
+        crate::battle::trainer_ai::try_to_faint::score_try_to_faint(
             &dex,
             &mut scores,
             0,
