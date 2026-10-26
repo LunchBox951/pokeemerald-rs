@@ -237,5 +237,5 @@ fn tilemap_symbol(id: &str) -> SymbolExpectation {
 }
 
 #[cfg(test)]
-#[path = "naming_screen_tests.rs"]
+#[path = "naming_screen_tests/mod.rs"]
 mod tests;
