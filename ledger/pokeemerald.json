@@ -31829,6 +31829,20 @@
       "status": "pending"
     },
     "src/party_menu.c": {
+      "artifacts": {
+        "CursorCb_TakeItem": {
+          "reason": "Models the effect only: TryTakeMonItem (party_menu.c:1813-1825) moves the held item into the bag with AddBagItem before clearing it, so a full bag refuses and the item stays; the cleared item reaches the save through merge_into_save_pokemon; OverworldPhase::take_lead_held_item is the flow hook a start menu entry can call, for the lead only, and has no production caller yet. A mail holder is refused untouched (HoldsMail), since upstream offers CursorCb_TakeMail there (party_menu.c:5373). Not modelled: the party-menu presentation (PlaySE, window removal, the PkmnNotHolding / BagFullCouldNotRemoveItem / DisplayTookHeldItemMessage messages, Task_UpdateHeldItemSprite), non-lead party slots, CursorCb_TakeMail and GiveMailToMonByItemId, and the start menu entry that would call the hook. Task_TakeItem does not exist upstream (no such symbol in src/party_menu.c); the take-item task path is CursorCb_TakeItem.",
+          "rust_target": "crates/pokeemerald-rs/src/party.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
+        "TryTakeMonItem": {
+          "reason": "TryTakeMonItem (party_menu.c:1813-1825) is modelled by party::take_held_item: no item returns NotHolding, a failed Bag::add_item returns BagFull and changes nothing, otherwise the bag gains one and the battler's item is cleared. A mail holder is refused untouched (HoldsMail; upstream routes it to CursorCb_TakeMail). The result is not written to the save here; the lead hook merges it (merge_into_save_pokemon). Only the lead is reachable; GiveItemToMon and mail handling are not modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/party.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"

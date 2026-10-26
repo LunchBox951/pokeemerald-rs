@@ -33,6 +33,7 @@ use engine::text::Token;
 use platform::{ButtonState, Buttons};
 
 use crate::game_save::{SaveFileStatus, SaveSlot, StoreOutcome};
+use crate::party;
 use crate::start_menu::{self, SaveMode, SaveTarget, StartMenu, StartMenuOutcome};
 
 use super::OverworldPhase;
@@ -146,6 +147,34 @@ impl OverworldPhase {
         self.start_menu = Some(crate::start_menu::synthetic_start_menu_at(
             self.start_menu_cursor,
         ));
+    }
+
+    /// The start menu's take-item hook: `CursorCb_TakeItem`
+    /// (`pokeemerald/src/party_menu.c:3273-3298`) on the lead. Moves the
+    /// lead's held item into the bag ([`party::take_held_item`]) and, only
+    /// when it moved, merges the lead into its saved slot so the save
+    /// reflects the change. A refused take (nothing held, or a full bag)
+    /// writes nothing; the caller owns the message each outcome selects
+    /// (`gText_PkmnNotHolding`, `gText_BagFullCouldNotRemoveItem`, and
+    /// `DisplayTookHeldItemMessage`).
+    ///
+    /// This is how an imported lead whose item `battle` does not model
+    /// (`lead_screen::ensure_lead_can_battle`) becomes able to
+    /// battle. `None` when there is no lead to act on, including while it is
+    /// lent to a battle.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the start menu's party entry, which would call this, is not built yet"
+        )
+    )]
+    pub(in crate::flow) fn take_lead_held_item(&mut self) -> Option<party::TakeHeldItem> {
+        let outcome = party::take_held_item(self.party_lead.as_mut()?, &mut self.save1.bag);
+        if matches!(outcome, party::TakeHeldItem::Took(_)) {
+            self.flush_lead_to_save();
+        }
+        Some(outcome)
     }
 
     /// `CopyPartyAndObjectsToSave` (`src/load_save.c`): mirrors the live party

@@ -16,9 +16,18 @@
 //! trainer is not defeated), and the item is never stripped from the lead.
 //! Only the lead reaches a battle, so only the lead is screened here;
 //! [`battle::Battle::new_with_player_reserves`] screens reserves for a caller
-//! that supplies them. No item effect is implemented, and nothing yet gives
-//! or takes a held item, so an imported save whose lead holds an item with a
-//! battle effect cannot enter these battles until that exists.
+//! that supplies them. No item effect is implemented, so an imported save
+//! whose lead holds an item with a battle effect cannot enter these battles
+//! until the player takes the item off it.
+//!
+//! # Taking the item off
+//!
+//! The way out is `CursorCb_TakeItem` (`pokeemerald/src/party_menu.c:3273`):
+//! [`crate::party::take_held_item`] moves the item into the bag, and the
+//! start menu reaches it through `OverworldPhase::take_lead_held_item`, which
+//! also merges the lead into its saved slot. The screen above then admits the
+//! lead in every flow, as it admits one that never held the item. A full bag
+//! refuses the take and the lead keeps the item, so the refusal stays honest.
 
 use battle::{BattleError, BattlePokemon};
 

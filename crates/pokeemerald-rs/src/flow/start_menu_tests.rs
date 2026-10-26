@@ -501,3 +501,92 @@ fn reopening_after_start_or_b_keeps_the_cursor() {
         );
     }
 }
+
+/// The start menu's take-item hook (`CursorCb_TakeItem`,
+/// `pokeemerald/src/party_menu.c:3273-3298`) on a lead backed by a saved slot.
+mod take_lead_held_item {
+    use super::{new_game_phase, settle};
+    use crate::flow::lead_screen::{ensure_lead_can_battle, loaded_holding};
+    use crate::new_game;
+    use crate::party::{from_save_pokemon, to_save_pokemon, TakeHeldItem};
+    use assets::items::ItemId;
+    use battle::{BattleError, Dex};
+
+    fn berry_total(phase: &super::OverworldPhase) -> u16 {
+        phase
+            .save1()
+            .bag
+            .berries
+            .iter()
+            .filter(|slot| slot.item_id == ItemId::ORAN_BERRY.0)
+            .map(|slot| slot.quantity)
+            .sum()
+    }
+
+    fn phase_leading_with_oran_berry() -> super::OverworldPhase {
+        let mut phase = new_game_phase();
+        settle(&mut phase);
+        let lead = loaded_holding(&new_game::provisional_starter(), ItemId::ORAN_BERRY);
+        let record = to_save_pokemon(&Dex::new(), &lead);
+        phase.set_backed_lead_for_test(0, record, lead);
+        phase
+    }
+
+    #[test]
+    fn the_item_moves_to_the_bag_and_the_save_follows() {
+        let mut phase = phase_leading_with_oran_berry();
+        assert_eq!(
+            ensure_lead_can_battle(phase.lead_for_test().unwrap()),
+            Err(BattleError::UnsupportedHeldItem(ItemId::ORAN_BERRY)),
+            "setup: the lead is refused"
+        );
+
+        assert_eq!(
+            phase.take_lead_held_item(),
+            Some(TakeHeldItem::Took(ItemId::ORAN_BERRY))
+        );
+
+        assert_eq!(berry_total(&phase), 1, "the bag gains one");
+        let lead = phase.lead_for_test().unwrap();
+        assert_eq!(lead.held_item(), ItemId::NONE);
+        assert_eq!(ensure_lead_can_battle(lead), Ok(()));
+        let saved = from_save_pokemon(&Dex::new(), &phase.save1().player_party[0]).unwrap();
+        assert_eq!(saved.held_item(), ItemId::NONE, "the saved slot follows");
+    }
+
+    #[test]
+    fn a_refused_take_changes_neither_the_lead_nor_the_save() {
+        let mut phase = phase_leading_with_oran_berry();
+        phase.save1.bag.berries[0].item_id = ItemId::ORAN_BERRY.0;
+        phase.save1.bag.berries[0].quantity = engine::save::bag::MAX_BERRY_CAPACITY;
+        let bag = phase.save1().bag.clone();
+
+        assert_eq!(
+            phase.take_lead_held_item(),
+            Some(TakeHeldItem::BagFull(ItemId::ORAN_BERRY))
+        );
+
+        assert_eq!(phase.save1().bag, bag);
+        assert_eq!(
+            phase.lead_for_test().unwrap().held_item(),
+            ItemId::ORAN_BERRY
+        );
+        let saved = from_save_pokemon(&Dex::new(), &phase.save1().player_party[0]).unwrap();
+        assert_eq!(saved.held_item(), ItemId::ORAN_BERRY);
+    }
+
+    #[test]
+    fn nothing_held_and_no_lead_are_reported_without_a_write() {
+        let mut phase = phase_leading_with_oran_berry();
+        assert_eq!(
+            phase.take_lead_held_item(),
+            Some(TakeHeldItem::Took(ItemId::ORAN_BERRY))
+        );
+        let bag = phase.save1().bag.clone();
+        assert_eq!(phase.take_lead_held_item(), Some(TakeHeldItem::NotHolding));
+        assert_eq!(phase.save1().bag, bag);
+
+        phase.clear_lead_for_test();
+        assert_eq!(phase.take_lead_held_item(), None);
+    }
+}

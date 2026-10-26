@@ -271,6 +271,25 @@ fn a_loaded_lead_holding_a_battle_item_is_refused_through_the_trigger_without_a_
     );
 }
 
+/// After the take, the Oran Berry lead that Rhett's approach refused is accepted.
+#[test]
+fn taking_a_refused_item_lets_the_sight_trainer_approach_start() {
+    let (rx, ry) = RHETT_TILE;
+    let mut phase = route_103_phase(PlayerState::new((rx, ry + 1), 3, Direction::North));
+    phase.set_fresh_lead_for_test(loaded_holding(&overwhelming_lead(), ItemId::ORAN_BERRY));
+    assert_eq!(
+        phase.take_lead_held_item(),
+        Some(crate::party::TakeHeldItem::Took(ItemId::ORAN_BERRY))
+    );
+
+    phase.step(ButtonState::new());
+
+    assert!(
+        phase.sight_approach.is_some(),
+        "the approach starts once the item is off"
+    );
+}
+
 // -- Honest cuts: Miguel's party, Amy & Liv's double battle ----------------
 
 /// Miguel's cone reaches, but his real party refuses to construct -- his

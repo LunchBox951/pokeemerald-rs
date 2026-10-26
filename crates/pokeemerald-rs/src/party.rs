@@ -18,9 +18,18 @@
 //! `battle` carries the item but models none of its effects, so
 //! [`battle::ensure_held_item_playable`] refuses a battle whose player-side
 //! item has one; each flow's refusal is documented where it is made. A fresh
-//! [`to_save_pokemon`] record files the battler's item. The merge leaves the
-//! backing record's item bytes alone, as nothing in the port changes a held
-//! item after load.
+//! [`to_save_pokemon`] record files the battler's item, and
+//! [`merge_into_save_pokemon`] writes it over the backing record's, so a
+//! change to the held item reaches the save.
+//!
+//! [`take_held_item`] is the one change the port makes: `CursorCb_TakeItem`'s
+//! `TryTakeMonItem` (`pokeemerald/src/party_menu.c:1813-1825`, `:3273-3298`).
+//! It moves the item into the bag with `AddBagItem` and clears the battler's
+//! item, so a lead [`flow::lead_screen`](crate::flow) refuses for holding an
+//! item with a battle effect can be made to battle. A full bag refuses the
+//! take and the lead keeps the item. Giving an item to a Pokemon
+//! (`GiveItemToMon`, `:1785-1811`) and the party menu's presentation are not
+//! modelled.
 //!
 //! Deliberately not modelled by `battle`, and so retained from the backing
 //! record by [`merge_into_save_pokemon`]: friendship, pokérus,
@@ -459,7 +468,8 @@ pub(crate) fn hp_hidden_by_load(dex: &Dex, stored: &Pokemon, lead: &BattlePokemo
 ///
 /// Writes only the fields the battler owns; every retained field stays as
 /// the save wrote it, except EVs, which the merge writes back from
-/// [`battle::BattlePokemon::evs`].
+/// [`battle::BattlePokemon::evs`], and the held item, which it writes back
+/// from [`battle::BattlePokemon::held_item`] so [`take_held_item`] persists.
 ///
 /// The cached stat block is kept when species and level are unchanged and
 /// recomputed EV-aware otherwise ([`compute_levelled_up_stats`]); current
@@ -498,6 +508,7 @@ pub(crate) fn merge_into_save_pokemon(
         stored_species == mon.species().0 && base.level == mon.level();
 
     substructures.growth[GROWTH_SPECIES].copy_from_slice(&mon.species().0.to_le_bytes());
+    substructures.growth[GROWTH_HELD_ITEM].copy_from_slice(&mon.held_item().0.to_le_bytes());
     substructures.growth[GROWTH_EXPERIENCE].copy_from_slice(&mon.experience().to_le_bytes());
     substructures.growth[GROWTH_PP_BONUSES] = mon.pp_bonuses().bits();
     substructures.attacks = encode_attacks(mon);
@@ -540,6 +551,50 @@ pub(crate) fn merge_into_save_pokemon(
 
     overlay_current_hp_with_hidden_points(&mut merged, mon, *hp_hidden_by_load);
     merged
+}
+
+/// What [`take_held_item`] did, mirroring `TryTakeMonItem`'s return
+/// (`pokeemerald/src/party_menu.c:1813-1825`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TakeHeldItem {
+    /// The Pokemon holds nothing (`return 0`); nothing changed.
+    NotHolding,
+    /// The Pokemon holds mail. Upstream's menu offers `CursorCb_TakeMail`
+    /// there instead of TAKE ITEM (`party_menu.c:5373`, `ItemIsMail`), which
+    /// also clears the mail record; that is not modelled, so nothing changed.
+    HoldsMail(assets::items::ItemId),
+    /// `AddBagItem` refused the item (`return 1`, "bag full, could not
+    /// remove"); the bag and the Pokemon are exactly as they were.
+    BagFull(assets::items::ItemId),
+    /// The bag gained one of the item and the Pokemon holds nothing
+    /// (`return 2`).
+    Took(assets::items::ItemId),
+}
+
+/// `TryTakeMonItem` (`pokeemerald/src/party_menu.c:1813-1825`), the effect of
+/// `CursorCb_TakeItem` (`:3273-3298`): moves `mon`'s held item into `bag`.
+///
+/// Mail is refused untouched ([`TakeHeldItem::HoldsMail`]).
+///
+/// `AddBagItem(item, 1)` runs before the item is cleared, so a bag that cannot
+/// take it leaves the item on the Pokemon rather than losing it. The change
+/// reaches the save through [`merge_into_save_pokemon`].
+pub(crate) fn take_held_item(mon: &mut BattlePokemon, bag: &mut engine::save::Bag) -> TakeHeldItem {
+    let item = mon.held_item();
+    if item == assets::items::ItemId::NONE {
+        return TakeHeldItem::NotHolding;
+    }
+    let is_mail = assets::items::ItemTable::new()
+        .get(item)
+        .is_ok_and(|data| data.item_type == assets::items::ItemType::USE_MAIL);
+    if is_mail {
+        return TakeHeldItem::HoldsMail(item);
+    }
+    if !bag.add_item(item, 1) {
+        return TakeHeldItem::BagFull(item);
+    }
+    *mon = mon.clone().with_held_item(assets::items::ItemId::NONE);
+    TakeHeldItem::Took(item)
 }
 
 fn backing_substructures(
