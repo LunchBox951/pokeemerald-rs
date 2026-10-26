@@ -174,4 +174,6 @@ fn check_battle_bar(bar: &BlobRoot) -> Result<(), ImportError> {
 #[cfg(test)]
 mod frame_tests;
 #[cfg(test)]
+mod healthbox_tests;
+#[cfg(test)]
 mod tests;
