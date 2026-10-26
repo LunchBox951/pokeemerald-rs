@@ -276,7 +276,7 @@ pub(crate) struct OverworldPhase {
     /// checksum, because none of them is evidence that the stored bytes
     /// are anything but real player data; they are evidence that this
     /// port cannot yet run them. Set by
-    /// [`Self::copy_party_and_objects_from_save`]'s error arm and cleared
+    /// [`Self::load_lead_from_save`]'s error arm and cleared
     /// by its other two (empty count, clean decode); diagnostic only, and
     /// never a save-time decision input.
     pub(super) undecodable_lead_retained: bool,
@@ -367,6 +367,23 @@ pub(crate) struct OverworldPhase {
     sight_trainer_log: sight_trainer_trigger::SightTrainerLog,
 }
 
+/// Refuses a `scene` whose own map is not `map`, the phase's map: the scene
+/// answers every header, event, and collision query the phase makes, so a
+/// scene from another room would silently run `map`'s scripts over the wrong
+/// grid.
+///
+/// # Panics
+///
+/// Panics if `scene.map_id()` differs from `map`.
+#[track_caller]
+pub(super) fn assert_scene_owns_map(scene: &OverworldScene, map: assets::MapId) {
+    assert_eq!(
+        scene.map_id(),
+        map,
+        "the overworld scene belongs to another map than the phase it is given to"
+    );
+}
+
 impl OverworldPhase {
     /// Start a new overworld run from `source`, with `options` carrying the
     /// `SaveBlock2` preferences a NEW GAME over an intact save must inherit
@@ -410,9 +427,9 @@ impl OverworldPhase {
         // nothing from `phase.rng` -- see `new_game::provisional_starter`'s
         // docs.
         let trainer_id = u32::from_le_bytes(phase.save2.player_trainer_id);
-        phase.party_lead =
-            Some(new_game::provisional_starter().with_original_trainer_id(trainer_id));
-        phase.undecodable_lead_retained = false;
+        phase.install_fresh_lead(
+            new_game::provisional_starter().with_original_trainer_id(trainer_id),
+        );
         Ok(phase)
     }
 
@@ -543,6 +560,10 @@ impl OverworldPhase {
     /// ([`first_battle_trigger::sync_route_101_state_on_entry`]); see the
     /// body for the legacy-save migrations it also applies.
     ///
+    /// # Panics
+    ///
+    /// Panics if `scene` is not `map_id`'s ([`assert_scene_owns_map`]).
+    ///
     /// Always builds with [`crate::pack_source::PackSource::Runtime`]:
     /// [`Self::continue_saved_game`] overwrites [`Self::pack_source`]
     /// immediately afterward, so its only other caller -- a test with an
@@ -553,6 +574,7 @@ impl OverworldPhase {
         mut block1: SaveBlock1,
         block2: SaveBlock2,
     ) -> Self {
+        assert_scene_owns_map(&scene, map_id);
         // A zeroed `last_heal_location` resolves to a real map (group
         // 0/num 0) and would send a white-out to Petalburg at `(0, 0)`
         // instead of home. No writer produces that all-zero value, so it
@@ -623,7 +645,7 @@ impl OverworldPhase {
             sight_approach: None,
             sight_trainer_log: sight_trainer_trigger::SightTrainerLog::default(),
         };
-        phase.copy_party_and_objects_from_save();
+        phase.load_lead_from_save();
         // A fainted lead with a single-member party still at the
         // trigger-consumed Route 101 state is otherwise unreachable:
         // current code always heals or advances that state once a first
@@ -663,6 +685,8 @@ impl OverworldPhase {
     /// name a real map; a synthetic-grid `scene` is re-labelled as that map
     /// ([`OverworldScene::in_room_for_test`]) so [`Self::step`] queries the
     /// map's header and events, exactly as a loaded scene's own would answer.
+    /// The relabel is to the phase's own `map_id`, so the scene always
+    /// satisfies [`assert_scene_owns_map`].
     #[cfg(test)]
     pub(super) fn for_test(
         scene: OverworldScene,
@@ -719,6 +743,7 @@ impl OverworldPhase {
         options: new_game::NewGameOptions,
         identity: new_game::NewGameIdentity,
     ) -> Self {
+        assert_scene_owns_map(&scene, map_id);
         let mut rng = engine::rng::Rng::new(new_game::NEW_GAME_RNG_SEED);
         let (mut save1, save2) =
             new_game::init_save_blocks_with_identity(&mut rng, options, identity);
@@ -1044,5 +1069,70 @@ mod pinned_source_tests {
             None,
         );
         assert_eq!(default.pack_source, PackSource::Runtime);
+    }
+}
+
+#[cfg(test)]
+mod scene_ownership_tests {
+    use super::*;
+    use engine::overworld::Direction;
+
+    const LITTLEROOT: assets::MapId = assets::MapId("MAP_LITTLEROOT_TOWN");
+
+    /// A synthetic scene still labelled as its default room
+    /// (`MAP_ROUTE122`), so it belongs to neither map the tests name.
+    fn route_122_scene() -> OverworldScene {
+        let scene = crate::overworld::test_support::synthetic_scene(10, 10);
+        assert_ne!(
+            scene.map_id(),
+            LITTLEROOT,
+            "fixture precondition: the scene must be another map's"
+        );
+        scene
+    }
+
+    #[test]
+    #[should_panic(expected = "belongs to another map than the phase")]
+    fn new_refuses_a_scene_owned_by_another_map() {
+        let _ = OverworldPhase::new(
+            route_122_scene(),
+            LITTLEROOT,
+            PlayerState::new((1, 1), 3, Direction::North),
+            None,
+            crate::pack_source::PackSource::Runtime,
+            new_game::NewGameOptions::DEFAULT,
+            new_game::NewGameIdentity::DEFAULT,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "belongs to another map than the phase")]
+    fn from_saved_refuses_a_scene_owned_by_another_map() {
+        let _ = OverworldPhase::from_saved(
+            route_122_scene(),
+            LITTLEROOT,
+            SaveBlock1::default(),
+            SaveBlock2::default(),
+        );
+    }
+
+    #[test]
+    fn a_scene_relabelled_to_the_phases_map_is_accepted() {
+        let scene = route_122_scene().in_room_for_test(LITTLEROOT);
+        let saved = OverworldPhase::from_saved(
+            scene,
+            LITTLEROOT,
+            SaveBlock1::default(),
+            SaveBlock2::default(),
+        );
+        assert_eq!(saved.scene.map_id(), saved.map_id);
+
+        let fresh = OverworldPhase::for_test(
+            route_122_scene(),
+            LITTLEROOT,
+            PlayerState::new((1, 1), 3, Direction::North),
+            None,
+        );
+        assert_eq!(fresh.scene.map_id(), fresh.map_id);
     }
 }
