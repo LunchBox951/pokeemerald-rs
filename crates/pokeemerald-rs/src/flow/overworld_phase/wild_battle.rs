@@ -29,8 +29,7 @@ impl OverworldPhase {
     /// holding an item with a battle effect, only after `CreateWildMon`'s draws; a missing lead passes to `begin_wild_battle`.
     pub(in crate::flow) fn wild_lead_admissible(&mut self) -> bool {
         let refusal = self
-            .party_lead
-            .as_ref()
+            .lead_battler()
             .and_then(|lead| ensure_lead_can_battle(lead).err());
         if let Some(error) = refusal {
             if self.wild_lead_refusal != Some(error) {

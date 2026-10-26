@@ -808,13 +808,6 @@ pub(crate) fn select_active_battler(
 /// record, and [`Self::merge_and_save`] replaces the owned record and rebases
 /// the owned offset in one step -- the single reconciliation boundary
 /// `Cmd_getexp` keeps (`pokeemerald/src/battle_script_commands.c:3465-3478`).
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "no production caller until the overworld adopts it"
-    )
-)]
 #[derive(Debug)]
 pub(crate) struct LoadedLead {
     slot: usize,
@@ -824,13 +817,6 @@ pub(crate) struct LoadedLead {
     lead_hp_hidden_by_load: i32,
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "no production caller until the overworld adopts it"
-    )
-)]
 impl LoadedLead {
     /// Selects the active member of `party` and measures what its load hid.
     ///
@@ -855,10 +841,28 @@ impl LoadedLead {
 
     /// Adopts a member just created into slot 0: its battler and the record
     /// encoded from it, with the hidden-HP offset measured against that record.
-    fn created(dex: &Dex, battler: BattlePokemon, record: Pokemon) -> Self {
+    pub(crate) fn created(dex: &Dex, battler: BattlePokemon, record: Pokemon) -> Self {
         let lead_hp_hidden_by_load = hp_hidden_by_load(dex, &record, &battler);
         Self {
             slot: 0,
+            battler: Some(battler),
+            record,
+            lead_hp_hidden_by_load,
+        }
+    }
+
+    /// Adopts `battler` as the member whose saved record is `record` in `slot`,
+    /// measuring the offset against that same pair.
+    #[cfg(test)]
+    pub(crate) fn backed_for_test(
+        dex: &Dex,
+        slot: usize,
+        battler: BattlePokemon,
+        record: Pokemon,
+    ) -> Self {
+        let lead_hp_hidden_by_load = hp_hidden_by_load(dex, &record, &battler);
+        Self {
+            slot,
             battler: Some(battler),
             record,
             lead_hp_hidden_by_load,
@@ -876,8 +880,18 @@ impl LoadedLead {
     }
 
     /// The signed hidden-HP offset carried into the next merge.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the overworld never reads the offset")
+    )]
     pub(crate) fn hidden_hp_offset(&self) -> i32 {
         self.lead_hp_hidden_by_load
+    }
+
+    /// Whether [`Self::take_battler`] has lent the battler out and it has not
+    /// come back through [`Self::restore_battler`].
+    pub(crate) fn is_lent(&self) -> bool {
+        self.battler.is_none()
     }
 
     /// # Panics
