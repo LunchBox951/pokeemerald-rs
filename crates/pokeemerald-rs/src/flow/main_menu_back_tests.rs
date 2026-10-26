@@ -238,3 +238,31 @@ fn b_returns_to_a_fresh_title_with_the_real_pack() {
         assert_eq!(state.saved.block2.options_window_frame_type, 5);
     }
 }
+
+/// The returning title must honour the retained save's L=A.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn returning_title_honours_the_retained_l_equals_a() {
+    let temp = TempSave::new("b-l-equals-a");
+    let mut slot = temp.slot();
+    let mut scene = menu(MainMenuType::NoSavedGame, 0, &mut slot);
+    if let AppScene::MainMenu(state) = &mut scene {
+        state.saved.block2.options_button_mode = engine::save::ButtonMode::LEqualsA;
+    }
+    let (mut scene, _) = advance_scene(scene, pressed(Buttons::B), &mut slot, PackSource::Repo);
+    for _ in 0..WAIT_FRAMES_AFTER_PRESS {
+        let (next, _) = advance_scene(scene, ButtonState::new(), &mut slot, PackSource::Repo);
+        scene = next;
+    }
+    let (title, _) = advance_scene(scene, ButtonState::new(), &mut slot, PackSource::Repo);
+    assert!(
+        matches!(title, AppScene::Title(_)),
+        "P22 must land on the title"
+    );
+    let (title, _) = advance_scene(title, ButtonState::new(), &mut slot, PackSource::Repo);
+    let (next, _) = advance_scene(title, pressed(Buttons::L), &mut slot, PackSource::Repo);
+    assert!(
+        matches!(next, AppScene::TitleFadeWait(_)),
+        "a fresh L under the retained L=A must advance the title like A"
+    );
+}

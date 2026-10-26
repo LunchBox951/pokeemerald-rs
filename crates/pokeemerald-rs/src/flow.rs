@@ -196,6 +196,16 @@ pub(crate) struct AnimatedTitle {
     pub(crate) retained_save: Option<Box<SavedGame>>,
 }
 
+impl AnimatedTitle {
+    /// The retained session save's `optionsButtonMode`, or the default
+    /// `Normal` on a boot title with none ([`AppScene::button_mode`]).
+    fn button_mode(&self) -> ButtonMode {
+        self.retained_save
+            .as_ref()
+            .map_or(ButtonMode::Normal, |saved| saved.block2.options_button_mode)
+    }
+}
+
 /// [`crate::app::App`]'s real (windowed) game-flow state (module docs):
 /// which scene is currently active. Every variant is boxed -- their sizes
 /// vary wildly (an [`AnimatedTitle`] embeds a whole [`TitleScene`]'s
@@ -268,11 +278,14 @@ impl AppScene {
     /// (`pokeemerald/src/main.c:279-288`'s source). Known gap: upstream loads
     /// the save during the copyright screen, so L=A already applies on the
     /// title; this port loads it only at the `Title` -> `MainMenu`
-    /// transition, so the title scenes read the default `Normal`. The intro
+    /// transition, so a boot title reads the default `Normal`; a title the main
+    /// menu's B returned to reads the live save it carries
+    /// ([`AnimatedTitle::retained_save`]). The intro
     /// carries the mode in its [`NewGameOptions`] rather than a `SaveBlock2`.
     fn button_mode(&self) -> ButtonMode {
         match self {
-            Self::Title(_) | Self::TitleFadeWait(_) => ButtonMode::Normal,
+            Self::Title(title) => title.button_mode(),
+            Self::TitleFadeWait(wait) => wait.button_mode(),
             Self::MainMenu(state) | Self::MainMenuHighlight(state) => {
                 state.saved.block2.options_button_mode
             }

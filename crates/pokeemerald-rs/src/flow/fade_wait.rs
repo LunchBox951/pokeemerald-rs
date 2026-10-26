@@ -30,6 +30,13 @@ pub(crate) struct TitleFadeWait {
     fade: NormalPaletteFade,
 }
 
+impl TitleFadeWait {
+    /// The retained title's button mode ([`AnimatedTitle::button_mode`]).
+    pub(super) fn button_mode(&self) -> engine::save::ButtonMode {
+        self.title.button_mode()
+    }
+}
+
 /// [`AppScene::MainMenuFadeWait`]'s state: the menu retained for its
 /// unfaded-recovery frame ([`advance_main_menu_fade_wait`]'s own doc
 /// comment), the [`MenuExit`] the press that started the fade chose, and the
