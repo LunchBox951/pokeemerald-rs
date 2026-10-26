@@ -12867,9 +12867,51 @@
     "graphics/interface": {
       "artifacts": {
         "main_menu_bg_palette": {
-          "reason": "graphics/interface/main_menu_bg.pal extracted as interface/palette/main_menu_bg (xtask::extract::interface::extract_interface_palettes, issue #216); MainMenuScene::from_pack reads its index 0 for the BG0 backdrop colour. Every other file under graphics/interface (icons, badges, pokedex chrome, etc.) and the sibling main_menu_text.pal stay unextracted -- see xtask::extract's module docs for why main_menu_text.pal specifically is deferred. Since the #122 ROM-import series the same normalized pack entries are also produced directly from the player's own ROM by crates/rom-import/src/domains/interface.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "reason": "graphics/interface/main_menu_bg.pal extracted as interface/palette/main_menu_bg (xtask::extract::interface::extract_interface_palettes); MainMenuScene::from_pack reads its index 0 for the BG0 backdrop colour. Every other file under graphics/interface (icons, badges, pokedex chrome, etc.) except the bag's scroll_indicator.png, red.pal, swap_line.png, menu_info.png and menu_info1.pal through menu_info3.pal, and the sibling main_menu_text.pal stay unextracted -- see xtask::extract's module docs for why main_menu_text.pal specifically is deferred. The same normalized pack entries are also produced directly from the player's own ROM by crates/rom-import/src/domains/interface.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
           "rust_target": "crates/pokeemerald-rs/src/main_menu.rs",
           "spec": "I-3",
+          "status": "ported"
+        },
+        "menu_info.png": {
+          "reason": "graphics/interface/menu_info.png (128x128, gMenuInfoElements_Gfx, src/graphics.c:1267; the sheet BlitMenuInfoIcon reads at the sMenuInfoIcons tile offsets, src/menu.c:113-141, 2098) extracted as bag/image/menu_info by xtask::extract::bag, narrowed from the 8-bit PNG to 4bpp by keeping each index modulo 16 as gbagfx does for a .4bpp rule (tools/gbagfx/convert_png.c ConvertBitDepth), and read back through BagAssets::menu_info (crates/assets/src/pack/bag.rs), whose MenuInfoAssets::type_icon and label_icon yield the 18 32x12 type icons and the four 42x12 TYPE, POWER, ACCURACY and PP labels. The same pack entry is also produced from the player's own ROM by crates/rom-import/src/domains/bag.rs (an uncompressed root), equivalence-checked byte-for-byte against this extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/bag.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "menu_info1.pal": {
+          "reason": "graphics/interface/menu_info1.pal (16 colours, gMenuInfoElements1_Pal, src/graphics.c:1264; ListMenuLoadStdPalAt palette id 0, src/menu.c:2078-2095) extracted as bag/palette/menu_info1 by xtask::extract::bag and returned with the menu-info icon sheet by BagAssets::menu_info (crates/assets/src/pack/bag.rs). The same pack entry is also produced from the player's own ROM by crates/rom-import/src/domains/bag.rs (an uncompressed root), equivalence-checked byte-for-byte against this extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/bag.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "menu_info2.pal": {
+          "reason": "graphics/interface/menu_info2.pal (16 colours, gMenuInfoElements2_Pal, src/graphics.c:1265; ListMenuLoadStdPalAt palette id 1, src/menu.c:2078-2095) extracted as bag/palette/menu_info2 by xtask::extract::bag and returned with the menu-info icon sheet by BagAssets::menu_info (crates/assets/src/pack/bag.rs). The same pack entry is also produced from the player's own ROM by crates/rom-import/src/domains/bag.rs (an uncompressed root), equivalence-checked byte-for-byte against this extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/bag.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "menu_info3.pal": {
+          "reason": "graphics/interface/menu_info3.pal (16 colours, gMenuInfoElements3_Pal, src/graphics.c:1266; ListMenuLoadStdPalAt palette id 2, src/menu.c:2078-2095) extracted as bag/palette/menu_info3 by xtask::extract::bag and returned with the menu-info icon sheet by BagAssets::menu_info (crates/assets/src/pack/bag.rs). The same pack entry is also produced from the player's own ROM by crates/rom-import/src/domains/bag.rs (an uncompressed root), equivalence-checked byte-for-byte against this extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/bag.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "red.pal": {
+          "reason": "graphics/interface/red.pal (16 colours, sRedInterface_Pal, src/list_menu.c:289, shared by the list-menu scroll arrows and cursors) extracted as bag/palette/scroll_indicator by xtask::extract::bag and returned with the scroll-arrow sheet by BagAssets::scroll_indicator (crates/assets/src/pack/bag.rs). The same pack entry is also produced from the player's own ROM by crates/rom-import/src/domains/bag.rs, equivalence-checked byte-for-byte against this extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/bag.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "scroll_indicator.png": {
+          "reason": "graphics/interface/scroll_indicator.png (16x32, the list-scroll arrow sheet AddScrollIndicatorArrowPair loads as sScrollIndicator_Gfx, src/list_menu.c:290) extracted as bag/image/scroll_indicator by xtask::extract::bag and read back through BagAssets::scroll_indicator (crates/assets/src/pack/bag.rs) with red.pal. The same pack entry is also produced from the player's own ROM by crates/rom-import/src/domains/bag.rs, equivalence-checked byte-for-byte against this extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/bag.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "swap_line.png": {
+          "reason": "graphics/interface/swap_line.png (16x32, gSwapLineGfx, src/graphics.c:1151) extracted as bag/image/swap_line, and its embedded 16-colour palette (gSwapLinePal, src/graphics.c:1152, no separate .pal file) as bag/palette/swap_line, by xtask::extract::bag; read back through BagAssets::swap_line (crates/assets/src/pack/bag.rs). The same pack entries are also produced from the player's own ROM by crates/rom-import/src/domains/bag.rs, equivalence-checked byte-for-byte against this extraction by crates/rom-import/tests/equivalence.rs.",
+          "rust_target": "crates/xtask/src/extract/bag.rs",
+          "spec": "S-4",
           "status": "ported"
         }
       },
