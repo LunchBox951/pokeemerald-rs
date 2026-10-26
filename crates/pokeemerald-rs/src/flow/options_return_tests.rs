@@ -13,13 +13,13 @@ use platform::{ButtonState, Buttons, Frame};
 use rendering::{NormalPaletteFade, PaletteFadeTarget};
 
 /// F+4: `Task_HandleMainMenuInput` first reads `JOY_NEW`.
-const FIRST_INPUT_FRAME: usize = 4;
-const NONE: Buttons = Buttons::NONE;
-const INPUT_BUTTONS: [Buttons; 4] = [Buttons::A, Buttons::UP, Buttons::DOWN, Buttons::B];
+pub(super) const FIRST_INPUT_FRAME: usize = 4;
+pub(super) const NONE: Buttons = Buttons::NONE;
+pub(super) const INPUT_BUTTONS: [Buttons; 4] = [Buttons::A, Buttons::UP, Buttons::DOWN, Buttons::B];
 
 /// What `InitMainMenu(TRUE)` presents on F, F+1 (bare backdrop), F+2 (windows,
 /// no highlight yet), F+3 (highlight), and F+4 onwards (ordinary input).
-const SETUP_PHASES: [&str; 5] = ["fade-in", "fade-in", "highlight", "menu", "menu"];
+pub(super) const SETUP_PHASES: [&str; 5] = ["fade-in", "fade-in", "highlight", "menu", "menu"];
 
 struct Return {
     backdrop: Box<Frame>,
@@ -28,7 +28,7 @@ struct Return {
     scene: AppScene,
 }
 
-fn phase(scene: &AppScene) -> &'static str {
+pub(super) fn phase(scene: &AppScene) -> &'static str {
     match scene {
         AppScene::MainMenuFadeIn(_) => "fade-in",
         AppScene::MainMenuHighlight(_) => "highlight",
@@ -74,7 +74,7 @@ fn return_from_options(f: &mut Fixture, held: &[Buttons]) -> Return {
 }
 
 /// `held` with `press` on frame F+`offset` and nothing on the other frames.
-fn press_on(offset: usize, press: Buttons) -> [Buttons; 5] {
+pub(super) fn press_on(offset: usize, press: Buttons) -> [Buttons; 5] {
     let mut held = [NONE; 5];
     held[offset] = press;
     held

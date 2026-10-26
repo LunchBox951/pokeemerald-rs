@@ -588,3 +588,6 @@ fn an_immediately_retiring_noise_note_leaves_the_width_only_rate() {
 
 #[path = "cgb_voice_noise_replacement.rs"]
 mod replacement_tests;
+
+#[path = "cgb_voice_noise_retirement.rs"]
+mod retirement_tests;

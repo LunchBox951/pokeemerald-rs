@@ -315,6 +315,15 @@ pub(super) fn entries_with_marked_narrow_glyphs(marked: &[usize]) -> Vec<PackEnt
     )
 }
 
+/// [`entries`], but only the normal font draws, and only the left pixel column
+/// of the glyph ids in `marked`.
+pub(super) fn entries_with_marked_normal_glyphs(marked: &[usize]) -> Vec<PackEntry> {
+    entries_with_fonts(
+        marked_glyph_sheet("normal", marked),
+        marked_glyph_sheet("narrow", &[]),
+    )
+}
+
 fn entries_with_narrow(narrow: PackEntry) -> Vec<PackEntry> {
     entries_with_fonts(glyph_sheet("normal"), narrow)
 }
