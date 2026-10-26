@@ -505,6 +505,11 @@ mod tie_tests;
 mod sweep_tests;
 
 #[cfg(test)]
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "expected values are computed from small integer terms whose casts \
+              are exact at these magnitudes"
+)]
 #[path = "mixer_reverb.rs"]
 mod reverb_tests;
 
