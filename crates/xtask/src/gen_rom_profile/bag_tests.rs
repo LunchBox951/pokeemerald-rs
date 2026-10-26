@@ -372,3 +372,65 @@ fn the_scroll_indicator_and_swap_line_sheets_keep_their_upstream_encodings() {
         assert_eq!(symbol("bag/palette/swap_line"), SymbolExpectation::Unnamed);
     });
 }
+
+#[test]
+fn the_menu_info_sheet_and_palettes_are_located_uncompressed() {
+    use crate::gen_rom_profile::plan::SymbolExpectation;
+
+    // `graphics.c:1264-1267`: global `.4bpp` sheet and three `.gbapal` palettes,
+    // all linked uncompressed.
+    let tiles = distinctive_tiles(256);
+    let (first_colors, first_bytes) = palette_bytes(0x7001);
+    let (second_colors, second_bytes) = palette_bytes(0x7002);
+    let (third_colors, third_bytes) = palette_bytes(0x7003);
+    let rom = RomFixture::new()
+        .emerald_header()
+        .write(0x10_0000, &first_bytes)
+        .write(0x10_0020, &second_bytes)
+        .write(0x10_0040, &third_bytes)
+        .write(0x10_0060, &tiles)
+        .finish();
+    let entries = vec![
+        image_entry_from_tiles("bag/image/menu_info".into(), &tiles, 4, 128, 128, None)
+            .expect("image"),
+        palette_entry("bag/palette/menu_info1".into(), &first_colors).expect("palette"),
+        palette_entry("bag/palette/menu_info2".into(), &second_colors).expect("palette"),
+        palette_entry("bag/palette/menu_info3".into(), &third_colors).expect("palette"),
+    ];
+    let expected = ids(&[
+        "bag/palette/menu_info3",
+        "bag/image/menu_info",
+        "bag/palette/menu_info1",
+        "bag/palette/menu_info2",
+    ]);
+
+    with_context("bag-menu-info", &rom, entries, |ctx| {
+        let mut report = Vec::new();
+        let plan = locate_expected(ctx, &expected, &mut report).expect("located");
+        let images: Vec<_> = plan
+            .images
+            .iter()
+            .map(|p| (p.id.as_str(), p.addr, p.encoding, p.tile_count))
+            .collect();
+        assert_eq!(
+            images,
+            [("bag/image/menu_info", 0x0810_0060, Encoding::Raw, 256)]
+        );
+        let palettes: Vec<_> = plan
+            .palettes
+            .iter()
+            .map(|p| (p.id.as_str(), p.addr, p.encoding, p.color_count))
+            .collect();
+        assert_eq!(
+            palettes,
+            [
+                ("bag/palette/menu_info1", 0x0810_0000, Encoding::Raw, 16),
+                ("bag/palette/menu_info2", 0x0810_0020, Encoding::Raw, 16),
+                ("bag/palette/menu_info3", 0x0810_0040, Encoding::Raw, 16),
+            ]
+        );
+        assert!(report
+            .iter()
+            .all(|line| line.symbol == SymbolExpectation::Unnamed));
+    });
+}
