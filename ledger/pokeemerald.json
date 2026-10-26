@@ -21027,6 +21027,14 @@
       "status": "pending"
     },
     "include/constants/item_effects.h": {
+      "artifacts": {
+        "ItemEffectMasks": {
+          "reason": "item_effects.h:4-65 ITEM0..ITEM5 field masks, ITEM_EFFECT_ARG_START and the ITEM6_* special amounts, ported as constants in assets::items::item_effects. Not covered by this artifact: the ITEM_EFFECT_* type ids (:67-90) used by GetItemEffectType, which no consumer reads yet; the parent stays pending for them.",
+          "rust_target": "crates/assets/src/items/item_effects.rs",
+          "spec": "S-6",
+          "status": "ported"
+        }
+      },
       "category": "code.constants",
       "kind": "file",
       "status": "pending"
@@ -29444,6 +29452,14 @@
       "status": "rewritten"
     },
     "src/data/pokemon/item_effects.h": {
+      "artifacts": {
+        "gItemEffectTable": {
+          "reason": "item_effects.h:385-457 and the 69 gItemEffect_* byte arrays at :1-383, transcribed byte-for-byte as assets::items::ItemEffectTable: 163 positions from ITEM_POTION through ITEM_ENIGMA_BERRY (explicit NULL at :456), a position holding no array is Null, and an item outside that range is OutsideTable, so a missing entry differs from an all-zero effect. Effects keep their variable lengths (6 to 10 bytes). Not modelled: the Enigma Berry's runtime effect bytes (gEnigmaBerries / save block), and any use of the bytes (item use, battle AI classification).",
+          "rust_target": "crates/assets/src/items/item_effects.rs",
+          "spec": "S-6",
+          "status": "ported"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
@@ -32019,6 +32035,12 @@
         "GetDeoxysStat": {
           "reason": "pokemon.c:2698-2712 (GetDeoxysStat; called from GetMonData at pokemon.c:3660-3684 for the ATK/DEF/SPEED/SPATK/SPDEF reads). The single-player Speed Forme substitution (base 95/90/180/95/90 for Deoxys's five non-HP stats) is rewritten as effective_battle_base_stats, applied at BattlePokemon construction and level-up recompute; like upstream's evVal/4 term (pokemon.c:2708-2709) the five substituted stats read the battler's current EVs, re-applied when BattlePokemon::with_evs adopts a loaded record's EVs and at each level-up, while max HP keeps the port's zero-EV live floor. The link-battle branch (BATTLE_TYPE_LINK_IN_BATTLE returns 0 and keeps the raw row) is not modelled. The persisted stat cache stays raw per upstream CalculateMonStats (pokemon.c:2823-2866, CALC_STAT reads gSpeciesInfo directly), including on the unchanged-level save path, which recomputes from the raw row; the assets species row stays raw Normal Forme data.",
           "rust_target": "crates/battle/src/pokemon.rs",
+          "spec": "S-6",
+          "status": "rewritten"
+        },
+        "GetItemEffectParamOffset": {
+          "reason": "pokemon.c:5324-5434 as assets::items::ItemEffect::param_offset, with ItemEffect::heal_hp_param_offset and ItemEffectTable::param_offset/heal_hp_param_offset: scan over flag fields 0-5 with the effect bit shifted alongside the flags, early return of 0 for fields 0-3, ITEM4_EVO_STONE and ITEM5_FRIENDSHIP_HIGH, PP_UP and REVIVE flag clearing, and 0 for a null table position. Tests pin the ITEM4_HEAL_HP offset for Potion, Full Restore, Energy Powder, Full Heal, Guard Spec., Dire Hit, each X item, Revive and the heal amount at that offset for ten HP-healing items, plus field/bit probes on HP Up, Sun Stone, Iron, Energy Powder and Guard Spec., and the null, out-of-table and unknown-id slots; other effect, field and bit combinations are not pinned. Not modelled: the Enigma Berry branch (:5337-5343) that reads gEnigmaBerries[gActiveBattler].itemEffect, so Enigma Berry yields 0; offsets are usize, not u8.",
+          "rust_target": "crates/assets/src/items/item_effects.rs",
           "spec": "S-6",
           "status": "rewritten"
         },
