@@ -4,6 +4,10 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 [`RELEASE.md` §Changelog](RELEASE.md#changelog) owns the update policy and entry format. Versions follow the repository's `FINAL.MAJOR.MINOR.PATCH` scheme.
 
+## [0.0.75.0] - 2026-10-26
+
+- General improvements in preparation for trainers using items in battle.
+
 ## [0.0.74.0] - 2026-10-26
 
 - Mom now turns to face you when you start her dialogue.
@@ -357,7 +361,8 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 - Initial prerelease establishing the repository release path, with an early title screen, new-game introduction, and exploration of the opening area.
 
-[0.0.74.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/98ba10237970a6e9de877ced16b1b223190090f0...dev
+[0.0.75.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/36af396e97b06960838320cc158b442431b44783...dev
+[0.0.74.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/98ba10237970a6e9de877ced16b1b223190090f0...36af396e97b06960838320cc158b442431b44783
 [0.0.73.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/8cee32b52a7ce45be4aa91b373848039a0cccd6d...98ba10237970a6e9de877ced16b1b223190090f0
 [0.0.72.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/dd1f5200aa09f2fd14fa5aa18b4dbd0c4a03fb3e...8cee32b52a7ce45be4aa91b373848039a0cccd6d
 [0.0.71.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/ce0fd44c695f1ac523fc958f4401607339397c5b...dd1f5200aa09f2fd14fa5aa18b4dbd0c4a03fb3e
