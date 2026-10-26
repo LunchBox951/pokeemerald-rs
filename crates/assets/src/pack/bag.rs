@@ -19,6 +19,10 @@ const ROTATING_BALL_IMAGE_ID: &str = "bag/image/rotating_ball";
 const ROTATING_BALL_PALETTE_ID: &str = "bag/palette/rotating_ball";
 const SELECT_BUTTON_IMAGE_ID: &str = "bag/image/select_button";
 const HM_IMAGE_ID: &str = "bag/image/hm";
+const SCROLL_INDICATOR_IMAGE_ID: &str = "bag/image/scroll_indicator";
+const SCROLL_INDICATOR_PALETTE_ID: &str = "bag/palette/scroll_indicator";
+const SWAP_LINE_IMAGE_ID: &str = "bag/image/swap_line";
+const SWAP_LINE_PALETTE_ID: &str = "bag/palette/swap_line";
 const ICON_IMAGE_PREFIX: &str = "bag/item-icon/image/";
 const ICON_PALETTE_PREFIX: &str = "bag/item-icon/palette/";
 
@@ -33,6 +37,10 @@ const ROTATING_BALL_SIDE: u32 = 16;
 const SELECT_BUTTON_WIDTH: u32 = 24;
 const SELECT_BUTTON_HEIGHT: u32 = 16;
 const HM_SIDE: u32 = 16;
+const SCROLL_INDICATOR_WIDTH: u32 = 16;
+const SCROLL_INDICATOR_HEIGHT: u32 = 32;
+const SWAP_LINE_WIDTH: u32 = 16;
+const SWAP_LINE_HEIGHT: u32 = 32;
 const ICON_SIDE: u32 = 24;
 const TILEMAP_BYTES: usize = 32 * 32 * 2;
 const PALETTE_ENTRY_BYTES: usize = 2;
@@ -424,7 +432,10 @@ const ICON_STEMS: [(&str, &str); ITEMS_COUNT + 1] = [
 ];
 
 /// Every ordinary-bag graphic. Fixed entries are validated by
-/// [`AssetPack::bag_assets`]; icons by [`item_icon`](Self::item_icon).
+/// [`AssetPack::bag_assets`]; icons by [`item_icon`](Self::item_icon); the
+/// list-scroll arrows and the swap line, which the screen draws only on demand,
+/// by [`scroll_indicator`](Self::scroll_indicator) and
+/// [`swap_line`](Self::swap_line).
 #[derive(Debug, Clone, Copy)]
 pub struct BagAssets<'a> {
     /// Bag screen tile sheet (`menu.png`), 4bpp bank-local indices.
@@ -602,6 +613,40 @@ impl<'a> BagAssets<'a> {
             &format!("{ICON_IMAGE_PREFIX}{image_stem}"),
             &format!("{ICON_PALETTE_PREFIX}{palette_stem}"),
             (ICON_SIDE, ICON_SIDE),
+            BANK_PALETTE_COLORS,
+        )
+    }
+
+    /// The list scroll-arrow sheet (`graphics/interface/scroll_indicator.png`)
+    /// with its `red.pal` palette, as `AddScrollIndicatorArrowPair` loads them
+    /// (`src/list_menu.c:289-290`): 16x32, two 16x16 frames, the up arrow at
+    /// tile offset 4 and the down arrow the same tiles flipped vertically.
+    ///
+    /// # Errors
+    ///
+    /// [`PackError::UnknownAsset`], [`PackError::WrongKind`], or
+    /// [`PackError::MalformedBagAsset`] when the sheet or palette is missing,
+    /// of the wrong kind, or not a 16x32 image with a 16-colour palette.
+    pub fn scroll_indicator(&self) -> Result<PalettedImage<'a>, PackError> {
+        self.pack.bag_paletted(
+            SCROLL_INDICATOR_IMAGE_ID,
+            SCROLL_INDICATOR_PALETTE_ID,
+            (SCROLL_INDICATOR_WIDTH, SCROLL_INDICATOR_HEIGHT),
+            BANK_PALETTE_COLORS,
+        )
+    }
+
+    /// The SELECT swap-line sprite sheet (`gSwapLineGfx`) with its palette
+    /// (`gSwapLinePal`), the PNG's own (`src/graphics.c:1151-1152`): 16x32.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`scroll_indicator`](Self::scroll_indicator).
+    pub fn swap_line(&self) -> Result<PalettedImage<'a>, PackError> {
+        self.pack.bag_paletted(
+            SWAP_LINE_IMAGE_ID,
+            SWAP_LINE_PALETTE_ID,
+            (SWAP_LINE_WIDTH, SWAP_LINE_HEIGHT),
             BANK_PALETTE_COLORS,
         )
     }

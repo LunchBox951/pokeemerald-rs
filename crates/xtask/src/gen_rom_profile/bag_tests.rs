@@ -286,3 +286,89 @@ fn static_bag_roots_survive_a_map_that_omits_locals() {
         SymbolExpectation::Unnamed
     );
 }
+
+#[test]
+fn the_scroll_indicator_and_swap_line_sheets_keep_their_upstream_encodings() {
+    use crate::gen_rom_profile::plan::SymbolExpectation;
+
+    // `list_menu.c:289-290`: LZ77 sheet, uncompressed `static` palette.
+    // `graphics.c:1151-1152`: LZ77 sheet and LZ77 palette, both global.
+    let arrow_tiles = distinctive_tiles(8);
+    let line_tiles: Vec<u8> = arrow_tiles.iter().map(|byte| byte ^ 0x5a).collect();
+    let (red_colors, red_bytes) = palette_bytes(0x5555);
+    let (line_colors, line_bytes) = palette_bytes(0x6666);
+    let rom = RomFixture::new()
+        .emerald_header()
+        .write(0x10_0000, &lz77_literals(&arrow_tiles))
+        .write(0x11_0000, &red_bytes)
+        .write(0x12_0000, &lz77_literals(&line_tiles))
+        .write(0x13_0000, &lz77_literals(&line_bytes))
+        .finish();
+    let sheet = |id: &str, tiles: &[u8]| {
+        image_entry_from_tiles(id.into(), tiles, 4, 16, 32, None).expect("image")
+    };
+    let entries = vec![
+        sheet("bag/image/scroll_indicator", &arrow_tiles),
+        palette_entry("bag/palette/scroll_indicator".into(), &red_colors).expect("palette"),
+        sheet("bag/image/swap_line", &line_tiles),
+        palette_entry("bag/palette/swap_line".into(), &line_colors).expect("palette"),
+    ];
+    let expected = ids(&[
+        "bag/palette/swap_line",
+        "bag/image/swap_line",
+        "bag/palette/scroll_indicator",
+        "bag/image/scroll_indicator",
+    ]);
+
+    with_context("bag-scroll-swap", &rom, entries, |ctx| {
+        let mut report = Vec::new();
+        let plan = locate_expected(ctx, &expected, &mut report).expect("located");
+        let images: Vec<_> = plan
+            .images
+            .iter()
+            .map(|p| (p.id.as_str(), p.addr, p.encoding, p.tile_count))
+            .collect();
+        assert_eq!(
+            images,
+            [
+                ("bag/image/scroll_indicator", 0x0810_0000, Encoding::Lz77, 8),
+                ("bag/image/swap_line", 0x0812_0000, Encoding::Lz77, 8),
+            ]
+        );
+        let palettes: Vec<_> = plan
+            .palettes
+            .iter()
+            .map(|p| (p.id.as_str(), p.addr, p.encoding, p.color_count))
+            .collect();
+        assert_eq!(
+            palettes,
+            [
+                (
+                    "bag/palette/scroll_indicator",
+                    0x0811_0000,
+                    Encoding::Raw,
+                    16
+                ),
+                ("bag/palette/swap_line", 0x0813_0000, Encoding::Lz77, 16),
+            ]
+        );
+        let symbol = |id: &str| {
+            report
+                .iter()
+                .find(|line| line.id == id)
+                .unwrap()
+                .symbol
+                .clone()
+        };
+        assert_eq!(
+            symbol("bag/image/scroll_indicator"),
+            SymbolExpectation::Local("sScrollIndicator_Gfx".to_owned())
+        );
+        assert_eq!(
+            symbol("bag/palette/scroll_indicator"),
+            SymbolExpectation::Local("sRedInterface_Pal".to_owned())
+        );
+        assert_eq!(symbol("bag/image/swap_line"), SymbolExpectation::Unnamed);
+        assert_eq!(symbol("bag/palette/swap_line"), SymbolExpectation::Unnamed);
+    });
+}

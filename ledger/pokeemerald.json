@@ -12867,9 +12867,27 @@
     "graphics/interface": {
       "artifacts": {
         "main_menu_bg_palette": {
-          "reason": "graphics/interface/main_menu_bg.pal extracted as interface/palette/main_menu_bg (xtask::extract::interface::extract_interface_palettes, issue #216); MainMenuScene::from_pack reads its index 0 for the BG0 backdrop colour. Every other file under graphics/interface (icons, badges, pokedex chrome, etc.) and the sibling main_menu_text.pal stay unextracted -- see xtask::extract's module docs for why main_menu_text.pal specifically is deferred. Since the #122 ROM-import series the same normalized pack entries are also produced directly from the player's own ROM by crates/rom-import/src/domains/interface.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
+          "reason": "graphics/interface/main_menu_bg.pal extracted as interface/palette/main_menu_bg (xtask::extract::interface::extract_interface_palettes, issue #216); MainMenuScene::from_pack reads its index 0 for the BG0 backdrop colour. Every other file under graphics/interface (icons, badges, pokedex chrome, etc.) except the bag's scroll_indicator.png, red.pal and swap_line.png, and the sibling main_menu_text.pal stay unextracted -- see xtask::extract's module docs for why main_menu_text.pal specifically is deferred. Since the #122 ROM-import series the same normalized pack entries are also produced directly from the player's own ROM by crates/rom-import/src/domains/interface.rs (--import-rom), equivalence-checked byte-for-byte against this checkout extraction by crates/rom-import/tests/equivalence.rs.",
           "rust_target": "crates/pokeemerald-rs/src/main_menu.rs",
           "spec": "I-3",
+          "status": "ported"
+        },
+        "red.pal": {
+          "reason": "graphics/interface/red.pal (16 colours, sRedInterface_Pal, src/list_menu.c:289, shared by the list-menu scroll arrows and cursors) extracted as bag/palette/scroll_indicator by xtask::extract::bag and returned with the scroll-arrow sheet by BagAssets::scroll_indicator (crates/assets/src/pack/bag.rs). Since the #122 ROM-import series the same pack entry is also produced from the player's own ROM by crates/rom-import/src/domains/bag.rs, equivalence-checked byte-for-byte against this extraction by crates/rom-import/tests/equivalence.rs. The other graphics/interface files stay unextracted.",
+          "rust_target": "crates/xtask/src/extract/bag.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "scroll_indicator.png": {
+          "reason": "graphics/interface/scroll_indicator.png (16x32, the list-scroll arrow sheet AddScrollIndicatorArrowPair loads as sScrollIndicator_Gfx, src/list_menu.c:290) extracted as bag/image/scroll_indicator by xtask::extract::bag and read back through BagAssets::scroll_indicator (crates/assets/src/pack/bag.rs) with red.pal. Since the #122 ROM-import series the same pack entry is also produced from the player's own ROM by crates/rom-import/src/domains/bag.rs, equivalence-checked byte-for-byte against this extraction by crates/rom-import/tests/equivalence.rs. Drawing the arrows is the bag screen's remaining work (#2560). The other graphics/interface files stay unextracted.",
+          "rust_target": "crates/xtask/src/extract/bag.rs",
+          "spec": "S-4",
+          "status": "ported"
+        },
+        "swap_line.png": {
+          "reason": "graphics/interface/swap_line.png (16x32, gSwapLineGfx, src/graphics.c:1151) extracted as bag/image/swap_line, and its embedded 16-colour palette (gSwapLinePal, src/graphics.c:1152, no separate .pal file) as bag/palette/swap_line, by xtask::extract::bag; read back through BagAssets::swap_line (crates/assets/src/pack/bag.rs). Since the #122 ROM-import series the same pack entries are also produced from the player's own ROM by crates/rom-import/src/domains/bag.rs, equivalence-checked byte-for-byte against this extraction by crates/rom-import/tests/equivalence.rs. Drawing the swap line is the bag screen's remaining work (#2560). The other graphics/interface files stay unextracted.",
+          "rust_target": "crates/xtask/src/extract/bag.rs",
+          "spec": "S-4",
           "status": "ported"
         }
       },

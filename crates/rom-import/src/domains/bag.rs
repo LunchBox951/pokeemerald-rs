@@ -1,6 +1,8 @@
 //! The ordinary bag: `bag/*`.
 //!
-//! The fixed bag images, palettes and tilemap, plus the deduplicated
+//! The fixed bag images, palettes and tilemap (including the list-scroll
+//! arrow sheet with `red.pal`, and the swap-line sheet with its own
+//! palette), plus the deduplicated
 //! item-icon images and palettes the checkout extractor emits. Every root is
 //! a plain image, palette or blob, so each goes through the shared codecs.
 //! The `gItemIconTable` row-to-icon mapping is not read here: it is typed

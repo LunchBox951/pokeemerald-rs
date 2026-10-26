@@ -7,6 +7,12 @@
 //! through `src/data/graphics/items.h`. Upstream shares sheets and palettes
 //! across items, so the two sets are deduplicated independently.
 //!
+//! The list-menu scroll arrows (`graphics/interface/scroll_indicator.png` with
+//! `red.pal`, `src/list_menu.c:289-290`) and the swap line
+//! (`graphics/interface/swap_line.png`, `gSwapLineGfx`/`gSwapLinePal`,
+//! `src/graphics.c:1151-1152`, whose palette is the PNG's own) are the two
+//! sprite sheets the bag screen draws beyond its own directory.
+//!
 //! Ids are `bag/{image,palette,raw}/<name>` and
 //! `bag/item-icon/{image,palette}/<stem>`.
 
@@ -32,6 +38,7 @@ const TILEMAP_BYTES: usize = 32 * 32 * 2;
 
 #[derive(Clone, Copy, Debug)]
 struct ImageSource {
+    /// Path under the checkout root.
     png: &'static str,
     id: &'static str,
     width: u32,
@@ -42,6 +49,7 @@ struct ImageSource {
 
 #[derive(Clone, Copy, Debug)]
 struct PaletteSource {
+    /// Path under the checkout root.
     pal: &'static str,
     id: &'static str,
     colors: usize,
@@ -57,34 +65,65 @@ const fn image(png: &'static str, id: &'static str, width: u32, height: u32) -> 
     }
 }
 
-/// `graphics.c:1136-1143,1269`, `item_menu_icons.c:36-37`, `item_menu.c:374`.
-const IMAGES: [ImageSource; 6] = [
-    image("menu.png", "bag/image/menu", 128, 32),
-    image("bag_male.png", "bag/image/male", 64, 384),
-    image("bag_female.png", "bag/image/female", 64, 384),
+/// `graphics.c:1136-1143,1151,1269`, `list_menu.c:290`, `item_menu_icons.c:36-37`,
+/// `item_menu.c:374`. `gSwapLinePal` is the PNG's own palette.
+const IMAGES: [ImageSource; 8] = [
+    image("graphics/bag/menu.png", "bag/image/menu", 128, 32),
+    image("graphics/bag/bag_male.png", "bag/image/male", 64, 384),
+    image("graphics/bag/bag_female.png", "bag/image/female", 64, 384),
     ImageSource {
         embedded_palette_id: Some("bag/palette/rotating_ball"),
-        ..image("rotating_ball.png", "bag/image/rotating_ball", 16, 16)
+        ..image(
+            "graphics/bag/rotating_ball.png",
+            "bag/image/rotating_ball",
+            16,
+            16,
+        )
     },
-    image("select_button.png", "bag/image/select_button", 24, 16),
-    image("hm.png", "bag/image/hm", 16, 16),
+    image(
+        "graphics/bag/select_button.png",
+        "bag/image/select_button",
+        24,
+        16,
+    ),
+    image("graphics/bag/hm.png", "bag/image/hm", 16, 16),
+    image(
+        "graphics/interface/scroll_indicator.png",
+        "bag/image/scroll_indicator",
+        16,
+        32,
+    ),
+    ImageSource {
+        embedded_palette_id: Some("bag/palette/swap_line"),
+        ..image(
+            "graphics/interface/swap_line.png",
+            "bag/image/swap_line",
+            16,
+            32,
+        )
+    },
 ];
 
-/// `graphics.c:1138-1141`.
-const PALETTES: [PaletteSource; 3] = [
+/// `graphics.c:1138-1141`, `list_menu.c:289`.
+const PALETTES: [PaletteSource; 4] = [
     PaletteSource {
-        pal: "menu_male.pal",
+        pal: "graphics/bag/menu_male.pal",
         id: "bag/palette/menu/male",
         colors: MENU_COLORS,
     },
     PaletteSource {
-        pal: "menu_female.pal",
+        pal: "graphics/bag/menu_female.pal",
         id: "bag/palette/menu/female",
         colors: MENU_COLORS,
     },
     PaletteSource {
-        pal: "bag.pal",
+        pal: "graphics/bag/bag.pal",
         id: "bag/palette/bag",
+        colors: BANK_COLORS,
+    },
+    PaletteSource {
+        pal: "graphics/interface/red.pal",
+        id: "bag/palette/scroll_indicator",
         colors: BANK_COLORS,
     },
 ];
@@ -132,14 +171,17 @@ pub(crate) fn icon_ids(upstream: &Path) -> Result<Vec<String>, ExtractError> {
 
 /// Extracts the fixed bag manifest and every icon `gItemIconTable` selects.
 pub(super) fn extract_bag(upstream: &Path, writer: &mut PackWriter) -> Result<(), ExtractError> {
-    let directory = upstream.join(BAG_DIRECTORY);
     for source in IMAGES {
-        extract_image(&directory.join(source.png), &source, writer)?;
+        extract_image(&upstream.join(source.png), &source, writer)?;
     }
     for source in PALETTES {
-        extract_palette(&directory.join(source.pal), source, writer)?;
+        extract_palette(&upstream.join(source.pal), source, writer)?;
     }
-    extract_tilemap_with(&directory.join(TILEMAP_PATH), &mut read_file, writer)?;
+    extract_tilemap_with(
+        &upstream.join(BAG_DIRECTORY).join(TILEMAP_PATH),
+        &mut read_file,
+        writer,
+    )?;
 
     let rows = icon_rows(upstream)?;
     let images: BTreeSet<&str> = rows.iter().map(|(image, _)| image.as_str()).collect();
@@ -484,6 +526,10 @@ const u32 gItemIconPalette_Blue[] = INCGFX_U32(\"graphics/items/icon_palettes/bl
             "bag/palette/rotating_ball",
             "bag/image/select_button",
             "bag/image/hm",
+            "bag/image/scroll_indicator",
+            "bag/palette/scroll_indicator",
+            "bag/image/swap_line",
+            "bag/palette/swap_line",
         ]
         .into_iter()
         .collect();
@@ -500,12 +546,14 @@ const u32 gItemIconPalette_Blue[] = INCGFX_U32(\"graphics/items/icon_palettes/bl
         assert_eq!(
             images,
             [
-                ("menu.png", 128, 32),
-                ("bag_male.png", 64, 384),
-                ("bag_female.png", 64, 384),
-                ("rotating_ball.png", 16, 16),
-                ("select_button.png", 24, 16),
-                ("hm.png", 16, 16),
+                ("graphics/bag/menu.png", 128, 32),
+                ("graphics/bag/bag_male.png", 64, 384),
+                ("graphics/bag/bag_female.png", 64, 384),
+                ("graphics/bag/rotating_ball.png", 16, 16),
+                ("graphics/bag/select_button.png", 24, 16),
+                ("graphics/bag/hm.png", 16, 16),
+                ("graphics/interface/scroll_indicator.png", 16, 32),
+                ("graphics/interface/swap_line.png", 16, 32),
             ]
         );
         let palettes: Vec<_> = PALETTES
@@ -515,9 +563,10 @@ const u32 gItemIconPalette_Blue[] = INCGFX_U32(\"graphics/items/icon_palettes/bl
         assert_eq!(
             palettes,
             [
-                ("menu_male.pal", 32),
-                ("menu_female.pal", 32),
-                ("bag.pal", 16)
+                ("graphics/bag/menu_male.pal", 32),
+                ("graphics/bag/menu_female.pal", 32),
+                ("graphics/bag/bag.pal", 16),
+                ("graphics/interface/red.pal", 16),
             ]
         );
     }
@@ -681,6 +730,40 @@ const u32 gItemIconPalette_Blue[] = INCGFX_U32(\"graphics/items/icon_palettes/bl
             bag.screen_tilemap,
             std::fs::read(upstream.join("graphics/bag/menu.bin")).unwrap()
         );
+
+        let pixels = |relative: &str| {
+            crate::extract::png::decode(&std::fs::read(upstream.join(relative)).unwrap())
+                .unwrap()
+                .pixels
+        };
+        let colors = |relative: &str| -> Vec<Option<u16>> {
+            crate::extract::jasc_pal::parse(
+                &std::fs::read_to_string(upstream.join(relative)).unwrap(),
+            )
+            .unwrap()
+            .iter()
+            .map(|color| Some(color.to_gba555()))
+            .collect()
+        };
+        let arrows = bag.scroll_indicator().unwrap();
+        assert_eq!(
+            arrows.image.pixels,
+            pixels("graphics/interface/scroll_indicator.png")
+        );
+        let actual: Vec<_> = (0..16).map(|i| arrows.palette.color(i)).collect();
+        assert_eq!(actual, colors("graphics/interface/red.pal"));
+        let line = bag.swap_line().unwrap();
+        assert_eq!(
+            line.image.pixels,
+            pixels("graphics/interface/swap_line.png")
+        );
+        let embedded = crate::extract::png::decode_palette(
+            &std::fs::read(upstream.join("graphics/interface/swap_line.png")).unwrap(),
+        )
+        .unwrap();
+        let expected: Vec<_> = embedded.iter().map(|c| Some(c.to_gba555())).collect();
+        let actual: Vec<_> = (0..16).map(|i| line.palette.color(i)).collect();
+        assert_eq!(actual, expected);
 
         let rows = icon_rows(&upstream).unwrap();
         assert_eq!(rows.len(), ITEMS_COUNT + 1);

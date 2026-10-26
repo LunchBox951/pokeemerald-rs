@@ -81,6 +81,10 @@ fn bag_entries() -> Vec<Entry> {
         palette("bag/palette/rotating_ball", 16, 0x0301),
         image("bag/image/select_button", (24, 16), 4),
         image("bag/image/hm", (16, 16), 5),
+        image("bag/image/scroll_indicator", (16, 32), 6),
+        palette("bag/palette/scroll_indicator", 16, 0x0401),
+        image("bag/image/swap_line", (16, 32), 7),
+        palette("bag/palette/swap_line", 16, 0x0501),
     ];
     entries.extend(icon_entries());
     entries
@@ -125,6 +129,81 @@ fn bag_assets_bundle_every_fixed_graphic() {
     assert_eq!((bag.hm.width, bag.hm.height), (16, 16));
 
     let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn scroll_indicator_and_swap_line_return_their_own_sheet_and_palette() {
+    let (pack, path) = load("bag-scroll-swap", bag_entries());
+    let bag = pack.bag_assets().unwrap();
+
+    let arrows = bag.scroll_indicator().unwrap();
+    assert_eq!((arrows.image.width, arrows.image.height), (16, 32));
+    assert_eq!(arrows.image.pixels[0], 6);
+    assert_eq!(arrows.palette.color_count, 16);
+    assert_eq!(arrows.palette.color(0), Some(0x0401));
+
+    let line = bag.swap_line().unwrap();
+    assert_eq!((line.image.width, line.image.height), (16, 32));
+    assert_eq!(line.image.pixels[0], 7);
+    assert_eq!(line.palette.color_count, 16);
+    assert_eq!(line.palette.color(0), Some(0x0501));
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn missing_or_malformed_scroll_and_swap_entries_are_rejected_on_lookup() {
+    let scroll = true;
+    let swap = false;
+    let cases: [(&str, bool, Option<Entry>); 8] = [
+        ("bag/image/scroll_indicator", scroll, None),
+        ("bag/palette/scroll_indicator", scroll, None),
+        ("bag/image/swap_line", swap, None),
+        ("bag/palette/swap_line", swap, None),
+        (
+            "bag/image/scroll_indicator",
+            scroll,
+            Some(image("bag/image/scroll_indicator", (16, 16), 0)),
+        ),
+        (
+            "bag/palette/scroll_indicator",
+            scroll,
+            Some(palette("bag/palette/scroll_indicator", 15, 0)),
+        ),
+        (
+            "bag/image/swap_line",
+            swap,
+            Some(image("bag/image/swap_line", (16, 32), 16)),
+        ),
+        (
+            "bag/palette/swap_line",
+            swap,
+            Some(palette("bag/palette/swap_line", 17, 0)),
+        ),
+    ];
+    for (n, (id, is_scroll, entry)) in cases.into_iter().enumerate() {
+        let entries = match entry {
+            Some(entry) => replaced(id, entry),
+            None => without(id),
+        };
+        let (pack, path) = load(&format!("bag-scroll-swap-bad-{n}"), entries);
+        // Unrelated fixed graphics still open; only the lookup refuses.
+        let bag = pack.bag_assets().unwrap();
+        let err = if is_scroll {
+            bag.scroll_indicator().unwrap_err()
+        } else {
+            bag.swap_line().unwrap_err()
+        };
+        assert!(
+            matches!(
+                &err,
+                PackError::UnknownAsset(bad) | PackError::MalformedBagAsset { id: bad, .. }
+                    if bad == id
+            ),
+            "case {n} `{id}`: {err:?}"
+        );
+        let _ = std::fs::remove_file(path);
+    }
 }
 
 #[test]
