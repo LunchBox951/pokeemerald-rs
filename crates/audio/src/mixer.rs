@@ -520,3 +520,7 @@ mod idle_duty_tests;
 #[cfg(test)]
 #[path = "mixer_wave_rotation.rs"]
 mod wave_rotation_tests;
+
+#[cfg(test)]
+#[path = "mixer_psg_balance.rs"]
+mod psg_balance_tests;
