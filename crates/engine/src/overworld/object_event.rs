@@ -311,12 +311,7 @@ impl ObjectEventState {
     /// Returns the direction opposite the current facing direction.
     #[must_use]
     pub const fn opposite_facing(&self) -> Direction {
-        match self.facing {
-            Direction::South => Direction::North,
-            Direction::North => Direction::South,
-            Direction::West => Direction::East,
-            Direction::East => Direction::West,
-        }
+        self.facing.opposite()
     }
 
     /// Changes facing without moving.

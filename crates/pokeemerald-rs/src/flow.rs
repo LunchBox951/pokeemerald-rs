@@ -22,7 +22,10 @@
 //! `BeginNormalPaletteFade`/`UpdatePaletteFade` gate
 //! (`pokeemerald/src/title_screen.c:779-787,824-828`;
 //! `main_menu.c:884-894,936-943`) -- see [`AppScene::TitleFadeWait`] and
-//! [`AppScene::MainMenuFadeWait`] for the waiting states themselves.
+//! [`AppScene::MainMenuFadeWait`] for the waiting states themselves. The
+//! title's fade hands off to [`AppScene::MainMenuFadeIn`], which runs
+//! `InitMainMenu(FALSE)`'s setup tasks before the menu takes input
+//! (`main_menu.c:583-608`).
 //!
 //! [`AnimatedTitle`] is the per-frame title-animation state, owned by one
 //! variant of [`AppScene`] (see [`advance_scene`]'s `Title` arm and
@@ -69,6 +72,8 @@ use options::{advance_options, OptionsState};
 /// battle drivers -- see that module's docs for the shared decision and
 /// write-back, and each driver's own docs for what stays driver-specific.
 mod battle_finalize;
+#[cfg(test)]
+mod boot_setup_frames_tests;
 /// I-3 (issue #1329) front-end palette fade-wait states and the four
 /// [`advance_scene`] arms that drive them -- this module's own docs.
 mod fade_wait;
@@ -222,9 +227,10 @@ pub(crate) enum AppScene {
     /// The Options screen, opened from the main menu's `OPTION` item (I-6):
     /// it retains the menu it returns to.
     Options(Box<OptionsState>),
-    /// The main menu fading in from black after the Options screen returns,
-    /// then waiting out upstream's save-check, battery-check and window-drawing
-    /// tasks with input ignored (`pokeemerald/src/main_menu.c:583-586,619-748`).
+    /// The main menu fading in -- from black after the Options screen
+    /// returns, from white after the title's fade-out -- then waiting out
+    /// upstream's save-check, battery-check and window-drawing tasks with
+    /// input ignored (`pokeemerald/src/main_menu.c:583-608,619-748`).
     MainMenuFadeIn(Box<MainMenuFadeIn>),
     /// Birch's speech, paging through [`crate::intro::speech`]'s text.
     Intro(Box<IntroScene>),
@@ -488,9 +494,9 @@ fn title_to_main_menu(
         window_frame_for(&saved),
     ) {
         Ok(menu) => {
-            let state = MainMenuState { scene: menu, saved };
-            let frame = state.scene.compose_frame();
-            Some((AppScene::MainMenu(Box::new(state)), frame))
+            let state = Box::new(MainMenuState { scene: menu, saved });
+            let (fade, frame) = MainMenuFadeIn::from_title(state);
+            Some((AppScene::MainMenuFadeIn(Box::new(fade)), frame))
         }
         Err(err) => {
             eprintln!("{}", main_menu_load_failure_message(&err));

@@ -259,7 +259,9 @@ impl OverworldPhase {
     /// `ProcessPlayerFieldInput`, and `PlayerStep` never runs once that
     /// returns `TRUE` (`field_control_avatar.c:143-145`, `:172`,
     /// `overworld.c:1444-1455`). A script [`crate::overworld::npc_scripts::script_text`]
-    /// recognizes opens an [`NpcDialog`]; any other selected target still
+    /// recognizes opens an [`NpcDialog`], after running its `faceplayer` on the
+    /// selected live object when it has one
+    /// ([`OverworldPhase::start_script_dialog`]); any other selected target still
     /// preempts the frame, and only a press that selects nothing falls through
     /// to movement ([`InteractionOutcome`]). Gated on the player being between steps --
     /// see [`OverworldPhase::interaction_tokens_this_frame`].
@@ -747,7 +749,8 @@ impl OverworldPhase {
                 self.take_field_lock();
             }
             match interaction {
-                Some(InteractionOutcome::Dialog(tokens)) => {
+                Some(InteractionOutcome::Dialog(script)) => {
+                    let tokens = self.start_script_dialog(script);
                     let text_speed = self.field_dialog_text_speed();
                     match NpcDialog::open_at_speed(&self.pack_source, tokens, text_speed) {
                         Ok(dialog) => self.dialog = Some(dialog),

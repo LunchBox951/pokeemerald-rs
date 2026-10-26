@@ -152,8 +152,11 @@ const FULL_VOLUME: u8 = 14;
 const SLOW_KEY_FIRST_CLOCK_SAMPLE: usize = 2979;
 
 /// Pre-routing contribution of a noise latch `level` centred on volume `centre`.
+/// One hardware volume unit is four DirectSound accumulator units (rationale at
+/// `PSG_LEVEL_FIFO_UNITS`), and the centred level counts each unit twice, so
+/// each centred step is two accumulator units.
 fn expected_contribution(level: u8, centre: u8) -> i32 {
-    ((2 * i32::from(level) - i32::from(centre)) * 16 * 127) >> 8
+    (2 * i32::from(level) - i32::from(centre)) * 2
 }
 
 fn expected_mixed(level: u8, centre: u8) -> f32 {
@@ -588,3 +591,6 @@ fn an_immediately_retiring_noise_note_leaves_the_width_only_rate() {
 
 #[path = "cgb_voice_noise_replacement.rs"]
 mod replacement_tests;
+
+#[path = "cgb_voice_noise_retirement.rs"]
+mod retirement_tests;

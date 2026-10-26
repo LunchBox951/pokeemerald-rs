@@ -71,7 +71,9 @@
 //!   `battle-interface/raw/healthbox_element/<stem>`
 //! - `pokemon/<species>/{front,back}` and `pokemon/<species>/palette/{normal,shiny}`
 //! - `pokedex-graphics/{image,image-palette,palette,raw}/<name>`
-//! - `audio/sample/{direct-sound,programmable-wave}/<name>`
+//! - `audio/sample/{direct-sound,programmable-wave}/<name>` and
+//!   `audio/sample/direct-sound/cry/<stem>`
+//! - `audio/cry/table`
 //! - `audio/voicegroup/<label>` and `audio/song/<name>`
 //! - `battle-message/table`
 //! - `naming-screen/{image,palette,raw}/<stem>`
@@ -89,6 +91,7 @@ mod battler;
 mod bundled_inventory_tests;
 #[cfg(test)]
 mod checkpoint_maps_tests;
+pub(crate) mod cry;
 mod error;
 mod fonts;
 pub mod inflate;
@@ -188,6 +191,7 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     battle_interface::extract_battle_interface(&upstream, &mut writer)?;
     battle_interface::extract_healthbox_elements(&upstream, &mut writer)?;
     audio_samples::extract_audio_samples(&upstream, &mut writer)?;
+    cry::extract_cries(&upstream, &mut writer)?;
     voicegroups::extract_voicegroups(&upstream, &mut writer)?;
     midi::extract_song(&upstream, &mut writer)?;
     battle_message::extract_battle_message(&upstream, &mut writer)?;

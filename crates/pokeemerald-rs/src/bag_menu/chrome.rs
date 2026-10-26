@@ -201,8 +201,9 @@ impl BagChrome {
             }
         }
         let screen_palette = textbox::palette_colors(palette);
-        // The marks index the list window's palette, which the pack does not
-        // carry; the screen palette's second bank is the nearest it supplies.
+        // The marks are blitted into the list window, whose palette is bank 1
+        // of the bag screen palette (item_menu.c:394-402, 820-822, 968, 990),
+        // so the second bank is exact, not an approximation.
         let flat = |image: assets::pack::ImageRef<'_>| Bitmap {
             width: image.width as usize,
             height: image.height as usize,
