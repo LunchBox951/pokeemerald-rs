@@ -1649,9 +1649,6 @@ fn plus_without_a_complementary_opponent_gets_no_special_attack_boost() {
     }
 }
 
-/// Upstream `Cmd_typecalc` sets `MOVE_RESULT_MISSED | DOESNT_AFFECT_FOE` for
-/// Levitate (`battle_script_commands.c:1375-1378`), so `seteffectwithchance`
-/// spends its draw but skips `SetMoveEffect` (`:2923-2930`).
 #[test]
 fn levitate_blocked_mud_shot_applies_no_speed_drop() {
     let dex = Dex::new();
