@@ -3,6 +3,7 @@ mod shared;
 mod audio;
 mod bag;
 mod battle_anim;
+mod battle_effect;
 mod battle_interface;
 mod battle_interface_elements;
 mod battle_message;

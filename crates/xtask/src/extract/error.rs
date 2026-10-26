@@ -229,6 +229,15 @@ pub enum ExtractError {
         /// What differs from the expected shape.
         detail: String,
     },
+    /// A cry table or cry sample source does not parse as the pinned upstream shape.
+    CrySource {
+        /// Source path.
+        path: PathBuf,
+        /// One-based line, or zero when the fault is not tied to one line.
+        line: usize,
+        /// What differs from the expected shape.
+        detail: String,
+    },
     /// A battle-animation source does not parse as the pinned upstream shape.
     BattleAnimationSource {
         /// Source path.
@@ -426,6 +435,9 @@ impl fmt::Display for ExtractError {
             }
             Self::BattleMessageSource { path, line, detail } => {
                 write!(f, "battle-message source `{}` line {line}: {detail}", path.display())
+            }
+            Self::CrySource { path, line, detail } => {
+                write!(f, "cry source `{}` line {line}: {detail}", path.display())
             }
             Self::BattleAnimationSource { path, line, detail } => {
                 write!(f, "battle-animation source `{}` line {line}: {detail}", path.display())

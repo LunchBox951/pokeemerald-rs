@@ -543,9 +543,11 @@ pub fn resolve_hit(
         // upstream's `MOVE_RESULT_NO_EFFECT` bitmask
         // (`include/constants/battle.h:220-228`), so it suppresses a
         // secondary effect exactly like an ordinary `NoEffect` immunity.
+        // Levitate's block sets the same flags (`battle_script_commands.c:1375-1378`);
+        // the effect-chance draw is still spent (`:2923-2930`).
         let hit_had_effect = !matches!(
             outcome,
-            HitOutcome::NoEffect | HitOutcome::WonderGuardBlocked
+            HitOutcome::NoEffect | HitOutcome::WonderGuardBlocked | HitOutcome::LevitateBlocked
         );
         spend_effect_chance_draw(dex, move_id, hit_had_effect, defender, rng)?
     };
