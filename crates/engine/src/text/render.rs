@@ -1592,11 +1592,10 @@ mod tests {
     /// Per-font pixel fills, each distinct, so a glyph names its source.
     fn fill_for(font: FontId) -> u8 {
         match font {
-            FontId::Small => 1,
+            FontId::Small | FontId::SmallNarrow => 1,
             FontId::Normal => 2,
             FontId::Short => 3,
             FontId::Narrow => 0,
-            FontId::SmallNarrow => 1,
         }
     }
 
