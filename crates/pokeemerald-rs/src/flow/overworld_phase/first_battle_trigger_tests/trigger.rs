@@ -4,7 +4,9 @@
 use super::super::test_support::*;
 use super::super::{ActiveBattle, OverworldPhase};
 use super::support::*;
+use crate::flow::lead_screen::loaded_holding;
 use crate::new_game;
+use assets::items::ItemId;
 use assets::MapId;
 use battle::{BattleOutcome, BattlePokemon, Dex, Ivs, MAX_IV};
 use engine::overworld::{Direction, PlayerState, WALK_FRAMES_PER_TILE};
@@ -42,7 +44,8 @@ fn continuing_on_route_101_only_advances_the_fresh_rescue_state() {
             .var_set(VAR_ROUTE101_STATE, saved_state)
             .unwrap();
         let resumed = OverworldPhase::from_saved(
-            crate::overworld::test_support::synthetic_scene(25, 25),
+            crate::overworld::test_support::synthetic_scene(25, 25)
+                .in_room_for_test(MapId("MAP_ROUTE101")),
             MapId("MAP_ROUTE101"),
             block1,
             block2,
@@ -89,7 +92,7 @@ fn stepping_onto_the_route_101_trigger_tile_starts_the_scripted_first_battle() {
     );
     assert_eq!(battle.enemy().level(), 2);
     assert!(
-        phase.party_lead.is_none(),
+        phase.lead_for_test().is_none(),
         "the lead mon moved into the battle"
     );
 }
@@ -416,7 +419,7 @@ fn an_aborted_first_battle_still_consumes_the_route_101_trigger() {
         "setup: the aborted battle must have emptied the slot"
     );
     assert!(
-        phase.party_lead.is_some(),
+        phase.lead_for_test().is_some(),
         "setup: the abort writes the lead back all the same"
     );
     assert_eq!(
@@ -505,5 +508,54 @@ fn an_inadmissible_lead_leaves_the_rescue_armed_without_drawing() {
         Ok(1),
         "the rescue stays armed for a lead the engine can fight with"
     );
-    assert!(phase.party_lead.is_some(), "the lead stays home");
+    assert!(phase.lead_for_test().is_some(), "the lead stays home");
+    phase.assert_lead_at_slot_for_test(0);
+}
+
+/// A loaded lead holding Oran Berry leaves the rescue armed, draws nothing and stays home
+/// -- the item's refusal is as free as an inadmissible lead's.
+#[test]
+fn a_loaded_lead_holding_a_battle_item_leaves_the_rescue_armed_without_drawing() {
+    let (tx, ty) = ROUTE_101_TRIGGER_TILE;
+    let mut phase = route_101_trigger_phase(PlayerState::new(
+        (tx - 1, ty),
+        ROUTE_101_TRIGGER_ELEVATION,
+        Direction::East,
+    ));
+    phase.rng = Rng::new(4242);
+    let lead = loaded_holding(&new_game::provisional_starter(), ItemId::ORAN_BERRY);
+    phase.party_lead = Some(lead.clone());
+
+    walk_one_tile_east(&mut phase);
+
+    assert_eq!(phase.player.position(), (tx, ty));
+    assert!(!phase.is_first_battle_active(), "no battle may start");
+    assert_eq!(phase.rng.state(), Rng::new(4242).state());
+    assert_eq!(phase.save1.event_data.var_get(VAR_ROUTE101_STATE), Ok(1));
+    assert_eq!(
+        phase.lead_for_test(),
+        Some(&lead),
+        "the lead keeps its item at home"
+    );
+    phase.assert_lead_at_slot_for_test(0);
+}
+
+/// A successful first-battle start leaves the lead lent, so a second lend is refused.
+#[test]
+#[should_panic(expected = "lent out to a battle")]
+fn a_started_first_battle_holds_the_lead_on_loan() {
+    let (tx, ty) = ROUTE_101_TRIGGER_TILE;
+    let mut phase = route_101_trigger_phase(PlayerState::new(
+        (tx - 1, ty),
+        ROUTE_101_TRIGGER_ELEVATION,
+        Direction::East,
+    ));
+    phase.rng = Rng::new(4242);
+    phase.set_fresh_lead_for_test(new_game::provisional_starter());
+    walk_one_tile_east(&mut phase);
+    assert!(
+        matches!(phase.active_battle, Some(ActiveBattle::First(_))),
+        "setup: the battle started"
+    );
+    let _ = phase.take_lead_battler();
 }

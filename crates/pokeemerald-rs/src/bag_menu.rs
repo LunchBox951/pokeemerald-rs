@@ -15,8 +15,10 @@
 //! the per-pocket cursor and scroll for the host to pass into the next
 //! [`BagScreenRequest`], which is how a reopen keeps its place.
 //!
-//! The pocket-switch rotating ball, the bag's bobbing animation, scroll
-//! arrows, and the SELECT swap are not drawn.
+//! A pocket switch plays upstream's transition (`Task_SwitchBagPocket`,
+//! `item_menu.c:1352-1404`) over the ticks that follow it: the list is wiped
+//! away, the bag bobs and the ball turns, and the engine changes pocket only
+//! when the list returns. The scroll arrows and the SELECT swap are not drawn.
 
 #![cfg_attr(
     not(test),
@@ -157,6 +159,45 @@ pub(crate) enum BagScreenTick {
     Closed(BagScreenResult),
 }
 
+/// Which way a pocket switch goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SwitchDirection {
+    Left,
+    Right,
+}
+
+impl SwitchDirection {
+    fn input(self) -> BagMenuInput {
+        match self {
+            Self::Left => BagMenuInput::Left,
+            Self::Right => BagMenuInput::Right,
+        }
+    }
+}
+
+/// Ticks of the list wipe before the destination list returns
+/// (`Task_SwitchBagPocket` state 0 runs 16 times, then state 1).
+const SWITCH_WIPE_TICKS: u8 = 16;
+const SWITCH_TICKS: u8 = SWITCH_WIPE_TICKS + 1;
+
+/// A pocket switch under way. The engine stays on the pocket being left until
+/// the switch ends, as `gBagPosition.pocket` does upstream.
+#[derive(Debug, Clone, Copy)]
+struct PocketSwitch {
+    direction: SwitchDirection,
+    /// Ticks since the press that started it.
+    ticks: u8,
+}
+
+impl PocketSwitch {
+    fn start(direction: SwitchDirection) -> Self {
+        Self {
+            direction,
+            ticks: 0,
+        }
+    }
+}
+
 /// An open bag screen.
 #[derive(Debug)]
 pub(crate) struct BagScreen {
@@ -165,6 +206,9 @@ pub(crate) struct BagScreen {
     mode: BagScreenMode,
     registered_item: Option<ItemId>,
     lr_buttons: bool,
+    /// Whether a link is active, which stops a press interrupting a switch.
+    link_active: bool,
+    switch: Option<PocketSwitch>,
     done: Option<BagScreenResult>,
 }
 
@@ -177,9 +221,23 @@ impl BagScreen {
     /// menu's own A, B, then D-pad order, `list_menu.c:398-415`). L and R
     /// switch pockets only in the L/R button mode. Held directions do not
     /// auto-repeat.
+    ///
+    /// A pocket switch runs for the next 17 ticks. Only a fresh switch
+    /// press is heard meanwhile and restarts it, unless the request has a
+    /// link; every other input is dropped, not queued (`item_menu.c:1356-1370`).
     pub(crate) fn tick(&mut self, buttons: ButtonState) -> BagScreenTick {
         if let Some(result) = self.done {
             return BagScreenTick::Closed(result);
+        }
+        if let Some(switch) = self.switch {
+            self.advance_switch(switch, buttons);
+            return BagScreenTick::Open;
+        }
+        if self.can_switch_pocket() {
+            if let Some(direction) = switch_direction(buttons, self.lr_buttons) {
+                self.switch = Some(PocketSwitch::start(direction));
+                return BagScreenTick::Open;
+            }
         }
         let Some(input) = input_of(
             buttons,
@@ -201,6 +259,29 @@ impl BagScreen {
         }
     }
 
+    fn can_switch_pocket(&self) -> bool {
+        !self.menu.pocket_switch_disabled() && self.menu.context_grid().is_none()
+    }
+
+    /// One tick of a switch: a fresh press commits the pocket being switched
+    /// to and starts the next switch from it; otherwise time passes, and the
+    /// engine changes pocket once the list is back.
+    fn advance_switch(&mut self, switch: PocketSwitch, buttons: ButtonState) {
+        let restart = switch_direction(buttons, self.lr_buttons).filter(|_| !self.link_active);
+        if let Some(direction) = restart {
+            self.menu.handle_input(switch.direction.input());
+            self.switch = Some(PocketSwitch::start(direction));
+            return;
+        }
+        let ticks = switch.ticks + 1;
+        if ticks < SWITCH_TICKS {
+            self.switch = Some(PocketSwitch { ticks, ..switch });
+        } else {
+            self.menu.handle_input(switch.direction.input());
+            self.switch = None;
+        }
+    }
+
     fn result_of(&self, outcome: BagMenuOutcome) -> BagScreenResult {
         match outcome {
             BagMenuOutcome::Selected(selection) if selection.pocket == Pocket::PokeBalls => {
@@ -218,6 +299,19 @@ impl BagScreen {
     #[must_use]
     pub(crate) fn positions(&self) -> BagPositions {
         self.menu.positions()
+    }
+}
+
+/// The fresh pocket press, if any: Left or Right, plus L and R in the L/R
+/// button mode (`GetSwitchBagPocketDirection`, `item_menu.c:1284-1300`).
+fn switch_direction(buttons: ButtonState, lr_buttons: bool) -> Option<SwitchDirection> {
+    let pressed = |button| buttons.is_newly_pressed(button);
+    if pressed(Buttons::LEFT) || (lr_buttons && pressed(Buttons::L)) {
+        Some(SwitchDirection::Left)
+    } else if pressed(Buttons::RIGHT) || (lr_buttons && pressed(Buttons::R)) {
+        Some(SwitchDirection::Right)
+    } else {
+        None
     }
 }
 
@@ -327,6 +421,8 @@ fn open_from_pack(
         mode: request.mode,
         registered_item: request.registered_item,
         lr_buttons: request.lr_buttons,
+        link_active: request.link.is_some(),
+        switch: None,
         done: None,
     })
 }
@@ -343,6 +439,8 @@ fn all_stacks(menu: &BagMenu) -> Vec<BagStack> {
     stacks
 }
 
+#[cfg(test)]
+mod glyph_tests;
 #[cfg(test)]
 mod pack_fixture;
 #[cfg(test)]

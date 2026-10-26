@@ -170,6 +170,18 @@ mod tests {
     }
 
     #[test]
+    fn a_hostile_profile_name_renders_on_one_line() {
+        let mut wrong = *shared_fixture_profile();
+        wrong.version = 9;
+        wrong.name = "name\nnext\u{1b}[2K";
+        let text = select_with(shared_emerald_rom(), &[wrong])
+            .unwrap_err()
+            .to_string();
+        assert!(text.contains(r"`name\nnext\u{1b}[2K`"), "{text}");
+        assert!(!text.contains(['\n', '\u{1b}']), "{text:?}");
+    }
+
+    #[test]
     fn an_empty_profile_table_selects_nothing() {
         let profiles: &[RevisionProfile] = &[];
         assert!(matches!(
