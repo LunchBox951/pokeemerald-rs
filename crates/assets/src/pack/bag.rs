@@ -441,9 +441,9 @@ pub struct BagAssets<'a> {
     pub female: PalettedImage<'a>,
     /// Rotating Poké Ball with its own palette.
     pub rotating_ball: PalettedImage<'a>,
-    /// Registered-select mark; uses the item-list window's palette.
+    /// Registered-select mark; indexes the item-list window's palette, bank 1 of the screen palette.
     pub registered_select: ImageRef<'a>,
-    /// HM mark; uses the item-list window's palette.
+    /// HM mark; indexes the item-list window's palette, bank 1 of the screen palette.
     pub hm: ImageRef<'a>,
     pack: &'a AssetPack,
 }
