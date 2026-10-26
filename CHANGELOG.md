@@ -6,6 +6,8 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 ## [0.0.74.0] - 2026-10-26
 
+- Mom now turns to face you when you start her dialogue.
+- Corrected the loudness of the Game Boy sound channels against sampled instruments.
 - General improvements to how your lead Pokémon is tracked between the field and battle.
 
 ## [0.0.73.0] - 2026-10-26

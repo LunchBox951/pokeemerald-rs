@@ -814,7 +814,7 @@ pub(crate) struct LoadedLead {
     /// `None` only while [`Self::take_battler`] has lent it to a battle.
     battler: Option<BattlePokemon>,
     record: Pokemon,
-    lead_hp_hidden_by_load: i32,
+    hidden_hp_offset: i32,
 }
 
 impl LoadedLead {
@@ -830,24 +830,24 @@ impl LoadedLead {
     pub(crate) fn load(dex: &Dex, party: &[Pokemon]) -> Result<Self, PartyError> {
         let (slot, battler) = select_active_battler(dex, party)?;
         let record = party[slot];
-        let lead_hp_hidden_by_load = hp_hidden_by_load(dex, &record, &battler);
+        let hidden_hp_offset = hp_hidden_by_load(dex, &record, &battler);
         Ok(Self {
             slot,
             battler: Some(battler),
             record,
-            lead_hp_hidden_by_load,
+            hidden_hp_offset,
         })
     }
 
     /// Adopts a member just created into slot 0: its battler and the record
     /// encoded from it, with the hidden-HP offset measured against that record.
     pub(crate) fn created(dex: &Dex, battler: BattlePokemon, record: Pokemon) -> Self {
-        let lead_hp_hidden_by_load = hp_hidden_by_load(dex, &record, &battler);
+        let hidden_hp_offset = hp_hidden_by_load(dex, &record, &battler);
         Self {
             slot: 0,
             battler: Some(battler),
             record,
-            lead_hp_hidden_by_load,
+            hidden_hp_offset,
         }
     }
 
@@ -860,12 +860,12 @@ impl LoadedLead {
         battler: BattlePokemon,
         record: Pokemon,
     ) -> Self {
-        let lead_hp_hidden_by_load = hp_hidden_by_load(dex, &record, &battler);
+        let hidden_hp_offset = hp_hidden_by_load(dex, &record, &battler);
         Self {
             slot,
             battler: Some(battler),
             record,
-            lead_hp_hidden_by_load,
+            hidden_hp_offset,
         }
     }
 
@@ -885,7 +885,7 @@ impl LoadedLead {
         expect(dead_code, reason = "the overworld never reads the offset")
     )]
     pub(crate) fn hidden_hp_offset(&self) -> i32 {
-        self.lead_hp_hidden_by_load
+        self.hidden_hp_offset
     }
 
     /// Whether [`Self::take_battler`] has lent the battler out and it has not
@@ -947,7 +947,7 @@ impl LoadedLead {
     pub(crate) fn merge_and_save(&mut self, dex: &Dex) -> Pokemon {
         let battler = self.battler.as_ref().expect(LENT_OUT);
         self.record =
-            merge_into_save_pokemon(dex, battler, &self.record, &mut self.lead_hp_hidden_by_load);
+            merge_into_save_pokemon(dex, battler, &self.record, &mut self.hidden_hp_offset);
         self.record
     }
 
@@ -977,7 +977,7 @@ impl LoadedLead {
         let stored_count = usize::from(player_party_count);
         if stored_count != 0 && self.slot >= stored_count {
             let battler = self.battler.as_ref().expect(LENT_OUT);
-            self.lead_hp_hidden_by_load = hp_hidden_by_load(dex, &self.record, battler);
+            self.hidden_hp_offset = hp_hidden_by_load(dex, &self.record, battler);
             self.merge_and_save(dex);
             return Ok(());
         }
@@ -985,7 +985,7 @@ impl LoadedLead {
         self.record.hp = self.record.max_hp;
         let battler = self.battler.as_mut().expect(LENT_OUT);
         battler.heal(dex)?;
-        self.lead_hp_hidden_by_load = hp_hidden_by_load(dex, &self.record, battler);
+        self.hidden_hp_offset = hp_hidden_by_load(dex, &self.record, battler);
         self.merge_and_save(dex);
         Ok(())
     }
