@@ -1648,3 +1648,26 @@ fn plus_without_a_complementary_opponent_gets_no_special_attack_boost() {
         );
     }
 }
+
+#[test]
+fn levitate_blocked_mud_shot_applies_no_speed_drop() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, BULBASAUR, 20, vec![MoveId::MUD_SHOT]);
+    let levitate_defender = mon(&dex, GASTLY, 20, vec![TACKLE]);
+    assert_eq!(levitate_defender.ability(), AbilityId::LEVITATE);
+    let mut rng = SequenceRng::new(ORDINARY_NON_CRITICAL_DRAWS);
+
+    let resolution = resolve_hit(
+        &dex,
+        MoveId::MUD_SHOT,
+        &attacker,
+        &levitate_defender,
+        false,
+        &mut rng,
+    )
+    .unwrap();
+
+    assert_eq!(resolution.outcome, HitOutcome::LevitateBlocked);
+    assert_eq!(rng.draws(), ORDINARY_NON_CRITICAL_DRAWS.len());
+    assert_eq!(resolution.secondary_effect, SecondaryApplication::None);
+}
