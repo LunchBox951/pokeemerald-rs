@@ -1622,19 +1622,30 @@ mod tests {
         assert_eq!(g.glyph.advance_width, NORMAL_A_ADVANCE_WIDTH);
     }
 
-    /// Per-font pixel fills, each distinct, so a glyph names its source.
-    fn fill_for(font: FontId) -> u8 {
+    /// Per-font pixel pairs, each distinct within the 2-bit depth, so a
+    /// glyph's first two pixels name its source.
+    fn fill_for(font: FontId) -> (u8, u8) {
         match font {
-            FontId::Small | FontId::SmallNarrow => 1,
-            FontId::Normal => 2,
-            FontId::Short => 3,
-            FontId::Narrow => 0,
+            FontId::Small => (1, 0),
+            FontId::Normal => (2, 0),
+            FontId::Short => (3, 0),
+            FontId::Narrow => (0, 1),
+            FontId::SmallNarrow => (1, 1),
         }
+    }
+
+    /// A sheet alternating `fill_for(font)` across each row, so every glyph
+    /// starts with that pair.
+    fn multi_font_pixels(font: FontId) -> Vec<u8> {
+        let (even, odd) = fill_for(font);
+        (0..SHEET_WIDTH * SHEET_HEIGHT)
+            .map(|index| if index % 2 == 0 { even } else { odd })
+            .collect()
     }
 
     fn multi_font_printer(initial: FontId) -> Printer<assets::fonts::OwnedFontGlyphSheet> {
         let sources = GlyphSources::try_from_fn(|font| {
-            let pixels = vec![fill_for(font); (SHEET_WIDTH * SHEET_HEIGHT) as usize];
+            let pixels = multi_font_pixels(font);
             Ok::<_, assets::error::AssetError>(synthetic_sheet(&pixels, font).to_owned_sheet())
         })
         .unwrap();
@@ -1657,7 +1668,11 @@ mod tests {
                 .unwrap_or_else(|| panic!("{font:?} source must be carried"));
             assert_eq!(source.font(), font);
             let glyph = source.glyph(1).unwrap();
-            assert_eq!(glyph.pixels[0], fill_for(font), "{font:?} pixels");
+            assert_eq!(
+                (glyph.pixels[0], glyph.pixels[1]),
+                fill_for(font),
+                "{font:?} pixels"
+            );
             assert_eq!(glyph.advance_width, font.glyph_width(1).unwrap());
         }
         // Normal and an alternate font are different data, not one aliased sheet.
@@ -1674,7 +1689,11 @@ mod tests {
             let TickEvent::Glyph(g) = printer.tick(PrinterInput::none()) else {
                 panic!("expected a glyph")
             };
-            assert_eq!(g.glyph.pixels[0], fill_for(initial), "{initial:?}");
+            assert_eq!(
+                (g.glyph.pixels[0], g.glyph.pixels[1]),
+                fill_for(initial),
+                "{initial:?}"
+            );
             assert_eq!(
                 g.glyph.advance_width,
                 initial.glyph_width(u16::from(ENCODED_A)).unwrap()

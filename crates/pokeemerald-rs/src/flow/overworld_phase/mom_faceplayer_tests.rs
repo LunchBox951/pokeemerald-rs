@@ -56,17 +56,10 @@ fn selected_local_id(phase: &OverworldPhase) -> Option<u8> {
 
 /// A pack with just the assets Mom's dialog box loads, so the real `step` can open it.
 fn dialog_pack(label: &str) -> &'static std::path::Path {
-    use crate::pack_test_support::{image_entry, pack_bytes, palette_entry};
-    let bytes = pack_bytes(vec![
+    use crate::pack_test_support::{image_entry, pack_bytes_with_fonts, palette_entry};
+    let bytes = pack_bytes_with_fonts(vec![
         image_entry("text-window/image/message_box", 56, 16, 4, 0),
         palette_entry("text-window/palette/message_box", 16),
-        image_entry(
-            "font/normal/glyphs",
-            assets::fonts::SHEET_WIDTH,
-            assets::fonts::SHEET_HEIGHT,
-            2,
-            0,
-        ),
     ]);
     let path = std::env::temp_dir().join(format!(
         "pokeemerald-rs-mom-faceplayer-{label}-{}-{:?}.pack",
