@@ -66,10 +66,14 @@ fn marker_row(fb: &Framebuffer, color: Rgb888, x: usize, down: bool) -> Option<i
         .map(|y| i32::try_from(y).unwrap())
 }
 
-fn arrows(screen: &BagScreen) -> (bool, bool) {
-    let fb = frame_of(screen);
-    let shown = |down| marker_row(&fb, ARROW_FAR, FAR_X, down).is_some();
+/// Which of the up and down arrows `fb` shows.
+pub(super) fn arrows_of(fb: &Framebuffer) -> (bool, bool) {
+    let shown = |down| marker_row(fb, ARROW_FAR, FAR_X, down).is_some();
     (shown(false), shown(true))
+}
+
+fn arrows(screen: &BagScreen) -> (bool, bool) {
+    arrows_of(&frame_of(screen))
 }
 
 /// How far an arrow is drawn from its resting place, or `None` when hidden.

@@ -107,6 +107,11 @@ pub(super) const fn pocket_name(browse_index: usize) -> &'static str {
     }
 }
 
+/// `gText_MoveVar1Where` (`strings.c:225`) with the picked-up item's name.
+pub(super) fn move_prompt(item_name: &str) -> String {
+    format!("Move the\n{item_name}\nwhere?")
+}
+
 /// `sItemMenuActions` text (`item_menu.c:266-282`).
 pub(super) const fn action_label(action: BagAction) -> &'static str {
     match action {
