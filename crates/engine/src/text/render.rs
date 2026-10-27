@@ -29,6 +29,7 @@ mod ext_ctrl {
     pub const SHIFT_RIGHT: u8 = super::super::EXT_CTRL_CODE_SHIFT_RIGHT;
     pub const SHIFT_DOWN: u8 = super::super::EXT_CTRL_CODE_SHIFT_DOWN;
     pub const SKIP: u8 = super::super::EXT_CTRL_CODE_SKIP;
+    pub const FONT: u8 = super::super::EXT_CTRL_CODE_FONT;
     pub const CLEAR: u8 = super::super::EXT_CTRL_CODE_CLEAR;
     pub const CLEAR_TO: u8 = super::super::EXT_CTRL_CODE_CLEAR_TO;
     pub const FILL_WINDOW: u8 = super::super::EXT_CTRL_CODE_FILL_WINDOW;
@@ -37,6 +38,9 @@ mod ext_ctrl {
 }
 
 mod keypad_icon;
+
+#[cfg(test)]
+mod font_control_tests;
 
 pub use keypad_icon::{keypad_icon_size, KeypadIconPlacement};
 
@@ -68,6 +72,23 @@ const fn clear_span_height(font: FontId) -> i32 {
         FontId::Normal | FontId::Narrow => 15,
         FontId::Short => 14,
         FontId::SmallNarrow => 12,
+    }
+}
+
+/// Maps an upstream `FONT_*` id (`pokeemerald/include/text.h:10-21`) to the
+/// source whose glyphs upstream draws with it (`text.c:1123-1141`).
+///
+/// The three `FONT_SHORT_COPY_*` ids dispatch to `DecompressGlyph_Short`, so
+/// they select [`FontId::Short`]. `FONT_BRAILLE` (6), `FONT_BOLD` (9) and any
+/// other id have no modelled source, so they map to `None`.
+const fn font_for_upstream_id(raw: u8) -> Option<FontId> {
+    match raw {
+        0 => Some(FontId::Small),
+        1 => Some(FontId::Normal),
+        2..=5 => Some(FontId::Short),
+        7 => Some(FontId::Narrow),
+        8 => Some(FontId::SmallNarrow),
+        _ => None,
     }
 }
 
@@ -298,8 +319,9 @@ fn glyph_id_for_token(tok: &Token) -> Option<u16> {
 /// The printer owns its glyph source and emits blit and layout events rather
 /// than writing a pixel buffer. [`Printer::new`] carries that one source;
 /// [`Printer::with_sources`] also carries the other modelled Latin sources,
-/// retrievable through [`Printer::source`], so a later `FONT` control can
-/// select one. Text always renders from the initial source until then.
+/// retrievable through [`Printer::source`]. A `FONT` control selects the source
+/// the next glyph renders from ([`Printer::active_font`]); text renders from
+/// the initial source until one does.
 #[derive(Debug)]
 pub struct Printer<S> {
     tokens: Vec<Token>,
@@ -308,6 +330,9 @@ pub struct Printer<S> {
     /// The modelled sources other than `glyphs`, in [`FontId::ALL`] order.
     /// Empty for a printer built by [`Printer::new`].
     alternate_glyphs: Vec<S>,
+    /// The font the next glyph renders from: `glyphs`' font until a `FONT`
+    /// control changes it, and `None` after one names an unmodelled font.
+    active_font: Option<FontId>,
     speed: TextSpeed,
     reveal_delay_frames_remaining: u8,
     origin: PixelPos,
@@ -328,6 +353,7 @@ impl<S: GlyphSource> Printer<S> {
     /// A/B speed-up is disabled until [`Self::with_ab_speed_up_print`] is used.
     #[must_use]
     pub fn new(tokens: Vec<Token>, glyphs: S, speed: TextSpeed, origin: PixelPos) -> Self {
+        let glyphs_font = glyphs.font();
         Self {
             tokens,
             next_token_index: 0,
@@ -338,6 +364,7 @@ impl<S: GlyphSource> Printer<S> {
             keypad_icon: None,
             glyphs,
             alternate_glyphs: Vec::new(),
+            active_font: Some(glyphs_font),
             speed,
             reveal_delay_frames_remaining: 0,
             origin,
@@ -351,8 +378,8 @@ impl<S: GlyphSource> Printer<S> {
     /// Creates a printer at the window-local `origin` that renders from
     /// `initial`'s source and also carries every other modelled source.
     ///
-    /// Behaves exactly as [`Self::new`] over `initial`'s source: nothing
-    /// selects an alternate source yet.
+    /// Renders exactly as [`Self::new`] over `initial`'s source until a
+    /// `FONT` control selects another carried source.
     #[must_use]
     pub fn with_sources(
         tokens: Vec<Token>,
@@ -368,10 +395,27 @@ impl<S: GlyphSource> Printer<S> {
         }
     }
 
-    /// The font the printer currently renders from.
+    /// The font the printer was built with. It fixes the template line and
+    /// scroll metrics and is what [`Self::restart`] returns to; a `FONT`
+    /// control does not change it (upstream leaves `printerTemplate.fontId`
+    /// intact, `pokeemerald/src/text.c:969-970`, `:1181-1185`). See
+    /// [`Self::active_font`] for the font glyphs render from.
     #[must_use]
     pub fn selected_font(&self) -> FontId {
         self.glyphs.font()
+    }
+
+    /// The font the next glyph renders from, as set by the stream's latest
+    /// `FONT` control (`subStruct->fontId`, `text.c:1007-1010`).
+    ///
+    /// `None` after a `FONT` control named a font with no modelled source
+    /// (Braille, Bold, or an unknown id): glyphs are then skipped until a
+    /// later control selects a modelled font. `Some(font)` names the
+    /// selection only; a [`Self::new`] printer renders nothing for a font
+    /// other than its own, as [`Self::source`] reports.
+    #[must_use]
+    pub const fn active_font(&self) -> Option<FontId> {
+        self.active_font
     }
 
     /// The source this printer carries for `font`, or `None` if it was built
@@ -465,6 +509,8 @@ impl<S: GlyphSource> Printer<S> {
         self.keypad_icon = None;
         self.state = PrinterState::HandleChar;
         self.ab_speed_up_latched = false;
+        self.active_font = Some(self.glyphs.font());
+        self.clear_height = clear_span_height(self.glyphs.font());
     }
 
     /// Advance the printer by exactly one frame.
@@ -608,9 +654,20 @@ impl<S: GlyphSource> Printer<S> {
             let Some(glyph_id) = glyph_id else {
                 continue;
             };
-            let Some(glyph) = self.glyphs.glyph(glyph_id) else {
+            // Upstream dispatches on the stream's current font id
+            // (`text.c:1123-1141`); a font with no carried source draws
+            // nothing rather than falling back to another font's glyph.
+            let Some(font) = self.active_font else {
                 continue;
             };
+            let Some(glyph) = self.source(font).and_then(|source| source.glyph(glyph_id)) else {
+                continue;
+            };
+            // `ClearTextSpan` erases `gCurGlyph.height` rows
+            // (`text.c:649-674`), which the latest `DecompressGlyph_*` set, so
+            // the clear height follows the font of the latest glyph rather
+            // than the latest `FONT` control.
+            self.clear_height = clear_span_height(font);
 
             let placement = RevealedGlyph {
                 x: self.cursor.0,
@@ -653,6 +710,15 @@ impl<S: GlyphSource> Printer<S> {
             ext_ctrl::SHIFT_DOWN => {
                 if let Some(&offset) = arguments.first() {
                     self.cursor.1 = self.origin.1.saturating_add(i32::from(offset));
+                }
+            }
+            // `text.c:1007-1010`: changes only the font later glyphs draw
+            // from, then repeats. The line and scroll metrics keep the
+            // template font, and the clear height waits for the next glyph
+            // (see `tick_handle_char`).
+            ext_ctrl::FONT => {
+                if let Some(&raw) = arguments.first() {
+                    self.active_font = font_for_upstream_id(raw);
                 }
             }
             // `text.c:1063-1072`: the argument is the width to erase from the
@@ -739,7 +805,7 @@ mod tests {
         super::super::decode(bytes).unwrap()
     }
 
-    const fn press_a() -> PrinterInput {
+    pub(super) const fn press_a() -> PrinterInput {
         PrinterInput {
             a_pressed: true,
             b_pressed: false,
@@ -1624,7 +1690,7 @@ mod tests {
 
     /// Per-font pixel pairs, each distinct within the 2-bit depth, so a
     /// glyph's first two pixels name its source.
-    fn fill_for(font: FontId) -> (u8, u8) {
+    pub(super) fn fill_for(font: FontId) -> (u8, u8) {
         match font {
             FontId::Small => (1, 0),
             FontId::Normal => (2, 0),
@@ -1636,7 +1702,7 @@ mod tests {
 
     /// A sheet alternating `fill_for(font)` across each row, so every glyph
     /// starts with that pair.
-    fn multi_font_pixels(font: FontId) -> Vec<u8> {
+    pub(super) fn multi_font_pixels(font: FontId) -> Vec<u8> {
         let (even, odd) = fill_for(font);
         (0..SHEET_WIDTH * SHEET_HEIGHT)
             .map(|index| if index % 2 == 0 { even } else { odd })
@@ -1644,13 +1710,20 @@ mod tests {
     }
 
     fn multi_font_printer(initial: FontId) -> Printer<assets::fonts::OwnedFontGlyphSheet> {
+        multi_font_printer_over(initial, &[ENCODED_A, super::super::EOS])
+    }
+
+    pub(super) fn multi_font_printer_over(
+        initial: FontId,
+        bytes: &[u8],
+    ) -> Printer<assets::fonts::OwnedFontGlyphSheet> {
         let sources = GlyphSources::try_from_fn(|font| {
             let pixels = multi_font_pixels(font);
             Ok::<_, assets::error::AssetError>(synthetic_sheet(&pixels, font).to_owned_sheet())
         })
         .unwrap();
         Printer::with_sources(
-            decode_tokens(&[ENCODED_A, super::super::EOS]),
+            decode_tokens(bytes),
             sources,
             initial,
             TextSpeed::Instant,
