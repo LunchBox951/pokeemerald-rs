@@ -72,7 +72,7 @@ const MENU_INFO_MARKS: [(usize, usize, u8); 7] = [
     (0xE0, 42, 7),
 ];
 /// Menu-info palette 2 (`gMenuInfoElements2_Pal`), the TM/HM window's palette:
-/// the colour of the TYPE_NORMAL, TYPE_FIGHTING and TYPE_POISON icons.
+/// the colour of the `TYPE_NORMAL`, `TYPE_FIGHTING` and `TYPE_POISON` icons.
 pub(super) const NORMAL_TYPE_ICON: Rgb888 = rgb(1, 2, 3);
 pub(super) const FIGHTING_TYPE_ICON: Rgb888 = rgb(2, 3, 4);
 pub(super) const POISON_TYPE_ICON: Rgb888 = rgb(3, 4, 5);
