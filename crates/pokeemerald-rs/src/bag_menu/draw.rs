@@ -34,6 +34,16 @@ const HM_NUMBER_GAP: i32 = 5;
 const DESCRIPTION_ORIGIN: (i32, i32) = (0, 104);
 const DESCRIPTION_SIZE: (i32, i32) = (112, 48);
 const DESCRIPTION_TEXT_OFFSET: (i32, i32) = (3, 1);
+/// The TM/HM move-data windows (`sDefaultBagWindows`, `item_menu.c:422-437`):
+/// the label icons at tile (1, 13), 5x6 tiles, and the type icon and values at
+/// tile (7, 13), 4x6 tiles. Values print at x 7 on 12-pixel lines
+/// (`item_menu.c:2576,2588,2592`).
+const MOVE_LABELS_ORIGIN: (i32, i32) = (8, 104);
+const MOVE_LABELS_SIZE: (u32, u32) = (40, 48);
+const MOVE_VALUES_ORIGIN: (i32, i32) = (56, 104);
+const MOVE_VALUES_SIZE: (u32, u32) = (32, 48);
+const MOVE_DATA_LINE: i32 = 12;
+const MOVE_VALUE_X: i32 = 7;
 /// The pocket-name window (tile (4, 1), 8x2) and its centring width
 /// (`item_menu.c:2408-2420`).
 const POCKET_NAME_ORIGIN: (i32, i32) = (32, 8);
@@ -350,13 +360,18 @@ impl BagScreen {
         }
         let position = usize::from(self.menu.scroll()) + usize::from(self.menu.cursor());
         let item = self.menu.stacks().get(position).map(|stack| stack.item);
-        let description = if self.menu.context_grid().is_some()
-            && self.menu.pocket() == assets::items::Pocket::TmHm
-        {
-            // The TM/HM pocket clears the window for its move data, which is
-            // not drawn (`item_menu.c:1642-1648`).
-            String::new()
-        } else if self.menu.context_grid().is_some() {
+        if let Some(icon) = self.chrome.icon(item) {
+            icon.blit_rows(fb, ICON_ORIGIN, 0, ICON_SIDE);
+        }
+        if self.menu.context_grid().is_some() && self.menu.pocket() == assets::items::Pocket::TmHm {
+            // The TM/HM pocket swaps the description window for its move data
+            // (`item_menu.c:1642-1648`).
+            if let Some(item) = item {
+                self.draw_move_data(fb, item);
+            }
+            return;
+        }
+        let description = if self.menu.context_grid().is_some() {
             // `OpenContextMenu` swaps the description for this
             // (`item_menu.c:1651-1655`).
             let table = assets::items::ItemDisplayTable::new();
@@ -393,6 +408,35 @@ selected.",
             &text,
             &self.chrome.normal_text_colors(),
         );
+    }
+
+    /// `PrepareTMHMMoveWindow` and `PrintTMHMMoveData` (`item_menu.c:2538-2595`):
+    /// the TYPE, POWER, ACCURACY and PP labels, the move's type icon, and its
+    /// power, accuracy, and PP.
+    fn draw_move_data(&self, fb: &mut Framebuffer, item: assets::items::ItemId) {
+        let Some(data) = labels::move_data_text(item) else {
+            return;
+        };
+        let labels_window = (MOVE_LABELS_ORIGIN, MOVE_LABELS_SIZE);
+        for (line, icon) in (0..).zip(self.chrome.label_icons()) {
+            self.chrome
+                .draw_menu_info_icon(fb, icon, labels_window, (0, line * MOVE_DATA_LINE));
+        }
+        let values_window = (MOVE_VALUES_ORIGIN, MOVE_VALUES_SIZE);
+        if let Some(icon) = self.chrome.type_icon(data.type_id) {
+            self.chrome
+                .draw_menu_info_icon(fb, icon, values_window, (0, 0));
+        }
+        let colors = self.chrome.move_data_text_colors();
+        let size = (
+            i32::try_from(MOVE_VALUES_SIZE.0).unwrap_or(0),
+            i32::try_from(MOVE_VALUES_SIZE.1).unwrap_or(0),
+        );
+        for (line, value) in (1..).zip([&data.power, &data.accuracy, &data.pp]) {
+            let text = self.chrome.normal_text(value);
+            let offset = (MOVE_VALUE_X, line * MOVE_DATA_LINE);
+            draw_glyphs(fb, MOVE_VALUES_ORIGIN, size, offset, &text, &colors);
+        }
     }
 
     /// The gray cursor `BagMenu_ItemPrintCallback` leaves on the picked-up

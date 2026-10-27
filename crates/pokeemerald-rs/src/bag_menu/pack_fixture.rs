@@ -77,6 +77,38 @@ pub(super) const SWAP_SEGMENT_AT: (usize, usize) = (5, 4);
 pub(super) const ARROW_NEAR_AT: (usize, usize) = (3, 2);
 pub(super) const ARROW_FAR_AT: (usize, usize) = (12, 13);
 
+/// The menu-info sheet's side, in pixels and in tiles.
+const MENU_INFO_SIDE: u32 = 128;
+const MENU_INFO_TILES_ACROSS: usize = 16;
+const MENU_INFO_ICON_HEIGHT: usize = 12;
+/// `sMenuInfoIcons` (`menu.c:113-139`): each marked icon's tile offset, width,
+/// and the palette index its rectangle is filled with.
+const MENU_INFO_MARKS: [(usize, usize, u8); 7] = [
+    (0x20, 32, 1),
+    (0x64, 32, 2),
+    (0x80, 32, 3),
+    (0xA8, 42, 4),
+    (0xC0, 42, 5),
+    (0xC8, 42, 6),
+    (0xE0, 42, 7),
+];
+/// Menu-info palette 2 (`gMenuInfoElements2_Pal`), the TM/HM window's palette:
+/// the colour of the `TYPE_NORMAL`, `TYPE_FIGHTING` and `TYPE_POISON` icons.
+pub(super) const NORMAL_TYPE_ICON: Rgb888 = rgb(1, 2, 3);
+pub(super) const FIGHTING_TYPE_ICON: Rgb888 = rgb(2, 3, 4);
+pub(super) const POISON_TYPE_ICON: Rgb888 = rgb(3, 4, 5);
+/// The TYPE, POWER, ACCURACY and PP label icons.
+pub(super) const TYPE_LABEL: Rgb888 = rgb(4, 5, 6);
+pub(super) const POWER_LABEL: Rgb888 = rgb(5, 6, 7);
+pub(super) const ACCURACY_LABEL: Rgb888 = rgb(6, 7, 8);
+pub(super) const PP_LABEL: Rgb888 = rgb(7, 8, 9);
+/// Index 14 and index 10 of palette 2: `TEXT_DYNAMIC_COLOR_5` and
+/// `TEXT_DYNAMIC_COLOR_1`, the move data's text and shadow.
+pub(super) const MOVE_DATA_TEXT: Rgb888 = rgb(8, 9, 10);
+pub(super) const MOVE_DATA_SHADOW: Rgb888 = rgb(9, 10, 11);
+/// What the other two menu-info palettes hold at every index the test reads.
+const OTHER_PALETTE_COLOR: Rgb888 = rgb(30, 1, 30);
+
 const fn rgb(r: u8, g: u8, b: u8) -> Rgb888 {
     bgr(r, g, b).to_rgb888()
 }
@@ -101,7 +133,7 @@ pub(super) fn bag_frame_color(frame: u8) -> Rgb888 {
     rgb(frame * 4, 5, 5)
 }
 
-const ICON_STEMS: [&str; 10] = [
+const ICON_STEMS: [&str; 11] = [
     "potion",
     "great_ball",
     "antidote",
@@ -111,6 +143,7 @@ const ICON_STEMS: [&str; 10] = [
     "mach_bike",
     "fighting_tm_hm",
     "normal_tm_hm",
+    "poison_tm_hm",
     "pokeblock_case",
 ];
 const ICON_IMAGES: [&str; 10] = [
@@ -373,6 +406,50 @@ fn icon_entries() -> Vec<PackEntry> {
     entries
 }
 
+fn menu_info_entries() -> Vec<PackEntry> {
+    let side = MENU_INFO_SIDE as usize;
+    let mut sheet = vec![0u8; side * side];
+    for (offset, width, index) in MENU_INFO_MARKS {
+        let (left, top) = (
+            offset % MENU_INFO_TILES_ACROSS * 8,
+            offset / MENU_INFO_TILES_ACROSS * 8,
+        );
+        for y in top..top + MENU_INFO_ICON_HEIGHT {
+            sheet[y * side + left..y * side + left + width].fill(index);
+        }
+    }
+    let channels = |color: Rgb888| Bgr555::from_channels(color.r >> 3, color.g >> 3, color.b >> 3);
+    let second: Vec<(u8, Bgr555)> = [
+        (1, NORMAL_TYPE_ICON),
+        (2, FIGHTING_TYPE_ICON),
+        (3, POISON_TYPE_ICON),
+        (4, TYPE_LABEL),
+        (5, POWER_LABEL),
+        (6, ACCURACY_LABEL),
+        (7, PP_LABEL),
+        (14, MOVE_DATA_TEXT),
+        (10, MOVE_DATA_SHADOW),
+    ]
+    .map(|(index, color)| (index, channels(color)))
+    .to_vec();
+    let other: Vec<(u8, Bgr555)> = (1u8..=14)
+        .map(|index| (index, channels(OTHER_PALETTE_COLOR)))
+        .collect();
+    vec![
+        pack_format::image_entry(
+            "bag/image/menu_info".into(),
+            MENU_INFO_SIDE,
+            MENU_INFO_SIDE,
+            BIT_DEPTH,
+            sheet,
+        )
+        .unwrap(),
+        palette_entry_with_colors("bag/palette/menu_info1", 16, &other),
+        palette_entry_with_colors("bag/palette/menu_info2", 16, &second),
+        palette_entry_with_colors("bag/palette/menu_info3", 16, &other),
+    ]
+}
+
 /// The pack with every entry the screen reads.
 pub(super) fn entries() -> Vec<PackEntry> {
     entries_with_narrow(glyph_sheet("narrow"))
@@ -406,6 +483,7 @@ fn entries_with_fonts(normal: PackEntry, narrow: PackEntry) -> Vec<PackEntry> {
     all.extend(screen_entries());
     all.extend(picture_entries());
     all.extend(icon_entries());
+    all.extend(menu_info_entries());
     all.extend(scroll_indicator_entries());
     all.extend(swap_line_entries());
     all
