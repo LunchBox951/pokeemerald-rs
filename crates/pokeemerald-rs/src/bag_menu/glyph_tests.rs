@@ -6,7 +6,9 @@ use engine::save::bag::Bag;
 use platform::Buttons;
 use rendering::Framebuffer;
 
-use super::pack_fixture::{entries_with_marked_narrow_glyphs, load, BAG_TEXT};
+use super::pack_fixture::{
+    entries_with_marked_narrow_glyphs, entries_with_marked_normal_glyphs, load, BAG_TEXT,
+};
 use super::tests::{frame_of, painted, sample_bag, switch_pocket, LIST_X, LIST_Y, ROW};
 use super::{open_from_pack, BagScreen, BagScreenMode, BagScreenRequest};
 
@@ -96,4 +98,18 @@ fn quantities_pad_with_the_five_pixel_spacer_not_a_space() {
             column(start + times + 10),
         ],
     );
+}
+
+#[test]
+fn the_list_cursor_draws_from_the_normal_font() {
+    // `BagMenu_PrintCursorAtPos` prints the arrow with `FONT_NORMAL` (`item_menu.c:1023`).
+    let arrow = narrow_id('▶');
+    let pack = load("marked-normal", entries_with_marked_normal_glyphs(&[arrow]));
+    let screen = open_from_pack(
+        &pack,
+        &sample_bag(),
+        BagScreenRequest::new(BagScreenMode::Field),
+    )
+    .expect("the synthetic pack opens");
+    assert_eq!(drawn_columns(&frame_of(&screen), 0), vec![0]);
 }

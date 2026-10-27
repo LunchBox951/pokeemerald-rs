@@ -68,7 +68,7 @@ fn a_lost_route_101_first_battle_heals_the_lead_instead_of_leaving_it_fainted() 
             .expect("Treecko/Pound must be in the dex");
     let max_hp = fragile_treecko.stats().max_hp;
     let base_pp = fragile_treecko.moves()[0].pp;
-    phase.party_lead = Some(fragile_treecko);
+    phase.set_fresh_lead_for_test(fragile_treecko);
 
     walk_east_and_land(&mut phase, 1);
     assert_eq!(
@@ -94,8 +94,7 @@ fn a_lost_route_101_first_battle_heals_the_lead_instead_of_leaving_it_fainted() 
     );
 
     let lead = phase
-        .party_lead
-        .as_ref()
+        .lead_for_test()
         .expect("conclude_first_battle heals in place -- it does not clear the lead");
     assert!(
         !lead.is_fainted(),
