@@ -85,31 +85,31 @@
     "data/battle_anim_scripts.s": {
       "artifacts": {
         "gBattleAnims_General": {
-          "reason": "gBattleAnims_General: normalized selector and program data reaches battle-anim/catalog from both builders: cargo xtask extract from the checkout (crates/xtask/src/extract/battle_anim.rs) and the ROM importer following the four selector tables and compiled command streams (crates/rom-import/src/domains/battle_anim.rs). tests/equivalence.rs requires identical kind, metadata, IDs, and bytes. Both exclude the unreachable Move_COUNT entry and stop each program at its first terminator, with UBFIX undefined. Execution behaviour (S-6), rendering and effect resources stay pending, so the parent file stays pending.",
+          "reason": "gBattleAnims_General: normalized selector and program data reaches battle-anim/catalog from both builders: cargo xtask extract from the checkout (crates/xtask/src/extract/battle_anim.rs) and the ROM importer following the four selector tables and compiled command streams (crates/rom-import/src/domains/battle_anim.rs). tests/equivalence.rs requires identical kind, metadata, IDs, and bytes. Both exclude the unreachable Move_COUNT entry and stop each program at its first terminator, with UBFIX undefined. Execution behaviour (S-6) and rendering stay pending, so the parent file stays pending. The catalog-reachable effect sheet and palette pairs are now extracted from the checkout as battle-effect/<NNN>/{image,palette} by xtask::extract::battle_effect (crates/xtask/src/extract/battle_effect.rs): 193 pairs following BattleEffectRecord::inventory, including ANIM_TAG_POKEBLOCK, which AnimTask_LoadPokeblockGfx loads directly (src/battle_anim_throw.c:2401-2406). ROM import of those pairs (#2674) and the remaining pic-table tags stay pending.",
           "rust_target": "crates/rom-import/src/domains/battle_anim.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "gBattleAnims_Moves": {
-          "reason": "gBattleAnims_Moves: normalized selector and program data reaches battle-anim/catalog from both builders: cargo xtask extract from the checkout (crates/xtask/src/extract/battle_anim.rs) and the ROM importer following the four selector tables and compiled command streams (crates/rom-import/src/domains/battle_anim.rs). tests/equivalence.rs requires identical kind, metadata, IDs, and bytes. Both exclude the unreachable Move_COUNT entry and stop each program at its first terminator, with UBFIX undefined. Execution behaviour (S-6), rendering and effect resources stay pending, so the parent file stays pending.",
+          "reason": "gBattleAnims_Moves: normalized selector and program data reaches battle-anim/catalog from both builders: cargo xtask extract from the checkout (crates/xtask/src/extract/battle_anim.rs) and the ROM importer following the four selector tables and compiled command streams (crates/rom-import/src/domains/battle_anim.rs). tests/equivalence.rs requires identical kind, metadata, IDs, and bytes. Both exclude the unreachable Move_COUNT entry and stop each program at its first terminator, with UBFIX undefined. Execution behaviour (S-6) and rendering stay pending, so the parent file stays pending. The catalog-reachable effect sheet and palette pairs are now extracted from the checkout as battle-effect/<NNN>/{image,palette} by xtask::extract::battle_effect (crates/xtask/src/extract/battle_effect.rs): 193 pairs following BattleEffectRecord::inventory, including ANIM_TAG_POKEBLOCK, which AnimTask_LoadPokeblockGfx loads directly (src/battle_anim_throw.c:2401-2406). ROM import of those pairs (#2674) and the remaining pic-table tags stay pending.",
           "rust_target": "crates/rom-import/src/domains/battle_anim.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "gBattleAnims_Special": {
-          "reason": "gBattleAnims_Special: normalized selector and program data reaches battle-anim/catalog from both builders: cargo xtask extract from the checkout (crates/xtask/src/extract/battle_anim.rs) and the ROM importer following the four selector tables and compiled command streams (crates/rom-import/src/domains/battle_anim.rs). tests/equivalence.rs requires identical kind, metadata, IDs, and bytes. Both exclude the unreachable Move_COUNT entry and stop each program at its first terminator, with UBFIX undefined. Execution behaviour (S-6), rendering and effect resources stay pending, so the parent file stays pending.",
+          "reason": "gBattleAnims_Special: normalized selector and program data reaches battle-anim/catalog from both builders: cargo xtask extract from the checkout (crates/xtask/src/extract/battle_anim.rs) and the ROM importer following the four selector tables and compiled command streams (crates/rom-import/src/domains/battle_anim.rs). tests/equivalence.rs requires identical kind, metadata, IDs, and bytes. Both exclude the unreachable Move_COUNT entry and stop each program at its first terminator, with UBFIX undefined. Execution behaviour (S-6) and rendering stay pending, so the parent file stays pending. The catalog-reachable effect sheet and palette pairs are now extracted from the checkout as battle-effect/<NNN>/{image,palette} by xtask::extract::battle_effect (crates/xtask/src/extract/battle_effect.rs): 193 pairs following BattleEffectRecord::inventory, including ANIM_TAG_POKEBLOCK, which AnimTask_LoadPokeblockGfx loads directly (src/battle_anim_throw.c:2401-2406). ROM import of those pairs (#2674) and the remaining pic-table tags stay pending.",
           "rust_target": "crates/rom-import/src/domains/battle_anim.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "gBattleAnims_StatusConditions": {
-          "reason": "gBattleAnims_StatusConditions: normalized selector and program data reaches battle-anim/catalog from both builders: cargo xtask extract from the checkout (crates/xtask/src/extract/battle_anim.rs) and the ROM importer following the four selector tables and compiled command streams (crates/rom-import/src/domains/battle_anim.rs). tests/equivalence.rs requires identical kind, metadata, IDs, and bytes. Both exclude the unreachable Move_COUNT entry and stop each program at its first terminator, with UBFIX undefined. Execution behaviour (S-6), rendering and effect resources stay pending, so the parent file stays pending.",
+          "reason": "gBattleAnims_StatusConditions: normalized selector and program data reaches battle-anim/catalog from both builders: cargo xtask extract from the checkout (crates/xtask/src/extract/battle_anim.rs) and the ROM importer following the four selector tables and compiled command streams (crates/rom-import/src/domains/battle_anim.rs). tests/equivalence.rs requires identical kind, metadata, IDs, and bytes. Both exclude the unreachable Move_COUNT entry and stop each program at its first terminator, with UBFIX undefined. Execution behaviour (S-6) and rendering stay pending, so the parent file stays pending. The catalog-reachable effect sheet and palette pairs are now extracted from the checkout as battle-effect/<NNN>/{image,palette} by xtask::extract::battle_effect (crates/xtask/src/extract/battle_effect.rs): 193 pairs following BattleEffectRecord::inventory, including ANIM_TAG_POKEBLOCK, which AnimTask_LoadPokeblockGfx loads directly (src/battle_anim_throw.c:2401-2406). ROM import of those pairs (#2674) and the remaining pic-table tags stay pending.",
           "rust_target": "crates/rom-import/src/domains/battle_anim.rs",
           "spec": "S-4",
           "status": "ported"
         },
         "reachable-normalized-programs": {
-          "reason": "reachable-normalized-programs: normalized selector and program data reaches battle-anim/catalog from both builders: cargo xtask extract from the checkout (crates/xtask/src/extract/battle_anim.rs) and the ROM importer following the four selector tables and compiled command streams (crates/rom-import/src/domains/battle_anim.rs). tests/equivalence.rs requires identical kind, metadata, IDs, and bytes. Both exclude the unreachable Move_COUNT entry and stop each program at its first terminator, with UBFIX undefined. Execution behaviour (S-6), rendering and effect resources stay pending, so the parent file stays pending.",
+          "reason": "reachable-normalized-programs: normalized selector and program data reaches battle-anim/catalog from both builders: cargo xtask extract from the checkout (crates/xtask/src/extract/battle_anim.rs) and the ROM importer following the four selector tables and compiled command streams (crates/rom-import/src/domains/battle_anim.rs). tests/equivalence.rs requires identical kind, metadata, IDs, and bytes. Both exclude the unreachable Move_COUNT entry and stop each program at its first terminator, with UBFIX undefined. Execution behaviour (S-6) and rendering stay pending, so the parent file stays pending. The catalog-reachable effect sheet and palette pairs are now extracted from the checkout as battle-effect/<NNN>/{image,palette} by xtask::extract::battle_effect (crates/xtask/src/extract/battle_effect.rs): 193 pairs following BattleEffectRecord::inventory, including ANIM_TAG_POKEBLOCK, which AnimTask_LoadPokeblockGfx loads directly (src/battle_anim_throw.c:2401-2406). ROM import of those pairs (#2674) and the remaining pic-table tags stay pending.",
           "rust_target": "crates/rom-import/src/domains/battle_anim.rs",
           "spec": "S-4",
           "status": "ported"
@@ -20521,6 +20521,14 @@
       "status": "pending"
     },
     "graphics_file_rules.mk": {
+      "artifacts": {
+        "battle-anim-concatenated-sprite-sheets": {
+          "reason": "The ice_cube, ice_crystals, mud_sand, flower, and spark .4bpp rules (graphics_file_rules.mk:64-68,114-131) cat per-part .4bpp files. Read by xtask::extract::battle_effect, which emits battle-effect/<NNN>/{image,palette} for the 193 effect sprites BattleEffectRecord::inventory derives from the catalog (including ANIM_TAG_POKEBLOCK). Modelled: the five concatenated sheets are rebuilt from their rule-listed PNG parts in rule order, each part's tiles row-major with the left pixel low, as one 8-pixel-wide column of tiles; the total is checked against the registered size. NOT modelled: every other rule of the file, and ROM import of these five sheets, which must reproduce the same column from the decompressed tile stream.",
+          "rust_target": "crates/xtask/src/extract/battle_effect.rs",
+          "spec": "S-4",
+          "status": "stubbed"
+        }
+      },
       "category": "meta.build",
       "kind": "file",
       "status": "pending"
@@ -20799,6 +20807,14 @@
       "status": "pending"
     },
     "include/constants/battle_anim.h": {
+      "artifacts": {
+        "ANIM_TAG_sprite-indices": {
+          "reason": "ANIM_TAG_* constants (include/constants/battle_anim.h:5-298). Read by xtask::extract::battle_effect, which emits battle-effect/<NNN>/{image,palette} for the 193 effect sprites BattleEffectRecord::inventory derives from the catalog (including ANIM_TAG_POKEBLOCK). Modelled: ANIM_SPRITES_START and every ANIM_TAG_* of the form (ANIM_SPRITES_START + <index>) are read, and the index (GET_TRUE_SPRITE_INDEX, :5) joins both registration tables to a tag; any other ANIM_TAG_* definition is refused. NOT modelled: the other constants of the header (animation, background, and argument constants), which the catalog extractor reads separately or no extractor reads yet.",
+          "rust_target": "crates/xtask/src/extract/battle_effect.rs",
+          "spec": "S-4",
+          "status": "stubbed"
+        }
+      },
       "category": "code.constants",
       "kind": "file",
       "status": "pending"
@@ -28850,6 +28866,20 @@
       "status": "pending"
     },
     "src/data/battle_anim.h": {
+      "artifacts": {
+        "gBattleAnimPaletteTable": {
+          "reason": "gBattleAnimPaletteTable (src/data/battle_anim.h:1303-1594). Read by xtask::extract::battle_effect, which emits battle-effect/<NNN>/{image,palette} for the 193 effect sprites BattleEffectRecord::inventory derives from the catalog (including ANIM_TAG_POKEBLOCK). Modelled: every row is parsed as {gBattleAnimSpritePal_*, ANIM_TAG_*} and joined by tag; the table-selected palette is kept even where it is not the sheet's own (GrayOrb, BlueOrb, and RedOrb2 share one sheet and select three palettes), and a selected tag registered twice is refused. NOT modelled: the 96 rows no catalog program loads emit nothing (the stock table registers ANIM_TAG_SAP_DRIP twice and never ANIM_TAG_SAP_DRIP_2, both outside the inventory); ROM import of the table is pending.",
+          "rust_target": "crates/xtask/src/extract/battle_effect.rs",
+          "spec": "S-4",
+          "status": "stubbed"
+        },
+        "gBattleAnimPicTable": {
+          "reason": "gBattleAnimPicTable (src/data/battle_anim.h:1010-1301). Read by xtask::extract::battle_effect, which emits battle-effect/<NNN>/{image,palette} for the 193 effect sprites BattleEffectRecord::inventory derives from the catalog (including ANIM_TAG_POKEBLOCK). Modelled: every row is parsed as {gBattleAnimSpriteGfx_*, size, ANIM_TAG_*} and joined by tag, never by row position; the row of each inventory tag selects its sheet declaration, and the registered size is checked against the five concatenated sheets' tile streams (the registered sizes of bent_spoon, eye_sparkle, and sparkle_6 differ from their PNGs, so a single PNG keeps its whole raster). NOT modelled: the 96 rows no catalog program loads emit nothing, and their declarations and sources are never read; ROM import of the table is pending.",
+          "rust_target": "crates/xtask/src/extract/battle_effect.rs",
+          "spec": "S-4",
+          "status": "stubbed"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
@@ -30669,6 +30699,12 @@
     },
     "src/graphics.c": {
       "artifacts": {
+        "gBattleAnimSpriteGfx_and_Pal-declarations": {
+          "reason": "gBattleAnimSpriteGfx_* and gBattleAnimSpritePal_* INCGFX_U32 declarations (src/graphics.c, first at :25 and :32). Read by xtask::extract::battle_effect, which emits battle-effect/<NNN>/{image,palette} for the 193 effect sprites BattleEffectRecord::inventory derives from the catalog (including ANIM_TAG_POKEBLOCK). Modelled: only the declarations the selected rows name are parsed, each exactly once, as a .png with .4bpp.lz, a .4bpp with .lz for the five concatenated sheets, or a .png or .pal with .gbapal.lz, and the sources must sit under graphics/battle_anims; the sheet is kept at its PNG's dimensions and pixels, the palette is a PNG PLTE or a JASC file of whole 16-colour banks (MusicNotes2 keeps its five). NOT modelled: every declaration no inventory tag selects, and ROM import of the sheets and palettes.",
+          "rust_target": "crates/xtask/src/extract/battle_effect.rs",
+          "spec": "S-4",
+          "status": "stubbed"
+        },
         "ordinary_bag_graphics": {
           "reason": "Bag screen, tilemap, sex palettes, animation sheets, bag palette, and HM mark extracted; other graphics remain pending.",
           "rust_target": "crates/xtask/src/extract/bag.rs",
