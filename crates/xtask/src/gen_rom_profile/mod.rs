@@ -434,7 +434,11 @@ fn publish_with(
         .create_new(true)
         .open(&temp)
         .map_err(failed)?;
-    match write(&mut file, &temp)
+    // The umask can have taken the owner's read bit, and the rename below
+    // would carry that mode onto the published module.
+    let restored = restore_owner_access(&file);
+    match restored
+        .and_then(|()| write(&mut file, &temp))
         .and_then(|()| file.sync_all())
         .and_then(|()| std::fs::rename(&temp, path))
     {
@@ -445,6 +449,37 @@ fn publish_with(
             Err(failed(remove_after(&temp, err)))
         }
     }
+}
+
+/// Give `file`'s owner read and write access if the umask took either, and
+/// leave every other mode bit as it is.
+///
+/// `OpenOptions` asks for `0o666`, and a umask that strips the owner bits
+/// (`0444`) leaves a file its owner can no longer read; the publishing rename
+/// would install that mode over a readable module. The mode changes only when
+/// an owner bit is missing, through the descriptor that created the file.
+#[cfg(unix)]
+fn restore_owner_access(file: &std::fs::File) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    const OWNER: u32 = 0o600;
+    let mut permissions = file.metadata()?.permissions();
+    let mode = permissions.mode();
+    if mode & OWNER != OWNER {
+        permissions.set_mode(mode | OWNER);
+        file.set_permissions(permissions)?;
+    }
+    Ok(())
+}
+
+/// Off Unix a file has no owner mode bits to restore.
+#[cfg(not(unix))]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "one signature for every platform; only the unix arm can fail to change a mode"
+)]
+fn restore_owner_access(_file: &std::fs::File) -> std::io::Result<()> {
+    Ok(())
 }
 
 /// Folds a cleanup failure into `original`, keeping its `ErrorKind`, because

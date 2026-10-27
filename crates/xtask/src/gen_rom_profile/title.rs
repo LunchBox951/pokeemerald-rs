@@ -253,6 +253,147 @@ mod tests {
     }
     use crate::gen_rom_profile::tests::{image_twin, with_context};
 
+    /// Colours of a synthetic 16-colour palette, distinct per `seed`.
+    fn palette_colors(seed: u16) -> Vec<u16> {
+        (0..16u16)
+            .map(|n| 0x1000 + seed * 0x40 + n * 3 + 1)
+            .collect()
+    }
+
+    fn color_bytes(colors: &[u16]) -> Vec<u8> {
+        colors.iter().flat_map(|c| c.to_le_bytes()).collect()
+    }
+
+    /// Address of the first logo colour in the synthetic title ROM.
+    const LOGO_ADDR: usize = 0x43_0000;
+
+    /// A complete synthetic title pack and ROM. The ROM holds 8 logo colours
+    /// with the rayquaza/clouds palette right after them; the pack holds
+    /// those 8 followed by `logo_pack_tail`.
+    fn title_fixture(logo_pack_tail: [u16; 8]) -> (Vec<u8>, Vec<pack_format::PackEntry>) {
+        let images = [
+            ("clouds", 0x11u8),
+            ("emerald_version", 0x22),
+            ("logo_shine", 0x33),
+            ("pokemon_logo", 0x44),
+            ("press_start", 0x55),
+            ("rayquaza", 0x66),
+        ];
+        let tilemaps = [("clouds", 3u8), ("pokemon_logo", 5), ("rayquaza", 7)];
+        let mut fixture = RomFixture::new().emerald_header();
+        let mut entries = Vec::new();
+        for (index, (name, seed)) in (0usize..).zip(images) {
+            let tiles = seeded_tiles(seed);
+            fixture = fixture.write(0x40_0000 + index * 0x1000, &lz77_literals(&tiles));
+            entries.push(
+                image_entry_from_tiles(format!("title/image/{name}"), &tiles, 4, 16, 16, None)
+                    .expect("image entry"),
+            );
+        }
+        for (index, (name, seed)) in (0usize..).zip(tilemaps) {
+            let map: Vec<u8> = (0..64u8)
+                .map(|n| n.wrapping_mul(seed * 2 + 11) ^ (seed * 17))
+                .collect();
+            fixture = fixture.write(0x41_0000 + index * 0x1000, &lz77_literals(&map));
+            entries.push(raw_entry(format!("title/raw/{name}"), map));
+        }
+        for (index, name) in (0usize..).zip(["emerald_version", "press_start", "unused"]) {
+            let colors = palette_colors(u16::try_from(index).expect("small") + 1);
+            fixture = fixture.write(0x42_0000 + index * 0x100, &color_bytes(&colors));
+            entries.push(palette_entry(format!("title/palette/{name}"), &colors).expect("palette"));
+        }
+        let logo_rom: Vec<u16> = palette_colors(9)[..8].to_vec();
+        let mut logo_pack = logo_rom.clone();
+        logo_pack.extend(logo_pack_tail);
+        let rayquaza = palette_colors(10);
+        let rom = fixture
+            .write(LOGO_ADDR, &color_bytes(&logo_rom))
+            .write(LOGO_ADDR + 16, &color_bytes(&rayquaza))
+            .finish();
+        entries.push(palette_entry(TRIMMED_PALETTE.into(), &logo_pack).expect("palette"));
+        entries.push(palette_entry(ADJACENT_PALETTE.into(), &rayquaza).expect("palette"));
+        (rom, entries)
+    }
+
+    #[test]
+    fn locate_composes_the_title_and_trims_the_logo_palette_by_adjacency() {
+        let (rom, entries) = title_fixture([0; 8]);
+        with_context("title-locate-e2e", &rom, entries, |ctx| {
+            let mut report = Vec::new();
+            let plan = locate(ctx, &mut report).expect("title located");
+            assert_eq!(plan.images.len(), 6);
+            assert_eq!(plan.tilemaps.len(), 3);
+            assert_eq!(plan.palettes.len(), 5);
+            // 6 images + 3 tilemaps + 5 palettes, one line each.
+            assert_eq!(report.len(), 14);
+            let logo = plan
+                .palettes
+                .iter()
+                .find(|p| p.id == TRIMMED_PALETTE)
+                .expect("logo palette");
+            let adjacent = plan
+                .palettes
+                .iter()
+                .find(|p| p.id == ADJACENT_PALETTE)
+                .expect("adjacent palette");
+            assert_eq!(
+                logo.addr,
+                0x0800_0000 + u32::try_from(LOGO_ADDR).expect("fits")
+            );
+            assert_eq!(logo.color_count, 8);
+            assert_eq!(logo.addr + 16, adjacent.addr);
+            assert_eq!(plan.bg_palettes, logo.addr);
+            let line = report
+                .iter()
+                .find(|l| l.id == TRIMMED_PALETTE)
+                .expect("logo report line");
+            assert_eq!(line.addr, logo.addr);
+            assert_eq!(line.len, 16);
+            assert_eq!(
+                line.symbol,
+                SymbolExpectation::Exact("gTitleScreenBgPalettes".to_owned())
+            );
+            assert!(
+                line.note.as_deref().is_some_and(
+                    |note| note.contains("8 colours") && note.contains("8 of the pack")
+                ),
+                "{:?}",
+                line.note
+            );
+        });
+    }
+
+    #[test]
+    fn a_logo_palette_whose_dropped_tail_is_not_black_is_refused() {
+        // The ROM holds the first 8 colours, but the pack's other 8 are not
+        // black, so neither the full palette nor the 8-colour prefix is a
+        // faithful match for the bytes before the adjacent palette.
+        let (rom, entries) = title_fixture([0x7fff; 8]);
+        let err = with_context("title-locate-bad-tail", &rom, entries, |ctx| {
+            locate(ctx, &mut Vec::new())
+        })
+        .expect_err("a non-black dropped tail fails closed");
+        assert!(
+            matches!(&err, GenRomProfileError::StructMismatch { id, .. } if id == TRIMMED_PALETTE),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn a_logo_palette_not_adjacent_to_the_rayquaza_palette_is_refused() {
+        let (mut rom, entries) = title_fixture([0; 8]);
+        // Corrupt the last logo colour in the ROM.
+        rom[LOGO_ADDR + 14] ^= 0xff;
+        let err = with_context("title-locate-bad-adjacency", &rom, entries, |ctx| {
+            locate(ctx, &mut Vec::new())
+        })
+        .expect_err("a logo palette that does not abut the next one fails closed");
+        assert!(
+            matches!(&err, GenRomProfileError::StructMismatch { id, .. } if id == TRIMMED_PALETTE),
+            "{err:?}"
+        );
+    }
+
     #[test]
     fn a_title_tilemap_of_the_wrong_kind_is_refused() {
         let payload = [9u8, 8, 7, 6, 5, 4, 3, 2];
