@@ -305,6 +305,82 @@ fn cancelled_pending_square_preserves_committed_hardware() {
     }
 }
 
+/// An immediately retiring first pass jumps to `oscillator_off` past the
+/// `NRx3` pitch write (`pokeemerald/src/m4a.c:1053-1056,1090-1102,1197-1202`),
+/// so the slot keeps the predecessor's low frequency byte for the next note.
+#[test]
+fn an_immediately_retiring_square_replacement_never_writes_its_pitch() {
+    const TRACK: usize = 0;
+    for (channel, sweep) in [
+        (CgbChannelNumber::Square1, Some(0x00)),
+        (CgbChannelNumber::Square2, None),
+    ] {
+        let slot = channel.slot();
+        let retiring = CgbVoice::square(
+            channel,
+            2,
+            sweep,
+            CgbAdsr {
+                attack: 0,
+                decay: 0,
+                sustain: 0,
+                release: 0,
+            },
+            72,
+            0,
+            FULL_TRACK_VOLUME,
+            FULL_TRACK_VOLUME,
+            TEST_VELOCITY,
+            TIED_GATE_TIME,
+            72,
+            TRACK,
+            0,
+            0,
+            0,
+        );
+        let mut replaced = Mixer::new(MAX_MASTER_VOLUME, 1);
+        let mut stopped = Mixer::new(MAX_MASTER_VOLUME, 1);
+        let mut actual = vec![0.0; SAMPLES_PER_FRAME * 2];
+        let mut expected = actual.clone();
+        assert!(replaced.add_cgb_voice(cgb_square_voice(channel, TRACK, 60, sweep)));
+        assert!(stopped.add_cgb_voice(cgb_square_voice(channel, TRACK, 60, sweep)));
+        replaced.mix_frame(&mut actual);
+        stopped.mix_frame(&mut expected);
+        assert_eq!(actual, expected);
+        assert!(actual.iter().any(|&sample| sample != 0.0));
+
+        assert!(replaced.add_cgb_voice(retiring));
+        stopped.stop_track(TRACK);
+        for _ in 0..4 {
+            replaced.mix_frame(&mut actual);
+            stopped.mix_frame(&mut expected);
+            assert!(replaced.cgb_slots[slot].is_none());
+            assert!(actual.iter().all(|&sample| sample == 0.0));
+            assert_eq!(
+                replaced.idle_cgb_hardware[slot]
+                    .as_ref()
+                    .and_then(CgbVoice::square_frequency),
+                stopped.idle_cgb_hardware[slot]
+                    .as_ref()
+                    .and_then(CgbVoice::square_frequency),
+                "the retained frequency must be the predecessor's low byte",
+            );
+        }
+
+        assert!(replaced.add_cgb_voice(cgb_square_voice(channel, TRACK, 60, None)));
+        assert!(stopped.add_cgb_voice(cgb_square_voice(channel, TRACK, 60, None)));
+        for _ in 0..4 {
+            replaced.mix_frame(&mut actual);
+            stopped.mix_frame(&mut expected);
+            assert!(actual.iter().any(|&sample| sample != 0.0));
+            assert_eq!(
+                actual, expected,
+                "the next note must inherit identical duty"
+            );
+        }
+    }
+}
+
 /// Retires `voice` after `settled_frames` of sound, applying
 /// `retiring_key_shift` on the retiring frame, and returns the idle-tail frames
 /// (plus a replacement note's first frame for a square). Upstream discards that

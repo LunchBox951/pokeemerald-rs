@@ -738,6 +738,10 @@ impl CgbVoice {
             _ => None,
         }
     }
+
+    pub(crate) fn square_frequency(&self) -> Option<u16> {
+        self.square_oscillator().map(SquareChannel::frequency)
+    }
 }
 
 #[cfg(test)]
