@@ -591,4 +591,5 @@ fn simultaneous_down_and_a_in_a_single_row_context_confirms() {
     ));
 }
 
+mod move_data;
 mod switch;
