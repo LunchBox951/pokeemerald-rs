@@ -241,19 +241,60 @@ impl OwnedScratchDir {
         })
     }
 
-    /// Whether `path` is still the directory this claim created: a real
+    /// Whether the directory at `path` is the one this claim created: a real
     /// directory (not a link) whose marker holds this claim's token.
-    fn still_ours(&self) -> bool {
-        std::fs::symlink_metadata(&self.path).is_ok_and(|meta| meta.is_dir())
-            && std::fs::read_to_string(self.path.join(SCRATCH_OWNER_MARKER))
+    fn is_ours(&self, path: &Path) -> bool {
+        std::fs::symlink_metadata(path).is_ok_and(|meta| meta.is_dir())
+            && std::fs::read_to_string(path.join(SCRATCH_OWNER_MARKER))
                 .is_ok_and(|found| found == self.token)
+    }
+
+    /// A sibling name nobody else can predict, where the claim is checked
+    /// and removed: the token is this claim's alone.
+    fn release_path(&self) -> PathBuf {
+        let parent = self.path.parent().expect("a claim lives inside its parent");
+        let name = self
+            .path
+            .file_name()
+            .expect("a claim has a name")
+            .to_string_lossy();
+        let tag: String = self
+            .token
+            .chars()
+            .filter(char::is_ascii_alphanumeric)
+            .collect();
+        parent.join(format!(".{name}.release-{tag}"))
     }
 }
 
 impl Drop for OwnedScratchDir {
+    /// Removes the claim only once it stands at a name nobody else knows.
+    ///
+    /// Checking the public name and then deleting it are two operations, and
+    /// a directory swapped in between them would be deleted. So the entry at
+    /// the public name is first moved, atomically, to a private sibling
+    /// name, and the ownership check and the removal both act on that
+    /// private name. A foreign entry caught by the move fails the check and
+    /// is moved back, never deleted.
     fn drop(&mut self) {
-        if self.still_ours() {
-            drop(std::fs::remove_dir_all(&self.path));
+        if !self.is_ours(&self.path) {
+            return;
+        }
+        let aside = self.release_path();
+        if std::fs::rename(&self.path, &aside).is_err() {
+            return;
+        }
+        if self.is_ours(&aside) {
+            drop(std::fs::remove_dir_all(&aside));
+            return;
+        }
+        // The move caught a replacement. Put it back; a contender that keeps
+        // the public name busy only delays this, so keep trying while it does.
+        for _ in 0..10_000 {
+            if std::fs::rename(&aside, &self.path).is_ok() {
+                return;
+            }
+            std::thread::yield_now();
         }
     }
 }
@@ -1319,4 +1360,59 @@ fn a_direct_write_at_an_absent_case_folded_lock_path_is_refused() {
         other => panic!("a write at a case alias of the lock path must be refused, got {other:?}"),
     }
     assert!(entry_names(&dir).is_empty(), "the refusal precedes staging");
+}
+
+/// Cleanup never deletes a directory swapped in between the ownership check
+/// and the removal: the check and the removal act on a private name.
+#[test]
+fn a_scratch_claim_never_deletes_a_directory_swapped_in_during_cleanup() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    let parent = OwnedScratchDir::new("claim-race-parent");
+    for round in 0..500u32 {
+        let claim = OwnedScratchDir::claim_in(&parent.path, |a| format!("claimed-{round}-{a}"));
+        let path = claim.path.clone();
+        let aside = parent.path.join(format!("aside-{round}"));
+        let foreign = parent.path.join(format!("foreign-{round}"));
+        std::fs::create_dir(&foreign).unwrap();
+        std::fs::write(foreign.join("keep"), b"foreign").unwrap();
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let swapper = {
+            let (stop, path, aside, foreign) = (
+                Arc::clone(&stop),
+                path.clone(),
+                aside.clone(),
+                foreign.clone(),
+            );
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    let _ = std::fs::rename(&path, &aside);
+                    let _ = std::fs::rename(&foreign, &path);
+                    let _ = std::fs::rename(&path, &foreign);
+                    let _ = std::fs::rename(&aside, &path);
+                }
+            })
+        };
+        std::thread::sleep(std::time::Duration::from_micros(200));
+        drop(claim);
+        stop.store(true, Ordering::Relaxed);
+        swapper.join().unwrap();
+
+        let survived = [&path, &aside, &foreign]
+            .iter()
+            .any(|p| std::fs::read(p.join("keep")).is_ok());
+        let listing: Vec<_> = std::fs::read_dir(&parent.path)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert!(
+            survived,
+            "round {round}: cleanup deleted the swapped-in foreign directory; listing {listing:?}"
+        );
+        for p in [&path, &aside, &foreign] {
+            let _ = std::fs::remove_dir_all(p);
+        }
+    }
 }
