@@ -119,7 +119,7 @@ impl Oscillator {
     pub(super) fn carry_hardware_state_from(&mut self, other: &Self) {
         match (self, other) {
             (Self::Square(square), Self::Square(previous)) => {
-                square.inherit_hardware_from(previous)
+                square.inherit_hardware_from(previous);
             }
             (Self::Noise(noise), Self::Noise(previous)) => {
                 noise.continue_output_from(previous);
