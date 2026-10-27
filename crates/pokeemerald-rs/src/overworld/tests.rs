@@ -234,7 +234,7 @@ fn a_failed_claim_leaves_the_unowned_entry_in_place() {
                 panic!("the claim lost the path");
             },
             |_| unreachable!("a lost claim never loads the pack"),
-        )
+        );
     });
     let survivor = std::fs::read(&path);
     let _ = std::fs::remove_file(&path);
