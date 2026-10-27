@@ -16,6 +16,8 @@ use super::{
     BagScreenResult, BagScreenTick, SWITCH_TICKS,
 };
 
+/// Ticks the bag's shake takes to settle after the cursor moves.
+const SHAKE_TICKS: u8 = 13;
 pub(super) const LIST_X: usize = 112;
 pub(super) const LIST_Y: usize = 17;
 pub(super) const ROW: usize = 16;
@@ -362,6 +364,8 @@ fn reopening_keeps_every_pockets_position() {
     screen.tick(press(Buttons::DOWN));
     switch_pocket(&mut screen, Buttons::RIGHT);
     screen.tick(press(Buttons::DOWN));
+    // The cursor move shakes the bag, which a reopened screen's is not doing.
+    idle(&mut screen, SHAKE_TICKS);
     let before = frame_of(&screen);
     let kept = screen.positions();
     assert_eq!(kept.pocket, Pocket::PokeBalls);
@@ -370,6 +374,9 @@ fn reopening_keeps_every_pockets_position() {
     let mut request = BagScreenRequest::new(BagScreenMode::Field);
     request.positions = kept;
     let mut reopened = open_with(request, &bag);
+    // Age the arrows to the same tick: the press and the idle ticks since the
+    // switch brought them back.
+    idle(&mut reopened, SHAKE_TICKS + 1);
     assert_eq!(frame_of(&reopened).pixels(), before.pixels());
     assert_eq!(reopened.positions(), kept);
     reopened.tick(press(Buttons::LEFT));
@@ -592,6 +599,8 @@ fn simultaneous_down_and_a_in_a_single_row_context_confirms() {
 }
 
 mod move_data;
+mod pocket_arrows;
 mod scroll;
+mod shake;
 mod swap;
 mod switch;

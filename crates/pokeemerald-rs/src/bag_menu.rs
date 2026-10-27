@@ -22,8 +22,11 @@
 //! `item_menu.c:1352-1404`) over the ticks that follow it: the list is wiped
 //! away, the bag bobs and the ball turns, and the engine changes pocket only
 //! when the list returns. The list's scroll arrows show while the pocket has
-//! rows past the window and bob as upstream's do. Only the Items, Poké Balls
-//! and Key Items pockets swap (`CanSwapItems`, `item_menu.c:1416-1427`).
+//! rows past the window and bob as upstream's do, and the pocket-switch arrows
+//! sit at the pocket name except during a switch, a context menu, or a swap,
+//! and the bag picture shakes when the list cursor moves (`ShakeBagSprite`,
+//! `item_menu_icons.c:477-494`). Only the Items, Poké Balls and Key Items
+//! pockets swap (`CanSwapItems`, `item_menu.c:1416-1427`).
 
 #![cfg_attr(
     not(test),
@@ -46,11 +49,13 @@ mod chrome;
 mod draw;
 mod labels;
 mod scroll;
+mod shake;
 mod sprite;
 mod swap;
 
 use chrome::BagChrome;
 use scroll::ArrowClock;
+use shake::BagShake;
 use swap::ItemSwap;
 
 /// Which caller opened the screen.
@@ -224,6 +229,10 @@ pub(crate) struct BagScreen {
     link_active: bool,
     switch: Option<PocketSwitch>,
     arrows: ArrowClock,
+    /// The pocket-switch arrows' own clock: a swap takes only that pair down.
+    switch_arrows: ArrowClock,
+    /// The bag picture's shake, which the list cursor sets off.
+    shake: BagShake,
     /// The bag as the screen has reordered it, which the engine menu lists.
     bag: Bag,
     /// What the engine menu was opened with. Its positions are the ones to
@@ -248,9 +257,10 @@ impl BagScreen {
     /// press is heard meanwhile and restarts it, unless the request has a
     /// link; every other input is dropped, not queued (`item_menu.c:1356-1370`).
     pub(crate) fn tick(&mut self, buttons: ButtonState) -> BagScreenTick {
-        let arrows_were_shown = self.arrows_exist();
+        let pairs_before = self.arrow_pairs();
         let outcome = self.handle_buttons(buttons);
-        self.age_arrows(arrows_were_shown, self.arrows_exist());
+        self.age_arrows(pairs_before, self.arrow_pairs());
+        self.shake.update();
         outcome
     }
 
@@ -462,6 +472,8 @@ fn open_from_pack(
         link_active: request.link.is_some(),
         switch: None,
         arrows: ArrowClock::default(),
+        switch_arrows: ArrowClock::default(),
+        shake: BagShake::default(),
         bag: bag.clone(),
         menu_request: engine_request,
         swap: None,
