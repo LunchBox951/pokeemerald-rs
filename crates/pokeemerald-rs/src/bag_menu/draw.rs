@@ -6,6 +6,7 @@ use rendering::{Framebuffer, Rgb888};
 
 use super::chrome::width_of;
 use super::labels;
+use super::swap::ItemSwap;
 use super::{BagScreen, PocketSwitch, SwitchDirection, SWITCH_WIPE_TICKS};
 
 /// The list window's content rectangle, in pixels (`sDefaultBagWindows`,
@@ -86,6 +87,18 @@ const CELL_WIDTH: i32 = 56;
 const CELL_TEXT_X: i32 = 8;
 const CELL_TOP: i32 = 1;
 
+/// The swap line's eight sprites (`ITEMMENU_SWAP_LINE_LENGTH`) start at
+/// x 112 (their centres at 120 less 8) and sit 16 apart; the sprite at y
+/// `1 + (row + 1) * 16` centres a boundary above row `row`, so its top is 9
+/// plus the row offset (`item_menu_icons.c:585-587`). The body frame is the
+/// sheet's second.
+const SWAP_LINE_SPRITES: i32 = 8;
+const SWAP_LINE_LEFT: i32 = 112;
+const SWAP_LINE_SPRITE_WIDTH: i32 = 16;
+const SWAP_LINE_MARGIN: i32 = 8;
+const SWAP_LINE_TOP: i32 = 9;
+const SWAP_LINE_BODY_ROW: usize = 16;
+
 impl BagScreen {
     /// Composites the screen over `base`, whose pixels show wherever the
     /// screen's graphics are transparent. A closed screen draws nothing.
@@ -108,10 +121,12 @@ impl BagScreen {
         if let Some(grid) = self.menu.context_grid() {
             self.draw_context(&mut base, &grid);
         }
+        self.draw_swap_line(&mut base);
+        self.draw_scroll_arrows(&mut base);
         base
     }
 
-    fn pocket_index(&self) -> usize {
+    pub(super) fn pocket_index(&self) -> usize {
         BROWSE_ORDER
             .iter()
             .position(|&pocket| pocket == self.menu.pocket())
@@ -236,6 +251,10 @@ impl BagScreen {
                 }
             }
         }
+        if let Some(swap) = self.swap() {
+            self.draw_swap_source_cursor(fb, swap);
+            return;
+        }
         let cursor_y = ROW_TOP + i32::from(self.menu.cursor()) * ROW_HEIGHT;
         let arrow = self.chrome.normal_text(SELECTOR_ARROW);
         let cursor_colors = if self.menu.context_grid().is_some() {
@@ -319,11 +338,18 @@ impl BagScreen {
     /// The icon and description of the highlighted row: the close row's
     /// arrow and return text when the cursor is on it.
     fn draw_selection(&self, fb: &mut Framebuffer) {
+        if let Some(swap) = self.swap() {
+            // The icon and description stay on the picked-up item, which
+            // `BagMenu_MoveCursorCallback` does not update while swapping
+            // (`item_menu.c:933-942,1434-1440`).
+            let name = assets::items::ItemDisplayTable::new()
+                .get(swap.item)
+                .map_or("?", |data| data.name);
+            self.draw_icon_and_description(fb, Some(swap.item), &labels::move_prompt(name));
+            return;
+        }
         let position = usize::from(self.menu.scroll()) + usize::from(self.menu.cursor());
         let item = self.menu.stacks().get(position).map(|stack| stack.item);
-        if let Some(icon) = self.chrome.icon(item) {
-            icon.blit_rows(fb, ICON_ORIGIN, 0, ICON_SIDE);
-        }
         let description = if self.menu.context_grid().is_some()
             && self.menu.pocket() == assets::items::Pocket::TmHm
         {
@@ -346,7 +372,19 @@ selected.",
                 labels::description,
             )
         };
-        let text = self.chrome.normal_text(&description);
+        self.draw_icon_and_description(fb, item, &description);
+    }
+
+    fn draw_icon_and_description(
+        &self,
+        fb: &mut Framebuffer,
+        item: Option<assets::items::ItemId>,
+        description: &str,
+    ) {
+        if let Some(icon) = self.chrome.icon(item) {
+            icon.blit_rows(fb, ICON_ORIGIN, 0, ICON_SIDE);
+        }
+        let text = self.chrome.normal_text(description);
         draw_glyphs(
             fb,
             DESCRIPTION_ORIGIN,
@@ -355,6 +393,51 @@ selected.",
             &text,
             &self.chrome.normal_text_colors(),
         );
+    }
+
+    /// The gray cursor `BagMenu_ItemPrintCallback` leaves on the picked-up
+    /// item's row while it is in the window; the moving cursor is hidden
+    /// (`item_menu.c:954-960,1434-1442`).
+    fn draw_swap_source_cursor(&self, fb: &mut Framebuffer, swap: ItemSwap) {
+        let Some(row) = swap.from.checked_sub(usize::from(self.menu.scroll())) else {
+            return;
+        };
+        if row >= self.menu.visible_rows().len() {
+            return;
+        }
+        let y = ROW_TOP + i32::try_from(row).unwrap_or(0) * ROW_HEIGHT;
+        let arrow = self.chrome.normal_text(SELECTOR_ARROW);
+        draw_glyphs(
+            fb,
+            LIST_ORIGIN,
+            LIST_SIZE,
+            (0, y),
+            &arrow,
+            &self.chrome.gray_cursor_colors(),
+        );
+    }
+
+    /// The swap line at the place the cursor chooses: eight 16x16 sprites,
+    /// the first its end and the rest its body, the last pulled in so it
+    /// stays clear of the list's right margin (`CreateSwapLineSprites`,
+    /// `UpdateSwapLineSpritesPos`, `menu_helpers.c:399-451`).
+    fn draw_swap_line(&self, fb: &mut Framebuffer) {
+        if !self.swap().is_some_and(|swap| swap.line_visible) {
+            return;
+        }
+        let top = SWAP_LINE_TOP + i32::from(self.menu.cursor()) * ROW_HEIGHT;
+        for sprite in 0..SWAP_LINE_SPRITES {
+            let margin = if sprite == SWAP_LINE_SPRITES - 1 {
+                SWAP_LINE_MARGIN
+            } else {
+                0
+            };
+            let left = SWAP_LINE_LEFT + sprite * SWAP_LINE_SPRITE_WIDTH - margin;
+            let frame_row = if sprite == 0 { 0 } else { SWAP_LINE_BODY_ROW };
+            self.chrome
+                .swap_line_sheet()
+                .draw_frame(fb, (left, top), frame_row, false);
+        }
     }
 
     fn draw_context(&self, fb: &mut Framebuffer, grid: &BagContextGrid) {
