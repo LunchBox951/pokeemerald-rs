@@ -308,8 +308,7 @@ impl TrainerContext {
     /// engine's own last-executed move; upstream's `gCurrentMove` is exactly
     /// this stale value at the point a forced replacement runs). See the
     /// ledger's `GetMostSuitableMonToSwitchInto` and
-    /// `OpponentHandleChoosePokemon` entries for the full upstream mapping
-    /// and its one remaining documented divergence (issue #1040).
+    /// `OpponentHandleChoosePokemon` entries for the full upstream mapping.
     ///
     /// # Errors
     ///
