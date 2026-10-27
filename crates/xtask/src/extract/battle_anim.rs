@@ -78,10 +78,13 @@ struct Sources<'a> {
 }
 
 /// Extracts the battle-animation catalog from the checkout.
+///
+/// Returns the catalog it queued, so a later extractor takes its inventory from
+/// the same programs without parsing the script twice.
 pub(super) fn extract_battle_anim(
     upstream: &Path,
     writer: &mut PackWriter,
-) -> Result<(), ExtractError> {
+) -> Result<BattleAnimationCatalog, ExtractError> {
     let read = |paths: &[&'static str]| -> Result<Vec<(&'static str, String)>, ExtractError> {
         paths
             .iter()
@@ -92,7 +95,7 @@ pub(super) fn extract_battle_anim(
     let macros = read_text(&upstream.join(MACROS_PATH))?;
     let headers = read(&HEADER_PATHS)?;
     let assembler = read(&ASSEMBLER_PATHS)?;
-    let bytes = build(&Sources {
+    let catalog = build(&Sources {
         script: &script,
         macros: &macros,
         headers: borrowed(&headers),
@@ -103,8 +106,8 @@ pub(super) fn extract_battle_anim(
         line: fault.line,
         detail: fault.detail,
     })?;
-    writer.push(pack_format::raw_entry(PACK_ID.to_owned(), bytes));
-    Ok(())
+    writer.push(pack_format::raw_entry(PACK_ID.to_owned(), catalog.encode()));
+    Ok(catalog)
 }
 
 fn borrowed<'a>(files: &'a [(&'static str, String)]) -> Vec<(&'a str, &'a str)> {
@@ -114,7 +117,7 @@ fn borrowed<'a>(files: &'a [(&'static str, String)]) -> Vec<(&'a str, &'a str)> 
         .collect()
 }
 
-fn build(src: &Sources<'_>) -> Result<Vec<u8>, Fault> {
+fn build(src: &Sources<'_>) -> Result<BattleAnimationCatalog, Fault> {
     let mut constants = Constants::default();
     for (path, text) in &src.headers {
         constants.load_header(path, text)?;
@@ -124,9 +127,7 @@ fn build(src: &Sources<'_>) -> Result<Vec<u8>, Fault> {
     }
     let macros = Macros::parse(MACROS_PATH, src.macros)?;
     let script = Script::parse(SCRIPT_PATH, src.script, &constants, &macros)?;
-    link(&script)
-        .map(|catalog| catalog.encode())
-        .map_err(|(line, detail)| Fault::new(SCRIPT_PATH, line, detail))
+    link(&script).map_err(|(line, detail)| Fault::new(SCRIPT_PATH, line, detail))
 }
 
 /// Resolves the reachable programs and builds the catalog.

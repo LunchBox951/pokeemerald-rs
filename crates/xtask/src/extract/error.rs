@@ -247,6 +247,23 @@ pub enum ExtractError {
         /// What differs from the expected shape.
         detail: String,
     },
+    /// A battle-effect registration, declaration, or constant does not parse as
+    /// the pinned upstream shape.
+    BattleEffectSource {
+        /// Source path.
+        path: PathBuf,
+        /// One-based line, or zero when the fault is not tied to one line.
+        line: usize,
+        /// What differs from the expected shape.
+        detail: String,
+    },
+    /// A battle-effect sheet or palette differs from its upstream shape.
+    BattleEffectAssetMismatch {
+        /// Source path.
+        path: PathBuf,
+        /// What differs from the expected shape.
+        detail: String,
+    },
     /// A direct-sound sample violates the supported WAV contract.
     Wav(
         /// Source path.
@@ -441,6 +458,12 @@ impl fmt::Display for ExtractError {
             }
             Self::BattleAnimationSource { path, line, detail } => {
                 write!(f, "battle-animation source `{}` line {line}: {detail}", path.display())
+            }
+            Self::BattleEffectSource { path, line, detail } => {
+                write!(f, "battle-effect source `{}` line {line}: {detail}", path.display())
+            }
+            Self::BattleEffectAssetMismatch { path, detail } => {
+                write!(f, "battle-effect asset `{}` {detail}", path.display())
             }
             Self::Wav(path, error) => {
                 write!(f, "decoding `{}` failed: {error}", path.display())

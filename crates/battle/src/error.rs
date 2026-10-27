@@ -100,6 +100,10 @@ pub enum BattleError {
     /// A trainer ID was outside the extracted trainer table.
     UnknownTrainer(TrainerId),
 
+    /// A trainer switch named a party slot that is not a healthy non-active
+    /// member: the active slot, a slot past the party, or a fainted member.
+    InvalidTrainerSwitch(usize),
+
     /// A trainer knew a move that the turn engine could execute but the
     /// trainer AI could not score. Trainer-battle construction rejects it
     /// before consuming randomness.
@@ -198,6 +202,9 @@ impl fmt::Display for BattleError {
                 write!(f, "running is forbidden in trainer battles")
             }
             Self::UnknownTrainer(id) => write!(f, "unknown trainer id `{}`", id.0),
+            Self::InvalidTrainerSwitch(slot) => {
+                write!(f, "party slot `{slot}` is not a healthy non-active member")
+            }
             Self::UnscoreableMoveEffect(id) => write!(
                 f,
                 "move `{}` has a battle effect the trainer AI does not score",
