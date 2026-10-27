@@ -6,6 +6,7 @@ use rendering::{Framebuffer, Rgb888};
 
 use super::chrome::width_of;
 use super::labels;
+use super::swap::ItemSwap;
 use super::{BagScreen, PocketSwitch, SwitchDirection, SWITCH_WIPE_TICKS};
 
 /// The list window's content rectangle, in pixels (`sDefaultBagWindows`,
@@ -33,6 +34,16 @@ const HM_NUMBER_GAP: i32 = 5;
 const DESCRIPTION_ORIGIN: (i32, i32) = (0, 104);
 const DESCRIPTION_SIZE: (i32, i32) = (112, 48);
 const DESCRIPTION_TEXT_OFFSET: (i32, i32) = (3, 1);
+/// The TM/HM move-data windows (`sDefaultBagWindows`, `item_menu.c:422-437`):
+/// the label icons at tile (1, 13), 5x6 tiles, and the type icon and values at
+/// tile (7, 13), 4x6 tiles. Values print at x 7 on 12-pixel lines
+/// (`item_menu.c:2576,2588,2592`).
+const MOVE_LABELS_ORIGIN: (i32, i32) = (8, 104);
+const MOVE_LABELS_SIZE: (u32, u32) = (40, 48);
+const MOVE_VALUES_ORIGIN: (i32, i32) = (56, 104);
+const MOVE_VALUES_SIZE: (u32, u32) = (32, 48);
+const MOVE_DATA_LINE: i32 = 12;
+const MOVE_VALUE_X: i32 = 7;
 /// The pocket-name window (tile (4, 1), 8x2) and its centring width
 /// (`item_menu.c:2408-2420`).
 const POCKET_NAME_ORIGIN: (i32, i32) = (32, 8);
@@ -86,6 +97,18 @@ const CELL_WIDTH: i32 = 56;
 const CELL_TEXT_X: i32 = 8;
 const CELL_TOP: i32 = 1;
 
+/// The swap line's eight sprites (`ITEMMENU_SWAP_LINE_LENGTH`) start at
+/// x 112 (their centres at 120 less 8) and sit 16 apart; the sprite at y
+/// `1 + (row + 1) * 16` centres a boundary above row `row`, so its top is 9
+/// plus the row offset (`item_menu_icons.c:585-587`). The body frame is the
+/// sheet's second.
+const SWAP_LINE_SPRITES: i32 = 8;
+const SWAP_LINE_LEFT: i32 = 112;
+const SWAP_LINE_SPRITE_WIDTH: i32 = 16;
+const SWAP_LINE_MARGIN: i32 = 8;
+const SWAP_LINE_TOP: i32 = 9;
+const SWAP_LINE_BODY_ROW: usize = 16;
+
 impl BagScreen {
     /// Composites the screen over `base`, whose pixels show wherever the
     /// screen's graphics are transparent. A closed screen draws nothing.
@@ -108,10 +131,12 @@ impl BagScreen {
         if let Some(grid) = self.menu.context_grid() {
             self.draw_context(&mut base, &grid);
         }
+        self.draw_swap_line(&mut base);
+        self.draw_scroll_arrows(&mut base);
         base
     }
 
-    fn pocket_index(&self) -> usize {
+    pub(super) fn pocket_index(&self) -> usize {
         BROWSE_ORDER
             .iter()
             .position(|&pocket| pocket == self.menu.pocket())
@@ -236,6 +261,10 @@ impl BagScreen {
                 }
             }
         }
+        if let Some(swap) = self.swap() {
+            self.draw_swap_source_cursor(fb, swap);
+            return;
+        }
         let cursor_y = ROW_TOP + i32::from(self.menu.cursor()) * ROW_HEIGHT;
         let arrow = self.chrome.normal_text(SELECTOR_ARROW);
         let cursor_colors = if self.menu.context_grid().is_some() {
@@ -319,18 +348,30 @@ impl BagScreen {
     /// The icon and description of the highlighted row: the close row's
     /// arrow and return text when the cursor is on it.
     fn draw_selection(&self, fb: &mut Framebuffer) {
+        if let Some(swap) = self.swap() {
+            // The icon and description stay on the picked-up item, which
+            // `BagMenu_MoveCursorCallback` does not update while swapping
+            // (`item_menu.c:933-942,1434-1440`).
+            let name = assets::items::ItemDisplayTable::new()
+                .get(swap.item)
+                .map_or("?", |data| data.name);
+            self.draw_icon_and_description(fb, Some(swap.item), &labels::move_prompt(name));
+            return;
+        }
         let position = usize::from(self.menu.scroll()) + usize::from(self.menu.cursor());
         let item = self.menu.stacks().get(position).map(|stack| stack.item);
         if let Some(icon) = self.chrome.icon(item) {
             icon.blit_rows(fb, ICON_ORIGIN, 0, ICON_SIDE);
         }
-        let description = if self.menu.context_grid().is_some()
-            && self.menu.pocket() == assets::items::Pocket::TmHm
-        {
-            // The TM/HM pocket clears the window for its move data, which is
-            // not drawn (`item_menu.c:1642-1648`).
-            String::new()
-        } else if self.menu.context_grid().is_some() {
+        if self.menu.context_grid().is_some() && self.menu.pocket() == assets::items::Pocket::TmHm {
+            // The TM/HM pocket swaps the description window for its move data
+            // (`item_menu.c:1642-1648`).
+            if let Some(item) = item {
+                self.draw_move_data(fb, item);
+            }
+            return;
+        }
+        let description = if self.menu.context_grid().is_some() {
             // `OpenContextMenu` swaps the description for this
             // (`item_menu.c:1651-1655`).
             let table = assets::items::ItemDisplayTable::new();
@@ -346,7 +387,19 @@ selected.",
                 labels::description,
             )
         };
-        let text = self.chrome.normal_text(&description);
+        self.draw_icon_and_description(fb, item, &description);
+    }
+
+    fn draw_icon_and_description(
+        &self,
+        fb: &mut Framebuffer,
+        item: Option<assets::items::ItemId>,
+        description: &str,
+    ) {
+        if let Some(icon) = self.chrome.icon(item) {
+            icon.blit_rows(fb, ICON_ORIGIN, 0, ICON_SIDE);
+        }
+        let text = self.chrome.normal_text(description);
         draw_glyphs(
             fb,
             DESCRIPTION_ORIGIN,
@@ -355,6 +408,80 @@ selected.",
             &text,
             &self.chrome.normal_text_colors(),
         );
+    }
+
+    /// `PrepareTMHMMoveWindow` and `PrintTMHMMoveData` (`item_menu.c:2538-2595`):
+    /// the TYPE, POWER, ACCURACY and PP labels, the move's type icon, and its
+    /// power, accuracy, and PP.
+    fn draw_move_data(&self, fb: &mut Framebuffer, item: assets::items::ItemId) {
+        let Some(data) = labels::move_data_text(item) else {
+            return;
+        };
+        let labels_window = (MOVE_LABELS_ORIGIN, MOVE_LABELS_SIZE);
+        for (line, icon) in (0..).zip(self.chrome.label_icons()) {
+            self.chrome
+                .draw_menu_info_icon(fb, icon, labels_window, (0, line * MOVE_DATA_LINE));
+        }
+        let values_window = (MOVE_VALUES_ORIGIN, MOVE_VALUES_SIZE);
+        if let Some(icon) = self.chrome.type_icon(data.type_id) {
+            self.chrome
+                .draw_menu_info_icon(fb, icon, values_window, (0, 0));
+        }
+        let colors = self.chrome.move_data_text_colors();
+        let size = (
+            i32::try_from(MOVE_VALUES_SIZE.0).unwrap_or(0),
+            i32::try_from(MOVE_VALUES_SIZE.1).unwrap_or(0),
+        );
+        for (line, value) in (1..).zip([&data.power, &data.accuracy, &data.pp]) {
+            let text = self.chrome.normal_text(value);
+            let offset = (MOVE_VALUE_X, line * MOVE_DATA_LINE);
+            draw_glyphs(fb, MOVE_VALUES_ORIGIN, size, offset, &text, &colors);
+        }
+    }
+
+    /// The gray cursor `BagMenu_ItemPrintCallback` leaves on the picked-up
+    /// item's row while it is in the window; the moving cursor is hidden
+    /// (`item_menu.c:954-960,1434-1442`).
+    fn draw_swap_source_cursor(&self, fb: &mut Framebuffer, swap: ItemSwap) {
+        let Some(row) = swap.from.checked_sub(usize::from(self.menu.scroll())) else {
+            return;
+        };
+        if row >= self.menu.visible_rows().len() {
+            return;
+        }
+        let y = ROW_TOP + i32::try_from(row).unwrap_or(0) * ROW_HEIGHT;
+        let arrow = self.chrome.normal_text(SELECTOR_ARROW);
+        draw_glyphs(
+            fb,
+            LIST_ORIGIN,
+            LIST_SIZE,
+            (0, y),
+            &arrow,
+            &self.chrome.gray_cursor_colors(),
+        );
+    }
+
+    /// The swap line at the place the cursor chooses: eight 16x16 sprites,
+    /// the first its end and the rest its body, the last pulled in so it
+    /// stays clear of the list's right margin (`CreateSwapLineSprites`,
+    /// `UpdateSwapLineSpritesPos`, `menu_helpers.c:399-451`).
+    fn draw_swap_line(&self, fb: &mut Framebuffer) {
+        if !self.swap().is_some_and(|swap| swap.line_visible) {
+            return;
+        }
+        let top = SWAP_LINE_TOP + i32::from(self.menu.cursor()) * ROW_HEIGHT;
+        for sprite in 0..SWAP_LINE_SPRITES {
+            let margin = if sprite == SWAP_LINE_SPRITES - 1 {
+                SWAP_LINE_MARGIN
+            } else {
+                0
+            };
+            let left = SWAP_LINE_LEFT + sprite * SWAP_LINE_SPRITE_WIDTH - margin;
+            let frame_row = if sprite == 0 { 0 } else { SWAP_LINE_BODY_ROW };
+            self.chrome
+                .swap_line_sheet()
+                .draw_frame(fb, (left, top), frame_row, false);
+        }
     }
 
     fn draw_context(&self, fb: &mut Framebuffer, grid: &BagContextGrid) {
