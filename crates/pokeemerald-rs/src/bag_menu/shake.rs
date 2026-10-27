@@ -137,14 +137,13 @@ impl BagShake {
             self.rotate_by_frame();
         } else {
             self.index += 1;
-            match self.animation.commands().get(self.index) {
-                Some(Command::Frame { .. }) => self.apply_frame(),
-                _ => {
-                    // The end command stays put, as `AffineAnimCmd_end` steps
-                    // the index back to it.
-                    self.ended = true;
-                    self.index = self.index.saturating_sub(1);
-                }
+            if let Some(Command::Frame { .. }) = self.animation.commands().get(self.index) {
+                self.apply_frame();
+            } else {
+                // The end command stays put, as `AffineAnimCmd_end` steps the
+                // index back to it.
+                self.ended = true;
+                self.index = self.index.saturating_sub(1);
             }
         }
     }
