@@ -331,7 +331,7 @@ fn font_costs_a_reveal_delay_period_like_other_repeat_controls() {
         frames_to_second_glyph(&[ENCODED_A, EXT, FONT_CODE, 0, ENCODED_A, crate::text::EOS]);
     // One more token handled before the glyph, each preceded by the Mid
     // period of 4 reveal-delay frames.
-    assert_eq!(with_font - plain, TextSpeed::Mid.wait_frames() as u32);
+    assert_eq!(with_font - plain, u32::from(TextSpeed::Mid.wait_frames()));
 }
 
 #[test]
