@@ -55,6 +55,27 @@ pub(super) const WIPE_RESTORED: Rgb888 = WIPE_RESTORED_555.to_rgb888();
 const WIPE_COVER_555: Bgr555 = bgr(12, 0, 12);
 const WIPE_RESTORED_555: Bgr555 = bgr(0, 12, 12);
 pub(super) const BACKGROUND: Rgb888 = rgb(0, 10, 10);
+/// The scroll-arrow sheet's markers. The horizontal-arrow frame (rows 0-15)
+/// is solid `ARROW_HORIZONTAL`; the vertical frame (rows 16-31) is clear but
+/// for `ARROW_NEAR` at its column 3, row 2 and `ARROW_FAR` at column 12,
+/// row 13, so a flip or a wrong frame moves or recolours them.
+pub(super) const ARROW_NEAR: Rgb888 = ARROW_NEAR_555.to_rgb888();
+pub(super) const ARROW_FAR: Rgb888 = ARROW_FAR_555.to_rgb888();
+pub(super) const ARROW_HORIZONTAL: Rgb888 = ARROW_HORIZONTAL_555.to_rgb888();
+const ARROW_NEAR_555: Bgr555 = bgr(31, 10, 10);
+const ARROW_FAR_555: Bgr555 = bgr(10, 31, 10);
+const ARROW_HORIZONTAL_555: Bgr555 = bgr(10, 10, 31);
+/// The swap-line sheet's markers: the first sprite's frame (rows 0-15) holds
+/// only `SWAP_END` at column 2, row 3, and the others' frame (rows 16-31)
+/// only `SWAP_SEGMENT` at column 5, row 4.
+pub(super) const SWAP_END: Rgb888 = SWAP_END_555.to_rgb888();
+pub(super) const SWAP_SEGMENT: Rgb888 = SWAP_SEGMENT_555.to_rgb888();
+const SWAP_END_555: Bgr555 = bgr(31, 31, 10);
+const SWAP_SEGMENT_555: Bgr555 = bgr(10, 31, 31);
+pub(super) const SWAP_END_AT: (usize, usize) = (2, 3);
+pub(super) const SWAP_SEGMENT_AT: (usize, usize) = (5, 4);
+pub(super) const ARROW_NEAR_AT: (usize, usize) = (3, 2);
+pub(super) const ARROW_FAR_AT: (usize, usize) = (12, 13);
 
 /// The menu-info sheet's side, in pixels and in tiles.
 const MENU_INFO_SIDE: u32 = 128;
@@ -308,6 +329,58 @@ fn picture_entries() -> Vec<PackEntry> {
     ]
 }
 
+fn scroll_indicator_entries() -> Vec<PackEntry> {
+    const SIDE: u32 = 16;
+    let side = SIDE as usize;
+    let mut sheet = vec![0u8; side * side * 2];
+    sheet[..side * side].fill(3);
+    for ((x, y), index) in [(ARROW_NEAR_AT, 1u8), (ARROW_FAR_AT, 2)] {
+        sheet[(side + y) * side + x] = index;
+    }
+    vec![
+        pack_format::image_entry(
+            "bag/image/scroll_indicator".into(),
+            SIDE,
+            2 * SIDE,
+            BIT_DEPTH,
+            sheet,
+        )
+        .unwrap(),
+        palette_entry_with_colors(
+            "bag/palette/scroll_indicator",
+            16,
+            &[
+                (1, ARROW_NEAR_555),
+                (2, ARROW_FAR_555),
+                (3, ARROW_HORIZONTAL_555),
+            ],
+        ),
+    ]
+}
+
+fn swap_line_entries() -> Vec<PackEntry> {
+    const SIDE: u32 = 16;
+    let side = SIDE as usize;
+    let mut sheet = vec![0u8; side * side * 2];
+    sheet[SWAP_END_AT.1 * side + SWAP_END_AT.0] = 1;
+    sheet[(side + SWAP_SEGMENT_AT.1) * side + SWAP_SEGMENT_AT.0] = 2;
+    vec![
+        pack_format::image_entry(
+            "bag/image/swap_line".into(),
+            SIDE,
+            2 * SIDE,
+            BIT_DEPTH,
+            sheet,
+        )
+        .unwrap(),
+        palette_entry_with_colors(
+            "bag/palette/swap_line",
+            16,
+            &[(1, SWAP_END_555), (2, SWAP_SEGMENT_555)],
+        ),
+    ]
+}
+
 fn icon_entries() -> Vec<PackEntry> {
     let mut entries = Vec::new();
     for image in ICON_IMAGES {
@@ -411,6 +484,8 @@ fn entries_with_fonts(normal: PackEntry, narrow: PackEntry) -> Vec<PackEntry> {
     all.extend(picture_entries());
     all.extend(icon_entries());
     all.extend(menu_info_entries());
+    all.extend(scroll_indicator_entries());
+    all.extend(swap_line_entries());
     all
 }
 
