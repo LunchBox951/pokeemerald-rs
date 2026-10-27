@@ -558,13 +558,26 @@ fn unpack_row(packed: &[u8], width: usize, bit_depth: u8, out: &mut Vec<u8>) {
 ///
 /// # Errors
 ///
-/// Returns [`PngError`] when framing, a parsed chunk's CRC, or the `PLTE`
-/// shape is invalid.
+/// Returns [`PngError`] when framing, a parsed chunk's CRC, the `IHDR`, or the
+/// `PLTE` shape is invalid, or when the image is not colour type 3 (indexed):
+/// pinned `ReadPngPalette` (`tools/gbagfx/convert_png.c`) reads `PLTE` only
+/// from an indexed image, so a suggested palette in a truecolour or grayscale
+/// PNG is not a game palette.
 pub fn decode_palette(data: &[u8]) -> Result<Vec<Rgb888>, PngError> {
     let rest = data
         .strip_prefix(&SIGNATURE)
         .ok_or(PngError::BadSignature)?;
     let chunks = read_chunks(rest)?;
+
+    let ihdr = chunks
+        .iter()
+        .find(|chunk| chunk.kind == IHDR)
+        .ok_or(PngError::Truncated)?;
+    let header = Header::parse(ihdr.data)?;
+    header.validate()?;
+    if header.color_type != INDEXED_COLOR_TYPE {
+        return Err(PngError::Unsupported("colour type is not 3 (indexed)"));
+    }
 
     let plte = chunks
         .iter()
@@ -1234,5 +1247,65 @@ pub(crate) mod tests {
         );
         let err = decode_palette(&png).unwrap_err();
         assert_eq!(err, PngError::MissingOrBadPalette);
+    }
+    #[test]
+    fn decode_palette_rejects_a_truecolor_png_with_a_suggested_plte() {
+        const TRUECOLOR_TYPE: u8 = 2;
+
+        let png = png_of_color_type(
+            TRUECOLOR_TYPE,
+            super::EIGHT_BIT_DEPTH,
+            1,
+            1,
+            &[super::FILTER_NONE, 0, 0, 0],
+            Some(&[1, 2, 3]),
+        );
+        assert_eq!(
+            decode_palette(&png).unwrap_err(),
+            PngError::Unsupported("colour type is not 3 (indexed)"),
+            "pinned ReadPngPalette only reads PLTE from an indexed image"
+        );
+    }
+
+    #[test]
+    fn decode_palette_rejects_a_grayscale_png_with_a_suggested_plte() {
+        let png = png_of_color_type(
+            super::GRAYSCALE_COLOR_TYPE,
+            super::FOUR_BIT_DEPTH,
+            1,
+            1,
+            &[super::FILTER_NONE, 0],
+            Some(&[1, 2, 3]),
+        );
+        assert_eq!(
+            decode_palette(&png).unwrap_err(),
+            PngError::Unsupported("colour type is not 3 (indexed)"),
+            "a grayscale image decodes without a palette, so a PLTE is not its palette"
+        );
+    }
+
+    #[test]
+    fn decode_palette_rejects_an_empty_ihdr_body() {
+        let mut png = Vec::new();
+        png.extend_from_slice(&super::SIGNATURE);
+        png.extend_from_slice(&chunk(super::IHDR, &[]));
+        png.extend_from_slice(&chunk(super::PLTE, &[1, 2, 3]));
+        png.extend_from_slice(&chunk(super::IEND, &[]));
+        assert_eq!(decode_palette(&png).unwrap_err(), PngError::Truncated);
+    }
+
+    #[test]
+    fn decode_palette_rejects_an_unsupported_ihdr_shape() {
+        let png = indexed_png_from_raw_with_plte(
+            super::EIGHT_BIT_DEPTH,
+            0,
+            1,
+            &[super::FILTER_NONE],
+            &[1, 2, 3],
+        );
+        assert_eq!(
+            decode_palette(&png).unwrap_err(),
+            PngError::Unsupported("width or height is zero")
+        );
     }
 }
