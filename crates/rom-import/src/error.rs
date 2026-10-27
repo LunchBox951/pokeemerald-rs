@@ -854,28 +854,6 @@ mod tests {
             ImportError::CompressedSample {
                 id: "audio/sample/direct-sound/x",
             },
-            ImportError::CryToneData {
-                table: "gCryTable",
-                slot: 3,
-                field: "type",
-                expected: 0x20,
-                actual: 0x00,
-            },
-            ImportError::CryPointerMismatch {
-                table: "gCryTable_Reverse",
-                slot: 3,
-                expected: crate::reader::GbaPtr::AT_BASE,
-                actual: crate::reader::GbaPtr::AT_BASE,
-            },
-            ImportError::RepeatedCrySample {
-                first: 1,
-                slot: 3,
-                ptr: crate::reader::GbaPtr::AT_BASE,
-            },
-            ImportError::CryWaveType {
-                id: "audio/sample/direct-sound/cry/x",
-                kind: 0,
-            },
             ImportError::VoiceType {
                 root: "audio/voicegroup/title",
                 slot: 3,
@@ -917,6 +895,39 @@ mod tests {
             ImportError::EmptyPack,
             ImportError::SameFile {
                 path: std::path::PathBuf::from("/roms/emerald.gba"),
+            },
+        ];
+        for case in cases {
+            let text = case.to_string();
+            assert!(!text.is_empty());
+            assert!(!text.contains('\n'), "{text}");
+        }
+    }
+
+    #[test]
+    fn cry_messages_are_single_line() {
+        let cases = [
+            ImportError::CryToneData {
+                table: "gCryTable",
+                slot: 3,
+                field: "type",
+                expected: 0x20,
+                actual: 0x00,
+            },
+            ImportError::CryPointerMismatch {
+                table: "gCryTable_Reverse",
+                slot: 3,
+                expected: crate::reader::GbaPtr::AT_BASE,
+                actual: crate::reader::GbaPtr::AT_BASE,
+            },
+            ImportError::RepeatedCrySample {
+                first: 1,
+                slot: 3,
+                ptr: crate::reader::GbaPtr::AT_BASE,
+            },
+            ImportError::CryWaveType {
+                id: "audio/sample/direct-sound/cry/x",
+                kind: 0,
             },
         ];
         for case in cases {
