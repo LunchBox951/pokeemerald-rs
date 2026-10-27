@@ -154,6 +154,7 @@ const GRAYSCALE_INDEX_MAX: u8 = 15;
 const DEFLATE_COMPRESSION_METHOD: u8 = 0;
 const ADAPTIVE_FILTER_METHOD: u8 = 0;
 const NO_INTERLACE: u8 = 0;
+const ONE_BIT_DEPTH: u8 = 1;
 const TWO_BIT_DEPTH: u8 = 2;
 const FOUR_BIT_DEPTH: u8 = 4;
 const EIGHT_BIT_DEPTH: u8 = 8;
@@ -318,6 +319,37 @@ impl Header {
             return Err(PngError::Unsupported("image is interlaced"));
         }
         scanline_layout(self.width as usize, self.height as usize, self.bit_depth)?;
+        Ok(())
+    }
+}
+
+impl Header {
+    /// The `IHDR` checks palette extraction needs. `decode_palette` reads no
+    /// pixels, so it skips the pixel decoder's shape limits (the 2, 4, and
+    /// 8-bit depths, interlacing, scanline size) and, like pinned
+    /// `ReadPngPalette` (`tools/gbagfx/convert_png.c`), asks only for a
+    /// well-formed indexed image, which includes the 1-bit depth.
+    fn validate_palette_source(&self) -> Result<(), PngError> {
+        if self.width == 0 || self.height == 0 {
+            return Err(PngError::Unsupported("width or height is zero"));
+        }
+        if self.color_type != INDEXED_COLOR_TYPE {
+            return Err(PngError::Unsupported("colour type is not 3 (indexed)"));
+        }
+        if !matches!(
+            self.bit_depth,
+            ONE_BIT_DEPTH | TWO_BIT_DEPTH | FOUR_BIT_DEPTH | EIGHT_BIT_DEPTH
+        ) {
+            return Err(PngError::Unsupported(
+                "indexed bit depth is not 1, 2, 4, or 8",
+            ));
+        }
+        if self.compression_method != DEFLATE_COMPRESSION_METHOD {
+            return Err(PngError::Unsupported("compression method is not 0"));
+        }
+        if self.filter_method != ADAPTIVE_FILTER_METHOD {
+            return Err(PngError::Unsupported("filter method is not 0"));
+        }
         Ok(())
     }
 }
@@ -574,10 +606,7 @@ pub fn decode_palette(data: &[u8]) -> Result<Vec<Rgb888>, PngError> {
         .find(|chunk| chunk.kind == IHDR)
         .ok_or(PngError::Truncated)?;
     let header = Header::parse(ihdr.data)?;
-    header.validate()?;
-    if header.color_type != INDEXED_COLOR_TYPE {
-        return Err(PngError::Unsupported("colour type is not 3 (indexed)"));
-    }
+    header.validate_palette_source()?;
 
     let plte = chunks
         .iter()
@@ -1306,6 +1335,21 @@ pub(crate) mod tests {
         assert_eq!(
             decode_palette(&png).unwrap_err(),
             PngError::Unsupported("width or height is zero")
+        );
+    }
+    #[test]
+    fn decode_palette_accepts_a_one_bit_indexed_png() {
+        let png =
+            indexed_png_from_raw_with_plte(1, 1, 1, &[super::FILTER_NONE, 0], &[1, 2, 3, 4, 5, 6]);
+        assert_eq!(decode_palette(&png).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn decode_palette_rejects_an_indexed_bit_depth_the_png_spec_forbids() {
+        let png = indexed_png_from_raw_with_plte(3, 1, 1, &[super::FILTER_NONE, 0], &[1, 2, 3]);
+        assert_eq!(
+            decode_palette(&png).unwrap_err(),
+            PngError::Unsupported("indexed bit depth is not 1, 2, 4, or 8")
         );
     }
 }
