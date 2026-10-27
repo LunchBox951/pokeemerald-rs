@@ -3,19 +3,17 @@
 //! only while the list has rows past the window, and bobbing as upstream's
 //! sprite callback moves them (`list_menu.c:997-1020`).
 
-use assets::pack::PalettedImage;
 use engine::bag_menu::MAX_ITEMS_SHOWN;
-use rendering::{Framebuffer, Rgb888};
+use rendering::Framebuffer;
 
-use super::chrome::{put, sine};
+use super::chrome::sine;
+use super::sprite::SIDE;
 use super::BagScreen;
-use crate::textbox;
 
 /// Top-left corners of the 16x16 sprites, which are centred at (172, 12)
 /// and (172, 148) (`item_menu.c:1031-1033`).
 const UP_ORIGIN: (i32, i32) = (164, 4);
 const DOWN_ORIGIN: (i32, i32) = (164, 140);
-const SIDE: usize = 16;
 /// The vertical arrow is the sheet's second frame (tile offset 4,
 /// `list_menu.c:139-148`); the first holds the horizontal arrows.
 const VERTICAL_FRAME_ROW: usize = SIDE;
@@ -25,46 +23,6 @@ const VERTICAL_FRAME_ROW: usize = SIDE;
 const BOB_MULTIPLIER: i32 = 2;
 const PHASE_STEP: u8 = 8;
 const SINE_ONE: i32 = 256;
-
-/// The scroll-arrow sheet and its palette.
-#[derive(Debug)]
-pub(super) struct ArrowSheet {
-    pixels: Vec<u8>,
-    palette: Vec<Rgb888>,
-}
-
-impl ArrowSheet {
-    pub(super) fn from_paletted(source: PalettedImage<'_>) -> Self {
-        Self {
-            pixels: source.image.pixels.to_vec(),
-            palette: textbox::palette_colors(source.palette),
-        }
-    }
-
-    /// Draws the vertical arrow with its top-left at `origin`; the down arrow
-    /// is the same tiles flipped vertically. Index 0 stays transparent.
-    fn draw(&self, fb: &mut Framebuffer, origin: (i32, i32), down: bool) {
-        for y in 0..SIDE {
-            let source_row = VERTICAL_FRAME_ROW + if down { SIDE - 1 - y } else { y };
-            for x in 0..SIDE {
-                let Some(&index) = self.pixels.get(source_row * SIDE + x) else {
-                    continue;
-                };
-                if index == 0 {
-                    continue;
-                }
-                if let Some(&color) = self.palette.get(usize::from(index)) {
-                    put(
-                        fb,
-                        origin.0 + i32::try_from(x).unwrap_or(0),
-                        origin.1 + i32::try_from(y).unwrap_or(0),
-                        color,
-                    );
-                }
-            }
-        }
-    }
-}
 
 /// The age of the arrow pair, which restarts whenever upstream destroys and
 /// recreates it. The pair's sprite callbacks run every frame it exists, even
@@ -136,14 +94,20 @@ impl BagScreen {
         let (up, down) = self.arrows_shown();
         let bobbed = |origin: (i32, i32), down| (origin.0, origin.1 + self.arrows.bob(down));
         if up {
-            self.chrome
-                .arrow_sheet()
-                .draw(fb, bobbed(UP_ORIGIN, false), false);
+            self.chrome.arrow_sheet().draw_frame(
+                fb,
+                bobbed(UP_ORIGIN, false),
+                VERTICAL_FRAME_ROW,
+                false,
+            );
         }
         if down {
-            self.chrome
-                .arrow_sheet()
-                .draw(fb, bobbed(DOWN_ORIGIN, true), true);
+            self.chrome.arrow_sheet().draw_frame(
+                fb,
+                bobbed(DOWN_ORIGIN, true),
+                VERTICAL_FRAME_ROW,
+                true,
+            );
         }
     }
 }

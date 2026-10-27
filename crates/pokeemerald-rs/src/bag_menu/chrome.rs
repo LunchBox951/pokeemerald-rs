@@ -12,7 +12,7 @@ use engine::text::window as msgwin;
 use engine::text::{Symbol, Token};
 use rendering::{AffineMatrix, Framebuffer, Rgb888};
 
-use super::scroll::ArrowSheet;
+use super::sprite::SpriteSheet;
 use super::BagScreenError;
 use crate::textbox::{self, FrameAssets};
 
@@ -170,7 +170,8 @@ pub(super) struct BagChrome {
     screen_palette: Vec<Rgb888>,
     bag: Bitmap,
     ball: Bitmap,
-    arrows: ArrowSheet,
+    arrows: SpriteSheet,
+    swap_line: SpriteSheet,
     pub(super) hm_mark: Bitmap,
     pub(super) registered_mark: Bitmap,
     icons: BTreeMap<u16, Bitmap>,
@@ -225,7 +226,8 @@ impl BagChrome {
             screen_palette: screen_palette.clone(),
             bag: Bitmap::from_paletted(if female { bag.female } else { bag.male }),
             ball: Bitmap::from_paletted(bag.rotating_ball),
-            arrows: ArrowSheet::from_paletted(bag.scroll_indicator()?),
+            arrows: SpriteSheet::from_paletted(bag.scroll_indicator()?),
+            swap_line: SpriteSheet::from_paletted(bag.swap_line()?),
             hm_mark: flat(bag.hm),
             registered_mark: flat(bag.registered_select),
             icons,
@@ -233,8 +235,13 @@ impl BagChrome {
     }
 
     /// The list scroll-arrow sprites.
-    pub(super) fn arrow_sheet(&self) -> &ArrowSheet {
+    pub(super) fn arrow_sheet(&self) -> &SpriteSheet {
         &self.arrows
+    }
+
+    /// The swap-line sprites.
+    pub(super) fn swap_line_sheet(&self) -> &SpriteSheet {
+        &self.swap_line
     }
 
     /// The icon decoded for `item`, or the close row's for `None`.

@@ -30800,6 +30800,12 @@
           "rust_target": "crates/assets/src/items.rs",
           "spec": "C-2",
           "status": "rewritten"
+        },
+        "bag_move_item_slot": {
+          "reason": "MoveItemSlotInList (item.c:635-657): the item at one list row is taken out and put back before another row, so a place is a boundary between rows and may follow the last. The pocket is first packed in list order, as upstream packs it on opening the bag (CompactItemsInBagPocket, item.c:601-612; item_menu.c:1101-1122), because the engine lists rows without compacting the caller's bag. Battle Pyramid and PC lists are not modelled.",
+          "rust_target": "crates/pokeemerald-rs/src/bag_menu/swap.rs",
+          "spec": "C-5",
+          "status": "rewritten"
         }
       },
       "category": "code.source",
@@ -30822,7 +30828,7 @@
     "src/item_menu.c": {
       "artifacts": {
         "bag_menu_screen": {
-          "reason": "BagScreen composes the bag over a supplied field or battle frame: screen tilemap, per-pocket bag picture and indicator squares (item_menu.c:1407-1414), pocket name (item_menu.c:2408-2420), the eight-row list with numbered TM/HM/berry labels and quantities (item_menu.c:896-922, 946-990), the selected icon and description (item_menu.c:994-1011), and the context-choice windows (item_menu.c:452-489). It hands input to the engine BagMenu and returns the typed result for the host; GoToBagMenu field and battle locations (item_menu.c:560-571) differ only in selection mode and close wording. A pocket switch plays upstream's 17-tick Task_SwitchBagPocket (item_menu.c:1352-1404): the list is wiped row by row, the pocket name slides across, the bag bobs closed before showing the destination pocket (item_menu_icons.c:446-472), the rotating ball turns half a turn over 16 ticks (item_menu_icons.c:497-532), the engine changes pocket only when the list returns, and a fresh pocket press restarts the switch unless the request carries a link, and other input is dropped. Wally's bag, which upstream also does not let a press interrupt, is not distinguished, and the affine bag shake on cursor movement (item_menu.c:926-943) is not drawn. The list scroll arrows (item_menu.c:1027-1038; list_menu.c:1126-1139) show while the pocket has rows past the window, counting the close row, and are hidden during a pocket switch and a context menu, recreated when either ends. Pocket-switch arrows, SELECT swap, quantity prompts, and every other location remain pending. No start-menu entry or battle caller opens the screen yet; it is exercised by its own tests only.",
+          "reason": "BagScreen composes the bag over a supplied field or battle frame: screen tilemap, per-pocket bag picture and indicator squares (item_menu.c:1407-1414), pocket name (item_menu.c:2408-2420), the eight-row list with numbered TM/HM/berry labels and quantities (item_menu.c:896-922, 946-990), the selected icon and description (item_menu.c:994-1011), and the context-choice windows (item_menu.c:452-489). It hands input to the engine BagMenu and returns the typed result for the host; GoToBagMenu field and battle locations (item_menu.c:560-571) differ only in selection mode and close wording. A pocket switch plays upstream's 17-tick Task_SwitchBagPocket (item_menu.c:1352-1404): the list is wiped row by row, the pocket name slides across, the bag bobs closed before showing the destination pocket (item_menu_icons.c:446-472), the rotating ball turns half a turn over 16 ticks (item_menu_icons.c:497-532), the engine changes pocket only when the list returns, and a fresh pocket press restarts the switch unless the request carries a link, and other input is dropped. Wally's bag, which upstream also does not let a press interrupt, is not distinguished, and the affine bag shake on cursor movement (item_menu.c:926-943) is not drawn. The list scroll arrows (item_menu.c:1027-1038; list_menu.c:1126-1139) show while the pocket has rows past the window, counting the close row, and are hidden during a pocket switch and a context menu, recreated when either ends. SELECT picks up an item in the Items, Poke Balls and Key Items pockets of the field and battle screens, the cursor chooses a place, and A or SELECT puts it down while B cancels; the screen keeps its own copy of the bag, reorders it, and returns the new bag to the host (item_menu.c:1228-1239, 1416-1525). Pocket-switch arrows, quantity prompts, and every other location remain pending. No start-menu entry or battle caller opens the screen yet; it is exercised by its own tests only.",
           "rust_target": "crates/pokeemerald-rs/src/bag_menu.rs",
           "spec": "C-5",
           "status": "rewritten"
@@ -30830,6 +30836,12 @@
         "bag_menu_state": {
           "reason": "BagMenu models pocket browse order, retained cursor and scroll with upstream list-window rules, field/battle/fixed-pocket selection, and context-action requests; swap, quantity prompts, Wally, shop, PC, and renderer remain pending.",
           "rust_target": "crates/engine/src/bag_menu.rs",
+          "spec": "C-5",
+          "status": "rewritten"
+        },
+        "bag_select_swap": {
+          "reason": "The bag SELECT swap in the field and battle screens: SELECT on an Items, Poke Balls or Key Items row (not the close row, not TMs, HMs or berries) picks it up and consumes the frame otherwise; while swapping SELECT, then A, put it down, B cancels, Up and Down choose the place, and the pocket buttons do nothing (item_menu.c:1228-1239, 1416-1525; list_menu.c:398-415). Putting it down at its own row or the boundary below it changes nothing; the cursor row steps back whenever the place is below the item, whether it is put down or cancelled, keeping the scroll (item_menu.c:1485-1525). While swapping the icon and the \"Move the {item} where?\" prompt stay on the item and its row keeps a gray cursor if it is in the window (item_menu.c:933-960, 1434-1442). The screen reorders its own copy of the bag and returns it; saving it is the host's.",
+          "rust_target": "crates/pokeemerald-rs/src/bag_menu/swap.rs",
           "spec": "C-5",
           "status": "rewritten"
         },
@@ -31333,6 +31345,14 @@
       "status": "pending"
     },
     "src/menu_helpers.c": {
+      "artifacts": {
+        "bag_swap_line": {
+          "reason": "The bag swap line: eight 16x16 sprites from the swap_line sheet and its own palette, the first the end cap (frame at tile 0) and the rest the body (tile offset 4), 16 apart from x 112 with the last pulled 8 pixels left of the list margin, centred at y 1 + (row + 1) * 16 for the cursor row (menu_helpers.c:30-90, 399-451; item_menu_icons.c:575-587). It is made hidden, shown by the first swap frame that is not a SELECT press, and hidden again when the swap ends (item_menu.c:1461-1464, 1506, 1524). The sheet's flipped end cap is not used by the bag.",
+          "rust_target": "crates/pokeemerald-rs/src/bag_menu/draw.rs",
+          "spec": "C-5",
+          "status": "rewritten"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
