@@ -264,6 +264,105 @@ fn git_sha_marks_a_dirty_worktree_and_leaves_a_clean_one_bare() {
     );
 }
 
+/// Initialises a repository at `repo` holding one commit of `content`.
+fn init_committed_repo(repo: &std::path::Path, content: &[u8]) {
+    std::fs::create_dir_all(repo).unwrap();
+    let git = |args: &[&str]| {
+        let mut command = std::process::Command::new("git");
+        command.arg("-C").arg(repo).args(args);
+        // The fixture itself must not be steered by an inherited routing
+        // variable either.
+        for name in ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"] {
+            command.env_remove(name);
+        }
+        let ok = command
+            .output()
+            .expect("git must be on PATH")
+            .status
+            .success();
+        assert!(ok, "git {args:?} failed");
+    };
+    git(&["init", "--quiet"]);
+    git(&["config", "user.email", "test@example.invalid"]);
+    git(&["config", "user.name", "test"]);
+    git(&["config", "commit.gpgsign", "false"]);
+    std::fs::write(repo.join("tracked.txt"), content).unwrap();
+    git(&["add", "tracked.txt"]);
+    git(&["commit", "--quiet", "-m", "initial"]);
+}
+
+const ROUTING_CHILD_REPO: &str = "POKEEMERALD_RS_TEST_GIT_SHA_REPO";
+const ROUTING_CHILD_EXPECTED: &str = "POKEEMERALD_RS_TEST_GIT_SHA_EXPECTED";
+const ROUTING_CHILD_TEST: &str =
+    "record_snapshot::tests::git_sha_routing_child_reads_the_repo_it_was_given";
+
+/// Runs in a child process of the routing test below; a no-op when the test
+/// suite runs it directly. The child process lets the parent set `GIT_*`
+/// without mutating this process's environment under other tests.
+#[test]
+fn git_sha_routing_child_reads_the_repo_it_was_given() {
+    let (Some(repo), Some(expected)) = (
+        std::env::var_os(ROUTING_CHILD_REPO),
+        std::env::var(ROUTING_CHILD_EXPECTED).ok(),
+    ) else {
+        return;
+    };
+    assert_eq!(
+        git_sha(std::path::Path::new(&repo)).as_deref(),
+        Some(expected.as_str()),
+        "git_sha must describe the repository it was asked about"
+    );
+}
+
+#[test]
+fn git_sha_ignores_inherited_git_repository_routing() {
+    let target = scratch_path("routing-target-repo");
+    let _target_guard = ScratchGuard(target.clone());
+    let other = scratch_path("routing-other-repo");
+    let _other_guard = ScratchGuard(other.clone());
+    init_committed_repo(&target, b"target");
+    init_committed_repo(&other, b"other");
+    let expected = git_sha(&target).expect("a freshly committed repo has a HEAD");
+    assert!(!expected.ends_with("-dirty"), "{expected}");
+
+    let other_git_dir = other.join(".git");
+    let cases: [(&str, Vec<(&str, std::path::PathBuf)>); 2] = [
+        (
+            "GIT_DIR and GIT_WORK_TREE",
+            vec![
+                ("GIT_DIR", other_git_dir.clone()),
+                ("GIT_WORK_TREE", other.clone()),
+            ],
+        ),
+        (
+            "GIT_INDEX_FILE",
+            vec![("GIT_INDEX_FILE", other_git_dir.join("index"))],
+        ),
+    ];
+    for (label, routing) in cases {
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+        child
+            .args([
+                "--exact",
+                ROUTING_CHILD_TEST,
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(ROUTING_CHILD_REPO, &target)
+            .env(ROUTING_CHILD_EXPECTED, &expected);
+        for (name, value) in routing {
+            child.env(name, value);
+        }
+        let output = child.output().expect("the test binary must re-run");
+        assert!(
+            output.status.success(),
+            "git_sha followed inherited {label}:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
 #[test]
 fn git_sha_is_none_for_a_path_with_no_git_repo() {
     let scratch = scratch_path("not-a-repo");
