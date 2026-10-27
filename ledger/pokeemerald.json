@@ -22447,14 +22447,20 @@
     "sound/cry_tables.inc": {
       "artifacts": {
         "checkout-cry-tables": {
-          "reason": "sound/cry_tables.inc:1-781. Checkout extraction of gCryTable (cry records) and gCryTable_Reverse (cry_reverse records): two 388-record lists parsed strictly (asm/macros/music_voice.inc:142-152 defines both macros with one sample operand, differing only in tone type 0x20 versus 0x30), required to name the same Cry_* symbol at every position, so the pack keeps one table and derives reverse from the playback mode. Malformed records, missing, duplicate, or misordered tables, duplicate symbols, and count or pairing mismatches are refused. The ROM import side is pending. ",
+          "reason": "sound/cry_tables.inc:1-781. Checkout extraction of gCryTable (cry records) and gCryTable_Reverse (cry_reverse records): two 388-record lists parsed strictly (asm/macros/music_voice.inc:142-152 defines both macros with one sample operand, differing only in tone type 0x20 versus 0x30), required to name the same Cry_* symbol at every position, so the pack keeps one table and derives reverse from the playback mode. Malformed records, missing, duplicate, or misordered tables, duplicate symbols, and count or pairing mismatches are refused. The ROM path is the rom-cry-tables sub-artifact.",
           "rust_target": "crates/xtask/src/extract/cry/tables.rs",
           "spec": "S-3",
           "status": "ported"
         },
         "cry-table-payload": {
-          "reason": "sound/cry_tables.inc:1-781. Schema and codec: the 388-position gCryTable is modelled as one audio/cry/table payload of SampleId references (assets::audio::CryTable, AssetPack::cry_table), and PlayCryInternal's mode resolution (sound.c:369-455) as CryMode::settings; gCryTable_Reverse names the same samples at every position (verified), so reverse is derived from the mode (sound.c:410-417,449-453). xtask extraction (crates/xtask/src/extract/cry) emits the payload and its samples from the checkout; the ROM import producer is pending, so the parent file stays pending.",
+          "reason": "sound/cry_tables.inc:1-781. Schema and codec: the 388-position gCryTable is modelled as one audio/cry/table payload of SampleId references (assets::audio::CryTable, AssetPack::cry_table), and PlayCryInternal's mode resolution (sound.c:369-455) as CryMode::settings; gCryTable_Reverse names the same samples at every position (verified), so reverse is derived from the mode (sound.c:410-417,449-453). xtask extraction (crates/xtask/src/extract/cry) and the ROM importer (the rom-cry-tables sub-artifact) both emit the payload and its samples, byte-identical on the supported ROM; the parent file stays pending.",
           "rust_target": "crates/assets/src/audio/cry.rs",
+          "spec": "S-3",
+          "status": "rewritten"
+        },
+        "rom-cry-tables": {
+          "reason": "sound/cry_tables.inc:1-781; asm/macros/music_voice.inc:142-152. ROM-path producer: the generated revision profile records gCryTable and gCryTable_Reverse (each 388 12-byte ToneData records, found by their cry/cry_reverse shape and accepted only as the one run of exactly that length) and the 388 sample roots in table order. The importer reads both whole spans through checked RomReader reads, requires every record to carry type 0x20 (normal) or 0x30 (reverse) and the macros fixed key, length, pan, and envelope bytes, requires each reverse pointer to equal the normal pointer at its position and each normal pointer to name the sample recorded for that position once, and emits the normalized audio/cry/table payload through assets::CryTable; a malformed table or pointer is a typed ImportError. The unmarked parent file stays pending.",
+          "rust_target": "crates/rom-import/src/domains/audio/cry.rs",
           "spec": "S-3",
           "status": "rewritten"
         }
@@ -22467,10 +22473,16 @@
     "sound/direct_sound_data.inc": {
       "artifacts": {
         "checkout-cry-samples": {
-          "reason": "sound/direct_sound_data.inc:390-1939. Checkout extraction of the 388 Cry_* definitions: each label's single .incbin of sound/direct_sound_samples/cries/<stem>.bin names the sibling .wav, decoded with the DirectSound sample codec shared with the instrument samples. The path is read from the declaration alone (Cry_HoOh is ho_oh, Cry_Unused265 is unused_265); duplicate labels, a label without an .incbin, and paths outside that directory are refused. The ROM import side is pending.",
+          "reason": "sound/direct_sound_data.inc:390-1939. Checkout extraction of the 388 Cry_* definitions: each label's single .incbin of sound/direct_sound_samples/cries/<stem>.bin names the sibling .wav, decoded with the DirectSound sample codec shared with the instrument samples. The path is read from the declaration alone (Cry_HoOh is ho_oh, Cry_Unused265 is unused_265); duplicate labels, a label without an .incbin, and paths outside that directory are refused. The ROM path is the rom-cry-samples sub-artifact.",
           "rust_target": "crates/xtask/src/extract/cry/sources.rs",
           "spec": "S-3",
           "status": "ported"
+        },
+        "rom-cry-samples": {
+          "reason": "sound/direct_sound_data.inc:390-1939; audio_rules.mk:19-22; tools/wav2agb/converter.cpp:213-278; src/m4a_1.s:671-700; src/m4a_tables.c:47. ROM-path producer: each cry WaveData header is validated (type 1, status 0, size equal to the recorded sample count) and its DPCM payload is decoded exactly as the mixer does, 64-sample blocks of 33 bytes with the first index byte contributing only its low nibble and 8-bit wraparound, through checked reads. The retained interpolation guard is decoded from the ROM byte the mixer reads, so a last block that --no-pad leaves unpadded takes the following byte and a read past the image is Truncated, never zero. The entries are byte-identical to the checkout extraction on the supported ROM. The parent file stays pending.",
+          "rust_target": "crates/rom-import/src/domains/audio/cry.rs",
+          "spec": "S-3",
+          "status": "rewritten"
         }
       },
       "category": "audio.misc",

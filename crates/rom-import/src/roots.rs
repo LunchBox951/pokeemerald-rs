@@ -331,7 +331,27 @@ pub struct SampleRoot {
     pub data_len: u32,
 }
 
-/// The audio roots `MUS_TITLE` needs.
+/// The species cry tables and the samples they name.
+///
+/// `gCryTable` and `gCryTable_Reverse` (`pokeemerald/sound/cry_tables.inc`)
+/// are each [`assets::audio::CRY_TABLE_LEN`] `ToneData` records whose `wav`
+/// word points at a DPCM-compressed `WaveData`. The reverse table repeats the
+/// normal table's samples under the reverse `ToneData` type, so one sample
+/// list serves both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CryRoots {
+    /// `gCryTable`, the first normal `ToneData` record.
+    pub normal: GbaPtr,
+    /// `gCryTable_Reverse`, the first reverse `ToneData` record.
+    pub reverse: GbaPtr,
+    /// Every cry sample in table order, so entry `n` is the sample record `n`
+    /// of both tables points at. Each root has a 16-byte `WaveData` header,
+    /// and its `data_len` is the decoded sample count, not the compressed
+    /// length stored in the ROM.
+    pub samples: &'static [SampleRoot],
+}
+
+/// The audio roots `MUS_TITLE` and the species cries need.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AudioRoots {
     /// `gSongTable`, an array of 8-byte `{header, ms, me}` entries.
@@ -346,6 +366,9 @@ pub struct AudioRoots {
     pub direct_sound: &'static [SampleRoot],
     /// Every CGB programmable-wave table those voicegroups reference.
     pub programmable_wave: &'static [SampleRoot],
+    /// The species cry tables and samples, or `None` for a profile built
+    /// from a pack that holds no cries.
+    pub cry: Option<CryRoots>,
 }
 
 /// One special battle-message template and the upstream symbol it is.
@@ -618,6 +641,7 @@ impl Roots {
             keysplits: &[],
             direct_sound: &[],
             programmable_wave: &[],
+            cry: None,
         },
         battle_messages: BattleMessageRoots::NONE,
         battle_anims: BattleAnimationRoots::NONE,

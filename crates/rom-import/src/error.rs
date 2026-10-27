@@ -286,15 +286,64 @@ pub enum ImportError {
         /// The claimed stored length in bytes.
         len: u32,
     },
-    /// A sample's `WaveData` is DPCM-compressed (`type != 0`).
+    /// An instrument sample's `WaveData` is DPCM-compressed (`type != 0`).
     ///
-    /// The pack stores samples decompressed and the mixer never expands
-    /// DPCM. No instrument the title music plays is compressed; every cry
-    /// is, and none is in scope. Refused rather than expanded because the
-    /// profile says this root is plain PCM, so the ROM disagrees with it.
+    /// The profile says this root is plain PCM, so a compressed header means
+    /// the ROM disagrees with it. Species cries are the compressed samples;
+    /// their roots are read through [`ImportError::CryWaveType`] instead.
     CompressedSample {
         /// The pack id the root produces.
         id: &'static str,
+    },
+    /// A cry table record's `ToneData` byte is not the one `cry` or
+    /// `cry_reverse` writes (`pokeemerald/asm/macros/music_voice.inc:142-152`).
+    ///
+    /// The `type` byte is what separates a cry from any other voice and the
+    /// normal table from the reverse one, so a wrong value there is a record
+    /// that is not a cry of this table's mode.
+    CryToneData {
+        /// The table's symbol, `gCryTable` or `gCryTable_Reverse`.
+        table: &'static str,
+        /// The record's position in the table.
+        slot: usize,
+        /// The `ToneData` field that disagreed.
+        field: &'static str,
+        /// The byte the macro writes.
+        expected: u8,
+        /// The byte the ROM holds.
+        actual: u8,
+    },
+    /// A reverse cry record names a different sample than the normal record
+    /// at the same position, or a record names the sample recorded for
+    /// another position.
+    CryPointerMismatch {
+        /// The table's symbol.
+        table: &'static str,
+        /// The record's position in the table.
+        slot: usize,
+        /// The sample the position requires.
+        expected: crate::reader::GbaPtr,
+        /// The sample the record names.
+        actual: crate::reader::GbaPtr,
+    },
+    /// Two positions of the normal cry table name one sample.
+    ///
+    /// Each cry owns its sample, so a repeat is a table the pack cannot
+    /// express as one sample id per position.
+    RepeatedCrySample {
+        /// The first position naming the sample.
+        first: usize,
+        /// The later position naming it again.
+        slot: usize,
+        /// The shared pointer.
+        ptr: crate::reader::GbaPtr,
+    },
+    /// A cry sample's `WaveData.type` is not the DPCM-compressed `1`.
+    CryWaveType {
+        /// The pack id the root produces.
+        id: &'static str,
+        /// The type word the ROM holds.
+        kind: u16,
     },
     /// A voicegroup slot's `ToneData.type` is one the importer does not
     /// model: not a `DirectSound`, CGB, key-split, or rhythm voice.
@@ -306,14 +355,14 @@ pub enum ImportError {
         /// The type byte.
         kind: u8,
     },
-    /// A voicegroup slot points at a sample, voicegroup, or key-split
-    /// table the profile does not record.
+    /// A voicegroup slot or cry table record points at a sample,
+    /// voicegroup, or key-split table the profile does not record.
     ///
     /// The pack links by id, so a pointer with no id is unrepresentable.
     /// The generator records every reachable root, so this is a wrong
     /// profile, not a gap to fill at run time.
     UnresolvedPointer {
-        /// The voicegroup's pack id.
+        /// The voicegroup's pack id, or the cry table's symbol.
         root: &'static str,
         /// The slot index.
         slot: usize,
@@ -493,8 +542,38 @@ impl fmt::Display for ImportError {
                 "`{id}` claims a {width}x{height}/{bit_depth}bpp glyph sheet of {len} bytes; the ROM stores 256x512/2bpp in 32768"
             ),
             Self::CompressedSample { id } => {
-                write!(f, "`{id}` is DPCM-compressed in the ROM; the importer reads plain PCM only")
+                write!(f, "`{id}` is DPCM-compressed in the ROM, but this revision profile records it as plain PCM")
             }
+            Self::CryToneData {
+                table,
+                slot,
+                field,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "`{table}` record {slot} has `{field}` {actual:#04x}, not the {expected:#04x} a cry record holds"
+            ),
+            Self::CryPointerMismatch {
+                table,
+                slot,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "`{table}` record {slot} points at {:#010x}, not the {:#010x} its position requires",
+                actual.raw(),
+                expected.raw()
+            ),
+            Self::RepeatedCrySample { first, slot, ptr } => write!(
+                f,
+                "`gCryTable` records {first} and {slot} both point at the sample {:#010x}",
+                ptr.raw()
+            ),
+            Self::CryWaveType { id, kind } => write!(
+                f,
+                "`{id}` has `WaveData` type {kind}, not the DPCM-compressed 1 every cry uses"
+            ),
             Self::VoiceType { root, slot, kind } => write!(
                 f,
                 "`{root}` slot {slot} has voice type {kind:#04x}, which the importer does not model"
@@ -774,6 +853,28 @@ mod tests {
             },
             ImportError::CompressedSample {
                 id: "audio/sample/direct-sound/x",
+            },
+            ImportError::CryToneData {
+                table: "gCryTable",
+                slot: 3,
+                field: "type",
+                expected: 0x20,
+                actual: 0x00,
+            },
+            ImportError::CryPointerMismatch {
+                table: "gCryTable_Reverse",
+                slot: 3,
+                expected: crate::reader::GbaPtr::AT_BASE,
+                actual: crate::reader::GbaPtr::AT_BASE,
+            },
+            ImportError::RepeatedCrySample {
+                first: 1,
+                slot: 3,
+                ptr: crate::reader::GbaPtr::AT_BASE,
+            },
+            ImportError::CryWaveType {
+                id: "audio/sample/direct-sound/cry/x",
+                kind: 0,
             },
             ImportError::VoiceType {
                 root: "audio/voicegroup/title",

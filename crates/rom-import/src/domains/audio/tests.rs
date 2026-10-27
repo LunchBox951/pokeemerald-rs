@@ -207,6 +207,7 @@ fn audio() -> AudioRoots {
         keysplits: &KEYSPLITS,
         direct_sound: &DIRECT_SOUND,
         programmable_wave: &PROGRAMMABLE_WAVE,
+        cry: None,
     }
 }
 
@@ -570,6 +571,7 @@ fn adjacency_audio() -> AudioRoots {
         keysplits: &ADJ_KEYSPLITS,
         direct_sound: &DIRECT_SOUND,
         programmable_wave: &PROGRAMMABLE_WAVE,
+        cry: None,
     }
 }
 
@@ -670,6 +672,7 @@ fn a_sparse_selected_child_tail_leaves_unselected_indices_empty() {
         keysplits: &SPARSE_KEYSPLITS,
         direct_sound: &DIRECT_SOUND,
         programmable_wave: &PROGRAMMABLE_WAVE,
+        cry: None,
     };
     let entry = voicegroup(&rom.reader(), &audio, &SPARSE_GROUPS[1]).unwrap();
     let kid = VoiceGroup::decode(&entry.payload).unwrap();
