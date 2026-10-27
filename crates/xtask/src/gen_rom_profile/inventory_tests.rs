@@ -14,7 +14,8 @@ use crate::extract::scope::{
     battle_interface_ids, healthbox_battle_bar_id, healthbox_element_ids, healthbox_frame_ids,
     healthbox_table_ids, layout_ids, opening_scene_ids, sprite_palette_ids, sprite_sheet_ids,
     starter_chooser_ids, text_window_ids, tileset_animation_ids, title_ids, BATTLERS, FONTS,
-    INTERFACE_PALETTE_IDS, LAYOUTS, TEXT_WINDOW_IMAGE_STEMS, TEXT_WINDOW_PALETTE_STEMS, TILESETS,
+    INTERFACE_PALETTE_IDS, KEYPAD_ICONS, LAYOUTS, TEXT_WINDOW_IMAGE_STEMS,
+    TEXT_WINDOW_PALETTE_STEMS, TILESETS,
 };
 
 /// One placeholder entry per fixed root and per bag id; the preflight checks presence only.
@@ -24,7 +25,12 @@ fn complete_inventory() -> Vec<PackEntry> {
         .flat_map(|tileset| inventory::tileset_payload_ids(tileset.name))
         .chain(tileset_animation_ids())
         .chain(title_ids())
-        .chain(FONTS.iter().map(|font| font.pack_id.to_owned()))
+        .chain(
+            FONTS
+                .iter()
+                .chain([&KEYPAD_ICONS])
+                .map(|font| font.pack_id.to_owned()),
+        )
         .chain(layout_ids())
         .chain(text_window_ids())
         .chain(INTERFACE_PALETTE_IDS.map(str::to_owned))
@@ -213,7 +219,7 @@ fn a_pack_missing_a_title_palette_is_refused() {
 
 #[test]
 fn a_pack_missing_a_font_sheet_is_refused() {
-    for font in FONTS {
+    for font in FONTS.into_iter().chain([KEYPAD_ICONS]) {
         let label = format!("no-{}", font.pack_id.replace('/', "-"));
         assert_refused(&label, without(font.pack_id), font.pack_id, "fonts");
     }

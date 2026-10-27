@@ -134,6 +134,7 @@ fn synthetic_scene(pixels: &[u8], speed: TextSpeed) -> IntroScene {
     IntroScene::new(
         synthetic_sources(pixels),
         transparent_message_box(),
+        crate::textbox::test_keypad_icons(&[]),
         speed,
         NewGameOptions::DEFAULT,
     )
@@ -364,6 +365,7 @@ fn compose_draws_the_dialogue_box_border_even_before_any_glyph_reveals() {
     let scene = IntroScene::new(
         synthetic_sources(&pixels),
         solid_red_message_box(),
+        crate::textbox::test_keypad_icons(&[]),
         TextSpeed::Mid,
         NewGameOptions::DEFAULT,
     );
@@ -392,12 +394,65 @@ fn box_pixel(content: (i32, i32)) -> (usize, usize) {
     (usize::try_from(x).unwrap(), usize::try_from(y).unwrap())
 }
 
+/// `[KEYPAD_ICON A_BUTTON, 'A']` mirrors the dialog regression: the speech
+/// window draws the icon at the printer's placement and starts the next glyph
+/// at the icon's right edge.
+#[test]
+fn a_keypad_icon_draws_at_the_printers_placement_and_the_next_glyph_follows_it() {
+    const ICON_A_ID: u8 = 0;
+    const ICON_A_WIDTH: i32 = 8;
+    let pixels = dark_grey_glyph_sheet_pixels();
+    let mut scene = IntroScene::new(
+        synthetic_sources(&pixels),
+        transparent_message_box(),
+        crate::textbox::test_keypad_icons(&[(0, 0, 2), (3, 5, 3)]),
+        TextSpeed::Instant,
+        NewGameOptions::DEFAULT,
+    );
+    scene.printer.restart(vec![
+        Token::KeypadIcon(ICON_A_ID),
+        Token::Char('A'),
+        Token::End,
+    ]);
+
+    assert_eq!(scene.tick(NO_INPUT), IntroStatus::Continue);
+    let placement = scene
+        .printer
+        .keypad_icon()
+        .expect("the first tick places the icon");
+    assert_eq!(
+        (placement.x, placement.y),
+        (STANDARD_PRINTER_ORIGIN.0, STANDARD_PRINTER_ORIGIN.1)
+    );
+    let fb = scene.compose();
+    let at = |dx: i32, dy: i32| {
+        let (x, y) = box_pixel((placement.x + dx, placement.y + dy));
+        fb.pixel(x, y)
+    };
+    assert_eq!(at(0, 0), Some(DARK_GREY_GLYPH_COLOR), "icon index 2");
+    assert_eq!(at(3, 5), Some(SHADOW_GLYPH_COLOR), "icon index 3");
+    assert_eq!(at(ICON_A_WIDTH, 0), Some(Rgb888::BLACK), "no glyph yet");
+
+    assert_eq!(scene.tick(NO_INPUT), IntroStatus::Continue);
+    let fb = scene.compose();
+    let (glyph_x, glyph_y) = box_pixel((
+        STANDARD_PRINTER_ORIGIN.0 + ICON_A_WIDTH + 4,
+        STANDARD_PRINTER_ORIGIN.1 + 8,
+    ));
+    assert_eq!(
+        fb.pixel(glyph_x, glyph_y),
+        Some(DARK_GREY_GLYPH_COLOR),
+        "the glyph starts after the icon"
+    );
+}
+
 #[test]
 fn clear_paints_the_erased_span_with_the_windows_background() {
     let pixels = dark_grey_glyph_sheet_pixels();
     let mut scene = IntroScene::new(
         synthetic_sources(&pixels),
         solid_red_message_box(),
+        crate::textbox::test_keypad_icons(&[]),
         TextSpeed::Instant,
         NewGameOptions::DEFAULT,
     );
@@ -460,6 +515,7 @@ fn clear_to_paints_only_up_to_its_target_column() {
     let mut scene = IntroScene::new(
         synthetic_sources(&pixels),
         solid_red_message_box(),
+        crate::textbox::test_keypad_icons(&[]),
         TextSpeed::Instant,
         NewGameOptions::DEFAULT,
     );

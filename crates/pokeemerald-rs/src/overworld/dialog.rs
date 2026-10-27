@@ -18,6 +18,7 @@
 
 use assets::fonts::{FontId, GlyphSources, OwnedFontGlyphSheet, OwnedGlyphSources};
 use assets::pack::{AssetPack, PackError};
+use assets::KeypadIconSheet;
 use engine::text::render::{Printer, PrinterInput, TextSpeed, TickEvent};
 use engine::text::window::MessageBoxLayout;
 use engine::text::Token;
@@ -44,7 +45,7 @@ pub(crate) fn confirm_printer_input(buttons: ButtonState) -> PrinterInput {
 pub(crate) enum NpcDialogError {
     /// The asset pack could not provide the dialog resources.
     Pack(PackError),
-    /// The font glyph sheet could not be decoded.
+    /// The font glyph sheet or keypad-icon sheet could not be decoded.
     Font(assets::AssetError),
 }
 
@@ -91,6 +92,7 @@ enum DialogState {
 #[derive(Debug)]
 pub(crate) struct NpcDialog {
     frame: FrameAssets,
+    icons: KeypadIconSheet,
     printer: Printer<OwnedFontGlyphSheet>,
     ops: Vec<WindowOp>,
     state: DialogState,
@@ -105,6 +107,7 @@ impl NpcDialog {
     pub(crate) fn new(
         sources: OwnedGlyphSources,
         frame: FrameAssets,
+        icons: KeypadIconSheet,
         tokens: Vec<Token>,
         text_speed: TextSpeed,
     ) -> Self {
@@ -118,6 +121,7 @@ impl NpcDialog {
         .with_ab_speed_up_print();
         Self {
             frame,
+            icons,
             printer,
             ops: Vec::new(),
             state: DialogState::Printing,
@@ -138,7 +142,8 @@ impl NpcDialog {
     /// # Errors
     ///
     /// Returns [`NpcDialogError::Pack`] for missing or malformed pack entries,
-    /// and [`NpcDialogError::Font`] when the font sheet cannot be decoded.
+    /// and [`NpcDialogError::Font`] when the font or keypad-icon sheet cannot
+    /// be decoded.
     pub(crate) fn from_pack_at_speed(
         pack: &AssetPack,
         tokens: Vec<Token>,
@@ -148,7 +153,8 @@ impl NpcDialog {
             Ok::<_, NpcDialogError>(OwnedFontGlyphSheet::new(pack.font(font)?)?)
         })?;
         let frame = FrameAssets::from_handle(pack.message_box()?);
-        Ok(Self::new(sources, frame, tokens, text_speed).with_waitbuttonpress())
+        let icons = KeypadIconSheet::new(pack.keypad_icons()?)?;
+        Ok(Self::new(sources, frame, icons, tokens, text_speed).with_waitbuttonpress())
     }
 
     /// Loads an asset pack and opens a confirm-to-close dialog, at a
@@ -157,7 +163,8 @@ impl NpcDialog {
     /// # Errors
     ///
     /// Returns [`NpcDialogError::Pack`] when the pack cannot be loaded or read,
-    /// and [`NpcDialogError::Font`] when the font sheet cannot be decoded.
+    /// and [`NpcDialogError::Font`] when the font or keypad-icon sheet cannot be
+    /// decoded.
     pub(crate) fn open_at_speed(
         source: &crate::pack_source::PackSource,
         tokens: Vec<Token>,
@@ -207,6 +214,11 @@ impl NpcDialog {
         if let Some(span) = self.printer.cleared_span() {
             self.ops.push(WindowOp::ClearSpan(span));
         }
+        // A keypad icon also ends its frame as `TickEvent::Idle`
+        // (`Printer::keypad_icon`), so it never competes with a glyph either.
+        if let Some(icon) = self.printer.keypad_icon() {
+            self.ops.push(WindowOp::KeypadIcon(icon));
+        }
         match event {
             TickEvent::Glyph(g) => self.ops.push(WindowOp::Glyph(g)),
             TickEvent::Scrolling { dy } => {
@@ -251,6 +263,8 @@ impl NpcDialog {
             textbox::STANDARD_BOX_SCREEN_ORIGIN,
             textbox::STANDARD_BOX_CONTENT_SIZE_PX,
             &self.frame.glyph_colors(),
+            &self.icons,
+            &self.frame.palette,
         );
         base
     }
@@ -296,7 +310,13 @@ fn synthetic_dialog_at_speed(tokens: Vec<Token>, speed: TextSpeed) -> NpcDialog 
         height: FRAME_HEIGHT,
         palette: vec![Rgb888::BLACK; FRAME_PALETTE_SIZE],
     };
-    NpcDialog::new(sources, frame, tokens, speed)
+    NpcDialog::new(
+        sources,
+        frame,
+        textbox::test_keypad_icons(&[]),
+        tokens,
+        speed,
+    )
 }
 
 #[cfg(test)]
@@ -581,6 +601,7 @@ mod tests {
         NpcDialog::new(
             sources,
             frame,
+            textbox::test_keypad_icons(&[]),
             vec![Token::Char('A'), Token::End],
             TextSpeed::Mid,
         )
@@ -678,10 +699,22 @@ mod tests {
         b: 40,
     };
 
+    const ICON_ACCENT_PALETTE_INDEX: u8 = 3;
+    const ICON_ACCENT_COLOR: Rgb888 = Rgb888 {
+        r: 30,
+        g: 60,
+        b: 220,
+    };
+
     /// A dialog whose glyph sheet and message box are solid, distinguishable
     /// colors, so a cleared span's pixels can be told apart from an unerased
     /// glyph's -- `synthetic_dialog`'s all-transparent fixture cannot.
     fn opaque_synthetic_dialog(tokens: Vec<Token>) -> NpcDialog {
+        opaque_synthetic_dialog_with_icons(tokens, textbox::test_keypad_icons(&[]))
+    }
+
+    /// [`opaque_synthetic_dialog`] over a caller-supplied keypad-icon sheet.
+    fn opaque_synthetic_dialog_with_icons(tokens: Vec<Token>, icons: KeypadIconSheet) -> NpcDialog {
         use assets::fonts::FontImageRef;
         use assets::pack::ImageRef;
 
@@ -707,13 +740,14 @@ mod tests {
         let mut palette = vec![Rgb888::BLACK; FRAME_PALETTE_SIZE];
         palette[usize::from(FRAME_INTERIOR_PALETTE_INDEX)] = FRAME_INTERIOR_COLOR;
         palette[usize::from(GLYPH_FOREGROUND_PALETTE_INDEX)] = OPAQUE_GLYPH_COLOR;
+        palette[usize::from(ICON_ACCENT_PALETTE_INDEX)] = ICON_ACCENT_COLOR;
         let frame = FrameAssets {
             pixels: vec![FRAME_INTERIOR_PALETTE_INDEX; (FRAME_WIDTH * FRAME_HEIGHT) as usize],
             width: FRAME_WIDTH,
             height: FRAME_HEIGHT,
             palette,
         };
-        NpcDialog::new(sources, frame, tokens, TextSpeed::Instant)
+        NpcDialog::new(sources, frame, icons, tokens, TextSpeed::Instant)
     }
 
     /// Screen pixel for a window-local content coordinate in the standard box.
@@ -721,6 +755,74 @@ mod tests {
         let x = textbox::STANDARD_BOX_SCREEN_ORIGIN.0 + content.0;
         let y = textbox::STANDARD_BOX_SCREEN_ORIGIN.1 + content.1;
         (usize::try_from(x).unwrap(), usize::try_from(y).unwrap())
+    }
+
+    /// `[KEYPAD_ICON A_BUTTON, 'A']` prints the icon where the printer places
+    /// it, then the glyph past the icon's 8-pixel width. The icon's pixels are
+    /// window-palette indices (`pokeemerald/src/text.c:1609-1623`), so index 1
+    /// stays the window's slot 1 rather than the glyph foreground role.
+    #[test]
+    fn a_keypad_icon_draws_at_the_printers_placement_and_the_next_glyph_follows_it() {
+        const ICON_A_ID: u8 = 0;
+        const ICON_A_WIDTH: i32 = 8;
+        // Sheet pixels of icon A (sheet origin (0, 0)): window slots 2, 3, 1.
+        let icons = textbox::test_keypad_icons(&[(0, 0, 2), (3, 5, 3), (5, 0, 1)]);
+        let mut dialog = opaque_synthetic_dialog_with_icons(
+            vec![Token::KeypadIcon(ICON_A_ID), Token::Char('A'), Token::End],
+            icons,
+        );
+        let (origin_x, origin_y) = textbox::STANDARD_PRINTER_ORIGIN;
+
+        assert_eq!(dialog.tick(NO_INPUT), DialogOutcome::Continue);
+        let placement = dialog
+            .printer
+            .keypad_icon()
+            .expect("the first tick places the icon");
+        assert_eq!((placement.x, placement.y), (origin_x, origin_y));
+        assert_eq!(i32::from(placement.width), ICON_A_WIDTH);
+
+        let fb = dialog.compose_over(Framebuffer::new());
+        let at = |dx: i32, dy: i32| {
+            let (x, y) = box_pixel((placement.x + dx, placement.y + dy));
+            fb.pixel(x, y)
+        };
+        assert_eq!(at(0, 0), Some(OPAQUE_GLYPH_COLOR), "icon index 2");
+        assert_eq!(at(3, 5), Some(ICON_ACCENT_COLOR), "icon index 3");
+        assert_eq!(
+            at(5, 0),
+            Some(FRAME_INTERIOR_COLOR),
+            "icon index 1 keeps slot 1"
+        );
+        assert_eq!(
+            at(1, 0),
+            Some(FRAME_INTERIOR_COLOR),
+            "icon index 0 is transparent"
+        );
+        assert_eq!(
+            at(ICON_A_WIDTH, 0),
+            Some(FRAME_INTERIOR_COLOR),
+            "the glyph has not printed yet"
+        );
+
+        assert_eq!(dialog.tick(NO_INPUT), DialogOutcome::Continue);
+        assert_eq!(
+            dialog.printer.keypad_icon(),
+            None,
+            "the glyph tick has no icon"
+        );
+        let fb = dialog.compose_over(Framebuffer::new());
+        let (glyph_x, glyph_y) = box_pixel((origin_x + ICON_A_WIDTH, origin_y));
+        assert_eq!(
+            fb.pixel(glyph_x, glyph_y),
+            Some(OPAQUE_GLYPH_COLOR),
+            "the glyph starts at the icon's right edge"
+        );
+        let (icon_x, icon_y) = box_pixel((origin_x + 3, origin_y + 5));
+        assert_eq!(
+            fb.pixel(icon_x, icon_y),
+            Some(ICON_ACCENT_COLOR),
+            "the icon stays after the glyph prints"
+        );
     }
 
     #[test]

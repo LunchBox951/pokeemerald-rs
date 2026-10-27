@@ -19,6 +19,7 @@ mod speech;
 
 use assets::fonts::{FontId, GlyphSources, OwnedFontGlyphSheet, OwnedGlyphSources};
 use assets::pack::{AssetPack, PackError};
+use assets::KeypadIconSheet;
 use engine::text::render::{Printer, PrinterInput, TextSpeed, TickEvent};
 use engine::text::window::MessageBoxLayout;
 use engine::text::Token;
@@ -113,7 +114,7 @@ const fn traversal_frames(runs: &[TraversalRun]) -> usize {
 pub enum IntroSceneError {
     /// The asset pack could not be loaded or read.
     Pack(PackError),
-    /// The font glyph sheet could not be decoded.
+    /// The font glyph sheet or keypad-icon sheet could not be decoded.
     Font(assets::AssetError),
 }
 
@@ -184,6 +185,7 @@ const fn normalized_text_speed(raw: u8) -> u8 {
 #[derive(Debug)]
 pub struct IntroScene {
     frame: FrameAssets,
+    icons: KeypadIconSheet,
     pages: [Vec<Token>; NUM_PAGES],
     page_index: usize,
     printer: Printer<OwnedFontGlyphSheet>,
@@ -211,6 +213,7 @@ impl IntroScene {
     pub(crate) fn new(
         sources: OwnedGlyphSources,
         frame: FrameAssets,
+        icons: KeypadIconSheet,
         speed: TextSpeed,
         new_game_options: NewGameOptions,
     ) -> Self {
@@ -226,6 +229,7 @@ impl IntroScene {
         .with_ab_speed_up_print();
         Self {
             frame,
+            icons,
             pages,
             page_index: 0,
             printer,
@@ -259,7 +263,7 @@ impl IntroScene {
     /// # Errors
     ///
     /// Returns [`IntroSceneError::Pack`] if an asset is missing or malformed,
-    /// or [`IntroSceneError::Font`] if the font sheet cannot be decoded.
+    /// or [`IntroSceneError::Font`] if the font or keypad-icon sheet cannot be decoded.
     pub fn from_pack(pack: &AssetPack) -> Result<Self, IntroSceneError> {
         Self::from_pack_with_options(pack, NewGameOptions::DEFAULT)
     }
@@ -294,12 +298,13 @@ impl IntroScene {
             Ok::<_, IntroSceneError>(OwnedFontGlyphSheet::new(pack.font(font)?)?)
         })?;
         let frame = FrameAssets::from_handle(pack.message_box()?);
+        let icons = KeypadIconSheet::new(pack.keypad_icons()?)?;
         let speed = TextSpeed::from_raw_option(options.text_speed);
         let options = NewGameOptions {
             text_speed: normalized_text_speed(options.text_speed),
             ..options
         };
-        Ok(Self::new(sources, frame, speed, options))
+        Ok(Self::new(sources, frame, icons, speed, options))
     }
 
     /// The boot-recovered options this intro will hand to
@@ -352,6 +357,11 @@ impl IntroScene {
         if let Some(span) = self.printer.cleared_span() {
             self.ops.push(WindowOp::ClearSpan(span));
         }
+        // A keypad icon also ends its frame as `TickEvent::Idle`
+        // (`Printer::keypad_icon`), so it never competes with a glyph either.
+        if let Some(icon) = self.printer.keypad_icon() {
+            self.ops.push(WindowOp::KeypadIcon(icon));
+        }
         match event {
             TickEvent::Glyph(g) => self.ops.push(WindowOp::Glyph(g)),
             TickEvent::Scrolling { dy } => {
@@ -403,6 +413,8 @@ impl IntroScene {
             textbox::STANDARD_BOX_SCREEN_ORIGIN,
             textbox::STANDARD_BOX_CONTENT_SIZE_PX,
             &self.frame.glyph_colors(),
+            &self.icons,
+            &self.frame.palette,
         );
 
         fb
@@ -474,7 +486,13 @@ pub(crate) fn synthetic_finished_scene() -> IntroScene {
         height: FRAME_HEIGHT,
         palette: vec![Rgb888::BLACK; 16],
     };
-    let mut scene = IntroScene::new(sources, frame, TextSpeed::Instant, NewGameOptions::DEFAULT);
+    let mut scene = IntroScene::new(
+        sources,
+        frame,
+        textbox::test_keypad_icons(&[]),
+        TextSpeed::Instant,
+        NewGameOptions::DEFAULT,
+    );
     let confirm_a = PrinterInput {
         a_pressed: true,
         b_pressed: false,

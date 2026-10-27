@@ -562,6 +562,8 @@ pub struct Roots {
     pub layouts: &'static [MapLayoutRoot],
     /// The five Latin glyph sheets.
     pub fonts: &'static [FontRoot],
+    /// Font bitmaps that are ordinary tile sheets: the keypad-icon sheet.
+    pub font_images: &'static [ImageRoot],
     /// Text-window frames and palettes.
     pub text_window: TextWindowRoots,
     /// Interface palettes.
@@ -605,6 +607,7 @@ impl Roots {
         },
         layouts: &[],
         fonts: &[],
+        font_images: &[],
         text_window: TextWindowRoots {
             images: &[],
             palettes: &[],
@@ -642,6 +645,7 @@ impl Roots {
             })
             .chain(self.title_screen.images.iter())
             .chain(self.sprites.sheets.iter())
+            .chain(self.font_images.iter())
             .chain(self.text_window.images.iter())
             .chain(self.bag.images.iter())
             .chain(self.starter_chooser.images.iter())
