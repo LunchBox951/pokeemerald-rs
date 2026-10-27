@@ -108,6 +108,7 @@ impl BagScreen {
         if let Some(grid) = self.menu.context_grid() {
             self.draw_context(&mut base, &grid);
         }
+        self.draw_scroll_arrows(&mut base);
         base
     }
 

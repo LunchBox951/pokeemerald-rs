@@ -18,7 +18,8 @@
 //! A pocket switch plays upstream's transition (`Task_SwitchBagPocket`,
 //! `item_menu.c:1352-1404`) over the ticks that follow it: the list is wiped
 //! away, the bag bobs and the ball turns, and the engine changes pocket only
-//! when the list returns. The scroll arrows and the SELECT swap are not drawn.
+//! when the list returns. The list's scroll arrows show while the pocket has
+//! rows past the window and bob as upstream's do. The SELECT swap is not drawn.
 
 #![cfg_attr(
     not(test),
@@ -40,8 +41,10 @@ use platform::{ButtonState, Buttons};
 mod chrome;
 mod draw;
 mod labels;
+mod scroll;
 
 use chrome::BagChrome;
+use scroll::ArrowClock;
 
 /// Which caller opened the screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -209,6 +212,7 @@ pub(crate) struct BagScreen {
     /// Whether a link is active, which stops a press interrupting a switch.
     link_active: bool,
     switch: Option<PocketSwitch>,
+    arrows: ArrowClock,
     done: Option<BagScreenResult>,
 }
 
@@ -226,6 +230,13 @@ impl BagScreen {
     /// press is heard meanwhile and restarts it, unless the request has a
     /// link; every other input is dropped, not queued (`item_menu.c:1356-1370`).
     pub(crate) fn tick(&mut self, buttons: ButtonState) -> BagScreenTick {
+        let arrows_were_shown = self.arrows_exist();
+        let outcome = self.handle_buttons(buttons);
+        self.age_arrows(arrows_were_shown, self.arrows_exist());
+        outcome
+    }
+
+    fn handle_buttons(&mut self, buttons: ButtonState) -> BagScreenTick {
         if let Some(result) = self.done {
             return BagScreenTick::Closed(result);
         }
@@ -423,6 +434,7 @@ fn open_from_pack(
         lr_buttons: request.lr_buttons,
         link_active: request.link.is_some(),
         switch: None,
+        arrows: ArrowClock::default(),
         done: None,
     })
 }

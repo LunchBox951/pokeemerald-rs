@@ -12,6 +12,7 @@ use engine::text::window as msgwin;
 use engine::text::{Symbol, Token};
 use rendering::{AffineMatrix, Framebuffer, Rgb888};
 
+use super::scroll::ArrowSheet;
 use super::BagScreenError;
 use crate::textbox::{self, FrameAssets};
 
@@ -119,7 +120,7 @@ impl Bitmap {
 }
 
 /// `sin` of a 256-unit angle in 8.8 fixed point.
-fn sine(angle: u8) -> i16 {
+pub(super) fn sine(angle: u8) -> i16 {
     let at = usize::from(angle);
     match at {
         0..=64 => QUARTER_SINE[at],
@@ -148,7 +149,7 @@ fn put_at(fb: &mut Framebuffer, origin: (i32, i32), offset: (usize, usize), colo
     );
 }
 
-fn put(fb: &mut Framebuffer, x: i32, y: i32, color: Rgb888) {
+pub(super) fn put(fb: &mut Framebuffer, x: i32, y: i32, color: Rgb888) {
     if let (Ok(x), Ok(y)) = (usize::try_from(x), usize::try_from(y)) {
         if x < Framebuffer::WIDTH && y < Framebuffer::HEIGHT {
             fb.set_pixel(x, y, color);
@@ -169,6 +170,7 @@ pub(super) struct BagChrome {
     screen_palette: Vec<Rgb888>,
     bag: Bitmap,
     ball: Bitmap,
+    arrows: ArrowSheet,
     pub(super) hm_mark: Bitmap,
     pub(super) registered_mark: Bitmap,
     icons: BTreeMap<u16, Bitmap>,
@@ -223,10 +225,16 @@ impl BagChrome {
             screen_palette: screen_palette.clone(),
             bag: Bitmap::from_paletted(if female { bag.female } else { bag.male }),
             ball: Bitmap::from_paletted(bag.rotating_ball),
+            arrows: ArrowSheet::from_paletted(bag.scroll_indicator()?),
             hm_mark: flat(bag.hm),
             registered_mark: flat(bag.registered_select),
             icons,
         })
+    }
+
+    /// The list scroll-arrow sprites.
+    pub(super) fn arrow_sheet(&self) -> &ArrowSheet {
+        &self.arrows
     }
 
     /// The icon decoded for `item`, or the close row's for `None`.

@@ -30768,7 +30768,7 @@
     "src/item_menu.c": {
       "artifacts": {
         "bag_menu_screen": {
-          "reason": "BagScreen composes the bag over a supplied field or battle frame: screen tilemap, per-pocket bag picture and indicator squares (item_menu.c:1407-1414), pocket name (item_menu.c:2408-2420), the eight-row list with numbered TM/HM/berry labels and quantities (item_menu.c:896-922, 946-990), the selected icon and description (item_menu.c:994-1011), and the context-choice windows (item_menu.c:452-489). It hands input to the engine BagMenu and returns the typed result for the host; GoToBagMenu field and battle locations (item_menu.c:560-571) differ only in selection mode and close wording. A pocket switch plays upstream's 17-tick Task_SwitchBagPocket (item_menu.c:1352-1404): the list is wiped row by row, the pocket name slides across, the bag bobs closed before showing the destination pocket (item_menu_icons.c:446-472), the rotating ball turns half a turn over 16 ticks (item_menu_icons.c:497-532), the engine changes pocket only when the list returns, and a fresh pocket press restarts the switch unless the request carries a link, and other input is dropped. Wally's bag, which upstream also does not let a press interrupt, is not distinguished, and the affine bag shake on cursor movement (item_menu.c:926-943) is not drawn. The list scroll arrows, pocket-switch arrows, SELECT swap, quantity prompts, and every other location remain pending. No start-menu entry or battle caller opens the screen yet; it is exercised by its own tests only.",
+          "reason": "BagScreen composes the bag over a supplied field or battle frame: screen tilemap, per-pocket bag picture and indicator squares (item_menu.c:1407-1414), pocket name (item_menu.c:2408-2420), the eight-row list with numbered TM/HM/berry labels and quantities (item_menu.c:896-922, 946-990), the selected icon and description (item_menu.c:994-1011), and the context-choice windows (item_menu.c:452-489). It hands input to the engine BagMenu and returns the typed result for the host; GoToBagMenu field and battle locations (item_menu.c:560-571) differ only in selection mode and close wording. A pocket switch plays upstream's 17-tick Task_SwitchBagPocket (item_menu.c:1352-1404): the list is wiped row by row, the pocket name slides across, the bag bobs closed before showing the destination pocket (item_menu_icons.c:446-472), the rotating ball turns half a turn over 16 ticks (item_menu_icons.c:497-532), the engine changes pocket only when the list returns, and a fresh pocket press restarts the switch unless the request carries a link, and other input is dropped. Wally's bag, which upstream also does not let a press interrupt, is not distinguished, and the affine bag shake on cursor movement (item_menu.c:926-943) is not drawn. The list scroll arrows (item_menu.c:1027-1038; list_menu.c:1126-1139) show while the pocket has rows past the window, counting the close row, and are hidden during a pocket switch and a context menu, recreated when either ends. Pocket-switch arrows, SELECT swap, quantity prompts, and every other location remain pending. No start-menu entry or battle caller opens the screen yet; it is exercised by its own tests only.",
           "rust_target": "crates/pokeemerald-rs/src/bag_menu.rs",
           "spec": "C-5",
           "status": "rewritten"
@@ -30864,6 +30864,14 @@
       "status": "pending"
     },
     "src/list_menu.c": {
+      "artifacts": {
+        "bag_vertical_scroll_arrows": {
+          "reason": "The bag list's vertical scroll-arrow pair: 16x16 sprites at (172, 12) and (172, 148) from the scroll_indicator sheet's second frame (tile offset 4), flipped vertically for the down arrow, in the red-interface palette (list_menu.c:96-148, 289-290; item_menu.c:1027-1038). The up arrow shows once the list has scrolled and the down arrow until it is fully scrolled (list_menu.c:1126-1139). Each bobs by sine * 2 / 256 truncated toward zero, the phase moving +8 (up) or -8 (down) a sample after a first callback that only starts the animation (list_menu.c:997-1020). Only the bag's vertical pair is modelled; the generic list menu and its other arrow users, including the horizontal pocket-switch pair, are not.",
+          "rust_target": "crates/pokeemerald-rs/src/bag_menu/scroll.rs",
+          "spec": "C-5",
+          "status": "rewritten"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
