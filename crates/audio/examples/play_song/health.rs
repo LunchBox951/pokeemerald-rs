@@ -16,7 +16,12 @@ impl UnderrunError {
     }
 }
 
-/// Fail if the underrun counter has grown past `baseline`.
+/// Fail if the midstream underrun count has grown past `baseline`.
+///
+/// `current` must be `AudioOutput::midstream_underruns`, which counts only
+/// silence followed by a sample queued after it. The plain `underruns` total
+/// also counts the padding a draining ring produces once the last frame is
+/// queued, which can land before this runs if the producer is descheduled.
 ///
 /// `baseline` is fixed for the run (a nonzero lifetime total is not a
 /// failure). Only call this while the song is still being rendered: once the

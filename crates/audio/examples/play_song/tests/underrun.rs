@@ -51,20 +51,23 @@ fn a_counter_increase_is_a_failure_sized_by_the_increase() {
 #[test]
 fn a_clean_null_playback_passes_the_guard() {
     let mut output = AudioOutput::null(64);
-    let baseline = output.underruns();
+    let baseline = output.midstream_underruns();
     push(&output, &[1.0_f32; 32]);
     let mut device = [9.0_f32; 32];
     output.pull_null(&mut device);
 
     assert!(device.iter().all(|s| (s - 1.0).abs() < f32::EPSILON));
-    assert_eq!(output.underruns(), baseline);
-    assert_eq!(check_underruns(baseline, output.underruns()), Ok(()));
+    assert_eq!(output.underruns(), 0);
+    assert_eq!(
+        check_underruns(baseline, output.midstream_underruns()),
+        Ok(())
+    );
 }
 
 #[test]
 fn a_counted_shortfall_cannot_be_followed_by_a_successful_push_and_a_passing_guard() {
     let mut output = AudioOutput::null(64);
-    let baseline = output.underruns();
+    let baseline = output.midstream_underruns();
     push(&output, &[1.0_f32; 32]);
 
     // The producer stalls: the device pulls more than is queued.
@@ -73,12 +76,17 @@ fn a_counted_shortfall_cannot_be_followed_by_a_successful_push_and_a_passing_gua
     assert!(device[..32].iter().all(|s| (s - 1.0).abs() < f32::EPSILON));
     assert!(device[32..].iter().all(|s| s.abs() < f32::EPSILON));
     assert_eq!(output.underruns(), 64);
+    assert_eq!(
+        output.midstream_underruns(),
+        0,
+        "no sample has been queued after the pad yet"
+    );
     assert_eq!(output.stream_errors(), 0);
 
     // The producer resumes and the enqueue succeeds, yet the run is not clean.
     push(&output, &[1.0_f32; 32]);
     assert_eq!(
-        check_underruns(baseline, output.underruns()),
+        check_underruns(baseline, output.midstream_underruns()),
         Err(UnderrunError { samples: 64 })
     );
 }
@@ -86,9 +94,12 @@ fn a_counted_shortfall_cannot_be_followed_by_a_successful_push_and_a_passing_gua
 #[test]
 fn a_shortfall_before_the_final_enqueue_is_caught_by_the_check_right_after_it() {
     let mut output = AudioOutput::null(64);
-    let baseline = output.underruns();
+    let baseline = output.midstream_underruns();
     push(&output, &[1.0_f32; 32]);
-    assert_eq!(check_underruns(baseline, output.underruns()), Ok(()));
+    assert_eq!(
+        check_underruns(baseline, output.midstream_underruns()),
+        Ok(())
+    );
 
     // The device outruns the producer during the pacing wait ...
     let mut device = [0.0_f32; 64];
@@ -96,8 +107,31 @@ fn a_shortfall_before_the_final_enqueue_is_caught_by_the_check_right_after_it() 
     // ... then the final frame is enqueued and checked before any further wait.
     push(&output, &[1.0_f32; 32]);
     assert_eq!(
-        check_underruns(baseline, output.underruns()),
+        check_underruns(baseline, output.midstream_underruns()),
         Err(UnderrunError { samples: 32 })
+    );
+}
+
+#[test]
+fn a_descheduled_producer_after_the_final_enqueue_does_not_fail_a_clean_song() {
+    // Mirrors `main`: the final frame is enqueued, then the producer is
+    // descheduled before `check_underruns` reads the counter.
+    let mut output = AudioOutput::null(64);
+    let baseline = output.midstream_underruns();
+    push(&output, &[1.0_f32; 32]);
+
+    // Callbacks run in the gap: every song sample is delivered, then the
+    // expected end-of-song silence is padded.
+    let mut device = [9.0_f32; 96];
+    output.pull_null(&mut device);
+    assert!(device[..32].iter().all(|s| (s - 1.0).abs() < f32::EPSILON));
+    assert!(device[32..].iter().all(|s| s.abs() < f32::EPSILON));
+    assert_eq!(output.underruns(), 64, "the padding is counted ...");
+
+    // ... but no song sample was lost, so the guard must pass.
+    assert_eq!(
+        check_underruns(baseline, output.midstream_underruns()),
+        Ok(())
     );
 }
 
@@ -105,17 +139,18 @@ fn a_shortfall_before_the_final_enqueue_is_caught_by_the_check_right_after_it() 
 fn silence_after_the_final_enqueue_during_drain_and_tail_is_expected() {
     let mut output = AudioOutput::null(64);
     let producer = output.producer();
-    let baseline = output.underruns();
+    let baseline = output.midstream_underruns();
     push(&output, &[1.0_f32; 32]);
-    assert_eq!(check_underruns(baseline, output.underruns()), Ok(()));
+    assert_eq!(
+        check_underruns(baseline, output.midstream_underruns()),
+        Ok(())
+    );
 
     let capacity = producer.capacity();
     let mut device = [0.0_f32; 96];
     output.pull_null(&mut device);
-    assert!(
-        output.underruns() > baseline,
-        "the drained ring pads silence"
-    );
+    assert!(output.underruns() > 0, "the drained ring pads silence");
+    assert_eq!(output.midstream_underruns(), baseline);
 
     let drained = wait_for_drain(
         capacity,

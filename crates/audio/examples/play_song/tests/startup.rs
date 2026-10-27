@@ -113,7 +113,7 @@ fn a_callback_inside_the_prefill_is_clean_but_one_past_it_trips_the_baseline() {
     let producer = output.producer();
     let mut seq = Sequencer::new(build_song());
     let mut buffer = vec![0.0_f32; Sequencer::FRAME_SAMPLES];
-    let baseline = output.underruns();
+    let baseline = output.midstream_underruns();
     let queued = Cell::new(0_usize);
 
     let result = prefill_then_start(
@@ -127,7 +127,7 @@ fn a_callback_inside_the_prefill_is_clean_but_one_past_it_trips_the_baseline() {
             let mut inside = vec![0.0_f32; queued.get()];
             output.pull_null(&mut inside);
             assert_eq!(
-                super::check_underruns(baseline, output.underruns()),
+                super::check_underruns(baseline, output.midstream_underruns()),
                 Ok(()),
                 "an immediate callback covered by the prefill is not a dropout"
             );
@@ -139,8 +139,10 @@ fn a_callback_inside_the_prefill_is_clean_but_one_past_it_trips_the_baseline() {
 
     assert_eq!(result, StartOutcome::Playing);
     assert!(queued.get() > 0);
+    // The next frame `main` queues proves the pad preceded song samples.
+    assert_eq!(producer.push(&[1.0_f32; 4]), 4);
     assert_eq!(
-        super::check_underruns(baseline, output.underruns()),
+        super::check_underruns(baseline, output.midstream_underruns()),
         Err(UnderrunError { samples: 8 }),
         "a callback outrunning the prefill must not be baselined away"
     );

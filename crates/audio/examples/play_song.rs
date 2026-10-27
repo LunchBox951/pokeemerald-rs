@@ -91,9 +91,9 @@ fn main() -> ExitCode {
     };
     let mut buffer = vec![0.0_f32; Sequencer::FRAME_SAMPLES];
 
-    // Snapshot before playback begins; the prefill is queued before the device
+    // Midstream-underrun snapshot before playback begins; the prefill is queued before the device
     // starts, so any increase after this point is a real dropout.
-    let underrun_baseline = output.underruns();
+    let underrun_baseline = output.midstream_underruns();
     match prefill_then_start(
         &mut seq,
         &producer,
@@ -126,11 +126,11 @@ fn main() -> ExitCode {
             eprintln!("audio playback stopped: {}", err.describe());
             return ExitCode::FAILURE;
         }
-        // Checked at the enqueue boundary, before the pacing wait: this sees
-        // every earlier dropout (the counter only grows), and on the final
-        // frame it stops before the device can drain the ring into the
-        // expected end-of-song silence.
-        if let Err(err) = check_underruns(underrun_baseline, output.underruns()) {
+        // `midstream_underruns` counts only silence that a later-queued
+        // sample followed, so this sees every dropout so far (the count only
+        // grows) yet ignores the end-of-song padding even if the device
+        // drains the ring before this line runs.
+        if let Err(err) = check_underruns(underrun_baseline, output.midstream_underruns()) {
             eprintln!("audio playback stopped: {}", err.describe());
             return ExitCode::FAILURE;
         }

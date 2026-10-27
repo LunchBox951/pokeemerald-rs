@@ -52,6 +52,15 @@ struct Shared {
     /// and consumer sides share. Always in `[0, capacity]`.
     occupied: AtomicUsize,
     underruns: AtomicU64,
+    /// The part of `underruns` known to precede a sample queued after it,
+    /// so it is a dropout inside the stream rather than trailing silence
+    /// after the last sample. Only ever raised (`fetch_max`).
+    ///
+    /// The producer settles what it saw before publishing a push; the
+    /// consumer settles what preceded each fill that delivered a sample. The
+    /// consumer's settling is what keeps this exact when a callback runs
+    /// between a push and the producer's next look.
+    settled_underruns: AtomicU64,
 }
 
 /// Lock `head`, recovering from poisoning rather than propagating a panic.
@@ -79,6 +88,7 @@ pub fn ring_buffer(capacity: usize) -> (Producer, Consumer) {
         head: Mutex::new(0),
         occupied: AtomicUsize::new(0),
         underruns: AtomicU64::new(0),
+        settled_underruns: AtomicU64::new(0),
     });
     (
         Producer {
@@ -117,12 +127,19 @@ impl Producer {
         let occupied = self.shared.occupied.load(Ordering::Acquire);
         let space = self.shared.capacity - occupied;
         let n = samples.len().min(space);
+        // Read before publishing: a pad counted after this point can only be
+        // silence following these samples (the consumer drained them first),
+        // which is not a dropout inside the stream.
+        let preceding_underruns = self.shared.underruns.load(Ordering::Acquire);
         for (i, &sample) in samples[..n].iter().enumerate() {
             let idx = (*head + i) % self.shared.capacity;
             self.shared.buffer[idx].store(sample.to_bits(), Ordering::Relaxed);
         }
         if n > 0 {
             *head = (*head + n) % self.shared.capacity;
+            self.shared
+                .settled_underruns
+                .fetch_max(preceding_underruns, Ordering::Relaxed);
             // Release: publishes the slot stores above to the consumer's
             // `Acquire` load of `occupied`.
             self.shared.occupied.fetch_add(n, Ordering::Release);
@@ -156,6 +173,18 @@ impl Producer {
     pub fn underruns(&self) -> u64 {
         self.shared.underruns.load(Ordering::Relaxed)
     }
+
+    /// The part of [`Self::underruns`] followed by a sample queued after it:
+    /// silence that interrupted the stream, not the silence that follows its
+    /// last sample once a finished producer stops pushing.
+    ///
+    /// A caller that has queued its final sample reads this to tell a
+    /// dropout from the device draining the ring: silence padded after the
+    /// last sample is counted by [`Self::underruns`] but never by this.
+    #[must_use]
+    pub fn midstream_underruns(&self) -> u64 {
+        self.shared.settled_underruns.load(Ordering::Relaxed)
+    }
 }
 
 /// The read half of a sample ring buffer, driven once per audio device
@@ -173,6 +202,19 @@ pub struct Consumer {
 }
 
 impl Consumer {
+    /// Mark every pad counted so far as followed by a delivered sample.
+    ///
+    /// Called when a sample is about to be delivered, before this call's own
+    /// shortfall (which trails that sample) is added to the counter.
+    fn settle_underruns(&self) {
+        let underruns = self.shared.underruns.load(Ordering::Relaxed);
+        if underruns > self.shared.settled_underruns.load(Ordering::Relaxed) {
+            self.shared
+                .settled_underruns
+                .fetch_max(underruns, Ordering::Relaxed);
+        }
+    }
+
     /// Pop the next queued sample, or `None` if the buffer is empty.
     ///
     /// A pure query: does not touch the underrun counter. Most callers want
@@ -183,6 +225,7 @@ impl Consumer {
         if self.shared.occupied.load(Ordering::Acquire) == 0 {
             return None;
         }
+        self.settle_underruns();
         let idx = self.tail % self.shared.capacity;
         let sample = f32::from_bits(self.shared.buffer[idx].load(Ordering::Relaxed));
         self.tail = (self.tail + 1) % self.shared.capacity;
@@ -230,6 +273,7 @@ impl Consumer {
             *slot = 0.0;
         }
         if drained > 0 {
+            self.settle_underruns();
             self.tail = (self.tail + drained) % self.shared.capacity;
             // Release: publishes the freed slots to the producer's `Acquire`
             // load of `occupied`.
@@ -319,6 +363,54 @@ mod tests {
         consumer.fill(&mut out3);
         assert_eq!(out3, [4.0, 5.0]);
         assert_eq!(consumer.underruns(), 12);
+    }
+
+    #[test]
+    fn silence_after_the_last_sample_is_not_midstream() {
+        let (producer, mut consumer) = ring_buffer(8);
+        assert_eq!(producer.push(&[1.0, 2.0]), 2);
+
+        // Every sample is delivered, then the callback pads the rest.
+        let mut out = [9.0; 6];
+        consumer.fill(&mut out);
+        assert_eq!(out, [1.0, 2.0, 0.0, 0.0, 0.0, 0.0]);
+        assert_eq!(producer.underruns(), 4);
+        assert_eq!(producer.midstream_underruns(), 0);
+
+        // More trailing silence, with no new sample, is still not midstream.
+        consumer.fill(&mut [9.0; 3]);
+        assert_eq!(producer.underruns(), 7);
+        assert_eq!(producer.midstream_underruns(), 0);
+    }
+
+    #[test]
+    fn silence_followed_by_a_pushed_sample_is_midstream() {
+        let (producer, mut consumer) = ring_buffer(8);
+        assert_eq!(producer.push(&[1.0, 2.0]), 2);
+        consumer.fill(&mut [0.0; 6]);
+        assert_eq!(producer.midstream_underruns(), 0);
+
+        // The producer resumes: the 4 pads now precede a queued sample.
+        assert_eq!(producer.push(&[3.0]), 1);
+        assert_eq!(producer.underruns(), 4);
+        assert_eq!(producer.midstream_underruns(), 4);
+    }
+
+    #[test]
+    fn silence_before_a_delivered_sample_is_midstream_and_the_pads_after_it_are_not() {
+        let (producer, mut consumer) = ring_buffer(8);
+        consumer.fill(&mut [0.0; 3]);
+        assert_eq!(consumer.try_pop(), None);
+        assert_eq!(producer.midstream_underruns(), 0);
+
+        // The pushed sample is delivered by the next callback, which trails
+        // 2 more pads: the 3 before it are midstream, the 2 after it are not.
+        assert_eq!(producer.push(&[5.0]), 1);
+        let mut out = [9.0; 3];
+        consumer.fill(&mut out);
+        assert_eq!(out, [5.0, 0.0, 0.0]);
+        assert_eq!(producer.underruns(), 5);
+        assert_eq!(producer.midstream_underruns(), 3);
     }
 
     /// Capacity is the ring's fixed size, not a reading of how much of it is
