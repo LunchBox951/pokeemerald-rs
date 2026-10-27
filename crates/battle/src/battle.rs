@@ -1289,6 +1289,12 @@ impl Battle {
             return Err(BattleError::InvalidTrainerSwitch(slot));
         };
         context.switch_target(slot)?;
+        // `Cmd_switchoutabilities` cures the leaving member before it returns
+        // to its party record (`battle_script_commands.c:9590`-`:9603`). A
+        // fainted member leaving for a forced replacement is already healthy.
+        if self.enemy.ability() == AbilityId::NATURAL_CURE {
+            self.enemy.set_status1(Status1::Healthy);
+        }
         self.enemy.clear_battle_scratch();
         context.switch_active(&mut self.enemy, slot)?;
         self.enemy.clear_battle_scratch();

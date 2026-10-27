@@ -676,3 +676,55 @@ fn a_finished_action_clears_its_own_landed_move_but_not_its_hitter() {
         "Growl landed on the player after the player's action closed"
     );
 }
+
+#[test]
+fn natural_cure_clears_the_outgoing_members_status_on_switch_out() {
+    let dex = Dex::new();
+    let player = mon(&dex, MEOWTH, 5, &[MoveId::TACKLE, MoveId::FOCUS_ENERGY]);
+    let party = vec![
+        mon(&dex, SpeciesId(363), 50, &[MoveId::TACKLE, MoveId::GROWL]),
+        mon(&dex, TORCHIC, 50, &[MoveId::TACKLE, MoveId::GROWL]),
+    ];
+    let mut battle = battle_with_party(party, player);
+    assert_eq!(battle.enemy().ability(), assets::AbilityId::NATURAL_CURE);
+    battle.enemy.set_status1(Status1::Paralysed);
+    let mut rng = ScriptedRng::new(&[]);
+
+    turn_with(&mut battle, 1, EnemyAction::Switch(1), &mut rng).expect("a healthy slot");
+    turn_with(&mut battle, 1, EnemyAction::Switch(0), &mut rng).expect("back to the lead");
+
+    assert_eq!(battle.enemy().species(), SpeciesId(363));
+    assert_eq!(battle.enemy().status1(), Status1::Healthy);
+}
+
+#[test]
+fn a_member_without_natural_cure_keeps_its_status_through_a_switch() {
+    let mut rng = ScriptedRng::new(&[]);
+    let mut battle = four_mon_battle(&mut rng);
+    assert_ne!(battle.enemy().ability(), assets::AbilityId::NATURAL_CURE);
+    battle.enemy.set_status1(Status1::Paralysed);
+
+    turn_with(&mut battle, 1, EnemyAction::Switch(1), &mut rng).expect("a healthy slot");
+    turn_with(&mut battle, 1, EnemyAction::Switch(0), &mut rng).expect("back to the lead");
+
+    assert_eq!(battle.enemy().status1(), Status1::Paralysed);
+}
+
+#[test]
+fn an_invalid_switch_does_not_cure_a_natural_cure_member() {
+    let dex = Dex::new();
+    let player = mon(&dex, MEOWTH, 5, &[MoveId::TACKLE]);
+    let party = vec![mon(&dex, SpeciesId(363), 50, &[MoveId::TACKLE])];
+    let mut battle = battle_with_party(party, player);
+    battle.enemy.set_status1(Status1::Paralysed);
+
+    turn_with(
+        &mut battle,
+        0,
+        EnemyAction::Switch(0),
+        &mut ScriptedRng::new(&[]),
+    )
+    .expect_err("the active slot");
+
+    assert_eq!(battle.enemy().status1(), Status1::Paralysed);
+}

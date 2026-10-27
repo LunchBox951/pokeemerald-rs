@@ -28390,6 +28390,12 @@
           "spec": "S-6",
           "status": "stubbed"
         },
+        "Cmd_switchoutabilities": {
+          "reason": "battle_script_commands.c:9590-:9603. Battle::switch_enemy_to clears the primary status of a leaving Natural Cure member before it returns to its party slot, for the trainer side's switch actions. Other abilities have no switch-out effect here, as upstream. NOT modelled: the player-side switch action, Pursuit/forced-out (Roar, Whirlwind) callers and doubles.",
+          "rust_target": "crates/battle/src/battle.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
         "Cmd_typecalc": {
           "reason": "Partial: STAB (has_stab/apply_stab, incl. the MOVE_STRUGGLE early-return), gTypeEffectiveness table-order per-slot modulation with terminal immunity (apply_dual_type_effectiveness), and the type1!=type2 dedup are rewritten as pure functions. The Levitate branch (:1375-:1383) is modelled too: hit::damage_before_roll zeroes a Ground moves damage ahead of this call when the defender ability is Levitate, reported through HitOutcome::LevitateBlocked/BattleEvent::LevitateBlocked. The Wonder Guard branch (:1409-:1418) is modelled as well: damage::aggregate_type_effectiveness tracks ModulateDmgByTypes SUPER_EFFECTIVE/NOT_VERY_EFFECTIVE flag toggling (:1321-1351) rather than floored running damage, and hit::damage_before_roll blocks any powered, not-strictly-super-effective hit other than Struggle (which skips typecalc, as upstream's MOVE_STRUGGLE early return does) against a Wonder Guard holder, reported through HitOutcome::WonderGuardBlocked/BattleEvent::WonderGuardBlocked and propagated through drain, multi-hit, and fixed damage. Still pending: Foresight handling, MOVE_RESULT_* flag accumulation, and battle-state wiring.",
           "rust_target": "crates/battle/src/damage.rs",
