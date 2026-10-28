@@ -6,9 +6,7 @@ use assets::MoveId;
 use battle::status1::poison_residual_damage;
 use battle::{Battle, BattleEvent, BattleOutcome, Dex, PlayerAction, Status1};
 
-/// Draws each fixture below consumes, counting the constructor's. Measured
-/// against the live engine: each script is exactly this long, so a drifted
-/// draw count fails the fixture instead of passing on spare values. Revisit a
+/// Draws each fixture below consumes, counting the constructor's. Revisit a
 /// count only when an engine change is meant to move it.
 const DIRECT_HIT_KO_DRAWS: usize = 11;
 const LAST_MON_RESIDUAL_DRAWS: usize = 10;
@@ -31,9 +29,7 @@ fn a_direct_hit_kos_reward_is_paid_before_the_residual_tick_that_fells_the_winne
     let lead = max_iv_mon(&dex, RATTATA, 5, vec![TACKLE]);
     let benched = max_iv_mon(&dex, RATTATA, 5, vec![TACKLE]);
 
-    // No draw in this turn decides anything the assertions below read, but the
-    // script is exactly as long as the draws consumed: a drifted draw count
-    // fails here instead of hiding behind spare values.
+    // No draw in this turn decides anything the assertions below read.
     let mut rng = SequenceRng::new([0; DIRECT_HIT_KO_DRAWS]);
     let mut battle = Battle::new_trainer(
         dex,
@@ -127,8 +123,7 @@ fn a_trainer_last_mons_lethal_residual_tick_ends_the_battle_before_the_players_o
         "fixture sanity -- the trainer's mon must be processed first in residual"
     );
 
-    // No draw in this turn decides anything the assertions below read, but the
-    // script is exactly as long as the draws consumed.
+    // No draw in this turn decides anything the assertions below read.
     let mut rng = SequenceRng::new([0; LAST_MON_RESIDUAL_DRAWS]);
     let mut battle =
         Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, vec![enemy], &mut rng).unwrap();
@@ -197,8 +192,6 @@ fn a_level_up_prompt_defers_the_residual_tick_to_the_answer_rather_than_dropping
         max_iv_mon(&dex, TREECKO, 5, vec![POUND, LEER]),
     ];
 
-    // The draws are all maximal; the script is exactly as long as the draws
-    // consumed through the answered prompt.
     let mut rng = SequenceRng::new([u16::MAX; LEVEL_UP_PROMPT_DRAWS]);
     let mut battle =
         Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, party, &mut rng).unwrap();
