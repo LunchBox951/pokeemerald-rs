@@ -627,4 +627,36 @@ fn a_symlinked_output_is_refused() {
     );
 }
 
+/// The reference is only read: git's opportunistic index refresh must not
+/// write to it, even when a tracked file's stat data is stale.
+#[test]
+#[cfg(unix)]
+fn verifying_the_reference_leaves_its_index_untouched() {
+    let fx = Fixture::new("index-untouched", GOOD);
+    let reference = &fx.config.reference;
+    // Same contents, stale stat data: a refreshing `git status` would
+    // rewrite the index with the new metadata.
+    let old = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
+    fs::File::options()
+        .write(true)
+        .open(reference.join("Makefile"))
+        .unwrap()
+        .set_modified(old)
+        .unwrap();
+    let index = reference.join(".git/index");
+    let bytes = fs::read(&index).unwrap();
+    let modified = fs::metadata(&index).unwrap().modified().unwrap();
+    checkout::verify_reference(reference, &fx.config.pinned_revision).unwrap();
+    assert_eq!(
+        fs::read(&index).unwrap(),
+        bytes,
+        "verification wrote the reference index"
+    );
+    assert_eq!(
+        fs::metadata(&index).unwrap().modified().unwrap(),
+        modified,
+        "verification touched the reference index"
+    );
+}
+
 mod checkout_reading;
