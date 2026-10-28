@@ -8,17 +8,25 @@
 //!
 //! # Deliberately out of scope
 //!
-//! Formatting, audio, and window-buffer controls are consumed without applying
-//! effects. Placeholders and dynamic tokens are skipped because this renderer
-//! has no expansion context. A keypad icon is not skipped: it advances the
-//! cursor by the icon's width and is reported through
+//! Colour, audio, and the other formatting controls are consumed without
+//! applying effects. Placeholders and dynamic tokens are skipped because this
+//! renderer has no expansion context. A keypad icon is not skipped: it advances
+//! the cursor by the icon's width and is reported through
 //! [`Printer::keypad_icon`] for the caller to draw, since this crate owns
-//! no icon bitmaps. `CLEAR`,
-//! `CLEAR_TO`, and `FILL_WINDOW` are the exceptions: they move the cursor, so
-//! `CLEAR`/`CLEAR_TO`'s geometry is reported as a [`ClearedSpan`] and
-//! `FILL_WINDOW`'s whole-window equivalent through
-//! [`Printer::cleared_window`], both for the caller to erase. Which colour
-//! that erase uses stays out of scope with the rest of formatting.
+//! no icon bitmaps. `FONT`, `CLEAR`, `CLEAR_TO`, and `FILL_WINDOW` are the
+//! exceptions among the controls that would otherwise be no-ops:
+//!
+//! - `FONT` changes the glyph source the following glyphs render from, mid
+//!   string, as reported by [`Printer::active_font`]. A font with no modelled
+//!   source (Braille, Bold, or an unknown id) skips glyphs until a later
+//!   `FONT` selects a modelled one. The template line and scroll metrics stay
+//!   on the font the printer was built with.
+//! - `CLEAR`/`CLEAR_TO` move the cursor, and their geometry is reported as a
+//!   [`ClearedSpan`] for the caller to erase.
+//! - `FILL_WINDOW` resets the cursor and reports its whole-window equivalent
+//!   through [`Printer::cleared_window`], also for the caller to erase.
+//!
+//! Which colour an erase uses stays out of scope with the rest of formatting.
 
 use assets::fonts::{FontId, Glyph, GlyphSource, GlyphSources};
 
