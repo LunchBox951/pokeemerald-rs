@@ -352,17 +352,19 @@ fn restart_returns_to_the_initial_font_and_clear_height() {
         );
         let _ = printer.tick(PrinterInput::none());
         while printer.tick(PrinterInput::none()) != TickEvent::Finished {}
+        // The CLEAR comes before any glyph, so it reads the height `restart`
+        // reset rather than one a restarted glyph would set.
         printer.restart(decode_tokens(&[
-            ENCODED_A,
             EXT,
             CLEAR_CODE,
             2,
+            ENCODED_A,
             crate::text::EOS,
         ]));
         assert_eq!(printer.active_font(), Some(FontId::Normal));
-        let g = next_glyph(&mut printer);
-        assert_eq!(pair(&g), fill_for(FontId::Normal));
         assert_eq!(printer.tick(PrinterInput::none()), TickEvent::Idle);
         assert_eq!(printer.cleared_span().unwrap().height, 15);
+        let g = next_glyph(&mut printer);
+        assert_eq!(pair(&g), fill_for(FontId::Normal));
     }
 }
