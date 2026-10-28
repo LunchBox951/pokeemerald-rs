@@ -46,8 +46,12 @@ fn walk_onto_cell_then_save_and_continue(name: &str, cell_elevation: u8) -> ((u8
 
     save_from_the_start_menu(&mut phase, &mut slot);
     let saved = slot.load();
-    let resumed =
-        OverworldPhase::from_saved(scene(), new_game::SPAWN_MAP_ID, saved.block1, saved.block2);
+    let resumed = OverworldPhase::from_saved(
+        scene().in_room_for_test(new_game::SPAWN_MAP_ID),
+        new_game::SPAWN_MAP_ID,
+        saved.block1,
+        saved.block2,
+    );
     assert_eq!(resumed.player.position(), (4, 4));
     (
         before,
@@ -116,8 +120,12 @@ fn continue_restores_any_elevation_pair_on_a_multi_level_tile() {
     phase.save1.pos.y = 4;
     save_from_the_start_menu(&mut phase, &mut slot);
     let saved = slot.load();
-    let resumed =
-        OverworldPhase::from_saved(scene(), new_game::SPAWN_MAP_ID, saved.block1, saved.block2);
+    let resumed = OverworldPhase::from_saved(
+        scene().in_room_for_test(new_game::SPAWN_MAP_ID),
+        new_game::SPAWN_MAP_ID,
+        saved.block1,
+        saved.block2,
+    );
     assert_eq!(
         (
             resumed.player.elevation(),
@@ -154,7 +162,12 @@ fn legacy_active_image_with_stale_elevation_byte_does_not_restore_it() {
         .player_object_event
         .with_elevation_byte(0x33)
         .with_active(true);
-    let resumed = OverworldPhase::from_saved(scene(), new_game::SPAWN_MAP_ID, block1, block2);
+    let resumed = OverworldPhase::from_saved(
+        scene().in_room_for_test(new_game::SPAWN_MAP_ID),
+        new_game::SPAWN_MAP_ID,
+        block1,
+        block2,
+    );
     assert_eq!(resumed.player.position(), (4, 4));
     assert_eq!(
         resumed.player.elevation(),
@@ -181,7 +194,12 @@ fn an_active_pair_the_ordinary_landing_cell_cannot_hold_is_not_restored() {
         .with_active(true);
     let scene =
         crate::overworld::test_support::synthetic_scene_with_cell_elevation(10, 10, (4, 4), 3);
-    let resumed = OverworldPhase::from_saved(scene, new_game::SPAWN_MAP_ID, block1, block2);
+    let resumed = OverworldPhase::from_saved(
+        scene.in_room_for_test(new_game::SPAWN_MAP_ID),
+        new_game::SPAWN_MAP_ID,
+        block1,
+        block2,
+    );
     assert_eq!(
         (
             resumed.player.elevation(),
@@ -220,7 +238,12 @@ fn upstream_origin_image_with_a_holdable_stale_current_is_not_restored() {
     bytes[object_events + 0x03] &= !0x80;
     bytes[object_events + 0x0B] = 0x30;
     let block1 = engine::save::SaveBlock1::from_bytes(&bytes, key).unwrap();
-    let resumed = OverworldPhase::from_saved(scene(), new_game::SPAWN_MAP_ID, block1, block2);
+    let resumed = OverworldPhase::from_saved(
+        scene().in_room_for_test(new_game::SPAWN_MAP_ID),
+        new_game::SPAWN_MAP_ID,
+        block1,
+        block2,
+    );
     assert_eq!(
         (
             resumed.player.elevation(),

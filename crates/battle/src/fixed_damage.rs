@@ -28,13 +28,13 @@ use crate::pokemon::BattlePokemon;
 use crate::secondary::spend_effect_chance_draw;
 
 /// Dragon Rage's move effect.
-pub const EFFECT_DRAGON_RAGE: MoveEffect = MoveEffect(41);
+pub const EFFECT_DRAGON_RAGE: MoveEffect = MoveEffect::DRAGON_RAGE;
 
 /// Seismic Toss's and Night Shade's move effect.
-pub const EFFECT_LEVEL_DAMAGE: MoveEffect = MoveEffect(87);
+pub const EFFECT_LEVEL_DAMAGE: MoveEffect = MoveEffect::LEVEL_DAMAGE;
 
 /// Sonic Boom's move effect.
-pub const EFFECT_SONICBOOM: MoveEffect = MoveEffect(130);
+pub const EFFECT_SONICBOOM: MoveEffect = MoveEffect::SONICBOOM;
 
 const DRAGON_RAGE_DAMAGE: u32 = 40;
 const SONIC_BOOM_DAMAGE: u32 = 20;

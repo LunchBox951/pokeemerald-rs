@@ -42,6 +42,7 @@ use crate::start_menu::StartMenu;
 
 mod animated_door;
 mod connections;
+mod field_poison;
 mod first_battle_conclusion;
 mod first_battle_trigger;
 mod frame;
@@ -241,34 +242,24 @@ pub(crate) struct OverworldPhase {
     /// The refusal [`Self::wild_lead_admissible`] last reported, so the
     /// diagnostic prints once per refusal rather than once per step.
     pub(super) wild_lead_refusal: Option<battle::BattleError>,
-    /// The player's lead party mon, in battle-ready form -- what a fired
-    /// encounter is fought with.
+    /// The player's lead party mon: its battle-ready form, the saved slot it
+    /// was decoded from (`SetBattlePartyIds`'s `gBattlerPartyIndexes[0]`,
+    /// `pokeemerald/src/battle_controllers.c:604`), the backing record, and the
+    /// current-HP points the zero-EV load clamp hid from it
+    /// (`party::hp_hidden_by_load`) -- what a fired encounter is fought with.
+    /// Write-back ([`Self::copy_party_and_objects_to_save`]) and
+    /// [`Self::white_out`]'s heal both target the lead's own slot, not always
+    /// slot 0.
     ///
     /// `None` means no party at all: the state a bare [`Self::new`] (and
-    /// so every `for_test` phase) starts in, and the state a battle
-    /// borrows the mon into while it runs. The battle writes the mon back
-    /// here when it ends, so damage taken persists into the overworld the
-    /// way `gPlayerParty[gBattlerPartyIndexes[0]]` does -- see
-    /// [`Self::party_lead_slot`] for which saved slot that is.
-    pub(super) party_lead: Option<battle::BattlePokemon>,
-    /// The saved slot [`Self::party_lead`] was decoded from --
-    /// `SetBattlePartyIds`'s `gBattlerPartyIndexes[0]`
-    /// (`pokeemerald/src/battle_controllers.c:604`). Write-back
-    /// ([`Self::copy_party_and_objects_to_save`]) and [`Self::white_out`]'s
-    /// heal both target this index, not always slot 0.
-    pub(super) party_lead_slot: usize,
-    /// The current-HP points [`crate::party`]'s load clamp hid from
-    /// [`Self::party_lead`] (`party::hp_hidden_by_load`): measured when the
-    /// lead is decoded from the save, added back by the merge on every
-    /// save, and rewritten by the white-out when it completes a heal on
-    /// the record directly. Zero when no lead was loaded from a record.
-    ///
-    /// Signed because the merge rebases it across a level-up, and the EV
-    /// gap it rebases by can shrink, leaving the model's live HP a point
-    /// above what upstream's own EV-aware block would hold
-    /// (`party::merge_into_save_pokemon`).
-    pub(super) lead_hp_hidden_by_load: i32,
-    /// Whether [`Self::party_lead`] is `None` because `save1.player_party[0]`
+    /// so every `for_test` phase) starts in. While a battle runs, the lead
+    /// stays and only its battler is out on loan
+    /// ([`Self::take_lead_battler`]). The battle writes the mon back when it
+    /// ends, so damage taken persists into the overworld the way
+    /// `gPlayerParty[gBattlerPartyIndexes[0]]` does. Private: every caller goes
+    /// through [`lead_owner`]'s interface.
+    lead: Option<crate::party::LoadedLead>,
+    /// Whether [`Self::lead`] is `None` because `save1.player_party[0]`
     /// would not decode, rather than because the slot is genuinely empty.
     ///
     /// Every decode failure sets this the same way -- an unsupported
@@ -280,12 +271,6 @@ pub(crate) struct OverworldPhase {
     /// by its other two (empty count, clean decode); diagnostic only, and
     /// never a save-time decision input.
     pub(super) undecodable_lead_retained: bool,
-    /// Whether [`Self::party_lead`] is `None` because
-    /// [`Self::take_lead_battler`] lent it to a battle, rather than because
-    /// no lead was loaded. Only a lent lead may be restored
-    /// ([`Self::restore_lead_battler`]), as `party::LoadedLead`'s battler is
-    /// absent only while lent. Reset to `NotLent` whenever the lead is rebuilt.
-    lead_loan: lead_owner::LeadLoan,
     /// The battle currently being played out, if any -- struct docs on
     /// [`ActiveBattle`]. `Some` freezes the overworld for the frame -- the
     /// same shape [`Self::dialog`] uses -- while
@@ -365,6 +350,23 @@ pub(crate) struct OverworldPhase {
     /// it never changes what the trigger decides, only how often it says
     /// so, on a check that reruns every frame with no button gate.
     sight_trainer_log: sight_trainer_trigger::SightTrainerLog,
+}
+
+/// Refuses a `scene` whose own map is not `map`, the phase's map: the scene
+/// answers every header, event, and collision query the phase makes, so a
+/// scene from another room would silently run `map`'s scripts over the wrong
+/// grid.
+///
+/// # Panics
+///
+/// Panics if `scene.map_id()` differs from `map`.
+#[track_caller]
+pub(super) fn assert_scene_owns_map(scene: &OverworldScene, map: assets::MapId) {
+    assert_eq!(
+        scene.map_id(),
+        map,
+        "the overworld scene belongs to another map than the phase it is given to"
+    );
 }
 
 impl OverworldPhase {
@@ -543,6 +545,10 @@ impl OverworldPhase {
     /// ([`first_battle_trigger::sync_route_101_state_on_entry`]); see the
     /// body for the legacy-save migrations it also applies.
     ///
+    /// # Panics
+    ///
+    /// Panics if `scene` is not `map_id`'s ([`assert_scene_owns_map`]).
+    ///
     /// Always builds with [`crate::pack_source::PackSource::Runtime`]:
     /// [`Self::continue_saved_game`] overwrites [`Self::pack_source`]
     /// immediately afterward, so its only other caller -- a test with an
@@ -553,6 +559,7 @@ impl OverworldPhase {
         mut block1: SaveBlock1,
         block2: SaveBlock2,
     ) -> Self {
+        assert_scene_owns_map(&scene, map_id);
         // A zeroed `last_heal_location` resolves to a real map (group
         // 0/num 0) and would send a white-out to Petalburg at `(0, 0)`
         // instead of home. No writer produces that all-zero value, so it
@@ -603,11 +610,8 @@ impl OverworldPhase {
             wild: WildEncounterState::new(),
             wild_table_screen: None,
             wild_lead_refusal: None,
-            party_lead: None,
-            party_lead_slot: 0,
-            lead_hp_hidden_by_load: 0,
+            lead: None,
             undecodable_lead_retained: false,
-            lead_loan: lead_owner::LeadLoan::NotLent,
             active_battle: None,
             different_save_file: false,
             new_game_session: false,
@@ -637,7 +641,7 @@ impl OverworldPhase {
                 .var_get(VAR_ROUTE101_STATE)
                 .is_ok_and(|state| state == ROUTE101_TRIGGER_CONSUMED_STATE);
         if legacy_first_battle_save {
-            if let Some(lead) = phase.party_lead.as_mut() {
+            if let Some(lead) = phase.lead_battler_mut() {
                 if lead.is_fainted() {
                     eprintln!(
                         "continue: this save predates the first-battle conclusion (issue #251) \
@@ -663,6 +667,8 @@ impl OverworldPhase {
     /// name a real map; a synthetic-grid `scene` is re-labelled as that map
     /// ([`OverworldScene::in_room_for_test`]) so [`Self::step`] queries the
     /// map's header and events, exactly as a loaded scene's own would answer.
+    /// The relabel is to the phase's own `map_id`, so the scene always
+    /// satisfies [`assert_scene_owns_map`].
     #[cfg(test)]
     pub(super) fn for_test(
         scene: OverworldScene,
@@ -719,6 +725,7 @@ impl OverworldPhase {
         options: new_game::NewGameOptions,
         identity: new_game::NewGameIdentity,
     ) -> Self {
+        assert_scene_owns_map(&scene, map_id);
         let mut rng = engine::rng::Rng::new(new_game::NEW_GAME_RNG_SEED);
         let (mut save1, save2) =
             new_game::init_save_blocks_with_identity(&mut rng, options, identity);
@@ -747,11 +754,8 @@ impl OverworldPhase {
             wild: WildEncounterState::new(),
             wild_table_screen: None,
             wild_lead_refusal: None,
-            party_lead: None,
-            party_lead_slot: 0,
-            lead_hp_hidden_by_load: 0,
+            lead: None,
             undecodable_lead_retained: false,
-            lead_loan: lead_owner::LeadLoan::NotLent,
             active_battle: None,
             different_save_file: true,
             new_game_session: true,
@@ -888,6 +892,9 @@ impl OverworldPhase {
         let Some(active) = self.active_battle.take() else {
             return false;
         };
+        // `ClearPoisonStepCounter` runs as each battle starts
+        // (`battle_setup.c:365-372,930-943`); every battle's frames pass here.
+        self.clear_poison_step_counter();
         self.active_battle = match active {
             ActiveBattle::Wild(battle) => self.advance_wild_battle_frame(battle),
             ActiveBattle::First(battle) => self.advance_first_battle_frame(battle),
@@ -968,6 +975,8 @@ mod fainted_lead_party_tests;
 #[cfg(test)]
 mod field_input_ordering_tests;
 #[cfg(test)]
+mod field_poison_tests;
+#[cfg(test)]
 mod first_battle_conclusion_tests;
 #[cfg(test)]
 mod first_battle_trigger_tests;
@@ -987,6 +996,8 @@ mod landing_call_arrow_elevation_tests;
 /// from this module; its own unit tests live with that module instead.
 #[cfg(test)]
 mod lead_owner_tests;
+#[cfg(test)]
+mod mom_faceplayer_tests;
 #[cfg(test)]
 mod oldale_reposition_tests;
 /// Wild and scripted first-battle opponents carry the save owner's OT id.
@@ -1044,5 +1055,70 @@ mod pinned_source_tests {
             None,
         );
         assert_eq!(default.pack_source, PackSource::Runtime);
+    }
+}
+
+#[cfg(test)]
+mod scene_ownership_tests {
+    use super::*;
+    use engine::overworld::Direction;
+
+    const LITTLEROOT: assets::MapId = assets::MapId("MAP_LITTLEROOT_TOWN");
+
+    /// A synthetic scene still labelled as its default room
+    /// (`MAP_ROUTE122`), so it belongs to neither map the tests name.
+    fn route_122_scene() -> OverworldScene {
+        let scene = crate::overworld::test_support::synthetic_scene(10, 10);
+        assert_ne!(
+            scene.map_id(),
+            LITTLEROOT,
+            "fixture precondition: the scene must be another map's"
+        );
+        scene
+    }
+
+    #[test]
+    #[should_panic(expected = "belongs to another map than the phase")]
+    fn new_refuses_a_scene_owned_by_another_map() {
+        let _ = OverworldPhase::new(
+            route_122_scene(),
+            LITTLEROOT,
+            PlayerState::new((1, 1), 3, Direction::North),
+            None,
+            crate::pack_source::PackSource::Runtime,
+            new_game::NewGameOptions::DEFAULT,
+            new_game::NewGameIdentity::DEFAULT,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "belongs to another map than the phase")]
+    fn from_saved_refuses_a_scene_owned_by_another_map() {
+        let _ = OverworldPhase::from_saved(
+            route_122_scene(),
+            LITTLEROOT,
+            SaveBlock1::default(),
+            SaveBlock2::default(),
+        );
+    }
+
+    #[test]
+    fn a_scene_relabelled_to_the_phases_map_is_accepted() {
+        let scene = route_122_scene().in_room_for_test(LITTLEROOT);
+        let saved = OverworldPhase::from_saved(
+            scene,
+            LITTLEROOT,
+            SaveBlock1::default(),
+            SaveBlock2::default(),
+        );
+        assert_eq!(saved.scene.map_id(), saved.map_id);
+
+        let fresh = OverworldPhase::for_test(
+            route_122_scene(),
+            LITTLEROOT,
+            PlayerState::new((1, 1), 3, Direction::North),
+            None,
+        );
+        assert_eq!(fresh.scene.map_id(), fresh.map_id);
     }
 }

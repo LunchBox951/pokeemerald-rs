@@ -307,6 +307,26 @@ impl TitleScene {
         frame: u32,
         palette: PaletteStage<'_>,
     ) -> Framebuffer {
+        self.compose_split_with_palette(frame, frame, palette)
+    }
+
+    /// [`Self::compose_with_palette`] with the background clock and the
+    /// sprite clock held apart: `background_frame` selects the cloud scroll
+    /// ([`cloud_scroll_y`]) and `sprite_frame` the Press Start blink
+    /// ([`press_start_visible`]).
+    ///
+    /// Upstream's confirming `Task_TitleScreenPhase3` frame skips the
+    /// `++tCounter` / `tBg1Y` / `gBattle_BG1_Y` update (title_screen.c:782-787, :805-814, so
+    /// BG1VOFS keeps the previous frame's value, title_screen.c:561-568) while `MainCB2` still
+    /// runs `AnimateSprites` after `RunTasks` (title_screen.c:675-681), so the two clocks
+    /// differ by one on that frame.
+    #[must_use]
+    pub(crate) fn compose_split_with_palette(
+        &self,
+        background_frame: u32,
+        sprite_frame: u32,
+        palette: PaletteStage<'_>,
+    ) -> Framebuffer {
         let rayquaza_layer = BgLayer::new(&self.rayquaza_tiles, &self.palette, &self.rayquaza_map);
         let clouds_layer = BgLayer::new(&self.clouds_tiles, &self.palette, &self.clouds_map);
         let logo_layer = AffineBgLayer::new(&self.logo_tiles, &self.palette, &self.logo_map);
@@ -325,7 +345,7 @@ impl TitleScene {
                 CLOUDS_BG_INDEX,
                 CLOUDS_PRIORITY,
                 0,
-                cloud_scroll_y(frame),
+                cloud_scroll_y(background_frame),
                 true,
             ),
             BgSlot::new_affine(
@@ -340,7 +360,7 @@ impl TitleScene {
             ),
         ];
 
-        let entries = sprite_entries(frame);
+        let entries = sprite_entries(sprite_frame);
         // The title never enables HBlank-free OAM, so the default 1,210-cycle
         // budget applies (`CB2_InitTitleScreen`, title_screen.c:655-661).
         let sprites = SpriteLayer::new(

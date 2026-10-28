@@ -47,12 +47,12 @@ fn wild_gender_and_lead_slot(party: [&BattlePokemon; 2], rng: Rng) -> (Gender, u
         seed.save1.player_party[slot] = crate::party::to_save_pokemon(&dex, member);
     }
     let mut phase = OverworldPhase::from_saved(
-        crate::overworld::test_support::synthetic_scene(10, 10),
+        crate::overworld::test_support::synthetic_scene(10, 10).in_room_for_test(seed.map_id),
         seed.map_id,
         seed.save1,
         seed.save2,
     );
-    let lead_slot = phase.party_lead_slot;
+    let lead_slot = phase.lead_slot_for_test().expect("setup: a loaded lead");
     phase.rng = rng;
     phase.begin_wild_battle(Some(WildEncounter {
         species: WURMPLE,

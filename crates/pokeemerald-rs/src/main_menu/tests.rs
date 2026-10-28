@@ -3,7 +3,8 @@ use super::{
     MainMenuSceneError, MainMenuType, HEADER_TEXT_BG, HEADER_TEXT_FG,
 };
 use crate::textbox::{self, Coverage};
-use assets::pack::{AssetPack, ImageRef, PackError};
+use assets::pack::{AssetPack, PackError};
+use engine::text::Token;
 use rendering::{Bgr555, Framebuffer, Rgb888};
 
 const DARKEN_WEIGHT: u8 = 7;
@@ -18,19 +19,9 @@ const OPAQUE_FOREGROUND_FONT_INDEX: u8 = 1;
 #[test]
 fn render_label_reveals_one_glyph_per_character_left_to_right() {
     let pixels = vec![0u8; (assets::fonts::SHEET_WIDTH * assets::fonts::SHEET_HEIGHT) as usize];
-    let image = ImageRef {
-        width: assets::fonts::SHEET_WIDTH,
-        height: assets::fonts::SHEET_HEIGHT,
-        bit_depth: FONT_BIT_DEPTH,
-        pixels: &pixels,
-    };
-    let sheet = assets::fonts::FontGlyphSheet::new(assets::fonts::FontImageRef::new_for_tests(
-        assets::fonts::FontId::Normal,
-        image,
-    ))
-    .unwrap();
+    let sources = super::blank_sources(&pixels);
 
-    let glyphs = render_label("AB", sheet);
+    let glyphs = render_label("AB", &sources);
     assert_eq!(glyphs.len(), 2);
     assert_eq!(glyphs[0].x, 0);
     assert!(
@@ -182,19 +173,9 @@ fn darken_outside_leaves_unpainted_backdrop_pixels_alone() {
 
 fn blit_header_glyph_of_index(index: u8) -> Framebuffer {
     let pixels = vec![index; (assets::fonts::SHEET_WIDTH * assets::fonts::SHEET_HEIGHT) as usize];
-    let image = ImageRef {
-        width: assets::fonts::SHEET_WIDTH,
-        height: assets::fonts::SHEET_HEIGHT,
-        bit_depth: FONT_BIT_DEPTH,
-        pixels: &pixels,
-    };
-    let sheet = assets::fonts::FontGlyphSheet::new(assets::fonts::FontImageRef::new_for_tests(
-        assets::fonts::FontId::Normal,
-        image,
-    ))
-    .unwrap();
+    let sources = super::blank_sources(&pixels);
 
-    let glyphs = render_label("A", sheet);
+    let glyphs = render_label("A", &sources);
     assert_eq!(glyphs.len(), 1, "one character reveals exactly one glyph");
     let mut fb = Framebuffer::new();
     textbox::blit_glyphs_colored(
@@ -246,7 +227,7 @@ fn header_glyph_colors_map_each_font_index_to_the_upstream_patched_palette() {
 fn synthetic_main_menu_pack_bytes(font_index: u8) -> Vec<u8> {
     use crate::pack_test_support::{image_entry, palette_entry_with_color};
 
-    crate::pack_test_support::pack_bytes(vec![
+    crate::pack_test_support::pack_bytes_with_fonts(vec![
         image_entry(
             "text-window/image/1",
             FRAME_SIDE,
@@ -360,6 +341,39 @@ fn load_synthetic_scene_inner(
     let temp_pack = claim_synthetic_pack(font_index, window_frame);
     let pack = AssetPack::load(temp_pack.path()).unwrap();
     MainMenuScene::from_pack_with_window_frame(&pack, menu_type, window_frame).unwrap()
+}
+
+#[test]
+fn the_label_printer_carries_every_font_the_pack_provides() {
+    let temp_pack = claim_synthetic_pack(TRANSPARENT_FONT_INDEX, super::FRAME_ID);
+    let pack = AssetPack::load(temp_pack.path()).unwrap();
+    let sources = super::load_sources(&pack).unwrap();
+    let printer = super::label_printer(vec![Token::End], &sources);
+    crate::pack_test_support::assert_carries_every_font(&printer);
+    assert_eq!(printer.selected_font(), assets::fonts::FontId::Normal);
+}
+
+#[test]
+fn a_pack_missing_an_alternate_font_sheet_is_refused() {
+    let path = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-main-menu-missing-font-{}-{:?}.pack",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let bytes = crate::pack_test_support::pack_bytes(vec![crate::pack_test_support::image_entry(
+        "font/normal/glyphs",
+        assets::fonts::SHEET_WIDTH,
+        assets::fonts::SHEET_HEIGHT,
+        FONT_BIT_DEPTH,
+        0,
+    )]);
+    let temp_pack = TempPackGuard::claim(path, &bytes);
+    let pack = AssetPack::load(temp_pack.path()).unwrap();
+    let err = super::load_sources(&pack).unwrap_err();
+    assert!(
+        matches!(&err, MainMenuSceneError::Pack(PackError::UnknownAsset(id)) if id == "font/small/glyphs"),
+        "unexpected error: {err}"
+    );
 }
 
 fn unwind_pack_path() -> std::path::PathBuf {
