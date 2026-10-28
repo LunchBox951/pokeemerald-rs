@@ -10,6 +10,8 @@ mod absorbing_abilities;
 mod confusion;
 #[path = "turn_engine/confusion_explosion.rs"]
 mod confusion_explosion;
+#[path = "turn_engine/effect_spore_contact/mod.rs"]
+mod effect_spore_contact;
 #[path = "turn_engine/escape.rs"]
 mod escape;
 #[path = "turn_engine/first_battle.rs"]
