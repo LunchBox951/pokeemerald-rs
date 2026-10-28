@@ -330,3 +330,26 @@ fn a_checksum_corrupted_reserve_does_not_prevent_white_out() {
 
     assert_eq!(phase.save1.money, 1000, "the defeated party whites out");
 }
+
+/// A checksum-valid reserve whose secure species is `SPECIES_NONE` fails decoding, and
+/// `Cmd_checkteamslost` leaves it out of the HP total since `MON_DATA_SPECIES` reads zero
+/// (`pokeemerald/src/battle_script_commands.c:3534-3564`), whatever the header's stale
+/// `hasSpecies` bit says; the faint of the lead is then a defeat.
+#[test]
+fn a_species_none_reserve_with_a_stale_has_species_does_not_prevent_white_out() {
+    let lead = frail_shuckle();
+    let mut empty = saved(&healthy_treecko(0));
+    let mut substructures = empty.box_data.substructures().unwrap();
+    substructures.growth[..2].copy_from_slice(&0u16.to_le_bytes());
+    empty.box_data.set_substructures(&substructures);
+    assert!(empty.box_data.has_species() && empty.hp != 0);
+    assert!(empty.box_data.substructures().is_ok());
+    assert!(party::from_save_pokemon(&Dex::new(), &empty).is_err());
+    let mut phase = phase_with_party(&[saved(&lead), empty], 0, lead);
+    phase.save1.last_heal_location.map_group = -1;
+
+    walk_into_the_battle(&mut phase);
+    finish_the_battle(&mut phase);
+
+    assert_eq!(phase.save1.money, 1000, "the defeated party whites out");
+}

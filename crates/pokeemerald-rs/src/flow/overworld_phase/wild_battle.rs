@@ -211,7 +211,7 @@ impl OverworldPhase {
                 // (`pokeemerald/src/pokemon.c:3742-3747`), which the HP total leaves out.
                 Err(PartyError::Egg | PartyError::Substructures(_)) => continue,
                 Err(error) => {
-                    if record.box_data.has_species() && record.hp != 0 {
+                    if record.hp != 0 && crate::party::record_has_validated_species(record) {
                         eprintln!("wild encounter: slot {slot}'s record {error} -- left out");
                         unplayable_member_remains = true;
                     }

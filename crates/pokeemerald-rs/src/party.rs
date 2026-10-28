@@ -752,6 +752,16 @@ pub(crate) fn from_save_pokemon(dex: &Dex, saved: &Pokemon) -> Result<BattlePoke
     Ok(mon)
 }
 
+/// Whether `record` reads as a real species the way `MON_DATA_SPECIES` does: a secure
+/// region that passes its checksum and names something other than `SPECIES_NONE`. The
+/// header's `hasSpecies` bit is a separate, possibly stale flag and proves neither.
+pub(crate) fn record_has_validated_species(record: &Pokemon) -> bool {
+    record
+        .box_data
+        .substructures()
+        .is_ok_and(|substructures| read_u16(&substructures.growth, GROWTH_SPECIES) != SPECIES_NONE)
+}
+
 /// Whether `record` is an egg or Bad Egg: the unencrypted header's
 /// `isBadEgg` bit, or the secure-region IV word's egg flag. Checked ahead
 /// of decode since [`from_save_pokemon`] itself does not reject either, and
