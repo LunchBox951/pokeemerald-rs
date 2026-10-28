@@ -199,23 +199,34 @@ fn calc_stat(
 }
 
 /// Current HP after a stat recalculation, `CalculateMonStats`' HP rule
-/// (`src/pokemon.c:2866-2892`).
+/// (`src/pokemon.c:2866-2895`).
 ///
-/// A fainted mon stays at zero; a living Shedinja is rewritten to one; any
-/// other living mon moves by the signed `new_max - old_max`, measured against
-/// the maximum it carried *before* the recalculation. Upstream leaves a
-/// non-positive result to wrap (the Pomeg glitch, fixed only under
-/// `BUGFIX`); a living mon is never made fainted here, so it clamps to one.
+/// Shedinja is set to one unless it is fainted with a nonzero old maximum,
+/// which returns before the HP write. A zero HP over a zero old maximum is an
+/// uninitialised mon and takes the new maximum; any other fainted mon stays at
+/// zero. A living mon moves by the signed `new_max - old_max`, measured
+/// against the maximum it carried *before* the recalculation. Stock upstream
+/// (`BUGFIX` off, `:2882-2885`) stores that signed result through the 16-bit
+/// HP field unclamped, so a non-positive result wraps modulo 2^16 (the Pomeg
+/// glitch) and a zero result faints; this follows stock rather than the
+/// `BUGFIX` clamp to one.
 fn hp_after_recalculation(species: SpeciesId, current_hp: u32, old_max: u32, new_max: u32) -> u32 {
-    if current_hp == 0 {
-        return 0;
-    }
     if species == SPECIES_SHEDINJA {
-        return SHEDINJA_MAX_HP;
+        return if current_hp != 0 || old_max == 0 {
+            SHEDINJA_MAX_HP
+        } else {
+            0
+        };
+    }
+    if current_hp == 0 {
+        return if old_max == 0 { new_max } else { 0 };
     }
     let moved = i64::from(current_hp) + i64::from(new_max) - i64::from(old_max);
-    u32::try_from(moved.max(1)).unwrap_or(u32::MAX)
+    u32::try_from(moved.rem_euclid(HP_FIELD_MODULUS)).unwrap_or(0)
 }
+
+/// The party record's HP field is a `u16` (`struct Pokemon::hp`).
+const HP_FIELD_MODULUS: i64 = 1 << 16;
 
 fn calc_max_hp(
     species: SpeciesId,

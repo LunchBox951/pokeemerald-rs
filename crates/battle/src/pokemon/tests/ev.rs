@@ -387,13 +387,66 @@ fn a_level_up_moves_living_hp_by_the_signed_delta_against_the_cached_maximum() {
     );
 }
 
+/// Stock `CalculateMonStats` (`BUGFIX` off, `src/pokemon.c:2882-2895`) writes
+/// `1 + (21 - 22) = 0` through the HP field unclamped.
 #[test]
-fn a_level_up_never_turns_a_living_mon_into_a_fainted_one() {
+fn a_level_up_hp_delta_is_not_clamped_without_bugfix() {
     let dex = Dex::new();
     let mut mon = sample_mon(&dex).with_cached_stats(divergent_cache(), 1);
     level_to(&mut mon, &dex, 6);
-    assert_eq!(mon.current_hp(), 1, "1 + (21 - 22) clamps to one point");
-    assert!(!mon.is_fainted());
+    assert_eq!(
+        mon.current_hp(),
+        0,
+        "stock upstream leaves 1 + (21 - 22) = 0"
+    );
+    assert!(mon.is_fainted());
+}
+
+/// A negative signed result wraps through the 16-bit HP field (the Pomeg
+/// glitch), as stock upstream stores it.
+#[test]
+fn a_negative_level_up_hp_result_wraps_through_the_sixteen_bit_hp_field() {
+    let dex = Dex::new();
+    let cache = Stats {
+        max_hp: 30,
+        ..divergent_cache()
+    };
+    let mut mon = sample_mon(&dex).with_cached_stats(cache, 2);
+    level_to(&mut mon, &dex, 6);
+    assert_eq!(
+        mon.current_hp(),
+        65_529,
+        "2 + (21 - 30) = -7 stored through a u16"
+    );
+}
+
+/// `CalculateMonStats` (`src/pokemon.c:2875-2878`): zero HP with a zero old
+/// maximum is an uninitialised mon, which takes the new maximum.
+#[test]
+fn zero_hp_with_zero_old_max_takes_the_new_maximum() {
+    let dex = Dex::new();
+    let zero = Stats {
+        max_hp: 0,
+        ..divergent_cache()
+    };
+    let mut mon = sample_mon(&dex).with_cached_stats(zero, 0);
+    level_to(&mut mon, &dex, 6);
+    assert_eq!(mon.current_hp(), mon.stats().max_hp);
+    assert_eq!(mon.current_hp(), 21);
+}
+
+/// `src/pokemon.c:2866-2871`: a Shedinja with a zero old maximum is also
+/// initialised to one, even at zero HP.
+#[test]
+fn a_shedinja_with_a_zero_old_max_is_initialised_to_one_hp() {
+    let dex = Dex::new();
+    let zero = Stats {
+        max_hp: 0,
+        ..divergent_cache()
+    };
+    let mut mon = shedinja(&dex).with_cached_stats(zero, 0);
+    level_to(&mut mon, &dex, 6);
+    assert_eq!((mon.current_hp(), mon.stats().max_hp), (1, 1));
 }
 
 #[test]
