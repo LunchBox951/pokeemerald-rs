@@ -54,8 +54,16 @@ impl TempSave {
 
 #[test]
 fn a_temp_save_never_reaches_a_stranger_or_planted_link_at_its_predictable_path() {
+    // The unfixed fixture named its directory `{prefix}-{pid}-{ThreadId}` and
+    // deleted whatever sat there, so a stranger is planted at that name too.
+    let legacy = format!(
+        "pokeemerald-rs-game-save-occupant-probe-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    );
     crate::scratch_dir_test_support::assert_claim_spares_planted_occupants(
         "pokeemerald-rs-game-save-occupant-probe",
+        &[legacy],
         || {
             let temp = TempSave::new("occupant-probe");
             let child = temp.join("probe");

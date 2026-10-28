@@ -167,8 +167,19 @@ pub(crate) fn fill_descriptor_table_leaving(free: usize) -> Vec<fs::File> {
 
 #[test]
 fn a_temp_dir_never_reaches_a_stranger_or_planted_link_at_its_predictable_path() {
+    // The unfixed fixture named its directory `{prefix}-{pid}-{counter}` from
+    // a process-wide counter and deleted whatever sat there. The counter value
+    // this test would have drawn depends on which tests ran first, so a
+    // stranger is planted at every value a run can reach (the suite makes
+    // the whole lib suite draws at most 81 counter values, below LEGACY_COUNTER_SPAN).
+    const LEGACY_COUNTER_SPAN: u32 = 256;
+    let pid = std::process::id();
+    let legacy: Vec<String> = (0..LEGACY_COUNTER_SPAN)
+        .map(|n| format!("pokeemerald-rs-import-occupant-probe-{pid}-{n}"))
+        .collect();
     crate::scratch_dir_test_support::assert_claim_spares_planted_occupants(
         "pokeemerald-rs-import-occupant-probe",
+        &legacy,
         || {
             let dir = TempDir::new("occupant-probe");
             let child = dir.join("probe");

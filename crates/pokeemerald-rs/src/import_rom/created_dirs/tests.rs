@@ -401,6 +401,15 @@ fn a_valid_deep_destination_creates_or_fully_rolls_back() {
             panic!("valid deep destination failed to create: {source}");
         }
     }
+    // The child runs with a 36-descriptor limit, which the fixture's
+    // recursive removal of a 37-level tree would exceed (one open directory
+    // per level), leaving the tree behind. Remove the levels deepest first
+    // by path, which needs no descriptor.
+    drop(_fillers);
+    for _ in 0..total {
+        let _ = std::fs::remove_dir(&level);
+        level.pop();
+    }
 }
 
 #[cfg(unix)]

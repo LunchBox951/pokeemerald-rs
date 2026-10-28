@@ -138,7 +138,13 @@ impl Drop for ScratchDir {
 
 /// Plants a populated stranger at the first predictable name a claim with
 /// `prefix` would try under the OS temporary directory, and (on unix) a
-/// symlink to a populated victim at the second. Runs `claim`, which must
+/// symlink to a populated victim at the second. `legacy_names` are further
+/// names, each a single component under that directory, where the fixture's
+/// unfixed predecessor would have put its directory; a populated stranger
+/// is planted at each too, so the regression collides with the old
+/// delete-then-create fixture as well as the exclusive claim (an unfixed
+/// fixture would delete the stranger and the sentinel check below fails).
+/// A name already planted above is skipped. Runs `claim`, which must
 /// make a fixture whose claimed directory is named `{prefix}-{pid}-{n}` and
 /// return it with a path inside it obtained through the fixture's recorded
 /// `join`. Asserts the claim lands on neither planted name, that writing
@@ -149,6 +155,7 @@ impl Drop for ScratchDir {
 /// name (never recursively) on the way out, even when an assertion fails.
 pub(crate) fn assert_claim_spares_planted_occupants<G>(
     prefix: &str,
+    legacy_names: &[String],
     claim: impl FnOnce() -> (G, std::path::PathBuf),
 ) {
     struct Planted(Vec<std::path::PathBuf>);
@@ -164,12 +171,14 @@ pub(crate) fn assert_claim_spares_planted_occupants<G>(
     let temp = std::env::temp_dir();
     let pid = std::process::id();
     let mut planted = Planted(Vec::new());
+    let mut strangers = Vec::new();
 
     let stranger = temp.join(format!("{prefix}-{pid}-0"));
     std::fs::create_dir(&stranger).expect("a free predictable name for the stranger");
     planted.0.push(stranger.clone());
     planted.0.push(stranger.join("sentinel"));
     std::fs::write(stranger.join("sentinel"), b"not yours").expect("the stranger's sentinel");
+    strangers.push(stranger.clone());
 
     #[cfg(unix)]
     let (link, victim) = {
@@ -184,12 +193,27 @@ pub(crate) fn assert_claim_spares_planted_occupants<G>(
         (link, victim)
     };
 
+    for name in legacy_names {
+        let legacy = temp.join(name);
+        if legacy.symlink_metadata().is_ok() {
+            continue;
+        }
+        std::fs::create_dir(&legacy).expect("a free name for the legacy candidate");
+        planted.0.push(legacy.clone());
+        planted.0.push(legacy.join("sentinel"));
+        std::fs::write(legacy.join("sentinel"), b"not yours").expect("the legacy sentinel");
+        strangers.push(legacy);
+    }
+
     let (guard, child) = claim();
     let claimed = child
         .parent()
         .expect("a path inside the claim")
         .to_path_buf();
-    assert_ne!(claimed, stranger, "the claim reused the stranger's name");
+    assert!(
+        !strangers.contains(&claimed),
+        "the claim reused a stranger's name"
+    );
     #[cfg(unix)]
     assert_ne!(claimed, link, "the claim reused the planted link's name");
     std::fs::write(&child, b"mine").expect("the claim is writable");
@@ -202,11 +226,14 @@ pub(crate) fn assert_claim_spares_planted_occupants<G>(
     );
     drop(guard);
 
-    assert_eq!(
-        std::fs::read(stranger.join("sentinel")).unwrap(),
-        b"not yours",
-        "dropping the claim reached the stranger"
-    );
+    for stranger in &strangers {
+        assert_eq!(
+            std::fs::read(stranger.join("sentinel")).unwrap(),
+            b"not yours",
+            "dropping the claim reached the stranger {}",
+            stranger.display()
+        );
+    }
     #[cfg(unix)]
     {
         assert_eq!(
