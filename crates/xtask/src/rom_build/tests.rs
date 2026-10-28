@@ -628,3 +628,108 @@ fn a_symlinked_output_is_refused() {
 }
 
 mod checkout_reading;
+
+/// Renames the scratch directory aside and puts `replacement` at its path.
+#[cfg(unix)]
+fn swap_scratch(scratch: &Scratch, replacement: impl FnOnce(&Path)) -> PathBuf {
+    let aside = scratch.path.with_extension("aside");
+    fs::rename(&scratch.path, &aside).unwrap();
+    replacement(&scratch.path);
+    aside
+}
+
+#[cfg(unix)]
+#[test]
+fn dropping_scratch_never_removes_a_tree_that_replaced_it() {
+    let root = temp_dir("scratch-replaced");
+    let scratch = Scratch::create(&root).unwrap();
+    fs::write(scratch.path.join("owned.txt"), b"mine").unwrap();
+    let path = scratch.path.clone();
+    let aside = swap_scratch(&scratch, |path| {
+        fs::create_dir(path).unwrap();
+        fs::write(path.join("keep.txt"), b"keep me").unwrap();
+    });
+    drop(scratch);
+    let kept = fs::read(path.join("keep.txt"));
+    let owned = fs::read(aside.join("owned.txt"));
+    let _ = fs::remove_dir_all(&root);
+    assert_eq!(
+        kept.unwrap(),
+        b"keep me",
+        "cleanup removed a tree it did not create"
+    );
+    assert_eq!(
+        owned.unwrap(),
+        b"mine",
+        "cleanup followed the pathname, not the hold"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_replaced_scratch_directory_is_refused_before_any_build_step() {
+    for symlink in [false, true] {
+        let root = temp_dir(if symlink {
+            "scratch-linked"
+        } else {
+            "scratch-swapped"
+        });
+        let foreign = root.join("foreign");
+        fs::create_dir(&foreign).unwrap();
+        fs::write(foreign.join("keep.txt"), b"keep me").unwrap();
+        let scratch = Scratch::create(&root).unwrap();
+        assert_eq!(scratch.tree().unwrap(), scratch.path.join("pokeemerald"));
+        swap_scratch(&scratch, |path| {
+            if symlink {
+                std::os::unix::fs::symlink(&foreign, path).unwrap();
+            } else {
+                fs::create_dir(path).unwrap();
+            }
+        });
+        assert!(matches!(scratch.tree(), Err(RomBuildError::Scratch(_))));
+        assert!(matches!(scratch.check(), Err(RomBuildError::Scratch(_))));
+        drop(scratch);
+        let kept = fs::read(foreign.join("keep.txt"));
+        let _ = fs::remove_dir_all(&root);
+        assert_eq!(kept.unwrap(), b"keep me");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_populated_directory_is_never_claimed_as_scratch() {
+    let root = temp_dir("scratch-claim");
+    let path = root.join("planted");
+    fs::create_dir(&path).unwrap();
+    fs::write(path.join("keep.txt"), b"keep me").unwrap();
+    assert!(Scratch::claim(path.clone()).is_err());
+    let kept = fs::read(path.join("keep.txt"));
+    let _ = fs::remove_dir_all(&root);
+    assert_eq!(kept.unwrap(), b"keep me");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_build_whose_scratch_is_swapped_mid_make_fails_and_spares_the_replacement() {
+    // The fake `make` runs in `<scratch>/pokeemerald`; it swaps its parent.
+    let script = format!(
+        "cd ..\nroot=$PWD\nmv \"$root\" \"$root.aside\"\nmkdir \"$root\"\n\
+         printf 'keep me' > \"$root/keep.txt\"\n{GOOD}"
+    );
+    let fx = Fixture::new("swap-mid-make", &script);
+    let result = build(&fx.config);
+    let kept: Vec<_> = fs::read_dir(&fx.config.scratch_root)
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter_map(|entry| fs::read(entry.path().join("keep.txt")).ok())
+        .collect();
+    assert!(
+        matches!(result, Err(RomBuildError::Scratch(_))),
+        "{result:?}"
+    );
+    assert_eq!(
+        kept,
+        [b"keep me".to_vec()],
+        "the replacement survived the drop"
+    );
+}
