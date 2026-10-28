@@ -28046,16 +28046,16 @@
     "src/battle_controller_player.c": {
       "artifacts": {
         "CopyPlayerMonData.status1": {
-          "reason": "battle_controller_player.c:1636-1640 and constants/battle.h:114-125. party::from_save_pokemon decodes the save record status word into battle::Status1: healthy, ordinary poison (0x08), paralysis (0x40), and sleep with 1-7 turns left. Any other word (burn, freeze, bad poison with or without its counter, several conditions at once, bits above STATUS1_ANY) fails closed with PartyError::UnsupportedStatus and leaves the record bytes untouched, because battle does not model those conditions and decoding them as healthy would erase them on the next save.",
+          "reason": "battle_controller_player.c:1636-1640 and constants/battle.h:114-125. Modelled: party::from_save_pokemon decodes the save record status word into battle::Status1 -- healthy, ordinary poison (0x08), paralysis (0x40), and sleep with 1-7 turns left -- and any other word fails closed with PartyError::UnsupportedStatus, leaving the record bytes untouched, so it is never read as healthy and erased on the next save. Deferred: burn, freeze, bad poison (0x80 and its counter bits), and combined status words, which battle does not model and which therefore cannot be loaded into a battler.",
           "rust_target": "crates/pokeemerald-rs/src/party.rs",
           "spec": "I-4",
-          "status": "rewritten"
+          "status": "stubbed"
         },
         "SetPlayerMonData.status1": {
-          "reason": "battle_controller_player.c:1983-1987 and constants/battle.h:114-121. Both party::to_save_pokemon and party::merge_into_save_pokemon write the battler Status1 into the record status word (0 for healthy or a cleared status, 0x08 poison, 0x40 paralysis, 1-7 sleep turns), so an inflicted or cured condition reaches the save; a sleep count above 7 would corrupt the neighbouring bits and panics instead.",
+          "reason": "battle_controller_player.c:1983-1987 and constants/battle.h:114-125. Modelled: both party::to_save_pokemon and party::merge_into_save_pokemon write the battler Status1 into the record status word (0 for healthy or a cleared status, 0x08 poison, 0x40 paralysis, 1-7 sleep turns), so an inflicted or cured condition reaches the save; a sleep count above 7 would corrupt the neighbouring bits and panics instead. Deferred: burn, freeze, bad poison, and combined words, which battle cannot hold and so never writes.",
           "rust_target": "crates/pokeemerald-rs/src/party.rs",
           "spec": "I-4",
-          "status": "rewritten"
+          "status": "stubbed"
         }
       },
       "category": "code.source",
