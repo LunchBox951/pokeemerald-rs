@@ -77,6 +77,28 @@ fn skip_line_comment(chars: &[char], start: usize) -> usize {
     i
 }
 
+/// Copies the quoted literal opening at `start` into `out`, honouring
+/// backslash escapes; returns the index after it. Stops before a newline or
+/// the end of the text, so an unterminated literal ends with its line.
+fn copy_quoted(chars: &[char], start: usize, out: &mut String) -> usize {
+    let quote = chars[start];
+    out.push(quote);
+    let mut i = start + 1;
+    while i < chars.len() && chars[i] != '\n' {
+        let c = chars[i];
+        out.push(c);
+        i += 1;
+        if c == quote {
+            break;
+        }
+        if c == '\\' && i < chars.len() && chars[i] != '\n' {
+            out.push(chars[i]);
+            i += 1;
+        }
+    }
+    i
+}
+
 /// Skips the block comment opening at `start`; returns the index after it.
 pub(super) fn skip_block_comment(
     source: PokedexSource,
@@ -154,11 +176,15 @@ pub(super) fn lex(source: PokedexSource, text: &str) -> Result<Vec<Token>> {
             '/' if chars.get(i + 1) == Some(&'*') => {
                 i = skip_block_comment(source, &text, i)?;
             }
-            '#' => {
+            // `%:` is the digraph spelling of `#`.
+            '#' | '%' if c == '#' || chars.get(i + 1) == Some(&':') => {
                 let mut body = String::new();
-                i += 1;
+                i += if c == '#' { 1 } else { 2 };
                 while i < chars.len() && chars[i] != '\n' {
-                    if chars[i] == '/' && chars.get(i + 1) == Some(&'/') {
+                    if chars[i] == '"' || chars[i] == '\'' {
+                        // Comment delimiters inside a literal are its text.
+                        i = copy_quoted(chars, i, &mut body);
+                    } else if chars[i] == '/' && chars.get(i + 1) == Some(&'/') {
                         i = skip_line_comment(chars, i);
                     } else if chars[i] == '/' && chars.get(i + 1) == Some(&'*') {
                         // A comment is one space, as in the C preprocessor.

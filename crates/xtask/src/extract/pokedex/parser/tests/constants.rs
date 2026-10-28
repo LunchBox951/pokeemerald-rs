@@ -237,3 +237,33 @@ fn conditional_preprocessing_around_the_enum_is_refused() {
         "a mismatched include guard was accepted"
     );
 }
+
+#[test]
+fn quoted_comment_delimiters_do_not_hide_overrides() {
+    for (open, close) in [("\"/*\"", "\"*/\""), ("'/*'", "'*/'")] {
+        let mut f = fixture();
+        replace_once(
+            &mut f.constants,
+            "#endif",
+            &format!(
+                "#define OPEN {open}\n#define NATIONAL_DEX_MON_1 2\n#define NATIONAL_DEX_MON_2 1\n#define CLOSE {close}\n#endif"
+            ),
+        );
+        assert!(
+            f.parse().is_err(),
+            "overrides between quoted `/*` and `*/` must be refused: {open}"
+        );
+    }
+}
+
+#[test]
+fn digraph_dex_constant_overrides_are_refused() {
+    for extra in [
+        "%:define NATIONAL_DEX_MON_1 2\n%:define NATIONAL_DEX_MON_2 1\n",
+        "%:undef NATIONAL_DEX_MON_1\n",
+    ] {
+        let mut f = fixture();
+        replace_once(&mut f.constants, "#endif", &format!("{extra}#endif"));
+        assert!(f.parse().is_err(), "override accepted: {extra}");
+    }
+}
