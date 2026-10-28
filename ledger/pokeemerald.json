@@ -30496,7 +30496,7 @@
         "TryFieldPoisonWhiteOut": {
           "reason": "field_poison.c:20-117. OverworldPhase::try_field_poison_white_out clears the status of every valid-species slot at zero HP that is poisoned (FaintFromFieldPoison), then, when no valid non-egg slot has HP left (AllMonsFainted), runs the standard OverworldPhase::white_out (money halved, party healed, field state reset, warp to the last heal location). Not modelled: the per-mon fainted message and wait, AdjustFriendship FRIENDSHIP_EVENT_FAINT_FIELD_PSN, the battle-facility FLDPSN_FRONTIER_WHITEOUT result, and dispatch as the registered script special (it has no callback).",
           "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/field_poison.rs",
-          "spec": "I-5",
+          "spec": "I-4",
           "status": "stubbed"
         }
       },
