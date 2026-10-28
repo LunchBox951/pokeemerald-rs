@@ -6,6 +6,7 @@
 //! [`build_trainer_pokemon`], as `flow::npc_trainer_battle` does: construction
 //! draws OT IDs before `Battle::new_trainer` can refuse an unexecutable move.
 
+use assets::items::ItemId;
 use assets::trainers::{AiFlags, TrainerClass, TrainerData, TrainerId, TrainerParty, TrainerTable};
 use assets::{MoveId, SpeciesId};
 
@@ -180,16 +181,27 @@ pub fn trainer_money(trainer: &TrainerData) -> u32 {
 }
 
 /// State owned by a trainer opponent for the duration of a battle.
+///
+/// The party keeps its original slot order for the whole battle, as
+/// upstream's `gEnemyParty` does while `gBattlerPartyIndexes` names the
+/// active member. [`Battle`](crate::battle::Battle) owns the active member as
+/// `Battle::enemy`; this context owns every other party record, fainted ones
+/// included, and the active member's original slot.
 #[derive(Debug, Clone)]
 pub struct TrainerContext {
     id: TrainerId,
     class: TrainerClass,
     ai_flags: AiFlags,
     money: u32,
-    bench: Vec<BattlePokemon>,
+    /// Every party member but the active one, in original slot order.
+    non_active: Vec<BattlePokemon>,
+    /// The original party slot of the active member.
+    active_slot: usize,
 }
 
 impl TrainerContext {
+    /// Builds the context for a party whose slot 0 is the active member and
+    /// whose remaining members are `bench` in original slot order.
     #[must_use]
     pub(crate) fn new(id: TrainerId, data: &TrainerData, bench: Vec<BattlePokemon>) -> Self {
         Self {
@@ -197,7 +209,8 @@ impl TrainerContext {
             class: data.class,
             ai_flags: data.ai_flags,
             money: trainer_money(data),
-            bench,
+            non_active: bench,
+            active_slot: 0,
         }
     }
 
@@ -225,61 +238,131 @@ impl TrainerContext {
         self.money
     }
 
-    /// Returns the number of party members remaining behind the active one.
+    /// Returns the original party slot of the active member.
+    #[must_use]
+    pub const fn active_slot(&self) -> usize {
+        self.active_slot
+    }
+
+    /// Returns the number of party members behind the active one that can
+    /// still fight. A fainted member keeps its slot but is not counted.
     #[must_use]
     pub fn bench_len(&self) -> usize {
-        self.bench.len()
+        self.non_active
+            .iter()
+            .filter(|mon| !mon.is_fainted())
+            .count()
     }
 
-    /// Returns the remaining party members in party order. A forced
-    /// replacement does not take them front to back: `send_out_next`
-    /// picks by matchup first and falls back to this order only when both
-    /// suitability passes decline.
+    /// Returns every party member but the active one, fainted ones included,
+    /// in original slot order. Use [`TrainerContext::bench_len`] for the
+    /// number that can still fight.
     #[must_use]
     pub fn bench(&self) -> &[BattlePokemon] {
-        &self.bench
+        &self.non_active
     }
 
-    /// Removes and returns the most suitable non-fainted member for a forced
-    /// post-faint send-out: `GetMostSuitableMonToSwitchInto`'s type and
-    /// most-damage passes, then party order. `fainted` is the battler being
-    /// replaced and `resolving_move` is the move whose resolution fainted it
-    /// (the turn engine's own last-executed move; upstream's `gCurrentMove`
-    /// is exactly this stale value at the point a forced replacement runs).
-    /// See the ledger's `GetMostSuitableMonToSwitchInto` and
-    /// `OpponentHandleChoosePokemon` entries for the full upstream mapping
-    /// and its one remaining documented divergence (issue #1040).
+    /// Returns each non-active party member with its original party slot, in
+    /// slot order.
+    pub fn candidates(&self) -> impl Iterator<Item = (usize, &BattlePokemon)> {
+        self.non_active
+            .iter()
+            .enumerate()
+            .map(|(index, mon)| (self.original_slot(index), mon))
+    }
+
+    /// The original party slot of `non_active[index]`.
+    const fn original_slot(&self, index: usize) -> usize {
+        if index < self.active_slot {
+            index
+        } else {
+            index + 1
+        }
+    }
+
+    /// The `non_active` index holding original `slot`, or `None` for the
+    /// active slot and slots past the party.
+    fn non_active_index(&self, slot: usize) -> Option<usize> {
+        match slot.cmp(&self.active_slot) {
+            std::cmp::Ordering::Equal => None,
+            std::cmp::Ordering::Less => Some(slot),
+            std::cmp::Ordering::Greater => Some(slot - 1),
+        }
+        .filter(|&index| index < self.non_active.len())
+    }
+
+    /// Returns the member in original party `slot` when it is a non-active,
+    /// non-fainted member, the only kind a switch may name.
+    pub(crate) fn switch_target(&self, slot: usize) -> Result<&BattlePokemon, BattleError> {
+        self.non_active_index(slot)
+            .map(|index| &self.non_active[index])
+            .filter(|mon| !mon.is_fainted())
+            .ok_or(BattleError::InvalidTrainerSwitch(slot))
+    }
+
+    /// Selects the original slot of the most suitable non-fainted member for
+    /// a forced post-faint send-out: `GetMostSuitableMonToSwitchInto`'s type
+    /// and most-damage passes, then the first healthy non-active slot in
+    /// party order. `fainted` is the battler being replaced and
+    /// `resolving_move` is the move whose resolution fainted it (the turn
+    /// engine's own last-executed move; upstream's `gCurrentMove` is exactly
+    /// this stale value at the point a forced replacement runs). See the
+    /// ledger's `GetMostSuitableMonToSwitchInto` and
+    /// `OpponentHandleChoosePokemon` entries for the full upstream mapping.
     ///
     /// # Errors
     ///
     /// Returns an error if a bench member's move is missing from `dex` --
     /// never in practice, since trainer-party validation already screens
     /// every move (see [`ensure_trainer_party_startable`]).
-    pub(crate) fn send_out_next(
-        &mut self,
+    pub(crate) fn select_replacement(
+        &self,
         dex: &Dex,
         fainted: &BattlePokemon,
         resolving_move: MoveId,
         player: &BattlePokemon,
-    ) -> Result<Option<BattlePokemon>, BattleError> {
-        if let Some(index) = self.most_suitable_by_type(dex, player)? {
-            return Ok(Some(self.bench.remove(index)));
+    ) -> Result<Option<usize>, BattleError> {
+        if let Some(slot) = self.most_suitable_by_type(dex, player)? {
+            return Ok(Some(slot));
         }
-        if let Some(index) = self.most_suitable_by_damage(dex, fainted, resolving_move, player)? {
-            return Ok(Some(self.bench.remove(index)));
+        if let Some(slot) = self.most_suitable_by_damage(dex, fainted, resolving_move, player)? {
+            return Ok(Some(slot));
         }
-        Ok(self.send_out_first_healthy())
+        Ok(self
+            .candidates()
+            .find(|(_, mon)| !mon.is_fainted())
+            .map(|(slot, _)| slot))
     }
 
-    /// Removes and returns the next non-fainted member in party order.
-    fn send_out_first_healthy(&mut self) -> Option<BattlePokemon> {
-        while !self.bench.is_empty() {
-            let mon = self.bench.remove(0);
-            if !mon.is_fainted() {
-                return Some(mon);
-            }
-        }
-        None
+    /// Swaps `active` with the member in original party `slot`: the outgoing
+    /// member returns to its own slot and the named member becomes active.
+    /// Nothing changes when `slot` is not a healthy non-active member.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BattleError::InvalidTrainerSwitch`] for the active slot, a
+    /// slot past the party, or a fainted member.
+    pub(crate) fn switch_active(
+        &mut self,
+        active: &mut BattlePokemon,
+        slot: usize,
+    ) -> Result<(), BattleError> {
+        self.switch_target(slot)?;
+        let index = self
+            .non_active_index(slot)
+            .expect("switch_target accepted the slot");
+        let incoming = self.non_active.remove(index);
+        let outgoing = std::mem::replace(active, incoming);
+        // The outgoing member takes the position its own original slot holds
+        // among the members still behind the new active one.
+        let outgoing_index = if self.active_slot < slot {
+            self.active_slot
+        } else {
+            self.active_slot - 1
+        };
+        self.non_active.insert(outgoing_index, outgoing);
+        self.active_slot = slot;
+        Ok(())
     }
 }
 
@@ -315,6 +398,9 @@ pub struct TrainerPartyMon<'a> {
     /// The fixed personality [`build_trainer_pokemon`] will receive; it selects the
     /// ability slot the admission screen checks.
     pub personality: u32,
+    /// The item the member will hold ([`ItemId::NONE`] for none); a held item
+    /// the battle cannot honour is refused before any draw.
+    pub held_item: ItemId,
 }
 
 /// Validates that a trainer party can be built and played without consuming RNG.
@@ -334,6 +420,9 @@ pub struct TrainerPartyMon<'a> {
 /// always-refused ability or a member's PP-positive move would be refused by
 /// [`secondary::ensure_admissible`](crate::secondary::ensure_admissible)
 /// against `player_lead` (for example Serene Grace with a Confuse Hit move).
+/// [`BattleError::UnsupportedHeldItem`] when a member's held item has an
+/// effect no pipeline models, or [`BattleError::UnsupportedTrainerBagItem`]
+/// when the trainer's bag holds any item.
 /// Only the lead is screened; reserves are screened by `Battle::new_trainer`.
 pub fn ensure_trainer_party_startable(
     dex: &Dex,
@@ -345,6 +434,7 @@ pub fn ensure_trainer_party_startable(
         return Err(BattleError::EmptyTrainerParty(trainer));
     }
     let data = trainer_data(trainer)?;
+    super::held_item::ensure_trainer_bag_unused(&data.items)?;
     for mon in party {
         BattlePokemon::validate(dex, mon.species, mon.level, mon.moves)?;
         super::admission::ensure_selected_ability_admissible(dex, mon.species, mon.personality)?;
@@ -368,6 +458,7 @@ pub fn ensure_trainer_party_startable(
                 super::secondary::ensure_admissible(dex, slot.move_id, &attacker, player_lead)?;
             }
         }
+        super::held_item::ensure_held_item_playable(mon.held_item)?;
     }
     if data.ai_flags.contains(AiFlags::CHECK_BAD_MOVE) {
         super::trainer_ai::ensure_target_ability_unambiguous(player_lead)?;
@@ -384,6 +475,7 @@ mod tests {
     };
     use crate::dex::Dex;
     use crate::script_rng::SequenceRng;
+    use assets::items::ItemId;
     use assets::trainers::{TrainerClass, TrainerId};
     use assets::{MoveId, SpeciesId};
 
@@ -575,12 +667,14 @@ mod tests {
                 level: 20,
                 moves: &moves,
                 personality,
+                held_item: ItemId::NONE,
             };
             let ok = TrainerPartyMon {
                 species: SpeciesId::MUDKIP,
                 level: 20,
                 moves: &moves,
                 personality: SLOT_0,
+                held_item: ItemId::NONE,
             };
             for party in [[refused, ok], [ok, refused]] {
                 assert_eq!(
@@ -624,6 +718,7 @@ mod tests {
                     level: 20,
                     moves: &moves,
                     personality,
+                    held_item: ItemId::NONE,
                 }],
             )
             .is_ok());
@@ -666,9 +761,37 @@ mod tests {
                     level: ROUTE_103_RIVAL_LEVEL,
                     moves: &moves,
                     personality: 0,
+                    held_item: ItemId::NONE,
                 }],
             ),
             Ok(())
+        );
+    }
+
+    #[test]
+    fn the_pre_flight_refuses_a_later_members_unmodelled_item_and_admits_an_effect_free_one() {
+        let dex = Dex::new();
+        let moves = [POUND];
+        let member = |held_item| TrainerPartyMon {
+            species: TREECKO,
+            level: ROUTE_103_RIVAL_LEVEL,
+            moves: &moves,
+            personality: 0,
+            held_item,
+        };
+        let screen = |party: &[TrainerPartyMon<'_>]| {
+            ensure_trainer_party_startable(&dex, &lead(TREECKO), MAY_ROUTE_103_MUDKIP, party)
+        };
+
+        assert_eq!(
+            screen(&[member(ItemId::NUGGET), member(ItemId::NONE)]),
+            Ok(())
+        );
+        assert_eq!(
+            screen(&[member(ItemId::NONE), member(ItemId::ORAN_BERRY)]),
+            Err(crate::error::BattleError::UnsupportedHeldItem(
+                ItemId::ORAN_BERRY
+            ))
         );
     }
 
@@ -685,6 +808,7 @@ mod tests {
                 level: ROUTE_103_RIVAL_LEVEL,
                 moves: &moves,
                 personality: 0,
+                held_item: ItemId::NONE,
             }],
         )
         .expect_err("Harden is not executable by this turn engine");
@@ -734,6 +858,7 @@ mod tests {
             level: ROUTE_103_RIVAL_LEVEL,
             moves: &moves,
             personality: SLOT_0,
+            held_item: ItemId::NONE,
         }];
         let enemy = crate::pokemon::BattlePokemon::new(
             &dex,
@@ -787,6 +912,7 @@ mod tests {
                     level: ROUTE_103_RIVAL_LEVEL,
                     moves: &moves,
                     personality: 0,
+                    held_item: ItemId::NONE,
                 }],
             ),
             Err(crate::error::BattleError::UnknownTrainer(UNKNOWN_TRAINER))
@@ -802,6 +928,7 @@ mod tests {
             level: ROUTE_103_RIVAL_LEVEL,
             moves: &moves,
             personality: 0,
+            held_item: ItemId::NONE,
         }];
         assert_eq!(
             trainer_data(TrainerId::JANI).unwrap().ai_flags,
@@ -832,6 +959,7 @@ mod tests {
             level: ROUTE_103_RIVAL_LEVEL,
             moves: &moves,
             personality: 0,
+            held_item: ItemId::NONE,
         }];
         assert_eq!(
             ensure_trainer_party_startable(&dex, &lead(VOLTORB), TrainerId::JANI, &party),
@@ -866,6 +994,7 @@ mod tests {
             level: ROUTE_103_RIVAL_LEVEL,
             moves: &moves,
             personality: 0,
+            held_item: ItemId::NONE,
         }];
         for slot in [0, 1] {
             let voltorb = lead(VOLTORB).with_ability_slot(slot);

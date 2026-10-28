@@ -192,15 +192,8 @@ fn mid_visit_flags_preserve_entry_collision_interaction_and_rendering() {
         .flag_set(FLAG_RECEIVED_POTION_OLDALE)
         .unwrap();
 
-    let events = phase
-        .scene
-        .map_events(OLDALE_TOWN)
-        .expect("MAP_OLDALE_TOWN must resolve");
-    let header = assets::MapHeaderTable::new()
-        .header(OLDALE_TOWN)
-        .expect("MAP_OLDALE_TOWN must have a header");
     {
-        let runtime = phase.scene.runtime(OLDALE_TOWN, header, &events);
+        let runtime = phase.scene.runtime();
         assert!(
             phase
                 .interaction_tokens_this_frame(crate::flow::tests::pressed(Buttons::A), &runtime)
@@ -326,10 +319,7 @@ fn real_pack_the_repositioned_npcs_block_and_vacate_their_real_map_tiles() {
 #[test]
 fn the_phase_seeds_live_object_events_from_the_transitioned_placements() {
     let phase = fresh_save_oldale_on_open_grid(PlayerState::new((5, 5), 3, Direction::South));
-    let resolved = phase
-        .scene
-        .map_events(OLDALE_TOWN)
-        .expect("MAP_OLDALE_TOWN must resolve");
+    let resolved = phase.scene.map_events();
 
     let seeded: Vec<_> = resolved
         .object_events
@@ -474,7 +464,7 @@ fn successful_warp_and_connection_replace_live_object_events() {
             FOOTPRINTS_MAN_NEW_TILE,
             "{what} must reseed, discarding the pre-transition live edit"
         );
-        for template in phase.scene.map_events(OLDALE_TOWN).unwrap().object_events {
+        for template in phase.scene.map_events().object_events {
             let entry = phase.object_events.get(template.local_id).unwrap();
             assert!(
                 std::ptr::eq(entry.template(), template),
@@ -550,7 +540,7 @@ fn continue_uses_saved_flags_to_restore_scene_and_live_npc_placements() {
     .expect("the synthetic Oldale pack must load");
     assert_eq!(resumed.map_id, OLDALE_TOWN);
 
-    let events = resumed.scene.map_events(OLDALE_TOWN).unwrap();
+    let events = resumed.scene.map_events();
     for (graphics_id, tile) in [
         ("OBJ_EVENT_GFX_MANIAC", FOOTPRINTS_MAN_OLD_TILE),
         ("OBJ_EVENT_GFX_MART_EMPLOYEE", MART_EMPLOYEE_OLD_TILE),
@@ -578,4 +568,29 @@ fn continue_uses_saved_flags_to_restore_scene_and_live_npc_placements() {
     }
 
     let _ = std::fs::remove_file(&path);
+}
+
+/// The scene's runtime answers from the placement it loaded with, not from
+/// the generated table's unrepositioned set a caller could re-resolve: the
+/// same events the phase seeds its live objects from.
+#[test]
+fn the_scene_runtime_answers_from_oldales_repositioned_events() {
+    let phase = fresh_save_oldale_on_open_grid(PlayerState::new((5, 5), 3, Direction::South));
+    let generated = assets::MapEventsTable::new()
+        .resolve(OLDALE_TOWN)
+        .expect("MAP_OLDALE_TOWN must resolve");
+    let runtime = phase.scene.runtime();
+
+    assert_eq!(runtime.id(), OLDALE_TOWN);
+    assert!(
+        std::ptr::eq(
+            runtime.events().object_events,
+            phase.scene.map_events().object_events
+        ),
+        "the runtime answers from the events the scene owns"
+    );
+    assert!(
+        !std::ptr::eq(runtime.events().object_events, generated.object_events),
+        "and those are the visit's repositioned placement, not the generated set"
+    );
 }
