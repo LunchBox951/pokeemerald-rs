@@ -4,6 +4,10 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 [`RELEASE.md` §Changelog](RELEASE.md#changelog) owns the update policy and entry format. Versions follow the repository's `FINAL.MAJOR.MINOR.PATCH` scheme.
 
+## [0.0.80.0] - 2026-10-28
+
+- General improvements in preparation for dialogue text that changes colour mid-line, with highlighted and shadowed words.
+
 ## [0.0.79.0] - 2026-10-28
 
 - A poisoned Pokémon now loses HP as you walk, faints at 0 HP, and if your whole party faints on the field you white out as in the original game. Saves now remember poison, paralysis and sleep.
