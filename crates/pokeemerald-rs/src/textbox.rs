@@ -256,12 +256,6 @@ pub(crate) fn scroll_window_ops(
     }));
 }
 
-/// Whether the glyph writes background value 0 over its cell, as
-/// `CopyGlyphToWindow` does for a `HIGHLIGHT 0` (`pokeemerald/src/text.c:363-420`).
-fn is_transparent_cell(glyph: &RevealedGlyph) -> bool {
-    glyph.paint_background && usize::from(glyph.colors.background) == TRANSPARENT_PALETTE_INDEX
-}
-
 impl WindowOp {
     /// Shifts this op vertically by a window scroll.
     pub(crate) fn shift_y(&mut self, dy: i32) {
@@ -309,16 +303,6 @@ pub(crate) fn compose_window_ops(
     for op in ops {
         match op {
             WindowOp::Glyph(glyph) => {
-                if let Some(scene) = scene.filter(|_| is_transparent_cell(glyph)) {
-                    let cell = ClearedSpan {
-                        x: glyph.x,
-                        y: glyph.y,
-                        width: i32::from(glyph.glyph.advance_width),
-                        height: glyph.raster_height,
-                        colors: glyph.colors,
-                    };
-                    restore_cleared_span(fb, scene, cell, origin, content_size);
-                }
                 blit_glyphs_colored(
                     fb,
                     std::slice::from_ref(glyph.as_ref()),
@@ -338,14 +322,13 @@ pub(crate) fn compose_window_ops(
 }
 
 /// Whether composing `ops` and `window_fill` needs the pre-frame scene: a
-/// whole-window fill, a `ScrollFill`, or a highlighted glyph cell with
-/// background 0, which [`compose_window_ops`] restores from it.
+/// whole-window fill or a `ScrollFill` with background 0, which
+/// [`compose_window_ops`] restores from it.
 pub(crate) fn needs_scene(ops: &[WindowOp], window_fill: Option<TextColors>) -> bool {
     window_fill.is_some_and(|fill| fill.background == 0)
         || ops.iter().any(|op| match op {
             WindowOp::ScrollFill(span) => span.colors.background == 0,
-            WindowOp::Glyph(glyph) => is_transparent_cell(glyph),
-            WindowOp::ClearSpan(_) => false,
+            WindowOp::Glyph(_) | WindowOp::ClearSpan(_) => false,
         })
 }
 
