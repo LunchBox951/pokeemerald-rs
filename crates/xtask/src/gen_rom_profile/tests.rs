@@ -1617,3 +1617,63 @@ fn an_interface_palette_without_a_cited_static_keeps_its_map_check() {
         SymbolExpectation::Unnamed
     );
 }
+
+/// Set in the child [`publish_under_an_owner_stripping_umask_keeps_the_module_owner_readable`]
+/// re-runs itself as, so only that child changes its own umask.
+#[cfg(unix)]
+const PUBLISH_UMASK_CHILD: &str = "POKEEMERALD_GEN_ROM_PROFILE_UMASK_CHILD";
+
+/// A publish under a umask that strips the owner bits (`0444`) over a
+/// readable module leaves a module its owner can still read. The temporary
+/// file is created `0o666 & !umask`, which is `0o222`, and the rename carries
+/// that mode onto the published name. The mode bits are asserted because a
+/// root runner reads a `0o222` file regardless.
+#[cfg(unix)]
+#[test]
+fn publish_under_an_owner_stripping_umask_keeps_the_module_owner_readable() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let name = "gen_rom_profile::tests::\
+                publish_under_an_owner_stripping_umask_keeps_the_module_owner_readable";
+    if std::env::var_os(PUBLISH_UMASK_CHILD).is_none() {
+        // The umask is process-wide, so the 0o444 one is set only in a re-run
+        // of this test binary that runs this test alone.
+        let output = std::process::Command::new("/bin/sh")
+            .args(["-c", "umask 0444 && exec \"$0\" \"$@\""])
+            .arg(std::env::current_exe().expect("test binary"))
+            .args(["--exact", name, "--test-threads=1"])
+            .env(PUBLISH_UMASK_CHILD, "1")
+            .output()
+            .expect("the child runs");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains("1 passed"),
+            "umask 0444 child failed:\n{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+
+    let dir = scratch("umask-0444-publish");
+    let out = dir.join("bpee_rev0.rs");
+    std::fs::write(&out, "pub const OLD: u32 = 0;\n").expect("existing module");
+    std::fs::set_permissions(&out, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+
+    super::publish(&out, "pub const GENERATED: u32 = 0;\n").expect("the publish succeeds");
+
+    let mode = std::fs::metadata(&out)
+        .expect("metadata")
+        .permissions()
+        .mode()
+        & 0o7777;
+    let text = std::fs::read(&out);
+    let _ = std::fs::remove_file(&out);
+    let _ = std::fs::remove_dir(&dir);
+    // 0666 & !0444 leaves 0222; only the owner read is restored, so the
+    // group and other bits still honour the umask.
+    assert_eq!(mode, 0o622, "published module mode: {mode:o}");
+    assert_eq!(
+        text.expect("module reads back"),
+        b"pub const GENERATED: u32 = 0;\n"
+    );
+}
