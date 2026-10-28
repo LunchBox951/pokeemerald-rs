@@ -267,3 +267,29 @@ fn digraph_dex_constant_overrides_are_refused() {
         assert!(f.parse().is_err(), "override accepted: {extra}");
     }
 }
+
+#[test]
+fn punctuation_attached_dex_constant_overrides_are_refused() {
+    for extra in [
+        "#define NATIONAL_DEX_MON_1+2\n#define NATIONAL_DEX_MON_2+1\n",
+        "#define NATIONAL_DEX_MON_1-0\n",
+    ] {
+        let mut f = fixture();
+        replace_once(&mut f.constants, "#endif", &format!("{extra}#endif"));
+        assert!(f.parse().is_err(), "override accepted: {extra}");
+    }
+}
+
+#[test]
+fn quoted_comment_delimiters_do_not_hide_an_override() {
+    let mut f = fixture();
+    replace_once(
+        &mut f.constants,
+        "#endif",
+        "static int open = '/*';\n#define NATIONAL_DEX_MON_1 2\nstatic int close = '*/';\n#endif",
+    );
+    assert!(
+        f.parse().is_err(),
+        "an override between top-level quoted `/*` and `*/` must be refused"
+    );
+}

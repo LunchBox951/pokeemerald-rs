@@ -99,10 +99,13 @@ pub(super) fn parse_constants(text: &str) -> Result<Constants> {
         let Tok::Directive(body) = &token.tok else {
             continue;
         };
-        let words: Vec<&str> = body.split_whitespace().collect();
-        let (Some(&directive), Some(&name)) = (words.first(), words.get(1)) else {
+        // The macro name is the identifier after the keyword, as cpp reads
+        // it: `#define NAME+2` defines `NAME` as `+2`.
+        let (directive, after) = split_identifier(body);
+        let (name, value) = split_identifier(after.trim_start());
+        if name.is_empty() {
             return Err(unsupported_directive(token.line));
-        };
+        }
         // Only unconditional macro definitions are read; any other directive
         // could change what the compiler sees, so it is refused.
         if !matches!(directive, "define" | "undef") || name == guard {
@@ -120,14 +123,17 @@ pub(super) fn parse_constants(text: &str) -> Result<Constants> {
             continue;
         }
         // A count alias must be defined once as `#define NAME CONSTANT`.
-        if directive != "define" || words.len() != 3 || aliases.contains_key(name) {
+        // Whitespace after the name makes it object-like.
+        let object_like = value.starts_with(char::is_whitespace);
+        let value: Vec<&str> = value.split_whitespace().collect();
+        if directive != "define" || !object_like || value.len() != 1 || aliases.contains_key(name) {
             return Err(PokedexSourceError::Malformed {
                 source: PokedexSource::Constants,
                 line: token.line,
                 expected: "one plain `#define` of each count alias",
             });
         }
-        aliases.insert(name.to_owned(), words[2].to_owned());
+        aliases.insert(name.to_owned(), value[0].to_owned());
     }
     for (name, _, expected) in COUNT_ALIASES {
         let Some(target) = aliases.get(name) else {
@@ -164,6 +170,15 @@ fn include_guard(cur: &mut Cursor) -> Result<String> {
         return Err(cur.fail(expected));
     }
     Ok(guard)
+}
+
+/// Splits `text` after its leading identifier, which is empty if `text` does
+/// not open with one.
+fn split_identifier(text: &str) -> (&str, &str) {
+    let end = text
+        .find(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .unwrap_or(text.len());
+    text.split_at(end)
 }
 
 fn unsupported_directive(line: usize) -> PokedexSourceError {

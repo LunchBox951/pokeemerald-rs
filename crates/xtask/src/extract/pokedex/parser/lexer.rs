@@ -9,6 +9,8 @@ pub(super) enum Tok {
     /// A run of digits and identifier characters starting with a digit.
     Number(String),
     Str(String),
+    /// A character literal, quotes and escapes included.
+    Char(String),
     Punct(char),
     /// A preprocessor line, without its leading `#` or trailing comment.
     Directive(String),
@@ -206,6 +208,15 @@ pub(super) fn lex(source: PokedexSource, text: &str) -> Result<Vec<Token>> {
                 i = next;
                 tokens.push(Token {
                     tok: Tok::Str(value),
+                    line,
+                });
+            }
+            '\'' => {
+                // Copied whole, so comment delimiters inside are its text.
+                let mut literal = String::new();
+                i = copy_quoted(chars, i, &mut literal);
+                tokens.push(Token {
+                    tok: Tok::Char(literal),
                     line,
                 });
             }
