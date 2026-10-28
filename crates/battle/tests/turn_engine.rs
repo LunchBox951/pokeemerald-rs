@@ -8,6 +8,8 @@ mod common;
 mod absorbing_abilities;
 #[path = "turn_engine/confusion.rs"]
 mod confusion;
+#[path = "turn_engine/confusion_explosion.rs"]
+mod confusion_explosion;
 #[path = "turn_engine/escape.rs"]
 mod escape;
 #[path = "turn_engine/first_battle.rs"]
