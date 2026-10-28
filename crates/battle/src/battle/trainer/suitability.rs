@@ -1,5 +1,5 @@
 //! `GetMostSuitableMonToSwitchInto`'s typing and most-damage passes: the
-//! forced post-faint replacement selector [`TrainerContext::send_out_next`]
+//! forced post-faint replacement selector [`TrainerContext::select_replacement`]
 //! tries before falling back to party order.
 
 use assets::{AbilityId, Effectiveness, MoveId, Type, TypeChart};
@@ -25,43 +25,45 @@ const NEUTRAL_TYPE_SCORE: u32 = 10;
 const OHKO_POWER_SENTINEL: u8 = 1;
 
 impl TrainerContext {
-    /// The healthy bench member with the best typing score against `player`
-    /// that also knows a super-effective move, else the next-best typing.
-    /// Only the super-effective check honours `player`'s Levitate: the typing
-    /// score reads no ability (`pokeemerald/src/battle_ai_switch_items.c:709`-`:733`).
+    /// The original slot of the healthy non-active member with the best
+    /// typing score against `player` that also knows a super-effective move,
+    /// else the next-best typing. Only the super-effective check honours
+    /// `player`'s Levitate: the typing score reads no ability
+    /// (`pokeemerald/src/battle_ai_switch_items.c:709`-`:733`).
     pub(super) fn most_suitable_by_type(
         &self,
         dex: &Dex,
         player: &BattlePokemon,
     ) -> Result<Option<usize>, BattleError> {
-        let mut invalid = vec![false; self.bench.len()];
+        let mut invalid = vec![false; self.non_active.len() + 1];
         loop {
-            let mut best_index = None;
+            let mut best = None;
             let mut best_score = 0;
-            for (index, candidate) in self.bench.iter().enumerate() {
-                if invalid[index] || candidate.is_fainted() {
+            for (slot, candidate) in self.candidates() {
+                if invalid[slot] || candidate.is_fainted() {
                     continue;
                 }
                 let score = typing_suitability_score(player, candidate);
                 if best_score < score {
                     best_score = score;
-                    best_index = Some(index);
+                    best = Some((slot, candidate));
                 }
             }
-            let Some(index) = best_index else {
+            let Some((slot, candidate)) = best else {
                 return Ok(None);
             };
-            if has_super_effective_move(dex, &self.bench[index], player)? {
-                return Ok(Some(index));
+            if has_super_effective_move(dex, candidate, player)? {
+                return Ok(Some(slot));
             }
-            invalid[index] = true;
+            invalid[slot] = true;
         }
     }
 
-    /// The healthy bench member whose move scores highest against `player`,
-    /// layered onto `resolving_move`'s stale base damage from `fainted`.
-    /// The running best is a `u8`, reproducing upstream's `bestDmg` wraparound
-    /// (ledger entry `GetMostSuitableMonToSwitchInto`).
+    /// The original slot of the healthy non-active member whose move scores
+    /// highest against `player`, layered onto `resolving_move`'s stale base
+    /// damage from `fainted`. The running best is a `u8`, reproducing
+    /// upstream's `bestDmg` wraparound (ledger entry
+    /// `GetMostSuitableMonToSwitchInto`).
     pub(super) fn most_suitable_by_damage(
         &self,
         dex: &Dex,
@@ -72,24 +74,25 @@ impl TrainerContext {
         let Some(base) = stale_base_damage(dex, resolving_move, fainted, player)? else {
             return Ok(None);
         };
-        let mut best_index = None;
+        let mut best_slot = None;
         let mut best_damage: u8 = 0;
-        for (index, candidate) in self.bench.iter().enumerate() {
+        for (slot, candidate) in self.candidates() {
             if candidate.is_fainted() {
                 continue;
             }
-            for slot in candidate.moves() {
-                let Some(damage) = candidate_move_damage(dex, slot.move_id, base, fainted, player)?
+            for known in candidate.moves() {
+                let Some(damage) =
+                    candidate_move_damage(dex, known.move_id, base, fainted, player)?
                 else {
                     continue;
                 };
                 if u32::from(best_damage) < damage {
                     best_damage = u8::try_from(damage % 256).expect("modulo 256 fits a byte");
-                    best_index = Some(index);
+                    best_slot = Some(slot);
                 }
             }
         }
-        Ok(best_index)
+        Ok(best_slot)
     }
 }
 
@@ -311,7 +314,7 @@ mod tests {
 
         assert_eq!(
             context.most_suitable_by_damage(&dex, &fainted, MEGA_KICK, &player),
-            Ok(Some(1)),
+            Ok(Some(2)),
             "Water Gun's narrowed score loses to Tackle's unnarrowed one"
         );
     }
@@ -349,7 +352,7 @@ mod tests {
 
         assert_eq!(
             context.most_suitable_by_damage(&dex, &fainted, MEGA_KICK, &player),
-            Ok(Some(1)),
+            Ok(Some(2)),
             "Ground's immunity is floored back to one by Flying's super effectiveness"
         );
     }
@@ -385,7 +388,7 @@ mod tests {
 
         assert_eq!(
             context.most_suitable_by_type(&dex, &player),
-            Ok(Some(1)),
+            Ok(Some(2)),
             "Levitate disqualifies Earthquake, so the best typing is invalidated"
         );
     }
@@ -504,7 +507,7 @@ mod tests {
 
         assert_eq!(
             context.most_suitable_by_type(&dex, &player),
-            Ok(Some(1)),
+            Ok(Some(2)),
             "Ground's immunity keeps Thunder Shock from ever reading as super \
              effective"
         );
@@ -541,7 +544,7 @@ mod tests {
 
         assert_eq!(
             context.most_suitable_by_damage(&dex, &fainted, MEGA_KICK, &player),
-            Ok(Some(0)),
+            Ok(Some(1)),
             "Earthquake takes no chart row against Levitate, so it cannot \
              overtake Tackle"
         );
@@ -593,7 +596,7 @@ mod tests {
 
         assert_eq!(
             context.most_suitable_by_damage(&dex, &fainted, MoveId::MEGA_KICK, &player),
-            Ok(Some(1))
+            Ok(Some(2))
         );
     }
 
@@ -640,7 +643,7 @@ mod tests {
 
         assert_eq!(
             context.most_suitable_by_damage(&dex, &fainted, MoveId::MEGA_KICK, &player),
-            Ok(Some(1))
+            Ok(Some(2))
         );
     }
 
@@ -675,12 +678,12 @@ mod tests {
 
         assert_eq!(
             context.most_suitable_by_damage(&dex, &fainted, MoveId::ICE_BEAM, &thick),
-            Ok(Some(0)),
+            Ok(Some(1)),
             "Thick Fat keeps Wing Attack's score under a byte"
         );
         assert_eq!(
             context.most_suitable_by_damage(&dex, &fainted, MoveId::ICE_BEAM, &guts),
-            Ok(Some(1)),
+            Ok(Some(2)),
             "without Thick Fat Wing Attack's score wraps below Tackle's"
         );
     }

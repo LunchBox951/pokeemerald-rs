@@ -129,3 +129,25 @@ pub fn resolve(flag: &str) -> Option<u16> {
 
 /// Number of hidden-item flags in the table.
 pub const HIDDEN_ITEM_FLAG_COUNT: usize = HIDDEN_ITEM_FLAGS.len();
+
+#[cfg(test)]
+mod tests {
+    use super::HIDDEN_ITEM_FLAGS;
+
+    fn fnv1a64(bytes: &[u8]) -> u64 {
+        bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+            (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3)
+        })
+    }
+
+    #[test]
+    fn every_flag_matches_the_canonical_table() {
+        let mut out = Vec::new();
+        for (index, (name, id)) in HIDDEN_ITEM_FLAGS.iter().enumerate() {
+            assert_eq!(usize::from(*id), 0x1F4 + index, "{name}");
+            out.extend_from_slice(name.as_bytes());
+            out.push(0);
+        }
+        assert_eq!(format!("{:016x}", fnv1a64(&out)), "a03ecfbb11087a42");
+    }
+}

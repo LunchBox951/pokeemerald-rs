@@ -4,6 +4,23 @@ use super::test_support::*;
 use engine::overworld::{Direction, PlayerState};
 use platform::{ButtonState, Buttons};
 
+/// The predictable scratch path a dialog-pacing test writes its pack to.
+fn scratch_pack_path(label: &str, saved_text_speed: u8) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!(
+        "pokeemerald-rs-step-{label}-{saved_text_speed}-{}-{:?}.pack",
+        std::process::id(),
+        std::thread::current().id()
+    ))
+}
+
+/// Exclusively creates the test's scratch pack (never following a planted
+/// symlink) and returns its path.
+fn claim_scratch_pack(label: &str, saved_text_speed: u8, bytes: &[u8]) -> std::path::PathBuf {
+    let path = scratch_pack_path(label, saved_text_speed);
+    crate::flow::tests::write_scratch_exclusive(&path, bytes);
+    path
+}
+
 /// A field-dialog interaction repairs an out-of-range saved
 /// `optionsTextSpeed` in place on the same frame, as
 /// `GetPlayerTextSpeedDelay` does (`pokeemerald/src/menu.c:481-488`).
@@ -56,7 +73,7 @@ fn a_field_dialog_interaction_leaves_an_in_range_saved_text_speed_untouched() {
 #[test]
 fn a_field_dialog_opened_by_the_real_step_pipeline_paces_at_the_saved_text_speed() {
     use crate::pack_source::PackSource;
-    use crate::pack_test_support::{image_entry, pack_bytes, palette_entry};
+    use crate::pack_test_support::{image_entry, pack_bytes_with_fonts, palette_entry};
 
     const MESSAGE_BOX_WIDTH: u32 = 56;
     const MESSAGE_BOX_HEIGHT: u32 = 16;
@@ -71,7 +88,7 @@ fn a_field_dialog_opened_by_the_real_step_pipeline_paces_at_the_saved_text_speed
     const OPTIONS_TEXT_SPEED_SLOW: u8 = 0;
     const OPTIONS_TEXT_SPEED_FAST: u8 = 2;
 
-    let pack_bytes_blob = pack_bytes(vec![
+    let pack_bytes_blob = pack_bytes_with_fonts(vec![
         image_entry(
             "text-window/image/message_box",
             MESSAGE_BOX_WIDTH,
@@ -90,12 +107,7 @@ fn a_field_dialog_opened_by_the_real_step_pipeline_paces_at_the_saved_text_speed
     ]);
 
     let frames_to_reveal_third_glyph = |saved_text_speed: u8| {
-        let path = std::env::temp_dir().join(format!(
-            "pokeemerald-rs-step-field-dialog-{saved_text_speed}-{}-{:?}.pack",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        std::fs::write(&path, &pack_bytes_blob).expect("the scratch directory is writable");
+        let path = claim_scratch_pack("field-dialog", saved_text_speed, &pack_bytes_blob);
         // `PackSource::Test` needs a `'static` path; leaked once per call,
         // reclaimed only when the test process exits (test-only, matches
         // this crate's own `Box::leak`-for-`'static`-fixtures idiom).
@@ -152,7 +164,7 @@ fn a_field_dialog_opened_by_the_real_step_pipeline_paces_at_the_saved_text_speed
 #[test]
 fn a_sight_trainer_intro_message_paces_at_the_saved_text_speed() {
     use crate::pack_source::PackSource;
-    use crate::pack_test_support::{image_entry, pack_bytes, palette_entry};
+    use crate::pack_test_support::{image_entry, pack_bytes_with_fonts, palette_entry};
 
     const MESSAGE_BOX_WIDTH: u32 = 56;
     const MESSAGE_BOX_HEIGHT: u32 = 16;
@@ -171,7 +183,7 @@ fn a_sight_trainer_intro_message_paces_at_the_saved_text_speed() {
     const OPTIONS_TEXT_SPEED_SLOW: u8 = 0;
     const OPTIONS_TEXT_SPEED_FAST: u8 = 2;
 
-    let pack_bytes_blob = pack_bytes(vec![
+    let pack_bytes_blob = pack_bytes_with_fonts(vec![
         image_entry(
             "text-window/image/message_box",
             MESSAGE_BOX_WIDTH,
@@ -190,12 +202,7 @@ fn a_sight_trainer_intro_message_paces_at_the_saved_text_speed() {
     ]);
 
     let frames_to_reveal_third_glyph = |saved_text_speed: u8| {
-        let path = std::env::temp_dir().join(format!(
-            "pokeemerald-rs-step-sight-trainer-intro-{saved_text_speed}-{}-{:?}.pack",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        std::fs::write(&path, &pack_bytes_blob).expect("the scratch directory is writable");
+        let path = claim_scratch_pack("sight-trainer-intro", saved_text_speed, &pack_bytes_blob);
         // `PackSource::Test` needs a `'static` path; leaked once per call,
         // reclaimed only when the test process exits (this file's own
         // Mom-dialog text-speed test uses the identical idiom).
@@ -245,4 +252,18 @@ fn a_sight_trainer_intro_message_paces_at_the_saved_text_speed() {
         "the sight trainer's intro box for a FAST-saved session must reveal its third glyph in \
          fewer frames than a SLOW-saved one, but they took {fast} and {slow}"
     );
+}
+
+/// A symlink planted at a dialog-pacing test's predictable scratch path must
+/// be replaced, never followed: its target stays unchanged.
+#[cfg(unix)]
+#[test]
+fn the_dialog_pacing_scratch_packs_never_follow_a_planted_symlink() {
+    for label in ["field-dialog", "sight-trainer-intro"] {
+        let path = scratch_pack_path(label, 2);
+        let bytes = b"scratch pack bytes";
+        crate::flow::tests::assert_planted_symlink_untouched(&path, bytes, || {
+            claim_scratch_pack(label, 2, bytes)
+        });
+    }
 }

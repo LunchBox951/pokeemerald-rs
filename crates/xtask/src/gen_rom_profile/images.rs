@@ -68,6 +68,29 @@ struct Variant {
     tile_count: u32,
 }
 
+/// The upstream name of an image root declared `static` (so a linker map
+/// cannot list it), or `None` for a global root.
+///
+/// `title_screen.c:63-66`, `item_menu_icons.c:37`, `item_menu.c:374`,
+/// `list_menu.c:290`, `text_window.c:10-28`.
+pub(super) fn local_image_symbol(id: &str) -> Option<String> {
+    if let Some(stem) = id.strip_prefix("text-window/image/") {
+        return super::text_window::is_static_frame(stem)
+            .then(|| format!("sTextWindowFrame{stem}_Gfx"));
+    }
+    if let Some(name) = id.strip_prefix("title/image/") {
+        let camel = super::locate::camel_case(name);
+        return matches!(camel.as_str(), "Rayquaza" | "LogoShine" | "Clouds")
+            .then(|| format!("sTitleScreen{camel}Gfx"));
+    }
+    match id {
+        "bag/image/rotating_ball" => Some("sRotatingBall_Gfx".to_owned()),
+        "bag/image/select_button" => Some("sRegisteredSelect_Gfx".to_owned()),
+        "bag/image/scroll_indicator" => Some("sScrollIndicator_Gfx".to_owned()),
+        _ => None,
+    }
+}
+
 /// The fragments a linker-map symbol for `id` must contain; empty when the
 /// domain has no naming convention.
 fn symbol_fragments(id: &str) -> Vec<String> {
@@ -100,6 +123,17 @@ fn symbol_fragments(id: &str) -> Vec<String> {
             return vec!["gMessageBox_Gfx".to_owned()];
         }
         return vec![format!("TextWindowFrame{stem}_Gfx")];
+    }
+    match id {
+        "battle-interface/image/textbox" => return vec!["gBattleTextboxTiles".to_owned()],
+        "battle-interface/image/healthbox_singles_player" => {
+            return vec!["gHealthboxSinglesPlayerGfx".to_owned()];
+        }
+        "battle-interface/image/healthbox_singles_opponent" => {
+            return vec!["gHealthboxSinglesOpponentGfx".to_owned()];
+        }
+        "battle-interface/image/enemy_mon_shadow" => return vec!["gEnemyMonShadow_Gfx".to_owned()],
+        _ => {}
     }
     Vec::new()
 }
@@ -182,8 +216,9 @@ pub fn locate_images(
 
     for (query_index, query) in queries.iter().enumerate() {
         let asset = ctx.pack.get(&query.id)?;
-        // Validates the dimensions against the payload before they drive packing.
-        let (_, width, height, pack_bit_depth) = asset.image_raster(&query.id)?;
+        // Validates the dimensions against the payload, and that they hold a whole
+        // tile, before they drive packing: a raster with no tile has no candidates.
+        let (_, width, height, pack_bit_depth) = asset.tiled_image_raster(&query.id)?;
         for (depth_index, &rom_bit_depth) in rom_depths(pack_bit_depth).iter().enumerate() {
             let bytes_per_tile = if rom_bit_depth == 4 { 32 } else { 64 };
             for metatile in metatile_candidates(width, height) {
@@ -310,9 +345,13 @@ fn assign(
         if let Some(note) = notes[index].clone() {
             line = line.with(Resolution::ArbitraryAmongIdentical).note(note);
         }
-        let fragments = symbol_fragments(&query.id);
-        if !fragments.is_empty() {
-            line = line.symbol_contains(fragments);
+        if let Some(name) = local_image_symbol(&query.id) {
+            line = line.local_symbol(name);
+        } else {
+            let fragments = symbol_fragments(&query.id);
+            if !fragments.is_empty() {
+                line = line.symbol_contains(fragments);
+            }
         }
         report.push(line);
         plans.push(ImagePlan {
@@ -371,6 +410,22 @@ mod tests {
         assert_eq!(
             symbol_fragments("text-window/image/message_box"),
             ["gMessageBox_Gfx"]
+        );
+        assert_eq!(
+            symbol_fragments("battle-interface/image/textbox"),
+            ["gBattleTextboxTiles"]
+        );
+        assert_eq!(
+            symbol_fragments("battle-interface/image/healthbox_singles_player"),
+            ["gHealthboxSinglesPlayerGfx"]
+        );
+        assert_eq!(
+            symbol_fragments("battle-interface/image/healthbox_singles_opponent"),
+            ["gHealthboxSinglesOpponentGfx"]
+        );
+        assert_eq!(
+            symbol_fragments("battle-interface/image/enemy_mon_shadow"),
+            ["gEnemyMonShadow_Gfx"]
         );
         // No convention asserts nothing; `symbol_contains` then accepts any symbol.
         assert!(symbol_fragments("tileset/general/anim/water/0").is_empty());
