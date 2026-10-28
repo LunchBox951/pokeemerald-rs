@@ -25,7 +25,9 @@
 //! [`AppScene::MainMenuFadeWait`] for the waiting states themselves. The
 //! title's fade hands off to [`AppScene::MainMenuFadeIn`], which runs
 //! `InitMainMenu(FALSE)`'s setup tasks before the menu takes input
-//! (`main_menu.c:583-608`).
+//! (`main_menu.c:583-608`). A fresh B on the main menu (checked after A, ahead
+//! of the D-pad) takes the same wait toward white and, once done, rebuilds the
+//! title (`main_menu.c:895-902,1109-1120`).
 //!
 //! [`AnimatedTitle`] is the per-frame title-animation state, owned by one
 //! variant of [`AppScene`] (see [`advance_scene`]'s `Title` arm and
@@ -173,6 +175,12 @@ mod save_continue_window_frame_tests;
 #[cfg(test)]
 mod start_menu_tests;
 
+/// The main menu's B path back to the title (I-2): priority against A and
+/// the D-pad, the white fade with `WIN0` open, the gated hand-off. Its own
+/// module for the same reason as its siblings `(oop-boundaries)`.
+#[cfg(test)]
+mod main_menu_back_tests;
+
 /// [`crate::app::App`]'s per-frame animation state for the real title screen
 /// (`crate::app`'s "Animating the real title screen" docs): the loaded
 /// scene, the tick most recently composed, and whether that frame has been
@@ -184,6 +192,22 @@ pub(crate) struct AnimatedTitle {
     pub(crate) scene: TitleScene,
     pub(crate) tick: u32,
     pub(crate) presented: bool,
+    /// The live session save a main-menu B carried back to the title, which
+    /// the next `Title` -> `MainMenu` reuses instead of re-reading the disk:
+    /// upstream's `gSaveBlock2Ptr` and `gSaveFileStatus` outlive the menu, so
+    /// settings committed in OPTION survive the round trip
+    /// (`pokeemerald/src/main_menu.c:1109-1120`). `None` on the boot title.
+    pub(crate) retained_save: Option<Box<SavedGame>>,
+}
+
+impl AnimatedTitle {
+    /// The retained session save's `optionsButtonMode`, or the default
+    /// `Normal` on a boot title with none ([`AppScene::button_mode`]).
+    fn button_mode(&self) -> ButtonMode {
+        self.retained_save
+            .as_ref()
+            .map_or(ButtonMode::Normal, |saved| saved.block2.options_button_mode)
+    }
 }
 
 /// [`crate::app::App`]'s real (windowed) game-flow state (module docs):
@@ -247,15 +271,26 @@ pub(crate) enum AppScene {
 }
 
 impl AppScene {
+    /// Whether this scene is the main menu's white fade back to the title
+    /// (B, `pokeemerald/src/main_menu.c:895-902`). The app watches it to
+    /// restart the title music when the next frame lands on
+    /// [`AppScene::Title`].
+    pub(crate) const fn returns_to_title(&self) -> bool {
+        matches!(self, Self::MainMenuFadeWait(wait) if wait.returns_to_title())
+    }
+
     /// The `optionsButtonMode` this scene's save carries
     /// (`pokeemerald/src/main.c:279-288`'s source). Known gap: upstream loads
     /// the save during the copyright screen, so L=A already applies on the
     /// title; this port loads it only at the `Title` -> `MainMenu`
-    /// transition, so the title scenes read the default `Normal`. The intro
+    /// transition, so a boot title reads the default `Normal`; a title the main
+    /// menu's B returned to reads the live save it carries
+    /// ([`AnimatedTitle::retained_save`]). The intro
     /// carries the mode in its [`NewGameOptions`] rather than a `SaveBlock2`.
     fn button_mode(&self) -> ButtonMode {
         match self {
-            Self::Title(_) | Self::TitleFadeWait(_) => ButtonMode::Normal,
+            Self::Title(title) => title.button_mode(),
+            Self::TitleFadeWait(wait) => wait.button_mode(),
             Self::MainMenu(state) | Self::MainMenuHighlight(state) => {
                 state.saved.block2.options_button_mode
             }
@@ -485,9 +520,16 @@ fn main_menu_load_failure_message(err: &MainMenuSceneError) -> String {
 fn title_to_main_menu(
     pack_source: &crate::pack_source::PackSource,
     save_slot: &mut SaveSlot,
+    retained_save: &mut Option<Box<SavedGame>>,
 ) -> Option<(AppScene, Box<Frame>)> {
-    let mut saved = save_slot.load();
-    apply_boot_defaults(&mut saved);
+    let was_retained = retained_save.is_some();
+    let saved = if let Some(saved) = retained_save.take() {
+        *saved
+    } else {
+        let mut saved = save_slot.load();
+        apply_boot_defaults(&mut saved);
+        saved
+    };
     match main_menu::load_with_window_frame(
         pack_source,
         menu_type_for(&saved),
@@ -500,6 +542,11 @@ fn title_to_main_menu(
         }
         Err(err) => {
             eprintln!("{}", main_menu_load_failure_message(&err));
+            // `load_with_window_frame` took only a borrow, so the retained
+            // save is still intact to hand back to the recovered title.
+            if was_retained {
+                *retained_save = Some(Box::new(saved));
+            }
             None
         }
     }
