@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use assets::pack::AssetPack;
 
 use super::{
-    capture_loaded, default_paths, fnv1a64, git_sha, render_meta, run_with_paths,
+    capture_loaded, default_paths, fnv1a64, git_command, git_sha, render_meta, run_with_paths,
     RecordSnapshotError, TITLE_FRAME_INDEX,
 };
 use crate::Scene;
@@ -231,9 +231,7 @@ fn git_sha_marks_a_dirty_worktree_and_leaves_a_clean_one_bare() {
     std::fs::create_dir_all(&repo).unwrap();
 
     let git = |args: &[&str]| {
-        let ok = std::process::Command::new("git")
-            .arg("-C")
-            .arg(&repo)
+        let ok = git_command(&repo)
             .args(args)
             .output()
             .expect("git must be on PATH")
@@ -268,14 +266,10 @@ fn git_sha_marks_a_dirty_worktree_and_leaves_a_clean_one_bare() {
 fn init_committed_repo(repo: &std::path::Path, content: &[u8]) {
     std::fs::create_dir_all(repo).unwrap();
     let git = |args: &[&str]| {
-        let mut command = std::process::Command::new("git");
-        command.arg("-C").arg(repo).args(args);
         // The fixture itself must not be steered by an inherited routing
-        // variable either.
-        for name in ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"] {
-            command.env_remove(name);
-        }
-        let ok = command
+        // variable either, so it removes the same set as `git_sha`.
+        let ok = git_command(repo)
+            .args(args)
             .output()
             .expect("git must be on PATH")
             .status
