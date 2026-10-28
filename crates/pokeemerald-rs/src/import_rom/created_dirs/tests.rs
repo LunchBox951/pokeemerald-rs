@@ -386,7 +386,7 @@ fn a_valid_deep_destination_creates_or_fully_rolls_back() {
     for _ in 1..total {
         level = level.join("d");
     }
-    let _fillers = fill_descriptor_table_leaving(4);
+    let fillers = fill_descriptor_table_leaving(4);
     match create_directories(&level) {
         Ok(created) => assert_eq!(created.len(), total),
         Err((created, source)) => {
@@ -405,7 +405,7 @@ fn a_valid_deep_destination_creates_or_fully_rolls_back() {
     // recursive removal of a 37-level tree would exceed (one open directory
     // per level), leaving the tree behind. Remove the levels deepest first
     // by path, which needs no descriptor.
-    drop(_fillers);
+    drop(fillers);
     for _ in 0..total {
         let _ = std::fs::remove_dir(&level);
         level.pop();
