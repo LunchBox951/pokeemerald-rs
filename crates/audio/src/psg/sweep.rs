@@ -23,9 +23,8 @@ pub enum SweepResult {
     Unchanged,
     /// Retune the channel to this frequency register value.
     Changed(u16),
-    /// Silence the channel after a frequency overflow, first retuning to the
-    /// frequency the sweep committed before its overflowing look-ahead
-    /// (`mgba/src/gb/audio.c:975-985`).
+    /// Silence the channel after an overflow, first retuning to the committed
+    /// frequency if the look-ahead overflowed (`mgba/src/gb/audio.c:975-985`).
     Disable(Option<u16>),
 }
 
@@ -34,8 +33,7 @@ impl Sweep {
     const DIRECTION_BIT: u8 = 1 << 3;
     const PERIOD_SHIFT: u32 = 4;
 
-    /// Decodes an `NR10` byte: shift in bits 0..=2, direction in bit 3, and
-    /// period in bits 4..=6.
+    /// Decodes an `NR10` byte.
     #[must_use]
     pub fn from_byte(byte: u8, initial_freq_reg: u16) -> Self {
         let direction = if byte & Self::DIRECTION_BIT == 0 {
@@ -64,10 +62,8 @@ impl Sweep {
         }
     }
 
-    /// Reports whether the hardware's trigger-time sweep calculation overflows.
-    ///
-    /// The check runs for an upward nonzero shift even when the period is zero
-    /// (`mgba/src/gb/audio.c:180-186`).
+    /// Reports whether the trigger-time calculation overflows; it runs for an
+    /// upward nonzero shift even at period zero (`mgba/src/gb/audio.c:180-186`).
     #[must_use]
     pub fn overflows_at_trigger(&self) -> bool {
         self.direction == SweepDirection::Increase
@@ -75,9 +71,8 @@ impl Sweep {
             && self.next_frequency().is_none()
     }
 
-    /// Reloads the shadow frequency and timer from a hardware trigger
-    /// (`mgba/src/gb/audio.c:182,863-867`); recheck
-    /// [`Self::overflows_at_trigger`] after (`:184-186`).
+    /// Reloads the shadow frequency and timer as a trigger does
+    /// (`mgba/src/gb/audio.c:182,863-867`); recheck [`Self::overflows_at_trigger`] after.
     pub(crate) fn retrigger(&mut self, freq_reg: u16) {
         self.shadow_frequency = freq_reg.min(MAX_FREQUENCY_REGISTER);
         self.ticks_until_step = self.period_ticks;
@@ -101,8 +96,8 @@ impl Sweep {
             return SweepResult::Disable(None);
         };
 
-        // The increase branch's write-back is gated on a non-zero shift; the
-        // decrease branch always writes back (mgba/src/gb/audio.c:965-989).
+        // Only the increase branch gates its write-back on a non-zero shift
+        // (mgba/src/gb/audio.c:965-989).
         let writes_back = match self.direction {
             SweepDirection::Increase => self.shift != 0,
             SweepDirection::Decrease => true,
@@ -113,7 +108,7 @@ impl Sweep {
 
         self.shadow_frequency = frequency;
 
-        // Hardware checks the next upward calculation before playing this one
+        // Hardware checks the next upward step before playing this one
         // (mgba/src/gb/audio.c:975-985).
         if self.direction == SweepDirection::Increase && self.next_frequency().is_none() {
             return SweepResult::Disable(Some(self.shadow_frequency));
@@ -123,7 +118,6 @@ impl Sweep {
     }
 }
 
-/// Shared fixtures for the sweep and square tests.
 #[cfg(test)]
 pub(super) mod test_support {
     use super::*;

@@ -22,7 +22,10 @@
 //! `BeginNormalPaletteFade`/`UpdatePaletteFade` gate
 //! (`pokeemerald/src/title_screen.c:779-787,824-828`;
 //! `main_menu.c:884-894,936-943`) -- see [`AppScene::TitleFadeWait`] and
-//! [`AppScene::MainMenuFadeWait`] for the waiting states themselves.
+//! [`AppScene::MainMenuFadeWait`] for the waiting states themselves. The
+//! title's fade hands off to [`AppScene::MainMenuFadeIn`], which runs
+//! `InitMainMenu(FALSE)`'s setup tasks before the menu takes input
+//! (`main_menu.c:583-608`).
 //!
 //! [`AnimatedTitle`] is the per-frame title-animation state, owned by one
 //! variant of [`AppScene`] (see [`advance_scene`]'s `Title` arm and
@@ -69,6 +72,8 @@ use options::{advance_options, OptionsState};
 /// battle drivers -- see that module's docs for the shared decision and
 /// write-back, and each driver's own docs for what stays driver-specific.
 mod battle_finalize;
+#[cfg(test)]
+mod boot_setup_frames_tests;
 /// I-3 (issue #1329) front-end palette fade-wait states and the four
 /// [`advance_scene`] arms that drive them -- this module's own docs.
 mod fade_wait;
@@ -77,6 +82,9 @@ pub(crate) mod first_battle;
 /// and [`npc_trainer_battle`] -- see that module's docs for the RNG-state
 /// contract driving it.
 mod first_usable_move;
+/// The player-side lead screen every battle start shares -- see that module's
+/// docs.
+mod lead_screen;
 /// The level-up move-replacement decision (issue #304), answered in one
 /// place for all three headless battle drivers — see that module's docs for
 /// the stand-in answer it gives and exactly where the seam ends.
@@ -89,6 +97,8 @@ mod move_learn;
 /// module.
 pub(crate) mod npc_trainer_battle;
 mod options;
+#[cfg(test)]
+mod options_return_tests;
 #[cfg(test)]
 mod options_tests;
 pub(crate) mod overworld_phase;
@@ -192,17 +202,19 @@ pub(crate) enum AppScene {
     /// for the front-end palette fade" section). [`AnimatedTitle::tick`]
     /// stays fixed here -- the retained title stops animating, matching
     /// upstream parking `CB2_GoToMainMenu` on the fade rather than the
-    /// title task.
+    /// title task. The cloud scroll is held one tick behind it: the
+    /// confirming frame skips the background counter update but not
+    /// `AnimateSprites` (`title_screen.c:675-681, :782-787, :805-814`).
     TitleFadeWait(Box<TitleFadeWait>),
     /// The main menu (I-3, issue #216; I-6, issue #214): Up/Down move the
     /// selection, A confirms it (module docs on [`advance_scene`]'s
     /// `MainMenu` arm for what each item does).
     MainMenu(Box<MainMenuState>),
-    /// The highlight-only frame after a successful Up/Down (I-3, issue
-    /// #2223): upstream's navigation task only schedules a callback that
-    /// redraws the new highlight and reinstalls input without polling
-    /// (`pokeemerald/src/main_menu.c:878-881`, `:930-933`;
-    /// `pokeemerald/src/task.c:118-120`), so this step presents the new
+    /// The highlight-only frame after a successful Up/Down (I-3) or after the returning menu's windows are drawn (I-6):
+    /// upstream's navigation and display tasks only schedule a callback that
+    /// redraws the highlight and reinstalls input without polling
+    /// (`pokeemerald/src/main_menu.c:878-888`, `:930-933`;
+    /// `pokeemerald/src/task.c:118-120`), so this step presents the
     /// highlight and ignores every button before [`AppScene::MainMenu`]
     /// resumes.
     MainMenuHighlight(Box<MainMenuState>),
@@ -215,12 +227,14 @@ pub(crate) enum AppScene {
     /// The Options screen, opened from the main menu's `OPTION` item (I-6):
     /// it retains the menu it returns to.
     Options(Box<OptionsState>),
-    /// The main menu fading in from black after the Options screen returns
-    /// (`pokeemerald/src/main_menu.c:583-586`).
+    /// The main menu fading in -- from black after the Options screen
+    /// returns, from white after the title's fade-out -- then waiting out
+    /// upstream's save-check, battery-check and window-drawing tasks with
+    /// input ignored (`pokeemerald/src/main_menu.c:583-608,619-748`).
     MainMenuFadeIn(Box<MainMenuFadeIn>),
     /// Birch's speech, paging through [`crate::intro::speech`]'s text.
     Intro(Box<IntroScene>),
-    /// The intro finished, but [`OverworldPhase::load_default`] failed once
+    /// The intro finished, but [`OverworldPhase::load`] failed once
     /// already (module docs' "log-or-ignore is fine" policy, and
     /// [`advance_scene`]'s `Intro`/`OverworldLoadFailed` arms) -- kept
     /// distinct from [`AppScene::Intro`] so a still-failing pack load is
@@ -375,7 +389,7 @@ fn title_advance_pressed(buttons: ButtonState) -> bool {
 }
 
 /// Whether [`AppScene::OverworldLoadFailed`]'s waiting state should retry
-/// [`OverworldPhase::load_default`] this frame -- only on a *fresh* A or B
+/// [`OverworldPhase::load`] this frame -- only on a *fresh* A or B
 /// edge, the same two dialogue-advance buttons [`AppScene::Intro`] itself
 /// reads (module docs on the finding this guards against: the previous
 /// behaviour re-attempted, and re-logged, the load every single frame while
@@ -404,7 +418,7 @@ fn intro_printer_input(buttons: ButtonState) -> PrinterInput {
 }
 
 /// Log the one-time proof that `phase`'s fresh save state
-/// ([`OverworldPhase::load_default`]'s own doc comment, finding 1 of this
+/// ([`OverworldPhase::load`]'s own doc comment, finding 1 of this
 /// module's review pass) actually reached the `Intro` -> `Overworld`
 /// handoff -- the same "log-or-ignore is fine" pipeline-liveness style
 /// [`crate::app::describe_newly_pressed`] already uses for input.
@@ -480,9 +494,9 @@ fn title_to_main_menu(
         window_frame_for(&saved),
     ) {
         Ok(menu) => {
-            let state = MainMenuState { scene: menu, saved };
-            let frame = state.scene.compose_frame();
-            Some((AppScene::MainMenu(Box::new(state)), frame))
+            let state = Box::new(MainMenuState { scene: menu, saved });
+            let (fade, frame) = MainMenuFadeIn::from_title(state);
+            Some((AppScene::MainMenuFadeIn(Box::new(fade)), frame))
         }
         Err(err) => {
             eprintln!("{}", main_menu_load_failure_message(&err));

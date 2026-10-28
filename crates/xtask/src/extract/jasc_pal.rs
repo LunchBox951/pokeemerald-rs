@@ -11,6 +11,8 @@ const BGR555_CHANNEL_BITS: u32 = 5;
 const RGB888_TO_BGR555_SHIFT: u32 = u8::BITS - BGR555_CHANNEL_BITS;
 const BGR555_GREEN_SHIFT: u32 = BGR555_CHANNEL_BITS;
 const BGR555_BLUE_SHIFT: u32 = BGR555_CHANNEL_BITS * 2;
+/// The smallest palette upstream accepts (`jasc_pal.c`: `numColors < 1`).
+const MIN_COLORS: usize = 1;
 /// The largest palette a GBA-native consumer can hold (one full 256-color
 /// palette). A declared count above this is rejected before any allocation.
 const MAX_COLORS: usize = 256;
@@ -24,6 +26,8 @@ pub enum JascPalError {
     UnsupportedVersion,
     /// The declared color count is missing or invalid.
     BadColorCount,
+    /// The declared color count is zero; upstream requires at least one.
+    NoColors,
     /// The declared color count exceeds what a GBA palette can hold.
     TooManyColors { max: usize, declared: usize },
     /// The file contains fewer colors than it declares.
@@ -31,6 +35,10 @@ pub enum JascPalError {
     /// A color entry is not three RGB channels in the supported range. The
     /// contained index is one-based within the color entries.
     BadColorLine(usize),
+    /// Input remains after the declared color records (an extra record, a
+    /// blank line, or garbage); upstream rejects it as "Garbage after color
+    /// data".
+    TrailingData,
 }
 
 impl fmt::Display for JascPalError {
@@ -39,6 +47,7 @@ impl fmt::Display for JascPalError {
             Self::BadMagic => write!(f, "JASC-PAL: missing or wrong magic header"),
             Self::UnsupportedVersion => write!(f, "JASC-PAL: unsupported version (expected 0100)"),
             Self::BadColorCount => write!(f, "JASC-PAL: missing or invalid colour count"),
+            Self::NoColors => write!(f, "JASC-PAL: header declared zero colours (minimum is 1)"),
             Self::TooManyColors { max, declared } => {
                 write!(
                     f,
@@ -52,6 +61,7 @@ impl fmt::Display for JascPalError {
                 )
             }
             Self::BadColorLine(line) => write!(f, "JASC-PAL: malformed colour on line {line}"),
+            Self::TrailingData => write!(f, "JASC-PAL: garbage after colour data"),
         }
     }
 }
@@ -83,7 +93,8 @@ impl Rgb888 {
 
 /// Parses the colors declared by a JASC-PAL palette.
 ///
-/// Both LF and CRLF line endings are accepted.
+/// Both LF and CRLF line endings are accepted. Any input after the declared
+/// color records is rejected, matching upstream gbagfx.
 ///
 /// # Errors
 ///
@@ -102,6 +113,9 @@ pub fn parse(text: &str) -> Result<Vec<Rgb888>, JascPalError> {
         .next()
         .and_then(|line| line.trim().parse().ok())
         .ok_or(JascPalError::BadColorCount)?;
+    if declared_color_count < MIN_COLORS {
+        return Err(JascPalError::NoColors);
+    }
     if declared_color_count > MAX_COLORS {
         return Err(JascPalError::TooManyColors {
             max: MAX_COLORS,
@@ -121,10 +135,22 @@ pub fn parse(text: &str) -> Result<Vec<Rgb888>, JascPalError> {
             found: colors.len(),
         });
     }
+    // Upstream (`jasc_pal.c`) rejects any byte after the last color line, so a
+    // further line of any kind (extra record, blank, garbage) is an error. The
+    // final line terminator itself does not yield a further line.
+    if lines.next().is_some() {
+        return Err(JascPalError::TrailingData);
+    }
     Ok(colors)
 }
 
 fn parse_color(line: &str) -> Option<Rgb888> {
+    // `str::lines` already strips the CR of a CRLF terminator, so a CR still
+    // here is a bare CR, which upstream rejects ("CR line endings aren't
+    // supported"); `split_whitespace` would otherwise swallow it.
+    if line.contains('\r') {
+        return None;
+    }
     let mut channels = line.split_whitespace();
     let red = parse_channel(channels.next()?)?;
     let green = parse_channel(channels.next()?)?;
@@ -179,9 +205,45 @@ mod tests {
     }
 
     #[test]
+    fn rejects_trailing_extra_color_record() {
+        for eol in ["\r\n", "\n"] {
+            let text = ["JASC-PAL", "0100", "1", "0 0 0", "255 255 255", ""].join(eol);
+            assert_eq!(parse(&text).unwrap_err(), JascPalError::TrailingData);
+        }
+    }
+
+    #[test]
+    fn rejects_trailing_blank_line() {
+        for eol in ["\r\n", "\n"] {
+            let text = ["JASC-PAL", "0100", "1", "0 0 0", "", ""].join(eol);
+            assert_eq!(parse(&text).unwrap_err(), JascPalError::TrailingData);
+        }
+    }
+
+    #[test]
+    fn rejects_trailing_garbage_after_declared_colors() {
+        for eol in ["\r\n", "\n"] {
+            let text = ["JASC-PAL", "0100", "1", "0 0 0", "garbage", ""].join(eol);
+            assert_eq!(parse(&text).unwrap_err(), JascPalError::TrailingData);
+        }
+    }
+
+    #[test]
+    fn rejects_bare_carriage_return_after_last_color() {
+        let err = parse("JASC-PAL\n0100\n1\n0 0 0\r").unwrap_err();
+        assert_eq!(err, JascPalError::BadColorLine(1));
+    }
+
+    #[test]
     fn rejects_bad_magic() {
         let err = parse("NOT-JASC\r\n0100\r\n0\r\n").unwrap_err();
         assert_eq!(err, JascPalError::BadMagic);
+    }
+
+    #[test]
+    fn rejects_zero_declared_colors() {
+        let err = parse("JASC-PAL\r\n0100\r\n0\r\n").unwrap_err();
+        assert_eq!(err, JascPalError::NoColors);
     }
 
     #[test]

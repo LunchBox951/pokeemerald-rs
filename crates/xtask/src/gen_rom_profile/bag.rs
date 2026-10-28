@@ -7,8 +7,12 @@
 //! is an image, palette, or blob keyed by file stem, never by item.
 //!
 //! How a root is stored is read from upstream's C: the rotating ball, the
-//! select button, the HM mark, and the rotating ball's palette are linked
-//! uncompressed; everything else is an LZ77 stream. Two item-icon images
+//! select button, the HM mark, the rotating ball's palette, and the scroll
+//! indicator's `red.pal`, and the menu-info sheet with its three palettes
+//! (`INCGFX_U8 ".4bpp"` and `INCGFX_U16 ".gbapal"`, `graphics.c:1264-1267`) are
+//! linked uncompressed; everything else is an LZ77 stream, including the
+//! scroll-indicator and swap-line sheets and the swap line's own palette
+//! (`graphics.c:1151-1152`, `list_menu.c:289-290`). Two item-icon images
 //! are byte-identical to another and sit in the ROM twice; those are
 //! reported as identical copies, which is sound because the importer reads
 //! bytes.
@@ -17,10 +21,9 @@ use rom_import::Encoding;
 
 use super::error::GenRomProfileError;
 use super::images::{locate_images, ImageQuery};
-use super::locate::exactly_one;
+use super::lz77_blobs::{locate_lz77_blobs, unnamed};
 use super::palettes::locate_unique_as;
 use super::plan::{BagPlan, BlobPlan, PalettePlan, ReportLine, SymbolExpectation};
-use super::tilesets::len32;
 use super::Context;
 
 const PREFIX: &str = "bag/";
@@ -29,12 +32,18 @@ const PALETTE_PREFIXES: [&str; 2] = ["bag/palette/", "bag/item-icon/palette/"];
 const RAW_PREFIX: &str = "bag/raw/";
 
 /// Roots linked uncompressed; every other bag root is an LZ77 stream.
-/// `item_menu_icons.c:36-37`, `item_menu.c:374`, `graphics.c:1269`.
-const UNCOMPRESSED: [&str; 4] = [
+/// `item_menu_icons.c:36-37`, `item_menu.c:374`, `graphics.c:1269`,
+/// `list_menu.c:289` (`INCGFX_U16 ... ".gbapal"`), `graphics.c:1264-1267`.
+const UNCOMPRESSED: [&str; 9] = [
     "bag/image/rotating_ball",
     "bag/image/select_button",
     "bag/image/hm",
     "bag/palette/rotating_ball",
+    "bag/palette/scroll_indicator",
+    "bag/image/menu_info",
+    "bag/palette/menu_info1",
+    "bag/palette/menu_info2",
+    "bag/palette/menu_info3",
 ];
 
 fn encoding_of(id: &str) -> Encoding {
@@ -109,6 +118,18 @@ fn locate_expected(
     })
 }
 
+/// What a linker map should say at one bag palette's address.
+///
+/// `sRotatingBall_Pal` (`item_menu_icons.c:36`) and `sRedInterface_Pal`
+/// (`list_menu.c:289`) are `static`, so a map omits them.
+fn palette_symbol(id: &str) -> SymbolExpectation {
+    match id {
+        "bag/palette/rotating_ball" => SymbolExpectation::Local("sRotatingBall_Pal".to_owned()),
+        "bag/palette/scroll_indicator" => SymbolExpectation::Local("sRedInterface_Pal".to_owned()),
+        _ => SymbolExpectation::Unnamed,
+    }
+}
+
 /// Locate each palette under the encoding its family stores it in.
 fn locate_palettes(
     ctx: &Context<'_>,
@@ -126,7 +147,7 @@ fn locate_palettes(
             ctx,
             &group,
             encoding,
-            &|_| SymbolExpectation::Unnamed,
+            &palette_symbol,
             report,
         )?);
     }
@@ -140,25 +161,7 @@ fn locate_raws(
     ids: &[String],
     report: &mut Vec<ReportLine>,
 ) -> Result<Vec<BlobPlan>, GenRomProfileError> {
-    let mut needles = Vec::with_capacity(ids.len());
-    for id in ids {
-        needles.push(ctx.pack.raw_payload(id)?.to_vec());
-    }
-    let hits = ctx.lz77.find_all(&needles);
-
-    let mut plans = Vec::with_capacity(ids.len());
-    for (index, id) in ids.iter().enumerate() {
-        let addr = exactly_one(id, &hits[index])?;
-        let len = len32(&needles[index]);
-        report.push(ReportLine::unique(id, addr, len));
-        plans.push(BlobPlan {
-            id: id.clone(),
-            addr,
-            encoding: Encoding::Lz77,
-            len,
-        });
-    }
-    Ok(plans)
+    locate_lz77_blobs(ctx, ids, &unnamed, report)
 }
 
 #[cfg(test)]
