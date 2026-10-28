@@ -6,12 +6,14 @@
 //! [`crate::error`].
 
 mod bag;
+mod battle_effect;
 mod battle_interface;
 mod battle_message;
 mod battler;
 mod error;
 mod format;
 mod handles;
+mod naming_screen;
 mod opening_scene;
 mod paletted_image;
 mod pokedex_graphics;
@@ -25,7 +27,8 @@ use crate::battle_anim::BattleAnimationCatalog;
 use crate::fonts::{FontId, FontImageRef};
 use crate::pokedex::PokedexData;
 
-pub use bag::BagAssets;
+pub use bag::{BagAssets, MenuInfoAssets, MenuInfoIcon, MenuInfoLabel};
+pub use battle_effect::{BattleEffectHandle, BattleEffectRecord};
 pub use battle_interface::{
     BattleBarHandle, BattleInterfaceHandle, BattleTextboxHandle, HealthboxElement,
     HealthboxElementsHandle,
@@ -41,6 +44,7 @@ pub use battler::{BattlerDirection, BattlerHandle, PaletteVariant};
 pub use error::PackError;
 pub use format::{DirectoryEntry, EntryKind, FORMAT_VERSION, MAGIC};
 pub use handles::{ImageRef, PaletteRef, TilesetHandle, WindowFrameHandle};
+pub use naming_screen::NamingScreenHandle;
 pub use opening_scene::{BirchSpeechHandle, WallClockHandle};
 pub use paletted_image::PalettedImage;
 pub use pokedex_graphics::PokedexGraphicsHandle;

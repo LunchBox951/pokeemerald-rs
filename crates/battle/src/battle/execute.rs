@@ -1,6 +1,6 @@
 //! Dispatch and stateful execution for moves admitted by [`crate::battle`].
 
-use assets::{AbilityId, MoveEffect, MoveId, Type};
+use assets::{AbilityId, MoveEffect, MoveId, MoveTarget, Type};
 
 use crate::ability::huge_power_attack;
 use crate::confuse::{
@@ -26,12 +26,13 @@ use crate::secondary::{
     SynchronizePoisonReflectionOutcome,
 };
 use crate::stat_change::{
-    is_stat_change_effect, resolve_stat_change_move, set_stage, StatChangeDirection,
+    is_stat_change_effect, resolve_stat_change_move, set_stage, ChangedStat, StatChangeDirection,
     StatChangeOutcome,
 };
+use crate::stat_stage::StatStage;
 use crate::status1::Status1;
 
-use super::{Battle, BattleEvent};
+use super::{Battle, BattleEvent, BattlerSide, BattlerState, LastLandedMove};
 
 mod pipelines;
 use pipelines::hit_failure_event;
@@ -39,6 +40,34 @@ use pipelines::hit_failure_event;
 /// Confusion's fixed self-hit power (`MOVE_POUND`'s override at
 /// `src/battle_util.c:2159`).
 const CONFUSION_SELF_HIT_POWER: u8 = 40;
+
+/// Whether the events one move produced mark `MOVE_RESULT_NO_EFFECT`, the
+/// flag that turns the target's landed-move record into `MOVE_UNAVAILABLE`
+/// (`battle_script_commands.c:4419`-`:4433`). A miss, a type immunity,
+/// Levitate, Wonder Guard, an absorbed or healed-through move, an explicit
+/// failure and a capped primary stat change set it; a blocked status that
+/// leaves `gMoveResultFlags` alone (Limber, Own Tempo, an already-applied
+/// status, Flash Fire) does not.
+fn last_landed_from(events: &[BattleEvent], move_id: MoveId) -> LastLandedMove {
+    let no_effect = events.iter().any(|event| {
+        matches!(
+            event,
+            BattleEvent::Missed { .. }
+                | BattleEvent::NoEffect { .. }
+                | BattleEvent::LevitateBlocked { .. }
+                | BattleEvent::WonderGuardBlocked { .. }
+                | BattleEvent::AbilityHealed { .. }
+                | BattleEvent::ButItFailed { .. }
+                | BattleEvent::StatWontGoHigher { .. }
+                | BattleEvent::StatWontGoLower { .. }
+        )
+    });
+    if no_effect {
+        LastLandedMove::Unavailable
+    } else {
+        LastLandedMove::Move(move_id)
+    }
+}
 
 /// Validates a move for one pipeline, returning that pipeline's own error.
 type MoveValidator = fn(&Dex, MoveId) -> Result<(), BattleError>;
@@ -114,6 +143,7 @@ impl Battle {
     ) -> Result<(), BattleError> {
         let pipeline = MovePipeline::for_move(&self.dex, move_id)?;
         let target_hp_before = self.battlers(attacker_is_player).1.current_hp();
+        let events_before = events.len();
         self.execute_move_pipeline(pipeline, attacker_is_player, move_id, rng, events)?;
         // Multi-hit moves run their contact abilities after each hit instead
         // (`data/battle_scripts_1.s:637`), inside their own loop.
@@ -122,7 +152,51 @@ impl Battle {
         if pipeline != MovePipeline::MultiHit && target_was_damaged {
             self.apply_contact_abilities(attacker_is_player, move_id, rng, events)?;
         }
+        let landed = last_landed_from(&events[events_before..], move_id);
+        self.record_move_end(attacker_is_player, move_id, landed)
+    }
+
+    /// `MOVEEND_UPDATE_LAST_MOVES` (`battle_script_commands.c:4389`-`:4433`)
+    /// for a move that reached `Cmd_attackcanceler`'s end: the target
+    /// records the attacker as its last hitter while it survives, and the
+    /// landed move. A self-targeting move is its own target.
+    fn record_move_end(
+        &mut self,
+        attacker_is_player: bool,
+        move_id: MoveId,
+        landed: LastLandedMove,
+    ) -> Result<(), BattleError> {
+        let targets_user = self.dex.move_data(move_id)?.target == MoveTarget::USER;
+        let target_is_player = attacker_is_player == targets_user;
+        let target_survived = !self.battlers(target_is_player).0.is_fainted();
+        self.battler_states[BattlerSide::from_is_player(target_is_player).index()].record_move_end(
+            BattlerSide::from_is_player(attacker_is_player),
+            target_survived,
+            landed,
+        );
         Ok(())
+    }
+
+    /// The move-end write for an action a canceller stopped before
+    /// `HITMARKER_OBEYS` was set: its target records `MOVE_UNAVAILABLE`.
+    pub(super) fn record_cancelled_move(
+        &mut self,
+        attacker_is_player: bool,
+        move_id: MoveId,
+    ) -> Result<(), BattleError> {
+        self.record_move_end(attacker_is_player, move_id, LastLandedMove::Unavailable)
+    }
+
+    /// Confusion's self-hit ends the action with the attacker as its own
+    /// target (`battle_util.c:2169`-`:2177`).
+    pub(super) fn record_confusion_self_hit(&mut self, attacker_is_player: bool) {
+        let survived = !self.battlers(attacker_is_player).0.is_fainted();
+        let side = BattlerSide::from_is_player(attacker_is_player);
+        self.battler_states[side.index()].record_move_end(
+            side,
+            survived,
+            LastLandedMove::Unavailable,
+        );
     }
 
     /// `MOVEEND_ON_DAMAGE_ABILITIES` for the contact abilities the engine
@@ -478,6 +552,9 @@ impl Battle {
                             });
                         }
                     }
+                    SecondaryApplication::SpeedDown => {
+                        self.apply_secondary_speed_drop(attacker_is_player, move_id, events);
+                    }
                 }
                 // Struggle's certain `MOVE_EFFECT_RECOIL_25` fires from the
                 // same `seteffectwithchance` step, still ahead of the
@@ -495,6 +572,39 @@ impl Battle {
             }
         }
         Ok(())
+    }
+
+    /// `MOVE_EFFECT_SPD_MINUS_1` as a secondary effect: one Speed stage off a
+    /// target that survived the hit. `SetMoveEffect` leads with an `hp == 0`
+    /// guard (`battle_script_commands.c:2261`-`:2264`), and a target already at
+    /// the minimum stage is left alone with no message because
+    /// `ChangeStatBuffs` runs with `flags == 0` (`:7056`-`:7059`,
+    /// `:7094`-`:7095`). Clear Body, White Smoke and Shield Dust never reach
+    /// this point ([`crate::secondary::spend_effect_chance_draw`]).
+    fn apply_secondary_speed_drop(
+        &mut self,
+        attacker_is_player: bool,
+        move_id: MoveId,
+        events: &mut Vec<BattleEvent>,
+    ) {
+        let defender = if attacker_is_player {
+            &mut self.enemy
+        } else {
+            &mut self.player
+        };
+        let current_stage = defender.stages().speed;
+        if defender.is_fainted() || current_stage == StatStage::MIN {
+            return;
+        }
+        let new_stage = current_stage.saturating_add(-1);
+        set_stage(defender, ChangedStat::Speed, new_stage);
+        events.push(BattleEvent::StatFell {
+            by_player: attacker_is_player,
+            move_id,
+            stat: ChangedStat::Speed,
+            new_stage,
+            magnitude: 1,
+        });
     }
 
     /// Applies damage up to the target's remaining HP and returns the HP lost.
@@ -609,7 +719,7 @@ impl Battle {
         self.clear_fainted_battler_state(fainted_is_player);
     }
 
-    fn clear_fainted_battler_state(&mut self, fainted_is_player: bool) {
+    pub(super) fn clear_fainted_battler_state(&mut self, fainted_is_player: bool) {
         let fainted_battler = if fainted_is_player {
             &mut self.player
         } else {
@@ -617,6 +727,10 @@ impl Battle {
         };
         fainted_battler.clear_battle_scratch();
         fainted_battler.set_status1(Status1::Healthy);
+        // `FaintClearSetData` resets the battler's history and Perish Song
+        // countdown (`battle_main.c:3288`-`:3289`, `:3314`-`:3319`).
+        self.battler_states[BattlerSide::from_is_player(fainted_is_player).index()] =
+            BattlerState::default();
     }
 
     fn execute_stat_change_move(
@@ -929,7 +1043,8 @@ mod pipeline_agreement_tests {
     use crate::damage::STRUGGLE;
 
     /// Independent expectation: every supported effect and its pipeline.
-    /// Effects absent here are unsupported.
+    /// Effects absent here are unsupported. Raw IDs on purpose: this numeric
+    /// table-mapping contract shares no constants with the classifier.
     const EXPECTED: &[(&[u8], MovePipeline)] = &[
         (
             &[
@@ -946,7 +1061,7 @@ mod pipeline_agreement_tests {
         (&[49], MovePipeline::Confuse),
         (
             &[
-                0, 2, 12, 14, 15, 17, 21, 22, 43, 55, 56, 61, 63, 64, 74, 76, 78, 96, 103, 110,
+                0, 2, 12, 14, 15, 17, 21, 22, 43, 55, 56, 61, 63, 64, 70, 74, 76, 78, 96, 103, 110,
                 131, 141, 163,
             ],
             MovePipeline::OrdinaryHit,
@@ -990,6 +1105,7 @@ mod pipeline_agreement_tests {
 
     #[test]
     fn every_effect_maps_to_the_expected_pipeline() {
+        // Raw sweep of every effect byte against the raw `EXPECTED` table.
         for raw in u8::MIN..=u8::MAX {
             let effect = MoveEffect(raw);
             let candidate = MovePipeline::candidate_for_effect(effect).0;

@@ -70,7 +70,14 @@ fn a_pack_directory_spelled_through_dotdot_still_imports() {
         Ok(fake_pack(b"pack bytes"))
     })
     .expect("a dotdot-spelled destination still imports");
+
     assert_eq!(outcome.pack_path(), pack_path);
+    // `missing/..` resolves back to `dir`, so the pack lands there.
+    assert_eq!(
+        fs::read(dir.join("pokeemerald.pack")).unwrap(),
+        b"pack bytes"
+    );
+    assert_eq!(fs::read(outcome.pack_path()).unwrap(), b"pack bytes");
 }
 
 #[test]
@@ -168,4 +175,63 @@ fn a_non_utf8_pack_name_is_published_byte_for_byte() {
 
     assert_eq!(outcome.pack_path(), pack_path);
     assert_eq!(fs::read(&pack_path).unwrap(), b"pack bytes");
+}
+
+/// Set in the child [`a_re_import_under_an_owner_stripping_umask_publishes_an_owner_readable_pack`]
+/// re-runs itself as, so only that child changes its own umask.
+#[cfg(unix)]
+const IMPORT_UMASK_CHILD: &str = "POKEEMERALD_IMPORT_UMASK_CHILD";
+
+/// An import under a umask that strips the owner bits (`0444`) over an
+/// installed, readable pack publishes a pack its owner can still read.
+/// `create_new` asks for `0o666`, so the umask leaves `0o222`, and the rename
+/// carries that mode onto the published name. The mode bits are asserted
+/// because a root runner reads a `0o222` file regardless.
+#[cfg(unix)]
+#[test]
+fn a_re_import_under_an_owner_stripping_umask_publishes_an_owner_readable_pack() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let name = "import_rom::tests::publishing::\
+                a_re_import_under_an_owner_stripping_umask_publishes_an_owner_readable_pack";
+    if std::env::var_os(IMPORT_UMASK_CHILD).is_none() {
+        // The umask is process-wide, so the 0o444 one is set only in a re-run
+        // of this test binary that runs this test alone.
+        let output = std::process::Command::new("/bin/sh")
+            .args(["-c", "umask 0444 && exec \"$0\" \"$@\""])
+            .arg(std::env::current_exe().unwrap())
+            .args(["--exact", name, "--test-threads=1"])
+            .env(IMPORT_UMASK_CHILD, "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains("1 passed"),
+            "umask 0444 child failed:\n{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+
+    let dir = TempDir::new("umask-publish");
+    // The directory already exists and is accessible, so only the file's own
+    // mode is in question.
+    fs::set_permissions(&dir.path, fs::Permissions::from_mode(0o700)).unwrap();
+    let pack_path = dir.join("pokeemerald.pack");
+    fs::write(&pack_path, b"old pack").unwrap();
+    fs::set_permissions(&pack_path, fs::Permissions::from_mode(0o600)).unwrap();
+    let source = SourceRom::new("umask-publish-src");
+    fs::set_permissions(source.path(), fs::Permissions::from_mode(0o600)).unwrap();
+
+    import_to_with(source.path(), &pack_path, |_rom, _path| {
+        Ok(fake_pack(b"pack bytes"))
+    })
+    .expect("the import succeeds");
+
+    let mode = fs::metadata(&pack_path).unwrap().permissions().mode() & 0o7777;
+    // 0666 & !0444 leaves 0222; only the owner read is restored, so the
+    // group and other bits still honour the umask.
+    assert_eq!(mode, 0o622, "published pack mode: {mode:o}");
+    assert_eq!(fs::read(&pack_path).unwrap(), b"pack bytes");
+    assert_eq!(file_names(&dir.path), ["pokeemerald.pack"]);
 }

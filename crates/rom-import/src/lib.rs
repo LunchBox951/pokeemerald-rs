@@ -103,13 +103,16 @@ pub use domains::battle_anim::{
     decode_battle_anim_payload, decode_battle_anim_program, AnimPointers, DecodedProgram,
     PACK_ID as BATTLE_ANIM_PACK_ID,
 };
+pub use domains::battle_interface::{
+    HEALTHBOX_BATTLE_BAR, HEALTHBOX_ELEMENTS, HEALTHBOX_TILE_BYTES,
+};
 pub use domains::battle_messages::{
     decode_battle_message_payload, PACK_ID as BATTLE_MESSAGE_PACK_ID,
 };
 pub use domains::song::decode_song_payload;
 pub use error::{HeaderFault, ImportError, Lz77Fault, PartialFile, SongFault};
 pub use lz77::{decompress as lz77_decompress, decompress_at as lz77_decompress_at, LZ77_TYPE};
-pub use one_line::{OneLine, OneLinePath};
+pub use one_line::{OneLine, OneLinePath, OneLineText};
 pub use profile::{
     select as select_profile, select_with as select_profile_with, RevisionProfile, EMERALD_US_REV0,
     KNOWN_PROFILES,

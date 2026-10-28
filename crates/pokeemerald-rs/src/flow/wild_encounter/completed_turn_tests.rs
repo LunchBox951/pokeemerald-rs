@@ -80,7 +80,7 @@ fn a_completed_turn_on_ordinary_ground_remembers_its_behavior() {
 fn the_fifth_completed_turn_on_grass_rolls_after_immunity() {
     let mut phase = grass_phase();
     phase.rng = Rng::new(0);
-    phase.party_lead = Some(player_mon(277, 50, vec![MoveId::POUND]));
+    phase.set_fresh_lead_for_test(player_mon(277, 50, vec![MoveId::POUND]));
     let rng_before = phase.rng.state();
     let directions = [Buttons::DOWN, Buttons::UP, Buttons::DOWN, Buttons::UP];
 
@@ -105,7 +105,7 @@ fn the_fifth_completed_turn_on_grass_rolls_after_immunity() {
 fn a_failed_turn_roll_keeps_immunity_exhausted() {
     let mut phase = grass_phase();
     phase.rng = Rng::new(ENCOUNTER_SEED);
-    phase.party_lead = Some(player_mon(277, 50, vec![MoveId::POUND]));
+    phase.set_fresh_lead_for_test(player_mon(277, 50, vec![MoveId::POUND]));
     // Seed 17's first draw (24107) fails the same-behavior rate check.
     let mut expected = Rng::new(ENCOUNTER_SEED);
     assert!(u32::from(expected.next_u16()) % 2880 >= 320);

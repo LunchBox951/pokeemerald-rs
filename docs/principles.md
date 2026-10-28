@@ -40,7 +40,7 @@ mGBA pixel math varies by build. The oracle is stock desktop mGBA using 32-bit `
 
 **8. Lean docs (`lean-docs`).** Docs preserve durable information that code and tools cannot cheaply reveal. Route task-specific context with pointers that state when and why to read the target. Give each fact one owner and link instead of duplicating it. Delete prose that does not change how a reader acts.
 
-**9. Constitution vs. roadmap (`constitution-vs-roadmap`).** Goals, principles, and v1 acceptance criteria form a small durable core. The path to v1 lives in GitHub issues, pull requests, discussions, and milestones. Do not freeze status, implementation history, or future plans into committed documentation.
+**9. Constitution vs. roadmap (`constitution-vs-roadmap`).** Goals, principles, and v1 acceptance criteria form a small durable core. The path to v1 lives in GitHub issues, pull requests, discussions, and milestones. Do not freeze status, implementation history, or future plans into committed documentation, except for the curated user-facing patch notes in [`CHANGELOG.md`](../CHANGELOG.md).
 
 **10. Gated by default (`gated-by-default`).** Every protected branch requires current objective CI and resolved review threads. `dev` is developer integration and `unstable` is the mechanical nightly. `stable` and `main` additionally require current CODEOWNER approval and manual merge. Evidence, not assertion, advances a change.
 
