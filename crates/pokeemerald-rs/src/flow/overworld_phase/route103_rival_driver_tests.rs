@@ -1,11 +1,13 @@
 //! Route 103 rival battle-outcome driver seam: win/loss decisions, starter and gender selection, and the Route 101 handoff.
 
+use assets::items::ItemId;
 use assets::{MapId, MoveId, SpeciesId};
 use battle::{BattleOutcome, BattlePokemon, Dex, Ivs};
 use engine::overworld::{Direction, PlayerState};
 use engine::save::PlayerGender;
 use platform::{ButtonState, Buttons};
 
+use crate::flow::lead_screen::loaded_holding;
 use crate::flow::tests::{held, pressed};
 
 use super::route103_rival_test_support::{
@@ -23,7 +25,7 @@ use super::OverworldPhase;
 #[test]
 fn winning_the_rival_battle_reinitialises_the_tileset_animation_tick() {
     let mut phase = route_103_phase_facing_the_rival();
-    phase.party_lead = Some(overwhelming_treecko_lead());
+    phase.set_fresh_lead_for_test(overwhelming_treecko_lead());
     phase.tick = 40;
     phase.step(pressed(Buttons::A));
     assert!(phase.is_rival_battle_active(), "setup: the battle started");
@@ -51,7 +53,7 @@ fn winning_the_rival_battle_reinitialises_the_tileset_animation_tick() {
 #[test]
 fn winning_the_rival_battle_hides_the_rival_and_makes_the_fight_unrepeatable() {
     let mut phase = route_103_phase_facing_the_rival();
-    phase.party_lead = Some(overwhelming_treecko_lead());
+    phase.set_fresh_lead_for_test(overwhelming_treecko_lead());
     phase.step(pressed(Buttons::A));
     assert!(phase.is_rival_battle_active(), "setup: the battle started");
 
@@ -63,7 +65,7 @@ fn winning_the_rival_battle_hides_the_rival_and_makes_the_fight_unrepeatable() {
         "a concluded battle empties its slot"
     );
     assert!(
-        phase.party_lead.is_some(),
+        phase.lead_for_test().is_some(),
         "the driver writes the player's mon back"
     );
     assert_eq!(
@@ -98,8 +100,7 @@ fn winning_the_rival_battle_hides_the_rival_and_makes_the_fight_unrepeatable() {
 
     // The rival is no longer even *found* by the facing lookup, so a fresh
     // A press finds nothing to interact with -- the fight cannot restart.
-    let lead_after = phase.party_lead.take();
-    phase.party_lead = lead_after.clone();
+    phase.assert_lead_at_slot_for_test(0);
     phase.step(pressed(Buttons::A));
     assert!(
         !phase.is_rival_battle_active(),
@@ -114,7 +115,7 @@ fn winning_the_rival_battle_hides_the_rival_and_makes_the_fight_unrepeatable() {
 #[test]
 fn winning_the_rival_battle_saturates_money_at_the_upstream_cap() {
     let mut phase = route_103_phase_facing_the_rival();
-    phase.party_lead = Some(overwhelming_treecko_lead());
+    phase.set_fresh_lead_for_test(overwhelming_treecko_lead());
     phase.save1.money = 999_900;
     phase.step(pressed(Buttons::A));
     assert!(phase.is_rival_battle_active(), "setup: the battle started");
@@ -156,7 +157,7 @@ fn winning_the_rival_battle_sets_the_exact_fought_trainers_defeated_flag_for_eve
             .event_data
             .var_set(VAR_STARTER_MON, starter_var)
             .expect("VAR_STARTER_MON is an ordinary var id");
-        phase.party_lead = Some(overwhelming_treecko_lead());
+        phase.set_fresh_lead_for_test(overwhelming_treecko_lead());
         phase.step(pressed(Buttons::A));
         assert!(
             phase.is_rival_battle_active(),
@@ -212,7 +213,7 @@ fn winning_the_rival_battle_sets_the_exact_fought_trainers_defeated_flag_for_eve
 #[test]
 fn losing_the_rival_battle_now_heals_halves_money_and_leaves_the_hide_flag_clear() {
     let mut phase = route_103_phase_facing_the_rival();
-    phase.party_lead = Some(overmatched_treecko_lead());
+    phase.set_fresh_lead_for_test(overmatched_treecko_lead());
     phase.rng = engine::rng::Rng::new(2024);
     phase.save1.money = 2001;
     phase.step(pressed(Buttons::A));
@@ -256,8 +257,7 @@ fn losing_the_rival_battle_now_heals_halves_money_and_leaves_the_hide_flag_clear
          2001 / 2 == 1000"
     );
     let lead = phase
-        .party_lead
-        .as_ref()
+        .lead_for_test()
         .expect("the driver writes the player's mon back, and white_out heals it in place");
     assert!(
         !lead.is_fainted(),
@@ -285,7 +285,7 @@ fn losing_the_rival_battle_now_heals_halves_money_and_leaves_the_hide_flag_clear
 #[test]
 fn beginning_a_rival_battle_clears_a_stale_outcome_from_an_earlier_attempt() {
     let mut phase = route_103_phase_facing_the_rival();
-    phase.party_lead = Some(overwhelming_treecko_lead());
+    phase.set_fresh_lead_for_test(overwhelming_treecko_lead());
     phase.rng = engine::rng::Rng::new(2024);
     // Terminal state from an earlier fight, sitting exactly where a fresh
     // attempt's own `None` belongs.
@@ -316,7 +316,7 @@ fn beginning_a_rival_battle_clears_a_stale_outcome_from_an_earlier_attempt() {
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_losing_the_rival_battle_warps_home_to_the_default_heal_location() {
     let mut phase = route_103_phase_facing_the_rival_repo();
-    phase.party_lead = Some(overmatched_treecko_lead());
+    phase.set_fresh_lead_for_test(overmatched_treecko_lead());
     phase.rng = engine::rng::Rng::new(2024);
     phase.step(pressed(Buttons::A));
     assert!(phase.is_rival_battle_active(), "setup: the battle started");
@@ -341,7 +341,7 @@ fn real_pack_losing_the_rival_battle_warps_home_to_the_default_heal_location() {
 #[test]
 fn one_turn_does_not_immediately_end_a_fresh_battle() {
     let mut phase = route_103_phase_facing_the_rival();
-    phase.party_lead = Some(lead(277, 5, 1)); // a level-5 Treecko with Pound
+    phase.set_fresh_lead_for_test(lead(277, 5, 1)); // a level-5 Treecko with Pound
     phase.step(pressed(Buttons::A));
     assert!(phase.is_rival_battle_active());
 
@@ -369,11 +369,11 @@ fn an_out_of_range_starter_var_starts_no_battle() {
         .event_data
         .var_set(VAR_STARTER_MON, 3)
         .expect("VAR_STARTER_MON is an ordinary var id");
-    phase.party_lead = Some(lead(277, 5, 1));
+    phase.set_fresh_lead_for_test(lead(277, 5, 1));
     phase.step(pressed(Buttons::A));
     assert!(!phase.is_rival_battle_active());
     assert!(
-        phase.party_lead.is_some(),
+        phase.lead_for_test().is_some(),
         "a refused trigger must not consume the lead"
     );
 }
@@ -433,7 +433,7 @@ fn a_lost_route_101_first_battle_still_lets_the_healed_lead_fight_the_rival() {
         sp_attack: battle::MAX_IV,
         sp_defense: battle::MAX_IV,
     };
-    route_101.party_lead = Some(
+    route_101.set_fresh_lead_for_test(
         BattlePokemon::new(&Dex::new(), SpeciesId(277), 1, ivs, 0, vec![MoveId::POUND])
             .expect("Treecko/Pound must be in the dex"),
     );
@@ -460,8 +460,8 @@ fn a_lost_route_101_first_battle_still_lets_the_healed_lead_fight_the_rival() {
         "setup: this seed/lead combination must really lose"
     );
     let healed_lead = route_101
-        .party_lead
-        .clone()
+        .lead_for_test()
+        .cloned()
         .expect("conclude_first_battle heals in place");
     assert!(
         !healed_lead.is_fainted(),
@@ -481,7 +481,7 @@ fn a_lost_route_101_first_battle_still_lets_the_healed_lead_fight_the_rival() {
     // fixture -- the healed lead and the real VAR_STARTER_MON the
     // conclusion wrote, nothing else.
     let mut route_103 = route_103_phase_facing_the_rival();
-    route_103.party_lead = Some(healed_lead);
+    route_103.set_fresh_lead_for_test(healed_lead);
     route_103
         .save1
         .event_data
@@ -501,7 +501,7 @@ fn a_lost_route_101_first_battle_still_lets_the_healed_lead_fight_the_rival() {
         "the party build really drew -- nothing refused it before it could"
     );
     assert!(
-        route_103.party_lead.is_none(),
+        route_103.lead_for_test().is_none(),
         "the lead moved into the battle, same as any other successful trigger"
     );
 
@@ -522,8 +522,96 @@ fn a_lost_route_101_first_battle_still_lets_the_healed_lead_fight_the_rival() {
 fn an_unmodelled_player_gender_starts_no_battle() {
     let mut phase = route_103_phase_facing_the_rival();
     phase.save2.player_gender = PlayerGender::Other(3);
-    phase.party_lead = Some(overwhelming_treecko_lead());
+    phase.set_fresh_lead_for_test(overwhelming_treecko_lead());
     phase.step(pressed(Buttons::A));
     assert!(!phase.is_rival_battle_active());
-    assert!(phase.party_lead.is_some());
+    assert!(phase.lead_for_test().is_some());
+}
+
+// -- The lead-owner loan --------------------------------------------------
+
+/// A started rival battle holds the lead on loan, so a second lend is refused.
+#[test]
+#[should_panic(expected = "lent out to a battle")]
+fn a_started_rival_battle_holds_the_lead_on_loan() {
+    let mut phase = route_103_phase_facing_the_rival();
+    phase.set_fresh_lead_for_test(overwhelming_treecko_lead());
+    phase.step(pressed(Buttons::A));
+    assert!(phase.is_rival_battle_active(), "setup: the battle started");
+    let _ = phase.take_lead_battler();
+}
+
+/// A concluded rival battle restores the lead to its slot before routing.
+#[test]
+fn a_concluded_rival_battle_restores_the_lead_to_its_slot() {
+    let mut phase = route_103_phase_facing_the_rival();
+    phase.set_fresh_lead_for_test(overwhelming_treecko_lead());
+    phase.step(pressed(Buttons::A));
+    assert!(phase.lead_for_test().is_none(), "the lead is on loan");
+
+    assert!(play_out_rival_battle(&mut phase, 32).is_some());
+    assert!(phase.lead_for_test().is_some(), "the lead came back");
+    phase.assert_lead_at_slot_for_test(0);
+    let lent = phase.take_lead_battler().expect("the loan was closed");
+    phase.restore_lead_battler(lent);
+}
+
+/// A refused rival start returns the lent lead, which can then be lent again.
+#[test]
+fn a_refused_rival_start_returns_the_lent_lead() {
+    let mut phase = route_103_phase_facing_the_rival();
+    let mut fainted = overwhelming_treecko_lead();
+    fainted.apply_damage(u32::MAX);
+    phase.set_fresh_lead_for_test(fainted);
+    phase.step(pressed(Buttons::A));
+    assert!(
+        !phase.is_rival_battle_active(),
+        "setup: the start is refused"
+    );
+    phase.assert_lead_at_slot_for_test(0);
+    let lent = phase.take_lead_battler().expect("still restorable");
+    phase.restore_lead_battler(lent);
+}
+
+/// A loaded lead holding a battle item is refused by the shared constructor: no battle, no
+/// draw, no rival flag, and the lent lead comes back with its item.
+#[test]
+fn a_loaded_lead_holding_a_battle_item_is_refused_and_returned() {
+    let mut phase = route_103_phase_facing_the_rival();
+    let lead = loaded_holding(&overwhelming_treecko_lead(), ItemId::ORAN_BERRY);
+    phase.set_fresh_lead_for_test(lead.clone());
+    phase.rng = engine::rng::Rng::new(1);
+
+    phase.step(pressed(Buttons::A));
+
+    assert!(!phase.is_rival_battle_active(), "no battle may start");
+    assert_eq!(phase.rng.state(), engine::rng::Rng::new(1).state());
+    assert_eq!(
+        phase.save1().event_data.flag_get(FLAG_HIDE_ROUTE_103_RIVAL),
+        Ok(false)
+    );
+    phase.assert_lead_at_slot_for_test(0);
+    let lent = phase.take_lead_battler().expect("still restorable");
+    assert_eq!(
+        lent, lead,
+        "the lead returns with the item it was saved with"
+    );
+    phase.restore_lead_battler(lent);
+}
+
+/// A start refused for the starter variable also returns the lent lead.
+#[test]
+fn an_unmapped_starter_var_returns_the_lent_lead() {
+    let mut phase = route_103_phase_facing_the_rival();
+    phase
+        .save1
+        .event_data
+        .var_set(VAR_STARTER_MON, 3)
+        .expect("VAR_STARTER_MON is an ordinary var id");
+    phase.set_fresh_lead_for_test(lead(277, 5, 1));
+    phase.step(pressed(Buttons::A));
+    assert!(!phase.is_rival_battle_active());
+    phase.assert_lead_at_slot_for_test(0);
+    let lent = phase.take_lead_battler().expect("still restorable");
+    phase.restore_lead_battler(lent);
 }

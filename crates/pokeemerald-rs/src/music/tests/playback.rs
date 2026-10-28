@@ -261,48 +261,55 @@ fn first_sample_after_frames(song: Song, frames: u32, fade_speed: Option<u16>) -
     frame[0]
 }
 
-/// Upstream scales each voice, then sums, then clips (`FadeOutBody`,
-/// `m4a.c:750`-`:757`; `TrkVolPitSet`, `m4a.c:765`-`:788`); four full-volume
-/// tracks overflow signed 8-bit together, so halving their volume must
-/// relieve that clipping, not just halve its clipped remainder.
+/// Upstream scales each voice, then sums into a wrapping byte lane
+/// (`FadeOutBody`, `m4a.c:750`-`:757`; `TrkVolPitSet`, `m4a.c:765`-`:788`;
+/// `m4a_1.s:308`-`:339`); four full-volume tracks overflow signed 8-bit
+/// together, so halving their volume must relieve that overflow, not just
+/// halve the wrapped remainder.
 #[test]
-fn a_fade_scales_each_voice_before_the_mixer_clips_their_sum() {
-    const CLIPPING_TRACKS: u8 = 4;
+fn a_fade_scales_each_voice_before_the_mixer_wraps_their_sum() {
+    const OVERFLOWING_TRACKS: u8 = 4;
     const FADE_SPEED: u16 = 1;
     const HALF_VOLUME_FRAME: u32 = 8;
-    const FULL_SCALE: f32 = 127.0 / 128.0;
+    const BYTE_SCALE: f32 = 128.0;
+
+    let wrap = |sum: f32| {
+        ((sum * BYTE_SCALE + BYTE_SCALE).rem_euclid(2.0 * BYTE_SCALE) - BYTE_SCALE) / BYTE_SCALE
+    };
 
     let one_voice = first_sample_after_frames(sustained_song(1), 1, None);
-    let unclipped_sum = one_voice * f32::from(CLIPPING_TRACKS);
+    let unwrapped_sum = one_voice * f32::from(OVERFLOWING_TRACKS);
     assert!(
-        unclipped_sum > FULL_SCALE,
+        unwrapped_sum >= 1.0,
         "the test needs voices whose sum overflows the mix: \
-         {CLIPPING_TRACKS} x {one_voice} = {unclipped_sum}"
+         {OVERFLOWING_TRACKS} x {one_voice} = {unwrapped_sum}"
     );
 
     // Per-voice volume truncation costs at most one mix unit per voice.
-    let tolerance = f32::from(CLIPPING_TRACKS) / 128.0;
-    let unfaded = first_sample_after_frames(sustained_song(usize::from(CLIPPING_TRACKS)), 1, None);
+    let tolerance = f32::from(OVERFLOWING_TRACKS) / BYTE_SCALE;
+    let unfaded =
+        first_sample_after_frames(sustained_song(usize::from(OVERFLOWING_TRACKS)), 1, None);
     assert!(
-        (unfaded - FULL_SCALE).abs() < tolerance,
-        "the unfaded frame must sit at clipped full scale, got {unfaded}"
+        (unfaded - wrap(unwrapped_sum)).abs() < tolerance,
+        "the unfaded frame must sit at the wrapped sum {}, got {unfaded}",
+        wrap(unwrapped_sum)
     );
 
     let faded = first_sample_after_frames(
-        sustained_song(usize::from(CLIPPING_TRACKS)),
+        sustained_song(usize::from(OVERFLOWING_TRACKS)),
         HALF_VOLUME_FRAME,
         Some(FADE_SPEED),
     );
-    let expected = unclipped_sum * 0.5;
+    let expected = unwrapped_sum * 0.5;
     assert!(
-        expected < FULL_SCALE,
-        "at half volume the faded voices must fit in the mix without clipping"
+        expected < 1.0,
+        "at half volume the faded voices must fit in the mix without wrapping"
     );
     assert!(
         (faded - expected).abs() < tolerance,
-        "half-volume fade of {CLIPPING_TRACKS} clipping voices: expected about {expected}, \
-         got {faded} (scaling the clipped frame instead would give {})",
-        FULL_SCALE * 0.5
+        "half-volume fade of {OVERFLOWING_TRACKS} overflowing voices: expected about {expected}, \
+         got {faded} (scaling the wrapped frame instead would give {})",
+        unfaded * 0.5
     );
 }
 

@@ -4,13 +4,13 @@
 //! [`crate::pack_test_support`].
 
 use super::save_continue_support::{new_game_phase, save_from_the_start_menu};
-use super::tests::TempSave;
+use super::tests::{write_scratch_exclusive, TempSave};
 use super::{advance_scene, new_game_options_for, window_frame_for, AppScene, MainMenuState};
 use crate::game_save::{SaveSlot, SavedGame};
 use crate::main_menu::{self, MainMenuItem};
 use crate::new_game::NewGameOptions;
 use crate::pack_source::PackSource;
-use crate::pack_test_support::{image_entry, pack_bytes, palette_entry_with_color};
+use crate::pack_test_support::{image_entry, pack_bytes_with_fonts, palette_entry_with_color};
 use engine::save::{BattleStyle, ButtonMode, SoundMode};
 use engine::settings::GameSettings;
 use platform::{ButtonState, Buttons};
@@ -54,26 +54,30 @@ fn synthetic_options_pack_bytes() -> Vec<u8> {
         0,
         Bgr555::from_channels(4, 4, 16),
     ));
-    pack_bytes(entries)
+    pack_bytes_with_fonts(entries)
 }
 
-struct Fixture {
+pub(super) struct Fixture {
     pack_path: std::path::PathBuf,
-    pack_source: PackSource,
+    pub(super) pack_source: PackSource,
     _temp: TempSave,
-    slot: SaveSlot,
+    pub(super) slot: SaveSlot,
 }
 
 impl Fixture {
-    fn new(label: &str) -> Self {
-        let temp = TempSave::new(label);
-        let slot = temp.slot();
-        let pack_path = std::env::temp_dir().join(format!(
+    fn pack_path(label: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
             "pokeemerald-rs-1763-{label}-{}-{:?}.pack",
             std::process::id(),
             std::thread::current().id()
-        ));
-        std::fs::write(&pack_path, synthetic_options_pack_bytes()).unwrap();
+        ))
+    }
+
+    pub(super) fn new(label: &str) -> Self {
+        let temp = TempSave::new(label);
+        let slot = temp.slot();
+        let pack_path = Self::pack_path(label);
+        write_scratch_exclusive(&pack_path, synthetic_options_pack_bytes());
         // `PackSource::Test` needs a `'static` path, as `flow::tests` does.
         let leaked: &'static std::path::Path = Box::leak(pack_path.clone().into_boxed_path());
         Self {
@@ -84,13 +88,18 @@ impl Fixture {
         }
     }
 
-    fn step(&mut self, scene: AppScene, buttons: &mut ButtonState, held: Buttons) -> AppScene {
+    pub(super) fn step(
+        &mut self,
+        scene: AppScene,
+        buttons: &mut ButtonState,
+        held: Buttons,
+    ) -> AppScene {
         buttons.update(held);
         advance_scene(scene, *buttons, &mut self.slot, self.pack_source.clone()).0
     }
 
     /// Steps with nothing held until `done` accepts the scene.
-    fn until(
+    pub(super) fn until(
         &mut self,
         mut scene: AppScene,
         buttons: &mut ButtonState,
@@ -106,7 +115,7 @@ impl Fixture {
     }
 
     /// A main menu on `OPTION`, built from the synthetic pack over `saved`.
-    fn main_menu_on_option(&self, mut saved: SavedGame) -> AppScene {
+    pub(super) fn main_menu_on_option(&self, mut saved: SavedGame) -> AppScene {
         super::apply_boot_defaults(&mut saved);
         let menu_type = super::menu_type_for(&saved);
         let mut menu = main_menu::load_with_window_frame(
@@ -122,7 +131,7 @@ impl Fixture {
     }
 
     /// `OPTION` -> A -> through the fade -> the screen ready for input.
-    fn open_options(&mut self, scene: AppScene, buttons: &mut ButtonState) -> AppScene {
+    pub(super) fn open_options(&mut self, scene: AppScene, buttons: &mut ButtonState) -> AppScene {
         let scene = self.step(scene, buttons, Buttons::A);
         assert!(matches!(scene, AppScene::MainMenuFadeWait(_)));
         let scene = self.until(scene, buttons, |s| matches!(s, AppScene::Options(_)));
@@ -145,7 +154,7 @@ fn tap(f: &mut Fixture, scene: AppScene, buttons: &mut ButtonState, held: Button
     f.step(scene, buttons, Buttons::NONE)
 }
 
-fn main_menu_state(scene: &AppScene) -> &MainMenuState {
+pub(super) fn main_menu_state(scene: &AppScene) -> &MainMenuState {
     match scene {
         AppScene::MainMenu(state) => state,
         _ => panic!("expected the main menu"),
@@ -251,7 +260,9 @@ fn options_survive_save_exit_and_continue() {
     assert_eq!(state.saved.block2.options_text_speed, 0);
 
     let mut resumed = super::OverworldPhase::from_saved(
-        crate::overworld::test_support::synthetic_scene(10, 10),
+        crate::overworld::test_support::synthetic_scene(10, 10).in_room_for_test(
+            crate::flow::overworld_phase::saved_map_id(state.saved.block1.location).unwrap(),
+        ),
         crate::flow::overworld_phase::saved_map_id(state.saved.block1.location).unwrap(),
         state.saved.block1.clone(),
         state.saved.block2.clone(),
@@ -308,9 +319,10 @@ fn a_pack_failure_opening_the_screen_returns_to_the_main_menu() {
 #[test]
 fn returning_fades_in_over_empty_windows_and_draws_the_menu_after() {
     // `InitMainMenu(TRUE)` clears VRAM and fades in with no windows drawn;
-    // `Task_MainMenuCheckSaveFile` waits for `!gPaletteFade.active` before
-    // the menu is drawn (`main_menu.c:556-650`). So every fade-in frame is a
-    // single backdrop colour.
+    // `Task_MainMenuCheckSaveFile` waits for `!gPaletteFade.active`, and the
+    // windows are drawn two tasks later (`main_menu.c:556-650`). So every
+    // `MainMenuFadeIn` frame is a single backdrop colour; `options_return_tests`
+    // counts the frames after the fade.
     let mut f = Fixture::new("options-return-fade");
     let mut buttons = ButtonState::new();
     let saved = f.slot.load();
@@ -347,7 +359,7 @@ fn returning_fades_in_over_empty_windows_and_draws_the_menu_after() {
 }
 
 /// A main menu on `OPTION` whose save holds `mode`.
-fn option_menu_with_mode(f: &mut Fixture, mode: ButtonMode) -> AppScene {
+pub(super) fn option_menu_with_mode(f: &mut Fixture, mode: ButtonMode) -> AppScene {
     let mut saved = f.slot.load();
     // `Ok` keeps the boot from defaulting the block over the mode under test.
     saved.status = crate::game_save::SaveFileStatus::Ok;
@@ -445,5 +457,16 @@ fn every_handoff_scene_reports_the_save_it_carries() {
         AppScene::Overworld(Box::new(phase)).button_mode(),
         ButtonMode::LEqualsA,
         "overworld"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn the_options_fixture_refuses_a_planted_symlink() {
+    let label = "symlink-regression";
+    super::tests::assert_planted_symlink_untouched(
+        &Fixture::pack_path(label),
+        &synthetic_options_pack_bytes(),
+        || Fixture::new(label),
     );
 }
