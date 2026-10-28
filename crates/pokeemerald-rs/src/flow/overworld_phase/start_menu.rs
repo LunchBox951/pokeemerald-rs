@@ -76,11 +76,16 @@ impl OverworldPhase {
             StartMenuOutcome::Open => self.start_menu = Some(menu),
             StartMenuOutcome::Closed => {}
             // The menu is dropped first, so the take runs with field control
-            // already back. The outcome's message is the party menu's to
-            // draw, so nothing is shown here.
-            StartMenuOutcome::TakeItem => {
-                let _ = self.take_lead_held_item();
-            }
+            // already back.
+            StartMenuOutcome::TakeItem => match self.take_lead_held_item() {
+                Some(party::TakeHeldItem::Took(_)) => {}
+                // Upstream tells the player (`gText_PkmnNotHolding`,
+                // `gText_BagFullCouldNotRemoveItem`); the party menu that
+                // draws those is not built, so the refusal is logged and
+                // the lead keeps its item.
+                Some(refused) => eprintln!("take item refused: {refused:?}"),
+                None => eprintln!("take item: there is no lead to take from"),
+            },
         }
         true
     }
