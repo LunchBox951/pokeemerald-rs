@@ -300,7 +300,6 @@ pub(super) fn forced_mover_runtime(
     )
 }
 
-/// A slide-east tile.
 pub(super) fn slide_east_runtime() -> MapRuntime<'static> {
     forced_mover_runtime(MB_SLIDE_EAST, Direction::East, false)
 }
