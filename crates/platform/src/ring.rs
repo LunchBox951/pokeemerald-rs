@@ -118,6 +118,13 @@ impl Producer {
     /// buffer already means playback has fallen behind generation.
     #[must_use = "a return value less than `samples.len()` means some samples were dropped"]
     pub fn push(&self, samples: &[f32]) -> usize {
+        self.push_staged(samples, || {})
+    }
+
+    /// [`Self::push`], running `after_store` once the samples are in their
+    /// slots and before they are published. Production passes a no-op; a test
+    /// passes the consumer's callback to land it inside the push.
+    fn push_staged(&self, samples: &[f32], after_store: impl FnOnce()) -> usize {
         let mut head = lock_head(&self.shared.head);
         // Acquire: synchronizes-with the consumer's `Release` `fetch_sub`,
         // so the slots it already read are visible as free before this call
@@ -127,16 +134,21 @@ impl Producer {
         let occupied = self.shared.occupied.load(Ordering::Acquire);
         let space = self.shared.capacity - occupied;
         let n = samples.len().min(space);
-        // Read before publishing: a pad counted after this point can only be
-        // silence following these samples (the consumer drained them first),
-        // which is not a dropout inside the stream.
-        let preceding_underruns = self.shared.underruns.load(Ordering::Acquire);
         for (i, &sample) in samples[..n].iter().enumerate() {
             let idx = (*head + i) % self.shared.capacity;
             self.shared.buffer[idx].store(sample.to_bits(), Ordering::Relaxed);
         }
+        after_store();
         if n > 0 {
             *head = (*head + n) % self.shared.capacity;
+            // Read after the stores, immediately before publishing: every pad
+            // counted by now was recorded while these samples were still
+            // unpublished, so it precedes them and is a dropout inside the
+            // stream. A pad counted after the publish can only follow them
+            // (the consumer drains them first), which is not. A pad that lands
+            // in the gap between this read and the publish is settled by the
+            // fill that delivers these samples.
+            let preceding_underruns = self.shared.underruns.load(Ordering::Acquire);
             self.shared
                 .settled_underruns
                 .fetch_max(preceding_underruns, Ordering::Relaxed);
@@ -363,6 +375,42 @@ mod tests {
         consumer.fill(&mut out3);
         assert_eq!(out3, [4.0, 5.0]);
         assert_eq!(consumer.underruns(), 12);
+    }
+
+    /// A pad the callback records while the final push is storing its
+    /// samples precedes them, so it is a dropout; the producer's own check
+    /// right after that push must already see it.
+    #[test]
+    fn final_push_racing_a_pad_is_visible_to_the_post_push_check() {
+        let (producer, mut consumer) = ring_buffer(8);
+        let baseline = producer.midstream_underruns();
+        let mut out = [9.0; 1];
+        let pushed = producer.push_staged(&[1.0, 2.0], || consumer.fill(&mut out));
+        assert_eq!(pushed, 2);
+        assert_eq!(
+            out,
+            [0.0],
+            "the callback ran before the samples were published"
+        );
+        assert_eq!(
+            producer.midstream_underruns() - baseline,
+            1,
+            "post-push check saw {} midstream underruns; the run actually had 1",
+            producer.midstream_underruns() - baseline
+        );
+    }
+
+    /// The pad can also land after the producer's last look but before the
+    /// publish; the delivering fill settles it, which is what a post-drain
+    /// recheck relies on.
+    #[test]
+    fn a_pad_before_the_publish_is_settled_once_the_samples_are_delivered() {
+        let (producer, mut consumer) = ring_buffer(8);
+        consumer.fill(&mut [9.0; 3]);
+        assert_eq!(producer.push(&[1.0, 2.0]), 2);
+        consumer.fill(&mut [9.0; 4]);
+        assert_eq!(producer.underruns(), 5);
+        assert_eq!(producer.midstream_underruns(), 3);
     }
 
     #[test]

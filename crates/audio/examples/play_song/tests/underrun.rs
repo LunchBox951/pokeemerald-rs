@@ -165,3 +165,30 @@ fn silence_after_the_final_enqueue_during_drain_and_tail_is_expected() {
     assert!(tail.is_ok());
     assert_eq!(output.stream_errors(), 0);
 }
+
+#[test]
+fn a_dropout_before_the_final_samples_is_caught_by_the_recheck_after_drain() {
+    // Mirrors `main`: the final frame is enqueued behind a pad, the device
+    // delivers it, the ring drains, and the guard is read once more.
+    let mut output = AudioOutput::null(64);
+    let producer = output.producer();
+    let baseline = output.midstream_underruns();
+    output.pull_null(&mut [0.0_f32; 16]);
+    push(&output, &[1.0_f32; 32]);
+
+    let mut device = [0.0_f32; 64];
+    output.pull_null(&mut device);
+    let drained = wait_for_drain(
+        producer.capacity(),
+        &policy(),
+        || producer.available_space(),
+        || output.stream_errors(),
+        Instant::now,
+        |_| panic!("the ring is already empty"),
+    );
+    assert!(drained.is_ok());
+    assert_eq!(
+        check_underruns(baseline, output.midstream_underruns()),
+        Err(UnderrunError { samples: 16 })
+    );
+}

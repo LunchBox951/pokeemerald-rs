@@ -152,6 +152,13 @@ fn main() -> ExitCode {
         eprintln!("audio playback stopped: {}", err.describe());
         return ExitCode::FAILURE;
     }
+    // A pad recorded while the final frame was being stored can slip past the
+    // check that followed that push; it is settled once the device has
+    // delivered those samples, which the drain above has just waited for.
+    if let Err(err) = check_underruns(underrun_baseline, output.midstream_underruns()) {
+        eprintln!("audio playback stopped: {}", err.describe());
+        return ExitCode::FAILURE;
+    }
     // Prefer the device's own measured playback position when it has one
     // (see `platform::AudioOutput::playback_progress`); the derived
     // `device_tail_wait` bound below is only the fallback for a host that
