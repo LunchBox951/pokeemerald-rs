@@ -263,6 +263,58 @@ fn two_ids_sharing_art_take_one_copy_each() {
     });
 }
 
+/// More ids than the ordinary locator hit cap, each sharing one sheet.
+const SHARING_IDS: usize = super::search::MATCH_LIMIT + 1;
+
+/// Locate [`SHARING_IDS`] ids sharing one sheet planted once per id, by
+/// `encoding`, and require each to take its own copy in address order.
+fn assert_every_sharing_id_takes_its_own_copy(name: &str, encoding: Encoding) {
+    let tiles = distinctive_tiles(4);
+    let stored = match encoding {
+        Encoding::Raw => tiles.clone(),
+        Encoding::Lz77 => lz77_literals(&tiles),
+    };
+    let mut fixture = RomFixture::new().emerald_header();
+    let mut entries = Vec::new();
+    let mut queries = Vec::new();
+    for slot in 0..SHARING_IDS {
+        fixture = fixture.write(0x20_0000 + slot * 0x100, &stored);
+        let id = format!("sprite/{slot:02}");
+        entries.push(image_entry_from_tiles(id.clone(), &tiles, 4, 16, 16, None).expect("entry"));
+        queries.push(match encoding {
+            Encoding::Raw => ImageQuery::raw(id),
+            Encoding::Lz77 => ImageQuery::lz77(id),
+        });
+    }
+    let rom = fixture.finish();
+
+    with_context(name, &rom, entries, |ctx| {
+        let mut report = Vec::new();
+        let plans = locate_images(ctx, &queries, &mut report).expect("every id has a copy");
+        let addrs: Vec<u32> = plans.iter().map(|plan| plan.addr).collect();
+        let expected: Vec<u32> = (0..SHARING_IDS)
+            .map(|slot| 0x0820_0000 + u32::try_from(slot).expect("small") * 0x100)
+            .collect();
+        assert_eq!(addrs, expected);
+        assert!(
+            report
+                .iter()
+                .all(|line| line.resolution == Resolution::ArbitraryAmongIdentical),
+            "{report:?}"
+        );
+    });
+}
+
+#[test]
+fn more_raw_ids_than_the_hit_cap_each_take_one_copy() {
+    assert_every_sharing_id_takes_its_own_copy("shared-art-raw-over-cap", Encoding::Raw);
+}
+
+#[test]
+fn more_compressed_ids_than_the_hit_cap_each_take_one_copy() {
+    assert_every_sharing_id_takes_its_own_copy("shared-art-lz77-over-cap", Encoding::Lz77);
+}
+
 #[test]
 fn one_id_with_two_copies_takes_the_lower_address() {
     let tiles = distinctive_tiles(4);

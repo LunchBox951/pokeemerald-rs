@@ -25,6 +25,7 @@ use super::error::GenRomProfileError;
 use super::locate::to_addr;
 use super::pack_source::{image_tiles, metatile_candidates, PackSource};
 use super::plan::{ImagePlan, ReportLine, Resolution};
+use super::search::MATCH_LIMIT;
 use super::Context;
 
 /// One image to locate.
@@ -260,8 +261,12 @@ pub fn locate_images(
         }
     }
 
-    let raw_hits = ctx.raw.find_all(&raw_needles);
-    let lz_hits = ctx.lz77.find_all(&lz_needles);
+    // `assign` gives each id sharing art its own copy, so every copy up to
+    // one per query must survive the search; the ordinary cap would reject
+    // more identical-art ids than it. No more ids than queries can share.
+    let hit_limit = queries.len().max(MATCH_LIMIT);
+    let raw_hits = ctx.raw.find_all_up_to(&raw_needles, hit_limit);
+    let lz_hits = ctx.lz77.find_all_up_to(&lz_needles, hit_limit);
 
     // Per query, every (address, packing) the ROM matched.
     let mut found: Vec<Candidates> = vec![BTreeMap::new(); queries.len()];
