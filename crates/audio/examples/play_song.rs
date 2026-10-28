@@ -130,8 +130,7 @@ fn main() -> ExitCode {
         // sample followed, so this sees every dropout so far (the count only
         // grows) yet ignores the end-of-song padding even if the device
         // drains the ring before this line runs.
-        if let Err(err) = check_underruns(underrun_baseline, output.midstream_underruns()) {
-            eprintln!("audio playback stopped: {}", err.describe());
+        if !playback_is_gapless(underrun_baseline, &output) {
             return ExitCode::FAILURE;
         }
         wait_for_frame_deadline(
@@ -155,8 +154,7 @@ fn main() -> ExitCode {
     // A pad recorded while the final frame was being stored can slip past the
     // check that followed that push; it is settled once the device has
     // delivered those samples, which the drain above has just waited for.
-    if let Err(err) = check_underruns(underrun_baseline, output.midstream_underruns()) {
-        eprintln!("audio playback stopped: {}", err.describe());
+    if !playback_is_gapless(underrun_baseline, &output) {
         return ExitCode::FAILURE;
     }
     // Prefer the device's own measured playback position when it has one
@@ -173,7 +171,7 @@ fn main() -> ExitCode {
         )
     });
     let derived_tail = device_tail_wait(output.max_callback_frames(), output.device_sample_rate());
-    let tail_result = wait_for_device_tail_or_measured(
+    if let Err(err) = wait_for_device_tail_or_measured(
         submitted_target,
         derived_tail,
         output.device_sample_rate(),
@@ -182,12 +180,22 @@ fn main() -> ExitCode {
         || output.stream_errors(),
         Instant::now,
         std::thread::sleep,
-    );
-    if let Err(err) = tail_result {
+    ) {
         eprintln!("audio playback stopped: {}", err.describe());
         return ExitCode::FAILURE;
     }
     ExitCode::SUCCESS
+}
+
+/// Report a dropout since `baseline` on stderr; `false` means the run failed.
+fn playback_is_gapless(baseline: u64, output: &AudioOutput) -> bool {
+    match check_underruns(baseline, output.midstream_underruns()) {
+        Ok(()) => true,
+        Err(err) => {
+            eprintln!("audio playback stopped: {}", err.describe());
+            false
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
