@@ -547,6 +547,17 @@ impl Battle {
             .chain(after.iter())
     }
 
+    /// Returns where the active player Pokémon sits in the order
+    /// [`Battle::player_members`] yields -- `0` until a replacement, as
+    /// upstream's `gBattlerPartyIndexes` entry for the player's battler
+    /// names the member out. When no member started fainted, every member
+    /// before it was out at some point, because a replacement always takes the
+    /// first reserve that has not fainted.
+    #[must_use]
+    pub const fn player_position(&self) -> usize {
+        self.player_slot
+    }
+
     /// Returns the opponent's active Pokémon.
     #[must_use]
     pub const fn enemy(&self) -> &BattlePokemon {

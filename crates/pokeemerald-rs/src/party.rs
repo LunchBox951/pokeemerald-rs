@@ -839,6 +839,29 @@ impl LoadedLead {
         })
     }
 
+    /// Adopts the member saved in `slot` as a battle reserve: its battler, its
+    /// record and the offset its load hid, ready for a later merge into that
+    /// same slot. Unlike [`Self::load`] this inspects only `record`, never
+    /// falling back to another slot, and logs nothing.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PartyError::Egg`] for an egg or Bad Egg, and the decode
+    /// error for a record that is empty or does not decode.
+    pub(crate) fn load_slot(dex: &Dex, slot: usize, record: &Pokemon) -> Result<Self, PartyError> {
+        if record_is_egg_or_bad_egg(record) {
+            return Err(PartyError::Egg);
+        }
+        let battler = from_save_pokemon(dex, record)?;
+        let hidden_hp_offset = hp_hidden_by_load(dex, record, &battler);
+        Ok(Self {
+            slot,
+            battler: Some(battler),
+            record: *record,
+            hidden_hp_offset,
+        })
+    }
+
     /// Adopts a member just created into slot 0: its battler and the record
     /// encoded from it, with the hidden-HP offset measured against that record.
     pub(crate) fn created(dex: &Dex, battler: BattlePokemon, record: Pokemon) -> Self {

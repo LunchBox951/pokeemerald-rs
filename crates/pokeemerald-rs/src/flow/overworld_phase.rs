@@ -40,6 +40,8 @@ use crate::new_game;
 use crate::overworld::{self, NpcDialog, OverworldScene, OverworldSceneError};
 use crate::start_menu::StartMenu;
 
+pub(super) use self::wild_battle::WildBattle;
+
 mod animated_door;
 mod connections;
 mod first_battle_conclusion;
@@ -142,7 +144,7 @@ pub(in crate::flow) enum SyntheticStartMenu {
 #[derive(Debug)]
 pub(super) enum ActiveBattle {
     /// A random wild encounter.
-    Wild(battle::Battle),
+    Wild(WildBattle),
     /// The Route 101 scripted first battle.
     First(battle::Battle),
     /// The Route 103 rival battle, with the trainer it is fought against.

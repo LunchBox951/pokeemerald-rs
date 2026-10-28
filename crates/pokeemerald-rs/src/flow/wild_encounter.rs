@@ -20,9 +20,13 @@
 //!
 //! # Wild-battle loss
 //!
-//! A terminal battle is written back before [`advance_wild_battle`] returns its outcome. Its
-//! same-frame caller sends [`BattleOutcome::PlayerLost`] through the overworld white-out,
-//! which heals the lead before another field frame can observe it.
+//! A terminal battle is written back before its same-frame caller reads the outcome:
+//! [`advance_wild_battle`] hands back every player-side member, and the caller files each
+//! one that entered into its own saved slot. `BattleOutcome::PlayerLost` is the battle's
+//! report that the whole party is exhausted (`Cmd_checkteamslost`,
+//! `src/battle_script_commands.c:3534-3564`), and only it goes through the overworld
+//! white-out (`CB2_EndWildBattle`, `src/battle_setup.c:602-616`), which heals the party
+//! before another field frame can observe it.
 //!
 //! # Lead-health eligibility
 //!
@@ -31,16 +35,14 @@
 //! loading heals the single-member Route 101 rescue state that can otherwise contain a
 //! fainted lead.
 
-use battle::{
-    Battle, BattleError, BattleOutcome, BattlePokemon, BattleRng, Dex, Gender, Nature, PlayerAction,
-};
+use battle::{Battle, BattleError, BattlePokemon, BattleRng, Dex, Gender, Nature, PlayerAction};
 use engine::overworld::metatile_behavior::MB_NORMAL;
 use engine::overworld::warp::WarpTrigger;
 use engine::overworld::wild_encounter::{WildEncounter, WildEncounterState};
 use engine::overworld::{MapRuntime, TilePos};
 use engine::rng::Rng;
 
-use super::battle_finalize::finalize_battle_turn;
+use super::battle_finalize::{finalize_party_battle_turn, PartyBattleEnd};
 use super::lead_screen::ensure_lead_can_battle;
 use super::move_learn::settle_move_learn_prompts;
 
@@ -147,7 +149,8 @@ fn consume_unmodelled_wild_held_item_draw(rng: &mut Rng) {
 }
 
 #[cfg(test)]
-/// [`start_wild_battle_with_lead_effects`] for a party whose slot 0 is `player_lead`.
+/// [`start_wild_battle_with_lead_effects`] for a party that is only `player_lead`, whose
+/// slot is 0.
 pub(super) fn start_wild_battle(
     player_lead: BattlePokemon,
     encounter: WildEncounter,
@@ -160,6 +163,7 @@ pub(super) fn start_wild_battle(
         crate::party::live_lead_cute_charm_wild_gender(&Dex::new(), &player_lead);
     start_wild_battle_with_lead_effects(
         player_lead,
+        Vec::new(),
         synchronize_nature,
         cute_charm_gender,
         encounter,
@@ -178,8 +182,12 @@ pub(super) fn start_wild_battle(
 /// `cute_charm_gender` is the gender slot 0 hands the wild mon when it is a non-egg
 /// Cute Charm holder (`CreateWildMon`, `wild_encounter.c:395-412`). Slot 0 need not be
 /// the battle lead `player_lead` when it is fainted.
+///
+/// `player_reserves` are the other saved party members that may be sent out, in slot
+/// order ([`Battle::new_with_player_reserves`]).
 pub(super) fn start_wild_battle_with_lead_effects(
     player_lead: BattlePokemon,
+    player_reserves: Vec<BattlePokemon>,
     synchronize_nature: Option<Nature>,
     cute_charm_gender: Option<Gender>,
     encounter: WildEncounter,
@@ -202,20 +210,23 @@ pub(super) fn start_wild_battle_with_lead_effects(
     consume_unmodelled_wild_held_item_draw(rng);
 
     let is_scripted_first_battle = false;
-    Battle::new(
+    Battle::new_with_player_reserves(
         dex,
         player_lead,
+        player_reserves,
         wild_opponent,
         is_scripted_first_battle,
         &mut SharedRng::new(rng),
     )
 }
 
+/// Plays one turn of `battle_slot`. A battle that ends, or whose turn fails, leaves the slot
+/// empty and is returned with its whole player-side party; an ongoing one, or an empty
+/// slot, returns `None`.
 pub(super) fn advance_wild_battle(
     battle_slot: &mut Option<Battle>,
-    player_lead: &mut Option<BattlePokemon>,
     rng: &mut Rng,
-) -> Option<BattleOutcome> {
+) -> Option<PartyBattleEnd> {
     let battle = battle_slot.as_mut()?;
     let player_action = PlayerAction::Run;
     let turn_failed = match battle.take_turn(player_action, &mut SharedRng::new(rng)) {
@@ -226,7 +237,7 @@ pub(super) fn advance_wild_battle(
         }
     };
     let _ = settle_move_learn_prompts(battle, rng);
-    finalize_battle_turn(battle_slot, turn_failed, player_lead)
+    finalize_party_battle_turn(battle_slot, turn_failed)
 }
 
 #[cfg(test)]
@@ -239,6 +250,8 @@ mod cute_charm_gender_tests;
 mod encounter_roll_tests;
 #[cfg(test)]
 mod first_battle_recovery_tests;
+#[cfg(test)]
+mod full_party_tests;
 #[cfg(test)]
 mod test_support;
 #[cfg(test)]
