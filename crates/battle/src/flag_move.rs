@@ -12,13 +12,13 @@ use crate::error::BattleError;
 use crate::pokemon::BattlePokemon;
 
 /// Focus Energy's move effect.
-pub const EFFECT_FOCUS_ENERGY: MoveEffect = MoveEffect(47);
+pub const EFFECT_FOCUS_ENERGY: MoveEffect = MoveEffect::FOCUS_ENERGY;
 
 /// Splash's move effect.
-pub const EFFECT_SPLASH: MoveEffect = MoveEffect(85);
+pub const EFFECT_SPLASH: MoveEffect = MoveEffect::SPLASH;
 
 /// Charge's move effect.
-pub const EFFECT_CHARGE: MoveEffect = MoveEffect(174);
+pub const EFFECT_CHARGE: MoveEffect = MoveEffect::CHARGE;
 
 const FLAG_MOVE_EFFECTS: [MoveEffect; 3] = [EFFECT_FOCUS_ENERGY, EFFECT_SPLASH, EFFECT_CHARGE];
 

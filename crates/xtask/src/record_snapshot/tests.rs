@@ -99,13 +99,25 @@ fn synthetic_main_menu_pack_bytes_with_background(background: u16) -> Vec<u8> {
     let mut frame_palette = vec![0u8; 32];
     frame_palette[2..4].copy_from_slice(&WINDOW_FRAME_GREEN_BGR555.to_le_bytes());
 
-    let font_pixels =
-        vec![0u8; (assets::fonts::SHEET_WIDTH * assets::fonts::SHEET_HEIGHT) as usize];
+    // `MainMenuScene` loads every modelled Latin sheet for its printers.
+    let font_entries = [
+        "font/small/glyphs",
+        "font/normal/glyphs",
+        "font/short/glyphs",
+        "font/narrow/glyphs",
+        "font/small_narrow/glyphs",
+    ]
+    .map(|id| Entry {
+        id,
+        kind: EntryKind::Image,
+        meta: image_meta(assets::fonts::SHEET_WIDTH, assets::fonts::SHEET_HEIGHT, 2),
+        payload: vec![0u8; (assets::fonts::SHEET_WIDTH * assets::fonts::SHEET_HEIGHT) as usize],
+    });
 
     let mut bg_palette = vec![0u8; 32];
     bg_palette[0..2].copy_from_slice(&background.to_le_bytes());
 
-    write_synthetic_pack(vec![
+    let mut entries = vec![
         Entry {
             id: "text-window/image/1",
             kind: EntryKind::Image,
@@ -119,18 +131,14 @@ fn synthetic_main_menu_pack_bytes_with_background(background: u16) -> Vec<u8> {
             payload: frame_palette,
         },
         Entry {
-            id: "font/normal/glyphs",
-            kind: EntryKind::Image,
-            meta: image_meta(assets::fonts::SHEET_WIDTH, assets::fonts::SHEET_HEIGHT, 2),
-            payload: font_pixels,
-        },
-        Entry {
             id: "interface/palette/main_menu_bg",
             kind: EntryKind::Palette,
             meta: palette_meta(16),
             payload: bg_palette,
         },
-    ])
+    ];
+    entries.extend(font_entries);
+    write_synthetic_pack(entries)
 }
 
 fn scratch_path(name: &str) -> PathBuf {

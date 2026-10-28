@@ -31,7 +31,7 @@ fn continued(phase: &OverworldPhase, position: (i32, i32)) -> OverworldPhase {
     let bytes = block1.to_bytes(SAVE_KEY);
     let restored = engine::save::SaveBlock1::from_bytes(&bytes, SAVE_KEY).unwrap();
     OverworldPhase::from_saved(
-        crate::overworld::test_support::synthetic_scene(20, 20),
+        crate::overworld::test_support::synthetic_scene(20, 20).in_room_for_test(LITTLEROOT),
         LITTLEROOT,
         restored,
         phase.save2.clone(),

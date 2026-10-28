@@ -253,6 +253,7 @@ fn locate_specials(
                 continue;
             };
             if let Some(addr) = by_neighbor(
+                template.symbol,
                 templates,
                 &streams,
                 &placed,
@@ -361,8 +362,11 @@ fn place_type_rows(
     Ok(())
 }
 
-/// The one candidate `neighbor` allows, if its anchor is placed yet.
+/// The one candidate `neighbor` allows for the template `own_symbol`, if its
+/// anchor is placed yet. A refusal blames `own_symbol`, the template that did
+/// not resolve; the anchor appears only in the reason.
 fn by_neighbor(
+    own_symbol: &str,
     templates: &[assets::pack::SpecialTemplate],
     streams: &[&[u8]],
     placed: &[Option<Placed>],
@@ -391,8 +395,8 @@ fn by_neighbor(
         anchor_addr.checked_sub(own_len)
     };
     only_one_matching(
-        &special_id(symbol),
-        "the declared neighbour's address",
+        &special_id(own_symbol),
+        &format!("the address beside its declared neighbour {symbol}"),
         candidates.iter().copied(),
         |&candidate| Some(candidate) == wanted,
     )
