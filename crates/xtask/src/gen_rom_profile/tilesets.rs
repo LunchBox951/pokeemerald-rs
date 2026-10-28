@@ -128,7 +128,12 @@ fn locate_one(
     let is_secondary = u8_at_addr(ctx.rom, struct_addr + FIELD_IS_SECONDARY) == Some(1);
     let tiles_addr = field(ctx, struct_addr, FIELD_TILES, name)?;
     let palettes_addr = field(ctx, struct_addr, FIELD_PALETTES, name)?;
-    let callback = u32_at_addr(ctx.rom, struct_addr + FIELD_CALLBACK).unwrap_or(0);
+    let callback = u32_at_addr(ctx.rom, struct_addr + FIELD_CALLBACK).ok_or_else(|| {
+        GenRomProfileError::StructMismatch {
+            id: name.to_owned(),
+            reason: format!("field +{FIELD_CALLBACK:#04x} is not fully inside the ROM"),
+        }
+    })?;
 
     let upstream = camel_case(name);
     report.push(
@@ -196,10 +201,14 @@ fn is_tileset_struct(ctx: &Context<'_>, base: u32, metatiles: u32, attributes: u
         u32_at_addr(ctx.rom, base + at)
             .is_some_and(|value| super::locate::to_offset(value).is_some())
     };
+    // The callback is a code pointer, so any value is allowed, but the whole
+    // word must be readable: a struct cut off at the ROM tail is not one.
+    let callback_readable = u32_at_addr(ctx.rom, base + FIELD_CALLBACK).is_some();
     flag_ok(base + FIELD_IS_COMPRESSED)
         && flag_ok(base + FIELD_IS_SECONDARY)
         && ptr_ok(FIELD_TILES)
         && ptr_ok(FIELD_PALETTES)
+        && callback_readable
         && u32_at_addr(ctx.rom, base + FIELD_METATILES) == Some(metatiles)
         && u32_at_addr(ctx.rom, base + FIELD_METATILE_ATTRIBUTES) == Some(attributes)
 }
@@ -403,7 +412,7 @@ pub fn len32(payload: &[u8]) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{frame_number, locate_one, locate_palettes};
+    use super::{frame_number, locate_one, locate_palettes, TILESET_STRUCT_BYTES};
     use crate::gen_rom_profile::error::GenRomProfileError;
     use crate::gen_rom_profile::tests::image_twin;
     use crate::gen_rom_profile::tests::with_context;
@@ -488,5 +497,68 @@ mod tests {
                 "{err:?}"
             );
         }
+    }
+
+    /// A demo tileset whose `struct Tileset` sits at `STRUCT_OFFSET` and whose
+    /// ROM image ends `rom_len` bytes into it.
+    fn locate_struct_cut_at(name: &str, rom_len: u32) -> Result<(), GenRomProfileError> {
+        const STRUCT_OFFSET: usize = 0x20_0000;
+        let metatiles = [1u8, 2, 3, 4, 5, 6, 7, 8];
+        let attributes = [9u8, 10, 11, 12, 13, 14, 15, 16];
+        let bus = |offset: usize| {
+            u32::try_from(offset).expect("offset fits in u32") + rom_import::ROM_BASE
+        };
+        let mut tileset = Vec::new();
+        tileset.extend_from_slice(&[0, 0, 0, 0]);
+        tileset.extend_from_slice(&bus(0x12_0000).to_le_bytes());
+        tileset.extend_from_slice(&bus(0x13_0000).to_le_bytes());
+        tileset.extend_from_slice(&bus(0x10_0000).to_le_bytes());
+        tileset.extend_from_slice(&bus(0x11_0000).to_le_bytes());
+        tileset.extend_from_slice(&0u32.to_le_bytes());
+        assert_eq!(tileset.len(), TILESET_STRUCT_BYTES as usize);
+        let rom = RomFixture::new()
+            .emerald_header()
+            .write(0x10_0000, &metatiles)
+            .write(0x11_0000, &attributes)
+            .write(STRUCT_OFFSET, &tileset)
+            .truncate(STRUCT_OFFSET + rom_len as usize)
+            .finish();
+        let entries = vec![
+            raw_entry("tileset/demo/metatiles".to_owned(), metatiles.to_vec()),
+            raw_entry(
+                "tileset/demo/metatile-attributes".to_owned(),
+                attributes.to_vec(),
+            ),
+        ];
+        with_context(name, &rom, entries, |ctx| {
+            locate_one(ctx, "demo", &mut Vec::new()).map(|_| ())
+        })
+    }
+
+    #[test]
+    fn a_tileset_struct_cut_off_inside_its_callback_is_not_accepted() {
+        // The metatile table points at a struct whose callback word is only
+        // half in the ROM: no candidate is a `struct Tileset`.
+        let err = locate_struct_cut_at("tileset-callback-cut", 0x16)
+            .expect_err("a struct truncated at the ROM tail is refused");
+        match err {
+            GenRomProfileError::StructMismatch { id, reason } => {
+                assert_eq!(id, "demo");
+                assert!(reason.contains("0 candidates"), "{reason}");
+            }
+            other => panic!("unexpected error {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_tileset_struct_with_its_whole_callback_passes_the_layout_check() {
+        // The same ROM with the final word present clears the layout check and
+        // fails later, on the tiles the synthetic pack does not hold.
+        let err = locate_struct_cut_at("tileset-callback-whole", TILESET_STRUCT_BYTES)
+            .expect_err("the pack holds no tiles entry");
+        assert!(
+            !matches!(&err, GenRomProfileError::StructMismatch { id, .. } if id == "demo"),
+            "{err:?}"
+        );
     }
 }
