@@ -72,6 +72,9 @@ fn apply_flag(entry: &mut MidiCfgEntry, token: &str) -> Result<(), MidiError> {
         EXACT_GATE_TIME_FLAG => entry.exact_gate_time = true,
         DOUBLE_CLOCKS_PER_BEAT_FLAG => entry.clocks_per_beat = DOUBLE_CLOCKS_PER_BEAT,
         ASSEMBLY_OUTPUT_LABEL_FLAG | DISABLE_ASSEMBLY_COMPRESSION_FLAG => {}
+        VOICEGROUP_FLAG if value.is_empty() => {
+            return Err(MidiError::CfgMalformedFlag(token.to_owned()));
+        }
         VOICEGROUP_FLAG => value
             .trim_start_matches('_')
             .clone_into(&mut entry.voicegroup_label),
@@ -84,7 +87,8 @@ fn apply_flag(entry: &mut MidiCfgEntry, token: &str) -> Result<(), MidiError> {
 }
 
 /// Parses the flags for `filename` without requiring a `-G` flag: an entry that omits it keeps
-/// an empty [`MidiCfgEntry::voicegroup_label`].
+/// an empty [`MidiCfgEntry::voicegroup_label`], while a `-G` with no operand is still a
+/// [`MidiError::CfgMalformedFlag`].
 ///
 /// # Errors
 ///
