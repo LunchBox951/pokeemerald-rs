@@ -131,8 +131,12 @@ pub(super) fn undo_created_directories_with_capture_hooks(
                 }
             }
         };
-        match rustix::fs::statat(parent, &dir.name, AtFlags::SYMLINK_NOFOLLOW) {
-            Ok(stat) if is_this_level(dir, &stat) => {
+        // A held original whose `fstat` fails is the lookup's error, not a
+        // verdict on whose directory sits at the name.
+        let looked_up = rustix::fs::statat(parent, &dir.name, AtFlags::SYMLINK_NOFOLLOW)
+            .and_then(|stat| Ok((stat, is_this_level(dir, &stat)?)));
+        match looked_up {
+            Ok((_, true)) => {
                 before_take();
                 if quarantine.is_none() {
                     quarantine = claim_quarantine(created, dir);
@@ -165,7 +169,7 @@ pub(super) fn undo_created_directories_with_capture_hooks(
             // longer held open to vouch for it: not provably this run's
             // directory, so it is left alone, and the levels above are left
             // too.
-            Ok(stat) => {
+            Ok((stat, false)) => {
                 if same_directory_identity(&stat, &dir.identity) {
                     warn_left_standing(
                         dir,
@@ -241,12 +245,29 @@ fn take_back_beside(parent: &OwnedFd, dir: &CreatedDirectory) -> bool {
     }
 }
 
-/// Whether `stat` is the directory `dir` created and still holds open.
-fn is_this_level(dir: &CreatedDirectory, stat: &rustix::fs::Stat) -> bool {
-    same_directory_identity(stat, &dir.identity)
-        && dir.own.as_ref().is_some_and(|own| {
-            rustix::fs::fstat(&**own).is_ok_and(|held| same_directory_identity(stat, &held))
-        })
+/// Whether `stat` is the directory `dir` created and still holds open. A
+/// held original whose `fstat` fails is the error, not a verdict.
+fn is_this_level(dir: &CreatedDirectory, stat: &rustix::fs::Stat) -> rustix::io::Result<bool> {
+    is_this_level_held_as(dir, stat, &|own| rustix::fs::fstat(own))
+}
+
+/// How the held original is examined: `fstat`, or a test's stand-in that
+/// fails.
+type HeldStat<'h> = dyn Fn(BorrowedFd<'_>) -> rustix::io::Result<rustix::fs::Stat> + 'h;
+
+/// [`is_this_level`] with the held original examined by `held_stat`.
+fn is_this_level_held_as(
+    dir: &CreatedDirectory,
+    stat: &rustix::fs::Stat,
+    held_stat: &HeldStat<'_>,
+) -> rustix::io::Result<bool> {
+    if !same_directory_identity(stat, &dir.identity) {
+        return Ok(false);
+    }
+    let Some(own) = dir.own.as_deref() else {
+        return Ok(false);
+    };
+    Ok(same_directory_identity(stat, &held_stat(own.as_fd())?))
 }
 
 /// The entry name a captured level sits under inside its quarantine.
@@ -559,7 +580,14 @@ fn take_back_into(
     dir: &CreatedDirectory,
     in_quarantine: &mut dyn FnMut(CaptureStage, BorrowedFd<'_>),
 ) -> Outcome {
-    take_back_into_revalidating(quarantine, parent, dir, in_quarantine, &holds_this_level)
+    take_back_into_revalidating(
+        quarantine,
+        parent,
+        dir,
+        in_quarantine,
+        &|own| rustix::fs::fstat(own),
+        &holds_this_level,
+    )
 }
 
 /// What re-checks a put-back capture: [`holds_this_level`], or a test's
@@ -567,14 +595,16 @@ fn take_back_into(
 type Revalidate<'r> =
     dyn Fn(BorrowedFd<'_>, &OsStr, &CreatedDirectory) -> rustix::io::Result<bool> + 'r;
 
-/// [`take_back_into`] with what was put back re-checked by `revalidate`
-/// instead of [`holds_this_level`], so a test can make that examination
-/// fail.
+/// [`take_back_into`] with the capture's held original examined by
+/// `held_stat` instead of `fstat`, and what was put back re-checked by
+/// `revalidate` instead of [`holds_this_level`], so a test can make either
+/// examination fail.
 fn take_back_into_revalidating(
     quarantine: &Quarantine<'_>,
     parent: &OwnedFd,
     dir: &CreatedDirectory,
     in_quarantine: &mut dyn FnMut(CaptureStage, BorrowedFd<'_>),
+    held_stat: &HeldStat<'_>,
     revalidate: &Revalidate<'_>,
 ) -> Outcome {
     let Some(held) = quarantine.fd() else {
@@ -604,8 +634,10 @@ fn take_back_into_revalidating(
         return Outcome::Stopped;
     }
     in_quarantine(CaptureStage::BeforeCheck, held);
-    let captured = rustix::fs::statat(held, QUARANTINE_ENTRY, AtFlags::SYMLINK_NOFOLLOW);
-    let ours = captured.as_ref().is_ok_and(|stat| is_this_level(dir, stat));
+    // The capture's lookup or its held original's `fstat` failing is the
+    // examination's error, reported below, not a verdict that it is not ours.
+    let captured = check_capture(held, dir, held_stat);
+    let ours = matches!(captured, Ok(true));
     let not_removed = if ours {
         in_quarantine(CaptureStage::Verified, held);
         match rustix::fs::unlinkat(held, QUARANTINE_ENTRY, AtFlags::REMOVEDIR) {
@@ -714,6 +746,17 @@ fn take_back_into_revalidating(
         ),
     }
     Outcome::Stopped
+}
+
+/// Whether the capture in `quarantine` is `dir`, with its held original
+/// examined by `held_stat`; a failed lookup or examination is the error.
+fn check_capture(
+    quarantine: BorrowedFd<'_>,
+    dir: &CreatedDirectory,
+    held_stat: &HeldStat<'_>,
+) -> rustix::io::Result<bool> {
+    rustix::fs::statat(quarantine, QUARANTINE_ENTRY, AtFlags::SYMLINK_NOFOLLOW)
+        .and_then(|stat| is_this_level_held_as(dir, &stat, held_stat))
 }
 
 /// The held directory and name a capture of `dir` that `put` back from
@@ -881,13 +924,7 @@ fn holds_this_level(
         Err(err) if err == rustix::io::Errno::NOENT => return Ok(false),
         Err(err) => return Err(err),
     };
-    if !same_directory_identity(&stat, &dir.identity) {
-        return Ok(false);
-    }
-    let Some(own) = dir.own.as_deref() else {
-        return Ok(false);
-    };
-    Ok(same_directory_identity(&stat, &rustix::fs::fstat(own)?))
+    is_this_level(dir, &stat)
 }
 
 /// Moves the capture in `quarantine` (named `quarantine_name` in the held
@@ -1189,9 +1226,40 @@ pub(super) fn take_back_level_revalidation_failing(
     else {
         return false;
     };
-    let taken =
-        take_back_into_revalidating(&quarantine, parent, dir, in_quarantine, &|_, _, _| Err(err))
-            == Outcome::Taken;
+    let taken = take_back_into_revalidating(
+        &quarantine,
+        parent,
+        dir,
+        in_quarantine,
+        &|own| rustix::fs::fstat(own),
+        &|_, _, _| Err(err),
+    ) == Outcome::Taken;
+    remove_quarantine(&quarantine, &mut || {});
+    taken
+}
+
+#[cfg(test)]
+/// [`take_back_level_via`] with the captured level's held original
+/// examined as failing with `err` when the capture is checked, while every
+/// later examination is real.
+pub(super) fn take_back_level_capture_check_failing(
+    parent: &OwnedFd,
+    dir: &CreatedDirectory,
+    quarantine_name: &str,
+    err: rustix::io::Errno,
+) -> bool {
+    let Some(quarantine) = open_quarantine(parent.as_fd(), dir, quarantine_name, dir, &mut || {})
+    else {
+        return false;
+    };
+    let taken = take_back_into_revalidating(
+        &quarantine,
+        parent,
+        dir,
+        &mut |_, _| {},
+        &|_| Err(err),
+        &holds_this_level,
+    ) == Outcome::Taken;
     remove_quarantine(&quarantine, &mut || {});
     taken
 }

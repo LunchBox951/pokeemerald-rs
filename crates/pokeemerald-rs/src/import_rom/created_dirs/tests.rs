@@ -3050,3 +3050,43 @@ fn a_moved_quarantine_that_cannot_be_examined_is_reported_with_the_error() {
     assert!(!level.exists() && !name.exists());
     assert!(entry_names(&away).is_empty(), "the moved quarantine stays");
 }
+
+#[cfg(unix)]
+#[test]
+fn a_capture_whose_held_original_cannot_be_examined_is_reported_with_the_error() {
+    // The capture's lookup matches the level's identity, but its held
+    // original's `fstat` fails (EIO through a test seam) while it is
+    // checked: the level is put back under its name and the walk stops with
+    // that error as the cause, not a claim that another entry took the name
+    // or that the level was moved away.
+    if !in_rollback_stderr_child() {
+        let stderr = rerun_alone_for_stderr(
+            "import_rom::created_dirs::tests::a_capture_whose_held_original_cannot_be_examined_is_reported_with_the_error",
+        );
+        let io = std::io::Error::from(rustix::io::Errno::IO).to_string();
+        assert!(
+            stderr.contains(&format!(
+                "/new is left in place: it could not be examined in its cleanup directory: {io}; the levels above it are left too"
+            )),
+            "the unexamined capture is not reported with its error; stderr:\n{stderr}"
+        );
+        assert!(
+            !stderr.contains("another entry has taken its name") && !stderr.contains("moved away"),
+            "the examination error is reported as a replacement or move; stderr:\n{stderr}"
+        );
+        return;
+    }
+    let dir = TempDir::new("capture-held-unexamined");
+    let level = dir.join("new");
+    let created = super::create_directories(&level).unwrap();
+    let parent = created[0].parent.as_deref().unwrap();
+    let proceeded = super::take_back::take_back_level_capture_check_failing(
+        parent,
+        &created[0],
+        ".undo-r",
+        rustix::io::Errno::IO,
+    );
+    assert!(!proceeded, "the walk stops at the unexamined level");
+    assert!(level.is_dir(), "the level is put back under its name");
+    assert_eq!(entry_names(&dir.path), ["new"], "no quarantine is left");
+}
