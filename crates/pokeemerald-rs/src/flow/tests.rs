@@ -59,6 +59,38 @@ pub(super) fn drive_through_fade_wait(
     panic!("fade wait did not reach `Done` within {MAX_FADE_WAIT_FRAMES} frames");
 }
 
+/// Steps the fresh boot's menu setup after the title fade's done frame
+/// (`scene`, the [`AppScene::MainMenuFadeIn`] handed off on it) with no input
+/// until the menu is ready to read input: the white fade-in, then the save
+/// check (F), the battery check, the windows, and the highlight (F+3), the last
+/// frame before the first input poll (`InitMainMenu(FALSE)`,
+/// `main_menu.c:583-608`). Returns the menu and that frame.
+/// `boot_setup_frames_tests` pins the frame counts.
+///
+/// # Panics
+///
+/// If `scene` is not the setup handoff or the menu is not reached within
+/// [`MAX_FADE_WAIT_FRAMES`].
+pub(super) fn drive_through_menu_setup(
+    mut scene: AppScene,
+    save_slot: &mut SaveSlot,
+    pack_source: &crate::pack_source::PackSource,
+) -> (AppScene, Box<Frame>) {
+    assert!(
+        matches!(scene, AppScene::MainMenuFadeIn(_)),
+        "the title fade must hand off to the menu's fade-in and setup frames"
+    );
+    for _ in 0..MAX_FADE_WAIT_FRAMES {
+        let (next, frame) =
+            advance_scene(scene, ButtonState::new(), save_slot, pack_source.clone());
+        if matches!(next, AppScene::MainMenu(_)) {
+            return (next, frame);
+        }
+        scene = next;
+    }
+    panic!("the menu did not take input within {MAX_FADE_WAIT_FRAMES} frames");
+}
+
 pub(super) fn pressed(button: Buttons) -> ButtonState {
     let mut state = ButtonState::new();
     state.update(button);
@@ -249,7 +281,7 @@ fn title_a_or_start_button_transitions_to_main_menu() {
             "{button:?} on the title screen must first enter the white fade-wait state"
         );
 
-        let (next, wait_frames, _destination_frame) = drive_through_fade_wait(
+        let (next, wait_frames, done_frame) = drive_through_fade_wait(
             waiting,
             &mut save_slot,
             &crate::pack_source::PackSource::Repo,
@@ -259,13 +291,34 @@ fn title_a_or_start_button_transitions_to_main_menu() {
             "the retained title frame must visibly fade toward white while waiting"
         );
 
-        let AppScene::MainMenu(state) = next else {
+        // The menu fades in from white and runs its setup tasks; the first A
+        // it honours is the frame after that (`boot_setup_frames_tests`).
+        let (menu, _settled_frame) =
+            drive_through_menu_setup(next, &mut save_slot, &crate::pack_source::PackSource::Repo);
+        let AppScene::MainMenu(state) = &menu else {
             panic!("{button:?} on the title screen must transition to the main menu once the fade completes");
         };
         // With no save file at the scratch path, the boot load is
         // `SAVE_STATUS_EMPTY`, so upstream's `Task_MainMenuCheckSaveFile`
         // picks `HAS_NO_SAVED_GAME` (`main_menu.c:661-665`).
         assert_eq!(state.scene.menu_type(), MainMenuType::NoSavedGame);
+
+        // The handoff frame is still the title's white, and the first A
+        // honoured after the setup frames confirms NEW GAME.
+        assert!(
+            done_frame.iter().all(|&pixel| pixel == 0x00FF_FFFF),
+            "{button:?}: the title fade's handoff frame stays white"
+        );
+        let (confirmed, _frame) = advance_scene(
+            menu,
+            pressed(Buttons::A),
+            &mut save_slot,
+            crate::pack_source::PackSource::Repo,
+        );
+        assert!(
+            matches!(confirmed, AppScene::MainMenuFadeWait(_)),
+            "{button:?}: A once the setup frames are over confirms NEW GAME"
+        );
     }
 }
 
@@ -506,12 +559,14 @@ fn real_pack_title_transition_borders_the_main_menu_with_the_saves_window_frame(
         matches!(waiting, AppScene::TitleFadeWait(_)),
         "A on the title screen must first enter the white fade-wait state"
     );
-    let (next, _wait_frames, frame) = drive_through_fade_wait(
+    let (next, _wait_frames, _done_frame) = drive_through_fade_wait(
         waiting,
         &mut save_slot,
         &crate::pack_source::PackSource::Repo,
     );
-    let AppScene::MainMenu(state) = next else {
+    let (menu, frame) =
+        drive_through_menu_setup(next, &mut save_slot, &crate::pack_source::PackSource::Repo);
+    let AppScene::MainMenu(state) = menu else {
         panic!("A on the title screen must transition to the main menu once the fade completes");
     };
     assert_eq!(

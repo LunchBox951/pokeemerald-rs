@@ -5,13 +5,14 @@ use std::collections::BTreeMap;
 
 use assets::fonts::{FontId, OwnedFontGlyphSheet};
 use assets::items::ItemId;
-use assets::pack::{AssetPack, PalettedImage};
+use assets::pack::{AssetPack, MenuInfoIcon, MenuInfoLabel, PalettedImage};
 use engine::bag_menu::BagStack;
 use engine::text::render::{Printer, PrinterInput, RevealedGlyph, TextSpeed, TickEvent};
 use engine::text::window as msgwin;
 use engine::text::{Symbol, Token};
 use rendering::{AffineMatrix, Framebuffer, Rgb888};
 
+use super::sprite::SpriteSheet;
 use super::BagScreenError;
 use crate::textbox::{self, FrameAssets};
 
@@ -31,6 +32,13 @@ const WINDOW_SHADOW_INDEX: usize = 4;
 const NORMAL_SHADOW_INDEX: usize = 3;
 const GRAY_CURSOR_TEXT_INDEX: usize = 3;
 const GRAY_CURSOR_SHADOW_INDEX: usize = 6;
+/// The TM/HM move-data windows load menu-info palette 2 as their palette 12
+/// (`ListMenuLoadStdPalAt(BG_PLTT_ID(12), 1)`, `item_menu.c:2452`).
+const MOVE_DATA_PALETTE: usize = 1;
+/// `TEXT_DYNAMIC_COLOR_5` and `TEXT_DYNAMIC_COLOR_1` (`characters.h:244,248`),
+/// the text and shadow of `COLORID_TMHM_INFO` (`item_menu.c:390`).
+const MOVE_DATA_TEXT_INDEX: usize = 0xE;
+const MOVE_DATA_SHADOW_INDEX: usize = 0xA;
 /// `floor(256 * sin(2*pi*k/256))` for `k` in 0..=64: the first quarter turn of
 /// the 256-unit angle the rotating ball turns by, truncated as the hardware's
 /// sine table is.
@@ -118,8 +126,50 @@ impl Bitmap {
     }
 }
 
+impl Bitmap {
+    /// Draws the part of `rect` that fits `clip` pixels, with its top-left at
+    /// `origin`; index 0 stays transparent.
+    fn blit_rect(
+        &self,
+        fb: &mut Framebuffer,
+        origin: (i32, i32),
+        rect: MenuInfoIcon,
+        clip: (u32, u32),
+    ) {
+        let index = |value: u32| usize::try_from(value).unwrap_or(usize::MAX);
+        for y in 0..rect.height.min(clip.1) {
+            for x in 0..rect.width.min(clip.0) {
+                let (column, row) = (index(rect.x + x), index(rect.y + y));
+                if column >= self.width {
+                    continue;
+                }
+                let Some(&pixel) = self.pixels.get(row * self.width + column) else {
+                    continue;
+                };
+                if pixel == 0 {
+                    continue;
+                }
+                if let Some(&color) = self.palette.get(usize::from(pixel)) {
+                    put_at(fb, origin, (index(x), index(y)), color);
+                }
+            }
+        }
+    }
+}
+
+/// The menu-info icon sheet as the TM/HM move-data windows draw it, with the
+/// icon rectangles the pack's typed accessors place on it.
+#[derive(Debug)]
+struct MoveDataIcons {
+    sheet: Bitmap,
+    /// Indexed by combat type id (`gBattleMoves[].type`).
+    types: Vec<MenuInfoIcon>,
+    /// In [`MenuInfoLabel::ALL`] order, which is the window's row order.
+    labels: [MenuInfoIcon; MenuInfoLabel::ALL.len()],
+}
+
 /// `sin` of a 256-unit angle in 8.8 fixed point.
-fn sine(angle: u8) -> i16 {
+pub(super) fn sine(angle: u8) -> i16 {
     let at = usize::from(angle);
     match at {
         0..=64 => QUARTER_SINE[at],
@@ -148,7 +198,7 @@ fn put_at(fb: &mut Framebuffer, origin: (i32, i32), offset: (usize, usize), colo
     );
 }
 
-fn put(fb: &mut Framebuffer, x: i32, y: i32, color: Rgb888) {
+pub(super) fn put(fb: &mut Framebuffer, x: i32, y: i32, color: Rgb888) {
     if let (Ok(x), Ok(y)) = (usize::try_from(x), usize::try_from(y)) {
         if x < Framebuffer::WIDTH && y < Framebuffer::HEIGHT {
             fb.set_pixel(x, y, color);
@@ -169,9 +219,12 @@ pub(super) struct BagChrome {
     screen_palette: Vec<Rgb888>,
     bag: Bitmap,
     ball: Bitmap,
+    arrows: SpriteSheet,
+    swap_line: SpriteSheet,
     pub(super) hm_mark: Bitmap,
     pub(super) registered_mark: Bitmap,
     icons: BTreeMap<u16, Bitmap>,
+    move_data_icons: MoveDataIcons,
 }
 
 impl BagChrome {
@@ -200,9 +253,21 @@ impl BagChrome {
                 slot.insert(Bitmap::from_paletted(bag.item_icon(item)?));
             }
         }
+        let menu_info = bag.menu_info()?;
+        let move_data_icons = MoveDataIcons {
+            sheet: Bitmap::from_paletted(PalettedImage {
+                image: menu_info.sheet,
+                palette: menu_info.palettes[MOVE_DATA_PALETTE],
+            }),
+            types: (0..=u8::MAX)
+                .map_while(|type_id| menu_info.type_icon(type_id))
+                .collect(),
+            labels: MenuInfoLabel::ALL.map(|label| menu_info.label_icon(label)),
+        };
         let screen_palette = textbox::palette_colors(palette);
-        // The marks index the list window's palette, which the pack does not
-        // carry; the screen palette's second bank is the nearest it supplies.
+        // The marks are blitted into the list window, whose palette is bank 1
+        // of the bag screen palette (item_menu.c:394-402, 820-822, 968, 990),
+        // so the second bank is exact, not an approximation.
         let flat = |image: assets::pack::ImageRef<'_>| Bitmap {
             width: image.width as usize,
             height: image.height as usize,
@@ -222,10 +287,23 @@ impl BagChrome {
             screen_palette: screen_palette.clone(),
             bag: Bitmap::from_paletted(if female { bag.female } else { bag.male }),
             ball: Bitmap::from_paletted(bag.rotating_ball),
+            arrows: SpriteSheet::from_paletted(bag.scroll_indicator()?),
+            swap_line: SpriteSheet::from_paletted(bag.swap_line()?),
             hm_mark: flat(bag.hm),
             registered_mark: flat(bag.registered_select),
             icons,
+            move_data_icons,
         })
+    }
+
+    /// The list scroll-arrow sprites.
+    pub(super) fn arrow_sheet(&self) -> &SpriteSheet {
+        &self.arrows
+    }
+
+    /// The swap-line sprites.
+    pub(super) fn swap_line_sheet(&self) -> &SpriteSheet {
+        &self.swap_line
     }
 
     /// The icon decoded for `item`, or the close row's for `None`.
@@ -339,6 +417,51 @@ impl BagChrome {
     /// index 6 shadow.
     pub(super) fn gray_cursor_colors(&self) -> [Option<Rgb888>; 4] {
         self.bank_1_colors(GRAY_CURSOR_TEXT_INDEX, GRAY_CURSOR_SHADOW_INDEX)
+    }
+
+    /// The icon for the combat type `type_id`, if upstream has one.
+    pub(super) fn type_icon(&self, type_id: u8) -> Option<MenuInfoIcon> {
+        self.move_data_icons
+            .types
+            .get(usize::from(type_id))
+            .copied()
+    }
+
+    /// The TYPE, POWER, ACCURACY and PP label icons, top to bottom.
+    pub(super) fn label_icons(&self) -> [MenuInfoIcon; MenuInfoLabel::ALL.len()] {
+        self.move_data_icons.labels
+    }
+
+    /// Blits a menu-info icon (`BlitMenuInfoIcon`, `menu.c:2098`) at a
+    /// window-local `offset`, clipped to the window as the bitmap blit is.
+    pub(super) fn draw_menu_info_icon(
+        &self,
+        fb: &mut Framebuffer,
+        icon: MenuInfoIcon,
+        window: ((i32, i32), (u32, u32)),
+        offset: (i32, i32),
+    ) {
+        let (origin, size) = window;
+        let room = |extent: u32, at: i32| extent.saturating_sub(at.unsigned_abs());
+        self.move_data_icons.sheet.blit_rect(
+            fb,
+            (origin.0 + offset.0, origin.1 + offset.1),
+            icon,
+            (room(size.0, offset.0), room(size.1, offset.1)),
+        );
+    }
+
+    /// The move-data values' colours (`COLORID_TMHM_INFO`): menu-info palette
+    /// 2 index 14 text over index 10 shadow.
+    pub(super) fn move_data_text_colors(&self) -> [Option<Rgb888>; 4] {
+        let palette = &self.move_data_icons.sheet.palette;
+        let color = |index: usize| palette.get(index).copied();
+        [
+            None,
+            color(MOVE_DATA_TEXT_INDEX),
+            color(MOVE_DATA_SHADOW_INDEX),
+            None,
+        ]
     }
 
     fn bank_1_colors(&self, text: usize, shadow: usize) -> [Option<Rgb888>; 4] {

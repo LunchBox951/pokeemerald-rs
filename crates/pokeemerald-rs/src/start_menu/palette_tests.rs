@@ -136,6 +136,7 @@ fn a_saved_games_own_window_frame_choice_borders_the_start_menu() {
     let pack = AssetPack::load(&path).expect("the fixture pack is well-formed");
     let chrome =
         StartMenuChrome::from_pack(&pack, CHOSEN_FRAME).expect("the fixture pack has frame 5");
+    crate::pack_test_support::assert_carries_every_font(&chrome.label_printer(Vec::new()));
     let mut menu = StartMenu::assemble(chrome, 0);
 
     let frame_5_red = Bgr555::from_channels(31, 0, 0).to_rgb888();

@@ -4,6 +4,40 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 [`RELEASE.md` §Changelog](RELEASE.md#changelog) owns the update policy and entry format. Versions follow the repository's `FINAL.MAJOR.MINOR.PATCH` scheme.
 
+## [0.0.79.0] - 2026-10-28
+
+- A poisoned Pokémon now loses HP as you walk, faints at 0 HP, and if your whole party faints on the field you white out as in the original game. Saves now remember poison, paralysis and sleep.
+
+## [0.0.78.0] - 2026-10-27
+
+- The Bag now shows a TM or HM's move type, power, accuracy and PP while its menu is open.
+
+## [0.0.77.0] - 2026-10-27
+
+- General improvements in preparation for battle move animations.
+
+## [0.0.76.0] - 2026-10-26
+
+- General improvements in preparation for text that switches fonts mid-line.
+
+## [0.0.75.0] - 2026-10-26
+
+- General improvements in preparation for trainers using items in battle.
+
+## [0.0.74.0] - 2026-10-26
+
+- Mom now turns to face you when you start her dialogue.
+- Corrected the loudness of the Game Boy sound channels against sampled instruments.
+- General improvements to how your lead Pokémon is tracked between the field and battle.
+
+## [0.0.73.0] - 2026-10-26
+
+- General improvements in preparation for Pokémon cries extracted from your ROM.
+
+## [0.0.72.0] - 2026-10-26
+
+- General improvements in preparation for button icons in dialogue.
+
 ## [0.0.71.0] - 2026-10-24
 
 - Trainers who spot you on Route 103 now walk up and challenge you before the battle starts.
@@ -343,7 +377,15 @@ Concise patch notes for development versions, carried from `dev` through the rel
 
 - Initial prerelease establishing the repository release path, with an early title screen, new-game introduction, and exploration of the opening area.
 
-[0.0.71.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/ce0fd44c695f1ac523fc958f4401607339397c5b...dev
+[0.0.79.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/d828e8ae72b532a2de0148cbf62942cd0805b7ec...dev
+[0.0.78.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/7bb89a891a17166542bca78a24db79325000dae9...d828e8ae72b532a2de0148cbf62942cd0805b7ec
+[0.0.77.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/1bd4a0c1485db83589e2cf761f83c6c9cd37c2c6...7bb89a891a17166542bca78a24db79325000dae9
+[0.0.76.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/42b847579ee1ed8368ccf8fb64f932a7c9bd82f3...1bd4a0c1485db83589e2cf761f83c6c9cd37c2c6
+[0.0.75.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/36af396e97b06960838320cc158b442431b44783...42b847579ee1ed8368ccf8fb64f932a7c9bd82f3
+[0.0.74.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/98ba10237970a6e9de877ced16b1b223190090f0...36af396e97b06960838320cc158b442431b44783
+[0.0.73.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/8cee32b52a7ce45be4aa91b373848039a0cccd6d...98ba10237970a6e9de877ced16b1b223190090f0
+[0.0.72.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/dd1f5200aa09f2fd14fa5aa18b4dbd0c4a03fb3e...8cee32b52a7ce45be4aa91b373848039a0cccd6d
+[0.0.71.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/ce0fd44c695f1ac523fc958f4401607339397c5b...dd1f5200aa09f2fd14fa5aa18b4dbd0c4a03fb3e
 [0.0.70.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/ddd60e3efb8065b0d2a4606dbf63545b51174497...dev
 [0.0.69.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/eb737282b387d993825d6b0582e39de77b682582...ddd60e3efb8065b0d2a4606dbf63545b51174497
 [0.0.68.0]: https://github.com/LunchBox951/pokeemerald-rs/compare/974ece58d7d8a70dbaa7afe7f1b00923037faa59...eb737282b387d993825d6b0582e39de77b682582
