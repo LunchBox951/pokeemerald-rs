@@ -559,6 +559,24 @@ fn take_back_into(
     dir: &CreatedDirectory,
     in_quarantine: &mut dyn FnMut(CaptureStage, BorrowedFd<'_>),
 ) -> Outcome {
+    take_back_into_revalidating(quarantine, parent, dir, in_quarantine, &holds_this_level)
+}
+
+/// What re-checks a put-back capture: [`holds_this_level`], or a test's
+/// stand-in that fails the examination.
+type Revalidate<'r> =
+    dyn Fn(BorrowedFd<'_>, &OsStr, &CreatedDirectory) -> rustix::io::Result<bool> + 'r;
+
+/// [`take_back_into`] with what was put back re-checked by `revalidate`
+/// instead of [`holds_this_level`], so a test can make that examination
+/// fail.
+fn take_back_into_revalidating(
+    quarantine: &Quarantine<'_>,
+    parent: &OwnedFd,
+    dir: &CreatedDirectory,
+    in_quarantine: &mut dyn FnMut(CaptureStage, BorrowedFd<'_>),
+    revalidate: &Revalidate<'_>,
+) -> Outcome {
     let Some(held) = quarantine.fd() else {
         warn_left_standing(dir, format_args!("its cleanup directory could not be used"));
         return Outcome::Stopped;
@@ -598,7 +616,7 @@ fn take_back_into(
             // reads 0 can that be told apart from the level's own removal;
             // elsewhere this is an accepted residual (module doc).
             Ok(()) => {
-                if let Standing::Linked(_) = standing(dir) {
+                if matches!(standing(dir), Standing::Linked(_) | Standing::Unexamined(_)) {
                     warn_if_moved_away(dir);
                 }
                 return Outcome::Taken;
@@ -623,15 +641,15 @@ fn take_back_into(
     // What was put back is this level only if it still is once there: a
     // writer could have moved it out of the quarantine and put another
     // directory in its place before the put-back, which then moved the
-    // replacement and left this level wherever that writer put it.
-    let original_put_back = ours
-        && match &put {
-            PutBack::InPlace => holds_this_level(parent.as_fd(), &dir.name, dir),
-            PutBack::Aside { name, .. } => holds_this_level(parent.as_fd(), name, dir),
-            PutBack::Stranded(_) => holds_this_level(held, QUARANTINE_ENTRY.as_ref(), dir),
-            PutBack::Gone(_) => false,
-        };
-    match put {
+    // replacement and left this level wherever that writer put it. A
+    // re-check that fails says neither: it is reported with its error, not
+    // as another writer's directory.
+    let original_put_back = match where_put_back(&put, dir, parent, held) {
+        Some((home, name)) if ours => revalidate(home, name, dir),
+        _ => Ok(false),
+    };
+    let mismatched = matches!(original_put_back, Ok(false));
+    match &put {
         // This level, not removed, was moved out of the quarantine by
         // another writer before it could be put back: it stands wherever
         // that writer put it, so it is reported there, through the held
@@ -647,23 +665,28 @@ fn take_back_into(
         // where they are not. This level is reported below, where it is
         // now; a capture stranded in the quarantine keeps it from being
         // removed, which its removal reports.
-        PutBack::Aside { name, .. } if ours && !original_put_back => eprintln!(
+        PutBack::Aside { name, .. } if ours && mismatched => eprintln!(
             "warning: {} was put back during cleanup in place of {}, but it is not the directory rollback made",
-            OneLinePath(&located_beside(parent, dir, &name)),
+            OneLinePath(&located_beside(parent, dir, name)),
             OneLinePath(&level_location(dir))
         ),
-        PutBack::Stranded(_) if ours && !original_put_back => {}
+        PutBack::Stranded(_) if ours && mismatched => {}
         PutBack::Gone(warning) | PutBack::Aside { warning, .. } | PutBack::Stranded(warning) => {
             eprintln!("{warning}");
         }
         PutBack::InPlace => {
-            if let (Some(err), true) = (not_removed, original_put_back) {
+            if let (Some(err), Ok(true)) = (not_removed, original_put_back) {
                 warn_left_standing(
                     dir,
                     format_args!("it could not be removed: {}", std::io::Error::from(err)),
                 );
             }
         }
+    }
+    // The warning written for the capture stands; if what is there now
+    // could not be re-checked, that is said too, with the error.
+    if let Err(err) = original_put_back {
+        warn_put_back_unexamined(quarantine, held, parent, dir, &put, not_removed, err);
     }
     // Something else took the name after validation: the replacement, put
     // back above, stops the walk, which leaves the levels above standing.
@@ -672,7 +695,7 @@ fn take_back_into(
     // when what was put back turned out to be another writer's directory.
     // A capture that could not be examined stops the walk too, and says so.
     match captured {
-        Ok(_) if !ours || !original_put_back => {
+        Ok(_) if mismatched => {
             warn_left_standing(
                 dir,
                 format_args!("another entry has taken its name; the levels above it are left too"),
@@ -693,6 +716,71 @@ fn take_back_into(
     Outcome::Stopped
 }
 
+/// The held directory and name a capture of `dir` that `put` back from
+/// `quarantine` now sits under, beside `parent` or still in the
+/// quarantine; `None` if it left the quarantine.
+fn where_put_back<'p>(
+    put: &'p PutBack,
+    dir: &'p CreatedDirectory,
+    parent: &'p OwnedFd,
+    quarantine: BorrowedFd<'p>,
+) -> Option<(BorrowedFd<'p>, &'p OsStr)> {
+    match put {
+        PutBack::InPlace => Some((parent.as_fd(), &dir.name)),
+        PutBack::Aside { name, .. } => Some((parent.as_fd(), name)),
+        PutBack::Stranded(_) => Some((quarantine, QUARANTINE_ENTRY.as_ref())),
+        PutBack::Gone(_) => None,
+    }
+}
+
+/// Reports that what the cleanup put back for `dir` (as `put`, from the
+/// held quarantine `held`) could not be re-checked to be the directory
+/// rollback made, with the error `err`, so the walk stops there; a level
+/// put back under its own name is reported with `not_removed`, why it was
+/// not removed, as well.
+fn warn_put_back_unexamined(
+    quarantine: &Quarantine<'_>,
+    held: BorrowedFd<'_>,
+    parent: &OwnedFd,
+    dir: &CreatedDirectory,
+    put: &PutBack,
+    not_removed: Option<rustix::io::Errno>,
+    err: rustix::io::Errno,
+) {
+    let location = match put {
+        PutBack::InPlace => {
+            let removal = not_removed.map_or_else(String::new, |removal| {
+                format!(
+                    "it could not be removed: {}; ",
+                    std::io::Error::from(removal)
+                )
+            });
+            warn_left_standing(
+                dir,
+                format_args!(
+                    "{removal}it was put back under its name, where it could not be examined: {}; the levels above it are left too",
+                    std::io::Error::from(err)
+                ),
+            );
+            return;
+        }
+        PutBack::Aside { name, .. } => located_beside(parent, dir, name),
+        PutBack::Stranded(_) => quarantine_location(
+            Some(held),
+            quarantine.home,
+            &quarantine.name,
+            &quarantine.path,
+        )
+        .join(QUARANTINE_ENTRY),
+        PutBack::Gone(_) => return,
+    };
+    eprintln!(
+        "warning: {} was put back during cleanup but could not be examined there: {}; the levels above it are left too",
+        OneLinePath(&location),
+        std::io::Error::from(err)
+    );
+}
+
 /// Reports that the directory rollback made for `dir`, no longer under its
 /// name, was moved away rather than removed, naming where the held
 /// original is now where `/proc` can say. Silent when it has no link left
@@ -700,8 +788,14 @@ fn take_back_into(
 /// where its link count cannot tell moved from removed ([`Standing::Unknown`]),
 /// the warning says it may have been moved.
 fn warn_if_moved_away(dir: &CreatedDirectory) {
+    report_moved_away(dir, standing(dir));
+}
+
+/// [`warn_if_moved_away`] with `standing` as what the held original's
+/// examination said, so a test can make it fail.
+fn report_moved_away(dir: &CreatedDirectory, standing: Standing) {
     let level = level_location(dir);
-    match standing(dir) {
+    match standing {
         Standing::Gone => {}
         Standing::Linked(Some(now)) => eprintln!(
             "warning: {} is the directory rollback made for {}, moved away before rollback could take it back; it is left in place",
@@ -716,13 +810,18 @@ fn warn_if_moved_away(dir: &CreatedDirectory) {
             "warning: {} is no longer under its name; if it was moved rather than removed, the directory rollback made is left elsewhere",
             OneLinePath(&level)
         ),
+        Standing::Unexamined(err) => eprintln!(
+            "warning: {} is no longer under its name, and the directory rollback made for it could not be examined: {}; if it was moved rather than removed, it is left elsewhere",
+            OneLinePath(&level),
+            std::io::Error::from(err)
+        ),
     }
 }
 
 /// What the held original's link count says about it.
 enum Standing {
-    /// Removed outright, or no longer held or examinable, so nothing can be
-    /// said about it.
+    /// Removed outright (a link count of 0), or no longer held, so nothing
+    /// can be said about it.
     Gone,
     /// Still linked somewhere; where, if `/proc` can say.
     Linked(Option<PathBuf>),
@@ -732,6 +831,9 @@ enum Standing {
     /// failure on macOS CI), so outside Linux and Android only a count of 0
     /// is trusted.
     Unknown,
+    /// Its `fstat` failed: it may still be linked anywhere, so the error is
+    /// reported rather than read as its removal.
+    Unexamined(rustix::io::Errno),
 }
 
 /// [`Standing`] of the directory `dir` holds open.
@@ -744,9 +846,20 @@ fn standing(dir: &CreatedDirectory) -> Standing {
 
 /// [`Standing`] of the held directory `held`.
 fn held_standing(held: BorrowedFd<'_>) -> Standing {
-    match rustix::fs::fstat(held) {
+    held_standing_as(rustix::fs::fstat(held), held)
+}
+
+/// [`held_standing`] with `examined` as what `held`'s own `fstat` gave.
+/// Only a link count of 0 proves removal; a failed examination is
+/// [`Standing::Unexamined`].
+fn held_standing_as(
+    examined: rustix::io::Result<rustix::fs::Stat>,
+    held: BorrowedFd<'_>,
+) -> Standing {
+    match examined {
         Ok(stat) if stat.st_nlink != 0 => {}
-        _ => return Standing::Gone,
+        Ok(_) => return Standing::Gone,
+        Err(err) => return Standing::Unexamined(err),
     }
     if cfg!(any(target_os = "linux", target_os = "android")) {
         Standing::Linked(held_location(held))
@@ -756,10 +869,25 @@ fn held_standing(held: BorrowedFd<'_>) -> Standing {
 }
 
 /// Whether `name` in the held `home` is the directory `dir` created and
-/// still holds open.
-fn holds_this_level(home: BorrowedFd<'_>, name: &OsStr, dir: &CreatedDirectory) -> bool {
-    rustix::fs::statat(home, name, AtFlags::SYMLINK_NOFOLLOW)
-        .is_ok_and(|stat| is_this_level(dir, &stat))
+/// still holds open; a vacant name is not. A lookup or held-descriptor
+/// `fstat` that fails otherwise is the error, not a verdict.
+fn holds_this_level(
+    home: BorrowedFd<'_>,
+    name: &OsStr,
+    dir: &CreatedDirectory,
+) -> rustix::io::Result<bool> {
+    let stat = match rustix::fs::statat(home, name, AtFlags::SYMLINK_NOFOLLOW) {
+        Ok(stat) => stat,
+        Err(err) if err == rustix::io::Errno::NOENT => return Ok(false),
+        Err(err) => return Err(err),
+    };
+    if !same_directory_identity(&stat, &dir.identity) {
+        return Ok(false);
+    }
+    let Some(own) = dir.own.as_deref() else {
+        return Ok(false);
+    };
+    Ok(same_directory_identity(&stat, &rustix::fs::fstat(own)?))
 }
 
 /// Moves the capture in `quarantine` (named `quarantine_name` in the held
@@ -911,7 +1039,11 @@ fn remove_quarantine_held_as(
         _ => false,
     };
     if !resolves {
-        warn_quarantine_not_at_name(quarantine, held.is_ok(), &by_name);
+        let standing = match quarantine.fd() {
+            Some(fd) => held_standing_as(held, fd),
+            None => Standing::Unknown,
+        };
+        warn_quarantine_not_at_name(quarantine, standing, &by_name);
         return;
     }
     if let Err(err) = rustix::fs::unlinkat(
@@ -930,21 +1062,19 @@ fn remove_quarantine_held_as(
 /// Reports a quarantine whose name no longer resolves to it, so it was not
 /// removed: whatever now holds the name is described as such, and the held
 /// quarantine, the directory rollback actually leaves, is named where it is
-/// now where `/proc` can say. Its name is all that is known when the held
-/// quarantine could not be examined, or (outside Linux and Android) its
-/// link count does not tell whether it was moved or removed.
+/// now where `/proc` can say, as `standing` (the held quarantine's
+/// examination) tells. Its name is all that is known when (outside Linux
+/// and Android) its link count does not tell whether it was moved or
+/// removed; when the held quarantine could not be examined, the error is
+/// reported too.
 fn warn_quarantine_not_at_name(
     quarantine: &Quarantine<'_>,
-    held_examined: bool,
+    standing: Standing,
     by_name: &rustix::io::Result<rustix::fs::Stat>,
 ) {
     let name = quarantine.name_location();
     let vacant = matches!(by_name, Err(err) if *err == rustix::io::Errno::NOENT);
-    let standing = match quarantine.fd() {
-        Some(fd) if held_examined => held_standing(fd),
-        _ => Standing::Unknown,
-    };
-    if !vacant || matches!(standing, Standing::Unknown) {
+    if !vacant || matches!(standing, Standing::Unknown | Standing::Unexamined(_)) {
         eprintln!(
             "warning: cleanup directory {} no longer resolves to the one rollback made; it is left in place",
             OneLinePath(&name)
@@ -959,6 +1089,11 @@ fn warn_quarantine_not_at_name(
         Standing::Linked(None) => eprintln!(
             "warning: cleanup directory {} was moved away before rollback could remove it; it is left elsewhere",
             OneLinePath(&name)
+        ),
+        Standing::Unexamined(err) => eprintln!(
+            "warning: the cleanup directory rollback made for {} could not be examined: {}; if it was moved rather than removed, it is left elsewhere",
+            OneLinePath(&name),
+            std::io::Error::from(err)
         ),
         Standing::Gone | Standing::Unknown => {}
     }
@@ -1022,20 +1157,51 @@ pub(super) fn take_back_level_looking_up(
 
 #[cfg(test)]
 /// [`take_back_level_via`] with the held quarantine's examination for its
-/// removal failing with `err`, while its name still resolves.
+/// removal failing with `err`, and `before_removal` run just before its
+/// name is re-checked, where a test moves it.
 pub(super) fn take_back_level_held_stat_failing(
     parent: &OwnedFd,
     dir: &CreatedDirectory,
     quarantine_name: &str,
     err: rustix::io::Errno,
+    before_removal: &mut dyn FnMut(),
 ) -> bool {
     let Some(quarantine) = open_quarantine(parent.as_fd(), dir, quarantine_name, dir, &mut || {})
     else {
         return false;
     };
     let taken = take_back_into(&quarantine, parent, dir, &mut |_, _| {}) == Outcome::Taken;
-    remove_quarantine_held_as(&quarantine, Err(err), &mut || {});
+    remove_quarantine_held_as(&quarantine, Err(err), before_removal);
     taken
+}
+
+#[cfg(test)]
+/// [`take_back_level_via`] with the re-check of whatever was put back
+/// failing with `err`, and `in_quarantine` run at each [`CaptureStage`].
+pub(super) fn take_back_level_revalidation_failing(
+    parent: &OwnedFd,
+    dir: &CreatedDirectory,
+    quarantine_name: &str,
+    err: rustix::io::Errno,
+    in_quarantine: &mut dyn FnMut(CaptureStage, BorrowedFd<'_>),
+) -> bool {
+    let Some(quarantine) = open_quarantine(parent.as_fd(), dir, quarantine_name, dir, &mut || {})
+    else {
+        return false;
+    };
+    let taken =
+        take_back_into_revalidating(&quarantine, parent, dir, in_quarantine, &|_, _, _| Err(err))
+            == Outcome::Taken;
+    remove_quarantine(&quarantine, &mut || {});
+    taken
+}
+
+#[cfg(test)]
+/// Reports `dir` as no longer under its name with its held original's
+/// examination failing with `err`, as [`warn_if_moved_away`] would.
+pub(super) fn warn_if_moved_away_held_stat_failing(dir: &CreatedDirectory, err: rustix::io::Errno) {
+    let own = dir.own.as_deref().expect("the level is held open");
+    report_moved_away(dir, held_standing_as(Err(err), own.as_fd()));
 }
 
 #[cfg(test)]
