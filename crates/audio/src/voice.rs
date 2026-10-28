@@ -1,10 +1,12 @@
 //! DirectSound voice playback and stereo accumulation.
 //!
-//! `SoundMainRAM` mixes four packed sample lanes and permits carry between
-//! adjacent lanes (`m4a_1.s:396..437`). This native mixer accumulates each
-//! output sample independently in an `i32`, so it does not reproduce that
-//! cross-lane bleed. Fixed-rate voices advance by exactly one source sample,
-//! which also preserves their raw, un-interpolated playback.
+//! `SoundMainRAM` mixes four packed sample lanes. Each voice term is masked
+//! (`bic 0xFF0000`) to land only in a lane's top byte, so a lane wraps modulo
+//! 256 and never carries into its neighbour (`m4a_1.s:308..339`,
+//! `395..416`). This native mixer accumulates each output sample independently
+//! in an `i32`; the mixer wraps the finished sum to a signed byte, which is the
+//! same result. Fixed-rate voices advance by exactly one source sample, which
+//! also preserves their raw, un-interpolated playback.
 //!
 //! A [`WaveData`] whose buffer retains a trailing interpolation guard past
 //! [`WaveData::logical_len`] (`crates/audio/src/sample.rs`) loops and retires

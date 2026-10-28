@@ -145,12 +145,12 @@ fn the_label_table_covers_every_effect_through_the_stat_change_contract() {
     for (effect, change) in STAT_CHANGE_EFFECTS {
         assert_eq!(ai_stat_label(effect), Some(change));
     }
-    for (raw, stat, magnitude, direction) in AI_ONLY_STAT_LABELS {
+    for (effect, stat, magnitude, direction) in AI_ONLY_STAT_LABELS {
         assert!(
-            STAT_CHANGE_EFFECTS.iter().all(|(id, _)| id.0 != raw),
-            "{raw} is already in the execution table"
+            STAT_CHANGE_EFFECTS.iter().all(|(id, _)| *id != effect),
+            "{effect:?} is already in the execution table"
         );
-        let label = ai_stat_label(MoveEffect(raw)).unwrap();
+        let label = ai_stat_label(effect).unwrap();
         assert_eq!(
             (label.stat, label.magnitude, label.direction),
             (stat, magnitude, direction)
@@ -181,6 +181,7 @@ fn the_label_table_covers_every_effect_through_the_stat_change_contract() {
 fn every_label_descriptor_has_a_supported_magnitude_and_scores_its_cap() {
     let user = mon(TREECKO, &[MoveId::POUND]);
     let target = mon(TREECKO, &[MoveId::POUND]);
+    // Raw sweep of every effect byte, so no label escapes the descriptor check.
     for raw in 0..=255_u8 {
         let Some(label) = ai_stat_label(MoveEffect(raw)) else {
             continue;

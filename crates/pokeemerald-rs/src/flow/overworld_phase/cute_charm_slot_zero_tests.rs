@@ -52,7 +52,7 @@ fn wild_gender_and_lead_slot(party: [&BattlePokemon; 2], rng: Rng) -> (Gender, u
         seed.save1,
         seed.save2,
     );
-    let lead_slot = phase.party_lead_slot;
+    let lead_slot = phase.lead_slot_for_test().expect("setup: a loaded lead");
     phase.rng = rng;
     phase.begin_wild_battle(Some(WildEncounter {
         species: WURMPLE,

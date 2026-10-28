@@ -1,5 +1,6 @@
 use assets::fonts::{
-    FontId, FontImageRef, OwnedFontGlyphSheet, GLYPH_COUNT, SHEET_HEIGHT, SHEET_WIDTH,
+    FontId, FontImageRef, GlyphSources, OwnedFontGlyphSheet, OwnedGlyphSources, GLYPH_COUNT,
+    SHEET_HEIGHT, SHEET_WIDTH,
 };
 use assets::pack::{AssetPack, ImageRef};
 use engine::text::render::{Printer, PrinterInput, TextSpeed, TickEvent};
@@ -115,19 +116,23 @@ const SHADOW_GLYPH_COLOR: Rgb888 = Rgb888 {
     b: 160,
 };
 
-fn synthetic_sheet(pixels: &[u8]) -> OwnedFontGlyphSheet {
+/// Every font's sheet over the same `pixels`, each under its own [`FontId`].
+fn synthetic_sources(pixels: &[u8]) -> OwnedGlyphSources {
     let image = ImageRef {
         width: SHEET_WIDTH,
         height: SHEET_HEIGHT,
         bit_depth: FONT_BIT_DEPTH,
         pixels,
     };
-    OwnedFontGlyphSheet::new(FontImageRef::new_for_tests(FontId::Normal, image)).unwrap()
+    GlyphSources::try_from_fn(|font| {
+        OwnedFontGlyphSheet::new(FontImageRef::new_for_tests(font, image))
+    })
+    .unwrap()
 }
 
 fn synthetic_scene(pixels: &[u8], speed: TextSpeed) -> IntroScene {
     IntroScene::new(
-        synthetic_sheet(pixels),
+        synthetic_sources(pixels),
         transparent_message_box(),
         speed,
         NewGameOptions::DEFAULT,
@@ -357,7 +362,7 @@ fn compose_returns_native_dimensions_and_paints_the_first_revealed_glyph() {
 fn compose_draws_the_dialogue_box_border_even_before_any_glyph_reveals() {
     let pixels = transparent_glyph_sheet_pixels();
     let scene = IntroScene::new(
-        synthetic_sheet(&pixels),
+        synthetic_sources(&pixels),
         solid_red_message_box(),
         TextSpeed::Mid,
         NewGameOptions::DEFAULT,
@@ -391,7 +396,7 @@ fn box_pixel(content: (i32, i32)) -> (usize, usize) {
 fn clear_paints_the_erased_span_with_the_windows_background() {
     let pixels = dark_grey_glyph_sheet_pixels();
     let mut scene = IntroScene::new(
-        synthetic_sheet(&pixels),
+        synthetic_sources(&pixels),
         solid_red_message_box(),
         TextSpeed::Instant,
         NewGameOptions::DEFAULT,
@@ -453,7 +458,7 @@ fn clear_to_paints_only_up_to_its_target_column() {
 
     let pixels = dark_grey_glyph_sheet_pixels();
     let mut scene = IntroScene::new(
-        synthetic_sheet(&pixels),
+        synthetic_sources(&pixels),
         solid_red_message_box(),
         TextSpeed::Instant,
         NewGameOptions::DEFAULT,
@@ -592,7 +597,7 @@ impl TempPackGuard {
         self.file.set_len(0).unwrap();
         self.file.rewind().unwrap();
         self.file
-            .write_all(&crate::pack_test_support::pack_bytes(entries))
+            .write_all(&crate::pack_test_support::pack_bytes_with_fonts(entries))
             .unwrap();
     }
 
@@ -675,6 +680,7 @@ fn from_pack_with_options_repairs_an_out_of_range_text_speed() {
     )
     .expect("the synthetic pack has both required entries");
 
+    crate::pack_test_support::assert_carries_every_font(&scene.printer);
     assert_eq!(
         scene.new_game_options(),
         NewGameOptions {
@@ -788,7 +794,7 @@ fn the_intro_scratch_packs_never_write_through_a_planted_entry() {
     for name in LIVE_SCRATCH_NAMES {
         let path = planted_probe_path(name);
         let entries = || vec![font_entry(TRANSPARENT_PALETTE_INDEX)];
-        let expected = crate::pack_test_support::pack_bytes(entries());
+        let expected = crate::pack_test_support::pack_bytes_with_fonts(entries());
         crate::pack_test_support::assert_scratch_claim_is_exclusive(&path, &expected, || {
             TempPackGuard::create(path.clone(), entries())
         });
@@ -854,9 +860,10 @@ fn without_a_default_pack_repeated_loads_keep_reporting_missing() {
 fn derive_traversal_runs() -> Vec<TraversalRun> {
     let pixels = transparent_glyph_sheet_pixels();
     let pages = super::speech::pages();
-    let mut printer = Printer::new(
+    let mut printer = Printer::with_sources(
         pages[0].clone(),
-        synthetic_sheet(&pixels),
+        synthetic_sources(&pixels),
+        FontId::Normal,
         TextSpeed::Mid,
         STANDARD_PRINTER_ORIGIN,
     )
