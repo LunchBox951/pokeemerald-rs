@@ -212,3 +212,30 @@ fn inanimate_and_cutting_tree_graphics_ignore_facing() {
         }
     }
 }
+
+/// An object's facing changes after load (`faceplayer`, a script turn), so the
+/// packed cells must cover every facing, not only the initial one: an
+/// unpacked cell would silently draw as the nearest packed frame.
+#[test]
+fn every_facing_selects_a_cell_the_binding_packs() {
+    let all = [
+        Direction::South,
+        Direction::North,
+        Direction::West,
+        Direction::East,
+    ];
+    let mut facings = vec![Facing::PEOPLE];
+    facings.extend(
+        ["OBJ_EVENT_GFX_TRUCK", "OBJ_EVENT_GFX_PICHU_DOLL"]
+            .map(|id| object_sheet(id).unwrap().facing),
+    );
+    for facing in facings {
+        let packed = facing.reachable_cells();
+        for direction in all {
+            let (cell, _) = facing.cell_for(direction);
+            assert_ne!(packed & (1 << cell), 0, "{facing:?} {direction:?}");
+        }
+    }
+    assert_eq!(Facing::PEOPLE.reachable_cells(), 0b111);
+    assert_eq!(Facing::Fixed(0).reachable_cells(), 0b1);
+}

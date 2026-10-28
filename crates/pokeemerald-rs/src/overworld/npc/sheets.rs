@@ -36,6 +36,16 @@ impl Facing {
         west: 2,
     };
 
+    /// Bit `n` set for every sheet cell `n` some facing can show. An object's
+    /// live facing changes after load (`faceplayer`, a script turn), so every
+    /// one of these must be packed, not just the initial facing's.
+    pub(super) const fn reachable_cells(self) -> u16 {
+        match self {
+            Self::Standard { south, north, west } => (1 << south) | (1 << north) | (1 << west),
+            Self::Fixed(cell) => 1 << cell,
+        }
+    }
+
     /// The cell and horizontal flip that show `facing`.
     pub(super) const fn cell_for(self, facing: Direction) -> (u16, bool) {
         match self {

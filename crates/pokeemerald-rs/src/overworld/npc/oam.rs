@@ -21,8 +21,7 @@ use super::{binding_key, SpriteBinding};
 const OAM_X_MODULUS: i32 = 512;
 pub(super) const OAM_Y_MODULUS: i32 = 256;
 
-#[allow(
-    clippy::cast_sign_loss,
+#[expect(
     clippy::cast_possible_truncation,
     reason = "rem_euclid bounds the result to the nine-bit OAM x range"
 )]
@@ -30,8 +29,7 @@ fn wrap_oam_x(x: i32) -> u16 {
     x.rem_euclid(OAM_X_MODULUS) as u16
 }
 
-#[allow(
-    clippy::cast_sign_loss,
+#[expect(
     clippy::cast_possible_truncation,
     reason = "rem_euclid bounds the result to the eight-bit OAM y range"
 )]

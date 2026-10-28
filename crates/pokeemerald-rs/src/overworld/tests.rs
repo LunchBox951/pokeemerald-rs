@@ -1226,14 +1226,15 @@ fn real_pack_1f_oam_entries_cover_every_drawn_fresh_save_npc() {
 
     // Mom faces east (`MOVEMENT_TYPE_FACE_RIGHT`), which reuses the west
     // stand frame h-flipped (`avatar::stand_frame_for`). Her sheet is packed
-    // first (`object_events[0]`), right after the player's block, and only
-    // the cells an event shows are packed, so her one west frame leads it.
+    // first (`object_events[0]`), right after the player's block, and every
+    // cell a facing can show is packed (south, north, west: her live facing
+    // changes when she turns to the player), so her west frame is third.
     let block = super::avatar::FRAME_BLOCK_TILES;
     let metatile_px = u16::try_from(super::METATILE_PX).unwrap();
 
     let mom = entries[1];
     assert_eq!(mom.palette_bank(), 4, "OBJ_EVENT_PAL_TAG_NPC_4 (mom.pal)");
-    assert_eq!(mom.tile_index(), block);
+    assert_eq!(mom.tile_index(), block + 2 * super::avatar::FRAME_TILES);
     assert!(mom.h_flip(), "MOVEMENT_TYPE_FACE_RIGHT");
     assert!(mom.enabled());
     assert_eq!(mom.dimensions(), (16, 32));

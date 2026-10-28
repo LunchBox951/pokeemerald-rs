@@ -31,7 +31,6 @@ use std::collections::HashMap;
 use assets::pack::{AssetPack, PaletteRef};
 use assets::ObjectEvent;
 use engine::event_data::EventData;
-use engine::overworld::initial_facing_direction;
 use rendering::{Bgr555, Palette};
 #[cfg(test)]
 use rendering::{BitDepth, OamEntry};
@@ -211,8 +210,8 @@ fn protagonist_source(who: PlayerCharacter, player: PlayerCharacter) -> NpcSprit
 
 /// Tile, palette and frame layout of a resolved graphic.
 ///
-/// Only the sheet cells some event of the scene shows are packed, in
-/// ascending cell order: a frame's tile offset is the number of packed cells
+/// Only the sheet cells some facing of some event of the scene can show
+/// ([`Facing::reachable_cells`]) are packed, in ascending cell order: a frame's tile offset is the number of packed cells
 /// before it ([`Self::frame_tile`]).
 #[derive(Debug, Clone, Copy)]
 pub(super) struct SpriteBinding {
@@ -318,7 +317,7 @@ struct WantedSheet {
 }
 
 /// Resolves distinct object graphics and appends the packed frames some event
-/// of the scene shows after the player frames already in `sprite_bytes`.
+/// of the scene can show after the player frames already in `sprite_bytes`.
 ///
 /// # Errors
 ///
@@ -352,16 +351,10 @@ pub(super) fn resolve_bindings(
             Some(NpcSpriteSource::Object(sheet)) => sheet,
             None => continue,
         };
-        let (cell, _) = sheet
-            .facing
-            .cell_for(initial_facing_direction(event.movement_type));
+        let cells = sheet.facing.reachable_cells();
         match wanted.iter_mut().find(|candidate| candidate.key == key) {
-            Some(known) => known.cells |= 1 << cell,
-            None => wanted.push(WantedSheet {
-                key,
-                sheet,
-                cells: 1 << cell,
-            }),
+            Some(known) => known.cells |= cells,
+            None => wanted.push(WantedSheet { key, sheet, cells }),
         }
     }
     for WantedSheet { key, sheet, cells } in wanted {
