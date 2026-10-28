@@ -44,6 +44,7 @@ pub(super) use self::wild_battle::WildBattle;
 
 mod animated_door;
 mod connections;
+mod field_poison;
 mod first_battle_conclusion;
 mod first_battle_trigger;
 mod frame;
@@ -893,6 +894,9 @@ impl OverworldPhase {
         let Some(active) = self.active_battle.take() else {
             return false;
         };
+        // `ClearPoisonStepCounter` runs as each battle starts
+        // (`battle_setup.c:365-372,930-943`); every battle's frames pass here.
+        self.clear_poison_step_counter();
         self.active_battle = match active {
             ActiveBattle::Wild(battle) => self.advance_wild_battle_frame(battle),
             ActiveBattle::First(battle) => self.advance_first_battle_frame(battle),
@@ -972,6 +976,8 @@ mod door_sequencing_tests;
 mod fainted_lead_party_tests;
 #[cfg(test)]
 mod field_input_ordering_tests;
+#[cfg(test)]
+mod field_poison_tests;
 #[cfg(test)]
 mod first_battle_conclusion_tests;
 #[cfg(test)]
